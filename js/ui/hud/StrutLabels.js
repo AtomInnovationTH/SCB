@@ -1,19 +1,7 @@
 /**
- * StrutLabels.js — Screen-space callout labels for the V5 strut tips
- * Shows floating DOM labels when the `struts` onboarding beat is active.
- *
- * Each label reads:  "STRUT n/k — α=DDD°"
- *   n  = 1-based index
- *   k  = total strut count
- *   α  = hinge angle in degrees (unsigned sweep from deployed baseline)
- *
- * Lifecycle:
- *   • Listen to Events.STRUT_LABELS_SHOW → show labels for durationMs.
- *   • update(camera) projects strut-tip world positions each frame.
- *   • Automatically hides after durationMs or when hide() is called.
- *
- * Uses THREE.Vector3.project(camera) for world→NDC→screen conversion.
- * DOM labels, no Canvas2D, no new Three.js render passes.
+ * Screen-space DOM labels at the strut tips, shown while the `struts` onboarding beat is active
+ * (Events.STRUT_LABELS_SHOW, auto-hide after durationMs or hide()). Each shows strut index n/k and the hinge
+ * angle α in degrees (unsigned sweep from the deployed baseline). `update(camera)` projects tips each frame.
  *
  * @module ui/hud/StrutLabels
  */
@@ -43,12 +31,8 @@ const LABEL_STYLE = {
 const _v3 = { x: 0, y: 0, z: 0 };   // scratch vector (avoids new THREE.Vector3 per frame)
 
 /**
- * Delegation 4 (2026-05-31) — Quick-Win 2b / P1-3:
- *
- * Prefer the authoritative `hingeAngleDeg` field that the emitter
- * (PlayerSatellite.highlightStrutsForBeat) now attaches per strut. Falls back
- * to the legacy Euler-magnitude estimate when the field is missing so older
- * tests with handcrafted strutGroups continue to work.
+ * Prefer the `hingeAngleDeg` that PlayerSatellite.highlightStrutsForBeat attaches per strut; fall back to the
+ * Euler-magnitude estimate when it is missing (tests with handcrafted strutGroups).
  */
 function _hingeAngle(sg) {
   if (sg && Number.isFinite(sg.hingeAngleDeg)) {
@@ -56,8 +40,7 @@ function _hingeAngle(sg) {
   }
   const pivotGroup = sg && sg.pivotGroup;
   if (!pivotGroup || !pivotGroup.rotation) return 0;
-  // Legacy fallback — axis-magnitude proxy; not strictly the sweep angle but
-  // remains monotonic with strut stow/deploy progress.
+  // Axis-magnitude proxy: not the sweep angle, but monotonic with stow/deploy progress.
   const r = pivotGroup.rotation;
   const deg = Math.sqrt(r.x * r.x + r.y * r.y + r.z * r.z) * RAD2DEG;
   return Math.round(deg);
@@ -82,22 +65,13 @@ export class StrutLabels {
     /** @type {boolean} */
     this._visible = false;
 
-    // Subscribe to strut-labels event
     this._onShow = ({ strutGroups, durationMs = 4000 }) => {
       this.show(strutGroups, durationMs);
     };
     eventBus.on(Events.STRUT_LABELS_SHOW, this._onShow);
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
-
-  /**
-   * Show labels for the given strut groups.
-   * @param {Array<{pivotGroup, strut, tipNode, azRad}>} strutGroups
-   * @param {number} durationMs  Auto-hide after this many ms.
-   */
+  /** @param {Array<{pivotGroup, strut, tipNode, azRad}>} strutGroups */
   show(strutGroups, durationMs = 4000) {
     if (!this._container) return;
     this._strutGroups = strutGroups || [];
@@ -114,14 +88,13 @@ export class StrutLabels {
   }
 
   /**
-   * Per-frame update — projects tip positions and ticks auto-hide timer.
    * @param {object}  camera  THREE.PerspectiveCamera
-   * @param {number}  dt      Delta time in seconds
+   * @param {number}  dt      seconds
    */
   update(camera, dt) {
     if (!this._visible || !this._strutGroups) return;
 
-    // Auto-hide timer always ticks, regardless of camera availability
+    // The auto-hide timer ticks even with no camera.
     if (this._timeLeft !== null) {
       this._timeLeft -= dt;
       if (this._timeLeft <= 0) {
@@ -130,7 +103,6 @@ export class StrutLabels {
       }
     }
 
-    // Skip world-space label projection when no camera is available
     if (!camera) return;
 
     const k   = this._strutGroups.length;
@@ -144,13 +116,8 @@ export class StrutLabels {
 
       if (!tip) continue;
 
-      // Delegation 4 (2026-05-31) — Browser-playtest fix:
-      // `_v3` is a plain {x,y,z} scratch object (not a THREE.Vector3),
-      // so `tip.getWorldPosition(_v3)` crashed with
-      // "target.setFromMatrixPosition is not a function" every frame.
-      // Read the world position directly from `matrixWorld.elements`
-      // (indices 12/13/14 = translation column) — avoids needing a
-      // real Vector3 and avoids importing THREE.
+      // `_v3` is a plain {x,y,z}, not a Vector3, so getWorldPosition(_v3) would throw: read the
+      // translation column (matrixWorld.elements[12..14]) directly.
       const mw = tip.matrixWorld?.elements;
       if (mw) {
         _v3.x = mw[12];
@@ -164,11 +131,10 @@ export class StrutLabels {
         continue;
       }
 
-      // Project to NDC via camera
       const ndc = _projectToScreen(_v3, camera);
       if (!ndc) continue;
 
-      // NDC → CSS pixels (top-left origin)
+      // NDC → CSS px, top-left origin.
       const sx = (ndc.x  *  0.5 + 0.5) * W;
       const sy = (ndc.y  * -0.5 + 0.5) * H;
 
@@ -180,17 +146,10 @@ export class StrutLabels {
     }
   }
 
-  /**
-   * Remove all labels and unsubscribe from events.
-   */
   destroy() {
     this._removeLabels();
     eventBus.off(Events.STRUT_LABELS_SHOW, this._onShow);
   }
-
-  // ==========================================================================
-  // PRIVATE
-  // ==========================================================================
 
   _rebuildLabels(count) {
     this._removeLabels();
@@ -212,26 +171,23 @@ export class StrutLabels {
 }
 
 /**
- * Lightweight world → NDC projection.
- * Avoids allocating a THREE.Vector3 by using a scratch object.
+ * World → NDC without allocating a Vector3; z is clip w. Null when the camera lacks matrices or w≈0.
  * @param {{x:number,y:number,z:number}} worldPos
  * @param {object} camera  THREE.PerspectiveCamera with projectionMatrix + matrixWorldInverse
- * @returns {{x:number,y:number,z:number}|null}
  */
 function _projectToScreen(worldPos, camera) {
   try {
-    // Build 4-component clip-space vector manually (avoids import)
     const m = camera.projectionMatrix   && camera.projectionMatrix.elements;
     const v = camera.matrixWorldInverse && camera.matrixWorldInverse.elements;
     if (!m || !v) return null;
 
-    // Transform world → view
+    // world → view
     const vx = v[0]*worldPos.x + v[4]*worldPos.y + v[8]*worldPos.z  + v[12];
     const vy = v[1]*worldPos.x + v[5]*worldPos.y + v[9]*worldPos.z  + v[13];
     const vz = v[2]*worldPos.x + v[6]*worldPos.y + v[10]*worldPos.z + v[14];
     const vw = v[3]*worldPos.x + v[7]*worldPos.y + v[11]*worldPos.z + v[15];
 
-    // View → clip
+    // view → clip
     const cx = m[0]*vx + m[4]*vy + m[8]*vz  + m[12]*vw;
     const cy = m[1]*vx + m[5]*vy + m[9]*vz  + m[13]*vw;
     const cw = m[3]*vx + m[7]*vy + m[11]*vz + m[15]*vw;

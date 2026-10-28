@@ -1,18 +1,14 @@
 /**
- * SkillsSystem.js — Core skill discovery engine for Space Cowboy.
- *
- * Replaces the linear 10-stage TutorialSystem with free-order skill discovery.
+ * SkillsSystem.js — free-order skill discovery engine (replaced the linear TutorialSystem).
  * 35 skills defined in Constants.SKILLS.CATALOG are tracked through four states:
  *   undiscovered → discovered → practiced → mastered
  *
- * Event-driven: each skill's triggerEvent maps to an Events.js constant.
- * When the event fires, the skill's use count increments and state transitions
- * are evaluated. Spaced-repetition reminders nudge the player about skills
- * they haven't used recently.
+ * Event-driven: each skill's triggerEvent maps to an Events.js constant; when it fires, the use count increments and
+ * state transitions are evaluated. Spaced-repetition reminders nudge skills not used recently.
  *
  * @module systems/SkillsSystem
- * @see archive/SKILLS_ARCHITECTURE.md — Full specification
- * @see Constants.SKILLS — All tuning knobs and skill catalog
+ * @see archive/SKILLS_ARCHITECTURE.md — full specification
+ * @see Constants.SKILLS — tuning knobs and skill catalog
  */
 
 import { eventBus }  from '../core/EventBus.js';
@@ -20,111 +16,101 @@ import { Events }    from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { persistenceManager } from './PersistenceManager.js';
 
-// ── Skill state constants ──────────────────────────────────────────────────
 const UNDISCOVERED = 'undiscovered';
 const DISCOVERED   = 'discovered';
 const PRACTICED    = 'practiced';
 const MASTERED     = 'mastered';
 
 /**
- * @typedef {Object} SkillDef
- * Immutable skill definition from Constants.SKILLS.CATALOG.
- * @property {string}   id            - Unique skill identifier
- * @property {string}   label         - Human-readable name
+ * @typedef {Object} SkillDef  Immutable definition from Constants.SKILLS.CATALOG.
+ * @property {string}   id
+ * @property {string}   label
  * @property {number}   tier          - 1..5 progression tier
  * @property {string}   category      - nav|scan|collect|awareness|manage
  * @property {string}   [triggerEvent] - Events.js constant key that fires this skill
- * @property {(data:any)=>boolean} [triggerFilter] - Optional payload predicate. When
- *           present, the skill only triggers if it returns truthy for the
- *           triggerEvent payload — lets several skills share one triggerEvent
- *           but discriminate by payload (e.g. ARM_CAPTURED{manual:true},
- *           SCAN_INITIATED{type:'wide'}). Omit for fire-on-every-event behavior.
+ * @property {(data:any)=>boolean} [triggerFilter] - Optional payload predicate: the skill triggers only if it returns
+ *           truthy, so several skills can share one triggerEvent (e.g. ARM_CAPTURED{manual:true},
+ *           SCAN_INITIATED{type:'wide'}). Omit to fire on every event.
  * @property {string}   prereqType    - none|soft|hard|safety
- * @property {string[]} prereqs       - Prerequisite skill ids
- * @property {boolean}  noReminder    - Skip from spaced-repetition reminders
+ * @property {string[]} prereqs       - prerequisite skill ids
+ * @property {boolean}  noReminder    - skip from spaced-repetition reminders
  * @property {Object}   [safetyGate]  - { minCatches } gate for destructive skills
  */
 
 /**
  * @typedef {Object} SkillRecord
- * @property {Object}  def              - Immutable definition from CATALOG
- * @property {string}  state            - Current state (UNDISCOVERED/DISCOVERED/PRACTICED/MASTERED)
- * @property {number}  count            - Total trigger count
- * @property {number}  discoveredAt     - Timestamp (ms) of first discovery
- * @property {number}  lastUsedAt       - Timestamp (ms) of most recent use
- * @property {number}  nextReminderAt   - Timestamp (ms) when next reminder is due
- * @property {number}  reminderInterval - Current SM-2 interval in seconds
- * @property {number}  easeFactor       - Current SM-2 ease factor
- * @property {boolean} gateUnlocked     - Whether safety gate is open (true if no gate)
+ * @property {Object}  def              - immutable definition from CATALOG
+ * @property {string}  state            - UNDISCOVERED/DISCOVERED/PRACTICED/MASTERED
+ * @property {number}  count            - total trigger count
+ * @property {number}  discoveredAt     - ms timestamp of first discovery
+ * @property {number}  lastUsedAt       - ms timestamp of most recent use
+ * @property {number}  nextReminderAt   - ms timestamp when the next reminder is due
+ * @property {number}  reminderInterval - current SM-2 interval in seconds
+ * @property {number}  easeFactor       - current SM-2 ease factor
+ * @property {boolean} gateUnlocked     - safety gate open (true if no gate)
  */
 
 export class SkillsSystem {
     constructor() {
-        /** @type {Map<string, SkillRecord>} All skills keyed by ID */
+        /** @type {Map<string, SkillRecord>} keyed by skill id */
         this._skills = new Map();
 
-        /** @type {Set<string>} Active HUD groups derived from discovered skills */
+        /** @type {Set<string>} HUD groups derived from discovered skills */
         this._activeGroups = new Set();
 
-        /** @type {number} Total catches (ARM_CAPTURED + LASSO_CAPTURED) for safety gates */
+        /** @type {number} ARM_CAPTURED + LASSO_CAPTURED, for safety gates */
         this._totalCatches = 0;
 
-        /** @type {number} Session discovery count */
+        /** @type {number} */
         this._discoveryCount = 0;
 
-        /** @type {number} Timestamp (ms) of first discovery this session */
+        /** @type {number} ms timestamp */
         this._firstDiscoveryTime = 0;
 
-        /** @type {number} Timestamp (ms) of most recent discovery */
+        /** @type {number} ms timestamp */
         this._lastDiscoveryTime = 0;
 
-        /** @type {number} Accumulator for 1 Hz reminder check (seconds) */
+        /** @type {number} seconds, for the 1 Hz reminder check */
         this._reminderAccum = 0;
 
-        /** @type {number} Reminders shown within current frequency-cap window */
+        /** @type {number} reminders shown in the current frequency-cap window */
         this._reminderCapCount = 0;
 
-        /** @type {number} Timestamp (ms) when current cap window started */
+        /** @type {number} ms timestamp */
         this._reminderCapStart = 0;
 
-        /** @type {Array<Function>} Unsubscribe functions for all EventBus listeners */
+        /** @type {Array<Function>} EventBus unsubscribes */
         this._unsubs = [];
 
         /**
-         * CP-4 (GUIDANCE_ARBITER_SPEC §3) — ring buffer of recent failure causes,
-         * `{ cause, at }`, used by the universal hint-gating rule to decide whether
-         * a *discovered* skill may be nudged ("discovered AND failed-recently").
+         * Ring buffer of recent failure causes (GUIDANCE_ARBITER_SPEC §3): the hint-gating rule nudges a *discovered*
+         * skill only if "discovered AND failed-recently".
          * @type {Array<{cause: string, at: number}>}
          */
         this._recentFailures = [];
 
         /**
-         * CP-4 — per-skill count of unheeded nudges shown. The rule falls silent
-         * after MAX_UNHEEDED_NUDGES; cleared when the player uses the skill.
+         * Per-skill unheeded nudges shown; the rule falls silent after MAX_UNHEEDED_NUDGES; cleared when the skill is used.
          * @type {Map<string, number>}
          */
         this._unheededNudges = new Map();
 
-        /** @type {number} Timestamp (ms) when this session started */
+        /** @type {number} ms timestamp */
         this._sessionStartMs = Date.now();
 
         /**
-         * Slice 8 — optional CodexSystem reference used to enrich the
-         * `manage_codex` SM-2 reminder with a "did you know?" pick. Injected via
-         * setCodexSystem() from main.js; absent in headless tests unless stubbed.
+         * Optional CodexSystem, via setCodexSystem() from main.js (absent in headless tests unless stubbed): enriches the
+         * `manage_codex` reminder with a "did you know?" pick.
          * @type {?Object}
          */
         this._codex = null;
 
-        // Bootstrap
         this._initSkills();
         this._setupListeners();
     }
 
     /**
-     * Slice 8 — inject the CodexSystem so the `manage_codex` reminder can point
-     * the player at an unlocked-but-unread entry. Purely additive: no codex ref
-     * means the reminder stays the generic "SPECS" nudge.
+     * No codex ref means the `manage_codex` reminder stays the generic "SPECS" nudge.
      * @param {Object} codex - CodexSystem instance (getUnlockedEntries/getCategories)
      */
     setCodexSystem(codex) {
@@ -132,13 +118,10 @@ export class SkillsSystem {
     }
 
     /**
-     * Slice 8 — deterministically pick one unlocked-but-unseen codex entry to
-     * resurface with the `manage_codex` reminder. Prefers the longest-unread
-     * (lowest `unlockContext.tSim`); entries without a context sort last; final
-     * tiebreak by category order then id. Returns null when there is no codex
-     * reference or nothing qualifies.
+     * Deterministically pick one unlocked-but-unseen codex entry for the `manage_codex` reminder: longest-unread first
+     * (lowest `unlockContext.tSim`), entries without a context last, then category order, then id. Null when there is no
+     * codex reference or nothing qualifies.
      * @returns {?{id:string, icon:string, title:string}}
-     * @private
      */
     _pickDidYouKnow() {
         const codex = this._codex;
@@ -146,7 +129,7 @@ export class SkillsSystem {
         const unseen = codex.getUnlockedEntries().filter(e => e && !e.seen);
         if (!unseen.length) return null;
 
-        // Stable category order (for the final tiebreak) from getCategories().
+        // Category order for the final tiebreak.
         const catOrder = new Map();
         if (typeof codex.getCategories === 'function') {
             const cats = codex.getCategories() || [];
@@ -168,46 +151,28 @@ export class SkillsSystem {
             return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);
         })[0];
 
-        // `icon` is a data passthrough only (never an invented glyph — plan D-J).
+        // `icon` is a data passthrough only (never an invented glyph).
         return { id: best.id, icon: best.icon || '', title: best.title || best.id };
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  PUBLIC API
-    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC API
 
-    /**
-     * Get the current state of a skill.
-     * @param {string} skillId - Skill identifier from CATALOG
-     * @returns {'undiscovered'|'discovered'|'practiced'|'mastered'}
-     */
+    /** @returns {'undiscovered'|'discovered'|'practiced'|'mastered'} */
     getState(skillId) {
         const rec = this._skills.get(skillId);
         return rec ? rec.state : UNDISCOVERED;
     }
 
-    /**
-     * Check whether a skill has been discovered (i.e. is discovered, practiced
-     * or mastered — anything beyond undiscovered).
-     * @param {string} skillId
-     * @returns {boolean}
-     */
+    /** Discovered, practiced or mastered: anything beyond undiscovered. */
     isDiscovered(skillId) {
         return this.getState(skillId) !== UNDISCOVERED;
     }
 
-    /**
-     * Check whether a skill has reached the mastered state.
-     * @param {string} skillId
-     * @returns {boolean}
-     */
     isMastered(skillId) {
         return this.getState(skillId) === MASTERED;
     }
 
     /**
-     * Return all skills that have been at least discovered, with their
-     * current state and use count.
      * @returns {Array<{id: string, label: string, tier: number, category: string, state: string, count: number}>}
      */
     getDiscoveredSkills() {
@@ -227,11 +192,9 @@ export class SkillsSystem {
     }
 
     /**
-     * Suggest up to `n` undiscovered skills whose prerequisites are met.
-     * Sorted by tier (lower first), then alphabetical by label.
-     * Skips skills marked `noReminder` (discovered only through natural play).
-     * @param {number} [n=3] - Maximum number of suggestions
-     * @returns {Array<Object>} Skill definition objects from CATALOG
+     * Up to `n` undiscovered skills whose prerequisites are met, by tier then label. Skips `noReminder` skills
+     * (discovered only through natural play).
+     * @returns {Array<Object>} definitions from CATALOG
      */
     getNextSuggestions(n = 3) {
         const suggestions = [];
@@ -249,7 +212,6 @@ export class SkillsSystem {
     }
 
     /**
-     * Get overall skill discovery progress.
      * @returns {{ discovered: number, total: number, percent: number }}
      */
     getProgress() {
@@ -265,15 +227,11 @@ export class SkillsSystem {
         };
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  CP-4 — universal hint-gating rule (GUIDANCE_ARBITER_SPEC §3 / §3.1)
-    // ═══════════════════════════════════════════════════════════════════════
+    // Universal hint-gating rule (GUIDANCE_ARBITER_SPEC §3 / §3.1)
 
     /**
-     * Record a recent failure cause into the ring buffer. Wired from failure
-     * events (NET_FAILED, LASSO_MISSED, …); also callable directly.
+     * Wired from failure events (NET_FAILED, LASSO_MISSED, …); also callable directly.
      * @param {string} cause - short cause tag (see Constants.SKILLS.FAILURE_CAUSES)
-     * @param {number} [now]
      */
     recordFailure(cause, now = Date.now()) {
         if (!cause) return;
@@ -284,33 +242,25 @@ export class SkillsSystem {
         }
     }
 
-    /**
-     * Whether a specific failure cause occurred within RECENT_FAILURE_TTL_S.
-     * @param {string} cause
-     * @param {number} [now]
-     * @returns {boolean}
-     */
+    /** Whether `cause` occurred within RECENT_FAILURE_TTL_S. */
     failedRecently(cause, now = Date.now()) {
         const ttl = Constants.SKILLS.RECENT_FAILURE_TTL_S * 1000;
         return this._recentFailures.some(f => f.cause === cause && (now - f.at) <= ttl);
     }
 
-    /** @private Any failure within the TTL (used when a hint has no specific cause). */
+    /** Any failure within the TTL (for a hint with no specific cause). */
     _failedRecentlyAny(now = Date.now()) {
         const ttl = Constants.SKILLS.RECENT_FAILURE_TTL_S * 1000;
         return this._recentFailures.some(f => (now - f.at) <= ttl);
     }
 
     /**
-     * THE universal hint-gating rule (GUIDANCE_ARBITER_SPEC §3): a hint for
-     * skill X may fire only if X is undiscovered OR (X discovered/practiced AND
-     * failed-recently), AND fewer than MAX_UNHEEDED_NUDGES unheeded nudges have
-     * been shown for X. Mastered skills are never nudged. This single rule is
-     * the "respect the player" invariant shared by every guidance layer.
+     * THE universal hint-gating rule (GUIDANCE_ARBITER_SPEC §3): a hint for skill X may fire only if X is undiscovered OR
+     * (X discovered/practiced AND failed-recently), AND fewer than MAX_UNHEEDED_NUDGES unheeded nudges were shown for X.
+     * Mastered skills are never nudged. The "respect the player" invariant shared by every guidance layer.
      * @param {string} skillId
-     * @param {{ cause?: string|null, now?: number }} [opts]
-     *        `cause` — the failure cause relevant to this hint; when omitted, any
-     *        recent failure satisfies the "failed-recently" clause.
+     * @param {{ cause?: string|null, now?: number }} [opts]  `cause`: the failure cause for this hint; omitted, any
+     *        recent failure satisfies "failed-recently".
      * @returns {boolean}
      */
     canFireHint(skillId, { cause = null, now = Date.now() } = {}) {
@@ -318,44 +268,34 @@ export class SkillsSystem {
         if (!rec) return false;
         if (rec.state === MASTERED) return false;
         if ((this._unheededNudges.get(skillId) || 0) >= Constants.SKILLS.MAX_UNHEEDED_NUDGES) {
-            return false; // silent after N unheeded nudges
+            return false;
         }
-        if (rec.state === UNDISCOVERED) return true; // first-encounter teaching always eligible
-        // Discovered/practiced: only nudge when the player is actually struggling.
+        if (rec.state === UNDISCOVERED) return true; // first encounter: always eligible
+        // Discovered/practiced: only when the player is struggling.
         return cause ? this.failedRecently(cause, now) : this._failedRecentlyAny(now);
     }
 
-    /** Record that a nudge was shown for a skill (counts toward the unheeded cap). */
+    /** Counts toward the unheeded cap. */
     noteNudgeShown(skillId) {
         this._unheededNudges.set(skillId, (this._unheededNudges.get(skillId) || 0) + 1);
     }
 
-    /** @returns {number} unheeded nudges shown for a skill this session. */
     getUnheededCount(skillId) {
         return this._unheededNudges.get(skillId) || 0;
     }
 
-    /**
-     * Veteran check (GUIDANCE_ARBITER_SPEC §3.1): a player who has discovered
-     * ≥ VETERAN_SKILL_THRESHOLD of all skills. Veterans get one-line ticker
-     * hints instead of modal tutorial overlays.
-     * @returns {boolean}
-     */
+    /** Veteran (GUIDANCE_ARBITER_SPEC §3.1): discovered ≥ VETERAN_SKILL_THRESHOLD of all skills; gets one-line ticker hints, not modal overlays. */
     isVeteran() {
         const p = this.getProgress();
         const thr = Constants.SKILLS.VETERAN_SKILL_THRESHOLD ?? 0.7;
         return p.total > 0 && (p.discovered / p.total) >= thr;
     }
 
-    /** @returns {'ticker'|'modal'} how a tutorial-class hint should be presented. */
     getHintPresentation() {
         return this.isVeteran() ? 'ticker' : 'modal';
     }
 
-    /**
-     * Per-frame update. Manages the 1 Hz spaced-repetition reminder check.
-     * @param {number} dt - Delta time in seconds
-     */
+    /** Per frame; runs the 1 Hz reminder check. @param {number} dt seconds */
     update(dt) {
         this._reminderAccum += dt;
         if (this._reminderAccum < 1.0) return;
@@ -363,10 +303,7 @@ export class SkillsSystem {
         this._checkReminders(Date.now());
     }
 
-    /**
-     * Reset all skills to undiscovered (new game / GAME_RESET).
-     * Clears timers, counters, and active HUD groups.
-     */
+    /** New game / GAME_RESET: all skills back to undiscovered. */
     reset() {
         for (const rec of this._skills.values()) {
             rec.state            = UNDISCOVERED;
@@ -388,15 +325,11 @@ export class SkillsSystem {
         this._reminderCapCount   = 0;
         this._reminderCapStart   = 0;
         this._sessionStartMs     = Date.now();
-        // CP-4 — clear hint-gating session state
         this._recentFailures     = [];
         this._unheededNudges.clear();
     }
 
-    /**
-     * Remove all EventBus listeners and clear timers.
-     * Call when the system is permanently torn down.
-     */
+    /** Remove all EventBus listeners; for permanent teardown. */
     dispose() {
         for (const unsub of this._unsubs) {
             unsub();
@@ -404,15 +337,9 @@ export class SkillsSystem {
         this._unsubs.length = 0;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  INTERNAL — Initialization
-    // ═══════════════════════════════════════════════════════════════════════
+    // INTERNAL: initialization
 
-    /**
-     * Populate `_skills` Map from Constants.SKILLS.CATALOG.
-     * Each entry gets mutable runtime state alongside its immutable definition.
-     * @private
-     */
+
     _initSkills() {
         const catalog = Constants.SKILLS.CATALOG;
         for (const def of catalog) {
@@ -430,28 +357,14 @@ export class SkillsSystem {
         }
     }
 
-    /**
-     * Wire up all EventBus listeners:
-     *  - Per-skill trigger events from CATALOG (with optional triggerFilter
-     *    payload discrimination — see {@link SkillDef})
-     *  - Safety gate catch tracking (ARM_CAPTURED + LASSO_CAPTURED)
-     *  - Persistence (PERSISTENCE_GATHER / PERSISTENCE_LOADED)
-     *  - Game reset
-     * @private
-     */
+
     _setupListeners() {
-        // ── Per-skill trigger events ──────────────────────────────────────
-        // A def may carry an optional `triggerFilter(data) => boolean` to
-        // payload-discriminate skills that share a triggerEvent (e.g.
-        // "manual capture" = ARM_CAPTURED{manual:true}, "wide scan" =
-        // SCAN_INITIATED{type:'wide'}). When present, the skill only triggers
-        // if the filter returns truthy for the event payload. Defs WITHOUT a
-        // triggerFilter behave exactly as before (fire on every event).
-        // (GUIDANCE_ARBITER_SPEC §5.)
+        // Per-skill trigger events. `triggerFilter(data)` (see SkillDef) discriminates skills sharing a triggerEvent;
+        // defs without one fire on every event (GUIDANCE_ARBITER_SPEC §5).
         for (const def of Constants.SKILLS.CATALOG) {
             if (!def.triggerEvent) continue;
             const eventName = Events[def.triggerEvent];
-            if (!eventName) continue; // Event not yet wired — skip gracefully
+            if (!eventName) continue; // event not wired yet
             const handler = (data) => {
                 if (def.triggerFilter && !def.triggerFilter(data)) return;
                 this._onSkillTriggered(def.id);
@@ -459,7 +372,7 @@ export class SkillsSystem {
             this._unsubs.push(eventBus.on(eventName, handler));
         }
 
-        // ── Safety gate catch tracking ────────────────────────────────────
+        // Safety gate catch tracking
         this._unsubs.push(eventBus.on(Events.ARM_CAPTURED, () => {
             this._totalCatches++;
             this._checkSafetyGates();
@@ -469,7 +382,7 @@ export class SkillsSystem {
             this._checkSafetyGates();
         }));
 
-        // ── CP-4: recent-failure tracking (feeds the universal hint-gating rule) ──
+        // Recent-failure tracking (feeds the hint-gating rule)
         const FC = Constants.SKILLS.FAILURE_CAUSES || {};
         for (const [eventKey, cause] of Object.entries(FC)) {
             const eventName = Events[eventKey];
@@ -477,7 +390,6 @@ export class SkillsSystem {
             this._unsubs.push(eventBus.on(eventName, () => this.recordFailure(cause)));
         }
 
-        // ── Persistence ───────────────────────────────────────────────────
         this._unsubs.push(eventBus.on(Events.PERSISTENCE_GATHER, (saveData) => {
             saveData.skills = this._serialize();
         }));
@@ -488,40 +400,28 @@ export class SkillsSystem {
             }
         }));
 
-        // ── Game reset ────────────────────────────────────────────────────
         this._unsubs.push(eventBus.on(Events.GAME_RESET, () => this.reset()));
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  INTERNAL — Skill Triggering & State Transitions
-    // ═══════════════════════════════════════════════════════════════════════
+    // INTERNAL: skill triggering & state transitions
 
-    /**
-     * Handle a skill trigger event. Increments count, checks prerequisites,
-     * and evaluates state transitions (discovered → practiced → mastered).
-     * @param {string} skillId
-     * @private
-     */
+
     _onSkillTriggered(skillId) {
         const rec = this._skills.get(skillId);
         if (!rec) return;
 
-        // Prerequisite / safety gate check
         if (!this._canTrigger(rec)) return;
 
         const now = Date.now();
         rec.count++;
         rec.lastUsedAt = now;
-        // CP-4: the player used the skill → they heeded any prior nudges. Reset
-        // the unheeded counter so future struggling can nudge again.
+        // Using the skill means they heeded prior nudges: reset so future struggling can nudge again.
         this._unheededNudges.delete(skillId);
 
         if (rec.state === UNDISCOVERED) {
-            // ── First trigger → DISCOVERED ──
             this._discoverSkill(rec, now);
 
         } else if (rec.state === DISCOVERED) {
-            // ── Check PRACTICED threshold ──
             const threshold = this._getPracticeThreshold(rec.def);
             if (rec.count >= threshold) {
                 this._transitionState(rec, PRACTICED);
@@ -529,7 +429,7 @@ export class SkillsSystem {
             this._onSkillUsed(rec, now);
 
         } else if (rec.state === PRACTICED) {
-            // ── Check MASTERED threshold + minimum time ──
+            // MASTERED needs the count threshold AND a minimum time.
             const threshold   = this._getMasteryThreshold(rec.def);
             const elapsedSec  = (now - rec.discoveredAt) / 1000;
             if (rec.count >= threshold && elapsedSec >= Constants.SKILLS.MASTERY_MIN_TIME) {
@@ -542,16 +442,8 @@ export class SkillsSystem {
     }
 
     /**
-     * Check whether a skill can be triggered given its prerequisite type.
-     *
-     * - `'none'`   — always allowed
-     * - `'soft'`   — always allowed (prereqs are suggestions, not blockers)
-     * - `'hard'`   — all prereqs must be at least discovered
-     * - `'safety'` — safety gate must be unlocked (minCatches reached)
-     *
-     * @param {SkillRecord} rec
-     * @returns {boolean}
-     * @private
+     * By prereqType: `'none'` and `'soft'` always (soft prereqs are suggestions); `'hard'` needs all prereqs discovered;
+     * `'safety'` needs the gate unlocked (minCatches reached).
      */
     _canTrigger(rec) {
         const def = rec.def;
@@ -568,35 +460,24 @@ export class SkillsSystem {
         }
     }
 
-    /**
-     * First-time discovery of a skill. Sets state to DISCOVERED, activates
-     * any associated HUD group, emits SKILL_DISCOVERED + SKILL_STATE_CHANGED,
-     * and updates discovery tracking for blitz detection.
-     * @param {SkillRecord} rec
-     * @param {number} now - Current timestamp (ms)
-     * @private
-     */
+    /** First discovery: activates the HUD group, emits SKILL_DISCOVERED + SKILL_STATE_CHANGED, feeds blitz detection. */
     _discoverSkill(rec, now) {
         const prevState = rec.state;
         rec.state       = DISCOVERED;
         rec.discoveredAt = now;
 
-        // Set up initial reminder schedule
         rec.nextReminderAt = now + rec.reminderInterval * 1000;
 
-        // Discovery tracking (blitz detection)
         this._discoveryCount++;
         if (this._discoveryCount === 1) {
             this._firstDiscoveryTime = now;
         }
         this._lastDiscoveryTime = now;
 
-        // Activate HUD group
         if (rec.def.hudGroup && !this._activeGroups.has(rec.def.hudGroup)) {
             this._activeGroups.add(rec.def.hudGroup);
         }
 
-        // Emit events
         eventBus.emit(Events.SKILL_DISCOVERED, {
             skillId:  rec.def.id,
             tier:     rec.def.tier,
@@ -611,12 +492,7 @@ export class SkillsSystem {
 
     }
 
-    /**
-     * Transition a skill to a new state and emit SKILL_STATE_CHANGED.
-     * @param {SkillRecord} rec
-     * @param {string} newState
-     * @private
-     */
+
     _transitionState(rec, newState) {
         const prevState = rec.state;
         rec.state = newState;
@@ -626,7 +502,7 @@ export class SkillsSystem {
             to:      newState,
         });
 
-        // ST-3.4: Mastery celebration — emit MASTERY_FANFARE after state change
+        // Mastery celebration, after the state change.
         if (newState === MASTERED) {
             eventBus.emit(Events.MASTERY_FANFARE, {
                 skillId:    rec.def.id,
@@ -637,30 +513,17 @@ export class SkillsSystem {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  INTERNAL — Prerequisite & Threshold Helpers
-    // ═══════════════════════════════════════════════════════════════════════
+    // INTERNAL: prerequisite & threshold helpers
 
-    /**
-     * Check whether a skill definition's prerequisites are met
-     * (for getNextSuggestions filtering — uses prereq arrays).
-     * @param {Object} def - Skill definition from CATALOG
-     * @returns {boolean}
-     * @private
-     */
+    /** Prerequisites met, for getNextSuggestions. */
     _prereqsMet(def) {
         if (!def.prereqs || def.prereqs.length === 0) return true;
         if (def.prereqType === 'none' || def.prereqType === 'soft') return true;
-        // 'hard' and 'safety' — prereqs must be discovered
+        // 'hard' and 'safety': prereqs must be discovered
         return def.prereqs.every(pid => this.isDiscovered(pid));
     }
 
-    /**
-     * Category-based practice threshold (DISCOVERED → PRACTICED).
-     * @param {Object} def - Skill definition
-     * @returns {number} Use count required
-     * @private
-     */
+    /** Category-based use count for DISCOVERED → PRACTICED. */
     _getPracticeThreshold(def) {
         const S = Constants.SKILLS;
         switch (def.category) {
@@ -671,12 +534,7 @@ export class SkillsSystem {
         }
     }
 
-    /**
-     * Category-based mastery threshold (PRACTICED → MASTERED).
-     * @param {Object} def - Skill definition
-     * @returns {number} Use count required
-     * @private
-     */
+    /** Category-based use count for PRACTICED → MASTERED. */
     _getMasteryThreshold(def) {
         const S = Constants.SKILLS;
         switch (def.category) {
@@ -685,15 +543,8 @@ export class SkillsSystem {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  INTERNAL — Safety Gates
-    // ═══════════════════════════════════════════════════════════════════════
 
-    /**
-     * Check all safety-gated skills and unlock any whose catch threshold
-     * has been met. Emits SKILL_GATE_UNLOCKED for each newly unlocked gate.
-     * @private
-     */
+    /** Unlocks safety-gated skills whose catch threshold is met; emits SKILL_GATE_UNLOCKED per gate. */
     _checkSafetyGates() {
         for (const rec of this._skills.values()) {
             if (!rec.def.safetyGate || rec.gateUnlocked) continue;
@@ -706,42 +557,24 @@ export class SkillsSystem {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  INTERNAL — Spaced Repetition (SM-2 Variant)
-    // ═══════════════════════════════════════════════════════════════════════
+    // INTERNAL: spaced repetition (SM-2 variant)
 
-    /**
-     * Called when a skill is used after discovery. Adjusts SM-2 interval:
-     * if the player used the skill before the reminder was due, the interval
-     * grows (they remember); otherwise it stays as-is until the reminder fires.
-     * @param {SkillRecord} rec
-     * @param {number} now - Current timestamp (ms)
-     * @private
-     */
+    /** SM-2 adjustment on use after discovery: used before the reminder was due → the interval grows; else it stays until the reminder fires. */
     _onSkillUsed(rec, now) {
         if (now < rec.nextReminderAt) {
-            // Used before reminder was due → they remember → interval grows
             rec.reminderInterval = Math.min(
                 rec.reminderInterval * rec.easeFactor,
                 Constants.SKILLS.REMINDER_MAX_INTERVAL
             );
             rec.easeFactor = Math.min(rec.easeFactor + 0.1, 3.0);
         }
-        // Reschedule next reminder from now
         rec.nextReminderAt = now + rec.reminderInterval * 1000;
     }
 
-    /**
-     * 1 Hz reminder check. Finds the most overdue non-mastered, non-noReminder
-     * skill and emits SKILL_REMINDED for it. Respects frequency cap and
-     * blitz suppression.
-     * @param {number} now - Current timestamp (ms)
-     * @private
-     */
+    /** 1 Hz: emits SKILL_REMINDED for the most overdue non-mastered, non-noReminder skill, within the frequency cap and blitz suppression. */
     _checkReminders(now) {
         const S = Constants.SKILLS;
 
-        // Reset frequency-cap window if expired
         const capWindowMs = S.REMINDER_CAP_WINDOW * 1000;
         if (now - this._reminderCapStart > capWindowMs) {
             this._reminderCapCount = 0;
@@ -749,12 +582,11 @@ export class SkillsSystem {
         }
         if (this._reminderCapCount >= S.REMINDER_FREQUENCY_CAP) return;
 
-        // Blitz suppression — experts don't need hand-holding
+        // Blitz suppression: experts don't need hand-holding.
         if (this._isBlitzing(now) && Math.random() < S.BLITZ_SUPPRESS_CHANCE) {
             return;
         }
 
-        // Find the single most overdue skill
         let bestRec    = null;
         let bestOverdue = 0;
 
@@ -762,7 +594,7 @@ export class SkillsSystem {
             if (rec.state !== DISCOVERED && rec.state !== PRACTICED) continue;
             if (rec.def.noReminder) continue;
             if (now < rec.nextReminderAt) continue;
-            // CP-4: fall silent after MAX_UNHEEDED_NUDGES for this skill.
+            // Silent after MAX_UNHEEDED_NUDGES for this skill.
             if ((this._unheededNudges.get(rec.def.id) || 0) >= Constants.SKILLS.MAX_UNHEEDED_NUDGES) continue;
 
             const overdue = now - rec.nextReminderAt;
@@ -774,10 +606,8 @@ export class SkillsSystem {
 
         if (!bestRec) return;
 
-        // Emit reminder. CP-4: veterans get a one-line ticker, not a modal; and
-        // each reminder counts toward the per-skill unheeded cap (reset on use).
-        // Slice 8: the manage_codex reminder is enriched with a "did you know?"
-        // pick (an unlocked-but-unread entry) when a codex ref is available.
+        // Veterans get a one-line ticker, not a modal; each reminder counts toward the per-skill unheeded cap (reset on
+        // use); manage_codex gets a "did you know?" pick when a codex ref exists.
         const payload = {
             skillId: bestRec.def.id,
             presentation: this.getHintPresentation(),
@@ -788,7 +618,7 @@ export class SkillsSystem {
         eventBus.emit(Events.SKILL_REMINDED, payload);
         this.noteNudgeShown(bestRec.def.id);
 
-        // Reminder was needed → shrink interval (they forgot)
+        // Reminder was needed: shrink the interval (they forgot).
         bestRec.reminderInterval = Math.max(
             bestRec.reminderInterval / bestRec.easeFactor,
             S.REMINDER_MIN_INTERVAL
@@ -799,34 +629,16 @@ export class SkillsSystem {
         this._reminderCapCount++;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  INTERNAL — Blitz Detection
-    // ═══════════════════════════════════════════════════════════════════════
 
-    /**
-     * Detect "blitz mode" — a veteran player discovering many skills rapidly.
-     * Returns true if ≥ BLITZ_THRESHOLD skills were discovered within
-     * BLITZ_DETECTION_WINDOW seconds of the first discovery.
-     * @param {number} now - Current timestamp (ms)
-     * @returns {boolean}
-     * @private
-     */
+    /** "Blitz mode": ≥ BLITZ_THRESHOLD skills discovered within BLITZ_DETECTION_WINDOW seconds of the first discovery. */
     _isBlitzing(now) {
         if (this._discoveryCount < Constants.SKILLS.BLITZ_THRESHOLD) return false;
         const elapsed = (now - this._firstDiscoveryTime) / 1000;
         return elapsed < Constants.SKILLS.BLITZ_DETECTION_WINDOW;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  INTERNAL — Persistence
-    // ═══════════════════════════════════════════════════════════════════════
 
-    /**
-     * Serialize current skill state for save. Only includes non-undiscovered
-     * skills (sparse format).
-     * @returns {Object} Serialized state
-     * @private
-     */
+    /** Sparse: only non-undiscovered skills. */
     _serialize() {
         const skills = {};
         for (const [id, rec] of this._skills) {
@@ -848,26 +660,18 @@ export class SkillsSystem {
         };
     }
 
-    /**
-     * Restore skill state from loaded save data. Rehydrates individual skill
-     * records, active HUD groups, and catch count. Caps overdue reminders
-     * to prevent a flood after long absence (max 10 min catchup).
-     * @param {Object} data - Serialized state from _serialize()
-     */
+    /** Caps overdue reminders (max 10 min catchup) so a long absence causes no flood. @param {Object} data from _serialize() */
     restore(data) {
         if (!data || data.version !== 1) return;
 
-        // Restore catch count (for safety gate continuity)
         if (typeof data.totalCatches === 'number') {
             this._totalCatches = data.totalCatches;
         }
 
-        // Restore active HUD groups
         if (Array.isArray(data.activeGroups)) {
             this._activeGroups = new Set(data.activeGroups);
         }
 
-        // Restore individual skills
         if (data.skills) {
             const now = Date.now();
             for (const [id, saved] of Object.entries(data.skills)) {
@@ -886,13 +690,11 @@ export class SkillsSystem {
                     rec.easeFactor = saved.easeFactor;
                 }
 
-                // Cap overdue reminders — max 10 min catchup after absence
                 rec.nextReminderAt = now + Math.min(
                     rec.reminderInterval * 1000,
                     600000
                 );
 
-                // Recheck gate status with restored catch count
                 if (rec.def.safetyGate) {
                     rec.gateUnlocked = this._totalCatches >= rec.def.safetyGate.minCatches;
                 }
@@ -901,18 +703,13 @@ export class SkillsSystem {
 
         this._checkSafetyGates();
 
-        // Notify other systems that skills are loaded
         eventBus.emit(Events.SKILLS_LOADED, { skills: this._skills });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  PUBLIC — Session helpers (Sprint 3 skill-based gates)
-    // ═══════════════════════════════════════════════════════════════════════
 
-    /** Returns count of LASSO_CAPTURED + ARM_CAPTURED this session. */
     getTotalCatches() { return this._totalCatches; }
 
-    /** Returns elapsed seconds since this SkillsSystem instance was constructed. */
+    /** Seconds since construction. */
     getSessionElapsed() { return (Date.now() - this._sessionStartMs) / 1000; }
 }
 

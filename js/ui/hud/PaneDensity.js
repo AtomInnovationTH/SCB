@@ -1,51 +1,40 @@
 /**
- * PaneDensity.js — the HUD pane-priority "density ladder" (rev 3).
+ * PaneDensity.js — the HUD pane-priority "density ladder".
  *
- * ONE ordered array (`this.rungs`). Slider level k shows the last k rungs:
- * index 0 sheds first on `-`, the right end is full clutter. 14 rungs (10 base + 4
- * instruments) → 15 detents (level 0 = empty view: no HUD, no sky labels, no city names, no
- * ships). Plan: tmp/plans/1788867799156-hud-pane-ladder-reorder.md
+ * ONE ordered array (`this.rungs`). Slider level k shows the last k rungs: index 0 sheds first on `-`, the right end is
+ * full clutter; level 0 = empty view (no HUD, no sky labels, no city names, no ships).
  *
- * Design — NO COUNTER. The ladder holds no hidden-count state of its own; each
- * step reads the LIVE visibility of every rung via its injected `isVisible()`
- * adapter and acts on it:
+ * NO COUNTER. The ladder holds no hidden-count state; each step reads the LIVE visibility of every rung via its injected
+ * `isVisible()` adapter:
  *   • `-` hides the lowest-priority (earliest) rung whose `isVisible()` is true.
  *   • `+` shows the highest-priority (latest) rung whose `isVisible()` is false.
- * This composes naturally with the individual pane toggles (7/8/9/0): if the
- * player re-shows a pane with its own key, the next `-`/`+` simply re-reads the
- * new live state and targets the right rung. NavSphere "starts hidden" falls out
- * for free — its `isVisible()` is already false, so `-` skips it.
+ * This composes with the individual pane toggles (7/8/9/0): if the player re-shows a pane with its own key, the next
+ * `-`/`+` re-reads the live state and targets the right rung. NavSphere "starts hidden" falls out for free — its
+ * `isVisible()` is already false, so `-` skips it.
  *
- * Composite rungs (`compositeRung`, `members`): isVisible = ANY member;
- * setVisible(v) fans out to every member; onFlip fires ONCE with the
- * composite's id (never per member) on every path (down / up / setLevel /
- * clearAll / restore). Members are ordinary rungs and may be missing from the
- * top-level ladder — FloorMask addresses them by their own ids. A composite
- * with zero members reads not-visible; setVisible is a no-op. `addMember`
- * appends (main.js drops the Override gag into `experimental` at the ladder
- * gate).
+ * Composite rungs (`compositeRung`, `members`): isVisible = ANY member; setVisible(v) fans out to every member; onFlip
+ * fires ONCE with the composite's id (never per member) on every path (down / up / setLevel / clearAll / restore).
+ * Members are ordinary rungs and may be missing from the top-level ladder — FloorMask addresses them by their own ids.
+ * A composite with zero members reads not-visible; setVisible is a no-op. `addMember` appends (main.js drops the
+ * Override gag into `experimental` at the ladder gate).
  *
- * World rungs (`world: true` — sky labels, and the one "Ships & city labels" step) are scene
- * objects, not HUD chrome. `hudClear()` is true iff every non-world rung is
- * currently hidden (slider level 1 of the final ladder: only the ships step;
- * level 2 with the MOTHER box visible is false; level 0 is true).
+ * World rungs (`world: true` — sky labels, and the one "Ships & city labels" step) are scene objects, not HUD chrome.
+ * `hudClear()` is true iff every non-world rung is currently hidden (slider level 1 of the final ladder: only the ships
+ * step; level 2 with the MOTHER box visible is false; level 0 is true).
  *
- * Followers (`opts.followers`, not in `rungs`): a follower is chrome that rides the HUD instead of
- * being a step of its own — the alerts & indicators flag. It never counts as a slider position
- * and `-`/`+` never stop on it, because a press that only moved it showed the player nothing.
- * Rule: followers read hidden exactly while no HUD (non-world) step is showing. The press that hides
- * the last HUD step hides them in the same press, the press that brings a HUD step back shows
- * them again. `+`, restore, floor changes, the panes' own keys and the HUD poll can only SHOW them (`revealFollowers`):
- * muting alerts is something only a `-` press may do, so a pane that is merely not laid out
- * yet can never silence a warning.
+ * Followers (`opts.followers`, not in `rungs`): chrome that rides the HUD instead of being a step of its own — the
+ * alerts & indicators flag. It never counts as a slider position and `-`/`+` never stop on it, because a press that only
+ * moved it showed the player nothing. Rule: followers read hidden exactly while no HUD (non-world) step is showing. The
+ * press that hides the last HUD step hides them in the same press, the press that brings a HUD step back shows them
+ * again. `+`, restore, floor changes, the panes' own keys and the HUD poll can only SHOW them (`revealFollowers`):
+ * muting alerts is something only a `-` press may do, so a pane that is merely not laid out yet can never silence a
+ * warning.
  *
- * The ladder is ONE array, edited in place by the hub before the FloorMask
- * caches it: `insertBefore(anchorId, rung)` splices an instrument ahead of a
- * named rung (throws on an unknown anchor — a silent append would renumber
- * the slider), `find(id)` looks a rung up top-level AND inside composites.
+ * The ladder is ONE array, edited in place by the hub before the FloorMask caches it: `insertBefore(anchorId, rung)`
+ * splices an instrument ahead of a named rung (throws on an unknown anchor — a silent append would renumber the slider),
+ * `find(id)` looks a rung up top-level AND inside composites.
  *
- * The rung adapters are INJECTED (not hard-wired) so this module is pure and
- * Node-testable: the DOM / canvas plumbing lives in HUD.js.
+ * The rung adapters are INJECTED so this module is pure and Node-testable: the DOM / canvas plumbing lives in HUD.js.
  *
  * @module ui/hud/PaneDensity
  */
@@ -64,18 +53,9 @@
  */
 
 /**
- * Composite rung — one ladder slot that fans out to several member rungs.
- * isVisible = ANY member visible; setVisible(v) writes every member; addMember
- * appends (main.js uses this at the ladder gate to drop the Override gag into
- * `experimental`). Members are ordinary rungs and may themselves be missing
- * from the top-level ladder. A composite with zero members reads not-visible
- * and setVisible is a no-op. PaneDensity.onFlip fires the composite's id once,
- * never per member (ladder reorder rev 3,
- * tmp/plans/1788867799156-hud-pane-ladder-reorder.md).
- *
- * @param {string} id
- * @param {string} label
- * @param {DensityRung[]} [members]
+ * Composite rung — one ladder slot that fans out to several member rungs (see the header): isVisible = ANY member
+ * visible; setVisible(v) writes every member; addMember appends. PaneDensity.onFlip fires the composite's id once,
+ * never per member.
  * @returns {DensityRung}
  */
 export function compositeRung(id, label, members) {
@@ -118,17 +98,14 @@ export class PaneDensity {
    * @param {(text: string, kind: string) => void} [opts.notify]  Transient on-screen notice.
    *   Kind: 'confirm' = per-step/readout lines (the engaged policy drops them);
    *   'prompt' = the pure-scenery reminder ("HUD already clear · + restores"),
-   *   the exit affordance (must always show — Session O, plan D12).
+   *   the exit affordance (must always show).
    * @param {(text: string) => void} [opts.log]     Reactive comms-history line.
    * @param {DensityRung[]} [opts.followers]  Chrome that follows the last HUD step (see the
    *   header): `{id, label, isVisible, setVisible}` like a rung, but not part of `rungs`.
-   * @param {(paneId: string, shown: boolean) => void} [opts.onFlip]  Fired once
-   *   per FLIPPED rung, AFTER its setVisible ran (Wave 5 Session H, Job A —
-   *   the D5 room-memory write trigger). Injected like notify/log so this
-   *   module stays pure/EventBus-free; HUD.js wires it to the ONE
-   *   HUD_PANE_VISIBILITY emit. No-op presses (down() with nothing visible,
-   *   up() with nothing hidden) never fire it; setLevel() fires it once per
-   *   rung it actually flips (`_silent` silences notices, never this edge).
+   * @param {(paneId: string, shown: boolean) => void} [opts.onFlip]  Fired once per FLIPPED rung, AFTER its setVisible
+   *   ran (the room-memory write trigger). Injected so this module stays pure/EventBus-free; HUD.js wires it to the ONE
+   *   HUD_PANE_VISIBILITY emit. No-op presses (down() with nothing visible, up() with nothing hidden) never fire it;
+   *   setLevel() fires it once per rung it actually flips (`_silent` silences notices, never this edge).
    */
   constructor({ rungs, followers, notify, log, onFlip } = {}) {
     /** @type {DensityRung[]} */
@@ -141,15 +118,12 @@ export class PaneDensity {
     /** @private true while setLevel() walks — per-step notices are silenced. */
     this._silent = false;
     /**
-     * CLEAN VIEW (owner, 2026-09-06; Zoom Ladder only — main.js flips this
-     * inside the LADDER gate, so a `?ladder=0` boot keeps the shipped
-     * one-rung `-`/`+`): while true the bus `-` CLEARS every pane in one
-     * press (clearAll) and the bus `+` from a cleared screen RESTORES the
-     * room that was showing (restore) — one press each way. Default false.
-     * CLEAN VIEW IS A MODE, NOT A ROOM EDIT: while the stash is held the
-     * hub's flip listener skips the D5 room capture (hasStash() is the
-     * signal), FloorMask skips its departing-floor capture, so a reload or
-     * the next floor brings the room back exactly as it was before `-`.
+     * CLEAN VIEW (owner 2026-09-06; Zoom Ladder only — main.js flips this inside the LADDER gate, so a `?ladder=0` boot
+     * keeps the shipped one-rung `-`/`+`): while true the bus `-` CLEARS every pane in one press (clearAll) and the bus
+     * `+` from a cleared screen RESTORES the room that was showing (restore). Default false.
+     * CLEAN VIEW IS A MODE, NOT A ROOM EDIT: while the stash is held the hub's flip listener skips the room capture
+     * (hasStash() is the signal) and FloorMask skips its departing-floor capture, so a reload or the next floor brings
+     * the room back exactly as it was before `-`.
      * @type {boolean}
      */
     this.clearOnDown = false;
@@ -157,13 +131,11 @@ export class PaneDensity {
     this._stash = null;
   }
 
-  /** Total rung count — the touch slider's max (iPad port, Ipad.md §5.1). */
+  /** Total rung count — the touch slider's max. */
   get total() { return this.rungs.length; }
 
   /**
-   * Live count of visible rungs. The slider's position source of truth — read
-   * fresh every time (no counter), so it composes with the individual pane
-   * toggles exactly like `-`/`+` do.
+   * Live count of visible rungs. The slider's position source of truth — read fresh every time (no counter).
    * @returns {number}
    */
   visibleCount() {
@@ -171,11 +143,10 @@ export class PaneDensity {
   }
 
   /**
-   * Live count of rungs that can show right now: visible, or hidden by the ladder itself. A rung
-   * that waits for something (the first scan, the daughters gate) or has nothing to show is not
-   * counted — `-` and `+` walk past it, so a slider position for it would do nothing. This is the
-   * slider's position count; `total` stays the fixed rung count. Rungs without an `isAvailable`
-   * adapter count as slots (hidden = hidden by the ladder).
+   * Live count of rungs that can show right now: visible, or hidden by the ladder itself. A rung that waits for
+   * something (the first scan, the daughters gate) or has nothing to show is not counted — `-` and `+` walk past it, so a
+   * slider position for it would do nothing. This is the slider's position count; `total` stays the fixed rung count.
+   * Rungs without an `isAvailable` adapter count as slots.
    * @returns {number}
    */
   availableCount() {
@@ -183,10 +154,9 @@ export class PaneDensity {
   }
 
   /**
-   * The slider level at which rung `id` is the lowest one showing: the number of slots from that
-   * rung to the end (the same count `visibleCount()` returns when exactly that suffix shows).
-   * Null for an unknown id. A rung that is not a slot right now gives the level of the next slot.
-   * @param {string} id
+   * The slider level at which rung `id` is the lowest one showing: the number of slots from that rung to the end (the
+   * same count `visibleCount()` returns when exactly that suffix shows). Null for an unknown id. A rung that is not a
+   * slot right now gives the level of the next slot.
    * @returns {number|null}
    */
   levelOf(id) {
@@ -198,12 +168,8 @@ export class PaneDensity {
   }
 
   /**
-   * True iff every non-world rung is currently hidden. World rungs (sky
-   * labels, ships, city pills) are scene objects — they do not count as HUD
-   * chrome. Slider level 1 of the final ladder (only the ships & city labels
-   * step, world) is true; level 2 (the MOTHER box visible) is false; level 0 is
-   * true. Reads live via `_safeVisible`; does not recurse into members — a
-   * visible composite (no `world` flag) is HUD chrome even if its only
+   * True iff every non-world rung is currently hidden (see the header for the world rungs). Reads live via
+   * `_safeVisible`; does not recurse into members — a visible composite (no `world` flag) is HUD chrome even if its only
    * showing member is a world leaf.
    * @returns {boolean}
    */
@@ -212,13 +178,9 @@ export class PaneDensity {
   }
 
   /**
-   * Splice `rung` into `this.rungs` immediately before the top-level rung
-   * whose id is `anchorId`. Returns the inserted index. Throws if the
-   * anchor is unknown (main.js calls `insertBefore('debris', cargo)` etc.
-   * before `new FloorMask(...)` — `_resolve` caches once).
-   * @param {string} anchorId
-   * @param {DensityRung} rung
-   * @returns {number}
+   * Splice `rung` into `this.rungs` immediately before the top-level rung whose id is `anchorId`. Returns the inserted
+   * index. Throws if the anchor is unknown (main.js calls `insertBefore('debris', cargo)` etc. before
+   * `new FloorMask(...)` — `_resolve` caches once).
    */
   insertBefore(anchorId, rung) {
     const i = this.rungs.findIndex((r) => r && r.id === anchorId);
@@ -227,11 +189,7 @@ export class PaneDensity {
     return i;
   }
 
-  /**
-   * Rung by id, searching top-level AND composite members recursively.
-   * @param {string} id
-   * @returns {DensityRung|null}
-   */
+  /** Rung by id, searching top-level AND composite members recursively. */
   find(id) {
     const walk = (list) => {
       if (!Array.isArray(list)) return null;
@@ -247,10 +205,9 @@ export class PaneDensity {
   }
 
   /**
-   * Hide the followers when no HUD step is showing, show them when one is. Run by `down()` only
-   * (setLevel's down steps are `down()`): muting is something only a `-` press may do. `up()` and
-   * `restore()` call the show-only `revealFollowers()` instead.
-   * No flip event: a follower is derived state, not a pane the room memory should record.
+   * Hide the followers when no HUD step is showing, show them when one is. Run by `down()` only (setLevel's down steps
+   * are `down()`): muting is something only a `-` press may do. `up()` and `restore()` call the show-only
+   * `revealFollowers()` instead. No flip event: a follower is derived state, not a pane the room memory should record.
    * @private
    */
   _syncFollowers() {
@@ -264,10 +221,9 @@ export class PaneDensity {
   }
 
   /**
-   * Show followers that are hidden while a HUD step is showing (`+`, restore, floor change, a pane's
-   * own key, the HUD's poll). It never hides one: only a `-` press may mute alerts, so a HUD that
-   * is merely not laid out (menu, view switch) and a `+` that brings back only a world step can
-   * never silence a warning. Cheap when nothing is hidden.
+   * Show followers that are hidden while a HUD step is showing (`+`, restore, floor change, a pane's own key, the HUD's
+   * poll). It never hides one: only a `-` press may mute alerts, so a HUD that is merely not laid out (menu, view
+   * switch) and a `+` that brings back only a world step can never silence a warning. Cheap when nothing is hidden.
    */
   revealFollowers() {
     if (!this.followers.length) return;
@@ -279,18 +235,15 @@ export class PaneDensity {
   }
 
   /**
-   * Touch-slider entry (iPad port): walk the ladder until exactly `level`
-   * rungs are visible. Each step is a real down()/up() that re-reads live
-   * visibility, so out-of-band pane toggles compose. Per-step notices are
-   * silenced; ONE summary notice/log fires if anything changed — unless
-   * `quiet` is set (a live drag emits per-detent input events; the caller
+   * Touch-slider entry: walk the ladder until exactly `level` rungs are visible. Each step is a real down()/up() that
+   * re-reads live visibility, so out-of-band pane toggles compose. Per-step notices are silenced; ONE summary
+   * notice/log fires if anything changed — unless `quiet` is set (a live drag emits per-detent input events; the caller
    * then announces ONCE on release via announceLevel()).
    *
-   * Bounded: stops when a step reports no rung OR when a step fails to change
-   * the live count (a refusing/broken adapter must never loop forever).
+   * Bounded: stops when a step reports no rung OR when a step fails to change the live count (a refusing/broken adapter
+   * must never loop forever).
    *
    * @param {number} level  target visible-rung count (clamped to 0..total)
-   * @param {{quiet?: boolean}} [opts]
    * @returns {number} steps actually performed
    */
   setLevel(level, { quiet = false } = {}) {
@@ -315,9 +268,8 @@ export class PaneDensity {
   }
 
   /**
-   * Emit the level summary (notice + comms log) from LIVE state. setLevel()
-   * calls this itself unless quiet; a dragging slider calls it once on
-   * release so an 11-detent slide is one line, not eleven.
+   * Emit the level summary (notice + comms log) from LIVE state. setLevel() calls this itself unless quiet; a dragging
+   * slider calls it once on release so an 11-detent slide is one line, not eleven.
    */
   announceLevel() {
     const cur = this.visibleCount();
@@ -328,21 +280,16 @@ export class PaneDensity {
     this._log(text);
   }
 
-  /**
-   * `-` — hide the lowest-priority currently-visible rung. No-op (with a
-   * notice) when the HUD is already pure scenery.
-   * @returns {DensityRung|null} the rung hidden, or null on a no-op.
-   */
+  /** `-` — hide the lowest-priority currently-visible rung. No-op (with a notice) when the HUD is already pure scenery. */
   down() {
     const rung = this.rungs.find(r => this._safeVisible(r));
     if (!rung) {
-      // Everything is already hidden — remind the player how to get it back.
       this._syncFollowers();
       if (!this._silent) this._notify('HUD already clear · + restores', 'prompt');
       return null;
     }
     rung.setVisible(false);
-    if (this._onFlip) this._onFlip(rung.id, false);   // AFTER the bit flip (Job A)
+    if (this._onFlip) this._onFlip(rung.id, false);   // AFTER the bit flip
     this._syncFollowers();                            // the last HUD step took the alerts with it
     const pure = this.rungs.every(r => !this._safeVisible(r));
     const text = pure
@@ -356,28 +303,23 @@ export class PaneDensity {
   }
 
   /**
-   * `+` — restore the highest-priority currently-hidden rung. No-op (with a
-   * notice) when every pane is already visible.
+   * `+` — restore the highest-priority currently-hidden rung. No-op (with a notice) when every pane is already visible.
    *
-   * SAFETY OVERRIDE witness (owner 2026-09-07): a rung whose pane CANNOT show
-   * right now — NEXT with no room (`data-next-mode="hidden"`), an empty pin
-   * widget, an absent `.skills-pane` — reads not-visible after its bit is
-   * cleared, so the old scan re-picked it on every press ("HUD + · Next shown"
-   * with nothing appearing) and every rung below it was unreachable. The scan
-   * now clears such a rung's bit (it appears when its content arrives) and
-   * keeps walking down until a pane actually shows; the notice names THAT rung,
-   * or reads "All panes visible" when nothing more can show.
+   * owner 2026-09-07 (SAFETY OVERRIDE witness): a rung whose pane CANNOT show right now — NEXT with no room
+   * (`data-next-mode="hidden"`), an empty pin widget, an absent `.skills-pane` — reads not-visible after its bit is
+   * cleared, so a naive scan re-picks it on every press and every rung below is unreachable. The scan therefore clears
+   * such a rung's bit (it appears when its content arrives) and keeps walking down until a pane actually shows; the
+   * notice names THAT rung, or reads "All panes visible" when nothing more can show.
    * @returns {DensityRung|null} the rung shown (or the last bit cleared), or null on a no-op.
    */
   up() {
-    // Scan from the highest-priority (last) rung down so `+` reverses `-`.
     let shown = null;      // the rung that actually became visible
     let flipped = null;    // the last rung whose bit was cleared
     for (let i = this.rungs.length - 1; i >= 0; i--) {
       const rung = this.rungs[i];
       if (this._safeVisible(rung)) continue;
       rung.setVisible(true);
-      if (this._onFlip) this._onFlip(rung.id, true);    // AFTER the bit flip (Job A)
+      if (this._onFlip) this._onFlip(rung.id, true);    // AFTER the bit flip
       flipped = rung;
       if (this._safeVisible(rung)) { shown = rung; break; }
       // Content/dodge-hidden: bit cleared, nothing to see yet — keep walking.
@@ -397,10 +339,8 @@ export class PaneDensity {
   }
 
   /**
-   * Wire the ladder to the event bus. Kept out of the constructor so tests can
-   * drive `down()` / `up()` directly without an event bus. The routing reads
-   * `clearOnDown` LIVE at press time (main.js sets it after attach, inside the
-   * LADDER gate): false → the shipped one-rung walk; true → the clean view.
+   * Wire the ladder to the event bus (kept out of the constructor so tests can drive `down()` / `up()` directly). The
+   * routing reads `clearOnDown` LIVE at press time (main.js sets it after attach, inside the LADDER gate).
    * @param {{on: Function}} bus
    * @param {{HUD_DENSITY_DOWN: string, HUD_DENSITY_UP: string}} events
    */
@@ -412,12 +352,9 @@ export class PaneDensity {
   }
 
   /**
-   * CLEAN VIEW `-` — hide EVERY visible rung in one press and remember which
-   * they were (the stash `+` restores). Each hide is a real down() step (the
-   * onFlip edge fires per rung → the D5 room memory records the clean room,
-   * exactly as eight `-` presses would). Already clear → the shipped no-op
-   * notice, and the previous stash is KEPT (a second `-` must not forget the
-   * room). ONE notice.
+   * CLEAN VIEW `-` — hide EVERY visible rung in one press and remember which they were (the stash `+` restores). Each
+   * hide is a real down() step (the onFlip edge fires per rung, exactly as eight `-` presses would). Already clear → the
+   * shipped no-op notice, and the previous stash is KEPT (a second `-` must not forget the room). ONE notice.
    * @returns {number} rungs hidden
    */
   clearAll() {
@@ -426,10 +363,9 @@ export class PaneDensity {
       this._notify('HUD already clear · + restores', 'prompt');
       return 0;
     }
-    // The stash is set BEFORE the walk: the hub's flip listener reads
-    // hasStash() to know these flips are the clean-view MODE (not remembered
-    // — the room memory keeps the pre-clear room; owner 2026-09-06). A walk
-    // that moved nothing (every adapter refused) leaves no stash behind.
+    // The stash is set BEFORE the walk: the hub's flip listener reads hasStash() to know these flips are the clean-view
+    // MODE (not remembered — the room memory keeps the pre-clear room). A walk that moved nothing (every adapter
+    // refused) leaves no stash behind.
     const prev = this._stash;
     this._stash = shown;
     const steps = this.setLevel(0, { quiet: true });
@@ -441,19 +377,17 @@ export class PaneDensity {
   }
 
   /**
-   * CLEAN VIEW `+` — bring back the stashed room: every stashed rung that is
-   * still hidden is shown (onFlip per rung), the stash is consumed, ONE
-   * summary notice. Rungs the player re-showed by hand meanwhile are left
-   * alone; a stashed id that no longer exists is skipped. No stash → 0 and
-   * nothing happens (attach() falls through to the shipped up() instead).
+   * CLEAN VIEW `+` — bring back the stashed room: every stashed rung that is still hidden is shown (onFlip per rung),
+   * the stash is consumed, ONE summary notice. Rungs the player re-showed by hand meanwhile are left alone; a stashed id
+   * that no longer exists is skipped. No stash → 0 and nothing happens (attach() falls through to up() instead).
    * @returns {number} rungs shown
    */
   restore() {
     const stash = this._stash;
     if (!stash || !stash.length) { this._stash = null; return 0; }
     let shown = 0;
-    // Flips run WHILE the stash is set (still the mode → not remembered: the
-    // room memory already holds this very room); the stash clears after.
+    // Flips run WHILE the stash is set (still the mode → not remembered: the room memory already holds this very room);
+    // the stash clears after.
     for (const id of stash) {
       const rung = this.rungs.find((r) => r && r.id === id);
       if (!rung || this._safeVisible(rung)) continue;
@@ -468,13 +402,11 @@ export class PaneDensity {
   }
 
   /**
-   * Forget the stash (the hub calls this on a FLOOR CHANGE: a room stashed on
-   * floor 2 must never be restored onto floor 4 — the new floor's own room
-   * applies and `+` walks the shipped ladder there).
+   * Forget the stash (the hub calls this on a FLOOR CHANGE: a room stashed on floor 2 must never be restored onto floor 4
+   * — the new floor's own room applies and `+` walks the ladder there).
    */
   dropStash() { this._stash = null; }
 
-  /** @returns {boolean} true while a clearAll() stash is waiting for `+` */
   hasStash() { return !!(this._stash && this._stash.length); }
 
   /** @private visible, or hidden by the ladder (see availableCount). Throwing adapter = not a slot. */
@@ -485,7 +417,7 @@ export class PaneDensity {
     try { return !!rung.isAvailable(); } catch (_) { return false; }
   }
 
-  /** @private Defensive isVisible() — a throwing/absent adapter reads as hidden. */
+  /** @private A throwing/absent adapter reads as hidden. */
   _safeVisible(rung) {
     try { return !!(rung && rung.isVisible()); } catch (_) { return false; }
   }

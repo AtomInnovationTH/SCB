@@ -34,6 +34,7 @@ import { latLonToPosition } from './Ephemeris.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 import { fetchData } from '../core/dataUrl.js';
 import { MONO_ADVANCE_EM } from '../core/Typeface.js';
+import { smoothstep01 } from '../core/MathUtil.js';
 
 /** Hard cap on rendered labels (performance + clutter). */
 export const MAX_CITIES = 420;
@@ -279,7 +280,7 @@ export function limbFade(cityWorldPos, earthCenter, camPos, lo = LIMB_FADE_LO, h
   if (d <= lo) return 0;
   if (d >= hi) return 1;
   const t = (d - lo) / (hi - lo);
-  return t * t * (3 - 2 * t);   // smoothstep
+  return smoothstep01(t);   // smoothstep
 }
 
 /** Distance fade: 1.0 inside `near`, linear to 0.0 at `far` (scene units). */

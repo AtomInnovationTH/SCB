@@ -1,26 +1,20 @@
 /**
- * LeftStack.js — pure left-arm chain layout (plan Task 8, hud-pane-ladder-reorder).
+ * Pure left-arm chain layout. The left HUD arm is Mother → Daughters in `#hud-left-column`, then overlay riders
+ * Cargo → Orbit → Autopilot → Pin stacked under the column down to the footer band. This is the ONE allocator:
+ * given a ceiling (column bottom, 1 Hz cached as `_leftColumnBottom` in main.js) and a floor (footer band top minus
+ * the stack gap), it places riders greedily top-down and the bottom rider yields first
+ * (natural → compact → trimmed → layout-hidden). Vertical order is priority order: Pin sheds first, then
+ * Autopilot, Orbit, then Cargo trims.
  *
- * The left HUD arm is Mother → Daughters in `#hud-left-column`, then overlay
- * riders Cargo → Orbit → Autopilot → Pin stacked under the column down to the
- * footer band. This module is the ONE allocator: given a ceiling (the column
- * bottom, 1 Hz cached as `_leftColumnBottom` in main.js) and a floor (footer
- * band top minus the stack gap), it places riders greedily top-down and lets
- * the bottom rider yield first (natural → compact → trimmed → layout-hidden).
- * Vertical order is priority order: Pin sheds first, then Autopilot, then
- * Orbit, then Cargo trims.
+ * Density-hidden riders (`hidden()` true) take no room, are not placed, and `apply` is not called. The stack never
+ * writes `data-density-hidden`; a layout-hidden rider collapses via its own `apply` (e.g. `data-stack-hidden`).
  *
- * Density-hidden riders (`hidden()` true) take no room, are not placed, and
- * `apply` is not called. The stack never writes `data-density-hidden`; a
- * layout-hidden rider collapses via its own `apply` (e.g. `data-stack-hidden`).
+ * Big screen: every rider is drawn HUD_SCALE (1.25) x bigger from its top-left corner (CSS `scale`), so the stack
+ * works in SCREEN px: each rider's natural / compact / min height is multiplied by the scale before packing, and
+ * `apply` gets the rider's LAYOUT height (screen px / scale) so a trimmed rider's max-height lands on the screen
+ * height placed here. Ceiling and floor are screen px already.
  *
- * u9-big-text: on a big screen every rider is drawn HUD_SCALE (1.25) x bigger from its top-left corner (the CSS
- * `scale` on the rider), so the stack works in SCREEN px: each rider's natural / compact / min height is multiplied
- * by the scale before it is packed into the span, and `apply` gets the rider's own LAYOUT height (screen px / scale)
- * so a trimmed rider's max-height still lands on the screen height this module placed. Ceiling and floor are screen
- * px already. At scale 1 every number is the one it always was.
- *
- * Pure / Node-testable: no DOM, no timers. Wiring lives in a later wave.
+ * Pure / Node-testable: no DOM, no timers.
  *
  * @module ui/hud/LeftStack
  */
@@ -45,13 +39,10 @@ import { currentHudScale } from '../HudScale.js';
  * @property {'natural'|'compact'|'trimmed'|'hidden'} mode
  */
 
-/** Gap between placed riders (px). Plan locked decision #8 / layout target. */
+/** Gap between placed riders (px). */
 export const LEFT_STACK_GAP_PX = 8;
 
-/**
- * @param {any} fn
- * @returns {number|null} a finite px value, else null
- */
+/** @returns {number|null} a finite px value (times k), else null */
 function callPx(fn, k = 1) {
   if (typeof fn !== 'function') return null;
   try {
@@ -64,30 +55,17 @@ function callPx(fn, k = 1) {
   }
 }
 
-/**
- * @param {any} rider
- * @returns {boolean}
- */
 function isDensityHidden(rider) {
   if (!rider || typeof rider.hidden !== 'function') return true;
   try { return !!rider.hidden(); } catch (_e) { return true; }
 }
 
-/**
- * @param {any} rider
- * @param {LeftStackPlacement} rec
- */
 function applyRider(rider, rec, k = 1) {
   if (!rider || typeof rider.apply !== 'function') return;
   try { rider.apply(rec.top, k === 1 ? rec.height : rec.height / k, rec.mode); } catch (_e) { /* never throw */ }
 }
 
-/**
- * Packed height of non-hidden items (heights + gaps between them).
- * @param {{mode:string, height:number}[]} items
- * @param {number} gap
- * @returns {number}
- */
+/** Packed height of non-hidden items (heights + gaps between them). */
 function packedHeight(items, gap) {
   let sum = 0;
   let n = 0;
@@ -100,15 +78,7 @@ function packedHeight(items, gap) {
   return sum;
 }
 
-/**
- * Leftover px for `items[i]` if every rider above keeps its current mode
- * and this rider may consume the rest of the span.
- * @param {{mode:string, height:number}[]} items
- * @param {number} i
- * @param {number} span
- * @param {number} gap
- * @returns {number}
- */
+/** Leftover px for `items[i]` if every rider above keeps its mode and this one may take the rest of the span. */
 function leftoverFor(items, i, span, gap) {
   let aboveH = 0;
   let aboveN = 0;
@@ -121,12 +91,7 @@ function leftoverFor(items, i, span, gap) {
   return span - aboveH - (aboveN ? gap : 0);
 }
 
-/**
- * One step down the presentation ladder for `item`, picking the first
- * mode that fits in `avail`: compact → trimmed → hidden.
- * @param {{rider:LeftStackRider, mode:string, height:number}} item
- * @param {number} avail
- */
+/** One step down the ladder for `item`, first mode that fits in `avail`: compact → trimmed → hidden. */
 function shed(item, avail, k = 1) {
   if (item.mode === 'natural') {
     const c = callPx(item.rider.compactPx, k);
@@ -151,10 +116,6 @@ function shed(item, avail, k = 1) {
   item.height = 0;
 }
 
-/**
- * @param {any} args
- * @returns {{ok:boolean, ceiling:number, span:number, gap:number, items:object[]}}
- */
 function plan(args) {
   const a = (args && typeof args === 'object') ? args : {};
   const k = (Number.isFinite(a.scale) && a.scale > 0) ? a.scale : currentHudScale();
@@ -180,8 +141,7 @@ function plan(args) {
     for (const it of items) { it.mode = 'hidden'; it.height = 0; }
     return { ok: false, ceiling: Number.isFinite(ceiling) ? ceiling : 0, span: 0, gap, items, k };
   }
-  // Bottom rider yields first (locked decision #5): shed from the tail until
-  // the remaining stack fits in `span`. Placement itself is greedy top-down.
+  // Bottom rider yields first: shed from the tail until the stack fits in `span`.
   let guard = items.length * 4 + 2;
   while (packedHeight(items, gap) > span && guard-- > 0) {
     let i = items.length - 1;
@@ -194,7 +154,6 @@ function plan(args) {
 
 /**
  * Place the left-arm overlay riders between `ceilingPx` and `floorPx`.
- *
  * @param {Object} args
  * @param {number} args.ceilingPx   top of the chain (Daughters / column bottom)
  * @param {number} args.floorPx     exclusive bottom (footer band top − gap)
@@ -219,13 +178,7 @@ export function layout(args) {
   return out;
 }
 
-/**
- * Cheap witness: every non-density-hidden rider is placed at natural height.
- * Does not call `apply`.
- *
- * @param {Object} args  same shape as layout()
- * @returns {boolean}
- */
+/** True when every non-density-hidden rider fits at natural height. Does not call `apply`. */
 export function fitsAll(args) {
   const { items } = plan(args);
   for (const it of items) {

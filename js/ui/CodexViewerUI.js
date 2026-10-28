@@ -1,26 +1,19 @@
 /**
- * CodexViewerUI.js — DOM overlay modal for browsing the codex entries.
- * Toggle with I key ("Info"). Escape closes.
+ * CodexViewerUI.js — DOM overlay modal for browsing the codex entries. Toggle with I; Escape closes.
  *
- * Layout (Slice 1 overhaul): full-screen overlay → centered panel with a
- * **3-column master-detail** interior:
- *   • sidebar (categories + learning paths)
- *   • compact entry list (dense rows — title · one-line hook · NEW/LOCKED pip)
- *   • persistent reading pane (QUICK LOOK → BRIEFING → TECH LEVEL → REAL WORLD →
- *     FORMULA → RELATED → prev/next → WARNING — the manual's authored red box,
- *     entries carrying `i18n.warning`, unlocked only; plan 1788957399035 §1.23;
- *     since Lane E an unlocked HARDWARE entry also floats its rendered part
- *     portrait right of the prose with a HARDWARE facts block — one render per
- *     entry through the injected `portraitFor`, text-only on any miss)
+ * Full-screen overlay → centred panel with a 3-column master-detail interior:
+ *   - sidebar (categories + learning paths)
+ *   - compact entry list (title, one-line hook, NEW/LOCKED pip)
+ *   - persistent reading pane (QUICK LOOK, BRIEFING, TECH LEVEL, REAL WORLD, FORMULA, RELATED, prev/next, WARNING:
+ *     the manual's authored red box, entries carrying `i18n.warning`, unlocked only). An unlocked HARDWARE entry also
+ *     floats its rendered part portrait right of the prose with a HARDWARE facts block: one render per entry through
+ *     the injected `portraitFor`, text-only on a miss.
  *
- * Reading follows selection: ↑/↓ move the list AND re-render the pane, so the
- * pane is never empty. Below ~1000px the interior collapses to a 2-pane swap
- * (list ⇄ reading), preserving the old Back behavior.
+ * Reading follows selection: up/down move the list AND re-render the pane, so it is never empty. Below ~1000 px
+ * the interior collapses to a 2-pane swap (list / reading).
  *
- * Deep links: `openEntry(id, { anchor })` (the CODEX_OPEN_ENTRY route every
- * glossary term rides). `anchor: 'warning'` lands on the page's WARNING box —
- * scrolled into view, a steady brighter frame for WARNING_LANDED_MS (plan
- * 1788957399035 §7.27: Houston's "manual" in the FURNACE gag).
+ * Deep links: `openEntry(id, { anchor })` (the CODEX_OPEN_ENTRY route every glossary term rides).
+ * `anchor: 'warning'` scrolls to the WARNING box and gives it a steady brighter frame for WARNING_LANDED_MS.
  *
  * @module ui/CodexViewerUI
  */
@@ -36,11 +29,9 @@ import {
   Constants, trlToBadgeColor, trlToLabel, techLevelBadgeText,
 } from '../core/Constants.js';
 
-// Fallback category labels used only if the system supplies no meta (e.g.
-// codex.json failed to load). Authoritative meta — including per-category
-// colour — comes from data/codex.json via codexSystem.getCategories(). The
-// data's `icon` fields are inert here: a category renders as a colour swatch +
-// a small-caps label, an entry as its title (Session L, plan D-J).
+// Fallback labels, used only if the system supplies no meta (codex.json failed to load). Authoritative meta,
+// including colour, comes from codexSystem.getCategories(). The data's `icon` fields are inert here: a category is
+// a colour swatch + a small-caps label, an entry its title.
 const CATEGORY_META_FALLBACK = {
   ORBITAL_MECHANICS: { label: 'Orbital Mechanics' },
   PROPULSION:        { label: 'Propulsion' },
@@ -60,22 +51,18 @@ const CATEGORY_META_FALLBACK = {
   PLAYBOOK:          { label: 'Playbook' },
 };
 
+/** A CSS colour TOKEN and nothing else (hex, rgb()/hsl(), colour word; no `;`, `url(`, quotes): the data colour is
+ *  interpolated into an inline style, so a non-token falls back to the hash hue. */
+const SWATCH_COLOR_RE = /^(#[0-9a-f]{3,8}|(?:rgb|hsl)a?\([0-9.,%\s/deg]+\)|[a-z]{3,20})$/i;
+
 /**
- * The swatch colour for a category (or a `track:`/`map:` pseudo-category).
- * Rule: the data's own colour when it has one; otherwise a deterministic hue
- * from the key — FNV-1a over the key's UTF-16 code units, hue = hash mod 360,
- * at a fixed 60% saturation / 55% lightness — so a colourless category always
- * paints the same swatch and two different keys rarely collide. Pure.
+ * Swatch colour for a category (or a `track:`/`map:` pseudo-category): the data colour when it is a token, else a
+ * deterministic hue, FNV-1a over the key's UTF-16 code units, hue = hash mod 360, fixed 60% / 55% saturation /
+ * lightness. Pure.
  * @param {string} key
  * @param {string} [color] - the data colour, if any
  * @returns {string} a CSS colour
  */
-/** A CSS colour TOKEN and nothing else — hex, rgb()/hsl(), or a colour word
- *  (no `;`, no `url(`, no quotes): the data colour is interpolated into an
- *  inline style, so anything that is not a token falls back to the hash hue.
- *  Session L review (defence in depth; codex.json is same-origin static data). */
-const SWATCH_COLOR_RE = /^(#[0-9a-f]{3,8}|(?:rgb|hsl)a?\([0-9.,%\s/deg]+\)|[a-z]{3,20})$/i;
-
 export function categorySwatchColor(key, color) {
   if (typeof color === 'string' && SWATCH_COLOR_RE.test(color.trim())) return color.trim();
   const s = String(key || '');
@@ -88,46 +75,35 @@ export function categorySwatchColor(key, color) {
 }
 
 /**
- * The category marker: a 10x10 px colour swatch followed by the category's
- * name in small caps. Never a glyph (plan D-J). `.codex-cat-swatch` /
- * `.codex-cat-label` are the stable hooks tests read.
- * @param {string} label - the category's display name
+ * The category marker: a 10x10 px colour swatch, then the name in small caps. Never a glyph.
+ * `.codex-cat-swatch` / `.codex-cat-label` are the hooks tests read.
  * @param {string} swatch - a CSS colour (see categorySwatchColor)
  * @returns {string} HTML
  */
 export function categoryLabelHtml(label, swatch) {
-  // Session L review (defence in depth): the label is data (codex.json
-  // categories / the fallback table) and the swatch a colour token validated
-  // by categorySwatchColor — escape the one and never trust the other.
+  // The label is data: escape it. The swatch is a token validated by categorySwatchColor.
   return `<span class="codex-cat-swatch" style="display:inline-block;width:10px;height:10px;` +
     `border-radius:2px;background:${swatch};flex-shrink:0;vertical-align:middle;"></span>` +
     `<span class="codex-cat-label" style="font-variant:small-caps;letter-spacing:0.06em;` +
     `overflow:hidden;text-overflow:ellipsis;">${escapeHtml(String(label ?? ''))}</span>`;
 }
 
-// Below this panel width the 3-column interior collapses to a 2-pane swap
-// (list ⇄ reading), mirroring the pre-overhaul Back navigation.
+// Below this panel width the 3-column interior collapses to a 2-pane swap (list / reading).
 const NARROW_BREAKPOINT = 1000;
 
-// The LOCKED marker that trails a locked entry's title inside a chip: a tiny
-// letter-spaced text tag (plan D-J: chrome glyphs became text). Leading space
-// keeps it off the title.
+// LOCKED tag trailing a locked entry's title; the leading space keeps it off the title.
 const LOCKED_TAG_HTML = ' <span class="codex-locked-tag" style="font-size:10px;letter-spacing:0.08em;opacity:0.8;">LOCKED</span>';
 
-// Dwell before an entry is marked seen. `CODEX_VIEWED` fires only once the
-// selection has *rested* on an unlocked/unseen entry this long — arrow-scrubbing
+// `CODEX_VIEWED` fires only once the selection has *rested* on an unlocked/unseen entry this long: arrow-scrubbing
 // and transient renders (deep-link routing, filter churn) never mark seen.
 const SEEN_DWELL_MS = 1500;
-/** u16b fix 1: how long the overlay swallows clicks after an open from the connections map (a double-click / double-tap's second click).
- *  u20-ipad: 600 (was 400): a finger's second tap on a real iPad can land after 400 ms and hit a link in the article that just opened. */
+/** How long the overlay swallows clicks after an open from the connections map (a double-click / double-tap's second
+ *  click). A real iPad finger's second tap can land after 400 ms and hit a link in the article that just opened. */
 const MAP_OPEN_SWALLOW_MS = 600;
 
-// A deep link that lands on the page's WARNING box (FURNACE gag v2 amendment,
-// plan 1788957399035 §7.27 — Houston's "manual"): after the entry renders the
-// `.codex-warning` is scrolled into view and wears `codex-warning--landed` for
-// this long — a STEADY brighter border (the one rule in CODEX_VIEWER_STYLE_ID;
-// no pulse: THREAT pulses only for live alarms). Cleared by a tracked timer or
-// on hide().
+// A deep link to the WARNING box (Houston's "manual"): after the entry renders, `.codex-warning` is scrolled into
+// view and wears `codex-warning--landed` this long: a STEADY brighter border (the one rule in
+// CODEX_VIEWER_STYLE_ID; no pulse: THREAT pulses only for live alarms). Cleared by a tracked timer or on hide().
 export const WARNING_LANDED_MS = 2000;
 export const WARNING_LANDED_CLASS = 'codex-warning--landed';
 /** The viewer's ONE stylesheet (everything else is inline style attributes). */
@@ -137,34 +113,28 @@ export class CodexViewerUI {
   /**
    * @param {import('../systems/CodexSystem.js').CodexSystem} codexSystem
    * @param {{ portraitFor?: (entry:object) => ({canvas:*, massKg?:number, specs?:string[]}|null) }} [deps]
-   *   Lane E (F1 workbench plan, 2026-09-23): `portraitFor` is the full-screen
-   *   reader's ONE optional collaborator — a LAZY callback (never a captured
-   *   reference) that turns a codex entry into its rendered part portrait.
-   *   Injected so this module keeps importing NO MotherCallouts / main.js and
-   *   holds no live singleton (headless-testable, as shipped). Absent (or a
-   *   `?ladder=0` boot, which passes nothing) → the reader stays text-only,
-   *   byte-identical to before this lane.
+   *   `portraitFor`: the reader's ONE optional collaborator, a LAZY callback (never a captured reference) turning a
+   *   codex entry into its rendered part portrait. Injected so this module imports NO MotherCallouts / main.js and
+   *   holds no live singleton (headless-testable). Absent (or a `?ladder=0` boot) → the reader stays text-only.
    */
   constructor(codexSystem, deps = {}) {
     this._codex = codexSystem;
     /** @type {?((entry:object) => ({canvas:*, massKg?:number, specs?:string[]}|null))} */
     this._portraitFor = (deps && typeof deps.portraitFor === 'function') ? deps.portraitFor : null;
     /** @type {?{id:string, result:({dataUrl:string, massKg?:number, specs?:string[]}|null)}}
-     * One cached render per entry id (Lane E step 5: "one render per entry,
-     * never per frame") — a resize or any other re-render of the SAME entry
-     * reuses the cached data URL instead of re-invoking `portraitFor`. */
+     * One cached render per entry id, never per frame: a re-render of the SAME entry reuses the cached data URL. */
     this._portraitCache = null;
     this._visible = false;
     this._selectedCategory = null; // set to the first category on first show()
     this._selectedEntry = null;
     this._overlay = null;
-    /** @type {string} UX-11 #10: live search query (overrides sidebar while set) */
+    /** @type {string} live search query (overrides sidebar while set) */
     this._searchQuery = '';
     /** @type {number|null} debounce handle for the search input */
     this._searchDebounce = null;
-    /** @type {'all'|'unlocked'|'locked'} list filter (Phase 3 filter bar) */
+    /** @type {'all'|'unlocked'|'locked'} list filter */
     this._filter = 'all';
-    /** @type {'default'|'az'|'trl'} list sort order (Phase 3 sort bar) */
+    /** @type {'default'|'az'|'trl'} list sort order */
     this._sort = 'default';
     /** @type {number} roving-focus index into the current entry list (keyboard nav) */
     this._focusIdx = -1;
@@ -172,9 +142,8 @@ export class CodexViewerUI {
     this._narrow = false;
 
     /**
-     * Slice 8 — ego-map mode. When true the reading pane renders an SVG
-     * connections map of `_selectedEntry` instead of the article. Transient
-     * (never persisted); cleared on any selection/filter/track switch and hide().
+     * Ego-map mode: the reading pane renders an SVG connections map of `_selectedEntry` instead of the article.
+     * Transient; cleared on any selection/filter/track switch and hide().
      * @type {boolean}
      */
     this._mapMode = false;
@@ -194,11 +163,8 @@ export class CodexViewerUI {
     this._resizeDebounce = null;
 
     /** @type {*} pending seen-dwell timer handle (null when disarmed) */
-    this._seenTimer = null;    /**
-     * Injectable timer seam so the dwell logic is testable in the DOM-less Node
-     * harness. Tests swap these for spies via `_setSeenTimerHooks`.
-     * @type {(fn:Function, ms:number)=>*}
-     */
+    this._seenTimer = null;
+    /** Timer seam for the Node harness; tests swap these via `_setSeenTimerHooks`. @type {(fn:Function, ms:number)=>*} */
     this._scheduleSeen = (fn, ms) => setTimeout(fn, ms);
     /** @type {(handle:*)=>void} */
     this._cancelSeen = (h) => clearTimeout(h);
@@ -207,45 +173,30 @@ export class CodexViewerUI {
     this._setupListeners();
   }
 
-  // ==========================================================================
-  // PUBLIC
-  // ==========================================================================
-
   toggle() { this._visible ? this._requestClose() : this.show(); }
 
-  /**
-   * The single close decision for every self-close path (capture-phase ESC,
-   * backdrop click, the CLOSE button, an I-key toggle) — one seam, so a close
-   * can be rerouted in one place. (The Zoom Ladder hosted mode that used this
-   * seam left with ArchiveFloor — Session H; deleted 2026-09-05, tidy-up (4).)
-   * @private
-   */
+  /** @private The single close decision for every self-close path (ESC, backdrop, CLOSE button, I key). */
   _requestClose() {
     this.hide();
   }
 
   show() {
     this._visible = true;
-    // No "All" view — land on a category (the first newbie-friendly one) so the
-    // list is focused and readable on open.
+    // No "All" view: land on the first newbie-friendly category.
     if (!this._selectedCategory) this._selectedCategory = this._firstCategoryKey();
     this._overlay.style.display = 'flex';
     requestAnimationFrame(() => { this._overlay.style.opacity = '1'; });
     this._applyResponsiveLayout();
     this._renderHeader();
     this._renderEntryList();
-    // Auto-select the first entry so the reading pane is never empty on open.
     this._selectFirstEntry();
   }
 
   hide() {
     this._visible = false;
-    // Slice 8: map mode is transient — never persists across a close.
     this._mapMode = false;
-    // Cancel any pending seen-dwell emit — a fire after close would mark an
-    // entry the player never actually read.
+    // A seen-dwell firing after close would mark an entry the player never read.
     this._clearSeenTimer();
-    // A landed warning's highlight does not outlive the viewer.
     this._clearLanded();
     this._overlay.style.opacity = '0';
     setTimeout(() => { if (!this._visible) this._overlay.style.display = 'none'; }, 200);
@@ -254,16 +205,12 @@ export class CodexViewerUI {
   isVisible() { return this._visible; }
 
   /**
-   * Deep-link: open the viewer directly on a specific entry by id (glossary
-   * §11.8 / Phase 4). Resolves the id through save-migration ALIASES for
-   * robustness, opens the overlay, selects the entry's real category, then
-   * routes to its reading pane. Unknown ids are a safe no-op. Locked entries are
-   * fine — the viewer renders them with a how-to-unlock hint.
+   * Deep-link: open on entry `id`, resolved through save-migration ALIASES. Unknown ids are a safe no-op; locked
+   * entries render with a how-to-unlock hint.
    *
-   * `opts.anchor === 'warning'` (gag v2 §7.27, Houston's "manual"): once the
-   * entry has rendered, its `.codex-warning` (the LAST block of the page) is
-   * scrolled into view and wears WARNING_LANDED_CLASS for WARNING_LANDED_MS.
-   * No warning on the page ⇒ a plain open. Any other anchor is ignored.
+   * `opts.anchor === 'warning'`: once the entry has rendered, its `.codex-warning` (the LAST block of the page) is
+   * scrolled into view and wears WARNING_LANDED_CLASS for WARNING_LANDED_MS. No warning on the page: a plain open.
+   * Any other anchor is ignored.
    * @param {string} id  codex entry id (possibly a retired alias)
    * @param {{ anchor?: string }} [opts]
    * @returns {boolean} true if an entry was opened
@@ -273,18 +220,13 @@ export class CodexViewerUI {
     const resolvedId = (ALIASES && ALIASES[id]) || id;
     const entry = this._codex.getEntry(resolvedId);
     if (!entry) return false;
-    // A deep-link must always land on a list where the target row is present:
-    // clear any active search query and reset the filter to 'all' so a prior
-    // 'unlocked'/'locked' filter or search can't hide the entry we're opening.
+    // Clear search and filter so the target row is always on the list.
     this._searchQuery = '';
     this._filter = 'all';
     const searchInput = document.getElementById('codex-search');
     if (searchInput) searchInput.value = '';
-    // Land on the entry's real category (not a `track:` pseudo-key) BEFORE
-    // show() so show()'s auto-select resolves the right list — no transient
-    // render/mark-seen of the stale category's first entry. _pendingOpenId tells
-    // _selectFirstEntry to route to this entry instead of position 0; the
-    // anchor is consumed by _selectEntry when THAT entry renders.
+    // Real category (not a `track:` pseudo-key) BEFORE show(), so there is no transient render/mark-seen of the stale
+    // category's first entry. _pendingOpenId makes _selectFirstEntry route here; _selectEntry consumes the anchor.
     this._selectedCategory = entry.category;
     this._pendingOpenId = resolvedId;
     this._pendingAnchor = (opts && typeof opts.anchor === 'string') ? opts.anchor : null;
@@ -297,35 +239,23 @@ export class CodexViewerUI {
   /** @private ms clock for the map-open click guard (tests replace it) */
   _nowMs() { return (typeof performance !== 'undefined' && performance && typeof performance.now === 'function') ? performance.now() : Date.now(); }
 
-  /**
-   * @private u16b fix 1: open `id` from the connections map and swallow clicks on the overlay for MAP_OPEN_SWALLOW_MS, so the
-   * second click of a double-click / double-tap cannot act on the article that just replaced the map.
-   * @param {string} id
-   * @returns {boolean}
-   */
+  /** @private Open `id` from the map and swallow overlay clicks for MAP_OPEN_SWALLOW_MS (double-click guard). */
   _openFromMap(id) {
     this._swallowClicksUntil = this._nowMs() + MAP_OPEN_SWALLOW_MS;
     return this.openEntry(id);
   }
 
-  /** @private u16b fix 1: true while the map-open click guard is up */
   _swallowsClick() { return typeof this._swallowClicksUntil === 'number' && this._nowMs() < this._swallowClicksUntil; }
 
-  /** @private u16b fix 1: the overlay's capture-phase click handler (see _buildDOM) */
   _onOverlayClickCapture(e) {
     if (!this._swallowsClick() || !e) return;
     if (typeof e.stopPropagation === 'function') e.stopPropagation();
     if (typeof e.preventDefault === 'function') e.preventDefault();
   }
 
-  // ==========================================================================
-  // DOM CONSTRUCTION
-  // ==========================================================================
-
   /** @private */
   _buildDOM() {
     this._ensureStyle();
-    // --- Overlay ---
     const overlay = document.createElement('div');
     overlay.id = 'codex-overlay';
     Object.assign(overlay.style, {
@@ -335,13 +265,11 @@ export class CodexViewerUI {
       justifyContent: 'center', alignItems: 'center',
       fontFamily: "var(--font-mono)", color: '#ccc',
     });
-    // u16b fix 1: right after an open FROM THE MAP, the overlay swallows clicks for a moment (capture phase, so no link or node
-    // under the finger hears them): the first click of a double-click / double-tap opened the article, its second click would
-    // land on the new article's text and could open a link.
+    // Capture phase, so no link or node under the finger hears a click right after an open FROM THE MAP (the second
+    // click of a double-click would land on the new article's text and could open a link).
     overlay.addEventListener('click', (e) => this._onOverlayClickCapture(e), true);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) this._requestClose(); });
 
-    // --- Panel ---
     const panel = document.createElement('div');
     panel.id = 'codex-panel';
     Object.assign(panel.style, {
@@ -351,7 +279,6 @@ export class CodexViewerUI {
       boxShadow: '0 0 40px rgba(0,212,255,0.12)', overflow: 'hidden',
     });
 
-    // --- Header ---
     const header = document.createElement('div');
     header.id = 'codex-header';
     Object.assign(header.style, {
@@ -379,14 +306,12 @@ export class CodexViewerUI {
         font-family: var(--font-mono);">ESC ×</button>
     `;
 
-    // --- Body (sidebar + list + reading pane) ---
     const body = document.createElement('div');
     body.id = 'codex-body';
     Object.assign(body.style, {
       display: 'flex', flex: '1', overflow: 'hidden',
     });
 
-    // --- Sidebar (column 1) ---
     const sidebar = document.createElement('div');
     sidebar.id = 'codex-sidebar';
     Object.assign(sidebar.style, {
@@ -395,7 +320,6 @@ export class CodexViewerUI {
     });
     this._buildSidebar(sidebar);
 
-    // --- Middle column: filter bar + compact entry list (column 2) ---
     const middle = document.createElement('div');
     middle.id = 'codex-middle';
     Object.assign(middle.style, {
@@ -404,8 +328,7 @@ export class CodexViewerUI {
       display: 'flex', flexDirection: 'column', flexShrink: '0', overflow: 'hidden',
     });
 
-    // Filter / sort bar (above the list). Built once; its buttons mutate
-    // _filter/_sort and re-render.
+    // Built once; its buttons mutate _filter/_sort and re-render.
     const filterBar = document.createElement('div');
     filterBar.id = 'codex-filter-bar';
     Object.assign(filterBar.style, {
@@ -415,7 +338,6 @@ export class CodexViewerUI {
     });
     this._buildFilterBar(filterBar);
 
-    // Compact entry list (dense rows, replaces the old card grid).
     const entryList = document.createElement('div');
     entryList.id = 'codex-entry-list';
     Object.assign(entryList.style, {
@@ -425,11 +347,8 @@ export class CodexViewerUI {
     middle.appendChild(filterBar);
     middle.appendChild(entryList);
 
-    // Search lost-click fix: delegate row clicks to the stable container instead
-    // of binding per-row. The list is rebuilt (innerHTML='') on every debounced
-    // search keystroke, so a mousedown/mouseup straddling a rebuild would lose
-    // its per-row 'click'. This container survives rebuilds, so the click always
-    // resolves via the row's dataset.id.
+    // Delegate row clicks to the stable container: the list is rebuilt on every debounced search keystroke, so a
+    // mousedown/mouseup straddling a rebuild would lose a per-row 'click'.
     entryList.addEventListener('click', (e) => {
       const rowEl = e.target.closest && e.target.closest('.codex-row');
       if (!rowEl || !entryList.contains(rowEl)) return;
@@ -440,12 +359,9 @@ export class CodexViewerUI {
       this._selectEntry(entry, { focusPane: this._narrow });
     });
 
-    // --- Reading pane (column 3) ---
     const reading = document.createElement('div');
     reading.id = 'codex-reading';
-    // Focusable (programmatic only) so Enter can move reading focus off the
-    // list and PgUp/PgDn scroll the briefing. tabIndex -1 keeps it out of the
-    // Tab order while allowing reading.focus().
+    // Programmatic focus only (tabIndex -1): Enter moves focus off the list, PgUp/PgDn scroll the briefing.
     reading.tabIndex = -1;
     reading.style.outline = 'none';
     Object.assign(reading.style, {
@@ -462,16 +378,15 @@ export class CodexViewerUI {
 
     this._overlay = overlay;
 
-    // Close button. u15b B-T7: on glass there is no Esc key - "CLOSE ×" (re-applied when glass turns on, D7).
+    // On glass there is no Esc key: "CLOSE ×" (re-applied when glass turns on).
     const closeBtn = overlay.querySelector('#codex-close-btn');
     closeBtn.addEventListener('click', () => this._requestClose());
     const closeLabel = () => { closeBtn.textContent = GestureHints.isGlass() ? 'CLOSE ×' : 'ESC ×'; };
     closeLabel();
     this._offGlassLabel = GestureHints.onGlassOn(closeLabel);
 
-    // UX-11 #10: live search — filters across ALL categories as you type;
-    // sidebar selection is ignored while a query is active. Debounced (each
-    // render rebuilds every row, so don't do it per keystroke).
+    // Live search across ALL categories (sidebar selection ignored while a query is active). Debounced: each render
+    // rebuilds every row.
     const searchInput = overlay.querySelector('#codex-search');
     searchInput.addEventListener('input', () => {
       if (this._searchDebounce) clearTimeout(this._searchDebounce);
@@ -482,7 +397,7 @@ export class CodexViewerUI {
         this._selectFirstEntry();
       }, 120);
     });
-    // Keep keystrokes (incl. game hotkeys like L/S/W) inside the search box.
+    // Keep keystrokes (incl. game hotkeys) inside the search box.
     searchInput.addEventListener('keydown', (e) => {
       if (e.code === 'Escape') { searchInput.blur(); return; }
       e.stopPropagation();
@@ -490,12 +405,8 @@ export class CodexViewerUI {
   }
 
   /**
-   * @private The viewer's ONE stylesheet, mounted once (id CODEX_VIEWER_STYLE_ID).
-   * Every other look in this module is an inline style attribute; this rule
-   * exists because a class toggle has to beat the WARNING box's inline border
-   * (hence `!important`). `codex-warning--landed` = the deep-link landing cue
-   * (gag v2 §7.27): a STEADY brighter red frame with a faint halo for
-   * WARNING_LANDED_MS — no transition, no animation (print, not a live alarm).
+   * @private The viewer's ONE stylesheet, mounted once. A class toggle has to beat the WARNING box's inline border
+   * (hence `!important`). `codex-warning--landed` is a STEADY brighter red frame, no transition or animation.
    */
   _ensureStyle() {
     if (typeof document === 'undefined' || typeof document.createElement !== 'function') return;
@@ -513,10 +424,8 @@ export class CodexViewerUI {
     mount.appendChild(style);
   }
 
-  /** @private Resolve category meta {label, color, swatch} from the system, with
-   * fallback. `color` is the accent (tints; cyan default); `swatch` is the
-   * marker colour — the data colour, else a key-derived hue (categorySwatchColor).
-   * The data's `icon` is deliberately not surfaced (plan D-J). */
+  /** @private Category meta {label, color, swatch}, with fallback. `color` is the accent (cyan default); `swatch`
+   * is the data colour, else a key-derived hue (categorySwatchColor). The data's `icon` is deliberately not surfaced. */
   _catMeta(key) {
     const m = (typeof this._codex.getCategoryMeta === 'function') ? this._codex.getCategoryMeta(key) : null;
     const fb = CATEGORY_META_FALLBACK[key] || { label: key };
@@ -527,9 +436,8 @@ export class CodexViewerUI {
     };
   }
 
-  /** @private Build the category sidebar tabs */
   _buildSidebar(sidebar) {
-    // Category tabs — ordered, data-driven; skip categories with no entries yet.
+    // Ordered, data-driven; skip categories with no entries yet.
     const cats = (typeof this._codex.getCategories === 'function')
       ? this._codex.getCategories()
       : Object.keys(CATEGORY_META_FALLBACK).map(key => ({ key, ...this._catMeta(key) }));
@@ -542,9 +450,7 @@ export class CodexViewerUI {
       sidebar.appendChild(tab);
     }
 
-    // --- Tracks: guided cross-category learning paths. Rendered below the
-    // categories under a small divider. Selecting a track key (prefixed
-    // "track:") switches the list into ordered-track mode. ---
+    // Learning paths: a `track:` key switches the list into ordered-track mode.
     const tracks = (typeof this._codex.getTracks === 'function') ? this._codex.getTracks() : null;
     const trackEntries = tracks ? Object.entries(tracks) : [];
     if (trackEntries.length) {
@@ -565,10 +471,7 @@ export class CodexViewerUI {
         });
     }
 
-    // --- Slice 8: CONNECTIONS — the ego-map affordance. A `map:` pseudo-key tab
-    // enters map mode on the current selection (fallback: first unlocked entry).
-    // It never becomes the active category, so it's given a custom onClick that
-    // enters map mode instead of switching the category. ---
+    // CONNECTIONS: the `map:` pseudo-key tab never becomes the active category; its custom onClick enters map mode.
     const mapDivider = document.createElement('div');
     mapDivider.textContent = 'CONNECTIONS';
     Object.assign(mapDivider.style, {
@@ -581,8 +484,7 @@ export class CodexViewerUI {
     sidebar.appendChild(mapTab);
   }
 
-  /** @private Slice 8 — enter map mode from the sidebar Map tab. Uses the
-   * current selection, falling back to the first unlocked entry. */
+  /** @private Enter map mode on the current selection, falling back to the first unlocked entry. */
   _openMapFromSidebar() {
     let entry = this._selectedEntry;
     if (!entry || !entry.unlocked) {
@@ -597,7 +499,6 @@ export class CodexViewerUI {
     if (this._narrow) this._applyResponsiveLayout();
   }
 
-  /** @private First category key (by order) that has at least one entry. */
   _firstCategoryKey() {
     const cats = (typeof this._codex.getCategories === 'function')
       ? this._codex.getCategories()
@@ -611,21 +512,14 @@ export class CodexViewerUI {
     return cats.length ? cats[0].key : null;
   }
 
-  /** @private Create a sidebar tab element: a colour swatch + a small-caps
-   * label (never a glyph — plan D-J). The swatch is the category's data colour
-   * or, for a colourless key, the deterministic hue from categorySwatchColor.
-   * @param {string} key
-   * @param {string} label
+  /** @private A colour swatch + small-caps label tab (never a glyph).
    * @param {string} category - dataset.category (may be a `track:`/`map:` pseudo-key)
-   * @param {string} color
-   * @param {Function} [onClick] - Slice 8: custom click handler; when supplied,
-   *        replaces the default category-switch behaviour (used by the map tab).
+   * @param {Function} [onClick] - replaces the default category switch (the map tab)
    */
   _makeSidebarTab(key, label, category, color, onClick) {
     const tab = document.createElement('div');
     tab.dataset.category = category;
-    // Phase 3 hue theming: stash the category accent on the element so the
-    // active-highlight + hover read in the category's own colour.
+    // The active highlight and hover read the category's own accent.
     tab.dataset.accent = color || '#00d4ff';
     Object.assign(tab.style, {
       padding: '9px 14px', cursor: 'pointer', fontSize: '13px',
@@ -633,7 +527,6 @@ export class CodexViewerUI {
       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
       display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px',
     });
-    // Per-category progress counter, refreshed on every render.
     tab.innerHTML = `<span style="display:inline-flex;align-items:center;gap:7px;min-width:0;overflow:hidden;">` +
       categoryLabelHtml(label, categorySwatchColor(key, color)) + '</span>' +
       `<span class="codex-tab-count" style="font-size:11px;color:#557;flex-shrink:0;"></span>`;
@@ -657,22 +550,17 @@ export class CodexViewerUI {
     return tab;
   }
 
-  // ==========================================================================
-  // RENDERING
-  // ==========================================================================
-
-  /** @private Apply the panel-width responsive mode (3-column vs 2-pane swap). */
+  /** @private Panel-width responsive mode (3-column vs 2-pane swap). */
   _applyResponsiveLayout() {
     const panel = document.getElementById('codex-panel');
     const reading = document.getElementById('codex-reading');
     const middle = document.getElementById('codex-middle');
     if (!panel || !reading || !middle) return;
     const w = panel.getBoundingClientRect().width || panel.offsetWidth || 0;
-    // Fall back to wide when width can't be measured (headless / not yet laid out).
+    // Wide when the width can't be measured (headless / not yet laid out).
     this._narrow = w > 0 && w < NARROW_BREAKPOINT;
     if (this._narrow) {
-      // 2-pane swap: the middle list takes the remaining width; reading pane is
-      // shown only when an entry is open (see _selectEntry / _showList).
+      // The list takes the remaining width; the reading pane shows only when an entry is open.
       middle.style.width = 'auto';
       middle.style.maxWidth = 'none';
       middle.style.flex = '1';
@@ -692,7 +580,6 @@ export class CodexViewerUI {
     }
   }
 
-  /** @private Update header progress counter + overall progress bar */
   _renderHeader() {
     const prog = this._codex.getProgress();
     const el = document.getElementById('codex-progress');
@@ -701,7 +588,6 @@ export class CodexViewerUI {
     if (fill) fill.style.width = `${prog.percentage}%`;
   }
 
-  /** @private Highlight the active sidebar tab + refresh per-category counts */
   _renderSidebarActive() {
     const sidebar = document.getElementById('codex-sidebar');
     if (!sidebar) return;
@@ -715,8 +601,7 @@ export class CodexViewerUI {
       tab.style.background = isSel ? `rgba(${rgb.r},${rgb.g},${rgb.b},0.13)` : 'none';
       tab.style.color = isSel ? accent : '#aaa';
 
-      // Per-category progress (e.g. "3/7"). Track tabs ("track:<id>") have no
-      // category progress; show their entry count instead.
+      // Track tabs have no category progress: show their entry count.
       const countEl = tab.querySelector('.codex-tab-count');
       if (countEl) {
         const cat = tab.dataset.category;
@@ -727,7 +612,7 @@ export class CodexViewerUI {
           const unlocked = list.filter(e => e.unlocked).length;
           countEl.textContent = `${unlocked}/${list.length}`;
         } else if (cat === 'map:') {
-          // Slice 8: the Map tab is an action, not a category — no progress badge.
+          // An action, not a category: no progress badge.
           countEl.textContent = '';
         } else if (typeof this._codex.getCategoryProgress === 'function') {
           const p = this._codex.getCategoryProgress(cat);
@@ -738,9 +623,8 @@ export class CodexViewerUI {
     }
   }
 
-  /** @private Resolve the current list (search / track / category) with the
-   * active filter+sort applied. Shared by the list and Prev/Next so they stay
-   * in lockstep.
+  /** @private The current list (search / track / category) with filter+sort applied; shared by the list and
+   * Prev/Next so they stay in lockstep.
    * @returns {{ entries:Array<object>, isTrack:boolean }}
    */
   _currentListEntries() {
@@ -763,7 +647,6 @@ export class CodexViewerUI {
     return { entries: this._applyFilterSort(entries, isTrack), isTrack };
   }
 
-  /** @private Render the compact entry list (dense rows). */
   _renderEntryList() {
     const listEl = document.getElementById('codex-entry-list');
     if (!listEl) return;
@@ -779,9 +662,7 @@ export class CodexViewerUI {
         : 'No topics match the current filter.';
       listEl.appendChild(empty);
     }
-    // 2a: a dim, non-interactive reassurance banner when the whole list is
-    // locked (default 'all' filter, no search) — turns a wall-of-LOCKED first
-    // impression into "these unlock as you fly" guidance.
+    // Dim reassurance banner when the whole list is locked (turns a wall of LOCKED into "these unlock as you fly").
     if (this._shouldShowZeroUnlockedBanner(entries)) {
       const banner = document.createElement('div');
       banner.className = 'codex-zero-unlocked-banner';
@@ -797,7 +678,6 @@ export class CodexViewerUI {
     }
     entries.forEach((entry, i) => listEl.appendChild(this._makeRow(entry, i)));
 
-    // Keep the roving-focus index within bounds of the freshly-rendered list.
     if (this._selectedEntry) {
       const sel = entries.findIndex(e => e.id === this._selectedEntry.id);
       this._focusIdx = sel >= 0 ? sel : (entries.length ? 0 : -1);
@@ -810,7 +690,6 @@ export class CodexViewerUI {
     this._renderFilterBar(isTrack);
   }
 
-  /** @private Highlight the active/selected + keyboard-focused list row. */
   _applyRowFocus() {
     const listEl = document.getElementById('codex-entry-list');
     if (!listEl) return;
@@ -825,13 +704,9 @@ export class CodexViewerUI {
     });
   }
 
-  /** @private Whether the zero-unlocked "all locked for now" banner should show
-   * for the given rendered list. Only for the default `all` filter with no
-   * active search query (showing it in search results or the `locked` filter
-   * would be misleading noise), and only when EVERY entry in the list is locked.
-   * Pure so it is testable in the DOM-less Node harness.
+  /** @private Only for the default `all` filter with no search (elsewhere it would be noise), and only when EVERY
+   * entry is locked. Pure.
    * @param {Array<object>} entries the already filter/sort-resolved list
-   * @returns {boolean}
    */
   _shouldShowZeroUnlockedBanner(entries) {
     if (this._searchQuery) return false;
@@ -840,34 +715,24 @@ export class CodexViewerUI {
     return entries.every(e => !e.unlocked);
   }
 
-  /** @private Build a hover `title` attribute (with a leading space) for a
-   * locked row's how-to-unlock hint; unlocked rows get an empty string (no
-   * attr). The hint may contain apostrophes/parens, so the attribute stays
-   * double-quoted and `"` is escaped via escapeHtml. Pure/testable.
-   * @param {object} entry
-   * @returns {string} e.g. ` title="How to unlock: Catch 3 debris."` or ``
+  /** @private Hover `title` attribute (leading space) for a locked row; `` when unlocked. Double-quoted, `"` escaped
+   * via escapeHtml. Pure.
+   * @returns {string} e.g. ` title="How to unlock: Catch 3 debris."`
    */
   _lockedRowTitleAttr(entry) {
     const text = this._lockedRowTitleText(entry);
     return text ? ` title="${escapeHtml(text)}"` : '';
   }
 
-  /** @private The plain how-to-unlock tooltip text for a locked row (or '' when
-   * unlocked). Split from `_lockedRowTitleAttr` so `_makeRow` can set it as a
-   * DOM property (row.title) without HTML-attr escaping. Pure/testable.
-   * @param {object} entry
-   * @returns {string}
-   */
+  /** @private Plain tooltip text ('' when unlocked), so `_makeRow` can set row.title without attr escaping. Pure. */
   _lockedRowTitleText(entry) {
     if (!entry || entry.unlocked) return '';
     const hint = GestureHints.glassWords(entry.unlockHint || 'Discover through gameplay.');
     return `How to unlock: ${hint}`;
   }
 
-  /** @private Create a single compact entry row.
-   * Reveal model (UX-11 #10): title + one-liner are ALWAYS visible — the
-   * codex is a syllabus. Locked rows read as "not yet detailed": dimmed + a
-   * LOCKED text pip. The entry's data `icon` is never rendered (plan D-J).
+  /** @private Title + one-liner are ALWAYS visible (the codex is a syllabus); locked rows are dimmed with a LOCKED
+   * text pip. The entry's data `icon` is never rendered.
    */
   _makeRow(entry, index) {
     const row = document.createElement('div');
@@ -877,7 +742,6 @@ export class CodexViewerUI {
     const isLocked = !entry.unlocked;
     const isNew = entry.unlocked && !entry.seen;
 
-    // 2b: locked rows carry a how-to-unlock hover hint; unlocked rows get none.
     const titleText = this._lockedRowTitleText(entry);
     if (titleText) row.title = titleText;
 
@@ -917,17 +781,13 @@ export class CodexViewerUI {
     row.addEventListener('mouseleave', () => {
       if (index !== this._focusIdx) row.style.background = 'transparent';
     });
-    // Click is handled by delegation on #codex-entry-list (see build()), so a
-    // click is never lost when the list rebuilds under the search debounce.
+    // Click is delegated on #codex-entry-list (see _buildDOM).
     return row;
   }
 
-  /** @private Auto-select an entry so the reading pane is never empty on open.
-   * Normally lands on the first list entry; when a deep-link set `_pendingOpenId`
-   * (openEntry), routes straight to that entry — even in narrow mode, where a
-   * deep-link should open the reading pane rather than sit on the list. */
+  /** @private Auto-select so the reading pane is never empty on open: the first list entry, or the `_pendingOpenId`
+   * deep-link target (even in narrow mode, where it opens the reading pane). */
   _selectFirstEntry() {
-    // Slice 8: category/track/search switches drop out of map mode.
     this._mapMode = false;
     const { entries } = this._currentListEntries();
     if (!entries.length) {
@@ -936,8 +796,6 @@ export class CodexViewerUI {
       this._renderEmptyReading();
       return;
     }
-    // Deep-link routing: open the requested entry directly. In narrow mode the
-    // deep-link intentionally opens the pane (focusPane), unlike a plain open.
     if (this._pendingOpenId) {
       const target = entries.find(e => e.id === this._pendingOpenId)
         || (this._codex.getEntry ? this._codex.getEntry(this._pendingOpenId) : null);
@@ -947,7 +805,7 @@ export class CodexViewerUI {
       }
     }
     if (this._narrow) {
-      // Narrow: show the list first; don't auto-open a reading pane.
+      // Narrow: list first, no auto-opened reading pane.
       this._selectedEntry = null;
       this._clearSeenTimer();
       this._applyResponsiveLayout();
@@ -956,46 +814,37 @@ export class CodexViewerUI {
     this._selectEntry(entries[0], { focusPane: false });
   }
 
-  /** @private After a filter/sort change (same selection context), keep the
-   * current reading position if the selected entry survives the new list;
-   * otherwise fall back to the first entry. Category/track switches still jump
-   * to first via _selectFirstEntry directly. */
+  /** @private After a filter/sort change, keep the reading position if the selected entry survives the new list,
+   * else fall back to the first entry. */
   _reselectAfterListChange() {
     const { entries } = this._currentListEntries();
     if (this._selectedEntry && entries.some(e => e.id === this._selectedEntry.id)) {
-      // Selection survived: _renderEntryList already recomputed _focusIdx +
-      // applied row focus. Nothing else to do (don't re-arm the seen timer).
+      // _renderEntryList already recomputed _focusIdx; don't re-arm the seen timer.
       return;
     }
     this._selectFirstEntry();
   }
 
-  /** @private Select an entry: update focus, render its reading pane, and (in
-   * narrow mode) swap the list out for the pane.
-   * @param {object} entry
+  /** @private Select an entry: update focus, render its reading pane, and (narrow mode) swap the list for the pane.
    * @param {{focusPane?:boolean}} [opts]
    */
   _selectEntry(entry, opts = {}) {
     if (!entry) return;
-    // Slice 8: any fresh selection returns to the article (exits map mode).
+    // Any fresh selection exits map mode.
     this._mapMode = false;
     this._selectedEntry = entry;
     const { entries } = this._currentListEntries();
     const idx = entries.findIndex(e => e.id === entry.id);
-    // Fix #6: if the entry isn't in the current list (e.g. a RELATED chip jumped
-    // to an entry filtered out by "Unlocked"), clear the roving index so
-    // _applyRowFocus lights no row instead of a stale/wrong one.
+    // Entry not in the current list (a RELATED chip to one the filter hides): -1, so no stale row lights.
     this._focusIdx = idx >= 0 ? idx : -1;
     this._applyRowFocus();
     this._renderReading(entry);
-    // A deep link with an anchor lands here, once, on ITS entry only.
     if (this._pendingAnchor && this._pendingOpenId === entry.id) {
       const anchor = this._pendingAnchor;
       this._pendingAnchor = null;
       this._landAnchor(anchor);
     }
-    // Seen dwell: (re)arm the timer for the newly-rested selection. Scrubbing
-    // to another entry before it fires cancels the pending emit.
+    // Scrubbing to another entry before the dwell fires cancels the emit.
     this._armSeenTimer(entry);
     if (this._narrow) {
       this._applyResponsiveLayout(); // hides the list, shows the pane
@@ -1007,13 +856,9 @@ export class CodexViewerUI {
   }
 
   /**
-   * @private Land a deep link's anchor on the just-rendered page (gag v2 §7.27).
-   * Only `'warning'` is known: scroll the page's `.codex-warning` into view
-   * (`block: 'end'` — it is the LAST block of the page; the method may be absent
-   * in a minimal DOM, so it is guarded) and give it WARNING_LANDED_CLASS for
-   * WARNING_LANDED_MS through a tracked timer (a second landing re-arms; hide()
-   * clears). No box on the page ⇒ nothing happens.
-   * @param {string} anchor
+   * @private Land a deep link's anchor on the just-rendered page. Only `'warning'` is known: scroll `.codex-warning`
+   * into view (`block: 'end'`, the LAST block of the page; scrollIntoView may be absent in a minimal DOM) and give it
+   * WARNING_LANDED_CLASS for WARNING_LANDED_MS through a tracked timer (a second landing re-arms; hide() clears).
    */
   _landAnchor(anchor) {
     if (anchor !== 'warning') return;
@@ -1033,7 +878,6 @@ export class CodexViewerUI {
     }, WARNING_LANDED_MS);
   }
 
-  /** @private Drop the landed highlight and its timer (timer fire, a re-landing, hide). */
   _clearLanded() {
     if (this._landedTimer != null) {
       clearTimeout(this._landedTimer);
@@ -1044,20 +888,13 @@ export class CodexViewerUI {
     if (el && el.classList && typeof el.classList.remove === 'function') el.classList.remove(WARNING_LANDED_CLASS);
   }
 
-  /** @private Test seam: swap the timer scheduler/canceller for spies.
-   * @param {(fn:Function, ms:number)=>*} schedule
-   * @param {(handle:*)=>void} cancel
-   */
+  /** @private Test seam: swap the timer scheduler/canceller for spies. */
   _setSeenTimerHooks(schedule, cancel) {
     if (typeof schedule === 'function') this._scheduleSeen = schedule;
     if (typeof cancel === 'function') this._cancelSeen = cancel;
   }
 
-  /** @private Arm the seen-dwell timer for a rested selection. Clears any
-   * pending handle first (selection changed → previous dwell is void). Only
-   * unlocked, unseen entries arm; locked / already-seen entries never do.
-   * @param {object} entry
-   */
+  /** @private Only unlocked, unseen entries arm; the previous dwell is void. */
   _armSeenTimer(entry) {
     this._clearSeenTimer();
     if (!entry || !entry.unlocked || entry.seen) return;
@@ -1068,7 +905,6 @@ export class CodexViewerUI {
     }, SEEN_DWELL_MS);
   }
 
-  /** @private Cancel any pending seen-dwell emit (selection change / hide). */
   _clearSeenTimer() {
     if (this._seenTimer != null) {
       this._cancelSeen(this._seenTimer);
@@ -1076,7 +912,6 @@ export class CodexViewerUI {
     }
   }
 
-  /** @private In narrow mode, return from the reading pane to the list. */
   _showList() {
     if (!this._narrow) return;
     this._selectedEntry = null;
@@ -1085,20 +920,14 @@ export class CodexViewerUI {
     this._applyRowFocus();
   }
 
-  /** @private Apply the locked/unlocked filter and the sort order.
-   * A learning path ("track") is authored as an ordered narrative, so its
-   * sequence is always preserved — the sort control is suppressed for tracks
-   * (see _renderFilterBar) and ignored here.
-   * @param {Array<object>} entries
-   * @param {boolean} [isTrack=false] keep the authored order, ignoring _sort
-   * @returns {Array<object>}
+  /** @private Locked/unlocked filter and sort. A learning path is an authored ordered narrative: its sequence is
+   * always kept (`isTrack`; the sort control is hidden for tracks, see _renderFilterBar).
    */
   _applyFilterSort(entries, isTrack = false) {
     let out = entries;
     if (this._filter === 'unlocked') out = out.filter(e => e.unlocked);
     else if (this._filter === 'locked') out = out.filter(e => !e.unlocked);
 
-    // Tracks keep their authored trackOrder regardless of the sort selection.
     if (isTrack) return out;
 
     if (this._sort === 'az') {
@@ -1111,11 +940,9 @@ export class CodexViewerUI {
         return bt - at;
       });
     }
-    // 'default': category order — leave as-is.
     return out;
   }
 
-  /** @private Build the filter/sort bar controls (once). */
   _buildFilterBar(bar) {
     const mkGroup = (label, key, opts) => {
       const wrap = document.createElement('span');
@@ -1141,9 +968,6 @@ export class CodexViewerUI {
           if (key === 'filter') this._filter = o.value;
           else this._sort = o.value;
           this._renderEntryList();
-          // Preserve reading position across a filter/sort change when the
-          // current selection survives the new list; only jump to first if it
-          // was filtered out (or nothing was selected).
           this._reselectAfterListChange();
         });
         wrap.appendChild(btn);
@@ -1163,9 +987,7 @@ export class CodexViewerUI {
     ]));
   }
 
-  /** @private Reflect current _filter/_sort selection on the bar's buttons.
-   * @param {boolean} [isTrack=false] hide the Sort group for learning paths.
-   */
+  /** @private Reflect _filter/_sort on the bar's buttons; `isTrack` hides the Sort group. */
   _renderFilterBar(isTrack = false) {
     const bar = document.getElementById('codex-filter-bar');
     if (!bar) return;
@@ -1183,7 +1005,6 @@ export class CodexViewerUI {
     });
   }
 
-  /** @private Render an empty-state reading pane (no entry selected). */
   _renderEmptyReading() {
     const reading = document.getElementById('codex-reading');
     if (!reading) return;
@@ -1194,12 +1015,7 @@ export class CodexViewerUI {
       </div>`;
   }
 
-  /** @private Render the persistent reading pane for an entry.
-   * Sections top→bottom: QUICK LOOK → BRIEFING → TECH LEVEL (trl<9) →
-   * IN THE REAL WORLD → FORMULA → RELATED → prev/next → WARNING (the manual's
-   * authored red box, unlocked entries carrying `warning` only — always LAST).
-   * Locked entries show only QUICK LOOK + the how-to-unlock panel.
-   */
+  /** @private The reading pane. Locked entries show only QUICK LOOK + the how-to-unlock panel; WARNING is always LAST. */
   _renderReading(entry) {
     const reading = document.getElementById('codex-reading');
     if (!reading) return;
@@ -1211,9 +1027,7 @@ export class CodexViewerUI {
     const accentRGB = this._hexToRgb(accent);
     const accentBg = (a) => `rgba(${accentRGB.r},${accentRGB.g},${accentRGB.b},${a})`;
 
-    // Slice 8 — ego-map mode short-circuits the article and renders the SVG
-    // connections map instead. Unlocked entries only (map mode is never armed
-    // for locked ones; guard anyway so a stray toggle can't strand the pane).
+    // Ego-map mode replaces the article. Unlocked only: guarded so a stray toggle can't strand the pane.
     if (this._mapMode && entry.unlocked) {
       this._renderEgoMap(entry, { accent, accentBg });
       return;
@@ -1223,15 +1037,12 @@ export class CodexViewerUI {
       `<div style="font-size:11px;letter-spacing:0.14em;font-weight:bold;
         color:${color || '#778'};margin:0 0 8px;">${text}</div>`;
 
-    // In narrow mode, offer a Back affordance to return to the list.
     const backHtml = this._narrow
       ? `<div id="codex-back-btn" style="cursor:pointer;color:#00d4ff;font-size:13px;margin-bottom:16px;
           display:inline-block;padding:5px 12px;border:1px solid rgba(0,212,255,0.2);border-radius:3px;
           transition:background 0.15s;">← Back to list</div>`
       : '';
 
-    // Title header: the title carries the entry (no glyph); the category reads
-    // as its colour swatch + small-caps name (plan D-J).
     const titleHtml = `
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;">
         <div style="flex:1;min-width:0;">
@@ -1241,7 +1052,7 @@ export class CodexViewerUI {
         ${entry.unlocked ? this._mapToggleHtml('MAP', accent, accentBg) : ''}
       </div>`;
 
-    // QUICK LOOK — the ELI5 lead, always shown (even when locked).
+    // QUICK LOOK: the ELI5 lead, always shown (even when locked).
     const quickLookHtml = `
       <div style="margin-bottom:22px;">
         ${sectionHeader('QUICK LOOK', accent)}
@@ -1250,14 +1061,8 @@ export class CodexViewerUI {
           border-radius:2px;">${decorateGlossary(GestureHints.glassWords(entry.shortText), { once: true })}</div>
       </div>`;
 
-    // Lane E — the entry's rendered part portrait (the "two-column" reading
-    // page: prose flows beside the picture). ONE render per entry through the
-    // injected `portraitFor` (see _getPortrait); a miss (no dep, a locked
-    // entry, no matching hull part, a null render, a throw) renders nothing
-    // and the prose takes the full width — text-only, exactly as before this
-    // lane. In narrow mode the picture is not floated (one column, the image
-    // stacks above the prose); wide mode floats it right of the QUICK LOOK /
-    // HARDWARE / BRIEFING lead.
+    // Part portrait via `portraitFor` (see _getPortrait); a miss renders nothing and the prose takes the full width.
+    // Narrow mode stacks the image above the prose; wide mode floats it right of the QUICK LOOK / HARDWARE / BRIEFING lead.
     const portrait = this._getPortrait(entry);
     const portraitHtml = (portrait && portrait.dataUrl)
       ? `<img src="${portrait.dataUrl}" alt=""
@@ -1266,14 +1071,8 @@ export class CodexViewerUI {
              border:1px solid ${accentBg(0.35)};border-radius:4px;">`
       : '';
 
-    // Lane E — HARDWARE: the matched part's mass + spec lines (the hard
-    // physics, from the callout part's EXISTING fields only, never invented).
-    // Rows whose field is absent are omitted; no facts → no section. The
-    // portrait miss does not hide a section the entry still has facts for —
-    // but the facts only exist on a matched part, so in practice they travel
-    // together. Unlocked depth only (locked entries never reach here —
-    // _getPortrait returns null while locked, and this block is built from
-    // its result).
+    // HARDWARE: the matched part's mass + spec lines, from the callout part's EXISTING fields only, never invented.
+    // Absent fields are omitted; no facts, no section. Unlocked only (_getPortrait returns null while locked).
     let hardwareHtml = '';
     if (portrait) {
       const rows = [];
@@ -1290,7 +1089,7 @@ export class CodexViewerUI {
       }
     }
 
-    // TECH LEVEL — only when the tech is not yet flight-proven (trl<9).
+    // TECH LEVEL: only when not yet flight-proven (below Constants.TRL.FLIGHT_PROVEN_MIN).
     const dTrl = entry.trl;
     let trlHtml = '';
     if (typeof dTrl === 'number' && dTrl < Constants.TRL.FLIGHT_PROVEN_MIN) {
@@ -1315,7 +1114,7 @@ export class CodexViewerUI {
         </div>`;
     }
 
-    // BRIEFING (fullText) — unlocked only; locked shows the how-to-unlock panel.
+    // BRIEFING (fullText): unlocked only; locked shows the how-to-unlock panel.
     const hint = GestureHints.glassWords(entry.unlockHint || 'Discover through gameplay.');
     let briefingHtml;
     if (isLocked) {
@@ -1338,7 +1137,6 @@ export class CodexViewerUI {
         </div>`;
     }
 
-    // IN THE REAL WORLD + FORMULA — unlocked depth only.
     let realWorldHtml = '';
     let formulaHtml = '';
     if (!isLocked) {
@@ -1363,8 +1161,7 @@ export class CodexViewerUI {
       }
     }
 
-    // RELATED — clickable chips (locked relateds still navigate; a LOCKED text
-    // tag marks them, never a glyph; the entry icon is not rendered).
+    // RELATED chips: locked relateds still navigate; a LOCKED text tag marks them, never a glyph.
     const related = (typeof this._codex.getRelated === 'function')
       ? this._codex.getRelated(entry.id)
       : [];
@@ -1379,7 +1176,6 @@ export class CodexViewerUI {
         </div>`;
     }
 
-    // Prev/Next within the current list.
     const siblings = this._currentListEntries().entries;
     const idx = siblings.findIndex(e => e.id === entry.id);
     const prev = idx > 0 ? siblings[idx - 1] : null;
@@ -1399,12 +1195,8 @@ export class CodexViewerUI {
          </div>`
       : '';
 
-    // WARNING — the manual's authored notice (the FURNACE gag, plan
-    // 1788957399035 §1.23): a STEADY red box printed LAST in the page column,
-    // literally the bottom of the page — print, not a live alarm (no pulse, no
-    // animation; THREAT red is the ink, not a channel). Unlocked entries only,
-    // and only when the data carries one (`entry.warning`, flattened by
-    // CodexSystem._buildEntry). The renderer supplies the caps WARNING label.
+    // WARNING: the manual's authored notice, a STEADY red box printed LAST (print, not a live alarm: no pulse, no
+    // animation; THREAT red is the ink, not a channel). Unlocked only, when `entry.warning` exists (CodexSystem._buildEntry).
     const warningHtml = (!isLocked && entry.warning)
       ? `<div class="codex-warning" style="margin-top:18px;padding:10px 14px;
            border:1px solid rgba(255,68,34,0.6);border-left:4px solid #ff4422;
@@ -1433,11 +1225,9 @@ export class CodexViewerUI {
       </div>
     `;
 
-    // Inline-glossary affordances inside the library itself.
     ensureGlossaryCss();
     delegateGlossaryClicks(reading);
 
-    // Back button (narrow mode)
     const backBtn = reading.querySelector('#codex-back-btn');
     if (backBtn) {
       backBtn.addEventListener('mouseenter', () => { backBtn.style.background = 'rgba(0,212,255,0.1)'; });
@@ -1445,7 +1235,6 @@ export class CodexViewerUI {
       backBtn.addEventListener('click', () => this._showList());
     }
 
-    // Slice 8 — MAP toggle: enter ego-map mode for this entry.
     const mapToggle = reading.querySelector('#codex-map-toggle');
     if (mapToggle) {
       mapToggle.addEventListener('mouseenter', () => { mapToggle.style.background = accentBg(0.15); });
@@ -1457,7 +1246,6 @@ export class CodexViewerUI {
       });
     }
 
-    // Related chips + Prev/Next: jump straight to another entry.
     const jumpTo = (id) => {
       const target = this._codex.getEntry ? this._codex.getEntry(id) : null;
       if (!target) return;
@@ -1476,7 +1264,6 @@ export class CodexViewerUI {
     });
   }
 
-  /** @private VERIFIED micro-stamp for entries carrying a lastVerified date. */
   _verifiedStampHtml(entry) {
     const lv = entry.lastVerified;
     if (!lv || typeof lv !== 'string') return '';
@@ -1485,24 +1272,13 @@ export class CodexViewerUI {
   }
 
   /**
-   * @private Lane E — the entry's rendered part portrait + hard-physics facts,
-   * ONE render per entry id (never per frame; a resize re-render of the same
-   * entry reuses the cached copy). Three null paths, all silent, all text-only
-   * (the left column then takes the full width):
-   *   1. no `portraitFor` dep (a `?ladder=0` boot passes nothing), a locked
-   *      entry (locked depth is QUICK LOOK + the unlock hint, as shipped), or
-   *      a concept entry the adapter cannot match to a hull part;
-   *   2. `portraitFor` returns null — e.g. `renderPartPortrait` missed because
-   *      there is no near pass, no near-field roots (the reader opened from
-   *      the menu, where no ship exists), or the near field is off on the
-   *      floor;
-   *   3. the callback throws (wrapped here AND at the call site — the reader
-   *      must never show a broken frame).
-   * The cached `result` carries the portrait as a JPEG data URL (rendered
-   * once from the adapter's canvas copy) beside the matched part's `massKg`
-   * and `specs`, shown only when present — from EXISTING fields only, never
-   * invented (the LibraryPane rule).
-   * @param {object} entry
+   * @private The entry's part portrait (JPEG data URL) + the matched part's `massKg` / `specs`, ONE render per entry
+   * id (a re-render reuses the cache). Existing fields only, never invented (the LibraryPane rule). Three silent
+   * text-only null paths:
+   *   1. no `portraitFor` dep, a locked entry, or a concept entry the adapter cannot match to a hull part;
+   *   2. `portraitFor` returns null (no near pass / near-field roots, e.g. the reader opened from the menu where no
+   *      ship exists, or the near field is off on the floor);
+   *   3. the callback throws (wrapped here AND at the call site: the reader must never show a broken frame).
    * @returns {{dataUrl:string, massKg?:number, specs?:string[]}|null}
    */
   _getPortrait(entry) {
@@ -1524,9 +1300,8 @@ export class CodexViewerUI {
     return result;
   }
 
-  /** @private LOGGED anchor stamp: when/where this entry was first unlocked,
-   * e.g. "LOGGED  T+02:14 · 782 km" (Slice 7). Empty for entries with no
-   * captured unlock context (startUnlocked / reference / pre-Slice-7 saves). */
+  /** @private LOGGED stamp (when/where first unlocked), e.g. "LOGGED  T+02:14 · 782 km"; empty with no captured
+   * unlock context (startUnlocked / reference entries, older saves). */
   _loggedLineHtml(entry) {
     const c = entry && entry.unlockContext;
     if (!c || typeof c !== 'object' || !Number.isFinite(c.tSim)) return '';
@@ -1542,8 +1317,7 @@ export class CodexViewerUI {
       color:#566;">LOGGED  T+${clock}${alt}</div>`;
   }
 
-  /** @private Completion banner shown when the entry's category is 100%
-   * unlocked (Slice 7). Subtle, category-accent tinted, no reward grammar. */
+  /** @private Banner when the entry's category is 100% unlocked. Subtle, accent tinted, no reward grammar. */
   _completionBannerHtml(entry, accent) {
     if (!entry || !this._codex || typeof this._codex.getCategoryProgress !== 'function') return '';
     const p = this._codex.getCategoryProgress(entry.category);
@@ -1557,14 +1331,9 @@ export class CodexViewerUI {
       font-size:11px;letter-spacing:0.08em;color:${accent || '#00d4ff'};">✓ ${label} — FILE COMPLETE</div>`;
   }
 
-  /** @private Slice 8 — the map/read toggle pill, shared by the article header
-   * (MAP) and the map header (READ) so their styling never drifts. The two
-   * render paths are mutually exclusive full-innerHTML replaces, so the shared
-   * `codex-map-toggle` id never collides at runtime.
-   * @param {string} label
-   * @param {string} accent
+  /** @private The map/read toggle pill, shared by the article header (MAP) and the map header (READ). The two paths
+   * are mutually exclusive full-innerHTML replaces, so the shared `codex-map-toggle` id never collides.
    * @param {(a:number)=>string} accentBg
-   * @returns {string}
    */
   _mapToggleHtml(label, accent, accentBg) {
     return `<span id="codex-map-toggle" tabindex="0" role="button"
@@ -1573,14 +1342,10 @@ export class CodexViewerUI {
         white-space:nowrap;">${label}</span>`;
   }
 
-  /** @private Slice 8 — "Curious next?" chips at the reading-pane foot. Up to 2,
-   * chosen deterministically from `entry.related` in array order: locked entries
-   * first (rendered as a question from the unlock hint), then unlocked-but-unseen.
-   * Reuses the `.codex-related-chip` markup so click delegation keeps working.
-   * Empty when nothing qualifies. Callers gate on `entry.unlocked`.
-   * @param {object} entry
+  /** @private "Curious next?" chips at the pane foot: up to 2 from `entry.related` in array order, locked first
+   * (from the unlock hint), then unlocked-but-unseen. Reuses `.codex-related-chip` so click delegation works.
+   * Callers gate on `entry.unlocked`.
    * @param {{accent:string, accentBg:(a:number)=>string}} theme
-   * @returns {string}
    */
   _curiousNextHtml(entry, { accent, accentBg }) {
     if (!entry || !entry.unlocked) return '';
@@ -1591,8 +1356,6 @@ export class CodexViewerUI {
 
     const locked = related.filter(r => r && !r.unlocked);
     const unseen = related.filter(r => r && r.unlocked && !r.seen);
-    // Locked prompts first, then unlocked-but-unread; array order preserved
-    // within each group. Cap at 2 total.
     const picks = [];
     for (const r of locked) { if (picks.length >= 2) break; picks.push({ r, kind: 'locked' }); }
     for (const r of unseen) { if (picks.length >= 2) break; picks.push({ r, kind: 'unseen' }); }
@@ -1615,17 +1378,9 @@ export class CodexViewerUI {
     </div>`;
   }
 
-  /** @private Slice 8 — shared clickable `.codex-related-chip` markup used by
-   * both the RELATED section and the CURIOUS NEXT chips, so the chip's
-   * border/background/color affordance never drifts between them. The class +
-   * data-id keep click delegation working (jumpTo). `inner` is the pre-built
-   * chip contents; `extraStyle` overrides gap/padding/line-height per caller.
-   * @param {string} id
-   * @param {boolean} locked
+  /** @private Chip markup shared by RELATED and CURIOUS NEXT; the class + data-id keep click delegation (jumpTo)
+   * working. `inner` is the pre-built contents; `extraStyle` overrides gap/padding/line-height.
    * @param {(a:number)=>string} accentBg
-   * @param {string} inner
-   * @param {string} [extraStyle]
-   * @returns {string}
    */
   _relatedChipHtml(id, locked, accentBg, inner, extraStyle = 'gap:5px;padding:5px 11px;') {
     return `<span class="codex-related-chip" data-id="${id}"
@@ -1636,10 +1391,8 @@ export class CodexViewerUI {
         color:${locked ? '#89a' : '#cde'};transition:all 0.15s;">${inner}</span>`;
   }
 
-  /** @private Slice 8 — enter ego-map mode focused on `entry`. Sets the map
-   * focus id, flips `_mapMode`, and re-renders the reading pane as the SVG map.
-   * Does NOT go through `_selectEntry` (which would exit map mode and re-arm the
-   * seen-dwell timer). @param {object} entry */
+  /** @private Enter map mode on `entry`. Does NOT go through `_selectEntry` (it would exit map mode and re-arm the
+   * seen-dwell timer). */
   _enterMapMode(entry) {
     if (!entry || !entry.unlocked) return;
     this._mapMode = true;
@@ -1647,24 +1400,18 @@ export class CodexViewerUI {
     this._renderReading(entry);
   }
 
-  /** @private Slice 8 — re-center the map on a node without leaving map mode.
-   * Cheap: only recomputes the layout and re-renders the SVG (no scaffolding
-   * rebuild, no dwell timer). @param {string} id */
+  /** @private Re-centre the map on a node without leaving map mode (no dwell timer). */
   _recenterMap(id) {
     const target = (typeof this._codex.getEntry === 'function') ? this._codex.getEntry(id) : null;
     if (!target || !target.unlocked) return;
     this._mapFocusId = id;
-    // Re-render via the focus entry; _mapMode is still true so _renderReading
-    // routes back into _renderEgoMap.
+    // _mapMode is still true, so _renderReading routes back into _renderEgoMap.
     this._renderReading(target);
   }
 
-  /** @private Slice 8 — render the reading pane as an SVG ego-map for `entry`.
-   * Click a node → re-center (stay in map); click the CENTRED node, dblclick or Enter → openEntry
-   * (exits map). Nodes are focusable for Enter. Locked nodes are dimmed, dashed,
-   * and their label leads with [LOCKED]. Nodes carry no glyph: the label under
-   * each circle is the entry's title (plan D-J). No physics/pan/zoom.
-   * @param {object} entry
+  /** @private The reading pane as an SVG ego-map. Click a node: re-centre; click the CENTRED node, dblclick or Enter:
+   * openEntry (exits map). Nodes are focusable for Enter. Locked nodes are dimmed, dashed, labelled [LOCKED]. No
+   * glyphs, physics, pan or zoom.
    * @param {{accent:string, accentBg:(a:number)=>string}} theme
    */
   _renderEgoMap(entry, { accent, accentBg }) {
@@ -1681,7 +1428,6 @@ export class CodexViewerUI {
     const VW = EGO_LAYOUT_VIEW.width;
     const VH = EGO_LAYOUT_VIEW.height;
 
-    // Edges under nodes.
     const byId = new Map(nodes.map(n => [n.id, n]));
     const edgeSvg = edges.map(e => {
       const a = byId.get(e.from);
@@ -1693,9 +1439,9 @@ export class CodexViewerUI {
         stroke="${accentBg(dim)}" stroke-width="${b.ring === 2 ? 1 : 1.5}" />`;
     }).join('');
 
-    // u17 A-T5 (D6): two layers. Every label is painted BEFORE (under) every circle, so a node's circle always wins a tap over
-    // another node's label that happens to cover it (the locked "docking_precision" label spans the "tool_choice" circle
-    // under "core_loop"; SVG hit-testing goes to the last-painted element). A label stays tappable where it covers nothing.
+    // Two layers: every label is painted BEFORE (under) every circle, so a circle always wins a tap over another
+    // node's label covering it (SVG hit-testing goes to the last-painted element). A label stays tappable where it
+    // covers nothing.
     const nodeStyle = (n) => {
       const isFocus = n.ring === 0;
       const r = isFocus ? 34 : (n.ring === 1 ? 26 : 20);
@@ -1716,7 +1462,7 @@ export class CodexViewerUI {
       const { isFocus, r, op, cursor } = nodeStyle(n);
       const stroke = isFocus ? accent : (n.locked ? '#556' : accentBg(0.6));
       const fill = isFocus ? accentBg(0.18) : 'rgba(10,14,20,0.9)';
-      // The text moved to the label layer, so the focusable group carries the node's name itself (screen readers).
+      // The text is on the label layer, so the focusable group carries the name itself (screen readers).
       const name = escapeHtml(`${n.locked ? '[LOCKED] ' : ''}${n.title}`);
       return `<g class="codex-map-node" data-id="${n.id}" data-ring="${n.ring}" aria-label="${name}"
         tabindex="0" style="cursor:${cursor};outline:none;" opacity="${op}">
@@ -1747,8 +1493,7 @@ export class CodexViewerUI {
         </svg>
       </div>`;
 
-    // READ toggle returns to the article (re-selects the focus entry, which
-    // clears _mapMode and re-arms the seen timer as a normal read).
+    // READ returns to the article: re-selecting the entry clears _mapMode and re-arms the seen timer.
     const readToggle = reading.querySelector('#codex-map-toggle');
     if (readToggle) {
       readToggle.addEventListener('mouseenter', () => { readToggle.style.background = accentBg(0.15); });
@@ -1760,13 +1505,11 @@ export class CodexViewerUI {
       });
     }
 
-    // Node interactions: single-click re-centers (non-focus); dblclick/Enter opens.
     reading.querySelectorAll('.codex-map-node').forEach(g => {
       const id = g.dataset.id;
       const isFocus = g.dataset.ring === '0';
-      // u16b D5: a tap on the centred node opens it (a touch player's double-tap is unreliable on iPad Safari); a tap on
-      // any other node moves it to the centre. dblclick and Enter still open; a desktop double-click that opens twice is
-      // harmless (openEntry just re-selects the same entry), and the overlay swallows clicks for MAP_OPEN_SWALLOW_MS after an open from the map.
+      // A tap on the centred node opens it (double-tap is unreliable on iPad Safari); a tap on any other node moves it
+      // to the centre. A desktop double-click that opens twice is harmless (openEntry re-selects the same entry).
       if (isFocus) {
         g.addEventListener('click', () => this._openFromMap(id));
       } else {
@@ -1778,8 +1521,7 @@ export class CodexViewerUI {
       });
     });
 
-    // u17 A-T5: a label (under every circle) acts like its own node: tap = re-centre / open the centred one; dblclick opens.
-    // Enter and focus stay on the circle's group (a <text> is not focusable).
+    // A label acts like its own node. Enter and focus stay on the circle's group (a <text> is not focusable).
     reading.querySelectorAll('.codex-map-label').forEach(t => {
       const id = t.dataset.id;
       const isFocus = t.dataset.ring === '0';
@@ -1788,8 +1530,7 @@ export class CodexViewerUI {
     });
   }
 
-  /** @private Parse a #rrggbb (or #rgb) hex colour to {r,g,b}; defaults to the
-   * codex cyan if the input is malformed. Used for category-accent tinting. */
+  /** @private #rrggbb / #rgb to {r,g,b}; the codex cyan if malformed. */
   _hexToRgb(hex) {
     const fallback = { r: 0, g: 212, b: 255 };
     if (typeof hex !== 'string') return fallback;
@@ -1803,22 +1544,15 @@ export class CodexViewerUI {
     };
   }
 
-  // ==========================================================================
-  // EVENT LISTENERS
-  // ==========================================================================
-
   /** @private */
   _setupListeners() {
-    // Keyboard handling while the codex is open (capture phase, so it runs
-    // before InputManager's codex intercept). ESC always closes; ↑/↓ move the
-    // list selection AND the reading pane; Enter focuses the pane; / focuses
-    // search. Typing in the search box is left alone.
+    // Capture phase, so it runs before InputManager's codex intercept. Typing in the search box is left alone.
     window.addEventListener('keydown', (e) => {
       if (!this._visible) return;
       const tgt = e.target;
       const inSearch = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA');
 
-      // ESC while typing in the search box: blur the field (don't close).
+      // ESC in the search box blurs the field instead of closing.
       if (e.code === 'Escape' && inSearch) {
         e.stopImmediatePropagation();
         e.preventDefault();
@@ -1830,8 +1564,6 @@ export class CodexViewerUI {
         e.stopImmediatePropagation();
         e.preventDefault();
         // Narrow mode with the reading pane open: ESC returns to the list.
-        // Otherwise ESC closes the viewer via _requestClose (the ONE close
-        // seam for every self-close path).
         if (this._narrow && this._selectedEntry) {
           this._showList();
         } else {
@@ -1842,7 +1574,6 @@ export class CodexViewerUI {
 
       if (inSearch) return; // don't hijack typing
 
-      // '/' focuses the search box.
       if (e.code === 'Slash') {
         e.stopImmediatePropagation(); e.preventDefault();
         const input = document.getElementById('codex-search');
@@ -1850,16 +1581,13 @@ export class CodexViewerUI {
         return;
       }
 
-      // ↑/↓ move the list selection and re-render the reading pane (reading
-      // follows selection). ←/→ step prev/next. Enter focuses the pane. Home/End
-      // jump to list ends.
+      // Arrows step the selection (reading follows); Enter focuses the pane; Home/End jump to the list ends.
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Home', 'End', 'Backspace'].includes(e.code)) {
         e.stopImmediatePropagation(); e.preventDefault();
         this._handleListKey(e.code);
       }
     }, true);
 
-    // Re-render when new entry unlocked (player might have codex open)
     eventBus.on(Events.CODEX_UNLOCKED, () => {
       if (this._visible) {
         this._renderHeader();
@@ -1867,10 +1595,7 @@ export class CodexViewerUI {
       }
     });
 
-    // Debounced resize: re-evaluate the 3-column ⇄ 2-pane breakpoint while open.
-    // On a mode flip with an entry selected, re-render the reading pane so the
-    // "← Back to list" affordance appears/disappears (it's only emitted while
-    // _narrow at render time).
+    // Debounced: re-evaluate the 3-column / 2-pane breakpoint while open.
     window.addEventListener('resize', () => {
       if (!this._visible) return;
       if (this._resizeDebounce) clearTimeout(this._resizeDebounce);
@@ -1882,29 +1607,25 @@ export class CodexViewerUI {
     });
   }
 
-  /** @private Handle a settled window resize while the viewer is open. */
   _onResize() {
     const wasNarrow = this._narrow;
     this._applyResponsiveLayout();
     if (this._narrow !== wasNarrow && this._selectedEntry) {
-      // Back-button affordance is narrow-only and baked in at render time.
+      // The Back button is narrow-only and baked in at render time.
       this._renderReading(this._selectedEntry);
     }
   }
 
-  /** @private Keyboard navigation over the compact list + reading pane. */
   _handleListKey(code) {
     const { entries } = this._currentListEntries();
     if (!entries.length) return;
 
-    // Backspace in narrow mode returns to the list.
     if (code === 'Backspace') {
       if (this._narrow && this._selectedEntry) this._showList();
       return;
     }
 
-    // Enter focuses the reading pane (accessibility: move reading focus off the
-    // list). In narrow mode, ensure the pane is shown.
+    // Enter moves reading focus off the list (accessibility); in narrow mode it shows the pane.
     if (code === 'Enter') {
       if (this._focusIdx >= 0 && this._focusIdx < entries.length) {
         this._selectEntry(entries[this._focusIdx], { focusPane: true });
@@ -1923,8 +1644,7 @@ export class CodexViewerUI {
       default: break;
     }
     this._focusIdx = idx;
-    // Reading follows selection (in wide mode). In narrow mode, keep the list
-    // visible while arrowing; only open the pane on Enter/click.
+    // Narrow mode keeps the list visible while arrowing; only Enter/click opens the pane.
     if (this._narrow) {
       this._applyRowFocus();
     } else {

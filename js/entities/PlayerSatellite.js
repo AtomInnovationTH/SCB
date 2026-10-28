@@ -27,8 +27,8 @@ import { powerDistribution } from '../systems/PowerDistribution.js';
 import { engineGasKg, engineTankDryKg, engineGasLowFrac, startEnginePool, START_GAS_KG, coldGasKgToPool, coldGasPoolToKg } from '../systems/ResourceSystem.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import {
-  computeCoM, computeCoMDrift, computeCoMDriftVector,
-  computeInertia, getActiveBlocks,
+  computeCoM,
+  computeInertia,
 } from '../systems/CoMCalculator.js';
 import { composeDockedArmQuat, strutLocalDirection } from './ArmDockBasis.js';
 import { netCellLayout } from './netCellLayout.js';
@@ -723,10 +723,6 @@ export class PlayerSatellite extends THREE.Group {
     this.lastDragMassKg = null;
     this.armManager = null;         // Set via setArmManager() for interlock checks
     this._thrusterInterlock = false; // True when back arm blocks FEEP thruster exhaust
-    this._plumeBlocked = {};        // C-9: Map<thrusterId, reason> — plume geometry interlock
-    this._comCache = null;          // C-9: Cached CoM result from last computation
-    this._comDriftM = 0;            // C-9: Cached scalar drift (m) for HUD
-    this._comDriftVec = { x: 0, y: 0, z: 0 }; // C-9: Drift vector (actual − balanced) for torque coupling
     // Attitude-dynamics inertia SSOT (Phase 1). Lazily computed from the mass
     // tree, cached, and invalidated on arm-state/berth changes plus the cargo-
     // ledger direct invalidations (lasso adoption entry, collar digestion
@@ -8175,11 +8171,6 @@ export class PlayerSatellite extends THREE.Group {
       const data = this._thrusterGlowTargets.get(thruster);
       if (!data) return;
 
-      // C-9: Check plume interlock — dim blocked FEEP nozzles
-      const tid = thruster._thrusterId;
-      const blocked = Constants.FEATURE_FLAGS.THRUSTER_INTERLOCK &&
-                      this._plumeBlocked && tid && (tid in this._plumeBlocked);
-
       // Prograde thrust target (same for all nozzles, as before)
       let progradeTarget = 0;
       if (hasThrust && ti.z > 0) {
@@ -8194,26 +8185,19 @@ export class PlayerSatellite extends THREE.Group {
       // with the shared trip/prograde target. Warm-up gives no glow (no thrust).
       if (this._slothGlow && this._slothGlow[i] > target) target = this._slothGlow[i];
 
-      // Suppress thrust output when plume-blocked
-      if (blocked) target *= 0.15;
-
-      // Ion start-up: the trip sets the level itself (the sputter would not survive the lerp); the plume interlock still dims it
+      // Ion start-up: the trip sets the level itself (the sputter would not survive the lerp)
       if (this._ionStartGlow) {
         const lvl = this._ionStartGlow[i] || 0;
-        data.intensity = blocked ? lvl * 0.15 : lvl;
+        data.intensity = lvl;
       } else {
         // Smooth interpolation — per-nozzle independent lerp
         data.intensity += (target - data.intensity) * Math.min(1, dt * lerpRate);
       }
 
-      // Apply glow — red tint when blocked, silvery-blue when clear
+      // Apply glow (silvery-blue)
       if (data.glow && data.glow.material) {
         data.glow.material.opacity = data.intensity * 0.8;
-        if (blocked) {
-          data.glow.material.color.setHex(0xff4444);
-        } else {
-          data.glow.material.color.setHex(0x99bbdd);
-        }
+        data.glow.material.color.setHex(0x99bbdd);
       }
 
       // Plume visibility, scale, and steady ion shimmer.
@@ -8230,8 +8214,7 @@ export class PlayerSatellite extends THREE.Group {
           const wS = 0.9 + data.intensity * 0.12;               // width nearly constant
           data.plume.scale.set(wS, lenS, wS);                   // local +Y = beam length
           data.plume.material.opacity = data.intensity * 0.5;   // steady (fade is vertex-alpha)
-          // Red-shift plume when interlock active (C-9 — preserved)
-          data.plume.material.color.setHex(blocked ? 0xff6644 : 0x99bbdd);
+          data.plume.material.color.setHex(0x99bbdd);
         }
       }
 
@@ -8245,7 +8228,7 @@ export class PlayerSatellite extends THREE.Group {
           const wS = 0.95 + data.intensity * 0.1;
           data.outerGlow.scale.set(wS, lenS, wS);
           data.outerGlow.material.opacity = data.intensity * 0.16;
-          data.outerGlow.material.color.setHex(blocked ? 0xff4422 : 0xaaccee);
+          data.outerGlow.material.color.setHex(0xaaccee);
         }
       }
 
@@ -8254,11 +8237,7 @@ export class PlayerSatellite extends THREE.Group {
         const DT = Constants.DIFFERENTIAL_THRUST;
         const fireEmissive = DT.INNER_EMISSIVE_BASE + data.intensity * DT.INNER_EMISSIVE_FIRE_SCALE;
         data.innerLiner.material.emissiveIntensity = fireEmissive;
-        if (blocked) {
-          data.innerLiner.material.emissive.setHex(0x662222);
-        } else {
-          data.innerLiner.material.emissive.setHex(0x334466);
-        }
+        data.innerLiner.material.emissive.setHex(0x334466);
       }
     });
 
@@ -9214,7 +9193,6 @@ export class PlayerSatellite extends THREE.Group {
     const flowerGuard = this._flowerPoseBandGuard();
     if (!this.armManager) {
       this._thrusterInterlock = flowerGuard;
-      this._plumeBlocked = {};
       return;
     }
 
@@ -9231,31 +9209,8 @@ export class PlayerSatellite extends THREE.Group {
       this._thrusterInterlock = false;
     }
 
-    // C-9: Plume-geometry interlock (flag-gated)
-    if (Constants.FEATURE_FLAGS.THRUSTER_INTERLOCK) {
-      this._plumeBlocked = getActiveBlocks(this.armManager);
-      // If ANY thruster is plume-blocked, also set the legacy interlock flag
-      // so existing thrust methods that check _thrusterInterlock will respect it
-      if (Object.keys(this._plumeBlocked).length > 0) {
-        this._thrusterInterlock = true;
-      }
-    } else {
-      this._plumeBlocked = {};
-    }
-
     // Design 7b: the flower pose-band guard (see the top of this method)
     if (flowerGuard) this._thrusterInterlock = true;
-
-    // C-9: Compute and cache CoM (once per frame, used by HUD + torque coupling)
-    if (Constants.FEATURE_FLAGS.COM_TRACKING) {
-      this._comCache = computeCoM(this.armManager, this);
-      this._comDriftM = computeCoMDrift(this.armManager, this);
-      this._comDriftVec = computeCoMDriftVector(this.armManager, this);
-    } else {
-      this._comCache = null;
-      this._comDriftM = 0;
-      this._comDriftVec = { x: 0, y: 0, z: 0 };
-    }
   }
 
   /**
@@ -9385,10 +9340,6 @@ export class PlayerSatellite extends THREE.Group {
    */
   resetCrossbowState() {
     this._thrusterInterlock = false;
-    this._plumeBlocked = {};
-    this._comCache = null;
-    this._comDriftM = 0;
-    this._comDriftVec = { x: 0, y: 0, z: 0 };
     this._attitudeInertia = null;
     this._crossbowAutoRcs = true;
     this._frameRecoilDv = 0;
@@ -9401,20 +9352,6 @@ export class PlayerSatellite extends THREE.Group {
 
   /** @returns {boolean} Whether auto-RCS compensation is enabled */
   get crossbowAutoRcs() { return this._crossbowAutoRcs; }
-
-  /**
-   * C-9: Get cached CoM computation result from this frame.
-   * Only populated when COM_TRACKING flag is ON.
-   * @returns {{ position: {x,y,z}, totalMass: number, breakdown: object }|null}
-   */
-  getCoMCache() { return this._comCache; }
-
-  /**
-   * C-9: Get cached CoM drift distance (meters) from this frame.
-   * Returns 0 when COM_TRACKING flag is OFF.
-   * @returns {number}
-   */
-  getCoMDrift() { return this._comDriftM; }
 
   /**
    * Attitude-dynamics inertia SSOT. Returns {ixx, iyy, izz} kg·m² about her true
@@ -9574,12 +9511,6 @@ export class PlayerSatellite extends THREE.Group {
     const I = this.getAttitudeInertia();
     return axis === 'x' ? I.ixx : (axis === 'z' ? I.izz : I.iyy);
   }
-
-  /**
-   * C-9: Get the plume-blocked thruster map from this frame.
-   * @returns {Object<string, string>} Map: { thrusterId → reason }
-   */
-  getPlumeBlocks() { return this._plumeBlocked; }
 
   // ==========================================================================
   // UPGRADES
@@ -11744,34 +11675,6 @@ export class PlayerSatellite extends THREE.Group {
     if (Math.abs(ti.x) > 1e-14) {
       this.orbit.eccentricity += ti.x / (2 * v);
       this.orbit.eccentricity = clamp(this.orbit.eccentricity, 0, 0.1);
-    }
-
-    // C-9: CoM-offset induced torque coupling (COM_TRACKING flag-gated).
-    // When asymmetric arm deployment shifts CoM off the thrust line, linear thrust
-    // induces a torque τ = r × F. Uses the DRIFT vector (actual − balanced)
-    // to isolate player-caused asymmetry from the permanent collar offset.
-    // Simplified model: perpendicular drift / barrel length = angular tilt,
-    // leaking z-thrust into inclination (y) and eccentricity (x) perturbations.
-    if (Constants.FEATURE_FLAGS.COM_TRACKING && this._comDriftM > 1e-8 && mag > 1e-12) {
-      const cp = this._comDriftVec; // drift vector, NOT raw CoM position
-      const perpSq = cp.x * cp.x + cp.y * cp.y; // XY drift from Z-axis thrust line
-      if (perpSq > 1e-12) {
-        const barrelLen = Constants.OCTOPUS_V5.CORE_LENGTH; // 2.0 m
-        const perpDist = Math.sqrt(perpSq);
-        const tiltRad = perpDist / barrelLen; // small-angle approx (typ. < 0.01 rad)
-        const leakDv = mag * tiltRad; // ΔV leaked into cross-track
-        // Direction of leak = normalize(comXY) — tells which way thrust tilts
-        const invPerp = 1 / perpDist;
-        const leakY = leakDv * (cp.y * invPerp); // inclination leak
-        const leakX = leakDv * (cp.x * invPerp); // eccentricity leak
-        if (Math.abs(leakY) > 1e-16) {
-          this.orbit.inclination += leakY / v;
-        }
-        if (Math.abs(leakX) > 1e-16) {
-          this.orbit.eccentricity += leakX / (2 * v);
-          this.orbit.eccentricity = clamp(this.orbit.eccentricity, 0, 0.1);
-        }
-      }
     }
 
     const minAlt = Constants.VLEO_MIN + Constants.EARTH_RADIUS;

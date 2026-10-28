@@ -1,10 +1,8 @@
 /**
- * ResourceSystem.js — Centralized resource/inventory management (CANONICAL OWNER)
- * Manages fuel (xenon propellant), cold gas (RCS), battery charge,
- * solar recharge, and resource upgrade effects.
+ * ResourceSystem.js — centralized resource/inventory management (CANONICAL OWNER): fuel (xenon propellant), cold gas
+ * (RCS), battery charge, solar recharge, and resource upgrade effects.
  *
- * One-way push to PlayerSatellite.resources via _syncToPlayer() so that
- * HUD and other readers can access values from player.resources.
+ * One-way push to PlayerSatellite.resources via _syncToPlayer() so the HUD and other readers can read player.resources.
  * All consumption flows through eventBus → ResourceSystem.consume().
  *
  * @module systems/ResourceSystem
@@ -17,11 +15,9 @@ import { ThermalSystem } from './ThermalSystem.js';
 import { clamp01 } from '../core/MathUtil.js';
 
 /**
- * h3-argon-engine D2: kilograms of ENGINE gas aboard — the ONE conversion from the
- * pool (a fill percentage: 100 = one full 60 L base tank) to mass. Reads the gas that
- * is IN THE TANK (`tankGasId`), never the active fuel (a cargo fuel has no `kgFull`).
+ * Kilograms of ENGINE gas aboard: the ONE conversion from the pool (a fill percentage: 100 = one full 60 L base tank)
+ * to mass. Reads the gas IN THE TANK (`tankGasId`), never the active fuel (a cargo fuel has no `kgFull`).
  * @param {{xenon?: number, tankGasId?: string}} res - ResourceSystem or player.resources
- * @returns {number} kg
  */
 export function engineGasKg(res) {
   const fuels = Constants.FUELS || {};
@@ -33,12 +29,10 @@ export function engineGasKg(res) {
 }
 
 /**
- * g1-gas-upgrades D1: price of `kg` kilograms of engine gas, credits — priced by what it costs to
- * LAUNCH the mass (every kilo about the same, research §3) plus the gas itself (research §2.4).
- * Rounded to 10 cr. Used by the upgrade rows, the resupply and the shop's price accessor.
+ * Price of `kg` kilograms of engine gas, credits: priced by what it costs to LAUNCH the mass (every kilo about the
+ * same, research §3) plus the gas itself (research §2.4). Rounded to 10 cr. Used by the upgrade rows, the resupply and
+ * the shop's price accessor.
  * @param {string} gasId - 'argon' | 'krypton' | 'xenon'
- * @param {number} kg
- * @returns {number} credits
  */
 export function gasPriceCr(gasId, kg) {
   const fuels = Constants.FUELS || {};
@@ -48,11 +42,9 @@ export function gasPriceCr(gasId, kg) {
 }
 
 /**
- * Nets step 3 lane 3f: price of `kg` kilograms of nitrogen cold gas, credits - the same launch-mass rule as gasPriceCr with the
- * nitrogen commodity price (`Constants.DAUGHTER_SUPPLY.N2_USD_PER_KG`, an estimate kept OUT of `Constants.FUELS`, which every reader
- * treats as the engine-gas list). Rounded to 10 cr.
- * @param {number} kg
- * @returns {number} credits
+ * Price of `kg` kilograms of nitrogen cold gas, credits: the same launch-mass rule as gasPriceCr with the nitrogen
+ * commodity price (`Constants.DAUGHTER_SUPPLY.N2_USD_PER_KG`, an estimate kept OUT of `Constants.FUELS`, which every
+ * reader treats as the engine-gas list). Rounded to 10 cr.
  */
 export function coldGasPriceCr(kg) {
   const S = Constants.DAUGHTER_SUPPLY;
@@ -61,11 +53,9 @@ export function coldGasPriceCr(kg) {
 }
 
 /**
- * Nets step 3 lane 3f: price of one ion-fuel cartridge (or `kg` of indium), credits - the launch-mass rule with the indium commodity
- * price (`Constants.DAUGHTER_SUPPLY.INDIUM_USD_PER_KG`, an estimate). Rounded to 1 cr (a cartridge is small money; a 10 cr step
- * would misprice it by a tenth).
+ * Price of one ion-fuel cartridge (or `kg` of indium), credits: the launch-mass rule with the indium commodity price
+ * (`Constants.DAUGHTER_SUPPLY.INDIUM_USD_PER_KG`, an estimate). Rounded to 1 cr (a 10 cr step would misprice a small cartridge).
  * @param {number} [kg] default: one cartridge
- * @returns {number} credits
  */
 export function indiumCartridgePriceCr(kg) {
   const S = Constants.DAUGHTER_SUPPLY;
@@ -74,26 +64,22 @@ export function indiumCartridgePriceCr(kg) {
 }
 
 /**
- * ap-gas D4: kilograms of nitrogen -> steering-gas POOL units. The pool (`coldGas`, `COLD_GAS_MAX` = 20 units) is not kg: the
- * full tank is `OCTOPUS_CORE_COLD_GAS` = 6 kg, so one unit is 0.3 kg. Every bill that computes kg converts here before it
- * charges the pool (it used to charge `amount: kg`: 3.33x too cheap).
- * @param {number} kg
- * @returns {number} pool units
+ * Kilograms of nitrogen -> steering-gas POOL units. The pool (`coldGas`, `COLD_GAS_MAX` = 20 units) is not kg: the full
+ * tank is `OCTOPUS_CORE_COLD_GAS` = 6 kg, so one unit is 0.3 kg. Every bill that computes kg converts here before it
+ * charges the pool.
  */
 export function coldGasKgToPool(kg) {
   return kg * Constants.COLD_GAS_MAX / Constants.OCTOPUS_CORE_COLD_GAS;
 }
 
-/** ap-gas D4: steering-gas POOL units -> kilograms of nitrogen (the inverse of `coldGasKgToPool`). */
+/** Steering-gas POOL units -> kilograms of nitrogen (the inverse of `coldGasKgToPool`). */
 export function coldGasPoolToKg(pool) {
   return pool * Constants.OCTOPUS_CORE_COLD_GAS / Constants.COLD_GAS_MAX;
 }
 
 /**
- * Nets step 3 lane 3f: free space in the cold-gas (nitrogen) tank, kg (ap-gas D4a: REAL kg; the pool's free room used to be
- * returned under this name, 3.33x too many kg).
+ * Free space in the cold-gas (nitrogen) tank, REAL kg (not pool units).
  * @param {{coldGas?: number, coldGasMax?: number}|null} res - ResourceSystem or player.resources
- * @returns {number} kg
  */
 export function coldGasFreeKg(res) {
   const max = res && Number.isFinite(res.coldGasMax) ? res.coldGasMax : Constants.COLD_GAS_MAX;
@@ -102,32 +88,28 @@ export function coldGasFreeKg(res) {
 }
 
 /**
- * q1-gas-leftovers D1: the kg a salvaged-gas amount is worth. Debris `salvage.xenon` is in pool units
- * (100 = one full tank of the default gas), so 10 units on argon = 2.08 kg. The one owner of this
- * conversion: the award (x refinery multiplier), the wireframe line and the dossier label all call it.
+ * The kg a salvaged-gas amount is worth. Debris `salvage.xenon` is in pool units (100 = one full tank of the default
+ * gas), so 10 units on argon = 2.08 kg. The one owner of this conversion: the award (x refinery multiplier), the
+ * wireframe line and the dossier label all call it.
  * @param {number} units - salvage.xenon (pool units)
- * @returns {number} kg
  */
 export function salvageGasKg(units) {
   const kgFull = Constants.FUELS[Constants.DEFAULT_FUEL].kgFull || 0;
   return Math.max(0, Number.isFinite(units) ? units : 0) / 100 * kgFull;
 }
 
-/** g1-gas-upgrades D2: the mass of engine gas every launch carries, whatever the gas or tank — 12.48 kg
- *  (today's 60 % of the base argon tank). Derived, never typed. */
+/** The mass of engine gas every launch carries, whatever the gas or tank (12.48 kg: 60 % of the base argon tank). Derived, never typed. */
 export const START_GAS_KG = Constants.PROPELLANT_START_FRACTION * Constants.FUELS[Constants.DEFAULT_FUEL].kgFull;
-/** g1-gas-upgrades D3: what a gas switch fills the tank with (the same launch mass). */
+/** What a gas switch fills the tank with (the same launch mass). */
 export const GAS_SWITCH_FILL_KG = START_GAS_KG;
 
-/** g1-gas-upgrades D3: argon < krypton < xenon — a gas switch only goes up. */
+/** argon < krypton < xenon: a gas switch only goes up. */
 const GAS_RANK = { argon: 0, krypton: 1, xenon: 2 };
 
 /**
- * g1-gas-upgrades D2: the engine pool (a percentage of the base 60 L tank, as everywhere) that holds
- * min(START_GAS_KG, capacity) kg of `tankGasId`. On the base argon tank this is exactly 60.
- * @param {string} tankGasId
+ * The engine pool (a percentage of the base 60 L tank, as everywhere) that holds min(START_GAS_KG, capacity) kg of
+ * `tankGasId`. On the base argon tank this is exactly 60.
  * @param {number} xenonMax - pool capacity
- * @returns {number} pool units
  */
 export function startEnginePool(tankGasId, xenonMax) {
   const fuels = Constants.FUELS || {};
@@ -139,11 +121,7 @@ export function startEnginePool(tankGasId, xenonMax) {
   return Math.min(pool, Number.isFinite(xenonMax) ? xenonMax : Constants.XENON_FUEL_MAX);
 }
 
-/**
- * g1-gas-upgrades D4: free space in the engine tank, kg of the gas IN the tank.
- * @param {{xenon?: number, xenonMax?: number, tankGasId?: string}} res
- * @returns {number} kg
- */
+/** Free space in the engine tank, kg of the gas IN the tank. */
 export function engineTankFreeKg(res) {
   const fuels = Constants.FUELS || {};
   const fuel = fuels[(res && res.tankGasId) || Constants.DEFAULT_FUEL] || fuels[Constants.DEFAULT_FUEL];
@@ -152,22 +130,16 @@ export function engineTankFreeKg(res) {
   return Math.max(0, max - pool) / 100 * fuel.kgFull;
 }
 
-/**
- * g1-gas-upgrades D6: dry mass of the engine tank itself — it follows the tank's size (the Bigger Engine Tank).
- * @param {{xenonMax?: number}} res - ResourceSystem or player.resources
- * @returns {number} kg
- */
+/** Dry mass of the engine tank itself, kg: it follows the tank's size (the Bigger Engine Tank). */
 export function engineTankDryKg(res) {
   const max = res && Number.isFinite(res.xenonMax) ? res.xenonMax : Constants.XENON_FUEL_MAX;
   return Constants.ENGINE_TANK_DRY_MASS_KG * max / Constants.XENON_FUEL_MAX;
 }
 
 /**
- * g1-gas-upgrades D7: "how full is the engine tank", by MASS and the same for every gas — against the
- * base argon tank scaled by the tank's size. On argon it is exactly xenon / xenonMax; xenon's 12.48 kg
- * reads 0.6 (12.48 / 20.8), not 9.7 % of its own 129 kg tank. Every low warning / bar / alarm reads this.
- * @param {{xenon?: number, xenonMax?: number, tankGasId?: string}} res - ResourceSystem or player.resources
- * @returns {number} 0..1
+ * "How full is the engine tank", 0..1, by MASS and the same for every gas: against the base argon tank scaled by the
+ * tank's size. On argon it is exactly xenon / xenonMax; xenon's 12.48 kg reads 0.6 (12.48 / 20.8), not 9.7 % of its
+ * own 129 kg tank. Every low warning / bar / alarm reads this.
  */
 export function engineGasLowFrac(res) {
   const def = (Constants.FUELS || {})[Constants.DEFAULT_FUEL];
@@ -177,15 +149,11 @@ export function engineGasLowFrac(res) {
 }
 
 /**
- * h3-argon-engine D4: the ONE Tsiolkovsky formula for the Hall engine. Cold gas is CARRIED, not
- * burned by this engine, so it sits in both the loaded and the empty mass.
- *   ΔV = (Isp / c) · g0 · ln((dry + coldGas + gas) / (dry + coldGas))
- * @param {object} a
- * @param {number} a.dryKg      - everything that is not a gas (core, tank, struts, arms, cargo), kg
- * @param {number} a.coldGasKg  - cold gas aboard (carried), kg
- * @param {number} a.gasKg      - engine gas aboard (burned), kg
- * @param {number} a.isp        - the ACTIVE fuel's Isp, s
- * @param {number} [a.c=1]      - consumption multiplier (shop upgrade x power split; an Isp gain)
+ * The ONE Tsiolkovsky formula for the Hall engine. Cold gas is CARRIED, not burned by this engine, so it sits in both
+ * the loaded and the empty mass.   ΔV = (Isp / c) · g0 · ln((dry + coldGas + gas) / (dry + coldGas))
+ * @param {number} a.dryKg - everything that is not a gas (core, tank, struts, arms, cargo)
+ * @param {number} a.isp - the ACTIVE fuel's Isp, s
+ * @param {number} [a.c=1] - consumption multiplier (shop upgrade x power split; an Isp gain)
  * @returns {number} m/s (0 when there is nothing to burn)
  */
 export function engineDeltaV({ dryKg, coldGasKg = 0, gasKg, isp, c = 1 }) {
@@ -196,116 +164,90 @@ export function engineDeltaV({ dryKg, coldGasKg = 0, gasKg, isp, c = 1 }) {
 
 export class ResourceSystem {
   constructor() {
-    // ── Resource pools (canonical — synced to player.resources) ──────────
-    // h3-argon-engine D2: `xenon` / `xenonMax` are POOL names kept for compatibility — the pool holds
-    // whichever gas is in the tank (`tankGasId`), as a fill percentage (100 = one full 60 L base tank).
-    this.xenon = 0;   // filled below, once xenonMax and tankGasId exist (g1-gas-upgrades D2)
+    // `xenon` / `xenonMax` are POOL names kept for compatibility: the pool holds whichever gas is in the tank
+    // (`tankGasId`), as a fill percentage (100 = one full 60 L base tank).
+    this.xenon = 0;   // filled below, once xenonMax and tankGasId exist
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
-    // Nets step 3 lane 3f (DECISIONS §4): the mother-side indium store, kg of cast indium for the daughters' ion-fuel cartridges.
-    // A new run starts it EMPTY (today daughters never refuel within a run except from salvage, so this keeps today's difficulty).
+    // Mother-side indium store, kg of cast indium for the daughters' ion-fuel cartridges (DECISIONS §4). A new run starts EMPTY.
     this.indiumStoreKg = 0;
-    // Nets step 3 slice 5 (5a, V6): drag sails aboard (a count; each is BIG_PIECES.SAIL.massKg of her live mass). A new run starts with none.
+    // Drag sails aboard (a count; each is BIG_PIECES.SAIL.massKg of her live mass). A new run starts with none.
     this.dragSails = 0;
-    // range-map D4: two cumulative tallies in KILOGRAMS of engine gas, for the range map's "this mission" line (MissionGasTally keeps its own
-    // baseline and rebases if these drop): everything drawn from the engine pool (every billed burn, trips included: the tally decides
-    // what to count) and what SALVAGE loaded (a shop buy does not count). Zero on reset() and restore(); never saved.
+    // Two cumulative tallies in KILOGRAMS of engine gas for the range map's "this mission" line (MissionGasTally keeps its
+    // own baseline and rebases if these drop): all drawn from the engine pool (every billed burn, trips included: the
+    // tally decides what to count) and what SALVAGE loaded (a shop buy does not count). Zero on reset() and restore(); never saved.
     this.xenonDrawnKg = 0;
     this.salvageGasKg = 0;
-    // w4-power D1: every boot starts at BATTERY_START_FRACTION (half) of the max.
+    // every boot starts at BATTERY_START_FRACTION (half) of the max
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);
     this.solarPanelHealth = 1.0;
-    // Mother-wings step 4 (DECISIONS §10, "power follows the panels"): the
-    // body-mount cells are backup power and get their OWN health, independent
-    // of the wings — damageSolarPanel() (collision/impact) and the passive
-    // radiation/MMOD degrade below both stay wing-only (`solarPanelHealth`);
-    // nothing degrades this today, so the body keeps working when the wings
-    // are damaged, furled or edge-on.
+    // Body-mount cells are backup power with their OWN health (DECISIONS §10, "power follows the panels"). The wing-only
+    // paths (damageSolarPanel() collision/impact, passive radiation/MMOD degrade) stay on `solarPanelHealth`; nothing
+    // degrades this today, so the body keeps working when the wings are damaged, furled or edge-on.
     this.bodyPanelHealth = 1.0;
 
-    // ── Lithium (F16: MPD thruster propellant) ──────────────────────────
     this.lithium = 0;                                // starts empty — must salvage
     this.lithiumMax = Constants.MPD_LITHIUM_CAPACITY; // 100 units
 
-    // ── Derived rates ───────────────────────────────────────────────────
-    // Fallback-only rate: used by update()'s rechargeRate when no live player
-    // is wired (menu hero, headless tests) — PlayerSatellite._updateSolarPower
-    // computes the REAL per-frame rate (real per-wing/per-cell area ×
-    // incidence × furl × shading × health) into player.resources.solarRate,
-    // and update() prefers that when it's available. Constants.SOLAR_PANEL_AREA
-    // is now the real total built area (mother-wings step 4), not a generic
-    // placeholder, so this fallback is a believable ceiling rather than a
-    // separate invented number.
+    // Fallback-only rate, used by update()'s rechargeRate when no live player is wired (menu hero, headless tests).
+    // PlayerSatellite._updateSolarPower computes the REAL per-frame rate (per-wing/per-cell area × incidence × furl ×
+    // shading × health) into player.resources.solarRate and update() prefers it. Constants.SOLAR_PANEL_AREA is the real
+    // total built area, so this fallback is a believable ceiling, not a separate invented number.
     this.solarRate =
       Constants.SOLAR_PANEL_EFFICIENCY *
       Constants.SOLAR_FLUX *
       Constants.SOLAR_PANEL_AREA;
-    // Shop solarEfficiency upgrade multiplier — read by the REAL per-frame
-    // calc too (synced to player.resources.solarEfficiencyMult below), so the
-    // upgrade still works under the new area-based model.
+    // Shop solarEfficiency multiplier, read by the REAL per-frame calc too (synced to player.resources.solarEfficiencyMult).
     this.solarEfficiencyMult = 1.0;
 
-    // ── Max capacities (upgradeable) ────────────────────────────────────
     this.xenonMax = Constants.XENON_FUEL_MAX;
     this.coldGasMax = Constants.COLD_GAS_MAX;
     this.batteryMax = Constants.BATTERY_MAX;
 
-    // ── Panel degradation (upgrade-affected) ────────────────────────────
     this.panelDegradationMultiplier = 1.0;
 
-    // ── S3b: MPD power infrastructure ────────────────────────────────────
     this._hasSupercap = false;         // Graphene Supercap upgrade flag
     this._rtgRate = 0;                 // RTG constant generation (Wh/s)
     this._powerBeamRate = 0;           // Power beaming rate (Wh/s during ground station pass)
     this._groundStationInView = false; // True during ground station pass windows
 
-    // ── Dual-mode fuel tracking (Phase 4) ───────────────────────────────
     // `tankGasId` = the gas IN the engine tank (saved); `_currentFuelId` = the ACTIVE fuel, which may be a
     // cargo fuel (aluminum…) while the tank gas stays put. Cargo depletion falls back to the tank gas.
     this.tankGasId = Constants.DEFAULT_FUEL || 'argon';
     this._currentFuelId = this.tankGasId;
     this._availableFuels = [this.tankGasId]; // always have the tank gas; others added dynamically
-    // g1-gas-upgrades D2: every launch carries START_GAS_KG of the tank gas (h1-mother-pane D5: 60 % of argon)
+    // every launch carries START_GAS_KG of the tank gas (60 % of argon)
     this.xenon = startEnginePool(this.tankGasId, this.xenonMax);
     this._cargoSystem = null;
-    /** h3b-argon-push D5: true once FUEL_CHANGED { initial: true } has named the loaded fuel to the readers. */
+    /** true once FUEL_CHANGED { initial: true } has named the loaded fuel to the readers. */
     this._fuelAnnounced = false;
 
-    // ── Player entity reference (set via setPlayer) ─────────────────────
-    /** @type {object|null} */
     this._player = null;
 
-    // ── Depletion guard (emit only once per depletion) ──────────────────
     this._depletionEmitted = false;
 
-    /** @type {number} Weather-based solar power multiplier (0 = eclipse, 1.3 = flare boost) */
+    /** Weather-based solar power multiplier (0 = eclipse, 1.3 = flare boost) */
     this._weatherSolarMult = 1.0;
 
-    /** @type {number} Seconds since last WEATHER_ACTIVE event */
+    /** Seconds since last WEATHER_ACTIVE event */
     this._weatherLastUpdate = 0;
 
-    // ── Power ledger (w2-heat D1, DECISIONS §15 row 5: "battery … charging or
-    // draining, the cost of each action") ─────────────────────────────────
-    // Cumulative totals in battery units, monotonic for the life of the
-    // instance (never reset — ThermalSystem reads the drawn total as a running
-    // counter and takes the delta each tick, so no draw is lost or counted
-    // twice whatever the frame order). OUT = every battery draw: consume(),
-    // drainBattery(), drawUpTo(). IN = charging actually stored by update()
-    // (solar + RTG + beaming; a full battery stores 0). replenish() (salvage /
-    // refinery battery) and upgrade top-ups are NOT charging and are excluded.
+    // Power ledger (DECISIONS §15 row 5: "battery … charging or draining, the cost of each action"). Cumulative totals in
+    // battery units, monotonic for the life of the instance (never reset: ThermalSystem reads the drawn total as a
+    // running counter and takes the delta each tick, so no draw is lost or counted twice whatever the frame order).
+    // OUT = every battery draw: consume(), drainBattery(), drawUpTo(). IN = charging actually stored by update() (solar +
+    // RTG + beaming; a full battery stores 0). replenish() (salvage / refinery battery) and upgrade top-ups are NOT
+    // charging and are excluded.
     this._ledgerOutUnits = 0;
     this._ledgerInUnits = 0;
-    /** @private units since the last update() — turned into watts there */
+    /** @private units since the last update(), turned into watts there */
     this._frameOutUnits = 0;
-    /** @private */
     this._frameInUnits = 0;
-    /** @private smoothed watts (HUD scale — same as the `SUN n W` readout) */
+    /** @private smoothed watts (HUD scale, same as the `SUN n W` readout) */
     this._inW = 0;
-    /** @private */
     this._outW = 0;
-    /** @type {object|null} ThermalSystem (or any { getSnapshot, reset }) — setThermalSource() */
+    /** ThermalSystem (or any { getSnapshot, reset }), set by setThermalSource() */
     this._thermalSource = null;
 
-    // Listen for weather effects on solar power
     eventBus.on(Events.WEATHER_ACTIVE, (effects) => {
       this._weatherSolarMult = effects.solarPower ?? 1.0;
       this._weatherLastUpdate = 0;
@@ -314,57 +256,29 @@ export class ResourceSystem {
     this._setupListeners();
   }
 
-  /**
-   * w4-power D1 (owner 2026-10-12: "battery is 50% and dropping until wings
-   * open"): the charge every boot starts with — BATTERY_START_FRACTION of `max`.
-   * @param {number} max - the (rebased) battery max, Wh
-   * @returns {number} Wh
-   */
+  /** The charge every boot starts with: BATTERY_START_FRACTION of `max` Wh (owner 2026-10-12: "battery is 50% and dropping until wings open"). */
   static startCharge(max) {
     const f = Constants.BATTERY_START_FRACTION;
     const frac = Number.isFinite(f) ? clamp01(f) : 1;
     return max * frac;
   }
 
-  /**
-   * h1-mother-pane D5 (owner 2026-10-14: "only 60% full"): the level a tank
-   * (engine propellant or cold gas) starts a boot at — new game, retry, CONTINUE.
-   * @param {number} max - the tank's max, kg
-   * @returns {number} kg
-   */
+  /** The level a tank (engine propellant or cold gas) starts a boot at, kg: new game, retry, CONTINUE (owner 2026-10-14: "only 60% full"). */
   static startPropellant(max) {
     const f = Constants.PROPELLANT_START_FRACTION;
     const frac = Number.isFinite(f) ? clamp01(f) : 1;
     return max * frac;
   }
 
-  /**
-   * Bind to the player entity so we can sync resource values.
-   * @param {object} player - PlayerSatellite instance
-   */
   setPlayer(player) {
     this._player = player;
-    this._syncToPlayer(); // Push OUR initial values to the player
+    this._syncToPlayer();
   }
 
-  /**
-   * Set reference to CargoSystem for cargo-based fuel consumption.
-   * @param {import('./CargoSystem.js').CargoSystem} cargoSystem
-   */
   setCargoSystem(cargoSystem) {
     this._cargoSystem = cargoSystem;
   }
 
-  // ======================================================================
-  // RESOURCE OPERATIONS
-  // ======================================================================
-
-  /**
-   * Consume a named resource.
-   * @param {string} resource - 'xenon' | 'coldGas' | 'battery'
-   * @param {number} amount
-   * @returns {boolean} true if the player had enough
-   */
   consume(resource, amount) {
     if (!this._isValid(resource)) return false;
     if (this[resource] < amount) return false;
@@ -381,16 +295,11 @@ export class ResourceSystem {
     return true;
   }
 
-  /** @private range-map D4: add `units` of engine pool (tank percent) to the cumulative kg drawn, in the gas now in the tank. */
+  /** @private Add `units` of engine pool (tank percent) to the cumulative kg drawn, in the gas now in the tank. */
   _countXenonDraw(units) {
     if (units > 0) this.xenonDrawnKg += engineGasKg({ xenon: units, tankGasId: this.tankGasId });
   }
 
-  /**
-   * Add to a named resource (capped at max).
-   * @param {string} resource - 'xenon' | 'coldGas' | 'battery'
-   * @param {number} amount
-   */
   replenish(resource, amount) {
     if (!this._isValid(resource)) return;
     const max = this[resource + 'Max'] || Infinity;
@@ -404,11 +313,8 @@ export class ResourceSystem {
   }
 
   /**
-   * Restore solar panel health by a fraction (from salvaged GaAs cells).
-   * Health is clamped to [0, 1.0]. Mother-wings step 4: this is the WING
-   * (ROSA) health — `bodyPanelHealth` (backup power) has no damage/repair path
-   * today by design (DECISIONS §10: it must keep working when the wings don't).
-   * @param {number} fraction - e.g. 0.02 for 2% restoration
+   * Restore solar panel health by a fraction (salvaged GaAs cells), clamped to [0, 1]. This is the WING (ROSA) health:
+   * `bodyPanelHealth` (backup power) has no damage/repair path by design (DECISIONS §10: it must keep working when the wings don't).
    */
   replenishPanelHealth(fraction) {
     this.solarPanelHealth = Math.min(1.0, this.solarPanelHealth + fraction);
@@ -421,14 +327,10 @@ export class ResourceSystem {
   }
 
   /**
-   * Apply impact damage to the solar panels (D2 glancing-collision consequence).
-   * Floors at 0.1 so a hit degrades but never fully destroys the array (some
-   * recharge always remains). Distinct from passive degradation (floors at 0.3).
-   * Mother-wings step 4 (DECISIONS §10 — "Rosa might get damaged by collision
-   * or player mistakes"): this is the exact mechanism the owner meant. It hits
-   * the WING (ROSA) health only — `bodyPanelHealth` (backup power) is
-   * untouched, so a collision can never zero out the body's own contribution.
-   * @param {number} fraction - health lost, e.g. 0.12
+   * Impact damage to the solar panels (glancing-collision consequence). Floors at 0.1 so a hit degrades but never fully
+   * destroys the array (some recharge always remains); passive degradation floors at 0.3. Hits the WING (ROSA) health
+   * only (DECISIONS §10, "Rosa might get damaged by collision or player mistakes"): `bodyPanelHealth` is untouched, so a
+   * collision can never zero out the body's own contribution. `fraction` = health lost, e.g. 0.12.
    */
   damageSolarPanel(fraction) {
     if (!(fraction > 0)) return;
@@ -441,12 +343,7 @@ export class ResourceSystem {
     });
   }
 
-  /**
-   * Drain battery by up to `amount` Wh (D2 glancing-collision consequence).
-   * Unlike consume(), this never fails — it drains whatever is available and
-   * clamps at 0 (a hit drains what it can).
-   * @param {number} amount - Wh to drain
-   */
+  /** Drain up to `amount` Wh (glancing-collision consequence). Unlike consume(), never fails: drains what is there, clamps at 0. */
   drainBattery(amount) {
     if (!(amount > 0)) return;
     const drained = Math.min(amount, this.battery);
@@ -461,15 +358,10 @@ export class ResourceSystem {
   }
 
   /**
-   * Draw up to `amount` from a named resource, clamped at what the pool
-   * actually holds (engines on an empty battery, 2026-09-25: consume()'s
-   * all-or-nothing refusal silently rejected an electric burn's draw once
-   * the battery parked below one frame's need — thrust was applied for
-   * free). Like drainBattery(), this never fails: it takes what is there
-   * and reports how much that was, so the caller can scale honestly.
-   * @param {string} resource - 'xenon' | 'coldGas' | 'battery' | 'lithium'
-   * @param {number} amount - desired draw (> 0)
-   * @returns {number} the amount actually drawn (0 .. amount)
+   * Draw up to `amount` from a named resource ('xenon' | 'coldGas' | 'battery' | 'lithium'), clamped at what the pool
+   * holds. consume()'s all-or-nothing refusal silently rejected an electric burn's draw once the battery parked below one
+   * frame's need, so thrust was applied for free. Like drainBattery() this never fails; it returns the amount actually
+   * drawn (0 .. amount) so the caller can scale honestly.
    */
   drawUpTo(resource, amount) {
     if (!this._isValid(resource) || !(amount > 0)) return 0;
@@ -487,25 +379,11 @@ export class ResourceSystem {
     return drawn;
   }
 
-  /**
-   * Check whether the player can afford a cost.
-   * @param {string} resource
-   * @param {number} amount
-   * @returns {boolean}
-   */
   canAfford(resource, amount) {
     if (!this._isValid(resource)) return false;
     return this[resource] >= amount;
   }
 
-  // ======================================================================
-  // LITHIUM OPERATIONS (F16: MPD Thruster)
-  // ======================================================================
-
-  /**
-   * Add lithium from salvage (capped at max capacity).
-   * @param {number} amount
-   */
   addLithium(amount) {
     const prev = this.lithium;
     this.lithium = Math.min(this.lithiumMax, this.lithium + amount);
@@ -518,24 +396,15 @@ export class ResourceSystem {
     });
   }
 
-  // ======================================================================
-  // DUAL-MODE FUEL SYSTEM (Phase 4)
-  // ======================================================================
-
-  /**
-   * Get current fuel definition.
-   * @returns {object}
-   */
   getCurrentFuel() {
     return Constants.FUELS[this._currentFuelId] || Constants.FUELS[this.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
   }
 
   /**
-   * h3b-argon-push D5: name the loaded fuel to every reader. FUEL_CHANGED was only ever sent on a change,
-   * so CommsSystem / StatusPanel named the DEFAULT fuel until the first change — wrong after a load that
-   * brings krypton or xenon. This sends it with `initial: true` at the first frame of play, after a load
-   * (restore) and after a new game / retry (reset). Listeners that treat FUEL_CHANGED as a player action
-   * (the cycle tone, the codex entry) skip `initial`.
+   * Name the loaded fuel to every reader. FUEL_CHANGED was only sent on a change, so CommsSystem / StatusPanel named the
+   * DEFAULT fuel until the first change (wrong after a load with krypton or xenon). Sends it with `initial: true` at the
+   * first frame of play, after a load (restore) and after a new game / retry (reset). Listeners that treat FUEL_CHANGED
+   * as a player action (the cycle tone, the codex entry) skip `initial`.
    */
   announceFuel() {
     const fuel = this.getCurrentFuel();
@@ -550,20 +419,10 @@ export class ResourceSystem {
     });
   }
 
-  /**
-   * Get current fuel ID.
-   * @returns {string}
-   */
   getCurrentFuelId() {
     return this._currentFuelId;
   }
 
-  /**
-   * Consume ion fuel based on current fuel type.
-   * @param {number} amount - base consumption amount
-   * @param {import('./CargoSystem.js').CargoSystem} [cargoSystem] - for cargo-based fuels
-   * @returns {boolean} true if fuel was available
-   */
   consumeIonFuel(amount, cargoSystem) {
     const fuel = this.getCurrentFuel();
     const cs = cargoSystem || this._cargoSystem;
@@ -577,13 +436,12 @@ export class ResourceSystem {
       return true;
     }
 
-    // Cargo-based fuel
     if (!cs) return false;
     const manifest = cs.getManifest();
     const inCargo = manifest.find(m => m.metalId === fuel.cargoMetalId);
 
     if (!inCargo || inCargo.massKg < amount) {
-      // Fuel depleted — auto-switch back to the gas in the tank (h3-argon-engine D6: was a hard-coded xenon)
+      // Fuel depleted: auto-switch back to the gas in the tank
       const tank = Constants.FUELS[this.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
       eventBus.emit(Events.FUEL_DEPLETED, { fuelId: this._currentFuelId, name: fuel.name });
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -606,19 +464,11 @@ export class ResourceSystem {
     return true;
   }
 
-  /**
-   * Weather-based solar power multiplier: 0 in eclipse, 1.0 nominal, 1.3 flare
-   * (cargo-continuity S8 — the digestion sun gate reads this).
-   * @returns {number}
-   */
+  /** Weather solar power multiplier: 0 in eclipse, 1.0 nominal, 1.3 flare (the digestion sun gate reads this). */
   getSolarPowerMultiplier() {
     return this._weatherSolarMult;
   }
 
-  /**
-   * Snapshot for HUD rendering.
-   * @returns {object}
-   */
   getStatus() {
     const fuel = this.getCurrentFuel();
     return {
@@ -630,7 +480,7 @@ export class ResourceSystem {
       batteryMax: this.batteryMax,
       solarRate: this.solarRate,
       solarPanelHealth: this.solarPanelHealth,
-      bodyPanelHealth: this.bodyPanelHealth,   // mother-wings step 4
+      bodyPanelHealth: this.bodyPanelHealth,
       currentFuelId: this._currentFuelId,
       tankGasId: this.tankGasId,
       currentFuelName: fuel.name,
@@ -638,7 +488,6 @@ export class ResourceSystem {
       currentFuelColor: fuel.color,
       lithium: this.lithium,
       lithiumMax: this.lithiumMax,
-      // S3b: power infrastructure status
       hasSupercap: this._hasSupercap,
       rtgRate: this._rtgRate,
       powerBeamRate: this._powerBeamRate,
@@ -646,18 +495,11 @@ export class ResourceSystem {
     };
   }
 
-  // ======================================================================
-  // POWER LEDGER + THERMAL SOURCE (w2-heat D1 / D3 — the meters' contract)
-  // ======================================================================
-
   /**
-   * The battery meter's numbers (w2-meters codes against this shape).
-   * Watts are on the HUD's `SUN n W` scale (battery units per real second ×
-   * SHIP_HEAT.W_PER_UNIT_S) and smoothed over ~POWER_TAU_S (0.5 s).
-   * `inW` = charging actually stored (solar + RTG + beaming; 0 surplus when
-   * full — replenish()/salvage and upgrade top-ups are not charging);
-   * `outW` = every battery draw; `netW = inW − outW`; `genW` = this frame's
-   * generation, unsmoothed (getGenerationW — w4-power D4). A fresh object per call.
+   * The battery meter's numbers. Watts are on the HUD's `SUN n W` scale (battery units per real second ×
+   * SHIP_HEAT.W_PER_UNIT_S), smoothed over ~POWER_TAU_S (0.5 s). `inW` = charging actually stored (solar + RTG + beaming;
+   * 0 surplus when full: replenish()/salvage and upgrade top-ups are not charging); `outW` = every battery draw;
+   * `netW = inW − outW`; `genW` = this frame's generation, unsmoothed (getGenerationW). A fresh object per call.
    * @returns {{battery:number, batteryMax:number, inW:number, outW:number, netW:number, genW:number}}
    */
   getPowerSnapshot() {
@@ -672,14 +514,10 @@ export class ResourceSystem {
   }
 
   /**
-   * w4-power D4 (owner 2026-10-12: "rotating mother should show immediate
-   * drop in power-in"): what the ship generates THIS frame, unsmoothed, on the
-   * meter's watt scale — the live per-frame rate PlayerSatellite._updateSolarPower
-   * writes (× the weather multiplier, exactly what update() charges with), plus
-   * RTG and beaming when fitted. Unlike `inW` it does not drop to 0 when the
-   * battery is full: it is what the panels make, stored or not. Falls back to
-   * the static rate when no live player is wired (as update() does).
-   * @returns {number} watts
+   * What the ship generates THIS frame, unsmoothed, in meter watts (owner 2026-10-12: "rotating mother should show
+   * immediate drop in power-in"): the live rate PlayerSatellite._updateSolarPower writes (× the weather multiplier,
+   * exactly what update() charges with), plus RTG and beaming when fitted. Unlike `inW` it does not drop to 0 when the
+   * battery is full: it is what the panels make, stored or not. Falls back to the static rate when no live player is wired.
    */
   getGenerationW() {
     const wPerUnitS = Constants.SHIP_HEAT.W_PER_UNIT_S;
@@ -694,62 +532,33 @@ export class ResourceSystem {
   }
 
   /**
-   * w4-power D5/D7: bill `watts` for `dt` real seconds — a motor or heater
-   * that is running this frame. The base load's own conversion (units = W ÷
-   * SHIP_HEAT.W_PER_UNIT_S × dt, PlayerSatellite._updateResources), so a 15 W
-   * motor shows as +15 W in `outW`; drawn through drawUpTo (never fails, clamps
-   * at empty), so it lands in the ledger and its heat follows (ThermalSystem).
-   * @param {number} watts
-   * @param {number} dt - real seconds
-   * @returns {number} the battery units actually drawn
+   * Bill `watts` for `dt` real seconds (a motor or heater running this frame). Same conversion as the base load
+   * (units = W ÷ SHIP_HEAT.W_PER_UNIT_S × dt, PlayerSatellite._updateResources), so a 15 W motor shows as +15 W in
+   * `outW`; drawn through drawUpTo (never fails, clamps at empty), so it lands in the ledger and its heat follows
+   * (ThermalSystem). Returns the battery units actually drawn.
    */
   billWatts(watts, dt) {
     if (!(watts > 0) || !(dt > 0)) return 0;
     return this.drawUpTo('battery', (watts / Constants.SHIP_HEAT.W_PER_UNIT_S) * dt);
   }
 
-  /**
-   * Cumulative battery units drawn since this instance was built (monotonic —
-   * every consume('battery') / drainBattery() / drawUpTo('battery')). The
-   * ThermalSystem's heat input: it takes the delta each tick.
-   * @returns {number}
-   */
+  /** Cumulative battery units drawn since this instance was built (monotonic): ThermalSystem's heat input, it takes the delta each tick. */
   getEnergyDrawnUnits() { return this._ledgerOutUnits; }
 
-  /**
-   * Cumulative battery units of charging actually stored (monotonic).
-   * @returns {number}
-   */
   getEnergyChargedUnits() { return this._ledgerInUnits; }
 
-  /**
-   * Register the heat source the meters read through getThermalSnapshot()
-   * (ThermalSystem calls this on itself). reset()/restore() reset it too —
-   * heat restarts with the battery on new game / retry / a fresh mission.
-   * @param {{ getSnapshot: function(): object, reset?: function(): void }|null} source
-   */
+  /** Register the heat source the meters read (ThermalSystem calls this on itself). reset()/restore() reset it too: heat restarts with the battery. */
   setThermalSource(source) { this._thermalSource = source || null; }
 
-  /** @returns {object|null} the registered thermal source (the loop ticks it). */
   getThermalSource() { return this._thermalSource; }
 
-  /**
-   * The heat meter's numbers, or null when no thermal source is registered.
-   * @returns {{tempC:number, band:'green'|'yellow'|'red', trend:-1|0|1, autoOpened:boolean}|null}
-   */
+  /** @returns {{tempC:number, band:'green'|'yellow'|'red', trend:-1|0|1, autoOpened:boolean}|null} null when no source. */
   getThermalSnapshot() {
     const src = this._thermalSource;
     return (src && typeof src.getSnapshot === 'function') ? src.getSnapshot() : null;
   }
 
-  /**
-   * Build the ship's ThermalSystem bound to this ledger and `player`, and
-   * register it. A factory here so main.js wires it in its two assigned lines
-   * without a new import (lane w2-heat file ownership). Idempotent: a second
-   * call disposes the first source.
-   * @param {object} player - PlayerSatellite (getFlowerStatus / setFlowerPose / _inShadow)
-   * @returns {ThermalSystem}
-   */
+  /** Build the ship's ThermalSystem bound to this ledger and `player` and register it. Idempotent: a second call disposes the first source. */
   createThermalSystem(player) {
     if (this._thermalSource && typeof this._thermalSource.dispose === 'function') {
       this._thermalSource.dispose();
@@ -757,7 +566,6 @@ export class ResourceSystem {
     return new ThermalSystem({ resourceSystem: this, player });
   }
 
-  /** @private one battery draw → the ledger */
   _recordDraw(units) {
     if (!(units > 0)) return;
     this._ledgerOutUnits += units;
@@ -765,11 +573,9 @@ export class ResourceSystem {
   }
 
   /**
-   * A held-world frame (a drawer is open — main.js `_worldHeld`): update() is
-   * not called, but player.update still bills the base load. Drop this
-   * frame's units so they never land as one spike on release; the smoothed
-   * watts stay frozen at their pre-hold values. (The cumulative totals keep
-   * counting — ThermalSystem.skipHeld re-syncs its counter past them.)
+   * A held-world frame (a drawer is open, main.js `_worldHeld`): update() is not called, but player.update still bills
+   * the base load. Drop this frame's units so they never land as one spike on release; the smoothed watts stay frozen.
+   * (Cumulative totals keep counting; ThermalSystem.skipHeld re-syncs its counter past them.)
    */
   discardHeldFrame() {
     this._frameOutUnits = 0;
@@ -788,7 +594,6 @@ export class ResourceSystem {
     this._frameOutUnits = 0;
   }
 
-  /** @private zero the smoothed watts (cumulative totals stay monotonic) */
   _resetLedgerRates() {
     this._frameInUnits = 0;
     this._frameOutUnits = 0;
@@ -803,11 +608,9 @@ export class ResourceSystem {
   }
 
   /**
-   * Serialize upgraded max capacities and the two gas levels for persistence.
-   * 2026-10-17 (s1-gas-survives-load): the engine pool (`xenon`, pool units — pool/100 x kgFull of the saved
-   * `tankGasId`) and `coldGas` are SAVED, so a reload is not a refuel (Ruling 0: tanks do not magically refill)
-   * and does not throw away gas bought in the shop. The battery level is still NOT saved: it starts at half.
-   * @returns {object}
+   * Serialize upgraded max capacities and the two gas levels. The engine pool (`xenon`, pool units: pool/100 × kgFull of
+   * the saved `tankGasId`) and `coldGas` are SAVED, so a reload is not a refuel (Ruling 0: tanks do not magically refill)
+   * and keeps gas bought in the shop. The battery level is NOT saved: it starts at half.
    */
   serialize() {
     return {
@@ -815,14 +618,13 @@ export class ResourceSystem {
       coldGasMax: this.coldGasMax,
       xenon: this.xenon,
       coldGas: this.coldGas,
-      indiumStoreKg: this.indiumStoreKg,   // lane 3f: saved like coldGas (an old save has none and loads as 0)
-      dragSails: this.dragSails,           // slice 5 (5a): the sail stock (an old save has none and loads as 0)
+      indiumStoreKg: this.indiumStoreKg,   // saved like coldGas (an old save has none and loads as 0)
+      dragSails: this.dragSails,           // the sail stock (an old save has none and loads as 0)
       batteryMax: this.batteryMax,
       currentFuelId: this._currentFuelId,
-      tankGasId: this.tankGasId,   // h3-argon-engine D6: the gas in the tank survives reloads
+      tankGasId: this.tankGasId,   // the gas in the tank survives reloads
       lithium: this.lithium,
       lithiumMax: this.lithiumMax,
-      // S3b: power infrastructure state
       hasSupercap: this._hasSupercap,
       rtgRate: this._rtgRate,
       powerBeamRate: this._powerBeamRate,
@@ -830,31 +632,26 @@ export class ResourceSystem {
   }
 
   /**
-   * Restore upgraded max capacities from saved data.
-   * 2026-10-17 (s1-gas-survives-load): a saved `xenon` / `coldGas` level is restored (clamped to [0, max]) — a
-   * reload must neither refill nor drain the tanks. An old save without the keys (or a non-finite value) gets the
-   * start fill. The battery starts at BATTERY_START_FRACTION of its rebased max (w4-power D1 — saves carry no
-   * charge, and every boot starts packed at half).
-   * @param {object} data - Previously serialized resource maxes
+   * Restore upgraded max capacities from saved data. A saved `xenon` / `coldGas` level is restored (clamped to
+   * [0, max]): a reload must neither refill nor drain the tanks. An old save without the keys (or a non-finite value)
+   * gets the start fill. The battery starts at BATTERY_START_FRACTION of its rebased max (saves carry no charge).
    */
   restore(data) {
     if (!data) return;
     if (data.xenonMax !== undefined) this.xenonMax = data.xenonMax;
     if (data.coldGasMax !== undefined) this.coldGasMax = data.coldGasMax;
     if (data.batteryMax !== undefined) {
-      // 2026-09-24: the base battery grew 100 -> 600 Wh (the ship's own spec).
-      // Legacy saves carry 100 + bought upgrades; carry the upgrades across by
-      // rebasing them onto the new base. New saves (>= the new base) pass
-      // through unchanged. Upgrade effects do not re-apply on load
+      // The base battery grew 100 -> 600 Wh. Legacy saves carry 100 + bought upgrades: carry the upgrades across by
+      // rebasing onto the new base; saves >= the new base pass through. Upgrade effects do not re-apply on load
       // (RESOURCE_RESTORED_EFFECTS), so this saved absolute is the only source.
       const BASE_OLD = 100, BASE_NEW = Constants.BATTERY_MAX;
       this.batteryMax = (data.batteryMax < BASE_NEW)
         ? BASE_NEW + (data.batteryMax - BASE_OLD)
         : data.batteryMax;
     }
-    // h3-argon-engine D6: an old save has no tankGasId (its tank held xenon-named gas at the same fill
-    // fraction) -> the tank becomes the default (argon) and so does the active fuel. A new save keeps both
-    // (the active fuel may be a cargo fuel). A saved gas this build does not know falls back to the default.
+    // An old save has no tankGasId (its tank held xenon-named gas at the same fill fraction): the tank and the active
+    // fuel become the default (argon). A new save keeps both (the active fuel may be a cargo fuel). A saved gas this
+    // build does not know falls back to the default.
     const savedTank = Constants.FUELS[data.tankGasId];
     if (data.tankGasId !== undefined && savedTank && !savedTank.fromCargo) {
       this.tankGasId = data.tankGasId;
@@ -865,88 +662,70 @@ export class ResourceSystem {
       this._currentFuelId = this.tankGasId;
     }
     this._availableFuels = [this.tankGasId];
-    // F16: Restore lithium (persists between missions — hard to get)
+    // lithium persists between missions (hard to get)
     if (data.lithium !== undefined) this.lithium = data.lithium;
     if (data.lithiumMax !== undefined) this.lithiumMax = data.lithiumMax;
-    // S3b: Restore power infrastructure state
     if (data.hasSupercap) this._hasSupercap = true;
     if (data.rtgRate !== undefined) this._rtgRate = data.rtgRate;
     if (data.powerBeamRate !== undefined) this._powerBeamRate = data.powerBeamRate;
-    // Gas levels: the saved level when there is one (s1-gas-survives-load D2); else the start fill (old save,
-    // or a game-over save, which strips the levels so CONTINUE is a fresh attempt). Battery: half — w4-power D1.
+    // Gas levels: the saved level when there is one, else the start fill (old save, or a game-over save, which strips
+    // the levels so CONTINUE is a fresh attempt). Battery: half.
     const clampLevel = (v, max) => Math.min(Math.max(v, 0), max);
     this.xenon = Number.isFinite(data.xenon)
       ? clampLevel(data.xenon, this.xenonMax)
-      : startEnginePool(this.tankGasId, this.xenonMax);   // g1-gas-upgrades D2: the same kg, any gas
+      : startEnginePool(this.tankGasId, this.xenonMax);   // the same kg, any gas
     this.coldGas = Number.isFinite(data.coldGas)
       ? clampLevel(data.coldGas, this.coldGasMax)
       : ResourceSystem.startPropellant(this.coldGasMax);
-    // lane 3f: the indium store, clamped to its room; an old save, or a game-over save (which strips it), starts it empty
+    // the indium store, clamped to its room; an old save, or a game-over save (which strips it), starts it empty
     this.indiumStoreKg = Number.isFinite(data.indiumStoreKg)
       ? clampLevel(data.indiumStoreKg, Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG)
       : 0;
-    this.dragSails = Number.isFinite(data.dragSails) ? Math.max(0, Math.floor(data.dragSails)) : 0;   // slice 5 (5a): the sail stock
-    this.xenonDrawnKg = 0;   // range-map D4: a load starts the gas tallies again (MissionGasTally rebases)
+    this.dragSails = Number.isFinite(data.dragSails) ? Math.max(0, Math.floor(data.dragSails)) : 0;
+    this.xenonDrawnKg = 0;   // a load starts the gas tallies again (MissionGasTally rebases)
     this.salvageGasKg = 0;
     this.battery = ResourceSystem.startCharge(this.batteryMax);
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
     this._depletionEmitted = false;
-    this._resetLedgerRates();   // w2-heat: a fresh mission — meters and heat restart
+    this._resetLedgerRates();   // a fresh mission: meters and heat restart
     this._resetThermal();
     this._syncToPlayer();
-    this.announceFuel();   // h3b-argon-push D5: the loaded fuel, named from the first frame
+    this.announceFuel();   // the loaded fuel, named from the first frame
   }
 
-  // ======================================================================
-  // PER-FRAME UPDATE
-  // ======================================================================
-
-  /**
-   * Called every gameplay frame.
-   * • Solar recharge
-   * • Depletion check
-   * @param {number} dt - seconds
-   */
+  /** Every gameplay frame: solar recharge, depletion check. */
   update(dt) {
-    // h3b-argon-push D5: boot — no restore()/reset() has named the fuel yet; the HUD listeners exist by now
+    // boot: no restore()/reset() has named the fuel yet; the HUD listeners exist by now
     if (!this._fuelAnnounced) this.announceFuel();
-    // Staleness timer: reset weather multiplier if no WEATHER_ACTIVE for 2s
+    // staleness: reset the weather multiplier if no WEATHER_ACTIVE for 2 s
     this._weatherLastUpdate += dt;
     if (this._weatherLastUpdate > 2.0) {
       this._weatherSolarMult = 1.0;
     }
 
-    // Solar panel recharge (simplified Wh model scaled for gameplay).
-    // Mother-wings step 4 (DECISIONS §10, "power follows the panels, realistic
-    // wins"): prefer the REAL per-frame rate PlayerSatellite._updateSolarPower
-    // computes (real per-wing/per-cell area × incidence × furl × shading, with
-    // wing/body health already applied separately — see its docstring). That
-    // rate already reflects eclipse, tilt, shading, furl and BOTH health
-    // splits, so it is used as-is here (no extra ×solarPanelHealth — that
-    // would double the wing-health penalty and wrongly apply it to the body's
-    // share too). Falls back to the generic static `this.solarRate` (still
-    // gated by wing health, the pre-existing behaviour) when no live player is
-    // wired — menu hero, or a bare ResourceSystem in a unit test.
+    // Solar recharge (simplified Wh model scaled for gameplay). DECISIONS §10, "power follows the panels, realistic
+    // wins": prefer the REAL per-frame rate PlayerSatellite._updateSolarPower computes (per-wing/per-cell area ×
+    // incidence × furl × shading, wing/body health applied separately). It already reflects eclipse, tilt, shading,
+    // furl and BOTH health splits, so it is used as-is (no extra ×solarPanelHealth: that would double the wing-health
+    // penalty and wrongly apply it to the body's share). Falls back to the static `this.solarRate` (still gated by wing
+    // health) when no live player is wired (menu hero, a bare ResourceSystem in a unit test).
     const liveRate = this._player && this._player.resources && this._player.resources.solarRate;
     const rechargeRate = (typeof liveRate === 'number')
       ? liveRate * this._weatherSolarMult * dt * 0.001
       : this.solarRate * this.solarPanelHealth * this._weatherSolarMult * dt * 0.001;
-    // w2-heat D1: charging actually stored this frame (solar + RTG + beaming
-    // below) — a full battery stores nothing, so its surplus is never "in".
+    // charging actually stored this frame (solar + RTG + beaming below): a full battery stores nothing, so its surplus is never "in"
     const batteryBeforeCharge = this.battery;
     if (this.battery < this.batteryMax) {
       this.battery = Math.min(this.batteryMax, this.battery + rechargeRate);
       this._syncToPlayer();
     }
 
-    // S3b: RTG constant recharge (independent of solar / weather)
     if (this._rtgRate > 0 && this.battery < this.batteryMax) {
       this.battery = Math.min(this.batteryMax, this.battery + this._rtgRate * dt);
       this._syncToPlayer();
     }
 
-    // S3b: Power beaming recharge (only during ground station pass)
     if (this._powerBeamRate > 0 && this._groundStationInView && this.battery < this.batteryMax) {
       this.battery = Math.min(this.batteryMax, this.battery + this._powerBeamRate * dt);
       this._syncToPlayer();
@@ -959,12 +738,9 @@ export class ResourceSystem {
     }
     this._smoothLedger(dt);
 
-    // Gradual solar panel degradation from radiation/micrometeorite damage.
-    // Mother-wings step 4: this is the WING (ROSA) health specifically — the
-    // large, thin, exposed blanket is what collision/MMOD/radiation realistically
-    // wears down first. `bodyPanelHealth` (compact, recessed body-mount cells,
-    // backup power) is deliberately NOT degraded here or anywhere else today.
-    // Base rate: ~5% loss per 10 minutes of real gameplay (600 game-seconds at TIME_SCALE_GAMEPLAY=10)
+    // Gradual panel degradation from radiation/micrometeorite damage. This is the WING (ROSA) health: the large, thin,
+    // exposed blanket wears down first. `bodyPanelHealth` (compact, recessed body-mount cells, backup power) is
+    // deliberately NOT degraded here or anywhere else. Base rate ~5 % loss per 10 min of gameplay (600 game-s at TIME_SCALE_GAMEPLAY=10).
     const baseDegradRate = 0.00008;
     const degradMultiplier = this.panelDegradationMultiplier || 1.0;
     const actualDegradRate = baseDegradRate * degradMultiplier;
@@ -973,7 +749,6 @@ export class ResourceSystem {
       this._syncToPlayer();
     }
 
-    // Depletion → game-over signal (emit once)
     if (
       this.xenon <= 0 &&
       this.coldGas <= 0 &&
@@ -984,23 +759,15 @@ export class ResourceSystem {
       eventBus.emit(Events.RESOURCE_DEPLETED, { reason: 'fuel' });
     }
 
-    // Re-arm depletion flag when any resource recovers
     if (this.xenon > 0 || this.coldGas > 0 || this.battery > 0) {
       this._depletionEmitted = false;
     }
   }
 
-  // ======================================================================
-  // ENGINE GAS (g1-gas-upgrades)
-  // ======================================================================
-
   /**
-   * g1-gas-upgrades D3: change the gas IN the tank to a better one (argon < krypton < xenon). What is left is
-   * vented (gone); the tank is filled with `kg` of the new gas (clamped to capacity). Refused for a gas ranked
-   * at or below the tank's, so a replay in any order never downgrades.
-   * @param {string} gasId
-   * @param {number} kg
-   * @returns {boolean} true if the switch happened
+   * Change the gas IN the tank to a better one (argon < krypton < xenon). What is left is vented; the tank is filled
+   * with `kg` of the new gas (clamped to capacity). Refused for a gas ranked at or below the tank's, so a replay in any
+   * order never downgrades. Returns true if the switch happened.
    */
   switchEngineGas(gasId, kg) {
     const fuel = Constants.FUELS[gasId];
@@ -1026,10 +793,8 @@ export class ResourceSystem {
   }
 
   /**
-   * g1-gas-upgrades D4: load up to `kg` of the gas in the tank, limited by free tank space.
-   * Also the path salvaged gas takes (D8).
-   * @param {number} kg
-   * @param {{source?: string}} [opts] `source: 'salvage'` (range-map D4): the kilos also add to `salvageGasKg`; the shop passes none
+   * Load up to `kg` of the gas in the tank, limited by free tank space; also the path salvaged gas takes.
+   * `opts.source: 'salvage'`: the kilos also add to `salvageGasKg`; the shop passes none.
    * @returns {number} kg actually loaded (0 when the tank is full: free < 0.1 kg)
    */
   resupplyEngineGas(kg, opts = {}) {
@@ -1038,7 +803,7 @@ export class ResourceSystem {
     const add = Math.min(kg, free);
     const fuel = Constants.FUELS[this.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
     this.xenon = Math.min(this.xenonMax, this.xenon + add / fuel.kgFull * 100);
-    if (opts && opts.source === 'salvage') this.salvageGasKg += add;     // range-map D4: only salvage counts as "caught", not a shop buy
+    if (opts && opts.source === 'salvage') this.salvageGasKg += add;     // only salvage counts as "caught", not a shop buy
     this._depletionEmitted = false;
     this._syncToPlayer();
     eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'engineGasResupply', value: add });
@@ -1046,35 +811,26 @@ export class ResourceSystem {
   }
 
   /**
-   * Nets step 3 lane 3f (T1): load up to `kg` of nitrogen into the cold-gas tank, limited by free space - the same rule as
-   * `resupplyEngineGas`. The tank feeds the docked daughters' bottles (§34 row 5), so this IS the daughters' cold-gas buy.
-   * @param {number} kg
+   * Load up to `kg` of nitrogen into the cold-gas tank, limited by free space (same rule as `resupplyEngineGas`). The
+   * tank feeds the docked daughters' bottles (§34 row 5), so this IS the daughters' cold-gas buy.
    * @returns {number} kg actually loaded (0 when the tank is full: free < 0.1 kg)
    */
   resupplyColdGas(kg) {
     const free = coldGasFreeKg(this);
     if (free < 0.1 || !(kg > 0)) return 0;
     const add = Math.min(kg, free);
-    this.coldGas = Math.min(this.coldGasMax, this.coldGas + coldGasKgToPool(add));   // ap-gas D4a: a purchase gives the kg it says
+    this.coldGas = Math.min(this.coldGasMax, this.coldGas + coldGasKgToPool(add));   // a purchase gives the kg it says
     this._syncToPlayer();
     eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'coldGasResupply', value: add });
     return add;
   }
 
-  // ======================================================================
-  // INDIUM STORE (lane 3f, DECISIONS §4: salvaged indium goes to a mother-side store, never into a daughter tank)
-  // ======================================================================
 
-  /** Room left in the indium store, kg. */
   indiumStoreFreeKg() {
     return Math.max(0, Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG - this.indiumStoreKg);
   }
 
-  /**
-   * Put up to `kg` of indium into the store (salvage, or a bought cartridge). What does not fit is NOT stored.
-   * @param {number} kg
-   * @returns {number} kg actually stored
-   */
+  /** Put up to `kg` of indium into the store (salvage, or a bought cartridge). What does not fit is NOT stored. Returns kg stored. */
   addIndium(kg) {
     if (!(kg > 0)) return 0;
     const add = Math.min(kg, this.indiumStoreFreeKg());
@@ -1085,9 +841,8 @@ export class ResourceSystem {
   }
 
   /**
-   * Nets step 3 lane 3f (T3): a bought ion-fuel cartridge goes into the indium store AT THE CLICK, whether or not the satellite's arm is
-   * there to show it (the arm's hand-over is only the look). A whole cartridge or none: a store with less room than one refuses it.
-   * @param {number} kg the cartridge's indium
+   * A bought ion-fuel cartridge goes into the indium store AT THE CLICK, whether or not the arm is there to show it
+   * (the hand-over is only the look). A whole cartridge or none: a store with less room than one refuses it.
    * @returns {number} kg stored (0 when there is no room for the whole cartridge)
    */
   loadIndiumCartridge(kg) {
@@ -1097,29 +852,21 @@ export class ResourceSystem {
     return add;
   }
 
-  /**
-   * Set the store's level directly, clamped to [0, max] (the docked swap writes the pool back with this).
-   * @param {number} kg
-   */
+  /** Set the store's level directly, clamped to [0, max] (the docked swap writes the pool back with this). */
   setIndiumStore(kg) {
     const max = Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG;
     this.indiumStoreKg = Math.min(max, Math.max(0, Number.isFinite(kg) ? kg : 0));
     this._syncToPlayer();
   }
 
-  // ======================================================================
-  // DRAG SAIL STOCK (slice 5, lane 5a: a bought sail is a count aboard; its mass is part of her live mass; 5d spends one per sail disposal)
-  // ======================================================================
+  // Drag sail stock: a bought sail is a count aboard and its mass is part of her live mass; each sail disposal spends one.
 
   /** Mass of the sails aboard, kg (ArmManager.getMassBudget adds it to her live mass). */
   dragSailMassKg() {
     return Math.max(0, this.dragSails) * Constants.BIG_PIECES.SAIL.massKg;
   }
 
-  /**
-   * One bought drag sail goes into the stock AT THE CLICK (like a cartridge).
-   * @returns {number} the stock after the load
-   */
+  /** One bought drag sail goes into the stock AT THE CLICK (like a cartridge); returns the stock after the load. */
   loadDragSail() {
     this.dragSails = Math.max(0, Math.floor(this.dragSails) || 0) + 1;
     this._syncToPlayer();
@@ -1127,21 +874,10 @@ export class ResourceSystem {
     return this.dragSails;
   }
 
-  // ======================================================================
-  // UPGRADES
-  // ======================================================================
-
-  /**
-   * Apply a shop upgrade that affects resource pools.
-   * @param {object} data - { effect: string, value: number }
-   * @returns {boolean} true if the effect was handled
-   */
   applyUpgrade(data) {
     switch (data.effect) {
       case 'xenonMax':
-        // BUG FIX: was `= Constants.XENON_FUEL_MAX + data.value` (non-cumulative).
-        // Now cumulative: buying twice gives base+50+50, not base+50 both times.
-        // g1-gas-upgrades D6: a bigger tank is SPACE, not gas — it raises the max only (fill it with a resupply)
+        // Cumulative (buying twice gives base+50+50). A bigger tank is SPACE, not gas: it raises the max only (fill it with a resupply).
         this.xenonMax += data.value;
         break;
       case 'engineGasSwitch':
@@ -1168,31 +904,26 @@ export class ResourceSystem {
         this.battery = Math.min(this.battery + data.value, this.batteryMax);
         break;
       case 'solarEfficiency':
-        // Multiply solar recharge rate by upgrade value (e.g., 1.3 = +30%, 2.0 = +100%).
-        // Mother-wings step 4: this now feeds the REAL per-frame calc via
-        // solarEfficiencyMult (synced to player.resources); solarRate is kept
-        // in step too, as the fallback rate for when no live player is wired.
+        // Multiplies the solar recharge rate (1.3 = +30 %). Feeds the REAL per-frame calc via solarEfficiencyMult
+        // (synced to player.resources); solarRate is kept in step as the fallback rate when no live player is wired.
         this.solarEfficiencyMult = data.value;
         this.solarRate = Constants.SOLAR_PANEL_EFFICIENCY * data.value
           * Constants.SOLAR_FLUX * Constants.SOLAR_PANEL_AREA;
         break;
       case 'supercapUpgrade':
-        // S3b: Adds burst storage to battery max AND sets thermal flag
+        // burst storage on battery max AND the thermal flag
         this.batteryMax += data.value;  // +100 Wh
         this.battery = Math.min(this.battery + data.value, this.batteryMax);
         this._hasSupercap = true;
         break;
       case 'rtgPower':
-        // S3b: RTG constant generation rate (Wh/s)
         this._rtgRate = data.value;  // 2.0 Wh/s
         break;
       case 'powerBeaming':
-        // S3b: Power beaming rate (active during ground station passes)
         this._powerBeamRate = data.value;  // 5.0 Wh/s
         break;
       case 'panelDegradation':
-        // Store multiplier used in update() for panel degradation rate
-        // value=0.5 → half degradation speed
+        // multiplier used in update() for the degradation rate (0.5 = half speed)
         this.panelDegradationMultiplier = data.value;
         break;
       default:
@@ -1206,20 +937,14 @@ export class ResourceSystem {
     return true;
   }
 
-  // ======================================================================
-  // RESET
-  // ======================================================================
-
-  /**
-   * Reset all resources to starting values (new game / retry).
-   */
   reset() {
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
-    this.indiumStoreKg = 0;   // lane 3f: a new run (retry, game-over continue) starts the indium store empty
-    this.dragSails = 0;       // slice 5 (5a): and with no drag sails
-    this.xenonDrawnKg = 0;    // range-map D4: the gas tallies start again (MissionGasTally rebases)
+    this.indiumStoreKg = 0;   // a new run (retry, game-over continue) starts the indium store empty
+    this.dragSails = 0;
+
+    this.xenonDrawnKg = 0;    // the gas tallies start again (MissionGasTally rebases)
     this.salvageGasKg = 0;
-    this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);   // w4-power D1: half
+    this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);   // half
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
     this.solarEfficiencyMult = 1.0;
@@ -1232,47 +957,39 @@ export class ResourceSystem {
     this.tankGasId = Constants.DEFAULT_FUEL || 'argon';
     this._currentFuelId = this.tankGasId;
     this._availableFuels = [this.tankGasId];
-    this.xenon = startEnginePool(this.tankGasId, this.xenonMax);   // g1-gas-upgrades D2: after xenonMax and tankGasId
-    // S3b: Reset power infrastructure
+    this.xenon = startEnginePool(this.tankGasId, this.xenonMax);   // after xenonMax and tankGasId
     this._hasSupercap = false;
     this._rtgRate = 0;
     this._powerBeamRate = 0;
     this._groundStationInView = false;
     clearTimeout(this._gsPassTimer);
-    this._resetLedgerRates();   // w2-heat: heat restarts with the battery (new game / retry)
+    this._resetLedgerRates();   // heat restarts with the battery (new game / retry)
     this._resetThermal();
     this._syncToPlayer();
-    this.announceFuel();   // h3b-argon-push D5: the default fuel, named from the first frame
+    this.announceFuel();   // the default fuel, named from the first frame
   }
 
-  // ======================================================================
-  // PRIVATE
-  // ======================================================================
-
-  /** @private */
   _isValid(resource) {
     return resource === 'xenon' || resource === 'coldGas' || resource === 'battery' || resource === 'lithium';
   }
 
-  /** @private Push this → player.resources (one-way) */
   _syncToPlayer() {
     if (!this._player) return;
     this._player.resources.xenon = this.xenon;
     this._player.resources.coldGas = this.coldGas;
-    this._player.resources.indiumStoreKg = this.indiumStoreKg;   // lane 3f
+    this._player.resources.indiumStoreKg = this.indiumStoreKg;
     this._player.resources.battery = this.battery;
     this._player.resources.solarPanelHealth = this.solarPanelHealth;
-    this._player.resources.bodyPanelHealth = this.bodyPanelHealth;      // mother-wings step 4
-    this._player.resources.solarEfficiencyMult = this.solarEfficiencyMult; // mother-wings step 4
+    this._player.resources.bodyPanelHealth = this.bodyPanelHealth;
+    this._player.resources.solarEfficiencyMult = this.solarEfficiencyMult;
     this._player.resources.xenonMax = this.xenonMax;
-    this._player.resources.tankGasId = this.tankGasId;   // h3-argon-engine D2: which gas the pool holds
+    this._player.resources.tankGasId = this.tankGasId;   // which gas the pool holds
     this._player.resources.coldGasMax = this.coldGasMax;
     this._player.resources.batteryMax = this.batteryMax;
     this._player.resources.lithium = this.lithium;
     this._player.resources.lithiumMax = this.lithiumMax;
   }
 
-  /** @private Wire EventBus listeners */
   _setupListeners() {
     eventBus.on(Events.RESOURCE_CONSUME, (data) => {
       this.consume(data.resource, data.amount);
@@ -1282,11 +999,9 @@ export class ResourceSystem {
       this.replenish(data.resource, data.amount);
     });
 
-    // S3b: Ground station pass tracking for power beaming
     eventBus.on(Events.GROUND_STATION_PASS, () => {
       this._groundStationInView = true;
-      // Ground station pass window lasts ~60s (per SubsystemEvents emission)
-      // Reset after window expires
+      // the pass window lasts ~60 s (per SubsystemEvents emission); reset after it expires
       clearTimeout(this._gsPassTimer);
       this._gsPassTimer = setTimeout(() => {
         this._groundStationInView = false;

@@ -1,20 +1,13 @@
 /**
- * ArmIdleAdvisor.js — data-driven anti-stuck idle watchdog (Item 3, 2026-06-11).
+ * @module systems/ArmIdleAdvisor — data-driven anti-stuck idle watchdog.
  *
- * Small Node-safe system (NOT a new engine) that watches each daughter arm's FSM
- * state once per second. When an arm sits in a hint's `state` for ≥ its `idleS`
- * AND the hint's `when` predicate holds, it fires a one-shot guidance hint —
- * posted as a one-line step chip in the hint ticker (u2-one-voice D7; it was a
- * TEACHING_MOMENT_FORCE card over the score strip). Each hint fires once PER DEPLOYMENT (reset on
- * any state change for that arm). Veterans (SkillsSystem.isVeteran) never see them.
+ * Small Node-safe system (NOT a new engine) that watches each daughter arm's FSM state once per second. When an arm
+ * sits in a hint's `state` for ≥ its `idleS` AND the hint's `when` predicate holds, it fires a one-shot guidance hint,
+ * posted as a one-line step chip in the hint ticker. Each hint fires once PER DEPLOYMENT (reset on any state change
+ * for that arm). Veterans (SkillsSystem.isVeteran) never see them.
  *
- * The hint table is data in Constants.ARM_IDLE_HINTS (+ ARM_PILOT_IDLE for the
- * pilot-mode case, which is a WASD mode rather than an FSM state).
- *
- * Wire in main.js: construct, init({ armManager, skillsSystem, getPilotMode,
- * getActiveNetForArm }), update(dt).
- *
- * @module systems/ArmIdleAdvisor
+ * The hint table is data in Constants.ARM_IDLE_HINTS (+ ARM_PILOT_IDLE for the pilot-mode case, which is a WASD mode
+ * rather than an FSM state).
  */
 
 import { eventBus } from '../core/EventBus.js';
@@ -23,7 +16,7 @@ import { Constants } from '../core/Constants.js';
 import { wordsFor } from './resupplyWords.js';
 import { nWorksFor, flyDigitFor } from './netRouting.js';
 
-const FLY_THEN_N_CHIP = 'Fly her, then N';   // hints-scan D3: her tool chip when N would not work her (cap = her number key)
+const FLY_THEN_N_CHIP = 'Fly her, then N';   // her tool chip when N would not work her (cap = her number key)
 const TICK_S = 1.0;   // evaluate at 1 Hz (cheap; matches SkillsSystem cadence)
 
 export class ArmIdleAdvisor {
@@ -49,10 +42,8 @@ export class ArmIdleAdvisor {
    * @param {object} deps
    * @param {object} deps.armManager — exposes `.arms` (array of ArmUnit-likes)
    * @param {object} [deps.skillsSystem] — exposes isVeteran()
-   * @param {Function} [deps.getPilotMode] — returns the current WASD control mode
-   * @param {Function} [deps.getActiveNetForArm] — (index) => active net or null
-   * @param {Function} [deps.isPiloted] — (arm) => true when he is flying her now (hints-scan D4: "Fly her" is not said then)
-   * @param {Function} [deps.nWorks] — (arm) => true when N works her tool right now (hints-scan D3); default: the
+   * @param {Function} [deps.isPiloted] — (arm) => true when he is flying her now ("Fly her" is not said then)
+   * @param {Function} [deps.nWorks] — (arm) => true when N works her tool right now; default: the
    *   resolver registered in netRouting (true when none), so a chip never names a key that goes to the mother or another daughter
    */
   init({ armManager, skillsSystem = null, getPilotMode = null, getActiveNetForArm = null, nWorks = null, isPiloted = null } = {}) {
@@ -70,7 +61,6 @@ export class ArmIdleAdvisor {
     this._armState.clear();
   }
 
-  /** hints-scan D1: does N work this daughter's tool right now? */
   _nWorksFor(arm) {
     if (this._nWorks) { try { return this._nWorks(arm) !== false; } catch (_e) { return true; } }
     return nWorksFor(arm);
@@ -81,14 +71,12 @@ export class ArmIdleAdvisor {
       && this._skillsSystem.isVeteran());
   }
 
-  /** Net count for an arm (0 if unknown). */
   _netCount(arm) {
     if (typeof arm.getNetInventory === 'function') return arm.getNetInventory();
     if (typeof arm._netInventory === 'number') return arm._netInventory;
     return 0;
   }
 
-  /** Is there a net currently in flight for this arm? */
   _netInFlight(arm) {
     if (arm._firedNet) return true;
     if (this._getActiveNetForArm && arm.index != null) {
@@ -97,7 +85,6 @@ export class ArmIdleAdvisor {
     return false;
   }
 
-  /** Evaluate a hint's `when` predicate against an arm. */
   _predicateHolds(when, arm) {
     switch (when) {
       case 'noNetInFlightHasNets':
@@ -113,12 +100,11 @@ export class ArmIdleAdvisor {
   }
 
   /**
-   * u2-one-voice D7: the coach sentence is a STEP CHIP in the ticker (cap = the key,
-   * body <= 5 words), not a card over the score strip. Entries without a `chip` keep
-   * the old TEACHING_MOMENT_FORCE card (none today).
+   * The coach sentence is a STEP CHIP in the ticker (cap = the key, body <= 5 words), not a card over the score strip.
+   * Entries without a `chip` keep the old TEACHING_MOMENT_FORCE card (none today).
    */
   _fire(hintId, title, text, icon, chip, glyph, keys) {
-    text = wordsFor(text); chip = wordsFor(chip);   // lane 3d: "resupply stop" / "the stop" -> "satellite" with the map on
+    text = wordsFor(text); chip = wordsFor(chip);   // "resupply stop" / "the stop" -> "satellite" with the map on
     if (chip) {
       eventBus.emit(Events.HINT_POSTED, {
         id: hintId,
@@ -128,8 +114,8 @@ export class ArmIdleAdvisor {
         duration: Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000,
         priority: 'normal',
         step: true,
-        // u18c D5: on glass a step button that is up (her tool's button, TouchActionChip) is the same instruction in the true word;
-        // this text waits behind it instead of covering it for 12 s (HintTicker).
+        // On glass a step button that is up (her tool's button, TouchActionChip) is the same instruction in the true
+        // word; this text waits behind it instead of covering it for 12 s (HintTicker).
         yieldToButton: true,
         _postOnboarding: true,
       });
@@ -144,9 +130,7 @@ export class ArmIdleAdvisor {
     });
   }
 
-  /**
-   * @param {number} dt — real seconds
-   */
+  /** @param {number} dt — real seconds */
   update(dt) {
     if (!this._enabled || !this._armManager) return;
     this._accum += dt;
@@ -154,10 +138,8 @@ export class ArmIdleAdvisor {
     const step = this._accum;
     this._accum = 0;
 
-    // Veterans never see idle hints — skip the whole pass.
     if (this._isVeteran()) {
-      // Still track state so a player who crosses the veteran threshold mid-game
-      // doesn't get a stale burst later; cheap to keep maps fresh.
+      // Still track state so a player who crosses the veteran threshold mid-game doesn't get a stale burst later.
       this._refreshStateOnly();
       return;
     }
@@ -172,7 +154,6 @@ export class ArmIdleAdvisor {
         rec = { state: arm.state, idleS: 0, fired: new Set() };
         this._armState.set(arm.id, rec);
       }
-      // State change → reset idle timer + per-deployment fired set.
       if (rec.state !== arm.state) {
         rec.state = arm.state;
         rec.idleS = 0;
@@ -183,17 +164,17 @@ export class ArmIdleAdvisor {
 
       for (const hint of hints) {
         if (hint.state !== arm.state) continue;
-        // hold-catch: a tool row speaks only for the tool she is holding (the pad is the default; N works the selected tool)
+        // A tool row speaks only for the tool she is holding (the pad is the default; N works the selected tool)
         if (hint.tool && (arm.selectedTool || 'NET') !== hint.tool) continue;
         if (rec.idleS < hint.idleS) continue;
         if (rec.fired.has(hint.hintId)) continue;
         if (!this._predicateHolds(hint.when, arm)) continue;
-        // hints-scan D4: a chip that says her number key ("Fly her") is not said while he is flying her: that digit would
-        // take him back to the ship. Not marked fired: it may still say it if he lets go while she is in flight.
+        // A chip that says her number key ("Fly her") is not said while he is flying her: that digit would take him
+        // back to the ship. Not marked fired: it may still say it if he lets go while she is in flight.
         if (Array.isArray(hint.keys) && hint.keys.includes('Digit1') && this._isPiloted && this._isPiloted(arm)) continue;
         rec.fired.add(hint.hintId);
-        // hints-scan D3 (owner 2026-10-26): a tool chip names N only when N works HER now; else it names her number key.
-        // Picked at the moment it fires, so the key is true when it is shown.
+        // owner 2026-10-26: a tool chip names N only when N works HER now; else it names her number key. Picked at the
+        // moment it fires, so the key is true when it is shown.
         if (Array.isArray(hint.keys) && hint.keys.includes('KeyN') && !this._nWorksFor(arm)) {
           const n = arm.index != null && Number.isInteger(arm.index) ? arm.index + 1 : flyDigitFor(arm);
           if (n) {

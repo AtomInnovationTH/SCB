@@ -1,26 +1,14 @@
 /**
- * DevSequenceAdvancer.js — "do the next thing" resolver for the Space key.
+ * DevSequenceAdvancer.js — "do the next thing" resolver for the Space key: mashing Space rips through
+ * Scan → Target → Autopilot → Daughter launch → Capture.
  *
- * Space is a rapid-advance / one-press-per-step driver for the core gameplay
- * loop, so anyone (devs especially) can mash Space to rip through a full cycle:
- *
- *     Scan → Target → Autopilot → Daughter launch → Capture
- *
- * This module is a PURE decision function: given a snapshot of live game state
- * it returns the id of the single next action to perform (or null if nothing is
- * actionable). The InputManager builds the snapshot from its deps and dispatches
- * the corresponding helper. Keeping the decision logic pure makes it unit-
- * testable in Node without a DOM / Three.js scene.
- *
- * Design notes (see .kilo/plans/spacebar-rapid-advance.md):
- *   • Onboarding still owns Space FIRST — this resolver only runs when the
- *     OnboardingDirector's smart-default declines the press.
- *   • Daughter-first capture: the `deploy` step is ordered before the `net`
- *     step, so a launchable daughter is preferred and the Mother net is the
- *     fallback (e.g. no daughter docked / out of fuel).
- *   • Capture-while-piloting has the HIGHEST priority so that once a daughter is
- *     launched and being piloted, further Space presses drive it to the catch
- *     instead of re-deploying another daughter.
+ * A PURE decision function: given a snapshot of live game state it returns the id of the single next action (or null if
+ * nothing is actionable). InputManager builds the snapshot and dispatches the helper; pure so it is testable in Node.
+ *   • Onboarding still owns Space FIRST: this resolver only runs when OnboardingDirector's smart-default declines the press.
+ *   • Daughter-first capture: `deploy` is ordered before `net`, so a launchable daughter is preferred and the Mother net is
+ *     the fallback (no daughter docked / out of fuel).
+ *   • Capture-while-piloting has the HIGHEST priority, so further Space presses drive a launched daughter to the catch
+ *     instead of re-deploying another.
  *
  * @module systems/DevSequenceAdvancer
  */
@@ -67,40 +55,33 @@ const CAPTURE_READY_STATES = new Set(['STATION_KEEP', 'TRANSIT', 'APPROACH']);
 export function resolveNextDevAction(snapshot) {
   const s = snapshot || {};
 
-  // 1) Piloting a daughter → capture takes precedence over everything.
   if (s.armPilotMode && CAPTURE_READY_STATES.has(s.pilotedArmState)) {
     return DEV_ACTIONS.CAPTURE;
   }
 
-  // 2) Nothing discovered yet → scan.
   if (!(Number(s.trackedContacts) > 0)) {
     return DEV_ACTIONS.SCAN;
   }
 
-  // 3) Contacts exist but none selected → cycle a target.
   if (!s.hasTarget) {
     return DEV_ACTIONS.TARGET;
   }
 
-  // 4) Target out of range → close on it with autopilot (unless already running).
   if (!s.inCaptureRange) {
     if (!s.autopilotActive) return DEV_ACTIONS.AUTOPILOT;
-    // Autopilot already closing — nothing new to do this press.
     return null;
   }
 
-  // 5) In range, daughter available → launch a daughter (daughter-first).
   if (s.canDeployDaughter) {
     return DEV_ACTIONS.DEPLOY;
   }
 
-  // 6) In range, no daughter → fire the Mother net (fallback).
   return DEV_ACTIONS.NET;
 }
 
 export default { DEV_ACTIONS, resolveNextDevAction };
 
-// CJS guard — exposes the data for Node-safe tests (mirrors OnboardingDirector).
+// CJS guard: exposes the data for Node-safe tests (mirrors OnboardingDirector).
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { DEV_ACTIONS, resolveNextDevAction };
 }

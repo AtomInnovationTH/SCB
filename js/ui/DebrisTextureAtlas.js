@@ -1,18 +1,10 @@
 /**
- * DebrisTextureAtlas.js — Procedural Canvas2D texture atlas for debris type visuals
- * Generates a single atlas texture with 6 type-differentiated debris appearances.
- * No external image files — all Canvas2D procedural painting.
- *
- * ST-6.2: Phase 2 debris visuals.
+ * DebrisTextureAtlas.js — procedural Canvas2D atlas with 6 type-differentiated debris looks; no image files.
  * @module ui/DebrisTextureAtlas
  */
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
-
-// ============================================================================
-// TYPE CONFIGURATION (pure logic — Node-safe)
-// ============================================================================
 
 /** Ordered list of catalogType values; index = slot position in atlas */
 const TYPE_ORDER = ['debris', 'rocket_body', 'inactive', 'active', 'unknown', 'fragment'];
@@ -37,15 +29,8 @@ function _typeConfig(catalogType) {
   return { slot, color: colorMap[catalogType] || colorMap.unknown };
 }
 
-// ============================================================================
-// PURE-LOGIC EXPORTS (Node-safe — no Canvas/THREE dependency)
-// ============================================================================
-
 /**
- * Compute UV offset + scale for a catalogue type slot in the atlas grid.
- * UV (0,0) = bottom-left, UV (1,1) = top-right (WebGL convention).
- * Canvas row 0 = top of image = UV V=1.
- *
+ * UV offset + scale for a catalogue type's slot. UV (0,0) = bottom-left (WebGL); canvas row 0 = top = UV V=1.
  * @param {string} catalogType — one of TYPE_ORDER values
  * @param {number} [cols] — grid columns (default: Constants or 3)
  * @param {number} [rows] — grid rows (default: Constants or 2)
@@ -66,12 +51,7 @@ export function getUVOffsetForType(catalogType, cols, rows) {
   };
 }
 
-/**
- * Get the base colour hex string for a catalogue type.
- * Falls back to COLOR_UNKNOWN for unrecognised types.
- * @param {string} catalogType
- * @returns {string} hex colour string e.g. '#666666'
- */
+/** Base colour hex for a catalogue type ('#666666'); COLOR_UNKNOWN for unrecognised types. */
 export function getBaseColorForType(catalogType) {
   return _typeConfig(catalogType).color;
 }
@@ -99,10 +79,6 @@ export function getEmissiveForMOID(moidBadge) {
   return { color: '#000000', intensity: 0 };
 }
 
-// ============================================================================
-// SEEDED PRNG (deterministic painting)
-// ============================================================================
-
 /** @private Simple multiplicative congruential PRNG for reproducible painting */
 function _seededRandom(seed) {
   let s = (seed >>> 0) || 1;
@@ -112,14 +88,7 @@ function _seededRandom(seed) {
   };
 }
 
-// ============================================================================
-// CANVAS2D ATLAS CLASS (browser-only — generate() uses Canvas2D + THREE)
-// ============================================================================
-
-/**
- * Procedural Canvas2D texture atlas for 6 debris type visuals.
- * Generates a single THREE.CanvasTexture at boot; not per-frame.
- */
+/** Procedural Canvas2D atlas for 6 debris types: one THREE.CanvasTexture at boot, not per frame. */
 export class DebrisTextureAtlas {
   /**
    * @param {number} [atlasSize] — pixel dimension (default from Constants)
@@ -136,8 +105,7 @@ export class DebrisTextureAtlas {
   }
 
   /**
-   * Paint the atlas and return a THREE.CanvasTexture.
-   * Requires browser DOM (Canvas2D) + THREE.js.
+   * Paint the atlas; needs a browser DOM (Canvas2D) + THREE.
    * @returns {THREE.CanvasTexture|null}
    */
   generate() {
@@ -153,7 +121,6 @@ export class DebrisTextureAtlas {
     const slotW = Math.floor(size / this._cols);
     const slotH = Math.floor(size / this._rows);
 
-    // Paint each type slot
     for (let i = 0; i < TYPE_ORDER.length; i++) {
       const type = TYPE_ORDER[i];
       const col = i % this._cols;
@@ -171,28 +138,20 @@ export class DebrisTextureAtlas {
     return tex;
   }
 
-  /** Get UV offset for a type (delegates to pure function) */
   getUVOffsetForType(catalogType) {
     return getUVOffsetForType(catalogType, this._cols, this._rows);
   }
 
-  /** Get base colour for a type (delegates to pure function) */
   getBaseColorForType(catalogType) {
     return getBaseColorForType(catalogType);
   }
 
-  /** Release canvas + texture GPU memory */
   dispose() {
     if (this.texture && this.texture.dispose) this.texture.dispose();
     this.texture = null;
     this._canvas = null;
   }
 
-  // --------------------------------------------------------------------------
-  // Painting helpers (private)
-  // --------------------------------------------------------------------------
-
-  /** @private Paint one type slot */
   _paintSlot(ctx, type, x, y, w, h, seed) {
     const rand = _seededRandom(seed * 7919 + 42);
     switch (type) {
@@ -208,7 +167,6 @@ export class DebrisTextureAtlas {
 
   /** @private Debris: scratched/scorched grey metal panel with seams & a warning stencil */
   _paintDebris(ctx, x, y, w, h, rand) {
-    // Base metal with a soft vertical lighting gradient
     const base = ctx.createLinearGradient(x, y, x, y + h);
     base.addColorStop(0, '#7a7a7e');
     base.addColorStop(0.5, '#636367');
@@ -216,7 +174,6 @@ export class DebrisTextureAtlas {
     ctx.fillStyle = base;
     ctx.fillRect(x, y, w, h);
 
-    // Large mottled discolouration patches (oxidation / sun-fade)
     for (let i = 0; i < 14; i++) {
       const px = x + rand() * w, py = y + rand() * h;
       const pr = w * (0.05 + rand() * 0.18);
@@ -228,14 +185,12 @@ export class DebrisTextureAtlas {
       ctx.fillRect(px - pr, py - pr, pr * 2, pr * 2);
     }
 
-    // Panel seams (a couple of straight weld lines)
     ctx.strokeStyle = 'rgba(40,40,44,0.8)';
     ctx.lineWidth = Math.max(1, w * 0.004);
     for (let i = 0; i < 3; i++) {
       const sy = y + (0.25 + i * 0.25) * h + (rand() - 0.5) * h * 0.05;
       ctx.beginPath(); ctx.moveTo(x, sy); ctx.lineTo(x + w, sy); ctx.stroke();
     }
-    // Rivets along the seams
     ctx.fillStyle = 'rgba(150,150,156,0.7)';
     for (let i = 0; i < 3; i++) {
       const sy = y + (0.25 + i * 0.25) * h;
@@ -246,7 +201,6 @@ export class DebrisTextureAtlas {
       }
     }
 
-    // Scratches
     ctx.strokeStyle = 'rgba(200,200,205,0.25)';
     ctx.lineWidth = Math.max(1, w * 0.0015);
     for (let i = 0; i < 40; i++) {
@@ -257,7 +211,6 @@ export class DebrisTextureAtlas {
       ctx.stroke();
     }
 
-    // Scorch / impact marks
     for (let i = 0; i < 6; i++) {
       const px = x + rand() * w, py = y + rand() * h;
       const pr = w * (0.02 + rand() * 0.05);
@@ -268,13 +221,11 @@ export class DebrisTextureAtlas {
       ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
     }
 
-    // Faded hazard stencil
     this._stencil(ctx, x + w * 0.1, y + h * 0.78, w * 0.22, h * 0.12, 'rgba(200,180,40,0.35)');
   }
 
   /** @private Rocket body: metallic silver hull, rivet bands, staging seam, scorch */
   _paintRocketBody(ctx, x, y, w, h, rand) {
-    // Cylindrical shading — bright down the middle, dark at the edges
     const grad = ctx.createLinearGradient(x, y, x + w, y);
     grad.addColorStop(0, '#6c6c78');
     grad.addColorStop(0.25, '#b8b8c6');
@@ -284,7 +235,6 @@ export class DebrisTextureAtlas {
     ctx.fillStyle = grad;
     ctx.fillRect(x, y, w, h);
 
-    // Brushed-metal vertical streaks
     ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.lineWidth = 1;
     for (let i = 0; i < 120; i++) {
@@ -292,7 +242,6 @@ export class DebrisTextureAtlas {
       ctx.beginPath(); ctx.moveTo(sx, y); ctx.lineTo(sx, y + h); ctx.stroke();
     }
 
-    // Rivet bands
     ctx.strokeStyle = 'rgba(90,90,105,0.8)';
     ctx.lineWidth = Math.max(1, h * 0.003);
     const bands = 10;
@@ -307,35 +256,27 @@ export class DebrisTextureAtlas {
       }
     }
 
-    // Heavy staging seam
     ctx.strokeStyle = 'rgba(60,66,80,0.9)';
     ctx.lineWidth = Math.max(2, h * 0.012);
     ctx.beginPath();
     ctx.moveTo(x, y + h * 0.62); ctx.lineTo(x + w, y + h * 0.62); ctx.stroke();
 
-    // Scorching near the engine end
     const sg = ctx.createLinearGradient(x, y + h, x, y + h * 0.7);
     sg.addColorStop(0, 'rgba(20,16,14,0.6)');
     sg.addColorStop(1, 'rgba(20,16,14,0)');
     ctx.fillStyle = sg;
     ctx.fillRect(x, y + h * 0.7, w, h * 0.3);
 
-    // Agency stencil band
     this._stencil(ctx, x + w * 0.12, y + h * 0.30, w * 0.3, h * 0.1, 'rgba(40,60,120,0.5)');
   }
 
-  /** @private Inactive: a real spacecraft face — dense dark solar-cell array,
-   *  silver interconnects/busbars, plus crinkled gold MLI thermal blanket.
-   *  Mirrors the dense near-black triple-junction GaAs look of
-   *  scene/solarCellTexture.js (cells dominate; substrate is dark — NOT a
-   *  bright-blue wireframe), so body-mounted PV debris and these slot pixels
-   *  read consistently across the game. */
+  /** @private Inactive: dense dark solar-cell array with silver busbars plus a crinkled gold MLI blanket corner.
+   *  Mirrors scene/solarCellTexture.js (cells dominate, substrate dark — NOT a bright-blue wireframe) so
+   *  body-mounted PV debris and these slot pixels read consistently. */
   _paintInactive(ctx, x, y, w, h, rand) {
-    // Dark interconnect/Kapton substrate seen in the hairline cell gaps.
     ctx.fillStyle = '#10131c';
     ctx.fillRect(x, y, w, h);
 
-    // ---- Dense photovoltaic cell grid (tall cells, close-packed) ----------
     const cols = 10, rows = 14;
     const cw = w / cols, ch = h / rows;
     const gap = Math.max(1, Math.min(cw, ch) * 0.05);
@@ -343,7 +284,6 @@ export class DebrisTextureAtlas {
       for (let c = 0; c < cols; c++) {
         const cx = x + c * cw + gap, cy = y + r * ch + gap;
         const cWidth = cw - gap * 2, cHeight = ch - gap * 2;
-        // Per-cell tone jitter — triple-junction GaAs reads near-black blue-violet.
         const jitter = Math.floor(rand() * 10) - 5;
         const rr = 20 + jitter, gg = 22 + jitter, bb = 46 + jitter;
         const g = ctx.createLinearGradient(cx, cy, cx + cWidth, cy + cHeight);
@@ -352,14 +292,12 @@ export class DebrisTextureAtlas {
         g.addColorStop(1.0, `rgb(${Math.max(0, rr - 6)},${Math.max(0, gg - 6)},${Math.max(0, bb - 14)})`);
         ctx.fillStyle = g;
         ctx.fillRect(cx, cy, cWidth, cHeight);
-        // Hair-thin silver finger conductors.
         ctx.strokeStyle = 'rgba(150,165,195,0.20)';
         ctx.lineWidth = Math.max(1, cWidth * 0.02);
         for (let f = 1; f < 6; f++) {
           const fx = cx + (cWidth * f) / 6;
           ctx.beginPath(); ctx.moveTo(fx, cy); ctx.lineTo(fx, cy + cHeight); ctx.stroke();
         }
-        // Two brighter busbars (the cell's main collectors).
         ctx.strokeStyle = 'rgba(190,205,235,0.42)';
         ctx.lineWidth = Math.max(1, cWidth * 0.05);
         for (let bbar = 1; bbar <= 2; bbar++) {
@@ -369,9 +307,8 @@ export class DebrisTextureAtlas {
       }
     }
 
-    // ---- Crinkled gold MLI thermal blanket (one large wrapped corner) -----
-    // Only part of the face is foil so the slot reads "blue array + gold MLI",
-    // not "all gold". This is the only slot with prominent gold.
+    // Only part of the face is foil so the slot reads "blue array + gold MLI", not "all gold":
+    // the only slot with prominent gold.
     const fx = x + w * (0.04 + rand() * 0.08);
     const fy = y + h * (0.04 + rand() * 0.08);
     const fw = w * (0.34 + rand() * 0.12);
@@ -382,7 +319,6 @@ export class DebrisTextureAtlas {
     fg.addColorStop(1.0, 'rgb(120,92,30)');
     ctx.fillStyle = fg;
     ctx.fillRect(fx, fy, fw, fh);
-    // Wrinkle highlights/shadows — wandering bright & dark creases.
     for (let k = 0; k < 22; k++) {
       const bright = rand() > 0.5;
       ctx.strokeStyle = bright ? 'rgba(255,238,170,0.55)' : 'rgba(90,66,18,0.55)';
@@ -395,7 +331,6 @@ export class DebrisTextureAtlas {
       }
       ctx.stroke();
     }
-    // Tape/edge seam where the blanket is fastened down.
     ctx.strokeStyle = 'rgba(60,48,18,0.7)';
     ctx.lineWidth = Math.max(2, w * 0.004);
     ctx.strokeRect(fx, fy, fw, fh);
@@ -409,7 +344,6 @@ export class DebrisTextureAtlas {
     ctx.fillStyle = base;
     ctx.fillRect(x, y, w, h);
 
-    // Big soft reflective highlight
     const cx = x + w * 0.4, cy = y + h * 0.3;
     const gradR = Math.min(w, h) * 0.5;
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, gradR);
@@ -418,20 +352,16 @@ export class DebrisTextureAtlas {
     ctx.fillStyle = grad;
     ctx.beginPath(); ctx.arc(cx, cy, gradR, 0, Math.PI * 2); ctx.fill();
 
-    // Panel seams
     ctx.strokeStyle = 'rgba(170,170,200,0.6)';
     ctx.lineWidth = Math.max(1, w * 0.002);
     for (let i = 1; i < 4; i++) {
       ctx.beginPath(); ctx.moveTo(x, y + i * h / 4); ctx.lineTo(x + w, y + i * h / 4); ctx.stroke();
     }
-    // Black thermal radiator strip
     ctx.fillStyle = 'rgba(20,20,28,0.85)';
     ctx.fillRect(x + w * 0.62, y + h * 0.1, w * 0.12, h * 0.55);
-    // Antenna stub
     ctx.strokeStyle = '#9999bb';
     ctx.lineWidth = Math.max(2, w * 0.005);
     ctx.beginPath(); ctx.moveTo(x + w * 0.2, y + h * 0.15); ctx.lineTo(x + w * 0.2, y + h * 0.45); ctx.stroke();
-    // Caution stencil
     this._stencil(ctx, x + w * 0.1, y + h * 0.8, w * 0.25, h * 0.1, 'rgba(200,40,40,0.45)');
   }
 
@@ -443,7 +373,6 @@ export class DebrisTextureAtlas {
     ctx.fillStyle = base;
     ctx.fillRect(x, y, w, h);
 
-    // Pitting / craters
     for (let i = 0; i < 80; i++) {
       const px = x + rand() * w, py = y + rand() * h;
       const pr = w * (0.004 + rand() * 0.02);
@@ -453,7 +382,6 @@ export class DebrisTextureAtlas {
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
     }
-    // Cracks
     ctx.strokeStyle = 'rgba(25,18,12,0.7)';
     ctx.lineWidth = Math.max(1, w * 0.002);
     for (let i = 0; i < 5; i++) {
@@ -471,7 +399,6 @@ export class DebrisTextureAtlas {
   _paintFragment(ctx, x, y, w, h, rand) {
     ctx.fillStyle = '#2c2c30';
     ctx.fillRect(x, y, w, h);
-    // Coarse metal noise
     const step = Math.max(2, Math.floor(w / 256));
     for (let px = x; px < x + w; px += step) {
       for (let py = y; py < y + h; py += step) {
@@ -480,13 +407,11 @@ export class DebrisTextureAtlas {
         ctx.fillRect(px, py, step, step);
       }
     }
-    // Heat-tinted zones — titanium/steel that ran hot during the breakup
-    // shows straw→blue oxidation. Adds warm/cool variety to the soot-grey.
+    // Heat-tinted zones: straw→blue oxidation, warm/cool variety in the soot-grey.
     for (let i = 0; i < 3; i++) {
       const px = x + rand() * w, py = y + rand() * h;
       const pr = w * (0.12 + rand() * 0.16);
       const g = ctx.createRadialGradient(px, py, 0, px, py, pr);
-      // alternate between straw-gold heat tint and blue temper
       if (rand() > 0.5) {
         g.addColorStop(0, 'rgba(150,120,60,0.28)');
       } else {
@@ -496,8 +421,7 @@ export class DebrisTextureAtlas {
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
     }
-    // Bright torn fracture edges (exposed bare metal) — bolder + with a dark
-    // shadow side so facets read 3D when zoomed.
+    // Bright torn fracture edges with a dark shadow side so facets read 3D when zoomed.
     for (let i = 0; i < 12; i++) {
       let px = x + rand() * w, py = y + rand() * h;
       const pts = [[px, py]];
@@ -505,7 +429,6 @@ export class DebrisTextureAtlas {
         px += (rand() - 0.5) * w * 0.18; py += (rand() - 0.5) * h * 0.18;
         pts.push([px, py]);
       }
-      // shadow first (offset), then bright highlight on top
       ctx.strokeStyle = 'rgba(8,8,10,0.6)';
       ctx.lineWidth = Math.max(1, w * 0.004);
       ctx.beginPath(); ctx.moveTo(pts[0][0] + 2, pts[0][1] + 2);
@@ -517,7 +440,6 @@ export class DebrisTextureAtlas {
       for (let s = 1; s < pts.length; s++) ctx.lineTo(pts[s][0], pts[s][1]);
       ctx.stroke();
     }
-    // Soot blotches
     for (let i = 0; i < 8; i++) {
       const px = x + rand() * w, py = y + rand() * h;
       const pr = w * (0.03 + rand() * 0.07);
@@ -533,7 +455,6 @@ export class DebrisTextureAtlas {
   _stencil(ctx, x, y, w, h, color) {
     ctx.save();
     ctx.fillStyle = color;
-    // a few "characters" as bars
     const n = 4;
     const cw = w / (n * 1.6);
     for (let i = 0; i < n; i++) {
@@ -543,9 +464,7 @@ export class DebrisTextureAtlas {
   }
 }
 
-// ============================================================================
-// CJS guard — expose pure helpers for Node.js tests
-// ============================================================================
+// CJS guard: pure helpers for Node tests.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     DebrisTextureAtlas,

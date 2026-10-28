@@ -19,11 +19,9 @@ import { gasPriceCr, coldGasPriceCr, coldGasPoolToKg, indiumCartridgePriceCr, GA
 
 /**
  * Upgrade definitions — 42 items across 9 categories, all wired to live systems
- * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins
- * this header to them).
- * ST-6.6: Each upgrade carries a `trl` (NASA TRL 1-9) and optional `trlRationale`
- * for colour-coded badge display. TRL is display-only — NEVER used in gating.
- * Exported for Node.js test harness (test-TRL.js integrity check).
+ * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins this header to them).
+ * Each carries a `trl` (NASA TRL 1-9) and optional `trlRationale` for the badge. TRL is display-only — NEVER used in gating.
+ * Exported for the Node test harness (test-TRL.js).
  */
 export const UPGRADES = [
   // Propulsion (10)
@@ -33,12 +31,12 @@ export const UPGRADES = [
   { id: 'high_thrust_ion', cat: 'Propulsion', name: 'High-Thrust Ion', cost: 800,
     desc: '+50% thrust power', effect: 'thrustMultiplier', value: 1.5, maxLevel: 1,
     trl: 8, trlRationale: 'High-power Hall thrusters flown on Starlink, AEHF; kW-class ion still maturing' },
-  // g1-gas-upgrades D6: id and effect kept (saves); a bigger tank is SPACE — fill it with a resupply.
+  // id and effect kept for saves; a bigger tank is SPACE — fill it with a resupply.
   { id: 'extra_xenon', cat: 'Propulsion', name: 'Bigger Engine Tank', cost: 600,
     desc: '+30 L of engine tank space (empty: fill it with a resupply)', effect: 'xenonMax', value: 50, maxLevel: 2,
     trl: 9, trlRationale: 'COPV xenon tanks flight-proven since 1990s' },
-  // g1-gas-upgrades D3: krypton and xenon are one-way upgrades of the gas in the tank, priced by the mass
-  // they put in orbit (D1). Xenon replaces krypton for good (supersededBy, enforced in upgradePrereqsMet).
+  // Krypton and xenon are one-way upgrades of the gas in the tank, priced by the mass they put in orbit.
+  // Xenon replaces krypton for good (supersededBy, enforced in upgradePrereqsMet).
   { id: 'gas_krypton', cat: 'Propulsion', name: 'Krypton Engine Gas', cost: gasPriceCr('krypton', GAS_SWITCH_FILL_KG),
     desc: "1.5× argon's push on the same power, so chases are quicker. Drains the tank and fills 12.5 kg of krypton — the same launch mass as your argon start.",
     effect: 'engineGasSwitch', value: 'krypton', maxLevel: 1, supersededBy: 'gas_xenon',
@@ -47,23 +45,23 @@ export const UPGRADES = [
     desc: "2.2× argon's push on the same power, so chases are quicker. Drains the tank and fills 12.5 kg of xenon — the same launch mass as your argon start.",
     effect: 'engineGasSwitch', value: 'xenon', maxLevel: 1,
     trl: 9, trlRationale: 'Xenon Hall thrusters flown since the 1970s; Deep Space 1 (1998)' },
-  // g1-gas-upgrades D4: range is bought by the kilo. Repeatable; the price is read through upgradeCostNow
-  // (the gas in the tank), `cost` here is the argon price for the catalogue tables.
+  // Range is bought by the kilo. Repeatable; priced through upgradeCostNow (the gas in the tank); `cost` is the argon
+  // price for the catalogue tables.
   { id: 'gas_resupply', cat: 'Propulsion', name: 'Engine Gas Resupply', cost: gasPriceCr('argon', Constants.GAS_RESUPPLY_KG),
     desc: 'Load 5 kg of the gas in your tank (less if the tank is nearly full). Every kilo has to be launched, so range costs credits.',
     effect: 'engineGasResupply', value: Constants.GAS_RESUPPLY_KG, maxLevel: Infinity, consumable: true,
     trl: 6, trlRationale: 'In-orbit propellant transfer demonstrated by Orbital Express (2007, hydrazine); xenon transfer not yet flown' },
-  // Nets step 3 lane 3f (owner 2026-10-23, "Cold gas and ion fuel"): nitrogen for her cold-gas tank, by the kilo like the engine gas
-  // (price through upgradeCostNow: the room in the tank, launch mass + nitrogen's own commodity price). The tank tops up docked daughters.
+  // Nitrogen for her cold-gas tank, by the kilo like the engine gas (priced via upgradeCostNow: room in the tank, launch mass
+  // + nitrogen's own commodity price). The tank tops up docked daughters.
   { id: 'coldgas_resupply', cat: 'Propulsion', name: 'Nitrogen Cold Gas', cost: coldGasPriceCr(Constants.DAUGHTER_SUPPLY.N2_BUY_KG),
     desc: 'Load 5 kg of nitrogen into your cold-gas tank (less if it is nearly full). Docked daughters fill their braking gas from it. Every kilo has to be launched, so it costs credits.',
     effect: 'coldGasResupply', value: Constants.DAUGHTER_SUPPLY.N2_BUY_KG, maxLevel: Infinity, consumable: true,
     trl: 6, trlRationale: 'In-orbit propellant transfer demonstrated by Orbital Express (2007, hydrazine); nitrogen servicing not yet flown' },
   { id: 'extra_coldgas', cat: 'Propulsion', name: 'Extra Cold Gas', cost: 400,
-    // fu-gas GD2: the tank is pool units (20 = 6 kg); the card says real kg (+10 units = +3 kg)
+    // the tank is pool units (20 = 6 kg); the card says real kg (+10 units = +3 kg)
     desc: `+${coldGasPoolToKg(10)} kg max cold gas`, effect: 'coldGasMax', value: 10, maxLevel: 2,
     trl: 9, trlRationale: 'Cold gas tanks ubiquitous since 1960s' },
-  // Reaction-wheel kit (owner 2026-10-24, DECISIONS §2 row 9): three RW4-class wheels, magnetic coils that slow them, the electronics.
+  // Reaction-wheel kit (DECISIONS §2 row 9): three RW4-class wheels, magnetic coils that slow them, the electronics.
   // The numbers are Constants.WHEELS (the card says them out loud: mass, what the wheels do, what they do not).
   { id: 'reaction_wheels', cat: 'Propulsion', name: 'Reaction Wheels (3)', cost: Constants.WHEELS.PRICE_CR,
     desc: `Three spinning wheels, one per axis (${Constants.WHEELS.MASS_KG.toFixed(1)} kg with coils and electronics). They turn her for battery power, no steering gas, but each holds only ${Constants.WHEELS.MOMENTUM_NMS} N·m·s and gives ${Constants.WHEELS.TORQUE_NM} N·m, so a big turn takes minutes: quick turns and big turns stay on the gas. Magnetic coils slow a full wheel in about 4 hours of game time.`,
@@ -80,7 +78,7 @@ export const UPGRADES = [
     requiresAll: ['mpd_thruster'],
     trl: 5, trlRationale: 'Tungsten-rhenium cathodes tested in vacuum chambers; on-orbit erosion unverified' },
 
-  // Power (8) — includes S3b MPD infrastructure chain
+  // Power (8)
   { id: 'efficient_panels', cat: 'Power', name: 'Efficient Panels', cost: 500,
     desc: '+30% solar efficiency', effect: 'solarEfficiency', value: 1.3, maxLevel: 1,
     trl: 9, trlRationale: 'Triple-junction GaAs standard on every modern satellite' },
@@ -91,7 +89,7 @@ export const UPGRADES = [
     desc: '-50% panel degradation', effect: 'panelDegradation', value: 0.5, maxLevel: 1,
     trl: 9, trlRationale: 'Rad-hard cover glass + coverslips used on GEO sats for decades' },
 
-  // S3b: Power infrastructure chain for MPD Ludicrous Mode
+  // MPD infrastructure chain (Ludicrous Mode)
   { id: 'multi_junction_solar', cat: 'Power', name: 'Multi-Junction Solar', cost: 1200,
     desc: 'GaInP/GaAs/Ge triple-junction. +100% solar efficiency.',
     effect: 'solarEfficiency', value: 2.0, maxLevel: 1,
@@ -132,14 +130,10 @@ export const UPGRADES = [
     desc: 'Reveal salvage contents at range', effect: 'salvageScan', value: true, maxLevel: 1,
     trl: 4, trlRationale: 'Remote spectral composition analysis demonstrated on lab targets; no ADR heritage' },
 
-  // Arms (5) — replaces deleted Capture category (laser, ion beam, magnetic, harpoon, net)
-  // Register item 101 (2026-08-21, owner-ruled RETIRE): `long_tether` (600 cr,
-  // effect 'tetherRange' ×2) retired from the catalog — it wrote the same live
-  // config.tetherMax field the tier ladder now owns, last-writer-wins (a tier
-  // purchase after it LOST the player the 600 cr reach with no warning). The
-  // TETHER MATERIALS ladder below is the one tether-reach track; the
-  // applyUpgradeOverride handler + EFFECT_ROUTES entry STAY so a pre-retirement
-  // save's upgrade replay keeps its purchased reach.
+  // Arms (5)
+  // owner 2026-08-21: `long_tether` (600 cr, effect 'tetherRange' ×2) retired from the catalog — it wrote the same live
+  // config.tetherMax the tether ladder owns (last-writer-wins). The applyUpgradeOverride handler + EFFECT_ROUTES entry STAY
+  // so an old save's upgrade replay keeps its purchased reach.
   { id: 'fast_reel', cat: 'Daughters', name: 'Fast Reel Motor', cost: 500,
     desc: '+50% reel speed', effect: 'reelSpeed', value: 1.5, maxLevel: 1,
     trl: 4, trlRationale: 'Motorised space reels demonstrated on SFU (1995), not yet for capture ops' },
@@ -149,10 +143,8 @@ export const UPGRADES = [
   { id: 'capture_net', cat: 'Daughters', name: 'Reinforced Nets', cost: 800,
     desc: '+20% capture success', effect: 'captureRate', value: 0.2, maxLevel: 1,
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
-  // Net ladder Phase B: consumable Mother Large Net restock. Repeatable (no
-  // maxLevel gate — see _purchaseUpgrade consumable branch). Each buy loads one
-  // net (250 cr) into the Mother's one launcher, up to 4 - her one count, for every
-  // piece she nets (DECISIONS §33). No in-mission resupply. Gated by CAPTURE_NET (filtered at render).
+  // Consumable Mother Large Net restock. Repeatable (no maxLevel gate — see _purchaseUpgrade). Each buy loads one net (250 cr)
+  // into the Mother's one launcher, up to 4 (DECISIONS §33). No in-mission resupply. Gated by CAPTURE_NET (filtered at render).
   { id: 'mother_net_restock', cat: 'Daughters', name: 'Mother net',
     cost: Constants.CAPTURE_NET.LARGE.REPLACEMENT_COST,
     desc: 'One net cartridge for the mother\'s launcher.',
@@ -173,15 +165,15 @@ export const UPGRADES = [
     effect: 'smallDaughterNet', value: 1, maxLevel: Infinity, consumable: true,
     requiresFeature: 'CAPTURE_NET',
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
-  // Nets step 3 lane 3f (owner 2026-10-23, "Cold gas and ion fuel"; DECISIONS §4: ion fuel is cast indium, a cartridge, never a fluid):
-  // one cartridge into the mother's indium store (a whole cartridge or none), the satellite's arm hands it over. A docked daughter
-  // swaps it for her tank (ArmUnit._updateIndiumSwap). Price: launch mass plus indium's own price (indiumCartridgePriceCr).
+  // DECISIONS §4: ion fuel is cast indium, a cartridge, never a fluid: one cartridge into the mother's indium store (whole or
+  // none), the satellite's arm hands it over. A docked daughter swaps it for her tank (ArmUnit._updateIndiumSwap).
+  // Price: launch mass plus indium's own price (indiumCartridgePriceCr).
   { id: 'indium_cartridge', cat: 'Daughters', name: 'Ion-fuel cartridge', cost: indiumCartridgePriceCr(),
     desc: `One cast-indium cartridge (${Math.round(Constants.DAUGHTER_SUPPLY.INDIUM_CARTRIDGE_KG * 1000)} g, a large daughter's full tank) for the daughters' ion thrusters. It goes into your indium store; a docked daughter swaps it in for her tank in about ${Constants.DAUGHTER_SUPPLY.SWAP_GAME_S} s. Salvaged indium goes to the same store.`,
     effect: 'indiumCartridge', value: Constants.DAUGHTER_SUPPLY.INDIUM_CARTRIDGE_KG, maxLevel: Infinity, consumable: true,
     trl: 5, trlRationale: 'Indium FEEP thrusters flew on Gaia and LISA Pathfinder; handing cartridges over in orbit is not yet demonstrated' },
-  // Nets step 3 slice 5 (lane 5a, V6; DECISIONS §33 row 16): a drag sail for letting a big piece go lower. A count in her stock (ResourceSystem.dragSails),
-  // its mass is part of her live mass; bought at the resupply satellite like a net (the trade gate is the same). Used by lane 5d.
+  // Drag sail (DECISIONS §33 row 16) for letting a big piece go lower. A count in her stock (ResourceSystem.dragSails); its mass
+  // is part of her live mass; bought at the resupply satellite like a net (same trade gate).
   { id: 'drag_sail', cat: 'Daughters', name: `Drag sail, ${Constants.BIG_PIECES.SAIL.areaM2} m\u00B2, ${Constants.BIG_PIECES.SAIL.massKg} kg`,
     cost: Constants.BIG_PIECES.SAIL.priceCr,
     desc: `One folded drag sail (${Constants.BIG_PIECES.SAIL.areaM2} m\u00B2, ${Constants.BIG_PIECES.SAIL.massKg} kg; HPS ADEO-L class). Lets a big piece go to come down by itself. Its mass counts in yours.`,
@@ -200,7 +192,7 @@ export const UPGRADES = [
     desc: 'Brittleness warnings', effect: 'kesslerWarning', value: true, maxLevel: 1,
     trl: 7, trlRationale: 'LeoLabs, ExoAnalytic provide real collision-risk alerts; onboard analysis still maturing' },
 
-  // Hull (2) — replaces deleted GNC automation items
+  // Hull (2)
   { id: 'whipple_shield', cat: 'Hull', name: 'Whipple Shield', cost: 1000,
     desc: 'Survive 1 fragment hit', effect: 'shieldHits', value: 1, maxLevel: 1,
     trl: 9, trlRationale: 'Whipple shields flown on ISS and every crewed spacecraft since 1970s' },
@@ -208,14 +200,10 @@ export const UPGRADES = [
     desc: 'Faster daughter docking', effect: 'autoDock', value: 0.5, maxLevel: 1,
     trl: 8, trlRationale: 'Auto-docking flown on Progress, Dragon-2; ADR-specific autonomy still emerging' },
 
-  // Graphene (2) — V4 GSL upgrade path (Sprint D5)
-  // Register item 101 (2026-08-21, owner-ruled RETIRE): `gsl_tether_v4`
-  // (3000 cr, effect 'v4TetherRange' ×6.25 → 12.5 km) retired from the catalog
-  // — the 3000 cr card out-reached the 61 500 cr ladder top (T5 GSL-100, 10 km)
-  // and any later tier purchase LOWERED reach 12.5 → the tier's maxLength with
-  // no warning (last-writer-wins on config.tetherMax, measured in
-  // tmp/i101-tether-overlap.mjs). The ladder's T5 GSL-100 (10 km, 800 N break)
-  // is the doctrine ceiling; the handler + route STAY for owned saves.
+  // Graphene (2)
+  // owner 2026-08-21: `gsl_tether_v4` (3000 cr, effect 'v4TetherRange' ×6.25 → 12.5 km) retired — it out-reached the 61 500 cr
+  // ladder top (T5 GSL-100, 10 km), and any later tier purchase LOWERED reach with no warning (last-writer-wins on
+  // config.tetherMax). The ladder's T5 (10 km, 800 N break) is the ceiling; the handler + route STAY for owned saves.
   { id: 'gsl_net_v4', cat: 'Graphene', name: 'GSL Net v4', cost: 3500,
     desc: '10× capture net area', effect: 'v4NetArea',
     value: Math.sqrt(Constants.V4_NET_SIZE_MULT), maxLevel: 1,
@@ -225,10 +213,8 @@ export const UPGRADES = [
     value: 5.0, maxLevel: 1,
     trl: 3, trlRationale: 'Electrostatic capture demonstrated on CubeSats; 160N force is game-speculative' },
 
-  // Cargo (2) — E2 elevator-throughput fix. The hold caps how much refined
-  // salvage each depot run can deliver to the space-elevator contract. Absolute
-  // capacity targets live in Constants (SSOT); the effect value is the target kg.
-  // Prices are a Phase-4 balance concern (tuned against catalog total).
+  // Cargo (2): the hold caps how much refined salvage each depot run can deliver to the space-elevator contract.
+  // Absolute capacity targets live in Constants (SSOT); the effect value is the target kg.
   { id: 'cargo_bay_2', cat: 'Cargo', name: 'Cargo Bay II', cost: 1800,
     desc: 'Expanded hold: +1,000 kg (500 → 1,500). More salvage per depot run.',
     effect: 'cargoCapacity', value: Constants.CARGO_BAY_TIER2_KG, maxLevel: 1,
@@ -239,17 +225,10 @@ export const UPGRADES = [
     requiresAll: ['cargo_bay_2'],
     trl: 4, trlRationale: 'Large pressurised cargo volumes demonstrated; 3 t ADR hold is game-speculative' },
 
-  // Thermal & Services (2) — category #9, created at P2's first row (P1 ledger
-  // §8; charter .kilo/plans/1787839542000-phase2-flower-hardware-charter.md
-  // TASK G). Purchase IS the gate: the pre-purchase tree renders byte-identical
-  // (no feature flag — the FEATURE_FLAGS pin stays 42). Authored hardware =
-  // ALL 4 stations; the shop stages trim-neutral diagonal PAIRS (S12 ⟂-CoM
-  // 0.0000). Observe-only at P2: draws and slews, throttles nothing — the
-  // thermal loop, PCM bank, and loop-fluid ladder join this category at P3+.
-  // Prices are economy-pass placeholders; the ΔV/mass line SAYS the tax out
-  // loud (§8.1 doctrine; numbers from tmp/flower-mass-budget.mjs §1 — re-run
-  // at the Design 7b pin 25.8 kg/pair: −288.7 / −236.3 m/s, stations
-  // 40/220 · 140/320, the plates fold in two for launch).
+  // Thermal & Services (2) — category #9. Purchase IS the gate (no feature flag; the FEATURE_FLAGS pin stays 42).
+  // Authored hardware = ALL 4 stations; the shop stages trim-neutral diagonal PAIRS (⟂-CoM 0.0000). Observe-only: draws and
+  // slews, throttles nothing. Prices are economy placeholders; the ΔV/mass line SAYS the tax out loud (25.8 kg/pair:
+  // −288.7 / −236.3 m/s, stations 40/220 · 140/320; the plates fold in two for launch).
   { id: 'flower_pair_a', cat: 'Thermal & Services', name: 'Aft Flower — Pair A', cost: 1200,
     desc: 'Two aft-pivot radiator struts at az 40/220 (trim-neutral diagonal): 2.30 m booms, 1.50×0.60 m tri-panel plates that fold in two and lie along the bus for launch, inert tip hardpoints. They open LIKE A FLOWER — O opens them to 146°, and folds them flat to 2°. Mass tax said out loud: +26 kg dry, ΔV 2896 → 2607 m/s at full tanks (−289). Observe-only: radiates nothing yet — the loop refit prices heat later.',
     effect: 'flowerPairA', value: 1, maxLevel: 1,
@@ -262,11 +241,9 @@ export const UPGRADES = [
 ];
 
 /**
- * Recommended-starter highlight (early-shop tension plan). Ordered preference;
- * the shop ⭐-marks the first item here that is (a) un-owned and (b) affordable.
- * The badge persists on early visits until the player owns ANY starter, then
- * fades. Cosmetic only — buying still flows through _purchaseUpgrade.
- * Falls back to Constants.SHOP.RECOMMENDED_STARTERS so tuning lives in one place.
+ * Recommended-starter highlight: ordered preference; the shop ⭐-marks the first item here that is un-owned and affordable.
+ * The badge persists on early visits until the player owns ANY starter. Cosmetic only — buying still flows through
+ * _purchaseUpgrade. Falls back to Constants.SHOP.RECOMMENDED_STARTERS so tuning lives in one place.
  */
 export const STARTER_PREFERENCE =
   (Constants.SHOP && Constants.SHOP.RECOMMENDED_STARTERS)
@@ -281,15 +258,11 @@ const STARTER_WHY = {
 };
 
 /**
- * Pick the recommended starter id: the first preference that is BOTH un-owned
- * and affordable at the given credits. Returns null when none qualify or when
- * the player already owns any starter (the ⭐ has served its purpose).
- * Pure — exported for tests.
+ * Pick the recommended starter id: the first preference that is BOTH un-owned and affordable at the given credits.
+ * Null when none qualify or the player already owns any starter. Pure — exported for tests.
  * @param {Array<{id:string,cost:number}>} upgrades — upgrade catalog
  * @param {Map<string,number>|Set<string>|Iterable} owned — owned upgrade ids
- * @param {number} credits — current spendable credits
  * @param {string[]} [preference] — ordered preference list
- * @returns {string|null}
  */
 export function recommendedStarter(upgrades, owned, credits, preference = STARTER_PREFERENCE) {
   const ownsId = (id) => {
@@ -299,7 +272,6 @@ export function recommendedStarter(upgrades, owned, credits, preference = STARTE
     if (Array.isArray(owned)) return owned.includes(id);
     return false;
   };
-  // Once the player owns any starter, the highlight fades entirely.
   if (preference.some(ownsId)) return null;
   const byId = new Map((upgrades || []).map(u => [u.id, u]));
   for (const id of preference) {
@@ -311,17 +283,13 @@ export function recommendedStarter(upgrades, owned, credits, preference = STARTE
   return null;
 }
 
-// S1 retention: pinned "next upgrade" chase-target math lives in the pure
-// ./shopPin.js module (shared with the HUD, DOM-free). Re-exported here so the
-// existing `../ui/ShopScreen.js` import sites (and tests) keep working.
-// The pin is ONLY ever player-chosen (pinUpgrade/togglePin) — there is no
-// auto-pin: manufacturing a cheapest-item goal the player never chose produced
-// noise like "Extra Cold Gas — READY AT DEPOT" while tanks were already full.
+// Pinned "next upgrade" chase-target math lives in the pure ./shopPin.js (shared with the HUD, DOM-free); re-exported here
+// for the existing import sites. The pin is ONLY ever player-chosen (pinUpgrade/togglePin): an auto-picked cheapest-item
+// goal produced noise like "Extra Cold Gas — READY AT DEPOT" while tanks were already full.
 import { pinProgress } from './shopPin.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 export { pinProgress };
 
-/** Spring tier descriptions for shop display */
 const SPRING_DESCRIPTIONS = [
   "Factory steel springs. Reliable but slow.",
   "Maraging steel. Premium alloy, higher energy storage.",
@@ -330,7 +298,6 @@ const SPRING_DESCRIPTIONS = [
   "Metamaterial quantum lattice. Maximum energy density.",
 ];
 
-/** Tether tier descriptions for shop display */
 export const TETHER_DESCRIPTIONS = [
   "Ultra-strong plastic fibre. Where you start.",
   "A tougher synthetic fibre. More nets, longer tethers.",
@@ -340,9 +307,9 @@ export const TETHER_DESCRIPTIONS = [
 ];
 
 /**
- * The tether card's one stats line (DECISIONS §33 row 5): what the fibre buys, in plain words. Mother nets, then the
- * large and small daughters' nets, then the large daughter's tether length. "6 mother nets, 6 per daughter, 4 km tethers"
- * (both daughters hold the same count since 2026-10-23, DECISIONS §38 row 5; if a row ever differs it reads "3 and 6 per daughter").
+ * The tether card's one stats line (DECISIONS §33 row 5), in plain words: mother nets, then the large and small daughters'
+ * nets, then the large daughter's tether length: "6 mother nets, 6 per daughter, 4 km tethers" (both daughters hold the same
+ * count, DECISIONS §38 row 5; if a row ever differs it reads "3 and 6 per daughter").
  * @param {{nets:{mother:number,large:number,small:number}, maxLength:number}} tier a Constants.TETHER_TIERS row
  */
 export function tetherStatsLine(tier) {
@@ -357,29 +324,27 @@ export class ShopScreen {
     this.element = null;
     this.visible = false;
     this.purchasedUpgrades = new Map(); // upgradeId → level
-    // S1 retention (2026-07-23): the pinned "next upgrade" chase target (id or
-    // null). Persisted via the serialized-upgrade array (sentinel). Drives the
+    // Pinned "next upgrade" chase target (id or null), persisted via the serialized-upgrade array (sentinel); drives the
     // pinned-next-upgrade HUD widget between depots.
     this.pinnedUpgradeId = null;
     this._lastPurchasedId = null; // for flash animation
     this._springTier = 0;  // Current spring tier index (0 = T1 starter)
     this._tetherTier = 0;  // Current tether tier index (0 = T1 starter)
-    // True only while showing the player's first depot visit (set from the
-    // GAME_STATE_CHANGE payload). Drives the one-time first-visit framing + ⭐.
+    // True only while showing the player's first depot visit (from the GAME_STATE_CHANGE payload): drives the one-time
+    // first-visit framing + ⭐.
     this._firstDepotVisit = false;
 
-    // Phase 5: system references for cargo selling
     this._cargoSystem = null;
     this._resourceSystem = null;   // g1-gas-upgrades D5
     this._scoringSystem = null;
     this._contractMassKg = 0;
 
-    // u1-resupply-stop D2 (owner 2026-10-17): buying and selling happen only at the resupply stop. null = no
-    // GameFlowManager wired (bare test rigs trade freely); only `false` refuses. GameFlowManager sets it.
+    // DECISIONS §26: buying and selling happen only at the resupply stop. null = no GameFlowManager wired (bare test rigs trade
+    // freely); only `false` refuses. GameFlowManager sets it.
     this._atResupplyStop = null;
-    /** Nets step 3 slice 3 (S7): the stop is the resupply SATELLITE (flag on, the "where next" list there): the trade refusal names it. */
+    /** The stop is the resupply SATELLITE (flag on, the "where next" list there): the trade refusal names it. */
     this._satelliteStop = false;
-    /** @type {Array<function(boolean|null): void>} u1-resupply-stop D3: panes that word their buttons by the stop (CARGO). */
+    /** @type {Array<function(boolean|null): void>} panes that word their buttons by the stop (CARGO). */
     this._stopListeners = [];
 
     this._injectStyles();
@@ -388,9 +353,8 @@ export class ShopScreen {
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to, firstDepotVisit }) => {
       if (to === GameStates.SHOP) {
-        // GameFlowManager persists FIRST_DEPOT_VISITED before this event fires,
-        // so the flag would already read true here. It passes the pre-write
-        // signal through the payload instead — capture it for refresh() to use.
+        // GameFlowManager persists FIRST_DEPOT_VISITED BEFORE this event fires, so the flag already reads true here; it passes the
+        // pre-write signal through the payload — capture it for refresh() to use.
         this._firstDepotVisit = !!firstDepotVisit;
         this.show();
       } else {
@@ -400,23 +364,16 @@ export class ShopScreen {
     });
   }
 
-  // ========================================================================
-  // Phase 5: System Setters & Contract State
-  // ========================================================================
-
-  /** Set CargoSystem reference for cargo manifest access. */
   setCargoSystem(cs) { this._cargoSystem = cs; }
 
-  /** g1-gas-upgrades D5: ResourceSystem reference — the engine-gas resupply is priced and gated by the tank. */
+  /** ResourceSystem reference — the engine-gas resupply is priced and gated by the tank. */
   setResourceSystem(rs) { this._resourceSystem = rs; }
 
-  /** Set ScoringSystem reference for addCredits. */
   setScoringSystem(ss) { this._scoringSystem = ss; }
 
   /**
-   * u1-resupply-stop D1/D2: GameFlowManager pushes whether the ship is at the resupply stop (a completed mission
-   * or the game-over shop, and no credited catch since). `false` refuses every trade below; `null` (never set)
-   * leaves the shop permissive for bare test rigs.
+   * GameFlowManager pushes whether the ship is at the resupply stop (a completed mission or the game-over shop, and no credited
+   * catch since). `false` refuses every trade below; `null` (never set) leaves the shop permissive for bare test rigs.
    * @param {boolean|null} atStop
    */
   setResupplyStop(atStop) {
@@ -424,40 +381,30 @@ export class ShopScreen {
     const changed = next !== this._atResupplyStop;
     this._atResupplyStop = next;
     if (!changed) return;
-    // A plain callback list, not an EventBus event (no Events.js churn): the CARGO pane repaints its button words.
+    // A plain callback list, not an EventBus event: the CARGO pane repaints its button words.
     // (`|| []`: tests build shops with Object.create(ShopScreen.prototype), which skips the constructor)
     for (const fn of [...(this._stopListeners || [])]) { try { fn(next); } catch (_e) { /* a pane's repaint must not break the flow */ } }
   }
 
   /**
-   * Nets step 3 slice 3 (S7): GameFlowManager says whether the stop is the resupply satellite (FIELDS_BY_HEIGHT on and the list there to
-   * ask on). Only the refusal's words change: away from it every trade is still refused, "at the resupply satellite" instead of "stop".
-   * @param {boolean} on
+   * GameFlowManager says whether the stop is the resupply satellite (FIELDS_BY_HEIGHT on and the list there to ask on). Only the
+   * refusal's words change: away from it every trade is still refused, "at the resupply satellite" instead of "stop".
    */
   setSatelliteStop(on) { this._satelliteStop = !!on; }
 
-  /**
-   * u1-resupply-stop D3: call `fn(atStop)` whenever the stop flag changes (the CARGO pane re-words its buttons).
-   * @param {function(boolean|null): void} fn
-   * @returns {function(): void} unsubscribe
-   */
+  /** Call `fn(atStop)` whenever the stop flag changes (the CARGO pane re-words its buttons). Returns an unsubscribe function. */
   onResupplyStopChange(fn) {
     if (typeof fn !== 'function') return () => {};
     this._stopListeners = [...(this._stopListeners || []), fn];
     return () => { this._stopListeners = (this._stopListeners || []).filter((f) => f !== fn); };
   }
 
-  /**
-   * u1-resupply-stop D2/D3: may credits change hands right now? False only when GameFlowManager has said the
-   * ship is NOT at the resupply stop. The REFIT chips and the CARGO pane read this to word their buttons.
-   * @returns {boolean}
-   */
+  /** May credits change hands right now? False only when GameFlowManager has said the ship is NOT at the resupply stop. */
   canTrade() { return this._atResupplyStop !== false; }
 
   /**
-   * u1-resupply-stop D2: the trade gate. When the ship is mid-mission, plays the deny sound, posts ONE comms
-   * line and returns true (the caller returns without touching credits, upgrades, tiers or cargo).
-   * @returns {boolean} true = refused
+   * The trade gate (DECISIONS §26). Mid-mission: plays the deny sound, posts ONE comms line and returns true (the caller returns
+   * without touching credits, upgrades, tiers or cargo). @returns {boolean} true = refused
    * @private
    */
   _refuseTrade() {
@@ -480,10 +427,6 @@ export class ShopScreen {
   /** Get contract mass (for save serialization). */
   getContractMass() { return this._contractMassKg || 0; }
 
-  // ========================================================================
-  // STYLES
-  // ========================================================================
-
   /** @private Inject CSS for purchase flash animation */
   _injectStyles() {
     if (document.getElementById('shop-flash-style')) return;
@@ -505,10 +448,6 @@ export class ShopScreen {
     `;
     document.head.appendChild(style);
   }
-
-  // ========================================================================
-  // BUILD DOM
-  // ========================================================================
 
   /** @private */
   _build() {
@@ -559,7 +498,6 @@ export class ShopScreen {
     this.element.style.display = 'none';
     this.container.appendChild(this.element);
 
-    // Deploy button
     const deployBtn = this.element.querySelector('#shop-deploy-btn');
     deployBtn.addEventListener('click', () => {
       audioSystem.playClick();
@@ -574,15 +512,10 @@ export class ShopScreen {
       deployBtn.style.boxShadow = 'none';
     });
 
-    // Build and append cargo section
     const cargoSection = this._buildCargoSection();
     const anchor = this.element.querySelector('#shop-cargo-anchor');
     if (anchor) anchor.appendChild(cargoSection);
   }
-
-  // ========================================================================
-  // CARGO SECTION (Phase 5)
-  // ========================================================================
 
   /** @private Build the cargo bay + elevator contract UI section */
   _buildCargoSection() {
@@ -626,7 +559,6 @@ export class ShopScreen {
 
     if (!manifestEl) return;
 
-    // Get cargo from CargoSystem
     const cargoStatus = this._cargoSystem ? this._cargoSystem.getStatus() : null;
 
     if (!cargoStatus || cargoStatus.manifest.length === 0) {
@@ -638,8 +570,7 @@ export class ShopScreen {
       const sellMod = (Constants.MARKET && Constants.MARKET.SELL_PRICE_MODIFIER) || 0.85;
 
       for (const item of cargoStatus.manifest) {
-        // Defensive: skip any malformed manifest entry (missing metalId) rather
-        // than crashing the whole shop on item.metalId.startsWith.
+        // Skip any malformed manifest entry (missing metalId) rather than crashing on item.metalId.startsWith.
         if (!item || typeof item.metalId !== 'string') continue;
         const sellValue = Math.round(item.value * sellMod);
         const isRefined = item.metalId.startsWith('refined_');
@@ -671,7 +602,6 @@ export class ShopScreen {
       if (totalEl) totalEl.textContent = `Total: ${totalValue}¢ (${cargoStatus.totalMassKg}kg / ${cargoStatus.capacityKg}kg)`;
       if (sellBtn) sellBtn.disabled = false;
 
-      // Attach sell handlers
       manifestEl.querySelectorAll('.sell-item-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const metalId = btn.dataset.metalId;
@@ -679,7 +609,6 @@ export class ShopScreen {
         });
       });
 
-      // Attach contribute handlers
       manifestEl.querySelectorAll('.contribute-item-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const metalId = btn.dataset.metalId;
@@ -693,7 +622,6 @@ export class ShopScreen {
       sellBtn.onclick = () => this._sellAllCargo();
     }
 
-    // Elevator progress
     if (elevatorSection) {
       const progress = this._contractMassKg || 0;
       const target = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000;
@@ -714,18 +642,11 @@ export class ShopScreen {
     }
   }
 
-  // ========================================================================
-  // PUBLIC SELL / CONTRIBUTE WRAPPERS (Session K — the CARGO HUD pane)
-  // ========================================================================
-
   /**
-   * Public wrappers over the private sell / contribute paths below. They exist
-   * for the CARGO pane (js/ui/hud/CargoPane.js, Session K): the pane's SELL /
-   * SELL ALL / -> ELEVATOR buttons act through THESE and never touch
-   * CargoSystem.removeMetal directly, so the sale pipeline (ScoringSystem.
-   * processSale), the contract mass, the CONTRACT_UPDATE / CONTRACT_COMPLETE
-   * emits and the market comms stay in one place. Pure delegation: no logic.
-   * @param {string} metalId - manifest metalId to sell in full
+   * Public wrappers over the private sell / contribute paths below, for the CARGO pane (js/ui/hud/CargoPane.js): its SELL /
+   * SELL ALL / -> ELEVATOR buttons act through THESE, never CargoSystem.removeMetal directly, so the sale pipeline
+   * (ScoringSystem.processSale), contract mass, CONTRACT_UPDATE / CONTRACT_COMPLETE emits and market comms stay in one place.
+   * Pure delegation. @param {string} metalId - manifest metalId to sell in full
    */
   sellMetal(metalId) {
     return this._sellCargo(metalId);
@@ -736,19 +657,10 @@ export class ShopScreen {
     return this._sellAllCargo();
   }
 
-  /**
-   * Contribute `massKg` of `metalId` to the space elevator contract — see
-   * `_contributeToElevator` (the win check fires inside).
-   * @param {string} metalId
-   * @param {number} massKg
-   */
+  /** Contribute `massKg` of `metalId` to the space elevator contract — see `_contributeToElevator` (the win check fires inside). */
   contributeToElevator(metalId, massKg) {
     return this._contributeToElevator(metalId, massKg);
   }
-
-  // ========================================================================
-  // SELL / CONTRIBUTE (Phase 5)
-  // ========================================================================
 
   /** @private Sell a single cargo item for credits */
   _sellCargo(metalId) {
@@ -760,9 +672,7 @@ export class ShopScreen {
 
     this._cargoSystem.removeMetal(metalId, item.massKg);
 
-    // E6: single sale-value SSOT. Route through ScoringSystem.processSale
-    // (market spread + bulk bonus + credit + BULK comms) instead of the local
-    // copy that had drifted from the canonical pipeline.
+    // Single sale-value SSOT: ScoringSystem.processSale (market spread + bulk bonus + credit + BULK comms).
     const ss = this._scoringSystem || scoringSystem;
     const credits = (ss && ss.processSale)
       ? ss.processSale({ totalValue: item.value, totalMassKg: item.massKg })
@@ -792,7 +702,6 @@ export class ShopScreen {
       this._cargoSystem.removeMetal(item.metalId, item.massKg);
     }
 
-    // E6: route through the shared sale pipeline (spread + bulk-on-total + credit).
     const ss = this._scoringSystem || scoringSystem;
     const credits = (ss && ss.processSale)
       ? ss.processSale({ totalValue, totalMassKg: totalMass })
@@ -820,11 +729,9 @@ export class ShopScreen {
 
     this._contractMassKg = (this._contractMassKg || 0) + removed;
 
-    // E3: a contribution pays the metal's SELL VALUE (market spread + bulk
-    // bonus — the same credits selling it would earn) PLUS the elevator's
-    // per-kg bonus, which the constant documents as being "on top of selling
-    // price". Before this fix it paid ONLY the 5¢/kg bonus, so contributing
-    // forfeited ~20¢/kg vs selling and the elevator win was strictly dominated.
+    // A contribution pays the metal's SELL VALUE (market spread + bulk bonus: the credits selling it would earn) PLUS the
+    // elevator's per-kg bonus, which Constants documents as "on top of selling price"; paying only the bonus made the elevator
+    // win strictly dominated by selling.
     const perKgValue = (item && item.massKg > 0) ? (item.value / item.massKg) : 0;
     const { saleValue, bonus, payout } = computeContributionPayout(perKgValue * removed, removed);
 
@@ -846,7 +753,6 @@ export class ShopScreen {
       priority: 'info'
     });
 
-    // Check win condition
     if (this._contractMassKg >= target) {
       const winBonus = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.WIN_BONUS) || 50000;
       if (ss && ss.addCredits) {
@@ -866,16 +772,11 @@ export class ShopScreen {
     this.refresh();
   }
 
-  // ========================================================================
-  // REFRESH
-  // ========================================================================
-
   /** Refresh shop with current credits */
   refresh() {
     const creditsEl = this.element.querySelector('#shop-credits');
     if (creditsEl) creditsEl.textContent = scoringSystem.credits.toLocaleString();
 
-    // Show upgrade count
     const upgradeCountEl = this.element.querySelector('#shop-upgrade-count');
     if (upgradeCountEl) {
       let totalOwned = 0;
@@ -887,12 +788,9 @@ export class ShopScreen {
     const catContainer = this.element.querySelector('#shop-categories');
     if (!catContainer) return;
 
-    // First-depot framing + recommended-starter highlight (early-shop tension).
-    // The investment-framing header and ⭐ both key off "first depot visit";
-    // the ⭐ additionally requires the player to own no starter yet. Use the
-    // in-memory signal from GAME_STATE_CHANGE — the persisted FIRST_DEPOT_VISITED
-    // flag is already true by the time the shop renders, so re-reading it here
-    // would never show the framing on the actual first visit.
+    // First-depot framing + recommended-starter ⭐: the investment-framing header and ⭐ key off "first depot visit" (⭐ also
+    // needs no starter owned). Use the in-memory GAME_STATE_CHANGE signal: the persisted FIRST_DEPOT_VISITED flag is already
+    // true when the shop renders.
     const firstDepot = this._firstDepotVisit;
     const noteEl = this.element.querySelector('#shop-firstvisit-note');
     if (noteEl) noteEl.style.display = firstDepot ? 'block' : 'none';
@@ -900,17 +798,12 @@ export class ShopScreen {
       ? recommendedStarter(UPGRADES, this.purchasedUpgrades, scoringSystem.credits)
       : null;
 
-    // Group by category
     const categories = {};
     UPGRADES.forEach(u => {
-      // Net ladder: hide feature-gated items (e.g. Mother net restock) when the
-      // gating flag is off.
+      // Hide feature-gated items (e.g. Mother net restock) when the gating flag is off.
       if (u.requiresFeature && !Constants.isFeatureEnabled(u.requiresFeature)) return;
-      // P2 flower: while FLOWER_PREINSTALLED is ON the hardware is already
-      // aboard at boot (owner ruling 2026-08-27) — hide its purchase rows so
-      // nobody pays credits for installed hardware. P3 flips the flag off and
-      // these rows return as the real gate. (Rows stay in UPGRADES: the
-      // CATALOG_TOTAL_CR SSOT and its pacing pins are catalog-shape facts.)
+      // owner 2026-08-27: while FLOWER_PREINSTALLED is ON the hardware is already aboard at boot — hide its purchase rows so
+      // nobody pays for installed hardware. Rows stay in UPGRADES: CATALOG_TOTAL_CR and its pacing pins are catalog-shape facts.
       if (Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED
           && (u.id === 'flower_pair_a' || u.id === 'flower_pair_b')) return;
       if (!categories[u.cat]) categories[u.cat] = [];
@@ -927,18 +820,15 @@ export class ShopScreen {
       </div>
     `).join('');
 
-    // Append crossbow spring & tether material tier sections
     html += this._renderTierSection('spring', '🛰️ CRADLE SPRINGS', Constants.SPRING_TIERS, SPRING_DESCRIPTIONS, this._springTier);
     html += this._renderTierSection('tether', '🧵 LINE FIBRE', Constants.TETHER_TIERS, TETHER_DESCRIPTIONS, this._tetherTier);
 
     catContainer.innerHTML = html;
 
-    // Inline-glossary affordances: decorated jargon in upgrade/tier descriptions
-    // deep-links to its Tech Library entry (idempotent CSS + delegated click).
+    // Inline-glossary: decorated jargon in descriptions deep-links to its Tech Library entry (idempotent CSS + delegated click).
     ensureGlossaryCss();
     delegateGlossaryClicks(catContainer);
 
-    // Buy button handlers
     catContainer.querySelectorAll('.shop-buy-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const id = btn.dataset.id;
@@ -946,7 +836,6 @@ export class ShopScreen {
       });
     });
 
-    // S1 retention: pin toggle handlers
     catContainer.querySelectorAll('.shop-pin-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -955,7 +844,6 @@ export class ShopScreen {
       });
     });
 
-    // Tier buy button handlers (springs & tethers)
     catContainer.querySelectorAll('.shop-tier-buy-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const tierType = btn.dataset.tierType;
@@ -964,25 +852,18 @@ export class ShopScreen {
       });
     });
 
-    // Apply flash animation to last purchased card
     if (this._lastPurchasedId) {
       const card = catContainer.querySelector(`[data-upgrade-id="${this._lastPurchasedId}"]`)
                 || catContainer.querySelector(`[data-tier-id="${this._lastPurchasedId}"]`);
       if (card) {
         card.classList.add('shop-card-flash');
-        // Remove after animation completes
         setTimeout(() => card.classList.remove('shop-card-flash'), 800);
       }
       this._lastPurchasedId = null;
     }
 
-    // Phase 5: Refresh cargo manifest
     this._refreshCargoManifest();
   }
-
-  // ========================================================================
-  // UPGRADE CARDS
-  // ========================================================================
 
   /** @private Render a single upgrade card */
   _renderUpgradeCard(upgrade, recommendedId = null) {
@@ -991,19 +872,16 @@ export class ShopScreen {
     const price = upgradeCostNow(upgrade, this._resourceSystem);   // g1-gas-upgrades D4: the ONE price accessor
     const canAfford = scoringSystem.credits >= price;
     const isRecommended = recommendedId === upgrade.id;
-    // Prerequisite gate (E5 SSOT): shared with the purchase guard in
-    // _purchaseUpgrade so the render's disabled-state and the actual purchase
-    // enforcement can't drift. Handles requires / requiresAll / requiresFeature.
+    // Prerequisite gate: shared with the purchase guard in _purchaseUpgrade (shopGating) so render and enforcement can't drift.
     const requiresMet = upgradePrereqsMet(upgrade, this.purchasedUpgrades, (f) => Constants.isFeatureEnabled(f));
-    // Consumable restock with no remaining capacity (both Mother pods full) is
-    // unavailable — don't let the player pay for a net that can't be loaded.
+    // Consumable restock with no remaining capacity (both Mother pods full) is unavailable.
     const daughterNetType = DAUGHTER_NET_EFFECT_TYPE[upgrade.effect];
     const consumableFull = (upgrade.effect === 'motherNetRestock'
       && !captureNetSystem.hasMotherPodSpace())
       || (!!daughterNetType && !captureNetSystem.hasDaughterNetSpace(daughterNetType))
       || noRoomFor(upgrade, this._resourceSystem);   // the engine tank, the cold-gas tank, the indium store
     const available = !maxed && canAfford && requiresMet && !consumableFull;
-    // S1 retention: pinnable = gated-open, not-maxed, non-consumable.
+    // Pinnable = gated-open, not-maxed, non-consumable.
     const pinnable = !maxed && requiresMet && !upgrade.consumable && upgrade.maxLevel !== Infinity;
     const isPinned = this.pinnedUpgradeId === upgrade.id;
 
@@ -1011,7 +889,6 @@ export class ShopScreen {
     const borderColor = maxed ? 'rgba(0,255,136,0.2)' : (available ? 'rgba(0,255,136,0.3)' : 'rgba(255,68,68,0.15)');
     const bgColor = maxed ? 'rgba(0,255,136,0.05)' : 'rgba(0,20,40,0.5)';
 
-    // Level indicator for multi-level upgrades (consumables show no level badge).
     const levelBadge = (!upgrade.consumable && upgrade.maxLevel > 1)
       ? `<span style="font-size:0.65rem;color:${maxed ? VisualLaw.COLORS.PLAYER : '#f0c040'};margin-left:6px;
                        padding:1px 5px;border-radius:2px;border:1px solid ${maxed ? 'rgba(0,255,136,0.3)' : 'rgba(240,192,64,0.3)'};
@@ -1019,11 +896,10 @@ export class ShopScreen {
            LVL ${currentLevel}/${upgrade.maxLevel}</span>`
       : (maxed ? `<span style="font-size:0.65rem;color:#00ff88;margin-left:6px;">✓</span>` : '');
 
-    // Cost display with insufficient funds styling
     const costColor = maxed ? 'rgba(0,255,136,0.4)' : (canAfford ? '#f0c040' : '#ff4444');
     const costStrike = !canAfford && !maxed ? 'text-decoration:line-through;opacity:0.6;' : '';
 
-    // ST-6.6 / UX-11 #10: Tech-Level badge — colour-coded, tooltipped with rationale
+    // TRL badge: colour-coded, tooltipped with rationale.
     const trlBadge = (typeof upgrade.trl === 'number')
       ? `<span title="${trlToTechLevelLabel(upgrade.trl, Constants.TRL)}${upgrade.trlRationale ? '\n' + upgrade.trlRationale : ''}"
               style="display:inline-block;margin-left:6px;font-size:0.6rem;font-weight:bold;
@@ -1033,12 +909,12 @@ export class ShopScreen {
                      background:rgba(0,0,0,0.3);">${techLevelBadgeText(upgrade.trl)}</span>`
       : '';
 
-    // Recommended-starter ⭐ badge + one-line "why" (early-shop tension).
+    // Recommended-starter ⭐ badge + one-line "why".
     const starBadge = isRecommended
       ? `<span title="Recommended starter" style="margin-left:6px;font-size:0.75rem;
                color:#f0c040;">★</span>`
       : '';
-    // S1 retention: pin toggle badge (📌) on the name row for pinnable items.
+    // Pin toggle badge (📌) on the name row for pinnable items.
     const pinBadge = pinnable
       ? `<span class="shop-pin-btn" data-pin-id="${upgrade.id}"
               title="${isPinned ? 'Unpin chase target' : 'Pin as next-upgrade goal'}"
@@ -1088,26 +964,14 @@ export class ShopScreen {
     `;
   }
 
-  // ========================================================================
-  // TIER UPGRADE CARDS (Crossbow Springs & Tether Materials)
-  // ========================================================================
-
-  /**
-   * @private Render an entire tier upgrade section (springs or tethers).
-   * @param {string} tierType - 'spring' or 'tether'
-   * @param {string} headerLabel - Section header text
-   * @param {Array} tiers - Tier data from Constants
-   * @param {string[]} descriptions - Human descriptions per tier
-   * @param {number} currentTier - Currently owned tier index
-   */
+  /** @private Render an entire tier section: tierType 'spring' | 'tether'; `tiers` from Constants, `descriptions` per tier. */
   _renderTierSection(tierType, headerLabel, tiers, descriptions, currentTier) {
     const cards = tiers.map((tier, i) =>
       this._renderTierCard(tierType, tier, i, descriptions[i], currentTier)
     ).join('');
 
-    // Register item 100: the "Max X m/s" cards are TRUE now that the dial
-    // ships — the section note names the control (and the tether section names
-    // the reach the tier ladder now drives). The dial default stays 10 m/s.
+    // The "Max X m/s" cards are TRUE: the dial ships, and the section note names the control (tethers: the reach the tier
+    // ladder drives). The dial default stays 10 m/s.
     let sectionNote = '';
     if (tierType === 'spring') {
       sectionNote = '<div style="font-size:0.65rem;color:rgba(0,255,136,0.4);margin-bottom:6px;">The ceiling your cradle can fire at — set the fleet launch speed in flight with [;] down / [\'] up. Hotter shots reload ∝ v².</div>';
@@ -1127,14 +991,7 @@ export class ShopScreen {
     `;
   }
 
-  /**
-   * @private Render a single tier upgrade card.
-   * @param {string} tierType - 'spring' or 'tether'
-   * @param {Object} tier - Tier data object from Constants
-   * @param {number} tierIndex - Index into the tiers array
-   * @param {string} desc - Human-readable description
-   * @param {number} currentTier - Currently owned tier index
-   */
+  /** @private Render a single tier upgrade card (tierType 'spring' | 'tether'; tier from Constants). */
   _renderTierCard(tierType, tier, tierIndex, desc, currentTier) {
     const isOwned = tierIndex < currentTier;
     const isCurrent = tierIndex === currentTier;
@@ -1143,7 +1000,6 @@ export class ShopScreen {
     const canAfford = scoringSystem.credits >= tier.cost;
     const available = isNext && canAfford;
 
-    // Visual states
     let borderColor, bgColor, opacity;
     if (isCurrent) {
       borderColor = 'rgba(0,255,136,0.5)';
@@ -1163,7 +1019,6 @@ export class ShopScreen {
       opacity = 0.35;
     }
 
-    // Stats line differs by tier type
     let statsLine;
     if (tierType === 'spring') {
       statsLine = `Max ${tier.maxSpeed} m/s`;
@@ -1171,7 +1026,6 @@ export class ShopScreen {
       statsLine = tier.nets ? tetherStatsLine(tier) : `${tier.breakStrength}N break · ${(tier.maxLength / 1000).toFixed(0)}km max`;
     }
 
-    // Status badge / action area
     let statusHtml;
     if (isCurrent) {
       statusHtml = `<span style="color:#00ff88;font-size:0.75rem;">▶ EQUIPPED</span>`;
@@ -1180,7 +1034,6 @@ export class ShopScreen {
     } else if (isLocked) {
       statusHtml = `<span style="color:rgba(100,100,100,0.5);font-size:0.75rem;">🔒 LOCKED</span>`;
     } else {
-      // isNext — purchasable
       const costColor = canAfford ? '#f0c040' : '#ff4444';
       const costStrike = !canAfford ? 'text-decoration:line-through;opacity:0.6;' : '';
       statusHtml = `
@@ -1222,18 +1075,10 @@ export class ShopScreen {
     `;
   }
 
-  // ========================================================================
-  // PURCHASE
-  // ========================================================================
-
   /**
-   * Public one-click purchase — the Wave-5 (2) REFIT pane's BUY path
-   * (docs/ladder/08-workbench.md §2: "Buying is one click … no browser
-   * confirm(), no undo"). u1-resupply-stop D2 (owner 2026-10-17): buying
-   * happens only at the resupply stop — the gate is in the private flow below,
-   * so a pane buy and a depot buy are refused alike mid-mission. Runs the EXACT private flow below (maxLevel gate, the E5
-   * shopGating prereq guard, wallet spend, UPGRADE_PURCHASED emit, refresh),
-   * so a pane buy and a depot buy are indistinguishable; the pane then
+   * Public one-click purchase — the REFIT pane's BUY path (docs/ladder/08-workbench.md: one click, no browser confirm(), no undo).
+   * Runs the EXACT private flow below (maxLevel gate, shopGating prereq guard, wallet spend, UPGRADE_PURCHASED emit, refresh),
+   * so a pane buy and a depot buy are indistinguishable and both are refused mid-mission (DECISIONS §26). The pane then
    * re-renders from purchasedUpgrades/credits truth.
    * @param {string} upgradeId
    */
@@ -1245,8 +1090,8 @@ export class ShopScreen {
     if (!upgrade) return;
     if (this._refuseTrade()) return;   // u1-resupply-stop D2: no store in the middle of space
 
-    // Consumables (e.g. Mother Large Net restock) are repeatable — no maxLevel
-    // gate, no ownership record. They just spend credits and emit the effect.
+    // Consumables (e.g. Mother Large Net restock) are repeatable — no maxLevel gate, no ownership record; they just spend
+    // credits and emit the effect.
     if (upgrade.consumable) {
       if (upgrade.requiresFeature && !Constants.isFeatureEnabled(upgrade.requiresFeature)) return;
       // Don't charge for a net that can't be loaded (both pods already full).
@@ -1260,12 +1105,12 @@ export class ShopScreen {
         audioSystem.playDeny();
         return;
       }
-      // g1-gas-upgrades D4: nor for gas that has no room in the tank (free < 0.1 kg)
+      // Nor for gas that has no room in the tank (free < 0.1 kg)
       if (upgrade.effect === 'engineGasResupply' && engineTankFull(this._resourceSystem)) {
         audioSystem.playDeny();
         return;
       }
-      // lane 3f: nor for nitrogen that has no room in the cold-gas tank (free < 0.1 kg), nor a cartridge the indium store cannot take
+      // Nor for nitrogen with no room in the cold-gas tank (free < 0.1 kg), nor a cartridge the indium store cannot take
       if ((upgrade.effect === 'coldGasResupply' || upgrade.effect === 'indiumCartridge') && noRoomFor(upgrade, this._resourceSystem)) {
         audioSystem.playDeny();
         if (upgrade.effect === 'indiumCartridge') {            // one plain line: the store takes whole cartridges only
@@ -1295,10 +1140,7 @@ export class ShopScreen {
     const currentLevel = this.purchasedUpgrades.get(upgradeId) || 0;
     if (currentLevel >= upgrade.maxLevel) return;
 
-    // E5: enforce prerequisites at PURCHASE time, not just in the render's
-    // disabled-state. Without this a mis-ordered / scripted buy could acquire a
-    // locked upgrade (e.g. graphene_supercap before solid_state_battery) and
-    // spend the credits anyway. Refuse before charging — wallet untouched.
+    // Prerequisites are enforced at PURCHASE time (shopGating), not just in the render. Refuse before charging — wallet untouched.
     if (!upgradePrereqsMet(upgrade, this.purchasedUpgrades, (f) => Constants.isFeatureEnabled(f))) {
       audioSystem.playDeny();
       return;
@@ -1313,14 +1155,12 @@ export class ShopScreen {
     this._lastPurchasedId = upgradeId; // trigger flash on next refresh
     audioSystem.playPurchase();
 
-    // S1 retention: clear the pin when the pinned item is purchased (or once it
-    // reaches maxLevel); the HUD re-advances to a fresh chase target on next hide.
+    // Clear the pin when the pinned item is purchased (or reaches maxLevel); the HUD re-advances on next hide.
     if (this.pinnedUpgradeId === upgradeId) {
       this.pinnedUpgradeId = null;
       this._emitPinnedUpgrade();
     }
 
-    // Emit upgrade event for game to apply
     eventBus.emit(Events.UPGRADE_PURCHASED, {
       id: upgradeId,
       effect: upgrade.effect,
@@ -1328,15 +1168,10 @@ export class ShopScreen {
       level: currentLevel + 1,
     });
 
-    // Refresh display (will apply flash animation)
     this.refresh();
   }
 
-  /**
-   * @private Purchase a tier upgrade (spring or tether).
-   * @param {string} tierType - 'spring' or 'tether'
-   * @param {number} tierIndex - Target tier index
-   */
+  /** @private Purchase a tier upgrade (tierType 'spring' | 'tether'). */
   _purchaseTierUpgrade(tierType, tierIndex) {
     const tiers = tierType === 'spring' ? Constants.SPRING_TIERS : Constants.TETHER_TIERS;
     const currentTier = tierType === 'spring' ? this._springTier : this._tetherTier;
@@ -1352,7 +1187,6 @@ export class ShopScreen {
       return;
     }
 
-    // Advance to new tier
     if (tierType === 'spring') {
       this._springTier = tierIndex;
     } else {
@@ -1362,7 +1196,7 @@ export class ShopScreen {
     this._lastPurchasedId = `${tierType}-${tierIndex}`; // trigger flash on next refresh
     audioSystem.playPurchase();
 
-    // Emit upgrade event — ArmManager.applyUpgrade() handles springTier / tetherTier
+    // ArmManager.applyUpgrade() handles springTier / tetherTier
     eventBus.emit(Events.UPGRADE_PURCHASED, {
       type: tierType === 'spring' ? 'springTier' : 'tetherTier',
       effect: tierType === 'spring' ? 'springTier' : 'tetherTier',
@@ -1375,15 +1209,7 @@ export class ShopScreen {
     this.refresh();
   }
 
-  // ========================================================================
-  // PUBLIC API
-  // ========================================================================
-
-  /**
-   * Get purchased upgrade IDs as a serializable array for persistence.
-   * Multi-level upgrades appear multiple times (once per level).
-   * @returns {string[]}
-   */
+  /** Purchased upgrade IDs as a serializable array; multi-level upgrades appear once per level. */
   getSerializableUpgrades() {
     const ids = [];
     for (const [id, level] of this.purchasedUpgrades) {
@@ -1391,19 +1217,15 @@ export class ShopScreen {
         ids.push(id);
       }
     }
-    // Serialize tier upgrades (tier 0 is free starter, store purchased tiers)
+    // Tier upgrades (tier 0 is the free starter; store purchased tiers)
     for (let i = 0; i < this._springTier; i++) ids.push('_springTier');
     for (let i = 0; i < this._tetherTier; i++) ids.push('_tetherTier');
-    // S1 retention: persist the pinned chase target as a sentinel token so it
-    // survives save/load through the existing upgrade-array channel.
+    // Persist the pinned chase target as a sentinel token so it survives save/load through the upgrade-array channel.
     if (this.pinnedUpgradeId) ids.push(`__pin__${this.pinnedUpgradeId}`);
     return ids;
   }
 
-  /**
-   * Restore purchases from a saved array of upgrade IDs.
-   * @param {string[]} upgradeIds - Array of upgrade IDs (duplicates = multi-level)
-   */
+  /** Restore purchases from a saved array of upgrade IDs (duplicates = multi-level). */
   restorePurchases(upgradeIds) {
     this.purchasedUpgrades.clear();
     this._springTier = 0;
@@ -1432,9 +1254,8 @@ export class ShopScreen {
   }
 
   /**
-   * Iterate all purchased upgrades, calling the callback with the full
-   * upgrade data object for each level purchased. Used to re-apply
-   * effects after restoring from a save.
+   * Iterate all purchased upgrades, calling the callback with the upgrade row once per level purchased (re-applies effects
+   * after a save restore).
    * @param {function({id:string, effect:string, value:*, level:number}):void} callback
    */
   forEachPurchasedUpgrade(callback) {
@@ -1450,7 +1271,6 @@ export class ShopScreen {
         });
       }
     }
-    // Re-apply tier upgrades on restore
     if (this._springTier > 0) {
       callback({ id: '_springTier', effect: 'springTier', value: this._springTier, level: this._springTier });
     }
@@ -1472,8 +1292,8 @@ export class ShopScreen {
   }
 
   /**
-   * Lane 3d: with the map on the header says "RESUPPLY SATELLITE" (the game-over continue shop is the one full-screen shop that
-   * still opens then: the workbench replaces it in play). Map off: the markup is never touched.
+   * With the map on the header says "RESUPPLY SATELLITE" (the game-over continue shop is the one full-screen shop that still
+   * opens then). Map off: the markup is never touched.
    * @private
    */
   _applyTitle() {
@@ -1488,9 +1308,7 @@ export class ShopScreen {
 
   hide() {
     this.visible = false;
-    // S1 retention: broadcast the current (player-chosen) pin so the HUD widget
-    // shows live progress until the next depot. No auto-pin: if the player
-    // never pinned anything, nothing is manufactured here.
+    // Broadcast the current (player-chosen) pin so the HUD widget shows live progress; no auto-pin.
     this._emitPinnedUpgrade();
     this.element.style.opacity = '0';
     setTimeout(() => {
@@ -1498,15 +1316,7 @@ export class ShopScreen {
     }, 300);
   }
 
-  // ========================================================================
-  // S1 retention: pinned "next upgrade" chase target
-  // ========================================================================
-
-  /**
-   * Resolve the pinned upgrade catalog row, or null if unset/stale/maxed.
-   * Pure read — does NOT mutate `pinnedUpgradeId` (use `_clearStalePin()` to
-   * drop an invalid pin).
-   */
+  /** Resolve the pinned catalog row, or null if unset/stale/maxed. Pure read — does NOT mutate `pinnedUpgradeId` (use `_clearStalePin()`). */
   getPinnedUpgrade() {
     if (!this.pinnedUpgradeId) return null;
     const u = UPGRADES.find((x) => x.id === this.pinnedUpgradeId);
@@ -1523,12 +1333,7 @@ export class ShopScreen {
     }
   }
 
-  /**
-   * Pin (or re-pin) an upgrade as the chase target. Only gated-open, not-maxed,
-   * non-consumable items are pinnable. Emits UPGRADE_PINNED.
-   * @param {string} id
-   * @returns {boolean} whether the pin was set
-   */
+  /** Pin (or re-pin) an upgrade as the chase target (only gated-open, not-maxed, non-consumable items); emits UPGRADE_PINNED. Returns whether set. */
   pinUpgrade(id) {
     const u = UPGRADES.find((x) => x.id === id);
     if (!u || u.consumable || u.maxLevel === Infinity) return false;

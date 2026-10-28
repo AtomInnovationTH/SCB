@@ -1,13 +1,9 @@
 /**
- * SettingsManager.js — Lightweight persistent user preferences.
+ * SettingsManager.js — persistent user preferences (load in ctor, save on change). Singleton `settingsManager`.
  *
- * Stored in its OWN localStorage key (`sc_settings_v1`), deliberately separate
- * from the game save (`spacecowboy_save_v1`). That save is wiped by
- * `persistenceManager.deleteSave()` on every New Game, so a preference like the
- * chosen language must NOT live there — it belongs to the player, not the run.
- *
- * Mirrors the small self-persisting pattern used by CityLabels (load in ctor,
- * save on change). Singleton export `settingsManager`.
+ * Stored in its OWN localStorage key (`sc_settings_v1`), separate from the game save (`spacecowboy_save_v1`):
+ * `persistenceManager.deleteSave()` wipes the save on every New Game, and a preference like language belongs to
+ * the player, not the run.
  *
  * @module systems/SettingsManager
  */
@@ -19,7 +15,7 @@ import { StorageKeys } from '../core/StorageKeys.js';
 
 const SETTINGS_KEY = StorageKeys.SETTINGS;
 
-/** Guidance preference values. 'auto' = behavior-driven (GuidanceDirector). */
+/** 'auto' = behavior-driven (GuidanceDirector). */
 const GUIDANCE_VALUES = ['auto', 'GUIDED', 'POINTERS', 'MINIMAL'];
 
 class SettingsManager {
@@ -29,7 +25,7 @@ class SettingsManager {
     this._load();
   }
 
-  /** @private Load + validate from localStorage (private-mode safe). */
+  /** @private Validated load; private-mode safe. */
   _load() {
     try {
       if (typeof localStorage === 'undefined') return;
@@ -46,9 +42,8 @@ class SettingsManager {
         if (typeof parsed.autolock === 'boolean') {
           this._settings.autolock = parsed.autolock;
         }
-        // Session O (plan D11, owner 2026-09-07): the 6-key constellation
-        // choice rides the same blob — only real booleans are accepted, anything
-        // else keeps the OFF default (a fresh profile starts clean).
+        // owner 2026-09-07: constellations default OFF (same as the Starfield ships); only real booleans accepted,
+        // anything else keeps the OFF default (a fresh profile starts clean).
         if (typeof parsed.constellations === 'boolean') {
           this._settings.constellations = parsed.constellations;
         }
@@ -56,7 +51,7 @@ class SettingsManager {
     } catch (_) { /* corrupt / blocked storage — keep defaults */ }
   }
 
-  /** @private Persist current settings (non-fatal on failure). */
+  /** @private Non-fatal on failure. */
   _save() {
     try {
       if (typeof localStorage === 'undefined') return;
@@ -64,25 +59,17 @@ class SettingsManager {
     } catch (_) { /* private mode / quota — ignore */ }
   }
 
-  /** @returns {string} The active language code (always a supported code). */
+  /** @returns {string} Active language code (always a supported code). */
   getLanguage() {
     return this._settings.language;
   }
 
-  /**
-   * @returns {import('../core/Languages.js').LanguageEntry} Full active entry
-   *          (flag + start city + labels).
-   */
+  /** @returns {import('../core/Languages.js').LanguageEntry} Full active entry (flag + start city + labels). */
   getLanguageEntry() {
     return getLanguage(this._settings.language);
   }
 
-  /**
-   * Set the active language. Persists and (when it actually changed) emits
-   * Events.LANGUAGE_CHANGED with the resolved entry.
-   * @param {string} code
-   * @returns {boolean} true if the value changed
-   */
+  /** Persists; emits Events.LANGUAGE_CHANGED (with the resolved entry) only on a change. @returns {boolean} changed */
   setLanguage(code) {
     if (!isSupportedLanguage(code) || code === this._settings.language) return false;
     this._settings.language = code;
@@ -91,20 +78,12 @@ class SettingsManager {
     return true;
   }
 
-  /**
-   * @returns {string} Guidance preference: 'auto' (behavior-driven) or a pinned
-   *          level ('GUIDED' | 'POINTERS' | 'MINIMAL').
-   */
+  /** @returns {string} 'auto' (behavior-driven) or a pinned level ('GUIDED' | 'POINTERS' | 'MINIMAL'). */
   getGuidance() {
     return this._settings.guidance || 'auto';
   }
 
-  /**
-   * Set the guidance preference. 'auto' returns control to the behavior-driven
-   * GuidanceDirector; a level pins it. Persists + emits GUIDANCE_LEVEL_CHANGED.
-   * @param {string} value
-   * @returns {boolean} true if the value changed
-   */
+  /** 'auto' returns control to GuidanceDirector; a level pins it. Persists + emits GUIDANCE_LEVEL_CHANGED. @returns {boolean} changed */
   setGuidance(value) {
     if (!GUIDANCE_VALUES.includes(value) || value === this._settings.guidance) return false;
     this._settings.guidance = value;
@@ -116,17 +95,12 @@ class SettingsManager {
     return true;
   }
 
-  /** @returns {boolean} whether the front-arc autolock assist is enabled. */
+  /** @returns {boolean} whether the front-arc autolock assist is enabled (missing value = true). */
   getAutolock() {
     return this._settings.autolock !== false;
   }
 
-  /**
-   * Enable/disable the front-arc autolock assist. Persists + emits a settings
-   * event the AutoLockController honors.
-   * @param {boolean} on
-   * @returns {boolean} true if the value changed
-   */
+  /** Persists + emits AUTOLOCK_SETTING_CHANGED (AutoLockController honors it). @returns {boolean} changed */
   setAutolock(on) {
     const v = !!on;
     if (v === this._settings.autolock) return false;
@@ -139,24 +113,15 @@ class SettingsManager {
   }
 
   /**
-   * @returns {boolean} whether the constellation outlines + labels are shown.
-   *  Session O (plan D11, owner 2026-09-07): the OFF default is the SAME
-   *  effective default the Starfield ships (objects born hidden), so the menu
-   *  backdrop — which is this same live sky — is clean too (global by design,
-   *  plan §9). The default is `false`, so unlike getAutolock there is no
-   *  legacy missing-value fallback to true.
+   * @returns {boolean} whether the constellation outlines + labels are shown. The OFF default matches what Starfield
+   *  ships (objects born hidden), so the menu backdrop (the same live sky) is clean too. Unlike getAutolock there is
+   *  no missing-value fallback to true.
    */
   getConstellations() {
     return !!this._settings.constellations;
   }
 
-  /**
-   * Enable/disable the constellation outlines + labels. Persists + returns
-   * whether the value actually changed. Emits NO event — a calmer default,
-   * nothing listens (Session O, plan D11, owner 2026-09-07).
-   * @param {boolean} on
-   * @returns {boolean} true if the value changed
-   */
+  /** Persists. Emits NO event (nothing listens). @returns {boolean} changed */
   setConstellations(on) {
     const v = !!on;
     if (v === this._settings.constellations) return false;

@@ -1,5 +1,5 @@
 /**
- * PieceClaim - launch interlocks phase 2 (lane interlocks-p2, owner 2026-10-22, docs/research/2026-10-launch-interlocks.md).
+ * PieceClaim - launch interlocks (owner 2026-10-22; archive/research/2026-10-launch-interlocks.md).
  *
  * One rule, "a piece has one owner". `pieceClaim(piece, world)` answers who owns a piece right now:
  *   - a daughter flying to it (LAUNCHING, TRANSIT, APPROACH),
@@ -8,12 +8,12 @@
  *   - a mother net or the small net (lasso) flying at it,
  *   - a catch already held (flagged captured / pinned, or a daughter carrying it);
  *   else free.
- * The pure line helpers live here too: `linesCross` (two daughter lines swap sides, the t4 harness's test) and
- * `lineWrapsShip` (a daughter's line runs through the hull, read off the ship keep-out passed in).
- * The player's words for each refusal are built here, so every caller (keys, tests, touch) says the same thing.
+ * The pure line helpers live here too: `linesCross` (two daughter lines swap sides) and `lineWrapsShip` (a daughter's
+ * line runs through the hull, read off the ship keep-out passed in). The player's words for each refusal are built
+ * here, so every caller (keys, tests, touch) says the same thing.
  *
  * Imports only core modules (as TransferTrip.js does), so ArmManager, ArmUnit, InputManager, LassoSystem and
- * AutopilotSystem can all call it without an import cycle. Everything else is passed in.
+ * AutopilotSystem can call it without an import cycle. Everything else is passed in.
  *
  * Player text rule (owner 2026-10-20): lead with what to do, then why; no "can't" / "no" / "not" where a positive
  * wording exists. Daughter names are the ones the game prints ("Small 1", "Large 2").
@@ -22,13 +22,12 @@
  */
 
 import { Constants } from '../core/Constants.js';
-// F16: a leaf module (imports nothing), so it adds no cycle; every line below that names a key reads the glass flag when it is built.
+// Leaf module (imports nothing), so no cycle; every line below that names a key reads the glass flag when it is built.
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { degToRad } from '../core/MathUtil.js';
 
 const S = Constants.ARM_STATES;
 
-/** Who owns a piece. */
 export const CLAIM = Object.freeze({
   FREE: 'free',
   FLYING: 'flying',     // a daughter is flying to it (launch, transit, final approach)
@@ -45,17 +44,17 @@ const FLYING_STATES = new Set([S.UNDOCKING, S.LAUNCHING, S.TRANSIT, S.APPROACH])
 const HOLDING_STATES = new Set([S.STATION_KEEP]);
 const WORKING_STATES = new Set([S.NETTING, S.MAGNETIC_GRAPPLE, S.GRIPPER_GRAPPLE, S.PAD_CONTACT]);
 
-/** Net states in which the net has not yet caught or given up: it is still on its way to the piece. */
+/** Net states in which the net is still on its way to the piece (not yet caught or given up). */
 const NET_FLYING_STATES = new Set(['LAUNCHING', 'SPINNING_UP', 'FLIGHT', 'CONTACT', 'BRAKE', 'ENVELOP', 'CINCH_CLOSING', 'SECURE_CHECK']);
 
-/** The same piece: identical object, or the same id (a Tab-selected snapshot vs the field's live object). */
+/** Identical object, or the same id (a Tab-selected snapshot vs the field's live object). */
 export function samePiece(a, b) {
   if (!a || !b) return false;
   if (a === b) return true;
   return a.id !== undefined && a.id !== null && a.id === b.id;
 }
 
-/** A piece that is already caught, or gone. */
+/** Already caught, or gone. */
 export function pieceIsCaught(piece) {
   return !!piece && (piece._captured === true || piece._armPinned === true || !!piece._capturedByArm);
 }
@@ -79,7 +78,7 @@ export function pieceClaim(piece, world, opts) {
     if (!a || a === except) continue;
     const st = a.state;
     if (st === S.DOCKED) {
-      // waiting to launch: the claim target is set when the launch is requested and only counts while her reservation lives
+      // Waiting to launch: the claim target is set at the launch request and counts only while her reservation lives
       const live = a._aimReserved === true || (world.pending && typeof world.pending.has === 'function' && world.pending.has(i));
       if (live && samePiece(a._claimTarget, piece)) return { kind: CLAIM.WAITING, arm: a, armIndex: i };
       continue;
@@ -104,7 +103,7 @@ export function pieceClaim(piece, world, opts) {
   }
 
   if (pieceIsCaught(piece)) {
-    // A catch the daughters hold on their racks is theirs: name her when she is the holder.
+    // A catch on a daughter's rack is hers: name her
     for (let i = 0; i < arms.length; i++) {
       const a = arms[i];
       if (!a || a === except) continue;
@@ -117,16 +116,11 @@ export function pieceClaim(piece, world, opts) {
   return FREE_CLAIM;
 }
 
-/** True when nobody owns the piece. */
 export function isFree(claim) {
   return !claim || claim.kind === CLAIM.FREE;
 }
 
-/**
- * Is a mother net (or the small net) still FLYING - not yet caught, not reeling a catch in? Used for the true reason the
- * ship holds still (R9): "a net is out" versus "a catch is reeling in".
- * @param {{nets?: object[], lasso?: (object|null)}} world
- */
+/** Is a mother net (or the small net) still FLYING, not yet caught or reeling a catch in? Gives the true reason the ship holds still. */
 export function netIsOut(world) {
   if (!world) return false;
   const nets = Array.isArray(world.nets) ? world.nets : [];
@@ -139,28 +133,24 @@ export function netIsOut(world) {
   return !!(ls && ls.active === true && ls._reelingIn !== true);
 }
 
-// ── the player's words ─────────────────────────────────────────────────────────────────────────────────────────
-
 /**
- * F16 (third review): a touch player has no Tab. Picking another piece is a tap on it (the same words chipPhrase uses for
- * "Press T for next target"), so a line that says "Tab to ..." says "Tap ..." on glass. The "Press N / D / S / R" parts stay as
- * they are: CommsSystem runs every line through `GestureHints.chipPhrase`, which turns them into the chip names.
- * @param {string} desktop  the keyboard wording
- * @param {string} glass    the touch wording
+ * A touch player has no Tab: picking another piece is a tap on it (the words chipPhrase uses for "Press T for next
+ * target"), so "Tab to ..." says "Tap ..." on glass. The "Press N / D / S / R" parts stay: CommsSystem runs every line
+ * through `GestureHints.chipPhrase`, which turns them into the chip names.
  */
 const forInput = (desktop, glass) => (GestureHints.isGlass() ? glass : desktop);
 
 const nameOf = (claim) => (claim && claim.arm && claim.arm.displayName) || 'A daughter';
 
-/** The plain word for the tool N would work for this daughter (F8). Null when it is not known: the line then says "tool". */
+/** The plain word for the tool N would work for this daughter; null when unknown (the line then says "tool"). */
 const TOOL_WORD = { NET: 'net', PAD: 'pad', MAGNET: 'magnet', GRIPPER: 'gripper' };
 export function toolWord(arm) {
   return (arm && TOOL_WORD[arm.selectedTool]) || null;
 }
 
 /**
- * The line for a DAUGHTER launch (D, Shift+D, Shift+A, the number keys) at an owned piece. Null for a free piece.
- * A daughter who HOLDS the piece names the tool N would work for her (net, pad, magnet, gripper; "tool" when unknown).
+ * The line for a DAUGHTER launch (D, Shift+D, Shift+A, the number keys) at an owned piece; null for a free piece.
+ * A daughter who HOLDS the piece names the tool N would work for her.
  * @param {{kind:string, arm:object|null}} claim from `pieceClaim`
  */
 export function launchRefusalLine(claim) {
@@ -178,8 +168,8 @@ export function launchRefusalLine(claim) {
 }
 
 /**
- * The line for a NET (N, the small net / lasso, the large net) at an owned piece. Null for a free piece.
- * (A daughter HOLDING the piece is normally answered by N working her tool before it gets here.)
+ * The line for a NET (N, the small net / lasso, the large net) at an owned piece; null for a free piece.
+ * (N normally works a HOLDING daughter's tool before it gets here.)
  */
 export function netRefusalLine(claim) {
   if (!claim) return null;
@@ -197,22 +187,22 @@ export function netRefusalLine(claim) {
 
 const WHY_PIECE = { gone: 'her piece is gone', caught: 'her piece is caught already', taken: 'her piece is taken already' };
 
-/** R4: a daughter flying to a piece that was caught or lost turns round. `why`: 'gone' | 'caught' | 'taken'. */
+/** A daughter flying to a piece that was caught or lost turns round. `why`: 'gone' | 'caught' | 'taken'. */
 export function pieceLostLine(who, why) {
   return `${who} coming home: ${WHY_PIECE[why] || WHY_PIECE.caught}.`;
 }
 
-/** R4: a launch that waited to fire finds its piece taken at the spring: she stays docked. */
+/** A launch that waited to fire finds its piece taken at the spring: she stays docked. */
 export function launchDroppedLine(who, why) {
   return `${who} stays docked: ${WHY_PIECE[why] || WHY_PIECE.caught}. ${forInput('Tab to the next piece', 'Tap another piece')}, then press D.`;
 }
 
-/** R5 at the spring: the ship has turned since the strut was picked and her line would now cross another daughter's. */
+/** At the spring: the ship has turned since the strut was picked and her line would now cross another daughter's. */
 export function launchCrossDroppedLine(who, otherWho) {
   return `${who} stays docked: her line would cross ${otherWho}'s. ${forInput('Tab to another piece', 'Tap another piece')}, then press D.`;
 }
 
-// ── pair shot (owner 2026-10-25 "2 a"; plan daughter-pairs-1025 S2): the lines of the Q key, plain words ─────────────────────────
+// Pair shot (the Q key; owner 2026-10-25 "2 a"): plain words.
 
 /** A pair is offered: said once per pair. `missDeg`: the larger of the two launch lines' misses, rounded. */
 export function pairReadyLine(missDeg) {
@@ -224,7 +214,7 @@ export function pairNoneLine() {
   return `No pair shot is ready. Pick a daughter and a piece first: a second piece is marked when two fit. ${forInput('D', 'SEND DAUGHTER')} launches one daughter alone.`;
 }
 
-/** S3: a daughter's catch is in its cell and her partner's is not yet: she waits so both reel in together (said once per pair). */
+/** A daughter's catch is in its cell and her partner's is not yet: she waits so both reel in together (said once per pair). */
 export function pairHoldLine() {
   return 'Holding the catch so both daughters reel in together.';
 }
@@ -275,8 +265,8 @@ export function pairStrutLine(who) {
 }
 
 /**
- * R5: the number key picked a strut whose line would cross another daughter's, and a clear one exists.
- * F11: on glass there are no number keys: a daughter is picked by a tap on her row in DAUGHTERS and sent with the
+ * The number key picked a strut whose line would cross another daughter's, and a clear one exists.
+ * On glass there are no number keys: a daughter is picked by a tap on her row in DAUGHTERS and sent with the
  * SEND DAUGHTER chip (GestureHints Digit1-4 / CHIP_LABELS.D), so a glass player is told that (`glassName`: her name).
  * @param {number} clearStrutNumber 1-4
  * @param {string} otherWho the daughter whose line would be crossed
@@ -287,19 +277,19 @@ export function crossNamedStrutLine(clearStrutNumber, otherWho, glassName) {
   return `Press ${clearStrutNumber}, then D: strut ${clearStrutNumber}'s line stays clear of ${otherWho}'s.`;
 }
 
-/** R5: every free strut's line would cross. */
+/** Every free strut's line would cross. */
 export function crossNoneClearLine(otherWho) {
   return `Press R to bring ${otherWho} home first: every free strut's line would cross hers.`;
 }
 
-/** R7: a mother turn for a net would wrap a daughter's line round the ship. */
+/** A mother turn for a net would wrap a daughter's line round the ship. */
 export function wrapRefusalLine(who) {
   return `Press R to bring ${who} home, or pick a piece in front: her line would wrap the ship.`;
 }
 
 /**
- * F12/F13 (second review): the true reason each group of daughters stayed docked after a send. Built by
- * `ArmManager._whyStayed`; every count is a number of DAUGHTERS, and they add up to `stayed`.
+ * The true reason each group of daughters stayed docked after a send. Built by `ArmManager._whyStayed`; every count
+ * is a number of DAUGHTERS, and they add up to `stayed`.
  * @typedef {object} StayWhy
  * @property {number} ranOut   no free piece was left for her (more daughters than pieces)
  * @property {number} cross    every piece she reaches would take her line across a line already out
@@ -307,8 +297,8 @@ export function wrapRefusalLine(who) {
  * @property {number} reach    every piece left is past her tether
  * @property {number} heavy    every piece left is heavier than she holds
  * @property {number} [other]   she reaches and holds a piece on a clear line, but was not sent (a reason already said)
- * @property {boolean} [reachSeen] F19: some stayed daughter has a piece left that is past her tether (whatever group she is in)
- * @property {boolean} [heavySeen] F19: some stayed daughter has a piece left that is heavier than she holds
+ * @property {boolean} [reachSeen] some stayed daughter has a piece left that is past her tether (whatever group she is in)
+ * @property {boolean} [heavySeen] some stayed daughter has a piece left that is heavier than she holds
  */
 const stayVerb = (n) => (n === 1 ? '1 stays' : `${n} stay`);
 const possessives = (names) => {
@@ -317,11 +307,7 @@ const possessives = (names) => {
   return p.length === 1 ? p[0] : `${p.slice(0, -1).join(', ')} and ${p[p.length - 1]}`;
 };
 
-/**
- * The sentences that say why daughters stayed docked, one per group that has members; '' when none stayed. Positive words,
- * the way out in each ("Press R ...", "Tab to ..."). `ranOut` keeps its earlier wording.
- * @param {StayWhy|null} why
- */
+/** The sentences saying why daughters stayed docked, one per group with members; '' when none stayed. Positive words, the way out in each. */
 export function stayedLine(why) {
   if (!why) return '';
   const parts = [];
@@ -338,11 +324,8 @@ export function stayedLine(why) {
 }
 
 /**
- * B4: how many daughters a one-per-piece send put out, and (F13) why the rest stayed docked. Without `why` every daughter
- * that stayed is counted as "no free piece left", the earlier wording.
- * @param {number} sent
- * @param {number} stayed
- * @param {StayWhy|null} [why]
+ * How many daughters a one-per-piece send put out, and why the rest stayed docked.
+ * Without `why` every stayed daughter counts as "no free piece left".
  */
 export function fanOutLine(sent, stayed, why) {
   const head = sent === 1 ? '1 daughter sent.' : `${sent} daughters sent, one per piece.`;
@@ -351,23 +334,23 @@ export function fanOutLine(sent, stayed, why) {
   return tail ? `${head} ${tail}` : head;
 }
 
-/** B4: a one-per-piece send found no free piece (every one has a daughter, a net or a catch). */
+/** A one-per-piece send found no free piece (every one has a daughter, a net or a catch). */
 export const FAN_OUT_NONE_LINE = 'Tab to a free piece: every piece in reach already has a daughter or a net.';
 
-/** F16: the same line as the player reads it (glass: a tap, not Tab). */
+/** The same line as the player reads it (glass: a tap, not Tab). */
 export function fanOutNoneText() {
   return forInput(FAN_OUT_NONE_LINE, FAN_OUT_NONE_LINE.replace('Tab to a free piece', 'Tap a free piece'));
 }
 
-/** F16: the lasso's auto-aim found every piece in lasso range taken: `fanOutNoneText`'s wording for the lasso's own range. */
+/** The lasso's auto-aim found every piece in lasso range taken: `fanOutNoneText`'s wording for the lasso's range. */
 export function lassoRangeAllOwnedLine() {
   return forInput('Tab to a free piece: every piece in lasso range already has a daughter or a net.',
     'Tap a free piece: every piece in lasso range already has a daughter or a net.');
 }
 
 /**
- * F14/F16: the player steered while the ship turned for the net, so the daughters stay docked. A glass player has no Shift+A:
- * she sends a daughter from her row in DAUGHTERS with the SEND DAUGHTER chip.
+ * The player steered while the ship turned for the net, so the daughters stay docked.
+ * Glass has no Shift+A: send from the DAUGHTERS row with the SEND DAUGHTER chip.
  */
 export function daughtersHeldBackLine() {
   return GestureHints.isGlass()
@@ -375,30 +358,30 @@ export function daughtersHeldBackLine() {
     : 'Daughters held back while you steer. Press Shift+A to send them.';
 }
 
-/** F13/F15: nobody was sent because every free piece is past the docked daughters' tethers. `pieces`: how many were left. */
+/** Nobody was sent: every free piece is past the docked daughters' tethers. `pieces`: how many were left. */
 export function reachNoneLine(pieces = 1) {
   return `${forInput('Tab to a nearer piece', 'Tap a nearer piece')}: ${pieces === 1 ? 'that one is' : 'those are'} out of the free daughters' reach.`;
 }
 
-/** F13/F15: nobody was sent because every free piece is heavier than the docked daughters hold. */
+/** Nobody was sent: every free piece is heavier than the docked daughters hold. */
 export function heavyNoneLine(pieces = 1) {
   return `${forInput('Tab to a lighter piece', 'Tap a lighter piece')}: ${pieces === 1 ? 'that one is' : 'those are'} too heavy for the free daughters.`;
 }
 
-/** F19: nobody was sent: some free pieces are past the free daughters' tethers and the others are heavier than they hold. */
+/** Nobody was sent: some free pieces are past the free daughters' tethers and the others are heavier than they hold. */
 export function reachHeavyNoneLine() {
   return `${forInput('Tab to another piece', 'Tap another piece')}: the pieces left are out of the free daughters' reach or too heavy for them.`;
 }
 
-/** F18: a daughter stayed for a reason already said (her launch was refused with its own line): only the way on is added. */
+/** A daughter stayed for a reason already said (her launch was refused with its own line): only the way on is added. */
 export function otherNoneLine() {
   return `${forInput('Tab to another piece', 'Tap another piece')}, then press D.`;
 }
 
 /**
- * F12/F13: the line for a one-per-piece send (Shift+D, Shift+N, Shift+A) that put NOBODY out although a daughter was ready:
- * the true reason, in this order - a crossing line (name the way out), pieces out of reach and/or too heavy (F19: both
- * named when both are present), a daughter who stayed for another reason (F18: no claim about owners), else every
+ * The line for a one-per-piece send (Shift+D, Shift+N, Shift+A) that put NOBODY out although a daughter was ready:
+ * the true reason, in this order - a crossing line (name the way out), pieces out of reach and/or too heavy (both
+ * named when both are present), a daughter who stayed for another reason (no claim about owners), else every
  * piece already has an owner (the one case that claim is true: `ranOut`, no free piece left).
  * @param {StayWhy & {left?: number}} why `left`: how many free pieces were still on the list (default 1)
  */
@@ -414,19 +397,19 @@ export function fanOutNoneLine(why) {
   return fanOutNoneText();
 }
 
-/** B8: Shift+A before a scan. */
+/** Shift+A before a scan. */
 export const SCAN_FIRST_LINE = 'Press S to scan first, then try again.';
 
-/** B8: Shift+A with every piece past net reach: daughters only, no net. */
+/** Shift+A with every piece past net reach: daughters only, no net. */
 export const DAUGHTERS_ONLY_LINE = 'Daughters only: every piece is past net reach.';
 
-/** R9: the true reason the ship holds still while the arm aims. */
+/** The true reason the ship holds still while the arm aims. */
 export function holdsStillLine(reason) {
   const why = reason === 'a catch is being reeled in' ? 'a catch is reeling in' : reason;
   return `Aiming the arm only: ${why}, so the ship holds still.`;
 }
 
-// ── geometry (pure; plain arrays or {x,y,z}; one common frame, metres) ──────────────────────────────────────────
+// Geometry: pure; plain arrays or {x,y,z}; one common frame, metres.
 
 const v3 = (p) => (Array.isArray(p) ? [p[0], p[1], p[2]] : [p.x, p.y, p.z]);
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -437,27 +420,25 @@ const len = (a) => Math.hypot(a[0], a[1], a[2]);
 const unit = (a) => { const l = len(a); return l > 1e-12 ? scale(a, 1 / l) : [0, 0, 0]; };
 
 /**
- * How far short of a full swap two lines still count as crossing, in degrees (F3, 2026-10-23). The t4 harness's strict test
- * (below) judges the lines at ONE moment, the press; the real lines then move: the ship turns a further 20-25 degrees while
- * the second daughter flies (S6, t4 harness: 17-25 deg from the start attitude at the press, 37-49 deg when both are out),
- * the daughters drift on their way, and the near-end offset is only ~1 m (two struts), so its direction turns with the ship.
- * Measured in the real game (G_0..G_3 probes, 12 strut pairs, docs/research/2026-10-launch-interlocks.md "Phase 2 built"):
- * at the press the strict test said clear for 4 of the 8 pairs that later crossed (their offset directions were 75-86
- * degrees apart, not yet past 90). With this margin the offset directions must be less than 90 - 30 = 60 degrees apart to
- * count as clear: all 8 are flagged (at least 15 degrees to spare) and one measured-clear pair, strut 2 then 4 (66 degrees),
- * is flagged too. A false "cross" only makes the pick take another strut; a missed one leaves two lines tangled.
+ * How far short of a full swap two lines still count as crossing, in degrees. The strict test (below) judges the lines
+ * at ONE moment, the press; the real lines then move: the ship turns a further 20-25 degrees while the second daughter
+ * flies, the daughters drift, and the near-end offset is only ~1 m (two struts), so its direction turns with the ship.
+ * Measured in the real game (12 strut pairs, archive/research/2026-10-launch-interlocks.md "Phase 2 built"): at the press
+ * the strict test said clear for 4 of the 8 pairs that later crossed (offset directions 75-86 degrees apart, not yet
+ * past 90). With this margin the offset directions must be less than 90 - 30 = 60 degrees apart to count as clear: all 8
+ * are flagged (at least 15 degrees to spare) and one measured-clear pair, strut 2 then 4 (66 degrees), is flagged too.
+ * A false "cross" only makes the pick take another strut; a missed one leaves two lines tangled.
  */
 export const CROSS_MARGIN_DEG = 30;
 
 /**
- * Do two lines swap sides, or come within `CROSS_MARGIN_DEG` of swapping? The t4 harness's test (lane t4-interlocks,
- * tmp/t4/lib.mjs) made conservative: look along the mean direction of the two lines; the sideways offset of line B from
- * line A at the ship end is `d0`, at the far end `d1`. Strictly they cross when the offset has turned round (`d0 . d1 < 0`,
- * the offsets more than 90 degrees apart); here they count as crossing already when the offsets are more than
- * (90 - margin) degrees apart. Two lines that stay on their own sides of each other never touch.
+ * Do two lines swap sides, or come within `CROSS_MARGIN_DEG` of swapping? Look along the mean direction of the two
+ * lines; the sideways offset of line B from line A at the ship end is `d0`, at the far end `d1`. Strictly they cross when
+ * the offset has turned round (`d0 . d1 < 0`, offsets more than 90 degrees apart); here already when the offsets are
+ * more than (90 - margin) degrees apart. Two lines that stay on their own sides of each other never touch.
  * @param {{a: (number[]|{x,y,z}), b: (number[]|{x,y,z})}} A line from the ship end `a` to the far end `b`
  * @param {{a: (number[]|{x,y,z}), b: (number[]|{x,y,z})}} B
- * @param {{marginDeg?: number}} [opts] `marginDeg: 0` is the harness's strict side-swap test
+ * @param {{marginDeg?: number}} [opts] `marginDeg: 0` is the strict side-swap test
  * @returns {boolean}
  */
 export function linesCross(A, B, opts) {
@@ -475,8 +456,8 @@ export function linesCross(A, B, opts) {
 
 /**
  * Does this daughter's line run through the ship? Reads the ship keep-out: the first 30 m of the line from just off her
- * strut tip, a 3 cm radius (what the t4 harness measured: the line through the radiator strut bracket at 128 deg of turn,
- * through the barrel from 131 deg). The caller passes the keep-out in so this module imports no entity.
+ * strut tip, a 3 cm radius (measured: through the radiator strut bracket at 128 deg of turn, through the barrel from
+ * 131 deg). The caller passes the keep-out in so this module imports no entity.
  * @param {{a: (number[]|{x,y,z}), b: (number[]|{x,y,z})}} line SHIP frame, metres: `a` her tether anchor on the strut, `b` her far end
  * @param {{segment: function}|null} keepOut `ArmManager.getKeepOut()`; null (a mock ship) answers "no"
  * @param {{ignore?: string[]}} [opts] parts of her own that never count (`dau<i>`, `strut<i>`, `rack catch <i>`)
@@ -498,7 +479,7 @@ export function lineWrapsShip(line, keepOut, opts) {
   return { wraps: true, part: hit.cat + ':' + hit.name, cat: hit.cat, name: hit.name };
 }
 
-// ── pair lesson and the gas saved (owner 2026-10-26 "1. Mission 2 lesson"; plan daughter-pairs-1025 S4): appended at the end of the pair lines ──
+// Pair lesson and the gas saved (owner 2026-10-26 "1. Mission 2 lesson"): appended at the end of the pair lines.
 
 /** The lesson waits for both daughters of a pair (said once, when the lesson starts with none ready). */
 export function pairLessonWaitLine() {
@@ -512,12 +493,12 @@ export function pairLessonSkipLine(ready) {
     : 'The daughters are not ready for a double shot yet. Watch for the PAIR mark in later missions.';
 }
 
-/** After a double shot: the gas it used and what it saved against two single shots. One decimal, "about": both are plans, not meters. */
+/** After a double shot: the gas used and saved against two single shots. One decimal, "about": both are plans, not meters. */
 export function pairSavedLine(xG, yG) {
   return `Double shot: about ${xG.toFixed(1)} g of gas, ${yG.toFixed(1)} g less than two single shots.`;
 }
 
-/** The lesson's closing sentence (always said in the lesson, saved or not). */
+/** The lesson's closing sentence (always said, saved or not). */
 export const PAIR_PARK_LINE = 'Park the ship between two pieces to get more double shots.';
 
 /** The lesson, a pair that saved nothing here: plain words, and why. */

@@ -1,21 +1,16 @@
 /**
- * _beatLifecycle.js — shared coach-beat sequencing primitives (CP-4 Phase B).
- *
- * Extracted as the reusable lifecycle layer the GUIDANCE_ARBITER / MISSION_ARC
- * specs call for: a small, framework-agnostic `BeatSequencer` (no EventBus, no
- * DOM, no THREE — fully Node-testable) plus two pure helpers. `MissionCoach`
- * wires real EventBus listeners to it; `OnboardingDirector` can adopt it later.
+ * @module systems/_beatLifecycle — shared coach-beat sequencing primitives: the reusable lifecycle layer the
+ * GUIDANCE_ARBITER_SPEC.md / MISSION_ARC specs (archive/) call for. A small, framework-agnostic `BeatSequencer` (no
+ * EventBus, no DOM, no THREE — fully Node-testable) plus two pure helpers. `MissionCoach` wires real EventBus
+ * listeners to it; `OnboardingDirector` can adopt it later.
  *
  * A "beat" is plain data:
  *   { id, type:'narrative'|'interactive'|'reactive', text, source?, channel?,
  *     skillId?, triggerEvent?, triggerFilter?(data)=>bool, holdMs?, escalateMs?,
  *     protect?, title?, body? }
- *
- * @module systems/_beatLifecycle
  */
 
-/** Build the COMMS_MESSAGE payload for a beat (always `_postOnboarding` so it
- *  passes the CP-4 suppression ramp at tiers ≥ 1). Pure. */
+/** COMMS_MESSAGE payload for a beat (always `_postOnboarding` so it passes the suppression ramp at tiers ≥ 1). Pure. */
 export function buildBeatComms(beat) {
   return {
     source: beat.source || 'HOUSTON',
@@ -56,7 +51,6 @@ export class BeatSequencer {
     this._escalated = false;
   }
 
-  /** Begin the sequence (no-op for an empty beat list). */
   start() {
     if (!Array.isArray(this.beats) || this.beats.length === 0) {
       this.running = false;
@@ -67,12 +61,10 @@ export class BeatSequencer {
     this._advance();
   }
 
-  /** @returns {object|null} the beat currently on screen. */
   current() {
     return this.running ? this.beats[this.index] : null;
   }
 
-  /** Mark the active interactive/reactive beat satisfied and advance. */
   satisfy() {
     if (!this.running || !this._awaitingSatisfy) return false;
     const beat = this.beats[this.index];
@@ -81,7 +73,6 @@ export class BeatSequencer {
     return true;
   }
 
-  /** Per-frame tick (seconds). Auto-advances narrative beats; escalates interactive ones once. */
   update(dt) {
     if (!this.running) return;
     this._timer += dt;
@@ -98,7 +89,6 @@ export class BeatSequencer {
     }
   }
 
-  /** Stop and clear all sequencing state. */
   reset() {
     this.running = false;
     this.index = -1;
@@ -107,7 +97,6 @@ export class BeatSequencer {
     this._escalated = false;
   }
 
-  /** @private Move to the next beat (or finish). */
   _advance() {
     this.index++;
     this._timer = 0;

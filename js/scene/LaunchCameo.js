@@ -29,6 +29,7 @@ import { latLonToPosition } from './Ephemeris.js';
 import { getRadialGlowTexture } from './glowSpriteTexture.js';
 import { cityFacingDot } from './CityLabels.js';
 import { makePlumeRibbon, updateRibbon } from './plumeRibbon.js';
+import { DEG2RAD, degToRad, clamp01, clamp } from '../core/MathUtil.js';
 
 /**
  * Cameo duration in seconds (real ascent ≈ 8 min → ~40× compression). The on-screen
@@ -162,7 +163,7 @@ export function padFor(code, cities) {
  * @returns {{x:number,y:number,z:number,alt:number}} position + altitude (units)
  */
 export function ascentPoint(lat, lon, radius, t, mirrorLon, azimuthDeg = 90, out) {
-  const tc = Math.max(0, Math.min(1, t));
+  const tc = clamp01(t);
   // Up:out ratio sweeps 3.36 → 0.30 (a constant ratio is a straight ballistic diagonal):
   // front-loaded climb, pitching over downrange late. alt exponent must stay ≥ 1: below
   // 1 the slope at t=0 is infinite (the vehicle would jump off the pad).
@@ -175,13 +176,13 @@ export function ascentPoint(lat, lon, radius, t, mirrorLon, azimuthDeg = 90, out
   const nx = surf.x / nLen, ny = surf.y / nLen, nz = surf.z / nLen;
 
   // Downrange = local east (d(position)/d(lon) in the latLonToPosition frame) rotated by the azimuth around n.
-  const la = lat * Math.PI / 180, lo = lonDeg * Math.PI / 180;
+  const la = degToRad(lat), lo = degToRad(lonDeg);
   let ex = -Math.cos(la) * Math.sin(lo), ey = 0, ez = Math.cos(la) * Math.cos(lo);
   const eLen = Math.hypot(ex, ey, ez) || 1;
   ex /= eLen; ez /= eLen;
   // North = n × east.
   let ux = ny * ez - nz * ey, uy = nz * ex - nx * ez, uz = nx * ey - ny * ex;
-  const az = azimuthDeg * Math.PI / 180;
+  const az = degToRad(azimuthDeg);
   const ca = Math.cos(az), sa = Math.sin(az);
   const dx = ex * ca + ux * sa, dy = ey * ca + uy * sa, dz = ez * ca + uz * sa;
 
@@ -209,7 +210,7 @@ export function cameoIntensity(sunDot) {
   const v = sunDot >= 0
     ? 0.70 + 0.30 * (1 - sunDot)
     : 0.45 + 0.55 * (1 + sunDot);
-  return Math.max(0.45, Math.min(1.0, v));
+  return clamp(v, 0.45, 1.0);
 }
 
 /**
@@ -219,7 +220,7 @@ export function cameoIntensity(sunDot) {
  * @returns {number} multiplier ∈ [1.0, 1.8] (fd ≥ 0.5 → 1.0, fd ≤ 0 → 1.8)
  */
 export function limbBoost(facingDot) {
-  const k = Math.max(0, Math.min(1, 1 - facingDot / 0.5));
+  const k = clamp01(1 - facingDot / 0.5);
   return 1 + 0.8 * k;
 }
 
@@ -230,7 +231,7 @@ export function limbBoost(facingDot) {
  * @returns {number} target core diameter in px
  */
 export function coreTargetPx(t) {
-  const tc = Math.max(0, Math.min(1, t));
+  const tc = clamp01(t);
   return 6 + 10 * tc;   // 6 px → 16 px
 }
 
@@ -243,7 +244,7 @@ export function coreTargetPx(t) {
  * @returns {number} sprite world size (scene units; 1 unit = 100 km)
  */
 export function worldSizeForPx(px, slantKm, pxPerDeg) {
-  const angRad = (px / pxPerDeg) * (Math.PI / 180);
+  const angRad = (px / pxPerDeg) * DEG2RAD;
   return (slantKm * Math.tan(angRad)) / 100;   // km → scene units
 }
 
@@ -265,7 +266,7 @@ export function plumeFadeIn(t) {
  * @returns {number} envelope ∈ [0,1]
  */
 export function plumeEnvelope(t) {
-  const tc = Math.max(0, Math.min(1, t));
+  const tc = clamp01(t);
   const fadeOut = 1 - Math.max(0, (tc - 0.88) / 0.12);   // fade last 12%
   return plumeFadeIn(tc) * fadeOut;
 }

@@ -1,5 +1,5 @@
 /**
- * TouchVerbButton.js - u15a (2026-10-22): controls a touch player had no way to reach, glass only (u16b added WIDE SCAN).
+ * TouchVerbButton.js - controls a touch player had no way to reach, glass only.
  *
  *   FLY THERE  (floor 4)        The Space key on floor 4 flies the transfer to the focused cluster. The button sends the
  *                               SAME key (KeyDispatch.pressKey('Space')), so the ladder's verb dispatch runs
@@ -17,22 +17,20 @@
  *                               touchcancel, the window seeing the finger lift, the page hiding or losing focus, the
  *                               button hiding (target gone, floor change, laser in spec), dispose. The laser can never stay
  *                               on with no finger down.
- *
- *   WIDE SCAN  (floors 2-3)     u16b (2026-10-22, coordinator design D4, the owner may veto). Shift+S had no touch control outside
- *                               the mission 3 lesson chip. Shown when a wide scan would help: floor 2 or 3, no target selected
- *                               (a wide scan is for finding targets), not piloting a daughter, the player has done one wide
- *                               scan before (the mission 3 lesson teaches it), the lesson's own ticker chip is not up
+ *   WIDE SCAN  (floors 2-3)     Shift+S had no touch control outside the mission 3 lesson chip. Shown when a wide scan would
+ *                               help: floor 2 or 3, no target selected (a wide scan is for finding targets), not piloting a
+ *                               daughter, the player has done one wide scan before, the lesson's own ticker chip is not up
  *                               (`ch3_wide_scan` is the active beat: on floor 2 the chip keeps that moment; on floor 3, where
  *                               the hint strip and its chip are hidden, the button shows for the lesson even before the first
- *                               wide scan), input not blocked. A tap presses Shift+S. While a scan
- *                               runs or the wide scanner cools down it is dimmed but still pressable (the sensor's own
- *                               "Wide scanner cooling down." line explains). DE-SPIN wins the slot if both ever qualify.
- *
- *   CHOOSE     (floors 2-4)     s5 gaps G1 (2026-10-25). Opens the fate list of a big catch (U). Floors 3-4 hide the hint strip, so
- *                               the ticker's CHOOSE chip cannot stand there; the button stands while a big piece is aboard and the
- *                               list is closed. Floor 2: only when the ticker's own CHOOSE chip is not up (on screen: a shelved chip
- *                               does not count), one row above the floor's other button. Floors 3-4: beside it, to the right of centre
- *                               at the same height (CHOOSE_BOTTOM_PX / CHOOSE_LEFT), clear of the centred toast, warning and pilot strip.
+ *                               wide scan), input not blocked. A tap presses Shift+S. While a scan runs or the wide scanner
+ *                               cools down it is dimmed but still pressable (the sensor's own "Wide scanner cooling down."
+ *                               line explains). DE-SPIN wins the slot if both ever qualify.
+ *   CHOOSE     (floors 2-4)     Opens the fate list of a big catch (U). Floors 3-4 hide the hint strip, so the ticker's
+ *                               CHOOSE chip cannot stand there; the button stands while a big piece is aboard and the list
+ *                               is closed. Floor 2: only when the ticker's own CHOOSE chip is not up (on screen: a shelved
+ *                               chip does not count), one row above the floor's other button. Floors 3-4: beside it, to the
+ *                               right of centre at the same height (CHOOSE_BOTTOM_PX / CHOOSE_LEFT), clear of the centred
+ *                               toast, warning and pilot strip.
  *
  * Why not ticker chips: the hint strip is display:none on floors 3-5 (FloorMask) and a ticker step button is click-only
  * (down and up back to back), so neither a floor-4 button nor a hold fits there.
@@ -56,14 +54,12 @@ export const VERB_LABELS = Object.freeze({ 'plan-transfer': 'FLY THERE' });
 export const DESPIN_LABEL = 'DE-SPIN';
 export const WIDE_LABEL = 'WIDE SCAN';
 
-/** The key each button presses. */
 export const FLY_KEY = 'Space';
 export const DESPIN_KEY = 'KeyL';
 export const WIDE_KEY = 'Shift+KeyS';
 /** The mission 3 lesson beat whose own ticker chip (TouchActionChip BEAT_CHIPS) owns the wide-scan moment. */
 export const WIDE_LESSON_BEAT = 'ch3_wide_scan';
 
-/** Floors that carry each button. */
 export const FLY_FLOOR = 4;
 export const DESPIN_FLOORS = Object.freeze([2, 3]);
 export const WIDE_FLOORS = Object.freeze([2, 3]);
@@ -74,9 +70,8 @@ export const LESSON_BUTTON_FLOOR = 3;
 export const BOTTOM_PX = Object.freeze({ 2: 168, 3: 88, 4: 88 });
 
 /**
- * s5 gaps G1 (2026-10-25): CHOOSE opens the fate list of a big catch (U). Floors 3-4 hide the hint strip, so the ticker's CHOOSE
- * chip cannot stand there and this button is the only touch way in. Floor 2 also shows it when the ticker chip is not up (another
- * chip or a lesson step holds the slot). It sits one step ABOVE the floor's other button so no two shown buttons share a spot.
+ * CHOOSE opens the fate list of a big catch (U): the only touch way in on floors 3-4 (no ticker chip there); floor 2 also
+ * shows it when the ticker chip is not up. It sits one step ABOVE the floor's other button so no two shown buttons share a spot.
  */
 export const CHOOSE_BTN_ID = 'touch-verb-choose';
 export const CHOOSE_LABEL = 'CHOOSE';
@@ -84,11 +79,14 @@ export const CHOOSE_KEY = 'KeyU';
 export const CHOOSE_FLOORS = Object.freeze([2, 3, 4]);
 /**
  * CSS px above the viewport bottom. Floor 2: one 48 px button and a 12 px gap above the floor's button row (clear of the hint
- * strip). Floors 3-4 (fix round 1, R2): the SAME height as the floor's button, BESIDE it (CHOOSE_LEFT), because the band above the
- * centre (132-200 px) is where the toast (144), a warning (170) and the ARM PILOT strip (172, centred, z 1000) land.
+ * strip). Floors 3-4: the SAME height as the floor's button, BESIDE it (CHOOSE_LEFT), because the band above the centre
+ * (132-200 px) is where the toast (144), a warning (170) and the ARM PILOT strip (172, centred, z 1000) land.
  */
 export const CHOOSE_BOTTOM_PX = Object.freeze({ 2: BOTTOM_PX[2] + 60, 3: BOTTOM_PX[3], 4: BOTTOM_PX[4] });
-/** CSS `left` of the CHOOSE button's left edge: floor 2 centred (with CHOOSE_TRANSFORM); floors 3-4 start 100 px right of the centre line, 23 px clear of the widest floor button (~154 px wide, half 77). */
+/**
+ * CSS `left` of the CHOOSE button's left edge: floor 2 centred (with CHOOSE_TRANSFORM); floors 3-4 start 100 px right of the
+ * centre line, 23 px clear of the widest floor button (~154 px wide, half 77).
+ */
 export const CHOOSE_LEFT = Object.freeze({ 2: '50%', 3: 'calc(50% + 100px)', 4: 'calc(50% + 100px)' });
 export const CHOOSE_TRANSFORM = Object.freeze({ 2: 'translateX(-50%)', 3: 'none', 4: 'none' });
 
@@ -113,16 +111,12 @@ const BASE_CSS = [
 export class TouchVerbButton {
   /**
    * @param {object} deps
-   * @param {Document} deps.doc
    * @param {HTMLElement} deps.parent                 where the buttons go (document.body: #hud-overlay is a z-10 stacking context)
-   * @param {object} [deps.bus]                       EventBus
-   * @param {object} [deps.events]                    the Events table
    * @param {boolean} [deps.glass=true]               false -> builds nothing (desktop)
    * @param {() => (number|null)} deps.getFloor       live ladder floor, null when the ladder is not active
-   * @param {() => boolean} [deps.isRiding]           the ladder is riding between floors
    * @param {() => (string|null)} [deps.getSpaceVerb] floor -> that floor's Space verb; default FloorContract.byId(floor).spaceVerb
-   * @param {() => (object|null)} [deps.getFocusedCluster]  NavcomFloor.getFocusedCluster
-   * @param {() => (string|null)} [deps.getChoiceLabel]  Nets step 3 slice 2b (lane 2b-2): NavcomFloor.choiceLabel - while the "where next" list is open, the chip's word ('FLY THERE' on a field row, 'STAY' on the Stay row); null otherwise
+   * @param {() => (string|null)} [deps.getChoiceLabel]  NavcomFloor.choiceLabel - while the "where next" list is open, the chip's
+   *                                                  word ('FLY THERE' on a field row, 'STAY' on the Stay row); null otherwise
    * @param {() => boolean} [deps.isInputBlocked]     the game would swallow the key: not gameplay, paused, codex / help / old map open, a ceremony
    * @param {(code:string) => *} deps.press           KeyDispatch.pressKey
    * @param {(code:string) => *} deps.hold            KeyDispatch.holdKey (keydown only)
@@ -130,12 +124,11 @@ export class TouchVerbButton {
    * @param {() => boolean} [deps.isDespinEnabled]    default Constants.isFeatureEnabled('LASER_DESPIN')
    * @param {() => (object|null)} [deps.getDespinTarget]  the debris the laser would fire at (selector target, or the piloted daughter's station-keep target)
    * @param {(target:object) => (number|null)} [deps.getTargetDistanceM]  metres from the mother optic, null = unknown (laser treats as in range)
-   * @param {() => (object|null)} [deps.getActiveTarget]  u16b: the selected target (targetSelector.getActiveTarget); WIDE SCAN shows only with none
-   * @param {() => boolean} [deps.isPiloting]         u16b: a daughter is being piloted (WIDE SCAN hides)
-   * @param {() => boolean} [deps.isWideScanLearned]  u16b: SkillsSystem.isDiscovered('scan_wide'); default false (no button until the lesson)
-   * @param {() => ({active:boolean, wideCooldown:number}|null)} [deps.getWideScanState]  u16b: SensorSystem.getScanStatus (dims the button)
-   * @param {() => boolean} [deps.getChoosePending]   s5 gaps G1: a big piece is aboard and the fate list is closed (CHOOSE shows); default false
-   * @param {() => boolean} [deps.isChooseChipUp]     s5 gaps G1: the ticker's CHOOSE chip is on screen (floor 2: the button then stays away)
+   * @param {() => (object|null)} [deps.getActiveTarget]  the selected target (targetSelector.getActiveTarget); WIDE SCAN shows only with none
+   * @param {() => boolean} [deps.isWideScanLearned]  SkillsSystem.isDiscovered('scan_wide'); default false (no button until the lesson)
+   * @param {() => ({active:boolean, wideCooldown:number}|null)} [deps.getWideScanState]  SensorSystem.getScanStatus (dims the button)
+   * @param {() => boolean} [deps.getChoosePending]   a big piece is aboard and the fate list is closed (CHOOSE shows); default false
+   * @param {() => boolean} [deps.isChooseChipUp]     the ticker's CHOOSE chip is on screen (floor 2: the button then stays away)
    * @param {Document} [deps.visibilityDoc]           where `visibilitychange` is heard (default `doc`)
    * @param {object} [deps.win]                       where blur / pagehide / pointer lift are heard (default `window`)
    * @param {boolean} [deps.poll=true]                false -> no timer (tests call refresh())
@@ -224,7 +217,7 @@ export class TouchVerbButton {
         const off = deps.bus.on(E[name], () => this.refresh());
         if (typeof off === 'function') this._unsubs.push(off);
       }
-      // u16b: the mission 3 lesson's ticker chip owns the wide-scan moment while its beat is the active one (same events and
+      // The mission 3 lesson's ticker chip owns the wide-scan moment while its beat is the active one (same events and
       // rule as TouchActionChip: any beat starting replaces it; its own satisfied event, a reset or a new game ends it).
       const sub = (name, fn) => {
         if (!E[name]) return;
@@ -243,7 +236,6 @@ export class TouchVerbButton {
     this.refresh();
   }
 
-  /** @private */
   _makeButton(doc, id, label) {
     const b = doc.createElement('button');
     b.id = id;
@@ -256,21 +248,16 @@ export class TouchVerbButton {
     return b;
   }
 
-  // ── what is on offer ────────────────────────────────────────────────────
-
-  /** @private */
   _blocked() {
     const f = this._d.isInputBlocked;
     if (typeof f !== 'function') return false;
     try { return !!f(); } catch (_e) { return true; }
   }
 
-  /** @private */
   _floor() {
     try { return this._d.getFloor ? this._d.getFloor() : null; } catch (_e) { return null; }
   }
 
-  /** @private the floor's Space verb, through the injected lookup or the floor table */
   _verb(floor) {
     try {
       if (typeof this._d.getSpaceVerb === 'function') return this._d.getSpaceVerb(floor) || null;
@@ -281,10 +268,8 @@ export class TouchVerbButton {
 
   /**
    * FLY THERE's label now, or null when it is not on offer: glass, floor 4, the floor's Space verb has a button, a
-   * cluster is focused, the ladder is not riding and Space would act. While the "where next" list is open (lane 2b-2) a
-   * cluster need not be focused: the chip is the pick, "FLY THERE" on a field row and "STAY" on the Stay row, and its tap
-   * is the same Space.
-   * @returns {string|null}
+   * cluster is focused, the ladder is not riding and Space would act. While the "where next" list is open a cluster need
+   * not be focused: the chip is the pick, "FLY THERE" on a field row and "STAY" on the Stay row, and its tap is the same Space.
    */
   flyLabel() {
     if (!this._glass || this._disposed) return null;
@@ -306,7 +291,6 @@ export class TouchVerbButton {
    * The debris the laser would fire at right now through this button, or null: floors 2-3, the feature on, input not
    * blocked (gameplay / overlays: the KeyL path's own checks), a target that still tumbles above the net-safe spin, in
    * the mother optic's range.
-   * @returns {object|null}
    */
   despinTarget() {
     if (!this._glass || this._disposed) return null;
@@ -333,7 +317,6 @@ export class TouchVerbButton {
   /**
    * True when WIDE SCAN is on offer: glass, floors 2-3, not riding, input free, no target selected, not piloting, the wide
    * scan learned, the lesson's chip not up, and DE-SPIN not already holding the slot.
-   * @returns {boolean}
    */
   wideOffer() {
     if (!this._glass || this._disposed) return false;
@@ -356,9 +339,8 @@ export class TouchVerbButton {
   }
 
   /**
-   * s5 gaps G1: true when CHOOSE is on offer: glass, floors 2-4, not riding, input free, a big piece aboard with the fate list
-   * closed (`getChoosePending`). Floors 3-4 always (no ticker there); floor 2 only while the ticker's own CHOOSE chip is not up.
-   * @returns {boolean}
+   * True when CHOOSE is on offer: glass, floors 2-4, not riding, input free, a big piece aboard with the fate list closed
+   * (`getChoosePending`). Floors 3-4 always (no ticker there); floor 2 only while the ticker's own CHOOSE chip is not up.
    */
   chooseOffer() {
     if (!this._glass || this._disposed) return false;
@@ -380,15 +362,12 @@ export class TouchVerbButton {
     return !!st && (st.active === true || (st.wideCooldown || 0) > 0);
   }
 
-  // ── drawing ─────────────────────────────────────────────────────────────
-
-  /** @private write-on-change show / hide */
   _show(el, on) {
     if (on === !el.hasAttribute('hidden')) return;
     if (on) { el.removeAttribute('hidden'); el.style.display = 'inline-flex'; } else { el.setAttribute('hidden', ''); el.style.display = 'none'; }
   }
 
-  /** Bring both buttons in line with the game. Safe at any time; the hold ends here whenever DE-SPIN is no longer on offer. */
+  /** Bring the buttons in line with the game. Safe at any time; the hold ends here whenever DE-SPIN is no longer on offer. */
   refresh() {
     if (this._disposed || !this.flyEl) return;
     const fly = this.flyLabel();
@@ -437,8 +416,6 @@ export class TouchVerbButton {
     this._chooseShown = choose;
   }
 
-  // ── CHOOSE ──────────────────────────────────────────────────────────────
-
   /** @private a tap = the U key: the same path as the keyboard (InputManager -> FateList.toggleFromKey) */
   _onChooseClick(e) {
     this._stop(e);
@@ -450,8 +427,6 @@ export class TouchVerbButton {
     }
     this.refresh();
   }
-
-  // ── WIDE SCAN ───────────────────────────────────────────────────────────
 
   /** @private a tap = Shift+S (dimmed while cooling down: still pressed, the sensor says why it refuses) */
   _onWideClick(e) {
@@ -465,9 +440,6 @@ export class TouchVerbButton {
     this.refresh();
   }
 
-  // ── FLY THERE ───────────────────────────────────────────────────────────
-
-  /** @private a tap = the Space key */
   _onFlyClick(e) {
     this._stop(e);
     if (this._disposed) return;
@@ -479,12 +451,8 @@ export class TouchVerbButton {
     this.refresh();
   }
 
-  // ── DE-SPIN ─────────────────────────────────────────────────────────────
-
-  /** @returns {boolean} the laser key is held down by this button right now */
   isHeld() { return this._held; }
 
-  /** @private a finger lands on DE-SPIN: the key goes down for as long as it stays */
   _onDespinDown(e) {
     this._stop(e);
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
@@ -513,18 +481,13 @@ export class TouchVerbButton {
     }
   }
 
-  /** @private pointerup / pointercancel / lostpointercapture / pointerleave on the button */
   _onDespinEnd(type, e) {
     if (e && this._pid != null && e.pointerId != null && e.pointerId !== this._pid) return;   // another finger
     this._stop(e);
     this._release(type);
   }
 
-  /**
-   * Let the laser key go. Every path that ends a hold lands here; safe when nothing is held.
-   * @param {string} [why]
-   * @returns {boolean} true when a key-up was sent
-   */
+  /** Let the laser key go. Every path that ends a hold lands here; safe when nothing is held. Returns true when a key-up was sent. */
   _release(why) {
     if (!this._held) return false;
     this._held = false;

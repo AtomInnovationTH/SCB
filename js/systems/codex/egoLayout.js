@@ -1,20 +1,16 @@
 /**
- * egoLayout.js — Pure, deterministic ego-map layout for the codex viewer.
+ * egoLayout.js — pure, deterministic ego-map layout for the codex viewer. Same inputs always yield identical output.
  *
- * Given a focus entry, computes a two-ring radial "ego network":
  *   • ring 0: the focus entry, centred.
- *   • ring 1: its direct `related` entries (1-hop), in array order, evenly
- *     spaced starting at −90° (12 o'clock).
- *   • ring 2: the related-of-related entries (2-hop), deduped against the focus
- *     and ring 1, capped, ghosted.
+ *   • ring 1: its direct `related` entries, in array order, evenly spaced from −90° (12 o'clock).
+ *   • ring 2: related-of-related, deduped against the focus and ring 1, capped, ghosted.
  *
- * No DOM / THREE / EventBus imports — this is testable in the Node harness.
- * Same inputs always yield identical output (angles, ordering, coordinates).
+ * No DOM / THREE / EventBus imports (Node-testable).
  *
  * @module systems/codex/egoLayout
  */
 
-// Fixed viewBox the SVG renderer maps into. Centre is (500, 350).
+// Fixed viewBox the SVG renderer maps into.
 const VIEW_W = 1000;
 const VIEW_H = 700;
 const CENTER_X = VIEW_W / 2;
@@ -30,9 +26,7 @@ const RING2_CAP = 12;
  * @property {number} y        - y coordinate within the 1000×700 viewBox
  * @property {0|1|2} ring      - 0 focus, 1 direct related, 2 two-hop related
  * @property {boolean} locked  - whether the entry is still locked
- * @property {string} title    - entry title (the node's only text — the data
- *                               `icon` is not carried; nothing renders it,
- *                               Session L plan D-J)
+ * @property {string} title    - entry title (the node's only text; the data `icon` is not carried)
  * @property {string} category - entry category key
  */
 
@@ -48,7 +42,6 @@ const RING2_CAP = 12;
  * @property {EgoEdge[]} edges
  */
 
-/** Build an EgoNode from a codex entry + position. @private */
 function toNode(entry, x, y, ring) {
   return {
     id: entry.id,
@@ -62,16 +55,12 @@ function toNode(entry, x, y, ring) {
 }
 
 /**
- * Compute the ego-map layout for a focus entry.
- *
  * @param {Object} deps
  * @param {string} deps.focusId - id of the entry at the centre.
  * @param {(id:string)=>(Object|null)} deps.getEntry - resolve an entry by id.
- * @param {(id:string)=>Object[]} deps.getRelated - direct related entries for an
- *        id, in authored order (the codex `related` array resolved to entries).
- * @param {Object} [opts] - reserved for future tuning; currently unused.
- * @returns {EgoMap} `{ nodes, edges }`; `{ nodes: [], edges: [] }` for an
- *          unknown focusId.
+ * @param {(id:string)=>Object[]} deps.getRelated - direct related entries for an id, in authored order.
+ * @param {Object} [opts] - unused.
+ * @returns {EgoMap} empty for an unknown focusId.
  */
 export function layoutEgoMap({ focusId, getEntry, getRelated }, opts = {}) {
   const focus = (typeof getEntry === 'function') ? getEntry(focusId) : null;
@@ -80,13 +69,10 @@ export function layoutEgoMap({ focusId, getEntry, getRelated }, opts = {}) {
   const nodes = [];
   const edges = [];
 
-  // Ring 0 — focus at centre.
   nodes.push(toNode(focus, CENTER_X, CENTER_Y, 0));
 
-  // Ring 1 — direct related, authored order, evenly spaced from −90°. Filter
-  // out self-references and duplicates FIRST so the angle spacing is derived
-  // from the surviving-node count (a duplicate/self-ref in `related` must not
-  // leave an empty angular gap).
+  // Ring 1. Filter self-references and duplicates FIRST so the angle spacing comes from the surviving count (no
+  // empty angular gap).
   const rawRing1 = (typeof getRelated === 'function') ? (getRelated(focusId) || []) : [];
   const seen = new Set([focus.id]);
   const ring1 = [];
@@ -100,7 +86,7 @@ export function layoutEgoMap({ focusId, getEntry, getRelated }, opts = {}) {
 
   ring1.forEach((entry, i) => {
     ring1Ids.push(entry.id);
-    // Start at −90° (top), distribute evenly clockwise.
+    // Clockwise from the top.
     const angle = (-Math.PI / 2) + (n1 > 0 ? (2 * Math.PI * i) / n1 : 0);
     const x = CENTER_X + RING1_RADIUS * Math.cos(angle);
     const y = CENTER_Y + RING1_RADIUS * Math.sin(angle);
@@ -108,9 +94,8 @@ export function layoutEgoMap({ focusId, getEntry, getRelated }, opts = {}) {
     edges.push({ from: focus.id, to: entry.id });
   });
 
-  // Ring 2 — two-hop related, deduped against focus + ring 1, sorted by
-  // (parent index in ring 1, id), capped. Each keeps its first-seen parent so
-  // the edge is deterministic.
+  // Ring 2: sorted by (parent index in ring 1, id), capped. Each keeps its first-seen parent so the edge is
+  // deterministic.
   const ring2Map = new Map(); // id → { entry, parentIdx, parentId }
   ring1Ids.forEach((parentId, parentIdx) => {
     const grand = (typeof getRelated === 'function') ? (getRelated(parentId) || []) : [];

@@ -1,6 +1,5 @@
 /**
  * BriefingScreen.js — Mission briefing / target selection screen
- * Supports Enter to launch, arrow/tab navigation, auto-select first target.
  * @module ui/BriefingScreen
  */
 
@@ -32,8 +31,7 @@ export class BriefingScreen {
     this.visible = false;
     this._targets = [];
     this._selectedIdx = -1;
-    // g1-gas-upgrades D9: the briefing names the gas in the tank (learned from FUEL_CHANGED, which
-    // ResourceSystem announces at boot, load and reset); a cargo fuel is not the tank gas.
+    // The gas in the tank, learned from FUEL_CHANGED (announced at boot, load and reset); a cargo fuel is not the tank gas.
     this._gasId = Constants.DEFAULT_FUEL;
     eventBus.on(Events.FUEL_CHANGED, (d) => {
       const f = d && Constants.FUELS[d.fuelId];
@@ -42,10 +40,8 @@ export class BriefingScreen {
     this._boundKeyHandler = this._onKeyDown.bind(this);
     this._build();
 
-    // Self-manage visibility + data via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to, payload }) => {
       if (to === GameStates.BRIEFING) {
-        // Receive target data from GameFlowManager via GAME_STATE_CHANGE payload
         if (payload && payload.targets) {
           this.setTargets(payload.targets, payload.playerOrbit);
         }
@@ -60,11 +56,8 @@ export class BriefingScreen {
   _build() {
     this.element = document.createElement('div');
     this.element.id = 'briefing-screen';
-    // T9 — briefing is a bottom-third comms overlay over the LIVE scene, not a
-    // full-screen blackout. Anchor content to the bottom; a gentle bottom-only
-    // gradient scrim keeps the card legible over a bright day-Earth while the
-    // top stays clear (scene reveal). pointer-events:none on the shell lets the
-    // clear area pass through; the card itself re-enables pointer events.
+    // Bottom-third overlay over the LIVE scene: a bottom-only scrim keeps the card legible over a bright day-Earth.
+    // pointer-events:none on the shell lets the clear area pass through; the card re-enables them.
     this.element.style.cssText = `
       position: absolute; inset: 0;
       display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
@@ -73,10 +66,7 @@ export class BriefingScreen {
       transition: opacity 0.3s;
     `;
 
-    // NOTE: #briefing-card-panel has no CSS/JS consumer in the app (the panel
-    // is styled inline). It is an intentional, stable hook for the local
-    // capture/verification driver (tmp/scb_briefing.cjs) and future animation
-    // targeting — do not strip it as "unused".
+    // #briefing-card-panel looks unused but is a stable hook for the capture driver and the entrance animation in show().
     this.element.innerHTML = `
       <div id="briefing-card-panel" style="pointer-events:auto;width:94%;max-width:900px;
            max-height:54vh;overflow-y:auto;margin:0 0 3vh 0;padding:14px 22px;
@@ -151,7 +141,6 @@ export class BriefingScreen {
     this.element.style.display = 'none';
     this.container.appendChild(this.element);
 
-    // Button events
     const commenceBtn = this.element.querySelector('#briefing-commence-btn');
     commenceBtn.addEventListener('click', () => {
       this._launchSelected();
@@ -167,7 +156,6 @@ export class BriefingScreen {
       commenceBtn.style.boxShadow = 'none';
     });
 
-    // Quick start button — picks nearest easy target and launches immediately
     const quickStartBtn = this.element.querySelector('#briefing-quickstart-btn');
     quickStartBtn.addEventListener('click', () => {
       this._quickStart();
@@ -194,7 +182,6 @@ export class BriefingScreen {
     });
   }
 
-  /** @private Handle keyboard when briefing is visible */
   _onKeyDown(e) {
     if (!this.visible) return;
 
@@ -224,14 +211,13 @@ export class BriefingScreen {
         break;
 
       case 'KeyQ':
-        // Quick start shortcut
         e.preventDefault();
         this._quickStart();
         break;
     }
   }
 
-  /** @private Move target selection by offset (+1 next, -1 previous) */
+  /** @private offset: +1 next, -1 previous (wraps). */
   _moveSelection(offset) {
     if (this._targets.length === 0) return;
     let newIdx = this._selectedIdx + offset;
@@ -241,7 +227,6 @@ export class BriefingScreen {
     audioSystem.playClick();
   }
 
-  /** @private Launch with the currently selected target */
   _launchSelected() {
     if (this._selectedIdx < 0 || this._targets.length === 0) return;
     audioSystem.playClick();
@@ -249,10 +234,9 @@ export class BriefingScreen {
     eventBus.emit(Events.BRIEFING_COMMENCE, { target });
   }
 
-  /** @private Quick start — pick the easiest nearby target and launch */
   _quickStart() {
     if (this._targets.length === 0) return;
-    // Already sorted by deltaV (cheapest first), pick index 0
+    // Sorted by deltaV (cheapest first)
     this._selectTarget(0);
     audioSystem.playClick();
     const target = this._targets[0];
@@ -267,16 +251,12 @@ export class BriefingScreen {
   setTargets(targets, playerOrbit) {
     this._targets = targets.slice(0, 5); // Show top 5
 
-    // SDA provider flavor text
     const sdaEl = this.element.querySelector('#briefing-sda');
     if (sdaEl) {
       sdaEl.textContent = SDA_PROVIDERS[Math.floor(Math.random() * SDA_PROVIDERS.length)];
     }
 
-    // Update mission context from scoring system. Mission-arc math (mission #
-    // + debris-until-depot clamps) is shared with the continue-flow welcome-back
-    // comms via getMissionProgress (js/core/missionProgress.js) so the two stay
-    // in sync.
+    // Mission-arc math is shared with the continue-flow comms via getMissionProgress.
     const stats = scoringSystem.getStats();
     const { perMission, missionNum, debrisUntilShop } = getMissionProgress(stats.debrisCleared);
 
@@ -305,8 +285,7 @@ export class BriefingScreen {
                        t.type === 'missionDebris' ? 'Mission Related' : 'Fragment';
       const difficulty = t.deltaV < 0.1 ? 1 : t.deltaV < 0.3 ? 2 : t.deltaV < 0.6 ? 3 : t.deltaV < 1.0 ? 4 : 5;
       const stars = '●'.repeat(difficulty) + '○'.repeat(5 - difficulty);   // difficulty pips, monochrome
-      // g1-gas-upgrades D9: real kilograms of the tank gas this ΔV burns (Tsiolkovsky over the core + tank + cold gas
-      // the engine pushes) — not the old ΔV × 20 guess labelled "Xe". An estimate, hence the "~".
+      // Kilograms of tank gas this ΔV burns (Tsiolkovsky over the core + tank + cold gas the engine pushes). An estimate, hence "~".
       const gas = Constants.FUELS[this._gasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
       const pushedKg = Constants.OCTOPUS_V5.CORE_DRY_MASS + Constants.ENGINE_TANK_DRY_MASS_KG + Constants.OCTOPUS_CORE_COLD_GAS;
       const estFuel = (pushedKg * (Math.exp(t.deltaV * 1000 / (gas.isp * Constants.G0)) - 1)).toFixed(1);
@@ -332,13 +311,10 @@ export class BriefingScreen {
       `;
     }).join('');
 
-    // Inline-glossary affordances: the ΔV label deep-links to its Tech Library
-    // entry. Capture phase so a term click wins over the card's own select
-    // handler (the whole card is clickable).
+    // Capture phase so a glossary term click (ΔV label) wins over the card's own select handler.
     ensureGlossaryCss();
     delegateGlossaryClicks(container, { capture: true });
 
-    // Card click selection
     container.querySelectorAll('.briefing-card').forEach(card => {
       card.addEventListener('click', () => {
         const idx = parseInt(card.dataset.idx);
@@ -356,7 +332,7 @@ export class BriefingScreen {
       });
     });
 
-    // Auto-select first target for quick Enter-Enter flow
+    // Auto-select the first target for an Enter-Enter flow
     if (this._targets.length > 0) {
       this._selectTarget(0);
     } else {
@@ -368,7 +344,6 @@ export class BriefingScreen {
   _selectTarget(idx) {
     this._selectedIdx = idx;
 
-    // Update card visuals
     const cards = this.element.querySelectorAll('.briefing-card');
     cards.forEach((card, i) => {
       const selected = i === idx;
@@ -376,14 +351,12 @@ export class BriefingScreen {
       card.style.background = selected ? 'rgba(0,255,136,0.1)' : 'rgba(0,20,40,0.6)';
     });
 
-    // Enable commence button
     const btn = this.element.querySelector('#briefing-commence-btn');
     if (btn) {
       btn.style.opacity = '1';
       btn.style.pointerEvents = 'auto';
     }
 
-    // Update enter prompt visibility
     const enterPrompt = this.element.querySelector('#briefing-enter-prompt');
     if (enterPrompt) {
       enterPrompt.style.opacity = idx >= 0 ? '1' : '0.5';
@@ -391,9 +364,8 @@ export class BriefingScreen {
   }
 
   /**
-   * @private u15b B-T7: the two key lines in touch words, read when the screen is shown (D7). A tap on a target card selects it
-   * (the card click handler) and COMMENCE APPROACH launches the selected one (_launchSelected), so the words are true.
-   * Desktop keeps the markup's text.
+   * @private The two key lines in touch words, read when the screen is shown. A tap on a card selects it and
+   * COMMENCE APPROACH launches the selected one, so the words are true. Desktop keeps the markup's text.
    */
   _syncKeyLines() {
     if (!this.element || !GestureHints.isGlass()) return;
@@ -408,10 +380,7 @@ export class BriefingScreen {
     this._syncKeyLines();
     this.element.style.display = 'flex';
     this.element.style.opacity = '1';
-    // T10 — briefing card entrance: a 280ms slide-up + fade of the card panel
-    // (the scrim fades via the shell's own opacity transition). Gives the card
-    // a deliberate "uplink arriving" beat instead of a hard pop. Honors
-    // prefers-reduced-motion (snap to final state, no transform).
+    // Card entrance: 280 ms slide-up + fade; prefers-reduced-motion snaps to the final state.
     const panel = this.element.querySelector('#briefing-card-panel');
     if (panel) {
       const reduced = !!(window.matchMedia &&
@@ -433,7 +402,6 @@ export class BriefingScreen {
         });
       }
     }
-    // Listen for keyboard input while briefing is shown
     window.addEventListener('keydown', this._boundKeyHandler);
   }
 

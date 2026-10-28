@@ -1,162 +1,91 @@
 /**
- * FloorMask.js — the Zoom Ladder's map-rule engine for HUD panes
- * (docs/ladder/08-workbench.md D8 + §4 "The map rule for panes").
+ * FloorMask.js — the Zoom Ladder's map-rule engine for HUD panes (docs/ladder/08-workbench.md D8 + §4 "The map rule
+ * for panes").
  *
- * As on a map, what is labeled depends on how far you have zoomed — house
- * numbers up close, city names far out, never both. Each floor shows only the
- * panes that make sense at its scale; zooming out makes the screen CALMER,
- * not busier. This module is the first consumer of the costume idea the
- * contract has carried unconsumed (FloorContract costume.leave/arrive): a
- * per-floor DENSITY MASK over the shipped HUD panes, in three tiers —
- *   'shown'  — the pane participates as shipped;
- *   'faint'  — visible at ~30 % opacity, hover-to-brighten (D6 safety
- *              readouts; dims, never gone);
- *   'gone'   — not part of this floor's room (the map rule).
+ * As on a map, what is labeled depends on how far you have zoomed. Each floor shows only the panes that make sense
+ * at its scale; zooming out makes the screen CALMER. A per-floor DENSITY MASK over the shipped HUD panes, in three tiers:
+ *   'shown' — the pane participates as shipped;
+ *   'faint' — visible at ~30 % opacity, hover-to-brighten (D6 safety readouts; dims, never gone);
+ *   'gone'  — not part of this floor's room.
  *
- * THE VISIBILITY LAYER (T8 "don't fight the inline writes"): tier visibility
- * is applied through the EXISTING pane-density rung adapters
- * (HUD._initPaneDensity → hud.paneDensity.rungs — {id, isVisible, setVisible}
- * live-state adapters). DOM rungs hide via the `data-density-hidden`
- * attribute whose CSS `!important` beats every inline `display` write from
- * view-switch / update code, and the pane's own keys (7/8/9/0, the density
- * `+`) already clear that attribute — so there is exactly ONE visibility bit
- * per pane and every party composes on it. The §4 panes with no rung of
- * their own (the debris-targeting reticle canvas; since 2026-09-02 evening the
- * hint-ticker strip) get a mask-owned attribute (`data-floor-gone`) with the
- * same `!important` discipline.
+ * VISIBILITY LAYER ("don't fight the inline writes"): tier visibility goes through the EXISTING pane-density rung
+ * adapters (HUD._initPaneDensity → hud.paneDensity.rungs, {id, isVisible, setVisible}). DOM rungs hide via the
+ * `data-density-hidden` attribute, whose CSS `!important` beats every inline `display` write from view-switch / update
+ * code, and the pane's own keys (7/8/9/0, the density `+`) already clear it: exactly ONE visibility bit per pane and
+ * every party composes on it. Panes with no rung of their own (the debris-targeting reticle canvas, the hint-ticker
+ * strip) get a mask-owned attribute (`data-floor-gone`) with the same `!important` discipline.
  *
- * D5 (per-floor player memory — "rooms you can rearrange"): on every floor
- * change the mask first CAPTURES the departing floor's pane INTENT (the ONE
- * density bit on each pane's elements — `_isVisible`; never on-screen
- * presence, which the rung adapters fold in for PaneDensity's own reasons),
- * then applies the arrival floor's layout = player memory where it exists,
- * the §4 default room otherwise. A pane re-shown with its own key (which
- * clears the attribute) is therefore remembered for THAT floor and reapplied
- * on return; global toggles apply within the mask. Persisted since Wave 5
- * Session G (2026-09-04): the state shape (exportMemory/importMemory: plain
- * JSON booleans keyed floor → pane) rides the player store `sc_ladder_view_v3`
- * through LadderController + LadderViewStore.
+ * D5 (per-floor player memory): on every floor change the mask first CAPTURES the departing floor's pane INTENT (the
+ * ONE density bit on each pane's elements — `_isVisible`; never on-screen presence), then applies the arrival floor's
+ * layout = player memory where it exists, the default room otherwise. A pane re-shown with its own key is remembered
+ * for THAT floor. Persisted: exportMemory/importMemory (plain JSON booleans, floor → pane) ride the player store
+ * `sc_ladder_view_v3` through LadderController + LadderViewStore.
  *
- * D7 (the always set): alerts (warnings strip, conjunction panel) and the
- * rail are NEVER masked on any floor, regardless of tier tables or player
- * memory — the engine never references their rungs or elements at all
- * (ALWAYS_ON below is the pinned list). The one-line safety readout left
- * this set in Session O (plan D8, owner 2026-09-07): cryptic, every number
- * duplicated elsewhere — it sat dormant, unwired, until module and test were
- * deleted (2026-10-16). The score strip left on 2026-09-23 (plan 1789561832042 C2, owner: "every zoom
- * except the hull") and comms left in Session N.5 — both are maskable room
- * panes now.
+ * D7 (the always set): alerts (warnings strip, conjunction panel) and the rail are NEVER masked on any floor,
+ * regardless of tier tables or player memory — the engine never references their rungs or elements (ALWAYS_ON is the
+ * pinned list). The score strip and comms are maskable room panes.
  *
- * PURE SCENERY (Session N.5 D7, owner 2026-09-07): when the `-` walk cleared every rung and
- * bowed the rails out, the hub also sets `body[data-pure-scenery]` (index.html
- * CSS hides the SPECS/REFIT tabs and `#build-stamp`; the vitals line and the
- * glass STORE chip left the rule — and the cockpit — in Session O, D8/D10).
- * Transient view state, never a room edit; `+`, any ride, or
- * a fresh engage clears it. The mask itself is untouched by it.
-
+ * PURE SCENERY (owner 2026-09-07): when the `-` walk cleared every rung and bowed the rails out, the hub also sets
+ * `body[data-pure-scenery]` (index.html CSS hides the SPECS/REFIT tabs and `#build-stamp`). Transient view state,
+ * never a room edit; `+`, any ride, or a fresh engage clears it. The mask itself is untouched by it.
  *
- * Transition at ride start: LadderController calls setFloor(floor) from
- * _applyFloorContent (which runs on engage AND at every ride START — the T1
- * content-swap idiom), so the destination floor's panes fade in during the
- * ~550 ms flight (TRANSITION_FADE_MS). Reduced motion swaps the flight fade
- * for a short crossfade (REDUCED_CROSSFADE_MS — 00-spec §6 "crossfades
- * replace rides"). G1: DOM writes happen only on floor changes, never per
- * frame.
+ * Ride start: LadderController calls setFloor(floor) from _applyFloorContent (on engage AND at every ride START), so
+ * the destination floor's panes fade in during the ~550 ms flight (TRANSITION_FADE_MS). Reduced motion swaps the
+ * flight fade for a short crossfade (REDUCED_CROSSFADE_MS — 00-spec §6). DOM writes happen only on floor changes,
+ * never per frame.
  *
- * API mirrors LadderAudioBeds exactly: setFloor(floorId|null) — null =
- * disengage → restore the SHIPPED cockpit (hidden-by-default rungs stay
- * hidden — see `shipped` below); setEnabled(bool) master gate (disabled
- * remembers the floor, restores the cockpit); dispose(). All deps
- * injected/optional ⇒ absent deps = every method is a state-only no-op
- * (headless-safe, byte-identical when unwired).
+ * API mirrors LadderAudioBeds: setFloor(floorId|null) — null = disengage → restore the SHIPPED cockpit
+ * (hidden-by-default rungs stay hidden, see `shipped`); setEnabled(bool) master gate (disabled remembers the floor,
+ * restores the cockpit); dispose(). All deps injected/optional ⇒ absent deps = state-only no-ops.
  *
- * Wiring (serial track — see the FloorMask HANDOFF): main.js constructs it
- * with the live `hud` and injects it into LadderController, which calls
- * setFloor(floor) at the END of _applyFloorContent and setFloor(null) in
- * _disengage — the audioBeds rows.
+ * Wiring: main.js constructs it with the live `hud` and injects it into LadderController, which calls setFloor(floor)
+ * at the END of _applyFloorContent and setFloor(null) in _disengage.
  *
  * @module ui/hud/FloorMask
  */
 
-// ── Tunables (own-module exports; house rule: never FloorContract/Constants) ─
-
 /** Faint-tier resting opacity (D6 "~30 %"). */
 export const FAINT_OPACITY = 0.3;
 
-/** Faint↔bright hover ease (08-workbench §2 motion: one curve, 240–300 ms). */
+/** Faint↔bright hover ease (08-workbench §2: one curve, 240–300 ms). */
 export const FAINT_TRANSITION_MS = 240;
 
-/** Arrival fade-in — the destination panes fade in during the ~550 ms flight. */
+/** Arrival fade-in: the destination panes fade in during the ~550 ms flight. */
 export const TRANSITION_FADE_MS = 550;
 
-/** Reduced-motion arrival crossfade (00-spec §6: crossfades replace rides). */
+/** Reduced-motion arrival crossfade (00-spec §6). */
 export const REDUCED_CROSSFADE_MS = 200;
 
 /**
- * MASK_PANES — the maskable pane vocabulary (plain names from the §4 table).
+ * MASK_PANES — the maskable pane vocabulary.
  *
- * rung:   pane-density rung id (hud.paneDensity.rungs) that owns the pane's
- *         ONE visibility bit; null = mask-owned attribute pane.
- * els:    DOM selectors for the faint/fade treatments (and for attribute
- *         panes, the visibility itself). '#id' or a class selector.
- * memory: participates in D5 per-floor player memory. The reticle canvas
- *         (rung `targetmarks`) has memory too: the `-` step hides it per floor.
- * shipped: the pane's state in the SHIPPED cockpit — what `_restoreAll`
- *         (disengage → menu / shop, setEnabled(false), dispose) restores.
- *         Absent = 'shown' (the default). 'gone' marks the three
- *         `experimental` members (`navsphere`, `discoveries`, `override`):
- *         hidden by default on EVERY floor (D3 — every DEFAULT_ROOMS row
- *         says 'gone', each root is BUILT with `data-density-hidden`), so a
- *         disengage must not reveal them (owner report 2026-09-09: the
- *         DISCOVERIES chip on the MENU). D5 memory is captured BEFORE the
- *         restore, so a player's `+` state still returns on re-engage.
+ * rung:   pane-density rung id (hud.paneDensity.rungs) that owns the pane's ONE visibility bit; null = mask-owned
+ *         attribute pane.
+ * els:    DOM selectors for the faint/fade treatments (and for attribute panes, the visibility itself).
+ * memory: participates in D5 per-floor player memory.
+ * shipped: the pane's state in the SHIPPED cockpit — what `_restoreAll` (disengage, setEnabled(false), dispose)
+ *         restores. Absent = 'shown'. 'gone' marks the `experimental` members (`navsphere`, `discoveries`,
+ *         `override`): hidden by default on EVERY floor (each root is BUILT with `data-density-hidden`), so a
+ *         disengage must not reveal them. D5 memory is captured BEFORE the restore, so a player's `+` state returns.
  *
- * Deliberately NOT here (the always set + world rungs): the 'alerts' and
- * 'rail' members of the always set (D7 — never masked), the 'reticles'
- * DENSITY flag-rung (it bundles the warnings/conjunction chrome — hiding it
- * would violate D7; the mask's 'reticles' pane drives the separate
- * `targetmarks` step, which touches ONLY the targeting canvas), and the 'skylabels'/'craft' world rungs (scene
- * objects, owned by their own floor systems — the map rule here governs
- * PANES). The score strip and comms ARE here (maskable room panes since
- * 2026-09-23 and Session N.5 respectively).
+ * Deliberately NOT here: the 'alerts' and 'rail' members of the always set (D7); the 'reticles' DENSITY flag-rung
+ * (it bundles the warnings/conjunction chrome — hiding it would violate D7; the mask's 'reticles' pane drives the
+ * separate `targetmarks` step, which touches ONLY the targeting canvas); the 'skylabels'/'craft' world rungs (scene
+ * objects, owned by their own floor systems).
  *
- * 'hints' (2026-09-02 evening, owner): the bottom-screen HintTicker strip —
- * onboarding beats ("Launch net (N)"), scan/lasso verbs, the codex ack chip.
- * Every chip it carries teaches or acknowledges the FLYING view, and in the F1
- * restore witnesses the tease_lock beat sat over the hull. Same shape as the
- * reticles pane: an ATTRIBUTE pane on the strip element only (the density
- * 'score' rung bundles the strip with the score panel for the 0-key
- * convenience — that rung is never driven; the score PANEL has been the
- * mask's own attribute pane since 2026-09-23, hidden on F1 through its
- * element, never through the rung). The ticker keeps its items and timers
- * while hidden; whatever is still alive reappears on the next floor.
+ * 'hints' (owner 2026-09-02): the bottom-screen HintTicker strip. Every chip it carries teaches or acknowledges the
+ * FLYING view. An ATTRIBUTE pane on the strip element only (the density 'score' rung bundles the strip with the score
+ * panel — that rung is never driven). The ticker keeps its items and timers while hidden.
  *
- * 'cargo' (2026-09-06, Session K): the CARGO pane (js/ui/hud/CargoPane.js) —
- * the manifest with SELL / SELL ALL / -> ELEVATOR over CargoSystem through
- * ShopScreen's public wrappers. A RUNG pane like the others: the pane owns a
- * pane-density rung ('cargo', pushed into hud.paneDensity.rungs by main.js
- * BEFORE the first setFloor) whose ONE bit is `data-density-hidden` on the
- * root `#hud-cargo-pane` (a direct child of #hud-overlay), so the pane density
- * counts it as a rung (Session P: the DETAIL slider's tick — the DISPLAY rail
- * that listed it as a notch retired) and D5 remembers it per floor.
- *
- * 'orbit' / 'copilot' / 'next' (2026-09-06, Session M — Instruments): three
- * more RUNG panes of the same shape. ORBIT (js/ui/hud/OrbitPane.js,
- * `#hud-orbit-pane`, bottom-left under the left column — Session P: no
- * DISPLAY rail beside it any more: the fixed
- * instrument slots, text only since 2026-09-08 — the OrbitMFD track view retired), COPILOT
- * (js/ui/hud/FmaStrip.js, `#hud-fma-strip`, the flight-mode annunciator that
- * rides as the LAST child of #hud-left-column — the ORBIT pane's ceiling is
- * the column's bottom, so nothing else moves) and NEXT (js/ui/hud/NextPane.js,
- * `#hud-next-pane`, the right edge above the CARGO slot: transfer window /
- * TCA / shadow / ground pass). Each pushes its rung into
- * hud.paneDensity.rungs from main.js BEFORE the first setFloor.
+ * 'cargo' (js/ui/hud/CargoPane.js) / 'orbit' (OrbitPane.js, `#hud-orbit-pane`, bottom-left under the left column) /
+ * 'copilot' (FmaStrip.js, `#hud-fma-strip`, the LAST child of #hud-left-column, so nothing else moves) / 'next'
+ * (NextPane.js, `#hud-next-pane`, right edge above the CARGO slot): RUNG panes that each own a pane-density rung,
+ * pushed into hud.paneDensity.rungs by main.js BEFORE the first setFloor. The ONE bit is `data-density-hidden` on the
+ * root; D5 remembers them per floor.
  */
 /**
- * The pane-density rungs' OWN hide bit (HUD._initPaneDensity domRung): set on
- * a pane's elements by `rung.setVisible(false)`, cleared by `setVisible(true)`
- * and by the pane's keys. The mask READS it (intent — see `_isVisible`) and
- * never writes it: every write goes through the rung adapter, the one writer.
+ * The pane-density rungs' OWN hide bit: set by `rung.setVisible(false)`, cleared by `setVisible(true)` and the pane's
+ * keys. The mask READS it (intent — see `_isVisible`) and never writes it: every write goes through the rung adapter.
  */
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
 
@@ -165,158 +94,93 @@ export const MASK_PANES = Object.freeze({
   debris:      Object.freeze({ rung: 'debris',      els: Object.freeze(['#hud-wireframe-container']), memory: true }),
   navsphere:   Object.freeze({ rung: 'navsphere',   els: Object.freeze([]),                           memory: true, shipped: 'gone' }),
   pin:         Object.freeze({ rung: 'pin',         els: Object.freeze(['#hud-pin-widget']),          memory: true }),
-  // Task 10: Discoveries is the #hud-discoveries wrapper (chip + popover).
+  // The #hud-discoveries wrapper (chip + popover).
   discoveries: Object.freeze({ rung: 'discoveries', els: Object.freeze(['#hud-discoveries']),         memory: true, shipped: 'gone' }),
-  // The MOTHER section inside the meters box. Since 2026-10-22 (owner: one `-`/`+` for the
-  // section and the box) `mother` and `vitals` are the two MEMBERS of the ONE `motherbox` step:
-  // each stays the ONE writer of its own element's hide bit, addressed here by its own id.
+  // `mother` and `vitals` are the two MEMBERS of the ONE `motherbox` step (owner 2026-10-22: one `-`/`+` for the
+  // section and the box): each stays the ONE writer of its own element's hide bit.
   mother:      Object.freeze({ rung: 'mother',      els: Object.freeze(['#hud-mother-panel']),        memory: true }),
-  // W2 meters (owner 2026-10-08, DECISIONS §15 row 5): heat, battery, gas and ion,
-  // top left, with the MOTHER section. Since 2026-10-22 (owner: "the new and improved
-  // mother pane should be hidable") a RUNG pane: the `vitals` member of the `motherbox`
-  // step is its ONE hide writer. Shown on F1-F4, gone on F5 by default.
+  // Meters (DECISIONS §15 row 5): heat, battery, gas and ion, top left. Hidable (owner 2026-10-22: "the new and
+  // improved mother pane should be hidable"): the `vitals` member of the `motherbox` step is its ONE hide writer.
+  // Shown on F1-F4, gone on F5 by default.
   vitals:      Object.freeze({ rung: 'vitals',      els: Object.freeze(['#hud-vitals']),              memory: true }),
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
-  // Target marks (owner 2026-10-22: hidden before the daughters pane): the whole
-  // #reticle-canvas. A RUNG pane since then: the `targetmarks` step is its ONE hide
-  // writer (the entry keeps its name, so no room table changes).
+  // Target marks: the whole #reticle-canvas. The `targetmarks` step is its ONE hide writer (the entry keeps the name
+  // `reticles`, so no room table changes). Hidden before the daughters pane (owner 2026-10-22).
   reticles:    Object.freeze({ rung: 'targetmarks', els: Object.freeze(['#reticle-canvas']),          memory: true }),
   hints:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-hint-ticker']),         memory: false }),
-  // The score strip (owner 2026-09-23, plan 1789561832042 C2): "it is the
-  // score" narrows to "every zoom EXCEPT the hull" — gone on the F1 room,
-  // shown on F2–F5. An ATTRIBUTE pane like 'hints', never a rung pane: the
-  // density rung named 'score' bundles the panel with the hint ticker (the
-  // 0-key convenience), and driving it here would also reveal the ticker,
-  // which has a pane of its own. Table-driven only (memory: false) — the
-  // owner's rule, not a per-player preference.
+  // owner 2026-09-23: the score strip shows at every zoom EXCEPT the hull (gone on F1, shown on F2–F5). An ATTRIBUTE
+  // pane like 'hints', never a rung pane: the density rung named 'score' also carries the hint ticker, which has a
+  // pane of its own. Table-driven only (memory: false): the owner's rule, not a per-player preference.
   score:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-score-panel']),         memory: false }),
   cargo:       Object.freeze({ rung: 'cargo',       els: Object.freeze(['#hud-cargo-pane']),          memory: true }),
   orbit:       Object.freeze({ rung: 'orbit',       els: Object.freeze(['#hud-orbit-pane']),          memory: true }),
   copilot:     Object.freeze({ rung: 'copilot',     els: Object.freeze(['#hud-fma-strip']),           memory: true }),
   next:        Object.freeze({ rung: 'next',        els: Object.freeze(['#hud-next-pane']),           memory: true }),
-  // Session N.5 (owner 2026-09-07): comms leaves ALWAYS_ON — the workbench is
-  // the ship and its callouts, no radio chatter. A room pane like the rest:
-  // gone on F1 by default, shown on floors 2-5, the rail toggles it, D5
-  // remembers.
+  // owner 2026-09-07: no radio chatter at the workbench — comms is a room pane (gone on F1, shown on floors 2-5).
   comms:       Object.freeze({ rung: 'comms',       els: Object.freeze(['#hud-comms-panel']),         memory: true }),
-  // SAFETY OVERRIDE panel (owner 2026-09-07.home/.kilo/plans/1788703905516-safety-override-panel.md
-  // D3):the demo cockpit button at bottom-centre. A pane-density rung at
-  // index 0 — hidden by default on EVERY floor (every DEFAULT_ROOMS row says
-  // 'gone');the last `+` reveals it,the first `-` sheds it; D5 remembers it
-  // per floor once pulled out. `shipped: 'gone'` — a disengage restores it
-  // HIDDEN (the shipped cockpit has no gag).
+  // SAFETY OVERRIDE panel (owner 2026-09-07): the demo cockpit button at bottom-centre. A pane-density rung at index
+  // 0, hidden by default on EVERY floor; the last `+` reveals it, the first `-` sheds it. `shipped: 'gone'`: a
+  // disengage restores it HIDDEN.
   override:    Object.freeze({ rung: 'override',    els: Object.freeze(['#hud-override-pane']),     memory: true, shipped: 'gone' }),
-  // F1 bar (owner 2026-10-08, DECISIONS §15 row 9): the 4-button bar at the bottom
-  // centre of F1 — shown there ALWAYS, gone on F2–F5 and in the shipped cockpit. An
-  // ATTRIBUTE pane (rung: null, `data-floor-gone`) with memory: false, so the table
-  // is the whole truth and no ROOMS_GENERATION bump is needed (the override pane's
-  // memory: true would have carried the old 'gone' into every returning player).
-  // H1 2026-10-09: the floor-1 help "?" (#hud-f1-help, HotkeyOverlay.mountF1Button) rides this pane: shown on F1 only.
+  // F1 bar (DECISIONS §15 row 9): the 4-button bar at the bottom centre of F1 — shown there ALWAYS, gone on F2–F5 and
+  // in the shipped cockpit. An ATTRIBUTE pane (rung: null) with memory: false, so the table is the whole truth and no
+  // ROOMS_GENERATION bump is needed (memory: true would carry an old 'gone' into every returning player).
+  // The floor-1 help "?" (#hud-f1-help, HotkeyOverlay.mountF1Button) rides this pane.
   f1bar:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-f1-bar', '#hud-f1-help']),             memory: false, shipped: 'gone' }),
 });
 
 /**
- * ALWAYS_ON — the D7 always set, pinned for tests. The engine never touches
- * these: no rung call, no element query, no attribute — on any floor, under
- * any player memory. (Display counterpart of "alarms always land at 1×".)
- * The one-line safety readout left this set in Session O (plan D8, owner 2026-09-07):
- * cryptic, every number duplicated elsewhere; the module was deleted 2026-10-16.
+ * The D7 always set, pinned for tests. The engine never touches these: no rung call, no element query, no
+ * attribute — on any floor, under any player memory.
  */
 export const ALWAYS_ON = Object.freeze([
   'alerts',      // #hud-warnings-panel, #hud-conjunction-panel — never referenced
   'rail',        // #ladder-rail — the ladder's own instrument
-  // The score strip left for MASK_PANES (owner 2026-09-23, plan
-  // 1789561832042 C2): "every zoom except the hull" — gone on the F1 room,
-  // shown on F2–F5, table-driven only. Comms left earlier, in Session N.5
-  // (owner 2026-09-07): gone on the F1 workbench by default, shown on
-  // floors 2-5.
 ]);
 
 /**
- * DEFAULT_ROOMS — the §4 default-rooms table, floor → pane → tier.
- * Exhaustive over MASK_PANES for every FloorContract floor (ids 1–5 since the
- * Session H 7→5 renumber; same physical rooms, new keys) — since Session K
- * (2026-09-06) that set includes the 'cargo' pane, and since 2026-09-23 the
- * 'score' strip, so every row carries both tiers. An id without a row
- * (out-of-table — nothing ships one) falls back to all-'shown' (full
- * cockpit). Edit per D5 as you play — player memory wins (the score is
- * memory:false — the owner's rule, not a preference).
+ * DEFAULT_ROOMS — the §4 default-rooms table, floor → pane → tier. Exhaustive over MASK_PANES for every
+ * FloorContract floor (ids 1–5), so every row carries every pane. An id without a row falls back to all-'shown'.
+ * Player memory wins over these (the score is memory:false — the owner's rule, not a preference).
  *
- *   F1 ship close-up  (inspect/refit):  hull is the index; EVERY pane clears
- *                                        out — discoveries too (owner, 2026-09-02
- *                                        evening, from the restore witnesses: the
- *                                        skills it lists teach the flying view,
- *                                        MotherCallouts' cards are the learning
- *                                        aid at the hull, and its top-left slot is
- *                                        exactly where the left callout rail
- *                                        paints; skill toasts land regardless).
- *                                        The hint ticker goes too (same evening:
- *                                        its chips teach the flying view — the
- *                                        tease_lock "Launch net (N)" beat sat over
- *                                        the hull; it is back on F2 with whatever
- *                                        is still alive).
- *   F2 flying view    (capture):        the home floor — everything shipped
- *                                        EXCEPT the nav orb and the discoveries
- *                                        pane (owner, 2026-09-06, from the first
- *                                        screen look: both are tall, both sat
- *                                        where the mid-height rails land — the
- *                                        orb under the WHERE rail, discoveries
- *                                        under the DISPLAY rail. Gone by default
- *                                        saves the vertical space; 8 / the WHAT
- *                                        rail's dim notch bring either back and
- *                                        D5 remembers). The orb was off in the
- *                                        shipped cockpit too — F2 'shown' had
- *                                        been turning it ON.
- *   F3 approach view  (insertion):      corner orb + daughters; lists go.
- *   F4 route planning (transfer):       daughters faint (out flying); rest go.
- *   F5 whole-Earth chart (survey):      chart + score + alerts only.
- *   The hint ticker is gone on every floor but F2 (owner, 2026-09-02 evening:
- *   "same clean-up" for the far floors) — its chips teach the flying view.
- *   The CARGO pane (Session K, 2026-09-06, owner call by the 13-inch iPad
- *   numbers) is 'shown' on F1 only — the shop floor, where selling and
- *   contributing happen — and 'gone' on F2–F5: on F2 the bottom-right slot has
- *   8 px of slack under the SPECS tab at the default room, so the pane sits
- *   behind the DISPLAY rail's MORE there and D5 remembers it per room once
- *   flipped.
- *   The Session M instruments (2026-09-06, owner law: by the 13-inch iPad
- *   numbers): ORBIT and COPILOT are 'shown' on the two flying floors F2 + F3
- *   (the DISPLAY rail's eight room-default notches on F2 are then exactly pin,
- *   debris, targets, mother, arms, reticles, orbit, copilot — the sky-label
- *   and score extras move behind MORE); COPILOT stays 'faint' on F4 with the
- *   daughters rows (the autopilot can be flying a cluster leg while the player
- *   plans); NEXT is 'shown' on the approach and route floors F3 + F4 (TCA and
- *   the transfer window are their subjects) and 'gone' on the home floor F2
- *   (D-L: a later-wave pane — one dim notch away behind MORE, D5 remembers);
- *   all three 'gone' on the hull F1 and the chart F5.
+ *   F1 ship close-up (inspect/refit): hull is the index; EVERY pane clears out — discoveries too (its skills teach the
+ *       flying view, MotherCallouts' cards are the learning aid at the hull, and its top-left slot is where the left
+ *       callout rail paints; skill toasts land regardless). The hint ticker goes too (its chips teach the flying view).
+ *       owner 2026-09-02: F1 clears every pane out, discoveries included.
+ *   F2 flying view (capture): the home floor — everything shipped EXCEPT the nav orb and the discoveries pane (both
+ *       tall, both where the mid-height rails land; the orb was off in the shipped cockpit too).
+ *       owner 2026-09-06: gone by default on F2, from the first screen look.
+ *   F3 approach view (insertion): corner orb + daughters; lists go.
+ *   F4 route planning (transfer): daughters faint (out flying); rest go.
+ *   F5 whole-Earth chart (survey): chart + score + alerts only.
+ *   The hint ticker is gone on every floor but F2 (owner 2026-09-02: "same clean-up" for the far floors).
+ *   CARGO is 'shown' on F1 only (the shop floor, where selling and contributing happen), by the 13-inch iPad numbers:
+ *   on F2 the bottom-right slot has 8 px of slack under the SPECS tab (owner 2026-09-06).
+ *   ORBIT and COPILOT are 'shown' on the two flying floors F2 + F3 (owner 2026-09-06: by the 13-inch iPad numbers);
+ *   COPILOT stays 'faint' on F4 with the daughters rows (the autopilot can be flying a cluster leg while the player
+ *   plans); NEXT is 'shown' on F3 + F4 (TCA and the transfer window are their subjects) and 'gone' on F2; all three
+ *   'gone' on F1 and F5.
  */
-// `override` is 'gone' on every floor by design (D3) — `_applyRoom` defaults a MISSING
-// key to 'shown', so every row must carry it (the exhaustive-row test pins that).
+// `override` is 'gone' on every floor by design — `_applyRoom` defaults a MISSING key to 'shown', so every row must
+// carry it (the exhaustive-row test pins that).
 export const DEFAULT_ROOMS = Object.freeze({
   1: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
-    // Session N.5 (owner 2026-09-07):the workbench is the SHIP — cargo (the
-    // elevator/till) and comms leave the F1 defaults too. The score strip
-    // followed (owner 2026-09-23, plan 1789561832042 C2): "every zoom except
-    // the hull". The N.5 cargo force-show in main.js's WORKBENCH_STOP is gone
-    // with it — the room table is the one truth.
+    // The workbench is the SHIP (owner 2026-09-07): cargo, comms and the score strip are gone; the room table is the
+    // one truth.
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone', f1bar: 'shown',
     score: 'gone',
-    // w4-power D4 (2026-10-12, §15 row 5 "always on screen"): measured clear of the F1 bar and the
-    // closed drawer at 1280×800 / 1366×768 / 1376×1032; main.js hides it while the drawer is open.
+    // §15 row 5 "always on screen": measured clear of the F1 bar and the closed drawer at 1280×800 / 1366×768 /
+    // 1376×1032; main.js hides it while the drawer is open.
     vitals: 'shown',
   }),
-  // Session N.5 (owner 2026-09-07) + Session O (owner 2026-09-07,
-  // "LEFT: mother, daughters"): the flying floor greets a first-timer with
-  // FOUR panes — what am I aiming at (targets), what is around me (reticles &
-  // alerts), can I catch (mother) — plus her daughters rows, the fleet list
-  // (arms) — plus the narrator (comms) and the hint ticker. The rest
-  // (debris map, upgrade pin, orbit numbers, autopilot strip) wait behind
-  // MORE / `+` until curiosity arrives; D5 remembers whatever a player pulls
-  // out.
+  // owner 2026-09-07 ("LEFT: mother, daughters"): the flying floor greets a first-timer with targets, reticles &
+  // alerts, mother, the daughters rows (arms), comms and the hint ticker. The rest (debris map, upgrade pin, orbit
+  // numbers, autopilot strip) wait behind `+`.
   2: Object.freeze({
-    // w7-panes D4 (owner 2026-10-13): TARGETS and TARGET INFO ('debris') are shown
-    // on F2 — HUD._scanGateOn holds both back until the first scan completes.
+    // owner 2026-10-13: TARGETS and TARGET INFO ('debris') are shown on F2; HUD._scanGateOn holds both back until the
+    // first scan completes.
     targets: 'shown', debris: 'shown', navsphere: 'gone', reticles: 'shown',
     pin: 'gone', mother: 'shown', arms: 'shown', discoveries: 'gone', hints: 'shown',
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone', f1bar: 'gone',
@@ -324,8 +188,8 @@ export const DEFAULT_ROOMS = Object.freeze({
     vitals: 'shown',
   }),
  3: Object.freeze({
-    // u6-tests-plain D4 (owner 2026-10-18, "what is noise"): ORBIT (LAT, LON, ALT, MET) is a
-    // Details pane on F3 too — 'gone' by default, one `+` (or the slider) away, unchanged.
+    // owner 2026-10-18 ("what is noise"): ORBIT (LAT, LON, ALT, MET) is a Details pane on F3 too: 'gone' by default,
+    // one `+` away.
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'shown',
     pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
     cargo: 'gone', orbit: 'gone', copilot: 'shown', next: 'shown', comms: 'shown', override: 'gone', f1bar: 'gone',
@@ -348,7 +212,6 @@ targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
   }),
 });
 
-/** @private House reduced-motion probe (GameFlowManager._prefersReducedMotion). */
 function _prefersReducedMotion() {
   try {
     return !!(typeof window !== 'undefined' &&
@@ -378,9 +241,9 @@ export class FloorMask {
     this._reducedMotion = deps.reducedMotion || _prefersReducedMotion;
 
     this._enabled = true;
-    /** Last requested floor (remembered while disabled/unresolved — beds idiom). */
+    /** Last requested floor (remembered while disabled/unresolved). */
     this._floor = null;
-    /** Floor whose layout is currently APPLIED (null = shipped cockpit). */
+    /** Floor whose layout is APPLIED (null = shipped cockpit). */
     this._appliedFloor = null;
     /** @type {Map<number, Map<string, boolean>>} D5 memory: floor → pane → visible */
     this._memory = new Map();
@@ -388,19 +251,13 @@ export class FloorMask {
     this._rungs = null;
     this._styleInjected = false;
     this._disposed = false;
-    // h4-simple-first D5/D7: the HUD reads the pane level through this mask (`getCurrentFloor`) to
-    // decide the simple-first lists; a real HUD offers `attachFloorMask`, test stubs do not.
+    // The HUD reads the pane level through this mask (`getCurrentFloor`) for the simple-first lists; test stubs lack `attachFloorMask`.
     if (this._hud && typeof this._hud.attachFloorMask === 'function') this._hud.attachFloorMask(this);
   }
 
-  // ── Public API (the LadderAudioBeds shape) ─────────────────────────────────
-
   /**
-   * Apply floor `floorId`'s room (player memory over §4 defaults), capturing
-   * the departing floor's live layout into D5 memory first. null = disengage
-   * → restore the SHIPPED cockpit (`_restoreAll`: hidden-by-default rungs stay
-   * hidden). Idempotent for the already-applied floor. While disabled only the
-   * floor is remembered.
+   * Apply floor `floorId`'s room (player memory over defaults), capturing the departing floor's live layout into D5
+   * memory first. null = disengage → restore the SHIPPED cockpit. Idempotent. While disabled only the floor is remembered.
    * @param {number|null} floorId - FloorContract floor id (1..5) or null
    */
   setFloor(floorId) {
@@ -409,12 +266,9 @@ export class FloorMask {
     if (!this._enabled) return;             // remembered; applied on re-enable
     if (!this._resolve()) return;           // absent deps: state-only no-op
     if (this._floor === this._appliedFloor) return;   // idempotent
-    // CLEAN VIEW is a MODE, not a room edit (owner 2026-09-06): while the
-    // density holds a `-` stash the departing floor's LIVE layout is the
-    // cleared screen — capturing it would remember "everything hidden".
-    // Skip the capture (the memory keeps the pre-clear room), then void the
-    // stash: it belonged to the departing room, and `+` on the arrival floor
-    // walks that floor's ladder — floor 2's panes never land on floor 4.
+    // CLEAN VIEW is a MODE, not a room edit (owner 2026-09-06): while the density holds a `-` stash the departing
+    // floor's LIVE layout is the cleared screen, and capturing it would remember "everything hidden". Skip the
+    // capture, then void the stash (it belonged to the departing room: floor 2's panes never land on floor 4).
     if (!this._inCleanView()) this._captureMemory();
     this._dropDensityStash();
     if (this._floor === null) {
@@ -424,24 +278,18 @@ export class FloorMask {
     this._applyRoom(this._floor);
   }
 
-  /** @private true while PaneDensity holds a clean-view stash (duck-typed; absent → false). */
+  /** @private Duck-typed; absent → false. */
   _inCleanView() {
     const pd = this._hud && this._hud.paneDensity;
     return !!(pd && typeof pd.hasStash === 'function' && pd.hasStash());
   }
 
-  /** @private PaneDensity.dropStash() when the injected HUD has it (duck-typed). */
   _dropDensityStash() {
     const pd = this._hud && this._hud.paneDensity;
     if (pd && typeof pd.dropStash === 'function') pd.dropStash();
   }
 
-  /**
-   * Master gate. Disabling restores the shipped cockpit (mask off = no
-   * masking) and remembers the floor; re-enabling reapplies the remembered
-   * floor's room. Idempotent.
-   * @param {boolean} on
-   */
+  /** Master gate. Disabling restores the shipped cockpit and remembers the floor; re-enabling reapplies it. Idempotent. */
   setEnabled(on) {
     if (this._disposed) return;
     const want = !!on;
@@ -457,7 +305,6 @@ export class FloorMask {
     }
   }
 
-  /** Restore the cockpit; further calls no-op. */
   dispose() {
     if (this._disposed) return;
     if (this._resolve()) {
@@ -467,21 +314,14 @@ export class FloorMask {
     this._disposed = true;
   }
 
-  /** The currently applied floor id, or null (tests/debug). */
   getAppliedFloor() { return this._appliedFloor; }
 
   /**
-   * Capture the APPLIED floor's live pane intent into D5 memory NOW, without a
-   * floor change — the same read `setFloor` performs at its capture moment
-   * (`_captureMemory`, the ONE intent read). Wave 5 Session H (Job A — the D5
-   * room-memory WRITE GAP, 03-plan Session G FINDINGS (c)): a pane shown or
-   * hidden by its own key (0/9/8, the density `-`/`+`/slider) and then a
-   * reload with NO floor change in between was never persisted, because the
-   * mask captured only inside setFloor(). LadderController.noteRoomChange()
-   * calls this on the Events.HUD_PANE_VISIBILITY edge, then exports. No-op
-   * while disposed / disabled (the cockpit is restored — a key press there is
-   * not a room edit) / unresolved (absent deps) / disengaged (no applied
-   * floor). Event-rate only (a key press), never per frame — G1.
+   * Capture the APPLIED floor's live pane intent into D5 memory NOW, without a floor change (`_captureMemory`, the
+   * ONE intent read). Without it a pane toggled by its own key and then a reload with no floor change was never
+   * persisted. LadderController.noteRoomChange() calls this on the Events.HUD_PANE_VISIBILITY edge, then exports.
+   * No-op while disposed / disabled (a key press with the cockpit restored is not a room edit) / unresolved /
+   * disengaged. Event-rate only, never per frame.
    */
   capture() {
     if (this._disposed || !this._enabled) return;
@@ -490,16 +330,12 @@ export class FloorMask {
     this._captureMemory();
   }
 
-  /** The last requested floor id, or null (tests/debug — beds parity). */
   getCurrentFloor() { return this._floor; }
 
   /**
-   * h4b D1: true when a pane the APPLIED floor's DEFAULT_ROOMS row marks 'gone' is visible now
-   * (the player's intent bit, `_isVisible` — the same read D5 memory uses): one `+` past the room.
-   * Not the D5 memory (rewritten on every change) and not a rung count (target info waiting for Z
-   * counts as hidden there). No mask applied (disabled, unresolved, shipped cockpit) = false.
-   * Read-only; a handful of getElementById per call, polled at 2-10 Hz.
-   * @returns {boolean}
+   * True when a pane the APPLIED floor's DEFAULT_ROOMS row marks 'gone' is visible now (the intent bit `_isVisible`):
+   * one `+` past the room. Not the D5 memory (rewritten on every change) and not a rung count (target info waiting
+   * for Z counts as hidden there). No mask applied = false. Read-only; polled at 2-10 Hz.
    */
   extraPaneShown() {
     if (this._disposed || !this._enabled || this._appliedFloor == null || !this._rungs) return false;
@@ -513,13 +349,9 @@ export class FloorMask {
   }
 
   /**
-   * RESET ROOM (Wave 5 Session J, plan D-H "long-press rail head = RESET
-   * ROOM"): forget floor `floor`'s D5 memory row and, when it is the APPLIED
-   * floor, re-apply its DEFAULT_ROOMS row now (memory over defaults with no
-   * memory = the defaults; the arrival fade runs as on a ride). Other floors'
-   * rows are untouched. No-op while disposed; a non-applied floor only loses
-   * its row (applied on the next arrival). LadderController.resetRoom() calls
-   * this and exports afterwards. Event-rate only (a long-press).
+   * RESET ROOM (long-press rail head): forget floor `floor`'s D5 memory row and, when it is the APPLIED floor,
+   * re-apply its DEFAULT_ROOMS row now (the arrival fade runs as on a ride). Other floors are untouched; a
+   * non-applied floor only loses its row. LadderController.resetRoom() calls this and exports afterwards.
    * @param {number} floor - FloorContract floor id
    * @returns {boolean} true when a row was dropped or the room re-applied
    */
@@ -534,11 +366,9 @@ export class FloorMask {
   }
 
   /**
-   * p1-newgame-panes D1: a NEW game forgets the player's reveals. Drops, on EVERY floor, each D5
-   * memory entry that shows a pane that floor's DEFAULT_ROOMS row marks 'gone' (the `+` pulls). A
-   * pane the player hid, and every 'faint' / 'shown' row, stays; a floor left with no entry loses
-   * its row. Memory only: the caller runs it while disengaged (no applied floor), and the next
-   * `setFloor` applies the result. Event-rate only (one new game).
+   * A NEW game forgets the player's reveals: drops, on EVERY floor, each D5 memory entry that shows a pane that
+   * floor's DEFAULT_ROOMS row marks 'gone'. A pane the player hid, and every 'faint' / 'shown' row, stays. Memory
+   * only: the caller runs it while disengaged, and the next `setFloor` applies the result.
    * @returns {boolean} true when an entry was dropped
    */
   forgetReveals() {
@@ -556,8 +386,7 @@ export class FloorMask {
   }
 
   /**
-   * D5 memory as a plain-JSON persistence surface (Wave 5 serializes this):
-   * `{ floors: { "<floorId>": { "<paneId>": boolean } } }`.
+   * D5 memory as plain JSON: `{ floors: { "<floorId>": { "<paneId>": boolean } } }`.
    * @returns {{floors: Object<string, Object<string, boolean>>}}
    */
   exportMemory() {
@@ -571,9 +400,8 @@ export class FloorMask {
   }
 
   /**
-   * Restore a D5 memory snapshot (exportMemory shape). Unknown panes and
-   * non-boolean values are dropped; ALWAYS_ON can never ride in via memory
-   * because the always set is not part of MASK_PANES at all.
+   * Restore a D5 memory snapshot (exportMemory shape). Unknown panes and non-boolean values are dropped; ALWAYS_ON
+   * can never ride in via memory (it is not part of MASK_PANES).
    * @param {{floors?: Object<string, Object<string, boolean>>}} state
    */
   importMemory(state) {
@@ -595,24 +423,15 @@ export class FloorMask {
     }
   }
 
-  // ── Internals ──────────────────────────────────────────────────────────────
-
-  /**
-   * @private Resolve the injected HUD's pane-density rungs (lazy, cached).
-   * Absent hud / paneDensity ⇒ false — the whole engine stays a no-op.
-   * @returns {boolean}
-   */
+  /** @private Lazy, cached. Absent hud / paneDensity ⇒ false: the whole engine stays a no-op. */
   _resolve() {
     if (this._rungs) return true;
     const pd = this._hud && this._hud.paneDensity;
     const rungs = pd && Array.isArray(pd.rungs) ? pd.rungs : null;
     if (!rungs) return false;
     this._rungs = new Map();
-    // Ladder reorder rev 3: a rung living inside a composite's `members`
-    // (`override` / `navsphere` / `discoveries` in `experimental`; `skylabels`
-    // / `pin` in `decor`) is addressable by its own id. MASK_PANES keys are
-    // unchanged. Cached once — all splices / addMember happen before
-    // `new FloorMask` (tmp/plans/1788867799156-hud-pane-ladder-reorder.md).
+    // A rung inside a composite's `members` (`override` / `navsphere` / `discoveries` in `experimental`; `skylabels` /
+    // `pin` in `decor`) is addressable by its own id. Cached once: all splices / addMember happen before `new FloorMask`.
     const register = (r) => {
       if (!r || !r.id) return;
       this._rungs.set(r.id, r);
@@ -624,7 +443,6 @@ export class FloorMask {
     return true;
   }
 
-  /** @private Capture the applied floor's live layout into D5 memory. */
   _captureMemory() {
     const floor = this._appliedFloor;
     if (floor == null) return;
@@ -637,7 +455,6 @@ export class FloorMask {
     }
   }
 
-  /** @private Apply floor `floor`'s room: memory over defaults, tiers, fade. */
   _applyRoom(floor) {
     this._appliedFloor = floor;
     const room = DEFAULT_ROOMS[floor] || null;   // no row (out-of-table id) → all shown
@@ -654,33 +471,19 @@ export class FloorMask {
       }
       this._setFaint(pane, tier === 'faint' && wantVisible);
     }
-    // Session O (plan D16 (a), owner 2026-09-07): the room apply just drove every
-    // rung's setVisible (incl. comms — F1 hides it, F2+ shows it) — visibility
-    // toggles that arrive with NO event, so the HUD's cached comms-bottom rect went
-    // stale (the right column's top was computed against a hidden pane: bottom 0
-    // → top ≈ 12 px → COMMS/TARGETS overlap, the owner's screenshot). Null it so
-    // the next update() frame recomputes. The pane's hiding is the density attribute
-    // (`data-density-hidden` → `display:none !important`) — display flips immediately,
-    // no CSS transition on it, so the next-frame rect is already the final box (no
-    // settle window like COMMS_PANEL_RESIZED's stepped sizes need). One call, at the
-    // end of the floor apply only — `_restoreAll` (disengage) restores the shipped
-    // cockpit the same rung writes, but the HUD is hidden in the menu then (update()
-    // returns early), and the next engage re-runs this floor apply — cached values can
-    // never be read stale across an engage.
+    // The room apply just drove every rung's setVisible (incl. comms) with NO event, so the HUD's cached comms-bottom
+    // rect is stale (the right column's top would be computed against a hidden pane → COMMS/TARGETS overlap). Null it
+    // so the next update() frame recomputes; display flips immediately (no CSS transition), so that rect is final.
+    // Only here, not in `_restoreAll`: the HUD is hidden in the menu then, and the next engage re-runs this apply.
     this._hud.invalidateCommsLayout?.();
-    // A room that shows HUD panes ends a muted-alerts state (the alerts ride the HUD). Show-only:
-    // a floor change never mutes anything.
+    // A room that shows HUD panes ends a muted-alerts state (alerts ride the HUD). Show-only: a floor change never mutes.
     this._hud.paneDensity?.revealFollowers?.();
   }
 
   /**
-   * @private Restore the SHIPPED cockpit — every pane back to its `shipped`
-   * state (absent = shown; the three `experimental` members are `'gone'`, so
-   * hidden-by-default rungs STAY hidden), treatments off. Before 2026-09-09
-   * this re-showed EVERY mask pane, so a disengage (→ menu / shop) revealed the
-   * DISCOVERIES chip, the ORB chip and the Override gag the player never pulled
-   * out. Callers capture D5 memory FIRST, so a `+` state still returns on
-   * re-engage. Write-on-change through the rung adapters (G1).
+   * @private Every pane back to its `shipped` state (the `experimental` members are `'gone'`, so hidden-by-default
+   * rungs STAY hidden: a disengage must not reveal the DISCOVERIES chip, ORB chip or Override gag), treatments off.
+   * Callers capture D5 memory FIRST. Write-on-change through the rung adapters.
    */
   _restoreAll() {
     this._appliedFloor = null;
@@ -696,21 +499,13 @@ export class FloorMask {
   }
 
   /**
-   * @private A pane's ONE visibility bit — the player's INTENT, never on-screen
-   * presence. A rung pane whose elements resolve reads the rung's own
-   * `data-density-hidden` attribute on them (set by the rung's setVisible — the
-   * density `-`, this mask — and cleared by the pane's keys; the mask never
-   * writes it directly, the rung stays the ONE writer). NOT the adapter's
-   * `isVisible()`: HUD's DOM rungs answer false for a pane that is merely OFF
-   * SCREEN (their getClientRects check — PaneDensity's "don't waste a rung"
-   * rule), and reading that as "hidden" captured `pin: false` on the flying floor (pre-renumber F4, now F2) for every
-   * player who had not pinned an upgrade goal yet (the widget is display:none
-   * until then), then density-hid the widget the moment they pinned one (Wave 4
-   * behaviour; fixed 2026-09-04, Session G review, once the D5 store began
-   * persisting the capture). Element-less rungs (the navsphere orb —
-   * `isOrbVisible()` IS its intent flag) and headless runs (no doc) fall back to
-   * the adapter. Attribute panes read the mask-owned `data-floor-gone`.
-   * null = unknowable (no rung, no elements) — skipped.
+   * @private A pane's ONE visibility bit — the player's INTENT, never on-screen presence. A rung pane whose elements
+   * resolve reads the rung's own `data-density-hidden` attribute on them (the mask never writes it; the rung stays
+   * the ONE writer). NOT the adapter's `isVisible()`: HUD's DOM rungs answer false for a pane that is merely OFF
+   * SCREEN (getClientRects check), and reading that as "hidden" captured `pin: false` for every player who had not
+   * pinned an upgrade goal yet (the widget is display:none until then), then density-hid it the moment they pinned
+   * one. Element-less rungs (the navsphere orb — `isOrbVisible()` IS its intent flag) and headless runs fall back to
+   * the adapter. Attribute panes read the mask-owned `data-floor-gone`. null = unknowable (no rung, no elements).
    */
   _isVisible(id, pane) {
     if (pane.rung) {
@@ -727,7 +522,6 @@ export class FloorMask {
     return els.every((el) => !(el.hasAttribute && el.hasAttribute('data-floor-gone')));
   }
 
-  /** @private Drive the pane's ONE visibility bit (rung or mask attribute). */
   _setVisible(id, pane, visible) {
     if (pane.rung) {
       const rung = this._rungs.get(pane.rung);
@@ -743,7 +537,6 @@ export class FloorMask {
     }
   }
 
-  /** @private Faint tier treatment (attribute + CSS hover — D6). */
   _setFaint(pane, faint) {
     const els = this._els(pane);
     if (!els.length) return;
@@ -754,11 +547,7 @@ export class FloorMask {
     }
   }
 
-  /**
-   * @private Arrival fade-in on a newly-revealed pane's elements: restart the
-   * finite fade class with the flight (or reduced-motion crossfade) length.
-   * Runs only on floor changes (G1 — no per-frame churn).
-   */
+  /** @private Restart the finite fade class with the flight (or reduced-motion crossfade) length. Floor changes only. */
   _arriveFade(pane, fadeMs) {
     const els = this._els(pane);
     if (!els.length) return;
@@ -772,7 +561,6 @@ export class FloorMask {
     }
   }
 
-  /** @private Resolve a pane's DOM elements (headless: always []). */
   _els(pane) {
     const doc = this._doc;
     if (!doc || !pane.els || !pane.els.length) return [];
@@ -791,7 +579,6 @@ export class FloorMask {
     return out;
   }
 
-  /** @private Inject the mask stylesheet once (attribute laws + arrive fade. */
   _ensureStyle() {
     if (this._styleInjected || !this._doc || !this._doc.head) return;
     this._styleInjected = true;

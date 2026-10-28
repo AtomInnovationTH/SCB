@@ -1,28 +1,30 @@
 /**
- * HoldWingClear.js - hold-clear (owner 2026-10-23: "a held catch never touches a radiator wing").
+ * @module systems/HoldWingClear — hold-clear (DECISIONS §35 rows 8-9, owner 2026-10-23: a held catch never touches a
+ * radiator wing).
  *
- * For every catch a daughter holds on her rack this module answers, per strut angle on the hold-pose grid (34, 39 ... 99, 100 deg),
- * two booleans from the catch's real drawn mesh, her cell and its frozen attitude (the placement chain of
+ * For every catch a daughter holds on her rack this answers, per strut angle on the hold-pose grid (34, 39 ... 99, 100
+ * deg), two booleans from the catch's real drawn mesh, her cell and its frozen attitude (the placement chain of
  * `CoMCalculator.heldCargoBookingMeters`, the same one the plume check and the net duck read):
- *   - `rest[p]`: at that strut angle the catch stays `REEL_HOLD.CLEAR_M` off every radiator part at every wing angle in
- *     `restAnglesDeg()` (the angles the wings stand at, and samples of the transit angles outside the band: `HOLD_CLEAR.REST_STEP_DEG`);
+ *   - `rest[p]`: the catch stays `REEL_HOLD.CLEAR_M` off every radiator part at every wing angle in
+ *     `restAnglesDeg()` (the angles the wings stand at, and samples of the transit angles outside the band:
+ *     `HOLD_CLEAR.REST_STEP_DEG`);
  *   - `band[p]`: the same at every wing angle `REEL_HOLD.BAND_LO_DEG .. BAND_HI_DEG` (step `HOLD_CLEAR.BAND_STEP_DEG`).
- *   Each set is judged `HOLD_CLEAR.REST_MARGIN_M` / `BAND_MARGIN_M` beyond `REEL_HOLD.CLEAR_M` (the wings are sampled, not swept: round 1 F1).
+ *   Each set is judged `HOLD_CLEAR.REST_MARGIN_M` / `BAND_MARGIN_M` beyond `REEL_HOLD.CLEAR_M` (wings are sampled, not swept).
  *
- * How (tmp/plans/hold-clear.md D1, T1):
- *   - The radiator kit is read from the live ship ONCE: each `FlowerStrutPivot_i` subtree is copied into a detached shadow tree
- *     (transforms only) and posed by the ship's own `_writeFlowerPose` (called on a stand-in `this`), so the live meshes are never
- *     touched and the maths is the game's. For each angle set (rest, band) the triangles of every radiator at every angle (the
- *     parts that do not turn once) go into ONE uniform grid: "clear of the grid" is "clear at every angle of the set".
- *   - A catch is judged by cutting its drawn triangles (once) into pieces of at most `SPLIT_M` and asking, per piece, for the exact
- *     distance from its centroid to the radiator triangles: farther than `CLEAR_M + the piece's own radius` -> the whole piece
- *     is clear; a centroid nearer than `CLEAR_M` is a real surface point in the wrong place -> blocked; in between the piece is
- *     bisected down to `LEAF_M`, where it still counts as blocked. Never a false "clear" (the bound is the triangle inequality);
+ * How:
+ *   - The radiator kit is read from the live ship ONCE: each `FlowerStrutPivot_i` subtree is copied into a detached
+ *     shadow tree (transforms only) and posed by the ship's own `_writeFlowerPose` (called on a stand-in `this`), so
+ *     the live meshes are never touched and the maths is the game's. For each angle set the triangles of every
+ *     radiator at every angle (the parts that do not turn once) go into ONE uniform grid: "clear of the grid" is
+ *     "clear at every angle of the set".
+ *   - A catch's drawn triangles are cut (once) into pieces of at most `SPLIT_M`; per piece, the exact distance from
+ *     its centroid to the radiator triangles: farther than `CLEAR_M + the piece's own radius` -> the piece is clear; a
+ *     centroid nearer than `CLEAR_M` is a real surface point in the wrong place -> blocked; in between the piece is
+ *     bisected down to `LEAF_M`, where it still counts as blocked. Never a false "clear" (triangle inequality);
  *     false "blocked" only inside a `LEAF_M` shell. A scoop bag and a typeless catch are balls (exact).
- *   - Work is counted in units (not milliseconds), so a frame does the same work on every machine and tests repeat exactly.
+ *   - Work is counted in units (not milliseconds), so a frame does the same work on every machine and tests repeat.
  *
  * Pure geometry + state on `piece._wingClear`; nothing here moves a mesh, a strut or a radiator.
- * @module systems/HoldWingClear
  */
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
@@ -33,7 +35,6 @@ import { DEG2RAD } from '../core/MathUtil.js';
 
 const M = 0.00001;
 
-// ── the pose grid (the one `_holdPoseOf` walks) ──────────────────────────────────────────────────────────────────────────────
 /** Strut angles (deg) of the hold-pose grid: 34, 39 ... 99, then 100. */
 export function holdPoseGridDeg() {
   const V5 = Constants.OCTOPUS_V5;
@@ -47,7 +48,6 @@ export function holdPoseGridDeg() {
 const POSES = holdPoseGridDeg();
 const NP = POSES.length;
 
-/** @returns {number[]} the wing angles (deg) of the band set: BAND_LO .. BAND_HI in `BAND_STEP_DEG` steps, both edges included */
 export function bandAnglesDeg() {
   const R = Constants.REEL_HOLD;
   const step = Constants.HOLD_CLEAR.BAND_STEP_DEG;
@@ -58,9 +58,10 @@ export function bandAnglesDeg() {
 }
 
 /**
- * @returns {number[]} the wing angles (deg) of the rest set: every wing angle outside the band the wings stand at or pass through - 0 .. BAND_LO and
- * BAND_HI .. 180 in `REST_STEP_DEG` steps (both band edges and 180 included: the wings wait AT an edge) plus the angles they stand at in those
- * ranges (`REST_STAND_DEG`: closed 0, park 135, open 146, vent 180). Derived from the band, so moving the band's top edge moves this set (round 1 F1).
+ * @returns {number[]} the wing angles (deg) of the rest set: every wing angle outside the band the wings stand at or
+ * pass through — 0 .. BAND_LO and BAND_HI .. 180 in `REST_STEP_DEG` steps (both band edges and 180 included: the wings
+ * wait AT an edge) plus the angles they stand at in those ranges (`REST_STAND_DEG`: closed 0, park 135, open 146,
+ * vent 180). Derived from the band, so moving the band's top edge moves this set.
  */
 export function restAnglesDeg() {
   const R = Constants.REEL_HOLD, HC = Constants.HOLD_CLEAR;
@@ -75,7 +76,7 @@ export function restAnglesDeg() {
   return Array.from(set).sort((a, b) => a - b);
 }
 
-// ── exact point-triangle distance (Ericson), squared; `T` flat, `o` the triangle's offset ───────────────────────────────────
+// Exact point-triangle distance (Ericson), squared; `T` flat, `o` the triangle's offset
 function ptTri2(px, py, pz, T, o) {
   const ax = T[o], ay = T[o + 1], az = T[o + 2];
   const abx = T[o + 3] - ax, aby = T[o + 4] - ay, abz = T[o + 5] - az;
@@ -113,7 +114,6 @@ function ptTri2(px, py, pz, T, o) {
   return dx * dx + dy * dy + dz * dz;
 }
 
-// ── the triangle grid (CSR cells; built in budgeted steps) ───────────────────────────────────────────────────────────────────
 function gridNew(tris, n, cell) {
   return {
     tris, n, c: cell, phase: 0, cur: 0, done: false,
@@ -187,18 +187,18 @@ function gridStep(g, budget) {
 }
 
 /**
- * Work points: a deterministic cost (not a clock) of what the distance queries did, so a frame's share of work is the same on every
- * machine: 8 per query, 1 per cell read, 1 per triangle looked at and 5 more per triangle measured. 1 point is about 10 ns on the
- * development Mac (T1); `HOLD_CLEAR.UNITS_PER_FRAME` is a number of points.
+ * Work points: a deterministic cost (not a clock) of what the distance queries did: 8 per query, 1 per cell read,
+ * 1 per triangle looked at and 5 more per triangle measured. 1 point is about 10 ns on the dev Mac;
+ * `HOLD_CLEAR.UNITS_PER_FRAME` is a number of points.
  */
 let _work = 0;
 let _stamp = new Int32Array(0);
 let _stampId = 0;
 
 /**
- * Best squared distance below `bound2` from (x, y, z) to any triangle of the grid; `bound2` itself when none is nearer. Only cells
- * whose box is nearer than the best so far are read, a triangle that spans several cells is looked at once per query, and a
- * triangle whose own box is already too far is not measured.
+ * Best squared distance below `bound2` from (x, y, z) to any triangle of the grid; `bound2` itself when none is
+ * nearer. Only cells whose box is nearer than the best so far are read; a triangle spanning several cells is looked
+ * at once per query; a triangle whose own box is too far is not measured.
  */
 function gridMinD2(g, x, y, z, bound2, cap = Infinity) {
   const B = Math.sqrt(bound2);
@@ -246,14 +246,12 @@ function gridMinD2(g, x, y, z, bound2, cap = Infinity) {
   return best;
 }
 
-// ── the radiator kit: shadow copies of the pivot subtrees, posed by the ship's own `_writeFlowerPose` ───────────────────────
 /** Same test as js/test/_flowerFold.js `isFx`: parts that are effects, not hardware. */
 function isFxLike(o) {
   return /Plume|Glow|Halo|Sprite|Light|Puff|Beam|Cable|Laser(Beam)?$|Outline|Fairing/.test(o.name || '')
     || (o.material && (o.material.blending === THREE.AdditiveBlending || (o.material.transparent === true && o.material.opacity < 0.2)));
 }
 
-/** Cheap signature of the radiator kit: which petals exist, how many nodes each pivot has, and the boom length. */
 export function kitSig(ship) {
   const gs = ship && ship._flowerGroups;
   if (!Array.isArray(gs) || gs.length === 0) return '';
@@ -268,7 +266,7 @@ export function kitSig(ship) {
   return s + 'c' + cradlesOf(ship).length;
 }
 
-/** The launch hold-downs (round 1 F6): `FlowerStrutCradle_i` and its `_Pin` sit on the hull skin, outside every pivot subtree, and never turn. */
+/** The launch hold-downs: `FlowerStrutCradle_i` and its `_Pin` sit on the hull skin, outside every pivot subtree, and never turn. */
 function cradlesOf(ship) {
   const out = [];
   const ch = ship.children;
@@ -299,10 +297,10 @@ function meshTriCount(geo) {
 
 const _localCache = new WeakMap();
 /**
- * A part's triangles in its own frame (flat Float32Array). A part of up to `SIMPLIFY_TRIS` triangles is kept exact (the radiator
- * panels are 12-triangle boxes); anything finer (lugs, bolts, hoses, ears: a few hundred triangles each) is replaced by its
- * bounding box in the part's own frame, which contains it - so "clear of the box" is "clear of the part", only a part's own
- * rounding (a cylinder's corners, about a centimetre) can read blocked early. It makes the kit about eight times smaller.
+ * A part's triangles in its own frame (flat Float32Array). A part of up to `SIMPLIFY_TRIS` triangles is kept exact (the
+ * radiator panels are 12-triangle boxes); anything finer (lugs, bolts, hoses, ears) is replaced by its bounding box
+ * in the part's own frame, which contains it — "clear of the box" is "clear of the part"; only a part's own rounding
+ * (a cylinder's corners, about a centimetre) can read blocked early. The kit is about eight times smaller.
  */
 function localTrisOf(geo) {
   let l = _localCache.get(geo);
@@ -332,9 +330,8 @@ function localTrisOf(geo) {
 }
 
 /**
- * Build (once per kit signature) the detached radiator copies and the two angle sets. Returns null when the ship has no radiator kit.
- * @param {object} ship PlayerSatellite
- * @param {{rest?:number[], band?:number[]}} [opts] probes only: other wing-angle sets
+ * Build (once per kit signature) the detached radiator copies and the two angle sets. Null when the ship has no
+ * radiator kit. `opts` (probes only): other wing-angle sets.
  */
 export function buildKit(ship, opts = null) {
   const sig = kitSig(ship);
@@ -383,8 +380,8 @@ export function buildKit(ship, opts = null) {
 }
 
 /**
- * The kit for this ship: built on first use, rebuilt when its signature changes. null without a radiator kit. The signature is re-read
- * when the number of petals changes and otherwise once in `SIG_RECHECK` calls (it is a string; this is asked every frame).
+ * The kit for this ship: built on first use, rebuilt when its signature changes; null without a radiator kit. The
+ * signature (a string, asked every frame) is re-read when the petal count changes, else once per `SIG_RECHECK` calls.
  */
 const SIG_RECHECK = 120;
 export function kitFor(ship) {
@@ -434,10 +431,9 @@ export function kitWorkLeft(kit) {
   return Math.max(0, tris) * KIT_TRI_POINTS;
 }
 
-/** Work points per radiator triangle in the kit build (extraction, then bounds, count and fill passes; ~0.2 us on the dev Mac). */
+/** Work points per radiator triangle in the kit build (extraction, bounds, count and fill passes; ~0.2 us on the dev Mac). */
 const KIT_TRI_POINTS = 25;
 
-/** Advance the kit's build by about `points` work points. Returns true when the kit is ready. */
 export function kitStep(kit, points) {
   if (!kit || kit.ready) return true;
   const budget0 = points / KIT_TRI_POINTS;
@@ -466,14 +462,11 @@ export function kitStep(kit, points) {
   return kit.ready;
 }
 
-/** Test/probe helper: build the whole kit now. */
 export function kitFinish(kit) {
   while (kit && !kit.ready) kitStep(kit, 1e12);
   return kit;
 }
 
-// ── a catch: its drawn triangles in her frame (cut once), then judged at each pose ──────────────────────────────────────────
-/** Bisect the longest edge until every triangle's radius about its centroid is <= maxR. Returns a flat Float64Array. */
 function splitTris(src, maxR) {
   const out = [];
   const n = src.length / 9;
@@ -508,9 +501,9 @@ function prepCost(piece) {
 }
 
 /**
- * Pay `cost` work points in installments within the call's budget (`until`, a value of `_work`): the profile's own bookkeeping (the prep of a
- * mesh, the placing of a pose) is done in one go, so it is paid BEFORE it runs: a frame never spends more than its budget plus one distance
- * query. `w.owed` is the unpaid rest between calls. Returns true when it is paid in full (the caller then does the work at once).
+ * Pay `cost` work points in installments within the call's budget (`until`, a value of `_work`). A profile's own
+ * bookkeeping (mesh prep, placing a pose) runs in one go, so it is paid BEFORE it runs: a frame never spends more than
+ * its budget plus one distance query. `w.owed` is the unpaid rest between calls. True when paid in full.
  */
 function pay(w, cost, until) {
   if (w.owed === null) w.owed = cost;
@@ -545,10 +538,10 @@ function prepPiece(piece, splitM) {
 }
 
 /**
- * Walk the triangles `T[9 * st.t .. 9n)` (placed in the ship frame) until `_work` reaches `until`. Each is cut by bisection where its
- * distance from the radiator grid cannot yet be told apart from the clearance. State lives in `st` (`t`, `sp`, `q`, the stack `S`).
- * Returns 1 = every triangle is `clearM` or more off the grid, 0 = one is not (or cannot be shown to be), -1 = out of budget, resume.
- * Never a false 1: a piece is "clear" only when no triangle lies within `clearM + its radius` of its centroid (triangle inequality).
+ * Walk the triangles `T[9 * st.t .. 9n)` (placed in the ship frame) until `_work` reaches `until`. Each is cut by
+ * bisection where its distance from the radiator grid cannot yet be told from the clearance. State lives in `st`
+ * (`t`, `sp`, `q`, the stack `S`). Returns 1 = every triangle is `clearM` or more off the grid, 0 = one is not (or
+ * cannot be shown to be), -1 = out of budget, resume. Never a false 1 (triangle inequality).
  */
 function trisRun(grid, T, n, st, clearM, leafM, maxQ, until) {
   const S = st.S;
@@ -587,7 +580,6 @@ function trisRun(grid, T, n, st, clearM, leafM, maxQ, until) {
 const _book = { x: 0, y: 0, z: 0 };
 const _poseQ = new THREE.Quaternion();
 
-/** Place the piece's triangles at (c, q) in the ship frame into `D[0 .. 9n)`. */
 function placeTris(prep, D, cx, cy, cz, q) {
   const n = prep.n;
   const x = q.x, y = q.y, z = q.z, w = q.w;
@@ -603,18 +595,14 @@ function placeTris(prep, D, cx, cy, cz, q) {
   }
 }
 
-// ── a profile on a piece ─────────────────────────────────────────────────────────────────────────────────────────────────────
-/**
- * The cache key of a profile: the arm, her rack cell, the attitude frozen in her frame, the cell offset, the size and the kit.
- * A profile is valid only while this still matches (`piece._wingClear.key`).
- */
+/** The cache key of a profile: arm, rack cell, frozen attitude, cell offset, size and kit. Valid only while it matches. */
 function keyOf(piece, armIndex, kitSigStr) {
   const q = piece._qLocalHer, o = piece._rackLocalM;
   return [armIndex, Number.isInteger(piece._rackCell) ? piece._rackCell : -1,
     q ? q.x : 0, q ? q.y : 0, q ? q.z : 0, q ? q.w : 1, o ? o.x : 0, o ? o.y : 0, o ? o.z : 0,
     piece.sizeMeter || 0, piece.isBag === true ? 1 : 0, piece.id | 0, kitSigStr, piece.type || ''];
 }
-/** `keyOf(piece, armIndex, sig)` equals `k`, without building the array (the per-frame scan asks this for every racked catch). */
+/** `keyOf(piece, armIndex, sig)` equals `k`, without building the array (asked for every racked catch each frame). */
 function keyMatches(k, piece, armIndex, sig) {
   if (!k) return false;
   const q = piece._qLocalHer, o = piece._rackLocalM;
@@ -625,7 +613,6 @@ function keyMatches(k, piece, armIndex, sig) {
     && k[12] === sig && k[13] === (piece.type || '');
 }
 
-/** Does this piece carry a profile that is still valid for where it sits (same arm, cell, attitude, size, kit)? */
 export function profileValid(mgr, armIndex, piece) {
   const w = piece && piece._wingClear;
   const ship = mgr && mgr.playerSatellite;
@@ -635,8 +622,8 @@ export function profileValid(mgr, armIndex, piece) {
 }
 
 /**
- * Begin a profile for one racked piece of arm `armIndex`; a valid one already there is kept. Returns false when the ship has no
- * radiator kit (no profile: today's behaviour) or the piece has no mass.
+ * Begin a profile for one racked piece; a valid one already there is kept. False when the ship has no radiator kit
+ * or the piece has no mass.
  */
 export function startProfile(mgr, armIndex, piece) {
   const ship = mgr.playerSatellite;
@@ -652,9 +639,9 @@ export function startProfile(mgr, armIndex, piece) {
 }
 
 /**
- * Run about `points` work points of one piece's profile: the kit's build first (while it is not ready), then the piece's preparation,
- * then its poses, each pose against the rest grid and then the band grid, suspending between queries. Returns the points not spent
- * (<= 0 when the budget ran out). `piece._wingClear.done` is set at the end.
+ * Run about `points` work points of one piece's profile: the kit's build first (while not ready), then the piece's
+ * preparation, then its poses (each against the rest grid, then the band grid), suspending between queries. Returns
+ * the points not spent (<= 0 when the budget ran out). `piece._wingClear.done` is set at the end.
  */
 export function stepProfile(mgr, piece, points) {
   const w = piece && piece._wingClear;
@@ -717,15 +704,13 @@ export function stepProfile(mgr, piece, points) {
   return points - used;
 }
 
-/** The work points spent so far by every kit build and profile step (a deterministic counter, the one the per-frame budget is made of). Test helper. */
+/** Work points spent so far by every kit build and profile step (the deterministic counter the per-frame budget uses). Test helper. */
 export function workDone() { return _work; }
 
 const _prof = { state: 0, rest: new Uint8Array(NP), band: new Uint8Array(NP) };
 /**
- * The arm's profile as one read: state 0 = none started on her rack (today's behaviour), 1 = started and pending, 2 = done; `rest`
- * and `band` are the AND over every racked piece (a pose is clear only if every catch is). The returned object is a shared scratch:
- * read it at once.
- * @param {object} arm
+ * The arm's profile as one read: state 0 = none started on her rack, 1 = pending, 2 = done; `rest` and `band` are the
+ * AND over every racked piece. The returned object is a shared scratch: read it at once.
  */
 export function armProfile(arm) {
   const rack = arm && arm.heldCatches;
@@ -747,11 +732,8 @@ export function armProfile(arm) {
 }
 
 /**
- * Is a strut angle (deg) clear in the profile's `set` ('rest' | 'band')? A grid angle reads its own pose; an angle between two grid
- * poses needs both neighbours clear; below the first or above the last it reads the end pose.
- * @param {{rest:Uint8Array, band:Uint8Array}} prof
- * @param {'rest'|'band'} set
- * @param {number} deg
+ * Is a strut angle (deg) clear in the profile's `set`? A grid angle reads its own pose; between two grid poses needs
+ * both neighbours clear; outside the grid it reads the end pose.
  */
 export function profileClearAt(prof, set, deg) {
   const a = prof[set];
@@ -767,5 +749,4 @@ export function profileClearAt(prof, set, deg) {
   return true;
 }
 
-/** Index of a hold-grid angle, or -1 (for the probes and tests). */
 export function poseIndexOf(deg) { return POSES.indexOf(Math.round(deg)); }

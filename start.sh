@@ -7,14 +7,31 @@
 #                             already exports PORT would make the kill below hit
 #                             some other program's server.
 # ./start.sh --no-browser   → serve only, do not open a browser (tests, remote use)
+# ./start.sh --lan          → also listen on the network so the iPad can load the game
+#                             (prints its URL). Default: this Mac only (127.0.0.1).
+#                             Needs node: the python fallback has no deny list for
+#                             .env, .git/, certs/ etc., so it stays local-only and
+#                             --lan without node refuses to start.
 cd "$(dirname "$0")" || exit 1   # serve this game folder, wherever the script is run from
 PORT="${SC_PORT:-8081}"
 OPEN_BROWSER=1
+LAN=0
 ARGS=()
 for a in "$@"; do
-    if [[ "$a" == "--no-browser" ]]; then OPEN_BROWSER=0; else ARGS+=("$a"); fi
+    if [[ "$a" == "--no-browser" ]]; then OPEN_BROWSER=0
+    elif [[ "$a" == "--lan" ]]; then LAN=1
+    else ARGS+=("$a"); fi
 done
 [[ -n "${NO_BROWSER:-}" ]] && OPEN_BROWSER=0
+
+USE_NODE=0
+if command -v node >/dev/null 2>&1 && [[ -f scripts/serve.mjs ]]; then USE_NODE=1; fi
+if [[ $LAN -eq 1 && $USE_NODE -eq 0 ]]; then
+    echo "   ❌ --lan needs node and scripts/serve.mjs: the python fallback has no deny list"
+    echo "      (it would hand .env, .git/ and certs/ to the network), so it stays on 127.0.0.1."
+    echo "      Install node, or run ./start.sh without --lan."
+    exit 1
+fi
 
 # Free the port, but only from an old copy of this game's server (never another app).
 for PID in $(lsof -ti :"$PORT" -sTCP:LISTEN 2>/dev/null); do
@@ -46,8 +63,14 @@ echo ""
 # The published site artifact has no scripts/ folder: there (or without node)
 # python serves the same way, still with no download.
 (node scripts/build-tag.mjs >/dev/null 2>&1 || true)
-if command -v node >/dev/null 2>&1 && [[ -f scripts/serve.mjs ]]; then
-    node scripts/serve.mjs --port "$PORT" >/dev/null 2>&1 &
+SERVER_OUT=/dev/null
+SERVE_ARGS=(--port "$PORT")
+if [[ $LAN -eq 1 ]]; then
+    SERVE_ARGS+=(--lan)
+    SERVER_OUT="$(mktemp -t sc-serve)"
+fi
+if [[ $USE_NODE -eq 1 ]]; then
+    node scripts/serve.mjs "${SERVE_ARGS[@]}" >"$SERVER_OUT" 2>&1 &
     SERVER_PID=$!
 else
     python3 - "$PORT" >/dev/null 2>&1 <<'PY' &
@@ -111,6 +134,11 @@ if pgrep -f "Brave Browser Nightly" >/dev/null 2>&1; then
     echo "      or ignore this if you're playing in stable Brave/Safari/Chrome."
 fi
 echo "   ✅ Server running at: $URL"
+if [[ $LAN -eq 1 ]]; then
+    echo "   📱 iPad / other devices on this network:"
+    grep '^LAN ' "$SERVER_OUT" | sed 's/^LAN /      /'
+    rm -f "$SERVER_OUT"
+fi
 if [[ $OPEN_BROWSER -eq 1 ]]; then
     open "$URL" --args $BROWSER_FLAGS
     echo "   🎮 Opening game in browser..."

@@ -1,6 +1,5 @@
 /**
- * ShipKeepOut.js — one exact answer to "what is in the way?" for the ship and
- * the daughters docked on it.
+ * ShipKeepOut.js — one exact answer to "what is in the way?" for the ship and the daughters docked on it.
  *
  *   const ko = createShipKeepOut({ player, armManager });
  *   ko.segment(a, b, radius, opts) → { gap, dist, name, cat, hits? }
@@ -10,48 +9,36 @@
  *   ko.refresh()                   // force a structure re-collect + matrix update
  *
  * All points are in the SHIP frame (the player root's local frame), in METRES.
- * `gap` is the exact distance from the segment (or point) to the nearest
- * triangle of the nearest obstacle, minus `radius` (<= 0 means touching or
- * overlapping). `name` is that mesh's name; `cat` is one of
+ * `gap` is the exact distance from the segment (or point) to the nearest triangle of the nearest obstacle, minus `radius`
+ * (<= 0 means touching or overlapping). `name` is that mesh's name; `cat` is one of
  * hull | wing | rad | nose | strut<N> | dau<N> | catch.
  *
- * WHY EXACT TRIANGLES: the leash line passes 0.050-0.113 m from the nose
- * sensors (LaserBaffle, EO_Bezel, IR_Aperture, LIDAR_Lens); boxes or cylinders
- * would report snags there that do not exist (probe 2026-10-14, tmp/probes/leash).
+ * WHY EXACT TRIANGLES: the leash line passes 0.050-0.113 m from the nose sensors (LaserBaffle, EO_Bezel, IR_Aperture,
+ * LIDAR_Lens); boxes or cylinders would report snags there that do not exist.
  *
- * HOW IT STAYS CURRENT WITHOUT A RE-COLLECT: every mesh's triangles are stored
- * once in the mesh's OWN frame. A query is carried into each candidate mesh's
- * local frame through the CURRENT `matrixWorld` (struts, radiators, wing tilt,
- * a daughter's pose all move), so a part that moved since the last query is
- * seen where it is now. Meshes whose ship-relative matrix is not a rigid motion
- * with one uniform scale (a handful of harness / furled-coil pieces) take a slow
- * path: their triangles are re-transformed whenever that matrix changes.
+ * HOW IT STAYS CURRENT WITHOUT A RE-COLLECT: every mesh's triangles are stored once in the mesh's OWN frame. A query is
+ * carried into each candidate mesh's local frame through the CURRENT `matrixWorld` (struts, radiators, wing tilt, a
+ * daughter's pose all move). Meshes whose ship-relative matrix is not a rigid motion with one uniform scale (a handful of
+ * harness / furled-coil pieces) take a slow path: their triangles are re-transformed whenever that matrix changes.
  *
- * MESH FILTER (the reference probe's rules; `isFx` of js/test/_flowerFold.js):
+ * MESH FILTER (`isFx` of js/test/_flowerFold.js):
  *   - THREE.Mesh only (no InstancedMesh / SkinnedMesh, no Line / Sprite / Points)
  *   - dropped as effects when the name matches
  *     /Plume|Glow|Halo|Sprite|Light|Puff|Beam|Cable|Laser(Beam)?$|Outline|Fairing/
- *     (note: that also drops names containing "Cable" and "Fairing"; the solid
- *     NavLight_Port / NavLight_Starboard spheres are exempt from the "Light" rule), or the
- *     material is additive-blended, or transparent with opacity < 0.2
- *   - LOD / cull visibility is IGNORED: the ship's `_detailMeshes` set (hidden
- *     by camera distance, PlayerSatellite.setCameraDistance) and a daughter's
- *     `_detailMeshes` are solid whatever their `.visible` says (except her
- *     bridle ring / hardpoints, which ArmUnit also hides BY STATE while the
- *     tether is stowed); a docked daughter's `group.visible` / `mesh.visible`
- *     (hidden by the caller, e.g. at the menu) are ignored too.
- *   - every OTHER `.visible === false` (own or ancestor) or `material.visible
- *     === false` means "this part does not exist in the current state" (the
- *     furled-wing coil while the wings are out, a retracted clamp pin, a
- *     daughter's stowed gimbal ring) and is skipped. Exception: a material with
- *     `userData.keepOutSolid` (the radiator rail / seam boxes, painted on the face
- *     instead of drawn) is hidden but still solid. Radiator pairs that are
- *     not installed are simply not in the scene graph.
- *   - daughters count only while they sit on their strut (DOCKED, LAUNCHING
- *     before the spring fires, RELOADING, HOLDING_CATCH, DOCKING); a daughter
- *     out in space is not an obstacle.
+ *     (that also drops "Cable" and "Fairing"; the solid NavLight_Port / NavLight_Starboard spheres are exempt from the
+ *     "Light" rule), or the material is additive-blended, or transparent with opacity < 0.2
+ *   - LOD / cull visibility is IGNORED: the ship's `_detailMeshes` set (hidden by camera distance,
+ *     PlayerSatellite.setCameraDistance) and a daughter's `_detailMeshes` are solid whatever their `.visible` says (except
+ *     her bridle ring / hardpoints, which ArmUnit also hides BY STATE while the tether is stowed); a docked daughter's
+ *     `group.visible` / `mesh.visible` (hidden by the caller, e.g. at the menu) are ignored too.
+ *   - every OTHER `.visible === false` (own or ancestor) or `material.visible === false` means "this part does not exist
+ *     in the current state" (furled-wing coil while the wings are out, a retracted clamp pin, a daughter's stowed gimbal
+ *     ring) and is skipped. Exception: a material with `userData.keepOutSolid` (the radiator rail / seam boxes, painted
+ *     on the face instead of drawn) is hidden but still solid. Radiator pairs not installed are not in the scene graph.
+ *   - daughters count only while they sit on their strut (DOCKED, LAUNCHING before the spring fires, RELOADING,
+ *     HOLDING_CATCH, DOCKING); a daughter out in space is not an obstacle.
  *
- * No test import, no scene mutation, no per-frame cost until asked.
+ * No scene mutation, no per-frame cost until asked.
  *
  * @module systems/ShipKeepOut
  */
@@ -66,10 +53,9 @@ const FX_NAME = /Plume|Glow|Halo|Sprite|Light|Puff|Beam|Cable|Laser(Beam)?$|Outl
 /** Daughter states in which the daughter physically sits on her strut. */
 const AT_STRUT = new Set(['DOCKED', 'LAUNCHING', 'RELOADING', 'HOLDING_CATCH', 'DOCKING']);
 
-/** Same rule as the probe's `isFx` (js/test/_flowerFold.js) — documented in the header. */
+/** Same rule as `isFx` in js/test/_flowerFold.js (see the header). */
 function isFxMesh(o) {
-  // NavLight_Port / NavLight_Starboard are 25 mm solid spheres (the glow is their
-  // separate additive halo child), so the "Light" effect rule must not drop them.
+  // NavLights are 25 mm solid spheres (the glow is a separate additive halo child): exempt from the "Light" rule.
   if (FX_NAME.test(o.name || '') && !SOLID_LIGHT.test(o.name || '')) return true;
   const mats = Array.isArray(o.material) ? o.material : [o.material];
   for (const m of mats) {
@@ -84,7 +70,7 @@ function materialsHidden(o) {
   return true;
 }
 
-// ── primitives (scalar, allocation-free; port of tmp/probes/leash/eng.mjs) ────
+// ── primitives (scalar, allocation-free) ──
 
 /** Squared distance, point (px,py,pz) → triangle T[o..o+8] (Ericson 5.1.5). */
 function ptTri2(px, py, pz, T, o) {
@@ -201,7 +187,7 @@ function ptSeg2(cx, cy, cz, ax, ay, az, bx, by, bz) {
 
 const v3 = (p) => (Array.isArray(p) || ArrayBuffer.isView(p)) ? [p[0], p[1], p[2]] : [p.x, p.y, p.z];
 
-/** Positions of a geometry as [x,y,z] reads, with index → flat Float64Array of triangles. */
+/** Flat Float64Array of triangles (indexed or not), scaled by invScale. */
 function extractTriangles(geo, invScale) {
   const pos = geo.getAttribute('position');
   const idx = geo.index ? geo.index.array : null;
@@ -229,11 +215,7 @@ function extractTriangles(geo, invScale) {
   return { tris, tb, n, box };
 }
 
-// ── the module ───────────────────────────────────────────────────────────────
-
-/**
- * @param {{ player: THREE.Object3D, armManager?: { arms: any[] } }} deps
- */
+/** @param {{ player: THREE.Object3D, armManager?: { arms: any[] } }} deps */
 export function createShipKeepOut({ player, armManager } = {}) {
   if (!player || typeof player.updateWorldMatrix !== 'function') {
     throw new Error('createShipKeepOut: player must be a THREE.Object3D');
@@ -248,7 +230,6 @@ export function createShipKeepOut({ player, armManager } = {}) {
   const cand = [];
   const stats = { entries: 0, triangles: 0, collects: 0, lastCollectMs: 0, lastQueryMs: 0, queries: 0, slowEntries: 0 };
 
-  // ---- collection ----------------------------------------------------------
   function classifyShip(o) {
     let strut = -1, wing = false, rad = false;
     for (let p = o; p && p !== player; p = p.parent) {
@@ -297,8 +278,8 @@ export function createShipKeepOut({ player, armManager } = {}) {
     const visit = (root, kind, arm, armIndex) => {
       const detailSrc = (kind === 'dau' ? arm._detailMeshes : player._detailMeshes) || [];
       const detail = new Set(detailSrc);
-      // The daughter's bridle hardware is in her LOD set too, but ArmUnit._updateBridle
-      // ALSO hides it by state (only drawn while the tether is out) — honour that flag.
+      // Her bridle hardware is in the LOD set too, but ArmUnit._updateBridle ALSO hides it by state (drawn only while
+      // the tether is out): honour that.
       if (kind === 'dau') for (const o of [arm._gimbalRing, arm._bridleHpA, arm._bridleHpB]) if (o) detail.delete(o);
       root.traverse((o) => {
         if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh) return;
@@ -346,7 +327,7 @@ export function createShipKeepOut({ player, armManager } = {}) {
     const sig = signature();
     if (force || sig !== treeSig) { treeSig = sig; collect(); }
     else {
-      // geometry rewritten in place (position buffer re-uploaded) → refresh that entry only
+      // Geometry rewritten in place (position buffer re-uploaded).
       for (let i = 0; i < list.length; i++) {
         const e = list[i], g = e.mesh.geometry;
         if (g !== e.geo || g.getAttribute('position').version !== e.posVer) { collect(); break; }
@@ -354,7 +335,6 @@ export function createShipKeepOut({ player, armManager } = {}) {
     }
   }
 
-  // ---- per-entry view of the query ------------------------------------------
   /** Bring the world segment/point into entry `e`'s frame. Returns false to skip (collapsed mesh). */
   function setupView(e, ax, ay, az, bx, by, bz) {
     rel.multiplyMatrices(SWinv, e.mesh.matrixWorld);
@@ -383,7 +363,7 @@ export function createShipKeepOut({ player, armManager } = {}) {
       for (let i = 0; i < 12; i++) e._lm[i] = m[i];
       e._tx = tx; e._ty = ty; e._tz = tz; e._l0 = l0;
       const bb = e.box, kk = e._kk;
-      // gap between the query's local AABB and the mesh's local AABB (valid lower bound)
+      // Gap between the query's AABB and the mesh's AABB: a valid lower bound.
       const lo0 = Math.min(e._p0[0], e._p1[0]), hi0 = Math.max(e._p0[0], e._p1[0]);
       const lo1 = Math.min(e._p0[1], e._p1[1]), hi1 = Math.max(e._p0[1], e._p1[1]);
       const lo2 = Math.min(e._p0[2], e._p1[2]), hi2 = Math.max(e._p0[2], e._p1[2]);
@@ -448,7 +428,6 @@ export function createShipKeepOut({ player, armManager } = {}) {
     return true;
   }
 
-  // ---- the scan over one entry's triangles ----------------------------------
   let _improved = false;
   /** ignoreNear in this entry's frame: skip triangles wholly inside any {p, r}. */
   function triIgnored(T, o, ig, nIg) {
@@ -533,7 +512,6 @@ export function createShipKeepOut({ player, armManager } = {}) {
     return out;
   }
 
-  // ---- the query -----------------------------------------------------------
   function run(isSeg, a, b, radius, opts, wantHits) {
     const tq0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     freshen(false);
@@ -554,7 +532,7 @@ export function createShipKeepOut({ player, armManager } = {}) {
     let bestD = Infinity, bestName = '', bestCat = '';
     const hits = wantHits ? [] : null;
 
-    // extra spheres first (cheap; seeds the nearest distance)
+    // Extra spheres first (cheap; seeds the nearest distance).
     for (const s of extraSpheres(opts)) {
       const nm = s.name || 'catch', ct = s.cat || 'catch';
       if (skipped(nm, ct)) continue;
@@ -594,11 +572,9 @@ export function createShipKeepOut({ player, armManager } = {}) {
     return out;
   }
 
-  // ---- measuring a body --------------------------------------------------------
   /**
-   * Measure the live triangles of category `cat` in the ship frame: bounding-box
-   * centre, the farthest vertex across `dir` (a unit vector; half-width of the
-   * body when it travels along `dir`) and along it.
+   * Live triangles of category `cat` in the ship frame: bounding-box centre, the farthest vertex across `dir` (a unit
+   * vector; half-width of the body travelling along `dir`) and along it.
    */
   function measureCat(cat, dir) {
     freshen(false);
@@ -649,7 +625,7 @@ export function createShipKeepOut({ player, armManager } = {}) {
     /** Update every matrix and re-collect the scene graph now. */
     refresh() { freshen(true); },
     stats,
-    /** Test hook: the live entry list (name, cat, n). */
+    /** Test hook: the live entry list. */
     _entries() { if (list.length === 0) freshen(true); return list; },
   };
 }

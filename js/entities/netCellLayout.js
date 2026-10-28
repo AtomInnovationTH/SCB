@@ -1,15 +1,14 @@
 /**
- * netCellLayout.js - where the net cartridges sit on a launcher face (nets-step2, DECISIONS §33 row 5).
+ * netCellLayout.js - where the net cartridges sit on a launcher face (DECISIONS §33 row 5).
  *
- * A pure function, no THREE: the mother's launcher face (PlayerSatellite._buildNetPods) and the daughters' net cans
- * (ArmUnit) both draw their muzzles from it, so one rule sizes every cell. The line-fibre upgrade raises the net count
- * 4 -> 6 -> 8 -> 10 (mother, small daughter) and 2 -> 3 -> 4 -> 5 (large daughter); round cartridges are packed to the
- * largest size that still fits the face.
+ * A pure function, no THREE: the mother's launcher face (PlayerSatellite._buildNetPods) and the daughters' net cans (ArmUnit) both draw
+ * their muzzles from it, so one rule sizes every cell. The line-fibre upgrade raises the net count 4 -> 6 -> 8 -> 10 (mother, small
+ * daughter) and 2 -> 3 -> 4 -> 5 (large daughter); round cartridges are packed to the largest size that still fits the face.
  *
- * Layout: n = 2..6 is a ring of n cells; 8 is one centre cell plus a ring of 7; 10 is one centre cell plus a ring of 9
- * (any other n is a ring of n; 1 is one centre cell). Ring cells come first, the centre cell last (index n - 1), so a
- * launcher that spends its nets from the highest index empties the centre first. The first ring cell sits at angle
- * pi/2 + pi/k from +X (k = ring size), counter-clockwise: two cells sit left and right, four make a square.
+ * Layout: n = 2..6 is a ring of n cells; 8 is one centre cell plus a ring of 7; 10 is one centre cell plus a ring of 9 (any other n is a
+ * ring of n; 1 is one centre cell). Ring cells come first, the centre cell last (index n - 1), so a launcher that spends its nets from the
+ * highest index empties the centre first. The first ring cell sits at angle pi/2 + pi/k from +X (k = ring size), counter-clockwise: two
+ * cells sit left and right, four make a square.
  */
 
 /**
@@ -39,11 +38,7 @@ export function netCellLayout(n, faceR, gap) {
   return cells;
 }
 
-/**
- * Ring radius of a layout (0 for a lone centre cell): handy for tests and callouts.
- * @param {{x:number,y:number,r:number}[]} cells
- * @returns {number}
- */
+/** Ring radius of a layout (0 for a lone centre cell): handy for tests and callouts. */
 export function netCellRingRadius(cells) {
   let rho = 0;
   for (const c of cells) rho = Math.max(rho, Math.hypot(c.x, c.y));

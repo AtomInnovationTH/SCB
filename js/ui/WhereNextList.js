@@ -1,23 +1,24 @@
 /**
- * WhereNextList - the "where next" list on floor 4 (LEO) (Nets step 3 slice 2b, lane 2b-2; plan decision K; DECISIONS §33 rows 6 and
- * 10; FEATURE_FLAGS.FIELDS_BY_HEIGHT). The panel the mission boundary asks "where to?" on: one row per field and a Stay row, the
- * words of js/systems/WhereNextRows.js. It draws at most five destination rows (the best guess first, tagged BEST, the rest cheapest gas
- * first) and a Stay line (`whereNextView`); the model keeps every row for the height scale and the picks. It owns no game state: main.js says when the choice is pending (`setPending`, from
- * `Events.WHERE_NEXT`), NavcomFloor says when floor 4 is the floor she is on (`setFloorShown`, from activate / deactivate), and a pick
- * goes out through `onPick(id)` (GameFlowManager.pickWhereNext). It is OPEN (on screen, taking keys) only while both hold.
+ * WhereNextList - the "where next" list on floor 4 (LEO) (DECISIONS §33 rows 6 and 10; FEATURE_FLAGS.FIELDS_BY_HEIGHT).
+ * The panel the mission boundary asks "where to?" on: one row per field and a Stay row, the words of
+ * js/systems/WhereNextRows.js. It draws at most five destination rows (the best guess first, tagged BEST, the rest
+ * cheapest gas first) and a Stay line (`whereNextView`); the model keeps every row for the height scale and the picks.
+ * It owns no game state: main.js says when the choice is pending (`setPending`, from `Events.WHERE_NEXT`), NavcomFloor
+ * says when floor 4 is the floor she is on (`setFloorShown`, from activate / deactivate), and a pick goes out through
+ * `onPick(id)` (GameFlowManager.pickWhereNext). It is OPEN (on screen, taking keys) only while both hold.
  *
  * Input (only while open; nothing pending = every floor-4 key and button as before):
  *   - tap / click a row focuses it; tapping the focused row picks it; a row that cannot be picked ignores taps
  *   - `focusStep(+1 / -1)` (Tab / Shift+Tab, routed by LadderController) moves focus over the rows that can be picked
- *   - `pickFocused()` (Space, routed by LadderController `_dispatchVerb`; the FLY THERE chip's tap is the same Space) picks the focus
+ *   - `pickFocused()` (Space, routed by LadderController `_dispatchVerb`; the FLY THERE chip's tap is the same Space)
  * Rows are plain <div>s: no <button>, no tabindex, so one Space press cannot also click a focused row.
  *
- * The rows are rebuilt every time the panel opens or is shown again, and about once a second while open (the gas, her mass and the
- * pieces left change while she waits); focus stays on the same row while it can still be picked, else it goes to the row the rebuild
- * pre-focuses (the field `defaultNext()` would fly to, else Stay).
+ * The rows are rebuilt each time the panel opens or is shown again, and about once a second while open; focus stays on
+ * the same row while it can still be picked, else it goes to the row the rebuild pre-focuses (the field `defaultNext()`
+ * would fly to, else Stay).
  *
- * DOM-guarded: with no document nothing is built and every method still answers (headless-safe). Inline styles and only
- * createElement / appendChild / removeChild / setAttribute / textContent / addEventListener, so a tiny fake DOM runs it.
+ * DOM-guarded (headless-safe): inline styles and only createElement / appendChild / removeChild / setAttribute /
+ * textContent / addEventListener, so a tiny fake DOM runs it.
  *
  * @module ui/WhereNextList
  */
@@ -29,27 +30,25 @@ import { whereNextView } from '../systems/WhereNextRows.js';
 export const WHERE_NEXT_ID = 'where-next-list';
 /** Row height on glass (iPad): the 44 px touch target. */
 export const ROW_PX_GLASS = 44;
-/** Row height with a pointer. */
 export const ROW_PX_DESKTOP = 28;
-/** Real-time interval between rebuilds of the rows while the list is open (ms). */
 export const REFRESH_MS = 1000;
 /**
- * Where it sits: bottom centre, its lower edge BOTTOM_PX above the screen's bottom - clear of the FLY THERE chip (88 px up, 48 px high,
- * centred), the transfer readout (bottom left, 400 px wide, to 863 px of a 1024 px screen) and the floor rail (right). The top centre
- * is the vitals, comms, score, pause and next-pane strip (measured at 1366x1024: 0-262 px down).
+ * Where it sits: bottom centre, its lower edge BOTTOM_PX above the screen's bottom - clear of the FLY THERE chip (88 px
+ * up, 48 px high, centred), the transfer readout (bottom left, 400 px wide, to 863 px of a 1024 px screen) and the floor
+ * rail (right). The top centre is the vitals, comms, score, pause and next-pane strip (measured at 1366x1024: 0-262 px
+ * down).
  */
 export const BOTTOM_PX = 164;
 export const WIDTH_PX = 580;
 /**
- * The panel never grows past the space between the top HUD strip (vitals, comms, score, next pane: 0-262 px down at 1366x1024) and
- * its own lower edge: more rows than fit scroll inside it (slice 3 adds rows).
+ * The panel never grows past the space between the top HUD strip (0-262 px down at 1366x1024) and its own lower edge:
+ * more rows than fit scroll inside it.
  */
 export const TOP_CLEAR_PX = 280;
 export const MAX_HEIGHT_CSS = `calc(100vh - ${BOTTOM_PX + TOP_CLEAR_PX}px)`;
 /** Pointer / touch / mouse events that end at the panel: nothing behind it (the map's drag, tap-to-focus, empty-tap scan) sees them. */
 export const STOPPED_EVENTS = ['pointerdown', 'pointerup', 'pointermove', 'touchstart', 'touchmove', 'touchend', 'mousedown', 'mouseup', 'click'];
 export const TITLE_TEXT = 'Where next?';
-/** The hint line: keys with a keyboard, taps on glass (read at draw time, as the other glass branches). */
 export const HINT_DESKTOP = 'Tab: next row \u00b7 Space: go';
 export const HINT_GLASS = 'Tap a row, tap it again to go';
 /** The tag on the row the game suggests (row 1; it has the focus when the list opens, so one tap or Space goes). */
@@ -65,18 +64,16 @@ const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : D
 export class WhereNextList {
   /**
    * @param {object} deps
-   * @param {Document|null} [deps.doc]      document (default: the global one; null = headless)
-   * @param {Element} [deps.parent]         where the panel goes (default doc.body)
+   * @param {Document|null} [deps.doc]      null = headless
    * @param {function} deps.getRows         () => buildWhereNextRows(...) result: { rows, focusId, selectable, line }
    * @param {function} deps.onPick          (id) => boolean: the pick (GameFlowManager.pickWhereNext)
    * @param {function} [deps.glass]         () => true on a touch screen (44 px rows, tap wording)
-   * @param {function} [deps.now]           ms clock (tests)
    * @param {function} [deps.isInputBlocked] () => true when the game would swallow a Space (paused, not gameplay, codex / help / old
    *                                        map open, a ceremony): taps do nothing then, as the FLY THERE chip and Space do
-   * @param {function} [deps.onFocus]           (id) => void: the focus moved to row `id` (null = none); the map's height scale
-   *                                            (ui/HeightScale.js, lane 3e) keeps its highlighted chip in step with it
-   * @param {object|null} [deps.bus]            event bus (default the game's; null = listen to nothing). Slice 5 (5d, D6): a "push" fate pick
-   *                                            (the big-piece fate event) while the list is open focuses that piece's push row
+   * @param {function} [deps.onFocus]       (id) => void: the focus moved to row `id` (null = none); the map's height scale
+   *                                        (ui/HeightScale.js) keeps its highlighted chip in step with it
+   * @param {object|null} [deps.bus]        event bus (default the game's; null = listen to nothing). A "push" fate pick
+   *                                        (the big-piece fate event) while the list is open focuses that piece's push row
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc : (typeof document !== 'undefined' ? document : null);
@@ -87,7 +84,7 @@ export class WhereNextList {
     this._now = typeof deps.now === 'function' ? deps.now : _nowMs;
     this._blockedFn = typeof deps.isInputBlocked === 'function' ? deps.isInputBlocked : null;
     this._onFocus = typeof deps.onFocus === 'function' ? deps.onFocus : null;
-    this._pending = false;          // the choice exists (Events.WHERE_NEXT {open: true})
+    this._pending = false;
     this._floorShown = false;       // floor 4 is the floor she is on
     this._model = { rows: [], focusId: null, selectable: [], line: null };
     this._focusId = null;
@@ -101,16 +98,15 @@ export class WhereNextList {
   }
 
   /**
-   * @private Slice 5 (5d, D6): the fate list marked a held piece "push": with this list open its row (new, or one that was there) gets
-   * the focus; closed or hidden (the fate list is on top), the row waits for the next opening, whose pre-focus is the first push row.
+   * @private The fate list marked a held piece "push": with this list open its row (new, or one that was there) gets the
+   * focus; closed or hidden (the fate list is on top), the row waits for the next opening, whose pre-focus is the first
+   * push row.
    */
   _onFate(e) {
     if (!e || e.fate !== 'push' || !this.isOpen()) return;
     this._rebuild(false);
     this.focus(`${PUSH_PREFIX}${e.debrisId}`);
   }
-
-  // ── State ──────────────────────────────────────────────────────────────────
 
   /** The choice is pending (main.js, from Events.WHERE_NEXT). Opening rebuilds the rows and pre-focuses. */
   setPending(on) {
@@ -132,10 +128,8 @@ export class WhereNextList {
   }
 
   isPending() { return this._pending; }
-  /** On screen and taking input: the choice is pending and floor 4 is the floor she is on. */
   isOpen() { return this._pending && this._floorShown && !this._disposed; }
 
-  /** @private open / close edge: build and show on open, hide on close. */
   _sync(wasOpen) {
     const open = this.isOpen();
     if (open && !wasOpen) {
@@ -149,23 +143,20 @@ export class WhereNextList {
     }
   }
 
-  // ── Model ──────────────────────────────────────────────────────────────────
-
-  /** @private what is drawn now (the top five, a focused extra row, Stay), from the model and the focus. */
   _view() { return whereNextView(this._model, this._focusId); }
   /** The rows as drawn: [{ id, kind, text, state, selectable, focused, best }] (a copy); `text` is the short line the panel shows. */
   rows() {
     const v = this._view();
     return v.rows.map((r) => ({ id: r.id, kind: r.kind, text: r.shortText || r.text, state: r.state, selectable: r.selectable, focused: r.id === this._focusId, best: r.id === v.bestId }));
   }
-  /** The id of the row the game suggests (tagged BEST), or null. */
   bestId() { return this._view().bestId; }
-  /** EVERY row as last built, with their numbers (gasKg, days, shortKg, ...), drawn or not: the map's height scale shows them on its chips (a copy). */
+  /** EVERY row as last built, with their numbers (gasKg, days, shortKg, ...), drawn or not: the map's height scale shows
+   *  them on its chips (a copy). */
   rowData() { return this._model.rows.map((r) => ({ ...r })); }
   focusedId() { return this._focusId; }
-  /** The row that is focused, or null. */
   focusedRow() { return this._model.rows.find((r) => r.id === this._focusId) || null; }
-  /** What the FLY THERE chip should say while a pick can be made: 'STAY' on the Stay row, 'CALL' on the call row (lane 3c), 'PUSH' on a push-down row (slice 5), 'FLY THERE' on a field row, else null. */
+  /** What the FLY THERE chip should say while a pick can be made: 'STAY' on the Stay row, 'CALL' on the call row, 'PUSH' on a
+   *  push-down row, 'FLY THERE' on a field row, else null. */
   chipLabel() {
     if (!this.isOpen()) return null;
     const r = this.focusedRow();
@@ -195,8 +186,6 @@ export class WhereNextList {
     this._rebuild(false);
   }
 
-  // ── Input ──────────────────────────────────────────────────────────────────
-
   /** Move the focus to the next / previous row that can be picked (wraps). @returns {boolean} the focus moved */
   focusStep(dir) {
     if (!this.isOpen()) return false;
@@ -210,7 +199,6 @@ export class WhereNextList {
     return true;
   }
 
-  /** Pick the focused row (Space). @returns {boolean} the pick was made */
   pickFocused() {
     if (!this.isOpen()) return false;
     const r = this.focusedRow();
@@ -231,9 +219,9 @@ export class WhereNextList {
   }
 
   /**
-   * Put the focus on row `id` without picking it (a tap on that row's chip on the map, ui/HeightScale.js). A row that cannot be
-   * picked, an unknown id, a closed list or input the game would swallow change nothing. Never a pick: `tapRow` picks a row that
-   * already has the focus, this does not.
+   * Put the focus on row `id` without picking it (a tap on that row's chip on the map, ui/HeightScale.js). A row that cannot
+   * be picked, an unknown id, a closed list or input the game would swallow change nothing. Never a pick: `tapRow` picks a
+   * row that already has the focus, this does not.
    * @returns {boolean} the focus is on `id` now
    */
   focus(id) {
@@ -248,10 +236,8 @@ export class WhereNextList {
     return true;
   }
 
-  /** The one callback that hears the focus move (null = none). */
   setOnFocus(fn) { this._onFocus = typeof fn === 'function' ? fn : null; }
 
-  /** @private tell the listener the focus is on a new row. */
   _focused() {
     if (!this._onFocus) return;
     try { this._onFocus(this._focusId); } catch (_e) { /* a listener never breaks the list */ }
@@ -263,16 +249,12 @@ export class WhereNextList {
     try { return !!this._blockedFn(); } catch (_e) { return true; }
   }
 
-  /** @private */
   _pick(id) {
     let ok = false;
     try { ok = !!this._onPick(id); } catch (_e) { ok = false; }
     return ok;
   }
 
-  // ── DOM ────────────────────────────────────────────────────────────────────
-
-  /** @private build the root once (hidden). */
   _build() {
     if (this._built) return;
     const doc = this._doc;
@@ -298,7 +280,6 @@ export class WhereNextList {
     this._parentEl = parent;
   }
 
-  /** @private */
   _show(on) {
     if (on) this._build();
     if (!this._root) return;
@@ -386,7 +367,6 @@ export class WhereNextList {
     });
   }
 
-  /** The panel's root element (tests / layout probes), or null. */
   get element() { return this._root; }
 
   dispose() {

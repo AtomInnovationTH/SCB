@@ -1,35 +1,22 @@
 /**
- * CargoPane.js — the CARGO HUD pane (Session K, 2026-09-06).
- *
- * The cargo manifest as a HUD pane over CargoSystem, with SELL / SELL ALL /
- * -> ELEVATOR acting through ShopScreen's PUBLIC wrappers (sellMetal /
- * sellAllCargo / contributeToElevator — never CargoSystem.removeMetal
- * directly, so the sale pipeline, the contract mass and the win check stay in
- * the shop). It is a pane-density RUNG like the other DOM panes: `rung()`
- * returns the HUD domRung shape ({id:'cargo', label, isVisible, setVisible})
- * whose ONE visibility bit is the `data-density-hidden` attribute on the root,
- * so the DETAIL slider counts it as a rung and FloorMask rooms it per floor
+ * CargoPane.js — the CARGO HUD pane: the cargo manifest over CargoSystem, with SELL / SELL ALL / -> ELEVATOR acting
+ * through ShopScreen's PUBLIC wrappers (sellMetal / sellAllCargo / contributeToElevator — never
+ * CargoSystem.removeMetal directly, so the sale pipeline, contract mass and win check stay in the shop).
+ * A pane-density RUNG: `rung()` returns the HUD domRung shape ({id:'cargo', label, isVisible, setVisible}) whose ONE
+ * visibility bit is `data-density-hidden` on the root, so the DETAIL slider counts it and FloorMask rooms it per floor
  * (MASK_PANES.cargo / DEFAULT_ROOMS[floor].cargo).
  *
- * Wiring (the hub's, main.js inside the LADDER gate): construct with the live
- * CargoSystem + ShopScreen, push `pane.rung()` into hud.paneDensity.rungs
- * BEFORE the first floorMask.setFloor. LeftStack places this pane as the
- * first left-arm overlay rider via `setStack(top, height, mode)` (write-on-
- * change on those three inputs). Layout-hidden uses `data-stack-hidden`, never
- * the density bit.
+ * Wiring (main.js, LADDER gate): construct with the live CargoSystem + ShopScreen, push `pane.rung()` into
+ * hud.paneDensity.rungs BEFORE the first floorMask.setFloor. LeftStack places it as the first left-arm overlay rider
+ * via `setStack(top, height, mode)` (write-on-change). Layout-hidden uses `data-stack-hidden`, never the density bit.
  *
- * Laws: the root is a DIRECT child of #hud-overlay (the side columns are
- * dimmed to 0.35 + pointer-events:none while the hull callouts are active);
- * NO backdrop-filter (the .hud-panel GPU ban, index.html); render on EVENTS
- * only (CARGO_UPDATED / CARGO_STORE / CARGO_SELL / CARGO_SELL_ALL /
- * CONTRACT_UPDATE / UPGRADE_PURCHASED / GAME_RESET + the pane's own actions),
- * never per frame; a keyed row pool (by metalId) makes a re-render cheap and
- * every text write is write-on-change; nothing registers on window/document;
- * NO keyboard binding — every digit is taken by InputManager, so the notch
- * carries no hotkey suffix; no timers. Every dep is optional and guarded:
- * importing the module and constructing it with no document must not throw
- * (headless-safe), and an absent `cargo` renders `bay empty` with the buttons
- * disabled.
+ * Laws: the root is a DIRECT child of #hud-overlay (the side columns are dimmed to 0.35 + pointer-events:none while
+ * the hull callouts are active); NO backdrop-filter (the .hud-panel GPU ban, index.html); render on EVENTS only
+ * (CARGO_UPDATED / CARGO_STORE / CARGO_SELL / CARGO_SELL_ALL / CONTRACT_UPDATE / UPGRADE_PURCHASED / GAME_RESET + own
+ * actions), never per frame; a keyed row pool (by metalId) and write-on-change text; nothing registers on
+ * window/document; NO keyboard binding (every digit is taken by InputManager, so the notch has no hotkey suffix);
+ * no timers. Every dep is optional and guarded: construction with no document must not throw, and an absent `cargo`
+ * renders `bay empty` with the buttons disabled.
  *
  * @module ui/hud/CargoPane
  */
@@ -43,25 +30,20 @@ import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { DENSITY_MOTION_MS, DENSITY_MOTION_EASING } from '../HUD.js';
 import { clamp } from '../../core/MathUtil.js';
 
-/** The root element id (FloorMask MASK_PANES.cargo.els = ['#hud-cargo-pane']). */
+/** FloorMask MASK_PANES.cargo.els = ['#hud-cargo-pane']. */
 export const CARGO_PANE_ID = 'hud-cargo-pane';
 
-/** The injected stylesheet's id (one <style>, injected once per document). */
 export const CARGO_STYLE_ID = 'cargo-pane-style';
 
-/** The pane-density rung id (FloorMask MASK_PANES.cargo.rung). */
+/** FloorMask MASK_PANES.cargo.rung. */
 export const CARGO_RUNG_ID = 'cargo';
 
 /**
- * CARGO_GEOMETRY — the pane's numbers (px). FULL_MAX_PX is a hard budget: on
- * the 13-inch iPad landscape the pane gets exactly y 724–924 under the SPECS
- * tab. ROW_* / BTN_* are the per-row and button heights (desktop / glass, the
- * 44 pt HIG hit box). COMPACT_* is the compact form's outer height: FRAME +
- * HEADER + FOOT_GAP + BTN (the header line and the two buttons cannot share
- * one 262 px inner row, so the compact form is two stacked lines). FRAME_PX is
- * the .hud-panel chrome (6 px padding + 1 px border, top and bottom);
- * HEADER_PX / PROGRESS_PX / LIST_PAD_PX / FOOT_GAP_PX are the fixed block
- * heights the full form's minimum is computed from (fullMinPx).
+ * The pane's numbers (px). FULL_MAX_PX is a hard budget: on the 13-inch iPad landscape the pane gets exactly
+ * y 724–924 under the SPECS tab. ROW_* / BTN_* are per-row and button heights (desktop / glass, the 44 pt hit box).
+ * COMPACT_* = FRAME + HEADER + FOOT_GAP + BTN (the header line and the two buttons cannot share one 262 px inner row,
+ * so the compact form is two stacked lines). FRAME_PX is the .hud-panel chrome (6 px padding + 1 px border, top and
+ * bottom); HEADER_PX / PROGRESS_PX / LIST_PAD_PX / FOOT_GAP_PX feed fullMinPx.
  */
 export const CARGO_GEOMETRY = Object.freeze({
   WIDTH_PX: HUD_COLUMN_WIDTH_PX,
@@ -81,31 +63,19 @@ export const CARGO_GEOMETRY = Object.freeze({
   FOOT_GAP_PX: 4,
 });
 
-/** The rung's ONE hide bit (HUD._initPaneDensity domRung grammar). */
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
 /** Layout-hidden (LeftStack): display:none via the pane's own style — never the density bit. */
 const STACK_HIDDEN_ATTR = 'data-stack-hidden';
 const MODE_ATTR = 'data-cargo-mode';
 
-/**
- * The full form's minimum outer height: frame + header + progress + list
- * padding + ONE row + footer gap + the footer buttons.
- * @param {boolean} glass
- * @returns {number}
- */
+/** The full form's minimum outer height: frame + header + progress + list padding + ONE row + footer gap + buttons. */
 export function fullMinPx(glass) {
   const G = CARGO_GEOMETRY;
   return G.FRAME_PX + G.HEADER_PX + G.PROGRESS_PX + G.LIST_PAD_PX +
     (glass ? G.ROW_GLASS_PX : G.ROW_PX) + G.FOOT_GAP_PX + (glass ? G.BTN_GLASS_PX : G.BTN_PX);
 }
 
-/**
- * The full form's natural outer height for `rows` manifest rows (the `bay
- * empty` line counts as one row).
- * @param {number} rows
- * @param {boolean} glass
- * @returns {number}
- */
+/** The full form's natural outer height for `rows` manifest rows (`bay empty` counts as one). */
 export function naturalPx(rows, glass) {
   const n = Math.max(1, rows | 0);
   return fullMinPx(glass) + (n - 1) * (glass ? CARGO_GEOMETRY.ROW_GLASS_PX : CARGO_GEOMETRY.ROW_PX);
@@ -113,20 +83,18 @@ export function naturalPx(rows, glass) {
 /** Alias so the instance method `naturalPx()` does not recurse into itself. */
 const _naturalPx = naturalPx;
 
-/** @private 1-decimal kg. */
 function fmt1(x) {
   const n = Number(x);
   return Number.isFinite(n) ? n.toFixed(1) : '0.0';
 }
 
-/** @private Capacity / target kg: integers stay integers, else 1 decimal. */
+/** Integers stay integers, else 1 decimal. */
 function fmtCap(x) {
   const n = Number(x);
   if (!Number.isFinite(n)) return '0';
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
 
-/** @private Credits: whole cents. */
 function fmtCents(x) {
   const n = Number(x);
   return `${Number.isFinite(n) ? Math.round(n) : 0}\u00a2`;
@@ -160,19 +128,19 @@ export class CargoPane {
     this._now = typeof deps.now === 'function' ? deps.now : null;
 
     this._root = null;
-    this._el = null;                 // { head, fill, worth, elevLabel, elevBar, list, empty, foot, sellAll, elevator }
+    this._el = null;
     /** @type {Map<string, {el:object, name:object, kg:object, val:object, btn:object}>} keyed row pool */
     this._rows = new Map();
     this._order = [];                // metalIds in DOM order
     this._rowCount = 1;              // rows the natural height is computed from (>= 1)
     this._empty = true;
-    this._mode = 'hidden';           // until the first setStack places the pane (cargo-mode)
+    this._mode = 'hidden';           // until the first setStack places the pane
     this._stackMode = undefined;     // last setStack inputs (write-on-change)
     this._stackTop = undefined;
     this._stackH = undefined;
     this._topPx = null;              // the placed top
-    this._heightPx = 0;              // cached rendered height (offsetHeight, read once per change)
-    this._expectedPx = 0;            // the arithmetic expectation (fallback when offsetHeight is unavailable)
+    this._heightPx = 0;              // cached offsetHeight, read once per change
+    this._expectedPx = 0;            // fallback when offsetHeight is unavailable
     this._rung = null;
     this._unsubs = [];
     this._disposed = false;
@@ -182,15 +150,7 @@ export class CargoPane {
     if (this._root) this._render();
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
-  /**
-   * The pane-density rung adapter (cached object; HUD domRung shape). The ONE
-   * visibility bit is `data-density-hidden` on the root; isVisible() also
-   * honours on-screen presence (getClientRects) like HUD's DOM rungs. Never
-   * throws headless (no root ⇒ not visible, setVisible no-op).
-   * @returns {{id:string, label:string, isVisible:function, setVisible:function}}
-   */
+  /** The pane-density rung adapter (cached). Never throws headless (no root ⇒ not visible, setVisible no-op). */
   rung() {
     if (!this._rung) {
       this._rung = {
@@ -199,8 +159,7 @@ export class CargoPane {
         isVisible: () => {
           const el = this._root;
           if (!el || !el.hasAttribute) return false;
-          // Density bit / leaving only — layout-hidden (`data-stack-hidden`)
-          // must not read as a density hide (LeftStack would skip apply).
+          // Layout-hidden (`data-stack-hidden`) must not read as a density hide (LeftStack would skip apply).
           return !el.hasAttribute(DENSITY_HIDDEN_ATTR) && !el.hasAttribute('data-density-leaving');
         },
         setVisible: (v) => {
@@ -215,12 +174,8 @@ export class CargoPane {
   }
 
   /**
-   * LeftStack apply (the hub calls it per frame). Write-on-change on the three
-   * inputs. Maps stack mode → data-cargo-mode: natural/trimmed → 'full',
-   * compact → 'compact', hidden → 'hidden' + data-stack-hidden. Sets `top`
-   * BEFORE un-hiding so the gap-closing reflow glides.
-   * @param {number} top
-   * @param {number} height
+   * LeftStack apply (per frame). Write-on-change. Stack mode → data-cargo-mode: natural/trimmed → 'full',
+   * compact → 'compact', hidden → 'hidden' + data-stack-hidden. Sets `top` BEFORE un-hiding so the reflow glides.
    * @param {'natural'|'compact'|'trimmed'|'hidden'} mode
    */
   setStack(top, height, mode) {
@@ -237,17 +192,14 @@ export class CargoPane {
     if (this._layout()) this._measure();
   }
 
-  /** Rider natural height: min(FULL_MAX_PX, rows). */
   naturalPx() {
     return Math.min(CARGO_GEOMETRY.FULL_MAX_PX, _naturalPx(this._rowCount, this._glass));
   }
 
-  /** Rider compact height (header + buttons), glass or desktop. */
   compactPx() {
     return this._glass ? CARGO_GEOMETRY.COMPACT_GLASS_PX : CARGO_GEOMETRY.COMPACT_PX;
   }
 
-  /** Rider trim floor (full form with one row). */
   minPx() {
     return fullMinPx(this._glass);
   }
@@ -255,12 +207,7 @@ export class CargoPane {
   /** The current cargo-mode: 'full' | 'compact' | 'hidden' ('hidden' until the first setStack, and headless). */
   mode() { return this._mode; }
 
-  /**
-   * The pane's PLACED top edge (CSS px) while it is on screen (placed, not
-   * layout-hidden, density bit clear), else null. A cached layout number +
-   * one attribute read — never a layout read.
-   * @returns {number|null}
-   */
+  /** The PLACED top edge (CSS px) while on screen (placed, not layout-hidden, density bit clear), else null. Never a layout read. */
   topPx() {
     const el = this._root;
     if (!el || this._mode === 'hidden' || this._topPx == null) return null;
@@ -268,13 +215,11 @@ export class CargoPane {
     return this._topPx;
   }
 
-  /** The cached rendered height (px): offsetHeight read once per render / dodge change, never per frame. */
+  /** Cached offsetHeight (px), read once per render / dodge change, never per frame. */
   heightPx() { return this._heightPx; }
 
-  /** Re-read the manifest and repaint (event-rate; also after every own action). */
   refresh() { this._render(); }
 
-  /** Unsubscribe every listener, remove the root; further calls no-op. */
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
@@ -293,9 +238,7 @@ export class CargoPane {
     this._heightPx = 0;
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-
-  /** @private Inject the style once, build the DOM under `parent` (headless: nothing). */
+  /** @private Headless: builds nothing. */
   _build(parentDep) {
     const doc = this._doc;
     if (!doc || typeof doc.createElement !== 'function') return;
@@ -307,10 +250,9 @@ export class CargoPane {
     const root = doc.createElement('div');
     root.id = CARGO_PANE_ID;
     root.className = 'hud-panel' + (this._glass ? ' cargo-glass' : '');
-    // Geometry: left / width at build (inverted U, locked #8); `top` and
-    // `max-height` are written ONLY by setStack. Plan Task 8.
+    // left / width at build; `top` and `max-height` are written ONLY by setStack.
     root.style.position = 'absolute';
-    root.style.left = `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`;   // = the left column's edge
+    root.style.left = `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`;   // the left column's edge
     root.style.width = `${G.WIDTH_PX}px`;
     root.style.boxSizing = 'border-box';
     root.style.pointerEvents = 'auto';
@@ -364,7 +306,7 @@ export class CargoPane {
     this._el = { head, fill, worth, elevLabel, elevBar, list, empty, foot, sellAll, elevator };
   }
 
-  /** @private The one <style id="cargo-pane-style"> (per document). No backdrop-filter. */
+  /** @private One <style> per document. No backdrop-filter. */
   _ensureStyle() {
     const doc = this._doc;
     if (!doc || !doc.head || (doc.getElementById && doc.getElementById(CARGO_STYLE_ID))) return;
@@ -456,10 +398,9 @@ export class CargoPane {
     doc.head.appendChild(style);
   }
 
-  /** @private Subscribe the render to the cargo / contract / capacity / reset events (injected bus). */
   _subscribe() {
-    // u1-resupply-stop D3: the shop tells us when the resupply stop opens / closes (a plain callback — no new
-    // EventBus event), so the button words below follow it. A stub shop without the hook is simply never told.
+    // The shop tells us when the resupply stop opens / closes (a plain callback, no EventBus event); a stub shop
+    // without the hook is simply never told.
     const shop = this._shop;
     if (shop && typeof shop.onResupplyStopChange === 'function') {
       try {
@@ -481,9 +422,6 @@ export class CargoPane {
     }
   }
 
-  // ── Reads (every one guarded) ──────────────────────────────────────────────
-
-  /** @private The manifest array (absent / throwing cargo ⇒ []). */
   _manifest() {
     const c = this._cargo;
     if (!c || typeof c.getManifest !== 'function') return [];
@@ -495,7 +433,6 @@ export class CargoPane {
     }
   }
 
-  /** @private {totalMassKg, capacityKg, totalValue} (absent ⇒ zeros). */
   _status() {
     const c = this._cargo;
     if (c && typeof c.getStatus === 'function') {
@@ -507,10 +444,7 @@ export class CargoPane {
     return { totalMassKg: 0, capacityKg: 0, totalValue: 0 };
   }
 
-  /**
-   * @private u1-resupply-stop D3: may the shop trade right now? False only when the shop says it is mid-mission
-   * (`canTrade() === false`); a stub shop without the reader is permissive.
-   */
+  /** @private False only when the shop says it is mid-mission (`canTrade() === false`); a stub shop is permissive. */
   _tradeOpen() {
     const s = this._shop;
     if (!s || typeof s.canTrade !== 'function') return true;
@@ -518,9 +452,9 @@ export class CargoPane {
   }
 
   /**
-   * @private Word one sell / contribute button by the stop: mid-mission it carries the full sentence as its tooltip
-   * and accessible name and is dimmed (data-closed); a click still goes to the shop, whose gate refuses it with
-   * the comms line. Write-on-change. The visible text stays short — the pane's footer is a fixed-budget row.
+   * @private Mid-mission the button carries the full sentence as tooltip and accessible name and is dimmed
+   * (data-closed); a click still goes to the shop, whose gate refuses it with the comms line. Write-on-change.
+   * The visible text stays short: the footer is a fixed-budget row.
    */
   _wordTradeButton(btn, closed, openLabel, closedLabel) {
     if (!btn || !btn.setAttribute) return;
@@ -537,7 +471,6 @@ export class CargoPane {
     }
   }
 
-  /** @private The contract mass so far (shop.getContractMass, guarded). */
   _contractKg() {
     const s = this._shop;
     if (!s || typeof s.getContractMass !== 'function') return 0;
@@ -549,34 +482,25 @@ export class CargoPane {
     }
   }
 
-  /** @private The elevator target mass (Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG). */
   _targetKg() {
     const ec = Constants && Constants.ELEVATOR_CONTRACT;
     const t = ec && Number(ec.TARGET_MASS_KG);
     return (Number.isFinite(t) && t > 0) ? t : 10000;
   }
 
-  // ── Actions (through the SHOP wrappers only) ───────────────────────────────
-
-  /** @private Row SELL → shop.sellMetal(metalId); re-render. */
   _sellRow(metalId) {
     const s = this._shop;
     if (this._disposed || !s || typeof s.sellMetal !== 'function') return;
     try { s.sellMetal(metalId); } finally { this._render(); }
   }
 
-  /** @private SELL ALL → shop.sellAllCargo() once; re-render. */
   _sellAll() {
     const s = this._shop;
     if (this._disposed || this._empty || !s || typeof s.sellAllCargo !== 'function') return;
     try { s.sellAllCargo(); } finally { this._render(); }
   }
 
-  /**
-   * @private -> ELEVATOR: contribute EVERY manifest item, one
-   * shop.contributeToElevator(metalId, massKg) per item, stopping early once
-   * shop.getContractMass() reaches the target (the win fires inside the shop).
-   */
+  /** @private Contributes EVERY manifest item, stopping once getContractMass() reaches the target (the win fires in the shop). */
   _contributeAll() {
     const s = this._shop;
     if (this._disposed || this._empty || !s || typeof s.contributeToElevator !== 'function') return;
@@ -595,9 +519,6 @@ export class CargoPane {
     }
   }
 
-  // ── Render (event-rate) ────────────────────────────────────────────────────
-
-  /** @private Repaint from the reads; keyed rows; write-on-change everywhere. */
   _render() {
     if (this._disposed || !this._root) return;
     const el = this._el;
@@ -622,7 +543,7 @@ export class CargoPane {
     this._setStyle(el.empty, 'display', empty ? '' : 'none');
     this._setDisabled(el.sellAll, empty);
     this._setDisabled(el.elevator, empty);
-    // u1-resupply-stop D3: mid-mission every sell / contribute button reads "... at the resupply stop".
+    // Mid-mission every sell / contribute button reads "... at the resupply stop".
     const closed = !this._tradeOpen();
     this._wordTradeButton(el.sellAll, closed, null, sellAtLine());
     this._wordTradeButton(el.elevator, closed, null, contributeAtLine());
@@ -633,7 +554,7 @@ export class CargoPane {
     this._measure();
   }
 
-  /** @private Keyed row pool by metalId: reuse, retext, reorder only when the order changed. */
+  /** @private Reorders only when the order changed. */
   _syncRows(items) {
     const list = this._el.list;
     const pool = this._rows;
@@ -672,7 +593,6 @@ export class CargoPane {
     }
   }
 
-  /** @private One manifest row: name | kg | value | SELL (the SELL button is keyed to its metalId). */
   _makeRow(id) {
     const doc = this._doc;
     const mk = (tag, cls, text) => {
@@ -693,12 +613,7 @@ export class CargoPane {
     return { el, name, kg, val, btn };
   }
 
-  // ── Layout (setStack; write-on-change outputs) ─────────────────────────────
-
-  /**
-   * @private Place the pane from the cached stack inputs. Returns true when a
-   * DOM write happened. Sets `top` BEFORE un-hiding. No layout reads.
-   */
+  /** @private Returns true when a DOM write happened. Sets `top` BEFORE un-hiding. No layout reads. */
   _layout() {
     const root = this._root;
     if (!root || !Number.isFinite(this._stackTop)) return false;
@@ -726,7 +641,7 @@ export class CargoPane {
     return wrote;
   }
 
-  /** @private Cache the rendered height: ONE offsetHeight read (fallback: the computed expectation). */
+  /** @private ONE offsetHeight read (fallback: the computed expectation). */
   _measure() {
     const root = this._root;
     if (!root) { this._heightPx = 0; return; }
@@ -735,23 +650,19 @@ export class CargoPane {
     this._heightPx = (typeof h === 'number' && h > 0) ? h : (this._expectedPx || 0);
   }
 
-  // ── Write-on-change helpers ────────────────────────────────────────────────
-
-  /** @private */
   _setText(el, text) {
     if (!el || el.textContent === text) return false;
     el.textContent = text;
     return true;
   }
 
-  /** @private */
   _setStyle(el, prop, value) {
     if (!el || !el.style || el.style[prop] === value) return false;
     el.style[prop] = value;
     return true;
   }
 
-  /** @private disabled + aria-disabled (the dim rule keys off the attribute). */
+  /** @private The dim rule keys off aria-disabled. */
   _setDisabled(btn, disabled) {
     if (!btn) return;
     if (btn.disabled !== disabled) btn.disabled = disabled;

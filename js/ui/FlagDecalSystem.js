@@ -1,24 +1,13 @@
 /**
  * FlagDecalSystem.js — Procedural Canvas2D country flag decal atlas
- * Generates simplified geometric flags for ~15 countries + unknown fallback.
- * No external image files — all Canvas2D procedural shapes.
- *
- * ST-6.2: Phase 3 country flag decals.
+ * Simplified geometric flags for ~15 countries + unknown fallback; no external image files.
  * @module ui/FlagDecalSystem
  */
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 
-// ============================================================================
-// COUNTRY CONFIGURATION (pure logic — Node-safe)
-// ============================================================================
-
-/**
- * Ordered list of supported country codes.
- * Index = slot position in the 4×4 flag atlas grid.
- * The last slot (index 15) is the "unknown" fallback.
- */
+/** Supported country codes; index = slot in the 4×4 flag atlas grid. The last slot (15) is the "unknown" fallback. */
 const COUNTRY_ORDER = [
   'USA', 'CIS', 'PRC', 'JPN',
   'IND', 'ESA', 'FRA', 'GBR',
@@ -26,19 +15,15 @@ const COUNTRY_ORDER = [
   'BRA', 'KOR', 'ISR', '???',
 ];
 
-/** Alias map: alternate codes resolve to canonical codes */
 const COUNTRY_ALIASES = {
   RUS: 'CIS',
   CHN: 'PRC',
 };
 
-// ============================================================================
-// PURE-LOGIC EXPORTS (Node-safe — no Canvas/THREE dependency)
-// ============================================================================
+// Pure-logic exports below are Node-safe (no Canvas/THREE dependency).
 
 /**
- * Compute UV offset + scale for a country's flag slot in the atlas grid.
- * Unknown country codes map to the '???' fallback slot.
+ * UV offset + scale for a country's flag slot in the atlas grid. Unknown codes map to the '???' slot.
  *
  * @param {string} countryCode — ISO-3-ish code (e.g. 'USA', 'CIS')
  * @param {number} [cols] — grid columns (default: Constants or 4)
@@ -64,26 +49,18 @@ export function getUVOffsetForCountry(countryCode, cols, rows) {
   };
 }
 
-/**
- * Check whether a country code has a dedicated flag design.
- * @param {string} countryCode
- * @returns {boolean}
- */
+/** Whether a country code has a dedicated flag design ('???' is the fallback, not a flag). */
 export function hasFlag(countryCode) {
   const resolved = COUNTRY_ALIASES[countryCode] || countryCode;
   const idx = COUNTRY_ORDER.indexOf(resolved);
-  // '???' slot is the unknown fallback — not a "real" flag
   return idx >= 0 && COUNTRY_ORDER[idx] !== '???';
 }
 
 /**
- * Item 12 (2026-06-12): flag eligibility by SIZE, not by catalog label.
- * Any object at least FLAG_MIN_SIZE_M wide carries a national marking — this
- * covers rocket bodies, defunct sats, AND large derelict satellites the catalog
- * happens to tag "debris" (→ internal `fragment`), e.g. COSMOS 1408 / IRIDIUM 33.
- * Small operational debris (lens caps, clamps) never qualifies; genuine
- * fragments are always sub-threshold so they are excluded by size automatically.
- * Pure + Node-safe (unit-tested headless).
+ * Flag eligibility by SIZE, not by catalog label: any object at least FLAG_MIN_SIZE_M wide carries a national
+ * marking — rocket bodies, defunct sats, AND large derelict satellites the catalog tags "debris" (→ internal
+ * `fragment`), e.g. COSMOS 1408 / IRIDIUM 33. Small operational debris (lens caps, clamps) never qualifies;
+ * genuine fragments are sub-threshold.
  *
  * @param {{type?: string, sizeMeter?: number}|null} debris
  * @returns {boolean}
@@ -97,10 +74,8 @@ export function isFlagEligible(debris) {
 }
 
 /**
- * Item 12 (2026-06-12): deterministic weighted country pick for PROCEDURAL
- * sats/rockets (catalog rows carry their own country). Weighted toward the
- * historically dominant launch states so early-mission fields look plausible.
- * Deterministic from the debris id so saves agree.
+ * Deterministic (from the debris id, so saves agree) weighted country pick for PROCEDURAL sats/rockets (catalog
+ * rows carry their own country). Weighted toward the historically dominant launch states.
  *
  * @param {number} id — numeric debris id
  * @returns {string} country code from the flag atlas (never '???')
@@ -113,7 +88,6 @@ export function pickCountryForId(id) {
     ['CAN', 1], ['BRA', 1], ['KOR', 1], ['ISR', 1],
   ];
   const total = WEIGHTED.reduce((s, [, w]) => s + w, 0);
-  // Deterministic hash of the id → [0, 1)
   const h = Math.sin((id || 0) * 78.233 + 1.618) * 43758.5453;
   let roll = (h - Math.floor(h)) * total;
   for (const [code, w] of WEIGHTED) {
@@ -123,14 +97,7 @@ export function pickCountryForId(id) {
   return WEIGHTED[0][0];
 }
 
-// ============================================================================
-// CANVAS2D FLAG ATLAS CLASS (browser-only)
-// ============================================================================
-
-/**
- * Procedural Canvas2D flag atlas for ~15 countries.
- * Generates a single THREE.CanvasTexture at boot; not per-frame.
- */
+/** Browser-only. Generates a single THREE.CanvasTexture at boot; not per-frame. */
 export class FlagDecalSystem {
   /**
    * @param {number} [atlasSize] — pixel dimension (default from Constants)
@@ -146,10 +113,6 @@ export class FlagDecalSystem {
     this.texture = null;
   }
 
-  /**
-   * Paint all flags and return a THREE.CanvasTexture.
-   * @returns {THREE.CanvasTexture|null}
-   */
   generate() {
     if (typeof document === 'undefined') return null;
 
@@ -180,30 +143,21 @@ export class FlagDecalSystem {
     return tex;
   }
 
-  /** Delegates to pure function */
   getUVOffsetForCountry(countryCode) {
     return getUVOffsetForCountry(countryCode, this._cols, this._rows);
   }
 
-  /** Delegates to pure function */
   hasFlag(countryCode) {
     return hasFlag(countryCode);
   }
 
-  /** Release canvas + texture GPU memory */
   dispose() {
     if (this.texture && this.texture.dispose) this.texture.dispose();
     this.texture = null;
     this._canvas = null;
   }
 
-  // --------------------------------------------------------------------------
-  // Flag painting dispatch
-  // --------------------------------------------------------------------------
-
-  /** @private */
   _paintFlag(ctx, code, x, y, w, h) {
-    // Add 2px padding inside each slot for visual separation
     const pad = 2;
     const fx = x + pad;
     const fy = y + pad;
@@ -212,16 +166,13 @@ export class FlagDecalSystem {
 
     this._drawFlagArt(ctx, code, fx, fy, fw, fh);
 
-    // Decal placard frame so the flag reads as a riveted plate bonded to the
-    // hull (NASA/ESA style), not a floating banner. Drawn over the flag art.
+    // Placard frame over the art: reads as a riveted plate bonded to the hull, not a floating banner.
     this._paintDecalFrame(ctx, fx, fy, fw, fh);
   }
 
   /**
-   * @private Pure flag artwork dispatch (no placard frame). Shared by the debris
-   * atlas (`_paintFlag`) and the standalone EVA shoulder-patch texture
-   * (`makeFlagCanvas`). Supports a couple of codes beyond the 16-slot atlas
-   * (THA, ESP) used only for the player's suit patch.
+   * @private Flag artwork dispatch (no placard frame), shared by the debris atlas (`_paintFlag`) and the EVA
+   * shoulder-patch texture (`makeFlagCanvas`). THA and ESP are beyond the 16-slot atlas, used only for the suit patch.
    */
   _drawFlagArt(ctx, code, x, y, w, h) {
     switch (code) {
@@ -247,14 +198,12 @@ export class FlagDecalSystem {
   }
 
   /**
-   * Render a SINGLE flag to a standalone canvas (no riveted decal frame), for
-   * use as a texture map elsewhere — e.g. the astronaut's curved shoulder
-   * patch. Browser-only (returns null under Node).
+   * Render a SINGLE flag to a standalone canvas (no decal frame), e.g. for the astronaut's curved shoulder patch.
+   * Browser-only (returns null under Node).
    *
    * @param {string} code — flag code (USA/IND/JPN/THA/ESP/…)
    * @param {number} [w=96]  canvas width  (landscape ~3:2 reads best)
    * @param {number} [h=64]  canvas height
-   * @returns {HTMLCanvasElement|null}
    */
   makeFlagCanvas(code, w = 96, h = 64) {
     if (typeof document === 'undefined') return null;
@@ -266,10 +215,9 @@ export class FlagDecalSystem {
     return canvas;
   }
 
-  /** @private Riveted placard frame + edge shading to sell "painted on hardware" */
+  /** @private Riveted placard frame + edge shading */
   _paintDecalFrame(ctx, x, y, w, h) {
     ctx.save();
-    // Subtle inner vignette (panel curvature / dirt at edges)
     const vg = ctx.createLinearGradient(x, y, x, y + h);
     vg.addColorStop(0, 'rgba(255,255,255,0.10)');
     vg.addColorStop(0.5, 'rgba(0,0,0,0)');
@@ -277,13 +225,11 @@ export class FlagDecalSystem {
     ctx.fillStyle = vg;
     ctx.fillRect(x, y, w, h);
 
-    // Dark metal border
     ctx.strokeStyle = 'rgba(20,22,26,0.85)';
     ctx.lineWidth = Math.max(2, w * 0.03);
     ctx.strokeRect(x + ctx.lineWidth / 2, y + ctx.lineWidth / 2,
       w - ctx.lineWidth, h - ctx.lineWidth);
 
-    // Corner rivets
     ctx.fillStyle = 'rgba(180,182,190,0.9)';
     const r = Math.max(2, w * 0.04);
     const inset = r * 1.6;
@@ -299,9 +245,7 @@ export class FlagDecalSystem {
     ctx.restore();
   }
 
-  // --------------------------------------------------------------------------
-  // Individual flag painters (simplified geometric approximations)
-  // --------------------------------------------------------------------------
+  // Individual flag painters: simplified geometric approximations.
 
   /** USA: blue canton + star grid + red/white stripes */
   _paintUSA(ctx, x, y, w, h) {
@@ -338,11 +282,9 @@ export class FlagDecalSystem {
     ctx.fillStyle = '#DE2910';
     ctx.fillRect(x, y, w, h);
     ctx.fillStyle = '#FFDE00';
-    // Large star
     const sx = x + w * 0.2;
     const sy = y + h * 0.35;
     this._drawStar(ctx, sx, sy, Math.min(w, h) * 0.12, 5);
-    // 4 small stars
     const smallR = Math.min(w, h) * 0.05;
     this._drawStar(ctx, x + w * 0.35, y + h * 0.18, smallR, 5);
     this._drawStar(ctx, x + w * 0.42, y + h * 0.28, smallR, 5);
@@ -366,7 +308,6 @@ export class FlagDecalSystem {
     ctx.fillStyle = '#FF9933'; ctx.fillRect(x, y, w, sh + 1);
     ctx.fillStyle = '#FFFFFF'; ctx.fillRect(x, y + sh, w, sh + 1);
     ctx.fillStyle = '#138808'; ctx.fillRect(x, y + sh * 2, w, sh + 1);
-    // Blue circle (simplified Ashoka Chakra)
     ctx.strokeStyle = '#000080';
     ctx.lineWidth = 2;
     const cr = Math.min(w, h) * 0.1;
@@ -403,7 +344,6 @@ export class FlagDecalSystem {
   _paintGBR(ctx, x, y, w, h) {
     ctx.fillStyle = '#012169';
     ctx.fillRect(x, y, w, h);
-    // White diagonal + cross
     ctx.strokeStyle = '#FFFFFF';
     ctx.lineWidth = Math.max(2, h * 0.12);
     ctx.beginPath();
@@ -415,7 +355,6 @@ export class FlagDecalSystem {
     ctx.moveTo(x + w / 2, y); ctx.lineTo(x + w / 2, y + h);
     ctx.moveTo(x, y + h / 2); ctx.lineTo(x + w, y + h / 2);
     ctx.stroke();
-    // Red cross on top
     ctx.strokeStyle = '#C8102E';
     ctx.lineWidth = Math.max(1.5, h * 0.1);
     ctx.beginPath();
@@ -459,7 +398,6 @@ export class FlagDecalSystem {
     ctx.fillRect(x + w - barW, y, barW, h);
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(x + barW, y, w - barW * 2, h);
-    // Simplified maple leaf (red diamond)
     ctx.fillStyle = '#FF0000';
     const cx = x + w / 2;
     const cy = y + h / 2;
@@ -477,7 +415,6 @@ export class FlagDecalSystem {
   _paintBRA(ctx, x, y, w, h) {
     ctx.fillStyle = '#009C3B';
     ctx.fillRect(x, y, w, h);
-    // Yellow diamond
     ctx.fillStyle = '#FFDF00';
     ctx.beginPath();
     ctx.moveTo(x + w / 2, y + h * 0.1);
@@ -486,7 +423,6 @@ export class FlagDecalSystem {
     ctx.lineTo(x + w * 0.1, y + h / 2);
     ctx.closePath();
     ctx.fill();
-    // Blue circle
     ctx.fillStyle = '#002776';
     ctx.beginPath();
     ctx.arc(x + w / 2, y + h / 2, Math.min(w, h) * 0.18, 0, Math.PI * 2);
@@ -500,12 +436,10 @@ export class FlagDecalSystem {
     const cx = x + w / 2;
     const cy = y + h / 2;
     const r = Math.min(w, h) * 0.22;
-    // Red top half
     ctx.fillStyle = '#CD2E3A';
     ctx.beginPath();
     ctx.arc(cx, cy, r, Math.PI, 0);
     ctx.fill();
-    // Blue bottom half
     ctx.fillStyle = '#0047A0';
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI);
@@ -520,20 +454,17 @@ export class FlagDecalSystem {
     ctx.fillStyle = '#0038B8';
     ctx.fillRect(x, y + h * 0.12, w, stripeH);
     ctx.fillRect(x, y + h - h * 0.12 - stripeH, w, stripeH);
-    // Hexagram (two overlapping triangles)
     const cx = x + w / 2;
     const cy = y + h / 2;
     const sr = Math.min(w, h) * 0.15;
     ctx.strokeStyle = '#0038B8';
     ctx.lineWidth = 2;
-    // Triangle up
     ctx.beginPath();
     ctx.moveTo(cx, cy - sr);
     ctx.lineTo(cx - sr * 0.866, cy + sr * 0.5);
     ctx.lineTo(cx + sr * 0.866, cy + sr * 0.5);
     ctx.closePath();
     ctx.stroke();
-    // Triangle down
     ctx.beginPath();
     ctx.moveTo(cx, cy + sr);
     ctx.lineTo(cx - sr * 0.866, cy - sr * 0.5);
@@ -558,7 +489,6 @@ export class FlagDecalSystem {
     ctx.fillStyle = '#AA151B'; ctx.fillRect(x, y, w, band + 1);              // red top
     ctx.fillStyle = '#F1BF00'; ctx.fillRect(x, y + band, w, band * 2 + 1);  // yellow (2u)
     ctx.fillStyle = '#AA151B'; ctx.fillRect(x, y + band * 3, w, band + 1);  // red bottom
-    // Simplified coat-of-arms hint: a small red/gold shield on the hoist side
     const sw = w * 0.14;
     const sh = h * 0.34;
     const sx = x + w * 0.28 - sw / 2;
@@ -581,11 +511,7 @@ export class FlagDecalSystem {
     ctx.fillText('?', x + w / 2, y + h / 2);
   }
 
-  // --------------------------------------------------------------------------
-  // Utility
-  // --------------------------------------------------------------------------
-
-  /** @private Draw a simple 5-pointed star */
+  /** @private Draw a simple star */
   _drawStar(ctx, cx, cy, r, points) {
     const step = Math.PI / points;
     ctx.beginPath();
@@ -602,9 +528,7 @@ export class FlagDecalSystem {
   }
 }
 
-// ============================================================================
-// CJS guard — expose pure helpers for Node.js tests
-// ============================================================================
+// CJS guard: expose pure helpers for Node.js tests
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     FlagDecalSystem,

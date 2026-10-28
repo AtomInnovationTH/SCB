@@ -14,6 +14,7 @@ import {
   sunGeometry, moonGeometry, planetGeometry, SUN_GLARE_STOPS, SATURN_RING,
 } from './bodyGeometry.js';
 import { skyBrightness } from './starCatalog.js';
+import { DEG2RAD, degToRad, clamp } from '../core/MathUtil.js';
 
 // Tilt (rad, ~23.5°) of the stylized cycle's sun circle vs the equator. Shared by
 // the per-frame sun motion and the real-clock seeding; exported so the eclipse
@@ -134,10 +135,9 @@ const MOON_REGIONS = [
 
 const MOON_SHADES = { dark: MOON_MARIA_DARK, mid: MOON_MARIA_MID, faint: MOON_MARIA_FAINT };
 const MOON_ALPHAS = { dark: 0.92, mid: 0.88, faint: 0.55 };
-const D2R = Math.PI / 180;
 
 function moonProject(latDeg, lonDeg) {
-  const lat = latDeg * D2R, lon = lonDeg * D2R;
+  const lat = latDeg * DEG2RAD, lon = lonDeg * DEG2RAD;
   return { x: Math.cos(lat) * Math.sin(lon), y: -Math.sin(lat) };
 }
 
@@ -625,7 +625,7 @@ export class SunLight {
     // point from UTC, today's lunar phase). The stylized 92-min cycle runs on from there.
     this._sunPhase0 = 0;                        // parametric start angle on the sun circle
     this._sunYaw0 = 0;                          // yaw (about +Y) to the real sub-solar longitude
-    this._moonAzOffset = 110 * Math.PI / 180;   // legacy fixed elongation fallback
+    this._moonAzOffset = degToRad(110);   // legacy fixed elongation fallback
     this._moonTanDecl = 0.25;                   // legacy y-lift fallback (≈14°)
     this._seedSkyFromClock(new Date());
 
@@ -872,7 +872,7 @@ export class SunLight {
       const s = latLonToUnitVec(sun.declDeg, sun.subLonEastDeg);
 
       // (a) Real |declination| ≤ 23.44° < SUN_CYCLE_TILT (23.49°): the clamp never bites in practice.
-      const ratio = Math.max(-1, Math.min(1, s.y / Math.sin(SUN_CYCLE_TILT)));
+      const ratio = clamp(s.y / Math.sin(SUN_CYCLE_TILT), -1, 1);
       let a0 = Math.asin(ratio);
       const declTomorrow =
         sunEphemeris(new Date(now.getTime() + 86400000)).declDeg;
@@ -890,7 +890,7 @@ export class SunLight {
       const m = latLonToUnitVec(moon.declDeg, moon.subLonEastDeg);
       this._moonAzOffset =
         Math.atan2(m.z, m.x) - Math.atan2(s.z, s.x);
-      this._moonTanDecl = Math.tan(moon.declDeg * Math.PI / 180);
+      this._moonTanDecl = Math.tan(degToRad(moon.declDeg));
     } catch (e) {
       console.warn('[SunLight] Real-clock sky seeding failed; using stylized defaults:', e);
     }
@@ -1217,7 +1217,7 @@ export class SunLight {
     if (this.camera) _down.applyQuaternion(this.camera.quaternion);
 
     for (const p of this._planets) {
-      const angle = sunAngle + p.deg * (Math.PI / 180);
+      const angle = sunAngle + p.deg * DEG2RAD;
       _pos.set(Math.cos(angle), 0, Math.sin(angle));
 
       p.disc.position.copy(_pos).multiplyScalar(Constants.PLANET_DIST);

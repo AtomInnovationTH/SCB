@@ -1,21 +1,15 @@
 /**
- * LeashTransfer.js — the leash hand-off: one line, one small state machine.
+ * LeashTransfer.js — the leash hand-off: one line, one small state machine. PURE: no THREE import, scene, eventBus or
+ * game objects (vectors are plain {x,y,z}, the ship attitude is any {x,y,z,w} quaternion).
+ * Design: archive/research/2026-10-leash.md, ruling DECISIONS §1/§19.
  *
- * PURE. No THREE scene, no eventBus, no game objects, no THREE import at all
- * (vectors are plain {x,y,z}, the ship attitude is any {x,y,z,w} quaternion).
- * Nothing in the game calls it yet; lane l5b wires it. Design:
- * docs/research/2026-10-leash.md, ruling DECISIONS §1/§19.
- *
- * Ruling in one breath: release the nose magnet → pay the bag out on its own
- * leash → turn the whole ship under it → reel in at a radiator tip → the tip
- * magnet latches the steel washer at the net's neck. The bag is never
+ * Ruling in one breath: release the nose magnet → pay the bag out on its own leash → turn the whole ship under it →
+ * reel in at a radiator tip → the tip magnet latches the steel washer at the net's neck. The bag is never
  * free-flying. Tension is a few newtons, so a spike can only mean a snag.
  *
- * FRAME: non-rotating, centred on the ship origin (player.position;
- * player.quaternion pivots there), metres. The ship's attitude arrives each
- * step as a quaternion; ship translation is ignored over a transfer (orbital
- * drift 0.11 m in 120 s, tmp/research/leash/turn-dynamics.md). Keep-out
- * queries take SHIP-frame points: the machine converts with inverse(shipQuat).
+ * FRAME: non-rotating, centred on the ship origin (player.position; player.quaternion pivots there), metres. The
+ * ship's attitude arrives each step as a quaternion; ship translation is ignored over a transfer (orbital drift
+ * 0.11 m in 120 s). Keep-out queries take SHIP-frame points: the machine converts with inverse(shipQuat).
  *
  * PHYSICS FACTS THIS DESIGN RESTS ON
  *  1. A line can only pull. Once the reel slows, a bag moving toward the tip
@@ -23,14 +17,13 @@
  *     equals the fastest reel-in speed used: reel in at REEL_SPEED_MPS from
  *     start to contact, and a bounce retries at half that.
  *  2. A soft constraint (Box2D "soft step") is stable at every dt 0.02–1.0 s;
- *     an explicit spring gained energy and blew up at dt 1.0 (1-D probe,
- *     tmp/research/leash/probe.mjs, probe2.mjs). Stretch ≈ v/ω·0.37 (critical
- *     damping), independent of mass.
+ *     an explicit spring gained energy and blew up at dt 1.0 (1-D probe).
+ *     Stretch ≈ v/ω·0.37 (critical damping), independent of mass.
  *  3. During the turn the anchor (ring rim, ~1.3 m from the origin) moves at
  *     up to ω·r ≈ 0.11 m/s; the line must pay out on demand (the clutch) or
  *     it drags the bag.
  *
- * KNOWN LIMITS (logged in tmp/plans/l3-leash-core.md):
+ * KNOWN LIMITS:
  *  - The clutch back-tension scales with mass (5e-4 N/kg), the snag threshold
  *    does not scale (5 N + 2·m·reel accel): at 50 kg the threshold is 10 N.
  *  - A line cannot stop a bag that moves toward the anchor, and a pull-only
@@ -38,28 +31,23 @@
  *    and no `stopBag`; a bag farther than D_MAX_M from its target is refused
  *    ('plan: too far') and the radiators go home.
  *
- * REEL_HOME (fix round 1 F1): the machine never assigns the bag's position. It
- * reels the bag back to its nose spot at HOME_REEL_MPS (<= LATCH_OK_MPS, never
- * shorter than the start distance) and commands relatchNose only when the bag is
- * within HOME_TOL_M of that spot and slower than LATCH_OK_MPS. A pull-only line
- * from the ring rim cannot carry a bag outward, so a bag that moved toward the
- * tip (closer to the anchor than the start distance - HOME_TOL_M) cannot get
- * home: CUT_FREE, failure {reason:'cut free', cause:'cannot reach the nose',
- * fault:<the original fault>}. F2: the part that caused the snag is ignored for
- * contacts while homing. F3: dt <= 0 is a no-op. F5: velocity given to the bag
- * outside the line (PAYOUT push, bounce) is booked as −m·dv in reactionImpulse.
- * H2: the push happens once, at the first PAYOUT entry; a replan re-entry does not push
- * again; the bag only coasts. A bag that has not reached the planned distance (within
- * PAYOUT_ACCEPT_M) by the PAYOUT time limit, or at once when a replan still misses by more
- * than PAYOUT_ACCEPT_M, faults 'payout' (home as from TURN).
+ * REEL_HOME: the machine never assigns the bag's position. It reels the bag back to its nose spot at HOME_REEL_MPS
+ * (<= LATCH_OK_MPS, never shorter than the start distance) and commands relatchNose only when the bag is within
+ * HOME_TOL_M of that spot and slower than LATCH_OK_MPS. A pull-only line from the ring rim cannot carry a bag outward,
+ * so a bag that moved toward the tip (closer to the anchor than the start distance - HOME_TOL_M) cannot get home:
+ * CUT_FREE, failure {reason:'cut free', cause:'cannot reach the nose', fault:<the original fault>}. The part that
+ * caused the snag is ignored for contacts while homing. dt <= 0 is a no-op. Velocity given to the bag outside the line
+ * (PAYOUT push, bounce) is booked as −m·dv in reactionImpulse. The push happens once, at the first PAYOUT entry; a
+ * replan re-entry does not push again, the bag only coasts. A bag that has not reached the planned distance (within
+ * PAYOUT_ACCEPT_M) by the PAYOUT time limit, or at once when a replan still misses by more than PAYOUT_ACCEPT_M,
+ * faults 'payout' (home as from TURN).
  *
- * BACK-TENSION (fix round 2 H1): the reel is a slipping brake, not a motor. In the
- * clutch (TURN / CATCH) the constant back-tension pull is applied only on a
- * substep where the clutch paid line out (Ldot > 0); a bag at rest on a line that
- * is not paying out feels no pull, so a long wait cannot drag it toward the
- * anchor. (This replaces round 1's C >= -5 mm gate, F7.)
+ * BACK-TENSION: the reel is a slipping brake, not a motor. In the clutch (TURN / CATCH) the constant back-tension pull
+ * is applied only on a substep where the clutch paid line out (Ldot > 0); a bag at rest on a line that is not paying
+ * out feels no pull, so a long wait cannot drag it toward the anchor.
  *
  * Exports: planHandoff, latchCheck, lineImpulse, LeashLine, LeashTransfer.
+ * @module systems/LeashTransfer
  */
 
 import { Constants } from '../core/Constants.js';
@@ -67,7 +55,6 @@ import { DEG2RAD, clamp } from '../core/MathUtil.js';
 
 const K = () => Constants.LEASH;
 
-// ─── tiny vector maths on plain {x,y,z} ────────────────────────────────────
 const V = (x = 0, y = 0, z = 0) => ({ x, y, z });
 const add = (a, b) => V(a.x + b.x, a.y + b.y, a.z + b.z);
 const sub = (a, b) => V(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -96,14 +83,12 @@ function qRot(q, v) {
 const qRotInv = (q, v) => qRot({ x: -q.x, y: -q.y, z: -q.z, w: q.w }, v);
 
 
-// ─── planHandoff ───────────────────────────────────────────────────────────
 
 /**
- * F2.4: the longest the reaction wheels may take for a hand-off turn of `angleRad` (s): `LEASH.WHEEL_TURN_X` x the time of the gas plan
- * (peak rate and ramp as `leashTurnLimits`). The swing of the line is tuned to that plan; a turn on the wheels 2x slower (55 s for what
- * the gas does in 26 s) let the line touch a radiator and the hull and cut it (mission-1 bot, 10-24). So the wheels take the hand-off
- * only for a turn about as quick as the gas, and the gas the rest.
- * @param {number} angleRad
+ * The longest the reaction wheels may take for a hand-off turn of `angleRad` (s): `LEASH.WHEEL_TURN_X` x the time of
+ * the gas plan (peak rate and ramp as `leashTurnLimits`). The swing of the line is tuned to that plan; a turn on the
+ * wheels 2x slower (55 s for what the gas does in 26 s) let the line touch a radiator and the hull and cut it. So the
+ * wheels take the hand-off only for a turn about as quick as the gas, and the gas the rest.
  * @returns {number} s
  */
 export function leashWheelLimitS(angleRad) {
@@ -115,8 +100,8 @@ export function leashWheelLimitS(angleRad) {
 
 /**
  * The rate and ramp the hand-off asks the autopilot for when it turns the ship (rad/s, rad/s²). The ONE place they are
- * read: the TURN phase sends them with `startTurn`, and the early gas check (`LeashDriver.gasShort`, gas-low-fail-fast
- * D1) prices the turn with the same limits.
+ * read: the TURN phase sends them with `startTurn`, and the early gas check (`LeashDriver.gasShort`) prices the turn
+ * with the same limits.
  * @returns {{maxRate:number, accel:number}}
  */
 export function leashTurnLimits() {
@@ -125,11 +110,10 @@ export function leashTurnLimits() {
 }
 
 /**
- * l8-reel-collar (D5): the nearest the bag's CENTRE may start to the tip along the line. The measured floor is
- * D_MIN_M (0.3 m, a bag of radius <= 0.25 m); a bigger bag needs `D_MIN_PER_R` radii, or its surface sweeps the
- * tip's own strut during the turn (measured: r 0.50 at 0.3 m snags FlowerStrut_0 on the first turn; at 0.6 m it
- * latches). Before this lane the bag started 2.5-5 m out (seat 0 at the old standoff), where the planner's root
- * was always far beyond this; from HOME (the bag 1.4-1.8 m out) the planner falls back to dMin and it matters.
+ * The nearest the bag's CENTRE may start to the tip along the line. The measured floor is D_MIN_M (0.3 m, a bag of
+ * radius <= 0.25 m); a bigger bag needs `D_MIN_PER_R` radii, or its surface sweeps the tip's own strut during the
+ * turn (measured: r 0.50 at 0.3 m snags FlowerStrut_0 on the first turn; at 0.6 m it latches). From HOME (the bag
+ * 1.4-1.8 m out) the planner falls back to dMin, so it matters.
  * @param {number} bagR — metres
  * @returns {number} metres
  */
@@ -146,7 +130,7 @@ export function minHandoffD(bagR) {
  * u = unit(tip − anchor). The target is tip + d·u with |target| = r (the bag's
  * current radius), the larger root. d in [dMin, dMax] → payoutM 0. No root or
  * d < dMin → payoutM = the radius increase needed for dMin (> 0: pay out
- * first). d > dMax → ok:false, reason 'too far' (F4; the REEL phase covers any
+ * first). d > dMax → ok:false, reason 'too far' (the REEL phase covers any
  * d up to dMax, there is no reel-in-first). The turn rotates the ship so
  * the body direction of the target comes to the bag's current direction.
  *
@@ -168,7 +152,7 @@ export function planHandoff({ anchorBody, tipBody, bagBodyNow, dMin, dMax }) {
         dUsed = dMin;
         payoutM = radiusAt(dMin) - r;
     } else if (d > dMax + 1e-9) {
-        // fix round 1 F4: no reel-in-first (a line cannot stop a bag moving toward the anchor)
+        // no reel-in-first (a line cannot stop a bag moving toward the anchor)
         return { ok: false, reason: 'too far', d, bagTargetBody: add(tipBody, mul(u, d)), axisBody: V(), psiRad: 0, payoutM: 0 };
     }
     const bagTargetBody = add(tipBody, mul(u, dUsed));
@@ -183,8 +167,6 @@ export function planHandoff({ anchorBody, tipBody, bagBodyNow, dMin, dMax }) {
     const axisBody = psiRad < 1e-4 ? V() : mul(x, 1 / sinPsi);
     return { ok: true, reason: '', d: dUsed, bagTargetBody, axisBody, psiRad, payoutM };
 }
-
-// ─── latchCheck ────────────────────────────────────────────────────────────
 
 /**
  * Does the washer at the neck latch, bounce, or has it not arrived yet?
@@ -211,8 +193,6 @@ export function latchCheck({ neckPos, bagVel, tipPos, lineDirIn }) {
     if (vc <= k.LATCH_ALIGNED_MPS && mis <= k.LATCH_ALIGN_DEG * DEG2RAD) return 'latch';
     return 'bounce';
 }
-
-// ─── the line: one unilateral soft constraint ──────────────────────────────
 
 /**
  * Soft-step impulse (Box2D v3 "soft step", one iteration), pull only, NO cap.
@@ -242,7 +222,7 @@ export function lineImpulse({ mass, h, freqHz, damping, C, cdotEff }) {
  *   clutch — TURN: pays out on demand so the line only just stays taut
  *            (cap PAYOUT_MAX_MPS); takes up at ≤ TAKEUP_MPS (only when the
  *            `takeup` flag is set) without pulling; back-tension pulls the bag
- *            along the line only while the clutch pays out (H1).
+ *            along the line only while the clutch pays out.
  *   payout — PAYOUT: pays out on the bag's demand (line never tighter than the
  *            bag needs), braking at REEL_ACCEL_MPS2 so the line stops at `target`.
  *   out    — pays out to `target` at TAKEUP_MPS (line lifting out of a slot).
@@ -260,7 +240,7 @@ export class LeashLine {
         this.takeup = false;
         this.engaged = engaged;
         this.fixed = false;      // an obstacle holds the bag (position frozen)
-        this.minLen = 0;         // 'in' mode never reels the free length shorter than this (F1)
+        this.minLen = 0;  // 'in' mode never reels the free length shorter than this
         this.lastC = 0;
     }
 
@@ -303,7 +283,6 @@ export class LeashLine {
             const nrm = unit(d, V(0, 0, 1));
             const distPred = len(sub(add(this.pos, mul(this.vel, h)), P1));
 
-            // ── reel ────────────────────────────────────────────────────
             const Lold = this.L;
             let Lnew = Lold;
             if (this.mode === 'in') {
@@ -336,7 +315,6 @@ export class LeashLine {
             }
             this.L = Lnew;
 
-            // ── constraint ──────────────────────────────────────────────
             const C = dist - (this.L - base0);
             this.lastC = C;
             const cdotEff = dot(sub(this.vel, Pv), nrm) - (this.Ldot - baseRate);
@@ -346,7 +324,7 @@ export class LeashLine {
             }
             let pull = -j;                       // impulse magnitude toward the pivot
             if (this.mode === 'clutch' && this.Ldot > 0) {
-                // H1: the reel is a slipping brake, not a motor: tension only while the line pays out
+                // the reel is a slipping brake, not a motor: tension only while the line pays out
                 pull += this.backTensionN() * h;
             }
             if (pull > 0) {
@@ -366,8 +344,6 @@ export class LeashLine {
     }
 }
 
-// ─── the machine ───────────────────────────────────────────────────────────
-
 const ACTIVE_LINE_PHASES = new Set(['RELEASE', 'PAYOUT', 'TURN', 'CATCH', 'REEL', 'REEL_HOME']);
 const LATCHED_PHASES = new Set(['LATCHED', 'CUT', 'SWING', 'UNFOLD']);
 const BERTH_NAMES = ['BerthCollar', 'BerthFace'];
@@ -377,7 +353,7 @@ const BERTH_NAMES = ['BerthCollar', 'BerthFace'];
  * makes a new instance to retry.
  *
  * step(dt, io) → { phase, commands, events, state, failure }
- *  commands: [{type, ...}] for the wiring lane (foldRadiators, releaseNose,
+ *  commands: [{type, ...}], types: foldRadiators, releaseNose,
  *    startTurn, cancelTurn, relatchNose, latch, cutLine, swingToBoom,
  *    unfoldRadiators, releaseHold, bagFree).
  *  events: [{type:'phase'|'snag'|'slack'|'bounce'|'catch'|'failed', ...}].
@@ -464,12 +440,11 @@ export class LeashTransfer {
         };
     }
 
-    /** F5: a velocity change dv given to the bag outside the line is booked on the ship as −m·dv. */
+    /** A velocity change dv given to the bag outside the line is booked on the ship as −m·dv. */
     _bookKick(dv) {
         this.stepReaction = add(this.stepReaction, mul(dv, -this.mass));
     }
 
-    /** Advance the line (and the bag with it) and accumulate the step's outputs. */
     _sim(dt, g, opts) {
         const line = this.line;
         const r = line.advance(dt, g, opts);
@@ -484,7 +459,7 @@ export class LeashTransfer {
 
     step(dt, io) {
         if (!(dt > 0)) {
-            // F3: dt <= 0 (or NaN) changes nothing and reports nothing
+            // dt <= 0 (or NaN) changes nothing and reports nothing
             this._reset();
             this._dt = 0;
             return { phase: this.phase, commands: [], events: [], state: this._buildState(io), failure: this.failure };
@@ -534,12 +509,11 @@ export class LeashTransfer {
         return result;
     }
 
-    // ── watchers: slack, snag, timeout (after the phase handler) ─────────────
+    // Watchers after the phase handler: slack, snag, timeout
     _watch(dt, io) {
         const k = K();
         const ph = this.phase;
         const startPhase = ph;
-        // slack
         if ((ph === 'TURN' || ph === 'REEL') && this.line) {
             if (this.line.lastC < -k.SLACK_MIN_M) this.slackT += dt; else this.slackT = 0;
             if (this.slackT > k.SLACK_S && !this.slackFired) {
@@ -548,17 +522,15 @@ export class LeashTransfer {
                 this._event('slack', { phase: ph });
             }
         }
-        // snag
         const snagPart = this._snagPart(io);
         if (snagPart) {
             this._event('snag', { part: snagPart, phase: ph });
             this._failWith('snag', snagPart);
             return;
         }
-        // timeout
         const limit = k.PHASE_TIMEOUT_S[ph];
         if (limit !== undefined && this.phase === startPhase && this.phaseT > limit) {
-            // H2: a PAYOUT re-entry has no push; a bag that has not coasted to the planned distance by then missed it
+            // a PAYOUT re-entry has no push; a bag that has not coasted to the planned distance by then missed it
             this._failWith(ph === 'PAYOUT' && this.payoutTries > 1 ? 'payout' : 'timeout ' + ph);
         }
     }
@@ -568,8 +540,8 @@ export class LeashTransfer {
         const ph = this.phase;
         const ko = io.keepOut;
         const q = io.shipQuat;
-        // F2: while homing, the part that caused the snag does not trip it again (a
-        // keep-out hit lasts many steps); any other part, and the mean tension, still do.
+        // While homing, the part that caused the snag does not trip it again (a keep-out hit lasts many steps); any other
+        // part, and the mean tension, still do.
         const ignored = ph === 'REEL_HOME' && this.home ? this.home.part : undefined;
         const tripped = (hit) => !!(hit && hit.gap <= 0 && !(ignored && hit.name === ignored));
         const toShip = (p) => qRotInv(q, p);
@@ -615,7 +587,6 @@ export class LeashTransfer {
         return null;
     }
 
-    // ── failure handling ─────────────────────────────────────────────────────
     _failWith(reason, part) {
         const ph = this.phase;
         if (LATCHED_PHASES.has(ph)) {
@@ -663,16 +634,15 @@ export class LeashTransfer {
         this._event('failed', { ...this.failure });
     }
 
-    // ── phases ───────────────────────────────────────────────────────────────
     _ph_FOLD(dt, io) {
         if (!this.entered) {
             this.entered = true;
             this._cmd('foldRadiators', { thetaRad: this.thetaH });
         }
-        // fb16 (owner 2026-10-25, "tighten up delays/pauses"): when the bag must be paid out first, the nose lets go and the line pays
-        // out UNDER the end of the radiator's fold, timed to finish with it (the plan reads where the tip WILL be: `io.tipFinalWorld`);
-        // the turn still waits for the radiator (PAYOUT, below). Every snag / tension / clearance check runs in RELEASE and PAYOUT
-        // exactly as before.
+        // owner 2026-10-25: "tighten up delays/pauses". When the bag must be paid out first, the nose lets go and the
+        // line pays out UNDER the end of the radiator's fold,
+        // timed to finish with it (the plan reads where the tip WILL be: `io.tipFinalWorld`); the turn still waits for the
+        // radiator (PAYOUT, below). Every snag / tension / clearance check runs in RELEASE and PAYOUT as usual.
         if (!this._aheadTried) this._planAhead(io);
         if (this.foldWait) {
             if (this._payoutDue(io)) { this._enter('RELEASE'); return true; }
@@ -685,10 +655,10 @@ export class LeashTransfer {
     }
 
     /**
-     * fb16: the plan for the radiator's FINAL position, made at the start of the fold. True = the bag needs a payout and the fold
-     * can run under it (`foldWait` is set; PAYOUT waits for the radiator before it re-plans). False = wait for the fold as before
-     * (no early position given, the switch is off, no payout needed, or the plan is not ok: the normal re-plan at the end of the
-     * fold then reports it exactly as it always did). Asked once.
+     * The plan for the radiator's FINAL position, made at the start of the fold. True = the bag needs a payout and the fold
+     * can run under it (`foldWait` is set; PAYOUT waits for the radiator before it re-plans). False = wait for the fold
+     * (no early position given, the switch is off, no payout needed, or the plan is not ok: the normal re-plan at the end
+     * of the fold then reports it). Asked once.
      */
     _planAhead(io) {
         this._aheadTried = true;
@@ -708,10 +678,10 @@ export class LeashTransfer {
     }
 
     /**
-     * fb16: is it time to let the bag go? The payout takes about `payoutM / PAYOUT_PUSH_MPS + push / (2 · REEL_ACCEL)` seconds (the
-     * coast, then the line brakes it to a stop); it starts when the radiator has that long (plus PAYOUT_FOLD_MARGIN_S) left to fold at
-     * `HOLD_SLEW_DEG_S`, so the two end together and the bag never waits long on a held line (a bag that has stopped drifts back at a
-     * few mm/s and a line cannot push it out again).
+     * Is it time to let the bag go? The payout takes about `payoutM / PAYOUT_PUSH_MPS + push / (2 · REEL_ACCEL)` seconds
+     * (the coast, then the line brakes it to a stop); it starts when the radiator has that long (plus PAYOUT_FOLD_MARGIN_S)
+     * left to fold at `HOLD_SLEW_DEG_S`, so the two end together and the bag never waits long on a held line (a bag that
+     * has stopped drifts back at a few mm/s and a line cannot push it out again).
      */
     _payoutDue(io) {
         const k = K();
@@ -721,7 +691,7 @@ export class LeashTransfer {
         return left <= need + (k.PAYOUT_FOLD_MARGIN_S ?? 0.3);
     }
 
-    /** fb16: the radiator has reached the hand-off angle (within THETA_TOL) and has stopped moving (it lands exactly on its target). */
+    /** The radiator has reached the hand-off angle (within THETA_TOL) and has stopped moving (it lands exactly on its target). */
     _foldLanded(io) {
         const th = io.radiatorThetaRad;
         return Math.abs(th - this.thetaH) <= (K().THETA_TOL_DEG * DEG2RAD)
@@ -750,7 +720,7 @@ export class LeashTransfer {
     _ph_RELEASE(dt, io, g) {
         if (!this.entered) {
             this.entered = true;
-            // F5: the nose's separation spring gives the push; the machine books it at PAYOUT entry
+            // the nose's separation spring gives the push; the machine books it at PAYOUT entry
             this._cmd('releaseNose', { pushMps: this.plan.payoutM > 0 ? K().PAYOUT_PUSH_MPS : 0 });
             this.line = new LeashLine({
                 mass: this.mass, pos: this.bag.pos, vel: this.bag.vel,
@@ -782,8 +752,8 @@ export class LeashTransfer {
             this.pay = { target: dist + Math.max(0, s) };
             line.mode = 'payout';
             line.target = line.L - dist + this.pay.target;
-            // H2: the nose's separation spring pushes once, at the first PAYOUT entry. A replan that
-            // re-enters PAYOUT finds the bag off the nose: nothing exists to push it again.
+            // The nose's separation spring pushes once, at the first PAYOUT entry. A replan that re-enters PAYOUT finds the bag
+            // off the nose: nothing exists to push it again.
             if (this.payoutTries === 1) {
                 line.vel = add(line.vel, mul(nrm, k.PAYOUT_PUSH_MPS));
                 this.bag.vel = clone(line.vel);
@@ -793,19 +763,19 @@ export class LeashTransfer {
         const r = this._sim(dt, g);
         const A = io.anchorWorld;
         const dist = len(sub(this.bag.pos, A));
-        // fb16: latched once true (a bag that waits for the radiator drifts back a few mm/s; it is still paid out). With the faster push
-        // (PAYOUT_PUSH_MPS 0.05) the line's stop leaves a rebound of ~3.5 mm/s that no force removes (a line only pulls), a hair over the
-        // old 3 mm/s rest test, so it passed only on a frame that sampled the rebound crossing zero (never at dt 0.25 s). At rest is now
-        // also: the line is at its length, slack (no longer pulling), and the bag moves under 1 cm/s.
+        // Latched once true (a bag that waits for the radiator drifts back a few mm/s; it is still paid out). With the
+        // PAYOUT_PUSH_MPS 0.05 push the line's stop leaves a rebound of ~3.5 mm/s that no force removes (a line only pulls), a
+        // hair over a 3 mm/s rest test, which passed only on a frame that sampled the rebound crossing zero (never at dt
+        // 0.25 s). At rest is: the line is at its length, slack (no longer pulling), and the bag moves under 1 cm/s.
         const atLength = line.L >= line.target - 1e-4 && Math.abs(line.Ldot) < 1e-3;
         const sp = len(line.vel);
         const done = this.payoutDone || (atLength && (sp < 0.003 || (line.lastC <= 0 && sp < 0.01)));
         if (!done) return false;
         this.payoutDone = true;
         if (this.foldWait) {
-            // fb16: paid out under the fold; the bag rests until the radiator has landed, then the plan is made again on the tip's real
-            // position (the turn depends on it). The line spools freely meanwhile: a HELD line, a few mm stretched at the stop, would
-            // pull the bag back in at ~3 mm/s, and the turn that follows carries that on (measured: the bag ended 25 mm nearer the tip)
+            // Paid out under the fold; the bag rests until the radiator has landed, then the plan is made again on the tip's real
+            // position (the turn depends on it). The line spools freely meanwhile: a HELD line, a few mm stretched at the stop,
+            // would pull the bag back in at ~3 mm/s, and the turn that follows carries that on (the bag ended 25 mm nearer the tip)
             if (!this._foldLanded(io)) { line.mode = 'clutch'; return false; }
             this.foldWait = false;
         }
@@ -816,8 +786,8 @@ export class LeashTransfer {
             this._enter('TURN');
             return true;
         }
-        // l5b-wire D10: a re-entry has no push and the bag is at rest, so it could only wait out the
-        // PAYOUT time limit (60 s) before the same fault. Fault now.
+        // A re-entry has no push and the bag is at rest, so it could only wait out the PAYOUT time limit (60 s) before the
+        // same fault. Fault now.
         this._failWith('payout');
         return false;
     }
@@ -924,8 +894,8 @@ export class LeashTransfer {
 
     _ph_LATCHED(dt, io) {
         this.line = null;
-        // l5c-reach E5: the latch brings the bag to rest on the ship. Its momentum relative to the ship goes
-        // onto the ship (+m·v), so the ship's books close at the latch instead of keeping m·v for ever.
+        // The latch brings the bag to rest on the ship. Its momentum relative to the ship goes onto the ship (+m·v), so the
+        // ship's books close at the latch instead of keeping m·v for ever.
         this._bookKick(mul(this.bag.vel, -1));
         this._pinBag(io);
         this._enter('CUT');
@@ -938,11 +908,10 @@ export class LeashTransfer {
     }
 
     /**
-     * l5c-reach E8: the wiring could not latch the bag on the tip (the tip's slot is taken, a hardware refusal).
-     * The machine entered LATCHED on the step that sent 'latch', and the line is still on: recover exactly as
-     * from a snag in the reel — lift off the slot, undo the turn, reel the bag home, relatch at the nose within
-     * HOME_TOL_M. (A failure from LATCHED would go straight to FAILED and the wiring would have to move the
-     * bag to the collar in one frame.)
+     * The wiring could not latch the bag on the tip (the tip's slot is taken, a hardware refusal). The machine entered
+     * LATCHED on the step that sent 'latch', and the line is still on: recover exactly as from a snag in the reel (lift off
+     * the slot, undo the turn, reel the bag home, relatch at the nose within HOME_TOL_M). A failure from LATCHED would go
+     * straight to FAILED and the wiring would have to move the bag to the collar in one frame.
      * @returns {boolean} true if the refusal was taken (the machine is now in REEL_HOME, or has cut the bag free)
      */
     refuseLatch() {
@@ -967,8 +936,8 @@ export class LeashTransfer {
         if (!this.entered) {
             this.entered = true;
             this._cmd('swingToBoom');
-            // fb16: the radiator opens while the bag swings onto the boom (the two are independent; the keep-out check on the bag
-            // runs in SWING and UNFOLD alike)
+            // the radiator opens while the bag swings onto the boom (independent; the keep-out check on the bag runs in SWING and
+            // UNFOLD alike)
             if (K().UNFOLD_DURING_SWING !== false) {
                 this.unfoldIssued = true;
                 this._cmd('unfoldRadiators', { thetaRad: this.unfoldTheta });
@@ -983,7 +952,7 @@ export class LeashTransfer {
         this._pinBag(io);
         if (!this.entered) {
             this.entered = true;
-            if (this.unfoldIssued) return true;   // fb16: already opening (since SWING began); only wait for it
+            if (this.unfoldIssued) return true;  // already opening (since SWING began); only wait for it
             this._cmd('unfoldRadiators', { thetaRad: this.unfoldTheta });
             return false;
         }
@@ -1052,8 +1021,8 @@ export class LeashTransfer {
             return false;
         }
         if (h.stage === 'reelin') {
-            // F1: no teleport. A pull-only line from the ring rim cannot carry a bag outward, so a bag that
-            // moved toward the tip (closer to the anchor than at the start) cannot get home: cut it free.
+            // No teleport. A pull-only line from the ring rim cannot carry a bag outward, so a bag that moved toward the tip
+            // (closer to the anchor than at the start) cannot get home: cut it free.
             const k = K();
             const dist0 = len(sub(this.bag.pos, io.anchorWorld));
             if (!h.reelChecked) {

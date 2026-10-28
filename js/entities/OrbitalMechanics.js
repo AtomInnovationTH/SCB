@@ -1,26 +1,13 @@
 /**
- * OrbitalMechanics.js — Orbital mechanics utility functions
- * All calculations in real units (km, km/s) unless noted.
- * Convert to scene units (× SCENE_SCALE) for Three.js rendering.
+ * OrbitalMechanics.js - orbital mechanics utilities. Real units (km, km/s) unless noted; × SCENE_SCALE for Three.js rendering.
  * @module entities/OrbitalMechanics
  */
 
 import { Constants } from '../core/Constants.js';
 import { degToRad, radToDeg, clamp } from '../core/MathUtil.js';
 
-// ============================================================================
-// KEPLER'S EQUATION
-// ============================================================================
-
-/**
- * Solve Kepler's equation  M = E − e sin E  via Newton-Raphson.
- * @param {number} M - Mean anomaly (radians)
- * @param {number} e - Eccentricity
- * @param {number} [tol=1e-10] - Convergence tolerance
- * @returns {number} Eccentric anomaly E (radians)
- */
+/** Solve Kepler's equation M = E − e sin E by Newton-Raphson (M, E in rad; `tol` default 1e-10). */
 export function solveKepler(M, e, tol = 1e-10) {
-  // Initial guess
   let E = M + e * Math.sin(M);
   for (let i = 0; i < 30; i++) {
     const dE = (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E));
@@ -30,26 +17,15 @@ export function solveKepler(M, e, tol = 1e-10) {
   return E;
 }
 
-/**
- * Convert mean anomaly to true anomaly.
- * @param {number} M - Mean anomaly (radians)
- * @param {number} e - Eccentricity
- * @returns {number} True anomaly ν (radians)
- */
+/** Mean anomaly → true anomaly (rad). */
 export function meanToTrueAnomaly(M, e) {
   const E = solveKepler(M, e);
-  // True anomaly from eccentric anomaly
   const sinV = (Math.sqrt(1 - e * e) * Math.sin(E)) / (1 - e * Math.cos(E));
   const cosV = (Math.cos(E) - e) / (1 - e * Math.cos(E));
   return Math.atan2(sinV, cosV);
 }
 
-/**
- * Convert true anomaly to mean anomaly.
- * @param {number} v - True anomaly (radians)
- * @param {number} e - Eccentricity
- * @returns {number} Mean anomaly M (radians)
- */
+/** True anomaly → mean anomaly (rad). */
 export function trueToMeanAnomaly(v, e) {
   const E = Math.atan2(
     Math.sqrt(1 - e * e) * Math.sin(v),
@@ -58,37 +34,21 @@ export function trueToMeanAnomaly(v, e) {
   return E - e * Math.sin(E);
 }
 
-// ============================================================================
-// KEPLERIAN ↔ CARTESIAN CONVERSIONS
-// ============================================================================
-
 /**
- * Convert Keplerian orbital elements to Cartesian position & velocity.
- * @param {object} orbit - Keplerian elements
- * @param {number} orbit.semiMajorAxis - Semi-major axis in km
- * @param {number} orbit.eccentricity - Eccentricity
- * @param {number} orbit.inclination - Inclination (rad)
- * @param {number} orbit.raan - Right ascension of ascending node (rad)
- * @param {number} orbit.argPerigee - Argument of perigee (rad)
- * @param {number} orbit.trueAnomaly - True anomaly (rad)
- * @param {number} [mu=Constants.MU_EARTH] - Gravitational parameter (km³/s²)
- * @returns {{ position: {x,y,z}, velocity: {x,y,z} }} in km and km/s
+ * Keplerian elements (semiMajorAxis in km, angles in rad) → Cartesian position (km) and velocity (km/s); `mu` in km³/s².
+ * @returns {{ position: {x,y,z}, velocity: {x,y,z} }}
  */
 export function keplerianToCartesian(orbit, mu = Constants.MU_EARTH) {
   const { semiMajorAxis: a, eccentricity: e, inclination: i,
           raan: Ω, argPerigee: ω, trueAnomaly: ν } = orbit;
 
-  // Semi-latus rectum
   const p = a * (1 - e * e);
 
-  // Radius
   const r = p / (1 + e * Math.cos(ν));
 
-  // Position in orbital plane (perifocal frame)
   const xP = r * Math.cos(ν);
   const yP = r * Math.sin(ν);
 
-  // Velocity in orbital plane
   const sqrtMuP = Math.sqrt(mu / p);
   const vxP = -sqrtMuP * Math.sin(ν);
   const vyP = sqrtMuP * (e + Math.cos(ν));
@@ -98,7 +58,6 @@ export function keplerianToCartesian(orbit, mu = Constants.MU_EARTH) {
   const cosω = Math.cos(ω), sinω = Math.sin(ω);
   const cosI = Math.cos(i), sinI = Math.sin(i);
 
-  // Combined rotation matrix elements
   const l1 = cosΩ * cosω - sinΩ * sinω * cosI;
   const l2 = -cosΩ * sinω - sinΩ * cosω * cosI;
   const m1 = sinΩ * cosω + cosΩ * sinω * cosI;
@@ -121,23 +80,11 @@ export function keplerianToCartesian(orbit, mu = Constants.MU_EARTH) {
 }
 
 /**
- * Convert Cartesian state to Keplerian elements.
+ * Cartesian state → Keplerian elements.
  *
- * **Frame convention:** input (position, velocity) is in the same Y-up scene
- * frame produced by [`keplerianToCartesian`](js/entities/OrbitalMechanics.js:76)
- * — i.e. Three.js coordinates where the orbital angular-momentum axis is Y.
- * Internally we swap `y ↔ z` to operate in the textbook Z-up ECI frame before
- * extracting elements. This makes the round-trip
- * `keplerianToCartesian(cartesianToKeplerian(r, v)) == (r, v)` hold.
- *
- * Historically this function used Z-up formulas directly on Y-up inputs, which
- * caused a ~1500 km per-tick teleport when used as a state-update round-trip
- * (see [`PlayerSatellite.applyCartesianImpulse`](js/entities/PlayerSatellite.js:2145)).
- *
- * @param {{ x: number, y: number, z: number }} position - km (Y-up scene frame)
- * @param {{ x: number, y: number, z: number }} velocity - km/s (Y-up scene frame)
- * @param {number} [mu=Constants.MU_EARTH]
- * @returns {object} Keplerian elements
+ * **Frame convention:** input (position km, velocity km/s) is in the same Y-up scene frame produced by `keplerianToCartesian`, i.e.
+ * Three.js coordinates where the orbital angular-momentum axis is Y. Internally `y ↔ z` are swapped to work in the textbook Z-up ECI
+ * frame, so the round-trip `keplerianToCartesian(cartesianToKeplerian(r, v)) == (r, v)` holds.
  */
 export function cartesianToKeplerian(position, velocity, mu = Constants.MU_EARTH) {
   // --- Scene Y-up → standard Z-up (swap y and z) ---
@@ -147,32 +94,26 @@ export function cartesianToKeplerian(position, velocity, mu = Constants.MU_EARTH
   const r = Math.sqrt(px * px + py * py + pz * pz);
   const v = Math.sqrt(vx * vx + vy * vy + vz * vz);
 
-  // Angular momentum  h = r × v  (standard frame)
   const hx = py * vz - pz * vy;
   const hy = pz * vx - px * vz;
   const hz = px * vy - py * vx;
   const h = Math.sqrt(hx * hx + hy * hy + hz * hz);
 
-  // Node vector  n = ẑ × h  (standard frame)
   const nx = -hy;
   const ny = hx;
   const n = Math.sqrt(nx * nx + ny * ny);
 
-  // Eccentricity vector
   const rdotv = px * vx + py * vy + pz * vz;
   const ex = ((v * v - mu / r) * px - rdotv * vx) / mu;
   const ey = ((v * v - mu / r) * py - rdotv * vy) / mu;
   const ez = ((v * v - mu / r) * pz - rdotv * vz) / mu;
   const e = Math.sqrt(ex * ex + ey * ey + ez * ez);
 
-  // Semi-major axis
   const energy = v * v / 2 - mu / r;
   const a = -mu / (2 * energy);
 
-  // Inclination
   const i = Math.acos(clamp(hz / h, -1, 1));
 
-  // RAAN
   let raan = 0;
   if (n > 1e-10) {
     raan = Math.acos(clamp(nx / n, -1, 1));
@@ -212,29 +153,21 @@ export function cartesianToKeplerian(position, velocity, mu = Constants.MU_EARTH
 }
 
 /**
- * Re-seat an orbit from a shown scene position + a release velocity — the ONE
- * orbit-rebuild computation for every held-cargo release (register items §8 A2
- * / 71). A pinned catch's own orbit is NOT frozen while `_armPinned`
- * (DebrisField skips propagation only for `_onboardingPinned` / `_motherParked`),
- * so releasing to the stale orbit snaps the body to wherever the orbit drifted
- * during the hold; rebuilding from the shown position makes the released body
- * continue from where the player last saw it. Shared by the mother [K] jettison
- * (CaptureNetSystem._reseatOrbitOnRelease) and the ArmManager.reset() cargo
- * release — one quantity, one computation.
+ * Re-seat an orbit from a shown scene position + a release velocity: the ONE orbit-rebuild computation for every held-cargo release.
+ * A pinned catch's own orbit is NOT frozen while `_armPinned` (DebrisField skips propagation only for `_onboardingPinned` /
+ * `_motherParked`), so releasing to the stale orbit snaps the body to wherever the orbit drifted during the hold; rebuilding from the
+ * shown position makes the released body continue from where the player last saw it. Shared by the mother [K] jettison
+ * (CaptureNetSystem._reseatOrbitOnRelease) and the ArmManager.reset() cargo release.
  *
- * Frame/unit contract follows applyCartesianImpulse: scene units ÷
- * Constants.SCENE_SCALE → km in the Y-up scene frame; velocity in km/s;
- * `orbit.semiMajorAxis` is stored back in SCENE UNITS (the DebrisField /
- * PlayerSatellite convention). Eccentricity clamps to [0, 0.1] (the co-orbital
- * field band).
+ * Frame/units follow applyCartesianImpulse: scene units ÷ Constants.SCENE_SCALE → km in the Y-up scene frame; velocity in km/s;
+ * `orbit.semiMajorAxis` is stored back in SCENE UNITS (the DebrisField / PlayerSatellite convention). Eccentricity clamps to [0, 0.1]
+ * (the co-orbital field band).
  *
- * @param {object} orbit         the orbit to rewrite (mutated on success only)
+ * @param {object} orbit  the orbit to rewrite (mutated on success only)
  * @param {{x:number,y:number,z:number}} scenePos  shown position (scene units, Y-up)
  * @param {{x:number,y:number,z:number}} velocityKmS  release velocity (km/s, Y-up scene frame)
- * @returns {boolean} true when re-seated; false on any degenerate input
- *          (missing refs, non-positive SCENE_SCALE, NaN/∞ element, or
- *          non-positive semi-major axis) — the caller releases to the live
- *          orbit instead, and the orbit is left untouched.
+ * @returns {boolean} true when re-seated; false on any degenerate input (missing refs, non-positive SCENE_SCALE, NaN/∞ element, or
+ *          non-positive semi-major axis): the caller releases to the live orbit instead, and the orbit is left untouched.
  */
 export function reseatOrbitFromScene(orbit, scenePos, velocityKmS) {
   const SCENE_SCALE = Constants.SCENE_SCALE;
@@ -245,9 +178,8 @@ export function reseatOrbitFromScene(orbit, scenePos, velocityKmS) {
     z: scenePos.z / SCENE_SCALE,
   };
   const newOrbit = cartesianToKeplerian(rKm, { x: velocityKmS.x, y: velocityKmS.y, z: velocityKmS.z });
-  // Validate EVERY element before writing — inclination comes from acos(hz/h)
-  // and is NaN on the degenerate h=0 geometry (radial release velocity), so an
-  // unchecked write could permanently corrupt the orbit with NaN.
+  // Validate EVERY element before writing: inclination comes from acos(hz/h) and is NaN on the degenerate h=0 geometry (radial release
+  // velocity), so an unchecked write could permanently corrupt the orbit with NaN.
   if (!newOrbit
       || !isFinite(newOrbit.semiMajorAxis) || newOrbit.semiMajorAxis <= 0
       || !isFinite(newOrbit.eccentricity)
@@ -267,29 +199,22 @@ export function reseatOrbitFromScene(orbit, scenePos, velocityKmS) {
   return true;
 }
 
-// ============================================================================
-// GROUND-TRACK PLACEMENT
-// ============================================================================
-
 /**
- * Compute the RAAN + true anomaly that place a satellite's sub-satellite point
- * (ground track) directly over a given geographic point at t=0.
+ * RAAN + true anomaly that put a satellite's sub-satellite point (ground track) directly over a geographic point at t=0.
  *
- * **Frame assumptions** (validated against this codebase):
- *  - Orbit frame is Y-up (Y = polar axis) — see {@link keplerianToCartesian}.
- *  - The visual Earth mesh does NOT rotate (no GMST applied to geometry), so the
- *    ECI longitude equals the *negative* of the geographic east-longitude
- *    because the equirectangular Earth texture is longitude-mirrored
- *    (`mirrorLon` in main.js / CityLabels).
+ * **Frame assumptions:**
+ *  - Orbit frame is Y-up (Y = polar axis), see `keplerianToCartesian`.
+ *  - The visual Earth mesh does NOT rotate (no GMST applied to geometry), so the ECI longitude equals the *negative* of the geographic
+ *    east-longitude because the equirectangular Earth texture is longitude-mirrored (`mirrorLon` in main.js / CityLabels).
  *  - Circular orbit with argPerigee = 0 (the player's default).
  *
- * Sub-point latitude is bounded by inclination; if `|lat| > inclination` the
- * latitude is clamped to the highest reachable parallel (true anomaly = ±90°).
+ * Sub-point latitude is bounded by inclination; if `|lat| > inclination` it is clamped to the highest reachable parallel
+ * (true anomaly = ±90°).
  *
- * @param {number} latDeg        Target latitude, degrees north (negative = south)
- * @param {number} lonEastDeg    Target longitude, degrees east (negative = west)
- * @param {number} inclinationRad Orbit inclination (radians)
- * @param {boolean} [ascending=true] Place on the northbound (ascending) pass
+ * @param {number} latDeg        degrees north (negative = south)
+ * @param {number} lonEastDeg    degrees east (negative = west)
+ * @param {number} inclinationRad
+ * @param {boolean} [ascending=true] place on the northbound (ascending) pass
  * @returns {{ raan: number, trueAnomaly: number }} radians, both in [0, 2π)
  */
 export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = true) {
@@ -300,12 +225,11 @@ export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = 
   const inc = inclinationRad;
   const sinInc = Math.sin(inc);
 
-  // ν such that lat = asin(sinInc · sinν); clamp when the parallel is above the
-  // orbit's reach (|lat| > inc).
+  // ν such that lat = asin(sinInc · sinν); clamp when |lat| > inc.
   let ratio = Math.abs(sinInc) < 1e-9 ? 0 : Math.sin(lat) / sinInc;
   ratio = clamp(ratio, -1, 1);
   let nu = Math.asin(ratio);
-  if (!ascending) nu = Math.PI - nu;   // descending (southbound) branch
+  if (!ascending) nu = Math.PI - nu;
 
   // Longitude of the sub-point relative to the ascending node, projected into
   // the equatorial plane: u_proj = atan2(cosI·sinν, cosν).
@@ -321,13 +245,10 @@ export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = 
 }
 
 /**
- * The sub-satellite point (geographic latitude / east longitude) under a
- * position — the inverse of `latLonToUnitVec` (js/scene/Ephemeris.js) and the
- * other half of {@link subPointToOrbit}'s frame law: Y is the polar axis,
- * (0°, 0°) is +X, and geographic EAST longitude runs toward −Z because the
- * equirectangular Earth texture is longitude-mirrored (the visual Earth does
- * not rotate). Direction only: the position may be in km or scene units, any
- * length > 0. Session M (the ORBIT pane's LAT / LON slots).
+ * The sub-satellite point (geographic latitude / east longitude) under a position: the inverse of `latLonToUnitVec` (js/scene/Ephemeris.js)
+ * and the other half of `subPointToOrbit`'s frame law: Y is the polar axis, (0°, 0°) is +X, and geographic EAST longitude runs toward −Z
+ * because the equirectangular Earth texture is longitude-mirrored (the visual Earth does not rotate). Direction only: the position may be in
+ * km or scene units, any length > 0.
  *
  *   lat     = asin(y / r)
  *   lonEast = −atan2(z, x)            (in (−180, 180], degrees)
@@ -345,107 +266,61 @@ export function subSatellitePoint(pos) {
   return { latDeg, lonEastDeg };
 }
 
-// ============================================================================
-// ORBIT PROPAGATION
-// ============================================================================
 /**
- * Propagate orbit by a time step using mean anomaly advancement.
- * Mutates the orbit object's trueAnomaly (and meanAnomaly if present).
- * @param {object} orbit - Keplerian elements (semiMajorAxis in km)
- * @param {number} dt - Time step in seconds (game-time, already scaled)
- * @param {number} [mu=Constants.MU_EARTH]
- * @returns {object} The same orbit object, mutated
+ * Advance the orbit by `dt` seconds (game time, already scaled) via mean anomaly. Mutates trueAnomaly (and meanAnomaly if present) and
+ * returns the same object; semiMajorAxis in km.
  */
 export function propagateOrbit(orbit, dt, mu = Constants.MU_EARTH) {
   const a = orbit.semiMajorAxis;
   const e = orbit.eccentricity;
-  const n = Math.sqrt(mu / (a * a * a)); // Mean motion (rad/s)
+  const n = Math.sqrt(mu / (a * a * a));
 
-  // Current mean anomaly from true anomaly
   let M = trueToMeanAnomaly(orbit.trueAnomaly, e);
 
-  // Advance mean anomaly
   M += n * dt;
 
-  // Wrap to [0, 2π)
   M = ((M % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
 
-  // Convert back to true anomaly
   orbit.trueAnomaly = meanToTrueAnomaly(M, e);
   orbit.meanMotion = n;
 
   return orbit;
 }
 
-// ============================================================================
-// DELTA-V CALCULATIONS
-// ============================================================================
-
-/**
- * Calculate orbital velocity at a given radius for an orbit with semi-major axis a.
- * v = sqrt(μ (2/r − 1/a))  (vis-viva equation)
- * @param {number} a - Semi-major axis (km)
- * @param {number} r - Current radius (km)
- * @param {number} [mu=Constants.MU_EARTH]
- * @returns {number} Orbital velocity (km/s)
- */
+/** Vis-viva orbital speed (km/s) at radius r (km) on an orbit of semi-major axis a (km): v = sqrt(μ (2/r − 1/a)). */
 export function orbitalVelocity(a, r, mu = Constants.MU_EARTH) {
   return Math.sqrt(mu * (2 / r - 1 / a));
 }
 
-/**
- * Hohmann transfer delta-v between two circular orbits.
- * @param {number} r1 - Radius of initial orbit (km)
- * @param {number} r2 - Radius of target orbit (km)
- * @param {number} [mu=Constants.MU_EARTH]
- * @returns {{ dv1: number, dv2: number, total: number, transferTime: number }}
- *          dv1/dv2 in km/s, transferTime in seconds
- */
+/** Hohmann transfer between two circular orbits of radius r1, r2 (km): dv1/dv2 in km/s, transferTime (half the transfer ellipse's period) in s. */
 export function hohmannDeltaV(r1, r2, mu = Constants.MU_EARTH) {
-  const aT = (r1 + r2) / 2; // Transfer orbit semi-major axis
+  const aT = (r1 + r2) / 2;
 
-  // Departure burn
   const v1 = Math.sqrt(mu / r1);
   const vT1 = Math.sqrt(mu * (2 / r1 - 1 / aT));
   const dv1 = Math.abs(vT1 - v1);
 
-  // Arrival burn
   const v2 = Math.sqrt(mu / r2);
   const vT2 = Math.sqrt(mu * (2 / r2 - 1 / aT));
   const dv2 = Math.abs(v2 - vT2);
 
-  // Transfer time (half period of transfer ellipse)
   const transferTime = Math.PI * Math.sqrt(aT * aT * aT / mu);
 
   return { dv1, dv2, total: dv1 + dv2, transferTime };
 }
 
-/**
- * Plane change delta-v (simple single-burn approximation).
- * @param {number} velocity - Current orbital velocity (km/s)
- * @param {number} deltaInclination - Change in inclination (rad)
- * @returns {number} Delta-v required (km/s)
- */
+/** Single-burn plane-change Δv (km/s) for a velocity (km/s) and an inclination change (rad). */
 export function planeChangeDeltaV(velocity, deltaInclination) {
   return 2 * velocity * Math.sin(Math.abs(deltaInclination) / 2);
 }
 
-/**
- * Estimate total delta-v to reach target orbit from current orbit.
- * Combines Hohmann altitude change + simple plane change.
- * @param {object} orbit1 - Current orbit (Keplerian, km)
- * @param {object} orbit2 - Target orbit (Keplerian, km)
- * @param {number} [mu=Constants.MU_EARTH]
- * @returns {number} Estimated total delta-v (km/s)
- */
+/** Estimated total Δv (km/s) between two Keplerian orbits (km): Hohmann altitude change + simple plane change. */
 export function totalDeltaV(orbit1, orbit2, mu = Constants.MU_EARTH) {
   const r1 = orbit1.semiMajorAxis;
   const r2 = orbit2.semiMajorAxis;
 
-  // Altitude change
   const hohmann = hohmannDeltaV(r1, r2, mu);
 
-  // Plane change (inclination difference)
   const v2 = Math.sqrt(mu / r2);
   const deltaI = Math.abs(orbit2.inclination - orbit1.inclination);
   const planeChange = planeChangeDeltaV(v2, deltaI);
@@ -453,19 +328,7 @@ export function totalDeltaV(orbit1, orbit2, mu = Constants.MU_EARTH) {
   return hohmann.total + planeChange;
 }
 
-// ============================================================================
-// METAL-ION PROPULSION — Salvage ΔV (Phase 2)
-// ============================================================================
-
-/**
- * Compute the ΔV obtainable by using salvaged metal as propellant
- * via metal-ion propulsion (Tsiolkovsky rocket equation).
- *
- * @param {number} metalMassKg - mass of metal available as propellant (kg)
- * @param {number} isp - specific impulse of the metal as propellant (seconds)
- * @param {number} dryMassKg - ship dry mass without propellant (kg)
- * @returns {number} deltaV in m/s
- */
+/** ΔV (m/s) from using salvaged metal as propellant (Tsiolkovsky); masses in kg, `isp` in s. */
 export function computeSalvageDeltaV(metalMassKg, isp, dryMassKg) {
   if (metalMassKg <= 0 || isp <= 0 || dryMassKg <= 0) return 0;
   const g0 = Constants.G0; // m/s²
@@ -474,16 +337,7 @@ export function computeSalvageDeltaV(metalMassKg, isp, dryMassKg) {
   return exhaustVelocity * Math.log(massRatio);
 }
 
-/**
- * Compute total salvageable ΔV from a mixed bag of metals.
- * Each metal type has its own Isp — compute per-type and sum.
- * (This is an approximation; real multi-propellant ΔV is more complex,
- * but suitable for gameplay.)
- *
- * @param {Array<{massKg: number, ispAsThrust: number}>} metals
- * @param {number} dryMassKg - ship dry mass (kg)
- * @returns {number} total deltaV in m/s
- */
+/** Total salvageable ΔV (m/s) from a mixed bag of metals: per-type Isp, summed (an approximation, fine for gameplay). */
 export function computeTotalSalvageDeltaV(metals, dryMassKg) {
   let totalDV = 0;
   for (const metal of metals) {
@@ -494,27 +348,14 @@ export function computeTotalSalvageDeltaV(metals, dryMassKg) {
   return totalDV;
 }
 
-// ============================================================================
-// SHADOW / ECLIPSE CHECK
-// ============================================================================
-
-/**
- * Check if a position is in Earth's shadow (cylindrical model).
- * @param {{ x: number, y: number, z: number }} position - Position (km or scene units)
- * @param {{ x: number, y: number, z: number }} sunDirection - Normalized sun direction
- * @param {number} earthRadius - Earth's radius in same units as position
- * @returns {boolean} true if in shadow
- */
+/** Is a position in Earth's shadow (cylindrical model)? `earthRadius` is in the position's units; `sunDirection` is normalised. */
 export function isInShadow(position, sunDirection, earthRadius) {
-  // Project position onto sun direction
   const dot = position.x * sunDirection.x +
               position.y * sunDirection.y +
               position.z * sunDirection.z;
 
-  // Must be on the dark side (away from sun)
   if (dot > 0) return false;
 
-  // Distance from the Earth-Sun line
   const projX = position.x - dot * sunDirection.x;
   const projY = position.y - dot * sunDirection.y;
   const projZ = position.z - dot * sunDirection.z;
@@ -523,10 +364,6 @@ export function isInShadow(position, sunDirection, earthRadius) {
   return distFromLine < earthRadius;
 }
 
-// ============================================================================
-// ECLIPSE PREDICTION (Session M — the ORBIT pane's SUN slot)
-// ============================================================================
-
 /** Module-private scratch for nextShadowTransition (single-threaded, never re-entered). */
 const _nstOrbit = { semiMajorAxis: 0, eccentricity: 0, inclination: 0, raan: 0, argPerigee: 0, trueAnomaly: 0 };
 const _nstPos = { x: 0, y: 0, z: 0 };
@@ -534,35 +371,26 @@ const _nstVel = { x: 0, y: 0, z: 0 };
 const _nstSun = { x: 0, y: 0, z: 0 };
 
 /**
- * When does the ship next cross the shadow terminator? Both bodies move: the
- * orbit advances in WORLD time (dtWorld = t_real × rate × baseScale, the same
- * law as the game loop) while the sun direction is a function of REAL time
- * (SunLight.update(dt) is fed the real dt — the sun never warps with the
- * floor's time cap). At ~400 km with rate 1 the two turn at the same angular
- * rate, so the shadow geometry is nearly frozen there and the transitions come
- * on the warped floors; a predictor that held the sun still would lie.
+ * When does the ship next cross the shadow terminator? Both bodies move: the orbit advances in WORLD time (dtWorld = t_real × rate ×
+ * baseScale, the same law as the game loop) while the sun direction is a function of REAL time (SunLight.update(dt) is fed the real dt: the
+ * sun never warps with the floor's time cap). At ~400 km with rate 1 the two turn at the same angular rate, so the shadow geometry is
+ * nearly frozen there and the transitions come on the warped floors; a predictor that held the sun still would lie.
  *
- * Method: sample the coming orbital period (in real seconds) at `samples`
- * steps; the first sample whose {@link isInShadow} differs from the t = 0
- * state brackets the flip, refined by 6 bisection steps (precision = the
- * sample spacing / 64). No sample differs → no flip within one orbit.
+ * Method: sample the coming orbital period (in real seconds) at `samples` steps; the first sample whose `isInShadow` differs from the
+ * t = 0 state brackets the flip, refined by 6 bisection steps (precision = the sample spacing / 64). No sample differs → no flip within
+ * one orbit.
  *
- * @param {object} orbit  Keplerian elements with semiMajorAxis in KM (use
- *   {@link orbitToKm} on a scene-unit orbit): eccentricity, inclination,
- *   raan, argPerigee, trueAnomaly (rad).
+ * @param {object} orbit  Keplerian elements with semiMajorAxis in KM (use `orbitToKm` on a scene-unit orbit), angles in rad.
  * @param {(aheadRealS:number, out:{x:number,y:number,z:number}) => {x:number,y:number,z:number}} sunDirAt
- *   The (unit) sun direction `aheadRealS` REAL seconds from now (SunLight.
- *   directionAt); may write into `out` or return its own vector.
+ *   The (unit) sun direction `aheadRealS` REAL seconds from now (SunLight.directionAt); may write into `out` or return its own vector.
  * @param {object} [opts]
  * @param {number} [opts.rate=1]          TimeAuthority.rate (world seconds per BASE_SCALE real second)
  * @param {number} [opts.baseScale=1]     TimeAuthority.BASE_SCALE
  * @param {number} [opts.samples=96]      samples over one orbital period
  * @param {number} [opts.earthRadius=Constants.EARTH_RADIUS_KM]  km (the orbit's unit)
- * @param {number} [opts.mu=Constants.MU_EARTH]
- * @returns {{ inShadow: boolean, secondsToFlipReal: number|null }}  inShadow =
- *   the t = 0 state; secondsToFlipReal in REAL seconds (× rate × baseScale for
- *   world seconds), null when no flip lies within one orbit, when the clock is
- *   stopped (rate ≤ 0) or when the inputs are unusable.
+ * @returns {{ inShadow: boolean, secondsToFlipReal: number|null }}  inShadow = the t = 0 state; secondsToFlipReal in REAL seconds
+ *   (× rate × baseScale for world seconds), null when no flip lies within one orbit, when the clock is stopped (rate ≤ 0) or when the
+ *   inputs are unusable.
  */
 export function nextShadowTransition(orbit, sunDirAt, opts = {}) {
   const rate = Number.isFinite(opts.rate) ? opts.rate : 1;
@@ -589,8 +417,7 @@ export function nextShadowTransition(orbit, sunDirAt, opts = {}) {
     if (tReal > 0) propagateOrbit(o, tReal * rate * baseScale, mu);
     keplerianToCartesianInto(o, _nstPos, _nstVel, mu);
     const s = sunDirAt(tReal, _nstSun);
-    // An unusable sun sample aborts the prediction (null) — never the previous
-    // sample's scratch vector (Session M review).
+    // an unusable sun sample aborts the prediction (null), never the previous sample's scratch vector
     if (!s || !Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(s.z)) return null;
     return isInShadow(_nstPos, s, earthRadius);
   };
@@ -611,7 +438,7 @@ export function nextShadowTransition(orbit, sunDirAt, opts = {}) {
     const st = stateAt(hi);
     if (st === null) return { inShadow: now, secondsToFlipReal: null };
     if (st !== now) {
-      for (let k = 0; k < 6; k++) {                 // 6 bisection steps: precision step / 64
+      for (let k = 0; k < 6; k++) {
         const mid = (lo + hi) / 2;
         const sm = stateAt(mid);
         if (sm === null) return { inShadow: now, secondsToFlipReal: null };
@@ -624,21 +451,12 @@ export function nextShadowTransition(orbit, sunDirAt, opts = {}) {
   return { inShadow: now, secondsToFlipReal: null };
 }
 
-// ============================================================================
-// ATMOSPHERIC DRAG
-// ============================================================================
-
 /**
- * Atmospheric density, piecewise exponential (kg/m^3).
- *
- * The table is Vallado's exponential model, every row 0-1000 km verbatim:
- * D. A. Vallado, "Fundamentals of Astrodynamics and Applications", 4th ed.
- * (2013), exponential atmospheric model. Reproduction used (fetched 2026-10-21):
+ * Atmospheric density (kg/m^3), piecewise exponential. The table is Vallado's exponential model, every row 0-1000 km verbatim:
+ * D. A. Vallado, "Fundamentals of Astrodynamics and Applications", 4th ed. (2013), exponential atmospheric model. Reproduction used:
  * https://raw.githubusercontent.com/JuliaSpace/SatelliteToolboxAtmosphericModels.jl/main/src/exponential/constants.jl
- * It is the MEAN-solar-activity air (rows 100-180 km equal the CIRA mean values).
- * Above 1000 km the density is 0; below 0 km it is the sea-level 1.225.
- * (The table before 2026-10-21 was a garbled copy: up to 223x too thick at 900 km
- * and with a dip between 150 and 200 km; see docs/research/2026-10-trips-by-height.md.)
+ * It is the MEAN-solar-activity air (rows 100-180 km equal the CIRA mean values). Above 1000 km the density is 0; below 0 km it is the
+ * sea-level 1.225. See docs/research/2026-10-trips-by-height.md.
  *
  * @param {number} altitudeKm - Altitude above Earth surface (km)
  * @returns {number} Atmospheric density (kg/m^3)
@@ -679,7 +497,6 @@ export function atmosphericDensity(altitudeKm) {
     { h: 1000, rho: 3.019e-15, H: 268.00 },
   ];
 
-  // Find correct layer
   let layer = layers[0];
   for (let j = layers.length - 1; j >= 0; j--) {
     if (altitudeKm >= layers[j].h) {
@@ -691,52 +508,25 @@ export function atmosphericDensity(altitudeKm) {
   return layer.rho * Math.exp(-(altitudeKm - layer.h) / layer.H);
 }
 
-/**
- * Calculate atmospheric drag deceleration.
- * @param {number} altitudeKm - Altitude above Earth surface (km)
- * @param {number} velocity - Velocity magnitude (km/s)
- * @param {number} area - Cross-sectional area (m²)
- * @param {number} mass - Object mass (kg)
- * @param {number} [cd=2.2] - Drag coefficient
- * @returns {number} Deceleration (km/s²)
- */
+/** Atmospheric drag deceleration (km/s²): `altitudeKm` km, `velocity` km/s, `area` m², `mass` kg, `cd` default 2.2. */
 export function atmosphericDrag(altitudeKm, velocity, area, mass, cd = 2.2) {
   const rho = atmosphericDensity(altitudeKm);
   // velocity in km/s → m/s for drag equation
   const vMs = velocity * 1000;
-  // F_drag = 0.5 × ρ × v² × Cd × A
   const dragForce = 0.5 * rho * vMs * vMs * cd * area;
   // Deceleration in m/s² → km/s²
   return (dragForce / mass) / 1000;
 }
 
-// ============================================================================
-// SCENE-UNIT HELPERS
-// ============================================================================
-
-/**
- * Convert km to scene units.
- * @param {number} km
- * @returns {number}
- */
 export function kmToScene(km) {
   return km * Constants.SCENE_SCALE;
 }
 
-/**
- * Convert scene units to km.
- * @param {number} sceneUnits
- * @returns {number}
- */
 export function sceneToKm(sceneUnits) {
   return sceneUnits / Constants.SCENE_SCALE;
 }
 
-/**
- * Convert a Keplerian orbit (semiMajorAxis in scene units) to km for calculations.
- * @param {object} orbit - Orbit with semiMajorAxis in scene units
- * @returns {object} Orbit copy with semiMajorAxis in km
- */
+/** Orbit copy with semiMajorAxis converted from scene units to km. */
 export function orbitToKm(orbit) {
   return {
     ...orbit,
@@ -744,11 +534,7 @@ export function orbitToKm(orbit) {
   };
 }
 
-/**
- * Get Cartesian position in scene units from a scene-unit orbit.
- * @param {object} orbit - Orbit with semiMajorAxis in scene units
- * @returns {{ position: {x,y,z}, velocity: {x,y,z} }}
- */
+/** Cartesian position (scene units) and velocity (km/s) from a scene-unit orbit. */
 export function orbitToSceneCartesian(orbit) {
   const kmOrbit = orbitToKm(orbit);
   const result = keplerianToCartesian(kmOrbit);
@@ -762,54 +548,29 @@ export function orbitToSceneCartesian(orbit) {
   };
 }
 
-// ============================================================================
-// Sprint 2 / PR A — Scratch-output ("Into") variants
-//
-// Same math as [`keplerianToCartesian`](js/entities/OrbitalMechanics.js:76)
-// and [`orbitToSceneCartesian`](js/entities/OrbitalMechanics.js:490) but write
-// into caller-provided `{x,y,z}` objects so per-frame call sites can avoid
-// allocating ~150–900 short-lived literals/frame (see
-// [`PERF_FOLLOWUP_ANALYSIS.md`](PERF_FOLLOWUP_ANALYSIS.md:82) § 3.1).
-//
-// The allocating versions remain for back-compat and tests; they are now
-// trivially expressible in terms of the `Into` variants.
-// ============================================================================
+// Scratch-output ("Into") variants: the same math as `keplerianToCartesian` and `orbitToSceneCartesian`, but written into caller-provided
+// `{x,y,z}` objects so per-frame call sites avoid allocating. The allocating versions remain for back-compat and tests.
 
-/**
- * Compute Cartesian state from Keplerian elements, writing into caller-owned
- * scratch objects. Returns nothing (zero allocations).
- *
- * @param {object} orbit              Keplerian elements (km, rad) — same shape
- *                                    as [`keplerianToCartesian`](js/entities/OrbitalMechanics.js:76).
- * @param {{x:number,y:number,z:number}} outPos   Will be mutated to position in km.
- * @param {{x:number,y:number,z:number}} outVel   Will be mutated to velocity in km/s.
- * @param {number} [mu=Constants.MU_EARTH]
- */
+/** Cartesian state from Keplerian elements (km, rad) into caller-owned `outPos` (km) and `outVel` (km/s); returns nothing, no allocation. */
 export function keplerianToCartesianInto(orbit, outPos, outVel, mu = Constants.MU_EARTH) {
   const { semiMajorAxis: a, eccentricity: e, inclination: i,
           raan: Ω, argPerigee: ω, trueAnomaly: ν } = orbit;
 
-  // Semi-latus rectum
   const p = a * (1 - e * e);
 
-  // Radius
   const r = p / (1 + e * Math.cos(ν));
 
-  // Position in orbital plane (perifocal frame)
   const xP = r * Math.cos(ν);
   const yP = r * Math.sin(ν);
 
-  // Velocity in orbital plane
   const sqrtMuP = Math.sqrt(mu / p);
   const vxP = -sqrtMuP * Math.sin(ν);
   const vyP = sqrtMuP * (e + Math.cos(ν));
 
-  // Rotation matrices: perifocal → ECI
   const cosΩ = Math.cos(Ω), sinΩ = Math.sin(Ω);
   const cosω = Math.cos(ω), sinω = Math.sin(ω);
   const cosI = Math.cos(i), sinI = Math.sin(i);
 
-  // Combined rotation matrix elements (identical to allocating version)
   const l1 = cosΩ * cosω - sinΩ * sinω * cosI;
   const l2 = -cosΩ * sinω - sinΩ * cosω * cosI;
   const m1 = sinΩ * cosω + cosΩ * sinω * cosI;
@@ -827,23 +588,12 @@ export function keplerianToCartesianInto(orbit, outPos, outVel, mu = Constants.M
 }
 
 /**
- * Compute scene-unit Cartesian state from a scene-unit Keplerian orbit, writing
- * into caller-owned scratch objects. Position is converted km → scene units;
- * velocity is left in km/s (the physics code that consumes it stays in km/s).
- *
- * Mirrors [`orbitToSceneCartesian()`](js/entities/OrbitalMechanics.js:490) but
- * is allocation-free for per-frame call sites such as
- * [`DebrisField._updateInstanceTransform()`](js/entities/DebrisField.js:1228).
- *
- * @param {object} orbit              Orbit with semiMajorAxis in **scene units**.
- * @param {{x:number,y:number,z:number}} outPos   Mutated to scene-unit position.
- * @param {{x:number,y:number,z:number}} outVel   Mutated to km/s velocity.
+ * Scene-unit Cartesian state from a scene-unit Keplerian orbit, into caller-owned scratch: `outPos` in scene units (km converted),
+ * `outVel` left in km/s (the physics that consumes it stays in km/s). Allocation-free for per-frame call sites such as
+ * DebrisField._updateInstanceTransform.
  */
-// Module-private scratch — only safe because `orbitToSceneCartesianInto` is
-// single-threaded (no Atomics/Workers touch this) and we never re-enter the
-// function before it returns. Two of these are used because the kmOrbit
-// copy must not alias outPos. The kmOrbit scratch carries semiMajorAxis only;
-// the rest of the orbit fields are read directly from `orbit`.
+// Module-private scratch: single-threaded and never re-entered before the function returns. Two are used because the kmOrbit copy must
+// not alias outPos. The kmOrbit scratch carries semiMajorAxis only; the rest is read directly from `orbit`.
 const _kmOrbitScratch = {
   semiMajorAxis: 0,
   eccentricity: 0,

@@ -46,8 +46,6 @@
  *            `│ WHEELS ▮▯▯▯ 42%`: the fullest of the three wheels, |h| / 4 N·m·s. Full is the BAD end (the opposite of the
  *            tanks): green < 75 %, amber from 75 %, red from 90 % (a wheel that full cannot take more spin that way; the gas
  *            or the tail boxes take over until the coils slow it). Not in the pane without the kit: its DOM is what it was.
- *   PLUME    `#plume-block-row` — the red WARN PLUME BLOCK line under the
- *            propulsion row (hidden unless StatusPanel lights it): never hover-only.
  *
  * Contract with the ResourceSystem (both OPTIONAL — every method is probed
  * with `?.` and a missing one falls back, never throws):
@@ -534,7 +532,6 @@ export class VitalsPane {
     this._getMassBudget = typeof deps.getMassBudget === 'function' ? deps.getMassBudget : null;
     this._root = null;
     this._titleSlot = null;      // the memo chip's home (right of MOTHER)
-    this._plumeEl = null;        // #plume-block-row
     this._timeEl = null;         // the battery time-left text
     this._timeText = '';
     this._timeHold = newTimeHold();   // u3-payoff-calm D3: the calm time-left state
@@ -997,7 +994,7 @@ export class VitalsPane {
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
-  /** @private Inject the style once, build title + rows + plume line, make the pane the parent's FIRST child. */
+  /** @private Inject the style once, build title + rows, make the pane the parent's FIRST child. */
   _build(parent) {
     const doc = this._doc;
     if (!doc || typeof doc.createElement !== 'function') return;
@@ -1099,12 +1096,6 @@ export class VitalsPane {
       root.appendChild(el);
       this._row[key] = rec;
     }
-
-    // The plume warning lives with the meters, never in the hover detail: a warning is never hover-only.
-    this._plumeEl = mk('div', 'vp-plume', 'WARN PLUME BLOCK');
-    this._plumeEl.id = 'plume-block-row';
-    this._plumeEl.style.display = 'none';
-    root.appendChild(this._plumeEl);
 
     this._root = root;
     if (parent && typeof parent.prepend === 'function') parent.prepend(root);
@@ -1304,13 +1295,6 @@ export class VitalsPane {
       #${VITALS_ID} .vp-edt { color: ${INFO}; font-size: 9px; font-weight: 700; flex: 0 0 auto; }
       #${VITALS_ID} .vp-rate[data-empty] { display: none; }
       #${VITALS_ID} .vp-tag[data-empty] { display: none; }
-      /* The plume warning: hidden until StatusPanel lights it (inline display), never part of the hover detail. */
-      #${VITALS_ID} .vp-plume {
-        font-size: 10px;
-        font-weight: 700;
-        color: ${WARNING};
-        text-shadow: ${HALO};
-      }
     `;
     doc.head.appendChild(style);
   }

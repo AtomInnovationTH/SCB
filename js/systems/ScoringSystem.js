@@ -1,5 +1,5 @@
 /**
- * ScoringSystem.js — Score tracking, calculations, and win/loss conditions
+ * ScoringSystem.js — score and credit ledgers, capture payouts, market sale math
  * @module systems/ScoringSystem
  */
 
@@ -10,7 +10,6 @@ import { gameState } from '../core/GameState.js';
 import { missionProfileFor } from '../core/missionProgress.js';
 import { radToDeg, clamp } from '../core/MathUtil.js';
 
-/** Scoring tiers */
 export const CAPTURE_TIERS = {
   DATA: 1,       // Scan only
   DEORBIT: 2,    // Ion beam / laser deorbit
@@ -18,33 +17,23 @@ export const CAPTURE_TIERS = {
 };
 
 /**
- * Method bonus multipliers.
- *
- * S1 economy closure (2026-07-23): the only method emitted by the shipped build
- * is `arm` (GameFlowManager.js, LassoSystem.js all hard-code `method:'arm'`).
- * The former speculative entries (laser/ionBeam/magnetic/tether/climber and the
- * ×2.0 `armManual`) were dead — and `armManual: 2.0` was a latent double-count:
- * it multiplied inside `calculateScore()` BEFORE the situational soft-cap, so
- * any future `method:'armManual'` + `manualCapture:true` would have stacked
- * ×2.0 (method) × ×2.0 (manual) outside the cap. Deleted. Manual-piloting reward
- * lives solely in the situational `manualCapture` ×2.0, under the soft caps.
- * `arm: 1.0` is a no-op kept only to document the shipped method.
+ * Method bonus multipliers. `arm` is the only method the shipped build emits (a no-op 1.0, kept to document it).
+ * Manual-piloting reward lives only in the situational `manualCapture` ×2.0, under the soft caps; a method multiplier
+ * would stack outside them.
  */
 const METHOD_BONUS = {
-  arm: 1.0,    // Auto-capture (base — V3 arm system); the only emitted method
+  arm: 1.0,
 };
 
 export class ScoringSystem {
   constructor() {
     this.totalScore = 0;
     this.credits = 0;
-    // S1 credits rebalance (2026-07-23): cumulative per-RUN credits paid through
-    // the capture path ONLY (not direct-points awards, sales, contracts, or the
-    // FIRST_DEPOT_FLOOR top-up). Drives CAPTURE_CREDITS_TAPER. Persisted; defaults
-    // to 0 for old saves (a loaded late-game save briefly escapes the taper —
-    // acceptable one-run distortion).
+    // Cumulative per-RUN credits paid through the capture path ONLY (not direct-points awards, sales, contracts or the
+    // FIRST_DEPOT_FLOOR top-up). Drives CAPTURE_CREDITS_TAPER. Persisted; 0 for old saves (a late-game load briefly
+    // escapes the taper: accepted).
     this.captureCreditsEarned = 0;
-    /** @private one-shot per-run flavor comms when the taper first activates */
+    /** One-shot per-run comms when the taper first activates. */
     this._taperCommsFired = false;
     this.debrisCleared = 0;
     this.debrisByTier = { data: 0, deorbit: 0, capture: 0 };
@@ -53,49 +42,35 @@ export class ScoringSystem {
     this.bestStreak = 0;
     this.startTime = Date.now();
 
-    // UX-3 N3: First-time arm capture comms messages (once per session)
     this._firstAutoArmMsg = false;
     this._firstManualArmMsg = false;
 
-    // ST-4.C: Track mission number for MISSION_START emission
     this._lastMissionNumber = 1;
-    /** @private Cached reference to gameState (set lazily on first SCORE_UPDATE) */
     this._gameState = gameState;
 
-    // ST-4.E: Per-tool ΔV tracking for efficiency report
     this._toolStats = {
       lasso: { catches: 0, dvSpent: 0, dvBefore: 0, active: false },
       arm:   { catches: 0, dvSpent: 0, dvBefore: 0, active: false },
       trawl: { catches: 0, dvSpent: 0, dvBefore: 0, active: false },
     };
-    /** @type {object|null} Player satellite ref for ΔV reads */
     this._playerRef = null;
 
-    // Listen for events
     eventBus.on(Events.SCORING_AWARD, (data) => this.awardPoints(data));
 
-    // Phase 5: Wire cargo-sell events to apply market modifiers
     eventBus.on(Events.CARGO_SELL, (data) => this.processSale(data));
     eventBus.on(Events.CARGO_SELL_ALL, (data) => this.processSale(data));
 
-    // ST-4.E: Tool ΔV tracking listeners
     this._setupToolTracking();
   }
 
   /**
-   * Calculate score for a debris interaction.
-   * @param {object} params
-   * @param {object} params.debris - Debris data object
-   * @param {string} params.method - Tool used (laser, ionBeam, magnetic, tether, climber)
-   * @param {number} params.captureTier - CAPTURE_TIERS enum
-   * @param {number} [params.fragmentsCreated=0] - Fragments spawned
-   * @param {number} [params.nearbyActiveSats=0] - Active sats within 10km
-   * @returns {number} Final score value
+   * Score for a debris interaction.
+   * @param {number} params.captureTier CAPTURE_TIERS enum
+   * @param {number} [params.nearbyActiveSats=0] active sats within 10 km
    */
   calculateScore(params) {
     const { debris, method, captureTier, fragmentsCreated = 0, nearbyActiveSats = 0 } = params;
 
-    // Determine base points from capture ACTION tier (data/deorbit/physical).
     const debrisTier = this._getDebrisTier(debris);
     let base;
     if (captureTier === CAPTURE_TIERS.DATA) {
@@ -106,25 +81,15 @@ export class ScoringSystem {
       base = Constants.TIER3_BASE;
     }
 
-    // E1 retune: scale the base by the DEBRIS tier so a physically-captured tiny
-    // fragment no longer earns the same flat base as a rocket body. Previously the
-    // flat 500 physical-capture base made early fragment runs pay ~640/catch, so a
-    // first depot blew past the intended 600–1,500 cr band. The tier weight
-    // (fragment ≈ 0.4× … rocket body ≈ 1.0×) tracks payout to target value while
-    // the salvage value below adds the mass share. (The ×1.3 tier-4 row was
-    // production-dead — register item 99, deleted 2026-08-21.)
+    // Scale the base by DEBRIS tier so a tiny fragment doesn't pay a rocket body's flat base (keeps the first depot in
+    // its 600–1,500 cr band): fragment ≈ 0.4× … rocket body ≈ 1.0×. The salvage value below adds the mass share.
     const tierWeights = Constants.DEBRIS_TIER_BASE_WEIGHT || { 1: 0.4, 2: 0.7, 3: 1.0 };
     base *= (tierWeights[debrisTier] || 1.0);
 
-    // Size factor: bigger = more points
     const sizeFactor = 1.0 + Math.log10(Math.max(debris.mass || 1, 1)) / 4;
 
-    // E1 despin doctrine (also fixes the perverse incentive): the tumble bonus
-    // is a DESPIN reward, not a "caught it spinning" reward. Pay it only when the
-    // piece SPAWNED above-spec (its _initialTumbleRate exceeded IN_SPEC_DEG) AND
-    // it is in-spec at capture (the player despun it). A still-tumbling lucky
-    // catch earns nothing; despinning now RAISES payout instead of cutting it.
-    // The magnitude scales with how fast it originally spun (harder despin = more).
+    // Tumble bonus is a DESPIN reward: paid only when the piece SPAWNED above spec (_initialTumbleRate > IN_SPEC_DEG)
+    // and is in spec at capture. A still-tumbling lucky catch earns nothing; it scales with the original spin.
     const inSpecDeg = (Constants.NET_TUMBLE_PENALTY && Constants.NET_TUMBLE_PENALTY.IN_SPEC_DEG) || 10;
     const initialTumbleDeg = (radToDeg(debris._initialTumbleRate != null
       ? debris._initialTumbleRate
@@ -132,22 +97,18 @@ export class ScoringSystem {
     const captureTumbleDeg = radToDeg(debris.tumbleRate || 0);
     let tumbleFactor = 1.0;
     if (initialTumbleDeg > inSpecDeg && captureTumbleDeg <= inSpecDeg) {
-      // Reward proportional to the above-spec spin that was tamed, gently sloped
-      // and capped so a fast fragment despin can't dominate a run (E1 retune).
+      // Proportional to the above-spec spin tamed; sloped and capped so a fast fragment despin can't dominate a run.
       const despinBonus = (initialTumbleDeg - inSpecDeg) / (Constants.TUMBLE_DESPIN_SLOPE_DEG || 340);
       tumbleFactor = 1.0 + Math.min(despinBonus, (Constants.TUMBLE_DESPIN_MAX_BONUS || 0.5));
     }
 
-    // Risk multiplier: nearby valuable assets increase stakes
     const riskMultiplier = 1.0 + nearbyActiveSats * 0.5;
 
-    // Method bonus
     const methodBonus = METHOD_BONUS[method] || 1.0;
 
-    // Fragment penalty
     const fragmentPenalty = Math.max(1, fragmentsCreated);
 
-    // Streak bonus (consecutive captures without damage)
+    // Streak: consecutive captures without damage
     const streakBonus = 1.0 + Math.min(this.currentStreak * 0.1, 0.5);
 
     const raw = base * sizeFactor * tumbleFactor;
@@ -156,20 +117,13 @@ export class ScoringSystem {
     return Math.max(10, final); // Minimum 10 points
   }
 
-  /**
-   * Award points for a successful interaction.
-   * @param {object} data
-   */
+  /** @returns {number} credits paid */
   awardPoints(data) {
-    // Direct point award bypass (scan rewards, mission events, etc.)
-    // When data.points is set and no debris object, award points directly
-    // without touching streak, debris tier counts, or mass tracking.
+    // Direct award (scan rewards, mission events): points with no debris skip streak, tier counts and mass tracking.
     if (data.points != null && !data.debris) {
       const pts = data.points;
-      // Penalty awards (e.g. Fragmentation penalty) carry negative points.
-      // Floor the spendable balance and score at 0 so a penalty can never
-      // drive credits negative — a negative balance soft-locks shop spend()
-      // and would round-trip through persistence.
+      // Penalty awards carry negative points. Floor balance and score at 0: a negative balance soft-locks shop spend()
+      // and would persist.
       this.totalScore = Math.max(0, this.totalScore + pts);
       this.credits = Math.max(0, this.credits + pts);
       eventBus.emit(Events.SCORE_UPDATE, {
@@ -180,7 +134,7 @@ export class ScoringSystem {
         streak: this.currentStreak,
         massKg: 0,
         totalMassKg: this.totalMassRecovered,
-        // u3-payoff-calm D1: a bounty released with the catch (data.withCatch) is part of the catch's payoff.
+        // a bounty released with the catch is part of the catch's payoff
         ...(data.withCatch ? { kind: 'catch-bonus' } : {}),
       });
       return pts;
@@ -188,22 +142,14 @@ export class ScoringSystem {
 
     let points = this.calculateScore(data);
 
-    // Phase 5: Apply bounty premium based on debris type
     const debrisType = data.debris ? data.debris.type : 'fragment';
     const bountyPremium = (Constants.MARKET && Constants.MARKET.BOUNTY_PREMIUMS)
       ? (Constants.MARKET.BOUNTY_PREMIUMS[debrisType] || 1.0)
       : 1.0;
     points = Math.round(points * bountyPremium);
 
-    // (Register item 98: the S1 material-bonus addition that used to sit after
-    // the situational multiply below was production-dead from inception and is
-    // deleted — see the tombstone comment there.)
-
-    // E1 retune: the situational multipliers below are ACCUMULATED into a single
-    // product, then soft-capped (SITUATIONAL_MULT_SOFT_CAP) before a single apply.
-    // Previously each was applied inline (points *= X), so stacking a scanned,
-    // manual, fuel-efficient, salvage, detached, deorbit catch reached ~×7.5 and
-    // made one lucky catch worth an entire shop tier. Comms still fire per bonus.
+    // Situational multipliers accumulate into ONE product, soft-capped (SITUATIONAL_MULT_SOFT_CAP) before a single apply
+    // (stacked inline they reached ~×7.5). Comms still fire per bonus.
     let situationalMult = 1.0;
 
     // Tactical assessment bonus: ×1.3 if player assessed all zones before capture
@@ -213,24 +159,22 @@ export class ScoringSystem {
         source: 'HOUSTON',
         text: 'Good assessment, Cowboy.',
         priority: 1,
-        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
+        _quiet: true,   // praise comms stay hidden
       });
     }
 
-    // Manual capture bonus: ×2.0 for manually piloting arm to target
     if (data.manualCapture) {
       situationalMult *= 2.0;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'Clean approach. Manual piloting noted.',
         priority: 1,
-        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
+        _quiet: true,
       });
     }
 
-    // UX-3 N3: First-time arm capture comms hints (once per session)
-    // Guard: manualCapture !== undefined distinguishes arm path (always sets it)
-    // from lasso path (emits SCORING_AWARD with method:'arm' but no manualCapture)
+    // First-time arm capture comms (once per session). manualCapture !== undefined separates the arm path (always sets it)
+    // from the lasso path (SCORING_AWARD with method:'arm' but no manualCapture).
     if ((data.method === 'arm' || data.method === 'armManual')
         && data.manualCapture !== undefined) {
       if (data.manualCapture && !this._firstManualArmMsg) {
@@ -252,29 +196,26 @@ export class ScoringSystem {
       }
     }
 
-    // Fuel efficiency bonus: ×1.25 for fuel-efficient manual capture
     if (data.fuelEfficient) {
       situationalMult *= 1.25;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'Efficient trajectory. Minimal fuel expenditure.',
         priority: 1,
-        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
+        _quiet: true,
       });
     }
 
-    // Salvage recovery bonus: ×1.15 when debris had salvageable resources (Session 10)
     if (data.salvageRecovered) {
       situationalMult *= Constants.SALVAGE_SCORE_MULTIPLIER;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'Salvage recovered. Good haul.',
         priority: 1,
-        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
+        _quiet: true,
       });
     }
 
-    // Deorbit sacrifice bonus (Session 10): arm sacrificed with captured debris
     if (data.deorbitSacrifice) {
       const deorbitMult = data.deorbitMultiplier || Constants.DEORBIT_MULTIPLIER_BASE;
       situationalMult *= deorbitMult;
@@ -282,39 +223,33 @@ export class ScoringSystem {
         source: 'HOUSTON',
         text: 'She went down with the target. Worth it.',
         priority: 1,
-        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
+        _quiet: true,
       });
     }
 
-    // Phase 6: Detached arm capture — ×2.0 for free-flying catch
     if (data.detachedCapture) {
       situationalMult *= Constants.DETACH_SCORE_MULT;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'COWBOY! Free-flying capture! Textbook maneuver.',
         priority: 1,
-        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
+        _quiet: true,
       });
     }
 
-    // Phase 6: Detached arm deorbit sacrifice — ×2.5
     if (data.detachedSacrifice) {
       situationalMult *= Constants.DETACH_SACRIFICE_MULT;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'Godspeed. She took the debris with her. Sacrifice noted.',
         priority: 1,
-        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
+        _quiet: true,
       });
     }
 
-    // E1 retune: soft-cap the accumulated situational product, then apply once.
-    // S1 credits rebalance (2026-07-23): the SCORE and CREDITS ledgers now split
-    // here. The situational product is capped at 2.5 for score (skill rating) but
-    // at a lower SITUATIONAL_MULT_SOFT_CAP_CREDITS (1.5) for the wallet, so
-    // skilled manual play earns ~+50% credits over auto-capture instead of the
-    // pre-fix ~6–7× that let a skilled player buy out the shop early. The shared
-    // `points` (base × bounty) feeds both.
+    // Soft-cap the situational product, apply once. The score and credits ledgers split here: score cap 2.5 (skill rating),
+    // wallet cap SITUATIONAL_MULT_SOFT_CAP_CREDITS (1.5), so skilled manual play earns ~+50% credits over auto-capture
+    // instead of ~6–7×. The shared `points` (base × bounty) feeds both.
     const scoreCap = Constants.SITUATIONAL_MULT_SOFT_CAP || 2.5;
     const creditsCap = Constants.SITUATIONAL_MULT_SOFT_CAP_CREDITS != null
       ? Constants.SITUATIONAL_MULT_SOFT_CAP_CREDITS
@@ -322,30 +257,19 @@ export class ScoringSystem {
     let scorePoints = Math.round(points * Math.min(situationalMult, scoreCap));
     let creditPoints = Math.round(points * Math.min(situationalMult, creditsCap));
 
-    // S1 economy closure (2026-07-19) — RETIRED 2026-08-21 (register item 98,
-    // owner ruling): the salvaged-metal material bonus (metalMassKg × 2 cr, cap
-    // 750, added after the situational multiply) was PRODUCTION-DEAD from the
-    // initial commit — no production award site ever passed metalMassKg — and
-    // the pacing projector paid it anyway. The block, both constants and the
-    // projector fixture are deleted; a passed metalMassKg is now ignored
-    // (tombstone pin in test-economy-invariants.js).
+    // owner 2026-08-21: no salvaged-metal bonus; a passed metalMassKg is ignored (tombstone pin in test-economy-invariants.js).
 
-    // S1 credits rebalance (2026-07-23): per-RUN capture-credits taper. Apply the
-    // taper to the FULL creditPoints (post-cap) so the
-    // ceiling is a true guarantee, then hard-clamp per award so a single large
-    // award cannot overshoot CEILING_X×catalog. Score is NEVER tapered — the
-    // chase/rating loop stays fully intact; only the wallet saturates late-run,
-    // shifting the endgame money loop toward refine-and-contribute.
+    // Per-RUN capture-credits taper on the FULL post-cap creditPoints, then a hard per-award clamp so one big award can't
+    // overshoot CEILING_X×catalog. Score is NEVER tapered; only the wallet saturates late-run (pushes the endgame toward
+    // refine-and-contribute).
     const taperCfg = Constants.CAPTURE_CREDITS_TAPER || { START_X: 1.5, CEILING_X: 2.5 };
     const catalogCr = (Constants.SHOP && Constants.SHOP.CATALOG_TOTAL_CR) || 42800;
     const ceilingCr = taperCfg.CEILING_X * catalogCr;
     const startCr = taperCfg.START_X * catalogCr;
     const taper = taperMultiplier(this.captureCreditsEarned, catalogCr, taperCfg);
     creditPoints = Math.round(creditPoints * taper);
-    // Hard ceiling clamp (never overshoot; floor at 0).
     creditPoints = clamp(Math.round(ceilingCr - this.captureCreditsEarned), 0, creditPoints);
-    // One-shot flavor comms the first time the taper actually bites this run, so
-    // shrinking payouts read as fiction, not a bug.
+    // One-shot comms when the taper first bites, so shrinking payouts read as fiction, not a bug.
     if (!this._taperCommsFired && this.captureCreditsEarned >= startCr) {
       this._taperCommsFired = true;
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -358,17 +282,13 @@ export class ScoringSystem {
 
     this.totalScore += scorePoints;
     this.credits += creditPoints;
-    // S1 Fix M1: Do NOT increment this.debrisCleared here.
-    // gameState.debrisCleared (incremented by GameFlowManager → gameState.clearDebris())
-    // is the single source of truth for debris count.
+    // Do NOT increment this.debrisCleared: gameState.debrisCleared (via GameFlowManager → clearDebris()) is the single source.
     this.currentStreak += 1;
     this.bestStreak = Math.max(this.bestStreak, this.currentStreak);
 
-    // S9-A: Track total mass recovered for display
     const debrisMassKg = data.debris?.mass || 0;
     this.totalMassRecovered += debrisMassKg;
 
-    // Track by tier
     if (data.captureTier === CAPTURE_TIERS.DATA) this.debrisByTier.data++;
     else if (data.captureTier === CAPTURE_TIERS.DEORBIT) this.debrisByTier.deorbit++;
     else this.debrisByTier.capture++;
@@ -376,44 +296,30 @@ export class ScoringSystem {
     eventBus.emit(Events.SCORE_UPDATE, {
       total: this.totalScore,
       credits: this.credits,
-      // S1 credits rebalance (2026-07-23): the ledgers now diverge, so expose
-      // both deltas. Legacy `delta` aliases the CREDITS delta (wallet-adjacent
-      // consumers read it); `scoreDelta`/`creditsDelta` are explicit.
+      // The ledgers diverge: legacy `delta` aliases the CREDITS delta (wallet consumers read it); scoreDelta/creditsDelta
+      // are explicit.
       delta: creditPoints,
       scoreDelta: scorePoints,
       creditsDelta: creditPoints,
-      debrisCleared: gameState.debrisCleared,  // S1 Fix M1: single source of truth
+      debrisCleared: gameState.debrisCleared,
       streak: this.currentStreak,
       massKg: debrisMassKg,
       totalMassKg: this.totalMassRecovered,
-      // u3-payoff-calm D1: tells the payoff line a credited catch from other credit changes.
+      // tells the payoff line a credited catch from other credit changes
       debrisType: data.debris?.type ?? null,
       kind: data.deorbitSacrifice ? 'deorbit' : 'catch',
-      // u23 B1: a scoop bag pays one award per member; each event carries the bag it belongs to, so the payoff line can
-      // show ONE line for the bag (members summed) instead of the last member's. Absent for a solo catch.
+      // a scoop bag pays one award per member; each event carries its bag so the payoff line shows ONE line (members summed).
+      // Absent for a solo catch.
       ...(data.bag ? { bagId: data.bag.id, bagCount: data.bag.count, bagMassKg: data.bag.massKg } : null),
     });
 
-    // ST-4.C mission transition check — MOVED (Wave 5 Session F, D4). It ran
-    // here, BEFORE the caller's gameState.clearDebris() incremented the count
-    // (this method never touches gameState.debrisCleared — S1 Fix M1), so at
-    // the 5th catch getMissionNumber() still read mission 1 and MISSION_START
-    // { missionNumber: 2 } fired one catch LATE, on the 6th. The counter's owner
-    // (GameFlowManager) now calls checkMissionTransition() right after each
-    // clearDebris(), so the event fires ON the boundary catch with the new
-    // number (03-plan Session E FINDINGS (f)).
-
-    // S1 Fix M1+L2: Win check REMOVED from ScoringSystem.
-    // GameState.update() is the sole win-condition emitter.
+    // Mission transition is NOT checked here: GameFlowManager calls checkMissionTransition() after clearDebris(); here the
+    // count isn't incremented yet, so MISSION_START would fire one catch late.
+    // No win check: GameState.update() is the sole win-condition emitter.
 
     return creditPoints;
   }
 
-  /**
-   * Spend credits in the shop.
-   * @param {number} amount
-   * @returns {boolean} Whether purchase was successful
-   */
   spendCredits(amount) {
     if (this.credits < amount) return false;
     this.credits -= amount;
@@ -421,21 +327,14 @@ export class ScoringSystem {
       total: this.totalScore,
       credits: this.credits,
       delta: 0,
-      debrisCleared: gameState.debrisCleared,  // S1 Fix M1: single source of truth
+      debrisCleared: gameState.debrisCleared,
     });
     return true;
   }
 
   /**
-   * Add credits directly (e.g. from cargo sales, contract contributions,
-   * contract WIN_BONUS, FIRST_DEPOT_FLOOR top-up).
-   *
-   * E4 (ledger split): this is CREDITS-ONLY — it no longer touches totalScore.
-   * `credits` are the spendable wallet (shop); `totalScore` is the performance
-   * ledger (WIN/GameOver report + rating bands). Selling salvage or contributing
-   * to the elevator should NOT inflate the performance score — that's a payment,
-   * not an achievement. Capture/boss/bounty awards still pay BOTH via awardPoints
-   * (performance is also payment), so no caller changes are needed there.
+   * Add credits directly (cargo sales, contract contributions and WIN_BONUS, FIRST_DEPOT_FLOOR top-up). CREDITS-ONLY: never
+   * touches totalScore (a payment, not an achievement). Capture/boss/bounty awards pay BOTH via awardPoints.
    * @param {number} amount
    */
   addCredits(amount) {
@@ -445,15 +344,14 @@ export class ScoringSystem {
       total: this.totalScore,
       credits: this.credits,
       delta: amount,
-      debrisCleared: gameState.debrisCleared,  // S1 Fix M1: single source of truth
+      debrisCleared: gameState.debrisCleared,
     });
   }
 
   /**
-   * Nets step 3 slice 5 (lane 5b, plan C3 "Score"): a big piece was disposed of and its pay lands. Like a catch's credit it goes to the
-   * wallet AND the score total (`awardPoints`); unlike it, the streak, the capture taper and the tier counts are not touched (the piece
-   * was counted at the catch and paid nothing there). Emits SCORE_UPDATE with `kind: 'disposal'` (the payoff line shows `kind: 'catch'`
-   * only; the disposal's own line is said by `GameFlowManager.disposeBigPiece`).
+   * A disposed big piece's pay lands in the wallet AND the score total, like a catch's credit; streak, capture taper and tier
+   * counts are untouched (the piece was counted at the catch). Emits SCORE_UPDATE `kind: 'disposal'` (the payoff line shows
+   * `kind: 'catch'` only; the disposal's own line is said by `GameFlowManager.disposeBigPiece`).
    * @param {number} amount credits, whole @returns {number} what was paid
    */
   awardDisposal(amount) {
@@ -477,10 +375,8 @@ export class ScoringSystem {
   }
 
   /**
-   * Process a cargo sale, applying MARKET sell modifier and bulk bonus.
-   * Wired to CARGO_SELL / CARGO_SELL_ALL events.
-   * @param {object} data - { totalValue: number, totalMassKg: number }
-   * @returns {number} Final sale value credited
+   * Cargo sale with the MARKET sell modifier and bulk bonus; wired to CARGO_SELL / CARGO_SELL_ALL.
+   * @param {object} data { totalValue, totalMassKg } @returns {number} credited value
    */
   processSale(data) {
     if (!data || !data.totalValue || data.totalValue <= 0) return 0;
@@ -499,16 +395,10 @@ export class ScoringSystem {
     return saleValue;
   }
 
-  /**
-   * Break streak on damage/failure.
-   */
   breakStreak() {
     this.currentStreak = 0;
   }
 
-  /**
-   * Get stats summary.
-   */
   getStats() {
     const elapsed = (Date.now() - this.startTime) / 1000;
     const minutes = Math.floor(elapsed / 60);
@@ -516,7 +406,7 @@ export class ScoringSystem {
     return {
       totalScore: this.totalScore,
       credits: this.credits,
-      debrisCleared: gameState.debrisCleared,  // S1 Fix M1: read from single source
+      debrisCleared: gameState.debrisCleared,
       debrisByTier: { ...this.debrisByTier },
       bestStreak: this.bestStreak,
       timePlayed: `${minutes}:${seconds.toString().padStart(2, '0')}`,
@@ -524,20 +414,16 @@ export class ScoringSystem {
     };
   }
 
-  /**
-   * Serialize scoring state for persistence.
-   * @returns {object}
-   */
   serialize() {
     return {
       credits: this.credits,
       totalScore: this.totalScore,
-      captureCreditsEarned: this.captureCreditsEarned,  // S1 taper (per-run)
-      missionNumber: Math.floor(gameState.debrisCleared / Constants.MISSIONS.DEBRIS_PER_MISSION) + 1,  // S1 Fix M1 (T8 SSOT)
-      debrisCleared: gameState.debrisCleared,  // S1 Fix M1
-      totalCaptures: gameState.debrisCleared,  // S1 Fix M1
+      captureCreditsEarned: this.captureCreditsEarned,
+      missionNumber: Math.floor(gameState.debrisCleared / Constants.MISSIONS.DEBRIS_PER_MISSION) + 1,
+      debrisCleared: gameState.debrisCleared,
+      totalCaptures: gameState.debrisCleared,
       manualCaptures: 0,  // not yet tracked individually
-      missionsCompleted: Math.floor(gameState.debrisCleared / Constants.MISSIONS.DEBRIS_PER_MISSION),  // S1 Fix M1 (T8 SSOT)
+      missionsCompleted: Math.floor(gameState.debrisCleared / Constants.MISSIONS.DEBRIS_PER_MISSION),
       bestMissionScore: this.totalScore,
       bestStreak: this.bestStreak,
       currentStreak: this.currentStreak,
@@ -545,19 +431,11 @@ export class ScoringSystem {
     };
   }
 
-  /**
-   * Restore scoring state from saved data.
-   * Handles missing fields gracefully with defaults.
-   * @param {object} data - Previously serialized scoring state
-   */
   restore(data) {
     if (!data) return;
-    // Clamp at 0: a corrupt or penalty-driven negative balance must never
-    // restore into a state that blocks shop purchases.
+    // Clamp at 0: a corrupt or penalty-driven negative balance must never block shop purchases.
     this.totalScore = Math.max(0, data.totalScore || 0);
     this.credits = Math.max(0, data.credits || 0);
-    // S1 taper: default 0 for old saves (a loaded late-game save briefly escapes
-    // the taper — acceptable one-run distortion).
     this.captureCreditsEarned = Math.max(0, data.captureCreditsEarned || 0);
     this.debrisCleared = data.debrisCleared || 0;
     this.debrisByTier = data.debrisByTier || { data: 0, deorbit: 0, capture: 0 };
@@ -566,21 +444,17 @@ export class ScoringSystem {
     this.startTime = Date.now();
   }
 
-  /**
-   * Reset scoring for a new game.
-   */
   reset() {
     this.totalScore = 0;
     this.credits = 0;
-    this.captureCreditsEarned = 0;   // S1 taper (per-run)
+    this.captureCreditsEarned = 0;
     this._taperCommsFired = false;
     this.debrisCleared = 0;
     this.debrisByTier = { data: 0, deorbit: 0, capture: 0 };
     this.currentStreak = 0;
     this.bestStreak = 0;
     this.startTime = Date.now();
-    this._lastMissionNumber = 1;   // ST-4.C
-    // ST-4.E: Reset per-tool ΔV tracking
+    this._lastMissionNumber = 1;
     this._toolStats = {
       lasso: { catches: 0, dvSpent: 0, dvBefore: 0, active: false },
       arm:   { catches: 0, dvSpent: 0, dvBefore: 0, active: false },
@@ -588,34 +462,17 @@ export class ScoringSystem {
     };
   }
 
-  // ==========================================================================
-  // ST-4.C: Mission Profile Helpers
-  // ==========================================================================
-
   /**
-   * Mission boundary check — the ONE public entry (Wave 5 Session F, D4).
-   * Called by the counter's owner (GameFlowManager) right AFTER
-   * `gameState.clearDebris()` on every credited clear (the CATCH_PROCESSED and
-   * ARM_DEORBIT paths), so MISSION_START { missionNumber, profile } fires ON the
-   * boundary catch — the 5th catch starts mission 2, the 20th mission 5 — with
-   * the number the mission-keyed onsets (MissionCoach chapters, the ISS /
-   * Starlink bosses) and the field / weather / threat profiles key on.
-   *
-   * Dedupes on `_lastMissionNumber` (reset() → 1), so a second call at the same
-   * count is a no-op. NOT called by the restore path: MENU_CONTINUE assigns
-   * `gameState.debrisCleared` directly and emits no start at resume — the
-   * first credited clear after a continue re-asserts the restored mission to
-   * every consumer, the shipped continue behaviour (HUD.js documents that
-   * MISSION_START is not emitted on a bare continue).
+   * The ONE public mission-boundary check. GameFlowManager calls it right AFTER `gameState.clearDebris()` on every credited
+   * clear (CATCH_PROCESSED and ARM_DEORBIT paths), so MISSION_START { missionNumber, profile } fires ON the boundary catch
+   * (the 5th starts mission 2). Dedupes on `_lastMissionNumber` (reset() → 1). NOT called on restore: MENU_CONTINUE sets
+   * `gameState.debrisCleared` directly and emits no start; the first credited clear after a continue re-asserts the
+   * mission (HUD.js documents this).
    */
   checkMissionTransition() {
     this._checkMissionTransition();
   }
 
-  /**
-   * Check if mission number has changed and emit MISSION_START if so.
-   * @private
-   */
   _checkMissionTransition() {
     const newMission = this.getMissionNumber();
     if (newMission !== this._lastMissionNumber) {
@@ -625,60 +482,33 @@ export class ScoringSystem {
     }
   }
 
-  /**
-   * Get the current mission number based on debris cleared.
-   * @returns {number}
-   */
   getMissionNumber() {
     return Math.floor((this._gameState?.debrisCleared || 0) / Constants.MISSIONS.DEBRIS_PER_MISSION) + 1;
   }
 
   /**
-   * Get the mission profile for a given mission number.
-   * Highest-matching minMission wins. The loop itself lives in
-   * core/missionProgress.js (`missionProfileFor`) so profile readers that own
-   * no ScoringSystem — GameFlowManager's progress line, the guided-chapter
-   * predicate — resolve the SAME entry this broadcasts on MISSION_START; this
-   * method is kept as the ScoringSystem-side entry point (test-MissionProfiles
-   * pins it) and simply delegates.
-   * @param {number} missionNumber
-   * @returns {object} Mission profile from Constants.MISSIONS.PROFILES
+   * Highest-matching minMission wins. Delegates to core/missionProgress.js `missionProfileFor` so readers without a
+   * ScoringSystem (GameFlowManager's progress line, the guided-chapter predicate) resolve the SAME entry. Kept as the
+   * entry point test-MissionProfiles pins.
    */
   _getMissionProfile(missionNumber) {
     return missionProfileFor(missionNumber);
   }
 
-  /**
-   * Determine debris difficulty tier from properties.
-   * @private
-   */
   _getDebrisTier(debris) {
-    // (Register item 99, 2026-08-21: the E1 tier-4 row — rocketBody > 4,000 kg
-    // — was production-dead since S11(b)'s two populations (df24e3b): no
-    // production spawn path emits a >4,000 kg rocketBody. Deleted by owner
-    // ruling, item-98 shape; tombstone pin in test-economy-invariants.js.)
+    // owner 2026-08-21: tier-4 row (rocketBody > 4,000 kg) is deliberately absent: no production spawn emits it (tombstone pin in
+    // test-economy-invariants.js).
     if (debris.type === 'rocketBody') return 3;
     if (debris.type === 'defunctSat') return debris.mass > 500 ? 3 : 2;
     if (debris.type === 'missionDebris') return debris.mass > 5 ? 2 : 1;
     return 1; // fragments
   }
 
-  // ==========================================================================
-  // ST-4.E: Tool-Tier Efficiency Report
-  // ==========================================================================
-
-  /**
-   * Set reference to player satellite for ΔV tracking.
-   * @param {object} player — PlayerSatellite instance with getDeltaVSpent()
-   */
+  /** @param {object} player PlayerSatellite with getDeltaVSpent() */
   setPlayer(player) {
     this._playerRef = player;
   }
 
-  /**
-   * Get per-tool efficiency stats for the sweep report.
-   * @returns {Array<{name:string, catches:number, dvSpent:number, dvPerCatch:number, isBest?:boolean}>}
-   */
   getToolStats() {
     const stats = [];
     for (const [name, s] of Object.entries(this._toolStats)) {
@@ -691,20 +521,14 @@ export class ScoringSystem {
         });
       }
     }
-    // Sort by dvPerCatch ascending (most efficient first)
+    // Most efficient (lowest dvPerCatch) first; the first is marked best.
     stats.sort((a, b) => a.dvPerCatch - b.dvPerCatch);
-    // Mark the best (lowest dvPerCatch)
     if (stats.length > 0) stats[0].isBest = true;
     return stats;
   }
 
-  /**
-   * Set up EventBus listeners for per-tool ΔV attribution.
-   * Snapshot getDeltaVSpent() before/after each tool operation.
-   * @private
-   */
   _setupToolTracking() {
-    // --- Lasso: start on LASSO_FIRED, end on LASSO_CAPTURED or LASSO_MISSED ---
+    // Lasso: start on LASSO_FIRED, end on LASSO_CAPTURED or LASSO_MISSED
     eventBus.on(Events.LASSO_FIRED, () => {
       if (this._playerRef) {
         this._toolStats.lasso.dvBefore = this._playerRef.getDeltaVSpent?.() || 0;
@@ -718,7 +542,7 @@ export class ScoringSystem {
       this._finishToolTracking('lasso', false);
     });
 
-    // --- Arm/Crossbow: start on CROSSBOW_FIRE, end on ARM_CAPTURED ---
+    // Arm/Crossbow: start on CROSSBOW_FIRE, end on ARM_CAPTURED
     eventBus.on(Events.CROSSBOW_FIRE, () => {
       if (this._playerRef) {
         this._toolStats.arm.dvBefore = this._playerRef.getDeltaVSpent?.() || 0;
@@ -729,7 +553,7 @@ export class ScoringSystem {
       this._finishToolTracking('arm', true);
     });
 
-    // --- Trawl: start on TRAWL_START, end on TRAWL_CAPTURE or TRAWL_END ---
+    // Trawl: start on TRAWL_START, end on TRAWL_CAPTURE
     eventBus.on(Events.TRAWL_START, () => {
       if (this._playerRef) {
         this._toolStats.trawl.dvBefore = this._playerRef.getDeltaVSpent?.() || 0;
@@ -740,12 +564,11 @@ export class ScoringSystem {
       this._finishToolTracking('trawl', true);
     });
 
-    // --- Enrich SWEEP_REPORT with toolStats (mutate same object ref) ---
+    // Enrich SWEEP_REPORT with toolStats (mutates the same object)
     eventBus.on(Events.SWEEP_REPORT, (report) => {
       report.toolStats = this.getToolStats();
     });
 
-    // --- Houston efficiency comms after M2 (missionNumber >= 3) ---
     eventBus.on(Events.MISSION_START, (d) => {
       if (d.missionNumber >= 3) {
         this._sendEfficiencyComms();
@@ -753,12 +576,6 @@ export class ScoringSystem {
     });
   }
 
-  /**
-   * Finish ΔV tracking for a tool operation.
-   * @private
-   * @param {string} toolName — 'lasso' | 'arm' | 'trawl'
-   * @param {boolean} captured — whether the operation resulted in a capture
-   */
   _finishToolTracking(toolName, captured) {
     const tool = this._toolStats[toolName];
     if (!tool || !tool.active) return;
@@ -773,10 +590,6 @@ export class ScoringSystem {
     }
   }
 
-  /**
-   * Send Houston comms about tool efficiency after mission 2.
-   * @private
-   */
   _sendEfficiencyComms() {
     const stats = this.getToolStats();
     if (stats.length < 2) return; // Need at least 2 tools for comparison
@@ -800,22 +613,13 @@ export class ScoringSystem {
 export const scoringSystem = new ScoringSystem();
 export default scoringSystem;
 
-// ============================================================================
-// PURE ECONOMY HELPERS — market sale value + elevator contribution payout
-// (exported for tests and shared by ShopScreen sell/contribute paths; E3/E6)
-// ============================================================================
+// Pure economy helpers (exported for tests; shared by ShopScreen sell/contribute paths)
 
 /**
- * S1 credits rebalance (2026-07-23): per-RUN capture-credits taper multiplier.
- * Pure — returns a factor in [0..1] applied to a capture award's credit payout:
- *   • 1.0 while cumulative capture credits earned < START_X×catalog;
- *   • linear falloff `max(0, 1 - (earned - start)/(ceiling - start))` after that,
- *     so cumulative capture credits asymptotically approach CEILING_X×catalog.
- * Monotonic non-increasing in `earnedCr`. Score is never tapered.
- * @param {number} earnedCr - cumulative per-run capture credits earned so far
- * @param {number} catalogCr - full catalog value (SHOP.CATALOG_TOTAL_CR)
- * @param {{START_X:number, CEILING_X:number}} taperCfg
- * @returns {number} factor in [0..1]
+ * Per-run capture-credits taper factor in [0..1] for a capture award's credit payout (pure): 1.0 while earned <=
+ * START_X×catalog, then linear falloff `max(0, 1 - (earned - start)/(ceiling - start))`, so cumulative credits approach
+ * CEILING_X×catalog. Non-increasing in `earnedCr`. Score is never tapered.
+ * @param {number} catalogCr full catalog value (SHOP.CATALOG_TOTAL_CR)
  */
 export function taperMultiplier(earnedCr, catalogCr, taperCfg) {
   const cfg = taperCfg || { START_X: 1.5, CEILING_X: 2.5 };
@@ -828,12 +632,9 @@ export function taperMultiplier(earnedCr, catalogCr, taperCfg) {
 }
 
 /**
- * Market sale-value math (SSOT for cargo sales AND elevator contributions):
- * apply the sell-price modifier (market spread) then the bulk bonus above the
- * mass threshold. Pure — no side effects; callers credit / emit comms.
- * @param {number} totalValue - listed cargo value (¢)
- * @param {number} totalMassKg
- * @returns {{ saleValue: number, bulk: boolean }}
+ * Market sale value (SSOT for cargo sales AND elevator contributions): sell-price modifier (spread), then the bulk bonus
+ * above the mass threshold. Pure; callers credit and emit comms.
+ * @param {number} totalValue listed cargo value (¢)
  */
 export function computeSaleValue(totalValue, totalMassKg) {
   if (!(totalValue > 0)) return { saleValue: 0, bulk: false };
@@ -848,15 +649,9 @@ export function computeSaleValue(totalValue, totalMassKg) {
 }
 
 /**
- * E3 — credits paid for contributing refined metal to the elevator contract.
- * The contract's per-kg bonus is documented as being paid "on top of selling
- * price", so a contribution must pay the market SALE VALUE (spread + bulk) PLUS
- * that bonus. The pre-fix code paid only the bonus, so contributing forfeited
- * ~20 ¢/kg vs selling and the elevator win was economically dominated. This is
- * the SSOT that makes contributing at least as good as selling.
- * @param {number} listedValue - listed ¢ value of the contributed metal
- * @param {number} massKg
- * @returns {{ saleValue: number, bonus: number, payout: number }}
+ * Credits for contributing refined metal to the elevator contract: market SALE VALUE (spread + bulk) PLUS the contract's
+ * per-kg bonus ("on top of selling price"), so contributing is at least as good as selling (SSOT).
+ * @param {number} listedValue listed ¢ value of the contributed metal
  */
 export function computeContributionPayout(listedValue, massKg) {
   const { saleValue } = computeSaleValue(listedValue, massKg);

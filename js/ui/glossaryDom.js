@@ -1,15 +1,8 @@
 /**
- * glossaryDom.js — shared DOM affordances for the inline glossary (§11.8).
- *
- * glossary.js stays DOM-free (pure decorator, Node-testable). This thin sibling
- * holds the two browser-only pieces every glossary surface needs so they aren't
- * copy-pasted across CommsPanel / ShopScreen / the viewer / etc:
- *   • ensureGlossaryCss(doc) — inject the `.glossary-term` stylesheet ONCE.
- *   • delegateGlossaryClicks(el) — one delegated click handler that turns a
- *     click on a `.glossary-term[data-entry]` into a CODEX_OPEN_ENTRY emit.
- *
+ * glossaryDom.js — browser-only glossary pieces, so glossary.js stays DOM-free (§11.8):
+ *   - ensureGlossaryCss(doc) injects the `.glossary-term` stylesheet once.
+ *   - delegateGlossaryClicks(el) turns a click on `.glossary-term[data-entry]` into CODEX_OPEN_ENTRY.
  * Both are idempotent and guarded for non-DOM environments.
- *
  * @module ui/glossaryDom
  */
 
@@ -19,17 +12,14 @@ import { Events } from '../core/Events.js';
 const CSS_ID = 'glossary-term-css';
 
 /**
- * Inject the shared `.glossary-term` stylesheet exactly once. Reuses the menu's
- * `.adr-name` look: a dotted underline that glows on hover. Deep-linkable terms
- * (`data-entry`) get a pointer cursor; hover-only terms get `help`. The
- * first-use cue (`--new`) is a brighter, solid underline that drops once seen.
+ * Inject the shared `.glossary-term` stylesheet once. Terms with `data-entry` get a pointer cursor,
+ * hover-only terms get `help`; `--new` is the first-use cue (brighter, solid underline).
  * @param {Document} [doc=document]
  */
 export function ensureGlossaryCss(doc = (typeof document !== 'undefined' ? document : null)) {
   if (!doc || typeof doc.createElement !== 'function') return;
   if (typeof doc.getElementById === 'function' && doc.getElementById(CSS_ID)) return;
-  // Mount on <head>, falling back to <html>/<body>. Guard against minimal DOM
-  // shims (used in headless tests) that expose createElement but no mount node.
+  // Minimal DOM shims (headless tests) may expose createElement but no mount node.
   const mount = doc.head || doc.documentElement || doc.body;
   if (!mount || typeof mount.appendChild !== 'function') return;
   const style = doc.createElement('style');
@@ -51,22 +41,10 @@ export function ensureGlossaryCss(doc = (typeof document !== 'undefined' ? docum
 }
 
 /**
- * Attach a single delegated click handler to `el` so a click on any
- * `.glossary-term[data-entry]` descendant deep-links the viewer. Idempotent:
- * tags the element so repeated calls don't stack handlers.
- *
- * On a term hit the event is stopped (`stopPropagation`) so the glossary action
- * cleanly wins over any underlying click target (e.g. a selectable briefing
- * card or shop row). When the container's own descendants carry their own click
- * handlers that would otherwise fire first during bubbling, pass
- * `{ capture: true }` so this handler runs in the capture phase and can suppress
- * them.
- *
- * The payload is `{ id }` — plus `anchor` ONLY when the span carries
- * `data-anchor` (a per-message deep link, `decorateGlossary` `opts.links`; the
- * FURNACE gag's "manual" lands on the page's warning — plan 1788957399035
- * §7.27). A plain glossary term emits exactly `{ id }`, as it always has.
- *
+ * One delegated click handler on `el` for `.glossary-term[data-entry]` descendants. Idempotent (tags `el`).
+ * stopPropagation on a hit, so the glossary wins over an underlying card/row; pass `{ capture: true }` when
+ * descendants' own click handlers would otherwise fire first.
+ * Payload is `{ id }`, plus `anchor` ONLY when the span carries `data-anchor` (`decorateGlossary` `opts.links`).
  * @param {HTMLElement} el  the container that will hold decorated spans
  * @param {{ capture?: boolean }} [opts]
  */
@@ -79,8 +57,6 @@ export function delegateGlossaryClicks(el, opts = {}) {
     if (!span) return;
     const id = span.dataset && span.dataset.entry;
     if (!id) return;
-    // A term click is a distinct intent — don't let it also trigger an
-    // underlying selectable card/row.
     if (typeof e.stopPropagation === 'function') e.stopPropagation();
     const anchor = span.dataset.anchor;
     eventBus.emit(Events.CODEX_OPEN_ENTRY, anchor ? { id, anchor } : { id });

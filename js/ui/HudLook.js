@@ -1,19 +1,8 @@
 /**
- * HudLook — the HUD's one look, and the colour-role helper that feeds it.
- *
- * h2-hud-look (owner 2026-10-14); owner 2026-10-18: "keep the new look, don't need classic
- * any more" — the classic look and its menu switch are gone.
- *
- * MECHANISM. Every converted HUD colour reads `var(--hud-<role>, <literal>)`. index.html
- * defines the `--hud-*` variables under `html[data-look="new"]`, and `<html>` ships with that
- * attribute (no first-paint flash); nothing sets or removes it at run time. The literal in
- * each `var()` is only a CSS fallback now (it is the value the colour had before the new look).
- *
- * `lookColor(c)` wraps a colour that is only known at run time (a palette entry handed
- * through the target-colour law, a skill-tier colour from Constants) in the same
- * `var(--hud-<role>, c)` form. It classifies by hue with the same rules used to convert
- * the static literals, so a runtime colour and a literal of the same value get one role.
- * Pure functions, no DOM, no imports.
+ * @module ui/HudLook — HUD colour roles; `lookColor` wraps run-time colours as `var(--hud-<role>, c)`.
+ * owner 2026-10-18: keep the new look; the classic look and its menu switch are gone.
+ * index.html defines `--hud-*` under `html[data-look="new"]` (set on `<html>` in the markup, never at run time);
+ * the literal inside each `var()` is only a CSS fallback. Pure functions, no DOM, no imports.
  */
 
 /** Colours whose role cannot be read off the hue. */
@@ -61,11 +50,9 @@ export function roleOf(r, g, b, hasAlpha = false) {
 }
 
 /**
- * Wrap a run-time colour as `var(--hud-<role>, c)` (or `rgb(var(--hud-<role>-rgb, r g b) / a)`
- * for an rgba() string). Anything that is not a plain hex / rgb() colour (including an
- * already-wrapped `var(...)`) is returned unchanged.
- * @param {string} c
- * @returns {string}
+ * Wrap a run-time colour as `var(--hud-<role>, c)` (`rgb(var(--hud-<role>-rgb, r g b) / a)` for rgba()).
+ * Same hue rules as the static literals, so equal colours get one role. Non-hex/rgb() input
+ * (including an already-wrapped `var(...)`) is returned unchanged.
  */
 export function lookColor(c) {
   if (typeof c !== 'string') return c;

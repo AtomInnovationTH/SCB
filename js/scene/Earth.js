@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { profileFlags } from '../core/ProfileFlags.js';
 import { TouchControls } from '../ui/TouchControls.js';
+import { smoothstep01 } from '../core/MathUtil.js';
 
 const earthSurfaceVertexShader = /* glsl */ `
 #include <common>
@@ -1372,7 +1373,8 @@ function makeRestorePlaceholder() {
 }
 
 // 16K FILES STORED FOR OFFLINE. The service worker precaches every texture EXCEPT the _16k ones (6 MB of AVIF would
-// double the first download), and on a first visit the page is not yet controlled when it fetches them, so they never
+// double the first download) and the JPGs that have an AVIF twin, and on a first visit the page is not yet controlled
+// when it fetches the 16k files, so they never
 // reach Cache Storage. Once BOTH 16k pictures are complete on screen and the page is controlled, it asks for each
 // file once, one at a time, low priority, and the service worker's cache-first rule stores the response (no
 // service-worker change). A file already in Cache Storage is never fetched again. Nothing happens on touch devices
@@ -1565,7 +1567,7 @@ export const EARTH_BLEND_MS = 1000;
 /** The blend's ease: smoothstep. 0 → 0, 1 → exactly 1. */
 export function blendEase(x) {
   const t = x <= 0 ? 0 : (x >= 1 ? 1 : x);
-  return t * t * (3 - 2 * t);
+  return smoothstep01(t);
 }
 
 /** Never uploaded, never disposed: three samples its 1×1 black. Stands in for "no picture". */

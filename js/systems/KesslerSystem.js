@@ -1,14 +1,10 @@
 /**
- * KesslerSystem.js — Kessler cascade tracking and fragment monitoring
- *
- * Responsibilities:
- *   • Track total orbital fragment count
- *   • Process fragmentation events (tool-induced, collision-generated)
- *   • Emit graduated warnings as thresholds approach
- *   • Trigger game-over when cascade limit is breached
- *   • Model passive secondary-collision probability
- *
- * @module systems/KesslerSystem
+ * @module systems/KesslerSystem — Kessler cascade tracking and fragment monitoring:
+ *   • track total orbital fragment count
+ *   • process fragmentation events (tool-induced, collision-generated)
+ *   • emit graduated warnings as thresholds approach
+ *   • trigger game-over when the cascade limit is breached
+ *   • model passive secondary-collision probability
  */
 
 import { Constants } from '../core/Constants.js';
@@ -17,41 +13,29 @@ import { Events } from '../core/Events.js';
 import { gameState } from '../core/GameState.js';
 import { audioSystem } from './AudioSystem.js';
 
-// ============================================================================
-// WARNING THRESHOLDS  (fraction of cascadeThreshold)
-// ============================================================================
-
+// Warning thresholds (fraction of cascadeThreshold)
 const WARNING_LEVELS = [
   { fraction: 0.5, level: 'CAUTION' },
   { fraction: 0.7, level: 'WARNING' },
   { fraction: 0.9, level: 'CRITICAL' },
 ];
 
-// ============================================================================
-// CLASS
-// ============================================================================
 
 export class KesslerSystem {
   constructor() {
-    /** @type {number} Running fragment tally */
     this.fragmentCount = 0;
 
-    /** @type {number} Fragments required for cascade game-over */
     this.cascadeThreshold = Constants.KESSLER_FRAGMENT_LIMIT; // 50
 
-    /** @type {boolean} Has the cascade been triggered? */
     this.cascadeActive = false;
 
-    /** @type {Array<object>} Chronological fragmentation log */
     this.fragmentEvents = [];
 
-    /** @type {Array<{fraction:number, level:string, emitted:boolean}>} */
     this._warnings = WARNING_LEVELS.map(w => ({ ...w, emitted: false }));
 
-    /** @type {number} Whipple shield hit absorption (from upgrades) */
     this.shieldHits = 0;
 
-    // Sprint 3: Mission-number gating (replaces tutorial stage gate)
+    // Mission-number gating: warnings stay off until SKILL_GATES.KESSLER_MIN_MISSION
     this._missionNumber = 1;
     eventBus.on(Events.SCORE_UPDATE, (d) => {
         if (typeof d?.debrisCleared === 'number') {
@@ -59,7 +43,7 @@ export class KesslerSystem {
         }
     });
 
-    // ST-4.C: Mission profile gate — additional suppression from mission profiles
+    // Mission profile gate — additional suppression from mission profiles
     this._kesslerAllowed = false;
     eventBus.on(Events.MISSION_START, (d) => {
         this._missionNumber = d.missionNumber;
@@ -71,22 +55,15 @@ export class KesslerSystem {
     // Self-reset via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_RESET, () => this.reset());
 
-    // Also reset on roguelite continue (GAMEOVER_CONTINUE does partial reset, not GAME_RESET)
+    // Also on roguelite continue (partial reset, no GAME_RESET)
     eventBus.on(Events.GAMEOVER_CONTINUE, () => this.reset());
 
-    // Self-manage shield absorption (Batch 3 decoupling)
-    // When a collision/kessler event fires, check shields first.
-    // If absorbed → comms + audio. If not → emit COLLISION_GAME_OVER for GFM.
+    // Self-managed shield absorption: absorbed → comms + audio, else COLLISION_GAME_OVER for GFM. Upgrade routing
+    // stays in GFM.applyUpgradeEffect() (imported singleton) to support the GAMEOVER_CONTINUE re-apply path.
     this._setupShieldAbsorption();
-    // Note: upgrade routing remains in GFM.applyUpgradeEffect() via imported singleton
-    // to support the GAMEOVER_CONTINUE re-apply path.
   }
 
-  /**
-   * Wire shield absorption listeners for GAME_KESSLER, GAME_COLLISION, ACTIVE_SAT_COLLISION.
-   * Absorbs hits when shieldHits > 0, otherwise emits COLLISION_GAME_OVER.
-   * @private
-   */
+  /** @private Shield absorption listeners for GAME_KESSLER, GAME_COLLISION, ACTIVE_SAT_COLLISION. */
   _setupShieldAbsorption() {
     eventBus.on(Events.GAME_KESSLER, () => {
       if (!gameState.isGameplay()) return;
@@ -95,14 +72,12 @@ export class KesslerSystem {
 
     eventBus.on(Events.GAME_COLLISION, (data) => {
       if (!gameState.isGameplay()) return;
-      // Active-satellite collision (pre-existing path).
       if (data.type === 'activeSatellite') {
         this._tryAbsorbOrGameOver('collision', 'collision');
         return;
       }
-      // D2 (ROADMAP §4 P2): a hard debris contact from CollisionAvoidanceSystem.
-      // Single-path shield accounting — same absorb-then-game-over as kessler /
-      // active-sat hits, so the Whipple Shield covers debris strikes too.
+      // Hard debris contact from CollisionAvoidanceSystem: same absorb-then-game-over path, so the Whipple Shield
+      // covers debris strikes too.
       if (data.source === 'debris') {
         this._tryAbsorbOrGameOver('debris', 'debris impact');
         return;
@@ -116,11 +91,9 @@ export class KesslerSystem {
   }
 
   /**
-   * Attempt shield absorption. If shields available, absorb + notify.
-   * Otherwise emit COLLISION_GAME_OVER for GameFlowManager.
+   * @private Absorb the hit if shields remain (comms + audio), else emit COLLISION_GAME_OVER for GameFlowManager.
    * @param {string} reason - 'kessler' | 'collision'
-   * @param {string} label - Human-readable label for comms message
-   * @private
+   * @param {string} label - label for the comms message
    */
   _tryAbsorbOrGameOver(reason, label) {
     if (this.shieldHits > 0) {
@@ -135,16 +108,11 @@ export class KesslerSystem {
     eventBus.emit(Events.COLLISION_GAME_OVER, { reason });
   }
 
-  // ======================================================================
-  // PUBLIC API
-  // ======================================================================
 
   /**
    * Record a fragmentation event (from any source).
-   * @param {object}  params
-   * @param {number}  params.fragments – new fragments generated
-   * @param {string}  [params.source='unknown'] – 'tool' | 'collision' | 'cascade'
-   * @param {*}       [params.debrisId]
+   * @param {number} params.fragments – new fragments generated
+   * @param {string} [params.source='unknown'] – 'tool' | 'collision' | 'cascade'
    */
   onFragmentation({ fragments, source = 'unknown', debrisId = null }) {
     if (fragments <= 0) return;
@@ -170,11 +138,7 @@ export class KesslerSystem {
     this.checkCascade();
   }
 
-  /**
-   * Model a debris-debris collision using a simplified NASA breakup model.
-   * @param {object} debris1 – must have `.mass`
-   * @param {object} debris2 – must have `.mass`
-   */
+  /** Model a debris-debris collision with a simplified NASA breakup model. Debris needs `.mass`. */
   onCollision(debris1, debris2) {
     const mass1 = debris1.mass || 10;
     const mass2 = debris2.mass || 10;
@@ -199,10 +163,6 @@ export class KesslerSystem {
     });
   }
 
-  /**
-   * Check whether the cascade threshold has been breached.
-   * @returns {boolean}
-   */
   checkCascade() {
     if (this.cascadeActive) return true;
 
@@ -214,7 +174,6 @@ export class KesslerSystem {
         threshold: this.cascadeThreshold,
       });
 
-      // Fire the game-level event that main.js already listens to
       eventBus.emit(Events.GAME_KESSLER, {
         fragments: this.fragmentCount,
       });
@@ -225,18 +184,10 @@ export class KesslerSystem {
     return false;
   }
 
-  /**
-   * Cascade risk as a 0→1 fraction.
-   * @returns {number}
-   */
   getCascadeRisk() {
     return Math.min(1.0, this.fragmentCount / this.cascadeThreshold);
   }
 
-  /**
-   * HUD-ready status snapshot.
-   * @returns {object}
-   */
   getStatus() {
     return {
       fragmentCount: this.fragmentCount,
@@ -247,16 +198,11 @@ export class KesslerSystem {
     };
   }
 
-  /**
-   * Per-frame update: passive secondary-collision probability.
-   * When fragment density is high enough, random secondary
-   * fragmentation events can occur organically.
-   * @param {number} dt – seconds
-   */
+  /** Per-frame: passive secondary-collision probability; at high fragment density random fragmentation can occur. */
   update(dt) {
     if (this.fragmentCount <= 10 || this.cascadeActive) return;
 
-    // Quadratic probability scaled to threshold proximity
+    // Quadratic in threshold proximity
     const riskFactor = (this.fragmentCount / this.cascadeThreshold) ** 2;
     const collisionProb = riskFactor * 0.001 * dt;
 
@@ -269,25 +215,14 @@ export class KesslerSystem {
     }
   }
 
-  // ======================================================================
-  // UPGRADES
-  // ======================================================================
-
-  /**
-   * Apply a shop upgrade affecting Kessler awareness or hull protection.
-   * @param {object} data - { effect: string, value: * }
-   */
   applyUpgrade(data) {
     switch (data.effect) {
       case 'kesslerWarning':
-        // Enable forwarding of cascade warnings to comms panel
         if (!this._warningsEnabled) {
           this._warningsEnabled = true;
           eventBus.on(Events.KESSLER_WARNING, (warnData) => {
             eventBus.emit(Events.COMMS_MESSAGE, {
-              // The level word (CAUTION / WARNING / CRITICAL) is already in the
-              // sentence; the explicit channel keeps the ALERT classification the
-              // former leading warning glyph used to earn via the text heuristic.
+              // The level word is already in the sentence; the explicit ALERT channel keeps the classification.
               text: `Cascade ${warnData.level}: ${warnData.fragmentCount}/${warnData.threshold} fragments`,
               channel: 'ALERT',
               priority: warnData.level === 'CRITICAL' ? 'danger' : 'warning',
@@ -296,35 +231,26 @@ export class KesslerSystem {
         }
         break;
       case 'shieldHits':
-        // Whipple shield: absorb fragment hits before game-over
         this.shieldHits = (this.shieldHits || 0) + data.value;
         break;
     }
   }
 
-  /**
-   * Reset for new game / retry.
-   */
   reset() {
     this.fragmentCount = 0;
     this.cascadeActive = false;
     this.fragmentEvents = [];
     this._warnings = WARNING_LEVELS.map(w => ({ ...w, emitted: false }));
-    this._kesslerAllowed = false;    // ST-4.C: reset mission profile gate
+    this._kesslerAllowed = false;    // reset mission profile gate
     this._missionNumber = 1;
-    // Note: shieldHits NOT reset — they come from upgrades (re-applied after reset)
+    // shieldHits NOT reset — they come from upgrades (re-applied after reset)
   }
 
-  // ======================================================================
-  // PRIVATE
-  // ======================================================================
-
-  /** @private Emit graduated warnings as risk rises */
   _checkWarnings() {
-    // Sprint 3: Suppress Kessler warnings until mission 4
+    // Warnings stay off until SKILL_GATES.KESSLER_MIN_MISSION
     if (this._missionNumber < Constants.SKILL_GATES.KESSLER_MIN_MISSION) return;
 
-    // ST-4.C: Mission profile gate — BOTH skill gate AND profile must pass
+    // BOTH the skill gate AND the mission profile must pass
     if (!this._kesslerAllowed) return;
 
     const risk = this.getCascadeRisk();
@@ -341,9 +267,7 @@ export class KesslerSystem {
     }
   }
 
-  /** @private */
   _setupListeners() {
-    // Tool-induced fragmentation
     eventBus.on(Events.INTERACTION_FRAGMENTATION, (data) => {
       this.onFragmentation({
         fragments: data.fragments || 1,
@@ -352,7 +276,7 @@ export class KesslerSystem {
       });
     });
 
-    // Debris-debris collisions (from future physics system)
+    // Debris-debris collisions
     eventBus.on(Events.DEBRIS_COLLISION, (data) => {
       if (data.debris1 && data.debris2) {
         this.onCollision(data.debris1, data.debris2);
@@ -370,6 +294,6 @@ export class KesslerSystem {
   }
 }
 
-/** Singleton instance (imported by GameFlowManager for upgrade routing) */
+/** Singleton (imported by GameFlowManager for upgrade routing) */
 export const kesslerSystem = new KesslerSystem();
 export default KesslerSystem;

@@ -3,11 +3,8 @@ import { Events } from '../core/Events.js';
 import { clamp } from '../core/MathUtil.js';
 
 /**
- * ReputationSystem — tracks standing with 5 partner entities.
- * News-event captures boost partner rep. Generic captures boost India (home base).
- * Tier thresholds unlock perks (refuel discounts, priority contracts, cosmetic flags).
- *
- * Epic 8 — ST-8.4.8
+ * ReputationSystem — standing with 5 partner entities. News-event captures boost partner rep; generic captures boost India
+ * (home base). Tier thresholds unlock perks (refuel discounts, priority contracts, cosmetic flags).
  */
 export class ReputationSystem {
   constructor() {
@@ -38,13 +35,11 @@ export class ReputationSystem {
     // We listen for INTERACTION_CAPTURE with a newsPartner field set by MissionEventSystem.
     // For now, we also listen for NEWS_EVENT_TRIGGERED to award a small "mission accepted" bonus.
     this._unsubs.push(eventBus.on(Events.NEWS_EVENT_TRIGGERED, (data) => {
-      // Small rep boost just for unlocking the mission
       if (data.partner) {
         this._addRep(data.partner, 5);
       }
     }));
 
-    // Generic captures boost India (home base) by 1
     this._unsubs.push(eventBus.on(Events.INTERACTION_CAPTURE, () => {
       this._addRep('India', 1);
     }));
@@ -53,17 +48,12 @@ export class ReputationSystem {
       this._addRep('India', 1);
     }));
 
-    // Reset on game reset
     this._unsubs.push(eventBus.on(Events.GAME_RESET, () => {
       this.reset();
     }));
   }
 
-  /**
-   * Add reputation to a partner. Emits 'reputation:tierUp' on tier change.
-   * @param {string} partnerId — key in this.partners
-   * @param {number} amount — rep points to add (can be negative)
-   */
+  /** Add rep (negative allowed, clamped 0–100). Emits 'reputation:tierUp' on tier change. */
   _addRep(partnerId, amount) {
     const partner = this.partners[partnerId];
     if (!partner) return;
@@ -82,9 +72,6 @@ export class ReputationSystem {
     }
   }
 
-  /**
-   * Return tier index for a given rep value.
-   */
   _getTier(rep) {
     let tier = 0;
     for (let i = this.tiers.length - 1; i >= 0; i--) {
@@ -93,9 +80,6 @@ export class ReputationSystem {
     return tier;
   }
 
-  /**
-   * Get full info for a partner including tier/perks.
-   */
   getPartnerInfo(partnerId) {
     const partner = this.partners[partnerId];
     if (!partner) return null;
@@ -109,9 +93,6 @@ export class ReputationSystem {
     };
   }
 
-  /**
-   * Get all partners with full info.
-   */
   getAllPartners() {
     return Object.entries(this.partners).map(([id, _p]) => ({
       id, ...this.getPartnerInfo(id)

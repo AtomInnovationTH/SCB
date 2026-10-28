@@ -1,19 +1,13 @@
 /**
- * DespinLaser.js — CP-2 mother-mounted de-spin laser.
+ * @module systems/DespinLaser — mother-mounted de-spin laser: a hold-to-fire assist (default key: L) that bleeds the
+ * angular momentum out of the active target so a net can cling. Operates on `targetSelector.getActiveTarget()`, not a
+ * daughter arm; mutates the real `tumbleRate` that render + HUD + cling all read.
  *
- * A hold-to-fire assist (default key: L) that bleeds the angular momentum out of
- * the active target so a net can cling. Mother-mounted per BIG_PICTURE §16 — it
- * operates on `targetSelector.getActiveTarget()`, not a daughter arm (the dormant
- * daughter `ARM_STATES.ABLATING` path mutated a non-existent `angularVelocity`;
- * this system mutates the real `tumbleRate` that render + HUD + cling all read).
+ * Lesson: tumbling debris fails nets. Detumble below the in-spec spin and the net-cling tumble penalty
+ * (CaptureNet.computeTumbleModifier) lifts → "net it".
  *
- * Lesson (CP-2): tumbling debris fails nets. Detumble below the in-spec spin and
- * the net-cling tumble penalty (CaptureNet.computeTumbleModifier) lifts → "net it".
- *
- * Pure core (`applyDespin`) is exported for headless testing. The Three.js beam
- * is created lazily and skipped entirely when no scene is injected.
- *
- * @module systems/DespinLaser
+ * Pure core (`applyDespin`) is exported for headless testing. The Three.js beam is created lazily and skipped entirely
+ * when no scene is injected.
  */
 
 import * as THREE from 'three';
@@ -24,10 +18,7 @@ import { degToRad, radToDeg } from '../core/MathUtil.js';
 
 const M = 0.00001; // scene units per metre (mirrors ArmUnit)
 
-/**
- * Pure de-spin step: bleed `rate` (rad/s²) × dt out of a tumble, clamped at 0.
- * @returns {number} new tumble (rad/s)
- */
+/** Pure de-spin step: bleed `rate` (rad/s²) × dt out of a tumble, clamped at 0. Returns the new tumble (rad/s). */
 export function applyDespin(tumbleRate, rate, dt) {
   return Math.max(0, (tumbleRate || 0) - rate * dt);
 }
@@ -41,7 +32,7 @@ export class DespinLaser {
     this._wasFiring = false;    // edge detection for ABLATION_START/END
     this._beam = null;          // lazy THREE.Line
     this._beamTarget = null;    // debris currently lit
-    this._overrideTarget = null; // ARM_PILOT SK target (issue 5c/9, 2026-06-12)
+    this._overrideTarget = null; // piloted-arm SK target (see setOverrideTarget)
   }
 
   /** @param {{scene?, player?, targetSelector?}} deps */
@@ -57,11 +48,9 @@ export class DespinLaser {
   isFiring() { return this._firing; }
 
   /**
-   * Issue 5c/9 (2026-06-12): while the player pilots a daughter in
-   * STATION_KEEP, the SK readout advises "de-spin [L]" — route the mother
-   * laser at the PILOTED ARM's SK target (which may differ from the
-   * Tab-locked selector target). Pass null to restore selector targeting.
-   * Set each frame by InputManager.processInput.
+   * While the player pilots a daughter in STATION_KEEP, the SK readout advises "de-spin [L]": route the mother laser at
+   * the PILOTED ARM's SK target (which may differ from the Tab-locked selector target). null restores selector
+   * targeting. Set each frame by InputManager.processInput.
    */
   setOverrideTarget(target) { this._overrideTarget = target || null; }
 
@@ -141,10 +130,9 @@ export class DespinLaser {
   /** @private update/create the cyan mother→target beam (no-op without a scene). */
   _drawBeam(target) {
     if (!this._scene || !this._player) return;
-    // BEAM VISUAL origin uses the gimbal-mounted telescope muzzle so the beam
-    // emerges from the aperture and tracks sensor articulation. NOTE: the range
-    // check in _inRange() intentionally stays on getPosition() (hull-center
-    // range is the gameplay-correct metric); only the visual origin moves here.
+    // BEAM VISUAL origin is the gimbal-mounted telescope muzzle, so the beam emerges from the aperture and tracks
+    // sensor articulation. The range check in _inRange() intentionally stays on getPosition() (hull-center range is the
+    // gameplay-correct metric); only the visual origin moves here.
     const motherPos = (this._player && typeof this._player.getLaserAperturePosition === 'function')
       ? this._player.getLaserAperturePosition()
       : (this._player.getPosition ? this._player.getPosition() : null);

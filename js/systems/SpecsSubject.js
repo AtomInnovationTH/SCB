@@ -1,49 +1,26 @@
 /**
- * SpecsSubject.js — the per-floor SUBJECT resolver for the SPECS pane
- * (Wave 5 Session J, plan D-C item 3: "SPECS on every floor — the
- * learning-friction fix").
+ * SpecsSubject.js — the per-floor SUBJECT resolver for the SPECS pane (LibraryPane; code keeps `codex`/`library`).
  *
- * The SPECS drawer (LibraryPane — code keeps `codex`/`library`) used to live
- * on the workbench floor only, so an unlock earned on floor 4 meant "ride
- * down to read, ride back" — a notification turned into a chore. Session J
- * enables the pane on EVERY floor, and this module answers the one question
- * an entry-less open (tab click, Space, the swipe) has to ask: **what is the
- * player looking at?** — per floor, from live reads the hub gathers on the
- * open edge (never per frame):
+ * Answers what an entry-less open (tab click, Space, the swipe) has to ask: **what is the player looking at?** —
+ * per floor, from live reads the hub gathers on the open edge (never per frame):
  *
- *   floor 1 (UPGRADE, the hull)  → the focused hull part's entry, else the
- *                                  REFIT card's manifest entry (as shipped
- *                                  since Session C — unchanged);
- *   floors 2–3 (CATCH / DEBRIS)  → the SELECTED TARGET's entry: a real
- *                                  catalog object is matched BY NAME to the
- *                                  ten `catalog_*` entries (debris carry NO
- *                                  codex id — survey finding), an untracked
- *                                  piece → the dark-debris entry, else the
- *                                  MASS BAND → the tool that catches it (the
- *                                  "net-rule" entry; the bands are
- *                                  Constants.TOOL_RECOMMENDATION, never a
- *                                  second copy of the numbers); no target →
- *                                  floor 2 reads the HUD primer, floor 3 the
- *                                  approach pane's own entry;
- *   floor 4 (LEO, NAVCOM)        → the FOCUSED CLUSTER's inclination-FAMILY
- *                                  entry (`cluster_*`, from the cluster id's
- *                                  `<family>-<altMin>` prefix — DebrisField
- *                                  INC_NAMES), with the ALTITUDE-BAND entry
- *                                  (`band_*`, from the `<altMin>` suffix —
- *                                  Constants.DEBRIS.ALT_BANDS) as the
- *                                  SECONDARY (resolveSubjectDetail); a
- *                                  focused cluster the hub reports only as a
- *                                  flag (or an unrecognised family) → the
- *                                  transfer physics (Hohmann), none → the
- *                                  transfer-window concept (Session L closed
- *                                  the 03-plan Session J FINDINGS (d));
- *   floor 5 (GEO, SDA)           → the chart LENS: THREAT → Kessler, VALUE
- *                                  → the chart's own entry.
+ *   floor 1 (UPGRADE, the hull)  → the focused hull part's entry, else the REFIT card's manifest entry;
+ *   floors 2–3 (CATCH / DEBRIS)  → the SELECTED TARGET's entry: a real catalog object is matched BY NAME to the
+ *                                  `catalog_*` entries (debris carry NO codex id), an untracked piece → the
+ *                                  dark-debris entry, else the MASS BAND → the tool that catches it (bands are
+ *                                  Constants.TOOL_RECOMMENDATION, never a second copy of the numbers); no target →
+ *                                  floor 2 reads the HUD primer, floor 3 the approach pane's own entry;
+ *   floor 4 (LEO, NAVCOM)        → the FOCUSED CLUSTER's inclination-FAMILY entry (`cluster_*`, from the cluster id's
+ *                                  `<family>-<altMin>` prefix — DebrisField INC_NAMES), with the ALTITUDE-BAND entry
+ *                                  (`band_*`, from the `<altMin>` suffix — Constants.DEBRIS.ALT_BANDS) as the
+ *                                  SECONDARY (resolveSubjectDetail); a cluster the hub reports only as a flag (or an
+ *                                  unrecognised family) → the transfer physics (Hohmann), none → the
+ *                                  transfer-window concept;
+ *   floor 5 (GEO, SDA)           → the chart LENS: THREAT → Kessler, VALUE → the chart's own entry.
  *
- * Pure: no DOM, no EventBus, no floor names in strings (FloorContract owns
- * those). Every input optional — an unknown floor / no reads → null, and the
- * pane's shipped fallback (its index) stands. The tables are data: the owner
- * retunes an id here and the pin in test-SpecsSubject follows.
+ * Pure: no DOM, no EventBus, no floor names in strings (FloorContract owns those). Every input optional — an
+ * unknown floor / no reads → null, and the pane's fallback (its index) stands. The tables are data; test-SpecsSubject
+ * pins them.
  *
  * @module systems/SpecsSubject
  */
@@ -51,10 +28,9 @@
 import { Constants } from '../core/Constants.js';
 
 /**
- * Real-catalog NAME fragments → the codex `catalog_*` entry. Upper-case
- * `includes` on the debris `name` (CatalogConverter carries the TLE name);
- * first match wins, so the more specific fragment sits first where two could
- * overlap. Procedural debris has generic names and never matches.
+ * Real-catalog NAME fragments → the codex `catalog_*` entry. Upper-case `includes` on the debris `name`
+ * (CatalogConverter carries the TLE name); first match wins, so a more specific fragment sits first. Procedural
+ * debris has generic names and never matches.
  */
 export const CATALOG_NAMES = Object.freeze([
   ['ENVISAT', 'catalog_envisat'],
@@ -74,15 +50,13 @@ export const CATALOG_NAMES = Object.freeze([
   ['COSMOS 1408', 'catalog_kosmos1408'],
 ]);
 
-/** Untracked ("dark") debris → the tracking entry (what the HEAT CAM sees). */
+/** Untracked ("dark") debris → the tracking entry. */
 export const DARK_ENTRY = 'trackable_vs_dark';
 
 /**
- * The mass-band → tool entries ("which net catches this?"). Bands read
- * Constants.TOOL_RECOMMENDATION at call time: ≤ LASSO_MAX_MASS the mother's
- * net, ≤ SPINNER_MAX_MASS the small daughter, ≤ GRAPPLE_MAX_MASS the large
- * daughter's gripper, above that the tool-choice primer (nothing aboard
- * catches it whole).
+ * Mass-band → tool entries. Bands read Constants.TOOL_RECOMMENDATION at call time: ≤ LASSO_MAX_MASS the mother's
+ * net, ≤ SPINNER_MAX_MASS the small daughter, ≤ GRAPPLE_MAX_MASS the large daughter's gripper, above that the
+ * tool-choice primer (nothing aboard catches it whole).
  */
 export const TOOL_ENTRIES = Object.freeze({
   lasso: 'miura_ori_net',
@@ -91,7 +65,7 @@ export const TOOL_ENTRIES = Object.freeze({
   beyond: 'tool_choice',
 });
 
-/** Per-floor defaults / lens rows (ids are codex entry ids, never names). */
+/** Per-floor defaults / lens rows (codex entry ids). */
 export const FLOOR_ENTRIES = Object.freeze({
   2: Object.freeze({ idle: 'reading_the_hud' }),
   3: Object.freeze({ idle: 'pane_tactical_approach' }),
@@ -100,11 +74,9 @@ export const FLOOR_ENTRIES = Object.freeze({
 });
 
 /**
- * Floor 4 — the cluster id's FAMILY prefix (DebrisField INC_NAMES `name`,
- * the part before the last '-') → the codex `cluster_*` entry. Session L
- * data pass: seven inclination-family briefings. An unlisted family (a
- * retuned INC_NAMES) falls back to FLOOR_ENTRIES[4].cluster, never to
- * `cluster_scattered` — scattered is a real family with its own meaning.
+ * Floor 4 — the cluster id's FAMILY prefix (DebrisField INC_NAMES `name`, the part before the last '-') → the codex
+ * `cluster_*` entry. An unlisted family falls back to FLOOR_ENTRIES[4].cluster, never to `cluster_scattered`
+ * (a real family with its own meaning).
  */
 export const CLUSTER_FAMILIES = Object.freeze({
   canaveral: 'cluster_canaveral',
@@ -117,9 +89,8 @@ export const CLUSTER_FAMILIES = Object.freeze({
 });
 
 /**
- * Floor 4 — the cluster id's ALTITUDE-BAND suffix (Constants.DEBRIS.ALT_BANDS
- * `min`, km) → the codex `band_*` entry: the five low-orbit bands only. The
- * MEO / GEO cells have no band entry (secondary null).
+ * Floor 4 — the cluster id's ALTITUDE-BAND suffix (Constants.DEBRIS.ALT_BANDS `min`, km) → the codex `band_*`
+ * entry: the five low-orbit bands only. MEO / GEO cells have none (secondary null).
  */
 export const CLUSTER_BANDS = Object.freeze({
   180: 'band_180_400',
@@ -130,13 +101,10 @@ export const CLUSTER_BANDS = Object.freeze({
 });
 
 /**
- * The entries a NAVCOM cluster documents: its inclination FAMILY (the subject)
- * and its ALTITUDE BAND (the secondary), from the DebrisField cluster id
- * `${family}-${altMin}` (getDebrisClusters / classifyClusterId).
- * @param {{ id?: string }|string|null|undefined} cluster - the focused cluster
- *   (DebrisField.getDebrisClusters shape) or its id
- * @returns {{ family: string, band: string|null }|null} null for no cluster,
- *   a junk id, or an unrecognised family
+ * A NAVCOM cluster's inclination FAMILY (the subject) and ALTITUDE BAND (the secondary), from the DebrisField
+ * cluster id `${family}-${altMin}`.
+ * @param {{ id?: string }|string|null|undefined} cluster - DebrisField.getDebrisClusters shape, or its id
+ * @returns {{ family: string, band: string|null }|null} null for no cluster, a junk id, or an unrecognised family
  */
 export function clusterEntries(cluster) {
   const id = (typeof cluster === 'string') ? cluster
@@ -151,9 +119,7 @@ export function clusterEntries(cluster) {
 
 /**
  * The entry a debris TARGET documents, or null for no target.
- * @param {{ name?: string, tracked?: boolean, mass?: number }|null|undefined} target
- *   the TargetSelector's active debris (DebrisField shape: `name`, `tracked`,
- *   `mass` kg)
+ * @param {{ name?: string, tracked?: boolean, mass?: number }|null|undefined} target - DebrisField shape (`mass` kg)
  * @returns {string|null}
  */
 export function targetEntry(target) {
@@ -184,10 +150,8 @@ export function targetEntry(target) {
  * @param {string|null} [view.partCodexId]  - floor 1: the focused hull part's codexId
  * @param {string|null} [view.refitCodexId] - floor 1: the REFIT card's manifest entry
  * @param {object|null} [view.target]       - floors 2–3: the active debris target
- * @param {object|string|null} [view.cluster] - floor 4: the focused NAVCOM cluster
- *   (NavcomFloor.getFocusedCluster — `{ id }` or the id) → its family entry
- * @param {boolean} [view.clusterFocused]   - floor 4: a NAVCOM cluster is focused
- *   (the flag-only read: the transfer physics, as shipped)
+ * @param {object|string|null} [view.cluster] - floor 4: NavcomFloor.getFocusedCluster (`{ id }` or the id)
+ * @param {boolean} [view.clusterFocused]   - floor 4: flag-only read of a focused cluster (→ the transfer physics)
  * @param {string|null} [view.lens]         - floor 5: the SDA chart lens ('VALUE'|'THREAT')
  * @returns {string|null} a codex entry id, or null (the pane's own fallback stands)
  */
@@ -215,10 +179,8 @@ export function resolveSubject(view) {
 }
 
 /**
- * resolveSubject plus the optional SECONDARY entry a reader may ignore: on
- * floor 4 with a recognised cluster, its altitude-band `band_*` entry; null
- * everywhere else. `id` is exactly resolveSubject(view).
- * @param {object} view - as resolveSubject
+ * resolveSubject plus the optional SECONDARY entry: on floor 4 with a recognised cluster, its altitude-band
+ * `band_*` entry; null elsewhere. `id` is exactly resolveSubject(view).
  * @returns {{ id: string|null, secondary: string|null }}
  */
 export function resolveSubjectDetail(view) {

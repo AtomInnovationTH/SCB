@@ -1,31 +1,21 @@
 /**
  * TargetAcquisition.js — the single "acquire the best contact" helper.
  *
- * The game historically shipped three divergent "nearest target" definitions
- * (AutoLockController's in-arc pick, AutopilotSystem's mass-based reacquire, and
- * InputManager's TPI-list Shift+N/Shift+A). This module unifies every
- * *programmatic* acquire behind one rule — the top of
- * [`DebrisField.getEnhancedTargetList`](js/entities/DebrisField.js:2825), the
- * same list the Tracked Targets pane renders — so the pane highlight and every
- * verb (N / D / A) always agree on the same target.
+ * Unifies every *programmatic* acquire (AutoLockController's in-arc pick, AutopilotSystem's reacquire,
+ * InputManager's Shift+N/Shift+A) behind one rule: the top of `DebrisField.getEnhancedTargetList`, the same list
+ * the Tracked Targets pane renders, so the pane highlight and every verb (N / D / A) agree on the target.
  *
  * Two entry points:
- *   1. `acquireBestTarget(context)` — used by scan auto-select, autopilot's
- *      no-target fallback, Shift+N, and Shift+A. Fill decisions (never stomp a
- *      live selection) are the caller's concern except for the scan listener.
- *   2. `SCAN_REVEALS_SETTLED` listener — the "I'm lost, help" flow: after a scan
- *      settles, if nothing is selected and the pane has contacts, auto-select
- *      the best one and post a context-aware verb hint (N/D in range, A out of
- *      range).
+ *   1. `acquireBestTarget(context)` — scan auto-select, autopilot's no-target fallback, Shift+N, Shift+A. Fill
+ *      decisions (never stomp a live selection) are the caller's concern except for the scan listener.
+ *   2. `SCAN_REVEALS_SETTLED` listener — the "I'm lost, help" flow: after a scan settles, if nothing is selected
+ *      and the pane has contacts, select the best and post a context-aware verb hint (N/D in range, A out of range).
  *
- * Design notes (mirrors AutoLockController / NavRecoveryAdvisor):
- *   - `_suppressLockSound:true` on the setTarget context keeps the lock earcon
- *     honest — AutoLockController's range tracker re-fires the cue on the
- *     in-range crossing (same rationale as AutoLockController.js:213-221).
- *   - `autoAcquire:true` marks the selection as programmatic so AutoLockController
- *     does not treat it as a manual override.
- *   - Every dependency is null-safe for headless Node tests.
- *   - Singleton + `init(deps)` wiring pattern (NavRecoveryAdvisor).
+ * Notes (mirrors AutoLockController / NavRecoveryAdvisor):
+ *   - `_suppressLockSound:true` on the setTarget context keeps the lock earcon honest: AutoLockController's range
+ *     tracker re-fires the cue on the in-range crossing (rationale in AutoLockController's header).
+ *   - `autoAcquire:true` marks the selection as programmatic so AutoLockController does not treat it as a manual override.
+ *   - Every dependency is null-safe for headless Node tests; singleton + `init(deps)` wiring (NavRecoveryAdvisor).
  *
  * @module systems/TargetAcquisition
  */
@@ -36,7 +26,7 @@ import { Constants } from '../core/Constants.js';
 import { formatDistanceKm } from './NavRecoveryAdvisor.js';
 import { motherNWorks, motherNHeldBack } from './netRouting.js';
 
-/** Min seconds between scan-sourced verb hints (module-local cooldown). */
+// Min seconds between scan-sourced verb hints.
 const VERB_HINT_COOLDOWN_S = 30;
 
 /** Sources that pick on the player's behalf (range-bounded); everything else is the player's own pick. */
@@ -55,26 +45,15 @@ export class TargetAcquisition {
     this._skillsSystem = null;
     this._guidanceDirector = null;
 
-    /** @type {number} timestamp (ms) of the last scan-sourced verb hint. */
+    /** ms timestamp of the last scan-sourced verb hint. */
     this._lastVerbHintAt = -Infinity;
 
     this._onRevealsSettled = this._onRevealsSettled.bind(this);
     this._unsubs = [];
   }
 
-  /**
-   * @param {object} deps — every field is optional / null-safe.
-   * @param {object} [deps.player]           — getPosition/getOrbitalElements
-   * @param {object} [deps.debrisField]      — getEnhancedTargetList/getDebrisById
-   * @param {object} [deps.sensorSystem]     — canDetectUntracked flag
-   * @param {object} [deps.targetSelector]   — getActiveTarget/setTarget
-   * @param {object} [deps.hud]              — setSelectedTarget
-   * @param {object} [deps.targetReticle]    — setSelectedTarget
-   * @param {object} [deps.navSphere]        — setSelectedTarget
-   * @param {object} [deps.debrisWireframe]  — setTarget
-   * @param {object} [deps.skillsSystem]     — canFireHint/noteNudgeShown
-   * @param {object} [deps.guidanceDirector] — isMinimal
-   */
+  /** @param {object} deps every field optional / null-safe: player, debrisField, sensorSystem, targetSelector, hud,
+   *  targetReticle, navSphere, debrisWireframe, skillsSystem (canFireHint/noteNudgeShown), guidanceDirector (isMinimal). */
   init(deps = {}) {
     this._player = deps.player || null;
     this._debrisField = deps.debrisField || null;
@@ -102,21 +81,12 @@ export class TargetAcquisition {
     this._lastVerbHintAt = -Infinity;
   }
 
-  // ─── ELIGIBLE LIST ───────────────────────────────────────────────────────
 
   /**
-   * The pane's eligible contacts: `getEnhancedTargetList` (discovered-only,
-   * welcomeSpawn-gated on M1 — the former M1 2 km radius clamp went with the
-   * 2026-09-09 welcome-drift fix T3 — TPI/near sorted upstream) filtered by the
-   * tracked/IR rule —
-   * only tracked debris unless the IR Scanner is active. Exact logic mirrors
-   * InputManager._cycleTarget (js/systems/InputManager.js:1358-1363).
-   *
-   * Cost note: `getEnhancedTargetList` walks the full debris list and computes
-   * a ΔV estimate per discovered entry — this is O(N) per call. All callers are
-   * event-driven (scan settle, Shift+N/Shift+A, autopilot fallback); do NOT
-   * call this per-frame.
-   * @returns {Array<object>} eligible list entries (sorted best-first) or [].
+   * The pane's eligible contacts: `getEnhancedTargetList` (discovered-only, welcomeSpawn-gated on M1; TPI/near sorted
+   * upstream) filtered by the tracked/IR rule: only tracked debris unless the IR Scanner is active (mirrors
+   * InputManager._cycleTarget). O(N) per call (full debris list + a ΔV estimate per entry): event-driven callers
+   * only, NEVER per frame. Returns entries best-first, or [].
    */
   getEligibleTargets() {
     if (!this._debrisField || typeof this._debrisField.getEnhancedTargetList !== 'function') return [];
@@ -135,35 +105,25 @@ export class TargetAcquisition {
     }
   }
 
-  // ─── ACQUIRE ─────────────────────────────────────────────────────────────
-
   /**
-   * Select the best eligible contact (top of the pane list) and sync every
-   * selection consumer (pane/wireframe self-heal from TARGET_SELECTED; NavSphere
-   * and HUD need explicit setSelectedTarget). Idempotent-friendly: callers that
-   * want fill-only behavior should guard on targetSelector.getActiveTarget().
-   *
-   * @param {object} [context={}] — merged into the setTarget context; add a
-   *        `source` tag ('scan'|'autopilot_reacquire'|'shift_n'...) for tracing.
-   * @param {Array<object>} [eligible] — optional precomputed eligible list
-   *        (from getEligibleTargets) to avoid recomputing the O(N) pane list.
-   * @returns {object|null} the selected debris object, or null when the list is
-   *        empty / deps unavailable.
+   * Select the best eligible contact (top of the pane list) and sync every selection consumer (pane/wireframe
+   * self-heal from TARGET_SELECTED; NavSphere and HUD need explicit setSelectedTarget). Fill-only callers guard on
+   * targetSelector.getActiveTarget(). `context` merges into the setTarget context (add a `source` tag for tracing);
+   * `eligible` is an optional precomputed list. Returns the debris object, or null when empty / deps unavailable.
    */
   acquireBestTarget(context = {}, eligible = null) {
     if (!this._targetSelector || typeof this._targetSelector.setTarget !== 'function') return null;
     const list = Array.isArray(eligible) ? eligible : this.getEligibleTargets();
     if (list.length === 0) return null;
 
-    // 2026-10-18: an AUTOMATIC pick stays within AUTOLOCK.RANGE_M — a 385 km
-    // auto-pick emptied the argon in mission 2. `maxRangeM` is read here and
-    // kept out of the setTarget context; the two automatic sources default to
-    // AUTOLOCK.RANGE_M, a player's own pick (e.g. 'shift_n') is unbounded.
+    // An AUTOMATIC pick stays within AUTOLOCK.RANGE_M (a 385 km auto-pick emptied the argon). `maxRangeM` is read here
+    // and kept out of the setTarget context; the two automatic sources default to AUTOLOCK.RANGE_M, a player's own
+    // pick (e.g. 'shift_n') is unbounded.
     const { maxRangeM: explicitRangeM, ...ctx } = context;
     const maxRangeM = Number.isFinite(explicitRangeM)
       ? explicitRangeM
       : (AUTOMATIC_SOURCES.has(ctx.source) ? Constants.AUTOLOCK.RANGE_M : Infinity);
-    // list.find: best rank first (near-first on M1, TPI later) among entries in range.
+    // best rank first (near-first on M1, TPI later) among entries in range
     const t = maxRangeM === Infinity ? list[0] : list.find(e => e.distanceKm * 1000 <= maxRangeM);
     if (!t) return null;
     const debris = (this._debrisField && typeof this._debrisField.getDebrisById === 'function')
@@ -179,8 +139,7 @@ export class TargetAcquisition {
       ...ctx,
     });
 
-    // Sync the consumers that don't self-heal from TARGET_SELECTED
-    // (same block as InputManager.js:1404-1408). Null-safe on each.
+    // Sync the consumers that don't self-heal from TARGET_SELECTED (as InputManager does after setTarget).
     if (this._debrisWireframe && typeof this._debrisWireframe.setTarget === 'function') {
       this._debrisWireframe.setTarget(debris);
     }
@@ -197,13 +156,10 @@ export class TargetAcquisition {
     return debris;
   }
 
-  // ─── SCAN AUTO-SELECT ──────────────────────────────────────────────────────
 
   /**
-   * SCAN_REVEALS_SETTLED handler — the "I'm lost, help" flow. Fill-only: never
-   * stomps a live selection. Fires regardless of the autolock Settings toggle
-   * (explicit player action, same policy as the autopilot fallback / recovery
-   * advisor). The selection always happens; only the verb hint is gated.
+   * SCAN_REVEALS_SETTLED handler, the "I'm lost, help" flow. Fill-only: never stomps a live selection. Fires
+   * regardless of the autolock Settings toggle (explicit player action); only the verb hint is gated.
    * @private
    */
   _onRevealsSettled() {
@@ -212,43 +168,37 @@ export class TargetAcquisition {
     const eligible = this.getEligibleTargets();
     if (eligible.length === 0) return; // nothing to fill (empty pane) — no hint
 
-    // Reuse the list we just computed — avoids a second O(N) pane rebuild.
-    // 2026-10-18: bounded to AUTOLOCK.RANGE_M (see acquireBestTarget); the hint
-    // describes the piece actually picked, not eligible[0].
+    // Reuse the list (no second O(N) rebuild). Bounded to AUTOLOCK.RANGE_M (see acquireBestTarget); the hint describes
+    // the piece actually picked, not eligible[0].
     const debris = this.acquireBestTarget({ source: 'scan', maxRangeM: Constants.AUTOLOCK.RANGE_M }, eligible);
     if (!debris) return;
     this._postVerbHint(debris, eligible.find(e => e.id === debris.id) || eligible[0]);
   }
 
-  // ─── CONTEXT-AWARE VERB HINT ───────────────────────────────────────────────
 
   /**
-   * After a scan-sourced acquire: coach the player toward the right next verb.
-   * In net range → "[N] net · [D] daughter"; out of range → "[A] to approach".
-   * Gating (all must pass): not minimal guidance, SkillsSystem.canFireHint for
-   * the relevant skill, and ≥ VERB_HINT_COOLDOWN_S since the last verb hint.
-   * @param {object} debris — the just-selected debris object
-   * @param {object} entry  — its eligible-list entry (carries distanceKm)
+   * After a scan-sourced acquire: coach toward the next verb. In net range "[N] net · [D] daughter"; out of range
+   * "[A] to approach". Gates: not minimal guidance, SkillsSystem.canFireHint for the skill, and >= VERB_HINT_COOLDOWN_S
+   * since the last verb hint. `entry` is the eligible-list entry (carries distanceKm).
    * @private
    */
   _postVerbHint(debris, entry) {
-    // Minimal-guidance players get no ticker coaching.
     if (this._guidanceDirector && typeof this._guidanceDirector.isMinimal === 'function'
       && this._guidanceDirector.isMinimal()) {
       return;
     }
 
-    // Module-local cooldown so scan-spamming doesn't repeat the chip.
+    // cooldown so scan-spamming doesn't repeat the chip
     const now = Date.now();
     if (now - this._lastVerbHintAt < VERB_HINT_COOLDOWN_S * 1000) return;
 
-    // Distance → in-range test against the net-lock envelope (90 m).
+    // in range = inside the net-lock envelope (90 m)
     const distanceKm = this._resolveDistanceKm(debris, entry);
     const inRange = distanceKm != null
       && (distanceKm * 1000) <= (Constants.NET_LOCK_RANGE_M || 90);
 
-    // n-leftovers L1: flying a daughter, N works HER tool. In range the line says "Esc, then N" (Esc leaves her), or, when
-    // Esc would recall her, waits (D and A stay true). Picked now, as the hint is posted.
+    // Flying a daughter, N works HER tool. In range the line says "Esc, then N" (Esc leaves her), or, when Esc would
+    // recall her, waits (D and A stay true). Picked now, as the hint is posted.
     const piloted = inRange && !motherNWorks();
     if (piloted && motherNHeldBack()) return;
 
@@ -267,7 +217,7 @@ export class TargetAcquisition {
     const distStr = distanceKm != null ? formatDistanceKm(distanceKm) : '';
     const contactLabel = distStr ? `${type} ${distStr}` : type;
 
-    // Spacecraft (V5) voice — scan feedback is the ship talking to the pilot.
+    // Spacecraft (V5) voice: scan feedback is the ship talking to the pilot.
     const commsText = inRange
       ? (piloted
         ? `Contact locked: ${contactLabel}. Esc, then [N] net · [D] daughter.`
@@ -280,7 +230,6 @@ export class TargetAcquisition {
       _postOnboarding: true,
     });
 
-    // Ticker chip so the key glyphs render in the HintTicker.
     eventBus.emit(Events.HINT_POSTED, {
       id: 'scan_lock_verbs',
       text: piloted ? 'In range — Esc, then N to net it.' : (inRange ? 'In range — capture it.' : 'Out of range — close in.'),
@@ -292,12 +241,7 @@ export class TargetAcquisition {
     });
   }
 
-  /**
-   * Resolve the km distance to a target, preferring the freshly-computed
-   * eligible-list value and falling back to a live scene-position measurement.
-   * @private
-   * @returns {number|null}
-   */
+  /** Km distance to a target: the eligible-list value if fresh, else a live scene-position measurement. @private */
   _resolveDistanceKm(debris, entry) {
     if (entry && Number.isFinite(entry.distanceKm)) return entry.distanceKm;
     if (!this._player || typeof this._player.getPosition !== 'function') return null;
@@ -312,7 +256,7 @@ export class TargetAcquisition {
   }
 }
 
-/** Singleton instance (wired in main.js, imported by InputManager/AutopilotSystem). */
+/** Singleton (wired in main.js, imported by InputManager/AutopilotSystem). */
 export const targetAcquisition = new TargetAcquisition();
 
 export default TargetAcquisition;

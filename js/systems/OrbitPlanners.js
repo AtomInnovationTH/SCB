@@ -1,27 +1,14 @@
 /**
- * OrbitPlanners.js — the two whole-field planning helpers ported out of the
- * retired js/ui/OrbitMFD.js canvas panel (Phase 6 route planner + D2 altitude
- * sweep planner). PURE functions only: no DOM, no canvas, no eventBus, no
- * THREE, no Typeface import. Plain Keplerian orbit-element objects in
- * (semiMajorAxis in SCENE units, matching entities/OrbitalMechanics.js), plain
- * data out. Formatting/painting belongs to the consumer (js/ui/TransferWindows.js).
- *
- * Fed by js/systems/NavcomFloor.js from its cluster source on the floor's
- * existing refresh cadence (never per frame).
- *
- * @module systems/OrbitPlanners
+ * @module systems/OrbitPlanners — the two whole-field planning helpers (route planner + altitude sweep planner). PURE
+ * functions only: no DOM, no canvas, no eventBus, no THREE. Plain Keplerian orbit-element objects in (semiMajorAxis in
+ * SCENE units, matching entities/OrbitalMechanics.js), plain data out. Formatting/painting belongs to the consumer
+ * (js/ui/TransferWindows.js). Fed by js/systems/NavcomFloor.js on the floor's refresh cadence (never per frame).
  */
 
 import { Constants } from '../core/Constants.js';
 import { sceneToKm, hohmannDeltaV, totalDeltaV } from '../entities/OrbitalMechanics.js';
 
-/**
- * @private Convert a scene-unit orbit to a km-unit copy (semiMajorAxis only;
- * ported verbatim from OrbitMFD.js's `_orbitToKm`, field-for-field, for use
- * with totalDeltaV / hohmannDeltaV which expect km).
- * @param {object} orbit — orbit in scene units
- * @returns {object} orbit copy with semiMajorAxis in km
- */
+/** @private Km-unit copy of a scene-unit orbit (semiMajorAxis only converted), for totalDeltaV / hohmannDeltaV which expect km. */
 function _orbitToKm(orbit) {
   return {
     semiMajorAxis: sceneToKm(orbit.semiMajorAxis),
@@ -35,18 +22,14 @@ function _orbitToKm(orbit) {
 }
 
 /**
- * Compute a ΔV-optimal visit order over `targets` using a greedy
- * nearest-neighbour heuristic from the player's current orbit (true TSP is
- * NP-hard; greedy is good enough for MAX_WAYPOINTS stops). Ported verbatim
- * from OrbitMFD.js's `updateRoutePlan` math.
- * @param {Array<{orbit:object}>} targets — candidate objects with `.orbit`
- *        Keplerian elements (scene units); entries without `orbit.semiMajorAxis`
- *        are filtered out.
+ * ΔV-optimal visit order over `targets`: greedy nearest-neighbour from the player's current orbit (true TSP is NP-hard;
+ * greedy is enough for MAX_WAYPOINTS stops).
+ * @param {Array<{orbit:object}>} targets — candidates with `.orbit` Keplerian elements (scene units); entries without
+ *        `orbit.semiMajorAxis` are filtered out
  * @param {object} playerOrbit — player's current orbital elements (scene units)
- * @returns {{ plan: Array<{target:object, orbit:object, dvToReach:number, cumulativeDV:number}>, totalDv:number }}
- *          `plan` is the visit order (ΔV in km/s per leg + running total);
- *          `totalDv` is the summed ΔV (km/s) across the whole route. Empty
- *          input (or no valid candidates) → `{ plan: [], totalDv: 0 }`.
+ * @returns {{ plan: Array<{target:object, orbit:object, dvToReach:number, cumulativeDV:number}>, totalDv: number }}
+ *          `plan` is the visit order (ΔV in km/s per leg + running total); `totalDv` the summed ΔV (km/s).
+ *          Empty input (or no valid candidates) → `{ plan: [], totalDv: 0 }`.
  */
 export function computeRoutePlan(targets, playerOrbit) {
   if (!targets || targets.length === 0 || !playerOrbit) {
@@ -99,19 +82,15 @@ export function computeRoutePlan(targets, playerOrbit) {
 }
 
 /**
- * Compute debris-density altitude bands (200–800 km, 50 km wide) and identify
- * the best sweep target (the densest reachable band, discounting the band the
- * player is already inside). Ported verbatim from OrbitMFD.js's
- * `_updateSweepPlanner` math (minus its staleness/DOM state).
- * @param {Array<{orbit:object}>} candidates — objects with `.orbit` Keplerian
- *        elements (scene units); entries without `orbit.semiMajorAxis` are
- *        filtered out.
+ * Debris-density altitude bands (200–800 km, 50 km wide) and the best sweep target: the densest reachable band,
+ * discounting (×0.5) the band the player is already inside.
+ * @param {Array<{orbit:object}>} candidates — objects with `.orbit` Keplerian elements (scene units); entries without
+ *        `orbit.semiMajorAxis` are filtered out
  * @param {number} playerAltKm — player altitude above Earth's surface (km)
  * @returns {{
  *   bands: Array<{altMin:number, altMax:number, midAlt:number, count:number, density:number}>,
  *   densest: {altMinKm:number, altMaxKm:number, count:number, dv:number}|null
- * }} `bands` covers the whole 200–800 km sweep range (always populated, even
- *    when empty of debris); `densest` is null when no band has any candidates.
+ * }} `bands` covers the whole sweep range (always populated, even when empty); `densest` is null when no band has candidates.
  */
 export function computeSweepBands(candidates, playerAltKm) {
   const list = (candidates || []).filter(t => t && t.orbit && t.orbit.semiMajorAxis);

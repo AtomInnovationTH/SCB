@@ -1,62 +1,36 @@
 /**
- * SdaChart.js — the Zoom Ladder SDA DOWNLINK (id 5) whole-domain chart overlay
- * (S5, M4, FloorContract.FLOORS[6]).
+ * SdaChart.js — Zoom Ladder SDA DOWNLINK (id 5) whole-domain chart overlay (FloorContract.FLOORS[6]).
  *
- * On the SDA floor the camera sits 500–1300 u from Earth center and the domain is read as
- * a CHART, not a scene: an Earth-centered altitude-band diagram of the 200–2000
- * km LEO shells with aggregated object counts per band (live debris clusters +
- * active satellites), the GEO ring pinned to the left/right screen edges by the
- * aspect-derived MEO radial compression (honest "MEO compressed" tag whenever
- * the map is actually compressed — never silently distort), and a decade-scale
- * Kessler timeline strip along the bottom.
+ * The camera sits 500–1300 u from Earth center and the domain is read as a CHART: an Earth-centered altitude-band
+ * diagram of the 200–2000 km LEO shells with aggregated object counts (live debris clusters + active satellites), the
+ * GEO ring pinned to the left/right screen edges by the aspect-derived MEO radial compression (the "MEO compressed"
+ * tag shows whenever the map is compressed — never silently distort), and a decade-scale Kessler timeline strip.
  *
- * TWO LENSES (FloorContract.byId(5).chart.lenses, flipped by the SDA Space
- * verb 'flip-lens'):
- *   - VALUE  — gold (VisualLaw.COLORS.VALUE, STEADY — gold never pulses):
- *     salvage mass per band from the canonical FloorContract.MASS_BANDS table
- *     (LEO_SUB_BANDS are ESTIMATE-flagged and rendered with the flag — the
- *     mass-honesty rule), plus the GEO belt+graveyard "gold" total on the ring.
- *   - THREAT — red-orange (VisualLaw.COLORS.THREAT, ALWAYS pulses): live
- *     count-weighted density per band (counts / shell volume, normalized) and
- *     the Kessler timeline with keyframes, single-event injections, and the
- *     branch projection ahead — plus the honesty notes the spec requires on
- *     this lens (sensor-jump + disputed-onset caveats).
+ * TWO LENSES (FloorContract.byId(5).chart.lenses, flipped by the SDA Space verb 'flip-lens'):
+ *   - VALUE  — gold (VisualLaw.COLORS.VALUE, STEADY — gold never pulses): salvage mass per band from
+ *     FloorContract.MASS_BANDS (LEO_SUB_BANDS are ESTIMATE-flagged and rendered with the flag — mass-honesty rule),
+ *     plus the GEO belt+graveyard "gold" total on the ring.
+ *   - THREAT — red-orange (VisualLaw.COLORS.THREAT, ALWAYS pulses): count-weighted density per band (counts / shell
+ *     volume, normalized) and the Kessler timeline (keyframes, single-event injections, branch projection), plus the
+ *     required honesty notes (sensor-jump + disputed-onset caveats).
  *
- * THE PROJECTION IS PURE AND EXPORTED (projectDensity): it mirrors
- * KesslerSystem's quadratic density model (KesslerSystem.update():260 —
- * expected secondary-collision rate ∝ (count/threshold)²) at catalog scale:
- * dN/dt = c·N²/N₀, whose closed form N(t) = N₀ / (1 − c·Δt) grows
- * hyperbolically toward a finite-time cascade singularity. The default
- * coefficient is calibrated to the FloorContract BAU branch anchor (~4× by
- * 2059, Lewis 2009); the LIVE game feeds KesslerSystem.getCascadeRisk() in as
- * `riskBoost`, so fragments the player creates visibly steepen the projected
- * decade curve. Deterministic, side-effect free, unit-tested.
+ * projectDensity is PURE and exported: it mirrors KesslerSystem.update()'s quadratic density model (secondary-collision
+ * rate ∝ (count/threshold)²) at catalog scale: dN/dt = c·N²/N₀, N(t) = N₀ / (1 − c·Δt), hyperbolic toward a
+ * finite-time cascade singularity. The default coefficient is calibrated to the FloorContract BAU branch anchor
+ * (~4× by 2059, Lewis 2009); the live game feeds KesslerSystem.getCascadeRisk() in as `riskBoost`.
  *
- * VISUAL LAW: color is never the sole channel (lens is double-encoded: ramp
- * color AND which figures are drawn — mass tonnage vs density bars — AND the
- * THREAT pulse); at most `labelBudget` (SDA = 7) named labels are painted,
- * ranked by lens weight (rankLabels). Axis numerals / honesty tags are chart
- * chrome, not world labels.
+ * VISUAL LAW: color is never the sole channel (lens is double-encoded: ramp color AND which figures are drawn AND the
+ * THREAT pulse); at most `labelBudget` (SDA = 7) named labels are painted, ranked by lens weight (rankLabels).
+ * Axis numerals / honesty tags are chart chrome, not world labels.
  *
- * NO PER-FRAME CHURN (the G1 lesson — ClusterIcons._paintIcon /
- * TransferWindows.DOM_WRITE_MIN_INTERVAL_MS precedent): the chart is
- * screen-static while the data is static (Earth-anchored floor — Earth stays
- * centered), so render() rasterizes ONLY when the frame signature changes
- * (lens, viewport, band aggregates, timeline inputs). The THREAT pulse (the
- * one legitimately time-varying element) repaints at most every
- * PULSE_TICK_MS (250 ms → ≤4 Hz real, the NAVCOM DOM-write cap precedent), never
- * per frame. The gate is the pure static shouldPaint() so tests pin it
- * headless. render() always computes and returns frame descriptors; painting
- * is the gated side effect.
+ * NO PER-FRAME CHURN: the chart is screen-static while the data is static (Earth-anchored floor), so render()
+ * rasterizes ONLY when the frame signature changes (lens, viewport, band aggregates, timeline inputs). The THREAT
+ * pulse repaints at most every PULSE_TICK_MS (250 ms, ≤4 Hz), never per frame. The gate is the pure static
+ * shouldPaint(); render() always computes and returns frame descriptors; painting is the gated side effect.
  *
- * Pattern-matches the ReachOrb canvas overlay: full-screen canvas,
- * pointer-events:none, built lazily on show(), opacity-transitioned, fully
- * DOM-guarded (inert + constructible in Node tests).
- *
- * FLOOR CONTENT (parallel track, docs/ladder/03-plan.md): no camera, no debris
- * source, no game loop, no EventBus — SdaFloor (the floor orchestrator) feeds it
- * aggregates + a viewport and owns the lifecycle; the serial track wires
- * SdaFloor into main.js/LadderController.
+ * Follows the ReachOrb canvas overlay pattern: full-screen canvas, pointer-events:none, built lazily on show(),
+ * opacity-transitioned, DOM-guarded (inert + constructible in Node tests). No camera, debris source, game loop or
+ * EventBus: SdaFloor feeds it aggregates + a viewport and owns the lifecycle.
  *
  * @module ui/SdaChart
  */
@@ -67,18 +41,15 @@ import { FloorContract } from '../core/FloorContract.js';
 import { mono, fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 import { clamp01 } from '../core/MathUtil.js';
 
-/** The SDA DOWNLINK (id 5) contract row (chart framing + labelBudget + lenses) — by id (Session H). */
+/** The SDA DOWNLINK (id 5) contract row (chart framing + labelBudget + lenses). */
 const FLOOR = FloorContract.byId(5);
 
-/** The two lenses, in flip order. VALUE is the arrival default (00-spec §3). */
+/** The two lenses, in flip order. VALUE is the arrival default. */
 export const LENSES = FLOOR.chart.lenses; // ['VALUE', 'THREAT']
 
 /**
- * THREAT-pulse repaint quantum (ms): the only time-varying paint input is the
- * pulse phase, quantized so the canvas rasterizes at ≤4 Hz real — the same cap
- * the NAVCOM planner uses for warp-driven countdown text (G1). VALUE is STEADY
- * (gold never pulses — VisualLaw law), so on VALUE nothing repaints until the
- * data/viewport/lens signature changes. Own-module tunable (house rule).
+ * THREAT-pulse repaint quantum (ms): the pulse phase is the only time-varying paint input, so the canvas rasterizes
+ * at ≤4 Hz (same cap as the NAVCOM planner's countdown text). VALUE is STEADY: nothing repaints until the signature changes.
  */
 export const PULSE_TICK_MS = 250;
 
@@ -86,46 +57,32 @@ export const PULSE_TICK_MS = 250;
 export const PULSE_PERIOD_MS = 2000;
 
 /**
- * LEO zone vertical budget: the honest-scale zone (Earth disc + 200–2000 km
- * shells) fills this fraction of the half-height; the MEO compression factor
- * follows from what's left to the left/right screen edge (aspect-derived).
+ * LEO zone vertical budget: the honest-scale zone (Earth disc + 200–2000 km shells) fills this fraction of the
+ * half-height; the MEO compression factor follows from what is left to the left/right screen edge.
  */
 export const LEO_VFRAC = 0.6;
 
 /**
- * Projected-cascade display ceiling (× base count). The hyperbolic BAU curve
- * has a finite-time singularity (that IS the cascade); past it the tracked
- * count is clamped here so the strip stays drawable — the honesty notes say
- * onset timing is disputed, so the ceiling reads as "cascade", not a number.
+ * Projected-cascade display ceiling (× base count). The hyperbolic BAU curve has a finite-time singularity (the
+ * cascade); past it the count is clamped here so the strip stays drawable. Onset timing is disputed, so it reads as "cascade".
  */
 export const CASCADE_CEIL_FACTOR = 20;
 
 /**
- * Default quadratic-growth coefficient (per year), calibrated so the pure
- * curve passes the FloorContract BAU branch anchor: ~4× tracked by 2059
- * (Lewis 2009), from the 2026 keyframe. N(t)=N₀/(1−cΔt) hits 4× when
- * 1−cΔt = 1/4 → c = 0.75/(2059−2026).
+ * Year the BAU branch anchor reaches ~4× tracked (Lewis 2009, from the 2026 keyframe): N₀/(1−cΔt) = 4N₀ at
+ * 1−cΔt = 1/4, so the default c = 0.75/(2059−2026).
  */
 export const BAU_QUADRUPLE_YEAR = 2059;
 
-/** Chart chrome colors (not VisualLaw semantics — the SDA chart costume). */
+/** Chart chrome colors (the SDA chart costume, not VisualLaw semantics). */
 const CHART_EARTH_BLUE = 'rgba(24, 62, 100, 0.92)'; // chart-blue flat disc
 const CHART_GRID = 'rgba(0, 204, 255, 0.18)';       // faint INFO grid/rings
 
-/** Monotonic ms clock (DOM-guarded module — Date.now fallback headless). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Pure aggregation + projection (exported, headless — the testable core)
-// ─────────────────────────────────────────────────────────────────────────────
-
 /**
- * Altitude (km) of one active-sat record. Accepts the data/active-sats.json
- * shape ({tle:{alt_km}}), the ActiveSatellites template shape ({altKm}), and a
- * bare {alt_km}. NaN when unknown (the record then lands out-of-band, never
- * silently vanishes).
- * @param {object} sat
- * @returns {number}
+ * Altitude (km) of one active-sat record: data/active-sats.json ({tle:{alt_km}}), ActiveSatellites ({altKm}) or a bare
+ * {alt_km}. NaN when unknown (the record then lands out-of-band, never vanishes).
  */
 export function satAltKm(sat) {
   if (!sat) return NaN;
@@ -136,22 +93,14 @@ export function satAltKm(sat) {
 }
 
 /**
- * Aggregate live objects into the SDA altitude bands.
- *
- * Bands are the canonical FloorContract.MASS_BANDS.LEO_SUB_BANDS shells
- * (never Constants.DEBRIS.ALT_BANDS / DebrisMap's UI array — the SSOT rule):
- * each band carries its canonical salvage mass (massT, ESTIMATE-flagged) plus
- * the live aggregates: debris-cluster member counts, active-sat counts, and
- * live cluster salvage mass (t). Objects outside [firstLo, lastHi] km — GEO
- * comms, GNSS, HEO — are aggregated into `outOfBand` (counted, never dropped:
- * the honesty rule) since the LEO shells are the chart's radial domain.
- *
- * Band rule: lo ≤ alt < hi, except the last band which includes its top edge.
- *
+ * Aggregate live objects into the SDA altitude bands: the canonical FloorContract.MASS_BANDS.LEO_SUB_BANDS shells
+ * (never Constants.DEBRIS.ALT_BANDS / DebrisMap's UI array — SSOT), each with its canonical salvage mass (massT,
+ * ESTIMATE-flagged) plus live debris-cluster counts, active-sat counts and live cluster mass (t). Objects outside
+ * [firstLo, lastHi] km (GEO comms, GNSS, HEO) go into `outOfBand` — counted, never dropped (honesty rule).
+ * Band rule: lo ≤ alt < hi, except the last band includes its top edge.
  * @param {object} [src]
- * @param {Array}  [src.clusters] - DebrisField.getDebrisClusters() shapes
- *                 ({count, avgAltKm, totalMassKg, ...})
- * @param {Array}  [src.sats]     - active-sat records (satAltKm shapes)
+ * @param {Array} [src.clusters] - DebrisField.getDebrisClusters() shapes ({count, avgAltKm, totalMassKg, ...})
+ * @param {Array} [src.sats]     - active-sat records (satAltKm shapes)
  * @returns {{bands: Array<{altKm:[number,number], massT:number, estimate:boolean,
  *            note:string, count:number, clusterCount:number, satCount:number,
  *            liveMassT:number}>, outOfBand:{count:number, satCount:number,
@@ -211,15 +160,11 @@ export function aggregateBands(src = {}) {
 }
 
 /**
- * Per-band lens weights, normalized 0..1 against the strongest band.
- *   VALUE  — salvage-mass weighted: canonical band mass + live cluster mass.
- *   THREAT — count-weighted DENSITY: objects per shell volume (the Kessler
- *            risk driver — a thin crowded shell out-threats a thick sparse
- *            one), volume ∝ (R+hi)³ − (R+lo)³.
- * All-zero input → all-zero weights (no divide-by-zero).
+ * Per-band lens weights, normalized 0..1 against the strongest band (all-zero input → all-zero weights).
+ *   VALUE  — canonical band mass + live cluster mass.
+ *   THREAT — count-weighted DENSITY, objects per shell volume ∝ (R+hi)³ − (R+lo)³ (the Kessler risk driver: a thin
+ *            crowded shell out-threats a thick sparse one).
  * @param {Array} bands - aggregateBands().bands
- * @param {string} lens - 'VALUE' | 'THREAT'
- * @returns {number[]}
  */
 export function lensWeights(bands, lens) {
   const list = Array.isArray(bands) ? bands : [];
@@ -237,12 +182,9 @@ export function lensWeights(bands, lens) {
 }
 
 /**
- * Resolve the FloorContract KESSLER_KEYFRAMES into a cumulative tracked-count
- * polyline: `tracked` keyframes are absolute; `delta` keyframes (single-event
- * fragment injections — Fengyun-1C, Iridium/Kosmos) add onto the last
- * cumulative value and are marked `event: true` for the strip's markers.
+ * Resolve FloorContract KESSLER_KEYFRAMES into a cumulative tracked-count polyline: `tracked` keyframes are absolute;
+ * `delta` keyframes (single-event injections — Fengyun-1C, Iridium/Kosmos) add onto the last value and get `event: true`.
  * @param {Array} [keyframes] - default FloorContract.KESSLER_KEYFRAMES
- * @returns {Array<{year:number, tracked:number, event:boolean, note:string}>}
  */
 export function resolveKeyframes(keyframes = FloorContract.KESSLER_KEYFRAMES) {
   const out = [];
@@ -256,29 +198,19 @@ export function resolveKeyframes(keyframes = FloorContract.KESSLER_KEYFRAMES) {
 }
 
 /**
- * PURE Kessler density projection — KesslerSystem's model at catalog scale.
- *
- * KesslerSystem models the expected secondary-collision rate as QUADRATIC in
- * density (update(): riskFactor = (count/threshold)², KesslerSystem.js:260).
- * The same functional form projected on the tracked catalog:
+ * PURE Kessler density projection: KesslerSystem's model at catalog scale. KesslerSystem's secondary-collision rate
+ * is QUADRATIC in density (update(): riskFactor = (count/threshold)²), so the same form on the tracked catalog:
  *
  *     dN/dt = c_eff · N²/N₀   ⇒   N(Δt) = N₀ / (1 − c_eff·Δt)
  *
- * hyperbolic growth with a finite-time singularity at Δt = 1/c_eff — the
- * cascade. c_eff = coeffPerYear · (1 + riskBoost): the live game feeds
- * KesslerSystem.getCascadeRisk() (0..1) in, so player-made fragments steepen
- * the curve and removals (risk decay) relax it. Past the singularity the
- * count clamps at CASCADE_CEIL_FACTOR·N₀ and `cascaded` flips true.
- *
- * Deterministic and side-effect free: same inputs → same output array.
- *
- * @param {object} [opts]
+ * with a finite-time singularity at Δt = 1/c_eff (the cascade). c_eff = coeffPerYear · (1 + riskBoost): the live game
+ * feeds KesslerSystem.getCascadeRisk() (0..1) in, so player-made fragments steepen the curve and risk decay relaxes
+ * it. Past the singularity the count clamps at CASCADE_CEIL_FACTOR·N₀ and `cascaded` flips true.
  * @param {number} [opts.baseYear]  - projection epoch (default: last keyframe year)
  * @param {number} [opts.baseCount] - tracked count at epoch (default: last keyframe)
- * @param {number} [opts.horizonYears=100] - how far to project (2126 endings frame)
+ * @param {number} [opts.horizonYears=100] - how far to project
  * @param {number} [opts.stepYears=10]     - decade-scale sampling
- * @param {number} [opts.coeffPerYear]     - quadratic coefficient (default: BAU
- *                 anchor calibration — ~4× by BAU_QUADRUPLE_YEAR)
+ * @param {number} [opts.coeffPerYear]     - quadratic coefficient (default: BAU anchor, ~4× by BAU_QUADRUPLE_YEAR)
  * @param {number} [opts.riskBoost=0]      - live cascade risk 0..1 (KesslerSystem)
  * @returns {Array<{year:number, tracked:number, cascaded:boolean}>}
  */
@@ -307,14 +239,9 @@ export function projectDensity(opts = {}) {
 }
 
 /**
- * Build the whole timeline model for the strip: resolved history keyframes,
- * the decade projection from the live risk, and the FloorContract branches
- * (the ADR branch is the player's role — the endings frame).
- * Pure: a plain-data assembly of the two pure functions above.
- * @param {object} [opts]
+ * The whole timeline model for the strip: resolved history keyframes, the decade projection from the live risk, and
+ * the FloorContract branches (the ADR branch is the player's role — the endings frame).
  * @param {number} [opts.riskBoost=0] - KesslerSystem.getCascadeRisk()
- * @param {number} [opts.horizonYears=100]
- * @param {number} [opts.stepYears=10]
  * @returns {{history:Array, projection:Array, branches:Array, baseYear:number}}
  */
 export function buildTimeline(opts = {}) {
@@ -333,16 +260,11 @@ export function buildTimeline(opts = {}) {
 }
 
 /**
- * Aspect-derived radial map (the MEO compression, 00-spec §3 F5).
- *
- * The LEO zone (Earth disc + shells up to the last band's top) is drawn at an
- * HONEST linear scale sized to LEO_VFRAC of the half-height; the MEO zone
- * beyond is radially compressed by the single factor that lands the GEO ring
- * (FloorContract chart.geoRingU ≈ 420 u) exactly at the left/right screen
- * edges (x = ±w/2). cFactor < 1 ⇒ compressed ⇒ the honest tag must show;
- * on a hyper-wide viewport where the honest scale already reaches the edge
- * (cFactor ≥ 1) nothing is distorted and the tag hides.
- *
+ * Aspect-derived radial map (the MEO compression). The LEO zone (Earth disc + shells up to the last band's top) is
+ * drawn at an HONEST linear scale sized to LEO_VFRAC of the half-height; the MEO zone beyond is radially compressed by
+ * the single factor that lands the GEO ring (FloorContract chart.geoRingU ≈ 420 u) exactly at the left/right screen
+ * edges (x = ±w/2). cFactor < 1 ⇒ compressed ⇒ the honest tag must show; on a hyper-wide viewport (cFactor ≥ 1)
+ * nothing is distorted and the tag hides.
  * @param {object} vp - {wPx, hPx}
  * @returns {{sLeoPxPerU:number, leoTopPx:number, leoTopU:number, geoU:number,
  *            geoPx:number, cFactor:number, compressed:boolean}}
@@ -368,10 +290,9 @@ export function meoRadialMap(vp) {
 }
 
 /**
- * Radial pixel distance from screen center for a circular altitude (km),
- * through the piecewise honest-LEO / compressed-MEO map. Monotone in altKm.
+ * Radial pixel distance from screen center for a circular altitude (km), through the piecewise honest-LEO /
+ * compressed-MEO map. Monotone in altKm.
  * @param {object} map - meoRadialMap() result
- * @param {number} altKm
  * @returns {number} px
  */
 export function radiusPxForAltKm(map, altKm) {
@@ -381,11 +302,10 @@ export function radiusPxForAltKm(map, altKm) {
 }
 
 /**
- * Rank label candidates for the floor's labelBudget (SDA = 7): weight-desc,
- * stable on ties by id, truncate. Pure — mirrors ClusterIcons.rank.
+ * Rank label candidates for the floor's labelBudget (SDA = 7): weight-desc, stable on ties by id, truncate.
+ * Mirrors ClusterIcons.rank.
  * @param {Array<{id:*, weight:number}>} candidates
- * @param {number} [budget] - default FLOOR.labelBudget (the SDA row)
- * @returns {Array}
+ * @param {number} [budget] - default FLOOR.labelBudget
  */
 export function rankLabels(candidates, budget = FLOOR.labelBudget) {
   const list = Array.isArray(candidates) ? candidates.slice() : [];
@@ -399,12 +319,9 @@ export function rankLabels(candidates, budget = FLOOR.labelBudget) {
 
 export class SdaChart {
   /**
-   * @param {object} [deps]
    * @param {function} [deps.now] - monotonic ms clock (tests); default performance.now
-   * @param {import('../core/Typeface.js').FontEpoch} [deps.fontEpoch] - Session R
-   *   (plan §14.2): the typeface epoch; one term of the frame signature, so a
-   *   chart painted before the B612 faces settled repaints ONCE when they do
-   *   (the paint gate is the existing refresh point). Tests inject their own.
+   * @param {import('../core/Typeface.js').FontEpoch} [deps.fontEpoch] - typeface epoch; one term of the frame signature, so a
+   *   chart painted before the B612 faces settled repaints ONCE when they do. Tests inject their own.
    */
   constructor(deps = {}) {
     this._now = deps.now || _nowMs;
@@ -414,48 +331,31 @@ export class SdaChart {
     this._built = false;
     this._visible = false;
     this._lens = LENSES[0]; // VALUE — the arrival default (00-spec §3 F5)
-    // Write-on-change state (G1): last painted signature + paint clock.
+    // Write-on-change state: last painted signature + paint clock.
     this._lastSig = null;
     this._lastPaintMs = -Infinity;
     /** Rasterizations actually performed (tests + probes). */
     this.paintCount = 0;
   }
 
-  // ── Lens state ──────────────────────────────────────────────────────────────
-
   /** @returns {string} current lens ('VALUE' | 'THREAT') */
   getLens() { return this._lens; }
 
-  /**
-   * Set the lens (endings land on THREAT; arrival resets to VALUE).
-   * Unknown values are ignored. @param {string} lens @returns {string} the lens
-   */
+  /** Set the lens (endings land on THREAT; arrival resets to VALUE). Unknown values are ignored. */
   setLens(lens) {
     if (LENSES.includes(lens)) this._lens = lens;
     return this._lens;
   }
 
-  /** Flip VALUE↔THREAT (the SDA 'flip-lens' Space verb). @returns {string} new lens */
+  /** Flip VALUE↔THREAT (the SDA 'flip-lens' Space verb). */
   flipLens() {
     this._lens = LENSES[(LENSES.indexOf(this._lens) + 1) % LENSES.length];
     return this._lens;
   }
 
-  // ── Write-on-change gate (G1 — pure + static, headless-pinnable) ────────────
-
   /**
-   * Should render() rasterize this frame?
-   *   - signature change (lens/viewport/data) → always paint;
-   *   - identical signature on the STEADY lens (VALUE — gold never pulses)
-   *     → never repaint;
-   *   - identical signature on THREAT (the pulse breathes) → repaint at most
-   *     every PULSE_TICK_MS (≤4 Hz real), never per frame.
-   * @param {string} sig - frame signature
-   * @param {string|null} lastSig - previously painted signature
-   * @param {string} lens - 'VALUE' | 'THREAT'
-   * @param {number} nowMs - monotonic clock
-   * @param {number} lastPaintMs - time of the previous rasterization
-   * @returns {boolean}
+   * Should render() rasterize this frame? Signature change → always; identical signature on the STEADY lens (VALUE) →
+   * never; identical signature on THREAT (the pulse breathes) → at most every PULSE_TICK_MS, never per frame.
    */
   static shouldPaint(sig, lastSig, lens, nowMs, lastPaintMs) {
     if (sig !== lastSig) return true;
@@ -464,12 +364,9 @@ export class SdaChart {
   }
 
   /**
-   * Frame signature: every input that changes the rasterized pixels except
-   * the THREAT pulse phase (which is time-gated instead). Pure + static.
-   * Session R: `fontEpoch` (the typeface epoch, an integer) is one term — a
-   * chart painted on the fallback face repaints once when the faces settle.
+   * Frame signature: every input that changes the rasterized pixels except the THREAT pulse phase (time-gated instead).
+   * `fontEpoch` (integer) is one term: a chart painted on the fallback face repaints once when the faces settle.
    * @param {object} m - {lens, wPx, hPx, bands, outOfBand, timeline, riskFraction, fontEpoch}
-   * @returns {string}
    */
   static frameSig(m) {
     const bands = (m.bands || [])
@@ -484,16 +381,13 @@ export class SdaChart {
     return `${m.lens}|${m.wPx}x${m.hPx}|${bands}|${oob}|${proj}|r${risk}|e${epoch}`;
   }
 
-  // ── DOM lifecycle (all no-op headless; ReachOrb overlay pattern) ────────────
-
   /** @private */
   _build() {
     if (this._built || typeof document === 'undefined' || !document.body) return;
     this._built = true;
     const canvas = document.createElement('canvas');
     canvas.id = 'ladder-sda-chart';
-    // z-index 33: the SDA costume layer (the NAVCOM icon layer is hidden on the SDA floor —
-    // the two floors never paint together).
+    // z-index 33: the SDA costume layer (the NAVCOM icon layer is hidden on the SDA floor; they never paint together).
     canvas.style.cssText = [
       'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
       'pointer-events:none', 'z-index:33', 'opacity:0', 'transition:opacity 0.3s',
@@ -503,15 +397,13 @@ export class SdaChart {
     this._ctx2d = canvas.getContext ? canvas.getContext('2d') : null;
   }
 
-  /** @returns {boolean} shown (activate/deactivate lifecycle probe) */
   isVisible() { return this._visible; }
 
   show() {
     this._build();
     this._visible = true;
     if (this._canvas) this._canvas.style.opacity = '1';
-    // A re-show must repaint even into an unchanged world (the canvas may
-    // have been cleared on hide): drop the signature.
+    // A re-show must repaint even into an unchanged world (the canvas may have been cleared on hide).
     this._lastSig = null;
   }
 
@@ -519,19 +411,13 @@ export class SdaChart {
     this._visible = false;
     if (this._canvas) {
       this._canvas.style.opacity = '0';
-      // Clear immediately so a re-shown chart never flashes a stale frame.
       if (this._ctx2d) this._ctx2d.clearRect(0, 0, this._canvas.width, this._canvas.height);
     }
   }
 
-  // ── Render (compute always; rasterize on change only) ───────────────────────
-
   /**
-   * Compute one chart frame and rasterize it iff the write-on-change gate
-   * passes. Headless (no canvas) the computation is identical and
-   * `painted` is false while `wouldPaint` still reports the gate decision.
-   *
-   * @param {object} m
+   * Compute one chart frame and rasterize it iff the write-on-change gate passes. Headless (no canvas) the computation
+   * is identical, `painted` is false and `wouldPaint` still reports the gate decision.
    * @param {Array}  m.bands       - aggregateBands().bands
    * @param {object} [m.outOfBand] - aggregateBands().outOfBand
    * @param {object} [m.timeline]  - buildTimeline() result
@@ -549,7 +435,6 @@ export class SdaChart {
     const map = meoRadialMap({ wPx, hPx });
     const weights = lensWeights(bands, lens);
 
-    // Ring descriptors: one shell per band (inner/outer px through the map).
     const rings = bands.map((b, i) => ({
       id: `band-${b.altKm[0]}`,
       altKm: b.altKm,
@@ -562,8 +447,7 @@ export class SdaChart {
       estimate: b.estimate,
     }));
 
-    // Label candidates (named world labels — the budget applies): the five
-    // bands (lens-weighted), the GEO gold ring, the timeline strip title.
+    // Named world-label candidates (the budget applies): the bands (lens-weighted), the GEO gold ring, the strip title.
     const gold = FloorContract.MASS_BANDS.REGIMES
       .filter((r) => r.gold)
       .reduce((a, r) => a + r.massT, 0); // 4,384 t belt+graveyard
@@ -604,8 +488,7 @@ export class SdaChart {
       painted = true;
     }
     if (wouldPaint) {
-      // The gate advances on the DECISION so headless tests pin the same
-      // cadence the browser sees (paint itself is the DOM-guarded effect).
+      // The gate advances on the DECISION so headless tests pin the cadence the browser sees.
       this._lastSig = sig;
       this._lastPaintMs = now;
     }
@@ -616,9 +499,7 @@ export class SdaChart {
     };
   }
 
-  // ── Rasterization (DOM-only; never called headless) ─────────────────────────
-
-  /** @private Paint the whole chart: disc, shells, GEO ring, labels, strip. */
+  /** @private Paint the whole chart. */
   _paint(f) {
     const g = this._ctx2d;
     const canvas = this._canvas;
@@ -633,16 +514,13 @@ export class SdaChart {
       ? 0.75 + 0.25 * Math.sin((now % PULSE_PERIOD_MS) / PULSE_PERIOD_MS * Math.PI * 2)
       : 1;
 
-    // Earth: chart-blue flat disc (the chart costume — an overlay, the real
-    // Earth mesh is untouched; the SDA visual-defaults revisit owns the 3D
-    // overlay sphere).
+    // Earth: chart-blue flat disc — an overlay; the real Earth mesh is untouched.
     const rEarth = Constants.EARTH_RADIUS * map.sLeoPxPerU;
     g.beginPath();
     g.arc(cx, cy, rEarth, 0, Math.PI * 2);
     g.fillStyle = CHART_EARTH_BLUE;
     g.fill();
 
-    // Self-lit altitude bands: annulus fills, lens ramp alpha by weight.
     for (const r of rings) {
       g.beginPath();
       g.arc(cx, cy, r.outerPx, 0, Math.PI * 2);
@@ -656,8 +534,7 @@ export class SdaChart {
       g.stroke();
     }
 
-    // GEO ring at the screen edges — gold, dashed, STEADY on both lenses
-    // (gold never pulses).
+    // GEO ring at the screen edges: gold, dashed, STEADY on both lenses.
     g.beginPath();
     g.arc(cx, cy, map.geoPx, 0, Math.PI * 2);
     g.setLineDash([6, 6]);
@@ -666,7 +543,6 @@ export class SdaChart {
     g.stroke();
     g.setLineDash([]);
 
-    // Named labels (budget-ranked upstream, ≤ 7).
     g.font = mono(10);
     g.textAlign = 'left';
     for (const l of labels) {
@@ -676,7 +552,7 @@ export class SdaChart {
       g.fillText(l.text, cx + 8, Math.max(12, y - 3));
     }
 
-    // Honesty chrome (not world labels): the MEO tag + ESTIMATE provenance.
+    // Honesty chrome (not world labels): MEO tag + ESTIMATE provenance.
     g.textAlign = 'center';
     g.fillStyle = VisualLaw.COLORS.INFO;
     g.globalAlpha = 0.8;
@@ -686,8 +562,7 @@ export class SdaChart {
     } else {
       g.fillText('pre-2020 count jumps partly = better sensors \u00b7 cascade onset disputed', cx, 30);
     }
-    // Out-of-band honesty line: objects beyond the LEO shells are counted,
-    // never silently dropped (GEO/GNSS/HEO live outside the radial domain).
+    // Objects beyond the LEO shells are counted, never silently dropped.
     if (f.outOfBand && f.outOfBand.count > 0) {
       g.textAlign = 'right';
       g.fillText(`beyond ${rings.length ? rings[rings.length - 1].altKm[1] : 2000} km: ${f.outOfBand.count} obj`, w - 10, 16);
@@ -711,14 +586,12 @@ export class SdaChart {
     const X = (yr) => x0 + ((yr - yr0) / Math.max(1, yr1 - yr0)) * (x1 - x0);
     const Y = (n) => y1 - (n / cMax) * (y1 - y0);
 
-    // Decade ticks (chrome).
     g.strokeStyle = CHART_GRID;
     g.lineWidth = 1;
     for (let yr = Math.ceil(yr0 / 10) * 10; yr <= yr1; yr += 10) {
       g.beginPath(); g.moveTo(X(yr), y1); g.lineTo(X(yr), y1 + 4); g.stroke();
     }
 
-    // History polyline (INFO cyan) + event markers (the two injections).
     g.strokeStyle = VisualLaw.COLORS.INFO;
     g.beginPath();
     hist.forEach((p, i) => { const x = X(p.year), y = Y(p.tracked); if (i === 0) g.moveTo(x, y); else g.lineTo(x, y); });
@@ -729,13 +602,11 @@ export class SdaChart {
       g.beginPath(); g.arc(X(p.year), Y(p.tracked), 2.5, 0, Math.PI * 2); g.fill();
     }
 
-    // Projection polyline — THREAT red (pulsing on the THREAT lens).
     g.strokeStyle = this._rgba(VisualLaw.COLORS.THREAT, (lens === 'THREAT' ? 0.95 : 0.5) * pulse);
     g.beginPath();
     proj.forEach((p, i) => { const x = X(p.year), y = Y(p.tracked); if (i === 0) g.moveTo(x, y); else g.lineTo(x, y); });
     g.stroke();
 
-    // Strip title (a budgeted world label) + endpoint numerals (chrome).
     const title = labels.find((l) => l.id === 'kessler-strip');
     g.font = mono(10);
     if (title) {
@@ -751,14 +622,12 @@ export class SdaChart {
     g.globalAlpha = 1;
   }
 
-  /** @private hex → rgba() with alpha. */
   _rgba(hex, a) {
     const n = parseInt(hex.slice(1), 16);
     const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
     return `rgba(${r}, ${g}, ${b}, ${clamp01(a)})`;
   }
 
-  /** Remove the whole layer. */
   dispose() {
     if (this._canvas && this._canvas.remove) this._canvas.remove();
     this._canvas = null;

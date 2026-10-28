@@ -1,25 +1,18 @@
 /**
  * AutoLockController.js — reward-first front-arc autolock + range tracking.
  *
- * Part of the reward-first onboarding spine
- * (.kilo/plans/new-player-onboarding-flow.md, Phase 1).
- *
  * Responsibilities:
- *   1. Auto-select the nearest debris inside the forward arc so a new player
- *      gets the satisfying lock + first catch in the first ~10 s. Permanent
- *      assist for all players; a Settings toggle can disable it, and any manual
- *      T/click selection (or a deliberate direction input) suppresses it for
- *      that target. In a GUIDED chapter (missions 1–3, the profile's
- *      `guidedCluster` flag via DebrisField.isGuidedChapter()) an empty forward
- *      arc falls back to the nearest alive piece anywhere within
- *      AUTOLOCK.GUIDED_FALLBACK_RANGE_M, so a cluster that drifted behind the
- *      mother is still pointed at (M1 guidance, T5).
- *   2. Track whether the *selected* target is inside NET_LOCK_RANGE_M and emit
- *      Events.TARGET_IN_RANGE / Events.TARGET_OUT_OF_RANGE on the crossing.
- *      These drive the cyan↔yellow reticle flip, the in-range-only lock earcon,
- *      and the range→autopilot teaching gate.
- *   3. Re-acquire the next forward candidate a short beat after a capture, so
- *      the reward registers before the reticle hops to the next piece.
+ *   1. Auto-select the nearest debris inside the forward arc so a new player gets the satisfying lock + first catch
+ *      in the first ~10 s. Permanent assist for all players; a Settings toggle can disable it, and any manual
+ *      T/click selection (or a deliberate direction input) suppresses it for that target. In a GUIDED chapter
+ *      (missions 1–3, the profile's `guidedCluster` flag via DebrisField.isGuidedChapter()) an empty forward arc
+ *      falls back to the nearest alive piece anywhere within AUTOLOCK.GUIDED_FALLBACK_RANGE_M, so a cluster that
+ *      drifted behind the mother is still pointed at.
+ *   2. Track whether the *selected* target is inside NET_LOCK_RANGE_M and emit Events.TARGET_IN_RANGE /
+ *      Events.TARGET_OUT_OF_RANGE on the crossing. These drive the cyan↔yellow reticle flip, the in-range-only lock
+ *      earcon, and the range→autopilot teaching gate.
+ *   3. Re-acquire the next forward candidate a short beat after a capture, so the reward registers before the
+ *      reticle hops to the next piece.
  *
  * Scan-first (DECISIONS §15 row 1): only MARKED pieces — see {@link isMarked} —
  * are ever picked. Nothing is locked until a scan (S) has revealed it. Hazard
@@ -30,11 +23,10 @@
  * the ship in this sim. Candidates are scored by distance within the arc.
  *
  * Design notes:
- *   - Lock-sound gating: AudioSystem plays playTargetLock on TARGET_SELECTED.
- *     To keep that earcon a trustworthy "you can act on this now" signal, we
- *     suppress it for out-of-range selections by tagging the TARGET_SELECTED
- *     context with `_suppressLockSound:true` and re-firing the lock cue on the
- *     yellow→cyan range flip via Events.TARGET_IN_RANGE.
+ *   - Lock-sound gating: AudioSystem plays playTargetLock on TARGET_SELECTED. To keep that earcon a trustworthy "you
+ *     can act on this now" signal, it is suppressed for out-of-range selections by tagging the TARGET_SELECTED
+ *     context with `_suppressLockSound:true` and re-firing the lock cue on the yellow→cyan range flip via
+ *     Events.TARGET_IN_RANGE.
  *   - Allocation-free hot path: no per-frame Vector3 churn.
  *
  * @module systems/AutoLockController
@@ -62,13 +54,11 @@ export class AutoLockController {
     this._debrisField = deps.debrisField || null;
     this._settings = deps.settingsManager || null;
 
-    /** @type {boolean} player/setting master enable. */
     this._enabled = !!(Constants.AUTOLOCK && Constants.AUTOLOCK.ENABLED);
     if (this._settings && typeof this._settings.getAutolock === 'function') {
       this._enabled = this._settings.getAutolock();
     }
 
-    /** @type {boolean} true once the player took manual control of selection. */
     this._manualOverride = false;
 
     /** @type {number} timestamp (ms) until which reacquire is paused. */
@@ -79,8 +69,7 @@ export class AutoLockController {
     /** @type {*} id the range state is tracking (reset on target switch). */
     this._rangeTargetId = null;
 
-    // Pre-allocated scratch objects — the acquire/track paths run per-frame and
-    // must not churn the GC (allocation-free hot path). _tryAcquire and
+    // Pre-allocated scratch: the acquire/track paths run per-frame (allocation-free hot path). _tryAcquire and
     // _trackRange never run in the same frame, so a shared scratch is safe.
     this._fwdScratch = { x: 0, y: 0, z: 0 };
     this._scenePosScratch = { x: 0, y: 0, z: 0 };
@@ -94,11 +83,8 @@ export class AutoLockController {
     if (debrisField) this._debrisField = debrisField;
   }
 
-  /** Enable/disable the assist (Settings toggle). */
   setEnabled(on) { this._enabled = !!on; }
   isEnabled() { return this._enabled; }
-
-  // ─── INTERNAL — WIRING ─────────────────────────────────────────────────
 
   _setupListeners() {
     const on = (evt, h) => {
@@ -107,8 +93,8 @@ export class AutoLockController {
       if (typeof u === 'function') this._unsubs.push(u);
     };
 
-    // Manual selection (T / HUD click) takes over: stop fighting the player.
-    // We distinguish autolock's own selections via the `autoLock` context flag.
+    // Manual selection (T / HUD click) takes over: stop fighting the player. Autolock's own picks carry the `autoLock`
+    // context flag.
     on(Events.TARGET_SELECTED, (d) => {
       if (d && d.autoLock) return;          // our own pick — not a manual override
       if (d && d.autoTarget) return;        // legacy welcome auto-target — also ours
@@ -122,10 +108,9 @@ export class AutoLockController {
       this._rangeTargetId = null;
     });
 
-    // After a capture, pause briefly so the reward registers, then reacquire —
-    // but only if REACQUIRE auto-advance is enabled. When it's off, suppress
-    // autolock until the player makes a manual selection (treat the post-capture
-    // state as a manual override) so we don't auto-advance to the next contact.
+    // After a capture, pause briefly so the reward registers, then reacquire, but only if REACQUIRE auto-advance is
+    // enabled. When off, treat the post-capture state as a manual override so autolock doesn't advance to the next
+    // contact until the player selects manually.
     on(Events.DEBRIS_CAPTURED, () => {
       const cfg = Constants.AUTOLOCK || {};
       const reacquire = cfg.REACQUIRE !== false;
@@ -140,18 +125,14 @@ export class AutoLockController {
       on(Events.GAME_RESET, () => this.reset());
     }
 
-    // Scan is the player's explicit "I'm lost, help" action (scan auto-select,
-    // TargetAcquisition). Re-arm ambient assist by clearing any sticky manual
-    // override so the reticle resumes picking in-arc contacts. Fill-only
-    // precedence (by design): after this re-arm, _tryAcquire may grab an in-arc
-    // ≤5 km piece during the ~0-1.2 s reveal stagger before SCAN_REVEALS_SETTLED
-    // fires; the scan acquire then finds a target present and skips. Both picks
-    // are "assisted flow" — no fight.
+    // Scan is the player's explicit "I'm lost, help" action (scan auto-select, TargetAcquisition): re-arm ambient
+    // assist by clearing any sticky manual override. Fill-only precedence (by design): after this re-arm, _tryAcquire
+    // may grab an in-arc ≤5 km piece during the ~0-1.2 s reveal stagger before SCAN_REVEALS_SETTLED fires; the scan
+    // acquire then finds a target present and skips. Both picks are "assisted flow": no fight.
     if (Events.SCAN_COMPLETE) {
       on(Events.SCAN_COMPLETE, () => { this._manualOverride = false; });
     }
 
-    // Settings toggle honors the autolock assist enable/disable.
     if (Events.AUTOLOCK_SETTING_CHANGED) {
       on(Events.AUTOLOCK_SETTING_CHANGED, (d) => { this._enabled = !!(d && d.enabled); });
     }
@@ -174,29 +155,21 @@ export class AutoLockController {
     this._unsubs.length = 0;
   }
 
-  // ─── PER-FRAME ─────────────────────────────────────────────────────────
-
-  /**
-   * @param {number} _dt
-   */
   update(_dt) {
     if (!this._player || !this._debrisField) return;
 
     const active = targetSelector.getActiveTarget();
 
-    // 1) Acquire a target if none selected (and assist is on / not overridden).
     if (!active) {
       this._tryAcquire();
       return;
     }
 
-    // 2) Track range crossings for the live selected target.
     this._trackRange(active);
   }
 
-  /** @private Attempt to autolock the nearest forward, alive candidate — or,
-   *  in a guided chapter with an empty forward arc, the nearest alive piece
-   *  anywhere (see _guidedFallbackPick). */
+  /** @private Autolock the nearest forward, alive candidate, or in a guided chapter with an empty forward arc the
+   *  nearest alive piece anywhere (see _guidedFallbackPick). */
   _tryAcquire() {
     if (!this._enabled) return;
     if (this._manualOverride) return;
@@ -209,7 +182,6 @@ export class AutoLockController {
     const radiusScene = ((cfg.RANGE_M || 5000) / 1000) * Constants.SCENE_SCALE; // m→km→scene
     const nearby = this._debrisField.getDebrisNear(playerPos, radiusScene);
 
-    // Forward = prograde (velocity) direction.
     const vel = this._player.getVelocity && this._player.getVelocity();
     const fwd = this._normalize(vel);
     const arcDot = Number.isFinite(cfg.ARC_DOT) ? cfg.ARC_DOT : 0.5;
@@ -218,7 +190,7 @@ export class AutoLockController {
     let pick = null;
     if (nearby && nearby.length > 0) {
       for (const d of nearby) {
-        if (!d || !d.alive || d._captured || d._disposed) continue;   // slice 5 (5d): a piece that was disposed of is never locked
+        if (!d || !d.alive || d._captured || d._disposed) continue;   // a disposed piece is never locked
         if (!isMarked(d)) continue;   // scan-first: an unscanned piece is never auto-locked
         if (d.hazard === true) continue;   // shards stay drawn but cannot be caught: never auto-locked
         const sp = d._scenePosition;
@@ -228,7 +200,7 @@ export class AutoLockController {
           const tz = sp.z - playerPos.z;
           const tlen = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
           const dot = (tx * fwd.x + ty * fwd.y + tz * fwd.z) / tlen;
-          if (dot < arcDot) continue; // outside forward arc
+          if (dot < arcDot) continue;
         }
         pick = d;
         break;
@@ -244,11 +216,9 @@ export class AutoLockController {
       : pick;
     if (!debris) return;
 
-    // Autolock always suppresses the SELECTED earcon: the lock cue fires from
-    // the TARGET_IN_RANGE crossing emitted by _trackRange next frame (in-range
-    // pick → immediate cue; out-of-range pick → cue only once it comes in
-    // range). This keeps exactly one lock sound per "now actionable" event and
-    // avoids a double-fire (SELECTED + IN_RANGE) on an in-range autolock.
+    // Autolock always suppresses the SELECTED earcon: the lock cue fires from the TARGET_IN_RANGE crossing emitted by
+    // _trackRange next frame (in-range pick → immediate cue; out-of-range pick → only once it comes in range). Exactly
+    // one lock sound per "now actionable" event, no SELECTED + IN_RANGE double-fire.
     targetSelector.setTarget(debris, {
       autoLock: true,
       _suppressLockSound: true,
@@ -260,28 +230,21 @@ export class AutoLockController {
   }
 
   /**
-   * @private Guided-chapter fallback (M1 guidance, T5): when the forward arc
-   * holds nothing, lock the nearest alive piece ANYWHERE within
-   * AUTOLOCK.GUIDED_FALLBACK_RANGE_M — no arc test. Only in a GUIDED chapter
-   * (missions 1–3, `DebrisField.isGuidedChapter()` → the profile's
-   * `guidedCluster` flag): there the welcome cluster is the whole mission. All
-   * seven pieces are authored AHEAD of the mother since the T1 cone fan (the
-   * pre-T1 layout put #4/#6 behind), but a player who overshoots, turns, or is
-   * moved by an unforeseen impulse can still leave the whole cluster outside
-   * the forward arc — and a silent reticle reads as "the debris vanished".
-   * With a target selected, the off-screen arrow (TargetReticle, behind-camera
-   * via _getEdgePosition) points at it and the OUT OF RANGE state says
-   * "press A". From mission 4 on the arc rule stands (pieces drift; accepted
-   * there).
+   * @private Guided-chapter fallback: when the forward arc holds nothing, lock the nearest alive piece ANYWHERE within
+   * AUTOLOCK.GUIDED_FALLBACK_RANGE_M (no arc test). Only in a GUIDED chapter (missions 1–3,
+   * `DebrisField.isGuidedChapter()` → the profile's `guidedCluster` flag): there the welcome cluster is the whole
+   * mission. All seven pieces are authored AHEAD of the mother, but a player who overshoots, turns, or is moved by an
+   * unforeseen impulse can leave the whole cluster outside the forward arc, and a silent reticle reads as "the debris
+   * vanished". With a target selected, the off-screen arrow (TargetReticle, behind-camera via _getEdgePosition)
+   * points at it and the OUT OF RANGE state says "press A". From mission 4 on the arc rule stands (pieces drift;
+   * accepted there).
    *
-   * Cost: one extra O(n) getDebrisNear pass, only on frames with no target
-   * and an empty arc. Note DebrisField's same-frame query cache keys on
-   * "same/smaller radius" — a later, smaller same-frame query reuses this
-   * wider result set (pre-existing cache semantics; callers filter by
-   * distance where it matters).
+   * Cost: one extra O(n) getDebrisNear pass, only on frames with no target and an empty arc. DebrisField's same-frame
+   * query cache keys on "same/smaller radius", so a later, smaller same-frame query reuses this wider result set
+   * (callers filter by distance where it matters).
    *
-   * @param {{x:number,y:number,z:number}} playerPos — scene units
-   * @param {object} cfg — Constants.AUTOLOCK
+   * @param {{x:number,y:number,z:number}} playerPos scene units
+   * @param {object} cfg Constants.AUTOLOCK
    * @returns {object|null} the nearest alive snapshot, or null
    */
   _guidedFallbackPick(playerPos, cfg) {
@@ -293,11 +256,9 @@ export class AutoLockController {
     const radiusScene = (rangeM / 1000) * Constants.SCENE_SCALE; // m→km→scene
     const anywhere = field.getDebrisNear(playerPos, radiusScene);
     if (!anywhere || anywhere.length === 0) return null;
-    // Sorted nearest-first; the first alive, uncaptured, MARKED, non-hazard
-    // WELCOME entry is the pick (scan-first: an unscanned piece is never
-    // auto-locked, even here; a hazard shard is drawn but uncatchable, so never
-    // locked). 2026-10-18: welcome pieces only — the pre-discovered cast pieces
-    // 7-8 km away qualified and pulled mission 2 off its near pieces.
+    // Sorted nearest-first; the first alive, uncaptured, MARKED, non-hazard WELCOME entry is the pick (scan-first: an
+    // unscanned piece is never auto-locked, even here; a hazard shard is drawn but uncatchable). Welcome pieces only:
+    // pre-discovered cast pieces 7-8 km away otherwise qualified and pulled mission 2 off its near pieces.
     for (const d of anywhere) {
       if (d && d.alive && !d._captured && !d._disposed && isMarked(d) && d.hazard !== true && d.welcomeSpawn === true) return d;
     }
@@ -306,23 +267,19 @@ export class AutoLockController {
 
   /** @private Emit IN/OUT range crossings for the selected target. */
   _trackRange(active) {
-    // A piece on the line / in the net / on a rack has no "range": it is held,
-    // not approached. Its `_scenePosition` is also one frame stale here —
-    // AutoLock runs before LassoSystem's same-frame pin (main.js loop order), so
-    // the distance read for a reeled piece is a frame of ship travel too far
-    // (measured 7.7 km at the 0.1 s dt clamp → a false OUT OF RANGE under
-    // "22m" and a false "too far for the net" teaching beat; research
-    // 2026-10 capture-repros A1). Emit nothing and forget the in/out state so a
-    // later release starts fresh, with no stale crossing on the first free frame.
+    // A piece on the line / in the net / on a rack has no "range": it is held, not approached. Its `_scenePosition` is
+    // also one frame stale here (AutoLock runs before LassoSystem's same-frame pin, main.js loop order), so the
+    // distance for a reeled piece is a frame of ship travel too far (measured 7.7 km at the 0.1 s dt clamp → a false
+    // OUT OF RANGE under "22m" and a false "too far for the net" teaching beat). Emit nothing and forget the in/out
+    // state so a later release starts fresh, with no stale crossing on the first free frame.
     if (active._armPinned || active._captured || active._capturedByArm || active._motherParked) {
       this._lastRangeState = null;
       return;
     }
 
-    // Hot path (runs every frame while a target is locked): read the live
-    // position vector directly to honor this module's allocation-free contract.
-    // PlayerSatellite.getPosition() clones a THREE.Vector3 — only used as a
-    // fallback for duck-typed players that don't expose `.position`.
+    // Hot path (every frame while a target is locked): read the live position vector directly (allocation-free
+    // contract). PlayerSatellite.getPosition() clones a THREE.Vector3; it is only a fallback for duck-typed players
+    // without `.position`.
     const playerPos = this._player.position
       || (this._player.getPosition && this._player.getPosition());
     const sp = active._scenePosition || this._targetScenePos(active);
@@ -338,16 +295,15 @@ export class AutoLockController {
     const dz = sp.z - playerPos.z;
     const distScene = Math.sqrt(dx * dx + dy * dy + dz * dz);
     const distM = (distScene / Constants.SCENE_SCALE) * 1000;
-    // net-reach-ticker T3 (owner 2026-10-27): the reach of the net N would fire at THIS piece (lasso <= 10 kg 90 m, large
-    // net 100 m), from the same function the fire gate uses, so the yellow OUT OF RANGE and the refusal agree.
+    // DECISIONS §45 row 2 (owner 2026-10-27): the reach of the net N would fire at THIS piece (lasso <= 10 kg 90 m,
+    // large net 100 m), from the same function the fire gate uses, so the yellow OUT OF RANGE and the refusal agree.
     const netRangeM = netReachForMassM(active.mass) || Constants.NET_LOCK_RANGE_M || 90;
     const inRange = distM <= netRangeM;
     const state = inRange ? 'in' : 'out';
 
-    // P6 — throttled (~4 Hz) range readout feeding the audio range-ticker. Only
-    // meaningful while out of net range (the closing approach); the in-range
-    // lock ping takes over inside netRangeM. AudioSystem kills the ticker on
-    // capture/clear/in-range, so a coarse emit here is enough.
+    // Throttled (~4 Hz) range readout feeding the audio range-ticker. Only meaningful out of net range (the in-range
+    // lock ping takes over inside netRangeM). AudioSystem kills the ticker on capture/clear/in-range, so a coarse emit
+    // is enough.
     const nowMs = (typeof performance !== 'undefined' && performance.now)
       ? performance.now() : Date.now();
     if (!inRange && (nowMs - (this._lastRangeEmit || 0) >= 250)) {
@@ -359,17 +315,16 @@ export class AutoLockController {
     this._lastRangeState = state;
 
     if (inRange) {
-      // autoLock: this crossing came from the automatic assist (not a manual
-      // pick), so the audio layer suppresses the lock earcon — an unprompted
-      // ping teaches the player nothing.
+      // autoLock: this crossing came from the automatic assist (not a manual pick), so the audio layer suppresses the
+      // lock earcon: an unprompted ping teaches the player nothing.
       eventBus.emit(Events.TARGET_IN_RANGE, { id: active.id, distanceM: distM, autoLock: !this._manualOverride });
     } else {
       eventBus.emit(Events.TARGET_OUT_OF_RANGE, { id: active.id, distanceM: distM });
     }
   }
 
-  /** @private Resolve a target's scene position via TargetSelector helper.
-   *  Returns a shared scratch object (do not retain across frames) or null. */
+  /** @private Target scene position via the TargetSelector helper. Returns a shared scratch object (do not retain
+   *  across frames) or null. */
   _targetScenePos(active) {
     const p = targetSelector.getActiveTargetPosition
       ? targetSelector.getActiveTargetPosition()
@@ -381,8 +336,8 @@ export class AutoLockController {
     return this._scenePosScratch;
   }
 
-  /** @private Normalize a {x,y,z} into the shared forward scratch; returns it,
-   *  or null if zero-length. Do not retain the result across frames. */
+  /** @private Normalize a {x,y,z} into the shared forward scratch; returns it, or null if zero-length. Do not retain
+   *  the result across frames. */
   _normalize(v) {
     if (!v) return null;
     const len = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);

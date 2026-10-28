@@ -1,55 +1,36 @@
 /**
- * TimeAuthority.js — the Zoom Ladder's ONE world-time choke point (S3 / T2).
+ * TimeAuthority.js — the Zoom Ladder's ONE world-time choke point.
  *
- * Before the ladder, "1 real second = 10 game seconds" was smeared across the
- * codebase: every world-sim entity multiplied `Constants.TIME_SCALE_GAMEPLAY`
- * internally (DebrisField, PlayerSatellite, ArmUnit, CaptureNet, LassoSystem,
- * ConjunctionSystem, the bosses, TrawlManager's hardcoded ×10, …). There was no
- * single place to implement the ladder's per-floor time caps or automatic warp
- * (docs/ladder/02-traps.md T2).
+ * "1 real second = 10 game seconds" used to be smeared across every world-sim entity (`Constants.TIME_SCALE_GAMEPLAY` inlined,
+ * incl. TrawlManager's hardcoded ×10), leaving no single place for the ladder's per-floor time caps or automatic warp
+ * (archive/ladder/02-traps.md T2). This module is that place. It splits the frame's time into two rates:
  *
- * This module is that single place. It splits the frame's time into two rates:
+ *   - **dtReal**  — real (slow-mo-scaled) seconds: camera, UI, ceremonies, attitude substeps, resources, animations. Unwarped.
+ *   - **dtWorld** — world-simulation seconds = `dtReal × scale`, where `scale = BASE_SCALE × rate` and `rate` (the ladder
+ *     warp multiplier) drifts toward the current floor's `timeCap` (docs/ladder/01-numbers.md: [0,1,1,1,4,20,100]).
  *
- *   - **dtReal**  — real (slow-mo-scaled) seconds: camera, UI, ceremonies,
- *     attitude substeps, resources, animations. Unwarped.
- *   - **dtWorld** — world-simulation seconds = `dtReal × scale`, where
- *     `scale = BASE_SCALE × rate` and `rate` (the ladder warp multiplier) drifts
- *     toward the current floor's `timeCap` (docs/ladder/01-numbers.md:
- *     [0,1,1,1,4,20,100]).
+ * `BASE_SCALE` mirrors the shipped `Constants.TIME_SCALE_GAMEPLAY` (=10). With the ladder disengaged (`active:false`, i.e.
+ * `Constants.LADDER.ENABLED` off or not in gameplay) the authority pins `rate = 1` INSTANTLY (no ramp), so
+ * `dtWorld === dtReal × BASE_SCALE` bit-for-bit.
  *
- * `BASE_SCALE` mirrors the shipped `Constants.TIME_SCALE_GAMEPLAY` (=10). With
- * the ladder disengaged (`active:false`, i.e. `Constants.LADDER.ENABLED` off or
- * not in gameplay) the authority pins `rate = 1` INSTANTLY — no ramp — so
- * `dtWorld === dtReal × BASE_SCALE` bit-for-bit and shipped behavior is
- * byte-identical.
+ * Who reads what:
+ *   - world-sim orbital systems (DebrisField/PlayerSatellite/ActiveSatellite/AutopilotSystem/ConjunctionSystem MOID timer)
+ *     receive the live `dtWorld` from the main-loop choke point (default `TimeAuthority.baseGameDt(dt)` for headless/test callers);
+ *   - close-range / cosmetic sites that only ever run at warp 1× (arms, nets, lassos, comms, tumble spins, sun sweep) read
+ *     the `BASE_SCALE` constant.
  *
- * The mechanical sweep replaced every `dt * Constants.TIME_SCALE_GAMEPLAY`:
- *   - world-sim orbital systems (DebrisField/PlayerSatellite/ActiveSatellite/
- *     AutopilotSystem/ConjunctionSystem MOID timer) receive the live `dtWorld`
- *     from the main-loop choke point (default `TimeAuthority.baseGameDt(dt)` for
- *     headless/test callers — byte-identical to the old ×10);
- *   - close-range / cosmetic sites that only ever run at warp 1× (arms, nets,
- *     lassos, comms, tumble spins, sun sweep) read the `BASE_SCALE` constant.
- *
- * Warp behaviors this authority owns (docs/ladder/00-spec.md §7,
- * FloorContract.TIME_RULES):
+ * Warp behaviors this authority owns (docs/ladder/00-spec.md §7, FloorContract.TIME_RULES):
  *   - **Automatic warp**: `rate` drifts toward the floor cap when calm.
- *   - **Danger cap**: a conjunction inside the alarm horizon ramps `rate` to 1×
- *     (fast, safety) so alarms always land at 1×.
- *   - **Crossing pre-ramp**: during a ride the ZoomLadder core already reports
- *     the DESTINATION floor as the current floor, so feeding its `timeCap` as
- *     the target pre-ramps toward the arrival rate during the flight
- *     (down-crossings ramp fast; up-crossings ease in — "visible feedback").
- *   - **MOID screening** above `MOID_SCREENING_ABOVE` (10×): the per-frame
- *     instantaneous proximity scan is invalid when objects teleport per frame,
- *     so conjunction detection switches to orbit-geometry MOID screening.
- *   - **Drag chunking**: atmospheric drag (a first-order Euler step) integrates
- *     in ≤ `DRAG_CHUNK_GAME_S` (60) game-second chunks so the decay factor can
- *     never go negative at high warp. Kepler propagation is analytic and stable
- *     at any dt, so only drag needs chunking.
+ *   - **Danger cap**: a conjunction inside the alarm horizon ramps `rate` to 1× (fast) so alarms always land at 1×.
+ *   - **Crossing pre-ramp**: during a ride the ZoomLadder core already reports the DESTINATION floor as current, so its
+ *     `timeCap` pre-ramps toward the arrival rate during the flight (down-crossings fast; up-crossings ease in).
+ *   - **MOID screening** above `MOID_SCREENING_ABOVE` (10×): the per-frame proximity scan is invalid when objects teleport
+ *     per frame, so conjunction detection switches to orbit-geometry MOID screening.
+ *   - **Drag chunking**: atmospheric drag (a first-order Euler step) integrates in ≤ `DRAG_CHUNK_GAME_S` (60) game-second
+ *     chunks so the decay factor can never go negative at high warp. Kepler propagation is analytic and stable at any dt.
  *
- * Pure and deterministic: no THREE/DOM/EventBus, no `Date.now`/timers. The
- * instance holds only the ramp state; every input carries its own `dtReal`.
+ * Pure and deterministic: no THREE/DOM/EventBus, no `Date.now`/timers. The instance holds only the ramp state; every input
+ * carries its own `dtReal`.
  *
  * @module systems/TimeAuthority
  */
@@ -70,19 +51,17 @@ export class TimeAuthority {
   static get DRAG_CHUNK_GAME_S() { return TR.DRAG_CHUNK_GAME_S; }
 
   /**
-   * Byte-identical replacement for the old `dt * Constants.TIME_SCALE_GAMEPLAY`.
-   * The default `dtWorld` for headless/close-range callers that never warp; the
-   * live warped value is threaded from the main-loop choke point instead.
-   * @param {number} dtReal - real seconds
+   * Byte-identical replacement for the old `dt * Constants.TIME_SCALE_GAMEPLAY`: the default `dtWorld` for headless/close-range
+   * callers that never warp (the live warped value is threaded from the main-loop choke point instead).
+   * @param {number} dtReal real seconds
    * @returns {number} game seconds at the base (unwarped) rate
    */
   static baseGameDt(dtReal) { return dtReal * Constants.TIME_SCALE_GAMEPLAY; }
 
   /**
-   * Number of ≤ DRAG_CHUNK_GAME_S Euler sub-steps a drag integration should take
-   * for a given game-time step. Returns 1 (a single, byte-identical step) for
-   * any `gameDt ≤ DRAG_CHUNK_GAME_S`; only high-warp frames subdivide.
-   * @param {number} gameDt - world-time step (game seconds)
+   * Euler sub-steps (each ≤ DRAG_CHUNK_GAME_S) a drag integration should take: 1 (a single, byte-identical step) for any
+   * `gameDt ≤ DRAG_CHUNK_GAME_S`; only high-warp frames subdivide.
+   * @param {number} gameDt world-time step (game seconds)
    * @returns {number} integer ≥ 1
    */
   static dragSubSteps(gameDt) {
@@ -92,17 +71,14 @@ export class TimeAuthority {
   }
 
   /**
-   * Q10 warp-feed rule (docs/ladder/08-workbench.md §8: "time changes only at
-   * the slow end of a flight"). The per-frame `targetCap` is normally the
-   * CURRENT floor's timeCap (the core reports the destination during a ride —
-   * the pre-ramp). While a cross-anchor ride is going UP, and until its
-   * post-ride level phase completes, the camera reports a HOLD floor (the
-   * departure) whose cap wins, so the time-lapse engages only after arrival +
-   * leveling — never during the flight. Down-rides pass no hold (the fast
-   * destination pre-ramp still settles time first). Pure.
-   * @param {number} floorCap - the core's current/destination floor timeCap
-   * @param {number|null|undefined} holdCap - the departure floor's timeCap while
-   *   an up-crossing holds (CameraSystem.ladderWarpHoldFloor), else null
+   * Warp-feed rule (docs/ladder/08-workbench.md §8: "time changes only at the slow end of a flight"). The per-frame
+   * `targetCap` is normally the CURRENT floor's timeCap (the core reports the destination during a ride: the pre-ramp).
+   * While a cross-anchor ride goes UP, and until its post-ride level phase completes, the camera reports a HOLD floor (the
+   * departure) whose cap wins, so the time-lapse engages only after arrival + leveling, never during the flight. Down-rides
+   * pass no hold (the fast destination pre-ramp still settles time first). Pure.
+   * @param {number} floorCap the core's current/destination floor timeCap
+   * @param {number|null|undefined} holdCap the departure floor's timeCap while an up-crossing holds
+   *   (CameraSystem.ladderWarpHoldFloor), else null
    * @returns {number} the cap to feed `update({ targetCap })`
    */
   static ladderTargetCap(floorCap, holdCap) {
@@ -110,18 +86,13 @@ export class TimeAuthority {
   }
 
   /**
-   * The HELD-WORLD rule (Session I, plan D-F; supersedes the D10 calm cap's
-   * 1×). Applied to the per-frame warp target AFTER ladderTargetCap: an open
-   * workbench drawer (REFIT / TECH LIBRARY) clamps the cap to **0** — the
-   * world clock STOPS while you shop or read (nothing bad happens; the rail
-   * reads HOLD). The ramp to 0 is the shipped cap-0 mechanism the retired
-   * ARCHIVE floor pinned (rate ramps down and snaps to 0; the danger clamp is
-   * a min() and can never un-pause — test-TimeAuthority). Same shape as the
-   * danger clamp: it never RAISES a cap. Pure; main.js feeds
-   * `_workbenchPaneOpen` (the ONE pane edge). History: D10 (00-spec §7)
-   * settled to 1× — owner decision D-F (2026-09-05) holds the world outright.
-   * @param {number} floorCap - the cap from ladderTargetCap (current/hold floor)
-   * @param {boolean} paneOpen - a workbench drawer (REFIT / TECH LIBRARY) is open
+   * The HELD-WORLD rule (supersedes the 1× of 00-spec §7's D10 calm cap; owner decision D-F, 2026-09-05). Applied to the warp
+   * target AFTER ladderTargetCap: an open workbench drawer (REFIT / TECH LIBRARY) clamps the cap to **0**: the world clock
+   * STOPS while you shop or read (the rail reads HOLD). The ramp to 0 is the shipped cap-0 mechanism (rate ramps down and
+   * snaps to 0; the danger clamp is a min() and can never un-pause — test-TimeAuthority). Like the danger clamp it never
+   * RAISES a cap. Pure; main.js feeds `_workbenchPaneOpen` (the ONE pane edge).
+   * @param {number} floorCap the cap from ladderTargetCap (current/hold floor)
+   * @param {boolean} paneOpen a workbench drawer (REFIT / TECH LIBRARY) is open
    * @returns {number} the cap to feed `update({ targetCap })`
    */
   static calmCap(floorCap, paneOpen) {
@@ -129,11 +100,11 @@ export class TimeAuthority {
   }
 
   /**
-   * u16a (owner 2026-10-22: "Stop the world while it's open"): the ONE held-world input. The world is held while a
-   * workbench drawer (REFIT / TECH LIBRARY) is open (D-F, DECISIONS §13 row 5) OR the full-screen codex / help page
-   * (SPECS, opened by tapping a HUD pane) is showing during gameplay. Out of gameplay (menu, shop, game over) the
-   * codex holds nothing: those screens have their own pause rules. The result feeds `calmCap` and `tripWarpArgs`
-   * (`workbenchOpen`) in main.js's time loop, once per frame. Pure.
+   * The ONE held-world input (owner 2026-10-22: "Stop the world while it's open"). The world is held while a workbench
+   * drawer (REFIT / TECH LIBRARY) is open (D-F, DECISIONS §13 row 5) OR the full-screen codex / help page (SPECS, opened by
+   * tapping a HUD pane) is showing during gameplay. Out of gameplay (menu, shop, game over) the codex holds nothing: those
+   * screens have their own pause rules. Feeds `calmCap` and `tripWarpArgs` (`workbenchOpen`) in main.js's time loop, once
+   * per frame. Pure.
    * @param {{paneOpen?:boolean, codexVisible?:boolean, gameplay?:boolean}} p
    * @returns {boolean} true = clamp the world clock to 0
    */
@@ -162,7 +133,6 @@ export class TimeAuthority {
     this._moidScreening = false;
   }
 
-  /** True while warp is high enough that conjunction detection uses MOID screening. */
   isMoidScreening() { return this._moidScreening; }
 
   /** Instant pin to the shipped base rate (flag-off / disengage). Byte-identical. */
@@ -176,19 +146,15 @@ export class TimeAuthority {
 
   /**
    * Advance the warp rate one frame and compute this frame's dtWorld.
-   *
-   * @param {object} p
-   * @param {number}  [p.dtReal=0]      - real (slow-mo-scaled) seconds this frame
-   * @param {boolean} [p.active=false]  - warp allowed (ladder flag on + gameplay + engaged)
-   * @param {number}  [p.targetCap=1]   - auto-warp target = current/destination floor timeCap
-   * @param {boolean} [p.dangerActive=false] - conjunction inside alarm horizon → ramp to 1×
-   * @returns {this}
+   * @param {number}  [p.dtReal=0]      real (slow-mo-scaled) seconds this frame
+   * @param {boolean} [p.active=false]  warp allowed (ladder flag on + gameplay + engaged)
+   * @param {number}  [p.targetCap=1]   auto-warp target = current/destination floor timeCap
+   * @param {boolean} [p.dangerActive=false] conjunction inside alarm horizon → ramp to 1×
    */
   update({ dtReal = 0, active = false, targetCap = 1, dangerActive = false } = {}) {
     this.dtReal = dtReal;
 
-    // Inactive: pin the shipped base rate with NO ramp so flag-off is
-    // byte-identical (dtWorld === dtReal × BASE_SCALE, bit-for-bit).
+    // Inactive: pin the base rate with NO ramp (dtWorld === dtReal × BASE_SCALE, bit-for-bit).
     if (!active) {
       this.rate = 1;
       this.scale = TimeAuthority.BASE_SCALE;
@@ -197,14 +163,13 @@ export class TimeAuthority {
       return this;
     }
 
-    // Auto-warp target = floor cap, clamped to 1× when danger is present. The
-    // danger clamp never RAISES the target (min), so a cap-0 floor stays paused.
+    // Target = floor cap, clamped to 1× under danger. The clamp is a min(), so it never RAISES the target: a cap-0 floor
+    // stays paused.
     const cap = Math.max(0, targetCap);
     const target = dangerActive ? Math.min(1, cap) : cap;
 
-    // Exponential approach; ramping DOWN (target < rate) uses the fast τ so
-    // danger and down-crossings arrive slow, ramping UP uses the gentle τ so
-    // auto-warp / up-crossings ease in with visible feedback.
+    // Exponential approach: ramping DOWN uses the fast τ (danger and down-crossings arrive slow), UP the gentle τ
+    // (auto-warp / up-crossings ease in with visible feedback).
     const tau = (target < this.rate) ? this._rampDownTau : this._rampUpTau;
     const alpha = (dtReal > 0 && tau > 0) ? (1 - Math.exp(-(dtReal * 1000) / tau)) : 1;
     this.rate += (target - this.rate) * alpha;

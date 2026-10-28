@@ -1,36 +1,25 @@
 /**
- * ProxOverlay.js — the Zoom Ladder PROX NET (id 3) tactical overlay (S4).
+ * ProxOverlay.js — the Zoom Ladder PROX NET (id 3) tactical overlay.
  *
- * On the PROX NET floor the near field stays live (fidelity.debrisMode 'tactical') but the
- * working range is 100 m – 120 km: individual meshes are sub-pixel, so this
- * layer draws the tactical read over them:
- *   - VALUE-CODED OBJECT MARKERS from DebrisField.getEnhancedTargetList()
- *     (estimatedPoints/risk fields): VisualLaw VALUE gold, steady, marker
- *     radius exaggerated by value (MARKER_MIN_PX..MARKER_MAX_PX against
- *     VALUE_REF_PTS) — never color-alone. At most `labelBudget` (PROX NET = 7)
- *     markers carry a text label, ranked by estimatedPoints.
- *   - PLAYER MARKER + orbit direction: a PLAYER-green chevron rotated to the
- *     screen-space velocity heading (the ClusterIcons ship grammar).
- *   - WIREFRAME DENSITY SHELLS: 2–3 translucent rings in the player's orbital
- *     plane at the FieldRiskModel sampling radii, each labeled with its zone
- *     and opacity-weighted by its measured shell density.
- *   - INSERTION POINTS (when a target cluster is set): the InsertionPlanner's
- *     edge/mid/core candidates with risk-colored trajectories — a VisualLaw
- *     THREAT gradient (INFO cyan at risk 0 → THREAT red-orange at risk 1),
- *     double-encoded in line width; the SELECTED candidate reads SELECTION
- *     blue with a heavier ring (Session Q: blue = pilot-selected; white is LABEL).
+ * On PROX NET the near field stays live (fidelity.debrisMode 'tactical') but the working range is 100 m – 120 km:
+ * individual meshes are sub-pixel, so this layer draws the tactical read over them:
+ *   - VALUE-CODED OBJECT MARKERS from DebrisField.getEnhancedTargetList() (estimatedPoints/risk): VisualLaw VALUE
+ *     gold, steady, radius exaggerated by value (MARKER_MIN_PX..MARKER_MAX_PX against VALUE_REF_PTS), never
+ *     colour-alone. At most `labelBudget` (PROX NET = 7) markers carry a text label, ranked by estimatedPoints.
+ *   - PLAYER MARKER: a PLAYER-green chevron rotated to the screen-space velocity heading (ClusterIcons ship grammar).
+ *   - WIREFRAME DENSITY SHELLS: 2–3 translucent rings in the player's orbital plane at the FieldRiskModel sampling
+ *     radii, each labelled with its zone and opacity-weighted by its measured shell density.
+ *   - INSERTION POINTS (when a target cluster is set): the InsertionPlanner's edge/mid/core candidates with
+ *     risk-coloured trajectories, a VisualLaw gradient (INFO cyan at risk 0 → THREAT red-orange at risk 1) double-encoded
+ *     in line width; the SELECTED candidate reads SELECTION blue with a heavier ring (white is LABEL).
  *
- * Pattern-matches the ClusterIcons/ReachOrb overlay style: one full-screen
- * canvas, pointer-events:none (selection is CYCLED by the floor controller
- * — click/keyboard-free per the PROX NET brief — so no hitboxes are mounted), built
- * lazily on show(), opacity-transitioned, fully DOM-guarded (inert +
- * constructible headless). render() always computes and RETURNS the frame
- * descriptors so tests assert layout/ranking/colors without a browser;
- * painting happens only when the DOM canvas exists and the layer is shown.
+ * Same overlay style as ClusterIcons/ReachOrb: one full-screen canvas, pointer-events:none (selection is CYCLED by
+ * the floor controller, so no hitboxes), built lazily on show(), opacity-transitioned, DOM-guarded (inert headless).
+ * render() always computes and RETURNS the frame descriptors so tests assert layout/ranking/colours without a
+ * browser; painting happens only when the canvas exists and the layer is shown.
  *
- * FLOOR CONTENT (parallel track): no camera, no debris source, no game loop —
- * ProxNetFloor feeds render() from its own per-frame tick with an injected
- * projector `(worldVec3) -> {x, y, visible}`.
+ * ProxNetFloor feeds render() from its own per-frame tick with an injected projector `(worldVec3) -> {x, y, visible}`;
+ * the overlay has no camera, debris source or game loop.
  *
  * @module ui/ProxOverlay
  */
@@ -40,8 +29,7 @@ import { FloorContract } from '../core/FloorContract.js';
 import { mono } from '../core/Typeface.js';
 import { lerp } from '../core/MathUtil.js';
 
-/** Value-marker radius band (px): radius = MIN + (MAX−MIN)·√(min(1, pts/REF)).
- *  √ so mid-value targets stay distinguishable; REF saturates the band. */
+/** Value-marker radius band (px): radius = MIN + (MAX−MIN)·√(min(1, pts/REF)); √ keeps mid-value targets distinguishable. */
 export const MARKER_MIN_PX = 3;
 export const MARKER_MAX_PX = 14;
 export const VALUE_REF_PTS = 1500;
@@ -56,13 +44,11 @@ export const TRAJ_WIDTH_MAX_PX = 3;
 /** Insertion-point ring radius (px); the selected ring draws 1.4×. */
 export const INSERTION_RING_PX = 8;
 
-/** The PROX NET (id 3) contract row (labelBudget source) — by id (Session H). */
+/** The PROX NET (id 3) contract row (labelBudget source). */
 const FLOOR = FloorContract.byId(3);
 
-/** @private clamp to [0,1] */
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
-/** @private '#rrggbb' → [r,g,b] */
 function hexRgb(hex) {
   const h = hex.replace('#', '');
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
@@ -78,14 +64,10 @@ export class ProxOverlay {
     this._visible = false;
   }
 
-  /** @returns {boolean} shown (activate/deactivate lifecycle probe) */
   isVisible() { return this._visible; }
 
-  // ── Pure grammar (static, headless-testable) ────────────────────────────────
-
   /**
-   * Value-exaggerated marker radius (px) for an estimatedPoints value.
-   * @param {number} estimatedPoints
+   * Value-exaggerated marker radius for an estimatedPoints value.
    * @returns {number} px ∈ [MARKER_MIN_PX, MARKER_MAX_PX]
    */
   static markerRadiusPx(estimatedPoints) {
@@ -93,13 +75,7 @@ export class ProxOverlay {
     return lerp(MARKER_MIN_PX, MARKER_MAX_PX, Math.sqrt(v));
   }
 
-  /**
-   * Rank targets for the label budget: highest estimatedPoints first (stable
-   * on ties by id), truncated to `budget`. Pure + static.
-   * @param {Array<{id:*, estimatedPoints:number}>} targets
-   * @param {number} budget
-   * @returns {Array} the top `budget` targets, value-desc
-   */
+  /** Rank targets for the label budget: highest estimatedPoints first (ties stable by id), truncated to `budget`. */
   static rankByValue(targets, budget) {
     const list = Array.isArray(targets) ? targets.slice() : [];
     list.sort((a, b) => {
@@ -111,10 +87,8 @@ export class ProxOverlay {
   }
 
   /**
-   * The VisualLaw THREAT gradient: risk 0 → INFO cyan, risk 1 → THREAT
-   * red-orange (linear RGB lerp). Color is never the sole channel — callers
-   * double-encode risk in stroke width (trajWidthPx).
-   * @param {number} risk01
+   * The VisualLaw gradient: risk 0 → INFO cyan, risk 1 → THREAT red-orange (linear RGB lerp). Colour is never the
+   * sole channel: callers double-encode risk in stroke width (trajWidthPx).
    * @returns {string} 'rgb(r,g,b)'
    */
   static riskColor(risk01) {
@@ -125,15 +99,14 @@ export class ProxOverlay {
     return `rgb(${r}, ${g}, ${b})`;
   }
 
-  /** Risk-scaled trajectory stroke width (px) — the non-color risk channel. */
+  /** Risk-scaled trajectory stroke width (px), the non-colour risk channel. */
   static trajWidthPx(risk01) {
     return TRAJ_WIDTH_MIN_PX + (TRAJ_WIDTH_MAX_PX - TRAJ_WIDTH_MIN_PX) * clamp01(risk01 || 0);
   }
 
   /**
-   * Orthonormal in-plane basis of the player's orbital plane (the ReachOrb
-   * plane rule): normal = pos × vel, degenerate/missing velocity falls back to
-   * the scene equator. Used to orient the density-shell rings.
+   * Orthonormal in-plane basis of the player's orbital plane (the ReachOrb plane rule): normal = pos × vel; a
+   * degenerate/missing velocity falls back to the scene equator. Orients the density-shell rings.
    * @param {{x,y,z}} posU
    * @param {{x,y,z}|null} velU
    * @returns {{e1:{x,y,z}, e2:{x,y,z}}}
@@ -165,12 +138,7 @@ export class ProxOverlay {
   }
 
   /**
-   * Sample a circle of radius `radiusU` around `centerU` in the given plane
-   * basis. Pure world-space points (no projection).
-   * @param {{x,y,z}} centerU
-   * @param {number} radiusU
-   * @param {{e1:{x,y,z}, e2:{x,y,z}}} basis
-   * @param {number} [n=SHELL_SEGMENTS]
+   * Sample a circle of radius `radiusU` around `centerU` in the plane basis: world-space points, no projection.
    * @returns {Array<{x:number,y:number,z:number}>}
    */
   static ringPoints(centerU, radiusU, basis, n = SHELL_SEGMENTS) {
@@ -189,18 +157,13 @@ export class ProxOverlay {
     return pts;
   }
 
-  // ── DOM lifecycle (all no-op headless; ReachOrb overlay pattern) ────────────
-
-  /** @private */
   _build() {
     if (this._built || typeof document === 'undefined' || !document.body) return;
     this._built = true;
     const canvas = document.createElement('canvas');
     canvas.id = 'ladder-prox-overlay';
-    // z-index 32 (ReachOrb's slot — the two never coexist: orb is NAVCOM, this is
-    // PROX NET): beneath the cluster icons (33) + transfer panel (34). No hitboxes:
-    // selection cycling is dispatch-driven (ProxNetFloor.cycleInsertion),
-    // so the whole layer stays pointer-events:none.
+    // z-index 32 (ReachOrb's slot; the two never coexist: orb is NAVCOM, this is PROX NET), beneath the cluster icons
+    // (33) + transfer panel (34). No hitboxes: selection cycling is dispatch-driven (ProxNetFloor.cycleInsertion).
     canvas.style.cssText = [
       'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
       'pointer-events:none', 'z-index:32', 'opacity:0', 'transition:opacity 0.3s',
@@ -216,12 +179,10 @@ export class ProxOverlay {
     this._visible = false;
     if (this._canvas) {
       this._canvas.style.opacity = '0';
-      // Clear immediately so a re-shown overlay never flashes a stale frame.
+      // Clear at once so a re-shown overlay never flashes a stale frame.
       if (this._ctx2d) this._ctx2d.clearRect(0, 0, this._canvas.width, this._canvas.height);
     }
   }
-
-  // ── Per-frame ───────────────────────────────────────────────────────────────
 
   /**
    * Compute (and, when the DOM layer is shown, paint) one overlay frame.
@@ -255,7 +216,6 @@ export class ProxOverlay {
       ? project
       : () => ({ x: 0, y: 0, visible: false });
 
-    // ── Value markers ──
     const targets = Array.isArray(frame.targets) ? frame.targets : [];
     const labeledIds = new Set(ProxOverlay.rankByValue(targets, budget).map((t) => t.id));
     const markers = [];
@@ -274,14 +234,12 @@ export class ProxOverlay {
       });
     }
 
-    // ── Player marker ──
     let ship = null;
     if (frame.shipPos) {
       const p = proj(frame.shipPos) || { x: 0, y: 0, visible: false };
       ship = { x: p.x, y: p.y, visible: !!p.visible, angleRad: frame.shipAngleRad || 0 };
     }
 
-    // ── Density shells (rings around the ship in its orbital plane) ──
     const shells = [];
     if (frame.shipPos && Array.isArray(frame.shells) && frame.shells.length) {
       const basis = ProxOverlay.planeBasis(frame.shipPos, frame.shipVel || null);
@@ -297,7 +255,6 @@ export class ProxOverlay {
       }
     }
 
-    // ── Insertion points + risk-colored trajectories ──
     let insertion = null;
     const cands = frame.insertion && Array.isArray(frame.insertion.candidates)
       ? frame.insertion.candidates : null;
@@ -341,9 +298,6 @@ export class ProxOverlay {
     return out;
   }
 
-  // ── Painting (no-op headless / while hidden) ────────────────────────────────
-
-  /** @private */
   _paint(f) {
     const canvas = this._canvas;
     const g = this._ctx2d;
@@ -360,7 +314,6 @@ export class ProxOverlay {
       g.globalAlpha = 0.12 + 0.28 * s.sat01;   // density-weighted translucency
       g.lineWidth = 1;
       this._strokePolyline(g, s.pts, false);
-      // Ring tag at the first visible sample.
       const tag = s.pts.find((p) => p.visible);
       if (tag) {
         g.globalAlpha = 0.5;
@@ -388,7 +341,7 @@ export class ProxOverlay {
         g.beginPath();
         g.arc(p.x, p.y, r, 0, Math.PI * 2);
         g.stroke();
-        // Cross-hair tick (shape channel — selection/risk never color-alone).
+        // Cross-hair tick (shape channel: selection/risk never colour-alone).
         g.beginPath();
         g.moveTo(p.x - r - 3, p.y); g.lineTo(p.x - r + 3, p.y);
         g.moveTo(p.x + r - 3, p.y); g.lineTo(p.x + r + 3, p.y);
@@ -399,7 +352,6 @@ export class ProxOverlay {
       }
     }
 
-    // Value markers (gold, steady).
     for (const m of f.markers) {
       if (!m.visible) continue;
       g.strokeStyle = m.color;
@@ -439,8 +391,7 @@ export class ProxOverlay {
     }
   }
 
-  /** @private Stroke a projected polyline, skipping invisible segments.
-   *  `open` polylines connect i→i+1 only; closed rings also join last→first. */
+  /** @private Stroke a projected polyline, skipping invisible segments. `open` connects i→i+1 only; closed rings join last→first. */
   _strokePolyline(g, pts, open) {
     if (!pts || pts.length < 2) return;
     g.beginPath();

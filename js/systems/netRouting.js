@@ -1,22 +1,14 @@
 /**
- * netRouting.js — net-ladder mass routing (single source of truth).
- *
- * Pure helper shared by the Mother fire verb (InputManager.fireLasso), the
- * lasso's own too-heavy rejection (LassoSystem.fire), and any HUD that needs
- * the routing copy. Also the home of the two shared mother-net lines. Kept in its own lightweight module (Constants only, no
- * THREE / NetProjectile deps) so the input/lasso layers don't pull the heavy
- * CaptureNet module just for a mass comparison.
- *
- * @module systems/netRouting
+ * @module systems/netRouting — net-ladder mass routing (single source of truth). Pure helper shared by the Mother fire
+ * verb (InputManager.fireLasso), the lasso's own too-heavy rejection (LassoSystem.fire) and any HUD needing the routing
+ * copy; also home of the shared mother-net lines. Constants only (no THREE / NetProjectile deps) so the input/lasso
+ * layers don't pull the heavy CaptureNet module for a mass comparison.
  */
 
 import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from './TimeAuthority.js';
 
-/**
- * The ONE line for N with no mother nets left (DECISIONS §33 row 3; owner 2026-10-20: "One line in Comms is better
- * than 2."). Every empty-magazine refusal says exactly this — the small-net path, the large-net path and the director.
- */
+/** The ONE line for N with no mother nets left (DECISIONS §33 row 3). Every empty-magazine refusal says exactly this. */
 export const OUT_OF_MOTHER_NETS_LINE = 'Out of mother nets. Press D to send a daughter.';
 
 /**
@@ -25,12 +17,12 @@ export const OUT_OF_MOTHER_NETS_LINE = 'Out of mother nets. Press D to send a da
  */
 export const OUT_OF_NET_RANGE_LINE = 'Out of net range. Press D to send a daughter.';
 
-/** A daughter with no nets: they refill only by buying at the resupply stop (DECISIONS §33 rows 5 and 8). The map-off words; read through
- *  `daughterOutOfNetsLine()` where the line is said (lane 3d: "resupply satellite" with the map on). */
+/** A daughter with no nets: they refill only at the resupply stop (DECISIONS §33 rows 5 and 8). The map-off words; read
+ *  through `daughterOutOfNetsLine()` where the line is said ("resupply satellite" with the map on). */
 export const DAUGHTER_OUT_OF_NETS_LINE = 'Out of nets. Restock at the resupply stop.';
 export { daughterOutOfNetsLine } from './resupplyWords.js';
 
-/** The ONE line when a shot leaves a single mother net (replaces the old "running low at 5" warning). */
+/** The ONE line when a shot leaves a single mother net. */
 export const ONE_MOTHER_NET_LEFT_LINE = 'One mother net left.';
 
 /**
@@ -39,7 +31,7 @@ export const ONE_MOTHER_NET_LEFT_LINE = 'One mother net left.';
  *   ≤ LASSO_MAX_CAPTURE_MASS (10 kg)   → 'lasso'  — the small point-blank net (LassoSystem)
  *   ≤ WEAVER_MAX_CAPTURE_MASS (500 kg) → 'mother' — the mother's large net; a daughter could hold it too
  *   otherwise                          → 'whale'  — the mother's large net; no daughter can hold it
- * The old "daughter-sized, press D" refusal for 10–500 kg is gone: N fires at any piece in range while nets remain.
+ * N fires at any piece in range while nets remain.
  * @param {number} mass — target mass (kg)
  * @returns {{ band: 'lasso'|'mother'|'whale', message: string|null }}
  *   `message` is the refusal line for the small net on a piece it cannot hold (null for 'lasso').
@@ -54,16 +46,13 @@ export function classifyNetTarget(mass) {
   return { band: 'lasso', message: null };
 }
 
-// ── One range truth (net-range, owner 2026-10-24: "mother net allows capturing debris more than 100 meters away") ──
-// The distance the HUD shows for a target (DebrisField distanceKm, NavSphere label) is the straight line from the
-// ship's centre (player.getPosition()) to the piece's live scene position. Every net fire gate and in-flight check
-// uses THIS function, so the number on screen and the number that refuses a shot are the same number. (The large
-// net used to measure from the muzzle, 1.27 m forward of that, so the two could differ by up to that much.)
+// One range truth (owner 2026-10-24: "mother net allows capturing debris more than 100 meters away").
+// The HUD distance for a target is the straight line from the ship's centre (player.getPosition()) to the piece's live
+// scene position. Every net fire gate and in-flight check uses THIS function, so the number on screen is the number
+// that refuses a shot.
 
 /**
  * Distance in metres from the ship's centre to a piece, both in scene units (1 m = SCENE_UNITS_PER_METER).
- * @param {{x:number,y:number,z:number}} shipPos
- * @param {{x:number,y:number,z:number}} targetPos
  * @returns {number} metres (Infinity when either position is missing)
  */
 export function targetRangeM(shipPos, targetPos) {
@@ -72,12 +61,7 @@ export function targetRangeM(shipPos, targetPos) {
   return Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_UNITS_PER_METER;
 }
 
-/**
- * A distance as the HUD writes it (TargetPanel target rows): metres rounded to the nearest, km above 1 km.
- * TargetPanel._formatDist calls this, so the refusal line and the row can never read differently.
- * @param {number} distKm
- * @returns {string}
- */
+/** A distance as the HUD writes it (TargetPanel target rows; TargetPanel._formatDist calls this): metres to the nearest, km above 1 km. */
 export function hudDistText(distKm) {
   if (distKm < 1) return `${(distKm * 1000).toFixed(0)}m`;
   if (distKm < 10) return `${distKm.toFixed(2)}km`;
@@ -86,13 +70,8 @@ export function hudDistText(distKm) {
 }
 
 /**
- * The refusal line for a shot at a piece beyond the net's advertised reach: names the distance (written as the HUD
- * writes it) and the limit. When the HUD's rounding would read the same as the limit (100.4 m shows "100m"), it
- * says so plainly with one decimal instead.
- * @param {number} distM
- * @param {number} limitM
- * @param {'net'|'lasso'} [kind]
- * @returns {string}
+ * The refusal line for a shot beyond the net's advertised reach: names the distance (as the HUD writes it) and the
+ * limit. When the HUD's rounding would read the same as the limit (100.4 m shows "100m"), one decimal is used instead.
  */
 export function netRangeLine(distM, limitM, kind = 'net') {
   const what = kind === 'lasso' ? 'Out of lasso range' : 'Out of net envelope';
@@ -105,15 +84,14 @@ export function netRangeLine(distM, limitM, kind = 'net') {
   return `${what} (${limitText}): the piece is ${away} away. Close in.`;
 }
 
-// ── One reach, on screen and at the trigger (net-reach-ticker T2/T3, owner 2026-10-27) ──
+// One reach, on screen and at the trigger (DECISIONS §45)
 
 /**
- * Single source of truth for "how far can this net class reach" (metres). Reach is tether-limited AND
- * flight-time-limited: the projectile misses with 'timeout' at MAX_FLIGHT_TIME (per-class override, else the shared
- * default) and with 'tether_limit' at TETHER_MAX, whichever comes first (NetProjectile._updateFlight). Lives here so
- * the reticle can read it without the heavy CaptureNet module; CaptureNet re-exports it.
+ * Single source of truth for "how far can this net class reach" (metres). Reach is tether-limited AND flight-time-limited:
+ * the projectile misses with 'timeout' at MAX_FLIGHT_TIME (per-class override, else the shared default) and with
+ * 'tether_limit' at TETHER_MAX, whichever comes first (NetProjectile._updateFlight). Lives here so the reticle can read
+ * it without the heavy CaptureNet module; CaptureNet re-exports it.
  * @param {object} netClass — one of CN.LARGE / CN.MEDIUM / CN.SMALL
- * @returns {number} max reach in metres
  */
 export function netMaxReachM(netClass) {
   if (!netClass) return 0;
@@ -128,9 +106,8 @@ export function netMaxReachM(netClass) {
 /**
  * The reach (metres) of the net the N key fires at a piece of this mass: the lasso (<= 10 kg: LASSO_RANGE, 90 m) or the
  * mother's large net (netMaxReachM, 100 m). The N fire gates (InputManager) and the reticle's yellow OUT OF RANGE
- * (AutoLockController) both read THIS, so the number on screen is the number that refuses a shot.
+ * (AutoLockController) both read THIS (DECISIONS §45).
  * @param {number} [mass] — target mass (kg); unknown reads as the lasso, as fireLasso routes it
- * @returns {number}
  */
 export function netReachForMassM(mass) {
   return classifyNetTarget(mass || 0).band === 'lasso'
@@ -147,11 +124,9 @@ export function netFlightSpeedMps(mass) {
 }
 
 /**
- * Where the piece will be, as a distance from the ship centre, when the net gets there. The same linear lead the aim
- * uses (computeLeadAim): flight time = distance now / net speed, piece moves by relVel x that time. Pure; units are
- * scene units and scene units per real second in, metres out.
- * @param {{x,y,z}} shipPos
- * @param {{x,y,z}} targetPos
+ * Where the piece will be, as a distance from the ship centre, when the net gets there. Same linear lead as the aim
+ * (computeLeadAim): flight time = distance now / net speed, piece moves by relVel x that time. Pure; scene units and
+ * scene units per real second in, metres out.
  * @param {{x,y,z}|null} relVelScenePerS — piece velocity relative to the ship (null: unknown, reads as not moving)
  * @param {number} netSpeedMps — see netFlightSpeedMps
  * @returns {number} metres (Infinity when a position is missing)
@@ -167,38 +142,38 @@ export function predictedRangeAtArrivalM(shipPos, targetPos, relVelScenePerS, ne
   const leadM = Math.sqrt(ax * ax + ay * ay + az * az) / M;
   if (!(nowM > 0)) return leadM;
   // A piece moving AWAY: the net chases it at its own speed v, so the catch happens at r*v/(v - vr), not at the aim lead's
-  // r + vr*r/v (an under-estimate: the piece keeps moving while the net flies the longer way). vr >= v: never caught.
+  // r + vr*r/v (an under-estimate). vr >= v: never caught.
   const vr = (relVelScenePerS.x * rx + relVelScenePerS.y * ry + relVelScenePerS.z * rz) / (nowM * M) / M;   // m/s along the line of sight
   if (!(vr > 0)) return leadM;
   if (vr >= netSpeedMps) return Infinity;
   const radialM = nowM * netSpeedMps / (netSpeedMps - vr);
-  // lateral part as before: the sideways drift over the aim's flight time
+  // lateral part: the sideways drift over the aim's flight time
   const vx = relVelScenePerS.x / M, vy = relVelScenePerS.y / M, vz = relVelScenePerS.z / M;
   const v2 = vx * vx + vy * vy + vz * vz;
   const latM = Math.sqrt(Math.max(0, v2 - vr * vr)) * tof;
   return Math.sqrt(radialM * radialM + latM * latM);
 }
 
-/** The ONE line when the piece will have drifted out of the net's reach before the net gets there (T2). */
+/** The ONE line when the piece will have drifted out of the net's reach before the net gets there. */
 export function driftOutOfReachLine(predictedM) {
   if (!Number.isFinite(predictedM)) return 'It is moving away faster than the net flies. Close in.';
   return `It would drift out of reach before the net gets there (about ${Math.round(predictedM)} m). Close in.`;
 }
 
-// ── hints-scan D1/D3 (owner 2026-10-26): a line never names a key that won't do it ──────────────────────────────────
-// "Press N to <verb>" is true for a daughter only when N goes to HER (InputManager.nWorksDaughter). main.js registers
-// that answer here; the lines said for a daughter (Comms' in-position line, ArmUnit's retry lines, the idle chips of
-// ArmIdleAdvisor) read it. With nothing registered (headless tests, menus) N is assumed to work her, as it always did.
+// A line never names a key that won't do it (DECISIONS §46 row 2): "Press N to <verb>" is true for a daughter only when
+// N goes to HER (InputManager.nWorksDaughter). main.js registers that answer here; the lines said for a daughter
+// (Comms' in-position line, ArmUnit's retry lines, ArmIdleAdvisor's idle chips) read it. With nothing registered
+// (headless tests, menus) N is assumed to work her.
 let _nResolver = null;
 
 /**
  * @param {{works: (arm:object|string, holdPiece?:object|null) => boolean, digit: (arm:object|string) => (number|null),
  *   isPiloted?: () => boolean, escLeaves?: () => boolean}|null} r
- *   works(armOrId, holdPiece): does N work her tool (holdPiece = "as if she were holding station on this piece", for a line said
- *   just before she gets there); digit(armOrId): the 1-based number key that flies her.
- *   OPTIONAL (n-leftovers L1): isPiloted(): is he flying a daughter now (then N works HER tool, not the mother's net);
- *   escLeaves(): does Esc leave her for the mother now (ladder engaged, or she is not holding station: else Esc recalls her).
- *   Absent = not piloted / Esc leaves, so old registrations and headless tests behave as before.
+ *   works(armOrId, holdPiece): does N work her tool (holdPiece = "as if she were holding station on this piece", for a
+ *   line said just before she gets there); digit(armOrId): the 1-based number key that flies her.
+ *   OPTIONAL: isPiloted(): is he flying a daughter now (then N works HER tool, not the mother's net); escLeaves():
+ *   does Esc leave her for the mother now (ladder engaged, or she is not holding station: else Esc recalls her).
+ *   Absent = not piloted / Esc leaves.
  */
 export function setNResolver(r) { _nResolver = r || null; }
 
@@ -208,7 +183,6 @@ export function nWorksFor(armOrId, holdPiece = null) {
   try { return _nResolver.works(armOrId, holdPiece) !== false; } catch (_e) { return true; }
 }
 
-/** The 1-based number key that flies her, or null. */
 export function flyDigitFor(armOrId) {
   if (armOrId && typeof armOrId === 'object' && Number.isInteger(armOrId.index)) return armOrId.index + 1;
   if (!_nResolver || armOrId == null) return null;
@@ -217,8 +191,8 @@ export function flyDigitFor(armOrId) {
 
 /**
  * The key words of a line that tells the player to work a daughter's tool: "Press N to <what>" when N does it, else
- * "Press <n> to fly her, then N to <what>" (D3). `what` is the verb phrase without "to" ("retry", "stick the pad on").
- * No number known: plain "Press N to ..." (the old line).
+ * "Press <n> to fly her, then N to <what>". `what` is the verb phrase without "to" ("retry", "stick the pad on").
+ * No number known: plain "Press N to ...".
  */
 export function pressNToLine(armOrId, what, holdPiece = null) {
   if (nWorksFor(armOrId, holdPiece)) return `Press N to ${what}`;
@@ -227,8 +201,8 @@ export function pressNToLine(armOrId, what, holdPiece = null) {
 }
 
 /**
- * A whole line that says "Press N to ...": returned as it is when N works her, else its first "Press N to" becomes
- * "Press <n> to fly her, then N to" (D3). For lines kept as whole literals (Comms' in-position line per tool).
+ * A whole line that says "Press N to ...": unchanged when N works her, else its first "Press N to" becomes
+ * "Press <n> to fly her, then N to". For lines kept as whole literals (Comms' in-position line per tool).
  */
 export function flyFirstLine(armOrId, text, holdPiece = null) {
   if (nWorksFor(armOrId, holdPiece)) return text;
@@ -236,14 +210,13 @@ export function flyFirstLine(armOrId, text, holdPiece = null) {
   return n ? text.replace('Press N to ', `Press ${n} to fly her, then N to `) : text;
 }
 
-// ── n-leftovers L1 (owner 2026-10-27): a line that names the MOTHER'S net says what N does when it is shown ──────────
+// A line that names the MOTHER'S net says what N does when it is shown (DECISIONS §46 row 4)
 /** Is he flying a daughter now? False when no resolver, or one without `isPiloted`. */
 function _piloted() {
   if (!_nResolver || typeof _nResolver.isPiloted !== 'function') return false;
   try { return !!_nResolver.isPiloted(); } catch (_e) { return false; }
 }
 
-/** Does N work the mother's net now? False only while he flies a daughter (N goes to HER tool). */
 export function motherNWorks() { return !_piloted(); }
 
 /** Flying a daughter and Esc would recall her instead of leaving her: a mother-net line is held back, not reworded. */
@@ -255,8 +228,7 @@ export function motherNHeldBack() {
 
 /**
  * A line that says "N to <verb>" for the mother's net: unchanged when N works it; while he flies a daughter, its first
- * "N to " becomes "Esc, then N to " ("In range. Esc, then N to cast", "Press Esc, then N to cast."). null = hold the
- * line back (Esc would recall her).
+ * "N to " becomes "Esc, then N to ". null = hold the line back (Esc would recall her).
  */
 export function motherNLine(text) {
   if (motherNWorks()) return text;

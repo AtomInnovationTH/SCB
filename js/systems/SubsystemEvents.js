@@ -1,14 +1,8 @@
 /**
- * SubsystemEvents.js — Spacecraft subsystem event generators for ambient
- * learning. Six lightweight subsystems emit periodic comms messages that
- * teach real aerospace concepts and trigger codex entry unlocks.
- *
- * Subsystems: Comms, Navigation, Attitude, Power, Avionics, Degradation
- * (archive/LEARNING_THROUGH_PLAY.md §12–17)
- *
- * Design: Each subsystem fires events through the EventBus with randomized
- * timing, cooldown protection, and anti-spam logic. They are NOT major game
- * systems — they are "space ambiance with educational payoff."
+ * SubsystemEvents.js — spacecraft subsystem event generators for ambient learning. Six lightweight subsystems (Comms,
+ * Navigation, Attitude, Power, Avionics, Degradation; archive/LEARNING_THROUGH_PLAY.md §12–17) emit periodic comms
+ * messages that teach real aerospace concepts and trigger codex unlocks, with randomized timing, cooldowns and
+ * anti-spam. Ambiance with educational payoff, not major game systems.
  *
  * @module systems/SubsystemEvents
  */
@@ -18,20 +12,14 @@ import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { persistenceManager } from './PersistenceManager.js';
 
-// ============================================================================
-// HELPERS
-// ============================================================================
-
 /** Random float in [min, max] */
 function rand(min, max) { return min + Math.random() * (max - min); }
 
-/** Random int in [min, max] inclusive */
+/** Inclusive. */
 function randInt(min, max) { return Math.floor(rand(min, max + 1)); }
 
-/** Pick random element from array */
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
-/** Format seconds as HH:MM:SS */
 function formatUptime(totalSeconds) {
   const h = Math.floor(totalSeconds / 3600);
   const m = Math.floor((totalSeconds % 3600) / 60);
@@ -40,12 +28,8 @@ function formatUptime(totalSeconds) {
 }
 
 /**
- * Send a comms message via EventBus with anti-spam protection.
- * Returns true if message was sent, false if suppressed.
- *
- * comms-after-tutorial D3/D4: `quiet` tags the line `_quiet` - the owner's "stay hidden" kinds
- * (radio-pass chatter and routine readouts that say nothing is being done, needed or broken).
- * CommsSystem drops a `_quiet` line at every tier; the SUBSYSTEM_EVENT below still fires.
+ * `quiet` tags the line `_quiet`: the owner's "stay hidden" kinds (radio-pass chatter and routine readouts that say
+ * nothing is being done, needed or broken). CommsSystem drops a `_quiet` line at every tier; the SUBSYSTEM_EVENT still fires.
  */
 function sendComms(text, source = 'SYSTEM', priority = 'LOW', quiet = false) {
   eventBus.emit(Events.COMMS_MESSAGE, quiet ? { priority, source, text, _quiet: true } : { priority, source, text });
@@ -53,31 +37,26 @@ function sendComms(text, source = 'SYSTEM', priority = 'LOW', quiet = false) {
   return true;
 }
 
-// ============================================================================
 // BASE SUBSYSTEM — shared timer/cooldown logic
-// ============================================================================
-
 class BaseSubsystem {
   constructor(name) {
     this.name = name;
-    /** @type {Object<string, number>} Named timers counting down */
+    /** @type {Object<string, number>} named timers counting down */
     this._timers = {};
-    /** @type {number} Global cooldown — don't fire if another subsystem just did */
+    /** @type {number} don't fire if another subsystem just did */
     this._cooldown = 0;
   }
 
-  /** Set a named timer with randomized variance */
   _setTimer(name, baseInterval, varianceFraction = 0.2) {
     const variance = baseInterval * varianceFraction;
     this._timers[name] = baseInterval + rand(-variance, variance);
   }
 
-  /** Set timer from [min, max] range */
   _setTimerRange(name, min, max) {
     this._timers[name] = rand(min, max);
   }
 
-  /** Tick a named timer. Returns true when it fires (reaches 0). */
+  /** True when the timer fires (reaches 0). */
   _tickTimer(name, dt) {
     if (this._timers[name] === undefined) return false;
     this._timers[name] -= dt;
@@ -88,27 +67,22 @@ class BaseSubsystem {
     return false;
   }
 
-  /** Check and tick cooldown */
   _tickCooldown(dt) {
     if (this._cooldown > 0) {
       this._cooldown -= dt;
     }
   }
 
-  /** Whether we're in cooldown */
   _onCooldown() {
     return this._cooldown > 0;
   }
 
-  /** Start cooldown after sending a message */
   _startCooldown(seconds = 15) {
     this._cooldown = seconds;
   }
 }
 
-// ============================================================================
 // A. COMMS SUBSYSTEM — Communications Events (§12)
-// ============================================================================
 
 const GROUND_STATIONS = ['Houston', 'Canberra', 'Madrid', 'Svalbard', 'Malindi', 'Kourou'];
 
@@ -124,7 +98,6 @@ class CommsSubsystem extends BaseSubsystem {
     const sub = Constants.SUBSYSTEMS;
     this._setTimerRange('groundStation', sub.GROUND_STATION_INTERVAL[0], sub.GROUND_STATION_INTERVAL[1]);
 
-    // Listen for SAA passages
     eventBus.on(Events.WEATHER_EFFECT_START, (data) => {
       if (data && data.type === 'SAA_PASSAGE') {
         this._inSAA = true;
@@ -142,11 +115,9 @@ class CommsSubsystem extends BaseSubsystem {
     this._tickCooldown(dt);
     const sub = Constants.SUBSYSTEMS;
 
-    // --- Ground Station Window ---
     if (this._groundStationActive) {
       this._groundStationTimer -= dt;
       if (this._groundStationTimer <= 0) {
-        // Window closes
         this._groundStationActive = false;
         const nextMin = Math.floor(sub.GROUND_STATION_INTERVAL[0] / 60);
         const nextMax = Math.floor(sub.GROUND_STATION_INTERVAL[1] / 60);
@@ -170,7 +141,6 @@ class CommsSubsystem extends BaseSubsystem {
         eventBus.emit(Events.GROUND_STATION_PASS, { station: this._currentStation, duration: windowDuration });
         this._startCooldown(12);
       } else {
-        // Retry soon
         this._setTimerRange('groundStation', 20, 40);
       }
     }
@@ -187,7 +157,6 @@ class CommsSubsystem extends BaseSubsystem {
       this._startCooldown(20);
     }
 
-    // --- Bandwidth Constraint ---
     if (gameData.deployedArms >= 3 && !this._onCooldown() && Math.random() < 0.003 * dt) {
       const armNum = randInt(1, gameData.deployedArms);
       sendComms(
@@ -222,9 +191,7 @@ class CommsSubsystem extends BaseSubsystem {
   }
 }
 
-// ============================================================================
 // B. NAVIGATION SUBSYSTEM — Navigation & Precision (§13)
-// ============================================================================
 
 class NavigationSubsystem extends BaseSubsystem {
   constructor() {
@@ -235,7 +202,6 @@ class NavigationSubsystem extends BaseSubsystem {
     this._setTimer('gpsDenied', sub.GPS_DENIED_INTERVAL);
     this._starTrackerPhase2Timer = 0;
 
-    // Listen for arm state changes indicating approach → netting
     eventBus.on(Events.ARM_STATE_CHANGE, (data) => {
       if (data && data.to === 'NETTING' && data.from === 'APPROACH') {
         const speed = (Math.random() * 0.4 + 0.05).toFixed(2);
@@ -252,7 +218,6 @@ class NavigationSubsystem extends BaseSubsystem {
     this._tickCooldown(dt);
     const sub = Constants.SUBSYSTEMS;
 
-    // --- Star Tracker Phase 2 (delayed follow-up) ---
     if (this._starTrackerPhase2Timer > 0) {
       this._starTrackerPhase2Timer -= dt;
       if (this._starTrackerPhase2Timer <= 0) {
@@ -261,7 +226,6 @@ class NavigationSubsystem extends BaseSubsystem {
       }
     }
 
-    // --- Star Tracker Calibration ---
     if (this._tickTimer('starTracker', dt)) {
       if (!this._onCooldown()) {
         sendComms('Star tracker recalibrating...', 'NAV', 'LOW', true);
@@ -271,7 +235,6 @@ class NavigationSubsystem extends BaseSubsystem {
       this._setTimer('starTracker', sub.STAR_TRACKER_INTERVAL);
     }
 
-    // --- IMU Drift Warning ---
     if (this._tickTimer('imuDrift', dt)) {
       if (!this._onCooldown()) {
         const drift = (Math.random() * 0.04 + 0.01).toFixed(3);
@@ -284,7 +247,6 @@ class NavigationSubsystem extends BaseSubsystem {
       this._setTimer('imuDrift', sub.IMU_DRIFT_INTERVAL);
     }
 
-    // --- GPS Denied Zone ---
     if (this._tickTimer('gpsDenied', dt)) {
       if (!this._onCooldown()) {
         sendComms(
@@ -301,9 +263,7 @@ class NavigationSubsystem extends BaseSubsystem {
   restore() {}
 }
 
-// ============================================================================
 // C. ATTITUDE SUBSYSTEM — Stabilization & Attitude Control (§14)
-// ============================================================================
 
 class AttitudeSubsystem extends BaseSubsystem {
   constructor() {
@@ -315,7 +275,6 @@ class AttitudeSubsystem extends BaseSubsystem {
     this._detumbleTimer = 0;
     this._detumbleTarget = 0;
 
-    // Listen for arm GRAPPLED state
     eventBus.on(Events.ARM_STATE_CHANGE, (data) => {
       if (data && data.to === 'GRAPPLED') {
         const tumbleRate = randInt(5, 50);
@@ -333,7 +292,6 @@ class AttitudeSubsystem extends BaseSubsystem {
     this._tickCooldown(dt);
     const sub = Constants.SUBSYSTEMS;
 
-    // --- Detumble follow-up ---
     if (this._detumbleTimer > 0) {
       this._detumbleTimer -= dt;
       if (this._detumbleTimer <= 0) {
@@ -345,7 +303,6 @@ class AttitudeSubsystem extends BaseSubsystem {
       }
     }
 
-    // --- Desaturation follow-up ---
     if (this._desatTimer > 0) {
       this._desatTimer -= dt;
       if (this._desatTimer <= 0) {
@@ -354,7 +311,6 @@ class AttitudeSubsystem extends BaseSubsystem {
       }
     }
 
-    // --- Reaction Wheel Saturation ---
     if (this._tickTimer('reactionWheel', dt)) {
       if (!this._onCooldown()) {
         const wheelId = pick(['X', 'Y', 'Z']);
@@ -369,7 +325,6 @@ class AttitudeSubsystem extends BaseSubsystem {
       this._setTimer('reactionWheel', sub.REACTION_WHEEL_INTERVAL);
     }
 
-    // --- Gyroscope Check ---
     if (this._tickTimer('gyroCheck', dt)) {
       if (!this._onCooldown()) {
         sendComms(
@@ -386,9 +341,7 @@ class AttitudeSubsystem extends BaseSubsystem {
   restore() {}
 }
 
-// ============================================================================
 // D. POWER SUBSYSTEM — Battery & Thermal (§15)
-// ============================================================================
 
 class PowerSubsystem extends BaseSubsystem {
   constructor() {
@@ -399,7 +352,6 @@ class PowerSubsystem extends BaseSubsystem {
     this._laserPowerBeamSent = false;
     this._inEclipse = false;
 
-    // Listen for eclipse transitions
     eventBus.on(Events.WEATHER_EFFECT_START, (data) => {
       if (data && data.type === 'ECLIPSE_ENTRY') {
         this._inEclipse = true;
@@ -415,7 +367,6 @@ class PowerSubsystem extends BaseSubsystem {
       }
     });
 
-    // Listen for arm deployments / lasso for supercapacitor events
     eventBus.on(Events.ARM_DEPLOYED, () => {
       if (Math.random() < 0.20) {
         const rechargeTime = randInt(3, 5);
@@ -431,7 +382,6 @@ class PowerSubsystem extends BaseSubsystem {
     this._tickCooldown(dt);
     const sub = Constants.SUBSYSTEMS;
 
-    // --- Battery Cycle Count ---
     if (this._tickTimer('batteryCycle', dt)) {
       if (!this._onCooldown()) {
         this._batteryCycleCount += randInt(1, 3);
@@ -446,7 +396,7 @@ class PowerSubsystem extends BaseSubsystem {
     }
 
     // --- Laser Power Beaming (one-time, when daughter arm at > 80% tether range) ---
-    // This is a simplified check — in practice we'd check actual tether extension
+    // Simplified check: actual tether extension is not read.
     if (!this._laserPowerBeamSent && gameData.deployedArms >= 1 && totalTime > 600 && !this._onCooldown()) {
       if (Math.random() < 0.001 * dt) {
         this._laserPowerBeamSent = true;
@@ -474,9 +424,7 @@ class PowerSubsystem extends BaseSubsystem {
   }
 }
 
-// ============================================================================
 // E. AVIONICS SUBSYSTEM — Redundancy & Telemetry (§16)
-// ============================================================================
 
 class AvionicsSubsystem extends BaseSubsystem {
   constructor() {
@@ -493,12 +441,10 @@ class AvionicsSubsystem extends BaseSubsystem {
     this._tickCooldown(dt);
     const sub = Constants.SUBSYSTEMS;
 
-    // --- Watchdog Timer Event ---
     if (this._tickTimer('watchdog', dt)) {
       if (!this._onCooldown()) {
         const uptimeStr = formatUptime(totalTime);
         if (Math.random() < 0.05) {
-          // Rare: watchdog triggered (failure + auto-recovery)
           const failProc = pick(['B', 'C']);
           const recoverProc = failProc === 'B' ? 'C' : 'B';
           sendComms(
@@ -516,7 +462,6 @@ class AvionicsSubsystem extends BaseSubsystem {
       this._setTimer('watchdog', sub.WATCHDOG_INTERVAL);
     }
 
-    // --- Telemetry Snapshot ---
     if (this._tickTimer('telemetry', dt)) {
       if (!this._onCooldown()) {
         const nominalPct = randInt(96, 100);
@@ -529,7 +474,6 @@ class AvionicsSubsystem extends BaseSubsystem {
       this._setTimer('telemetry', sub.TELEMETRY_INTERVAL);
     }
 
-    // --- ECC Memory Event ---
     if (this._tickTimer('ecc', dt)) {
       if (!this._onCooldown()) {
         this._eccEventCount++;
@@ -540,13 +484,12 @@ class AvionicsSubsystem extends BaseSubsystem {
         );
         this._startCooldown(15);
       }
-      // ECC events become less frequent over time (first few are educational)
+      // ECC events thin out over time (the first few are educational).
       const baseInterval = sub.ECC_INTERVAL;
       const scaledInterval = baseInterval + (this._eccEventCount * 500);
       this._setTimer('ecc', Math.min(scaledInterval, 6000));
     }
 
-    // --- Triple Redundancy Check ---
     if (this._tickTimer('tmr', dt)) {
       if (!this._onCooldown()) {
         sendComms(
@@ -569,9 +512,7 @@ class AvionicsSubsystem extends BaseSubsystem {
   }
 }
 
-// ============================================================================
 // F. DEGRADATION SUBSYSTEM — Environmental Wear (§17)
-// ============================================================================
 
 class DegradationSubsystem extends BaseSubsystem {
   constructor() {
@@ -582,14 +523,12 @@ class DegradationSubsystem extends BaseSubsystem {
     this._setTimer('mmod', sub.MMOD_INTERVAL);
     this._setTimer('radiationDose', sub.RADIATION_DOSE_INTERVAL);
 
-    // Persistent degradation trackers
     this._kaptonIntegrity = 98;   // starts near 100%, decreases slowly
     this._uvDose = 0.5;           // krad, accumulates
     this._radiationDose = 0.02;   // Sv, accumulates
     this._inSAA = false;
     this._inGeoStorm = false;
 
-    // Listen for weather effects that affect radiation
     eventBus.on(Events.WEATHER_EFFECT_START, (data) => {
       if (data && data.type === 'SAA_PASSAGE') this._inSAA = true;
       if (data && data.type === 'GEOMAGNETIC_STORM') this._inGeoStorm = true;
@@ -604,7 +543,6 @@ class DegradationSubsystem extends BaseSubsystem {
     this._tickCooldown(dt);
     const sub = Constants.SUBSYSTEMS;
 
-    // Slowly accumulate degradation over game time
     this._kaptonIntegrity = Math.max(60, this._kaptonIntegrity - 0.0005 * dt);
     this._uvDose += 0.0002 * dt;
     if (this._inSAA || this._inGeoStorm) {
@@ -613,7 +551,6 @@ class DegradationSubsystem extends BaseSubsystem {
       this._radiationDose += 0.00005 * dt;
     }
 
-    // --- Atomic Oxygen Warning ---
     if (this._tickTimer('atomicOxygen', dt)) {
       if (!this._onCooldown()) {
         const flux = (Math.random() * 5e14 + 1e14).toExponential(1);
@@ -627,7 +564,6 @@ class DegradationSubsystem extends BaseSubsystem {
       this._setTimer('atomicOxygen', sub.ATOMIC_OXYGEN_INTERVAL);
     }
 
-    // --- UV Degradation ---
     if (this._tickTimer('uvDegradation', dt)) {
       if (!this._onCooldown()) {
         const dose = this._uvDose.toFixed(1);
@@ -641,12 +577,10 @@ class DegradationSubsystem extends BaseSubsystem {
       this._setTimer('uvDegradation', sub.UV_DEGRADATION_INTERVAL);
     }
 
-    // --- MMOD Event ---
     if (this._tickTimer('mmod', dt)) {
       if (!this._onCooldown()) {
         const panel = pick(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);
         if (Math.random() < 0.05) {
-          // Very rare: minor penetration
           sendComms(
             `A tiny piece of space debris hit panel ${panel} and made a small puncture. The self-sealing foam closed it.`,
             'STRUCTURE', 'MEDIUM'
@@ -674,7 +608,7 @@ class DegradationSubsystem extends BaseSubsystem {
       }
       this._setTimer('radiationDose', sub.RADIATION_DOSE_INTERVAL);
     } else if (!this._inSAA && !this._inGeoStorm) {
-      // Keep refreshing the timer when not in radiation zone
+      // Not in a radiation zone: keep refreshing the timer.
       if (this._timers['radiationDose'] === undefined) {
         this._setTimer('radiationDose', sub.RADIATION_DOSE_INTERVAL);
       }
@@ -697,9 +631,7 @@ class DegradationSubsystem extends BaseSubsystem {
   }
 }
 
-// ============================================================================
 // SUBSYSTEM EVENTS — Main controller
-// ============================================================================
 
 export class SubsystemEvents {
   constructor() {
@@ -713,13 +645,13 @@ export class SubsystemEvents {
       degradation: new DegradationSubsystem(),
     };
 
-    // Sprint 3: Capture-count gate — suppress subsystem chatter until first capture
+    // Capture-count gate: no subsystem chatter until the first capture.
     this._totalCatches = 0;
     eventBus.on(Events.LASSO_CAPTURED, () => { this._totalCatches++; });
     eventBus.on(Events.ARM_CAPTURED, () => { this._totalCatches++; });
 
-    // Self-manage persistence (decoupled from GameFlowManager)
-    // Use peek() (not load()) to avoid infinite recursion — load() emits PERSISTENCE_LOADED
+    // Self-managed persistence (decoupled from GameFlowManager). peek(), not load(): load() emits PERSISTENCE_LOADED
+    // (infinite recursion).
     eventBus.on(Events.PERSISTENCE_LOADED, () => {
       const save = persistenceManager.peek();
       if (save && save.subsystemEvents) {
@@ -734,8 +666,7 @@ export class SubsystemEvents {
   }
 
   /**
-   * Update all subsystems.
-   * @param {number} dt - Delta time in seconds
+   * @param {number} dt - seconds
    * @param {object} gameData - Current game state data
    * @param {object} [gameData.playerOrbit] - Player orbital elements
    * @param {object} [gameData.armManager] - ArmManager reference
@@ -745,10 +676,8 @@ export class SubsystemEvents {
   update(dt, gameData = {}) {
     this.totalTime += dt;
 
-    // Sprint 3: Suppress subsystem chatter until first capture
     if (this._totalCatches < Constants.SKILL_GATES.SUBSYSTEM_MIN_CATCHES) return;
 
-    // Normalize gameData with defaults
     const data = {
       playerOrbit: gameData.playerOrbit || null,
       armManager: gameData.armManager || null,
@@ -765,10 +694,6 @@ export class SubsystemEvents {
     }
   }
 
-  /**
-   * Get serializable state for persistence.
-   * @returns {object}
-   */
   getState() {
     const state = { totalTime: this.totalTime };
     for (const [key, sub] of Object.entries(this.subsystems)) {
@@ -777,10 +702,6 @@ export class SubsystemEvents {
     return state;
   }
 
-  /**
-   * Restore state from save data.
-   * @param {object} data
-   */
   restore(data) {
     if (!data) return;
     if (data.totalTime !== undefined) this.totalTime = data.totalTime;

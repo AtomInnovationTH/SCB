@@ -1,24 +1,22 @@
 /**
- * MissionGasTally - "this mission's" engine gas, for the range map's second gas line (range-map lane, D4; owner 2026-10-25 "keep it real":
- * only catches with leftover gas add range, and the map shows what the catches gave so the link is visible but small).
+ * @module systems/MissionGasTally — "this mission's" engine gas, for the range map's second gas line (DECISIONS §42
+ * row 3: only catches with leftover gas add range; the map shows what the catches gave so the link is visible but small).
  *
- * Two numbers in kilograms since the last mark: `gainedKg` (what salvage loaded: `ResourceSystem.salvageGasKg`) and `usedKg` (what her own
- * moves drew from the engine pool: `ResourceSystem.xenonDrawnKg`: the autopilot's approach and hold, recoil, dodges, steering). A trip's burn is
- * NOT counted: it is the choice the map shows (the list prices it), not the mission's cost. The tally reads the cumulative counters each frame
- * and keeps its own baseline, so a counter that drops (ResourceSystem.reset() / restore() on a new game or a continue) never makes a number
- * negative: the drop is a rebase.
+ * Two numbers in kilograms since the last mark: `gainedKg` (what salvage loaded: `ResourceSystem.salvageGasKg`) and
+ * `usedKg` (what her own moves drew from the engine pool: `ResourceSystem.xenonDrawnKg`: the autopilot's approach and
+ * hold, recoil, dodges, steering). A trip's burn is NOT counted: it is the choice the map shows (the list prices it),
+ * not the mission's cost. The tally reads the cumulative counters each frame and keeps its own baseline, so a counter
+ * that drops (ResourceSystem.reset() / restore() on a new game or a continue) never makes a number negative: the drop
+ * is a rebase.
  *
- * Marks: a where-next pick (the mission is over, including "Stay here"), a new game, a continue. `undo()` puts back what the last mark cleared (a refused
- * pick re-opens the list).
- *
- * @module systems/MissionGasTally
+ * Marks: a where-next pick (the mission is over, including "Stay here"), a new game, a continue. `undo()` puts back
+ * what the last mark cleared (a refused pick re-opens the list).
  */
 
 const finite = (v) => (Number.isFinite(v) ? v : null);
 
 export class MissionGasTally {
   /**
-   * @param {object} [deps]
    * @param {function} [deps.counters]  () => {xenonDrawnKg, salvageGasKg} (the ResourceSystem); null / missing = both stay 0
    * @param {function} [deps.isBurning] () => boolean: true while a trip burns (TransferTrip's `isTripBurning`)
    */
@@ -30,7 +28,7 @@ export class MissionGasTally {
     this._prev = null;
     this._lastDrawn = null;
     this._lastSalvage = null;
-    this._wasBurning = false;     // a trip burned on the previous look (F1.5: its last chunk is billed on the very frame it ends)
+    this._wasBurning = false;     // a trip burned on the previous look (its last chunk is billed on the very frame it ends)
   }
 
   /** Kilograms her own moves drew since the mark (a trip's burn excluded). */
@@ -58,7 +56,7 @@ export class MissionGasTally {
     this._lastSalvage = c ? c.salvage : null;
   }
 
-  /** The last mark was a refused pick: the numbers it cleared come back (nothing else changed in between). */
+  /** The last mark was a refused pick: the numbers it cleared come back. */
   undo() {
     if (!this._prev) return;
     this._used += this._prev.used;
@@ -67,9 +65,10 @@ export class MissionGasTally {
   }
 
   /**
-   * Once per frame: take what the counters moved since the last look. A draw counts as her own move only if no trip burned on this frame or the
-   * previous one: `TransferTrip._end` bills the trip's last chunk and clears `isTripBurning()` in the same frame, so the frame after a burn still
-   * carries burn gas (F1.5; the first frame of a burn is covered by the flag already being set when the trip bills).
+   * Once per frame: take what the counters moved since the last look. A draw counts as her own move only if no trip
+   * burned on this frame or the previous one: `TransferTrip._end` bills the trip's last chunk and clears
+   * `isTripBurning()` in the same frame, so the frame after a burn still carries burn gas (the first frame of a burn
+   * is covered by the flag already being set when the trip bills).
    */
   update() {
     const burning = !!this._burning();
@@ -88,12 +87,9 @@ export class MissionGasTally {
 }
 
 /**
- * Wire a tally to the events that end or begin a mission (main.js, next to the range map): a where-next pick clears it (`WHERE_NEXT {open: false}`,
- * "Stay here" included), a refused pick that puts the list back (`{open: true, again: true}`) restores it, and a new game, a retry or a continue clear it.
- * @param {MissionGasTally} tally
- * @param {{on: function}} bus the event bus
- * @param {object} Events the Events table
- * @returns {function} unsubscribe all
+ * Wire a tally to the events that end or begin a mission (main.js, next to the range map): a where-next pick clears it
+ * (`WHERE_NEXT {open: false}`, "Stay here" included), a refused pick that puts the list back (`{open: true, again:
+ * true}`) restores it, and a new game, a retry or a continue clear it. Returns unsubscribe-all.
  */
 export function bindMissionGasTally(tally, bus, Events) {
   const offs = [

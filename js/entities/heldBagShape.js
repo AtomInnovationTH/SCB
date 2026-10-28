@@ -1,20 +1,19 @@
 /**
- * heldBagShape.js — where a net's bag sits round the catch it holds: the ONE pure home (lane net-cinch, 2026-10-20).
+ * heldBagShape.js - where a net's bag sits round the catch it holds: the ONE pure home.
  *
- * A net is built as the 6.8 m flight cone. Once it has closed on its catch it is drawn as a compact bag (CaptureNetVisual
- * `_shapeHeldBag`): the apex ball (where the tether ends, the bag's "neck") touches the rear of the catch, one DRAWN radius
- * behind its centre, on the tow line from the launcher's ring to the catch, but never closer to that ring than the ring
- * can seat it. Three places need the same point in the same frame: the visual draws the bag there, CaptureNet seats the
- * net's position there while a daughter holds the catch, and ArmUnit `_rhSyncBag` winds the line to it (the line's length
- * is muzzle -> neck). They all call this module, so the sim measures to the point the picture draws.
+ * A net is built as the 6.8 m flight cone. Once it has closed on its catch it is drawn as a compact bag (CaptureNetVisual `_shapeHeldBag`):
+ * the apex ball (where the tether ends, the bag's "neck") touches the rear of the catch, one DRAWN radius behind its centre, on the tow line
+ * from the launcher's ring to the catch, but never closer to that ring than the ring can seat it. Three places need the same point in the
+ * same frame: the visual draws the bag there, CaptureNet seats the net's position there while a daughter holds the catch, and ArmUnit
+ * `_rhSyncBag` winds the line to it (the line's length is muzzle -> neck). They all call this module, so the sim measures to the point
+ * the picture draws.
  *
- * Units: `c` (the catch centre), `ring` and the results are SCENE units, `rS` too. Nothing here allocates (callers pass
- * scratch vectors; plain {x,y,z} objects work as well as THREE.Vector3).
+ * Units: `c` (the catch centre), `ring`, `rS` and the results are SCENE units. Nothing here allocates (callers pass scratch vectors; plain
+ * {x,y,z} objects work as well as THREE.Vector3).
  *
- * The ring is the mother's capture ring (berth collar) for a mother net and the daughter's net-launcher MUZZLE for a
- * daughter's net. A daughter's neck also keeps `HELD_BAG.HUB_RADIUS_M` off the muzzle along the tow line (`standM`): the
- * apex ball is 5 cm in radius and the muzzle is the front face of her net launcher, so a neck AT the muzzle would sink the
- * ball into her hull.
+ * The ring is the mother's capture ring (berth collar) for a mother net and the daughter's net-launcher MUZZLE for a daughter's net. A
+ * daughter's neck also keeps `HELD_BAG.HUB_RADIUS_M` off the muzzle along the tow line (`standM`): the apex ball is 5 cm in radius and the
+ * muzzle is the front face of her net launcher, so a neck AT the muzzle would sink the ball into her hull.
  *
  * @module entities/heldBagShape
  */
@@ -38,17 +37,16 @@ export const HELD_BAG = Object.freeze({
 });
 
 /**
- * The radius the catch is DRAWN at, scene units: the instance's render scale times its bounding radius, deflated by the
- * digestion chop. No floor.
+ * The radius the catch is DRAWN at, scene units: the instance's render scale times its bounding radius, deflated by the digestion chop. No floor.
  * @param {object} d the catch
  * @param {number|null} [chopMul=null]
  * @returns {number}
  */
 export function drawnCatchRadiusScene(d, chopMul = null) {
-  // u20-nets: a scoop bag is a ball of radius `sizeMeter / 2` (its `type` is the heaviest member's, whose mesh is not the bag's
-  // shape): the net's wrap goes round that ball, at true size, no readability floor.
+  // a scoop bag is a ball of radius `sizeMeter / 2` (its `type` is the heaviest member's, whose mesh is not the bag's shape): the net's wrap
+  // goes round that ball, at true size, no readability floor
   if (d.isBag === true && d.sizeMeter > 0) return (d.sizeMeter / 2) * M * (chopMul != null ? chopMul : 1);
-  DebrisWireframe.getGeometry(d.type, d.id);            // fills the bounding-radius cache
+  DebrisWireframe.getGeometry(d.type, d.id);
   const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
   let renderScale = DebrisField.effectiveRenderScale(d);
   if (chopMul != null) renderScale *= chopMul;
@@ -66,8 +64,8 @@ export function heldBagRadiusScene(d, chopMul = null) {
 }
 
 /**
- * The bag's axis (unit, local -Z of the bag group points along it): from the launch direction (g = 0) to the tow line
- * ring -> catch (g = 1), so a bag hauled in from off-centre lines up with its tether.
+ * The bag's axis (unit; local -Z of the bag group points along it): from the launch direction (g = 0) to the tow line ring -> catch (g = 1),
+ * so a bag hauled in from off-centre lines up with its tether.
  * @param {{x:number,y:number,z:number,set?:Function}} L receives the unit axis
  * @param {{x:number,y:number,z:number}} c catch centre, scene units
  * @param {{x:number,y:number,z:number}|null} ring the launcher's ring (null: launch direction only)
@@ -95,8 +93,8 @@ export function heldBagAxisInto(L, c, ring, fallbackDir, g = 1) {
 }
 
 /**
- * How far behind the catch's centre the neck sits, scene units: touching the rear of the catch, but never behind the ring
- * (a catch drawn larger than its seat would put the neck inside the ship), `standM` metres of clearance kept off it.
+ * How far behind the catch's centre the neck sits, scene units: touching the rear of the catch, but never behind the ring (a catch drawn
+ * larger than its seat would put the neck inside the ship), `standM` metres of clearance kept off it.
  * @param {number} rS the bag's sizing radius (`heldBagRadiusScene`)
  * @param {{x:number,y:number,z:number}} c
  * @param {{x:number,y:number,z:number}|null} ring
@@ -116,8 +114,8 @@ export function heldBagBack(rS, c, ring, L, standM = 0) {
 const _L = { x: 0, y: 0, z: 1 };
 
 /**
- * A closed bag's neck for the catch `c` held on a line from `ring` (g = 1): `c - axis * back`. The simulation's form
- * (CaptureNet seats the held net's position there; ArmUnit winds the line to it). Returns the neck in `out`.
+ * A closed bag's neck for the catch `c` held on a line from `ring` (g = 1): `c - axis * back`. The simulation's form (CaptureNet seats the
+ * held net's position there; ArmUnit winds the line to it). Returns the neck in `out`.
  * @param {{x:number,y:number,z:number}} out receives the neck, scene units
  * @param {{x:number,y:number,z:number}} c catch centre, scene units
  * @param {{x:number,y:number,z:number}} ring muzzle (daughter) / capture ring (mother), scene units

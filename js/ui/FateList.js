@@ -1,29 +1,26 @@
 /**
- * FateList - the fate list: what to do with a big caught piece (Nets step 3 slice 5, lane 5c; plan C6, L2, L3; DECISIONS §33 rows 16-17).
- * A big piece pays when it is disposed of, not at the catch (js/systems/BigPieces.js), so this panel is where she picks the way:
- * hand it to a satellite, push it down, fit a drag sail, keep it aboard, or melt it. Built on the pattern of ui/WhereNextList.js, with
- * its own id, title and hints (WhereNextList.js is not touched).
+ * FateList - the fate list: what to do with a big caught piece (DECISIONS §33 rows 16-17).
+ * A big piece pays when disposed of, not at the catch (js/systems/BigPieces.js): hand it to a satellite, push it down,
+ * fit a drag sail, keep it aboard, or melt it. Same pattern as ui/WhereNextList.js, with its own id, title and hints.
  *
- * It owns no game state. It reads the pending pieces through `getPieces()` (BigPieces.pendingAboard: oldest catch first) and the words
- * of each through `getRows(piece)` (js/systems/FateRows.js: the values and the five rows from her live numbers). A pick calls
- * `setFate(id, fate)` (GameFlowManager.setFate) and, ONLY when that returned true, emits `Events.BIG_PIECE_FATE {debrisId, fate}` for
- * the executor of that fate, says one plain line and closes. It refreshes on `BIG_PIECE_DISPOSED`, once a second while open, and
- * closes when nothing is left.
+ * Owns no game state. `getPieces()` gives the pending pieces (BigPieces.pendingAboard: oldest catch first),
+ * `getRows(piece)` the words (js/systems/FateRows.js). A pick calls `setFate(id, fate)` (GameFlowManager.setFate)
+ * and, ONLY when that returned true, emits `Events.BIG_PIECE_FATE {debrisId, fate}` for the fate's executor, says one
+ * plain line and closes. Refreshes on `BIG_PIECE_DISPOSED` and once a second while open; closes when nothing is left.
  *
- * Opening: U (InputManager calls `toggleFromKey`) on floors 2-4, or the CHOOSE chip on glass (it presses U), only with a big piece
- * aboard. While it is open `onOpenChange(true)` lets the host hide the where-next list (it stays pending and comes back on close).
+ * Opens with U (InputManager calls `toggleFromKey`) on floors 2-4, or the CHOOSE chip on glass (it presses U), only
+ * with a big piece aboard. While open, `onOpenChange(true)` lets the host hide the where-next list.
  *
- * Three big choices, chosen by rule (FateRows.pickChoices: the easiest fate that pays, the best-paying other, keep), each a bold action, the
- * money on the right and one dim sub-line; under a rule a small dim DETAILS block: the "Also" rows (other fates she can still pick), what is
- * not possible now, the owner and the values. The model keeps all five fates; the box paints from `choices`, `also` and `details`.
+ * Three big choices by rule (FateRows.pickChoices: easiest fate that pays, best-paying other, keep); under them a
+ * DETAILS block: the "Also" rows (other pickable fates) and plain lines. The model keeps all five fates.
  *
- * Keys (only while open; a capture listener on the window, so the ladder's arrows and Tab never see them):
+ * Keys (while open; a window capture listener, so the ladder's arrows and Tab never see them):
  *   Left / Right  the previous / next piece ("1 of 3")        Up / Down / Tab  the previous / next choice, then the "Also" rows
  *   Enter / Space pick the focused row                         Esc / U          close
- * Touch / mouse: a tap on a row focuses it, tapping the focused row picks it; the tabs and the close button are 44 px targets on glass.
+ * Touch / mouse: a tap focuses a row, tapping the focused row picks it; tabs and close are 44 px targets on glass.
  *
- * DOM-guarded: with no document nothing is built and every method still answers (headless-safe); inline styles and only
- * createElement / appendChild / removeChild / setAttribute / textContent / addEventListener, so a tiny fake DOM runs it.
+ * DOM-guarded (no document: nothing built, every method still answers). Only createElement / appendChild /
+ * removeChild / setAttribute / textContent / addEventListener, so a tiny fake DOM runs it.
  *
  * @module ui/FateList
  */
@@ -35,12 +32,12 @@ import { pieceName } from '../systems/BigPieces.js';
 
 export const FATE_LIST_ID = 'fate-list';
 export const TITLE_TEXT = 'WHAT TO DO WITH IT';
-/** Row / button height on glass (the 44 px touch target) and with a pointer. */
+/** Row / button height (px): glass (touch target) and pointer. */
 export const ROW_PX_GLASS = 44;
 export const ROW_PX_DESKTOP = 28;
-/** Real-time interval between rebuilds while open (ms): the gas, her mass and the stock change while she thinks. */
+/** Real-time ms between rebuilds while open (gas, mass and stock change while she thinks). */
 export const REFRESH_MS = 1000;
-/** Where it sits: exactly where the where-next list sits (bottom centre, 164 px up, 580 px wide, never past the top HUD strip). */
+/** Sits exactly where the where-next list sits (bottom centre, never past the top HUD strip). */
 export const BOTTOM_PX = 164;
 export const WIDTH_PX = 580;
 export const TOP_CLEAR_PX = 280;
@@ -48,14 +45,14 @@ export const MAX_HEIGHT_CSS = `calc(100vh - ${BOTTOM_PX + TOP_CLEAR_PX}px)`;
 export const STOPPED_EVENTS = ['pointerdown', 'pointerup', 'pointermove', 'touchstart', 'touchmove', 'touchend', 'mousedown', 'mouseup', 'click'];
 export const HINT_DESKTOP = '\u2190 \u2192 other piece \u00b7 \u2191 \u2193 choice \u00b7 Enter: choose \u00b7 U: close';
 export const HINT_GLASS = 'Tap a row, tap it again to choose';
-/** The floors the list opens on (the ladder's floors 2-4); no ladder (no floor number) opens anywhere. */
+/** Floors the list opens on; no ladder (no floor number) opens anywhere. */
 export const FLOORS = Object.freeze([2, 3, 4]);
 
 const MARK = '\u25b8';
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 const FLOOR4 = (FloorContract.byId(4) || { name: 'map' }).name;
 
-/** Painted sizes (CSS px) the panel uses, so a test can add up its height from the counts (an ESTIMATE: only a browser measures it). */
+/** Painted sizes (CSS px) for the height ESTIMATE; only a browser measures the real one. */
 export const LAYOUT_PX = Object.freeze({
   PAD: 18,              // padding 8 + 8 and the 1 px border either side
   HEAD_TEXT: 20,        // the title line (the close button is `px` tall)
@@ -68,10 +65,7 @@ export const LAYOUT_PX = Object.freeze({
   HINT: 20,
 });
 
-/**
- * A model with the choice fields filled in: a model that has no `choices` (a host's own, older shape) shows every row that can be picked as a choice.
- * @param {object} m a `buildFateRows` result or an older-shaped one @returns {object}
- */
+/** Fills in the choice fields: a model with no `choices` (a host's own, older shape) shows every pickable row as a choice. */
 export function normalizeModel(m) {
   const rows = m.rows.map((r) => ({ ...r, label: r.label != null ? r.label : r.text, money: r.money || '', sub: r.sub || '' }));
   const hasChoices = Array.isArray(m.choices);
@@ -80,11 +74,7 @@ export function normalizeModel(m) {
   return { ...m, rows, choices, also, details: Array.isArray(m.details) ? m.details : [] };
 }
 
-/**
- * The height the open panel needs, from the counts: the head, the piece line, one big row per choice, the details (an "Also" row each, then the
- * wrapped detail lines) and the hint. An estimate at the CSS heights above (the real pixels are a browser's).
- * @param {{choices: string[], also: string[], details: string[]}} m @param {boolean} glass @returns {number} px
- */
+/** Estimated open-panel height (px) from the counts, at the LAYOUT_PX heights. */
 export function estimateHeightPx(m, glass) {
   const px = glass ? ROW_PX_GLASS : ROW_PX_DESKTOP;
   const L = LAYOUT_PX;
@@ -96,7 +86,7 @@ export function estimateHeightPx(m, glass) {
   return h + 6 + L.HINT;
 }
 
-/** The one line a pick says (the executor of the fate says the rest when it acts). @param {string} fate @param {string} name @param {boolean} berthed */
+/** The one line a pick says; the fate's executor says the rest when it acts. */
 export function pickLine(fate, name, berthed) {
   switch (fate) {
     case 'keep': return `Keeping the ${name} aboard.`;
@@ -111,19 +101,17 @@ export function pickLine(fate, name, berthed) {
 export class FateList {
   /**
    * @param {object} deps
-   * @param {Document|null} [deps.doc]       document (default the global one; null = headless)
-   * @param {Element} [deps.parent]          where the panel goes (default doc.body)
+   * @param {Document|null} [deps.doc]       default the global one; null = headless
+   * @param {Element} [deps.parent]          default doc.body
    * @param {object} [deps.win]              where the key listener goes (default the global window)
-   * @param {object} [deps.bus]              event bus (default the game's)
    * @param {function} deps.getPieces        () => [{debris, holder, fate}] (BigPieces.pendingAboard)
    * @param {function} deps.getRows          (debris) => buildFateRows result
    * @param {function} deps.setFate          (id, fate) => boolean (GameFlowManager.setFate)
    * @param {function} [deps.glass]          () => true on a touch screen (44 px targets, tap wording)
-   * @param {function} [deps.isInputBlocked] () => true when the game would swallow the key (paused, not gameplay, codex / help open)
+   * @param {function} [deps.isInputBlocked] () => true when the game would swallow the key (paused, codex / help open)
    * @param {function} [deps.getFloor]       () => the ladder's floor number, or null (no ladder)
    * @param {function} [deps.inGameplay]     () => false closes the list (a menu, the shop)
-   * @param {function} [deps.onOpenChange]   (open) => void (the host hides / returns the where-next list)
-   * @param {function} [deps.now]            ms clock (tests)
+   * @param {function} [deps.onOpenChange]   (open) => void
    * @param {boolean}  [deps.poll=true]      false = no refresh timer (tests call `tick`)
    */
   constructor(deps = {}) {
@@ -161,31 +149,25 @@ export class FateList {
     on(Events.GAME_RESET, () => this.close());
   }
 
-  // ── State ──────────────────────────────────────────────────────────────────
-
   isOpen() { return this._open && !this._disposed; }
 
   /** The pending pieces as last read: [{id, name, holder, fate}] (a copy). */
   pieces() { return this._pieces.map((p) => ({ id: p.debris.id, name: pieceName(p.debris), holder: p.holder, fate: p.fate })); }
   /** 0-based index of the shown piece, or -1. */
   index() { return this._pieces.findIndex((p) => p.debris.id === this._pieceId); }
-  /** The shown piece's id, or null. */
   pieceId() { return this._pieceId; }
   /** The shown piece's rows as built: [{id, text, label, money, sub, selectable, state, current, focused}], all five fates (a copy). */
   rows() { return this._model ? this._model.rows.map((r) => ({ ...r, focused: r.id === this._focusId })) : []; }
-  /** The ids of the big choices, in order (a copy). */
   choices() { return this._model ? this._model.choices.slice() : []; }
-  /** The ids of the "Also" rows (pickable, shown small under the choices), in order (a copy). */
+  /** Ids of the "Also" rows (pickable, shown small under the choices). */
   also() { return this._model ? this._model.also.slice() : []; }
-  /** The ids the keys and taps walk, in order: the choices, then the "Also" rows. */
   focusOrder() { return this._model ? this._model.choices.concat(this._model.also) : []; }
-  /** The detail lines under the choices ("Not possible now: ...", "Owner: ...", "Values: ..."), a copy. */
+  /** Detail lines under the choices ("Not possible now: ...", "Owner: ...", "Values: ..."). */
   details() { return this._model ? this._model.details.slice() : []; }
-  /** The shown piece's whole model (values, progress, picked), or null. */
   model() { return this._model; }
   focusedId() { return this._focusId; }
 
-  /** @private the ladder's floor allows the list (floors 2-4; no ladder = any). */
+  /** @private floors 2-4; no ladder = any. */
   _floorOk() {
     if (!this._getFloor) return true;
     let f = null;
@@ -193,13 +175,13 @@ export class FateList {
     return f == null || FLOORS.includes(f);
   }
 
-  /** @private the game would swallow the key; a throwing getter counts as blocked. */
+  /** @private a throwing getter counts as blocked. */
   _blocked() {
     if (!this._blockedFn) return false;
     try { return !!this._blockedFn(); } catch (_e) { return true; }
   }
 
-  /** Is there something to choose for, and may the list open now (a big piece aboard, floors 2-4, not blocked)? */
+  /** A big piece aboard, floors 2-4, not blocked. */
   canOpen() {
     if (this._disposed || this._blocked() || !this._floorOk()) return false;
     let ps = [];
@@ -207,14 +189,14 @@ export class FateList {
     return ps.length > 0;
   }
 
-  /** The U key: opens when it can, closes when open. @returns {boolean} the key was used (opened or closed) */
+  /** @returns {boolean} the key was used (opened or closed) */
   toggleFromKey() {
     if (this._disposed) return false;
     if (this._open) { this.close(); return true; }
     return this.open();
   }
 
-  /** Open on the oldest pending piece (or the one shown last, if still pending). @returns {boolean} it is open */
+  /** Opens on the oldest pending piece (or the one shown last, if still pending). @returns {boolean} it is open */
   open() {
     if (this._disposed) return false;
     if (this._open) return true;
@@ -222,14 +204,13 @@ export class FateList {
     this._open = true;
     this._build();
     this._rebuild(true);
-    if (!this._open) return false;           // (nothing left after the read)
+    if (!this._open) return false;           // nothing left after the read
     this._show(true);
     this._startTimer();
     this._changed(true);
     return true;
   }
 
-  /** Close (nothing is picked). */
   close() {
     if (!this._open) return false;
     this._open = false;
@@ -239,15 +220,12 @@ export class FateList {
     return true;
   }
 
-  /** @private tell the host the open state moved. */
   _changed(open) {
     if (!this._onOpenChange) return;
     try { this._onOpenChange(open); } catch (_e) { /* a host never breaks the list */ }
   }
 
-  // ── Model ──────────────────────────────────────────────────────────────────
-
-  /** @private read the pieces and the shown piece's rows; `preFocus`: take the rebuild's pre-focus instead of keeping the focus. */
+  /** @private `preFocus`: take the rebuild's pre-focus instead of keeping the focus. */
   _rebuild(preFocus) {
     let ps = [];
     try { ps = this._getPieces() || []; } catch (_e) { ps = []; }
@@ -273,7 +251,7 @@ export class FateList {
     this._paint();
   }
 
-  /** About once a second while open: rebuild (focus kept), and close when she leaves the floors or the game. Called by the timer. */
+  /** Timer call, about once a second while open: rebuild (focus kept); close when she leaves the floors or the game. */
   tick(nowMs) {
     if (!this.isOpen()) return;
     if ((this._inGameplay && !this._safe(this._inGameplay, true)) || !this._floorOk()) { this.close(); return; }
@@ -282,23 +260,18 @@ export class FateList {
     this._rebuild(false);
   }
 
-  /** @private */
   _safe(fn, dflt) { try { return fn(); } catch (_e) { return dflt; } }
 
-  /** @private */
   _startTimer() {
     if (!this._poll || this._timer != null || typeof setInterval !== 'function') return;
     this._timer = setInterval(() => this.tick(), REFRESH_MS);
     if (this._timer && typeof this._timer.unref === 'function') this._timer.unref();
   }
 
-  /** @private */
   _stopTimer() {
     if (this._timer != null && typeof clearInterval === 'function') clearInterval(this._timer);
     this._timer = null;
   }
-
-  // ── Input ──────────────────────────────────────────────────────────────────
 
   /** Show the previous / next pending piece (wraps). @returns {boolean} the piece changed */
   step(dir) {
@@ -310,7 +283,7 @@ export class FateList {
     return true;
   }
 
-  /** Move the focus to the next / previous choice, then the "Also" rows (wraps). @returns {boolean} the focus moved */
+  /** Focus the next / previous choice, then the "Also" rows (wraps). @returns {boolean} the focus moved */
   focusStep(dir) {
     if (!this.isOpen() || !this._model) return false;
     const sel = this.focusOrder();
@@ -321,7 +294,6 @@ export class FateList {
     return true;
   }
 
-  /** Pick the focused row (Enter). @returns {boolean} the pick was made */
   pickFocused() {
     if (!this.isOpen()) return false;
     const r = this._model && this.focusOrder().includes(this._focusId) && this._model.rows.find((x) => x.id === this._focusId);
@@ -329,7 +301,7 @@ export class FateList {
     return this._pick(r.id);
   }
 
-  /** A tap / click on row `id`: focus it, or pick it when it already has the focus. Rows that cannot be picked or are not on the list ignore it. */
+  /** A tap on row `id`: focus it, or pick it when it already has the focus. Unpickable or unlisted rows ignore it. */
   tapRow(id) {
     if (!this.isOpen() || this._blocked()) return false;
     const r = this._model && this.focusOrder().includes(id) && this._model.rows.find((x) => x.id === id);
@@ -340,10 +312,7 @@ export class FateList {
     return false;
   }
 
-  /**
-   * The pick: `setFate` first; ONLY when it said true does the executor's event go out, one line is said and the list closes.
-   * @private @param {string} fate @returns {boolean}
-   */
+  /** @private `setFate` first; ONLY when it said true does the executor's event go out, one line is said and the list closes. */
   _pick(fate) {
     const id = this._pieceId;
     if (id == null) return false;
@@ -351,18 +320,15 @@ export class FateList {
     const berthed = !!(this._model && this._model.berthed);
     let ok = false;
     try { ok = !!this._setFate(id, fate); } catch (_e) { ok = false; }
-    if (!ok) { this._rebuild(false); return false; }      // refused (the piece moved on, the furnaces have it): fresh rows
+    if (!ok) { this._rebuild(false); return false; }      // refused (piece moved on, furnaces have it): fresh rows
     const text = pickLine(fate, name, berthed);
     if (text) this._bus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority: 'info', _keep: true });
-    this._bus.emit(Events.BIG_PIECE_FATE, { debrisId: id, fate });     // (the executor may dispose of the piece at once: its own line follows ours)
+    this._bus.emit(Events.BIG_PIECE_FATE, { debrisId: id, fate });     // the executor may dispose of the piece at once: its own line follows ours
     this.close();
     return true;
   }
 
-  /**
-   * One key while open. @param {string} code KeyboardEvent.code @param {{shiftKey?: boolean}} [e]
-   * @returns {boolean} the key was taken (the caller stops it reaching the ladder and the game)
-   */
+  /** @param {string} code KeyboardEvent.code @returns {boolean} the key was taken (it must not reach the ladder or the game) */
   handleKey(code, e = {}) {
     if (!this.isOpen() || this._blocked()) return false;
     switch (code) {
@@ -377,16 +343,15 @@ export class FateList {
     }
   }
 
-  /** @private the window's capture listener: a taken key goes no further. */
   _onWindowKey(e) {
     if (!this.isOpen() || !e) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    // s5 gaps S1: a U PRESSED ON THE WINDOW ITSELF (KeyDispatch.pressKey, which the CHOOSE button and the ticker chip use) reaches
-    // this capture listener AFTER InputManager's bubble listener: at the target a browser runs listeners in the order they were
-    // added, not capture first. InputManager has already toggled the list for that event, so closing it here would undo the tap.
-    // A real keystroke starts at the page, runs this listener first and is consumed here; InputManager never sees it.
+    // A U PRESSED ON THE WINDOW ITSELF (KeyDispatch.pressKey: the CHOOSE button and the ticker chip) reaches this capture
+    // listener AFTER InputManager's bubble listener (at the target, listeners run in the order added). InputManager has
+    // already toggled the list, so closing it here would undo the tap. A real keystroke runs this listener first and
+    // is consumed here: InputManager never sees it.
     if (e.code === 'KeyU' && this._win && e.target === this._win) return;
     if (this.handleKey(e.code, e)) {
       if (typeof e.preventDefault === 'function') e.preventDefault();
@@ -395,9 +360,6 @@ export class FateList {
     }
   }
 
-  // ── DOM ────────────────────────────────────────────────────────────────────
-
-  /** @private build the root once (hidden). */
   _build() {
     if (this._built) return;
     const doc = this._doc;
@@ -423,7 +385,6 @@ export class FateList {
     this._parentEl = parent;
   }
 
-  /** @private */
   _show(on) {
     if (on) this._build();
     if (!this._root) return;
@@ -431,7 +392,6 @@ export class FateList {
     this._root.setAttribute('aria-hidden', on ? 'false' : 'true');
   }
 
-  /** @private a 44 px (glass) / 28 px button: a plain div that takes taps. */
   _button(label, px, onTap, act) {
     const el = this._doc.createElement('div');
     el.setAttribute('role', 'button');
@@ -445,14 +405,13 @@ export class FateList {
     return el;
   }
 
-  /** @private where the shown piece is held, in words. */
   _heldText() {
     const e = this._pieces.find((p) => p.debris.id === this._pieceId);
     if (!e) return '';
     return e.holder === 'collar' ? 'at your nose' : 'on a daughter';
   }
 
-  /** @private repaint into the root (write-on-change by the whole text). */
+  /** @private repaint; write-on-change by the whole text. */
   _paint() {
     if (!this._root || !this._model) return;
     const doc = this._doc;
@@ -469,7 +428,6 @@ export class FateList {
     this._rowEls = [];
     const add = (el) => { this._root.appendChild(el); this._rowEls.push(el); return el; };
 
-    // head: title and the close button
     const head = doc.createElement('div');
     Object.assign(head.style, { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' });
     const title = doc.createElement('span');
@@ -479,7 +437,7 @@ export class FateList {
     head.appendChild(this._button('\u00d7', px, () => this.close(), 'close'));
     add(head);
 
-    // the piece: "1 of 3" with the tabs, then its name and where it is held
+    // "1 of 3" with the tabs, then name and where it is held
     const tabs = doc.createElement('div');
     Object.assign(tabs.style, { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' });
     if (n > 1) tabs.appendChild(this._button('\u25c2', px, () => this.step(-1), 'prev'));
@@ -492,8 +450,6 @@ export class FateList {
     Object.assign(what.style, { color: VisualLaw.COLORS.SELECTION, marginLeft: '6px' });
     tabs.appendChild(what);
     add(tabs);
-
-    // (the old value lines are gone: their content is in the details under the choices)
 
     if (m.progress) {
       const pr = doc.createElement('div');
@@ -524,7 +480,7 @@ export class FateList {
       return mark;
     };
 
-    // the big choices: number, bold action on the left, money on the right, one dim sub-line
+    // big choices: number, bold action left, money right, one dim sub-line
     m.choices.forEach((id, i) => {
       const r = rowOf(id);
       if (!r) return;
@@ -549,7 +505,7 @@ export class FateList {
       add(row);
     });
 
-    // the details: a rule, a small dim label, the "Also" rows (pickable), then the plain lines (not pickable)
+    // details: rule, dim label, "Also" rows (pickable), then plain lines (not pickable)
     if (m.also.length || m.details.length) {
       const rule = doc.createElement('div');
       Object.assign(rule.style, { borderTop: `1px solid ${VisualLaw.COLORS.INFO}`, opacity: '0.3', marginTop: '8px' });
@@ -585,7 +541,7 @@ export class FateList {
     add(hint);
   }
 
-  /** The text of the DOM as painted, one string per element (tests); the divider rule has no text and is left out. */
+  /** Painted DOM text, one string per element (tests). */
   domText() {
     return this._rowEls.map((el) => {
       const kids = el.children ? Array.from(el.children) : [];
@@ -593,7 +549,6 @@ export class FateList {
     }).filter((t) => t !== '');
   }
 
-  /** The panel's root element (tests / layout probes), or null. */
   get element() { return this._root; }
 
   dispose() {

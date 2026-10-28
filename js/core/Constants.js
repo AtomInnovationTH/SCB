@@ -2149,7 +2149,6 @@ export const Constants = {
     // ── Recoil Safety (NEW — ST-9.3 C-3) ──
     HIGH_RECOIL_ALPHA_LOW:  Math.PI / 6,     // rad (30°) — below this = high axial recoil
     HIGH_RECOIL_ALPHA_HIGH: 5 * Math.PI / 6, // rad (150°) — above this = high axial recoil
-    HINGE_SETTLE_TIME: 0.5,                   // seconds — auto-unlock delay after fire recoil settles
 
     // ── 3-Plane Layout (NEW) ──
     ROSA_PLANE_AZIMUTH: 0,         // rad (0° and 180° plane)
@@ -2290,7 +2289,6 @@ export const Constants = {
     WING_CLAMP_RELATCH_TILT_DEG: 0.5,  // deg — both wing tilts within this of 0 lets the re-stow latch close (owner 2026-09-25; tilt then snaps to exactly 0)
 
     // ── Hinge (NEW) ──
-    HINGE_LOCK_TORQUE: 1000,       // N·m
     HINGE_MOTOR_TORQUE: 10,        // N·m
     HINGE_BEARING: 'Si3N4_MoS2',
 
@@ -2800,18 +2798,7 @@ export const Constants = {
     // pad fires a plume as it orbits into visual range (rate-limited, silent).
     LAUNCH_CAMEO:              true,
     LAUNCH_CAMEO_AMBIENT:      true,
-    COM_TRACKING:              false,  // ST-9.12 — center-of-mass tracking
-    THRUSTER_INTERLOCK:        false,  // ST-9.12 — plume geometry check
     SEMI_AUTO_AIM:             true,   // ST-9.3  — Mother auto-rotation aim (aim-before-launch)
-    LOCKABLE_HINGE:            false,  // ST-9.3  — ROTATE ↔ LOCKED hinge
-
-    // Manual-flight navigation aids: prograde/retrograde velocity markers +
-    // closure-rate/ETA readouts on the target reticle. OFF by default — the
-    // mother flies on autopilot and is nudged with the arrow keys, so KSP-style
-    // burn-vector tooling is just orbital flavor in the core loop. Reserved for
-    // advanced missions where the autopilot is degraded/damaged and the pilot
-    // must hand-fly the rendezvous. (AP heading cue rides along with these.)
-    MANUAL_NAV:                false,
 
     // NEW — ST-9.4 C-6: Capture Net System
     CAPTURE_NET:               true,   // ST-9.4  — full capture net projectile + inventory (P1 ON)
@@ -2973,21 +2960,11 @@ export const Constants = {
   },
 
   // =========================================================================
-  // CONFIG G HINGE STATES (NEW — for ST-9.3 #9)
-  // =========================================================================
-  HINGE_STATES: {
-    ROTATE: 'ROTATE',   // motor active, brake disengaged
-    LOCKED: 'LOCKED',   // brake engaged, motor off
-  },
-
-  // =========================================================================
   // CONFIG G PLUME CLEARANCE (NEW — for ST-9.12 #8)
   // =========================================================================
   PLUME_HALF_ANGLE: 35 * Math.PI / 180,  // rad — sourced: 25.5°±2.5° measured In-FEEP
                                          // beam divergence (LISA Pathfinder qualification) ×1.25
                                          // charge-exchange margin; a real shielded design caps at 60°
-  COM_DRIFT_WARN_THRESHOLD: 0.020,       // m (20mm)
-  COM_BALANCED_THRESHOLD: 0.005,         // m (5mm)
 
   // =========================================================================
   // MAIN THRUSTER NOZZLE GEOMETRY (NEW — ST-9.12 C-9, Gap #8)

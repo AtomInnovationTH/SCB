@@ -33,7 +33,6 @@ import { dividedByScale, onHudScaleChange, currentHudScale } from './HudScale.js
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
-import { updateDriftWarning, updateThrusterBlocks } from '../systems/CoMCalculator.js';
 import { FLOOR_WORDS } from '../systems/FloorWordsStore.js';   // u7 D6: the two orbit-word lines show in sentence case
 
 /** Camera view → HUD info-level mapping */
@@ -43,7 +42,6 @@ const VIEW_INFO_LEVELS = {
     showComms: true, showArms: true, showProgress: true, showWarnings: true,
     showAnalysis: true,
     showClosureRate: true,
-    showVelocityVectors: true,
     hudOpacity: 1.0, label: 'COCKPIT VIEW',
   },
   CHASE: {
@@ -51,7 +49,6 @@ const VIEW_INFO_LEVELS = {
     showComms: false, showArms: true, showProgress: false, showWarnings: true,
     showAnalysis: true,
     showClosureRate: true,
-    showVelocityVectors: true,
     hudOpacity: 0.85, label: 'COMMAND VIEW',
   },
   TARGET_LOCK: {
@@ -61,7 +58,6 @@ const VIEW_INFO_LEVELS = {
     showComms: false, showArms: true, showProgress: false, showWarnings: true,
     showAnalysis: true,
     showClosureRate: true,
-    showVelocityVectors: true,
     hudOpacity: 0.85, label: 'TARGET LOCK',
   },
   ORBIT: {
@@ -69,7 +65,6 @@ const VIEW_INFO_LEVELS = {
     showComms: false, showArms: false, showProgress: false, showWarnings: true,
     showAnalysis: false,
     showClosureRate: false,
-    showVelocityVectors: false,
     hudOpacity: 0.6, label: 'OVERVIEW',
   },
   // INSPECTION (2026-06-03 rev. 2): no longer a V-cycle view. Used by the
@@ -85,7 +80,6 @@ const VIEW_INFO_LEVELS = {
     showComms: false, showArms: true, showProgress: false, showWarnings: true,
     showAnalysis: true,
     showClosureRate: false,
-    showVelocityVectors: false,
     hudOpacity: 0.8, label: 'INSPECT',
   },
   ARM_PILOT: {
@@ -93,7 +87,6 @@ const VIEW_INFO_LEVELS = {
     showComms: true, showArms: true, showProgress: false, showWarnings: true,
     showAnalysis: true,
     showClosureRate: true,
-    showVelocityVectors: false,
     hudOpacity: 0.9, label: 'DAUGHTER PILOT',
   },
 };
@@ -2393,17 +2386,6 @@ export class HUD {
       this._updateTimers.resources = 0;
       this._resources = { ...player.resources };
 
-      // C-9: Compute CoM drift warning + plume blocks (at HUD rate, 10 Hz)
-      let comDriftM = 0;
-      let comSuggestedStowArm = null;
-      let plumeBlocks = {};
-      if (player.armManager) {
-        const driftState = updateDriftWarning(player.armManager, player);
-        comDriftM = driftState.offsetM;
-        comSuggestedStowArm = driftState.suggestedArm;
-        plumeBlocks = updateThrusterBlocks(player.armManager);
-      }
-
       // Attitude: live body angular rate (deg/s) for the rigid-body dynamics
       // readout. getAngularRate exists on the real player; guard for headless
       // mocks that don't implement it.
@@ -2419,9 +2401,6 @@ export class HUD {
         cargoStatus: data.cargoStatus,
         totalMassKg: this._totalMassKg || 0,
         thrusterInterlocked: player.thrusterInterlocked || false,
-        comDriftM,
-        comSuggestedStowArm,
-        plumeBlocks,
         angularRate,
         simple: this.isSimpleTargets(),   // z1-calm-scan D5: DAUGHTERS hides LAUNCH and ΔV on the simple level
       });

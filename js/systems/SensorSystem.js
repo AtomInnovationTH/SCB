@@ -1,12 +1,5 @@
 /**
- * SensorSystem.js — Sensor/detection management with tiers and range filtering
- *
- * Manages:
- *   • sensor range tiers (basic → enhanced → advanced)
- *   • range-gated target detection via DebrisField.getDebrisNear()
- *   • data enrichment levels (what info is resolved at what distance)
- *   • sensor upgrade tracking
- *
+ * SensorSystem.js — sensor range tiers, range-gated detection, distance-gated data enrichment, active scans
  * @module systems/SensorSystem
  */
 
@@ -16,10 +9,6 @@ import { powerDistribution } from './PowerDistribution.js';
 import { Constants } from '../core/Constants.js';
 import { wingsHint } from './WingsHint.js';
 import { clamp01 } from '../core/MathUtil.js';
-
-// ============================================================================
-// SENSOR TIER DEFINITIONS
-// ============================================================================
 
 /** @type {Object<string, {range:number, rangeKm:number, scanRate:number, dataFields:string[], description:string}>} */
 export const SENSOR_TIERS = {
@@ -46,10 +35,6 @@ export const SENSOR_TIERS = {
   },
 };
 
-// ============================================================================
-// DATA ENRICHMENT LEVELS  (distance-gated)
-// ============================================================================
-
 const DATA_LEVELS = {
   FAR:    { level: 0, label: 'Unresolved',  fields: ['type'] },
   MEDIUM: { level: 1, label: 'Classified',  fields: ['type', 'size', 'mass'] },
@@ -57,35 +42,24 @@ const DATA_LEVELS = {
   CLOSE:  { level: 3, label: 'Full Profile', fields: ['type', 'size', 'mass', 'material', 'tumbleRate', 'brittleness', 'orbit'] },
 };
 
-// ============================================================================
-// CLASS
-// ============================================================================
-
 export class SensorSystem {
   constructor() {
-    /** @type {string} */
     this.tier = 'basic';
 
     /** @type {number} Detection range in scene units */
     this.range = SENSOR_TIERS.basic.range;
 
-    /** @type {number} Scan speed multiplier */
     this.scanRate = SENSOR_TIERS.basic.scanRate;
 
-    /** @type {Array<object>} Last frame's detected targets */
     this.detectedTargets = [];
 
-    /** @type {boolean} Whether salvage scanner upgrade is active */
     this.canScanSalvage = false;
 
-    /** @type {number} Weather-based sensor range multiplier */
     this._weatherSensorMult = 1.0;
 
     /** @type {number} Seconds since last WEATHER_ACTIVE event */
     this._weatherLastUpdate = 0;
 
-    // === Active Scan State ===
-    /** @type {boolean} Whether a scan is currently in progress */
     this._scanActive = false;
     /** @type {string|null} Current scan type: 'quick' or 'wide' */
     this._scanType = null;
@@ -96,73 +70,57 @@ export class SensorSystem {
     /** @type {number} Wide scan cooldown remaining (seconds) */
     this._wideCooldown = 0;
 
-    // S2.4: Scan anti-spam — diminishing returns
-    /** @type {number} Total scans completed this session */
     this._scanCount = 0;
-    /** @type {number} Total credits earned from scans this session */
     this._scanCreditsTotal = 0;
     /**
-     * Field-based scan economy (2026-06-04): ground stations pay for NEW survey
-     * data about a debris field. The first scan of a given field is valuable;
-     * re-scanning the same field yields no new data (no reward) but still works
-     * functionally (reveals fresh arrivals, satisfies onboarding). Missions that
-     * span multiple fields therefore pay out once per distinct field surveyed.
-     * @type {Set<string>} field ids already paid out this session.
+     * Field ids already paid out this session. Ground stations pay for NEW survey data: the first scan of a field pays;
+     * re-scanning it yields no reward but still works (reveals fresh arrivals, satisfies onboarding).
+     * @type {Set<string>}
      */
     this._rewardedFields = new Set();
 
-    // Sprint 3: Skill-based gate — suppress sensor weather effects until scan discovered
+    // Skill gate: suppress sensor weather effects until the scan skill is discovered
     this._scanDiscovered = false;
     eventBus.on(Events.SKILL_DISCOVERED, (d) => {
         if (d?.skillId === 'scan_quick') this._scanDiscovered = true;
     });
 
-    // w2-heat D2 (DECISIONS §15 row 2 — "scanning costs battery and heat, like
-    // mana"): the ledger the scans pay into. null (menu hero, unit tests that
-    // never wire it) → scans stay free, exactly as before.
+    // DECISIONS §15 row 2 ("scanning costs battery and heat, like mana"): the ledger the scans pay into.
+    // null (menu hero, unit tests that never wire it) → scans stay free.
     /** @type {object|null} ResourceSystem — setResourceSystem() */
     this._resourceSystem = null;
     /** @type {Array<{remaining:number, rate:number}>} the computer's analysis loads still running */
     this._analysisJobs = [];
-    /** w4-power D6: true once this boot's first (cold, whole-sky) search has been paid. Not persisted. */
+    /** True once this boot's first (cold, whole-sky) search has been paid. Not persisted. */
     this._coldSearchDone = false;
 
-    // Listen for weather effects (suppressed until scan skill discovered)
     eventBus.on(Events.WEATHER_ACTIVE, (effects) => {
       if (!this._scanDiscovered) return;
       this._weatherSensorMult = effects.sensorRange ?? 1.0;
       this._weatherLastUpdate = 0;
     });
 
-    // S2.4: Reset scan anti-spam counters on game restart
     eventBus.on(Events.GAME_RESET, () => {
       this._scanCount = 0;
       this._scanCreditsTotal = 0;
       this._rewardedFields.clear();
-      this._analysisJobs.length = 0;   // w2-heat: a retry does not inherit a running analysis
-      this._coldSearchDone = false;    // w4-power D6: every start has no tracks yet
+      this._analysisJobs.length = 0;   // a retry does not inherit a running analysis
+      this._coldSearchDone = false;    // every start has no tracks yet
     });
 
     this._setupListeners();
   }
 
-  // ======================================================================
-  // DETECTION
-  // ======================================================================
-
   /**
-   * Return every debris piece within sensor range, enriched by data level.
+   * Every debris piece within sensor range, enriched by data level.
    * @param {THREE.Vector3} playerPos
-   * @param {object} debrisField – DebrisField instance (must have getDebrisNear)
-   * @returns {Array<object>}
+   * @param {object} debrisField DebrisField instance (needs getDebrisNear)
    */
   getDetectedTargets(playerPos, debrisField) {
     if (!debrisField || !playerPos) return [];
 
-    // Power distribution: sensors disabled if multiplier is 0
     if (powerDistribution.sensorMultiplier <= 0) return [];
 
-    // Apply power multiplier to effective range (stacks with upgrades + weather)
     const effectiveRange = this.range * powerDistribution.sensorMultiplier * this._weatherSensorMult;
     const nearby = debrisField.getDebrisNear(playerPos, effectiveRange);
 
@@ -175,32 +133,23 @@ export class SensorSystem {
     return this.detectedTargets;
   }
 
-  // ======================================================================
-  // UPGRADES
-  // ======================================================================
-
   /**
-   * Apply a shop upgrade that affects sensor capabilities.
-   * These are multiplicative on top of current tier values.
-   * @param {object} data - { effect: string, value: number|boolean }
-   * @returns {boolean} true if handled
+   * Apply a shop upgrade (multiplicative on current tier values).
+   * @param {object} data { effect: string, value: number|boolean } @returns {boolean} true if handled
    */
   applyUpgrade(data) {
     switch (data.effect) {
       case 'sensorRange':
-        // Multiply detection range (e.g., basic 0.1 × 1.5 = 0.15 = 15km)
+        // basic 0.1 × 1.5 = 0.15 = 15 km
         this.range *= data.value;
         break;
       case 'detectUntracked':
-        // Enable detection of untracked debris in sensor results
         this.canDetectUntracked = true;
         break;
       case 'scanRange':
-        // Multiply scan rate (affects data enrichment speed)
         this.scanRate *= data.value;
         break;
       case 'salvageScan':
-        // Enable salvage content scanning at range
         this.canScanSalvage = true;
         break;
       default:
@@ -215,11 +164,6 @@ export class SensorSystem {
     return true;
   }
 
-  /**
-   * Upgrade the sensor suite.
-   * @param {string} newTier – 'enhanced' | 'advanced'
-   * @returns {boolean} success
-   */
   upgradeSensor(newTier) {
     const tierDef = SENSOR_TIERS[newTier];
     if (!tierDef) {
@@ -246,10 +190,6 @@ export class SensorSystem {
     return true;
   }
 
-  /**
-   * Snapshot for HUD.
-   * @returns {object}
-   */
   getStatus() {
     const tierDef = SENSOR_TIERS[this.tier];
     return {
@@ -261,31 +201,22 @@ export class SensorSystem {
     };
   }
 
-  // ======================================================================
-  // SCAN COST (w2-heat D2)
-  // ======================================================================
-
   /**
-   * Wire the battery the scans pay from (main.js, beside
-   * armManager.setResourceSystem). Unwired → scans are free.
-   * @param {object|null} rs - ResourceSystem (canAfford / consume / drawUpTo)
+   * Wire the battery the scans pay from (main.js, beside armManager.setResourceSystem). Unwired → scans are free.
+   * @param {object|null} rs ResourceSystem (canAfford / consume / drawUpTo)
    */
   setResourceSystem(rs) {
     this._resourceSystem = rs || null;
   }
 
   /**
-   * What one scan costs, in battery units (Wh). Total = POWER_COST × the
-   * 600 Wh base battery (Constants.BATTERY_MAX — an absolute energy, so a
-   * bigger bought battery makes a scan relatively cheaper) × SCAN.COST_MULT.
-   * SWEEP_SHARE of it is the sweep, paid the instant the scan starts; the rest
-   * is the onboard computer's analysis, a steady load over ANALYSIS_S real s.
-   * w4-power D6: `opts.cold` prices the first scan of a boot — a whole-sky
-   * search with no tracks yet: at least SCAN.COLD_SEARCH_WH × COST_MULT (the
-   * wide scan's energy), the same sweep share, the analysis over the longer of
-   * the pressed scan's and the wide scan's ANALYSIS_S.
+   * Cost of one scan in battery units (Wh): POWER_COST × the 600 Wh base battery (Constants.BATTERY_MAX, an absolute
+   * energy, so a bigger bought battery makes a scan relatively cheaper) × SCAN.COST_MULT. SWEEP_SHARE of it is the sweep,
+   * paid the instant the scan starts; the rest is the computer's analysis, a steady load over ANALYSIS_S real s.
+   * `opts.cold` prices the first scan of a boot, a whole-sky search with no tracks yet: at least SCAN.COLD_SEARCH_WH ×
+   * COST_MULT (the wide scan's energy), same sweep share, analysis over the longer of the pressed scan's and the wide
+   * scan's ANALYSIS_S.
    * @param {'quick'|'wide'} type
-   * @param {{ cold?: boolean }} [opts]
    * @returns {{ total:number, sweep:number, analysis:number, analysisS:number, analysisW:number }}
    */
   getScanCost(type, opts) {
@@ -306,25 +237,20 @@ export class SensorSystem {
   }
 
   /**
-   * Pay a scan's sweep now and queue its analysis load. Refuses (with the
-   * reactive comms line) when the battery cannot pay the sweep. The first
-   * paid scan of a boot is the cold search (w4-power D6 — getScanCost cold).
-   * @param {'quick'|'wide'} type
-   * @returns {boolean} true when the scan may start
+   * Pay a scan's sweep now and queue its analysis load. Refuses (reactive comms line) when the battery can't pay the
+   * sweep. The first paid scan of a boot is the cold search (getScanCost cold). @returns {boolean} true when the scan may start
    * @private
    */
   _payScan(type) {
     const rs = this._resourceSystem;
-    if (!rs) return true;   // unwired (menu hero, unit tests): free, as before
+    if (!rs) return true;   // unwired (menu hero, unit tests): free
     const cold = !this._coldSearchDone;
     const cost = this.getScanCost(type, { cold });
     if (cost.total <= 0) return true;
     if (!rs.canAfford('battery', cost.sweep)) {
-      // m1-finish: with the wings rolled up the true way out is the wings, not
-      // "wait for sunlight" — say so and put the wings row back up. Wings already
-      // commanded out (still rolling, or out) or no ship seen yet (null: unit
-      // tests) keeps the old line byte for byte. u2-one-voice D5: the line no longer
-      // names the key or the floor-1 button - the re-posted wings chip carries the how.
+      // With the wings rolled up the true way out is the wings, not "wait for sunlight": say so and re-post the wings
+      // row. Wings already commanded out (rolling, or out) or no ship seen yet (null: unit tests) keep the old line. The
+      // line doesn't name the key or the floor-1 button; the re-posted wings chip carries the how.
       const wingsUp = wingsHint.needsOpening() === true;
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'V5',
@@ -346,12 +272,10 @@ export class SensorSystem {
   }
 
   /**
-   * Draw the running analysis loads for `dt` real seconds. The battery pays
-   * what it holds (drawUpTo); an empty battery starves the computer, it does
-   * not refund the scan. Called by the game loop beside resourceSystem.update
-   * under the SAME held-world guard (main.js) — NOT from update(), which runs
-   * while a drawer holds the world: a held analysis pauses, it is not lost.
-   * @param {number} dt
+   * Draw the running analysis loads for `dt` real seconds. The battery pays what it holds (drawUpTo); an empty battery
+   * starves the computer, it does not refund the scan. Called by the game loop beside resourceSystem.update under the
+   * SAME held-world guard (main.js), NOT from update(), which runs while a drawer holds the world: a held analysis
+   * pauses, it is not lost.
    */
   drawAnalysis(dt) {
     const jobs = this._analysisJobs;
@@ -366,22 +290,17 @@ export class SensorSystem {
     }
   }
 
-  /**
-   * Per-frame update.
-   * @param {number} dt – delta seconds
-   */
   update(dt, playerPos, debrisField) {
-    // Cache player position & debris field for _revealNearbyDebris (UX-3 #9)
+    // Cache player position & debris field for _revealNearbyDebris
     if (playerPos) this._lastPlayerPos = playerPos;
     if (debrisField) this._lastDebrisField = debrisField;
 
-    // Staleness timer: reset weather multiplier if no WEATHER_ACTIVE for 2s
+    // Staleness: reset the weather multiplier if no WEATHER_ACTIVE for 2 s
     this._weatherLastUpdate += dt;
     if (this._weatherLastUpdate > 2.0) {
       this._weatherSensorMult = 1.0;
     }
 
-    // Process active scan timer
     if (this._scanActive) {
       this._scanTimer -= dt;
       if (this._scanTimer <= 0) {
@@ -389,11 +308,9 @@ export class SensorSystem {
       }
     }
 
-    // Process scan cooldowns
     if (this._quickCooldown > 0) this._quickCooldown -= dt;
     if (this._wideCooldown > 0) this._wideCooldown -= dt;
 
-    // Animate reveal progress for recently discovered debris
     const now = performance.now();
     if (this._lastDebrisField && this._lastDebrisField.debrisList) {
       for (const debris of this._lastDebrisField.debrisList) {
@@ -405,16 +322,9 @@ export class SensorSystem {
     }
   }
 
-  // ======================================================================
   // PRIVATE
-  // ======================================================================
 
-  /**
-   * Map a raw distance to a DATA_LEVELS entry.
-   * @param {number} distance – scene units
-   * @returns {object}
-   * @private
-   */
+  /** @param {number} distance scene units */
   _getDataLevel(distance) {
     if (distance <= 0.005) return DATA_LEVELS.CLOSE;   // ≤ 500 m
     if (distance <= 0.02)  return DATA_LEVELS.NEAR;    // ≤ 2 km
@@ -423,18 +333,9 @@ export class SensorSystem {
     return DATA_LEVELS.FAR;
   }
 
-  /**
-   * Filter a raw debris entry down to only the fields the sensor
-   * can resolve at the current range + tier.
-   * @param {object} entry – raw from getDebrisNear
-   * @param {object} dataLevel – DATA_LEVELS entry
-   * @returns {object}
-   * @private
-   */
   _enrichData(entry, dataLevel) {
     const tierDef = SENSOR_TIERS[this.tier];
 
-    // Combine tier capability with range-based data level
     const available = new Set(dataLevel.fields);
     // Tier unlocks its fields only at or below data-level threshold
     for (const f of tierDef.dataFields) {
@@ -462,22 +363,12 @@ export class SensorSystem {
     return enriched;
   }
 
-  // ======================================================================
-  // ACTIVE SCAN
-  // ======================================================================
-
-  /**
-   * Start an active scan (quick ping or wide aperture).
-   * @param {'quick'|'wide'} type
-   * @private
-   */
   _startScan(type) {
     const cfg = type === 'quick' ? Constants.SCAN.QUICK : Constants.SCAN.WIDE;
     this._scanActive = true;
     this._scanType = type;
     this._scanTimer = cfg.DURATION;
 
-    // Trigger scan audio/visual feedback
     eventBus.emit(Events.SCAN_INITIATED, { type });
 
     eventBus.emit(Events.COMMS_MESSAGE, {
@@ -489,10 +380,6 @@ export class SensorSystem {
     });
   }
 
-  /**
-   * Complete the active scan — award credits, roll for discoveries.
-   * @private
-   */
   _completeScan() {
     const type = this._scanType;
     const cfg = type === 'quick' ? Constants.SCAN.QUICK : Constants.SCAN.WIDE;
@@ -500,39 +387,29 @@ export class SensorSystem {
     this._scanActive = false;
     this._scanType = null;
 
-    // Set the appropriate cooldown
     if (type === 'quick') {
       this._quickCooldown = cfg.COOLDOWN;
     } else {
       this._wideCooldown = cfg.COOLDOWN;
     }
 
-    // ── Field-based survey economy (2026-06-04) ──────────────────────────
-    // Ground stations pay for NEW, high-resolution data about a debris field.
-    // The first survey of a given field is valuable; re-scanning the SAME field
-    // returns data they already have (no reward) — this kills scan-farming a
-    // single spot. A mission spanning several fields still pays per field.
+    // Field-based survey economy: ground stations pay for NEW data about a debris field. Re-scanning the SAME field returns
+    // data they already have (no reward), which kills scan-farming one spot. A mission spanning several fields pays per field.
     this._scanCount++;
     const baseReward = cfg.REWARD;
     const sessionCap = Constants.SCAN.SESSION_SCAN_CAP || 5000;
 
-    // Identify the field the player is surveying (dominant cluster within range).
     const revealRange = (Constants.SCAN.REVEAL_BASE_RANGE || 5.0) * (cfg.RANGE_MULTIPLIER || 1.0);
     const fieldId = (this._lastDebrisField && this._lastPlayerPos)
       ? this._lastDebrisField.getFieldIdNear(this._lastPlayerPos, revealRange)
       : null;
 
-    // M1 guidance (T5): the mission the field is in, and what the scan can
-    // actually reach. `getFieldIdNear` above is a 500 km FIELD test — on M1 it
-    // still finds the welcome cluster after it drifted out of the forward arc,
-    // so the reward reads 'stale' ("already current") and the recovery advisor
-    // (which keys on 'empty') stays silent: the player scans and hears nothing
-    // useful. So the SCAN_COMPLETE payload now also carries `contactsInRange`
-    // (non-hazard pieces inside the reveal range — the same query the reveal
-    // below consumes, run ONCE and handed down) and `missionNumber`, letting
-    // NavRecoveryAdvisor post a bearing when nothing is in reach and, on M1,
-    // the cluster count + bearing line. `(x || 1)` mirrors DebrisField's own
-    // "M1 until told otherwise" reading of `_currentMissionNumber`.
+    // `getFieldIdNear` is a 500 km FIELD test: on M1 it still finds the welcome cluster after it drifted out of the
+    // forward arc, so the reward reads 'stale' and the recovery advisor (keys on 'empty') stays silent. So SCAN_COMPLETE
+    // also carries `contactsInRange` (non-hazard pieces inside the reveal range; the same query the reveal below consumes,
+    // run ONCE and handed down) and `missionNumber`, letting NavRecoveryAdvisor post a bearing when nothing is in reach and,
+    // on M1, the cluster count + bearing. `(x || 1)` mirrors DebrisField's own "M1 until told otherwise" reading of
+    // `_currentMissionNumber`.
     const nearby = (this._lastDebrisField && this._lastPlayerPos)
       ? this._lastDebrisField.getDebrisNear(this._lastPlayerPos, revealRange)
       : null;
@@ -550,21 +427,17 @@ export class SensorSystem {
     let rewardKind = 'none'; // 'fresh' | 'stale' | 'empty' | 'capped'
 
     if (!fieldId) {
-      // Empty space — nothing of value to survey.
       rewardKind = 'empty';
     } else if (this._rewardedFields.has(fieldId)) {
-      // Already surveyed this field — data is current, no new value.
       rewardKind = 'stale';
     } else {
-      // Fresh field — full survey value. Mild diminishing across DISTINCT fields
-      // surveyed (not per repeated scan) so later fields still pay, just slightly
-      // less, keeping early exploration the most rewarding.
+      // Fresh field: full survey value, mildly diminishing across DISTINCT fields surveyed (not per repeated scan).
       const fieldsPaid = this._rewardedFields.size;
       const diminish = Math.max(0.5, 1 - fieldsPaid * 0.05); // -5% per distinct field, floor 50%
       reward = Math.round(baseReward * diminish);
       rewardKind = 'fresh';
 
-      // Session cap is a final safety net against pathological field-hopping.
+      // Session cap: final safety net against pathological field-hopping.
       if (this._scanCreditsTotal >= sessionCap) {
         reward = 0;
         rewardKind = 'capped';
@@ -578,7 +451,6 @@ export class SensorSystem {
       }
     }
 
-    // Award credits for valuable survey data.
     if (reward > 0) {
       eventBus.emit(Events.SCORING_AWARD, {
         points: reward,
@@ -586,10 +458,8 @@ export class SensorSystem {
       });
     }
 
-    // Player feedback — explain WHY the yield is what it is.
-    // (These lines use `sender:` and carry no bypass tag, so at suppression
-    // tier 0 — the onboarding Director — they are muted anyway; the M1 skip
-    // below matters once onboarding has ended.)
+    // Feedback explains WHY the yield is what it is. These lines use `sender:` with no bypass tag, so at suppression tier 0
+    // (onboarding Director) they are muted anyway; the M1 skip below matters once onboarding has ended.
     if (rewardKind === 'fresh') {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
@@ -597,12 +467,9 @@ export class SensorSystem {
         priority: 'info',
       });
     } else if (rewardKind === 'stale') {
-      // M1 guidance (T5): on mission 1 the ONLY field is the welcome cluster
-      // — "Move to a new field for fresh data" would send a new player away
-      // from the one thing they must clear, and the re-scan is almost always
-      // a "where did it go?" request, which NavRecoveryAdvisor now answers
-      // with the count + bearing line. Credit logic above is unchanged (a
-      // stale field still pays nothing); only the line is skipped.
+      // On mission 1 the ONLY field is the welcome cluster: "Move to a new field" would send a new player away from what
+      // they must clear, and the re-scan is usually a "where did it go?" request, which NavRecoveryAdvisor answers with
+      // count + bearing. Credit logic is unchanged (a stale field pays nothing); only the line is skipped.
       if (missionNumber !== 1) {
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'HOUSTON',
@@ -623,12 +490,10 @@ export class SensorSystem {
       });
     }
 
-    // Discovery chance — may reveal hidden debris
     const discoveries = [];
     const maxDisc = type === 'wide' ? (cfg.MAX_DISCOVERIES || 1) : 1;
-    // Debris type distribution for scan discoveries (ST-4.D enrichment)
     const discTypes = ['fragment', 'fragment', 'fragment', 'missionDebris', 'defunctSat', 'rocketBody'];
-    // All possible salvage metals (from SALVAGE_SYNERGIES)
+    // All salvage metals (from SALVAGE_SYNERGIES)
     const allMetals = ['GALLIUM', 'COPPER', 'TITANIUM', 'KEVLAR', 'ALUMINUM', 'STEEL',
                        'IRIDIUM', 'CARBON_COMPOSITE', 'GLASS_CERAMIC'];
     for (let i = 0; i < maxDisc; i++) {
@@ -657,10 +522,8 @@ export class SensorSystem {
       }
     }
 
-    // Emit scan complete results (rewardKind lets NavRecoveryAdvisor route
-    // 'empty' scans into actionable bearing guidance — UX-11 #11;
-    // contactsInRange / missionNumber extend that to "field found but nothing
-    // in reach" and the M1 count + bearing line — M1 guidance T5)
+    // rewardKind lets NavRecoveryAdvisor route 'empty' scans into bearing guidance; contactsInRange / missionNumber extend
+    // that to "field found but nothing in reach" and the M1 count + bearing line.
     const results = {
       type,
       discoveries: discoveries.length,
@@ -671,11 +534,8 @@ export class SensorSystem {
     };
     eventBus.emit(Events.SCAN_COMPLETE, results);
 
-    // Emit per-discovery events + bonus rewards.
-    // The wide-scan discovery bonus is gated to FRESH fields only — re-scanning
-    // an already-surveyed field can't farm discovery credits (consistent with
-    // the field-survey economy above). The SCAN_DISCOVERY event still fires so
-    // hazard/synergy gameplay (MissionEventSystem) is unaffected.
+    // Per-discovery events + bonus. The wide-scan bonus is gated to FRESH fields only (no farming discovery credits by
+    // re-scanning); SCAN_DISCOVERY still fires so hazard/synergy gameplay (MissionEventSystem) is unaffected.
     discoveries.forEach(d => {
       eventBus.emit(Events.SCAN_DISCOVERY, d);
       if (type === 'wide' && cfg.DISCOVERY_REWARD && rewardKind === 'fresh') {
@@ -686,9 +546,7 @@ export class SensorSystem {
       }
     });
 
-    // Houston feedback — the credit yield was already reported by the
-    // field-survey block above (with the ACTUAL amount). Here we only surface
-    // newly-found contacts so the two messages don't conflict or double up.
+    // Houston reports only newly-found contacts; the credit yield was already reported above with the actual amount.
     if (discoveries.length > 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
@@ -697,21 +555,16 @@ export class SensorSystem {
       });
     }
 
-    // UX-3 #9: Staggered reveal — discover undiscovered debris near the player.
-    // Hands down the query already run for `contactsInRange` (same range) so
-    // the field is walked once per scan; the call itself stays HERE so the
-    // synchronous SCAN_REVEALS_SETTLED ordering after SCAN_COMPLETE is kept.
+    // Staggered reveal of undiscovered debris near the player. Hands down the query already run for `contactsInRange` (same
+    // range) so the field is walked once; the call stays HERE to keep the synchronous SCAN_REVEALS_SETTLED ordering after
+    // SCAN_COMPLETE.
     this._revealNearbyDebris(type, nearby);
   }
 
   /**
-   * UX-3 #9: Discover undiscovered debris near the player with staggered timing.
-   * Quick scan reveals fewer targets at shorter range; wide scan reveals more.
-   * Uses getDebrisNear() which returns all debris (including undiscovered) with positions.
-   * @param {string} scanType - 'quick' or 'wide'
-   * @param {Array<object>} [nearbyArg] - the getDebrisNear result for this scan's
-   *   reveal range, when the caller already has it (_completeScan). Omitted →
-   *   this runs its own query, so direct callers (tests) keep working.
+   * Discover undiscovered debris near the player with staggered timing; quick scan reveals fewer targets at shorter range.
+   * @param {Array<object>} [nearbyArg] the getDebrisNear result for this scan's reveal range when the caller has it
+   *   (_completeScan); omitted → runs its own query, so direct callers (tests) keep working.
    * @private
    */
   _revealNearbyDebris(scanType, nearbyArg) {
@@ -719,26 +572,21 @@ export class SensorSystem {
     const playerPos = this._lastPlayerPos;
     if (!debrisField || !playerPos) return;
 
-    // Determine scan range using REVEAL_BASE_RANGE (500 km base) × config multiplier
-    // Sensor detection range (this.range) is too small for orbital-scale discovery
+    // REVEAL_BASE_RANGE (500 km base) × config multiplier; the sensor range (this.range) is too small for orbital-scale discovery
     const cfg = scanType === 'wide' ? Constants.SCAN.WIDE : Constants.SCAN.QUICK;
     const revealRange = (Constants.SCAN.REVEAL_BASE_RANGE || 5.0) * (cfg.RANGE_MULTIPLIER || 1.0);
     const maxReveals = cfg.MAX_REVEALS || (scanType === 'wide' ? 10 : 5);
 
-    // getDebrisNear returns spread-copies; we need original refs via getDebrisById.
-    // Truly empty space → no reveal-settled event: NavRecoveryAdvisor's empty-scan
-    // bearing guidance owns that case (rewardKind:'empty'). No double messaging.
+    // getDebrisNear returns spread-copies; originals come via getDebrisById. Truly empty space → no reveal-settled event
+    // (NavRecoveryAdvisor's empty-scan guidance owns it, rewardKind:'empty'): no double messaging.
     const nearby = Array.isArray(nearbyArg)
       ? nearbyArg
       : debrisField.getDebrisNear(playerPos, revealRange);
     if (!nearby || nearby.length === 0) return;
 
-    // Filter to undiscovered only, resolve original debris objects, already sorted by distance.
-    // Track whether the field already holds discovered contacts so a re-scan of a
-    // known field still fills the selection even when nothing new is revealed.
-    // S11(b): hazard shards (the power-law background cloud) are never revealed
-    // — they are uncapturable furniture, not contacts; the scan's reveal budget
-    // belongs to the authored foreground cast.
+    // Undiscovered only, resolved to the original objects (already sorted by distance). hasDiscovered: a re-scan of a known
+    // field still fills the selection even when nothing new is revealed. Hazard shards (the power-law background cloud) are
+    // never revealed: uncapturable furniture, and the reveal budget belongs to the authored foreground cast.
     const toReveal = [];
     let hasDiscovered = false;
     for (const copy of nearby) {
@@ -751,7 +599,6 @@ export class SensorSystem {
       }
     }
 
-    // Staggered reveal with smooth fade-in (120ms spacing, 300ms scale animation)
     const staggerMs = Constants.SCAN.REVEAL_STAGGER_MS || 120;
     toReveal.forEach((debris, i) => {
       setTimeout(() => {
@@ -762,13 +609,9 @@ export class SensorSystem {
       }, i * staggerMs);
     });
 
-    // Signal that scan reveals have settled so scan auto-select can fill the
-    // Tracked Targets pane. Fire after the last staggered reveal lands (+50 ms
-    // margin) when there are new contacts; fire immediately when nothing new was
-    // revealed but the field still holds discovered contacts (re-scan of a known
-    // field must still fill an empty selection). Never fire when the field is
-    // genuinely empty (both toReveal empty and no discovered contacts) — that's
-    // NavRecoveryAdvisor's territory.
+    // Signal that reveals have settled so scan auto-select can fill the Tracked Targets pane: after the last staggered reveal
+    // (+50 ms margin) when there are new contacts; immediately when nothing new but the field holds discovered contacts;
+    // never when the field is genuinely empty (NavRecoveryAdvisor's territory).
     if (toReveal.length > 0) {
       setTimeout(() => {
         eventBus.emit(Events.SCAN_REVEALS_SETTLED, {
@@ -784,10 +627,6 @@ export class SensorSystem {
     }
   }
 
-  /**
-   * Get active scan status for HUD display.
-   * @returns {{ active: boolean, type: string|null, progress: number, quickCooldown: number, wideCooldown: number }}
-   */
   getScanStatus() {
     let progress = 0;
     if (this._scanActive && this._scanType) {
@@ -803,15 +642,9 @@ export class SensorSystem {
     };
   }
 
-  // ======================================================================
-  // EVENT LISTENERS
-  // ======================================================================
-
-  /** @private */
   _setupListeners() {
-    // Handles both tier upgrades ({ tier }) and shop upgrades ({ effect, value })
-    // GFM.applyUpgradeEffect emits SENSOR_UPGRADE for both new purchases
-    // and save-restore paths (decoupled — no direct ref needed)
+    // Handles tier upgrades ({ tier }) and shop upgrades ({ effect, value }); GFM.applyUpgradeEffect emits SENSOR_UPGRADE for
+    // both new purchases and save-restore (decoupled, no direct ref).
     eventBus.on(Events.SENSOR_UPGRADE, (data) => {
       if (data.tier) this.upgradeSensor(data.tier);
       else if (data.effect) this.applyUpgrade(data);
@@ -824,7 +657,6 @@ export class SensorSystem {
       }
     });
 
-    // === Active Scan Triggers ===
     eventBus.on(Events.SCAN_QUICK, () => {
       if (this._scanActive || this._quickCooldown > 0) {
         eventBus.emit(Events.COMMS_MESSAGE, {
@@ -834,7 +666,7 @@ export class SensorSystem {
         });
         return;
       }
-      if (!this._payScan('quick')) return;   // w2-heat D2: the sweep is paid up front
+      if (!this._payScan('quick')) return;   // the sweep is paid up front
       this._startScan('quick');
     });
 
@@ -847,7 +679,7 @@ export class SensorSystem {
         });
         return;
       }
-      if (!this._payScan('wide')) return;    // w2-heat D2
+      if (!this._payScan('wide')) return;
       this._startScan('wide');
     });
   }

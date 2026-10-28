@@ -1,9 +1,5 @@
 /**
- * LassoSystem.js — Short-range magnetic/adhesive projectile for quick debris grabs.
- * SPACE key fires a lasso toward the nearest debris within range.
- * Auto-aim assist (±30° cone) makes first catches easy.
- * ST-2.4 → FIX-2.4a: Weighted capture net — spinning octagonal net with perimeter weights,
- *   tube tether, radial sparks on contact.
+ * LassoSystem.js — short-range net projectile: SPACE fires at the nearest debris in range (auto-aim cone ±30°).
  * @module systems/LassoSystem
  */
 
@@ -28,45 +24,32 @@ import { degToRad, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.j
 /** 1 meter in scene units (1 unit = 100 km = 100000 m) */
 const M = 0.00001;
 
-/** Cargo-continuity S13(d): seconds a pending catch glides from its wait point
- *  onto the collar seat before adopting (smooths the hand-off, never a teleport). */
+/** Seconds a pending catch glides from its wait point onto the collar seat before adopting (never a teleport). */
 const LASSO_ADOPT_SETTLE_S = 0.8;
 
-/** 2026-08-26 wrap-as-cloth: seconds the welded lasso web fades out over the
- *  freshly adopted catch instead of blinking off at reel completion. The
- *  adoption's berthed bag (NET_ADOPTED → CaptureNetVisual) appears at the same
- *  collar seat the same frame, so the hand-off reads as a crossfade, not a pop.
- *  Well under both cooldowns (catch 2 s / miss 1 s) — a re-cast can never race
- *  a live fade in production. */
+/** Seconds the welded web fades out over the adopted catch; the berthed bag (NET_ADOPTED → CaptureNetVisual)
+ *  appears at the same collar seat that frame, so it reads as a crossfade. Under both cooldowns (catch 2 s /
+ *  miss 1 s): a re-cast never races a live fade. */
 const LASSO_WEB_FADE_S = 0.35;
 
-/** Reusable Z-axis vector for quaternion math */
 const _zAxis = new THREE.Vector3(0, 0, 1);
 
-/** Reusable −Z axis — the NetMeshKit mouth points along local −Z, so the net
- *  group is oriented so local −Z maps onto the flight direction (see update()). */
+/** −Z axis: the NetMeshKit mouth points along local −Z; the net group maps local −Z onto the flight direction. */
 const _negZAxis = new THREE.Vector3(0, 0, -1);
 
-/** Reusable zero vector for reel-in lerp target */
 const _zeroVec = new THREE.Vector3(0, 0, 0);
 
-/** Default forward dir when the ship has no velocity (mirrors fire()'s legacy +Z). */
+/** Default forward when the ship has no velocity (mirrors fire()). */
 const _defaultForward = new THREE.Vector3(0, 0, 1);
 
-/** Module-level scratch vectors — avoid per-frame allocation in the arc test. */
 const _scratchFwd = new THREE.Vector3();
 const _scratchToTarget = new THREE.Vector3();
-/** Phase 1B — scratch for the per-frame muzzle world position. */
 const _scratchMuzzle = new THREE.Vector3();
-/** Cargo-continuity S13(d) — scratch for the collar-seat reel-end offset. */
 const _scratchCargoOffset = new THREE.Vector3();
-/** Tether — scratch for the nadir (planet-down) sag direction + flight anchor. */
 const _scratchNadir = new THREE.Vector3();
 const _scratchTetherAnchor = new THREE.Vector3();
 
-// 2026-08-26 wrap-as-cloth — scratches for the per-frame drape drive (the
-// contents spec mirrors CaptureNetVisual's; own copies so two live drivers
-// never share a scratch) and for the reel drag orientation.
+// Wrap drape-drive scratches; own copies (contents spec mirrors CaptureNetVisual's) so two live drivers never share one.
 const _scratchAway = new THREE.Vector3();
 const _scratchAway2 = new THREE.Vector3();
 const _scratchPiecePos = new THREE.Vector3();
@@ -82,157 +65,114 @@ const _wrapBoxScratch = { ox: 0, oy: 0, oz: 0,
     hx: 0, hy: 0, hz: 0 };
 
 export class LassoSystem {
-    /**
-     * @param {THREE.Scene} scene
-     */
     constructor(scene) {
         this.scene = scene;
 
-        /** @type {boolean} Whether a lasso is currently in flight */
         this.active = false;
 
-        /** @type {THREE.Vector3|null} Lasso projectile position */
         this.projectilePos = null;
 
-        /** @type {THREE.Vector3|null} Lasso velocity */
         this.projectileVel = null;
 
-        /** @type {object|null} Target debris (from getDebrisNear result) */
         this.target = null;
 
-        /** @type {object|null} Debris currently held by the reel-in pin
-         *  (_armPinned/_armPinPos), tracked so it can be released on reset even
-         *  after this.target is cleared. */
+        /** Debris held by the reel-in pin (_armPinned/_armPinPos); kept so it is released on reset after target clears. */
         this._reelPinTarget = null;
 
-        /** catch-near-pass (Decision 2): scene manager (null = web stays far pass), whether the web group is a
-         *  near-field root now, and the piece the web wraps (kept after `target` clears while the welded web fades). */
+        /** Scene manager (null = web stays far pass); whether the web group is a near-field root now; the piece the web
+         *  wraps (kept after `target` clears while the welded web fades). */
         this._nearSm = null;
         this._webNear = false;
         this._webDebris = null;
 
-        /** @type {{t:number, dur:number, seed:object}|null} 2026-08-26 — live
-         *  web fade-out over a freshly adopted catch (crossfades into the
-         *  berthed bag); ticked by _updateVisualEffects, cleared at zero. */
+        /** Live web fade-out over an adopted catch; ticked by _updateVisualEffects, cleared at zero. */
         this._webFade = null;
 
-        /** @type {number} 2026-08-26 round 2 — flight billow phase (kit jiggle). */
         this._billowPhase = 0;
 
-        /** @type {number} 2026-08-26 round 2 — apex→piece depth at contact
-         *  (scene units); the wrap eases it to the WRAP_SEAT_FRAC seat so the
-         *  net visibly slides OVER the piece (engulf) instead of pinning the
-         *  piece at the apex tip ("alongside the net"). */
+        /** Apex→piece depth at contact (scene units); the wrap eases it to the WRAP_SEAT_FRAC seat so the net slides
+         *  OVER the piece (engulf) instead of pinning it at the apex tip. */
         this._wrapSeatD0 = 0;
 
-        /** @type {string|null} Target debris ID for live lookup */
         this._targetId = null;
 
-        /** @type {THREE.Vector3|null} Live target scene position (updated each frame) */
         this._targetScenePos = null;
-        /** @type {boolean} catch-focus D0: `target` is the canonical field object (live `_scenePosition`), not a snapshot */
+        /** `target` is the canonical field object (live `_scenePosition`), not a snapshot. */
         this._targetIsLive = false;
 
         /** @type {THREE.Vector3} Offset of projectile relative to player (local frame) */
         this._projOffset = new THREE.Vector3();
 
-        /** @type {number} Phase 1A — per-shot contact radius (scene units), scaled by launch distance. */
+        /** Per-shot contact radius (scene units), scaled by launch distance. */
         this._contactRadiusScene = Constants.LASSO_CONTACT_RADIUS_M * M;
 
-        /** @type {number} Phase 1A — per-shot eased apparent flight speed (scene units / real second). */
+        /** Per-shot eased apparent flight speed (scene units / real second). */
         this._flightSpeedScene = Constants.LASSO_SPEED * M * TimeAuthority.BASE_SCALE;
 
-        /** @type {THREE.Vector3|null} Phase 1C — last launch direction (world), for cosmetic recoil. */
+        /** Last launch direction (world), for cosmetic recoil. */
         this._lastLaunchDir = null;
 
-        /** @type {object|null} Phase 1C — PlayerSatellite for cosmetic recoil kick (optional). */
         this._player = null;
 
-        /** @type {number} Flight timer */
         this.flightTimer = 0;
 
-        /** @type {number} Max flight time before lasso retracts */
         this.maxFlightTime = Constants.LASSO_MAX_FLIGHT_TIME;
 
-        /** @type {number} Cooldown between casts */
         this.cooldown = 0;
 
-        /** @type {THREE.Mesh|null} Tether outer sheath mesh (dark, thick — coaxial) */
         this._tetherMesh = null;
 
-        /** @type {THREE.Mesh|null} Tether inner core mesh (bright, thin — coaxial v2) */
         this._tetherCore = null;
 
-        /** @type {number} Pulse bead phase (legacy — kept for reset compat) */
+        /** Pulse bead phase (legacy; kept for reset compat). */
         this._pulsePhase = 0;
 
-        /** @type {THREE.QuadraticBezierCurve3|null} Most recently built tether curve */
         this._tetherCurve = null;
 
-        /** @type {THREE.Group|null} Capture net projectile group (FIX-2.4a — replaces bolas) */
         this._netGroup = null;
 
-        /** @type {boolean} Reel-in phase */
         this._reelingIn = false;
 
-        /** @type {number} Reel progress 0-1 */
         this._reelProgress = 0;
 
         /** @type {THREE.Vector3} Reel start offset from player (relative coords — orbit-safe) */
         this._reelStartOffset = new THREE.Vector3();
 
-        // Phase 6: Visual feedback state
-        /** @type {number} Running time for animations */
         this._time = 0;
 
-        /** @type {THREE.Mesh|null} Muzzle flash */
         this._muzzleFlash = null;
-        /** @type {number} Muzzle flash timer (seconds remaining) */
         this._muzzleFlashTimer = 0;
 
-        /** @type {THREE.Mesh|null} Contact flash */
         this._contactFlash = null;
-        /** @type {number} Contact flash timer */
         this._contactFlashTimer = 0;
 
         /** @type {number} Accumulated net spin angle (radians) */
         this._netSpinAngle = 0;
 
-        /** @type {number} Number of curve sample points for tether */
         this._tetherSampleCount = Constants.NET_TETHER_SEGMENTS + 1;
 
-        /** @type {number} Max cooldown duration (for UI reference) — driven by Constants */
         this.cooldownMax = Constants.LASSO_COOLDOWN_CATCH;
 
-        /** @type {boolean} Whether the first-cast comms primer has been sent this session */
         this._firstCastPrimerSent = false;
 
-        // DECISIONS §33 (2026-10-20): the small net draws on the mother's ONE count of nets, owned by CaptureNetSystem
-        // (getAmmo() reads it, fire() spends it). LassoSystem keeps no count of its own.
+        // DECISIONS §33: the small net draws on the mother's ONE count of nets, owned by CaptureNetSystem (getAmmo() reads
+        // it, fire() spends it). LassoSystem keeps no count of its own.
 
-        /** @type {number|null} Target id we last announced as "in lasso range",
-         *  so the proactive prompt fires once per entry (not every frame). */
+        /** Target id last announced as "in lasso range" (the proactive prompt fires once per entry). */
         this._inRangePromptId = null;
 
-        /** @type {boolean} True while the OnboardingDirector pipeline is running.
-         *  The proactive in-range "Press N" prompt is the Director's job during
-         *  onboarding (the `lasso` beat teaches it), so we suppress the system
-         *  prompt until ONBOARDING_COMPLETE to avoid contradicting the Director
-         *  (it would otherwise punch through tier 0 and appear over early beats). */
+        /** True while the OnboardingDirector pipeline runs: its `lasso` beat teaches the in-range "Press N" prompt, so the
+         *  system prompt is suppressed until ONBOARDING_COMPLETE (it would punch through tier 0 over early beats). */
         this._onboardingActive = false;
-        // Capture unsubscribe handles so dispose() can tear these down — without
-        // this the closures keep a disposed LassoSystem alive on the eventBus and
-        // its stale callbacks keep mutating _onboardingActive / _inRangePromptId.
+        // Unsubscribe handles for dispose(): else the closures keep a disposed LassoSystem alive on the eventBus.
         this._evtUnsubs = [
             eventBus.on(Events.ONBOARDING_STARTED, () => { this._onboardingActive = true; }),
             eventBus.on(Events.ONBOARDING_COMPLETE, () => { this._onboardingActive = false; }),
             eventBus.on(Events.GAME_RESET, () => { this._inRangePromptId = null; this._clearPendingAdoption(); }),
-            // Phase 3: track the active mission so reel-in physics can be gated OFF
-            // on Mission 1 (the tutorial reels exactly as today, flag regardless).
+            // Track the active mission: reel-in physics is gated OFF on Mission 1 (the tutorial reels as before).
             eventBus.on(Events.MISSION_START, (data) => {
                 this._missionNumber = (data && data.missionNumber != null) ? data.missionNumber : 1;
             }),
-            // Diagnostics: trace the key lifecycle events when window.__lassoDebug is on.
             eventBus.on(Events.LASSO_DENIED, (e) => this._trace('DENIED', e)),
             eventBus.on(Events.LASSO_CONTACT, (e) => this._trace('CONTACT', e)),
             eventBus.on(Events.LASSO_STOWED, (e) => this._trace('STOWED', e)),
@@ -240,75 +180,49 @@ export class LassoSystem {
             eventBus.on(Events.LASSO_CAPTURED, (e) => this._trace('CAPTURED', e)),
         ];
 
-        /** @type {number} Phase 3 — active mission number (1 = tutorial; gates reel physics). */
+        /** Active mission number (1 = tutorial; gates reel physics). */
         this._missionNumber = 1;
 
-        /** @type {boolean} Phase 3 — whether reel-in physics is active for the CURRENT catch
-         *  (flag ON && !isMission1 && capturedMass > LASSO_MAX_CAPTURE_MASS). Latched at contact. */
+        /** Reel-in physics active for the CURRENT catch (flag ON && !isMission1 && capturedMass > LASSO_MAX_CAPTURE_MASS);
+         *  latched at contact. */
         this._reelPhysicsActive = false;
 
-        /** @type {number} Phase 3 — seconds the tether has spent above the safe strain fraction. */
+        /** Seconds the tether has spent above the safe strain fraction. */
         this._strainTimer = 0;
 
-        /** @type {object|null} Cargo-continuity S13(d) — a completed catch waiting
-         *  for the nose collar to free before it adopts onto the one holding model.
-         *  { target, phase: 'wait'|'settle', settleT, fromPos, announced }. At most
-         *  one (fire() refuses a new cast while it exists). Null when none. */
+        /** A completed catch waiting for the nose collar to free before adopting: { target, phase: 'wait'|'settle',
+         *  settleT, fromPos, announced }. At most one (fire() refuses a new cast while it exists). */
         this._pendingAdoption = null;
 
-        /** @type {object|null} CaptureNetSystem (wired via setCaptureNetSystem).
-         *  The lasso's completed catch adopts onto its mother berth path; when null
-         *  (headless tests) the catch resolves via the legacy instant path. */
+        /** CaptureNetSystem (setCaptureNetSystem): the catch adopts onto its mother berth path; null (headless tests)
+         *  = legacy instant path. */
         this._captureNetSystem = null;
         /** @type {object|null} Test seam for the net count (setMotherNetSupply); null in production. */
         this._motherNetSupply = null;
 
-        /** @type {object|null} Optional SkillsSystem for hint-gating (Phase 3).
-         *  Wired via setSkillsSystem(); when absent the prompt fires ungated
-         *  (Node tests / headless). */
+        /** Optional SkillsSystem for hint-gating (setSkillsSystem); absent = prompt fires ungated (headless). */
         this._skillsSystem = null;
-        // Feed lasso failures into the recent-failure ring buffer so a STRUGGLING
-        // player still gets the proactive nudge while an expert who never fails
-        // does not. SkillsSystem records these on the LASSO_DENIED event itself
-        // (catalog FAILURE_CAUSES), so no extra wiring is needed here.
-        // ── Gossamer particle trail state ──────────────────────────────────
-        /** @type {THREE.Points|null} Particle system for gossamer silk trail */
+        // Lasso failures reach SkillsSystem through LASSO_DENIED itself (catalog FAILURE_CAUSES); no wiring needed here.
         this._trailPoints = null;
-        /** @type {Float32Array} Particle positions (x,y,z per particle) */
         this._trailPositions = null;
-        /** @type {Float32Array} Particle alphas (1 per particle) */
         this._trailAlphas = null;
-        /** @type {Float32Array} Particle birth times (1 per particle) */
         this._trailBirths = null;
-        /** @type {Float32Array} Particle drift velocities (x,y,z per particle) */
         this._trailDrift = null;
-        /** @type {number} Next particle slot index (ring buffer) */
         this._trailHead = 0;
-        /** @type {number} Trail particle count */
         this._trailCount = 200;
-        /** @type {number} Particle lifetime in seconds */
         this._trailLifetime = 1.0;
-        /** @type {number} Emit accumulator */
         this._trailEmitAccum = 0;
 
         this._createVisuals();
 
-        /** @type {number} Diagnostics — throttle counter for per-frame trace logs. */
         this._dbgFrame = 0;
-        // Diagnostics: expose the live instance + a state dumper so issues can be
-        // inspected from the browser console without a rebuild. The hooks install
-        // ONLY under the dev net-shot opt-in — `?shot=1` or `?shotauto=1`
-        // (devShotGate.requested, the same explicit opt-in as the __net* surface;
-        // register item 18). Trace logging keeps its own switch:
-        //   window.__lassoDebug = true
-        // then fire a net (N). Snapshot anytime with window.__lassoState().
+        // Dev diagnostics, installed ONLY under the net-shot opt-in (`?shot=1`/`?shotauto=1`, devShotGate.requested;
+        // register item 18). Trace logging: window.__lassoDebug = true, then fire a net (N); snapshot: window.__lassoState().
         if (typeof window !== 'undefined' && devShotGate.requested) {
             window.__lasso = this;
             window.__lassoState = () => this._dbgSnapshot();
-            // Live flag toggle for A/B testing without a rebuild/restart, e.g.:
-            //   window.__lassoFlags()                       → read current
-            //   window.__lassoFlags({ phys:false })         → revert Phase 3
-            //   window.__lassoFlags({ kin:false })          → disable net open/cinch
+            // Live flag toggle for A/B testing: __lassoFlags() reads; __lassoFlags({ phys:false }) reverts reel physics;
+            // __lassoFlags({ kin:false }) disables net open/cinch.
             window.__lassoFlags = (set) => {
                 const F = Constants.FEATURE_FLAGS;
                 if (set && typeof set === 'object') {
@@ -325,17 +239,15 @@ export class LassoSystem {
         }
     }
 
-    /** Diagnostics — true when console tracing is enabled (browser only). */
     _dbg() {
         return typeof window !== 'undefined' && window.__lassoDebug === true;
     }
 
-    /** Diagnostics — one-line tagged console log when tracing is on. */
     _trace(tag, obj) {
         if (this._dbg()) console.log(`[lasso] ${tag}`, obj || '');
     }
 
-    /** Diagnostics — current lifecycle snapshot (numbers in metres where noted). */
+    /** Lifecycle snapshot for diagnostics (metres where noted). */
     _dbgSnapshot() {
         const M = 0.00001;
         const off = (this.projectilePos && this._lastPlayerPos)
@@ -367,39 +279,18 @@ export class LassoSystem {
         };
     }
 
-    /**
-     * Inject the SkillsSystem so the proactive in-range prompt obeys the
-     * universal hint-gating rule (mastered ⇒ silent; veteran ⇒ ticker; silent
-     * after MAX_UNHEEDED_NUDGES). Optional — when unset the prompt is ungated.
-     * @param {object} skillsSystem
-     */
+    /** Inject SkillsSystem so the in-range prompt obeys hint-gating (mastered ⇒ silent; veteran ⇒ ticker; silent after
+     *  MAX_UNHEEDED_NUDGES). Optional: unset = ungated. */
     setSkillsSystem(skillsSystem) {
         this._skillsSystem = skillsSystem || null;
     }
 
-    /**
-     * Cargo-continuity S13(d): inject the CaptureNetSystem. A completed lasso
-     * catch adopts onto its mother berth path (the one holding model) instead of
-     * the deleted cargo cells. Optional — when unset (headless tests) the catch
-     * resolves via the legacy instant path.
-     * @param {object} captureNetSystem
-     */
     setCaptureNetSystem(captureNetSystem) {
         this._captureNetSystem = captureNetSystem || null;
     }
 
-    /**
-     * Resolve the forward firing direction for the arc constraint. Single source
-     * of truth shared by fire() (the authoritative gate) and the proactive
-     * in-range invite, so the invite can never advertise a cast fire() will then
-     * reject. Falls back to +Z when the ship has no velocity (matches fire()'s
-     * legacy behaviour). Writes into `out` (a scratch vector) to avoid per-frame
-     * allocation; returns `out`.
-     * @param {THREE.Vector3|null} playerVelDir — prograde dir (may be null/zero)
-     * @param {THREE.Vector3} out — scratch target
-     * @returns {THREE.Vector3} normalized forward direction
-     * @private
-     */
+    /** Forward firing direction for the arc constraint; single source for fire() and the in-range invite, so the invite
+     *  never advertises a cast fire() rejects. Falls back to +Z without velocity. Writes into scratch `out`. */
     _resolveForwardDir(playerVelDir, out) {
         if (playerVelDir && playerVelDir.lengthSq() > 0) {
             return out.copy(playerVelDir).normalize();
@@ -407,74 +298,34 @@ export class LassoSystem {
         return out.copy(_defaultForward);
     }
 
-    /**
-     * Phase 1B: world position of the front-centre launcher muzzle — along the
-     * nose (+Z/prograde) at LASSO_MUZZLE_OFFSET_M ahead of the hull centre. The
-     * net spawns here and the tether anchors here so the throw reads as leaving
-     * a front launcher, not the hull centroid. Recomputed every frame so it
-     * tracks the nose as the ship reorients along velocity.
-     * @param {THREE.Vector3} playerPos
-     * @param {THREE.Vector3|null} playerVelDir — prograde dir (may be null/zero)
-     * @param {THREE.Vector3} out — scratch target (returned)
-     * @returns {THREE.Vector3} world muzzle position
-     * @private
-     */
+    /** World position of the nose launcher muzzle: LASSO_MUZZLE_OFFSET_M ahead of the hull centre along the nose
+     *  (+Z/prograde); the net spawns here. Recomputed every frame as the ship reorients along velocity. */
     _computeMuzzleWorld(playerPos, playerVelDir, out) {
         const fwd = this._resolveForwardDir(playerVelDir, _scratchFwd);
         return out.copy(playerPos).addScaledVector(fwd, Constants.LASSO_MUZZLE_OFFSET_M * M);
     }
 
-    /**
-     * Tether anchor for the OUTBOUND (flight) phase. Unlike the muzzle (which
-     * sits LASSO_MUZZLE_OFFSET_M along the *velocity* vector), this anchor sits a
-     * short way from the hull along the direction to the *net* — i.e. it is
-     * always collinear with the tether. Anchoring along velocity put the start
-     * point off the tether's line whenever the cast direction ≠ prograde (the
-     * common case — the net flies at the target, not along velocity), which bowed
-     * the strand into an arch that looped over the mother and read as a detached
-     * tether (owner: "tether seems disconnect from mother"). Pointing the anchor
-     * at the net keeps the strand straight from the nose to the net and clearly
-     * attached. Offset is clamped small so it hugs the hull at the in-game framing.
-     * @param {THREE.Vector3} playerPos hull centre (world)
-     * @param {THREE.Vector3} netPos    projectile/net position (world)
-     * @param {THREE.Vector3} out       scratch target (returned)
-     * @returns {THREE.Vector3} world tether anchor
-     * @private
-     */
+    /** Tether anchor for the OUTBOUND phase: a short way from the hull toward the *net*, so it is always collinear with
+     *  the tether. Anchoring along velocity bowed the strand into an arch over the mother whenever cast ≠ prograde
+     *  (read as a detached tether; owner: "tether seems disconnect from mother"). Offset clamped small so it hugs the hull.
+     *  @param {THREE.Vector3} playerPos hull centre (world)
+     *  @param {THREE.Vector3} netPos projectile/net position (world)
+     *  @param {THREE.Vector3} out scratch target (world; returned) */
     _computeTetherAnchor(playerPos, netPos, out) {
-        // out = (net − player) delta. NOTE: keep all math on `out` itself — do
-        // NOT alias a separate `dir` handle to it; an earlier version did
-        // `const dir = out.copy(...)` then `out.copy(playerPos).addScaledVector(dir,…)`,
-        // which (since dir===out) added playerPos·off and parked the anchor ~100 m
-        // radially outward — the tether then stretched to a wrong point in flight
-        // and snapped back to the hull at reel ("tether jumps to wrong position").
+        // Keep all math on `out` itself; do NOT alias a separate `dir` to it (that added playerPos·off and parked the
+        // anchor ~100 m radially outward).
         out.copy(netPos).sub(playerPos);
         const dist = out.length();
         if (dist < 1e-9) return out.copy(playerPos);
-        // Anchor at the NOSE TIP, not the 8 m spawn muzzle. LASSO_MUZZLE_OFFSET_M
-        // (where the projectile spawns + the muzzle flash sits) is ~4 ship-lengths
-        // ahead of the hull; anchoring the *tether* there left a large empty gap
-        // between the mother and the strand at the in-game framing, reading as a
-        // detached tether. The hull (OCTOPUS_V5 core ≈ 2 m) reads as connected
-        // when the strand starts within ~1.5 m of centre, so clamp hard to the
-        // nose and shrink further for very short throws. Direction is toward the
-        // net (collinear with the tether) so the strand never arches off-axis.
+        // Anchor at the NOSE TIP, not the 8 m spawn muzzle (that gap read as a detached tether). The hull (OCTOPUS_V5 core
+        // ≈ 2 m) reads as connected when the strand starts within ~1.5 m of centre; shrink further for very short throws.
         const off = Math.min(1.5 * M, dist * 0.5);
-        // Scale the delta to length `off` (toward the net), then offset from the
-        // hull — single-buffer, no aliasing.
         return out.multiplyScalar(off / dist).add(playerPos);
     }
 
-    /**
-     * Phase 1C: trigger a brief cosmetic recoil kick of the mother mesh opposite
-     * the launch direction. This is VISUAL ONLY — no orbit change, no fuel, no
-     * _rcsVelocity — so it cannot disturb the M1 station-keep / pin. The kick
-     * offset is applied to the player model group and springs back via a
-     * critically-damped decay in PlayerSatellite. Falls back to a no-op when no
-     * player model is wired (headless tests).
-     * @param {THREE.Vector3} launchDir — normalized world launch direction
-     * @private
-     */
+    /** VISUAL-ONLY recoil kick of the mother mesh opposite the launch direction (no orbit change, fuel or _rcsVelocity,
+     *  so the M1 station-keep/pin is undisturbed); springs back in PlayerSatellite. No-op without a player model.
+     *  @param {THREE.Vector3} launchDir normalized world launch direction */
     _launchRecoil(launchDir) {
         if (!this._player || typeof this._player.applyCosmeticRecoil !== 'function') return;
         if (!launchDir) return;
@@ -483,37 +334,22 @@ export class LassoSystem {
         );
     }
 
-    /**
-     * Wire the PlayerSatellite so the cosmetic launch recoil (Phase 1C) can kick
-     * the hull mesh. Optional — when unset the recoil is a no-op (headless tests).
-     * @param {object} player — PlayerSatellite with applyCosmeticRecoil(offsetVec)
-     */
     setPlayer(player) {
         this._player = player || null;
     }
 
-    /**
-     * catch-near-pass (Decision 2): hand over the scene manager so the cast web can be drawn in the near-field pass.
-     * The web follows the HELD piece it wraps (the piece's `_nearProxy`, set by DebrisField when the pinned catch is
-     * within the near rule of the ship): a web in the near pass over a piece still in the far pass would paint over it.
-     * In flight (nothing held yet) the web stays far pass with the piece it is chasing. Optional: unset = far pass.
-     * @param {object|null} sceneManager — registerNearFieldRoot / unregisterNearFieldRoot
-     */
+    /** Hand over the scene manager so the web can draw in the near pass. The web follows the HELD piece it wraps (its
+     *  `_nearProxy`, set by DebrisField when the pinned catch is within the near rule): a near-pass web over a far-pass
+     *  piece would paint over it. In flight the web stays far pass. Unset = far pass. */
     attachNearField(sceneManager) {
         this._nearSm = sceneManager || null;
         if (!this._nearSm && this._webNear) this._webNear = false;
     }
 
-    /**
-     * catch-near-pass (Decision 2): put the web group in the near pass exactly while the piece it wraps is drawn there.
-     * The group is a scene child with a world position, which is what a near-field root is (the pass moves it to
-     * (world − camera)·S and scales it ×S, then puts it back), so no write site changes. The web's lines are screen-space
-     * pixels (worldUnits false), which the pass does not change.
-     * The piece is resolved BY ID through the field (CONVENTIONS.md:154): `target` may be a snapshot or a copy that never
-     * receives the field's `_nearProxy` flag.
-     * @param {object|null} [debrisField] the field (update() passes it); without it the target itself is read
-     * @private
-     */
+    /** Put the web group in the near pass exactly while the piece it wraps is drawn there. The group is a scene child
+     *  with a world position, i.e. a near-field root (the pass moves it to (world − camera)·S, scales ×S, then restores).
+     *  Web lines are screen-space px (worldUnits false), unchanged by the pass. The piece is resolved BY ID through the
+     *  field (CONVENTIONS.md Rule H): `target` may be a snapshot that never gets the field's `_nearProxy` flag. */
     _syncWebPass(debrisField = null) {
         const g = this._netGroup, sm = this._nearSm;
         if (!g || !sm || typeof sm.registerNearFieldRoot !== 'function') return;
@@ -528,17 +364,8 @@ export class LassoSystem {
         else if (typeof sm.unregisterNearFieldRoot === 'function') sm.unregisterNearFieldRoot(g);
     }
 
-    /**
-     * Cargo-continuity S13(d): the berth axis the collar seat sits on — the ship's
-     * live forward (from its attitude) when a player is wired, else the prograde
-     * fallback shared with fire(). Matches CaptureNet.updateBerthHold, which pins
-     * the adopted catch on the ship-forward axis, so the reel delivery and the
-     * adoption pin agree.
-     * @param {THREE.Vector3|null} playerVelDir
-     * @param {THREE.Vector3} out
-     * @returns {THREE.Vector3} normalized berth axis
-     * @private
-     */
+    /** Berth axis the collar seat sits on: the ship's live forward (attitude) when a player is wired, else the
+     *  prograde fallback. Matches CaptureNet.updateBerthHold so reel delivery and the adoption pin agree. */
     _berthAxis(playerVelDir, out) {
         const player = this._player;
         if (player && player.quaternion) {
@@ -547,44 +374,21 @@ export class LassoSystem {
         return this._resolveForwardDir(playerVelDir, out);
     }
 
-    /**
-     * catch-focus (owner 2026-10-18, "debris still magically shrinks"; DECISIONS Ruling 0, physically real wins):
-     * a lasso catch is drawn at its TRUE size from contact to the collar, the same law the mother net has kept since
-     * 2026-10-16 (CaptureNet._catchFloorScale). The old floor (MOTHER_CATCH_MIN_RENDER_M, 1.5-2.0 m bounding radius,
-     * 4-5.5x a small fragment) eased to true size between FLOOR_FAR_M and FLOOR_NEAR_M: the visible shrink. The value
-     * written to `_catchRenderMin` is now the piece's BASE render scale, which DebrisField.catchRenderFloorScale (its
-     * predicate only raises, `_catchRenderMin > base`) treats as no floor. The constant MOTHER_CATCH_MIN_RENDER_M stays
-     * in Constants.js (the non-ladder ceremony hold distance reads it).
-     * @param {object} target — the piece
-     * @param {THREE.Vector3} _scenePos — unused (the old distance ease)
-     * @param {THREE.Vector3} _playerPos — unused (the old distance ease)
-     * @returns {number} scene-unit scale for `_catchRenderMin` (== the base render scale: no floor)
-     * @private
-     */
+    /** A lasso catch is drawn at its TRUE size from contact to the collar (DECISIONS Ruling 0; same law as
+     *  CaptureNet._catchFloorScale). Returns the piece's BASE render scale, which DebrisField.catchRenderFloorScale treats
+     *  as no floor (its predicate only raises, `_catchRenderMin > base`). MOTHER_CATCH_MIN_RENDER_M stays in Constants.js
+     *  (the non-ladder ceremony hold distance reads it). The scene/player params are unused. */
     _catchFloorFor(target, _scenePos, _playerPos) {
         return DebrisField.baseRenderScale(target);
     }
 
-    /**
-     * Cargo-continuity S13(d): world position of the collar seat the one holding
-     * model berths a catch at — berth anchor + berth-axis × (size/2 + clearance),
-     * the exact standoff CaptureNet.updateBerthHold holds (the S13(c) collar seat).
-     * S13(e): the anchor is the COLLAR (on-axis), not the pod-0 muzzle — the
-     * pods left the boresight; the berth did not.
-     * The lasso reels its package HERE and the adoption pins it HERE, so the
-     * hand-off never snaps. Falls back to the hull centre + prograde when no
-     * player is wired (headless).
-     * @param {object|null} target — the catch (for its size)
-     * @param {THREE.Vector3} playerPos
-     * @param {THREE.Vector3|null} playerVelDir
-     * @param {THREE.Vector3} out
-     * @returns {THREE.Vector3} world collar-seat position
-     * @private
-     */
+    /** World position of the collar seat a catch berths at: berth anchor + berth-axis × standoff, the exact standoff
+     *  CaptureNet.updateBerthHold holds. The anchor is the COLLAR (on-axis), not the pod-0 muzzle. The lasso reels its
+     *  package HERE and adoption pins it HERE, so the hand-off never snaps. Falls back to hull centre + prograde without
+     *  a player (headless). */
     _collarSeatWorld(target, playerPos, playerVelDir, out) {
-        // l8-reel-collar: the seat is HOME — the catch's centre on the collar axis, the bag's surface on the ring
-        // (or clear of the nose parts by 0.02 m) — the SAME place the mother reel ends, from the one helper
-        // (CaptureNetSystem.getCatchHomeDistM → catchHomeDistM). It was size/2 + 1.0 m.
+        // The seat is HOME: the catch's centre on the collar axis, the bag's surface on the ring (or clear of the nose parts
+        // by 0.02 m); the same place the mother reel ends (CaptureNetSystem.getCatchHomeDistM → catchHomeDistM).
         const cnsHome = this._captureNetSystem;
         const R = Constants.CAPTURE_NET.REEL_HOME;
         const standoffM = (cnsHome && typeof cnsHome.getCatchHomeDistM === 'function' && target)
@@ -602,37 +406,19 @@ export class LassoSystem {
         return out.addScaledVector(_scratchFwd, standoffM * M);
     }
 
-    /**
-     * 2026-08-26 round 2 (ENGULF) — where the reel actually DELIVERS the piece:
-     * the collar seat pushed fore by the adoption's interior seat depth
-     * (CAPTURE_NET.ADOPT_CATCH_SEAT_M). adoptLassoCatch pins the piece at
-     * bag-apex + fwd × _catchSeatM (the whale-in-cone follow-up 2 contract —
-     * the catch rides INSIDE the bag, engulfed, never at the apex tip), so the
-     * reel must land the piece exactly there or the hand-off snaps. The
-     * pending-wait hold (_pinPending) keeps using the bare collar seat — it is
-     * a hold-off point, and the settle glide animates onto THIS point before
-     * adopting.
-     * @private
-     */
+    /** Where the reel DELIVERS the piece. Adoption seats the catch at HOME (apex at the ring), so this IS the collar
+     *  seat; the reel must land exactly there or the hand-off snaps. The pending-wait hold (_pinPending) uses the same
+     *  seat and the settle glide animates onto it before adopting. */
     _reelDeliveryWorld(target, playerPos, playerVelDir, out) {
-        // l8-reel-collar: adoption now seats the catch at HOME (apex at the ring, seat = home seat), so the
-        // delivery point IS the collar seat — no interior-seat term (was ADOPT_CATCH_SEAT_M 2.856).
         return this._collarSeatWorld(target, playerPos, playerVelDir, out);
     }
 
     /** Create capture net projectile group, tube tether, trail, and flash visuals */
     _createVisuals() {
-        // ── Unified "web in space" net — shared NetMeshKit (Mother + Daughter) ──
-        // Replaces the rejected look (8 m octagon LineSegments + four 3 m chrome
-        // sphere weights + the wireframe cone "bag") with the SAME translucent web
-        // vocabulary the daughter uses (handoff option B). Sized + styled by
-        // NET_WEB so it reads as a delicate web the small operator casts, never a
-        // cage that out-masses the ship + catch (GAME_DESIGN.md §2.1).
-        //
-        // STRICTLY LOCAL-SPACE: the kit only builds geometry around a local origin
-        // (apex at (0,0,0), mouth along local −Z). All world-positioning,
-        // orientation, open/cinch drive, reel, and tether (the solved F8–F12
-        // machinery) stay in update()/_applyNetMouthRadius/_setNetOpacity below.
+        // Unified web-in-space net: the shared NetMeshKit (Mother + Daughter), sized and styled by NET_WEB: a delicate web,
+        // never a cage that out-masses ship + catch (GAME_DESIGN.md §2.1).
+        // STRICTLY LOCAL-SPACE: the kit builds geometry around a local origin (apex (0,0,0), mouth along local −Z). World
+        // positioning, orientation, open/cinch drive, reel and tether stay in update()/_applyNetMouthRadius/_setNetOpacity.
         this._netGroup = new THREE.Group();
 
         const NW = Constants.NET_WEB;
@@ -649,39 +435,25 @@ export class LassoSystem {
         });
         this._netGroup.add(this._netKit.group);
 
-        // References the open-on-launch / cinch-on-capture animation + tests use.
-        // These mirror the kit handle (which owns the meshes) — the mouth-radius
-        // animation drives them through NetMeshKit.setMouthFraction.
+        // Handles for the open/cinch animation + tests (mouth radius driven through NetMeshKit.setMouthFraction).
         this._netWeights = this._netKit.rimWeights;          // rim nodes (open/cinch sweep)
         this._netFullRadiusScene = this._netKit.mouthRadius; // full open mouth radius (scene units)
 
         this._netGroup.visible = false;
         this.scene.add(this._netGroup);
 
-        // ── Sprint 2 v2: tether (Dyneema ivory fibre, not arcade yellow) ────
-        // Rebuilt each frame from a QuadraticBezierCurve3 (NOT CatmullRom with 3
-        // points — that extrapolates past its endpoints, the "out the back of
-        // mother" bug). Quadratic Bezier passes through only its two endpoints.
+        // The tether is rebuilt each frame from a QuadraticBezierCurve3 (NOT CatmullRom with 3 points: it extrapolates past
+        // its endpoints, "out the back of mother"); a quadratic Bezier passes only through its two endpoints.
 
-        // ── Gossamer fat-line tether (matches the NetMeshKit web primitive) ──
-        // A single Line2 / LineMaterial cable replaces the old coaxial
-        // sheath+core TubeGeometry. A thin tube faceted/Frenet-twisted into a
-        // jagged "staircase" when slimmed toward gossamer; a fat line carries a
-        // constant screen-space width + built-in AA, so it reads as a smooth,
-        // delicate ivory strand at any thinness. Shares the web's resolution sync
-        // (registered with NetMeshKit). Cheaper than the per-frame dual-tube
-        // rebuild it replaces. _tetherCore is retired (kept null; all its call
-        // sites are guarded).
+        // Fat-line tether (Line2/LineMaterial; matches the NetMeshKit web primitive): constant screen-space width + AA, smooth
+        // at any thinness (a thin tube faceted/Frenet-twisted into a jagged staircase). Shares the web's resolution sync
+        // (registered with NetMeshKit). _tetherCore is retired (kept null; its call sites are guarded).
         const tetherGeo = new LineGeometry();
-        // Seed with the initial straight segment (rebuilt each frame from the
-        // live catenary in _rebuildTetherGeometry).
+        // Seed straight segment; rebuilt each frame from the live catenary in _rebuildTetherGeometry.
         tetherGeo.setPositions([0, 0, 0, 0, 0, M * 10]);
         const tetherMat = new LineMaterial({
-            color: Constants.NET_WEB.WEB_COLOR, // C0/V5: cable and net share one
-            // colour SSOT (was the hard-coded, drifted 0xcfeaff)
-            linewidth: Constants.NET_WEB.TETHER_WIDTH_M, // V3: world units (m) —
-            // the strand thickens on approach and stays AA-smooth at distance
-            // (was fixed 2.0 screen px). The tube this replaces staircased.
+            color: Constants.NET_WEB.WEB_COLOR, // cable and net share one colour SSOT
+            linewidth: Constants.NET_WEB.TETHER_WIDTH_M, // world units (m): thickens on approach, AA-smooth at distance
             transparent: true,
             opacity: 0,             // faded in on fire()
             worldUnits: true,       // width is metres, not screen px
@@ -694,21 +466,14 @@ export class LassoSystem {
         this._tetherMesh = new Line2(tetherGeo, tetherMat);
         this._tetherMesh.frustumCulled = false;
         this._tetherMesh.visible = false;
-        // §2-followup (round 4): the net tether bridges mother and a captured
-        // target (separate scene objects). Tag it CONNECTOR so it lies on the
-        // hull/target instead of sorting ambiguously by raw depth.
+        // Tag CONNECTOR: the tether bridges mother and a captured target (separate scene objects), so it must lie on the
+        // hull/target instead of sorting by raw depth.
         this._tetherMesh.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
         this.scene.add(this._tetherMesh);
 
-        // Coaxial bright core retired — the fat-line strand carries the look.
         this._tetherCore = null;
 
-        // Markers removed in v2e — they confirmed anchor was going to wrong place
 
-        // Energy pulse bead removed (Issue #6 — de-arcade tether visual)
-        // Trail spheres removed (Issue #6 — de-arcade tether visual)
-
-        // ── Phase 6: Muzzle flash — bright white sphere ────────────────────
         const flashGeo = new THREE.SphereGeometry(M * 10, 6, 6);
         const flashMat = new THREE.MeshBasicMaterial({
             color: 0xffffff,
@@ -717,10 +482,9 @@ export class LassoSystem {
         });
         this._muzzleFlash = new THREE.Mesh(flashGeo, flashMat);
         this._muzzleFlash.visible = false;
-        this._muzzleFlash.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // §2-followup (round 4)
+        this._muzzleFlash.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
         this.scene.add(this._muzzleFlash);
 
-        // ── Phase 6: Contact flash — white/cyan ─────────────────────────────
         const contactGeo = new THREE.SphereGeometry(M * 12, 6, 6);
         const contactMat = new THREE.MeshBasicMaterial({
             color: 0x88ffff,
@@ -729,10 +493,9 @@ export class LassoSystem {
         });
         this._contactFlash = new THREE.Mesh(contactGeo, contactMat);
         this._contactFlash.visible = false;
-        this._contactFlash.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // §2-followup (round 4)
+        this._contactFlash.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
         this.scene.add(this._contactFlash);
 
-        // ── Gossamer particle trail ──────────────────────────────────────────
         const N = this._trailCount;
         this._trailPositions = new Float32Array(N * 3);
         this._trailAlphas = new Float32Array(N);
@@ -743,7 +506,6 @@ export class LassoSystem {
         trailGeo.setAttribute('position', new THREE.BufferAttribute(this._trailPositions, 3));
         trailGeo.setAttribute('alpha', new THREE.BufferAttribute(this._trailAlphas, 1));
 
-        // Custom ShaderMaterial for per-particle alpha + additive glow
         const trailMat = new THREE.ShaderMaterial({
             uniforms: {
                 uColor: { value: new THREE.Color(0.55, 0.95, 0.80) }, // cyan-green silk
@@ -778,62 +540,35 @@ export class LassoSystem {
         this._trailPoints = new THREE.Points(trailGeo, trailMat);
         this._trailPoints.frustumCulled = false;
         this._trailPoints.visible = false;
-        this._trailPoints.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // §2-followup (round 4)
+        this._trailPoints.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
         this.scene.add(this._trailPoints);
 
-        // NOTE: Contact ring removed (ST-2.4) — replaced by dynamic radial sparks
     }
 
-    /**
-     * Set opacity on the net's web (cone + drawstring + fade-able edge nodes)
-     * via the shared kit. The tether is a separate object owned by LassoSystem
-     * and is faded independently.
-     * @param {number} opacity
-     */
+    /** Set opacity on the net web (cone, drawstring, edge nodes) via the kit; the tether is faded independently. */
     _setNetOpacity(opacity) {
         if (this._netKit) NetMeshKit.setOpacity(this._netKit, opacity);
     }
 
-    /**
-     * Phase 2 (LASSO_NET_KINEMATICS): set the net MOUTH radius as a fraction of
-     * the full perimeter radius — the parameterized "open / cinch" animation,
-     * delegated to the shared kit (scales rim-node + cone XY, keeps the apex +
-     * axial length, rebuilds the drawstring). This is a kinematic mapping (not a
-     * cloth sim): openFrac on launch, cinchFrac on capture. No-op when the kit is
-     * absent (pre-init).
-     * @param {number} radiusFrac — mouth radius fraction in [NET_CINCH..1]
-     * @private
-     */
+    /** Net MOUTH radius as a fraction of the full perimeter radius, in [NET_CINCH..1] (LASSO_NET_KINEMATICS): open on
+     *  launch, cinch on capture; a kinematic mapping, not cloth. No-op before the kit exists. */
     _applyNetMouthRadius(radiusFrac) {
         if (this._netKit) NetMeshKit.setMouthFraction(this._netKit, radiusFrac);
     }
 
     /**
-     * 2026-08-26 wrap-as-cloth: drive the shared kit's REAL drape machinery —
-     * ring-collapse cinch onto the caught piece's contents floor, item-12
-     * elbow redistribution, and the W2a size-aware welded film — during the
-     * lasso's WRAP + haul. This is the exact vocabulary the mother pod-net
-     * speaks (CaptureNetVisual.js drape driver); the lasso previously never
-     * called updateWebDrape at all, so its "wrap" was a bare cone XY scale.
-     * Envelop leads (drape saturates by cinchT 0.5), the drawstring completes
-     * (cinchFrac = cinchT, held 1 through the haul), and the film fades
-     * base → the SMALL welded rest (catchSizeM = LOGICAL size — the floored
-     * rendered radius pops at reel entry and would re-fade the film; same
-     * W2a rationale as the mother path).
-     *
-     * The caught piece is pinned AT the projectile each reel frame
-     * (target._armPinPos ← projectilePos), i.e. at the kit-group origin —
-     * contentsZ ≈ 0, the co-located apex-pin case the kit pins in its own
-     * item-12 family. The oriented-box spec mirrors CaptureNetVisual.js
-     * :1341–1365 (own scratches — two live drivers must never share one).
-     * Contents are omitted (0 / null) whenever the debris carries no
-     * drawable scale (bare headless mocks) — the kit treats that as an empty
-     * net bunching to a point, its documented contract.
+     * Drive the shared kit's REAL drape machinery during the lasso's WRAP + haul (the vocabulary the mother pod-net speaks,
+     * CaptureNetVisual drape driver): ring-collapse cinch onto the piece's contents floor, elbow redistribution, size-aware
+     * welded film. Envelop leads (drape saturates by cinchT 0.5); the drawstring completes (cinchFrac = cinchT, held 1
+     * through the haul); the film fades base → the SMALL welded rest (catchSizeM = LOGICAL size: the floored rendered
+     * radius pops at reel entry and would re-fade the film).
+     * The piece is pinned AT the projectile each reel frame (target._armPinPos ← projectilePos), i.e. the kit-group
+     * origin: contentsZ ≈ 0, the co-located apex-pin case. The oriented-box spec mirrors CaptureNetVisual (own scratches:
+     * two live drivers never share one). Contents are omitted (0 / null) when the debris has no drawable scale (bare
+     * headless mocks): the kit treats that as an empty net bunching to a point.
      * @param {number} cinchT wrap progress in [0, 1]
-     * @param {number} [gatherT] round 3 (V3): sock-gather amount in [0, 1] —
-     *   how far the mouth ring has eased toward the contents' far face
+     * @param {number} [gatherT] sock-gather in [0, 1]: how far the mouth ring has eased toward the contents' far face
      *   (0 during the wrap window; ramps over WRAP_SOCK_GATHER_RAMP after)
-     * @private
      */
     _driveWrapDrape(cinchT, gatherT = 0) {
         const kit = this._netKit;
@@ -890,43 +625,26 @@ export class LassoSystem {
         });
     }
 
-    // Sparks removed per user feedback — "NOT an arcade game"
 
-    /**
-     * Rebuild coaxial tether (sheath + core) with a subtle catenary sag at
-     * the midpoint for natural cable-slack look. Stores the curve so the
-     * pulse bead can travel along it during reel-in.
-     * Sag magnitude scales with tether length so short tethers stay taut.
-     * @param {THREE.Vector3} startPos - Satellite attach point
-     * @param {THREE.Vector3} endPos   - Net projectile position
-     */
+    /** Rebuild the tether with a subtle catenary sag at the midpoint (scales with length, so short tethers stay taut);
+     *  stores the curve in _tetherCurve. */
     _rebuildTetherGeometry(startPos, endPos) {
         if (!this._tetherMesh) return;
 
         const length = startPos.distanceTo(endPos);
-        // Sag capped at either the configured NET_TETHER_SAG (m) or 5% of length,
-        // whichever is smaller — short tethers stay visually taut.
+        // Sag capped at NET_TETHER_SAG (m) or 5% of length, whichever is smaller.
         const sagMag = Math.min(Constants.NET_TETHER_SAG * M, length * 0.05);
         const mid = new THREE.Vector3()
             .addVectors(startPos, endPos)
             .multiplyScalar(0.5);
-        // Catenary sag toward NADIR (planet-down), NOT world −Y. The Earth sits
-        // at the scene origin, so nadir = −normalize(mid). Sagging along a fixed
-        // world axis pulled the control point off to one side of the tether at
-        // most orbital attitudes, bowing the strand into an "arch" that loops
-        // up and over the mother and reads as a detached tether. A nadir-aligned
-        // sag always hangs the strand gently downward toward the planet (and
-        // vanishes to taut when the tether is itself radial), so it never arches
-        // across the hull. For a QuadraticBezierCurve3 the apex sits halfway to
-        // the control point, so offset by 2× the desired sag.
+        // Sag toward NADIR (planet-down; Earth at the scene origin, so nadir = −normalize(mid)), NOT a fixed world axis, which
+        // bowed the strand into an arch over the mother at most attitudes (reads as a detached tether). Vanishes to taut when
+        // the tether is radial. A QuadraticBezierCurve3 apex sits halfway to the control point, so offset by 2× the sag.
         const nadir = mid.lengthSq() > 0
             ? _scratchNadir.copy(mid).normalize().multiplyScalar(-1)
             : _scratchNadir.set(0, -1, 0);
         mid.addScaledVector(nadir, sagMag * 2);
 
-        // Sprint 2 v2c: QuadraticBezierCurve3 — guaranteed no extrapolation
-        // past endpoints. CatmullRomCurve3 with 3 points OVERSHOOTS past
-        // start/end, causing the "tether out the back of mother" bug.
         const curve = new THREE.QuadraticBezierCurve3(
             startPos.clone(),
             mid,
@@ -934,24 +652,16 @@ export class LassoSystem {
         );
         this._tetherCurve = curve;
 
-        // Sample the catenary into the fat-line strand. getPoints(N) yields
-        // NET_TETHER_SEGMENTS+1 points; flatten to [x,y,z,…] for LineGeometry.
+        // Sample the catenary (NET_TETHER_SEGMENTS+1 points) into the fat-line strand, flattened to [x,y,z,…].
         const pts = curve.getPoints(Constants.NET_TETHER_SEGMENTS);
         const flat = this._tetherFlat && this._tetherFlat.length === pts.length * 3
             ? this._tetherFlat
             : (this._tetherFlat = new Float32Array(pts.length * 3));
-        // ── DEFECT-1 FIX: anchor-relative vertices (float32 precision) ──────
-        // The ship orbits at ~64–84 scene units from the world origin
-        // (EARTH_RADIUS 63.71 + altitude). At magnitude ~64 the float32 grid
-        // spacing is 2^(6-23) ≈ 7.6e-6 units ≈ 0.76 m, while the tether's spine
-        // points sit ~1 m apart — so absolute-world vertices snap to that grid
-        // and the strand renders as a regular "lightning-bolt" sawtooth (the web
-        // escapes this because it lives in a local Group near its own origin).
-        // Fix: park the line object AT the start anchor and store every vertex
-        // RELATIVE to that anchor. The subtraction happens in float64 (JS
-        // numbers) and the small offsets (~0.0003 units) keep full float32
-        // precision; the single uniform translation in the object matrix shifts
-        // the whole strand together (no per-vertex wobble). Primitive-agnostic.
+        // Anchor-relative vertices (float32 precision): the ship orbits ~64–84 scene units from the origin (EARTH_RADIUS 63.71
+        // + altitude), where float32 spacing is ≈ 7.6e-6 units ≈ 0.76 m against tether points ~1 m apart, so absolute vertices
+        // snap to a "lightning-bolt" sawtooth (the web is immune: it lives in a local Group). Park the line AT the start anchor
+        // and store vertices RELATIVE to it (float64 subtraction keeps the ~0.0003-unit offsets exact in float32; one
+        // object-matrix translation shifts the strand together).
         this._tetherMesh.position.copy(startPos);
         for (let i = 0; i < pts.length; i++) {
             flat[i * 3] = pts[i].x - startPos.x;
@@ -961,31 +671,20 @@ export class LassoSystem {
         this._tetherMesh.geometry.setPositions(flat);
     }
 
-    /**
-     * catch-focus Decision 0 (owner 2026-10-18, "the lasso catch never leaves the line"): the CANONICAL field object
-     * for a debris handed out by getDebrisNear (a read-only SNAPSHOT: frozen `_scenePosition` and `orbit`) or by a
-     * stale selection, found by id. The lasso reel seeds its start offset and its pin from the target's
-     * `_scenePosition`; a snapshot taken at fire is frozen while the ship moves ~78 km/s in scene space, so the catch
-     * was drawn tens of km from the line at contact and vanished for 1.8-4.0 s.
-     * @param {object|null} debrisField
-     * @param {object|null} d
-     * @returns {object|null} the live field object, or null when the field has no `getDebrisById`, does not know
-     *   the id, or the piece is dead (the caller then keeps `d` and reads the live `_targetScenePos` instead)
-     * @private
-     */
+    /** The CANONICAL field object for a debris from getDebrisNear (a read-only SNAPSHOT: frozen `_scenePosition` and
+     *  `orbit`) or a stale selection, found by id. The reel seeds its start offset and pin from `_scenePosition`; a
+     *  snapshot is frozen while the ship moves ~78 km/s in scene space, so the catch was drawn tens of km off the line
+     *  (owner 2026-10-18: the lasso catch never leaves the line). Returns null when the field has no `getDebrisById`,
+     *  does not know the id, or the piece is dead (the caller then keeps `d` and reads the live `_targetScenePos`). */
     _canonicalDebris(debrisField, d) {
         if (!d || !debrisField || typeof debrisField.getDebrisById !== 'function') return null;
         const live = debrisField.getDebrisById(d.id);
         return (live && live.id === d.id && live.alive !== false) ? live : null;
     }
 
-    /**
-     * interlocks-p2 R1: who owns `piece` right now (a daughter flying, holding or lining up a launch for it, a mother net on
-     * its way, a catch held)? Null when nobody does, or when no arm manager is wired (headless mocks). The lasso itself is
-     * not asked: it is idle whenever this runs.
-     * @returns {{kind: string}|null}
-     * @private
-     */
+    /** Who owns `piece` now (a daughter flying, holding or lining up a launch for it, a mother net inbound, a catch
+     *  held)? Null when nobody does or no arm manager is wired (headless mocks). The lasso itself is not asked: it is idle
+     *  whenever this runs. */
     _pieceOwner(piece) {
         const am = this._player && this._player.armManager;
         if (!piece || !am || typeof am.pieceClaimOf !== 'function') return null;
@@ -993,32 +692,20 @@ export class LassoSystem {
         return claim && !isFree(claim) ? claim : null;
     }
 
-    /**
-     * catch-focus Decision 0: where the target piece is NOW (scene units, a shared reference — copy before keeping).
-     * A canonical target's own `_scenePosition` is live; a snapshot fallback's is frozen at fire, so prefer the
-     * `_targetScenePos` that update() refreshes from the canonical object by id every frame.
-     * @returns {THREE.Vector3|null}
-     * @private
-     */
+    /** Where the target piece is NOW (scene units, shared reference: copy before keeping). A canonical target's
+     *  `_scenePosition` is live; a snapshot's is frozen at fire, so prefer `_targetScenePos` (refreshed by id every frame). */
     _livePiecePos() {
         const t = this.target;
         if (this._targetIsLive && t && t._scenePosition) return t._scenePosition;
         return this._targetScenePos || (t && t._scenePosition) || this.projectilePos;
     }
 
-    /**
-     * Extract scene position from a debris object returned by getDebrisNear.
-     * getDebrisNear returns objects with _cartesian.position = { x, y, z }.
-     * @param {object} debris
-     * @returns {THREE.Vector3|null}
-     */
+    /** Scene position of a debris from getDebrisNear (`_cartesian.position`) or the field (`_scenePosition`). */
     _getDebrisScenePos(debris) {
         if (!debris) return null;
-        // Original debris objects have _scenePosition (from DebrisField._updateInstanceTransform)
         if (debris._scenePosition) {
             return debris._scenePosition.clone();
         }
-        // Copies from getDebrisNear() have _cartesian
         if (debris._cartesian && debris._cartesian.position) {
             const p = debris._cartesian.position;
             return new THREE.Vector3(p.x, p.y, p.z);
@@ -1027,28 +714,18 @@ export class LassoSystem {
     }
 
     /**
-     * Proactive in-range prompt (gap C.3). When the Tab-selected target first
-     * comes within lasso range, is inside the forward firing arc, AND a cast is
-     * actually possible, emit a one-time "press N" comms hint. Resets when the
-     * target leaves range (with hysteresis margin) / changes / leaves the arc /
-     * a cast becomes impossible, so it re-arms for the next entry.
-     *
-     * Invite ⇔ success: the gate here mirrors the real constraints `fire()`
-     * enforces (range, mass, forward arc) so we never invite a cast the system
-     * will then refuse. The line is tagged `_proactive` so commsSuppression
-     * tier-gates it (suppressed at tier 0 — the Director owns onboarding).
-     *
-     * @private
-     * @param {THREE.Vector3} playerPos
-     * @param {object|null} selectedTarget
+     * Proactive in-range prompt: a one-time "press N" comms hint when the Tab-selected target first comes within range,
+     * inside the forward arc, with a cast possible. Re-arms when the target leaves range (10% hysteresis) / changes /
+     * leaves the arc / a cast becomes impossible.
+     * Invite ⇔ success: mirrors fire()'s constraints (range, mass, arc) so we never invite a cast it will refuse. The
+     * line is tagged `_proactive` so commsSuppression tier-gates it (suppressed at tier 0: the Director owns onboarding).
      * @param {THREE.Vector3|null} [playerVelDir] prograde dir for the arc test
+     * @private
      */
     _updateInRangePrompt(playerPos, selectedTarget, playerVelDir = null) {
-        // During onboarding the Director's `lasso` beat teaches this; suppress
-        // the system prompt entirely so it can't contradict an earlier beat.
+        // During onboarding the Director's `lasso` beat teaches this; suppress so it can't contradict an earlier beat.
         if (this._onboardingActive) { this._inRangePromptId = null; return; }
 
-        // A cast must be currently possible, else clear and bail.
         const canCast = !this.active && this.cooldown <= 0 && this.getAmmo() > 0;
         if (!canCast || !selectedTarget || !playerPos) {
             this._inRangePromptId = null;
@@ -1061,54 +738,45 @@ export class LassoSystem {
 
         const dist = playerPos.distanceTo(pos);
         const rangeScene = Constants.LASSO_RANGE * M;
-        // Hysteresis: require leaving by a 10% margin before re-arming so a
-        // target hovering at the boundary can't re-fire the prompt repeatedly.
+        // Hysteresis: leave by a 10% margin before re-arming, so a target at the boundary can't re-fire the prompt.
         const alreadyArmed = this._inRangePromptId === targetId;
         const enterRange = dist <= rangeScene;
         const stayRange = dist <= rangeScene * 1.1;
         const inRange = alreadyArmed ? stayRange : enterRange;
         const tooHeavy = (selectedTarget.mass || 1) > Constants.LASSO_MAX_CAPTURE_MASS;
 
-        // Forward-arc test — uses the SAME forward-dir resolution as fire()
-        // (shared _resolveForwardDir, +Z fallback) so the invite matches exactly
-        // what a cast would do. Always enforced, even at zero velocity.
+        // Forward arc: same resolution as fire() (_resolveForwardDir, +Z fallback); always enforced, even at zero velocity.
         const fwdDir = this._resolveForwardDir(playerVelDir, _scratchFwd);
         const toTarget = _scratchToTarget.copy(pos).sub(playerPos).normalize();
         const inArc = toTarget.dot(fwdDir) >= Constants.LASSO_FORWARD_ARC_DOT;
 
         if (inRange && !tooHeavy && inArc) {
-            // Only announce on the transition into a castable state for this target.
             if (this._inRangePromptId !== targetId) {
-                // Universal hint-gating (Phase 3): skip for a player who has
-                // mastered the lasso, or after MAX_UNHEEDED_NUDGES, but still
-                // nudge a discovered-but-struggling player (recent lasso-denied
-                // failure). Ungated when no SkillsSystem is wired (tests).
+                // Hint-gating: skip when the lasso is mastered or after MAX_UNHEEDED_NUDGES, but still nudge a struggling player
+                // (recent lasso-denied). Ungated without a SkillsSystem (tests).
                 const ss = this._skillsSystem;
                 if (ss && typeof ss.canFireHint === 'function') {
                     if (!ss.canFireHint('collect_lasso', { cause: 'lasso-denied' })) {
-                        // Do NOT consume the transition — a subsequent lasso-denied
-                        // failure can flip canFireHint true while still in range, and
-                        // we want the nudge to fire then. Re-checked next frame.
+                        // Do NOT consume the transition: a later lasso-denied can flip canFireHint true while still in range; re-checked
+                        // next frame.
                         return;
                     }
                 }
-                // n-leftovers L1: while he flies a daughter N works HER tool: the line says "Esc, then N", or (Esc would
-                // recall her) waits, unconsumed, until he is back on the ship. Picked now, as the hint is posted.
+                // While he flies a daughter N works HER tool: the line says "Esc, then N", or (Esc would recall her) waits, unconsumed,
+                // until he is back on the ship. Picked now, as the hint is posted.
                 const _nWorks = motherNWorks();
                 const _castLine = motherNLine('In range. N to cast');
                 const _castComms = motherNLine('Target in lasso range. Press N to cast.');
                 if (_castLine == null) return;
-                // Mark the transition consumed only now that we will show a hint.
                 this._inRangePromptId = targetId;
 
-                // Veteran downgrade: a one-line ticker entry instead of a comms
-                // line, so an expert isn't interrupted by a modal-weight prompt.
+                // Veteran: a one-line ticker entry instead of a comms line.
                 const veteran = !!(ss && typeof ss.isVeteran === 'function' && ss.isVeteran());
                 if (veteran) {
                     eventBus.emit(Events.HINT_POSTED, {
                         id: 'lasso_in_range',
                         text: _castLine,
-                        // piloted (F1.3): the glyph is Esc and no key lights (N is not what he presses first), as the Director's chips
+                        // piloted: the glyph is Esc and no key lights (N is not what he presses first), as the Director's chips
                         glyph: _nWorks ? 'N' : 'Esc',
                         keys: _nWorks ? ['KeyN'] : [],
                         skillId: 'collect_lasso',
@@ -1116,12 +784,8 @@ export class LassoSystem {
                         priority: 'normal',
                     });
                 } else {
-                    // Keep this prompt clean and actionable. The raw capture-odds
-                    // % ("Mother net 32%") was removed (2026-06-14): a bare number
-                    // with no context is noise to a new player, and the labelled,
-                    // colour-coded odds already live in the Target panel badge and
-                    // the reticle odds strip (the SSOT ToolOdds readout). Comms
-                    // just needs to say what to press.
+                    // Keep it actionable: no raw capture-odds % (noise to a new player); the labelled odds live in the Target panel
+                    // badge and the reticle odds strip (SSOT ToolOdds).
                     eventBus.emit(Events.COMMS_MESSAGE, {
                         text: _castComms,
                         source: 'SYSTEM',
@@ -1137,28 +801,18 @@ export class LassoSystem {
                 }
             }
         } else {
-            // Out of range, too heavy, out of arc, or deselected — re-arm.
             this._inRangePromptId = null;
         }
     }
 
-    /**
-     * Fire a lasso toward the nearest debris.
-     * @param {THREE.Vector3} playerPos - Mothership position
-     * @param {object} debrisField - DebrisField instance
-     * @param {THREE.Vector3} [playerVelDir] - Prograde direction for aim cone
-     * @param {object|null} [selectedTarget=null] - Tab-selected target from TargetSelector (priority over auto-aim)
-     * @returns {boolean} true if lasso was fired
-     */
+    /** Fire a lasso toward the nearest debris; true if fired. A Tab-selected `selectedTarget` takes priority over auto-aim. */
     fire(playerPos, debrisField, playerVelDir, selectedTarget = null) {
-        if (selectedTarget && selectedTarget._disposed === true) selectedTarget = null;   // slice 5 (5d, D4): a piece that was disposed of is no pick
-        // trip-melt D7: nothing is cast while the ship burns to the next field (one plain line, nothing fires).
+        if (selectedTarget && selectedTarget._disposed === true) selectedTarget = null;   // a disposed piece is no pick
+        // Nothing is cast while the ship burns to the next field (one plain line).
         if (tripRefuses('lasso')) return false;
         if (this.active || this.cooldown > 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'cooldown' });
-            // UX: tell the player WHY the cast was rejected. Without this the
-            // only feedback is a red reticle flash + click — a first-time
-            // player can't tell the lasso is mid-flight or recharging.
+            // Say WHY the cast was rejected (else the only feedback is a red reticle flash + click).
             const secs = this.cooldownRemaining;
             eventBus.emit(Events.COMMS_MESSAGE, {
                 text: this.active
@@ -1172,8 +826,7 @@ export class LassoSystem {
             return false;
         }
 
-        // UX-3 #7: Ammo check — the mother's one count of nets (0 when the net system is not wired: flag off).
-        // One line at 0, never two (DECISIONS §33 row 3).
+        // Ammo: the mother's one count of nets (0 when the net system is not wired). One line at 0, never two (DECISIONS §33 row 3).
         if (this.getAmmo() <= 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_ammo' });
             eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1186,15 +839,13 @@ export class LassoSystem {
             return false;
         }
 
-        // Cargo-continuity S13(d): the lasso rides the ONE holding model — a catch
-        // berths at the nose collar. Soft-block when that single station is busy:
-        // a mated/inbound mother net holds the collar, or a catch is already
-        // waiting for it. The catch has nowhere to go until the berth frees.
+        // The lasso rides the ONE holding model: a catch berths at the nose collar. Soft-block while that station is busy
+        // (a mated/inbound mother net holds it, or a catch is already waiting for it).
         const cns = this._captureNetSystem;
         if (cns && (cns.getDockedCatch() || cns.hasMotherNetInFlight() || this._pendingAdoption)) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'collar_busy' });
-            // no-melt: a catch the nose cannot get rid of (no furnace; every tip and daughter cell taken) gets the
-            // plain "nose is full" line; while a hand-off is still pending today's wait line stays.
+            // A catch the nose cannot get rid of (no furnace; every tip and daughter cell taken) gets the plain "nose is full"
+            // line; while a hand-off is pending the wait line stays.
             const noseFull = typeof cns.getNoseFullLine === 'function' ? cns.getNoseFullLine() : null;
             eventBus.emit(Events.COMMS_MESSAGE, {
                 text: noseFull || 'Cargo berth busy. Wait for the nose collar to clear.',
@@ -1206,14 +857,13 @@ export class LassoSystem {
             return false;
         }
 
-        // Find nearest debris within lasso range
         const rangeScene = Constants.LASSO_RANGE * M; // LASSO_RANGE (=== NET_LOCK_RANGE_M, 90 m) in scene units
-        // slice 5 (5d, D4): a piece that was disposed of (let go by a push-down or a drag sail) is never the nearest piece: it is no catch
+        // A disposed piece (let go by a push-down or a drag sail) is never the nearest piece: it is no catch.
         const nearby = (debrisField.getDebrisNear(playerPos, rangeScene) || []).filter((p) => !(p && p._disposed));
 
         if (!nearby || nearby.length === 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_target' });
-            // net-range: a Tab-selected piece beyond the reach gets the line that names its distance and the limit.
+            // A Tab-selected piece beyond reach gets the line that names its distance and the limit.
             const selPos0 = selectedTarget ? this._getDebrisScenePos(selectedTarget) : null;
             const selRangeM = selPos0 ? targetRangeM(playerPos, selPos0) : Infinity;
             eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1232,15 +882,15 @@ export class LassoSystem {
         let bestTarget = null;
         let bestPos = null;
         let bestDist = Infinity;
-        let ownedSkipped = 0;   // interlocks-p2: pieces the auto-aim passed over because somebody owns them
+        let ownedSkipped = 0;   // pieces auto-aim passed over because somebody owns them
 
-        // PRIORITY 1: If player has Tab-selected a target and it's in range, use it (S1 Fix C2)
+        // PRIORITY 1: a Tab-selected target in range wins.
         if (selectedTarget) {
-            // catch-focus D0: a Tab-selected target can be a stale snapshot — read its LIVE field object.
+            // A Tab-selected target can be a stale snapshot: read its LIVE field object.
             selectedTarget = this._canonicalDebris(debrisField, selectedTarget) || selectedTarget;
             const selectedPos = this._getDebrisScenePos(selectedTarget);
-            // interlocks-p2 R1: the player's own pick has an owner: one line, nothing is cast (InputManager.fireLasso
-            // refuses first; this is the release-time and direct-caller backstop).
+            // The player's own pick has an owner: one line, nothing is cast (InputManager.fireLasso refuses first; this is the
+            // release-time and direct-caller backstop).
             const pickOwner = this._pieceOwner(selectedTarget);
             if (pickOwner) {
                 eventBus.emit(Events.LASSO_DENIED, { reason: 'piece_owned' });
@@ -1252,15 +902,12 @@ export class LassoSystem {
             if (selectedPos) {
                 const dist = playerPos.distanceTo(selectedPos);
                 const mass = selectedTarget.mass || 1;
-                // UX-3 #4: Mass-specific rejection with comms hint
                 if (mass > Constants.LASSO_MAX_CAPTURE_MASS) {
                     eventBus.emit(Events.LASSO_DENIED, { reason: 'too_heavy' });
-                    // Net ladder: the shared classifier (single source of truth with the Mother fire
-                    // routing in InputManager). InputManager hands every piece over 10 kg to the mother's large
-                    // net before it ever calls fire() (fireLasso, and again after the windup), so this refusal is
-                    // only reached with no net system wired (CAPTURE_NET off) or a direct caller. It must not send
-                    // the player back to N: nothing here can fire the large net. DECISIONS §33: no 10-500 kg
-                    // 'daughter-sized' band any more.
+                    // Shared classifier (single source with InputManager's Mother fire routing). InputManager hands every piece over 10 kg
+                    // to the mother's large net before calling fire() (fireLasso, and again after the windup), so this refusal is reached
+                    // only with no net system wired (CAPTURE_NET off) or a direct caller. It must not send the player back to N: nothing
+                    // here can fire the large net. DECISIONS §33: no 10-500 kg 'daughter-sized' band.
                     const { message } = classifyNetTarget(mass);
                     eventBus.emit(Events.COMMS_MESSAGE, {
                         text: message,
@@ -1296,10 +943,9 @@ export class LassoSystem {
             const dot = Math.max(-1, Math.min(1, toDebris.dot(aimDir)));
             const angle = Math.acos(dot);
 
-            // Check mass limit
             const mass = d.mass || 1;
             if (mass > Constants.LASSO_MAX_CAPTURE_MASS) continue;
-            if (this._pieceOwner(d)) { ownedSkipped++; continue; }   // interlocks-p2 R1: auto-aim leaves a piece somebody owns alone
+            if (this._pieceOwner(d)) { ownedSkipped++; continue; }   // auto-aim leaves a piece somebody owns alone
 
             if (angle <= maxAngle && dist < bestDist) {
                 bestDist = dist;
@@ -1313,7 +959,7 @@ export class LassoSystem {
             for (const d of nearby) {
                 const mass = d.mass || 1;
                 if (mass > Constants.LASSO_MAX_CAPTURE_MASS) continue;
-                if (this._pieceOwner(d)) { ownedSkipped++; continue; }   // interlocks-p2 R1
+                if (this._pieceOwner(d)) { ownedSkipped++; continue; }
                 const debrisPos = this._getDebrisScenePos(d);
                 if (!debrisPos) continue;
                 bestTarget = d;
@@ -1336,9 +982,8 @@ export class LassoSystem {
             return false;
         }
 
-        // UX-3 #4: Forward-arc constraint — target must be in forward hemisphere.
-        // Uses the shared _resolveForwardDir (same +Z fallback as the proactive
-        // invite) so the two gates can never disagree.
+        // Forward-arc constraint: the target must be in the forward hemisphere; shared _resolveForwardDir (same +Z fallback
+        // as the invite) so the two gates never disagree.
         const fwdDir = this._resolveForwardDir(playerVelDir, _scratchFwd);
         const toTarget = new THREE.Vector3().subVectors(bestPos, playerPos).normalize();
         const fwdDot = toTarget.dot(fwdDir);
@@ -1350,16 +995,14 @@ export class LassoSystem {
                 channel: 'CMD',
                 priority: 'warning',
                 _lassoFeedback: true,
-                // During onboarding, let the Director own alignment guidance —
-                // tier-gate this denial so it can't contradict an early beat.
+                // During onboarding the Director owns alignment guidance: tier-gate this denial.
                 _proactive: this._onboardingActive || undefined,
             });
             return false;
         }
 
-        // Fire!
-        // catch-focus D0: getDebrisNear hands out SNAPSHOT copies (frozen `_scenePosition`/`orbit`). Hold the
-        // CANONICAL field object so every read of the target (contact seeding, the reel pin) is live.
+        // getDebrisNear hands out SNAPSHOT copies (frozen `_scenePosition`/`orbit`): hold the CANONICAL field object so every
+        // read of the target (contact seeding, the reel pin) is live.
         const liveTarget = this._canonicalDebris(debrisField, bestTarget);
         this._targetIsLive = !!liveTarget;
         if (liveTarget) bestTarget = liveTarget;
@@ -1368,26 +1011,19 @@ export class LassoSystem {
         this._targetId = bestTarget.id;
         this._targetScenePos = bestPos.clone();
 
-        // Phase 1B: spawn the projectile + anchor the tether at the FRONT-CENTRE
-        // launcher muzzle (along the nose, +Z/prograde), not the hull centroid.
-        // The muzzle is recomputed every frame in update() so it tracks the nose
-        // as the ship reorients; here we just seed the initial spawn.
+        // Spawn the projectile + anchor the tether at the FRONT-CENTRE launcher muzzle (nose, +Z/prograde), not the hull
+        // centroid; update() recomputes it every frame, here we only seed the spawn.
         const muzzleWorld = this._computeMuzzleWorld(playerPos, playerVelDir, new THREE.Vector3());
         this.projectilePos = muzzleWorld.clone();
         this._projOffset.copy(muzzleWorld).sub(playerPos); // player-relative muzzle offset
 
         const dir = new THREE.Vector3().subVectors(bestPos, muzzleWorld).normalize();
         this.projectileVel = dir.multiplyScalar(Constants.LASSO_SPEED * M); // LASSO_SPEED m/s in scene units (relative)
-        // Phase 1C: remember the launch direction so the cosmetic recoil kick can
-        // shove the mother mesh opposite the throw.
         this._lastLaunchDir = dir.clone();
 
-        // Phase 1A: visible throw geometry. Compute the launch distance (muzzle →
-        // target, metres) once at fire, then derive a contact radius that scales
-        // down for near targets and an EASED flight speed so even a point-blank
-        // guided catch reads as a ~LASSO_MIN_FLIGHT_TIME arc instead of a 0.02 s
-        // blink. Far targets keep the fast 100 m/real-s apparent speed (capped by
-        // LASSO_MAX_FLIGHT_TIME).
+        // Launch distance (muzzle → target, m) once at fire; the contact radius scales down for near targets and flight speed
+        // is EASED so even a point-blank catch reads as a ~LASSO_MIN_FLIGHT_TIME arc, not a 0.02 s blink. Far targets keep the
+        // fast 100 m/real-s apparent speed (capped by LASSO_MAX_FLIGHT_TIME).
         const launchDistanceM = muzzleWorld.distanceTo(bestPos) / M;
         const contactRadiusM = clamp(Constants.LASSO_CONTACT_RADIUS_FRACTION * launchDistanceM, Constants.LASSO_CONTACT_RADIUS_FLOOR_M, Constants.LASSO_CONTACT_RADIUS_M);
         this._contactRadiusScene = contactRadiusM * M;
@@ -1417,26 +1053,22 @@ export class LassoSystem {
             },
         });
 
-        // Show capture net visuals (FIX-2.4a) — reset scale in case prior reel-in collapsed it
-        // 2026-08-26: a still-ticking web fade (tests can re-fire inside the
-        // fade window; production cooldowns cannot) hands the kit back to the
-        // new cast — rebuild the natural cone so the flight web never starts
-        // welded-shaped, then fall through to the normal fire staging.
+        // Show net visuals; reset scale in case a prior reel-in collapsed it. A still-ticking web fade (tests can re-fire
+        // inside the fade window; production cooldowns cannot) hands the kit back to the new cast: rebuild the natural cone so
+        // the flight web never starts welded-shaped.
         if (this._webFade) {
             this._webFade = null;
             if (this._netKit) NetMeshKit.updateWebDrape(this._netKit, {});
         }
         this._netGroup.visible = true;
         this._netGroup.scale.setScalar(1.0);
-        // Phase 2: leave the canister with the mouth compact so the open-on-launch
-        // animation has somewhere to open FROM (else it pops full for one frame).
+        // Leave the canister with the mouth compact so open-on-launch has somewhere to open FROM (else it pops full).
         if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS) {
             this._applyNetMouthRadius(Constants.NET_LAUNCH_COMPACT_FRAC);
         }
         // Cool pre-contact web tint (reset any green left from a prior reel).
         if (this._netKit) NetMeshKit.setColor(this._netKit, Constants.NET_WEB.WEB_COLOR);
         this._setNetOpacity(Constants.NET_WEB.WEB_OPACITY);
-        // Sprint 2 v2: Show coaxial tether (sheath + bright core)
         this._tetherMesh.visible = true;
         this._tetherMesh.material.opacity = 0.55;
         if (this._tetherCore) {
@@ -1444,17 +1076,14 @@ export class LassoSystem {
             this._tetherCore.material.opacity = 0.8;
         }
         this._pulsePhase = 0;
-        // Phase 1B/1C: a muzzle puff AT THE CANISTER (nose), scaled up + longer so
-        // the launch reads clearly and the net visibly emerges from hardware.
+        // Muzzle puff AT THE CANISTER (nose), scaled up and longer so the net visibly emerges from hardware.
         this._muzzleFlash.position.copy(muzzleWorld);
         this._muzzleFlash.scale.setScalar(Constants.LASSO_MUZZLE_FLASH_SCALE);
         this._muzzleFlash.visible = true;
         this._muzzleFlashTimer = Constants.LASSO_MUZZLE_FLASH_TIME;
         this._muzzleFlash.material.opacity = Constants.LASSO_MUZZLE_FLASH_OPACITY ?? 0.95;
-        // Phase 1C: kick the mother mesh opposite the launch (cosmetic only).
         this._launchRecoil(this._lastLaunchDir);
 
-        // Sound: electromagnetic THWIP (via EventBus → AudioSystem)
         eventBus.emit(Events.LASSO_FIRED, {
             targetId: bestTarget.id,
             projectileMass: Constants.LASSO_PROJECTILE_MASS,
@@ -1462,7 +1091,6 @@ export class LassoSystem {
             speed: Constants.LASSO_SPEED,
         });
 
-        // ST-1.3: First-cast comms primer — once per session
         if (!this._firstCastPrimerSent) {
             this._firstCastPrimerSent = true;
             eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1479,59 +1107,36 @@ export class LassoSystem {
         return true;
     }
 
-    /**
-     * The mother's net count (for the HUD and the cast gate): CaptureNetSystem's one count. With no net system wired
-     * (CAPTURE_NET flag off) there are no nets, so this is 0 — the lasso does not fire (DECISIONS §33 row 1).
-     * @returns {number}
-     */
+    /** The mother's net count (HUD and cast gate): CaptureNetSystem's one count; 0 with no net system wired (CAPTURE_NET
+     *  off), so the lasso does not fire (DECISIONS §33 row 1). */
     getAmmo() {
         const cns = this._motherNetSupply || this._captureNetSystem;
         return cns && typeof cns.getMotherNetCount === 'function' ? cns.getMotherNetCount() : 0;
     }
 
-    /**
-     * Test seam: a separate source for the mother's net count (`getMotherNetCount()` / `spendMotherNet()`), used by the
-     * headless legacy-resolution unit tests that cast with NO capture net system wired (a wired one makes the catch
-     * adopt onto the nose collar instead of resolving instantly). Production never calls this: main.js wires the
-     * capture net system, which is the count's one owner.
-     * @param {{getMotherNetCount: Function, spendMotherNet: Function}|null} supply
-     */
+    /** Test seam: a separate source for the net count (`getMotherNetCount()`/`spendMotherNet()`) for headless
+     *  legacy-resolution tests with NO capture net system wired (a wired one makes the catch adopt onto the nose collar).
+     *  Production never calls this. */
     setMotherNetSupply(supply) {
         this._motherNetSupply = supply || null;
     }
 
-    /**
-     * Look up the live scene position of the target debris from its orbital elements.
-     * @param {object} debrisField
-     * @returns {THREE.Vector3|null}
-     */
     _getLiveTargetPos(debrisField) {
-        // FIX: use `== null` so targetId === 0 (valid — first debris spawned) is NOT
-        // treated as "target died", which previously cancelled the lasso on frame 1.
+        // `== null` so targetId === 0 (a valid first debris) is not treated as "target died".
         if (this._targetId == null || !debrisField) return null;
         const debris = debrisField.getDebrisById
             ? debrisField.getDebrisById(this._targetId)
             : null;
         if (!debris || !debris.alive) return null;
-        // Prefer the live _scenePosition (single source of truth — matches
-        // _getDebrisScenePos used at fire time, and honours the onboarding pin
-        // whose ORBIT is intentionally frozen). Reading the orbit here for a
-        // pinned piece returned the stale spawn position the mother flies past
-        // at orbital speed — making the net home BACKWARD ("180° wrong way").
+        // Prefer the live _scenePosition (matches _getDebrisScenePos at fire; honours the onboarding pin whose ORBIT is
+        // intentionally frozen): a pinned piece's orbit is the stale spawn position the mother flies past, which made the net
+        // home BACKWARD.
         if (debris._scenePosition) return debris._scenePosition.clone();
         if (!debris.orbit) return null;
         const cart = orbitToSceneCartesian(debris.orbit);
         return new THREE.Vector3(cart.position.x, cart.position.y, cart.position.z);
     }
 
-    /**
-     * Update lasso state each frame.
-     * @param {number} dt - Delta time
-     * @param {THREE.Vector3} playerPos - Current mothership position
-     * @param {object} debrisField - For debris removal on catch
-     * @param {object|null} [selectedTarget] - Tab-selected target
-     * @param {THREE.Vector3|null} [playerVelDir] - Prograde dir for the arc test
-     */
     update(dt, playerPos, debrisField, selectedTarget = null, playerVelDir = null) {
         this._time += dt;
         this._lastPlayerPos = playerPos; // diagnostics — for _dbgSnapshot offset math
@@ -1544,21 +1149,16 @@ export class LassoSystem {
             }
         }
 
-        // Phase 6: Update visual effects (run independently of active state)
         this._updateVisualEffects(dt);
 
         // catch-near-pass (Decision 2): the web follows the held piece it wraps into the same pass.
         this._syncWebPass(debrisField);
 
-        // Cargo-continuity S13(d): tick a catch waiting for the nose collar to
-        // free (hold clear of the occupant, settle in, then adopt onto the one
-        // holding model). Runs independent of active state — the wait persists
-        // across casts.
+        // Tick a catch waiting for the nose collar (hold clear of the occupant, settle in, adopt). Runs regardless of active
+        // state: the wait persists across casts.
         this._updatePendingAdoption(dt, playerPos, playerVelDir, debrisField);
 
-        // Proactive "in range — press N" prompt (gap C.3). Fires once when the
-        // Tab-selected target first enters a castable state (in range, in the
-        // forward arc, idle/loaded). Tier-gated + onboarding-suppressed.
+        // Proactive in-range prompt (tier-gated, onboarding-suppressed).
         this._updateInRangePrompt(playerPos, selectedTarget, playerVelDir);
 
         if (!this.active) return;
@@ -1566,35 +1166,28 @@ export class LassoSystem {
 
         this.flightTimer += dt;
 
-        // --- Refresh target position from orbital elements each frame ---
         const liveTargetPos = this._getLiveTargetPos(debrisField);
         if (liveTargetPos) {
             this._targetScenePos.copy(liveTargetPos);
         } else if (!this._reelingIn) {
-            // Target died or became invalid during flight
             this._cancelLasso();
             return;
         }
 
         if (this._reelingIn) {
-            // Reel-in phase: move debris toward player
             this._reelProgress += dt * Constants.LASSO_REEL_SPEED;
             this._reelProgress = Math.min(this._reelProgress, 1.0); // clamp — prevent overshoot
             this._billReelMotor(dt);
             if (this._reelProgress >= 1.0) {
-                // Catch complete! Cargo-continuity S13(d): the catch adopts onto the
-                // ONE holding model (the nose-collar berth) — or, with no capture
-                // system wired (headless), resolves via the legacy instant path.
+                // Catch complete: it adopts onto the nose-collar berth, or (no capture system, headless) resolves via the legacy
+                // instant path.
                 this._resolveCatch(debrisField, playerPos, playerVelDir);
                 return;
             }
 
-            // S4: Emit tether tension feedback — intensifies as reel-in progresses.
-            // Phase 3 (gated): when reel physics is active for this (heavy, non-M1)
-            // catch, also carry the real mass-driven tension in Newtons + a strain
-            // fraction; apply a subtle CoM pull toward the catch; and risk a snap
-            // under sustained over-strain. When the gate is OFF (M1 / ≤cap / flag
-            // off) the payload + timing are byte-identical to before.
+            // Tether tension feedback grows with reel progress. With reel physics active (heavy, non-M1 catch) also carry the
+            // mass-driven tension (N) + a strain fraction, a subtle CoM pull toward the catch, and snap risk under sustained
+            // over-strain. Gate OFF: payload + timing unchanged.
             if (this._reelPhysicsActive) {
                 this._applyReelPhysics(dt, playerPos);
                 if (!this.active) return; // a snap reset the lasso this frame
@@ -1605,46 +1198,28 @@ export class LassoSystem {
                 });
             }
 
-            // Two-phase capture: WRAP (net shrinks at contact) → REEL (compact package
-            // travels to player). Matches physically meaningful net capture sequence.
+            // Two-phase capture: WRAP (net shrinks at contact) → REEL (compact package travels to player).
             const WRAP_END = 0.2;                              // wrap phase: t ∈ [0, 0.2]
-            const COMPACT_SCALE = Constants.NET_COMPACT_SCALE; // Sprint 2 v2: 0.45 (was 0.15 — too small to see)
+            const COMPACT_SCALE = Constants.NET_COMPACT_SCALE;
 
-            // 2026-06-30 realism pass: the web stays ivory Dyneema through the
-            // haul too — a real net doesn't change colour when it grips. Capture
-            // state is signalled on the HUD/comms, not by recolouring the mesh
-            // (matches CaptureNetVisual.js). Hold the translucent web opacity.
-            // 2026-08-26 ORDER MATTERS: this hold runs BEFORE the drape drive
-            // below — setOpacity writes the membrane's plain 0.28 rest, and
-            // updateWebDrape's welded fade (base → size-aware welded by cinch)
-            // must land after it or the film re-brightens every frame and the
-            // fabric read dies (the same write-order law the mother path keeps
-            // between its state rows and its drape driver).
+            // The web stays ivory Dyneema through the haul (a real net doesn't change colour when it grips; capture state is on
+            // the HUD/comms, as in CaptureNetVisual). ORDER MATTERS: this hold runs BEFORE the drape drive below: setOpacity
+            // writes the membrane's plain 0.28 rest, and updateWebDrape's welded fade must land after it or the film
+            // re-brightens every frame (the mother path keeps the same write order).
             if (this._netKit) NetMeshKit.setColor(this._netKit, Constants.NET_WEB.WEB_COLOR);
             this._setNetOpacity(Constants.NET_WEB.WEB_OPACITY);
 
             if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS) {
-                // 2026-08-26 wrap-as-cloth: the old driver here was
-                // _applyNetMouthRadius(mouthFrac) — NetMeshKit.setMouthFraction
-                // scales the cone+membrane XY uniformly, which is EXACTLY the
-                // owner's "debris shrinking wrapped in a geodesic bubble" read
-                // (a linear cone closing on itself, no fabric language). The
-                // wrap now speaks the same drape vocabulary as the mother
-                // pod-net: rim weights cinch onto the kit's own closed radius
-                // (rim-only primitive — the cone/membrane meshes stay at scale
-                // 1), while updateWebDrape bunches threads+film onto the
-                // caught piece's contents floor with the W2a size-aware welded
-                // fade (_driveWrapDrape below). Group scale stays 1 either way.
+                // The wrap speaks the mother pod-net's drape vocabulary, not _applyNetMouthRadius (its uniform cone+membrane XY scale
+                // read as "debris shrinking wrapped in a geodesic bubble"): rim weights cinch onto the kit's own closed radius
+                // (cone/membrane meshes stay at scale 1) while updateWebDrape bunches threads+film onto the piece's contents floor
+                // with the size-aware welded fade (_driveWrapDrape). Group scale stays 1 either way.
                 const cinchT = Math.min(1, this._reelProgress / WRAP_END);
                 if (this._netGroup) this._netGroup.scale.setScalar(1.0);
                 if (this._netKit) {
-                    // Round 3 (V3) — sock gather: once the cinch completes the
-                    // mouth ring eases toward the piece (rosette ON the
-                    // bundle) instead of trailing at the mouth plane as an
-                    // empty sock through the whole reel. Drape first, rim
-                    // second: setRimCinch reads the drape's effective mouth
-                    // plane (_mouthZEff) so the beads ride THIS frame's
-                    // gathered fabric.
+                    // Sock gather: once the cinch completes the mouth ring eases toward the piece (rosette ON the bundle) instead of
+                    // trailing as an empty sock. Drape first, rim second: setRimCinch reads the drape's effective mouth plane (_mouthZEff)
+                    // so the beads ride THIS frame's gathered fabric.
                     const gatherT = (Constants.NET_WEB.WRAP_SOCK_GATHER_FRAC ?? 0)
                         * clamp01((this._reelProgress - WRAP_END)
                             / (Constants.NET_WEB.WRAP_SOCK_GATHER_RAMP ?? 0.25));
@@ -1658,7 +1233,6 @@ export class LassoSystem {
                         : COMPACT_SCALE
                 );
             }
-            // Tether hidden at contact — no opacity update needed during reel-in
 
             let reelT;
             if (this._reelProgress < WRAP_END) {
@@ -1668,25 +1242,18 @@ export class LassoSystem {
                 // REEL: compact package travels player-relative from contact → zero
                 reelT = (this._reelProgress - WRAP_END) / (1 - WRAP_END);
             }
-            // Cargo-continuity S13(d) + 2026-08-26 round 2 (ENGULF): the PIECE is
-            // the primary — it lerps contact → the reel DELIVERY point (the
-            // collar seat pushed fore by the adoption's interior seat depth, so
-            // the hand-off still lands pin-exact). The net APEX rides seatScene
-            // BEHIND the piece toward the ship: the piece sits INSIDE the bag
-            // volume (fabric on both sides — engulfed), never at the apex tip
-            // where it read "alongside the net". During the WRAP window the
-            // piece is stationary (reelT = 0) while the seat eases from the
-            // actual contact depth to the WRAP_SEAT_FRAC seat — the net
-            // visibly slides OVER the piece as the mouth cinches behind it.
+            // The PIECE is primary: it lerps contact → the reel DELIVERY point (the adoption seat, so the hand-off lands
+            // pin-exact). The net APEX rides seatScene BEHIND the piece toward the ship: the piece sits INSIDE the bag (engulfed),
+            // never at the apex tip. During WRAP the piece is stationary (reelT = 0) while the seat eases from the actual contact
+            // depth to the WRAP_SEAT_FRAC seat: the net slides OVER the piece as the mouth cinches behind it.
             this._reelDeliveryWorld(this.target, playerPos, playerVelDir, _scratchMuzzle);
             const reelEndOffset = _scratchCargoOffset.copy(_scratchMuzzle).sub(playerPos);
             const pieceOffset = new THREE.Vector3().lerpVectors(
                 this._reelStartOffset, reelEndOffset, reelT
             );
             const piecePos = _scratchPiecePos.copy(playerPos).add(pieceOffset);
-            // Reel-tick forensics (dev-gated): name the garbage INPUT the frame
-            // the piece pin goes km-scale in a live take. No hot-path allocation
-            // unless the lasso debug flag is on.
+            // Reel-tick forensics (dev-gated): names the garbage INPUT when the pin goes km-scale; no hot-path allocation unless
+            // the lasso debug flag is on.
             if (this._dbg()) {
                 this._dbgReel = {
                     reelT: +reelT.toFixed(3),
@@ -1706,85 +1273,61 @@ export class LassoSystem {
             }
             this.projectilePos.copy(piecePos).addScaledVector(_scratchAway2, -seatScene);
 
-            // Drag the captured debris along with the net package so it visibly
-            // reels into the mother. The debris position is otherwise owned by
-            // DebrisField._updateInstanceTransform (orbit propagation, or the
-            // onboarding pin which is released at LASSO_CONTACT) and would stay
-            // frozen mid-reel. Use the authoritative _armPinned/_armPinPos
-            // direct-copy pin (highest priority after the now-released onboarding
-            // pin) — this also exempts the package from distance LOD culling so
-            // it stays visible inside the net during the haul.
+            // Drag the captured debris along with the package: its position is otherwise owned by
+            // DebrisField._updateInstanceTransform (orbit, or the onboarding pin released at LASSO_CONTACT). Use the
+            // authoritative _armPinned/_armPinPos direct-copy pin (highest priority after the released onboarding pin); it also
+            // exempts the package from distance LOD culling.
             if (this.target) {
                 this._reelPinTarget = this.target;
-                // 2026-08-26 round 2 — pin-priority belt: the onboarding tease
-                // pin OUTRANKS the arm pin in DebrisField._updateInstanceTransform
-                // (:2230 before :2240). Its release rides the LASSO_CONTACT
-                // listener + an orbit resync; under long SwiftShader frames that
-                // release intermittently lost the race and the piece rendered
-                // km off the ship mid-reel while our (sane) arm pin was ignored
-                // (tmp/lasso4/5 probes: piece 7.7 km out, pin 22 m). The reel
-                // OWNS this piece — assert the release every frame; one boolean
-                // write, idempotent, and the field's own doc says exactly this
-                // ("an arm capture releases the pin first, _armPinned wins after").
+                // Pin-priority belt: the onboarding tease pin OUTRANKS the arm pin in DebrisField._updateInstanceTransform; its
+                // release rides the LASSO_CONTACT listener + an orbit resync, which intermittently lost the race under long SwiftShader
+                // frames (piece rendered km off the ship mid-reel). The reel OWNS this piece: assert the release every frame (one
+                // idempotent boolean write; the field's doc says "an arm capture releases the pin first, _armPinned wins after").
                 this.target._onboardingPinned = false;
                 this.target._catchRenderMin = this._catchFloorFor(this.target, piecePos, playerPos);
-                // Round 3: SAME-FRAME pin — pinCapturedDebris force-writes
-                // `_scenePosition` + the rendered instance NOW (debrisField
-                // already ran this frame; a bare `_armPinPos` write would not
-                // draw until NEXT frame = one ship-step behind, see _pinFresh).
+                // SAME-FRAME pin: pinCapturedDebris force-writes `_scenePosition` + the rendered instance NOW (debrisField already
+                // ran this frame; a bare `_armPinPos` write draws one ship-step late, see _pinFresh).
                 this._pinFresh(debrisField, this.target, piecePos);
             }
         } else {
-            // Flight phase: homing projectile tracks target in local frame
-            // Advance offset toward target-relative-to-player
+            // Flight: the homing projectile tracks the target-relative-to-player offset in the local frame.
             const targetOffset = new THREE.Vector3().subVectors(this._targetScenePos, playerPos);
             const toTarget = new THREE.Vector3().subVectors(targetOffset, this._projOffset);
             const distToTarget = toTarget.length();
 
             if (distToTarget < this._contactRadiusScene &&
                 this.flightTimer >= Constants.LASSO_MIN_FLIGHT_TIME) { // proximity + min-flight gate — contact!
-                // net-range: the lasso homes on a live piece for up to LASSO_MAX_FLIGHT_TIME (~808 m of reach), so a
-                // piece that drifted beyond the advertised reach since the cast is a miss, never a catch.
+                // The lasso homes on a live piece for up to LASSO_MAX_FLIGHT_TIME (~808 m of reach), so a piece that drifted beyond
+                // the advertised reach since the cast is a miss, never a catch.
                 if (this._targetScenePos && targetRangeM(playerPos, this._targetScenePos) > Constants.LASSO_RANGE) {
                     this._cancelLasso();
                     return;
                 }
                 this._reelingIn = true;
-                // 2026-08-26 wrap-as-cloth: normalize the kit out of the
-                // open-on-launch mouth scale ONCE at contact (openFrac has
-                // saturated by min-flight — 0.8 s > NET_SPIN_UP_TIME 0.4 s, so
-                // this is (1,1,1) already; the explicit write is the contract).
-                // From here the wrap owns the web via setRimCinch +
-                // updateWebDrape, which rebuild VERTICES in full-mouth space —
-                // any leftover mesh scale would shrink the drape's output.
+                // Normalize the kit out of the open-on-launch mouth scale ONCE at contact (openFrac has saturated by min-flight:
+                // 0.8 s > NET_SPIN_UP_TIME 0.4 s, so it is (1,1,1) already; the explicit write is the contract). From here the wrap
+                // owns the web via setRimCinch + updateWebDrape, which rebuild VERTICES in full-mouth space: leftover mesh scale
+                // would shrink the drape's output.
                 if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS && this._netKit) {
                     NetMeshKit.setMouthFraction(this._netKit, 1.0);
                 }
-                // Phase 3: latch whether reel-in physics applies to THIS catch.
-                // MANDATORY gate — disabled on Mission 1 and for ≤ the Mother-net
-                // mass cap, so the tutorial / welcome catches reel identically to
-                // today regardless of the LASSO_REEL_PHYSICS flag.
+                // Latch whether reel-in physics applies to THIS catch. MANDATORY gate: off on Mission 1 and for ≤ the Mother-net mass
+                // cap, so tutorial/welcome catches reel identically regardless of the LASSO_REEL_PHYSICS flag.
                 this._strainTimer = 0;
                 const capturedMass = this.target ? (this.target.mass || 0) : 0;
                 this._reelPhysicsActive =
                     Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS &&
                     this._missionNumber !== 1 &&
                     capturedMass > Constants.LASSO_MAX_CAPTURE_MASS;
-                // CRITICAL FIX (v2e): use LOCAL (player-relative) offsets only —
-                // absolute-frame mixing introduced a velocity×dt error of ~1.3 km
-                // per frame at 80 km/s apparent orbital velocity ("shoots out
-                // front, disappears, reels in from the back").
-                // 2026-08-26 round 2 (ENGULF): the reel lerp is now PIECE-primary
-                // — the start offset is the CATCH's player-relative offset at
-                // contact (the piece is what reels home; the apex trails it by
-                // the interior seat). The apex→piece depth at contact seeds the
-                // seat ease so the wrap slides the net OVER the stationary piece.
-                // catch-focus D0: the piece's LIVE position. `_targetScenePos` was refreshed from the canonical
-                // object at the top of this update; a snapshot target's own `_scenePosition` is frozen at fire.
+                // Use LOCAL (player-relative) offsets only: mixing absolute frames added a velocity×dt error of ~1.3 km per frame at
+                // 80 km/s apparent orbital velocity ("shoots out front, disappears, reels in from the back"). The reel lerp is
+                // PIECE-primary: the start offset is the CATCH's player-relative offset at contact (the apex trails it); the
+                // apex→piece depth at contact seeds the seat ease so the wrap slides the net OVER the stationary piece.
+                // The piece's LIVE position: `_targetScenePos` was refreshed from the canonical object at the top of update(); a
+                // snapshot target's own `_scenePosition` is frozen at fire.
                 const pieceAtContact = this._livePiecePos();
                 this._reelStartOffset.copy(pieceAtContact).sub(playerPos);
-                // Contact-tick forensics (dev probe): name the source when the
-                // start offset reads km-scale garbage in a live take.
+                // Contact-tick forensics (dev probe): names the source when the start offset reads km-scale garbage.
                 this._dbgContact = {
                     startOffM: this._reelStartOffset.length() / M,
                     sceneRelM: this.target && this.target._scenePosition
@@ -1806,70 +1349,51 @@ export class LassoSystem {
                 }
                 this._reelProgress = 0;
 
-                // Establish the reel-in pin AT CONTACT, anchored to where the
-                // debris currently is, so it doesn't render for one frame at its
-                // stale orbital position in the gap between the onboarding-pin
-                // release (LASSO_CONTACT, emitted below) and the first reel-in
-                // frame (debrisField.update runs before lassoSystem.update). The
-                // reel branch then animates _armPinPos toward the mother.
+                // Establish the reel-in pin AT CONTACT where the debris is now, so it doesn't render one frame at its stale orbital
+                // position between the onboarding-pin release (LASSO_CONTACT, below) and the first reel frame (debrisField.update
+                // runs before lassoSystem.update).
                 if (this.target) {
                     this._reelPinTarget = this.target;
-                    // Round-2 pin-priority belt (see the reel-frame twin above):
-                    // the arm pin owns the piece from contact on, regardless of
-                    // whether the LASSO_CONTACT release listener wins its race.
+                    // Pin-priority belt (see the reel-frame twin above): the arm pin owns the piece from contact on.
                     this.target._onboardingPinned = false;
                     this.target._catchRenderMin = this._catchFloorFor(this.target, pieceAtContact, playerPos);
-                    // Round 3: same-frame pin (register-9 idiom — see _pinFresh).
+                    // Same-frame pin (see _pinFresh).
                     this._pinFresh(debrisField, this.target, pieceAtContact);
                 }
 
-                // Contact flash removed per user feedback ("NOT an arcade game")
                 this._contactFlashTimer = 0;
                 this._contactFlash.visible = false;
 
-                // Sprint 2 v2: KEEP tether visible through reel-in — this is the
-                // visual cue that tells the player their debris is being retracted.
-                // Retrograde-cast bug is avoided because _rebuildTetherGeometry
-                // rebuilds from current playerPos → projectilePos every frame.
+                // KEEP the tether visible through reel-in: the cue that the debris is being retracted. _rebuildTetherGeometry
+                // rebuilds from current playerPos → projectilePos every frame (no retrograde-cast bug).
 
 
                 eventBus.emit(Events.LASSO_CONTACT, { targetId: this.target.id });
             } else {
-                // Phase 1A: move at the per-shot EASED apparent speed so even a
-                // point-blank guided catch reads as a ~LASSO_MIN_FLIGHT_TIME arc
-                // instead of a single-frame blink. _flightSpeedScene already folds
-                // in TIME_SCALE_GAMEPLAY (computed at fire). Clamp the step so the
-                // net parks at contact range and waits out the min-flight gate
-                // rather than overshooting the target.
+                // Move at the per-shot EASED apparent speed (_flightSpeedScene folds in TIME_SCALE_GAMEPLAY at fire). Clamp the step
+                // so the net parks at contact range and waits out the min-flight gate instead of overshooting.
                 const parkDist = Math.max(0, distToTarget - this._contactRadiusScene * 0.5);
                 const step = Math.min(this._flightSpeedScene * dt, distToTarget, parkDist || distToTarget);
                 toTarget.normalize().multiplyScalar(step);
                 this._projOffset.add(toTarget);
             }
 
-            // Convert offset back to absolute scene position
             this.projectilePos.copy(playerPos).add(this._projOffset);
 
-            // Timeout
             if (this.flightTimer > this.maxFlightTime) {
                 this._cancelLasso();
                 return;
             }
         }
 
-        // ── Gossamer particle trail: emit + update ────────────────────────────
         this._updateGossamerTrail(dt, playerPos);
 
-        // ── FIX-2.4a: Update net position, orientation, and spin ─────────────
         if (this._netGroup && this.projectilePos) {
             this._netGroup.position.copy(this.projectilePos);
 
-            // Orient net face perpendicular to flight direction (Z-axis = velocity)
             if (this._targetScenePos && !this._reelingIn) {
-                // Phase 2: OPEN-ON-LAUNCH. The net leaves the canister compact and
-                // opens as the gyroscopic spin ramps over NET_SPIN_UP_TIME — a
-                // kinematic spin→centrifugal-open mapping (not a force sim). Spin
-                // rate ramps with the open fraction so it reads as "spinning up".
+                // OPEN-ON-LAUNCH: the net leaves the canister compact and opens as the gyroscopic spin ramps over NET_SPIN_UP_TIME
+                // (kinematic spin→centrifugal-open mapping, not a force sim); spin rate ramps with the open fraction.
                 let spinScale = 1.0;
                 if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS) {
                     const openFrac = Math.min(1, this.flightTimer / Constants.NET_SPIN_UP_TIME);
@@ -1877,13 +1401,9 @@ export class LassoSystem {
                         openFrac * (1.0 - Constants.NET_LAUNCH_COMPACT_FRAC);
                     this._applyNetMouthRadius(mouthFrac);
                     spinScale = 0.25 + 0.75 * openFrac; // spin-up while opening
-                    // 2026-08-26 round 2 — organic flight web: the cast net
-                    // BILLOWS (the kit's per-spoke jiggle channel) instead of
-                    // flying as a mathematically perfect cone. Drape stays 0:
-                    // contents floors and the welded fade are untouched by
-                    // construction (both are drape/cinch-gated), and the
-                    // open-on-launch mouth scale composes on top (the jiggle
-                    // deforms vertices in full-mouth space; the scale opens it).
+                    // Organic flight web: the net BILLOWS (the kit's per-spoke jiggle channel) rather than flying as a perfect cone.
+                    // Drape stays 0, so contents floors and the welded fade are untouched (both are drape/cinch-gated); the
+                    // open-on-launch mouth scale composes on top (jiggle deforms vertices in full-mouth space; the scale opens it).
                     const billowFrac = Constants.NET_WEB.FLIGHT_BILLOW_FRAC ?? 0;
                     if (this._netKit && billowFrac > 0) {
                         this._billowPhase += dt * 2 * Math.PI
@@ -1898,25 +1418,18 @@ export class LassoSystem {
                     .subVectors(this._targetScenePos, playerPos).normalize();
                 if (flightDir.lengthSq() > 0.001) {
                     const orientQuat = new THREE.Quaternion();
-                    // The shared NetMeshKit cone points its MOUTH along local −Z
-                    // (apex at the group origin / tether side). Orient the group so
-                    // local −Z maps onto the flight direction → the web mouth opens
-                    // toward the target (was +Z for the old octagon; cosmetic only,
-                    // outside the F8–F12 frame/motion machinery).
+                    // The NetMeshKit cone points its MOUTH along local −Z (apex at the group origin / tether side): orient so local −Z
+                    // maps onto the flight direction, opening the mouth toward the target (cosmetic only).
                     orientQuat.setFromUnitVectors(_negZAxis, flightDir);
-                    // Apply gyroscopic spin around flight axis
                     this._netSpinAngle += 2 * Math.PI * Constants.NET_SPIN_HZ * spinScale * dt;
                     const spinQuat = new THREE.Quaternion();
                     spinQuat.setFromAxisAngle(_zAxis, this._netSpinAngle);
                     this._netGroup.quaternion.multiplyQuaternions(orientQuat, spinQuat);
                 }
             } else {
-                // During reel-in: apex (tether side, kit origin) faces the ship
-                // and the wrapped mouth trails away, so the bundle reads as
-                // DRAGGED home by its tether. The old `rotation.z =` Euler
-                // write wiped the flight quaternion the frame the wrap started
-                // (the pose snapped to a world-axis cone). Spin continues
-                // around the local drag axis. 2026-08-26, wrap-as-cloth pass.
+                // Reel-in: the apex (tether side, kit origin) faces the ship and the wrapped mouth trails away, so the bundle reads
+                // as DRAGGED home by its tether. Set the quaternion, not an Euler `rotation.z =` (that wiped the flight orientation
+                // when the wrap started). Spin continues around the local drag axis.
                 this._netSpinAngle += 2 * Math.PI * Constants.NET_SPIN_HZ * dt;
                 _scratchAway.copy(this.projectilePos).sub(playerPos);
                 if (_scratchAway.lengthSq() > 1e-18) {
@@ -1928,13 +1441,9 @@ export class LassoSystem {
             }
         }
 
-        // Phase 1B: rebuild the tether EVERY frame from the front-centre MUZZLE
-        // (nose, +Z/prograde) → projectile, not the hull centroid. The muzzle is
-        // recomputed each frame so it tracks the nose as the ship reorients along
-        // velocity. During reel-in the package returns toward the hull centre
-        // (Phase 4 reroutes this to an aft cargo cell). Combined with
-        // QuadraticBezierCurve3 (no extrapolation) the tether is guaranteed to go
-        // from the muzzle to the net and nowhere else.
+        // Rebuild the tether EVERY frame from the front-centre MUZZLE (nose, +Z/prograde) → projectile (the muzzle is
+        // recomputed each frame as the ship reorients). During reel-in the package returns toward the hull centre. With
+        // QuadraticBezierCurve3 (no extrapolation) the tether goes from the muzzle to the net and nowhere else.
         if (this._tetherMesh && this._tetherMesh.visible && this.projectilePos) {
             this._tetherMesh.material.opacity = 0.5;
             if (this._tetherCore) {
@@ -1952,7 +1461,6 @@ export class LassoSystem {
             }
         }
 
-        // Energy pulse bead removed (Issue #6 — de-arcade tether visual)
 
         // Diagnostics — throttled per-frame state while a cast is live (~6 Hz).
         if (this._dbg() && (++this._dbgFrame % 10 === 0)) {
@@ -1969,29 +1477,14 @@ export class LassoSystem {
     }
 
     /**
-     * Round 3 (2026-08-26) — same-frame pin, the register-9 idiom. THE ROOT
-     * CAUSE of the "ghost piece" / refused catch-cut: DebrisField.update
-     * (main.js:3877) consumes `_armPinPos` BEFORE this system moves it
-     * (main.js:3973), so a bare `_armPinPos` write left the rendered piece —
-     * and `_scenePosition`, which the catch cut and its 250 m sanity fence
-     * read — exactly ONE FRAME of apparent ship travel behind the net:
-     * ~128 m at 60 fps, 7.7 km under the SwiftShader 0.1 s dt clamp
-     * (tmp/lasso11-rec frames 42–56: pin fresh at 22 m, _scenePosition
-     * stale at 7678 m, EVERY reel frame; the fence aborted the cut at entry
-     * in 3/3 takes). ArmManager (:1801) and CaptureNet (:1821/:2140/:3141)
-     * already solve this exact ordering with `pinCapturedDebris` — "force
-     * the rendered instance ... THIS frame, overriding whatever
-     * this.update() computed earlier" — the lasso was the ONLY per-frame
-     * pin writer missing the idiom. Headless mocks without a field (or with
-     * a bare mock lacking the method) keep the old writes bit-for-bit.
-     * 2026-08-27: this routing RESOLVES CAPTURE_NET.md §12.1 trap 3's
-     * adjacent-latent-bug note (the lasso-side one-frame pin lag) — dated
-     * resolution note there; empirically pinned against the REAL DebrisField
-     * write path in live loop order by the §12.1 FRAME ORDER family in
-     * test-LassoSystem.js (bare write trails 1166.67 m at 60 fps / 0.7 u/s;
-     * this routing renders the commanded pin the same frame).
-     * @param {object|null} debrisField
-     * @param {object} target
+     * Same-frame pin. DebrisField.update (main.js) consumes `_armPinPos` BEFORE this system moves it, so a bare write left
+     * the rendered piece, and `_scenePosition` (which the catch cut and its 250 m sanity fence read), ONE FRAME of apparent
+     * ship travel behind the net: ~128 m at 60 fps, 7.7 km under the SwiftShader 0.1 s dt clamp. ArmManager and CaptureNet
+     * solve this ordering with `pinCapturedDebris` ("force the rendered instance ... THIS frame, overriding whatever
+     * this.update() computed earlier"); the lasso was the only per-frame pin writer missing it. Headless mocks without a
+     * field (or lacking the method) keep the bare writes. Resolves the lasso-side pin lag noted in CAPTURE_NET.md §12.1
+     * trap 3; pinned against the REAL DebrisField write path by the §12.1 FRAME ORDER family in test-LassoSystem.js (bare
+     * write trails 1166.67 m at 60 fps / 0.7 u/s).
      * @param {THREE.Vector3} pos — scene position for the pin THIS frame
      * @private
      */
@@ -2009,33 +1502,22 @@ export class LassoSystem {
     }
 
     /**
-     * Cargo-continuity S13(d): resolve a completed reel. The ONE holding model —
-     * the catch adopts onto the CaptureNetSystem's nose-collar berth and rides the
-     * exact machinery an S3 mother catch does (berth hold → securing mate → ledger
-     * → S7 transfer / S8 collar digestion). With no capture system wired
-     * (headless tests) it falls back to the legacy instant resolution.
-     *
-     * LASSO_STOWED / LASSO_CAPTURED / ARM_CAPTURED fire AT reel completion (the
-     * catch IS made now) — unchanged timing from the old _stowCatch, so onboarding
-     * beats (tease_lock / first_catch / second_catch) and the autopilot's lasso
-     * attitude-hold release advance promptly. Scoring + salvage + removal happen
-     * later, exactly once, at the collar's CATCH_PROCESSED.
-     * @param {object} debrisField
-     * @param {THREE.Vector3} playerPos
-     * @param {THREE.Vector3|null} playerVelDir
+     * Resolve a completed reel. The catch adopts onto the CaptureNetSystem nose-collar berth (berth hold → securing mate →
+     * ledger → transfer / collar digestion); with no capture system (headless) it falls back to the legacy instant
+     * resolution. LASSO_STOWED / LASSO_CAPTURED / ARM_CAPTURED fire AT reel completion (the catch IS made now) so
+     * onboarding beats (tease_lock / first_catch / second_catch) and the autopilot's lasso attitude-hold release advance
+     * promptly. Scoring + salvage + removal happen later, exactly once, at the collar's CATCH_PROCESSED.
      * @private
      */
     _resolveCatch(debrisField, playerPos, playerVelDir) {
         const target = this.target;
         const cns = this._captureNetSystem;
         if (!cns) {
-            // Headless / no capture system — the legacy instant resolution.
             this._completeCatch(debrisField);
             return;
         }
 
-        // The catch is MADE at reel completion — fire the capture-UX beats now,
-        // re-targeted off the deleted cargo cells (no cellIndex exists anymore).
+        // The catch is MADE at reel completion: fire the capture-UX beats now.
         eventBus.emit(Events.LASSO_STOWED, {
             debrisId: target ? target.id : null,
             podIndex: 0,
@@ -2050,18 +1532,12 @@ export class LassoSystem {
             debrisId: target ? target.id : null,
         });
 
-        // Hand pin ownership off the reel BEFORE _resetLasso clears it — the
-        // adoption (or the pending wait) now owns the pin.
+        // Hand pin ownership off the reel BEFORE _resetLasso clears it: the adoption (or pending wait) now owns the pin.
         this._reelPinTarget = null;
 
-        // The reel delivered the catch to the collar seat, but the completion step
-        // returns before the reel's final pin write, leaving the pin a hair short.
-        // Snap it exactly onto the DELIVERY point (seat + adoption's interior
-        // seat depth — 2026-08-26 round 2) so the adoption hand-off is seamless:
-        // the catch IS there; updateBerthHold pins the same point (no gap, no pop).
-        // Round 3: through the same-frame pin (CaptureNet's berth tick already
-        // ran this frame — a bare write would render the hand-off frame one
-        // ship-step behind; see _pinFresh).
+        // The completion step returns before the reel's final pin write, leaving the pin a hair short: snap it onto the
+        // DELIVERY point (updateBerthHold pins the same point: no gap, no pop), through the same-frame pin (CaptureNet's berth
+        // tick already ran this frame; see _pinFresh).
         if (target) {
             this._reelDeliveryWorld(target, playerPos, playerVelDir, _scratchMuzzle);
             this._pinFresh(debrisField, target, _scratchMuzzle);
@@ -2076,15 +1552,9 @@ export class LassoSystem {
         if (target) this._adoptOrPend(target, playerPos, playerVelDir, debrisField);
     }
 
-    /**
-     * 2026-08-26 wrap-as-cloth: start the welded web's fade-out at reel
-     * completion (success paths only — misses keep the instant retract). The
-     * kit's live opacities are the seed (register-92 idiom) and the welded
-     * SHAPE is frozen: no drape writes run during the fade, so the bunched
-     * fabric dissolves in place over the catch while the adoption's berthed
-     * bag takes over — a crossfade, never a blink-off.
-     * @private
-     */
+    /** Start the welded web's fade-out at reel completion (success paths only; misses retract instantly). The kit's live
+     *  opacities seed it and the welded SHAPE is frozen (no drape writes during the fade): the fabric dissolves in place
+     *  while the adoption's berthed bag takes over. */
     _beginWebFadeOut() {
         if (!this._netKit || !this._netGroup || !this._netGroup.visible) return;
         this._webFade = {
@@ -2094,48 +1564,30 @@ export class LassoSystem {
         };
     }
 
-    /**
-     * Cargo-continuity S13(d): adopt the catch onto the collar now, or — when the
-     * single collar station is busy (a mated catch or an inbound mother net) — hold
-     * it clear of the occupant and adopt the moment it frees. Cargo is never
-     * destroyed (continuity law 1), so a busy collar pends, never drops.
-     * @param {object} target
-     * @param {THREE.Vector3} playerPos
-     * @param {THREE.Vector3|null} playerVelDir
-     * @param {object|null} [debrisField] — same-frame pin when present (round 3)
-     * @private
-     */
+    /** Adopt the catch onto the collar now or, when the single collar station is busy (a mated catch or an inbound mother
+     *  net), hold it clear of the occupant and adopt the moment it frees. Cargo is never destroyed (continuity law 1): a
+     *  busy collar pends, never drops. `debrisField` enables the same-frame pin. */
     _adoptOrPend(target, playerPos, playerVelDir, debrisField = null) {
         const cns = this._captureNetSystem;
         if (!cns.getDockedCatch() && !cns.hasMotherNetInFlight() && cns.adoptLassoCatch(target)) {
             return;
         }
-        // Collar busy, or the adoption was refused (a context race) — hold the
-        // catch clear of the occupant and retry; cargo is never dropped.
+        // Collar busy, or the adoption was refused (a context race): hold clear of the occupant and retry.
         this._pendingAdoption = { target, phase: 'wait', settleT: 0, fromPos: null, announced: false };
         this._pinPending(target, playerPos, playerVelDir, debrisField);
     }
 
-    /**
-     * Cargo-continuity S13(d): tick a catch waiting for the collar. 'wait' holds it
-     * pinned clear of the occupant (recomputed each frame as the ship reorients and
-     * the queue changes); once the station frees it 'settle's smoothly onto the
-     * collar seat (no teleport), then adopts. Runs every frame, independent of lasso
-     * active state.
-     * @param {number} dt
-     * @param {THREE.Vector3} playerPos
-     * @param {THREE.Vector3|null} playerVelDir
-     * @private
-     */
+    /** Tick a catch waiting for the collar: 'wait' holds it pinned clear of the occupant (recomputed each frame); once the
+     *  station frees it 'settle's smoothly onto the collar seat (no teleport), then adopts. Runs every frame, regardless
+     *  of lasso active state. */
     _updatePendingAdoption(dt, playerPos, playerVelDir, debrisField = null) {
         const p = this._pendingAdoption;
         if (!p) return;
         const target = p.target;
         const cns = this._captureNetSystem;
 
-        // The piece died (Kessler / mission transition) or the system went away —
-        // release the pin and drop the wait. Cargo is never destroyed by US; the
-        // field owns a dead body.
+        // The piece died (Kessler / mission transition) or the system went away: release the pin and drop the wait. The field
+        // owns a dead body.
         if (!target || target.alive === false || !cns) {
             this._clearPendingAdoption();
             return;
@@ -2154,7 +1606,6 @@ export class LassoSystem {
             if (busy) {
                 this._pinPending(target, playerPos, playerVelDir, debrisField);
             } else {
-                // Station freed — glide onto the collar seat, then adopt.
                 p.phase = 'settle';
                 p.settleT = 0;
                 p.fromPos = target._armPinPos
@@ -2164,9 +1615,8 @@ export class LassoSystem {
             return;
         }
 
-        // 'settle': ease from the wait point onto the collar seat — but only while
-        // the station is actually free; if a mother catch re-takes the collar
-        // mid-glide, abort back to 'wait' (held clear) rather than park on it.
+        // 'settle': ease onto the collar seat only while the station is free; if a mother catch re-takes the collar
+        // mid-glide, abort back to 'wait'.
         const stillBusy = cns.getDockedCatch() || cns.hasMotherNetInFlight();
         if (stillBusy) {
             p.phase = 'wait';
@@ -2176,21 +1626,16 @@ export class LassoSystem {
         p.settleT += dt;
         const f = Math.min(1, p.settleT / LASSO_ADOPT_SETTLE_S);
         const ease = smoothstep01(f);
-        // 2026-08-26 round 2: the glide lands on the DELIVERY point (collar
-        // seat + adoption's interior seat depth) — the exact pin adoptLassoCatch
-        // writes — so the pend→adopt hand-off stays snap-free with the engulf seat.
+        // The glide lands on the DELIVERY point, the exact pin adoptLassoCatch writes, so pend→adopt is snap-free.
         this._reelDeliveryWorld(target, playerPos, playerVelDir, _scratchMuzzle);
         if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
         target._armPinPos.copy(p.fromPos).lerp(_scratchMuzzle, ease);
         target._motherParked = true;
         target._catchRenderMin = this._catchFloorFor(target, target._armPinPos, playerPos);
-        // Round 3: same-frame pin (register-9 idiom — see _pinFresh). The glide
-        // must RENDER each eased step this frame, not one ship-step behind.
+        // Same-frame pin (see _pinFresh): the glide must RENDER each eased step this frame.
         this._pinFresh(debrisField, target, target._armPinPos);
         if (f >= 1) {
-            // The seat is reached — adopt. If the collar was re-occupied between
-            // this frame's check and the adoption (belt-and-braces; cargo is never
-            // orphaned at the seat with no owner), fall back to 'wait' and retry.
+            // Seat reached: adopt. If the collar was re-occupied since this frame's check (belt-and-braces), fall back to 'wait'.
             const adopted = cns.adoptLassoCatch(target);
             if (!adopted) {
                 p.phase = 'wait';
@@ -2200,40 +1645,27 @@ export class LassoSystem {
         }
     }
 
-    /**
-     * Cargo-continuity S13(d): pin a waiting catch clear of the collar's current
-     * occupant — the collar seat pushed fore along the berth axis by the occupant's
-     * fore extent (getCollarQueueDepthM), so it never overlaps a mated/inbound
-     * mother catch. Follows the (reorienting) ship each frame. Register item 74:
-     * the read is corridor-held / extended-standoff honest (the shared
-     * motherNetForeExtentM), so the hold clears a tandem body's TRUE far face.
-     * @param {object} target
-     * @param {THREE.Vector3} playerPos
-     * @param {THREE.Vector3|null} playerVelDir
-     * @param {object|null} [debrisField] — same-frame pin when present (round 3)
-     * @private
-     */
+    /** Pin a waiting catch clear of the collar's occupant: the collar seat pushed fore along the berth axis by the
+     *  occupant's fore extent (getCollarQueueDepthM), so it never overlaps a mated/inbound mother catch. Follows the
+     *  reorienting ship. The read is corridor-held / extended-standoff honest (shared motherNetForeExtentM), so the hold
+     *  clears a tandem body's TRUE far face. `debrisField` enables the same-frame pin. */
     _pinPending(target, playerPos, playerVelDir, debrisField = null) {
         const cns = this._captureNetSystem;
         this._collarSeatWorld(target, playerPos, playerVelDir, _scratchMuzzle);
         const depthM = cns ? cns.getCollarQueueDepthM() : 0;
         this._berthAxis(playerVelDir, _scratchFwd);
         if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
-        // l8-reel-collar: the hold-off sits one BERTH_CLEARANCE_M (the keep-clear spacing) past the occupant's far
-        // face; with the collar free it is home itself (the old size/2 + 1.0 standoff carried that clearance).
+        // The hold-off sits one BERTH_CLEARANCE_M (keep-clear spacing) past the occupant's far face; with the collar free it
+        // is home itself.
         const holdOffM = depthM > 0 ? depthM + (Constants.CAPTURE_NET.BERTH_CLEARANCE_M ?? 1.0) : 0;
         target._armPinPos.copy(_scratchMuzzle).addScaledVector(_scratchFwd, holdOffM * M);
         target._motherParked = true;
         target._catchRenderMin = this._catchFloorFor(target, target._armPinPos, playerPos);
-        // Round 3: same-frame pin (register-9 idiom — see _pinFresh).
+        // Same-frame pin (see _pinFresh).
         this._pinFresh(debrisField, target, target._armPinPos);
     }
 
-    /**
-     * Cargo-continuity S13(d): release the pending wait (game reset / dead target /
-     * system teardown). Clears the pin flags the wait owned; idempotent.
-     * @private
-     */
+    /** Release the pending wait (game reset / dead target / teardown): clears the pin flags it owned; idempotent. */
     _clearPendingAdoption() {
         const p = this._pendingAdoption;
         if (p && p.target) {
@@ -2244,17 +1676,11 @@ export class LassoSystem {
         this._pendingAdoption = null;
     }
 
-    /**
-     * w4-power D5 (owner 2026-10-12: "Reel on mother costs"): the lasso reel
-     * bills the mother's battery while it turns — line tension (the lasso's
-     * own base + per-kg model) × line speed ÷ REEL_EFFICIENCY, floored at the
-     * mother reel's 15 W motor (TETHER_REEL_POWER), capped at HAUL_MOTOR_POWER.
-     * Line speed: the haul from the contact range over the REEL window
-     * (1 − 0.2 of the progress at LASSO_REEL_SPEED); the WRAP cinch bills the
-     * floor. Nothing on a held-world frame or with no battery wired.
-     * @param {number} dt
-     * @private
-     */
+    /** The lasso reel bills the mother's battery while it turns (owner 2026-10-12: "Reel on mother costs"): line tension
+     *  (the lasso's own base + per-kg model) × line speed ÷ REEL_EFFICIENCY, floored at the mother reel's 15 W motor
+     *  (TETHER_REEL_POWER), capped at HAUL_MOTOR_POWER. Line speed: the haul from the contact range over the REEL window
+     *  (1 − 0.2 of the progress at LASSO_REEL_SPEED); the WRAP cinch bills the floor. Nothing on a held-world frame or
+     *  with no battery wired. */
     _billReelMotor(dt) {
         const p = this._player;
         if (!(dt > 0) || !p || p._motorBillHeld === true) return;
@@ -2272,22 +1698,14 @@ export class LassoSystem {
         rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.MOTHER_REEL_MIN ?? 15, mechW)), dt);
     }
 
-    /**
-     * Phase 3 (LASSO_REEL_PHYSICS, gated): mass-driven reel tension + a subtle
-     * centre-of-mass pull toward the catch + tangle/break risk. Only ever called
-     * when _reelPhysicsActive is latched true at contact (flag ON, NOT Mission 1,
-     * capturedMass > LASSO_MAX_CAPTURE_MASS), so the tutorial / welcome catches
-     * never reach this path. VISUAL/MOTION uses the fuel-free, self-damping
-     * _rcsVelocity channel (the same one the collision-dodge uses), clamped by
-     * RCS_MAX_SPEED — never the fuel-charging applyCartesianImpulse.
-     * @param {number} dt
-     * @param {THREE.Vector3} playerPos
-     * @private
-     */
+    /** Reel physics (LASSO_REEL_PHYSICS, gated): mass-driven tension + a subtle centre-of-mass pull toward the catch +
+     *  tangle/break risk. Called only when _reelPhysicsActive was latched at contact (flag ON, NOT Mission 1, capturedMass
+     *  > LASSO_MAX_CAPTURE_MASS). Motion uses the fuel-free, self-damping _rcsVelocity channel (as the collision-dodge
+     *  does), clamped by RCS_MAX_SPEED: never the fuel-charging applyCartesianImpulse. */
     _applyReelPhysics(dt, playerPos) {
         const capturedMass = this.target ? (this.target.mass || 0) : 0;
 
-        // --- Mass-driven tension (mirror CaptureNet.js:879) ---
+        // Mass-driven tension (mirrors CaptureNet.js)
         const tensionN = Constants.LASSO_TENSION_BASE_N + capturedMass * Constants.LASSO_TENSION_PER_KG;
         const strainFraction = capturedMass / Math.max(1, Constants.LASSO_NET_RATED_MASS_KG);
         eventBus.emit(Events.TETHER_TENSION, {
@@ -2297,10 +1715,8 @@ export class LassoSystem {
             armId: 'lasso',
         });
 
-        // --- CoM pull toward the catch (momentum) ---
-        // Reeling a mass m toward the ship pulls the ship toward the catch by
-        // m/m_ship. Nudge _rcsVelocity toward the (player-relative) net package,
-        // scaled by mass ratio × reel rate, clamped by RCS_MAX_SPEED.
+        // CoM pull: reeling a mass m pulls the ship toward the catch by m/m_ship. Nudge _rcsVelocity toward the
+        // (player-relative) net package, scaled by mass ratio × reel rate, clamped by RCS_MAX_SPEED.
         if (this._player && this._player._rcsVelocity && this.projectilePos) {
             const shipMass = (this._player.mass && this._player.mass > 0) ? this._player.mass : 130;
             const massRatio = capturedMass / (capturedMass + shipMass);
@@ -2314,19 +1730,16 @@ export class LassoSystem {
                 if (this._player._rcsVelocity.length() > maxV) {
                     this._player._rcsVelocity.normalize().multiplyScalar(maxV);
                 }
-                // (b) Angular coupling: a heavy OFF-AXIS catch also tugs the
-                // Mother's nose toward it while hauling. Fed to the recoil
-                // attitude springs (RCS-nulled). Centreline catches → no tug.
+                // Angular coupling: a heavy OFF-AXIS catch also tugs the nose toward it while hauling (fed to the recoil attitude
+                // springs, RCS-nulled); centreline catches: no tug.
                 if (typeof this._player.applyReelTorque === 'function') {
                     this._player.applyReelTorque(toCatch, massRatio, dt);
                 }
             }
         }
 
-        // --- Tangle / break risk ---
-        // Sustained strain above NET_STRAIN_SAFE_FRACTION accumulates; past
-        // LASSO_NET_BREAK_TIME_S the tether snaps, dropping the catch (no score,
-        // no removeDebris) with a miss-style cooldown.
+        // Tangle/break risk: sustained strain above NET_STRAIN_SAFE_FRACTION accumulates; past LASSO_NET_BREAK_TIME_S the
+        // tether snaps, dropping the catch (no score, no removeDebris) with a miss-style cooldown.
         if (strainFraction > Constants.NET_STRAIN_SAFE_FRACTION) {
             this._strainTimer += dt;
             if (this._strainTimer >= Constants.LASSO_NET_BREAK_TIME_S) {
@@ -2338,12 +1751,8 @@ export class LassoSystem {
         }
     }
 
-    /**
-     * Phase 3: snap the tether under over-strain — drop the catch cleanly (release
-     * the reel pin, NO removeDebris/score) and go to a miss-style cooldown.
-     * @param {number} tensionN
-     * @private
-     */
+    /** Snap the tether under over-strain: drop the catch cleanly (release the reel pin, NO removeDebris/score), then a
+     *  miss-style cooldown. */
     _snapTether(tensionN) {
         const targetId = this.target ? this.target.id : null;
         eventBus.emit(Events.LASSO_SNAPPED, { targetId, tensionN });
@@ -2360,41 +1769,29 @@ export class LassoSystem {
         eventBus.emit(Events.LASSO_COOLDOWN_START, { duration: Constants.LASSO_COOLDOWN_MISS });
     }
 
-    /**
-     * Legacy instant catch resolution — removeDebris + flat score at once.
-     * Cargo-continuity S13(d): this is now ONLY the headless/test fallback for a
-     * LassoSystem with no CaptureNetSystem wired (production always wires one, so
-     * the real path is the collar adoption in _resolveCatch). Kept so throw-only
-     * tests resolve a catch without a full capture system.
-     */
+    /** Legacy instant catch (removeDebris + flat score): ONLY the headless/test fallback with no CaptureNetSystem wired
+     *  (production's real path is the collar adoption in _resolveCatch). Kept so throw-only tests resolve a catch. */
     _completeCatch(debrisField) {
         const target = this.target;
 
-        // Remove debris from field
         if (debrisField && target) {
             debrisField.removeDebris(target.id);
         }
 
-        // Emit lasso-specific catch event (TutorialSystem listens to this)
         eventBus.emit(Events.LASSO_CAPTURED, {
             debrisId: target ? target.id : null,
             type: target ? target.type : 'unknown',
             mass: target ? (target.mass || 0) : 0,
         });
 
-        // Also emit ARM_CAPTURED for catch juice (slo-mo, flash, sound)
-        // Session O (plan D13, owner 2026-09-07: "one catch, one confirmation"):
-        // both this ARM_CAPTURED and the INTERACTION_CAPTURE below feed HUD toasts
-        // tagged `confirm` — under the engaged toast policy both die, so a single
-        // lasso catch shows ONE surface (or none while engaged), never two. The
-        // EVENTS stay — arm pane, audio, skills, scoring listen to them (no
-        // behaviour change here).
+        // Also ARM_CAPTURED for catch juice (slo-mo, flash, sound). Owner 2026-09-07: "one catch, one confirmation": this and
+        // the INTERACTION_CAPTURE below both feed HUD toasts tagged `confirm`; under the engaged toast policy both die, so a
+        // lasso catch shows ONE surface (or none while engaged). The EVENTS stay: arm pane, audio, skills, scoring listen.
         eventBus.emit(Events.ARM_CAPTURED, {
             armId: 'lasso',
             debrisId: target ? target.id : null,
         });
 
-        // Score the lasso catch through the normal pipeline
         eventBus.emit(Events.INTERACTION_CAPTURE, {
             points: Constants.TIER3_BASE || 500,
             type: target ? target.type : 'fragment',
@@ -2408,7 +1805,6 @@ export class LassoSystem {
             captureTier: 3,
         });
 
-        // Comms
         eventBus.emit(Events.COMMS_MESSAGE, {
             text: `Lasso catch! ${target ? target.type : 'debris'} secured.`,
             priority: 'info',
@@ -2421,12 +1817,7 @@ export class LassoSystem {
         eventBus.emit(Events.LASSO_COOLDOWN_START, { duration: Constants.LASSO_COOLDOWN_CATCH });
     }
 
-    /**
-     * Update gossamer silk particle trail — emit at projectile, update drift + fade.
-     * @param {number} dt
-     * @param {THREE.Vector3} playerPos
-     * @private
-     */
+    /** Gossamer silk trail: emit at the projectile, update drift + fade. */
     _updateGossamerTrail(dt, playerPos) {
         if (!this._trailPoints) return;
 
@@ -2438,7 +1829,6 @@ export class LassoSystem {
         const now = this._time;
         const lifetime = this._trailLifetime;
 
-        // ── Emit new particles during flight (not reel-in) ────────────────
         if (this.active && this.projectilePos && !this._reelingIn) {
             this._trailPoints.visible = true;
             // Emit ~60 particles/sec (1 per ~0.016s)
@@ -2449,7 +1839,6 @@ export class LassoSystem {
                 const i = this._trailHead;
                 const i3 = i * 3;
 
-                // Position at projectile with small random offset
                 pos[i3]     = this.projectilePos.x + (Math.random() - 0.5) * M * 3;
                 pos[i3 + 1] = this.projectilePos.y + (Math.random() - 0.5) * M * 3;
                 pos[i3 + 2] = this.projectilePos.z + (Math.random() - 0.5) * M * 3;
@@ -2467,24 +1856,20 @@ export class LassoSystem {
             }
         }
 
-        // ── Update all particles: drift + fade ────────────────────────────
         let anyAlive = false;
         for (let i = 0; i < N; i++) {
             if (births[i] <= 0) continue; // inactive slot
             const age = now - births[i];
             if (age > lifetime) {
-                // Dead — hide particle
                 alphas[i] = 0;
                 births[i] = 0;
                 continue;
             }
             anyAlive = true;
 
-            // Smooth fade: ease-out (fast at start, slow tail)
             const t = age / lifetime;
             alphas[i] = 1.0 - t * t; // quadratic fade-out
 
-            // Drift with curl-like sinusoidal modulation
             const i3 = i * 3;
             const curlPhase = age * 4.0 + i * 0.7; // unique per particle
             pos[i3]     += drift[i3]     * dt + Math.sin(curlPhase) * M * 0.02 * dt;
@@ -2492,19 +1877,16 @@ export class LassoSystem {
             pos[i3 + 2] += drift[i3 + 2] * dt + Math.sin(curlPhase * 0.7) * M * 0.02 * dt;
         }
 
-        // Update GPU buffers
         if (this._trailPoints.visible) {
             this._trailPoints.geometry.attributes.position.needsUpdate = true;
             this._trailPoints.geometry.attributes.alpha.needsUpdate = true;
         }
 
-        // Hide trail when all particles dead and lasso inactive
         if (!this.active && !anyAlive) {
             this._trailPoints.visible = false;
         }
     }
 
-    /** Cancel/retract lasso without a catch */
     _cancelLasso() {
         eventBus.emit(Events.LASSO_MISSED);  // notify tutorial of mid-flight miss
         eventBus.emit(Events.COMMS_MESSAGE, {
@@ -2517,13 +1899,10 @@ export class LassoSystem {
         eventBus.emit(Events.LASSO_COOLDOWN_START, { duration: Constants.LASSO_COOLDOWN_MISS });
     }
 
-    /** Reset lasso state */
     _resetLasso() {
-        // Release the reel-in pin so a cancelled-mid-reel piece returns to
-        // normal propagation. On a COMPLETED catch, _resolveCatch has already
-        // nulled _reelPinTarget to hand pin ownership to the adoption/pending
-        // record, so this is a no-op there; on a headless instant catch the
-        // debris is already removed, so it's a harmless cleanup.
+        // Release the reel-in pin so a cancelled-mid-reel piece resumes propagation. After a COMPLETED catch _resolveCatch
+        // has already nulled _reelPinTarget (the adoption/pending record owns the pin), so this is a no-op; a headless
+        // instant catch has already removed the debris.
         if (this._reelPinTarget) {
             this._reelPinTarget._armPinned = false;
             this._reelPinTarget._catchRenderMin = 0;
@@ -2541,18 +1920,16 @@ export class LassoSystem {
         this._reelingIn = false;
         this._reelProgress = 0;
         this._netSpinAngle = 0;
-        // Phase 3: clear reel-physics latch + strain accumulator for the next cast.
+        // Clear the reel-physics latch + strain accumulator for the next cast.
         this._reelPhysicsActive = false;
         this._strainTimer = 0;
-        // 2026-08-26 round 2: flight billow + engulf seat re-arm clean.
+        // Re-arm flight billow + engulf seat.
         this._billowPhase = 0;
         this._wrapSeatD0 = 0;
 
         if (this._netGroup && !this._webFade) this._netGroup.visible = false;
-        // Phase 2: restore the mouth to full radius so the static net geometry is
-        // correct if the flag is toggled off and the next cast starts clean.
-        // 2026-08-26: deferred while a web fade is live — the welded shape must
-        // dissolve in place; the fade's completion tick restores the geometry.
+        // Restore the mouth to full radius so the next cast (or a flag toggle) starts clean. Deferred while a web fade is
+        // live: the welded shape must dissolve in place; the fade's completion tick restores the geometry.
         if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS && !this._webFade) {
             this._applyNetMouthRadius(1.0);
         }
@@ -2568,17 +1945,11 @@ export class LassoSystem {
         this._tetherCurve = null;
     }
 
-    /**
-     * Phase 6 + ST-2.4: Update visual effects independently of lasso active state.
-     * Allows muzzle flash, contact flash, and sparks to persist briefly after reset.
-     * @param {number} dt
-     */
+    /** Visual effects independent of lasso active state (muzzle/contact flash persist briefly after reset). */
     _updateVisualEffects(dt) {
-        // 2026-08-26 — welded web fade-out over a freshly adopted catch. The
-        // shape is frozen (no drape writes); opacity rides the captured seed
-        // (register-92 idiom). At zero: hide, then restore the resting
-        // geometry the next cast expects (natural cone, open rim, scale 1 —
-        // the same normalization _resetLasso deferred while the fade lived).
+        // Welded web fade-out over an adopted catch: shape frozen (no drape writes), opacity rides the captured seed. At
+        // zero: hide, then restore the resting geometry the next cast expects (natural cone, open rim, scale 1: what
+        // _resetLasso deferred).
         if (this._webFade) {
             this._webFade.t -= dt;
             const s = Math.max(0, this._webFade.t / this._webFade.dur);
@@ -2593,7 +1964,6 @@ export class LassoSystem {
             }
         }
 
-        // Muzzle flash fade (LASSO_MUZZLE_FLASH_TIME)
         if (this._muzzleFlashTimer > 0) {
             this._muzzleFlashTimer -= dt;
             const flashLife = Constants.LASSO_MUZZLE_FLASH_TIME || 0.2;
@@ -2604,7 +1974,6 @@ export class LassoSystem {
             }
         }
 
-        // Contact flash fade (300ms)
         if (this._contactFlashTimer > 0) {
             this._contactFlashTimer -= dt;
             this._contactFlash.material.opacity = Math.max(0, this._contactFlashTimer / 0.3) * 0.9;
@@ -2613,34 +1982,28 @@ export class LassoSystem {
             }
         }
 
-        // Sparks removed per user feedback
     }
 
-    // ── Public cooldown state accessors (ST-1.3) ────────────────────────────
 
     /** Seconds of cooldown remaining (0 = ready to fire) */
     get cooldownRemaining() {
         return Math.max(0, this.cooldown);
     }
 
-    /** Cleanup */
     dispose() {
-        // Tear down eventBus subscriptions so a disposed LassoSystem isn't kept
-        // alive (and doesn't keep mutating state) via its onboarding listeners.
+        // Unsubscribe from the eventBus so a disposed LassoSystem isn't kept alive.
         if (this._evtUnsubs) {
             this._evtUnsubs.forEach(u => { if (typeof u === 'function') u(); });
             this._evtUnsubs.length = 0;
         }
-        // Dispose the shared net-mesh kit (cone + nodes + drawstring + apex hub).
         if (this._netGroup) {
             if (this._webNear && this._nearSm && typeof this._nearSm.unregisterNearFieldRoot === 'function') {
-                this._nearSm.unregisterNearFieldRoot(this._netGroup);   // catch-near-pass: never leave a dead root in the pass
+                this._nearSm.unregisterNearFieldRoot(this._netGroup);   // never leave a dead root in the pass
                 this._webNear = false;
             }
             if (this._netKit) NetMeshKit.dispose(this._netKit);
             this.scene.remove(this._netGroup);
         }
-        // Sprint 2 v2: Dispose coaxial tether (sheath + core)
         if (this._tetherMesh) {
             this.scene.remove(this._tetherMesh);
             NetMeshKit.unregisterLineMaterial(this._tetherMesh.material);
@@ -2652,13 +2015,11 @@ export class LassoSystem {
             this._tetherCore.geometry.dispose();
             this._tetherCore.material.dispose();
         }
-        // Gossamer trail cleanup
         if (this._trailPoints) {
             this.scene.remove(this._trailPoints);
             this._trailPoints.geometry.dispose();
             this._trailPoints.material.dispose();
         }
-        // Sparks removed — no cleanup needed
         if (this._muzzleFlash) {
             this.scene.remove(this._muzzleFlash);
             this._muzzleFlash.geometry.dispose();

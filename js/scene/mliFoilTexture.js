@@ -44,6 +44,7 @@
  */
 
 import * as THREE from 'three';
+import { degToRad, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 /**
  * The foil's material look — the ONE place PlayerSatellite reads it from, so the scan-flash restore cannot
@@ -235,7 +236,7 @@ function _buildChain(x0, y0, ang0, totalLen, segs, w, amp, fan, cSalt) {
     const dx = Math.cos(ang) * segLen, dy = Math.sin(ang) * segLen;
     segments.push({ x0: x, y0: y, dx, dy, t0: s / segs, t1: (s + 1) / segs });
     x += dx; y += dy;
-    ang += (_hash01(s, cSalt, 91) - 0.5) * 2 * (25 * Math.PI / 180);   // ±25°/joint
+    ang += (_hash01(s, cSalt, 91) - 0.5) * 2 * degToRad(25);   // ±25°/joint
   }
   return { segments, w, amp, fan };
 }
@@ -292,10 +293,10 @@ function _chainField(u, v, ch) {
     for (let sy = -1; sy <= 1; sy++) {
       for (let sx = -1; sx <= 1; sx++) {
         const px = u + sx - f.x0, py = v + sy - f.y0;
-        const tt = Math.max(0, Math.min(1, (px * f.dx + py * f.dy) / ll));
+        const tt = clamp01((px * f.dx + py * f.dy) / ll);
         const ex = px - tt * f.dx, ey = py - tt * f.dy;
         const d = Math.hypot(ex, ey);
-        if (d < best) { best = d; tAt = f.t0 + (f.t1 - f.t0) * tt; }
+        if (d < best) { best = d; tAt = lerp(f.t0, f.t1, tt); }
       }
     }
   }
@@ -358,7 +359,7 @@ function _buildHeight(size, vp) {
       const vo = _voronoi(u, v, lat);
       // border profile: 1 in the panel interior → 0 at the border (smoothstep)
       const prof = Math.min(1, (vo.f2 - vo.f1) * vp.pillowK);
-      const sm = prof * prof * (3 - 2 * prof);
+      const sm = smoothstep01(prof);
 
       // 2. pillow
       hh += vp.pillowAmp * lat.amp[vo.i1] * sm * invCells;
@@ -486,7 +487,7 @@ export function buildFoilPixels(size, variant = 'crumpled') {
       const facetId = lat.id[vo.i1];
 
       let r = R.base + facetId * R.span + c * R.creaseAdd;
-      r = Math.max(R.lo, Math.min(R.hi, r));
+      r = clamp(r, R.lo, R.hi);
       const rv = Math.round(r * 255);
       rm[idx + 0] = rv; rm[idx + 1] = rv; rm[idx + 2] = 255; rm[idx + 3] = 255;
 

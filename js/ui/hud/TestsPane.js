@@ -2,12 +2,9 @@
  * TestsPane.js — the "Tests" fold-out: one closed header button, and behind it
  * the developer extras (today the sound list).
  *
- * u6-tests-plain D2 (2026-10-19). Built ONLY when the Tests switch is on
- * (`?tests=1`, or the old `?sounds=1`; see TestsSwitch.js); otherwise inert, no
- * DOM. `#hud-tests-pane` sits where the sound list sat (left edge = MOTHER's,
- * bottom 176 px, z-index 60) on every floor and the ride. CLOSED at every load:
- * one `Tests ▸` button (44 px tall, takes taps); a tap toggles `Tests ▾` and
- * the body. The body holds the sound list, rendered by SoundLogPane into it.
+ * Built ONLY when the Tests switch is on (`?tests=1`, or the old `?sounds=1`; see TestsSwitch.js); otherwise inert,
+ * no DOM. Sits where the sound list sat (left edge = MOTHER's, bottom 176 px, z-index 60). CLOSED at every load:
+ * one 44 px `Tests ▸` button; a tap toggles `Tests ▾` and the body, which SoundLogPane renders into.
  *
  * @module ui/hud/TestsPane
  */
@@ -32,7 +29,7 @@ export class TestsPane {
     this.body = null;
     this.soundLog = null;
     this.open = false;
-    // Read once at construction (never at import) so tests can set it.
+    // Read at construction, never at import, so tests can set it.
     const search = opts.search ?? (typeof location !== 'undefined' ? location.search : '');
     this.requested = testsRequested(search);
     const doc = opts.doc || (typeof document !== 'undefined' ? document : null);

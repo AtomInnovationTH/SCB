@@ -1,21 +1,14 @@
 /**
- * RangeMapModel - the numbers behind the orbital range map (range-map lane, 2026-10-25; owner: "an orbital map to clearly understand
- * their range and choices with current fuel and salvage fuel"; "rings around Earth"; plan D1-D6). Pure: no DOM, no events, no game state.
+ * RangeMapModel - the numbers behind the orbital range map (owner: "an orbital map to clearly understand their range and
+ * choices with current fuel and salvage fuel"; "rings around Earth"). Pure: no DOM, no events, no game state.
  * The view (js/ui/RangeMap.js) draws what this says.
  *
- *   rangeMapRect(viewW, viewH, mode)     where the square panel sits on the left of the screen, clear of the list, the floor rail and the footer band
- *   buildLayout({rows, herKm, side})     the rings: one per distinct height of the where-next rows (+ hers), radius by RANK of height (not
- *                                        to scale) with a visible break at a big height gap, every ring's label box placed so no two overlap
- *   reachBand(layout)                    the annulus from the lowest to the highest ring she can reach now (the rows in state 'ok')
- *   spiralAt / spiralPoints              her path from her ring to the picked one: radius follows the real climb (the profile's samples),
- *                                        two stylised turns over the trip
- *   orbitCount(samples) / orbitLine(n)   "She circles Earth about N times on the way": the sum of dt / period(a), computed
- *   hitTest(layout, x, y)                the ring a tap is nearest to
- *   gasAboardLine / catchesLine / movesLine / tripDayText / textLines   the words (the lines under the canvas: short, 0.1 kg)
+ * Rings: one per distinct height of the where-next rows (+ hers), radius by RANK of height (not to scale) with a visible break at a
+ * big height gap. Her path: radius follows the real climb (the profile's samples), two stylised turns over the trip.
  *
- * A ring is made by a field row, a satellite row or the Stay row (her own field); the call row (a satellite's trip to her) and the push-down
- * rows (a height of their own) make none: the call is drawn as an arrow between rings. Her own ring exists even when no row carries it
- * (berthed at a satellite).
+ * A ring is made by a field row, a satellite row or the Stay row (her own field); the call row (a satellite's trip to her) and the
+ * push-down rows (a height of their own) make none: the call is drawn as an arrow between rings. Her own ring exists even when no row
+ * carries it (berthed at a satellite).
  *
  * @module systems/RangeMapModel
  */
@@ -28,11 +21,9 @@ import { degToRad, clamp01, clamp } from '../core/MathUtil.js';
 const DOT = '\u00b7';
 const R = () => Constants.RANGE_MAP;
 
-// ── The panel ────────────────────────────────────────────────────────────────
-
 /**
  * @private The floor rail's box for the clearance: the live `left` / `bottom` edges when given (RailIndicator.leftPx() / bottomPx()), else the
- * rail at its design place (RANGE_MAP.RAIL_*: RAIL_EDGE_PX in from the right edge, mid-height). `false` = no rail. A missing edge reads as the design one.
+ * rail at its design place (RANGE_MAP.RAIL_*). `false` = no rail. A missing edge reads as the design one.
  */
 function railBox(viewW, viewH, rail) {
   if (rail === false) return null;
@@ -46,8 +37,8 @@ function railBox(viewW, viewH, rail) {
 
 /**
  * @private How far above the screen's bottom the bottom-left transfer-window box reaches, plus the air: XFER_BOX_BOTTOM_PX (its CSS bottom) + its
- * outer height + XFER_BOX_GAP_PX. The height is the live one (`TransferWindows.heightPx()`, passed as `box.height`); unmeasured, the height of its
- * tallest state (XFER_BOX_FALLBACK_PX). `box === false` = no box. The box sits at the left edge, under the map's x-span, so it always counts.
+ * outer height + XFER_BOX_GAP_PX. Height is the live one (`TransferWindows.heightPx()`, as `box.height`), else its tallest state
+ * (XFER_BOX_FALLBACK_PX). `box === false` = no box. The box sits under the map's x-span, so it always counts.
  */
 export function boxClearPx(box) {
   if (box === false) return 0;
@@ -57,13 +48,13 @@ export function boxClearPx(box) {
 }
 
 /**
- * The square the map takes, in CSS px (D5, moved to the left in F1.1: the height column's place). Left edge LEFT_PX, top at TOP_PX (below the
- * top HUD strip). `mode` 'choose': the where-next list is open, so the map stays left of its x-span (the list is bottom centre, its top never
- * above y 280: their y-spans always overlap, so the clearance is in x) and is at most SIDE_CHOOSE_PX; 'trip': the list is closed and the map may
- * be SIDE_TRIP_PX. The text lines under the canvas (TEXT_PX) count against the room below, which ends BOTTOM_PX above the screen's bottom (the
- * footer band). In both modes it stays left of the floor rail (`opts.rail`: `{left, bottom}` live edges, nothing = the rail at its design place,
- * `false` = none) whenever their y-spans can meet. The room below ends at the higher of the footer band (BOTTOM_PX) and the top of the bottom-left
- * transfer-window box (`opts.box`: `{height}` live, see boxClearPx), so the text block never lands on the box. The open drawer (x 0 to 440, z 35) may cover it; the height column yields while it shows.
+ * The square the map takes, in CSS px: left edge LEFT_PX, top at TOP_PX (below the top HUD strip). `mode` 'choose': the where-next list is
+ * open, so the map stays left of its x-span (the list is bottom centre, its top never above y 280: their y-spans always overlap, so the
+ * clearance is in x) and is at most SIDE_CHOOSE_PX; 'trip': the list is closed and the map may be SIDE_TRIP_PX. The text lines under the
+ * canvas (TEXT_PX) count against the room below, which ends at the higher of the footer band (BOTTOM_PX above the screen's bottom) and the
+ * top of the bottom-left transfer-window box (`opts.box`: `{height}` live, see boxClearPx), so the text block never lands on the box.
+ * In both modes it stays left of the floor rail (`opts.rail`: `{left, bottom}` live edges, nothing = the rail at its design place,
+ * `false` = none) whenever their y-spans can meet. The open drawer (x 0 to 440, z 35) may cover it; the height column yields while it shows.
  * Null when it would be narrower than MIN_SIDE_PX (then the map is not shown).
  * @param {number} viewW @param {number} viewH @param {'choose'|'trip'} [mode]
  * @param {{rail?: ({left?: number, bottom?: number, top?: number}|false|null), box?: ({height?: number}|false|null)}} [opts]
@@ -86,9 +77,6 @@ export function rangeMapRect(viewW, viewH, mode = 'choose', opts = {}) {
   return { x: left, y: c.TOP_PX, w: side, h: side, side };
 }
 
-// ── The rings ────────────────────────────────────────────────────────────────
-
-/** @private how a row's state reads on its ring */
 function ringState(row) {
   if (!row) return 'here';
   switch (row.state) {
@@ -99,17 +87,12 @@ function ringState(row) {
   }
 }
 
-/** @private "3 d" / "<1 d" */
 function daysShort(days) {
   if (!(days >= 1)) return '<1 d';
   return `${Math.round(days)} d`;
 }
 
-/**
- * The words on a ring: "750 km · 4.7 kg · 43 d", or the reason when it cannot be reached ("750 km · short 1.2 kg"). A satellite starts "sat".
- * @param {{altKm: number}} ring @param {object|null} row the ring's row @param {boolean} here her own ring
- * @returns {string}
- */
+/** The words on a ring: "750 km · 4.7 kg · 43 d", or the reason when it cannot be reached ("750 km · short 1.2 kg"). A satellite starts "sat". */
 export function ringLabel(ring, row, here) {
   const km = `${Math.round(ring.altKm)} km`;
   const head = row && row.kind === 'satellite' ? `sat ${km}` : km;
@@ -124,10 +107,9 @@ export function ringLabel(ring, row, here) {
   }
 }
 
-/** @private the width of a label box for this text */
 const boxWidth = (text) => Math.ceil(text.length * R().LABEL_CHAR_PX + 2 * R().LABEL_PAD_PX);
 
-/** @private do two boxes overlap (a 1 px air gap counts as overlap) */
+// a 1 px air gap counts as overlap
 function overlaps(a, b) {
   return a.x < b.x + b.w + 1 && b.x < a.x + a.w + 1 && a.y < b.y + b.h + 1 && b.y < a.y + a.h + 1;
 }
@@ -145,7 +127,7 @@ export function buildLayout({ rows, herKm, side }) {
   const her = Number.isFinite(herKm) ? herKm : null;
   const cx = side / 2;
   const cy = side / 2;
-  // one entry per distinct height, from the rows that make a ring
+  // one entry per distinct height, from the rows that make a ring (highest rank wins)
   const byHeight = [];
   const at = (km) => byHeight.find((e) => Math.abs(e.altKm - km) < 0.5);
   const rank = { satellite: 3, field: 3, stay: 2 };
@@ -165,7 +147,7 @@ export function buildLayout({ rows, herKm, side }) {
   byHeight.sort((a, b) => a.altKm - b.altKm);
   const n = byHeight.length;
 
-  // radii: by rank of height; a gap of BREAK_KM or more gets BREAK_EXTRA spacings more
+  // radii by rank of height; a gap of BREAK_KM or more gets BREAK_EXTRA spacings more
   const f = c.EARTH_FRAC;
   const maxOuter = side / 2 - c.PAD_PX - c.LABEL_H_PX / 2;
   const units = [];
@@ -213,16 +195,15 @@ export function buildLayout({ rows, herKm, side }) {
   return layout;
 }
 
-/** @private clamp a box inside the canvas (shifts it; never shrinks it) */
 function clampBox(b, side) {
   return { x: clamp(b.x, 0, side - b.w), y: clamp(b.y, 0, side - b.h), w: b.w, h: b.h };
 }
 
 /**
- * @private Put every label box on its ring at an angle where it overlaps no other box and stays inside the canvas. A ring's label is
- * centred where the ring crosses the preferred radial: straight up for every other ring and straight down for the others, so
- * neighbouring labels sit on opposite sides and a label's neighbour on its own side is two ring spacings away; when that spot is taken
- * (a tight map) the angle fans out in 10 degree steps, then the least overlapping spot is kept. The break labels go first, on the right.
+ * @private Put every label box on its ring at an angle where it overlaps no other box and stays inside the canvas. A label is centred where
+ * the ring crosses the preferred radial: straight up for every other ring, straight down for the rest, so a label's neighbour on its own
+ * side is two ring spacings away; when taken (a tight map) the angle fans out in 10 degree steps, then the least overlapping spot is kept.
+ * The break labels go first, on the right.
  */
 function placeLabels(layout) {
   const c = R();
@@ -257,9 +238,8 @@ function placeLabels(layout) {
 }
 
 /**
- * The radius a height is drawn at: straight lines between the rings (so a climb that lingers between two heights shows as a slow stretch),
+ * The radius a height is drawn at: straight lines between the rings (a climb lingering between two heights shows as a slow stretch),
  * held at the first and last ring beyond them, never inside the Earth disc.
- * @param {object} layout @param {number} altKm @returns {number}
  */
 export function radiusOf(layout, altKm) {
   const rings = layout.rings;
@@ -281,7 +261,6 @@ export function radiusOf(layout, altKm) {
 /**
  * Her reach now: the rings whose row can be flown (state 'ok'), as one band from the lowest to the highest, a half ring spacing wider on each side
  * so a lone ring has a body. Null when nothing can be flown.
- * @param {object} layout
  * @returns {{innerR: number, outerR: number, innerAltKm: number, outerAltKm: number, altKms: number[], ids: string[]}|null}
  */
 export function reachBand(layout) {
@@ -296,7 +275,7 @@ export function reachBand(layout) {
 
 /**
  * The ring a row belongs to: a field, satellite or Stay row its own; the call row its satellite's; a push-down row none.
- * @param {object} layout @param {string|null} rowId @param {object[]} [rows] the rows (to find a call row's satellite)
+ * @param {object[]} [rows] the rows (to find a call row's satellite)
  * @returns {object|null}
  */
 export function ringOfRow(layout, rowId, rows) {
@@ -308,12 +287,9 @@ export function ringOfRow(layout, rowId, rows) {
   return null;
 }
 
-// ── Her path ─────────────────────────────────────────────────────────────────
-
 /**
  * Where she is on the path at `f` (0..1 of the trip's time): the radius is the real climb's height (the profile's samples) through the
  * ring scale, the angle advances `turns` stylised turns over the trip, counter-clockwise on screen from `startRad`.
- * @param {object} layout
  * @param {{profile?: object|null, fromKm: number, toKm: number, turns?: number, startRad?: number}} plan `profile`: `planTo(id).profile`;
  *   without samples the height goes straight from `fromKm` to `toKm`
  * @param {number} f
@@ -332,7 +308,7 @@ export function spiralAt(layout, plan, f) {
   return { x: layout.cx + radius * Math.cos(angle), y: layout.cy - radius * Math.sin(angle), radius, angle, altKm };
 }
 
-/** @param {object} layout @param {object} plan see spiralAt @param {number} [n] points (default SPIRAL_POINTS) @returns {Array<{x:number,y:number,radius:number,angle:number,altKm:number,f:number}>} */
+/** `spiralAt` sampled at n+1 points (default SPIRAL_POINTS), each with its `f`. */
 export function spiralPoints(layout, plan, n = R().SPIRAL_POINTS) {
   const out = [];
   const m = Math.max(2, Math.round(n));
@@ -342,7 +318,7 @@ export function spiralPoints(layout, plan, n = R().SPIRAL_POINTS) {
 
 /**
  * The arrow of a called satellite (no burn: it comes to her): straight along one radial from its ring to hers.
- * @param {object} layout @param {number} satKm @param {number} herKm @param {number} [angle] radians, default straight right
+ * @param {number} [angle] radians, default straight right
  * @returns {{from: {x: number, y: number}, to: {x: number, y: number}}}
  */
 export function callArrow(layout, satKm, herKm, angle = 0) {
@@ -370,18 +346,16 @@ export function orbitCount(samples) {
   return n;
 }
 
-/** @param {number} n orbits @returns {string} "She circles Earth about 15 times on the way" ("about once" below 1.5) */
+/** "She circles Earth about 15 times on the way" ("about once" below 1.5). */
 export function orbitLine(n) {
   const k = Math.round(n);
   if (!(n > 0)) return '';
   return k <= 1 ? 'She circles Earth about once on the way' : `She circles Earth about ${k} times on the way`;
 }
 
-// ── Taps ─────────────────────────────────────────────────────────────────────
-
 /**
  * The ring a tap is nearest to, by distance from its circle, when within max(HIT_MIN_PX, half the ring's spacing); a tie goes to the lower ring.
- * @param {object} layout @param {number} x canvas px @param {number} y canvas px
+ * @param {number} x canvas px @param {number} y canvas px
  * @returns {object|null} the ring (its `rowId` may be null: her own ring while berthed)
  */
 export function hitTest(layout, x, y) {
@@ -397,9 +371,7 @@ export function hitTest(layout, x, y) {
   return bestDist <= Math.max(R().HIT_MIN_PX, best.spacingPx / 2) ? best : null;
 }
 
-// ── Words ────────────────────────────────────────────────────────────────────
-
-/** @param {number} day @param {number} days @returns {string} "Day 3 of 43" */
+/** "Day 3 of 43" */
 export function tripDayText(day, days) {
   return `Day ${day} of ${days}`;
 }
@@ -407,7 +379,7 @@ export function tripDayText(day, days) {
 /** @private one decimal always (the owner's 0.1 kg; the where-next rows' `kgText` writes 0.05 below 0.1, these lines do not) */
 const kg1 = (kg) => Math.max(0, Number.isFinite(kg) ? kg : 0).toFixed(1);
 
-/** @param {number} aboardKg @param {number} tankKg @returns {string} "Gas aboard 9.8 of 20.8 kg" */
+/** "Gas aboard 9.8 of 20.8 kg" */
 export function gasAboardLine(aboardKg, tankKg) {
   return `Gas aboard ${kg1(aboardKg)} of ${kg1(tankKg)} kg`;
 }
@@ -430,7 +402,7 @@ export const CALL_LINE = 'The resupply satellite is on its way';
 /**
  * The lines under the canvas, packed top-down and padded with '' to TEXT_LINES: the gas aboard, then (choosing, not berthed) what her catches gave
  * and what her own moves used, then how often she circles Earth on the chosen path, then the day of the trip (or the called satellite's note).
- * Each line is short enough for the smallest canvas (test-RangeMapModel pins the widest case).
+ * Each fits the smallest canvas (test-RangeMapModel pins the widest case).
  * @param {{aboardKg?: number, tankKg?: number, gainedKg?: number, usedKg?: number, showMission?: boolean, orbits?: number, day?: number, days?: number, called?: boolean}} [p]
  * @returns {string[]}
  */

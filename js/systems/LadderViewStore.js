@@ -1,43 +1,32 @@
 /**
- * LadderViewStore.js — the Zoom Ladder's PLAYER-owned view preferences
- * (08-workbench D5 "rooms you can rearrange"; Wave 5 Session G, 2026-09-04).
+ * LadderViewStore.js — the Zoom Ladder's PLAYER-owned view preferences (08-workbench D5 "rooms you can rearrange").
  *
- * ONE localStorage key, `sc_ladder_view_v3` (StorageKeys.LADDER_VIEW; v3 since
- * 2026-09-23 — v2 blobs remembered cargo shown on F1, abandoned in place; v2
- * was the Session H 7→5 renumber — floor keys mean new floors, v1 abandoned),
- * holding the two things the player arranges on the workbench and expects to
- * find as they left them after the SHOP and after a reload:
- *   - `rooms` — FloorMask's D5 per-floor pane memory, exactly its
- *     exportMemory() shape `{ floors: { "<floorId>": { "<paneId>": boolean } } }`,
- *     stamped with `roomsGen` (ROOMS_GENERATION — the DEFAULT_ROOMS generation
- *     it was captured against; a stale stamp drops the rooms on load);
+ * ONE localStorage key, `sc_ladder_view_v3` (StorageKeys.LADDER_VIEW; floor keys mean new floors, so a renumber
+ * abandons older blobs), holding the two things the player arranges on the workbench and expects to find as they
+ * left them after the SHOP and after a reload:
+ *   - `rooms` — FloorMask's D5 per-floor pane memory, exactly its exportMemory() shape
+ *     `{ floors: { "<floorId>": { "<paneId>": boolean } } }`, stamped with `roomsGen` (ROOMS_GENERATION — the
+ *     DEFAULT_ROOMS generation it was captured against; a stale stamp drops the rooms on load);
  *   - `panes` — the F3 workbench panes' open-state `{ refit, library }`.
  *
- * Stored in its OWN key, deliberately separate from the run save
- * (`spacecowboy_save_v1`, wiped by `persistenceManager.deleteSave()` on every
- * New Game) — the SettingsManager header rule: a rearranged room belongs to
- * the player, not the run. The run-scoped half of D5 (the floor + z01 the
- * player left) lives in the run save instead (`save.ladder`, gathered by
- * main.js on PERSISTENCE_GATHER — see LadderController.viewState).
+ * Stored in its OWN key, deliberately separate from the run save (`spacecowboy_save_v1`, wiped by
+ * `persistenceManager.deleteSave()` on every New Game), per the SettingsManager header rule: a rearranged room
+ * belongs to the player, not the run. The run-scoped half of D5 (the floor + z01 the player left) lives in the run
+ * save instead (`save.ladder`, gathered by main.js on PERSISTENCE_GATHER; see LadderController.viewState).
  *
- * The SettingsManager pattern: load + validate in the constructor, save on
- * change, private-mode-safe (every storage access is try/catch; a missing or
- * corrupt key → the shipped defaults, never a throw). G1: write-on-change
- * ONLY — setRooms/setPanes compare against the last written state and skip
- * identical writes; the callers (LadderController) invoke them on floor
- * changes and pane open/close edges, never per frame.
+ * SettingsManager pattern: load + validate in the constructor, save on change, private-mode-safe (every storage
+ * access is try/catch; a missing or corrupt key → the shipped defaults, never a throw). G1: write-on-change ONLY:
+ * setRooms/setPanes compare against the last written state and skip identical writes; callers (LadderController)
+ * invoke them on floor changes and pane open/close edges, never per frame.
  *
- * Validation (every import validated): `rooms` must be an object with a
- * `floors` object; each row an object; only boolean values are kept (the pane
- * NAMES are FloorMask.importMemory's half — unknown / non-memory panes are
- * dropped there, and ALWAYS_ON can never ride in). `panes` keeps only boolean
- * `refit` / `library`; anything else → the default (both closed).
+ * Validation (every import validated): `rooms` must be an object with a `floors` object; each row an object; only
+ * boolean values are kept (the pane NAMES are FloorMask.importMemory's half: unknown / non-memory panes are dropped
+ * there, and ALWAYS_ON can never ride in). `panes` keeps only boolean `refit` / `library`; anything else → the
+ * default (both closed).
  *
- * Headless / flag-off: `storage` is injectable (tests); the default is the
- * global localStorage when present, else null → an in-memory store that
- * remembers within the session and writes nothing. main.js constructs this
- * ONLY inside the `Constants.LADDER.ENABLED` gate, so a ?ladder=0 boot never
- * touches the key (byte-identical).
+ * Headless / flag-off: `storage` is injectable (tests); the default is the global localStorage when present, else
+ * null → an in-memory store that remembers within the session and writes nothing. main.js constructs this ONLY
+ * inside the `Constants.LADDER.ENABLED` gate, so a ?ladder=0 boot never touches the key.
  *
  * @module systems/LadderViewStore
  */
@@ -50,45 +39,32 @@ const VIEW_KEY = StorageKeys.LADDER_VIEW;
 export const LADDER_VIEW_VERSION = 1;
 
 /**
- * The DEFAULT-ROOMS generation the stored `rooms` were captured against.
- * FloorMask._captureMemory records EVERY memory pane of a floor the moment any
- * pane flips, so a player who ever touched a pane carries a full room row that
- * outranks DEFAULT_ROOMS forever — a defaults change would never reach them.
- * Bump this when DEFAULT_ROOMS changes: a stored envelope whose `roomsGen`
- * differs (or is absent — the pre-stamp v2 writes) drops its ROOMS only; the
- * `panes` memory and the key itself survive (the Session H key bump was the
- * heavier tool — this is the surgical one). Written on every save.
- *   1 — implicit: the Session G/H rooms (F2 = everything shown)
- *   2 — 2026-09-06 (owner): F2 nav orb + discoveries gone by default
- *   3 — 2026-09-06 (Session K): the CARGO pane joins MASK_PANES / DEFAULT_ROOMS (shown on the shop floor, gone elsewhere)
- *   4 — 2026-09-06 (Session M): the ORBIT / COPILOT / NEXT instruments join (ORBIT + COPILOT shown on F2 + F3, COPILOT faint on F4, NEXT shown on F3 + F4)
- *   5 — 2026-09-07 (Session N.5, owner "first make me care"): the first-contact
- *       rooms — F1 is the SHIP alone (cargo + comms leave its defaults; the
- *       first WORKBENCH_STOP shows the till); F2 greets a new player with
- *       THREE panes (targets, reticles & alerts, mother) + comms + the hint
- *       ticker (debris, pin, arms, orbit, copilot behind MORE); comms leaves
- *       ALWAYS_ON for the rooms (shown F2-F5, gone on the F1 workbench).
- *   6 — 2026-09-07 (Session O, owner "LEFT: mother, daughters"): F2's
- *       arms (the daughters rows, the fleet list) join the home floor —
- *       FOUR panes now (with comms + the hint ticker). This drops remembered
- *       per-floor room edits once — the known cost of a defaults change.
- *   7 — 2026-09-08 (ladder reorder rev 3): F3 nav orb gone; composites
- *       experimental/decor. Stored gen-6 rooms drop once.
- *   8 — 2026-10-13 (w7-panes, owner "comms should be visible on F2 at start of
- *       game"; "Targets and Target info visible after scan"): F2 now shows
- *       TARGET INFO (`debris`) too — the scan gate in HUD holds both back until
- *       the first scan. Stored gen-7 rooms drop once, so a saved hide of COMMS
- *       on F2 (the − key) no longer outranks the defaults.
- *   9 — 2026-10-19 (u6-tests-plain, owner 2026-10-18 "what is noise"): ORBIT
- *       (LAT, LON, ALT, MET) is 'gone' on F3 by default. Stored gen-8 rooms
- *       drop once, so a saved F3 room no longer outranks the new default.
+ * The DEFAULT-ROOMS generation the stored `rooms` were captured against. FloorMask._captureMemory records EVERY
+ * memory pane of a floor the moment any pane flips, so a player who ever touched a pane carries a full room row that
+ * outranks DEFAULT_ROOMS forever: a defaults change would never reach them. Bump this when DEFAULT_ROOMS changes: a
+ * stored envelope whose `roomsGen` differs (or is absent) drops its ROOMS only; the `panes` memory and the key itself
+ * survive. Written on every save. Each bump drops remembered per-floor room edits once (the known cost).
+ *   1 — F2 = everything shown
+ *   2 — F2 nav orb + discoveries gone by default (owner 2026-09-06)
+ *   3 — the CARGO pane joins MASK_PANES / DEFAULT_ROOMS (shown on the shop floor, gone elsewhere)
+ *   4 — the ORBIT / COPILOT / NEXT instruments join (ORBIT + COPILOT shown on F2 + F3, COPILOT faint on F4, NEXT
+ *       shown on F3 + F4)
+ *   5 — first-contact rooms (owner 2026-09-07, "first make me care"): F1 is the SHIP alone (cargo + comms leave its
+ *       defaults; the first WORKBENCH_STOP shows the till); F2 greets a new player with THREE panes (targets,
+ *       reticles & alerts, mother) + comms + the hint ticker (debris, pin, arms, orbit, copilot behind MORE); comms
+ *       leaves ALWAYS_ON for the rooms (shown F2-F5, gone on the F1 workbench).
+ *   6 — F2's arms (the daughters rows, the fleet list) join the home floor: FOUR panes (with comms + the hint
+ *       ticker) (owner 2026-09-07, "LEFT: mother, daughters").
+ *   7 — F3 nav orb gone; composites experimental/decor.
+ *   8 — F2 also shows TARGET INFO (`debris`) (owner 2026-10-13, "comms should be visible on F2 at start of game";
+ *       "Targets and Target info visible after scan"): the scan gate in HUD holds both back until the first scan. A
+ *       saved hide of COMMS on F2 (the − key) no longer outranks the defaults.
+ *   9 — ORBIT (LAT, LON, ALT, MET) is 'gone' on F3 by default (owner 2026-10-18, "what is noise").
  */
 export const ROOMS_GENERATION = 9;
 
-/** The shipped pane state: both workbench panes closed. */
 export const DEFAULT_PANES = Object.freeze({ refit: false, library: false });
 
-/** @private The default storage: the global localStorage when present. */
 function _defaultStorage() {
   try {
     return (typeof localStorage !== 'undefined') ? localStorage : null;
@@ -103,10 +79,8 @@ function _defaultStorage() {
 const SPECIAL_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
- * @private Validate a rooms snapshot into a fresh plain-JSON copy, or null.
- * Keeps the FloorMask exportMemory envelope; drops non-object rows,
- * non-boolean values and prototype-steering keys. Pane-name validation is
- * FloorMask.importMemory's.
+ * Validate a rooms snapshot into a fresh plain-JSON copy (FloorMask exportMemory envelope), or null; drops
+ * non-object rows, non-boolean values and prototype-steering keys. Pane-name validation is FloorMask.importMemory's.
  */
 function _sanitizeRooms(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return null;
@@ -127,7 +101,7 @@ function _sanitizeRooms(snapshot) {
   return { floors };
 }
 
-/** @private Validate a panes object into `{ refit, library }` booleans. */
+/** Validate a panes object into `{ refit, library }` booleans. */
 function _sanitizePanes(panes) {
   const out = { ...DEFAULT_PANES };
   if (!panes || typeof panes !== 'object') return out;
@@ -137,60 +111,35 @@ function _sanitizePanes(panes) {
 }
 
 export class LadderViewStore {
-  /**
-   * @param {object} [deps]
-   * @param {object|null} [deps.storage] - a localStorage-shaped object
-   *   (getItem/setItem); default: the global localStorage, or null (in-memory
-   *   only) when absent. Tests inject a stub or null.
-   */
+  /** @param {object|null} [deps.storage] - localStorage-shaped (getItem/setItem); default the global, or null. */
   constructor(deps = {}) {
     this._storage = (deps.storage !== undefined) ? deps.storage : _defaultStorage();
-    /** @type {{floors: Object<string, Object<string, boolean>>}|null} */
     this._rooms = null;
-    /** @type {{refit: boolean, library: boolean}} */
     this._panes = { ...DEFAULT_PANES };
-    /** The last serialized envelope written (or loaded) — the write-on-change guard. */
+    /** The last serialized envelope written (or loaded): the write-on-change guard. */
     this._lastJson = null;
-    /** Writes attempted (tests: G1 write-on-change pin). */
     this._writes = 0;
     this._load();
   }
 
-  // ── Reads ────────────────────────────────────────────────────────────────
-
-  /**
-   * The remembered rooms (FloorMask.exportMemory shape) or null when none —
-   * feed straight to FloorMask.importMemory (which validates the pane names).
-   * A fresh copy: callers cannot reach the store's state.
-   * @returns {{floors: Object<string, Object<string, boolean>>}|null}
-   */
+  /** The remembered rooms (FloorMask.exportMemory shape) or null; a fresh copy, feed to FloorMask.importMemory. */
   rooms() {
     return this._rooms ? JSON.parse(JSON.stringify(this._rooms)) : null;
   }
 
   /**
-   * The remembered drawer open-state (booleans; the shipped default is both
-   * closed): `refit` = the workbench REFIT drawer (floor 1 only — recorded
-   * while floor 1 is applied, carried otherwise), `library` = the SPECS
-   * drawer (rides along across floors — recorded on every floor since
-   * Session L, J FINDINGS (c)). A fresh copy.
-   * @returns {{refit: boolean, library: boolean}}
+   * The remembered drawer open-state (default both closed): `refit` = the workbench REFIT drawer (floor 1 only,
+   * recorded while floor 1 is applied, carried otherwise), `library` = the SPECS drawer (rides along across floors,
+   * recorded on every floor). A fresh copy.
    */
   panes() {
     return { ...this._panes };
   }
 
-  /** Writes attempted so far (tests). @returns {number} */
+  /** Writes attempted (tests: G1 write-on-change pin). */
   writeCount() { return this._writes; }
 
-  // ── Writes (on change only) ──────────────────────────────────────────────
-
-  /**
-   * Remember a rooms snapshot (FloorMask.exportMemory()). Invalid → ignored.
-   * Writes only when the sanitized snapshot differs from what is stored.
-   * @param {{floors?: object}} snapshot
-   * @returns {boolean} true when the state changed (and a write was attempted)
-   */
+  /** Remember a rooms snapshot (FloorMask.exportMemory()); invalid → ignored. Writes only on change. */
   setRooms(snapshot) {
     const rooms = _sanitizeRooms(snapshot);
     if (!rooms) return false;
@@ -200,13 +149,7 @@ export class LadderViewStore {
     return true;
   }
 
-  /**
-   * Remember the drawer open-state (REFIT floor 1 / SPECS any floor — see
-   * panes()). Non-boolean fields fall back to the default (closed). Writes
-   * only on change.
-   * @param {{refit?: boolean, library?: boolean}} panes
-   * @returns {boolean} true when the state changed (and a write was attempted)
-   */
+  /** Remember the drawer open-state; non-boolean fields fall back to closed. Writes only on change. */
   setPanes(panes) {
     const next = _sanitizePanes(panes);
     if (next.refit === this._panes.refit && next.library === this._panes.library) return false;
@@ -215,9 +158,6 @@ export class LadderViewStore {
     return true;
   }
 
-  // ── Storage (private-mode safe) ──────────────────────────────────────────
-
-  /** @private Load + validate (a corrupt / missing key → the defaults, no throw). */
   _load() {
     try {
       if (!this._storage || typeof this._storage.getItem !== 'function') return;
@@ -237,12 +177,10 @@ export class LadderViewStore {
     }
   }
 
-  /** @private The envelope as written. */
   _serialize() {
     return JSON.stringify({ v: LADDER_VIEW_VERSION, roomsGen: ROOMS_GENERATION, rooms: this._rooms, panes: this._panes });
   }
 
-  /** @private Persist (non-fatal on failure; skipped when nothing changed). */
   _save() {
     const json = this._serialize();
     if (json === this._lastJson) return;

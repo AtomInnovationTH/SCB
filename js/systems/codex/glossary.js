@@ -1,46 +1,34 @@
 /**
- * glossary.js — inline jargon glossary + a pure HTML decorator (master §11.8).
+ * glossary.js — inline jargon glossary + a pure HTML decorator.
  *
- * The first time a hard space word (ΔV, LEO, FEEP, TRL, conjunction…) appears in
- * player-facing text we wrap it in a `<span class="glossary-term">` with a native
- * `title=` hover definition and, when the term maps to a Tech Library entry, a
- * `data-entry` deep-link the UI turns into a click → `CODEX_OPEN_ENTRY`.
+ * The first time a hard space word (ΔV, LEO, FEEP, TRL, conjunction…) appears in player-facing text it is wrapped in a
+ * `<span class="glossary-term">` with a native `title=` hover definition and, when the term maps to a Tech Library
+ * entry, a `data-entry` deep-link the UI turns into a click → `CODEX_OPEN_ENTRY`.
  *
- * This module is deliberately **DOM-free** (mirrors codexInterpolate.js) so it
- * imports cleanly under Node for unit tests. All DOM wiring (click delegation,
- * CSS) lives at the call sites (CommsPanel, viewer, …).
+ * DOM-free (mirrors codexInterpolate.js) so it imports under Node for unit tests; DOM wiring (click delegation, CSS)
+ * lives at the call sites (CommsPanel, viewer, …).
  *
- * Design notes:
  *   • `decorateGlossary` is PURE: same input → same output string, no globals.
- *   • Non-term text is HTML-escaped (we are moving from raw `${text}`
- *     interpolation to span-wrapping, so escaping is mandatory — see plan §5).
- *   • The matcher is built once and cached; surface forms are sorted longest-
- *     first so "specific impulse" wins over "impulse" and "delta-v" over "v".
- *   • Per-term case rules: acronyms (LEO/GEO/TRL/RAAN) match case-SENSITIVE so
- *     "leo" in prose stays plain; phrases ("delta-v", "specific impulse") match
- *     case-INSENSITIVELY via `flags:'i'`.
- *   • Boundaries are unicode/hyphen aware: we match the raw text (never inside an
- *     already-emitted span) and reject matches flanked by word characters so
- *     "Isp" doesn't fire inside "Wispy" and "delta" doesn't fire inside "deltas".
+ *   • Non-term text is HTML-escaped (mandatory: output is span-wrapped HTML, not raw `${text}`).
+ *   • The matcher is built once and cached; surface forms are sorted longest-first so "specific impulse" wins over
+ *     "impulse" and "delta-v" over "v".
+ *   • Acronyms (LEO/GEO/TRL/RAAN) match case-SENSITIVE so "leo" in prose stays plain; phrases ("delta-v",
+ *     "specific impulse") match case-INSENSITIVELY via `flags:'i'`.
+ *   • Boundaries: match the raw text (never inside an already-emitted span) and reject matches flanked by word
+ *     characters so "Isp" doesn't fire inside "Wispy" and "delta" doesn't fire inside "deltas".
  *
  * @module systems/codex/glossary
  */
 
-// ============================================================================
-// GLOSSARY DATA
 // Each def: { term, aliases?, def, entryId?, flags? }
 //   term     — canonical surface form (also the data-term key)
 //   aliases  — extra surface forms that share the same def/entry
-//   def      — one-line, plain-language hover definition (acronyms expanded)
+//   def      — one-line, plain-language hover definition (acronyms expanded; no humor)
 //   entryId  — codex.json entry id to deep-link (omit → hover-only, no click)
 //   flags    — 'i' = case-insensitive match (default: case-sensitive)
-//
-// Definitions are plain-language and fact-checked against the project content
-// rules (acronyms expanded; humor only in framing, kept out of the defs here).
-// ============================================================================
 
 export const GLOSSARY = [
-  // ── Orbital mechanics ────────────────────────────────────────────────────
+  // Orbital mechanics
   { term: 'ΔV', aliases: ['delta-v', 'delta v'], flags: 'i',
     def: 'Delta-v: the change in velocity a craft can produce — its fuel budget for every burn, in metres per second.',
     entryId: 'delta_v' },
@@ -92,7 +80,7 @@ export const GLOSSARY = [
     def: 'Deorbit: deliberately dropping a craft\u2019s orbit so it re-enters and burns up instead of becoming debris.',
     entryId: 'atmospheric_drag' },
 
-  // ── Debris & environment ──────────────────────────────────────────────────
+  // Debris & environment
   { term: 'Kessler syndrome', aliases: ['Kessler'], flags: 'i',
     def: 'Kessler syndrome: a runaway chain reaction where each collision makes more debris, triggering still more collisions.',
     entryId: 'kessler_syndrome' },
@@ -112,7 +100,7 @@ export const GLOSSARY = [
     def: 'South Atlantic Anomaly: a dip in Earth\u2019s magnetic shield over the South Atlantic where radiation reaches lower orbits.',
     entryId: 'south_atlantic_anomaly' },
 
-  // ── Maturity / readiness ──────────────────────────────────────────────────
+  // Maturity / readiness
   { term: 'TRL',
     def: 'Technology Readiness Level: a 1–9 scale for how proven a technology is. 1 = lab idea, 9 = flight-proven in real missions.' },
   { term: 'ASAT',
@@ -125,7 +113,7 @@ export const GLOSSARY = [
     def: 'On-orbit Servicing, Assembly and Manufacturing: refuelling, repairing or building spacecraft while they\u2019re still in space.',
     entryId: 'world_servicing' },
 
-  // ── Propulsion ────────────────────────────────────────────────────────────
+  // Propulsion
   { term: 'FEEP',
     def: 'Field-Emission Electric Propulsion: a thruster that flings ions off a charged liquid metal for ultra-precise, tiny nudges.',
     entryId: 'feep_thruster' },
@@ -151,7 +139,7 @@ export const GLOSSARY = [
     def: 'Argon: a very cheap, abundant ion-thruster propellant — lower performance than xenon but easy to source in bulk.',
     entryId: 'argon_propellant' },
 
-  // ── Attitude control ──────────────────────────────────────────────────────
+  // Attitude control
   { term: 'reaction wheel', aliases: ['reaction wheels'], flags: 'i',
     def: 'Reaction wheel: a spinning flywheel inside the craft — speeding it up or slowing it turns the craft the other way, no fuel.',
     entryId: 'reaction_wheels' },
@@ -174,7 +162,7 @@ export const GLOSSARY = [
     def: 'Momentum dumping: bleeding off spin built up in reaction wheels (via thrusters or magnetorquers) before they max out.',
     entryId: 'momentum_dumping' },
 
-  // ── Tethers & structures ──────────────────────────────────────────────────
+  // Tethers & structures
   { term: 'tether', flags: 'i',
     def: 'Tether: a long cable between two objects in space — used to deorbit debris, generate power, or transfer momentum.',
     entryId: 'space_tether' },
@@ -185,7 +173,7 @@ export const GLOSSARY = [
     def: 'Miura-ori: a rigid origami fold that lets big panels or nets pack flat and deploy in one smooth pull.',
     entryId: 'miura_ori_net' },
 
-  // ── Materials & thermal ───────────────────────────────────────────────────
+  // Materials & thermal
   { term: 'MLI',
     def: 'Multi-Layer Insulation: the shiny gold/silver blankets that shield spacecraft from extreme heat and cold.',
     entryId: 'mli_insulation' },
@@ -196,7 +184,7 @@ export const GLOSSARY = [
     def: 'Radioisotope Thermoelectric Generator: a nuclear battery that makes electricity from heat — powers deep-space probes for decades.',
     entryId: 'rtg_power' },
 
-  // ── Comms & ground ────────────────────────────────────────────────────────
+  // Comms & ground
   { term: 'ground station', aliases: ['groundstation'], flags: 'i',
     def: 'Ground station: an antenna on Earth that talks to a satellite during the brief window it flies overhead.',
     entryId: 'ground_station_pass' },
@@ -207,7 +195,7 @@ export const GLOSSARY = [
     def: 'Telemetry: the stream of health and status data a craft beams home — voltages, temperatures, attitude, and more.',
     entryId: 'telemetry' },
 
-  // ── Avionics & reliability ────────────────────────────────────────────────
+  // Avionics & reliability
   { term: 'watchdog', aliases: ['watchdog timer'], flags: 'i',
     def: 'Watchdog timer: a chip that reboots the computer if the software stops checking in — a last-resort recovery.',
     entryId: 'watchdog_timer' },
@@ -222,16 +210,7 @@ export const GLOSSARY = [
     entryId: 'fdir' },
 ];
 
-// ============================================================================
-// PURE DECORATOR
-// ============================================================================
-
-/**
- * Escape the five HTML-significant characters so plain text can be safely
- * assigned to innerHTML.
- * @param {string} s
- * @returns {string}
- */
+/** Escape the five HTML-significant characters so plain text is safe for innerHTML. */
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -248,21 +227,14 @@ function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * A "word char" for boundary tests: latin letters, digits, underscore. We treat
- * Δ as part of the term itself (matched literally) rather than a boundary char,
- * so "ΔV" is found, while we still reject "Ispx" / "xIsp" / "deltas".
- */
+/** "Word char" for boundary tests. Δ is part of the term (matched literally), so "ΔV" is found while "Ispx" / "xIsp" / "deltas" are rejected. */
 const WORD = /[A-Za-z0-9_]/;
 
 let _matcher = null; // cached { regex, lookup }
 
 /**
- * Build (once) the combined matcher from GLOSSARY:
- *   - every surface form → its def record
- *   - alternation sorted longest-first so greedier phrases win
- *   - case-insensitive forms lower-cased in the lookup; case-sensitive forms
- *     keyed exactly.
+ * Build (once) the combined matcher from GLOSSARY: every surface form → its def record, alternation sorted longest-first,
+ * case-insensitive forms lower-cased in the lookup, case-sensitive forms keyed exactly.
  * @returns {{ regex: RegExp, byForm: Map<string,object>, ci: Set<string> }}
  */
 function buildMatcher() {
@@ -282,12 +254,11 @@ function buildMatcher() {
     }
   }
 
-  // Longest-first so "specific impulse" beats "impulse", "delta-v" beats bits.
+  // Longest-first so "specific impulse" beats "impulse".
   forms.sort((a, b) => b.length - a.length);
 
   const alternation = forms.map(escapeRegExp).join('|');
-  // 'gi' on the combined regex; per-form case rules are enforced at match time
-  // by checking the matched substring against the case-sensitive lookup.
+  // 'gi' on the combined regex; per-form case rules are enforced at match time (resolveMatch).
   const regex = new RegExp(alternation, 'gi');
 
   _matcher = { regex, byForm };
@@ -295,46 +266,35 @@ function buildMatcher() {
 }
 
 /**
- * Resolve a raw matched substring to its glossary record, honouring case rules:
- *   - exact case-sensitive hit wins (acronyms: LEO, TRL, RAAN…)
- *   - otherwise a case-insensitive form may match on its lowercased key
- * @param {string} matched  the raw text the regex matched
+ * Resolve a matched substring to its glossary record: an exact case-sensitive hit (acronyms) wins, else a
+ * case-insensitive form on its lowercased key.
  * @returns {{ rec:object, surface:string }|null}
  */
 function resolveMatch(matched, byForm) {
-  // Case-sensitive exact form?
   const exact = byForm.get(matched);
   if (exact && !exact.ci) return exact;
-  // Case-insensitive form?
   const lower = byForm.get(matched.toLowerCase());
   if (lower && lower.ci) return lower;
-  // An exact-keyed CI form (term authored already-lowercase) — accept too.
+  // A CI form authored already-lowercase
   if (exact && exact.ci) return exact;
   return null;
 }
 
 /**
- * Decorate jargon in `plainText` with hover/deep-link glossary spans.
- *
- * PURE: escapes the text, wraps recognised terms, returns an innerHTML-safe
- * string. Never wraps inside an already-emitted span (it tokenises the *raw*
- * input and escapes each piece independently).
+ * Decorate jargon in `plainText` with hover/deep-link glossary spans. PURE: escapes the text, wraps recognised terms,
+ * returns an innerHTML-safe string. Never wraps inside an already-emitted span (tokenises the *raw* input and escapes
+ * each piece independently).
  *
  * @param {string} plainText  raw, un-escaped source text
  * @param {object} [opts]
- * @param {boolean} [opts.once=true]  wrap only the FIRST occurrence of each
- *   distinct term per call (veteran-friendly; avoids a wall of underlines).
- * @param {(term:string)=>boolean} [opts.isNew]  optional predicate → adds the
- *   `glossary-term--new` first-use cue class when it returns true.
- * @param {(term:string)=>void} [opts.onSeen]  optional callback fired once per
- *   distinct decorated term (to persist seen-state).
+ * @param {boolean} [opts.once=true]  wrap only the FIRST occurrence of each distinct term per call (avoids a wall of underlines)
+ * @param {(term:string)=>boolean} [opts.isNew]  adds the `glossary-term--new` first-use cue class when true
+ * @param {(term:string)=>void} [opts.onSeen]  fired once per distinct decorated term (to persist seen-state)
  * @param {Array<{term:string, entryId:string, anchor?:string}>} [opts.links]
- *   per-call deep links (FURNACE gag v2 amendment, plan 1788957399035 §7.26):
- *   after the glossary pass, the FIRST case-insensitive whole-word occurrence of
- *   each `term` that is not already inside a span is wrapped as
- *   `<span class="glossary-term glossary-link" data-term data-entry
- *   [data-anchor] title="Open in SPECS">` — same class, same CSS, same click
- *   delegation. No match ⇒ text unchanged. A malformed item is skipped.
+ *   per-call deep links: after the glossary pass, the FIRST case-insensitive whole-word occurrence of each `term` not
+ *   already inside a span is wrapped as `<span class="glossary-term glossary-link" data-term data-entry
+ *   [data-anchor] title="Open in SPECS">` (same class, CSS and click delegation). No match ⇒ text unchanged; a
+ *   malformed item is skipped.
  * @returns {string} HTML-safe string
  */
 export function decorateGlossary(plainText, opts = {}) {
@@ -348,8 +308,7 @@ export function decorateGlossary(plainText, opts = {}) {
 
   const usedTerms = new Set();  // canonical term keys already wrapped (for `once`)
   const seenFired = new Set();  // canonical term keys onSeen already fired for
-  // Output pieces: `{ text }` = escaped-on-emit raw text (still linkable);
-  // `{ html }` = an emitted span (opaque — never linked inside).
+  // `{ text }` = escaped-on-emit raw text (still linkable); `{ html }` = an emitted span (opaque).
   const pieces = [];
   let lastIndex = 0;
   let m;
@@ -359,9 +318,7 @@ export function decorateGlossary(plainText, opts = {}) {
     const start = m.index;
     const end = start + matched.length;
 
-    // Word-boundary guard: reject a match flanked by word characters so
-    // acronyms don't fire inside larger words ("Isp" in "Wispy", "leo" in
-    // "Galileo"). Hyphen/space-joined forms are fine — '-' isn't a WORD char.
+    // Word-boundary guard: "Isp" in "Wispy", "leo" in "Galileo" don't fire. Hyphen/space-joined forms are fine ('-' isn't a WORD char).
     const before = start > 0 ? plainText[start - 1] : '';
     const after = end < plainText.length ? plainText[end] : '';
     const firstCh = matched[0];
@@ -377,7 +334,6 @@ export function decorateGlossary(plainText, opts = {}) {
     const termKey = resolved.rec.term;
     if (once && usedTerms.has(termKey)) continue;
 
-    // Flush the gap before this match (raw; escaped on emit).
     pieces.push({ text: plainText.slice(lastIndex, start) });
 
     usedTerms.add(termKey);
@@ -392,8 +348,6 @@ export function decorateGlossary(plainText, opts = {}) {
       + `${dataEntry} title="${escapeHtml(rec.def)}">${escapeHtml(matched)}</span>` });
 
     lastIndex = end;
-    // advance regex past this match (it already did via exec, but a `continue`
-    // path above could leave lastIndex behind — exec's lastIndex is authoritative)
 
     if (typeof opts.onSeen === 'function' && !seenFired.has(termKey)) {
       seenFired.add(termKey);
@@ -401,7 +355,6 @@ export function decorateGlossary(plainText, opts = {}) {
     }
   }
 
-  // The trailing remainder.
   pieces.push({ text: plainText.slice(lastIndex) });
 
   applyLinks(pieces, opts.links);
@@ -410,12 +363,9 @@ export function decorateGlossary(plainText, opts = {}) {
 }
 
 /**
- * Wrap the FIRST case-insensitive whole-word occurrence of each link's `term`
- * inside the raw-text pieces (never inside an emitted span) as a
- * `.glossary-term.glossary-link` deep link. Mutates `pieces` in place by
- * splitting the hit piece into text / span / text. Malformed links (not an
- * object, missing strings) are skipped; a term with no hit leaves the text
- * unchanged. Never throws.
+ * Wrap the FIRST case-insensitive whole-word occurrence of each link's `term` inside the raw-text pieces (never inside
+ * an emitted span) as a `.glossary-term.glossary-link` deep link. Mutates `pieces` in place (hit piece → text / span /
+ * text). Malformed links are skipped; a term with no hit leaves the text unchanged. Never throws.
  * @param {Array<{text?:string, html?:string}>} pieces
  * @param {*} links
  */

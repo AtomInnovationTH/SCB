@@ -1,11 +1,6 @@
 /**
- * SpaceWeatherSystem.js — Dynamic space weather events that affect gameplay
- * and teach concepts. Generates periodic weather phenomena (solar flares,
- * geomagnetic storms, SAA passages, eclipses) with actual gameplay effects.
- *
- * Emits events that other systems can optionally listen to — does not
- * directly modify other systems.
- *
+ * SpaceWeatherSystem.js — periodic space weather (solar flares, geomagnetic storms, SAA passages, eclipses) with gameplay
+ * effects. Emits events other systems may listen to; does not modify them directly.
  * @module systems/SpaceWeatherSystem
  */
 
@@ -15,11 +10,8 @@ import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { persistenceManager } from './PersistenceManager.js';
 
-// ============================================================================
-// WEATHER TYPE DEFINITIONS
-// ============================================================================
-// `icon` is a short text tag (<= 4 chars) the HUD weather badge shows beside
-// `name` (plan D-J: no pictographs anywhere; the comms line carries the name alone).
+// `icon` is a short text tag (<= 4 chars) the HUD weather badge shows beside `name` (no pictographs anywhere; the comms
+// line carries the name alone).
 
 const SW = Constants.SPACE_WEATHER;
 
@@ -91,25 +83,15 @@ const WEATHER_TYPES = {
   },
 };
 
-// ============================================================================
-// HELPER: random in range
-// ============================================================================
-
 function randRange(min, max) {
   return min + Math.random() * (max - min);
 }
 
-// ============================================================================
-// SPACE WEATHER SYSTEM
-// ============================================================================
-
 export class SpaceWeatherSystem {
   /**
    * @param {object} [opts]
-   * @param {object} [opts.catalogLoader] - ST-6.1 optional seeded-replay source.
-   *        When ready, replaces random-roll scheduling with a deterministic
-   *        timeline driven by `/data/space-weather.json`. When absent or not
-   *        ready, falls back to the legacy random-interval behaviour.
+   * @param {object} [opts.catalogLoader] optional seeded-replay source. When ready, replaces random-roll scheduling with a
+   *        deterministic timeline from `/data/space-weather.json`; otherwise falls back to random intervals.
    */
   constructor(opts = {}) {
     /** @type {Map<string, { startTime: number, duration: number, effects: object, def: object }>} */
@@ -118,54 +100,45 @@ export class SpaceWeatherSystem {
     /** @type {Object<string, number>} Countdown to next event of each type (random mode) */
     this.timers = {};
 
-    /** @type {number} Total elapsed time */
     this.totalTime = 0;
 
-    /** @type {object} Cached merged effects */
     this._mergedEffects = this._defaultEffects();
 
-    // --- ST-6.1: seeded-replay state ---
     this._catalogLoader = opts.catalogLoader || null;
     this._replayMode = !!(this._catalogLoader &&
                           typeof this._catalogLoader.isReady === 'function' &&
                           this._catalogLoader.isReady());
-    /** @type {Set<number>} indices of events already fired (by index in the events array) */
     this._firedReplayIdx = new Set();
-    /** @type {number} which slot of the events[] array we've advanced past */
     this._replayCursor = 0;
 
-    // Initialize timers for each weather type (randomized first occurrence).
-    // Kept initialized in BOTH modes so a mid-session fallback still works.
+    // Timers stay initialized in BOTH modes so a mid-session fallback still works (randomized first occurrence).
     for (const [type, def] of Object.entries(WEATHER_TYPES)) {
       this.timers[type] = randRange(def.minInterval * 0.5, def.maxInterval);
     }
 
-    // Sprint 3: Skill-based gate — suppress weather until power management discovered
+    // Skill gate: suppress weather until power management is discovered
     this._powerMgmtDiscovered = false;
     eventBus.on(Events.SKILL_DISCOVERED, (d) => {
         if (d?.skillId === 'manage_power') this._powerMgmtDiscovered = true;
     });
 
-    // ST-4.C: Mission profile gate — additional suppression from mission profiles
+    // Mission profile gate (the skill gate must pass too)
     this._weatherAllowed = false;
     eventBus.on(Events.MISSION_START, (d) => {
         this._weatherAllowed = d.profile.weather;
     });
 
-    // ST-4.C: Reset weather gate on game reset — also reset replay cursor.
     eventBus.on(Events.GAME_RESET, () => {
         this._weatherAllowed = false;
         this._firedReplayIdx = new Set();
         this._replayCursor = 0;
     });
 
-    // ST-6.1: if catalogue finishes loading mid-session, upgrade to replay mode.
     eventBus.on(Events.CATALOG_LOADED, (d) => {
       if (d && d.ready && this._catalogLoader) this._replayMode = true;
     });
 
-    // ST-6.1: additive persistence — save/restore replay cursor + fired set.
-    // Legacy saves without `spaceWeatherReplay` simply start from hour 0 (safe).
+    // Persist the replay cursor + fired set (additive; legacy saves without `spaceWeatherReplay` start from hour 0).
     eventBus.on(Events.PERSISTENCE_GATHER, (saveData) => {
       if (!saveData || typeof saveData !== 'object') return;
       saveData.spaceWeatherReplay = {
@@ -177,10 +150,7 @@ export class SpaceWeatherSystem {
     eventBus.on(Events.PERSISTENCE_LOADED, () => {
       // PersistenceManager.load() emits this; read via peek to avoid recursion.
       try {
-        // Read through the exported singleton. Anything falsy or malformed is
-        // ignored — default-safe. This used to go through
-        // `window.persistenceManager`, which NOTHING ever assigns, so the
-        // replay cursor was never actually restored.
+        // Read through the exported singleton (nothing assigns `window.persistenceManager`); falsy or malformed is ignored.
         const save = persistenceManager.peek();
         if (!save || !save.spaceWeatherReplay) return;
         const s = save.spaceWeatherReplay;
@@ -192,12 +162,7 @@ export class SpaceWeatherSystem {
     console.log(`[SpaceWeatherSystem] Initialized. ${this._replayMode ? 'SEEDED REPLAY' : 'random mode'} (${Object.keys(WEATHER_TYPES).length} weather types)`);
   }
 
-  /**
-   * Inject or upgrade a catalogLoader reference post-construction.
-   * Mainly useful when CatalogLoader init() resolves after SpaceWeatherSystem
-   * has been built — wiring code can flip the switch.
-   * @param {object} catalogLoader
-   */
+  /** Inject or upgrade a catalogLoader after construction (CatalogLoader init() may resolve after this is built). */
   setCatalogLoader(catalogLoader) {
     this._catalogLoader = catalogLoader || null;
     this._replayMode = !!(catalogLoader &&
@@ -205,8 +170,7 @@ export class SpaceWeatherSystem {
                           catalogLoader.isReady());
   }
 
-  /** Map a catalogue event `type` string onto one of WEATHER_TYPES keys.
-   *  Unknown types → null (skipped). @private */
+  /** Map a catalogue event `type` string onto a WEATHER_TYPES key; unknown → null (skipped). @private */
   _catalogTypeToKey(t) {
     switch (String(t || '').toLowerCase()) {
       case 'solar_flare':  return 'SOLAR_FLARE';
@@ -220,32 +184,21 @@ export class SpaceWeatherSystem {
     }
   }
 
-  /** @returns {number} Current game-hour, derived from totalTime (seconds) × TIME_SCALE_GAMEPLAY.
-   *  Using TIME_SCALE_GAMEPLAY keeps the timeline aligned with how debris/player orbits tick. */
+  /** @returns {number} Current game-hour: totalTime (s) × TimeAuthority.BASE_SCALE / 3600, aligned with how debris/player
+   *  orbits tick. */
   _currentGameHour() {
     const scale = TimeAuthority.BASE_SCALE || 1;
     return (this.totalTime * scale) / 3600;
   }
 
-  // ==========================================================================
-  // UPDATE
-  // ==========================================================================
-
-  /**
-   * Update weather system. Called every frame from game loop.
-   * @param {number} dt - Delta time in seconds
-   * @param {object} [gameData] - Optional context { playerOrbit, sunDirection }
-   */
   update(dt, gameData) {
     this.totalTime += dt;
 
     let stateChanged = false;
 
     if (this._replayMode) {
-      // --- ST-6.1: Seeded replay path — fire unfired catalogue events whose
-      //     scheduled game_hour has passed. Existing gates still apply:
-      //     `manage_power` skill gate → emission-suppression in _startEvent,
-      //     mission profile gate → filtered here before dispatch.
+      // Seeded replay: fire unfired catalogue events whose scheduled game_hour has passed. Gates still apply: the
+      // `manage_power` skill gate (emission suppression in _startEvent) and the mission profile gate (filtered here).
       const nowH = this._currentGameHour();
       const events = (typeof this._catalogLoader.getWeatherEventsUpTo === 'function')
         ? this._catalogLoader.getWeatherEventsUpTo(nowH) : [];
@@ -263,16 +216,13 @@ export class SpaceWeatherSystem {
         stateChanged = true;
       }
     } else {
-      // --- Legacy random-roll path (unchanged) ---
       for (const [type, def] of Object.entries(WEATHER_TYPES)) {
-        // Skip if this type is already active
         if (this.activeEvents.has(type)) continue;
 
         this.timers[type] -= dt;
         if (this.timers[type] <= 0) {
-          // ST-4.C: Mission profile gate — BOTH skill gate AND profile must pass
+          // BOTH the skill gate AND the mission profile must pass
           if (!this._weatherAllowed) {
-            // Re-schedule without firing — check again later
             this.timers[type] = randRange(def.minInterval * 0.3, def.minInterval);
             continue;
           }
@@ -282,7 +232,6 @@ export class SpaceWeatherSystem {
       }
     }
 
-    // --- Update active event timers, remove expired ---
     for (const [type, event] of this.activeEvents.entries()) {
       event.elapsed = (event.elapsed || 0) + dt;
       if (event.elapsed >= event.duration) {
@@ -291,31 +240,19 @@ export class SpaceWeatherSystem {
       }
     }
 
-    // --- Recompute merged effects if state changed ---
     if (stateChanged) {
       this._recomputeMergedEffects();
     }
 
-    // --- Emit active effects every frame (systems can query) ---
+    // Emit active effects every frame (systems can query)
     if (this.activeEvents.size > 0) {
       eventBus.emit(Events.WEATHER_ACTIVE, this._mergedEffects);
     }
   }
 
-  // ==========================================================================
-  // EVENT START / END
-  // ==========================================================================
-
-  /**
-   * Start a weather event.
-   * @private
-   * @param {string} type - Weather type key
-   * @param {object} def - Weather definition
-   */
   _startEvent(type, def, replayOverride) {
-    // ST-6.1: replay events pass `duration_h` in game-hours (catalogue schedule).
-    // Convert back to seconds of totalTime (elapsed) — divide by TIME_SCALE_GAMEPLAY
-    // so the event lasts the right *game-time* window on the existing totalTime++.
+    // Replay events pass `duration_h` in game-hours (catalogue schedule); divide by BASE_SCALE so the event lasts the right
+    // game-time window on totalTime.
     let duration;
     if (replayOverride && typeof replayOverride.duration_h === 'number') {
       const scale = TimeAuthority.BASE_SCALE || 1;
@@ -333,7 +270,6 @@ export class SpaceWeatherSystem {
     };
     this.activeEvents.set(type, event);
 
-    // Build comms alert text with flavor
     let alertText;
     if (type === 'SOLAR_FLARE') {
       const classes = ['C4.2', 'M1.7', 'M3.5', 'X1.1'];
@@ -345,17 +281,15 @@ export class SpaceWeatherSystem {
       alertText = def.commsAlert();
     }
 
-    // Sprint 3: Suppress weather alerts until power management skill discovered
+    // Suppress weather alerts until the power management skill is discovered
     if (!this._powerMgmtDiscovered) return;
 
-    // Emit comms alert
     eventBus.emit(Events.COMMS_MESSAGE, {
       priority: type === 'SAA_PASSAGE' ? 'LOW' : 'MEDIUM',
       source: 'WEATHER',
       text: alertText,
     });
 
-    // Emit weather effect start event
     eventBus.emit(Events.WEATHER_EFFECT_START, {
       type,
       effects: event.effects,
@@ -368,11 +302,6 @@ export class SpaceWeatherSystem {
     console.log(`[SpaceWeather] ${def.icon} ${def.name} started (${Math.round(duration)}s)`);
   }
 
-  /**
-   * End a weather event and reset its timer.
-   * @private
-   * @param {string} type
-   */
   _endEvent(type) {
     const event = this.activeEvents.get(type);
     if (!event) return;
@@ -380,13 +309,10 @@ export class SpaceWeatherSystem {
     const def = WEATHER_TYPES[type];
     this.activeEvents.delete(type);
 
-    // Reset timer for next occurrence
     this.timers[type] = randRange(def.minInterval, def.maxInterval);
 
-    // Emit end event
     eventBus.emit(Events.WEATHER_EFFECT_END, { type });
 
-    // End comms message
     eventBus.emit(Events.COMMS_MESSAGE, {
       priority: 'LOW',
       source: 'WEATHER',
@@ -396,14 +322,6 @@ export class SpaceWeatherSystem {
     console.log(`[SpaceWeather] ${def.icon} ${def.name} ended`);
   }
 
-  // ==========================================================================
-  // MERGED EFFECTS
-  // ==========================================================================
-
-  /**
-   * @private Get default (neutral) effect multipliers.
-   * @returns {object}
-   */
   _defaultEffects() {
     return {
       sensorRange: 1.0,
@@ -418,11 +336,7 @@ export class SpaceWeatherSystem {
     };
   }
 
-  /**
-   * Recompute merged effect multipliers for all active events.
-   * Multipliers stack multiplicatively; booleans OR together.
-   * @private
-   */
+  /** Multipliers stack multiplicatively; booleans OR together. @private */
   _recomputeMergedEffects() {
     const merged = this._defaultEffects();
 
@@ -442,30 +356,10 @@ export class SpaceWeatherSystem {
     this._mergedEffects = merged;
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
-
-  /**
-   * Get merged effect multipliers for all active events.
-   * Other systems query this for their multipliers.
-   * @returns {{ sensorRange: number, solarPower: number, edtEfficiency: number,
-   *             commsBandwidth: number, atmosphericDrag: number,
-   *             radiationRisk: boolean, sensorNoise: boolean,
-   *             thermalStress: boolean, electronicsRisk: number }}
-   */
   getActiveEffects() {
     return { ...this._mergedEffects };
   }
 
-  // ==========================================================================
-  // PERSISTENCE
-  // ==========================================================================
-
-  /**
-   * Get serializable state for save game.
-   * @returns {object}
-   */
   getState() {
     const active = {};
     for (const [type, event] of this.activeEvents) {
@@ -481,10 +375,6 @@ export class SpaceWeatherSystem {
     };
   }
 
-  /**
-   * Restore state from save game data.
-   * @param {object} data
-   */
   restore(data) {
     if (!data) return;
     if (data.totalTime != null) this.totalTime = data.totalTime;

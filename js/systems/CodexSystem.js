@@ -1,19 +1,13 @@
 /**
- * CodexSystem.js — ambient learning encyclopedia that unlocks entries as the
- * player encounters aerospace concepts during gameplay.
+ * @module systems/CodexSystem — ambient learning encyclopedia: entries unlock as the player meets aerospace concepts
+ * (ENCOUNTER → REACT → UNDERSTAND).
  *
- * Three-Beat Pattern: ENCOUNTER → REACT → UNDERSTAND (codex entry unlocks).
- *
- * Phase 1 (data-driven): entry CONTENT lives in data/codex.json (offline-first,
- * i18n-ready). Unlock PREDICATES — which can't be JSON — live in
- * codex/codexTriggers.js keyed by id (multi-trigger). Live-value prose
- * (`{{ Constants.path }}`) is resolved at load via codex/codexInterpolate.js.
- * The system is constructed with the parsed data injected:
+ * Entry CONTENT lives in data/codex.json (offline-first, i18n-ready). Unlock PREDICATES — which can't be JSON — live in
+ * codex/codexTriggers.js keyed by id (multi-trigger). Live-value prose (`{{ Constants.path }}`) is resolved at load via
+ * codex/codexInterpolate.js. The parsed data is injected:
  *     const data = await loadCodexData();   // browser
  *     new CodexSystem(data);
  * Node tests read the JSON and pass it the same way.
- *
- * @module systems/CodexSystem
  */
 
 import { eventBus } from '../core/EventBus.js';
@@ -23,10 +17,7 @@ import { persistenceManager } from './PersistenceManager.js';
 import { CODEX_TRIGGERS } from './codex/codexTriggers.js';
 import { interpolate } from './codex/codexInterpolate.js';
 
-// ============================================================================
-// CATEGORIES (logic enum — labels/icons/colours live in data/codex.json meta)
-// ============================================================================
-
+// Logic enum; labels/icons/colours live in data/codex.json meta.
 export const CodexCategory = {
   PLAYBOOK:          'PLAYBOOK',
   ORBITAL_MECHANICS: 'ORBITAL_MECHANICS',
@@ -46,37 +37,25 @@ export const CodexCategory = {
   NEWS:              'NEWS',
 };
 
-// ============================================================================
-// SAVE MIGRATION ALIASES
-// Maps retired/merged entry ids → surviving id so pre-dedupe saves restore.
-// Populated from data/codex.json at construction (kept module-level so the
-// PERSISTENCE_LOADED restore path and Node tests can read it). Not the global
-// SAVE_VERSION: bumping that would discard ALL state (credits/upgrades) — the
-// alias migrates only the codex slice in place.
-// ============================================================================
-// Null-prototype so JSON-sourced keys (incl. a literal "__proto__") become
-// plain own keys and lookups can't traverse Object.prototype.
+// Maps retired/merged entry ids → surviving id so pre-dedupe saves restore. Filled from data/codex.json at
+// construction (module-level so the PERSISTENCE_LOADED restore path and Node tests can read it). Not the global
+// SAVE_VERSION: bumping that would discard ALL state (credits/upgrades); the alias migrates only the codex slice.
+// Null-prototype so JSON-sourced keys (incl. a literal "__proto__") become plain own keys and lookups can't
+// traverse Object.prototype.
 export const ALIASES = Object.create(null);
 
 /**
- * Instant "+ Library" acknowledgment (docs/ladder/08-workbench.md §11 Wave 4
- * "immediate codex-unlock chip"). Unlocks are QUEUED — 20 s cooldown +
- * 30 s startup grace — so the chime and the Discoveries row can land 30–50 s
- * after the action that earned them. The moment an unlock REQUEST is accepted
- * (first request for a locked entry), a HintTicker chip names the entry so
- * the player connects cause and reward; the chime/CODEX_UNLOCKED/TECH_UNLOCKED
- * still fire on the queue's own schedule. A ticker chip, NOT a toast: the
- * flight-HUD rule (test-hud-activate-keys) forbids center-screen popups on
- * unlock; the bottom-strip ticker is the same surface the codex "did you
- * know?" reminder already uses, glossary-decorated so terms deep-link.
+ * Instant "+ Library" acknowledgment (docs/ladder/08-workbench.md §11 Wave 4). Unlocks are QUEUED — 20 s cooldown +
+ * 30 s startup grace — so the chime and the Discoveries row can land 30–50 s after the action that earned them. When
+ * an unlock REQUEST is accepted, a HintTicker chip names the entry so the player connects cause and reward. A ticker
+ * chip, NOT a toast: the flight-HUD rule (test-hud-activate-keys) forbids center-screen popups on unlock.
  */
 export const CODEX_ACK_CHIP_MS = 6000;
 /** HINT_POSTED id prefix for the acknowledgment chip (one id per entry). */
 export const CODEX_ACK_CHIP_ID = 'codex-ack:';
 
 /**
- * Pure search predicate — case-insensitive substring on
- * title / shortText / fullText / category. Exported for the viewer + tests.
+ * Pure search predicate — case-insensitive substring on title / shortText / fullText / category.
  * @param {object} entry
  * @param {string} query
  * @returns {boolean}
@@ -92,16 +71,8 @@ export function entryMatchesQuery(entry, query) {
     || (entry.category || '').toLowerCase().replace(/_/g, ' ').includes(q);
 }
 
-// ============================================================================
-// CODEX SYSTEM
-// ============================================================================
-
 export class CodexSystem {
-  /**
-   * @param {object|null} codexData  parsed data/codex.json
-   *   ({ version, categories, tracks, aliases, entries }). If null/omitted the
-   *   system constructs empty (graceful) — mirrors CatalogLoader's fallback.
-   */
+  /** @param {object|null} codexData parsed data/codex.json; null/omitted constructs an empty system (graceful), like CatalogLoader. */
   constructor(codexData = null) {
     const data = (codexData && Array.isArray(codexData.entries))
       ? codexData
@@ -127,31 +98,23 @@ export class CodexSystem {
     /** @type {number} cooldown timer (seconds remaining) */
     this._cooldownTimer = 0;
     /**
-     * @type {number} mission-time (s) before which unlocks are queued rather
-     * than performed immediately. Many entries trigger on the first telemetry
-     * frame; performing them at t≈0 dogpiles the mission-start comms crackle /
-     * departure cluster into a "click click click" pile. Deferring drains them
-     * one-at-a-time (cooldown-spaced) once the player is actually flying.
+     * @type {number} mission-time (s) before which unlocks are queued rather than performed immediately. Many entries
+     * trigger on the first telemetry frame; performing them at t≈0 piles them onto the mission-start comms cluster.
      */
     this._startupGraceUntil = 0;
     /**
-     * Session O follow-up (owner 2026-09-07, "still 3 SPECS toasts at the
-     * bottom at start — that is clutter; suppress all SPECS popups for now"):
-     * whether an accepted unlock request posts its "+ SPECS: <title>" ticker
-     * chip. Default true (the shipped behaviour; `?ladder=0` never touches it).
-     * The ladder hub sets false — the SPECS badge counts the same unlocks, so
-     * the doorway survives without the chip; Session Q's merged transient slot
-     * decides the chips' final home. The unlock itself (queue, chime,
-     * CODEX_UNLOCKED) is untouched.
+     * Whether an accepted unlock request posts its "+ SPECS: <title>" ticker chip. Default true. The ladder hub sets
+     * false (owner 2026-09-07, "still 3 SPECS toasts at the bottom at start — that is clutter; suppress all SPECS
+     * popups for now"); the SPECS badge counts the same unlocks. The unlock itself (queue, chime, CODEX_UNLOCKED)
+     * is untouched.
      * @type {boolean}
      */
     this._ackChips = true;
     /** @type {Set<string>} event names already subscribed */
     this._subscribedEvents = new Set();
 
-    // Slice 7 — unlock anchoring: mission clock (accumulated in update, reset on
-    // MISSION_START/GAME_RESET) + latest mothership altitude cached from
-    // telemetry, stamped onto each entry as it unlocks.
+    // Unlock anchoring: mission clock (accumulated in update, reset on MISSION_START/GAME_RESET) + latest mothership
+    // altitude cached from telemetry, stamped onto each entry as it unlocks.
     /** @type {number} seconds since mission start */
     this._missionTime = 0;
     /** @type {number|null} last known mothership altitude (km) */
@@ -164,11 +127,7 @@ export class CodexSystem {
     console.log(`[CodexSystem] Initialized with ${this.entries.length} entries across ${Object.keys(this._categoryMeta).length || Object.keys(CodexCategory).length} categories`);
   }
 
-  /**
-   * Flatten one data entry into the runtime shape the viewer/API expect,
-   * resolving i18n + live-value placeholders and attaching its triggers.
-   * @private
-   */
+  /** Flatten one data entry into the runtime shape (resolve i18n + live-value placeholders, attach triggers). @private */
   _buildEntry(e) {
     const i = e.i18n || {};
     const hasTrl = (typeof e.trl === 'number');
@@ -177,10 +136,10 @@ export class CodexSystem {
       category: e.category,
       subcategory: e.subcategory || null,
       trl: hasTrl ? e.trl : null,         // PLAYBOOK/CATALOG/WORLD_INDUSTRY → null
-      icon: e.icon || '',                 // data passthrough; never rendered by the readers (plan D-J)
+      icon: e.icon || '',                 // data passthrough; never rendered by the readers
       related: Array.isArray(e.related) ? e.related : [],
-      // In-game hardware name(s) this entry documents (bridges the callout
-      // vocabulary → Tech Library search; MotherCallouts links here).
+      // In-game hardware name(s) this entry documents (bridges callout vocabulary → Tech Library search;
+      // MotherCallouts links here).
       hardwareNames: Array.isArray(e.hardwareNames) ? e.hardwareNames : [],
       track: e.track || null,
       trackOrder: (typeof e.trackOrder === 'number') ? e.trackOrder : null,
@@ -189,18 +148,13 @@ export class CodexSystem {
       // translatable fields (interpolated against live Constants)
       title: i.title || e.id,
       shortText: interpolate(i.shortText || '', Constants),
-      // The bridge line (Wave 5 Session D): one sentence naming the part and
-      // what it does on THIS ship before the concept briefing — hardware
-      // entries only (data-authored beside hardwareNames; the TECH LIBRARY
-      // pane renders it under its header). Absent → null, never a stub.
+      // Bridge line: one sentence naming the part and what it does on THIS ship before the concept briefing; hardware
+      // entries only (data-authored beside hardwareNames; the TECH LIBRARY pane renders it under its header).
       hardwareNote: (typeof i.hardwareNote === 'string' && i.hardwareNote)
         ? interpolate(i.hardwareNote, Constants) : null,
-      // The manual's warning line (the FURNACE gag, plan 1788957399035 §1.D):
-      // an authored red-box notice both readers print at the foot of an
-      // UNLOCKED entry (the I-key viewer's page column, the F1 SPECS drawer).
-      // Data-authored under i18n beside hardwareNote; exactly one entry
-      // carries it today (welcome_cowboy — "page one of the manual").
-      // Absent → null, never a stub.
+      // The manual's warning line: an authored red-box notice both readers print at the foot of an UNLOCKED entry (the
+      // I-key viewer's page column, the F1 SPECS drawer). Data-authored under i18n beside hardwareNote; exactly one
+      // entry carries it today (welcome_cowboy — "page one of the manual"). Absent → null, never a stub.
       warning: (typeof i.warning === 'string' && i.warning)
         ? interpolate(i.warning, Constants) : null,
       fullText: interpolate(i.fullText || '', Constants),
@@ -208,29 +162,19 @@ export class CodexSystem {
       formula: i.formula || null,
       unlockHint: i.unlockHint || 'Discover through gameplay.',
       trlRationale: hasTrl ? (i.trlRationale || 'Established science (default)') : null,
-      // runtime state. `startUnlocked` entries are readable immediately: PLAYBOOK
-      // quick-start + WORLD_INDUSTRY exposition (onboarding/reference material, not
-      // a gameplay "discovery"), plus one per-category "cornerstone" briefing so
-      // every tech category shows its value from the first library open.
-      // Session O (plan D16b, owner 2026-09-07): the START fact is carried onto
-      // the runtime entry as its own field — the SPECS badge (`LibraryPane.unreadCount`)
-      // must tell the 74 startUnlocked entries apart from unlocks earned IN PLAY (the
+      // `startUnlocked` entries are readable immediately: PLAYBOOK quick-start + WORLD_INDUSTRY exposition, plus one
+      // per-category "cornerstone" briefing. The START fact is carried onto the runtime entry as its own field — the
+      // SPECS badge (`LibraryPane.unreadCount`) must tell the 74 startUnlocked entries apart from unlocks earned IN PLAY (the
       // runtime `unlocked` can be true for both; only the badge excludes the 74).
       startUnlocked: e.startUnlocked === true,
       unlocked: e.startUnlocked === true,
       seen: false,
-      // unlock predicates (multi-trigger). Inert for startUnlocked entries (they
-      // are already unlocked, so _checkUnlocks skips them) but kept for cornerstones
-      // to preserve the entryUnlocksOn contract tests.
+      // unlock predicates (multi-trigger). Inert for startUnlocked entries (_checkUnlocks skips them) but kept for
+      // cornerstones to preserve the entryUnlocksOn contract tests.
       _triggers: CODEX_TRIGGERS[e.id] || [],
     };
   }
 
-  // ==========================================================================
-  // EVENT SUBSCRIPTION
-  // ==========================================================================
-
-  /** @private Subscribe once to every distinct event referenced by triggers. */
   _setupListeners() {
     for (const entry of this.entries) {
       for (const trig of entry._triggers) {
@@ -241,14 +185,12 @@ export class CodexSystem {
       }
     }
 
-    // Codex persistence — self-managed, mirroring SubsystemEvents. On save,
-    // attach state to the bundle; on load, read via peek() (load() re-emits
-    // PERSISTENCE_LOADED and would recurse).
+    // Codex persistence, self-managed (like SubsystemEvents). On save, attach state to the bundle; on load, read via
+    // peek() (load() re-emits PERSISTENCE_LOADED and would recurse).
     eventBus.on(Events.PERSISTENCE_GATHER, (saveData) => {
       if (!saveData) return;
-      // Data-loss guard: if codex.json failed to load this session we have zero
-      // entries. Writing getState() would persist an EMPTY codex and clobber a
-      // prior save's earned unlocks. Preserve whatever was already persisted.
+      // Data-loss guard: if codex.json failed to load there are zero entries, and writing getState() would clobber a
+      // prior save's earned unlocks with an EMPTY codex. Preserve whatever was already persisted.
       if (this.entries.length === 0) {
         const prev = persistenceManager.peek();
         if (prev && prev.codex) saveData.codex = prev.codex;
@@ -261,12 +203,10 @@ export class CodexSystem {
       if (save && save.codex) this.restore(save.codex);
     });
 
-    // Mark-seen when the viewer opens an entry.
     eventBus.on(Events.CODEX_VIEWED, (data) => {
       if (data && data.id) this.markSeen(data.id);
     });
 
-    // Explicit unlock requests (e.g. TutorialSystem / deep-link grants).
     eventBus.on(Events.CODEX_UNLOCK_REQUEST, (data) => {
       if (data && data.id) {
         const entry = this._byId.get(data.id);
@@ -274,12 +214,10 @@ export class CodexSystem {
       }
     });
 
-    // Slice 7 — cache the latest mothership altitude so _performUnlock can stamp
-    // an unlock's location. Passive listener, independent of the trigger checks.
+    // Cache the latest mothership altitude so _performUnlock can stamp an unlock's location.
     eventBus.on(Events.PLAYER_TELEMETRY, (p) => {
       if (p && Number.isFinite(p.altitude)) this._lastAltKm = p.altitude;
     });
-    // Reset the mission clock (and per-mission completion latches) on a new run.
     const resetMissionClock = () => {
       this._missionTime = 0;
       this._completionsFired.clear();
@@ -289,18 +227,9 @@ export class CodexSystem {
     eventBus.on(Events.GAME_RESET, resetMissionClock);
   }
 
-  // ==========================================================================
-  // UNLOCK MECHANISM
-  // ==========================================================================
-
-  /**
-   * Check all locked entries whose triggers include the fired event.
-   * @private
-   */
   _checkUnlocks(eventName, payload) {
-    // GAME_WIN is terminal (update() stops draining the queue on the win
-    // screen) — unlock matching entries immediately so a simultaneous endgame
-    // batch all lands. _performUnlock guards !unlocked, so this stays safe.
+    // GAME_WIN is terminal (update() stops draining the queue on the win screen): unlock matching entries immediately
+    // so a simultaneous endgame batch all lands. _performUnlock guards !unlocked, so this stays safe.
     const immediate = (eventName === Events.GAME_WIN);
     const p = payload || {};
     for (const entry of this.entries) {
@@ -312,25 +241,19 @@ export class CodexSystem {
         if (hit) {
           if (immediate) this._performUnlock(entry);
           else this._queueUnlock(entry);
-          break; // one matching trigger is enough
+          break;
         }
       }
     }
   }
 
-  /** @private Queue an entry for unlock (respecting cooldown). */
   _queueUnlock(entry) {
     if (entry.unlocked) return;
     if (this._unlockQueue.some(e => e.id === entry.id)) return;
-    // The request is ACCEPTED from here (locked, not yet queued): acknowledge
-    // it instantly on the ticker, whether the unlock itself performs now or
-    // waits out the grace/cooldown queue. Exactly one chip per accepted
-    // request — the two guards above make duplicates and already-unlocked
-    // entries return before reaching this line.
+    // ACCEPTED from here (locked, not yet queued): acknowledge instantly on the ticker, whether the unlock performs now
+    // or waits out the grace/cooldown queue. One chip per accepted request (the guards above drop duplicates).
     this._postAckChip(entry);
-    // During the mission-start grace window, always queue — the update() drain
-    // releases entries one-at-a-time once _missionTime passes the grace, so no
-    // unlock chime collides with the startup comms/departure cluster.
+    // During the startup grace always queue: update() releases entries one at a time once _missionTime passes it.
     const inStartupGrace = this._missionTime < this._startupGraceUntil;
     if (!inStartupGrace && this._cooldownTimer <= 0 && this._unlockQueue.length === 0) {
       this._performUnlock(entry);
@@ -340,18 +263,13 @@ export class CodexSystem {
   }
 
   /**
-   * @private Post the "+ SPECS: <title>" acknowledgment chip (HINT_POSTED,
-   * CODEX_ACK_CHIP_MS). Glyph is the Info key — the ticker's chip is a KEY
-   * chip by convention (see OnboardingDirector's codex reminder) and tells the
-   * player how to reach the entry; the text is the title alone (Session L: the
-   * entry's data icon is never rendered — plan D-J).
-   * `codexId` (Session J item 3, "the unlock chip's tap opens SPECS on the
-   * new entry") names the entry for the presenter: HintTicker renders a row
-   * that carries it as tappable and hands `{ id }` to its `setChipTap` sink.
-   * Data only — this emitter knows nothing about panes.
+   * @private Post the "+ SPECS: <title>" acknowledgment chip (HINT_POSTED, CODEX_ACK_CHIP_MS). Glyph is the Info key —
+   * the ticker's chip is a KEY chip by convention (see OnboardingDirector's codex reminder); the text is the title
+   * alone (the entry's data icon is never rendered). `codexId` makes HintTicker render the row as tappable and hand
+   * `{ id }` to its `setChipTap` sink. Data only — this emitter knows nothing about panes.
    */
   _postAckChip(entry) {
-    if (!this._ackChips) return;   // Session O follow-up: the ladder hub silences the chips (the badge is the doorway)
+    if (!this._ackChips) return;   // the ladder hub silences the chips (the badge is the doorway)
     eventBus.emit(Events.HINT_POSTED, {
       id: CODEX_ACK_CHIP_ID + entry.id,
       text: `+ SPECS: ${entry.title}`,
@@ -364,13 +282,11 @@ export class CodexSystem {
     });
   }
 
-  /** @private Perform the actual unlock — set flag, emit events, start cooldown. */
   _performUnlock(entry) {
     entry.unlocked = true;
     this._cooldownTimer = Constants.CODEX.UNLOCK_COOLDOWN;
 
-    // Slice 7 — anchor the unlock in mission time + place. altKm may be null
-    // (no telemetry yet, e.g. a headless test or the very first frame).
+    // Anchor the unlock in mission time + place. altKm may be null (no telemetry yet, e.g. a headless test).
     entry.unlockContext = {
       tSim: Math.max(0, Math.round(this._missionTime)),
       altKm: Number.isFinite(this._lastAltKm) ? Math.round(this._lastAltKm) : null,
@@ -387,15 +303,13 @@ export class CodexSystem {
 
     console.log(`[CodexSystem] Unlocked: ${entry.title}`);
 
-    // Slice 7 — first-100% completion comms for the entry's category and track.
     this._checkCompletion(entry);
   }
 
   /**
-   * @private Emit a single Houston line the first time the unlocked entry's
-   * category or track reaches 100%. Arbiter-gated and reward-free: it rides the
-   * decoupled COMMS_MESSAGE path (`_postOnboarding` passes at suppression tiers
-   * ≥ 1), never `_critical`, and grants no credits/XP.
+   * @private Emit a single Houston line the first time the unlocked entry's category or track reaches 100%.
+   * Arbiter-gated and reward-free: it rides the decoupled COMMS_MESSAGE path (`_postOnboarding` passes at suppression
+   * tiers ≥ 1), never `_critical`, and grants no credits/XP.
    * @param {object} entry the entry just unlocked
    */
   _checkCompletion(entry) {
@@ -421,29 +335,20 @@ export class CodexSystem {
     }
   }
 
-  /** @private Post a completion line on the decoupled, arbiter-gated comms path. */
   _emitCompletionComms(text) {
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON',
       text,
       channel: 'MISSION',
       priority: 'info',
-      _postOnboarding: true,   // rides the CP-4 suppression ramp at tiers ≥ 1
+      _postOnboarding: true,   // rides the suppression ramp at tiers ≥ 1
       _codexCompletion: true,  // tag for tests / downstream filters
     });
   }
 
-  // ==========================================================================
-  // UPDATE (called every frame from the game loop)
-  // ==========================================================================
-
   /**
-   * Session O follow-up (owner 2026-09-07): silence / restore the
-   * "+ SPECS: <title>" acknowledgment chips. `false` drops the chip only —
-   * the unlock request is still accepted, queued, chimed and announced
-   * (CODEX_UNLOCKED); the SPECS badge (LibraryPane.unreadCount) counts it.
-   * The ladder hub calls `setAckChips(false)` inside its LADDER.ENABLED gate;
-   * flag-off never calls it (default true = shipped).
+   * Silence / restore the "+ SPECS: <title>" acknowledgment chips (owner 2026-09-07); the unlock itself is untouched.
+   * The ladder hub calls `setAckChips(false)` inside its LADDER.ENABLED gate; default true.
    * @param {boolean} on
    */
   setAckChips(on) { this._ackChips = on !== false; }
@@ -451,16 +356,12 @@ export class CodexSystem {
   /** @returns {boolean} whether accepted unlock requests post a ticker chip */
   ackChips() { return this._ackChips; }
 
-  /** Tick the unlock cooldown and process queued unlocks. */
   update(dt) {
-    // Slice 7 — advance the mission clock (only ticks during active play, since
-    // the game loop calls this with the sim dt). Mirrors ConjunctionSystem.
+    // Advance the mission clock (ticks only during active play: the game loop passes the sim dt).
     if (Number.isFinite(dt)) this._missionTime += dt;
 
     if (this._cooldownTimer > 0) this._cooldownTimer -= dt;
 
-    // Hold the queue until the mission-start grace passes so the first unlock
-    // chime doesn't land on the startup comms/departure cluster.
     if (this._missionTime < this._startupGraceUntil) return;
 
     if (this._cooldownTimer <= 0 && this._unlockQueue.length > 0) {
@@ -470,16 +371,11 @@ export class CodexSystem {
     }
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
-
   /** @param {string} id @returns {object|null} */
   getEntry(id) { return this._byId.get(id) || null; }
 
   /**
-   * The unlock triggers for an entry (multi-trigger). Exposed for tests +
-   * tooling; each is `{ event, match(payload)→bool }`.
+   * The unlock triggers for an entry (multi-trigger), exposed for tests + tooling.
    * @param {string} id
    * @returns {Array<{event:string, match:(p:object)=>boolean}>}
    */
@@ -505,13 +401,13 @@ export class CodexSystem {
   }
 
   /**
-   * TRL badge info for an entry.
+   * TRL badge info for an entry (null for non-tech entries).
    * @param {string} id
    * @returns {{trl:number, color:string, label:string, rationale:string}|null}
    */
   getEntryTRL(id) {
     const entry = this._byId.get(id);
-    if (!entry || typeof entry.trl !== 'number') return null;   // no badge for non-tech entries
+    if (!entry || typeof entry.trl !== 'number') return null;
     const trl = entry.trl;
     return {
       trl,
@@ -609,13 +505,8 @@ export class CodexSystem {
     if (entry && entry.unlocked) entry.seen = true;
   }
 
-  // ==========================================================================
-  // PERSISTENCE
-  // ==========================================================================
-
   /**
-   * Serializable state for save game (versioned envelope so the codex slice can
-   * migrate without touching the global SAVE_VERSION).
+   * Serializable save state: a versioned envelope so the codex slice can migrate without touching the global SAVE_VERSION.
    * @returns {{ v:number, entries:Array<{id,unlocked,seen}> }}
    */
   getState() {
@@ -623,8 +514,7 @@ export class CodexSystem {
       v: 2,
       entries: this.entries.map(e => {
         const o = { id: e.id, unlocked: e.unlocked, seen: e.seen };
-        // Slice 7 — additive: persist unlock context when present. Old (v1)
-        // saves simply lack `ctx`; the restore path tolerates its absence.
+        // Additive: persist unlock context when present. v1 saves lack `ctx`; restore tolerates its absence.
         if (e.unlockContext) o.ctx = e.unlockContext;
         return o;
       }),
@@ -632,9 +522,9 @@ export class CodexSystem {
   }
 
   /**
-   * Restore from save data. Accepts the versioned envelope `{ v, entries }` or a
-   * legacy bare array; retired ids migrate through ALIASES; union semantics so a
-   * merged-away id can't clobber a survivor already unlocked by an earlier line.
+   * Restore from save data. Accepts the versioned envelope `{ v, entries }` or a legacy bare array; retired ids
+   * migrate through ALIASES; union semantics so a merged-away id can't clobber a survivor already unlocked by an
+   * earlier line.
    * @param {{ v?:number, entries?:Array }|Array} data
    */
   restore(data) {
@@ -649,8 +539,7 @@ export class CodexSystem {
       if (!entry) continue;
       entry.unlocked = entry.unlocked || !!saved.unlocked;
       entry.seen = entry.seen || !!saved.seen;
-      // Slice 7 — restore unlock context if the save carried it (v2+); old saves
-      // and startUnlocked entries simply have none.
+      // Restore unlock context if the save carried it (v2+); old saves and startUnlocked entries have none.
       if (saved.ctx && typeof saved.ctx === 'object' && !entry.unlockContext) {
         entry.unlockContext = saved.ctx;
       }

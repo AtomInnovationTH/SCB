@@ -1,91 +1,43 @@
 /**
- * MotherCallouts.js — In-world 3D inspection callouts for the mothership.
+ * MotherCallouts.js — in-world 3D inspection callouts for the mothership.
  *
- * Part labels, leader lines and detail cards are anchored onto the real model
- * in the world (no separate 2D schematic pane). A screen-space side-rail layout
- * flanks the ship with two stacked columns of cards joined to their anchors by
- * elbow leaders, so labels never crowd the fore cap or cross each other.
+ * Part labels, leader lines and detail cards are anchored onto the real model (no 2D schematic pane). A screen-space
+ * side-rail layout flanks the ship with two stacked columns of cards joined to their anchors by elbow leaders.
  *
- * Labels in steps (DECISIONS §13 r3, 2026-09-24): the system names show in
- * EVERY band, and a system's part labels appear only while that system is
- * OPEN — pinned by a click/tap, held by hovering any of its parts or its
- * name, lingered ~1 s (CALLOUTS.OPEN_LINGER_MS) after the pointer leaves, or
- * (inside the close lens) held by the part nearest screen centre. At rest F1
- * shows only the six system names — seven once the radiators are bought.
+ * Labels in steps (DECISIONS §13 r3): system names show in EVERY band; a system's part labels appear only while that
+ * system is OPEN — pinned by click/tap, held by hovering any of its parts or its name, lingered
+ * CALLOUTS.OPEN_LINGER_MS after the pointer leaves, or (inside the close lens) held by the part nearest screen centre.
+ * At rest only the system names show (six; seven once the radiators are bought).
  *
  * Zoom bands (camera-to-ship distance, with hysteresis):
+ *   Band 1  SYSTEM    (far, > ~9 m)   : system names only (no hull hover).
+ *   Band 2  PART      (mid, ~9–4 m)   : + the OPEN system's major part cards.
+ *   Band 3  COMPONENT (close, < ~4 m) : + the open system's detail cards and a proximity reveal around the focused
+ *                                       part. Cards stay compact; the full detail card lives on hover (the dossier).
  *
- *   Band 1  SYSTEM   (far, > ~9 m)   : system names only (no hull hover).
- *   Band 2  PART     (mid, ~9–4 m)   : system names + the OPEN system's
- *                                       major part cards.
- *   Band 3  COMPONENT(close, < ~4 m) : + the open system's detail cards and
- *                                       today's proximity reveal around the
- *                                       focused part. Every card stays
- *                                       compact — the promoted "full" card is
- *                                       retired (B1); the full detail card
- *                                       lives on hover (the dossier, B2).
+ * Hull-part hover: parts with `pick:` hull-object names raycast alongside the card sprites at 10 Hz. Hovering a part
+ * outlines it in house cyan (see _ensureOutline) and brightens its card; a click equals clicking the card (one hover
+ * state `_hoverRec`, one CODEX_OPEN_ENTRY emitter). Hull MESHES are pickable whenever they can be on screen in the
+ * PART/COMPONENT bands, regardless of the card's rail cull, facing gate or detail tier; the CARD keeps its visibility
+ * gate (_recPickable).
  *
- * Identity: hue = system (6 hues), risk = a small badge dot on the card. Anchors
- * on the far side of the hull fade by camera-facing angle (dot-product proxy).
- * Card positions ease in SCREEN space (NDC) so ship rotation reads as smooth
- * sliding rather than object-space wobble. Rail side and stack order use
- * hysteresis so orbiting doesn't thrash sides or flash leader crossings.
+ * HOVER DOSSIER (docs/ladder/08-workbench.md §2 Motion): after 400 ms dwell on ONE rec, one reusable sprite beside the
+ * pointer shows the full detail card (see _updateDossier). Touch never sees it.
  *
- * First time inspection engages, a one-shot "guided pulse" sweeps a highlight
- * through the systems so a new player learns the vocabulary passively.
- *
- * Hull-part hover (D2's first verb, Wave 5): parts with `pick:` hull-object
- * names raycast alongside the card sprites at the same 10 Hz — hovering the
- * part outlines it in the house cyan (EdgesGeometry lines + a translucent
- * inflated shell, children of the picked meshes, depth-tested and pulled
- * 1.5 mm toward the camera so the hull hides far-side layers) and brightens
- * its card; clicking the part is identical to clicking its card (one hover
- * state `_hoverRec`, one CODEX_OPEN_ENTRY emitter). The stationary re-pick is
- * sticky (see _refreshHover) so the highlight is steady. Since Wave 5
- * Session D the hull MESHES are pickable whenever they can be on screen in
- * the PART/COMPONENT bands — regardless of the card's rail cull, facing gate
- * or detail tier (the mesh is literally under the pointer) — while the CARD
- * keeps the shipped visibility gate; see _recPickable's two tiers.
- *
- * HOVER DOSSIER (B2, 08-workbench §2 Motion): beat one is the shipped
- * immediate treatment (outline, opacity lift, small scale bump, leader
- * whitening — read from _hoverRec in _positionCard). Beat two: after 400 ms
- * of dwell on ONE rec, a single reusable dossier sprite appears beside the
- * pointer carrying the full detail card — the retired focus card's 6-slot
- * budget (mass, specs, live rows, ▸ deep link, readiness), rendered through
- * _applyCard's `full` variant onto a wrapper rec, never onto a rail rec. It
- * never joins rail layout, draws above every rail card, clamps against the
- * pane-aware edges so it cannot slide under a drawer, and re-rasterises its
- * live rows at the shared LIVE_REFRESH_HZ cadence. Touch never sees it: a
- * tap runs the click path only (pointerup is followed by pointerleave, which
- * clears the hover and the pointer position long before any dwell elapses).
- *
- * REFIT ghosts (Wave 5 (2)): setGhostOutline(partIds) shows the SAME outline
- * steady-on for a set of parts (the pane's alternative hover), pulsed
- * 0.35×–1× at 1.2 Hz on the recs' own materials; getPartsBySystem() feeds the
- * pane's bookkeeping; the optional onPartClick hook (D-a) routes a resolved
+ * REFIT ghosts: setGhostOutline(partIds) / getPartsBySystem(); the optional onPartClick hook routes a resolved
  * part/card click to the REFIT card instead of the Library emit.
  *
- * PART PORTRAIT (Session T): getPartFrame(partId) hands the hub the part's
- * world pick-mesh box + its PORTRAIT_OVERRIDES pose row, and
- * withHiddenForPortrait(fn) hides the callout layer AND every outline layer
- * for the SPECS pane's one-shot portrait render — the table is the only
- * per-card authoring; distance is solved from the box (scene/portraitFraming).
+ * PART PORTRAIT: getPartFrame(partId) and withHiddenForPortrait(fn) serve the SPECS pane's one-shot portrait render.
  *
- * Gating mirrors the hull outline: active while either the discrete INSPECTION
- * view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom sub-state (INSPECT_HULL_OUTLINE)
- * reports inspection on.
+ * Gating mirrors the hull outline: active while the INSPECTION view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom
+ * sub-state (INSPECT_HULL_OUTLINE) reports inspection on.
  *
- * Render pipeline (corrects the round-1 plan note): the callout group is a child
- * of `player`, and SceneManager._updateNearCamera() re-tags every near-field root
- * subtree onto NEAR_FIELD_LAYER EVERY FRAME (SceneManager.js:966-975), so these
- * sprites render in the NEAR pass alongside the hull — after clearDepth(), so the
- * hull can never overpaint them. The pass's uniform ×1e5 camera-relative scale is
- * applied to the shared root, and every position here goes through
- * player.worldToLocal / local anchors, so screen size and position are preserved
- * exactly. Near-plane clipping of dots/leader tips is provably dead: min inspect
- * distance is 2 m (CameraSystem.js:208) vs a 1.33 m clip threshold for the
- * fore-most anchor (1.3 m) — unreachable.
+ * Render pipeline: the callout group is a child of `player`, and SceneManager._updateNearCamera() re-tags every
+ * near-field subtree onto NEAR_FIELD_LAYER EVERY FRAME, so sprites render in the NEAR pass after clearDepth() and the
+ * hull can never overpaint them. The pass's ×1e5 camera-relative scale applies to the shared root and every position
+ * here goes through player.worldToLocal / local anchors, so screen size and position are preserved. Near-plane
+ * clipping of dots/leader tips cannot happen: min inspect distance is 2 m (CameraSystem) vs a 1.33 m clip threshold
+ * for the fore-most anchor (1.3 m).
  *
  * @module ui/MotherCallouts
  */
@@ -99,7 +51,7 @@ import { createCardTexture, CARD_W_OVER_TITLE_H, wrapHint } from '../scene/label
 import { fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 import { orderRail } from '../scene/railOrder.js';
 import { RAIL_GEOMETRY } from './RailGeometry.js';
-import { GestureHints } from './hud/GestureHints.js';   // u15b D7: the hint's words follow glass, read when drawn
+import { GestureHints } from './hud/GestureHints.js';
 import { TAP_SLOP_PX, TAP_SLOP_MS } from '../systems/TapPick.js';
 import { engineGasKg } from '../systems/ResourceSystem.js';
 import { DEG2RAD, degToRad, clamp01, clamp } from '../core/MathUtil.js';
@@ -112,71 +64,34 @@ const CFG = Constants.CALLOUTS;
 const HUES = CFG.SYSTEM_HUES;
 const RISK = CFG.RISK_COLORS;
 
-// u17 A-T2 (D3): the flower struts' card row. Desktop names the O key; glass has no such key (the touch twin is a floor-1
-// button that is not readable from here), so the glass row names no control. Chosen when the CARD is applied (`specRow`).
+// Flower struts' card row. Desktop names the O key; glass has no such key, so its row names no control (chosen in `specRow`).
 const FLOWER_ROW = 'They open LIKE A FLOWER \u2014 O opens to 146\u00B0 / folds flat';
 const FLOWER_ROW_GLASS = 'They open LIKE A FLOWER \u2014 146\u00B0 open / folds flat';
 const specRow = (row) => (row === FLOWER_ROW && GestureHints.isGlass() ? FLOWER_ROW_GLASS : row);
 
-// ----------------------------------------------------------------------------
-// SYSTEM / PART ANCHOR TABLE
-// ----------------------------------------------------------------------------
-// Anchors are LOCAL model coordinates (parented to the PlayerSatellite group),
-// in metres × M, taken from the real model build in PlayerSatellite.js
-// (+Z fore, −Z aft, XY radial; barrel r=0.40, L=2.0 → caps at z=±1.0).
+// Anchors are LOCAL model coordinates (parented to the PlayerSatellite group), in metres × M, from the real model
+// build in PlayerSatellite.js (+Z fore, −Z aft, XY radial; barrel r=0.40, L=2.0 → caps at z=±1.0).
 //
-// Per part:
-//   id       stable lookup key (tests + internal; display copy may change freely).
-//   tier     'major' → PART + COMPONENT bands; 'detail' → COMPONENT band only,
-//            and only when its system owns the focused part OR it sits near the
-//            focused part on screen (proximity reveal, T6).
-//   massKg   real-flavoured dry mass (kg) shown on the detail card.
-//   specs    1–2 static spec lines for the detail card.
-//   priority higher = kept when a rail overflows (culling drops lowest first).
-//   risk     GREEN/YELLOW/RED → badge dot colour.
-//   codexId  existing codex entry id/alias → clickable deep-link.
-//   live     id consumed by _liveRows() for phase-2 dynamic rows (optional).
-//   mesh     PlayerSatellite mesh name; the anchor is resolved from the live
-//            mesh position instead of the static coordinate (T1). Falls back to
-//            `anchor` with a one-time console.warn if the name doesn't resolve.
-//   dynamic  re-resolve the mesh anchor EVERY frame (the mesh moves, e.g. the
-//            strut-mounted reel cartridges). Static meshes resolve once.
-//   meshOffset  optional [x, y, z] in ship frame (metres × M) ADDED to the
-//            resolved mesh position (T10) — point at a feature of the mesh (a
-//            bell rim, a plate tip) when its origin is not the feature. Applied
-//            after the world→local copy, so it rides a `dynamic` mesh too.
-//            Ignored without `mesh`; the static `anchor` tuple is never offset.
-//   pick     PlayerSatellite object names used ONLY for hull hover: the raycast
-//            targets and the cyan edge outline (D2's first verb — hover the part
-//            itself, not just its card). NEVER moves an anchor (anchors are
-//            `mesh`/`anchor` only), so every leader/dot/card stays byte-identical
-//            with or without `pick`. Names resolve via player.traverse collecting
-//            EVERY match (names were shared historically — SensorSpoke ×4 until
-//            Mother audit T4, FEEP_Boss/FEEP_GridDisc until T9 — and the
-//            traverse-all rule is kept so a future shared name still outlines
-//            whole), so the sets must be
-//            DISJOINT subtrees across parts. Absent → defaults to
-//            `mesh ? [mesh] : []`. Card-only parts (berths/mli and the
-//            anchorless structure plates) carry no `pick` on purpose — see
-//            the FINDINGS in the Wave-5 hull-hover report for each reason.
-//            (§13 r4, Lane H: the THERMAL family and the daughters left this
-//            list — they pick through `pickPrefixes` / their live arm groups.)
-//   pickPrefixes  optional name PREFIXES completing the parent-part roll-up
-//            (DECISIONS §13 ruling 4, Lane H 2026-09-25): every object under
-//            `player` whose name STARTS WITH one of these joins this part's
-//            pick targets — the small pieces (bolts, clips, mounts, booms,
-//            panels) highlight the part they belong to, and through the
-//            blocker raycast they block the pointer for the part behind.
-//            Matched by the same traverse-all rule as `pick` (a matched group
-//            brings its whole subtree), so prefixes must stay disjoint across
-//            parts exactly like `pick` names — the pick-table test pins both.
-//            Absent → exact `pick` only.
-//   flowerGated  the part's mesh exists only after the aft radiator flower is
-//            bought: while the flower is absent (_flowerGone) the mesh lookup is
-//            skipped with no warn and the static `anchor` is used; the one-shot
-//            `_meshTried` latch is RE-ARMED on the gone→present edge so a
-//            `dynamic` card binds the real frame after purchase (Phase 0 fix,
-//            dc0025e; see _resolveAnchor).
+// Per part: id (stable key for tests + internals; display copy may change freely), massKg/specs (detail card),
+// priority (higher = kept when a rail overflows), risk (GREEN/YELLOW/RED badge dot), codexId (deep-link), live (id read
+// by _liveRows()), and:
+//   tier     'major' → PART + COMPONENT bands; 'detail' → COMPONENT band only, and only when its system owns the
+//            focused part OR it sits near the focused part on screen (proximity reveal).
+//   mesh     PlayerSatellite mesh name; the anchor resolves from the live mesh instead of the static `anchor` (which
+//            stays as the fallback, with a one-time console.warn if the name doesn't resolve).
+//   dynamic  re-resolve the mesh anchor EVERY frame (the mesh moves, e.g. strut-mounted reel cartridges).
+//   meshOffset  optional [x, y, z] (ship frame, metres × M) ADDED to the resolved mesh position, for a feature the mesh
+//            origin is not at; rides a `dynamic` mesh too. Ignored without `mesh`; the static `anchor` is never offset.
+//   pick     PlayerSatellite object names used ONLY for hull hover (raycast targets + cyan edge outline); NEVER moves an
+//            anchor. Resolved via player.traverse collecting EVERY match, so the sets must be DISJOINT subtrees across
+//            parts. Absent → `mesh ? [mesh] : []`. Card-only parts (berths/mli, anchorless structure plates) carry no
+//            `pick` on purpose; the THERMAL family and the daughters pick through `pickPrefixes` / live arm groups.
+//   pickPrefixes  optional name PREFIXES completing the parent-part roll-up (DECISIONS §13 ruling 4): every object
+//            under `player` whose name STARTS WITH one joins this part's pick targets, so small pieces (bolts, clips,
+//            mounts, booms, panels) highlight their part and block the pointer for the part behind. Same traverse-all
+//            rule as `pick`, so prefixes must stay disjoint across parts; the pick-table test pins both.
+//   flowerGated  the part's mesh exists only after the aft radiator flower is bought: until then the mesh lookup is
+//            skipped (no warn, static `anchor` used) and re-armed on the gone→present edge (_resolveAnchor).
 const SYSTEMS = [
   {
     id: 'POWER', label: 'POWER',
@@ -185,30 +100,17 @@ const SYSTEMS = [
     parts: [
       { id: 'rosa_wings', name: 'ROLL-OUT SOLAR WINGS', risk: 'GREEN', tier: 'major', codexId: 'rosa_solar_array',
         massKg: 22, priority: 9, live: 'rosa',
-        // mother-cells lane (2026-09-24): re-measured (tmp/power-before-after.mjs,
-        // real ship builder + settle loop, matches test-MotherPower.js's own
-        // methodology) — was a stale '~2.2 kW peak when new' guess.
+        // Peak figures measured with the real ship builder and settle loop (`test-MotherPower.js` method).
         specs: ['2× 1×2 m roll-out arrays', 'Wings-only peak ~1.63 kW, ~1.83 kW with body cells'],
         pick: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'],
-        // §13 r4 roll-up: the wings' booms, spreaders, brackets and spool
-        // curls are wing hardware (measured, tmp/h-mapping.mjs: 16 meshes).
         pickPrefixes: ['ROSA_Boom', 'ROSA_Bracket', 'ROSA_Spreader', 'ROSA_SpoolCurl'],
-        // Mother audit T10 (W8): the leader follows the +X blanket's centre
-        // through sun-tracking tilt and the furl (the static x 1.1 tuple sat in
-        // empty sky beside a tilted or rolled-up wing). Static stands in until
-        // the mesh binds.
+        // Leader follows the +X blanket centre through sun-tracking tilt and furl; static anchor stands in until the mesh binds.
         mesh: 'ROSA_Panel_Front_0deg', dynamic: true,
         anchor: [ 1.1 * M, 0, 0 ] },
       { id: 'body_cells', name: 'HULL SOLAR CELLS', risk: 'GREEN', tier: 'detail', codexId: 'gallium_arsenide',
         massKg: 3, priority: 2, specs: ['Body-mounted gallium-arsenide cells'],
-        // az 33.75° facet centre, central PV row (face radius barrelR×1.014).
-        // The old az-0° anchor sat in the ROSA-root keep-out on bare hull and
-        // collided with NAV LIGHTS (2 cm).
-        // mother-cells lane (2026-09-24): the body cells were re-laid at half
-        // width (11.25°, `_buildMainBus` in PlayerSatellite.js) — 40 facet
-        // cells (0..39, was 24 at the 22.5° whole-facet layout) plus the same
-        // 4 end-band gap cells (94.65/274.65, unchanged — see that function's
-        // comments for the measured keep-out clearances).
+        // az 33.75° facet centre, central PV row (face radius barrelR×1.014); az 0° sits in the ROSA-root keep-out
+        // (40 facet cells + 4 end-band gap cells; keep-out clearances measured in `PlayerSatellite` `_buildMainBus`).
         pick: [
           ...Array.from({ length: 40 }, (_, i) => `BarrelSolarPanel_${i}`),
           'BarrelSolarPanel_gap_94.65_F', 'BarrelSolarPanel_gap_94.65_A',
@@ -217,22 +119,12 @@ const SYSTEMS = [
         anchor: [ 0.337 * M, 0.2254 * M, 0 ] },
       { id: 'array_roll', name: 'SOLAR WING SPOOL', risk: 'GREEN', tier: 'detail', codexId: 'solar_power',
         massKg: 4, priority: 2, specs: ['Roll-out drum + drive'],
-        // DERIVED, never typed: the spool axis is COLLAR_RADIUS +
-        // ROSA_BRACKET_LEN + 0.4·drumR ≈ 0.49 m, and ROSA_BRACKET_LEN is a live
-        // lever (it grew 0.060 → 0.070 to hold the furled coil off the body PV,
-        // which is what moved this anchor from 0.48). A literal here would
-        // silently strand the leader line off the real spool the next time that
-        // lever moves — exactly the drift the rosaSpoolAxisM accessor exists
-        // to prevent.
+        // DERIVED, never typed: ROSA_BRACKET_LEN is a live lever, so a literal would strand the leader (rosaSpoolAxisM).
         pick: ['ROSA_Spool_0deg', 'ROSA_Spool_180deg'],
-        // §13 r4 roll-up: the wing clamp bodies hold the furled blanket on
-        // the spool — spool hardware (the motor boxes/pads next door belong
-        // to WING MOTOR BOX, fb7174b).
+        // §13 r4 roll-up: wing clamp bodies are spool hardware (the motor boxes/pads belong to WING MOTOR BOX).
         pickPrefixes: ['WingClamp'],
         anchor: [ PlayerSatellite.rosaSpoolAxisM() * M, 0, 0 ] },
-      // One fixed motor box per wing, bolted to the inside MidRing at the wing
-      // root (DECISIONS §10). DERIVED anchor: the box centre sits at
-      // COLLAR_RADIUS + WING_MOTOR_PAD_H + WING_MOTOR_BOX_DEEP/2 (0.4105 m).
+      // One motor box per wing (DECISIONS §10). DERIVED anchor: COLLAR_RADIUS + WING_MOTOR_PAD_H + WING_MOTOR_BOX_DEEP/2.
       { id: 'wing_motor_box', name: 'WING MOTOR BOX', risk: 'GREEN', tier: 'detail', codexId: 'solar_power',
         massKg: 3, priority: 2, specs: ['Turns the wing', 'Bolted to the mid-body ring'],
         pick: ['WingMotorBox_0deg', 'WingMotorBox_180deg', 'WingMotorPad_0deg', 'WingMotorPad_180deg'],
@@ -248,25 +140,19 @@ const SYSTEMS = [
       { id: 'feep', name: 'ION THRUSTERS (FEEP)', risk: 'YELLOW', tier: 'major', codexId: 'feep_thruster',
         massKg: 8, priority: 8, live: 'feep',
         specs: ['4× emitter clusters', 'Specific impulse ~4000 s'],
-        // The 4 emitter cluster bodies (NOT FEEP_Boss/FEEP_GridDisc — those share
-        // duplicate names and are cull-hidden mm detail).
+        // The 4 emitter cluster bodies (FEEP_Boss/FEEP_GridDisc share duplicate names and are cull-hidden mm detail).
         pick: ['MainFEEP_0', 'MainFEEP_1', 'MainFEEP_2', 'MainFEEP_3'],
         anchor: [ 0, -0.20 * M, -1.05 * M ] },
       { id: 'rcs', name: 'COLD-GAS STEERING', risk: 'GREEN', tier: 'major', codexId: 'cold_gas_rcs',
         massKg: 3, priority: 5, specs: ['Nitrogen thruster ring'],
         pick: ['RCSPod_0', 'RCSPod_1', 'RCSPod_2', 'RCSPod_3'],
-        // §13 r4 roll-up: pod boots, bolts, thruster bells, liners and
-        // throats are steering hardware ('RCSPod' also carries the boots and
-        // pod bolts; measured 60 meshes the set).
+        // §13 r4 roll-up: pod boots, bolts, thruster bells, liners and throats ('RCSPod' also carries boots and bolts; 60 meshes).
         pickPrefixes: ['RCSPod', 'RCSThruster', 'RCSLiner', 'RCSThroat'],
         anchor: [ -0.03 * M, 0.42 * M, -0.795 * M ] },
       { id: 'mli', name: 'THERMAL BLANKET (MLI)', risk: 'GREEN', tier: 'detail', codexId: 'mli_insulation',
         massKg: 2, priority: 2, specs: ['Multi-layer insulation'],
         // Bare-MLI shoulder band above the fore cell row (cells end at z=0.72).
-        // The old z=0.50 anchor pointed at MLI seam rings deleted 2026-07-23.
         anchor: [ 0.404 * M, 0, 0.78 * M ] },
-      // Briefings for the structure parts (Session D, owner decision 1): the
-      // five blanks got short codex entries so every click lands somewhere.
       { id: 'aft_deck', name: 'AFT THRUSTER DECK', risk: 'GREEN', tier: 'detail', codexId: 'aft_thruster_deck',
         massKg: 4, priority: 1, specs: ['Aft plate — 0.6 m deck'],
         mesh: 'AftThrusterDeck',
@@ -275,55 +161,33 @@ const SYSTEMS = [
   },
   {
     id: 'PAYLOAD', label: 'PAYLOAD',
-    // Mother audit T10: on collar hardware, not in the bore — the old (0, 0.10,
-    // 1.05) sat inside it. Design 6: the berth tunnel wall (0, 0.155, 1.15) is
-    // gone; the point is now the az-90 BerthCollarStrut_1's outboard skin at
-    // z ≈ 1.15 (axis radial 0.2527 + 0.014 along the strut's outward normal
-    // (0.904, 0.427) → (0, 0.265, 1.156)).
+    // On collar hardware, not in the bore: the outboard skin of the az-90 BerthCollarStrut_1 at z ≈ 1.15.
     anchor: [ 0, 0.265 * M, 1.156 * M ],
     role: 'net launcher + spin-brake',
     parts: [
       { id: 'despin', name: 'SPIN-BRAKE LASER', risk: 'RED', tier: 'major', codexId: 'detumble',
         massKg: 9, priority: 9, live: 'despin',
         specs: ['Photon-pressure despin', '~5 W fibre laser'],
-        // Gimbal child — dynamic so the anchor tracks if the turret articulates.
-        // pick: the telescope + baffle bodies. LaserMuzzle stays the ANCHOR mesh
-        // but is a geometry-less Object3D (PlayerSatellite.js:3255), so it can't
-        // outline — the two real gimbal meshes carry the hover instead.
+        // Gimbal child — dynamic so the anchor tracks the turret. LaserMuzzle is the ANCHOR mesh but a geometry-less
+        // Object3D, so it can't outline: the two real gimbal meshes (telescope, baffle) carry the hover.
         mesh: 'LaserMuzzle', dynamic: true,
         pick: ['LaserTelescope', 'LaserBaffle'],
         anchor: [ -0.184 * M, 0.184 * M, 1.20 * M ] },
       { id: 'net_launcher', name: 'LARGE NET LAUNCHER', risk: 'GREEN', tier: 'major', codexId: 'miura_ori_net',
         massKg: 5, priority: 7, specs: ['Miura-ori net, ~5 m span'],
-        // ONE launcher, centred inside the collar bore (owner 2026-10-13: "one,
-        // centered"; there were two housings at x ±0.45 until then). Mother
-        // audit T10 (F13) lesson kept: the old static (0, 0, 1.30) was the
-        // collar bore, so bind the HOUSING — its origin is the housing centre
-        // at (0, 0, 1.16); the static fallback is the housing's top surface
-        // (r 0.12), same x/z as the mesh origin. The cells are children of the
-        // housing, so the exact-name pick below outlines the whole assembly;
-        // there are no saddles any more.
+        // ONE launcher, centred inside the collar bore: bind the HOUSING; the static fallback is its top surface. The
+        // cells are children of the housing, so the exact-name pick outlines the whole assembly.
         mesh: 'NetLauncher',
         pick: ['NetLauncher'],
         anchor: [ 0, 0.12 * M, 1.16 * M ] },
       { id: 'berth_collar', name: 'DOCKING COLLAR', risk: 'GREEN', tier: 'detail', codexId: 'capture_collar',
-        // Design 6 (2026-09-08): massKg 6 → 3 — the skeleton collar (thin ring
-        // on four struts, ≈ 2.5 kg of thin-wall Al) replaced the ≈ 9 kg torus +
-        // tunnel + flange + cone.
         massKg: 3, priority: 3,
-        // F1 workbench plan (Lane D, 2026-09-23): retargeted from
-        // `docking_berthing` — that entry is DAUGHTER BERTHS' briefing; the
-        // nose collar is where CAUGHT DEBRIS mates rigidly on-axis, so it links
-        // its own debris-capture briefing now (`capture_collar` lists this
-        // card's name in hardwareNames — the search bridge test pins it).
-        // Mother fixes 3/4: display name berth-collar → DOCKING COLLAR (owner
-        // 2026-09-08); the id `berth_collar` (refitIndex, tests) and the frozen
-        // mesh name NetBerthCollar are untouched.
-        // Design 6: the collar is a SKELETON — BerthCollarRing is a thin capture
-        // ring (R 0.180, tube 0.020, bore 0.16 kept) on BerthCollarStrut_0..3
-        // with the BerthFace plate on the turntable top inside the bore; the
-        // BerthTunnel / BerthFlange / BerthCollarGuideCone it used to pick are
-        // retired (they blocked the ring optics — test-SensorClearance).
+        // Links its own debris-capture briefing: the nose collar is where CAUGHT DEBRIS mates rigidly on-axis
+        // (`capture_collar` lists this card's name in hardwareNames; the search bridge test pins it). The id
+        // `berth_collar` (refitIndex, tests) and the mesh name NetBerthCollar are frozen.
+        // SKELETON: BerthCollarRing (R 0.180, tube 0.020, bore 0.16) on BerthCollarStrut_0..3, BerthFace plate on the
+        // turntable top. BerthTunnel / BerthFlange / BerthCollarGuideCone are retired (they blocked the ring optics:
+        // test-SensorClearance).
         specs: [
           `Nose collar \u00b7 ${(2 * (Constants.OCTOPUS_V5?.BERTH_COLLAR_INNER_R_M ?? 0.16)).toFixed(2)} m bore`,
           `Seat plane z ${(Constants.OCTOPUS_V5?.BERTH_COLLAR_Z_M ?? 1.30).toFixed(2)} m \u00b7 cargo mates on-axis`,
@@ -331,41 +195,27 @@ const SYSTEMS = [
         ],
         mesh: 'BerthCollarRing',
         pick: ['BerthCollarRing', 'BerthCollarStrut_0', 'BerthCollarStrut_1', 'BerthCollarStrut_2', 'BerthCollarStrut_3', 'BerthFace'],
-        // §13 r4 roll-up: the collar's foot pads and lamps.
-        pickPrefixes: ['BerthCollarFoot', 'BerthCollarLamp', 'BerthCollarFlange'],   // v6-nose-tail: + the flange face and its 24 bolts
-        // Mother fixes 4/4 (b): BerthCollarRing's origin is the bore centre, so
-        // the live anchor sat in the hole and the camera→anchor ray went through
-        // the ring onto BerthFace. Offset to the ring's OUTER equator (R + tube =
-        // 0.200) — Design 6 moved it from az 90 to az 60 (0.100, 0.1732): the
-        // ±Y ring face carries the fore sun sensors now (az 90/270), and az 60
-        // is above the telescope top (1.245) and off the ±Y struts, so the
-        // leader tip sits on the tube from fore-on / fore-q-stbd / fore-q-top
-        // (Mode B harness: BerthCollarRing, gap ∈ [−0.02, +0.005]). The static
-        // tuple is the same point (a fixed part: static = live).
+        pickPrefixes: ['BerthCollarFoot', 'BerthCollarLamp', 'BerthCollarFlange'],
+        // Offset to the ring's OUTER equator at az 60 (R + tube = 0.200): BerthCollarRing's origin is the bore centre
+        // (the live anchor would sit in the hole). The ±Y ring face carries the fore sun sensors (az 90/270); az 60 is
+        // above the telescope top and off the ±Y struts, so the leader tip sits on the tube from fore-on / fore-q-stbd /
+        // fore-q-top. Mode B harness (`scripts/visual-ab/mother-audit-shots.mjs`): BerthCollarRing, gap ∈ [−0.02, +0.005].
+        // The static tuple is the same point.
         meshOffset: [ 0.100 * M, 0.1732 * M, 0 ],
         anchor: [ 0.100 * M, 0.1732 * M, 1.30 * M ] },
     ],
   },
   {
     id: 'SENSORS', label: 'SENSORS',
-    // Mother audit T10: the deck lip (r 0.34–0.38, z 1.03) — the old (0, 0.26,
-    // 1.12) sat in the air between the instruments.
+    // The deck lip (r 0.34–0.38, z 1.03).
     anchor: [ 0, 0.37 * M, 1.03 * M ],
     role: 'tracking turret + cameras',
     parts: [
       { id: 'gimbal', name: 'SENSOR TURRET', risk: 'GREEN', tier: 'major', codexId: 'docking_precision',
         massKg: 5, priority: 6, specs: ['2-axis pointing platform'],
-        // SensorGimbal itself is a geometry-less Group; pick the turntable body
-        // (Mother audit T4: the r 0.34 SensorHubRing cylinder — the four
-        // SensorSpoke boxes are gone). Anchor on its top face (T10 — the old
-        // (0, 0, 1.00) was the cap centre inside the collar bore). Design 6 moved
-        // it from az 90 to az 105 (r 0.31 → (−0.080, 0.299)): the az-90 collar
-        // strut now lands its foot pad (r 0.03, z 1.050–1.062) exactly over
-        // (0, 0.31, 1.055), so the Mode B harness read the SENSOR TURRET leader
-        // on BerthCollarFoot_1 / BerthCollarStrut_1 (gap −0.010 / −0.012). At
-        // az 105 the point is 50 mm clear of the pad rim, 55 mm outside the
-        // telescope barrel (az 135, r 0.10) and clear of the ring / puck from
-        // fore-on and fore-q-top (SensorHubRing, gap 0).
+        // SensorGimbal itself is a geometry-less Group; pick the turntable body (SensorHubRing). Anchor on its top face
+        // at az 105: 50 mm clear of the az-90 collar strut's foot pad rim, 55 mm outside the telescope barrel
+        // (az 135, r 0.10) and clear of the ring / puck. Mode B: SensorHubRing, gap 0.
         pick: ['SensorHubRing'],
         anchor: [ -0.080 * M, 0.299 * M, 1.055 * M ] },
       { id: 'eo_cam', name: 'DAYLIGHT CAMERA', risk: 'GREEN', tier: 'major', codexId: 'pose_estimation',
@@ -375,17 +225,15 @@ const SYSTEMS = [
       { id: 'ir_cam', name: 'HEAT (INFRARED) CAM', risk: 'GREEN', tier: 'major', codexId: 'trackable_vs_dark',
         massKg: 2, priority: 4, specs: ['Long-wave infrared — spots dark debris'],
         pick: ['IR_Sensor'],
-        anchor: [ -0.1715 * M, -0.1715 * M, 1.145 * M ] },   // v10-look-r5: IR box stands on the turret (centre r 0.2425, mid-height 1.145)
+        anchor: [ -0.1715 * M, -0.1715 * M, 1.145 * M ] },   // IR box on the turret (centre r 0.2425, mid-height 1.145)
       { id: 'lidar', name: 'LASER RANGEFINDER', risk: 'GREEN', tier: 'major', codexId: 'lidar_ranging',
         massKg: 3, priority: 5, specs: ['Flash LIDAR — range + pose'],
         pick: ['LIDAR_Dome'],
-        // §13 r4 roll-up: the flash drum under the dome.
         pickPrefixes: ['LIDAR_Drum'],
         anchor: [ 0.184 * M, -0.184 * M, 1.10 * M ] },
       { id: 'star_trackers', name: 'STAR TRACKERS', risk: 'GREEN', tier: 'major', codexId: 'star_tracker',
         massKg: 1, priority: 3, specs: ['2× — attitude from starfield'],
         pick: ['StarTracker_0', 'StarTracker_1'],
-        // §13 r4 roll-up: the two tracker mounts.
         pickPrefixes: ['StarTracker_'],
         anchor: [ 0.042 * M, 0.398 * M, 0.90 * M ] },
       { id: 'fore_bulkhead', name: 'FORE BULKHEAD', risk: 'GREEN', tier: 'major', codexId: 'fore_bulkhead',
@@ -395,42 +243,24 @@ const SYSTEMS = [
       { id: 'sensor_deck', name: 'SENSOR DECK', risk: 'GREEN', tier: 'detail', codexId: 'sensor_deck',
         massKg: 2, priority: 2, specs: ['Instrument mounting annulus'],
         mesh: 'SensorDeck',
-        // Mother audit T10: SensorDeck's origin is the bore centre (0, 0, 1.03),
-        // inside the collar bore — point at the deck lip (r 0.34–0.38 after
-        // T4), 1 mm proud of the plate. The static stays the shipped tuple (the
-        // ≥ 4 cm envelope is measured on it).
-        // Mother fixes 4/4 (a): the lip point was az 90 — exactly between the
-        // star trackers (az 82/98 since the 2026-09-25 baffle fix), so from az 60
-        // (and from +Y) the leader landed on StarTracker_0. A headless replica of
-        // the harness camera→anchor
-        // raycast over the 12 audit poses scored every 1° of the lip: az 65–69
-        // is the stable window (SensorDeck/Skirt from both fore-quarters, the
-        // top fore-quarter, the starboard side and hinge-az60; only the far-side
-        // and grazing poses miss, onto the turntable rim). az 65: 5 cm clear of
-        // the EO barrel (az 45, r ≤ 0.36), 31° clear of StarTracker_0's mouth
-        // (measured after the az 82/98 move, tmp/star-tracker-probe.mjs).
+        // SensorDeck's origin is the bore centre, inside the collar bore: point at the deck lip, 1 mm proud of the plate
+        // (the static stays; its ≥ 4 cm envelope is measured). Lip az 65: az 90 sits between the star trackers (az
+        // 82/98) and the leader landed on StarTracker_0; az 65–69 is the stable window over the 12 audit poses.
         meshOffset: [ 0.156 * M, 0.335 * M, 0.001 * M ],
         anchor: [ 0, 0.30 * M, 1.03 * M ] },
       { id: 'sun_sensors', name: 'SUN SENSORS', risk: 'GREEN', tier: 'detail', codexId: 'sun_sensor',
         massKg: 0.5, priority: 2, specs: ['Coarse sun sensing, 4×'],
-        // Mother audit T5/T10: the fore pair moved from the (buried) cap-plane
-        // sites to the turntable top at (0, ±0.24, 1.06); Design 6 (2026-09-08)
-        // moved them again, onto the capture ring's fore face at (0, ±0.180,
-        // 1.3235) — the turntable site was 58 % blind behind the ring
-        // instruments (test-SensorClearance register S7/S8). Bind the +Y puck;
-        // the static is its centre (ring-face site).
+        // Fore pair on the capture ring's fore face at (0, ±0.180, 1.3235): the turntable site was 58 % blind behind the
+        // ring instruments (test-SensorClearance register S7/S8). Bind the +Y puck; the static is its centre.
         mesh: 'SunSensor_0',
         pick: ['SunSensor_0', 'SunSensor_1', 'SunSensor_2', 'SunSensor_3'],
         anchor: [ 0, 0.180 * M, 1.3235 * M ] },
       { id: 'nav_lights', name: 'NAVIGATION LIGHTS', risk: 'GREEN', tier: 'detail', codexId: 'nav_lights',
         massKg: 1, priority: 1, specs: ['Port/starboard running lights'],
-        // Mother audit T6/T10: the lights left the ±X equator (inside the ROSA
-        // drum sweep) for the fore shoulder at z 0.76; Mother fixes 1/4 swung
-        // them from az 345/195 to az 336/204 so the core clears the FURLED coil
-        // (r 0.158) too — (0.376, −0.168). Bind the starboard core (no pick
-        // array — the default pick is the mesh).
+        // Fore shoulder at z 0.76, az 336/204: the core clears the FURLED ROSA coil (r 0.158) — (0.376, −0.168). Bind the
+        // starboard core (no pick array: the default pick is the mesh).
         mesh: 'NavLight_Starboard',
-        // v6-nose-tail: the port light's housing (the starboard one is a child of the bound core).
+        // The port light's housing (the starboard one is a child of the bound core).
         pickPrefixes: ['NavHousing_Port'],
         anchor: [ 0.376 * M, -0.168 * M, 0.76 * M ] },
     ],
@@ -450,128 +280,83 @@ const SYSTEMS = [
       { id: 'mga', name: 'MEDIUM-GAIN ANTENNA', risk: 'GREEN', tier: 'detail', codexId: 'bandwidth_limits',
         massKg: 1, priority: 2, specs: ['Tangent patch, higher rate'],
         pick: ['MGA_Patch'],
-        pickPrefixes: ['MGA_Bezel'],   // v6-nose-tail: the bezel frame round the patch
+        pickPrefixes: ['MGA_Bezel'],
         anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ] },
       { id: 'gps', name: 'GPS ANTENNAS', risk: 'GREEN', tier: 'detail', codexId: 'gps_denied',
         massKg: 0.5, priority: 2, specs: ['GPS patch pair'],
         pick: ['GPS_Patch_0', 'GPS_Patch_1'],
-        pickPrefixes: ['GPS_Bezel_'],   // v6-nose-tail: the bezel frames round the patches
+        pickPrefixes: ['GPS_Bezel_'],
         anchor: [ 0.376 * M, -0.137 * M, 0.87 * M ] },
-      // codexId remap (owner review, 2026-09-03): the aft whip is the second
-      // half of the omni PAIR — one S-band radio system, one briefing
-      // (`frequency_bands`: "a small omnidirectional antenna holds the link"),
-      // like the two flower parts share theirs. `comms_blackout` (ionospheric
-      // scintillation, reentry plasma) stays reachable by its own gameplay
-      // unlock and the frequency_bands related chip.
+      // codexId (owner 2026-09-03): the aft whip is the second half of the omni PAIR — one S-band radio system, one briefing
+      // (`frequency_bands`). `comms_blackout` stays reachable by its own unlock and the frequency_bands related chip.
       { id: 'ttc_aft', name: 'S-BAND OMNI (AFT)', risk: 'GREEN', tier: 'detail', codexId: 'frequency_bands',
         massKg: 1, priority: 1, specs: ['Aft whip of the omni pair'],
         pick: ['TTC_Omni_1'],
-        // §13 r4 roll-up: the aft whip's base.
         pickPrefixes: ['TTC_Omni_1'],
-        anchor: [ 0.40 * Math.cos(degToRad(78)) * M, 0.40 * Math.sin(degToRad(78)) * M, -0.92 * M ] },   // v10-look-r5: aft omni at az 78
+        anchor: [ 0.40 * Math.cos(degToRad(78)) * M, 0.40 * Math.sin(degToRad(78)) * M, -0.92 * M ] },
     ],
   },
   {
     id: 'CAPTURE', label: 'CAPTURE',
-    // Berth groove, centreline — next to the docked daughters, the only
-    // capture hardware the player can actually SEE. The old fore-deck anchor
-    // (z=+0.90, the hinge line) pointed at the opposite end from 3 of the
-    // system's 4 parts and contradicted what it summarized (round 5).
+    // Berth groove, centreline — next to the docked daughters, the only capture hardware the player can SEE.
     anchor: [ 0, 0.35 * M, -0.75 * M ],
     role: '4× daughter craft + berths',
     parts: [
       { id: 'berths', name: 'DAUGHTER BERTHS', risk: 'GREEN', tier: 'major', codexId: 'docking_berthing',
         massKg: 6, priority: 6, specs: ['4× — 2 large, 2 small', 'Spring ejector + hinge strut'],
-        // az 64° pocket's aft-lip CORNER: the pocket's angular edge (az 82.6°,
-        // where the carved groove meets the skin) on the hull radius (r 0.40)
-        // at z=-0.85 — a real hull edge. The old (0.20, 0.346) tuple was the
-        // pocket's az-60 centreline at r 0.40, i.e. mid-air over the carved
-        // floor (Mother audit T10). ~15 cm clear of the docked daughter's own
-        // callout, whose anchor is the craft body mid-pocket (z=-0.70).
+        // az 64° pocket's aft-lip CORNER, on the hull radius (r 0.40) at z=-0.85 — a real hull edge, ~15 cm clear of the
+        // docked daughter's own callout (anchor: craft body mid-pocket, z=-0.70).
         anchor: [ 0.0512 * M, 0.3967 * M, -0.85 * M ] },
       { id: 'tether_reels', name: 'TETHER WINCHES', risk: 'GREEN', tier: 'major', codexId: 'reel_mechanics',
         massKg: 4, priority: 6, specs: ['4× Dyneema fiber reels'],
-        // Reel cartridges ride the struts (stowed z≈−0.46, deployed ≈1.5 m out).
-        // ReelCartridge_0 stays the ANCHOR mesh (reel #0 only); pick the 4 reel
-        // housings so hover covers all four winches. Stand-in at az 64 (r 0.40,
-        // the re-clock trial strut azimuth — was az 60).
+        // Reel cartridges ride the struts (stowed z≈−0.46, deployed ≈1.5 m out). ReelCartridge_0 stays the ANCHOR mesh
+        // (reel #0 only); pick all 4 reel housings. Stand-in at az 64 (r 0.40, the trial strut azimuth).
         mesh: 'ReelCartridge_0', dynamic: true,
         pick: ['ReelHousing_0', 'ReelHousing_1', 'ReelHousing_2', 'ReelHousing_3'],
-        // §13 r4 roll-up: the drums and status LEDs inside the housings.
         pickPrefixes: ['ReelDrum', 'ReelLED'],
         anchor: [ 0.1754 * M, 0.3595 * M, -0.46 * M ] },
-      // codexId remap (owner review, 2026-09-03): the Double-A clevises are
-      // the cradle struts' HINGES — `vacuum_mechanisms` ("Mechanisms in
-      // Vacuum": cold-welding hinges, dry films) is their briefing, beside the
-      // flower hinge family; `robotic_arm` describes the DAUGHTER craft, whose
-      // cards already deep-link weaver_gripper / spinner_pad.
+      // codexId (owner 2026-09-03): the Double-A clevises are the cradle struts' HINGES — `vacuum_mechanisms` is their briefing;
+      // `robotic_arm` describes the DAUGHTER craft.
       { id: 'hinges', name: 'STRUT HINGES', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
         massKg: 2, priority: 2, specs: ['Double-A clevis, 4×'],
         pick: ['AFrame_64_L', 'AFrame_64_R', 'AFrame_116_L', 'AFrame_116_R',
           'AFrame_244_L', 'AFrame_244_R', 'AFrame_296_L', 'AFrame_296_R'],
-        // §13 r4 roll-up: the fore hinge line's pads, pins and LEDs.
-        pickPrefixes: ['HingePad', 'HingePin', 'HingeLED', 'AFrame_'],   // v5-hinges: + encoder, stops, latch, harness (AFrame_<az>_<part>)
-        // DERIVED: first strut azimuth, hinge radius 0.44 m, hinge plane z =
-        // COLLAR_Y (moved onto the front ring 2026-09-23). A literal here would
-        // point 10 cm aft of the real hinge, as 0.22/0.381/0.90 once did.
+        pickPrefixes: ['HingePad', 'HingePin', 'HingeLED', 'AFrame_'],   // AFrame_ also takes encoder, stops, latch, harness (AFrame_<az>_<part>)
+        // DERIVED: first strut azimuth, hinge radius 0.44 m, hinge plane z = COLLAR_Y (the front ring). A literal would
+        // point 10 cm aft of the real hinge.
         anchor: [ 0.44 * Math.cos(degToRad(Constants.ARM_LADDER.Y0_QUAD.azimuths[0])) * M,
                   0.44 * Math.sin(degToRad(Constants.ARM_LADDER.Y0_QUAD.azimuths[0])) * M,
                   Constants.OCTOPUS_V5.COLLAR_Y * M ] },
       { id: 'cradle_spring', name: 'CROSSBOW SPRING', risk: 'YELLOW', tier: 'detail', codexId: 'spring_energy',
         massKg: 1, priority: 2, specs: ['Spring ejector — launches daughters'],
-        // Spring group rides the strut (stowed z≈−0.62, deployed ≈1.7 m out).
-        // CrossbowSpring_0 stays the ANCHOR mesh (reel #0 only); pick the 4 spring
-        // housings so hover covers all four ejectors. Stand-in at az 64 (r 0.40,
-        // the re-clock trial strut azimuth — was az 60).
+        // Spring group rides the strut (stowed z≈−0.62, deployed ≈1.7 m out). CrossbowSpring_0 stays the ANCHOR mesh
+        // (reel #0 only); pick all 4 spring housings. Stand-in at az 64 (r 0.40, the trial strut azimuth).
         mesh: 'CrossbowSpring_0', dynamic: true,
         pick: ['SpringHousing_0', 'SpringHousing_1', 'SpringHousing_2', 'SpringHousing_3'],
-        // §13 r4 roll-up: the guide rails and spring coils.
         pickPrefixes: ['GuideRail', 'SpringCoil'],
         anchor: [ 0.1754 * M, 0.3595 * M, -0.62 * M ] },
-      // §13 r4 (Lane H, 2026-09-25): the four daughter cradle struts — the
-      // booms the daughters ride. No part owned them before: Strut_0..3 and
-      // their collars, clips and drives lit nothing (or a part behind them).
-      // Dimensions are the builder's (PlayerSatellite._buildStruts:
-      // STRUT_LENGTH 1.70 m, STRUT_TUBE_OD 0.050 m, CFRP T800/M21); no
-      // documented set mass exists, so the mass row is a labelled ESTIMATE.
+      // §13 r4: the four daughter cradle struts. Dimensions are the builder's (PlayerSatellite._buildStruts:
+      // STRUT_LENGTH 1.70 m, STRUT_TUBE_OD 0.050 m, CFRP T800/M21); no documented set mass, so a labelled ESTIMATE.
       { id: 'daughter_struts', name: 'DAUGHTER STRUTS', risk: 'GREEN', tier: 'detail', codexId: 'docking_berthing',
         massKg: 7, priority: 2,
         specs: ['4× 1.70 m CFRP tubes, 50 mm OD', 'Sweep drive + brake at each hinge', 'Set mass ≈ 7 kg (estimate)'],
-        // The anchor rides strut 0's mid-point (its mesh origin — the cylinder
-        // is centred) through every sweep pose; the static fallback is the
-        // measured stowed mid-strut (tmp/h-anchor.mjs: (0.548, 1.123, 1.00)).
+        // The anchor rides strut 0's mid-point (its mesh origin; the cylinder is centred) through every sweep pose; the
+        // static fallback is the measured stowed mid-strut (0.548, 1.123, 1.00).
         mesh: 'Strut_0', dynamic: true,
         pickPrefixes: ['Strut_', 'RootCollar', 'TipCollar', 'RibRing', 'PClip', 'StrutMotorBox', 'StrutRest', 'Bushing', 'CClip'],
         anchor: [ 0.548 * M, 1.123 * M, 1.00 * M ] },
-      // NET LAUNCHERS (DAUGHTERS) deleted: that hardware lives on the ArmUnit
-      // (ArmUnit.js:660-667), never on the Mother. The fact moved into the
-      // daughter cards' specs (T3).
+      // No net-launcher part for the daughters: that hardware lives on the ArmUnit, never on the Mother.
     ],
   },
   {
-    // P2 thermal arc — the AFT FLOWER family (charter
-    // .kilo/plans/1787839542000-phase2-flower-hardware-charter.md TASK F; hue
-    // row lives in Constants.CALLOUTS.SYSTEM_HUES.THERMAL — BOTH places, or
-    // the family renders fallback-hued). Purchase-gated hardware: every rec
-    // carries `flowerGated` and hides until a pair is bought (the daughter
-    // `_armGone` idiom), so no callout ever points at empty rim. Every rec keeps
-    // a STATIC station tuple as the pre-purchase stand-in; since Mother audit T10
-    // the two pose-following rows (RADIATOR PLATES, TIP HARDPOINTS) also carry a
-    // `mesh` + `dynamic: true` binding that _resolveAnchor arms on the
-    // gone→present edge (the flowerGated one-shot, dc0025e), so the leader rides
-    // the plate / tip boss through the bloom instead of pointing at the STOW bud.
-    // The ship already carries the diegetic thermal
-    // sensor — the HEAT (INFRARED) CAM callout under SENSORS.
-    // Design 7b / radiator launch fold (2026-09-08): the stations clocked to
-    // the ROSA plane and the clevis pin rose to r 0.475. The ROSA coil-physics
-    // fix then freed one more degree, so the stations are az 40/140/220/320 and
-    // the family anchor and the two static rows (STRUTS az 40, HINGE BRACKETS
-    // az 320) sit on the hinge: (0.475 cos 40°, 0.475 sin 40°) = (0.3639,
-    // 0.3053). The
-    // plates / tips rows keep their mesh bindings (FlowerStrutPlate_0 /
-    // FlowerStrutTipPad_0) and their pre-bind stand-ins. HINGE BRACKETS
-    // massKg 1 → 2.6 (the wing piano hinges + latches: +0.4 kg/strut) so the
-    // family total follows the 51.6 kg budget pin (37 + 10 + 2 + 2.6).
+    // The AFT FLOWER family; hue row in Constants.CALLOUTS.SYSTEM_HUES.THERMAL — BOTH places, or the family renders
+    // fallback-hued. Purchase-gated: every rec carries `flowerGated` and hides until a pair is bought (the daughter
+    // `_armGone` idiom). Every rec keeps a STATIC station tuple as the pre-purchase stand-in; the two pose-following
+    // rows (RADIATOR PLATES, TIP HARDPOINTS) also carry `mesh` + `dynamic: true`, armed by _resolveAnchor on the
+    // gone→present edge, so the leader rides the plate / tip boss through the bloom.
+    // Stations are az 40/140/220/320, clocked to the ROSA plane, clevis pin at r 0.475: the family anchor and the two
+    // static rows (STRUTS az 40, HINGE BRACKETS az 320) sit on the hinge (0.3639, 0.3053). HINGE BRACKETS massKg 2.6
+    // so the family total follows the 51.6 kg budget pin (37 + 10 + 2 + 2.6).
     id: 'THERMAL', label: 'THERMAL',
     anchor: [ 0.3639 * M, 0.3053 * M, -1.02 * M ],
     role: 'aft flower — struts open LIKE A FLOWER',
@@ -580,51 +365,38 @@ const SYSTEMS = [
       { id: 'flower_plates', name: 'RADIATOR PLATES', risk: 'GREEN', tier: 'major', codexId: 'space_radiator',
         massKg: 37, priority: 6, flowerGated: true,
         specs: ['4× 1.50×0.60 m tri-panel radiators, fold flat for launch', 'Reject heat as infrared — numbers come with the loop refit'],
-        // Mother audit T10: the leader follows plate 0 (pair A — az 40 since
-        // Design 7b, was 45) through the pose — the static tuple only ever
-        // matched the STOW bud. The flowerGated one-shot binds the frame after
-        // purchase (_resolveAnchor); the static stands in until then, parked
-        // on pair A's OTHER station side (tuple az 225, 5° off the 220
-        // station — a pre-purchase stand-in, not a hardware pin) so it never
-        // coincides with the AFT FLOWER STRUTS card at az 40.
+        // Leader follows plate 0 (pair A, az 40); the flowerGated one-shot binds the frame after purchase. The static
+        // stand-in sits on pair A's other station side (az 225, not a hardware pin), clear of the STRUTS card at az 40.
         mesh: 'FlowerStrutPlate_0', dynamic: true,
-        // §13 r4 roll-up: ALL twelve radiator panels — the 4 plates, the 8
-        // wings, their seams and knuckles — answer as the plates (measured,
-        // tmp/h-mapping.mjs: 44 meshes).
+        // §13 r4 roll-up: ALL twelve radiator panels (4 plates, 8 wings, seams, knuckles) answer as the plates (44 meshes).
         pickPrefixes: ['FlowerStrutPlate_', 'FlowerStrutWing_', 'FlowerStrutWingSeam', 'FlowerStrutWingKnuckle'],
         anchor: [ -0.30 * M, -0.30 * M, -1.15 * M ] },
       { id: 'flower_struts', name: 'AFT FLOWER STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
         massKg: 10, priority: 6, flowerGated: true,
         specs: ['4× aft-pivot booms, 2.30 m — fold fore along the bus for launch', FLOWER_ROW],
-        // §13 r4 roll-up: the 4 booms and their seams (the wing hinge lugs
-        // stay with the hinge brackets below).
+        // §13 r4 roll-up: the 4 booms and their seams (the wing hinge lugs stay with the hinge brackets).
         pickPrefixes: ['FlowerStrut_', 'FlowerStrutSeam'],
         anchor: [ 0.3639 * M, 0.3053 * M, -1.10 * M ] },
       { id: 'flower_tips', name: 'TIP HARDPOINTS', risk: 'GREEN', tier: 'detail', codexId: 'tip_hardpoints',
         massKg: 2, priority: 2, flowerGated: true,
         specs: ['Inert cargo bosses at the strut tips', 'Cold-cell refit will bolt on here'],
-        // Mother audit T10: the leader rides tip boss 0 (az 40) through the pose
-        // (static stands in pre-purchase, then the gated one-shot binds).
+        // Leader rides tip boss 0 (az 40) through the pose (static stands in pre-purchase, then the gated one-shot binds).
         mesh: 'FlowerStrutTipPad_0', dynamic: true,
-        // §13 r4 roll-up: all four tip pads (pad 0 already answered via the
-        // mesh default; 1–3 join it).
-        pickPrefixes: ['FlowerStrutTipPad', 'FlowerStrutTipStalk', 'FlowerStrutTipCone'],   // l6-look: + the leash stalk tubes and cone (the tip hardware rolls up with its pad)
+        // §13 r4 roll-up: all four tip pads (pad 0 already answers via the mesh default).
+        pickPrefixes: ['FlowerStrutTipPad', 'FlowerStrutTipStalk', 'FlowerStrutTipCone'],   // stalk tubes and cone roll up with their pad
         anchor: [ -0.283 * M, -0.283 * M, -1.12 * M ] },
       { id: 'flower_hinges', name: 'FLOWER HINGE BRACKETS', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
         massKg: 2.6, priority: 2, flowerGated: true,
         specs: ['Rim-band clevises r 0.475, molybdenum-disulfide-filmed pins; wing piano hinges + one-shot latches', 'Hinges are the honest jam risk'],
-        // §13 r4 roll-up: the brackets, pins, rim mount bolts — and the wing
-        // piano-hinge LUGS (FlowerStrutHingeLug_* — the hinge leaves between
-        // boom and panel, hinge hardware by name and job) — and v10-look-r5 D4's
-        // launch hold-down: the hull cradles (+ pin) and the boom's latch lugs.
+        // §13 r4 roll-up: brackets, pins, rim mount bolts, the wing piano-hinge LUGS (hinge leaves between boom and
+        // panel), and the launch hold-down (hull cradles + pin, boom latch lugs).
         pickPrefixes: ['FlowerStrutBracket', 'FlowerStrutPin', 'MountBolt_Flower', 'FlowerStrutHingeLug', 'FlowerStrutCradle', 'FlowerStrutLatch'],
         anchor: [ 0.3639 * M, -0.3053 * M, -0.94 * M ] },
     ],
   },
   {
-    // Docked daughters — dynamic recs that follow each docked ArmUnit (T3).
-    // Titles are static (berth i%2 alternates Large/Small, ArmManager.js:113),
-    // so cards are built once; visibility is gated per frame on the arm's state.
+    // Docked daughters — dynamic recs that follow each docked ArmUnit. Titles are static (berth i%2 alternates
+    // Large/Small in ArmManager), so cards are built once; visibility is gated per frame on the arm's state.
     id: 'DAUGHTERS', label: 'DAUGHTERS',
     anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ],
     daughters: true,
@@ -649,101 +421,79 @@ const SYSTEMS = [
   },
 ];
 
-// ----------------------------------------------------------------------------
-// PORTRAIT POSE TABLE (Session T — the SPECS pane's one-shot PART PORTRAIT;
-// plan tmp/plans/1788863200000-specs-pane-part-imagery.md §2.2, owner Q3 "small
-// parts framed loose")
-// ----------------------------------------------------------------------------
-// Per-card overrides for getPartFrame(), keyed by the part `id` and kept in a
-// SEPARATE table from the card rows on purpose (orchestrator rule, 2026-09-08:
-// a parallel lane is rewriting the DOCKING COLLAR / PAYLOAD / SUN SENSORS rows
-// and the BerthCollarRing geometry — the berth_collar / sun_sensors / gimbal /
-// sensor_deck directions are re-checked at integration, so they must stay one
-// line each). Every card WITHOUT a row here is photographed from the player's
-// current side (portraitFraming.portraitDirFor: the part was just seen /
-// clicked from there, so it is un-occluded); a row here says that side is
-// known-bad from the ANCHORS truth table (tmp/mother-audit/after-modeB) or the
-// geometry, and gives the side that works. Ship frame: +X stbd / +Y up / +Z
-// fore. Distance is NEVER authored — T0 solves it from the pick-mesh box.
+// PORTRAIT POSE TABLE — per-card overrides for the SPECS pane's one-shot PART PORTRAIT (getPartFrame), keyed by part
+// `id`. A card WITHOUT a row is photographed from the player's current side (it was just seen from there, so it is
+// un-occluded); a row says that side is known-bad (occluded) and gives the side that works. Ship frame: +X stbd / +Y
+// up / +Z fore. Distance is NEVER authored: it is solved from the pick-mesh box.
 //   dir      [x, y, z] part → camera direction (normalised downstream).
-//   stowDir  the flower family's alternative while the aft flower is STOWED
-//            (the plates trail aft: an aft-on look hits AftThrusterDeck) —
-//            picked by getFlowerStatus() in getPartFrame.
-//   fill     the fraction of the frame's limiting axis the part's LARGEST
-//            projected extent spans (portraitCameraFit, default 0.8; the sphere
-//            fallback reads it as its diameter fill). Q3: the puck-class parts
-//            (sun sensors, nav lights, the patch antennas) frame LOOSE at 0.35
-//            so the hull context stays; the MLI skin IS the hull, 0.5.
-//   single   (amendment (d), 2026-09-08) a SPREAD multi-instance part — pods /
-//            pucks / reels / A-frames around the barrel — frames ONE instance:
-//            the pick target nearest the player's camera (ties → the lowest
-//            index; no camera → the first). The union of the whole ring framed
-//            the whole ship in the first witness (rcs 1/1, sun_sensors 1/1).
-//   frame    (T3) portrait-ONLY geometry for a card-only row: mesh names under
-//            `player` (a nested list = one instance made of several meshes —
-//            a hinge's bracket + pin; `{ arm: i }` = berth i's DOCKED daughter
-//            group). Replaces the hover picks as the frame
-//            source, so the owner's card-only decision (no hull hover / outline
-//            for mli, berths, the flower struts and hinges) stays untouched.
-//   tangent  (T7) with `radial`: a component along the azimuthal tangent at the
-//            instance (+ = counter-clockwise from fore) — the side view for a
-//            part that a radially-outboard neighbour covers.
-//   radial   `dir` = the framed box centre's own outward radial in the ship's
-//            XY plane + this [x, y, z] bias — the camera sits outside the hull
-//            looking AT that instance (with `single`: at the chosen one); an
-//            on-axis centre keeps the row's `dir`. The docked DAUGHTERS use it
-//            on the docked arm.group (read at frame time — never a copied
-//            azimuth table): looking onto the body from a fore-biased radial.
+//   stowDir  the flower family's alternative while the aft flower is CLOSED, STOWED or on a SLEW under half open
+//            (getFlowerStatus: CLOSED, STOW, or SLEW with openFrac < 0.5; an aft-on look hits AftThrusterDeck). The family
+//            frames only while a flower pair exists.
+//   fill     the fraction of the frame's limiting axis the part's LARGEST projected extent spans (portraitCameraFit,
+//            default 0.8; the sphere fallback reads it as its diameter fill). The puck-class parts (sun sensors, nav
+//            lights, the patch antennas) frame LOOSE at 0.35 so the hull context stays (owner 2026-09-08 (Q3): small
+//            parts framed loose); the MLI skin IS the hull, 0.5.
+//   single   a SPREAD multi-instance part (pods / pucks / reels / A-frames) frames ONE instance: the pick target
+//            nearest the player's camera (ties → the lowest index; no camera → the first). The union of the whole ring
+//            framed the whole ship.
+//   frame    portrait-ONLY geometry for a card-only row: mesh names under `player` (a nested list = one instance made
+//            of several meshes; `{ arm: i }` = berth i's DOCKED daughter group). Replaces the hover picks as the frame
+//            source, so card-only parts (mli, berths, flower struts, hinges) get no hover. owner 2026-09-03 (hull hover):
+//            card-only, so no hull hover or outline for mli, berths, flower struts and hinges
+//            (`test-MotherCallouts` `CARD_ONLY_IDS` pins it).
+//   tangent  with `radial`: a component along the azimuthal tangent at the instance (+ = counter-clockwise from fore),
+//            the side view for a part that a radially-outboard neighbour covers.
+//   radial   `dir` = the framed box centre's own outward radial in the ship's XY plane + this [x, y, z] bias — the
+//            camera sits outside the hull looking AT that instance (with `single`: the chosen one); an on-axis centre
+//            keeps the row's `dir`. The docked DAUGHTERS use it on the docked arm.group (resolved live, DOCKED only).
 const PORTRAIT_OVERRIDES = {
   // POWER — the blanket's FRONT face (+Y) is clear from top / hinge / aft-q; fore-on / aft-on hit the boom
-  // §13 r4 roll-up pins (Lane H): the `frame` rows freeze each portrait to
-  // the pre-roll-up pick list — the picks grew small pieces (booms, boots,
-  // drums…), and a `single` portrait must keep framing the INSTANCE the
-  // owner approved, not the nearest bolt.
-  rosa_wings:    { dir: [0.15, 1.0, 0.1], single: true, radial: [0, 1.2, 0.1], frame: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'] },   // T7: ONE blanket face-on from above its own radial (the pair + barrel read as a whole-ship shot)
-  body_cells:    { dir: [0.6, -0.8, 0.4] },             // T7: from below-stbd — the cell wrap with both wings edge-on and far
-  array_roll:    { dir: [1.0, 0.35, 0.2], single: true, radial: [0, 0.6, 0.8], frame: ['ROSA_Spool_0deg', 'ROSA_Spool_180deg'] },   // T7: ONE spool from its fore-up radial (the blanket hides it from abeam)
+  // §13 r4 roll-up pins: the `frame` rows freeze each portrait to the pre-roll-up pick list; a `single` portrait must
+  // keep framing the INSTANCE, not the nearest bolt.
+  rosa_wings:    { dir: [0.15, 1.0, 0.1], single: true, radial: [0, 1.2, 0.1], frame: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'] },   // ONE blanket face-on from above its own radial (the pair + barrel read as a whole-ship shot)
+  body_cells:    { dir: [0.6, -0.8, 0.4] },             // from below-stbd — the cell wrap with both wings edge-on and far
+  array_roll:    { dir: [1.0, 0.35, 0.2], single: true, radial: [0, 0.6, 0.8], frame: ['ROSA_Spool_0deg', 'ROSA_Spool_180deg'] },   // ONE spool from its fore-up radial (the blanket hides it from abeam)
   // PROPULSION — aft-end hardware; the aft-q-d3.2 pose is clear
   feep:          { dir: [0.6, 0.4, -1.0] },
-  rcs:           { dir: [0.6, 0.4, -1.0], fill: 0.7, single: true, radial: [0, 0, 0.15], frame: ['RCSPod_0', 'RCSPod_1', 'RCSPod_2', 'RCSPod_3'] },   // ONE pod, bells face-on; T7 fill 0.7 so the doghouse reads as a unit
+  rcs:           { dir: [0.6, 0.4, -1.0], fill: 0.7, single: true, radial: [0, 0, 0.15], frame: ['RCSPod_0', 'RCSPod_1', 'RCSPod_2', 'RCSPod_3'] },   // ONE pod, bells face-on; fill 0.7 so the doghouse reads as a unit
   aft_deck:      { dir: [0.6, 0.4, -1.0] },
   mli:           { dir: [1.0, 0.35, 0.2], fill: 0.85, frame: ['Barrel_ConfigG'] },   // the skin IS the hull: the barrel fills the frame (portrait-only; hover stays card-only)
   // PAYLOAD — own mesh from fore-q-stbd / side / hinge; BerthFace gap 0.009 from the fore quarters
-  despin:        { dir: [-0.9, 0.3, 0.8], fill: 0.7 },  // Design 6 re-check: port-fore, tighter — the telescope tube through the open ring
-  net_launcher:  { dir: [0.3, 0.3, 1.0] },              // ONE centred housing inside the collar (2026-10-13; re-checked by picture, see the w7 plan Log)
-  berth_collar:  { dir: [0.4, 0.25, 1.0] },             // Design 6 re-check: kept — dead-ahead ([0.15, 0.15, 1]) let the whole sensor farm steal the frame (4/2 vs 4/3)
+  despin:        { dir: [-0.9, 0.3, 0.8], fill: 0.7 },  // port-fore, tighter — the telescope tube through the open ring
+  net_launcher:  { dir: [0.3, 0.3, 1.0] },              // ONE centred housing inside the collar
+  berth_collar:  { dir: [0.4, 0.25, 1.0] },             // dead-ahead ([0.15, 0.15, 1]) let the whole sensor farm steal the frame
   // SENSORS — the turret cluster; instrument sides (+X EO / −X IR / −Y LIDAR dome / +Y canted trackers / the FrontCap)
-  gimbal:        { dir: [0.5, 0.9, 0.5] },              // Design 6 re-check: kept the above-fore view — through the ring from dead-ahead the turret hid behind the ring (3/2 vs 4/3)
-  eo_cam:        { dir: [0.8, 0.4, 1.0], fill: 0.85 },  // T7: stbd-fore-up — the aperture faces fore (re-checked at integration)
-  ir_cam:        { dir: [-0.8, 0.4, 1.0], fill: 0.85 }, // Design 6 re-check: port-fore-up — the aperture side (the mirror of eo_cam, which reads 5/4)
-  lidar:         { dir: [0.2, -1.0, 0.3] },             // T7: from below — the dome without the collar in front
-  star_trackers: { dir: [0.3, 1.0, 1.0], fill: 0.7 },   // T7: fore-up 45° — the two canted tubes read as tubes with openings
-  fore_bulkhead: { dir: [1.0, 0.7, 0.3] },              // T7: abeam-up — the plate's rim (the collar sits in front of its face; re-checked at integration)
-  sensor_deck:   { dir: [0.6, 1.0, 0.4] },              // T7: from above-fore (re-checked at integration)
-  sun_sensors:   { dir: [0.3, 0.8, 1.0], fill: 0.35, single: true, radial: [0, 0, 0.3] },   // ONE 5 cm puck, loose (Q3). Design 6 moved the two onto the ring FACE at (0, ±0.18, 1.32); the side radial still reads the puck ON the rim (3/2) where a fore-heavy radial read the hub (1/1) — kept
-  nav_lights:    { dir: [0.8, -0.4, 0.6], fill: 0.5, radial: [0, 0, 0.3] },   // 3 cm core — loose (Q3; T7 0.35 → 0.5: 0.7 blew the core out), from its own radial
-  // COMMS — the HGA faces nadir-ish; the patches face-on from the stbd grazes (the plan's aft row for
-  // mga is corrected here: MGA_Patch sits on the FORE shoulder at z 0.87, az 25 — the stbd-graze-mga pose)
-  ttc:           { dir: [0.4, -0.9, 0.7], fill: 0.6, radial: [0, 0, 0.5] },   // T7: the omni from its own radial, fore-biased, with hull context
-  mga:           { dir: [1.0, 0.4, 0.3], fill: 0.6 },   // T7: a 20 cm patch, not a puck — 0.35 showed the whole forebody
-  gps:           { dir: [0.9, 0.35, 0.2], fill: 0.5, single: true, radial: [0, 0, 0.2] },   // T7 0.35 → 0.5
-  ttc_aft:       { dir: [0.6, 0.4, -1.0], fill: 0.6, radial: [0, 0, -0.5] },   // T7: the aft omni from its own radial, aft-biased, with hull context
+  gimbal:        { dir: [0.5, 0.9, 0.5] },              // above-fore: from dead-ahead the turret hid behind the ring
+  eo_cam:        { dir: [0.8, 0.4, 1.0], fill: 0.85 },  // stbd-fore-up — the aperture faces fore
+  ir_cam:        { dir: [-0.8, 0.4, 1.0], fill: 0.85 }, // port-fore-up — the aperture side (mirror of eo_cam)
+  lidar:         { dir: [0.2, -1.0, 0.3] },             // from below — the dome without the collar in front
+  star_trackers: { dir: [0.3, 1.0, 1.0], fill: 0.7 },   // fore-up 45° — the two canted tubes read as tubes with openings
+  fore_bulkhead: { dir: [1.0, 0.7, 0.3] },              // abeam-up — the plate's rim (the collar sits in front of its face)
+  sensor_deck:   { dir: [0.6, 1.0, 0.4] },              // from above-fore
+  sun_sensors:   { dir: [0.3, 0.8, 1.0], fill: 0.35, single: true, radial: [0, 0, 0.3] },   // ONE 5 cm puck, loose; the side radial reads the puck ON the ring-face rim where a fore-heavy radial read the hub
+  nav_lights:    { dir: [0.8, -0.4, 0.6], fill: 0.5, radial: [0, 0, 0.3] },   // 3 cm core — loose (0.7 blew the core out), from its own radial
+  // COMMS — the HGA faces nadir-ish; the patches face-on from the stbd grazes. MGA_Patch sits on the FORE shoulder at
+  // z 0.87, az 25 (the stbd-graze-mga pose).
+  ttc:           { dir: [0.4, -0.9, 0.7], fill: 0.6, radial: [0, 0, 0.5] },   // the omni from its own radial, fore-biased, with hull context
+  mga:           { dir: [1.0, 0.4, 0.3], fill: 0.6 },   // a 20 cm patch, not a puck — 0.35 showed the whole forebody
+  gps:           { dir: [0.9, 0.35, 0.2], fill: 0.5, single: true, radial: [0, 0, 0.2] },
+  ttc_aft:       { dir: [0.6, 0.4, -1.0], fill: 0.6, radial: [0, 0, -0.5] },   // the aft omni from its own radial, aft-biased, with hull context
   // CAPTURE — the reel-close pose (upper reel cans from +Y); berths from the az-64 tunnel side
-  // T3: one berth = the az-64 daughter seated in its pocket ({ arm: 0 } — the docked arm.group, away → omitted) plus the
-  // strut-root hardware on the fore hinge line (hinge pad, A-frame clevises, spring ejector, reel); the pocket itself is
-  // carved into the barrel (no mesh). Hover stays card-only (owner decision); the frame is portrait-only.
-  berths:        { dir: [0.5, 0.87, 0.35], frame: [{ arm: 0 }, 'SpringHousing_0', 'ReelHousing_0'] },   // T7: the seated daughter + its ejector / reel (the fore hinge line made it a whole-ship shot)
+  // One berth = the az-64 daughter seated in its pocket ({ arm: 0 } — the docked arm.group, away → omitted) plus the
+  // strut-root hardware on the fore hinge line (hinge pad, A-frame clevises, spring ejector, reel); the pocket itself
+  // is carved into the barrel (no mesh). Hover stays card-only; the frame is portrait-only.
+  berths:        { dir: [0.5, 0.87, 0.35], frame: [{ arm: 0 }, 'SpringHousing_0', 'ReelHousing_0'] },   // the seated daughter + its ejector / reel (the fore hinge line made it a whole-ship shot)
   tether_reels:  { dir: [0.2, 1.0, -0.3], single: true, radial: [0, 0, 0.2], frame: ['ReelHousing_0', 'ReelHousing_1', 'ReelHousing_2', 'ReelHousing_3'] },   // ONE reel can
   hinges:        { dir: [0.2, 1.0, -0.3], single: true, radial: [0, 0, 0.4], frame: ['AFrame_64_L', 'AFrame_64_R', 'AFrame_116_L', 'AFrame_116_R', 'AFrame_244_L', 'AFrame_244_R', 'AFrame_296_L', 'AFrame_296_R'] },   // ONE A-frame clevis
-  cradle_spring: { dir: [0.2, 1.0, -0.3], fill: 0.5, single: true, radial: [0, 0, 0.3], tangent: 0.9, frame: ['SpringHousing_0', 'SpringHousing_1', 'SpringHousing_2', 'SpringHousing_3'] },   // T7: ONE housing from the SIDE (tangent) — radially outboard sits its docked daughter
-  // §13 r4 (Lane H): the new struts card frames ONE boom from its own radial.
+  cradle_spring: { dir: [0.2, 1.0, -0.3], fill: 0.5, single: true, radial: [0, 0, 0.3], tangent: 0.9, frame: ['SpringHousing_0', 'SpringHousing_1', 'SpringHousing_2', 'SpringHousing_3'] },   // ONE housing from the SIDE (tangent) — radially outboard sits its docked daughter
+  // §13 r4: the new struts card frames ONE boom from its own radial.
   daughter_struts: { dir: [0.5, 0.5, 0.4], single: true, radial: [0, 0, 0.2], frame: ['Strut_0', 'Strut_1', 'Strut_2', 'Strut_3'] },
   // THERMAL — CARGO / PARK plates face-on from aft; STOW from aft-on hits AftThrusterDeck
-  flower_plates: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], frame: ['FlowerStrutPlate_0'] },   // T7 stowDir: abeam-aft-up — the folded plates in profile along the barrel (aft-on read as a whole-ship 3/4); §13 r4 pin: the pick grew 12 panels + wings, the portrait keeps the one plate
-  flower_struts: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], single: true, radial: [0, 0, -0.8], frame: ['FlowerStrut_0', 'FlowerStrut_1', 'FlowerStrut_2', 'FlowerStrut_3'] },   // T3: the booms (portrait-only); T7: ONE boom from its radial-aft
-  flower_tips:   { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], frame: ['FlowerStrutTipPad_0'] },   // T7 stowDir abeam (the aft hub hid the stowed pad); §13 r4 pin: the pick grew 4 pads, the portrait keeps pad 0
-  // T3: one hinge = its clevis bracket + pin (one group = one instance); `single` frames the one nearest the camera.
-  flower_hinges: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], single: true, radial: [0, 0, -0.4], tangent: 0.8,   // T7: from the side — the swung-out boom covered the clevis from its radial
+  flower_plates: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], frame: ['FlowerStrutPlate_0'] },   // stowDir abeam-aft-up: folded plates in profile along the barrel (aft-on read as a whole-ship 3/4); §13 r4 pin: the pick grew 12 panels + wings, the portrait keeps the one plate
+  flower_struts: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], single: true, radial: [0, 0, -0.8], frame: ['FlowerStrut_0', 'FlowerStrut_1', 'FlowerStrut_2', 'FlowerStrut_3'] },   // the booms (portrait-only); ONE boom from its radial-aft
+  flower_tips:   { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], frame: ['FlowerStrutTipPad_0'] },   // stowDir abeam (the aft hub hid the stowed pad); §13 r4 pin: the pick grew 4 pads, the portrait keeps pad 0
+  // One hinge = its clevis bracket + pin (one group = one instance); `single` frames the one nearest the camera.
+  flower_hinges: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], single: true, radial: [0, 0, -0.4], tangent: 0.8,   // from the side — the swung-out boom covered the clevis from its radial
                    frame: [['FlowerStrutBracket_0', 'FlowerStrutPin_0'], ['FlowerStrutBracket_1', 'FlowerStrutPin_1'], ['FlowerStrutBracket_2', 'FlowerStrutPin_2'], ['FlowerStrutBracket_3', 'FlowerStrutPin_3']] },
   // DAUGHTERS — the docked body from its own radial, fore-biased (frame = the docked arm.group)
   daughter_0:    { radial: [0, 0, 0.3] },
@@ -752,100 +502,65 @@ const PORTRAIT_OVERRIDES = {
   daughter_3:    { radial: [0, 0, 0.3] },
 };
 
-// LOD band edges, in METRES of camera-to-ship distance. Hysteresis: descend
-// (zoom in) on the lower number, ascend (zoom out) on the higher.
-// §13 r3 (2026-09-24): compIn/compOut moved 5.5/6.5 → 4.0/4.5 — the spec's
-// 4 m lens split (00-spec "Lens split at 4 m"; FloorContract lens-split-4m).
-// F1's camera is 2–6 m, so the old edges left the PART band 0.5 m of the
-// floor. partIn/partOut (8/9 m) are unchanged — the ?ladder=0 inspect path
-// still uses them.
+// LOD band edges, in METRES of camera-to-ship distance. Hysteresis: descend (zoom in) on the lower number, ascend
+// (zoom out) on the higher. compIn/compOut are the 4 m lens split (§13 r3; 00-spec "Lens split at 4 m"; FloorContract
+// lens-split-4m): F1's camera is 2–6 m. partIn/partOut (8/9 m) still serve the ?ladder=0 inspect path.
 const BAND = {
   partIn:  8.0,  partOut:  9.0,
   compIn:  4.0,  compOut:  4.5,
 };
 
-const GUIDE_STEP_S = 1.1;   // seconds each system stays highlighted in the tour
-const GUIDE_HOLD_S = 0.6;   // initial hold before the tour starts
+const GUIDE_STEP_S = 1.1;
+const GUIDE_HOLD_S = 0.6;
 
-// §13 r3 (L6): the one-line hint's copy, VERBATIM from the ruling (owner,
-// 2026-09-24). Owned by MotherCallouts — not FloorMask, not the toast queue.
-// Shown while active and not yet dismissed (once per page load), centred in
-// the pane-free strip inside the transient band; see _buildHint/_updateHint.
+// §13 r3: the one-line hint's copy, VERBATIM from the ruling (owner 2026-09-24). Shown while active and not yet
+// dismissed (once per page load), centred in the pane-free strip inside the transient band (_buildHint/_updateHint).
 const HINT_TEXT = 'Point at a part to see what it does. Click to upgrade it.';
-// u15b B-T7: the glass wording. A tap on a part opens the SPECS drawer with the REFIT card (WorkbenchPane.showPart), which is
-// where the upgrade is bought, so the line says that. Read when the hint is DRAWN (D7): the hub flips glass after this is built.
+// Glass wording: a tap opens the SPECS drawer with the REFIT card (WorkbenchPane.showPart), where the upgrade is bought.
+// Read when the hint is DRAWN: the hub flips glass after this is built.
 const HINT_TEXT_GLASS = 'Tap a part to see what it does and upgrade it.';
 const hintText = () => (GestureHints.isGlass() ? HINT_TEXT_GLASS : HINT_TEXT);
 
 const FADE_RATE = 6.0;      // opacity ease rate for band crossfades
 
-// Session R (plan §14.2): the typeface epoch's redraw budget per frame — the
-// compact cards a cold boot rasterised before the B612 faces settled are
-// re-rasterised at most this many per frame (≈ 37 cards → 7 frames), never all
-// at once. Each card is redrawn ONCE per epoch; this only spreads the once.
+// Typeface-epoch redraw budget per frame: compact cards rasterised before the B612 faces settled are re-rasterised at
+// most this many per frame (≈ 37 cards → 7 frames). Each card is redrawn ONCE per epoch; this only spreads it.
 export const CARD_EPOCH_REDRAWS_PER_FRAME = 6;
 
-// Scratch for _recBounds (a per-click edge, never per frame — module-level so
-// the record builder allocates only the record it returns).
+// Scratch for _recBounds (a per-click edge, never per frame).
 const _recBoundsScratch = new THREE.Vector3();
-// Session T — getPartFrame's scratch: the ship's world → local inverse (a
-// portrait frame is a SHIP-LOCAL box) and a centre / instance-distance vector.
-// Per click, never per frame.
+// getPartFrame scratch (per click): the ship's world → local inverse and a centre / instance-distance vector.
 const _frameInv = new THREE.Matrix4();
 const _frameV = new THREE.Vector3();
-const LINE_OP_SCALE = 0.8;  // line opacity = labelOp × this (round 4: hairline)
-const LINE_HALF_WIDTH_FRAC = 0.0012; // leader ribbon half-width / camera-ship dist (round 4: hairline)
+const LINE_OP_SCALE = 0.8;  // line opacity = labelOp × this
+const LINE_HALF_WIDTH_FRAC = 0.0012; // leader ribbon half-width / camera-ship dist
 
-// Hover stickiness (playtest 2026-09-03 "parts flicker"): the stationary 10 Hz
-// re-pick (_refreshHover) keeps a held hover through this many consecutive
-// misses minus one and clears it on the Nth (3 ticks ≈ 300 ms at 10 Hz). Only
-// the stationary re-pick is sticky — see _refreshHover.
+// Hover stickiness: the stationary 10 Hz re-pick (_refreshHover) keeps a held hover through this many consecutive
+// misses minus one and clears it on the Nth (3 ticks ≈ 300 ms at 10 Hz). Only the stationary re-pick is sticky.
 const HOVER_MISS_TICKS = 3;
-/** Session L review: the render canvas width behind the pane/rail NDC law is a
- *  LAYOUT-affected read (clientWidth forces a synchronous layout when the DOM
- *  is dirty). It is re-read at most this often on the per-frame path — the
- *  rails' own 1 Hz cadence — and a resize is picked up within one tick. */
+/** Canvas width behind the pane/rail NDC law: clientWidth forces a synchronous layout when the DOM is dirty, so it is
+ *  re-read at most this often on the per-frame path (the rails' own 1 Hz cadence); a resize is picked up in one tick. */
 const VW_READ_MS = 1000;
 
-// Hover-outline depth stagger (owner, 2026-09-03: "parts on the far side show
-// through the mother — confusing"): the outline layers keep the depth test
-// (so the hull occludes far-side layers and anything crossing in front of the
-// part) and are pulled this far toward the camera each frame so they win the
-// test against their OWN surface. 1.5 mm is ~150× the log-depth resolution at
-// F3 (~10 µm at 7.7 m), under the ROSA blanket's 4 mm front/back gap (the
-// hidden face's layer stays hidden), and ~0.15 px on screen at F3.
+// Hover-outline depth stagger (metres toward the camera per frame; see the DEPTH note on _ensureOutline): ~150× the
+// log-depth resolution at F3 (~10 µm at 7.7 m), under the ROSA blanket's 4 mm front/back gap, ~0.15 px on screen.
 const HOVER_OUTLINE_STAGGER_M = 0.0015;
 
-// REFIT ghost pulse (Wave 5 (2), 08-workbench §2: hovering an alternative
-// "pulses the part's ghost outline on the hull"). Ghost recs' OWN outline
-// materials oscillate between GHOST_PULSE_MIN× and 1× of their base opacity
-// (lines 0.85, shell 0.3 — captured at _ensureOutline build) at
-// GHOST_PULSE_HZ; bases are restored on clear. The hover rec never pulses
-// (hover wins on overlap) and hull materials are never touched.
+// REFIT ghost pulse (docs/ladder/08-workbench.md §2): GHOST_PULSE_MIN×–1× of the base opacity (lines 0.85, shell 0.3).
 const GHOST_PULSE_HZ = 1.2;
 const GHOST_PULSE_MIN = 0.35;
 
-// HOVER DOSSIER (B2, 08-workbench §2 Motion): dwelling this long on ONE rec
-// (hover held, same rec) shows the full-content dossier card beside the
-// pointer. The dwell restarts on every hover CHANGE; the existing
-// HOVER_MISS_TICKS stickiness already damps hover flicker, so there is no
-// second timer — the check is a per-frame timestamp compare (and the module
+// HOVER DOSSIER dwell: restarts on every hover CHANGE; no second timer — a per-frame timestamp compare (the module
 // carries no timer anywhere, pinned by the suite).
 const HOVER_DOSSIER_DELAY_MS = 400;
-// Gap between the pointer and the dossier card's near edge (NDC). The card
-// sits beside the pointer, never under it, and flips toward screen centre
-// when it would cross a pane-aware edge.
+// Gap between the pointer and the dossier card's near edge (NDC); flips toward screen centre at a pane-aware edge.
 const HOVER_DOSSIER_OFFSET_NDC = 0.12;
-// The dossier draws above every rail card (30…230) and dot (31…231) — a flat
-// order, not depth-staggered: one pointer-anchored object, always on top.
+// The dossier draws above every rail card (30…230) and dot (31…231): one pointer-anchored object, always on top.
 const DOSSIER_RENDER_ORDER = 260;
 
 /**
- * One rec's outline-layer pull toward the camera already captured in
- * `self._vStagCam` (see _updateOutlineStagger — the only caller). A module
- * function, not a prototype method, so prototype-borrowing test rigs that
- * lift `_updateOutlineStagger` onto plain objects keep working; uses only
- * the rig-provided scratch vectors.
+ * One rec's outline-layer pull toward the camera already in `self._vStagCam` (only caller: _updateOutlineStagger). A module
+ * function, not a method, so prototype-borrowing test rigs that lift `_updateOutlineStagger` onto plain objects keep working.
  * @param {MotherCallouts|object} self
  * @param {{lines:THREE.LineSegments[], shells:THREE.Mesh[]}|null} out
  */
@@ -875,11 +590,9 @@ function staggerOutlineLayers(self, out) {
 }
 
 /**
- * u5-info-ap-hold D4: true when the player ship's centre (an NDC point, this frame's projection) is
- * inside the view and in front of the camera (projected z in [-1, 1]; a point behind the camera
- * projects past 1). No projection yet (a rig without one) = on screen, as before.
+ * True when the player ship's centre (an NDC point) is inside the view and in front of the camera (projected z in
+ * [-1, 1]); no projection yet (a rig without one) = on screen.
  * @param {{x:number,y:number,z:number}|null|undefined} n
- * @returns {boolean}
  */
 export function shipOnScreen(n) {
   if (!n) return true;
@@ -894,21 +607,14 @@ export class MotherCallouts {
    * @param {THREE.Camera}   camera
    * @param {object} [opts]
    * @param {HTMLCanvasElement|null} [opts.canvas]  Render canvas for pointer events.
-   * @param {function|null} [opts.onPartClick]  Wave 5 (2) D-a hook (owner,
-   *   2026-09-03): when set, a resolved part/card click calls
-   *   `onPartClick(getHoveredPart())` INSTEAD of emitting CODEX_OPEN_ENTRY —
-   *   main.js wires it to the REFIT pane ONLY while the ladder flag is on.
-   *   Session D: with the hook set, parts WITHOUT a briefing are pickable and
-   *   fire it too (their REFIT verb needs no entry; the record's codexId is
-   *   null and the hub gates its library actions on it). Absent (the shipped
-   *   default and every ?ladder=0 boot), the click emits exactly as shipped —
-   *   briefing-less parts stay unpickable there. The ONE emitter in
-   *   _handlePointerUp stays the one.
-   * @param {import('../core/Typeface.js').FontEpoch} [opts.fontEpoch]  Session R
-   *   (plan §14.2): the typeface epoch the card textures are stamped with —
-   *   the document's by default; tests inject their own so the shared one is
-   *   never bumped. A card rasterised before the four B612 faces settled is
-   *   redrawn ONCE (at its existing refresh point) when the epoch moves.
+   * @param {function|null} [opts.onPartClick]  When set, a resolved part/card click calls
+   *   `onPartClick(getHoveredPart())` INSTEAD of emitting CODEX_OPEN_ENTRY — main.js wires it to the REFIT pane ONLY
+   *   while the ladder flag is on. With the hook set, parts WITHOUT a briefing are pickable and fire it too (record
+   *   codexId null; the hub gates its library actions on it). Absent, the click emits as shipped and briefing-less
+   *   parts stay unpickable.
+   * @param {import('../core/Typeface.js').FontEpoch} [opts.fontEpoch]  The typeface epoch the card textures are
+   *   stamped with — the document's by default; tests inject their own so the shared one is never bumped. A card
+   *   rasterised before the four B612 faces settled is redrawn ONCE (at its existing refresh point) when the epoch moves.
    */
   constructor(playerGroup, camera, { canvas = null, onPartClick = null, fontEpoch = defaultFontEpoch } = {}) {
     this.player = playerGroup;
@@ -921,27 +627,22 @@ export class MotherCallouts {
     this._band = 'SYSTEM';
     this._guideT = -1;
     this._guidedDone = false;
-    // §13 r3 — labels in steps. The OPEN system (one id or null) is resolved
-    // every frame by _resolveOpenSys, in the locked order: pinned > hovered
-    // (any part of it, or its name) > lingered > (close lens) the focus
-    // part's system. Clicks/taps write the pin (_handlePointerUp); hover
-    // feeds the resolver through _hoverRec.
+    // §13 r3 labels in steps: the OPEN system (one id or null) is resolved every frame by _resolveOpenSys: pinned >
+    // hovered (any part of it, or its name) > lingered > (close lens) the focus part's system.
     this._pinnedSys = null;   // a click/tap pin (a system-name tap toggles it)
     this._lingerSys = null;   // the last hovered system, held OPEN_LINGER_MS
     this._lingerAt = 0;       // frame clock (ms) of the last hovered frame
     this._openSys = null;     // resolved in update(), read by _targetOpacity
-    // The one-line hint (§13 r3): shows while active and not yet dismissed,
-    // once per page load; the element is built in _build (DOM, no canvas 2D).
+    // The one-line hint: once per page load; the element is built in _build (DOM).
     this._hintDone = false;
     this._hintEl = null;
     this._focusPart = null;
-    this._liveCtx = null;       // late-bound live-data context (task 7)
+    this._liveCtx = null;       // late-bound live-data context
     this._lastLiveT = 0;        // live-refresh cadence guard
-    this._bandChangedAt = 0;    // T3: timestamp of last band change (scan-in hold)
-    this._revealSeq = 0;        // T3: stagger sequence counter
-    this._nowMs = 0;            // T3: frame timestamp stored for _positionCard
+    this._bandChangedAt = 0;    // timestamp of last band change (scan-in hold)
+    this._revealSeq = 0;        // stagger sequence counter
+    this._nowMs = 0;            // frame timestamp stored for _positionCard
 
-    // Reusable scratch vectors (zero per-frame alloc).
     this._vShip = new THREE.Vector3();
     this._vCam = new THREE.Vector3();
     this._vAnchor = new THREE.Vector3();
@@ -954,7 +655,6 @@ export class MotherCallouts {
     this._shipNDC = new THREE.Vector3();
     this._vAttach = new THREE.Vector3();
     this._vElbow = new THREE.Vector3();
-    // Ribbon-leader scratch.
     this._rA = new THREE.Vector3();
     this._rB = new THREE.Vector3();
     this._rDir = new THREE.Vector3();
@@ -967,72 +667,43 @@ export class MotherCallouts {
     this._rC3 = new THREE.Vector3();
     this._vCamLocal = new THREE.Vector3();
     this._leaderHalfWidth = 0;
-    // Hover-outline stagger scratch (_updateOutlineStagger).
     this._vStag = new THREE.Vector3();
     this._vStagDir = new THREE.Vector3();
     this._vStagCam = new THREE.Vector3();
 
-    // Per-frame projection state (populated in update()).
     this._halfH = 1; this._halfW = 1;
     this._railL = -0.5; this._railR = 0.5;
-    // Rail-card fit scale (helper E 2026-09-27): 1 everywhere the uncovered
-    // strip can hold both columns at full size; < 1 only when it cannot
-    // (measured: 1024×768 + drawer — a 508 px strip vs a 544 px need), where
-    // the rail cards shrink uniformly until railL ≤ railR. Applied in
-    // _sizeFrac (rail tiers only; the hover dossier clamps itself).
+    // Rail-card fit scale: 1 unless the uncovered strip cannot hold both columns at full size (1024×768 + drawer: a
+    // 508 px strip vs a 544 px need); then rail cards shrink uniformly, applied in _sizeFrac (rail tiers only).
     this._railScale = 1;
-    // Workbench pane insets (Wave 5 Session B, 08-workbench §2): CSS-px widths
-    // of the LEFT (REFIT) and RIGHT (TECH LIBRARY) panes while open, fed on
-    // the panes' onOpenChange edge from main.js _syncWorkbenchPanes (the ONE
-    // pane edge — never per frame). The column layout treats the covered
-    // strips as the screen edges and the focus pick measures from the centre
-    // of the UNCOVERED strip — where the camera's look-at bias puts the ship.
-    // Both default 0: every formula below reduces to the shipped constants
-    // and a ?ladder=0 boot (which never constructs a pane) is byte-identical.
+    // Pane insets (CSS px, LEFT = REFIT, RIGHT = TECH LIBRARY; see setPaneInsets). Both default 0 = no-pane constants.
     this._paneInsetL = 0;
     this._paneInsetR = 0;
-    // Rail insets (Session L, Session K FINDINGS (a)): the SECOND inset source
-    // — the DISPLAY rail's reach from the left screen edge and the WHERE rail's
-    // reach from the right, each + RAIL_GEOMETRY.DODGE_GAP_PX, fed by the hub
-    // from the rails' own 1 Hz dodge reads (setRailInsets, write-on-change).
-    // Merged with the pane insets by max per side in _updatePaneEdges — the
-    // ONE merge point — so neither writer clobbers the other. 0 = no rail.
+    // Rail insets (see setRailInsets): merged with the pane insets by max per side in _updatePaneEdges.
     this._railInsetL = 0;
     this._railInsetR = 0;
-    /** Session L review: the canvas width behind the NDC law, read ≤ 1 Hz (VW_READ_MS) on the frame clock. */
+    /** The canvas width behind the NDC law, read ≤ 1 Hz (VW_READ_MS) on the frame clock. */
     this._vwCache = 0;
     this._vwReadAt = null;
-    // Derived per frame in _updatePaneEdges(): the usable screen edges (NDC)
-    // and the uncovered strip's centre X (NDC).
+    // Derived per frame in _updatePaneEdges(): the usable screen edges + the uncovered strip's centre X (NDC).
     this._edgeL = -1;
     this._edgeR = 1;
     this._stripCX = 0;
 
-    // Clickable-label interaction (codex deep-links) + hull-part hover (D2's
-    // first verb): the same 10 Hz pick tests the card sprites FIRST, then the
-    // parts' `pick` hull meshes, so hovering/clicking the part itself behaves
-    // exactly like its card (one hover state `_hoverRec`, written only by
-    // _setHoverRec; one CODEX_OPEN_ENTRY emitter in _handlePointerUp).
+    // Hover and click share one pick path: card sprites FIRST, then the parts' `pick` hull meshes (one hover state
+    // `_hoverRec`, written only by _setHoverRec; one CODEX_OPEN_ENTRY emitter in _handlePointerUp).
     this._raycaster = new THREE.Raycaster();
-    // The callouts group rides inside the player subtree, which SceneManager
-    // registers as a NEAR_FIELD root — moving every sprite to
-    // NEAR_FIELD_LAYER (layer 1) at close range. A default raycaster only
-    // tests layer 0, so every pick silently missed at inspection depth and
-    // click-to-open was dead (round 5 autopsy: spriteLayers 2 vs rcLayers 1,
-    // ray dead-centre at 2.8e-14 miss distance). Test all layers: the pick
-    // loop only ever sees these ~37 sprites, so the mask costs nothing.
+    // The callouts group rides inside the player subtree, a NEAR_FIELD root: SceneManager moves every sprite to
+    // NEAR_FIELD_LAYER (layer 1) at close range, and a default raycaster tests only layer 0, so every pick would
+    // silently miss at inspection depth. Test all layers: the pick loop only sees these ~37 sprites.
     this._raycaster.layers.enableAll();
     this._ndc = new THREE.Vector2();
     this._pointerDown = null;
     this._hoverT = 0;
     this._cursorSet = false;
     this._listening = false;
-    // HOVER DOSSIER (B2): one reusable sprite + a card-shape wrapper rec,
-    // built in _build() (they need the group). The dwell clock restarts on
-    // every hover CHANGE (written in _setHoverRec, the ONE hover writer);
-    // _dossierShownFor is the rec the shown dossier was built for; the
-    // pointer NDC is cached by _refreshHover at its 10 Hz cadence so the
-    // per-frame placement never reads the DOM.
+    // HOVER DOSSIER: one reusable sprite + a card-shape wrapper rec, built in _build(). The dwell clock restarts in
+    // _setHoverRec; the pointer NDC is cached by _refreshHover at 10 Hz so placement never reads the DOM.
     this._dossierSprite = null;
     this._dossierRec = null;
     this._dossierShownFor = null;
@@ -1041,27 +712,19 @@ export class MotherCallouts {
     this._dossierPrimed = false;
     this._dossierSX = 0; this._dossierSY = 0;
     this._setHoverRec(null);   // one hover state, initialized through its ONE writer (source-pinned)
-    // REFIT ghost outlines (Wave 5 (2)): the ONE ghost set — recs whose hover
-    // outline is shown steady-on by the pane's alternative hover (reusing
-    // _ensureOutline/_setOutlineVisible, 06-core-api: never a second outline
-    // system). Pulsed in update() on the recs' OWN materials; the hover rec
-    // wins on overlap. Source-pinned in test-MotherCallouts row l: the set is
-    // constructed HERE exactly once — every other site mutates, never replaces.
+    // REFIT ghost outlines: the ONE ghost set (reuses _ensureOutline/_setOutlineVisible). Source-pinned in
+    // test-MotherCallouts: constructed HERE exactly once — every other site mutates, never replaces.
     this._ghostRecs = new Set();
     this._ghostPulse = true;    // setGhostOutline({ pulse }) — false = steady
     this._ghostPhaseT = 0;      // pulse phase clock (s), reset on empty→shown
-    this._pointerPos = null;   // last pointer client coords, for hover re-pick (R13)
-    this._hoverPickT = 0;      // hover re-pick cadence guard (R13)
+    this._pointerPos = null;   // last pointer client coords, for hover re-pick
+    this._hoverPickT = 0;      // hover re-pick cadence guard
     this._hoverMisses = 0;     // consecutive stationary re-pick misses with a hover held (stickiness)
-    // §13 r3 fix (review): the system-label sprite under the pointer, picked
-    // by _refreshHover/_handlePointerMove on their own refreshed ray (ONE
-    // pick order for hover and click — names are drawn on top) and only READ
-    // by the per-frame _resolveOpenSys, which must not refresh world matrices
-    // or raycast at 60 Hz for an NDC that changes at the 10 Hz hover cadence.
+    // The system-label sprite under the pointer, picked by _refreshHover/_handlePointerMove on their own refreshed ray
+    // and only READ by the per-frame _resolveOpenSys, which must not raycast at 60 Hz for an NDC that changes at 10 Hz.
     this._sysLabelHover = null;
-    // §13 r4 fix (review): the flower PAIR COUNT the pick state is armed
-    // against — each _installFlowerPair BUILDS new meshes, so a count change
-    // re-arms every flowerGated rec's pick cache and outline (_checkFlowerGen).
+    // The flower PAIR COUNT the pick state is armed against — each _installFlowerPair BUILDS new meshes, so a count
+    // change re-arms every flowerGated rec's pick cache and outline (_checkFlowerGen).
     this._flowerPairsSeen = undefined;
     this._onPointerMove = (e) => this._handlePointerMove(e);
     this._onPointerDown = (e) => this._handlePointerDown(e);
@@ -1075,23 +738,16 @@ export class MotherCallouts {
     this.player.add(this._group);
 
     this._partLabels = [];
-    this._allRecs = []; // cached union of system + part labels (LOW-16)
-    this._leftRail = [];  // persistent rail arrays (LOW-16)
+    this._allRecs = []; // cached union of system + part labels
+    this._leftRail = [];  // persistent rail arrays
     this._rightRail = [];
     this._build();
 
     this._viewInspect = false;
     this._zoomInspect = false;
-    // A general TRANSIENT show/hide gate mirroring CityLabels.setSuppressed:
-    // active = (viewInspect || zoomInspect) && !suppressed. Never persisted;
-    // the inspection signals (CAMERA_VIEW_CHANGE / INSPECT_HULL_OUTLINE) keep
-    // owning the resting state, so clearing it restores exactly what they say.
-    // NOT used by the Zoom Ladder since 2026-09-02: the morning's "F3 single
-    // costume" suppressed these cards on the hull floor and the owner's
-    // playtest overturned it the same day — MotherCallouts IS the F3 costume
-    // (docs/ladder/08-workbench.md §2). Nothing calls setSuppressed in
-    // production today; with `_suppressed` false `_applyActive()` reduces to
-    // the pre-ladder `viewInspect || zoomInspect`.
+    // A TRANSIENT show/hide gate mirroring CityLabels.setSuppressed: active = (viewInspect || zoomInspect) &&
+    // !suppressed; never persisted. NOT used by the Zoom Ladder (MotherCallouts IS the F3 costume,
+    // docs/ladder/08-workbench.md §2); nothing calls setSuppressed in production today.
     this._suppressed = false;
     this._onViewChange = ({ view } = {}) => {
       this._viewInspect = (view === 'INSPECTION');
@@ -1104,12 +760,8 @@ export class MotherCallouts {
     eventBus.on(Events.CAMERA_VIEW_CHANGE, this._onViewChange);
     eventBus.on(Events.INSPECT_HULL_OUTLINE, this._onHullOutline);
 
-    // §13 r4 (Lane H, 2026-09-25): the blocker-raycast state — one mesh→rec
-    // owner map and one blocker-mesh list over the whole ship (every Mesh
-    // under `player` plus the DOCKED daughters' arm groups), rebuilt lazily
-    // when the pick generation key changes (a flower pair install or an arm
-    // docking/undocking — the only events that move meshes in or out of pick
-    // subtrees). See _pickGenKey / _ensurePickIndex / _pickBestRec.
+    // §13 r4 blocker-raycast state: one mesh→rec owner map and one blocker-mesh list over the whole ship (Meshes under
+    // `player` plus the DOCKED daughters' arm groups), rebuilt lazily when _pickGenKey changes (see _ensurePickIndex).
     this._pickOwnerGen = null;
     this._pickOwners = null;      // Map<THREE.Mesh, part rec>
     this._blockerMeshes = null;   // THREE.Mesh[]
@@ -1118,16 +770,7 @@ export class MotherCallouts {
   /** @returns {boolean} true while the transient gate hides the sprite cards (unused in production today). */
   isSuppressed() { return this._suppressed; }
 
-  /**
-   * General transient show/hide gate (CityLabels.setSuppressed parity): hides
-   * the in-world sprite cards while the hull outline (INSPECT_HULL_OUTLINE)
-   * keeps working unmodified. NEVER persists and never touches the inspection
-   * flags: `active = inspecting && !suppressed`. Not used by the ladder since
-   * 2026-09-02 (the F3 "single costume" was overturned by playtest —
-   * MotherCallouts is the F3 costume); nothing calls it in production today.
-   * Kept as the house gate for any future per-floor suppression.
-   * @param {boolean} v
-   */
+  /** Transient show/hide gate (CityLabels.setSuppressed parity); never persisted. Unused in production today. */
   setSuppressed(v) {
     v = !!v;
     if (v === this._suppressed) return;
@@ -1141,10 +784,8 @@ export class MotherCallouts {
   }
 
   /**
-   * Late-bind the live-data context (task 7). Called from main.js after all
-   * systems are constructed (construction-order gotcha: motherCallouts is built
-   * before commsSystem). Every reference is optional — cards degrade to static
-   * rows if a system is missing.
+   * Late-bind the live-data context (motherCallouts is built before commsSystem); every reference is optional — cards
+   * degrade to static rows.
    * @param {object} ctx { resourceSystem, commsSystem, codexSystem,
    *   powerDistribution, despinLaser, player }
    */
@@ -1153,19 +794,9 @@ export class MotherCallouts {
   }
 
   /**
-   * Workbench pane insets (Wave 5 Session B — the 06-core-api "Known
-   * non-consumer" FINDINGS, now consumed): the CSS-px widths of the LEFT
-   * (REFIT) and RIGHT (TECH LIBRARY) panes while open, 0 when closed. Fed
-   * from main.js `_syncWorkbenchPanes()` on the panes' onOpenChange edge —
-   * the ONE pane-edge signal (beside the D10 calm cap and the camera's
-   * look-at inset), NEVER per frame. Effect (see _updatePaneEdges): the
-   * callout columns treat the left screen edge as `leftPx` and the right
-   * edge as `W − rightPx` (cards never under a pane), and _pickFocusPart
-   * measures "nearest screen-centre" from the centre of the UNCOVERED strip
-   * — which is where the camera's pane bias now puts the ship. Non-finite /
-   * negative values clamp to 0 (never a guess).
-   * @param {number} leftPx  - LEFT pane width while open (REFIT), else 0
-   * @param {number} rightPx - RIGHT pane width while open (TECH LIBRARY), else 0
+   * Workbench pane insets: CSS-px widths of the LEFT (REFIT) and RIGHT (TECH LIBRARY) panes while open, 0 when closed.
+   * Fed from main.js `_syncWorkbenchPanes()` on the panes' onOpenChange edge (the ONE pane-edge signal, never per
+   * frame; see _updatePaneEdges). Non-finite / negative values clamp to 0.
    */
   setPaneInsets(leftPx, rightPx) {
     this._paneInsetL = (Number.isFinite(leftPx) && leftPx > 0) ? leftPx : 0;
@@ -1173,25 +804,14 @@ export class MotherCallouts {
   }
 
   /**
-   * Rail insets (Session L — Session K FINDINGS (a): on the 13-inch iPad the
-   * floor-1 hull callout columns sat UNDER both rails on the PARTS band, the
-   * rails painting on top). The rails are the SECOND inset source beside the
-   * drawers: `leftPx` was the DISPLAY rail's RIGHT edge (its reach from the
-   * left screen edge) — Session P retired that rail for the footer-band
-   * DETAIL slider, so the hub passes null there now and the left side falls
-   * back to the drawer's inset; `rightPx` is the WHERE rail's reach from
-   * the RIGHT screen edge (`innerWidth − railIndicator.leftPx()`), CSS px, or
-   * null while that rail is hidden / unmeasured. Each non-null value gains
-   * RAIL_GEOMETRY.DODGE_GAP_PX (the rails' own clearance) so the column starts
-   * a rail-gap clear of the rail. Safe to call per frame (the hub does, off
-   * the rails' 1 Hz reads): write-on-change — the same pair returns without
-   * touching anything; a change re-derives the edges at once
-   * (_updatePaneEdges) so the next pick / layout reads them. Merged with the
-   * pane insets by max per side in _updatePaneEdges — the ONE merge point —
-   * so neither source clobbers the other. Non-finite / negative / null → 0
-   * (no rail on that side; never a guess).
-   * @param {number|null} leftPx  - the DISPLAY rail's right edge (px from the left screen edge), or null
-   * @param {number|null} rightPx - the WHERE rail's reach from the right screen edge (px), or null
+   * Rail insets: the SECOND inset source beside the drawers. `leftPx` = the DISPLAY rail's right edge (px from the left
+   * screen edge; the hub passes null now that the footer-band DETAIL slider replaced that rail), `rightPx` = the WHERE
+   * rail's reach from the RIGHT screen edge (`innerWidth − railIndicator.leftPx()`), null while hidden / unmeasured.
+   * Each non-null value gains RAIL_GEOMETRY.DODGE_GAP_PX. Safe to call per frame (the hub does, off the rails' 1 Hz
+   * reads): write-on-change; a change re-derives the edges at once. Merged with the pane insets by max per side in
+   * _updatePaneEdges. Non-finite / negative / null → 0.
+   * @param {number|null} leftPx
+   * @param {number|null} rightPx
    * @returns {boolean} whether the stored rail insets changed
    */
   setRailInsets(leftPx, rightPx) {
@@ -1206,20 +826,13 @@ export class MotherCallouts {
   }
 
   /**
-   * Derive the usable screen edges (NDC) + the uncovered strip's centre from
-   * the pane insets — once per update(), before the rail X computation reads
-   * them. The px→NDC conversion follows the CameraSystem pane-bias law: the
-   * viewport width is the render CANVAS's clientWidth (SceneManager sizes it
-   * to innerWidth — the same number camera.aspect is built from; never
-   * `window`), and an unknown width means NO inset — never a guess. A
-   * degenerate strip (panes covering ~everything, < 0.2 NDC ≈ 10 % of the
-   * screen) falls back to the full edges rather than inverting the rails —
-   * the hub's <1100 px one-pane rule keeps real layouts far from this.
-   * Insets 0 (every shipped boot) → (-1, 1, 0): the exact shipped operands.
-   * Session L: the EFFECTIVE inset per side is max(pane, rail) — the ONE
-   * merge point of the two sources. The rule trips only when the two insets
-   * cover > 90 % of the width; the rails alone (169 + 130 px of 1376, or of
-   * 1280) cover ~22 %, so the threshold stands unchanged.
+   * Derive the usable screen edges (NDC) + the uncovered strip's centre from the pane/rail insets — once per update(),
+   * before the rail X computation reads them. The px→NDC conversion follows the CameraSystem pane-bias law: the
+   * viewport width is the render CANVAS's clientWidth (SceneManager sizes it to innerWidth, the number camera.aspect is
+   * built from; never `window`), and an unknown width means NO inset — never a guess. A degenerate strip (< 0.2 NDC ≈
+   * 10 % of the screen) falls back to the full edges rather than inverting the rails (it trips only when the two insets
+   * cover > 90 % of the width; the rails alone cover ~22 %). Insets 0 → (-1, 1, 0). The EFFECTIVE inset per side is
+   * max(pane, rail).
    * @private
    */
   _updatePaneEdges() {
@@ -1227,19 +840,13 @@ export class MotherCallouts {
     const inR = Math.max(this._paneInsetR, this._railInsetR);
     let eL = -1, eR = 1;
     if (inL > 0 || inR > 0) {
-      // Session L review: clientWidth is a LAYOUT-affected read and, with the
-      // rails as a second inset source, this ran on EVERY active floor-1 frame
-      // (before: drawer-open frames only). Cached for VW_READ_MS on the frame
-      // clock (_nowMs, stamped by _layout — 0 in the bare test rigs, where the
-      // first read then serves the rig for good); an unknown width (no canvas /
-      // 0 / NaN) is never cached, so "no inset, never a guess" is retried as
-      // shipped. The INSETS are not cached — a drawer or rail change still
-      // re-derives the edges at once with the cached width; only a resize waits
-      // ≤ 1 s, the rails' own dodge cadence.
+      // clientWidth is a layout-affected read: cached for VW_READ_MS on the frame clock (_nowMs; 0 in bare test rigs,
+      // where the first read serves the rig for good). An unknown width is never cached, so "no inset, never a guess"
+      // is retried. The INSETS are not cached: a drawer or rail change re-derives the edges at once.
       const now = this._nowMs || 0;
       let vw = (this._vwCache > 0 && this._vwReadAt != null && (now - this._vwReadAt) < VW_READ_MS) ? this._vwCache : -1;
       if (vw < 0) {
-        const cw = this.canvas ? this.canvas.clientWidth : NaN;   // ONE read (the shipped form read the getter twice)
+        const cw = this.canvas ? this.canvas.clientWidth : NaN;   // ONE read
         vw = Number.isFinite(cw) ? cw : 0;
         this._vwCache = vw;
         this._vwReadAt = now;
@@ -1256,29 +863,14 @@ export class MotherCallouts {
   }
 
   /**
-   * The rail X positions (_railL/_railR) from the pane-aware edges and the
-   * ship's screen silhouette radius (helper E 2026-09-27, extracted from
-   * update() for the layout-rig suite). Two laws, both measured against the
-   * 2026-09-27 probe (tmp/callout-width/measure.json — "callouts don't fit the
-   * screen width"):
-   *   1. The reserved card width is the WIDEST tier actually on the rails —
-   *      SIZE_SYSTEM (0.052), not SIZE_MAJOR (0.040). The old reservation
-   *      under-reserved every system name card by
-   *      2·(SIZE_SYSTEM−SIZE_MAJOR)·CARD_W_OVER_TITLE_H/aspect ≈ 78 px at
-   *      1920×1080, so the left column sat 21 px off-screen (drawer closed)
-   *      or 27 px under the drawer (open), and the right column sat under
-   *      the WHERE rail, at every viewport measured. widthNDC =
-   *      2·frac·CARD_W_OVER_TITLE_H/camAspect for every card (aspect ×
-   *      heightFactor is the R15 invariant), so the max frac alone picks the
-   *      widest — a constant, no per-rec loop, no frame lag.
-   *   2. FIT: both columns must fit the uncovered strip with a margin each
-   *      (railL ≤ railR). When they cannot (measured: 1024×768 + the 380 px
-   *      drawer — a 508 px strip vs a 544 px need), the rail cards shrink
-   *      uniformly (_railScale, applied in _sizeFrac) until they do, rather
-   *      than overlapping each other or sliding under a pane.
-   * The ship-bound operand can never cross the pair once the edge-derived
-   * positions fit (railL_ship < railR_ship always, and each edge-derived
-   * operand is ≤ its counterpart), so railL ≤ railR holds on exit.
+   * The rail X positions (_railL/_railR) from the pane-aware edges and the ship's screen silhouette radius. Two laws:
+   *   1. The reserved card width is the WIDEST tier on the rails — SIZE_SYSTEM (0.052), not SIZE_MAJOR (0.040), or
+   *      system name cards under-reserve (~78 px at 1920×1080). widthNDC = 2·frac·CARD_W_OVER_TITLE_H/camAspect for
+   *      every card, so the max frac alone picks the widest: a constant, no per-rec loop, no frame lag.
+   *   2. FIT: both columns must fit the uncovered strip with a margin each (railL ≤ railR). When they cannot (1024×768
+   *      + the 380 px drawer: a 508 px strip vs a 544 px need), the rail cards shrink uniformly (_railScale, applied in
+   *      _sizeFrac) rather than overlap or slide under a pane.
+   * The ship-bound operand can never cross the pair once the edge-derived positions fit, so railL ≤ railR holds on exit.
    * @param {number} screenR the ship silhouette's NDC half-width on screen
    * @private
    */
@@ -1297,20 +889,12 @@ export class MotherCallouts {
     this._railR = Math.min(this._edgeR - margin - railCardW, this._shipNDC.x + screenR + CFG.RAIL_INSET_NDC);
   }
 
-
   /**
-   * The part the player is looking at — the Zoom Ladder's F1 deep-link source
-   * (docs/ladder/08-workbench.md D1/D2: the Tech Library opens FROM the part
-   * you were looking at). In the COMPONENT band (< BAND.compIn, the close lens
-   * of the 4 m split, §13 r3) `_focusPart` is the major part nearest screen-centre,
-   * re-picked every update(); outside that band there is no focus and this
-   * returns null. Pure read; the small allocation is fine — main.js calls it
-   * only on an F1 arrival (ArchiveFloor.getSubject) and on the LIBRARY pane's
-   * entry-less open edge, never per frame.
-   * `codexId` is the part table's entry id/alias exactly as CodexSystem
-   * resolves it (the same string the card click emits in CODEX_OPEN_ENTRY);
-   * parts without a briefing report `codexId: null`, which ArchiveFloor treats
-   * as "no link" (plain arrival). `screen` / `bounds`: see _partRecord.
+   * The part the player is looking at — the F1 deep-link source (docs/ladder/08-workbench.md D1/D2). In the COMPONENT
+   * band (< BAND.compIn, §13 r3) `_focusPart` is the major part nearest screen-centre, re-picked every update();
+   * outside it this returns null. Pure read; main.js calls it only on an F1 arrival (ArchiveFloor.getSubject) and on
+   * the LIBRARY pane's entry-less open edge, never per frame. `codexId` is the part table's entry id/alias as
+   * CodexSystem resolves it; parts without a briefing report null ("no link"). `screen` / `bounds`: see _partRecord.
    * @returns {{ id: string, name: string, codexId: string|null, systemId: string,
    *   screen: {x:number,y:number}|null, bounds: {x0:number,y0:number,x1:number,y1:number}|null }|null}
    */
@@ -1322,12 +906,9 @@ export class MotherCallouts {
   }
 
   /**
-   * The part under the pointer — card sprite or hull `pick` mesh, one hover
-   * state (`_hoverRec`), same record shape as getFocusedPart(). NO band gate:
-   * hover exists wherever a part's card is eligible (PART and COMPONENT bands;
-   * in the SYSTEM band nothing on the hull hovers). Null when nothing is
-   * hovered. Pure read; allocates a fresh object per call — never call it per
-   * frame (the click hook calls it once per click).
+   * The part under the pointer — card sprite or hull `pick` mesh, one hover state (`_hoverRec`), same record shape as
+   * getFocusedPart(). NO band gate: hover exists wherever a part's card is eligible (PART and COMPONENT bands). Null
+   * when nothing is hovered. Pure read; allocates per call (once per click, never per frame).
    * @returns {{ id: string, name: string, codexId: string|null, systemId: string,
    *   screen: {x:number,y:number}|null, bounds: {x0:number,y0:number,x1:number,y1:number}|null }|null}
    */
@@ -1338,25 +919,15 @@ export class MotherCallouts {
   }
 
   /**
-   * The ONE record builder behind getHoveredPart()/getFocusedPart() (Wave 5
-   * Session D — "the photo on the clicked part"). Beside the shipped four
-   * fields it carries WHERE the part is on screen, in DRAWING-BUFFER px
-   * (`canvas.width/height`, the space a `drawImage` crop reads — the same
-   * convention as main.js's photoSource), so the LIBRARY pane can crop its
-   * photo around the clicked part instead of the ship:
-   *   screen — the callout ANCHOR's projection (rec._anchorX/_anchorY, the
-   *            NDC written by _layout every frame) × the canvas size; null
-   *            when the canvas is unknown / sizeless or the anchor is not on
-   *            screen (behind the camera, non-finite).
-   *   bounds — the projected pick-mesh box: every pick target's meshes'
-   *            geometry bounding boxes, 8 corners each through matrixWorld
-   *            (refreshed here — the in-frame matrices are a frame stale, the
-   *            STALE WORLD MATRICES note) and the camera → the screen-space
-   *            {x0,y0,x1,y1} in drawing-buffer px; null when the part has no
-   *            pick geometry (card-only parts) or nothing projects in front
-   *            of the camera. Computed ONCE per call — per click, never per
-   *            frame (the record allocates anyway).
-   * Never throws: any missing dep degrades that field to null.
+   * The ONE record builder behind getHoveredPart()/getFocusedPart(). Besides id/name/codexId/systemId it carries WHERE
+   * the part is on screen, in DRAWING-BUFFER px (`canvas.width/height`, as main.js's photoSource), so the LIBRARY pane
+   * can crop its photo around the part:
+   *   screen — the callout ANCHOR's projection (rec._anchorX/_anchorY, the NDC written by _layout) × the canvas size;
+   *            null when the canvas is unknown or the anchor is off screen.
+   *   bounds — the projected pick-mesh box: every pick target's mesh geometry boxes, 8 corners each through a refreshed
+   *            matrixWorld (in-frame matrices are a frame stale, the STALE WORLD MATRICES note) and the camera →
+   *            {x0,y0,x1,y1} in drawing-buffer px; null for card-only parts or when nothing projects in front.
+   * Computed once per call (per click). Never throws: any missing dep degrades that field to null.
    * @private @param {object} rec
    */
   _partRecord(rec) {
@@ -1371,14 +942,12 @@ export class MotherCallouts {
     };
   }
 
-  /** @private Canvas drawing-buffer size, or null when unknown / sizeless. */
   _bufferSize() {
     const cv = this.canvas;
     const w = cv ? Number(cv.width) : 0, h = cv ? Number(cv.height) : 0;
     return (w > 0 && h > 0) ? { w, h } : null;
   }
 
-  /** @private The rec's anchor projection in drawing-buffer px (see _partRecord). */
   _recScreen(rec) {
     const size = this._bufferSize();
     if (!size) return null;
@@ -1388,7 +957,6 @@ export class MotherCallouts {
     return { x: (ax * 0.5 + 0.5) * size.w, y: (-ay * 0.5 + 0.5) * size.h };
   }
 
-  /** @private The rec's projected pick-mesh box in drawing-buffer px (see _partRecord). */
   _recBounds(rec) {
     const size = this._bufferSize();
     if (!size || !this.camera || typeof this._pickTargets !== 'function') return null;
@@ -1417,25 +985,16 @@ export class MotherCallouts {
   }
 
   /**
-   * REFIT ghost outlines (Wave 5 (2)): show the hover outline steady-on for a
-   * set of parts — the pane's "hover an alternative → the hardware pulses
-   * cyan on the hull" affordance. REUSES the one outline system
-   * (_ensureOutline + _setOutlineVisible, 06-core-api.md:551-553: "do not
-   * build a second outline system"); update() pulses the ghost recs' OWN
-   * materials 0.35×–1× of base at 1.2 Hz and _updateOutlineStagger staggers
-   * them exactly like the hover.
+   * REFIT ghost outlines: show the hover outline steady-on for a set of parts (the pane's "hover an alternative → the
+   * hardware pulses cyan on the hull"). REUSES the one outline system (_ensureOutline + _setOutlineVisible); update()
+   * pulses the ghost recs' OWN materials and _updateOutlineStagger staggers them like the hover.
    *
    * Rules:
-   *   - ids resolving to card-only parts (no pick geometry → _ensureOutline
-   *     null) and unknown ids are SKIPPED, never thrown on (D-c: unowned
-   *     hardware without a mesh cannot ghost — a FINDING, not a feature);
-   *   - inactive (`!_active`): nothing is shown (every id reports skipped);
-   *   - `setGhostOutline(null)` clears: hides every ghost that is not the
-   *     live `_hoverRec` and restores base opacities;
-   *   - the hover rec wins on overlap (steady base, no pulse) and clearing
-   *     ghosts never hides a live hover.
-   * Allocates (a scratch set + the report) — call on hover edges, never per
-   * frame.
+   *   - card-only parts (no pick geometry → _ensureOutline null) and unknown ids are SKIPPED, never thrown on; when
+   *     inactive (`!_active`) nothing is shown (every id reports skipped);
+   *   - `setGhostOutline(null)` clears: hides every ghost that is not the live `_hoverRec` and restores base opacities;
+   *   - the hover rec wins on overlap (steady base, no pulse) and clearing ghosts never hides a live hover.
+   * Allocates (a scratch set + the report) — call on hover edges, never per frame.
    * @param {string[]|null} partIds — MotherCallouts part ids (refitIndex.partsForSubsystem output)
    * @param {{ pulse?: boolean }} [opts] — pulse=false holds the ghosts steady at base
    * @returns {{ shown: string[], skipped: string[] }}
@@ -1451,8 +1010,7 @@ export class MotherCallouts {
       next.add(rec);
       shown.push(id);
     }
-    // Recs leaving the set: restore base opacities and hide — unless the rec
-    // is the live hover, which keeps its outline (steady, as a plain hover).
+    // Recs leaving the set: restore base opacities and hide — unless the rec is the live hover (keeps its outline).
     for (const rec of this._ghostRecs) {
       if (next.has(rec)) continue;
       this._restoreGhostBase(rec);
@@ -1472,12 +1030,9 @@ export class MotherCallouts {
   }
 
   /**
-   * The callout parts of one MotherCallouts system — the REFIT pane's
-   * focusPart/ghost bookkeeping read. `hasGeometry` reports whether the part
-   * can outline on the hull (its pick subtree resolves to ≥1 real Mesh):
-   * card-only parts (mli, berths, nav_lights…) and the docked daughters
-   * report false — D-c: no unowned-hardware ghosts. Allocates a fresh array
-   * of fresh records — never call per frame.
+   * The callout parts of one system — the REFIT pane's focusPart/ghost bookkeeping read. `hasGeometry` reports whether
+   * the part can outline on the hull (its pick subtree resolves to ≥1 real Mesh): card-only parts (mli, berths,
+   * nav_lights…) and the docked daughters report false. Allocates a fresh array of fresh records — never per frame.
    * @param {string} systemId — a MOTHER_CALLOUT_SYSTEMS id (e.g. 'POWER')
    * @returns {Array<{ id: string, name: string, codexId: string|null, systemId: string, hasGeometry: boolean }>}
    */
@@ -1505,55 +1060,25 @@ export class MotherCallouts {
   }
 
   /**
-   * Session T — the SPECS pane's one-shot PART PORTRAIT (plan §1.6 / T3; the
-   * checkpoint-1 amendments (b) + (d), 2026-09-08): the box a portrait camera
-   * must frame for a part, plus its pose row. The box is SHIP-LOCAL (the
-   * player group's frame) and comes with the ship's live `matrix`
-   * (matrixWorld): a WORLD axis-aligned box of a rotated ship is FAT — the
-   * first witness measured the wings' 3.06 × 0.00 × 2.00 m local box as
-   * 3.23 × 2.26 × 2.62 m in world under the LVLH attitude — while every hull
-   * part is ship-aligned, so the local box is a tight oriented box whose 8
-   * corners the framing fits through `matrix` (portraitFraming.
-   * portraitCameraFit). Union rule: the rec's `pick` meshes' geometry boxes,
-   * 8 corners each through a refreshed `matrixWorld` (the STALE WORLD MATRICES
-   * note) and then the ship's inverse — the SAME traverse `_recBounds` uses
-   * (`o.isMesh`, real geometry, our own outline shells `userData.partId`
-   * skipped), never `Box3.expandByObject`, which recurses INTO those shells.
-   * Hidden meshes count like they do in `_recBounds` (a furled wing's blanket
-   * box still frames the drum region — plan §2.2).
+   * The SPECS pane's one-shot PART PORTRAIT: the box a portrait camera must frame for a part, plus its pose row. The
+   * box is SHIP-LOCAL (the player group's frame) and comes with the ship's live `matrix` (matrixWorld): a WORLD
+   * axis-aligned box of a rotated ship is FAT (the wings' 3.06 × 0.00 × 2.00 m local box measured 3.23 × 2.26 × 2.62 m
+   * in world under the LVLH attitude), while every hull part is ship-aligned, so the local box is tight and the
+   * framing fits its 8 corners through `matrix` (portraitFraming.portraitCameraFit). Union rule: the same traverse
+   * `_recBounds` uses (real geometry, our own outline shells `userData.partId` skipped; refreshed `matrixWorld`, the
+   * STALE WORLD MATRICES note), never `Box3.expandByObject`, which recurses INTO those shells. Hidden meshes count as
+   * in `_recBounds` (a furled wing's blanket box still frames the drum region).
    *
-   * Table rules (PORTRAIT_OVERRIDES — the ONLY per-card authoring surface):
-   *   `single`  — a spread multi-instance part (pods / pucks / reels / A-frames
-   *               around the barrel) frames ONE instance: the pick target whose
-   *               world box centre is NEAREST `cameraPos` (the player's camera —
-   *               the instance they are looking at), ties → the LOWEST index;
-   *               with no camera the first target. Deterministic for a given
-   *               camera pose, so the witness reproduces the same instance.
-   *   `radial`  — `dir` = the framed box centre's own outward radial in the
-   *               ship's XY plane plus the row's [x, y, z] bias (the camera sits
-   *               outside the hull looking AT that instance); an on-axis centre
-   *               keeps the row's `dir`. The docked DAUGHTERS (`armIndex`) use
-   *               it on the docked `arm.group` (resolved live through
-   *               `_liveCtx.armManager`, DOCKED only).
-   *   `stowDir` — the THERMAL family (`flowerGated`) frames only while a flower
-   *               pair exists and picks this while stowed (getFlowerStatus: STOW,
-   *               or a SLEW under half open).
-   * Returns null for an unknown id, a card-only part without a `frame` row
-   * (no `pick` / `mesh` — the pane keeps the ship photo; T3 gave the four
-   * card-only rows `frame` geometry), a gone flower / an away daughter, or an
-   * empty box; never throws. Allocates (a Box3, a Matrix4, the record) — per
-   * click at the photo edge, never per frame. Without a `player` the box is
-   * WORLD and `matrix` null (`local: false`) — the render then falls to the
-   * sphere law, the documented fallback.
+   * Returns null for an unknown id, a card-only part without a `frame` row (the pane keeps the ship photo), a gone
+   * flower / an away daughter, or an empty box; never throws. Per click, never per frame. Without a `player` the box
+   * is WORLD and `matrix` null (`local: false`) — the render then falls to the sphere law.
    * @param {string} partId — a MotherCallouts part id (the click record's `id`)
    * @param {THREE.Vector3|null} [cameraPos] — the player's camera world position (the `single` rule's tie-breaker)
    * @returns {{ box: THREE.Box3, matrix: THREE.Matrix4|null, local: boolean, dir: number[]|null,
    *   fill: number|null, instance: string|null, id: string, name: string }|null}
-   *   `box` ship-local (scene units) with `matrix` = the ship's matrixWorld;
-   *   `dir` a SHIP-frame [x, y, z] override or null (the hub turns it into a
-   *   world direction and falls back to the player's side); `fill` a frame
-   *   fill override or null (the framing's default); `instance` the framed
-   *   pick target's name under the `single` rule.
+   *   `box` ship-local (scene units) with `matrix` = the ship's matrixWorld; `dir` a SHIP-frame [x, y, z] override or
+   *   null (the hub turns it into a world direction); `fill` a frame fill override or null; `instance` the framed pick
+   *   target's name under the `single` rule.
    */
   getPartFrame(partId, cameraPos = null) {
     if (typeof partId !== 'string' || !partId) return null;
@@ -1573,10 +1098,7 @@ export class MotherCallouts {
       const c = box.getCenter(_frameV);
       const r = Math.hypot(c.x, c.y);
       if (r <= 1e-12) return dir;
-      // `tangent` (T7): a component along the ship's azimuthal tangent at the
-      // instance (+ = counter-clockwise seen from fore), so a part that a
-      // radially-outboard neighbour covers (a spring housing under its docked
-      // daughter, a hinge clevis behind its swung-out boom) is seen from the side.
+      // `tangent`: see PORTRAIT_OVERRIDES — the side view for a part that a radially-outboard neighbour covers.
       const t = Number.isFinite(ov.tangent) ? ov.tangent : 0;
       return [c.x / r + ov.radial[0] - t * (c.y / r), c.y / r + ov.radial[1] + t * (c.x / r), ov.radial[2]];
     };
@@ -1584,10 +1106,8 @@ export class MotherCallouts {
     if (def.armIndex !== undefined) {
       const arm = this._liveCtx?.armManager?.arms?.[def.armIndex];
       if (!arm || arm.state !== Constants.ARM_STATES.DOCKED || !arm.group) return null;
-      // T7: the docked BODY (`arm.mesh`, the hex-prism group) with only its
-      // VISIBLE meshes — the arm group also carries idle plume cones, bridle
-      // legs and the tether kit, which stretched the box to the whole strut
-      // line ("the whole satellite shows" in the second witness).
+      // The docked BODY (`arm.mesh`, the hex-prism group) with only its VISIBLE meshes — the arm group also carries idle
+      // plume cones, bridle legs and the tether kit, which stretched the box to the whole strut line.
       const body = arm.mesh || arm.group;
       this._unionMeshBox(body, box, toLocal, true);
       if (box.isEmpty()) this._unionMeshBox(arm.group, box, toLocal);      // a body with nothing visible: the whole arm
@@ -1602,9 +1122,8 @@ export class MotherCallouts {
         if (stowed) dir = ov.stowDir.slice();
       }
     }
-    // The frame source: the hover picks (`pick` → `mesh`), or — T3 — the row's
-    // `frame` groups (portrait-only geometry for the card-only rows, so hover /
-    // outlines stay exactly as the owner decided). One group = one instance.
+    // The frame source: the hover picks (`pick` → `mesh`), or the row's `frame` groups (portrait-only geometry for the
+    // card-only rows, so hover / outlines are unaffected). One group = one instance.
     let groups;
     if (ov && Array.isArray(ov.frame) && ov.frame.length) {
       groups = ov.frame.map((entry) => this._frameTargets(entry)).filter((g) => g.length);
@@ -1635,12 +1154,10 @@ export class MotherCallouts {
   }
 
   /**
-   * @private T3 — resolve one `frame` table entry (a mesh name, or a list of
-   * names that together make ONE instance — e.g. a hinge's bracket + pin) to
-   * the objects of those names under `player`, the `_pickTargets` rule
-   * (every object of that name, by traverse) without its per-rec cache: a
-   * flower pair bought after the first hover must still frame. Portrait-only:
-   * hover never reads it. Per click.
+   * @private Resolve one `frame` table entry (a mesh name, or a list of names that together make ONE instance — e.g. a
+   * hinge's bracket + pin) to the objects of those names under `player`: the `_pickTargets` rule (every object of that
+   * name, by traverse) without its per-rec cache, so a flower pair bought after the first hover still frames.
+   * Portrait-only: hover never reads it. Per click.
    * @param {string|string[]} entry
    * @returns {THREE.Object3D[]}
    */
@@ -1651,9 +1168,7 @@ export class MotherCallouts {
     for (const it of items) {
       if (typeof it === 'string' && it) wanted.add(it);
       else if (it && typeof it === 'object' && Number.isInteger(it.arm)) {
-        // `{ arm: i }` — the docked daughter of berth i (its arm.group, DOCKED
-        // only, resolved live like the daughter rows): a berth's picture is the
-        // daughter seated in it; away → the berth's own hardware alone.
+        // `{ arm: i }` — the docked daughter of berth i (DOCKED only, resolved live); away → the berth's own hardware alone.
         const arm = this._liveCtx?.armManager?.arms?.[it.arm];
         if (arm && arm.state === Constants.ARM_STATES.DOCKED && arm.group) out.push(arm.group);
       }
@@ -1676,7 +1191,7 @@ export class MotherCallouts {
     const v = _recBoundsScratch;
     target.traverse((o) => {
       if (!o.isMesh || !o.geometry?.attributes?.position || o.userData.partId) return;   // never our own outline shells
-      if (visibleOnly && !this._chainVisible(o, target)) return;                          // T7: idle plumes / stowed kit under a daughter
+      if (visibleOnly && !this._chainVisible(o, target)) return;                          // idle plumes / stowed kit under a daughter
       const g = o.geometry;
       if (!g.boundingBox) g.computeBoundingBox();
       const bb = g.boundingBox;
@@ -1692,17 +1207,11 @@ export class MotherCallouts {
   }
 
   /**
-   * Session T — run `fn` with everything of ours that rides the ship's render
-   * layer HIDDEN, so a portrait render of the near set shows the hardware and
-   * nothing else: the callout group (`_group` — leaders, dots, cards; a child
-   * of `player`, so it WOULD render in a ship-only pass) and every hover /
-   * REFIT-ghost outline layer (`rec._outline.lines` / `.shells` — children of
-   * the hull meshes, NOT of `_group`, so `_group.visible` cannot hide them —
-   * plus any leftover `userData.partId` mesh under `player`, defensively).
-   * Restores exactly what was visible in a `finally` (a throw propagates);
-   * layers that were already hidden stay hidden. `setSuppressed` is the WRONG
-   * handle for this (it resets band / pointer state); this touches only
-   * `.visible`. Returns `fn()`'s value. Per click, never per frame.
+   * Run `fn` with everything of ours that rides the ship's render layer HIDDEN, so a portrait render of the near set
+   * shows the hardware and nothing else: the callout group (`_group`, a child of `player`) and every hover / REFIT-ghost
+   * outline layer (`rec._outline.lines` / `.shells` — children of the hull meshes, NOT of `_group`, so `_group.visible`
+   * cannot hide them — plus any leftover `userData.partId` mesh under `player`). Restores exactly what was visible in a
+   * `finally`; already-hidden layers stay hidden. `setSuppressed` is the WRONG handle (it resets band / pointer state).
    * @template T @param {() => T} fn @returns {T}
    */
   withHiddenForPortrait(fn) {
@@ -1728,9 +1237,8 @@ export class MotherCallouts {
     }
   }
 
-  /** @private Restore a ghost rec's outline materials to their build-time base
-   *  opacities (no-op without an outline; tolerates hand-built outlines
-   *  without base fields by leaving their current opacity). */
+  /** @private Restore a ghost rec's outline materials to their build-time base opacities (tolerates hand-built
+   *  outlines without base fields). */
   _restoreGhostBase(rec) {
     const out = rec && rec._outline;
     if (!out) return;
@@ -1738,9 +1246,7 @@ export class MotherCallouts {
     if (out.shellBaseOp != null && out.shellMaterial) out.shellMaterial.opacity = out.shellBaseOp;
   }
 
-  /** @private Empty the ghost set: bases restored, non-hover outlines hidden.
-   *  Used by _setActive(false), dispose() and guarded so rigs without the set
-   *  never reach it. */
+  /** @private Empty the ghost set: bases restored, non-hover outlines hidden. Guarded so rigs without the set skip it. */
   _clearGhosts() {
     if (!this._ghostRecs || !this._ghostRecs.size) return;
     for (const rec of this._ghostRecs) {
@@ -1751,9 +1257,8 @@ export class MotherCallouts {
   }
 
   /**
-   * @private Per-frame ghost pulse (update() tail): every ghost rec's OWN
-   * outline materials oscillate GHOST_PULSE_MIN×–1× of base at GHOST_PULSE_HZ
-   * — never a hull material, never the hover rec (hover wins on overlap:
+   * @private Per-frame ghost pulse (update() tail): every ghost rec's OWN outline materials oscillate
+   * GHOST_PULSE_MIN×–1× of base at GHOST_PULSE_HZ — never a hull material, never the hover rec (hover wins on overlap:
    * held steady at base). pulse=false ghosts hold base. No allocation.
    */
   _updateGhostPulse(dt) {
@@ -1776,36 +1281,23 @@ export class MotherCallouts {
     }
   }
 
-  // --------------------------------------------------------------------------
-  // BUILD
-  // --------------------------------------------------------------------------
-
   /** Shared target-bracket texture for leader anchor markers. @private */
   static _dotTexture() {
     if (MotherCallouts._dotTex) return MotherCallouts._dotTex;
     const c = document.createElement('canvas');
     c.width = c.height = 64;
     const ctx = c.getContext('2d');
-    // White — _makeDot tints via material.color, and hover brightening reads it.
-    // Round 5: thicker strokes + bigger centre dot — at DOT_SIZE 0.016 the
-    // sprite lands ~17 px at 1080p; 5 px texture strokes ≈ 1.3 px on screen,
-    // and the r=4 core keeps a solid point readable even when ticks blur over
-    // bright hull (gold MLI / white dome washed the old 3 px/r=2 version out).
+    // White: _makeDot tints via material.color and hover brightening reads it. Thick strokes (5 px ≈ 1.3 px on screen)
+    // and the r=4 core keep the point readable over bright hull (gold MLI / white dome).
     ctx.strokeStyle = '#ffffff';
     ctx.fillStyle = '#ffffff';
     ctx.lineWidth = 5;
     const t = 16; // tick length
     const m = 4;  // margin from edge
-    // Four corner ticks (L-shaped brackets).
-    // top-left
     ctx.beginPath(); ctx.moveTo(m, m + t); ctx.lineTo(m, m); ctx.lineTo(m + t, m); ctx.stroke();
-    // top-right
     ctx.beginPath(); ctx.moveTo(64 - m - t, m); ctx.lineTo(64 - m, m); ctx.lineTo(64 - m, m + t); ctx.stroke();
-    // bottom-left
     ctx.beginPath(); ctx.moveTo(m, 64 - m - t); ctx.lineTo(m, 64 - m); ctx.lineTo(m + t, 64 - m); ctx.stroke();
-    // bottom-right
     ctx.beginPath(); ctx.moveTo(64 - m - t, 64 - m); ctx.lineTo(64 - m, 64 - m); ctx.lineTo(64 - m, 64 - m - t); ctx.stroke();
-    // Centre dot.
     ctx.beginPath(); ctx.arc(32, 32, 4, 0, Math.PI * 2); ctx.fill();
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -1813,7 +1305,6 @@ export class MotherCallouts {
     return tex;
   }
 
-  /** Card sprite (texture assigned lazily). @private */
   _makeCardSprite() {
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
       transparent: true, opacity: 0.0, depthWrite: false, depthTest: false,
@@ -1830,7 +1321,7 @@ export class MotherCallouts {
    */
   _makeLine(color) {
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(24), 3)); // 8 verts
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(24), 3));
     geo.setIndex([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
     const mat = new THREE.MeshBasicMaterial({
       color, transparent: true, opacity: 0.0, depthWrite: false, depthTest: false,
@@ -1842,7 +1333,6 @@ export class MotherCallouts {
     return line;
   }
 
-  /** Small filled marker where a leader touches its part. @private */
   _makeDot(color) {
     const dot = new THREE.Sprite(new THREE.SpriteMaterial({
       map: MotherCallouts._dotTexture(),
@@ -1877,8 +1367,8 @@ export class MotherCallouts {
       };
       this._applyCard(sRec); // initial static card
       this._allRecs.push(sRec);
-      // The DAUGHTERS pseudo-group has no visible system label — its parts are
-      // the docked craft themselves (T3); keep the rec for the tour but never show.
+      // The DAUGHTERS pseudo-group has no visible system label — its parts are the docked craft themselves; keep the
+      // rec for the tour but never show.
       if (sys.daughters) sRec._neverShow = true;
 
       for (const part of sys.parts) {
@@ -1908,11 +1398,8 @@ export class MotherCallouts {
       }
     }
 
-    // B2: the ONE hover dossier sprite + its card-shape wrapper rec. The
-    // wrapper carries the dossier's own cardKey/card/_cardCache, so a hover
-    // never touches any rail rec's card identity — and exactly ONE full
-    // texture is resident at a time (the R14 budget's "1 focused card" slot,
-    // re-purposed for the dossier).
+    // The ONE hover dossier sprite + card-shape wrapper rec: it carries its own cardKey/card/_cardCache, so a hover never
+    // touches a rail rec's card identity, and exactly ONE full texture is resident at a time.
     this._dossierSprite = this._makeCardSprite();
     this._dossierSprite.renderOrder = DOSSIER_RENDER_ORDER;
     this._dossierSprite.visible = false;
@@ -1923,42 +1410,33 @@ export class MotherCallouts {
       cardKey: null, card: null, _cardEpoch: -1, _cardCache: null,
     };
 
-    // §13 r3 (L6): the one-line hint (DOM — no canvas 2D needed).
+    // §13 r3: the one-line hint (DOM — no canvas 2D needed).
     this._buildHint();
   }
 
   /**
-   * Resolve a rec's anchor for this frame (T1). Static parts copy their table
-   * coordinate; `mesh` parts resolve from the live PlayerSatellite mesh (once,
-   * cached); `dynamic` parts re-resolve every frame because the mesh moves
-   * (strut-mounted reels/springs); daughter recs follow their docked ArmUnit.
-   * Falls back to the static coordinate with a one-time warn on a mesh miss.
-   * Optional `meshOffset: [x, y, z]` (ship frame, scene units — already ×M) is
-   * added AFTER the mesh world→local copy, so a card can point at a feature of
-   * a mesh whose origin is not the feature (a bell's rim, a plate's tip) without
-   * a static tuple that drifts when the mesh moves (Mother audit T10).
-   * `flowerGated` recs: the flower meshes only exist after _installFlowerPair
-   * (a purchase), so the one-shot lookup is skipped while the family is gone and
-   * re-armed on the gone→present edge — a `dynamic: true` card binds on the
-   * first frame after purchase instead of caching a miss (and a warn) forever.
+   * Resolve a rec's anchor for this frame. Static parts copy their table coordinate; `mesh` parts resolve from the
+   * live PlayerSatellite mesh (once, cached; `dynamic` parts every frame because the mesh moves; `meshOffset` is added
+   * AFTER the world→local copy so the card can point at a feature without a static tuple that drifts); daughter recs
+   * follow their docked ArmUnit. A mesh miss warns once and falls back to the static coordinate. `flowerGated` recs
+   * skip the lookup while the family is gone and re-arm it on the gone→present edge, so a `dynamic: true` card binds on
+   * the first frame after purchase instead of caching a miss (and a warn) forever.
    * @private
    */
   _resolveAnchor(rec) {
     const def = rec.def;
-    // P2: the THERMAL family hides until a flower pair is purchased (the
-    // daughter `_armGone` idiom) — purchase-gated hardware never gets a
-    // floating label pointing at empty rim.
+    // The THERMAL family hides until a flower pair is purchased (the daughter `_armGone` idiom).
     if (def.flowerGated) {
       const gone = !this._flowerOn();
       if (rec._flowerGone && !gone) {
-        // T10: gone → present edge — re-arm the one-shot mesh lookup.
+        // gone → present edge — re-arm the one-shot mesh lookup.
         rec._meshTried = false;
         rec._mesh = null;
         rec._meshResolved = false;
       }
       rec._flowerGone = gone;
     }
-    // Daughter recs follow their docked ArmUnit (T3).
+    // Daughter recs follow their docked ArmUnit.
     if (def.armIndex !== undefined) {
       const arm = this._liveCtx?.armManager?.arms?.[def.armIndex];
       if (arm && arm.state === Constants.ARM_STATES.DOCKED && arm.group) {
@@ -1975,8 +1453,7 @@ export class MotherCallouts {
       rec.anchor.set(def.anchor[0], def.anchor[1], def.anchor[2]);
       return;
     }
-    // T10: while a flowerGated family is gone its meshes do not exist yet —
-    // no lookup, no warn (the static anchor stands in; the card is hidden anyway).
+    // flowerGated family gone: no lookup, no warn (the static anchor stands in; the card is hidden anyway).
     if (!rec._mesh && !rec._meshTried && !rec._flowerGone) {
       rec._meshTried = true;
       rec._mesh = this.player.getObjectByName(def.mesh) || null;
@@ -1985,8 +1462,6 @@ export class MotherCallouts {
       }
     }
     if (rec._mesh) {
-      // Static meshes resolve once and cache; `dynamic` meshes (strut-mounted
-      // reels/springs, gimbal children) re-resolve every frame.
       if (rec._meshResolved && !def.dynamic) return;
       rec._mesh.getWorldPosition(this._vTmp);
       this.player.worldToLocal(this._vTmp);
@@ -1999,10 +1474,6 @@ export class MotherCallouts {
     }
   }
 
-  // --------------------------------------------------------------------------
-  // CARD TEXTURE MANAGEMENT
-  // --------------------------------------------------------------------------
-
   /** Codex link state for a part: 'linked' | 'locked' | null. @private */
   _codexState(def) {
     if (!def.codexId) return null;
@@ -2010,9 +1481,8 @@ export class MotherCallouts {
     if (!cs || typeof cs.getEntry !== 'function') return 'linked';
     const entry = cs.getEntry(def.codexId);
     if (!entry) {
-      // A codexId that no longer resolves would render a clickable ▸ that
-      // silently no-ops (CodexViewerUI.openEntry returns false). Treat it as
-      // unlinked and warn once so the drift is loud, not invisible.
+      // A codexId that no longer resolves would render a clickable ▸ that silently no-ops (CodexViewerUI.openEntry
+      // returns false). Treat it as unlinked and warn once so the drift is loud, not invisible.
       if (!MotherCallouts._warnedMissingCodex) MotherCallouts._warnedMissingCodex = new Set();
       if (typeof console !== 'undefined' && !MotherCallouts._warnedMissingCodex.has(def.codexId)) {
         MotherCallouts._warnedMissingCodex.add(def.codexId);
@@ -2023,7 +1493,6 @@ export class MotherCallouts {
     return entry.unlocked ? 'linked' : 'locked';
   }
 
-  /** Codex entry title for a part's linked entry, or null. @private */
   _codexTitle(def) {
     if (!def.codexId) return null;
     const cs = this._liveCtx?.codexSystem;
@@ -2032,7 +1501,6 @@ export class MotherCallouts {
     return (e && e.title) ? e.title : null;
   }
 
-  /** Read TRL for a part's codex entry, or null. @private */
   _partTRL(def) {
     const cs = this._liveCtx?.codexSystem;
     if (!def.codexId || !cs || typeof cs.getEntry !== 'function') return null;
@@ -2041,35 +1509,28 @@ export class MotherCallouts {
   }
 
   /**
-   * Build the spec for a rec's current state and (re)generate its card texture
-   * only when the content string changes. `full` → the full detail card with
-   * spec/TRL/live rows (the hover dossier's content since B2); otherwise a
-   * compact title-only card — the only variant the rails carry since B1
-   * retired the promoted focus card.
-   *
-   * Cards are cached per rec by VARIANT ('compact' | 'hover'), not by content,
-   * so a live-data refresh on the full card regenerates only that variant and
-   * never evicts the permanently-resident compact card (round-2 R3/R14).
+   * Build the spec for a rec's current state and (re)generate its card texture only when the content string changes.
+   * `full` → the full detail card with spec/TRL/live rows (the hover dossier's content); otherwise a compact title-only
+   * card (the only variant the rails carry). Cached per rec by VARIANT ('compact' | 'hover'), not by content, so a
+   * live-data refresh on the full card never evicts the permanently-resident compact card.
    * @private
    */
   _applyCard(rec, { full = false } = {}) {
     const def = rec.def;
     const codex = rec.isSystem ? null : this._codexState(def);
     let rows = [];
-    // Round 5: system cards get a single dim role line — a title-only chip
-    // made the player guess what the system IS (CAPTURE was the worst case:
-    // it pointed at an invisible hinge line with no explanation).
+    // System cards get a single dim role line (a title-only chip left the player guessing what the system IS).
     if (rec.isSystem && def.role) rows.push({ text: def.role });
     if (full && !rec.isSystem) {
       // Deterministic row budget: 6 slots total.
       // Locked: reserve hint lines (1-2), fill [mass, ...specs, ...live(≤2)], append hint last. TRL dropped.
       // Unlocked: [mass, ...specs(≤2), ...live(≤2), TRL], capped at 6.
       const isLocked = codex === 'locked';
-      // Only the first two live rows survive the budget (R12).
+      // Only the first two live rows survive the budget.
       const live = this._liveRows(def).slice(0, 2);
 
-      // Pre-wrap the unlock hint with the single shared wrap implementation;
-      // its line count IS the budget reservation, so budget and draw agree (review).
+      // Pre-wrap the unlock hint with the single shared wrap implementation; its line count IS the budget reservation,
+      // so budget and draw agree.
       let hintLines = [];
       if (isLocked) {
         const hintText = this._liveCtx?.codexSystem?.getUnlockHint?.(def.codexId) || null;
@@ -2083,9 +1544,8 @@ export class MotherCallouts {
       }
       for (const lr of live) rows.push({ text: lr, dim: false });
 
-      // Deep-link affordance NAMES its destination (round 6): the row shows the
-      // exact Tech Library entry the click opens, not a generic "open tech
-      // library". Pushed before TRL so it survives the budget slice.
+      // The deep-link row NAMES its destination: the exact Tech Library entry the click opens. Pushed before TRL so it
+      // survives the budget slice.
       const codexTitle = codex ? this._codexTitle(def) : null;
       if (codex === 'linked') {
         rows.push({ text: `▸ ${codexTitle || 'open SPECS'}`, dim: true, color: rec.hue });
@@ -2095,22 +1555,21 @@ export class MotherCallouts {
         // Locked cards still name where the ▸ leads (amber, matches the hint).
         rows.push({ text: `▸ ${codexTitle}`, dim: true, color: VisualLaw.COLORS.CAUTION });
       } else if (codex === null) {
-        // Structural part with no briefing — explain the dead click (round 6).
+        // Structural part with no briefing — explain the dead click.
         rows.push({ text: 'structure — no briefing', dim: true });
       }
 
       rows = rows.slice(0, budget);
 
-      // Hint lines appended last, amber (R8).
+      // Hint lines appended last, amber.
       for (const line of hintLines) {
         rows.push({ text: line, dim: false, color: VisualLaw.COLORS.CAUTION });
       }
     }
     const title = rec.isSystem ? def.label : def.name;
     const variant = full ? 'hover' : 'compact';
-    // Session R (plan §14.2): the typeface epoch leads the content key — a
-    // card rasterised before the B612 faces settled misses here once the epoch
-    // moves, and the redraw below is the ONE redraw that texture is owed.
+    // The typeface epoch leads the content key: a card rasterised before the B612 faces settled misses here once the
+    // epoch moves, and the redraw below is the ONE redraw that texture is owed.
     const epoch = this._fontEpoch.value();
     const key = [
       epoch,
@@ -2118,11 +1577,9 @@ export class MotherCallouts {
       full ? rows.map((r) => r.text).join('|') : 'compact',
     ].join('::');
 
-    // Early-out: content unchanged → keep the current texture (R3). The key
-    // carries the epoch, so this exit is only reached under the stamped epoch;
-    // the stamp is re-asserted defensively (review pass 2) so every exit of
-    // _applyCard leaves `_cardEpoch === epoch` and the per-frame branch can
-    // never spin on a rec whose key was written without it.
+    // Early-out: content unchanged → keep the current texture. The key carries the epoch, so this exit is only reached
+    // under the stamped epoch; the stamp is re-asserted defensively so every exit of _applyCard leaves
+    // `_cardEpoch === epoch` and the per-frame branch can never spin on a rec whose key was written without it.
     if (rec.cardKey === key && rec.card) { rec._cardEpoch = epoch; return; }
 
     // Reuse the cached variant if its content key still matches.
@@ -2137,7 +1594,6 @@ export class MotherCallouts {
       return;
     }
 
-    // Generate a fresh card for this variant.
     const card = createCardTexture({
       title,
       titleColor: rec.isSystem ? rec.hue : CFG.INK,
@@ -2160,8 +1616,7 @@ export class MotherCallouts {
   }
 
   /**
-   * Dynamic live-data rows for a part (graceful degradation: returns [] if the
-   * live context or a referenced system is absent). @private
+   * Dynamic live-data rows for a part ([] if the live context or a referenced system is absent). @private
    */
   _liveRows(def) {
     const ctx = this._liveCtx;
@@ -2170,8 +1625,7 @@ export class MotherCallouts {
     try {
       switch (def.live) {
         case 'rosa': {
-          // Wings state (round-3 T10): makes the furl state legible on the card.
-          // Supersedes round-2 R12's Battery row — battery is already on the HUD.
+          // Wings state: makes the furl state legible on the card (battery is already on the HUD).
           const furl = ctx.player?._rosaFurlProgress;
           if (typeof furl === 'number') {
             out.push(furl >= 0.98 ? 'Wings: DEPLOYED' : furl <= 0.02 ? 'Wings: FURLED' : `Wings: ${Math.round(furl * 100)}%`);
@@ -2182,27 +1636,26 @@ export class MotherCallouts {
           const rs = ctx.resourceSystem;
           if (rs?.getStatus && typeof rs.getStatus === 'function') {
             const st = rs.getStatus();
-            // currentFuelName may be a cargo-fed metal (fromCargo), which is NOT
-            // drawn from the xenon tank — don't report xenon kg under its name (R4).
+            // currentFuelName may be a cargo-fed metal (fromCargo), which is NOT drawn from the xenon tank — don't
+            // report xenon kg under its name.
             const fuel = rs.getCurrentFuel?.();
             if (fuel && !fuel.fromCargo) {
-              out.push(`Fuel: ${st.currentFuelName} ${engineGasKg(st).toFixed(1)}/${engineGasKg({ xenon: st.xenonMax, tankGasId: st.tankGasId }).toFixed(1)} kg`);   // h3b D4: real kg, not tank percent
+              out.push(`Fuel: ${st.currentFuelName} ${engineGasKg(st).toFixed(1)}/${engineGasKg({ xenon: st.xenonMax, tankGasId: st.tankGasId }).toFixed(1)} kg`);   // real kg, not tank percent
             } else if (fuel) {
               out.push(`Fuel: ${st.currentFuelName} (cargo)`);
             } else {
               out.push(`Fuel: ${engineGasKg(st).toFixed(1)}/${engineGasKg({ xenon: st.xenonMax, tankGasId: st.tankGasId }).toFixed(1)} kg`);
             }
           }
-          // No "Thrust" row: its data source (player.thrustInput) is dead —
-          // the manual thrust methods that wrote it are gone and
-          // _applyThrust zeroes the accumulator before callouts update (review).
+          // No "Thrust" row: its data source (player.thrustInput) is dead — the manual thrust methods that wrote it are
+          // gone and _applyThrust zeroes the accumulator before callouts update.
           break;
         }
         case 'ttc': {
           const cm = ctx.commsSystem;
           if (cm?.getSuppressionTier) {
             const tier = cm.getSuppressionTier();
-            // comms-after-tutorial D6c: tier 3 = nothing suppressed (the old `tier > 0` read it backwards).
+            // tier 3 = nothing suppressed (`tier > 0` reads it backwards).
             out.push(`Link: ${tier < 3 ? `SUPPRESSED (${tier})` : 'NOMINAL'}`);
           }
           break;
@@ -2226,10 +1679,6 @@ export class MotherCallouts {
     return out;
   }
 
-  // --------------------------------------------------------------------------
-  // ACTIVATION
-  // --------------------------------------------------------------------------
-
   _setActive(on) {
     if (this._active === on) return;
     this._active = on;
@@ -2239,18 +1688,13 @@ export class MotherCallouts {
       this._band = 'SYSTEM';
       this._attachPointer();
       eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: 'SYSTEM' });
-      // Refresh all compact cards so codex lock state is current (MED-9).
-      // Content-key check makes unchanged cards a no-op (R3).
-      // Session R (review pass 2): a card stamped under an OLDER typeface epoch
-      // is left to _layout's capped branch (≤ CARD_EPOCH_REDRAWS_PER_FRAME per
-      // frame, from the next frame — the callouts are active now), where it
-      // redraws once with the current codex state anyway. On the usual
-      // settle-then-inspect path this loop would otherwise rasterise every
-      // card in one call — the burst the cap exists to prevent.
+      // Refresh all compact cards so codex lock state is current (unchanged cards are a no-op by content key). A card
+      // stamped under an OLDER typeface epoch is left to _layout's capped branch (≤ CARD_EPOCH_REDRAWS_PER_FRAME per
+      // frame), which redraws it with the current codex state anyway; this loop would otherwise burst every card.
       const fontEpochNow = this._fontEpoch.value();
       for (const rec of this._allRecs) {
-        rec._revealAt = null; // T3: no stale reveal hold across re-entry
-        rec._pendingSide = null; // T4: no stale flip across re-entry
+        rec._revealAt = null; // no stale reveal hold across re-entry
+        rec._pendingSide = null; // no stale flip across re-entry
         rec._sideT = 0;
         if (rec._cardEpoch !== fontEpochNow) continue;
         this._applyCard(rec, { full: false });
@@ -2258,32 +1702,23 @@ export class MotherCallouts {
     } else {
       this._guideT = -1;
       this._focusPart = null;
-      // §13 r3: a re-arrival is the rest state (the system names only) —
-      // pins and lingers do not survive leaving inspection.
+      // §13 r3: a re-arrival is the rest state (system names only) — pins and lingers do not survive leaving inspection.
       this._pinnedSys = null;
       this._lingerSys = null;
       this._openSys = null;
-      this._sysLabelHover = null;   // the hovered-name cache does not survive leaving inspection (§13 r3 fix)
+      this._sysLabelHover = null;   // the hovered-name cache does not survive leaving inspection
       if (this._hintEl) this._hintEl.style.display = 'none';
-      // Round 6: the guided tour is a one-shot. Mark it done on the first exit so
-      // a quick dip in/out of inspection can't replay the dim tour indefinitely.
+      // The guided tour is a one-shot: mark it done on the first exit so a quick dip in/out of inspection can't replay it.
       this._guidedDone = true;
       this._detachPointer();
       this._setHoverRec(null); // canvas-less instances never attach — clear hover explicitly
-      // Wave 5 (2): REFIT ghost outlines clear with the costume (bases
-      // restored, set emptied) — guarded so prototype-borrowing rigs without
-      // the set skip it; the explicit hide-all below catches every layer.
+      // REFIT ghost outlines clear with the costume (guarded: prototype-borrowing rigs without the set skip it).
       if (this._ghostRecs) this._clearGhosts();
-      // T4: hover outlines are children of the hull meshes, NOT of this._group,
-      // so `_group.visible = false` cannot hide them — hide each one explicitly.
+      // Hover outlines are children of the hull meshes, NOT of this._group, so hide each one explicitly.
       for (const p of this._partLabels) this._setOutlineVisible(p, false);
       eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: null });
     }
   }
-
-  // --------------------------------------------------------------------------
-  // CLICKABLE LABELS → CODEX DEEP-LINKS
-  // --------------------------------------------------------------------------
 
   _attachPointer() {
     if (this._listening || !this.canvas) return;
@@ -2325,30 +1760,17 @@ export class MotherCallouts {
   }
 
   /**
-   * Card/part pick eligibility — ONE gate for hover, click, card and mesh, so
-   * they can never drift apart (round 6). Two tiers since Wave 5 Session D:
-   *
-   *   CARD (`mesh` false — the sprite loop): EXACTLY the shipped visibility
-   *   filter — the sprite is drawn and past the legibility gate — so a card
-   *   is pickable precisely when the player can read it.
-   *
-   *   MESH (`mesh` true — the hull loop in _pickBestRec): the part's `pick`
-   *   hull meshes are pickable whenever they can be ON SCREEN in the
-   *   PART/COMPONENT bands, REGARDLESS of the card's rail cull, facing gate or
-   *   detail tier — the mesh is literally under the pointer (a rail-culled
-   *   wing, a barrel PV box at the PART band whose card waits for the
-   *   COMPONENT band). Only pickability widens: the card itself stays
-   *   governed by its own rules (_targetOpacity / _stackRail), anchors,
-   *   leaders and layout are untouched. Hidden hardware never picks: the
-   *   SYSTEM band (nothing on the hull hovers there), purchase-gated flower
-   *   parts before the buy, daughters away from their berth.
-   *
-   * The briefing gate (both tiers): a RESOLVABLE codexId (round 6: a drifted
-   * id renders "structure — no briefing" and must not stay clickable with a
-   * dead no-op click) — OR the injected onPartClick hook, whose D-a REFIT
-   * verb never needed an entry (Session D; the hub gates its own
-   * codexId-dependent actions). Absent hook + no briefing (the shipped
-   * `?ladder=0` boot): unpickable, exactly as shipped.
+   * Card/part pick eligibility — ONE gate for hover, click, card and mesh, so they can never drift apart. Two tiers:
+   *   CARD (`mesh` false — the sprite loop): the sprite is drawn and past the legibility gate, so a card is pickable
+   *   precisely when the player can read it.
+   *   MESH (`mesh` true — the hull loop in _pickBestRec): the part's `pick` hull meshes are pickable whenever they can
+   *   be ON SCREEN in the PART/COMPONENT bands, REGARDLESS of the card's rail cull, facing gate or detail tier — the
+   *   mesh is literally under the pointer. Only pickability widens: the card stays governed by its own rules
+   *   (_targetOpacity / _stackRail). Hidden hardware never picks: the SYSTEM band, purchase-gated flower parts before
+   *   the buy, daughters away from their berth.
+   * The briefing gate (both tiers): a RESOLVABLE codexId (a drifted id renders "structure — no briefing" and must not
+   * stay clickable) — OR the injected onPartClick hook, whose REFIT verb never needed an entry (the hub gates its own
+   * codexId-dependent actions). Absent hook + no briefing (the `?ladder=0` boot): unpickable.
    * @private @param {object} p part rec @param {boolean} [mesh] the hull-mesh tier
    * @returns {boolean}
    */
@@ -2356,11 +1778,8 @@ export class MotherCallouts {
     if (this._codexState(p.def) === null && !this._onPartClick) return false;
     if (!mesh) {
       if (!p.sprite.visible) return false;
-      // Gate on whichever is larger of eased vs target opacity, so picking
-      // follows what the player can actually see. Derived from the legibility
-      // floor (MIN_CARD_OP) so the two can't drift: a card is either clearly
-      // readable-and-clickable or hidden — no muddy half-pickable band. The
-      // 0.8 factor keeps the gate strictly below the floor (round 6).
+      // Gate on whichever is larger of eased vs target opacity, so picking follows what the player can see; derived from
+      // the legibility floor (MIN_CARD_OP) so the two can't drift. The 0.8 factor keeps the gate strictly below the floor.
       if (Math.max(p.op ?? 0, p._targetOp ?? 0) <= (CFG.MIN_CARD_OP ?? 0.5) * 0.8) return false;
       return true;
     }
@@ -2370,28 +1789,18 @@ export class MotherCallouts {
   }
 
   /**
-   * Resolve a rec's `pick` hull objects (lazy, once). Default when the table
-   * row carries no `pick`: `mesh ? [mesh] : []`. Resolution collects EVERY
-   * object with a matching name via player.traverse — getObjectByName returns
-   * only the FIRST match, and pick names were shared historically (SensorSpoke
-   * ×4 until Mother audit T4, FEEP_Boss / FEEP_GridDisc until T9); no shared
-   * name remains but the traverse-all behaviour is kept on purpose.
-   * §13 r4 (Lane H): `pickPrefixes` rows additionally collect every object
-   * whose name STARTS WITH one of the prefixes (the parent-part roll-up —
-   * bolts, clips, mounts, booms, panels highlight the part they belong to),
-   * matched by the same traverse-all rule and deduped against the exact
-   * names. Daughter recs (`armIndex`) resolve their pick subtree LIVE from
-   * the docked arm group each call — the craft are scene children, not
-   * `player` children, so a name lookup cannot reach them and a dock/undock
-   * must never serve a cached group. `flowerGated` rows never cache a miss
-   * while the family is gone: the meshes appear at purchase and resolution
-   * must run fresh then.
-   * One-time console.warn per rec for names that resolve to nothing (mirrors
-   * the anchor mesh-miss warn). Never throws when `player` is absent.
+   * Resolve a rec's `pick` hull objects (lazy, once). Default when the table row carries no `pick`:
+   * `mesh ? [mesh] : []`. Resolution collects EVERY object with a matching name via player.traverse
+   * (getObjectByName returns only the FIRST match), so a future shared pick name still outlines whole. §13 r4:
+   * `pickPrefixes` also collect every object whose name STARTS WITH a prefix, same rule, deduped against the exact
+   * names. Daughter recs (`armIndex`) resolve LIVE from the docked arm group each call — the craft are scene children,
+   * not `player` children, and a dock/undock must never serve a cached group. `flowerGated` rows never cache a miss
+   * while the family is gone. One-time console.warn per rec for names that resolve to nothing. Never throws when
+   * `player` is absent.
    * @private @returns {THREE.Object3D[]}
    */
   _pickTargets(rec) {
-    // H4: daughter recs — the live docked arm group, never cached.
+    // daughter recs — the live docked arm group, never cached.
     if (rec.def.armIndex !== undefined) {
       const arm = this._liveCtx?.armManager?.arms?.[rec.def.armIndex];
       if (arm && arm.state === Constants.ARM_STATES.DOCKED && arm.group) return [arm.group];
@@ -2429,10 +1838,9 @@ export class MotherCallouts {
   }
 
   /**
-   * True when `obj` and every parent up to and including `root` are `.visible`, and `obj` is drawn
-   * (not all of its materials `visible === false`).
-   * Raycaster.intersectObject tests LAYERS only, never `.visible` (T1) — hidden
-   * plumes, furled panels and docked daughter bodies would otherwise be hit.
+   * True when `obj` and every parent up to and including `root` are `.visible`, and `obj` is drawn (not all of its
+   * materials `visible === false`). Raycaster.intersectObject tests LAYERS only, never `.visible` — hidden plumes,
+   * furled panels and docked daughter bodies would otherwise be hit.
    * @private
    */
   _chainVisible(obj, root) {
@@ -2452,14 +1860,10 @@ export class MotherCallouts {
   }
 
   /**
-   * §13 r4 (Lane H): the pick generation key — the only two events that move
-   * meshes in or out of pick subtrees are a flower-pair install (a purchase)
-   * and an arm docking / undocking. The flower state is keyed on the PAIR
-   * COUNT, not a boolean (review fix): pairs are bought separately and
-   * `_installFlowerPair` BUILDS new meshes per pair, so buying pair B must
-   * rebuild the owner map and the blocker list too, not just pair A's "on".
-   * A key change rebuilds both on the next pick (see _ensurePickIndex).
-   * Cheap to compute; called per pick.
+   * §13 r4: the pick generation key — the only events that move meshes in or out of pick subtrees are a flower-pair
+   * install and an arm docking / undocking. The flower state is keyed on the PAIR COUNT, not a boolean: each pair
+   * BUILDS new meshes (`_installFlowerPair`), so buying pair B must rebuild the owner map and the blocker list too.
+   * A key change rebuilds both on the next pick (see _ensurePickIndex). Cheap; called per pick.
    * @private @returns {string}
    */
   _pickGenKey() {
@@ -2469,18 +1873,11 @@ export class MotherCallouts {
   }
 
   /**
-   * §13 r4 fix (review): a flower-pair PURCHASE builds NEW meshes
-   * (`PlayerSatellite._installFlowerPair`, one set per pair), so a pair-count
-   * change invalidates every flowerGated rec's cached pick subtree
-   * (`_pickObjs`, resolved against the old pairs' meshes) AND its outline
-   * (built over those same meshes). On a count change: dispose/detach each
-   * flowerGated rec's outline via the ONE teardown (`_disposeOutline` — no
-   * leaks, no duplicate layers), re-arm `_pickTried/_pickObjs` and
-   * `_outlineTried/_outline`, and a rec that is currently hovered or ghosted
-   * gets its outline rebuilt and shown again at once. The first call only
-   * records the baseline count (nothing older can be cached). Called per
-   * frame from update() and from _ensurePickIndex ahead of its generation
-   * check; cheap when the count has not moved (one optional call + compare).
+   * A flower-pair PURCHASE builds NEW meshes (`_installFlowerPair`, one set per pair), so a pair-count change
+   * invalidates every flowerGated rec's cached pick subtree (`_pickObjs`) AND its outline: dispose/detach each outline
+   * via the ONE teardown (`_disposeOutline`), re-arm `_pickTried/_pickObjs` and `_outlineTried/_outline`, and rebuild
+   * the outline at once for a rec that is hovered or ghosted. The first call only records the baseline count. Called
+   * per frame from update() and from _ensurePickIndex ahead of its generation check; cheap when the count is steady.
    * @private
    */
   _checkFlowerGen() {
@@ -2503,21 +1900,16 @@ export class MotherCallouts {
   }
 
   /**
-   * §13 r4: build, lazily and per generation, (a) the mesh→rec OWNER map —
-   * every Mesh inside some part's pick subtree (exact names, `pickPrefixes`
-   * matches, the docked daughters' live arm groups) — and (b) the BLOCKER
-   * list: every real Mesh under `player` plus every Mesh under a DOCKED
-   * daughter's arm group. Excluded from the blocker list: our own callout
-   * layer (cards, leaders, dots, the dossier — children of `_group`, which
-   * is itself a child of `player`) and every hover/REFIT outline layer
-   * (`userData.partId`; their raycast is a no-op anyway). First-wins on
-   * ownership; the pick-table disjoint-subtree test keeps the sets
-   * conflict-free. Never throws with no `player`.
+   * §13 r4: build, lazily and per generation, (a) the mesh→rec OWNER map — every Mesh inside some part's pick subtree
+   * (exact names, `pickPrefixes` matches, the docked daughters' live arm groups) — and (b) the BLOCKER list: every real
+   * Mesh under `player` plus every Mesh under a DOCKED daughter's arm group, minus our own callout layer (children of
+   * `_group`) and every hover/REFIT outline layer (`userData.partId`). First-wins on ownership; the pick-table
+   * disjoint-subtree test keeps the sets conflict-free. Never throws with no `player`.
    * @private
    */
   _ensurePickIndex() {
-    // §13 r4 fix (review): a pair-count change re-arms the flowerGated recs
-    // BEFORE the generation check below rebuilds the owner map / blockers.
+    // A pair-count change re-arms the flowerGated recs BEFORE the generation check below rebuilds the owner map /
+    // blockers.
     this._checkFlowerGen();
     const gen = this._pickGenKey();
     if (this._pickOwnerGen === gen && this._pickOwners) return;
@@ -2531,7 +1923,7 @@ export class MotherCallouts {
     };
     if (this.player && typeof this.player.traverse === 'function') {
       this.player.traverse((o) => {
-        if (!o.isMesh || !o.geometry?.attributes?.position) return;   // no Lines/Points/Sprites (T2)
+        if (!o.isMesh || !o.geometry?.attributes?.position) return;   // no Lines/Points/Sprites
         if (o.userData.partId) return;                                 // our own outline layers
         if (group && inCalloutLayer(o)) return;                        // cards / leaders / dots / dossier
         blockers.push(o);
@@ -2564,19 +1956,13 @@ export class MotherCallouts {
   }
 
   /**
-   * Shared raycast pick with the camera ray already set: the card sprites
-   * FIRST (a card hit ALWAYS beats a mesh hit — cards are depthTest:false and
-   * draw on top of the hull), then the ONE blocker raycast (§13 r4, Lane H):
-   * every chain-visible Mesh under the ray — ship or docked daughter — sorted
-   * by distance, and the FIRST hit decides. It either answers as the part it
-   * belongs to (owner map → `_recPickable` mesh tier) or it BLOCKS: a piece
-   * no part owns (the bare hull skin) or a part that is not pickable stops
-   * the pointer — nothing lights up THROUGH a piece in front of it. This
-   * replaces the per-rec pick loop, which only ever saw pick subtrees and
-   * lit parts behind non-pickable meshes (DECISIONS-evidence §13: the barrel
-   * block, the rear cap). Outline layers never enter the list (userData.partId)
-   * and Lines never enter it (Meshes only). Single source for the pick so
-   * hover and click can never drift apart (review).
+   * Shared raycast pick with the camera ray already set: the card sprites FIRST (a card hit ALWAYS beats a mesh hit —
+   * cards are depthTest:false and draw on top of the hull), then the ONE blocker raycast (§13 r4): every chain-visible
+   * Mesh under the ray — ship or docked daughter — sorted by distance, and the FIRST hit decides. It either answers as
+   * the part it belongs to (owner map → `_recPickable` mesh tier) or it BLOCKS: a piece no part owns (the bare hull
+   * skin) or a part that is not pickable stops the pointer — nothing lights up THROUGH a piece in front of it. This
+   * replaces the per-rec pick loop, which lit parts behind non-pickable meshes (archive/DECISIONS-evidence.md §13: the
+   * barrel block, the rear cap). Single source for the pick so hover and click can never drift apart.
    * @private
    */
   _pickBestRec() {
@@ -2601,11 +1987,9 @@ export class MotherCallouts {
     if (!hits.length) return null;
     hits.sort((a, b) => a.distance - b.distance);
     for (const hit of hits) {
-      // T2 parity: fake rigs can hand back non-Mesh objects; the list itself
-      // is Mesh-only by construction.
+      // Fake rigs can hand back non-Mesh objects; the list itself is Mesh-only by construction.
       if (!hit.object || !hit.object.isMesh) continue;
-      // T1: skip hits whose ancestor chain is hidden (the list is built per
-      // generation, visibility is checked live, here).
+      // Skip hits whose ancestor chain is hidden (the list is built per generation, visibility is checked live, here).
       if (!this._chainVisible(hit.object, null)) continue;
       const rec = this._pickOwners.get(hit.object) || null;
       if (rec && this._recPickable(rec, true)) return rec;
@@ -2625,28 +2009,23 @@ export class MotherCallouts {
   }
 
   /**
-   * The SOLE writer of `_hoverRec` (source-pinned in test-MotherCallouts): one
-   * hover state whatever the source — card sprite or hull mesh. Swaps the part
-   * outline and keeps the hand cursor in sync; the card treatment (opacity
-   * lift, scale bump, leader whitening) reads `_hoverRec` in _positionCard.
-   * Every applied pick result — a hit (same rec or a switch) or an explicit
-   * clear — also ends the stationary miss run (`_hoverMisses`, see
-   * _refreshHover), so a stale count can never shorten the next hover.
+   * The SOLE writer of `_hoverRec` (source-pinned in test-MotherCallouts): one hover state whatever the source — card
+   * sprite or hull mesh. Swaps the part outline and keeps the hand cursor in sync; the card treatment reads `_hoverRec`
+   * in _positionCard. Every applied pick result — a hit or an explicit clear — also ends the stationary miss run
+   * (`_hoverMisses`, see _refreshHover), so a stale count can never shorten the next hover.
    * @private @param {object|null} rec
    */
   _setHoverRec(rec) {
     const next = rec || null;
-    // §13 r3 (L5): the first non-null hover ends the one-time sweep (the
-    // player takes over) and dismisses the hint line — both once per load.
+    // §13 r3: the first non-null hover ends the one-time sweep (the player takes over) and dismisses the hint line —
+    // both once per load.
     if (next) { this._guidedDone = true; this._hintDone = true; }
     this._hoverMisses = 0;
     if (next === this._hoverRec) return;
     const old = this._hoverRec;
     this._hoverRec = next;
-    // B2: the dossier's 400 ms dwell restarts on every hover CHANGE (the
-    // same rec held keeps counting) and a cleared hover hides it at once.
-    // Guarded on the sprite — prototype-borrowing rigs without the dossier
-    // skip that write; the clock fields are plain primitives.
+    // The dossier's 400 ms dwell restarts on every hover CHANGE (the same rec held keeps counting) and a cleared hover
+    // hides it at once. Guarded on the sprite — prototype-borrowing rigs without the dossier skip that write.
     this._dossierDwellStart = next
       ? (typeof performance !== 'undefined' ? performance.now() : Date.now())
       : 0;
@@ -2656,8 +2035,7 @@ export class MotherCallouts {
       this._dossierSprite.visible = false;
       this._dossierSprite.material.opacity = 0;
     }
-    // A rec that is ALSO ghosted keeps its outline on hover-out (the REFIT
-    // ghost pulse resumes in update()); plain hovers hide as shipped.
+    // A rec that is ALSO ghosted keeps its outline on hover-out (the REFIT ghost pulse resumes in update()).
     if (old && !(this._ghostRecs && this._ghostRecs.has(old))) {
       this._setOutlineVisible(old, false);
     }
@@ -2674,11 +2052,11 @@ export class MotherCallouts {
     }
   }
 
-  /** Pointer left the canvas: clear the hover and stop re-picking (R13). @private */
+  /** Pointer left the canvas: clear the hover and stop re-picking. @private */
   _handlePointerLeave() {
     this._setHoverRec(null);
-    this._pointerPos = null;   // stop re-picking once the pointer exits (R13)
-    this._sysLabelHover = null;   // the hovered-name cache clears with the hover (§13 r3 fix)
+    this._pointerPos = null;   // stop re-picking once the pointer exits
+    this._sysLabelHover = null;   // the hovered-name cache clears with the hover
   }
 
   /** Hull-outline master switch (a method so tests can stub it). @private */
@@ -2687,55 +2065,35 @@ export class MotherCallouts {
   }
 
   /**
-   * Lazily build a rec's hover outline (once, cached), two layers per Mesh in
-   * the pick subtrees, both parented to THAT MESH so they follow every live
-   * transform (gimbal, furl, strut ride):
+   * Lazily build a rec's hover outline (once, cached), two layers per Mesh in the pick subtrees, both parented to THAT
+   * MESH so they follow every live transform (gimbal, furl, strut ride):
    *
-   *   1. House-style EdgesGeometry LineSegments (the hull-outline look, same
-   *      threshold). SCALE TRAP: EdgesGeometry hashes vertices at a fixed 1e4
-   *      precision and the ship is built at M = 1e-5 scene units per metre —
-   *      raw hull geometry collapses into ONE hash bucket and yields ZERO
-   *      edges (silently: an empty, invisible LineSegments; the shipped hull
-   *      outline has the same trap). Edge a ×1/M clone at metre scale, then
-   *      scale the edges back down. The house threshold is untouched.
-   *   2. A translucent cyan shell (the pre-approved fallback for weak edges):
-   *      a Mesh SHARING the hull mesh's geometry (never disposed here),
-   *      inflated 3% — closed bodies read as a soft cyan tint + silhouette
-   *      halo, flat panels as a cyan rim + tint. The witness showed edge
-   *      lines alone are near-invisible on the flat ROSA panels.
+   *   1. House-style EdgesGeometry LineSegments (same threshold as the hull outline). SCALE TRAP: EdgesGeometry hashes
+   *      vertices at a fixed 1e4 precision and the ship is built at M = 1e-5 scene units per metre — raw hull geometry
+   *      collapses into ONE hash bucket and yields ZERO edges (silently: an empty, invisible LineSegments). Edge a ×1/M
+   *      clone at metre scale, then scale the edges back down. The house threshold is untouched.
+   *   2. A translucent cyan shell: a Mesh SHARING the hull mesh's geometry (never disposed here), inflated 3% (edge
+   *      lines alone are near-invisible on the flat ROSA panels).
    *
-   * DEPTH (refinements, 2026-09-03): BOTH layers keep `depthTest` ON and
-   * `depthWrite` OFF, and are pulled HOVER_OUTLINE_STAGGER_M (1.5 mm) toward
-   * the camera every frame (_updateOutlineStagger) — the house "tiny geometric
-   * Z stagger" SceneManager prescribes over polygonOffset under the
-   * logarithmic depth buffer (the ROSA blanket's own 2 mm front/back standoff
-   * is the precedent). Why not scale, why not depth-free:
-   *   - The flat ROSA panels are PlaneGeometry with zero z-extent: a uniform
-   *     `scale.setScalar(1.03)` cannot lift a z=0 plane off its own plane, so
-   *     the shell and the edge lines sat exactly coplanar with the hull that
-   *     had already written depth and shimmered (equal-depth fragments flip
-   *     the LESS test frame to frame). The pull toward the camera does lift
-   *     them, whatever the geometry.
-   *   - Session 1b first drew both layers `depthTest:false` (the card/dot/
-   *     leader treatment): steady, but far-side layers (the 4 RCS pods, the
-   *     back ROSA face, the 28 barrel cells) showed THROUGH the mother and a
-   *     radiator plate crossing a wing was tinted over — owner playtest:
-   *     confusing. With the depth test on, the hull's own depth hides them.
+   * DEPTH: BOTH layers keep `depthTest` ON and `depthWrite` OFF, and are pulled HOVER_OUTLINE_STAGGER_M (1.5 mm) toward
+   * the camera every frame (_updateOutlineStagger) — the house "tiny geometric Z stagger" SceneManager prescribes over
+   * polygonOffset under the logarithmic depth buffer. Why not scale, why not depth-free:
+   *   - The flat ROSA panels are PlaneGeometry with zero z-extent: `scale.setScalar(1.03)` cannot lift a z=0 plane off
+   *     itself, so the layers would sit coplanar with the hull and shimmer (equal-depth fragments flip the LESS test
+   *     frame to frame). The camera pull lifts them whatever the geometry.
+   *   - depthTest:false is steady, but far-side layers (the 4 RCS pods, the back ROSA face, the 28 barrel cells) show
+   *     THROUGH the mother (owner playtest: confusing). With the depth test on, the hull's own depth hides them.
    *
-    * One LineBasicMaterial + one MeshBasicMaterial per rec — their own, never
-    * a hull material, never shared across recs. Caches null when outlines are
-    * disabled or nothing picks — EXCEPT a flowerGated rec whose family is not
-    * bought yet: that miss is never latched (review fix), so a pre-purchase
-    * REFIT ghost cannot cache null forever and the outline builds after the
-    * purchase (later purchases re-arm via _checkFlowerGen).
-    * @private @returns {{lines: THREE.LineSegments[], shells: THREE.Mesh[],
-    *   material: THREE.LineBasicMaterial, shellMaterial: THREE.MeshBasicMaterial}|null}
-    */
+   * One LineBasicMaterial + one MeshBasicMaterial per rec — their own, never a hull material, never shared. Caches null
+   * when outlines are disabled or nothing picks — EXCEPT a flowerGated rec whose family is not bought yet: that miss is
+   * never latched, so a pre-purchase REFIT ghost cannot cache null forever (later purchases re-arm via _checkFlowerGen).
+   * @private @returns {{lines: THREE.LineSegments[], shells: THREE.Mesh[],
+   *   material: THREE.LineBasicMaterial, shellMaterial: THREE.MeshBasicMaterial}|null}
+   */
   _ensureOutline(rec) {
     if (rec._outlineTried) return rec._outline;
-    // §13 r4 fix (review): while a flowerGated family is gone its meshes do
-    // not exist — resolve nothing and LATCH nothing; the gone→present edge
-    // (purchase) resolves fresh.
+    // While a flowerGated family is gone its meshes do not exist — resolve nothing and LATCH nothing; the gone→present
+    // edge (purchase) resolves fresh.
     if (rec.def.flowerGated && !this._flowerOn()) { rec._outline = null; return null; }
     rec._outlineTried = true;
     rec._outline = null;
@@ -2743,10 +2101,9 @@ export class MotherCallouts {
     const targets = this._pickTargets(rec);
     if (!targets.length) return null;
     const INS = Constants.INSPECTION || {};
-    // Both materials: depth test ON (the hull occludes far-side layers), depth
-    // write OFF (an overlay never writes depth) — see the DEPTH note above. The
-    // stagger that wins the test against the part's own surface is geometric
-    // (_updateOutlineStagger), never polygonOffset. Never a hull material.
+    // Both materials: depth test ON (the hull occludes far-side layers), depth write OFF (an overlay never writes
+    // depth) — see the DEPTH note above. The stagger that wins the test against the part's own surface is geometric
+    // (_updateOutlineStagger), never polygonOffset.
     const material = new THREE.LineBasicMaterial({
       color: INS.HULL_OUTLINE_COLOR ?? 0x00ffcc,
       transparent: true,
@@ -2765,15 +2122,11 @@ export class MotherCallouts {
     const shells = [];
     for (const target of targets) {
       target.traverse((o) => {
-        // Meshes with real geometry only — skip Sprites/Lines/Points, the
-        // outline layers themselves (userData.partId), and position-less
-        // geometry (EdgesGeometry would throw).
+        // Meshes with real geometry only — skip Sprites/Lines/Points, outline layers (userData.partId), no-position geometry.
         if (!o.isMesh || !o.geometry?.attributes?.position) return;
         if (o.userData.partId) return;
-        // §13 r4 (Lane H): pieces hidden at build time never carry layers —
-        // the layers show/hide as one, and a shell over an always-hidden
-        // piece (an idle plume cone inside a docked daughter's arm group)
-        // would draw fx geometry as hardware on hover.
+        // §13 r4: pieces hidden at build time never carry layers (they show/hide as one; a shell over an idle plume cone
+        // inside a docked daughter's arm group would draw fx geometry as hardware).
         if (!this._chainVisible(o, target)) return;
         const src = o.geometry.clone();
         src.scale(NORM, NORM, NORM);
@@ -2783,7 +2136,7 @@ export class MotherCallouts {
         const line = new THREE.LineSegments(edges, material);
         line.name = 'MotherCalloutOutline';
         line.userData.partId = rec.def.id;
-        line.raycast = () => {};          // T2: never hit by our own recursive pick
+        line.raycast = () => {};          // never hit by our own recursive pick
         line.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
         line.visible = false;
         o.add(line);
@@ -2791,7 +2144,7 @@ export class MotherCallouts {
         const shell = new THREE.Mesh(o.geometry, shellMaterial); // SHARED geometry
         shell.name = 'MotherCalloutOutline';
         shell.userData.partId = rec.def.id;
-        shell.raycast = () => {};         // T2 again — a shell must never self-hit
+        shell.raycast = () => {};         // a shell must never self-hit
         shell.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
         shell.scale.setScalar(1.03);
         shell.visible = false;
@@ -2802,8 +2155,7 @@ export class MotherCallouts {
     if (!lines.length) { material.dispose(); shellMaterial.dispose(); return null; }
     rec._outline = {
       lines, shells, material, shellMaterial,
-      // Build-time base opacities — the REFIT ghost pulse oscillates around
-      // these and _restoreGhostBase puts them back on clear.
+      // Build-time base opacities — the REFIT ghost pulse oscillates around these and _restoreGhostBase puts them back.
       lineBaseOp: material.opacity,
       shellBaseOp: shellMaterial.opacity,
     };
@@ -2811,12 +2163,10 @@ export class MotherCallouts {
   }
 
   /**
-   * @private Detach + dispose a rec's hover/ghost outline — the ONE teardown,
-   * shared by dispose() and the pair-count re-arm (_checkFlowerGen): each
-   * LineSegments is removed from its parent hull mesh and its OWN
-   * EdgesGeometry disposed, then the rec's two materials; the shells are only
-   * REMOVED from their parent mesh — their geometry is SHARED with the live
-   * hull mesh and is never disposed here.
+   * @private Detach + dispose a rec's hover/ghost outline — the ONE teardown, shared by dispose() and the pair-count
+   * re-arm (_checkFlowerGen): each LineSegments is removed from its parent hull mesh and its OWN EdgesGeometry
+   * disposed, then the rec's two materials; the shells are only REMOVED from their parent mesh — their geometry is
+   * SHARED with the live hull mesh and is never disposed here.
    */
   _disposeOutline(rec) {
     const o = rec._outline;
@@ -2841,21 +2191,13 @@ export class MotherCallouts {
   }
 
   /**
-   * Pull EVERY outlined rec's layers HOVER_OUTLINE_STAGGER_M toward the
-   * camera — the hovered rec AND the REFIT ghost recs (Wave 5 (2) extended
-   * the shipped hover-only stagger per the 06-core-api note: "extend it if a
-   * second rec ever shows an outline") — in each parent mesh's LOCAL frame,
-   * so they win the depth test against their own surface while the hull still
-   * occludes far-side layers (see the DEPTH note on _ensureOutline). Runs per
-   * frame at the end of update() (after _layout's re-pick, so a switched
-   * hover is staggered before it is drawn), once from _setHoverRec and once
-   * from setGhostOutline (both are drawn staggered on their very first
-   * frame). Each parent's world matrix is refreshed first (in-frame they are
-   * one frame stale — see _refreshHover); the offset is exact under any
-   * parent rotation and non-uniform scale (the ROSA roll-out wrapper scales
-   * x) because it goes through worldToLocal. ≤ 32 small objects per rec
-   * (body_cells) — ~tens of µs. No per-frame allocation; no-op without a
-   * real camera (test stubs) or without any outlined rec.
+   * Pull EVERY outlined rec's layers (hover + REFIT ghosts) HOVER_OUTLINE_STAGGER_M toward the camera in each parent
+   * mesh's LOCAL frame, so they win the depth test against their own surface while the hull still occludes far-side
+   * layers (see the DEPTH note on _ensureOutline). Runs per frame at the end of update() (after _layout's re-pick) and
+   * once from _setHoverRec / setGhostOutline, so a new outline is staggered on its first drawn frame. Each parent's
+   * world matrix is refreshed first (in-frame they are one frame stale); the offset goes through worldToLocal, so it is
+   * exact under any parent rotation and non-uniform scale (the ROSA roll-out wrapper scales x). No per-frame
+   * allocation; no-op without a real camera (test stubs) or any outlined rec.
    * @private
    */
   _updateOutlineStagger() {
@@ -2875,17 +2217,16 @@ export class MotherCallouts {
 
   _handlePointerMove(e) {
     if (!this._active) return;
-    // Always record the latest position so _layout can re-pick under a
-    // stationary pointer as cards slide (R13); the pick itself is throttled.
+    // Always record the latest position so _layout can re-pick under a stationary pointer as cards slide; the pick
+    // itself is throttled.
     this._pointerPos = { clientX: e.clientX, clientY: e.clientY };
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     if (now - this._hoverT < 100) return;   // ~10 Hz
     this._hoverT = now;
     if (!this.camera) return;
-    // §13 r3 fix (review): the SAME pick order as click — the system-name
-    // sprites are drawn on top, so a name under the pointer suppresses the
-    // part hover and is recorded as the hovered name (the pin stays the tap's
-    // verb). Guarded like _refreshHover for prototype-borrowing rigs.
+    // The SAME pick order as click — the system-name sprites are drawn on top, so a name under the pointer suppresses
+    // the part hover and is recorded as the hovered name (the pin stays the tap's verb). Guarded like _refreshHover for
+    // prototype-borrowing rigs.
     this._raycaster.setFromCamera(this._pointerNDC(e), this.camera);
     this._sysLabelHover = (typeof this._pickSystemLabelRay === 'function') ? this._pickSystemLabelRay() : null;
     if (this._sysLabelHover) { this._setHoverRec(null); return; }
@@ -2893,40 +2234,26 @@ export class MotherCallouts {
   }
 
   /**
-   * Re-pick the hover from the stored pointer position (R13). Cards slide in
-   * screen space as the ship rotates (and the hull meshes rotate under a
-   * stationary pointer), so the hover would otherwise go stale. Runs at
-   * ~10 Hz from _layout; cheap (the system-name sprites FIRST — the ONE pick
-   * order shared with click, names are drawn on top — then the card sprites,
-   * then the eligible parts' pick meshes via _pickBestRec).
+   * Re-pick the hover from the stored pointer position: cards slide in screen space as the ship rotates (and the hull
+   * meshes rotate under a stationary pointer), so the hover would otherwise go stale. Runs at ~10 Hz from _layout;
+   * system-name sprites FIRST (the ONE pick order shared with click), then card sprites, then the parts' pick meshes.
    *
-   * STALE WORLD MATRICES (the witnessed cause of the stationary blink,
-   * 2026-09-03): this runs inside the frame's update, BEFORE the render's
-   * scene.updateMatrixWorld(), and update() refreshes only the player itself
-   * (updateWorldMatrix(true, false)) — every hull mesh and card sprite still
-   * carries LAST frame's matrixWorld while the camera is already at THIS
-   * frame's pose. The ship covers ~7.7 km/s along its orbit (~130 m per 60 Hz
-   * frame, 60× its own length), so the ray through a still pointer met the
-   * panel where it WAS and missed on every frame the camera did not look
-   * along the velocity — the in-frame pick missed while the same pick run
-   * after the render hit every time (headless witness: panel matrixWorld
-   * 7,700 m stale per tick; hover cleared 3 ticks after each pointer event).
-   * Refresh the player subtree first (396 objects, ~0.06 ms, at 10 Hz).
+   * STALE WORLD MATRICES: this runs inside the frame's update, BEFORE the render's scene.updateMatrixWorld(), and
+   * update() refreshes only the player itself — every hull mesh and card sprite still carries LAST frame's matrixWorld
+   * while the camera is at THIS frame's pose. The ship covers ~7.7 km/s along its orbit (~130 m per 60 Hz frame, 60×
+   * its own length), so a ray through a still pointer missed on every frame the camera did not look along the
+   * velocity. Refresh the player subtree first (396 objects, ~0.06 ms, at 10 Hz).
    *
-   * HOVER STICKINESS (refinement, playtest 2026-09-03 "parts flicker"): this
-   * stationary re-pick used to clear the hover on ANY miss, and thin parts,
-   * part edges and the ship turning under a still pointer can still miss for
-   * a frame — the outline blinked on/off. The rule, in order:
+   * HOVER STICKINESS: thin parts, part edges and the ship turning under a still pointer can miss for a frame, so the
+   * outline would blink. The rule, in order:
    *   1. a hit on the HELD rec confirms it (miss run reset, nothing else);
-   *   2. a hit on a DIFFERENT pickable rec switches immediately (old outline
-   *      hidden, new shown — the pointer really is on something else);
-   *   3. a miss with a hover held KEEPS it, unless the held rec is no longer
-   *      `_recPickable` (facing gate dropped, rail-culled, band left, briefing
-   *      gone — cleared at once) or this is the HOVER_MISS_TICKS-th
-   *      consecutive miss (3 ticks ≈ 300 ms at 10 Hz — cleared);
+   *   2. a hit on a DIFFERENT pickable rec switches immediately (old outline hidden, new shown — the pointer really is
+   *      on something else);
+   *   3. a miss with a hover held KEEPS it, unless the held rec is no longer `_recPickable` (facing gate dropped,
+   *      rail-culled, band left, briefing gone — cleared at once) or this is the HOVER_MISS_TICKS-th consecutive miss
+   *      (3 ticks ≈ 300 ms at 10 Hz — cleared);
    *   4. a miss with nothing held does nothing.
-   * Only this path is sticky. The explicit clears stay immediate and
-   * unchanged: _handlePointerLeave (pointerleave), _detachPointer,
+   * Only this path is sticky. The explicit clears stay immediate: _handlePointerLeave, _detachPointer,
    * _setActive(false), and a real _handlePointerMove onto empty space.
    * @private
    */
@@ -2940,22 +2267,16 @@ export class MotherCallouts {
       ((this._pointerPos.clientX - rect.left) / rect.width) * 2 - 1,
       -((this._pointerPos.clientY - rect.top) / rect.height) * 2 + 1,
     );
-    // B2: the dossier follows the pointer — cache the NDC here (its ONE
-    // writer, at this 10 Hz cadence) so the per-frame dossier placement
-    // never reads the DOM; the position ease smooths the cadence.
+    // The dossier follows the pointer — cache the NDC here (its ONE writer, at this 10 Hz cadence) so the per-frame
+    // placement never reads the DOM; the position ease smooths the cadence.
     this._dossierNX = this._ndc.x;
     this._dossierNY = this._ndc.y;
-    // In-frame: bring the hull meshes + card sprites to THIS frame's pose
-    // before casting (see STALE WORLD MATRICES above).
+    // In-frame: bring the hull meshes + card sprites to THIS frame's pose before casting (see STALE WORLD MATRICES).
     this.player.updateWorldMatrix(true, true);
     this._raycaster.setFromCamera(this._ndc, this.camera);
-    // §13 r3 fix (review): ONE pick order for hover and click, matching what
-    // is drawn on top — system-NAME sprites first, then the parts. The name
-    // pick runs HERE, on this same refreshed ray (the pointer NDC only
-    // changes at this 10 Hz cadence; the per-frame _resolveOpenSys just reads
-    // the _sysLabelHover cache — no 60 Hz matrix refresh). A name under the
-    // pointer means NO part hover: the part behind the name must not light up
-    // while a click pins the system (guarded: prototype-borrowing rigs).
+    // ONE pick order for hover and click, matching what is drawn on top — system-NAME sprites first, on this refreshed
+    // ray (_resolveOpenSys only reads the _sysLabelHover cache per frame). A name under the pointer means NO part
+    // hover: the part behind it must not light up while a click pins the system (guarded for prototype-borrowing rigs).
     this._sysLabelHover = (typeof this._pickSystemLabelRay === 'function') ? this._pickSystemLabelRay() : null;
     if (this._sysLabelHover) {
       this._setHoverRec(null);
@@ -2975,14 +2296,9 @@ export class MotherCallouts {
 
   _handlePointerDown(e) {
     if (!this._active) return;
-    // The PINCH GUARD (Session J plan item 2 named "isPrimary + slop"; the
-    // slop half landed in J — this is the isPrimary half, Job 1 iPad audit
-    // 2026-09-06). A second finger landing mid-gesture NULLS the slot instead
-    // of overwriting it, so an anchored pinch (one finger still) can never
-    // register a part click no matter WHICH finger is the still one: the
-    // primary's later up finds no slot, the secondary's up returns below.
-    // `=== false` keeps mouse events and the unit rigs (no isPrimary field)
-    // on the primary path — same pattern as main.js's click resolver.
+    // PINCH GUARD: a second finger landing mid-gesture NULLS the slot instead of overwriting it, so an anchored pinch
+    // can never register a part click whichever finger is the still one: the primary's later up finds no slot, the
+    // secondary's up returns below. `=== false` keeps mouse events and unit rigs (no isPrimary field) on the primary path.
     if (e.isPrimary === false) { this._pointerDown = null; return; }
     this._pointerDown = {
       x: e.clientX, y: e.clientY,
@@ -2999,13 +2315,10 @@ export class MotherCallouts {
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
     if (moved > TAP_SLOP_PX || (now - down.t) > TAP_SLOP_MS) return;   // drag / long-press → ignore (TapPick's ONE slop law)
-    // §13 r3 (L5): the first tap ends the one-time sweep — the player takes
-    // over. (Drags and long-presses returned above; a tap is a real
-    // take-over, wherever it lands.)
+    // §13 r3: the first tap ends the one-time sweep — the player takes over (drags and long-presses returned above).
     this._guidedDone = true;
-    // A tap on a system NAME toggles its pin (§13 r3) — touch has no hover,
-    // so the pin is how a tap "opens" a system. Never the part-click path.
-    // (Guarded: the prototype-borrowing test rigs predate the method.)
+    // A tap on a system NAME toggles its pin (§13 r3) — touch has no hover, so the pin is how a tap "opens" a system.
+    // Never the part-click path. (Guarded: the prototype-borrowing test rigs predate the method.)
     const sysRec = (typeof this._pickSystemLabelAt === 'function') ? this._pickSystemLabelAt(e) : null;
     if (sysRec) {
       this._hintDone = true;
@@ -3021,19 +2334,11 @@ export class MotherCallouts {
     // §13 r3: a part hit pins its system, then today's path runs.
     this._hintDone = true;
     this._pinnedSys = hit.sysId;
-    // T7: the WHOLE card is clickable — hover and click agree (the old
-    // title-strip UV gate made ~⅔ of a focused card a dead zone with a hand
-    // cursor). Hull-part clicks arrive through the same _pickLabel (the mesh
-    // loop in _pickBestRec), so clicking a part IS clicking its card.
-    // Wave 5 (2) D-a (owner, 2026-09-03): with the REFIT hook injected the
-    // click opens the part's REFIT card INSTEAD of the Library — the hook
-    // receives the getHoveredPart() record (the clicked rec is written
-    // through the ONE hover writer first, so hovered == clicked even on a
-    // synthetic click). Session D: the hook fires for parts WITHOUT a
-    // briefing too — the REFIT verb never needed an entry; the hub gates its
-    // own codexId-dependent actions (library retarget, scan) on the record.
-    // Absent hook (shipped / ?ladder=0): the one CODEX_OPEN_ENTRY emit below
-    // runs exactly as today, still gated on a codexId.
+    // The WHOLE card is clickable — hover and click agree (hull-part clicks arrive through the same _pickLabel, so
+    // clicking a part IS clicking its card). owner 2026-09-03: with the REFIT hook a part click opens its REFIT card
+    // INSTEAD of the Library: the hook receives the getHoveredPart() record (the clicked rec goes through the ONE hover
+    // writer first) and fires for parts WITHOUT a briefing too; the hub gates its codexId-dependent actions on the
+    // record. Absent hook: the one CODEX_OPEN_ENTRY emit below runs, still gated on a codexId.
     if (this._onPartClick) {
       this._setHoverRec(hit);
       this._onPartClick(this.getHoveredPart());
@@ -3042,15 +2347,10 @@ export class MotherCallouts {
     }
   }
 
-  // --------------------------------------------------------------------------
-  // PER-FRAME UPDATE
-  // --------------------------------------------------------------------------
-
   update(dt) {
     if (!this._active || !this.camera) return;
 
-    // §13 r4 fix (review): re-arm the flowerGated pick caches / outlines on a
-    // pair purchase (cheap when the count has not moved — see _checkFlowerGen).
+    // Re-arm the flowerGated pick caches / outlines on a pair purchase (cheap when the count has not moved).
     this._checkFlowerGen();
 
     this.player.updateWorldMatrix(true, false);
@@ -3075,16 +2375,13 @@ export class MotherCallouts {
 
     // Ship centre + silhouette radius in NDC → rail X positions.
     this._shipNDC.copy(this._vShip).project(this.camera);
-    // Ship world-quaternion, hoisted here so _pickFocusPart (below) and _layout
-    // both read the CURRENT rotation, not last frame's or identity (R6).
+    // Ship world-quaternion, hoisted so _pickFocusPart (below) and _layout both read the CURRENT rotation.
     this.player.getWorldQuaternion(this._qTmp);
     const shipBoundR = CFG.SHIP_BOUND_M * M;
     this._vTmp.copy(this._vShip).addScaledVector(this._camRight, shipBoundR).project(this.camera);
     const screenR = Math.abs(this._vTmp.x - this._shipNDC.x);
 
-    // Workbench panes (Wave 5 Session B): the usable screen edges. With no
-    // pane open _edgeL/_edgeR are exactly -1/+1 and every line below is the
-    // shipped arithmetic, byte-identical.
+    // Workbench panes: the usable screen edges. With no pane open _edgeL/_edgeR are exactly -1/+1.
     this._updatePaneEdges();
     this._updateRailX(screenR);
 
@@ -3093,23 +2390,20 @@ export class MotherCallouts {
 
     this._vCamDir.copy(this._vCam).sub(this._vShip).normalize();
 
-    // Resolve every rec's anchor for this frame BEFORE focus picking and layout
-    // read them (T1; mirrors the R6 quaternion hoist).
+    // Resolve every rec's anchor for this frame BEFORE focus picking and layout read them (mirrors the quaternion hoist).
     for (const rec of this._allRecs) this._resolveAnchor(rec);
 
     if (this._band === 'COMPONENT') this._focusPart = this._pickFocusPart();
     else this._focusPart = null;
 
-    // §13 r3 (L2): resolve the OPEN system before _layout reads it.
+    // §13 r3: resolve the OPEN system before _layout reads it.
     this._openSys = (typeof this._resolveOpenSys === 'function') ? this._resolveOpenSys() : null;
 
     this._layout(dt);
-    // §13 r3 (L6): the one-line hint's visibility + placement — after
-    // _layout so the pane-aware strip centre is this frame's.
+    // §13 r3: the one-line hint's visibility + placement — after _layout so the pane-aware strip centre is this frame's.
     this._updateHint?.();
-    // After the re-pick inside _layout: pull every outlined rec (hover +
-    // REFIT ghosts) toward the camera for THIS frame's pose (depth-honest
-    // highlight, see _ensureOutline), then advance the ghost pulse.
+    // After the re-pick inside _layout: pull every outlined rec (hover + REFIT ghosts) toward the camera for THIS
+    // frame's pose (see _ensureOutline), then advance the ghost pulse.
     this._updateOutlineStagger();
     this._updateGhostPulse(dt);
   }
@@ -3128,13 +2422,13 @@ export class MotherCallouts {
     if (this._band !== prev) {
       this._bandChangedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
       this._revealSeq = 0;
-      // T3: clear stale reveal holds so every rec gets a fresh stagger slot.
+      // clear stale reveal holds so every rec gets a fresh stagger slot.
       for (const rec of this._allRecs) rec._revealAt = null;
       eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: this._band });
     }
   }
 
-  /** P2: is any aft-flower pair purchased? Gates the THERMAL family. @private */
+  /** Is any aft-flower pair purchased? Gates the THERMAL family. @private */
   _flowerOn() {
     return typeof this.player?.getFlowerPairCount === 'function'
       && this.player.getFlowerPairCount() > 0;
@@ -3148,7 +2442,7 @@ export class MotherCallouts {
   }
 
   /** Tourable groups: visible system labels only — DAUGHTERS excluded (its
-   *  recs are the docked craft), THERMAL excluded pre-purchase (P2). @private */
+   *  recs are the docked craft), THERMAL excluded pre-purchase. @private */
   _tourableSystems() {
     return SYSTEMS.filter((s) => !s.daughters && !(s.flowerGated && !this._flowerOn()));
   }
@@ -3161,26 +2455,15 @@ export class MotherCallouts {
   }
 
   /**
-   * §13 r3 (L2) — resolve the OPEN system (one id or null), every frame, in
-   * the locked order:
-   *   1. the PINNED system (a click/tap on a system name toggles it; a part
-   *      click sets it — see _handlePointerUp);
-   *   2. the system of the hovered rec — any part of it (the `_hoverRec` the
-   *      parts' pick loop owns), or its NAME: the name pick runs in
-   *      _refreshHover / _handlePointerMove FIRST in the ONE pick order
-   *      shared with click (system-name sprites are drawn on top, then part
-   *      cards, then the blocker mesh raycast), so a name under the pointer
-   *      means NO part hover — hover and click can never disagree (review
-   *      fix). This resolver only READS the `_sysLabelHover` cache those two
-   *      write at the hover's ~10 Hz cadence: no per-frame
-   *      updateWorldMatrix / sprite raycast for an NDC that changes at 10 Hz;
-   *   3. LINGER: the last hovered system, held CALLOUTS.OPEN_LINGER_MS after
-   *      the pointer leaves it (the fold-back reads deliberate, not flickery);
-   *   4. in the COMPONENT band, the system of the focus part
-   *      (_pickFocusPart — the close lens opens the system nearest centre);
+   * §13 r3: resolve the OPEN system (one id or null), every frame, in the locked order:
+   *   1. the PINNED system (a click/tap on a system name toggles it; a part click sets it — see _handlePointerUp);
+   *   2. the system of the hovered rec — any part of it (`_hoverRec`), or its NAME: the name pick runs in _refreshHover
+   *      / _handlePointerMove FIRST (one pick order shared with click), so a name under the pointer means NO part
+   *      hover. This resolver only READS the `_sysLabelHover` cache those two write at ~10 Hz — no per-frame raycast;
+   *   3. LINGER: the last hovered system, held CALLOUTS.OPEN_LINGER_MS after the pointer leaves it;
+   *   4. in the COMPONENT band, the system of the focus part (_pickFocusPart);
    *   5. otherwise null (rest: the system names only).
-   * A system-NAME hover also ends the sweep and dismisses the hint (§13 r3
-   * L5/L6) — the part path does the same in _setHoverRec.
+   * A system-NAME hover also ends the sweep and dismisses the hint — the part path does the same in _setHoverRec.
    * @private @param {number} [now] frame clock (ms) — tests inject; default performance.now()
    * @returns {string|null}
    */
@@ -3193,7 +2476,7 @@ export class MotherCallouts {
       this._lingerAt = now;
       return hoverSys;
     }
-    const label = this._sysLabelHover || null;   // the cache _refreshHover writes (review fix — no raycast here)
+    const label = this._sysLabelHover || null;   // the cache _refreshHover writes
     if (label) {
       this._guidedDone = true;
       this._hintDone = true;
@@ -3207,11 +2490,9 @@ export class MotherCallouts {
   }
 
   /**
-   * @private Raycast the system-label sprites with the raycaster's CURRENT
-   * ray; the nearest hit wins. The gate mirrors _recPickable's card tier
-   * (visible + legible) without its briefing clause — system labels carry no
-   * codexId by design, and a dimmed name stays pointable (ruling 3: pointing
-   * at a system name opens it).
+   * @private Raycast the system-label sprites with the raycaster's CURRENT ray; the nearest hit wins. The gate mirrors
+   * _recPickable's card tier (visible + legible) without its briefing clause — system labels carry no codexId by
+   * design, and a dimmed name stays pointable (pointing at a system name opens it).
    */
   _pickSystemLabelRay() {
     let best = null, bestDist = Infinity;
@@ -3227,11 +2508,9 @@ export class MotherCallouts {
   }
 
   /**
-   * @private The system-label sprite under a POINTER EVENT (a click/tap):
-   * sets the ray from the event's NDC — matrices refreshed first, because a
-   * tap is the touch player's only verb and must not miss on a stale frame —
-   * then raycasts the system labels. Used by _handlePointerUp for the pin
-   * toggle.
+   * @private The system-label sprite under a POINTER EVENT (a click/tap): sets the ray from the event's NDC — matrices
+   * refreshed first, because a tap is the touch player's only verb and must not miss on a stale frame — then raycasts
+   * the system labels. Used by _handlePointerUp for the pin toggle.
    */
   _pickSystemLabelAt(e) {
     if (!this.camera || !this.canvas) return null;
@@ -3246,17 +2525,14 @@ export class MotherCallouts {
     let best = null, bestD = Infinity;
     for (const p of this._partLabels) {
       if (p.isDetail) continue;
-      // Skip hull-hidden parts (far side of ship) so focus doesn't reveal
-      // a system detail tier at ~0 opacity (LOW-13).
+      // Skip hull-hidden parts (far side of ship) so focus doesn't reveal a system detail tier at ~0 opacity.
       if (this._anchorVisible(p.anchor, p) < 0.2) continue;
       this._vAnchor.copy(p.anchor);
       this.player.localToWorld(this._vAnchor);
       this._vTmp.copy(this._vAnchor).project(this.camera);
       if (this._vTmp.z > 1) continue;
-      // "Nearest screen-centre" measures from the centre of the UNCOVERED
-      // strip (Wave 5 Session B) — with a workbench pane open the camera's
-      // look-at bias puts the ship there, so the focused part stays the one
-      // the player is actually looking at. No pane → _stripCX 0, shipped.
+      // "Nearest screen-centre" measures from the centre of the UNCOVERED strip — with a workbench pane open the
+      // camera's look-at bias puts the ship there. No pane → _stripCX 0.
       const dx = this._vTmp.x - this._stripCX;
       const d = dx * dx + this._vTmp.y * this._vTmp.y;
       if (d < bestD) { bestD = d; best = p; }
@@ -3265,18 +2541,12 @@ export class MotherCallouts {
   }
 
   /**
-   * Anchor visibility gate (camera-facing dot proxy). Anchors on the far side
-   * of the hull fade to 0. Returns 0..1.
-   * Uses the ship world-quaternion hoisted in update() (R6).
-   * T8: the anchor's RADIAL component is the surface normal; near-axial parts
-   * (net launcher, turret, FEEP) are exempt — they read in silhouette at every
-   * angle and must not fade to ~0.2 when viewed broadside.
-   * Mother fixes 4/4 (c): a flowerGated row whose LIVE anchor rides a deployed
-   * strut beyond the hull's hardware envelope (radial > FREE_STANDING_R_M) is a
-   * free-standing panel 1–2 m off the skin — it reads from either side and the
-   * hull never occludes it, so the radial "surface normal" proxy does not apply
-   * (RADIATOR PLATES vanished from the −Y poses with the plates on-screen).
-   * Stowed (bud along the hull, radial < 0.6) the gate applies as before.
+   * Anchor visibility gate (camera-facing dot proxy): anchors on the far side of the hull fade to 0. Returns 0..1. Uses
+   * the ship world-quaternion hoisted in update(). The anchor's RADIAL component is the surface normal; near-axial
+   * parts (net launcher, turret, FEEP) are exempt — they read in silhouette at every angle. A flowerGated row whose
+   * LIVE anchor rides a deployed strut beyond the hull's hardware envelope (radial > FREE_STANDING_R_M) is a
+   * free-standing panel 1–2 m off the skin: it reads from either side and the hull never occludes it, so the proxy
+   * does not apply. Stowed (radial < 0.6) the gate applies as before.
    * @param {THREE.Vector3} anchorLocal ship-frame anchor
    * @param {object} [rec] the rec (for the free-standing exemption)
    * @private
@@ -3293,13 +2563,9 @@ export class MotherCallouts {
     if (this._vFace.lengthSq() < 1e-20) return 1;
     this._vFace.normalize();
     const d = this._vFace.dot(this._vCamDir);
-    // Softened ramp: a part 90° off still reads ~0.42 instead of ~0.22 (T8).
+    // Softened ramp: a part 90° off still reads ~0.42 instead of ~0.22.
     return clamp01((d + 0.25) / 0.6);
   }
-
-  // --------------------------------------------------------------------------
-  // RAIL LAYOUT
-  // --------------------------------------------------------------------------
 
   /** On-screen height fraction (of viewport height) for a rec's tier. @private
    * Rail tiers carry _railScale (the strip-fit law, _updateRailX): 1 wherever
@@ -3329,26 +2595,22 @@ export class MotherCallouts {
     this._nowMs = now;
     const liveDue = (now - this._lastLiveT) >= (1000 / (CFG.LIVE_REFRESH_HZ || 2));
     if (liveDue) this._lastLiveT = now;
-    // Session R (plan §14.2): the typeface epoch this frame. A compact card
-    // whose texture was stamped under an older epoch (rasterised before the
-    // B612 faces settled — _build() draws every card at construction) is
-    // redrawn once below, at most CARD_EPOCH_REDRAWS_PER_FRAME per frame so
-    // the one-time settle never lands ~37 rasterisations in a single frame.
+    // The typeface epoch this frame. A compact card stamped under an older epoch (rasterised before the B612 faces
+    // settled — _build() draws every card at construction) is redrawn once below, ≤ CARD_EPOCH_REDRAWS_PER_FRAME/frame.
     const fontEpochNow = this._fontEpoch.value();
     let epochRedraws = 0;
 
-    // Re-pick hover from the stored pointer position so it tracks cards sliding
-    // under a stationary pointer (R13).
+    // Re-pick hover from the stored pointer position so it tracks cards sliding under a stationary pointer.
     this._refreshHover();
 
-    // Reuse persistent rail arrays (LOW-16: zero per-frame alloc).
+    // Reuse persistent rail arrays (zero per-frame alloc).
     const leftList = this._leftRail;
     const rightList = this._rightRail;
     leftList.length = 0;
     rightList.length = 0;
 
-    // T6: project the focused part's anchor once so detail parts NEAR it on
-    // screen can reveal even when they belong to another system.
+    // Project the focused part's anchor once so detail parts NEAR it on screen can reveal even when they belong to
+    // another system.
     let focusNX = 0, focusNY = 0;
     if (focus) {
       this._vTmp.copy(focus.anchor);
@@ -3358,7 +2620,7 @@ export class MotherCallouts {
     }
 
     for (const rec of this._allRecs) {
-      // Anchor NDC (computed before target opacity: T6 proximity reveal reads it).
+      // Anchor NDC (computed before target opacity: the proximity reveal reads it).
       this._vAnchor.copy(rec.anchor);
       this.player.localToWorld(this._vAnchor);
       this._vAnchor.project(this.camera);
@@ -3375,27 +2637,22 @@ export class MotherCallouts {
 
       rec._targetOp = targetOp;
 
-      // T3: scan-in stagger — assign a reveal timestamp when a card transitions
-      // from hidden to visible after a band change. 150 ms hold so the old band
-      // clears, then 40 ms/card stagger capped at 300 ms.
+      // Scan-in stagger — assign a reveal timestamp when a card goes hidden → visible after a band change: 150 ms hold
+      // so the old band clears, then 40 ms/card stagger capped at 300 ms.
       if (rec._targetOp > 0.02 && rec.op <= 0.02 && rec._revealAt == null) {
         rec._revealAt = this._bandChangedAt + 150 + Math.min(300, (this._revealSeq++) * 40);
       }
       if (rec.op > 0.05) rec._revealAt = null;
 
-      // Card content: compact only — B1 retired the promoted focus card, and
-      // the full variant is the hover dossier's (B2). The epoch branch below
-      // is the rail cards' one remaining refresh point.
+      // Card content: compact only (the full variant is the dossier's); the epoch branch below is the rails' one refresh.
       if (rec._cardEpoch !== fontEpochNow && epochRedraws < CARD_EPOCH_REDRAWS_PER_FRAME) {
-        // Session R: the face question settled after this compact card was
-        // drawn — its ONE owed redraw (the key inside misses on the epoch).
+        // Its ONE owed redraw: the face question settled after this card was drawn (the key inside misses on the epoch).
         this._applyCard(rec, { full: false });
         epochRedraws++;
       }
 
-      // T4: pending side-flip — commit when faded out, force fade otherwise.
-      // Placed BEFORE the hidden early-continue so a rec fading out for a band
-      // change while a flip is pending can't get stuck invisible.
+      // Pending side-flip — commit when faded out, force fade otherwise. Placed BEFORE the hidden early-continue so a
+      // rec fading out for a band change while a flip is pending can't get stuck invisible.
       if (rec._pendingSide) {
         if (rec.op <= 0.05) {
           rec.side = rec._pendingSide;
@@ -3415,15 +2672,15 @@ export class MotherCallouts {
         if (rec.op <= 0.02) {
           rec.primed = false; // reappear snaps to new slot, no sweep
           rec._railOrder = null; // reset rail ordinal when hidden
-          rec._pendingSide = null; // T4: clear pending flip on hide
-          rec.side = null; // T4: fresh side assignment on reappear (sets _sideT=now)
+          rec._pendingSide = null; // clear pending flip on hide
+          rec.side = null; // fresh side assignment on reappear (sets _sideT=now)
           rec._sideT = 0;
         }
         this._hideRec(rec);
         continue;
       }
 
-      // Side assignment with hysteresis + 1.5 s dwell (T4: fade-swap, never sweep).
+      // Side assignment with hysteresis + 1.5 s dwell (fade-swap, never sweep).
       const desired = (ax < this._shipNDC.x) ? 'L' : 'R';
       // Cancel a queued flip if the anchor reverted back to the committed side.
       if (rec._pendingSide != null && desired === rec.side) {
@@ -3444,39 +2701,28 @@ export class MotherCallouts {
 
     this._stackRail(leftList, this._railL, dt, ease, fadeK);
     this._stackRail(rightList, this._railR, dt, ease, fadeK);
-    // B2: the hover dossier — after the rails, so it never joins their layout.
+    // the hover dossier — after the rails, so it never joins their layout.
     this._updateDossier(now, liveDue, ease);
   }
 
   /** Target opacity for a rec given band/guide/open-system, before anchor gating. @private
-   * Round 6: binary legibility. The card's opacity is band/guide/open only —
-   * the facing ramp (which belongs to hardware on the hull, not a card on a
-   * screen-edge rail) is a hard GATE here (back-facing → 0) and is applied as a
-   * soft fade only to the dot + leader in _positionCard. Non-hidden targets are
-   * floored to MIN_CARD_OP so a shown card is always readable, never muddy.
-   * §13 r3 (2026-09-24) — labels in steps:
-   *   - system labels show in EVERY band. The SYSTEM band keeps today's rule
-   *     exactly (all full; the sweep's guided system full, the rest 0.5). In
-   *     PART/COMPONENT the open system's name is full, the others dimmed to
-   *     MIN_CARD_OP — all full at rest (no system open), and during the sweep
-   *     the guided system is full and the rest dim (the sweep now plays in
-   *     the PART band too; its first hover/tap ends it);
-   *   - major parts show ONLY when their system is open; in COMPONENT the
-   *     non-focus majors keep today's 0.8;
-   *   - detail parts show in COMPONENT for the open system, plus today's
-   *     proximity reveal around the focus part.
-   * @param {string|null} [openSys] the OPEN system id (from _resolveOpenSys).
-   *   This is the old focusSys parameter's slot — the COMPONENT focus reaches
-   *   the detail rule through the resolver's rule 4, so the parameter names
-   *   the OPEN system, not the focus part's system.
+   * Binary legibility: opacity is band/guide/open only — the facing ramp (hardware on the hull, not a card on a
+   * screen-edge rail) is a hard GATE here (back-facing → 0) and a soft fade only on the dot + leader in _positionCard.
+   * Non-hidden targets are floored to MIN_CARD_OP so a shown card is always readable.
+   * §13 r3 — labels in steps:
+   *   - system labels show in EVERY band. SYSTEM band: all full (the sweep's guided system full, the rest 0.5).
+   *     PART/COMPONENT: the open system's name is full, the others dimmed to MIN_CARD_OP; all full at rest, and during
+   *     the sweep the guided system is full and the rest dim (its first hover/tap ends it);
+   *   - major parts show ONLY when their system is open; in COMPONENT the non-focus majors keep 0.8;
+   *   - detail parts show in COMPONENT for the open system, plus the proximity reveal around the focus part.
+   * @param {string|null} [openSys] the OPEN system id (from _resolveOpenSys; the COMPONENT focus reaches it via rule 4)
    * @param {number} [focusNX] focused part's anchor NDC (proximity reveal)
    * @param {number} [focusNY]
-   * @param {number} [facing] pre-computed _anchorVisible(rec.anchor) for this
-   *   frame (from _layout); recomputed only if not supplied (e.g. unit tests). */
+   * @param {number} [facing] pre-computed _anchorVisible(rec.anchor) for this frame; recomputed only if not supplied. */
   _targetOpacity(rec, band, guideId, openSys, focusNX, focusNY, facing) {
     if (rec._neverShow) return 0; // DAUGHTERS pseudo-group has no system label
-    if (rec._armGone) return 0;   // daughter away from its berth (T3)
-    if (rec._flowerGone) return 0; // THERMAL family pre-purchase (P2)
+    if (rec._armGone) return 0;   // daughter away from its berth
+    if (rec._flowerGone) return 0; // THERMAL family pre-purchase
     // Hard facing gate: a card whose anchor faces away is hidden outright
     // (the dot/leader carry the on-hull fade; the card does not).
     const face = (facing != null) ? facing : this._anchorVisible(rec.anchor, rec);
@@ -3484,21 +2730,18 @@ export class MotherCallouts {
     const floor = CFG.MIN_CARD_OP ?? 0.5;
     if (rec.isSystem) {
       if (band === 'SYSTEM') {
-        // Today's SYSTEM-band rule, kept exactly.
         if (guideId) return (rec.def.id === guideId) ? 1 : 0.5;
         return 1;
       }
-      // §13 r3: the names show in every band. During the sweep the guided
-      // system is full and the rest dim; otherwise the open system's name
-      // is full, the others dim, and every name is full at rest.
+      // §13 r3: the names show in every band. During the sweep the guided system is full and the rest dim; otherwise
+      // the open system's name is full, the others dim, and every name is full at rest.
       if (guideId) return (rec.def.id === guideId) ? 1 : floor;
       return (openSys == null || rec.def.id === openSys) ? 1 : floor;
     }
     if (rec.isDetail) {
       if (band !== 'COMPONENT') return 0;
       let reveal = rec.sysId === openSys;
-      // T6: proximity reveal — detail parts near the focused part on screen
-      // appear even when they belong to another system.
+      // Proximity reveal — detail parts near the focused part on screen appear even when they belong to another system.
       if (!reveal && this._focusPart) {
         const dx = rec._anchorX - focusNX, dy = rec._anchorY - focusNY;
         const r = CFG.DETAIL_REVEAL_NDC || 0.25;
@@ -3506,9 +2749,8 @@ export class MotherCallouts {
       }
       return reveal ? 1 : 0;
     }
-    // Major part: only the open system's majors show (§13 r3). During the
-    // sweep no system is open (the first hover/tap ends it), so the sweep
-    // shows names only — the old guideId dimming of majors is superseded.
+    // Major part: only the open system's majors show (§13 r3). During the sweep no system is open (the first hover/tap
+    // ends it), so the sweep shows names only.
     const showParts = band === 'PART' || band === 'COMPONENT';
     if (!showParts) return 0;
     if (rec.sysId !== openSys) return 0;
@@ -3520,15 +2762,14 @@ export class MotherCallouts {
   }
 
   /**
-   * Stack one rail's cards: order top → bottom (with hysteresis, via the pure
-   * `orderRail` helper), priority-cull on overflow, assign slot Ys centred on
-   * the anchors' mean, then ease + place.
+   * Stack one rail's cards: order top → bottom (hysteresis via the pure `orderRail`), priority-cull on overflow, assign
+   * slot Ys centred on the anchors' mean, then ease + place.
    * @private
    */
   _stackRail(list, railX, dt, ease, fadeK) {
     if (list.length === 0) return;
 
-    // Top → bottom order with persistent ordinals + hysteresis (R2).
+    // Top → bottom order with persistent ordinals + hysteresis.
     orderRail(list, CFG.ORDER_HYSTERESIS || 0.04);
 
     const gap = CFG.RAIL_GAP_NDC;
@@ -3555,7 +2796,7 @@ export class MotherCallouts {
           // Fade out and hide the culled rec this frame so it doesn't freeze.
           drop.op += (0 - drop.op) * fadeK;
           if (drop.op <= 0.02) drop.primed = false;
-          drop._railOrder = null; // renumber when it re-enters (R2)
+          drop._railOrder = null; // renumber when it re-enters
           this._hideRec(drop);
           total = list.reduce((s, r) => s + r._h, 0) + gap * (list.length - 1);
         }
@@ -3602,18 +2843,13 @@ export class MotherCallouts {
   }
 
   /**
-   * B2 beat two: the hover dossier. After HOVER_DOSSIER_DELAY_MS of dwell on
-   * ONE rec (hover held, same rec — the dwell restarts on every change, see
-   * _setHoverRec), a single reusable full-content card appears beside the
-   * pointer: _applyCard's `full` variant (the retired focus card's 6-slot
-   * budget, honesty rows and live rows) rendered onto the wrapper rec's OWN
-   * sprite, so no rail rec's card identity is ever touched. It never joins
-   * rail layout — no neighbour moves — and its live rows re-rasterise at
-   * the shared ≤ LIVE_REFRESH_HZ cadence (the old focus-card liveDue gate).
+   * The hover dossier: after HOVER_DOSSIER_DELAY_MS of dwell on ONE rec (the dwell restarts on every change, see
+   * _setHoverRec), a single reusable full-content card appears beside the pointer: _applyCard's `full` variant rendered
+   * onto the wrapper rec's OWN sprite, so no rail rec's card identity is touched. It never joins rail layout and its
+   * live rows re-rasterise at ≤ LIVE_REFRESH_HZ.
    *
-   * GLASS HAS NO HOVER: a tap runs the click path only — pointerup on touch
-   * is followed by pointerleave, which clears the hover and the stored
-   * pointer position long before any dwell can elapse.
+   * GLASS HAS NO HOVER: a tap runs the click path only — pointerleave follows pointerup on touch and clears the hover
+   * long before any dwell elapses.
    * @private
    */
   _updateDossier(now, liveDue, ease) {
@@ -3649,14 +2885,11 @@ export class MotherCallouts {
   }
 
   /**
-   * Place the dossier beside the pointer, never under it. Unproject the
-   * cached pointer NDC (written by _refreshHover at its 10 Hz cadence; the
-   * position ease smooths the cadence) on the ship-centre depth plane — the
-   * same law _positionCard uses — then offset the card a fixed gap off the
-   * pointer, flipping toward screen centre when it would cross the
-   * pane-aware RIGHT edge, and clamp against the pane-aware edges (never
-   * ±1: the card must not slide under a drawer). The clamp is inherited
-   * verbatim from the retired _placeFocus (source-pinned by the suite).
+   * Place the dossier beside the pointer, never under it. Unproject the cached pointer NDC (written by _refreshHover
+   * at its 10 Hz cadence; the position ease smooths the cadence) on the ship-centre depth plane — the same law
+   * _positionCard uses — then offset the card a fixed gap off the pointer, flipping toward screen centre when it would
+   * cross the pane-aware RIGHT edge, and clamp against the pane-aware edges (never ±1: the card must not slide under a
+   * drawer). The clamp is source-pinned by the suite.
    * @private
    */
   _positionDossier(ease) {
@@ -3664,8 +2897,7 @@ export class MotherCallouts {
     const px = this._dossierNX, py = this._dossierNY;
     if (!sprite || !Number.isFinite(px) || !Number.isFinite(py)) { this._hideDossier(); return; }
 
-    // Card geometry at the dossier's size tier.
-    // aspect × heightFactor = CARD_W_OVER_TITLE_H for every card (R15).
+    // Card geometry at the dossier's size tier (aspect × heightFactor = CARD_W_OVER_TITLE_H for every card).
     const frac = this._sizeFrac(this._dossierRec, true);
     const heightFactor = this._dossierRec.card?.heightFactor || 1;
     const camAspect = this.camera.aspect || 1;
@@ -3673,24 +2905,18 @@ export class MotherCallouts {
     const cardH = 2 * frac * heightFactor;
     const margin = CFG.RAIL_MARGIN_NDC;
 
-    // Right of the pointer by default; flip toward screen centre when the
-    // card would cross the pane-aware right edge.
     let side = 'R';
     let tx = px + HOVER_DOSSIER_OFFSET_NDC;
     if (tx + cardW > this._edgeR - margin) { side = 'L'; tx = px - HOVER_DOSSIER_OFFSET_NDC; }
-    // Clamp X: card extends outward from its anchor edge, so reserve width on
-    // that side — against the PANE-AWARE edges (inherited from _placeFocus:
-    // the dossier never sits under a workbench pane; no pane → -1/+1).
+    // Clamp X: card extends outward from its anchor edge, so reserve width on that side — against the PANE-AWARE edges
+    // (the dossier never sits under a workbench pane; no pane → -1/+1).
     if (side === 'L') tx = Math.max(tx, this._edgeL + margin + cardW);
     else {
-      // Right-extending card: its left edge only needs to clear a LEFT pane —
-      // this floor matters for a stale pointer frozen under a just-opened
-      // drawer (live pointers always sit inside the uncovered strip).
+      // Right-extending card: its left edge only needs to clear a LEFT pane (matters for a stale pointer under a drawer).
       tx = Math.max(tx, this._edgeL + margin);
       tx = Math.min(tx, this._edgeR - margin - cardW);
     }
-    // Clamp Y: card is centred vertically on ty, a small nudge below the
-    // pointer so it reads "beside", never "under".
+    // Clamp Y: a small nudge below the pointer so the card reads "beside", never "under".
     let ty = py - HOVER_DOSSIER_OFFSET_NDC * 0.5;
     ty = clamp(ty, -1 + margin + cardH / 2, 1 - margin - cardH / 2);
 
@@ -3700,8 +2926,7 @@ export class MotherCallouts {
       this._dossierSY += (ty - this._dossierSY) * ease;
     }
 
-    // Unproject at the ship-centre depth plane (the _positionCard law) —
-    // the dossier rides the same plane, so its sizing math matches.
+    // Unproject at the ship-centre depth plane (the _positionCard law), so the sizing math matches.
     this._vAttach.copy(this._vShip)
       .addScaledVector(this._camRight, (this._dossierSX - this._shipNDC.x) * this._halfW)
       .addScaledVector(this._camUp, (this._dossierSY - this._shipNDC.y) * this._halfH);
@@ -3719,15 +2944,12 @@ export class MotherCallouts {
   }
 
   /**
-   * Given a rec's eased NDC slot, unproject to local space, size the sprite
-   * screen-constant, ease opacity, and rebuild the elbow leader + dot.
+   * Given a rec's eased NDC slot: unproject to local space, size the sprite, ease opacity, rebuild the leader + dot.
    * @private
    */
   _positionCard(rec, nx, ny, isFocus, side, fadeK) {
-    // Unproject NDC slot at ship-centre depth → world → local.
-    // Use (nx − shipNDC.x) and (ny − shipNDC.y) so the offset is relative to
-    // the ship's actual screen position, not absolute NDC (which would double-
-    // shift when the inspection look-at carries a forward offset).
+    // Unproject NDC slot at ship-centre depth → world → local, relative to the ship's actual screen position (absolute
+    // NDC would double-shift when the inspection look-at carries a forward offset).
     this._vAttach.copy(this._vShip)
       .addScaledVector(this._camRight, (nx - this._shipNDC.x) * this._halfW)
       .addScaledVector(this._camUp, (ny - this._shipNDC.y) * this._halfH);
@@ -3735,20 +2957,17 @@ export class MotherCallouts {
     this.player.worldToLocal(this._vTmp);
     rec.sprite.position.copy(this._vTmp);
 
-    // Screen-constant sizing (manual dist scaling; see plan task 6 fallback).
-    // SIZE_* defines the on-screen height of the TITLE BLOCK; scale by heightFactor
-    // so the whole card grows proportionally and text stays the same size.
-    // aspect × heightFactor = CARD_W_OVER_TITLE_H for every card (R15), so derive
-    // the width factor from the invariant instead of reading a possibly-stale card.
+    // Screen-constant sizing (manual dist scaling). SIZE_* defines the on-screen height of the TITLE BLOCK; scale by
+    // heightFactor so the whole card grows proportionally and text stays the same size. aspect × heightFactor =
+    // CARD_W_OVER_TITLE_H for every card, so derive the width factor from the invariant, not a possibly-stale card.
     const frac = this._sizeFrac(rec, isFocus);
     const heightFactor = rec.card?.heightFactor || 1;
     const h = frac * 2 * this._halfH * heightFactor;
     const aspect = CARD_W_OVER_TITLE_H / heightFactor;
     rec.sprite.scale.set(h * aspect, h, 1);
 
-    // Ease opacity. T3: hold at 0 while waiting for the scan-in reveal slot.
-    // Hover lifts it a little; the colour lift below carries the affordance at
-    // full opacity where this boost is a no-op.
+    // Ease opacity; hold at 0 while waiting for the scan-in reveal slot. Hover lifts it a little; the colour lift below
+    // carries the affordance at full opacity where this boost is a no-op.
     const tgt = (rec._revealAt != null && this._nowMs < rec._revealAt) ? 0 : rec._targetOp;
     rec.op += (tgt - rec.op) * fadeK;
     const hovered = this._hoverRec === rec;
@@ -3756,10 +2975,8 @@ export class MotherCallouts {
     const visible = op > 0.02;
     rec.sprite.material.opacity = op;
     rec.sprite.visible = visible;
-    // Round 6: cards are full-bright (no non-hover dim scalar — the vignette no
-    // longer touches them, so a global dim only muddied them). The hover cue is
-    // carried by the leader whitening (below), the +0.15 opacity lift, and a
-    // small screen-constant scale bump.
+    // Cards are full-bright (a global dim only muddied them). The hover cue is carried by the leader whitening
+    // (below), the +0.15 opacity lift, and a small screen-constant scale bump.
     rec.sprite.material.color.setScalar(1.0);
     const hoverScale = hovered ? 1.04 : 1.0;
     rec.sprite.scale.multiplyScalar(hoverScale);
@@ -3804,7 +3021,7 @@ export class MotherCallouts {
     // Attach point in local space.
     this._rA.copy(attachWorld);
     this.player.worldToLocal(this._rA);
-    // Anchor in local space (Vector3, resolved per frame — T1).
+    // Anchor in local space (Vector3, resolved per frame).
     const anchorL = this._rB.copy(anchorLocal);
     // Elbow joint: attach + a horizontal screen stub toward the ship.
     const stubWorld = CFG.ELBOW_STUB_NDC * this._halfW;
@@ -3838,18 +3055,11 @@ export class MotherCallouts {
     pos.setXYZ(base + 3, this._rC3.x, this._rC3.y, this._rC3.z);
   }
 
-  // --------------------------------------------------------------------------
-  // §13 r3 (L6) — THE ONE-LINE HINT
-  // --------------------------------------------------------------------------
-
   /**
-   * @private Build the one-line hint: a DOM chip (inline style, the
-   * HintTicker pattern) vertically centred in the transient band (88–124 px
-   * from the bottom — the hint ticker's own band, read from the same
-   * ONBOARDING.TICKER tuning so the two cannot drift), horizontally centred
-   * in the pane-free strip by _updateHint. `pointer-events:none` (it never
-   * blocks a pick) and disposed in dispose(). No-op without a DOM (the Node
-   * test rigs) — _updateHint is a no-op without the element.
+   * @private Build the one-line hint: a DOM chip (inline style, the HintTicker pattern) vertically centred in the
+   * transient band (88–124 px from the bottom, read from the same ONBOARDING.TICKER tuning as the hint ticker so the
+   * two cannot drift), horizontally centred in the pane-free strip by _updateHint. `pointer-events:none`; disposed in
+   * dispose(). No-op without a DOM (the Node test rigs).
    */
   _buildHint() {
     if (typeof document === 'undefined' || !document.body) return;
@@ -3857,8 +3067,7 @@ export class MotherCallouts {
     const el = document.createElement('div');
     el.id = 'mother-callout-hint';
     el.textContent = hintText();
-    // Individual assignments (not one cssText string) so the initial state is
-    // explicit and headless DOM shims read back every pinned property.
+    // Individual assignments (not one cssText string) so headless DOM shims read back every pinned property.
     const s = el.style;
     s.position = 'fixed';
     s.bottom = `${T.BOTTOM_PX ?? 88}px`;
@@ -3881,22 +3090,18 @@ export class MotherCallouts {
   }
 
   /**
-   * @private The hint's per-frame drive (from update()): show while ACTIVE
-   * and not yet dismissed (`_hintDone` is never reset — once per page load,
-   * like the sweep), else hide. Placement — the pane-free strip's centre X in
-   * CSS px — is re-derived at most once per VW_READ_MS and on every
-   * pane/rail-edge change (a drawer opening moves the strip); a canvas rect
-   * read is layout-affected, never per frame. No-op without the element.
+   * @private The hint's per-frame drive (from update()): show while ACTIVE and not yet dismissed (`_hintDone` is never
+   * reset — once per page load), else hide. Placement (the pane-free strip's centre X in CSS px) is re-derived at most
+   * once per VW_READ_MS and on every pane/rail-edge change; a canvas rect read is layout-affected, never per frame.
    */
   _updateHint() {
     const el = this._hintEl;
     if (!el) return;
-    // u5-info-ap-hold D4: the hint waits for the ship - it says "point at a part", so it shows only
-    // while the ship's centre is on screen and in front of the camera (checked only while the hint is
-    // still to be shown; once done it never comes back). Words unchanged (§13 r3).
+    // The hint waits for the ship ("point at a part"): it shows only while the ship's centre is on screen and in front
+    // of the camera (checked only while the hint is still to be shown). Words unchanged (§13 r3).
     const show = this._active && !this._hintDone && shipOnScreen(this._shipNDC);
     const want = show ? 'flex' : 'none';
-    if (show) { const t = hintText(); if (el.textContent !== t) el.textContent = t; }   // u15b D7: draw-time glass read
+    if (show) { const t = hintText(); if (el.textContent !== t) el.textContent = t; }   // draw-time glass read
     if (el.style.display !== want) el.style.display = want;
     if (!show) return;
     const now = this._nowMs || 0;
@@ -3922,15 +3127,14 @@ export class MotherCallouts {
 
   dispose() {
     this._detachPointer();
-    this._sysLabelHover = null;   // the hovered-name cache leaves with the layer (§13 r3 fix)
-    // §13 r3 (L6): the hint element leaves with the layer.
+    this._sysLabelHover = null;   // the hovered-name cache leaves with the layer
+    // §13 r3: the hint element leaves with the layer.
     this._disposeHint?.();
-    // Wave 5 (2): drop the REFIT ghost set before the outline teardown below
-    // (bases restored is moot — the materials are about to dispose — but the
-    // set must not hold freed recs). Guarded like _setActive for rig stubs.
+    // Drop the REFIT ghost set before the outline teardown below (the materials are about to dispose, but the set must
+    // not hold freed recs). Guarded like _setActive for rig stubs.
     if (this._ghostRecs && this._ghostRecs.size) this._clearGhosts();
-    // T2a: if inspection was active, tell the HUD breadcrumb to hide before
-    // we tear down — otherwise it stays on screen permanently.
+    // If inspection was active, tell the HUD breadcrumb to hide before we tear down — otherwise it stays on screen
+    // permanently.
     if (this._active) {
       eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: null });
       this._active = false;
@@ -3950,13 +3154,11 @@ export class MotherCallouts {
       s.line?.geometry?.dispose();
       s.line?.material?.dispose();
       s.dot?.material?.dispose();
-      // Hover outlines live under the hull meshes (not _group) — the ONE
-      // teardown detaches + disposes them (shells SHARE the hull meshes'
-      // geometry: removed but never disposed — see _disposeOutline).
+      // Hover outlines live under the hull meshes (not _group) — the ONE teardown detaches + disposes them (shells
+      // SHARE the hull meshes' geometry: removed but never disposed — see _disposeOutline).
       this._disposeOutline(s);
     }
-    // B2: the dossier wrapper's cached card + its sprite material (the same
-    // pattern as the rail recs above — the wrapper is not in _allRecs).
+    // The dossier wrapper's cached card + its sprite material (the wrapper is not in _allRecs).
     if (this._dossierRec?._cardCache) {
       for (const card of this._dossierRec._cardCache.values()) {
         card?.texture?.dispose();

@@ -1,58 +1,39 @@
 /**
- * HudReboot.js — the "systems reboot" choreography after the FURNACE gag's
- * blackout (owner brief 2026-09-09: "flickers back to life at view 0 and
- * panels flicker in prioritized top to bottom with some random, the classic
- * 'took a hit, systems off line'"; plan
- * .kilo/plans/1788957399035-furnace-gag-v2.md §1.C, decisions 15–18).
+ * HudReboot.js — the "systems reboot" choreography after the FURNACE gag's blackout.
+ * owner 2026-09-09: flickers back to life at view 0 and panels flicker in prioritized top to bottom with some random
+ * ("took a hit, systems off line").
  *
- * What it is: the veil lifts onto the BARE world — every visible HUD element
- * is dark — and the instruments return one by one, top → bottom with a little
- * jitter, each with a 320 ms relay flicker and a clack, the comms panel with
- * its own crackle, the SAFETY OVERRIDE button LAST. Then `onDone` fires and
- * the caller (OverridePane `_enterRecover`, Lane A) finishes the gag. The
- * camera, the game state and every pane's own visibility bit are untouched:
- * this module changes NOTHING but two class names on elements it found
- * on screen, and it strips them again on the way out.
+ * The veil lifts onto the BARE world — every visible HUD element is dark — and the instruments return one by one, top →
+ * bottom with a little jitter, each with a 320 ms relay flicker and a clack, the comms panel with its own crackle, the
+ * SAFETY OVERRIDE button LAST. Then `onDone` fires and the caller (OverridePane `_enterRecover`) finishes the gag. The
+ * camera, the game state and every pane's own visibility bit are untouched: this module changes NOTHING but two class
+ * names on elements it found on screen, and strips them again on the way out.
  *
- * The contract (§1.14 / §1.17, duck-typed on both sides): `play({ onDone })
- * -> boolean` (false = nothing to do, the caller falls back to today's path),
- * `cancel()` (abort: classes stripped, no `onDone`), `isPlaying()`,
- * `dispose()`.
+ * Contract (duck-typed on both sides): `play({ onDone }) -> boolean` (false = nothing to do, the caller falls back to
+ * today's path), `cancel()` (abort: classes stripped, no `onDone`), `isPlaying()`, `dispose()`.
  *
- * The density law (the pane-density ladder, HUD.js): a pane's visibility is
- * ONE attribute the ladder owns, and the ladder's rule is `display: none
- * !important`. This module never writes `display`, never reads or writes the
- * ladder's attributes, and never names the two side columns — the overlay's
- * children are found generically (the columns are simply among them; darkening
- * a column darkens its panes). Opacity via CLASSES only:
- * `.hud-reboot-dark` (opacity 0, no pointer events, no transition) and
- * `.hud-reboot-in` (the keyframe flicker). A ladder-hidden pane has no client
- * rects, so it is never collected and never touched.
+ * The density law (pane-density ladder, HUD.js): a pane's visibility is ONE attribute the ladder owns, and the ladder's
+ * rule is `display: none !important`. This module never writes `display`, never reads or writes the ladder's
+ * attributes, and never names the two side columns — the overlay's children are found generically (darkening a column
+ * darkens its panes). Opacity via CLASSES only: `.hud-reboot-dark` (opacity 0, no pointer events, no transition) and
+ * `.hud-reboot-in` (the keyframe flicker). A ladder-hidden pane has no client rects, so it is never collected.
  *
- * The fake-DOM probe: SHOWN = `el.getClientRects().length > 0` — the same
- * probe the OverridePane rung uses, which a stub document can answer without
- * layout — AND something painted: the element's own box is non-empty, or a
- * shown descendant within three levels has a non-empty box (a zero-size
- * STATIC wrapper whose content is `position: fixed` children — the
- * DISCOVERIES chip's `#hud-discoveries`, the city-labels layer — paints
- * through its children; one with nothing painted below it is not a target:
- * no slot, no clack for nothing). Order = the VISUAL top: the element's own
- * `getBoundingClientRect().top` when its box is non-empty, else the topmost
- * edge its descendants paint (follow-up 2026-09-09: the wrapper's own 0 × 0
- * rect at the top of the overlay sorted the bottom-left chip FIRST). NaN / a
- * throw / an unmeasurable box reads as 0 and keeps the element; ties keep DOM
- * order; then the LAST ids move to the end.
+ * The fake-DOM probe: SHOWN = `el.getClientRects().length > 0` (the OverridePane rung's probe, answerable by a stub
+ * document without layout) AND something painted: the element's own box is non-empty, or a shown descendant within three
+ * levels has a non-empty box (a zero-size STATIC wrapper whose content is `position: fixed` children — the DISCOVERIES
+ * chip's `#hud-discoveries`, the city-labels layer — paints through its children; one with nothing painted below it is
+ * not a target: no slot, no clack for nothing). Order = the VISUAL top: the element's own `getBoundingClientRect().top`
+ * when its box is non-empty, else the topmost edge its descendants paint (the wrapper's own 0 × 0 rect at the top of the
+ * overlay would sort the bottom-left chip FIRST). NaN / a throw / an unmeasurable box reads as 0 and keeps the element;
+ * ties keep DOM order; then the LAST ids move to the end.
  *
- * The detached-timer law (OverridePane, the 2026-09-07 browser witness): the
- * injected `setTimeout` / `clearTimeout` are always CALLED DETACHED (`const f
- * = this._setTimeoutFn; f(cb, ms)`), never as a method of this object —
- * window.setTimeout throws "Illegal invocation" when its `this` is anything
- * but the window, and Node (which ignores `this`) would stay green.
+ * The detached-timer law (OverridePane): the injected `setTimeout` / `clearTimeout` are always CALLED DETACHED
+ * (`const f = this._setTimeoutFn; f(cb, ms)`), never as a method of this object — window.setTimeout throws "Illegal
+ * invocation" when its `this` is anything but the window, and Node (which ignores `this`) would stay green.
  *
- * No colours: opacity only, so there is no palette here and NO import at all
- * (if a colour is ever wanted, VisualLaw is the one import allowed). Every dep
- * is optional and injected (doc / timers / random / reduced motion / audio) so
- * the whole choreography runs in Node on fake time. `doc: null` ⇒ inert.
+ * No colours: opacity only, so NO import at all (if a colour is ever wanted, VisualLaw is the one import allowed). Every
+ * dep is optional and injected (doc / timers / random / reduced motion / audio) so the whole choreography runs in Node on
+ * fake time. `doc: null` ⇒ inert.
  *
  * @module ui/hud/HudReboot
  */
@@ -79,7 +60,7 @@ export const REBOOT_CHROME_IDS = Object.freeze([
   'notification-zone',
   'ladder-rail',
   'ladder-detail-slider',
-  'ladder-workbench-tab',   // Session U (plan 1788954873769): the ONE workbench pane's SPECS tab (was ladder-library-tab)
+  'ladder-workbench-tab',   // the ONE workbench pane's SPECS tab
   'build-stamp',
   'hud-discoveries',
   'hud-chip-orb',
@@ -97,14 +78,10 @@ export const REBOOT_SKIP_IDS = Object.freeze([
   'hud-override-vignette',
 ]);
 
-// ── Private constants ──────────────────────────────────────────────────────────
-
 const DEFAULT_OVERLAY_ID = 'hud-overlay';
 const REDUCED_ATTR = 'data-hud-reboot-reduced';   // on the body while a reduced-motion run plays
 const COMMS_ID = 'hud-comms-panel';               // the one return that also crackles
 const KEYFRAMES = 'hud-reboot-in';
-
-// ── Private helpers ────────────────────────────────────────────────────────────
 
 /** @private The house matchMedia probe (OverridePane / RefitPane / FloorMask). */
 function _prefersReducedMotion() {
@@ -126,7 +103,6 @@ function _addClass(el, c) {
   el.className = parts.join(' ');
 }
 
-/** @private */
 function _removeClass(el, c) {
   if (!el) return;
   if (el.classList && typeof el.classList.remove === 'function') { el.classList.remove(c); return; }
@@ -146,10 +122,9 @@ function _isShown(el) {
 }
 
 /**
- * @private The element's own box, read once and never throwing:
- * `{ ok, top, nonEmpty }` — `ok` false when there is no method / a throw / no
- * rect; `top` finite or null; `nonEmpty` when width and height are both > 0
- * (a non-finite dimension reads as "cannot tell", i.e. nonEmpty null).
+ * @private The element's own box, read once, never throwing: `{ ok, top, nonEmpty }` — `ok` false when there is no
+ * method / a throw / no rect; `top` finite or null; `nonEmpty` when width and height are both > 0 (a non-finite
+ * dimension reads as "cannot tell", i.e. nonEmpty null).
  */
 function _ownBox(el) {
   if (!el || typeof el.getBoundingClientRect !== 'function') return { ok: false, top: null, nonEmpty: null };
@@ -170,11 +145,9 @@ function _ownBox(el) {
 const PAINT_WALK_DEPTH = 3;
 
 /**
- * @private The topmost edge painted BELOW `el`: the minimum `top` over its
- * SHOWN descendants with a non-empty box, walking `children` to
- * PAINT_WALK_DEPTH (a display-none subtree paints nothing and is not
- * entered; a child whose rect throws is not a candidate but its children
- * still are). Null when nothing below paints. Never throws.
+ * @private The topmost edge painted BELOW `el`: the minimum `top` over its SHOWN descendants with a non-empty box,
+ * walking `children` to PAINT_WALK_DEPTH (a display-none subtree is not entered; a child whose rect throws is not a
+ * candidate but its children still are). Null when nothing below paints. Never throws.
  */
 function _paintTopBelow(el, depth) {
   if (depth > PAINT_WALK_DEPTH) return null;
@@ -194,16 +167,10 @@ function _paintTopBelow(el, depth) {
 }
 
 /**
- * @private The sort key = the VISUAL top. An element with a non-empty box of
- * its own sorts by that box's top (NaN ⇒ 0). A zero-size STATIC wrapper
- * (the DISCOVERIES chip's `#hud-discoveries`, the city-labels layer — their
- * content is `position: fixed` / `absolute` children, so the wrapper's own
- * rect sits at 0 × 0 at the top of the overlay) sorts by the topmost edge
- * its descendants paint; when NOTHING below it paints either, it is not a
- * target at all (null): there is nothing to darken, so no slot and no clack
- * for it. A box that cannot be measured (no method / throw / non-finite
- * size) keeps the element with key `top` or 0 — never drop what cannot be
- * seen to be empty.
+ * @private The sort key = the VISUAL top. An element with a non-empty box of its own sorts by that box's top (NaN ⇒ 0).
+ * A zero-size STATIC wrapper (see the header) sorts by the topmost edge its descendants paint; when NOTHING below it
+ * paints either, it is not a target (null). A box that cannot be measured (no method / throw / non-finite size) keeps
+ * the element with key `top` or 0 — never drop what cannot be seen to be empty.
  * @returns {number|null}
  */
 function _sortKey(el) {
@@ -212,7 +179,6 @@ function _sortKey(el) {
   return _paintTopBelow(el, 1);
 }
 
-/** @private The element's id as a string ('' when absent). */
 function _idOf(el) {
   return (el && typeof el.id === 'string') ? el.id : '';
 }
@@ -220,10 +186,7 @@ function _idOf(el) {
 export class HudReboot {
   /**
    * @param {object} [deps] every dep optional, duck-typed, never trusted not to throw
-   * @param {Document|null} [deps.doc] document (default: the global one; null = headless inert)
-   * @param {function} [deps.setTimeout] injected timer (default: the global)
-   * @param {function} [deps.clearTimeout] injected timer (default: the global)
-   * @param {function} [deps.random] `() => [0, 1)` (default: Math.random)
+   * @param {Document|null} [deps.doc] null = headless inert
    * @param {boolean|function} [deps.reducedMotion] override for the matchMedia probe
    * @param {object}   [deps.audio] `{ playRelayClack?(), playCommsCrackle?() }` (the AudioSystem singleton)
    * @param {string}   [deps.overlayId='hud-overlay'] the HUD overlay whose children are the panes
@@ -253,15 +216,10 @@ export class HudReboot {
     this._ensureStyle();
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
   /**
-   * Start the choreography: darken every shown HUD element NOW, then return
-   * them top → bottom on the stagger. A run already playing is cancelled
-   * first (classes stripped, its `onDone` dropped).
-   * @param {{onDone?: function}} [opts]
-   * @returns {boolean} false when there is nothing to darken (headless, no
-   *   overlay, everything hidden) — the caller falls back to its own path.
+   * Start the choreography: darken every shown HUD element NOW, then return them top → bottom on the stagger. A run
+   * already playing is cancelled first (classes stripped, its `onDone` dropped).
+   * @returns {boolean} false when there is nothing to darken (headless, no overlay, everything hidden).
    */
   play(opts = {}) {
     if (this._disposed) return false;
@@ -273,14 +231,12 @@ export class HudReboot {
     const reduced = this._reducedMotion();
     this._setReducedAttr(reduced);
 
-    // Phase 1 — NOW: every target dark at once (the veil lifts onto the bare world).
     for (const el of targets) _addClass(el, REBOOT_DARK_CLASS);
     this._touched = targets.slice();
     this._playing = true;
     this._remaining = targets.length;
     this._onDone = (opts && typeof opts.onDone === 'function') ? opts.onDone : null;
 
-    // Phase 2 — the return schedule, computed up front (one random() per target).
     const K = HUD_REBOOT;
     const lastSet = new Set(REBOOT_LAST_IDS);
     for (let i = 0; i < targets.length; i++) {
@@ -292,8 +248,7 @@ export class HudReboot {
       if (lastSet.has(_idOf(el))) at += K.LAST_GAP_MS;
       const scheduled = this._schedule(() => this._returnOne(el, reduced), at);
       if (scheduled == null) {
-        // No timer seam (headless without a setTimeout): nothing can return —
-        // undo the darkening rather than leave the HUD black.
+        // No timer seam (headless without a setTimeout): nothing can return — undo the darkening rather than leave it black.
         this.cancel();
         return false;
       }
@@ -301,10 +256,7 @@ export class HudReboot {
     return true;
   }
 
-  /**
-   * Abort: clear every timer, strip BOTH classes from every touched element,
-   * forget `onDone` (it is NOT called). Idempotent; never throws.
-   */
+  /** Abort: clear every timer, strip BOTH classes from every touched element, forget `onDone` (NOT called). Idempotent. */
   cancel() {
     for (const id of this._timers) this._clearTimer(id);
     this._timers.clear();
@@ -318,7 +270,6 @@ export class HudReboot {
     this._onDone = null;
   }
 
-  /** @returns {boolean} a run is in flight (dark hold, returns, or the last flicker) */
   isPlaying() { return this._playing; }
 
   /** cancel() + forget the document; further `play()` calls return false. */
@@ -330,14 +281,10 @@ export class HudReboot {
     this._audio = null;
   }
 
-  // ── Collection ─────────────────────────────────────────────────────────────
-
   /**
-   * @private The targets: the overlay's children + the chrome ids, de-duplicated
-   * (first-seen order), minus the skip ids, SHOWN only (client rects, and
-   * something painted — see `_sortKey`), sorted by VISUAL top (stable), then
-   * the LAST ids moved to the end in `REBOOT_LAST_IDS` order.
-   * @returns {object[]}
+   * @private The targets: the overlay's children + the chrome ids, de-duplicated (first-seen order), minus the skip ids,
+   * SHOWN only (client rects, and something painted — see `_sortKey`), sorted by VISUAL top (stable), then the LAST ids
+   * moved to the end in `REBOOT_LAST_IDS` order.
    */
   _collect() {
     const doc = this._doc;
@@ -362,9 +309,7 @@ export class HudReboot {
     }
     const skip = new Set(REBOOT_SKIP_IDS);
     const shown = raw.filter((el) => !skip.has(_idOf(el)) && _isShown(el));
-    // Stable sort by the visual top: decorate with the DOM index so ties keep
-    // their order; a null key (a shown wrapper with nothing painted below it)
-    // is not a target.
+    // Stable sort by the visual top (DOM index breaks ties); a null key is not a target.
     const keyed = [];
     shown.forEach((el, i) => {
       const top = _sortKey(el);
@@ -381,9 +326,6 @@ export class HudReboot {
     return rest.concat(lasts);
   }
 
-  // ── The return ─────────────────────────────────────────────────────────────
-
-  /** @private One element comes back: dark off, `in` on, the clack (and the comms crackle), `in` off after FLICKER_MS. */
   _returnOne(el, reduced) {
     if (!this._playing) return;
     _removeClass(el, REBOOT_DARK_CLASS);
@@ -394,7 +336,6 @@ export class HudReboot {
     if (id == null) this._settleOne(el);
   }
 
-  /** @private The flicker is over for this element; the last one ends the run. */
   _settleOne(el) {
     if (!this._playing) return;
     _removeClass(el, REBOOT_IN_CLASS);
@@ -402,7 +343,6 @@ export class HudReboot {
     if (this._remaining <= 0) this._finish();
   }
 
-  /** @private The run is over: forget the touched set, then `onDone` exactly once. */
   _finish() {
     const done = this._onDone;
     this._onDone = null;
@@ -416,16 +356,11 @@ export class HudReboot {
     }
   }
 
-  // ── Sheet ──────────────────────────────────────────────────────────────────
-
   /**
-   * @private One <style> per document, idempotent by id. `.hud-reboot-dark`
-   * wins over inline opacity writes (!important) and freezes transitions so
-   * the darkening is a snap; the pointer-events rule also covers descendants
-   * that opt back in (the SAFETY OVERRIDE button is `auto` inside a `none`
-   * root). `.hud-reboot-in` is the relay flicker; reduced motion (the media
-   * query, or the body attribute this module writes when its dep says so)
-   * turns the keyframe off and leaves a plain snap-on.
+   * @private One <style> per document, idempotent by id. `.hud-reboot-dark` wins over inline opacity writes (!important)
+   * and freezes transitions so the darkening is a snap; the pointer-events rule also covers descendants that opt back in
+   * (the SAFETY OVERRIDE button is `auto` inside a `none` root). `.hud-reboot-in` is the relay flicker; reduced motion
+   * (the media query, or the body attribute this module writes when its dep says so) turns the keyframe off.
    */
   _ensureStyle() {
     const doc = this._doc;
@@ -454,7 +389,6 @@ export class HudReboot {
     doc.head.appendChild(style);
   }
 
-  /** @private `body[data-hud-reboot-reduced]` follows the reduced-motion answer at play() time (write-on-change). */
   _setReducedAttr(reduced) {
     const d = this._doc;
     const body = d && d.body;
@@ -467,9 +401,6 @@ export class HudReboot {
     }
   }
 
-  // ── Small seams ────────────────────────────────────────────────────────────
-
-  /** @private A tracked timer (cancel clears it). Returns the id (null when there is no timer seam). */
   _schedule(fn, ms) {
     if (!this._setTimeoutFn) return null;
     let id = null;
@@ -488,14 +419,12 @@ export class HudReboot {
     return id;
   }
 
-  /** @private */
   _clearTimer(id) {
     if (id == null || !this._clearTimeoutFn) return;
     const clearTimer = this._clearTimeoutFn;              // detached call (see the header)
     try { clearTimer(id); } catch (_e) { /* timer */ }
   }
 
-  /** @private A guarded, duck-typed audio call. */
   _audioCall(method) {
     const a = this._audio;
     try {
@@ -503,7 +432,6 @@ export class HudReboot {
     } catch (_e) { /* audio */ }
   }
 
-  /** @private */
   _reducedMotion() {
     const d = this._reducedDep;
     if (typeof d === 'function') {

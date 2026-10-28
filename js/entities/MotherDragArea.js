@@ -1,10 +1,10 @@
 /**
- * MotherDragArea.js — her projected area across her velocity (Nets step 3 slice 2a, 2026-10-22).
+ * MotherDragArea.js - her projected area across her velocity.
  *
- * The drag law needs the area she presents to the air, and she is not a ball: nose-first with the wings edge-on she shows
- * 3.2 m2 (radiators 146 deg), turned broadside 3.5, with the wings facing forward 5.9. The game used a bare 20 m2.
+ * The drag law needs the area she presents to the air, and she is not a ball: nose-first with the wings edge-on she shows 3.2 m2
+ * (radiators 146 deg), turned broadside 3.5, with the wings facing forward 5.9. (The game used a bare 20 m2 before this model.)
  *
- * The model (decision C of the slice plan; measured against the built meshes, see test-MotherDragArea.js):
+ * The model (measured against the built meshes, see test-MotherDragArea.js):
  *
  *     A(d) = ( sum_i ( |d_i| * C_i(theta) )^1.5 )^(1/1.5)  +  sum_wings  A_w * s * |n . d|
  *
@@ -14,19 +14,17 @@
  *   A_w     one blanket, ROSA_WIDTH x ROSA_LENGTH = 2.0 m2;  s  the wing's deploy scale (wrapper scale.x, 1 = out)
  *   n       the blanket's normal in the body frame, from the pivot's real transform
  *
- * Why this and not the simpler sums: the axis sum |dx|Cx + |dy|Cy + |dz|Cz is always over (max 35 %, median 20 % on the
- * 360 test poses), and a table of the whole ship by axis cannot follow a turned flat plate (max 88-195 % off the axes). A
- * p-norm of 1.5 over the core with the wings as the plates they are is exact on the axes, unbiased (mean signed error
- * ~0.5 %) and costs a few multiplies per frame. Not in it (owed, named in the slice plan): the radiators hiding part of a
- * wing seen nose-first (the model reads up to +22 % there), a held catch's area, launched daughters leaving the core,
- * single-petal holds (the shared radiator angle is used), air that turns with the Earth.
+ * Why this and not the simpler sums: the axis sum |dx|Cx + |dy|Cy + |dz|Cz is always over (max 35 %, median 20 % on the 360 test poses),
+ * and a table of the whole ship by axis cannot follow a turned flat plate (max 88-195 % off the axes). A p-norm of 1.5 over the core with
+ * the wings as the plates they are is exact on the axes, unbiased (mean signed error ~0.5 %) and costs a few multiplies per frame. Not
+ * in it: the radiators hiding part of a wing seen nose-first (the model reads up to +22 % there), a held catch's area, launched daughters
+ * leaving the core, single-petal holds (the shared radiator angle is used), air that turns with the Earth.
  *
  * Pure: no THREE, no game state. PlayerSatellite.dragAreaM2() gathers her state and calls this.
  */
 import { Constants } from '../core/Constants.js';
 import { DEG2RAD } from '../core/MathUtil.js';
 
-/** The p of the core blend: 1 is the axis sum (too big), 2 the root of squares (too small); 1.5 is unbiased on the meshes. */
 export const CORE_BLEND_P = 1.5;
 
 
@@ -36,13 +34,8 @@ export function wingAreaM2() {
   return V5.ROSA_WIDTH * V5.ROSA_LENGTH;
 }
 
-/**
- * The core's projected area across the three body axes at radiator angle `thetaRad`, m2: the CORE_AREA_M2 rows
- * interpolated linearly in the angle, clamped to the first and last row.
- * @param {number} thetaRad radiator angle (the shared `_flowerThetaRad`), radians
- * @param {number[]} [out] receives [Cx, Cy, Cz]
- * @returns {number[]} out
- */
+/** The core's projected area across the three body axes at radiator angle `thetaRad` (the shared `_flowerThetaRad`), m2: the CORE_AREA_M2
+ *  rows interpolated linearly in the angle, clamped to the first and last row. `out` receives [Cx, Cy, Cz]. */
 export function coreAreaAt(thetaRad, out = [0, 0, 0]) {
   const rows = Constants.MOTHER_DRAG.CORE_AREA_M2;
   const last = rows.length - 1;
@@ -64,13 +57,10 @@ const _core = [0, 0, 0];
 /**
  * Her projected area across the direction `d`, m2.
  * @param {number} dx velocity direction in her body frame (any length; a zero vector means +Z: she is not moving, nose-first)
- * @param {number} dy
- * @param {number} dz
  * @param {number} thetaRad radiator angle, radians
  * @param {Array<{scale:number, nx:number, ny:number, nz:number}>} [wings] each ROSA wing: deploy scale (wrapper scale.x) and its
  *   blanket normal in the body frame (unit)
  * @param {number} [nWings] how many leading entries of `wings` to count (default all); lets a caller reuse one array
- * @returns {number}
  */
 export function motherDragAreaM2(dx, dy, dz, thetaRad, wings, nWings) {
   let len = Math.sqrt(dx * dx + dy * dy + dz * dz);
@@ -103,15 +93,14 @@ export function wingNormalAt(aRad) {
 let _reference = null;
 
 /**
- * Her REFERENCE area, m2: how she flies. Nose-first (+Z), radiators at THERMAL.FLOWER.OPEN_DEG (146 deg, the working angle), both wings out and
- * tracking the sun, taken as the mean of the model over the wing turn a uniform in 0..180 deg (the plate's |n.d| = |sin a|
- * nose-first, so the mean is 2/pi): about 3.2 + 2.5 m2. This is the area the sinking arrow's threshold and the welcome
- * pieces (before she has taken a drag step) are computed with.
- * @returns {number}
+ * Her REFERENCE area, m2: how she flies. Nose-first (+Z), radiators at THERMAL.FLOWER.OPEN_DEG (146 deg, the working angle), both wings out
+ * and tracking the sun, taken as the mean of the model over the wing turn a uniform in 0..180 deg (the plate's |n.d| = |sin a| nose-first,
+ * so the mean is 2/pi): about 3.2 + 2.5 m2. This is the area the sinking arrow's threshold and the welcome pieces (before she has taken a
+ * drag step) are computed with.
  */
 export function referenceDragAreaM2() {
   if (_reference !== null) return _reference;
-  const N = 180;                                       // midpoints of 1-degree bins over 0..180 deg
+  const N = 180;  // midpoints of 1-degree bins over 0..180 deg
   let sum = 0;
   const wings = [{ scale: 1, nx: 0, ny: 0, nz: 0 }, { scale: 1, nx: 0, ny: 0, nz: 0 }];
   for (let i = 0; i < N; i++) {

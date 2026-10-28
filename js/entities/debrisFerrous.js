@@ -1,10 +1,8 @@
 /**
- * debrisFerrous.js — shared capture-metadata derivation for debris (CP-1).
+ * debrisFerrous.js - shared capture-metadata derivation for debris.
  *
- * Single source of truth used by BOTH the procedural factory (DebrisField) and
- * the catalog converter (CatalogConverter) so the tool recommender + capture
- * sub-FSMs behave identically for procedural and real debris. Keep the rules
- * here — do not re-derive these flags inline.
+ * Single source of truth for BOTH the procedural factory (DebrisField) and the catalog converter (CatalogConverter), so the tool
+ * recommender + capture sub-FSMs behave identically for procedural and real debris. Keep the rules here; do not re-derive these flags inline.
  *
  * @module entities/debrisFerrous
  */
@@ -33,10 +31,7 @@ export const SURFACE_ROUGHNESS_BY_MATERIAL = {
 const SURFACE_ROUGHNESS_FALLBACK = 0.5;
 
 /**
- * Derive every capture-relevant flag for one debris object.
- * @param {string} material - debris material tag
- * @param {string} type     - internal DEBRIS_TYPES key
- * @param {number} mass     - debris mass (kg)
+ * Derive every capture-relevant flag for one debris object (`material` tag, internal DEBRIS_TYPES key `type`, `mass` in kg).
  * @returns {{ ferromagnetic: boolean, hasFerrousFasteners: boolean,
  *            hasGrappleFixture: boolean, surfaceRoughness: number }}
  */

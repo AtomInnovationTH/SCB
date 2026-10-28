@@ -1,40 +1,25 @@
 /**
- * SdaFloor.js — the Zoom Ladder SDA DOWNLINK floor (id 5) content orchestrator
- * (S5, M4, FloorContract.FLOORS[6]).
+ * SdaFloor.js — the Zoom Ladder SDA DOWNLINK floor (id 5, FloorContract.FLOORS[6]) content orchestrator.
  *
- * SDA DOWNLINK is the Earth-anchored whole-domain strategic chart. This module is its
- * "costume" controller: it owns the floor's replacement content while the near
- * field is off, the full debris meshes are hidden, and the ship is out of
- * frame (fidelity.debrisMode === 'massBands', costume.transform
- * 'earth-to-chart'):
- *   - the SDA chart overlay (SdaChart): 200–2000 km altitude shells with
- *     aggregated live object counts (debris clusters + active sats), the
- *     canonical MASS_BANDS salvage table, the GEO gold ring at the screen
- *     edges (aspect-derived MEO compression + honest tag), and the
- *     decade-scale Kessler timeline strip (history keyframes + the PURE
- *     projection from KesslerSystem's quadratic density model);
- *   - the two lenses — VALUE (gold, mass-weighted) / THREAT (red,
- *     count-weighted + timeline) — with VALUE the arrival default
- *     (00-spec §3 F5) and the endings free to land on THREAT via setLens();
- *   - the Space verb 'flip-lens' (00-spec §5): flipLens(), dispatched by
- *     LadderController (HANDOFF — the serial track wires the verb case).
+ * SDA DOWNLINK is the Earth-anchored whole-domain strategic chart. This is its "costume" controller: it owns the
+ * floor's content while the near field is off, full debris meshes are hidden and the ship is out of frame
+ * (fidelity.debrisMode === 'massBands', costume.transform 'earth-to-chart'):
+ *   - the SdaChart overlay: 200–2000 km altitude shells with aggregated live counts (debris clusters + active
+ *     sats), the MASS_BANDS salvage table, the GEO gold ring at the screen edges, and the decade-scale Kessler
+ *     timeline strip (history + the PURE projection from KesslerSystem's quadratic density model);
+ *   - two lenses, VALUE (gold, mass-weighted) / THREAT (red, count-weighted + timeline); VALUE is the arrival
+ *     default (00-spec §3 F5), the endings may land on THREAT via setLens();
+ *   - the Space verb 'flip-lens' (00-spec §5): flipLens(), dispatched by LadderController.
  *
- * DESIGN (docs/ladder/03-plan.md, this is the PARALLEL track — NavcomFloor
- * pattern):
- *   - Every dependency is INJECTED and optional, so the module is
- *     unit-testable headless (no THREE, no DOM, no EventBus). The cluster
- *     source is any object exposing getDebrisClusters(); the sat source is a
- *     function returning active-sat records (data/active-sats.json shapes) or
- *     an object exposing getAllActiveSats(); the kessler dep is anything
- *     exposing getCascadeRisk()/getStatus() (KesslerSystem).
- *   - It emits NO events. LadderController activates it on the arrival
- *     floor's fidelity.debrisMode === 'massBands', ticks update() per frame
- *     while active, and dispatches the 'flip-lens' verb (serial-track wire).
- *   - DATA CADENCE: sources are re-polled on activate() and then at most
- *     every DATA_REFRESH_MS from the per-frame tick — never per frame (the
- *     cluster pass walks the whole debris list). The chart itself rasterizes
- *     write-on-change only (SdaChart's G1 gate), so a calm SDA floor costs zero
- *     paints and one aggregation pass per refresh window.
+ * Every dependency is INJECTED and optional, so it is unit-testable headless (no THREE, no DOM, no EventBus):
+ * cluster source = any object with getDebrisClusters(); sat source = a function returning active-sat records
+ * (data/active-sats.json shape) or an object with getAllActiveSats(); kessler = anything with
+ * getCascadeRisk()/getStatus() (KesslerSystem). It emits NO events. LadderController activates it on the arrival
+ * floor's debrisMode 'massBands', ticks update() per frame while active, and dispatches 'flip-lens'.
+ *
+ * DATA CADENCE: sources are re-polled on activate() and then at most every DATA_REFRESH_MS, never per frame (the
+ * cluster pass walks the whole debris list). The chart rasterizes write-on-change only (SdaChart's G1 gate), so a
+ * calm floor costs zero paints and one aggregation pass per refresh window.
  *
  * @module systems/SdaFloor
  */
@@ -43,31 +28,26 @@ import { FloorContract } from '../core/FloorContract.js';
 import { SdaChart, aggregateBands, buildTimeline, LENSES } from '../ui/SdaChart.js';
 import { clamp01 } from '../core/MathUtil.js';
 
-/** The SDA DOWNLINK (id 5) contract row — by id, never by index (Session H). */
+// by id, never by index
 const FLOOR = FloorContract.byId(5);
 
 /**
- * Minimum real-time interval between source re-polls (cluster walk + sat list
- * + kessler status) while the SDA floor is active. The chart reads slow strategic data;
- * per-frame aggregation would be pure waste (G1 discipline at the data layer).
- * Own-module tunable (house rule: not FloorContract/Constants).
+ * Minimum real-time interval between source re-polls (cluster walk + sat list + kessler status) while active;
+ * per-frame aggregation would be waste. Own-module tunable (house rule: not FloorContract/Constants).
  */
 export const DATA_REFRESH_MS = 2000;
 
-/** Monotonic ms clock (headless-safe; injectable for tests). */
+// monotonic ms clock (headless-safe; injectable for tests)
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 export class SdaFloor {
   /**
    * @param {object} [deps]
-   * @param {object} [deps.clusterSource] - exposes getDebrisClusters() (DebrisField)
-   * @param {function|object} [deps.satSource] - () => active-sat records, or an
-   *                 object exposing getAllActiveSats() (CatalogLoader shape)
-   * @param {object} [deps.kessler]       - exposes getCascadeRisk() and/or
-   *                 getStatus() (KesslerSystem) — live cascade pressure feeds
-   *                 the timeline projection's riskBoost
-   * @param {object} [deps.chart]         - SdaChart instance (default: fresh)
-   * @param {function} [deps.now]         - monotonic ms clock (tests)
+   * @param {object} [deps.clusterSource] - getDebrisClusters() (DebrisField)
+   * @param {function|object} [deps.satSource] - () => active-sat records, or getAllActiveSats() (CatalogLoader)
+   * @param {object} [deps.kessler] - getCascadeRisk() and/or getStatus() (KesslerSystem); feeds the timeline riskBoost
+   * @param {object} [deps.chart] - SdaChart instance (default: fresh)
+   * @param {function} [deps.now] - monotonic ms clock (tests)
    */
   constructor(deps = {}) {
     this._clusterSource = deps.clusterSource || null;
@@ -84,18 +64,12 @@ export class SdaFloor {
     this._lastRefreshMs = -Infinity;
   }
 
-  /** @returns {boolean} */
   isActive() { return this._active; }
 
-  /** The chart view instance (for the serial track to mount / tests). */
   get chart() { return this._chart; }
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-  /**
-   * Enter the SDA floor: reset the lens to the arrival default (VALUE — 00-spec §3 F5),
-   * take a fresh data sample, and show the chart.
-   */
+  /** Enter the floor: reset the lens to the arrival default (VALUE, 00-spec §3 F5), sample data afresh, show the chart. */
   activate() {
     if (this._active) return;
     this._active = true;
@@ -104,20 +78,14 @@ export class SdaFloor {
     if (this._chart.show) this._chart.show();
   }
 
-  /** Leave the SDA floor: hide the chart (state kept so re-entry is cheap). */
   deactivate() {
     if (!this._active) return;
     this._active = false;
     if (this._chart.hide) this._chart.hide();
   }
 
-  // ── Data (throttled — never per frame) ─────────────────────────────────────
 
-  /**
-   * Re-poll the sources and rebuild the band aggregation + timeline model.
-   * Called on activate() and from the throttled per-frame path; safe headless
-   * with any subset of deps (absent sources aggregate as empty).
-   */
+  /** Re-poll the sources and rebuild bands + timeline; safe headless with any subset of deps (absent = empty). */
   refreshData() {
     this._lastRefreshMs = this._now();
     const clusters = (this._clusterSource && this._clusterSource.getDebrisClusters)
@@ -131,7 +99,7 @@ export class SdaFloor {
     this._timeline = buildTimeline({ riskBoost: this._risk });
   }
 
-  /** @private Active-sat records from either dep shape (fn or CatalogLoader). */
+  /** @private Active-sat records from either dep shape. */
   _readSats() {
     const s = this._satSource;
     if (!s) return [];
@@ -140,7 +108,7 @@ export class SdaFloor {
     return [];
   }
 
-  /** @private Live cascade risk 0..1 from the kessler dep (0 without it). */
+  /** @private Cascade risk 0..1 from the kessler dep (0 without it). */
   _readRisk() {
     const k = this._kessler;
     if (!k) return 0;
@@ -155,49 +123,26 @@ export class SdaFloor {
     return 0;
   }
 
-  /** The current band aggregation (tests / context panel). */
   getBands() { return this._bands; }
 
   /** Objects outside the LEO shells (counted, never dropped). */
   getOutOfBand() { return this._outOfBand; }
 
-  /** The current timeline model (tests / endings ledger). */
   getTimeline() { return this._timeline; }
 
-  /** The last-sampled cascade risk fed to the projection. */
   getRisk() { return this._risk; }
 
-  // ── Lens (the 'flip-lens' Space verb surface) ──────────────────────────────
 
-  /** @returns {string} current lens ('VALUE' | 'THREAT') */
   getLens() { return this._chart.getLens(); }
 
-  /**
-   * Dispatch the SDA Space verb (FloorContract.byId(5).spaceVerb
-   * 'flip-lens'): flip VALUE↔THREAT. The next update() repaints (the flip
-   * changes the frame signature). Callable while inactive (harmless — the
-   * lens is reset to VALUE on the next arrival anyway).
-   * @returns {string} the new lens
-   */
+  /** Flip VALUE↔THREAT (the 'flip-lens' Space verb). The next update() repaints. Callable while inactive: harmless. */
   flipLens() { return this._chart.flipLens(); }
 
-  /**
-   * Set the lens explicitly (the endings ride lands on THREAT with the career
-   * ledger overlaid — 00-spec §9). Unknown values are ignored.
-   * @param {string} lens @returns {string} the lens in effect
-   */
+  /** Set the lens explicitly (the endings ride lands on THREAT with the career ledger — 00-spec §9); unknown ignored. */
   setLens(lens) { return this._chart.setLens(lens); }
 
-  // ── Per-frame ──────────────────────────────────────────────────────────────
 
-  /**
-   * Render one frame of the SDA costume. No-op while inactive. Re-polls the
-   * sources at most every DATA_REFRESH_MS; the chart rasterizes only when its
-   * frame signature changed (write-on-change — G1).
-   * @param {object} [ctx]
-   * @param {number} [ctx.wPx] [ctx.hPx] - viewport override (headless tests)
-   * @returns {object|null} the SdaChart frame descriptors (tests), or null
-   */
+  /** One frame; no-op while inactive. Re-polls at most every DATA_REFRESH_MS; rasterizes only on a changed frame signature (G1). */
   update(ctx = {}) {
     if (!this._active) return null;
     if ((this._now() - this._lastRefreshMs) >= DATA_REFRESH_MS) this.refreshData();
@@ -211,7 +156,6 @@ export class SdaFloor {
     });
   }
 
-  /** Tear down the owned view. */
   dispose() {
     if (this._chart.dispose) this._chart.dispose();
   }

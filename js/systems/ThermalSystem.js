@@ -1,49 +1,37 @@
 /**
- * ThermalSystem.js — the ship's heat (w2-heat, 2026-10-08).
+ * ThermalSystem.js — the ship's heat.
  *
- * DECISIONS §15 rows 2/4/5/6 + §2 rows 5–7: the ship heats up from what the
- * player does (every watt drawn from the battery ends as heat), warns at
- * 60 °C (yellow) and 85 °C (red), and opens its radiator by itself at 70 °C —
- * a little late on purpose, the player could have opened it sooner (O).
+ * DECISIONS §15 rows 2/4/5/6 + §2 rows 5–7: the ship heats up from what the player does (every watt drawn from the
+ * battery ends as heat), warns at 60 °C (yellow) and 85 °C (red), and opens its radiator by itself at 70 °C, a
+ * little late on purpose (the player could have opened it sooner, O).
  *
- * One lump, on the battery's own clock (Constants.SHIP_HEAT — every constant
- * carries its physical reading there):
+ * One lump, on the battery's own clock (Constants.SHIP_HEAT carries every constant's physical reading):
  *
  *   C dT/dt = P_in − P_out
  *   P_in  = drawn battery energy (ResourceSystem ledger) + SUN_HULL_W in daylight
  *   P_out = σ ε A_eff (T⁴ − T_sink⁴),
  *   A_eff = A_hull + A_rad × (G_closed + (1 − G_closed) × openFrac) × flow
  *
- * L4 radiator-loop (owner 2026-10-20, "a radiator can be open without
- * transferring heat; on a running engine without cooling it"): the radiators
- * shed the ship's heat only while the coolant flows. `flow` (0…1) is the
- * ship's own thermostat valve (`loopFlow`): 0 at or below LOOP_OFF_C (20 °C),
- * 1 at or above LOOP_FULL_C (30 °C), linear between. With flow 0 the
- * radiators — folded or open — shed nothing; only the bare hull leaks. The
- * player has no control over the loop (no pump draw yet — a follow-up).
+ * Radiator loop (owner 2026-10-20, "a radiator can be open without transferring heat; on a running engine without
+ * cooling it"): radiators shed heat only while the coolant flows. `flow` (0…1) is the ship's own thermostat valve
+ * (`loopFlow`): 0 at or below LOOP_OFF_C (20 °C), 1 at or above LOOP_FULL_C (30 °C), linear between. With flow 0 the
+ * radiators, folded or open, shed nothing; only the bare hull leaks. The player has no control over the loop.
  *
- * Ticked by the game loop right after resourceSystem.update(dt), under the
- * same held-world guard, so heat stops whenever the world clock does; held
- * frames call skipHeld() so battery billed meanwhile never heats the ship.
+ * Ticked by the game loop right after resourceSystem.update(dt), under the same held-world guard, so heat stops
+ * whenever the world clock does; held frames call skipHeld() so battery billed meanwhile never heats the ship.
  * Reset with the battery (ResourceSystem.reset()/restore() call reset()).
  *
- * w4-power D7 (2026-10-12): below HEATER.HOLD_C (0 °C) the battery heaters
- * draw what holds it (capped at HEATER.MAX_W), billed through the battery —
- * `_updateHeater`. Its one line is visible in mission 1 (`_critical`, though
- * priority 'info') because the heaters cost battery. Since L4 radiator-loop the
- * coolant stops well above HOLD_C (LOOP_OFF_C 20 °C), so an open radiator no
- * longer pulls the ship down to the heaters; they run only when the ship is
- * cold for another reason (a long eclipse with nothing drawn).
+ * Below HEATER.HOLD_C (0 °C) the battery heaters draw what holds it (capped at HEATER.MAX_W), billed through the
+ * battery (`_updateHeater`). Its one line is visible in mission 1 (`_critical`, though priority 'info') because
+ * the heaters cost battery. The coolant stops well above HOLD_C (LOOP_OFF_C 20 °C), so an open radiator no longer
+ * pulls the ship down to the heaters; they run only when it is cold for another reason (a long eclipse, nothing drawn).
  *
- * Speaks only through Events.COMMS_MESSAGE (sender 'THERMAL'). The auto
- * radiator calls player.setFlowerPose() ONLY — it never emits
- * THERMAL_FLOWER_INPUT (that event means "the player commanded the radiator";
- * the codex unlocks on it). A player command always wins: one seen in the
- * last PLAYER_WINS_S blocks the auto-open, and the auto never folds a radiator
- * at all: it opens to the OPEN pose (146°) and leaves it there.
- * During a catch hand-off hold it does not call setFlowerPose at all (the
- * hold refuses every pose and the ship would speak the player's refusal line);
- * it opens after the hold ends.
+ * Speaks only through Events.COMMS_MESSAGE (sender 'THERMAL'). The auto radiator calls player.setFlowerPose() ONLY;
+ * it never emits THERMAL_FLOWER_INPUT (that event means "the player commanded the radiator"; the codex unlocks on
+ * it). A player command always wins: one seen in the last PLAYER_WINS_S blocks the auto-open, and the auto never
+ * folds a radiator: it opens to the OPEN pose (146°) and leaves it. During a catch hand-off hold it does not call
+ * setFlowerPose at all (the hold refuses every pose and the ship would speak the player's refusal line); it opens
+ * after the hold ends.
  *
  * @module systems/ThermalSystem
  */
@@ -59,41 +47,35 @@ export const SIGMA = 5.670374419e-8;
 const K0 = 273.15;
 
 export class ThermalSystem {
-  /**
-   * @param {{ resourceSystem?: object|null, player?: object|null }} [deps]
-   *   resourceSystem — the power ledger (getEnergyDrawnUnits); this registers
-   *   itself there with setThermalSource(this). player — PlayerSatellite:
-   *   getFlowerStatus().openFrac, setFlowerPose(name), _inShadow.
-   */
+  /** `resourceSystem`: the power ledger (getEnergyDrawnUnits); this registers itself with setThermalSource(this).
+   *  `player`: PlayerSatellite (getFlowerStatus().openFrac, setFlowerPose(name), _inShadow). */
   constructor({ resourceSystem = null, player = null } = {}) {
     this._rs = resourceSystem;
     this._player = player;
 
-    /** @type {number} lump temperature, °C */
+    /** lump temperature, °C */
     this.tempC = 0;
-    /** @private real seconds of ticked (un-held) play — the auto controller's clock */
+    // real seconds of ticked (un-held) play: the auto controller's clock
     this._clockS = 0;
-    /** @private last seen ledger total (units) */
+    // last seen ledger total (units)
     this._lastDrawnUnits = 0;
-    /** @private smoothed dT/dt, °C per real second */
+    // smoothed dT/dt, °C per real second
     this._rateCps = 0;
-    /** @private */
     this._yellowArmed = true;
-    /** @private */
     this._redArmed = true;
-    /** @private true from an auto-open until any player command (it never auto-closes) */
+    // true from an auto-open until any player command (it never auto-closes)
     this._autoOpened = false;
-    /** @private reel-hold F1: a swing this auto asked for was dropped at the band's edge (a catch in their way): the next ask skips the "folded" check once (the wings stand half open) */
+    // a swing this auto asked for was dropped at the band's edge (a catch in the way): the next ask skips the "folded" check once (wings stand half open)
     this._dropRetry = false;
-    /** @private clock time of the last player radiator command */
+    // clock time of the last player radiator command
     this._lastPlayerCmdS = -Infinity;
-    /** w4-power D7: the heater's draw this tick, W (0 when warm / disabled) */
+    /** the heater's draw this tick, W (0 when warm / disabled) */
     this.heaterW = 0;
-    /** @private battery units the heater billed since the last tick (taken out of "other heat in") */
+    // battery units the heater billed since the last tick (taken out of "other heat in")
     this._heaterUnits = 0;
-    /** @private play seconds (this._clockS — held and paused frames excluded) the heater has run since the last line */
+    // play seconds (_clockS: held and paused frames excluded) the heater has run since the last line
     this._heaterRunGameS = 0;
-    /** @private this._clockS at the last heater line */
+    // _clockS at the last heater line
     this._heaterLineAtS = -Infinity;
 
     this._onPlayerCmd = () => {
@@ -109,18 +91,8 @@ export class ThermalSystem {
     this.reset();
   }
 
-  // ======================================================================
-  // PHYSICS
-  // ======================================================================
 
-  /**
-   * L4 radiator-loop: how much of the radiator surface the coolant reaches
-   * (0…1) — the ship's thermostat valve. 0 at or below LOOP_OFF_C, 1 at or
-   * above LOOP_FULL_C, linear between. Pure; the heaters (HOLD_C) sit well
-   * below LOOP_OFF_C, so the two never overlap.
-   * @param {number} tempC - lump temperature, °C
-   * @returns {number}
-   */
+  /** Share of the radiator surface the coolant reaches (0…1): the thermostat valve. Pure; the heaters (HOLD_C) sit well below LOOP_OFF_C. */
   loopFlow(tempC) {
     const SH = Constants.SHIP_HEAT;
     const off = SH.LOOP_OFF_C;
@@ -131,12 +103,8 @@ export class ThermalSystem {
   }
 
   /**
-   * Effective radiating area (ε-weighted m²) at an open fraction and a loop
-   * flow. With flow 0 the radiators — folded or open — add nothing (no leak
-   * term: a dry radiator is just a plate hanging off the ship).
-   * @param {number} openFrac 0 folded … 1 full bloom
-   * @param {number} [flow=1] coolant flow fraction 0…1 (`loopFlow`); 1 = loop fully open
-   * @returns {number}
+   * Effective radiating area (ε-weighted m²). With flow 0 the radiators add nothing (no leak term: a dry radiator
+   * is a plate hanging off the ship). openFrac 0 folded … 1 full bloom.
    */
   effectiveAreaM2(openFrac, flow = 1) {
     const SH = Constants.SHIP_HEAT;
@@ -145,13 +113,7 @@ export class ThermalSystem {
     return SH.HULL_AREA_M2 + SH.RAD_AREA_M2 * (lerp(SH.G_CLOSED, 1, f)) * q;
   }
 
-  /**
-   * Radiated power (W) at `tempC`, an open fraction and a loop flow.
-   * @param {number} tempC
-   * @param {number} openFrac
-   * @param {number} [flow=this.loopFlow(tempC)] pass 1 to size the worst case (loop stuck open)
-   * @returns {number}
-   */
+  /** Radiated power (W). `flow` defaults to `loopFlow(tempC)`; pass 1 to size the worst case (loop stuck open). */
   radiatedW(tempC, openFrac, flow = this.loopFlow(tempC)) {
     const SH = Constants.SHIP_HEAT;
     const T = tempC + K0;
@@ -160,14 +122,9 @@ export class ThermalSystem {
   }
 
   /**
-   * Steady-state temperature (°C) for a constant heat input. With `flow`
-   * omitted the thermostat rule applies: the answer depends on T, so it is
-   * bisected (radiatedW rises with T, so there is exactly one root). With
-   * `flow` given it is the closed form at that fixed flow.
-   * @param {number} powerW - total heat in (electrical + sun), W
-   * @param {number} [openFrac=0]
-   * @param {number|null} [flow=null] a fixed loop flow 0…1, or null for the thermostat rule
-   * @returns {number}
+   * Steady-state temperature (°C) for a constant heat input (`powerW`: electrical + sun). With `flow` omitted the
+   * thermostat rule applies: the answer depends on T, so it is bisected (radiatedW rises with T: exactly one root).
+   * With `flow` given it is the closed form at that fixed flow.
    */
   equilibriumC(powerW, openFrac = 0, flow = null) {
     const SH = Constants.SHIP_HEAT;
@@ -187,15 +144,11 @@ export class ThermalSystem {
     return 0.5 * (lo + hi);
   }
 
-  // ======================================================================
-  // PER-FRAME
-  // ======================================================================
 
   /**
-   * Advance the lump by `dt` real seconds (the battery's clock — SHIP_HEAT
-   * UNIT_J / W_PER_UNIT_S = 3.6 J per watt per real second). Call only while
-   * the world runs (main.js ticks it under the `_worldHeld` guard).
-   * @param {number} dt - real seconds (slow-mo scaled, like resourceSystem.update)
+   * Advance the lump by `dt` real seconds (the battery's clock: SHIP_HEAT UNIT_J / W_PER_UNIT_S = 3.6 J per watt per
+   * real second; slow-mo scaled like resourceSystem.update). Call only while the world runs (main.js ticks it under
+   * the `_worldHeld` guard).
    */
   update(dt) {
     if (!(dt > 0)) return;
@@ -203,10 +156,9 @@ export class ThermalSystem {
     this._clockS += dt;
     const before = this.tempC;
 
-    // Heat in: every battery unit drawn since the last tick (drawn watts end
-    // as heat — D3), plus the sun on the hull in daylight. The heater's own
-    // draw (billed at the end of the last tick) is in `d` too — its heat is
-    // what warms the ship — but it is NOT "other heat in" for its controller.
+    // Heat in: every battery unit drawn since the last tick (drawn watts end as heat) plus the sun on the hull in
+    // daylight. The heater's own draw (billed at the end of the last tick) is in `d` too, since its heat warms the
+    // ship, but it is NOT "other heat in" for its controller.
     let qInJ = 0;
     let otherJ = 0;
     const rs = this._rs;
@@ -226,8 +178,8 @@ export class ThermalSystem {
       otherJ += SH.SUN_HULL_W * clockS;
     }
 
-    // Integrate (explicit, sub-stepped: τ ≥ ~200 battery-clock s, steps ≤ 2 s). radiatedW reads the loop's
-    // flow at each sub-step's own temperature (L4: the valve follows the ship, slope ≤ ~230 W/K → 2 s × 230 / C ≈ 0.03, stable).
+    // Integrate (explicit, sub-stepped: τ ≥ ~200 battery-clock s, steps ≤ 2 s). radiatedW reads the loop's flow at
+    // each sub-step's own temperature (valve slope ≤ ~230 W/K → 2 s × 230 / C ≈ 0.03, stable).
     const openFrac = this._openFrac();
     const steps = Math.max(1, Math.ceil(clockS / 2));
     const hStep = clockS / steps;
@@ -237,7 +189,6 @@ export class ThermalSystem {
       this.tempC += (qStep - qOut) / SH.HEAT_CAPACITY_J_PER_K;
     }
 
-    // Trend: smoothed dT/dt in °C per real second.
     const a = 1 - Math.exp(-dt / SH.TREND_TAU_S);
     this._rateCps += ((this.tempC - before) / dt - this._rateCps) * a;
 
@@ -247,19 +198,12 @@ export class ThermalSystem {
   }
 
   /**
-   * w4-power D7 — the battery heaters (Constants.HEATER). Below HOLD_C they
-   * draw what holds HOLD_C: the power the lump radiates now, minus every other
-   * heat input (`otherW` — electrical draw + sun), plus a pull C/PULL_S W per K
-   * toward HOLD_C. That is continuous through HOLD_C (it fades to 0 within
-   * ~1 K above it), so there is no on/off flicker, and when uncapped the lump
-   * settles at exactly HOLD_C. Capped at MAX_W; billed through the battery
-   * (ResourceSystem.billWatts) so its heat arrives through the ledger next
-   * tick. One comms line after LINE_AFTER_S of running, at most once per
-   * LINE_EVERY_S. No auto-close (owner ruling 2026-10-09).
-   * @param {number} dt - real seconds
-   * @param {number} openFrac
-   * @param {number} otherW - non-heater heat in this tick, W
-   * @returns {number} the heater's watts this tick
+   * The battery heaters (Constants.HEATER). Below HOLD_C they draw what holds HOLD_C: the power the lump radiates
+   * now, minus every other heat input (`otherW`: electrical draw + sun), plus a pull C/PULL_S W per K toward HOLD_C.
+   * Continuous through HOLD_C (fades to 0 within ~1 K above it: no on/off flicker; uncapped, the lump settles at
+   * exactly HOLD_C). Capped at MAX_W; billed through the battery (ResourceSystem.billWatts) so its heat arrives
+   * through the ledger next tick. One comms line after LINE_AFTER_S of running, at most once per LINE_EVERY_S. No
+   * auto-close (owner ruling 2026-10-09). Returns the heater's watts this tick.
    * @private
    */
   _updateHeater(dt, openFrac, otherW) {
@@ -278,23 +222,21 @@ export class ThermalSystem {
     else if (rs && typeof rs.drawUpTo === 'function') {
       this._heaterUnits += rs.drawUpTo('battery', (w / SH.W_PER_UNIT_S) * dt);
     }
-    // The line: 10 s of running, at most once per 5 min of play.
     this._heaterRunGameS += dt;
     if (this._heaterRunGameS >= H.LINE_AFTER_S
         && this._clockS - this._heaterLineAtS >= H.LINE_EVERY_S) {
       this._heaterLineAtS = this._clockS;
       this._heaterRunGameS = 0;
-      // L4 radiator-loop: folding the radiator no longer saves anything (the coolant is already off at this temperature).
+      // Folding the radiator saves nothing here (the coolant is already off at this temperature).
       this._say(`Ship cold — battery heaters on, ${Math.round(w)} W, keeping the cells above freezing.`, 'info', { critical: true });
     }
     return w;
   }
 
   /**
-   * A held-world frame (main.js calls this instead of update while
-   * `_worldHeld`): heat is paused, and whatever the battery bills meanwhile
-   * (the base load keeps running in player.update) never heats the ship —
-   * the ledger counter is moved past it, so release lands no spike.
+   * A held-world frame (main.js calls this instead of update while `_worldHeld`): heat is paused, and whatever the
+   * battery bills meanwhile (the base load keeps running in player.update) never heats the ship; the ledger counter
+   * moves past it so release lands no spike.
    */
   skipHeld() {
     const rs = this._rs;
@@ -303,15 +245,9 @@ export class ThermalSystem {
     }
   }
 
-  // ======================================================================
-  // SNAPSHOT / RESET
-  // ======================================================================
 
-  /**
-   * The heat meter's numbers (ResourceSystem.getThermalSnapshot forwards this).
-   * `flow` (L4): the coolant loop's flow fraction 0…1 (0 = the radiators shed nothing).
-   * @returns {{tempC:number, band:'green'|'yellow'|'red', trend:-1|0|1, autoOpened:boolean, flow:number}}
-   */
+  /** The heat meter's numbers (ResourceSystem.getThermalSnapshot forwards this). `flow`: coolant flow 0…1 (0 = radiators shed nothing). */
+  /** @returns {{tempC:number, band:'green'|'yellow'|'red', trend:-1|0|1, autoOpened:boolean, flow:number}} */
   getSnapshot() {
     const SH = Constants.SHIP_HEAT;
     const t = this.tempC;
@@ -321,10 +257,9 @@ export class ThermalSystem {
   }
 
   /**
-   * New game / retry / fresh mission: back to the closed daylight equilibrium
-   * for the base load (the needle sits still until the player acts), lines
-   * re-armed, the auto controller cleared. Draws made before the reset do not
-   * heat the new run (the ledger counter is re-synced).
+   * New game / retry / fresh mission: back to the closed daylight equilibrium for the base load (the needle sits
+   * still until the player acts), lines re-armed, auto controller cleared. Earlier draws do not heat the new run
+   * (the ledger counter is re-synced).
    */
   reset() {
     const SH = Constants.SHIP_HEAT;
@@ -345,7 +280,6 @@ export class ThermalSystem {
       ? rs.getEnergyDrawnUnits() : 0;
   }
 
-  /** Drop the bus listener and the registration (tests, re-wiring). */
   dispose() {
     eventBus.off(Events.THERMAL_FLOWER_INPUT, this._onPlayerCmd);
     if (this._rs && typeof this._rs.getThermalSource === 'function'
@@ -354,11 +288,8 @@ export class ThermalSystem {
     }
   }
 
-  // ======================================================================
-  // PRIVATE
-  // ======================================================================
 
-  /** @private openFrac per the w2-start-pose contract (0 folded … 1 bloom); no flower → 0 */
+  /** @private openFrac 0 folded … 1 bloom; no flower gives 0 */
   _openFrac() {
     const p = this._player;
     const st = (p && typeof p.getFlowerStatus === 'function') ? p.getFlowerStatus() : null;
@@ -371,7 +302,7 @@ export class ThermalSystem {
     return !!(this._player && this._player._inShadow);
   }
 
-  /** @private once per crossing, re-armed REARM_C below (D4) */
+  /** @private once per crossing, re-armed REARM_C below */
   _updateLines(openFrac) {
     const SH = Constants.SHIP_HEAT;
     const t = this.tempC;
@@ -386,7 +317,7 @@ export class ThermalSystem {
       this._yellowArmed = false;
       this._say(open
         ? `Ship warming up — ${SH.YELLOW_C} °C. The radiator is already open.`
-        // u5-info-ap-hold D5: no key and no floor-1 button named (the same words on touch): say what will happen.
+        // no key and no floor-1 button named (the same words on touch): say what will happen
         : this._autoOpenArmed(openFrac)
           ? `Ship warming up — ${SH.YELLOW_C} °C. The radiator opens itself at ${SH.AUTO_OPEN_C} °C.`
           : `Ship warming up — ${SH.YELLOW_C} °C. The radiator is folded.`, 'warning');
@@ -396,11 +327,9 @@ export class ThermalSystem {
   }
 
   /**
-   * @private u5 D5: would the radiator open itself once the ship reaches AUTO_OPEN_C? One answer for the
-   * self-open code and for the 60 °C line: a radiator fitted, folded (at rest), not already auto-opened,
-   * no player radiator command in the last PLAYER_WINS_S, no launch driving the ship, no catch hand-off hold.
-   * @param {number} openFrac
-   * @returns {boolean}
+   * @private Would the radiator open itself once the ship reaches AUTO_OPEN_C? One answer for the self-open code and
+   * the 60 °C line: a radiator fitted, folded (at rest), not already auto-opened, no player radiator command in the
+   * last PLAYER_WINS_S, no launch driving the ship, no catch hand-off hold.
    */
   _autoOpenArmed(openFrac) {
     const SH = Constants.SHIP_HEAT;
@@ -412,15 +341,13 @@ export class ThermalSystem {
     if (p.flowerHandoffHeld === true || p.flowerCommandsLocked === true) return false;
     if (this._autoOpened) return false;
     if ((this._clockS - this._lastPlayerCmdS) < SH.PLAYER_WINS_S) return false;
-    return openFrac <= SH.AT_REST_FRAC || this._dropRetry === true;   // reel-hold F1: after a dropped swing the wings stand at the band's edge, half open (openFrac ~0.4-0.5)
+    return openFrac <= SH.AT_REST_FRAC || this._dropRetry === true;   // after a dropped swing the wings stand at the band edge, half open (openFrac ~0.4-0.5)
   }
 
   /**
-   * @private D5 — open late by itself, to the OPEN pose (146°, DECISIONS §15
-   * "Radiator angles"), and leave it there: once open it stays open — the
-   * auto NEVER folds it back (owner 2026-10-09; it used to at ≤ 35 °C). Only
-   * the player folds it, and the 30 s re-open at ≥ 70 °C after that is
-   * unchanged (PLAYER_WINS_S).
+   * @private Open late by itself, to the OPEN pose (146°, DECISIONS §15 "Radiator angles"), and leave it there: the
+   * auto NEVER folds it back (owner 2026-10-09). Only the player folds it, and the 30 s re-open at ≥ 70 °C after
+   * that is unchanged (PLAYER_WINS_S).
    */
   _updateAutoRadiator(dt, openFrac) {
     const SH = Constants.SHIP_HEAT;
@@ -428,19 +355,19 @@ export class ThermalSystem {
     if (!p || typeof p.setFlowerPose !== 'function') return;
     const ls = p._launchSequence;
     if (ls && typeof ls.isActive === 'function' && ls.isActive()) return;   // the launch owns the ship
-    // A catch hand-off hold refuses every pose and would make setFlowerPose speak the player's refusal line; wait it out (opens after the hold ends).
+    // A catch hand-off hold refuses every pose and would make setFlowerPose speak the player's refusal line; wait it out.
     if (p.flowerHandoffHeld === true || p.flowerCommandsLocked === true) return;
 
-    // reel-hold D3: a swing the radiator drive dropped at the band's edge (a catch in their way, PlayerSatellite.bandGate) never
-    // finished "opening once": the drive leaves a one-shot mark, and the auto asks again (once no holder blocks for good, below).
-    // (The plan's polled rule, "no move pending and openFrac at rest", never fires for an opening swing: it is dropped at the
-    // band's lower edge, openFrac ~0.4; and a stub player with no `_flowerTargetTheta` re-armed every frame.) The wings stand half
-    // open there, so the ask must not wait for "folded" either (`_autoOpenArmed` reads `_dropRetry`): one ask, then it is spent.
+    // A swing the radiator drive dropped at the band's edge (a catch in the way, PlayerSatellite.bandGate) never
+    // finished "opening once": the drive leaves a one-shot mark and the auto asks again. A polled "no move pending
+    // and openFrac at rest" rule never fires for an opening swing (dropped at the band's lower edge, openFrac ~0.4)
+    // and a stub player with no `_flowerTargetTheta` re-armed every frame. The wings stand half open there, so the
+    // ask must not wait for "folded" either (`_autoOpenArmed` reads `_dropRetry`): one ask, then it is spent.
     if (p._flowerBandDropped === true) { p._flowerBandDropped = false; this._autoOpened = false; this._dropRetry = true; }
     if (this._autoOpened) return;   // it opened once and stays open
 
     if (this.tempC >= SH.AUTO_OPEN_C && this._autoOpenArmed(openFrac)) {
-      // reel-hold D3: a holder that can reach no clear pose keeps the radiators shut; ask again only when she lets go (a 'wait' is
+      // A holder that can reach no clear pose keeps the radiators shut; ask again only when she lets go (a 'wait' is
       // asked through: the wings go to the band's edge and the holders lift while they wait)
       const am = p.armManager;
       if (am && typeof am.radiatorBandBlocked === 'function' && am.radiatorBandBlocked() === 'never') return;
@@ -454,11 +381,9 @@ export class ThermalSystem {
   }
 
   /**
-   * @private One THERMAL comms line. Warnings carry `_critical` (the
-   * low-battery/xenon pattern) so they pass the onboarding suppression tier —
-   * mission 1 must hear them (§15 row 6), and a radiator that opens by itself
-   * must say why. w4-power D3: the text goes through GestureHints.speak (it
-   * rewrites key words for glass; u5 D5: no line here names a key any more).
+   * @private One THERMAL comms line. Warnings carry `_critical` (the low-battery/xenon pattern) so they pass the
+   * onboarding suppression tier: mission 1 must hear them (§15 row 6), and a radiator that opens by itself must say
+   * why. The text goes through GestureHints.speak (rewrites key words for glass; no line here names a key).
    */
   _say(text, priority, opts) {
     const msg = { sender: 'THERMAL', text: GestureHints.speak(text), priority };

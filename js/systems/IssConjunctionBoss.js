@@ -1,31 +1,22 @@
 /**
- * IssConjunctionBoss.js — CH5 "protect-the-asset" boss (MISSION_ARC_IMPLEMENTATION §6).
+ * @module systems/IssConjunctionBoss — CH5 "protect-the-asset" boss.
  *
- * At the MISSION BOUNDARY into mission `Constants.ISS_BOSS.MISSION` (the 20th
- * credited catch → `MISSION_START { missionNumber: 5 }`; Wave 5 Session F
- * re-homed the onset here from `SHOP_DEPLOY`, which the chapter-4+ depot
- * INVITATION made optional), ARM; on the first gameplay frame with no depot
- * stop pending (`_bossLifecycle.MissionOnset` — never under the depot overlay;
- * at once behind an invitation, after DEPLOY when a forced stop intervened),
- * spawn FRAG_COUNT Cosmos-1408 threat fragments in the ISS forward track and
- * start a TCA_HOURS game-time countdown. The player's choice is emergent from
- * play (no modal):
+ * At the MISSION BOUNDARY into mission `Constants.ISS_BOSS.MISSION` (the 20th credited catch → `MISSION_START
+ * { missionNumber: 5 }`; not `SHOP_DEPLOY`, which the chapter-4+ depot INVITATION made optional), ARM; on the first
+ * gameplay frame with no depot stop pending (`_bossLifecycle.MissionOnset` — never under the depot overlay; at once
+ * behind an invitation, after DEPLOY when a forced stop intervened), spawn FRAG_COUNT Cosmos-1408 threat fragments in
+ * the ISS forward track and start a TCA_HOURS game-time countdown. The player's choice is emergent from play (no modal):
  *
- *   • INTERCEPT — clear ALL threat frags before TCA → +INTERCEPT_BONUS_KG toward
- *     the elevator contract, +INTERCEPT_BONUS_CREDITS, and the "ISS Saver" codex.
- *   • DECLINE   — clear NONE (or fire `ISS_BOSS_DECLINE`) → the station performs an
- *     autonomous PDAM reboost. No penalty; the "ISS PDAM" codex.
- *   • MISS      — engaged (cleared ≥1) but didn't finish before TCA → a late
- *     hydrazine reboost; bonus lost, "Hydrazine Reboost" codex. The frags the
- *     player DID clear still score normally through the regular capture flow.
+ *   • INTERCEPT — clear ALL threat frags before TCA → +INTERCEPT_BONUS_KG toward the elevator contract,
+ *     +INTERCEPT_BONUS_CREDITS, and the "ISS Saver" codex.
+ *   • DECLINE   — clear NONE (or fire `ISS_BOSS_DECLINE`) → the station performs an autonomous PDAM reboost. No
+ *     penalty; the "ISS PDAM" codex.
+ *   • MISS      — engaged (cleared ≥1) but didn't finish before TCA → a late hydrazine reboost; bonus lost,
+ *     "Hydrazine Reboost" codex. Frags the player DID clear still score normally through the regular capture flow.
  *
- * The three codex entries auto-unlock from the `ISS_BOSS_RESOLVED { outcome }`
- * event (see CodexSystem), so this system only emits the resolution + awards.
- *
- * Node-safe (no THREE / DOM): `debrisField` and `shopScreen` are injected and
- * mocked in tests; game-time is accumulated locally via TIME_SCALE_GAMEPLAY.
- *
- * @module systems/IssConjunctionBoss
+ * The three codex entries auto-unlock from `ISS_BOSS_RESOLVED { outcome }` (see CodexSystem); this system only emits
+ * the resolution + awards. Node-safe (no THREE / DOM): `debrisField` and `shopScreen` are injected (mocked in tests);
+ * game-time is accumulated locally via TIME_SCALE_GAMEPLAY.
  */
 
 import { Events } from '../core/Events.js';
@@ -42,8 +33,8 @@ export class IssConjunctionBoss {
    * @param {object} [deps.debrisField]        — spawnIssThreatField({count}) => { ids }
    * @param {object} [deps.shopScreen]         — get/setContractMass() for the elevator award
    * @param {object} [deps.persistenceManager] — peek() for restore
-   * @param {Function} [deps.depotStopPending] — () => boolean: GameFlowManager.isDepotStopPending(),
-   *   wired by main.js; the armed onset holds while it returns true. Default: never.
+   * @param {Function} [deps.depotStopPending] — () => boolean (GameFlowManager.isDepotStopPending(), wired by main.js);
+   *   the armed onset holds while it returns true. Default: never.
    */
   constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null, depotStopPending = null } = {}) {
     this._eventBus = eventBus;
@@ -66,15 +57,11 @@ export class IssConjunctionBoss {
     /** @type {boolean} the imminent (final) warning has fired. */
     this._imminentFired = false;
 
-    /** @type {Function[]} listeners only live while the boss runs. */
+    /** @type {Function[]} listeners that only live while the boss runs. */
     this._runUnsubs = [];
     this._unsubs = [];
     this._disposed = false;
   }
-
-  // --------------------------------------------------------------------------
-  // PUBLIC API
-  // --------------------------------------------------------------------------
 
   /** Subscribe to triggers. Call once after construction. */
   init() {
@@ -94,7 +81,7 @@ export class IssConjunctionBoss {
     });
   }
 
-  /** Per-frame tick (gameplay frames only) — fires an armed onset, then advances the game-time TCA countdown. */
+  /** Per-frame tick (gameplay frames only): fires an armed onset, then advances the game-time TCA countdown. */
   update(dt) {
     if (this._disposed) return;
     if (this._onset.armed && this._onset.poll(this._depotStopPending()) != null) this._fire();
@@ -114,8 +101,7 @@ export class IssConjunctionBoss {
     }
 
     if (this._tcaRemainingS <= 0) {
-      // Time's up. Cleared ≥1 but not all = a late hydrazine dodge (miss);
-      // cleared none = the player effectively declined (autonomous PDAM).
+      // Time's up. Cleared ≥1 but not all = late hydrazine dodge (miss); none = effectively declined (autonomous PDAM).
       this._resolve(this._threats.clearedCount > 0 ? 'miss' : 'decline');
     }
   }
@@ -151,9 +137,6 @@ export class IssConjunctionBoss {
     this._unsubs.length = 0;
   }
 
-  // --------------------------------------------------------------------------
-  // INTERNAL
-  // --------------------------------------------------------------------------
 
   /** @private ARM at the boundary into the boss mission (the `_active || _completed` guard: once per game). */
   _onMissionStart(data) {
@@ -170,7 +153,7 @@ export class IssConjunctionBoss {
     this._onset.arm(mission);
   }
 
-  /** @private FIRE (the first free gameplay frame) — the guard re-checked: a restore during the hold may have completed it. */
+  /** @private FIRE (first free gameplay frame); guard re-checked: a restore during the hold may have completed it. */
   _fire() {
     if (this._active || this._completed) return;
     this._start();
@@ -186,8 +169,7 @@ export class IssConjunctionBoss {
       const res = this._debrisField.spawnIssThreatField({ count });
       ids = (res && Array.isArray(res.ids)) ? res.ids : [];
     }
-    // No candidates to repurpose → can't stage the boss; bail without marking
-    // complete so it can run on a later entry into the mission.
+    // No candidates to repurpose → can't stage the boss; bail without marking complete so it can run on a later entry.
     if (ids.length === 0) return;
 
     this._threats = new ThreatSet(ids);
@@ -251,7 +233,7 @@ export class IssConjunctionBoss {
     awardElevatorMass(this._eventBus, this._shop, this._scoring, kg);
   }
 
-  /** @private Critical-tagged comms so the boss always reaches the player. */
+  /** @private Critical-tagged so the boss always reaches the player. */
   _comms(text, priority = 'info') {
     this._eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON',

@@ -1,10 +1,6 @@
 /**
- * TargetSelector.js — Target selection, tracking, and auto-tool recommendation
- * Manages which debris object is currently selected for arm deployment.
- * Provides MW2-style auto-tool recommendation based on target mass (CONTROL_REDESIGN §3).
- *
- * Extracted from InteractionSystem.js (Session 5 cleanup — dead tool framework removed).
- * Active scan + tool recommendation added in Control Redesign sprint.
+ * TargetSelector.js — which debris object is selected for arm deployment, plus mass-based auto-tool
+ * recommendation (archive/CONTROL_REDESIGN.md §3).
  *
  * @module systems/TargetSelector
  */
@@ -22,7 +18,6 @@ export class TargetSelector {
     /** @type {object} Context from last setTarget call (distanceKm, etc.) */
     this._targetContext = {};
 
-    // === Auto-Tool Recommendation State ===
     /** @type {string|null} Current recommended tool: 'lasso'|'spinner'|'weaver'|'trawl' */
     this._recommendedTool = null;
 
@@ -35,32 +30,28 @@ export class TargetSelector {
     this._setupListeners();
   }
 
-  // ======================================================================
-  // TARGET MANAGEMENT
-  // ======================================================================
-
   /**
    * Set the active target debris.
    * @param {object|null} debris - Debris data from DebrisField, or null to clear
-   * @param {object} [context={}] - Optional extra data forwarded into TARGET_SELECTED event
+   * @param {object} [context={}] - forwarded into the TARGET_SELECTED event
    */
   setTarget(debris, context = {}) {
-    // Slice 5 (5d, D4): a piece that was disposed of (let go by a push-down or a drag sail, or broke loose) is never a target: it stays
-    // in the sky as a collision object, so Tab, a tap, the autopilot, auto-lock and the N key's aim all end here. Nothing changes.
+    // A piece that was disposed of (let go by a push-down or a drag sail, or broke loose) is never a target: it stays
+    // in the sky as a collision object, so Tab, a tap, the autopilot, auto-lock and the N key's aim all end here.
     if (debris && debris._disposed === true) return;
-    // UX-3 #1: Clear previous target's frozen ΔV when switching targets
+    // Clear the previous target's frozen ΔV when switching
     if (this.activeTarget && this.activeTarget !== debris) {
       delete this.activeTarget.selectedDeltaV;
     }
     this.activeTarget = debris;
     this._targetContext = context;
     if (debris) {
-      // UX-3 #9: Auto-discover on selection (ensures selected target shows in panel)
+      // Auto-discover on selection so the target shows in the panel
       if (!debris.discovered) {
         debris.discovered = true;
         eventBus.emit(Events.TARGET_DISCOVERED, { target: debris });
       }
-      // UX-3 #1: Freeze ΔV at selection time (Tab, autopilot, HUD click)
+      // Freeze ΔV at selection time (Tab, autopilot, HUD click)
       if (context.deltaV !== undefined) {
         debris.selectedDeltaV = context.deltaV;
       }
@@ -69,31 +60,22 @@ export class TargetSelector {
       this._recommendedTool = null;
       this._toolAlternatives = [];
       this._toolIndex = 0;
-      // Forward context so a programmatic reset clear (context.silent) can
-      // suppress the "target lost" earcon — a reset never had a target the
-      // player engaged, so the descending cue would just be startup noise.
+      // Forward context so a reset clear (context.silent) can suppress the "target lost" earcon.
       eventBus.emit(Events.TARGET_CLEARED, context);
     }
   }
 
-  /**
-   * Get the currently selected target.
-   * @returns {object|null} Active debris data object, or null
-   */
+  /** @returns {object|null} Active debris data object, or null */
   getActiveTarget() {
     return this.activeTarget;
   }
 
   /**
-   * Get world position of the active target.
-   *
-   * Prefer the live `_scenePosition` (set every frame by
-   * DebrisField._updateInstanceTransform) — it is the single source of truth
-   * shared with LassoSystem/AutoLock/rendering, and for normal debris it equals
-   * the orbit position. This also honours the onboarding tease pin, which places
-   * curated pieces at a fixed mother-local offset via `_scenePosition`; reading
-   * the orbit instead would put the reticle off the rendered piece. Falls back to
-   * the orbit for targets without a cached scene position (e.g. ISS/satellites).
+   * World position of the active target. Prefers the live `_scenePosition` (set every frame by
+   * DebrisField._updateInstanceTransform): the SSOT shared with LassoSystem/AutoLock/rendering, equal to the orbit
+   * position for normal debris. It also honours the onboarding tease pin (curated pieces at a fixed mother-local
+   * offset); reading the orbit would put the reticle off the rendered piece. Falls back to the orbit for targets
+   * without a cached scene position (e.g. ISS/satellites).
    * @returns {THREE.Vector3|null}
    */
   getActiveTargetPosition() {
@@ -107,9 +89,7 @@ export class TargetSelector {
   }
 
   /**
-   * Allocation-free variant of getActiveTargetPosition for per-frame callers
-   * (the mother-net lead-aim provider is polled every aim tick; the cloning
-   * variant allocated a Vector3 per call — mother-net-reel plan §4.12).
+   * Allocation-free getActiveTargetPosition for per-frame callers (the mother-net lead-aim provider polls every aim tick).
    * @param {THREE.Vector3} out — receives the position
    * @returns {THREE.Vector3|null} out, or null when no target/position
    */
@@ -123,15 +103,7 @@ export class TargetSelector {
     return out.copy(cart.position);
   }
 
-  // ======================================================================
-  // AUTO-TOOL RECOMMENDATION (CONTROL_REDESIGN §3)
-  // ======================================================================
-
-  /**
-   * Evaluate the active target and recommend the best capture tool.
-   * Called automatically on TARGET_SELECTED.
-   * @private
-   */
+  /** Recommend the best capture tool for the active target; runs on TARGET_SELECTED. @private */
   _updateRecommendation() {
     const target = this.activeTarget;
     if (!target) {
@@ -145,12 +117,8 @@ export class TargetSelector {
     const TR = Constants.TOOL_RECOMMENDATION;
     const tools = [];
 
-    // Whale band FIRST (mother-net-reel plan §7.6): above MOTHER_MIN_MASS no
-    // daughter tool can take the catch — ArmUnit hard-refuses > 500 kg, the
-    // lasso caps at 10 kg and trawl auto-capture at 50 kg — so the mother's
-    // Large Net pod is the ONLY legal tool. Previously a 2000 kg whale fell
-    // through to 'weaver' (whose net caps at 500 kg), the tool chip read
-    // WEAVER, and the autopilot parked at D_TRAIL_ARMS purely by accident.
+    // Whale band FIRST: above MOTHER_MIN_MASS no daughter tool can take the catch — ArmUnit hard-refuses > 500 kg, the
+    // lasso caps at 10 kg and trawl auto-capture at 50 kg — so the mother's Large Net pod is the ONLY legal tool.
     if (mass > (TR.MOTHER_MIN_MASS ?? TR.GRAPPLE_MAX_MASS)) {
       this._recommendedTool = 'mother';
       this._toolAlternatives = ['mother'];
@@ -163,23 +131,21 @@ export class TargetSelector {
       return;
     }
 
-    // Build list of viable tools based on mass thresholds
-    // Priority order: lasso (smallest/cheapest) → spinner → weaver → trawl
+    // Viable tools by mass; priority lasso (smallest/cheapest) → spinner → weaver → trawl
     if (mass <= TR.LASSO_MAX_MASS) tools.push('lasso');
     if (mass <= TR.SPINNER_MAX_MASS) tools.push('spinner');
     if (mass > TR.SPINNER_MAX_MASS || mass <= TR.GRAPPLE_MAX_MASS) {
-      // Weaver for medium-to-large debris
       if (!tools.includes('weaver') && mass >= TR.WEAVER_MIN_MASS) tools.push('weaver');
     }
     if (mass >= TR.WEAVER_MIN_MASS && !tools.includes('weaver')) tools.push('weaver');
 
-    // Pick best recommendation (smallest effective tool first = most efficient)
+    // Smallest effective tool first
     if (tools.length > 0) {
       this._recommendedTool = tools[0];
       this._toolAlternatives = tools;
       this._toolIndex = 0;
     } else {
-      // Fallback: weaver for anything too heavy for spinner but below weaver min
+      // Too heavy for spinner but below weaver min → weaver
       this._recommendedTool = 'weaver';
       this._toolAlternatives = ['weaver'];
       this._toolIndex = 0;
@@ -192,10 +158,7 @@ export class TargetSelector {
     });
   }
 
-  /**
-   * Cycle to the next tool alternative (backtick key).
-   * @private
-   */
+  /** Cycle to the next tool alternative (backtick key). @private */
   _cycleTool() {
     if (this._toolAlternatives.length <= 1) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -222,50 +185,30 @@ export class TargetSelector {
     });
   }
 
-  // ======================================================================
-  // LIFECYCLE
-  // ======================================================================
-
-  /**
-   * Per-frame update. Checks if target is still alive.
-   * @param {number} dt - Delta time
-   */
+  /** Per-frame. @param {number} dt - seconds */
   update(dt) {
-    // Safety-net: clear target if it's been removed (event-driven path is _onDebrisRemoved)
-    if (this.activeTarget && (!this.activeTarget.alive || this.activeTarget._disposed === true)) {     // (slice 5: or let go while it was the target)
+    // Safety net: clear a removed target (event path is _onDebrisRemoved); also one let go while it was the target
+    if (this.activeTarget && (!this.activeTarget.alive || this.activeTarget._disposed === true)) {
       this.clearTarget();
     }
   }
 
-  /**
-   * Clear the active target and emit TARGET_CLEARED.
-   * Preferred over directly nulling — gives HUD/reticle/audio proper feedback.
-   */
+  /** Clear the active target and emit TARGET_CLEARED; use instead of nulling directly (HUD/reticle/audio feedback). */
   clearTarget() {
     if (this.activeTarget) {
       this.setTarget(null);
     }
   }
 
-  /**
-   * Handle DEBRIS_REMOVED event — clear target if it matches.
-   * @private
-   * @param {object} data - { id, type, sizeMeter }
-   */
+  /** DEBRIS_REMOVED: clear the target if it matches. @private @param {object} data - { id, type, sizeMeter } */
   _onDebrisRemoved(data) {
     if (this.activeTarget && data && data.id === this.activeTarget.id) {
-      // Silent: the target ceasing to EXIST already has its own story (capture
-      // ceremony sounds, deorbit visuals). The descending "target lost" earcon
-      // means exactly one thing — lock/selection lost while the target still
-      // exists (drift or deliberate deselect). Voicing it here stacked a
-      // contradictory "lost" cue on top of every successful capture.
+      // Silent: the target ceasing to EXIST has its own cues (capture ceremony, deorbit visuals). The "target lost"
+      // earcon means exactly one thing: lock/selection lost while the target still exists (drift or deselect).
       this.setTarget(null, { silent: true });
     }
   }
 
-  /**
-   * Reset to no target.
-   */
   reset() {
     this.activeTarget = null;
     this._targetContext = {};
@@ -274,35 +217,23 @@ export class TargetSelector {
     this._toolIndex = 0;
   }
 
-  // ======================================================================
-  // EVENT LISTENERS
-  // ======================================================================
-
   /** @private */
   _setupListeners() {
-    // Re-evaluate tool recommendation whenever a new target is selected
     eventBus.on(Events.TARGET_SELECTED, () => {
       this._updateRecommendation();
     });
 
-    // Backtick → cycle through tool alternatives.
-    // (The TOOL_DEPLOY and FOCUS_ACTION listeners were removed in the
-    // 2026-06-14 hotkey revamp: T now emits TOOL_CYCLE, F emits FORGE_TOGGLE,
-    // and tool deployment is reached directly via D / N. No smart "focus
-    // action" verb remains.)
+    // T emits TOOL_CYCLE; tool deployment is reached directly via D / N (no smart "focus action" verb).
     eventBus.on(Events.TOOL_CYCLE, () => {
       this._cycleTool();
     });
 
-    // Event-driven cleanup: clear target when its debris is removed
     eventBus.on(Events.DEBRIS_REMOVED, (data) => this._onDebrisRemoved(data));
 
-    // Mother-net-reel plan §4.7: clear the active target on NET_BERTHED —
-    // explicitly, silently, and ONLY at berth. NOT from the shared per-frame
-    // gate (a `_captured` check there would emit TARGET_CLEARED for every
-    // arm/lasso catch, playing the "target lost" earcon and cancelling any
-    // running aim coroutine), and NOT before berth or the player loses the
-    // survey bounty that auto-fires during the reel (§4.18).
+    // Clear the active target on NET_BERTHED, silently, and ONLY at berth. NOT from the shared per-frame gate (a
+    // `_captured` check there would emit TARGET_CLEARED for every arm/lasso catch, playing the "target lost" earcon
+    // and cancelling any running aim coroutine), and NOT before berth or the player loses the survey bounty that
+    // auto-fires during the reel.
     eventBus.on(Events.NET_BERTHED, (data) => {
       if (this.activeTarget && data && data.debrisId === this.activeTarget.id) {
         this.setTarget(null, { silent: true });

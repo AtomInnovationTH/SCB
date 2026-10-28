@@ -1,27 +1,15 @@
 /**
  * PaneChrome.js — shared "minimize/expand" chrome for HUD panes.
  *
- * Adds a consistent, unobtrusive top-right `[KEY]` badge to an HTML pane and
- * manages a multi-step size cycle so the player can shrink each pane down to
- * only the info they need.
+ * Adds a top-right `[KEY]` badge to an HTML pane and manages a multi-step size cycle (an ordered list of named size
+ * states, e.g. 2-step ['normal', 'max'], 3-step ['min', 'normal', 'max']).
  *
- * Steps are an ordered list of named size states, e.g.:
- *   - 2-step:  ['normal', 'max']
- *   - 3-step:  ['min', 'normal', 'max']
+ * The chrome is agnostic about *how* a pane changes size: on each step change it (a) sets `data-pane-step` on the pane,
+ * (b) toggles the classes `pane-step-<name>`, (c) shows elements tagged `data-pane-show="<name>"` only on that step and
+ * hides those tagged `data-pane-hide="<name>"`, and (d) calls the optional `onStep` callback so the pane can re-render.
  *
- * The chrome is technology-agnostic about *how* a pane changes size: on each
- * step change it (a) sets `data-pane-step` on the pane element, (b) toggles the
- * classes `pane-step-<name>` so CSS / the pane can react, (c) shows elements
- * tagged `data-pane-show="<name>"` only on that step and hides those tagged
- * `data-pane-hide="<name>"`, and (d) calls the optional `onStep` callback so the
- * pane can re-render (e.g. recompute how many comms lines fit).
- *
- * Interaction:
- *   - Clicking the badge cycles to the next step (wraps).
- *   - Right-clicking the badge steps backward (handy to re-expand quickly).
- *   - Panes whose hotkey is free may also drive `cycle()` from a key handler.
- *
- * No persistence — step state is in-memory and resets each session.
+ * Clicking the badge cycles to the next step (wraps); right-click steps backward. Panes whose hotkey is free may also
+ * drive `cycle()` from a key handler. No persistence — step state is in-memory and resets each session.
  *
  * @module ui/hud/PaneChrome
  */
@@ -38,10 +26,8 @@
  * @property {string}      [color]      Badge text colour (default green).
  * @property {(step:string, index:number)=>void} [onStep] Called after each change.
  * @property {string}      [title]      Tooltip for the badge.
- * @property {boolean}     [badge]      Build the corner badge (default true). Set
- *                                       false for a pane with no visible key text
- *                                       (u4-phone-fold D5): the step cycle still
- *                                       works through cycle() / setStep().
+ * @property {boolean}     [badge]      Build the corner badge (default true). Set false for a pane with no visible key
+ *                                       text: the step cycle still works through cycle() / setStep().
  */
 
 export class PaneChrome {
@@ -54,48 +40,38 @@ export class PaneChrome {
     this._bracket = opts.bracket !== false;
     this._keyLabel = opts.keyLabel;
 
-    // Resolve the initial step.
     let startName = opts.initial;
     if (!startName) startName = this._steps.includes('normal') ? 'normal' : this._steps[0];
     this._index = Math.max(0, this._steps.indexOf(startName));
 
-    // u4-phone-fold D5: `badge: false` builds no badge element at all.
+    // `badge: false` builds no badge element at all.
     this._badge = opts.badge === false
       ? null
       : this._buildBadge(opts.keyLabel, opts.title, opts.bracket !== false);
-    // The 34 px offset for the dormant keycap glyph retired in Session S — the glyph never renders since _applySkillReveal stopped applying hud-dormant.
     if (this._badge) this._pane.appendChild(this._badge);
 
-    // Apply the initial step (no callback churn — pane is mid-build, but the
-    // callback is generally idempotent; callers can also call refresh()).
+    // Apply the initial step (the callback is generally idempotent; callers can also call refresh()).
     this._apply();
   }
 
-  /** @returns {string} current step name */
   get step() { return this._steps[this._index]; }
 
-  /** @returns {number} current step index */
   get index() { return this._index; }
 
   /** @returns {boolean} true when on the smallest (first) step */
   get isMinimized() { return this._index === 0; }
 
-  /** Advance to the next step (wraps to the first). */
   cycle() {
     this._index = (this._index + 1) % this._steps.length;
     this._apply();
   }
 
-  /** Step backward (wraps to the last). */
   cycleBack() {
     this._index = (this._index - 1 + this._steps.length) % this._steps.length;
     this._apply();
   }
 
-  /**
-   * Jump directly to a named step. No-op if the name is unknown.
-   * @param {string} name
-   */
+  /** Jump directly to a named step. No-op if the name is unknown. */
   setStep(name) {
     const i = this._steps.indexOf(name);
     if (i < 0) return;
@@ -106,11 +82,6 @@ export class PaneChrome {
   /** Re-apply the current step (e.g. after the pane re-renders its contents). */
   refresh() { this._apply(); }
 
-  // --------------------------------------------------------------------------
-  // PRIVATE
-  // --------------------------------------------------------------------------
-
-  /** @private Build the clickable corner badge. */
   _buildBadge(keyLabel, title, bracket) {
     const badge = document.createElement('div');
     badge.className = 'hud-pane-badge';
@@ -143,17 +114,14 @@ export class PaneChrome {
     return badge;
   }
 
-  /** @private Apply the current step to the pane DOM and notify the pane. */
   _apply() {
     const name = this._steps[this._index];
 
-    // 1) data attribute + per-step class (one active at a time).
     this._pane.dataset.paneStep = name;
     for (const s of this._steps) {
       this._pane.classList.toggle(`pane-step-${s}`, s === name);
     }
 
-    // 2) show/hide tagged children for this step.
     this._pane.querySelectorAll('[data-pane-show]').forEach((el) => {
       el.style.display = (el.dataset.paneShow === name) ? '' : 'none';
     });
@@ -161,10 +129,8 @@ export class PaneChrome {
       el.style.display = (el.dataset.paneHide === name) ? 'none' : '';
     });
 
-    // 3) let the pane react (recompute layout, line counts, etc.).
     if (this._onStep) this._onStep(name, this._index);
 
-    // 4) badge-only panes (no hotkey) reflect state with a +/− glyph.
     if (!this._bracket && this._badge) {
       this._badge.textContent = this.isMinimized ? '+' : '–';
     }

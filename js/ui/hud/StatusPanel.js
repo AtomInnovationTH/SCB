@@ -498,10 +498,6 @@ export class StatusPanel {
           </div>
           <span id="throttle-val" style="width:30px;text-align:right;color:var(--hud-normal, #00ff88);font-weight:bold;">100%</span>
         </div>
-        <div id="com-drift-row" style="display:none;font-size:10px;margin-top:3px;margin-bottom:2px;">
-          <span style="opacity:0.7;">CoM Δ: </span><span id="com-drift-val" style="font-weight:bold;color:var(--hud-normal, #00ff88);">0.000 m</span>
-          <span id="com-stow-hint" style="display:none;color:var(--hud-caution, #ffaa00);margin-left:4px;font-size:11px;"></span>
-        </div>
         <div id="att-rate-row" style="display:none;font-size:10px;margin-top:1px;margin-bottom:2px;">
           <span style="opacity:0.7;">Rate: </span><span id="att-rate-val" style="font-weight:bold;color:var(--hud-normal, #00ff88);">P 0.0°/s · Y 0.0°/s · R 0.0°/s</span>
         </div>
@@ -849,9 +845,6 @@ export class StatusPanel {
     }
     this._updateCargoLine();
 
-    // C-9: Update CoM drift display + plume block indicator
-    this._updateCoMDisplay(data);
-
     // Attitude: live body angular-rate readout (rigid-body dynamics legibility)
     this._updateAttitudeRate(data);
 
@@ -873,60 +866,6 @@ export class StatusPanel {
   /** Re-render the arm status panel (call on arm state-change events). */
   renderArmPanel() {
     this._renderArmPanel();
-  }
-
-  /**
-   * C-9: Update the CoM drift display and plume-block indicator.
-   * Shows/hides based on COM_TRACKING / THRUSTER_INTERLOCK feature flags.
-   * Color coding: green < 0.5×threshold; amber < threshold; red ≥ threshold.
-   * @param {object} data — from HUD update() call
-   * @private
-   */
-  _updateCoMDisplay(data) {
-    const comRow = document.getElementById('com-drift-row');
-    const comVal = document.getElementById('com-drift-val');
-    const comHint = document.getElementById('com-stow-hint');
-    const plumeRow = document.getElementById('plume-block-row');
-
-    // CoM drift display — gated by COM_TRACKING flag
-    if (Constants.FEATURE_FLAGS.COM_TRACKING && comRow && comVal) {
-      comRow.style.display = '';
-      const drift = data.comDriftM || 0;
-      const threshold = Constants.COM_DRIFT_WARN_THRESHOLD;
-      const balanced = Constants.COM_BALANCED_THRESHOLD;
-      comVal.textContent = drift.toFixed(3) + ' m';
-
-      // Color coding: green (balanced) → amber (drift) → red (warning)
-      if (drift >= threshold) {
-        comVal.style.color = 'var(--hud-warning, #ff4444)'; // red
-      } else if (drift >= balanced) {
-        comVal.style.color = 'var(--hud-caution, #ffaa00)'; // amber
-      } else {
-        comVal.style.color = 'var(--hud-normal, #00ff88)'; // green
-      }
-
-      // Stow suggestion hint
-      if (comHint) {
-        if (drift >= threshold && data.comSuggestedStowArm !== undefined && data.comSuggestedStowArm !== null) {
-          comHint.style.display = '';
-          comHint.textContent = `Stow Daughter #${data.comSuggestedStowArm + 1} to rebalance`;
-        } else {
-          comHint.style.display = 'none';
-          comHint.textContent = '';
-        }
-      }
-    } else if (comRow) {
-      comRow.style.display = 'none';
-    }
-
-    // Plume block indicator — gated by THRUSTER_INTERLOCK flag
-    if (Constants.FEATURE_FLAGS.THRUSTER_INTERLOCK && plumeRow) {
-      const blocks = data.plumeBlocks || {};
-      const hasBlocks = Object.keys(blocks).length > 0;
-      plumeRow.style.display = hasBlocks ? '' : 'none';
-    } else if (plumeRow) {
-      plumeRow.style.display = 'none';
-    }
   }
 
   /**

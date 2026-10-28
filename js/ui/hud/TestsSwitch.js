@@ -1,11 +1,7 @@
 /**
- * TestsSwitch.js — the one "Tests" switch for the developer-only extras.
- *
- * u6-tests-plain D1 (2026-10-19). `?tests=1` turns on everything that exists
- * only for testing: the Tests fold-out (sound list inside), the "INSPECTION"
- * notice and the orb's LAT/LON/ALT line. `?sounds=1` was the old switch and
- * stays as an alias. A leaf module (no imports) so any file can read it
- * without an import cycle.
+ * The one "Tests" switch for the developer-only extras: `?tests=1` turns on the Tests fold-out (sound list inside),
+ * the "INSPECTION" notice and the orb's LAT/LON/ALT line. `?sounds=1` stays as an alias.
+ * Leaf module (no imports) so any file can read it without an import cycle.
  *
  * @module ui/hud/TestsSwitch
  */

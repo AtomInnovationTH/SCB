@@ -1,15 +1,11 @@
 /**
  * soundVocabulary.js — the audio design law, made enforceable.
  *
- * Audio Vocabulary Overhaul (2026-07-23, P7). Every remaining play/start
- * sound method on AudioSystem is registered here with its family, its single
- * meaning, and the trigger that fires it. The taxonomy (see the plan's "Design
- * law" table) is now testable: `audio-vocabulary.test.js` fails CI if a sound
- * is added without a classification, if an entry points at a missing method, or
- * if two sounds claim the same meaning.
+ * Every play/start sound method on AudioSystem is registered here with its family, single meaning and trigger.
+ * `audio-vocabulary.test.js` fails if a sound lacks an entry, an entry points at a missing method, or two sounds
+ * claim the same meaning (`meaning` strings MUST be unique).
  *
  * Families: PHYSICAL | RADIO | PING | TICK | DENY | ALARM | REWARD | PAD.
- * (`meaning` strings MUST be unique — one sound = one meaning.)
  *
  * @typedef {Object} VocabEntry
  * @property {'PHYSICAL'|'RADIO'|'PING'|'TICK'|'DENY'|'ALARM'|'REWARD'|'PAD'} family
@@ -19,7 +15,7 @@
  * @type {Record<string, VocabEntry>}
  */
 export const soundVocabulary = {
-  // ---- PHYSICAL — a mechanical event actually happened (self-labeling) ----
+  // ---- PHYSICAL — a mechanical event actually happened ----
   playMagnetic:        { family: 'PHYSICAL', meaning: 'magnetic field hum',        trigger: 'magnetic capture assist' },
   playCatchClamp:      { family: 'PHYSICAL', meaning: 'net clamp on catch',        trigger: 'ARM_CAPTURED' },
   playCollision:       { family: 'PHYSICAL', meaning: 'collision impact',          trigger: 'GAME_KESSLER' },
@@ -34,9 +30,8 @@ export const soundVocabulary = {
   playLassoFire:       { family: 'PHYSICAL', meaning: 'lasso fire',                trigger: 'lasso launched' },
   startLassoWireWhistle:{ family: 'PHYSICAL', meaning: 'lasso wire whistle',       trigger: 'lasso wire in flight' },
   playLassoWinch:      { family: 'PHYSICAL', meaning: 'lasso winch',               trigger: 'lasso reel-in' },
-  // Net voices serve BOTH launcher families since 2026-08-27: mother pod
-  // (podIndex ≥ 0) full volume, daughter arm (armIndex ≥ 0) at
-  // DAUGHTER_NET_GAIN. One meaning each — the launcher only sets the gain.
+  // Net voices serve BOTH launcher families: mother pod (podIndex ≥ 0) full volume, daughter arm (armIndex ≥ 0) at
+  // DAUGHTER_NET_GAIN. One meaning each; the launcher only sets the gain.
   playNetCanisterThump:{ family: 'PHYSICAL', meaning: 'net canister launch', trigger: 'NET_FIRED (mother full / daughter scaled)' },
   startNetFlightWhistle:{ family: 'PHYSICAL', meaning: 'net flight whistle', trigger: 'net airborne (mother full / daughter scaled)' },
   playNetCinchClamp:   { family: 'PHYSICAL', meaning: 'net cinch clamp on a catch', trigger: 'NET_CATCH_SUCCESS (mother full / daughter scaled; owns the net-catch moment — ARM_CAPTURED echo deduped)' },
@@ -51,7 +46,7 @@ export const soundVocabulary = {
   startRcsHiss:        { family: 'PHYSICAL', meaning: 'RCS attitude hiss',         trigger: 'manual RCS couple firing' },
   startIonStartupHum:  { family: 'PHYSICAL', meaning: 'the trip engines lighting: a hum that rises with the lit share, then holds quiet', trigger: 'ION_STARTUP_BEGIN / HUM / LIT / END (the trip burn)' },
   playRcsPuff:         { family: 'PHYSICAL', meaning: 'RCS ignition puff',         trigger: 'fresh RCS couple ignition' },
-  // FURNACE gag v2 (plan 1788957399035 §1.19): one clack per HUD panel returning after the blackout.
+  // One clack per HUD panel returning after the FURNACE blackout.
   playRelayClack:      { family: 'PHYSICAL', meaning: 'a breaker relay closing as one HUD panel returns (systems reboot)', trigger: 'HudReboot: each panel returning after the FURNACE blackout' },
 
   // ---- RADIO — comms channel activity ----

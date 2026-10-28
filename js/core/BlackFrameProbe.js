@@ -39,6 +39,7 @@
 
 import * as THREE from 'three';
 import { getHealLog } from './BlackPatchHeal.js';
+import { clamp } from './MathUtil.js';
 
 /** State-sample cadence in frames (~8 Hz at 120 Hz). */
 const CHECK_EVERY = 15;
@@ -306,8 +307,8 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
   function readLuma(x, y) {
     const w = gl.drawingBufferWidth;
     const h = gl.drawingBufferHeight;
-    const rx = Math.max(0, Math.min(w - PATCH, Math.round(x)));
-    const ry = Math.max(0, Math.min(h - PATCH, Math.round(y)));
+    const rx = clamp(Math.round(x), 0, w - PATCH);
+    const ry = clamp(Math.round(y), 0, h - PATCH);
     gl.readPixels(rx, ry, PATCH, PATCH, gl.RGBA, gl.UNSIGNED_BYTE, pxBuf);
     let sum = 0;
     for (let i = 0; i < pxBuf.length; i += 4) {

@@ -1,11 +1,6 @@
 /**
- * CommsPanel.js — 6-channel colour-coded comms pane (ST-5.1)
- * Replaces monolithic 120 px log + center popup with:
- *   - ~144 px tall, ~400 px wide pane (top-right, clears NavSphere)
- *   - 6 channel filter toggles (CMD, ALERT, HOUSTON, SCI, FLAVOR, MISSION)
- *   - Left-edge colour stripe per message row
- *   - C-tap → expand pane; C-hold → radial menu (via EventBus)
- *   - PageUp/PageDown history scrolling
+ * CommsPanel.js — the colour-coded comms pane: left-edge colour stripe per message row, the 7 key cycles the
+ * size (line / normal / large), PageUp/PageDown history scrolling.
  * @module ui/hud/CommsPanel
  */
 
@@ -22,98 +17,64 @@ import { VITALS_COLLAPSED_HEIGHT_PX } from './VitalsPane.js';
 
 const COMMS = Constants.COMMS;
 
-// 3-step sizes for the comms pane: a 1-line strip, the normal 4-line log, and
-// the large 10-line review. Heights are resolved from COMMS constants below.
+// Sizes: a 1-line strip, the normal 4-line log, the large 10-line review (heights from COMMS constants).
 const COMMS_STEPS = ['line', 'normal', 'large'];
 
-// Height (px) reserved at the top of the comms pane for the gated elevator-
-// contract tracker. The pane GROWS by this much when the tracker is revealed,
-// so the message log keeps its full per-step height (no clipped lines).
+// Height (px) the pane GROWS by when the gated elevator-contract tracker is revealed, so the log keeps its full height.
 const CONTRACT_HEADER_PX = 26;
 
 // One rendered message row (the template in `_updateCommsPanel`): margin 2 px 0, padding 3 px 6 px. The trim and the
-// tall-row clamp (D4) read the same numbers, so the markup and the arithmetic cannot drift apart.
+// tall-row clamp read the same numbers, so the markup and the arithmetic cannot drift apart.
 const ROW_MARGIN_Y_PX = 2;
 const ROW_PAD_Y_PX = 3;
-// Line height of a message row where the browser cannot tell us (no getComputedStyle: node tests): 13 px body x 1.45.
+// Row line height where there is no getComputedStyle (node tests): 13 px body x 1.45.
 const ROW_LINE_HEIGHT_FALLBACK_PX = 13 * 1.45;
 // COMMS_SCROLL_UP / _DOWN move the window by at most this many messages (fewer when fewer rows are shown).
 const SCROLL_STEP_MAX = 3;
-// comms-min-show D1: the panel's own display list holds at most as many rows as CommsSystem's store (its MAX_MESSAGES).
+// The panel's own display list holds at most as many rows as CommsSystem's store (its MAX_MESSAGES).
 const SHOWN_MAX = 20;
-// A float sum of frame times can land a hair under the limit; this much slack never lets a line leave early in play.
+// A float sum of frame times can land a hair under the limit; this slack never lets a line leave early in play.
 const SHOW_TIME_SLACK_S = 1e-6;
 
-// ----------------------------------------------------------------------------
-// SIMPLIFIED 3-COLOUR PALETTE (priority-based, not per-channel)
-// Keeps the pane easy to scan: green = normal, amber = warning, red = critical.
-// ----------------------------------------------------------------------------
+// 3-colour palette by priority: green = normal, amber = warning, red = critical.
 const COMMS_COLOR_NORMAL = 'var(--hud-normal, #00ff88)';   // green  — info / nominal
 const COMMS_COLOR_WARNING = 'var(--hud-caution, #ffaa00)';  // amber  — warnings
 const COMMS_COLOR_CRITICAL = 'var(--hud-warning, #ff4444)'; // red    — critical / alerts
 
 /**
- * Map a message priority to one of the 3 palette colours.
- *
- * Semantics (per UX spec):
- *   • GREEN  — normal / info / guidance / nominal / "attaboy"
- *   • YELLOW — warning / alert / caution
- *   • RED    — danger / risk / emergency / critical
- *
- * Accepts both the canonical CommsPriority enum values (INFO/WARNING/CRITICAL)
- * AND the looser, human vocabulary that emitters across the codebase actually
- * use (mixed case: 'warning', 'critical', 'danger', 'alert', 'emergency', …).
- * Previously this only matched the exact uppercase enum, so the many lowercase
- * `priority:'warning'` emitters rendered green — defeating the colour code.
- *
+ * Map a message priority to one of the 3 palette colours (green normal / yellow warning / red critical).
+ * Accepts both the CommsPriority enum values (INFO/WARNING/CRITICAL) AND the looser mixed-case vocabulary
+ * emitters actually use ('warning', 'danger', 'alert', 'emergency', …).
  * @param {string} priority
- * @returns {string} hex colour
+ * @returns {string} CSS colour
  */
 function getPriorityColor(priority) {
   const p = String(priority || '').toLowerCase();
-  // RED — danger / risk / emergency / critical
   if (p === 'critical' || p === 'danger' || p === 'emergency' ||
       p === 'risk' || p === 'fatal' || p === 'error') {
     return COMMS_COLOR_CRITICAL;
   }
-  // YELLOW — warning / alert / caution
   if (p === 'warning' || p === 'warn' || p === 'alert' || p === 'caution') {
     return COMMS_COLOR_WARNING;
   }
-  // GREEN — everything else (info / guidance / nominal / attaboy / '')
   return COMMS_COLOR_NORMAL;
 }
 
-/**
- * True when a message priority is in the "red" (critical/danger) band.
- * Case-insensitive and accepts the looser danger vocabulary.
- * @param {string} priority
- * @returns {boolean}
- */
+/** True when a message priority is in the "red" (critical/danger) band (case-insensitive, loose vocabulary). */
 function isCriticalPriority(priority) {
   return getPriorityColor(priority) === COMMS_COLOR_CRITICAL;
 }
 
 /**
- * comms-min-show (coordinator, review fix): true for a yellow OR red line — a warning in the owner's "warnings jump
- * the queue". Red shows at once; yellow goes to the front of the queue (after the newest row's 3 s) and is never cut.
- * @param {string} priority
- * @returns {boolean}
+ * True for a yellow OR red line (owner: "warnings jump the queue"). Red shows at once; yellow goes to the front of the
+ * queue (after the newest row's 3 s) and is never cut.
  */
 function isWarningOrWorse(priority) {
   return getPriorityColor(priority) !== COMMS_COLOR_NORMAL;
 }
 
-// ============================================================================
-// PURE HELPERS (CJS-exportable for tests)
-// ============================================================================
-
-// (UX-11 #9 review cleanup: discriminateKeyEvent removed — the C tap/hold
-// discrimination it modelled no longer exists anywhere in the input path.)
-
 /**
- * Round-trip filter state through JSON (for persistence testing).
- * Missing channels default to true.
+ * Round-trip filter state through JSON (for persistence testing). Missing channels default to true.
  * @param {object} filters — partial filter map
  * @returns {object} — complete filter map with all 6 channels
  */
@@ -128,13 +89,9 @@ function filterRoundTrip(filters) {
 }
 
 /**
- * True when a comms message is a guidance instruction the player has already
- * followed (its onboarding beat id is in the satisfied set). Such a line must
- * NOT keep the "latest" attention highlight — once obeyed it should read like
- * history. Pure + exported so the de-highlight contract is testable DOM-free.
+ * True when a comms message is a guidance instruction the player has already followed (its onboarding beat id
+ * is in the satisfied set). Such a line must NOT keep the "latest" attention highlight.
  * @param {object} msg — stored comms message (may carry `onboardingBeatId`)
- * @param {Set<string|number>} satisfiedBeatIds
- * @returns {boolean}
  */
 function isFollowedInstruction(msg, satisfiedBeatIds) {
   return !!(msg && msg.onboardingBeatId != null
@@ -142,24 +99,13 @@ function isFollowedInstruction(msg, satisfiedBeatIds) {
 }
 
 /**
- * localStorage key for the player's last Comms size step (a persisted player
- * step wins the default). `_v2` (follow-up 2026-09-09, plan
- * .kilo/plans/1788926404388-hud-followups-0909.md §1.13 — a ONE-TIME RESET):
- * ladder reorder rev 3 introduced this persistence together with the `'line'`
- * ladder default, but until 2026-09-09 `_applyCommsStep` read `this._chrome`
- * from INSIDE PaneChrome's constructor callback (still null → 'normal'), so
- * every boot sized the pane at 144 whatever the step said — "two lines in a
- * four-line box". Any step a player cycled to while fighting that box must not
- * outlive the fix; the old key is simply never read again.
+ * localStorage key for the player's last Comms size step (a persisted step wins the default).
+ * `_v2` is a ONE-TIME RESET: steps stored under the old key came from a bug that sized every boot at 144 px;
+ * the old key is never read again.
  */
 const COMMS_STEP_STORE_KEY = 'spacecowboy_comms_pane_step_v2';
 
-/**
- * Glass: ctor `glass` wins; else GestureHints.isGlass(); else detectGlass().
- * Plan Task 6 / locked #13 (the [7] badge hit retired with the badge, u4-phone-fold D5).
- * @param {boolean|null|undefined} explicit
- * @returns {boolean}
- */
+/** Glass: ctor `glass` wins; else GestureHints.isGlass(); else detectGlass(). */
 function resolveGlass(explicit) {
   if (explicit === true) return true;
   if (explicit === false) return false;
@@ -168,8 +114,7 @@ function resolveGlass(explicit) {
 }
 
 /**
- * Initial Comms size step. A persisted player step wins; else `'line'` under
- * the ladder gate (rev 3 — the right arm's top follows it) and `'normal'`
+ * Initial Comms size step. A persisted player step wins; else `'line'` under the ladder gate and `'normal'`
  * with the gate off (`?ladder=0`).
  * @param {{ladderEnabled?: boolean, stored?: string|null}} [opts]
  * @returns {string}
@@ -189,14 +134,10 @@ export function commsInitialStep({ ladderEnabled, stored } = {}) {
   return 'normal';
 }
 
-// ============================================================================
-// COMMS PANEL CLASS
-// ============================================================================
-
 export class CommsPanel {
   /**
    * @param {HTMLElement} container
-   * @param {{ glass?: boolean|null }} [opts]  `glass` — Task 6.
+   * @param {{ glass?: boolean|null }} [opts]
    */
   constructor(container, { glass = null } = {}) {
     this._container = container;
@@ -212,12 +153,7 @@ export class CommsPanel {
     /** @type {number} Scroll offset for PageUp/PageDown review */
     this._scrollOffset = 0;
 
-    /**
-     * @type {Set<string|number>} Onboarding beat ids whose instruction the
-     * player has already followed. A guidance line tagged with one of these
-     * ids drops its "latest" attention highlight immediately — the moment the
-     * player obeys the comms direction it stops demanding attention.
-     */
+    /** @type {Set<string|number>} Onboarding beat ids whose instruction the player has already followed. */
     this._satisfiedBeatIds = new Set();
 
     /** @type {Object<string, HTMLElement>} DOM panels for show/hide */
@@ -225,24 +161,22 @@ export class CommsPanel {
 
     /**
      * @type {import('../../systems/codex/GlossaryState.js').GlossaryState|null}
-     * First-use seen-state for the inline glossary. Optional — comms still
-     * decorates terms without it (every term just keeps its first-use cue).
+     * First-use seen-state for the inline glossary; optional (without it every term keeps its first-use cue).
      */
     this._glossaryState = null;
 
     /** @type {number} Message rows left in the log after the last render's trim (see `_scrollStep`); -1 = none yet. */
     this._shownRows = -1;
-    /** @type {number} The log's last seen `offsetWidth` (D3: only a WIDTH change re-renders); -1 = not seen yet. */
+    /** @type {number} The log's last seen `offsetWidth` (only a WIDTH change re-renders); -1 = not seen yet. */
     this._logWidth = -1;
     this._logResizeObserver = null;
     this._logResizeListener = null;
     this._logResizeRaf = 0;
     this._disposed = false;
 
-    // comms-min-show D1: the panel keeps its OWN display list so every line stays on screen at least
-    // COMMS.PANE_MIN_SHOW_S seconds. CommsSystem still stores (and coalesces) every line at once; the panel takes each
-    // stored object once (`_taken`), queues it (`_waiting`) and moves it on to `_shown` (the rows drawn, newest last)
-    // one at a time. See `_takeNew`, `_pruneQueue`, `_releaseNext`.
+    // The panel keeps its OWN display list so every line stays on screen at least COMMS.PANE_MIN_SHOW_S seconds.
+    // CommsSystem still stores (and coalesces) every line at once; the panel takes each stored object once
+    // (`_taken`), queues it (`_waiting`) and moves it on to `_shown` (the rows drawn, newest last) one at a time.
     /** @type {object[]} stored comms messages waiting for their turn (oldest first) */
     this._waiting = [];
     /** @type {object[]} stored comms messages in the order they were drawn (newest last, at most SHOWN_MAX) */
@@ -251,22 +185,15 @@ export class CommsPanel {
     this._taken = new WeakSet();
     /** @type {number} real seconds since the newest row was drawn; Infinity = nothing on screen yet (the first line is at once) */
     this._sinceShown = Infinity;
-    /** @type {number} stored objects taken so far; 0 = the panel has never queued anything (draws the store, D6) */
+    /** @type {number} stored objects taken so far; 0 = the panel has never queued anything (draws the store) */
     this._intakeCount = 0;
 
     this._build();
     this._setupListeners();
   }
 
-  /**
-   * Inject the glossary seen-state controller so first-use cues drop after a
-   * term has been seen. @param {object} state GlossaryState-like
-   */
+  /** Inject the glossary seen-state controller so first-use cues drop after a term has been seen. */
   setGlossaryState(state) { this._glossaryState = state; }
-
-  // ==========================================================================
-  // BUILD DOM
-  // ==========================================================================
 
   /** @private Create a styled HUD panel */
   _createPanel(id, styles) {
@@ -280,9 +207,9 @@ export class CommsPanel {
 
   /** @private */
   _build() {
-    // --- Comms Panel (top-right — fixed size, UX-2 #11) ---
-    // COMMS sits IN the top-right corner (owner 2026-10-18): `top` and `right` read PANE_CORNER_PX (0), each under a
-    // safe-area max so a notched screen (viewport-fit=cover, index.html:5) is cleared. Rails/tabs keep HUD_EDGE_PX.
+    // COMMS sits IN the top-right corner (DECISIONS §28): `top` and `right` read PANE_CORNER_PX (0), each under a
+    // safe-area max so a notched screen (viewport-fit=cover in index.html's viewport meta) is cleared.
+    // Rails/tabs keep HUD_EDGE_PX.
     this.panels.comms = this._createPanel('hud-comms-panel', {
       top: `max(${PANE_CORNER_PX}px, env(safe-area-inset-top))`,
       right: `max(${PANE_CORNER_PX}px, env(safe-area-inset-right))`,
@@ -292,18 +219,10 @@ export class CommsPanel {
       transition: 'height 0.3s ease, border-color 0.3s ease',
     });
     this.panels.comms.dataset.hudGroup = 'manage_comms';
-    // Comms panel starts active — messages arrive from boot sequence immediately.
-    // Skill discovery (COMMS_OPENED) still fires for progression tracking.
     this.panels.comms.classList.add('hud-active');
 
-    // --- Elevator-contract tracker (gated header) ---
-    // The slow, shop-driven 10,000 kg endgame objective. Hidden until the player
-    // makes their first contribution (CONTRACT_UPDATE with contractMassKg > 0),
-    // then revealed here at the TOP of the comms pane — grouping the long-game
-    // objective with the channel that narrates its milestones. Starts
-    // display:none so a new pilot never sees a static, unreachable 0/10,000 in
-    // the always-bright score strip. Reused ids (hud-anchor-mass/-target) keep
-    // continuity with the former score-strip segment.
+    // Elevator-contract tracker (the 10,000 kg endgame objective): display:none until the first contribution
+    // (CONTRACT_UPDATE with contractMassKg > 0), so a new pilot never sees an unreachable 0/10,000.
     this._contractVisible = false;
     this._contractEl = document.createElement('div');
     this._contractEl.id = 'hud-contract-tracker';
@@ -328,7 +247,6 @@ export class CommsPanel {
     `;
     this.panels.comms.appendChild(this._contractEl);
 
-    // --- Log container ---
     this._logEl = document.createElement('div');
     this._logEl.id = 'hud-comms-log';
     Object.assign(this._logEl.style, {
@@ -343,14 +261,12 @@ export class CommsPanel {
     this.panels.comms.appendChild(this._logEl);
     this._observeLogWidth();
 
-    // Inline-glossary affordances: a one-time stylesheet for `.glossary-term`
-    // and a delegated click handler that deep-links terms with a codex entry.
+    // Inline glossary: one-time stylesheet + delegated click handler (deep-links terms with a codex entry).
     ensureGlossaryCss();
     delegateGlossaryClicks(this._logEl);
 
-    // --- Resize chrome (3-step: line / normal / large) ---
-    // The 7 key cycles the size via _expandPane(). No "GROUND COMMS" label and, since u4-phone-fold
-    // D5, no visible [7] badge (resize by badge is dropped; the key is in the Help page and the hover tip).
+    // The 7 key cycles the size via _expandPane(). No "GROUND COMMS" label and no visible [7] badge
+    // (the key is in the Help page and the hover tip).
     this._chrome = new PaneChrome({
       pane: this.panels.comms,
       keyLabel: '7',
@@ -360,11 +276,8 @@ export class CommsPanel {
       color: COMMS_COLOR_NORMAL,
       title: 'Comms size (7)',
       onStep: (step) => {
-        // PaneChrome applies the initial step from INSIDE its constructor, so
-        // on that first call `this._chrome` is still null — the step MUST come
-        // from the callback (follow-up 2026-09-09 §1.13: reading `this._chrome`
-        // here fell back to 'normal' and sized every boot at 144 px while the
-        // badge said 'line' — "two lines in a four-line box").
+        // PaneChrome applies the initial step from INSIDE its constructor, so on that first call
+        // `this._chrome` is still null: the step MUST come from the callback.
         this._applyCommsStep(step);
         if (this._commsStepReady) {
           try { localStorage.setItem(COMMS_STEP_STORE_KEY, step); } catch (_e) { /* private mode */ }
@@ -374,21 +287,14 @@ export class CommsPanel {
     this._commsStepReady = true;
   }
 
-  // ==========================================================================
-  // EVENT LISTENERS
-  // ==========================================================================
-
   /** @private */
   _setupListeners() {
-    // 7-tap → expand pane temporarily
     eventBus.on(Events.COMMS_FOCUS, () => {
-      // 7 always re-reveals the comms pane, even when the pane-density ladder
-      // (−) hid it — clear the density flag before expanding.
+      // 7 always re-reveals the pane, even when the pane-density ladder hid it: clear the flag first.
       if (this.panels.comms) this.panels.comms.removeAttribute('data-density-hidden');
       this._expandPane();
     });
 
-    // PageUp / PageDown history scrolling
     // The step is the number of rows actually on screen (at most 3), so a trimmed window never skips a message.
     eventBus.on(Events.COMMS_SCROLL_UP, () => {
       this._scrollOffset = Math.min(this._scrollOffset + this._scrollStep(), this._getMaxScroll());
@@ -397,38 +303,26 @@ export class CommsPanel {
 
     eventBus.on(Events.COMMS_SCROLL_DOWN, () => this._scrollDown());
 
-    // When an onboarding hint is satisfied (the player followed the direction),
-    // drop the matching guidance line's attention highlight right away so it
-    // stops demanding attention — without waiting for a follow-up "ack" line.
+    // A satisfied onboarding hint drops the matching guidance line's attention highlight right away.
     eventBus.on(Events.HINT_SATISFIED, (d) => {
       if (!d || d.id == null) return;
       this._satisfiedBeatIds.add(d.id);
       this._updateCommsPanel();
     });
 
-    // Elevator-contract tracker — gated header atop the comms pane (replaces the
-    // former always-on score-strip segment). Reveals on first contribution.
     eventBus.on(Events.CONTRACT_UPDATE, (data) => this._onContractUpdate(data));
 
-    // comms-min-show D7: a new game empties the queue and the rows drawn (CommsSystem empties its store on the same event).
+    // A new game empties the queue and the rows drawn (CommsSystem empties its store on the same event).
     eventBus.on(Events.GAME_RESET, () => this._resetQueue());
   }
 
-  // ==========================================================================
-  // PUBLIC
-  // ==========================================================================
-
-  /**
-   * Set the CommsSystem reference.
-   * @param {import('../../systems/CommsSystem.js').CommsSystem} commsSystem
-   */
+  /** @param {import('../../systems/CommsSystem.js').CommsSystem} commsSystem */
   setCommsSystem(commsSystem) {
     this._commsSystem = commsSystem;
   }
 
   /**
-   * Handle an incoming comms message event. Updates the log and may trigger
-   * a border flash for critical messages.
+   * Handle an incoming comms message event: updates the log, flashes the border for a critical one.
    * @param {object} msg — { text, priority, channel, … }
    */
   onMessage(msg) {
@@ -440,9 +334,9 @@ export class CommsPanel {
       this._updateCommsPanel();
       return;
     }
-    // comms-min-show D2-D6: take what CommsSystem stored since the last call (a text line, or the text-less repaint
-    // after a COMMS_RELEASE: either way the store is the truth), draw a warning at once and the first waiting line if
-    // its turn has come. A queued-only call keeps the scroll position but still redraws (pruning may have changed it).
+    // Take what CommsSystem stored since the last call (a text line, or the text-less repaint after a COMMS_RELEASE:
+    // either way the store is the truth), draw a warning at once and the first waiting line if its turn has come.
+    // A queued-only call keeps the scroll position but still redraws (pruning may have changed it).
     this._pruneQueue();
     const jumped = this._takeNew();
     const released = this._releaseNext();
@@ -452,16 +346,14 @@ export class CommsPanel {
   }
 
   /**
-   * Per-frame update — drives the comms panel flash timer.
-   * @param {number} dt — delta time
+   * Per-frame update — drives the flash timer.
+   * @param {number} dt — seconds
    */
   update(dt) {
     this._tickQueue(dt);
     if (this._commsFlashTimer > 0) {
       this._commsFlashTimer -= dt;
-      // Calm-HUD: hold a steady red border for the critical window — the red
-      // already carries severity; the old 1.59 Hz square-wave strobe was the
-      // live JS twin of the .comms-flash class removed in the Phase 1 pass.
+      // Calm-HUD: a steady red border for the critical window (no strobe).
       this.panels.comms.style.borderColor = 'rgb(var(--hud-warning-rgb, 255 68 68) / 0.7)';
       if (this._commsFlashTimer <= 0) {
         const step = this._currentStep();
@@ -471,34 +363,23 @@ export class CommsPanel {
     }
   }
 
-  /**
-   * Refresh command availability (called at 10 Hz).
-   * No-op since ST-5.1; the C-hold radial menu was removed entirely (UX-11 #9).
-   */
+  /** No-op (the C-hold radial menu is gone); HUD still calls it at 10 Hz. */
   updateMenu() {
     // Intentionally empty
   }
 
-  /**
-   * Toggle comms — ST-5.1: now a no-op for backward compatibility.
-   * C-tap/hold discrimination is handled by InputManager → EventBus.
-   */
+  /** Legacy: expands the pane. */
   toggleComms() {
-    // Legacy compatibility: expand pane on toggle
     this._expandPane();
   }
 
-  /** @returns {boolean} Center popup fully removed (and the radial menu after it) */
+  /** Always false: the center popup is gone. */
   isCommsOpen() {
-    return false; // Center popup fully removed
+    return false;
   }
-
-  // (UX-11 #9 review cleanup: executeCommsCommand removed — the RadialMenu
-  // was its only conceptual invoker and the HUD wrapper had zero callers.)
 
   /** Clean up DOM elements. */
   dispose() {
-    // No center popup to remove (ST-5.1: _buildCommsMenu deleted)
     this._disposed = true;
     this._resetQueue();
     if (this._logResizeObserver && typeof this._logResizeObserver.disconnect === 'function') {
@@ -513,20 +394,14 @@ export class CommsPanel {
     this._logResizeRaf = 0;
   }
 
-  // ==========================================================================
-  // PRIVATE
-  // ==========================================================================
-
-  // --------------------------------------------------------------------------
-  // comms-min-show: every line stays on screen at least COMMS.PANE_MIN_SHOW_S seconds
-  // --------------------------------------------------------------------------
+  // Display queue: every line stays on screen at least COMMS.PANE_MIN_SHOW_S seconds.
 
   /** @private True when the constructor built the display list (a bare prototype rig in a test has none: store drawn as ever). */
   _queueReady() {
     return Array.isArray(this._waiting) && Array.isArray(this._shown) && !!this._taken;
   }
 
-  /** @private The messages the log draws: the panel's own `_shown` once anything has come through intake, else the store (D6). */
+  /** @private The messages the log draws: the panel's own `_shown` once anything has come through intake, else the store. */
   _displayMessages() {
     const store = this._commsSystem ? this._commsSystem.getMessages() : [];
     if (!Array.isArray(this._shown) || !(this._intakeCount > 0)) return store;
@@ -540,7 +415,7 @@ export class CommsPanel {
   }
 
   /**
-   * @private D2: forget every queued or drawn object CommsSystem no longer stores (coalescing replaced it with a
+   * @private Forget every queued or drawn object CommsSystem no longer stores (coalescing replaced it with a
    * summary, the ring buffer dropped it, or `CommsSystem.reset()` emptied the store). A drawn row that vanishes is
    * redrawn at once by the caller (`true`); a scroll position past the end is brought back inside.
    * @returns {boolean} true when a drawn row was removed
@@ -564,7 +439,7 @@ export class CommsPanel {
   }
 
   /**
-   * @private D2/D4: walk the store in order and take every object not taken yet. A warning goes straight onto the
+   * @private Walk the store in order and take every object not taken yet. A warning goes straight onto the
    * screen (newest row, the show clock restarts, the border flashes); anything else waits.
    * @returns {boolean} true when a warning was drawn
    */
@@ -594,7 +469,7 @@ export class CommsPanel {
   }
 
   /**
-   * @private D5: at most COMMS.PANE_QUEUE_MAX lines wait. Past that the oldest waiting non-warning line is skipped
+   * @private At most COMMS.PANE_QUEUE_MAX lines wait. Past that the oldest waiting non-warning line is skipped
    * (never drawn; it stays in CommsSystem's log). Run AFTER the release step, so a batch (COMMS_RELEASE) still starts
    * with its oldest line and only then loses the surplus from the front of the queue.
    */
@@ -608,7 +483,7 @@ export class CommsPanel {
   }
 
   /**
-   * @private D3: draw the head of the queue when the newest row has been on screen long enough, or when nothing is on
+   * @private Draw the head of the queue when the newest row has been on screen long enough, or when nothing is on
    * screen at all (never "Awaiting transmission…" while a line waits). One line per call.
    * @returns {boolean} true when a row was drawn
    */
@@ -631,7 +506,7 @@ export class CommsPanel {
     if (pruned || released) this._updateCommsPanel();
   }
 
-  /** @private D7: GAME_RESET / dispose - nothing queued, nothing drawn, the next line shows at once. */
+  /** @private GAME_RESET / dispose - nothing queued, nothing drawn, the next line shows at once. */
   _resetQueue() {
     if (!this._queueReady()) return;
     this._waiting.length = 0;
@@ -640,16 +515,14 @@ export class CommsPanel {
     this._taken = new WeakSet();
   }
 
-  /** @private C-tap cycles the pane size (line → normal → large → line). */
+  /** @private Cycles the pane size (line → normal → large → line). */
   _expandPane() {
     if (this._chrome) this._chrome.cycle();
   }
 
   /**
-   * @private The current size step: PaneChrome's once it exists (the state
-   * owner), else the last step APPLIED (`_applyCommsStep` records it — right
-   * while PaneChrome is still constructing and `this._chrome` is null), else
-   * 'normal'.
+   * @private The current size step: PaneChrome's once it exists, else the last step APPLIED (recorded by
+   * `_applyCommsStep`, valid while PaneChrome is still constructing), else 'normal'.
    */
   _currentStep() {
     if (this._chrome && COMMS_STEPS.includes(this._chrome.step)) return this._chrome.step;
@@ -659,48 +532,39 @@ export class CommsPanel {
 
   /**
    * @private Resolve the pane/log height for the current step.
-   * @param {string} [stepArg] the step PaneChrome just applied (its `onStep`
-   *   argument) — passed explicitly because the initial call arrives from
-   *   inside PaneChrome's constructor, before `this._chrome` exists.
+   * @param {string} [stepArg] the step PaneChrome just applied; explicit because the initial call arrives
+   *   from inside PaneChrome's constructor, before `this._chrome` exists.
    */
   _applyCommsStep(stepArg) {
     const step = COMMS_STEPS.includes(stepArg) ? stepArg : this._currentStep();
     this._commsStep = step;
     let h;
-    if (step === 'line') h = VITALS_COLLAPSED_HEIGHT_PX;   // q3 D3: as tall as MOTHER's collapsed pane (one number, VitalsPane)
+    if (step === 'line') h = VITALS_COLLAPSED_HEIGHT_PX;   // as tall as MOTHER's collapsed pane (one number, VitalsPane)
     else if (step === 'large') h = COMMS.PANE_EXPAND_HEIGHT_PX;
     else h = COMMS.PANE_HEIGHT_PX;
 
-    // The log keeps its full per-step height; the pane grows by the contract
-    // header (when revealed) so revealing the tracker never clips messages.
+    // The pane grows by the contract header (when revealed) so the tracker never clips messages.
     const logH = h - 12;
     const panelH = h + (this._contractVisible ? CONTRACT_HEADER_PX : 0);
     this.panels.comms.style.height = `${panelH}px`;
     this._logEl.style.height = `${logH}px`;
 
-    // Brighter border when enlarged beyond normal; default otherwise.
     if (this._commsFlashTimer <= 0) {
       this.panels.comms.style.borderColor = (step === 'large')
         ? 'rgb(var(--hud-info-rgb, 0 255 255) / 1.0)'
         : 'var(--hud-hairline, rgb(var(--hud-normal-rgb, 0 255 136) / 0.3))';
     }
 
-    // Re-render so the visible line count matches the new height.
     this._updateCommsPanel();
 
-    // Notify layout consumers (HUD right column + NavSphere slot) that the
-    // comms panel's height — and therefore its bottom edge — has changed, so
-    // they can invalidate their cached comms-bottom and reflow. The panel
-    // height animates over 0.3s (CSS transition), so listeners keep recomputing
-    // through a short settle window rather than snapping at the end.
+    // Layout consumers (HUD right column + NavSphere slot) invalidate their cached comms-bottom on this. The
+    // height animates over 0.3 s (CSS transition), so listeners keep recomputing through a short settle window.
     eventBus.emit(Events.COMMS_PANEL_RESIZED, { step, height: h });
   }
 
   /**
-   * @private Update the gated elevator-contract tracker. Reveals the header the
-   * first time the player has contributed mass (contractMassKg > 0) and keeps it
-   * shown thereafter. On reveal the comms pane grows by CONTRACT_HEADER_PX so the
-   * message log keeps its full height (COMMS_PANEL_RESIZED reflows the column).
+   * @private Update the gated elevator-contract tracker. Reveals the header the first time contractMassKg > 0
+   * and keeps it shown; the pane then grows by CONTRACT_HEADER_PX (COMMS_PANEL_RESIZED reflows the column).
    * @param {object} data — { contractMassKg, targetMassKg }
    */
   _onContractUpdate(data) {
@@ -717,27 +581,24 @@ export class CommsPanel {
     if (fillEl && target > 0) {
       fillEl.style.width = `${Math.min(100, (mass / target) * 100)}%`;
     }
-    // Color intensity: muted below 50 %, brighter above (mirrors the old strip).
+    // Colour intensity: muted below 50 %, brighter above.
     if (this._contractEl && target > 0) {
       const c = (mass / target) > 0.5 ? 'var(--hud-normal, #a5d6a7)' : 'var(--hud-normal, #81c784)';
       this._contractEl.style.color = c;
       if (fillEl) fillEl.style.background = c;
     }
 
-    // Gate: reveal once the contract is actually in play, then keep it shown.
     if (mass > 0 && !this._contractVisible) {
       this._contractVisible = true;
       if (this._contractEl) this._contractEl.style.display = 'flex';
-      // Grow the pane to fit the header without stealing log height, and notify
-      // the layout (NavSphere slot + right-hand pane column) to reflow.
       this._applyCommsStep();
     }
   }
 
   /**
-   * @private Watch the log's WIDTH (D3). A narrower window narrows the log, the same message then wraps onto more lines,
-   * and the rows rendered at the old width can end up cut; only a render re-trims them. A `ResizeObserver` on the log's
-   * border box (a `window` `resize` listener where there is none); nothing at all in node tests, where neither exists.
+   * @private Watch the log's WIDTH. A narrower log wraps a message onto more lines, so rows rendered at the old
+   * width can end up cut; only a render re-trims them. A `ResizeObserver` on the border box (a `window` `resize`
+   * listener where there is none); nothing in node tests.
    */
   _observeLogWidth() {
     if (typeof ResizeObserver === 'function') {
@@ -752,8 +613,8 @@ export class CommsPanel {
   /**
    * @private True when the log's width differs from the last one seen (and remembers the new one). The width is the
    * border-box `offsetWidth`: the observer's content width shifts by the 4 px scrollbar whenever it appears, which
-   * would re-render, hide the scrollbar, and oscillate. The 0.3 s height animation changes only the height, which is
-   * D2's business (the transitionend render), so a pure height change reports false.
+   * would re-render, hide the scrollbar, and oscillate. The 0.3 s height animation changes only the height (the
+   * transitionend render's business), so a pure height change reports false.
    */
   _logWidthChanged() {
     const w = this._logEl ? this._logEl.offsetWidth : NaN;
@@ -763,12 +624,10 @@ export class CommsPanel {
   }
 
   /**
-   * @private The ResizeObserver fired. The FIRST callback (it arrives right after the first layout, around boot) only
-   * records the width: nothing is rendered before boot has finished. Later, a width change renders AT ONCE, inside the
-   * callback: an observer callback runs after layout and before paint, so the re-trimmed rows are the ones that get
-   * painted (deferring to the next animation frame left one painted frame with a cut row, measured 2026-10-17).
-   * Re-rendering cannot re-trigger the observer: the log's border box does not change (its height is set inline per
-   * step, its width comes from the panel).
+   * @private The ResizeObserver fired. The FIRST callback (right after the first layout, around boot) only records
+   * the width: nothing is rendered before boot has finished. Later, a width change renders AT ONCE inside the
+   * callback (it runs after layout and before paint; deferring to the next frame painted one frame with a cut row).
+   * Re-rendering cannot re-trigger the observer: the log's border box does not change.
    */
   _onLogObserved() {
     if (this._disposed || !this._logEl) return;
@@ -781,8 +640,8 @@ export class CommsPanel {
   }
 
   /**
-   * @private The `window` `resize` fallback (no ResizeObserver): re-render once (per animation frame at most) when the
-   * log's width changed. A `resize` event can come in bursts while a window is dragged, so these are coalesced.
+   * @private The `window` `resize` fallback (no ResizeObserver): re-render at most once per animation frame, when
+   * the log's width changed (`resize` comes in bursts while a window is dragged).
    */
   _onLogResized() {
     if (this._disposed || !this._logEl) return;
@@ -796,19 +655,17 @@ export class CommsPanel {
   }
 
   /**
-   * @private Show whole message rows only, at every size step (D1): remove the oldest rendered rows while the log
-   * content overflows its box, so no row is cut through at the top edge. Leaves at least one row, and when that last
-   * row is itself taller than the box, clamps it to the lines that fit (`_clampTallRow`, D4). No-op where the log has no
-   * layout (tests, hidden pane).
+   * @private Show whole message rows only, at every size step: remove the oldest rendered rows while the log
+   * content overflows its box, so no row is cut through at the top edge. Leaves at least one row, and when that
+   * row is itself taller than the box, clamps it (`_clampTallRow`). No-op where the log has no layout.
    */
   _trimCutRows() {
     const log = this._logEl;
     if (!log || !log.children || typeof log.removeChild !== 'function') return;
-    // q3 round 3 (S1) + D2: trim against the SMALLER of the target height and the height the box has right now. A
-    // step change animates the log's `height` over 0.3 s: shrinking, the target is the smaller (a row that will not
-    // fit must not come back at the end); growing, the box as it is now is the smaller (a row that does not fit yet
-    // must not stick out over the top while the box is still small; the transitionend render adds what fits later).
-    // With no layout yet the target alone counts.
+    // Trim against the SMALLER of the target height and the box's height right now. A step change animates the
+    // log's `height` over 0.3 s: shrinking, the target is the smaller (a row that will not fit must not come back
+    // at the end); growing, the current box is the smaller (a row must not stick out over the top while the box is
+    // still small; the transitionend render adds what fits later). With no layout yet the target alone counts.
     const target = parseFloat(log.style && log.style.height);
     const box = () => {
       const now = log.clientHeight;
@@ -822,10 +679,9 @@ export class CommsPanel {
   }
 
   /**
-   * @private D4: the one row left is still taller than the box. Showing its END (the old scroll-to-bottom) cut the START
-   * of the message in half a row; instead keep its START and end it with an ellipsis: clamp to the whole lines that fit
-   * (`-webkit-line-clamp`), and keep the full text in the row's tooltip. Every render builds fresh rows, so a clamp never
-   * outlives its render: when the box or the width grows enough, the next render's row simply is not clamped.
+   * @private The one row left is still taller than the box. Keep its START (scroll-to-bottom would cut the start of
+   * the message in half a row) and end it with an ellipsis: clamp to the whole lines that fit (`-webkit-line-clamp`),
+   * full text in the row's tooltip. Every render builds fresh rows, so a clamp never outlives its render.
    * @param {HTMLElement} row
    * @param {number} boxH the log box height the row has to fit
    */
@@ -859,9 +715,8 @@ export class CommsPanel {
   }
 
   /**
-   * @private The log's height finished animating (D2): render again against the settled box. Shrinking, that
-   * re-trims what the target already trimmed; growing, the rows that now fit come back whole. `_updateCommsPanel`
-   * also keeps the newest row in view when the log is not scrolled up.
+   * @private The log's height finished animating: render again against the settled box (growing, the rows that
+   * now fit come back whole).
    */
   _onLogTransitionEnd(e) {
     if (e && e.propertyName && e.propertyName !== 'height') return;
@@ -877,7 +732,7 @@ export class CommsPanel {
   }
 
   /**
-   * @private Message rows on screen after the last render's trim (D4b), at most the step's line count. Before any
+   * @private Message rows on screen after the last render's trim, at most the step's line count. Before any
    * render, or when the log cannot say, the step's line count.
    */
   _rowsOnScreen() {
@@ -887,20 +742,20 @@ export class CommsPanel {
   }
 
   /**
-   * @private How many messages one COMMS_SCROLL_UP / _DOWN moves (D4b): 3 as ever, but never more than the rows on
-   * screen (a trimmed window of 1 row steps by 1, not 3, so no message is jumped over), at least 1.
+   * @private How many messages one COMMS_SCROLL_UP / _DOWN moves: 3, but never more than the rows on screen
+   * (a trimmed window of 1 row steps by 1, so no message is jumped over), at least 1.
    */
   _scrollStep() {
     return Math.max(1, Math.min(SCROLL_STEP_MAX, this._rowsOnScreen()));
   }
 
   /**
-   * @private PageDown (D4b): move toward the newest messages by one step, without jumping over a message. The step is
-   * the number of rows on screen NOW, but the window below can hold taller messages, so the new window may show fewer
-   * rows than the step moved: its oldest row would then be newer than the message right after the previous newest, and
-   * that one is skipped. Then step back (one render each, at most the step) until the new window reaches down to it.
-   * In offsets (messages newer than the window): the new oldest shown row has `offset + rows - 1` newer messages, and the
-   * message after the previous newest has `prevOffset - 1`.
+   * @private PageDown: move toward the newest messages by one step, without jumping over a message. The window
+   * below can hold taller messages, so the new window may show fewer rows than the step moved; its oldest row
+   * would then be newer than the message right after the previous newest, which is skipped. So step back (one
+   * render each, at most the step) until the new window reaches down to it. In offsets (messages newer than the
+   * window): the new oldest shown row has `offset + rows - 1` newer messages, the message after the previous
+   * newest has `prevOffset - 1`.
    */
   _scrollDown() {
     const prevOffset = this._scrollOffset;
@@ -913,8 +768,8 @@ export class CommsPanel {
   }
 
   /**
-   * @private Get max scroll offset. The oldest window holds `total - rows on screen` messages above it: when the trim
-   * leaves fewer rows than the step's line count, the oldest messages would otherwise never come into view.
+   * @private Max scroll offset: the oldest window holds `total - rows on screen` messages above it (when the trim
+   * leaves fewer rows than the step's line count, the oldest messages would otherwise never come into view).
    */
   _getMaxScroll() {
     const total = this._displayMessages().length;
@@ -925,7 +780,6 @@ export class CommsPanel {
   _updateCommsPanel() {
     if (!this._logEl) return;
 
-    // comms-min-show D6: the rows are the panel's own `_shown` list (the store only before any line has come through intake).
     const allMessages = this._displayMessages();
 
     if (allMessages.length === 0) {
@@ -934,38 +788,30 @@ export class CommsPanel {
       return;
     }
 
-    // Apply scroll offset — visible line count follows the current size step.
+    // visible line count follows the current size step
     const visibleCount = this._visibleLineCount();
     const end = allMessages.length - this._scrollOffset;
     const start = Math.max(0, end - visibleCount);
     const visible = allMessages.slice(start, end);
 
-    // Index (within `visible`) of the most-recent message — highlighted unless
-    // the user has scrolled up into history.
+    // Index (within `visible`) of the newest message — highlighted unless scrolled up into history.
     const latestIdx = (this._scrollOffset === 0) ? visible.length - 1 : -1;
 
     this._logEl.innerHTML = visible.map((msg, i) => {
       const color = getPriorityColor(msg.priority);
-      // A satisfied onboarding instruction is no longer "demanding attention":
-      // even if it's still the most-recent line, render it dimmed like history.
+      // a satisfied onboarding instruction renders dimmed like history, even as the newest line
       const isLatest = (i === latestIdx) && !isFollowedInstruction(msg, this._satisfiedBeatIds);
 
-      // Latest message: full-strength, subtle highlight band. Older: dimmed.
       const textOpacity = isLatest ? '1' : '0.6';
       const rowBg = isLatest ? 'rgb(var(--hud-text-rgb, 255 255 255) / 0.06)' : 'transparent';
       const weight = (isLatest || isCriticalPriority(msg.priority)) ? '700' : '400';
 
       const sourceText = msg.source ? `${escapeHtml(msg.source)}: ` : '';
 
-      // Inline glossary: wrap recognised jargon in the message body (only — never
-      // the source label). The first-use cue is driven by the seen-state, and a
-      // term is marked seen only when it's the freshest line the player is
-      // actually reading (the latest, un-scrolled row) so history re-renders
-      // don't silently burn every cue. A message carrying a `link`
-      // (`{ term, entryId, anchor? }`, copied by CommsSystem's listener — the
-      // FURNACE gag's "manual", plan 1788957399035 §7.26) gets its first
-      // whole-word `term` wrapped as a SPECS deep link over the SAME span class
-      // and the SAME click delegation as every glossary term.
+      // Inline glossary: wrap recognised jargon in the message body only (never the source label). A term is
+      // marked seen only when it is the latest, un-scrolled row, so history re-renders don't burn every cue.
+      // A message carrying a `link` (`{ term, entryId, anchor? }`, copied by CommsSystem's listener) gets its
+      // first whole-word `term` wrapped as a SPECS deep link, same span class and click delegation.
       const gs = this._glossaryState;
       const markSeen = isLatest && this._scrollOffset === 0;
       const body = decorateGlossary(msg.text, {
@@ -975,27 +821,25 @@ export class CommsPanel {
         links: msg.link ? [msg.link] : undefined,
       });
 
-      // The inner <div> keeps the label and the body inline when `_clampTallRow` turns the row into a -webkit-box
-      // (some engines make every direct child of a -webkit-box its own block, which would put them on two lines).
+      // The inner <div> keeps label and body inline when `_clampTallRow` turns the row into a -webkit-box
+      // (some engines make every direct child of a -webkit-box its own block).
       return `<div style="margin:${ROW_MARGIN_Y_PX}px 0;padding:${ROW_PAD_Y_PX}px 6px;border-left:${COMMS.STRIPE_WIDTH_PX}px solid ${color};background:${rowBg};border-radius:2px;"><div>
         <span style="color:${color};font-weight:700;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;">${sourceText}</span><span style="color:${color};opacity:${textOpacity};font-weight:${weight};font-size:13px;">${body}</span>
       </div></div>`;
     }).join('');
 
-    // q3 round 2 (R3) + D1: whole message rows only, at EVERY size step (it was the 'line' step alone). The rendered
-    // rows (the step's line count of them) can be taller than the log box, and then the oldest sticks out over the top
-    // edge and shows half a line: drop the oldest rendered row while the content is taller than the box. Never the
-    // last one; a last row that is still too tall is clamped to the lines that fit (D4).
+    // Whole message rows only, at EVERY size step: rendered rows can be taller than the log box, and then the
+    // oldest sticks out over the top edge: drop the oldest while the content is taller than the box. Never the
+    // last one; a last row that is still too tall is clamped (`_clampTallRow`).
     this._trimCutRows();
     const rendered = this._logEl.children;
     this._shownRows = (rendered && rendered.length > 0) ? rendered.length : visible.length;
 
-    // Auto-scroll to bottom (unless scrolled up)
     if (this._scrollOffset === 0) {
       this._logEl.scrollTop = this._logEl.scrollHeight;
     }
 
-    // Flash border for critical messages (respect enlarged-state cyan border)
+    // critical flash; the enlarged ('large') state keeps its cyan border
     const step = this._currentStep();
     if (this._commsFlashTimer > 0) {
       this.panels.comms.style.borderColor = 'rgb(var(--hud-warning-rgb, 255 68 68) / 0.7)';
@@ -1005,14 +849,10 @@ export class CommsPanel {
   }
 }
 
-// ============================================================================
-// NAMED EXPORTS (for tests)
-// ============================================================================
-
 export { filterRoundTrip, getPriorityColor, isCriticalPriority, isFollowedInstruction,
   COMMS_COLOR_NORMAL, COMMS_COLOR_WARNING, COMMS_COLOR_CRITICAL };
 
-// ST-5.1: CJS guard — expose pure helpers for Node.js tests
+// CJS guard: expose pure helpers for Node.js tests
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { filterRoundTrip, getPriorityColor, isCriticalPriority, isFollowedInstruction,
     COMMS_COLOR_NORMAL, COMMS_COLOR_WARNING, COMMS_COLOR_CRITICAL };

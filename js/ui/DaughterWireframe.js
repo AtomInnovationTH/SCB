@@ -1,16 +1,12 @@
 /**
- * DaughterWireframe.js — Part-callout wireframe for a deployed ArmUnit (daughter craft)
- * Canvas2D panel — same pipeline as DebrisWireframe.js.
- *
- * Positioning: bottom-left slot so it never overlaps DebrisWireframe (bottom-right).
+ * DaughterWireframe.js — part-callout wireframe for a deployed ArmUnit (daughter craft); Canvas2D panel,
+ * same pipeline as DebrisWireframe.js, bottom-left slot so it never overlaps DebrisWireframe (bottom-right).
  *
  * Lifecycle:
- *   • Auto-shows when CAMERA_VIEW_CHANGE → ARM_PILOT.
- *   • Auto-hides when leaving ARM_PILOT.
- *   • Pressing bare `I` in ARM_PILOT expands this panel 1.4× AND triggers
- *     DebrisWireframe expanded (daughter close-up) mode — coordinated by HUD.js.
- *
- * Requires setPilotedArm(arm) to be called each frame (by HUD.update()).
+ *   - Auto-shows on CAMERA_VIEW_CHANGE → ARM_PILOT.
+ *   - Auto-hides on leaving ARM_PILOT.
+ *   - Bare `I` in ARM_PILOT expands the panel 1.4× and DebrisWireframe's expanded mode (coordinated by HUD.js).
+ * HUD.update() must call setPilotedArm(arm) each frame.
  *
  * @module ui/DaughterWireframe
  */
@@ -21,10 +17,6 @@ import { Events }    from '../core/Events.js';
 import { mono } from '../core/Typeface.js';
 import { GestureHints } from './hud/GestureHints.js';
 import { degToRad, clamp01, clamp } from '../core/MathUtil.js';
-
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
 
 const WC  = Constants.WIREFRAMES;
 const PW  = WC.PANEL_SIZE_NORMAL.w;   // 280 px
@@ -64,10 +56,7 @@ function rotateAndTilt(x, y, z, cosY, sinY) {
   _rot[2] = ry * _sinTilt + rz * _cosTilt;
 }
 
-// ============================================================================
-// WIREFRAME SHAPE — ArmUnit daughter craft (simplified schematic)
-//
-// Vertex layout (52 verts, scale×1.8 applied at end):
+// Vertex layout (52 verts, scale ×1.8 applied at end):
 //   0–5   front hex  (Z=+0.50, R=0.28)
 //   6–11  rear  hex  (Z=−0.50, R=0.28)
 //  12–15  EPM pole  (base, tip, cross-A, cross-B)
@@ -79,11 +68,9 @@ function rotateAndTilt(x, y, z, cosY, sinY) {
 //  44–45  Bridle hardpoints (2 positions)
 //  46–49  Status light marker (2-vertex cross)
 //  50–51  Tether line (attach point + extended aft)
-// ============================================================================
 
 /**
- * Build the daughter arm part-callout shape.
- * Exported for unit testing (pure data, no DOM).
+ * Build the daughter arm part-callout shape (pure data, no DOM; exported for tests).
  * @returns {{ vertices: number[][], zones: Array<{name,edges,massPercent,risk}> }}
  */
 export function buildDaughterShape() {
@@ -101,49 +88,38 @@ export function buildDaughterShape() {
   };
   const ring6 = (r, z) => hexN(r, z);  // alias — same shape
 
-  // Hex body (0–11)
   const FH = hexN(0.28,  0.50);   // front hex 0–5
   const RH = hexN(0.28, -0.50);   // rear  hex 6–11
 
-  // EPM pole (12–15)
   const EPM_B  = v( 0.00,  0.28,  0.15);   // 12 base
   const EPM_T  = v( 0.00,  0.46,  0.15);   // 13 tip
   const EPM_CA = v( 0.05,  0.46,  0.15);   // 14 cross arm A
   const EPM_CB = v(-0.05,  0.46,  0.15);   // 15 cross arm B
 
-  // FEEP fore (16–21) and aft (22–27)
   const FFORE = ring6(0.12,  0.62);
   const FAFT  = ring6(0.12, -0.62);
 
-  // Body-conformal solar skin (28–39): two hex rings just proud of the body
-  // shell (R=0.30 vs body 0.28), inset along Z so end caps stay structure.
-  // Matches the 3D `-solar-skin` mesh (textured PV cells; no protruding wings).
+  // Solar skin: hex rings just proud of the body shell (R=0.30 vs 0.28), inset along Z so end caps stay structure.
+  // Matches the 3D `-solar-skin` mesh.
   const SKF = hexN(0.30,  0.46);   // skin front ring 28–33
   const SKR = hexN(0.30, -0.46);   // skin rear  ring 34–39
 
-  // Net pack (40–43) — rectangle bulging from front-bottom
   const NTA = v(-0.10, -0.28,  0.40);
   const NTB = v( 0.10, -0.28,  0.40);
   const NTC = v( 0.10, -0.36,  0.40);
   const NTD = v(-0.10, -0.36,  0.40);
 
-  // Bridle hardpoints (44–45)
   const BHA = v( 0.22,  0.12,  0.00);
   const BHB = v(-0.22,  0.12,  0.00);
 
-  // Status light marker (46–49): small cross
   const SLA = v( 0.04,  0.28, -0.25);
   const SLB = v(-0.04,  0.28, -0.25);
   const SLC = v( 0.00,  0.33, -0.25);
   const SLD = v( 0.00,  0.23, -0.25);
 
-  // Tether (50–51)
   const TRA = v( 0.00,  0.00, -0.52);   // tether attach at rear face
   const TRB = v( 0.00,  0.00, -0.70);   // tether extends further
 
-  // ── ZONE EDGE LISTS ──────────────────────────────────────────────────────
-
-  // Zone 0 — Body Shell
   const bodyEdges = [];
   for (let k = 0; k < 6; k++) {
     bodyEdges.push([FH + k, FH + (k + 1) % 6]);
@@ -151,29 +127,25 @@ export function buildDaughterShape() {
     bodyEdges.push([FH + k, RH + k]);
   }
 
-  // Zone 1 — EPM Pole
   const epmEdges = [
     [EPM_B, EPM_T],
     [EPM_CA, EPM_CB],
     [EPM_B, FH + 2],   // tie to body top (az 120° ≈ near +Y)
   ];
 
-  // Zone 2 — FEEP Fore
   const fforeEdges = [];
   for (let k = 0; k < 6; k++) {
     fforeEdges.push([FFORE + k, FFORE + (k + 1) % 6]);
   }
   fforeEdges.push([FH + 0, FFORE + 0], [FH + 3, FFORE + 3]);
 
-  // Zone 3 — FEEP Aft
   const faftEdges = [];
   for (let k = 0; k < 6; k++) {
     faftEdges.push([FAFT + k, FAFT + (k + 1) % 6]);
   }
   faftEdges.push([RH + 0, FAFT + 0], [RH + 3, FAFT + 3]);
 
-  // Zone 4 — Solar Skin (body-conformal cells). Two hex end rings plus a
-  // longitudinal cell line down each of the 6 faces = the wireframe cell grid.
+  // Zone 4 — Solar Skin: two hex end rings plus a longitudinal cell line down each of the 6 faces.
   const solarEdges = [];
   for (let k = 0; k < 6; k++) {
     solarEdges.push([SKF + k, SKF + (k + 1) % 6]);  // front ring
@@ -181,32 +153,27 @@ export function buildDaughterShape() {
     solarEdges.push([SKF + k, SKR + k]);            // longitudinal cell line
   }
 
-  // Zone 5 — Net Pack
   const netEdges = [
     [NTA, NTB], [NTB, NTC], [NTC, NTD], [NTD, NTA],
     [NTA, FH + 5], [NTB, FH + 0],
   ];
 
-  // Zone 6 — Bridle Ring
   const bridleEdges = [
     [BHA, BHB],
     [BHA, FH + 0],
     [BHB, FH + 3],
   ];
 
-  // Zone 7 — Status Light
   const statusEdges = [
     [SLA, SLB],
     [SLC, SLD],
   ];
 
-  // Zone 8 — Tether
   const tetherEdges = [
     [TRA, TRB],
     [RH + 0, TRA],
   ];
 
-  // ── Scale 1.8× ───────────────────────────────────────────────────────────
   for (const vert of vl) {
     vert[0] *= 1.8;
     vert[1] *= 1.8;
@@ -230,10 +197,6 @@ export function buildDaughterShape() {
 }
 
 const DAUGHTER_SHAPE = buildDaughterShape();
-
-// ============================================================================
-// CLASS
-// ============================================================================
 
 export class DaughterWireframe {
   /**
@@ -287,18 +250,16 @@ export class DaughterWireframe {
 
     /** @type {object|null} Currently tracked ArmUnit */
     this._arm     = null;
-    /** @type {number} Dynamic net risk color index — looked up by name so it
-     * stays correct if the zone list changes (e.g. solar wings → body skin). */
+    /** @type {number} Net risk colour index, looked up by name so it survives zone-list changes. */
     this._netZoneIdx = this._shape.zones.findIndex(z => z.name === 'Net Pack');
-    /** @type {number} §11.3 wheel-saturation accent target — the body shell
-     * carries the whole-craft warning; looked up by name like the net index. */
+    /** @type {number} §11.3 wheel-saturation accent target: the body shell carries the whole-craft warning;
+     * looked up by name like the net index. */
     this._bodyZoneIdx = this._shape.zones.findIndex(z => z.name === 'Body Shell (hex)');
     /** @type {string} Dynamic status light color */
     this._statusColor = ZONE_COLORS.GREEN;
     /** @type {number} Arm index for badge label */
     this._armIndex = 0;
 
-    // Event listeners
     this._onViewChange = ({ view } = {}) => {
       if (view === 'ARM_PILOT') {
         this.show();
@@ -317,10 +278,6 @@ export class DaughterWireframe {
     eventBus.on(Events.GAME_STATE_CHANGE,  this._onStateChange);
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
-
   show() {
     this._visible   = true;
     this._zoneIndex = -1;
@@ -334,8 +291,7 @@ export class DaughterWireframe {
   }
 
   /**
-   * Update which arm this panel describes.
-   * Called each frame by HUD.update() with `armManager.getPilotedArm()`.
+   * Which arm this panel describes; HUD.update() passes `armManager.getPilotedArm()` each frame.
    * @param {object|null} arm  ArmUnit instance or null
    * @param {number}      [armIndex=0]
    */
@@ -345,25 +301,18 @@ export class DaughterWireframe {
 
     if (!arm) return;
 
-    // Update dynamic zone colors
     const nets = arm.netInventory ?? arm._netInventory ?? 0;
     this._shape.zones[this._netZoneIdx].risk = nets > 0 ? 'GREEN' : 'RED';
 
-    // §11.3 wheel-saturation accent (the wave-2 wheel-hud polish this panel
-    // deferred): while the piloted arm's reaction wheels are saturated, the
-    // body shell carries the panel's warning accent (risk RED — the same
-    // convention as the Net Pack flip above; the desat-surcharge WARNING
-    // itself lives on StatusPanel/comms). Allocation-free read of the
-    // getStatus() wheelSaturated pair's backing field (the `netInventory ??
-    // _netInventory` idiom — getStatus() builds a fresh literal per call,
-    // a per-frame allocation this per-frame setter never makes). Neutral
-    // false when DAUGHTER_NET_RECOIL is OFF (ArmUnit zeroes the pair) and
-    // absent on legacy mocks — the ternary then writes the design 'GREEN',
-    // so the rendered panel stays byte-identical.
+    // §11.3 wheel-saturation accent: while the piloted arm's reaction wheels are saturated the body shell goes
+    // risk RED, like the Net Pack flip above (the desat-surcharge WARNING itself lives on StatusPanel/comms).
+    // Allocation-free: reads the backing field of getStatus()'s wheelSaturated pair (same idiom as
+    // `netInventory ?? _netInventory`), since getStatus() builds a fresh literal per call.
+    // false when DAUGHTER_NET_RECOIL is OFF (ArmUnit zeroes the pair) or on legacy mocks, so the panel
+    // renders the design 'GREEN'.
     const wheelSat = arm.wheelSaturated ?? arm._wheelSaturated ?? false;
     this._shape.zones[this._bodyZoneIdx].risk = wheelSat ? 'RED' : 'GREEN';
 
-    // Status light color from _statusLightMat
     const mat = arm._statusLightMat;
     if (mat && mat.color) {
       const rgb = mat.color;
@@ -415,10 +364,6 @@ export class DaughterWireframe {
     eventBus.off(Events.GAME_STATE_CHANGE,  this._onStateChange);
   }
 
-  // ==========================================================================
-  // PRIVATE
-  // ==========================================================================
-
   _allocateProjectionBuffer(len) {
     if (this._projected.length !== len) {
       this._projected = new Array(len);
@@ -435,7 +380,6 @@ export class DaughterWireframe {
     ctx.fillStyle = this._bgGradient;
     ctx.fillRect(0, 0, W, H);
 
-    // Header
     ctx.font      = mono(12, 'bold');
     ctx.textAlign = 'center';
     ctx.fillStyle = HEADER_COL;
@@ -453,11 +397,10 @@ export class DaughterWireframe {
       ctx.font      = mono(10);
       ctx.fillStyle = DIM_COL;
       ctx.textAlign = 'center';
-      ctx.fillText(GestureHints.isGlass() ? '. Tap her row in DAUGHTERS to fly her. ' : '. Press 1–4 to pilot a daughter. ', WIRE_CX, WIRE_CY + 20);   // u15b: glass read at draw time (D7)
+      ctx.fillText(GestureHints.isGlass() ? '. Tap her row in DAUGHTERS to fly her. ' : '. Press 1–4 to pilot a daughter. ', WIRE_CX, WIRE_CY + 20);   // glass read at draw time (D7)
       return;
     }
 
-    // Project vertices
     const cosY  = Math.cos(this._angle);
     const sinY  = Math.sin(this._angle);
     const verts = this._shape.vertices;
@@ -477,7 +420,6 @@ export class DaughterWireframe {
     for (let zi = 0; zi < zones.length; zi++) {
       const zone = zones[zi];
       let color  = ZONE_COLORS[zone.risk] || WC.COLOR_LINE;
-      // Status light zone: use dynamic colour from _statusLightMat
       if (zone.name === 'Status Light') color = this._statusColor;
       const highlighted = zi === this._zoneIndex;
       const edges       = zone.edges;

@@ -1,29 +1,20 @@
 /**
- * GuidanceDirector.js — graduated guidance depth + behavior-driven auto-tuning.
- *
- * Reward-first onboarding spine (.kilo/plans/new-player-onboarding-flow.md
- * §D.1 / §D.5). One capture-first spine serves every persona; only the AMOUNT
- * of coaching scales. This module owns that scale.
+ * @module systems/GuidanceDirector — graduated guidance depth + behavior-driven auto-tuning. One capture-first spine
+ * serves every persona; only the AMOUNT of coaching scales, and this module owns that scale.
  *
  * Levels (guidanceLevel):
  *   GUIDED   — new player: full comms + chips + idle help.
  *   POINTERS — middle: terse, ticker-only, undiscovered/struggling nudges.
  *   MINIMAL  — expert / veteran: no coaching; the action is the reward.
  *
- * The level is SEEDED from skill state (a veteran starts at MINIMAL) but is
- * PRIMARILY driven by in-session behavior:
- *   • Competence (de-escalate): an advanced action performed before the spine
- *     coaches it. A successful DEBRIS_CAPTURED before coaching is decisive →
- *     MINIMAL. Otherwise two distinct advanced actions drop one tier.
- *   • Struggle (re-escalate): idle-stall, empty-net click, denied fire, or a
- *     recent failure bumps the level back up one tier (capped by SkillsSystem's
- *     MAX_UNHEEDED_NUDGES so it self-corrects without nagging).
+ * SEEDED from skill state (a veteran starts at MINIMAL) but PRIMARILY driven by in-session behavior:
+ *   • Competence (de-escalate): an advanced action performed before the spine coaches it. A successful DEBRIS_CAPTURED
+ *     before coaching is decisive → MINIMAL. Otherwise two distinct advanced actions drop one tier.
+ *   • Struggle (re-escalate): idle-stall, empty-net click, denied fire, or a recent failure bumps the level up one tier
+ *     (capped by SkillsSystem's MAX_UNHEEDED_NUDGES so it self-corrects without nagging).
  *
- * A Settings toggle can pin the level (setOverride). Emits
- * Events.GUIDANCE_LEVEL_CHANGED on every transition. GAME_RESET clears
- * in-session state (override persists across reset only if re-applied).
- *
- * @module systems/GuidanceDirector
+ * A Settings toggle can pin the level (setOverride). Emits Events.GUIDANCE_LEVEL_CHANGED on every transition.
+ * GAME_RESET clears in-session state (override persists across reset only if re-applied).
  */
 
 import { eventBus } from '../core/EventBus.js';
@@ -39,7 +30,6 @@ const ORDER = [GuidanceLevels.GUIDED, GuidanceLevels.POINTERS, GuidanceLevels.MI
 
 export class GuidanceDirector {
   /**
-   * @param {object} deps
    * @param {object} [deps.skillsSystem] — for veteran seed (isVeteran)
    * @param {object} [deps.settingsManager] — for the persistent guidance pref
    */
@@ -73,7 +63,7 @@ export class GuidanceDirector {
   isGuided()   { return this.getLevel() === GuidanceLevels.GUIDED; }
   isMinimal()  { return this.getLevel() === GuidanceLevels.MINIMAL; }
 
-  /** Settings toggle: pin a level, or pass null to return to behavior-driven. */
+  /** Settings toggle: pin a level, or null to return to behavior-driven. */
   setOverride(level) {
     if (level !== null && !ORDER.includes(level)) return;
     this._override = level;
@@ -101,8 +91,7 @@ export class GuidanceDirector {
       if (typeof u === 'function') this._unsubs.push(u);
     };
 
-    // Competence signals — advanced actions that, performed ahead of coaching,
-    // demonstrate the player doesn't need hand-holding.
+    // Competence signals: advanced actions that, performed ahead of coaching, show the player needs no hand-holding.
     const competenceEvents = [
       Events.LASSO_FIRED,
       Events.AUTOPILOT_ENGAGE,
@@ -113,9 +102,7 @@ export class GuidanceDirector {
       on(e, () => this._noteCompetence(e));
     }
 
-    // A successful capture is the decisive opt-out (the returning player's
-    // "I've got this"). If it happens while the spine is NOT actively coaching
-    // a capture beat, jump straight to MINIMAL.
+    // A successful capture is the decisive opt-out; if the spine is NOT coaching a capture beat, jump straight to MINIMAL.
     on(Events.DEBRIS_CAPTURED, () => {
       if (!this._coachingActive) {
         this._capturedUnguided = true;
@@ -123,8 +110,7 @@ export class GuidanceDirector {
       }
     });
 
-    // Struggle signals — re-escalate one tier (SkillsSystem's unheeded-nudge cap
-    // still protects against nagging downstream).
+    // Struggle signals — re-escalate one tier.
     const struggleEvents = [
       Events.NET_EMPTY_CLICK,
       Events.LASSO_DENIED,
@@ -138,8 +124,7 @@ export class GuidanceDirector {
       on(Events.GAME_RESET, () => this.reset());
     }
 
-    // Settings toggle: a 'settings'-tagged GUIDANCE_LEVEL_CHANGED pins (or
-    // releases, level:null) the override. Ignore our own behavior-driven emits.
+    // A 'settings'-tagged GUIDANCE_LEVEL_CHANGED pins (or releases, level:null) the override. Ignore our own emits.
     on(Events.GUIDANCE_LEVEL_CHANGED, (d) => {
       if (!d || d.reason !== 'settings') return;
       this._override = d.level || null;
@@ -161,14 +146,12 @@ export class GuidanceDirector {
   noteStall() { this._reEscalate('idle-stall'); }
 
   _noteCompetence(evtKey) {
-    // Only counts as "ahead of coaching" when the spine isn't currently walking
-    // the player through this exact action.
+    // Counts as "ahead of coaching" only when the spine isn't walking the player through this exact action.
     if (this._coachingActive) return;
     this._competence.add(evtKey);
-    // Two distinct advanced actions → drop ONE tier (guards single stray press).
-    // `_stepDownFired` makes this one-shot per competence window: without it the
-    // 3rd and 4th distinct competence events would each re-satisfy `size >= 2`
-    // and step down again. A re-escalation (struggle/idle) reopens the window.
+    // Two distinct advanced actions → drop ONE tier (guards a single stray press). `_stepDownFired` makes it one-shot per
+    // competence window (else the 3rd and 4th distinct events would each re-satisfy `size >= 2`); a re-escalation
+    // (struggle/idle) reopens the window.
     if (this._competence.size >= 2 && !this._capturedUnguided && !this._stepDownFired) {
       this._stepDownFired = true;
       this._stepDown('two-advanced-actions');
@@ -181,8 +164,7 @@ export class GuidanceDirector {
   }
 
   _reEscalate(reason) {
-    // Reopen the competence step-down window: after the player struggles, a
-    // fresh pair of advanced actions may legitimately de-escalate again.
+    // Reopen the competence step-down window: after a struggle a fresh pair of advanced actions may de-escalate again.
     this._stepDownFired = false;
     const i = ORDER.indexOf(this._level);
     if (i > 0) this._setLevel(ORDER[i - 1], reason);
@@ -204,8 +186,7 @@ export class GuidanceDirector {
     this._capturedUnguided = false;
     this._stepDownFired = false;
     this._coachingActive = false;
-    // Note: _override is intentionally preserved across GAME_RESET — a player's
-    // explicit Settings choice should survive a new game until they change it.
+    // _override is intentionally preserved across GAME_RESET: an explicit Settings choice survives a new game.
     this._emitChange('reset');
   }
 

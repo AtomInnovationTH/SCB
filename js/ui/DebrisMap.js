@@ -1,27 +1,8 @@
 /**
- * DebrisMap.js — Full-Screen Debris Map (Strategic Orbital Survey)
- * Canvas2D modal that polls DebrisField.getDebrisClusters() every 5 seconds,
- * ranks the top 5 clusters by a composite score incorporating mass, variety,
- * ΔV cost, and conjunction risk, and lets the player engage autopilot toward
- * a selected cluster via Shift+A.
- *
- * S11(a) note (register item 51): the field is ONE orbital regime, so the
- * cluster list collapses to a single row (every piece classifies into the
- * regime's one (band × inclination) cell) — TRUE: the field really is one
- * regime; the multi-cluster ranking premise returns with
- * fields-as-destinations (the journey mechanism). The ranking machinery stays
- * load-bearing for that day and is untouched. Register item 97 (CLOSED):
- * scoreCluster priced the transfer against the cell's incCenter label rather
- * than the regime's actual plane — honest only where a language's incDeg sat
- * exactly on its cell centre (en/th/es/hi ≈ 36 m/s), inflated for ja
- * (238 m/s), and filtered out entirely for ta/pt (the map's empty state over
- * a co-planar field). The score now reads the cluster's avgIncRad — the
- * members' mean live plane, derived by getDebrisClusters beside avgAltKm —
- * so every language's row prices the true in-plane Hohmann (~36 m/s,
- * measured by tmp/i97-score.mjs).
- *
- * Full-screen strategic overlay toggled via M (or Backquote). Hidden by default.
- * @module ui/DebrisMap
+ * @module ui/DebrisMap — full-screen Canvas2D debris map: polls DebrisField.getDebrisClusters(), ranks the top 5 by
+ * mass, variety, ΔV cost and conjunction risk, and lets Shift+A engage autopilot toward the selected cluster.
+ * The field is ONE orbital regime, so the list collapses to a single row today; the ranking stays for
+ * fields-as-destinations. Hidden by default.
  */
 
 import { Constants } from '../core/Constants.js';
@@ -41,7 +22,7 @@ import { VisualLaw } from '../core/VisualLaw.js';
 
 const DM = Constants.DEBRIS_MAP;
 
-// Altitude band definitions for the orbital schematic (km)
+// Altitude bands of the orbital schematic (km).
 const ALT_BANDS = [
   { min: 200, max: 400, label: '200–400' },
   { min: 400, max: 600, label: '400–600' },
@@ -52,11 +33,9 @@ const ALT_BANDS = [
 
 export class DebrisMap {
   constructor() {
-    // --- Responsive canvas sizing ---
     this._W = Math.min(800, window.innerWidth - 80);
     this._H = Math.min(600, window.innerHeight - 80);
 
-    // --- Canvas setup (DPR-aware) ---
     const dpr = window.devicePixelRatio || 1;
     this.dpr = dpr;
 
@@ -83,7 +62,6 @@ export class DebrisMap {
     this._ctx.scale(dpr, dpr);
     this._ctx.imageSmoothingEnabled = true;
 
-    // --- Backdrop (semi-transparent click-to-close) ---
     this._backdrop = document.createElement('div');
     Object.assign(this._backdrop.style, {
       position: 'fixed',
@@ -96,7 +74,6 @@ export class DebrisMap {
     this._backdrop.addEventListener('click', () => this.hide());
     document.body.appendChild(this._backdrop);
 
-    // --- State ---
     this._visible = false;
     this._clusters = [];
     this._rankedClusters = [];   // top N scored
@@ -106,17 +83,15 @@ export class DebrisMap {
     this._player = null;
     this._autopilotSystem = null;
 
-    // Conjunction risk map: altitude band → alert count
+    // altitude band → alert count
     this._conjunctionAlerts = new Map();
 
-    // --- CP-3 launch-window state ---
     this._selectedWindow = null;      // transfer window for the highlighted cluster (display)
     this._committedCluster = null;    // cluster the player engaged autopilot toward
     this._committedWindow = null;     // its live transfer window (drives beep/comms)
     this._prevDepartIn = null;        // previous committed departIn for crossing detection
 
-    // --- EventBus subscriptions ---
-    // NO auto-show on ORBITAL_VIEW — this is a strategic modal, toggled by player
+    // NO auto-show on ORBITAL_VIEW: a strategic modal, toggled by the player.
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
       const gameplay = [
         GameStates.ORBITAL_VIEW,
@@ -127,10 +102,9 @@ export class DebrisMap {
     });
     eventBus.on(Events.GAME_RESET, () => this.hide());
 
-    // Accumulate conjunction alerts for risk scoring
     eventBus.on(Events.CONJUNCTION_WARNING, (data) => {
       if (data && data.distance != null) {
-        // Bucket by 100 km altitude bands
+        // Bucket by 100 km bands
         const altBand = Math.round((data.distance || 0) / 100) * 100;
         const prev = this._conjunctionAlerts.get(altBand) || 0;
         this._conjunctionAlerts.set(altBand, prev + 1);
@@ -140,17 +114,12 @@ export class DebrisMap {
       this._conjunctionAlerts.clear();
     });
 
-    // CP-3: the committed launch-window countdown ends when autopilot stops.
+    // The committed launch-window countdown ends when autopilot stops.
     eventBus.on(Events.AUTOPILOT_DISENGAGE, () => this._clearCommittedWindow());
     eventBus.on(Events.AUTOPILOT_ARRIVED, () => this._clearCommittedWindow());
     eventBus.on(Events.GAME_RESET, () => this._clearCommittedWindow());
   }
 
-  // ===========================================================================
-  // Public API
-  // ===========================================================================
-
-  /** Toggle map visibility. */
   toggle() {
     if (this._visible) {
       this.hide();
@@ -159,7 +128,6 @@ export class DebrisMap {
     }
   }
 
-  /** Show the debris map. */
   show() {
     this._visible = true;
     this._canvas.style.display = 'block';
@@ -167,41 +135,36 @@ export class DebrisMap {
     this._refreshClusters();  // immediate poll on open
   }
 
-  /** Hide the debris map. */
   hide() {
     this._visible = false;
     this._canvas.style.display = 'none';
     this._backdrop.style.display = 'none';
   }
 
-  /** @returns {boolean} Whether the map is currently visible. */
   isVisible() { return this._visible; }
 
-  /** Select next cluster in the ranked list. */
   selectNext() {
     if (this._rankedClusters.length === 0) return;
     this._selectedIndex = Math.min(this._selectedIndex + 1, this._rankedClusters.length - 1);
     this._emitSelection();
   }
 
-  /** Select previous cluster in the ranked list. */
   selectPrev() {
     if (this._rankedClusters.length === 0) return;
     this._selectedIndex = Math.max(this._selectedIndex - 1, 0);
     this._emitSelection();
   }
 
-  /** @returns {object|null} Currently highlighted cluster (with scoring metadata). */
+  /** @returns {object|null} The highlighted cluster (with scoring metadata). */
   getSelectedCluster() {
     return this._rankedClusters[this._selectedIndex] ?? null;
   }
 
-  /** Engage autopilot toward the currently selected cluster. */
   engageSelectedCluster() {
     const cluster = this.getSelectedCluster();
     if (!cluster || !this._autopilotSystem) return;
     this._autopilotSystem.engageCluster(cluster);
-    // CP-3: commit the launch-window countdown to this cluster.
+    // Commit the launch-window countdown to this cluster.
     if (Constants.isFeatureEnabled('CLUSTER_TRANSFER_WINDOW')) {
       this._committedCluster = cluster;
       this._committedWindow = null;
@@ -210,16 +173,11 @@ export class DebrisMap {
   }
 
   /**
-   * Shift+A "field center" helper (2026-06-14): re-rank clusters and engage
-   * autopilot toward the single highest-scored one (densest / highest-value =
-   * the debris-field center), regardless of which row is currently highlighted
-   * in the map. Works even when the map has never been opened (it polls on
-   * demand). Returns the engaged cluster (or null when there are none).
+   * Shift+A "field center": re-rank and engage autopilot toward the highest-scored cluster, whatever row is
+   * highlighted. Works when the map was never opened (polls on demand). Returns the cluster or null.
    * @returns {object|null}
    */
   engageBestCluster() {
-    // Refresh ranking on demand so the press doesn't depend on the map being
-    // open / recently polled.
     this._refreshClusters();
     if (this._rankedClusters.length === 0 || !this._autopilotSystem) return null;
     this._selectedIndex = 0;            // top-ranked = field center
@@ -235,7 +193,7 @@ export class DebrisMap {
 
   /**
    * Called every frame from the main game loop.
-   * @param {number} dt — frame delta in seconds
+   * @param {number} dt — seconds
    * @param {object} deps — { debrisField, player, autopilotSystem }
    */
   update(dt, deps) {
@@ -243,41 +201,30 @@ export class DebrisMap {
     this._player = deps.player;
     this._autopilotSystem = deps.autopilotSystem;
 
-    // CP-3: the committed-cluster countdown runs every frame, even when the
-    // map is closed — that's what makes "wait for the window" a real decision.
+    // The committed-cluster countdown runs every frame, even when the map is closed (makes "wait for the window"
+    // a real decision).
     this._trackCommittedWindow(dt);
 
     if (!this._visible) return;
 
-    // Poll clusters at configured interval
     this._pollTimer += dt;
     if (this._pollTimer >= DM.POLL_INTERVAL_S) {
       this._pollTimer = 0;
       this._refreshClusters();
     }
 
-    // CP-3: live transfer window for the highlighted cluster (planning readout)
     this._selectedWindow = this._computeWindow(this.getSelectedCluster());
 
     this._draw();
   }
 
-  // ===========================================================================
-  // CP-3 — Launch-window tracking
-  // ===========================================================================
-
-  /** Clear the committed-cluster countdown (autopilot stopped / reset). */
   _clearCommittedWindow() {
     this._committedCluster = null;
     this._committedWindow = null;
     this._prevDepartIn = null;
   }
 
-  /**
-   * Compute the transfer window for a cluster relative to the player's orbit.
-   * @param {object|null} cluster
-   * @returns {object|null} window (see LaunchWindow.computeTransferWindow) or null
-   */
+  /** @returns {object|null} the cluster's transfer window from the player's orbit (LaunchWindow.computeTransferWindow). */
   _computeWindow(cluster) {
     if (!cluster || !this._player) return null;
     if (!Constants.isFeatureEnabled('CLUSTER_TRANSFER_WINDOW')) return null;
@@ -292,10 +239,7 @@ export class DebrisMap {
     return computeTransferWindow(chaserKm, targetKm);
   }
 
-  /**
-   * Recompute the committed cluster's window each frame and fire the T-minus
-   * beep (once) and "window open" cue (once) as the countdown crosses thresholds.
-   */
+  /** Recompute the committed window each frame; fire the T-minus beep and "window open" cue once each. */
   _trackCommittedWindow(dt) {
     if (!this._committedCluster) { this._committedWindow = null; return; }
 
@@ -327,13 +271,8 @@ export class DebrisMap {
     this._prevDepartIn = win.departIn;
   }
 
-  // ===========================================================================
-  // Scoring (static for testability)
-  // ===========================================================================
-
   /**
-   * Score a single cluster relative to the player's orbit and conjunction state.
-   * Pure function — no side effects, fully testable.
+   * Score one cluster against the player's orbit and conjunction state. Pure.
    *
    * @param {object} cluster — cluster from DebrisField.getDebrisClusters()
    * @param {object} playerOrbitKm — player orbital elements with semiMajorAxis in km
@@ -341,13 +280,9 @@ export class DebrisMap {
    * @returns {object} cluster augmented with { dvMs, varietyBonus, conjRisk, reachable, score }
    */
   static scoreCluster(cluster, playerOrbitKm, conjAlerts) {
-    // Build a synthetic orbit for the cluster center (circular, at mean
-    // altitude). Register item 97: the plane is the members' mean live
-    // inclination (avgIncRad, derived by getDebrisClusters beside avgAltKm) —
-    // NOT the bucket label's centre (incCenter), which mispriced off-centre
-    // languages (ja a phantom 238 m/s; ta/pt filtered to the map's empty
-    // state over a co-planar field). The label remains the fallback for
-    // payload-less (hand-built/legacy) clusters.
+    // Synthetic circular orbit at the cluster's mean altitude. The plane is the members' mean live inclination
+    // (avgIncRad), NOT the bucket label's centre (incCenter), which mispriced off-centre languages. The label stays
+    // the fallback for hand-built clusters.
     const clusterOrbit = {
       semiMajorAxis: Constants.EARTH_RADIUS_KM + cluster.avgAltKm,
       inclination: cluster.avgIncRad ?? (degToRad(cluster.incCenter)),
@@ -356,19 +291,16 @@ export class DebrisMap {
       raan: 0,
     };
 
-    // totalDeltaV returns km/s; convert to m/s
+    // totalDeltaV returns km/s
     const dvKms = totalDeltaV(playerOrbitKm, clusterOrbit);
     const dvMs = dvKms * 1000;
 
-    // Variety bonus: count of distinct debris type categories present
     const varietyBonus = Object.keys(cluster.types).filter(k => cluster.types[k] > 0).length;
 
-    // Conjunction risk: untracked targets + active alerts in altitude band
     const untrackedCount = cluster.targets.filter(t => !t.tracked).length;
     const alertCount = DebrisMap._getAlertsInBand(cluster.altRange, conjAlerts);
     const conjRisk = untrackedCount * 0.5 + alertCount;
 
-    // Reachability gate
     const reachable = dvMs < DM.MAX_DV_MS;
 
     // Score = (totalMassKg × varietyBonus × reachable) / (ΔV_ms + conjRisk×100 + ε)
@@ -386,12 +318,7 @@ export class DebrisMap {
     };
   }
 
-  /**
-   * Count conjunction alerts overlapping an altitude range.
-   * @param {{ min: number, max: number }} altRange — km
-   * @param {Map} conjAlerts — altBand → count
-   * @returns {number}
-   */
+  /** Count of conjunction alerts whose band falls in `altRange` (km). */
   static _getAlertsInBand(altRange, conjAlerts) {
     let count = 0;
     for (const [band, n] of conjAlerts) {
@@ -400,17 +327,12 @@ export class DebrisMap {
     return count;
   }
 
-  // ===========================================================================
-  // Internal — cluster refresh
-  // ===========================================================================
-
-  /** Re-poll clusters from DebrisField and rank them. */
   _refreshClusters() {
     if (!this._debrisField || !this._player) return;
 
     this._clusters = this._debrisField.getDebrisClusters();
 
-    // Build player orbit in km for totalDeltaV
+    // Player orbit in km for totalDeltaV
     const playerOrbit = this._player.orbit || this._player.getOrbitalElements?.() || {};
     const playerOrbitKm = {
       ...playerOrbit,
@@ -424,17 +346,11 @@ export class DebrisMap {
       .sort((a, b) => b.score - a.score)
       .slice(0, DM.MAX_DISPLAY);
 
-    // Clamp selection index
     if (this._selectedIndex >= this._rankedClusters.length) {
       this._selectedIndex = Math.max(0, this._rankedClusters.length - 1);
     }
   }
 
-  // ===========================================================================
-  // Internal — canvas rendering
-  // ===========================================================================
-
-  /** Render the full-screen debris map. */
   _draw() {
     const ctx = this._ctx;
     const W = this._W;
@@ -442,7 +358,6 @@ export class DebrisMap {
 
     ctx.clearRect(0, 0, W, H);
 
-    // Semi-transparent background with rounded rect
     ctx.fillStyle = 'rgba(8, 12, 20, 0.94)';
     ctx.beginPath();
     this._roundRect(ctx, 0, 0, W, H, 8);
@@ -453,41 +368,33 @@ export class DebrisMap {
     ctx.lineWidth = 1;
     ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
 
-    // Layout: left column (60%) for cluster list, right column (40%) for schematic
+    // Left column (58%): cluster list; right: schematic
     const LEFT_W = Math.floor(W * 0.58);
     const RIGHT_W = W - LEFT_W;
     const RIGHT_X = LEFT_W;
 
-    // Vertical divider
     ctx.strokeStyle = 'rgba(255, 170, 0, 0.2)';
     ctx.beginPath();
     ctx.moveTo(LEFT_W, 30);
     ctx.lineTo(LEFT_W, H - 30);
     ctx.stroke();
 
-    // === LEFT COLUMN: Title + Cluster List ===
     this._drawLeftColumn(ctx, LEFT_W, H);
 
-    // === RIGHT COLUMN: Orbital Schematic ===
     this._drawRightColumn(ctx, RIGHT_X, RIGHT_W, H);
 
-    // === FOOTER ===
     this._drawFooter(ctx, W, H);
   }
 
-  /** Draw the left column: title bar + ranked cluster list. */
   _drawLeftColumn(ctx, W, H) {
-    // Title bar
     ctx.fillStyle = VisualLaw.COLORS.CAUTION;
     ctx.font = mono(14, 'bold');
     ctx.fillText('▸ DEBRIS MAP', 16, 22);
 
-    // Cluster count
     ctx.fillStyle = '#667788';
     ctx.font = mono(11);
     ctx.fillText(`${this._rankedClusters.length} ranked clusters`, 170, 22);
 
-    // Handle empty state
     if (this._rankedClusters.length === 0) {
       ctx.fillStyle = '#556677';
       ctx.font = mono(13);
@@ -496,7 +403,6 @@ export class DebrisMap {
       return;
     }
 
-    // Cluster rows
     const ROW_H = 80;
     const START_Y = 38;
 
@@ -505,7 +411,6 @@ export class DebrisMap {
       const y = START_Y + i * ROW_H;
       const selected = (i === this._selectedIndex);
 
-      // Selection highlight
       if (selected) {
         ctx.fillStyle = 'rgba(255, 170, 0, 0.12)';
         ctx.fillRect(6, y, W - 12, ROW_H - 6);
@@ -514,18 +419,16 @@ export class DebrisMap {
         ctx.strokeRect(6.5, y + 0.5, W - 13, ROW_H - 7);
       }
 
-      // Rank number
       ctx.fillStyle = selected ? '#ffcc44' : '#667788';
       ctx.font = mono(16, 'bold');
       ctx.fillText(`${i + 1}.`, 14, y + 20);
 
-      // Cluster name
       ctx.fillStyle = selected ? '#ffffff' : '#aabbcc';
       ctx.font = mono(12);
       const name = c.name.length > 30 ? c.name.slice(0, 28) + '…' : c.name;
       ctx.fillText(name, 40, y + 20);
 
-      // Stats line 1: count / mass / variety
+      // Stats: count / mass / variety, then ΔV / risk / score, then altitude range
       ctx.fillStyle = '#88aacc';
       ctx.font = mono(11);
       ctx.fillText(
@@ -533,7 +436,6 @@ export class DebrisMap {
         40, y + 37,
       );
 
-      // Stats line 2: ΔV / risk / score
       const dvColor = c.dvMs < 50 ? '#44ff88' : c.dvMs < 200 ? '#ffcc44' : '#ff6644';
       ctx.fillStyle = dvColor;
       ctx.font = mono(11);
@@ -547,7 +449,6 @@ export class DebrisMap {
       ctx.font = mono(11, 'bold');
       ctx.fillText(`SCORE ${c.score.toFixed(1)}`, 260, y + 54);
 
-      // Stats line 3: altitude range
       ctx.fillStyle = '#556677';
       ctx.font = mono(10);
       ctx.fillText(
@@ -556,15 +457,11 @@ export class DebrisMap {
       );
     }
 
-    // CP-3: transfer-window readout for the highlighted cluster, below the list
+    // Transfer-window readout for the highlighted cluster, below the list
     this._drawWindowReadout(ctx, W, H, START_Y + this._rankedClusters.length * ROW_H + 6);
   }
 
-  // ===========================================================================
-  // CP-3 — Launch-window rendering
-  // ===========================================================================
-
-  /** Format a duration in seconds as "mm:ss" or "h:mm:ss". */
+  /** Seconds as "mm:ss" or "h:mm:ss" ('∞' if not finite). */
   _fmtClock(seconds) {
     if (!Number.isFinite(seconds)) return '∞';
     const s = Math.max(0, Math.round(seconds));
@@ -575,15 +472,11 @@ export class DebrisMap {
     return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
   }
 
-  /**
-   * Draw the Depart / Arrive / ΔV readout + live countdown for the selected
-   * cluster's next Hohmann transfer window.
-   */
+  /** Depart / Arrive / ΔV readout + live countdown for the selected cluster's next Hohmann window. */
   _drawWindowReadout(ctx, W, H, y) {
     const cluster = this.getSelectedCluster();
     if (!cluster || y > H - 64) return;
 
-    // Divider
     ctx.strokeStyle = 'rgba(255, 170, 0, 0.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -609,9 +502,8 @@ export class DebrisMap {
       return;
     }
 
-    // D1: near-co-altitude clusters have a synodic period of YEARS and a trivial
-    // ΔV — the Hohmann countdown is meaningless. Show a "launch anytime"
-    // advisory and hide the T-minus / arrival clocks (keep ΔV for context).
+    // Near-co-altitude clusters have a synodic period of YEARS and a trivial ΔV, so the Hohmann countdown is
+    // meaningless: show a "launch anytime" advisory, hide the T-minus / arrival clocks (keep ΔV).
     const coOrbital = coOrbitalReadout(win);
     if (coOrbital) {
       ctx.font = mono(11);
@@ -657,16 +549,13 @@ export class DebrisMap {
     ctx.fillStyle = dvColor;
     ctx.fillText(`${win.dvTotal.toFixed(0)} m/s`, 230, y + 50);
 
-    // Periodicity hint — the teaching beat. (Co-orbital / infinite-synodic
-    // windows are handled by the launch-anytime early return above, so here the
-    // synodic is always a finite, meaningful sub-7-day period.)
+    // Periodicity hint (the teaching beat). Co-orbital windows returned above, so the synodic here is finite.
     ctx.fillStyle = '#556677';
     ctx.font = mono(10);
     const periodTxt = `next window every ${this._fmtClock(win.synodic)}. Space is periodic`;
     ctx.fillText(periodTxt, 14, y + 64);
   }
 
-  /** Draw a dashed transfer path from the player marker to the selected cluster arc. */
   _drawTransferPath(ctx, cx, cy, altToRadius, minAlt, maxAlt) {
     if (!Constants.isFeatureEnabled('CLUSTER_TRANSFER_WINDOW')) return;
     const cluster = this.getSelectedCluster();
@@ -686,7 +575,6 @@ export class DebrisMap {
     const tx = cx + cr * Math.cos(ca);
     const ty = cy + cr * Math.sin(ca);
 
-    // Dashed transfer arc (bowed via Earth-relative control point)
     ctx.save();
     ctx.strokeStyle = 'rgba(51, 221, 255, 0.55)';
     ctx.lineWidth = 1.5;
@@ -700,7 +588,6 @@ export class DebrisMap {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Arrival marker
     ctx.fillStyle = 'rgba(51, 221, 255, 0.9)';
     ctx.beginPath();
     ctx.arc(tx, ty, 3, 0, Math.PI * 2);
@@ -708,18 +595,15 @@ export class DebrisMap {
     ctx.restore();
   }
 
-  /** Draw the right column: orbital altitude schematic with debris density arcs. */
   _drawRightColumn(ctx, x, w, H) {
     const cx = x + w / 2;
     const cy = 30 + (H - 60) / 2;  // center vertically between title and footer
     const maxR = Math.min(w / 2 - 20, (H - 80) / 2 - 10);
 
-    // Title
     ctx.fillStyle = VisualLaw.COLORS.CAUTION;
     ctx.font = mono(11, 'bold');
     ctx.fillText('ORBITAL SURVEY', x + 10, 22);
 
-    // Draw Earth center
     const earthR = maxR * 0.2;
     ctx.fillStyle = 'rgba(60, 120, 180, 0.4)';
     ctx.beginPath();
@@ -735,7 +619,6 @@ export class DebrisMap {
     ctx.fillText('EARTH', cx, cy + 3);
     ctx.textAlign = 'left';
 
-    // Draw altitude band rings
     const minAlt = 200;
     const maxAlt = 2000;
     const altToRadius = (alt) => earthR + (alt - minAlt) / (maxAlt - minAlt) * (maxR - earthR);
@@ -754,10 +637,8 @@ export class DebrisMap {
       labelled.push({ label: band.label, r, side: i % 2 === 0 ? 'left' : 'right' });
     }
 
-    // Session S: band labels alternate sides (even bands right-aligned at cx − r − 3,
-    // odd bands left-aligned at cx + r + 3) and each side keeps the outer-wins guard —
-    // one measure per label; the rings sit 13-35 px apart for 45-58 px strings, so a
-    // same-side neighbour that would collide is skipped.
+    // Band labels alternate sides (even right-aligned at cx − r − 3, odd left-aligned at cx + r + 3); each side keeps
+    // an outer-wins guard (rings sit 13-35 px apart for 45-58 px strings), skipping a colliding same-side neighbour.
     ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
     ctx.font = mono(10);
     let leftEdgeTaken = -Infinity;
@@ -784,24 +665,21 @@ export class DebrisMap {
     }
     ctx.textAlign = 'left';
 
-    // Draw cluster indicators as arcs on the schematic
     for (let i = 0; i < this._rankedClusters.length; i++) {
       const c = this._rankedClusters[i];
       const selected = (i === this._selectedIndex);
 
-      // Position arc at cluster's altitude
       const meanAlt = (c.altRange.min + c.altRange.max) / 2;
       const r = altToRadius(meanAlt);
 
-      // Arc angular position based on inclination (spread clusters visually)
+      // Angular position from inclination, spread by rank
       const incRad = degToRad(c.incCenter);
       const startAngle = incRad - 0.4 - i * 0.15;
       const endAngle = incRad + 0.4 + i * 0.15;
 
-      // Arc thickness based on cluster count (more objects = thicker)
       const arcWidth = Math.min(8, 2 + c.count * 0.3);
 
-      // Color by score ranking with conjunction risk influence
+      // Colour by conjunction risk
       let arcColor;
       if (selected) {
         arcColor = 'rgba(255, 200, 50, 0.9)';
@@ -819,7 +697,6 @@ export class DebrisMap {
       ctx.arc(cx, cy, r, startAngle, endAngle);
       ctx.stroke();
 
-      // Cluster number label near the arc
       const labelAngle = (startAngle + endAngle) / 2;
       const lx = cx + (r + 12) * Math.cos(labelAngle);
       const ly = cy + (r + 12) * Math.sin(labelAngle);
@@ -830,7 +707,6 @@ export class DebrisMap {
       ctx.fillText(`${i + 1}`, lx, ly + 3);
       ctx.textAlign = 'left';
 
-      // Selected cluster highlight ring
       if (selected) {
         ctx.strokeStyle = 'rgba(255, 200, 50, 0.3)';
         ctx.lineWidth = arcWidth + 4;
@@ -840,7 +716,6 @@ export class DebrisMap {
       }
     }
 
-    // Player position indicator (small green diamond)
     if (this._player) {
       const playerOrbit = this._player.orbit || this._player.getOrbitalElements?.() || {};
       const playerAltKm = (playerOrbit.semiMajorAxis || 0) / Constants.SCENE_SCALE - Constants.EARTH_RADIUS_KM;
@@ -867,10 +742,8 @@ export class DebrisMap {
       }
     }
 
-    // CP-3: transfer-path indicator from player to the selected cluster
     this._drawTransferPath(ctx, cx, cy, altToRadius, minAlt, maxAlt);
 
-    // Legend
     const legendY = H - 55;
     ctx.fillStyle = '#556677';
     ctx.font = mono(10);
@@ -886,11 +759,9 @@ export class DebrisMap {
     ctx.fillRect(x + 10, legendY + 17, 6, 6);
   }
 
-  /** Draw footer keybind hints. */
   _drawFooter(ctx, W, H) {
     const footerY = H - 14;
 
-    // Footer background bar
     ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
     ctx.fillRect(0, H - 28, W, 28);
 
@@ -899,7 +770,6 @@ export class DebrisMap {
     ctx.fillText('[`] close   [,/.] select   [Shift+A] engage autopilot   [Esc] close', 16, footerY);
   }
 
-  /** Emit cluster selection event for external consumers. */
   _emitSelection() {
     const cluster = this.getSelectedCluster();
     if (cluster) {
@@ -911,7 +781,6 @@ export class DebrisMap {
     }
   }
 
-  /** Helper: draw a rounded rectangle path. */
   _roundRect(ctx, x, y, w, h, r) {
     ctx.moveTo(x + r, y);
     ctx.lineTo(x + w - r, y);
@@ -924,7 +793,6 @@ export class DebrisMap {
     ctx.quadraticCurveTo(x, y, x + r, y);
   }
 
-  /** Clean up DOM + events. */
   dispose() {
     this._canvas?.remove();
     this._backdrop?.remove();

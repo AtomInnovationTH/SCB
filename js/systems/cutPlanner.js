@@ -1,17 +1,12 @@
 /**
- * cutPlanner.js — pure debris cut planner (cutting step 1).
+ * @module systems/cutPlanner — pure debris cut planner: how a captured debris body is chopped into pot-sized pieces.
  *
- * Decides how a captured debris body is chopped into pot-sized pieces:
- * D1 = A (cut every seam; slice any part still too big), outer parts first,
- * lightest first, main body last, and the part the ship is holding very last
- * (you cannot cut away what you are gripping). Rulings and chop order are
- * ratified in `docs/DECISIONS.md` §12.
+ * Cut every seam; slice any part still too big; outer parts first, lightest first, main body last, and the part the
+ * ship is holding very last (you cannot cut away what you are gripping). Rulings and chop order are ratified in
+ * `docs/DECISIONS.md` §12.
  *
- * PURE: no THREE, no `eventBus`, no `Math.random`, no `Constants`. The only
- * import is the wireframe zone table (same precedent as `LassoSystem.js`).
- * Zone data is read, never mutated; results share no objects with the input.
- *
- * @module systems/cutPlanner
+ * PURE: no THREE, no `eventBus`, no `Math.random`, no `Constants`. The only import is the wireframe zone table (same
+ * precedent as `LassoSystem.js`). Zone data is read, never mutated; results share no objects with the input.
  */
 
 import { getWireframeData } from '../ui/DebrisWireframe.js';
@@ -48,8 +43,8 @@ export function planCuts(debris, { maxPieceKg, holdZone } = {}) {
     throw new RangeError(`planCuts: maxPieceKg must be > 0, got ${maxPieceKg}`);
   }
 
-  // Zones come from the wireframe table (unknown types fall back to
-  // missionDebris). Read-only: never mutated, never shared into the result.
+  // Zones come from the wireframe table (unknown types fall back to missionDebris). Read-only: never mutated, never
+  // shared into the result.
   const zones = getWireframeData(debris.type, debris.id).zones;
 
   if (holdZone !== null && holdZone !== undefined) {
@@ -68,7 +63,7 @@ export function planCuts(debris, { maxPieceKg, holdZone } = {}) {
     ? debris.salvage
     : null;
 
-  // ── No cut needed (or mass is nonsense): one piece listing every zone ─────
+  // No cut needed (or mass is nonsense): one piece listing every zone
   if (whole) {
     return {
       cut: false,
@@ -92,15 +87,13 @@ export function planCuts(debris, { maxPieceKg, holdZone } = {}) {
     };
   }
 
-  // ── Per-zone part counts ──────────────────────────────────────────────────
   const plan = zones.map((z, i) => {
     const zoneMass = mass * z.massPercent / 100;
     const parts = Math.max(1, Math.ceil(zoneMass / maxPieceKg - PARTS_EPS));
     return { zoneName: z.name, zoneIndex: i, zoneMass, parts };
   });
 
-  // Main body: the FIRST zone with the largest massPercent. Held zone:
-  // holdZone if given, else the main body.
+  // Main body: the FIRST zone with the largest massPercent. Held zone: holdZone if given, else the main body.
   let mainIdx = 0;
   for (let i = 1; i < zones.length; i++) {
     if (zones[i].massPercent > zones[mainIdx].massPercent) mainIdx = i;
@@ -109,9 +102,8 @@ export function planCuts(debris, { maxPieceKg, holdZone } = {}) {
     ? zones.findIndex((z) => z.name === holdZone)
     : mainIdx;
 
-  // Chop order: every other zone first (lightest first, ties by zone order),
-  // then the main body (if it isn't the held zone), then the held zone last.
-  // A zone's parts stay together.
+  // Chop order: every other zone first (lightest first, ties by zone order), then the main body (if it isn't the held
+  // zone), then the held zone last. A zone's parts stay together.
   const order = plan
     .filter((p) => p.zoneIndex !== mainIdx && p.zoneIndex !== heldIdx)
     .sort((a, b) => (a.zoneMass - b.zoneMass) || (a.zoneIndex - b.zoneIndex));
@@ -150,11 +142,7 @@ export function planCuts(debris, { maxPieceKg, holdZone } = {}) {
   return { cut: true, cuts, seamCuts: cuts - throughCuts, throughCuts, pieces };
 }
 
-/**
- * Deep-copy a salvage object for the uncut case (no scaling, no sharing).
- * @param {object|null} salvage
- * @returns {object|null}
- */
+/** Deep-copy a salvage object for the uncut case (no scaling, no sharing). */
 function copySalvage(salvage) {
   if (!salvage) return null;
   const out = {};
@@ -164,17 +152,13 @@ function copySalvage(salvage) {
 }
 
 /**
- * Scale salvage across the pieces: the six scalar fields and each metal's
- * `amount` and `value` follow the piece's mass fraction; all other metal
- * fields are copied. The LAST piece absorbs the residue per field, so every
- * field conserves exactly. Missing salvage leaves every piece at `null`.
- *
- * @param {object|null} salvage - the input's salvage (read-only).
- * @param {object[]} pieces - chop-ordered pieces (mutated: `.salvage` set).
- * @param {number} mass - the whole body's mass.
+ * Scale salvage across the pieces: the six scalar fields and each metal's `amount` and `value` follow the piece's mass
+ * fraction; all other metal fields are copied. The LAST piece absorbs the residue per field, so every field conserves
+ * exactly. Missing salvage leaves every piece at `null`. `pieces` are chop-ordered and mutated (`.salvage` set);
+ * `salvage` is read-only; `mass` is the whole body's mass.
  */
 function fillSalvage(salvage, pieces, mass) {
-  if (!salvage) return; // pieces keep salvage: null
+  if (!salvage) return;
 
   const scalarSums = new Map(); // field -> allocated so far
   const metalSums = new Map(); // metal index -> { amount, value } allocated so far

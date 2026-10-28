@@ -1,48 +1,21 @@
 /**
- * GestureSplash.js — the first-run gesture MEMO: two lines, one gesture each,
- * a 3 s splash that names PINCH and HOLD on glass (WHEEL and N on the
- * desktop) after the intro lands on the flying floor, then gets out of
- * the way (Session O, plan D4, owner 2026-09-07: "holding an iPad
- * needs no teaching; pinch and hold do"). It replaces the six-row TOUCH MAP /
- * KEY MAP checklist card (js/ui/hud/TouchMapPane.js, deleted in the same
- * commit) in the hub's exact wiring slot — but it is a MEMO, not a
- * teaching card: no header, no counter, no SKIP chip, no rows ticking.
+ * @module ui/GestureSplash — the first-run gesture MEMO: a 3 s splash naming ZOOM (pinch on glass, WHEEL on desktop)
+ * once the intro lands on the flying floor. A memo, not a teaching card: no header, counter, SKIP chip or rows.
+ * owner 2026-09-07: holding an iPad needs no teaching; pinch and hold do.
  *
- * u2-one-voice D6 (2026-10-18): ZOOM is the only row (the N -> NET row repeated the net
- * chip); in mission 1 it waits for the 3rd catch (`deps.quiet`) so the arrival stays about
- * the wings; before the show only a ZOOM input suppresses it, after the show any input hides it.
+ * Flow: shows on the first tick where `deps.floor()` reads 2 (null while the intro flyby / a ride is in flight) and
+ * `deps.quiet()` is false (mission 1 waits for the 3rd catch so the arrival stays about the wings); records
+ * `shownAt`; hides 3 s later or on the first player input (CAMERA_ZOOM_INPUT, HUD_TARGET_CLICK, LASSO_FIRED,
+ * NET_FIRED). Before the show only a ZOOM input suppresses it. Either way the store is marked skipped ONCE, so
+ * `isFirstRun()` reads false from then on. Hiding = 300 ms CSS fade (instant under reduced motion), then
+ * `data-splash-done` + display none on the next update tick after the fade window (measured on `nowMs`).
  *
- * The splash omits a player WHO ALREADY DID the grammar: it SHOWS on the
- * first tick where `deps.floor()` reads 2 (the getter returns null while
- * the intro flyby is in flight / a ride is riding — so the splash lands only
- * after the intro settled on F2), records `shownAt`, and hides 3 s later
- * OR on the FIRST player input — witnessed on the bus exactly like the retired
- * card did (CAMERA_ZOOM_INPUT, HUD_TARGET_CLICK, LASSO_FIRED, NET_FIRED);
- * a pre-show input suppresses the show outright (a player who already
- * pinched needs no teaching) — either way the store is marked skipped ONCE,
- * so `isFirstRun()` reads false from there on and a returning player never
- * sees it again. Hiding = a 300 ms CSS fade through the injected style
- * (instant under reduced motion), then `data-splash-done` + display none
- * on the NEXT update tick after the fade window — measured on the `nowMs`
- * passed to update, no timer; nobody removes the node.
+ * LIFECYCLE. The hub builds it for a FIRST RUN only (inside its LADDER gate); INERT (builds and subscribes
+ * nothing) when `store.isFirstRun()` is false. Constructible headless: every dep optional, nothing thrown.
  *
- * LIFECYCLE. The hub constructs the splash for a FIRST RUN only (inside its
- * LADDER gate; a veteran's boot builds nothing); the splash is INERT —
- * builds nothing, subscribes nothing — when `store.isFirstRun()` is false.
- *
- * Laws (the retired TouchMapPane header's, Session O amendment): DOM
- * fonts through var(--font-mono) only; tabular numerals; uppercase small
- * labels, 0.08 em letter-spacing; muted white/green from VisualLaw
- * (LABEL muted by opacity for the labels, PLAYER for the hairline); NO
- * pictographic glyph (the arrow is the allowed Arrows block, written as an
- * escape); no floor NAME anywhere; no layout reads; no innerHTML; no
- * timers / rAF (timing from the nowMs passed to update); no window /
- * document listeners (the four bus subscriptions are the only edges); never
- * reads Constants; never touches the DOM at import time; constructible
- * headless (no document, no storage: every dep optional, every method
- * callable, nothing thrown).
- *
- * @module ui/GestureSplash
+ * Laws: DOM fonts through var(--font-mono) only; uppercase labels, 0.08 em letter-spacing; muted white/green from
+ * VisualLaw; NO pictographic glyph (the arrow is written as an escape); no floor NAME; no layout reads; no
+ * innerHTML; no timers / rAF; no window / document listeners; never reads Constants; no DOM at import time.
  */
 
 import { eventBus } from '../core/EventBus.js';
@@ -53,44 +26,40 @@ import { GestureHints } from './hud/GestureHints.js';
 /** The root element id (the attention probe counts it as a transient). */
 export const GESTURE_SPLASH_ID = 'hud-gesture-splash';
 
-/** The injected stylesheet's id (one <style>, injected once per document). */
+/** The injected stylesheet's id (one <style> per document). */
 export const GESTURE_SPLASH_STYLE_ID = 'gesture-splash-style';
 
-/** The column the splash rides in (its LAST child, the retired card's slot). */
+/** The column the splash rides in (as its LAST child). */
 export const GESTURE_SPLASH_PARENT_ID = 'hud-left-column';
 
-/** How long the memo stays once shown (by nowMs, no timer). */
+/** How long the memo stays once shown (by nowMs, no timer), ms. */
 export const SPLASH_MS = 3000;
 
-/** The fade window (in + out) — the show fades in via a finite keyframe, the
- *  hide fades out via a transition; instant under reduced motion (CSS only). */
+/** The fade window (in + out), ms; instant under reduced motion (CSS only). */
 export const FADE_MS = 300;
 
 /** The arrow literal, shared by the glass and desktop labels (one grammar). */
 const ARROW = '\u2192';
 
 /**
- * The row: ZOOM only (u2-one-voice D6 - the N -> NET row went: it repeated the
- * net chip). The glass label REUSES GestureHints TABLE's chip; the desktop label
- * names the key. Frozen: read at build time, nothing may edit them.
+ * The row: ZOOM only (an N -> NET row would repeat the net chip). The glass label REUSES the GestureHints TABLE
+ * chip; the desktop label names the key.
  *
  * @type {ReadonlyArray<Readonly<{glass:string, desktop:string}>>}
  */
 export const ROWS = Object.freeze([
-  // Ladder reorder rev 3 (Task 15): Equal / Minus now name the HUD-pane ladder
-  // (`− / + → HUD PANES`); the pinch-zoom chip is the numpad zoom keys' row.
+  // Equal / Minus name the HUD-pane ladder, so the pinch-zoom chip is the numpad zoom keys' row.
   Object.freeze({ glass: GestureHints.TABLE.NumpadAdd.chip, desktop: `WHEEL ${ARROW} ZOOM` }),
 ]);
 
-/** The four bus witnesses (the retired card's four; the FIRST one witnessed
- *  ends the memo (or suppresses it outright, before the show). */
+/** The four bus witnesses; the FIRST one ends the memo (or suppresses it, before the show). */
 const INPUT_EVENTS = Object.freeze([
   'CAMERA_ZOOM_INPUT', 'HUD_TARGET_CLICK', 'LASSO_FIRED', 'NET_FIRED',
 ]);
 
 /** The fade-out toggle (set at hide; the done bit follows a fade window later). */
 const HIDING_ATTR = 'data-splash-hiding';
-/** The terminal bit (display none; written on the tick after the fade window). */
+/** The terminal bit (display none). */
 const DONE_ATTR = 'data-splash-done';
 
 export class GestureSplash {
@@ -104,7 +73,7 @@ export class GestureSplash {
    * @param {object|null} [deps.bus]     event bus with on(event, fn) → unsubscribe (default: eventBus; null ⇒ no bus witnesses).
    * @param {object}   [deps.events]     the Events name table (default: Events).
    * @param {function} [deps.floor]      () → the current floor (2 is the show floor; null while the intro / a ride is in flight).
-   * @param {function} [deps.quiet]      () → true while the memo should wait (u2-one-voice D6: mission 1 before the 3rd catch). Absent ⇒ never quiet.
+   * @param {function} [deps.quiet]      () → true while the memo should wait (mission 1 before the 3rd catch). Absent ⇒ never quiet.
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -124,31 +93,24 @@ export class GestureSplash {
     this._hidden = false;
     this._done = false;
     this._inert = !this._firstRun();              // not a first run: builds nothing, subscribes nothing, never ticks
-    this._shownAt = null;                 // the tick clock the reveal landed (null = not yet shown)
+    this._shownAt = null;                 // tick clock at reveal (null = not yet shown)
     this._hideAt = null;                  // a bus hide has no clock: stamped on the next update()
 
     if (!this._inert) this._subscribe();
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
   /**
-   * The per-frame tick (the hub calls it once per drawn frame). It shows on
-   * the first tick where deps.floor() reads 2 (nothing before — the root is
-   * built at reveal, so the intro's frames never pop it), records shownAt,
-   * hides SPLASH_MS of nowMs later, and — after a hide — advances the fade
-   * to its done bit (the tick after the window, measured on nowMs; nothing
-   * further is written).
+   * The per-frame tick: shows on the first tick where deps.floor() reads 2 (the root is built at reveal, so the
+   * intro's frames never pop it), hides SPLASH_MS of nowMs later, then advances the fade to the done bit.
    * @param {number} [nowMs] the frame clock; falls back to deps.now(). No clock ⇒ no-op.
    */
   update(nowMs) {
     if (this._disposed || this._done || this._inert) return;
-    let t = (nowMs == null || nowMs === '') ? NaN : Number(nowMs);   // null is unknown, never 0 (the retired card's rule)
+    let t = (nowMs == null || nowMs === '') ? NaN : Number(nowMs);   // null is unknown, never 0
     if (!Number.isFinite(t) && this._now) t = Number(this._now());
     if (!Number.isFinite(t)) return;
 
-    // A hide in flight: after the fade window the node sleeps (done bit, display
-    // none; no further DOM writes anywhere).
+    // A hide in flight: after the fade window the node sleeps (done bit; no further DOM writes).
     if (this._hidden) {
       if (this._hideAt === null) { this._hideAt = t; return; }     // a bus hide: stamp at the next tick
       if (t - this._hideAt >= FADE_MS) this._finish();
@@ -158,7 +120,7 @@ export class GestureSplash {
     if (this._shownAt === null) {
       const floor = this._readFloor();
       if (floor !== 2) return;
-      if (this._readQuiet()) return;      // D6: the wings are the job at the arrival - wait for a calm moment
+      if (this._readQuiet()) return;      // the wings are the job at the arrival: wait for a calm moment
       this._shownAt = t;
       this._build();
       return;
@@ -182,8 +144,6 @@ export class GestureSplash {
     }
     this._root = null;
   }
-
-  // ── Show / hide ────────────────────────────────────────────────────────────
 
   /** @private Append the root as the LAST child of `parent` (headless: nothing). */
   _build() {
@@ -282,9 +242,8 @@ export class GestureSplash {
     for (const name of INPUT_EVENTS) {
       const key = E[name];
       if (!key) continue;
-      // D6: before the show only a ZOOM input suppresses (a player who already
-      // zoomed needs no zoom lesson); a net / click before the memo is no reason
-      // to skip it. After the show any input hides it, as before.
+      // Before the show only a ZOOM input suppresses (a player who already zoomed needs no zoom lesson);
+      // after the show any input hides it.
       const onEvent = () => {
         if (this._shownAt === null && name !== 'CAMERA_ZOOM_INPUT') return;
         this._hide();
@@ -302,8 +261,6 @@ export class GestureSplash {
     }
     this._unsubs = [];
   }
-
-  // ── Reads (every one guarded) ──────────────────────────────────────────────
 
   /** @private store.isFirstRun() guarded (no store ⇒ true; a throw ⇒ true:the splash may show). */
   _firstRun() {
@@ -329,14 +286,9 @@ export class GestureSplash {
     }
   }
 
-  // ── Terminal ────────────────────────────────────────────────────────────────
-
   /**
-   * @private End the memo: the FIRST player input (bus, no clock) or the
-   * SPLASH_MS expiry (the tick clock). The store is marked skipped exactly
-   * once (isFirstRun reads false from here on; the hub's gate closes — a
-   * returning player never sees it again); the listeners are released; the
-   * root fades out (hiding bit; the done bit follows a fade window later).
+   * @private End the memo: the FIRST player input (bus, no clock) or the SPLASH_MS expiry (tick clock).
+   * Marks the store skipped exactly once, releases the listeners, fades the root out (hiding bit).
    * @param {number} [t] the tick clock, null from a bus witness (stamped on the next update).
    */
   _hide(t) {
@@ -345,7 +297,7 @@ export class GestureSplash {
     this._unsubscribe();
     const s = this._store;
     if (s && typeof s.markSkipped === 'function') {
-      try { s.markSkipped(); } catch (_e) { /* the store swallows its own storage faults;a stub's bug is not the splash's */ }
+      try { s.markSkipped(); } catch (_e) { /* the store swallows its own storage faults */ }
     }
     this._hideAt = (t !== null && Number.isFinite(t)) ? t : null;
     if (this._root && this._root.setAttribute) {
@@ -353,7 +305,7 @@ export class GestureSplash {
     }
   }
 
-  /** @private The terminal bit: display none + stop (no further DOM writes anywhere). */
+  /** @private The terminal bit: display none + stop (no further DOM writes). */
   _finish() {
     this._done = true;
     if (this._root && this._root.setAttribute) {

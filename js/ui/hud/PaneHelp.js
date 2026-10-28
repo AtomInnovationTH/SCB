@@ -1,39 +1,21 @@
 /**
- * PaneHelp.js — "what is this pane?" help affordance for every HUD pane header
- * (Zoom Ladder Wave 4, docs/ladder/08-workbench.md §11: "HUD `data-help`
- * mechanism + 9 PLAYBOOK entries + the `[?]` deep link").
+ * PaneHelp.js — "what is this pane?" help affordance for every HUD pane header.
  *
- * Every covered pane (header where one exists, stable root where none does)
- * carries `data-help="<codexId>"` pointing at a REAL Tech Library entry.
- * ONE delegated handler set on the document — the glossaryDom pattern, never
- * per-element listeners — serves all of them:
+ * Every covered pane (header where one exists, stable root where none does) carries
+ * `data-help="<codexId>"` pointing at a REAL Tech Library entry. ONE delegated handler set on the
+ * document (the glossaryDom pattern, never per-element listeners) serves all of them:
  *
- *   • hover  → after 120 ms the pane header brightens (`pane-help-hot`);
- *              after 400 ms ONE reused tooltip shows the entry's `shortText`
- *              plus the pane's toggle key (7/9/0 family, where applicable) and
- *              its pane-density rung (the −/+ ladder position).
- *              (08-workbench §2 Motion: "Hover: 120 ms delay …; tooltip = the
- *              entry's shortText after 400 ms.")
- *   • click  → CODEX_OPEN_ENTRY deep link to the entry (main.js routes it to
- *              CodexViewerUI.openEntry). Clicks on interactive descendants
- *              (glossary terms, fold toggles, sort buttons, target rows, the
- *              Discoveries header toggle) keep their own behavior.
- *   • touch  → long-press = hover (gated behind the house TouchControls.detect()
- *              real-touch detection); a plain tap still deep-links. The tooltip
- *              lingers briefly after release so it can be read.
+ *   • hover  → after 120 ms the header brightens (`pane-help-hot`); after 400 ms ONE reused tooltip shows
+ *              the entry's `shortText` plus the pane's toggle key and density rung (08-workbench §2 Motion).
+ *   • click  → CODEX_OPEN_ENTRY deep link (main.js routes it to CodexViewerUI.openEntry). Clicks on
+ *              interactive descendants (INTERACTIVE_GUARD) keep their own behavior.
+ *   • touch  → long-press = hover (gated behind TouchControls.detect()); a plain tap still deep-links.
  *
- * G1: no per-frame DOM churn — every write here is event-driven and the
- * tooltip is one reused element. Tagging is idempotent (rescan() only writes
- * missing attributes); lazily-built ladder panes (rail / transfer windows /
- * tactical approach mount on first show) are picked up by a throttled
- * rescan-on-miss inside the delegated hover/touch handlers.
+ * G1: no per-frame DOM churn: every write is event-driven, the tooltip is one reused element, tagging is
+ * idempotent, and lazily-built ladder panes are picked up by a throttled rescan-on-miss in the handlers.
  *
- * Tunables live in-module (house rule — never FloorContract/Constants); the
- * hover/tooltip numbers reuse 08-workbench §2.
- *
- * Node-safe: importing this file touches no window/document. All DOM work is
- * inside install()/rescan()/handlers, every step guarded, so the Node suite
- * drives it through minimal shims (test-PaneHelp.js).
+ * Tunables live in-module (never FloorContract/Constants).
+ * Node-safe: importing touches no window/document; the Node suite drives it through shims (test-PaneHelp.js).
  *
  * @module ui/hud/PaneHelp
  */
@@ -43,11 +25,7 @@ import { Events } from '../../core/Events.js';
 import { TouchControls } from '../TouchControls.js';
 import { clamp } from '../../core/MathUtil.js';
 
-/**
- * Tunables (module-local, house rule). Hover + tooltip reuse the 08-workbench
- * §2 Motion numbers; the long-press threshold matches the house tap ceiling
- * (MotherCallouts treats > 400 ms as a long-press, not a tap).
- */
+/** Tunables. Hover + tooltip are the 08-workbench §2 Motion numbers. */
 export const HELP_TUNE = {
   HOVER_DELAY_MS: 120,    // §2: hover cue (brighten) after 120 ms
   TOOLTIP_DELAY_MS: 400,  // §2: tooltip = shortText after 400 ms
@@ -59,26 +37,16 @@ export const HELP_TUNE = {
 };
 
 /**
- * The pane → codex table (SSOT). Every HUD pane with a header is listed here;
- * `selector` targets the header element where one exists and the stable pane
- * root where the pane has none (or rewrites its innerHTML wholesale —
- * conjunction header, transfer windows, tactical approach).
+ * The pane → codex table (SSOT). `selector` targets the header element where one exists and the stable
+ * pane root where the pane has none (or rewrites its innerHTML wholesale).
  *
- * key:    the pane's toggle key from the 5/6/7/8/9/0 display-toggle family
- *         (null where the family has no key for this pane).
- * rung:   static fallback copy used when the live ladder getter is absent
- *         or the row's rungId is unknown (today's behaviour). Placement
- *         notes for panes outside the ladder stay here (the rail never
- *         hides — D7; floor instruments belong to their zoom level).
- * rungId: the pane-density ladder id this row belongs to. Composite
- *         MEMBERS use the member id (`discoveries`, `pin`, …), not the
- *         composite id; the DETAIL slider and floor instruments omit it.
- *         Live tooltip text is derived on each render (plan
- *         1788867799156 Task 16) so `?ladder=0` (10 rungs) and the
- *         14-rung gate both read right.
+ * key:    the pane's toggle key from the 5/6/7/8/9/0 family (null where there is none).
+ * rung:   static fallback copy when the live ladder getter is absent or the rungId is unknown.
+ * rungId: the pane-density ladder id. Composite MEMBERS use the member id (`discoveries`, `pin`, …), not the
+ *         composite id; the DETAIL slider and floor instruments omit it. Live text is derived on each render
+ *         so `?ladder=0` (10 rungs) and the 14-rung gate both read right.
  *
- * test-PaneHelp.js walks this table against data/codex.json — a typo'd
- * codexId fails the suite.
+ * test-PaneHelp.js walks this table against data/codex.json — a typo'd codexId fails the suite.
  */
 export const PANE_HELP = [
   { pane: 'comms log',          selector: '#hud-comms-panel',                        codexId: 'pane_comms_log',          key: '7',  rungId: 'comms',        rung: 'Comms (rung 4/14)' },
@@ -94,35 +62,22 @@ export const PANE_HELP = [
   { pane: 'ladder rail',        selector: '#ladder-rail',                            codexId: 'pane_ladder_rail',        key: null, rung: 'always shown' },
   { pane: 'transfer windows',   selector: '#ladder-transfer-windows',                codexId: 'pane_transfer_windows',   key: null, rung: 'route-planning instrument' },
   { pane: 'tactical approach',  selector: '#ladder-prox-context',                    codexId: 'pane_tactical_approach',  key: null, rung: 'approach instrument' },
-  // Session U (plan 1788954873769, ONE workbench pane): both headers live inside
-  // the one drawer root `#ladder-workbench` — the REFIT block (F1 only) and the
-  // SPECS head. codexIds, keys and rungs unchanged; rescan() re-tags after the
-  // engines' innerHTML repaints as before.
+  // Both headers live inside the one drawer root `#ladder-workbench`: the REFIT block (F1 only) and the SPECS head.
   { pane: 'refit',              selector: '#ladder-workbench .refit-header',         codexId: 'pane_refit',              key: null, rung: 'refit instrument' },
   { pane: 'library',            selector: '#ladder-workbench .library-header',       codexId: 'pane_library',            key: null, rung: 'SPECS instrument' },
-  // Rev-3 DETAIL slider (plan 1788867799156 Task 15). Reuses pane_ladder_rail —
-  // the closest existing SPECS page. No rungId: the slider is not a ladder pane.
+  // DETAIL slider: reuses pane_ladder_rail (closest SPECS page). No rungId: not a ladder pane.
   { pane: 'detail slider',      selector: '#ladder-detail-slider',                   codexId: 'pane_ladder_rail',        key: null, rung: 'slider 0 = empty view / scene only, right end = every pane; drag or − / +' },
 ];
 
-/**
- * Clicks on these keep their own behavior (never hijacked into a deep link):
- * glossary terms already deep-link themselves; fold toggles (short screens) fold / unfold; the sort
- * button sorts; target rows select; the Discoveries header toggles the tree.
- */
+/** Clicks on these keep their own behavior (never hijacked into a deep link). */
 export const INTERACTIVE_GUARD =
   'button, a, input, select, textarea, .glossary-term, .fold-toggle, .sp-header, .target-row, .target-sort-btn';
 
 /**
- * Live density-rung copy for a PANE_HELP row. Slider position is 1-based
- * FROM THE TOP (i = total − index) so the ships & city labels step reads `1/14` — the first
- * thing the slider reveals — and `experimental` reads `14/14`. A composite
- * MEMBER (`pd.find(id)` then walk `pd.rungs` for the parent) uses the
- * composite's index and `Composite · Member` labels. Never caches — the
- * caller reads the live ladder each render so `?ladder=0` (10 rungs) and
- * the 14-rung gate both read right. Absent ladder / unknown id → the
- * row's static `rung` with no live suffix (today's behaviour). Plan
- * 1788867799156 Task 16.
+ * Live density-rung copy for a PANE_HELP row. Slider position is 1-based FROM THE TOP
+ * (i = total − index): the first thing the slider reveals reads `1/14`, `experimental` reads `14/14`.
+ * A composite MEMBER uses the composite's index and `Composite · Member` labels. Never caches: the caller
+ * reads the live ladder each render. Absent ladder / unknown id → the row's static `rung`.
  *
  * @param {{rung?:string, rungId?:string}|null} row
  * @param {{rungs?: Array, find?: Function}|null} pd  live PaneDensity (or a test fake)
@@ -164,11 +119,8 @@ export function liveRungText(row, pd) {
 }
 
 /**
- * Pure tooltip content model (Node-tested): the entry's shortText plus the
- * pane's toggle key and density rung. The title is the entry title alone —
- * the data `icon` is never rendered (Session L, plan D-J).
- * @param {{icon?:string,title?:string,shortText?:string}|null} entry
- * @param {{key:(string|null), rung:string}} row
+ * Pure tooltip content model: the entry's shortText plus the pane's toggle key and density rung.
+ * The title is the entry title alone — the data `icon` is never rendered.
  * @returns {{title:string, short:string, meta:string}|null} null without an entry
  */
 export function helpTooltipModel(entry, row) {
@@ -186,10 +138,7 @@ export function helpTooltipModel(entry, row) {
 
 const CSS_ID = 'pane-help-css';
 
-/**
- * Inject the shared pane-help stylesheet exactly once (glossaryDom pattern).
- * @param {Document} [doc=document]
- */
+/** Inject the shared pane-help stylesheet exactly once (glossaryDom pattern). */
 export function ensurePaneHelpCss(doc = (typeof document !== 'undefined' ? document : null)) {
   if (!doc || typeof doc.createElement !== 'function') return;
   if (typeof doc.getElementById === 'function' && doc.getElementById(CSS_ID)) return;
@@ -210,20 +159,11 @@ export function ensurePaneHelpCss(doc = (typeof document !== 'undefined' ? docum
 
 export class PaneHelp {
   /**
-   * @param {object} [deps]
-   * @param {(id:string)=>object|null} [deps.getEntry]  codex entry resolver
-   *        (wired late — HUD.setCodexSystem lands after construction, so this
-   *        is consulted at hover time, never cached).
-   * @param {boolean} [deps.hasTouch]  house real-touch detection; defaults to
-   *        TouchControls.detect() (Ipad.md §4.5). Injectable for tests.
-   * @param {Document|null} [deps.doc]  document override for tests.
-   * @param {Function} [deps.setTimeoutFn] / @param {Function} [deps.clearTimeoutFn]
-   *        timer injection for tests (defaults to globals).
-   * @param {()=>number} [deps.now]  clock injection for tests.
-   * @param {() => object|null} [deps.ladder]  live PaneDensity getter. HUD
-   *        constructs PaneHelp before PaneDensity (and main.js may still
-   *        splice rungs), so this is consulted at tooltip time, never
-   *        cached. Absent → static row.rung (plan 1788867799156 Task 16).
+   * @param {object} [deps]  hasTouch, doc, setTimeoutFn, clearTimeoutFn, now are test injections.
+   * @param {(id:string)=>object|null} [deps.getEntry]  codex entry resolver, wired late (HUD.setCodexSystem
+   *        lands after construction), so consulted at hover time, never cached.
+   * @param {() => object|null} [deps.ladder]  live PaneDensity getter. HUD constructs PaneHelp before
+   *        PaneDensity (and main.js may still splice rungs), so consulted at tooltip time, never cached.
    */
   constructor({ getEntry = null, hasTouch = undefined, doc = undefined,
                 setTimeoutFn = undefined, clearTimeoutFn = undefined, now = undefined,
@@ -258,11 +198,7 @@ export class PaneHelp {
     this._handlers = [];         // [type, fn, opts] for dispose()
   }
 
-  /**
-   * Tag panes and register the ONE delegated handler set on the document.
-   * Idempotent: repeated calls never stack handlers (glossaryDom pattern —
-   * the document root is marked).
-   */
+  /** Tag panes and register the ONE delegated handler set. Idempotent: the document root is marked. */
   install() {
     const doc = this._doc;
     if (!doc) return;
@@ -283,8 +219,7 @@ export class PaneHelp {
     add('mouseout', (e) => this._onOut(e));
     add('click', (e) => this._onClick(e));
     if (this._hasTouch) {
-      // Long-press = hover on touch (house HAS_TOUCH gate). Passive: we never
-      // preventDefault — play gestures (pinch, rail drag) must keep working.
+      // Passive: never preventDefault — play gestures (pinch, rail drag) must keep working.
       add('touchstart', (e) => this._onTouchStart(e), { passive: true });
       add('touchmove', (e) => this._onTouchMove(e), { passive: true });
       add('touchend', (e) => this._onTouchEnd(e), { passive: true });
@@ -292,11 +227,7 @@ export class PaneHelp {
     }
   }
 
-  /**
-   * Tag every table pane that exists right now (idempotent, write-on-missing
-   * only — G1-safe). Lazily-built ladder panes are caught by the throttled
-   * rescan-on-miss in the hover/touch handlers.
-   */
+  /** Tag every table pane that exists right now (idempotent, write-on-missing only). */
   rescan() {
     const doc = this._doc;
     if (!doc || typeof doc.querySelector !== 'function') return;
@@ -306,17 +237,12 @@ export class PaneHelp {
       if (!el || !el.dataset) continue;
       if (el.dataset.help === row.codexId) continue;
       el.dataset.help = row.codexId;
-      // Panes default to pointer-events:none under #hud-overlay — the help
-      // affordance needs hover/click on the tagged element itself.
+      // Panes default to pointer-events:none under #hud-overlay; hover/click need the tagged element itself.
       if (el.style) el.style.pointerEvents = 'auto';
     }
   }
 
-  /**
-   * @private Resolve the PANE_HELP row for a tagged element. Selector wins so
-   * two panes can share a codexId (the DETAIL slider reuses pane_ladder_rail)
-   * without stealing each other's rung text.
-   */
+  /** @private Selector wins so two panes can share a codexId (the DETAIL slider reuses pane_ladder_rail). */
   _rowForEl(el, id) {
     if (el && el.id) {
       const bySel = this._rowsBySelector.get('#' + el.id);
@@ -346,8 +272,6 @@ export class PaneHelp {
     return el;
   }
 
-  // ── hover (mouse) ──────────────────────────────────────────────────────────
-
   /** @private */
   _onOver(e) {
     const el = this._resolve(e && e.target);
@@ -367,7 +291,7 @@ export class PaneHelp {
   /** @private */
   _onOut(e) {
     if (!this._hotEl) return;
-    // Still inside the same pane (child → child moves) → keep the hover alive.
+    // child → child moves inside the same pane keep the hover alive
     const to = this._closest(e && e.relatedTarget, '[data-help]');
     if (to === this._hotEl) return;
     this._clearHover();
@@ -384,8 +308,6 @@ export class PaneHelp {
     this._hideTip();
   }
 
-  // ── click (deep link) ──────────────────────────────────────────────────────
-
   /** @private */
   _onClick(e) {
     const target = e && e.target;
@@ -396,14 +318,11 @@ export class PaneHelp {
       this._suppressClickUntil = 0;
       return;
     }
-    // Interactive descendants keep their own click behavior.
     const interactive = this._closest(target, INTERACTIVE_GUARD);
     if (interactive && interactive !== el) return;
     this._hideTip();
     eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: el.dataset.help });
   }
-
-  // ── touch (long-press = hover; gated behind HAS_TOUCH) ────────────────────
 
   /** @private */
   _onTouchStart(e) {
@@ -435,7 +354,6 @@ export class PaneHelp {
   /** @private */
   _onTouchEnd() {
     this._cancelPress();
-    // Let a long-press tooltip linger so it can actually be read.
     if (this._tip && this._tip.style && this._tip.style.display !== 'none') {
       if (this._lingerTimer) this._clearTimeout(this._lingerTimer);
       this._lingerTimer = this._setTimeout(() => {
@@ -454,8 +372,6 @@ export class PaneHelp {
     if (this._pressTimer) { this._clearTimeout(this._pressTimer); this._pressTimer = null; }
     this._touchStart = null;
   }
-
-  // ── the ONE reused tooltip ─────────────────────────────────────────────────
 
   /** @private Build (once) or fetch the tooltip element. */
   _ensureTip() {
@@ -518,8 +434,7 @@ export class PaneHelp {
     tip._meta.textContent = model.meta;
     if (tip.style) tip.style.display = 'block';
 
-    // Position: below the pane element, clamped on-screen; above when the
-    // bottom would clip. One-shot measure on an event — not per-frame (G1).
+    // Below the pane element, clamped on-screen; above when the bottom would clip. One-shot measure (G1).
     if (typeof el.getBoundingClientRect === 'function' && tip.style) {
       const r = el.getBoundingClientRect();
       const win = (typeof window !== 'undefined') ? window : null;

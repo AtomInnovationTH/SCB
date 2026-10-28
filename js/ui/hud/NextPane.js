@@ -1,47 +1,32 @@
 /**
- * NextPane.js — the NEXT HUD pane (Session M item 3, 2026-09-06): upcoming
- * events, four FIXED row slots, one T-minus each.
+ * NextPane.js — the NEXT HUD pane: upcoming events, four FIXED row slots, one T-minus each.
  *
  *   TRANSFER  <cluster>   T-12m40s | OPEN NOW   the soonest transfer window
  *   TCA       <threat>    T-42s · 0.3 km        the current conjunction (amber; tier RED red)
  *   SHADOW|SUNLIT  in     08:11                 the next eclipse flip
  *   PASS      <station>   T-21m00s              the next ground-station pass
  *
- * It is a pane-density RUNG like CARGO: `rung()` returns the HUD domRung shape
- * ({id:'next', label, isVisible, setVisible}) whose ONE visibility bit is the
- * `data-density-hidden` attribute on the root, so the DETAIL slider counts it as a
- * notch and FloorMask rooms it per floor (MASK_PANES.next). This pane is NOT
- * the focused-cluster transfer readout costume (that one is the FULL readout of
- * ONE cluster); this is the soonest of everything, in one glance.
+ * A pane-density RUNG like CARGO: `rung()` returns the HUD domRung shape ({id:'next', label, isVisible,
+ * setVisible}) whose ONE visibility bit is `data-density-hidden` on the root, so the DETAIL slider counts it
+ * as a notch and FloorMask rooms it per floor (MASK_PANES.next). It is the soonest of everything, not the
+ * focused-cluster transfer readout.
  *
- * Wiring (the hub's, main.js inside the LADDER gate): construct with the deps
- * below (`parent: hud.rightColumnEl`), push `pane.rung()` into hud.paneDensity.rungs
- * BEFORE the first floorMask.setFloor, call `update(nowMs)` per frame
- * (self-throttled to 1 Hz). `setDodge` is a documented no-op (rev 3 Task 6 —
- * the pane is the last child of #hud-right-column; main.js still calls it per
- * frame until Wave 4 drops the call).
+ * Wiring (main.js inside the LADDER gate): construct with `parent: hud.rightColumnEl`, push `pane.rung()` into
+ * hud.paneDensity.rungs BEFORE the first floorMask.setFloor, call `update(nowMs)` per frame (self-throttled to
+ * 1 Hz). `setDodge` is a no-op (the pane is the last child of #hud-right-column).
  *
- * Laws: with `parent` the root is a relative child of that node (the right
- * column); without `parent` it still defaults to #hud-overlay (`?ladder=0`).
- * NO backdrop-filter; NO layout read anywhere (the heights are fixed numbers:
- * FRAME + HEADER + rows, or FRAME + HEADER when every slot is the unknown
- * mark — one row `NEXT —`);
- * the tick is self-throttled to >= TICK_MS from the `nowMs` it is handed (no
- * timer, no rAF of its own); every DOM write is write-on-change; textContent
- * only (no innerHTML); no window/document listeners; no fetch (the stations
- * arrive as a dep); the module never reads Constants.LADDER and never touches
- * the DOM at import time; every dep is optional and guarded, so `new
- * NextPane()` with no document is inert (rows read the unknown mark). Every
- * T-minus on this pane is WORLD seconds (departIn is orbit time, the eclipse
- * dep is world seconds, the pass is orbit time) — the same clock as the
- * transfer readout, never the boss countdowns' paced clock.
+ * Laws: with `parent` the root is a relative child of it; without, it defaults to #hud-overlay (`?ladder=0`).
+ * NO backdrop-filter; NO layout read (heights are fixed numbers: FRAME + HEADER + rows, or FRAME + HEADER when
+ * every slot is the unknown mark — one row `NEXT —`); the tick is self-throttled to >= TICK_MS from the `nowMs`
+ * it is handed (no timer, no rAF); every DOM write is write-on-change; textContent only; no window/document
+ * listeners; no fetch (the stations arrive as a dep); never reads Constants.LADDER or touches the DOM at import;
+ * every dep is optional and guarded, so `new NextPane()` with no document is inert. Every T-minus is WORLD
+ * seconds (orbit time), the same clock as the transfer readout, never the boss countdowns' paced clock.
  *
- * u6-tests-plain D5 (2026-10-19): at the SIMPLE level (deps.simple() true — mission 1,
- * no `+` pane pulled in) the pane speaks plain words, with NO countdowns (round 1 F1: game
- * time runs ~40x real, so a minute countdown churns): `Next stop <cluster> window in about
- * 2 h` (folded when co-orbital or unknown), `Close pass <threat>` (folded when clear; tier
- * colour kept), `In sunlight` / `In Earth's shadow` (a state, changes at a flip); PASS folds. Above
- * simple every row reads exactly as above ("Details" — today's text, unchanged).
+ * At the SIMPLE level (deps.simple() true: mission 1, no `+` pane pulled in) the pane speaks plain words with NO
+ * countdowns (game time runs ~40x real, so a minute countdown churns): `Next stop <cluster> window in about 2 h`
+ * (folded when co-orbital or unknown), `Close pass <threat>` (folded when clear; tier colour kept),
+ * `In sunlight` / `In Earth's shadow` (a state); PASS folds. Above simple every row reads as in the table above.
  *
  * @module ui/hud/NextPane
  */
@@ -66,11 +51,9 @@ export const NEXT_RUNG_ID = 'next';
 export const NEXT_ROWS = Object.freeze(['transfer', 'tca', 'shadow', 'pass']);
 
 /**
- * NEXT_GEOMETRY — the pane's numbers (px). FULL_MAX_PX is the hard budget the
- * full form must fit (the 13-inch iPad landscape slot above CARGO); FRAME_PX
- * is the .hud-panel chrome (6 px padding + 1 px border, top and bottom);
- * HEADER_PX the title line; ROW_PX one event row. The full form is header +
- * FULL_ROWS rows, the compact form header + COMPACT_ROWS (the soonest two).
+ * NEXT_GEOMETRY — the pane's numbers (px). FULL_MAX_PX is the hard budget the full form must fit (the 13-inch
+ * iPad landscape slot above CARGO); FRAME_PX is the .hud-panel chrome (6 px padding + 1 px border, top and
+ * bottom). Full form = header + FULL_ROWS rows, compact = header + COMPACT_ROWS (the soonest two).
  */
 export const NEXT_GEOMETRY = Object.freeze({
   WIDTH_PX: 280,
@@ -99,14 +82,14 @@ export const PASS_STEPS = 64;
 /** The unknown mark (em dash) — the value of every row the deps cannot fill. */
 const UNKNOWN = '\u2014';
 
-/** u6 D5: the root carries this while the plain (simple) form is on. */
+/** The root carries this while the plain (simple) form is on. */
 const SIMPLE_ATTR = 'data-next-simple';
 
 /** The rung's ONE hide bit (HUD._initPaneDensity domRung grammar). */
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
-/** The dodge's mode: 'full' | 'compact' | 'hidden' (hidden = display:none via the style). */
+/** 'full' | 'compact' | 'hidden' (hidden = display:none via the style). */
 const MODE_ATTR = 'data-next-mode';
-/** Empty orbit: every slot is the unknown mark — one row `NEXT —` (Task 14). */
+/** Empty orbit: every slot is the unknown mark — one row `NEXT —`. */
 const EMPTY_ATTR = 'data-next-empty';
 /** A row folded away by the compact form (the two latest events). */
 const FOLDED_ATTR = 'data-folded';
@@ -131,26 +114,20 @@ export function compactPx() {
   return G.FRAME_PX + G.HEADER_PX + G.COMPACT_ROWS * G.ROW_PX;
 }
 
-/** u6 D5: the simple form's outer height: frame + header + `rows` shown rows (0 rows = the empty form). */
+/** The simple form's outer height: frame + header + `rows` shown rows (0 rows = the empty form). */
 export function simplePx(rows) {
   const G = NEXT_GEOMETRY;
   const n = Math.max(0, Math.min(NEXT_ROWS.length, Math.floor(Number(rows) || 0)));
   return G.FRAME_PX + G.HEADER_PX + n * G.ROW_PX;
 }
 
-/**
- * The empty form's outer height: frame + header (one line `NEXT —`).
- * Plan Task 14 / locked #16 — every slot the unknown mark (or TCA idle clear).
- */
+/** The empty form's outer height: frame + header (one line `NEXT —`; every slot unknown or TCA idle clear). */
 export function emptyPx() {
   const G = NEXT_GEOMETRY;
   return G.FRAME_PX + G.HEADER_PX;
 }
 
-/**
- * Great-circle distance (km) between two lat/lon points (degrees, east-positive).
- * @returns {number}
- */
+/** Great-circle distance (km) between two lat/lon points (degrees, east-positive). */
 export function haversineKm(lat1, lon1, lat2, lon2) {
   const p1 = lat1 * DEG2RAD, p2 = lat2 * DEG2RAD;
   const dp = (lat2 - lat1) * DEG2RAD;
@@ -159,11 +136,7 @@ export function haversineKm(lat1, lon1, lat2, lon2) {
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-/**
- * The SHADOW row's clock: mm:ss under an hour, else h:mm (world seconds).
- * @param {number} s
- * @returns {string}
- */
+/** The SHADOW row's clock: mm:ss under an hour, else h:mm (world seconds). */
 export function formatClock(s) {
   if (!Number.isFinite(s)) return UNKNOWN;
   const sec = Math.max(0, Math.round(s));
@@ -172,7 +145,7 @@ export function formatClock(s) {
   return `${h}h${String(Math.floor((sec % 3600) / 60)).padStart(2, '0')}m`;
 }
 
-/** @private A T-minus for an event that may be happening right now (TCA, PASS). */
+/** @private */
 function fmtTminus(s) {
   if (!Number.isFinite(s)) return UNKNOWN;
   return s > 0 ? TransferWindows.formatDuration(s) : 'NOW';
@@ -180,7 +153,7 @@ function fmtTminus(s) {
 
 /** @private Metres to 1-decimal km. */
 function fmtKm(m) {
-  const n = num(m);                                 // null / '' are NOT zero (Session M review)
+  const n = num(m);                                 // null / '' are NOT zero
   return Number.isFinite(n) ? `${(Math.max(0, n) / 1000).toFixed(1)} km` : UNKNOWN;
 }
 
@@ -207,10 +180,7 @@ function unknownRow(label, subject = '') {
   return { label, subject, value: UNKNOWN, seconds: Infinity, key: '', tier: null };
 }
 
-/**
- * @private A slot has nothing to say: the unknown mark, or TCA's idle `clear`.
- * Plan Task 14 — when EVERY slot is empty the pane collapses to `NEXT —`.
- */
+/** @private A slot has nothing to say: the unknown mark, or TCA's idle `clear`. When EVERY slot is empty the pane collapses to `NEXT —`. */
 function slotEmpty(m) {
   if (!m) return true;
   if (m.value === UNKNOWN) return true;
@@ -224,7 +194,7 @@ export class NextPane {
    * @param {Element}  [deps.parent]    root's parent (default: doc.getElementById('hud-overlay')).
    * @param {boolean}  [deps.glass]     true on glass (the pane is display-only: no touch target changes).
    * @param {function} [deps.now]       ms clock — the fallback when update() is called without nowMs.
-   * @param {function} [deps.clusters]  () => [{ name, label?, altKm }] (label = the display name, u6 D5; optionally orbitKm or a live
+   * @param {function} [deps.clusters]  () => [{ name, label?, altKm }] (label = the display name; optionally orbitKm or a live
    *   cluster with `targets`) — the transfer candidates.
    * @param {function} [deps.playerAltKm] () => the player's altitude (km).
    * @param {function} [deps.orbit]     () => the player's Keplerian elements, semiMajorAxis in
@@ -233,7 +203,7 @@ export class NextPane {
    * @param {function} [deps.eclipse]   () => { inShadow, secondsToFlip } | null (world seconds).
    * @param {function} [deps.subPoint]  (pos {x,y,z}) => { latDeg, lonEastDeg } (direction only).
    * @param {function} [deps.stations]  () => [{ name, lat, lon }] | null (degrees, east-positive).
-   * @param {function} [deps.simple]    () => true at the simple level (u6 D5; absent = never simple).
+   * @param {function} [deps.simple]    () => true at the simple level (absent = never simple).
    */
   constructor(deps = {}) {
     this._glass = !!deps.glass;
@@ -247,22 +217,22 @@ export class NextPane {
     this._eclipse = deps.eclipse;
     this._subPoint = deps.subPoint;
     this._stations = deps.stations;
-    this._simpleDep = typeof deps.simple === 'function' ? deps.simple : null;   // u6 D5: () => true at the simple level
+    this._simpleDep = typeof deps.simple === 'function' ? deps.simple : null;
 
     this._root = null;
-    this._simple = false;            // u6 D5: the plain form is on (last render)
-    this._hide = [false, false, false, false];   // u6 D5: rows folded in the plain form
-    this._shown = NEXT_ROWS.length;  // u6 D5: rows the form shows (plain form: the unfolded ones)
+    this._simple = false;            // the plain form is on (last render)
+    this._hide = [false, false, false, false];   // rows folded in the plain form
+    this._shown = NEXT_ROWS.length;  // rows the form shows (plain form: the unfolded ones)
     this._el = null;                 // { head, title, rows: [{ el, label, subject, value }] }
     this._model = null;              // the last computed row models (slot order)
     this._keys = NEXT_ROWS.map(() => undefined);   // last subject key per slot (undefined = never rendered)
     this._flashUntil = NEXT_ROWS.map(() => 0);     // change-highlight deadline per slot (ms)
     this._order = [0, 1, 2, 3];      // slots by soonest first
-    this._mode = 'full';             // column child (rev 3); 'hidden' only headless / disposed
-    this._empty = false;             // Task 14: every slot unknown → one row `NEXT —`
-    this._underPx = undefined;       // last setDodge inputs (write-on-change) — unused since dodge retired
+    this._mode = 'full';             // 'hidden' only headless / disposed
+    this._empty = false;             // every slot unknown → one row `NEXT —`
+    this._underPx = undefined;       // setDodge inputs; unused (dodge retired)
     this._floorPx = undefined;
-    this._topPx = null;              // overlay top retired; topPx() is always null
+    this._topPx = null;              // always null (overlay top retired)
     this._heightPx = 0;              // the form's geometric height (emptyPx / fullPx)
     this._lastTickMs = null;
     this._rung = null;
@@ -272,13 +242,9 @@ export class NextPane {
     if (!this._root) this._mode = 'hidden';
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
   /**
-   * The pane-density rung adapter (cached object; HUD domRung shape). The ONE
-   * visibility bit is `data-density-hidden` on the root; isVisible() also
-   * honours on-screen presence (getClientRects) like HUD's DOM rungs. Never
-   * throws headless (no root = not visible, setVisible no-op).
+   * The pane-density rung adapter (cached object; HUD domRung shape). isVisible() also honours on-screen
+   * presence (getClientRects) like HUD's DOM rungs. Never throws headless (no root = not visible).
    * @returns {{id:string, label:string, isVisible:function, setVisible:function}}
    */
   rung() {
@@ -306,14 +272,7 @@ export class NextPane {
     return this._rung;
   }
 
-  /**
-   * THE DODGE — retired (ladder reorder rev 3 Task 6). The pane is a relative
-   * child of #hud-right-column and the hub no longer calls this (the right arm
-   * glides as one column). Kept as a documented no-op for the API: never
-   * writes styles, never throws.
-   * @param {number|null} [_underPx]
-   * @param {number} [_floorPx]
-   */
+  /** THE DODGE — retired: the pane is a relative child of #hud-right-column. Kept as a no-op for the API. */
   setDodge(_underPx, _floorPx) {
     return;
   }
@@ -329,9 +288,8 @@ export class NextPane {
   }
 
   /**
-   * u7 D2: is the box on screen right now? heightPx() alone is not enough - it stays non-zero while the
+   * Is the box on screen right now? heightPx() alone is not enough: it stays non-zero while the
    * density rung hides the pane. Reads attributes and the inline style only (no layout read).
-   * @returns {boolean}
    */
   isShown() {
     const el = this._root;
@@ -344,10 +302,8 @@ export class NextPane {
   mode() { return this._mode; }
 
   /**
-   * The tick (the hub calls it per frame). Self-throttled to >= TICK_MS from
-   * `nowMs`; recomputes the four rows from the deps and writes on change.
-   * Nothing is computed or written while the pane is density-hidden or
-   * clipped by the dodge (both display:none).
+   * The tick (the hub calls it per frame). Self-throttled to >= TICK_MS from `nowMs`; recomputes the
+   * four rows and writes on change. Nothing is computed while the pane is density-hidden.
    * @param {number} [nowMs]  the world clock in ms (falls back to deps.now, then Date.now)
    */
   update(nowMs) {
@@ -378,8 +334,6 @@ export class NextPane {
     this._heightPx = 0;
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-
   /** @private Inject the style once, build the DOM under `parent` (headless: nothing). */
   _build(parentDep) {
     const doc = this._doc;
@@ -392,8 +346,7 @@ export class NextPane {
     const root = doc.createElement('div');
     root.id = NEXT_PANE_ID;
     root.className = 'hud-panel' + (this._glass ? ' next-glass' : '');
-    // Ladder reorder rev 3 Task 6: column child is position:relative / width 100%
-    // (no right/bottom/top). Overlay default (`?ladder=0`) keeps the old inset.
+    // Column child: position:relative / width 100%. Overlay default (`?ladder=0`) keeps the inset.
     if (parentDep) {
       root.style.position = 'relative';
       root.style.width = '100%';
@@ -517,9 +470,7 @@ export class NextPane {
     doc.head.appendChild(style);
   }
 
-  // ── Reads (every one guarded) ──────────────────────────────────────────────
-
-  /** @private The window height when the hub passes no floor (never per frame: setDodge caches). */
+  /** @private The window height when the hub passes no floor. */
   _viewportHeight() {
     const doc = this._doc;
     const win = (doc && doc.defaultView) || (typeof window !== 'undefined' ? window : null);
@@ -545,12 +496,11 @@ export class NextPane {
   }
 
   /**
-   * @private TRANSFER: the cluster with the smallest departIn. The chaser is the
-   * player's radius (playerAltKm + R_E, or the orbit's semi-major axis) with the
-   * orbit's angles for phase; a cluster is a km orbit when it carries one
-   * (orbitKm, or live `targets` via clusterToOrbitKm), else a circular orbit at
-   * altKm + R_E in the player's plane. computeTransferWindow takes RADII (km),
-   * never altitudes. A co-orbital cluster (isCoOrbital) is open now.
+   * @private TRANSFER: the cluster with the smallest departIn. The chaser is the player's radius
+   * (playerAltKm + R_E, or the orbit's semi-major axis) with the orbit's angles for phase; a cluster is a
+   * km orbit when it carries one (orbitKm, or live `targets` via clusterToOrbitKm), else a circular orbit at
+   * altKm + R_E in the player's plane. computeTransferWindow takes RADII (km), never altitudes.
+   * A co-orbital cluster is open now.
    */
   _transferRow() {
     const clusters = call(this._clusters);
@@ -634,11 +584,9 @@ export class NextPane {
   }
 
   /**
-   * @private PASS: propagate the player orbit over ONE period in PASS_STEPS
-   * samples (the only propagation budget of the tick), sub-point each sample,
-   * the first sample within PASS_RADIUS_KM of a station wins (the closest
-   * station of that sample). The Earth's surface does not rotate in this game,
-   * so the ECI sub-point IS the ground point.
+   * @private PASS: propagate the player orbit over ONE period in PASS_STEPS samples (the tick's only
+   * propagation budget); the first sample within PASS_RADIUS_KM of a station wins (the closest station of that
+   * sample). The Earth's surface does not rotate in this game, so the ECI sub-point IS the ground point.
    */
   _passRow() {
     const stations = call(this._stations);
@@ -678,17 +626,10 @@ export class NextPane {
     return unknownRow('PASS');
   }
 
-  // ── The plain (simple) form — u6 D5 ────────────────────────────────────────
-
-  /**
-   * @private Map the four row models to their plain-word forms. A row with
-   * nothing to say gets `hide: true` (folded). The raw models are untouched
-   * (the Details form reads them as before).
-   */
+  /** @private Map the four row models to plain-word forms; a row with nothing to say gets `hide: true`. The raw models are untouched. */
   _plainModel(model) {
     const [tr, tca, sh] = model;
     const out = [];
-    // TRANSFER: folded when co-orbital or unknown; else the soonest window.
     const when = TransferWindows.plainWindow(tr.seconds);
     if (tr.value === UNKNOWN || tr.coOrbital || when == null) {
       out.push({ ...tr, hide: true });
@@ -698,14 +639,13 @@ export class NextPane {
         ...tr, hide: false, label: 'Next stop', subject: lead || tr.subject, value: `window ${when}`,
       });
     }
-    // TCA: folded when clear.
     if (slotEmpty(tca)) {
       out.push({ ...tca, hide: true });
     } else {
-      // F1: no seconds, no km (the clock runs ~40x real); the tier colour carries the urgency.
+      // no seconds, no km (the clock runs ~40x real); the tier colour carries the urgency
       out.push({ ...tca, hide: false, label: 'Close pass', value: '' });
     }
-    // SHADOW | SUNLIT: a state only (F1): it changes at a flip, never between.
+    // SHADOW | SUNLIT: a state only; it changes at a flip, never between.
     if (sh.value === UNKNOWN) {
       out.push({ ...sh, hide: true });
     } else {
@@ -713,12 +653,9 @@ export class NextPane {
         ...sh, hide: false, label: sh.label === 'SHADOW' ? 'In sunlight' : "In Earth's shadow", subject: '', value: '',
       });
     }
-    // PASS: folded at the simple level (a ground-station detail).
     out.push({ ...model[3], hide: true });
     return out;
   }
-
-  // ── Render (1 Hz) ──────────────────────────────────────────────────────────
 
   /** @private Recompute the four rows, rank them, write on change; the change-highlight by `now`. */
   _render(now) {
@@ -740,8 +677,7 @@ export class NextPane {
       this._setText(r.subject, m.subject);
       this._setText(r.value, m.value);
       this._setAttr(r.el, TIER_ATTR, m.tier);
-      // The highlight keys on the SUBJECT only (never the ticking countdown);
-      // the first render of a slot is a placement, not a change.
+      // The highlight keys on the SUBJECT only (never the ticking countdown); the first render is a placement.
       const prev = this._keys[i];
       if (prev !== undefined && prev !== m.key) this._flashUntil[i] = now + FLASH_MS;
       this._keys[i] = m.key;
@@ -750,7 +686,6 @@ export class NextPane {
     }
     this._order = [0, 1, 2, 3].sort((x, y) => (model[x].seconds - model[y].seconds) || (x - y));
     this._applyFold();
-    // The plain form is empty when every row folded; Details: every slot says nothing.
     const empty = simple ? this._shown === 0 : raw.every(slotEmpty);
     if (empty !== this._empty) {
       this._empty = empty;
@@ -763,7 +698,7 @@ export class NextPane {
   _applyFold() {
     const el = this._el;
     if (!el) return;
-    if (this._simple) {   // u6 D5: the plain form folds exactly the rows with nothing to say
+    if (this._simple) {   // the plain form folds exactly the rows with nothing to say
       for (let i = 0; i < el.rows.length; i++) this._setAttr(el.rows[i].el, FOLDED_ATTR, this._hide[i] ? '' : null);
       return;
     }
@@ -773,12 +708,9 @@ export class NextPane {
     }
   }
 
-  // ── Layout (setDodge; pure arithmetic, write-on-change outputs) ────────────
-
   /**
-   * @private Place the pane from the cached dodge inputs. Bottom-anchored: the
-   * pane hugs the floor and yields UPWARD only as far as the rider above
-   * forces it. No layout reads. Returns true when a DOM write happened.
+   * @private Place the pane from the cached dodge inputs. Bottom-anchored: it hugs the floor and yields
+   * UPWARD only as far as the rider above forces it. No layout reads. Returns true when a DOM write happened.
    */
   _layout() {
     const root = this._root;
@@ -812,8 +744,6 @@ export class NextPane {
     }
     return wrote;
   }
-
-  // ── Write-on-change helpers ────────────────────────────────────────────────
 
   /** @private */
   _setText(el, text) {

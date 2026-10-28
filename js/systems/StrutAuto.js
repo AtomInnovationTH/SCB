@@ -1,30 +1,24 @@
 /**
- * StrutAuto.js — the daughter arms mostly move themselves (lane arms-auto;
- * DECISIONS §25 ruling 5, owner 2026-10-15), and the player can take over.
+ * StrutAuto.js — the daughter arms mostly move themselves (DECISIONS §25 ruling 5), and the player can take over.
  *
  *   1. Closed (0°) at the start of a run, until the first opening.
- *   2. Swept back 34° from then on (owner 2026-10-16: "default position"), PER ARM: an arm's first
- *      opening is a piece within the 90 m ring or a catch under way (these open every arm), or a
- *      press / launch that opens that arm (a "." with a daughter picked opens only her); after it
- *      THAT arm rests at 34° and never folds flat on its own again. An arm never opened rests closed.
- *   3. The launching arm aims itself: the launch (aim ceremony / number-key gate)
- *      owns its struts; this module keeps its hands off until 3 s after it ends,
- *      then brings a re-docked strut to the due angle.
- *   4. Arms dodge an inbound catch (the lean-aside duck, now also triggered by
- *      the mother net's own approach, not only by LASSO_CAPTURED).
- *   5. A manual move ("." key, DAUGHTERS tile) holds for 10 s after the arm
- *      ARRIVES, then eases back to automatic.
- *   6. The full range of motion is shown once per player, the first time the
- *      struts leave closed.
+ *   2. Swept back 34° from then on (the "default position"), PER ARM: an arm's first opening is a piece within the 90 m
+ *      ring or a catch under way (these open every arm), or a press / launch that opens that arm (a "." with a daughter
+ *      picked opens only her); after it THAT arm rests at 34° and never folds flat on its own again. An arm never
+ *      opened rests closed.
+ *   3. The launching arm aims itself: the launch (aim ceremony / number-key gate) owns its struts; this module keeps its
+ *      hands off until 3 s after it ends, then brings a re-docked strut to the due angle.
+ *   4. Arms dodge an inbound catch (the lean-aside duck; also triggered by the mother net's own approach, not only by
+ *      LASSO_CAPTURED).
+ *   5. A manual move ("." key, DAUGHTERS tile) holds for 10 s after the arm ARRIVES, then eases back to automatic.
+ *   6. The full range of motion is shown once per player, the first time the struts leave closed.
  *
- * Everything moves at the real hinge rate: this module only writes the same
- * `arm._strutTargetAlpha` latch the "." key writes; the ship's per-frame driver
- * (PlayerSatellite._updateStruts) slews it at STRUT_SLEW_RATE. Nothing here
- * teleports, emits STRUT_DEPLOY_INPUT, or touches an arm that is not DOCKED. (hold-catch: it only AGES the manual
- * marker of a HOLDING_CATCH arm; ArmManager._updateCargoPlumePoses drives that arm's strut to her hold pose.)
+ * Everything moves at the real hinge rate: this module only writes the same `arm._strutTargetAlpha` latch the "." key
+ * writes; the ship's per-frame driver (PlayerSatellite._updateStruts) slews it at STRUT_SLEW_RATE. Nothing here
+ * teleports, emits STRUT_DEPLOY_INPUT, or touches an arm that is not DOCKED. (It only AGES the manual marker of a
+ * HOLDING_CATCH arm; ArmManager._updateCargoPlumePoses drives that arm's strut to her hold pose.)
  *
- * Split for testability: `autoPoseFor` (pure), `StrutAutoStore` (the
- * once-per-player record, the TouchMapStore idiom) and `StrutAutoController`
+ * Split for testability: `autoPoseFor` (pure), `StrutAutoStore` (the once-per-player record) and `StrutAutoController`
  * (per-frame logic over a small `view` the ArmManager builds).
  *
  * @module systems/StrutAuto
@@ -38,8 +32,7 @@ import { degToRad } from '../core/MathUtil.js';
 export const STRUT_AUTO_VERSION = 1;
 
 /**
- * The due angle: swept back (STRUT_REST_ALPHA, 34°) once an arm has been opened in this
- * run (or a piece is near, which opens them), closed (0°) before that.
+ * The due angle: swept back (STRUT_REST_ALPHA, 34°) once an arm has been opened this run, closed (0°) before that.
  * @param {boolean} open near, or this arm opened once this run
  * @returns {number} radians
  */
@@ -47,7 +40,6 @@ export function autoPoseFor(open) {
   return open ? Constants.OCTOPUS_V5.STRUT_REST_ALPHA : 0;
 }
 
-/** @private default storage: the global localStorage when present. */
 function _defaultStorage() {
   try {
     return (typeof localStorage !== 'undefined') ? localStorage : null;
@@ -57,18 +49,12 @@ function _defaultStorage() {
 }
 
 /**
- * The once-per-player record: has the full-range show been seen? One
- * localStorage key (StorageKeys.STRUT_AUTO), envelope `{ v: 1, seen: true }`.
- * Outside the run save, so a New Game does not repeat the show. Private-mode
- * safe: any storage failure → unseen / in-memory only, never a throw.
- * Write-on-change only.
+ * The once-per-player record: has the full-range show been seen? One localStorage key (StorageKeys.STRUT_AUTO),
+ * envelope `{ v: 1, seen: true }`. Outside the run save, so a New Game does not repeat the show. Any storage failure →
+ * unseen / in-memory only, never a throw. Write-on-change only.
  */
 export class StrutAutoStore {
-  /**
-   * @param {object} [deps]
-   * @param {object|null} [deps.storage] localStorage-shaped; default the global
-   *   localStorage, or null (in-memory only).
-   */
+  /** @param {object} [deps]  deps.storage: localStorage-shaped; default the global localStorage, or null (in-memory only). */
   constructor(deps = {}) {
     this._storage = (deps.storage !== undefined) ? deps.storage : _defaultStorage();
     this._seen = false;
@@ -77,10 +63,9 @@ export class StrutAutoStore {
     this._load();
   }
 
-  /** @returns {boolean} whether this player has seen the show */
   get seen() { return this._seen; }
 
-  /** Record that the show has been seen. Writes once; later calls are no-ops. */
+  /** Writes once; later calls are no-ops. */
   markSeen() {
     if (this._seen) return;
     this._seen = true;
@@ -115,13 +100,11 @@ export class StrutAutoStore {
   }
 }
 
-/** One arm's private bookkeeping (WeakMap-keyed; never stored on the arm). @private */
+/** One arm's private bookkeeping (WeakMap-keyed; never stored on the arm). */
 const _newArmState = () => ({ mine: null, opened: false, prevClosed: true });
 
 /**
- * Per-frame logic. Construct once; call `update(dt, view)` every frame.
- *
- * `view` (built by ArmManager, read-only snapshot + a few actions):
+ * Construct once; call `update(dt, view)` every frame. `view` (built by ArmManager, read-only snapshot + a few actions):
  *   arms                    ArmUnit[]            the manager's arms
  *   inert()                 boolean              flag off / launch lock / dance / safe mode …
  *   busy()                  boolean              a launch, aim, duck, leash … owns the struts
@@ -142,7 +125,7 @@ export class StrutAutoController {
     this.reset();
   }
 
-  /** Forget everything (ArmManager.reset / a new game). */
+  /** ArmManager.reset / a new game. */
   reset() {
     this._near = false;
     this._anyOpened = false;     // some arm has left closed in this run (per-arm record: _st(arm).opened; not saved)
@@ -161,24 +144,17 @@ export class StrutAutoController {
     this._arm = new WeakMap();
   }
 
-  /**
-   * Play is not running (menu, briefing, shop): stop a show where it is. Not marked seen;
-   * it retries at the next quiet chance. Called by ArmManager instead of `update`.
-   */
+  /** Play is not running (menu, briefing, shop): stop a show where it is (not marked seen; retries). Called by ArmManager instead of `update`. */
   suspend() {
     if (this._show) this._cancelShow();
   }
 
-  /** @returns {boolean} whether a piece/catch currently counts as near (hysteresis applied) */
+  /** Whether a piece/catch counts as near (hysteresis applied). */
   get near() { return this._near; }
-  /** @returns {boolean} whether ANY arm has been opened in this run (each opened arm rests at 34° from then on) */
   get openedOnce() { return this._anyOpened; }
-  /** @param {object} arm @returns {boolean} whether this arm has been opened in this run */
   armOpened(arm) { return !!(arm && this._arm.get(arm)?.opened); }
-  /** @returns {object|null} the running show, if any */
   get show() { return this._show; }
 
-  /** @private Record that these arms have been opened in this run. */
   _markOpened(arms) {
     for (const a of arms) {
       if (!a) continue;
@@ -194,10 +170,7 @@ export class StrutAutoController {
     return s;
   }
 
-  /**
-   * @param {number} dt seconds (> 0)
-   * @param {object} view see the class doc
-   */
+  /** @param {number} dt seconds (> 0)  @param {object} view see the class doc */
   update(dt, view) {
     const V = Constants.OCTOPUS_V5.STRUT_AUTO;
     const arms = view.arms || [];
@@ -211,7 +184,7 @@ export class StrutAutoController {
     }
     const docked = arms.filter((a) => a && a.state === Constants.ARM_STATES.DOCKED);
 
-    // ── near (item 1, 2): a piece inside the ring / a catch opens the arms for the first time ──
+    // near (1, 2): a piece inside the ring / a catch opens the arms for the first time
     this._scanS += dt;
     if (this._scanS >= V.SCAN_INTERVAL_S) {
       this._scanS = 0;
@@ -221,14 +194,14 @@ export class StrutAutoController {
       if (this._near) { this._anyOpened = true; this._markOpened(arms); }   // a piece / a catch opens every arm
     }
 
-    // ── dodge an inbound catch (item 4) ───────────────────────────────────
+    // dodge an inbound catch (4)
     const radiusM = view.inboundNetRadiusM();
     if (radiusM != null) view.duck(radiusM);
 
-    // ── manual override ageing (item 5) — runs even while busy ────────────
+    // manual override ageing (5): runs even while busy
     this._ageMarkers(dt, docked, view);
 
-    // ── trigger bookkeeping for the show (item 6), BEFORE any write ───────
+    // show trigger bookkeeping (6), BEFORE any write
     const eff = (a) => a._strutTargetAlpha ?? (a.getAimAlpha ? a.getAimAlpha() : 0);
     const thr = Constants.OCTOPUS_V5.STRUT_OPEN_THRESHOLD;
     const anyOpen = docked.some((a) => eff(a) >= thr);
@@ -245,7 +218,7 @@ export class StrutAutoController {
     }
     if (this._showArms.size === 0) this._showPending = false;
 
-    // ── busy → hands off, 3 s cool-off (item 3) ───────────────────────────
+    // busy → hands off, 3 s cool-off (3)
     const busy = view.busy();
     if (busy) {
       this._coolS = V.HANDOFF_S;
@@ -257,14 +230,14 @@ export class StrutAutoController {
       if (this._show) this._cancelShow();
     }
 
-    // ── the show owns the latch while it runs ─────────────────────────────
+    // the show owns the latch while it runs
     if (this._show) {
       this._tickShow(dt, docked, view);
     } else if ((this._showPending || this._retryReady(view)) && this._coolS <= 0 && this._showMayStart(docked, view)) {
       this._startShow(docked, view);
     }
 
-    // ── per-arm automatic pose (items 1–3) ────────────────────────────────
+    // per-arm automatic pose (1–3)
     for (const arm of docked) {
       const st = this._st(arm);
       const due = autoPoseFor(st.opened);
@@ -286,16 +259,13 @@ export class StrutAutoController {
     if (view.headless) this._slewHeadless(dt, docked);
   }
 
-  // ── override markers ────────────────────────────────────────────────────
-
-  /** @private */
   _ageMarkers(dt, docked, view) {
     const V = Constants.OCTOPUS_V5.STRUT_AUTO;
     let any = false;
     for (const arm of view.arms || []) {
       const m = arm && arm._strutManual;
       if (!m) continue;
-      // hold-catch (owner 2026-10-22): a daughter holding a catch keeps her marker and its quiet window too (a "." press moved
+      // owner 2026-10-22: a daughter holding a catch keeps her marker and its quiet window too (a "." press moved
       // her strut; ArmManager's hold-pose driver leaves a safe manual angle alone until the marker expires here).
       if (arm.state !== Constants.ARM_STATES.DOCKED && arm.state !== Constants.ARM_STATES.HOLDING_CATCH) { delete arm._strutManual; continue; }
       if (arm._strutTargetAlpha !== undefined) m.quietS = 0;
@@ -311,22 +281,16 @@ export class StrutAutoController {
     }
   }
 
-  // ── the full-range show ─────────────────────────────────────────────────
+  // the full-range show
 
-  /**
-   * A cut-short show tries again when it is quiet and either a piece is within range (no
-   * "." hold running) or the player presses "." again. @private
-   */
+  /** A cut-short show retries when quiet and a piece is within range (no "." hold running) or "." is pressed again. */
   _retryReady(view) {
     if (!this._retry || !view.store || view.store.seen) return false;
     if (view.pressCount() !== this._retryPress) return true;
     return this._near && !(view.arms || []).some((a) => a && a._strutManual);
   }
 
-  /**
-   * Quiet: all daughters docked (every arm, not just some), none aiming, no net in flight or
-   * reeling, no leash hand-off. @private
-   */
+  /** Quiet: every arm docked, none aiming, no net in flight or reeling, no leash hand-off. */
   _showMayStart(docked, view) {
     if (!view.store || view.store.seen || docked.length === 0) return false;
     const arms = (view.arms || []).filter(Boolean);
@@ -336,7 +300,6 @@ export class StrutAutoController {
     return docked.every((a) => !a._aimReserved);
   }
 
-  /** @private */
   _startShow(docked, view) {
     const V = Constants.OCTOPUS_V5.STRUT_AUTO;
     // Only the arms opened in this event (or cut short before) play the show.
@@ -347,7 +310,7 @@ export class StrutAutoController {
     this._showArms.clear();
     this._retryArms = [];
     if (arms.length === 0) return;
-    // Each arm returns to what was due: the angle its "." press asked for, else its automatic one.
+    // Each arm returns to what was due: its "." press angle, else its automatic one.
     const backs = new Map();
     for (const a of arms) {
       backs.set(a, (a._strutManual && a._strutTargetAlpha !== undefined)
@@ -359,9 +322,8 @@ export class StrutAutoController {
   }
 
   /**
-   * Stop the show where it is: arms still heading for the show's angle are frozen
-   * (a latch someone else wrote is theirs), then the automatic pose takes them to the
-   * due angle at the real rate. @private
+   * Stop the show where it is: arms still heading for the show's angle are frozen (a latch someone else wrote is
+   * theirs), then the automatic pose takes them to the due angle at the real rate.
    */
   _cancelShow() {
     const s = this._show;
@@ -379,7 +341,6 @@ export class StrutAutoController {
     this._showPending = false;
   }
 
-  /** @private */
   _tickShow(dt, docked, view) {
     const V = Constants.OCTOPUS_V5.STRUT_AUTO;
     const s = this._show;
@@ -399,7 +360,7 @@ export class StrutAutoController {
     }
 
     if (s.phase === 'out') {
-      // Re-check clearance 0.25 s apart, at the next 3° (the measured sweep is clear to 180°; this is the net).
+      // Re-check clearance 0.25 s apart, at the next 3° (the measured sweep is clear to 180°; this is the safety net).
       this._checkS += dt;
       if (this._checkS >= 0.25 && typeof view.gapAt === 'function') {
         this._checkS = 0;
@@ -422,7 +383,6 @@ export class StrutAutoController {
     }
   }
 
-  /** @private */
   _turnBack(s) {
     s.phase = 'back';
     for (const a of s.arms) {
@@ -432,9 +392,8 @@ export class StrutAutoController {
     }
   }
 
-  // ── headless slew ───────────────────────────────────────────────────────
+  // headless slew
 
-  /** @private */
   _slewHeadless(dt, docked) {
     for (const arm of docked) {
       const t = arm._strutTargetAlpha;

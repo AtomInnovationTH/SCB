@@ -1,39 +1,23 @@
 /**
- * HintTicker.js — Bottom-screen single-line onboarding hint presenter
+ * Bottom-screen single-line onboarding hint presenter, driven entirely by EventBus messages:
+ *   • Events.HINT_POSTED         — show a new hint on the LEFT (latest, brightest)
+ *   • Events.HINT_SATISFIED      — fade and remove a hint by `id`
+ *   • Events.SKILL_STATE_CHANGED — when the related skillId reaches `practiced`, the matching hint fades on its own
  *
- * Delegation 2 onboarding (2026-05-31). A stateless presenter driven entirely
- * by EventBus messages:
- *   • Events.HINT_POSTED     — show a new hint on the LEFT (latest, brightest)
- *   • Events.HINT_SATISFIED  — fade and remove a hint by `id`
- *   • Events.SKILL_STATE_CHANGED — when the related skillId reaches `practiced`
- *                                  state, the matching hint fades on its own.
+ * Layout (tuning: Constants.ONBOARDING.TICKER): the latest hint lives on the LEFT (bright border, key glyph in a
+ * chip); older hints push RIGHT, each dimmer and slightly smaller; a hint beyond MAX_VISIBLE displaces the
+ * rightmost. When one clears, the rest shift left. Inline CSS only (self-contained, like TeachingOverlay.js).
  *
- * Layout: fixed strip ~36 px tall, anchored 88 px above viewport bottom
- * (above the existing notification slot at the very bottom).  The latest hint
- * lives on the LEFT — bright cyan border, 16 px font, key glyph in a chip.
- * Older hints push RIGHT, each step dimmer + slightly smaller (~13 px, 95 %
- * scale).  At most 4 hints are visible; a 5th displaces the rightmost.  When
- * a hint clears (satisfied / duration / skill practiced), the remaining items
- * shift left over 250 ms.
+ * Glass: the payload stays KEY-based; at render time the chip and the body consult GestureHints — on a touch device
+ * a `keys: ['KeyN']` hint paints "HOLD → NET". Off glass GestureHints is inert, so desktop is byte-identical.
+ * The "+ Library" unlock chip (CodexSystem, `codexId`) is the one tappable row: its click reaches `setChipTap(fn)`
+ * (the hub wires it to the SPECS pane).
  *
- * Inline CSS only — matches the project pattern of self-contained UI modules
- * (TeachingOverlay.js, CommsPanel.js).  No new CSS files.
- *
- * Glass (Session J item 5): the payload stays KEY-based; at render time the
- * chip and the body consult GestureHints — on a touch device a `keys:
- * ['KeyN']` hint paints "HOLD → NET" and "Press N" prose speaks the gesture.
- * Off glass GestureHints is inert (null chip, same-instance text), so desktop
- * is byte-identical. The "+ Library" unlock chip (CodexSystem, `codexId`) is
- * the one tappable row: its click reaches `setChipTap(fn)` — the hub wires it
- * to the SPECS pane so an unlock is a doorway, not a notification.
- *
- * Step chips (u2-one-voice, 2026-10-18): a row whose payload has `step: true`
- * is THE one thing to do now. Posting a step row takes any other visible step
- * row off screen at once; the replaced row WAITS (newest first) and comes back
- * when the newer step row is satisfied, expires or is practiced away. A waiting
- * id counts in `getItemIds()` and a post for it is a no-op. On glass, with a
- * `setStepTap` sink wired, a step row that carries `press` + `button` renders
- * as a 44 px button (label only) whose tap calls the sink with the key code.
+ * Step chips: a row whose payload has `step: true` is THE one thing to do now. Posting a step row takes any other
+ * visible step row off screen at once; the replaced row WAITS (newest first) and comes back when the newer step row
+ * is satisfied, expires or is practiced away. A waiting id counts in `getItemIds()` and a post for it is a no-op.
+ * On glass, with a `setStepTap` sink wired, a step row that carries `press` + `button` renders as a 44 px button
+ * (label only) whose tap calls the sink with the key code.
  *
  * @module ui/hud/HintTicker
  */
@@ -46,14 +30,12 @@ import { ensureGlossaryCss, delegateGlossaryClicks } from '../glossaryDom.js';
 import { GestureHints } from './GestureHints.js';
 import { isShortScreen } from './PhoneFold.js';
 
-// Lazy DOM probe — checked on each use so Node-side tests can install a
-// minimal document shim AFTER the module has been first evaluated.
+// Checked on each use so Node tests can install a document shim AFTER first evaluation.
 function _hasDOM() {
   return typeof document !== 'undefined';
 }
 
-// Default tuning falls back when Constants.ONBOARDING.TICKER is absent
-// (defensive — keeps the module usable in isolated tests).
+// Fallback when Constants.ONBOARDING.TICKER is absent (isolated tests).
 const DEFAULTS = {
   BOTTOM_PX: 88,
   ROW_HEIGHT_PX: 36,
@@ -75,13 +57,12 @@ function _tuning() {
   return Object.assign({}, DEFAULTS, c);
 }
 
-/** u7 D5b: gap + Targets pane width (px) the chip clears on a short phone (Targets is 300 wide, 8 gap). */
+/** Gap + Targets pane width (px) the chip clears on a short phone (Targets is 300 wide, 8 gap). */
 export const CHIP_TARGETS_CLEAR_PX = 308;
 
 /**
- * u7 D5b: where the step chip sits. Centred (today) except on a short screen no wider than the
- * 768 px phone rule while the Targets pane is shown: then its right edge is the pane's left edge - 8, so the
- * two never overlap. Pure; no layout read.
+ * Where the step chip sits: centred, except on a short screen no wider than 768 px while the Targets pane is shown;
+ * then its right edge is the pane's left edge - 8. Pure; no layout read.
  * @param {{W:number, H:number, targetsShown:boolean}} p
  * @returns {'center'|'left-of-targets'}
  */
@@ -89,14 +70,9 @@ export function chipPlacement({ W, H, targetsShown }) {
   return (targetsShown && isShortScreen(H) && Number.isFinite(W) && W <= 768) ? 'left-of-targets' : 'center';
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// HINT TICKER
-// ───────────────────────────────────────────────────────────────────────────
-
 export class HintTicker {
   /**
-   * @param {HTMLElement} [containerEl] — DOM mount point (defaults to document.body)
-   * @param {object}      [opts]
+   * @param {HTMLElement} [containerEl] — mount point (defaults to document.body)
    * @param {object}      [opts.eventBus] — overridable EventBus (tests pass a mock)
    */
   constructor(containerEl, opts = {}) {
@@ -107,26 +83,16 @@ export class HintTicker {
     this._unsubs = [];
     this._disposed = false;
 
-    /** @type {HTMLElement|null} Container strip element */
     this._strip = null;
 
-    /**
-     * @type {((info: { id: string }) => void)|null} The unlock-chip tap sink
-     * (`setChipTap`). Called with `{ id: payload.codexId }` when a row that
-     * carries a string `codexId` is clicked. Null = the row is inert.
-     */
+    /** @type {((info: { id: string }) => void)|null} unlock-chip tap sink (`setChipTap`); null = the row is inert. */
     this._onChipTap = null;
 
-    /**
-     * @type {((code: string) => void)|null} The step-button tap sink
-     * (`setStepTap`). Called with the payload's `press` key code when a step
-     * button is tapped. Null = step rows render as plain chips.
-     */
+    /** @type {((code: string) => void)|null} step-button tap sink (`setStepTap`); null = step rows render as plain chips. */
     this._onStepTap = null;
 
     /**
-     * Step rows pushed off screen by a newer step row, newest first. Same item
-     * shape as `_items`; the timer keeps running while a row waits.
+     * Step rows pushed off screen by a newer step row, newest first. Same shape as `_items`; the timer keeps running.
      * @type {Array<{ id: string, el: HTMLElement, skillId?: string, timer?: number, payload: object }>}
      */
     this._waiting = [];
@@ -134,7 +100,7 @@ export class HintTicker {
     /** Step-button elements fading out: the strip stays tall until they are gone. */
     this._fadingButtons = new Set();
 
-    /** @type {(() => boolean)|null} u7 D5b: is the Targets pane on screen? (HUD wires it; null = never) */
+    /** @type {(() => boolean)|null} is the Targets pane on screen? (HUD wires it; null = never) */
     this._targetsShown = null;
     /** @type {'center'|'left-of-targets'} the placement last written (write-on-change) */
     this._placement = 'center';
@@ -143,16 +109,13 @@ export class HintTicker {
     this._wireListeners();
   }
 
-  // ─── PUBLIC API ────────────────────────────────────────────────────────
-
-  /** u7 D5b: the Targets-shown getter (HUD passes one over the TargetPanel's attributes). */
+  /** The Targets-shown getter (HUD passes one over the TargetPanel's attributes). */
   setTargetsShown(fn) {
     this._targetsShown = (typeof fn === 'function') ? fn : null;
   }
 
   /**
-   * u7 D5b: put the chip where chipPlacement() says; writes only on change. Called once a frame
-   * (main.js) with the window numbers the code already has. No layout read.
+   * Put the chip where chipPlacement() says; writes only on change. Called once a frame (main.js). No layout read.
    * @param {{innerWidth?:number, innerHeight?:number}|null} [win]  defaults to window
    */
   syncPlacement(win) {
@@ -175,98 +138,81 @@ export class HintTicker {
     }
   }
 
-  /** Programmatic post (used by tests).  Same payload contract as HINT_POSTED. */
+  /** Programmatic post (tests); same payload contract as HINT_POSTED. */
   post(payload) {
     this._onHintPosted(payload);
   }
 
-  /** Programmatic satisfy (used by tests). */
   satisfy(id) {
     this._onHintSatisfied({ id });
   }
 
   /**
-   * Wire the unlock-chip tap. A HINT_POSTED payload with a string `codexId`
-   * (CodexSystem's "+ Library" acknowledgment) renders as a tappable row; its
-   * click calls `fn({ id: codexId })`. The hub points this at the SPECS pane
-   * (`libraryPane.openEntry(id)`, else the CODEX_OPEN_ENTRY deep link) so the
-   * unlock chip opens the new entry. Pass a non-function to unwire.
-   * @param {((info: { id: string }) => void)|null} fn
+   * Wire the unlock-chip tap. A HINT_POSTED payload with a string `codexId` renders as a tappable row; its click
+   * calls `fn({ id: codexId })`. The hub points this at the SPECS pane (`libraryPane.openEntry(id)`, else the
+   * CODEX_OPEN_ENTRY deep link). Pass a non-function to unwire.
    */
   setChipTap(fn) {
     this._onChipTap = (typeof fn === 'function') ? fn : null;
   }
 
   /**
-   * Wire the step-button tap (touch). A glass step row with `press` + `button`
-   * renders as a button; its click calls `fn(press)`. main.js points this at
-   * `dispatchKeyPress`. Pass a non-function to unwire.
-   * @param {((code: string) => void)|null} fn
+   * Wire the step-button tap (touch): a glass step row with `press` + `button` renders as a button; its click calls
+   * `fn(press)` (main.js: `dispatchKeyPress`). Pass a non-function to unwire.
    */
   setStepTap(fn) {
     this._onStepTap = (typeof fn === 'function') ? fn : null;
   }
 
   /**
-   * u11 D2: is a step row other than `exceptId` alive (on screen, or waiting off screen for the newer one to leave)?
-   * TouchActionChip asks before it posts: one step chip, one action.
+   * Is a step row other than `exceptId` alive (on screen, or waiting off screen)? TouchActionChip asks before it
+   * posts: one step chip, one action.
    * @param {string} [exceptId]
-   * @param {string} [exceptPress]  u18c D5: also ignore step buttons that press this key (a daughter's tool button replaces a
+   * @param {string} [exceptPress]  also ignore step buttons that press this key (a daughter's tool button replaces a
    *        KeyN beat chip: same key, and hers is the true word)
-   * @returns {boolean}
    */
   hasStepChip(exceptId, exceptPress) {
-    // u11 R11: only a step row WITH a button is a tappable chip; a text-only step hint ("Turn to line her up")
-    // does not hold the slot against a line chip.
+    // Only a step row WITH a button is a tappable chip; a text-only step hint does not hold the slot.
     const isStep = (it) => it && it.id !== exceptId && it.payload && it.payload.step === true && !!it.payload.button
       && !(exceptPress && it.payload.press === exceptPress);
     return this._items.some(isStep) || this._waiting.some(isStep);
   }
 
-  /** s5 gaps R1: is the row with this id on screen right now (a shelved step row waits off screen and does not count)? */
+  /** Is the row with this id on screen right now (a waiting step row does not count)? */
   isOnScreen(id) {
     return this._items.some((it) => it && it.id === id);
   }
 
-  /** u18c D5: a step BUTTON (glass, with a step sink) is on screen: the row a text-only `yieldToButton` hint must not cover. */
+  /** A step BUTTON (glass, with a step sink) is on screen: the row a text-only `yieldToButton` hint must not cover. */
   _stepButtonUp() {
     if (typeof this._onStepTap !== 'function' || !GestureHints.isGlass()) return false;
     return this._items.some((it) => it && it.payload && it.payload.step === true && typeof it.payload.press === 'string' && !!it.payload.button);
   }
 
-  /** u15b fix 4: is a step button with this label showing now? (the glass pilot strip names only buttons that are up) */
+  /** Is a step button with this label showing now? (the glass pilot strip names only buttons that are up) */
   hasStepButton(label) {
     return this._items.some((it) => it && it.payload && it.payload.step === true && it.payload.button === label);
   }
 
-  /** Number of currently-visible hint rows. */
   getVisibleCount() {
     return this._items.length;
   }
 
-  /** Returns the DOM strip (for tests). */
+  /** The DOM strip (tests). */
   getStripElement() {
     return this._strip;
   }
 
-  /**
-   * Returns the array of item ids in left→right order (for tests), then the
-   * ids of step rows waiting off screen (a waiting id still counts as "up", so
-   * a poster that checks `getItemIds()` never re-posts it).
-   */
+  /** Item ids left→right, then the ids of step rows waiting off screen (a waiting id still counts as "up"). */
   getItemIds() {
     return this._items.map(it => it.id).concat(this._waiting.map(it => it.id));
   }
 
-  /**
-   * Clear every visible hint. Wired to GAME_WIN (F3) so a lingering onboarding
-   * chip doesn't sit on top of the victory screen. Also usable programmatically.
-   */
+  /** Clear every visible hint. Wired to GAME_WIN so no chip sits over the victory screen. */
   clearAll() {
-    // Waiting step rows go first, so the fade of a visible step row can never
-    // bring one back (no chip may sit over the victory report).
+    // Waiting rows go first, so the fade of a visible step row can never bring one back.
     this._dropAllWaiting();
-    // Snapshot ids first — _fadeAndRemove mutates this._items in place.
+    // Snapshot ids: _fadeAndRemove mutates this._items in place.
     for (const id of this._items.map(it => it.id)) {
       this._fadeAndRemove(id);
     }
@@ -291,17 +237,13 @@ export class HintTicker {
     this._strip = null;
   }
 
-  // ─── INTERNAL — DOM CONSTRUCTION ───────────────────────────────────────
-
   _build() {
     if (!_hasDOM() || !this._container) return;
     const T = _tuning();
     const strip = document.createElement('div');
-    // Zoom Ladder (FloorMask, 08-workbench §4): on the F3 hull floor the mask
-    // sets `data-floor-gone` on this strip (display:none !important) and clears
-    // it on the next floor — the ticker itself never knows; items and timers
-    // keep running and whatever is still alive reappears. The density 'score'
-    // rung's `data-density-hidden` is the other, independent bit on this node.
+    // FloorMask sets `data-floor-gone` on this strip (display:none !important) on the hull floor and clears it on the
+    // next; the ticker never knows (items and timers keep running). The density 'score' rung's
+    // `data-density-hidden` is the other, independent bit on this node.
     strip.id = 'hud-hint-ticker';
     strip.style.cssText = [
       'position:fixed',
@@ -324,15 +266,11 @@ export class HintTicker {
     this._strip = strip;
     this._container.appendChild(strip);
 
-    // Inline-glossary affordances. The strip is pointer-events:none (click-
-    // through); decorated terms re-enable pointer events on themselves (see the
-    // body span below) so a click can deep-link, and this delegated handler on
-    // the strip catches the bubbled event.
+    // The strip is pointer-events:none; decorated glossary terms re-enable pointer events on themselves (body span
+    // below) and this delegated handler catches the bubbled click.
     ensureGlossaryCss();
     delegateGlossaryClicks(strip);
   }
-
-  // ─── INTERNAL — EVENTBUS WIRING ────────────────────────────────────────
 
   _wireListeners() {
     const eb = this._eventBus;
@@ -346,20 +284,15 @@ export class HintTicker {
     if (Events.SKILL_STATE_CHANGED) {
       on(Events.SKILL_STATE_CHANGED, (d) => this._onSkillStateChanged(d));
     }
-    // F3: the game-win screen takes over — drop any lingering hint chips so they
-    // don't hover over the victory report.
     if (Events.GAME_WIN) {
       on(Events.GAME_WIN, () => this.clearAll());
     }
   }
 
-  // ─── EVENT HANDLERS ────────────────────────────────────────────────────
-
   _onHintPosted(payload) {
     if (this._disposed) return;
     if (!payload || !payload.id) return;
-    // Idempotent: re-emitting the same id while alive = no-op.
-    // A step row that is waiting off screen is "alive" too.
+    // Idempotent: re-posting an id that is alive (on screen or waiting) is a no-op.
     if (this._items.some(it => it.id === payload.id)) return;
     if (this._waiting.some(it => it.id === payload.id)) return;
     const T = _tuning();
@@ -374,11 +307,9 @@ export class HintTicker {
       timer: null,
     };
 
-    // One step at a time: a new step row pushes every visible step row off
-    // screen; they wait and come back when this one leaves.
-    // u18c D5 (live fix): ... except a text-only hint that says it yields (`yieldToButton`: the idle coach's "Grip it" beside
-    // her tool's button) when a step BUTTON is up on glass. It waits behind the button instead of covering it for its 12 s: the
-    // button is the same instruction in the true word, and a touch player cannot tap a sentence.
+    // One step at a time: a new step row pushes every visible step row off screen; they come back when this one
+    // leaves. Except a text-only hint with `yieldToButton` (the idle coach's "Grip it") while a step BUTTON is up on
+    // glass: it waits behind the button, which is the same instruction in the true word.
     if (payload.step === true && payload.yieldToButton === true && !payload.button && this._stepButtonUp()) {
       this._waiting.push(item);
       if (typeof setTimeout === 'function' && Number.isFinite(dur) && dur > 0) {
@@ -388,11 +319,10 @@ export class HintTicker {
     }
     if (payload.step === true) this._shelveVisibleSteps();
 
-    // Insert as LEFT-most (latest); push existing right.
     this._items.unshift(item);
     if (this._strip) {
-      // u14b R2: a button of the SAME id that is still fading out (taken down, re-posted within FADE_OUT_MS) is replaced IN
-      // PLACE, so the new button sits where the player's thumb is going; a second copy beside it would shift the centred strip.
+      // A button of the SAME id still fading out (re-posted within FADE_OUT_MS) is replaced IN PLACE, so the new
+      // button sits where the thumb is going; a second copy beside it would shift the centred strip.
       const old = el ? this._fadingButtonFor(payload.id) : null;
       if (old && old.parentNode === this._strip) {
         this._fadingButtons.delete(old);
@@ -403,34 +333,30 @@ export class HintTicker {
       }
     }
 
-    // Brief flash for `priority:'high'`.
     if (payload.priority === 'high' && _hasDOM()) {
       el.style.boxShadow = '0 0 12px rgb(var(--hud-info-rgb, 0 204 255) / 0.55)';
       setTimeout(() => { if (el) el.style.boxShadow = ''; }, 500);
     }
 
-    // Displace 5th-and-beyond from the RIGHT (never a step row).
+    // Displace from the RIGHT (never a step row).
     this._enforceCap();
 
-    // Restyle older entries (font / opacity / scale) — left-to-right.
     this._restyleAll();
 
-    // Auto-expire timer.
     if (typeof setTimeout === 'function' && Number.isFinite(dur) && dur > 0) {
       item.timer = setTimeout(() => this._fadeAndRemove(item.id), dur);
     }
   }
 
-  /** u14b R2: the step button with this hint id that is fading out (not yet removed), or null. */
+  /** The step button with this hint id that is fading out (not yet removed), or null. */
   _fadingButtonFor(id) {
     for (const b of this._fadingButtons) if (b && b.dataset && b.dataset.hintId === id) return b;
     return null;
   }
 
   /**
-   * u14b R2: take a fading row out of the strip's layout (position:absolute at its current spot). The strip is centred, so a row
-   * that stays in the flow for its FADE_OUT_MS keeps the next button off its centre and then snaps back: a tap on the new button
-   * hit the dead fading copy.
+   * Take a fading row out of the strip's layout (position:absolute at its current spot). The strip is centred, so a
+   * row left in the flow for FADE_OUT_MS keeps the next button off centre and then snaps back: a tap hit the dead copy.
    */
   _floatOut(el) {
     if (!el || !el.style || !el.parentNode) return;
@@ -451,7 +377,6 @@ export class HintTicker {
 
   _onSkillStateChanged(payload) {
     if (!payload || !payload.skillId || !payload.to) return;
-    // When the related skill becomes 'practiced' (or higher), fade matching hints.
     const reached = (payload.to === 'practiced' || payload.to === 'mastered');
     if (!reached) return;
     for (const it of this._waiting.filter(w => w.skillId === payload.skillId)) {
@@ -460,8 +385,6 @@ export class HintTicker {
     const matches = this._items.filter(it => it.skillId === payload.skillId);
     for (const it of matches) this._fadeAndRemove(it.id);
   }
-
-  // ─── STEP WAIT LIST ────────────────────────────────────────────────────
 
   /** Take every visible step row off screen (no fade) and put it on the wait list, newest first. */
   _shelveVisibleSteps() {
@@ -475,7 +398,6 @@ export class HintTicker {
     }
   }
 
-  /** Forget a waiting row (satisfied / practiced / expired / cleared). */
   _dropWaiting(id) {
     const i = this._waiting.findIndex(it => it.id === id);
     if (i < 0) return false;
@@ -509,10 +431,7 @@ export class HintTicker {
     this._restyleAll();
   }
 
-  /**
-   * Keep at most MAX_VISIBLE rows. The oldest NON-step row goes first: the cap
-   * must never push out the step (visible or waiting) the player is meant to do.
-   */
+  /** Keep at most MAX_VISIBLE rows. The oldest NON-step row goes first: never push out the step the player is meant to do. */
   _enforceCap() {
     const T = _tuning();
     while (this._items.length > T.MAX_VISIBLE) {
@@ -533,8 +452,6 @@ export class HintTicker {
     this._strip.style.height = hasBtn ? `${Math.max(T.ROW_HEIGHT_PX, 48)}px` : `${T.ROW_HEIGHT_PX}px`;
   }
 
-  // ─── ITEM LIFECYCLE ────────────────────────────────────────────────────
-
   _fadeAndRemove(id) {
     const idx = this._items.findIndex(it => it.id === id);
     if (idx < 0) {
@@ -554,11 +471,9 @@ export class HintTicker {
       item.el.style.opacity = '0';
       // A second tap during the fade must not toggle anything back.
       item.el.style.pointerEvents = 'none';
-      this._floatOut(item.el);   // u14b R2: and it must not sit in the strip's layout either
+      this._floatOut(item.el);   // nor sit in the strip's layout
     }
-    // Remove from array immediately so list logic stays consistent.
     this._items.splice(idx, 1);
-    // Physically remove after fade.
     const el = item.el;
     const isBtn = !!(el && el.dataset && el.dataset.stepButton === '1');
     if (isBtn) this._fadingButtons.add(el);
@@ -573,7 +488,7 @@ export class HintTicker {
     this._restyleAll();
   }
 
-  /** Force-remove without fade (e.g. displaced by 5th post). */
+  /** Remove (no fade when displaced by the cap). */
   _removeItemElement(item, fade = true) {
     if (!_hasDOM()) return;
     if (item.timer != null && typeof clearTimeout === 'function') clearTimeout(item.timer);
@@ -589,7 +504,6 @@ export class HintTicker {
     }
   }
 
-  /** Re-apply opacity / font / scale across the row (left = brightest). */
   _restyleAll() {
     if (!_hasDOM()) return;
     const T = _tuning();
@@ -613,26 +527,16 @@ export class HintTicker {
     this._syncStripHeight();
   }
 
-  /**
-   * Build the DOM for one hint row.
-   * @param {object} payload
-   * @param {boolean} highlight — whether this slot is the latest (left-most)
-   * @returns {HTMLElement}
-   */
+  /** @param {boolean} highlight — this slot is the latest (left-most) */
   _buildItemElement(payload, highlight) {
     const T = _tuning();
     const row = _hasDOM() ? document.createElement('div') : null;
     if (!row) return row;
-    // The unlock chip (CodexSystem `_postAckChip`, `codexId: entry.id`) is
-    // the ONE tappable row: pointer events back on, a pointer cursor, and a
-    // click that reaches the `setChipTap` sink. Every other row stays
-    // click-through (the strip is pointer-events:none). Tappable ONLY while a
-    // sink is wired at build time: the hub wires it inside the LADDER.ENABLED
-    // gate, so a ?ladder=0 boot (no SPECS pane, no sink) renders the shipped
-    // click-through row byte-for-byte — never a dead pointer target.
+    // The unlock chip (`codexId`) is the ONE tappable row; every other row stays click-through. Tappable ONLY while a
+    // sink is wired at build time: the hub wires it inside the LADDER.ENABLED gate, so a ?ladder=0 boot (no SPECS
+    // pane, no sink) never gets a dead pointer target.
     const tappable = (typeof payload.codexId === 'string') && (typeof this._onChipTap === 'function');
-    // A step row on glass with a step sink and a button label IS the button
-    // (44 px, label only). No sink / off glass: the plain chip, as before.
+    // A step row on glass with a step sink and a button label IS the button. No sink / off glass: the plain chip.
     if (payload.step === true && typeof payload.press === 'string' && payload.button
         && typeof this._onStepTap === 'function' && GestureHints.isGlass()) {
       return this._buildStepButton(row, payload, highlight);
@@ -657,11 +561,8 @@ export class HintTicker {
       'will-change:opacity,transform',
     ].concat(tappable ? ['cursor:pointer'] : []).join(';') + ';';
 
-    // Glyph chip (left). On glass a keyed hint's chip is the GESTURE
-    // ("HOLD → NET", see _resolveGlyph) — several words, so the chip must be
-    // free to grow: it keeps its 22 px height and never shrinks or wraps
-    // inside the flex row. Off glass the chip is one key glyph and the style
-    // list is exactly what it was (desktop byte-identical).
+    // Glyph chip (left). On glass a keyed hint's chip is the GESTURE ("HOLD → NET", see _resolveGlyph): several
+    // words, so it must be free to grow and never shrink or wrap in the flex row. Off glass it is one key glyph.
     const chipText = this._resolveGlyph(payload);
     if (chipText) {
       const chip = document.createElement('span');
@@ -685,11 +586,8 @@ export class HintTicker {
       row.appendChild(chip);
     }
 
-    // Body text (right) — inline glossary decorated. `pointer-events:auto`
-    // re-enables hit-testing inside the click-through strip so glossary terms
-    // are clickable; decorateGlossary escapes the source before wrapping.
-    // GestureHints.speak rewrites "[N]" / "(N)" / "Press N" as the gesture on
-    // glass and hands back the SAME string off glass.
+    // Body text (right): `pointer-events:auto` re-enables hit-testing inside the click-through strip so glossary
+    // terms are clickable; decorateGlossary escapes the source before wrapping.
     const body = document.createElement('span');
     body.innerHTML = decorateGlossary(GestureHints.speak(payload.text || ''), { once: true });
     body.style.cssText = 'color:var(--hud-text, #ccddee);pointer-events:auto;';
@@ -697,8 +595,7 @@ export class HintTicker {
 
     if (tappable) {
       row.addEventListener('click', (e) => {
-        // A glossary term inside the body is its own deep link (glossaryDom's
-        // delegated handler on the strip) — one intent per tap: yield to it.
+        // A glossary term inside the body is its own deep link: one intent per tap, yield to it.
         const t = e && e.target;
         if (t && typeof t.closest === 'function' && t.closest('.glossary-term[data-entry]')) return;
         if (typeof this._onChipTap === 'function') this._onChipTap({ id: payload.codexId });
@@ -750,24 +647,20 @@ export class HintTicker {
   }
 
   /**
-   * The chip text for a hint row. On glass a KEYED hint paints its gesture
-   * (GestureHints.chipFor — the first key with a table row) even when the
-   * payload also carries a `glyph`; glyph-only hints (`keys: []` — the '!'
-   * refusal, the '…' hold, the codex 'I' ack) keep their glyph. Off glass
-   * chipFor is always null and the key-glyph fallbacks below are untouched.
+   * The chip text for a hint row. On glass a KEYED hint paints its gesture (GestureHints.chipFor) even when the
+   * payload also carries a `glyph`; glyph-only hints (`keys: []`: the '!' refusal, the '…' hold, the codex 'I' ack)
+   * keep their glyph.
    */
   _resolveGlyph(payload) {
     const g = GestureHints.chipFor(payload.keys);
     if (g) return g;
-    // u15b B-T5: on glass a raw key glyph ("S", "?", "1-4") is never shown: the skill's touch word, else no badge.
+    // On glass a raw key glyph ("S", "?", "1-4") is never shown: the skill's touch word, else no badge.
     const word = GestureHints.badgeFor(payload);
     if (word !== undefined) return word;
     if (payload.glyph) return payload.glyph;
     if (Array.isArray(payload.keys) && payload.keys.length > 0) {
-      if (GestureHints.isGlass()) return null;   // u15b B-T5: a key with no gesture row shows no badge on glass
-      // Friendly fallback: just take first character of first key.
+      if (GestureHints.isGlass()) return null;   // a key with no gesture row shows no badge on glass
       const k = String(payload.keys[0]);
-      // Strip 'Key' prefix from KeyS / KeyD codes.
       if (k.startsWith('Key')) return k.slice(3);
       if (k.startsWith('Arrow')) return '←';
       if (k === 'Space') return '␣';
@@ -781,8 +674,7 @@ export class HintTicker {
 
   _chipBg(payload, T) {
     const glyph = (payload.glyph || '').toLowerCase();
-    // Matches a legacy mouse pictograph (U+1F5B1) still carried by some payloads;
-    // built from its code point so this file renders no pictograph itself.
+    // U+1F5B1 (mouse pictograph) is still carried by some payloads; built from its code point so this file has none.
     if (glyph.includes(String.fromCodePoint(0x1F5B1)) || glyph.includes('mouse')) return T.KEY_CHIP_BG_MOUSE;
     if (glyph.includes('shift') || glyph.includes('ctrl') || glyph.includes('alt') || glyph.includes('meta')) {
       return T.KEY_CHIP_BG_MODIFIER;

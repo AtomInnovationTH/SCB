@@ -1,20 +1,13 @@
 /**
  * SkillsPane.js — "Discoveries" / Journal HUD overlay pane.
  *
- * Plan 1788867799156-hud-pane-ladder-reorder.md Task 10 / locked #7: the
- * compact pane is a footer-chip popover (`DISCOVERIES` chip inboard of the
- * DETAIL slider; `#hud-discoveries` wrapper owns the density bit). Tap the
- * chip to expand the 280×≤300 popover above the footer; tap again collapses.
- * Expanded state is session-only (never persisted). J key still opens the
- * full skill-tree overlay. Header hit is 44 px on glass.
+ * The compact pane is a footer-chip popover (`DISCOVERIES` chip inboard of the DETAIL slider; the
+ * `#hud-discoveries` wrapper owns the density bit). Tap the chip to expand the 280×≤300 popover above the
+ * footer; tap again collapses. Expanded state is session-only (never persisted). The J key opens the full
+ * skill-tree overlay. Header hit is 44 px on glass.
  *
- * Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.7): the
- * wrapper is BUILT with `data-density-hidden` (D3 — hidden by default on every
- * floor, like the Override gag); only the `experimental` rung's adapter (the
- * last `+`, FloorMask D5 memory) clears it.
- *
- * Delegation 1 (2026-05-31) onboarding rebind: open-key migrated from K → J
- * because bare K was freed by the broader hotkey overhaul (Forge moved to F4).
+ * The wrapper is BUILT with `data-density-hidden` (hidden by default on every floor, like the Override gag);
+ * only the `experimental` rung's adapter (the last `+`) clears it.
  *
  * Pure DOM component — no canvas, no THREE.js.
  *
@@ -35,8 +28,8 @@ import { GestureHints } from './GestureHints.js';
 export const DISCOVERIES_WRAPPER_ID = 'hud-discoveries';
 export const DISCOVERIES_CHIP_ID = 'hud-chip-discoveries';
 /**
- * DISCOVERIES chip `right` offset (2026-10-22): left of the ORB chip, which stands left of the DETAIL slider
- * (FooterChip.js has the layout and why). Scale 1 value; the live CSS is {@link DISCOVERIES_CHIP_RIGHT_CSS}.
+ * DISCOVERIES chip `right` offset: left of the ORB chip, which stands left of the DETAIL slider (FooterChip.js
+ * has the layout). Scale 1 value; the live CSS is {@link DISCOVERIES_CHIP_RIGHT_CSS}.
  */
 export const DISCOVERIES_CHIP_OFFSET_PX = leftOfSliderBasePx(ORB_CHIP_WIDTH_PX + FOOTER_CHIP_GAP_PX);
 export const DISCOVERIES_CHIP_RIGHT_CSS = leftOfSliderCss(ORB_CHIP_WIDTH_PX + FOOTER_CHIP_GAP_PX);
@@ -48,13 +41,12 @@ function resolveGlass(explicit) {
     try { return TouchControls.detectGlass(); } catch (_e) { return false; }
 }
 
-// ── Skill state constants (match SkillsSystem) ────────────────────────────
+// Skill states (match SkillsSystem).
 const UNDISCOVERED = 'undiscovered';
 const DISCOVERED   = 'discovered';
 const PRACTICED    = 'practiced';
 const MASTERED     = 'mastered';
 
-// ── Category display metadata ─────────────────────────────────────────────
 const CATEGORY_META = {
     nav:       { label: 'NAVIGATION',  order: 0 },
     scan:      { label: 'SCANNING',    order: 1 },
@@ -63,7 +55,6 @@ const CATEGORY_META = {
     awareness: { label: 'AWARENESS',   order: 4 },
 };
 
-// ── State symbols for skill display ───────────────────────────────────────
 const STATE_SYMBOLS = {
     [UNDISCOVERED]: '○',
     [DISCOVERED]:   '●',
@@ -71,37 +62,30 @@ const STATE_SYMBOLS = {
     [MASTERED]:     '✓',
 };
 
-// ── Compact view limits ───────────────────────────────────────────────────
 const MAX_COMPACT_ACTIVE  = 4;
 const MAX_COMPACT_SUGGEST = 2;
 
-// ── First-discovery threshold (longer display for first N) ────────────────
 const FIRST_DISCOVERY_LONG_COUNT = 3;
 
-// ── Progression-aware persistence levels ─────────────────────────────────
-// Drives show()/fadeOut() behavior based on player's discovered-skill count.
+// Drives show()/fadeOut() by the player's discovered-skill count.
 // NOVICE:     pane always visible, high idle opacity, no auto-hide.
 // APPRENTICE: pane stays rendered but dims to 45% idle after timeout.
-// VETERAN:    current toast behavior — fades out and hides completely.
+// VETERAN:    toast behavior — fades out and hides completely.
 const EXPERIENCE_LEVELS = {
     NOVICE:     { threshold: 0,  idleOpacity: 0.85, autoHideMs: null,  firstDiscoveryMs: null  },
     APPRENTICE: { threshold: 5,  idleOpacity: 0.45, autoHideMs: 15000, firstDiscoveryMs: 20000 },
     VETERAN:    { threshold: 15, idleOpacity: 0.0,  autoHideMs: 4000,  firstDiscoveryMs: 8000  },
 };
 
-// ── Brighten window when a discovery fires in NOVICE mode ────────────────
-// After this delay the pane transitions back from 100% to the idle opacity.
+// Brighten window when a discovery fires in NOVICE mode: after it the pane returns from 100% to idle opacity.
 const NOVICE_BRIGHTEN_MS = 3000;
 
-// ── Delay before first auto-display after construction ────────────────────
 const INITIAL_DISPLAY_DELAY_MS = 500;
 
-// ── Fade-to-idle transition duration ──────────────────────────────────────
 const FADE_TO_IDLE_MS = 300;
 
 export class SkillsPane {
     /**
-     * Create the Skills Pane and attach it to the HUD overlay.
      * @param {HTMLElement} hudContainer — The #hud-overlay div
      * @param {{glass?:boolean, hintBandPx?:number, doc?:Document}} [opts]
      */
@@ -121,7 +105,6 @@ export class SkillsPane {
         this._wrapper = null;
         this._chip = null;
 
-        // ── Skill data ────────────────────────────────────────────────
         /** @type {Object[]} Full catalog from Constants.SKILLS.CATALOG */
         this._catalog = Constants.SKILLS.CATALOG;
         /** @type {Object[]} Tier definitions from Constants.SKILLS.TIERS */
@@ -135,7 +118,6 @@ export class SkillsPane {
         /** @type {number} Running count of discoveries this session */
         this._discoveryCount = 0;
 
-        // ── Tech unlock data (from CodexSystem via TECH_UNLOCKED) ───────
         /** @type {Object[]} Recent tech unlocks: { id, title, shortText, category, time } */
         this._recentTech = [];
         /** @type {number} Badge counter for unseen tech entries */
@@ -143,7 +125,6 @@ export class SkillsPane {
         /** @type {number} Max recent tech entries shown in compact view */
         this._techMaxVisible = 3;
 
-        // ── DOM elements ──────────────────────────────────────────────
         /** @type {HTMLElement|null} Compact pane container */
         this._pane = null;
         /** @type {HTMLElement|null} Compact pane header row */
@@ -157,21 +138,17 @@ export class SkillsPane {
         /** @type {HTMLElement|null} Expanded body (scrollable skill list) */
         this._expandedBody = null;
 
-        // ── Visibility state ──────────────────────────────────────────
         /** @type {boolean} Compact pane visible right now */
         this._visible = false;
         /** @type {boolean} Expanded overlay open */
         this._expanded = false;
-        /** @type {boolean} Master switch — toggled by GAME_STATE_CHANGE.
-         *  Default FALSE: pane is hidden on app load (MENU / BRIEFING /
-         *  LAUNCH_CINEMATIC), only becomes available once the player
-         *  reaches a gameplay state (ORBITAL_VIEW / APPROACH / INTERACTION).
-         *  2026-05-15 polish task 7. */
+        /** @type {boolean} Master switch, toggled by GAME_STATE_CHANGE. Default FALSE: hidden on app load
+         *  (MENU / BRIEFING / LAUNCH_CINEMATIC); available once the player reaches a gameplay state
+         *  (ORBITAL_VIEW / APPROACH / INTERACTION). */
         this._masterVisible = false;
         /** @type {boolean} Currently fading out compact pane */
         this._fading = false;
 
-        // ── Timers ────────────────────────────────────────────────────
         /** @type {number|null} Auto-hide setTimeout ID */
         this._hideTimerId = null;
         /** @type {number|null} Fade-end cleanup setTimeout ID */
@@ -181,11 +158,10 @@ export class SkillsPane {
         /** @type {number|null} Initial-display (post-construct) setTimeout ID */
         this._initialTimerId = null;
 
-        // ── Progression-aware persistence tracking ───────────────────
         /** @type {string} Last level observed — used to log threshold crossings */
         this._lastLevelSeen = 'novice';
 
-        // ── Checklist mode (ST-3.1: NOVICE next-step suggestions) ─────
+        // Checklist mode: NOVICE next-step suggestions
         /** @type {boolean} Enabled while in NOVICE level */
         this._checklistMode = true;
         /** @type {Set<string>} Recently-discovered skill IDs shown with ✓ */
@@ -193,17 +169,14 @@ export class SkillsPane {
         /** @type {Map<string, number>} skillId → setTimeout handle for ✓ dim */
         this._checklistDimTimers = new Map();
 
-        // ── Event unsubscribers ───────────────────────────────────────
         /** @type {Function[]} */
         this._unsubs = [];
 
-        // ── Key handlers (bound once) ─────────────────────────────────
-        /** @type {Function} Bubble-phase keydown (J key toggle — Journal) */
+        /** @type {Function} Bubble-phase keydown (J toggles the Journal) */
         this._boundOnKeyDown = this._onKeyDown.bind(this);
         /** @type {Function} Capture-phase keydown (expanded overlay) */
         this._boundOnExpandedKeyDown = this._onExpandedKeyDown.bind(this);
 
-        // ── Bootstrap ─────────────────────────────────────────────────
         this._initCatalog();
         this._injectStyles();
         this._build();
@@ -212,21 +185,15 @@ export class SkillsPane {
             this._doc.addEventListener('keydown', this._boundOnKeyDown);
         }
 
-        // 2026-05-15 polish task 7: hidden on startup. Used to call
-        // _applyInitialDisplay() unconditionally 500 ms after construct,
-        // which painted the pane during MENU / BRIEFING. Now we wire
-        // visibility to GAME_STATE_CHANGE — pane only appears once the
-        // player reaches a gameplay state. The first call to
-        // setVisible(true) in a gameplay state runs _applyInitialDisplay.
+        // Hidden on startup: visibility follows GAME_STATE_CHANGE, so the pane never paints during MENU /
+        // BRIEFING. The first setVisible(true) in a gameplay state runs _applyInitialDisplay.
         this._lastLevelSeen = this._getExperienceLevel();
         this._unsubs.push(
             eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
                 const gameplay = (to === 'ORBITAL_VIEW' || to === 'APPROACH' || to === 'INTERACTION');
                 if (gameplay && !this._masterVisible) {
                     this.setVisible(true);
-                    // Re-apply initial display now that we're past the menu.
-                    // Slight delay matches the original behavior so the
-                    // pane appears *after* the HUD has settled into view.
+                    // delayed so the pane appears after the HUD has settled into view
                     if (this._initialTimerId !== null) timerManager.clear(this._initialTimerId);
                     this._initialTimerId = timerManager.setTimeout(() => {
                         this._initialTimerId = null;
@@ -239,30 +206,17 @@ export class SkillsPane {
         );
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  PUBLIC API
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Per-frame update. CSS transitions handle animations; reserved for
-     * future frame-driven effects.
-     * @param {number} _dt — Delta time in seconds
-     */
+    /** Per-frame update; CSS transitions drive all visual effects. */
     update(_dt) {
         // intentionally minimal — CSS transitions drive all visual effects
     }
 
     /**
      * Show the compact pane. Behavior adapts to player experience level:
-     *   NOVICE     — pane is always rendered; show() brightens to 100% and
-     *                returns to 85% idle after NOVICE_BRIGHTEN_MS.
-     *   APPRENTICE — pane is normally visible at 45%; show() brightens to
-     *                100% and fades back to 45% after 15s (20s for first 3).
-     *   VETERAN    — classic transient toast: slide-in to 100%, full fadeOut
-     *                after 4s (8s for first 3).
-     * Slide-in animation only plays when the pane is currently hidden (i.e.
-     * VETERAN idle). For NOVICE/APPRENTICE the pane is already rendered so
-     * only the opacity transition plays.
+     *   NOVICE     — always rendered; show() brightens to 100% and returns to 85% idle after NOVICE_BRIGHTEN_MS.
+     *   APPRENTICE — normally visible at 45%; show() brightens to 100% and fades back after 15s (20s for first 3).
+     *   VETERAN    — transient toast: slide-in to 100%, full fadeOut after 4s (8s for first 3).
+     * The slide-in only plays when the pane is currently hidden (VETERAN idle).
      * @param {number} [duration] — Override auto-hide duration (ms)
      */
     show(duration) {
@@ -278,10 +232,9 @@ export class SkillsPane {
         p.style.display = 'block';
         p.style.transition = 'opacity 200ms ease-out, transform 200ms ease-out';
         if (isCurrentlyHidden) {
-            // Slide-in from left (veteran idle → active, or first-ever show)
             p.style.opacity = '0';
             p.style.transform = 'translateX(-20px)';
-            // Force reflow so browser registers starting values before transition
+            // force reflow so the transition starts from these values
             void p.offsetHeight;
         }
         p.style.opacity = '1';
@@ -292,30 +245,21 @@ export class SkillsPane {
         if (dur != null && dur > 0) {
             this._scheduleHide(dur);
         }
-        // If dur is null (shouldn't happen — novice returns NOVICE_BRIGHTEN_MS),
-        // the pane stays at 100% indefinitely until next show() or fadeOut().
     }
 
-    /**
-     * Hide the compact pane with a fade-out animation.
-     */
+    /** Hide the compact pane with a fade-out animation. */
     hide() {
         if (!this._visible && !this._fading) return;
         this._cancelHideTimer();
         this._fadeOut();
     }
 
-    /**
-     * Toggle expanded skill tree view on / off.
-     */
+    /** Toggle expanded skill tree view on / off. */
     toggleExpanded() {
         this._expanded ? this._closeExpanded() : this._openExpanded();
     }
 
-    /**
-     * Master visibility control (called by HUD.js on game-state changes).
-     * @param {boolean} visible
-     */
+    /** Master visibility control (called by HUD.js on game-state changes). */
     setVisible(visible) {
         this._masterVisible = visible;
         if (!visible) {
@@ -324,10 +268,7 @@ export class SkillsPane {
         }
     }
 
-    /**
-     * Reset to a fresh-game state: clear all skill discoveries, tech entries,
-     * and re-apply NOVICE behavior. Called by GameFlowManager on new game.
-     */
+    /** Reset to a fresh-game state (called by GameFlowManager on new game): clear discoveries and tech, re-apply NOVICE. */
     reset() {
         this._cancelHideTimer();
         this._cancelFadeTimer();
@@ -338,34 +279,27 @@ export class SkillsPane {
         for (const tid of this._masteredTimers.values()) timerManager.clear(tid);
         this._masteredTimers.clear();
 
-        // Reset skill state
         for (const def of this._catalog) this._states.set(def.id, UNDISCOVERED);
         this._discoveryOrder.length = 0;
         this._discoveryCount = 0;
 
-        // Reset checklist mode (ST-3.1)
         for (const tid of this._checklistDimTimers.values()) timerManager.clear(tid);
         this._checklistDimTimers.clear();
         this._checklistCompletedIds.clear();
         this._checklistMode = true;
 
-        // PR 5 / P2.8: safety net — kill any other untracked timers owned
-        // by this pane (e.g. animation fallbacks scheduled but not stored).
+        // safety net: kill any other untracked timers owned by this pane (animation fallbacks)
         timerManager.clearByOwner(this);
 
-        // Reset tech state
         this._recentTech.length = 0;
         this._unseenTechCount = 0;
 
-        // Re-apply NOVICE behavior (always visible at 85% idle)
         this._lastLevelSeen = this._getExperienceLevel();
         this._renderCompact();
         this._applyInitialDisplay();
     }
 
-    /**
-     * Remove all DOM elements, unsubscribe events, clear timers.
-     */
+    /** Remove all DOM elements, unsubscribe events, clear timers. */
     dispose() {
         this._cancelHideTimer();
         this._cancelFadeTimer();
@@ -376,16 +310,13 @@ export class SkillsPane {
         for (const tid of this._masteredTimers.values()) timerManager.clear(tid);
         this._masteredTimers.clear();
 
-        // Clear checklist timers (ST-3.1)
         for (const tid of this._checklistDimTimers.values()) timerManager.clear(tid);
         this._checklistDimTimers.clear();
         this._checklistCompletedIds.clear();
 
-        // PR 5 / P2.8: safety net — kill any timers tagged with this owner
-        // that haven't been explicitly tracked (animation-end fallbacks etc.).
+        // safety net: kill any untracked timers tagged with this owner
         timerManager.clearByOwner(this);
 
-        // Clear tech state
         this._recentTech.length = 0;
         this._unseenTechCount = 0;
 
@@ -407,14 +338,7 @@ export class SkillsPane {
         if (styleEl) styleEl.remove();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  INITIALIZATION
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Build the catalog lookup map and set all states to UNDISCOVERED.
-     * @private
-     */
+    /** @private Build the catalog lookup map and set all states to UNDISCOVERED. */
     _initCatalog() {
         for (const def of this._catalog) {
             this._defMap.set(def.id, def);
@@ -422,14 +346,7 @@ export class SkillsPane {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  CSS INJECTION
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Inject the Skills Pane stylesheet (idempotent).
-     * @private
-     */
+    /** @private Inject the Skills Pane stylesheet (idempotent). */
     _injectStyles() {
         const doc = this._doc;
         if (!doc || !doc.getElementById || doc.getElementById('skills-pane-styles')) return;
@@ -792,10 +709,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         if (doc.head && typeof doc.head.appendChild === 'function') doc.head.appendChild(el);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  DOM CONSTRUCTION
-    // ═══════════════════════════════════════════════════════════════════════
-
     /** @private Build both compact and expanded DOM trees */
     _build() {
         this._buildCompactPane();
@@ -803,10 +716,8 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
     }
 
     /**
-     * Build the compact pane: DISCOVERIES footer chip + `.skills-pane` popover
-     * inside `#hud-discoveries`. Density bit on the wrapper hides both.
-     * Plan Task 10 / locked #7.
-     * @private
+     * @private Build the compact pane: DISCOVERIES footer chip + `.skills-pane` popover inside `#hud-discoveries`;
+     * the density bit on the wrapper hides both.
      */
     _buildCompactPane() {
         const doc = this._doc;
@@ -815,15 +726,11 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         const wrapper = doc.createElement('div');
         wrapper.id = DISCOVERIES_WRAPPER_ID;
         if (wrapper.setAttribute) {
-            // Hidden by default on EVERY floor (D3, as OverridePane.js does at
-            // build): `experimental` is the ladder's index 0 — every
-            // DEFAULT_ROOMS row says 'gone' and the shipped cockpit has no
-            // chip. Without this bit the wrapper showed through the translucent
-            // MENU on a fresh boot (HUD.hide() hides only `this.panels`) and
-            // stayed up on F2 whenever the two-phase hide was dropped mid-glide
-            // (owner report 2026-09-09). The bit is written ONLY here and by the
-            // rung adapter — setVisible(true) / _applyInitialDisplay / the chip
-            // tap never touch it.
+            // Hidden by default on EVERY floor (as OverridePane.js does at build): `experimental` is the ladder's
+            // index 0, every DEFAULT_ROOMS row says 'gone', and the shipped cockpit has no chip. Without this bit
+            // the wrapper showed through the translucent MENU on a fresh boot (HUD.hide() hides only
+            // `this.panels`). The bit is written ONLY here and by the rung adapter; setVisible(true),
+            // _applyInitialDisplay and the chip tap never touch it.
             wrapper.setAttribute('data-density-hidden', '');
             if (this._glass) wrapper.setAttribute('data-glass', '');
         }
@@ -882,7 +789,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         this._setChipExpanded(false);
     }
 
-    /** @private Session-only chip popover — never written to storage. */
+    /** @private Session-only chip popover (never persisted). */
     _toggleChip() {
         this._setChipExpanded(!this._chipOpen);
     }
@@ -897,16 +804,10 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         if (this._chip) this._chip.setExpanded(this._chipOpen);
     }
 
-    /**
-     * Build the expanded overlay: backdrop + centered panel with header,
-     * scrollable body, and footer. Appended to document.body for z-index
-     * independence (same pattern as CodexViewerUI).
-     * @private
-     */
+    /** @private Build the expanded overlay (backdrop + centered panel); appended to document.body for z-index independence, like CodexViewerUI. */
     _buildExpandedView() {
         const doc = this._doc;
         if (!doc || typeof doc.createElement !== 'function') return;
-        // ── Backdrop ──
         const backdrop = doc.createElement('div');
         backdrop.className = 'sp-backdrop';
         if (typeof backdrop.addEventListener === 'function') {
@@ -915,11 +816,9 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         if (doc.body && typeof doc.body.appendChild === 'function') doc.body.appendChild(backdrop);
         this._backdrop = backdrop;
 
-        // ── Panel ──
         const overlay = doc.createElement('div');
         overlay.className = 'sp-expanded';
 
-        // Header
         const header = doc.createElement('div');
         header.className = 'sp-ex-header';
         const backBtn = doc.createElement('span');
@@ -935,13 +834,11 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         header.appendChild(exCount);
         overlay.appendChild(header);
 
-        // Body (scrollable, 2-column via CSS columns)
         const body = doc.createElement('div');
         body.className = 'sp-ex-body';
         overlay.appendChild(body);
         this._expandedBody = body;
 
-        // Footer
         const footer = doc.createElement('div');
         footer.className = 'sp-ex-footer';
         const progText = doc.createElement('span');
@@ -957,14 +854,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         this._expandedOverlay = overlay;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  EVENT LISTENERS
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Subscribe to EventBus events from SkillsSystem.
-     * @private
-     */
+    /** @private Subscribe to EventBus events from SkillsSystem. */
     _setupListeners() {
         this._unsubs.push(
             eventBus.on(Events.SKILL_DISCOVERED, (d) => this._onSkillDiscovered(d))
@@ -982,7 +872,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             eventBus.on(Events.SKILLS_LOADED, (d) => this._onSkillsLoaded(d))
         );
 
-        // ── Tech unlock tracking (Phase 3+4: Discovery Pane) ────────────
         this._unsubs.push(
             eventBus.on(Events.TECH_UNLOCKED, (data) => {
                 this._recentTech.unshift({
@@ -992,7 +881,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
                     category: data.category,
                     time: Date.now(),
                 });
-                // Keep max 10 in memory, show max 3
+                // keep 10 in memory (_techMaxVisible are shown)
                 if (this._recentTech.length > 10) this._recentTech.pop();
                 this._unseenTechCount++;
                 this._renderCompact();
@@ -1000,7 +889,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             })
         );
 
-        // Clear unseen badge when Tech Library (L key) is opened
+        // opening the Tech Library clears the unseen badge
         this._unsubs.push(
             eventBus.on(Events.CODEX_OPENED, () => {
                 if (this._unseenTechCount > 0) {
@@ -1010,7 +899,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             })
         );
 
-        // ST-3.1: First capture exits NOVICE checklist mode
+        // the first capture exits NOVICE checklist mode
         this._unsubs.push(
             eventBus.on(Events.LASSO_CAPTURED, () => this._exitChecklistMode())
         );
@@ -1018,7 +907,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             eventBus.on(Events.ARM_CAPTURED, () => this._exitChecklistMode())
         );
 
-        // ST-3.4: Celebration visual feedback on state transitions
         this._unsubs.push(
             eventBus.on(Events.SKILL_STATE_CHANGED, (d) => {
                 if (d?.to === 'practiced') this._flashSkillEntry(d.skillId);
@@ -1032,74 +920,51 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         );
     }
 
-    /**
-     * Handle SKILL_DISCOVERED: update local state, render compact pane,
-     * play edge glow, and auto-show.
-     * @param {{ skillId: string, tier: number, label: string }} data
-     * @private
-     */
+    /** @private SKILL_DISCOVERED: update local state, render compact pane, auto-show. */
     _onSkillDiscovered(data) {
         const { skillId } = data;
         const def = this._defMap.get(skillId);
         if (!def) return;
 
-        // Update local tracking
         this._states.set(skillId, DISCOVERED);
         if (!this._discoveryOrder.includes(skillId)) {
             this._discoveryOrder.push(skillId);
         }
         this._discoveryCount++;
 
-        // ST-3.1: Handle checklist completion animation
         if (this._checklistMode) {
             this._handleChecklistDiscovery(skillId);
         }
 
-        // Render compact with highlight on the new skill
         this._renderCompact(skillId);
 
-        // Show pane (auto-hides per level policy)
+        // auto-hides per level policy
         this.show();
 
-        // Log threshold crossings (novice → apprentice → veteran)
         this._checkLevelTransition();
     }
 
     /**
-     * u15b D7: glass is read when text is drawn, never at construction (the hub flips GestureHints AFTER this pane is
-     * built). An explicit ctor `glass: false` still wins.
-     * @private
-     * @returns {boolean}
+     * @private Glass is read when text is drawn, never at construction (the hub flips GestureHints AFTER this
+     * pane is built). An explicit ctor `glass: false` still wins.
      */
     _glassNow() {
         if (this._glassArg === false) return false;
         return this._glass || GestureHints.isGlass();
     }
 
-    /**
-     * u15b B-T6: the key text of a skill row. Desktop: "[S]". Glass: the touch word ("SCAN", "READ MORE") or nothing,
-     * never a key in brackets.
-     * @private
-     * @param {{id?:string,key?:(string|null)}} def
-     * @returns {string}
-     */
+    /** @private The key text of a skill row. Desktop: "[S]". Glass: the touch word ("SCAN", "READ MORE") or nothing, never a key in brackets. */
     _keyText(def) {
         if (!def || !def.key) return '';
         if (this._glassNow()) return GestureHints.wordForSkill(def.id);
         return '[' + def.key + ']';
     }
 
-    /**
-     * Handle SKILL_STATE_CHANGED: update local state map, refresh visible
-     * skill entries, and initiate mastered-fade when appropriate.
-     * @param {{ skillId: string, from: string, to: string }} data
-     * @private
-     */
+    /** @private SKILL_STATE_CHANGED: update the state map and visible entries; start the mastered-fade when due. */
     _onSkillStateChanged(data) {
         const { skillId, to } = data;
         this._states.set(skillId, to);
 
-        // If compact pane is showing, update the affected entry
         if (this._visible && this._paneBody) {
             const el = this._paneBody.querySelector(`[data-skill-id="${skillId}"]`);
             if (el) {
@@ -1107,53 +972,39 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
                 if (to === MASTERED) {
                     if (symEl) { symEl.textContent = '✓'; symEl.style.color = 'var(--hud-normal, #00ff88)'; }
                     el.classList.add('sp-mastered');
-                    // Update label color to green for mastered
                     const lblEl = el.querySelector('.sp-lbl');
                     if (lblEl) lblEl.style.color = 'var(--hud-normal, #00ff88)';
 
-                    // Start mastered-fade timer
                     if (!this._masteredTimers.has(skillId)) {
                         const tid = timerManager.setTimeout(() => {
                             el.classList.add('sp-mastered-fade');
                             this._masteredTimers.delete(skillId);
-                            // Remove DOM node after opacity transition
+                            // remove the node after the opacity transition
                             timerManager.setTimeout(() => { if (el.parentNode) el.remove(); }, 2100, { owner: this });
                         }, Constants.SKILLS.MASTERED_FADE_DELAY, { owner: this });
                         this._masteredTimers.set(skillId, tid);
                     }
                 } else if (to === PRACTICED) {
-                    // Practiced keeps ● symbol (same as discovered)
                     if (symEl) symEl.textContent = '●';
                 }
             }
         }
     }
 
-    /**
-     * Handle SKILL_REMINDED: show the compact pane with the reminded skill
-     * highlighted so the player notices the contextual nudge.
-     * @param {{ skillId: string }} data
-     * @private
-     */
+    /** @private SKILL_REMINDED: show the compact pane with the reminded skill highlighted. */
     _onSkillReminded(data) {
         const { skillId } = data;
         if (!this._masterVisible) return;
         if (!this._defMap.has(skillId)) return;
-        // u14b R5: the compact pane lists the skill's KEY name; on glass a reminder for a key with no touch control is not shown
-        // (the same gate the ticker reminder passes: OnboardingDirector._onSkillReminded). Desktop: always.
+        // The pane lists the skill's KEY name; on glass a reminder for a key with no touch control is not shown
+        // (same gate as OnboardingDirector._onSkillReminded). Desktop: always.
         if (!GestureHints.reminderFitsGlass(this._defMap.get(skillId), skillId)) return;
 
-        // Re-render compact view with the reminded skill highlighted
         this._renderCompact(skillId);
         this.show(Constants.SKILLS.PANE_SHOW_DURATION);
     }
 
-    /**
-     * Handle SKILLS_LOADED: bulk-update local state map from persisted data.
-     * Fired by SkillsSystem.restore() when a saved game is loaded.
-     * @param {{ skills: Map<string, Object> }} data
-     * @private
-     */
+    /** @private SKILLS_LOADED (SkillsSystem.restore() on a loaded save): bulk-update the state map. */
     _onSkillsLoaded(data) {
         const skills = data.skills;
         if (!(skills instanceof Map)) return;
@@ -1169,11 +1020,9 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         this._discoveryCount = this._discoveryOrder.length;
         this._updateCountBadges();
 
-        // Refresh level tracking + apply correct initial display for the
-        // restored progression state (a loaded save may jump straight to
-        // APPRENTICE/VETERAN behavior).
+        // a loaded save may jump straight to APPRENTICE/VETERAN behavior
         this._lastLevelSeen = this._getExperienceLevel();
-        // ST-3.1: Exit checklist if loaded save is beyond NOVICE
+        // exit the checklist if the loaded save is beyond NOVICE
         if (this._checklistMode && this._lastLevelSeen !== 'novice') {
             this._checklistMode = false;
             this._checklistCompletedIds.clear();
@@ -1181,26 +1030,19 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         this._applyInitialDisplay();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  RENDERING — COMPACT VIEW
-    // ═══════════════════════════════════════════════════════════════════════
-
     /**
-     * Rebuild the compact pane body. Shows recently active skills (newest
-     * first), then undiscovered suggestions to fill remaining slots.
+     * @private Rebuild the compact pane body: recently active skills (newest first), then undiscovered
+     * suggestions to fill the remaining slots.
      * @param {string|null} [highlightId=null] — Skill to highlight with animation
-     * @private
      */
     _renderCompact(highlightId = null) {
-        // ST-3.1: In NOVICE checklist mode, use the dedicated checklist renderer
         if (this._checklistMode && this._getExperienceLevel() === 'novice') {
             this._renderChecklist();
             return;
         }
         this._paneBody.innerHTML = '';
 
-        // ── SKILLS section ──────────────────────────────────────────────
-        // Sub-header for skills (only if we also have tech to show)
+        // sub-header only if there is tech to show too
         if (this._recentTech.length > 0) {
             const skillsHdr = document.createElement('div');
             skillsHdr.style.cssText = 'font-size:10px;color:var(--hud-normal, #00ff88);padding:2px 0 1px;letter-spacing:1px;opacity:0.7;';
@@ -1208,7 +1050,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             this._paneBody.appendChild(skillsHdr);
         }
 
-        // 1. Active skills (discovered / practiced / mastered — most recent first)
+        // active skills (discovered / practiced / mastered), most recent first
         const active = [];
         for (let i = this._discoveryOrder.length - 1; i >= 0; i--) {
             const id = this._discoveryOrder[i];
@@ -1219,29 +1061,24 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             if (active.length >= MAX_COMPACT_ACTIVE) break;
         }
 
-        // 2. Suggestions (undiscovered with prereqs met)
+        // suggestions: undiscovered with prereqs met
         const suggestions = this._getSuggestions(MAX_COMPACT_SUGGEST);
 
-        // Render active entries
         for (const id of active) {
             const el = this._createCompactEntry(id, id === highlightId);
             this._paneBody.appendChild(el);
         }
 
-        // Render suggestions
         for (const def of suggestions) {
             const el = this._createCompactEntry(def.id, false, true);
             this._paneBody.appendChild(el);
         }
 
-        // ── NEW TECH section (only if any tech unlocked) ────────────────
         if (this._recentTech.length > 0) {
-            // Separator
             const sep = document.createElement('hr');
             sep.className = 'sp-tech-sep';
             this._paneBody.appendChild(sep);
 
-            // Header with badge
             const techHdr = document.createElement('div');
             techHdr.className = 'sp-tech-header';
             let hdrHTML = 'NEW TECH';
@@ -1251,7 +1088,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             techHdr.innerHTML = hdrHTML;
             this._paneBody.appendChild(techHdr);
 
-            // Recent tech entries (up to _techMaxVisible)
             const visibleTech = this._recentTech.slice(0, this._techMaxVisible);
             for (const tech of visibleTech) {
                 const entry = document.createElement('div');
@@ -1261,7 +1097,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
                 this._paneBody.appendChild(entry);
             }
 
-            // Hint
             const hint = document.createElement('div');
             hint.className = 'sp-tech-hint';
             hint.textContent = 'I. Info';
@@ -1271,16 +1106,9 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         this._updateCountBadges();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  RENDERING — NOVICE CHECKLIST MODE (ST-3.1)
-    // ═══════════════════════════════════════════════════════════════════════
-
     /**
-     * Render the NOVICE checklist view into _paneBody. Shows up to
-     * CHECKLIST_SUGGESTION_COUNT next-step suggestions as ✓ / → / ○ items
-     * plus recently-completed items with a fade-out animation.
-     * Always displays exactly n items (completed + suggestions = n).
-     * @private
+     * @private Render the NOVICE checklist into _paneBody: CHECKLIST_SUGGESTION_COUNT (n) items as ✓ / → / ○,
+     * recently-completed ones fading out; always exactly n (completed + suggestions).
      */
     _renderChecklist() {
         this._paneBody.innerHTML = '';
@@ -1288,7 +1116,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         const n = cfg.CHECKLIST_SUGGESTION_COUNT;
         const { discovered, total } = this._getProgress();
 
-        // Completed items take priority slots; fill remainder with suggestions
+        // completed items take priority slots
         const completedToShow = [...this._checklistCompletedIds].slice(0, n);
         const suggestionsNeeded = Math.max(n - completedToShow.length, 0);
         const suggestions = this._getSuggestions(suggestionsNeeded);
@@ -1296,17 +1124,14 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         const wrap = document.createElement('div');
         wrap.className = 'sp-checklist';
 
-        // Header
         const hdr = document.createElement('div');
         hdr.className = 'sp-checklist-header';
         hdr.textContent = '▸ NEXT STEPS';
         wrap.appendChild(hdr);
 
-        // Items container
         const items = document.createElement('div');
         items.className = 'sp-checklist-items';
 
-        // Recently-completed items (shown with ✓, fading out)
         for (const completedId of completedToShow) {
             const def = this._defMap.get(completedId);
             if (!def) continue;
@@ -1319,7 +1144,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             items.appendChild(item);
         }
 
-        // Undiscovered suggestions: first = current (→ pulse), rest = upcoming (○)
+        // first suggestion = current (→ pulse), rest = upcoming (○)
         let isFirst = true;
         for (const def of suggestions) {
             const tierColor = this._getTierColor(def.tier);
@@ -1344,7 +1169,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
 
         wrap.appendChild(items);
 
-        // Progress footer
         const prog = document.createElement('div');
         prog.className = 'sp-checklist-progress';
         prog.innerHTML =
@@ -1356,22 +1180,15 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         this._updateCountBadges();
     }
 
-    /**
-     * Handle a skill discovery while in checklist mode: add to completed set
-     * with a linger timer, then re-render.
-     * @param {string} skillId
-     * @private
-     */
+    /** @private A discovery in checklist mode: add to the completed set with a linger timer, then re-render. */
     _handleChecklistDiscovery(skillId) {
         const cfg = Constants.SKILLS.DISCOVERY_PANE;
         this._checklistCompletedIds.add(skillId);
 
-        // Clear any existing timer for this skill
         if (this._checklistDimTimers.has(skillId)) {
             timerManager.clear(this._checklistDimTimers.get(skillId));
         }
 
-        // Schedule removal after linger period
         const tid = timerManager.setTimeout(() => {
             this._checklistCompletedIds.delete(skillId);
             this._checklistDimTimers.delete(skillId);
@@ -1380,15 +1197,10 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         this._checklistDimTimers.set(skillId, tid);
     }
 
-    /**
-     * Exit checklist mode. Clears all pending dim timers and re-renders
-     * using the normal compact view.
-     * @private
-     */
+    /** @private Exit checklist mode: clear pending dim timers, re-render the normal compact view. */
     _exitChecklistMode() {
         if (!this._checklistMode) return;
         this._checklistMode = false;
-        // Clear all pending checklist timers
         for (const tid of this._checklistDimTimers.values()) timerManager.clear(tid);
         this._checklistDimTimers.clear();
         this._checklistCompletedIds.clear();
@@ -1396,12 +1208,9 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
     }
 
     /**
-     * Create a single compact skill entry DOM element.
-     * @param {string} skillId
+     * @private Create one compact skill entry element.
      * @param {boolean} [isHighlight=false] — play discovery animation
      * @param {boolean} [isSuggestion=false] — dimmed suggestion styling
-     * @returns {HTMLElement}
-     * @private
      */
     _createCompactEntry(skillId, isHighlight = false, isSuggestion = false) {
         const def   = this._defMap.get(skillId);
@@ -1415,7 +1224,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         if (isSuggestion) entry.classList.add('sp-suggest');
         if (state === MASTERED) entry.classList.add('sp-mastered');
 
-        // Symbol
         const sym = document.createElement('span');
         sym.className = 'sp-sym';
         sym.textContent = isSuggestion ? '○' : (STATE_SYMBOLS[state] || '●');
@@ -1426,7 +1234,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         }
         entry.appendChild(sym);
 
-        // Label
         const lbl = document.createElement('span');
         lbl.className = 'sp-lbl';
         lbl.textContent = def ? GestureHints.glassWords(def.label) : skillId;
@@ -1435,13 +1242,11 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         }
         entry.appendChild(lbl);
 
-        // Key binding hint
         const keyEl = document.createElement('span');
         keyEl.className = 'sp-key';
         if (def && def.key) keyEl.textContent = this._keyText(def);
         entry.appendChild(keyEl);
 
-        // Discovery animation (pulse + slide)
         if (isHighlight && !isSuggestion) {
             entry.style.setProperty('--tier-color', color);
             entry.classList.add('sp-pulse', 'sp-slide');
@@ -1452,19 +1257,10 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         return entry;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  RENDERING — EXPANDED VIEW
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Rebuild the expanded overlay body. Groups all 35 skills by category,
-     * sorted within each category by tier number.
-     * @private
-     */
+    /** @private Rebuild the expanded overlay body: skills grouped by category, sorted by tier within each. */
     _renderExpanded() {
         this._expandedBody.innerHTML = '';
 
-        // Group skills by category
         const groups = {};
         for (const cat of Object.keys(CATEGORY_META)) groups[cat] = [];
         for (const def of this._catalog) {
@@ -1472,7 +1268,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             if (g) g.push(def);
         }
 
-        // Render categories in defined order
         const sortedCats = Object.keys(CATEGORY_META)
             .sort((a, b) => CATEGORY_META[a].order - CATEGORY_META[b].order);
 
@@ -1480,22 +1275,18 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             const defs = groups[cat];
             if (!defs || defs.length === 0) continue;
 
-            // Sort skills within category by tier, then label
             defs.sort((a, b) => a.tier !== b.tier ? a.tier - b.tier : a.label.localeCompare(b.label));
 
-            // Count discovered in this category
             const catDiscovered = defs.filter(
                 d => this._states.get(d.id) !== UNDISCOVERED
             ).length;
 
-            // Determine category header color (use first skill's tier color)
+            // header colour = the first skill's tier colour
             const catColor = this._getTierColor(defs[0].tier);
 
-            // Section container
             const section = document.createElement('div');
             section.className = 'sp-cat';
 
-            // Category header
             const hdr = document.createElement('div');
             hdr.className = 'sp-cat-hdr';
             hdr.style.color = catColor;
@@ -1509,7 +1300,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             hdr.appendChild(hdrProg);
             section.appendChild(hdr);
 
-            // Skill entries
             for (const def of defs) {
                 section.appendChild(this._createExpandedEntry(def));
             }
@@ -1517,7 +1307,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             this._expandedBody.appendChild(section);
         }
 
-        // Update footer and badges
         const progress = this._getProgress();
         const progEl = this._expandedOverlay.querySelector('.sp-prog-text');
         if (progEl) {
@@ -1527,13 +1316,9 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
     }
 
     /**
-     * Create a single expanded skill entry DOM element.
-     * Shows state symbol, label with tier color, and key binding.
-     * Safety-gated undiscovered skills show a filled square with red tint and a
-     * LOCKED tooltip (the 14px symbol slot cannot hold the word).
+     * @private Create one expanded skill entry. Safety-gated undiscovered skills show a filled square with red
+     * tint and a LOCKED tooltip (the 14px symbol slot cannot hold the word).
      * @param {Object} def — Skill definition from CATALOG
-     * @returns {HTMLElement}
-     * @private
      */
     _createExpandedEntry(def) {
         const state = this._states.get(def.id) || UNDISCOVERED;
@@ -1544,7 +1329,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         entry.className = 'sp-ex-entry';
         entry.dataset.skillId = def.id;
 
-        // State-based class
         if (isLocked) {
             entry.classList.add('spe-locked');
         } else if (state === MASTERED) {
@@ -1557,7 +1341,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             entry.classList.add('spe-undiscovered');
         }
 
-        // Symbol
         const sym = document.createElement('span');
         sym.className = 'sp-ex-sym';
         if (isLocked) {
@@ -1576,7 +1359,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         }
         entry.appendChild(sym);
 
-        // Label
         const lbl = document.createElement('span');
         lbl.className = 'sp-ex-lbl';
         lbl.textContent = GestureHints.glassWords(def.label);
@@ -1585,7 +1367,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         }
         entry.appendChild(lbl);
 
-        // Key hint
         const keyEl = document.createElement('span');
         keyEl.className = 'sp-ex-key';
         if (def.key) keyEl.textContent = this._keyText(def);
@@ -1594,17 +1375,10 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         return entry;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  ANIMATIONS
-    // ═══════════════════════════════════════════════════════════════════════
-
     /**
-     * Flash a skill entry row to celebrate PRACTICED or MASTERED transitions.
-     * PRACTICED uses the skill's tier color via inline style + CSS transition.
-     * MASTERED uses gold via CSS keyframe class (sp-flash-mastered in _injectStyles).
-     * @param {string} skillId
+     * @private Flash a skill row on PRACTICED (tier colour, inline style + CSS transition) or MASTERED (gold,
+     * keyframe class sp-flash-mastered in _injectStyles).
      * @param {'practiced'|'mastered'} [kind='practiced']
-     * @private
      */
     _flashSkillEntry(skillId, kind = 'practiced') {
         const containers = [this._paneBody, this._expandedBody].filter(Boolean);
@@ -1617,13 +1391,11 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             if (!el) continue;
 
             if (kind === 'mastered') {
-                // Gold flash via CSS keyframe animation
                 el.classList.remove('sp-flash-mastered');
                 void el.offsetWidth;
                 el.classList.add('sp-flash-mastered');
                 timerManager.setTimeout(() => el.classList.remove('sp-flash-mastered'), dur + 100, { owner: this });
             } else {
-                // Tier-color flash via inline style + CSS transition
                 const def = this._defMap?.get(skillId);
                 const tierColor = def ? this._getTierColor(def.tier) : 'var(--hud-info, #44ddff)';
                 el.style.transition = 'none';
@@ -1639,16 +1411,9 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  SHOW / HIDE MANAGEMENT
-    // ═══════════════════════════════════════════════════════════════════════
-
     /**
-     * Fade the compact pane. Behavior depends on player experience level:
-     *   NOVICE     — fade to 85% idle opacity, remain rendered.
-     *   APPRENTICE — fade to 45% idle opacity, remain rendered.
-     *   VETERAN    — fade out completely and set display:none.
-     * @private
+     * @private Fade the compact pane: NOVICE to 85% idle and APPRENTICE to 45% idle (both stay rendered); VETERAN
+     * fades out and sets display:none.
      */
     _fadeOut() {
         const level = this._getExperienceLevel();
@@ -1659,7 +1424,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             return;
         }
 
-        // VETERAN — classic full fade-and-hide
         if (this._fading) return;
         this._fading = true;
 
@@ -1674,19 +1438,14 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             this._fading = false;
             this._fadeEndTimerId = null;
             p.style.display = 'none';
-            // Reset inline styles so next show() starts clean
+            // reset so the next show() starts clean
             p.style.transition = '';
             p.style.opacity = '';
             p.style.transform = '';
-        }, dur + 50, { owner: this }); // small buffer
+        }, dur + 50, { owner: this });
     }
 
-    /**
-     * Fade the pane to a target idle opacity while keeping it rendered
-     * (display:block). Used by NOVICE (0.85) and APPRENTICE (0.45) levels.
-     * @param {number} targetOpacity — 0..1
-     * @private
-     */
+    /** @private Fade to a target idle opacity (0..1) while keeping it rendered (display:block); NOVICE 0.85, APPRENTICE 0.45. */
     _fadeToIdle(targetOpacity) {
         this._cancelHideTimer();
         this._cancelFadeTimer();
@@ -1699,29 +1458,20 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             `opacity ${FADE_TO_IDLE_MS}ms ease-out, transform ${FADE_TO_IDLE_MS}ms ease-out`;
         p.style.transform = 'translateX(0)';
         p.style.opacity = String(targetOpacity);
-        // Pane remains visible at idle opacity
         this._visible = true;
     }
 
-    /**
-     * Apply the level-appropriate initial display on game start. NOVICE and
-     * APPRENTICE players see the pane at their idle opacity from the outset;
-     * VETERAN players get the classic hidden default.
-     * @private
-     */
+    /** @private Initial display on game start: NOVICE and APPRENTICE see the pane at idle opacity; VETERAN stays hidden. */
     _applyInitialDisplay() {
         if (!this._masterVisible) return;
         const level = this._getExperienceLevel();
-        if (level === 'veteran') return; // hidden by default — awaits discovery
+        if (level === 'veteran') return; // awaits a discovery
         this._renderCompact();
         const cfg = EXPERIENCE_LEVELS[level.toUpperCase()];
         this._fadeToIdle(cfg.idleOpacity);
     }
 
-    /**
-     * Hide compact pane immediately (no animation).
-     * @private
-     */
+    /** @private Hide the compact pane immediately (no animation). */
     _hideImmediate() {
         this._cancelHideTimer();
         this._cancelFadeTimer();
@@ -1734,11 +1484,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         p.style.transform = '';
     }
 
-    /**
-     * Schedule a fade-out after the given delay.
-     * @param {number} delayMs
-     * @private
-     */
+    /** @private Schedule a fade-out after `delayMs`. */
     _scheduleHide(delayMs) {
         this._cancelHideTimer();
         this._hideTimerId = timerManager.setTimeout(() => {
@@ -1747,10 +1493,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         }, delayMs, { owner: this });
     }
 
-    /**
-     * Cancel the auto-hide timer if active.
-     * @private
-     */
+    /** @private */
     _cancelHideTimer() {
         if (this._hideTimerId !== null) {
             timerManager.clear(this._hideTimerId);
@@ -1758,10 +1501,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         }
     }
 
-    /**
-     * Cancel the fade-end cleanup timer if active.
-     * @private
-     */
+    /** @private */
     _cancelFadeTimer() {
         if (this._fadeEndTimerId !== null) {
             timerManager.clear(this._fadeEndTimerId);
@@ -1770,18 +1510,13 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
     }
 
     /**
-     * Determine how long the compact pane should stay at 100% opacity before
-     * fading to idle (NOVICE/APPRENTICE) or disappearing (VETERAN). Varies by
-     * experience level; first FIRST_DISCOVERY_LONG_COUNT discoveries use the
-     * longer per-level duration.
+     * @private How long (ms, always > 0) the pane stays at 100% before fading to idle (NOVICE/APPRENTICE) or
+     * disappearing (VETERAN). The first FIRST_DISCOVERY_LONG_COUNT discoveries use the longer per-level duration.
      * @param {string} [level] — 'novice' | 'apprentice' | 'veteran'
-     * @returns {number} Duration in ms (always > 0)
-     * @private
      */
     _getShowDuration(level) {
         const lvl = level || this._getExperienceLevel();
         if (lvl === 'novice') {
-            // Brighten window before returning to 85% idle
             return NOVICE_BRIGHTEN_MS;
         }
         const cfg = EXPERIENCE_LEVELS[lvl.toUpperCase()];
@@ -1789,16 +1524,9 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         return isFirst ? cfg.firstDiscoveryMs : cfg.autoHideMs;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  PROGRESSION-AWARE PERSISTENCE
-    // ═══════════════════════════════════════════════════════════════════════
-
     /**
-     * Count of skills in any state beyond 'undiscovered'. Derived from the
-     * local _states Map which is kept in sync via SKILL_DISCOVERED and
-     * SKILLS_LOADED event handlers.
-     * @returns {number}
-     * @private
+     * @private Count of skills in any state beyond 'undiscovered' (from `_states`, kept in sync by the
+     * SKILL_DISCOVERED / SKILLS_LOADED handlers).
      */
     _getDiscoveredSkillCount() {
         let n = 0;
@@ -1809,12 +1537,8 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
     }
 
     /**
-     * Current experience level based on discovered-skill count.
-     *   NOVICE     < 5
-     *   APPRENTICE 5..14
-     *   VETERAN    ≥ 15
+     * @private Experience level by discovered-skill count: NOVICE < 5, APPRENTICE 5..14, VETERAN ≥ 15.
      * @returns {'novice'|'apprentice'|'veteran'}
-     * @private
      */
     _getExperienceLevel() {
         const count = this._getDiscoveredSkillCount();
@@ -1823,16 +1547,12 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         return 'veteran';
     }
 
-    /**
-     * Log a level transition (dev visibility for UX evolution). Called after
-     * discoveries that may cross a threshold.
-     * @private
-     */
+    /** @private Log a level transition (dev visibility); called after discoveries that may cross a threshold. */
     _checkLevelTransition() {
         const newLevel = this._getExperienceLevel();
         if (newLevel !== this._lastLevelSeen) {
             console.log('[SkillsPane] Level advanced:', this._lastLevelSeen, '→', newLevel);
-            // ST-3.1: Disable checklist on level-up from novice
+            // leaving novice disables the checklist
             if (this._checklistMode && newLevel !== 'novice') {
                 this._exitChecklistMode();
             }
@@ -1840,25 +1560,14 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  EXPANDED VIEW MANAGEMENT
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Open the expanded skill tree overlay. Hides compact pane, renders
-     * full category list, and installs capture-phase key listener.
-     * @private
-     */
+    /** @private Open the expanded skill tree overlay: hides the compact pane, renders the full list, installs the capture-phase key listener. */
     _openExpanded() {
         this._expanded = true;
 
-        // Hide compact pane while expanded is open
         this._hideImmediate();
 
-        // Render fresh content
         this._renderExpanded();
 
-        // Show backdrop
         const bd = this._backdrop;
         bd.style.display = 'block';
         bd.style.opacity = '0';
@@ -1866,7 +1575,6 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         void bd.offsetHeight;
         bd.style.opacity = '1';
 
-        // Show overlay
         const ov = this._expandedOverlay;
         ov.style.display = 'flex';
         ov.style.flexDirection = 'column';
@@ -1879,10 +1587,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         document.addEventListener('keydown', this._boundOnExpandedKeyDown, true);
     }
 
-    /**
-     * Close the expanded overlay. Fades out, removes capture-phase listener.
-     * @private
-     */
+    /** @private Fade out the expanded overlay and remove the capture-phase listener. */
     _closeExpanded() {
         this._expanded = false;
 
@@ -1902,37 +1607,19 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         document.removeEventListener('keydown', this._boundOnExpandedKeyDown, true);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  KEY HANDLING
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Bubble-phase keydown: J key toggles expanded Journal view when not
-     * already expanded (capture handler owns J/ESC when overlay is open).
-     * Delegation 1 (2026-05-31) rebind: K → J.
-     * @param {KeyboardEvent} e
-     * @private
-     */
+    /** @private Bubble-phase keydown: J toggles the Journal view when not already expanded (the capture handler owns J/ESC while open). */
     _onKeyDown(e) {
         if (e.code !== 'KeyJ') return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
-        // Ignore if typing in a form element
         const tag = e.target.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-        // Don't handle if expanded — capture handler owns this
         if (this._expanded) return;
 
         e.preventDefault();
         this.toggleExpanded();
     }
 
-    /**
-     * Capture-phase keydown: active ONLY while expanded overlay is open.
-     * ESC or J closes the overlay; everything else is suppressed.
-     * Delegation 1 (2026-05-31) rebind: K → J.
-     * @param {KeyboardEvent} e
-     * @private
-     */
+    /** @private Capture-phase keydown, active ONLY while the expanded overlay is open: ESC or J closes it; everything else is suppressed. */
     _onExpandedKeyDown(e) {
         e.preventDefault();
         e.stopPropagation();
@@ -1942,36 +1629,20 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  HELPERS
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Look up the color for a tier number from Constants.SKILLS.TIERS.
-     * @param {number} tierNum — 1-based tier number
-     * @returns {string} CSS color hex (e.g. '#00ff88')
-     * @private
-     */
+    /** @private Colour for a 1-based tier number from Constants.SKILLS.TIERS. */
     _getTierColor(tierNum) {
         const tier = this._tiers.find(t => t.tier === tierNum);
-        // Tier colours are identity colours (each tier its own hue), so they stay raw in both looks —
-        // mapping them to roles made tiers 2-4 one cyan (h2 review, 2026-10-15).
+        // Tier colours are identity colours (each tier its own hue), so they stay raw in both looks;
+        // mapping them to roles made tiers 2-4 one cyan.
         return tier ? tier.color : 'var(--hud-text, #ccddcc)';
     }
 
-    /**
-     * Compute undiscovered skill suggestions whose prerequisites are met.
-     * Skips noReminder skills. Sorted by tier (lower first), then label.
-     * @param {number} [n=2] — Maximum suggestions to return
-     * @returns {Object[]} Array of skill definition objects from CATALOG
-     * @private
-     */
+    /** @private Undiscovered skills whose prerequisites are met (skips noReminder), by tier then label, at most `n`. */
     _getSuggestions(n = 2) {
         const result = [];
         for (const def of this._catalog) {
             if (this._states.get(def.id) !== UNDISCOVERED) continue;
             if (def.noReminder) continue;
-            // Hard / safety prereqs must be met
             if (def.prereqType === 'hard' || def.prereqType === 'safety') {
                 const met = def.prereqs.every(pid => this._states.get(pid) !== UNDISCOVERED);
                 if (!met) continue;
@@ -1985,11 +1656,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         return result.slice(0, n);
     }
 
-    /**
-     * Get overall discovery progress.
-     * @returns {{ discovered: number, total: number }}
-     * @private
-     */
+    /** @private @returns {{ discovered: number, total: number }} */
     _getProgress() {
         let discovered = 0;
         for (const state of this._states.values()) {
@@ -1998,10 +1665,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         return { discovered, total: this._states.size };
     }
 
-    /**
-     * Update the [X/Y] count badge in both compact header and expanded header.
-     * @private
-     */
+    /** @private Update the [X/Y] count badge in both headers. */
     _updateCountBadges() {
         const { discovered, total } = this._getProgress();
         const text = `[${discovered}/${total}]`;

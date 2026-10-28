@@ -1,16 +1,12 @@
 /**
- * FooterChip.js — PURE footer-band chips for the experimental rung (Discoveries
- * / Orb). Plan 1788867799156-hud-pane-ladder-reorder.md Task 10 / locked #7:
- * 32 px visual / 44 px hit, INFO-cyan SPECS-tab costume, uppercase 11 px mono.
- * DISCOVERIES / ORB mount these; density-hide lives on the rung wrapper
- * (experimental sheds first, so rails-shy is a no-op at level 0). `bottomPx`
- * defaults to `footerBand({ glass, hintBandPx }).bottom`.
+ * FooterChip.js — PURE footer-band chips for the experimental rung (Discoveries / Orb): 32 px visual / 44 px hit,
+ * INFO-cyan SPECS-tab costume, uppercase 11 px mono. DISCOVERIES / ORB mount these; density-hide lives on the rung
+ * wrapper (experimental sheds first, so rails-shy is a no-op at level 0). `bottomPx` defaults to
+ * `footerBand({ glass, hintBandPx }).bottom`.
  *
- * WHY a module: the two chips share chrome, density, rails-shy, and hit math.
- * Resting law `[data-density-hidden]{display:none !important}` is global
- * (HUD.js:562); this file only toggles the attribute. VisualLaw.EASING is
- * `cubic-in-out` (not a CSS keyword) so rails-shy hide is instant — no
- * transition to reduce.
+ * WHY a module: the two chips share chrome, density, rails-shy, and hit math. Resting law
+ * `[data-density-hidden]{display:none !important}` is global (HUD.js); this file only toggles the attribute.
+ * VisualLaw.EASING is `cubic-in-out` (not a CSS keyword) so rails-shy hide is instant — no transition to reduce.
  *
  * @module ui/hud/FooterChip
  */
@@ -26,10 +22,9 @@ export const FOOTER_CHIP_PX = RAIL_GEOMETRY.FOOTER_BAND_PX;
 export const FOOTER_CHIP_HIT_PX = RAIL_GEOMETRY.TOUCH_PITCH_PX;
 
 /**
- * Documented fallback CSS `bottom` of the footer band (RailGeometry.js:108
- * example: `footerBand({ hintBandPx: 124 }) → { bottom: 132 }`). Used when
- * `bottomPx` is omitted and hintBandPx defaults to the ticker band
- * (main.js `_HINT_BAND_PX` = TICKER.BOTTOM_PX + ROW_HEIGHT_PX = 124).
+ * Fallback CSS `bottom` of the footer band (RailGeometry `footerBand({ hintBandPx: 124 }) → { bottom: 132 }`). Used when
+ * `bottomPx` is omitted and hintBandPx defaults to the ticker band (main.js `_HINT_BAND_PX` = TICKER.BOTTOM_PX +
+ * ROW_HEIGHT_PX = 124).
  */
 export const FOOTER_CHIP_BOTTOM_PX = 132;
 
@@ -37,11 +32,9 @@ export const FOOTER_CHIP_BOTTOM_PX = 132;
 const DEFAULT_HINT_BAND_PX = FOOTER_CHIP_BOTTOM_PX - RAIL_GEOMETRY.FOOTER_GAP_PX;
 
 /**
- * Where the two chips sit (2026-10-22, plan hud-hide-order Task 4; measured, tmp/chips/before.json): the
- * DETAIL slider lives bottom RIGHT (its right edge HUD_EDGE_PX from the screen, 176 px wide x `--hud-scale`)
- * and the SPECS tab bottom LEFT, so the old left/right offsets put ORB on top of the slider and DISCOVERIES
- * under the transfer-windows / approach panels. Both chips now stand left of the slider on the footer
- * baseline: [DISCOVERIES] gap [ORB] gap [slider] edge. One gap everywhere (>= 8 px to anything).
+ * Where the two chips sit: the DETAIL slider lives bottom RIGHT (its right edge HUD_EDGE_PX from the screen, 176 px wide
+ * x `--hud-scale`) and the SPECS tab bottom LEFT, so both chips stand left of the slider on the footer baseline:
+ * [DISCOVERIES] gap [ORB] gap [slider] edge. One gap everywhere (>= 8 px to anything).
  */
 export const FOOTER_CHIP_GAP_PX = 10;
 /** ORB's fixed width (its text is about 46 px) so DISCOVERIES can be placed by number. */
@@ -51,8 +44,6 @@ const SLIDER_FOOTPRINT_PX = TRACK_WIDTH_PX + 2 * 8;   // DetailSlider.js: track 
 /**
  * CSS `right` of a chip that stands `extraPx` left of the slider's left edge (+ one gap). The slider scales with
  * `--hud-scale` (index.html), the chips do not, so the footprint is multiplied by the live scale.
- * @param {number} [extraPx]
- * @returns {string}
  */
 export function leftOfSliderCss(extraPx = 0) {
   return `calc(${HUD_EDGE_PX + FOOTER_CHIP_GAP_PX + extraPx}px + ${SLIDER_FOOTPRINT_PX}px * var(--hud-scale, 1))`;
@@ -64,11 +55,9 @@ export function leftOfSliderBasePx(extraPx = 0) {
 }
 
 /**
- * The F1 SPECS drawer covers the footer band's right half (its bar reaches the chips), so both chips step aside
- * while it is open. Writes `style.visibility` on the DISCOVERIES wrapper (chip + popover) and the ORB chip: a
- * bit of its own, so it never fights the density step or FloorMask; '' when the drawer closes restores them.
- * @param {boolean} hidden
- * @param {Document} [doc]
+ * The F1 SPECS drawer covers the footer band's right half, so both chips step aside while it is open. Writes
+ * `style.visibility` on the DISCOVERIES wrapper (chip + popover) and the ORB chip: a bit of its own, so it never fights
+ * the density step or FloorMask; '' when the drawer closes restores them.
  */
 export function setChipsUnderDrawer(hidden, doc = document) {
   for (const id of ['hud-discoveries', 'hud-chip-orb']) {
@@ -84,7 +73,7 @@ const EXPANDED_ATTR = 'data-expanded';
 const FONT_PX = 11;
 const HIT_PAD_PX = (FOOTER_CHIP_HIT_PX - FOOTER_CHIP_PX) / 2;
 
-/** SPECS-tab plate (LibraryPane.js:948). */
+/** SPECS-tab plate (LibraryPane). */
 const GLASS_BG = 'rgb(var(--hud-ink-rgb, 0 16 32) / 0.85)';
 
 /** '#rrggbb' → an info-role tint at alpha a: `rgb(var(--hud-info-rgb, r g b) / a)` (the fallback IS today's colour). */
@@ -137,17 +126,8 @@ function _ensureStyle(doc) {
 }
 
 /**
- * @param {object} opts
- * @param {string} opts.id
- * @param {string} opts.label
- * @param {'left'|'right'} opts.side
  * @param {number|string} opts.offsetPx  px, or a CSS length such as a calc()
- * @param {number} [opts.minWidthPx]
- * @param {function} [opts.onTap]
- * @param {Document} [opts.doc]
  * @param {number} [opts.bottomPx] CSS `bottom` — defaults to footerBand().bottom
- * @param {boolean} [opts.glass]
- * @param {number} [opts.hintBandPx]
  * @param {object} [opts.parent] append target (default doc.body)
  * @returns {{el: object, setVisible: function, isVisible: function, setExpanded: function, isExpanded: function, setRailsShy: function, destroy: function}}
  */

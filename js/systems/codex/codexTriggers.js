@@ -1,16 +1,12 @@
 /**
  * codexTriggers.js — unlock predicates for every codex entry, keyed by id.
  *
- * JSON (data/codex.json) holds entry *content*; predicates can't be JSON, so
- * they live here. Each id maps to an ARRAY of { event, match } triggers — an
- * entry unlocks when ANY of its triggers fires (this is how the Phase-1 dedupe
- * "unions" a survivor's trigger with its merged-away losers, and how the old
- * `_subsystemSourceMap` source catch-all is folded in explicitly).
+ * data/codex.json holds entry content; predicates can't be JSON, so they live here. Each id maps to an ARRAY of
+ * { event, match } triggers; an entry unlocks when ANY of them fires.
  *
  *   match(payload) → boolean   // must not throw; treat missing fields as false
  *
- * Reachability of the comms-substring matches is guarded by
- * test-CodexReachability.js (corpus side) + its trigger-side self-validation.
+ * Reachability of the comms-substring matches is guarded by test-CodexReachability.js.
  *
  * @module systems/codex/codexTriggers
  */
@@ -18,14 +14,12 @@
 import { Events } from '../../core/Events.js';
 import { Constants } from '../../core/Constants.js';
 
-// --- tiny matcher helpers (keep predicates terse + consistent) -------------
 /** any-of, case-insensitive substring on p.text */
 const txt = (...subs) => (p) => !!p && !!p.text && subs.some(s => p.text.toLowerCase().includes(s));
 /** all-of, case-insensitive substring on p.text */
 const txtAll = (...subs) => (p) => !!p && !!p.text && subs.every(s => p.text.toLowerCase().includes(s));
 /** any-of, CASE-SENSITIVE substring on p.text (triggers that never lowercased) */
 const txtCS = (...subs) => (p) => !!p && !!p.text && subs.some(s => p.text.includes(s));
-/** SUBSYSTEM_EVENT source membership */
 const src = (...sources) => (p) => !!p && sources.includes(p.source);
 const always = () => true;
 /** COMMS_MESSAGE from an ISRO ground station (case-insensitive source match). */
@@ -37,17 +31,12 @@ const isroComms = (p) => {
 const E = Events;
 
 /**
- * id → [{ event, match }]. Every entry in data/codex.json must have an entry
- * here (guarded by test-CodexData.js), or it can never unlock.
+ * id → [{ event, match }]. Every entry in data/codex.json must have one here (test-CodexData.js) or it can never unlock.
  *
- * NOTE: A dozen of these ids are per-category "cornerstone" entries flagged
- * `startUnlocked: true` in data/codex.json (delta_v, specific_impulse,
- * solar_power, kessler_syndrome, aluminum_space, space_tether, hypervelocity,
- * pulse_scan_radar, ground_station_pass, isro_why_india,
- * attitude_control_system, onboard_computer). Their triggers stay defined here
- * intentionally: already-unlocked entries are skipped by _checkUnlocks, so the
- * predicates are inert at runtime but keep the entryUnlocksOn contract tests
- * (e.g. test-CodexISRO.js) valid.
+ * NOTE: a dozen ids (delta_v, specific_impulse, solar_power, kessler_syndrome, aluminum_space, space_tether,
+ * hypervelocity, pulse_scan_radar, ground_station_pass, isro_why_india, attitude_control_system, onboard_computer) are
+ * `startUnlocked: true` cornerstones. Their triggers stay on purpose: _checkUnlocks skips unlocked entries, so they are
+ * inert at runtime but keep the entryUnlocksOn contract tests (test-CodexISRO.js) valid.
  * @type {Record<string, Array<{ event: string, match: (p:object)=>boolean }>>}
  */
 export const CODEX_TRIGGERS = {
@@ -65,23 +54,20 @@ export const CODEX_TRIGGERS = {
 
   // ===== PROPULSION =====
   feep_thruster:          [{ event: E.ARM_MANUAL_THRUST, match: always }],
-  // survivor of ← specific_impulse_explained (union: SCORING_AWARD + FUEL_CHANGED)
   specific_impulse:       [{ event: E.SCORING_AWARD, match: (p) => !!p.reason && p.reason.includes('fuel') },
-                           { event: E.FUEL_CHANGED, match: (p) => !(p && p.initial) }],   // h3b D5: the boot/load announcement is not a player action
-  // q1-gas-leftovers D3: the ladder is argon (the gas the ship starts with) -> krypton -> xenon, the last two
-  // shop upgrades (gas_krypton / gas_xenon, ShopScreen UPGRADE_PURCHASED). A save that bought one earlier
-  // unlocks it from the telemetry's resources.tankGasId (the gas IN the tank; never currentFuelId, which can
-  // be a cargo fuel). engineGasPct is the engine gas against what the ship launched with, so none of these
-  // fires on the first frame.
+                           { event: E.FUEL_CHANGED, match: (p) => !(p && p.initial) }],   // the boot/load announcement is not a player action
+  // Gas ladder: argon (start) -> krypton -> xenon; the last two are shop upgrades (gas_krypton / gas_xenon,
+  // UPGRADE_PURCHASED). A save that bought one earlier unlocks from telemetry resources.tankGasId (the gas IN the
+  // tank; never currentFuelId, which can be a cargo fuel). engineGasPct is against the launch gas, so none fires on
+  // the first frame.
   xenon_propellant:       [{ event: E.UPGRADE_PURCHASED, match: (p) => p.id === 'gas_xenon' },
                            { event: E.PLAYER_TELEMETRY, match: (p) => p.resources?.tankGasId === 'xenon' }],
   krypton_propellant:     [{ event: E.UPGRADE_PURCHASED, match: (p) => p.id === 'gas_krypton' },
                            { event: E.PLAYER_TELEMETRY, match: (p) => p.resources?.tankGasId === 'krypton' }],
   argon_propellant:       [{ event: E.PLAYER_TELEMETRY, match: (p) => p.resources?.tankGasId === 'argon' && p.engineGasPct < 0.7 }],
   cold_gas_thruster:      [{ event: E.PLAYER_TELEMETRY, match: (p) => p.coldGasPct < 0.8 }],
-  // F6: MPD_BURST_START has no emitter (its arming verb was deleted, t6 2026-10-17; MPD
-  // burst input isn't wired). The UPGRADE_APPLIED fallback unlocks the entry when the
-  // MPD thruster is installed; the burst trigger stays for if burst mode ever returns.
+  // MPD_BURST_START has no emitter (burst input isn't wired). The UPGRADE_APPLIED fallback unlocks on MPD install; the
+  // burst trigger stays for if burst mode returns.
   mpd_burst:              [{ event: E.MPD_BURST_START, match: always },
                            { event: E.UPGRADE_APPLIED, match: (p) => !!p.id && p.id.includes('mpd') }],
   spring_energy:          [{ event: E.CROSSBOW_FIRE, match: always }],
@@ -98,11 +84,9 @@ export const CODEX_TRIGGERS = {
   // ===== POWER =====
   solar_power:            [{ event: E.PLAYER_TELEMETRY, match: (p) => p.batteryPct < 0.5 }],
   eclipse_cycle:          [{ event: E.COMMS_MESSAGE, match: txt('shadow', 'eclipse') }],
-  // S8: the furnace entry unlocks the first time a catch is processed — mother
-  // park or daughter digestion (both fire CATCH_PROCESSED). Event-based, no
-  // comms-text coupling (the lines live in GameFlowManager, outside the
-  // reachability corpus).
-  // no-melt (owner 2026-10-18): with no furnace a parked catch is not a furnace event; only a digested one unlocks it.
+  // The furnace entry unlocks on the first processed catch (mother park or daughter digestion; both fire
+  // CATCH_PROCESSED). Event-based: the comms lines live in GameFlowManager, outside the reachability corpus.
+  // DECISIONS §28 row 1: with no furnace a parked catch is not a furnace event; only a digested one unlocks it.
   solar_furnace:          [{ event: E.CATCH_PROCESSED, match: (p) => Constants.isFeatureEnabled('FURNACE_COOK') || (!!p && p.digested === true) }],
   battery_chemistry:      [{ event: E.COMMS_MESSAGE, match: txt('battery cycle') },
                            { event: E.SUBSYSTEM_EVENT, match: src('POWER') }],
@@ -124,13 +108,10 @@ export const CODEX_TRIGGERS = {
   kessler_syndrome:       [{ event: E.STATE_CHANGE, match: (p) => p.newState === 'PLAYING' }],
   solar_storm:            [{ event: E.COMMS_MESSAGE, match: txt('solar') }],
   van_allen_belts:        [{ event: E.COMMS_MESSAGE, match: txt('radiation', 'van allen') }],
-  // survivor of ← saa_radiation (identical trigger)
   south_atlantic_anomaly: [{ event: E.WEATHER_EFFECT_START, match: (p) => p.type === 'SAA_PASSAGE' }],
-  // survivor of ← atomic_oxygen_erosion (+ STRUCTURE source catch-all)
   atomic_oxygen:          [{ event: E.COMMS_MESSAGE, match: txt('atomic oxygen') },
                            { event: E.SUBSYSTEM_EVENT, match: txt('atomic oxygen') },
                            { event: E.SUBSYSTEM_EVENT, match: src('STRUCTURE') }],
-  // survivor of ← mmod_impact_physics
   mmod_impact:            [{ event: E.COMMS_MESSAGE, match: txt('mmod') },
                            { event: E.SUBSYSTEM_EVENT, match: txt('micrometeorite') }],
   uv_degradation:         [{ event: E.SUBSYSTEM_EVENT, match: txt('uv') }],
@@ -141,12 +122,9 @@ export const CODEX_TRIGGERS = {
   graphene_gsl:           [{ event: E.ARM_CAPTURED, match: (p) => p.type === 'weaver' }],
   hbn_coating:            [{ event: E.SUBSYSTEM_EVENT, match: txt('atomic oxygen') }],
   kevlar_mli:             [{ event: E.CARGO_STORE, match: (p) => p.metalId === 'kevlar' }],
-  // survivor of ← space_aluminum (union: metalId + type)
   aluminum_space:         [{ event: E.CARGO_STORE, match: (p) => p.metalId === 'aluminum' || p.type === 'aluminum' }],
   gallium_arsenide:       [{ event: E.CARGO_STORE, match: (p) => p.metalId === 'gallium' }],
-  // survivor of ← titanium
   titanium_alloys:        [{ event: E.CARGO_STORE, match: (p) => p.metalId === 'titanium' || p.type === 'titanium' }],
-  // survivor of ← carbon_composite
   carbon_composites:      [{ event: E.CARGO_STORE, match: (p) => p.metalId === 'carbon_composite' || p.type === 'carbon_composite' }],
   iridium_avionics:       [{ event: E.CARGO_STORE, match: (p) => p.metalId === 'iridium' }],
 
@@ -156,11 +134,9 @@ export const CODEX_TRIGGERS = {
   net_yo_yo_despin:       [{ event: E.NET_FIRED, match: always }],
   tether_materials:       [{ event: E.UPGRADE_APPLIED, match: (p) => !!p.id && p.id.includes('tether') }],
   tether_dynamics:        [{ event: E.TETHER_REEL_STATE, match: (p) => p.reeling === true }],
-  // The TANGLED FSM state + its TETHER_TANGLE emitter were deleted (dead code,
-  // zero callers — P1 integrity sweep). Tangle physics is most relevant while
-  // reeling in, so this entry is reachable via the live TETHER_REEL_STATE trigger.
+  // No TANGLED state or TETHER_TANGLE emitter exists; tangle physics matters while reeling in, so it rides the live
+  // TETHER_REEL_STATE.
   tether_tangle_physics:  [{ event: E.TETHER_REEL_STATE, match: (p) => p.reeling === true }],
-  // survivor of ← edt_propulsion (union: COMMS 'edt' + EDT_ATTRACT)
   edt_physics:            [{ event: E.COMMS_MESSAGE, match: txt('edt') },
                            { event: E.EDT_ATTRACT, match: always }],
   miura_ori_net:          [{ event: E.CROSSBOW_FIRE, match: always }],
@@ -188,7 +164,6 @@ export const CODEX_TRIGGERS = {
 
   // ===== SENSORS =====
   lidar_sensing:          [{ event: E.SENSOR_UPGRADED, match: always }],
-  // survivor of ← star_tracker_nav (+ NAV source catch-all)
   star_tracker:           [{ event: E.COMMS_MESSAGE, match: txt('star tracker') },
                            { event: E.SUBSYSTEM_EVENT, match: txt('star tracker') },
                            { event: E.SUBSYSTEM_EVENT, match: src('NAV') }],
@@ -198,17 +173,16 @@ export const CODEX_TRIGGERS = {
   kalman_filtering:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 20 }],
   pulse_scan_radar:       [{ event: E.PULSE_SCAN_COMPLETE, match: always }],
   lidar_ranging:          [{ event: E.ARM_CAPTURED, match: always }],
-  // Phase 2d SENSORS fill — discovery via debris-clear thresholds (non-comms)
+  // Debris-clear thresholds (non-comms).
   sun_sensor:             [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 9 }],
   pose_estimation:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 19 }],
 
   // ===== ATTITUDE (split from SENSORS) =====
-  // survivor of ← cmg_gyroscopes (union: COMMS 'reaction wheel' + SUBSYSTEM gyro/reaction wheel)
   reaction_wheels:        [{ event: E.COMMS_MESSAGE, match: txt('reaction wheel') },
                            { event: E.SUBSYSTEM_EVENT, match: txt('gyro', 'reaction wheel') }],
   magnetorquers:          [{ event: E.COMMS_MESSAGE, match: txt('magnetorquer') }],
   detumble:               [{ event: E.COMMS_MESSAGE, match: txt('tumble rate') }],
-  // Phase 2d ATTITUDE fill — discovery via debris-clear thresholds (non-comms)
+  // Debris-clear thresholds (non-comms).
   attitude_control_system:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 6 }],
   rcs_attitude_control:         [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 12 }],
   control_moment_gyroscope:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 16 }],
@@ -221,7 +195,7 @@ export const CODEX_TRIGGERS = {
                            { event: E.SUBSYSTEM_EVENT, match: src('AVIONICS') }],
   telemetry:              [{ event: E.COMMS_MESSAGE, match: txt('telemetry frame') }],
   ecc_memory:             [{ event: E.COMMS_MESSAGE, match: txt('single-bit error') }],
-  // Phase 2d AVIONICS fill — discovery via debris-clear thresholds (non-comms)
+  // Debris-clear thresholds (non-comms).
   onboard_computer:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 7 }],
   spacewire_bus:          [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 13 }],
   rad_hard_processor:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 17 }],
@@ -229,7 +203,6 @@ export const CODEX_TRIGGERS = {
   single_event_effects:   [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 27 }],
 
   // ===== COMMS =====
-  // survivor of ← laser_comms_optical
   laser_comms:            [{ event: E.COMMS_MESSAGE, match: txt('laser comms') },
                            { event: E.SUBSYSTEM_EVENT, match: txt('laser comms') }],
   ground_station_window:  [{ event: E.COMMS_MESSAGE, match: txtAll('ground station', 'range') }],
@@ -250,7 +223,7 @@ export const CODEX_TRIGGERS = {
   space_elevator:         [{ event: E.GAME_WIN, match: (p) => p.winType === 'elevator' }],
   what_10000kg_buys:      [{ event: E.GAME_WIN, match: (p) => p.winType === 'elevator' }],
   jwst_horizon:           [{ event: E.GAME_WIN, match: (p) => p.winType === 'elevator' }],
-  // Phase 2d HERITAGE fill — servicing/exposure legacy, discovery via debris-clear
+  // Debris-clear thresholds.
   heritage_solar_max:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 36 }],
   heritage_ldef:             [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 44 }],
   heritage_hubble_servicing: [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 46 }],
@@ -260,28 +233,26 @@ export const CODEX_TRIGGERS = {
   news_starlink_breakup:  [{ event: E.NEWS_EVENT_TRIGGERED, match: (p) => p.eventId === 'starlink_breakup' }],
   news_thaicom4:          [{ event: E.NEWS_EVENT_TRIGGERED, match: (p) => p.eventId === 'thaicom4_geo_derelict' }],
 
-  // ===== Phase 2 — new concept entries =====
+  // ===== Concept entries =====
   cnt:               [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 30 }],
   carbyne:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 45 }],
   solar_wind:        [{ event: E.WEATHER_EFFECT_START, match: always }],
   rendezvous:        [{ event: E.AUTOPILOT_ARRIVED, match: always }],
   docking_berthing:  [{ event: E.ARM_CAPTURED, match: always }],
   // ===== CATALOG — discovery "trading cards", unlocked as you clear debris =====
-  // (PLAYBOOK + WORLD_INDUSTRY entries are `startUnlocked` in data/codex.json —
-  //  reference/onboarding material is readable from the first open, so it needs
-  //  no trigger here. welcome_cowboy / world_adr_mandate triggers were removed.)
+  // (PLAYBOOK + WORLD_INDUSTRY entries are `startUnlocked`, so they need no trigger here.)
   catalog_envisat:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 7 }],
   catalog_vanguard1:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 4 }],
   catalog_les1:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 9 }],
   catalog_cosmos_iridium: [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 11 }],
   catalog_fengyun1c:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 15 }],
-  // Phase 2c CATALOG marquee objects
+  // Marquee objects.
   catalog_telstar1:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 5 }],
   catalog_kosmos482:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 8 }],
   catalog_sl16:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 13 }],
   catalog_cz5b:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 14 }],
   catalog_kosmos1408:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 18 }],
-  // Phase 2c NEWS & EVENTS — real-world headlines, unlocked as you progress
+  // Real-world headlines, unlocked as you progress.
   news_starlink_storm:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 3 }],
   news_tiangong_dodge:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 6 }],
   news_iss_pallet:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 10 }],
@@ -290,13 +261,10 @@ export const CODEX_TRIGGERS = {
   news_yunhai_collision:  [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 20 }],
   news_swift_rescue:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 14 }],
 
-  // ===== P2 THERMAL-ARC BATCH (charter TASK H; 20 entries, single
-  // DATA_VERSION stamp '1003'→'1004') =====
-  // Event-keyed triggers only — no comms-substring couplings, so the
-  // test-CodexReachability corpus contract is untouched. Flower-adjacent
-  // entries unlock off the purchase/deploy verbs; encyclopedic ones ride the
-  // SCORE_UPDATE progression thresholds (the krypton/argon idiom);
-  // capture-heritage ones fire on the live capture chain events.
+  // ===== THERMAL-ARC BATCH =====
+  // Event-keyed only (no comms-substring couplings, so the test-CodexReachability corpus is untouched). Flower-adjacent
+  // entries unlock off purchase/deploy verbs; encyclopedic ones ride SCORE_UPDATE thresholds; capture-heritage ones
+  // fire on the live capture chain events.
   space_radiator:         [{ event: E.UPGRADE_APPLIED, match: (p) => !!p.id && p.id.includes('flower') },
                            { event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 18 }],
   loop_heat_pipe:         [{ event: E.THERMAL_FLOWER_INPUT, match: always },

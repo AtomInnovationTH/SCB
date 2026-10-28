@@ -1,80 +1,49 @@
 /**
- * OrbitPane.js — the ORBIT HUD pane (Session M, item 1, 2026-09-06).
- *
- * The ship's orbit as a flight instrument — text only (owner 2026-09-08:
- * "remove the graphic on the left side, only text"; before that a TRACK view,
- * the OrbitMFD plot in a 126 px square, rode beside the text): a SLOTS block —
- * a header line and a 2-row grid of fixed-width readouts inside 280 px
- * (ladder reorder rev 3, locked #8 / #15 — ΔV dropped; Mother digest owns it):
+ * OrbitPane.js — the ORBIT HUD pane: the ship's orbit as a flight instrument, text only. A header line and a 2-row
+ * grid of fixed-width readouts inside 280 px (ΔV is not here; the Mother digest owns it):
  *
  *   LAT · LON · ALT (+ trend arrow)
  *   SUN (state word + time to the next terminator crossing) · MET
  *
- * It is a pane-density RUNG like the other DOM panes: `rung()` returns the HUD
- * domRung shape ({id:'orbit', label, isVisible, setVisible}) whose ONE
- * visibility bit is the `data-density-hidden` attribute on the root, so the
- * DETAIL slider counts it as a rung (Session P) and FloorMask rooms it per floor.
+ * A pane-density RUNG like the other DOM panes: `rung()` returns the HUD domRung shape ({id:'orbit', label, isVisible,
+ * setVisible}) whose ONE visibility bit is the `data-density-hidden` attribute on the root, so the DETAIL slider counts
+ * it and FloorMask rooms it per floor.
  *
- * HOME (owner 2026-09-07; before that: right of the DISPLAY rail): bottom-left,
- * FLUSH with the left HUD column (x = PANE_CORNER_PX 0), UNDER the left HUD column
- * (Session P: the DISPLAY rail it rode under retired — the ceiling is the
- * column's own bottom, a 1 Hz hub read) and ABOVE the hint ticker — so the
- * bottom-centre stays free for the SAFETY OVERRIDE button. The hub (main.js,
- * inside the LADDER gate) constructs the pane, pushes `rung()` into
- * hud.paneDensity.rungs before the first floorMask.setFloor, and calls
- * `update(nowMs)` per frame; the LeftStack places it with
- * `setStack(top, height, mode)` (write-on-change on its three inputs; `top`
- * is set BEFORE un-hiding; pure arithmetic, no layout read). `left` is set once
- * at build: max(PANE_CORNER_PX, env(safe-area-inset-left)). Modes by the
- * vertical budget between the ceiling (the column's
- * bottom + GAP, or the screen top) and the bottom edge: `full` (the one form,
- * FULL_PX = 104 tall) when ≥ FULL_PX, else `hidden` (display none via the
- * `data-orbit-mode` attribute — never the rung bit). The left-edge cascade:
- * the column (top-anchored) → this pane fills what is left, hiding when
- * squeezed — the CARGO / NEXT law without their compact step.
+ * HOME (owner 2026-09-07): bottom-left, FLUSH with the left HUD column (x = PANE_CORNER_PX), UNDER it (the ceiling is the column's own
+ * bottom, a 1 Hz hub read) and ABOVE the hint ticker, so the bottom-centre stays free for the SAFETY OVERRIDE button.
+ * The hub (main.js, LADDER gate) constructs the pane, pushes `rung()` into hud.paneDensity.rungs before the first
+ * floorMask.setFloor, and calls `update(nowMs)` per frame; the LeftStack places it with `setStack(top, height, mode)`
+ * (write-on-change on its three inputs; `top` is set BEFORE un-hiding; pure arithmetic, no layout read). `left` is set
+ * once at build: max(PANE_CORNER_PX, env(safe-area-inset-left)). Modes by the vertical budget between the ceiling (the
+ * column's bottom + GAP, or the screen top) and the bottom edge: `full` (the one form, FULL_PX tall) when it fits, else
+ * `hidden` (display none via the `data-orbit-mode` attribute, never the rung bit). The column (top-anchored) comes
+ * first; this pane fills what is left, hiding when squeezed (the CARGO / NEXT law without their compact step).
  *
- * UPDATE: `update(nowMs)` self-throttles to one tick per second; every tick
- * recomputes the readouts from the injected deps and writes text / style /
- * attributes only when a value changed. The eclipse prediction (`eclipse()`)
- * is recomputed EVEN WHILE density-hidden (another pane consumes it) — only
- * the DOM writes are skipped. The slow slot (the SUN word)
- * flash on change (`data-changed` for 1.2 s — a white BLOOM, see below); the
- * per-second slots never flash.
+ * UPDATE: `update(nowMs)` self-throttles to one tick per second; every tick recomputes the readouts from the injected
+ * deps and writes text / style / attributes only when a value changed. The eclipse prediction (`eclipse()`) is
+ * recomputed EVEN WHILE density-hidden (another pane consumes it); only the DOM writes are skipped. The slow slot (the
+ * SUN word) flashes on change (`data-changed` for 1.2 s, a white BLOOM); the per-second slots never flash.
  *
- * WHITE TELEMETRY (owner 2026-09-08: "White color numbers in the Orbit pane.
- * It is meant to be eye catching, to show off this is sim, not a cartoon … eye
- * candy for Space enthusiasts"; plan
- * .kilo/plans/1788863500000-orbit-pane-telemetry-showpiece.md): the pane is a
- * showpiece of the simulation and reads like mission telemetry — the SpaceX
- * webcast overlay / the ISS trackers: white tabular numerals, dim small-caps
- * labels, the unit lighter than the number, colour reserved for STATE.
- *   - Values wear `COLORS.LABEL` white (`.orbit-value`); labels and the header
- *     keep the panel's dim green (index.html `.hud-panel`), 0.55 / 0.6.
- *   - Units: the UNIT_SLOTS whose formatter yields `<number> <unit>` (ALT `km`)
- *     hold two inner spans — `.orbit-num` + `.orbit-unit`
- *     (the unit at 0.6 opacity, `white-space: pre` so its leading space
- *     survives the flex line start). The split happens at paint from the
- *     UNCHANGED formatter string (`UNIT_RE`), so the value element's
- *     textContent stays byte-identical (`'350.0 km'`) and `readout()` is the
- *     same string. Width-neutral: opacity has no metric, same glyphs, same
- *     advance — CELL_W_PX / the `.orbit-cell-2 .orbit-text` width rule untouched.
- *   - Colour for state only: the ALT `↓` stays CAUTION amber; SUN stays a
- *     word; the ALT `↑` (a burn, not a warning) inherits the value white like
- *     any other glyph. (ΔV bar / reserve tick retired with the ΔV cell.)
- *   - The change-flash on white values: `@keyframes orbit-pane-flash` is a
- *     `text-shadow` bloom (LABEL glow → transparent, `ease-out forwards`, the
- *     same CHANGE_FLASH_MS) — not a colour change (PLAYER green is a state).
- *     Under `prefers-reduced-motion: reduce` the animation is off and the
- *     glow declared on `[data-changed]` holds steady for the 1.2 s window
- *     (information kept, motion removed — the NextPane / HUD.js precedent).
+ * WHITE TELEMETRY (owner 2026-09-08: white numbers in the Orbit pane, eye candy that shows this is a sim, not a
+ * cartoon): white tabular numerals, dim small-caps labels, the unit lighter than the number, colour reserved for STATE.
+ *   - Values wear `COLORS.LABEL` white (`.orbit-value`); labels and the header keep the panel's dim green
+ *     (index.html `.hud-panel`), 0.55 / 0.6.
+ *   - Units: the UNIT_SLOTS whose formatter yields `<number> <unit>` (ALT `km`) hold two inner spans, `.orbit-num` +
+ *     `.orbit-unit` (opacity 0.6, `white-space: pre` so its leading space survives the flex line start). The split
+ *     happens at paint from the UNCHANGED formatter string (`UNIT_RE`), so the value element's textContent stays
+ *     byte-identical (`'350.0 km'`) and `readout()` is the same string. Width-neutral (opacity has no metric):
+ *     CELL_W_PX / the `.orbit-cell-2 .orbit-text` width rule are untouched.
+ *   - Colour for state only: the ALT `↓` stays CAUTION amber; SUN stays a word; the ALT `↑` (a burn, not a warning)
+ *     inherits the value white.
+ *   - Change flash: `@keyframes orbit-pane-flash` is a `text-shadow` bloom (LABEL glow → transparent, `ease-out
+ *     forwards`, CHANGE_FLASH_MS), not a colour change (PLAYER green is a state). Under `prefers-reduced-motion:
+ *     reduce` the animation is off and the glow declared on `[data-changed]` holds steady for the 1.2 s window.
  *
- * Laws: root = a DIRECT child of #hud-overlay wearing .hud-panel, pointer-
- * events none (nothing is tappable); ONE injected <style> per document, no
- * backdrop-filter; DOM fonts ride the --font-mono token with tabular numerals;
- * no timers / rAF of its own (all timing from `nowMs`); no global listeners;
- * no layout reads; never reads the ladder flag (the hub gates construction);
- * touches no DOM at import time; every dep optional and guarded (constructible
- * with no document — the readouts then hold `—` and eclipse() reads {false, null}).
+ * Laws: root = a DIRECT child of #hud-overlay wearing .hud-panel, pointer-events none (nothing is tappable); ONE
+ * injected <style> per document, no backdrop-filter; DOM fonts ride the --font-mono token with tabular numerals; no
+ * timers / rAF of its own (all timing from `nowMs`); no global listeners; no layout reads; never reads the ladder flag
+ * (the hub gates construction); touches no DOM at import time; every dep optional and guarded (constructible with no
+ * document — the readouts then hold `—` and eclipse() reads {false, null}).
  *
  * @module ui/hud/OrbitPane
  */
@@ -89,28 +58,21 @@ import { TimeAuthority } from '../../systems/TimeAuthority.js';
 import { RESERVE_FRAC, usableDeltaV } from '../../entities/ReachabilityModel.js';
 import { radToDeg, clamp01 } from '../../core/MathUtil.js';
 
-/** The colour law (read-only): LABEL white for the values and the flash bloom, CAUTION amber for the reserve tick / decay arrow. */
+/** LABEL white for the values and the flash bloom, CAUTION amber for the decay arrow. */
 const COLORS = VisualLaw.COLORS;
 
-/** The root element id (FloorMask MASK_PANES.orbit.els = ['#hud-orbit-pane']). */
+/** FloorMask MASK_PANES.orbit.els = ['#hud-orbit-pane']. */
 export const ORBIT_PANE_ID = 'hud-orbit-pane';
 
-/** The injected stylesheet's id (one <style>, injected once per document). */
 export const ORBIT_STYLE_ID = 'orbit-pane-style';
 
-/** The pane-density rung id (FloorMask MASK_PANES.orbit.rung). */
+/** FloorMask MASK_PANES.orbit.rung. */
 export const ORBIT_RUNG_ID = 'orbit';
 
 /**
- * ORBIT_GEOMETRY — the pane's numbers (px). FRAME_PX is the .hud-panel chrome
- * (6 px padding + 1 px border, top and bottom). Width is HUD_COLUMN_WIDTH_PX
- * (280) — two rows of slots inside 280 (ladder reorder rev 3, locked #8 / #15):
- * LAT · LON · ALT · SUN · MET. The ΔV cell is gone (Mother digest owns ΔV).
- * CELL_W_PX is derived so three cells + two gaps fill SLOTS_W_PX =
- * HUD_COLUMN_WIDTH_PX − H_CHROME_PX (8 px padding + 1 px border a side).
- * FULL_PX = FRAME + slotsPx() is the pane's ONE height (two rows).
- * Labels are 11 px (type floor, locked #14).
- * rightPx() = PANE_CORNER_PX + HUD_COLUMN_WIDTH_PX (280) — import, don't hard-code.
+ * The pane's numbers (px). FRAME_PX is the .hud-panel chrome (6 px padding + 1 px border, top and bottom). Width is
+ * HUD_COLUMN_WIDTH_PX (280). CELL_W_PX is derived so three cells + two gaps fill SLOTS_W_PX = HUD_COLUMN_WIDTH_PX −
+ * H_CHROME_PX. FULL_PX = FRAME + slotsPx() is the pane's ONE height (two rows). Labels are 11 px (the type floor).
  */
 const VALUE_FONT_PX = 13;
 const VALUE_CH = 10;
@@ -141,21 +103,18 @@ export const ORBIT_GEOMETRY = Object.freeze({
   ROW_GAP_PX,
 });
 
-/** Minimum ms between two update() ticks (the 1 Hz law). */
 export const TICK_MS = 1000;
 
-/** How long a slow slot wears `data-changed` after its string changed (ms). */
+/** ms a slow slot wears `data-changed` after its string changed. */
 export const CHANGE_FLASH_MS = 1200;
 
 /**
  * The sink rate of the game's drag at `altKm` for HER REFERENCE coefficient, km per REAL second at BASE_SCALE 10 / rate 1.
  * PlayerSatellite integrates atmosphericDrag(alt, v, area, mass) as sma *= 1 - 2*a*dt/v per world second; with her
- * reference area (MotherDragArea.referenceDragAreaM2(): nose-first, radiators 146 deg, wings tracking the sun, 5.79 m2) and
- * her start mass (MOTHER_DRAG.MASS_KG, 294.28 kg) the sink is 2.13e-4 km per real second at the 350 km start, 8.4e-5 at
- * 400 km, 3.6e-5 at 450 km and 1.6e-5 at 500 km (Vallado's air; probe tmp/step3/trend-numbers.mjs). Her real sink differs from
- * it at any moment (her area runs from about 1 to 9 m2 with her attitude, radiators and wings; she is lighter by the gas burnt):
- * this is the yardstick the arrow's line is cut from, not a prediction.
- * @param {number} altKm
+ * reference area (MotherDragArea.referenceDragAreaM2(): nose-first, radiators 146 deg, wings tracking the sun, 5.79 m2)
+ * and her start mass (MOTHER_DRAG.MASS_KG, 294.28 kg) the sink is 2.13e-4 at 350 km, 8.4e-5 at 400, 3.6e-5 at 450 and
+ * 1.6e-5 at 500 km (Vallado's air). Her real sink differs at any moment (her area runs from about 1 to 9 m2; she is
+ * lighter by the gas burnt): this is the yardstick the arrow's line is cut from, not a prediction.
  * @returns {number} km per real second
  */
 export function referenceSinkKmPerRealS(altKm) {
@@ -166,16 +125,11 @@ export function referenceSinkKmPerRealS(altKm) {
 }
 
 /**
- * ALT trend threshold, km per REAL second of smoothed altitude rate: one fifth of the game's reference sink at 400 km
- * (referenceSinkKmPerRealS), computed from atmosphericDrag itself, once, at module load. It is 1.67e-5 now.
- * History: 1e-3 (the old, 3-7x too thick air and a 130 kg mother) -> 7.0e-5 (Nets step 3 slice 1, 2026-10-21: Vallado's air,
- * the bare 20 m2 over 242.68 kg) -> computed (slice 2a, 2026-10-22: her real area, 5.79 m2 at the reference, over her start mass
- * 294.28 kg; the value was typed before, which is what the review of slice 1 asked to end). What changed with the area: every
- * sink is 4.2x smaller (A/m 0.0197 against 0.0824) and the line, being a fifth of the 400 km sink, moves with it, so the
- * claims about the arrow did not change: the EMA (TREND_EMA, seeded at 0.15 of the first rate) crosses the line on the SECOND
- * sample at 350 km (sink 12.7x the line), the THIRD at 400 km (the second EMA step, 0.2775 x 8.4e-5 = 2.3e-5), the FIFTH at 450 km,
- * and never above 496.4 km, where the sink falls below the line; a steady orbit (no sink) stays blank. test-OrbitPane.js
- * pins all of it against atmosphericDrag.
+ * ALT trend threshold, km per REAL second of smoothed altitude rate: one fifth of the reference sink at 400 km
+ * (referenceSinkKmPerRealS), computed from atmosphericDrag itself once at module load (1.67e-5 now). The EMA
+ * (TREND_EMA, seeded at 0.15 of the first rate) crosses the line on the SECOND sample at 350 km, the THIRD at 400 km,
+ * the FIFTH at 450 km, and never above 496.4 km, where the sink falls below the line; a steady orbit stays blank.
+ * test-OrbitPane.js pins all of it against atmosphericDrag.
  * @returns {number} km per real second
  */
 export function altTrendThresholdKmPerS() {
@@ -184,13 +138,12 @@ export function altTrendThresholdKmPerS() {
 
 export const ALT_TREND_KM_PER_S = altTrendThresholdKmPerS();
 
-/** The trend EMA weight on the previous rate (DockingReticle._easeOdds: 0.85 / 0.15). */
+/** Trend EMA weight on the previous rate (DockingReticle._easeOdds: 0.85 / 0.15). */
 export const TREND_EMA = 0.85;
 
-/** The unknown-value placeholder (an em dash; fixed homes never go empty). */
+/** Unknown value: an em dash (fixed homes never go empty). */
 export const PLACEHOLDER = '\u2014';
 
-/** The rung's ONE hide bit (HUD._initPaneDensity domRung grammar). */
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
 /** Layout-hidden (LeftStack): display:none via the pane's own style — never the density bit. */
 const STACK_HIDDEN_ATTR = 'data-stack-hidden';
@@ -200,36 +153,30 @@ const TREND_ATTR = 'data-trend';
 const ARROW_DOWN = '\u2193';
 const ARROW_UP = '\u2191';
 
-/** The slots whose string change flashes (the per-second slots never do). */
 const SLOW_SLOTS = Object.freeze(['sunState']);
 
-/** The slots block's inner height: header + gap + two rows with one gap. */
 export function slotsPx() {
   const G = ORBIT_GEOMETRY;
   return G.HEADER_PX + G.ROW_GAP_PX + 2 * (G.LABEL_PX + G.VALUE_PX) + G.ROW_GAP_PX;
 }
 
-/** The pane's outer height (frame + the slots block) — its one form; equals ORBIT_GEOMETRY.FULL_PX. */
+/** Equals ORBIT_GEOMETRY.FULL_PX. */
 export function fullPx() {
   return ORBIT_GEOMETRY.FRAME_PX + slotsPx();
 }
 
-/** @private finite number or null (null / undefined / '' / booleans are NOT numbers here) */
+/** @private Finite number or null (null / undefined / '' / booleans are NOT numbers here). */
 function num(x) {
   if (x == null || x === '' || typeof x === 'boolean') return null;
   const n = Number(x);
   return Number.isFinite(n) ? n : null;
 }
 
-/** @private two-digit zero pad */
 function pad2(n) {
   return n < 10 ? `0${n}` : String(n);
 }
 
-/**
- * ORBIT_FMT — the slot formats (pure; every one returns PLACEHOLDER for a
- * non-finite input so the slot keeps its fixed home).
- */
+/** Slot formats (pure; every one returns PLACEHOLDER for a non-finite input so the slot keeps its fixed home). */
 export const ORBIT_FMT = Object.freeze({
   /** `408.2 km` */
   alt: (km) => { const n = num(km); return n == null ? PLACEHOLDER : `${n.toFixed(1)} km`; },
@@ -264,18 +211,14 @@ export const ORBIT_FMT = Object.freeze({
 });
 
 /**
- * The unit split (white telemetry): a formatted `<number> <unit>` string paints
- * as `.orbit-num` + `.orbit-unit` (the unit dimmer). UNIT_SLOTS are the displayed
- * slots whose formatter yields that shape (ALT `km`; VEL / ΔV dropped from the
- * grid — locked #15). A non-matching string (the `—` placeholder) paints whole
- * into `.orbit-num` with an empty unit. The value element's textContent is the
- * formatter string either way: num + unit, the unit carrying its own leading
- * space (`' km'`).
+ * The unit split: a formatted `<number> <unit>` string paints as `.orbit-num` + `.orbit-unit` (the unit dimmer).
+ * A non-matching string (the `—` placeholder) paints whole into `.orbit-num` with an empty unit. The value element's
+ * textContent is the formatter string either way (the unit carries its own leading space, `' km'`).
  */
 export const UNIT_RE = /^(\S+) (\S+)$/;
 export const UNIT_SLOTS = Object.freeze(['alt']);
 
-/** @private `'350.0 km'` → `{ num: '350.0', unit: ' km' }`; `'—'` → `{ num: '—', unit: '' }` */
+/** `'350.0 km'` → `{ num: '350.0', unit: ' km' }`; `'—'` → `{ num: '—', unit: '' }` */
 export function splitUnit(text) {
   const m = UNIT_RE.exec(text);
   return m ? { num: m[1], unit: ` ${m[2]}` } : { num: text, unit: '' };
@@ -323,7 +266,7 @@ export class OrbitPane {
     this._clock = typeof deps.clock === 'function' ? deps.clock : null;
 
     this._root = null;
-     this._el = null;                 // { slots, cells: {slot → value el}, units, trend }
+    this._el = null;                 // { slots, cells: {slot → value el}, units, trend }
     this._rung = null;
     this._mode = 'hidden';           // until the first setStack places the pane
     this._stackMode = undefined;     // last setStack inputs (write-on-change)
@@ -341,15 +284,7 @@ export class OrbitPane {
     this._build(deps.parent);
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
-  /**
-   * The pane-density rung adapter (cached object; HUD domRung shape). The ONE
-   * visibility bit is `data-density-hidden` on the root; isVisible() also
-   * honours on-screen presence (getClientRects) like HUD's DOM rungs. Never
-   * throws headless (no root ⇒ not visible, setVisible no-op).
-   * @returns {{id:string, label:string, isVisible:function, setVisible:function}}
-   */
+  /** The pane-density rung adapter (cached). Never throws headless (no root ⇒ not visible, setVisible no-op). */
   rung() {
     if (!this._rung) {
       this._rung = {
@@ -372,11 +307,8 @@ export class OrbitPane {
   }
 
   /**
-   * LeftStack apply (the hub calls it per frame). Write-on-change on the three
-   * inputs. natural/compact/trimmed → data-orbit-mode 'full'; hidden →
-   * 'hidden' + data-stack-hidden. Sets `top` BEFORE un-hiding.
-   * @param {number} top
-   * @param {number} height
+   * LeftStack apply (per frame). Write-on-change. natural/compact/trimmed → data-orbit-mode 'full'; hidden → 'hidden' +
+   * data-stack-hidden. Sets `top` BEFORE un-hiding.
    * @param {'natural'|'compact'|'trimmed'|'hidden'} mode
    */
   setStack(top, height, mode) {
@@ -393,25 +325,19 @@ export class OrbitPane {
     this._layout();
   }
 
-  /** Rider natural height (the one form). */
   naturalPx() { return ORBIT_GEOMETRY.FULL_PX; }
 
-  /** No compact step (one form). */
   compactPx() { return null; }
 
-  /** Cannot trim. */
   minPx() { return null; }
 
   /** The current mode: 'full' (the one form) | 'hidden' ('hidden' until the first setStack, and headless). */
   mode() { return this._mode; }
 
   /**
-   * SAFETY OVERRIDE (owner 2026-09-07; rev 3 inverted U): the pane's placed
-   * RIGHT edge (CSS px) while it is on screen — placed by setStack, mode not
-   * 'hidden', density bit clear — else null. Equals PANE_CORNER_PX +
-   * HUD_COLUMN_WIDTH_PX (280) — import, don't hard-code. One attribute read,
-   * never a layout read. The OVERRIDE panel centres itself in the band right
-   * of this edge (the hub's gameLoop wire), so the two never overlap.
+   * (SAFETY OVERRIDE, owner 2026-09-07.) The placed RIGHT edge (CSS px) while on screen (placed by setStack, mode not 'hidden', density bit clear), else
+   * null. Equals PANE_CORNER_PX + HUD_COLUMN_WIDTH_PX — import, don't hard-code. Never a layout read. The SAFETY
+   * OVERRIDE panel centres itself in the band right of this edge (the hub's gameLoop wire), so the two never overlap.
    * @returns {number|null}
    */
   rightPx() {
@@ -422,10 +348,8 @@ export class OrbitPane {
   }
 
   /**
-   * The 1 Hz tick: at most one tick per TICK_MS; recomputes every readout from
-   * the deps (the eclipse prediction even while hidden), writes the DOM only
-   * when visible and only what changed.
-   * @param {number} nowMs
+   * The 1 Hz tick: at most one per TICK_MS; recomputes every readout (the eclipse prediction even while hidden),
+   * writes the DOM only when visible and only what changed.
    * @returns {boolean} true when a tick ran
    */
   update(nowMs) {
@@ -442,18 +366,15 @@ export class OrbitPane {
   }
 
   /**
-   * The eclipse state cached from the last tick, in WORLD seconds:
-   * { inShadow, secondsToFlip } — secondsToFlip = time to the next terminator
-   * crossing (null when none lies within one orbit, the clock is stopped, or
-   * nothing is known). Fresh even while density-hidden.
+   * Eclipse state from the last tick, in WORLD seconds: secondsToFlip = time to the next terminator crossing (null
+   * when none lies within one orbit, the clock is stopped, or nothing is known). Fresh even while density-hidden.
    * @returns {{inShadow:boolean, secondsToFlip:(number|null)}}
    */
   eclipse() { return this._eclipse; }
 
-  /** The strings the last tick computed (a copy): alt, trend, vel, inc, period, lat, lon, sunState, sunTimer, dv, dvFill, met. */
+  /** A copy of the strings the last tick computed. */
   readout() { return { ...this._vals }; }
 
-  /** Remove the root; further calls no-op. */
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
@@ -466,9 +387,7 @@ export class OrbitPane {
     this._eclipse = NO_ECLIPSE;
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-
-  /** @private Inject the style once, build the DOM under `parent` (headless: nothing). */
+  /** @private Headless: builds nothing. */
   _build(parentDep) {
     const doc = this._doc;
     if (!doc || typeof doc.createElement !== 'function') return;
@@ -483,7 +402,7 @@ export class OrbitPane {
       return el;
     };
     const cells = Object.create(null);
-    /** One slot: a dim label above a value; `wide` spans two cells. `slot` keys the value element. */
+    // A dim label above a value; `wide` spans two cells; `slot` keys the value element.
     const cell = (label, slot, wide) => {
       const c = mk('div', 'orbit-cell' + (wide ? ' orbit-cell-2' : ''));
       c.appendChild(mk('div', 'orbit-label', label));
@@ -502,8 +421,7 @@ export class OrbitPane {
       cells[slot] = s;
       return s;
     };
-    /** The unit split (white telemetry): the slot's value element holds `.orbit-num` + `.orbit-unit`
-     *  (the unit dimmer); the element's own textContent is emptied first so the two spans ARE its text. */
+    // The slot's value element holds `.orbit-num` + `.orbit-unit`; its own textContent is emptied first so the two spans ARE its text.
     const units = Object.create(null);
     const unitSplit = (slot) => {
       const el = cells[slot];
@@ -516,9 +434,9 @@ export class OrbitPane {
 
     const root = mk('div', 'hud-panel' + (this._glass ? ' orbit-glass' : ''));
     root.id = ORBIT_PANE_ID;
-    // Geometry: left / width at build (inverted U); top / height by setStack.
+    // left / width at build; top / height by setStack.
     root.style.position = 'absolute';
-    root.style.left = `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`;   // = the left column's edge
+    root.style.left = `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`;   // the left column's edge
     root.style.width = `${HUD_COLUMN_WIDTH_PX}px`;
     root.style.boxSizing = 'border-box';
     root.style.pointerEvents = 'none';
@@ -529,7 +447,6 @@ export class OrbitPane {
     const slots = mk('div', 'orbit-slots');
     slots.appendChild(mk('div', 'orbit-head', 'ORBIT'));
 
-    // Row 1: LAT · LON · ALT (+ trend) — two rows inside 280 (rev 3).
     const r1 = mk('div', 'orbit-row');
     r1.appendChild(cell('LAT', 'lat', false).cell);
     r1.appendChild(cell('LON', 'lon', false).cell);
@@ -540,7 +457,7 @@ export class OrbitPane {
     alt.value.appendChild(trend);
     r1.appendChild(alt.cell);
 
-    // Row 2: SUN (state word + timer, two cells) · MET
+    // SUN takes two cells (state word + timer).
     const r2 = mk('div', 'orbit-row');
     const sun = cell('SUN', null, true);
     sun.value.appendChild(span('orbit-text', 'sunState', PLACEHOLDER));
@@ -556,7 +473,7 @@ export class OrbitPane {
     this._el = { slots, cells, units, trend };
   }
 
-  /** @private The one <style id="orbit-pane-style"> (per document). No backdrop-filter. */
+  /** @private One <style> per document. No backdrop-filter. */
   _ensureStyle() {
     const doc = this._doc;
     if (!doc || !doc.head || (doc.getElementById && doc.getElementById(ORBIT_STYLE_ID))) return;
@@ -642,22 +559,19 @@ export class OrbitPane {
     doc.head.appendChild(style);
   }
 
-  // ── Reads (every one guarded) ──────────────────────────────────────────────
-
-  /** @private Call a dep, swallowing throws (undefined on failure / absence). */
+  /** @private Swallows throws (undefined on failure / absence). */
   _read(fn) {
     if (typeof fn !== 'function') return undefined;
     try { return fn(); } catch (_e) { return undefined; }
   }
 
-  /** @private A player method result (undefined when absent / throwing). */
   _playerRead(name) {
     const p = this._player;
     if (!p || typeof p[name] !== 'function') return undefined;
     try { return p[name](); } catch (_e) { return undefined; }
   }
 
-  /** @private { rate, baseScale } from the clock dep (defaults 1 / 1). */
+  /** @private Defaults 1 / 1. */
   _clockNow() {
     const c = this._read(this._clock);
     const rate = c ? num(c.rate) : null;
@@ -665,7 +579,7 @@ export class OrbitPane {
     return { rate: rate == null ? 1 : rate, baseScale: base == null ? 1 : base };
   }
 
-  /** @private The future-sun function: sunDirAt, else a still sun from sunDir, else null. */
+  /** @private sunDirAt, else a still sun from sunDir, else null. */
   _sunDirAtFn() {
     if (this._sunDirAt) return this._sunDirAt;
     if (this._sunDir) {
@@ -679,15 +593,11 @@ export class OrbitPane {
     return null;
   }
 
-  /** @private A percentage string with one decimal. */
   _pct(frac) {
     const f = clamp01(Number(frac) || 0);
     return (Math.round(f * 1000) / 10).toString();
   }
 
-  // ── Compute (per tick, visible or not) ─────────────────────────────────────
-
-  /** @private Recompute every readout string + the eclipse cache from the deps. */
   _compute(dtS) {
     const F = ORBIT_FMT;
     const v = { ...EMPTY_VALS };
@@ -735,7 +645,7 @@ export class OrbitPane {
     v.sunState = inShadow == null ? PLACEHOLDER : (inShadow ? 'SHADOW' : 'SUNLIT');
     v.sunTimer = flipWorld == null ? PLACEHOLDER : F.mmss(flipWorld);
 
-    // ΔV: usable = budget × (1 − reserve); the bar's fill = usable / budget.
+    // usable = budget × (1 − reserve); the fill = usable / budget.
     const budget = this._read(this._budget);
     const dvBudget = budget && typeof budget === 'object' ? num(budget.deltaV) : null;
     if (dvBudget != null) {
@@ -757,11 +667,7 @@ export class OrbitPane {
     return 2 * Math.PI * Math.sqrt(aKm * aKm * aKm / Constants.MU_EARTH);
   }
 
-  /**
-   * @private The ALT trend arrow from an EMA of Δalt/Δt (km per real second)
-   * — DockingReticle._easeOdds' 0.85 / 0.15 — against ALT_TREND_KM_PER_S.
-   * @returns {string} ARROW_DOWN | ARROW_UP | ''
-   */
+  /** @private ALT trend arrow from an EMA of Δalt/Δt (km per real second) against ALT_TREND_KM_PER_S: ARROW_DOWN | ARROW_UP | ''. */
   _trend(altKm, dtS) {
     const T = this._trendState;
     if (altKm == null) { T.last = null; T.rate = 0; return ''; }
@@ -775,16 +681,12 @@ export class OrbitPane {
     return '';
   }
 
-  // ── Paint (per tick; DOM writes only while visible, write-on-change) ───────
-
-  /** @private true when the root is on screen for the DOM writes to matter. */
   _paintable() {
     const root = this._root;
     if (!root || this._mode === 'hidden') return false;
     return !(root.hasAttribute && root.hasAttribute(DENSITY_HIDDEN_ATTR));
   }
 
-  /** @private Write the computed strings (write-on-change), mark / clear the flashes, sync the MFD. */
   _paint(nowMs) {
     const v = this._vals;
     const prev = this._prev;
@@ -814,9 +716,7 @@ export class OrbitPane {
     }
   }
 
-  // ── Layout (setStack; write-on-change outputs) ─────────────────────────────
-
-  /** @private Place the pane from the cached stack inputs. No layout reads. Sets top BEFORE un-hiding. */
+  /** @private From the cached stack inputs. No layout reads. Sets top BEFORE un-hiding. */
   _layout() {
     const root = this._root;
     if (!root || !Number.isFinite(this._stackTop)) return;
@@ -838,17 +738,13 @@ export class OrbitPane {
     }
   }
 
-  // ── Write-on-change helpers ────────────────────────────────────────────────
-
-  /** @private */
   _setText(el, text) {
     if (!el || el.textContent === text) return false;
     el.textContent = text;
     return true;
   }
 
-  /** @private The unit split: the formatter string lands as `.orbit-num` + `.orbit-unit` (write-on-change each;
-   *  the slot element's own textContent is never written — it IS the two spans, so it reads the whole string). */
+  /** @private The slot element's own textContent is never written: it IS the two spans, so it reads the whole string. */
   _setUnitText(pair, text) {
     const parts = splitUnit(text);
     const a = this._setText(pair.num, parts.num);
@@ -856,14 +752,13 @@ export class OrbitPane {
     return a || b;
   }
 
-  /** @private */
   _setStyle(el, prop, value) {
     if (!el || !el.style || el.style[prop] === value) return false;
     el.style[prop] = value;
     return true;
   }
 
-  /** @private set (value string) or remove (null) an attribute, only when it differs. */
+  /** @private Set (value string) or remove (null), only when it differs. */
   _setAttr(el, name, value) {
     if (!el || !el.setAttribute) return false;
     const have = el.hasAttribute && el.hasAttribute(name) ? el.getAttribute(name) : null;

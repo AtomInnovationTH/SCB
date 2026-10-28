@@ -1,46 +1,30 @@
 /**
- * AmbientLaunchScheduler.js — launch plumes from any pad as it orbits into view.
+ * @module systems/AmbientLaunchScheduler — launch plumes from any pad as it orbits into view
+ * (FEATURE_FLAGS.LAUNCH_CAMEO_AMBIENT). Extends the scripted opening cameo (GameFlowManager → LaunchCameo), which
+ * fires ONCE from the player's home pad on a New Game.
  *
- * The scripted opening cameo (GameFlowManager → LaunchCameo) fires ONCE from
- * the player's home pad on a New Game. This scheduler is the ambient extension
- * (FEATURE_FLAGS.LAUNCH_CAMEO_AMBIENT): every ~0.5 s it checks all launch pads
- * from cities.json and fires a plume from any pad that RISES into view — the
- * instant its label pill begins to fade in (facing dot crosses FIRE_GATE=0.03
- * upward) — so later in the pass, and on later orbits, other spaceports launch
- * as the mother flies over them.
+ * Every ~0.5 s all launch pads from cities.json are checked; a pad that RISES into view fires a plume the instant its
+ * label pill begins to fade in (facing dot crosses FIRE_GATE=0.03 upward).
  *
- * Example (owner request): on the Thai orbit, Sriharikota's pill begins to
- * fade in ~17 s after spawn and the plume ignites within ~0.5 s of that —
- * climbing to fd 0.44 over the next half minute, once per 9.1-minute orbit.
- * Wenchang fires scripted at 7 s; the two plumes overlap ~17–23 s.
+ * Example (owner request): on the Thai orbit, Sriharikota's pill fades in ~17 s after spawn and the plume ignites within
+ * ~0.5 s of that, climbing to fd 0.44 over the next half minute, once per 9.1-minute orbit. Wenchang fires scripted at
+ * 7 s; the two plumes overlap ~17–23 s.
  *
- * Rate limiting keeps it lively but not a fireworks show:
+ * Rate limiting:
  *  • per pad: at most once per pass (re-armed only after the pad fully sets);
- *  • global: at most one ambient launch per GLOBAL_COOLDOWN_S (30 s — long
- *    enough to avoid volleys, short enough that a queued pad still fires
- *    inside its visibility window; the East-Asia cluster queues, not volleys).
+ *  • global: at most one ambient launch per GLOBAL_COOLDOWN_S (30 s: long enough to avoid volleys, short enough that a
+ *    queued pad still fires inside its visibility window; the East-Asia cluster queues, not volleys).
  *
- * Silent by design ("comms is not a tour guide"): no comms line; the pad's
- * label pill flashes cyan briefly at ignition (cityLabels.pulse).
+ * Silent by design ("comms is not a tour guide"): no comms line; the pad's label pill flashes cyan at ignition.
  *
- * Scripted-vs-ambient coordination: ambient fire is deferred until the
- * scripted opening cameo has had its moment (launchCameo.firedOnce, or
- * SCRIPTED_DEFER_S of gameplay as the Continue fallback). The defer gates
- * ONLY the fire decision — edges are tracked fresh every tick regardless, so
- * a pad that rises during the defer is never lost. An edge is consumed ONLY
- * by a successful fire or by the pad setting: cooldowns and a full plume pool
- * pin it (prevFd = -1) until it can fire.
+ * Scripted-vs-ambient: ambient fire is deferred until the scripted opening cameo has fired (launchCameo.firedOnce, or
+ * SCRIPTED_DEFER_S of gameplay as the Continue fallback). The defer gates ONLY the fire decision — edges are tracked
+ * fresh every tick regardless, so a pad that rises during the defer is never lost. An edge is consumed ONLY by a
+ * successful fire or by the pad setting: cooldowns and a full plume pool pin it (prevFd = -1) until it can fire.
  *
- * Timing runs on an accumulated game-time clock (dt), not wall-clock — pause
- * and slow-mo freeze the scheduler with the rest of the sim.
- *
- * Gated: gameplay state only and not while the Strategic Map is open (a
- * wasted fire). LaunchCameo pools MAX_PLUMES concurrent plumes.
- *
- * The decision core (chooseAmbientPad / updatePadEdges) is pure and
- * Node-testable; all THREE/DOM access lives in the wrapper.
- *
- * @module systems/AmbientLaunchScheduler
+ * Timing runs on an accumulated game-time clock (dt): pause and slow-mo freeze the scheduler. Gated: gameplay state
+ * only, not while the Strategic Map is open. LaunchCameo pools MAX_PLUMES concurrent plumes. The decision core
+ * (chooseAmbientPad / updatePadEdges) is pure and Node-testable; all THREE/DOM access lives in the wrapper.
  */
 
 import * as THREE from 'three';
@@ -52,27 +36,22 @@ import { launchCameo, launchVisible, LAUNCH_FLASH_S, FIRE_GATE } from '../scene/
 import { cityLabels, cityFacingDot } from '../scene/CityLabels.js';
 import { latLonToPosition } from '../scene/Ephemeris.js';
 
-/** How often the scheduler evaluates pad visibility (seconds). Short so the
- * fire happens within ~0.5 s of the pad rising — the player needs the whole
- * plume to play while the pad is still in view. 27 pads × cheap math: free. */
+/** Pad visibility check interval (seconds). Short so the fire happens within ~0.5 s of the pad rising and the whole
+ * plume plays while the pad is still in view. */
 export const CHECK_INTERVAL_S = 0.5;
-/** Facing-dot gate for "in view" — the instant the pad's pill begins to fade
- * into view (shared with LaunchCameo.fire's gate). Re-exported for tests. */
+/** Facing-dot gate for "in view" (shared with LaunchCameo.fire's gate). Re-exported for tests. */
 export { FIRE_GATE };
-/** At/below this the pad is considered set — re-arms the per-pass flag.
- * Band [SET_GATE, FIRE_GATE] = [0, 0.03] is the hysteresis. */
+/** At/below this the pad is considered set — re-arms the per-pass flag. Band [SET_GATE, FIRE_GATE] = [0, 0.03] is
+ * the hysteresis. */
 export const SET_GATE = 0.0;
-/** Minimum seconds between ambient launches. 30 s: long enough to avoid
- * volleys, short enough that a queued pad still fires inside its visibility
- * window (a 90 s cooldown outlived Sriharikota's ~70 s window on th). */
+/** Minimum seconds between ambient launches: long enough to avoid volleys, short enough that a queued pad still
+ * fires inside its visibility window (~70 s; a 90 s cooldown outlived Sriharikota's ~70 s window). */
 export const GLOBAL_COOLDOWN_S = 30;
-/** Seconds ambient holds for the scripted opening cameo before falling back
- * (Continue sessions never run the scripted path). */
+/** Seconds ambient holds for the scripted opening cameo before falling back (Continue never runs the scripted path). */
 export const SCRIPTED_DEFER_S = 30;
 
 /**
- * Roll per-pad edge bookkeeping. Re-arms a pad once it has set; rolls prevFd.
- * Pure — Node-testable.
+ * Roll per-pad edge bookkeeping: re-arm a pad once it has set; roll prevFd. Pure — Node-testable.
  * @param {Array<{fd:number, prevFd:number, firedThisPass:boolean}>} pads
  */
 export function updatePadEdges(pads) {
@@ -83,10 +62,9 @@ export function updatePadEdges(pads) {
 }
 
 /**
- * Pick the best pad to fire this tick, if any. Pure — Node-testable.
- * Eligible = rising edge (prevFd ≤ gate < fd) AND not yet fired this pass.
- * When several rise together (East-Asia cluster), the most central (highest
- * fd) wins. The caller enforces the global cooldown via `cooldownOk`.
+ * Best pad to fire this tick (pad name), or null. Pure — Node-testable.
+ * Eligible = rising edge (prevFd ≤ gate < fd) AND not yet fired this pass. When several rise together (East-Asia
+ * cluster), the most central (highest fd) wins. `cooldownOk` = the global cooldown has elapsed (enforced by the caller).
  * @param {Array<{name:string, fd:number, prevFd:number, firedThisPass:boolean}>} pads
  * @param {boolean} cooldownOk — global cooldown has elapsed
  * @returns {string|null} pad name to fire, or null
@@ -103,21 +81,16 @@ export function chooseAmbientPad(pads, cooldownOk) {
 }
 
 /**
- * Deterministic per-pad launch heading (Task 6). cities.json stores no
- * azimuthDeg for its 27 launch pads, so without this every ambient launch flew
- * due east (90°) and repeats looked canned. Real equatorial/mid-latitude pads
- * launch into a rotation-assisted EAST-ISH corridor, so we hash the pad name to
- * a heading in [45°, 135°] (90° ± 45°): varied enough that two passes over the
- * same pad don't trace the identical arc, plausible enough to read as a real
- * ascent corridor. Deterministic → reproducible in tests and across sessions.
- * Pure — Node-testable.
+ * Deterministic per-pad launch heading in [45°, 135°): cities.json stores no azimuthDeg for its launch pads, so without
+ * this every ambient launch flew due east. Real pads launch into a rotation-assisted EAST-ISH corridor, so the pad
+ * name is hashed to 90° ± 45°: varied, plausible, reproducible in tests and across sessions. Pure — Node-testable.
  * @param {string} name — pad name
  * @returns {number} azimuth degrees ∈ [45, 135)
  */
 export function ambientAzimuth(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return 45 + (h % 90);   // 90° ± 45°
+  return 45 + (h % 90);
 }
 
 const _cam = new THREE.Vector3();
@@ -158,7 +131,6 @@ export class AmbientLaunchScheduler {
     eventBus.on(Events.GAME_RESET, this._onReset);
   }
 
-  /** Clear cooldowns + per-pass flags (New Game / reset). */
   resetState() {
     this._lastFireAt = -Infinity;
     this._firstTickAt = null;
@@ -170,15 +142,13 @@ export class AmbientLaunchScheduler {
   }
 
   /**
-   * GameFlowManager calls this when ORBITAL_VIEW is entered WITHOUT the
-   * scripted opening beats (Continue, or returning from a screen): no scripted
-   * cameo is coming, so the defer window is pointless — ambient opens now.
+   * GameFlowManager calls this when ORBITAL_VIEW is entered WITHOUT the scripted opening beats (Continue, or returning
+   * from a screen): no scripted cameo is coming, so ambient opens now.
    */
   skipScriptedDefer() { this._deferOverride = true; }
 
   /**
-   * GameFlowManager calls this when the SCRIPTED cameo fires a pad, so the
-   * ambient scheduler does not double-fire the same pad this pass.
+   * GameFlowManager calls this when the SCRIPTED cameo fires a pad, so ambient doesn't double-fire it this pass.
    * @param {string} name — pad name as listed in cities.json
    */
   markFiredExternally(name) {
@@ -187,9 +157,7 @@ export class AmbientLaunchScheduler {
   }
 
   /**
-   * Per-frame entry from the main loop; self-throttles to CHECK_INTERVAL_S.
-   * All timing (defer, cooldown) runs on the accumulated game-time clock, so
-   * pause / slow-mo freeze the scheduler with the rest of the sim.
+   * Per-frame entry from the main loop; self-throttles to CHECK_INTERVAL_S on the accumulated game-time clock.
    * @param {number} dt — seconds
    */
   update(dt) {
@@ -207,13 +175,10 @@ export class AmbientLaunchScheduler {
     const now = this._clock;
     if (this._firstTickAt === null) this._firstTickAt = now;
 
-    // Refresh watchability EVERY tick — the edge state must stay fresh even
-    // while the fire decision is deferred, or rising edges die unobserved.
-    // Watchable = above the horizon AND inside the camera frustum
-    // (launchVisible). A pad above the horizon but off-screen (Wenchang on th)
-    // must never fire — the plume would be invisible by definition.
-    // p.fd stores the WATCHABLE metric (raw fd when watchable, else -1) so the
-    // pure edge machinery (chooseAmbientPad / updatePadEdges) works unchanged.
+    // Refresh watchability EVERY tick: the edge state must stay fresh even while the fire decision is deferred, or
+    // rising edges die unobserved. Watchable = above the horizon AND inside the camera frustum (launchVisible); an
+    // off-screen pad must never fire. p.fd stores the WATCHABLE metric (raw fd when watchable, else -1) so the pure
+    // edge machinery (chooseAmbientPad / updatePadEdges) works unchanged.
     parent.getWorldPosition(_centre);
     camera.getWorldPosition(_cam);
     for (const p of this._pads) {
@@ -227,14 +192,12 @@ export class AmbientLaunchScheduler {
         : -1;
     }
 
-    // Scripted-defer gates ONLY the fire decision. On a New Game the scripted
-    // cameo (7 s + poll) sets firedOnce and ambient opens immediately; on a
-    // Continue (no scripted cameo exists) it times out after SCRIPTED_DEFER_S.
+    // Scripted-defer gates ONLY the fire decision. New Game: the scripted cameo sets firedOnce and ambient opens
+    // immediately; Continue (no scripted cameo): times out after SCRIPTED_DEFER_S.
     const deferActive = !this._deferOverride && !launchCameo.firedOnce && (now - this._firstTickAt) < SCRIPTED_DEFER_S;
     if (!deferActive && this._deferWasActive && !launchCameo.firedOnce) {
-      // Defer expired by time: pads that became watchable during the defer
-      // produced no tracked rising edge. Make watchable pads eligible once,
-      // so the first pass of a Continue session is not silently lost.
+      // Defer expired by time: pads that became watchable during the defer produced no tracked rising edge. Make
+      // watchable pads eligible once, so the first pass of a Continue session is not silently lost.
       for (const p of this._pads) if (p.fd > 0) p.prevFd = -1;
     }
     this._deferWasActive = deferActive;
@@ -248,20 +211,17 @@ export class AmbientLaunchScheduler {
       if (name) {
         const pad = this._pads.find((p) => p.name === name);
         if (!cooldownOk) {
-          // The cooldown must not swallow the edge either (Xichang fired first
-          // on th and 90 s ate Sriharikota's whole window): pin it and fire
-          // the moment the cooldown lifts — if the pad is still in view.
+          // The cooldown must not swallow the edge either: pin it and fire the moment the cooldown lifts, if the pad
+          // is still in view.
           pad.prevFd = -1;
         } else {
-          // A refusal no longer always keeps the edge live. Distinguish:
-          //  • TRANSIENT ('pool' — MAX_PLUMES full): pin the edge (prevFd = -1)
-          //    so it fires the moment a slot frees; the pass is not consumed.
-          //  • PERMANENT ('gate'/'geometry' — pad or its plume is off-frame this
-          //    pass): re-trying next tick refuses again, so pinning would let this
-          //    pad win chooseAmbientPad every ~0.5 s and starve fireable pads
-          //    (review finding). Consume the edge instead: mark firedThisPass so
-          //    the pad re-arms only after it fully sets, and let updatePadEdges
-          //    (next tick) roll prevFd naturally. We do NOT pin.
+          // Refusal kinds:
+          //  • TRANSIENT ('pool' — MAX_PLUMES full): pin the edge (prevFd = -1) so it fires the moment a slot frees;
+          //    the pass is not consumed.
+          //  • PERMANENT ('gate'/'geometry' — pad or its plume is off-frame this pass): retrying refuses again, and
+          //    pinning would let this pad win chooseAmbientPad every ~0.5 s and starve fireable pads. Consume the edge
+          //    instead: firedThisPass re-arms the pad only after it fully sets; updatePadEdges (next tick) rolls
+          //    prevFd. Do NOT pin.
           const fired = launchCameo.fire(pad);
           if (!fired) {
             if (launchCameo.lastRefusal === 'pool') { pad.prevFd = -1; return; }
@@ -270,8 +230,7 @@ export class AmbientLaunchScheduler {
           }
           pad.firedThisPass = true;
           this._lastFireAt = now;
-          // Short cyan flash on the pad's pill at ignition ("launching NOW") —
-          // then the plume itself holds the eye. No comms (tour-guide rule).
+          // Short cyan flash on the pad's pill at ignition; no comms (tour-guide rule).
           cityLabels.pulse(pad.name, LAUNCH_FLASH_S);
         }
       }
@@ -288,6 +247,5 @@ export class AmbientLaunchScheduler {
   }
 }
 
-/** Singleton (wired in main.js). */
 export const ambientLaunchScheduler = new AmbientLaunchScheduler();
 export default AmbientLaunchScheduler;

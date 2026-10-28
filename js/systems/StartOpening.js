@@ -1,57 +1,39 @@
 /**
- * StartOpening.js — the ship opens up on the player's first action
- * (owner 2026-10-20, DECISIONS "Opening at the start").
+ * StartOpening.js — the ship opens up on the player's first action (owner 2026-10-20, DECISIONS "Opening at the start").
  *
- * Every start leaves the ship as its row says: battery at half and falling,
- * wings rolled up, radiators closed (0°), daughter struts shut (0°). That
- * state holds until the player's FIRST ACTION; then, at once and never waiting
- * for each other (DECISIONS §10/§11):
- *   • the wings roll out,
- *   • the radiators open to 146°,
- *   • the daughter struts go to their 34° rest.
- * The same on Mac and iPad. Why the radiators: open, they give the wings room to
- * follow the Sun (closed, the wings may tilt only 5°); the one line posted here says
- * so in positive words (owner 2026-10-20: "written in the negative. Do better.").
+ * Every start leaves the ship as its row says: battery at half and falling, wings rolled up, radiators closed (0°),
+ * daughter struts shut (0°). That holds until the player's FIRST ACTION; then, at once and never waiting for each
+ * other (DECISIONS §10/§11): the wings roll out, the radiators open to 146°, the daughter struts go to their 34° rest.
+ * Same on Mac and iPad. Why the radiators: open, they give the wings room to follow the Sun (closed, the wings tilt
+ * only 5°); the one line posted here says so in positive words (owner 2026-10-20: "written in the negative. Do better.").
  *
- * ── What counts as the first action (D1) ──────────────────────────────────
- * The first of these that arrives while the opening is ARMED, the game is in a
+ * What counts as the first action: the first of these that arrives while the opening is ARMED, the game is in a
  * gameplay state and the start ride (the intro fly-by) is not in flight:
- *   • a `keydown` that is not a key repeat, not a bare modifier (Shift,
- *     Control, Alt, Meta, CapsLock), not Escape and not held with Meta or
- *     Control (browser shortcuts). The step chip's synthetic keys count.
+ *   • a `keydown` that is not a repeat, not a bare modifier (Shift, Control, Alt, Meta, CapsLock), not Escape and
+ *     not held with Meta or Control (browser shortcuts). The step chip's synthetic keys count.
  *   • a `pointerdown` anywhere on the page (canvas, HUD, F1 bar, chips, pads);
  *   • a `wheel` (scroll zoom, trackpad pinch).
- * Mouse moves and hovers do not count. Whether an input counts is decided at
- * CAPTURE time, before InputManager's own listeners run: the key that skips
- * the opening dance was judged "not armed" (the dance arms nothing) and never
- * fires this. An input during the start ride only skips the ride; the next one
- * fires.
+ * Mouse moves and hovers do not count. Counting is decided at CAPTURE time, before InputManager's own listeners: the
+ * key that skips the opening dance was judged "not armed" (the dance arms nothing) and never fires this. An input
+ * during the start ride only skips the ride; the next one fires.
  *
- * ── When it acts (D3) ─────────────────────────────────────────────────────
- * Only the actuation is deferred, so it runs AFTER the triggering input's own
- * handlers and each part is a SET, never a toggle: a first press of `,` `O` or
- * `.`, a tap on the wings chip, or an F1 bar button can never close a part
- * again.
+ * When it acts: only the actuation is deferred, so it runs AFTER the triggering input's own handlers and each part is
+ * a SET, never a toggle: a first press of `,` `O` or `.`, a tap on the wings chip, or an F1 bar button can never
+ * close a part again.
  *   • key, wheel: a 0 ms task after the event;
- *   • pointerdown: wait for that pointer's `pointerup` / `pointercancel`, then
- *     for a `click` that may follow (up to CLICK_WAIT_MS), then a 0 ms task.
- *     So a long look-around drag opens her at its end; the F1 bar and the step
+ *   • pointerdown: wait for that pointer's `pointerup` / `pointercancel`, then for a `click` that may follow (up to
+ *     CLICK_WAIT_MS), then a 0 ms task. So a long look-around drag opens her at its end; the F1 bar and the step
  *     chip run on that click, before this does.
- * `ownsStepTap('Comma')` lets main.js hold back the wings chip's own key press
- * while a tap on it is waiting here (the key is a toggle; the opening is the
- * set the tap asked for).
+ * `ownsStepTap('Comma')` lets main.js hold back the wings chip's own key press while a tap on it waits here (the key
+ * is a toggle; the opening is the set the tap asked for).
  *
- * ── Armed (D2) ────────────────────────────────────────────────────────────
- * `arm()` is called every time the start state is applied: the new game's
- * hand-over, CONTINUE, retry, game over → shop exit (OpeningDance's
- * `setOnStartApplied` hook). Once per arming, then disarmed. If a part is
- * already commanded open when the ride ends (the player pressed `,` `O` or `.`
- * during the dance or the ride) the player has already acted: it fires then,
- * found by a light poll (RIDE_POLL_MS) that runs only while armed.
+ * Armed: `arm()` runs every time the start state is applied: the new game's hand-over, CONTINUE, retry, game over →
+ * shop exit (OpeningDance's `setOnStartApplied` hook). Once per arming, then disarmed. If a part is already commanded
+ * open when the ride ends (the player pressed `,` `O` or `.` during the dance or ride) the player has already acted:
+ * it fires then, found by a light poll (RIDE_POLL_MS) that runs only while armed.
  *
- * Pure of the DOM except `install()`: gates, actuators, clock and the line's
- * sink are injected, so it unit-tests without a page. `shipOpeningActuators`
- * builds the real ones from the player ship and the arm manager.
+ * Pure of the DOM except `install()`: gates, actuators, clock and the line's sink are injected, so it unit-tests
+ * without a page. `shipOpeningActuators` builds the real ones from the player ship and the arm manager.
  *
  * @module systems/StartOpening
  */
@@ -63,12 +45,10 @@ import { GestureHints } from '../ui/hud/GestureHints.js';
 import { radToDeg } from '../core/MathUtil.js';
 
 /**
- * The parts the first action opens, in the order the line names them. ONE
- * constant: the owner is being asked whether the radiators stay in the opening
- * (measured 2026-10-20: open, the ship cools to 0 °C in about 150 s and the
- * heaters then eat the extra sun, so after 3.5-5 min the battery is lower than
- * with them shut). Drop 'radiators' here and they open by themselves at 70 °C
- * as before (ThermalSystem._updateAutoRadiator); the line changes with it.
+ * The parts the first action opens, in the order the line names them. ONE constant: the owner is being asked whether
+ * the radiators stay in the opening (measured 2026-10-20: open, the ship cools to 0 °C in about 150 s and the heaters
+ * then eat the extra sun, so after 3.5-5 min the battery is lower than with them shut). Drop 'radiators' here and
+ * they open by themselves at 70 °C (ThermalSystem._updateAutoRadiator); the line changes with it.
  */
 export const OPENING_PARTS = Object.freeze(['wings', 'radiators', 'struts']);
 
@@ -77,14 +57,12 @@ export const OPENING_LINE_START = 'Opening up:';
 
 /** How long after a pointer lets go a `click` may still follow (the F1 bar and the step chip run on it). */
 export const CLICK_WAIT_MS = 350;
-/** The poll that finds the ride's end while armed. */
 export const RIDE_POLL_MS = 250;
 /** A pointer held longer than this counts as released (a lost `pointerup` must not hold the opening forever). */
 export const POINTER_HOLD_MAX_MS = 30000;
 /**
- * After a pointer-started opening has fired, a chip's late comma press (a click that came
- * after CLICK_WAIT_MS on a slow touch stack) is still held back this long: it is a toggle and
- * would roll the wings straight back up.
+ * After a pointer-started opening has fired, a chip's late comma press (a click after CLICK_WAIT_MS on a slow touch
+ * stack) is still held back this long: it is a toggle and would roll the wings straight back up.
  */
 export const STEP_TAP_GRACE_MS = 800;
 
@@ -95,12 +73,7 @@ const MODIFIER_CODES = new Set([
 ]);
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock']);
 
-/**
- * Whether a keydown is a first action: not a repeat, not a bare modifier, not
- * Escape, not a browser shortcut (Meta or Control held).
- * @param {{ repeat?: boolean, code?: string, key?: string, metaKey?: boolean, ctrlKey?: boolean }} e
- * @returns {boolean}
- */
+// Whether a keydown is a first action: not a repeat, not a bare modifier, not Escape, not a browser shortcut.
 export function keyCounts(e) {
   if (!e || e.repeat) return false;
   if (e.metaKey || e.ctrlKey) return false;
@@ -109,13 +82,8 @@ export function keyCounts(e) {
   return true;
 }
 
-/**
- * The one comms line at the opening: names what opened and why the radiators
- * open (a fact about the wings' tilt, never a claim that the battery gains).
- * @param {string[]} opened - the parts that opened, from OPENING_PARTS
- * @param {{ parts?: readonly string[], openDeg?: number }} [opts]
- * @returns {string} '' when nothing opened
- */
+// The one comms line: names what opened and why the radiators open (a fact about the wings' tilt, never a claim
+// that the battery gains). '' when nothing opened.
 export function openingLine(opened, opts = {}) {
   const FL = Constants.THERMAL.FLOWER;
   const parts = opts.parts || OPENING_PARTS;
@@ -134,7 +102,7 @@ export function openingLine(opened, opts = {}) {
   return line;
 }
 
-/** @private whether the radiator's COMMANDED angle is nearer the open pose than the rest pose (the "." law). */
+// Whether the radiator's COMMANDED angle is nearer the open pose than the rest pose (the "." law).
 function flowerCommandedOpen(p) {
   const FL = Constants.THERMAL.FLOWER;
   const rad = p._flowerTargetTheta !== undefined ? p._flowerTargetTheta : p._flowerThetaRad;
@@ -143,29 +111,21 @@ function flowerCommandedOpen(p) {
   return Math.abs(deg - FL.OPEN_DEG) < Math.abs(deg - FL.REST_DEG);
 }
 
-/** @private radiators fitted */
 function flowerFitted(p) {
   return !!(p && typeof p.getFlowerPairCount === 'function' && p.getFlowerPairCount() > 0
     && typeof p.setFlowerPose === 'function');
 }
 
 /**
- * The real SET actuators and the "already commanded open" reader, built over
- * the player ship and the arm manager (getters: both are made after boot).
+ * The real SET actuators and the "already commanded open" reader over the player ship and the arm manager (getters:
+ * both are made after boot).
  *
- * Radiators go through the ship's own `setFlowerPose(OPEN_POSE)` (146°) and
- * then emit THERMAL_FLOWER_INPUT { deploying: true } — exactly what the O key
- * and the F1 bar emit for an opening — so ThermalSystem sees a player opening
- * (its auto-open lets go, the 30 s player-wins window starts, the codex trigger
- * fires). No click and no THERMAL comms line: the opening's one line replaces
- * the O handler's "Radiator opening to 146° ...". A radiator the player already
- * opened (their own O) is left alone and emits nothing more. Wings and struts
- * emit nothing: STRUT_DEPLOY_INPUT / ROSA_FURL_INPUT are the tutorial's "the
- * player did this" credit, and the player did not.
- *
- * @param {{ getPlayer: () => object|null, getArmManager: () => object|null, bus?: { emit: Function } }} deps
- * @returns {{ actuators: { wings: () => boolean, radiators: () => boolean, struts: () => boolean },
- *            commanded: () => { wings: boolean, radiators: boolean, struts: boolean } }}
+ * Radiators go through the ship's `setFlowerPose(OPEN_POSE)` (146°), then emit THERMAL_FLOWER_INPUT
+ * { deploying: true } — exactly what the O key and the F1 bar emit — so ThermalSystem sees a player opening (its
+ * auto-open lets go, the 30 s player-wins window starts, the codex trigger fires). No click and no THERMAL comms
+ * line: the opening's one line replaces the O handler's "Radiator opening to 146° ...". A radiator the player
+ * already opened (their own O) is left alone and emits nothing more. Wings and struts emit nothing:
+ * STRUT_DEPLOY_INPUT / ROSA_FURL_INPUT are the tutorial's "the player did this" credit, and the player did not.
  */
 export function shipOpeningActuators({ getPlayer, getArmManager, bus = eventBus }) {
   const actuators = {
@@ -207,17 +167,14 @@ export function shipOpeningActuators({ getPlayer, getArmManager, bus = eventBus 
  * @typedef {object} StartOpeningDeps
  * @property {() => boolean} [isGameplay] - the game is in a gameplay state
  * @property {() => boolean} [introInFlight] - the start ride is flying
- * @property {{ wings?: () => boolean, radiators?: () => boolean, struts?: () => boolean }} [actuators]
- *   - one SET per part; true = the part is now open or opening
- * @property {() => { wings?: boolean, radiators?: boolean, struts?: boolean }} [commanded]
- *   - which parts are already commanded open
+ * @property {object} [actuators] - { wings, radiators, struts }: one SET per part; true = now open or opening
+ * @property {() => object} [commanded] - which parts are already commanded open
  * @property {(text: string) => void} [say] - the sink of the one comms line
  * @property {readonly string[]} [parts] - defaults to OPENING_PARTS
- * @property {{ setTimeout: (fn: Function, ms: number) => *, clear: (id: *) => void }} [timers]
+ * @property {object} [timers] - { setTimeout(fn, ms), clear(id) }
  */
 
 export class StartOpening {
-  /** @param {StartOpeningDeps} [deps] */
   constructor(deps = {}) {
     this._isGameplay = deps.isGameplay || (() => false);
     this._introInFlight = deps.introInFlight || (() => false);
@@ -229,19 +186,16 @@ export class StartOpening {
       setTimeout: (fn, ms) => setTimeout(fn, ms),
       clear: (id) => clearTimeout(id),
     };
-    /** @private armed: the next first action opens the ship */
+    // armed: the next first action opens the ship
     this._armed = false;
-    /** @private the action that counted and is waiting to actuate, or null */
+    // the action that counted and is waiting to actuate, or null
     this._pending = null;
-    /** @private the ride-end poll's timer */
+    // the ride-end poll's timer
     this._pollId = null;
-    /** @private a pointer-started opening just fired: a chip's late comma press is still held back */
+    // a pointer-started opening just fired: a chip's late comma press is still held back
     this._grace = null;
-    /** @private times the opening fired (tests / debugging) */
     this._fires = 0;
-    /** @private the last line posted ('' = none) */
     this._lastLine = '';
-    /** @private the page the listeners are on */
     this._target = null;
     this._listeners = [];
 
@@ -252,7 +206,7 @@ export class StartOpening {
     this._onWheel = (e) => this.onWheel(e);
   }
 
-  /** The default sink: one HOUSTON line, tier-0 pass (the onboarding Director mutes everything else early on). */
+/** Default sink: one HOUSTON line, tier-0 pass (the onboarding Director mutes everything else early on). */
   static defaultSay(text) {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
@@ -262,7 +216,6 @@ export class StartOpening {
     });
   }
 
-  // ── lifecycle ────────────────────────────────────────────────────────────
 
   /** The start state was just applied: the next first action opens the ship. Safe to call again (a retry). */
   arm() {
@@ -273,7 +226,6 @@ export class StartOpening {
     this._schedulePoll();
   }
 
-  /** Stand down (a menu visit): no listener work, no poll. */
   disarm() {
     this._armed = false;
     this._cancelPending();
@@ -281,32 +233,20 @@ export class StartOpening {
     this._endGrace();
   }
 
-  /** @returns {boolean} waiting for the first action */
   isArmed() { return this._armed; }
 
-  /** @returns {boolean} a counted action is waiting to actuate */
   isPending() { return this._armed && this._pending !== null; }
 
-  /**
-   * u11 D5: a pointer press is waiting here as the player's first action (it opens the wings when it fires). The
-   * canvas tap that is that same press must not also run a scan: the next empty tap scans.
-   * @returns {boolean}
-   */
+  /** A pointer press is waiting here as the player's first action; the canvas tap that is that same press must not also scan. */
   isPointerPending() { return this._armed && this._pending !== null && this._pending.kind === 'pointer'; }
 
-  /** @returns {number} times it has fired */
   get fires() { return this._fires; }
 
-  /** @returns {string} the last comms line posted ('' = none yet) */
   get lastLine() { return this._lastLine; }
 
   /**
-   * True while a tap on a step chip is waiting here as the first action (or
-   * just fired, STEP_TAP_GRACE_MS): the chip's own key press (a toggle) must be
-   * held back, the opening sets the wings it asked for. Only the wings chip's
-   * `Comma`.
-   * @param {string} code
-   * @returns {boolean}
+   * True while a tap on a step chip waits here as the first action (or just fired, STEP_TAP_GRACE_MS): the chip's own
+   * key press (a toggle) must be held back. Only the wings chip's `Comma`.
    */
   ownsStepTap(code) {
     if (code !== 'Comma') return false;
@@ -314,18 +254,12 @@ export class StartOpening {
     return this._armed && this._pending !== null && this._pending.kind === 'pointer';
   }
 
-  /** @private */
   _endGrace() {
     if (this._grace !== null) this._timers.clear(this._grace);
     this._grace = null;
   }
 
-  /**
-   * Listen on the page (capture, passive) so the judgement runs before any
-   * other listener. Idempotent. Needs no DOM beyond `addEventListener`.
-   * @param {{ addEventListener: Function, removeEventListener: Function }} target - window
-   * @returns {boolean}
-   */
+  /** Listen on the page (capture, passive) so the judgement runs before any other listener. Idempotent. */
   install(target) {
     this.uninstall();
     if (!target || typeof target.addEventListener !== 'function') return false;
@@ -343,7 +277,6 @@ export class StartOpening {
     return true;
   }
 
-  /** Remove the page listeners. */
   uninstall() {
     const t = this._target;
     if (t && typeof t.removeEventListener === 'function') {
@@ -353,9 +286,8 @@ export class StartOpening {
     this._listeners = [];
   }
 
-  // ── input judgement (capture time) ───────────────────────────────────────
 
-  /** @private armed, in gameplay and no ride in flight: an input now is a first action */
+  /** Armed, in gameplay and no ride in flight: an input now is a first action. */
   _counts() {
     if (!this._armed) return false;
     let play = false;
@@ -365,7 +297,6 @@ export class StartOpening {
     return play && !ride;
   }
 
-  /** @param {KeyboardEvent|object} e */
   onKeyDown(e) {
     if (!this._armed || !keyCounts(e)) return;
     if (this._pending) {
@@ -378,7 +309,6 @@ export class StartOpening {
     this._fireSoon();
   }
 
-  /** @param {WheelEvent|object} _e */
   onWheel(_e) {
     if (!this._armed) return;
     if (this._pending) {
@@ -390,7 +320,6 @@ export class StartOpening {
     this._fireSoon();
   }
 
-  /** @param {PointerEvent|object} e */
   onPointerDown(e) {
     if (!this._armed || !e) return;
     const id = e.pointerId === undefined ? 0 : e.pointerId;
@@ -405,7 +334,6 @@ export class StartOpening {
     this._pending.timer = this._timers.setTimeout(() => this._fireSoon(), POINTER_HOLD_MAX_MS);
   }
 
-  /** pointerup / pointercancel @param {PointerEvent|object} e */
   onPointerUp(e) {
     const p = this._pending;
     if (!this._armed || !p || p.kind !== 'pointer' || p.state !== 'down') return;
@@ -417,27 +345,22 @@ export class StartOpening {
     p.timer = this._timers.setTimeout(() => this._fireSoon(), CLICK_WAIT_MS);
   }
 
-  /** @param {MouseEvent|object} _e */
   onClick(_e) {
     const p = this._pending;
     if (!this._armed || !p || p.kind !== 'pointer') return;
     if (p.state === 'down' || p.state === 'click') this._fireSoon();
   }
 
-  // ── pending action ───────────────────────────────────────────────────────
 
-  /** @private */
   _begin(p) {
     this._pending = Object.assign({ timer: null }, p);
   }
 
-  /** @private */
   _clearTimer(p) {
     if (p && p.timer !== null && p.timer !== undefined) this._timers.clear(p.timer);
     if (p) p.timer = null;
   }
 
-  /** @private */
   _cancelPending() {
     const p = this._pending;
     this._pending = null;
@@ -458,20 +381,16 @@ export class StartOpening {
     }, 0);
   }
 
-  // ── the ride-end poll (D2) ───────────────────────────────────────────────
 
-  /** @private */
   _schedulePoll() {
     this._pollId = this._timers.setTimeout(() => this._poll(), RIDE_POLL_MS);
   }
 
-  /** @private */
   _cancelPoll() {
     if (this._pollId !== null && this._pollId !== undefined) this._timers.clear(this._pollId);
     this._pollId = null;
   }
 
-  /** @private A part already commanded open when the ride ends: the player has acted. */
   _poll() {
     this._pollId = null;
     if (!this._armed) return;
@@ -482,22 +401,16 @@ export class StartOpening {
     this._schedulePoll();
   }
 
-  /** @private */
   _anyCommanded() {
     let c = null;
     try { c = this._commanded() || {}; } catch (_e) { c = {}; }
     return !!(c.wings || c.radiators || c.struts);
   }
 
-  // ── the opening ──────────────────────────────────────────────────────────
-
   /**
-   * Open the ship now: each part of `parts` is a SET (see
-   * `shipOpeningActuators`), none waits for another, then ONE comms line names
-   * what opened and why. Once per arming. If the game left gameplay in the
-   * meantime (the first key was the shop's), nothing happens and it stays
-   * armed for the next gameplay input.
-   * @returns {{ opened: string[], line: string }|null} null when not armed / not in gameplay
+   * Open the ship now: each part of `parts` is a SET (see `shipOpeningActuators`), none waits for another, then ONE
+   * comms line names what opened and why. Once per arming. If the game left gameplay meanwhile (the first key was
+   * the shop's), nothing happens and it stays armed for the next gameplay input. Null when not armed / not in gameplay.
    */
   fire() {
     if (!this._armed) return null;

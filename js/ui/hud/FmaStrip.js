@@ -1,40 +1,30 @@
 /**
- * FmaStrip.js — the COPILOT flight-mode annunciator (Session M, 2026-09-06).
+ * FmaStrip.js — the COPILOT flight-mode annunciator: one 28 px line under the left column's panes saying what the
+ * autopilot is doing, the aviation FMA way: `AP OFF` (dim) when it has nothing, `AP · AIMING` while an aim-before-launch
+ * sequence owns the nose and the AP is off (engaged wins: the numbers keep flowing through a short aim), and the four
+ * segments `AP · <PHASE> · <range> · <closing>` while engaged. A PHASE change is BOXED (1 px border in the strip's text
+ * colour) for 10 s, measured on the `nowMs` the hub passes — no timers of its own.
  *
- * One 28 px line under the left column's panes that says what the autopilot
- * is doing, the aviation FMA way: `AP OFF` (dim) when it has nothing, `AP ·
- * AIMING` while an aim-before-launch attitude sequence owns the nose (and the
- * AP is off — engaged wins: the numbers keep flowing through a short aim), and
- * the four fixed segments `AP · <PHASE> · <range> · <closing>` while engaged. A
- * PHASE change is BOXED (1 px border in the strip's text colour) for 10 s,
- * measured on the `nowMs` the hub passes — no timers of its own.
+ * It POLLS: `update(nowMs)` self-throttles to <= 1 Hz, reads `deps.fma()` (the hub passes
+ * `() => autopilotSystem.fmaState()`), and writes on change only. The CLOSING rate is the SIGNED range rate from
+ * successive 1 Hz range samples (negative = closing), smoothed by an EMA (0.85 old / 0.15 new, seeded on the first rate)
+ * and shown as `—` until two samples exist. On a phase change it calls `deps.onPhaseChange(prevPhase, nextPhase, state)`
+ * if provided (the hub connects it to the CopilotVoice). It emits NOTHING on the bus.
  *
- * It POLLS: `update(nowMs)` self-throttles to <= 1 Hz, reads `deps.fma()` (the
- * hub passes `() => autopilotSystem.fmaState()`), and writes on change only.
- * The CLOSING rate is the SIGNED range rate from successive 1 Hz range samples
- * (negative = closing), smoothed by an EMA (0.85 old / 0.15 new, seeded on the
- * first rate) and shown as `—` until two samples exist. On a phase change it
- * calls `deps.onPhaseChange(prevPhase, nextPhase, state)` if provided — the
- * hub connects that to the CopilotVoice. It emits NOTHING on the bus.
+ * It is a pane-density RUNG like CargoPane: `rung()` returns the HUD domRung shape ({id:'copilot', label:'Autopilot',
+ * isVisible, setVisible}) whose ONE visibility bit is `data-density-hidden` on the root (HUD.js carries the global
+ * `[data-density-hidden]{display:none !important}`; the injected style carries the id-scoped belt). Never emits
+ * HUD_PANE_VISIBILITY.
  *
- * It is a pane-density RUNG like CargoPane: `rung()` returns the HUD domRung
- * shape ({id:'copilot', label:'Autopilot', isVisible, setVisible}) whose ONE
- * visibility bit is `data-density-hidden` on the root (HUD.js carries the
- * global `[data-density-hidden]{display:none !important}`; the injected style
- * carries the id-scoped belt). Never emits HUD_PANE_VISIBILITY.
- *
- * HOME: the LAST child of `#hud-left-column` (deps.parent default), inheriting
- * the column's 260 px width; `position: relative` inline like the column's
- * other panes (the .hud-panel class says absolute). Display-only: NO tap
+ * HOME: the LAST child of `#hud-left-column` (deps.parent default), inheriting the column's 260 px width;
+ * `position: relative` inline like the column's other panes (the .hud-panel class says absolute). Display-only: NO tap
  * action, so no 44 pt rule; `user-select: none`; pointer-events none.
  *
- * Laws: DOM fonts through var(--font-mono) only; tabular numerals; no
- * pictographic glyph (· — − are Latin-1 / General Punctuation / Math
- * Operators); no floor name; no layout reads on the hot path (isVisible's
- * getClientRects is the domRung contract, called at event time); no timers, no
- * rAF, no window/document listeners; never reads Constants.LADDER; never
- * touches the DOM at import time; constructible headless (no document ⇒ every
- * method callable, nothing thrown).
+ * Laws: DOM fonts through var(--font-mono) only; tabular numerals; no pictographic glyph (· — − are Latin-1 / General
+ * Punctuation / Math Operators); no floor name; no layout reads on the hot path (isVisible's getClientRects is the
+ * domRung contract, called at event time); no timers, no rAF, no window/document listeners; never reads
+ * Constants.LADDER; never touches the DOM at import time; constructible headless (no document ⇒ every method callable,
+ * nothing thrown).
  *
  * @module ui/hud/FmaStrip
  */
@@ -48,20 +38,16 @@ import { shortTypeName } from './TargetPanel.js';
 /** The root element id (FloorMask MASK_PANES.copilot.els = ['#hud-fma-strip']). */
 export const FMA_STRIP_ID = 'hud-fma-strip';
 
-/** The injected stylesheet's id (one <style>, injected once per document). */
 export const FMA_STYLE_ID = 'fma-strip-style';
 
 /** The pane-density rung id (FloorMask MASK_PANES.copilot.rung). */
 export const FMA_RUNG_ID = 'copilot';
 
-/** The column the strip rides in (its LAST child). */
 export const FMA_PARENT_ID = 'hud-overlay';
 
 /**
- * FMA_GEOMETRY — the strip's numbers. HEIGHT_PX is the outer height (display
- * only: no tap target, so no 44 pt rule). POLL_MS is the self-throttle floor
- * (<= 1 Hz). BOX_MS is how long a changed PHASE word wears its box. EMA_KEEP /
- * EMA_NEW smooth the range rate (old / new weights).
+ * FMA_GEOMETRY — HEIGHT_PX outer height (display only: no tap target, so no 44 pt rule); POLL_MS self-throttle floor
+ * (<= 1 Hz); BOX_MS how long a changed PHASE word wears its box; EMA_KEEP / EMA_NEW old / new range-rate weights.
  */
 export const FMA_GEOMETRY = Object.freeze({
   HEIGHT_PX: 28,
@@ -79,13 +65,11 @@ export const PHASE_LABELS = Object.freeze({
   MATCH_ORBIT: 'MATCH ORBIT',
   TRAIL_ALIGN: 'TRAIL ALIGN',
   HOLD: 'HOLD',
-  TRANSFER: 'TRANSFER',   // trip-melt D8: the burn to the next field (AutopilotSystem.holdPrograde)
+  TRANSFER: 'TRANSFER',   // the burn to the next field (AutopilotSystem.holdPrograde)
 });
 
-/** The word shown while an aim sequence owns the nose and the AP is off. */
 export const AIMING_LABEL = 'AIMING';
 
-/** The closing placeholder until two range samples exist. */
 export const NO_RATE = '\u2014';                 // —
 
 /** The rung's ONE hide bit (HUD._initPaneDensity domRung grammar). */
@@ -94,29 +78,23 @@ const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
 const STACK_HIDDEN_ATTR = 'data-stack-hidden';
 /** off | aiming | engaged — drives the dim rule and which segments show. */
 const MODE_ATTR = 'data-fma-mode';
-/** The PHASE segment's 10 s box. */
 const BOXED_ATTR = 'data-boxed';
-/** A segment (or separator) folded away in the off / aiming forms. */
 const SEG_HIDDEN_ATTR = 'data-fma-hidden';
-/** u5 D2: the autopilot is flying on floor 2 - the strip shows there although the room hides it. */
+/** The autopilot is flying on floor 2 - the strip shows there although the room hides it. */
 export const FLYING_ATTR = 'data-ap-flying';
-/** u5 D2: the plain-words line (floor 2, simple level): no small-caps, no PHASE / numbers segments. */
+/** The plain-words line (floor 2, simple level): no small-caps, no PHASE / numbers segments. */
 const PLAIN_ATTR = 'data-fma-plain';
 
-/** The FmaStrip floor on which the flying rule and the plain line apply (the home floor). */
 const HOME_FLOOR = 2;
 
 const MINUS = '\u2212';                          // − (Math Operators, allowed)
 const DOT = '\u00b7';                            // · (Latin-1, allowed)
-/** Nets step 3 slice 2b (lane 2b-2): the plain line while the boundary waits for her pick of the next field (floors 3 and 4, simple level). */
+/** The plain line while the boundary waits for her pick of the next field (floors 3 and 4, simple level). */
 export const WHERE_NEXT_LINE = `Where next? Pick on the ${(FloorContract.byId(4) || { name: 'map' }).name} map`;   // the floor's name from the contract, never typed here
 
 /**
- * Range text: `412 m` below 1 km, `1.4 km` below 10 km, `12 km` / `1235 km`
- * beyond (the strip is 260 px wide; the integer tier keeps the far line on
- * one row). Non-finite ⇒ the placeholder.
- * @param {number|null} m
- * @returns {string}
+ * Range text: `412 m` below 1 km, `1.4 km` below 10 km, `12 km` / `1235 km` beyond (the strip is 260 px wide; the
+ * integer tier keeps the far line on one row). Non-finite ⇒ the placeholder.
  */
 export function fmtRange(m) {
   if (m == null) return NO_RATE;
@@ -129,11 +107,8 @@ export function fmtRange(m) {
 }
 
 /**
- * Closing text: the SIGNED range rate, sign always shown (`−0.4 m/s`,
- * `+0.4 m/s`; a rounded zero reads `+0.0 m/s`), one decimal below 10 m/s and
- * an integer beyond. Non-finite ⇒ `—`. Negative = closing.
- * @param {number|null} mps
- * @returns {string}
+ * Closing text: the SIGNED range rate, sign always shown (`−0.4 m/s`, `+0.4 m/s`; a rounded zero reads `+0.0 m/s`), one
+ * decimal below 10 m/s and an integer beyond. Non-finite ⇒ `—`. Negative = closing.
  */
 export function fmtClosing(mps) {
   if (mps == null) return NO_RATE;
@@ -149,15 +124,13 @@ export function fmtClosing(mps) {
 export class FmaStrip {
   /**
    * @param {object} [deps]
-   * @param {Document|null} [deps.doc]  document (default: the global one; null = headless).
-    * @param {Element}  [deps.parent]     root's parent (default: doc.getElementById('hud-overlay')).
-   * @param {function} [deps.now]        ms clock — used only when update() is called without nowMs.
+   * @param {Document|null} [deps.doc]  null = headless.
    * @param {function} [deps.fma]        () → AutopilotSystem.fmaState() shape. Absent ⇒ `AP OFF`.
    * @param {function} [deps.onPhaseChange] (prevPhase, nextPhase, state) on every AP phase change after the first sample.
-   * @param {function} [deps.floor]      () → the applied floor id (u5 D2: the flying rule and the plain line are floor 2's). Absent ⇒ null.
-   * @param {function} [deps.simple]     () → true at the simple level (u5 D2: HUD.isSimpleTargets). Absent ⇒ false.
-   * @param {function} [deps.choosing]   () → true while the mission boundary's "where next" choice is pending (Nets step 3 slice 2b,
-   *                                      lane 2b-2: GameFlowManager.isWhereNextPending, the trip's phase, not the autopilot's burn-only
+   * @param {function} [deps.floor]      () → the applied floor id (the flying rule and the plain line are floor 2's). Absent ⇒ null.
+   * @param {function} [deps.simple]     () → true at the simple level (HUD.isSimpleTargets). Absent ⇒ false.
+   * @param {function} [deps.choosing]   () → true while the mission boundary's "where next" choice is pending
+   *                                      (GameFlowManager.isWhereNextPending, the trip's phase, not the autopilot's burn-only
    *                                      status). The plain line then reads WHERE_NEXT_LINE. Absent ⇒ false.
    */
   constructor(deps = {}) {
@@ -175,7 +148,6 @@ export class FmaStrip {
     this._rung = null;
     this._disposed = false;
 
-    // The model (write-on-change against these).
     this._lastMs = null;             // last accepted poll time
     this._phase = null;              // raw AP phase key (null until the first sample)
     this._word = null;               // the displayed PHASE word
@@ -189,24 +161,16 @@ export class FmaStrip {
     this._stackMode = undefined;
     this._stackTop = undefined;
     this._stackH = undefined;
-    this._flying = false;            // u5 D2: the autopilot is engaged (setFlying / the poll)
-    this._flyShown = false;          // u5 D2: data-ap-flying is on the root (flying AND on the home floor)
+    this._flying = false;            // the autopilot is engaged (setFlying / the poll)
+    this._flyShown = false;          // data-ap-flying is on the root (flying AND on the home floor)
     this._lastT = null;              // the last clock value seen by update()
-    this._plainText = null;          // u5 D2: the plain-words line, or null for today's segments
+    this._plainText = null;          // the plain-words line, or null for the segments
 
     this._build(deps.parent);
     this._paint('off', PHASE_LABELS.OFF, NO_RATE, NO_RATE);
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
-  /**
-   * The pane-density rung adapter (cached object; HUD domRung shape). The ONE
-   * visibility bit is `data-density-hidden` on the root; isVisible() also
-   * honours on-screen presence (getClientRects) like HUD's DOM rungs. Never
-   * throws headless (no root ⇒ not visible, setVisible no-op).
-   * @returns {{id:string, label:string, isVisible:function, setVisible:function}}
-   */
+  /** The pane-density rung adapter (cached; see the header). Never throws headless (no root ⇒ not visible, setVisible no-op). */
   rung() {
     if (!this._rung) {
       this._rung = {
@@ -229,10 +193,8 @@ export class FmaStrip {
   }
 
   /**
-   * LeftStack apply (the hub calls it per frame). Write-on-change. Sets `top`
-   * BEFORE un-hiding. mode 'hidden' → data-stack-hidden (never the density bit).
-   * @param {number} top
-   * @param {number} height
+   * LeftStack apply (the hub calls it per frame). Write-on-change. Sets `top` BEFORE un-hiding. mode 'hidden' →
+   * data-stack-hidden (never the density bit).
    * @param {'natural'|'compact'|'trimmed'|'hidden'} mode
    */
   setStack(top, height, mode) {
@@ -261,22 +223,18 @@ export class FmaStrip {
     }
   }
 
-  /** Rider natural height (one line). */
   naturalPx() { return FMA_GEOMETRY.HEIGHT_PX; }
 
   /**
-   * u5-info-ap-hold D2: the autopilot is flying (engaged; HOLD after arrival counts). On the home floor
-   * (floor 2) the strip then shows even though the room hides it: a separate attribute, never the density
-   * bit, so the pane level (FloorMask.extraPaneShown / capture) is untouched. The hub calls it from
-   * AUTOPILOT_ENGAGE / AUTOPILOT_DISENGAGE (this class holds no listener); the next poll re-reads the
-   * truth from `deps.fma()`. Shows / hides at once and repaints the text without waiting for the poll.
-   * @param {boolean} on
+   * The autopilot is flying (engaged; HOLD after arrival counts). On the home floor (floor 2) the strip then shows even
+   * though the room hides it: a separate attribute, never the density bit, so the pane level (FloorMask.extraPaneShown /
+   * capture) is untouched. The hub calls it from AUTOPILOT_ENGAGE / AUTOPILOT_DISENGAGE (this class holds no listener);
+   * the next poll re-reads the truth from `deps.fma()`. Shows / hides at once and repaints without waiting for the poll.
    */
   setFlying(on) {
     if (this._disposed) return;
     this._flying = !!on;
     this._syncFlyAttr();
-    // Repaint now from the live state (the next poll would be up to POLL_MS away).
     let t = Number(this._now ? this._now() : NaN);
     if (!Number.isFinite(t)) t = this._lastT;
     if (!Number.isFinite(t)) t = 0;
@@ -284,10 +242,8 @@ export class FmaStrip {
     this._sample(t, false);
   }
 
-  /** u5 D2: true while the autopilot flies and the strip is held on screen by that (floor 2). */
   isFlyingShown() { return this._flyShown; }
 
-  /** @private Mirror `_flying` + the home floor onto the root's flying attribute. */
   _syncFlyAttr() {
     const want = this._flying && this._floor() === HOME_FLOOR;
     if (want !== this._flyShown) this._flyShown = want;
@@ -300,22 +256,19 @@ export class FmaStrip {
     try { const f = this._floorFn(); return typeof f === 'number' ? f : null; } catch (_e) { return null; }
   }
 
-  /** @private The simple level (the injected getter; never throws). */
   _isSimple() {
     if (!this._simpleFn) return false;
     try { return !!this._simpleFn(); } catch (_e) { return false; }
   }
 
-  /** @private The "where next" choice is pending (the injected getter; never throws). */
   _choosing() {
     if (!this._choosingFn) return false;
     try { return !!this._choosingFn(); } catch (_e) { return false; }
   }
 
   /**
-   * The poll (the hub calls it per frame; it accepts one sample per POLL_MS).
-   * Reads deps.fma(), advances the closing estimator, boxes / unboxes the
-   * PHASE word on the passed clock, writes the DOM on change only.
+   * The poll (the hub calls it per frame; it accepts one sample per POLL_MS). Advances the closing estimator, boxes /
+   * unboxes the PHASE word on the passed clock, writes the DOM on change only.
    * @param {number} [nowMs] the frame clock; falls back to deps.now(). No clock ⇒ no-op.
    */
   update(nowMs) {
@@ -330,8 +283,7 @@ export class FmaStrip {
   }
 
   /**
-   * @private One accepted sample at `t`: read the state, advance the estimator, paint.
-   * @param {number} t
+   * @private One accepted sample at `t`.
    * @param {boolean} reconcile  the poll corrects `_flying` from the state; setFlying's own repaint does not
    */
   _sample(t, reconcile) {
@@ -354,7 +306,6 @@ export class FmaStrip {
       }
     }
 
-    // Mode + the displayed word.
     const mode = engaged ? 'engaged' : (aiming ? 'aiming' : 'off');
     const word = engaged ? (PHASE_LABELS[phase] || phase)
       : (aiming ? AIMING_LABEL : PHASE_LABELS.OFF);
@@ -365,7 +316,6 @@ export class FmaStrip {
     this._word = word;
     this._mode = mode;
 
-    // Range + closing (engaged with a finite range only).
     let rangeText = NO_RATE;
     let closingText = NO_RATE;
     if (engaged) {
@@ -391,24 +341,23 @@ export class FmaStrip {
       this._resetSeries();
     }
 
-    // u5 D2: floor 2 at the simple level says it in plain words (the autopilot is flying there).
-    // u6 D8: floors 3 and 4 too, and there the strip is plain whatever the autopilot is doing:
-    // `Autopilot off` / `Autopilot on` (aiming) / u5's engaged line.
+    // Simple level: plain words on floor 2 (engaged only) and on floors 3 and 4 (whatever the autopilot is doing):
+    // `Autopilot off` / `Autopilot on` (aiming) / the engaged line.
     this._plainText = null;
     const floor = this._floor();
     if (this._isSimple() && ((engaged && floor === HOME_FLOOR) || floor === 3 || floor === 4)) {
       const named = engaged && s.headingMode === 'TARGET' && typeof s.targetName === 'string' && s.targetName
         ? shortTypeName(s.targetName) : null;
       if (this._choosing()) {
-        // Nets step 3 slice 2b (lane 2b-2): the boundary is waiting for her pick; no trip exists yet, so there is no TRANSFER phase.
+        // The boundary is waiting for her pick; no trip exists yet, so there is no TRANSFER phase.
         this._plainText = WHERE_NEXT_LINE;
       } else if (phase === 'TRANSFER') {
-        // trip-melt D8: the ship's own burn, not "Autopilot on". Nets step 3 slice 2b: a trip between fields says where she is
-        // going and which day of it this is ("Climbing to 425 km · day 3 of 5"); without that data, the old words.
-        // Review F6: while her nose is not along the way she goes (a climb pushes along her motion, a descent against it) the push
-        // waits, and the line says why. Review R1: the same when the turn waits for power (an empty battery).
+        // The ship's own burn, not "Autopilot on". A trip between fields says where she is going and which day of it this
+        // is ("Climbing to 425 km · day 3 of 5"); without that data, the old words. While her nose is not along the way
+        // she goes (a climb pushes along her motion, a descent against it) the push waits, and the line says why; the
+        // same when the turn waits for power (an empty battery).
         const t = s.trip;
-        // Lane 3c: a called resupply satellite on its way (nothing burns; she holds): "Resupply satellite on its way · day 3 of 16"
+        // A called resupply satellite on its way (nothing burns; she holds): "Resupply satellite on its way · day 3 of 16"
         const calling = !!(t && t.call === true && Number.isFinite(t.day) && Number.isFinite(t.days) && t.days >= 1);
         // Ion start-up (DECISIONS 37 row 7): while the four tail engines light, the strip says so; the trip's own text follows
         this._plainText = (t && t.lighting === true)
@@ -435,7 +384,6 @@ export class FmaStrip {
   /** The current line as one string (`AP OFF`, `AP · AIMING`, `AP · HOLD · 12 m · +0.0 m/s`). */
   text() { return this._text; }
 
-  /** Unsubscribe nothing (the strip holds no listener), remove the root; further calls no-op. */
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
@@ -446,9 +394,6 @@ export class FmaStrip {
     this._el = null;
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-
-  /** @private Inject the style once, build the DOM as the LAST child of `parent` (headless: nothing). */
   _build(parentDep) {
     const doc = this._doc;
     if (!doc || typeof doc.createElement !== 'function') return;
@@ -459,7 +404,6 @@ export class FmaStrip {
     const root = doc.createElement('div');
     root.id = FMA_STRIP_ID;
     root.className = 'hud-panel';
-    // Overlay rider (plan Task 8): left column width, stacked by LeftStack.
     root.style.position = 'absolute';
     root.style.left = `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`;   // = the left column's edge
     root.style.width = `${HUD_COLUMN_WIDTH_PX}px`;
@@ -556,8 +500,6 @@ export class FmaStrip {
     doc.head.appendChild(style);
   }
 
-  // ── Reads / model ──────────────────────────────────────────────────────────
-
   /** @private deps.fma() guarded (absent / throwing / non-object ⇒ null). */
   _read() {
     if (!this._fma) return null;
@@ -577,9 +519,6 @@ export class FmaStrip {
     this._series = null;
   }
 
-  // ── Paint (write-on-change) ────────────────────────────────────────────────
-
-  /** @private The line text + the DOM (segments, separators, mode, box). */
   _paint(mode, word, rangeText, closingText) {
     const plain = this._plainText;
     this._text = plain !== null ? plain
@@ -588,10 +527,9 @@ export class FmaStrip {
           : `AP ${DOT} ${word} ${DOT} ${rangeText} ${DOT} ${closingText}`;
     const el = this._el;
     if (!el || !this._root) return;
-    // Density-hidden (the room / a flip): the line is tracked, the DOM is left
-    // alone — every write below is write-on-change, so the next visible tick
-    // catches up in one pass (Session M review; the OrbitPane / NextPane rule).
-    // u5 D2: not while the strip is held on screen by the flying rule - it must read true.
+    // Density-hidden (the room / a flip): the line is tracked, the DOM is left alone — every write below is
+    // write-on-change, so the next visible tick catches up in one pass. Not while the flying rule holds the strip on
+    // screen: it must read true.
     if (!this._flyShown && this._root.hasAttribute && this._root.hasAttribute(DENSITY_HIDDEN_ATTR)) return;
     this._setAttr(this._root, MODE_ATTR, mode);
     if (plain !== null) {
@@ -614,14 +552,12 @@ export class FmaStrip {
     this._setFlag(el.phase, BOXED_ATTR, this._boxedAt !== null);
   }
 
-  /** @private */
   _setText(el, text) {
     if (!el || el.textContent === text) return false;
     el.textContent = text;
     return true;
   }
 
-  /** @private */
   _setAttr(el, name, value) {
     if (!el || !el.setAttribute) return false;
     const have = el.getAttribute ? el.getAttribute(name) : undefined;
@@ -630,7 +566,6 @@ export class FmaStrip {
     return true;
   }
 
-  /** @private A boolean attribute: present when `on`, absent otherwise. */
   _setFlag(el, name, on) {
     if (!el || !el.setAttribute || !el.hasAttribute) return false;
     const have = el.hasAttribute(name);
@@ -642,16 +577,16 @@ export class FmaStrip {
 }
 
 /**
- * u5 D2 (review fix round 1): folds DAUGHTERS to make room for a strip the autopilot holds on screen, at
- * most ONCE per flight, and gives it back only if this keeper folded it and nobody touched it since.
+ * Folds DAUGHTERS to make room for a strip the autopilot holds on screen, at most ONCE per flight, and gives it back
+ * only if this keeper folded it and nobody touched it since.
  *
- * The LeftStack never calls a hidden rider's `apply`, so the hub calls `step()` once a frame (before the
- * layout) and the rider's `apply` tells it the mode it was given through `setMode()`.
+ * The LeftStack never calls a hidden rider's `apply`, so the hub calls `step()` once a frame (before the layout) and
+ * the rider's `apply` tells it the mode it was given through `setMode()`.
  *  - fold:    flying shown + the stack said 'hidden' + DAUGHTERS open + not folded yet this flight.
- *  - release: DAUGHTERS found open again after the keeper folded it (the player, or a departure's
- *             auto-open): the keeper lets go, never refolds this flight (the strip stays stack-hidden).
- *  - restore: the strip stops being shown (autopilot off, or off floor 2) and DAUGHTERS is still folded
- *             by this keeper: unfold it.
+ *  - release: DAUGHTERS found open again after the keeper folded it (the player, or a departure's auto-open): the keeper
+ *             lets go, never refolds this flight (the strip stays stack-hidden).
+ *  - restore: the strip stops being shown (autopilot off, or off floor 2) and DAUGHTERS is still folded by this
+ *             keeper: unfold it.
  */
 export class DaughtersFoldKeeper {
   constructor() {
@@ -660,10 +595,8 @@ export class DaughtersFoldKeeper {
     this._noRoom = false;     // the strip rider's last mode was 'hidden' while it flies
   }
 
-  /** The strip rider's `apply` mode (only read while the strip flies). */
   setMode(mode) { this._noRoom = (mode === 'hidden'); }
 
-  /** True while this keeper holds a fold it will give back. */
   holdsFold() { return this._did; }
 
   /**

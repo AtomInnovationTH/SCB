@@ -11,9 +11,9 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { DebrisField } from '../entities/DebrisField.js';
 import { armProfile } from '../systems/HoldWingClear.js';
+import { DEG2RAD } from '../core/MathUtil.js';
 
 const M = Constants.SCENE_UNITS_PER_METER;
-const D2R = Math.PI / 180;
 const S = Constants.ARM_STATES;
 const AT_HOME = (st) => st === S.DOCKED || st === S.RELOADING;
 
@@ -31,7 +31,7 @@ const REST_STRUT_DEG = 34;
  */
 export function setRadiatorsNow(player, deg) {
   player._flowerTargetTheta = undefined;
-  player._flowerThetaRad = deg * D2R;
+  player._flowerThetaRad = deg * DEG2RAD;
   if (player._petalHolds) player._petalHolds.length = 0;
   player._flowerCmdClockS = player._flowerClockS || 0;
   player._writeFlowerPose();
@@ -41,9 +41,9 @@ export function setRadiatorsNow(player, deg) {
 /** Struts out as after the opening: every daughter's strut raised to `REST_STRUT_DEG` when lower (the ship starts folded at 0). */
 export function deployStruts(player, armManager) {
   for (const a of armManager.arms) {
-    if (!a || (a.getAimAlpha && a.getAimAlpha() >= REST_STRUT_DEG * D2R - 1e-6)) continue;
+    if (!a || (a.getAimAlpha && a.getAimAlpha() >= REST_STRUT_DEG * DEG2RAD - 1e-6)) continue;
     a._strutTargetAlpha = undefined;
-    a.setAimAlpha(REST_STRUT_DEG * D2R, 0);
+    a.setAimAlpha(REST_STRUT_DEG * DEG2RAD, 0);
   }
   if (typeof player._updateStruts === 'function') player._updateStruts(0);
 }
@@ -148,9 +148,9 @@ export function netBlockFor(game, sizeM, deg) {
   const holders = armManager.arms.filter((a) => a && a.heldCatches && a.heldCatches.length && typeof armManager._corridorFoulAt === 'function')
     .map((a) => {
       const alpha = a.getAimAlpha();
-      return { daughter: a.index + 1, strutDeg: +(alpha / D2R).toFixed(2), fouls: !!armManager._corridorFoulAt(a.index, alpha, radiusM) };
+      return { daughter: a.index + 1, strutDeg: +(alpha / DEG2RAD).toFixed(2), fouls: !!armManager._corridorFoulAt(a.index, alpha, radiusM) };
     });
-  return { block, daughter: block >= 0 ? block + 1 : null, kind: armManager._netBlockKind || null, radiatorsDeg: +(player._flowerThetaRad / D2R).toFixed(2), holders };
+  return { block, daughter: block >= 0 ? block + 1 : null, kind: armManager._netBlockKind || null, radiatorsDeg: +(player._flowerThetaRad / DEG2RAD).toFixed(2), holders };
 }
 
 export function holdStatus(game) {
@@ -161,7 +161,7 @@ export function holdStatus(game) {
     return {
       daughter: a.index + 1,
       state: a.state,
-      strutDeg: a.getAimAlpha ? +(a.getAimAlpha() / D2R).toFixed(2) : null,
+      strutDeg: a.getAimAlpha ? +(a.getAimAlpha() / DEG2RAD).toFixed(2) : null,
       catchSizeM: held ? +(held.sizeMeter ?? 0).toFixed(3) : null,
       catchType: held ? held.type : null,
       profile: prof.state === 0 ? 'none' : prof.state === 1 ? 'pending' : 'done',
@@ -169,8 +169,8 @@ export function holdStatus(game) {
     };
   });
   return {
-    radiatorsDeg: player ? +(player._flowerThetaRad / D2R).toFixed(2) : null,
-    radiatorsTargetDeg: player && player._flowerTargetTheta !== undefined ? +(player._flowerTargetTheta / D2R).toFixed(2) : null,
+    radiatorsDeg: player ? +(player._flowerThetaRad / DEG2RAD).toFixed(2) : null,
+    radiatorsTargetDeg: player && player._flowerTargetTheta !== undefined ? +(player._flowerTargetTheta / DEG2RAD).toFixed(2) : null,
     daughters,
   };
 }

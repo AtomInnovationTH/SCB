@@ -21,6 +21,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { DEG2RAD, RAD2DEG, clamp01 } from '../core/MathUtil.js';
 
 /** Ribbon sample count (verts = 2× this). */
 export const RIBBON_SAMPLES = 48;
@@ -32,7 +33,7 @@ export const RIBBON_SAMPLES = 48;
  * @param {number} apogeeKm — cameo apogee (km), normalises the curve
  */
 export function halfWidthKm(altKm, apogeeKm) {
-  const u = Math.max(0, Math.min(1, altKm / apogeeKm));
+  const u = clamp01(altKm / apogeeKm);
   return 2 + 16 * Math.pow(u, 1.4);   // 2 km → 18 km
 }
 
@@ -42,7 +43,7 @@ export function halfWidthKm(altKm, apogeeKm) {
  * @returns {number} alpha ∈ [0,1] (before the per-frame master opacity)
  */
 export function ribbonAlpha(s) {
-  return Math.pow(Math.max(0, Math.min(1, s)), 1.5);
+  return Math.pow(clamp01(s), 1.5);
 }
 
 /** Minimum projected half-width (px): below ~0.75 the thin low trail aliases and shimmers. updateRibbon clamps world half-width to stay ≥ this. */
@@ -138,9 +139,9 @@ export function updateRibbon(mesh, opts) {
 
     // anti-shimmer px floor
     let halfKm = halfWidthKm(_p.alt * 100, apogeeKm);
-    const pxHalf = (halfKm / distKm) * (180 / Math.PI) * pxPerDeg;
+    const pxHalf = (halfKm / distKm) * RAD2DEG * pxPerDeg;
     if (pxHalf < MIN_HALF_WIDTH_PX) {
-      halfKm = (MIN_HALF_WIDTH_PX / pxPerDeg) * (Math.PI / 180) * distKm;
+      halfKm = (MIN_HALF_WIDTH_PX / pxPerDeg) * DEG2RAD * distKm;
     }
     const halfU = halfKm / 100;   // km → scene units
 

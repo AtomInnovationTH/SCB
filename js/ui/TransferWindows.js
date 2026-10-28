@@ -1,32 +1,17 @@
 /**
- * TransferWindows.js — the Zoom Ladder F6 (NAVCOM) transfer-window surface
- * (S5, M3, FloorContract.FLOORS[5].costume.arrive 'TransferWindows').
+ * TransferWindows.js — the NAVCOM floor's transfer-window surface (FloorContract costume.arrive 'TransferWindows').
  *
- * F6 is the orbital-neighborhood PLANNING floor: it reads the transfer window
- * from the player's orbit to the focused debris cluster (the §24 lesson — "space
- * is periodic, go now is usually wrong") and surfaces the depart/transfer/arrive
- * countdown + ΔV. The window math lives in js/entities/LaunchWindow.js
- * (computeTransferWindow / coOrbitalReadout); this module is the read-only
- * costume that formats + paints it.
+ * Reads the transfer window from the player's orbit to the focused debris cluster ("space is periodic, go now is
+ * usually wrong") and surfaces the depart/transfer/arrive countdown + ΔV. The window math lives in
+ * js/entities/LaunchWindow.js (computeTransferWindow / coOrbitalReadout); this module is the read-only costume that
+ * formats and paints it: no game loop, no autopilot, no events (NavcomFloor feeds it a window).
  *
- * Pure formatting (`formatDuration`, `readout`, `fuelLine`) is static +
- * THREE/DOM-free so the planning readout is unit-testable exactly like the
- * legacy DebrisMap readout (coOrbitalReadout precedent). The DOM panel is fully
- * guarded (inert headless). FUEL-REACHABILITY: `readout`/`refresh` accept an
- * optional `opts.assessment` (ReachabilityModel.assess result) and surface a
- * verdict + engine gas + margin row; without it the model/markup are unchanged.
- *
- * OrbitMFD retirement: `readout`/`refresh` also accept optional `opts.route`
- * (systems/OrbitPlanners.computeRoutePlan result) and `opts.sweep`
- * (computeSweepBands result), fed by NavcomFloor from the whole cluster field
- * (not the focused cluster). Both rows are labelled FIELD-scoped ("FIELD
- * ROUTE …" / "FIELD DENSEST BAND …") so the panel never implies these
- * field-wide numbers belong to the focused cluster's window above them.
- * Absent opts ⇒ markup byte-identical (the flag-off philosophy).
- *
- * FLOOR CONTENT (parallel track): no game loop, no autopilot, no event emission —
- * NavcomFloor feeds it a window; the plan-transfer VERB (Space on F6) is what
- * commits/engages, wired by the serial track.
+ * Pure formatting (`formatDuration`, `readout`, `fuelLine`) is static and THREE/DOM-free, so it is unit-testable.
+ * The DOM panel is guarded (inert headless). `readout`/`refresh` accept optional `opts.assessment`
+ * (ReachabilityModel.assess result: verdict + engine gas + margin row), `opts.route` (OrbitPlanners.computeRoutePlan)
+ * and `opts.sweep` (computeSweepBands), the last two fed by NavcomFloor from the whole cluster field. Those rows
+ * are labelled FIELD-scoped ("FIELD ROUTE …" / "FIELD DENSEST BAND …") so they never read as the focused cluster's
+ * window above them. Absent opts ⇒ markup unchanged.
  *
  * @module ui/TransferWindows
  */
@@ -41,26 +26,19 @@ import { PANE_CORNER_PX } from './RailGeometry.js';
 const IMMINENT_S = Constants.DEBRIS_MAP.WINDOW_IMMINENT_S;
 
 /**
- * The panel titles itself from the ONE source of floor labels (FloorContract
- * `name`; the rail paints the same word — owner relabel 2026-09-05: 4 LEO).
- * Never hard-code a floor name in a panel.
+ * The panel titles itself from the ONE source of floor labels (FloorContract `name`, as the rail does; owner relabel
+ * 2026-09-05: 4 LEO). Never hard-code a floor name.
  */
 const THIS_FLOOR = FloorContract.byId(4);
 const FLOOR_TITLE = THIS_FLOOR ? THIS_FLOOR.name : 'LEO';
 
 /**
- * G1 (post-M3 play-test): minimum real-time interval between innerHTML writes.
- * The M3-review html cache capped the churn at the rate the TEXT changes —
- * ~1 Hz at 1× (formatDuration rounds to whole seconds). Under F6 warp (20×)
- * the countdown text legitimately changes ~20×/s, so the cache alone lets the
- * panel tear down/re-parse its rows at 20 Hz on a 120 fps machine. This cap
- * bounds DOM writes to ≤4 Hz REAL regardless of warp; STRUCTURAL changes
- * (target/emptiness/imminence/ΔV text) bypass it so nothing important lags.
- * Documented in docs/ladder/01-numbers.md §"Post-M3 glue".
+ * Minimum real-time interval between innerHTML writes. The html cache only limits churn to the rate the TEXT
+ * changes (~1 Hz at 1×); under 20× warp it changes ~20×/s. This bounds DOM writes to ≤4 Hz REAL regardless of
+ * warp; STRUCTURAL changes (target/emptiness/imminence/ΔV text) bypass it. See docs/ladder/01-numbers.md §"Post-M3 glue".
  */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
 
-/** Monotonic ms clock (DOM-guarded module — Date.now fallback for headless). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 /** The box's distance above the screen's bottom (its CSS `bottom`); RANGE_MAP.XFER_BOX_BOTTOM_PX is pinned to it. */
@@ -70,8 +48,8 @@ export class TransferWindows {
   /**
    * @param {object} [deps]
    * @param {function} [deps.now] - monotonic ms clock (tests); defaults to performance.now
-   * @param {function} [deps.simple] - u6 D7: () => true at the simple level (mission 1, no `+` pane
-   *                 pulled in): the panel then paints two plain sentences instead of the numbers.
+   * @param {function} [deps.simple] - () => true at the simple level (mission 1, no `+` pane pulled in):
+   *                 the panel then paints two plain sentences instead of the numbers.
    */
   constructor(deps = {}) {
     this._now = deps.now || _nowMs;
@@ -86,30 +64,19 @@ export class TransferWindows {
   }
 
   /**
-   * G1 pure gate: should refresh() write the DOM this frame?
-   * Structural changes always write; countdown-only changes are capped at
-   * DOM_WRITE_MIN_INTERVAL_MS (250 ms → ≤4 Hz real) so F6 warp can't turn the
-   * per-second countdown into a per-frame innerHTML teardown. Pure + static so
-   * the cap is headless-pinnable (test-NavcomFloor).
+   * Should refresh() write the DOM this frame? Structural changes always write; countdown-only changes are capped
+   * at DOM_WRITE_MIN_INTERVAL_MS (pinned by test-NavcomFloor).
    * @param {string} structKey  - structural fingerprint of the new model
    * @param {string|null} lastStructKey - previously painted fingerprint
-   * @param {number} nowMs      - monotonic clock
-   * @param {number} lastWriteMs - time of the previous DOM write
-   * @returns {boolean}
    */
   static shouldWrite(structKey, lastStructKey, nowMs, lastWriteMs) {
     if (structKey !== lastStructKey) return true;
     return (nowMs - lastWriteMs) >= DOM_WRITE_MIN_INTERVAL_MS;
   }
 
-  /** G1 pin surface: the DOM-write cap (ms). */
   static get DOM_WRITE_MIN_INTERVAL_MS() { return DOM_WRITE_MIN_INTERVAL_MS; }
 
-  /**
-   * Format a duration in seconds as a compact T-minus string.
-   * @param {number} s - seconds (0 / negative → "OPEN NOW"; non-finite → "—")
-   * @returns {string}
-   */
+  /** @param {number} s - seconds (0 / negative → "OPEN NOW"; non-finite → "—") */
   static formatDuration(s) {
     if (!Number.isFinite(s)) return '\u2014';
     if (s <= 0) return 'OPEN NOW';
@@ -124,11 +91,9 @@ export class TransferWindows {
   }
 
   /**
-   * u6 fix round 1 (F1): a coarse window phrase for a player line. Game time runs
-   * about 40x real, so any minute countdown churns; this changes only a few times
-   * an hour of world time. <= 0 -> `open now`; under an hour -> `in under an hour`;
-   * under a day -> `in about N h`; else `in about N days` (`in about 1 day`).
-   * Non-finite -> null (the caller folds the line / row). Pure + static.
+   * A coarse window phrase for a player line (game time runs about 40x real, so a minute countdown would churn).
+   * <= 0 -> `open now`; under an hour -> `in under an hour`; under a day -> `in about N h`; else `in about N days`.
+   * Non-finite -> null (the caller folds the line / row).
    * @param {number} s - seconds until the window opens
    * @returns {?string}
    */
@@ -142,22 +107,17 @@ export class TransferWindows {
   }
 
   /**
-   * Build the display model for a transfer window. Pure — no DOM.
+   * Display model for a transfer window. Pure — no DOM.
    * @param {object|null} win - a computeTransferWindow() result (or null)
    * @param {object} [opts]
    * @param {string} [opts.targetName] - focused cluster name
-   * @param {object} [opts.assessment] - FUEL-REACHABILITY: the focused cluster's
-   *                 ReachabilityModel.assess() result ({verdict, fuelKg,
-   *                 budgetAfter, ...}). Absent → fuelText '' (pre-reach model).
-   * @param {object} [opts.budget] - getMassBudget() sample (reserved; the row
-   *                 reads budgetAfter so remaining fuel is post-burn honest)
-   * @param {object} [opts.route] - OrbitMFD retirement: systems/OrbitPlanners
-   *                 .computeRoutePlan() result ({plan, totalDv}), whole-field
-   *                 (not the focused cluster). Absent → routeText '' (no row).
-   * @param {boolean} [opts.simple] - u6 D7: add the plain two-line form (`simple:true`,
-   *                 `plainText`, `plainFuelText`); every other field is unchanged.
-   * @param {object} [opts.sweep] - OrbitMFD retirement: systems/OrbitPlanners
-   *                 .computeSweepBands() result ({bands, densest}), whole-field.
+   * @param {object} [opts.assessment] - the focused cluster's ReachabilityModel.assess() result ({verdict, fuelKg,
+   *                 budgetAfter, ...}). Absent → fuelText ''.
+   * @param {object} [opts.budget] - getMassBudget() sample (reserved; the row reads budgetAfter, post-burn)
+   * @param {object} [opts.route] - OrbitPlanners.computeRoutePlan() result ({plan, totalDv}), whole-field.
+   *                 Absent → routeText '' (no row).
+   * @param {boolean} [opts.simple] - add the plain two-line form (`simple:true`, `plainText`, `plainFuelText`)
+   * @param {object} [opts.sweep] - OrbitPlanners.computeSweepBands() result ({bands, densest}), whole-field.
    *                 Absent → sweepText '' (no row).
    * @returns {{
    *   empty:boolean, coOrbital:boolean, targetName:string,
@@ -169,7 +129,7 @@ export class TransferWindows {
   static readout(win, opts = {}) {
     const model = TransferWindows._readout(win, opts);
     if (!opts.simple) return model;
-    // u6 D7 — the simple level: two plain sentences, no numbers of the trip itself.
+    // Simple level: two plain sentences, no numbers of the trip itself.
     let plainText;
     let plainFuelText = '';
     if (model.empty) plainText = 'Point at a debris field to plan a trip.';
@@ -185,15 +145,13 @@ export class TransferWindows {
     return { ...model, simple: true, plainText, plainFuelText };
   }
 
-  /** @private The full (Details) model — today's text, unchanged. */
+  /** @private The full (Details) model. */
   static _readout(win, opts = {}) {
     const targetName = opts.targetName || '\u2014';
     const a = opts.assessment || null;
     const fuelText = (win && a) ? TransferWindows.fuelLine(a) : '';
     const verdict = (win && a) ? (a.verdict || null) : null;
-    // Field-scoped rows: whole-field planning, independent of whether a
-    // transfer window exists for the focused cluster (empty/NO TARGET still
-    // shows the field route/sweep if the caller supplied them).
+    // Field-scoped rows are independent of whether a window exists (NO TARGET still shows them).
     const routeText = TransferWindows.routeLine(opts.route || null);
     const sweepText = TransferWindows.sweepLine(opts.sweep || null);
     if (!win) {
@@ -231,12 +189,7 @@ export class TransferWindows {
     };
   }
 
-  /**
-   * FUEL-REACHABILITY row text: verdict + engine gas cost + post-burn ΔV margin,
-   * e.g. 'REACHABLE · Gas 2.1 kg · 512 m/s left'. Pure + static.
-   * @param {{verdict:string, fuelKg:number, budgetAfter:number}} a
-   * @returns {string}
-   */
+  /** Verdict + engine gas cost + post-burn ΔV margin, e.g. 'REACHABLE · Gas 2.1 kg · 512 m/s left'. */
   static fuelLine(a) {
     if (!a || !a.verdict) return '';
     const xe = Number.isFinite(a.fuelKg) ? (Math.round(a.fuelKg * 10) / 10) : '\u2014';
@@ -244,13 +197,7 @@ export class TransferWindows {
     return `${String(a.verdict).toUpperCase()} \u00b7 Gas ${xe} kg \u00b7 ${left} m/s left`;
   }
 
-  /**
-   * OrbitMFD retirement: FIELD ROUTE row text, e.g. "FIELD ROUTE 6 stops \u00b7
-   * \u0394V 0.41 km/s". FIELD-scoped label — this is the whole cluster field's
-   * route, not the focused cluster's window above it. Pure + static.
-   * @param {{plan:Array, totalDv:number}|null} route - OrbitPlanners.computeRoutePlan() result
-   * @returns {string} '' when there is no route (absent opts or an empty plan)
-   */
+  /** FIELD ROUTE row, e.g. "FIELD ROUTE 6 stops · ΔV 0.41 km/s"; '' when there is no route or an empty plan. */
   static routeLine(route) {
     if (!route || !Array.isArray(route.plan) || route.plan.length === 0) return '';
     const n = route.plan.length;
@@ -258,30 +205,20 @@ export class TransferWindows {
     return `FIELD ROUTE ${n} stop${n !== 1 ? 's' : ''} \u00b7 \u0394V ${dv} km/s`;
   }
 
-  /**
-   * OrbitMFD retirement: FIELD DENSEST BAND row text, e.g. "FIELD DENSEST BAND
-   * 800\u2013900 km \u00b7 17 obj". FIELD-scoped label — the whole field's
-   * altitude-sweep pick, not the focused cluster. Pure + static.
-   * @param {{bands:Array, densest:{altMinKm:number,altMaxKm:number,count:number}|null}|null} sweep
-   *        - OrbitPlanners.computeSweepBands() result
-   * @returns {string} '' when there is no densest band (absent opts or an empty sweep)
-   */
+  /** FIELD DENSEST BAND row, e.g. "FIELD DENSEST BAND 800–900 km · 17 obj"; '' when there is no densest band. */
   static sweepLine(sweep) {
     const d = sweep && sweep.densest;
     if (!d) return '';
     return `FIELD DENSEST BAND ${Math.round(d.altMinKm)}\u2013${Math.round(d.altMaxKm)} km \u00b7 ${d.count} obj`;
   }
 
-  // ── DOM (guarded) ───────────────────────────────────────────────────────────
-
-  /** @private */
   _build() {
     if (this._built || typeof document === 'undefined' || !document.body) return;
     this._built = true;
     const root = document.createElement('div');
     root.id = 'ladder-transfer-windows';
     root.style.cssText = [
-      'position:absolute', `left:max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`, `bottom:${BOX_BOTTOM_PX}px`, 'min-width:220px',   // followups-1018 D4: left edge = the MOTHER pane's
+      'position:absolute', `left:max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`, `bottom:${BOX_BOTTOM_PX}px`, 'min-width:220px',   // left edge = the MOTHER pane's
       'padding:8px 12px', 'border:1px solid rgba(0,204,255,0.4)', 'border-radius:4px',
       'background:rgba(0,16,32,0.72)', 'color:' + VisualLaw.COLORS.INFO,
       'font-family: var(--font-mono)', 'font-size:0.7rem', 'letter-spacing:0.06em',
@@ -295,15 +232,14 @@ export class TransferWindows {
   hide() { this._visible = false; if (this._root) this._root.style.opacity = '0'; }
 
   /**
-   * The box's live outer height in px (border and padding included), for panels that must clear it: it grows with its lines (title, depart,
-   * "xfer ... -> T-...", dv, fuel, route, sweep, period). The box is anchored BOX_BOTTOM_PX above the screen's bottom, so its top edge is
-   * innerHeight - BOX_BOTTOM_PX - heightPx(). Null while it is not showing or not measured (the caller then assumes its tallest state).
-   * The read happens only when the markup changed (after the write below) and at show(), never per frame.
+   * The box's live outer height in px (border and padding included), for panels that must clear it. Its top edge is
+   * innerHeight - BOX_BOTTOM_PX - heightPx(). Null while not showing or not measured (the caller then assumes its
+   * tallest state). Measured only after a markup write and at show(), never per frame.
    * @returns {number|null}
    */
   heightPx() { return (this._visible && this._boxH > 0) ? this._boxH : null; }
 
-  /** @private one layout read of the box's height; a missing rect (headless DOM) leaves it unmeasured */
+  /** @private A missing rect (headless DOM) leaves it unmeasured. */
   _measure() {
     const root = this._root;
     if (!root || typeof root.getBoundingClientRect !== 'function') { this._boxH = null; return; }
@@ -313,7 +249,6 @@ export class TransferWindows {
   }
 
   /**
-   * Paint the transfer-window readout for the focused cluster.
    * @param {object|null} win - computeTransferWindow() result (or null)
    * @param {object} [opts] - { targetName, assessment, budget, route, sweep }
    * @returns {object} the display model that was rendered (readout())
@@ -323,23 +258,18 @@ export class TransferWindows {
     try { simple = !!(this._simple && this._simple()); } catch (_e) { simple = false; }
     const model = TransferWindows.readout(win, simple ? { ...opts, simple: true } : opts);
     if (!this._root) return model;
-    // G1 warp churn cap: structural changes paint immediately; countdown-only
-    // ticks are bounded to ≤4 Hz real (see shouldWrite / DOM_WRITE_MIN_INTERVAL_MS).
-    // The fuel row is structural: a verdict/margin change repaints immediately.
-    // The FIELD route/sweep rows are likewise structural (NavcomFloor recomputes
-    // them on its own throttled cadence, never per frame, so any change here is
-    // a real change worth an immediate repaint).
+    // Structural changes paint immediately; countdown-only ticks are capped (shouldWrite). The fuel and FIELD
+    // route/sweep rows are structural (NavcomFloor recomputes them on its own throttled cadence).
     const structKey = `${simple ? 'S' : 'F'}|${model.plainText || ''}|${model.plainFuelText || ''}|${model.targetName}|${model.empty}|${model.coOrbital}|${model.imminent}|${model.dvText}|${model.showArrive}|${model.fuelText}|${model.routeText}|${model.sweepText}`;
     const now = this._now();
     if (!TransferWindows.shouldWrite(structKey, this._lastStructKey, now, this._lastWriteMs)) {
       return model;
     }
-    // The window title never pulses (it is INFO/planning, not THREAT). "Imminent"
-    // is double-encoded: LABEL-white depart line + the [IMMINENT] tag.
+    // Never pulses (INFO/planning, not THREAT). "Imminent" is double-encoded: LABEL-white depart line + [IMMINENT] tag.
     const departColor = model.imminent ? VisualLaw.COLORS.LABEL : VisualLaw.COLORS.INFO;
     const titleRow = `<div style="color:${VisualLaw.COLORS.PLAYER}">${FLOOR_TITLE} \u00b7 ${model.targetName}</div>`;
     if (model.simple) {
-      // u6 D7: sentence case, no numbers of the trip; the verdict keeps its colour (the WORDS carry it).
+      // Sentence case, no numbers of the trip; the verdict keeps its colour (the WORDS carry it).
       const rowsS = [titleRow];
       if (model.plainText) rowsS.push(`<div style="color:${departColor}">${model.plainText}</div>`);
       if (model.plainFuelText) {
@@ -364,9 +294,8 @@ export class TransferWindows {
     if (model.showArrive) rows.push(`<div>${model.transferText} \u2192 ${model.arriveText}</div>`);
     if (model.dvText) rows.push(`<div>${model.dvText}</div>`);
     if (model.fuelText) {
-      // Verdict color: reachable = PLAYER green, marginal = VALUE gold (steady),
-      // unreachable = dim INFO (the WORD carries it — THREAT red must pulse and
-      // this is a planning surface, not an alarm). Never color-alone.
+      // reachable = PLAYER green, marginal = VALUE gold (steady), unreachable = dim INFO (THREAT red must pulse and
+      // this is a planning surface, not an alarm). Never color-alone: the WORD carries it.
       const fuelColor = model.verdict === 'reachable' ? VisualLaw.COLORS.PLAYER
         : model.verdict === 'marginal' ? VisualLaw.COLORS.VALUE
         : VisualLaw.COLORS.INFO;
@@ -376,9 +305,7 @@ export class TransferWindows {
     if (model.routeText) rows.push(`<div style="opacity:0.85">${model.routeText}</div>`);
     if (model.sweepText) rows.push(`<div style="opacity:0.85">${model.sweepText}</div>`);
     rows.push(`<div style="opacity:0.7">${model.periodText}</div>`);
-    // M3 review fix: refresh() is ticked every frame while F6 is active, but the
-    // readout only changes ~1/s at 1× (formatDuration rounds to seconds) — skip
-    // the full innerHTML teardown/re-parse when the markup is unchanged.
+    // Ticked every frame; skip the innerHTML teardown/re-parse when the markup is unchanged.
     const html = rows.join('');
     if (html !== this._lastHtml) {
       this._root.innerHTML = html;

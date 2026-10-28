@@ -16,7 +16,7 @@
  * @module scene/Ephemeris
  */
 
-const DEG = Math.PI / 180;
+import { DEG2RAD, degToRad, clamp } from '../core/MathUtil.js';
 
 function norm360(d) {
   return ((d % 360) + 360) % 360;
@@ -53,13 +53,13 @@ export function gmstDeg(d) {
 export function sunEphemeris(date) {
   const d = julianDay(date) - 2451545.0;
   const L = norm360(280.460 + 0.9856474 * d);         // mean longitude
-  const g = norm360(357.528 + 0.9856003 * d) * DEG;   // mean anomaly
+  const g = norm360(357.528 + 0.9856003 * d) * DEG2RAD;   // mean anomaly
   const lambdaDeg = norm360(L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g));
-  const eps = (23.439 - 0.0000004 * d) * DEG;         // obliquity
-  const lam = lambdaDeg * DEG;
+  const eps = (23.439 - 0.0000004 * d) * DEG2RAD;         // obliquity
+  const lam = lambdaDeg * DEG2RAD;
 
-  const alphaDeg = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam)) / DEG;
-  const declDeg = Math.asin(Math.sin(eps) * Math.sin(lam)) / DEG;
+  const alphaDeg = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam)) / DEG2RAD;
+  const declDeg = Math.asin(Math.sin(eps) * Math.sin(lam)) / DEG2RAD;
 
   const subLonEastDeg = norm180(alphaDeg - gmstDeg(d));
   return { declDeg, subLonEastDeg, eclipticLonDeg: lambdaDeg };
@@ -73,31 +73,31 @@ export function sunEphemeris(date) {
 export function moonEphemeris(date) {
   const d = julianDay(date) - 2451545.0;
   const Lp = norm360(218.316 + 13.176396 * d);          // mean longitude
-  const Mp = norm360(134.963 + 13.064993 * d) * DEG;    // mean anomaly
-  const F = norm360(93.272 + 13.229350 * d) * DEG;      // argument of latitude
+  const Mp = norm360(134.963 + 13.064993 * d) * DEG2RAD;    // mean anomaly
+  const F = norm360(93.272 + 13.229350 * d) * DEG2RAD;      // argument of latitude
 
   const eclipticLonDeg = norm360(Lp + 6.289 * Math.sin(Mp)); // evection ≫ rest
   const eclipticLatDeg = 5.128 * Math.sin(F);
 
-  const eps = (23.439 - 0.0000004 * d) * DEG;
-  const lam = eclipticLonDeg * DEG;
-  const bet = eclipticLatDeg * DEG;
+  const eps = (23.439 - 0.0000004 * d) * DEG2RAD;
+  const lam = eclipticLonDeg * DEG2RAD;
+  const bet = eclipticLatDeg * DEG2RAD;
 
   const alphaDeg = Math.atan2(
     Math.sin(lam) * Math.cos(eps) - Math.tan(bet) * Math.sin(eps),
     Math.cos(lam)
-  ) / DEG;
+  ) / DEG2RAD;
   const declDeg = Math.asin(
     Math.sin(bet) * Math.cos(eps) + Math.cos(bet) * Math.sin(eps) * Math.sin(lam)
-  ) / DEG;
+  ) / DEG2RAD;
 
   const subLonEastDeg = norm180(alphaDeg - gmstDeg(d));
 
   // illuminated fraction (1 − cos e)/2: 0 new, 1 full
   const sun = sunEphemeris(date);
-  const cosE = Math.cos(bet) * Math.cos((eclipticLonDeg - sun.eclipticLonDeg) * DEG);
-  const clamped = Math.max(-1, Math.min(1, cosE));
-  const elongationDeg = Math.acos(clamped) / DEG;
+  const cosE = Math.cos(bet) * Math.cos((eclipticLonDeg - sun.eclipticLonDeg) * DEG2RAD);
+  const clamped = clamp(cosE, -1, 1);
+  const elongationDeg = Math.acos(clamped) / DEG2RAD;
   const illuminatedFraction = (1 - clamped) / 2;
 
   return { declDeg, subLonEastDeg, eclipticLonDeg, eclipticLatDeg, elongationDeg, illuminatedFraction };
@@ -117,8 +117,8 @@ export function moonEphemeris(date) {
  * @returns {{ x: number, y: number, z: number }} unit vector (plain object)
  */
 export function latLonToUnitVec(latDeg, lonEastDeg) {
-  const lat = latDeg * DEG;
-  const lon = -lonEastDeg * DEG; // mirrored-longitude convention
+  const lat = latDeg * DEG2RAD;
+  const lon = -lonEastDeg * DEG2RAD; // mirrored-longitude convention
   return {
     x: Math.cos(lat) * Math.cos(lon),
     y: Math.sin(lat),
@@ -136,8 +136,8 @@ export function latLonToUnitVec(latDeg, lonEastDeg) {
  * @param {number} lon_deg - Longitude in degrees (-180…+180)
  */
 export function latLonToPosition(lat_deg, lon_deg, radius) {
-  const lat = lat_deg * Math.PI / 180;
-  const lon = lon_deg * Math.PI / 180;
+  const lat = degToRad(lat_deg);
+  const lon = degToRad(lon_deg);
   return {
     x: radius * Math.cos(lat) * Math.cos(lon),
     y: radius * Math.sin(lat),

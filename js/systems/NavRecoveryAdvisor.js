@@ -1,33 +1,17 @@
 /**
- * NavRecoveryAdvisor.js — "you're lost" recovery guidance (UX-11 #11).
+ * @module systems/NavRecoveryAdvisor — "you're lost" recovery guidance (UX-11 #11): point at the nearest live contact
+ * with bearing + distance so the player is never silently stranded.
  *
- * Two recovery surfaces, both pointing at the nearest live contact with a
- * bearing + distance so the player is never silently stranded:
+ *   1. Empty-scan guidance — a scan completing with `rewardKind:'empty'` (SensorSystem._completeScan) posts a HOUSTON
+ *      line with bearing/distance to the nearest live debris and the one-tap affordance ("press A to approach").
+ *   2. Out-of-range watchdog — no selected target AND no live debris within sensor reach for LOST_DWELL_S seconds
+ *      fires one throttled hint. Veterans (SkillsSystem.isVeteran) never see the watchdog; the empty-scan line
+ *      answers a player action and is shown to everyone.
  *
- *   1. Empty-scan guidance — when an active scan completes with
- *      `rewardKind:'empty'` (no debris field in range — see
- *      [`SensorSystem._completeScan`](js/systems/SensorSystem.js:391)), post a
- *      HOUSTON line with the bearing/distance to the nearest live debris and
- *      the one-tap recovery affordance ("press A to approach").
- *   2. Out-of-range watchdog — when the player has no selected target AND no
- *      live debris within sensor reach for LOST_DWELL_S seconds, fire a single
- *      throttled hint. Veterans (SkillsSystem.isVeteran) never see the
- *      watchdog; the empty-scan line is a direct response to a player action
- *      and is shown to everyone.
- *
- * The one-tap re-acquire itself lives in
- * [`AutopilotSystem.engage`](js/systems/AutopilotSystem.js:167): pressing A
- * with no target auto-selects the nearest catchable piece.
- *
- * Pure helpers (`findNearestLiveDebris`, `classifyBearing`,
- * `formatDistanceKm`) are exported for unit tests and reused by
- * [`AutopilotSystem._findNearestLargeDebris`](js/systems/AutopilotSystem.js:1).
- *
- * Pattern mirror of [`ArmIdleAdvisor`](js/systems/ArmIdleAdvisor.js:1).
- * Wire in main.js: init({ player, debrisField, targetSelector, skillsSystem }),
- * update(dt).
- *
- * @module systems/NavRecoveryAdvisor
+ * The one-tap re-acquire lives in AutopilotSystem.engage (A with no target selects the nearest catchable piece).
+ * Pure helpers (`findNearestLiveDebris`, `classifyBearing`, `formatDistanceKm`) are exported for tests and reused
+ * by AutopilotSystem._findNearestLargeDebris. Pattern mirror of ArmIdleAdvisor.
+ * Wire in main.js: init({ player, debrisField, targetSelector, skillsSystem }), update(dt).
  */
 
 import { eventBus } from '../core/EventBus.js';
@@ -42,28 +26,18 @@ const SCAN_HINT_COOLDOWN_S = 20; // min seconds between empty-scan guidance line
 /** "In reach" envelope (scene units). 1.0 = 100 km — generous sensor-scale radius. */
 const NEARBY_RADIUS_SCENE = 1.0;
 
-// Scratch outputs for orbitToSceneCartesianInto — the nearest-debris scan
-// walks the full debrisList (~800 entries); no per-entry allocations
-// (project scratch-vector discipline; see OrbitalMechanics PR A).
+// Scratch outputs for orbitToSceneCartesianInto: the scan walks the full debrisList (~800 entries) with no
+// per-entry allocations.
 const _scanPos = { x: 0, y: 0, z: 0 };
 const _scanVel = { x: 0, y: 0, z: 0 };
 
-// ============================================================================
-// PURE HELPERS (Node-safe, no THREE)
-// ============================================================================
 
 /**
- * Find the nearest alive debris to a position.
- *
- * Position source (T4): a debris record's `_scenePosition` — the per-frame
- * pose DebrisField renders and that selection/range/net/reticle read — wins
- * when present; the orbit is the fallback for records that have never been
- * positioned (headless callers, a piece culled before its first transform).
- * The orbit alone was wrong for an onboarding tease pin (M1 #1/#2): the pin
- * rides the mother in her local frame and its orbit used to stay frozen at the
- * spawn-era phase, so this scan ranked a piece 22 m off the nose as hundreds of
- * km away and the "press A to approach" advice pointed at a ghost. Reads
- * `.x/.y/.z` so a THREE.Vector3 and a plain {x,y,z} both work.
+ * Find the nearest alive debris to a position. Position source: a record's `_scenePosition` (the per-frame pose
+ * DebrisField renders and selection/range/net/reticle read) wins; the orbit is the fallback for records never
+ * positioned (headless callers, a piece culled before its first transform). The orbit alone is wrong for an
+ * onboarding tease pin: it rides the mother in her local frame, so its orbit stays frozen at the spawn-era phase.
+ * Reads `.x/.y/.z` so a THREE.Vector3 and a plain {x,y,z} both work.
  *
  * @param {{x:number,y:number,z:number}} playerPos — scene units
  * @param {Array<object>} debrisList — DebrisField.debrisList entries ({ alive, mass, orbit, id, _scenePosition? })
@@ -75,7 +49,7 @@ export function findNearestLiveDebris(playerPos, debrisList, minMassKg = 0) {
   let best = null;
   let bestDistSq = Infinity;
   for (const d of debrisList) {
-    if (!d || !d.alive || d._disposed) continue;   // slice 5 (5d, D4): a piece that was disposed of is no approach target, no heading, no advice
+    if (!d || !d.alive || d._disposed) continue;   // a disposed piece is no approach target, heading or advice
     if ((d.mass || 0) < minMassKg) continue;
     const sp = d._scenePosition;
     if (sp && Number.isFinite(sp.x) && Number.isFinite(sp.y) && Number.isFinite(sp.z)) {
@@ -91,7 +65,7 @@ export function findNearestLiveDebris(playerPos, debrisList, minMassKg = 0) {
     if (distSq < bestDistSq) {
       bestDistSq = distSq;
       if (best) {
-        // Reuse the result object — allocations only on the first hit.
+        // Reuse the result object: allocate only on the first hit.
         best.debris = d;
         best.pos.x = _scanPos.x; best.pos.y = _scanPos.y; best.pos.z = _scanPos.z;
       } else {
@@ -104,8 +78,8 @@ export function findNearestLiveDebris(playerPos, debrisList, minMassKg = 0) {
 }
 
 /**
- * Classify the bearing from the player to a target in pilot-friendly orbital
- * terms: along-track (prograde/retrograde/abeam) + radial (high/low).
+ * Classify the bearing from the player to a target in pilot terms: along-track (prograde/retrograde/abeam) +
+ * radial (high/low).
  *
  * @param {{x,y,z}} playerPos — scene units (also defines the radial direction)
  * @param {{x,y,z}} playerVel — any consistent units (direction only)
@@ -122,14 +96,13 @@ export function classifyBearing(playerPos, playerVel, targetPos) {
 
   const tx = dx / dist, ty = dy / dist, tz = dz / dist;
 
-  // Along-track component (vs. velocity direction)
   let along = 0;
   const vmag = Math.sqrt(playerVel.x * playerVel.x + playerVel.y * playerVel.y + playerVel.z * playerVel.z);
   if (vmag > 1e-12) {
     along = (tx * playerVel.x + ty * playerVel.y + tz * playerVel.z) / vmag;
   }
 
-  // Radial component (vs. local "up" — away from Earth's center)
+  // Radial component (vs. local "up", away from Earth's center)
   let radial = 0;
   const pmag = Math.sqrt(playerPos.x * playerPos.x + playerPos.y * playerPos.y + playerPos.z * playerPos.z);
   if (pmag > 1e-12) {
@@ -143,7 +116,7 @@ export function classifyBearing(playerPos, playerVel, targetPos) {
 }
 
 /**
- * Human-friendly distance string: "850 m", "4.2 km", "38 km", "310 km".
+ * Distance string: "850 m", "4.2 km", "38 km", "310 km".
  * @param {number} distKm
  * @returns {string}
  */
@@ -152,10 +125,6 @@ export function formatDistanceKm(distKm) {
   if (distKm < 10) return `${distKm.toFixed(1)} km`;
   return `${Math.round(distKm)} km`;
 }
-
-// ============================================================================
-// ADVISOR
-// ============================================================================
 
 export class NavRecoveryAdvisor {
   constructor() {
@@ -166,11 +135,8 @@ export class NavRecoveryAdvisor {
     this._enabled = false;
 
     this._accum = 0;
-    /** Seconds spent continuously "lost" (no target + nothing in reach). */
     this._lostS = 0;
-    /** Seconds since the watchdog last fired. */
     this._sinceWatchdogHint = WATCHDOG_COOLDOWN_S;
-    /** Seconds since the empty-scan guidance last fired. */
     this._sinceScanHint = SCAN_HINT_COOLDOWN_S;
 
     this._onScanComplete = this._onScanComplete.bind(this);
@@ -203,21 +169,13 @@ export class NavRecoveryAdvisor {
   }
 
   /**
-   * Scan → actionable guidance. Fires for everyone (it's a direct response to
-   * a player action).
-   *
-   * Two routes (M1 guidance, T5):
-   *   • Mission 1 (`missionNumber === 1`): the cluster report — count of live
-   *     welcome pieces + distance/bearing to the nearest — posted on EVERY
-   *     scan, `_reactive` (the S key just asked), no cooldown (the 5 s scan
-   *     cooldown already rate-limits it). On M1 the only field is the welcome
-   *     cluster, so this line is the whole answer and the generic hint below
-   *     is NOT posted alongside it (two HOUSTON lines saying the same thing).
-   *   • Otherwise: the bearing hint when the scan found no field
-   *     (`rewardKind:'empty'`) OR found one but nothing inside the reveal
-   *     range (`contactsInRange === 0` — the field test is a 500 km cluster
-   *     lookup, so a drifted field reads 'stale' while the player sees
-   *     nothing), throttled so scan-spamming doesn't repeat it.
+   * Scan → guidance, for everyone. Two routes:
+   *   • Mission 1: the cluster report (count of live welcome pieces + nearest distance/bearing) on EVERY scan,
+   *     `_reactive`, no cooldown (the 5 s scan cooldown rate-limits it). The generic hint is NOT posted alongside
+   *     it (two HOUSTON lines saying the same thing).
+   *   • Otherwise: the bearing hint when the scan found no field (`rewardKind:'empty'`) OR a field but nothing in
+   *     the reveal range (`contactsInRange === 0`: the field test is a 500 km cluster lookup, so a drifted field
+   *     reads 'stale' while the player sees nothing), throttled against scan-spamming.
    * @private
    */
   _onScanComplete(data) {
@@ -234,14 +192,9 @@ export class NavRecoveryAdvisor {
   }
 
   /**
-   * Mission-1 scan report: "Scan complete. {n} pieces in the cluster. Nearest
-   * {dist}, {bearing}." over the live welcome pieces only (welcomeSpawn &&
-   * alive && !_captured — the catalog debris are hidden on M1 and hazard
-   * shards are furniture, so neither may count or be pointed at). n = 0 →
-   * "Cluster cleared." and nothing else (no generic hint: on M1 the only
-   * other live pieces are hazard shards, which must never be pointed at).
-   * Scans are rare, so the filtered copy of debrisList is an acceptable
-   * allocation.
+   * Mission-1 scan report: "Scan complete. {n} pieces in the cluster. Nearest {dist}, {bearing}." over the live
+   * welcome pieces only (welcomeSpawn && alive && !_captured — catalog debris are hidden on M1 and hazard shards
+   * are furniture, so neither may count or be pointed at). n = 0 → "Cluster cleared." and nothing else.
    * @private
    */
   _postClusterReport() {
@@ -256,9 +209,7 @@ export class NavRecoveryAdvisor {
       text = 'Cluster cleared.';
     } else {
       text = `Scan complete. ${n} piece${n === 1 ? '' : 's'} in the cluster.`;
-      // A piece with neither a finite _scenePosition nor an orbit yields no
-      // position (findNearestLiveDebris skips it) — then the count stands
-      // alone rather than a bearing to nothing.
+      // No position (neither finite _scenePosition nor orbit): the count stands alone, not a bearing to nothing.
       if (nearest) {
         const bearing = classifyBearing(playerPos, this._playerVel(), nearest.pos);
         text += ` Nearest ${formatDistanceKm(bearing.distKm)}, ${bearing.label}.`;
@@ -272,9 +223,7 @@ export class NavRecoveryAdvisor {
     });
   }
 
-  /**
-   * @param {number} dt — real seconds
-   */
+  /** @param {number} dt — real seconds */
   update(dt) {
     if (!this._enabled) return;
     this._sinceWatchdogHint += dt;
@@ -321,20 +270,15 @@ export class NavRecoveryAdvisor {
     return v ? { x: v.x, y: v.y, z: v.z } : { x: 0, y: 0, z: 0 };
   }
 
-  /**
-   * Post the recovery line: bearing + distance to the nearest live contact,
-   * or map guidance when the field is genuinely empty.
-   * @private
-   */
+  /** @private Post the recovery line: bearing + distance to the nearest live contact, or map guidance if empty. */
   _postGuidance() {
     const playerPos = this._playerPos();
     if (!playerPos || !this._debrisField) return;
     const nearest = findNearestLiveDebris(playerPos, this._debrisField.debrisList || []);
 
     if (!nearest) {
-      // Field genuinely empty — disambiguate "lost" from "done" (#11.4):
-      // mission-progress milestones are handled by GameFlowManager (#12);
-      // here we only route the player to the next cluster.
+      // Field genuinely empty — "lost" vs "done" (#11.4): milestones are GameFlowManager's (#12); here we only
+      // route the player to the next cluster.
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
         text: 'No live contacts remain in this field. Scroll out to LEO and press Space to fly to the next cluster.',

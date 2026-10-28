@@ -1,13 +1,10 @@
 /**
- * NavSphere.js — 3D radar sphere HUD element
- * Projects all contacts onto a 2D circle for 360° situational awareness.
- * Distance-encoded: hybrid logarithmic dual-zone mapping (Sprint S5-A).
- * Inspired by the Nav Sphere from Independence War (1997).
+ * NavSphere.js — 3D radar sphere HUD element (after the Nav Sphere in Independence War, 1997).
+ * Projects all contacts onto a 2D circle for 360° situational awareness; distance is encoded by a hybrid
+ * logarithmic dual-zone mapping.
  *
- * Plan 1788867799156-hud-pane-ladder-reorder.md Task 10 / locked #7: the
- * minimized state IS the ORB footer chip (inboard of the SPECS tab). Rung
- * show lands in the chip; chip tap / 8 expands the disc bottom-right above
- * the footer. getReservedHeight() is deprecated (always 0 — HUD.js no longer
+ * The minimized state IS the ORB footer chip (inboard of the SPECS tab). Rung show lands in the chip; chip tap / 8
+ * expands the disc bottom-right above the footer. getReservedHeight() is deprecated (always 0 — HUD.js no longer
  * reads a column slot).
  * @module ui/NavSphere
  */
@@ -29,25 +26,19 @@ import { testsRequestedHere } from './hud/TestsSwitch.js';
 import { isShortScreen } from './hud/PhoneFold.js';
 import { degToRad, radToDeg, clamp } from '../core/MathUtil.js';
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
 const SPHERE_RADIUS = 140;         // px radius — diameter 280 matches targets panel width
 
 /**
- * ORB chip `right` offset (2026-10-22): one gap left of the DETAIL slider (bottom right), so the chip never sits
- * on it. Scale 1 value; the live CSS is {@link ORB_CHIP_RIGHT_CSS} (the slider grows with `--hud-scale`).
+ * ORB chip `right` offset: one gap left of the DETAIL slider (bottom right), so the chip never sits on it. Scale 1 value;
+ * the live CSS is {@link ORB_CHIP_RIGHT_CSS} (the slider grows with `--hud-scale`).
  */
 export const ORB_CHIP_OFFSET_PX = leftOfSliderBasePx(0);
 export const ORB_CHIP_RIGHT_CSS = leftOfSliderCss(0);
 export const ORB_CHIP_ID = 'hud-chip-orb';
 
 /**
- * Expanded-disc centre (Task 10): bottom-right above the footer band.
- * cy = H − footerTop − 8 − R; cx = W − HUD_EDGE_PX − R.
+ * Expanded-disc centre: bottom-right above the footer band. cy = H − footerTop − 8 − R; cx = W − HUD_EDGE_PX − R.
  * @param {{width:number, height:number, radius?:number, footerTop:number, edgePx?:number}} p
- * @returns {{cx:number, cy:number}}
  */
 export function orbDiscCenter({ width, height, radius = SPHERE_RADIUS, footerTop, edgePx = HUD_EDGE_PX }) {
   return {
@@ -56,16 +47,15 @@ export function orbDiscCenter({ width, height, radius = SPHERE_RADIUS, footerTop
   };
 }
 
-/** u7 D2: smallest / largest corner-orb radius on a short screen (px). */
+/** Smallest / largest corner-orb radius on a short screen (px). */
 const SHORT_ORB_MIN_PX = 40;
 const SHORT_ORB_MAX_PX = 84;
-/** u7 D2: gap between the right column's last box and the orb disc (px). */
+/** Gap between the right column's last box and the orb disc (px). */
 export const SHORT_ORB_GAP_PX = 8;
 
 /**
- * u7 D2: the corner orb's disc on a SHORT screen (height < 500): its right edge stays at W - 16 and it sits
- * under the right column (comms, NEXT) instead of over it. r fits the room left above the bottom
- * margin, clamped 40..84. Pure.
+ * The corner orb's disc on a SHORT screen (height < 500): its right edge stays at W - 16 and it sits under the right
+ * column (comms, NEXT) instead of over it. r fits the room left above the bottom margin, clamped 40..84. Pure.
  * @param {{W:number, H:number, top:number}} p  top = the disc's top edge (bottom of the lowest right-column
  *   box + SHORT_ORB_GAP_PX)
  * @returns {{cx:number, cy:number, r:number}}
@@ -93,10 +83,6 @@ const C = {
   white:    '#ffffff',
 };
 
-// ============================================================================
-// TESTABLE HELPER FUNCTIONS (pure, module-level — exported for Node tests)
-// ============================================================================
-
 /** Compute stalk screen-dy for a given z, R, fraction. z > 0 → up (negative dy). */
 function _stalkDyForZ(z, R, stalkMaxFraction) {
   const stalkLen = Math.abs(z) * R * stalkMaxFraction;
@@ -122,8 +108,7 @@ function _sortContactsSelectedLast(contacts, selectedId) {
 }
 
 /**
- * ECI → WGS-84 geodetic conversion with explicit GMST.
- * Game coordinate system: Y = polar axis, XZ = equatorial plane.
+ * ECI → WGS-84 geodetic with explicit GMST. Game frame: Y = polar axis, XZ = equatorial plane.
  * @param {number} x - ECI X (km)
  * @param {number} y - ECI Y / polar axis (km)
  * @param {number} z - ECI Z (km)
@@ -149,21 +134,14 @@ function _eciToGeodeticWithGMST(x, y, z, gmst) {
 }
 
 /**
- * ECI → WGS-84 geodetic using Date.now() for GMST.
- * Approximate but sufficient: visible LAT/LON drift is correct.
- * Uses Date.now() because no sim-epoch is available in GameState.
- * GMST comes from the shared scene/Ephemeris.js helper (same source the
- * real-clock sky seeding uses) so nav readouts and the sky stay in lockstep.
+ * ECI → WGS-84 geodetic using Date.now() for GMST (no sim-epoch in GameState; approximate, but the visible LAT/LON drift is
+ * correct). GMST comes from scene/Ephemeris.js, the source the real-clock sky seeding uses, so readouts and sky stay in lockstep.
  */
 function _eciToGeodetic(x, y, z) {
   const jd = Date.now() / 86400000 + 2440587.5;
   const gmst = degToRad(gmstDeg(jd - 2451545.0));
   return _eciToGeodeticWithGMST(x, y, z, gmst);
 }
-
-// ============================================================================
-// NAV SPHERE
-// ============================================================================
 
 export class NavSphere {
   /**
@@ -204,25 +182,20 @@ export class NavSphere {
     this._outerZoneKm = Constants.NAVSPHERE.OUTER_ZONE_KM_MAX;
     this._playerVel = null;
 
-    // Reusable THREE vectors
     this._right   = new THREE.Vector3();
     this._up      = new THREE.Vector3();
     this._forward = new THREE.Vector3();
     this._tmpDir  = new THREE.Vector3();
     this._eqDir   = new THREE.Vector3();  // reusable for equatorial projection
 
-    // --- Zoom Ladder PROX NET (id 3) additive opts (S4, 'NavSphere:corner-minimap') ---
-    // Both null by default ⇒ every shipped code path below is byte-identical.
-    // While CORNER-MOUNTED (ProxMiniSphere.mount) the sphere shrinks in place
-    // to this radius and the layer is FORCED ON (the minimap is the PROX NET floor
-    // costume — the manual 8-key hold and the minimized one-liner are
-    // suspended, not overwritten: their flags survive for the unmount).
+    // Zoom Ladder PROX NET (id 3) additive opts; null by default ⇒ shipped paths unchanged. While CORNER-MOUNTED
+    // (ProxMiniSphere.mount) the sphere shrinks in place to this radius and the layer is FORCED ON; the manual 8-key hold and
+    // the minimized one-liner are suspended, not overwritten (their flags survive for the unmount).
     /** @type {number|null} corner-minimap radius (px), null = unmounted */
     this._cornerMountRadiusPx = null;
-    /** @type {(() => (number|null))|null} u7 D2: bottom of the right column's lowest box (short-screen clearance) */
+    /** @type {(() => (number|null))|null} bottom of the right column's lowest box (short-screen clearance) */
     this._cornerTopProvider = null;
-    // Floor-fed tactical layer drawn over the radar (focused cluster bearing +
-    // selected insertion point). Plain descriptor, see ProxMiniSphere.
+    // Floor-fed tactical layer drawn over the radar (see ProxMiniSphere).
     /** @type {{clusterPos:?{x,y,z}, clusterName:?string, insertionPos:?{x,y,z}, insertionZone:?string}|null} */
     this._tacticalOverlay = null;
 
@@ -243,13 +216,9 @@ export class NavSphere {
       const gameplay = (to === GameStates.ORBITAL_VIEW || to === GameStates.APPROACH || to === GameStates.INTERACTION);
       if (!gameplay) this.setVisible(false);
     });
-    // The nav orb is held off by default (see the constructor) so players
-    // aren't faced with the radar before they've chosen to bring it up. Press 8
-    // to show it (see toggleMinimized); the choice then persists across
-    // missions. `_hidden` is honoured by setVisible(), so the view config's
-    // showNavSphere:true can't override the manual hold. This listener just
-    // refreshes the canvas state on a mission boundary without forcing the orb
-    // back on.
+    // Held off by default so players aren't faced with the radar before choosing to bring it up (8 key, toggleMinimized); the
+    // choice persists across missions. `_hidden` is honoured by setVisible(), so the view config's showNavSphere:true can't
+    // override the manual hold. This listener only refreshes canvas state on a mission boundary without forcing the orb back on.
     eventBus.on(Events.MISSION_START, () => {
       this._frameSkip = -1;
       this._syncCanvasDisplay();
@@ -259,10 +228,6 @@ export class NavSphere {
       this.setSelectedTarget(data.id);
     });
   }
-
-  // ==========================================================================
-  // CANVAS SETUP
-  // ==========================================================================
 
   /** @private */
   _createCanvas() {
@@ -283,7 +248,7 @@ export class NavSphere {
     this.ctx = this.canvas.getContext ? this.canvas.getContext('2d') : null;
   }
 
-  /** @private ORB footer chip — minimized state (Task 10). */
+  /** @private ORB footer chip — minimized state. */
   _createOrbChip() {
     const doc = this._doc;
     if (!doc || typeof doc.createElement !== 'function') return;
@@ -339,10 +304,6 @@ export class NavSphere {
     }
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
-
   /** @param {boolean} visible */
   setVisible(visible) {
     this._visible = visible;
@@ -353,13 +314,11 @@ export class NavSphere {
   }
 
   /**
-   * Clean public toggle — wraps toggleVisibility().
-   * Delegation 3 (2026-05-31): InputManager Shift+N prefers this over the
-   * internal toggleVisibility() which manages the _hidden flag.
+   * Clean public toggle — wraps toggleVisibility(); InputManager Shift+N prefers this over toggleVisibility(), which manages
+   * the _hidden flag.
    */
   toggle() { this.toggleVisibility(); }
 
-  /** Toggle NavSphere visibility */
   toggleVisibility() {
     this._hidden = !this._hidden;
     this._frameSkip = -1;
@@ -368,25 +327,21 @@ export class NavSphere {
   }
 
   /**
-   * Chip / disc toggle (the 8 key). Minimized = ORB chip (Task 10); expanded
-   * draws the disc bottom-right above the footer. First press while hidden
-   * re-reveals (HUD_PANE_VISIBILITY) and expands.
+   * Chip / disc toggle (the 8 key). Minimized = ORB chip; expanded draws the disc bottom-right above the footer. First press
+   * while hidden re-reveals (HUD_PANE_VISIBILITY) and expands.
    */
   toggleMinimized() {
     if (!this.canvas && !this._chip) return;
     let shown;
-    // If the orb is being held off (off by default, a prior manual hide, or the
-    // pane-density ladder hid it via setOrbHidden), the first 8 press brings it
-    // up rather than collapsing an already-hidden orb. Subsequent presses
-    // expand/collapse the disc (chip is the minimized state — Task 10).
+    // If the orb is held off (default, a prior manual hide, or hidden by the pane-density ladder via setOrbHidden), the first
+    // 8 press brings it up instead of collapsing a hidden orb. Later presses expand/collapse the disc.
     if (this._hidden) {
       this._hidden = false;
       this._minimized = false;
       this._frameSkip = -1;
       shown = true;
-      // Wave 5 Session H (Job A): the un-hide path flipped `_hidden` — the
-      // intent flag isOrbVisible() reads (the rung's bit). The minimize fold
-      // below never touches it, so only THIS path signals (after the flip).
+      // The un-hide path flips `_hidden` — the intent flag isOrbVisible() reads (the rung's bit). The minimize fold below never
+      // touches it, so only THIS path signals (after the flip).
       eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'navsphere', shown: true });
     } else {
       this._minimized = !this._minimized;
@@ -403,22 +358,18 @@ export class NavSphere {
     });
   }
 
-  /** @returns {boolean} */
   get isMinimized() { return this._minimized; }
 
   /**
-   * Pane-density ladder — is the orb currently ON (chip or disc showing)?
-   * Reads the same `_hidden` flag the 8 key drives, so the ladder and
-   * the 8 key compose: an individual 8 press re-reveals a density-hidden orb.
-   * @returns {boolean}
+   * Pane-density ladder — is the orb currently ON (chip or disc showing)? Reads the same `_hidden` flag the 8 key drives, so
+   * an individual 8 press re-reveals a density-hidden orb.
    */
   isOrbVisible() { return !this._hidden; }
 
   /**
-   * Pane-density ladder — show/hide the orb by driving the manual `_hidden`
-   * flag (NOT the view-config `_visible` flag), so the density hide survives a
-   * camera-view switch and the 8 key can re-reveal it. SHOW lands in the CHIP
-   * (Task 10); HIDE collapses the disc and hides chip + canvas.
+   * Pane-density ladder — show/hide the orb by driving the manual `_hidden` flag (NOT the view-config `_visible` flag), so the
+   * density hide survives a camera-view switch and the 8 key can re-reveal it. SHOW lands in the CHIP; HIDE collapses the
+   * disc and hides chip + canvas.
    * @param {boolean} hidden
    */
   setOrbHidden(hidden) {
@@ -430,9 +381,7 @@ export class NavSphere {
   }
 
   /**
-   * @deprecated Task 10 — the orb no longer occupies a right-column slot
-   * (footer chip / disc above the footer). HUD.js stops reading this.
-   * Always 0.
+   * @deprecated The orb no longer occupies a right-column slot; HUD.js stops reading this. Always 0.
    * @returns {number} px
    */
   getReservedHeight() {
@@ -443,14 +392,10 @@ export class NavSphere {
   setSelectedTarget(id) { this._selectedTargetId = id; }
 
   /**
-   * Zoom Ladder PROX NET additive opt — corner-minimap mount (S4,
-   * FloorContract.FLOORS[4].costume 'NavSphere:corner-minimap', transform
-   * 'navsphere-to-minimap'). While mounted the sphere draws at `radiusPx` in
-   * the bottom-right corner (where the 8-key disc sits), the canvas is forced visible
-   * (the minimap is the floor costume — `_hidden`/`_minimized` are suspended
-   * but PRESERVED, so the player's 8-key state resumes on unmount), and the
-   * [8] badge is suppressed. Pass null to unmount and restore the shipped
-   * display state. Never called by shipped code paths (ProxMiniSphere only).
+   * Zoom Ladder PROX NET corner-minimap mount (FloorContract.FLOORS[4].costume 'NavSphere:corner-minimap'). While mounted the
+   * sphere draws at `radiusPx` in the bottom-right corner (where the 8-key disc sits), the canvas is forced visible
+   * (`_hidden`/`_minimized` suspended but PRESERVED, so the player's 8-key state resumes on unmount) and the [8] badge is
+   * suppressed. Pass null to unmount. Never called by shipped code paths (ProxMiniSphere only).
    * @param {number|null} radiusPx
    */
   setCornerMount(radiusPx) {
@@ -461,8 +406,8 @@ export class NavSphere {
   }
 
   /**
-   * u7 D2: where the right column's lowest box ends (px), asked of the HUD at each draw. Null/absent →
-   * today's disc. Only the corner mount on a short screen reads it.
+   * Where the right column's lowest box ends (px), asked of the HUD at each draw; null/absent → the standard disc.
+   * Only the corner mount on a short screen reads it.
    * @param {(() => (number|null))|null} fn
    */
   setCornerTopProvider(fn) {
@@ -470,9 +415,8 @@ export class NavSphere {
   }
 
   /**
-   * @private The disc this draw uses: today's orbDiscCenter at the mount radius (or SPHERE_RADIUS), except
-   * a corner mount on a short screen with a column-bottom provider, which clears the right column
-   * (shortScreenOrbDisc). Tall screens: today's numbers exactly.
+   * @private The disc this draw uses: orbDiscCenter at the mount radius (or SPHERE_RADIUS), except a corner mount on a short
+   * screen with a column-bottom provider, which clears the right column (shortScreenOrbDisc).
    * @returns {{cx:number, cy:number, r:number}}
    */
   _discGeometry() {
@@ -492,11 +436,8 @@ export class NavSphere {
   }
 
   /**
-   * Zoom Ladder PROX NET additive opt — the floor-fed tactical layer (see
-   * ProxMiniSphere): focused cluster bearing + selected insertion point,
-   * drawn by update() over the radar contacts. The descriptor is stored by
-   * reference (the adapter mutates ONE reused object; no per-frame stores).
-   * Null (default) ⇒ nothing extra is drawn — shipped frames byte-identical.
+   * PROX NET floor-fed tactical layer (see ProxMiniSphere): focused cluster bearing + selected insertion point, drawn by update()
+   * over the radar contacts. Stored by reference (the adapter mutates ONE reused object; no per-frame stores). Null ⇒ nothing extra.
    * @param {{clusterPos:?{x,y,z}, clusterName:?string, insertionPos:?{x,y,z}, insertionZone:?string}|null} overlay
    */
   setTacticalOverlay(overlay) {
@@ -504,7 +445,6 @@ export class NavSphere {
   }
 
   /**
-   * Main per-frame update.
    * @param {number} dt
    * @param {object} data
    * @param {THREE.Vector3}  data.playerPos
@@ -517,12 +457,10 @@ export class NavSphere {
    * @param {object}        [data.armManager] - ArmManager for jellyfish tether viz
    */
   update(dt, data) {
-    // Corner-mounted (Zoom Ladder PROX NET): the mount suspends the manual hold —
-    // the minimap draws while the flags keep the player's choice for unmount.
+    // Corner-mounted (PROX NET): the mount suspends the manual hold; the flags keep the player's choice for unmount.
     if (this._hidden && this._cornerMountRadiusPx == null) return;
-    // Self-heal the forced display against shipped flag-driven hides
-    // (setVisible/setOrbHidden/toggleMinimized write display directly; while
-    // mounted, the mount owns the layer). Style write only when it differs.
+    // Self-heal the forced display against flag-driven hides (setVisible/setOrbHidden/toggleMinimized write display directly;
+    // while mounted the mount owns the layer). Style write only when it differs.
     if (this._cornerMountRadiusPx != null && this.canvas
         && this.canvas.style.display !== 'block') {
       this.canvas.style.display = 'block';
@@ -547,8 +485,8 @@ export class NavSphere {
       );
     }
 
-    // Minimized (8 key): the ORB chip is the minimized state (Task 10) — disc
-    // not drawn. (Suspended while corner-mounted — the PROX NET minimap always draws.)
+    // Minimized (8 key): the ORB chip is the minimized state — disc not drawn (suspended while corner-mounted: the minimap
+    // always draws).
     if (this._minimized && this._cornerMountRadiusPx == null) {
       return;
     }
@@ -556,40 +494,33 @@ export class NavSphere {
     const { playerPos, playerVel, debrisField, activeSatellites,
             sunDirection, targetSelector, sensorSystem, armManager } = data;
 
-    // Dynamic sensor range
     if (sensorSystem && sensorSystem.range) {
       this._outerZoneKm = sensorSystem.range / Constants.SCENE_SCALE;
     } else {
       this._outerZoneKm = Constants.NAVSPHERE.OUTER_ZONE_KM_MAX;
     }
 
-    // Store player velocity for closure rate calculations
     this._playerVel = playerVel || null;
 
-    // Sync selected target from target selector
     if (targetSelector) {
       const at = targetSelector.getActiveTarget();
       if (at) this._selectedTargetId = at.id;
     }
 
-    // Extract camera local axes
     this.camera.updateMatrixWorld();
     const m = this.camera.matrixWorld;
     this._right.setFromMatrixColumn(m, 0);
     this._up.setFromMatrixColumn(m, 1);
     this._forward.setFromMatrixColumn(m, 2).negate();
 
-    // Sphere center: bottom-right above the footer band, where the 8-key disc
-    // sits (cx = W − HUD_EDGE_PX − R, cy = H − footerTop − 8 − R). Corner-mounted
-    // PROX NET uses the same spot at its smaller radius, so it never depends on
-    // the COMMS height and can't cover the NEXT pane (n1-nav-corner).
-    // u7 D2: on a short screen the corner mount sits under the right column (see _discGeometry).
+    // Sphere center: bottom-right above the footer band, where the 8-key disc sits (cx = W − HUD_EDGE_PX − R,
+    // cy = H − footerTop − 8 − R). Corner-mounted PROX NET uses the same spot at its smaller radius, so it never depends on the
+    // COMMS height and can't cover the NEXT pane; on a short screen it sits under the right column (see _discGeometry).
     const { cx, cy, r: R } = this._discGeometry();
     const ctx = this.ctx;
 
     ctx.save();
 
-    // ---- Hemisphere background (radial gradient for 3D depth) ----
     const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
     bgGrad.addColorStop(0, 'rgba(0, 40, 80, 1.0)');
     bgGrad.addColorStop(0.7, 'rgba(0, 25, 50, 1.0)');
@@ -599,7 +530,6 @@ export class NavSphere {
     ctx.fillStyle = bgGrad;
     ctx.fill();
 
-    // Specular highlight (offset up-left, simulating light on glass sphere)
     const hlX = cx - R * 0.3;
     const hlY = cy - R * 0.3;
     const hlR = R * 0.45;
@@ -617,18 +547,15 @@ export class NavSphere {
     ctx.arc(cx, cy, R, 0, Math.PI * 2);
     ctx.clip(); // clip all drawing inside the sphere
 
-    // ---- Elliptical grid lines (3D hemisphere great circles) ----
     const gridCol = 'rgba(0, 150, 255, 0.15)';
     ctx.lineWidth = 0.5;
 
-    // Longitude meridians (vertical ellipses)
     for (const deg of [-60, -30, 0, 30, 60]) {
       const phi = degToRad(deg);
       const rX = Math.abs(R * Math.sin(phi));
       ctx.strokeStyle = gridCol;
       ctx.beginPath();
       if (rX < 1) {
-        // Central meridian — vertical line
         ctx.moveTo(cx, cy - R);
         ctx.lineTo(cx, cy + R);
       } else {
@@ -637,11 +564,9 @@ export class NavSphere {
       ctx.stroke();
     }
 
-    // Latitude parallels (horizontal ellipses with curvature for 3D effect)
     for (const f of [-0.5, 0, 0.5]) {
       const yOff = f * R;
       const halfW = R * Math.sqrt(1 - f * f);
-      // Vertical radius creates the curved 3D appearance
       const rY = halfW * 0.18 * (1 - Math.abs(f) * 0.5);
       ctx.strokeStyle = gridCol;
       ctx.beginPath();
@@ -649,25 +574,20 @@ export class NavSphere {
       ctx.stroke();
     }
 
-    // ---- Distance-encoded range rings (replaces FOV boundary ring) ----
     this._drawRangeRings(ctx, cx, cy, R);
 
-    // ---- Tether range rings (jellyfish tentacle zones) ----
     this._drawTetherRings(ctx, cx, cy, R, armManager);
 
-    // ---- Earth direction indicator ----
     this._drawIndicator(ctx, cx, cy, R,
       playerPos.clone().negate().normalize(),
       C.earth, C.earthDim, 12, 'E');
 
-    // ---- Sun direction indicator ----
     if (sunDirection) {
       this._drawIndicator(ctx, cx, cy, R,
         sunDirection.clone().normalize(),
         C.sun, C.sun, 5, null, 0.9, 0.35);
     }
 
-    // ---- Velocity prograde marker ----
     if (playerVel) {
       const v = new THREE.Vector3(playerVel.x, playerVel.y, playerVel.z);
       if (v.lengthSq() > 1e-8) {
@@ -677,11 +597,9 @@ export class NavSphere {
         ctx.globalAlpha = a;
         ctx.strokeStyle = C.prograde;
         ctx.lineWidth = 2;
-        // Small circle
         ctx.beginPath();
         ctx.arc(sx, sy, 6, 0, Math.PI * 2);
         ctx.stroke();
-        // Cross-hair ticks
         ctx.beginPath();
         ctx.moveTo(sx - 9, sy); ctx.lineTo(sx - 5, sy);
         ctx.moveTo(sx + 5, sy); ctx.lineTo(sx + 9, sy);
@@ -701,9 +619,8 @@ export class NavSphere {
         if (!t.alive) continue;
         // Scan-first (DECISIONS §15 row 1): no radar dot until a scan reveals it.
         if (!isMarked(t)) continue;
-        // Skip untracked debris unless IR Scanner is active or it's the selected target
-        // u20-debris: a background shard 10 cm or bigger is now `tracked` (known to radar) but is still scenery, never a
-        // contact: it is dotted only where an untracked shard always was (the IR scanner), as before.
+        // Skip untracked debris unless IR Scanner is active or it's the selected target. A background shard 10 cm or bigger is
+        // `tracked` (known to radar) but still scenery, never a contact: dotted only where an untracked shard always was (IR scanner).
         if ((t.tracked === false || t.hazard === true) && !canDetect && t.id !== this._selectedTargetId) continue;
         if (t.id === this._selectedTargetId) {
           _selectedDebrisTarget = t;  // defer to draw last (on top)
@@ -713,7 +630,6 @@ export class NavSphere {
       }
     }
 
-    // ---- Arm tether lines (jellyfish tentacles) ----
     this._drawArmTetherLines(ctx, cx, cy, R, armManager, playerPos);
 
     // ---- Sibling arm markers (ARM_PILOT mode — ST-8.5.2) ----
@@ -721,7 +637,6 @@ export class NavSphere {
       this._drawSiblingArmMarkers(ctx, cx, cy, R, armManager, playerPos, data.pilotedArmId);
     }
 
-    // ---- Active satellite dots ----
     if (activeSatellites) {
       const sats = activeSatellites.getSatelliteList(playerPos);
       for (const s of sats) {
@@ -730,10 +645,8 @@ export class NavSphere {
       }
     }
 
-    // ---- Zoom Ladder PROX NET tactical overlay (additive; null ⇒ skipped) ----
-    // Floor-fed context over the radar: focused cluster bearing + selected
-    // insertion point (see setTacticalOverlay / ProxMiniSphere). Drawn before
-    // the selected target + player dot so the actionables stay on top.
+    // PROX NET tactical overlay (null ⇒ skipped; see setTacticalOverlay). Drawn before the selected target + player dot so the
+    // actionables stay on top.
     if (this._tacticalOverlay) {
       this._drawTacticalOverlay(ctx, cx, cy, R, playerPos);
     }
@@ -743,7 +656,6 @@ export class NavSphere {
       this._drawDebrisDot(ctx, cx, cy, R, _selectedDebrisTarget, playerPos);
     }
 
-    // ---- Player center dot (drawn last, on top) ----
     ctx.globalAlpha = 1;
     ctx.beginPath();
     ctx.arc(cx, cy, 3.5, 0, Math.PI * 2);
@@ -753,21 +665,18 @@ export class NavSphere {
     ctx.restore(); // remove clip
 
     // ---- Rim / edge glow (drawn outside clip so full stroke is visible) ----
-    // Outer glow ring (softer, wider)
     ctx.strokeStyle = 'rgba(0, 150, 255, 0.12)';
     ctx.lineWidth = 5;
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, Math.PI * 2);
     ctx.stroke();
-    // Inner rim stroke
     ctx.strokeStyle = 'rgba(0, 150, 255, 0.4)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, Math.PI * 2);
     ctx.stroke();
 
-    // ---- Geolocation readout (LAT / LON / ALT) above the disc (Task 10) ----
-    // u6 D3: drawn only with the Tests switch on.
+    // Geolocation readout (LAT / LON / ALT) above the disc; drawn only with the Tests switch on.
     if (this._geoCache && this.testsSwitch) {
       const geo = this._geoCache;
       ctx.font = mono(10);
@@ -782,9 +691,8 @@ export class NavSphere {
       ctx.fillText(geoText, geoX, cy - R - 14);
     }
 
-    // ---- ST-9.3 C-3: HIGH RECOIL warning indicator ----
-    // Show amber warning when selected arm's aim alpha is in the high-recoil zone
-    // (α < 30° or α > 150°, near stowed/zenith where cos(α) ≈ ±1 → max residual torque)
+    // HIGH RECOIL warning: amber when the selected arm's aim alpha is in the high-recoil zone (α < 30° or α > 150°, near
+    // stowed/zenith where cos(α) ≈ ±1 → max residual torque)
     if (armManager && armManager.selectedArmIndex >= 0) {
       const selArm = armManager.arms[armManager.selectedArmIndex];
       if (selArm && typeof selArm.isHighRecoilZone === 'function' && selArm.isHighRecoilZone()) {
@@ -792,17 +700,15 @@ export class NavSphere {
         ctx.font = mono(10, 'bold');
         ctx.fillStyle = '#ffcc00';
         ctx.textAlign = 'center';
-        // Calm-HUD: steady amber — a standing state, not an event; the WARN word
-        // and amber already carry the warning (was a 0.64 Hz infinite blink).
+        // Calm-HUD: steady amber — a standing state, not an event; the WARN word and amber already carry the warning.
         ctx.globalAlpha = 1;
         const warnX = Math.min(cx, this._width - HUD_EDGE_PX - ctx.measureText('WARN HIGH RECOIL').width / 2);
         ctx.fillText('WARN HIGH RECOIL', warnX, warnY);
       }
     }
 
-    // [8] hotkey badge at the sphere's top-right corner (matches [7]/[0]).
-    // Suppressed while corner-mounted: the PROX NET minimap is the floor costume,
-    // not the 8-key orb — the key badge would advertise a suspended toggle.
+    // [8] hotkey badge at the sphere's top-right corner (matches [7]/[0]); suppressed while corner-mounted (the minimap is the
+    // floor costume, so the badge would advertise a suspended toggle).
     if (this._cornerMountRadiusPx == null) {
       this._drawKeyBadge(ctx, cx + R - 4, cy - R + 4);
     }
@@ -810,11 +716,7 @@ export class NavSphere {
     ctx.restore();
   }
 
-  /**
-   * @private Draw the `[8]` hotkey badge at the sphere's top-right corner —
-   * matches the [7]/[0] pane badges (dim green, right-aligned) so the player
-   * can see the key that toggles the nav orb.
-   */
+  /** @private Draw the `[8]` hotkey badge at the sphere's top-right corner, matching the [7]/[0] pane badges (dim green, right-aligned). */
   _drawKeyBadge(ctx, rightX, topY) {
     ctx.save();
     ctx.font = mono(10, 'bold');
@@ -826,21 +728,13 @@ export class NavSphere {
   }
 
   /**
-   * @private Zoom Ladder PROX NET tactical overlay (additive — only drawn when
-   * setTacticalOverlay() stored a descriptor). VisualLaw grammar, never
+   * @private PROX NET tactical overlay (drawn only when setTacticalOverlay() stored a descriptor). VisualLaw grammar, never
    * color-alone:
-   *   - focused cluster bearing: VALUE-gold RING (the cluster 'ring-count'
-   *     shape) + name label, distance-encoded via _toSphereWithDistance and
-   *     clamped to the rim (the PROX NET corridor target usually sits beyond the
-   *     sensor's outer zone);
-   *   - selected insertion point: SELECTION-blue ring + cross-hair ticks +
-   *     zone label (the ProxOverlay insertion grammar; blue = selection, Session Q).
+   *   - focused cluster bearing: VALUE-gold RING (the cluster 'ring-count' shape) + name label, distance-encoded via
+   *     _toSphereWithDistance and clamped to the rim (the PROX NET corridor target usually sits beyond the sensor's outer zone);
+   *   - selected insertion point: SELECTION-blue ring + cross-hair ticks + zone label (the ProxOverlay insertion grammar).
    * Behind-camera points dim to the house 0.4 alpha like every other contact.
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} cx - sphere center X
-   * @param {number} cy - sphere center Y
    * @param {number} R  - sphere radius px (mount-resolved)
-   * @param {THREE.Vector3|{x,y,z}} playerPos
    */
   _drawTacticalOverlay(ctx, cx, cy, R, playerPos) {
     const ov = this._tacticalOverlay;
@@ -929,10 +823,8 @@ export class NavSphere {
     if (distKm <= 0) return 0;
 
     if (distKm <= innerKm) {
-      // Inner zone: log mapping 0–innerKm → 0–split*R
       return Math.log(1 + distKm) / Math.log(1 + innerKm) * split * R;
     } else {
-      // Outer zone: log mapping innerKm–outerKm → split*R – R
       const outerRange = outerKm - innerKm;
       const d = distKm - innerKm;
       return (Math.log(1 + d) / Math.log(1 + outerRange) * (1 - split) + split) * R;
@@ -940,29 +832,22 @@ export class NavSphere {
   }
 
   /**
-   * Project a relative position vector to NavSphere screen coordinates
-   * using camera-space direction + distance-encoded radius.
+   * Project a relative position vector to NavSphere screen coordinates (camera-space direction + distance-encoded radius).
    * @param {THREE.Vector3} relVec - relative position (NOT normalized)
-   * @param {number} cx - sphere center x
-   * @param {number} cy - sphere center y
-   * @param {number} R - sphere radius px
    * @returns {{sx: number, sy: number, z: number, distKm: number, clipped: boolean}}
    */
   _toSphereWithDistance(relVec, cx, cy, R) {
     const distScene = relVec.length();
     const distKm = distScene / Constants.SCENE_SCALE;
 
-    // Normalize for direction
     this._tmpDir.copy(relVec).normalize();
 
     const dx = this._tmpDir.dot(this._right);
     const dy = -this._tmpDir.dot(this._up);      // screen Y is inverted
     const z  = this._tmpDir.dot(this._forward);   // depth (positive = in front)
 
-    // Map distance to radius
     const r = this._distToRadius(distKm, R);
 
-    // Direction on sphere surface (2D unit vector)
     const dirLen = Math.sqrt(dx * dx + dy * dy) || 1e-6;
     const ndx = dx / dirLen;
     const ndy = dy / dirLen;
@@ -982,46 +867,34 @@ export class NavSphere {
   }
 
   /**
-   * Compute closure rate: negative = approaching, positive = receding (E4).
+   * Closure rate (km/s): negative = approaching, positive = receding.
    * @param {object} targetCart - {position: {x,y,z}, velocity: {x,y,z}} from orbitToSceneCartesian
-   * @param {THREE.Vector3} playerPos
    * @param {object} playerVel - {x,y,z}
-   * @returns {number} closure rate (negative = closing)
    */
   _computeClosureRate(targetCart, playerPos, playerVel) {
     if (!playerVel) return null;
 
-    // Relative position
     const rx = targetCart.position.x - playerPos.x;
     const ry = targetCart.position.y - playerPos.y;
     const rz = targetCart.position.z - playerPos.z;
     const dist = Math.sqrt(rx * rx + ry * ry + rz * rz);
     if (dist < 1e-10) return 0;
 
-    // Unit direction vector
     const ux = rx / dist;
     const uy = ry / dist;
     const uz = rz / dist;
 
-    // Relative velocity (target vel - player vel)
     const tvx = (targetCart.velocity?.x || 0) - playerVel.x;
     const tvy = (targetCart.velocity?.y || 0) - playerVel.y;
     const tvz = (targetCart.velocity?.z || 0) - playerVel.z;
 
-    // Closure rate = dot product of relative velocity with unit direction
-    // Negative = approaching, positive = receding
+    // Closure rate = dot(relative velocity, unit direction); negative = approaching
     return tvx * ux + tvy * uy + tvz * uz;
   }
 
-  // ==========================================================================
-  // PRIVATE HELPERS
-  // ==========================================================================
-
   /**
-   * Project a direction vector onto sphere screen coords.
-   * Used for direction-only indicators (Earth, Sun, Prograde, velocity).
-   * Can accept unnormalized vectors (e.g., equatorial projections for stalks).
-   * @param {THREE.Vector3} dir - Direction vector (normalized or unnormalized)
+   * Project a direction vector (normalized or not, e.g. equatorial projections for stalks) onto sphere screen coords;
+   * for direction-only indicators (Earth, Sun, Prograde, velocity).
    * @returns {{ sx: number, sy: number, z: number }}
    */
   _toSphere(dir, cx, cy, R) {
@@ -1031,7 +904,6 @@ export class NavSphere {
     return { sx: cx + x * R * 0.85, sy: cy - y * R * 0.85, z };
   }
 
-  /** Draw a labelled direction indicator (Earth, Sun). */
   _drawIndicator(ctx, cx, cy, R, dir, colFront, colBack, size, label,
                   aFront = 1, aBack = 0.4) {
     const { sx, sy, z } = this._toSphere(dir, cx, cy, R);
@@ -1049,11 +921,7 @@ export class NavSphere {
     ctx.globalAlpha = 1;
   }
 
-  /**
-   * Draw labeled concentric range rings at key distances.
-   * Uses _distToRadius for proper log mapping.
-   * Replaces the old FOV boundary ring.
-   */
+  /** Labeled concentric range rings at key distances, log-mapped via _distToRadius. */
   _drawRangeRings(ctx, cx, cy, R) {
     const NS = Constants.NAVSPHERE;
     const rings = NS.RANGE_RINGS_KM;  // [0.2, 0.5, 2, 5, 10, 25, 50]
@@ -1091,9 +959,8 @@ export class NavSphere {
       }
     }
 
-    // Session S: labels in a second pass, outermost first, one measure per label —
-    // a label that would run into the one outside it is skipped (the 200m / 2km / 5km
-    // run-together at the orb's right)
+    // Labels in a second pass, outermost first, one measure per label — a label that would run into the one outside it is
+    // skipped (the 200m / 2km / 5km run-together at the orb's right)
     ctx.fillStyle = 'rgba(0, 255, 136, 0.25)';
     let lastLeft = Infinity;
     for (let i = labelled.length - 1; i >= 0; i--) {
@@ -1108,7 +975,6 @@ export class NavSphere {
     ctx.restore();
   }
 
-  /** Draw a debris contact dot with zone-based coloring, distance encoding, and type shapes. */
   _drawDebrisDot(ctx, cx, cy, R, target, playerPos) {
     const cart = orbitToSceneCartesian(target.orbit);
     this._tmpDir.set(cart.position.x, cart.position.y, cart.position.z)
@@ -1116,14 +982,12 @@ export class NavSphere {
     const { sx, sy, z, distKm, clipped } = this._toSphereWithDistance(this._tmpDir, cx, cy, R);
     // After _toSphereWithDistance, _tmpDir is normalized (direction only)
 
-    // Continuous dot size: closer = bigger
     const NS = Constants.NAVSPHERE;
     const t = Math.min(distKm / (this._outerZoneKm || NS.OUTER_ZONE_KM_MAX), 1);
     let dotSz = NS.DOT_MAX_PX - t * (NS.DOT_MAX_PX - NS.DOT_MIN_PX);
     const alpha = z > 0 ? 0.9 : 0.4;
     if (z < 0) dotSz = Math.max(NS.DOT_MIN_PX, dotSz - 1);
 
-    // Size modulation from physical debris size (E2)
     let finalSize = dotSz;
     if (target.sizeMeter) {
       // Scale factor: tiny debris (0.1m) = 0.5x, huge debris (10m+) = 1.5x
@@ -1132,17 +996,13 @@ export class NavSphere {
     }
     finalSize = clamp(NS.DOT_MAX_PX, NS.DOT_MIN_PX, finalSize);
 
-    // Closure rate coloring (E4)
     const closureRate = this._computeClosureRate(cart, playerPos, this._playerVel);
 
-    // Zone-based coloring with closure rate override
     const sel = target.id === this._selectedTargetId;
     const dotColor = this._getZoneColor(distKm, sel, closureRate);
 
-    // Bidirectional stalk (depth encoding: z > 0 → up, z < 0 → down) (ST-5.4)
     this._drawStalk(ctx, cx, cy, R, this._tmpDir, sx, sy, z, dotColor, distKm);
 
-    // Draw contact shape based on debris type (E1)
     const drawSize = sel ? finalSize + 2.5 : finalSize;
     this._drawContactShape(ctx, sx, sy, target.type, drawSize, dotColor, alpha);
 
@@ -1150,10 +1010,8 @@ export class NavSphere {
     if (sel) {
       const NS2 = Constants.NAVSPHERE;
 
-      // ST-6.3: MOID badge colour override — HI = red, MD = yellow, LO/null = cyan.
-      // Calm-HUD: ring is steady for every badge — selection is a standing state
-      // and the colour already differentiates threat level (HI previously pulsed
-      // at 2 Hz; MD was already steady).
+      // MOID badge colour override — HI = red, MD = yellow, LO/null = cyan. Calm-HUD: the ring is steady for every badge —
+      // selection is a standing state and the colour already differentiates threat level.
       let ringColor = C.selected;
       const moidBadge = target.moidBadge || null;
       if (moidBadge === 'HI') {
@@ -1165,24 +1023,20 @@ export class NavSphere {
       const ringAlpha = 0.8;
       ctx.strokeStyle = ringColor;
       ctx.lineWidth = 1.5;
-      // Outer ring (1.5× dot size)
       ctx.globalAlpha = alpha * ringAlpha;
       ctx.beginPath();
       ctx.arc(sx, sy, finalSize * NS2.LOCK_ON_OUTER_RADIUS_MULT, 0, Math.PI * 2);
       ctx.stroke();
-      // Inner ring (1.1× dot size)
       ctx.globalAlpha = alpha * ringAlpha * 0.7;
       ctx.beginPath();
       ctx.arc(sx, sy, finalSize * NS2.LOCK_ON_INNER_RADIUS_MULT, 0, Math.PI * 2);
       ctx.stroke();
     }
 
-    // Velocity (closure) arrow for contacts within range (ST-5.4)
     if (distKm <= Constants.NAVSPHERE.VELOCITY_ARROW_RANGE_KM && closureRate !== null) {
       this._drawVelocityArrow(ctx, sx, sy, closureRate, cart, this._playerVel);
     }
 
-    // Selected target distance readout (E5)
     if (sel && distKm !== undefined) {
       ctx.save();
       ctx.globalAlpha = alpha;  // steady opacity, not pulsing
@@ -1198,15 +1052,10 @@ export class NavSphere {
   }
 
   /**
-   * Draw a debris contact shape based on type (E1).
-   * defunctSat → diamond ◆, rocketBody → rectangle ■,
-   * missionDebris → triangle ▲, fragment/default → circle ●
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} sx - screen x
-   * @param {number} sy - screen y
+   * Draw a debris contact shape by type: defunctSat → diamond ◆, rocketBody → rectangle ■, missionDebris → triangle ▲,
+   * fragment/default → circle ●.
    * @param {string} type - debris type (fragment/rocketBody/defunctSat/missionDebris)
    * @param {number} size - shape radius in px
-   * @param {string} color - fill color
    * @param {number} alpha - 0–1 opacity
    */
   _drawContactShape(ctx, sx, sy, type, size, color, alpha) {
@@ -1218,7 +1067,6 @@ export class NavSphere {
 
     switch (type) {
       case 'defunctSat':
-        // Diamond ◆
         ctx.beginPath();
         ctx.moveTo(sx, sy - size);
         ctx.lineTo(sx + size, sy);
@@ -1229,12 +1077,10 @@ export class NavSphere {
         break;
 
       case 'rocketBody':
-        // Rectangle ■
         ctx.fillRect(sx - size * 0.7, sy - size, size * 1.4, size * 2);
         break;
 
       case 'missionDebris':
-        // Triangle ▲
         ctx.beginPath();
         ctx.moveTo(sx, sy - size);
         ctx.lineTo(sx + size, sy + size * 0.7);
@@ -1244,7 +1090,6 @@ export class NavSphere {
         break;
 
       default:
-        // Circle ● (fragments, generic)
         ctx.beginPath();
         ctx.arc(sx, sy, size, 0, Math.PI * 2);
         ctx.fill();
@@ -1253,16 +1098,12 @@ export class NavSphere {
     ctx.restore();
   }
 
-  /** Draw an active satellite dot with distance encoding. */
   _drawSatDot(ctx, cx, cy, R, sat, playerPos) {
     this._tmpDir.subVectors(sat.position, playerPos);
     const { sx, sy, z, distKm, clipped } = this._toSphereWithDistance(this._tmpDir, cx, cy, R);
-    // After _toSphereWithDistance, _tmpDir is normalized (direction only)
 
-    // Bidirectional stalk (depth encoding: z > 0 → up, z < 0 → down) (ST-5.4)
     this._drawStalk(ctx, cx, cy, R, this._tmpDir, sx, sy, z, C.white, distKm);
 
-    // Continuous dot size: closer = bigger
     const NS = Constants.NAVSPHERE;
     const tVal = Math.min(distKm / (this._outerZoneKm || NS.OUTER_ZONE_KM_MAX), 1);
     const dotSz = Math.max(3, NS.DOT_MAX_PX - tVal * (NS.DOT_MAX_PX - NS.DOT_MIN_PX));
@@ -1276,19 +1117,9 @@ export class NavSphere {
   }
 
   /**
-   * Draw a bidirectional I-War stalk from a contact dot.
-   * Encodes out-of-plane depth: z > 0 → stalk UP (above plane), z < 0 → stalk DOWN.
-   * Length proportional to |z| × R × STALK_MAX_FRACTION (ST-5.4).
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} cx   Sphere center X (unused, kept for API compat)
-   * @param {number} cy   Sphere center Y (unused, kept for API compat)
-   * @param {number} R    Sphere radius
-   * @param {THREE.Vector3} dir  Direction (unused, kept for API compat)
-   * @param {number} sx   Dot screen X
-   * @param {number} sy   Dot screen Y
+   * Draw a bidirectional I-War stalk from a contact dot: out-of-plane depth z > 0 → stalk UP (above plane), z < 0 → DOWN.
+   * Length ∝ |z| × R × STALK_MAX_FRACTION. cx, cy, dir and distKm are unused (kept for API compat).
    * @param {number} z    Camera-space depth (positive = front hemisphere)
-   * @param {string} color  CSS color string for the stalk
-   * @param {number} distKm  Distance in km (unused, kept for API compat)
    */
   _drawStalk(ctx, cx, cy, R, dir, sx, sy, z, color, distKm) {
     const NS = Constants.NAVSPHERE;
@@ -1308,18 +1139,9 @@ export class NavSphere {
     ctx.globalAlpha = 1.0;
   }
 
-  // ==========================================================================
-  // JELLYFISH VISUALIZATION — Tether rings, zone colors, arm tethers
-  // ==========================================================================
-
   /**
-   * Draw concentric tether range rings (jellyfish tentacle zones).
-   * Uses _distToRadius for proper log-mapped ring radii.
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} cx - Sphere center X
-   * @param {number} cy - Sphere center Y
-   * @param {number} R  - Sphere radius in px
-   * @param {object} armManager - For deployed arm type detection
+   * Concentric tether range rings (jellyfish tentacle zones), log-mapped via _distToRadius.
+   * @param {object} armManager - for deployed arm type detection
    */
   _drawTetherRings(ctx, cx, cy, R, armManager) {
     // Tether ranges in km
@@ -1327,12 +1149,10 @@ export class NavSphere {
     const spinnerKm = Constants.SPINNER_TETHER_LENGTH / 1000;  // 0.5 km
     const weaverKm = Constants.WEAVER_TETHER_LENGTH / 1000;    // 2.0 km
 
-    // Convert to NavSphere pixel radius using distance encoding
     const lassoR = this._distToRadius(lassoKm, R);
     const spinnerR = this._distToRadius(spinnerKm, R);
     const weaverR = this._distToRadius(weaverKm, R);
 
-    // Determine which arm types are deployed for pulse/brighten effect
     let hasLassoDeployed = false;
     let hasSpinnerDeployed = false;
     let hasWeaverDeployed = false;
@@ -1346,34 +1166,27 @@ export class NavSphere {
       }
     }
 
-    // Pulse effect for active arm types (subtle alpha oscillation).
-    // Calm-HUD: 0.32 Hz / small amplitude — reviewed and kept; frozen under
+    // Pulse for active arm types (subtle alpha oscillation). Calm-HUD: 0.32 Hz / small amplitude, frozen under
     // prefers-reduced-motion (the CSS media block can't reach canvas writes).
     const pulse = prefersReducedMotion() ? 0.5 : 0.5 + 0.5 * Math.sin(this._time * 2);
 
-    // ---- Zone fills (E6) — drawn BEFORE ring strokes ----
+    // ---- Zone fills: drawn BEFORE ring strokes ----
     ctx.globalAlpha = 1;
 
-    // Lasso zone fill (center → lassoR) — white
     const lassoFillAlpha = hasLassoDeployed ? 0.12 : 0.06;
     ctx.beginPath();
     ctx.arc(cx, cy, lassoR, 0, Math.PI * 2);
     ctx.fillStyle = `rgba(255, 255, 255, ${lassoFillAlpha})`;
     ctx.fill();
 
-    // Spinner zone fill (lassoR → spinnerR) — green
     const spinnerFillAlpha = hasSpinnerDeployed ? 0.08 : 0.04;
     this._drawZoneFill(ctx, cx, cy, lassoR, spinnerR,
       `rgba(0, 255, 136, ${spinnerFillAlpha})`);
 
-    // Weaver zone fill (spinnerR → weaverR) — cyan
     const weaverFillAlpha = hasWeaverDeployed ? 0.06 : 0.03;
     this._drawZoneFill(ctx, cx, cy, spinnerR, weaverR,
       `rgba(0, 204, 255, ${weaverFillAlpha})`);
 
-    // ---- Ring strokes (existing) ----
-
-    // Draw Weaver ring (outermost, cyan)
     ctx.strokeStyle = Constants.NAVSPHERE_WEAVER_RING_COLOR;
     ctx.lineWidth = hasWeaverDeployed ? 1.5 + pulse * 0.5 : 1;
     ctx.globalAlpha = hasWeaverDeployed ? 0.3 + pulse * 0.15 : 0.15;
@@ -1382,7 +1195,6 @@ export class NavSphere {
     ctx.arc(cx, cy, weaverR, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Draw Spinner ring (middle, green)
     ctx.strokeStyle = Constants.NAVSPHERE_SPINNER_RING_COLOR;
     ctx.lineWidth = hasSpinnerDeployed ? 1.5 + pulse * 0.5 : 1;
     ctx.globalAlpha = hasSpinnerDeployed ? 0.35 + pulse * 0.15 : 0.2;
@@ -1390,7 +1202,6 @@ export class NavSphere {
     ctx.arc(cx, cy, spinnerR, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Draw Lasso ring (innermost, white, thin)
     ctx.strokeStyle = Constants.NAVSPHERE_LASSO_RING_COLOR;
     ctx.lineWidth = 0.5;
     ctx.globalAlpha = 0.25;
@@ -1402,16 +1213,7 @@ export class NavSphere {
     ctx.globalAlpha = 1.0;
   }
 
-  /**
-   * Draw an annular zone fill between two radii (E6).
-   * Uses composite path with counter-clockwise inner arc to cut out center.
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} cx - center x
-   * @param {number} cy - center y
-   * @param {number} innerR - inner radius
-   * @param {number} outerR - outer radius
-   * @param {string} fillColor - CSS fill color with alpha
-   */
+  /** Annular zone fill between two radii (composite path; the counter-clockwise inner arc cuts out the center). */
   _drawZoneFill(ctx, cx, cy, innerR, outerR, fillColor) {
     ctx.beginPath();
     ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
@@ -1421,19 +1223,15 @@ export class NavSphere {
   }
 
   /**
-   * Get dot color based on closure rate or tether zone distance.
-   * Closure rate takes priority; selected target always wins.
-   * @param {number} distanceKm - Distance from mothership in km
-   * @param {boolean} isSelected - Whether this is the selected target
-   * @param {number} [closureRate] - Closure rate (negative = approaching)
-   * @returns {string} CSS color string
+   * Dot color from closure rate or tether zone distance. Closure rate takes priority; selected target always wins.
+   * @param {number} distanceKm - distance from mothership
+   * @param {number} [closureRate] - negative = approaching
    */
   _getZoneColor(distanceKm, isSelected, closureRate) {
     if (isSelected) return C.selected;
 
     const NS = Constants.NAVSPHERE;
 
-    // Closure rate coloring takes priority over distance (E4)
     if (closureRate !== undefined && closureRate !== null) {
       if (closureRate < NS.CLOSURE_APPROACHING_THRESHOLD) {
         return NS.COLOR_APPROACHING;    // red — closing in
@@ -1444,7 +1242,6 @@ export class NavSphere {
       }
     }
 
-    // Fallback to distance-based coloring (existing behavior)
     const lassoKm = Constants.LASSO_RANGE / 1000;             // 0.09 km (= NET_LOCK_RANGE_M)
     const spinnerKm = Constants.SPINNER_TETHER_LENGTH / 1000;  // 0.5 km
     const weaverKm = Constants.WEAVER_TETHER_LENGTH / 1000;    // 2.0 km
@@ -1465,12 +1262,7 @@ export class NavSphere {
   }
 
   /**
-   * Draw arm tether lines from center to deployed arm positions (jellyfish tentacles).
-   * Uses distance-encoded projection for arm endpoint positions.
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} cx - Sphere center X
-   * @param {number} cy - Sphere center Y
-   * @param {number} R  - Sphere radius
+   * Draw arm tether lines from center to deployed arm positions (jellyfish tentacles), distance-encoded.
    * @param {object} armManager
    * @param {THREE.Vector3} playerPos
    */
@@ -1478,10 +1270,8 @@ export class NavSphere {
     if (!armManager || !armManager.arms || !playerPos) return;
 
     for (const arm of armManager.arms) {
-      // Only draw for deployed arms (not DOCKED or EXPENDED)
       if (arm.state === 'DOCKED' || arm.state === 'EXPENDED') continue;
 
-      // Get arm position (THREE.Vector3 world position)
       const armPos = arm.position;
       if (!armPos) continue;
 
@@ -1490,17 +1280,13 @@ export class NavSphere {
       const dist = this._tmpDir.length();
       if (dist < 0.0000001) continue;
 
-      // Project arm position using distance-encoded sphere projection
       const { sx: px, sy: py, z, distKm } = this._toSphereWithDistance(this._tmpDir, cx, cy, R);
 
-      // Detached arms: steady red triangle (no tether line).
-      // Calm-HUD: a detached arm is a standing hazard, not an event — the red
-      // triangle glyph already reads "untethered / warning" (was a ~0.95 Hz
-      // infinite pulse).
+      // Detached arms: steady red triangle (no tether line). Calm-HUD: a detached arm is a standing hazard, not an event — the red
+      // triangle already reads "untethered / warning".
       if (arm.isDetached) {
         ctx.globalAlpha = 0.9;
 
-        // Draw triangle instead of circle (indicates untethered / warning)
         ctx.fillStyle = '#ff4444';
         ctx.beginPath();
         ctx.moveTo(px, py - 5);
@@ -1509,7 +1295,6 @@ export class NavSphere {
         ctx.closePath();
         ctx.fill();
 
-        // Red outline ring
         ctx.strokeStyle = '#ff4444';
         ctx.lineWidth = 1;
         ctx.globalAlpha = 0.6;
@@ -1517,7 +1302,6 @@ export class NavSphere {
         ctx.arc(px, py, 7, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Label
         ctx.font = mono(10);
         ctx.fillStyle = '#ff6666';
         ctx.globalAlpha = 0.7;
@@ -1528,13 +1312,10 @@ export class NavSphere {
         continue; // skip tether line
       }
 
-      // Choose color by arm type
       const color = arm.type === 'weaver' ? VisualLaw.COLORS.INFO : VisualLaw.COLORS.PLAYER;
-      // Calm-HUD: steady tether line — presence + colour already encode the
-      // arm; the old 0.48 Hz alpha oscillation was a standing-state pulse.
+      // Calm-HUD: steady tether line — presence + colour already encode the arm; an alpha oscillation would be a standing-state pulse.
       const alphaBase = 0.6;
 
-      // Draw tether line from center to arm position
       ctx.strokeStyle = color;
       ctx.globalAlpha = alphaBase;
       ctx.lineWidth = 1.5;
@@ -1543,7 +1324,6 @@ export class NavSphere {
       ctx.lineTo(px, py);
       ctx.stroke();
 
-      // Draw arm dot (larger than debris dots)
       ctx.fillStyle = color;
       ctx.globalAlpha = Math.min(1.0, alphaBase + 0.3);
       ctx.beginPath();
@@ -1562,12 +1342,8 @@ export class NavSphere {
   }
 
   /**
-   * Draw a velocity (closure) arrow from a contact dot (ST-5.4).
-   * Arrow direction = on-sphere projection of relative velocity.
-   * Arrow length ∝ closure rate, clamped to VELOCITY_ARROW_MAX_LENGTH_PX.
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} sx  Dot screen X
-   * @param {number} sy  Dot screen Y
+   * Draw a velocity (closure) arrow from a contact dot: direction = on-sphere projection of relative velocity, length ∝
+   * closure rate, clamped to VELOCITY_ARROW_MAX_LENGTH_PX.
    * @param {number} closureRate  Scalar closure rate (negative = approaching)
    * @param {object} cart  Target cartesian { position, velocity }
    * @param {object} playerVel  Player velocity { x, y, z }
@@ -1585,7 +1361,6 @@ export class NavSphere {
     const rvy = (cart.velocity?.y || 0) - playerVel.y;
     const rvz = (cart.velocity?.z || 0) - playerVel.z;
 
-    // Project onto sphere screen axes (camera right / up)
     const adx = this._right.x * rvx + this._right.y * rvy + this._right.z * rvz;
     const ady = -(this._up.x * rvx + this._up.y * rvy + this._up.z * rvz);
     const adLen = Math.sqrt(adx * adx + ady * ady);
@@ -1601,13 +1376,11 @@ export class NavSphere {
     ctx.lineWidth = 1;
     ctx.globalAlpha = 0.8;
 
-    // Arrow shaft
     ctx.beginPath();
     ctx.moveTo(sx, sy);
     ctx.lineTo(ex, ey);
     ctx.stroke();
 
-    // Arrowhead (simple V at tip)
     const angle = Math.atan2(ndy, ndx);
     const headLen = Math.min(pxLen * 0.5, 2);
     ctx.beginPath();
@@ -1620,18 +1393,8 @@ export class NavSphere {
     ctx.restore();
   }
 
-  // --------------------------------------------------------------------------
-  // SIBLING ARM MARKERS (ST-8.5.2)
-  // --------------------------------------------------------------------------
-
   /**
    * Draw amber diamond markers for deployed sibling arms during ARM_PILOT mode.
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} cx   Sphere center X
-   * @param {number} cy   Sphere center Y
-   * @param {number} R    Sphere radius px
-   * @param {object} armManager
-   * @param {THREE.Vector3} playerPos
    * @param {string} pilotedArmId  ID of the currently piloted arm
    */
   _drawSiblingArmMarkers(ctx, cx, cy, R, armManager, playerPos, pilotedArmId) {
@@ -1651,7 +1414,6 @@ export class NavSphere {
 
       const { sx: px, sy: py } = this._toSphereWithDistance(this._tmpDir, cx, cy, R);
 
-      // Amber diamond marker
       const size = 5;
       ctx.save();
       ctx.translate(px, py);
@@ -1665,7 +1427,6 @@ export class NavSphere {
       ctx.strokeRect(-size / 2, -size / 2, size, size);
       ctx.restore();
 
-      // Arm label
       ctx.font = mono(10);
       ctx.fillStyle = VisualLaw.COLORS.CAUTION;
       ctx.globalAlpha = 0.7;

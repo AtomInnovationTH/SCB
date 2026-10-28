@@ -1,16 +1,12 @@
 /**
- * ConjunctionSystem.js — Predicts debris-to-player conjunctions (near-misses)
- * Generates 3-tier warnings (GREEN/YELLOW/RED) that force evasive manoeuvres.
- * Creates semi-random interruptions that cost ΔV to dodge, deepening resource tension.
+ * @module systems/ConjunctionSystem — predicts debris-to-player conjunctions (near-misses); 3-tier warnings
+ * (GREEN/YELLOW/RED) that force evasive ΔV spend.
  *
- * Design constraints (from game design doc):
- *  - ~2 alerts per mission (matches real ISS conjunction rate)
- *  - Never during ARM PILOT mode (too disruptive to fine motor control)
- *  - Random timing prevents predictability
- *  - Forces ΔV spend → deepens resource tension
- *  - Evasion vector teaches collision avoidance concepts
- *
- * @module systems/ConjunctionSystem
+ * Design:
+ *  - ~2 alerts per mission (matches the real ISS conjunction rate);
+ *  - never in ARM PILOT mode (too disruptive to fine motor control);
+ *  - random timing prevents predictability;
+ *  - forces ΔV spend, which deepens resource tension; the evasion vector teaches collision avoidance.
  */
 
 import { eventBus } from '../core/EventBus.js';
@@ -20,7 +16,7 @@ import { TimeAuthority } from './TimeAuthority.js';
 import { orbitToSceneCartesian, cartesianToKeplerian } from '../entities/OrbitalMechanics.js';
 import { clamp } from '../core/MathUtil.js';
 
-// ST-6.3: Graceful MOID import — back-compat if MoidCalculator unavailable (§C.6)
+// Graceful MOID import: MOID features disable if MoidCalculator is unavailable.
 let _computeMOID = null;
 let _classifyMOID = null;
 import('./MoidCalculator.js').then(mod => {
@@ -29,10 +25,6 @@ import('./MoidCalculator.js').then(mod => {
 }).catch(() => {
   console.warn('[ConjunctionSystem] MoidCalculator unavailable. MOID features disabled');
 });
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
 
 /** 1 metre in scene units (1 scene unit ≈ 100 km) */
 const M = 0.00001;
@@ -43,18 +35,18 @@ const KM_TO_SCENE = M * 1000; // 0.01
 /** Threat classification thresholds (metres) */
 const THRESHOLD_RED_M    = 200;
 const THRESHOLD_YELLOW_M = 500;
-const THRESHOLD_GREEN_M  = 5000; // extended from 1000m for reliable alert generation
+const THRESHOLD_GREEN_M  = 5000;
 
 /** Thresholds in scene units */
-const THRESHOLD_RED    = THRESHOLD_RED_M    * M;  // 0.002
-const THRESHOLD_YELLOW = THRESHOLD_YELLOW_M * M;  // 0.005
-const THRESHOLD_GREEN  = THRESHOLD_GREEN_M  * M;  // 0.05
+const THRESHOLD_RED    = THRESHOLD_RED_M    * M;
+const THRESHOLD_YELLOW = THRESHOLD_YELLOW_M * M;
+const THRESHOLD_GREEN  = THRESHOLD_GREEN_M  * M;
 
 /** Pre-filter scan radius (scene units ≈ 50 km) */
 const SCAN_RADIUS    = 0.5;
 const SCAN_RADIUS_SQ = SCAN_RADIUS * SCAN_RADIUS;
 
-/** Linear propagation look-ahead (seconds — matches orbital velocity timescale) */
+/** Linear propagation look-ahead (seconds) */
 const LOOK_AHEAD_S = 60;
 
 /** Random interval between conjunction checks (real seconds) */
@@ -64,34 +56,25 @@ const CHECK_MAX_S = 120;
 /** Maximum alerts per mission (avoids annoyance while matching ISS rate) */
 const MAX_ALERTS = 3;
 
-/** Alert tier enum */
 const TIER = Object.freeze({ GREEN: 'GREEN', YELLOW: 'YELLOW', RED: 'RED' });
-
-// ============================================================================
-// CONJUNCTION SYSTEM
-// ============================================================================
 
 export class ConjunctionSystem {
   constructor() {
-    /** @private Accumulated real-time since last check */
+    /** Accumulated real-time (s) since the last check */
     this._checkTimer = 0;
 
-    /** @private Next check fires when _checkTimer reaches this value */
     this._nextCheckAt = this._randomInterval();
 
-    /** @private Number of alerts emitted this mission */
     this._alertCount = 0;
 
-    /** @private Current active threat data (or null) */
     this._currentThreat = null;
 
-    /** @private Whether an alert overlay is currently active */
     this._alertActive = false;
 
-    /** @private Remaining display time for current alert (seconds) */
+/** @private Remaining alert display time (seconds) */
     this._alertTimer = 0;
 
-    // ST-2.1: Capture-count gating — no alerts before first capture + elapsed time
+// Capture-count gating: no alerts before the first capture plus elapsed time
     this._captureCount = 0;
     this._missionElapsed = 0;
     this._firstCaptureTime = null;
@@ -99,11 +82,9 @@ export class ConjunctionSystem {
     this._primerSent = false;
     this._primerTimer = 0;
     this._pendingFirstAlert = null;
-    // Onboarding: one-shot dodge-tools tip on the first close pass (YELLOW/RED),
-    // when rolling up the panels (,) and stowing the struts (.) first matters.
+// Onboarding: one-shot dodge-tools tip on the first close pass (YELLOW/RED): roll up the panels (,), stow the struts (.)
     this._dodgeToolsTipSent = false;
 
-    // ST-6.3: MOID cache and badge state
     /** @type {Map<number|string, number>} debris id → MOID in metres */
     this._moidCache = new Map();
     /** @type {Map<number|string, string|null>} debris id → current badge tier */
@@ -116,13 +97,12 @@ export class ConjunctionSystem {
     eventBus.on(Events.ARM_CAPTURED, () => { this._onCapture(); });
     eventBus.on(Events.LASSO_CAPTURED, () => { this._onCapture(); });
 
-    // ST-4.C: Mission profile gate — additional suppression from mission profiles
     this._conjunctionAllowed = false;
     eventBus.on(Events.MISSION_START, (d) => {
       this._conjunctionAllowed = d.profile.conjunction;
     });
 
-    // ST-4.C: Self-reset on GAME_RESET (ConjunctionSystem is a singleton)
+// Singleton: self-reset on GAME_RESET
     eventBus.on(Events.GAME_RESET, () => this.reset());
 
     console.log(
@@ -131,27 +111,17 @@ export class ConjunctionSystem {
     );
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
-
   /**
-   * Main per-frame update.  Call from the game loop during active gameplay.
-   *
+   * Per-frame update; call during active gameplay.
    * @param {number}  dt          — Real-time delta (seconds)
-   * @param {object}  gameState   — GameState singleton
-   * @param {Array}   debrisList  — DebrisField.debrisList (flat array)
-   * @param {THREE.Vector3} playerPos — Player scene position
    * @param {{x:number,y:number,z:number}} playerVel — Player velocity (scene units/s)
-   * @param {boolean} isArmPilot  — True when ARM_PILOT camera mode is active
    * @param {number}  [dtWorld]   — World-simulation delta (game seconds); TimeAuthority-owned.
    * @param {boolean} [moidScreening] — True above ~10× warp: instantaneous proximity
    *   positions are meaningless when objects teleport per frame, so detection
-   *   switches to orbit-geometry MOID screening (T2, FloorContract F6/F7 warp-moid).
+   *   switches to orbit-geometry MOID screening.
    */
   update(dt, gameState, debrisList, playerPos, playerVel, isArmPilot,
          dtWorld = TimeAuthority.baseGameDt(dt), moidScreening = false) {
-    // Tick down active alert display timer
     if (this._alertActive) {
       this._alertTimer -= dt;
       if (this._alertTimer <= 0) {
@@ -159,25 +129,18 @@ export class ConjunctionSystem {
       }
     }
 
-    // Only scan during active gameplay states
     if (!gameState.isGameplay()) return;
 
-    // ST-2.1: Track mission elapsed time
     this._missionElapsed += dt;
 
-    // T2 warp screening: above ~10× the stochastic instantaneous-proximity scan
-    // below is invalid (objects jump kilometres per frame). Use phase-independent
-    // MOID screening instead and skip the proximity path entirely.
+    // Above ~10× warp the instantaneous-proximity scan below is invalid (objects jump kilometres per frame): use
+    // phase-independent MOID screening and skip the proximity path. Its alerts pass the same three guards as the
+    // proximity scan (mission profile, per-mission cap, arm-pilot) — see updateMOID / _moidAlertsAllowed.
     if (moidScreening) {
-      // Ladder T2: above ~10× warp (F6/F7) detection runs the MOID path. The
-      // alert side of that path is gated with the SAME three guards the
-      // proximity scan enforces below (mission-profile :556, per-mission cap
-      // :194, arm-pilot suppression :197) — see updateMOID / _moidAlertsAllowed.
       this.updateMOID(dt, debrisList, playerPos, playerVel, dtWorld, isArmPilot);
       return;
     }
 
-    // ST-2.1: Tick primer countdown → fire delayed first alert
     if (this._primerTimer > 0) {
       this._primerTimer -= dt;
       if (this._primerTimer <= 0 && this._pendingFirstAlert) {
@@ -187,58 +150,46 @@ export class ConjunctionSystem {
       }
     }
 
-    // Advance randomised check timer
     this._checkTimer += dt;
     if (this._checkTimer < this._nextCheckAt) return;
 
-    // Timer fired — reset and schedule next
     this._checkTimer = 0;
     this._nextCheckAt = this._randomInterval();
 
-    // Enforce per-mission alert cap
     if (this._alertCount >= MAX_ALERTS) return;
 
     // Suppress during ARM_PILOT — fine motor control must not be disrupted
     if (isArmPilot) return;
 
-    // Guard against missing data
     if (!debrisList || !playerPos || !playerVel) return;
 
-    // --- Scan for conjunctions ---
     const threat = this._scanForConjunctions(debrisList, playerPos, playerVel);
     if (!threat) return;
 
-    // Generate evasion recommendation
     const evasionVector = this._generateEvasionVector(
       threat.threatDir, playerPos,
     );
 
-    // Emit alert event
     this._emitAlert(threat.tier, threat.debris, threat.tca,
       threat.minDistScene, evasionVector);
   }
 
   /**
-   * ST-6.3: Separate MOID update — call from the game loop alongside update().
-   * Decoupled from the stochastic proximity scan so it runs on a fixed cadence.
-   * @param {number}  dt          — Real-time delta (seconds)
-   * @param {Array}   debrisList  — DebrisField.debrisList
-   * @param {THREE.Vector3} playerPos — Player scene position
+   * MOID update; call from the game loop alongside update(). Runs on a fixed cadence, decoupled from the
+   * stochastic proximity scan.
    * @param {{x,y,z}} playerVel — Player velocity (km/s)
    * @param {number}  [dtWorld]   — World-simulation delta (game seconds); TimeAuthority-owned.
-   * @param {boolean} [isArmPilot] — True when ARM_PILOT camera mode is active. The
-   *   MOID cache/badges still update (CollisionAvoidance's getTopRiskPairs must
-   *   stay live), but ALERT emission is suppressed — the same arm-pilot guard the
-   *   proximity path enforces (:197). Ladder MOID gating.
+   * @param {boolean} [isArmPilot] — The MOID cache/badges still update (CollisionAvoidance's getTopRiskPairs must
+   *   stay live), but ALERT emission is suppressed, as in the proximity path.
    */
   updateMOID(dt, debrisList, playerPos, playerVel, dtWorld = TimeAuthority.baseGameDt(dt),
              isArmPilot = false) {
-    if (!_computeMOID || !_classifyMOID) return; // MOID calculator not available
+    if (!_computeMOID || !_classifyMOID) return;
     if (!debrisList || !playerPos || !playerVel) return;
 
     const C = Constants.CONJUNCTION;
-    // Gotcha #4: MOID_RECOMPUTE_INTERVAL_S is in game seconds; dtWorld is the
-    // TimeAuthority-owned world delta (byte-identical to dt × base rate at 1×).
+    // MOID_RECOMPUTE_INTERVAL_S is in game seconds; dtWorld is the TimeAuthority-owned world delta
+    // (identical to dt × base rate at 1×).
     this._moidTimer += dtWorld;
 
     // Detect significant velocity change (>10 m/s) → force early recompute
@@ -247,20 +198,19 @@ export class ConjunctionSystem {
     );
     const dvMs = Math.abs(velMag - this._lastPlayerVelMag) * 1000; // km/s → m/s
     if (dvMs > 10) {
-      this._moidTimer = C.MOID_RECOMPUTE_INTERVAL_S; // force immediate recompute
+      this._moidTimer = C.MOID_RECOMPUTE_INTERVAL_S;
     }
 
     if (this._moidTimer < C.MOID_RECOMPUTE_INTERVAL_S) return;
     this._moidTimer = 0;
     this._lastPlayerVelMag = velMag;
 
-    // Derive player Keplerian orbit from position/velocity
     const S = Constants.SCENE_SCALE;
     const posKm = { x: playerPos.x / S, y: playerPos.y / S, z: playerPos.z / S };
     const playerOrbit = cartesianToKeplerian(posKm, playerVel);
     if (!playerOrbit || !isFinite(playerOrbit.semiMajorAxis) || playerOrbit.semiMajorAxis <= 0) return;
 
-    // Convert player orbit semiMajorAxis from km to metres for the _m API
+    // semiMajorAxis km → m for the _m API
     const playerMoidOrbit = {
       semiMajorAxis_m: playerOrbit.semiMajorAxis * 1000,
       eccentricity:    playerOrbit.eccentricity,
@@ -269,14 +219,11 @@ export class ConjunctionSystem {
       argPerigee:      playerOrbit.argPerigee,
     };
 
-    // Compute MOID for each debris object
     for (let i = 0, len = debrisList.length; i < len; i++) {
       const debris = debrisList[i];
       if (!debris.alive || !debris.orbit) continue;
-      // Mother-net-reel plan §1.3: a pinned/captured catch must never raise a
-      // MOID badge against its own captor — same exemption predicate as
-      // CollisionAvoidanceSystem._isThreatExempt. Transient for arm/lasso
-      // catches, PERMANENT for a berthed whale without this filter.
+      // A pinned/captured catch must never raise a MOID badge against its own captor (same exemption as
+      // CollisionAvoidanceSystem._isThreatExempt); without it a berthed whale would be a PERMANENT threat.
       if (debris._captured || debris._armPinned || debris._capturedByArm) continue;
 
       const moid = _computeMOID(playerMoidOrbit, debris.orbit);
@@ -286,24 +233,18 @@ export class ConjunctionSystem {
       const newBadge = badge === 'SAFE' ? null : badge;
       const oldBadge = this._moidBadges.get(debris.id) || null;
 
-      // Stamp badge onto the debris object for UI consumption
       debris.moidBadge = newBadge;
       debris.moid_m = moid;
 
-      // De-bounce: emit CONJUNCTION_ALERT only on UPWARD tier transitions AND
-      // only when alerts are allowed (Ladder MOID gating). The badge/cache state
-      // above always advances so CollisionAvoidance's getTopRiskPairs stays live
-      // and a later ungated frame won't re-fire an already-crossed transition.
+      // Emit CONJUNCTION_ALERT only on UPWARD tier transitions and only when alerts are allowed. Badge/cache state
+      // always advances so getTopRiskPairs stays live and a later ungated frame won't re-fire a crossed transition.
       if (this._isUpwardTransition(oldBadge, newBadge) && this._moidAlertsAllowed(isArmPilot)) {
         this._emitMoidAlert(debris, moid, newBadge);
-        this._alertCount++;   // MOID alerts consume the shared per-mission budget (:194)
-        // M3 review fix: a fired MOID alert must ALSO drive the S3 danger cap —
-        // main.js reads getStatus().alertActive as the warp danger signal, and
-        // on F6/F7 (moidScreening) the proximity path that normally sets it never
-        // runs, so without this the "alarms always land at 1×" invariant is dead
-        // exactly where warp exists. Mirror _doEmitAlert's display window
-        // (LO≈GREEN 5 s / MD≈YELLOW 10 s / HI≈RED 30 s); update()'s alert-timer
-        // countdown runs before the moidScreening early-return, so it decays.
+        this._alertCount++;   // MOID alerts consume the shared per-mission budget (MAX_ALERTS)
+        // A fired MOID alert must also drive the warp danger cap: main.js reads getStatus().alertActive as the warp
+        // danger signal, and under moidScreening the proximity path that normally sets it never runs (invariant:
+        // alarms always land at 1×). Display window mirrors _doEmitAlert (LO≈GREEN 5 s / MD≈YELLOW 10 s /
+        // HI≈RED 30 s); update() counts the timer down before its moidScreening return, so it decays.
         this._alertActive = true;
         this._alertTimer = newBadge === 'HI' ? 30 : newBadge === 'MD' ? 10 : 5;
       }
@@ -312,7 +253,6 @@ export class ConjunctionSystem {
     }
   }
 
-  /** Reset all state for a new mission. */
   reset() {
     this._checkTimer = 0;
     this._nextCheckAt = this._randomInterval();
@@ -320,7 +260,6 @@ export class ConjunctionSystem {
     this._currentThreat = null;
     this._alertActive = false;
     this._alertTimer = 0;
-    // ST-2.1: Reset gating state
     this._captureCount = 0;
     this._missionElapsed = 0;
     this._firstCaptureTime = null;
@@ -329,19 +268,14 @@ export class ConjunctionSystem {
     this._primerTimer = 0;
     this._pendingFirstAlert = null;
     this._dodgeToolsTipSent = false;
-    this._conjunctionAllowed = false;  // ST-4.C: reset mission profile gate
-    // ST-6.3: Reset MOID state
+    this._conjunctionAllowed = false;
     this._moidCache.clear();
     this._moidBadges.clear();
     this._moidTimer = 0;
     this._lastPlayerVelMag = 0;
   }
 
-  /**
-   * Current status snapshot (for HUD polling or debug overlay).
-   * @returns {{ currentThreat: object|null, alertActive: boolean,
-   *             alertCount: number, nextCheckIn: number }}
-   */
+  /** Status snapshot for HUD polling / debug overlay; nextCheckIn in real seconds. */
   getStatus() {
     return {
       currentThreat: this._currentThreat,
@@ -352,10 +286,9 @@ export class ConjunctionSystem {
   }
 
   /**
-   * ST-6.3: Return the top-N riskiest debris by MOID within the prefilter threshold.
-   * Used by CollisionAvoidanceSystem for hot-loop pre-filtering.
-   * @param {number} [n] — max items (defaults to Constants.CONJUNCTION.CA_TOP_N)
-   * @returns {Array<{id: *, moid: number}>} sorted ascending by MOID
+   * Top-N riskiest debris by MOID (m) within CA_MOID_PREFILTER_M, sorted ascending; CollisionAvoidanceSystem uses it
+   * to pre-filter its hot loop.
+   * @param {number} [n] — defaults to Constants.CONJUNCTION.CA_TOP_N
    */
   getTopRiskPairs(n) {
     const limit = n || Constants.CONJUNCTION.CA_TOP_N || 32;
@@ -370,31 +303,14 @@ export class ConjunctionSystem {
     return result.slice(0, limit);
   }
 
-  // ==========================================================================
-  // SCHEDULING
-  // ==========================================================================
-
-  /**
-   * @private Random real-second interval for the next conjunction check.
-   * @returns {number}
-   */
   _randomInterval() {
     return CHECK_MIN_S + Math.random() * (CHECK_MAX_S - CHECK_MIN_S);
   }
 
-  // ==========================================================================
-  // SCANNING
-  // ==========================================================================
-
   /**
-   * Scan the full debris list for the single most threatening upcoming
-   * conjunction within the look-ahead window.
-   *
+   * Most threatening upcoming conjunction within the look-ahead window, or null.
+   * @returns {object|null} { debris, tca, minDistScene, tier, threatDir }
    * @private
-   * @param {Array}  debrisList
-   * @param {{x,y,z}} playerPos
-   * @param {{x,y,z}} playerVel
-   * @returns {object|null} Best threat { debris, tca, minDistScene, tier, threatDir }
    */
   _scanForConjunctions(debrisList, playerPos, playerVel) {
     let best = null;
@@ -403,14 +319,11 @@ export class ConjunctionSystem {
     for (let i = 0, len = debrisList.length; i < len; i++) {
       const debris = debrisList[i];
       if (!debris.alive) continue;
-      // Mother-net-reel plan §1.3: pinned/captured catches are threat-exempt —
-      // a berthed whale sits ~5 m off the nose (trivially inside SCAN_RADIUS)
-      // with a co-orbitally matched velocity, so without this filter it wins
-      // bestDist EVERY scan, masks every genuine threat, burns the 3-alert
-      // budget, and repeatedly auto-disengages the autopilot.
+      // Pinned/captured catches are threat-exempt: a berthed whale sits ~5 m off the nose (inside SCAN_RADIUS) with
+      // a co-orbitally matched velocity, so it would win bestDist EVERY scan, mask real threats, burn the 3-alert
+      // budget and repeatedly auto-disengage the autopilot.
       if (debris._captured || debris._armPinned || debris._capturedByArm) continue;
 
-      // --- Fast pre-filter using cached scene position ---
       let dx, dy, dz;
       if (debris._scenePosition) {
         dx = debris._scenePosition.x - playerPos.x;
@@ -425,14 +338,12 @@ export class ConjunctionSystem {
       }
       if (dx * dx + dy * dy + dz * dz > SCAN_RADIUS_SQ) continue;
 
-      // --- Full cartesian state for velocity-based prediction ---
       const cart = orbitToSceneCartesian(debris.orbit);
       const prediction = this._predictClosestApproach(
         cart.position, cart.velocity, playerPos, playerVel,
       );
       if (!prediction) continue;
 
-      // Only interested if approaching (TCA > 0) and within GREEN envelope
       if (prediction.tca <= 0 || prediction.minDist > THRESHOLD_GREEN) continue;
 
       if (prediction.minDist < bestDist) {
@@ -450,13 +361,8 @@ export class ConjunctionSystem {
     return best;
   }
 
-  // ==========================================================================
-  // CLOSEST APPROACH PREDICTION (simplified linear propagation)
-  // ==========================================================================
-
   /**
-   * Compute time-of-closest-approach (TCA) and miss distance using constant-
-   * velocity (linear) extrapolation.  Analytically:
+   * TCA and miss distance by constant-velocity (linear) extrapolation:
    *
    *   TCA = − (Δr · Δv) / (Δv · Δv)    clamped to [0, LOOK_AHEAD_S]
    *   miss = |Δr + Δv · TCA|
@@ -464,12 +370,9 @@ export class ConjunctionSystem {
    * @private
    * @param {{x,y,z}} dPos  — debris position  (scene units)
    * @param {{x,y,z}} dVel  — debris velocity   (scene units / s)
-   * @param {{x,y,z}} pPos  — player position
-   * @param {{x,y,z}} pVel  — player velocity
    * @returns {{ tca:number, minDist:number, threatDir:{x,y,z} } | null}
    */
   _predictClosestApproach(dPos, dVel, pPos, pVel) {
-    // Relative position (scene units)
     const rpx = dPos.x - pPos.x;
     const rpy = dPos.y - pPos.y;
     const rpz = dPos.z - pPos.z;
@@ -481,19 +384,17 @@ export class ConjunctionSystem {
     const rvz = (dVel.z - pVel.z) * KM_TO_SCENE;
 
     const rvDotRv = rvx * rvx + rvy * rvy + rvz * rvz;
-    if (rvDotRv < 1e-24) return null; // negligible relative motion
+    if (rvDotRv < 1e-24) return null;
 
     const rpDotRv = rpx * rvx + rpy * rvy + rpz * rvz;
     let tca = -rpDotRv / rvDotRv;
     tca = clamp(tca, 0, LOOK_AHEAD_S);
 
-    // Miss vector at TCA
     const cx = rpx + rvx * tca;
     const cy = rpy + rvy * tca;
     const cz = rpz + rvz * tca;
     const minDist = Math.sqrt(cx * cx + cy * cy + cz * cz);
 
-    // Normalised threat approach direction (current relative position vector)
     const rLen = Math.sqrt(rpx * rpx + rpy * rpy + rpz * rpz);
     const threatDir = rLen > 1e-10
       ? { x: rpx / rLen, y: rpy / rLen, z: rpz / rLen }
@@ -502,35 +403,17 @@ export class ConjunctionSystem {
     return { tca, minDist, threatDir };
   }
 
-  // ==========================================================================
-  // CLASSIFICATION
-  // ==========================================================================
-
-  /**
-   * Classify threat tier from predicted miss distance.
-   * @private
-   * @param {number} minDistScene — miss distance in scene units
-   * @returns {string} 'GREEN' | 'YELLOW' | 'RED'
-   */
+  /** Threat tier from predicted miss distance (scene units). @private */
   _classifyThreat(minDistScene) {
     if (minDistScene < THRESHOLD_RED)    return TIER.RED;
     if (minDistScene < THRESHOLD_YELLOW) return TIER.YELLOW;
     return TIER.GREEN;
   }
 
-  // ==========================================================================
-  // EVASION VECTOR
-  // ==========================================================================
-
   /**
-   * Compute a recommended evasion direction perpendicular to the threat
-   * approach vector, preferring the radial (anti-Earth) direction so the
-   * manoeuvre stays in the orbital plane.
-   *
+   * Evasion direction perpendicular to the threat approach, preferring the radial (anti-Earth) direction so the
+   * manoeuvre stays in the orbital plane. Returns a normalised vector.
    * @private
-   * @param {{x,y,z}} threatDir  — normalised threat approach direction
-   * @param {{x,y,z}} playerPos  — player scene position (for radial ref)
-   * @returns {{x:number, y:number, z:number}} normalised evasion vector
    */
   _generateEvasionVector(threatDir, playerPos) {
     // Radial "up" — away from Earth centre
@@ -554,14 +437,6 @@ export class ConjunctionSystem {
     return { x: radial.z, y: 0, z: -radial.x };
   }
 
-  // ==========================================================================
-  // ALERT EMISSION
-  // ==========================================================================
-
-  /**
-   * Handle a capture event (arm or lasso). ST-2.1.
-   * @private
-   */
   _onCapture() {
     this._captureCount++;
     if (this._firstCaptureTime === null) {
@@ -570,26 +445,23 @@ export class ConjunctionSystem {
   }
 
   /**
-   * Gate and emit a CONJUNCTION_WARNING event.
-   * Applies capture-count, elapsed-time, and first-alert GREEN gating (ST-2.1).
+   * Gate and emit a CONJUNCTION_WARNING: mission-profile, capture-count, elapsed-time and first-alert GREEN gating.
    * @private
    */
   _emitAlert(tier, debris, tca, distScene, evasionVector) {
-    // ST-4.C: Mission profile gate — BOTH skill gate AND profile must pass
+    // Mission profile gate — BOTH skill gate AND profile must pass
     if (!this._conjunctionAllowed) return;
 
-    // ST-2.1: Capture-count + elapsed gating
     const C = Constants.CONJUNCTION;
     if (this._captureCount < C.MIN_CAPTURES) return;
     if (this._firstCaptureTime === null) return;
     if ((this._missionElapsed - this._firstCaptureTime) < C.MIN_ELAPSED_S) return;
 
-    // ST-2.1: First-alert handling — force GREEN, queue comms primer
+    // First alert: force GREEN, queue comms primer
     if (!this._firstAlertFired) {
       tier = TIER.GREEN;
 
       if (!this._primerSent) {
-        // Emit comms primer and delay first alert by PRIMER_LEAD_S
         this._primerSent = true;
         this._primerTimer = C.PRIMER_LEAD_S;
         this._pendingFirstAlert = { tier, debris, tca, distScene, evasionVector };
@@ -599,29 +471,24 @@ export class ConjunctionSystem {
           priority: 'INFO',
           text: 'CONJUNCTION TRACKING ONLINE<br>Orbital debris paths sometimes cross yours. Green = informational.<br>Check SPECS [?] for details.',
         });
-        return; // Don't emit alert yet — primer leads by 5s
+        return;
       }
 
-      // Primer already sent — waiting for timer to expire. Ignore additional scans.
       return;
     }
 
     this._doEmitAlert(tier, debris, tca, distScene, evasionVector);
   }
 
-  /**
-   * Perform the actual alert emission (no gating). ST-2.1 split from _emitAlert.
-   * @private
-   */
+  /** Emit the alert with no gating (split from _emitAlert). @private */
   _doEmitAlert(tier, debris, tca, distScene, evasionVector) {
     this._firstAlertFired = true;
     this._alertCount++;
     this._alertActive = true;
 
     const distMeters = Math.round(distScene / M);
-    this._currentThreat = { tier, debrisId: debris.id, debrisType: debris.type, tca, distMeters };   // Session M: the NEXT pane's TCA row labels by type
+    this._currentThreat = { tier, debrisId: debris.id, debrisType: debris.type, tca, distMeters };   // debrisType: the NEXT pane's TCA row labels by type
 
-    // Display duration by tier
     switch (tier) {
       case TIER.GREEN:  this._alertTimer = 5;  break;
       case TIER.YELLOW: this._alertTimer = 10; break;
@@ -639,19 +506,18 @@ export class ConjunctionSystem {
       alertNumber:  this._alertCount,
     });
 
-    // UX-2 #2: Route conjunction alerts through comms panel
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: '18th Space Defense Squadron',
       channel: 'ALERT',
       priority: tier === TIER.RED ? 'critical' : tier === TIER.YELLOW ? 'warning' : 'info',
-      // CP-4: an imminent (RED) conjunction must reach the player at ANY suppression
-      // tier — the explicit _critical tag bypasses the post-onboarding wake ramp.
+      // An imminent (RED) conjunction must reach the player at ANY suppression tier: _critical bypasses the
+      // post-onboarding wake ramp.
       _critical: tier === TIER.RED,
       text: `CONJUNCTION ${tier}: ${(debris.type || 'UNKNOWN').toUpperCase()} #${debris.id} at ${distMeters}m in ${Math.round(tca)}s`,
     });
 
-    // Onboarding (JIT): the first real close pass is when protecting extended
-    // hardware first matters. Teach the two dodge-tool keys in one comms line.
+    // Onboarding (JIT): the first real close pass is when protecting extended hardware matters; teach the two
+    // dodge-tool keys in one comms line.
     if (!this._dodgeToolsTipSent && (tier === TIER.YELLOW || tier === TIER.RED)) {
       this._dodgeToolsTipSent = true;
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -668,10 +534,6 @@ export class ConjunctionSystem {
     );
   }
 
-  /**
-   * Clear the active alert and emit CONJUNCTION_CLEAR.
-   * @private
-   */
   _clearAlert() {
     if (!this._alertActive) return;
     this._alertActive = false;
@@ -683,20 +545,12 @@ export class ConjunctionSystem {
     });
   }
 
-  // ==========================================================================
-  // ST-6.3: MOID BADGE LOGIC
-  // ==========================================================================
-
-  /** Badge-tier ordering for upward-transition detection. @private */
+  /** Badge-tier rank for upward-transition detection. @private */
   static _TIER_ORDER = { HI: 3, MD: 2, LO: 1 };
 
   /**
-   * Check if new badge is a more severe tier than old badge.
-   * null→LO, null→MD, null→HI, LO→MD, LO→HI, MD→HI are all "upward".
+   * True if newBadge is more severe than oldBadge (null→LO/MD/HI, LO→MD/HI, MD→HI).
    * @private
-   * @param {string|null} oldBadge
-   * @param {string|null} newBadge
-   * @returns {boolean}
    */
   _isUpwardTransition(oldBadge, newBadge) {
     if (!newBadge) return false; // new is SAFE — never emit
@@ -706,19 +560,13 @@ export class ConjunctionSystem {
   }
 
   /**
-   * Ladder MOID gating (docs/ladder/02-traps.md T2 "MOID screening"): the
-   * warp-time MOID alert path must be gated behind the SAME three guards the
-   * stochastic proximity scan enforces, so F6/F7 MOID screening cannot spam
-   * unbounded, ungated CONJUNCTION_ALERTs the moment it engages:
-   *   1. `_conjunctionAllowed` — mission-profile gate (proximity path :556);
-   *   2. `_alertCount < MAX_ALERTS` — per-mission cap (proximity path :194,
-   *      shared budget: MOID alerts increment `_alertCount` too);
-   *   3. `!isArmPilot` — arm-pilot suppression (proximity path :197).
-   * Note this gates only ALERT EMISSION, never the MOID cache/badge update
-   * (getTopRiskPairs / debris.moidBadge must stay live regardless).
+   * Gates the warp-time MOID alert path behind the same three guards as the proximity scan
+   * (archive/ladder/02-traps.md T2 "MOID screening"), so MOID screening cannot spam ungated CONJUNCTION_ALERTs:
+   *   1. `_conjunctionAllowed` — mission-profile gate (_emitAlert);
+   *   2. `_alertCount < MAX_ALERTS` — per-mission cap, shared: MOID alerts increment `_alertCount` too;
+   *   3. `!isArmPilot` — arm-pilot suppression (update).
+   * Gates ALERT EMISSION only, never the MOID cache/badge update (getTopRiskPairs / debris.moidBadge stay live).
    * @private
-   * @param {boolean} isArmPilot
-   * @returns {boolean}
    */
   _moidAlertsAllowed(isArmPilot) {
     if (!this._conjunctionAllowed) return false;
@@ -727,11 +575,7 @@ export class ConjunctionSystem {
     return true;
   }
 
-  /**
-   * Emit a CONJUNCTION_ALERT for a MOID-based tier transition.
-   * Additive to ST-6.1's active-sat arming RED path.
-   * @private
-   */
+  /** CONJUNCTION_ALERT for a MOID tier transition; additive to the active-sat arming RED path. @private */
   _emitMoidAlert(debris, moid_m, badge) {
     eventBus.emit(Events.CONJUNCTION_ALERT, {
       severity:   badge,
@@ -743,9 +587,8 @@ export class ConjunctionSystem {
       moidBadge:  badge,
     });
 
-    // Also push into the comms feed — embed styled badge HTML in text because
-    // CommsSystem constructs new message objects (standard fields only), so
-    // custom metadata fields would be dropped before reaching CommsPanel.
+    // Also into the comms feed: badge HTML is embedded in text because CommsSystem rebuilds messages with standard
+    // fields only, so custom metadata would be dropped before CommsPanel.
     const C = Constants.CONJUNCTION;
     const color = badge === 'HI' ? C.BADGE_COLOR_HI
       : badge === 'MD' ? C.BADGE_COLOR_MD : C.BADGE_COLOR_LO;

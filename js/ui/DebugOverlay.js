@@ -1,6 +1,5 @@
 /**
- * DebugOverlay.js — Ctrl+D toggleable performance metrics overlay
- * Shows FPS, frame time, entity counts, arm status, and game state.
+ * DebugOverlay.js — Ctrl+D performance metrics overlay (FPS, frame time, entity counts, arms, game state).
  * @module ui/DebugOverlay
  */
 
@@ -13,7 +12,6 @@ export class DebugOverlay {
         this._build();
     }
 
-    /** @private */
     _build() {
         this._element = document.createElement('div');
         this._element.id = 'debug-overlay';
@@ -28,17 +26,12 @@ export class DebugOverlay {
         document.body.appendChild(this._element);
     }
 
-    /** Toggle visibility */
     toggle() {
         this.visible = !this.visible;
         this._element.style.display = this.visible ? 'block' : 'none';
     }
 
-    /**
-     * Record a frame timestamp for FPS calculation.
-     * Call this at the start of each frame.
-     * @param {number} frameTimeMs - Time for this frame in ms
-     */
+    /** @param {number} frameTimeMs - time for this frame, ms (call once per frame) */
     recordFrame(frameTimeMs) {
         this._frameTimeSamples.push(frameTimeMs);
         if (this._frameTimeSamples.length > this._maxSamples) {
@@ -46,12 +39,7 @@ export class DebugOverlay {
         }
     }
 
-    /**
-     * PR 4 / P1.5 — peek the latest instantaneous FPS without touching the UI.
-     * Returns 0 if no sample has been recorded yet or last frame had zero time.
-     * Used by main.js to feed the QualityManager.runtimeAdapt() history buffer.
-     * @returns {number}
-     */
+    /** Latest instantaneous FPS without touching the UI; 0 if no sample or zero frame time. Feeds main.js runtimeAdapt. */
     getLastFps() {
         const samples = this._frameTimeSamples;
         if (!samples.length) return 0;
@@ -61,24 +49,12 @@ export class DebugOverlay {
     }
 
     /**
-     * Update display with current game metrics.
-     * @param {object} data
-     * @param {string} data.gameState - Current game state string
-     * @param {number} data.debrisCount - Interactive debris count
-     * @param {number} data.bgDebrisCount - Background debris count
-     * @param {number} data.activeSatCount - Active satellite count
-     * @param {number} [data.armsDeployed=0] - Number of deployed arms
-     * @param {number} [data.armsDocked=0] - Number of docked arms
-     * @param {number} [data.armsExpended=0] - Number of expended arms
-     * @param {string} [data.cameraView=''] - Current camera view name
-     * @param {number} [data.drawCalls=0] - WebGL draw calls
-     * @param {number} [data.triangles=0] - WebGL triangles
-     * @param {number} [data.textures=0] - WebGL textures in memory
+     * @param {object} data  gameState, debrisCount, bgDebrisCount, activeSatCount, and optional armsDeployed /
+     *   armsDocked / armsExpended, cameraView, drawCalls, triangles, textures, welcomeDebris
      */
     update(data) {
         if (!this.visible) return;
 
-        // Calculate FPS and avg frame time
         const samples = this._frameTimeSamples;
         const avgFrameTime = samples.length > 0
             ? samples.reduce((a, b) => a + b, 0) / samples.length
@@ -86,7 +62,6 @@ export class DebugOverlay {
         const fps = avgFrameTime > 0 ? Math.round(1000 / avgFrameTime) : 0;
         const frameTimeStr = avgFrameTime.toFixed(1);
 
-        // Min/max frame time
         const minFrame = samples.length > 0 ? Math.min(...samples).toFixed(1) : '0.0';
         const maxFrame = samples.length > 0 ? Math.max(...samples).toFixed(1) : '0.0';
 
@@ -98,14 +73,11 @@ export class DebugOverlay {
             `Arms: ${data.armsDocked || 0} docked · ${data.armsDeployed || 0} out · ${data.armsExpended || 0} spent`,
         ];
 
-        // WebGL stats (if available)
         if (data.drawCalls || data.triangles) {
             lines.push(`GL: ${data.drawCalls} draws | ${data.triangles} tris | ${data.textures} tex`);
         }
 
-        // Mission-1 welcome-field diagnostics (size / position / visibility per piece).
-        // Provided by DebrisField.getWelcomeFieldDiagnostics(); only present on
-        // mission 1 (the curated learning cluster). Used to tune first-mission layout.
+        // Mission 1 only: DebrisField.getWelcomeFieldDiagnostics(), used to tune the first-mission layout.
         if (Array.isArray(data.welcomeDebris) && data.welcomeDebris.length) {
             lines.push('── M1 Welcome Debris (size/pos/vis) ──');
             for (const p of data.welcomeDebris) {
@@ -116,26 +88,19 @@ export class DebugOverlay {
         this._element.textContent = lines.join('\n');
     }
 
-    /**
-     * Format one welcome-field diagnostic piece into two compact overlay lines.
-     * @private
-     * @param {object} p - entry from DebrisField.getWelcomeFieldDiagnostics()
-     * @returns {string}
-     */
+    /** One DebrisField.getWelcomeFieldDiagnostics() entry as two overlay lines. */
     _formatWelcomePiece(p) {
         const m = (v, suffix = '') => (Number.isFinite(v) ? `${v.toFixed(0)}${suffix}` : '?');
         const m1 = (v) => (Number.isFinite(v) ? v.toFixed(2) : '?');
         const signed = (v) => (Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${v.toFixed(0)}` : '?');
 
-        // Line 1 — identity + SIZE + POSITION.
         const type = (p.type || '?').slice(0, 4).padEnd(4, ' ');
         const size = `${m1(p.sizeM)}m→${m1(p.renderM)}m`;
         const range = `rng ${m(p.rangeM, 'm')}`;
         const frame = `fwd ${signed(p.fwdM)} lat ${signed(p.latM)}`;
         const head = `D${p.label} ${type} ${size}  ${range} ${frame}`;
 
-        // Line 2 — VISIBILITY state. ✓/✗ alive+rendered, disc/hid, trk, pin,
-        // captured, net-range, and the distance-LOD tier.
+        // Line 2: visibility (alive+rendered), discovered, tracked, pinned, captured, net range, distance-LOD tier.
         const vis = p.visible ? '✓vis' : '✗hidden';
         const disc = p.discovered ? '●disc' : '○undisc';
         const trk = p.tracked ? 'trk' : 'no-trk';
@@ -147,7 +112,6 @@ export class DebugOverlay {
         return `${head}\n${state}`;
     }
 
-    /** Remove from DOM */
     dispose() {
         if (this._element && this._element.parentNode) {
             this._element.parentNode.removeChild(this._element);

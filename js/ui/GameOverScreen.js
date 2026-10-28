@@ -16,17 +16,12 @@ export const GAME_OVER_REASONS = {
   collision: 'COLLISION WITH ACTIVE SATELLITE',
   debris: 'CATASTROPHIC DEBRIS COLLISION',
   fuel: 'FUEL DEPLETED. STRANDED IN ORBIT',
-  // t1-stranded: both tanks empty and no way to get more (GameFlowManager.update, STRANDED_GRACE_S). True mid-mission
-  // (no store in flight, u1-resupply-stop, owner 2026-10-17) and at a stop the credits can't pay for.
+  // Both tanks empty and no way to get more (GameFlowManager.update, STRANDED_GRACE_S): mid-mission,
+  // or at a stop the credits can't pay for.
   stranded: 'OUT OF GAS. STRANDED IN ORBIT',
   reentry: 'UNCONTROLLED REENTRY',
-  // NOTE: no 'battery' reason. Battery depletion folds into 'fuel'
-  // (ResourceSystem fires RESOURCE_DEPLETED{reason:'fuel'} only when xenon AND
-  // coldGas AND battery are all 0; battery self-recharges in sunlight/RTG/beam,
-  // so a battery-alone death is transient by design). The other resource reason
-  // is 'stranded' (t1-stranded): both gas tanks empty and no gas to be had (mid-
-  // mission, or a stop the credits can't pay) — GameFlowManager.update, STRANDED_GRACE_S.
-  // A real power-failure death mechanic is a backlog item (ROADMAP §7, via PowerDistribution).
+  // No 'battery' reason: ResourceSystem fires RESOURCE_DEPLETED{reason:'fuel'} only when xenon AND coldGas AND
+  // battery are all 0 (battery self-recharges in sunlight/RTG/beam, so a battery-alone death is transient).
 };
 
 const ADR_FACTS = [
@@ -47,21 +42,19 @@ export class GameOverScreen {
     this.visible = false;
     this._isWin = false;
     this._shopScreen = null;
-    /** @type {'debris'|'elevator'} which win path triggered (Phase E). */
+    /** @type {'debris'|'elevator'} which win path triggered. */
     this._winType = 'debris';
     /** @type {number} kg delivered to the GEO anchor (elevator win). */
     this._winTotalMassKg = 0;
     this._build();
 
-    // Self-manage visibility via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to, payload }) => {
       if (to === GameStates.GAME_OVER) this.showGameOver(payload);
       else if (to === GameStates.WIN) this.showVictory();
       else this.hide();
     });
 
-    // Phase E: capture the win variant. GAME_WIN is emitted immediately before
-    // the WIN state transition, so this runs before showVictory() reads it.
+    // GAME_WIN is emitted immediately before the WIN state transition, so this runs before showVictory() reads it.
     eventBus.on(Events.GAME_WIN, (data) => {
       this._winType = (data && data.winType) || 'debris';
       this._winTotalMassKg = (data && typeof data.totalMassKg === 'number') ? data.totalMassKg : 0;
@@ -69,7 +62,6 @@ export class GameOverScreen {
   }
 
   /**
-   * Set the shop screen reference for reading upgrade count.
    * @param {import('./ShopScreen.js').ShopScreen} shop
    */
   setShopScreen(shop) {
@@ -131,7 +123,6 @@ export class GameOverScreen {
     this.element.style.display = 'none';
     this.container.appendChild(this.element);
 
-    // Button events
     const retryBtn = this.element.querySelector('#gameover-retry-btn');
     retryBtn.addEventListener('click', () => {
       audioSystem.playClick();
@@ -195,9 +186,7 @@ export class GameOverScreen {
     const stats = scoringSystem.getStats();
     const credits = scoringSystem.credits || 0;
     const carriedCredits = Math.floor(credits * 0.5);
-    // Mission number shares the clamped mission-arc math with the Briefing card
-    // and continue-flow comms via getMissionProgress (js/core/missionProgress.js)
-    // so a boundary death at exactly WIN_DEBRIS_COUNT never drifts to "Mission 13".
+    // Clamped via getMissionProgress so a death at exactly WIN_DEBRIS_COUNT never shows "Mission 13".
     const { missionNum } = getMissionProgress(stats.debrisCleared);
     const upgradeCount = this._getUpgradeCount();
     statsEl.innerHTML = `
@@ -220,7 +209,7 @@ export class GameOverScreen {
       </div>
     `;
 
-    // Show continue button on game over, reset retry button text (may say "PLAY AGAIN" after a win)
+    // Retry text may say "PLAY AGAIN" after a win
     const retryBtn = this.element.querySelector('#gameover-retry-btn');
     if (retryBtn) retryBtn.textContent = 'TRY AGAIN';
     const continueBtn = this.element.querySelector('#gameover-continue-btn');
@@ -228,15 +217,11 @@ export class GameOverScreen {
 
     factEl.textContent = ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
 
-    // Play game over sound
     audioSystem.playGameOver();
 
     this.show();
   }
 
-  /**
-   * Show victory screen.
-   */
   showVictory() {
     this._isWin = true;
     if (this._winType === 'elevator') {
@@ -244,7 +229,6 @@ export class GameOverScreen {
     } else {
       this._showDebrisVictory();
     }
-    // Rename retry button + hide continue (shared across both win variants)
     const retryBtn = this.element.querySelector('#gameover-retry-btn');
     if (retryBtn) retryBtn.textContent = 'PLAY AGAIN';
     const continueBtn = this.element.querySelector('#gameover-continue-btn');
@@ -254,8 +238,7 @@ export class GameOverScreen {
   }
 
   /**
-   * @private Phase E — the anchor-run / elevator win cinematic. Headline is the
-   * tonnage delivered to the GEO anchor; closes on the JWST narration.
+   * @private The anchor-run / elevator win. Headline is the tonnage delivered to the GEO anchor.
    */
   _showElevatorVictory() {
     const titleEl = this.element.querySelector('#gameover-title');
@@ -310,9 +293,7 @@ export class GameOverScreen {
     reasonEl.textContent = 'The orbital environment has been stabilized. Outstanding work, Cowboy.';
 
     const stats = scoringSystem.getStats();
-    // Missions completed — shares the clamped mission-arc math with the Briefing
-    // card, death summary, and continue-flow comms via getMissionProgress
-    // (js/core/missionProgress.js) so the victory count can never drift.
+    // Clamped via getMissionProgress (shared with Briefing card and death summary) so the count can't drift.
     const { missionsCompleted: missionCount } = getMissionProgress(stats.debrisCleared);
     const upgradeCount = this._getUpgradeCount();
     statsEl.innerHTML = `
@@ -342,7 +323,6 @@ export class GameOverScreen {
     factEl.textContent = ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
   }
 
-  /** @private Get total upgrade count from shop screen */
   _getUpgradeCount() {
     if (!this._shopScreen) return 0;
     let count = 0;
@@ -350,13 +330,9 @@ export class GameOverScreen {
     return count;
   }
 
-  /** @private Get rating based on stats */
   _getRating(stats) {
-    // E1/E4 recalibration: bands re-derived from scripted full-run score data
-    // AFTER the ledger split (sales no longer inflate score) AND the 60-clear
-    // retune. Simulated full runs score ~53k (low skill) → ~96k (high skill), so
-    // the old 8k/15k/30k/50k bands saturated at ACE for everyone. These bands
-    // separate a died-early partial run (ROOKIE) from a skilled completion (ACE).
+    // Bands from scripted full-run scores (~53k low skill to ~96k high skill); a died-early partial run
+    // is ROOKIE, a skilled completion ACE.
     const score = stats.totalScore;
     if (score >= 95000) return '●●●●● ACE COWBOY';
     if (score >= 78000) return '●●●●○ VETERAN';
@@ -368,7 +344,6 @@ export class GameOverScreen {
   show() {
     this.visible = true;
     this.element.style.display = 'flex';
-    // Fade in
     this.element.style.opacity = '0';
     requestAnimationFrame(() => {
       this.element.style.opacity = '1';

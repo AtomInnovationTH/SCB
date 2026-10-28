@@ -1,54 +1,38 @@
 /**
- * HullCamFloor.js — the Zoom Ladder HULL CAM floor (id 1) content orchestrator
- * (S4, FloorContract.FLOORS[2]).
+ * HullCamFloor.js — the Zoom Ladder HULL CAM floor (id 1) content orchestrator (FloorContract.FLOORS[2]).
  *
- * HULL CAM is the subject-anchored close-inspection floor (2–6 m; the F1/F2
- * boundary moved 12 → 7 m on 2026-09-16 and 7 → 6 m on 2026-09-21, the latter
- * taking the lens split 5 → 4 m with it). This module is
- * the floor's "costume" controller: it owns the blueprint/inspect surface while the
- * ladder is on the floor (costume.transform 'lens-split-4m'):
- *   - the BlueprintOverlay callout layer — leader-lined labels on the seven
- *     manifest subsystems (ENGINEERING / POWER / BERTHS / COMMS / CARGO /
- *     SENSORS / THERMAL — D9, js/data/blueprintSubsystems.js), filling the
- *     floor's labelBudget (7) exactly;
- *   - the LENS SPLIT at 4 m (FLOOR.lens.splitAtM, 00-spec.md §3 F1): the camera
- *     distance picks the DEFAULT lens — *detail* below the split (ONE focused
- *     subsystem, expanded readout from real systems via injected providers)
- *     vs *overview* at/above it (all callouts, compact). Crossing the split
- *     re-arms the distance default (any toggle override clears);
- *   - the Space verb 'lens-toggle' (00-spec.md §5): one key cycles
- *     overview → detail(sub₁) → detail(sub₂) → … → detail(subₙ) → overview,
- *     so the verb both toggles the lens AND switches the focused subsystem —
- *     exposed as lensToggle() for the serial track to wire.
+ * HULL CAM is the subject-anchored close-inspection floor (2–6 m). This module is the floor's "costume" controller:
+ * it owns the blueprint/inspect surface while the ladder is on the floor (costume.transform 'lens-split-4m'):
+ *   - the BlueprintOverlay callout layer: leader-lined labels on the seven manifest subsystems (ENGINEERING / POWER /
+ *     BERTHS / COMMS / CARGO / SENSORS / THERMAL, js/data/blueprintSubsystems.js), filling the floor's labelBudget (7)
+ *     exactly;
+ *   - the LENS SPLIT at 4 m (FLOOR.lens.splitAtM, 00-spec.md §3 F1): the camera distance picks the DEFAULT lens:
+ *     *detail* below the split (ONE focused subsystem, expanded readout from real systems via injected providers) vs
+ *     *overview* at/above it (all callouts, compact). Crossing the split re-arms the distance default (any toggle
+ *     override clears);
+ *   - the Space verb 'lens-toggle' (00-spec.md §5): one key cycles overview → detail(sub₁) → detail(sub₂) → … →
+ *     detail(subₙ) → overview, so the verb both toggles the lens AND switches the focused subsystem; exposed as
+ *     lensToggle().
  *
- * DESIGN (docs/ladder/03-plan.md, this is the PARALLEL track — NavcomFloor is
- * the template):
- *   - Every dependency is INJECTED and optional, so the module is unit-testable
- *     headless (no THREE, no DOM, no EventBus). The projector
- *     `(shipLocalU) -> {x,y,visible}` is passed in (the serial track composes
- *     player.localToWorld ∘ world→screen); anchors resolve through an optional
- *     `shipMeshSource.getAnchorLocalU(meshName)` adapter (live-mesh anchors,
- *     the MotherCallouts T1 pattern) with the static manifest
- *     offset as the designed fallback — never a hole, never a throw.
- *   - `providers[readout]()` feeds the detail lens live rows (power/thermal/…
- *     numbers); absent or throwing providers degrade to the static spec rows
- *     (MotherCallouts._liveRows best-effort precedent).
- *   - CLICK (Wave 4, 08-workbench D2): the constructor wires the overlay's
- *     setOnSelect sink into focusById (the ClusterIcons → NavcomFloor shape),
- *     so a card click focuses that subsystem; title clicks deep-link the Tech
- *     Library from inside BlueprintOverlay (CODEX_OPEN_ENTRY — the
- *     MotherCallouts grammar). codexId rides the render items.
- *   - It emits NO events itself. The legacy inspect side-effects (FOV narrow,
- *     dynamic near-plane, background dim, hull-overlay events, onboarding
- *     signal — CameraSystem._setInspectZoom, 02-traps.md T6) are SERIAL-track
- *     territory: they become the 3/4 down-hump's arrival effects and are
- *     specced in HANDOFF.md, deliberately NOT reimplemented here.
+ * DESIGN (archive/ladder/03-plan.md; NavcomFloor is the template):
+ *   - Every dependency is INJECTED and optional, so the module is unit-testable headless (no THREE, DOM or EventBus).
+ *     The projector `(shipLocalU) -> {x,y,visible}` is passed in (the serial track composes player.localToWorld ∘
+ *     world→screen); anchors resolve through an optional `shipMeshSource.getAnchorLocalU(meshName)` adapter
+ *     (live-mesh anchors, the MotherCallouts pattern) with the static manifest offset as the designed fallback:
+ *     never a hole, never a throw.
+ *   - `providers[readout]()` feeds the detail lens live rows (power/thermal/… numbers); absent or throwing providers
+ *     degrade to the static spec rows (MotherCallouts._liveRows best-effort precedent).
+ *   - CLICK (08-workbench D2): the constructor wires the overlay's setOnSelect sink into focusById (the ClusterIcons →
+ *     NavcomFloor shape), so a card click focuses that subsystem; title clicks deep-link the Tech Library from inside
+ *     BlueprintOverlay (CODEX_OPEN_ENTRY, the MotherCallouts grammar). codexId rides the render items.
+ *   - It emits NO events itself. The legacy inspect side-effects (FOV narrow, dynamic near-plane, background dim,
+ *     hull-overlay events, onboarding signal; CameraSystem._setInspectZoom, archive/ladder/02-traps.md T6) are
+ *     SERIAL-track territory: they become the 3/4 down-hump's arrival effects (specced in HANDOFF.md), deliberately
+ *     NOT reimplemented here.
  *
- * LadderController drives this (HANDOFF spec): it activates the floor content
- * on arrival at floor 3, deactivates on leaving, and dispatches the
- * 'lens-toggle' verb decision to lensToggle(). main.js is the single ticker
- * (update({distM, project}) once per frame after cameraSystem.update — the
- * NavcomFloor precedent).
+ * LadderController drives this: it activates the floor content on arrival at floor 3, deactivates on leaving, and
+ * dispatches the 'lens-toggle' verb decision to lensToggle(). main.js is the single ticker (update({distM, project})
+ * once per frame after cameraSystem.update, the NavcomFloor precedent).
  *
  * @module systems/HullCamFloor
  */
@@ -57,7 +41,7 @@ import { FloorContract } from '../core/FloorContract.js';
 import { BlueprintOverlay, CARD_ROW_BUDGET } from '../ui/BlueprintOverlay.js';
 import { BLUEPRINT_SUBSYSTEMS, anchorLocalU, M_TO_U } from '../data/blueprintSubsystems.js';
 
-/** The F1 (HULL CAM) contract row — by id, never by index (Session H). */
+/** The HULL CAM contract row: by id, never by index. */
 const FLOOR = FloorContract.byId(1);
 
 /** The two lens modes, straight from the contract (['detail', 'overview']). */
@@ -65,21 +49,18 @@ const [LENS_DETAIL, LENS_OVERVIEW] = FLOOR.lens.modes;
 
 export class HullCamFloor {
   /**
+  /**
    * @param {object} [deps]
-   * @param {object} [deps.player]         - subject/ship ref (reserved for the
-   *                 serial track's projector + daughter re-anchoring; unused
-   *                 headless so tests need no stub)
-   * @param {object} [deps.shipMeshSource] - OPTIONAL live-anchor adapter:
-   *                 getAnchorLocalU(meshName) -> {x,y,z} ship-local scene units
-   *                 (or null → static manifest fallback). The serial track
-   *                 builds it from player.getObjectByName + worldToLocal.
+   * @param {object} [deps.player]         - subject/ship ref (reserved for the serial track's projector + daughter
+   *                 re-anchoring; unused headless so tests need no stub)
+   * @param {object} [deps.shipMeshSource] - OPTIONAL live-anchor adapter: getAnchorLocalU(meshName) -> {x,y,z}
+   *                 ship-local scene units (or null → static manifest fallback). Built from
+   *                 player.getObjectByName + worldToLocal.
    * @param {function} [deps.project]      - default projector (shipLocalU)->{x,y,visible}
    * @param {object} [deps.overlay]        - BlueprintOverlay instance (default: fresh)
-   * @param {object} [deps.providers]      - detail-lens readout sources keyed by
-   *                 the manifest `readout` ids ('power', 'thermal', 'comms',
-   *                 'engineering', 'cargo'). Each is () => Array<string> row
-   *                 lines (or a plain object → 'KEY: value' rows). Fake-able
-   *                 in tests; absent/throwing → static spec rows only.
+   * @param {object} [deps.providers]      - detail-lens readout sources keyed by the manifest `readout` ids ('power',
+   *                 'thermal', 'comms', 'engineering', 'cargo'). Each is () => Array<string> row lines (or a plain
+   *                 object → 'KEY: value' rows). Absent/throwing → static spec rows only.
    */
   constructor(deps = {}) {
     this._player = deps.player || null;
@@ -88,21 +69,18 @@ export class HullCamFloor {
     this._overlay = deps.overlay || new BlueprintOverlay();
     this._providers = deps.providers || null;
 
-    // Card click → subsystem focus: the exact ClusterIcons →
-    // NavcomFloor.focusById wiring shape (08-workbench §7). Title clicks
-    // deep-link the codex inside the overlay itself (CODEX_OPEN_ENTRY, the
-    // MotherCallouts grammar) — no wiring needed here. Changes nothing
-    // headless and paints nothing extra.
+    // Card click → subsystem focus: the ClusterIcons → NavcomFloor.focusById wiring shape (08-workbench §7). Title
+    // clicks deep-link the codex inside the overlay itself (CODEX_OPEN_ENTRY): no wiring needed here.
     if (typeof this._overlay.setOnSelect === 'function') {
       this._overlay.setOnSelect((id) => this.focusById(id));
     }
 
     this._active = false;
-    /** Priority-ranked manifest (the carousel + budget order — one law). */
+    /** Priority-ranked manifest (the carousel + budget order). */
     this._ranked = BlueprintOverlay.rank(BLUEPRINT_SUBSYSTEMS, BLUEPRINT_SUBSYSTEMS.length);
     this._focusId = this._ranked.length ? this._ranked[0].id : null;
-    /** Distance-picked default lens. Arrival from above (entry z01 0.75 ≈ 7.9 m)
-     *  is the common case, so the pre-first-sample default is overview. */
+    /** Distance-picked default lens. Arrival from above (entry z01 0.75 ≈ 7.9 m) is the common case, so the
+     *  pre-first-sample default is overview. */
     this._lensDefault = LENS_OVERVIEW;
     /** Player toggle override; cleared whenever the distance default flips. */
     this._lensOverride = null;
@@ -112,8 +90,7 @@ export class HullCamFloor {
   static get SPLIT_M() { return FLOOR.lens.splitAtM; }
 
   /**
-   * The lens the camera distance picks by default: detail below the split,
-   * overview at/above it (00-spec.md §3 F1). Pure + static.
+   * The lens the camera distance picks by default: detail below the split, overview at/above it (00-spec.md §3 F1).
    * @param {number} distM - camera→subject distance in metres
    * @returns {string} 'detail' | 'overview'
    */
@@ -121,37 +98,30 @@ export class HullCamFloor {
     return (distM < FLOOR.lens.splitAtM) ? LENS_DETAIL : LENS_OVERVIEW;
   }
 
-  /** @returns {boolean} */
   isActive() { return this._active; }
 
-  /** The view instance (for the serial track to mount / tests). */
   get overlay() { return this._overlay; }
 
   /** The effective lens: player override, else the distance default. */
   getLens() { return this._lensOverride || this._lensDefault; }
 
-  /** @returns {object|null} the focused manifest subsystem. */
   getFocusedSubsystem() {
     return this._ranked.find((s) => s.id === this._focusId) || null;
   }
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-  /** Enter HULL CAM: show the blueprint costume (state kept across re-entry). */
   activate() {
     if (this._active) return;
     this._active = true;
     if (this._overlay.show) this._overlay.show();
   }
 
-  /** Leave HULL CAM: hide the costume. */
   deactivate() {
     if (!this._active) return;
     this._active = false;
     if (this._overlay.hide) this._overlay.hide();
   }
 
-  // ── Focus ──────────────────────────────────────────────────────────────────
 
   /** Focus a subsystem by id (click / re-aim). @returns {boolean} found */
   focusById(id) {
@@ -169,15 +139,12 @@ export class HullCamFloor {
     this._focusId = this._ranked[i].id;
   }
 
-  // ── The Space verb: lens-toggle ────────────────────────────────────────────
-
   /**
-   * Dispatch the HULL CAM Space verb (FloorContract.byId(1).spaceVerb
-   * 'lens-toggle'). One key cycles the whole inspection carousel:
+   * Dispatch the HULL CAM Space verb (FloorContract.byId(1).spaceVerb 'lens-toggle'). One key cycles the whole
+   * inspection carousel:
    *   overview → detail(sub₁) → detail(sub₂) → … → detail(subₙ) → overview →…
-   * so it toggles the lens (00-spec §3) AND switches the focused subsystem
-   * within the detail lens. The override this sets is cleared whenever the
-   * camera crosses the 5 m split (the distance re-picks the default).
+   * so it toggles the lens (00-spec §3) AND switches the focused subsystem within the detail lens. The override this
+   * sets is cleared whenever the camera crosses the 5 m split (the distance re-picks the default).
    * @returns {{lens:string, focusId:*}} the post-toggle state
    */
   lensToggle() {
@@ -185,7 +152,6 @@ export class HullCamFloor {
       return { lens: this.getLens(), focusId: null };
     }
     if (this.getLens() === LENS_OVERVIEW) {
-      // Enter the detail carousel at its top (deterministic cycle).
       this._focusId = this._ranked[0].id;
       this._lensOverride = (this._lensDefault === LENS_DETAIL) ? null : LENS_DETAIL;
     } else {
@@ -193,7 +159,6 @@ export class HullCamFloor {
       if (i >= 0 && i < this._ranked.length - 1) {
         this._focusId = this._ranked[i + 1].id;      // next subsystem
       } else {
-        // Wrapped past the last subsystem → back to the overview lens.
         this._focusId = this._ranked[0].id;
         this._lensOverride = (this._lensDefault === LENS_OVERVIEW) ? null : LENS_OVERVIEW;
       }
@@ -201,13 +166,11 @@ export class HullCamFloor {
     return { lens: this.getLens(), focusId: this._focusId };
   }
 
-  // ── Per-frame ──────────────────────────────────────────────────────────────
-
   /**
    * Render one frame of the HULL CAM costume. No-op while inactive.
    * @param {object} [ctx]
-   * @param {number} [ctx.distM]    - camera→subject distance in metres (drives
-   *                 the lens default; non-finite → the last default holds)
+   * @param {number} [ctx.distM]    - camera→subject distance in metres (drives the lens default; non-finite → the
+   *                 last default holds)
    * @param {function} [ctx.project] - projector override for this frame
    * @param {number} [ctx.centerX]  - subject center screen x (rail-side split)
    * @returns {{lens:string, focusId:*, callouts:Array}|null} descriptors (tests)
@@ -218,8 +181,7 @@ export class HullCamFloor {
     const lens = this.getLens();
     const project = ctx.project || this._project;
 
-    // Overview: ALL callouts, compact. Detail: the ONE focused subsystem with
-    // its expanded readout (00-spec §3 — the lens split's whole point).
+    // Overview: ALL callouts, compact. Detail: the ONE focused subsystem with its expanded readout (00-spec §3).
     const source = (lens === LENS_DETAIL)
       ? this._ranked.filter((s) => s.id === this._focusId)
       : this._ranked;
@@ -230,7 +192,7 @@ export class HullCamFloor {
       anchorU: this._anchorU(sub),
       focused: sub.id === this._focusId,
       rows: (lens === LENS_DETAIL) ? this._readoutRows(sub) : [],
-      codexId: sub.codexId,       // title click → Tech Library deep-link (D2)
+      codexId: sub.codexId,       // title click → Tech Library deep-link
     }));
 
     const callouts = this._overlay.render(items, project, {
@@ -242,10 +204,9 @@ export class HullCamFloor {
   }
 
   /**
-   * @private Track the distance-picked lens default. Crossing the 5 m split
-   * flips the default AND clears any toggle override — "the camera distance
-   * picks which one is the default" (00-spec §3). Non-finite samples (no
-   * camera yet) leave the state untouched.
+   * Track the distance-picked lens default. Crossing the 5 m split flips the default AND clears any toggle override
+   * ("the camera distance picks which one is the default", 00-spec §3). Non-finite samples (no camera yet) leave
+   * the state untouched.
    */
   _noteDistance(distM) {
     if (!Number.isFinite(distM)) return;
@@ -257,13 +218,10 @@ export class HullCamFloor {
   }
 
   /**
-   * @private Resolve a subsystem's anchor in ship-local scene units: the live
-   * mesh position via the optional shipMeshSource adapter when the manifest
-   * names a mesh, else the static manifest offset (T1 fallback — silent by
-   * design: the adapter is optional, headless is the fallback's home).
-   * An optional `meshOffsetM` [x, y, z] (METRES, ship frame) is added to the
-   * LIVE mesh position only (Mother audit T10) — the static `anchorM` is the
-   * whole fallback and is never offset.
+   * Resolve a subsystem's anchor in ship-local scene units: the live mesh position via the optional shipMeshSource
+   * adapter when the manifest names a mesh, else the static manifest offset (silent by design: the adapter is
+   * optional, headless is the fallback's home). An optional `meshOffsetM` [x, y, z] (METRES, ship frame) is added to
+   * the LIVE mesh position only: the static `anchorM` is the whole fallback and is never offset.
    */
   _anchorU(sub) {
     if (sub.mesh && this._shipMeshSource
@@ -271,8 +229,8 @@ export class HullCamFloor {
       const p = this._shipMeshSource.getAnchorLocalU(sub.mesh);
       if (p && Number.isFinite(p.x)) {
         const mo = sub.meshOffsetM;
-        // Fresh object: the main.js adapter caches and hands back ONE object per
-        // name, so an in-place += would accumulate the offset every frame.
+        // Fresh object: the main.js adapter caches and hands back ONE object per name, so an in-place += would
+        // accumulate the offset every frame.
         if (mo) return { x: p.x + mo[0] * M_TO_U, y: p.y + mo[1] * M_TO_U, z: p.z + mo[2] * M_TO_U };
         return p;
       }
@@ -281,10 +239,9 @@ export class HullCamFloor {
   }
 
   /**
-   * @private The focused card's rows: static spec first, then the injected
-   * provider's live rows (real power/thermal/… numbers), sliced to the card
-   * row budget. Best-effort — a missing or throwing provider degrades to the
-   * static rows and never throws (MotherCallouts._liveRows precedent).
+   * The focused card's rows: static spec first, then the injected provider's live rows (real power/thermal/…
+   * numbers), sliced to the card row budget. Best-effort: a missing or throwing provider degrades to the static
+   * rows and never throws.
    */
   _readoutRows(sub) {
     const rows = [];
@@ -303,7 +260,6 @@ export class HullCamFloor {
     return rows.slice(0, CARD_ROW_BUDGET);
   }
 
-  /** Tear down the owned view. */
   dispose() {
     if (this._overlay.dispose) this._overlay.dispose();
   }

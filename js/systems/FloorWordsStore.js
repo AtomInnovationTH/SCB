@@ -1,15 +1,9 @@
 /**
- * FloorWordsStore.js - u7 D6: "LEO / GEO explained once".
- *
- * The ladder rail keeps its orbit words (`4 LEO`, `5 GEO`; owner 2026-10-20, "Keep, explain once"). The
- * first time the player arrives on floor 4 (and, separately, floor 5) by their own choice, one plain line
- * says what the word means. This file holds the two lines, the pure "show it now?" rule, and the
- * once-per-player record (modelled on StrutAutoStore: one localStorage key, outside the run save so a
- * New Game does not repeat it, in-memory fallback when storage fails, write-on-change).
- *
- * Imports only StorageKeys. Node-safe.
- *
- * @module systems/FloorWordsStore
+ * @module systems/FloorWordsStore — "LEO / GEO explained once" (DECISIONS §30 row 1). The ladder rail keeps its orbit
+ * words (`4 LEO`, `5 GEO`); the first time the player arrives on floor 4 (and, separately, floor 5) by their own
+ * choice, one plain line says what the word means. Holds the two lines, the pure "show it now?" rule, and the
+ * once-per-player record (like StrutAutoStore: one localStorage key, outside the run save so a New Game does not
+ * repeat it, in-memory fallback when storage fails, write-on-change). Imports only StorageKeys. Node-safe.
  */
 
 import { StorageKeys } from '../core/StorageKeys.js';
@@ -17,7 +11,7 @@ import { StorageKeys } from '../core/StorageKeys.js';
 /** Envelope version of the stored record. */
 export const FLOOR_WORDS_VERSION = 1;
 
-/** The explaining line per floor (owner's words for LEO; the GEO line is in the same form). */
+/** The explaining line per floor. */
 export const FLOOR_WORDS = Object.freeze({
   4: 'LEO means low Earth orbit: 200 to 2,000 km',
   5: 'GEO means geostationary orbit: 35,786 km',
@@ -27,9 +21,7 @@ export const FLOOR_WORDS = Object.freeze({
 export const FLOOR_WORDS_MS = 5000;
 
 /**
- * Should a floor-word line be shown this frame? Pure.
- * @param {{floor:number, riding:boolean, intro:boolean, quiet:boolean, taught:(floor:number)=>boolean}} p
- *   `taught` may also be a Set / array of floors.
+ * Should a floor-word line be shown this frame? Pure. `taught` is a (floor) => boolean, or a Set / array of floors.
  * @returns {string|null} the text, or null
  */
 export function floorWordsToShow({ floor, riding, intro, quiet, taught }) {
@@ -53,11 +45,7 @@ function _defaultStorage() {
 }
 
 export class FloorWordsStore {
-  /**
-   * @param {object} [deps]
-   * @param {object|null} [deps.storage] localStorage-shaped; default the global localStorage, or null
-   *   (in-memory only).
-   */
+  /** @param {object|null} [deps.storage] localStorage-shaped; default the global localStorage, or null (in-memory only). */
   constructor(deps = {}) {
     this._storage = (deps.storage !== undefined) ? deps.storage : _defaultStorage();
     this._taught = new Set();

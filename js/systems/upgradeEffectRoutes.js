@@ -1,23 +1,16 @@
 /**
- * upgradeEffectRoutes.js — F4: explicit shop-effect → subsystem routing map.
+ * upgradeEffectRoutes.js — explicit shop-effect → subsystem routing map.
  *
- * WHY THIS EXISTS (F4): `GameFlowManager.applyUpgradeEffect` used to be a hand-
- * maintained `switch`. Three purchasable Power upgrades — `graphene_supercap`
- * (`supercapUpgrade`, 2,500 cr), `rtg_module` (`rtgPower`, 3,500 cr) and
- * `power_beaming` (`powerBeaming`, 2,000 cr) — had working handler CASES in
- * ResourceSystem / PlayerSatellite but no `switch` entry routing to them, so
- * ~8,000 cr of shop effects silently did nothing on purchase OR save-restore.
- *
- * The routing is now DATA (this map) + a mechanical dispatcher, and the map is
- * exported so `test-shop-effects.js` can assert that every catalog `effect`
- * has a route (no more silently-inert purchases). This module is pure — it
- * imports nothing — so the test loads it in Node with no THREE/DOM.
+ * `GameFlowManager.applyUpgradeEffect` was a hand-maintained `switch`; three purchasable Power upgrades (`graphene_supercap`
+ * → `supercapUpgrade`, `rtg_module` → `rtgPower`, `power_beaming` → `powerBeaming`) had handler CASES in ResourceSystem /
+ * PlayerSatellite but no `switch` entry, so they silently did nothing on purchase OR save-restore. Routing is now DATA (this
+ * map) + a mechanical dispatcher, and the map is exported so `test-shop-effects.js` can assert every catalog `effect` has a
+ * route. Pure (imports nothing), so the test loads it in Node with no THREE/DOM.
  *
  * @module systems/upgradeEffectRoutes
  */
 
-// ── Route-target identifiers ────────────────────────────────────────────────
-// Each names a dispatch destination understood by applyUpgradeEffect().
+// Route-target identifiers: each names a dispatch destination understood by applyUpgradeEffect().
 export const RESOURCE_SYSTEM = 'resourceSystem';   // resourceSystem.applyUpgrade(data)
 export const PLAYER = 'player';                    // player.applyUpgrade(data)
 export const ARM_MANAGER = 'armManager';           // armManager.applyUpgrade(data)
@@ -36,9 +29,9 @@ export const ROUTE_TARGETS = new Set([
 ]);
 
 /**
- * The consumable daughter-net restock items (DECISIONS §33 rows 2 and 5): shop effect -> the daughter type whose
- * magazine takes the net ('weaver' = the large daughter, 'spinner' = the small). The ONE table the shop's full check,
- * the purchase guard and the apply route all read.
+ * The consumable daughter-net restock items (DECISIONS §33 rows 2 and 5): shop effect -> the daughter type whose magazine
+ * takes the net ('weaver' = the large daughter, 'spinner' = the small). The ONE table the shop's full check, the purchase
+ * guard and the apply route all read.
  */
 export const DAUGHTER_NET_EFFECT_TYPE = Object.freeze({
   largeDaughterNet: 'weaver',
@@ -46,11 +39,9 @@ export const DAUGHTER_NET_EFFECT_TYPE = Object.freeze({
 });
 
 /**
- * effect string → ordered list of subsystems that consume it.
- * MUST cover every `effect` in the ShopScreen UPGRADES catalog (asserted by
- * test-shop-effects.js). Multiple targets = the effect is consumed in more
- * than one place (e.g. `supercapUpgrade` bumps battery storage in
- * ResourceSystem AND flips the MPD-cooling flag in PlayerSatellite).
+ * effect string → ordered list of subsystems that consume it. MUST cover every `effect` in the ShopScreen UPGRADES catalog
+ * (asserted by test-shop-effects.js). Multiple targets = consumed in more than one place (e.g. `supercapUpgrade` bumps
+ * battery storage in ResourceSystem AND flips the MPD-cooling flag in PlayerSatellite).
  * @type {Object<string, string[]>}
  */
 export const EFFECT_ROUTES = {
@@ -61,20 +52,21 @@ export const EFFECT_ROUTES = {
   solarEfficiency: [RESOURCE_SYSTEM],
   panelDegradation: [RESOURCE_SYSTEM],
 
-  // ── g1-gas-upgrades: engine gas (D3 one-way gas switch, D4 consumable resupply) → ResourceSystem ──
+  // ── Engine gas (one-way gas switch, consumable resupply) → ResourceSystem ──
   engineGasSwitch: [RESOURCE_SYSTEM],
   engineGasResupply: [RESOURCE_SYSTEM],
-  // ── lane 3f: the nitrogen buy fills her cold-gas tank (it tops up docked daughters) → ResourceSystem ──
+  // ── the nitrogen buy fills her cold-gas tank (it tops up docked daughters) → ResourceSystem ──
   coldGasResupply: [RESOURCE_SYSTEM],
-  // ── lane 3f: the ion-fuel cartridge goes into her indium store → ResourceSystem (the satellite's swap is only the look) ──
+  // ── the ion-fuel cartridge goes into her indium store → ResourceSystem (the satellite's swap is only the look) ──
   indiumCartridge: [RESOURCE_SYSTEM],
-  // ── slice 5 (5a): the drag sail goes into her sail stock (a count; 5d spends it) → ResourceSystem ──
+  // ── the drag sail goes into her sail stock (a count) → ResourceSystem ──
   dragSail: [RESOURCE_SYSTEM],
 
-  // ── S3b power infrastructure (F4: these three were inert) ──
-  supercapUpgrade: [RESOURCE_SYSTEM, PLAYER], // +100 Wh burst store + MPD thermal flag (ResourceSystem.js:480, PlayerSatellite.js:3616)
-  rtgPower: [RESOURCE_SYSTEM],                 // constant Wh/s generation (ResourceSystem.js:486)
-  powerBeaming: [RESOURCE_SYSTEM],             // ground-pass Wh/s (ResourceSystem.js:490)
+  // ── Power infrastructure ──
+  // +100 Wh burst store (ResourceSystem.applyUpgrade) + MPD thermal flag (PlayerSatellite.applyUpgrade)
+  supercapUpgrade: [RESOURCE_SYSTEM, PLAYER],
+  rtgPower: [RESOURCE_SYSTEM],                 // constant Wh/s generation
+  powerBeaming: [RESOURCE_SYSTEM],             // ground-pass Wh/s
 
   // ── Propulsion → PlayerSatellite ──
   xenonEfficiency: [PLAYER],
@@ -84,12 +76,10 @@ export const EFFECT_ROUTES = {
   mpdThruster: [PLAYER],
   mpdCathodeLife: [PLAYER],
 
-  // ── Thermal (P2 aft flower) → PlayerSatellite ──
-  // Purchase-gated hardware install: PlayerSatellite._installFlowerPair builds
-  // the pair meshes (idempotent — the save-restore replay re-applies these).
-  // Mass rides ArmManager.getMassBudget's coreDry carrier via
-  // player.getFlowerDryMassKg(); no resource-side state, so restore replay is
-  // safe by construction.
+  // ── Thermal (aft flower) → PlayerSatellite ──
+  // Purchase-gated hardware install: PlayerSatellite._installFlowerPair builds the pair meshes (idempotent: the
+  // save-restore replay re-applies these). Mass rides ArmManager.getMassBudget's coreDry carrier via
+  // player.getFlowerDryMassKg(); no resource-side state, so restore replay is safe.
   flowerPairA: [PLAYER],
   flowerPairB: [PLAYER],
 
@@ -104,11 +94,9 @@ export const EFFECT_ROUTES = {
   salvageScan: [SENSOR_EVENT],
 
   // ── Arms → ArmManager ──
-  // Register item 101 (2026-08-21): the `long_tether` catalog row is RETIRED
-  // (owner-ruled) — it wrote the same live config.tetherMax the tier ladder
-  // owns, last-writer-wins. The route + handler STAY: a pre-retirement save's
-  // upgrade replay (`forEachPurchasedUpgrade` → applyUpgradeEffect) re-applies
-  // it, so an owned save keeps its purchased reach. No new purchase can emit it.
+  // owner 2026-08-21: the `long_tether` catalog row is RETIRED (it wrote the same live config.tetherMax the tier ladder owns,
+  // last-writer-wins). Route + handler STAY: a pre-retirement save's replay (`forEachPurchasedUpgrade` →
+  // applyUpgradeEffect) re-applies it so an owned save keeps its reach. No new purchase can emit it.
   tetherRange: [ARM_MANAGER],
   reelSpeed: [ARM_MANAGER],
   armFuelMax: [ARM_MANAGER],
@@ -127,58 +115,46 @@ export const EFFECT_ROUTES = {
   largeDaughterNet: [DAUGHTER_NET],
   smallDaughterNet: [DAUGHTER_NET],
 
-  // ── Cargo hold capacity → CargoSystem (E2 elevator-throughput fix) ──
+  // ── Cargo hold capacity → CargoSystem ──
   cargoCapacity: [CARGO_SYSTEM],
 
   // ── Kessler / hull ──
   kesslerWarning: [KESSLER_SYSTEM],
   shieldHits: [KESSLER_SYSTEM],
 
-  // ── V4 GSL arm upgrades — dispatched by ArmManager's OWN UPGRADE_PURCHASED
-  //    listener (ArmManager.js:279), so applyUpgradeEffect must not re-dispatch
-  //    them. Present here so the catalog-coverage test stays honest. ──
-  //    Register item 101 (2026-08-21): `gsl_tether_v4` (v4TetherRange) is
-  //    RETIRED from the catalog — it out-reached the tether ladder top and any
-  //    later tier purchase silently LOWERED reach (last-writer-wins on
-  //    config.tetherMax). The route + handler STAY for owned saves (replay
-  //    keeps the purchased reach). v4NetArea / v4GripForce remain live cards.
+  // ── V4 GSL arm upgrades: dispatched by ArmManager's OWN UPGRADE_PURCHASED listener, so applyUpgradeEffect must not
+  //    re-dispatch them. Present here so the catalog-coverage test stays honest.
+  //    owner 2026-08-21: `gsl_tether_v4` (v4TetherRange) is RETIRED from the catalog (it out-reached the tether ladder top and
+  //    any later tier purchase silently LOWERED reach); route + handler STAY for owned saves. v4NetArea / v4GripForce remain
+  //    live cards. ──
   v4TetherRange: [ARM_MANAGER_EVENT],
   v4NetArea: [ARM_MANAGER_EVENT],
   v4GripForce: [ARM_MANAGER_EVENT],
 };
 
 /**
- * Effects whose RESOURCE-side state is fully persisted by
- * ResourceSystem.serialize()/restore() AND applied CUMULATIVELY (so re-running
- * their handler on the restore path would double-count). On the MENU_CONTINUE
- * restore path — where resourceSystem.restore() has already set the absolute
- * value — the RESOURCE_SYSTEM route is skipped for these so the `+=` handlers
- * don't double-count (e.g. batteryMax). Their NON-resource routes (e.g.
- * supercapUpgrade → PLAYER) still run so the player-side flag is re-applied.
+ * Effects whose RESOURCE-side state is fully persisted by ResourceSystem.serialize()/restore() AND applied CUMULATIVELY
+ * (re-running the handler on restore would double-count). On the MENU_CONTINUE restore path, where resourceSystem.restore()
+ * has already set the absolute value, the RESOURCE_SYSTEM route is skipped for these so the `+=` handlers don't double-count
+ * (e.g. batteryMax). Their NON-resource routes (e.g. supercapUpgrade → PLAYER) still run.
  *
- * NOTE: rtgPower / powerBeaming are deliberately NOT listed here even though
- * ResourceSystem also serializes them — their handlers are plain ASSIGNMENTS
- * (`_rtgRate = value`), so re-applying on restore is idempotent. Leaving them
- * OUT means the restore path re-applies them, which also retroactively repairs
- * legacy saves written before F4 (where the effect was inert, so the field was
- * persisted as 0). supercapUpgrade must stay because its resource handler is
- * cumulative (`batteryMax += value`).
+ * rtgPower / powerBeaming are deliberately NOT listed even though ResourceSystem serializes them: their handlers are plain
+ * ASSIGNMENTS (`_rtgRate = value`), so re-applying is idempotent, and it also repairs legacy saves written while the effect
+ * was inert (persisted as 0). supercapUpgrade must stay: its resource handler is cumulative (`batteryMax += value`).
  *
  * Purchase and GAMEOVER_CONTINUE (from a reset base) always apply the full route.
  * @type {Set<string>}
  */
 export const RESOURCE_RESTORED_EFFECTS = new Set([
   'xenonMax', 'coldGasMax', 'batteryMax', 'supercapUpgrade',
-  // g1-gas-upgrades D10: restore() already set the tank gas (`tankGasId`) and fills the launch mass — a
-  // replay on MENU_CONTINUE must not vent or refill. (GAMEOVER_CONTINUE replays from a reset base.)
+  // restore() already set the tank gas (`tankGasId`) and fills the launch mass: a replay on MENU_CONTINUE must not vent or
+  // refill. (GAMEOVER_CONTINUE replays from a reset base.)
   'engineGasSwitch',
 ]);
 
 /**
- * Resolve the route targets for an effect on a given code path.
- * @param {string} effect — the catalog effect string
- * @param {{ restore?: boolean }} [opts] — restore=true drops the RESOURCE_SYSTEM
- *   target for RESOURCE_RESTORED_EFFECTS (see above).
+ * Route targets for an effect on a given code path.
+ * @param {{ restore?: boolean }} [opts] restore=true drops the RESOURCE_SYSTEM target for RESOURCE_RESTORED_EFFECTS.
  * @returns {string[]} targets to dispatch (possibly empty)
  */
 export function resolveEffectRoute(effect, opts = {}) {

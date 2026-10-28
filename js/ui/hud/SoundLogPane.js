@@ -1,13 +1,11 @@
 /**
  * SoundLogPane.js — dev pane: the last 10 sounds, newest at the bottom.
  *
- * DECISIONS §15 row 10. Built ONLY when the Tests switch is on (`?tests=1`, or
- * the old `?sounds=1`; a plain query parameter, not a feature flag). u6 D2:
- * `opts.into` renders the lines into a given element (the Tests fold-out body)
- * instead of building its own box. A mono-face list bottom-left above the footer
- * band, pointer-events none; oldest line on top so new sounds push the list up.
- * One line each: `2.4s  terminal blip ×4 — <meaning>`. Own 4 Hz timer; no input,
- * no persistence.
+ * DECISIONS §15 row 10. Built ONLY when the Tests switch is on (`?tests=1`, or the old `?sounds=1`; a plain query
+ * parameter, not a feature flag). `opts.into` renders the lines into a given element (the Tests fold-out body) instead
+ * of building its own box. A mono-face list bottom-left above the footer band, pointer-events none; oldest line on top
+ * so new sounds push the list up. One line each: `2.4s  terminal blip ×4 — <meaning>`. Own 4 Hz timer; no input, no
+ * persistence.
  *
  * @module ui/hud/SoundLogPane
  */
@@ -19,7 +17,7 @@ import { testsRequested } from './TestsSwitch.js';
 export const SOUND_LOG_PANE_ID = 'hud-sound-log';
 export const SOUND_LOG_REFRESH_MS = 250;
 
-/** True when the Tests switch is on: `tests=1`, or the old `sounds=1` alias (u6 D1). */
+/** True when the Tests switch is on: `tests=1`, or the old `sounds=1` alias. */
 export function soundsRequested(search) {
   return testsRequested(search);
 }
@@ -38,7 +36,7 @@ export class SoundLogPane {
     const search = opts.search ?? (typeof location !== 'undefined' ? location.search : '');
     const doc = opts.doc || (typeof document !== 'undefined' ? document : null);
     if (!parent || !doc || !soundsRequested(search)) return;
-    if (opts.into) {   // u6 D2: lines go into the Tests body; the host owns position and look
+    if (opts.into) {   // lines go into the Tests body; the host owns position and look
       this.el = opts.into;
       this._hosted = true;
       this.refresh();
@@ -49,7 +47,7 @@ export class SoundLogPane {
     el.id = SOUND_LOG_PANE_ID;
     el.setAttribute('aria-hidden', 'true');
     Object.assign(el.style, {
-      position: 'absolute', left: `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`, bottom: '176px', maxWidth: '520px',   // followups-1018 D4: left edge = the MOTHER pane's
+      position: 'absolute', left: `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`, bottom: '176px', maxWidth: '520px',   // left edge = the MOTHER pane's
       padding: '6px 8px', background: 'rgb(var(--hud-ink-rgb, 0 0 0) / 0.55)', color: 'var(--hud-normal, #9fd)',
       fontFamily: 'var(--font-mono)', fontSize: '11px', lineHeight: '1.35', whiteSpace: 'pre',
       pointerEvents: 'none', zIndex: '60',

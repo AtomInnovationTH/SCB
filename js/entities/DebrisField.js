@@ -32,6 +32,7 @@ import { referenceDragAreaM2 } from './MotherDragArea.js';
 import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';
 import { bagSize } from './scoopRule.js';
 import { DragSailSet } from './DragSailMesh.js';
+import { degToRad, radToDeg, clamp01, clamp, smoothstep01 } from '../core/MathUtil.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -221,12 +222,12 @@ function applyInstanceColorVariation(out, id, catalogType) {
   const hueRange = isFrag ? 0.05 : 0.03;
   _instanceHSL.h = (_instanceHSL.h + (r1 - 0.5) * hueRange + 1) % 1;
   // Slight saturation jitter so some pieces look more oxidised/coloured
-  _instanceHSL.s = Math.max(0, Math.min(1, _instanceHSL.s * (0.75 + r2 * 0.6)));
+  _instanceHSL.s = clamp01(_instanceHSL.s * (0.75 + r2 * 0.6));
   // Brightness variation is the big anti-monotone win. Centre the multiplier
   // on ~1.0 (range ~0.62–1.18) so on a bright base some pieces read sun-lit
   // and others shadow/scorch-darkened, without dragging the whole field dark.
   // Floor keeps near-black fragments from collapsing to a flat silhouette.
-  _instanceHSL.l = Math.max(0.10, Math.min(0.97, _instanceHSL.l * (0.62 + r1 * 0.56)));
+  _instanceHSL.l = clamp(_instanceHSL.l * (0.62 + r1 * 0.56), 0.10, 0.97);
 
   if (_SRGB) out.setHSL(_instanceHSL.h, _instanceHSL.s, _instanceHSL.l, _SRGB);
   else out.setHSL(_instanceHSL.h, _instanceHSL.s, _instanceHSL.l);
@@ -1261,14 +1262,13 @@ export class DebrisField {
     const regime = this._fieldRegime || regimeFromStartOrbit(null);
     const altMidKm = (regime.altMinKm + regime.altMaxKm) / 2;
     const altKm = gaussRandomRng(rng, altMidKm, (regime.altMaxKm - regime.altMinKm) / 4);
-    const clampedAlt = Math.max(regime.altMinKm, Math.min(regime.altMaxKm - 1e-9, altKm));
+    const clampedAlt = clamp(altKm, regime.altMinKm, regime.altMaxKm - 1e-9);
 
     const incTol = regime.incTolDeg;
     const incDeg = gaussRandomRng(rng, regime.incCenterDeg, incTol / 2);
-    const clampedInc = Math.max(regime.incCenterDeg - incTol,
-      Math.min(regime.incCenterDeg + incTol, incDeg));
+    const clampedInc = clamp(incDeg, regime.incCenterDeg - incTol, regime.incCenterDeg + incTol);
 
-    const raanTolRad = (regime.raanTolDeg || 0) * Math.PI / 180;
+    const raanTolRad = degToRad(regime.raanTolDeg || 0);
     const raanCenter = regime.raanCenterRad || 0;
     const raan = raanCenter + Math.max(-raanTolRad,
       Math.min(raanTolRad, gaussRandomRng(rng, 0, raanTolRad / 2)));
@@ -1278,7 +1278,7 @@ export class DebrisField {
     return {
       semiMajorAxis: smaScene,
       eccentricity: rng() * 0.02,
-      inclination: clampedInc * Math.PI / 180,
+      inclination: degToRad(clampedInc),
       raan,
       argPerigee: rng() * 2 * Math.PI,
       trueAnomaly: rng() * 2 * Math.PI,
@@ -1453,17 +1453,14 @@ export class DebrisField {
       const _sizeSpan = typeDef.sizeMax - typeDef.sizeMin;
       const _sizeMid  = typeDef.sizeMin + _massFrac * _sizeSpan;
       const _sizeJitter = 0.85 + Math.random() * 0.30;   // ±15 %
-      sizeMeter = Math.max(
-        typeDef.sizeMin * 0.7,
-        Math.min(typeDef.sizeMax * 1.15, _sizeMid * _sizeJitter)
-      );
+      sizeMeter = clamp(_sizeMid * _sizeJitter, typeDef.sizeMin * 0.7, typeDef.sizeMax * 1.15);
     }
 
     // Tumble (authored rate when the spec names one)
     const tumbleRateDeg = (specActive && Number.isFinite(spec.tumbleDeg))
       ? spec.tumbleDeg
       : randRange(typeDef.tumbleMin, typeDef.tumbleMax);
-    const tumbleRate = tumbleRateDeg * Math.PI / 180; // rad/s
+    const tumbleRate = degToRad(tumbleRateDeg); // rad/s
     const tumbleAxis = randomUnitVector();
 
     // Material — weighted by type so gold MLI / blue solar cells stay rare and
@@ -1795,7 +1792,7 @@ export class DebrisField {
           const _tHSL = { h: 0, s: 0, l: 0 };
           if (_SRGB) tint.getHSL(_tHSL, _SRGB); else tint.getHSL(_tHSL);
           _tHSL.s *= 0.35;                                 // mostly neutral
-          _tHSL.l = Math.max(0.72, Math.min(0.92, _tHSL.l)); // bright modulator
+          _tHSL.l = clamp(_tHSL.l, 0.72, 0.92); // bright modulator
           if (_SRGB) tint.setHSL(_tHSL.h, _tHSL.s, _tHSL.l, _SRGB);
           else tint.setHSL(_tHSL.h, _tHSL.s, _tHSL.l);
           mat.color = tint;
@@ -2467,7 +2464,7 @@ export class DebrisField {
     this._reseatDriftedWelcome(playerPos, playerOrbit, dt, gameDt);
 
     // --- Update interactive debris ---
-    const maxVisualRad = Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S * Math.PI / 180;
+    const maxVisualRad = degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S);
 
     // Mother local-frame basis for the onboarding tease pin (forward = prograde,
     // right = cross-track / horizontal). Computed once per frame; consumed by
@@ -2696,7 +2693,7 @@ export class DebrisField {
             // Reveal scale matches the debris mesh.
             const flagRp = debris._revealProgress;
             const flagReveal = (flagRp !== undefined && flagRp < 1)
-              ? flagRp * flagRp * (3 - 2 * flagRp) : 1;
+              ? smoothstep01(flagRp) : 1;
             // Item 12 (2026-06-12): decal sized in PHYSICAL metres —
             // clamp(sizeMeter × FACTOR, MIN..MAX) — instead of a fixed
             // 0.7-local-unit footprint (read tiny on an 8 m rocket body).
@@ -3169,7 +3166,7 @@ export class DebrisField {
           const _tHSL = { h: 0, s: 0, l: 0 };
           if (_SRGB) tint.getHSL(_tHSL, _SRGB); else tint.getHSL(_tHSL);
           _tHSL.s *= 0.35;
-          _tHSL.l = Math.max(0.72, Math.min(0.92, _tHSL.l));
+          _tHSL.l = clamp(_tHSL.l, 0.72, 0.92);
           if (_SRGB) tint.setHSL(_tHSL.h, _tHSL.s, _tHSL.l, _SRGB);
           else tint.setHSL(_tHSL.h, _tHSL.s, _tHSL.l);
           mat.color = tint;
@@ -3524,7 +3521,7 @@ export class DebrisField {
     // Smooth reveal: scale up from 0→1 over 300ms using smoothstep
     const rp = debris._revealProgress;
     const revealScale = (rp !== undefined && rp < 1)
-      ? rp * rp * (3 - 2 * rp) // smoothstep easing
+      ? smoothstep01(rp) // smoothstep easing
       : 1;
 
     // catch-near-pass (Decision 1): a held piece near the ship is drawn by its near-pass proxy, so the far-pass
@@ -4281,8 +4278,8 @@ export class DebrisField {
    */
   static pairLaunchPoint(strut, alphaDeg, rangeM) {
     const P = Constants.PAIR_FIELDS;
-    const az = Constants.ARM_LADDER.Y0_QUAD.azimuths[strut] * Math.PI / 180;
-    const a = alphaDeg * Math.PI / 180;
+    const az = degToRad(Constants.ARM_LADDER.Y0_QUAD.azimuths[strut]);
+    const a = degToRad(alphaDeg);
     const sA = Math.sin(a), cA = Math.cos(a);
     const rho = P.HINGE_R_M + Constants.OCTOPUS_V5.STRUT_LENGTH * sA;
     return {
@@ -4697,8 +4694,7 @@ export class DebrisField {
       // Update sizeMeter/sceneSize to match new type+mass
       const typeDef = DEBRIS_TYPES[debris.type];
       if (typeDef) {
-        const massFrac = Math.max(0, Math.min(1,
-          (debris.mass - typeDef.massMin) / (typeDef.massMax - typeDef.massMin || 1)));
+        const massFrac = clamp01((debris.mass - typeDef.massMin) / (typeDef.massMax - typeDef.massMin || 1));
         DebrisField.setDebrisSize(debris,
           typeDef.sizeMin + massFrac * (typeDef.sizeMax - typeDef.sizeMin));
       }
@@ -4720,7 +4716,7 @@ export class DebrisField {
       // createFragments) so the E1 despin doctrine can't mistake
       // authoring for a player de-spin.
       if (Number.isFinite(spec.tumbleDegS)) {
-        debris.tumbleRate = spec.tumbleDegS * Math.PI / 180;
+        debris.tumbleRate = degToRad(spec.tumbleDegS);
         debris._initialTumbleRate = debris.tumbleRate;
       }
       if (spec.tumbleAxis) {
@@ -4953,7 +4949,7 @@ export class DebrisField {
    * @returns {{ playerOrbit: object, fragments: Array<{ massKg:number, offsetM:number, ahead:boolean, welcomeField:boolean, type:string }> }}
    */
   spawnWelcomeField(playerOrbit, options = {}) {
-    const count = Math.max(7, Math.min(8, options.count ?? 7));
+    const count = clamp(options.count ?? 7, 7, 8);
     const minOffsetM = options.minOffsetM ?? 150;
     const maxOffsetM = options.maxOffsetM ?? 1500;
     const minMassKg = options.minMassKg ?? 5;
@@ -5041,7 +5037,7 @@ export class DebrisField {
     const sma = Constants.EARTH_RADIUS + altKm * Constants.SCENE_SCALE;
     const meanMotion = Math.sqrt(Constants.MU_EARTH / Math.pow(sma / Constants.SCENE_SCALE, 3));
     const baseNu = Math.random() * Math.PI * 2;          // random phase around the track
-    const spreadRad = (cfg.trackSpreadDeg ?? 8) * Math.PI / 180;
+    const spreadRad = degToRad(cfg.trackSpreadDeg ?? 8);
     const frameComp = meanMotion * (this._lastSpawnGameDt || 0); // mid-frame propagation pre-compensation
 
     // Candidates: alive, not already special-tagged, and NOT mid-capture.
@@ -5066,9 +5062,9 @@ export class DebrisField {
       const lead = ((i + 1) / count) * spreadRad;
       debris.orbit.semiMajorAxis = sma;
       debris.orbit.eccentricity = cfg.eccentricity ?? 0.0003;
-      debris.orbit.inclination = (cfg.incDeg ?? 51.6) * Math.PI / 180;
-      debris.orbit.raan = (cfg.raanDeg ?? 123.4) * Math.PI / 180;
-      debris.orbit.argPerigee = (cfg.argPerigeeDeg ?? 45) * Math.PI / 180;
+      debris.orbit.inclination = degToRad(cfg.incDeg ?? 51.6);
+      debris.orbit.raan = degToRad(cfg.raanDeg ?? 123.4);
+      debris.orbit.argPerigee = degToRad(cfg.argPerigeeDeg ?? 45);
       debris.orbit.trueAnomaly = baseNu + lead - frameComp;
       debris.orbit.meanMotion = meanMotion;
 
@@ -5077,8 +5073,7 @@ export class DebrisField {
       debris.type = 'fragment';
       const typeDef = DEBRIS_TYPES[debris.type];
       if (typeDef) {
-        const massFrac = Math.max(0, Math.min(1,
-          (debris.mass - typeDef.massMin) / (typeDef.massMax - typeDef.massMin || 1)));
+        const massFrac = clamp01((debris.mass - typeDef.massMin) / (typeDef.massMax - typeDef.massMin || 1));
         DebrisField.setDebrisSize(debris,
           typeDef.sizeMin + massFrac * (typeDef.sizeMax - typeDef.sizeMin));
       }
@@ -5451,7 +5446,7 @@ export class DebrisField {
         const dv = totalDeltaV(_tmpKmOrbit, _tmpKmOrbit2);
 
         // Risk level based on tumble + size
-        const tumbleDeg = debris.tumbleRate * 180 / Math.PI;
+        const tumbleDeg = radToDeg(debris.tumbleRate);
         let risk = 'Low';
         let riskStars = 1;
         if (tumbleDeg > 60 || (debris.type === 'rocketBody' && debris.mass > 3000)) {
@@ -5510,7 +5505,7 @@ export class DebrisField {
           distance: dist,
           distanceKm: distKm,
           altKm: Math.round(altKm),
-          incDeg: Math.round(debris.orbit.inclination * 180 / Math.PI),
+          incDeg: Math.round(radToDeg(debris.orbit.inclination)),
           deltaV: dv,
           selectedDeltaV: debris.selectedDeltaV,
           risk,
@@ -5616,7 +5611,7 @@ export class DebrisField {
       return debris._clusterId;
     }
     const altKm = (sma - Constants.EARTH_RADIUS) / Constants.SCENE_SCALE;
-    const incDeg = inc * 180 / Math.PI;
+    const incDeg = radToDeg(inc);
     debris._clusterId = classifyClusterId(altKm, incDeg);
     debris._clusterIdSma = sma;
     debris._clusterIdInc = inc;
@@ -5739,7 +5734,7 @@ export class DebrisField {
         debris.salvage.lithium > 0 ||
         (debris.salvage.metals && debris.salvage.metals.length > 0);
       debris.metalMassKg = (debris.salvage.metals || []).reduce((sum, m) => sum + m.amount, 0);
-      debris.tumbleRate = randRange(30, 180) * Math.PI / 180;
+      debris.tumbleRate = degToRad(randRange(30, 180));
       debris._initialTumbleRate = debris.tumbleRate; // E1: keep spawn-tumble in sync with the override
 
       // Place near the collision point — approximate orbit from position

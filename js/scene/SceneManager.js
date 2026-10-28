@@ -60,6 +60,7 @@ import { selectInitialTier } from '../systems/QualityManager.js';
 import { GpuProbe } from '../systems/GpuProbe.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { getOrbitalFoilEnv } from './orbitalFoilEnv.js';
+import { clamp01 } from '../core/MathUtil.js';
 
 export class SceneManager {
   /**
@@ -1051,7 +1052,7 @@ export class SceneManager {
    * @param {number} target01  peak alpha (typically Constants.INSPECTION.DIM), or 0
    */
   setInspectDim(target01) {
-    this._inspectDimTarget = Math.max(0, Math.min(1, target01 || 0));
+    this._inspectDimTarget = clamp01(target01 || 0);
   }
 
   _updateInspectDim() {

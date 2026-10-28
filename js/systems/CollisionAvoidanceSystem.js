@@ -1,15 +1,10 @@
 /**
- * CollisionAvoidanceSystem.js — Semi-autonomous evasive maneuver system
+ * CollisionAvoidanceSystem.js — semi-autonomous evasive maneuvers. Scans nearby debris at 4 Hz and fires RCS dodge
+ * impulses on an imminent collision, unless the player explicitly targeted that debris for capture. Real-world
+ * analogue: ISS Pre-Determined Debris Avoidance Maneuver (PDAM).
  *
- * Continuously monitors nearby debris trajectories at 4 Hz and automatically
- * fires RCS dodge impulses when an imminent collision is detected — unless the
- * player has explicitly targeted that debris for capture.
- *
- * Real-world analogue: ISS Pre-Determined Debris Avoidance Maneuver (PDAM).
- *
- * Detection uses the same constant-velocity linear TCA prediction as
- * ConjunctionSystem._predictClosestApproach(), but with a tighter scan
- * radius (5 km) and shorter look-ahead (10 s).
+ * Detection uses the same constant-velocity linear TCA prediction as ConjunctionSystem._predictClosestApproach(),
+ * with a tighter scan radius (5 km) and shorter look-ahead (10 s).
  *
  * @module systems/CollisionAvoidanceSystem
  */
@@ -25,29 +20,19 @@ import { audioSystem } from './AudioSystem.js';
 import { engineGasLowFrac } from './ResourceSystem.js';
 import { clamp } from '../core/MathUtil.js';
 
-// ============================================================================
-// LOCAL CONSTANTS (derived from Constants.COLLISION_AVOIDANCE)
-// ============================================================================
-
 /** 1 metre in scene units */
 const M = 0.00001;
 
 /** Velocity conversion: km/s → scene-units/s (orbitToSceneCartesian returns km/s) */
 const KM_TO_SCENE = M * 1000; // 0.01
 
-// ============================================================================
-// COLLISION AVOIDANCE SYSTEM
-// ============================================================================
-
 export class CollisionAvoidanceSystem {
 
   constructor() {
     const CA = Constants.COLLISION_AVOIDANCE;
 
-    /** @type {boolean} System enabled */
     this._enabled = CA.ENABLED_DEFAULT;
 
-    /** @type {number} Scan throttle accumulator */
     this._scanTimer = 0;
 
     /** @type {number} WORLD (game) seconds since the previous scan tick — the contact scan's look-ahead window */
@@ -55,7 +40,7 @@ export class CollisionAvoidanceSystem {
     /** @type {boolean} true once update() has been given a world dt (old callers pass none) */
     this._worldDtSeen = false;
 
-    // --- Backward chord memory (s2-fast-time-hits, 2026-10-17) -----------------
+    // --- Backward chord memory ---
     /** @type {number} Contact-scan sequence number: advances on EVERY contact-scan call
      *  (armed or not), so a chord is only ever drawn between two ADJACENT scans. */
     this._contactSeq = 0;
@@ -66,28 +51,22 @@ export class CollisionAvoidanceSystem {
     this._chordDistM = 0;
     this._chordSpeedMs = 0;
 
-    /** @type {object|null} Current tracked threat */
     this._currentThreat = null;
 
-    /** @type {number} Time since last dodge (for cooldown) */
     this._lastDodgeTime = -Infinity;
 
-    /** @type {number} Elapsed game time */
     this._elapsedTime = 0;
 
     /** @type {number|null} Active (Tab-selected) target debris ID — exempt from dodging */
     this._activeTargetId = null;
 
-    /** @type {number|string|null} Debris ID currently locked by autopilot — exempt from dodging
-     *  in all AP modes (TARGET, DEBRIS, TRAWL). See AUTOPILOT_ANALYSIS.md §D / B.8. */
+    /** @type {number|string|null} Debris ID locked by autopilot: exempt from dodging in all AP modes (TARGET, DEBRIS,
+     *  TRAWL). See archive/AUTOPILOT_ANALYSIS.md §D / B.8. */
     this._autopilotLockId = null;
 
-    /** @type {boolean} Trawl mode active — tighter threshold */
     this._trawlActive = false;
 
-    /** @type {boolean} ARM_PILOT camera mode — fully suppress */
     this._armPilotMode = false;
-
 
     /** @type {number} Timestamp of last player movement input */
     this._lastPlayerInputTime = -Infinity;
@@ -100,20 +79,19 @@ export class CollisionAvoidanceSystem {
     /** @type {object|null} */ this._debrisField = null;
     /** @type {object|null} */ this._armManager = null;
     /** @type {object|null} */ this._inputManager = null;
-    /** @type {object|null} ST-6.3: ConjunctionSystem ref for MOID prefilter */
+    /** @type {object|null} ConjunctionSystem ref for MOID prefilter */
     this._conjunctionSystem = null;
-    /** @type {number} ST-6.3: Debug log throttle */
+    /** @type {number} Debug log throttle */
     this._moidLogTimer = 0;
 
-    // --- Comms quieting state (Delegation 1 follow-up, 2026-05-31) ---
-    /** @type {number} Current mission number — tracked via MISSION_START
-     *  and SCORE_UPDATE so the CA comms gate works without a direct
-     *  GameState ref (same pattern as KesslerSystem). */
+    // --- Comms quieting state ---
+    /** @type {number} Current mission number, tracked via MISSION_START and SCORE_UPDATE so the CA comms gate works
+     *  without a direct GameState ref (same pattern as KesslerSystem). */
     this._missionNumber = 1;
     /** @type {number} Epoch ms of last CA comms emit (any kind) */
     this._lastCommsEmitMs = -Infinity;
 
-    // --- D2 collision-consequence emitter state (ROADMAP §4 P2) -------------
+    // --- Collision-consequence emitter state ---
     /** @type {boolean} In a gameplay state (tracked via GAME_STATE_CHANGE) */
     this._inGameplay = false;
     /** @type {boolean} Onboarding tutorial running — collisions disarmed */
@@ -133,14 +111,7 @@ export class CollisionAvoidanceSystem {
     this._setupListeners();
   }
 
-  // ==========================================================================
-  // INITIALIZATION
-  // ==========================================================================
-
-  /**
-   * Wire dependencies after construction (same pattern as AutopilotSystem).
-   * @param {{ player, debrisField, armManager, inputManager }} deps
-   */
+  /** Wire dependencies after construction (same pattern as AutopilotSystem). */
   init(deps) {
     this._player = deps.player;
     this._debrisField = deps.debrisField;
@@ -150,12 +121,7 @@ export class CollisionAvoidanceSystem {
     this._resourceSystem = deps.resourceSystem || null;
   }
 
-  // ==========================================================================
-  // EVENT LISTENERS
-  // ==========================================================================
-
   _setupListeners() {
-    // Track active target for exemption
     eventBus.on(Events.TARGET_SELECTED, (data) => {
       this._activeTargetId = data?.id ?? data?.debrisId ?? null;
     });
@@ -163,8 +129,8 @@ export class CollisionAvoidanceSystem {
       this._activeTargetId = null;
     });
 
-    // Track autopilot-locked debris (exempt regardless of AP mode — see B.8 in
-    // AUTOPILOT_ANALYSIS.md). Closes the CA/AP tug-of-war during DEBRIS / TRAWL.
+    // Autopilot-locked debris is exempt regardless of AP mode (archive/AUTOPILOT_ANALYSIS.md B.8): closes the CA/AP
+    // tug-of-war during DEBRIS / TRAWL.
     eventBus.on(Events.AUTOPILOT_TARGET_LOCK, (data) => {
       this._autopilotLockId = data?.debrisId ?? null;
     });
@@ -184,19 +150,17 @@ export class CollisionAvoidanceSystem {
       this._armPilotMode = data?.mode === 'ARM_PILOT';
     });
 
-
-    // Toggle system on/off
     eventBus.on(Events.CA_TOGGLED, (data) => {
       this._enabled = !!data?.enabled;
     });
 
-    // Mission tracking for comms quieting gate (Delegation 1 follow-up)
+    // Mission tracking for the comms quieting gate
     eventBus.on(Events.MISSION_START, (d) => {
       if (typeof d?.missionNumber === 'number') {
         this._missionNumber = d.missionNumber;
       }
-      // A new mission re-seats / respawns the field: positions remembered from the
-      // old one must never be chorded to the new ones (s2-fast-time-hits D5).
+      // A new mission re-seats / respawns the field: positions remembered from the old one must never be chorded to
+      // the new ones.
       this._contactMem.clear();
     });
     eventBus.on(Events.SCORE_UPDATE, (d) => {
@@ -206,18 +170,14 @@ export class CollisionAvoidanceSystem {
       }
     });
 
-    // Game reset — clear all state
     eventBus.on(Events.GAME_RESET, () => { this.reset(); });
 
-    // Game state change — only active during gameplay
     eventBus.on(Events.GAME_STATE_CHANGE, (data) => {
-      // Disable during non-gameplay states (menu, shop, briefing, game over)
       const gameplay = ['ORBITAL_VIEW', 'APPROACH', 'INTERACTION'];
       const nowGameplay = !!(data?.to && gameplay.includes(data.to));
       this._inGameplay = nowGameplay;
       if (!nowGameplay) {
-        // Not in gameplay — freeze scanning but don't disable toggle. Reset the
-        // spawn-grace clock so re-entering gameplay re-arms after the grace.
+        // Freeze scanning (the toggle stays); reset the spawn-grace clock so re-entering gameplay re-arms after it.
         this._scanTimer = 0;
         this._worldSinceScan = 0;
         this._contactMem.clear(); // no chord across a pause / menu / re-entry
@@ -226,7 +186,7 @@ export class CollisionAvoidanceSystem {
       }
     });
 
-    // --- D2 collision-consequence gating (load-bearing new-player guard) -----
+    // --- Collision-consequence gating (load-bearing new-player guard) ---
     // Onboarding tutorial: keep the collision emitter disarmed so the curated
     // welcome field (spawned deliberately close) can never kill a new player.
     eventBus.on(Events.ONBOARDING_STARTED, () => { this._onboardingActive = true; });
@@ -238,31 +198,22 @@ export class CollisionAvoidanceSystem {
     // mother is being flung/repositioned (arm deploy), so a ceremony ≠ a collision.
     eventBus.on(Events.LAUNCH_CEREMONY_START, () => { this._ceremonyActive = true; });
     eventBus.on(Events.LAUNCH_CEREMONY_COMPLETE, () => { this._ceremonyActive = false; });
-    // Session I follow-up (review): a skipped ceremony emits ABORT, not
-    // COMPLETE — without this row _ceremonyActive stuck true after one
+    // A skipped ceremony emits ABORT, not COMPLETE: without this row _ceremonyActive stuck true after one
     // ESC/Space/Enter/D skip and auto-dodge stayed DISABLED for the session.
     eventBus.on(Events.LAUNCH_CEREMONY_ABORT, () => { this._ceremonyActive = false; });
-    // Aim-before-launch: the auto-rotation slew repositions the mother's
-    // attitude for several seconds — treat it like a ceremony so avoidance
-    // impulses don't fight the slew (and an aim ≠ a collision).
+    // Aim-before-launch: the auto-rotation slew repositions the mother's attitude for several seconds; treat it like a
+    // ceremony so avoidance impulses don't fight the slew.
     eventBus.on(Events.AIM_SEQUENCE_START, () => { this._ceremonyActive = true; });
     eventBus.on(Events.AIM_SEQUENCE_END, () => { this._ceremonyActive = false; });
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
-
-  /** @returns {boolean} */
   get enabled() { return this._enabled; }
 
-  /** Toggle system enabled state */
   toggle() {
     this._enabled = !this._enabled;
     eventBus.emit(Events.CA_TOGGLED, { enabled: this._enabled });
   }
 
-  /** Get status for HUD or debug */
   getStatus() {
     return {
       enabled: this._enabled,
@@ -273,7 +224,6 @@ export class CollisionAvoidanceSystem {
     };
   }
 
-  /** Reset all state (called on GAME_RESET) */
   reset() {
     this._scanTimer = 0;
     this._worldSinceScan = 0;
@@ -289,9 +239,8 @@ export class CollisionAvoidanceSystem {
     this._lastSuppressedReason = null;
     this._missionNumber = 1;
     this._lastCommsEmitMs = -Infinity;
-    // D2 collision-consequence state. Note _inGameplay is NOT reset here — a
-    // GAME_RESET is followed by a fresh GAME_STATE_CHANGE that sets it, and the
-    // grace clock restart below keeps a new run guarded regardless.
+    // Collision-consequence state. _inGameplay is NOT reset: a GAME_RESET is followed by a fresh GAME_STATE_CHANGE that
+    // sets it, and the grace clock restart keeps a new run guarded regardless.
     this._onboardingActive = false;
     this._ceremonyActive = false;
     this._gameplayElapsed = 0;
@@ -301,23 +250,12 @@ export class CollisionAvoidanceSystem {
   }
 
   /**
-   * Comms-gate helper (Delegation 1 follow-up, 2026-05-31).
-   *
-   * The CA system used to fire a COMMS_MESSAGE on every threat-detected,
-   * dodge-executed, and threat-cleared transition.  Reviewer noted this
-   * produced an overwhelming yellow wall on mission 1 (10+ dodges visible
-   * in the first 60 seconds) that drowned out welcoming onboarding tone.
-   *
-   * This helper enforces two gates:
-   *   1. Mission floor — silent until missionNumber >= COMMS_MIN_MISSION.
-   *   2. Rate limit — at most one CA comms per COMMS_RATE_LIMIT_S seconds.
-   *
-   * Dodging still fires silently; only the COMMS_MESSAGE side-channel is
-   * affected.  Use this for any "chatty" CA comms; do NOT use it for
-   * future game-over alerts (those should still fire even on mission 1).
-   *
-   * @private
-   * @param {object} payload — same payload you'd pass to eventBus.emit(COMMS_MESSAGE,…)
+   * @private Comms gate. Two gates: (1) mission floor, silent until missionNumber >= COMMS_MIN_MISSION; (2) rate
+   * limit, at most one CA comms per COMMS_RATE_LIMIT_S seconds. Why: a COMMS_MESSAGE on every threat / dodge / clear
+   * made a yellow wall on mission 1 (10+ dodges in 60 s) that drowned out the onboarding tone. Dodging still fires
+   * silently; only the COMMS_MESSAGE side-channel is gated. Use for any "chatty" CA comms; NOT for future game-over
+   * alerts (those fire even on mission 1).
+   * @param {object} payload as for eventBus.emit(COMMS_MESSAGE,…)
    * @returns {boolean} true if the message was emitted, false if gated
    */
   _emitCaComms(payload) {
@@ -336,28 +274,20 @@ export class CollisionAvoidanceSystem {
     return true;
   }
 
-  // ==========================================================================
-  // UPDATE (called from main.js game loop)
-  // ==========================================================================
-
   /**
-   * Main update tick — called after autopilot, before player.update().
+   * Main update tick; called after autopilot, before player.update().
    *
-   * 2026-10-17 (s2-fast-time-hits) — cadence. The DODGE scan and every real-time timer
-   * run at 4 Hz of REAL time (SCAN_INTERVAL), as ever. The CONTACT scan runs on that
-   * tick AND ALSO whenever the world seconds since the previous contact scan reach
-   * CONTACT_WINDOW_MAX_S (only once a world dt has been seen) — whichever comes first.
-   * Why: the forward look is clamped to 10 world s, so a 4 Hz real scan at 40×/200×/1000×
-   * (floors 3/4/5) left 10.0-10.7 / 50 / 250 world s per scan mostly unchecked: measured
-   * real hits of a dead-on 10 kg pass were 40× 19-20/20, 100× 7-8/20, 200× 4/20,
-   * 1000× 1/20. Now F1-F3 tick as before, F4 scans about every 3 frames, F5 every frame.
-   * A world-time-only tick runs the contact scan and nothing else (no dodge scan, no
-   * `_scanTimer` reset). See `_scanAndProcessContacts` for the backward chord.
+   * Cadence: the DODGE scan and every real-time timer run at 4 Hz of REAL time (SCAN_INTERVAL). The CONTACT scan runs
+   * on that tick AND whenever the world seconds since the previous contact scan reach CONTACT_WINDOW_MAX_S (only once
+   * a world dt has been seen), whichever comes first. Why: the forward look is clamped to 10 world s, so a 4 Hz real
+   * scan at 40×/200×/1000× (floors 3/4/5) left 10.0-10.7 / 50 / 250 world s per scan mostly unchecked (measured real
+   * hits of a dead-on 10 kg pass: 40× 19-20/20, 100× 7-8/20, 200× 4/20, 1000× 1/20). F1-F3 tick as before, F4 scans
+   * about every 3 frames, F5 every frame. A world-time-only tick runs the contact scan and nothing else (no dodge
+   * scan, no `_scanTimer` reset). See `_scanAndProcessContacts` for the backward chord.
    *
-   * @param {number} dt — REAL delta time in seconds (all timers here run on it)
-   * @param {number} [dtWorld] — WORLD (game) seconds that passed this frame
-   *   (`timeAuthority.dtWorld`); the contact scan's look-ahead window is the
-   *   sum of these since the previous contact scan. Omitted → the nominal
+   * @param {number} dt REAL delta time in seconds (all timers here run on it)
+   * @param {number} [dtWorld] WORLD (game) seconds that passed this frame (`timeAuthority.dtWorld`); the contact scan's
+   *   look-ahead window is the sum of these since the previous contact scan. Omitted → the nominal
    *   SCAN_INTERVAL × TIME_SCALE_GAMEPLAY.
    */
   update(dt, dtWorld) {
@@ -373,11 +303,10 @@ export class CollisionAvoidanceSystem {
 
     const CA = Constants.COLLISION_AVOIDANCE;
 
-    // Track player movement input for override detection (cheap, every frame).
     this._detectPlayerInput();
 
-    // --- Scan throttle: the real 4 Hz tick runs the dodge scan AND the contact
-    //     scan; a world-time tick (D1) runs the contact scan alone. ---
+    // Scan throttle: the real 4 Hz tick runs the dodge scan AND the contact scan; a world-time tick runs the contact
+    // scan alone.
     this._scanTimer += dt;
     const realDue = this._scanTimer >= CA.SCAN_INTERVAL;
     const worldDue = !realDue && this._worldDtSeen
@@ -385,11 +314,10 @@ export class CollisionAvoidanceSystem {
     if (!realDue && !worldDue) return;
     if (realDue) this._scanTimer = 0;
 
-    // World seconds since the previous CONTACT scan (reset on EVERY contact scan,
-    // before the armed check, so the spawn grace never piles into one window), clamped
-    // to 10 s for the forward look: a straight line over minutes is wrong. The raw,
-    // unclamped value is the backward chord's elapsed time. No world dt ever
-    // supplied → the nominal window and no chord.
+    // World seconds since the previous CONTACT scan (reset on EVERY contact scan, before the armed check, so the spawn
+    // grace never piles into one window), clamped to 10 s for the forward look (a straight line over minutes is
+    // wrong). The raw, unclamped value is the backward chord's elapsed time. No world dt ever supplied → the nominal
+    // window and no chord.
     const CAw = Constants.COLLISION_AVOIDANCE;
     const windowWorldS = this._worldDtSeen
       ? Math.min(this._worldSinceScan, CAw.CONTACT_WINDOW_MAX_S)
@@ -397,22 +325,19 @@ export class CollisionAvoidanceSystem {
     const sinceScanWorldS = this._worldDtSeen ? this._worldSinceScan : undefined;
     this._worldSinceScan = 0;
 
-    // --- Scan for threats ---
     const playerPos = this._player.getPosition();
     const playerVel = this._player.getVelocity();
 
-    // --- D2 collision consequences (ROADMAP §4 P2) --------------------------
-    // Runs INDEPENDENT of the dodge enable-toggle and ARM_PILOT so that turning
-    // auto-dodge off (or piloting a daughter) can't make the mother invincible
-    // to debris. Internally gated (gameplay / onboarding / spawn-grace /
-    // ceremony / per-debris cooldown / captured-pinned exemption). Runs on the
-    // 4 Hz real tick AND on world-time ticks (every frame at 1000x; s2-fast-time-hits).
+    // Collision consequences run INDEPENDENT of the dodge enable-toggle and ARM_PILOT, so turning auto-dodge off (or
+    // piloting a daughter) can't make the mother invincible to debris. Internally gated (gameplay / onboarding /
+    // spawn-grace / ceremony / per-debris cooldown / captured-pinned exemption). Runs on the 4 Hz real tick AND on
+    // world-time ticks (every frame at 1000×).
     this._scanAndProcessContacts(playerPos, playerVel, windowWorldS, sinceScanWorldS);
 
-    // World-time-only tick: the dodge scan keeps its 4 Hz real cadence (D1/D6).
+    // World-time-only tick: the dodge scan keeps its 4 Hz real cadence.
     if (!realDue) return;
 
-    // --- Auto-dodge (gated by the enable toggle + ARM_PILOT suppression) -----
+    // Auto-dodge (gated by the enable toggle + ARM_PILOT suppression)
     if (!this._enabled || this._armPilotMode) return;
 
     const threat = this._scanForThreats(playerPos, playerVel);
@@ -436,23 +361,15 @@ export class CollisionAvoidanceSystem {
         });
       }
 
-      // --- Evaluate if dodge is needed ---
       this._evaluateAndDodge(threat, playerPos);
     } else {
       this._clearThreat();
     }
   }
 
-  // ==========================================================================
-  // D2 COLLISION CONSEQUENCES (ROADMAP §4 P2)
-  // ==========================================================================
-
   /**
-   * Is the collision-consequence emitter armed this tick?
-   * All four gates are load-bearing — the onboarding + grace gates are what keep
-   * a new player un-killable by the deliberately-close welcome field.
-   * @private
-   * @returns {boolean}
+   * @private Is the collision-consequence emitter armed this tick? All four gates are load-bearing: the onboarding +
+   * grace gates keep a new player un-killable by the deliberately-close welcome field.
    */
   _collisionArmed() {
     const CM = Constants.COLLISION_MODEL || {};
@@ -463,43 +380,34 @@ export class CollisionAvoidanceSystem {
   }
 
   /**
-   * Scan the same candidate set as the dodge scan for genuine CONTACTS (not
-   * near-misses to dodge) and route graduated consequences. Called once per
-   * contact-scan tick (the real 4 Hz tick, or a world-time tick — see `update()`),
-   * independent of the dodge toggle. No per-iteration allocation.
+   * @private Scan the same candidate set as the dodge scan for genuine CONTACTS (not near-misses to dodge) and route
+   * graduated consequences. Called once per contact-scan tick (the real 4 Hz tick or a world-time tick; see
+   * `update()`), independent of the dodge toggle. No per-iteration allocation.
    *
-   * Two looks per candidate (2026-10-17, s2-fast-time-hits — the hit check must see a
-   * pass at every time rate; measured real hits of a dead-on 10 kg pass, same at
-   * 20..10 000 m/s: 10×/20× 20/20, 40× 19-20, 100× 7-8, 200× 4/20, 1000× 1/20):
-   *   1. FORWARD (unchanged): straight line from the current state over the window
+   * Two looks per candidate (the hit check must see a pass at every time rate; measured real hits of a dead-on 10 kg
+   * pass, same at 20..10 000 m/s: 10×/20× 20/20, 40× 19-20, 100× 7-8, 200× 4/20, 1000× 1/20):
+   *   1. FORWARD: straight line from the current state over the window
    *      `min(world s since the last contact scan, CONTACT_WINDOW_MAX_S)`.
-   *   2. BACKWARD CHORD (new): the segment between this piece's relative position at the
-   *      IMMEDIATELY previous contact scan and now, both read from the orbit
-   *      (`orbitToSceneCartesianInto` minus the ship). It catches a pass that happened
-   *      between two scans and so lies behind the forward window. Used only when
-   *      `0 < Tb <= CONTACT_CHORD_MAX_S` (Tb = world s between the two scans, unclamped;
-   *      a chord between two TRUE positions errs about a quarter of a straight-line
-   *      extrapolation: <= ~17 m at 10 km/s over 25 s, so longer gaps — e.g. F5 under
-   *      ~40 fps — skip it), the pair was approaching at the start (r0·d < 0), the
-   *      implied speed is <= CONTACT_PREFILTER_SPEED_MS and agrees with the orbit-derived
-   *      relative speed (a teleport or re-seat fails this and is skipped). It acts on
-   *      'glancing'/'hard' only; a chord 'warning' is ignored (warnings stay forward-only).
-   *      One pass = one consequence: both looks go through `_handleContact`, whose
-   *      per-piece real-time contact cooldown (5 s >> the 0.25 s real gap between scans)
-   *      swallows the second.
+   *   2. BACKWARD CHORD: the segment between this piece's relative position at the IMMEDIATELY previous contact scan
+   *      and now, both read from the orbit (`orbitToSceneCartesianInto` minus the ship). It catches a pass that
+   *      happened between two scans and so lies behind the forward window. Used only when
+   *      `0 < Tb <= CONTACT_CHORD_MAX_S` (Tb = world s between the two scans, unclamped; a chord between two TRUE
+   *      positions errs about a quarter of a straight-line extrapolation: <= ~17 m at 10 km/s over 25 s, so longer
+   *      gaps, e.g. F5 under ~40 fps, skip it), the pair was approaching at the start (r0·d < 0), and the implied
+   *      speed is <= CONTACT_PREFILTER_SPEED_MS and agrees with the orbit-derived relative speed (a teleport or
+   *      re-seat fails this and is skipped). It acts on 'glancing'/'hard' only; a chord 'warning' is ignored
+   *      (warnings stay forward-only). One pass = one consequence: both looks go through `_handleContact`, whose
+   *      per-piece real-time contact cooldown (5 s >> the 0.25 s real gap between scans) swallows the second.
    *
-   * Loop order per piece: exemption -> store gate (distance to the ship, so the memory
-   * covers everything the next, possibly longer, interval could bring in) -> chord +
-   * store -> forward `reachSq` skip -> forward look. The scan sequence number advances on
-   * EVERY call, armed or not, and an unarmed scan stores nothing, so the first armed scan
+   * Loop order per piece: exemption -> store gate (distance to the ship, so the memory covers everything the next,
+   * possibly longer, interval could bring in) -> chord + store -> forward `reachSq` skip -> forward look. The scan
+   * sequence number advances on EVERY call, armed or not, and an unarmed scan stores nothing, so the first armed scan
    * after a gap draws no chord.
-   * @private
-   * @param {THREE.Vector3} playerPos
-   * @param {{x,y,z}} playerVel — km/s
-   * @param {number} [windowWorldS] — look-ahead window in WORLD seconds (default
-   *   the nominal world time of one SCAN_INTERVAL, TimeAuthority.baseGameDt); 0 grades by the current distance only
-   * @param {number} [sinceScanWorldS] — raw (unclamped) WORLD seconds since the previous
-   *   contact scan = the chord's elapsed time Tb; undefined / 0 → no chord this scan
+   * @param {{x,y,z}} playerVel km/s
+   * @param {number} [windowWorldS] look-ahead window in WORLD seconds (default the nominal world time of one
+   *   SCAN_INTERVAL, TimeAuthority.baseGameDt); 0 grades by the current distance only
+   * @param {number} [sinceScanWorldS] raw (unclamped) WORLD seconds since the previous contact scan = the chord's
+   *   elapsed time Tb; undefined / 0 → no chord this scan
    */
   _scanAndProcessContacts(playerPos, playerVel, windowWorldS, sinceScanWorldS) {
     const seq = ++this._contactSeq;
@@ -532,13 +440,11 @@ export class CollisionAvoidanceSystem {
       const debris = list[i];
       if (!debris || !debris.alive) continue;
 
-      // Shared exemption set (SSOT with the dodge scan): welcome cluster
-      // (M1-scoped) / welcomeField / captured-pinned / active-target /
-      // autopilot-locked / arm-targeted are never contacts.
+      // Shared exemption set (SSOT with the dodge scan): welcome cluster (M1-scoped) / welcomeField / captured-pinned /
+      // active-target / autopilot-locked / arm-targeted are never contacts.
       if (this._isThreatExempt(debris)) continue;
 
-      // --- Fast distance² pre-filter using cached scene position (same as the
-      //     dodge scan's candidate envelope) ---
+      // Fast distance² pre-filter on the cached scene position (same candidate envelope as the dodge scan).
       const sp = debris._scenePosition;
       if (!sp) continue;
       const dx = sp.x - playerPos.x;
@@ -546,16 +452,15 @@ export class CollisionAvoidanceSystem {
       const dz = sp.z - playerPos.z;
       const distSq = dx * dx + dy * dy + dz * dz;
       if (distSq > storeReachSq) continue;
-      if (!debris.orbit) continue; // no orbit to read (the store radius reaches past the old pre-filter)
+      if (!debris.orbit) continue; // no orbit to read
 
-      // --- State from the orbit (world seconds). Zero-alloc scratch variant: one
-      //     read serves the chord, the memory and the forward look. ---
+      // State from the orbit (world seconds). Zero-alloc scratch variant: one read serves the chord, the memory and
+      // the forward look.
       const pos = this._contactScratchPos;
       const vel = this._contactScratchVel;
       orbitToSceneCartesianInto(debris.orbit, pos, vel);
 
-      // --- Backward chord + memory: the relative position (piece - ship) from the
-      //     same source (the orbit) at both ends. ---
+      // Backward chord + memory: the relative position (piece - ship) from the same source (the orbit) at both ends.
       const r1x = pos.x - playerPos.x;
       const r1y = pos.y - playerPos.y;
       const r1z = pos.z - playerPos.z;
@@ -567,7 +472,6 @@ export class CollisionAvoidanceSystem {
       }
       m.seq = seq; m.x = r1x; m.y = r1y; m.z = r1z;
 
-      // --- Forward look (unchanged) ---
       if (distSq > reachSq) continue;
       const rvx = (vel.x - playerVel.x) * KM_TO_SCENE;
       const rvy = (vel.y - playerVel.y) * KM_TO_SCENE;
@@ -603,24 +507,19 @@ export class CollisionAvoidanceSystem {
   }
 
   /**
-   * The backward chord for one piece (see `_scanAndProcessContacts`). Pure
-   * arithmetic on the stored previous relative position `m` and the current one
-   * (r1) — no allocation except the classifier's argument object, built only
+   * @private The backward chord for one piece (see `_scanAndProcessContacts`). Pure arithmetic on the stored previous
+   * relative position `m` and the current one (r1); no allocation except the classifier's argument object, built only
    * for a chord that passes inside the warning envelope.
-   * @private
-   * @param {{x,y,z}} m — previous relative position (piece - ship, scene units)
-   * @param {number} r1x — relative position now, x (scene units)
-   * @param {number} r1y — relative position now, y
-   * @param {number} r1z — relative position now, z
-   * @param {{x,y,z}} vel — piece velocity now (km/s)
-   * @param {{x,y,z}} playerVel — km/s
-   * @param {number} Tb — world seconds between the two scans (> 0)
-   * @param {number} hullRadiusM — ship hull radius for the classifier (m)
-   * @param {number} massKg — piece mass
-   * @param {object} CA — Constants.COLLISION_AVOIDANCE
-   * @param {object} CM — Constants.COLLISION_MODEL
-   * @returns {'none'|'glancing'|'hard'} — on a hit, `_chordDistM` / `_chordSpeedMs` hold
-   *   the closest distance (m) and the implied closing speed (m/s)
+   * @param {{x,y,z}} m previous relative position (piece - ship, scene units)
+   * @param {number} r1x relative position now, x (scene units)
+   * @param {number} r1y
+   * @param {number} r1z
+   * @param {{x,y,z}} vel piece velocity now (km/s)
+   * @param {{x,y,z}} playerVel km/s
+   * @param {number} Tb world seconds between the two scans (> 0)
+   * @param {number} hullRadiusM ship hull radius for the classifier (m)
+   * @returns {'none'|'glancing'|'hard'} on a hit, `_chordDistM` / `_chordSpeedMs` hold the closest distance (m) and
+   *   the implied closing speed (m/s)
    */
   _chordSeverity(m, r1x, r1y, r1z, vel, playerVel, Tb, hullRadiusM, massKg, CA, CM) {
     const dx = r1x - m.x;
@@ -640,7 +539,6 @@ export class CollisionAvoidanceSystem {
     const rvz = (vel.z - playerVel.z) * KM_TO_SCENE;
     const orbitMs = Math.sqrt(rvx * rvx + rvy * rvy + rvz * rvz) / M;
     if (Math.abs(impliedMs - orbitMs) > 0.25 * orbitMs + 50) return 'none';
-    // Closest point on the segment.
     let s = -r0d / dd;
     if (s < 0) s = 0; else if (s > 1) s = 1;
     const cx = m.x + dx * s;
@@ -661,10 +559,8 @@ export class CollisionAvoidanceSystem {
   }
 
   /**
-   * Drop chord-memory entries that can no longer be chorded (older than the
-   * previous scan) — pieces that died or flew out of the store radius.
-   * @private
-   * @param {number} seq — the current scan sequence number
+   * @private Drop chord-memory entries that can no longer be chorded (older than the previous scan): pieces that died
+   * or flew out of the store radius.
    */
   _pruneContactMem(seq) {
     for (const [id, m] of this._contactMem) {
@@ -673,13 +569,8 @@ export class CollisionAvoidanceSystem {
   }
 
   /**
-   * Route one classified contact to its consequence, honoring per-debris
-   * cooldowns so a single lingering pass-through can't machine-gun events.
-   * @private
-   * @param {'warning'|'glancing'|'hard'} severity
-   * @param {object} debris
-   * @param {number} closingMs
-   * @param {number} distM
+   * @private Route one classified contact to its consequence, honoring per-debris cooldowns so a single lingering
+   * pass-through can't machine-gun events.
    */
   _handleContact(severity, debris, closingMs, distM) {
     const CM = Constants.COLLISION_MODEL || {};
@@ -739,28 +630,18 @@ export class CollisionAvoidanceSystem {
     });
   }
 
-  // ==========================================================================
-  // DETECTION (Phase 1 — dodge scan, 4 Hz real)
-  // ==========================================================================
-
   /**
-   * Shared exemption test for BOTH the dodge scan (`_scanForThreats`) and the
-   * collision-consequence scan (`_scanAndProcessContacts`), so the two candidate
-   * filters over the same `debrisList` can't drift apart. A debris is exempt when:
-   *   • it's a welcome-cluster piece placed for THIS chapter (c2-fifth-catch D1:
-   *     DebrisField tags each piece `welcomeChapter` at spawn and re-tags it when the
-   *     re-seat puts it back ahead of the ship; untagged = chapter 1). The game put
-   *     it in the player's path, so it must not cost them a burn. A surviving piece
-   *     of an OLDER chapter that was not re-seated re-enters both scans (welcomeSpawn
-   *     is not cleared on MISSION_START) — never permanently invincible, matching the
-   *     long-standing dodge doctrine;
+   * @private Shared exemption test for BOTH the dodge scan (`_scanForThreats`) and the collision-consequence scan
+   * (`_scanAndProcessContacts`), so the two candidate filters over the same `debrisList` can't drift apart. A debris is
+   * exempt when:
+   *   • it's a welcome-cluster piece placed for THIS chapter (DebrisField tags each piece `welcomeChapter` at spawn and
+   *     re-tags it when the re-seat puts it back ahead of the ship; untagged = chapter 1). The game put it in the
+   *     player's path, so it must not cost them a burn. A surviving piece of an OLDER chapter that was not re-seated
+   *     re-enters both scans (welcomeSpawn is not cleared on MISSION_START): never permanently invincible;
    *   • it carries the persistent `welcomeField` flag;
-   *   • it's a held/captured catch (we're holding it — not a collision, not a dodge);
-   *   • it's the active (Tab-selected) target, autopilot-locked, or arm-targeted
-   *     (deliberately being approached to capture).
-   * @private
-   * @param {object} debris
-   * @returns {boolean}
+   *   • it's a held/captured catch (we're holding it: not a collision, not a dodge);
+   *   • it's the active (Tab-selected) target, autopilot-locked, or arm-targeted (deliberately being approached to
+   *     capture).
    */
   _isThreatExempt(debris) {
     if (debris.welcomeSpawn && (debris.welcomeChapter ?? 1) === this._missionNumber) return true;
@@ -773,24 +654,19 @@ export class CollisionAvoidanceSystem {
   }
 
   /**
-   * Scan all debris for the most threatening upcoming collision.
-   * Pre-filters by distance² for performance (800 debris → ~5-20 candidates).
-   *
-   * @private
-   * @param {THREE.Vector3} playerPos — player scene position
-   * @param {{x,y,z}} playerVel — player velocity (km/s)
+   * @private Scan all debris for the most threatening upcoming collision. Pre-filters by distance² (800 debris → ~5-20
+   * candidates). A piece whose relative speed is below `Constants.COLLISION_MODEL.GLANCING_MIN_SPEED_MS` is skipped: a
+   * touch that slow does nothing (collisionModel.js), so a dodge would burn gas for no harm. Read live each scan.
+   * @param {THREE.Vector3} playerPos player scene position
+   * @param {{x,y,z}} playerVel player velocity (km/s)
    * @returns {object|null} Worst threat { debrisId, tca, missDistScene, missDistM, evasionDir, threatDir }
-   *
-   * 2026-10-17 (r1-release-dodge): a piece whose relative speed is below
-   * `Constants.COLLISION_MODEL.GLANCING_MIN_SPEED_MS` is skipped — a touch that slow does
-   * nothing (collisionModel.js), so a dodge would burn gas for no harm. Read live each scan.
    */
   _scanForThreats(playerPos, playerVel) {
     const CA = Constants.COLLISION_AVOIDANCE;
     const avoidRadius = this._getAvoidanceRadius();
     const glancingFloorMs = (Constants.COLLISION_MODEL || {}).GLANCING_MIN_SPEED_MS || 0;
 
-    // ST-6.3: MOID prefilter — if ConjunctionSystem has MOID data, scan only top-N pairs
+    // MOID prefilter: if ConjunctionSystem has MOID data, scan only the top-N pairs
     const moidPairs = this._conjunctionSystem
       ? this._conjunctionSystem.getTopRiskPairs()
       : null;
@@ -800,7 +676,6 @@ export class CollisionAvoidanceSystem {
     let totalCandidates;
 
     if (useMoidFilter) {
-      // Build a set of IDs to check from the MOID-ranked pairs
       const moidIds = new Set(moidPairs.map(p => p.id));
       debrisList = this._debrisField.debrisList.filter(d => d.alive && moidIds.has(d.id));
       totalCandidates = this._debrisField.debrisList.length;
@@ -809,7 +684,7 @@ export class CollisionAvoidanceSystem {
       totalCandidates = debrisList.length;
     }
 
-    // ST-6.3: Debug log once per second
+    // Debug log once per second
     this._moidLogTimer += CA.SCAN_INTERVAL;
     if (this._moidLogTimer >= 1.0) {
       this._moidLogTimer = 0;
@@ -831,7 +706,7 @@ export class CollisionAvoidanceSystem {
       // M1-scoped so surviving pieces re-enter CA in later missions.
       if (this._isThreatExempt(debris)) continue;
 
-      // --- Fast distance² pre-filter using cached scene position ---
+      // Fast distance² pre-filter using cached scene position
       let dx, dy, dz;
       if (debris._scenePosition) {
         dx = debris._scenePosition.x - playerPos.x;
@@ -844,7 +719,6 @@ export class CollisionAvoidanceSystem {
       const distSq = dx * dx + dy * dy + dz * dz;
       if (distSq > CA.SCAN_RADIUS_SQ) continue;
 
-      // --- Full cartesian state for velocity-based TCA prediction ---
       const cart = orbitToSceneCartesian(debris.orbit);
       const prediction = this._predictClosestApproach(
         cart.position, cart.velocity, playerPos, playerVel,
@@ -852,7 +726,6 @@ export class CollisionAvoidanceSystem {
       if (!prediction) continue;
       if (prediction.relSpeedMs < glancingFloorMs) continue; // too slow to do harm
 
-      // Only interested if approaching (TCA > 0) and within avoidance envelope
       if (prediction.tca <= 0 || prediction.minDist > avoidRadius) continue;
       if (prediction.tca > CA.LOOK_AHEAD_S) continue;
 
@@ -872,33 +745,26 @@ export class CollisionAvoidanceSystem {
     return worst;
   }
 
-  // ==========================================================================
-  // TCA PREDICTION (reuse ConjunctionSystem math)
-  // ==========================================================================
-
   /**
-   * Compute time-of-closest-approach (TCA) and miss distance using
-   * constant-velocity linear extrapolation.
+   * @private Time of closest approach (TCA) and miss distance by constant-velocity linear extrapolation:
    *
    *   TCA = −(Δr · Δv) / (Δv · Δv)   clamped to [0, LOOK_AHEAD_S]
    *   miss = |Δr + Δv × TCA|
    *
-   * @private
-   * @param {{x,y,z}} dPos — debris position (scene units)
-   * @param {{x,y,z}} dVel — debris velocity (km/s from orbitToSceneCartesian)
-   * @param {{x,y,z}} pPos — player position (scene units)
-   * @param {{x,y,z}} pVel — player velocity (km/s from getVelocity)
+   * @param {{x,y,z}} dPos debris position (scene units)
+   * @param {{x,y,z}} dVel debris velocity (km/s from orbitToSceneCartesian)
+   * @param {{x,y,z}} pPos player position (scene units)
+   * @param {{x,y,z}} pVel player velocity (km/s from getVelocity)
    * @returns {{ tca:number, minDist:number, threatDir:{x,y,z}, relSpeedMs:number } | null}
    */
   _predictClosestApproach(dPos, dVel, pPos, pVel) {
     const CA = Constants.COLLISION_AVOIDANCE;
 
-    // Relative position (scene units)
     const rpx = dPos.x - pPos.x;
     const rpy = dPos.y - pPos.y;
     const rpz = dPos.z - pPos.z;
 
-    // Relative velocity — convert km/s → scene-units/s
+    // Relative velocity: km/s → scene-units/s
     const rvx = (dVel.x - pVel.x) * KM_TO_SCENE;
     const rvy = (dVel.y - pVel.y) * KM_TO_SCENE;
     const rvz = (dVel.z - pVel.z) * KM_TO_SCENE;
@@ -910,13 +776,11 @@ export class CollisionAvoidanceSystem {
     let tca = -rpDotRv / rvDotRv;
     tca = clamp(tca, 0, CA.LOOK_AHEAD_S);
 
-    // Miss vector at TCA
     const cx = rpx + rvx * tca;
     const cy = rpy + rvy * tca;
     const cz = rpz + rvz * tca;
     const minDist = Math.sqrt(cx * cx + cy * cy + cz * cz);
 
-    // Normalised threat approach direction
     const rLen = Math.sqrt(rpx * rpx + rpy * rpy + rpz * rpz);
     const threatDir = rLen > 1e-10
       ? { x: rpx / rLen, y: rpy / rLen, z: rpz / rLen }
@@ -925,18 +789,12 @@ export class CollisionAvoidanceSystem {
     return { tca, minDist, threatDir, relSpeedMs: Math.sqrt(rvDotRv) / M };
   }
 
-  // ==========================================================================
-  // EVASION VECTOR (reuse ConjunctionSystem math)
-  // ==========================================================================
-
   /**
-   * Compute dodge direction perpendicular to threat approach vector.
-   * Cross product: threat × radial → perpendicular in orbital plane.
-   *
-   * @private
-   * @param {{x,y,z}} threatDir — normalised threat direction
-   * @param {{x,y,z}} playerPos — player scene position
-   * @returns {{x:number, y:number, z:number}} Normalised evasion direction (scene units)
+   * @private Dodge direction perpendicular to the threat approach vector (threat × radial → perpendicular in the
+   * orbital plane).
+   * @param {{x,y,z}} threatDir normalised threat direction
+   * @param {{x,y,z}} playerPos player scene position
+   * @returns {{x:number, y:number, z:number}} normalised evasion direction (scene units)
    */
   _generateEvasionVector(threatDir, playerPos) {
     // Radial "up" — away from Earth centre
@@ -946,7 +804,6 @@ export class CollisionAvoidanceSystem {
       ? { x: px / pLen, y: py / pLen, z: pz / pLen }
       : { x: 0, y: 1, z: 0 };
 
-    // Cross product: threat × radial → perpendicular in orbital plane
     let ex = threatDir.y * radial.z - threatDir.z * radial.y;
     let ey = threatDir.z * radial.x - threatDir.x * radial.z;
     let ez = threatDir.x * radial.y - threatDir.y * radial.x;
@@ -960,50 +817,37 @@ export class CollisionAvoidanceSystem {
     return { x: radial.z, y: 0, z: -radial.x };
   }
 
-  // ==========================================================================
-  // AVOIDANCE (Phase 1 — dodge execution)
-  // ==========================================================================
-
   /**
-   * Evaluate whether to execute a dodge and fire if appropriate.
+   * @private Evaluate whether to execute a dodge and fire if appropriate.
    *
-   * Real-dodge lane (2026-09-15, owner decision): the manoeuvre is a genuine
-   * Δv burn through `PlayerSatellite.applyCartesianImpulse` — it mutates the
-   * orbit and bills xenon + battery (the ion/FEEP path applyCartesianImpulse
-   * already gates and charges; see the module-level resource-model note in
-   * the class docstring header of this file's real-dodge commit). The old
-   * `_rcsVelocity` placebo channel is no longer touched by this method.
+   * The manoeuvre is a genuine Δv burn through `PlayerSatellite.applyCartesianImpulse` (owner decision 2026-09-15): it
+   * mutates the orbit and bills xenon + battery (the ion/FEEP path applyCartesianImpulse already gates and charges).
+   * The old `_rcsVelocity` placebo channel is no longer touched by this method.
    *
-   * Magnitude is geometry-driven: Δv_needed ≈ (desiredMiss − predictedMiss) /
-   * timeToTCA, clamped to [BASE_DODGE_DV, DODGE_DV_CEILING_MS]. `threat.tca`
-   * is already expressed in the same WORLD/orbital-mechanics time base that
-   * drives `PlayerSatellite.update()`'s orbit propagation (gameDt = dtReal ×
-   * TIME_SCALE_GAMEPLAY) — see `_predictClosestApproach()` and the
-   * `LOOK_AHEAD_S` comment in Constants.js. Using `threat.tca` directly here
-   * (never `dt`, never the real-time COOLDOWN clock) keeps this arithmetic
-   * unit-consistent with the burn's actual effect on the propagated orbit.
+   * Magnitude is geometry-driven: Δv_needed ≈ (desiredMiss − predictedMiss) / timeToTCA, clamped to
+   * [BASE_DODGE_DV, DODGE_DV_CEILING_MS]. `threat.tca` is already in the same WORLD/orbital-mechanics time base that
+   * drives `PlayerSatellite.update()`'s orbit propagation (gameDt = dtReal × TIME_SCALE_GAMEPLAY); see
+   * `_predictClosestApproach()` and the `LOOK_AHEAD_S` comment in Constants.js. Using `threat.tca` directly (never
+   * `dt`, never the real-time COOLDOWN clock) keeps this unit-consistent with the burn's effect on the propagated
+   * orbit.
    *
    * Three honest outcomes (never a false "fired" claim):
    *   - sufficient: burn clears the geometry → routine, gated comms.
-   *   - insufficient: DODGE_DV_CEILING_MS clamped the burn below what the
-   *     geometry needed → BRACE comms, bypasses the mission-floor/rate-limit
-   *     quieting (safety-critical).
-   *   - refused: PROPELLANT_RESERVE_FRAC pre-check or applyCartesianImpulse
-   *     itself declined (dry tank, flat battery, interlock, envelope guard)
-   *     → explicit named refusal comms, also bypasses quieting, no orbit
-   *     change, no billing.
+   *   - insufficient: DODGE_DV_CEILING_MS clamped the burn below what the geometry needed → BRACE comms, bypasses the
+   *     mission-floor/rate-limit quieting (safety-critical).
+   *   - refused: PROPELLANT_RESERVE_FRAC pre-check or applyCartesianImpulse itself declined (dry tank, flat battery,
+   *     interlock, envelope guard) → explicit named refusal comms, also bypasses quieting, no orbit change, no
+   *     billing.
    *
-   * @private
-   * @param {object} threat — from _scanForThreats()
-   * @param {THREE.Vector3} playerPos — current player position
+   * @param {object} threat from _scanForThreats()
+   * @param {THREE.Vector3} playerPos current player position
    */
   _evaluateAndDodge(threat, playerPos) {
     const CA = Constants.COLLISION_AVOIDANCE;
 
-    // --- Cooldown check ---
     if (this._elapsedTime - this._lastDodgeTime < CA.COOLDOWN) return;
 
-    // --- Player manual override: recent input suppresses dodge ---
+    // Player manual override: recent input suppresses dodge
     if (this._elapsedTime - this._lastPlayerInputTime < CA.OVERRIDE_WINDOW) {
       if (this._lastSuppressedReason !== 'manual_override') {
         this._lastSuppressedReason = 'manual_override';
@@ -1020,7 +864,7 @@ export class CollisionAvoidanceSystem {
       return;
     }
 
-    // --- ARM_PILOT suppress (redundant safety — also checked in update) ---
+    // ARM_PILOT suppress (redundant safety; also checked in update)
     if (this._armPilotMode) {
       if (this._lastSuppressedReason !== 'arm_pilot') {
         this._lastSuppressedReason = 'arm_pilot';
@@ -1035,7 +879,6 @@ export class CollisionAvoidanceSystem {
     // Clear suppression debounce — we're proceeding to dodge
     this._lastSuppressedReason = null;
 
-    // --- Geometry-driven dodge magnitude (see JSDoc above for the clock note) ---
     const desiredMissM = this._trawlActive ? CA.TRAWL_AVOIDANCE_RADIUS_M : CA.AVOIDANCE_RADIUS_M;
     const missShortfallM = Math.max(0, desiredMissM - threat.missDistM);
     const tcaForDv = Math.max(CA.DV_MIN_TCA_S, threat.tca);
@@ -1047,8 +890,8 @@ export class CollisionAvoidanceSystem {
 
     const dirLabel = this._getDirectionLabel(threat.evasionDir, playerPos);
 
-    // --- Propellant reserve pre-check — CA won't autonomously spend the
-    //     player's last margin; refuse and name it before even attempting. ---
+    // Propellant reserve pre-check: CA won't autonomously spend the player's last margin; refuse and name it before
+    // attempting.
     const reserveReason = this._checkPropellantReserve();
     if (reserveReason) {
       this._lastDodgeTime = this._elapsedTime;
@@ -1057,7 +900,7 @@ export class CollisionAvoidanceSystem {
         reason: reserveReason,
         requiredDvMs,
       });
-      // Refusals bypass mission-floor/rate-limit quieting — safety-critical.
+      // Refusals bypass mission-floor/rate-limit quieting: safety-critical.
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'CA',
         text: `COLLISION AVOIDANCE REFUSED — ${reserveReason}. Debris ${threat.debrisId}, miss ${Math.round(threat.missDistM)}m. MANUAL ACTION REQUIRED`,
@@ -1066,24 +909,22 @@ export class CollisionAvoidanceSystem {
       return;
     }
 
-    // --- Issue the real impulse. Bills xenon + battery exactly once inside
-    //     applyCartesianImpulse (no separate RESOURCE_CONSUME emit here —
-    //     double-billing is the bug another lane fixed elsewhere). ---
+    // Issue the real impulse. Bills xenon + battery exactly once inside applyCartesianImpulse (no separate
+    // RESOURCE_CONSUME emit here: that would double-bill).
     const ev = threat.evasionDir;
     const dvWorld = new THREE.Vector3(ev.x, ev.y, ev.z).multiplyScalar(dodgeDvMs);
-    const fired = this._player.applyCartesianImpulse(dvWorld, CA.DODGE_BILLING_WINDOW_S, { dodge: true });   // net-duck R2: a dodge is never held for a ducked catch
+    const fired = this._player.applyCartesianImpulse(dvWorld, CA.DODGE_BILLING_WINDOW_S, { dodge: true });   // a dodge is never held for a ducked catch
 
     this._lastDodgeTime = this._elapsedTime;
 
     if (!fired) {
-      // Refused by applyCartesianImpulse itself — name the reason honestly.
+      // Refused by applyCartesianImpulse itself: name the reason honestly.
       const reason = this._diagnoseRefusalReason();
       eventBus.emit(Events.CA_DODGE_REFUSED, {
         debrisId: threat.debrisId,
         reason,
         requiredDvMs,
       });
-      // Refusals bypass mission-floor/rate-limit quieting — safety-critical.
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'CA',
         text: `COLLISION AVOIDANCE REFUSED — ${reason}. Debris ${threat.debrisId}, miss ${Math.round(threat.missDistM)}m. MANUAL ACTION REQUIRED`,
@@ -1092,10 +933,8 @@ export class CollisionAvoidanceSystem {
       return;
     }
 
-    // Cosmetic puff already fired inside applyCartesianImpulse (real physics,
-    // same visual feel as the old placebo — see PlayerSatellite.applyCartesianImpulse).
+    // Cosmetic puff already fired inside applyCartesianImpulse.
 
-    // --- Emit dodge event ---
     eventBus.emit(Events.CA_DODGE_EXECUTED, {
       debrisId: threat.debrisId,
       direction: dirLabel,
@@ -1103,9 +942,8 @@ export class CollisionAvoidanceSystem {
       insufficient: clampBinding,
     });
 
-    // --- D2: the CA autopilot performed an avoidance burn → COLLISION_EVASION
-    //     (HUD banner + comms consumers). Naturally rate-limited by the dodge
-    //     cooldown (≥ COOLDOWN s between dodges). ---
+    // The CA autopilot performed an avoidance burn → COLLISION_EVASION (HUD banner + comms consumers); naturally
+    // rate-limited by the dodge cooldown (≥ COOLDOWN s between dodges).
     eventBus.emit(Events.COLLISION_EVASION, {
       debrisId: threat.debrisId,
       distanceM: Math.round(threat.missDistM),
@@ -1113,8 +951,8 @@ export class CollisionAvoidanceSystem {
     });
 
     if (clampBinding) {
-      // Insufficient — the ceiling clamped the burn below what the geometry
-      // needed. Never imply safety; bypasses mission-floor/rate-limit quieting.
+      // Insufficient: the ceiling clamped the burn below what the geometry needed. Never imply safety; bypasses
+      // mission-floor/rate-limit quieting.
       eventBus.emit(Events.CA_DODGE_INSUFFICIENT, {
         debrisId: threat.debrisId,
         magnitude: dodgeDvMs,
@@ -1126,7 +964,6 @@ export class CollisionAvoidanceSystem {
         priority: 'critical',
       });
     } else {
-      // Routine success — keeps the existing mission-floor/rate-limit quieting.
       this._emitCaComms({
         sender: 'CA',
         text: `CAUTION: COLLISION AVOIDANCE. Dodge burn fired (${dodgeDvMs.toFixed(2)} m/s ${dirLabel})`,
@@ -1136,13 +973,10 @@ export class CollisionAvoidanceSystem {
   }
 
   /**
-   * Reserve-floor guard (real-dodge lane, 2026-09-15): the autonomous CA burn
-   * must never be what drains the player's LAST xenon/battery margin without
-   * their knowledge. Below PROPELLANT_RESERVE_FRAC of either tank, CA
-   * declines to fire and reports why — a named refusal, not a silent skip.
-   * (applyCartesianImpulse's own gates only trip at exactly empty/interlocked;
-   * this is a proactive floor above that.)
-   * @private
+   * @private Reserve-floor guard: the autonomous CA burn must never be what drains the player's LAST xenon/battery
+   * margin without their knowledge. Below PROPELLANT_RESERVE_FRAC of either tank, CA declines to fire and reports why
+   * (a named refusal, not a silent skip). applyCartesianImpulse's own gates only trip at exactly empty/interlocked;
+   * this is a proactive floor above that.
    * @returns {string|null} refusal reason, or null when the reserve is fine
    */
   _checkPropellantReserve() {
@@ -1153,7 +987,7 @@ export class CollisionAvoidanceSystem {
     const batteryReserve = (Constants.BATTERY_MAX || 100) * frac;
     const fuel = this._getActiveFuel();
     const batteryLow = (res.battery ?? Infinity) <= batteryReserve;
-    // g1-gas-upgrades D7: the reserve is MASS against the base argon tank (the same for every gas), 5 %.
+    // The reserve is MASS against the base argon tank (the same for every gas), 5 %.
     const xenonLow = (!fuel || !fuel.fromCargo) && (res.xenon == null ? false : engineGasLowFrac(res) <= frac);
     if (batteryLow) return 'battery reserve — preserving power for essential systems';
     if (xenonLow) return `${this._tankGasName(res)} reserve — preserving propellant for essential maneuvers`;
@@ -1161,11 +995,8 @@ export class CollisionAvoidanceSystem {
   }
 
   /**
-   * Diagnose why applyCartesianImpulse refused a burn, mirroring its own
-   * internal gate order (power → interlock → battery → xenon → envelope),
-   * so the refusal comms name the real reason instead of a generic failure.
-   * @private
-   * @returns {string}
+   * @private Why applyCartesianImpulse refused a burn, mirroring its gate order (power → interlock → battery → xenon →
+   * envelope), so the refusal comms name the real reason instead of a generic failure.
    */
   _diagnoseRefusalReason() {
     const p = this._player;
@@ -1177,42 +1008,29 @@ export class CollisionAvoidanceSystem {
     return 'maneuver envelope limit';
   }
 
-  /**
-   * @private
-   * @returns {object|null} the currently active fuel definition, if known
-   */
   _getActiveFuel() {
     if (this._resourceSystem && typeof this._resourceSystem.getCurrentFuel === 'function') {
       return this._resourceSystem.getCurrentFuel();
     }
-    return (Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL]) || null;   // g1-gas-upgrades D9: was xenon
+    return (Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL]) || null;
   }
 
   /**
-   * g1-gas-upgrades D9: the lower-case name of the gas IN the engine tank, for the refusal texts.
-   * @private
-   * @param {object} [res] - player.resources
-   * @returns {string}
+   * @private Lower-case name of the gas IN the engine tank, for the refusal texts.
+   * @param {object} [res] player.resources
    */
   _tankGasName(res) {
     const f = (Constants.FUELS && (Constants.FUELS[res && res.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL])) || null;
     return f && f.name ? f.name.toLowerCase() : 'engine gas';
   }
 
-  // ==========================================================================
-  // THREAT CLEARING
-  // ==========================================================================
-
-  /** @private Clear current threat and emit event */
   _clearThreat() {
     if (this._currentThreat) {
       eventBus.emit(Events.CA_THREAT_CLEARED, {
         debrisId: this._currentThreat.debrisId,
       });
 
-      // Gated — see _emitCaComms JSDoc.  Skipping this on mission 1 is
-      // especially nice because every dodge would otherwise generate a
-      // matching "Clear." follow-up = 2× the noise.
+      // Gated. Skipping this on mission 1 avoids a matching "Clear." after every dodge (2× the noise).
       this._emitCaComms({
         sender: 'CA',
         text: 'Clear. Resume heading.',
@@ -1224,16 +1042,6 @@ export class CollisionAvoidanceSystem {
     }
   }
 
-  // ==========================================================================
-  // CONTEXT AWARENESS (Phase 2)
-  // ==========================================================================
-
-  /**
-   * Check if a debris ID is currently targeted by any deployed arm.
-   * @private
-   * @param {number} debrisId
-   * @returns {boolean}
-   */
   _isArmTarget(debrisId) {
     if (!this._armManager) return false;
     const arms = this._armManager.arms;
@@ -1244,17 +1052,12 @@ export class CollisionAvoidanceSystem {
     return false;
   }
 
-  /**
-   * Detect recent player movement input (WASD/arrows).
-   * If movement keys are pressed, record timestamp for override window.
-   * @private
-   */
+  /** @private Record the time of recent player movement input (WASD/arrows) for the override window. */
   _detectPlayerInput() {
     if (!this._inputManager) return;
     const keys = this._inputManager.keys;
     if (!keys) return;
 
-    // Check standard movement keys
     const hasInput = keys['KeyW'] || keys['KeyA'] || keys['KeyS'] || keys['KeyD'] ||
                      keys['ArrowUp'] || keys['ArrowDown'] || keys['ArrowLeft'] || keys['ArrowRight'];
     if (hasInput) {
@@ -1262,25 +1065,18 @@ export class CollisionAvoidanceSystem {
     }
   }
 
-  /**
-   * Get the effective avoidance radius based on mode.
-   * @private
-   * @returns {number} Avoidance radius in scene units
-   */
+  /** @private Effective avoidance radius by mode (scene units). */
   _getAvoidanceRadius() {
     const CA = Constants.COLLISION_AVOIDANCE;
     return this._trawlActive ? CA.TRAWL_AVOIDANCE_RADIUS : CA.AVOIDANCE_RADIUS;
   }
 
   /**
-   * Generate a human-readable direction label from the evasion vector.
-   * @private
-   * @param {{x,y,z}} evasionDir — normalised evasion direction (world space)
-   * @param {{x,y,z}} playerPos — player scene position
-   * @returns {string} Direction label (e.g., "cross-track", "radial-up")
+   * @private Human-readable direction label from the evasion vector (e.g. "cross-track", "radial-up").
+   * @param {{x,y,z}} evasionDir normalised evasion direction (world space)
+   * @param {{x,y,z}} playerPos player scene position
    */
   _getDirectionLabel(evasionDir, playerPos) {
-    // Approximate radial direction
     const pLen = Math.sqrt(playerPos.x ** 2 + playerPos.y ** 2 + playerPos.z ** 2);
     if (pLen < 1e-10) return 'lateral';
 

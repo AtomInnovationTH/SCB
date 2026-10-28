@@ -1,6 +1,5 @@
 /**
- * AudioSystem.js — Procedural sound effects using Web Audio API
- * All sounds are generated procedurally — no external audio files needed.
+ * AudioSystem.js — procedural Web Audio sound effects; no external audio files.
  * @module systems/AudioSystem
  */
 
@@ -11,31 +10,23 @@ import timerManager from './TimerManager.js';
 import { installSoundLog } from './audio/SoundLog.js';
 import { clamp01, clamp, lerp } from '../core/MathUtil.js';
 
-// Slice 8 — codex unlock chime. The base pair is D5→A5 [587, 880]; per category
-// we transpose by a small deterministic pentatonic offset so different tracks
-// feel tonally distinct without any pitch feeling "wrong". Pure + module-level
-// so it's unit-testable in the headless harness.
+// Codex unlock chime: D5→A5 base pair, transposed per category by a small pentatonic offset (pure, unit-testable).
 const CODEX_CHIME_BASE = [587, 880]; // D5, A5
 const CODEX_PENTATONIC = [0, 2, 4, 7, 9]; // major-pentatonic semitone offsets
 
 /**
- * Deterministic three-note frequency triad for a codex-unlock chime, transposed
- * from the base D5→A5 pair by a per-category pentatonic offset. The third note
- * is the octave above the base note (D6) so the chime's 3-note LENGTH sets it
- * apart from every 2-note cue (P4 — chime differentiation).
- * @param {string} [category] - codex category key; unknown/missing → base triad.
- * @returns {[number, number, number]} three finite ascending frequencies.
+ * Deterministic 3-note triad for a codex-unlock chime. The octave-above third note (D6) makes the 3-note LENGTH set
+ * it apart from every 2-note cue. Unknown/missing category → base triad.
  */
 export function codexChimeNotes(category) {
   const triad = (factor) => [
     CODEX_CHIME_BASE[0] * factor,
     CODEX_CHIME_BASE[1] * factor,
-    CODEX_CHIME_BASE[0] * 2 * factor, // octave above the base note
+    CODEX_CHIME_BASE[0] * 2 * factor,
   ];
   if (typeof category !== 'string' || category.length === 0) {
     return triad(1);
   }
-  // Stable string hash → pentatonic bucket.
   let h = 0;
   for (let i = 0; i < category.length; i++) {
     h = (h * 31 + category.charCodeAt(i)) | 0;
@@ -46,10 +37,9 @@ export function codexChimeNotes(category) {
 }
 
 /**
- * True when a TARGET_SELECTED payload is a pick the GAME made, not the player:
- * a scan's auto-select (autoAcquire, source 'scan'), autolock (autoLock) or the
- * legacy welcome auto-target, and the game's own follow-ups (source capture_advance, lesson_pick, onboarding_pick). The autopilot's own re-acquire is not one: it
- * is flying her there.
+ * True when a TARGET_SELECTED payload is a pick the GAME made, not the player: a scan's auto-select (autoAcquire,
+ * source 'scan'), autolock (autoLock), the legacy welcome auto-target, or the game's own follow-ups (source
+ * capture_advance, lesson_pick, onboarding_pick). The autopilot's own re-acquire is not one: it is flying her there.
  */
 export function isAutomaticPick(d) {
   if (!d) return false;
@@ -57,30 +47,22 @@ export function isAutomaticPick(d) {
   return (!!d.autoAcquire && d.source === 'scan') || d.source === 'capture_advance' || d.source === 'lesson_pick' || d.source === 'onboarding_pick';
 }
 
-/** True when `id` is the piece currently tagged as a game-made pick. */
 export function isRangeTickAutoPick(id, autoPickId) {
   return autoPickId != null && id === autoPickId;
 }
 
 /**
- * Daughter-net cue gain scale (2026-08-27). The daughter launchers are the
- * small crossbow canisters (Medium/Small nets) heard from the daughter's
- * standoff — smaller hardware, farther away — so every net voice they share
- * with the mother (canister thump, flight whistle, cinch clamp, brake hiss,
- * envelop sting, cinch ticks) plays at this scale. The mother pod keeps the
- * full-volume default (scale omitted ⇒ 1.0 — byte-identical output).
- * Exported for the regression tests (test-DaughterNetAudio.js).
+ * Daughter-net cue gain scale. Daughter launchers (Medium/Small nets) are heard from their standoff, so every net
+ * voice shared with the mother plays at this scale; the mother pod keeps the default (scale omitted ⇒ 1.0,
+ * byte-identical). Exported for test-DaughterNetAudio.js.
  */
 export const DAUGHTER_NET_GAIN = 0.7;
 
 /**
- * De-dup windows for the daughter catch cue (see the ARM_CAPTURED handler):
- * an ARM_CAPTURED whose debris id matches a net catch voiced within
- * DAUGHTER_CATCH_ECHO_ID_S is the same physical catch (the arm's FSM poll
- * lands 1-2 frames after NET_CATCH_SUCCESS — measured ≤ 34 ms at 60 fps;
- * the window is generous for slow frames). When either side carries no id
- * (headless mocks), only the tight DAUGHTER_CATCH_ECHO_FALLBACK_S applies.
- * Exported for the regression tests.
+ * De-dup windows for the daughter catch cue (see the ARM_CAPTURED handler): an ARM_CAPTURED whose debris id matches a
+ * net catch voiced within DAUGHTER_CATCH_ECHO_ID_S is the same physical catch (the arm's FSM poll lands 1-2 frames
+ * after NET_CATCH_SUCCESS; measured ≤ 34 ms at 60 fps). With no id on either side (headless mocks) only
+ * DAUGHTER_CATCH_ECHO_FALLBACK_S applies. Exported for tests.
  */
 export const DAUGHTER_CATCH_ECHO_ID_S = 5.0;
 export const DAUGHTER_CATCH_ECHO_FALLBACK_S = 1.0;
@@ -90,7 +72,7 @@ class AudioSystem {
     this.ctx = null;
     this.master = null;
     this.sfxBus = null;
-    // Audio Vocabulary Overhaul (P2) — per-family bus nodes (created in init()).
+    // Per-family bus nodes (created in init()).
     this.physicalBus = null;
     this.radioBus = null;
     this.pingBus = null;
@@ -99,15 +81,13 @@ class AudioSystem {
     this.alarmBus = null;
     this.rewardBus = null;
     this.padBus = null;
-    // Reserved, silent, unused — prepared for future music + TTS narration.
+    // Reserved, silent, unused: future music + TTS narration.
     this.musicBus = null;
     this.voiceBus = null;
-    // Ducking state: re-entrancy counter so overlapping duck requests don't
-    // restore early. voiceBus TTS hook shares the same counter.
+    // Re-entrancy counter so overlapping duck requests don't restore early; the voiceBus TTS hook shares it.
     this._duckHolds = 0;
-    // P6 — range-closing ticker state.
     this._rangeTickerActive = false;
-    /** 2026-10-27: id of a piece the game (scan / autolock) picked: its range ticker stays silent. */
+    /** id of a piece the game (scan / autolock) picked: its range ticker stays silent. */
     this._rangeAutoPickId = null;
     /** The autopilot is flying her to the target: the ticker may run for any pick. */
     this._rangeApEngaged = false;
@@ -115,48 +95,39 @@ class AudioSystem {
     this._rangeTickerHz = 1;
     this._rangeTickerSuppressedUntil = 0;
     this._apEngaged = false;
-    // Startup legibility: set on MENU → ORBITAL_VIEW; gates manifest blips.
+    // Set on MENU → ORBITAL_VIEW; gates manifest blips.
     this._missionStartMs = null;
     this.available = false;
     this.activeSources = new Map();
     this._initialized = false;
     this._eventsSetup = false;
 
-    // Phase 8: Approach beep per-arm timers { armId → lastBeepTime }
+    // Approach beep per-arm timers { armId → lastBeepTime }
     this._approachBeepTimers = new Map();
 
-    // Phase 8: Tether tension cooldown per-arm { armId → lastTensionTime }
+    // Tether tension cooldown per-arm { armId → lastTensionTime }
     this._tetherTensionTimers = new Map();
     this._tetherTensionCooldown = 3.0; // seconds between tension sounds
 
-    // Mother net (Phase B §9): loop node state for the flight whistle and the
-    // reel winch. Null when no loop is running; _stopNetLoops() is the
-    // chokepoint every terminal path calls so a loop can never stick.
+    // Mother net: loop node state for the flight whistle and reel winch; null when no loop runs. _stopNetLoops() is
+    // the chokepoint every terminal path calls, so a loop can never stick.
     this._netWhistleNodes = null;
     this._netWinchNodes = null;
-    // Ceremony duck guard (review item 4): the NET_CEREMONY_START duck is
-    // paired with NET_CEREMONY_COMPLETE, which fires only from
-    // _captureSuccess/_miss — a net abandoned before either (release from
-    // FLIGHT, CaptureNetSystem.reset()) would leave _duckHolds at 1 forever
-    // (every non-alarm bus stuck at half gain). The flag makes acquire
-    // idempotent and _releaseNetDuck() rides the _stopNetLoops() chokepoint,
-    // so the duck cannot outlive a net.
+    // Ceremony duck guard: the NET_CEREMONY_START duck pairs with NET_CEREMONY_COMPLETE, which fires only from
+    // _captureSuccess/_miss. A net abandoned before either (release from FLIGHT, CaptureNetSystem.reset()) would leave
+    // _duckHolds at 1 forever (every non-alarm bus at half gain). The flag makes acquire idempotent and
+    // _releaseNetDuck() rides _stopNetLoops(), so the duck cannot outlive a net.
     this._netCeremonyDucked = false;
 
-    // Daughter-net audio (2026-08-27): one-owner-per-physical-moment ledger.
-    // NET_CATCH_SUCCESS (armIndex ≥ 0) voices the daughter catch (scaled
-    // cinch clamp) and records the caught debris id + time here; the
-    // ARM_CAPTURED handler — the arm's bookkeeping of the SAME catch, which
-    // lands 1-2 frames later via the arm's FSM poll — consults this ledger
-    // and skips its whoosh+clamp for a catch the net already voiced.
-    // Non-net ARM_CAPTURED paths (lasso, magnetic grapple, legacy netting
-    // with CAPTURE_NET off) never write the ledger and keep their cue.
+    // Daughter-net catch ledger (one owner per physical catch): NET_CATCH_SUCCESS (armIndex ≥ 0) voices the scaled
+    // cinch clamp and records the debris id + time here. The ARM_CAPTURED handler (same catch, 1-2 frames later) skips
+    // its whoosh+clamp for a catch the net already voiced. Non-net ARM_CAPTURED paths (lasso, magnetic grapple,
+    // legacy netting) never write the ledger and keep their cue.
     /** @type {Map<string|number, number>} debrisId → catch time (s) */
     this._daughterNetCatchIds = new Map();
     /** @type {number|null} last daughter net-catch time (s) — id-less fallback */
     this._lastDaughterNetCatchAt = null;
 
-    // Phase R9: 4-tier ΔV alarm state
     this._dvAlarmTier = 0;
     this._dvDucked = false;
     this._dvAlarmInterval = null;
@@ -164,35 +135,26 @@ class AudioSystem {
     this._dvAlarmLfo = null;
     this._dvAlarmGain = null;
 
-    // Phase R9: Thruster sputtering state
     this._thrusterSputtering = false;
     this._sputterInterval = null;
     this._thrusterBaseGain = 0.06;
     this._thrusterGain = null;
 
-    // Phase 7: Docking alignment tone state
     this._alignmentToneOsc = null;
     this._alignmentToneGain = null;
 
-    // SAFETY OVERRIDE panel FURNACE gag (owner 2026-09-07): in-flight klaxon
-    // { osc, gain, endsAt } or null — single-instance re-entrancy guard.
+    // FURNACE gag klaxon on the SAFETY OVERRIDE panel (owner 2026-09-07) { osc, gain, endsAt } or null; single-instance re-entrancy guard.
     this._klaxon = null;
 
-    // Dev tool (?sounds=1 pane): log every vocabulary sound call. No sound changes.
+    // Dev tool (?sounds=1 pane): logs every vocabulary sound call; changes no sound.
     installSoundLog(this);
   }
 
-  /**
-   * Initialize AudioContext on user interaction (required by browsers).
-   */
+  /** Create the AudioContext; must run from a user gesture (browser rule). */
   init() {
     if (this._initialized) return;
-    // §13 diagnostic: ?noAudio=1 URL flag — short-circuits AudioContext
-    // creation entirely so we can A/B test whether the audio render thread
-    // is the SMC fan trigger at sim-start. Flag is parsed lazily so the test
-    // runner (no window) is unaffected. Identical to §12.11 mechanism for
-    // pause-fan but applied to GAMEPLAY: if fan stays off with this flag set,
-    // the §12.11 audio-thread mechanism is confirmed as the gameplay trigger.
+    // ?noAudio=1 skips AudioContext creation entirely (A/B for whether the audio render thread triggers the SMC fan
+    // at sim-start). Parsed lazily so the headless test runner (no window) is unaffected.
     try {
       if (typeof window !== 'undefined' &&
           new URLSearchParams(window.location.search).get('noAudio') === '1') {
@@ -202,46 +164,24 @@ class AudioSystem {
         return;
       }
     } catch (_e) { /* swallow — non-browser env */ }
-    // §13 boot timeline (?logBoot=1) — mark every audio lifecycle event so the
-    // timeline shows precisely when the 44.1 kHz audio render thread becomes
-    // active (the §12.11 fan-trigger mechanism). Optional-chained — no-op when
-    // window.__bootMark is not attached. Safe in Node test runner.
+    // ?logBoot=1 boot timeline: mark audio lifecycle events (when the audio render thread goes active). No-op without
+    // window.__bootMark.
     try {
       // eslint-disable-next-line no-undef
       if (typeof window !== 'undefined') window.__bootMark?.('audioSystem.init() called');
     } catch (_e) { /* swallow */ }
     try {
-      // §13 Sprint 4 — low-power AudioContext configuration.
-      //
-      // Root-cause: default `new AudioContext()` uses
-      //   latencyHint = 'interactive' (≈ 256-sample buffer, ~5.8 ms @ 44.1k)
-      //   sampleRate  = 44100
-      // → audio render thread wakes ~170×/s with default config.
-      // Even with zero audible work, that wakeup frequency drives Energy
-      // Impact past the macOS SMC fan-trip threshold (§12.11 mechanism).
-      // A/B-confirmed via ?noAudio=1: fan stays OFF when ctx is never
-      // created, ON when ctx is created with defaults — even with full
-      // GPU work running in both cases.
-      //
-      // Fix: use latencyHint:'playback' (large buffer, fewer wakeups —
-      // typically 1024-4096 samples) and 22050 Hz sampleRate (half the
-      // clock rate, sufficient for all procedural game SFX which are
-      // sub-2 kHz). Combined effect: 8-32× fewer audio thread wakeups.
-      //
-      // Compatibility: every play* method uses relative time and absolute
-      // frequencies that are invariant under sample rate change. No call
-      // site needs modification. Tested at 22050 Hz / 44100 Hz, identical
-      // behaviour aside from intentional low-pass at 11025 Hz (above all
-      // procedural sound frequencies — not perceptible).
-      //
-      // Test runner is unaffected — it stubs AudioContext entirely.
+      // Low-power AudioContext. The default latencyHint 'interactive' (~256-sample buffer, ~5.8 ms @ 44.1 kHz) wakes
+      // the render thread ~170×/s, which drives Energy Impact past the macOS SMC fan-trip threshold even with zero
+      // audible work (A/B: fan stays off with ?noAudio=1). 'playback' (1024-4096 samples) + 22050 Hz gives 8-32× fewer
+      // wakeups; all procedural SFX are sub-2 kHz (the 11025 Hz low-pass is inaudible). Every play* method uses
+      // relative time and absolute frequencies, so sample rate is invisible to call sites. Tests stub AudioContext.
       const CtxCtor = window.AudioContext || window.webkitAudioContext;
       let opts = { latencyHint: 'playback', sampleRate: 22050 };
       try {
         this.ctx = new CtxCtor(opts);
       } catch (_e1) {
-        // Some old Safari builds don't accept sampleRate at construct time.
-        // Retry without sampleRate first; if that also fails, default ctor.
+        // Old Safari rejects sampleRate at construct time: retry without it, then the default ctor.
         try {
           this.ctx = new CtxCtor({ latencyHint: 'playback' });
         } catch (_e2) {
@@ -253,12 +193,9 @@ class AudioSystem {
       this.sfxBus = this.ctx.createGain();
       this.sfxBus.gain.value = 0.7;
       this.sfxBus.connect(this.master);
-      // Audio Vocabulary Overhaul (P2) — family bus graph. Every family bus
-      // routes → sfxBus → master → destination. Ducking (see _duckOthers)
-      // ramps all non-alarm family buses; the alarm bus is never ducked so
-      // danger always outranks. musicBus/voiceBus are reserved (silent) and
-      // connect straight to master so future music/TTS bypass sfx volume and
-      // can be ducked independently.
+      // Family bus graph: every family bus routes → sfxBus → master → destination. Ducking (_duckOthers) ramps all
+      // non-alarm buses; the alarm bus is never ducked, so danger outranks. musicBus/voiceBus are reserved (silent) and
+      // connect straight to master so future music/TTS bypass sfx volume and can be ducked independently.
       const FG = (Constants.AUDIO && Constants.AUDIO.FAMILY_GAIN) || {};
       const mkFamily = (gainVal) => {
         const g = this.ctx.createGain();
@@ -274,14 +211,12 @@ class AudioSystem {
       this.alarmBus = mkFamily(FG.alarm);
       this.rewardBus = mkFamily(FG.reward);
       this.padBus = mkFamily(FG.pad);
-      // Reserved buses → master (silent until music/TTS ships).
       this.musicBus = this.ctx.createGain();
       this.musicBus.gain.value = 1.0;
       this.musicBus.connect(this.master);
       this.voiceBus = this.ctx.createGain();
       this.voiceBus.gain.value = 1.0;
       this.voiceBus.connect(this.master);
-      // Non-alarm family buses that duck when an alarm is active.
       this._duckableBuses = [
         this.physicalBus, this.radioBus, this.pingBus, this.tickBus,
         this.denyBus, this.rewardBus, this.padBus, this.musicBus, this.voiceBus,
@@ -289,13 +224,12 @@ class AudioSystem {
       this.master.connect(this.ctx.destination);
       this.available = true;
       this._initialized = true;
-      // §13 mark initial state (typically 'suspended' until user gesture).
+      // §13 boot mark of the initial state (typically 'suspended' until a user gesture).
       try {
         // eslint-disable-next-line no-undef
         if (typeof window !== 'undefined') {
           window.__bootMark?.(`AudioContext created (state=${this.ctx.state}, sampleRate=${this.ctx.sampleRate})`);
-          // Subscribe to state transitions — fires when ctx goes
-          // suspended ↔ running. This is the §12.11 fan-trigger signal.
+          // Subscribe to suspended ↔ running transitions: the §12.11 fan-trigger signal.
           if (typeof this.ctx.addEventListener === 'function') {
             this.ctx.addEventListener('statechange', () => {
               try {
@@ -321,20 +255,17 @@ class AudioSystem {
   }
 
   /**
-   * Resume context if suspended (autoplay policy) or interrupted (WebKit:
-   * an iPadOS audio interruption — Siri, a call, another app seizing the
-   * session — parks the ctx in the NON-STANDARD 'interrupted' state; a
-   * 'suspended'-only gate leaves the game silent for the rest of the session
-   * because the InputManager unlock is one-shot. Job 1 iPad audit 2026-09-06;
-   * pinned in audio-vocabulary.test.js. 'closed' is never resumed.)
+   * Resume if suspended (autoplay policy) or interrupted. WebKit parks the ctx in the NON-STANDARD 'interrupted' state
+   * on an iPadOS audio interruption (Siri, a call, another app); a 'suspended'-only gate would leave the game silent
+   * all session because the InputManager unlock is one-shot. 'closed' is never resumed. Pinned in
+   * audio-vocabulary.test.js.
    */
   resume() {
     if (!this.ctx) return;
     const s = this.ctx.state;
     if (s === 'suspended' || s === 'interrupted') {
-      // resume() returns a promise in browsers (a stub may return nothing);
-      // a rejection (NotAllowedError before any gesture) is not ours to
-      // surface — Job 1 review hygiene: never an unhandled rejection.
+      // resume() returns a promise (a stub may return nothing); swallow a rejection (NotAllowedError before any
+      // gesture): never an unhandled rejection.
       const p = this.ctx.resume();
       if (p && typeof p.catch === 'function') p.catch(() => {});
     }
@@ -346,11 +277,8 @@ class AudioSystem {
   }
 
   /**
-   * Duck all non-alarm family buses so an ALARM cue reads clearly over the
-   * rest of the mix (danger outranks everything — Design law (d)). Uses a
-   * re-entrancy counter (`_duckHolds`) so overlapping alarms don't restore
-   * the mix early. 0.15 s down-ramp, 0.5 s up-ramp.
-   * @param {boolean} on
+   * Duck all non-alarm family buses so an ALARM cue reads clearly (danger outranks everything — Design law (d)). The
+   * `_duckHolds` counter stops overlapping alarms restoring the mix early. 0.15 s down-ramp, 0.5 s up-ramp.
    * @private
    */
   _duckOthers(on) {
@@ -375,11 +303,7 @@ class AudioSystem {
     }
   }
 
-  /**
-   * One-shot duck for a transient alarm: duck on, restore after `ms`.
-   * @param {number} ms
-   * @private
-   */
+  /** @private One-shot duck for a transient alarm: on, restored after `ms`. */
   _duckPulse(ms) {
     if (!this.available) return;
     this._duckOthers(true);
@@ -387,21 +311,17 @@ class AudioSystem {
   }
 
   /**
-   * TTS-ready hook (reserved): duck the mix for spoken narration. Shares the
-   * same re-entrancy counter as alarm ducking. No voice content ships yet.
-   * @param {boolean} on
+   * TTS-ready hook (reserved): duck the mix for spoken narration; shares the alarm re-entrancy counter. No voice
+   * content ships yet.
    */
   duckForVoice(on) {
     this._duckOthers(on);
   }
 
   /**
-   * @private Startup legibility: true while inside the mission-start cue grace
-   * window (Constants.AUDIO.STARTUP_CUE_GRACE_S after MENU → gameplay).
-   * Non-essential automation-fired cues (manifest typewriter blips, hint
-   * chime) hold their tongue during this window; their visuals still appear.
-   * Never used for ALARM/danger cues.
-   * @returns {boolean}
+   * @private True while inside the mission-start cue grace window (Constants.AUDIO.STARTUP_CUE_GRACE_S after
+   * MENU → gameplay). Non-essential automation-fired cues (manifest blips, hint chime) stay quiet; visuals still
+   * appear. Never used for ALARM/danger cues.
    */
   _inStartupCueGrace() {
     if (this._missionStartMs == null) return false;
@@ -412,17 +332,14 @@ class AudioSystem {
   }
 
   /**
-   * @private P6 — handle a throttled TARGET_RANGE readout: map distance to a
-   * tick cadence and (re)start the range ticker. Cadence rises as the player
-   * closes; below net range the lock ping takes over so we stop.
+   * @private Map a throttled TARGET_RANGE readout to a tick cadence and (re)start the range ticker. Cadence rises as
+   * the player closes; below net range the lock ping takes over, so it stops.
    */
   _onTargetRange(d) {
     const RT = (Constants.AUDIO && Constants.AUDIO.RANGE_TICKER) || {};
     if (!RT.ENABLED || !this.available || !d) { this._stopRangeTicker(); return; }
-    // 2026-10-27 (owner: "what is the constant beep beep after a scan S"): the
-    // ticker answers the player's own pick or the autopilot's flight, never a
-    // piece the game picked for him (a scan's auto-select, autolock). A later
-    // player pick of the same piece clears the tag (TARGET_SELECTED below).
+    // owner 2026-10-27: the ticker answers the player's own pick or the autopilot's flight, never a piece the game
+    // picked (a scan's auto-select, autolock). A later player pick of the same piece clears the tag (TARGET_SELECTED).
     if (isRangeTickAutoPick(d.id, this._rangeAutoPickId) && !this._rangeApEngaged) {
       this._stopRangeTicker();
       return;
@@ -442,15 +359,13 @@ class AudioSystem {
     }
   }
 
-  /** @private Self-rescheduling range tick using the latest cadence. */
   _scheduleRangeTick() {
     if (!this._rangeTickerActive) return;
     const hz = this._rangeTickerHz || 1;
     const periodMs = Math.max(120, 1000 / hz);
     this._rangeTickerId = timerManager.setTimeout(() => {
       if (!this._rangeTickerActive) return;
-      // Pause while the DockingReticle owns the PING channel (alignment tone or
-      // recent docking beeps) so two range sonifications never overlap.
+        // Pause while the DockingReticle owns the PING channel (alignment tone / recent docking beeps).
       const now = this.ctx ? this.ctx.currentTime : 0;
       const suppressed = !!this._alignmentToneOsc
         || (this._rangeTickerSuppressedUntil && now < this._rangeTickerSuppressedUntil);
@@ -462,7 +377,6 @@ class AudioSystem {
     }, periodMs, { owner: this });
   }
 
-  /** @private Kill the range ticker immediately. */
   _stopRangeTicker() {
     this._rangeTickerActive = false;
     if (this._rangeTickerId != null) {
@@ -472,12 +386,8 @@ class AudioSystem {
   }
 
   /**
-   * §13 escalation: decide whether the ambient engine-room loop should run
-   * in gameplay states. Constant default is false (Apple Silicon SMC fan
-   * trigger); `?ambient=1` URL flag force-enables, `?noAmbient=1` force-
-   * disables for symmetry. Node test runner has no `window` → always false.
-   * @returns {boolean}
-   * @private
+   * @private §13: whether the ambient engine-room loop runs in gameplay. Default false (Apple Silicon SMC fan
+   * trigger); `?ambient=1` forces on, `?noAmbient=1` forces off. The Node runner (no window) → always false.
    */
   _isAmbientLoopEnabled() {
     try {
@@ -489,25 +399,14 @@ class AudioSystem {
     return !!(Constants.AUDIO && Constants.AUDIO.AMBIENT_LOOP_ENABLED);
   }
 
-  // ==========================================================================
-  // EVENT-DRIVEN WIRING
-  // ==========================================================================
-
-  /**
-   * Subscribe to game events via EventBus for automatic sound playback.
-   * Idempotent — only wires once.
-   */
+  /** Subscribe to game events via EventBus. Idempotent. */
   setupEventListeners() {
     if (this._eventsSetup) return;
     this._eventsSetup = true;
 
-    // Arm lifecycle sounds.
-    // Issue 1 (2026-06-12): the deploy WOOSH keys off ARM_SPRING_FIRED — the
-    // moment the crossbow spring actually releases the daughter (1.5 s after
-    // LAUNCHING entry) — so audio matches departure, not intent. ARM_DEPLOYED
-    // (clamp-release start) now plays a quiet mechanical click so the 1.5 s
-    // wind-up reads as deliberate. HUD/skills/teaching wiring on ARM_DEPLOYED
-    // is unaffected.
+    // Arm lifecycle sounds. The deploy WOOSH keys off ARM_SPRING_FIRED (the crossbow spring actually releasing the
+    // daughter, 1.5 s after LAUNCHING entry) so audio matches departure; ARM_DEPLOYED (clamp-release start) plays a
+    // quiet click so the wind-up reads as deliberate.
     eventBus.on(Events.ARM_DEPLOYED, () => {
       this.playDockClick();
     });
@@ -516,21 +415,15 @@ class AudioSystem {
       this.playArmDeploy();
     });
 
-    // Task D ownership decision (2026-08-27): for a NET capture there is ONE
-    // physical moment — the bag cinching shut — and NET_CATCH_SUCCESS owns
-    // its sound (playNetCinchClamp, daughter-scaled), for both launcher
-    // families. ARM_CAPTURED for that same catch is the ArmUnit's FSM
-    // bookkeeping of the identical moment, emitted 1-2 frames later (the arm
-    // polls the net FSM after CaptureNetSystem.update resolved it — measured
-    // f397 NET_CATCH_SUCCESS → f399 ARM_CAPTURED at 60 fps), so its
-    // whoosh+clamp is skipped when the debris id matches the just-voiced net
-    // catch. Every non-net ARM_CAPTURED (lasso reel-completion, magnetic
-    // grapple, legacy netting with CAPTURE_NET off) has no NET_CATCH_SUCCESS
-    // and keeps this cue unchanged.
+    // A NET capture has ONE physical moment, the bag cinching shut, and NET_CATCH_SUCCESS owns its sound
+    // (playNetCinchClamp, daughter-scaled) for both launcher families. ARM_CAPTURED for the same catch is the ArmUnit
+    // FSM's bookkeeping 1-2 frames later (measured f397 → f399 at 60 fps), so its whoosh+clamp is skipped when the
+    // debris id matches the just-voiced net catch. Non-net ARM_CAPTURED (lasso, magnetic grapple, legacy netting)
+    // keeps this cue.
     eventBus.on(Events.ARM_CAPTURED, (data) => {
       if (this._isDaughterNetCatchEcho(data)) return;
       this.playNetWhoosh(0.3);
-      this.playCatchClamp(); // Phase 1C: metallic clamp impact on capture
+      this.playCatchClamp();
     });
 
     eventBus.on(Events.ARM_RETURNED, (data) => {
@@ -551,23 +444,18 @@ class AudioSystem {
       this.playWarning(0.6);
     });
 
-    // Game events
     eventBus.on(Events.GAME_KESSLER, () => {
-      this._duckPulse(2000); // P2 ducking: Kessler collision is game-ending danger
+      this._duckPulse(2000); // Kessler collision is game-ending danger
       this.playCollision();
     });
 
-    // P5 (fixes #4): SCORE_UPDATE → playScoreTally subscription REMOVED. A
-    // capture already fires cashRegister (SCORING_AWARD = "credits in"); the
-    // tally tick added nothing and doubled the reward voice for one capture.
-    // playScoreTally is kept as a method for a future score-HUD count-up.
+    // SCORE_UPDATE deliberately does not play playScoreTally: a capture already fires cashRegister (SCORING_AWARD) and
+    // the tally tick doubled the reward voice. playScoreTally stays for a future score-HUD count-up.
 
-    // Scan initiated — radar sweep/ping sound
     eventBus.on(Events.SCAN_INITIATED, () => {
       this.playScan();
     });
 
-    // Credit award — cash register "ka-ching"
     eventBus.on(Events.SCORING_AWARD, (data) => {
       if (data.points > 0) {
         this.playCashRegister();
@@ -575,88 +463,67 @@ class AudioSystem {
     });
 
     eventBus.on(Events.CAMERA_VIEW_CHANGE, () => {
-      // Don't play click here — it's already called directly in main.js onKeyDown for V key
-      // This prevents double-click sounds
+      // No click here: main.js onKeyDown already plays it for the V key (avoids a double click).
     });
 
-    // === Phase R8 event wiring ===
-
-    // Target lock ceremony sounds (Phase 5) — reward-first spine.
-    // The "locked on" earcon is governed by the NET-RANGE crossing, NOT raw
-    // selection, so it always means "you can act on this now". AutoLockController
-    // tracks every selected target (auto or manual) and emits TARGET_IN_RANGE on
-    // the out→in crossing (or immediately for an already-in-range pick), which is
-    // where the lock cue fires. An explicitly out-of-range selection stays
-    // silent. We still honor a one-frame SELECTED cue when nothing will range-
-    // track it (e.g. headless/no-controller contexts) — but skip it whenever the
-    // selection is tagged in/out by the range system to avoid a double-fire.
+    // Target lock earcon, reward-first: governed by the NET-RANGE crossing, NOT raw selection, so it always means
+    // "you can act on this now". AutoLockController tracks every selected target and emits TARGET_IN_RANGE on the
+    // out→in crossing (immediately for an already-in-range pick), which is where the cue fires. An out-of-range pick
+    // stays silent. A one-frame SELECTED cue still plays when nothing range-tracks the pick (headless / no
+    // controller), unless the range system tagged the selection (avoids a double-fire).
     eventBus.on(Events.TARGET_SELECTED, (data) => {
-      // Suppressed picks (autolock) and range-governed selections defer to
-      // TARGET_IN_RANGE for the earcon.
       if (data && data._suppressLockSound) return;
       if (data && data.autoLock) return;
-      // Manual selection without range governance: play immediately.
       this._playLockDeduped();
     });
 
     eventBus.on(Events.TARGET_CLEARED, (data) => {
-      // A programmatic reset clear (mission init) passes silent:true — no target
-      // was ever engaged, so skip the "target lost" earcon.
+      // A programmatic reset clear (mission init) passes silent:true: no target was engaged, so no "target lost" earcon.
       if (data && data.silent) return;
       this.playTargetLost();
     });
 
-    // Net-range crossing INTO range → the lock earcon (the "there it is" payoff
-    // after autopilot closes the gap, and the tease lock at start). This is the
-    // single trustworthy "now actionable" cue.
+    // Net-range crossing INTO range → the lock earcon: the single trustworthy "now actionable" cue (payoff after the
+    // autopilot closes the gap, and the tease lock at start).
     eventBus.on(Events.TARGET_IN_RANGE, (data) => {
-      // Only the player selecting a target should ping. The game's automatic
-      // lock (startup tease debris, ambient reacquire) fires TARGET_IN_RANGE
-      // unprompted — an anonymous earcon the player did nothing to cause teaches
-      // no vocabulary, so it is tagged autoLock and stays silent here.
+      // Only the player's selection should ping. The game's automatic lock (startup tease debris, ambient reacquire)
+      // fires TARGET_IN_RANGE unprompted; an anonymous earcon teaches no vocabulary, so it is tagged autoLock and
+      // stays silent.
       if (data && data.autoLock) return;
       this._playLockDeduped();
     });
 
-    // T key → ascending fuel cycle step tone
     eventBus.on(Events.FUEL_CHANGED, (data) => {
-      if (data && data.initial) return;   // h3b-argon-push D5: the boot/load announcement is not a player action
+      if (data && data.initial) return; // the boot/load announcement is not a player action
       this.playFuelCycle(data.index || 0);
     });
 
-    // Cargo stored → mechanical clunk
     eventBus.on(Events.CARGO_STORE, () => {
       this.playCargoStored();
     });
 
-    // Trawl auto-capture → soft ding
     eventBus.on(Events.TRAWL_CAPTURE, () => {
       this.playTrawlCapture();
     });
 
-    // Ion start-up (a trip's four tail engines light, DECISIONS §37 row 7): a hum on its own key that rises with the lit share, then
-    // holds quiet for the burn. Its own 'ionStartup' key, so InputManager's per-frame stopThrusterHum() never touches it.
+    // Ion start-up (a trip's four tail engines light, DECISIONS §37 row 7): a hum on its own 'ionStartup' key that
+    // rises with the lit share, then holds quiet for the burn; InputManager's per-frame stopThrusterHum() never touches it.
     eventBus.on(Events.ION_STARTUP_BEGIN, () => this.startIonStartupHum(0));
     eventBus.on(Events.ION_STARTUP_HUM, (d) => this.updateIonStartupHum(d ? d.lit : 0));
     eventBus.on(Events.ION_STARTUP_LIT, () => this.holdIonStartupHum());
     eventBus.on(Events.ION_STARTUP_END, () => this.stopIonStartupHum());
-    // ... and it is silent while the game is paused (the trip's clock does not run then), back at the same level on resume.
+    // ... and silent while the game is paused (the trip's clock does not run then), back at the same level on resume.
     eventBus.on(Events.PAUSE_MENU, () => this.muteIonStartupHum(true));
     eventBus.on(Events.PAUSE_RESUME, () => this.muteIonStartupHum(false));
 
-    // Ambient loop lifecycle: start on gameplay, stop on menu/gameover.
-    // §13 escalation: gated by Constants.AUDIO.AMBIENT_LOOP_ENABLED (default
-    // false) — two continuously-looping BufferSource + BiquadFilter chains
-    // were keeping the audio render thread permanently busy on Apple Silicon
-    // (SMC fan trigger after the §13.5 low-power ctx fix still ran the chip
-    // hot). URL overrides:
-    //   ?ambient=1   — force-enable (for users who want engine-room sound)
-    //   ?noAmbient=1 — force-disable (default behaviour, kept for symmetry)
+    // Ambient loop lifecycle: start on gameplay, stop on menu/gameover. Gated by Constants.AUDIO.AMBIENT_LOOP_ENABLED
+    // (default false): two continuously-looping BufferSource + BiquadFilter chains kept the audio render thread busy
+    // on Apple Silicon (SMC fan trigger, even after the low-power ctx fix). URL: ?ambient=1 force-enables,
+    // ?noAmbient=1 force-disables.
     eventBus.on(Events.STATE_CHANGE, (data) => {
       const playStates = ['ORBITAL_VIEW', 'APPROACH', 'INTERACTION'];
-      // Startup legibility: mark mission start (MENU → gameplay) so cues tied
-      // to automatic startup processes (manifest typewriter blips) can hold
-      // their tongue during the opening cluster.
+      // Mark mission start (MENU → gameplay) so cues tied to automatic startup processes (manifest blips) stay quiet
+      // during the opening cluster.
       if (data.to === 'ORBITAL_VIEW' && data.from === 'MENU') {
         this._missionStartMs = (typeof performance !== 'undefined' && performance.now)
           ? performance.now() : Date.now();
@@ -668,11 +535,9 @@ class AudioSystem {
       }
     });
 
-    // T10 — menu→sim transition audio. There is no menu ambient (engine-room
-    // loop is gameplay-only), so the departure was silent. A soft pad swell
-    // rises during the camera pull-back; a comms crackle marks the HUD coming
-    // online. Both gate on this.available, so ?noAudio=1 (init short-circuits
-    // → available=false) keeps them silent for capture drivers.
+    // Menu→sim transition audio (there is no menu ambient; the engine-room loop is gameplay-only): a soft pad swell
+    // during the camera pull-back and a comms crackle as the HUD comes online. Both gate on this.available, so
+    // ?noAudio=1 keeps them silent for capture drivers.
     eventBus.on(Events.MENU_DEPARTURE_START, (data) => {
       // Size the swell to the pull-back so it lands with the handoff.
       const dur = (data && Number.isFinite(data.durationMs)) ? data.durationMs / 1000 : 1.35;
@@ -682,41 +547,34 @@ class AudioSystem {
       this.playCommsCrackle();
     });
 
-    // T6 — SAFER cold-gas puff "pfft" during the astronaut jet-off exit. One per
-    // puff (fires only on the full new-game exit). Gates on this.available.
+    // SAFER cold-gas puff during the astronaut jet-off exit: one per puff, only on the full new-game exit.
     eventBus.on(Events.MENU_EVA_PUFF, () => {
       this.playEvaPuff();
     });
 
-    // === Phase R9 event wiring ===
-
     // ΔV telemetry → 4-tier urgency alarm + thruster sputtering + ambient modulation
     eventBus.on(Events.DELTAV_UPDATE, (data) => {
       this.updateDeltaVAlarm(data.pct, data.predictedPct);
-      // Bug 2 fix: drive thruster sputtering when fuel is low
+      // thruster sputtering when fuel is low
       if (this.activeSources.has('thruster')) {
         this.updateThrusterFuelState(data.pct * 100); // 0-1 → 0-100
       }
-      // Bug 3 fix: modulate ambient engine-room sounds based on solar/battery state
+      // modulate ambient engine-room sounds from solar/battery state
       this.updateAmbientState({
         solarRate: data.solarRate || 0,
         batteryPct: data.batteryPct || 100,
       });
     });
 
-    // === Conjunction alerts (Sprint C1) ===
     eventBus.on(Events.CONJUNCTION_WARNING, (data) => {
       this.playConjunctionAlert(data.tier);
     });
 
-    // === Phase 6: Tether detach snap sound ===
     eventBus.on(Events.ARM_DETACHED, () => {
       this.playTetherSnap();
     });
-    // §4 item 2: TETHER_SNAP also triggers snap audio (BUG-B fix)
+    // TETHER_SNAP also triggers the snap audio
     eventBus.on(Events.TETHER_SNAP, () => this.playTetherSnap());
-
-    // === Phase 8: Audio & Polish — Final Juice ===
 
     // Approach beep — arm nearing target (rate-limited per arm)
     eventBus.on(Events.ARM_APPROACH_PING, (data) => {
@@ -724,7 +582,6 @@ class AudioSystem {
       const now = performance.now() / 1000;
       const lastBeep = this._approachBeepTimers.get(armId) || 0;
 
-      // Determine interval based on distance tier
       let interval;
       if (distanceFraction < 0.1) interval = 0.2;
       else if (distanceFraction < 0.3) interval = 0.5;
@@ -749,22 +606,18 @@ class AudioSystem {
       }
     });
 
-    // Weather alerts — distinct earcons per type
     eventBus.on(Events.WEATHER_EFFECT_START, (data) => {
       this.playWeatherAlert(data.type);
     });
 
-    // Codex unlock — discovery chime (Slice 8: per-category tonal variant)
     eventBus.on(Events.CODEX_UNLOCKED, (d) => {
       this.playCodexUnlock(d && d.category);
     });
 
-    // Sweep complete — success fanfare
     eventBus.on(Events.TRAWL_SWEEP_COMPLETE, () => {
       this.playSweepComplete();
     });
 
-    // Phase 7: Autopilot disengage tone
     eventBus.on(Events.AUTOPILOT_DISENGAGE, () => {
       this._apEngaged = false;
       this.playAPDisengage();
@@ -779,16 +632,13 @@ class AudioSystem {
       this.playAPEngage();
     });
 
-    // Autopilot arrival — distinctive ascending chime (ready to capture)
     eventBus.on(Events.AUTOPILOT_ARRIVED, () => {
       this.playAPArrived();
     });
 
-    // CP-3: transfer-window cues — T-minus beep + window-open chime
     eventBus.on(Events.CLUSTER_WINDOW_IMMINENT, () => this.playWindowImminent());
     eventBus.on(Events.CLUSTER_WINDOW_OPEN, () => this.playWindowOpen());
 
-    // P6 — core-loop range-closing ticker.
     eventBus.on(Events.TARGET_RANGE, (d) => this._onTargetRange(d));
     // Tag a game-made pick so its range readout stays silent (see _onTargetRange).
     eventBus.on(Events.TARGET_SELECTED, (d) => {
@@ -804,44 +654,35 @@ class AudioSystem {
     eventBus.on(Events.DEBRIS_CAPTURED, () => this._stopRangeTicker());
     eventBus.on(Events.STATE_CHANGE, () => this._stopRangeTicker());
 
-    // Salvage reveal — loot box moment
     eventBus.on(Events.SALVAGE_REVEAL, () => {
       this.playSalvageReveal();
     });
 
-    // Lasso audio feedback (Phase 6 — Lasso Feedback Overhaul)
     eventBus.on(Events.LASSO_FIRED, () => {
       this.playLassoFire();
       this.startLassoWireWhistle();
     });
 
     eventBus.on(Events.LASSO_CONTACT, () => {
-      this.playCatchClamp();        // Metallic clank on contact
+      this.playCatchClamp();
       this.stopLassoWireWhistle();
-      this.playLassoWinch();        // Mechanical reel-in sound
+      this.playLassoWinch();
     });
 
     eventBus.on(Events.LASSO_CAPTURED, () => {
-      this.stopLassoWireWhistle();  // Safety stop
+      this.stopLassoWireWhistle();
     });
 
     eventBus.on(Events.LASSO_DENIED, () => {
       this.playDeny();
     });
 
-    // === Net voices (mother-net-reel plan §9 Phase B + daughter extension) ===
-    // TWO launcher families share these events and now BOTH speak:
-    //   mother  — podIndex ≥ 0, full-volume cues (byte-identical to Phase B);
-    //   daughter — armIndex ≥ 0 with podIndex −1 (explicit since 2026-08-27),
-    //              the SAME voices at DAUGHTER_NET_GAIN (smaller hardware,
-    //              heard from the daughter's standoff).
-    // Gating is deliberate on BOTH branches: a payload that names neither
-    // launcher stays silent (the old `podIndex < 0` mother gate read
-    // `undefined < 0 === false` and let id-less daughter fires START the
-    // mother thump+whistle with no reachable stop — the phantom-whistle
-    // leak). The two loops (flight whistle, reel winch) are killed via
-    // _stopNetLoops() from EVERY terminal path of EITHER family — a stuck
-    // loop is the classic bug.
+    // Net voices. TWO launcher families share these events and BOTH speak: mother (podIndex ≥ 0, full volume) and
+    // daughter (armIndex ≥ 0 with podIndex −1; the same voices at DAUGHTER_NET_GAIN). Gating is deliberate on BOTH
+    // branches: a payload naming neither launcher stays silent (an old `podIndex < 0` mother gate read
+    // `undefined < 0 === false` and let id-less daughter fires start the mother thump+whistle with no reachable
+    // stop). The two loops (flight whistle, reel winch) are killed via _stopNetLoops() from EVERY terminal path of
+    // EITHER family.
 
     // Fire: canister thump + flight whistle (stopped on any terminal event).
     eventBus.on(Events.NET_FIRED, (data) => {
@@ -855,10 +696,8 @@ class AudioSystem {
       }
     });
 
-    // Catch: whistle stops, the clamp lands (the line-taut beat). The
-    // daughter catch records itself so ARM_CAPTURED (the arm's bookkeeping of
-    // the same physical moment, 1-2 frames later) doesn't double the clamp —
-    // see the ARM_CAPTURED handler's ownership note.
+    // Catch: whistle stops, the clamp lands (the line-taut beat). The daughter catch records itself so the
+    // ARM_CAPTURED handler doesn't double the clamp (see its ownership note).
     eventBus.on(Events.NET_CATCH_SUCCESS, (data) => {
       if (!data) return;
       if (data.podIndex >= 0) {
@@ -871,11 +710,9 @@ class AudioSystem {
       }
     });
 
-    // Miss: kill the loops. Mother keeps her DENY buzz / strain rip (§9.7).
-    // The DAUGHTER branch is loop-hygiene ONLY: the daughter miss voice is
-    // owned by ARM_CAPTURE_FAILED → playFailBuzz (the ArmUnit emits it when
-    // its FSM poll sees MISSED, the same physical moment) — adding a deny
-    // here would double-voice one miss (task-D one-owner rule).
+    // Miss: kill the loops. Mother keeps her DENY buzz / strain rip (§9.7). The DAUGHTER branch is loop-hygiene ONLY:
+    // ARM_CAPTURE_FAILED → playFailBuzz owns the daughter miss voice (the ArmUnit emits it when its FSM poll sees
+    // MISSED, the same moment); a deny here would double-voice one miss.
     eventBus.on(Events.NET_CATCH_MISS, (data) => {
       if (!data) return;
       if (data.podIndex >= 0) {
@@ -890,12 +727,10 @@ class AudioSystem {
       }
     });
 
-    // Reel: winch loop (pitch mapped to remainingM via updateNetReelPitch,
-    // polled from CaptureNetSystem.update). Mother-only and only for a
-    // successful catch — the empty miss reel-back is a quiet rewind, and the
-    // daughter's catch is hauled home by the ArmUnit (the arm/tether owns
-    // that soundscape). The daughter branch is a whistle backstop: her
-    // auto-reel fires this event in the same tick as catch/miss resolution.
+    // Reel: winch loop (pitch follows remainingM via updateNetReelPitch, polled from CaptureNetSystem.update).
+    // Mother-only and only for a successful catch: the empty miss reel-back is a quiet rewind, and the daughter's
+    // catch is hauled home by the ArmUnit (the arm/tether owns that soundscape). The daughter branch is a whistle
+    // backstop: her auto-reel fires this event in the same tick as catch/miss resolution.
     eventBus.on(Events.NET_REEL_STARTED, (data) => {
       if (!data) return;
       if (data.podIndex >= 0) {
@@ -905,9 +740,8 @@ class AudioSystem {
       }
     });
 
-    // Berth: winch stops, dock clunk + short reward chime. Mother-only by
-    // construction — a daughter net never berths (fireDaughterNet catches are
-    // arm-hauled; lasso adoptions suppress NET_BERTHED).
+    // Berth: winch stops, dock clunk + short reward chime. Mother-only: a daughter net never berths (fireDaughterNet
+    // catches are arm-hauled; lasso adoptions suppress NET_BERTHED).
     eventBus.on(Events.NET_BERTHED, (data) => {
       if (!data || data.podIndex < 0) return;
       this._stopNetLoops();
@@ -915,32 +749,28 @@ class AudioSystem {
       this.playNetBerthChime();
     });
 
-    // Reel completed: belt-and-braces loop stop for BOTH families. Mother:
-    // covers the fallback STOWED exit (the headless reel-back). Daughter:
-    // covers the held-catch stow (arm delivery / target death mid-haul) and
-    // any reel-end path that skips the catch/miss hooks.
+    // Reel completed: belt-and-braces loop stop for BOTH families. Mother: the fallback STOWED exit (headless
+    // reel-back). Daughter: the held-catch stow (arm delivery / target death mid-haul) and any reel-end path that
+    // skips the catch/miss hooks.
     eventBus.on(Events.NET_REEL_COMPLETED, (data) => {
       if (!data) return;
       if (data.podIndex >= 0 || data.armIndex >= 0) this._stopNetLoops();
     });
 
-    // Release / jettison: kill every loop (the abort path) — both families.
+    // Release / jettison: kill every loop (abort path), both families.
     eventBus.on(Events.NET_RELEASED, (data) => {
       if (!data) return;
       if (data.podIndex >= 0 || data.armIndex >= 0) this._stopNetLoops();
     });
 
-    // Fragmentation while a mother net is on the field: kill the loops.
-    // (NET_FRAGMENTATION carries no podIndex — the debris went; the net's own
-    // miss path fires separately and also stops the loops.)
+    // Fragmentation with a mother net on the field: kill the loops. (NET_FRAGMENTATION carries no podIndex; the net's
+    // own miss path fires separately and also stops the loops.)
     eventBus.on(Events.NET_FRAGMENTATION, () => {
       this._stopNetLoops();
     });
 
-    // Ceremony stings (already emitted behind FEATURE_FLAGS.NET_CEREMONY):
-    // brake retro hiss, envelop sweep, per-10% cinch ratchet ticks. Daughter
-    // ceremonies (podIndex −1, armIndex ≥ 0) play the same stings at
-    // DAUGHTER_NET_GAIN.
+    // Ceremony stings (emitted behind FEATURE_FLAGS.NET_CEREMONY): brake retro hiss, envelop sweep, per-10% cinch
+    // ratchet ticks. Daughter ceremonies (podIndex −1, armIndex ≥ 0) play them at DAUGHTER_NET_GAIN.
     eventBus.on(Events.NET_BRAKE_FIRED, (data) => {
       if (!data) return;
       if (data.podIndex >= 0) this.playNetBrakeHiss();
@@ -957,18 +787,12 @@ class AudioSystem {
       else if (data.armIndex >= 0) this.playNetCinchTick(data.fraction, DAUGHTER_NET_GAIN);
     });
 
-    // Ceremony ducking: the mix ducks under the ceremony so the net voices
-    // read clearly (alarm bus is never ducked — danger still outranks).
-    // Extended to daughter ceremonies (NET_CEREMONY_START fires for daughters
-    // too, with podIndex −1 and an armIndex): same guarded acquire, same
-    // release paths. Idempotent acquire keeps the _duckOthers re-entrancy
-    // counter balanced (one hold per live ceremony flag, never stacked), and
-    // release rides the _stopNetLoops() chokepoint — every daughter terminal
-    // path (catch, miss, expire, release, stow, reset) runs it — so an
-    // abandoned net of EITHER family can never leak a permanent 50% mix
-    // (review item 4). The flag is one shared slot: mother and daughter
-    // ceremonies never run concurrently (CameraSystem admits one ceremony at
-    // a time), matching the pre-existing single-ceremony semantics.
+    // Ceremony ducking: the mix ducks under the ceremony so the net voices read clearly (alarm bus never ducks).
+    // Daughter ceremonies too (NET_CEREMONY_START fires for them with podIndex −1 and an armIndex): idempotent acquire
+    // keeps the _duckOthers counter balanced (one hold per live ceremony flag), and release rides the _stopNetLoops()
+    // chokepoint, which every terminal path of either family runs, so an abandoned net can never leak a permanent 50%
+    // mix. The flag is one shared slot: mother and daughter ceremonies never run concurrently (CameraSystem admits one
+    // at a time).
     eventBus.on(Events.NET_CEREMONY_START, (data) => {
       if (!data) return;
       if (!(data.podIndex >= 0) && !(data.armIndex >= 0)) return;
@@ -983,53 +807,38 @@ class AudioSystem {
       this._releaseNetDuck();
     });
 
-    // S3b: MPD Burst Mode audio
     eventBus.on(Events.MPD_BURST_END, (data) => {
       this.playMPDDisarm();
     });
 
-    // ST-3.4: Skill celebration audio
     eventBus.on(Events.SKILL_STATE_CHANGED, (d) => {
       if (d?.to === 'practiced') this.playPracticeChime();
     });
     // Owner 2026-10-21: no mastery popup or fanfare in the sim.
 
-    // m1-finish: a mission's last catch — one existing success cue. The same catch can also
-    // clear a cluster (RewardSystem -> AUDIO_CUE fieldCleared), so both go through one guard.
+    // A mission's last catch: one existing success cue. The same catch can also clear a cluster (RewardSystem →
+    // AUDIO_CUE fieldCleared), so both go through one guard.
     eventBus.on(Events.MISSION_COMPLETE, () => this._playFieldClearedOnce());
 
-    // Delegation 2 (2026-05-31) — onboarding "hint posted" soft chime.
-    // Generic AUDIO_CUE channel — payload: { id|cue: string, volume?: number }.
-    // Recognised cues: `hint_post`, `sweepComplete` (trawl sweep), and
-    // `fieldCleared` (P4 — milestone, its own voice); unknown cues are no-ops.
+    // Generic AUDIO_CUE channel, payload { id|cue: string, volume?: number }. Recognised cues: `hint_post`,
+    // `sweepComplete` (trawl sweep), `fieldCleared` (milestone, its own voice); unknown cues are no-ops.
     eventBus.on(Events.AUDIO_CUE, (data) => {
       if (!data) return;
       const id = data.id || data.cue;
       if (id === 'hint_post') {
-        // Startup legibility: the first onboarding hints post seconds into the
-        // mission with no player action — the chime read as an unexplained
-        // tone. The hint card still appears; only the sound waits out the
-        // opening. Hints posted after the grace window keep their chime.
+        // The first onboarding hints post seconds into the mission with no player action; the chime read as an
+        // unexplained tone. The hint card still appears; only the sound waits out the opening grace window.
         if (this._inStartupCueGrace()) return;
         const v = (typeof data.volume === 'number') ? data.volume : 0.4;
         this.playHintPost(v);
       } else if (id === 'sweepComplete') {
         this.playSweepComplete();
       } else if (id === 'fieldCleared') {
-        // P4 (fixes #8) — cluster-cleared milestone gets its own bigger voice.
         this._playFieldClearedOnce();
       }
     });
   }
 
-  // ==========================================================================
-  // PROCEDURAL SOUND GENERATORS
-  // ==========================================================================
-
-  /**
-   * Magnetic field hum — pulsing low tone
-   * @param {number} [duration=0.5]
-   */
   playMagnetic(duration = 0.5) {
     if (!this.available) return;
     const ctx = this.ctx;
@@ -1039,7 +848,6 @@ class AudioSystem {
     osc.type = 'sine';
     osc.frequency.value = 60;
 
-    // LFO for pulsing
     const lfo = ctx.createOscillator();
     lfo.type = 'sine';
     lfo.frequency.value = 4;
@@ -1060,10 +868,7 @@ class AudioSystem {
     lfo.stop(now + duration);
   }
 
-  /**
-   * Warning beep — descending G4→E4 interval (Phase R8).
-   * Two-note earcon using EARCON_FREQUENCIES.ALERT.
-   */
+  /** Warning beep: descending G4→E4 two-note earcon (EARCON_FREQUENCIES.ALERT). */
   playWarning() {
     if (!this.available) return;
     const now = this.ctx.currentTime;
@@ -1084,15 +889,11 @@ class AudioSystem {
     });
   }
 
-  /**
-   * Play capture/clamp impact sound — metallic thud + ringing (Phase 1C).
-   * Triggered when arm enters GRAPPLED state (catch moment).
-   */
+  /** Capture/clamp impact: metallic thud + ring + noise click. Triggered when the arm enters GRAPPLED (catch moment). */
   playCatchClamp() {
     if (!this.available) return;
     const now = this.ctx.currentTime;
 
-    // Impact thud (low frequency burst)
     const thud = this.ctx.createOscillator();
     const thudGain = this.ctx.createGain();
     thud.type = 'sine';
@@ -1104,7 +905,6 @@ class AudioSystem {
     thud.start(now);
     thud.stop(now + 0.2);
 
-    // Metallic ring (higher frequency, longer decay)
     const ring = this.ctx.createOscillator();
     const ringGain = this.ctx.createGain();
     ring.type = 'triangle';
@@ -1116,7 +916,6 @@ class AudioSystem {
     ring.start(now + 0.02);
     ring.stop(now + 0.5);
 
-    // Clamp click (noise burst)
     const bufSize = Math.floor(this.ctx.sampleRate * 0.05);
     const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
     const data = buf.getChannelData(0);
@@ -1138,9 +937,7 @@ class AudioSystem {
   }
 
   /**
-   * ==========================================================================
-   * REWARD FAMILY — note map (P4). Every "you gained something" cue. Kept
-   * distinct in contour + length so they never blur together:
+   * REWARD FAMILY note map: every "you gained something" cue, distinct in contour + length so they never blur:
    *   playCaptureSuccess  single A5 (880)            — debris captured
    *   playPurchase        700 → 1050 (triangle)      — credits spent (shop)
    *   playCashRegister    1200 → 1800 (triangle)     — credits earned
@@ -1153,13 +950,9 @@ class AudioSystem {
    *   playFieldCleared    C5·E5·G5·C6 echo fanfare   — cluster/field cleared
    *   playVictory         (see method)               — run victory
    * PING chimes for reference: targetLock C5→E5, targetLost E5→C5.
-   * ==========================================================================
    */
 
-  /**
-   * Capture success confirmation — single clean beep (A5, 880Hz, 150ms).
-   * S9-B: Simplified from G4→B4→D5 fanfare to a single tone for sim reframe.
-   */
+  /** Capture success: single clean beep (A5, 880 Hz, 150 ms). */
   playCaptureSuccess() {
     if (!this.available) return;
     const ctx = this.ctx;
@@ -1167,7 +960,7 @@ class AudioSystem {
 
     const osc = ctx.createOscillator();
     osc.type = 'sine';
-    osc.frequency.value = 880; // A5 — clean, high, brief
+    osc.frequency.value = 880;
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0.15, now);
@@ -1179,15 +972,11 @@ class AudioSystem {
     osc.stop(now + 0.15);
   }
 
-  /**
-   * Collision/explosion rumble
-   */
   playCollision() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Low noise burst
     const bufferSize = ctx.sampleRate * 0.5;
     const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const data = buffer.getChannelData(0);
@@ -1213,9 +1002,6 @@ class AudioSystem {
     noise.stop(now + 0.5);
   }
 
-  /**
-   * UI click — short blip
-   */
   playClick() {
     if (!this.available) return;
     const ctx = this.ctx;
@@ -1236,23 +1022,17 @@ class AudioSystem {
   }
 
   /**
-   * SAFETY OVERRIDE panel's FURNACE gag — a broken cockpit button that fakes a
-   * self-destruct. Two-tone sawtooth klaxon: 440/620 Hz alternating at 2 Hz
-   * (0.25 s per step), precomputed across the whole duration), routed to the
-   * ALARM family bus (danger outranks all — never ducked). Single-instance:
-   * a klaxon in flight is ignored until its endsAt passes (onended may never
-   * fire when the ctx is suspended, so expiry is checked by time, not by
-   * onended). Mute-aware: no ctx call at all when unavailable. Never throws.
-   * @param {number} [durationS=2] — klaxon length in seconds (non-finite or
-   *                                 ≤ 0 falls back to 2; capped at 10).
+   * SAFETY OVERRIDE panel's FURNACE gag: a broken cockpit button that fakes a self-destruct. Two-tone sawtooth
+   * klaxon, 440/620 Hz alternating at 2 Hz (0.25 s per step, precomputed across the duration), on the ALARM bus
+   * (never ducked). Single-instance: a klaxon in flight is ignored until its endsAt passes (onended may never fire on
+   * a suspended ctx, so expiry is checked by time). Mute-aware: no ctx call when unavailable. Never throws.
+   * @param {number} [durationS=2] klaxon length in s (non-finite or ≤ 0 → 2; capped at 10).
    */
   playKlaxon(durationS = 2) {
     if (!this.available || !this.ctx) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    // Re-entrancy guard: one klaxon in flight at a time. If a stale _klaxon
-    // survived past its endsAt (onended never fired — ctx suspended), discard it.
-
+    // Re-entrancy guard: a stale _klaxon past its endsAt (onended never fired, ctx suspended) is discarded.
     if (this._klaxon) {
       if (now < this._klaxon.endsAt) return;
       this._klaxon = null;
@@ -1285,11 +1065,7 @@ class AudioSystem {
     }
   }
 
-  /**
-   * Teardown seam for the SAFETY OVERRIDE panel's FURNACE gag — the gag's abort
-   * path calls this to kill a klaxon in flight early. Safe when unavailable or
-   * when no klaxon is playing (no-op, never throws).
-   */
+  /** Teardown seam for the FURNACE gag's abort path: kills a klaxon in flight early. No-op when none; never throws. */
   stopKlaxon() {
     if (!this._klaxon) return;
     const { osc, gain } = this._klaxon;
@@ -1299,13 +1075,10 @@ class AudioSystem {
   }
 
   /**
-   * FURNACE gag v2 (plan 1788957399035 §1.19) — a breaker relay closing: ONE
-   * HUD panel returning after the blackout ("took a hit, systems offline").
-   * HudReboot fires one per returning panel, so the top → bottom return reads
-   * as relays clacking home down the console. PHYSICAL family (a mechanical
-   * event in the cockpit, not a UI tick): 40 ms sawtooth 160 → 90 Hz through
-   * a 600 Hz low-pass, gain 0.22 → 0 — low, short, dry. Mute-aware (the
-   * `available` guard, like playCollision). Never throws.
+   * FURNACE gag v2: a breaker relay closing, ONE HUD panel returning after the blackout. HudReboot fires one per
+   * returning panel, so the top → bottom return reads as relays clacking home down the console. PHYSICAL family
+   * (mechanical cockpit event, not a UI tick): 40 ms sawtooth 160 → 90 Hz through a 600 Hz low-pass, gain 0.22 → 0.
+   * Mute-aware (`available` guard). Never throws.
    */
   playRelayClack() {
     if (!this.available) return;
@@ -1333,15 +1106,10 @@ class AudioSystem {
   }
 
   /**
-   * Terminal blip — short FM sweep, ~50ms, low volume. Used for comms boot
-   * messages and the salvage-manifest typewriter reveal.
-   * P5 (#4): optional `step` pitches each row up (+60 Hz/row) so a run of blips
-   * reads as one rising "data loading" gesture, not repeated identical clicks.
-   * Startup legibility (2026-07-24): silent during the mission-start grace
-   * window — the auto-locked first target's passive survey completes with no
-   * player action and would otherwise fire ~5 unexplained clicks into the
-   * opening cluster. The typewriter rows still animate visually.
-   * @param {number} [step=0] — row index; 0 = original 800→400 Hz sweep.
+   * Terminal blip: short FM sweep, ~50 ms, low volume, for comms boot messages and the salvage-manifest typewriter
+   * reveal. Optional `step` (row index; 0 = 800→400 Hz sweep) pitches each row up (+60 Hz/row) so a run reads as one
+   * rising "data loading" gesture. Silent during the mission-start grace window: the auto-locked first target's
+   * passive survey completes with no player action and would fire ~5 unexplained clicks; the rows still animate.
    */
   playTerminalBlip(step = 0) {
     if (!this.available) return;
@@ -1365,9 +1133,6 @@ class AudioSystem {
     osc.stop(now + 0.06);
   }
 
-  /**
-   * Score tally — digital counting sound
-   */
   playScoreTally() {
     if (!this.available) return;
     const ctx = this.ctx;
@@ -1387,9 +1152,6 @@ class AudioSystem {
     osc.stop(now + 0.06);
   }
 
-  /**
-   * Game over — ominous descending tone
-   */
   playGameOver() {
     if (!this.available) return;
     const ctx = this.ctx;
@@ -1415,9 +1177,6 @@ class AudioSystem {
     osc.stop(now + 2.0);
   }
 
-  /**
-   * Victory fanfare — ascending chord
-   */
   playVictory() {
     if (!this.available) return;
     const ctx = this.ctx;
@@ -1449,20 +1208,11 @@ class AudioSystem {
     });
   }
 
-  // ==========================================================================
-  // NEW FIRE-AND-FORGET GENERATORS
-  // ==========================================================================
-
-  /**
-   * Net whoosh — filtered noise sweep for net deployment
-   * @param {number} [dur=0.4]
-   */
   playNetWhoosh(dur = 0.4) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // White noise buffer
     const bufferSize = Math.ceil(ctx.sampleRate * dur);
     const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const data = buffer.getChannelData(0);
@@ -1473,13 +1223,11 @@ class AudioSystem {
     const noise = ctx.createBufferSource();
     noise.buffer = buffer;
 
-    // Bandpass filter with frequency sweep 3000 → 300 Hz
     const filter = ctx.createBiquadFilter();
     filter.type = 'bandpass';
     filter.frequency.setValueAtTime(3000, now);
     filter.frequency.linearRampToValueAtTime(300, now + dur);
 
-    // Gain envelope: 0→0.4 in 20ms, hold, 0.4→0 in last 100ms
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(0.4, now + 0.02);
@@ -1493,16 +1241,12 @@ class AudioSystem {
     noise.stop(now + dur);
   }
 
-  /**
-   * Dock click — mechanical latch click when arm docks
-   */
   playDockClick() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
     const dur = 0.03;
 
-    // Primary click — sine at 400Hz
     const osc1 = ctx.createOscillator();
     osc1.type = 'sine';
     osc1.frequency.value = 400;
@@ -1517,7 +1261,6 @@ class AudioSystem {
     osc1.start(now);
     osc1.stop(now + dur);
 
-    // Lower thud — sine at 200Hz
     const osc2 = ctx.createOscillator();
     osc2.type = 'sine';
     osc2.frequency.value = 200;
@@ -1533,16 +1276,11 @@ class AudioSystem {
     osc2.stop(now + dur);
   }
 
-  /**
-   * Arm deploy — tether unspool sound with whirring LFO
-   * @param {number} [dur=0.6]
-   */
   playArmDeploy(dur = 0.6) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // White noise source
     const bufferSize = Math.ceil(ctx.sampleRate * dur);
     const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const data = buffer.getChannelData(0);
@@ -1553,13 +1291,11 @@ class AudioSystem {
     const noise = ctx.createBufferSource();
     noise.buffer = buffer;
 
-    // Bandpass filter at 1500Hz, Q=0.8
     const filter = ctx.createBiquadFilter();
     filter.type = 'bandpass';
     filter.frequency.value = 1500;
     filter.Q.value = 0.8;
 
-    // LFO: sine at 8Hz modulating bandpass frequency ±300Hz
     const lfo = ctx.createOscillator();
     lfo.type = 'sine';
     lfo.frequency.value = 8;
@@ -1568,7 +1304,6 @@ class AudioSystem {
     lfo.connect(lfoGain);
     lfoGain.connect(filter.frequency);
 
-    // Gain: ramp 0→0.2 over 50ms, then slow decay to 0 over duration
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(0.2, now + 0.05);
@@ -1583,16 +1318,12 @@ class AudioSystem {
     lfo.stop(now + dur);
   }
 
-  /**
-   * Tether snap — sharp metallic snap/crack + tension release whip + low rumble fade.
-   * Phase 6: plays when tether is severed (ARM_DETACHED event).
-   */
+  /** Tether snap: sharp metallic snap + tension-release whip + low rumble fade. Plays when the tether is severed. */
   playTetherSnap() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Layer 1: Sharp metallic snap (short burst of filtered noise at high freq)
     const snapDur = 0.08;
     const snapBuf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * snapDur), ctx.sampleRate);
     const snapData = snapBuf.getChannelData(0);
@@ -1614,7 +1345,6 @@ class AudioSystem {
     snapSrc.start(now);
     snapSrc.stop(now + snapDur);
 
-    // Layer 2: Tension release whip (descending tone)
     const whipOsc = ctx.createOscillator();
     whipOsc.type = 'sawtooth';
     whipOsc.frequency.setValueAtTime(2000, now);
@@ -1627,7 +1357,6 @@ class AudioSystem {
     whipOsc.start(now);
     whipOsc.stop(now + 0.3);
 
-    // Layer 3: Low rumble fade (sub-bass)
     const rumbleOsc = ctx.createOscillator();
     rumbleOsc.type = 'sine';
     rumbleOsc.frequency.value = 50;
@@ -1640,10 +1369,6 @@ class AudioSystem {
     rumbleOsc.stop(now + 0.8);
   }
 
-  /**
-   * Fail buzz — error buzz for arm capture failure
-   * @param {number} [dur=0.3]
-   */
   playFailBuzz(dur = 0.3) {
     if (!this.available) return;
     const ctx = this.ctx;
@@ -1653,7 +1378,6 @@ class AudioSystem {
     osc.type = 'square';
     osc.frequency.value = 150;
 
-    // Gain: 0→0.15 in 10ms, hold 200ms, 0.15→0 in remaining time
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(0.15, now + 0.01);
@@ -1667,10 +1391,8 @@ class AudioSystem {
   }
 
   /**
-   * P3 — canonical DENY voice: the single "input refused, nothing broke" sound.
-   * Low dull square buzz, ~120 ms (the playFailBuzz DNA shortened). Replaces the
-   * former four deny voices (playClickFail, playLassoDenied, shop playWarning(0.3),
-   * playFailBuzz-as-denial). One meaning, one word. DENY family.
+   * Canonical DENY voice: the single "input refused, nothing broke" sound. Low dull square buzz, ~120 ms (the
+   * playFailBuzz DNA shortened). One meaning, one word.
    */
   playDeny() {
     if (!this.available) return;
@@ -1691,17 +1413,12 @@ class AudioSystem {
     osc.stop(now + dur + 0.02);
   }
 
-  /**
-   * Dramatic retrograde deorbit burn sound — descending rumble + alert tone (Session 10).
-   * Represents arm sacrificing all remaining fuel.
-   * @param {number} [dur=2.5] - Duration in seconds
-   */
+  /** Retrograde deorbit burn: descending rumble + alert tone; the arm sacrificing all remaining fuel. */
   playDeorbitBurn(dur = 2.5) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Deep rumble: filtered noise descending
     const bufferSize = ctx.sampleRate * dur;
     const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const data = noiseBuffer.getChannelData(0);
@@ -1729,7 +1446,6 @@ class AudioSystem {
     noise.start(now);
     noise.stop(now + dur);
 
-    // Alert tone: descending warning pulse
     const osc = ctx.createOscillator();
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(400, now);
@@ -1747,15 +1463,7 @@ class AudioSystem {
     osc.stop(now + dur);
   }
 
-  // ==========================================================================
-  // PHASE R8 — NEW SOUND METHODS
-  // ==========================================================================
-
-  /**
-   * Ascending step tone for fuel cycling with T key.
-   * Each fuel type gets one step higher.
-   * @param {number} [stepIndex=0]
-   */
+  /** Ascending step tone for T-key fuel cycling; each fuel type one step higher. */
   playFuelCycle(stepIndex = 0) {
     if (!this.available) return;
     const freqs = Constants.AUDIO.EARCON_FREQUENCIES.CYCLE;
@@ -1773,9 +1481,6 @@ class AudioSystem {
     osc.stop(this.ctx.currentTime + 0.12);
   }
 
-  /**
-   * Soft mechanical "clunk" when cargo is stored — 100→60Hz thud.
-   */
   playCargoStored() {
     if (!this.available) return;
     const osc = this.ctx.createOscillator();
@@ -1809,25 +1514,16 @@ class AudioSystem {
     osc.stop(this.ctx.currentTime + 0.3);
   }
 
-  // ==========================================================================
-  // AMBIENT ENGINE ROOM LOOP (Phase R8)
-  // ==========================================================================
-
-  /**
-   * Start persistent ambient "engine room" loop — bandpass-filtered white noise
-   * for fans/coolant hum + solar hiss layer.
-   */
+  /** Start the persistent ambient "engine room" loop: bandpass white noise (fans/coolant hum) + solar hiss layer. */
   startAmbientLoop() {
     if (!this.available || this._ambientActive) return;
     this._ambientActive = true;
-    // §13 boot timeline — mark exactly when the ambient loop kicks in so
-    // the user can correlate fan-on with this event in `?logBoot=1` output.
+    // §13 boot timeline: mark when the ambient loop kicks in so fan-on can be correlated in `?logBoot=1` output.
     try {
       // eslint-disable-next-line no-undef
       if (typeof window !== 'undefined') window.__bootMark?.('startAmbientLoop(). 2 buffer sources + 2 filters going live');
     } catch (_e) { /* swallow */ }
 
-    // White noise via buffer for fans/coolant
     const bufferSize = this.ctx.sampleRate * 2;
     const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
     const data = noiseBuffer.getChannelData(0);
@@ -1859,7 +1555,6 @@ class AudioSystem {
     this._solarGain = this.ctx.createGain();
     this._solarGain.gain.value = 0.005;
 
-    // Connect chains
     this._ambientNoise.connect(this._ambientFilter);
     this._ambientFilter.connect(this._ambientGain);
     this._ambientGain.connect(this.padBus);
@@ -1872,9 +1567,7 @@ class AudioSystem {
     this._solarNoise.start();
   }
 
-  /**
-   * Stop ambient loop with fade-out. Safe to call when not started.
-   */
+  /** Stop the ambient loop with a fade-out. Safe to call when not started. */
   stopAmbientLoop() {
     if (!this._ambientActive) return;
     this._ambientActive = false;
@@ -1899,10 +1592,6 @@ class AudioSystem {
     }, 600, { owner: this });
   }
 
-  /**
-   * Update ambient sound state based on ship systems.
-   * @param {{ solarRate: number, batteryPct: number }} state
-   */
   updateAmbientState(state) {
     if (!this._ambientActive) return;
 
@@ -1921,16 +1610,10 @@ class AudioSystem {
     }
   }
 
-  // ==========================================================================
-  // PERSISTENT / LOOPING SOUNDS
-  // ==========================================================================
-
   /**
    * Start continuous thruster hum with directional sound differentiation.
-   * @param {'ion'|'coldgas'} [type='ion']
-   * @param {'prograde'|'retrograde'|'lateral'} [direction='prograde']
-   * @param {number} [intensity=1.0] — gain multiplier. Use 0.4 for arm-pilot
-   *   FEEP thrusters (much smaller engines than the mothership main bus).
+   * @param {number} [intensity=1.0] gain multiplier; 0.4 for arm-pilot FEEP thrusters (much smaller engines than the
+   *   mothership main bus).
    */
   startThrusterHum(type = 'ion', direction = 'prograde', intensity = 1.0) {
     if (!this.available) return;
@@ -1941,7 +1624,6 @@ class AudioSystem {
       if (existing._direction === direction
           && existing.type === type
           && existing._intensity === intensity) return;
-      // Something changed — stop and restart
       this.stopThrusterHum();
     }
 
@@ -1969,10 +1651,8 @@ class AudioSystem {
 
       const baseGain = 0.08 * intensity;
       gain.gain.linearRampToValueAtTime(baseGain, now + 0.2);
-      // Phase R9: store base gain for sputtering reference
       this._thrusterBaseGain = baseGain;
     } else if (type === 'coldgas') {
-      // White noise buffer (2 seconds, looping)
       const bufferSize = ctx.sampleRate * 2;
       const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const channelData = buffer.getChannelData(0);
@@ -1997,14 +1677,13 @@ class AudioSystem {
 
       const baseGain = 0.06 * intensity;
       gain.gain.linearRampToValueAtTime(baseGain, now + 0.1);
-      // Phase R9: store base gain for sputtering reference
       this._thrusterBaseGain = baseGain;
     }
 
-    // Phase R9: store reference to thruster gain node for sputtering
+    // sputtering reads _thrusterBaseGain and _thrusterGain
     this._thrusterGain = gain;
 
-    // Phase 1: Retrograde braking pulse — LFO amplitude modulation
+    // Retrograde braking pulse: LFO amplitude modulation
     let retroLfo = null;
     let retroLfoGain = null;
     if (direction === 'retrograde') {
@@ -2013,7 +1692,7 @@ class AudioSystem {
       retroLfo.frequency.value = 4;    // 4 Hz pulse
       retroLfoGain.gain.value = 0.3;   // ±30% modulation depth
       retroLfo.connect(retroLfoGain);
-      retroLfoGain.connect(gain.gain); // AM modulation on main gain
+      retroLfoGain.connect(gain.gain);
       retroLfo.start(now);
       nodes.push(retroLfo);
     }
@@ -2022,16 +1701,12 @@ class AudioSystem {
     this.activeSources.set('thruster', { nodes, gain, type, _direction: direction, _intensity: intensity, _retroLfo: retroLfo });
   }
 
-  /**
-   * Stop continuous thruster hum with fade-out.
-   */
   stopThrusterHum() {
     if (!this.activeSources.has('thruster')) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
     const entry = this.activeSources.get('thruster');
 
-    // Phase R9: stop sputtering when thruster hum stops
     this._stopSputtering();
     this._thrusterGain = null;
 
@@ -2039,7 +1714,6 @@ class AudioSystem {
     entry.gain.gain.setValueAtTime(entry.gain.gain.value, now);
     entry.gain.gain.linearRampToValueAtTime(0, now + 0.15);
 
-    // Clean up retrograde LFO if present
     if (entry._retroLfo) {
       try { entry._retroLfo.stop(); } catch (_) { /* already stopped */ }
       entry._retroLfo = null;
@@ -2057,9 +1731,9 @@ class AudioSystem {
   }
 
   /**
-   * Ion start-up hum (TransferTrip's lighting stage, Constants.ION_STARTUP): a quiet sine with a triangle a fifth above, on its OWN
-   * 'ionStartup' key (never 'thruster'), at gain 0 and the low pitch until `updateIonStartupHum` raises them with the lit share.
-   * A second call while one plays does nothing.
+   * Ion start-up hum (TransferTrip's lighting stage, Constants.ION_STARTUP): a quiet sine with a triangle a fifth
+   * above, on its OWN 'ionStartup' key (never 'thruster'), at gain 0 and the low pitch until `updateIonStartupHum`
+   * raises them with the lit share. A second call while one plays does nothing.
    * @param {number} [lit=0] 0..1 the lit share it starts at
    */
   startIonStartupHum(lit = 0) {
@@ -2087,10 +1761,7 @@ class AudioSystem {
     this.updateIonStartupHum(lit);
   }
 
-  /**
-   * Ion start-up hum: gain and pitch follow the lit share (gain 0 -> HUM_GAIN_PEAK, pitch HUM_FREQ_LOW_HZ -> HUM_FREQ_HIGH_HZ).
-   * @param {number} lit 0..1
-   */
+  /** Ion start-up hum: gain 0 → HUM_GAIN_PEAK and pitch HUM_FREQ_LOW_HZ → HUM_FREQ_HIGH_HZ follow the lit share (0..1). */
   updateIonStartupHum(lit) {
     const entry = this.activeSources.get('ionStartup');
     if (!this.available || !entry) return;
@@ -2147,18 +1818,15 @@ class AudioSystem {
   }
 
   /**
-   * Sustained RCS attitude hiss — looping white noise through a 400 Hz bandpass
-   * (the same coldgas recipe as startThrusterHum's 'coldgas' branch), on its own
-   * 'rcsHiss' key so it never fights the ion hum. Driven at the real post-gate
-   * attitude-thrust level, so it is quiet while coasting at the rate cap and
-   * swells during the arrest burn. Kept under the ion hum (0.06 base gain).
-   * @param {number} [level=1.0] — 0..1 commanded attitude-thrust fraction.
+   * Sustained RCS attitude hiss: looping white noise through a 400 Hz bandpass (startThrusterHum's 'coldgas' recipe),
+   * on its own 'rcsHiss' key so it never fights the ion hum. Driven at the real post-gate attitude-thrust level (quiet
+   * while coasting at the rate cap, swells during the arrest burn); kept under the ion hum (0.06 base gain).
+   * @param {number} [level=1.0] 0..1 commanded attitude-thrust fraction.
    */
   startRcsHiss(level = 1.0) {
     if (!this.available) return;
     level = clamp01(level);
 
-    // Already playing: just retarget the gain if the level moved.
     if (this.activeSources.has('rcsHiss')) {
       const existing = this.activeSources.get('rcsHiss');
       const target = 0.06 * level;
@@ -2178,7 +1846,6 @@ class AudioSystem {
     gain.gain.setValueAtTime(0, now);
     const nodes = [];
 
-    // White noise buffer (2 seconds, looping) — the coldgas recipe.
     const bufferSize = ctx.sampleRate * 2;
     const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const channelData = buffer.getChannelData(0);
@@ -2207,9 +1874,6 @@ class AudioSystem {
     this.activeSources.set('rcsHiss', { nodes, gain, type: 'coldgas', _level: level });
   }
 
-  /**
-   * Stop the sustained RCS attitude hiss with a short fade-out.
-   */
   stopRcsHiss() {
     if (!this.activeSources.has('rcsHiss')) return;
     const ctx = this.ctx;
@@ -2232,9 +1896,8 @@ class AudioSystem {
   }
 
   /**
-   * RCS ignition accent — a direct copy of playEvaPuff: highpassed noise, ~60 ms,
-   * gain ~0.045. Fired once per fresh couple ignition so the *attack* is instant
-   * even though the hull is slow to respond.
+   * RCS ignition accent: a copy of playEvaPuff (highpassed noise, ~60 ms, gain ~0.045), fired once per fresh couple
+   * ignition so the *attack* is instant even though the hull is slow to respond.
    */
   playRcsPuff() {
     if (!this.available) return;
@@ -2254,7 +1917,7 @@ class AudioSystem {
     hp.Q.value = 0.5;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.045, now + 0.008); // quiet, fast attack
+    g.gain.exponentialRampToValueAtTime(0.045, now + 0.008);
     g.gain.exponentialRampToValueAtTime(0.0008, now + dur);
     noise.connect(hp);
     hp.connect(g);
@@ -2263,15 +1926,11 @@ class AudioSystem {
     noise.stop(now + dur + 0.02);
   }
 
-  // ==========================================================================
-  // PHASE R9 — 4-TIER ΔV ALARM SYSTEM
-  // ==========================================================================
-
   /**
-   * Update ΔV alarm state. Called at 10Hz from HUD update via DELTAV_UPDATE event.
-   * Tier: 0=none, 1=single beep/15s, 2=double beep/8s, 3=triple beep/3s, 4=continuous warble.
-   * @param {number} dvPct — Current ΔV as percentage (0-1)
-   * @param {number} [predictedPct] — Predicted ΔV after matching target (0-1), optional
+   * Update ΔV alarm state; called at 10 Hz from HUD update via DELTAV_UPDATE. Tier: 0=none, 1=single beep/15s,
+   * 2=double beep/8s, 3=triple beep/3s, 4=continuous warble.
+   * @param {number} dvPct current ΔV fraction (0-1)
+   * @param {number} [predictedPct] optional ΔV fraction (0-1) after matching the target
    */
   updateDeltaVAlarm(dvPct, predictedPct) {
     if (!this.available) return;
@@ -2285,15 +1944,13 @@ class AudioSystem {
     else if (pct <= 0.15) tier = 2;    // <15%: double beep every 8s
     else if (pct <= 0.30) tier = 1;    // <30%: single beep every 15s
 
-    // Idempotent: if tier unchanged, do nothing
     if (tier === this._dvAlarmTier) return;
 
     this._dvAlarmTier = tier;
     this._stopDvAlarm();
 
-    // P2 ducking: sustain a duck hold while the ΔV alarm is at tier ≥ 2 so the
-    // beeps read clearly over the mix. Symmetric on/off keyed off _dvDucked so
-    // the re-entrancy counter never leaks a hold.
+    // Sustain a duck hold while the ΔV alarm is at tier ≥ 2 so the beeps read clearly. Symmetric on/off keyed off
+    // _dvDucked so the re-entrancy counter never leaks a hold.
     const wantDuck = tier >= 2;
     if (wantDuck && !this._dvDucked) {
       this._dvDucked = true;
@@ -2306,26 +1963,19 @@ class AudioSystem {
     if (tier === 0) return;
 
     if (tier === 4) {
-      // Continuous warbling tone for <1% ΔV
       this._startContinuousAlarm();
     } else {
-      // Periodic beeps: tier 1=single, 2=double, 3=triple
       const intervals = Constants.HUD.DV_ALARM_INTERVALS;
       const intervalSec = intervals[tier - 1] || 15;
-      // PR 5 / P2.8: TimerManager-tracked interval (owner=this).
-      // _dvAlarmInterval now stores the TimerManager id; teardown via
-      // timerManager.clear() in _stopDvAlarm().
+      // _dvAlarmInterval stores the TimerManager id (owner=this); teardown via timerManager.clear() in _stopDvAlarm().
       this._dvAlarmInterval = timerManager.setInterval(() => {
         this._playAlarmBeeps(tier);
       }, intervalSec * 1000, { owner: this });
-      // Play first beep pattern immediately
       this._playAlarmBeeps(tier);
     }
   }
 
-  /**
-   * Legacy stop — force-resets alarm tier for backward compatibility.
-   */
+  /** Legacy stop: force-resets the alarm tier (backward compatibility). */
   stopDeltaVAlarm() {
     this._dvAlarmTier = -1; // Force reset on next updateDeltaVAlarm call
     this.updateDeltaVAlarm(1.0); // Full fuel = no alarm
@@ -2339,7 +1989,6 @@ class AudioSystem {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = 'square';
-      // Higher pitch for more urgent tiers
       osc.frequency.value = 1500 + (count - 1) * 300;
       const start = now + i * 0.18;
       gain.gain.setValueAtTime(Constants.AUDIO.ALERT_GAIN, start);
@@ -2362,7 +2011,6 @@ class AudioSystem {
     osc.type = 'square';
     osc.frequency.value = 2400;
 
-    // LFO modulates frequency for warbling effect
     lfo.type = 'sine';
     lfo.frequency.value = 4; // 4Hz warble
     lfoGain.gain.value = 200; // ±200Hz variation
@@ -2382,7 +2030,6 @@ class AudioSystem {
     this._dvAlarmGain = gain;
   }
 
-  /** @private Stop any active ΔV alarm (interval beeps or continuous warble) */
   _stopDvAlarm() {
     if (this._dvAlarmInterval) {
       timerManager.clear(this._dvAlarmInterval);
@@ -2406,26 +2053,15 @@ class AudioSystem {
     }
   }
 
-  // ==========================================================================
-  // PHASE R9 — THRUSTER SPUTTERING
-  // ==========================================================================
-
-  /**
-   * Update thruster audio state based on current fuel level.
-   * When fuel < 10%, introduces random gain dropouts (sputtering).
-   * @param {number} fuelPct — Current fuel percentage (0-100)
-   */
+  /** Thruster audio from the fuel level: below 10% fuel, random gain dropouts (sputtering). @param fuelPct 0-100 */
   updateThrusterFuelState(fuelPct) {
     if (!this.available || !this._thrusterGain) return;
 
     if (fuelPct < 10 && !this._thrusterSputtering) {
-      // Start sputtering: random gain dropouts
       this._thrusterSputtering = true;
-      // PR 5 / P2.8: TimerManager-tracked sputter interval.
       this._sputterInterval = timerManager.setInterval(() => {
         if (!this._thrusterGain) { this._stopSputtering(); return; }
         const now = this.ctx.currentTime;
-        // Random dropout: gain drops to near-zero briefly
         this._thrusterGain.gain.setValueAtTime(0.01, now);
         const resumeTime = now + 0.03 + Math.random() * 0.08;
         this._thrusterGain.gain.setValueAtTime(this._thrusterBaseGain || 0.06, resumeTime);
@@ -2435,7 +2071,6 @@ class AudioSystem {
     }
   }
 
-  /** @private Stop sputtering effect and restore stable gain */
   _stopSputtering() {
     this._thrusterSputtering = false;
     if (this._sputterInterval) {
@@ -2444,21 +2079,16 @@ class AudioSystem {
     }
   }
 
-  // ==========================================================================
-  // PHASE 8 — AUDIO & POLISH (FINAL JUICE)
-  // ==========================================================================
-
   /**
-   * Approach beep — pitch increases as arm nears target.
-   * Far (0.7-1.0): 400Hz quiet | Mid (0.3-0.7): 600Hz | Close (0.1-0.3): 800Hz | Final (<0.1): 1000Hz
-   * @param {number} distanceFraction — 0.0 = at target, 1.0 = far away
+   * Approach beep: pitch rises as the arm nears the target.
+   * Far (0.7-1.0): 400 Hz quiet | Mid (0.3-0.7): 600 Hz | Close (0.1-0.3): 800 Hz | Final (<0.1): 1000 Hz
+   * @param {number} distanceFraction 0 = at target, 1 = far away
    */
   playApproachBeep(distanceFraction) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Map distance to frequency and volume
     let freq, vol;
     if (distanceFraction < 0.1) { freq = 1000; vol = 0.14; }
     else if (distanceFraction < 0.3) { freq = 800; vol = 0.11; }
@@ -2470,7 +2100,6 @@ class AudioSystem {
     osc.frequency.value = freq;
 
     const gain = ctx.createGain();
-    // Short envelope: 50ms attack, 100ms release
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(vol, now + 0.05);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
@@ -2482,9 +2111,9 @@ class AudioSystem {
   }
 
   /**
-   * Tether tension — low creak/groan that intensifies with strain.
+   * Tether tension: low creak/groan that intensifies with strain.
    * Light (0.3-0.5): quiet creak | Medium (0.5-0.8): groaning | Heavy (0.8-1.0): stressed cable
-   * @param {number} tensionFraction — 0.0 = slack, 1.0 = max tension
+   * @param {number} tensionFraction 0 = slack, 1 = max tension
    */
   playTetherTension(tensionFraction) {
     if (!this.available) return;
@@ -2536,7 +2165,6 @@ class AudioSystem {
     } else {
       // Heavy: noise + sawtooth stressed cable (80-120Hz)
       const dur = 0.8;
-      // Noise layer
       const bufSize = Math.ceil(ctx.sampleRate * dur);
       const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
       const data = buf.getChannelData(0);
@@ -2556,7 +2184,6 @@ class AudioSystem {
       noise.start(now);
       noise.stop(now + dur);
 
-      // Sawtooth layer
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(80, now);
@@ -2577,16 +2204,14 @@ class AudioSystem {
   }
 
   /**
-   * Salvage reveal — two-phase loot box moment.
-   * Phase 1 (0-500ms): metallic unsealing + pneumatic hiss
-   * Phase 2 (500-1500ms): rising chime cascade C5→E5→G5
+   * Salvage reveal, a two-phase loot box moment: 1 (0-500 ms) metallic unsealing + pneumatic hiss; 2 (500-1500 ms)
+   * rising chime cascade C5→E5→G5.
    */
   playSalvageReveal() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Phase 1A: Metallic unsealing (noise sweep 200→2000Hz, 300ms)
     const sealDur = 0.3;
     const sealBufSize = Math.ceil(ctx.sampleRate * sealDur);
     const sealBuf = ctx.createBuffer(1, sealBufSize, ctx.sampleRate);
@@ -2608,7 +2233,6 @@ class AudioSystem {
     sealNoise.start(now);
     sealNoise.stop(now + sealDur);
 
-    // Phase 1B: Pneumatic hiss (high-passed noise, 100ms)
     const hissDur = 0.1;
     const hissBufSize = Math.ceil(ctx.sampleRate * hissDur);
     const hissBuf = ctx.createBuffer(1, hissBufSize, ctx.sampleRate);
@@ -2628,11 +2252,9 @@ class AudioSystem {
     hissNoise.start(now + 0.2);
     hissNoise.stop(now + 0.35);
 
-    // Phase 2: Rising chime cascade C5→E5→G5 (starting at 500ms)
     const chimeNotes = [523, 659, 784]; // C5, E5, G5
     chimeNotes.forEach((freq, i) => {
       const start = now + 0.5 + i * 0.2;
-      // Main tone
       const osc = ctx.createOscillator();
       osc.type = 'sine';
       osc.frequency.value = freq;
@@ -2644,7 +2266,6 @@ class AudioSystem {
       osc.start(start);
       osc.stop(start + 0.4);
 
-      // Slight detune shimmer
       const osc2 = ctx.createOscillator();
       osc2.type = 'sine';
       osc2.frequency.value = freq * 1.005; // +5 cents
@@ -2659,11 +2280,10 @@ class AudioSystem {
   }
 
   /**
-   * T10 — menu→sim departure pad swell. A soft, low synth chord that fades in
-   * and back out over the camera pull-back, giving the (otherwise silent)
-   * departure a sense of motion/lift without a musical stinger. Kept quiet
-   * (peak ≈ 0.06) so it sits under the UI click and never masks Houston VO.
-   * @param {number} [durationSec=1.35] — total swell length (≈ pull-back time).
+   * Menu→sim departure pad swell: a soft, low synth chord that fades in and back out over the camera pull-back, giving
+   * the (otherwise silent) departure a sense of lift without a musical stinger. Quiet (peak ≈ 0.06) so it sits under
+   * the UI click and never masks Houston VO.
+   * @param {number} [durationSec=1.35] total swell length (≈ pull-back time).
    */
   playDepartureSwell(durationSec = 1.35) {
     if (!this.available) return;
@@ -2681,7 +2301,6 @@ class AudioSystem {
     filter.frequency.linearRampToValueAtTime(900, now + dur * 0.55);
     filter.frequency.linearRampToValueAtTime(500, now + dur);
 
-    // Master swell envelope: slow attack, gentle release.
     const swell = ctx.createGain();
     swell.gain.setValueAtTime(0.0001, now);
     swell.gain.linearRampToValueAtTime(0.06, now + dur * 0.5);
@@ -2693,7 +2312,6 @@ class AudioSystem {
       const osc = ctx.createOscillator();
       osc.type = i === 0 ? 'sine' : 'triangle';
       osc.frequency.value = f;
-      // Slight per-voice detune for a wider, less synthetic pad.
       osc.detune.value = (i - 1) * 4;
       const vg = ctx.createGain();
       vg.gain.value = i === 0 ? 0.9 : 0.5; // root loudest
@@ -2705,7 +2323,7 @@ class AudioSystem {
   }
 
   /**
-   * T10 — comms crackle: a short radio-squelch burst + a two-blip "online"
+   * Comms crackle: a short radio-squelch burst + a two-blip "online"
    * confirm, played as the HUD powers on. Signals the comms link coming live
    * alongside the visual power-on stagger. ~0.35 s total, subtle.
    */
@@ -2714,22 +2332,17 @@ class AudioSystem {
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Squelch burst: bandpass-filtered noise, quick in/out (radio keying).
-    // Startup legibility (2026-07-24): the former two-note square "online
-    // confirm" (880→1320 Hz) that followed the squelch was heard as an
-    // unexplained high double blip at mission handoff — square tones sit in
-    // the PING register, not RADIO. RADIO family speaks in static only; the
-    // squelch alone is self-labeling.
+    // Squelch only (bandpass noise, radio keying): RADIO speaks in static; square "online confirm" blips sit in the
+    // PING register and read as unexplained tones, so none are added.
     this._playSquelch(now, 0.16, 0.09);
   }
 
   /**
-   * @private Shared RADIO squelch burst: bandpass-filtered noise, quick in/out
-   * (radio keying). Single source of the squelch DNA so playCommsCrackle and
-   * playRadioNotice can't drift apart. Routed to radioBus.
-   * @param {number} startTime — AudioContext time to begin.
-   * @param {number} [dur=0.16] — burst length (s).
-   * @param {number} [peakGain=0.09] — envelope peak.
+   * @private Shared RADIO squelch burst: bandpass noise, quick in/out (radio keying), on radioBus. Single source of
+   * the squelch DNA so playCommsCrackle and playRadioNotice can't drift apart.
+   * @param {number} startTime AudioContext time to begin.
+   * @param {number} [dur=0.16] burst length (s).
+   * @param {number} [peakGain=0.09] envelope peak.
    */
   _playSquelch(startTime, dur = 0.16, peakGain = 0.09) {
     if (!this.available) return;
@@ -2757,10 +2370,9 @@ class AudioSystem {
   }
 
   /**
-   * P3 — comms message notice. Replaces playWarning for comms priority sounds so
-   * a radio message never sounds like a danger ALARM. Short squelch burst
-   * (shares _playSquelch with commsCrackle; slightly shorter/quieter). RADIO family.
-   * @param {string} [priority] — 'CRITICAL' doubles the squelch; otherwise single.
+   * Comms message notice, replacing playWarning for comms priority sounds so a radio message never sounds like a
+   * danger ALARM. Short squelch burst (shared with commsCrackle; slightly shorter/quieter). RADIO family.
+   * @param {string} [priority] 'CRITICAL' doubles the squelch; otherwise single.
    */
   playRadioNotice(priority) {
     if (!this.available) return;
@@ -2772,9 +2384,8 @@ class AudioSystem {
   }
 
   /**
-   * T6 — SAFER cold-gas puff: a tiny highpassed-noise "pfft" (~0.05 s, quiet),
-   * layered under the departure pad swell as the astronaut thrusters fire on her
-   * jet-off exit. Deliberately subtle — a texture cue, not a bang.
+   * SAFER cold-gas puff: a tiny highpassed-noise "pfft" (~0.05 s, quiet), layered under the departure pad swell as the
+   * astronaut thrusters fire on her jet-off exit. Deliberately subtle: a texture cue, not a bang.
    */
   playEvaPuff() {
     if (!this.available) return;
@@ -2794,7 +2405,7 @@ class AudioSystem {
     hp.Q.value = 0.5;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.045, now + 0.008); // quiet, fast attack
+    g.gain.exponentialRampToValueAtTime(0.045, now + 0.008);
     g.gain.exponentialRampToValueAtTime(0.0008, now + dur);
     noise.connect(hp);
     hp.connect(g);
@@ -2803,10 +2414,7 @@ class AudioSystem {
     noise.stop(now + dur + 0.02);
   }
 
-  /**
-   * Weather alert earcons — distinct sound per weather type.
-   * @param {string} type — 'solar_flare', 'geomagnetic', 'saa', 'eclipse'
-   */
+  /** Weather alert earcons, a distinct sound per type: 'solar_flare', 'geomagnetic', 'saa', 'eclipse'. */
   playWeatherAlert(type) {
     if (!this.available) return;
     const ctx = this.ctx;
@@ -2918,7 +2526,6 @@ class AudioSystem {
    * Codex unlock — gentle two-note ascending chime (D5→A5 base, transposed by
    * a deterministic per-category pentatonic offset via {@link codexChimeNotes}).
    * Light and informative, not disruptive.
-   * @param {string} [category] - codex category key for the tonal variant.
    */
   playCodexUnlock(category) {
     if (!this.available) return;
@@ -2941,19 +2548,15 @@ class AudioSystem {
     });
   }
 
-  /**
-   * Sweep complete — brief success fanfare C4→E4→G4→C5 (trawl sweep only, P4).
-   * Sawtooth + sine blend with echo tail via delay node.
-   */
+  /** Sweep complete: brief success fanfare C4→E4→G4→C5 (trawl sweep only); sawtooth + sine blend, echo tail via delay node. */
   playSweepComplete() {
     this._playEchoFanfare([262, 330, 392, 523]); // C4, E4, G4, C5
   }
 
   /**
-   * P4 (fixes #8) — field-cleared milestone. Its OWN voice, no longer sharing
-   * playSweepComplete. Same echo-fanfare DNA but a full octave span
-   * (C5→E5→G5→C6) so it reads as a bigger milestone than any 2–3 note chime,
-   * yet smaller than the victory fanfare. REWARD family.
+   * Field-cleared milestone, its OWN voice (not shared with playSweepComplete). Same echo-fanfare DNA but a full octave
+   * span (C5→E5→G5→C6), so it reads as a bigger milestone than any 2-3 note chime, yet smaller than the victory
+   * fanfare. REWARD family.
    */
   playFieldCleared() {
     this._playEchoFanfare([523, 659, 784, 1047]); // C5, E5, G5, C6
@@ -2972,16 +2575,14 @@ class AudioSystem {
   }
 
   /**
-   * @private Shared ascending 4-note fanfare (sawtooth+sine blend) with an echo
-   * tail. Used by playSweepComplete and playFieldCleared. REWARD family.
-   * @param {number[]} notes — ascending frequencies (Hz).
+   * @private Shared ascending 4-note fanfare (sawtooth+sine blend) with an echo tail, for playSweepComplete and
+   * playFieldCleared. REWARD family. @param {number[]} notes ascending frequencies (Hz).
    */
   _playEchoFanfare(notes) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Delay node for reverb tail
     const delay = ctx.createDelay(0.5);
     delay.delayTime.value = 0.15;
     const feedback = ctx.createGain();
@@ -2995,7 +2596,6 @@ class AudioSystem {
 
     notes.forEach((freq, i) => {
       const start = now + i * 0.15;
-      // Sawtooth layer
       const saw = ctx.createOscillator();
       saw.type = 'sawtooth';
       saw.frequency.value = freq;
@@ -3004,11 +2604,10 @@ class AudioSystem {
       sawGain.gain.exponentialRampToValueAtTime(0.001, start + 0.3);
       saw.connect(sawGain);
       sawGain.connect(this.rewardBus);
-      sawGain.connect(delay); // feed into echo
+      sawGain.connect(delay);
       saw.start(start);
       saw.stop(start + 0.3);
 
-      // Sine layer
       const sin = ctx.createOscillator();
       sin.type = 'sine';
       sin.frequency.value = freq;
@@ -3017,7 +2616,7 @@ class AudioSystem {
       sinGain.gain.exponentialRampToValueAtTime(0.001, start + 0.35);
       sin.connect(sinGain);
       sinGain.connect(this.rewardBus);
-      sinGain.connect(delay); // feed into echo
+      sinGain.connect(delay);
       sin.start(start);
       sin.stop(start + 0.35);
     });
@@ -3032,16 +2631,11 @@ class AudioSystem {
     }, 2500, { owner: this });
   }
 
-  // ==========================================================================
-  // CONJUNCTION ALERT BEEPS (Sprint C1)
-  // ==========================================================================
-
   /**
-   * Conjunction alert beeps — tiered urgency.
+   * Conjunction alert beeps, tiered urgency.
    * GREEN:  single soft beep  (800 Hz, 100 ms)
    * YELLOW: double beep       (1200 Hz, 80 ms × 2, 100 ms gap)
    * RED:    urgent triple beep (1600 Hz, 60 ms × 3, 60 ms gap) + distortion
-   * @param {string} tier — 'GREEN' | 'YELLOW' | 'RED'
    */
   playConjunctionAlert(tier) {
     if (!this.available) return;
@@ -3055,7 +2649,7 @@ class AudioSystem {
     };
     const cfg = configs[tier] || configs.GREEN;
 
-    // P2 ducking: RED conjunction is act-now danger — duck the mix for 2 s.
+    // RED conjunction is act-now danger: duck the mix for 2 s.
     if (tier === 'RED') this._duckPulse(2000);
 
     for (let i = 0; i < cfg.count; i++) {
@@ -3091,21 +2685,13 @@ class AudioSystem {
     }
   }
 
-  // ==========================================================================
-  // PHASE 6 — LASSO FEEDBACK SOUNDS
-  // ==========================================================================
-
-  /**
-   * Lasso fire — electromagnetic "THWIP" (noise burst + resonant filter sweep, 150ms).
-   * Replaces the generic click for lasso launch.
-   */
+  /** Lasso fire: electromagnetic "THWIP" (noise burst + resonant filter sweep, 150 ms), the lasso-launch sound. */
   playLassoFire() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
     const dur = 0.15;
 
-    // Layer 1: Noise burst through resonant bandpass (the "snap")
     const bufSize = Math.ceil(ctx.sampleRate * dur);
     const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
     const data = buf.getChannelData(0);
@@ -3128,7 +2714,6 @@ class AudioSystem {
     noise.start(now);
     noise.stop(now + dur);
 
-    // Layer 2: Short descending tone for electromagnetic character
     const osc = ctx.createOscillator();
     osc.type = 'sine';
     osc.frequency.setValueAtTime(1200, now);
@@ -3142,16 +2727,13 @@ class AudioSystem {
     osc.stop(now + dur);
   }
 
-  /**
-   * Start continuous wire-whistle during lasso flight — filtered noise at 800Hz, very low volume.
-   */
+  /** Continuous wire-whistle during lasso flight: filtered noise at 800 Hz, very low volume. */
   startLassoWireWhistle() {
-    this.stopLassoWireWhistle(); // Stop any existing
+    this.stopLassoWireWhistle();
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Looping noise buffer
     const bufSize = ctx.sampleRate * 2;
     const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
     const bufData = buf.getChannelData(0);
@@ -3167,7 +2749,7 @@ class AudioSystem {
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.03, now + 0.1); // Very low volume
+    gain.gain.linearRampToValueAtTime(0.03, now + 0.1);
 
     noise.connect(filter);
     filter.connect(gain);
@@ -3177,9 +2759,6 @@ class AudioSystem {
     this._lassoWhistleNodes = { noise, filter, gain };
   }
 
-  /**
-   * Stop wire-whistle sound with fade-out.
-   */
   stopLassoWireWhistle() {
     if (!this._lassoWhistleNodes) return;
     const { noise, gain } = this._lassoWhistleNodes;
@@ -3196,17 +2775,13 @@ class AudioSystem {
     this._lassoWhistleNodes = null;
   }
 
-  /**
-   * Lasso winch/reel — mechanical rising-pitch filtered noise, 500ms.
-   * Plays during reel-in phase after contact.
-   */
+  /** Lasso winch/reel: mechanical rising-pitch filtered noise, 500 ms; plays during the reel-in after contact. */
   playLassoWinch() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
     const dur = 0.5;
 
-    // Noise source
     const bufSize = Math.ceil(ctx.sampleRate * dur);
     const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
     const data = buf.getChannelData(0);
@@ -3223,7 +2798,6 @@ class AudioSystem {
     filter.frequency.exponentialRampToValueAtTime(1200, now + dur);
     filter.Q.value = 3;
 
-    // LFO for mechanical ratcheting effect
     const lfo = ctx.createOscillator();
     lfo.type = 'square';
     lfo.frequency.value = 12; // 12Hz rapid mechanical clicking
@@ -3245,33 +2819,21 @@ class AudioSystem {
     lfo.stop(now + dur);
   }
 
-  // ==========================================================================
-  // NET VOICES (mother-net-reel plan §9 Phase B; daughter extension 2026-08-27)
-  //
-  // The mother Large Net was 100% silent; Phase B gave her these voices, and
-  // the daughter crossbow nets now share them. Listener-side gating decides
-  // the family: mother (podIndex ≥ 0) plays full volume — the default
-  // `scale` keeps her output byte-identical to Phase B — and daughter
-  // (armIndex ≥ 0) passes DAUGHTER_NET_GAIN. The lasso keeps its own voices.
-  // Two loops (flight whistle, reel winch) have explicit stop methods and a
-  // single _stopNetLoops() chokepoint called from EVERY terminal path of
-  // either family — a stuck loop is the classic bug.
-  // ==========================================================================
+  // NET VOICES. Listener-side gating decides the family: mother (podIndex ≥ 0) plays full volume (default `scale`
+  // 1.0), daughter (armIndex ≥ 0) passes DAUGHTER_NET_GAIN. The lasso keeps its own voices. Two loops (flight whistle,
+  // reel winch) have explicit stop methods and a single _stopNetLoops() chokepoint called from EVERY terminal path of
+  // either family.
 
   /**
-   * Net canister thump — the net canister leaving the launcher muzzle.
-   * Low body thud + a short pressure "pfft" (the cold-gas ejection), distinct
-   * from the lasso's electromagnetic THWIP (playLassoFire) and the daughter's
-   * crossbow WOOSH (playArmDeploy). PHYSICAL.
-   * @param {number} [scale=1.0] — output gain scale (DAUGHTER_NET_GAIN for
-   *   daughter fires; omitted for the full-volume mother pod)
+   * Net canister thump: the canister leaving the launcher muzzle. Low body thud + a short pressure "pfft" (the
+   * cold-gas ejection), distinct from the lasso's THWIP (playLassoFire) and the daughter's crossbow WOOSH
+   * (playArmDeploy). PHYSICAL.
    */
   playNetCanisterThump(scale = 1.0) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Layer 1: body thud (low sine burst, 60→35 Hz, ~180 ms)
     const thud = ctx.createOscillator();
     thud.type = 'sine';
     thud.frequency.setValueAtTime(60, now);
@@ -3284,7 +2846,6 @@ class AudioSystem {
     thud.start(now);
     thud.stop(now + 0.22);
 
-    // Layer 2: ejection pfft (short noise burst through a lowpass, ~120 ms)
     const dur = 0.12;
     const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
     const data = buf.getChannelData(0);
@@ -3307,15 +2868,10 @@ class AudioSystem {
   }
 
   /**
-   * Net flight whistle — continuous loop while a net is airborne. Same idiom
-   * as startLassoWireWhistle but a separate instance (the two can never
-   * overlap by mass routing, but they must not share state) and a lower,
-   * heavier band (600 Hz vs 800 Hz — the net canister reads heavier).
-   * ONE instance serves both launcher families (a daughter fire restarts it
-   * at DAUGHTER_NET_GAIN); the stop side is event-driven per family plus the
-   * any-net-in-flight poll in CaptureNetSystem.update. PHYSICAL.
-   * @param {number} [scale=1.0] — loop gain scale (DAUGHTER_NET_GAIN for
-   *   daughter fires; omitted for the full-volume mother pod)
+   * Net flight whistle: continuous loop while a net is airborne. Same idiom as startLassoWireWhistle but a separate
+   * instance (the two never overlap by mass routing, but must not share state) and a lower, heavier band (600 Hz vs
+   * 800 Hz). ONE instance serves both launcher families (a daughter fire restarts it at DAUGHTER_NET_GAIN); the stop
+   * side is event-driven per family plus the any-net-in-flight poll in CaptureNetSystem.update. PHYSICAL.
    */
   startNetFlightWhistle(scale = 1.0) {
     this.stopNetFlightWhistle();
@@ -3348,7 +2904,6 @@ class AudioSystem {
     this._netWhistleNodes = { noise, filter, gain };
   }
 
-  /** Stop the mother flight whistle with a short fade. */
   stopNetFlightWhistle() {
     if (!this._netWhistleNodes) return;
     const { noise, gain } = this._netWhistleNodes;
@@ -3366,21 +2921,15 @@ class AudioSystem {
   }
 
   /**
-   * Net cinch clamp — the wrapped bundle ratcheting shut on a catch.
-   * Heavier than playCatchClamp (whose meaning "net clamp on catch" is taken
-   * by ARM_CAPTURED): a low metallic CLUNK + a ratchet buzz tail. Owns the
-   * catch moment for NET captures of BOTH families (task-D one-owner rule —
-   * the daughter's trailing ARM_CAPTURED echo is deduped at the listener).
-   * PHYSICAL.
-   * @param {number} [scale=1.0] — output gain scale (DAUGHTER_NET_GAIN for
-   *   daughter catches; omitted for the full-volume mother pod)
+   * Net cinch clamp: the wrapped bundle ratcheting shut on a catch. Heavier than playCatchClamp (whose "net clamp on
+   * catch" meaning is taken by ARM_CAPTURED): a low metallic CLUNK + a ratchet buzz tail. Owns the catch moment for
+   * NET captures of BOTH families (the daughter's trailing ARM_CAPTURED echo is deduped at the listener). PHYSICAL.
    */
   playNetCinchClamp(scale = 1.0) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Low metallic clunk (sine 70→45 Hz + triangle ring 500→250 Hz)
     const clunk = ctx.createOscillator();
     clunk.type = 'sine';
     clunk.frequency.setValueAtTime(70, now);
@@ -3405,7 +2954,6 @@ class AudioSystem {
     ring.start(now + 0.02);
     ring.stop(now + 0.55);
 
-    // Ratchet buzz tail (12 Hz square LFO on a noise band, ~300 ms)
     const dur = 0.3;
     const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
     const data = buf.getChannelData(0);
@@ -3436,10 +2984,9 @@ class AudioSystem {
   }
 
   /**
-   * Mother reel winch — continuous loop while the catch reels in, pitch mapped
-   * to the remaining distance (updateNetReelPitch). Mechanical ratcheting like
-   * playLassoWinch but a LOOP (the mother reel runs 5–25 s, not 500 ms).
-   * PHYSICAL.
+   * Mother reel winch: continuous loop while the catch reels in, pitch mapped to the remaining distance
+   * (updateNetReelPitch). Mechanical ratcheting like playLassoWinch but a LOOP (the mother reel runs 5–25 s, not
+   * 500 ms). PHYSICAL.
    */
   startNetReelWinch() {
     this.stopNetReelWinch();
@@ -3455,14 +3002,13 @@ class AudioSystem {
     noise.buffer = buf;
     noise.loop = true;
 
-    // Bandpass centre driven by remainingM (see updateNetReelPitch): starts
-    // high (far) and falls as the catch closes — the audible range readout.
+    // Bandpass centre driven by remainingM (see updateNetReelPitch): starts high (far), falls as the catch closes;
+    // the audible range readout.
     const filter = ctx.createBiquadFilter();
     filter.type = 'bandpass';
     filter.frequency.value = 900;
     filter.Q.value = 3;
 
-    // Mechanical ratchet LFO.
     const lfo = ctx.createOscillator();
     lfo.type = 'square';
     lfo.frequency.value = 11;
@@ -3485,11 +3031,10 @@ class AudioSystem {
   }
 
   /**
-   * Map the winch pitch to the reel's remaining distance. Called per frame
-   * from CaptureNetSystem.update while a mother net reels (cheap — one
-   * setTargetAtTime on a live loop, no-op when no winch is running).
-   * @param {number} remainingM — metres left to reel (≥ 0)
-   * @param {number} seedM — the seeded reel distance (for normalisation)
+   * Map the winch pitch to the reel's remaining distance. Called per frame from CaptureNetSystem.update while a mother
+   * net reels (cheap: one setTargetAtTime on a live loop; no-op when no winch runs).
+   * @param {number} remainingM metres left to reel (≥ 0)
+   * @param {number} seedM the seeded reel distance (for normalisation)
    */
   updateNetReelPitch(remainingM, seedM) {
     const nodes = this._netWinchNodes;
@@ -3503,7 +3048,6 @@ class AudioSystem {
     } catch (e) { /* headless stub */ }
   }
 
-  /** Stop the mother reel winch with a short fade. */
   stopNetReelWinch() {
     if (!this._netWinchNodes) return;
     const { noise, gain, lfo } = this._netWinchNodes;
@@ -3523,16 +3067,14 @@ class AudioSystem {
   }
 
   /**
-   * Mother berth clunk — the wrapped package settling onto the launcher at the
-   * standoff. A single deep docking thud (distinct from playDockClick's small
-   * arm-latch click). PHYSICAL.
+   * Mother berth clunk: the wrapped package settling onto the launcher at the standoff. A single deep docking thud
+   * (distinct from playDockClick's small arm-latch click). PHYSICAL.
    */
   playNetBerthClunk() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Deep thud (sine 55→30 Hz, ~350 ms) + a short contact noise tick.
     const thud = ctx.createOscillator();
     thud.type = 'sine';
     thud.frequency.setValueAtTime(55, now);
@@ -3567,9 +3109,8 @@ class AudioSystem {
   }
 
   /**
-   * Mother berth chime — short two-note REWARD for a secured whale. Distinct
-   * from playCaptureSuccess (single A5, daughter-flavoured): a lower, longer
-   * G4→D5 pair that reads as "heavy cargo signed off". REWARD.
+   * Mother berth chime: short two-note REWARD for a secured whale. Distinct from playCaptureSuccess (single A5,
+   * daughter-flavoured): a lower, longer G4→D5 pair that reads as "heavy cargo signed off".
    */
   playNetBerthChime() {
     if (!this.available) return;
@@ -3579,11 +3120,8 @@ class AudioSystem {
   }
 
   /**
-   * Net retro-brake hiss — the corner retros firing to arrest the net at
-   * BRAKE entry. A mid-band noise burst (~400 ms), distinct from the lasso's
-   * contact clank. PHYSICAL.
-   * @param {number} [scale=1.0] — output gain scale (DAUGHTER_NET_GAIN for
-   *   daughter ceremonies; omitted for the full-volume mother pod)
+   * Net retro-brake hiss: the corner retros firing to arrest the net at BRAKE entry. A mid-band noise burst
+   * (~400 ms), distinct from the lasso's contact clank. PHYSICAL.
    */
   playNetBrakeHiss(scale = 1.0) {
     if (!this.available) return;
@@ -3614,11 +3152,8 @@ class AudioSystem {
   }
 
   /**
-   * Net envelop sting — the rim weights sweeping past the catch at
-   * ENVELOP peak. A soft fabric "shh" sweep (noise band 1800→600 Hz).
-   * PHYSICAL.
-   * @param {number} [scale=1.0] — output gain scale (DAUGHTER_NET_GAIN for
-   *   daughter ceremonies; omitted for the full-volume mother pod)
+   * Net envelop sting: the rim weights sweeping past the catch at ENVELOP peak. A soft fabric "shh" sweep (noise band
+   * 1800→600 Hz). PHYSICAL.
    */
   playNetEnvelopSting(scale = 1.0) {
     if (!this.available) return;
@@ -3650,12 +3185,9 @@ class AudioSystem {
   }
 
   /**
-   * Net cinch-progress tick — one short ratchet click per 10% cinch
-   * threshold. Pitched up slightly as the fraction closes (the drawstring
-   * tightening). PHYSICAL.
-   * @param {number} [fraction=0] — cinch fraction 0..1
-   * @param {number} [scale=1.0] — output gain scale (DAUGHTER_NET_GAIN for
-   *   daughter ceremonies; omitted for the full-volume mother pod)
+   * Net cinch-progress tick: one short ratchet click per 10% cinch threshold, pitched up slightly as the fraction
+   * closes (the drawstring tightening). PHYSICAL.
+   * @param {number} [fraction=0] cinch fraction 0..1
    */
   playNetCinchTick(fraction = 0, scale = 1.0) {
     if (!this.available) return;
@@ -3678,17 +3210,14 @@ class AudioSystem {
   }
 
   /**
-   * Mother strain rip — the net letting go at the 80–100% rated-mass band.
-   * Creak-then-let-go: a rising tension creak (sawtooth 180→400 Hz) that cuts
-   * to a noise rip + release drop. Pairs with the strain-slip comms line.
-   * PHYSICAL.
+   * Mother strain rip: the net letting go at the 80–100% rated-mass band. Creak-then-let-go: a rising tension creak
+   * (sawtooth 180→400 Hz) that cuts to a noise rip + release drop. Pairs with the strain-slip comms line. PHYSICAL.
    */
   playNetStrainRip() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Creak (rising sawtooth, ~350 ms)
     const creak = ctx.createOscillator();
     creak.type = 'sawtooth';
     creak.frequency.setValueAtTime(180, now);
@@ -3702,7 +3231,6 @@ class AudioSystem {
     creak.start(now);
     creak.stop(now + 0.38);
 
-    // Rip (noise burst, ~200 ms, at the creak peak)
     const ripDur = 0.2;
     const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * ripDur), ctx.sampleRate);
     const data = buf.getChannelData(0);
@@ -3723,7 +3251,6 @@ class AudioSystem {
     noise.start(now + 0.32);
     noise.stop(now + 0.32 + ripDur);
 
-    // Release drop (sine 300→80 Hz — the let-go)
     const drop = ctx.createOscillator();
     drop.type = 'sine';
     drop.frequency.setValueAtTime(300, now + 0.34);
@@ -3738,10 +3265,8 @@ class AudioSystem {
   }
 
   /**
-   * Aim-resolve double-tick — the mother slew settling on the launch attitude.
-   * Two short TICK clicks ~70 ms apart (the "locked, then confirmed" gesture).
-   * Distinct from playClick (single UI tick) and the target-lock PING earcon.
-   * TICK.
+   * Aim-resolve double-tick: the mother slew settling on the launch attitude. Two short TICK clicks ~70 ms apart (the
+   * "locked, then confirmed" gesture), distinct from playClick (single UI tick) and the target-lock PING earcon.
    */
   playAimResolveTick() {
     if (!this.available) return;
@@ -3763,13 +3288,10 @@ class AudioSystem {
   }
 
   /**
-   * _stopNetLoops — the loop chokepoint (§9.5). Called from EVERY net
-   * terminal path of BOTH families — mother (catch, miss, release, frag,
-   * strain, berth, reel-completed, tab-hide, reset) and daughter (miss,
-   * reel-completed stow, release, frag, reset) — so no loop can stick.
-   * Idempotent. Also releases the ceremony duck (review item 4, extended to
-   * daughter ceremonies) — the duck must not outlive a net of either family.
-   * @private
+   * @private The net-loop chokepoint (§9.5). Called from EVERY net terminal path of BOTH families: mother (catch,
+   * miss, release, frag, strain, berth, reel-completed, tab-hide, reset) and daughter (miss, reel-completed stow,
+   * release, frag, reset), so no loop can stick. Idempotent. Also releases the ceremony duck, which must not outlive a
+   * net of either family.
    */
   _stopNetLoops() {
     this.stopNetFlightWhistle();
@@ -3777,34 +3299,23 @@ class AudioSystem {
     this._releaseNetDuck();
   }
 
-  /**
-   * Idempotent release of the mother-net ceremony duck (review item 4).
-   * Paired with the guarded acquire in the NET_CEREMONY_START handler.
-   * @private
-   */
+  /** @private Idempotent release of the mother-net ceremony duck; pairs with the acquire in the NET_CEREMONY_START handler. */
   _releaseNetDuck() {
     if (!this._netCeremonyDucked) return;
     this._netCeremonyDucked = false;
     this._duckOthers(false);
   }
 
-  /**
-   * @private Seconds clock shared by the daughter catch de-dup ledger — the
-   * audio clock when live, wall clock headless (same idiom as
-   * _playLockDeduped).
-   * @returns {number}
-   */
+  /** @private Seconds clock for the daughter catch de-dup ledger: audio clock when live, wall clock headless. */
   _nowS() {
     return (this.ctx && typeof this.ctx.currentTime === 'number')
       ? this.ctx.currentTime : (Date.now() / 1000);
   }
 
   /**
-   * @private Record a daughter NET_CATCH_SUCCESS so the trailing ARM_CAPTURED
-   * for the SAME catch (the arm's FSM-poll bookkeeping, 1-2 frames later)
-   * skips its whoosh+clamp — one owner per physical moment (task D).
-   * Stale entries are pruned on insert so the ledger stays a handful deep
-   * even across a long session.
+   * @private Record a daughter NET_CATCH_SUCCESS so the trailing ARM_CAPTURED for the SAME catch (1-2 frames later)
+   * skips its whoosh+clamp: one owner per physical moment. Stale entries are pruned on insert so the ledger stays a
+   * handful deep.
    * @param {string|number|null|undefined} debrisId
    */
   _recordDaughterNetCatch(debrisId) {
@@ -3817,41 +3328,32 @@ class AudioSystem {
   }
 
   /**
-   * @private True when this ARM_CAPTURED payload is the echo of a daughter
-   * net catch that playNetCinchClamp already voiced. Primary key: debris id
-   * (ARM_CAPTURED carries targetId on the arm path, debrisId on the lasso
-   * path; NET_CATCH_SUCCESS carries debrisId — same id space) within
-   * DAUGHTER_CATCH_ECHO_ID_S. Id-less payloads fall back to the tight
-   * DAUGHTER_CATCH_ECHO_FALLBACK_S window. Matches are consumed one-shot so
-   * a genuine later capture of the same body keeps its cue.
-   * @param {object|undefined} data — ARM_CAPTURED payload
-   * @returns {boolean}
+   * @private True when this ARM_CAPTURED payload echoes a daughter net catch that playNetCinchClamp already voiced.
+   * Primary key: debris id (ARM_CAPTURED carries targetId on the arm path, debrisId on the lasso path;
+   * NET_CATCH_SUCCESS carries debrisId; same id space) within DAUGHTER_CATCH_ECHO_ID_S. Id-less payloads fall back to
+   * the tight DAUGHTER_CATCH_ECHO_FALLBACK_S window. Matches are consumed one-shot so a later genuine capture of the
+   * same body keeps its cue.
+   * @param {object|undefined} data ARM_CAPTURED payload
    */
   _isDaughterNetCatchEcho(data) {
     const now = this._nowS();
     const id = data ? (data.targetId ?? data.debrisId) : null;
     if (id != null && this._daughterNetCatchIds.has(id)) {
       const t = this._daughterNetCatchIds.get(id);
-      this._daughterNetCatchIds.delete(id);   // one-shot
+      this._daughterNetCatchIds.delete(id);
       if (now - t <= DAUGHTER_CATCH_ECHO_ID_S) return true;
     }
     if (id == null && this._lastDaughterNetCatchAt != null
         && now - this._lastDaughterNetCatchAt <= DAUGHTER_CATCH_ECHO_FALLBACK_S) {
-      this._lastDaughterNetCatchAt = null;    // one-shot
+      this._lastDaughterNetCatchAt = null;
       return true;
     }
     return false;
   }
 
-  // ==========================================================================
-  // PHASE 5 — TARGET LOCK CEREMONY SOUNDS
-  // ==========================================================================
-
   /**
-   * Play the lock earcon with a short dedupe window so a manual SELECTED and the
-   * follow-up TARGET_IN_RANGE crossing (or any two near-simultaneous triggers)
-   * produce exactly ONE "locked on" sound. ~250 ms guard.
-   * @private
+   * @private Play the lock earcon with a ~250 ms dedupe window so a manual SELECTED and the follow-up TARGET_IN_RANGE
+   * crossing (or any two near-simultaneous triggers) produce exactly ONE "locked on" sound.
    */
   _playLockDeduped() {
     const t = (this.ctx && typeof this.ctx.currentTime === 'number') ? this.ctx.currentTime : (Date.now() / 1000);
@@ -3860,20 +3362,15 @@ class AudioSystem {
     this.playTargetLock();
   }
 
-  /**
-   * Target lock-on — ascending two-note (C5→E5, 60ms each, sine wave, slight reverb).
-   * FS2/MW2 heritage "target acquired" ping.
-   */
+  /** Target lock-on: ascending two-note (C5→E5, 60 ms each, sine, slight reverb); FS2/MW2 heritage "target acquired" ping. */
   playTargetLock() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Ascending two-note: C5 (523Hz) → E5 (659Hz)
     const notes = [523, 659];
     const noteDur = 0.06; // 60ms each
 
-    // Delay node for slight reverb tail
     const delay = ctx.createDelay(0.3);
     delay.delayTime.value = 0.08;
     const feedback = ctx.createGain();
@@ -3897,7 +3394,7 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, start + noteDur + 0.06);
       osc.connect(gain);
       gain.connect(this.pingBus);
-      gain.connect(delay); // feed into reverb
+      gain.connect(delay);
       osc.start(start);
       osc.stop(start + noteDur + 0.06);
     });
@@ -3912,20 +3409,15 @@ class AudioSystem {
     }, 500, { owner: this });
   }
 
-  /**
-   * Target lost — descending two-note (E5→C5, 40ms each).
-   * Softer and quicker than lock-on to indicate loss.
-   */
+  /** Target lost: descending two-note (E5→C5, 40 ms each), softer and quicker than lock-on to indicate loss. */
   playTargetLost() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Descending two-note: E5 (659Hz) → C5 (523Hz)
     const notes = [659, 523];
     const noteDur = 0.04; // 40ms each
 
-    // Delay 100ms so visual animation plays before audio confirms (§5.2)
     const lostDelay = 0.1;
     notes.forEach((freq, i) => {
       const start = now + lostDelay + i * noteDur;
@@ -3942,21 +3434,12 @@ class AudioSystem {
     });
   }
 
-  // ==========================================================================
-  // Phase 7: DOCKING APPROACH AUDIO
-  // ==========================================================================
-
-  /**
-   * Play a docking approach beep with explicit frequency and volume.
-   * @param {number} freq - Hz
-   * @param {number} vol - 0-1
-   */
+  /** Docking approach beep with explicit frequency (Hz) and volume (0-1). */
   playDockingBeep(freq, vol) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    // P6: while docking beeps own the PING channel, pause the range ticker
-    // (~0.5 s window) so two range sonifications never overlap.
+    // Docking beeps own the PING channel: pause the range ticker ~0.5 s so two range sonifications never overlap.
     this._rangeTickerSuppressedUntil = now + 0.5;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
@@ -3971,7 +3454,7 @@ class AudioSystem {
     osc.stop(now + 0.12);
   }
 
-  /** CP-3: transfer-window T-minus cue — two rising cyan blips. */
+  /** Transfer-window T-minus cue: two rising cyan blips. */
   playWindowImminent() {
     if (!this.available) return;
     const now = this.ctx.currentTime;
@@ -3979,7 +3462,7 @@ class AudioSystem {
     this._playSineBlip(now + 0.10, 1319, 0.10, 0.22); // E6
   }
 
-  /** CP-3: transfer-window open cue — confirming ascending triad. */
+  /** Transfer-window open cue: confirming ascending triad. */
   playWindowOpen() {
     if (!this.available) return;
     const now = this.ctx.currentTime;
@@ -4006,7 +3489,6 @@ class AudioSystem {
     this._alignmentToneGain = gain;
   }
 
-  /** Stop the sustained alignment confirmation tone. */
   stopAlignmentTone() {
     if (!this._alignmentToneOsc) return;
     const now = this.ctx.currentTime;
@@ -4016,7 +3498,7 @@ class AudioSystem {
     this._alignmentToneGain = null;
   }
 
-  /** P6 — autopilot engage tone: ascending 400→800Hz (inverse of disengage), 500ms fade. PING family. */
+  /** Autopilot engage tone: ascending 400→800 Hz (inverse of disengage), 500 ms fade. PING family. */
   playAPEngage() {
     if (!this.available) return;
     const ctx = this.ctx;
@@ -4058,7 +3540,6 @@ class AudioSystem {
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Three ascending beeps: 400, 800, 1200 Hz
     [400, 800, 1200].forEach((freq, i) => {
       const osc = ctx.createOscillator();
       osc.type = 'sine';
@@ -4075,20 +3556,13 @@ class AudioSystem {
     });
   }
 
-  // ==========================================================================
-  // S3b: MPD BURST MODE SOUNDS
-  // ==========================================================================
-
-  /**
-   * MPD disarm sound — power-down descending tone (200 Hz → 30 Hz, 0.3s) + relay click.
-   */
+  /** MPD disarm: power-down descending tone (200 → 30 Hz, 0.3 s) + relay click. */
   playMPDDisarm() {
     if (!this.available) return;
     try {
       const ctx = this.ctx;
       const now = ctx.currentTime;
 
-      // Descending power-down tone
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(200, now);
@@ -4108,7 +3582,6 @@ class AudioSystem {
       osc.start(now);
       osc.stop(now + 0.4);
 
-      // Relay click (short noise burst)
       const bufferSize = ctx.sampleRate * 0.02;
       const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const data = buffer.getChannelData(0);
@@ -4125,14 +3598,7 @@ class AudioSystem {
     } catch (e) { /* audio error — non-critical */ }
   }
 
-  // ==========================================================================
-  // SCAN & CREDIT FEEDBACK SOUNDS
-  // ==========================================================================
-
-  /**
-   * Scan initiated — radar sweep/ping sound.
-   * Rising sine sweep 800→2000Hz over 0.3s with fade envelope.
-   */
+  /** Scan initiated: radar sweep/ping, rising sine 800→2000 Hz over 0.3 s with a fade envelope. */
   playScan() {
     if (!this.available) return;
     const ctx = this.ctx;
@@ -4141,12 +3607,10 @@ class AudioSystem {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
-    // Rising sweep: 800Hz to 2000Hz over 0.3s
     osc.type = 'sine';
     osc.frequency.setValueAtTime(800, now);
     osc.frequency.exponentialRampToValueAtTime(2000, now + 0.3);
 
-    // Quick fade in, sustain, fade out
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(0.15, now + 0.05);
     gain.gain.setValueAtTime(0.15, now + 0.15);
@@ -4158,16 +3622,12 @@ class AudioSystem {
     osc.stop(now + 0.5);
   }
 
-  /**
-   * Cash register "ka-ching" — two quick metallic triangle-wave tones.
-   * Plays when credits are awarded (SCORING_AWARD event).
-   */
+  /** Cash register "ka-ching": two quick metallic triangle-wave tones, played when credits are awarded (SCORING_AWARD). */
   playCashRegister() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    // Two quick metallic tones
     for (let i = 0; i < 2; i++) {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -4184,10 +3644,8 @@ class AudioSystem {
   }
 
   /**
-   * P3 — shop purchase confirm. REWARD family, ka-ching (triangle pair) DNA but
-   * pitched below playCashRegister (700/1050 Hz vs 1200/1800) so "spent credits"
-   * is audibly distinct from "earned credits". Replaces the former shop use of
-   * playCaptureSuccess (which is now capture-only).
+   * Shop purchase confirm. REWARD family, ka-ching (triangle pair) DNA but pitched below playCashRegister (700/1050 Hz
+   * vs 1200/1800) so "spent credits" is audibly distinct from "earned credits". (playCaptureSuccess is capture-only.)
    */
   playPurchase() {
     if (!this.available) return;
@@ -4208,17 +3666,13 @@ class AudioSystem {
       osc.stop(now + i * 0.08 + 0.15);
     }
   }
-  // ==========================================================================
-  // ST-3.4: SKILL CELEBRATION SOUNDS
-  // ==========================================================================
-
   /**
-   * Internal helper: sine tone with attack-decay envelope, routed through sfxBus.
-   * @param {number} startTime — AudioContext time to begin
-   * @param {number} freq — Frequency in Hz
-   * @param {number} dur — Duration in seconds
-   * @param {number} peakGain — Peak gain (0–1)
-   * @private
+   * @private Sine tone with an attack-decay envelope. Shared across families: REWARD chimes by default, PING for the
+   * range ticker; the caller passes an explicit family bus when needed.
+   * @param {number} startTime AudioContext time to begin
+   * @param {number} freq Hz
+   * @param {number} dur s
+   * @param {number} peakGain 0–1
    */
   _playSineBlip(startTime, freq, dur, peakGain, dest) {
     const ctx = this.ctx;
@@ -4229,8 +3683,6 @@ class AudioSystem {
     gain.gain.setValueAtTime(0, startTime);
     gain.gain.linearRampToValueAtTime(peakGain, startTime + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.001, startTime + dur);
-    // Shared helper across families — REWARD chimes by default, PING for the
-    // range ticker (P6). Caller passes an explicit family bus when needed.
     osc.connect(gain).connect(dest || this.rewardBus || this.sfxBus);
     osc.start(startTime);
     osc.stop(startTime + dur + 0.02);
@@ -4247,28 +3699,24 @@ class AudioSystem {
   }
 
   /**
-   * Delegation 2 (2026-05-31) — soft "hint posted" notification cue.
-   * Startup-legibility rework (2026-07-23): a gentle, longer, lower triangle
+   * Soft "hint posted" notification cue: a gentle, longer, lower triangle
    * swell (~520→660 Hz, ~350 ms, soft attack) so it reads as a "gentle
    * notification" rather than another UI click in the startup blip family.
    * Quiet enough to fade into the ambient mix; peak gain capped at ~0.15.
-   * @param {number} [volume=0.4] — caller-side scale; clamped to [0, 1].
+   * @param {number} [volume=0.4] caller-side scale; clamped to [0, 1].
    */
   playHintPost(volume = 0.4) {
     if (!this.available || !this.ctx) return;
-    // Delegation 4 (2026-05-31) — P1-1 fix: bail early when the AudioContext
-    // is suspended (AutoplayPolicy first-frame race). Scheduled oscillators
-    // would otherwise queue up and trigger a delayed click whenever the user
-    // first interacts. AudioCue is fire-and-forget — dropping the first chime
-    // is preferable to a glitch.
+    // Bail when the AudioContext is not running (AutoplayPolicy first-frame race): scheduled oscillators would queue up
+    // and trigger a delayed click at first interaction. AudioCue is fire-and-forget; dropping the first chime beats a
+    // glitch.
     if (this.ctx.state !== 'running') return;
     const v = clamp01(volume);
     const ctx = this.ctx;
     const now = ctx.currentTime;
     const dest = this.rewardBus || this.sfxBus || this.master || ctx.destination;
-    // Two-note rising notification: G4 (392 Hz) → B4 (494 Hz), triangle wave,
-    // soft attack and a long decay tail. Total ~350 ms. Deliberately pitched
-    // below playTargetLock (C5→E5) so a hint never sounds like a sensor lock.
+    // Two-note rising notification G4 (392 Hz) → B4 (494 Hz), triangle, soft attack, long decay tail, ~350 ms.
+    // Deliberately below playTargetLock (C5→E5) so a hint never sounds like a sensor lock.
     const playNote = (freq, startOffset, durSec) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -4276,7 +3724,6 @@ class AudioSystem {
       osc.frequency.setValueAtTime(freq, now + startOffset);
       const peak = 0.15 * v;
       gain.gain.setValueAtTime(0.0001, now + startOffset);
-      // Gentle attack (~50 ms) so it swells rather than clicks.
       gain.gain.exponentialRampToValueAtTime(peak, now + startOffset + 0.05);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + startOffset + durSec);
       osc.connect(gain);
@@ -4290,31 +3737,20 @@ class AudioSystem {
 }
 
 /**
- * Wake the browser's audio service without blocking (st11, 2026-10-19).
+ * Wake the browser's audio service without blocking. The prewarm has to make `new AudioContext()`, and the first
+ * constructor of a page blocks the main thread 117-220 ms (1 ms of CPU; measured, Chromium GPU, headless and headed
+ * Brave) until the audio service has started and answered the device query; a second constructor costs 0.1-16 ms.
+ * `mediaDevices.enumerateDevices()` makes the same service start-up asynchronously; a constructor after it measured
+ * 1-2 ms. So the prewarm calls this first and builds the context when the promise settles.
  *
- * The prewarm below has to make `new AudioContext()`. Measured on a warm page
- * (Chromium GPU, headless and headed Brave on a real device): the first
- * constructor of a page waits 117-220 ms with 1 ms of CPU, because the main
- * thread blocks until the browser's audio service has started and answered the
- * device query — one 122-183 ms frame about 0.2 s after the menu appears. A second
- * constructor costs 0.1-16 ms. `mediaDevices.enumerateDevices()` makes the same
- * service start-up, but asynchronously (the call itself returns at once); a
- * constructor after it measured 1-2 ms. So the prewarm calls this first and builds
- * the context when the promise settles.
- *
- * Same gates as the prewarm (desktop only: a coarse primary pointer, no
- * `matchMedia`, or no `mediaDevices` → nothing), and `?noAudio=1` stays fully
- * silent (that flag exists to keep the audio service from starting at all).
- * It opens no device, plays nothing and asks for no permission. Called at the
- * start of main.js instead (before the menu) it delayed the menu by ~75 ms
- * (measured, 10 runs), so it is called after the first draw.
+ * Same gates as the prewarm (desktop only: a coarse primary pointer, no `matchMedia`, or no `mediaDevices` →
+ * nothing); `?noAudio=1` stays fully silent. Opens no device, plays nothing, asks for no permission. Called at the
+ * start of main.js it delayed the menu by ~75 ms (measured, 10 runs), so it is called after the first draw.
  *
  * @param {object} opts
- * @param {object} opts.win - window stand-in (`matchMedia`, `navigator`, `location`)
- * @param {boolean} [opts.pointerChecked=false] - the caller already asked the
- *   coarse-pointer query (scheduleAudioPrewarm), so it is not asked twice
- * @returns {Promise|null} the enumerateDevices() promise (never rejects), or null
- *   when nothing was requested
+ * @param {object} opts.win window stand-in (`matchMedia`, `navigator`, `location`)
+ * @param {boolean} [opts.pointerChecked=false] the caller already asked the coarse-pointer query
+ * @returns {Promise|null} the enumerateDevices() promise (never rejects), or null when nothing was requested
  */
 export function warmAudioService({ win, pointerChecked = false } = {}) {
   if (!win) return null;
@@ -4330,22 +3766,19 @@ export function warmAudioService({ win, pointerChecked = false } = {}) {
 }
 
 /**
- * Start-up prewarm (st2-start-quick D1): build the sound system in an idle
- * moment after the first draw, so the first click does not pay the 0.26 s
- * `AudioContext` start (measured, st1 phase 1). The browser only needs a
- * gesture to RESUME a context, not to create one: the context stays
- * suspended and the first gesture's `InputManager._tryAudioUnlock` resumes it
- * (`init()` is idempotent, so that path never builds a second one).
+ * Start-up prewarm: build the sound system in an idle moment after the first draw, so the first click does not pay
+ * the 0.26 s `AudioContext` start (measured). The browser only needs a gesture to RESUME a context, not to create one:
+ * the context stays suspended and the first gesture's `InputManager._tryAudioUnlock` resumes it (`init()` is
+ * idempotent, so that path never builds a second one).
  *
- * Desktop only: when the primary pointer is coarse (iPad / iPhone) nothing is
- * scheduled and the first-gesture path stays as it was, until it is tried on a
- * device. No `matchMedia` → also nothing scheduled (unknown environment).
+ * Desktop only: with a coarse primary pointer (iPad / iPhone) nothing is scheduled; no `matchMedia` → also nothing
+ * (unknown environment).
  *
  * @param {object} opts
- * @param {object} opts.win - window stand-in (`matchMedia`, `requestIdleCallback`, `setTimeout`)
- * @param {{init: Function}} opts.audio - the AudioSystem
- * @param {Function} [opts.afterInit] - called after init (main.js `_syncAudioCtxState`:
- *   the menu keeps the context suspended even if the browser allowed autoplay)
+ * @param {object} opts.win window stand-in (`matchMedia`, `requestIdleCallback`, `setTimeout`)
+ * @param {{init: Function}} opts.audio the AudioSystem
+ * @param {Function} [opts.afterInit] called after init (main.js `_syncAudioCtxState`: the menu keeps the context
+ *   suspended even if the browser allowed autoplay)
  * @returns {boolean} true when the prewarm was scheduled
  */
 export function scheduleAudioPrewarm({ win, audio, afterInit } = {}) {
@@ -4359,18 +3792,15 @@ export function scheduleAudioPrewarm({ win, audio, afterInit } = {}) {
     try { if (typeof afterInit === 'function') afterInit(); } catch (_e) { /* never fatal */ }
   };
   const run = () => {
-    // A gesture (or any other explicit init()) got here first: that path built and
-    // resumed the sound system for a reason — e.g. the menu's departure swell is
-    // playing — so the prewarm must not touch it (afterInit would suspend it).
+    // A gesture (or other explicit init()) got here first and built/resumed the sound system for a reason (e.g. the
+    // menu's departure swell is playing), so the prewarm must not touch it (afterInit would suspend it).
     if (audio._initialized) return;   // init() latches this on success and on ?noAudio
     try { audio.init(); } catch (_e) { /* init() reports its own failures */ }
     const ctx = audio.ctx;
     if (!ctx || !audio.available) { callAfterInit(); return; }
-    // Hold: until someone calls init() on purpose (a gesture's _tryAudioUnlock, the
-    // menu's Start, comms), play*() stays a no-op exactly as before the prewarm
-    // (`available` was false). Else events that fire on the menu before the first
-    // click (e.g. a saved engine-gas switch -> FUEL_CHANGED) would queue on the
-    // suspended context and all sound at once at the first click.
+    // Hold: until someone calls init() on purpose (a gesture's _tryAudioUnlock, the menu's Start, comms), play*() stays
+    // a no-op as before the prewarm (`available` was false); else events firing on the menu before the first click
+    // (e.g. a saved engine-gas switch → FUEL_CHANGED) would queue on the suspended context and all sound at once.
     const hadOwnInit = Object.prototype.hasOwnProperty.call(audio, 'init');
     const prevInit = audio.init;
     let held = true;
@@ -4405,9 +3835,8 @@ export function scheduleAudioPrewarm({ win, audio, afterInit } = {}) {
       (typeof win.setTimeout === 'function' ? win.setTimeout.bind(win) : setTimeout)(run, 0);
     }
   };
-  // st11: wake the audio service first (async); build the context once that settled,
-  // so `new AudioContext()` is ~1 ms instead of a 117-220 ms frame. A cap keeps a
-  // browser that never answers from delaying the prewarm for more than 1 s.
+  // Wake the audio service first (async); build the context once that settled, so `new AudioContext()` is ~1 ms
+  // instead of a 117-220 ms frame. A 1 s cap keeps a browser that never answers from delaying the prewarm.
   const warm = warmAudioService({ win, pointerChecked: true });
   if (warm) {
     let scheduled = false;

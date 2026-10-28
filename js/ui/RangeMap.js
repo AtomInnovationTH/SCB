@@ -1,24 +1,26 @@
 /**
- * RangeMap - the orbital range map beside the "where next" list (range-map lane, 2026-10-25; owner: "an orbital map to clearly
- * understand their range and choices with current fuel and salvage fuel"; "rings around Earth"; plan D1, D6, D7). The thin view over
- * js/systems/RangeMapModel.js (the numbers) and js/systems/MissionGasTally.js (the second gas line).
+ * RangeMap - the orbital range map beside the "where next" list (DECISIONS §42): rings around Earth, her path and her
+ * reach. A thin view over js/systems/RangeMapModel.js (the numbers) and js/systems/MissionGasTally.js (the second gas
+ * line).
  *
- * One DOM root on `document.body` (z 33, like the height scale) at the LEFT of the screen in the height column's place (F1.1: the column hides while this
- * shows; a ring tap focuses a field as its chips did), holding one `<canvas>` (the rings, her path, the labels) and the text lines
- * under it (gas aboard, what her catches gave and her own moves used, the orbit count, the day of the trip: packed top-down, `RangeMapModel.textLines`). Only the canvas takes pointer events, and only while the list
- * is open; a tap FOCUSES the ring's row (`WhereNextList.focus`, the height scale chip's path) and never picks: flying stays the list's own tap-again,
- * Space and FLY THERE.
+ * One DOM root on `document.body` (z 33, like the height scale) at the LEFT, in the height column's place (the column
+ * hides while this shows), holding one `<canvas>` (rings, path, labels) and the text lines under it
+ * (`RangeMapModel.textLines`, packed top-down). Only the canvas takes pointer events, and only while the list is open;
+ * a tap FOCUSES the ring's row (`WhereNextList.focus`) and never picks: flying stays the list's own tap-again, Space
+ * and FLY THERE.
  *
- * When it shows (D6), one frame at a time, from `update()`:
+ * When it shows, one frame at a time, from `update()`:
  *   - floor 4 is not the floor she is on: hidden;
- *   - the list is open: shown at once, following the list's focus (polled: `WhereNextList.setOnFocus` is single-slot and the height scale's);
- *   - after a pick (`notePick`, from main.js's onPick, BEFORE the pick runs, so the rows are the ones she chose from): shown through `wait`, the
- *     rows and her height frozen at the pick; hidden from `ION_STARTUP_BEGIN` so the engines are seen; shown again in trip mode (larger, 0.6 s fade)
- *     once the burn runs, the engines are lit and the camera swing is over, her dot moving along the path by the trip's progress with "Day d of N";
- *     hidden at arrival (the trip is idle again). A called satellite (phase `call`, no burn) shows the arrow. A refused pick re-opens the list: the
- *     stored pick is dropped and the map follows the focus again.
+ *   - the list is open: shown at once, following the list's focus (polled: `WhereNextList.setOnFocus` is single-slot
+ *     and the height scale's);
+ *   - after a pick (`notePick`, from main.js's onPick, BEFORE the pick runs, so the rows are the ones she chose from):
+ *     shown through `wait`, rows and height frozen at the pick; hidden from `ION_STARTUP_BEGIN` so the engines are
+ *     seen; shown again in trip mode (larger, 0.6 s fade) once the burn runs, the engines are lit and the camera
+ *     swing is over, her dot moving along the path by the trip's progress with "Day d of N"; hidden at arrival. A
+ *     called satellite (phase `call`, no burn) shows the arrow. A refused pick re-opens the list: the stored pick is
+ *     dropped and the map follows the focus again.
  *
- * No eventBus import of its own beyond the two start-up events; everything else comes in through `deps`, so a fake DOM, a fake trip and a fake
+ * No eventBus import beyond the two start-up events; everything else comes in through `deps`, so a fake DOM, trip and
  * camera run it. With no document nothing is built and every method still answers.
  *
  * @module ui/RangeMap
@@ -40,19 +42,16 @@ const RM = () => Constants.RANGE_MAP;
 const ARROW_ANGLE = Math.PI;                 // the called satellite's arrow runs along the left radial (the break label is on the right)
 const SAT_GLYPH_RAD = degToRad(-40);
 
-/** @private the row kinds a path is drawn to */
 const isDestination = (row) => !!row && (row.kind === 'field' || row.kind === 'satellite');
-/** @private a push-down row: a height of its own, no ring (the free place); her trip to it is shown only once picked (F1.7) */
+/** @private a push-down row: a height of its own, no ring (the free place); her trip to it is shown only once picked */
 const isPush = (row) => !!row && row.kind === 'push' && Number.isFinite(row.altKm);
 
-/** @private a stable text of what the layout depends on */
 function rowsSignature(rows) {
   return rows.map((r) => `${r.id}:${r.kind}:${Math.round(r.altKm)}:${r.state}:${r.gasKg == null ? '' : Math.round(r.gasKg * 10)}:${r.days == null ? '' : Math.round(r.days)}:${r.shortKg == null ? '' : Math.round(r.shortKg * 10)}`).join('|');
 }
 
 /**
- * Draw the map on a 2D context (CSS px; the caller has scaled for the device). Pure in the sense that it only writes to `g`.
- * @param {CanvasRenderingContext2D} g
+ * Draw the map on a 2D context (CSS px; the caller has scaled for the device). Only writes to `g`.
  * @param {{layout: object, side: number, focusRing: (object|null), originRing: (object|null), band: (object|null), path: (Array|null),
  *   flownTo: (number|null), dot: ({x:number,y:number}|null), arrow: (object|null), tripMode: boolean}} v
  */
@@ -63,7 +62,6 @@ export function paintRangeMap(g, v) {
   g.clearRect(0, 0, v.side, v.side);
   if (!L || !L.rings.length) return;
   g.save();
-  // the reach band under everything
   if (v.band) {
     g.beginPath();
     g.arc(L.cx, L.cy, v.band.outerR, 0, Math.PI * 2);
@@ -71,7 +69,7 @@ export function paintRangeMap(g, v) {
     g.arc(L.cx, L.cy, v.band.innerR, 0, Math.PI * 2, true);
     g.fillStyle = C.REACH;
     g.fill('evenodd');
-    // F1.4: a firm edge at the furthest ring she can reach, a softer one at the inner end
+    // a firm edge at the furthest ring she can reach, a softer one at the inner end
     g.beginPath();
     g.arc(L.cx, L.cy, v.band.outerR, 0, Math.PI * 2);
     g.strokeStyle = C.REACH_EDGE;
@@ -85,7 +83,6 @@ export function paintRangeMap(g, v) {
       g.stroke();
     }
   }
-  // Earth
   g.beginPath();
   g.arc(L.cx, L.cy, L.earthR, 0, Math.PI * 2);
   g.fillStyle = C.EARTH;
@@ -104,7 +101,6 @@ export function paintRangeMap(g, v) {
     g.stroke();
     dash([]);
   }
-  // the rings
   for (const ring of L.rings) {
     const focus = v.focusRing === ring;
     const dim = v.tripMode && ring !== v.focusRing && ring !== v.originRing;
@@ -138,7 +134,7 @@ export function paintRangeMap(g, v) {
     }
   }
   g.globalAlpha = 1;
-  // her path to the pick (F1.4: thick, on a dark stroke, the part flown brighter, an arrowhead at the target), or the called satellite's arrow
+  // her path to the pick (thick, on a dark stroke, the part flown brighter, an arrowhead at the target), or the called satellite's arrow
   if (v.path && v.path.length > 1) {
     const P = v.path;
     const trace = (until) => {
@@ -166,7 +162,6 @@ export function paintRangeMap(g, v) {
       g.stroke();
     }
     g.globalAlpha = 1;
-    // the arrowhead: at the last point, along the last stretch of the path
     const end = P[P.length - 1];
     let back = P[P.length - 2];
     for (let i = P.length - 2; i >= 0 && Math.hypot(end.x - P[i].x, end.y - P[i].y) < 4; i--) back = P[i];
@@ -206,7 +201,6 @@ export function paintRangeMap(g, v) {
     g.fillStyle = C.SPIRAL;
     g.fill();
   }
-  // her dot
   if (v.dot) {
     g.beginPath();
     g.arc(v.dot.x, v.dot.y, 4.5, 0, Math.PI * 2);
@@ -252,11 +246,8 @@ export class RangeMap {
    * @param {function} [deps.box]        () => {height} the bottom-left transfer-window box's live outer height (TransferWindows.heightPx()), null = unmeasured (its tallest state is assumed)
    * @param {function} [deps.rail]       () => {left, bottom} the floor rail's live edges (RailIndicator.leftPx(), bottomPx(); a null reads as the rail's design place), or false for none
    * @param {Document|null} [deps.doc]   default the global document; null = headless
-   * @param {Element} [deps.parent]      default doc.body
    * @param {object|null} [deps.bus]     the event bus (default the game's; null = listen to nothing)
-   * @param {function} [deps.now]        ms clock (tests)
    * @param {function} [deps.reducedMotion] () => true: no fade
-   * @param {function} [deps.dpr]        () => device pixel ratio
    */
   constructor(deps = {}) {
     this._list = deps.list || null;
@@ -296,16 +287,12 @@ export class RangeMap {
     }
   }
 
-  // ── Wiring (main.js) ───────────────────────────────────────────────────────
-
-  /** @private */
   _get(x) { return typeof x === 'function' ? x() : x; }
 
   /**
    * The pick is about to run (main.js's onPick, before `pickWhereNext`): keep the rows she is choosing from, her height and the picked row's
    * climb, so the map shows her pick through `wait` and the trip, whatever the registry does meanwhile. A refused pick re-opens the list and
    * the next `update()` drops this.
-   * @param {string} id the picked row
    */
   notePick(id) {
     if (this._disposed || !this._list) return;
@@ -314,7 +301,6 @@ export class RangeMap {
     this._storePick(id, rows);
   }
 
-  /** @private keep a pick: the rows it was made from, her height now, the picked row's climb */
   _storePick(id, rows) {
     const row = rows.find((r) => r.id === id) || null;
     const reg = this._get(this._registry);
@@ -325,8 +311,9 @@ export class RangeMap {
   }
 
   /**
-   * The choice opens or closes (`WHERE_NEXT`). Open: the list is (again) what she looks at, so a stored pick (a refused one) goes at once. Closed with
-   * no pick stored (F1.7: a path that called `pickWhereNext` without `notePick`): take the list's last focused row, from the rows it showed.
+   * The choice opens or closes (`WHERE_NEXT`). Open: the list is what she looks at again, so a stored (refused) pick
+   * goes at once. Closed with no pick stored (a path that called `pickWhereNext` without `notePick`): take the list's
+   * last focused row, from the rows it showed.
    * @private
    */
   _onWhereNext(d) {
@@ -352,8 +339,6 @@ export class RangeMap {
       return p && Array.isArray(p.samples) && p.samples.length >= 2 ? p : null;
     } catch (_e) { return null; }
   }
-
-  // ── Visibility ─────────────────────────────────────────────────────────────
 
   /** @private the frame's decision: {visible, mode: 'choose'|'trip', phase: 'list'|'wait'|'burn'|'call'|'hidden'} */
   _decide() {
@@ -382,21 +367,17 @@ export class RangeMap {
     return hidden;
   }
 
-  /** @private */
   _hideNow() {
     if (this._root) this._root.style.display = 'none';
     this._shown = false;
     this._fadeArmed = false;
   }
 
-  /** Whether the map is on screen (tests). */
   isShown() { return this._shown && !!this._root && this._root.style.display !== 'none'; }
 
-  // ── Frame ──────────────────────────────────────────────────────────────────
-
   /**
-   * One frame (main.js, after the navcom tick). Cheap when hidden; when shown it follows the list's focus or the trip and redraws only when
-   * what it draws changed (at most REDRAW_MS apart in trip mode).
+   * One frame (main.js, after the navcom tick). Cheap when hidden; when shown it follows the list's focus or the trip
+   * and redraws only when what it draws changed (at most REDRAW_MS apart in trip mode).
    * @returns {{visible: boolean, mode: string, phase: string}}
    */
   update() {
@@ -414,7 +395,6 @@ export class RangeMap {
     if (!rect) { if (this._shown) this._hideNow(); this._decision = { visible: false, mode: d.mode, phase: 'hidden' }; return this._decision; }
     this._rect = rect;
     const trip = this._get(this._trip);
-    // the rows, her height and the focus the map is about
     const live = d.phase === 'list';
     if (live) {
       const focusId = this._list.focusedId();
@@ -445,7 +425,6 @@ export class RangeMap {
     return d;
   }
 
-  /** @private layout, focus, path, dot, band for this frame */
   _model(d, trip, rect) {
     const rows = this._rows;
     const layoutKey = `${rowsSignature(rows)}#${this._herKm == null ? '' : Math.round(this._herKm)}#${Math.round(rect.side)}`;
@@ -466,7 +445,7 @@ export class RangeMap {
       this._arrow = callArrow(L, target.altKm, home.altKm, ARROW_ANGLE);
       this._dot = { x: this._arrow.to.x, y: this._arrow.to.y };
     } else if (((isDestination(row) && target) || (isPush(row) && !live(d))) && home && target !== home) {
-      const toKm = target ? target.altKm : row.altKm;                 // a push-down row has no ring: its height lies between two of them (F1.7)
+      const toKm = target ? target.altKm : row.altKm;                 // a push-down row has no ring: its height lies between two of them
       let profile = null;
       if (d.phase === 'burn' && trip && trip.profile && Array.isArray(trip.profile.samples)) profile = trip.profile;
       else if (!live(d) && this._pick) profile = this._pick.profile;
@@ -511,7 +490,6 @@ export class RangeMap {
     }
   }
 
-  /** @private */
   _draw(d) {
     const L = this._layout;
     const progressKey = this._flownTo == null ? '' : Math.round(this._flownTo * 500);
@@ -526,10 +504,9 @@ export class RangeMap {
     });
   }
 
-  // ── Taps ───────────────────────────────────────────────────────────────────
-
   /**
-   * A tap at (x, y) on the canvas (CSS px from its top-left): focus the row of the ring it is nearest to. Only while the list is open; never a pick.
+   * A tap at (x, y) on the canvas (CSS px from its top-left): focus the row of the nearest ring. Only while the list
+   * is open; never a pick.
    * @returns {boolean} the focus is on that ring's row now
    */
   tapAt(x, y) {
@@ -541,7 +518,6 @@ export class RangeMap {
     return ok;
   }
 
-  /** What the map shows now (tests): the decision, the rect, the focused ring, the dot, the lines. */
   state() {
     const L = this._layout;
     return {
@@ -553,13 +529,9 @@ export class RangeMap {
     };
   }
 
-  /** The canvas and root elements (tests). */
   get canvas() { return this._canvas; }
   get element() { return this._root; }
 
-  // ── DOM ────────────────────────────────────────────────────────────────────
-
-  /** @private build the root once (hidden) */
   _ensureDom() {
     if (this._built) return;
     const doc = this._doc;
@@ -572,7 +544,7 @@ export class RangeMap {
     root.setAttribute('aria-label', 'Orbital range map: rings by height, your reach with the gas aboard');
     Object.assign(root.style, {
       position: 'absolute', left: '0px', top: '0px', boxSizing: 'border-box', zIndex: '33', pointerEvents: 'none', display: 'none',
-      background: RM().COLORS.BACKING, borderRadius: '6px', boxShadow: `inset 0 0 0 1px ${RM().COLORS.BACKING_EDGE}`,    // F1.3: one dark backing behind the canvas AND the text block
+      background: RM().COLORS.BACKING, borderRadius: '6px', boxShadow: `inset 0 0 0 1px ${RM().COLORS.BACKING_EDGE}`,    // one dark backing behind the canvas AND the text block
       fontFamily: 'var(--font-mono)', fontSize: `${RM().TEXT_FONT_PX}px`, letterSpacing: '0', opacity: '1',
     });
     const canvas = doc.createElement('canvas');
@@ -605,7 +577,6 @@ export class RangeMap {
     this._g = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
   }
 
-  /** @private position and size the panel */
   _place(rect, d) {
     if (!this._root) return;
     const side = Math.round(rect.side);
@@ -659,5 +630,4 @@ export class RangeMap {
   }
 }
 
-/** @private is this decision the live list's (a helper for `_model`) */
 function live(d) { return d.phase === 'list'; }

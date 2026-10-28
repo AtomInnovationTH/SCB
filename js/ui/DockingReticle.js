@@ -1,8 +1,5 @@
 /**
- * DockingReticle.js — Orbiter-heritage docking crosshair Canvas2D overlay
- * Full-screen overlay visible ONLY during ARM PILOT mode.
- * Shows center crosshair, target indicator, range/closure readouts,
- * alignment bars, net readiness, vignette, and arm status.
+ * DockingReticle.js — Orbiter-heritage docking crosshair Canvas2D overlay, visible ONLY during ARM PILOT mode.
  * @module ui/DockingReticle
  */
 
@@ -20,14 +17,10 @@ import { dossierSystem } from '../systems/DossierSystem.js';
 import { toolShortLabel } from '../systems/ToolOdds.js';
 import { calmBreathe, finitePulse } from './hudPulse.js';
 import { FONT_MONO } from '../core/Typeface.js';
-import { setDespinProbe, despinButtonUp } from './hud/DespinHint.js';   // u20-ipad F4: one "is DE-SPIN up" rule, shared with ToolOdds
-import { GestureHints } from './hud/GestureHints.js';   // u17 A-T1: the aiming-mark captions follow glass, read when drawn
+import { setDespinProbe, despinButtonUp } from './hud/DespinHint.js';   // one "is DE-SPIN up" rule, shared with ToolOdds
+import { GestureHints } from './hud/GestureHints.js';   // the aiming-mark captions follow glass, read when drawn
 import { RAD2DEG, clamp01, clamp, lerp } from '../core/MathUtil.js';
 import { VisualLaw } from '../core/VisualLaw.js';
-
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
 
 /** 1 meter in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -35,7 +28,6 @@ const M = 0.00001;
 /** Daughter states in which net guidance is still meaningful (pre-capture). */
 const PRE_CAPTURE_STATES = new Set(['TRANSIT', 'APPROACH']);
 
-/** Color palette (consistent with HUD green theme) */
 const C = {
   primary:    VisualLaw.COLORS.PLAYER,
   primaryDim: 'rgba(0, 255, 136, 0.3)',
@@ -50,10 +42,6 @@ const C = {
 };
 
 const FONT = FONT_MONO;
-
-// ============================================================================
-// DOCKING RETICLE
-// ============================================================================
 
 export class DockingReticle {
   /**
@@ -74,34 +62,29 @@ export class DockingReticle {
     this._arm = null;
     this._target = null;
     this._time = 0;
-    // Calm-HUD: timestamp when net readiness last arrived, driving the
-    // decaying-breathe arrival cue in _drawNetStatus (null = not ready).
+    // when net readiness last arrived: drives the decaying-breathe cue in _drawNetStatus (null = not ready)
     this._netReadySince = null;
-    // Calm-HUD: timestamp when the fired net last entered CAPTURED, driving
-    // the finite celebration flourish in _drawOddsStripInFlight.
+    // when the fired net last entered CAPTURED: drives the finite flourish in _drawOddsStripInFlight
     this._capturedSince = null;
 
-    // Computed metrics
     this._range = 0;
     this._closureRate = 0;
     this._lastRange = -1;
-    this._clrSmooth = null;   // CLR line: smoothed closure rate (m/s) — the raw one above stays for getAlignment()
+    this._clrSmooth = null;   // CLR line: smoothed closure rate (m/s); the raw one above stays for getAlignment()
     this._clrArrow = 0;       // CLR line: +1 closing, -1 opening, 0 none (hysteresis state)
     this._offsetX = 0;     // meters lateral
     this._offsetY = 0;     // meters vertical
 
-    // Phase 7: Approach audio state
     this._lastBeepTime = 0;
     this._alignmentToneActive = false;
 
-    // Reusable THREE vectors
     this._tmpVec = new THREE.Vector3();
     this._tmpVec2 = new THREE.Vector3();
     this._tmpVec3 = new THREE.Vector3();
 
     this._skActive = false;
 
-    // u17 A-T1 (D2): what a touch player really has on screen, read at call time (main.js wires it). Null = nothing known.
+    // What a touch player really has on screen, read at call time (main.js wires it). Null = nothing known.
     this._glassControls = null;
 
     this._createCanvas();
@@ -109,18 +92,12 @@ export class DockingReticle {
     this._resizeHandler = () => this._onResize();
     window.addEventListener('resize', this._resizeHandler);
 
-    // Self-manage visibility via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
       const gameplay = (to === GameStates.ORBITAL_VIEW || to === GameStates.APPROACH || to === GameStates.INTERACTION);
       if (!gameplay) this.setVisible(false);
     });
   }
 
-  // ==========================================================================
-  // CANVAS SETUP (same pattern as NavSphere)
-  // ==========================================================================
-
-  /** @private */
   _createCanvas() {
     this._canvas = document.createElement('canvas');
     this._canvas.id = 'docking-reticle-canvas';
@@ -134,7 +111,6 @@ export class DockingReticle {
     this._ctx = this._canvas.getContext('2d');
   }
 
-  /** @private */
   _onResize() {
     const dpr = Math.min(window.devicePixelRatio, 2);
     this.dpr = dpr;
@@ -149,19 +125,15 @@ export class DockingReticle {
     this._ctx.imageSmoothingQuality = 'high';
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
-
   /**
-   * u17 A-T1 (D2): tell the reticle which touch controls are on screen, so its glass captions name only those.
+   * Tell the reticle which touch controls are on screen, so its glass captions name only those.
    * Both closures are read when a caption is drawn, never cached.
    * @param {{hasStepButton?: (label:string)=>boolean, isDespinUp?: ()=>boolean, isTurnPadUp?: ()=>boolean}|null} controls
    */
   setGlassControls(controls) {
     this._glassControls = controls || null;
-    // u20-ipad F4: ToolOdds' odds hint reads the same answer (it has no controls handle of its own), and words the
-    // past-5-km case from the mother's distance to the target (this frame's parent position of the piloted daughter).
+    // ToolOdds' odds hint reads the same answer (no controls handle of its own), and words the past-5-km case from
+    // the mother's distance to the target (this frame's parent position of the piloted daughter).
     setDespinProbe(this._glassControls && typeof this._glassControls.isDespinUp === 'function' ? {
       up: () => this._glassDespinUp(),
       distanceM: (t) => {
@@ -173,7 +145,7 @@ export class DockingReticle {
     } : null);
   }
 
-  /** @private u17 A-T1: glass is read when drawn (D1), never at construction. */
+  /** @private glass is read when drawn, never at construction. */
   _glassNow() {
     return GestureHints.isGlass();
   }
@@ -189,7 +161,7 @@ export class DockingReticle {
     return ['LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER', 'USE MAGNET'].find((label) => this._chipUp(label)) || '';
   }
 
-  /** @private u18c D6: is the piloted daughter's CHANGE TOOL button on her DAUGHTERS row right now? (main.js closure -> StatusPanel.toolButtonUp) */
+  /** @private is the piloted daughter's CHANGE TOOL button on her DAUGHTERS row right now? (main.js closure -> StatusPanel.toolButtonUp) */
   _toolButtonUp() {
     const c = this._glassControls;
     if (!c || typeof c.toolButtonUp !== 'function') return false;
@@ -198,23 +170,17 @@ export class DockingReticle {
 
   /** @private is the hold-to-fire DE-SPIN button on screen right now? */
   _glassDespinUp() {
-    return despinButtonUp(this._glassControls);   // u20-ipad F4: the shared rule (DespinHint.js)
+    return despinButtonUp(this._glassControls);   // the shared rule (DespinHint.js)
   }
 
-  /**
-   * Show or hide the reticle overlay.
-   * @param {boolean} visible
-   */
   setVisible(visible) {
     this._visible = visible;
     this._canvas.style.display = visible ? 'block' : 'none';
     if (!visible) {
-      // Clear canvas when hiding
       this._ctx.clearRect(0, 0, this._width, this._height);
       this._lastRange = -1;
       this._clrSmooth = null;
       this._clrArrow = 0;
-      // Phase 7: Stop alignment tone when hiding
       if (this._alignmentToneActive) {
         this._alignmentToneActive = false;
         audioSystem.stopAlignmentTone();
@@ -224,17 +190,15 @@ export class DockingReticle {
   }
 
   /**
-   * Set the arm and target for rendering metrics.
    * @param {import('../entities/ArmUnit.js').ArmUnit} arm
    * @param {object|null} target - Debris object with .mesh.position
    */
   setArmData(arm, target) {
-    // M2: drop the odds-display easing state when the piloted arm or the
-    // target changes — otherwise the strip briefly counts up from the previous
+    // Drop the odds-display easing state when the arm or target changes, else the strip counts up from the previous
     // context's odds and shows phantom trend arrows.
     if (arm !== this._arm || target !== this._target) {
       this._oddsEase = null;
-      // the CLR line measures from the arm to the target: a new pair starts the average over (no old range to difference)
+      // the CLR line measures arm to target: a new pair starts the average over
       this._lastRange = -1;
       this._clrSmooth = null;
       this._clrArrow = 0;
@@ -243,38 +207,28 @@ export class DockingReticle {
     this._target = target;
   }
 
-  /**
-   * Per-frame update — compute metrics and redraw.
-   * @param {number} dt - Delta time in seconds
-   */
+  /** @param {number} dt - seconds */
   update(dt) {
     if (!this._visible || !this._arm) return;
     this._time += dt;
-    this._lastDt = dt;   // Phase 1b: odds-strip display easing needs frame dt
+    this._lastDt = dt;   // the odds-strip display easing needs frame dt
     this._computeMetrics(dt);
     this._updateApproachAudio();
     this._render();
     this._updateSkActiveFlag();
   }
 
-  /**
-   * True if within net deployment range.
-   * @returns {boolean}
-   */
+  /** True if within net deployment range. */
   isNetReady() {
     if (!this._arm) return false;
-    // u20-nets fix round 1 (2026-10-23): the net's REAL reach, the number the shot is bound by (NetProjectile._updateFlight ends it
-    // at min(TETHER_MAX, LAUNCH_SPEED x MAX_FLIGHT_TIME) = 80 m for both daughters' nets) and that the InputManager refusal, ToolOdds
-    // and this reticle's own "too far" advisory already read (`netMaxReachM`, CaptureNet.js). It was 2 x the net's DIAMETER, which
-    // was 10 m for the 5 m net; with the 3 m net (6 m) and the small one (3 m) it fell below her 8 m station-keep distance
-    // (ArmUnit.js ~3828), so NET READY never showed at the default distance.
+    // The net's REAL reach, the number the shot is bound by (NetProjectile._updateFlight ends it at
+    // min(TETHER_MAX, LAUNCH_SPEED x MAX_FLIGHT_TIME) = 80 m for both daughters' nets) and that the InputManager
+    // refusal, ToolOdds and this reticle's "too far" advisory read (`netMaxReachM`, CaptureNet.js). Not 2 x the net's
+    // diameter: that fell below her 8 m station-keep distance, so NET READY never showed at the default distance.
     const netRange = netMaxReachM(getNetClassForType(this._arm.type));
     return this._range < netRange && this._range > 0;
   }
 
-  /**
-   * Remove canvas and clean up event listeners.
-   */
   dispose() {
     window.removeEventListener('resize', this._resizeHandler);
     if (this._canvas && this._canvas.parentNode) {
@@ -283,10 +237,6 @@ export class DockingReticle {
     this._canvas = null;
     this._ctx = null;
   }
-
-  // ==========================================================================
-  // METRICS COMPUTATION
-  // ==========================================================================
 
   /** @private Compute range, closure rate, and alignment offsets */
   _computeMetrics(dt) {
@@ -303,16 +253,15 @@ export class DockingReticle {
     const armPos = this._arm.position;
     const targetPos = this._target._scenePosition;
 
-    // Range in meters
     const rangeScene = armPos.distanceTo(targetPos);
     this._range = rangeScene / M;
 
-    // Closure rate (delta range per second, positive = closing)
+    // Closure rate: delta range per second, positive = closing
     if (this._lastRange >= 0) {
       this._closureRate = (this._lastRange - this._range) / Math.max(dt, 0.001);
-      // The CLR line shows an exponential average (about 0.3 s) with an arrow that needs 0.15 m/s to switch on and
-      // drops below 0.08 m/s (the same edges as the fleet pane's closing word), so noise around 0.1 m/s cannot flip
-      // the arrow or colour every frame (owner 10-27: a closing readout flashed).
+      // The CLR line shows an exponential average (about 0.3 s) with an arrow that switches on at 0.15 m/s and off
+      // below 0.08 m/s (the fleet pane's closing-word edges), so noise around 0.1 m/s cannot flip the arrow or colour
+      // every frame (owner 10-27: a closing readout flashed).
       const raw = this._closureRate;
       this._clrSmooth = this._clrSmooth == null
         ? raw
@@ -328,7 +277,7 @@ export class DockingReticle {
     }
     this._lastRange = this._range;
 
-    // Compute target offset in arm's local frame
+    // target offset in the arm's local frame
     const toTarget = this._tmpVec.copy(targetPos).sub(armPos);
 
     let forward;
@@ -342,28 +291,19 @@ export class DockingReticle {
     const right = new THREE.Vector3().crossVectors(forward, up).normalize();
     const localUp = new THREE.Vector3().crossVectors(right, forward).normalize();
 
-    // Project toTarget onto right and up axes for lateral/vertical offset (meters)
+    // lateral/vertical offset (meters)
     this._offsetX = toTarget.dot(right) / M;
     this._offsetY = toTarget.dot(localUp) / M;
   }
 
-  // ==========================================================================
-  // APPROACH AUDIO (Phase 7 — §5.4)
-  // ==========================================================================
-
-  /** @private Update docking approach beeps and alignment confirmation tone */
+  /** @private Docking approach beeps and alignment confirmation tone */
   _updateApproachAudio() {
     const range = this._range;
     const now = performance.now() / 1000;
 
-    // Suppress the rapid close-range docking beeps once the arm reaches
-    // station-keep or any post-approach state (NETTING / GRAPPLED / REELING /
-    // DOCKING). At that point the pilot is parked at standoff (≤20 m) or
-    // actively capturing — the fast "beep-beep-beep" becomes annoying spam
-    // rather than useful approach feedback (user is no longer approaching).
-    // Also stop any active alignment tone for the same reason.
-    // HOLDING_CATCH (u17b, owner 2026-10-22 bug): she is parked on her strut with the
-    // catch on her rack, 0.7 m from her old target, so the range beeps never stop.
+    // No close-range beeps (or alignment tone) once the arm reaches station-keep or any post-approach state: the
+    // pilot is parked at standoff (≤20 m) or capturing, so they are spam. HOLDING_CATCH (owner 2026-10-22 bug): she
+    // is parked on her strut with the catch on her rack, 0.7 m from her old target, so the range beeps never stopped.
     const POST_APPROACH_STATES = new Set([
       'STATION_KEEP', 'NETTING', 'GRAPPLED', 'REELING', 'DOCKING',
       'TRAWLING', 'HAULING', 'HOLDING_CATCH',
@@ -377,12 +317,8 @@ export class DockingReticle {
       return;
     }
 
-    // --- Range-based beeping (sonar-ping during APPROACH) ---
-    // Tuned 2026-05-15 polish task 2: the close-range tier was 0.2 s /
-    // 1200 Hz which the user found annoyingly rapid+high once inside
-    // ~20 m. Softened to 0.4 s / 1000 Hz — still a clear "you are close"
-    // cue but less of a fire-alarm. SK entry hard-cuts the whole loop
-    // above (line 270-277), so this only fires during APPROACH itself.
+    // Range-based sonar-ping beeps; fires only during APPROACH itself (post-approach states return above).
+    // Close tier stays 0.4 s / 1000 Hz: faster and higher beeps annoyed the owner.
     let interval = null, freq = 600, vol = 0.1;
     if (range > 0 && range <= 200) {
       if (range > 100)      { interval = 2.0; freq = 600;  vol = 0.10; }
@@ -396,7 +332,7 @@ export class DockingReticle {
       audioSystem.playDockingBeep(freq, vol);
     }
 
-    // --- Alignment confirmation tone (H+V within 5m, range < 25m) ---
+    // Alignment confirmation tone: H+V within 5 m, range < 25 m
     const aligned = Math.abs(this._offsetX) < 5 && Math.abs(this._offsetY) < 5
                     && range > 0 && range < 25;
     if (aligned && !this._alignmentToneActive) {
@@ -408,10 +344,6 @@ export class DockingReticle {
     }
   }
 
-  // ==========================================================================
-  // RENDERING
-  // ==========================================================================
-
   /** @private Full redraw */
   _render() {
     const ctx = this._ctx;
@@ -420,52 +352,31 @@ export class DockingReticle {
     const cx = w / 2;
     const cy = h / 2;
 
-    // 1. Clear
     ctx.clearRect(0, 0, w, h);
 
-    // 2. Vignette
     this._drawVignette(ctx, cx, cy, w, h);
 
-    // 3/4. (removed 2026-10-23, owner: "bright green + over daughter after launch") The centre crosshair, the target
-    //      diamond and the station-keep dot. The diamond sat on the crosshair every frame (its offsets are measured
-    //      along the line to the target, so they are always 0) and the cyan TargetReticle bracket already marks the piece.
+    // owner 2026-10-23: no centre crosshair, target diamond or station-keep dot ("bright green + over daughter after
+    // launch"): the diamond sat on the crosshair every frame (its offsets are measured along the line to the
+    // target, so always 0) and the cyan TargetReticle bracket already marks the piece.
 
-    // 5/6. Range + closure-rate readouts — MANUAL PILOT ONLY.
-    // RNG/CLR are advanced hand-flying instruments: the pilot uses closure
-    // rate to feather the final approach and RNG for fine arm-tip distance.
-    // Under autopilot the DAP controller flies the approach itself, so these
-    // numbers are noise (and RNG duplicates the per-debris TargetReticle
-    // distance). Suppress them unless the player is actually flying the arm.
+    // RNG/CLR are hand-flying instruments (closure rate to feather the final approach): MANUAL PILOT ONLY. Under
+    // autopilot they are noise, and RNG duplicates the per-debris TargetReticle distance.
     if (this._arm.isManual && this._arm.isManual()) {
-      // 5. Range readout
       this._drawRangeReadout(ctx, cx);
-
-      // 6. Closure rate readout
       this._drawClosureRate(ctx, cx);
     }
 
-    // 7. Alignment bars
     this._drawAlignmentBars(ctx, cx, cy, w, h);
-
-    // 8. Net status
     this._drawNetStatus(ctx, cx, h);
-
-    // 9. Arm info
     this._drawArmInfo(ctx, w, h);
 
-    // 10. (removed 2026-06-14) Station-keep θ/φ/R readout box — declutter.
-    //     The live capture-odds strip below already carries the SK feedback the
-    //     player acts on; the raw θ/φ/R numbers were noise.
-
-    // 11. CP-1 / P2 — per-arm tool-selection panel (the capture-odds strip)
+    // The capture-odds strip carries the station-keep feedback; no raw θ/φ/R readout box.
+    // Per-arm tool-selection panel (the capture-odds strip)
     if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) {
       this._drawToolSelectionPanel(ctx, cx, cy);
     }
   }
-
-  // --------------------------------------------------------------------------
-  // DRAWING HELPERS
-  // --------------------------------------------------------------------------
 
   /** @private Darken corners — narrow-FOV camera feel */
   _drawVignette(ctx, cx, cy, w, h) {
@@ -482,7 +393,6 @@ export class DockingReticle {
   _drawRangeReadout(ctx, cx) {
     const y = 50;
 
-    // Color by range
     let color;
     if (this._range < 50) color = C.primary;
     else if (this._range <= 200) color = C.warning;
@@ -510,15 +420,12 @@ export class DockingReticle {
     let color, arrow;
 
     if (this._clrArrow > 0) {
-      // Closing
       color = C.primary;
       arrow = '▼';
     } else if (this._clrArrow < 0) {
-      // Opening
       color = C.danger;
       arrow = '▲';
     } else {
-      // Near-zero
       color = C.warning;
       arrow = '●';
     }
@@ -538,23 +445,20 @@ export class DockingReticle {
     const barThick = 4;
     const pipSize = 8;
 
-    // ---------- Left bar (vertical offset: target above/below) ----------
+    // Left bar: vertical offset (target above/below)
     const lbX = 40;
     const lbY = cy - barLen / 2;
 
-    // Bar background
     ctx.fillStyle = 'rgba(0, 255, 136, 0.08)';
     ctx.fillRect(lbX - barThick / 2, lbY, barThick, barLen);
 
-    // Center tick
     ctx.fillStyle = C.primaryDim;
     ctx.fillRect(lbX - 6, cy - 0.5, 12, 1);
 
-    // Pip position: clamp offset to [-100, 100], map to bar range
+    // Pip position: offset clamped to [-100, 100] m, mapped to the bar
     const vClamp = clamp(this._offsetY, -100, 100);
     const vPipY = cy - (vClamp / 100) * (barLen / 2);
 
-    // Pip
     ctx.fillStyle = Math.abs(this._offsetY) < 10 ? C.primary : C.warning;
     ctx.beginPath();
     ctx.moveTo(lbX - pipSize, vPipY);
@@ -563,25 +467,21 @@ export class DockingReticle {
     ctx.closePath();
     ctx.fill();
 
-    // Label
     ctx.font = `10px ${FONT}`;
     ctx.textAlign = 'center';
     ctx.fillStyle = C.gray;
     ctx.fillText('V', lbX, lbY - 8);
 
-    // ---------- Bottom bar (horizontal offset: target left/right) ----------
+    // Bottom bar: horizontal offset (target left/right)
     const bbX = cx - barLen / 2;
     const bbY = h - 100;
 
-    // Bar background
     ctx.fillStyle = 'rgba(0, 255, 136, 0.08)';
     ctx.fillRect(bbX, bbY - barThick / 2, barLen, barThick);
 
-    // Center tick
     ctx.fillStyle = C.primaryDim;
     ctx.fillRect(cx - 0.5, bbY - 6, 1, 12);
 
-    // Pip
     const hClamp = clamp(this._offsetX, -100, 100);
     const hPipX = cx + (hClamp / 100) * (barLen / 2);
 
@@ -593,33 +493,24 @@ export class DockingReticle {
     ctx.closePath();
     ctx.fill();
 
-    // Label
     ctx.fillStyle = C.gray;
     ctx.fillText('H', bbX - 10, bbY + 3);
   }
 
   /**
-   * @private Bottom center: net readiness / verb hint — STATE-AWARE (Item 10,
-   * 2026-06-12). One hint line, no stacking:
-   *   • STATION_KEEP: N/`/R/Esc verb bar — Space does NOTHING in SK (the old
-   *     '[SPACE] Deploy' hint pointed at a dead key; the SK fire verb is N).
+   * @private Bottom center: net readiness / verb hint, STATE-AWARE. One hint line, no stacking:
+   *   • STATION_KEEP: N/`/R/Esc verb bar — Space does NOTHING in SK (the SK fire verb is N).
    *   • TRANSIT/APPROACH + ready: N fire.
    *   • Not ready: get closer.
-   *   • Any post-capture / retrieval state (NETTING, GRAPPLED, HAULING,
-   *     REELING, RETURNING, …): draw NOTHING — the net is already committed,
-   *     so a lingering "NET READY — [N] fire" / "get closer" line is obsolete
-   *     (2026-06-13 fix: reticle stayed visible while the piloted arm hauled
-   *     its catch home).
+   *   • Any post-capture / retrieval state (NETTING, GRAPPLED, HAULING, REELING, RETURNING, …): draw NOTHING — the
+   *     net is already committed, so a lingering "NET READY" / "get closer" line is obsolete.
    */
   _drawNetStatus(ctx, cx, h) {
     const y = h - 55;
     const state = this._arm && this._arm.state;
     const inSK = state === 'STATION_KEEP';
-    // Net guidance is only meaningful before the net is committed. Once the
-    // arm leaves the pre-capture deployable states, suppress the line entirely.
-    // Also re-arm the arrival cue: exiting the deployable states (net fired /
-    // arm busy) ends the readiness window, so the next ready window gets a
-    // fresh cue instead of the settled tail of the previous one.
+    // Net guidance is only meaningful before the net is committed. Leaving the pre-capture states also re-arms the
+    // arrival cue, so the next ready window gets a fresh cue instead of the settled tail of the previous one.
     if (!inSK && !PRE_CAPTURE_STATES.has(state)) {
       this._netReadySince = null;
       return;
@@ -627,17 +518,15 @@ export class DockingReticle {
 
     const ready = this.isNetReady();
 
-    // Calm-HUD: track readiness transitions so the prompt gets a single calm
-    // arrival cue (decaying breathe that settles to steady) instead of the old
-    // infinite 0.64 Hz blink. Colour/glyph carry the standing state.
+    // Readiness transitions give the prompt a single calm arrival cue (decaying breathe that settles to steady),
+    // not an infinite blink. Colour/glyph carry the standing state.
     if (ready) {
       if (this._netReadySince == null) this._netReadySince = this._time;
     } else {
       this._netReadySince = null;
     }
-    // Arrival cue via the shared calm-pulse helper: 0.8 s fade-in, ~0.29 Hz
-    // breathe, amplitude eases ±0.16 → ±0.05 over ~6 s then settles near-steady
-    // (TargetReticle.js "▸ N" shape). Steady 1.0 under prefers-reduced-motion.
+    // Shared calm-pulse helper: 0.8 s fade-in, ~0.29 Hz breathe, amplitude eases ±0.16 → ±0.05 over ~6 s then settles
+    // near-steady (TargetReticle.js "▸ N" shape). Steady 1.0 under prefers-reduced-motion.
     const shownFor = this._netReadySince == null ? 0 : this._time - this._netReadySince;
     const readyAlpha = this._netReadySince == null
       ? 1
@@ -650,8 +539,8 @@ export class DockingReticle {
       ctx.textBaseline = 'middle';
       ctx.fillStyle = ready ? `rgba(0, 255, 136, ${readyAlpha})` : C.gray;
       if (this._glassNow()) {
-        // u17 A-T1 (D2): each clause names a button only while that button is on screen; Esc has no touch control and the
-        // tool cycle's (CHANGE TOOL, u18c) sits on her DAUGHTERS row, so neither is named here. Nothing left -> nothing drawn.
+        // Each clause names a button only while it is on screen; Esc has no touch control and the tool cycle's
+        // (CHANGE TOOL) sits on her DAUGHTERS row, so neither is named here. Nothing left -> nothing drawn.
         const clauses = [];
         const net = this._glassNetChip();
         if (net) clauses.push(`tap ${net}`);
@@ -695,13 +584,11 @@ export class DockingReticle {
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
 
-    // Arm ID + type
     ctx.fillStyle = C.primary;
     const armName = this._arm.displayName || `${this._arm.id} [${this._arm.type}]`;
     ctx.fillText(armName.toUpperCase(), x, y);
     y += lineH;
 
-    // Fuel percentage
     const fuel = Math.round(this._arm.fuel ?? 0);
     let fuelColor;
     if (fuel > 50) fuelColor = C.primary;
@@ -711,7 +598,6 @@ export class DockingReticle {
     ctx.fillText(`FUEL: ${fuel}%`, x, y);
     y += lineH;
 
-    // Tether length
     const tether = Math.round(this._arm.tetherLength ?? 0);
     const tetherMax = this._arm.config?.tetherMax ?? 2000;
     const tetherPct = (tether / tetherMax * 100).toFixed(0);
@@ -723,21 +609,12 @@ export class DockingReticle {
     ctx.fillText(`TETHER: ${tether}m (${tetherPct}%)`, x, y);
   }
 
-  // --------------------------------------------------------------------------
-  // (removed 2026-06-14) STATION-KEEP θ/φ/R OVERLAY — decluttered. The capture-
-  // odds strip carries the actionable SK feedback; the raw angle/range numbers
-  // were visual noise.
-  // --------------------------------------------------------------------------
-
   /**
-   * @private Capture Odds Strip — one widget, four context states
-   * (capture-feedback overhaul Phase 1b; replaces the vertical star-score list).
-   *
+   * @private Capture Odds Strip — one widget, four context states:
    *   AIM       (STATION_KEEP)        — live odds strip; % is the hero.
    *   IN FLIGHT (NETTING, net away)   — strip dims to labels; `NET AWAY — 34m`.
    *   REELING   (GRAPPLED/REELING + payload) — TENSION bar with RIP/SNAP ticks.
-   *   RESULT    — existing full-screen flashes (NET FAILED / TETHER SNAP)
-   *               handle it; the widget draws nothing.
+   *   RESULT    — the full-screen flashes (NET FAILED / TETHER SNAP) handle it; the widget draws nothing.
    */
   _drawToolSelectionPanel(ctx, cx, cy) {
     const arm = this._arm;
@@ -749,7 +626,6 @@ export class DockingReticle {
     } else if ((arm.state === 'GRAPPLED' || arm.state === 'REELING') && arm.capturedDebris) {
       this._drawTensionBar(ctx, cx, cy);
     }
-    // RESULT state: full-screen flashes elsewhere — nothing here.
   }
 
   /** @private Widget frame shared by all states. Returns {left, top, boxW}. */
@@ -766,12 +642,11 @@ export class DockingReticle {
     return { left, top, boxW };
   }
 
-  /** @private Short column label per verb (names are footnotes; % is the hero). */
   _oddsColLabel(kind) {
     return toolShortLabel(kind);
   }
 
-  /** @private Odds → colour tier (always paired with a symbol/word — colourblind-safe). */
+  /** @private Odds → colour tier (always paired with a symbol/word: colourblind-safe). */
   _oddsColor(pct) {
     const HUD = Constants.TOOL_HUD || {};
     if (pct >= 80) return HUD.COLOR_GOOD || '#00ffaa';
@@ -781,9 +656,8 @@ export class DockingReticle {
   }
 
   /**
-   * @private Ease the displayed odds toward the truth (~300 ms lerp) and track
-   * the trend rate, so de-spinning reads as a live count-up: 41%↑ 48%↑ 57%↑.
-   * Motion IS the reward — this is the loop that teaches "pull a lever → odds climb".
+   * @private Ease the displayed odds toward the truth (~300 ms lerp) and track the trend rate, so de-spinning reads
+   * as a live count-up: 41%↑ 48%↑ 57%↑ (teaches "pull a lever → odds climb").
    */
   _easeOdds(kind, pTrue) {
     const TO = Constants.TOOL_ODDS || {};
@@ -791,11 +665,10 @@ export class DockingReticle {
     if (!this._oddsEase) this._oddsEase = {};
     let e = this._oddsEase[kind];
     if (!e) e = this._oddsEase[kind] = { shown: pTrue, rate: 0, lastTrue: pTrue };
-    // Trend rate (smoothed Δp/s) from the TRUE value, so the arrow leads the easing.
+    // Trend rate (smoothed Δp/s) from the TRUE value, so the arrow leads the easing
     const inst = dt > 0 ? (pTrue - e.lastTrue) / dt : 0;
     e.rate = e.rate * 0.85 + inst * 0.15;
     e.lastTrue = pTrue;
-    // Display easing.
     const tau = TO.DISPLAY_LERP_S || 0.3;
     const k = 1 - Math.exp(-dt / tau);
     e.shown += (pTrue - e.shown) * k;
@@ -814,9 +687,8 @@ export class DockingReticle {
     const odds = arm._toolOdds || {};
     const selected = arm.selectedTool || 'NET';
     const netCount = (typeof arm.getNetInventory === 'function') ? arm.getNetInventory() : 0;
-    // Phase 1.5: knowledge gates the readout — before Full Profile the est-mass
-    // strain band is uncertain (NET % renders with ~) and brittleness is
-    // unknown (FRAG chip shows ?). Honest about what we don't know.
+    // Before Full Profile the est-mass strain band is uncertain (NET % renders with ~) and brittleness is unknown
+    // (FRAG chip shows ?).
     const skTarget = arm._stationKeepTarget || arm.target;
     const profiled = skTarget ? dossierSystem.isProfiled(skTarget.id) : true;
 
@@ -829,7 +701,6 @@ export class DockingReticle {
     const boxH = headerH + oddsRowH + labelRowH + blockerRowH + advisoryH + footerH + 6;
     const { left, top, boxW } = this._oddsPanelFrame(ctx, cx, cy, boxH);
 
-    // Header — arm class.
     const armLabel = arm.type === 'weaver' ? 'LARGE' : arm.type === 'spinner' ? 'SMALL' : 'DAUGHTER';
     ctx.font = `bold 10px ${FONT}`;
     ctx.textAlign = 'left';
@@ -837,7 +708,7 @@ export class DockingReticle {
     ctx.fillStyle = 'rgba(0, 255, 170, 0.7)';
     ctx.fillText(armLabel, left + 8, top + 5);
 
-    // ── Fixed columns in cycle order (the eye learns positions) ──
+    // Fixed columns in cycle order (the eye learns positions)
     const colW = HUD.COL_WIDTH_PX || 48;
     const stripW = toolset.length * colW;
     const stripLeft = left + (boxW - stripW) / 2;
@@ -861,7 +732,7 @@ export class DockingReticle {
       let falling = false;
 
       if (!o || o.p == null) {
-        // Empty magazine / offline: '--', not 0% — different cause, different fix.
+        // Empty magazine / offline: '--', not 0% (different cause, different fix)
         text = '--';
         color = HUD.COLOR_ZERO || 'rgba(180,200,210,0.45)';
         if (this._oddsEase) delete this._oddsEase[kind];
@@ -871,20 +742,19 @@ export class DockingReticle {
         color = this._oddsColor(pct);
         rising = e.rate > trendRate;
         falling = e.rate < -trendRate;
-        // Unprofiled target: est-mass strain band is uncertain → honest ~.
+        // Unprofiled target: est-mass strain band is uncertain → ~
         const approx = (kind === 'NET' && !profiled) ? '~' : '';
         text = `${approx}${pct}%${rising ? '\u2191' : falling ? '\u2193' : ''}`;
       }
       if (isSel) selectedPct = pct;
 
-      // Odds number — 14px bold. Calm-HUD: steady; the ↑/↓ glyph already
-      // encodes the trend (the old 1.9 Hz rising-brightness flicker was noise).
+      // Steady: the ↑/↓ glyph already encodes the trend.
       ctx.font = `bold ${HUD.ODDS_FONT_PX || 14}px ${FONT}`;
       ctx.textAlign = 'center';
       ctx.fillStyle = color;
       ctx.fillText(text, colCx, oddsY);
 
-      // Label row — 9px, ▶ on selected, ·n magazine count on NET.
+      // Label row: ▶ on selected, ·n magazine count on NET
       let label = this._oddsColLabel(kind);
       if (kind === 'NET') label += `\u00B7${netCount}`;
       else if (kind === 'PAD' && typeof arm._padUvCureDosesRemaining === 'number') {
@@ -896,7 +766,6 @@ export class DockingReticle {
         : 'rgba(180, 200, 210, 0.6)';
       ctx.fillText((isSel ? '\u25B6' : '') + label, colCx, labelY);
 
-      // Selected column: odds-coloured underline.
       if (isSel) {
         ctx.strokeStyle = (pct == null) ? (HUD.COLOR_ZERO || 'rgba(180,200,210,0.45)') : color;
         ctx.lineWidth = 2;
@@ -906,10 +775,9 @@ export class DockingReticle {
         ctx.stroke();
       }
 
-      // Blocker word — 8px red, ONLY when the verb is dead (0% / --).
-      // Phase 2: the NET column carries the live aspect chip instead when the
-      // target is elongated and the mouth sits between widthM and lengthM —
-      // the % already encodes it (0% ↔ 96%); the chip explains WHY.
+      // Blocker word, ONLY when the verb is dead (0% / --). The NET column carries the live aspect chip instead when
+      // the target is elongated and the mouth sits between widthM and lengthM: the % already encodes it, the chip
+      // explains WHY.
       const aspectChip = (kind === 'NET') ? this._netAspectChip(skTarget) : null;
       if (aspectChip) {
         ctx.font = `bold ${HUD.BLOCKER_FONT_PX || 8}px ${FONT}`;
@@ -922,7 +790,7 @@ export class DockingReticle {
       }
     }
 
-    // ── One advisory line: the single biggest lever ──
+    // One advisory line: the single biggest lever
     const advisoryY = blockerY + blockerRowH / 2 + advisoryH / 2;
     const adv = this._buildOddsAdvisory(odds, selected, selectedPct);
     if (adv) {
@@ -932,14 +800,13 @@ export class DockingReticle {
       ctx.fillText(adv.text, cx, advisoryY);
     }
 
-    // ── Footer: keys + FRAG chip (only when risk ≥ FRAG_CHIP_MIN; the amber/red
-    //    colour carries the warning, no glyph prefix) ──
+    // Footer: keys + FRAG chip (only when risk ≥ FRAG_CHIP_MIN; the amber/red colour carries the warning)
     const footerY = advisoryY + advisoryH / 2 + footerH / 2;
     ctx.font = `9px ${FONT}`;
     ctx.textAlign = 'left';
     ctx.fillStyle = 'rgba(0, 255, 170, 0.5)';
     if (this._glassNow()) {
-      // u17 A-T1 (D2): the tool cycle has no touch control; the launch button is named only while it is up.
+      // The tool cycle has no touch control; the launch button is named only while it is up.
       const net = this._glassNetChip();
       if (net) ctx.fillText(`tap ${net}`, left + 8, footerY);
     } else {
@@ -947,7 +814,7 @@ export class DockingReticle {
     }
     const fragRisk = arm._toolOddsFragRisk || 0;
     if (!profiled) {
-      // Brittleness unknown until the close-range survey — say so honestly.
+      // Brittleness unknown until the close-range survey
       ctx.textAlign = 'right';
       ctx.fillStyle = 'rgba(255, 170, 0, 0.55)';
       ctx.fillText('FRAG ?', left + boxW - 8, footerY);
@@ -960,9 +827,8 @@ export class DockingReticle {
   }
 
   /**
-   * @private Phase 2 — live aspect chip for the NET column. Non-null only when
-   * the target is elongated AND the mouth ∈ (widthM, lengthM): the catch is
-   * orientation-dependent, so name the current presentation.
+   * @private Live aspect chip for the NET column. Non-null only when the target is elongated AND the mouth ∈
+   * (widthM, lengthM): the catch is orientation-dependent, so name the current presentation.
    * @returns {{text:string, color:string}|null}
    */
   _netAspectChip(target) {
@@ -982,8 +848,7 @@ export class DockingReticle {
       z: tp.z - arm.position.z,
     });
     const HUD = Constants.TOOL_HUD || {};
-    // M5: the ✓ shows when presented width fits the mouth with the tunable
-    // margin (1.0 = exact fit; <1 demands slack before advertising the shot).
+    // ✓ when presented width fits the mouth with the tunable margin (1.0 = exact fit; <1 demands slack first)
     const fitMargin = (Constants.ASPECT_CAPTURE && Constants.ASPECT_CAPTURE.END_ON_FIT_MARGIN) ?? 1.0;
     return presented <= dia * fitMargin
       ? { text: 'END-ON \u2713', color: HUD.COLOR_GOOD || '#00ffaa' }
@@ -991,8 +856,8 @@ export class DockingReticle {
   }
 
   /**
-   * @private "better tool, press the tool-cycle key" offer. The tool cycle has no touch control, so on glass there is no
-   * such offer to make (u17 A-T1, D2): null, and the caller moves on to the next advisory.
+   * @private "better tool, press the tool-cycle key" offer. The tool cycle has no touch control, so on glass there is
+   * no such offer to make: null, and the caller moves on to the next advisory.
    */
   _switchOffer(kind, p) {
     if (this._glassNow()) return null;
@@ -1000,10 +865,9 @@ export class DockingReticle {
   }
 
   /**
-   * @private One advisory line — driven by the selected tool's top blocker,
-   * preserving the established priority chain for NET (width → range →
-   * off-axis → tumble with the live de-spin readout). If a different tool
-   * beats the selected by more than SWITCH_ADVISE_MARGIN, offer the switch.
+   * @private One advisory line, driven by the selected tool's top blocker, in the priority chain for NET (width →
+   * range → off-axis → tumble with the live de-spin readout). If a different tool beats the selected by more than
+   * SWITCH_ADVISE_MARGIN, offer the switch.
    */
   _buildOddsAdvisory(odds, selected, selectedPct) {
     const arm = this._arm;
@@ -1011,12 +875,12 @@ export class DockingReticle {
     const target = arm._stationKeepTarget || arm.target;
     const sel = odds[selected];
 
-    // Deterministic blockers on the selected tool → the fix is the advisory.
+    // Deterministic blockers on the selected tool: the fix is the advisory
     if (sel && sel.p == null) {
       return { text: sel.hint || 'unavailable', color: '#ff7755' };
     }
 
-    // Switch offer: another tool beats the selected by > 20 pts.
+    // Switch offer: another tool beats the selected by > SWITCH_ADVISE_MARGIN (20 pts)
     const switchMargin = TO.SWITCH_ADVISE_MARGIN ?? 0.20;
     let bestKind = null;
     let bestP = (sel && sel.p) || 0;
@@ -1033,7 +897,7 @@ export class DockingReticle {
       const range = (typeof arm._standoffR === 'number' && arm._standoffR > 0)
         ? arm._standoffR : 50;
       const netAdv = this._buildNetAdvisory(target, range, selectedPct ?? 0);
-      // NET-dead + better tool available → the switch IS the fix.
+      // NET-dead + better tool available: the switch IS the fix
       if (sel && sel.p === 0 && bestKind) {
         const offer = this._switchOffer(bestKind, bestP);
         if (offer) return offer;
@@ -1043,7 +907,7 @@ export class DockingReticle {
         const offer = this._switchOffer(bestKind, bestP);
         if (offer) return offer;
       }
-      // Phase 1.5: nothing more urgent → offer the knowledge fix.
+      // nothing more urgent: offer the knowledge fix
       if (target && !dossierSystem.isProfiled(target.id)) {
         const surveyM = (Constants.DOSSIER && Constants.DOSSIER.DETAIL_SCAN_RANGE_M) || 50;
         return { text: `close to ${surveyM}m to survey`, color: 'rgba(0, 255, 170, 0.6)' };
@@ -1051,12 +915,10 @@ export class DockingReticle {
       return null;
     }
 
-    // Non-NET selected: blocker hint first, then the switch offer.
     if (sel && sel.p === 0 && sel.hint) {
       return { text: sel.hint, color: '#ff7755' };
     }
-    // Phase 3c: live eddy-damping readout — the MAGNET's passive secondary is
-    // working; show the tumble bleeding so the NET % climb reads as caused.
+    // Live eddy-damping readout: shows the tumble bleeding so the NET % climb reads as caused by the MAGNET.
     if (selected === 'MAGNET' && target && target._eddyDamping) {
       const deg = Math.abs(target.tumbleRate || 0) * RAD2DEG;
       return { text: `eddy-damping ${deg.toFixed(1)}\u00B0/s\u2193`, color: '#66ddff' };
@@ -1072,12 +934,8 @@ export class DockingReticle {
   }
 
   /**
-   * @private Map the fired net's FSM state → {label, color} for the in-flight
-   * readout. This is where the capture ceremony is now signalled: the net mesh
-   * stays ivory Dyneema (CaptureNetVisual realism pass, 2026-06-30) and the
-   * phase the player used to read off the net's colour reads here instead.
-   * Colours mirror the old net hue energy ramp so the muscle memory carries
-   * over — but each is paired with a WORD (colourblind-safe).
+   * @private Map the fired net's FSM state → {label, color} for the in-flight readout. The net mesh stays ivory
+   * Dyneema, so the capture phase is signalled here; each colour is paired with a WORD (colourblind-safe).
    * Returns null for pre-contact flight (caller shows the distance readout).
    * @param {object} net — arm._firedNet (NetProjectile) or null
    * @returns {{ label: string, color: string }|null}
@@ -1097,10 +955,8 @@ export class DockingReticle {
     }
   }
 
-  /** @private IN FLIGHT — strip dims to labels only; status line carries either
-   * `NET AWAY — 34m` (pre-contact) or the colour-coded capture phase
-   * (CONTACT → … → SECURING) once the net reaches the target. The net mesh no
-   * longer changes colour, so this readout IS the capture-state signal. */
+  /** @private IN FLIGHT — strip dims to labels only; the status line carries `NET AWAY — 34m` (pre-contact) or
+   * the colour-coded capture phase (CONTACT → … → SECURING) once the net reaches the target. */
   _drawOddsStripInFlight(ctx, cx, cy) {
     const arm = this._arm;
     const toolset = arm.toolset || [];
@@ -1116,7 +972,7 @@ export class DockingReticle {
     const armLabel = arm.type === 'weaver' ? 'LARGE' : arm.type === 'spinner' ? 'SMALL' : 'DAUGHTER';
     ctx.fillText(armLabel, left + 8, top + 5);
 
-    // Dim labels only — no stale odds during flight.
+    // Dim labels only: no stale odds during flight
     const colW = HUD.COL_WIDTH_PX || 48;
     const stripLeft = left + (boxW - toolset.length * colW) / 2;
     ctx.font = `9px ${FONT}`;
@@ -1126,15 +982,12 @@ export class DockingReticle {
       ctx.fillText(this._oddsColLabel(toolset[i]), stripLeft + i * colW + colW / 2, top + 14 + 7);
     }
 
-    // Status line: capture phase once the net is at the target, else net range.
     const net = arm._firedNet;
     const phase = this._netPhaseReadout(net);
     const statusY = top + 14 + 14 + 8;
     ctx.font = `bold 11px ${FONT}`;
     if (phase) {
-      // CAPTURED gets a single calm celebration breathe (one 0.5 Hz cycle,
-      // then steady) before the arm hands off to the tension-bar (GRAPPLED)
-      // view; everything else reads steady.
+      // CAPTURED gets a single 0.5 Hz breathe before the arm hands off to the tension bar; the rest read steady.
       const S = Constants.CAPTURE_NET.STATES;
       if (net.state === S.CAPTURED) {
         if (this._capturedSince == null) this._capturedSince = this._time;
@@ -1154,11 +1007,9 @@ export class DockingReticle {
   }
 
   /**
-   * @private REELING — the strip swaps to the TENSION bar: tether tension with
-   * the SNAP tick + payload kg; pulses red near snap. Below it, a thin NET
-   * STRAIN bar (payload / rated mass) carries the RIP tick on its own axis —
-   * boost-rip risk is driven by strain, not tether tension, so the two never
-   * share a scale. (Phase 3a adds the boost-reel key and live tension control.)
+   * @private REELING — the strip swaps to the TENSION bar: tether tension with the SNAP tick + payload kg. Below
+   * it, a thin NET STRAIN bar (payload / rated mass) carries the RIP tick on its own axis: boost-rip risk is driven
+   * by strain, not tether tension, so the two never share a scale.
    */
   _drawTensionBar(ctx, cx, cy) {
     const arm = this._arm;
@@ -1175,29 +1026,27 @@ export class DockingReticle {
     ctx.fillStyle = 'rgba(0, 255, 170, 0.6)';
     ctx.fillText(`${Math.round(payloadKg)} kg`, left + boxW - 8, top + 5);
 
-    // Bar geometry.
     const barX = left + 10;
     const barW = boxW - 20;
     const barY = top + 14 + 10;
     const barH = 8;
 
-    // Tension fraction of tether break strength (SNAP at 1.0).
+    // Tension as a fraction of tether break strength (SNAP at 1.0)
     const breakN = arm.tetherBreakStrength || 100;
     const frac = clamp01((arm.tetherTension || 0) / breakN);
     const warnFrac = Constants.REEL_TENSION_WARNING ?? 0.7;
     const critFrac = Constants.REEL_TENSION_CRITICAL ?? 0.9;
 
-    // Track + fill (solid colour tiers — avoids gradient API in headless tests).
+    // Solid colour tiers (no gradient API: headless tests)
     ctx.fillStyle = 'rgba(0, 255, 170, 0.12)';
     ctx.fillRect(barX, barY, barW, barH);
-    // Calm-HUD: steady fill at every tier, including critical — the red tier
-    // colour plus the SNAP tick and the (separate, event-driven) tension audio
-    // carry the urgency; the old ~2.5 Hz |sin| strobe just agitated.
+    // Steady fill at every tier, including critical: the red tier, the SNAP tick and the event-driven tension audio
+    // carry the urgency.
     const fillCol = frac < warnFrac ? '#00ffaa' : frac < critFrac ? '#ffd166' : '#ff4444';
     ctx.fillStyle = fillCol;
     ctx.fillRect(barX, barY, barW * frac, barH);
 
-    // SNAP tick (tether axis only — RIP lives on the strain bar below).
+    // SNAP tick (tether axis only; RIP lives on the strain bar below)
     ctx.strokeStyle = '#ff4444';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -1209,10 +1058,8 @@ export class DockingReticle {
     ctx.fillStyle = '#ff4444';
     ctx.fillText('SNAP', barX + barW, barY - 7);
 
-    // NET STRAIN bar — the axis rip probability actually lives on
-    // (payloadMass / _netRatedMass vs NET_STRAIN_SAFE_FRACTION, the same
-    // quantities _updateReeling rolls boost-rip against). Only meaningful for
-    // a net catch with a known rated mass.
+    // NET STRAIN bar: the axis rip probability lives on (payloadMass / _netRatedMass vs NET_STRAIN_SAFE_FRACTION, as
+    // _updateReeling rolls boost-rip). Only meaningful for a net catch with a known rated mass.
     const strainY = barY + barH + 8;
     const strainH = 4;
     const ratedKg = arm._netRatedMass || 0;
@@ -1224,7 +1071,6 @@ export class DockingReticle {
       ctx.fillRect(barX, strainY, barW, strainH);
       ctx.fillStyle = strain > safe ? VisualLaw.COLORS.CAUTION : 'rgba(0, 255, 170, 0.8)';
       ctx.fillRect(barX, strainY, barW * strain, strainH);
-      // RIP tick at the safe fraction of the STRAIN axis.
       ctx.strokeStyle = VisualLaw.COLORS.CAUTION;
       ctx.beginPath();
       ctx.moveTo(barX + barW * safe, strainY - 2);
@@ -1236,12 +1082,11 @@ export class DockingReticle {
       ctx.fillText('RIP', barX + barW * safe, strainY + strainH + 7);
     }
 
-    // Footer — boost-reel hint lands with Phase 3a's REEL_BOOST.
     if (Constants.isFeatureEnabled && Constants.isFeatureEnabled('REEL_BOOST')) {
       ctx.font = `9px ${FONT}`;
       ctx.textAlign = 'left';
       ctx.fillStyle = arm._boostReel ? '#ffd166' : 'rgba(0, 255, 170, 0.5)';
-      // u17 A-T1 (D2): Shift has no touch control, so on glass the hint is left out; the live BOOST REEL state still shows.
+      // Shift has no touch control, so on glass the hint is left out; the live BOOST REEL state still shows.
       if (!this._glassNow()) {
         ctx.fillText(arm._boostReel ? 'BOOST REEL \u00D72' : 'hold [\u21E7] fast reel', left + 8, strainY + strainH + 16);
       } else if (arm._boostReel) {
@@ -1252,8 +1097,8 @@ export class DockingReticle {
   }
 
   /**
-   * @private the broadside advisory. Desktop: unchanged. Glass: she can be orbited by touch only while she holds station
-   * (STATION_KEEP), with the TURN PAD; name the pad only then and only while it is on screen, else just the state.
+   * @private The broadside advisory. Glass: she can be orbited by touch only while she holds station (STATION_KEEP),
+   * with the TURN PAD; name the pad only then and only while it is on screen, else just the state.
    */
   _aspectBroadside() {
     if (!this._glassNow()) return 'ASPECT: BROADSIDE \u2014 orbit to end-on';
@@ -1262,17 +1107,14 @@ export class DockingReticle {
       : 'ASPECT: BROADSIDE';
   }
 
-  /** @private is the TURN PAD on screen right now? */
   _glassTurnPadUp() {
     const c = this._glassControls;
     return !!(c && typeof c.isTurnPadUp === 'function' && c.isTurnPadUp());
   }
 
   /**
-   * @private NET advisory chain (formerly the P-CLING pre-fire readout — the
-   * % itself now lives in the odds strip's NET column; Phase 1b folds the two
-   * into one source so no duplicate % is shown). Priority preserved:
-   * width → range → off-axis → tumble (with the live de-spin readout).
+   * @private NET advisory chain (the % itself lives in the odds strip's NET column, so no duplicate % is shown).
+   * Priority: width → range → off-axis → tumble (with the live de-spin readout).
    * @returns {{ text: string, color: string }|null}
    */
   _buildNetAdvisory(target, range, pct) {
@@ -1286,9 +1128,8 @@ export class DockingReticle {
     let advisory = '';
     let advisoryCol = 'rgba(0, 255, 170, 0.6)';
 
-    // UX-11 #1: off-axis warning — the auto-aim leads the target, but a big
-    // lead angle (fast transverse drift) makes the shot fragile. Teach the
-    // player to re-aim / match velocity before firing.
+    // Off-axis warning: the auto-aim leads the target, but a big lead angle (fast transverse drift) makes the shot
+    // fragile; teach the player to re-aim / match velocity before firing.
     let offAxisDeg = 0;
     const tScene = (typeof arm._getTargetScenePos === 'function') ? arm._getTargetScenePos() : null;
     if (tScene && arm.position) {
@@ -1299,10 +1140,8 @@ export class DockingReticle {
     }
     const offAxisWarn = CN.OFF_AXIS_WARN_DEG || 12;
 
-    // Item 4 (2026-06-12): width fork — wider-than-mouth debris is a
-    // deterministic reel-time net failure; warn BEFORE the player commits.
-    // Phase 2: orientation-aware — pass the live approach bearing so a long
-    // body reads ASPECT (fits end-on) instead of a flat TOO_WIDE.
+    // Width fork: wider-than-mouth debris is a deterministic reel-time net failure; warn BEFORE the player commits.
+    // Orientation-aware: the live approach bearing lets a long body read ASPECT (fits end-on) instead of TOO_WIDE.
     let approachDir = null;
     if (tScene && arm.position) {
       approachDir = {
@@ -1314,15 +1153,14 @@ export class DockingReticle {
     const fit = assessNetFit(target, netClass, approachDir);
 
     if (fit.fit === 'TOO_WIDE') {
-      // Phase 0.2 (capture-feedback overhaul): only advise GRIPPER when this
-      // arm actually carries one — the Spinner doesn't, so point at the Weaver.
+      // Only advise GRIPPER when this arm carries one (the Spinner doesn't: point at the Weaver)
       const toolset = (Constants.DAUGHTER_TOOLSETS && Constants.DAUGHTER_TOOLSETS[arm.type])
         || arm.toolset || [];
       if (this._glassNow()) {
-        // u17 A-T1 (D2): the tool cycle has no touch control. Name REEL / SEND DAUGHTER only while their chips are up.
+        // The tool cycle has no touch control. Name REEL / SEND DAUGHTER only while their chips are up.
         const reel = this._chipUp('REEL');
         const send = this._chipUp('SEND DAUGHTER');
-        // u18c D6: a daughter who carries a gripper and whose row shows CHANGE TOOL: that button is the way to it.
+        // A daughter who carries a gripper and whose row shows CHANGE TOOL: that button is the way to it.
         advisory = toolset.includes('GRIPPER') && this._toolButtonUp()
           ? 'too wide for this net \u2014 tap CHANGE TOOL for the gripper'
           : 'too wide for this net'
@@ -1334,12 +1172,11 @@ export class DockingReticle {
       }
       advisoryCol = '#ff5555';
     } else if (fit.fit === 'ASPECT') {
-      // Phase 2: currently broadside on a body that fits end-on. Tumble makes
-      // θ sweep — de-spin first to freeze the aspect, THEN orbit around.
+      // Broadside on a body that fits end-on. Tumble makes θ sweep: de-spin first to freeze the aspect, THEN orbit.
       const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
       const deg = Math.abs(tumbleRate || 0) * RAD2DEG;
       if (tumbleRate != null && deg > inSpec && !target._despinning) {
-        // u17 A-T1 (D2): on glass the de-spin clause stays only while the DE-SPIN button is up; else the plain broadside advice.
+        // On glass the de-spin clause stays only while the DE-SPIN button is up; else the plain broadside advice.
         advisory = !this._glassNow() ? 'de-spin to freeze aspect [L]'
           : this._glassDespinUp() ? 'de-spin to freeze aspect: hold DE-SPIN'
             : this._aspectBroadside();
@@ -1356,8 +1193,7 @@ export class DockingReticle {
     } else if (tumbleRate != null) {
       const deg = Math.abs(tumbleRate) * RAD2DEG;
       const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
-      // Issue 9 (2026-06-12): live °/s readout — while holding H the player
-      // sees the tumble converge toward the in-spec threshold.
+      // Live °/s readout: while holding the de-spin key the tumble converges toward the in-spec threshold.
       if (target._despinning) {
         advisory = `de-spinning ${deg.toFixed(1)}\u00B0/s \u2192 ${inSpec}\u00B0/s`;
         advisoryCol = '#66ddff';
@@ -1366,11 +1202,8 @@ export class DockingReticle {
           + (!this._glassNow() ? ' \u2014 de-spin [L]' : this._glassDespinUp() ? ' \u2014 hold DE-SPIN' : '');
       }
     }
-    // Register item 17 (2026-08-19): a NET ✓ whose DRAWN span outspans the
-    // bag gets an amber qualifier instead of silence — the verdict stays
-    // logical (item 7b), this is the advisory-only cue. Fires only when the
-    // whole chain above was silent, so range/off-axis/tumble keep priority;
-    // 'good shot' remains the final fallback.
+    // A NET ✓ whose DRAWN span outspans the bag gets an amber qualifier instead of silence (the verdict stays
+    // logical; advisory-only). Fires only when the chain above was silent; 'good shot' remains the final fallback.
     if (!advisory && fit.fit === 'OK' && renderedSpanOverflows(target, netClass)) {
       advisory = `renders ~${Math.round(renderedSpanM(target))} m — the ${netClass.DIAMETER} m bag will visibly overflow`;
       advisoryCol = '#ffd166';
@@ -1380,11 +1213,8 @@ export class DockingReticle {
   }
 
   /**
-   * @private Update the _skActive flag (its reader, the station-keep centre dot, was removed 2026-10-23; the flag
-   * is kept for callers and tests).
-   * Previously this method also managed a Three.js standoff wireframe sphere
-   * around the debris (color 0x00ffaa) but that visual was removed:
-   * it cluttered the SK view and competed with the debris for visual focus.
+   * @private Update the _skActive flag (no in-class reader since the station-keep centre dot was removed; kept for
+   * callers and tests).
    */
   _updateSkActiveFlag() {
     this._skActive = !!(this._arm && this._arm.state === 'STATION_KEEP');

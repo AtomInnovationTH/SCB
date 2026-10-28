@@ -1,32 +1,31 @@
 /**
- * TripProfile - what a climb or a descent between two debris fields costs her, flown with the real thruster
- * (Nets step 3 slice 2b, DECISIONS §33 rows 6 and 10, FEATURE_FLAGS.FIELDS_BY_HEIGHT; plan decision I).
+ * TripProfile - what a climb or descent between two debris fields costs her, flown with the real thruster
+ * (DECISIONS §33 rows 6 and 10, FEATURE_FLAGS.FIELDS_BY_HEIGHT).
  *
- * PURE: numbers in, numbers out, no scene and no state. TransferTrip plays the result, FieldRegistry and (lane 2b-2)
- * the "where next" list read days and gas from it.
+ * PURE: numbers in, numbers out. TransferTrip plays the result; FieldRegistry and the "where next" list read days and gas.
  *
- * The model is a continuous push along (or against) her motion on a circular spiral, the standard low-thrust result:
+ * Model: a continuous push along (or against) her motion on a circular spiral, the standard low-thrust result:
  *
  *     da/dt = 2 * sqrt(a^3 / mu) * (dir * cos * T / m  -  d)        (a: semi-major axis, d: the drag slowing her)
  *     dm/dt = -T / (Isp * g0)                                       (Tsiolkovsky's differential)
  *
- * `dir` is +1 for a climb, -1 for a descent (her nose then points against her motion: the drag helps). `cos` is how much
- * of the push really goes the way she wants (1 when she can turn to the burn attitude; less when a daughter out on her
- * line keeps her where she points: the engine still burns T, only cos x T pushes along the way). `d` comes from
- * `atmosphericDrag` (Vallado's published air, Cd 2.2; it returns a DECELERATION in km/s2, not a force) with her drag area:
- * nose-first, radiators at their angle (capped at the burn band's edge, 146 deg: `tripDragAreaM2`), wings tracking the sun
- * (MotherDragArea, slice 2a). Called without an area it takes the 146 deg reference.
+ * `dir` is +1 for a climb, -1 for a descent (nose against her motion: the drag helps). `cos` is the share of the push that
+ * goes the way she wants (1 when she can turn to the burn attitude; less when a daughter out on her line keeps her where
+ * she points: the engine still burns T, only cos x T pushes along the way). `d` comes from `atmosphericDrag` (Vallado's
+ * published air, Cd 2.2; returns a DECELERATION in km/s2, not a force) with her drag area: nose-first, radiators at their
+ * angle (capped at the burn band's edge, 146 deg: `tripDragAreaM2`), wings tracking the sun (MotherDragArea). Without an
+ * area it takes the 146 deg reference.
  * Stepped by explicit midpoint (RK2) at TRIP.PROFILE_STEP_S game seconds; the last step is cut to land on the target.
  *
- * Checked in test-TripProfile.js against 2a's separate integrator (the research doc's 17.17 days / 1.602 kg for 350 -> 500
- * km at 18 mN) and against a step-by-step position-and-velocity simulation.
+ * Checked in test-TripProfile.js against a separate integrator (the research doc's 17.17 days / 1.602 kg for 350 -> 500
+ * km at 18 mN) and a step-by-step position-and-velocity simulation.
  *
- * Not here: the gas multiplier c (PlayerSatellite's consumptionMultiplier: the power share given to the thrust bus, 1.18 =
- * 1 / 0.85 at the default 40 % share, times the paid Efficient Ion Drive upgrade, 0.8) is folded into the Isp the caller
- * passes in (FieldRegistry.planTo: isp / c), so the profile's kg is what the tank is billed.
+ * Not here: the gas multiplier c (PlayerSatellite's consumptionMultiplier: thrust-bus power share, 1.18 = 1 / 0.85 at the
+ * default 40 % share, times the paid Efficient Ion Drive upgrade, 0.8) is folded into the Isp the caller passes in
+ * (FieldRegistry.planTo: isp / c), so the profile's kg is what the tank is billed.
  *
- * Owed (the plan's list): the thruster's 600 W and Earth's shadow (the profile assumes a steady push); air that turns with
- * the Earth; node drift between heights (J2).
+ * Owed: the thruster's 600 W and Earth's shadow (the profile assumes a steady push); air that turns with the Earth; node
+ * drift between heights (J2).
  */
 import { Constants } from '../core/Constants.js';
 import { atmosphericDrag } from '../entities/OrbitalMechanics.js';
@@ -34,9 +33,9 @@ import { motherDragAreaM2, referenceDragAreaM2, wingNormalAt } from '../entities
 import { DEG2RAD, clamp01, clamp } from '../core/MathUtil.js';
 
 const SECONDS_PER_DAY = 86400;
-/** `tripDragAreaM2` answers by radiator angle (radians, exact): a handful of angles are asked for, again and again. */
+/** `tripDragAreaM2` cache by radiator angle (radians, exact): a handful of angles are asked for again and again. */
 const _areaByTheta = new Map();
-/** The most samples a profile keeps (the integrator may take 70 000 steps for a long climb). */
+/** The most samples a profile keeps (a long climb may take 70 000 steps). */
 const MAX_SAMPLES = 1200;
 
 /**
@@ -50,11 +49,11 @@ export function realThrustN(fuel) {
 }
 
 /**
- * The drag area a trip is flown with (review F3, plan decision I): nose-first, her radiators at THEIR angle capped at the burn
- * band's edge (TRIP.BURN_POSE_MAX_DEG, 146 deg: above it she gets no push and waits for them, so no trip flies higher), both
- * wings out and tracking the sun (the mean over the wing's turn, as `referenceDragAreaM2` takes it). At 146 deg it IS the
- * reference area; at another angle the radiators show another area across her nose (measured: 7.41 m2 at 90 deg, 4.72 m2 at 30 deg,
- * against 5.79 m2 at 146 deg, wings included).
+ * The drag area a trip is flown with: nose-first, radiators at THEIR angle capped at the burn band's edge
+ * (TRIP.BURN_POSE_MAX_DEG, 146 deg: above it she gets no push and waits for them), both wings out and tracking the sun
+ * (mean over the wing's turn, as `referenceDragAreaM2` takes it). At 146 deg it IS the reference area; at another angle the
+ * radiators show another area across her nose (measured: 7.41 m2 at 90 deg, 4.72 m2 at 30 deg, 5.79 m2 at 146 deg,
+ * wings included).
  * @param {number} [thetaRad] her radiators' angle; missing or not a number = the burn band's edge
  * @returns {number} m2
  */
@@ -77,33 +76,24 @@ export function tripDragAreaM2(thetaRad) {
   return area;
 }
 
-/**
- * A trip wait's bound in real seconds: `baseS` as it is, or at most Constants.TRIP.SKIP_S with the dev `?skipTrip=1`.
- * @param {number} baseS
- * @returns {number}
- */
+/** A trip wait's bound in real seconds: `baseS`, or at most Constants.TRIP.SKIP_S with the dev `?skipTrip=1`. */
 export function tripWaitCap(baseS) {
   const k = Constants.TRIP.SKIP_S;
   return k > 0 ? Math.min(baseS, k) : baseS;
 }
 
-/**
- * Real seconds a trip of `days` plays in (row 10: "sped up to 1-2 minutes"): clamp(PLAY_BASE_S + PLAY_PER_DAY_S x days,
- * PLAY_MIN_S, PLAY_MAX_S).
- * @param {number} days
- * @returns {number}
- */
+/** Real seconds a trip of `days` plays in (row 10: "sped up to 1-2 minutes"): clamp(PLAY_BASE_S + PLAY_PER_DAY_S x days, PLAY_MIN_S, PLAY_MAX_S). */
 export function playSeconds(days) {
   const T = Constants.TRIP;
-  if (T.SKIP_S > 0) return T.SKIP_S;                // dev `?skipTrip=1`: the trip plays in a few seconds (days, gas and credits follow the share played)
+  if (T.SKIP_S > 0) return T.SKIP_S;                // dev `?skipTrip=1` (days, gas and credits follow the share played)
   const d = Number.isFinite(days) && days > 0 ? days : 0;
   return clamp(T.PLAY_BASE_S + T.PLAY_PER_DAY_S * d, T.PLAY_MIN_S, T.PLAY_MAX_S);
 }
 
 /**
- * Nets step 3 slice 4 (S2): the days a trip takes on the ship's clock when its push waits `waitS` real seconds for her nose first. The
- * trip counts a wait as flown time (`TransferTrip._flownDays`: the profile's days x the real seconds flown / the seconds it plays in), so the
- * wait adds `days x waitS / playSeconds(days)`. PURE.
+ * The days a trip takes on the ship's clock when its push waits `waitS` real seconds for her nose first. The trip counts a
+ * wait as flown time (`TransferTrip._flownDays`: days x real seconds flown / seconds it plays in), so the wait adds
+ * `days x waitS / playSeconds(days)`.
  * @param {number} days the profile's days @param {number} waitS real seconds the push waits for her nose (>= 0)
  * @returns {number} days
  */
@@ -114,7 +104,6 @@ export function daysWithTurnWait(days, waitS) {
 }
 
 /**
- * Fly a climb or descent between two circular orbits.
  * @param {object} p
  * @param {number} p.fromKm        altitude she leaves (km above the surface)
  * @param {number} p.toKm          altitude she wants (km)
@@ -124,7 +113,7 @@ export function daysWithTurnWait(days, waitS) {
  * @param {number} [p.areaM2]      her drag area (m2); default `referenceDragAreaM2()` (radiators at 146 deg; FieldRegistry.planTo
  *                                 passes `tripDragAreaM2(her radiator angle)`)
  * @param {number} [p.cos=1]       the share of the push that goes the way she wants, 0..1 (the cos of her angle to it)
- * @param {boolean} [p.drag=true]  false = the air is off (checks and the "drag off" case of the research doc)
+ * @param {boolean} [p.drag=true]  false = the air is off (the research doc's "drag off" case)
  * @param {number} [p.stepS]       game seconds per step (default `Constants.TRIP.PROFILE_STEP_S`)
  * @returns {{ok: boolean, reason: (string|null), dir: number, fromKm: number, toKm: number, days: number, tEndS: number,
  *   m0: number, m1: number, gasKg: number, dvMps: number,
@@ -166,7 +155,6 @@ export function tripProfile(p) {
   const aTarget = RE + toKm;
   const tMax = C.TRIP.PROFILE_MAX_DAYS * SECONDS_PER_DAY;
 
-  // da/dt (km/s) at (a km, m kg)
   const rate = (a, m) => {
     const v = Math.sqrt(mu / a);                  // circular speed, km/s
     const d = dragOn ? atmosphericDrag(a - RE, v, area, m) : 0;   // km/s2, positive slows her
@@ -183,7 +171,7 @@ export function tripProfile(p) {
   let reason = null;
   while (true) {
     const r0 = rate(a, m);
-    if (!(dir * r0 > 0)) { ok = false; reason = dir > 0 ? 'drag' : 'push'; break; }   // she is not getting there
+    if (!(dir * r0 > 0)) { ok = false; reason = dir > 0 ? 'drag' : 'push'; break; }
     const aMid = a + 0.5 * stepS * r0;
     const mMid = m - 0.5 * stepS * mdot;
     const rMid = rate(aMid, mMid);
@@ -203,7 +191,7 @@ export function tripProfile(p) {
     if (t >= tMax) { ok = false; reason = 'days'; break; }
   }
 
-  // keep at most MAX_SAMPLES, evenly by index, the last one always
+  // At most MAX_SAMPLES, evenly by index, the last always kept.
   const n = ts.length;
   const samples = [];
   if (n <= MAX_SAMPLES) {
@@ -225,8 +213,8 @@ export function tripProfile(p) {
 }
 
 /**
- * Where the profile has her at `fraction` of its length in time (0..1): t, semi-major axis a (km), altitude (km) and mass m.
- * Linear between the kept samples; fractions outside 0..1 clamp. A profile with no samples answers its departure numbers.
+ * Where the profile has her at `fraction` of its length in time (0..1): t, semi-major axis a (km), altitude (km), mass m.
+ * Linear between samples; fractions outside 0..1 clamp. A profile with no samples answers its departure numbers.
  * @param {{samples: Array<{t: number, a: number, m: number}>, tEndS: number, fromKm: number, m0: number}} profile
  * @param {number} fraction
  * @returns {{t: number, a: number, altKm: number, m: number, fraction: number}}

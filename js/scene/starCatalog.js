@@ -13,6 +13,8 @@
  * @module scene/starCatalog
  */
 
+import { DEG2RAD, clamp01, lerp, smoothstep01 } from '../core/MathUtil.js';
+
 // { ra: hours (0–24), dec: degrees (-90..+90), mag: visual magnitude, spec: spectral class }
 export const BRIGHT_STARS = {
   // ── ORION (7) ────────────────────────────────────────────────────────────
@@ -166,7 +168,7 @@ export function sampleFieldMagnitude(u, mMin, mMax) {
 export function magnitudeBrightnessBelowCeiling(mag, min, max, soft) {
   const raw = Math.pow(10, -0.4 * (mag - 1.0));
   if (raw >= min) return Math.min(raw, max);
-  return min * (soft + (1 - soft) * (raw / min));
+  return min * lerp(soft, 1, raw / min);
 }
 
 // THE ONE BRIGHTNESS CURVE FOR THE WHOLE SKY (stars AND bodies)
@@ -219,8 +221,8 @@ export function fieldSizeAlpha(mag, mMax, { base, slope, floor, alphaMin }) {
   const curveSize = base - slope * mag;
   if (curveSize >= floor) return { size: curveSize, alpha: 1.0 };
   const magAtFloor = (base - floor) / slope;
-  const t = Math.min(1, Math.max(0, (mag - magAtFloor) / (mMax - magAtFloor)));
-  return { size: floor, alpha: 1.0 + (alphaMin - 1.0) * t };
+  const t = clamp01((mag - magAtFloor) / (mMax - magAtFloor));
+  return { size: floor, alpha: lerp(1.0, alphaMin, t) };
 }
 
 // GALACTIC FRAME — pure {x,y,z} math on the REAL galactic basis, so the band
@@ -229,7 +231,7 @@ export function fieldSizeAlpha(mag, mMax, { base, slope, floor, alphaMin }) {
 // Same convention as Starfield.raDec2xyz: +Y celestial north, RA 0 at +X, Z negated.
 function raDecToUnit(raHours, decDeg) {
   const ra = raHours * (Math.PI / 12);
-  const dec = decDeg * (Math.PI / 180);
+  const dec = decDeg * DEG2RAD;
   return {
     x: Math.cos(dec) * Math.cos(ra),
     y: Math.sin(dec),
@@ -306,13 +308,13 @@ export function mwGreatRiftMask(L, latOff, p) {
   // The rift broadens from the compact Northern Coalsack (Cygnus) to widest
   // near l ≈ 15° (Ophiuchus/Sagittarius); a fixed width can't express that.
   const g = (L - p.broadenLong) / Math.max(1e-6, p.broadenWidth);
-  const width = p.width * (1 + (p.broaden - 1) * Math.exp(-g * g));
+  const width = p.width * lerp(1, p.broaden, Math.exp(-g * g));
   const d = Math.abs(latOff - p.offset) / width;
   if (d >= 1) return 1;
   // `depth` is the residual core density: dust obscuration, not a hole.
   const t = Math.min(1, d / Math.max(1e-6, p.edge));
-  const ramp = t * t * (3 - 2 * t);   // smoothstep
-  return p.depth + (1 - p.depth) * ramp;
+  const ramp = smoothstep01(t);   // smoothstep
+  return lerp(p.depth, 1, ramp);
 }
 
 /**
@@ -322,7 +324,7 @@ export function mwGreatRiftMask(L, latOff, p) {
  */
 export function mwCygnusBoost(L, p) {
   const d = (L - p.long) / p.width;
-  return 1 + (p.boost - 1) * Math.exp(-d * d);
+  return lerp(1, p.boost, Math.exp(-d * d));
 }
 
 /**

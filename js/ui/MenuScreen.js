@@ -1,7 +1,5 @@
 /**
- * MenuScreen.js — Main menu / start screen overlay
- * Enter key (or the START MISSION button) begins the mission.
- * @module ui/MenuScreen
+ * @module ui/MenuScreen — main menu / start screen overlay; Enter (or START MISSION) begins the mission.
  */
 
 import { eventBus } from '../core/EventBus.js';
@@ -19,23 +17,21 @@ import { GestureHints } from './hud/GestureHints.js';
 import { resolvePrimaryMenuAction, startRequiresConfirm, NEW_GAME_CONFIRM_MESSAGE } from './menuActions.js';
 import { buildUpdateCard } from './UpdateCard.js';
 import { applyUpdate } from '../core/UpdateWatch.js';
-import { claimAutoApply } from '../core/UpdateWatch.js';   // the loop-guard claim (kept a separate line: test-UpdateCard.js pins the applyUpdate import)
+import { claimAutoApply } from '../core/UpdateWatch.js';   // the loop-guard claim (separate line: test-UpdateCard.js pins the applyUpdate import)
 import { buildWhatsNewCard, loadNotes, readNotice, markSeen, placeNotice } from './WhatsNewCard.js';   // the "what's new" notes card (owner 2026-10-26)
 import { clamp } from '../core/MathUtil.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 
-/** up1: the one line on the menu while the game switches to the new build by itself. */
+/** The one line on the menu while the game switches to the new build by itself. */
 const UPDATE_NOTICE_TEXT = 'Updating to the new version\u2026';
-/** up1: if the page is still here this long after the switch was asked for, give up: drop the notice and show the card (ms). */
+/** If the page is still here this long after the switch was asked for, give up: drop the notice, show the card (ms). */
 const AUTO_UPDATE_RELEASE_MS = 20000;
 
 /**
- * Which events in the "Upcoming events" list are still ahead (menu-1025). Pure:
- * an event stays through its last day. A date that is not YYYY-MM-DD is kept
- * (a typo must never silently hide an event).
+ * Which events in the "Upcoming events" list are still ahead. Pure: an event stays through its last day. A date
+ * that is not YYYY-MM-DD is kept (a typo must never silently hide an event).
  * @param {Array<string|null|undefined>} endDates  each event's `data-end`, YYYY-MM-DD
  * @param {string} todayIso  today as YYYY-MM-DD (device clock, local date)
- * @returns {number[]} indexes of the events to show, in order
  */
 export function upcomingEventIndexes(endDates, todayIso) {
   const iso = /^\d{4}-\d{2}-\d{2}$/;
@@ -46,26 +42,20 @@ export function upcomingEventIndexes(endDates, todayIso) {
   return out;
 }
 
-/** Today as YYYY-MM-DD in the device's local time. */
 export function localIsoDate(now = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
   return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
 }
 
-/**
- * Which "(more)" in Countries a language flag opens (the id after `adr-more-`).
- * Owner 2026-10-26: "country selected in drop down box, opens that country in
- * menu. so users see info they care about." BRA has no country entry: null.
- */
+/** Which "(more)" in Countries a language flag opens (the id after `adr-more-`); BRA has no country entry: null. */
 export const COUNTRY_FOR_FLAG = Object.freeze({
   THA: 'thailand', JPN: 'japan', IND: 'india', USA: 'countries', ESP: 'countries', BRA: null,
 });
 
 export class MenuScreen {
   /**
-   * @param {string|null} [initialTier] — current SceneManager quality tier so the
-   *   menu renderer boots at the matching pixelRatio / MSAA / bloom settings.
-   *   Live changes still arrive via Events.PERF_TIER_CHANGED (handled in MenuScene3D).
+   * @param {string|null} [initialTier] — current SceneManager quality tier, so the menu renderer boots at the
+   *   matching pixelRatio / MSAA / bloom. Live changes arrive via Events.PERF_TIER_CHANGED (MenuScene3D).
    */
   constructor(initialTier = null) {
     this.container = document.getElementById('hud-overlay');
@@ -74,28 +64,22 @@ export class MenuScreen {
     this._menuScene3D = null;
     this._initialTier = initialTier;
     this._boundKeyHandler = this._onKeyDown.bind(this);
-    // Departure sequence state (Item 6). While _departing is true the menu is
-    // playing its exit cascade + 3D camera pull-back before MENU_START fires;
-    // any further key/click fast-forwards it (skippable). _departTimer holds
-    // the pending emit so a skip can cancel + fire it immediately.
+    // While _departing the menu plays its exit cascade + 3D camera pull-back before MENU_START fires; any key/click
+    // fast-forwards it. _departTimer holds the pending emit so a skip can cancel + fire it immediately.
     this._departing = false;
     this._departTimer = null;
-    // T4: one-shot timer that fires MENU_DEPARTURE_REVEAL at ~65% of the
-    // pull-back so the sim unhides the real ship while the hero still masks it.
+    // One-shot MENU_DEPARTURE_REVEAL at ~65% of the pull-back (sim unhides the real ship behind the hero).
     this._revealTimer = null;
-    // Which event _finishDeparture emits (MENU_START for new game, MENU_CONTINUE
-    // for a returning player — T8). Set when a departure begins.
+    // Event _finishDeparture emits (MENU_START new game, MENU_CONTINUE returning player).
     this._departEvent = null;
-    // Session J.5 — the menu UPDATE card. `_update` = the last UPDATE_AVAILABLE
-    // payload ({ hash, tag, bullets }) or null; `_updateDismissed` = the hash
-    // the player answered LATER to (never nag twice per build, this page
-    // session). The card is built lazily and ONLY inside #menu-header.
+    // The menu UPDATE card. `_update` = the last UPDATE_AVAILABLE payload ({ hash, tag, bullets }) or null;
+    // `_updateDismissed` = the hash the player answered LATER to (never nag twice per build per page session).
+    // The card is built lazily and ONLY inside #menu-header.
     this._update = null;
     this._updateDismissed = null;
     this._updateCard = null;
-    // up1: UPDATE_AUTO_APPLY — the game is switching to the new build by itself.
-    // While `_autoUpdating` is true no departure can begin (every start path is
-    // guarded), so a game never starts on the build being deleted.
+    // UPDATE_AUTO_APPLY: while `_autoUpdating` no departure can begin (every start path is guarded), so a game never
+    // starts on the build being deleted.
     this._autoUpdating = false;
     this._autoUpdateTimer = null;
     this._autoAttempt = 0;         // which auto switch is current (a released one is cancelled for good)
@@ -109,26 +93,23 @@ export class MenuScreen {
     this._notesCard = null;
     this._onNotesResize = null;
     this._updateChecker = null;
-    // w1-first-minute D3: what the "?" button opens (set by setHelpOpener).
+    // What the "?" button opens (set by setHelpOpener).
     this._helpOpener = null;
     this._build();
-    // u15b D7: the hub flips glass AFTER this screen is built (and the menu may already be showing), so the start hint is
-    // re-worded the moment glass turns on, as well as on every show().
+    // The hub flips glass AFTER this screen is built (the menu may already be showing), so the start hint is re-worded
+    // the moment glass turns on, as well as on every show().
     this._offGlass = GestureHints.onGlassOn(() => this._syncStartHint());
 
-    // Self-manage visibility via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
       if (to === GameStates.MENU) this.show();
       else this.hide();
     });
-    // Session J.5: UpdateWatch → "NEW VERSION READY" (mounted now if visible,
-    // else on the next show()). Flag-independent: no LADDER gate here.
+    // UpdateWatch → "NEW VERSION READY" (mounted now if visible, else on the next show()). No LADDER gate here.
     eventBus.on(Events.UPDATE_AVAILABLE, (p) => this._onUpdateAvailable(p));
-    // up1: the same news, but the menu is up and no game has begun — switch now.
+    // The same news, but the menu is up and no game has begun: switch now.
     eventBus.on(Events.UPDATE_AUTO_APPLY, (p) => this._onUpdateAutoApply(p));
   }
 
-  /** @private */
   _build() {
     this.element = document.createElement('div');
     this.element.id = 'menu-screen';
@@ -756,10 +737,8 @@ export class MenuScreen {
     this.element.style.display = 'none';
     this.container.appendChild(this.element);
 
-    // Initialise 3D hero scene
     this._ensureScene3D();
 
-    // Button interactions — Start
     const btn = this.element.querySelector('#menu-start-btn');
     btn.addEventListener('mouseenter', () => {
       btn.style.background = 'rgba(0,255,136,0.25)';
@@ -775,7 +754,6 @@ export class MenuScreen {
       this._requestStartGame();
     });
 
-    // Button interactions — Continue
     const continueBtn = this.element.querySelector('#menu-continue-btn');
     if (continueBtn) {
       continueBtn.addEventListener('mouseenter', () => {
@@ -793,10 +771,9 @@ export class MenuScreen {
       });
     }
 
-    // Language / region selector
     this._buildLangSelector();
 
-    // Help "?" beside it (D3) — inert and hidden until setHelpOpener().
+    // Help "?": inert and hidden until setHelpOpener().
     this._wireHelpButton();
 
     // Show mode toggle + mark (owner 2026-10-28).
@@ -805,14 +782,10 @@ export class MenuScreen {
     // The version button opens the notes card; the notes themselves load once, here (show() waits on them).
     this._wireVersionButton();
 
-    // Touch-friendly lore tooltips (replaces native title= which is invisible
-    // on touch). Converts .adr-name[title] → data-tip and wires tap/hover.
     this._initLoreTooltips();
 
-    // Drop events that are already over, so the list never goes stale.
     this._pruneEvents();
 
-    // "(more)" beside a country name shows that country's other names.
     const left = this.element.querySelector('#menu-left');
     if (left) {
       left.addEventListener('click', (e) => {
@@ -826,10 +799,9 @@ export class MenuScreen {
   }
 
   /**
-   * @private Show or hide what one "(more)" button controls (its aria-controls
-   * element: a country's list, or the NASA/ESA row). Opening one closes every
-   * other, so at most one is open. The button reads "(more)" while closed and
-   * "(less)" while open; its first label is kept in data-label.
+   * @private Show or hide what one "(more)" button controls (its aria-controls element: a country's list, or the
+   * NASA/ESA row). Opening one closes every other. Label "(more)" closed / "(less)" open; the first label is kept
+   * in data-label.
    */
   _toggleMore(btn) {
     const row = this.element.querySelector('#' + btn.getAttribute('aria-controls'));
@@ -854,10 +826,8 @@ export class MenuScreen {
   }
 
   /**
-   * @private Open the country a language flag stands for (COUNTRY_FOR_FLAG):
-   * its Countries group opens and that country's list shows (organisations and
-   * other names); every other country closes. An unknown flag or one with no
-   * entry (BRA) closes them all.
+   * @private Open the country a language flag stands for (COUNTRY_FOR_FLAG); every other country closes. An
+   * unknown flag or one with no entry (BRA) closes them all.
    */
   _openCountryFor(flag) {
     const id = COUNTRY_FOR_FLAG[flag] || null;
@@ -872,10 +842,8 @@ export class MenuScreen {
   }
 
   /**
-   * @private Hide each past event in the "Upcoming events" group (by its
-   * data-end date, device clock), set the badge to the number still shown and
-   * hide the whole group when none are left. Runs before the tooltips matter:
-   * hidden rows simply never get hovered.
+   * @private Hide each past event in the "Upcoming events" group (by its data-end date, device clock), set the
+   * badge to the number still shown, and hide the whole group when none are left.
    */
   _pruneEvents(now = new Date()) {
     const group = this.element.querySelector('details[data-group="events"]');
@@ -889,19 +857,14 @@ export class MenuScreen {
   }
 
   /**
-   * @private Migrate the lore panel's native `title=` tooltips to a styled,
-   * tap-toggleable popover. Native `title` never shows on touch devices; this
-   * gives the same factoids a tap target on touch and a hover on pointer
-   * devices, in the library's INFO grammar (#aaddff prose, proportional B612,
-   * opaque plate). Free-text only — these
-   * are one-off factoids, NOT codex entries, so the glossary deep-link system
-   * (glossaryDom.js → CODEX_OPEN_ENTRY) deliberately isn't used here.
+   * @private Migrate the lore panel's native `title=` tooltips (never shown on touch) to a styled, tap-toggleable
+   * popover (title → data-tip). Free-text only: these are one-off factoids, NOT codex entries, so the glossary
+   * deep-link system (glossaryDom.js → CODEX_OPEN_ENTRY) deliberately isn't used here.
    */
   _initLoreTooltips() {
     const left = this.element.querySelector('#menu-left');
     if (!left) return;
 
-    // Shared floating tooltip element (one per screen).
     let tip = this.element.querySelector('#menu-tip');
     if (!tip) {
       tip = document.createElement('div');
@@ -911,10 +874,8 @@ export class MenuScreen {
     }
     this._tipEl = tip;
     this._tipAnchor = null;   // currently tap-pinned .adr-name (null = none)
-    this._describedEl = null; // anchor currently wired via aria-describedby
-                              // (covers both hover and pin paths)
+    this._describedEl = null; // anchor currently wired via aria-describedby (hover and pin paths)
 
-    // Move title → data-tip so the native tooltip never competes with ours.
     left.querySelectorAll('.adr-name[title]').forEach((el) => {
       const text = el.getAttribute('title');
       if (text) el.setAttribute('data-tip', text);
@@ -926,7 +887,7 @@ export class MenuScreen {
       if (!text) return;
       tip.textContent = text;
       tip.classList.add('open');
-      // Measure after content set. Position above the anchor, clamped to viewport.
+      // Measure after content set; above the anchor, clamped to the viewport.
       const r = anchor.getBoundingClientRect();
       const tw = tip.offsetWidth;
       const th = tip.offsetHeight;
@@ -937,8 +898,7 @@ export class MenuScreen {
       if (top2 < margin) top2 = r.bottom + 8;   // flip below if no room above
       tip.style.left = `${Math.round(left2)}px`;
       tip.style.top = `${Math.round(top2)}px`;
-      // a11y: associate the anchor with the tooltip. Track the anchor so hide()
-      // can clear it (hover anchors aren't _tipAnchor, so this covers both paths).
+      // a11y: tracked in _describedEl so hide() can clear it (hover anchors aren't _tipAnchor).
       anchor.setAttribute('aria-describedby', 'menu-tip');
       this._describedEl = anchor;
     };
@@ -956,7 +916,7 @@ export class MenuScreen {
     };
     this._hideLoreTip = hide;
 
-    // Hover (pointer devices) — show while hovered, unless a tap-pin is active.
+    // Hover: show while hovered, unless a tap-pin is active.
     left.addEventListener('mouseover', (e) => {
       const anchor = e.target.closest && e.target.closest('.adr-name[data-tip]');
       if (!anchor || this._tipAnchor) return;
@@ -968,12 +928,11 @@ export class MenuScreen {
       hide();
     });
 
-    // Tap / click — toggle a pinned tooltip (touch-friendly). For real links
-    // (the Rawhide anchor) let the navigation happen; only pin for spans.
+    // Tap / click toggles a pinned tooltip. Real links (the Rawhide anchor) navigate; only spans pin.
     left.addEventListener('click', (e) => {
       const anchor = e.target.closest && e.target.closest('.adr-name[data-tip]');
       if (!anchor) return;
-      if (anchor.tagName === 'A') return;   // real link — don't hijack navigation
+      if (anchor.tagName === 'A') return;
       e.preventDefault();
       e.stopPropagation();
       if (this._tipAnchor === anchor) { hide(); return; }
@@ -983,7 +942,6 @@ export class MenuScreen {
       place(anchor);
     });
 
-    // Dismiss a pinned tooltip on outside tap / Escape.
     this._tipOutsideHandler = (e) => {
       if (!this._tipAnchor) return;
       if (e.target.closest && e.target.closest('.adr-name[data-tip]')) return;
@@ -991,20 +949,16 @@ export class MenuScreen {
     };
     document.addEventListener('click', this._tipOutsideHandler, true);
 
-    // The lore panel scrolls independently — a pinned/hovered tooltip would
-    // drift away from its anchor, so hide it on scroll (cheap + unobtrusive).
+    // The lore panel scrolls independently: a pinned/hovered tooltip would drift from its anchor, so hide on scroll.
     left.addEventListener('scroll', hide, { passive: true });
     this._tipEscHandler = (e) => { if (e.key === 'Escape') hide(); };
     document.addEventListener('keydown', this._tipEscHandler, true);
   }
 
   /**
-   * @private Build the top-right language/region selector. Each option carries
-   * a procedurally-painted flag swatch (same flag system as the EVA patch).
-   * Selecting a language persists it, repaints the astronaut's shoulder patch,
-   * and emits Events.LANGUAGE_CHANGED (consumed by MenuOrbitPreview to re-aim
-   * the live backdrop toward the regional start orbit, and available to a
-   * future i18n string layer).
+   * @private Build the top-right language/region selector (procedural flag swatches). Selecting a language
+   * persists it, repaints the astronaut's shoulder patch, and emits Events.LANGUAGE_CHANGED (MenuOrbitPreview
+   * re-aims the live backdrop toward the regional start orbit).
    */
   _buildLangSelector() {
     const root = this.element.querySelector('#menu-lang');
@@ -1012,8 +966,7 @@ export class MenuScreen {
     const menu = this.element.querySelector('#menu-lang-menu');
     if (!root || !btn || !menu) return;
 
-    // Procedural flag swatches as data-URLs (robust across platforms, unlike
-    // flag emoji which render as letters on some OSes).
+    // Data-URL swatches: flag emoji render as letters on some OSes.
     const flagSystem = new FlagDecalSystem();
     const swatchCache = {};
     const swatchFor = (flagCode) => {
@@ -1054,7 +1007,6 @@ export class MenuScreen {
         refreshCurrent();
         this._openCountryFor(lang.flag);
         this._closeLangMenu();
-        // Repaint the astronaut's shoulder patch immediately.
         if (changed && this._menuScene3D) this._menuScene3D.setFlag(lang.flag);
       });
       menu.appendChild(li);
@@ -1066,7 +1018,6 @@ export class MenuScreen {
     };
     btn.addEventListener('click', toggle);
 
-    // Close on outside click / Escape
     this._langOutsideHandler = (e) => {
       if (!root.contains(e.target)) this._closeLangMenu();
     };
@@ -1079,7 +1030,6 @@ export class MenuScreen {
     this._openCountryFor(settingsManager.getLanguageEntry().flag);   // page load shows the saved pick's country
   }
 
-  /** @private */
   _openLangMenu() {
     if (!this._langRoot) return;
     this._langRoot.classList.add('open');
@@ -1088,7 +1038,6 @@ export class MenuScreen {
     document.addEventListener('keydown', this._langEscHandler, true);
   }
 
-  /** @private */
   _closeLangMenu() {
     if (!this._langRoot) return;
     this._langRoot.classList.remove('open');
@@ -1098,9 +1047,8 @@ export class MenuScreen {
   }
 
   /**
-   * Inject what the menu "?" button opens (main.js passes the HotkeyOverlay
-   * toggle — the same list the ? key opens). Reveals the button; until this is
-   * called the button stays hidden, so it is never a dead control.
+   * Inject what the menu "?" button opens (main.js passes the HotkeyOverlay toggle). Reveals the button; until
+   * then it stays hidden, so it is never a dead control.
    * @param {(() => void)|null} fn
    */
   setHelpOpener(fn) {
@@ -1109,7 +1057,7 @@ export class MenuScreen {
     if (btn) btn.style.display = this._helpOpener ? '' : 'none';
   }
 
-  /** @private Wire the "?" button's click to the injected opener (D3). */
+  /** @private Wire the "?" button's click to the injected opener. */
   _wireHelpButton() {
     const btn = this.element && this.element.querySelector('#menu-help-btn');
     if (!btn) return;
@@ -1151,26 +1099,20 @@ export class MenuScreen {
   _onKeyDown(e) {
     if (!this.visible) return;
 
-    // If a departure is already playing, ANY key fast-forwards it (skippable
-    // per Item 6 guard — total added latency must be short & skippable).
+    // If a departure is already playing, ANY key fast-forwards it.
     if (this._departing) {
       e.preventDefault();
       this._finishDeparture(true);
       return;
     }
 
-    // 2026-05-17 rollback: revert from "any key" to "Press Return to start".
-    // The any-key behaviour was too easy to trigger by accident (e.g. the
-    // user tapping Cmd+Shift+R for a hard refresh would blow past the menu).
-    // Only Enter/Return (or NumpadEnter) starts. (The KeyF "fast start"
-    // shortcut was removed in the menu overhaul — START MISSION is the single
-    // entry path; MENU_FAST_START remains a reserved event with no emitter.)
+    // Only Enter/Return (or NumpadEnter) starts: "any key" was too easy to trigger by accident (Cmd+Shift+R for a
+    // hard refresh blew past the menu). START MISSION is the single entry path; MENU_FAST_START is a reserved
+    // event with no emitter.
     if (e.code === 'Enter' || e.code === 'NumpadEnter') {
       e.preventDefault();
-      // F1 save-guard: with a save present, the primary key RESUMES the mission
-      // (CONTINUE) — it must never silently start a new game that wipes the
-      // save (that was the instant, no-confirm data loss). With no save it
-      // starts as before.
+      // Save-guard: with a save present the primary key RESUMES (CONTINUE); it must never silently start a new game
+      // that wipes the save.
       if (resolvePrimaryMenuAction(persistenceManager.hasSave()) === 'CONTINUE') {
         this._continueGame();
       } else {
@@ -1180,16 +1122,13 @@ export class MenuScreen {
   }
 
   /**
-   * @private F1 save-guard: entry point for the explicit START MISSION button.
-   * Starting a NEW game clears any existing save (GameFlowManager MENU_START →
-   * deleteSave). When a save exists this asks a single confirm that names the
-   * loss and points at CONTINUE, so an intentional new game is still one click
-   * away but an accidental one can't silently wipe progress. With no save (or
-   * no window.confirm), it starts immediately. A skip during an in-flight
-   * departure fast-forwards it without re-confirming.
+   * @private Save-guard entry point for the START MISSION button. A NEW game clears any existing save
+   * (GameFlowManager MENU_START → deleteSave), so with a save this asks one confirm that names the loss and points
+   * at CONTINUE. No save (or no window.confirm): starts immediately. A skip during a departure fast-forwards it
+   * without re-confirming.
    */
   _requestStartGame() {
-    if (this._autoUpdating) return;   // up1: the update switch is under way — no confirm, no start
+    if (this._autoUpdating) return;   // the update switch is under way: no confirm, no start
     if (this._departing) { this._finishDeparture(true); return; }
     if (startRequiresConfirm(persistenceManager.hasSave())) {
       const canConfirm = typeof window !== 'undefined' && typeof window.confirm === 'function';
@@ -1199,24 +1138,18 @@ export class MenuScreen {
   }
 
   /**
-   * @private Start game — plays the departure cinematic (Item 6), then emits
-   * MENU_START. The menu chrome staggers out and the 3D hero camera pulls
-   * back while the live gameplay scene behind the transparent menu takes over;
-   * MENU_START fires at the end (or immediately, on skip / reduced motion).
+   * @private Start game: plays the departure cinematic, then emits MENU_START (at the end, or immediately on skip /
+   * reduced motion). The new-game save-wipe confirm lives in _requestStartGame(); this is the confirmed path.
    */
   _startGame() {
     if (this._autoUpdating) return;
     if (this._departing) { this._finishDeparture(true); return; }
     this._closeNotes(false);   // the notes card folds away; START was never blocked by it
-    // Note: the new-game save-wipe confirm lives in _requestStartGame() (the
-    // button/key entry point). _startGame() is the confirmed departure path.
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
-    // New game → cinematic pull-back, then MENU_START. Extended to 3.65s
-    // (cameraDur 3.5) so the astronaut exit drifts further from the mother and
-    // the orientation move (random partial-flash or fly-around) plays calmly.
-    // cameraDur also clamps the fraction-based astronaut beat timeline.
+    // 3650 ms / cameraDur 3.5 s: long enough for the astronaut exit to drift clear of the mother and the
+    // orientation move to play calmly. cameraDur also clamps the fraction-based astronaut beat timeline.
     this._beginDeparture(Events.MENU_START, 3650, 3.5);
   }
 
@@ -1235,12 +1168,8 @@ export class MenuScreen {
     const reduced = !!(window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
-    // Reduced motion → skip the staged cinematic, straight cut (still gives
-    // the DOM a brief fade via the departing class, but no camera move wait).
-    // The audio pad swell accompanies the pull-back cinematic, so it is
-    // skipped here too (emitting it would overrun the ~220ms cut — the swell
-    // has a 0.4s floor — desyncing audio from the visual for reduced-motion
-    // users).
+    // Reduced motion: straight cut (a brief DOM fade via the departing class, no camera wait). The audio pad swell
+    // is skipped too: it has a 0.4 s floor and would overrun the ~220 ms cut.
     if (reduced) {
       const content = this.element.querySelector('#menu-content');
       if (content) content.classList.add('menu-departing');
@@ -1251,41 +1180,31 @@ export class MenuScreen {
       return;
     }
 
-    // T10: cue the departure audio pad swell at the START of the pull-back
-    // (MENU_START/MENU_CONTINUE fire at the END). Sized to the camera move.
+    // Cue the audio pad swell at the START of the pull-back (MENU_START/MENU_CONTINUE fire at the END).
     eventBus.emit(Events.MENU_DEPARTURE_START, { event, durationMs, cameraDur });
 
-    // Stage 1: menu chrome stagger-fade (CSS cascade, left column first).
+    // Menu chrome stagger-fades (CSS cascade, left column first).
     const content = this.element.querySelector('#menu-content');
     if (content) content.classList.add('menu-departing');
-    // T6: clear the plate + vignette and stop capturing pointer events so the
-    // reveal isn't dimmed and post-departure clicks reach the game canvas.
+    // Clear the plate + vignette and stop capturing pointer events (reveal isn't dimmed, clicks reach the game canvas).
     this._beginPlateDeparture();
-    // Stage 2: 3D hero departure — weld arc/glow/sparks fade, camera pulls
-    // back so the hero recedes toward the live scene.
     if (this._menuScene3D) this._menuScene3D.beginDeparture(cameraDur);
     this._departing = true;
-    // T4: reveal the real player ship EARLY (~65% through the pull-back) so it is
-    // rendered + lit behind the still-frame-filling hero — the cut then has no
-    // visibility pop. One-shot; cleared by _resetDepartureState (skip cancels it,
-    // and MENU_START's own GAME_STATE_CHANGE unhide covers the skipped path).
+    // Reveal the real player ship EARLY (~65% through the pull-back), rendered + lit behind the hero, so the cut has
+    // no visibility pop. One-shot; _resetDepartureState cancels it (MENU_START's GAME_STATE_CHANGE unhide covers a skip).
     this._revealTimer = setTimeout(() => {
       this._revealTimer = null;
       eventBus.emit(Events.MENU_DEPARTURE_REVEAL);
     }, Math.round(durationMs * 0.65));
-    // Stage 3 handoff: emit the target event near the end of the pull-back. The
-    // gameplay scene is already rendering behind the transparent menu; hide()
-    // then cross-fades the plate to 0.
+    // Emit the target event near the end of the pull-back; hide() then cross-fades the plate to 0.
     this._departTimer = setTimeout(() => this._finishDeparture(), durationMs);
     this._armSkipClick();
   }
 
   /**
-   * @private T6 — start the backdrop clear: fade the plate + vignette (via CSS
-   * classes) and stop the menu from capturing pointer events so post-departure
-   * clicks reach the game canvas ~0.5s sooner. The window-level capture-phase
-   * skip handler still fires (capture precedes hit-testing), so pointer-events
-   * off does not break skip-to-finish.
+   * @private Start the backdrop clear: fade the plate + vignette (CSS classes) and stop capturing pointer events so
+   * clicks reach the game canvas ~0.5 s sooner. The window-level capture-phase skip handler still fires (capture
+   * precedes hit-testing).
    */
   _beginPlateDeparture() {
     if (this.element) {
@@ -1298,21 +1217,16 @@ export class MenuScreen {
   _armSkipClick() {
     if (this._skipClickHandler) return;
     this._skipClickHandler = () => this._finishDeparture(true);
-    // capture-phase, one path; removed in _finishDeparture.
+    // Capture phase; removed via _resetDepartureState.
     window.addEventListener('pointerdown', this._skipClickHandler, true);
   }
 
   /**
-   * @private Tear down the TRANSIENT departure state (pending timer, in-flight
-   * flag, target event, and the window-level skip-click listener). Single
-   * source of truth for the reset that show(), hide(), and _finishDeparture()
-   * all need — keeps them from drifting as departure state grows.
-   *
-   * Deliberately does NOT touch the departure CSS/style side effects
-   * (`menu-departing`, `menu-departing-plate`, inline pointer-events). Those
-   * must PERSIST through hide()'s opacity fade so the reveal isn't re-dimmed
-   * and clicks keep reaching the game canvas (T6); they are restored only in
-   * show() when a fresh, interactive menu is being built.
+   * @private Tear down the TRANSIENT departure state (timers, in-flight flag, target event, skip-click listener);
+   * shared by show(), hide() and _finishDeparture().
+   * Deliberately does NOT touch the departure CSS/style effects (`menu-departing`, `menu-departing-plate`, inline
+   * pointer-events): those must PERSIST through hide()'s opacity fade so the reveal isn't re-dimmed and clicks keep
+   * reaching the game canvas; show() restores them.
    */
   _resetDepartureState() {
     if (this._departTimer) {
@@ -1332,19 +1246,15 @@ export class MenuScreen {
   }
 
   /**
-   * @private Complete the departure: fire the target event exactly once. Called
-   * at the end of the ramp OR early when the player skips (any key/click).
-   * @param {boolean} [skipped=false] — true when triggered by a skip (key /
-   *   pointer / re-press), so the sim side can suppress the intro camera zoom.
+   * @private Complete the departure: fire the target event exactly once (at the end of the ramp, or early on a skip).
+   * @param {boolean} [skipped=false] — true on a skip, so the sim side can suppress the intro camera zoom.
    */
   _finishDeparture(skipped = false) {
-    // Capture emit intent BEFORE the reset clears _departing/_departEvent, so
-    // the exactly-once guard and the target event survive the teardown.
+    // Capture emit intent BEFORE the reset clears _departing/_departEvent (exactly-once guard).
     const wasDeparting = this._departing;
-    const event = this._departEvent || Events.MENU_START; // default defensive
-    // T5: on a skip, jump the 3D hero + astronaut exit to their end state so a
-    // fast-forward doesn't freeze the astronaut mid-beat behind the revealed
-    // sim ship (the DOM side is handled by the reset + emit below).
+    const event = this._departEvent || Events.MENU_START;
+    // On a skip, jump the 3D hero + astronaut exit to their end state so a fast-forward doesn't freeze the astronaut
+    // mid-beat behind the revealed sim ship.
     if (skipped && wasDeparting && this._menuScene3D && this._menuScene3D.skipDeparture) {
       this._menuScene3D.skipDeparture();
     }
@@ -1354,12 +1264,8 @@ export class MenuScreen {
   }
 
   /**
-   * @private Continue from saved game (T8). Play a SHORT departure (0.6s) then
-   * emit MENU_CONTINUE — replaces the previous hard cut so returning players
-   * get the same live-scene handoff as a new game. Continue now routes straight
-   * to ORBITAL_VIEW flight (no BRIEFING card); mission context arrives as a
-   * welcome-back comms trickle. The departure stays brief — returning players
-   * value speed.
+   * @private Continue from the saved game: a SHORT departure (0.6 s), then MENU_CONTINUE. Routes straight to
+   * ORBITAL_VIEW flight (no BRIEFING card); mission context arrives as a welcome-back comms trickle.
    */
   _continueGame() {
     if (this._autoUpdating) return;
@@ -1371,13 +1277,7 @@ export class MenuScreen {
     this._beginDeparture(Events.MENU_CONTINUE, 600, 0.6);
   }
 
-  /**
-   * Build the 3D hero scene if it does not already exist (idempotent). Normally
-   * built once and kept alive across hide/show (stop/start), so this is a no-op
-   * after construction; it exists so `show()` self-heals if the instance is ever
-   * null (e.g. a failed initial init) rather than leaving a permanently blank
-   * hero. Mirrors the original constructor build path + its try/catch.
-   */
+  /** Build the 3D hero scene if missing (idempotent): `show()` self-heals a null instance (failed init) instead of a blank hero. */
   _ensureScene3D() {
     if (this._menuScene3D) return;
     const canvas3d = this.element.querySelector('#menu-scene-3d');
@@ -1391,12 +1291,9 @@ export class MenuScreen {
     }
   }
 
-  // ── Session J.5 — the menu UPDATE card ─────────────────────────────────────
-
   /**
-   * @private Events.UPDATE_AVAILABLE `{ hash, tag, bullets }` (UpdateWatch emits
-   * it once per new hash). Remember it; mount now only while the menu is
-   * visible — otherwise show() mounts it on the next menu visit.
+   * @private Events.UPDATE_AVAILABLE `{ hash, tag, bullets }` (once per new hash). Remember it; mount now only while
+   * the menu is visible, else show() mounts it on the next visit.
    */
   _onUpdateAvailable(p) {
     if (!p || typeof p.hash !== 'string' || !p.hash) return;
@@ -1405,17 +1302,14 @@ export class MenuScreen {
   }
 
   /**
-   * @private Build the card (ui/UpdateCard.js) and insert it into #menu-header
-   * right AFTER #menu-continue-wrapper, so it sits centered under the START /
-   * CONTINUE buttons and cascades out with the header on departure. Idempotent
-   * per hash; a hash the player already answered LATER to never re-mounts.
-   * The card never exists outside #menu-screen: the mount target is looked up
-   * on this.element only.
+   * @private Build the card (ui/UpdateCard.js) and insert it into #menu-header right AFTER #menu-continue-wrapper
+   * (centred under START / CONTINUE; cascades out with the header on departure). Idempotent per hash; a hash the
+   * player answered LATER to never re-mounts. The mount target is looked up on this.element only.
    */
   _mountUpdateCard() {
     const p = this._update;
     if (!p || !this.element) return;
-    if (this._autoUpdating) return;   // up1: the notice holds the place; the card returns only if the switch gives up
+    if (this._autoUpdating) return;   // the notice holds the place; the card returns only if the switch gives up
     if (this._updateDismissed === p.hash) return;
     if (this._updateCard && this._updateCard._hash === p.hash) return;
     this._closeNotes(false);          // the waiting build's card wins: one restart control on screen, never two
@@ -1446,20 +1340,18 @@ export class MenuScreen {
   }
 
   /**
-   * @private Events.UPDATE_AUTO_APPLY `{ hash, tag, bullets }` (UpdateWatch
-   * emits it INSTEAD of UPDATE_AVAILABLE when a build is waiting, the state is
-   * the menu, no game has begun, this is the only window and this build was not
-   * tried yet): show one line and switch, through the same `_applyUpdate()` as
-   * the tap, so `_reload()` stays the page's one reload site. While `_autoUpdating`
-   * every start path returns early. If a departure is already playing (or the
-   * menu is not up) it never switches: the card path takes over.
+   * @private Events.UPDATE_AUTO_APPLY `{ hash, tag, bullets }` (UpdateWatch emits it INSTEAD of UPDATE_AVAILABLE when
+   * a build is waiting, the state is the menu, no game has begun, this is the only window and this build was not
+   * tried yet): show one line and switch through the same `_applyUpdate()` as the tap, so `_reload()` stays the
+   * page's one reload site. While `_autoUpdating` every start path returns early. If a departure is already playing
+   * (or the menu is not up) it never switches: the card path takes over.
    */
   _onUpdateAutoApply(p) {
     if (!p || typeof p.hash !== 'string' || !p.hash) return;
     if (this._autoUpdating) return;
     if (!this.visible || this._departing || this._applyingUpdate) { this._onUpdateAvailable(p); return; }
-    // D3: the loop-guard key is written HERE, only when the switch really starts; a menu
-    // that fell back to the card above leaves the build "untried". No usable key → the card.
+    // The loop-guard key is written HERE, only when the switch really starts; a menu that fell back to the card above
+    // leaves the build "untried". No usable key → the card.
     if (!this._claimAutoApply(p.appBuild)) { this._onUpdateAvailable(p); return; }
     this._update = p;
     this._autoUpdating = true;
@@ -1477,10 +1369,7 @@ export class MenuScreen {
     return claimAutoApply(appBuild);
   }
 
-  /**
-   * @private The one-line notice, right after #menu-continue-wrapper (where the
-   * card would sit), looked up on this.element only. Text via textContent.
-   */
+  /** @private The one-line notice, right after #menu-continue-wrapper (where the card would sit). */
   _mountUpdateNotice() {
     if (!this.element) return;
     this._unmountUpdateNotice();
@@ -1515,10 +1404,7 @@ export class MenuScreen {
     this._autoUpdateTimer = setTimeout(() => this._releaseAutoUpdate(), AUTO_UPDATE_RELEASE_MS);
   }
 
-  /**
-   * @private The switch did not take the page away: open the lock, drop the
-   * notice, let a tap try again, and show the card.
-   */
+  /** @private The switch did not take the page away: open the lock, drop the notice, let a tap retry, show the card. */
   _releaseAutoUpdate() {
     this._autoUpdateTimer = null;
     if (this._reloadIssued) return;   // the page is already going away: do not open the lock under it
@@ -1530,11 +1416,9 @@ export class MenuScreen {
   }
 
   /**
-   * @private RESTART NOW. The new build is installed and WAITING in the
-   * service worker (it never takes over by itself): switch to it, and reload
-   * once it has taken over. With no worker waiting this is a plain reload.
-   * core/UpdateWatch.js applyUpdate() owns the order (listener first, then
-   * SKIP_WAITING) and reloads through _reload(). Overridable for tests.
+   * @private RESTART NOW. The new build is WAITING in the service worker (it never takes over by itself): switch
+   * to it, reload once it has. No worker waiting: a plain reload. core/UpdateWatch.js applyUpdate() owns the order
+   * (listener first, then SKIP_WAITING) and reloads through _reload(). Overridable for tests.
    */
   _applyUpdate(cancelled) {
     if (this._applyingUpdate) return;   // a second tap must not stack a second listener
@@ -1555,7 +1439,7 @@ export class MenuScreen {
 
   /**
    * @private The START button's hint line. Desktop: "Press Enter or Click" / "Click to start new (confirms)". Glass
-   * (read now, D7): "Tap to start" / "Tap to start new (confirms)" - a tap on the button starts the same way.
+   * (read now): "Tap to start" / "Tap to start new (confirms)" - a tap on the button starts the same way.
    * @param {boolean} [hasSave] omit to ask the save store
    */
   _syncStartHint(hasSave) {
@@ -1571,36 +1455,28 @@ export class MenuScreen {
 
   show() {
     this.visible = true;
-    // Clear any leftover departure state from a prior run (e.g. returning to
-    // the menu after a game) so the chrome is fully visible + interactive.
+    // Clear leftover departure state from a prior run so the chrome is visible + interactive.
     this._resetDepartureState();
     const content = this.element.querySelector('#menu-content');
     if (content) content.classList.remove('menu-departing');
-    // T6: restore the backdrop plate + pointer capture for the fresh menu.
+    // Restore the backdrop plate + pointer capture for the fresh menu.
     this.element.classList.remove('menu-departing-plate');
     this.element.style.pointerEvents = 'auto';
-    // The menu object lives for the whole session (built once at boot), so an
-    // event that ends while the tab sits open must be hidden on every show().
+    // The menu lives for the whole session, so an event that ends while the tab sits open is hidden on every show().
     this._pruneEvents();
-    // Toggle Continue button visibility based on whether a save exists
     const hasSave = persistenceManager.hasSave();
     const continueWrapper = this.element.querySelector('#menu-continue-wrapper');
     if (continueWrapper) {
       continueWrapper.style.display = hasSave ? 'block' : 'none';
     }
-    // F1 save-guard: when a save exists, Enter maps to CONTINUE (the safe
-    // action), so the START button's key hint must not claim Enter starts a
-    // new game. Keep the copy honest with the actual key mapping.
+    // With a save Enter maps to CONTINUE, so the START hint must not claim Enter starts a new game.
     this._syncStartHint(hasSave);
-    // Session J.5: an update that arrived while the menu was hidden (or that
-    // the watcher found before the first show) mounts its card now.
+    // An update that arrived while the menu was hidden (or before the first show) mounts its card now.
     if (this._update) this._mountUpdateCard();
     this._showNotice();
     this.element.style.display = 'flex';
     this.element.style.opacity = '1';
-    // Listen for keyboard input while menu is shown
     window.addEventListener('keydown', this._boundKeyHandler);
-    // Start 3D scene — lazily rebuild it if a prior hide() disposed it.
     this._ensureScene3D();
     if (this._menuScene3D) this._menuScene3D.start();
   }
@@ -1609,24 +1485,16 @@ export class MenuScreen {
     this.visible = false;
     this.element.style.opacity = '0';
     window.removeEventListener('keydown', this._boundKeyHandler);
-    // Defensive: if an external state change hides the menu mid-departure,
-    // cancel the pending emit + clear the flags so the timer can't fire a stray
-    // second event later. (Normal flow completes via _finishDeparture() before
-    // any hide, so this only matters on odd paths.) NOTE: the departure CSS
-    // (plate/pointer-events) is intentionally left in place — it must persist
-    // through this opacity fade so the reveal stays clear; show() restores it.
+    // An external state change may hide the menu mid-departure: cancel the pending emit so the timer can't fire a
+    // stray second event. The departure CSS (plate/pointer-events) stays: it must persist through this opacity fade;
+    // show() restores it.
     this._resetDepartureState();
     this._closeLangMenu();
     this._closeNotes(false);
     if (this._hideLoreTip) this._hideLoreTip();
-    // Stop 3D scene. NOTE: we intentionally do NOT dispose()+rebuild the hero
-    // here. A dispose/rebuild cycle would poison shared caches — ArmUnit.dispose()
-    // frees the module-shared bridle geometry (`_sharedBridleGeo`) and the cached
-    // additive-glow texture, and PlayerSatellite has no eventBus teardown — so the
-    // rebuilt hero on a later menu visit would reference disposed GPU resources and
-    // leak listeners. Keeping the single instance alive (stop on hide, start on
-    // show) is the safe baseline; a true teardown needs hardened
-    // ArmUnit/PlayerSatellite dispose() paths + menu QA (tracked as follow-up).
+    // Stop, NEVER dispose()+rebuild the hero: ArmUnit.dispose() frees the module-shared bridle geometry
+    // (`_sharedBridleGeo`) and the cached glow texture, and PlayerSatellite has no eventBus teardown, so a rebuilt
+    // hero would reference disposed GPU resources and leak listeners.
     if (this._menuScene3D) this._menuScene3D.stop();
     setTimeout(() => {
       if (!this.visible) this.element.style.display = 'none';

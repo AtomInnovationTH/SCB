@@ -1,11 +1,7 @@
 /**
- * CameraSystem.js — Multi-view camera system
- * V key toggles two named views: FLY (chase, default) ↔ LOOK AROUND (orbit).
- * Close inspection is NOT a separate cycle stop — it engages automatically as a
- * zoom sub-state of LOOK AROUND (Schmitt-trigger on distance). Other views
- * (cockpit, target lock, arm pilot, net cinematic) are entered by their own
- * bindings.
- * Smooth transitions via position/lookAt lerp.
+ * CameraSystem.js — multi-view camera. V toggles FLY (chase, default) ↔ LOOK AROUND (orbit); close inspection engages
+ * automatically as a zoom sub-state of LOOK AROUND (Schmitt trigger on distance). Cockpit, target lock, arm pilot and
+ * net cinematic are entered by their own bindings. Transitions lerp position and lookAt.
  * @module systems/CameraSystem
  */
 
@@ -24,10 +20,6 @@ import { testsRequestedHere } from '../ui/hud/TestsSwitch.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { degToRad, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
-// ============================================================================
-// VIEW MODES
-// ============================================================================
-
 /** @enum {string} Camera view modes */
 export const CameraViews = {
   FIRST_PERSON: 'FIRST_PERSON',
@@ -40,29 +32,17 @@ export const CameraViews = {
 };
 
 /**
- * View cycling order driven by the V key.
- *
- * 2026-06-15 (2-cycle revamp): V toggles just two named views —
- *   FLY (fly the ship) ↔ LOOK AROUND (pull back, orbit the camera, study the
- *   field). This re-aligns the cycle with the onboarding copy, which already
- *   teaches a two-view model.
- *
- * Close inspection is NOT a cycle stop: zooming in while in LOOK AROUND
- * auto-enters an inspection sub-state (Schmitt-trigger on distance) that engages
- * the narrow FOV, dynamic near-plane, vignette and contextual wireframe overlay.
- * A Tab-locked debris focuses the debris wireframe; otherwise the mothership.
- *
- * The discrete INSPECTION view + the legacy bare-I / toggleInspection() path
- * remain available (entered via enterInspection()); pressing V from there wraps
- * back to FLY. FIRST_PERSON, ARM_PILOT and NET_CINEMATIC remain outside the
- * cycle (entered by their own bindings).
+ * View cycle driven by the V key: FLY ↔ LOOK AROUND. Close inspection is not a stop: zooming in while in LOOK AROUND
+ * auto-enters an inspection sub-state (Schmitt trigger on distance: narrow FOV, dynamic near plane, vignette, contextual
+ * wireframe; a Tab-locked debris shows the debris wireframe, otherwise the mothership). The discrete INSPECTION view
+ * and bare-I / toggleInspection() remain (enterInspection()); V from there wraps to FLY. FIRST_PERSON, ARM_PILOT and
+ * NET_CINEMATIC stay outside the cycle.
  */
 const VIEW_CYCLE = [
   CameraViews.CHASE,          // FLY (default)
   CameraViews.ORBIT,          // LOOK AROUND (zoom in here to inspect the mothership)
 ];
 
-/** Human-readable labels for HUD display */
 const VIEW_LABELS = {
   [CameraViews.FIRST_PERSON]: '🎯 COCKPIT',
   [CameraViews.CHASE]:        '🛰 FLY',
@@ -73,28 +53,21 @@ const VIEW_LABELS = {
   [CameraViews.NET_CINEMATIC]: '🎬 NET CINEMATIC',
 };
 
-// ============================================================================
-// ZOOM LADDER crossing choreography (Q10 — docs/ladder/08-workbench.md §8:
-// "one change at a time — the roll is its own phase"). In-module constants,
-// NOT FloorContract numbers: the ride timing the core sees (rideMs / onDone)
-// is untouched; these shape only what the camera does with the up-vector.
-// ============================================================================
+// Zoom-ladder crossing choreography (docs/ladder/08-workbench.md §8: "one change at a time — the roll is its own
+// phase"). In-module constants, not FloorContract numbers: the ride timing the core sees (rideMs / onDone) is
+// untouched; these shape only what the camera does with the up-vector.
 
 /**
- * UP-rides (ship→Earth, F5→F6): the source (ship-radial) up is HELD for the
- * whole flight; the horizon then levels to Earth-north in a separate post-ride
- * camera phase of this length (cubic in-out). On-floor exactness resumes when
- * the phase ends.
+ * UP-rides (ship→Earth, F5→F6): the source (ship-radial) up is HELD for the whole flight; the horizon then levels to
+ * Earth-north in a separate post-ride phase of this length (cubic in-out). On-floor exactness resumes when it ends.
  */
 export const LADDER_LEVEL_MS = 600;
 /** Wall ms without a ladder update after which ladderDragNudge drops nudges (paused / hidden / blurred; ~15 frames at 60 fps). */
 export const LADDER_NUDGE_STALE_MS = 250;
 
 /**
- * Drag coast, PER SECOND (2026-10-21, iPad "slow view"): the coast used to decay
- * `damping` per DRAWN FRAME, so a flick coasted ~2x as far at 30 fps and half as
- * far at 120 fps. Speed is now rad/s and decays `damping ** (step * 60)`: the
- * `damping` constants (0.92) mean "per 1/60 s", so 60 fps feels as it always did.
+ * Drag coast is PER SECOND: speed is rad/s and decays `damping ** (step * 60)`, so the `damping` constants (0.92) mean
+ * "per 1/60 s" and a flick coasts the same distance at any frame rate.
  */
 export const COAST_REF_FPS = 60;
 /** Real-time step bounds for the coast: no divide by zero, a long hitch never flings the view. */
@@ -114,75 +87,70 @@ function coastStepS(prevMs, nowMs) {
 }
 
 /**
- * VIEW RETURN (owner 2026-10-25, "track pad drag view ... after a pause should gently return to default view so
- * player does not get lost/confused/disoriented"). Amendment 2026-10-25 (owner): 4 s after a drag the view glides back
- * to the floor's default in 2 s; the drag is the cause (docs/ladder/00-spec.md §6, "the camera never moves on its own
- * without a player-initiated cause").
+ * VIEW RETURN (DECISIONS §35 row 12; docs/ladder/00-spec.md §6: "the camera never moves on its own without a
+ * player-initiated cause"; the drag is the cause): after the last view input the view glides back to the floor's default.
  *  - IDLE_S: the wait after the LAST view input (mouse or finger drag, held arrows, wheel or pinch zoom) once the drag's
  *    coast has stopped. Any view input restarts it. Real seconds, the same clock as the coast (a hitch counts at most
  *    COAST_STEP_MAX_S, so a pause or a hidden tab never ends the wait).
  *  - GLIDE_S: floors 1-3 (ship anchor): smoothstep along the great circle from the view to the chase direction
- *    (`_ladderChaseLocal`; where that arc would pass over a pole of the floor, the same smoothstep over azimuth and
- *    polar angle instead, so the horizon never flips); the zoom distance does not change. Floor 4 (Earth anchor):
- *    CameraSystem only raises `ladderViewReturnDue()`; main.js's floor-4 block answers with the same framing turn the
- *    arrival uses (`ladderTurnEarthDir`, its own length). Floor 5 never moves.
- * No return while a drawer is open, a ride runs, the catch focus or reel view holds the camera; the wait starts when they end.
+ *    (`_ladderChaseLocal`; over a pole of the floor, the same smoothstep over azimuth and polar angle instead, so the
+ *    horizon never flips); the zoom distance does not change. Floor 4 (Earth anchor): CameraSystem only raises
+ *    `ladderViewReturnDue()`; main.js's floor-4 block answers with the same framing turn the arrival uses
+ *    (`ladderTurnEarthDir`). Floor 5 never moves.
+ * No return while a drawer is open, a ride runs, or the catch focus or reel view holds the camera.
  */
 export const LADDER_VIEW_RETURN = Object.freeze({ IDLE_S: 4.0, GLIDE_S: 2.0 });
 
 /**
- * DOWN-rides (Earth→ship, F6→F5): the roll back to ship-up completes within
- * this FRACTION of the ride (the cubic in-out barely moves the dolly there),
- * so the camera is fully ship-up before the dive dominates.
+ * DOWN-rides (Earth→ship, F6→F5): the roll back to ship-up completes within this FRACTION of the ride (the cubic in-out
+ * barely moves the dolly there), so the camera is fully ship-up before the dive dominates.
  */
 export const LADDER_DOWN_ROLL_FRAC = 0.45;
 
 /**
- * Wave 5 (3) — the F3 look-at bias ease (08-workbench §2 "Motion": "240–300 ms
- * for pane slides and subject reframes", one curve). Deliberately the SAME
- * number as RefitPane.PANE_SLIDE_MS (270) so the subject and the pane arrive
- * together; VisualLaw still has no pane-timing entry (01-numbers "Workbench
- * panes" is canonical until the entries land per 08-workbench §9 — do not add
- * one here). Reduced motion snaps instead.
+ * F3 look-at bias ease (08-workbench §2 "Motion": "240–300 ms for pane slides and subject reframes", one curve).
+ * Deliberately the SAME number as RefitPane.PANE_SLIDE_MS (270) so subject and pane arrive together; VisualLaw has no
+ * pane-timing entry (01-numbers "Workbench panes" is canonical until entries land per 08-workbench §9 — do not add one
+ * here). Reduced motion snaps instead.
  */
 export const LADDER_PANE_REFRAME_MS = 270;
 
 /**
- * reel-visible (owner 2026-10-16: "the reel-in phase is invisible"; docs/DECISIONS.md §25 item 2: "the reel-in must be
- * seen") — the CATCH FOCUS: under the zoom ladder the camera holds 24.5 m (F2) and never moves, so a 0.3 m catch
- * is ~16 px while it is reeled in, handed to a radiator tip and fed to the furnace. When the player's own mother
- * net catches something, the ladder camera comes in to 6 m on the catch (reel), the middle of collar and tip
- * (hand-off) and the tip (cook), then goes back. It is a SEPARATE camera-layer blend (an anchor offset from the
- * mother plus a distance pull) over the ladder's own state, which it never writes: when the blend reaches 0 the
- * camera is exactly where the ladder holds it. Firing the net is the player-initiated cause (docs/ladder/00-spec.md
- * :262 "the camera never moves on its own without a player-initiated cause"); any camera input of his ends it.
- * In-module numbers (the LADDER_LEVEL_MS precedent), not FloorContract numbers.
- *
- * catch-focus (owner 2026-10-18, "no camera doesn't seem to move in on the catch"): EVERY catch gets the focus, not
- * only a mother net on F2/F3 with motion allowed. Daughter net catches (a far one is a CUT in and out), lasso catches
- * (from LASSO_CONTACT, on to the collar), and a collar catch keeps it until it is processed. Levels F1-F3 (ship
- * anchor) run it; F4-F5 (Earth anchor) refuse with a console line. Reduced motion CUTS in and out instead of
- * refusing. Each start / refusal / cancel / end prints exactly one `[catch-focus]` console line.
+ * CATCH FOCUS (DECISIONS §25 item 2: "the reel-in must be seen"; owner 2026-10-16: "the reel-in phase is invisible").
+ * Under the zoom ladder the camera holds 24.5 m (F2), so a 0.3 m catch is ~16 px while reeled in, handed to a radiator
+ * tip and fed to the furnace. EVERY catch (owner 2026-10-18: "no camera doesn't seem to move in on the catch") brings
+ * the ladder camera in to 6 m on the catch (reel), the middle of collar and tip (hand-off) and the tip (cook), then
+ * back: mother net, daughter net (a far one is a CUT in and out), lasso (from LASSO_CONTACT, on to the collar), and a
+ * collar catch keeps it until processed. F1-F3 (ship anchor) run it; F4-F5 (Earth anchor) refuse with a console line;
+ * reduced motion CUTS in and out. Each start / refusal / cancel / end prints exactly one `[catch-focus]` line.
+ * A SEPARATE camera-layer blend (anchor offset from the mother plus a distance pull) over the ladder's own state, which
+ * it never writes: at blend 0 the camera is exactly where the ladder holds it. Firing the net is the player-initiated
+ * cause (docs/ladder/00-spec.md §6); any camera input of his ends it. In-module numbers, not FloorContract numbers.
  */
 export const CATCH_FOCUS = Object.freeze({
   DIST_U: 6e-5,        // 6 m: F2's floor (FloorContract), so no near-plane change
   TAU_S: 0.6,          // the anchor's time constant toward the focus point
-  IN_S: 1.8,           // the whole move in (reel-view 2026-10-22: was 0.8 s, which swung the camera round the ship in a blink and threw the piece off screen; owner: "debris suddenly moves several meters")
+  // the whole move in; slow enough that the camera does not swing round the ship and throw the piece off screen (DECISIONS §35)
+  IN_S: 1.8,
   AIM_S: 1.0,          // ... of which the LOOK-AT point reaches the piece in this first part ("aim first, then move"): the piece stays on screen
   POS_DELAY_S: 0.4,    // ... and the camera position starts to move this long after the aim began, ending with the move
-  TAKEOVER_MAX_U: 1e-3, // 100 m: a camera input takes the camera's pose over for the ladder when it stands within this of the mother (F2's far end); farther, the old walk back
-  LOOK_SMOOTH_S: 0.8,  // the time a HOP of the focus point is eased out over (critically damped, starts at rest): the point HOPS (collar -> hand-off -> tip, a second catch, a newer reel) and the camera used to turn in ONE frame (fix round 1, FB1)
+  TAKEOVER_MAX_U: 1e-3, // 100 m: a camera input takes the pose over for the ladder when it stands within this of the mother (F2's far end); farther, the old walk back
+  // the time a HOP of the focus point (collar -> hand-off -> tip, a second catch, a newer reel) is eased out over
+  // (critically damped, starts at rest); without it the camera turned in ONE frame
+  LOOK_SMOOTH_S: 0.8,
   OUT_S: 1.0,          // ... and back out, after the catch is processed
   CANCEL_S: 0.3,       // ... and out after a player camera input: no cut, no walk back
   END_HOLD_S: 1.0,     // stay on the tip this long after CATCH_PROCESSED
   WAIT_S: 8.0,         // a lasso catch waiting for a busy collar to adopt it: let go after this (a mother catch AT the collar is COLLAR_MAX_S)
-  COLLAR_MAX_S: 60,    // catch-focus (2026-10-18): a catch sitting at the nose collar keeps the focus this long (it used to let go after WAIT_S), then lets go
+  COLLAR_MAX_S: 60,    // a catch sitting at the nose collar keeps the focus this long, then lets go
   TIP_MAX_S: 40,       // safety valve: never hold the cook longer than this
   HOP_CUT_U: 2e-4,     // 20 m: a hop of the focus point (a newer reel, a second catch) bigger than this is a CUT to the new point; smaller ones are eased out over LOOK_SMOOTH_S
   FAR_CUT_U: 5e-4,     // 50 m: a catch farther than this from the camera's anchor is a CUT in and out, not an ease over hundreds of metres
-  DAUGHTER_HOLD_S: 1.5, // a daughter's reel: stay on her this long after she is latched at her strut (reel-view 2026-10-22: was 3 s)
-  REEL_OFF_DEG: 30,    // reel view (B2): the camera sits this far round from the mother-daughter line so her tail glow and gas puffs are seen side-on
-  REEL_MIN_DIST_M: 4,  // ... at max(this, REEL_SIDE_MULT x her catch's longest side, near plane + REEL_NEAR_CLEAR_M + the shot's reach) (fix round 2, FB7: 2.5 m was inside the F2/F3 near plane of 3 m: she was not drawn)
+  DAUGHTER_HOLD_S: 1.5, // a daughter's reel: stay on her this long after she is latched at her strut
+  REEL_OFF_DEG: 30,    // reel view: the camera sits this far round from the mother-daughter line so her tail glow and gas puffs are seen side-on
+  // ... at max(this, REEL_SIDE_MULT x her catch's longest side, near plane + REEL_NEAR_CLEAR_M + the shot's reach)
+  // (the F2/F3 near plane is 3 m: a 2.5 m distance would not draw her)
+  REEL_MIN_DIST_M: 4,
   REEL_NEAR_CLEAR_M: 0.5, // ... the nearest point of her and her catch stays this far beyond the camera's near plane
   REEL_LAG_M: 1.0,     // ... and the ease's overshoot while she brakes (the lead term runs ahead of a slowing point: measured 0.6 m closer than the shot's distance)
   REEL_ARM_R_M: 0.5,   // ... counted as the daughter's own reach around her centre (body, antennas, tail glow)
@@ -192,18 +160,20 @@ export const CATCH_FOCUS = Object.freeze({
   DAUGHTER_MAX_S: 300, // safety valve for a daughter's long haul (4 m/s over a 500 m tether is ~125 s)
   ADOPT_GRACE_S: 0.5,  // a lasso reel that ended: wait this long for a net to adopt the catch before letting go
   LEAD_FILTER_S: 0.25, // smoothing of the focus point's velocity (the lead that cancels the ease's lag)
-  VEL_ACCEPT_N: 3,     // fix round 3 (FB10): this many consecutive frames of "jumps" that all show the same measured velocity are motion, not hops: the filtered velocity takes it (a view that starts while she is already at 30 m/s)
+  // this many consecutive frames of "jumps" that all show the same measured velocity are motion, not hops: the
+  // filtered velocity takes it (a view that starts while she is already at 30 m/s)
+  VEL_ACCEPT_N: 3,
   VEL_AGREE: 0.3,      // ... "the same": successive measured velocities within this fraction of their length
-  LEAD_MAX_U_S: 2e-4,  // a jump off the point's predicted path faster than this (20 m/s, scene units / s) is a hop between phases, not motion (FB6: not absolute speed: a reeled daughter cruises at 60 m/s)
+  // a jump off the point's predicted path faster than this (20 m/s, scene units / s) is a hop between phases, not
+  // motion (not absolute speed: a reeled daughter cruises at 60 m/s)
+  LEAD_MAX_U_S: 2e-4,
 });
 
 /**
- * reel-view B1 (owner 2026-10-22, "on net closure around debris, debris suddenly moves several meters"): the catch focus
- * is two moves with their own clocks over one progress `u` (0..1 of CATCH_FOCUS.IN_S): the LOOK-AT point eases onto the
- * piece first (`aim`), the camera POSITION follows a little later and ends with it (`pos`). Both are smoothsteps, so
- * every start and end is soft. Pure: the tests call it with the same numbers the camera uses.
+ * The catch focus is two moves with their own clocks over one progress `u` (0..1 of CATCH_FOCUS.IN_S): the LOOK-AT
+ * point eases onto the piece first (`aim`), the camera POSITION follows a little later and ends with it (`pos`). Both
+ * are smoothsteps. Pure: the tests call it with the same numbers the camera uses.
  * @param {number} u progress 0..1 (the camera's blend progress; it runs backwards on the way out)
- * @returns {{aim:number, pos:number}} weights 0..1
  */
 export function catchFocusWeights(u) {
   const t = clamp01(u) * CATCH_FOCUS.IN_S;
@@ -215,16 +185,11 @@ export function catchFocusWeights(u) {
 }
 
 /**
- * fix round 2 (FB6): how far the focus point jumped off its own predicted path this frame. A HOP of the point (collar ->
- * middle of collar and tip, a newer reel) is a jump the filtered velocity does not predict; a reeled daughter cruising at
- * 60 m/s is fast but on her path, so absolute speed cannot tell the two apart (it called every frame of a 120 m reel a hop
- * and lost her off screen). Pure: the tests call it.
- * @param {THREE.Vector3} tgt - this frame's point
- * @param {THREE.Vector3} rel - last frame's point
+ * How far the focus point jumped off its own predicted path this frame. A HOP of the point (collar -> middle of collar
+ * and tip, a newer reel) is a jump the filtered velocity does not predict; a reeled daughter cruising at 60 m/s is fast
+ * but on her path, so absolute speed cannot tell the two apart. Pure: the tests call it.
  * @param {THREE.Vector3} vel - the filtered velocity (scene units / s)
- * @param {number} dt - seconds
  * @param {THREE.Vector3} out - receives tgt - (rel + vel * dt)
- * @returns {number} |out| in scene units
  */
 export function focusPointJump(tgt, rel, vel, dt, out) {
   out.copy(tgt).sub(rel).addScaledVector(vel, -dt);
@@ -232,15 +197,13 @@ export function focusPointJump(tgt, rel, vel, dt, out) {
 }
 
 /**
- * fix round 2 (FB7): how far from the shot's focus point the reel-view camera stands. Floors 2-3 keep the camera's near
- * plane at 3 m and the close-up pass only takes her within 10 m of the mother and never goes below the main near plane, so
- * a shot that puts her inside the near plane clips her: the NEAREST point of her and her catch must stay
- * REEL_NEAR_CLEAR_M beyond it. Pure: the tests call it.
- * @param {object} p
+ * How far from the shot's focus point the reel-view camera stands. Floors 2-3 keep the near plane at 3 m and the
+ * close-up pass takes her within 10 m of the mother and never goes below the main near plane, so a shot that puts her
+ * inside the near plane clips her: the NEAREST point of her and her catch must stay REEL_NEAR_CLEAR_M beyond it.
+ * Pure: the tests call it.
  * @param {number} [p.sizeM] her catch's longest side, m (0 when empty-handed)
- * @param {number} [p.reachM] farthest of her and her catch (their centres plus their own extent) from the focus point, m
+ * @param {number} [p.reachM] farthest of her and her catch (centres plus own extent) from the focus point, m
  * @param {number} [p.nearM] the camera's near plane on this floor, m
- * @returns {number} metres
  */
 export function reelViewDistM({ sizeM = 0, reachM = 0, nearM = 3 } = {}) {
   return Math.max(CATCH_FOCUS.REEL_MIN_DIST_M, CATCH_FOCUS.REEL_SIDE_MULT * sizeM, nearM + CATCH_FOCUS.REEL_NEAR_CLEAR_M + reachM);
@@ -260,18 +223,10 @@ export function cubicInOut(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-// ============================================================================
-// CAMERA SYSTEM
-// ============================================================================
-
 export class CameraSystem {
   /**
-   * @param {THREE.PerspectiveCamera} camera - The scene camera
-   * @param {HTMLCanvasElement} canvas - For mouse events (orbit mode)
-   * @param {THREE.Scene} [scene] - Scene to attach the fill/rim lights to
-   * @param {import('../scene/SceneManager.js').SceneManager} [sceneManager] -
-   *   optional; used to enroll the fill/rim follow lights in the near-field
-   *   depth pass so they light the ×S ship (z-layer fix).
+   * @param {import('../scene/SceneManager.js').SceneManager} [sceneManager] - enrolls the fill/rim follow lights in
+   *   the near-field depth pass so they light the ×S ship
    */
   constructor(camera, canvas, scene = null, sceneManager = null) {
     /** @type {THREE.PerspectiveCamera} */
@@ -281,16 +236,10 @@ export class CameraSystem {
     this.canvas = canvas;
 
     /** @type {import('../scene/SceneManager.js').SceneManager|null}
-     *  Optional — used to drive the in-engine inspect background dim
-     *  (NearFieldRenderPass vignette). Null in headless tests. */
+     *  Drives the inspect background dim (NearFieldRenderPass vignette); null in headless tests. */
     this._sceneManager = sceneManager;
 
-    // ========================================================================
-    // CAMERA FILL LIGHT
-    // Warm PointLight that follows the camera — illuminates the spacecraft
-    // regardless of sun angle (like a cockpit instrument floodlight).
-    // Only created when a scene reference is supplied.
-    // ========================================================================
+    // Camera fill light: a warm PointLight that follows the camera (cockpit-floodlight feel); only with a scene.
     /** @type {THREE.PointLight|null} */
     this._fillLight = null;
     /** @type {THREE.PointLight|null} Cool back/rim light on the far side of the ship. */
@@ -298,63 +247,35 @@ export class CameraSystem {
     /** @type {THREE.PointLight|null} Dim blue albedo fill on the nadir (Earth-facing) side. */
     this._earthLight = null;
     if (scene) {
-      // Color: slightly warm white (spacecraft instrument lighting feel).
-      //
-      // UNIT-SCALE NOTE: the scene is 1 unit = 100 km, so the camera-to-ship
-      // distance is tiny in scene units (a 15 m chase cam ≈ 0.00015). three.js
-      // attenuation is `1 / max(pow(d, decay), 0.01)` — with decay=2 the
-      // `pow(0.00015, 2)=2.25e-8` term is always below the 0.01 floor, so the
-      // inverse-square pinned at its MAX (1/0.01 = 100×). That turned a nominal
-      // 0.35 fill into an effective ~35× frontal flood (vs the sun's 2.0),
-      // flattening the ship into a washed-out, shapeless read and making the
-      // brightness lurch as the cutoff window faded between ~30–100 m of zoom.
-      // (Same class of bug as the −0.001=−100 m panel offset.)
-      //
-      // Fix: decay=0 (no inverse-square — the 100 km scale makes physical
-      // falloff meaningless here) gives a constant base of 1, and a wide
-      // cutoff (0.01 units ≈ 1 km) keeps the window ≈1 across the whole
-      // gameplay zoom band so the fill no longer changes with zoom. The wide
-      // cutoff ALSO means it only reaches the near ship/debris, never the
-      // distant Earth (~0.6 units away) — so it can't wash out the Earth or
-      // atmosphere. Camera-side KEY (front fill) — lifted 0.5 → 2.4 so the
-      // camera-facing hull reads as lit metal rather than a flat dark shape.
-      // Item 2 (ship parity): warm key color matched to the menu hero's key
-      // (0xfff8ec) — was 0xfff5e0. Positioned off-axis per-frame in update().
+      // UNIT SCALE: 1 scene unit = 100 km, so camera-to-ship distance is tiny (a 15 m chase cam ≈ 0.00015). three.js
+      // attenuation is `1 / max(pow(d, decay), 0.01)`: with decay=2, pow(0.00015, 2) is always below the 0.01 floor, so
+      // inverse-square pins at its MAX (100×) and a nominal 0.35 fill became a ~35× flood (vs the sun's 2.0) that
+      // flattened the ship. So decay=0 (physical falloff is meaningless at this scale) with a wide cutoff (0.01 units ≈
+      // 1 km): constant base 1, window ≈1 across the gameplay zoom band, reaching only the near ship/debris, never the
+      // Earth (~0.6 units away). Key (camera-side front fill) 2.4 so the camera-facing hull reads as lit metal; warm
+      // colour 0xfff8ec matches the menu hero's key. Positioned off-axis per frame in update().
       this._fillLight = new THREE.PointLight(0xfff8ec, 2.4, 0.01, 0);
       this._fillLight.name = 'cameraFillLight';
       scene.add(this._fillLight);
 
-      // RIM / BACK LIGHT — a cool key on the FAR side of the ship from the
-      // camera. Point lights are omnidirectional, so a light placed just beyond
-      // the ship (opposite the camera) catches the hull's silhouette edges and
-      // separates them from the black-space backdrop — the "less silhouette"
-      // fix, and the same rim technique the menu hero uses (MenuScene3D rim
-      // DirectionalLight). Same unit-scale trick as the fill (decay=0 + ~1 km
-      // cutoff) so it stays a constant, zoom-independent rim that only touches
-      // the near ship/debris and never the Earth. Positioned per-frame in
-      // update() along the camera→ship axis.
+      // RIM / BACK LIGHT: a cool light just beyond the ship (opposite the camera) catches the hull's silhouette edges and
+      // separates them from the backdrop (the menu hero's MenuScene3D rim technique). Same unit-scale trick as the fill
+      // (decay=0 + ~1 km cutoff). Positioned per frame in update() along the camera→ship axis.
       this._rimLight = new THREE.PointLight(0xbcd0ff, 2.0, 0.01, 0);
       this._rimLight.name = 'cameraRimLight';
       scene.add(this._rimLight);
 
-      // EARTHSHINE FILL (V5) — a dim blue albedo glow on the NADIR side of
-      // the ship: the planet's own light bouncing back up. It lifts the
-      // Earth-facing side of the net's membrane/bag (and hull) that neither
-      // the sun nor the camera key ever reaches, so the bag stops reading as
-      // a flat silhouette over the bright limb. Dim (0.6 vs sun 2.0 / camera
-      // key 2.4), cool blue (albedo, not daylight). Same unit-scale trick
-      // (decay=0 + ~1 km cutoff) so it only ever touches the near
-      // ship/debris. Positioned per-frame in update() toward the planet.
+      // EARTHSHINE FILL: a dim blue albedo glow (0.6 vs sun 2.0 / camera key 2.4) on the NADIR side, lifting the
+      // Earth-facing side of the net's membrane/bag and hull that neither the sun nor the camera key reaches. Same
+      // unit-scale trick. Positioned per frame in update() toward the planet.
       this._earthLight = new THREE.PointLight(0x9db8e8, 0.6, 0.01, 0);
       this._earthLight.name = 'earthshineFill';
       scene.add(this._earthLight);
 
-      // z-layer fix: enroll the follow lights in the near-field depth pass.
-      // They are created AFTER main.js's registerNearFieldRoot(player), so
-      // without this they never gain NEAR_FIELD_LAYER and the ship renders UNLIT
-      // in the near sub-render (flat, unlike the menu hero). The pass also scales
-      // their `distance` cutoff into ×S space each near render so their reach
-      // tracks the scaled ship. No-op when no sceneManager is supplied (tests).
+      // Enroll the follow lights in the near-field depth pass. They are created AFTER main.js's
+      // registerNearFieldRoot(player), so without this they never gain NEAR_FIELD_LAYER and the ship renders UNLIT in
+      // the near sub-render. The pass also scales their `distance` cutoff into ×S space each near render. No-op
+      // without a sceneManager (tests).
       if (sceneManager && typeof sceneManager.registerNearFieldLight === 'function') {
         sceneManager.registerNearFieldLight(this._fillLight);
         sceneManager.registerNearFieldLight(this._rimLight);
@@ -371,57 +292,43 @@ export class CameraSystem {
     /** @type {string|null} Previous view (for transition) */
     this._previousView = null;
 
-    /** @type {object|null} PlayerSatellite ref — backs the mother-pod net
-     *  ceremony launcher (pod muzzle world position via getNetPodPositionInto).
-     *  Injected via setPlayer(); optional so headless tests (no player) keep
-     *  the daughter arm ceremony working and the pod ceremony no-ops. */
+    /** @type {object|null} PlayerSatellite ref, injected via setPlayer(): backs the mother-pod net ceremony launcher
+     *  (pod muzzle world position via getNetPodPositionInto). Optional: headless tests run without a player and the
+     *  pod ceremony then no-ops. */
     this._player = null;
 
     /** @type {('mother'|'debris'|'daughter')|null} Focused subject while in INSPECTION */
     this._inspectSubject = null;
 
-    /** u6 D3: the Tests switch (?tests=1 / ?sounds=1), read once here; tests may set it. */
+    /** The Tests switch (?tests=1 / ?sounds=1), read once here; tests may set it. */
     this.testsSwitch = testsRequestedHere();
 
-    // ========================================================================
-    // TRANSITION STATE
-    // ========================================================================
     this._transitioning = false;
     this._transitionProgress = 0;
     this._transitionDuration = 0.5; // seconds
-    // Small-catch plan W4: the ceremony exit over a sub-metre subject cuts in
-    // EXIT_CUT_SMALL_S instead of the default ease — the one-shot override is
-    // restored to this default the frame any transition completes.
+    // The ceremony exit over a sub-metre subject cuts in EXIT_CUT_SMALL_S instead of the default ease; this one-shot
+    // override is restored to the default the frame any transition completes.
     this._transitionDurationDefault = this._transitionDuration;
     this._transitionStartOffset = new THREE.Vector3(); // Start offset from player for transition
     this._transitionStartLookDir = new THREE.Vector3(); // Start look DIRECTION for transition
     this._lastPlayerPos = new THREE.Vector3(); // Cached player pos for setView
-    // Round 3 (2026-08-26): the PREVIOUS frame's player pos — the epoch the
-    // camera's current position was written in while an override drives it.
-    // Lets an in-update exit rebase the (one-frame-old) camera pose into the
-    // current ship frame before setView captures its transition start offset
-    // (one frame of apparent orbital travel is ~128 m at 60 fps and km-scale
-    // under a clamped SwiftShader frame — tmp/lasso11-rec frames 43-44).
+    // The PREVIOUS frame's player pos: the epoch the camera's position was written in while an override drives it. Lets
+    // an in-update exit rebase the (one-frame-old) camera pose into the current ship frame before setView captures its
+    // transition start offset (one frame of apparent orbital travel is ~128 m at 60 fps).
     this._prevPlayerPos = new THREE.Vector3();
     this._prevPlayerPosInit = false;
     this._lastVelDir = new THREE.Vector3(0, 0, 1);
 
-    // ========================================================================
-    // CHASE CAMERA CONFIG
-    // ========================================================================
     this.chase = {
       offsetBehind: 0.00015,   // Distance behind player along velocity (~15m)
       offsetAbove: 0.00007,    // Distance above player along radial (~7m)
       lookAhead: 0.00002,      // Look-ahead past player (~2m, keeps spacecraft centered)
       smoothing: 3.0,          // Damping factor (higher = faster follow)
-      targetLookBias: 0.25,    // 2026-06-03: fraction the look point eases toward
+      targetLookBias: 0.25,    // fraction the look point eases toward
                                // a locked target (folded-in TACTICAL framing).
                                // 0 = off (pure chase); keep subtle.
     };
 
-    // ========================================================================
-    // FIRST PERSON CONFIG
-    // ========================================================================
     this.firstPerson = {
       offsetForward: 0.000025, // Slightly in front of satellite center
       offsetUp: 0.000005,      // Slight upward offset
@@ -433,21 +340,18 @@ export class CameraSystem {
       freeLookActive: false,
     };
 
-    // ========================================================================
-    // ORBIT CAMERA CONFIG
-    // ========================================================================
     this.orbit = {
       theta: Math.PI,           // Azimuthal angle (start behind player — same direction as cockpit)
       phi: Math.PI / 4,        // Polar angle (radians)
       distance: 0.0003,        // Distance from player (~30m)
-      minDistance: 0.00002,     // Minimum zoom (~2m — lowered so OVERVIEW can push into inspection depth; near-clip scales dynamically below the inspect threshold)
+      minDistance: 0.00002,     // Minimum zoom (~2m); near-clip scales dynamically below the inspect threshold
       maxDistance: 0.01,        // Maximum zoom
       rotateSpeed: 0.005,      // Mouse rotation sensitivity
       zoomSpeed: 0.0001,       // Scroll zoom speed
       isDragging: false,
       lastMouseX: 0,
       lastMouseY: 0,
-      damping: 0.92,           // Rotation momentum damping, per 1/60 s (the coast is per second since 2026-10-21)
+      damping: 0.92,           // Rotation momentum damping, per 1/60 s
       velocityTheta: 0,        // rad/s
       velocityPhi: 0,
       pendTheta: 0,            // turn (rad) of the moves since the last drawn frame
@@ -455,28 +359,18 @@ export class CameraSystem {
       hasPend: false,
       lastWallMs: null,        // wall clock of the last orbit frame (coast step)
 
-      // ----------------------------------------------------------------------
-      // Zoom-driven inspection sub-state (2026-06-03 consolidation rev. 2)
-      // ----------------------------------------------------------------------
-      // Inspection is no longer a separate view. While in OVERVIEW, zooming in
-      // past `inspectEnterDist` engages a mothership inspection sub-state
-      // (narrow FOV, dynamic near-plane, vignette, hull/wireframe overlays);
-      // zooming back out past the larger `inspectExitDist` disengages it. The
-      // gap between the two distances is a Schmitt trigger that prevents the
-      // overlay/FOV from flickering when the camera parks near the boundary.
+      // Zoom-driven inspection sub-state: while in OVERVIEW, zooming in past `inspectEnterDist` engages a mothership
+      // inspection (narrow FOV, dynamic near-plane, vignette, hull/wireframe overlays); zooming out past the larger
+      // `inspectExitDist` disengages it. The gap is a Schmitt trigger so the overlay/FOV don't flicker at the boundary.
       inspectEnterDist: 0.00012,  // ~12m — push in closer than this to inspect
       inspectExitDist: 0.00018,   // ~18m — pull back past this to leave inspect
       inspectActive: false,       // current sub-state (hysteresis output)
       inspectTaught: false,       // one-shot learning beat fired?
     };
 
-    // ========================================================================
-    // INSPECTION CAMERA CONFIG (S2.1 — close-range mechanical inspection)
-    // ========================================================================
-    // `fov` here is the single source of truth for the inspection lens, shared
-    // by BOTH the discrete INSPECTION view (enterInspection) and the OVERVIEW
-    // zoom-driven sub-state (_setInspectZoom reads this.inspection.fov) so the
-    // two paths can't drift.
+    // `fov` here is the single source of truth for the inspection lens, shared by BOTH the discrete INSPECTION view
+    // (enterInspection) and the OVERVIEW zoom-driven sub-state (_setInspectZoom reads this.inspection.fov), so the two
+    // paths can't drift.
     this.inspection = {
       theta: Math.PI,
       phi: Math.PI / 4,
@@ -499,9 +393,6 @@ export class CameraSystem {
       savedFov: null,           // Stores previous FOV to restore on exit
     };
 
-    // ========================================================================
-    // ARM PILOT CONFIG
-    // ========================================================================
     this.armPilot = {
       arm: null,              // Reference to ArmUnit being piloted
       fovNarrow: Constants.CAMERA_FOV_ARM_PILOT,  // 40° narrow FOV for arm camera
@@ -510,9 +401,6 @@ export class CameraSystem {
       offsetAbove: 0.000016,  // 1.6m above arm
     };
 
-    // ========================================================================
-    // TARGET LOCK CONFIG
-    // ========================================================================
     this.targetLock = {
       target: null,             // THREE.Vector3 or null
       offsetDistance: 0.0003,   // Camera offset from midpoint
@@ -520,36 +408,20 @@ export class CameraSystem {
       minCamDist: 0.0001,      // Min distance from player
     };
 
-    // ========================================================================
-    // SHARED STATE
-    // ========================================================================
     this._currentTargetPos = new THREE.Vector3();  // Where camera should be
     this._currentTargetLook = new THREE.Vector3(); // Where camera should look
     this._thrustMagnitude = 0; // For head-bob
-    // (Removed 2026-08-15: the "T4 experiment" transient attitude kick — a ~3°
-    //  chase-view camera rotation fed by the raw arrow-key command via the
-    //  deleted setAttitudeCommand(). Owner verdict: the onset read as an
-    //  annoying jolt on every RCS tap. Input confirmation is already carried
-    //  by the RCS plume + hiss; nothing here or in any gated scenario reads
-    //  it — the kick only ever fired on a live key command.)
+    // owner 2026-08-15: no chase-camera attitude kick on RCS taps (it read as an annoying jolt; the RCS plume + hiss confirm input).
 
-    // S4: Camera shake on catch (enhanced from Phase 8)
     this._catchShakeTimer = 0;     // seconds remaining for shake effect
     this._catchShakeDuration = Constants.CATCH_SHAKE_DURATION || 0.3; // total shake duration
     this._catchShakeIntensity = Constants.CATCH_SHAKE_INTENSITY ?? 0.000003; // scene units (= 0.3 m)
-    // NOTE the fallback magnitude: it must stay a MICRO-shake. It read `|| 0.003`
-    // until 2026-08-03 — the same metres-vs-scene-units mis-read the constant
-    // itself carried (0.003 scene units = ±300 m of camera jitter, which
-    // scrambled the mother catch's post-cinch frames). A dead fallback that
-    // still encodes the bug is a landmine, so it now mirrors the fixed value.
+    // The fallback must stay a MICRO-shake: the constant is in scene units (0.003 would be ±300 m of camera jitter).
 
-    // Whale-tug amplitude scale (§9.11, review minor 7): the NET_MOTHER_TUG
-    // handler stores ONLY this multiplier — the base intensity/duration
-    // constants above stay immutable so any future consumer of
-    // _catchShakeTimer doesn't inherit the last tug's scaled amplitude.
+    // Whale-tug amplitude scale: the NET_MOTHER_TUG handler stores ONLY this multiplier; the base intensity/duration
+    // constants above stay immutable so a later consumer of _catchShakeTimer doesn't inherit the last tug's amplitude.
     this._catchShakeScale = 1.0;
 
-    // Phase 4: FOV breathe during sustained thrust (I-War heritage)
     this._fovBreathOffset = 0;       // current FOV offset in degrees
     this._fovBreathTarget = 0;       // target FOV offset
     this._fovBreathTimer = 0;        // sustained thrust timer (seconds)
@@ -561,28 +433,23 @@ export class CameraSystem {
     this._thrustVisualDir = null;    // 'prograde' | 'retrograde' | 'lateral' | null
     this._thrustVisualMag = 0;       // current thrust magnitude for FOV
 
-    // Menu→sim handoff intro (deep-polish-4). Chase offset starts scaled at
-    // MENU_START (match-cut to the receding menu hero) and eases straight back
-    // to 1.0 — no dead hold. 1.0 = normal formation. See startIntroZoom().
+    // Menu→sim handoff intro: chase offset starts scaled at MENU_START (match-cut to the receding menu hero) and eases
+    // straight back to 1.0 (normal formation); see startIntroZoom().
     this._introScale = 1.0;          // chase-offset multiplier (1.0 = normal)
 
-    // Pre-allocated temporary vectors for update() hot path
     this._tmpVecA = new THREE.Vector3();
     this._tmpVecB = new THREE.Vector3();
     this._tmpVecC = new THREE.Vector3();
-    this._tmpVecD = new THREE.Vector3();   // P3: _computeTargetLock toTarget / ceremony up
-    this._radialDir = new THREE.Vector3(); // P3: per-frame radial-up (same reuse
-                                           // pattern as _lastVelDir above)
+    this._tmpVecD = new THREE.Vector3();   // _computeTargetLock toTarget / ceremony up
+    this._radialDir = new THREE.Vector3(); // per-frame radial-up
 
-    // Cached LVLH basis for the current frame — write-only on the render path,
-    // read only by the pure solveOrbitAnglesForDirection() helper (the ?shot=1
-    // sky-pose hook). Dedicated vectors, NOT _tmpVecA/B/C: those are live
+    // Cached LVLH basis for the current frame: written on the render path, read only by the pure
+    // solveOrbitAnglesForDirection() (the ?shot=1 sky-pose hook). Dedicated vectors, NOT _tmpVecA/B/C: those are live
     // scratch in _computeOrbit and are reused elsewhere within the same frame.
     this._lvlhRadial = new THREE.Vector3();
     this._lvlhLateral = new THREE.Vector3();
     this._lvlhForward = new THREE.Vector3();
 
-    // V-7: Launch ceremony state
     this._launchCeremony = {
       active: false,
       phase: 0,       // 0=inactive, 1=PRE_LAUNCH, 2=LAUNCH, 3=COAST, 4=HANDOFF
@@ -593,10 +460,10 @@ export class CameraSystem {
       prevLook: new THREE.Vector3(),
     };
 
-    // Ion start-up (DECISIONS §37 row 7, lane ion-startup): while a trip's four tail engines light, the camera eases to a view behind
-    // and a little to the side of her tail, holds, and eases back to whatever view the player had. A BLEND over the normal driver
-    // (the ladder, chase, orbit ...), applied after it each frame: that driver keeps running, so handing back needs no saved pose.
-    // `t` 0..1 is how far out the camera is; phase 'in' | 'hold' | 'out'. Any player camera input ends it at once.
+    // Ion start-up (DECISIONS §37 row 7): while a trip's four tail engines light, the camera eases to a view behind and
+    // a little to the side of her tail, holds, and eases back. A BLEND over the normal driver (ladder, chase, orbit ...),
+    // applied after it each frame: that driver keeps running, so handing back needs no saved pose. `t` 0..1 is how far
+    // out the camera is; phase 'in' | 'hold' | 'out'. Any player camera input ends it at once.
     this._ion = { active: false, phase: 'in', t: 0, savedNear: 0, holdLeft: -1 };
     this._ionOff = new THREE.Vector3();
     this._ionTgt = new THREE.Vector3();
@@ -608,7 +475,6 @@ export class CameraSystem {
     this._ionQ2 = new THREE.Quaternion();
     this._ionIdentityQ = new THREE.Quaternion();
 
-    // Q2: Net ceremony cinematic state (parallel to _launchCeremony)
     this._netCeremony = {
       active: false,
       beatIndex: 0,
@@ -621,20 +487,14 @@ export class CameraSystem {
       savedFov: 0,         // pre-ceremony _baseFov
       isFirstEver: false,  // true if this is the first-ever net deploy
       success: null,       // null until NET_CEREMONY_COMPLETE event
-      // ── Launcher abstraction (mother-net-reel plan §11.1) ──
-      // The ceremony was arm-centric: arm.position anchored every beat,
-      // getActiveNetForArm found the net, arm.target._scenePosition found the
-      // debris. A mother-pod shot has armIndex=-1 and no arm, so all three
-      // early-exited. _launcher generalises the anchor:
+      // Launcher abstraction (a mother-pod shot has armIndex=-1 and no arm): anchors every beat.
       //   daughter: getPos → arm.position,        getDebrisPos → arm.target._scenePosition
       //   mother:   getPos → pod muzzle (live),   getDebrisPos → net.targetDebris._scenePosition
-      // Both allocation-free; null when no launcher could be resolved (the
-      // ceremony then refuses to start — the same contract as the old no-arm
-      // early-exit).
+      // Both allocation-free; null when no launcher could be resolved (the ceremony then refuses to start).
       _launcher: null,     // { getPos(out), getDebrisPos(out) } | null
       _net: null,          // the NetProjectile (either path)
-      _reelBeatChained: false, // Phase D.2 — the REEL_IN beat chains at most once
-      _quiet: false,           // reel-visible — started while the ladder owns the camera: slow motion only, no view
+      _reelBeatChained: false, // the REEL_IN beat chains at most once
+      _quiet: false,           // started while the ladder owns the camera: slow motion only, no view
       // Persistent geometry (set once at ceremony start)
       _launchFwd: new THREE.Vector3(),     // launch direction (unit)
       _sideDir: new THREE.Vector3(),       // port-side (cross fwd × radialUp)
@@ -649,14 +509,10 @@ export class CameraSystem {
       _scratchLauncherPos: new THREE.Vector3(), // launcher (arm/pod) scene position
     };
 
-    // 2026-08-26 — the SHORT lasso-catch cut (FEATURE_FLAGS.LASSO_CATCH_CUT).
-    // One continuous catch-framed shot from wrap contact through the reel
-    // escort, S4 grammar (hold [8,12] m off the catch, side/up off the reel
-    // line, look biased ≤ 4.5 m toward the ship), released the moment the
-    // reel resolves (+ a settle breath) or at LASSO_CUT_MAX_S — always before
-    // the berth-secure clock starts digestion. NOT the beat machinery: no
-    // beat list, no time-scale, no FOV moves; deliberately the smallest
-    // camera statement that reads "you caught it".
+    // The SHORT lasso-catch cut (FEATURE_FLAGS.LASSO_CATCH_CUT): one continuous catch-framed shot from wrap contact
+    // through the reel escort (hold [8,12] m off the catch, side/up off the reel line, look biased ≤ 4.5 m toward the
+    // ship), released when the reel resolves (+ a settle breath) or at LASSO_CUT_MAX_S, always before the berth-secure
+    // clock starts digestion. NOT the beat machinery: no beat list, no time-scale, no FOV moves.
     this._lassoCut = {
       active: false,
       t: 0,
@@ -664,12 +520,9 @@ export class CameraSystem {
       debris: null,        // the wrapped piece (captured at LASSO_CONTACT)
       savedView: null,
       savedFov: 0,
-      // Round 3 (2026-08-26) — transient-entry retry: a subject-sanity refusal
-      // at LASSO_CONTACT (ghost `_scenePosition`, out-of-range read, degenerate
-      // reel line) arms a per-frame retry while THIS reel is still live on
-      // THIS debris, instead of skipping the whole cut. Policy refusals
-      // (flags, reduced motion, held keys, an owning ceremony) never retry —
-      // they are answers, not races.
+      // Transient-entry retry: a subject-sanity refusal at LASSO_CONTACT (ghost `_scenePosition`, out-of-range read,
+      // degenerate reel line) arms a per-frame retry while THIS reel is still live on THIS debris. Policy refusals
+      // (flags, reduced motion, held keys, an owning ceremony) never retry: they are answers, not races.
       pendingDebris: null,
       _sideDir: new THREE.Vector3(),   // fixed at entry — stable framing
       _vCatch: new THREE.Vector3(),
@@ -680,69 +533,48 @@ export class CameraSystem {
     };
     /** @type {object|null} LassoSystem — wired by main.js (setLassoSystem). */
     this._lassoSystem = null;
-    /** @type {(function(): boolean)|null} Returns true while any player key is
-     *  held — the cut never STARTS over active piloting (a held key produces
-     *  no new keydown, so the any-input abort alone could not cover it). */
+    /** @type {(function(): boolean)|null} True while any player key is held: the cut never STARTS over active piloting
+     *  (a held key produces no new keydown, so the any-input abort alone could not cover it). */
     this._lassoCutInputProbe = null;
 
-    // ========================================================================
-    // HUD OVERLAY for view indicator
-    // ========================================================================
     this._viewIndicator = null;
     this._viewIndicatorTimer = 0;
-    /** @type {boolean} When true the indicator stays on screen (no fade) —
-     * used for non-default views so the player never loses track of being
-     * in LOOK AROUND. Cleared when returning to the default FLY view. */
+    /** @type {boolean} Keeps the indicator on screen (no fade) in non-default views; cleared on return to FLY. */
     this._viewIndicatorPersistent = false;
     this._createViewIndicator();
 
-    // ========================================================================
-    // MOUSE EVENT HANDLERS
-    // ========================================================================
-    // Sim mode: NO camera shake on capture. Previously bumped the camera on
-    // ARM_CAPTURED / LASSO_CAPTURED ("catch juice"), which read as arcade
-    // feedback. A real ADR sat catching sub-kg debris would feel nothing.
-    // Listeners removed per user feedback.
-    //
-    // EXCEPTION (mother-net-reel plan §9.11): the WHALE tug is different — a
-    // 0.5–23 t catch yanking the Mother at line-taut is a real momentum event
-    // the crew WOULD feel. Re-subscribed for the mother path only
-    // (NET_MOTHER_TUG, emitted once at CAPTURED with the imparted Δv), amplitude
-    // scaled by that Δv, duration ≈ the spring window, and skipped entirely
-    // under prefers-reduced-motion. Arm/lasso captures stay silent — that
-    // decision stands.
-    // F3 (Phase D hardening): collect every eventBus subscription so dispose()
-    // can drain them. Without this, every CameraSystem ever constructed stays
-    // subscribed to NET_CEREMONY_START for the process lifetime — a stale
-    // instance re-arms on the next start and pins CeremonyTimeScale (test
-    // pollution + a production leak after a ceremony loses its update() driver).
+    // Sim mode: NO camera shake on capture (a real ADR catching sub-kg debris would feel nothing); arm/lasso captures
+    // stay silent.
+    // EXCEPTION: the WHALE tug. A 0.5–23 t catch yanking the Mother at line-taut is a real momentum event. Subscribed
+    // for the mother path only (NET_MOTHER_TUG, once at CAPTURED with the imparted Δv): amplitude scaled by that Δv,
+    // duration ≈ the spring window, skipped under prefers-reduced-motion.
+    // Collect every eventBus subscription so dispose() can drain them: otherwise each CameraSystem ever constructed
+    // stays subscribed to NET_CEREMONY_START for the process lifetime (a stale instance re-arms and pins
+    // CeremonyTimeScale).
     this._unsubs = this._unsubs || [];
     this._unsubs.push(eventBus.on(Events.NET_MOTHER_TUG, (data) => {
       if (!data || data.podIndex < 0) return;              // mother pods only
       if (this._prefersReducedMotion()) return;            // accessibility gate
       const dv = data.dvMs || 0;
       if (dv <= 0) return;                                 // envelope-damped tug: no shake
-      // Amplitude scales with the imparted Δv against the cap (0.5 m/s →
-      // full CATCH_SHAKE_INTENSITY); duration follows the spring window.
-      // Store ONLY the scale — the base constants stay immutable (minor 7).
+      // Amplitude scales with the imparted Δv against the cap (0.5 m/s → full CATCH_SHAKE_INTENSITY); duration follows
+      // the spring window. Store ONLY the scale: the base constants stay immutable.
       const cap = Constants.CAPTURE_NET?.NET_TUG_MAX_DV_MS ?? 0.5;
       this._catchShakeScale = Math.min(1, dv / Math.max(1e-9, cap));
       this._catchShakeDuration = data.windowS || Constants.CATCH_SHAKE_DURATION || 0.3;
       this._catchShakeTimer = this._catchShakeDuration;
     }));
 
-    // Phase 4: Listen for thrust visual events for FOV breathe
     this._unsubs.push(eventBus.on(Events.THRUST_VISUAL, (data) => {
       this._thrustVisualMag = data.magnitude || 0;
       this._thrustVisualDir = data.direction || null;
     }));
 
-    // V-7: Launch ceremony trigger
     this._unsubs.push(eventBus.on(Events.LAUNCH_CEREMONY_START, ({ arm }) => {
       this.startLaunchCeremony(arm);
     }));
 
-    // Q2: Net ceremony event subscriptions (gated at handler entry)
+    // Net ceremony subscriptions (gated at handler entry)
     this._unsubs.push(eventBus.on(Events.NET_CEREMONY_START, (payload) => {
       this._onNetCeremonyStart(payload);
     }));
@@ -756,9 +588,8 @@ export class CameraSystem {
       this._onNetBerthed(payload);
     }));
 
-    // 2026-08-26 — lasso catch cut triggers/aborts. Contact enters (fully
-    // guarded in the handler); a mid-cut miss or tether snap is a truncation
-    // (the catch is NOT made) — the letterbox must drop the same frame.
+    // Lasso catch cut: contact enters (guarded in the handler); a mid-cut miss or tether snap is a truncation (the
+    // catch is NOT made), so the letterbox must drop the same frame.
     this._unsubs.push(eventBus.on(Events.LASSO_CONTACT, () => {
       this._onLassoContact();
     }));
@@ -769,16 +600,12 @@ export class CameraSystem {
       if (this._lassoCut.active) this._exitLassoCut(false);
     }));
 
-    // P3 (visual-centerpiece plan §6): guarantee CeremonyTimeScale is released
-    // when a net ceremony stops receiving update() — otherwise the net FSM keeps
-    // reading a <1.0× scale and runs in slow-motion indefinitely (the leak the
-    // comment above warns about, but from the driver side rather than dispose).
-    //   • A hard game-state transition (mission end, back to menu) cannot carry a
-    //     cinematic across it, so abort any live ceremony — that restores the
-    //     view/FOV and resets the scale.
-    //   • The pause menu should resume the SAME ceremony, so only release the
-    //     scale this system owns; _updateNetCeremony re-asserts the active beat's
-    //     scale on the next served frame (self-healing).
+    // Guarantee CeremonyTimeScale is released when a net ceremony stops receiving update(); otherwise the net FSM keeps
+    // reading a <1.0× scale and runs in slow motion indefinitely.
+    //   • A hard game-state transition (mission end, back to menu) cannot carry a cinematic across it: abort any live
+    //     ceremony (restores view/FOV and resets the scale).
+    //   • The pause menu resumes the SAME ceremony: only release the scale this system owns; _updateNetCeremony
+    //     re-asserts the active beat's scale on the next served frame (self-healing).
     this._unsubs.push(eventBus.on(Events.GAME_STATE_CHANGE, () => {
       if (this._netCeremony && this._netCeremony.active) this._abortNetCeremony();
       else CeremonyTimeScale.reset(this);
@@ -789,40 +616,33 @@ export class CameraSystem {
     this._unsubs.push(eventBus.on(Events.PAUSE_MENU, () => {
       CeremonyTimeScale.reset(this);
     }));
-    // Ion start-up: BEGIN swings the camera out behind her tail; LIT (all four burn) starts its hold (CAM_HOLD_S, so he sees them at full
-    // power) and then the hand-back; END (the trip ended / was aborted) hands it back at once.
+    // Ion start-up: BEGIN swings the camera out behind her tail; LIT (all four burn) starts its hold (CAM_HOLD_S) and
+    // then the hand-back; END (the trip ended / was aborted) hands it back at once.
     this._unsubs.push(eventBus.on(Events.ION_STARTUP_BEGIN, () => this._beginIonStartup()));
     this._unsubs.push(eventBus.on(Events.ION_STARTUP_LIT, () => this._litIonStartup()));
     this._unsubs.push(eventBus.on(Events.ION_STARTUP_END, () => this._releaseIonStartup()));
-    // ... and his own camera input ends the swing at once. With the ladder on, the wheel and the pinch never reach handleWheelZoom (the
-    // WheelRouter feeds the ladder); the router emits this before it routes, so it is the one signal every wheel / pinch gives. (A
-    // ladder ride - the rail, a floor change - ends it in ladderStartRide.)
+    // ... and any player camera input ends the swing at once. With the ladder on, the wheel and the pinch never reach
+    // handleWheelZoom (the WheelRouter feeds the ladder); the router emits this before it routes, so it is the one
+    // signal every wheel / pinch gives. (A ladder ride - the rail, a floor change - ends it in ladderStartRide.)
     this._unsubs.push(eventBus.on(Events.CAMERA_ZOOM_INPUT, () => this._ionStartupInput('zoom input')));
 
-    // ========================================================================
-    // ZOOM LADDER camera (S2 ride engine — docs/ladder/06-core-api.md, T6).
-    // A separate override slot (parallel to the launch/net ceremonies) driven by
-    // LadderController: it dollies the camera along a direction from the
-    // floor's anchor (ship for F3–F5, Earth CENTRE for F6–F7 → Earth-fixed
-    // framing, which setView() offset lerps cannot do) at the (floor, z01)
-    // distance, cubic-in-out for crossing rides. The direction is HEADING-
-    // RELATIVE on ship anchors (B1, see `local` below) and inertial on Earth
-    // anchors. Active only while the ladder is engaged (Constants.LADDER.ENABLED
-    // + gameplay); untouched when the flag is off, so shipped views stay
-    // byte-identical.
-    // ========================================================================
+    // ZOOM LADDER camera (ride engine, archive/ladder/06-core-api.md): a separate override slot (parallel to the
+    // launch/net ceremonies) driven by LadderController. It dollies the camera along a direction from the floor's
+    // anchor (ship for F3–F5, Earth CENTRE for F6–F7 → Earth-fixed framing, which setView() offset lerps cannot do) at
+    // the (floor, z01) distance, cubic-in-out for crossing rides. The direction is HEADING-RELATIVE on ship anchors
+    // (see `local` below) and inertial on Earth anchors. Active only while the ladder is engaged
+    // (Constants.LADDER.ENABLED + gameplay); untouched when the flag is off, so shipped views stay byte-identical.
     this._ladderUpdateSeq = 0;   // drawn-frame counter (ladderDragNudge coalescing)
     this._ladderUpdateWallMs = null;   // wall clock of the last ladder update (stale-nudge guard)
     this._wallNowMs = () => ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now());
     this._ladderCam = {
       active: false,
       anchor: 'ship',            // 'ship' | 'earth'
-      dir: new THREE.Vector3(0, 0.35, 1).normalize(), // anchor→camera unit dir (WORLD; rebuilt from `local` on ship anchors — B1)
-      earthTurn: null,           // u8-f4-frame-field: a running turn of `dir` on an Earth anchor { start, target, t } (ladderTurnEarthTo); null = none
+      dir: new THREE.Vector3(0, 0.35, 1).normalize(), // anchor→camera unit dir (WORLD; rebuilt from `local` on ship anchors)
+      earthTurn: null,           // a running turn of `dir` on an Earth anchor { start, target, t } (ladderTurnEarthTo); null = none
       curDistU: 0.0004,          // eased current distance (scene units)
       targetDistU: 0.0004,       // free-scroll / settle target
       fov: Constants.CAMERA_FOV,
-      // Ride (crossing / mini): cubic-in-out distance+fov lerp over `dur`.
       riding: false,
       rideT: 0,
       rideDur: 0,
@@ -833,29 +653,22 @@ export class CameraSystem {
       rideAnchorFrom: 'ship',
       onDone: null,
       _tmp: new THREE.Vector3(),
-      // Cross-anchor up-frame interpolation temps (F5↔F6 reorientation — Q10:
-      // down-rides roll early in the ride, up-rides level AFTER it; see
-      // _updateLadderCamera / _ladderSlerpUp).
+      // Cross-anchor up-frame interpolation temps (F5↔F6; down-rides roll early in the ride, up-rides level AFTER it;
+      // see _updateLadderCamera / _ladderSlerpUp).
       _upTo: new THREE.Vector3(),
       _upQuat: new THREE.Quaternion(),
       _upQuatE: new THREE.Quaternion(),
-      // Drag-to-rotate (S4; renumbered ids): mouse drag rotates the dolly
-      // direction — the LOCAL orbital-frame pose on ship anchors
-      // (heading-relative, B1), the inertial world dir on Earth anchors —
-      // around the floor's up-frame with ORBIT's velocity+damping feel
-      // (constants mirror this.orbit). Two gates (2026-10-20): `enabled` is the
-      // MOUSE rule — floors 2/3/4 always (floor 2 widened, owner "Mac too"),
-      // floor 1 (the workbench) only WHILE a drawer is open (the TURNTABLE,
-      // plan D-F; arrows orbit the CAMERA, never the ship). `touchEnabled` is
-      // the TOUCH rule — a finger turns the view on floors 1–4 with or without
-      // a drawer. The floor-5 chart stays locked for both; closing the drawer
-      // on floor 2 forgets the dragged pose (setLadderPaneOpen). Every consumer is
-      // additionally gated on lc.active, so the shipped mouse handling is
-      // byte-identical while the ladder is off.
+      // Drag-to-rotate: mouse drag rotates the dolly direction (the LOCAL orbital-frame pose on ship anchors, the
+      // inertial world dir on Earth anchors) around the floor's up-frame with ORBIT's velocity+damping feel (constants
+      // mirror this.orbit). Two gates: `enabled` is the MOUSE rule: floors 2/3/4 always, floor 1 (the workbench) only
+      // WHILE a drawer is open (the TURNTABLE; arrows orbit the CAMERA, never the ship). `touchEnabled` is the TOUCH
+      // rule: a finger turns the view on floors 1–4 with or without a drawer. The floor-5 chart stays locked for both;
+      // closing the drawer on floor 2 forgets the dragged pose (setLadderPaneOpen). Every consumer is also gated on
+      // lc.active, so mouse handling is byte-identical while the ladder is off.
       paneOpen: false,        // main.js feeds setLadderPaneOpen (the ONE pane edge)
       drag: {
         enabled: false,       // the MOUSE gate (_ladderDragEnabledFor)
-        touchHeld: false,     // fb16: a finger is held on a view drag (TouchControls -> ladderSetTouchHeld): view input while down
+        touchHeld: false,     // a finger is held on a view drag (TouchControls -> ladderSetTouchHeld): view input while down
         touchEnabled: false,  // the TOUCH gate (_ladderTouchDragEnabledFor): a finger turns the view on floors 1-4
         isDragging: false,
         lastMouseX: 0,
@@ -871,28 +684,22 @@ export class CameraSystem {
       },
       _dragUp: new THREE.Vector3(),
       _dragRight: new THREE.Vector3(),
-      // HULL CAM (floor 1) inspect side-effect absorption (T6): true while the
-      // engaged ladder floor is 1 and the inspect dim/overlay effects are
-      // applied. See _ladderApplyInspectFx.
+      // HULL CAM (floor 1): true while the engaged ladder floor is 1 and the inspect dim/overlay effects are applied
+      // (_ladderApplyInspectFx).
       inspectFxActive: false,
-      // B1 (docs/ladder/08-workbench.md §8) — "flying backwards" fix. On SHIP
-      // anchors the dolly offset lives in the ship's ORBITAL frame — R = radial,
-      // T = velocity (Gram-Schmidt against R; identical for circular orbits),
-      // N = R × T — as unit local coefficients `local = (r, t, n)`, and the
-      // world `dir` is rebuilt from the LIVE frame every frame, exactly what the
-      // shipped CHASE does with velDir/radialDir. The camera therefore follows
-      // the heading instead of drifting behind → beside → ahead over half an
-      // orbit. Earth anchors keep the inertial world `dir` (that is what makes
-      // Earth's spin visible on F6/F7). Cross-anchor rides: ship→Earth freezes
-      // the current world dir (continuity, then inertial); Earth→ship slerps the
-      // world dir from the frozen inertial start toward the ARRIVAL local pose
-      // (the player's per-floor drag memory, else the canonical chase-behind
-      // pose) recomputed each frame from the live frame, on the ride's ease.
+      // On SHIP anchors the dolly offset lives in the ship's ORBITAL frame (docs/ladder/08-workbench.md §8, the "flying
+      // backwards" fix): R = radial, T = velocity (Gram-Schmidt against R; identical for circular orbits), N = R × T, as
+      // unit local coefficients `local = (r, t, n)`. The world `dir` is rebuilt from the LIVE frame every frame, as CHASE
+      // does with velDir/radialDir, so the camera follows the heading instead of drifting behind → beside → ahead over
+      // half an orbit. Earth anchors keep the inertial world `dir` (that makes Earth's spin visible on F6/F7).
+      // Cross-anchor rides: ship→Earth freezes the current world dir (continuity, then inertial); Earth→ship slerps the
+      // world dir from the frozen inertial start toward the ARRIVAL local pose (the player's per-floor drag memory, else
+      // the canonical chase-behind pose), recomputed each frame from the live frame, on the ride's ease.
       local: new THREE.Vector3(0, 1, 0),   // (r, t, n): x along R, y along T, z along N
       localSeeded: false,                  // false ⇒ project the world dir on the next ship-anchored frame
       floor: null,                         // engaged frame's floor id (drag-memory key)
-      dragMemory: {},                      // floor → Vector3 local pose last dragged there (D5: per-floor framing memory)
-      // fb16 V1-V5: the view returns to the floor's default after a pause (LADDER_VIEW_RETURN; _stepLadderViewReturn).
+      dragMemory: {},                      // floor → Vector3 local pose last dragged there (per-floor framing memory)
+      // The view returns to the floor's default after a pause (LADDER_VIEW_RETURN; _stepLadderViewReturn).
       viewReturn: {
         dirty: false,       // a view input moved the view since it was last at default: a return is owed
         moved: false,       // the drag block applied a turn this frame (set there, read and cleared by the step)
@@ -919,49 +726,39 @@ export class CameraSystem {
       _dirQuatE: new THREE.Quaternion(),
       _localUp: new THREE.Vector3(1, 0, 0),   // the R axis in local coordinates (the ship floors' pole)
       _localRight: new THREE.Vector3(),
-      // Q10 — the roll is its own phase (see LADDER_LEVEL_MS / LADDER_DOWN_ROLL_FRAC).
-      // `_upStart` is the camera.up captured at ride start: an UP-ride holds it
-      // for the whole flight and then levels it to Earth-north in the post-ride
-      // `leveling` phase; a DOWN-ride rolls it to the live ship-radial during
-      // the first LADDER_DOWN_ROLL_FRAC of the ride. `levelHoldFloor` is the
-      // up-ride's DEPARTURE floor, whose timeCap main.js keeps feeding the
-      // TimeAuthority until the level phase completes (ladderWarpHoldFloor).
+      // The roll is its own phase (see LADDER_LEVEL_MS / LADDER_DOWN_ROLL_FRAC). `_upStart` is the camera.up captured at
+      // ride start: an UP-ride holds it for the whole flight, then levels it to Earth-north in the post-ride `leveling`
+      // phase; a DOWN-ride rolls it to the live ship-radial during the first LADDER_DOWN_ROLL_FRAC of the ride.
+      // `levelHoldFloor` is the up-ride's DEPARTURE floor, whose timeCap main.js keeps feeding the TimeAuthority until
+      // the level phase completes (ladderWarpHoldFloor).
       _upStart: new THREE.Vector3(0, 1, 0),
       leveling: false,
       levelT: 0,
       rideFloorFrom: null,
       levelHoldFloor: null,
-      // Wave 5 (3) — the F3 look-at bias (08-workbench §2 / 01-numbers "F3
-      // look-at bias"): while a workbench pane covers one edge of the viewport
-      // the subject reframes toward the PANE-FREE centre. main.js feeds ONE
-      // signed CSS-px inset through setLadderPaneInset (positive = a pane on
-      // the LEFT edge, negative = RIGHT; both open → the caller nets them) from
-      // the pane's onOpenChange edge — the same signal that feeds the D10 calm
-      // cap. The per-frame TARGET is that inset only while the engaged floor is
-      // 3, else 0 (so a ride away, a disengage or a close all release it),
-      // eased over LADDER_PANE_REFRAME_MS on the ride ease (reduced motion →
-      // snap). The bias is a pure YAW about the camera's own up, applied AFTER
-      // the shipped lookAt — position, distance, up, the dolly frame and the
-      // ride engine are untouched — sized so the anchor projects to
-      // x_ndc = inset / viewport width: exactly the centre of the uncovered strip.
+      // F3 look-at bias (08-workbench §2 / 01-numbers "F3 look-at bias"): while a workbench pane covers one edge of the
+      // viewport the subject reframes toward the PANE-FREE centre. main.js feeds ONE signed CSS-px inset through
+      // setLadderPaneInset (positive = pane on the LEFT edge, negative = RIGHT; both open → the caller nets them) from
+      // the pane's onOpenChange edge (the same signal that feeds the calm cap). The per-frame TARGET is that inset only
+      // while the engaged floor is 3, else 0 (a ride away, a disengage or a close all release it), eased over
+      // LADDER_PANE_REFRAME_MS on the ride ease (reduced motion → snap). The bias is a pure YAW about the camera's own
+      // up, applied AFTER the shipped lookAt (position, distance, up, dolly frame and ride engine untouched), sized so
+      // the anchor projects to x_ndc = inset / viewport width: the centre of the uncovered strip.
       paneInsetPx: 0,       // the request (setLadderPaneInset) — 0 forever on a flag-off boot
       paneBiasPx: 0,        // the eased inset applied this frame
       paneBiasFrom: 0,
       paneBiasTo: 0,
       paneBiasT: 1,         // ease progress (1 = settled)
-      // H2 (DECISIONS §15, owner 2026-10-09: "the camera should follow the
-      // daughter") — on floors 2–3 a piloted daughter becomes the ship
-      // anchor. The target is captured ONCE per frame at the top of
-      // _updateLadderCamera (the blend clock); the anchor readers below only
-      // read it. The blend is in OFFSETS from the live mother position, never
-      // between frozen world points: the ship moves ~2.3 km per 300 ms.
+      // DECISIONS §15 (owner 2026-10-09: "the camera should follow the daughter"): on floors 2–3 a piloted daughter
+      // becomes the ship anchor. The target is captured ONCE per frame at the top of _updateLadderCamera (the blend
+      // clock); the anchor readers only read it. The blend is in OFFSETS from the live mother position, never between
+      // frozen world points: the ship moves ~2.3 km per 300 ms.
       followArm: null,                    // the daughter the ship anchor rides with (null = the mother)
       followT: 1,                         // blend progress since the last target change (1 = settled)
       followFromOff: new THREE.Vector3(), // anchor − mother when the target last changed
       followLastOff: new THREE.Vector3(), // anchor − mother as resolved on the previous frame
     };
 
-    // reel-visible: the catch focus (see CATCH_FOCUS). A blend OVER the ladder camera, never a write into it.
     this._catchFocus = {
       active: false,                      // from NET_CATCH_SUCCESS until the blend has eased back to 0
       engaging: true,                     // false once released / cancelled: the blend is only easing out
@@ -990,8 +787,8 @@ export class CameraSystem {
       innerDist: 0,                       // daughter focus: the nearest his zoom may bring the camera to her this frame (scene units; 0 = the daughter limit alone)
       zoom: 1,                            // daughter focus (owner 2026-10-27): his wheel / pinch zoom, a factor on the shot's distance; holds for the whole spell
       zoomed: false,                      // `zoom` is in force this frame (not 1)
-      safeDist: 0,                        // FB11: the reel view's floor (scene units): the nearest point of her and her catch stays clear of the near plane
-      reelView: false,                    // reel view (B2): the focus rides with a daughter on her reel home
+      safeDist: 0,                        // the reel view's floor (scene units): the nearest point of her and her catch stays clear of the near plane
+      reelView: false,                    // the focus rides with a daughter on her reel home
       reelSeen: false,                    // she has been on a reel home during this focus
       reelSeq: 0,                         // which reel (ArmUnit._rhReelSeq) the view follows
       spell: null,                        // wait view: the waiting spell this focus began on ({n, live}; null for every other focus)
@@ -1009,8 +806,8 @@ export class CameraSystem {
       rel: new THREE.Vector3(),           // the focus point relative to the mother, last frame
       relSeeded: false,
       vel: new THREE.Vector3(),           // its velocity relative to the mother (filtered), scene units / s
-      lastMeas: new THREE.Vector3(),      // FB10: last frame's measured velocity (while it counted as a jump)
-      jumpRun: 0,                         // FB10: consecutive frames that counted as jumps with the same measured velocity
+      lastMeas: new THREE.Vector3(),      // last frame's measured velocity (while it counted as a jump)
+      jumpRun: 0,                         // consecutive frames that counted as jumps with the same measured velocity
       aim: new THREE.Vector3(),
       q2a: new THREE.Vector3(),           // scratch for _catchFocusBlendDir
       q2b: new THREE.Vector3(),
@@ -1020,9 +817,9 @@ export class CameraSystem {
       azKeep: { ang: 0, set: false },     // the drawn blend's turn of last frame (kept continuous; cleared while the focus weight is 0)
       v: new THREE.Vector3(),
     };
-    this._takeoverDistU = null; // FB8: the distance a camera input took over from the focus, until the ladder controller has read it
+    this._takeoverDistU = null; // the distance a camera input took over from the focus, until the ladder controller has read it
     this._reelViewOff = null;   // {arm, seq}: the reel whose view he ended (or that was refused): not started again
-    // wait view (2026-10-27, DECISIONS §46): the view goes to a daughter who waits in STATION_KEEP for N.
+    // Wait view (DECISIONS §46): the view goes to a daughter who waits in STATION_KEEP for N.
     this._waitSpells = new Map();   // ArmUnit -> {n, live}: a spell runs from her first STATION_KEEP until a state that is not part of the catch
     this._waitSpellSeq = 0;         // spells counted over all daughters (the oldest still waiting gets the view first)
     this._waitViewOff = new Map();  // ArmUnit -> spell number: the waiting spell whose view he ended (or that the mother's catch took): not started again in that spell
@@ -1035,7 +832,7 @@ export class CameraSystem {
     }));
     this._unsubs.push(eventBus.on(Events.CATCH_BREAKDOWN_START, (p) => this._onCatchFocusBreakdown(p)));
     this._unsubs.push(eventBus.on(Events.CATCH_PROCESSED, (p) => this._onCatchFocusProcessed(p)));
-    // catch-focus: a lasso catch gets the focus from contact; a snapped or missed line lets it go
+    // A lasso catch gets the focus from contact; a snapped or missed line lets it go
     this._unsubs.push(eventBus.on(Events.LASSO_CONTACT, (p) => this._onCatchFocusLassoStart(p)));
     this._unsubs.push(eventBus.on(Events.LASSO_SNAPPED, () => this._onCatchFocusLassoLost('lasso snapped')));
     this._unsubs.push(eventBus.on(Events.LASSO_MISSED, () => this._onCatchFocusLassoLost('lasso missed')));
@@ -1043,7 +840,7 @@ export class CameraSystem {
     this._boundMouseDown = this._onMouseDown.bind(this);
     this._boundMouseMove = this._onMouseMove.bind(this);
     this._boundMouseUp = this._onMouseUp.bind(this);
-    this._boundWindowMouseUp = () => { this._ladderCam.drag.isDragging = false; };   // fb16: a release off the canvas ends the ladder drag
+    this._boundWindowMouseUp = () => { this._ladderCam.drag.isDragging = false; };   // a release off the canvas ends the ladder drag
     this._boundContextMenu = (e) => {
       if (this.currentView === CameraViews.FIRST_PERSON ||
           this.currentView === CameraViews.ORBIT) {
@@ -1054,29 +851,12 @@ export class CameraSystem {
     this._attachMouseListeners();
   }
 
-  // ==========================================================================
-  // VIEW CYCLING
-  // ==========================================================================
-
-  /**
-   * Toggle the camera view (V key): FLY ↔ LOOK AROUND.
-   *
-   * 2026-06-15 (2-cycle): close inspection is no longer a cycle stop — it
-   * engages automatically by zooming in while in LOOK AROUND. The discrete
-   * INSPECTION view is still reachable via the legacy bare-I / toggleInspection()
-   * path; pressing V from there wraps back to FLY and restores optics/overlay.
-   *
-   * @param {string|number|null} [lockedId] - The currently Tab-locked debris id
-   *   (or null). Accepted for API stability with the V-key caller; no longer used
-   *   directly now that INSPECTION left the cycle.
-   */
+  /** Toggle FLY ↔ LOOK AROUND (V key); from the discrete INSPECTION view V wraps to FLY. `lockedId` is unused. */
   cycleView(lockedId = null) {
     void lockedId; // retained for caller API stability (INSPECTION left the cycle)
-    this._ionStartupInput('view key');   // ion start-up: the player's own camera input ends the swing at once
+    this._ionStartupInput('view key');   // the player's own camera input ends the ion start-up swing at once
     const cur = this.currentView;
 
-    // From the legacy discrete INSPECTION view, V wraps back to FLY (restores
-    // optics/overlay).
     if (cur === CameraViews.INSPECTION) {
       this.exitInspection(CameraViews.CHASE);
       return;
@@ -1088,29 +868,23 @@ export class CameraSystem {
     this.setView(next);
   }
 
-  /**
-   * Set a specific camera view with smooth transition.
-   * @param {string} view - A CameraViews enum value
-   */
+  /** Set a camera view (a CameraViews value) with a smooth transition. */
   setView(view) {
     if (view === this.currentView && !this._transitioning) return;
 
-    // Leaving OVERVIEW clears the zoom-driven inspection sub-state so its
-    // narrow FOV / near-plane / vignette / overlay don't leak into the next
-    // view. (No-op if it was never engaged.)
+    // Leaving OVERVIEW clears the zoom-driven inspection sub-state so its narrow FOV / near-plane / vignette / overlay
+    // don't leak into the next view.
     if (this.currentView === CameraViews.ORBIT && view !== CameraViews.ORBIT) {
       this._clearInspectZoom();
     }
 
-    // Q2 Stage 6: external view switch during an active net ceremony aborts
-    // the ceremony cleanly (FOV/time-scale restored, FIRST_NET_DEPLOY NOT
-    // written). NET_CINEMATIC entries from the ceremony itself are exempt.
+    // An external view switch during an active net ceremony aborts it cleanly (FOV/time-scale restored, FIRST_NET_DEPLOY
+    // NOT written). NET_CINEMATIC entries from the ceremony itself are exempt.
     if (this._netCeremony.active && view !== CameraViews.NET_CINEMATIC) {
       this._abortNetCeremony();
     }
-    // Same contract for the lasso cut — any external view intent wins
-    // instantly (the cut is garnish, never a wall). _exitLassoCut clears
-    // `active` before its own setView, so this cannot recurse.
+    // Same for the lasso cut: any external view intent wins instantly (the cut is garnish, never a wall).
+    // _exitLassoCut clears `active` before its own setView, so this cannot recurse.
     if (this._lassoCut.active && view !== CameraViews.NET_CINEMATIC) {
       this._exitLassoCut(false);
     }
@@ -1118,11 +892,10 @@ export class CameraSystem {
     this._previousView = this.currentView;
     this.currentView = view;
 
-    // Start transition — capture current camera state as OFFSET from player
     this._transitioning = true;
     this._transitionProgress = 0;
-    // When leaving orbit/inspection view, use canonical theta=π (behind + above) position
-    // to prevent 90° roll caused by arbitrary orbit theta
+    // Leaving orbit/inspection: use the canonical theta=π (behind + above) position to prevent a 90° roll from an
+    // arbitrary orbit theta
     if ((this._previousView === CameraViews.ORBIT || this._previousView === CameraViews.INSPECTION) && this._lastVelDir) {
       const radialDir = this._lastPlayerPos.clone().normalize();
       const velDir = this._lastVelDir;
@@ -1130,7 +903,6 @@ export class CameraSystem {
       const d = cfg.distance;
       const cosPhi = Math.cos(cfg.phi);
       const sinPhi = Math.sin(cfg.phi);
-      // Canonical orbit: theta=π → cosTheta=-1, sinTheta=0
       // offset = radialDir * d * cosPhi + (-velDir) * d * sinPhi
       const canonOffset = radialDir.clone().multiplyScalar(d * cosPhi)
         .sub(velDir.clone().multiplyScalar(d * sinPhi));
@@ -1138,17 +910,14 @@ export class CameraSystem {
       this._transitionStartLookDir.copy(canonOffset).negate().normalize();
     } else {
       this._transitionStartOffset.copy(this.camera.position).sub(this._lastPlayerPos);
-      // Capture the camera's current look direction (unit vector)
       this._transitionStartLookDir.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
     }
 
-    // Reset orbit + inspection drag state
     this.orbit.isDragging = false;
     this._dragStop(this.orbit);
     this.inspection.isDragging = false;
     this._dragStop(this.inspection);
 
-    // Reset free look
     this.firstPerson.freeLookYaw = 0;
     this.firstPerson.freeLookPitch = 0;
     this.firstPerson.freeLookActive = false;
@@ -1158,74 +927,46 @@ export class CameraSystem {
     if (!isArmPilotTransition) {
       this._showViewIndicator(view);
     } else {
-      // ARM_PILOT uses its own controls strip, not the camera view indicator.
-      // Force-clear the indicator so a persistent badge (e.g. "🔭 LOOK AROUND ·
-      // [V] to fly", set when LOOK AROUND was entered) doesn't linger on screen
-      // through the entire piloting session.
+      // ARM_PILOT uses its own controls strip: force-clear the indicator so a persistent badge (e.g. LOOK AROUND
+      // "[V] to fly") doesn't linger through the piloting session.
       this._viewIndicatorPersistent = false;
       this._viewIndicatorTimer = 0;
       this._hideViewIndicator();
     }
 
-    // Diagnostic background dim — fade in only for the INSPECT view.
     this._applyInspectDim(view === CameraViews.INSPECTION);
 
-    // Notify other systems of the view change
     eventBus.emit(Events.CAMERA_VIEW_CHANGE, { view, label: VIEW_LABELS[view] });
-    // UX-2 #12: Route camera view change through notification zone
-    // (skip for ARM_PILOT enter/exit — controls strip provides the indicator)
+    // Route the view change through the notification zone (skip for ARM_PILOT enter/exit: its controls strip is the
+    // indicator)
     if (!isArmPilotTransition) {
       eventBus.emit(Events.SHOW_NOTIFICATION, { text: VIEW_LABELS[view], kind: 'view' });
     }
     console.log(`[CameraSystem] View: ${VIEW_LABELS[view]}`);
   }
 
-  /**
-   * Get the current view mode.
-   * @returns {string}
-   */
   getView() {
     return this.currentView;
   }
 
-  /**
-   * Get the human-readable label for the current view.
-   * @returns {string}
-   */
   getViewLabel() {
     return VIEW_LABELS[this.currentView] || 'UNKNOWN';
   }
 
-  // ==========================================================================
-  // SET TARGET (for Target Lock mode)
-  // ==========================================================================
-
-  /**
-   * Set the target position for Target Lock camera.
-   * @param {THREE.Vector3|null} targetPos - World position of the target
-   */
   setLockTarget(targetPos) {
     this.targetLock.target = targetPos ? targetPos.clone() : null;
   }
 
-  /**
-   * Set current thrust magnitude (for head-bob in first person).
-   * @param {number} magnitude - 0 to 1
-   */
+  /** @param {number} magnitude - 0 to 1 (head-bob in first person) */
   setThrustMagnitude(magnitude) {
     this._thrustMagnitude = magnitude;
   }
 
-  // ==========================================================================
-  // UPDATE — Called every frame
-  // ==========================================================================
-
   /**
-   * Update camera position and orientation.
-   * @param {number} dt - Delta time in seconds
-   * @param {THREE.Vector3} playerPos - Player position in scene
-   * @param {{ x: number, y: number, z: number }} playerVel - Player velocity (km/s)
-   * @param {THREE.Quaternion} [playerQuat] - Player orientation quaternion
+   * Per-frame camera update.
+   * @param {number} dt - seconds
+   * @param {THREE.Vector3} playerPos - scene units
+   * @param {{ x: number, y: number, z: number }} playerVel - km/s
    */
   update(dt, playerPos, playerVel, playerQuat) {
     if (!playerPos || !playerVel) return;
@@ -1233,9 +974,8 @@ export class CameraSystem {
     this._lastVelDir.set(playerVel.x, playerVel.y, playerVel.z).normalize();
     const velDir = this._lastVelDir;
     const radialDir = this._radialDir.copy(playerPos).normalize();
-    // Round 3: keep the one-frame-old epoch for the in-update exit rebase
-    // (see _exitLassoCut). Seeded to the live pos on the first frame so a
-    // day-one exit can never rebase against the origin.
+    // Keep the one-frame-old epoch for the in-update exit rebase (see _exitLassoCut). Seeded to the live pos on the
+    // first frame so a day-one exit can never rebase against the origin.
     if (this._prevPlayerPosInit) {
       this._prevPlayerPos.copy(this._lastPlayerPos);
     } else {
@@ -1244,11 +984,9 @@ export class CameraSystem {
     }
     this._lastPlayerPos.copy(playerPos); // Cache for setView()
 
-    // Round 3 — lasso-cut transient-entry retry: a subject-sanity refusal at
-    // LASSO_CONTACT armed `pendingDebris`; re-attempt with THIS frame's ship
-    // position (the contact-time attempt reads the cached one, which is one
-    // frame old relative to the freshly pinned piece under long frames). The
-    // retry dies with the reel, with a retarget, or on any policy refusal.
+    // Lasso-cut transient-entry retry: a subject-sanity refusal at LASSO_CONTACT armed `pendingDebris`; re-attempt with
+    // THIS frame's ship position (the contact-time attempt reads the cached one, one frame old relative to the freshly
+    // pinned piece under long frames). The retry dies with the reel, with a retarget, or on any policy refusal.
     {
       const lc = this._lassoCut;
       if (lc && !lc.active && lc.pendingDebris) {
@@ -1261,36 +999,29 @@ export class CameraSystem {
       }
     }
 
-    // Cache the frame's LVLH basis for solveOrbitAnglesForDirection(). Done
-    // here in update(), not in _computeOrbit, so the basis exists before the
-    // first ORBIT frame and regardless of which view is active. Write-only on
-    // the render path — nothing reads these except the pure solver.
-    // KEEP IN SYNC: this same lateral/forward derivation lives in the view
-    // computations (_computeFirstPerson ×2, _computeOrbit, _computeInspection).
-    // solveOrbitAnglesForDirection() assumes the cache matches the ORBIT
-    // view's basis bit-for-bit; edit one site, edit them all.
+    // Cache the frame's LVLH basis for solveOrbitAnglesForDirection(). Done here, not in _computeOrbit, so the basis
+    // exists before the first ORBIT frame and regardless of the active view; nothing reads it except the pure solver.
+    // KEEP IN SYNC: the same lateral/forward derivation lives in _computeFirstPerson (×2), _computeOrbit and
+    // _computeInspection; the solver assumes the cache matches the ORBIT view's basis bit-for-bit.
     this._lvlhRadial.copy(radialDir);
     this._lvlhLateral.crossVectors(velDir, radialDir).normalize();
     this._lvlhForward.crossVectors(radialDir, this._lvlhLateral).normalize();
 
-    // Zoom Ladder override (S2) — highest-priority camera driver when engaged.
-    // Bypasses the normal view path entirely; the follow-light rig + shake below
-    // still run so the ship stays lit on the ladder.
+    // Zoom Ladder override: highest-priority camera driver when engaged. Bypasses the normal view path; the follow-light
+    // rig + shake below still run so the ship stays lit on the ladder.
     if (this._netCeremony.active && this._netCeremony._quiet) this._tickQuietNetCeremony(dt);
     if (this._ladderCam.active) {
-      // H2 (D4): a launch ceremony's camera never shows under the ladder, yet
-      // it would swallow every key until it ended. Stand it down here — a frame
-      // after START, so every START listener (TeachingSystem's blocker) has
-      // already run and ABORT clears them. Press her number to ride with her.
+      // A launch ceremony's camera never shows under the ladder, yet it would swallow every key until it ended. Stand
+      // it down here, a frame after START, so every START listener (TeachingSystem's blocker) has already run and ABORT
+      // clears them. Press her number to ride with her.
       if (this._launchCeremony.active) this.skipLaunchCeremony(false);
       this._updateLadderCamera(dt, playerPos, velDir, radialDir);
     } else if (this._launchCeremony.active) {
-      // V-7: Launch ceremony override — bypass normal view computation
       const result = this._updateLaunchCeremony(dt, playerPos, velDir, radialDir, playerQuat);
       if (result) {
         this.camera.position.copy(result.pos);
-        // V-8 fix: use daughter's radial-up when camera is near her (Phases 2-3).
-        // Mother's radialDir diverges as tether extends — same fix as ARM_PILOT (line 489).
+        // Use the daughter's radial-up when the camera is near her (phases 2-3): the mother's radialDir diverges as the
+        // tether extends (same fix as ARM_PILOT).
         const c = this._launchCeremony;
         const ceremonyUp = (c.phase >= 2 && c.arm?.position)
           ? this._tmpVecD.copy(c.arm.position).normalize()
@@ -1299,7 +1030,6 @@ export class CameraSystem {
         this.camera.lookAt(result.look);
       }
     } else if (this._netCeremony.active) {
-      // Q2: Net cinematic override — bypass normal view computation
       const ncResult = this._updateNetCeremony(dt, playerPos, velDir, radialDir, playerQuat);
       if (ncResult) {
         this.camera.position.copy(ncResult.pos);
@@ -1307,14 +1037,10 @@ export class CameraSystem {
         this.camera.lookAt(ncResult.look);
       }
     } else {
-      // 2026-08-26: lasso catch cut — same override slot, own tiny driver.
-      // Round 3: when the driver returns null the cut EXITED this very tick
-      // (fence / max valve / settle / dropped subject) — fall through to the
-      // normal view path below so THIS frame still gets a camera write. The
-      // old shape skipped the frame entirely, holding a one-frame-old pose
-      // that reads as a km-scale walkabout under long frames (tmp/lasso7
-      // f006; tmp/lasso11-rec frame 43: cam held 7678 m off the ship on the
-      // exit tick).
+      // Lasso catch cut: same override slot, own tiny driver. When it returns null the cut EXITED this very tick
+      // (fence / max valve / settle / dropped subject): fall through to the normal view path below so THIS frame still
+      // gets a camera write (skipping it would hold a one-frame-old pose that reads as a km-scale walkabout under long
+      // frames).
       let lcResult = null;
       if (this._lassoCut.active) {
         lcResult = this._updateLassoCut(dt, playerPos);
@@ -1325,7 +1051,6 @@ export class CameraSystem {
         }
       }
       if (!lcResult) {
-    // Compute target camera state based on current view
     let targetPos;
     let targetLook;
 
@@ -1344,19 +1069,16 @@ export class CameraSystem {
         break;
 
       case CameraViews.TARGET_LOCK:
-        // NOTE (2026-06-03): TARGET_LOCK is no longer reachable — it was dropped
-        // from VIEW_CYCLE and nothing else calls setView(TARGET_LOCK) (see the
-        // VIEW_CYCLE comment + GameFlowManager's "no auto-switch" note). Its
-        // side-on framing benefit is now folded into CHASE via targetLookBias.
-        // Kept intact (this case, _computeTargetLock, VIEW_INFO_LEVELS.TARGET_LOCK,
-        // the GameFlowManager revert) so the view can be re-enabled by simply
-        // re-adding it to VIEW_CYCLE if the framing is wanted again.
+        // TARGET_LOCK is no longer reachable (dropped from VIEW_CYCLE; nothing else calls setView(TARGET_LOCK), see
+        // GameFlowManager's "no auto-switch" note); its side-on framing is folded into CHASE via targetLookBias. Kept
+        // intact (this case, _computeTargetLock, VIEW_INFO_LEVELS.TARGET_LOCK, the GameFlowManager revert) so it can be
+        // re-enabled by re-adding it to VIEW_CYCLE.
         ({ pos: targetPos, look: targetLook } = this._computeTargetLock(dt, playerPos, velDir, radialDir));
         break;
 
       case CameraViews.ARM_PILOT:
-        // SK branch returns an explicit up vector (daughter-local) so the
-        // horizon stays stable as daughter orbits debris.
+        // SK branch returns an explicit up vector (daughter-local) so the horizon stays stable as the daughter orbits
+        // debris.
         ({ pos: targetPos, look: targetLook, up: targetUp } = this._computeArmPilot(dt, playerPos, velDir, radialDir));
         break;
 
@@ -1365,17 +1087,14 @@ export class CameraSystem {
         break;
     }
 
-    // Handle smooth transition between views (position + lookAt lerp, no quaternion slerp)
     if (this._transitioning) {
       this._transitionProgress += dt / this._transitionDuration;
 
       if (this._transitionProgress >= 1.0) {
         this._transitioning = false;
         this._transitionProgress = 1.0;
-        // W4: any one-shot exit-cut override expires with the transition it
-        // shortened — every later view change eases at the default again.
+        // any one-shot exit-cut override expires with the transition it shortened: later view changes ease at the default
         this._transitionDuration = this._transitionDurationDefault;
-        // UX Fix B: Finalize FOV transition when view transition completes
         if (this._fovTransitionStart !== undefined && this._fovTransitionEnd !== undefined) {
           this._baseFov = this._fovTransitionEnd;
           this.camera.fov = this._fovTransitionEnd;
@@ -1385,11 +1104,9 @@ export class CameraSystem {
         }
       }
 
-      // Smooth easing (ease-in-out cubic)
       const t = this._transitionProgress;
       const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
-      // UX Fix B: Smooth FOV lerp piggybacked on view transition
       if (this._fovTransitionStart !== undefined && this._fovTransitionEnd !== undefined) {
         const lerpedFov = lerp(this._fovTransitionStart, this._fovTransitionEnd, ease);
         this._baseFov = lerpedFov;
@@ -1402,8 +1119,7 @@ export class CameraSystem {
       const currentOffset = this._tmpVecA.lerpVectors(this._transitionStartOffset, targetOffset, ease);
       this.camera.position.copy(playerPos).add(currentOffset);
 
-      // Interpolate look DIRECTION (nlerp — normalized linear interp of direction vectors)
-      // This avoids the scale mismatch of lerping absolute positions
+      // Interpolate look DIRECTION (nlerp), which avoids the scale mismatch of lerping absolute positions
       const targetLookDir = targetLook.clone().sub(targetPos).normalize();
       const lerpedDir = this._tmpVecB.lerpVectors(this._transitionStartLookDir, targetLookDir, ease);
       if (lerpedDir.lengthSq() < 0.0001) lerpedDir.copy(targetLookDir); // fallback
@@ -1414,15 +1130,12 @@ export class CameraSystem {
       this.camera.up.copy(radialDir);
       this.camera.lookAt(currentLook);
     } else {
-      // All views: direct position copy (no lerp smoothing).
-      // At orbital velocity (~128m/frame), any position lerp causes
-      // the camera to fall behind the player and lose tracking.
+      // Direct position copy, no lerp smoothing: at orbital velocity (~128 m/frame) any position lerp makes the camera
+      // fall behind the player and lose tracking.
       this.camera.position.copy(targetPos);
-      // ARM_PILOT: prefer the explicit up vector returned by _computeArmPilot
-      // (SK branch returns daughter-local +Y so the horizon stays stable as
-      // daughter orbits debris — Earth-radial wobbles at φ-poles).  If no
-      // explicit up was provided (non-SK branch), fall back to the daughter's
-      // Earth-radial up (mother's radial diverges as tether extends).
+      // ARM_PILOT: prefer the explicit up from _computeArmPilot (SK branch: daughter-local +Y, so the horizon stays
+      // stable as she orbits debris; Earth-radial wobbles at φ-poles); else her Earth-radial up (the mother's radial
+      // diverges as the tether extends).
       if (this.currentView === CameraViews.ARM_PILOT && this.armPilot.arm?.position) {
         if (targetUp && targetUp.lengthSq() > 1e-12) {
           this.camera.up.copy(targetUp);
@@ -1434,13 +1147,12 @@ export class CameraSystem {
       }
       this.camera.lookAt(targetLook);
     }
-      } // end !lcResult (round 3 fall-through)
-    } // end V-7 ceremony else
+      } // end !lcResult
+    } // end ceremony else
 
     // Ion start-up: blend the frame's pose toward the view behind her tail (no-op unless a trip's engines are lighting)
     if (this._ion.active) this._applyIonStartup(dt, playerPos, playerQuat, radialDir);
 
-    // Phase 8: Apply camera shake offset (catches, not ARM_PILOT)
     if (this._catchShakeTimer > 0) {
       this._catchShakeTimer -= dt;
       const intensity = this._catchShakeIntensity * this._catchShakeScale
@@ -1448,14 +1160,11 @@ export class CameraSystem {
       this.camera.position.x += (Math.random() - 0.5) * 2 * intensity;
       this.camera.position.y += (Math.random() - 0.5) * 2 * intensity;
       this.camera.position.z += (Math.random() - 0.5) * 2 * intensity;
-      // One-shot scale: restore to neutral when the shake ends so a future
-      // armer starts from the base amplitude (minor 7).
+      // One-shot scale: restore to neutral when the shake ends so a future armer starts from the base amplitude.
       if (this._catchShakeTimer <= 0) this._catchShakeScale = 1.0;
     }
 
-    // Update view indicator timer (skipped while the indicator is persistent —
-    // non-default views keep the badge on screen so the player never loses
-    // track of being in LOOK AROUND).
+    // View indicator timer (skipped while persistent: non-default views keep the badge on screen).
     if (!this._viewIndicatorPersistent && this._viewIndicatorTimer > 0) {
       this._viewIndicatorTimer -= dt;
       if (this._viewIndicatorTimer <= 0) {
@@ -1463,13 +1172,10 @@ export class CameraSystem {
       }
     }
 
-    // Zoom-inspection FOV ease (OVERVIEW sub-state). The dedicated view-
-    // transition FOV lerp only runs when _fovTransitionEnd is set (armPilot /
-    // ceremony / discrete-inspection paths); the zoom sub-state doesn't use it,
-    // so this independent ease drives _baseFov toward the inspect target
-    // (narrow) or back to the saved base — including across an OVERVIEW→COMMAND
-    // view change, where the transition lerp is a no-op. Yields to the
-    // transition lerp if one is actually configured to avoid double-driving FOV.
+    // Zoom-inspection FOV ease (OVERVIEW sub-state). The view-transition FOV lerp only runs when _fovTransitionEnd is set
+    // (armPilot / ceremony / discrete-inspection paths), so this independent ease drives _baseFov toward the inspect
+    // target (narrow) or back to the saved base, including across an OVERVIEW→COMMAND view change. Yields to the
+    // transition lerp if one is configured, to avoid double-driving FOV.
     if (this._inspectZoomFovTarget !== undefined && this._fovTransitionEnd === undefined) {
       const easeRate = 5.0; // ~200ms to 63%
       this._baseFov += (this._inspectZoomFovTarget - this._baseFov) * Math.min(1, easeRate * dt);
@@ -1481,14 +1187,11 @@ export class CameraSystem {
       this.camera.updateProjectionMatrix();
     }
 
-    // Phase 4: FOV breathe during sustained thrust (I-War heritage)
-    // Skip during ARM_PILOT (has its own narrow FOV)
+    // FOV breathe during sustained thrust (I-War heritage); skipped during ARM_PILOT (own narrow FOV)
     if (this.currentView !== CameraViews.ARM_PILOT && !this._launchCeremony.active && !this._netCeremony.active && !this._ladderCam.active) {
       const thrustMag = this._thrustVisualMag;
       if (thrustMag > 0.05) {
-        // Accumulate sustained thrust timer
         this._fovBreathTimer = Math.min(this._fovBreathTimer + dt, 1.0);
-        // Only apply after 500ms sustained thrust (ramp from 0.5s to 1.0s)
         const sustainFrac = Math.max(0, (this._fovBreathTimer - 0.5) / 0.5);
         // Prograde: narrow FOV (tunnel-vision acceleration), Retrograde: widen FOV (braking)
         const maxOffset = 2.5 * thrustMag * sustainFrac;
@@ -1503,10 +1206,8 @@ export class CameraSystem {
         this._fovBreathTimer = Math.max(0, this._fovBreathTimer - dt * 2);
         this._fovBreathTarget = 0;
       }
-      // Ease toward target (500ms ease)
       const easeRate = 4.0; // ~250ms to 63% of target
       this._fovBreathOffset += (this._fovBreathTarget - this._fovBreathOffset) * Math.min(1, easeRate * dt);
-      // Apply offset to camera FOV
       if (Math.abs(this._fovBreathOffset) > 0.01) {
         this.camera.fov = this._baseFov + this._fovBreathOffset;
         this.camera.updateProjectionMatrix();
@@ -1514,51 +1215,42 @@ export class CameraSystem {
         this.camera.fov = this._baseFov;
         this.camera.updateProjectionMatrix();
       }
-      // Reset per-frame thrust signal
       this._thrustVisualMag = 0;
       this._thrustVisualDir = null;
     }
 
-    // Menu→sim intro offset decay — ease straight back to normal formation (no
-    // hold). Bidirectional: startIntroZoom() may set _introScale ABOVE 1.0
-    // (start wide, zoom in) or BELOW 1.0 (start close, pull back — the measured
-    // match-cut, since the menu hero fills the frame at the handoff). The ease
-    // begins the moment startIntroZoom() moves _introScale off 1.0.
+    // Menu→sim intro offset decay: ease straight back to normal formation (no hold). Bidirectional: startIntroZoom()
+    // may set _introScale ABOVE 1.0 (start wide, zoom in) or BELOW 1.0 (start close, pull back: the measured match-cut,
+    // since the menu hero fills the frame at the handoff). The ease begins the moment it moves _introScale off 1.0.
     if (Math.abs(this._introScale - 1.0) > 0.001) {
       const easeRate = Constants.EARTH.INTRO_EASE_RATE;
       this._introScale += (1.0 - this._introScale) * Math.min(1, easeRate * dt);
       if (Math.abs(this._introScale - 1.0) < 0.001) this._introScale = 1.0;
     }
 
-    // Sync the ship light rig each frame. Both lights are distance-limited (see
-    // ctor) so they only illuminate the near ship/debris, never the Earth.
+    // Sync the ship light rig each frame. The lights are distance-limited (see ctor) so they only illuminate the near
+    // ship/debris, never the Earth.
     if (this._fillLight) {
-      // OFF-AXIS KEY (Item 2, ship parity): the fill used to sit AT the camera
-      // (position.copy(camera.position)) → flat, frontal "flash-photo" light
-      // with zero modeling. The menu hero reads better because its key sits at
-      // a flattering off-axis angle. Offset the fill in CAMERA SPACE — up and
-      // right relative to the camera — by a fraction of the camera→ship
-      // distance so the offset scales with zoom and the hull gets form shadows.
-      // Basis from the camera QUATERNION (set synchronously by lookAt() above;
-      // matrixWorld is only recomputed lazily at render, so it would be stale).
+      // OFF-AXIS KEY: a fill AT the camera is a flat, frontal "flash-photo" light. Offset it in CAMERA SPACE (up and
+      // right) by a fraction of the camera→ship distance, so the offset scales with zoom and the hull gets form shadows.
+      // Basis from the camera QUATERNION (set synchronously by lookAt() above; matrixWorld is only recomputed lazily at
+      // render, so it would be stale).
       this._tmpVecB.set(1, 0, 0).applyQuaternion(this.camera.quaternion); // right
       this._tmpVecC.set(0, 1, 0).applyQuaternion(this.camera.quaternion); // up
       let d = 0.0004;                         // ~40 m default (no ship pos yet)
       if (playerPos) {
         d = this._tmpVecA.subVectors(playerPos, this.camera.position).length();
       }
-      // Clamp the offset lever so the offset light stays inside the ~1 km
-      // cutoff even in wide (ORBIT/INSPECTION) views — the added lever is
-      // sqrt(0.4² + 0.3²)=0.5·d, so cap d·0.5 at ~half the cutoff (0.004).
+      // Clamp the offset lever so the offset light stays inside the ~1 km cutoff even in wide (ORBIT/INSPECTION)
+      // views: the added lever is sqrt(0.4² + 0.3²)=0.5·d, so cap d·0.5 at ~half the cutoff (0.004).
       const lever = Math.min(d, 0.008);
       this._fillLight.position.copy(this.camera.position)
         .addScaledVector(this._tmpVecC, 0.4 * lever)   // lift up
         .addScaledVector(this._tmpVecB, 0.3 * lever);  // push right
     }
     if (this._rimLight && playerPos) {
-      // Back/rim: place it just beyond the ship along the camera→ship axis so
-      // it lights the far edges toward the camera, peeling the silhouette off
-      // the black background.
+      // Back/rim: just beyond the ship along the camera→ship axis, lighting the far edges and peeling the silhouette
+      // off the black background.
       const back = this._tmpVecA.subVectors(playerPos, this.camera.position);
       if (back.lengthSq() > 1e-12) {
         back.setLength(0.0003);   // ~30 m past the ship
@@ -1568,10 +1260,8 @@ export class CameraSystem {
       }
     }
     if (this._earthLight && playerPos) {
-      // Earthshine: planet centre is the scene origin, so the nadir direction
-      // at the ship is −playerPos/|playerPos|. Sit ~40 m planetward of the
-      // hull — inside the ~1 km cutoff, lighting the Earth-facing side of the
-      // pod/net bag with the planet's albedo glow.
+      // Earthshine: planet centre is the scene origin, so the nadir direction at the ship is −playerPos/|playerPos|.
+      // Sit ~40 m planetward of the hull, inside the ~1 km cutoff.
       const r = playerPos.length();
       if (r > 1e-9) {
         this._tmpVecA.copy(playerPos).multiplyScalar(-1 / r);
@@ -1581,10 +1271,6 @@ export class CameraSystem {
       }
     }
   }
-
-  // ==========================================================================
-  // ION START-UP (a trip's engines light; see the constructor note)
-  // ==========================================================================
 
   /** True while the ion start-up view is out (swinging out, holding, or coming back). */
   isIonStartupActive() { return this._ion.active; }
@@ -1695,21 +1381,12 @@ export class CameraSystem {
     }
   }
 
-  // ==========================================================================
-  // VIEW COMPUTATION METHODS
-  // ==========================================================================
-
-  /**
-   * Compute first-person (cockpit) camera position and look target.
-   * @private
-   */
   _computeFirstPerson(dt, playerPos, velDir, radialDir, playerQuat) {
     // Camera mounted at front of satellite, looking along velocity
     const pos = playerPos.clone()
       .addScaledVector(velDir, this.firstPerson.offsetForward)
       .addScaledVector(radialDir, this.firstPerson.offsetUp);
 
-    // Head-bob during thrust
     if (this._thrustMagnitude > 0.01) {
       this.firstPerson.headBobPhase += dt * this.firstPerson.headBobFrequency;
       const bobX = Math.sin(this.firstPerson.headBobPhase) * this.firstPerson.headBobAmplitude * this._thrustMagnitude;
@@ -1719,11 +1396,9 @@ export class CameraSystem {
       pos.addScaledVector(radialDir, bobY);
     }
 
-    // Look direction: along velocity with optional free-look
     let look = playerPos.clone().addScaledVector(velDir, 0.001);
 
     if (this.firstPerson.freeLookActive) {
-      // Apply yaw/pitch offsets to look direction
       const lateral = this._tmpVecA.crossVectors(velDir, radialDir).normalize();
       look.add(lateral.multiplyScalar(this.firstPerson.freeLookYaw * 0.001));
       look.addScaledVector(radialDir, this.firstPerson.freeLookPitch * 0.001);
@@ -1732,56 +1407,42 @@ export class CameraSystem {
     return { pos, look };
   }
 
-  /**
-   * Compute chase (third-person) camera position and look target.
-   * Camera behind and above satellite, looking AT the spacecraft.
-   * @private
-   */
   _computeChase(dt, playerPos, velDir, radialDir, allowTargetBias = false) {
     // Menu→sim intro uses a scaled chase offset for the match-cut settle.
     const s = this._introScale;
 
-    // Position: behind (opposite velocity) and above (along radial out)
     const pos = playerPos.clone()
       .addScaledVector(velDir, -this.chase.offsetBehind * s)
       .addScaledVector(radialDir, this.chase.offsetAbove * s);
 
-    // Look target: at the player with a tiny forward offset (keeps spacecraft centered)
     const look = playerPos.clone()
       .addScaledVector(velDir, this.chase.lookAhead);
 
-    // 2026-06-03: Folded-in TARGET_LOCK behaviour. When a debris target is
-    // locked (set each frame during APPROACH) and reasonably close, gently bias
-    // the look point toward it and ease the camera back a touch so both the
-    // ship and the target stay framed — without the jarring side-on framing of
-    // the old dedicated TACTICAL view. Bias is intentionally subtle and only
-    // applied to the live CHASE view (not the ARM_PILOT / TARGET_LOCK fallbacks).
+    // Folded-in TARGET_LOCK behaviour: when a debris target is locked (set each frame during APPROACH) and reasonably
+    // close, gently bias the look point toward it and ease the camera back a touch so ship and target stay framed.
+    // Intentionally subtle; only on the live CHASE view (not the ARM_PILOT / TARGET_LOCK fallbacks).
     if (allowTargetBias && this.targetLock.target) {
       const sep = playerPos.distanceTo(this.targetLock.target);
-      // Only engage within the OVERVIEW zoom range (~1 km) to avoid acting on a
-      // stale target left over from a previous approach.
+      // Only within the OVERVIEW zoom range (~1 km), to avoid acting on a stale target left from a previous approach.
       if (sep > 1e-9 && sep < this.orbit.maxDistance) {
         const bias = this.chase.targetLookBias; // 0..1 fraction toward target
         look.lerp(this.targetLock.target, bias);
-        // Pull back proportional to separation (capped) so the target does not
-        // crowd the edge of frame as it nears.
+        // Pull back proportional to separation (capped) so the target does not crowd the edge of frame as it nears.
         const pullback = Math.min(sep * 0.4, this.chase.offsetBehind * 1.5);
         pos.addScaledVector(velDir, -pullback);
       }
     }
 
-    // Scale the near-plane to the live camera→ship distance so the closest hull
-    // parts don't clip when zoomed in and the ship rotates toward the camera.
-    // Proportional scaling keeps depth precision sane at all chase distances.
+    // Scale the near plane to the live camera→ship distance so the closest hull parts don't clip when zoomed in and the
+    // ship rotates toward the camera (proportional keeps depth precision sane at all chase distances).
     this._applyDynamicNearPlane(pos.distanceTo(playerPos));
 
     return { pos, look };
   }
 
   /**
-   * Drag moves (mouse delta, finger nudge) since the last drawn frame, as a
-   * TURN in rad. The frame that draws them turns by exactly this (_coastDrag);
-   * `velocity*` is set to the speed it will have (turn / last step) at once so
+   * Drag moves (mouse delta, finger nudge) since the last drawn frame, as a TURN in rad. The frame that draws them
+   * turns by exactly this (_coastDrag); `velocity*` is set to the speed it will have (turn / last step) at once so
    * "a drag is live" readers (the frame scheduler) see it before the frame.
    * @param {object} d - drag config (orbit / inspection / ladder drag)
    * @param {boolean} sum - add to the turn already pending (touch coalescing) instead of replacing it
@@ -1811,17 +1472,13 @@ export class CameraSystem {
   }
 
   /**
-   * One frame of drag motion at the REAL step (seconds) — the same total coast
-   * at every frame rate.
-   *  - a frame WITH new moves turns by exactly those moves and sets the speed
-   *    (turn / step; scaled by `carry`, below), no decay that frame;
+   * One frame of drag motion at the REAL step (seconds): the same total coast at every frame rate.
+   *  - a frame WITH new moves turns by exactly those moves and sets the speed (turn / step; scaled by `carry`, below),
+   *    no decay that frame;
    *  - a frame without coasts: angle += speed * (1 - d) / k, speed *= d, with
    *    d = damping ** (step * 60), k = -60 ln(damping)  (damping = per 1/60 s).
-   * `carry` = d60 * (-ln d60) / (1 - d60): the old law decayed once in the frame
-   * that applied the move, so at 60 fps the speed after a move frame was
-   * `damping` x the move (and the discrete sum d/(1-d) differs 4 % from the
-   * continuous 1/k). With `carry` the 60 fps turn per frame is bit-for-bit the
-   * old 0.92^n series, and the total coast is still frame-rate independent.
+   * `carry` = d60 * (-ln d60) / (1 - d60) makes the 60 fps turn per frame bit-for-bit the 0.92^n series (a move frame
+   * leaves `damping` x the move; the discrete sum d/(1-d) differs 4 % from the continuous 1/k).
    * Writes the turn to this._coastOut ({theta, phi}, rad) and returns it.
    * @private
    */
@@ -1857,15 +1514,8 @@ export class CameraSystem {
     return out;
   }
 
-  /**
-   * Compute orbit camera position (free orbit around player).
-   * Uses LVLH (Local Vertical Local Horizontal) frame so the orbit camera
-   * is aligned with the orbital reference frame — no skew or roll artifacts.
-   * Mouse drag to rotate, scroll to zoom.
-   * @private
-   */
+  /** Orbit camera: free orbit around the player in the LVLH frame (no skew or roll); drag rotates, scroll zooms. @private */
   _computeOrbit(dt, playerPos, velDir, radialDir) {
-    // Apply the drag turn / momentum coast (per second, real clock)
     const _wallNow = this._wallNowMs();
     const _turn = this._coastDrag(this.orbit, coastStepS(this.orbit.lastWallMs, _wallNow));
     this.orbit.lastWallMs = _wallNow;
@@ -1877,12 +1527,10 @@ export class CameraSystem {
 
     // Build LVLH frame: radial = "up pole", lateral = "right", forward = "ahead"
     const lateral = this._tmpVecA.crossVectors(velDir, radialDir).normalize();
-    // Re-derive forward to guarantee orthogonality
     const forward = this._tmpVecB.crossVectors(radialDir, lateral).normalize();
 
-    // Spherical to Cartesian offset in LVLH frame
-    // phi: angle from radial (0 = directly above, π = directly below)
-    // theta: azimuth around radial in the forward/lateral plane
+    // Spherical to Cartesian offset in LVLH: phi from radial (0 = directly above, π = directly below), theta azimuth
+    // around radial in the forward/lateral plane
     const sinPhi = Math.sin(this.orbit.phi);
     const cosPhi = Math.cos(this.orbit.phi);
     const cosTheta = Math.cos(this.orbit.theta);
@@ -1896,10 +1544,8 @@ export class CameraSystem {
     const pos = playerPos.clone().add(offset);
     const look = playerPos.clone();
 
-    // When zoomed into the inspection sub-state, scale the near-plane to the
-    // (very small) distance so close mechanical detail doesn't clip. Outside
-    // the sub-state, leave the near-plane at the global default (restored by
-    // _setInspectZoom(false)).
+    // In the inspection sub-state, scale the near plane to the (very small) distance so close detail doesn't clip;
+    // outside it the near plane stays at the global default (restored by _setInspectZoom(false)).
     if (this.orbit.inspectActive) {
       this._applyDynamicNearPlane(this.orbit.distance);
     }
@@ -1908,22 +1554,14 @@ export class CameraSystem {
   }
 
   /**
-   * Solve the ORBIT angles (theta, phi) that centre a given world-space sky
-   * direction in the camera's view. Pure — touches no state.
-   *
-   * The orbit camera sits at `playerPos + offset` looking at `playerPos`, so
-   * its forward is `-offset̂`. To centre a sky direction `d` you therefore need
-   * `offset̂ = -d`. In the LVLH frame (radial = up pole, lateral = right,
-   * forward = ahead) that gives:
+   * Solve the ORBIT angles (theta, phi) that centre a world-space sky direction in the camera's view. Pure.
+   * The orbit camera sits at `playerPos + offset` looking at `playerPos`, so its forward is `-offset̂`; to centre a sky
+   * direction `d` you need `offset̂ = -d`. In the LVLH frame (radial = up pole, lateral = right, forward = ahead):
    *   phi   = acos(-d · radial)            — angle from the radial pole
    *   theta = atan2(-d · lateral, -d · forward)
-   *
-   * The caller must respect _computeOrbit's gimbal clamp phi ∈ [0.1, π-0.1]:
-   * a target within ~5.7° of the ±radial axis will be off-centre by the clamp,
-   * which is harmless for framing a wide figure.
-   *
+   * The caller must respect _computeOrbit's gimbal clamp phi ∈ [0.1, π-0.1]: a target within ~5.7° of the ±radial axis
+   * will be off-centre by the clamp, which is harmless for framing a wide figure.
    * @param {THREE.Vector3} dir — unit world-space sky direction to centre
-   * @returns {{ theta: number, phi: number }}
    */
   solveOrbitAnglesForDirection(dir) {
     const nx = -dir.x, ny = -dir.y, nz = -dir.z;
@@ -1937,12 +1575,9 @@ export class CameraSystem {
   }
 
   /**
-   * Scale the camera near-plane to a (very small) inspection distance so close
-   * mechanical detail doesn't clip. Shared by both inspection paths — the
-   * OVERVIEW zoom sub-state (_computeOrbit) and the discrete INSPECTION view
-   * (_computeInspection) — so the optics stay identical and can't drift. The
-   * change-guard avoids a projection-matrix rebuild on frames where near barely
-   * moves.
+   * Scale the camera near plane to a (very small) inspection distance so close detail doesn't clip. Shared by both
+   * inspection paths (the OVERVIEW zoom sub-state and the discrete INSPECTION view) so the optics can't drift. The
+   * change-guard avoids a projection-matrix rebuild on frames where near barely moves.
    * @param {number} distance camera-to-subject distance in scene units
    * @private
    */
@@ -1955,21 +1590,14 @@ export class CameraSystem {
   }
 
   /**
-   * Evaluate the zoom-driven inspection sub-state for OVERVIEW (ORBIT).
-   *
-   * Called after every OVERVIEW zoom change. Uses a Schmitt trigger: engage
-   * inspection once the camera pushes closer than `inspectEnterDist`, and only
-   * disengage once it pulls back past the larger `inspectExitDist`. The gap
-   * between the two prevents flicker when the player parks near the boundary.
-   * Mothership-only (2026-06-03 decision) — debris/daughter inspection stays on
-   * the explicit bare-I / ARM_PILOT path.
+   * Evaluate the zoom-driven inspection sub-state for OVERVIEW (ORBIT) after every zoom change. Schmitt trigger: engage
+   * closer than `inspectEnterDist`, disengage only past the larger `inspectExitDist` (no flicker when parked near the
+   * boundary). Mothership-only: debris/daughter inspection stays on the explicit bare-I / ARM_PILOT path.
    * @private
    */
   _evaluateInspectZoom() {
-    // ZOOM LADDER (S4): while the ladder is engaged the shipped 12/18 m
-    // Schmitt is BYPASSED — the F3/F4 wall/entry pair owns the inspect optics
-    // (_ladderApplyInspectFx keys them on the engaged floor id). Gated on
-    // lc.active, so the flag-off path is byte-identical.
+    // ZOOM LADDER: while engaged the shipped 12/18 m Schmitt is BYPASSED: the F3/F4 wall/entry pair owns the inspect
+    // optics (_ladderApplyInspectFx keys them on the engaged floor id).
     if (this._ladderCam.active) return;
     if (this.currentView !== CameraViews.ORBIT) return;
 
@@ -1982,10 +1610,8 @@ export class CameraSystem {
   }
 
   /**
-   * Engage/disengage the OVERVIEW zoom-inspection sub-state: tween FOV, manage
-   * the dynamic near-plane, fade the vignette, and toggle the mothership
-   * overlay. Does NOT change `currentView` — the named view stays OVERVIEW.
-   * @param {boolean} on
+   * Engage/disengage the OVERVIEW zoom-inspection sub-state: tween FOV, manage the dynamic near plane, fade the
+   * vignette, toggle the mothership overlay. Does NOT change `currentView`.
    * @private
    */
   _setInspectZoom(on) {
@@ -1994,34 +1620,28 @@ export class CameraSystem {
     o.inspectActive = on;
 
     if (on) {
-      // Narrow the lens like the dedicated inspection view. Remember the
-      // pre-zoom base FOV so exit restores exactly what OVERVIEW was using.
-      // The FOV itself eases per-frame in update() (the view-transition FOV
-      // lerp only runs during a view change, which this sub-state is not).
+      // Narrow the lens like the dedicated inspection view; remember the pre-zoom base FOV so exit restores it. The FOV
+      // eases per frame in update() (the view-transition FOV lerp only runs during a view change).
       this._inspectZoomSavedFov = this._baseFov;
       this._inspectZoomFovTarget = this.inspection.fov; // single source of truth (shared with discrete view)
       this._fovBreathOffset = 0;
       this._fovBreathTarget = 0;
       this._fovBreathTimer = 0;
 
-      // Diagnostic background dim + mothership hull/wireframe overlay.
       this._applyInspectDim(true);
       eventBus.emit(Events.INSPECTION_TOGGLE, { subject: 'mother', targetId: null });
       eventBus.emit(Events.INSPECT_HULL_OUTLINE, { visible: true });
-      // Onboarding signal: fires only on mother-inspection ENGAGE (never exit)
-      // so the `inspect` beat can confirm the player actually reached the depth
-      // where the hull callouts appear.
+      // Onboarding signal: fires only on mother-inspection ENGAGE (never exit), so the `inspect` beat can confirm the
+      // player reached the depth where the hull callouts appear.
       eventBus.emit(Events.MOTHER_INSPECTION_ENGAGED, {});
 
-      // One-shot learning beat the first time inspection engages via zoom, so
-      // the player understands the silent threshold did something deliberate.
+      // One-shot learning beat the first time inspection engages via zoom (the silent threshold did something deliberate).
       if (!o.inspectTaught) {
         o.inspectTaught = true;
-        // u6 D3: a developer line; players see it only with the Tests switch on.
+        // a developer line; players see it only with the Tests switch on.
         if (this.testsSwitch) eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active', kind: 'inspect' });
       }
     } else {
-      // Restore lens (per-frame ease) + near-plane.
       this._inspectZoomFovTarget = this._inspectZoomSavedFov || Constants.CAMERA_FOV;
       this.camera.near = Constants.CAMERA_NEAR;
       this.camera.updateProjectionMatrix();
@@ -2034,16 +1654,11 @@ export class CameraSystem {
   }
 
   /**
-   * Clear the zoom-inspection sub-state without a view transition — used when
-   * leaving OVERVIEW so optics/overlays don't leak into the next view.
-   *
-   * Also pulls the stored OVERVIEW zoom distance back out to the exit threshold.
-   * Without this, re-entering OVERVIEW (V→COMMAND→V) would leave orbit.distance
-   * inside the inspection band while inspectActive is false — the optics/overlays
-   * would stay off AND _computeOrbit's protective dynamic near-plane (gated on
-   * inspectActive) would not engage, letting the camera clip through the
-   * mothership until the next wheel event. Resetting the distance guarantees
-   * OVERVIEW always re-opens outside the band.
+   * Clear the zoom-inspection sub-state without a view transition (leaving OVERVIEW), so optics/overlays don't leak.
+   * Also pulls the stored OVERVIEW zoom distance back out to the exit threshold: otherwise re-entering OVERVIEW
+   * (V→COMMAND→V) would leave orbit.distance inside the inspection band with inspectActive false, so the optics stay
+   * off AND _computeOrbit's dynamic near plane (gated on inspectActive) would not engage, letting the camera clip
+   * through the mothership until the next wheel event.
    * @private
    */
   _clearInspectZoom() {
@@ -2052,14 +1667,10 @@ export class CameraSystem {
     this.orbit.distance = Math.max(this.orbit.distance, this.orbit.inspectExitDist);
   }
 
-  /**
-   * Compute INSPECTION camera — reuses orbit math with tighter limits + dynamic near-plane.
-   * @private
-   */
+  /** INSPECTION camera: reuses the orbit math with tighter limits + dynamic near plane. @private */
   _computeInspection(dt, playerPos, velDir, radialDir) {
     const cfg = this.inspection;
 
-    // Apply the drag turn / momentum coast (per second, real clock)
     const _wallNow = this._wallNowMs();
     const _turn = this._coastDrag(cfg, coastStepS(cfg.lastWallMs, _wallNow));
     cfg.lastWallMs = _wallNow;
@@ -2069,11 +1680,9 @@ export class CameraSystem {
     // Clamp phi to avoid gimbal lock
     cfg.phi = clamp(cfg.phi, 0.1, Math.PI - 0.1);
 
-    // Build LVLH frame (same as orbit)
     const lateral = this._tmpVecA.crossVectors(velDir, radialDir).normalize();
     const forward = this._tmpVecB.crossVectors(radialDir, lateral).normalize();
 
-    // Spherical to Cartesian offset
     const sinPhi = Math.sin(cfg.phi);
     const cosPhi = Math.cos(cfg.phi);
     const cosTheta = Math.cos(cfg.theta);
@@ -2087,18 +1696,14 @@ export class CameraSystem {
     const pos = playerPos.clone().add(offset);
     const look = playerPos.clone();
 
-    // Dynamic near-plane (shared with the OVERVIEW zoom sub-state).
     this._applyDynamicNearPlane(cfg.distance);
 
     return { pos, look };
   }
 
   /**
-   * Compute target lock camera — positions to show both satellite AND target.
-   *
-   * UNREACHABLE as of 2026-06-03 (TARGET_LOCK removed from VIEW_CYCLE; nothing
-   * calls setView(TARGET_LOCK)). Retained intentionally for possible re-enable —
-   * re-add CameraViews.TARGET_LOCK to VIEW_CYCLE to bring it back. The framing
+   * Target-lock camera: shows both satellite AND target. UNREACHABLE (TARGET_LOCK removed from VIEW_CYCLE; nothing calls
+   * setView(TARGET_LOCK)); retained for re-enable by re-adding CameraViews.TARGET_LOCK to VIEW_CYCLE. The framing
    * intent now lives in _computeChase's targetLookBias.
    * @private
    */
@@ -2106,53 +1711,35 @@ export class CameraSystem {
     const target = this.targetLock.target;
 
     if (!target) {
-      // No target: fall back to chase behavior
       return this._computeChase(dt, playerPos, velDir, radialDir);
     }
 
-    // Midpoint between player and target
     const midpoint = this._tmpVecC.copy(playerPos).add(target).multiplyScalar(0.5);
 
-    // Distance between player and target
     const separation = playerPos.distanceTo(target);
 
-    // Camera should be offset perpendicular to the player-target line
     const toTarget = this._tmpVecD.subVectors(target, playerPos).normalize();
     const perpendicular = this._tmpVecA.crossVectors(toTarget, radialDir).normalize();
     if (perpendicular.lengthSq() < 0.001) {
-      // Fallback if parallel
       perpendicular.crossVectors(toTarget, this._tmpVecB.set(0, 1, 0)).normalize();
     }
 
-    // Camera distance scales with separation (keep both in frame)
     const camDist = Math.max(
       this.targetLock.minCamDist,
       separation * 0.8 + this.targetLock.offsetDistance
     );
 
-    // Position camera to the side and above, looking at midpoint
     const pos = midpoint.clone()
       .addScaledVector(perpendicular, camDist * 0.5)
       .addScaledVector(radialDir, camDist * 0.3);
 
-    // Look at a point weighted 85% satellite + 15% target
     const look = playerPos.clone().lerp(target, 0.15);
 
     return { pos, look };
   }
 
-  // ==========================================================================
-  // ARM PILOT CAMERA
-  // ==========================================================================
-
   /**
-   * Set the arm to follow in ARM_PILOT mode.
-   * Narrows FOV and switches to ARM_PILOT view.
-   * @param {import('../entities/ArmUnit.js').ArmUnit} arm
-   */
-  /**
-   * Wire the PlayerSatellite so the mother-pod net ceremony can anchor on the
-   * pod muzzle (mother-net-reel plan §11.1). Optional — when unset the pod
+   * Wire the PlayerSatellite so the mother-pod net ceremony can anchor on the pod muzzle. Optional: when unset the pod
    * ceremony no-ops (same early-exit contract as a missing arm).
    * @param {object} player — PlayerSatellite with getNetPodPositionInto()
    */
@@ -2160,20 +1747,20 @@ export class CameraSystem {
     this._player = player || null;
   }
 
+  /**
+   * Set the arm to follow in ARM_PILOT mode: narrows FOV and switches to the ARM_PILOT view.
+   */
   setPilotArm(arm) {
     if (!arm) return;
-    this.armPilot.arm = arm;    // Phase 4: Save base FOV (without breathe offset) and reset breathe state
+    this.armPilot.arm = arm;
     this.armPilot.fovNormal = this._baseFov;
     this._fovBreathOffset = 0;
     this._fovBreathTarget = 0;
     this._fovBreathTimer = 0;
-    // UX Fix B: Smooth FOV transition (lerped during update) instead of instant snap
     this._fovTransitionStart = this._baseFov;
     this._fovTransitionEnd = this.armPilot.fovNarrow;
-    // Look-direction blend: smooth transition into ARM PILOT view.
-    // If the arm has a target, start the blend already facing toward it
-    // so the camera doesn't reverse 180° when the arm flies retrograde
-    // toward trailing debris.
+    // Look-direction blend into the ARM PILOT view: if the arm has a target, start the blend already facing it so the
+    // camera doesn't reverse 180° when the arm flies retrograde toward trailing debris.
     this.armPilot._lookBlendTime = 0;
     this.armPilot._lookBlendDuration = 1.5; // seconds
     this.armPilot._prevForward = new THREE.Vector3();
@@ -2190,11 +1777,8 @@ export class CameraSystem {
   }
 
   /**
-   * @private — Set up FOV transition + look-blend fields for ARM_PILOT entry.
-   * Extracted from setPilotArm() so the launch-ceremony auto-entry path can
-   * reuse the same logic without duplication.  Caller must set
-   * this.armPilot.arm BEFORE invoking, then call setView(ARM_PILOT) AFTER.
-   * @param {import('../entities/ArmUnit.js').ArmUnit} arm
+   * @private FOV transition + look-blend fields for ARM_PILOT entry, shared with the launch-ceremony auto-entry path.
+   * Caller must set this.armPilot.arm BEFORE invoking, then call setView(ARM_PILOT) AFTER.
    */
   _setupArmPilotEntry(arm) {
     this.armPilot.fovNormal = this._baseFov;
@@ -2203,9 +1787,7 @@ export class CameraSystem {
     this._fovBreathTimer = 0;
     this._fovTransitionStart = this._baseFov;
     this._fovTransitionEnd = this.armPilot.fovNarrow;
-    // Look-direction blend: smooth transition into ARM_PILOT view.  If the arm
-    // has a target, start the blend already facing toward it so the camera
-    // doesn't reverse 180° when the arm flies retrograde toward trailing debris.
+    // Look-direction blend into ARM_PILOT (see setPilotArm).
     this.armPilot._lookBlendTime = 0;
     this.armPilot._lookBlendDuration = 1.5;
     this.armPilot._prevForward = new THREE.Vector3();
@@ -2214,7 +1796,7 @@ export class CameraSystem {
         .subVectors(arm.target._scenePosition, arm.position)
         .normalize();
     } else if (arm._stationKeepTarget && arm._stationKeepTarget._scenePosition && arm.position) {
-      // Daughter already in SK before ceremony ended — face the debris.
+      // Daughter already in SK before the ceremony ended: face the debris.
       this.armPilot._prevForward
         .subVectors(arm._stationKeepTarget._scenePosition, arm.position)
         .normalize();
@@ -2225,9 +1807,7 @@ export class CameraSystem {
     }
   }
 
-  /**
-   * Exit ARM_PILOT mode — restore FOV and return to CHASE view.
-   */
+  /** Exit ARM_PILOT mode: restore FOV and return to CHASE view. */
   clearPilotArm() {
     this.armPilot.arm = null;
     this.armPilot._skLookTarget = null; // Clear STATION_KEEP smooth look target
@@ -2235,28 +1815,18 @@ export class CameraSystem {
     // Restore default ARM_PILOT offsets (ceremony may have boosted them to 8×)
     this.armPilot.offsetBehind = 0.00005;
     this.armPilot.offsetAbove  = 0.000016;
-    // UX Fix B: Smooth FOV transition back (lerped during update)
     this._fovTransitionStart = this._baseFov;
     this._fovTransitionEnd = this.armPilot.fovNormal || Constants.CAMERA_FOV;
-    // Return to CHASE view (triggers transition that will lerp FOV)
     this.setView(CameraViews.CHASE);
   }
 
-  /**
-    * Get the currently piloted arm (or null).
-    * @returns {import('../entities/ArmUnit.js').ArmUnit|null}
-    */
+  /** @returns {import('../entities/ArmUnit.js').ArmUnit|null} the piloted arm */
   getPilotedArm() {
     return this.armPilot.arm;
   }
 
-  // ==========================================================================
-  // LAUNCH CEREMONY (V-7)
-  // ==========================================================================
-
   /**
-   * Start 4-phase launch cinematic camera sequence.
-   * @param {import('../entities/ArmUnit.js').ArmUnit} arm - The launched arm
+   * Start the launch cinematic camera sequence.
    */
   startLaunchCeremony(arm) {
     if (!arm) return;
@@ -2272,30 +1842,27 @@ export class CameraSystem {
     // Reset dynamic slew multiplier — recomputed on first Phase 1 frame
     c._slewMultiplier = undefined;
 
-    // Latch: once the crossbow spring fires, never override arm position again.
-    // arm._springFired resets on LAUNCHING→TRANSIT transition, so the ceremony
-    // needs its own persistent flag.
+    // Latch: once the crossbow spring fires, never override arm position again (arm._springFired resets on the
+    // LAUNCHING→TRANSIT transition, so the ceremony needs its own persistent flag).
     c._springLatch = false;
 
-    // Save pre-ceremony FOV for ESC restore and fovNormal (§14.8.11.3)
+    // Save pre-ceremony FOV for ESC restore and fovNormal
     c.savedFov = this._baseFov;
 
-    // Cancel any active view transition — ceremony takes over (§14.8.11.6)
     this._transitioning = false;
     this._transitionProgress = 0;
 
-    // Cancel FOV transition — ceremony manages FOV directly (§14.8.11.3)
     this._fovTransitionStart = undefined;
     this._fovTransitionEnd = undefined;
 
-    // Reset ARM_PILOT offsets to defaults so Phase 2's * 8 is always correct.
-    // A previous ceremony may have left boosted (8×) offsets from completion.
+    // Reset ARM_PILOT offsets to defaults so Phase 2's * 8 is always correct (a previous ceremony may have left
+    // boosted 8× offsets from completion).
     this.armPilot.offsetBehind = 0.00005;
     this.armPilot.offsetAbove  = 0.000016;
   }
 
   /**
-   * Skip launch ceremony — jump to ARM_PILOT or restore previous view.
+   * Skip the launch ceremony: jump to ARM_PILOT or restore the previous view.
    * @param {boolean} [enterPilot=true] - true → enter ARM_PILOT, false → return to CHASE (ESC)
    */
   skipLaunchCeremony(enterPilot = true) {
@@ -2304,47 +1871,32 @@ export class CameraSystem {
     const arm = c.arm;
     c.active = false;
     c.phase = 0;
-    // Restore FOV — ESC restores original, skip-to-pilot keeps eased value
     if (!enterPilot) {
       this._baseFov = c.savedFov || Constants.CAMERA_FOV;
     }
     this.camera.fov = this._baseFov;
-    // Restore near-plane pushed during Phase 2-3
     this.camera.near = Constants.CAMERA_NEAR;
     this.camera.updateProjectionMatrix();
     if (enterPilot && arm) {
       eventBus.emit(Events.LAUNCH_CEREMONY_COMPLETE, { arm });
     } else {
-      // Session I follow-up (review): every exit that does NOT hand off to the
-      // pilot must still stand the ceremony-state listeners down. Without this,
-      // one ESC/Space/Enter/D skip (or the dead-arm guard above the phase
-      // machine) left _launchCeremonyLive true in main.js — the frame
-      // scheduler boosted to native refresh for the REST OF THE SESSION — and
-      // stuck TeachingSystem's 'launchCeremony' blocker and
-      // CollisionAvoidanceSystem._ceremonyActive (auto-dodge disabled).
-      // ABORT deliberately skips the COMPLETE side effects (ArmPilot entry,
-      // FOV keep, enableManual — InputManager's COMPLETE handler).
+      // Every exit that does NOT hand off to the pilot must still stand the ceremony-state listeners down; otherwise
+      // one ESC/Space/Enter/D skip (or the dead-arm guard above the phase machine) leaves _launchCeremonyLive true in
+      // main.js (the frame scheduler boosts to native refresh for the REST OF THE SESSION) and sticks TeachingSystem's
+      // 'launchCeremony' blocker and CollisionAvoidanceSystem._ceremonyActive (auto-dodge disabled).
+      // ABORT deliberately skips the COMPLETE side effects (ArmPilot entry, FOV keep, enableManual: InputManager's
+      // COMPLETE handler).
       eventBus.emit(Events.LAUNCH_CEREMONY_ABORT, { arm });
     }
   }
 
   /**
-   * Update launch ceremony — 3-phase cinematic camera sequence.
-   *
-   * User experience timeline:
-   *   Phase 1 OBSERVE (1.5s) — Camera stays at CHASE. Player watches from behind:
-   *     • Daughter powers up (status LED), strut rotates to aim at target
-   *     • ~0.3s: Crossbow spring fires → camera shake (mother recoil)
-   *     • Daughter shoots off toward target, tether streams out
-   *   Phase 2 TETHER_FOLLOW (2.0s) — Camera zooms from mother along tether to daughter:
-   *     • Smooth dolly from CHASE behind-mother to behind-daughter
-   *     • Not FPV — slightly behind & above so new player keeps perspective
-   *     • Tether visible connecting back to mother as camera advances
-   *     • FOV narrows gradually (cinematic zoom-in feel)
-   *   Phase 3 HANDOFF (0.5s) — Camera settles to ARM_PILOT view:
-   *     • Final convergence to standard arm-pilot viewpoint
-   *     • FOV eases to ARM_PILOT narrow (40°)
-   *
+   * Update the launch ceremony: 3-phase cinematic camera sequence (durations: DURATIONS below).
+   *   Phase 1 OBSERVE: camera stays at CHASE; the player watches the daughter power up, the strut aim, the crossbow
+   *     spring fire (at CROSSBOW_UNDOCK_TIME: camera shake, mother recoil) and the daughter shoot off, tether streaming.
+   *   Phase 2 TETHER_FOLLOW: smooth dolly from CHASE behind-mother to behind-daughter along the tether (not FPV:
+   *     slightly behind & above so a new player keeps perspective); FOV narrows gradually.
+   *   Phase 3 HANDOFF: settles to the standard ARM_PILOT viewpoint; FOV eases to ARM_PILOT narrow (40°).
    * @private
    * @returns {{ pos: THREE.Vector3, look: THREE.Vector3 }|null}
    */
@@ -2352,19 +1904,16 @@ export class CameraSystem {
     const c = this._launchCeremony;
     //                     Phase:  0    1       2       3
     const DURATIONS = [0, 3.25, 3.5, 1.0]; // total 7.75s.
-    // Phase 1 (3.25s): spring fires at CROSSBOW_UNDOCK_TIME (1.5s), leaving ~1.75s
-    //   for the player to actually SEE the daughter separate and fly free in the
-    //   familiar wide CHASE view before the camera leaves the mothership.
-    // Phase 2 (3.5s) / Phase 3 (1.0s): longer, gentler glide + settle into the
-    //   pilot view so the handoff reads as gradual rather than a lunge.
+    // Phase 1 (3.25s): the spring fires at CROSSBOW_UNDOCK_TIME (1.5s), leaving ~1.75s to SEE the daughter separate and
+    //   fly free in the familiar wide CHASE view before the camera leaves the mothership.
+    // Phase 2 (3.5s) / Phase 3 (1.0s): a longer, gentler glide + settle into the pilot view so the handoff reads as
+    //   gradual rather than a lunge.
     c.timer += dt;
 
-    // ── Phase complete? Advance ──
     if (c.timer >= DURATIONS[c.phase]) {
       c.timer -= DURATIONS[c.phase];
       c.phase++;
 
-      // Phase 2 entry: camera starts zooming along tether toward daughter
       if (c.phase === 2) {
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `Tracking ${c.arm.displayName}. Tether deploying`,
@@ -2372,9 +1921,8 @@ export class CameraSystem {
         });
       }
 
-      // Phase 3 entry: boost ARM_PILOT offsets BEFORE Phase 3 runs.
-      // _computeArmPilot() reads these offsets, so they must be boosted
-      // before Phase 3's first frame — otherwise it lerps to 0.3m (default).
+      // Phase 3 entry: boost ARM_PILOT offsets BEFORE Phase 3 runs: _computeArmPilot() reads them, so otherwise it
+      // lerps to 0.3 m (default).
       if (c.phase === 3) {
         this.armPilot.offsetBehind = 0.00005;   // 5m behind
         this.armPilot.offsetAbove  = 0.000016;  // 1.6m above
@@ -2389,15 +1937,14 @@ export class CameraSystem {
         const completingArm = c.arm;
         c.active = false;
         c.phase = 0;
-        // Camera STAYS on the daughter — auto-enter ARM_PILOT view so the
-        // player immediately gets the inspection framing of the debris instead
-        // of being yanked back to the mothership CHASE view.
+        // Camera STAYS on the daughter: auto-enter ARM_PILOT so the player immediately gets the inspection framing of
+        // the debris instead of being yanked back to the mothership CHASE view.
         this.armPilot.offsetBehind = 0.00005;   // 5m past debris (in SK branch)
         this.armPilot.offsetAbove  = 0.000016;  // 1.6m above
         this.armPilot.arm = completingArm;
         this._setupArmPilotEntry(completingArm);
-        // Force a transition lerp so camera doesn't snap (setView would otherwise
-        // short-circuit if currentView happens to already match).
+        // Force a transition lerp so the camera doesn't snap (setView would otherwise short-circuit if currentView
+        // already matches).
         this._previousView = this.currentView;
         this._transitioning = true;
         this._transitionProgress = 0;
@@ -2409,30 +1956,25 @@ export class CameraSystem {
           text: `${completingArm.displayName} deployed. Arrow keys orbit debris, ESC to recall`,
           priority: 'info',
         });
-        // Return ARM_PILOT position (camera follows daughter / inspection view).
         return this._computeArmPilot(dt, playerPos, velDir, radialDir);
       }
     }
 
     const t = c.timer / DURATIONS[c.phase];
-    const ease = smoothstep01(t); // smoothstep
+    const ease = smoothstep01(t);
     const arm = c.arm;
     if (!arm || !arm.position) { this.skipLaunchCeremony(); return null; }
 
-    // Guard: arm died during ceremony
     if (arm.state === 'EXPENDED' || arm.state === 'DOCKED') {
       this.skipLaunchCeremony(false);
       return null;
     }
 
-    // V-8 fix: Daughter reached STATION_KEEP before ceremony finished (timing
-    // race when debris is close — e.g. 35m at 10 m/s ≈ 3.5s arrival vs 6s
-    // ceremony). Complete immediately so the daughter is still findable and
-    // armPilot is prepped — the ceremony hands the player straight into the
-    // daughter (LAUNCH_CEREMONY_COMPLETE auto-enters ARM_PILOT).
-    // Cannot use skipLaunchCeremony() — it omits armPilot setup, comms, and
-    // LAUNCH_CEREMONY_COMPLETE. Instead, replicate the phase > 3 completion
-    // block inline (same logic as lines 937-962 above).
+    // Daughter reached STATION_KEEP before the ceremony finished (timing race when debris is close: e.g. 35 m at
+    // 10 m/s ≈ 3.5 s arrival vs 6 s ceremony). Complete immediately so the daughter is still findable and armPilot is
+    // prepped: the ceremony hands the player straight into the daughter (LAUNCH_CEREMONY_COMPLETE auto-enters
+    // ARM_PILOT). Cannot use skipLaunchCeremony(): it omits armPilot setup, comms and LAUNCH_CEREMONY_COMPLETE, so the
+    // phase > 3 completion block above is replicated inline.
     if (arm.state === Constants.ARM_STATES.STATION_KEEP && c.phase < 3) {
       this.camera.near = Constants.CAMERA_NEAR;
       this.camera.updateProjectionMatrix();
@@ -2462,7 +2004,6 @@ export class CameraSystem {
     const localUp = armPos.clone().normalize();
     let pos, look;
 
-    // ── Compute forward direction toward target (shared by phases 2-3) ──
     let fwd = velDir.clone();
     if (arm.target && arm.target._scenePosition) {
       fwd = arm.target._scenePosition.clone().sub(armPos).normalize();
@@ -2470,20 +2011,16 @@ export class CameraSystem {
       fwd = arm.velocity.clone().normalize();
     }
 
-    // Orthogonalize localUp against fwd so "behind" and "above" offsets
-    // stay perpendicular — matches _computeArmPilot pattern (~line 1376).
+    // Orthogonalize localUp against fwd so "behind" and "above" offsets stay perpendicular (same as _computeArmPilot).
     localUp.addScaledVector(fwd, -fwd.dot(localUp)).normalize();
 
     switch (c.phase) {
 
-      // ════════════════════════════════════════════════════════════════════
-      // Phase 1: OBSERVE (3.25s) — Camera at CHASE, watching the satellite
-      // ════════════════════════════════════════════════════════════════════
+      // Phase 1: OBSERVE (3.25s): camera at CHASE, watching the satellite
       case 1: {
-        // Drive strut slew toward target direction during clamp hold.
-        // launch-aim: with LAUNCH_AIMS_STRUT on, the launch gate has already swung the strut at its
-        // real strut rate (19.5°/s) and the spring pushes along it — the cut-scene never writes a strut (this
-        // 4x+ swing was the "teleporting strut" the owner's physics ruling forbids).
+        // Drive strut slew toward target direction during clamp hold. With LAUNCH_AIMS_STRUT on, the launch gate has
+        // already swung the strut at its real strut rate (19.5°/s) and the spring pushes along it: the cut-scene never
+        // writes a strut (a 4x+ swing would be the "teleporting strut" the owner's physics ruling forbids).
         if (!Constants.FEATURE_FLAGS.LAUNCH_AIMS_STRUT
             && arm.launchDirection && arm._dockOutward && playerQuat && arm.setAimAlpha) {
           const invQuat = playerQuat.clone().invert();
@@ -2498,10 +2035,8 @@ export class CameraSystem {
           const cosA = -localDir.z;
           const tgtAlpha = Math.atan2(Math.abs(sinA), cosA);
 
-          // Dynamic slew multiplier: ensure strut reaches tgtAlpha BEFORE
-          // the spring fires at CROSSBOW_UNDOCK_TIME.  Budget 80% of the
-          // undock window so the strut settles before the daughter launches.
-          // Minimum 4× so small angles still look smooth.
+          // Dynamic slew multiplier: the strut must reach tgtAlpha BEFORE the spring fires at CROSSBOW_UNDOCK_TIME.
+          // Budget 80% of the undock window; minimum 4× so small angles still look smooth.
           if (c._slewMultiplier === undefined) {
             // First frame of Phase 1 — compute once from initial delta
             const curAlpha = arm.getAimAlpha ? arm.getAimAlpha() : 0;
@@ -2515,21 +2050,21 @@ export class CameraSystem {
           arm.setAimAlpha(tgtAlpha, dt * c._slewMultiplier);
         }
 
-        // Latch spring-fire on the ceremony object so the flag survives
-        // the LAUNCHING→TRANSIT state transition (ArmUnit resets _springFired).
+        // Latch spring-fire on the ceremony object so the flag survives the LAUNCHING→TRANSIT state transition
+        // (ArmUnit resets _springFired).
         if (arm._springFired && !c._springLatch) {
           c._springLatch = true;
         }
 
-        // Track strut tip position during clamp hold (before spring fires).
-        // Use ceremony latch — arm._springFired resets on state transition.
+        // Track strut tip position during clamp hold (before spring fires). Uses the ceremony latch, since
+        // arm._springFired resets on state transition.
         if (!c._springLatch && arm.dockOffset && playerQuat) {
           const tipOffset = arm.dockOffset.clone().applyQuaternion(playerQuat);
           arm.position.copy(playerPos).add(tipOffset);
         }
 
-        // launch-seq: the "Spring released. Separating" line is ArmUnit's now (at ARM_SPRING_FIRED, so it
-        // shows with or without this cut-scene); the copy that lived here made it cut-scene-only.
+        // The "Spring released. Separating" line is ArmUnit's (at ARM_SPRING_FIRED, so it shows with or without this
+        // cut-scene).
 
         // Camera: stay exactly at CHASE (tracks orbiting player at ~7.6 km/s).
         // Look directly at the arm — starts at strut tip, flies away after spring fires.
@@ -2539,39 +2074,32 @@ export class CameraSystem {
         break;
       }
 
-      // ════════════════════════════════════════════════════════════════════
-      // Phase 2: TETHER_FOLLOW (3.5s) — Zoom from mother to behind-daughter
-      // ════════════════════════════════════════════════════════════════════
+      // Phase 2: TETHER_FOLLOW (3.5s): zoom from mother to behind-daughter
       case 2: {
-        // Start: CHASE position (behind mother — where Phase 1 ended)
         const chasePos = this._computeChase(dt, playerPos, velDir, radialDir).pos;
 
-        // End: behind the daughter arm (4m behind, 1.3m above).
-        // Daughter mesh (~0.3m) fills ~8.5% of screen height at 45° FOV — clearly visible.
-        // Several meters of tether are also in frame at this distance.
+        // End: behind the daughter arm (4 m behind, 1.3 m above): the daughter mesh (~0.3 m) fills ~8.5% of screen height
+        // at 45° FOV, with several metres of tether in frame.
         const behindDaughter = armPos.clone()
           .addScaledVector(fwd, -0.00004)    // 4m behind
           .addScaledVector(localUp, 0.000013); // 1.3m above
 
         pos = new THREE.Vector3().lerpVectors(chasePos, behindDaughter, ease);
 
-        // Look ahead (same 0.001 = 100m pattern as _computeArmPilot)
-        // — keeps daughter in lower frame, tether trailing behind visible.
+        // Look ahead (same 0.001 = 100 m pattern as _computeArmPilot): keeps the daughter in the lower frame, tether
+        // trailing behind visible.
         const lookAhead = armPos.clone().addScaledVector(fwd, 0.001);
         look = new THREE.Vector3().lerpVectors(armPos, lookAhead, ease);
         break;
       }
 
-      // ════════════════════════════════════════════════════════════════════
-      // Phase 3: HANDOFF (1.0s) — Settle to ARM_PILOT tracking view
-      // ════════════════════════════════════════════════════════════════════
+      // Phase 3: HANDOFF (1.0s): settle to the ARM_PILOT tracking view
       case 3: {
-        // Temporarily set armPilot.arm so _computeArmPilot works
         this.armPilot.arm = c.arm;
         const apResult = this._computeArmPilot(dt, playerPos, velDir, radialDir);
 
-        // Start: behind-daughter (same geometry as Phase 2 endpoint).
-        // Offsets are already boosted at Phase 2→3 transition (4m/1.3m).
+        // Start: behind-daughter (same geometry as the Phase 2 endpoint); offsets are already boosted at the Phase 2→3
+        // transition (4 m / 1.3 m).
         const startPos = armPos.clone()
           .addScaledVector(fwd, -this.armPilot.offsetBehind)
           .addScaledVector(localUp, this.armPilot.offsetAbove);
@@ -2583,39 +2111,28 @@ export class CameraSystem {
       }
     }
 
-    // ── FOV + near-plane management ──
-    // Phase 1: keep CHASE FOV (no zoom — player observes from familiar view)
-    // Phase 2-3: ease toward 45° (moderate cinematic view behind daughter).
-    // Keep 45° through Phase 3 so the post-ceremony ARM_PILOT tracking view
-    // matches Phase 2 exactly — no visual zoom from FOV narrowing.
-    // User selecting a launched daughter (1-4) eases to 40° (armPilot.fovNarrow).
+    // FOV + near plane. Phase 1: keep CHASE FOV (the player observes from the familiar view). Phase 2-3: ease toward 45°
+    // (moderate cinematic view behind the daughter), kept through Phase 3 so the post-ceremony ARM_PILOT tracking view
+    // matches Phase 2 exactly (no visual zoom from FOV narrowing). Selecting a launched daughter (1-4) eases to 40°
+    // (armPilot.fovNarrow).
     if (c.phase >= 2) {
       const targetFov = 45;
       const fovEaseRate = 1.5;
       this._baseFov += (targetFov - this._baseFov) * Math.min(1, fovEaseRate * dt);
       this.camera.fov = this._baseFov;
 
-      // Dynamic near-plane: camera is very close to daughter in phases 2-3.
-      // Default CAMERA_NEAR (3m) clips the daughter mesh.  Push near to 0.1m
-      // (same floor as INSPECTION mode) so daughter + tether stay visible.
+      // Dynamic near plane: the camera is very close to the daughter in phases 2-3, where the default CAMERA_NEAR (3 m)
+      // clips her mesh; push near to 0.1 m (same floor as INSPECTION mode) so daughter + tether stay visible.
       this.camera.near = 0.000001;   // ~0.1m
       this.camera.updateProjectionMatrix();
     }
 
-    // [DBG-ARM] CEREMONY per-frame log removed (noise during launch ceremony).
-    // Phase-change log at line ~1069 is kept (low-volume).
-
     return { pos, look };
   }
 
-  // ==========================================================================
-  // Q2: NET CEREMONY CINEMATIC (CEREMONY_REDESIGN.md §4)
-  // ==========================================================================
+  // NET CEREMONY CINEMATIC (archive/CEREMONY_REDESIGN.md §4)
 
-  /**
-   * NET_CEREMONY_START handler — enter NET_CINEMATIC mode.
-   * @private
-   */
+  /** NET_CEREMONY_START handler: enter NET_CINEMATIC mode. @private */
   _onNetCeremonyStart(payload) {
     if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;
     if (this._netCeremony.active) return;       // already in ceremony
@@ -2628,11 +2145,9 @@ export class CameraSystem {
     const HCB = NC.HIGHLIGHTS_CUT_BEATS;
     const HTS = NC.HIGHLIGHTS_TIME_SCALE;
 
-    // Read first-deploy flags from PersistenceManager. The mother path gets
-    // its own flag (mother-net-reel plan §11.3): the FIRST_NET_DEPLOY flag is
-    // daughter-flavoured (set by the arm ceremony), so without a mother flag
-    // the first-ever WHALE catch would play the trimmed highlights cut even
-    // though the player has never seen the pod fire.
+    // First-deploy flags from PersistenceManager. The mother path has its own flag: FIRST_NET_DEPLOY is
+    // daughter-flavoured (set by the arm ceremony), so without a mother flag the first-ever WHALE catch would play the
+    // trimmed highlights cut even though the player has never seen the pod fire.
     const isMotherShot = (payload.podIndex ?? -1) >= 0 && (payload.armIndex ?? -1) < 0;
     const firstDeployDone = isMotherShot
       ? persistenceManager.getCeremonyFlag('FIRST_MOTHER_NET_DEPLOY')
@@ -2650,9 +2165,8 @@ export class CameraSystem {
       SECURED_SETTLE:     45,
     };
 
-    // Stage 4 (CEREMONY_REDESIGN.md §5.1): per-beat physics time-scale.
-    // Applied ONLY to NetProjectile.update() and CaptureNetVisual.update() via
-    // CeremonyTimeScale. World dt stays at 1.0× (§6 R1).
+    // Per-beat physics time-scale (archive/CEREMONY_REDESIGN.md §5.1): applied ONLY to NetProjectile.update() and
+    // CaptureNetVisual.update() via CeremonyTimeScale. World dt stays at 1.0× (§6 R1).
     const BEAT_TIME_SCALE = {
       POD_MUZZLE_PREFIRE: NC.TIME_SCALE_PRE_FLIGHT, // 0.4 — beats 1–2
       MUZZLE_EXIT_SPINUP: NC.TIME_SCALE_PRE_FLIGHT, // 0.4
@@ -2665,31 +2179,23 @@ export class CameraSystem {
 
     let beats;
     if (isFirstEver) {
-      // Full 7-beat sequence
       beats = [
         { key: 'POD_MUZZLE_PREFIRE', duration: BD.POD_MUZZLE_PREFIRE, fov: 35, timeScale: BEAT_TIME_SCALE.POD_MUZZLE_PREFIRE },
         { key: 'MUZZLE_EXIT_SPINUP', duration: BD.MUZZLE_EXIT_SPINUP, fov: 40, timeScale: BEAT_TIME_SCALE.MUZZLE_EXIT_SPINUP },
         { key: 'GLAMOUR_SHOT',       duration: BD.GLAMOUR_SHOT,       fov: 50, timeScale: BEAT_TIME_SCALE.GLAMOUR_SHOT },
-        // APPROACH_DOLLY: was 2.0 s, raised to 8.0 s on 2026-05-25 so that the
-        // FLIGHT phase actually completes inside this beat for typical 30–80 m
-        // engagements (10 m/s × scale 0.6 = 6 m/s wall, so 8 s wall ≈ 48 m of
-        // flight). NET_BRAKE_FIRED force-advances out of this beat as soon as
-        // contact occurs, so the long cap is just a safety upper bound — it
-        // does not extend the ceremony when contact happens earlier.
+        // APPROACH_DOLLY 8.0 s: so the FLIGHT phase completes inside this beat for typical 30–80 m engagements
+        // (10 m/s × scale 0.6 = 6 m/s wall, so 8 s wall ≈ 48 m of flight). NET_BRAKE_FIRED force-advances out of this
+        // beat on contact, so the long cap is only a safety bound; it does not extend the ceremony.
         { key: 'APPROACH_DOLLY',     duration: 8.0,                   fov: 45, timeScale: BEAT_TIME_SCALE.APPROACH_DOLLY },
         { key: 'BRAKE_ENVELOP',      duration: BD.BRAKE_ENVELOP,      fov: 38, timeScale: BEAT_TIME_SCALE.BRAKE_ENVELOP },
         { key: 'CINCH',              duration: BD.CINCH,              fov: 42, timeScale: BEAT_TIME_SCALE.CINCH },
         { key: 'SECURED_SETTLE',     duration: BD.SECURED_SETTLE,     fov: 45, timeScale: BEAT_TIME_SCALE.SECURED_SETTLE },
       ];
     } else {
-      // Highlights cut: only HIGHLIGHTS_CUT_BEATS at scaled wall-clock duration.
-      // Per-beat physics time-scale is the SAME as the full sequence — only
-      // the beat DURATION is multiplied by HIGHLIGHTS_TIME_SCALE.
-      // APPROACH_DOLLY is a special case: it has no single BEAT_DURATIONS_S
-      // entry (only _MIN/_MAX), and the full-sequence code uses an 8.0 s
-      // safety cap that force-advances on NET_BRAKE_FIRED. The highlights
-      // cut must use the same cap so the FSM has time to actually contact
-      // the target inside the ceremony (the 2026-05-25 capture-flow fix).
+      // Highlights cut: only HIGHLIGHTS_CUT_BEATS, with the beat DURATION multiplied by HIGHLIGHTS_TIME_SCALE (the
+      // per-beat physics time-scale is the SAME as the full sequence). APPROACH_DOLLY has no single BEAT_DURATIONS_S
+      // entry (only _MIN/_MAX), so it uses the same 8.0 s safety cap as the full sequence (force-advanced on
+      // NET_BRAKE_FIRED), giving the FSM time to contact the target inside the ceremony.
       beats = HCB.map(key => {
         const duration = key === 'APPROACH_DOLLY'
           ? 8.0 * HTS
@@ -2703,13 +2209,10 @@ export class CameraSystem {
       });
     }
 
-    // ── Resolve the launcher (mother-net-reel plan §11.1) ──
-    // Daughter path (armIndex ≥ 0): the ARM_PILOT arm anchors the ceremony.
-    // Mother path (podIndex ≥ 0, armIndex < 0): the pod muzzle anchors it —
-    // polled live each frame because the pod rides the ship. Either path
-    // yields { getPos, getDebrisPos, net }; neither ⇒ refuse to start (the
-    // same contract as the old no-arm early-exit, which test-NetCinematic.js:431
-    // asserts for the daughter path).
+    // Resolve the launcher. Daughter path (armIndex ≥ 0): the ARM_PILOT arm anchors the ceremony. Mother path
+    // (podIndex ≥ 0, armIndex < 0): the pod muzzle anchors it, polled live each frame because the pod rides the ship.
+    // Either path yields { getPos, getDebrisPos, net }; neither ⇒ refuse to start (test-NetCinematic asserts this for
+    // the daughter path).
     const isMother = (payload.podIndex ?? -1) >= 0 && (payload.armIndex ?? -1) < 0;
     let launcher = null;
     let net = null;
@@ -2745,18 +2248,15 @@ export class CameraSystem {
     }
     if (!launcher) return;
 
-    // A ceremony films a LAUNCH. A net that is already seated at the ship
-    // (the lasso-adoption hand-off constructs one directly in BERTHED —
-    // adoptLassoCatch) has no flight to film: the beat list would replay the
-    // whole launch sequence around a parked bag and drag the camera to the
-    // beats' flight anchors in empty space. Belt-and-braces with the
-    // _ceremonyStartEmitted suppression at the adoption site.
+    // A ceremony films a LAUNCH. A net already seated at the ship (the lasso-adoption hand-off constructs one directly
+    // in BERTHED, adoptLassoCatch) has no flight to film: the beats would replay the launch around a parked bag and drag
+    // the camera to flight anchors in empty space. Belt-and-braces with the _ceremonyStartEmitted suppression at the
+    // adoption site.
     if (net && (net.state === 'BERTHED' || net.state === 'COLLARED'
       || net.state === 'TRANSFERRING' || net.state === 'STOWED')) return;
 
-    // 2026-08-26: a real pod launch outranks the lasso garnish — if the cut
-    // is somehow live (lasso mid-reel + simultaneous whale fire), release it
-    // before the ceremony takes NET_CINEMATIC, so ENTERED/EXITED stay paired.
+    // A real pod launch outranks the lasso garnish: if the cut is live (lasso mid-reel + simultaneous whale fire),
+    // release it before the ceremony takes NET_CINEMATIC, so ENTERED/EXITED stay paired.
     if (this._lassoCut.active) this._exitLassoCut(false);
 
     c.active = true;
@@ -2774,8 +2274,7 @@ export class CameraSystem {
     c.success = null;
     c._reelBeatChained = false;
 
-    // Store launch direction (unit vector) + radial/side frame, anchored on
-    // the launcher's CURRENT position.
+    // Launch direction (unit vector) + radial/side frame, anchored on the launcher's CURRENT position.
     const launcherPos = launcher.getPos(c._scratchLauncherPos);
     if (net) {
       c._launchFwd.set(
@@ -2799,88 +2298,72 @@ export class CameraSystem {
       c._sideDir.crossVectors(c._launchFwd, c._v3e.set(0, 1, 0)).normalize();
     }
 
-    // Stage 4: publish first beat's physics time-scale BEFORE the next tick of
-    // NetProjectile / CaptureNetVisual runs. EventBus is synchronous, so this
-    // handler completes inside captureNetSystem.update() before the camera tick.
-    // The very first NetProjectile sub-step that emitted NET_CEREMONY_START
-    // already ran at 1.0× (one-frame lag accepted; beats are multi-frame).
+    // Publish the first beat's physics time-scale BEFORE the next NetProjectile / CaptureNetVisual tick. EventBus is
+    // synchronous, so this handler completes inside captureNetSystem.update() before the camera tick; the very first
+    // NetProjectile sub-step that emitted NET_CEREMONY_START already ran at 1.0× (one-frame lag accepted).
     if (beats.length > 0) {
       CeremonyTimeScale.set(beats[0].timeScale ?? 1.0, this);
     }
 
-    // reel-visible: under the zoom ladder the ceremony's camera never shows (update() hands the frame to the ladder
-    // before it ever reaches _updateNetCeremony), so a NET_CINEMATIC cut here would only leave a ghost view and a
-    // ceremony nothing advances. Keep what the player does feel — the slow motion of the net flight, released the
-    // moment the catch resolves (NET_CEREMONY_COMPLETE) — and take no view, FOV, near plane or cinema-dim event.
-    // The catch focus (CATCH_FOCUS) is what the player sees instead.
+    // Under the zoom ladder the ceremony's camera never shows (update() hands the frame to the ladder before it reaches
+    // _updateNetCeremony), so a NET_CINEMATIC cut would only leave a ghost view and a ceremony nothing advances. Keep the
+    // slow motion of the net flight (released when the catch resolves, NET_CEREMONY_COMPLETE) and take no view, FOV,
+    // near plane or cinema-dim event. The catch focus (CATCH_FOCUS) is what the player sees instead.
     if (this._ladderCam.active) {
       c._quiet = true;
       return;
     }
     c._quiet = false;
 
-    // Switch to NET_CINEMATIC mode
     this.currentView = CameraViews.NET_CINEMATIC;
     this._transitioning = false;
     this._transitionProgress = 0;
     this._fovTransitionStart = undefined;
     this._fovTransitionEnd = undefined;
 
-    // Cinema-dim contract (2026-08-25): announce that the ceremony cut is
-    // actually LIVE on screen. Emitted here (not at NET_CEREMONY_START) so a
-    // refused ceremony — no launcher, launch ceremony active, flag off —
-    // never dims the HUD. HUD.js listens and dims the overlay (the black
-    // letterbox bars it also slid in left 2026-09-09; the events are unchanged).
+    // Cinema-dim contract: announce that the ceremony cut is actually LIVE on screen. Emitted here (not at
+    // NET_CEREMONY_START) so a refused ceremony (no launcher, launch ceremony active, flag off) never dims the HUD.
+    // HUD.js listens and dims the overlay.
     eventBus.emit(Events.NET_CINEMATIC_ENTERED, {
       armIndex: c.armIndex, podIndex: c.podIndex, isFirstEver,
     });
   }
 
-  /**
-   * NET_BRAKE_FIRED advisory handler — snap APPROACH_DOLLY to BRAKE_ENVELOP.
-   * @private
-   */
+  /** NET_BRAKE_FIRED advisory handler: snap APPROACH_DOLLY to BRAKE_ENVELOP. @private */
   _onNetBrakeFired(payload) {
     if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;
     const c = this._netCeremony;
     if (!c.active) return;
-    // Identity filter (mother-net-reel plan §11.1): match on the launcher
-    // axis that started this ceremony — armIndex for daughter, podIndex for
-    // mother. (Two mother pods share armIndex=-1, so armIndex alone cannot
-    // discriminate pod ceremonies.)
+    // Identity filter: match on the launcher axis that started this ceremony (armIndex for daughter, podIndex for
+    // mother; two mother pods share armIndex=-1, so armIndex alone cannot discriminate pod ceremonies).
     if (c.podIndex >= 0 ? (c.podIndex !== payload.podIndex)
                        : (c.armIndex !== payload.armIndex)) return;
 
     const beat = c.beats[c.beatIndex];
     if (beat && beat.key === 'APPROACH_DOLLY') {
-      // Force beat advance on next update frame
       c.beatTimer = beat.duration;
     }
   }
 
-  /**
-   * NET_CEREMONY_COMPLETE handler — handle miss (truncate) or success (let play out).
-   * @private
-   */
+  /** NET_CEREMONY_COMPLETE handler: handle a miss (truncate) or a success (let play out). @private */
   _onNetCeremonyComplete(payload) {
     if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;
     const c = this._netCeremony;
     if (!c.active) return;
-    // Identity filter (mother-net-reel plan §11.1) — see _onNetBrakeFired.
+    // Identity filter: see _onNetBrakeFired.
     if (c.podIndex >= 0 ? (c.podIndex !== payload.podIndex)
                        : (c.armIndex !== payload.armIndex)) return;
 
     c.success = payload.success;
 
-    // reel-visible: a quiet ceremony (ladder on) has no beats to play out — the catch has resolved either way, so
-    // the slow motion ends here (the reel must run at full speed) and the catch focus takes over.
+    // A quiet ceremony (ladder on) has no beats to play out: the catch has resolved either way, so the slow motion ends
+    // here (the reel must run at full speed) and the catch focus takes over.
     if (c._quiet) {
       this._endQuietNetCeremony();
       return;
     }
 
     if (payload.success === false) {
-      // Miss path: truncate immediately, do NOT set first-deploy flag
       this._exitNetCeremony(false);
     }
     // Success path: let the ceremony beats play out naturally.
@@ -2888,45 +2371,35 @@ export class CameraSystem {
   }
 
   /**
-   * Phase D.2 (mother-net-reel plan §11.2) — chain a trailing REEL_IN beat
-   * onto the ceremony when a mother catch is mid-reel as the capture beats
-   * complete. The beat frames mother + incoming catch in a 3/4 view and is
-   * released to the player cam at berth (NET_BERTHED → _onNetBerthed) or at
-   * the REEL_BEAT_MAX_S wall-clock cap — never a 40 s hold.
-   *
-   * Runs at 1.0× timeScale: CeremonyTimeScale multiplies the reel's dt
-   * (§4.15), so a slowmo beat would literally slow the winch. Skipped under
-   * prefers-reduced-motion, for daughter catches, and when the reel already
-   * finished inside the capture beats (a close-range shot).
-   *
+   * Chain a trailing REEL_IN beat onto the ceremony when a mother catch is mid-reel as the capture beats complete. The
+   * beat frames mother + incoming catch in a 3/4 view and is released to the player cam at berth (NET_BERTHED →
+   * _onNetBerthed) or at the REEL_BEAT_MAX_S wall-clock cap, never a 40 s hold.
+   * Runs at 1.0× timeScale: CeremonyTimeScale multiplies the reel's dt, so a slowmo beat would slow the winch. Skipped
+   * under prefers-reduced-motion, for daughter catches, and when the reel already finished inside the capture beats.
    * @param {object} c — the _netCeremony state
    * @returns {boolean} true when the REEL_IN beat was chained
    * @private
    */
   _tryChainReelBeat(c) {
     if (c.podIndex < 0) return false;                    // daughter — exit as before
-    if (c._reelBeatChained) return false;                // chain once — the cap is
-                                                       // the release valve; re-chaining
-                                                       // would hold the cinematic for
-                                                       // the whole reel (§11.2: never 40 s)
+    if (c._reelBeatChained) return false;                // chain once: the cap is the release valve; re-chaining
+                                                       // would hold the cinematic for the whole reel (never 40 s)
     if (this._prefersReducedMotion()) return false;      // accessibility gate
     const net = c._net;
     if (!net || net.state !== 'REELING' || net.catchResult !== 'success') return false;
     if (net._motherReelFallback) return false;           // headless fallback reel
 
     const NC = Constants.CAPTURE_NET.NET_CEREMONY;
-    // Wall-clock estimate: remaining distance ÷ reel speed, padded, capped.
-    // The beat force-advances on NET_BERTHED, so this is only a safety bound —
-    // and the corridor hold can add up to CORRIDOR_TIMEOUT_S, which the cap
-    // absorbs (release mid-hold is the intended pressure valve).
+    // Wall-clock estimate: remaining distance ÷ reel speed, padded, capped. The beat force-advances on NET_BERTHED, so
+    // this is only a safety bound; the corridor hold can add up to CORRIDOR_TIMEOUT_S, which the cap absorbs (release
+    // mid-hold is the intended pressure valve).
     const reelSpeed = net.netClass?.REEL_SPEED || 2.0;
     const remaining = net._remainingM ?? 0;
-    // Effectively berthed — a close-range shot that finished its reel inside
-    // the capture beats. (remaining/speed)×1.2+0.5 floors at 0.5 s, so a raw
-    // duration check can never exclude this case; gate on the distance itself.
+    // Effectively berthed: a close-range shot that finished its reel inside the capture beats. (remaining/speed)×1.2+0.5
+    // floors at 0.5 s, so a raw duration check can never exclude this case; gate on the distance itself.
     if (remaining <= 0.5) return false;
-    // l8-reel-collar: the reel now runs all the way to the collar and eases off for the last metres, so the net
-    // gives its own time-to-go (the apex distance alone under-counts the catch's seat and the slow tail)
+    // The reel runs all the way to the collar and eases off for the last metres, so the net gives its own time-to-go
+    // (the apex distance alone under-counts the catch's seat and the slow tail)
     const eta = typeof net.reelEtaS === 'function' ? net.reelEtaS() : null;
     const estimate = (eta != null ? eta : remaining / reelSpeed) * 1.2 + 0.5;
     const duration = Math.min(estimate, NC.REEL_BEAT_MAX_S ?? 12.0);
@@ -2936,37 +2409,28 @@ export class CameraSystem {
       key: 'REEL_IN',
       duration,
       fov: NC.REEL_BEAT_FOV ?? 42,
-      timeScale: 1.0,                                    // §4.15 — never dilate the reel
-      // 2026-08-25: saturate the dolly-in early. Without this the smoothstep
-      // eased across the beat's WHOLE duration (up to 12 s), so the camera
-      // spent most of the reel mid-transit between the muzzle-side settle
-      // pose and the catch-framed hold — the catch read tiny against empty
-      // sky. With easeInS the camera arrives in ~2.5 s and HOLDS; the beat's
-      // remaining motion is the winch itself.
+      timeScale: 1.0,                                    // never dilate the reel
+      // Saturate the dolly-in early: otherwise the smoothstep eased across the beat's WHOLE duration (up to 12 s) and
+      // the camera spent most of the reel mid-transit between the muzzle-side settle pose and the catch-framed hold.
+      // With easeInS the camera arrives in ~2.5 s and HOLDS; the remaining motion is the winch itself.
       easeInS: NC.REEL_DOLLY_IN_S ?? 2.5,
     });
     c._reelBeatChained = true;
-    // beatIndex currently == beats.length - 1 (just incremented past the old
-    // last beat) — point it at the new trailing beat.
+    // beatIndex == beats.length - 1 here (just incremented past the old last beat): point it at the new trailing beat.
     c.beatIndex = c.beats.length - 1;
     return true;
   }
 
   /**
-   * NET_BERTHED handler — chain the PARK_HOLD beat off the REEL_IN beat.
-   * Cargo-continuity S4: under S3 the catch PARKS at the nose instead of being
-   * deleted, so the berth IS the payoff — do not release to the player cam
-   * here. The park hold is APPENDED (never a same-index swap) so the lerp's
-   * prevKey is REEL_IN: both share the catch-framed pos/look formula, so
-   * `lerpVectors(REEL_IN, PARK_HOLD, ease)` is position-exact at every ease and
-   * the camera holds rock-steady through the chain. A same-index swap would
-   * leave prevKey = SECURED_SETTLE and reset ease to 0 — snapping the camera
-   * ~5–7 m back to the muzzle-side pose at the payoff frame.
-   *
-   * The normal beat-advance then exits by the clock with completedNormally, so
-   * the first-deploy flag write is preserved. Outside the reel beat this is a
-   * no-op (the berth can also land after the beat's wall-clock cap released us
-   * already, or mid capture-beats on a close-range shot).
+   * NET_BERTHED handler: chain the PARK_HOLD beat off the REEL_IN beat. The catch PARKS at the nose instead of being
+   * deleted, so the berth IS the payoff: do not release to the player cam here. The park hold is APPENDED (never a
+   * same-index swap) so the lerp's prevKey is REEL_IN: both share the catch-framed pos/look formula, so
+   * `lerpVectors(REEL_IN, PARK_HOLD, ease)` is position-exact at every ease and the camera holds rock-steady. A
+   * same-index swap would leave prevKey = SECURED_SETTLE and reset ease to 0, snapping the camera ~5–7 m back to the
+   * muzzle-side pose at the payoff frame.
+   * The normal beat-advance then exits by the clock with completedNormally, so the first-deploy flag write is
+   * preserved. Outside the reel beat this is a no-op (the berth can land after the beat's wall-clock cap released us,
+   * or mid capture-beats on a close-range shot).
    * @private
    */
   _onNetBerthed(payload) {
@@ -2976,21 +2440,16 @@ export class CameraSystem {
     const beat = c.beats[c.beatIndex];
     if (beat && beat.key === 'REEL_IN') {
       const NC = Constants.CAPTURE_NET.NET_CEREMONY;
-      // Small-catch plan W4 (2026-08-25): a sub-metre catch digests fast
-      // (min-mass span 60 game-s ≈ 6 wall-s sunlit) and the fixed 4/6 s hold
-      // released the camera right as the chop started — the shrink played
-      // over the exit transition in the open. Extend the hold through berth
-      // secure + digestion to CHOP END (+ pad) so the W3 deflate-and-fade
-      // lands INSIDE the held shot; capped (eclipse dilates the digest clock
-      // ×25 — the cap is the release valve, and the guard's `_digestedOut`
-      // check releases early whenever the feed finishes first). Repeat and
-      // first-ever catches at/above the size gate keep the trimmed 4/6 s
-      // byte-identical.
+      // A sub-metre catch digests fast (min-mass span 60 game-s ≈ 6 wall-s sunlit) and the fixed 4/6 s hold released the
+      // camera as the chop started. Extend the hold through berth secure + digestion to CHOP END (+ pad) so the
+      // deflate-and-fade lands INSIDE the held shot; capped (eclipse dilates the digest clock ×25: the cap is the
+      // release valve, and the guard's `_digestedOut` check releases early whenever the feed finishes first). Repeat and
+      // first-ever catches at/above the size gate keep the trimmed 4/6 s.
       let duration = c.isFirstEver ? (NC.PARK_HOLD_FIRST_S ?? 10.0) : (NC.PARK_HOLD_S ?? 5.0);
       const d = c._net?.targetDebris;
       const sizeGateM = NC.PARK_HOLD_DIGEST_MAX_SIZE_M ?? 0;
-      // followups-1018 D2: with no furnace (FURNACE_COOK off) there is no chop to wait for, so the hold stays the plain
-      // PARK_HOLD_FIRST_S / PARK_HOLD_S; the lengthening below runs only while the cook is on.
+      // With no furnace (FURNACE_COOK off) there is no chop to wait for, so the hold stays the plain PARK_HOLD_FIRST_S /
+      // PARK_HOLD_S; the lengthening below runs only while the cook is on.
       if (Constants.isFeatureEnabled('FURNACE_COOK') && d && typeof d.sizeMeter === 'number' && d.sizeMeter < sizeGateM) {
         const CN = Constants.CAPTURE_NET;
         const FT = Constants.FURNACE_TRANSFER;
@@ -3002,11 +2461,11 @@ export class CameraSystem {
       }
       c.beats.push({
         key: 'PARK_HOLD',
-        // First-ever mother catch holds longer — the first_net_park teaching
-        // moment (CATCH_PROCESSED { parked: true }) lands during it.
+        // First-ever mother catch holds longer: the first_net_park teaching moment (CATCH_PROCESSED { parked: true })
+        // lands during it.
         duration,
-        fov: NC.REEL_BEAT_FOV ?? 42,   // unchanged from REEL_IN — no FOV pop
-        timeScale: 1.0,                // §4.15 — never dilate the berth hold
+        fov: NC.REEL_BEAT_FOV ?? 42,   // unchanged from REEL_IN: no FOV pop
+        timeScale: 1.0,                // never dilate the berth hold
       });
       c.beatIndex = c.beats.length - 1;
       c.beatTimer = 0;
@@ -3014,8 +2473,7 @@ export class CameraSystem {
   }
 
   /**
-   * Compute a beat's camera endpoint position (design doc §5.3).
-   * Writes into `out`; no allocation.
+   * A beat's camera endpoint position (design doc §5.3). Writes into `out`; no allocation.
    * @private
    * @param {THREE.Vector3} out — pre-allocated output vector
    * @param {string} key — beat key or 'ARM_PILOT_START'
@@ -3024,7 +2482,6 @@ export class CameraSystem {
     const M = 0.00001;
     switch (key) {
       case 'ARM_PILOT_START': {
-        // ARM_PILOT standard position: behind arm toward debris, above
         const apFwd = this._netCeremony._v3e;
         if (debrisPos.distanceToSquared(armPos) > 1e-20) {
           apFwd.subVectors(debrisPos, armPos).normalize();
@@ -3036,29 +2493,18 @@ export class CameraSystem {
           .addScaledVector(localUp, this.armPilot.offsetAbove);
       }
       case 'SECURED_SETTLE': {
-        // Whale-in-cone follow-up 1 (2026-08-05): OWN pose, side-on to the
-        // reel line. The shared ARM_PILOT_START branch parked the camera 5 m
-        // BEHIND the launcher on the pod↔catch axis, so the beat's lerp from
-        // the CINCH pose (16 m beyond the capture site) ran straight down the
-        // reel line and through the berthed bag — measured camToWhale ≈ 2.6 m
-        // mid-beat, the "thread bundle, no whale" stills (and the fabric
-        // gate's camInsideBag skip). A fixed side/up offset off the reel line
-        // can never enter the bag cone, and looking at the live catch (see
-        // _netCeremonyBeatLook) keeps the payoff framed as it reels to the
-        // pod: at berth the catch rides ~6.5 m ahead of the muzzle (2.0 m
-        // standoff + ~4.5 m seat), so 6 m off-axis frames it large.
+        // OWN pose, side-on to the reel line (never on the catch↔muzzle axis: the lerp from the CINCH pose, 16 m beyond the
+        // capture site, would run straight down the reel line and through the berthed bag). A fixed side/up offset can
+        // never enter the bag cone; looking at the live catch (see _netCeremonyBeatLook) keeps the payoff framed: at berth
+        // the catch rides ~6.5 m ahead of the muzzle (2.0 m standoff + ~4.5 m seat), so 6 m off-axis frames it large.
         return out.copy(armPos)
           .addScaledVector(side, 6 * M)
           .addScaledVector(localUp, 2.5 * M);
       }
       case 'POD_MUZZLE_PREFIRE':
-        // 2026-08-25 reframe (filmstrip analysis): the old pose (0.6 m behind
-        // the muzzle, 0.15 m up) sat INSIDE the spin-up cone's silhouette —
-        // the disc expands to the full mouth diameter at the muzzle during
-        // SPINNING_UP, so the player's first ceremony frame was a lattice
-        // wall with the pod invisible (tmp/cinema frame 001). A side profile
-        // off the boresight reads the arming device ON the nose: canister
-        // pop, disc spin-up and the ship hull all in one composition.
+        // Side profile off the boresight reads the arming device ON the nose (canister pop, disc spin-up and ship hull in
+        // one composition): a pose just behind the muzzle sits INSIDE the spin-up cone's silhouette (the disc expands to
+        // the full mouth diameter at the muzzle during SPINNING_UP), hiding the pod.
         return out.copy(armPos)
           .addScaledVector(side, 3.0 * M)
           .addScaledVector(fwd, -1.5 * M)
@@ -3068,94 +2514,55 @@ export class CameraSystem {
           .addScaledVector(localUp, 1.0 * M)
           .addScaledVector(side, 2.5 * M);
       case 'GLAMOUR_SHOT':
-        // Stage 3 retune 2026-05-24: 0.8 → 1.5 (D fractions; mouthR=0.5D so
-        // distance/radius = 1.5/0.5 = 3.0× — hero-shot silhouette breathing room).
-        // Whale-in-cone follow-up 1 (2026-08-05): dead-astern put the net
-        // exactly ON the camera→whale axis — through the lerp from
-        // MUZZLE_EXIT_SPINUP the whale stayed hidden at the frame edge behind
-        // the flooding net (measured: whale 21 m off, 23 px in the corner).
-        // The 3/4 rear-side pose keeps ratio ≥ 3.0 while parallax separates
-        // net and whale from the first frame of the beat.
+        // D fractions: 1.5 (mouthR = 0.5 D, so distance/radius = 3.0×: hero-shot silhouette breathing room). The 3/4
+        // rear-side pose (dead-astern puts the net exactly ON the camera→whale axis, hiding the whale) keeps ratio ≥ 3.0
+        // while parallax separates net and whale from the first frame of the beat.
         return out.copy(netPos)
           .addScaledVector(fwd, -1.3 * D_M)
           .addScaledVector(side, 0.85 * D_M)
           .addScaledVector(localUp, 0.3 * D_M);
       case 'APPROACH_DOLLY':
-        // Stage 3 retune 2026-05-24: 0.5 → 1.25 (ratio 2.5× — outside cone wall).
+        // 1.25 D fractions (ratio 2.5×: outside the cone wall).
         return out.copy(netPos)
           .addScaledVector(side, 1.25 * D_M);
       case 'BRAKE_ENVELOP':
-        // 2026-05-25 Stage 3 fix (CONTINUOUS netPos-tracking + apex-plane-breakout):
-        // (1) NO cached `_beat5WorldPos` — see CINCH-class regression test 11 in
-        //     test-NetCinematic.js. The orbital frame translates >100 km/s; any
-        //     stale absolute anchor goes catastrophically out of frame in <1 s.
-        // (2) Camera MUST have a non-zero `fwd` component. Previously the offset
-        //     was `side × 1.25 × D_M` only — putting the camera in the apex plane
-        //     (perpendicular to launchDir). The ENVELOP animation translates the
-        //     8 rim weights along the cone axis from z=−coneH (mouth plane) to
-        //     z=0 (apex plane). With camera in the apex plane the weight start
-        //     position is at atan(coneH/sideOffset)=atan(0.55D/1.25D)=23.7° off
-        //     the camera→apex axis — OUTSIDE the half-FOV-V of 19° at beat-5
-        //     FOV=38°. User saw weights "pop in" only at the end of the sweep
-        //     (= same experience as before any of these fixes).
-        //     New offset: (side 1.5, fwd 0.6, up 0.5) × D_M places the camera
-        //     in a 3/4 elevated side view. Distance/mouthR = √(2.25+0.36+0.25)/0.5
-        //     = 3.38× (still well outside cone surface). The fwd component
-        //     pushes the camera off the apex plane so the weight sweep is
-        //     observed obliquely (parallax visible).
+        // CONTINUOUS netPos-tracking + apex-plane-breakout:
+        // (1) NO cached `_beat5WorldPos` (CINCH-class regression test 11 in test-NetCinematic.js): the orbital frame
+        //     translates >100 km/s, so any stale absolute anchor goes out of frame in <1 s.
+        // (2) The camera MUST have a non-zero `fwd` component: a `side × 1.25 × D_M`-only offset sits in the apex plane
+        //     (perpendicular to launchDir), and the ENVELOP rim weights (translating along the cone axis from z=−coneH,
+        //     the mouth plane, to z=0, the apex plane) start atan(0.55D/1.25D) = 23.7° off the camera→apex axis: OUTSIDE
+        //     the half-FOV-V of 19° at beat-5 FOV=38°, so they "pop in". Offset (side 1.5, fwd 0.6, up 0.5) × D_M is a 3/4
+        //     elevated side view: distance/mouthR = √(2.25+0.36+0.25)/0.5 = 3.38× (well outside the cone surface), and
+        //     the fwd component takes the camera off the apex plane so the weight sweep is seen obliquely.
         return out.copy(netPos)
           .addScaledVector(side, 1.5 * D_M)
           .addScaledVector(fwd, 0.6 * D_M)
           .addScaledVector(localUp, 0.5 * D_M);
       case 'CINCH':
-        // 2026-05-25 Stage 3 fix (apex-plane-breakout, front-view framing):
-        // Previous offset was (side 1.5, up −0.3) × D_M — again perpendicular
-        // to launchDir, so the camera sat in the apex plane (same plane the
-        // CINCH_CLOSING weights spin in). The weight ring was seen EDGE-ON
-        // — a contracting horizontal line, not a closing drawstring spiral.
-        // New offset uses fwd × 2.0 × D_M (camera AHEAD of mouth, looking back
-        // through the bag's open mouth at the apex plane) plus a small side
-        // component for parallax. The apex plane is now perpendicular to the
-        // camera's view direction → weights' spiral inward is rendered as a
-        // shrinking 2-D circle dead-centre in the frame. Distance/mouthR ratio:
-        // √(0.4² + 2.0² + 0.4²)/0.5 = √4.32/0.5 = 4.16× (well outside cone).
+        // Apex-plane-breakout, front-view framing: an offset perpendicular to launchDir (e.g. side 1.5, up −0.3) puts the
+        // camera in the apex plane (the plane the CINCH_CLOSING weights spin in), so the ring is seen EDGE-ON: a
+        // contracting line, not a closing drawstring spiral. fwd × 2.0 × D_M puts the camera AHEAD of the mouth, looking
+        // back through the bag's open mouth at the apex plane, plus a small side component for parallax: the spiral
+        // inward renders as a shrinking 2-D circle dead-centre. Distance/mouthR: √(0.4² + 2.0² + 0.4²)/0.5 = 4.16× (well
+        // outside the cone).
         return out.copy(netPos)
           .addScaledVector(side, 0.4 * D_M)
           .addScaledVector(fwd, 2.0 * D_M)
           .addScaledVector(localUp, 0.4 * D_M);
       case 'REEL_IN':
       case 'PARK_HOLD': {
-        // Cargo-continuity S4 (2026-08-11) — frame THE CATCH, mother as
-        // context. The old 3/4 "mother + incoming catch" midpoint shot is the
-        // measured retreat (REELING 22.6 m, BERTHED 22.9 m — a 1.5 m catch
-        // read ~68 px in tmp/rv-disappear.log). Hold ~8–12 m off the LIVE
-        // catch instead, side/up off the reel line (the SECURED_SETTLE lesson:
-        // never on the catch↔muzzle axis), scaled by the catch so a 7 m whale
-        // still fits the frame. The mother grows into frame as context as the
-        // catch closes; at berth/park the payoff is the catch AT the nose,
-        // large. REEL_IN and PARK_HOLD share the formula so the NET_BERTHED
-        // chain is seamless (identical pos + look, no camera jump).
-        // 2026-08-25 retune (filmstrip): drop the camera toward the reel
-        // plane (up 0.6 → 0.34, side 0.8 → 0.94 — still unit-norm so the
-        // hold distance stays exactly holdM, the S4 test contract). The old
-        // elevated pose looked DOWN at the catch and kept the mother out of
-        // frame for the whole reel; the flatter profile puts the nose in
-        // frame from the first held frame, so the shot reads "package winched
-        // to the ship" instead of "lump alone against stars".
-        // Small-catch plan W4 (2026-08-25): the hold tracks the DRAWN BUNDLE,
-        // not just the logical size — `2 × sizeM` read 1 m for a 0.5 m
-        // fragment while the readability floor draws that catch at 2.0 m
-        // radius (net.heldBundleRadiusM — measured tmp/frag-before f20+), so
-        // the old formula was honest only by accident of the 8 m floor. The
-        // bundle term holds HOLD_BUNDLE_FRAME_K = 4 bundle-radii off: the
-        // bundle's diameter subtends 2·atan(1/4) ≈ 28° of the 42° beat FOV —
-        // the after2 whale composition generalized. The [8, 12] clamp is
-        // UNCHANGED: the floor equals 4 × MOTHER_CATCH_MIN_RENDER_M (2.0 m),
-        // i.e. the smallest bundle the reel/park can ever draw already sits
-        // at the composition invariant, so both verified subjects (2 m whale,
-        // sub-metre fragment) hold at exactly 8 m — no regression by
-        // construction. Headless mocks without the accessor fall back to the
-        // sizeM-only term (bundle 0), the pre-W4 formula bit-for-bit.
+        // Frame THE CATCH, mother as context: hold ~8–12 m off the LIVE catch, side/up off the reel line (never on the
+        // catch↔muzzle axis), scaled by the catch so a 7 m whale still fits. The mother grows into frame as the catch
+        // closes; at berth/park the payoff is the catch AT the nose, large. REEL_IN and PARK_HOLD share the formula so the
+        // NET_BERTHED chain is seamless (identical pos + look, no camera jump). up 0.34 / side 0.94 is unit-norm, so the
+        // hold distance is exactly holdM (the S4 test contract); the flat profile puts the nose in frame from the first
+        // held frame. The hold tracks the DRAWN BUNDLE, not just the logical size: `2 × sizeM` read 1 m for a 0.5 m
+        // fragment while the readability floor draws that catch at 2.0 m radius (net.heldBundleRadiusM). The bundle term
+        // holds HOLD_BUNDLE_FRAME_K = 4 bundle-radii off (the bundle's diameter subtends 2·atan(1/4) ≈ 28° of the 42°
+        // beat FOV). The [8, 12] clamp: the floor equals 4 × MOTHER_CATCH_MIN_RENDER_M (2.0 m), the smallest bundle the
+        // reel/park can draw, so a 2 m whale and a sub-metre fragment both hold at exactly 8 m. Headless mocks without
+        // the accessor fall back to the sizeM-only term (bundle 0).
         const sizeM = this._netCeremony._net?.targetDebris?.sizeMeter || 2;
         const bundleRM = (typeof this._netCeremony._net?.heldBundleRadiusM === 'function')
           ? (this._netCeremony._net.heldBundleRadiusM() || 0) : 0;
@@ -3170,10 +2577,7 @@ export class CameraSystem {
     }
   }
 
-  /**
-   * Compute a beat's lookAt target. Writes into `out`; no allocation.
-   * @private
-   */
+  /** A beat's lookAt target. Writes into `out`; no allocation. @private */
   _netCeremonyBeatLook(out, key, armPos, netPos, debrisPos, fwd, D_M) {
     switch (key) {
       case 'ARM_PILOT_START':
@@ -3185,44 +2589,26 @@ export class CameraSystem {
       case 'MUZZLE_EXIT_SPINUP':
         return out.copy(netPos);
       case 'BRAKE_ENVELOP':
-        // 2026-05-25 — look at cone midpoint (apex + fwd × coneH/2), not the
-        // apex itself. The ENVELOP animation occupies the full cone length
-        // (weights translate from mouth-plane to apex-plane). Centering on the
-        // apex pushes the FROM-end of the weight sweep (mouth plane) outside
-        // the FOV; centering on the midpoint balances both ends in frame.
-        // coneH = D × CONE_LENGTH_FRAC × CONE_OPEN_RADIUS_FRAC.
-        // 2026-05-28 (Item 1): CONE_LENGTH_FRAC bumped 0.55 → 0.85 so the
-        // cinch closes past the debris's leading edge (gap = 0.35 × D
-        // instead of 0.05 × D).  Midpoint moves 0.275 × D → 0.425 × D.
+        // Look at the cone midpoint (apex + fwd × coneH/2), not the apex: the ENVELOP animation occupies the full cone
+        // length (weights translate from mouth plane to apex plane), and centring on the apex pushes the FROM-end of the
+        // sweep (mouth plane) outside the FOV; the midpoint balances both ends in frame.
+        // coneH = D × CONE_LENGTH_FRAC × CONE_OPEN_RADIUS_FRAC; CONE_LENGTH_FRAC 0.85 puts the midpoint at 0.425 × D.
         return out.copy(netPos).addScaledVector(fwd, 0.425 * (D_M ?? 0));
       case 'CINCH':
-        // 2026-05-26 GEOMETRY FIX: CINCH ring contracts at the MOUTH plane
-        // (local z=-coneHeight).  2026-05-28 (Item 1): CONE_LENGTH_FRAC was
-        // 0.55, so coneH was 0.55 × D and the mouth/ring sat 0.4 m past the
-        // target — the user perceived the ring cinching THROUGH the
-        // debris's middle.  Bumped to 0.85 so coneH = 0.85 × D and the
-        // ring sits 0.35 × D past the target (2.8 m for LARGE D=8) —
-        // safely past the leading edge of the debris.  This look-at value
-        // = CONE_LENGTH_FRAC × CONE_OPEN_RADIUS_FRAC × D_M and MUST stay
-        // in sync with Constants.CAPTURE_NET.NET_CEREMONY.CONE_LENGTH_FRAC.
+        // Look at the CINCH ring, which contracts at the MOUTH plane (local z=-coneHeight). CONE_LENGTH_FRAC 0.85 makes
+        // coneH = 0.85 × D, so the ring sits 0.35 × D past the target (2.8 m for LARGE D=8), safely past the debris's
+        // leading edge (the ring must not cinch THROUGH the debris's middle). This look-at value = CONE_LENGTH_FRAC ×
+        // CONE_OPEN_RADIUS_FRAC × D_M and MUST stay in sync with Constants.CAPTURE_NET.NET_CEREMONY.CONE_LENGTH_FRAC.
         return out.copy(netPos).addScaledVector(fwd, 0.85 * (D_M ?? 0));
       case 'APPROACH_DOLLY':
-        // Midpoint of net and debris
         return out.copy(netPos).add(debrisPos).multiplyScalar(0.5);
       case 'REEL_IN':
       case 'PARK_HOLD': {
-        // Phase D.2 + S4 — track the incoming catch biased slightly toward the
-        // muzzle, so the berth destination stays in frame as it closes. Shared
-        // with PARK_HOLD so the berth chain has no look-target jump.
-        // 2026-08-25 retune (filmstrip): bias 0.7/0.3 → 0.45 toward the
-        // muzzle, CLAMPED to ≤ 4.5 m from the catch. The unclamped midpoint-
-        // ish bias aimed ~9 m off the catch at reel start (20 m separation) —
-        // atan(9/8) ≈ 48° off the hold axis, past the 42°-FOV horizontal
-        // half-angle (~31.5° at 16:10), so the package sat cropped at the
-        // frame edge (after2 frame 033). 4.5 m keeps the catch inside the
-        // frame at the 8 m hold (atan(4.5/8) ≈ 29°) and at the 12 m hold
-        // (≈ 21°); inside ~10 m separation the 0.45 fraction takes over and
-        // frames catch + nose together, identical to the unclamped berth pose.
+        // Track the incoming catch biased 0.45 toward the muzzle, so the berth destination stays in frame as it closes;
+        // shared with PARK_HOLD so the berth chain has no look-target jump. CLAMPED to ≤ 4.5 m from the catch: an
+        // unclamped bias aimed ~9 m off the catch at reel start (20 m separation), atan(9/8) ≈ 48° off the hold axis, past
+        // the 42°-FOV horizontal half-angle (~31.5° at 16:10). 4.5 m keeps the catch in frame at the 8 m hold (atan(4.5/8)
+        // ≈ 29°) and the 12 m hold (≈ 21°); inside ~10 m separation the 0.45 fraction takes over and frames catch + nose.
         const toMuzzle = this._netCeremony._v3e.copy(armPos).sub(debrisPos);
         const dist = toMuzzle.length();
         const M_LOOK = 0.00001;
@@ -3235,12 +2621,10 @@ export class CameraSystem {
   }
 
   /**
-   * Compute net scene position into c._scratchNetPos. No allocation.
-   * Daughter: arm position + launchDirection × distanceTraveled (the arm is
-   * the flight anchor). Mother: the net's own live position × M — the mother
-   * reel/berth writes net.position in metres every frame from the ship-relative
-   * pin (mother-net-reel plan §8), which IS the correct scene anchor; the
-   * flight phase reads the same field via the anchor provider.
+   * Net scene position into c._scratchNetPos. No allocation. Daughter: arm position + launchDirection ×
+   * distanceTraveled (the arm is the flight anchor). Mother: the net's own live position × M (the mother reel/berth
+   * writes net.position in metres every frame from the ship-relative pin, which IS the correct scene anchor; the
+   * flight phase reads the same field via the anchor provider).
    * @private
    */
   _computeNetScenePos(c) {
@@ -3249,7 +2633,6 @@ export class CameraSystem {
       ? (captureNetSystem.getActiveNetForPod ? captureNetSystem.getActiveNetForPod(c.podIndex) : null)
       : captureNetSystem.getActiveNetForArm(c.armIndex));
     if (net && c.podIndex >= 0 && net.position) {
-      // Mother: net.position is metres (CaptureNet.js:454) — scale to scene.
       c._scratchNetPos.set(net.position.x * M, net.position.y * M, net.position.z * M);
     } else if (net && net._sourceArm?.position) {
       const ap = net._sourceArm.position;
@@ -3259,7 +2642,6 @@ export class CameraSystem {
         ap.z + net.launchDirection.z * net.distanceTraveled * M
       );
     } else if (c._launcher && c._launcher.getPos(c._scratchNetPos)) {
-      // fall through — launcher position is the anchor
     } else {
       c._scratchNetPos.set(0, 0, 0);
     }
@@ -3277,61 +2659,44 @@ export class CameraSystem {
     c.beatTimer += dt;
     let beat = c.beats[c.beatIndex];
 
-    // Subject-death guard (2026-08-26): a ceremony must never keep lerping
-    // beats over a net that has been consumed/deactivated — the pre-guard
-    // failure mode was a letterboxed camera chasing stale anchors while the
-    // world moved on (Kessler kill mid-flight, teardown, release). Keys on
-    // `isActive === false` EXPLICITLY (headless beat mocks without the field
-    // stay served — undefined is not false, and the FLIGHT-control pin keeps
-    // this from ever becoming a blanket refusal). A digested-out subject is
-    // the one COMPLETED payoff (the whole catch played on camera — the same
-    // contract as the PARK_HOLD `_digestedOut` release below, which remains
-    // for the spliced-net case where isActive never flips); everything else
-    // is a truncation. Camera-handoff-hold L2 (2026-09-25): a DELIVERED
-    // hand-off is the other completed payoff — the mother-path arrival sets
-    // `isActive = false` + `_cargoDelivered = true` (CaptureNet S7), which
-    // used to read as a subject death here, truncating the first catch's
-    // exit so FIRST_MOTHER_NET_DEPLOY never fired and the long first-catch
-    // ceremony replayed on every mother catch.
+    // Subject-death guard: a ceremony must never keep lerping beats over a net that has been consumed/deactivated
+    // (Kessler kill mid-flight, teardown, release). Keys on `isActive === false` EXPLICITLY (headless beat mocks without
+    // the field stay served: undefined is not false, and the FLIGHT-control pin keeps this from becoming a blanket
+    // refusal). A digested-out subject is the one COMPLETED payoff (like the PARK_HOLD `_digestedOut` release below, which
+    // remains for the spliced-net case where isActive never flips); everything else is a truncation. A DELIVERED
+    // hand-off is the other completed payoff: the mother-path arrival sets `isActive = false` + `_cargoDelivered = true`
+    // (CaptureNet S7), which must not read as a subject death (it would truncate the first catch's exit, so
+    // FIRST_MOTHER_NET_DEPLOY never fires and the long first-catch ceremony replays on every mother catch).
     if (beat && c._net && c._net.isActive === false) {
       this._exitNetCeremony(c._net._digestedOut === true || c._net._cargoDelivered === true);
       return null;
     }
 
-    // Phase D.2 guard: the REEL_IN beat ends the frame the net leaves REELING
-    // for any reason other than the berth (which NET_BERTHED covers) — a
-    // mid-reel miss (dead target, strain slip) does NOT re-emit
-    // NET_CEREMONY_COMPLETE (already spent at CAPTURED), so poll the state.
+    // REEL_IN guard: the beat ends the frame the net leaves REELING for any reason other than the berth (NET_BERTHED
+    // covers that); a mid-reel miss (dead target, strain slip) does NOT re-emit NET_CEREMONY_COMPLETE (already spent at
+    // CAPTURED), so poll the state.
     if (beat && beat.key === 'REEL_IN' && c._net && c._net.state !== 'REELING') {
       this._exitNetCeremony(false);
       return null;
     }
 
-    // S4: the park hold lives in BERTHED/COLLARED — a jettison [K] or a
-    // dead-target teardown ends it the frame the hold breaks (same idiom as
-    // the REEL_IN guard above). S13(c): the terminal state is the collar mate.
-    // Small-catch plan W4 (2026-08-25): `_digestedOut` releases too — the
-    // spliced net keeps its stale COLLARED state forever, so a hold extended
-    // through digestion (sub-metre catches) would otherwise sit out its full
-    // clock over a consumed body. completedNormally: the whole ceremony
-    // played and the payoff finished on camera — this is the clean cut, not
-    // a truncation. Camera-handoff-hold L2 (2026-09-25): `_cargoDelivered`
-    // releases the same way (belt-and-braces with the subject-death guard —
-    // the delivered net flips isActive, but a reader holding the reference
-    // before the splice sees the marker first).
+    // The park hold lives in BERTHED/COLLARED: a jettison [K] or a dead-target teardown ends it the frame the hold
+    // breaks (same idiom as the REEL_IN guard above); the terminal state is the collar mate. `_digestedOut` releases
+    // too: the spliced net keeps its stale COLLARED state forever, so a hold extended through digestion (sub-metre
+    // catches) would otherwise sit out its full clock over a consumed body. completedNormally: the whole ceremony
+    // played and the payoff finished on camera, a clean cut, not a truncation. `_cargoDelivered` releases the same way
+    // (belt-and-braces with the subject-death guard: a reader holding the reference before the splice sees the marker
+    // first).
     if (beat && beat.key === 'PARK_HOLD' && c._net
         && (c._net._digestedOut === true || c._net._cargoDelivered === true)) {
       this._exitNetCeremony(true);
       return null;
     }
-    // Camera-handoff-hold L1/L3 (2026-09-25): TRANSFERRING keeps serving the
-    // hold, exactly like COLLARED — the cargo hand-off IS the payoff
-    // continuing (the nose-collar crane to a daughter rack, CaptureNet S7),
-    // and the bag leaving the collar must not cut the shot the frame the
-    // catch departs. The PARK_HOLD pos/look formulas already track the live
-    // pin, which the transfer rewrites every frame. Any OTHER state out of
-    // the hold (RELEASED, jettison, teardown, STOWED) still truncates; an
-    // aborted transfer returns to COLLARED, which stays served.
+    // TRANSFERRING keeps serving the hold, like COLLARED: the cargo hand-off IS the payoff continuing (the nose-collar
+    // crane to a daughter rack, CaptureNet S7), and the bag leaving the collar must not cut the shot the frame the
+    // catch departs. The PARK_HOLD pos/look formulas already track the live pin, which the transfer rewrites every
+    // frame. Any OTHER state out of the hold (RELEASED, jettison, teardown, STOWED) still truncates; an aborted
+    // transfer returns to COLLARED, which stays served.
     if (beat && beat.key === 'PARK_HOLD' && c._net
         && c._net.state !== 'BERTHED' && c._net.state !== 'COLLARED'
         && c._net.state !== 'TRANSFERRING') {
@@ -3339,17 +2704,12 @@ export class CameraSystem {
       return null;
     }
 
-    // Camera-handoff-hold L4 (2026-09-25): FIRST-EVER hold only — when the
-    // cargo hand-off starts under the hold, stretch the beat so it can end
-    // ON the landing (+ PARK_HOLD_DIGEST_PAD_S), capped at
-    // PARK_HOLD_DIGEST_CAP_S from hold start. Repeat holds are NEVER
-    // stretched (M1 constraint 7: no cutscene the player sees every time) —
-    // a repeat hold that runs out mid-flight ends on its own clock via the
-    // normal beat-advance exit above. L6: polled, not evented — the transfer
-    // clock (_cargoS/_cargoDur) is live net state, read the same way the
-    // guards above read `state`. Idempotent while the flight runs (beatTimer
-    // and the remaining flight advance 1:1 at the hold's 1.0× timeScale),
-    // and a re-crane after an abort simply stretches to the new landing.
+    // FIRST-EVER hold only: when the cargo hand-off starts under the hold, stretch the beat so it can end ON the
+    // landing (+ PARK_HOLD_DIGEST_PAD_S), capped at PARK_HOLD_DIGEST_CAP_S from hold start. Repeat holds are NEVER
+    // stretched (no cutscene the player sees every time): a repeat hold that runs out mid-flight ends on its own clock
+    // via the normal beat-advance exit. Polled, not evented: the transfer clock (_cargoS/_cargoDur) is live net state,
+    // read like `state` above. Idempotent while the flight runs (beatTimer and the remaining flight advance 1:1 at the
+    // hold's 1.0× timeScale), and a re-crane after an abort simply stretches to the new landing.
     if (beat && beat.key === 'PARK_HOLD' && c.isFirstEver && c._net
         && c._net.state === 'TRANSFERRING'
         && typeof c._net._cargoDur === 'number') {
@@ -3361,15 +2721,12 @@ export class CameraSystem {
       if (endS > beat.duration) beat.duration = endS;
     }
 
-    // Beat advance
     if (c.beatTimer >= beat.duration) {
       c.beatTimer -= beat.duration;
       c.beatIndex++;
       if (c.beatIndex >= c.beats.length) {
-        // Phase D.2: chain into the REEL_IN beat instead of exiting when a
-        // mother catch is mid-reel (3/4 view of mother + incoming catch,
-        // released at berth or the wall-clock cap). Daughter catches exit
-        // here as before.
+        // Chain into the REEL_IN beat instead of exiting when a mother catch is mid-reel (3/4 view of mother + incoming
+        // catch, released at berth or the wall-clock cap). Daughter catches exit here.
         if (this._tryChainReelBeat(c)) {
           beat = c.beats[c.beatIndex];
         } else {
@@ -3381,14 +2738,11 @@ export class CameraSystem {
       }
     }
 
-    // P3: publish the active beat's physics time-scale (CEREMONY_REDESIGN.md §5.1),
-    // re-asserted every served frame so it is the single source of truth for the
-    // beat scale in this method. Idempotent (same value, same owner), and it makes
-    // the scale self-healing — if the pause path (or any owner-scoped reset)
-    // cleared it, the first ceremony frame after resume restores it, while the
-    // exit/abort paths clear it for good. (The ceremony-start set in
-    // _onNetCeremonyStart stays — it must run inside the synchronous
-    // NET_CEREMONY_START handler, before the projectile's next tick.)
+    // Publish the active beat's physics time-scale (archive/CEREMONY_REDESIGN.md §5.1), re-asserted every served frame
+    // so it is the single source of truth for the beat scale in this method. Idempotent (same value, same owner) and
+    // self-healing: if the pause path (or any owner-scoped reset) cleared it, the first frame after resume restores it,
+    // while the exit/abort paths clear it for good. (The ceremony-start set in _onNetCeremonyStart stays: it must run
+    // inside the synchronous NET_CEREMONY_START handler, before the projectile's next tick.)
     CeremonyTimeScale.set(beat.timeScale ?? 1.0, this);
 
     const t = c.beatTimer / (beat.easeInS
@@ -3397,8 +2751,7 @@ export class CameraSystem {
     const tc = Math.min(1, t);
     const ease = smoothstep01(tc); // smoothstep, saturates at easeInS when set
 
-    // Launcher anchor (mother-net-reel plan §11.1): arm.position for daughter,
-    // the live pod muzzle for mother. Polled every frame — the pod rides the
+    // Launcher anchor: arm.position for daughter, the live pod muzzle for mother. Polled every frame: the pod rides the
     // ship, and a stale absolute anchor drifts ~45 km apparent in 0.65 s.
     if (!c._launcher) {
       this._exitNetCeremony(false);
@@ -3416,8 +2769,7 @@ export class CameraSystem {
     const side = c._sideDir;
     const D_M = c._netDiameterScene;
 
-    // Debris scene position (into c._v3d) — live on both paths (the debris
-    // keeps propagating while pinned).
+    // Debris scene position (into c._v3d), live on both paths (the debris keeps propagating while pinned).
     const debrisPos = c._v3d;
     if (!c._launcher.getDebrisPos(debrisPos)) {
       debrisPos.copy(armPos).addScaledVector(fwd, 0.0005);
@@ -3431,8 +2783,6 @@ export class CameraSystem {
       localUp.addScaledVector(fwd, -upDot).normalize();
     }
 
-
-    // ── Compute FROM (previous beat endpoint) and TO (current beat endpoint) ──
     const prevKey = c.beatIndex > 0 ? c.beats[c.beatIndex - 1].key : 'ARM_PILOT_START';
     this._netCeremonyBeatPos(this._tmpVecA, prevKey, armPos, netPos, debrisPos, fwd, side, localUp, D_M);
     this._netCeremonyBeatPos(this._tmpVecB, beat.key, armPos, netPos, debrisPos, fwd, side, localUp, D_M);
@@ -3441,30 +2791,26 @@ export class CameraSystem {
     const pos = c._v3a;
     pos.lerpVectors(this._tmpVecA, this._tmpVecB, ease);
 
-    // ── Compute FROM/TO lookAt targets ──
     this._netCeremonyBeatLook(this._tmpVecA, prevKey, armPos, netPos, debrisPos, fwd, D_M);
     this._netCeremonyBeatLook(this._tmpVecB, beat.key, armPos, netPos, debrisPos, fwd, D_M);
 
-    // Output lookAt
     const look = c._v3b;
     look.lerpVectors(this._tmpVecA, this._tmpVecB, ease);
 
-    // FOV lerp between previous beat's target and current beat's target
     const prevFov = c.beatIndex > 0 ? c.beats[c.beatIndex - 1].fov : c.savedFov;
     this._baseFov = lerp(prevFov, beat.fov, ease);
     this.camera.fov = this._baseFov;
     this.camera.near = 0.000001; // ~0.1m (tight framing)
     this.camera.updateProjectionMatrix();
 
-    // Up vector (localUp already computed into c._v3c)
     return { pos, look, up: localUp };
   }
 
   /**
-   * reel-visible — end a QUIET net ceremony (one started while the zoom ladder owned the camera): clear its state and
-   * give the net its full speed back. Deliberately NOT the cinematic exit: it never took a view, so it restores no
-   * view, FOV or near plane (the ladder owns all three), writes no first-deploy flag and emits no
-   * NET_CINEMATIC_EXITED (its ENTERED was never sent — the pair stays balanced).
+   * End a QUIET net ceremony (one started while the zoom ladder owned the camera): clear its state and give the net its
+   * full speed back. Deliberately NOT the cinematic exit: it never took a view, so it restores no view, FOV or near
+   * plane (the ladder owns all three), writes no first-deploy flag and emits no NET_CINEMATIC_EXITED (its ENTERED was
+   * never sent: the pair stays balanced).
    * @private
    */
   _endQuietNetCeremony() {
@@ -3484,9 +2830,9 @@ export class CameraSystem {
   }
 
   /**
-   * reel-visible — the per-frame guard for a quiet ceremony: nothing advances it, so it must end by itself if the
-   * ladder lets go of the camera (its beats would then pull the camera to beat anchors it never entered), the net
-   * is gone without a COMPLETE (a release mid-flight), or a safety cap passes.
+   * Per-frame guard for a quiet ceremony: nothing advances it, so it must end by itself if the ladder lets go of the
+   * camera (its beats would then pull the camera to beat anchors it never entered), the net is gone without a COMPLETE
+   * (a release mid-flight), or a safety cap passes.
    * @private
    */
   _tickQuietNetCeremony(dt) {
@@ -3500,11 +2846,9 @@ export class CameraSystem {
   }
 
   /**
-   * Q2 Stage 6 — abort an active net ceremony WITHOUT routing through
-   * setView(prevView). Used by setView() when an external view change is
-   * requested mid-ceremony; the new view is set by setView's normal flow,
-   * so this helper only undoes ceremony side-effects (FOV, state, time-scale).
-   * FIRST_NET_DEPLOY is intentionally NOT written — abort ≠ normal completion.
+   * Abort an active net ceremony WITHOUT routing through setView(prevView). Used by setView() when an external view
+   * change is requested mid-ceremony; the new view is set by setView's normal flow, so this only undoes ceremony
+   * side-effects (FOV, state, time-scale). FIRST_NET_DEPLOY is intentionally NOT written: abort ≠ normal completion.
    * @private
    */
   _abortNetCeremony() {
@@ -3512,13 +2856,11 @@ export class CameraSystem {
     if (!c.active) return;
     if (c._quiet) { this._endQuietNetCeremony(); return; }
 
-    // Restore FOV
     this._baseFov = c.savedFov;
     this.camera.fov = c.savedFov;
     this.camera.near = Constants.CAMERA_NEAR;
     this.camera.updateProjectionMatrix();
 
-    // Clear ceremony state
     c.active = false;
     c.beatIndex = 0;
     c.beatTimer = 0;
@@ -3529,11 +2871,11 @@ export class CameraSystem {
     c._net = null;
     c.success = null;
 
-    // Stage 4: clear ceremony time-scale (world dt back to 1.0× — §6 R1)
+    // Clear ceremony time-scale (world dt back to 1.0×, §6 R1)
     CeremonyTimeScale.reset();
 
-    // Cinema-dim contract: the abort path leaves the cinematic too (setView's
-    // normal flow takes over) — the HUD must un-dim on every exit route.
+    // Cinema-dim contract: the abort path leaves the cinematic too (setView's normal flow takes over): the HUD must
+    // un-dim on every exit route.
     eventBus.emit(Events.NET_CINEMATIC_EXITED, { completedNormally: false });
   }
 
@@ -3547,36 +2889,28 @@ export class CameraSystem {
     if (!c.active) return;
     if (c._quiet) { this._endQuietNetCeremony(); return; }
 
-    // Small-catch plan W4 (2026-08-25): capture the subject's size BEFORE the
-    // state is cleared below — the exit over a sub-metre bundle cuts in
-    // EXIT_CUT_SMALL_S instead of easing 0.5 s across a frame whose subject
-    // was just consumed (the "aimless drift" tail, tmp/frag-before f41+).
-    // One-shot: the update loop restores the default when the transition
-    // completes. Gate shared with the park-hold digest extension.
+    // Capture the subject's size BEFORE the state is cleared below: the exit over a sub-metre bundle cuts in
+    // EXIT_CUT_SMALL_S instead of easing 0.5 s across a frame whose subject was just consumed. One-shot: the update
+    // loop restores the default when the transition completes. Gate shared with the park-hold digest extension.
     const NCx = Constants.CAPTURE_NET.NET_CEREMONY;
     const exitSizeM = c._net?.targetDebris?.sizeMeter;
     const smallExit = typeof exitSizeM === 'number'
       && exitSizeM < (NCx.PARK_HOLD_DIGEST_MAX_SIZE_M ?? 0);
 
-    // Set first-deploy flag at end of first-ever SUCCESSFUL ceremony. The
-    // mother path writes its own flag (§11.3) so a first whale catch after a
-    // daughter deploy still gets the full beat list. NOTE: the flag must also be
-    // listed in PersistenceManager.save()'s ceremonyFlags WHITELIST
-    // (PersistenceManager.js:93) — GameFlowManager's saveGame() passthrough
-    // (GameFlowManager.js:1624) only forwards flags that already survived that
-    // whitelist, so the whitelist entry is what actually makes this persist.
+    // Set the first-deploy flag at the end of the first-ever SUCCESSFUL ceremony. The mother path writes its own flag
+    // so a first whale catch after a daughter deploy still gets the full beat list. NOTE: the flag must also be listed
+    // in PersistenceManager.save()'s ceremonyFlags WHITELIST: GameFlowManager's saveGame() passthrough only forwards
+    // flags that already survived that whitelist, so the whitelist entry is what actually makes this persist.
     if (completedNormally && c.isFirstEver && c.success !== false) {
       persistenceManager.setCeremonyFlag(
         c.podIndex >= 0 ? 'FIRST_MOTHER_NET_DEPLOY' : 'FIRST_NET_DEPLOY', true);
     }
 
-    // Restore FOV
     this._baseFov = c.savedFov;
     this.camera.fov = c.savedFov;
     this.camera.near = Constants.CAMERA_NEAR;
     this.camera.updateProjectionMatrix();
 
-    // Restore previous view
     const prevView = c.savedView || CameraViews.ARM_PILOT;
 
     c.active = false;
@@ -3589,11 +2923,11 @@ export class CameraSystem {
     c._net = null;
     c.success = null;
 
-    // Stage 4: clear ceremony time-scale (world dt back to 1.0× — §6 R1)
+    // Clear ceremony time-scale (world dt back to 1.0×, §6 R1)
     CeremonyTimeScale.reset();
 
-    // Cinema-dim contract: paired with NET_CINEMATIC_ENTERED — every exit
-    // route (beats done, miss truncation, skip) un-dims the HUD.
+    // Cinema-dim contract: paired with NET_CINEMATIC_ENTERED; every exit route (beats done, miss truncation, skip)
+    // un-dims the HUD.
     eventBus.emit(Events.NET_CINEMATIC_EXITED, { completedNormally });
 
     if (smallExit) this._transitionDuration = NCx.EXIT_CUT_SMALL_S ?? this._transitionDurationDefault;
@@ -3601,24 +2935,19 @@ export class CameraSystem {
   }
 
   /**
-   * Public skip for the net ceremony (parent §11.2 — the REEL_IN beat, and every
-   * other beat, must be skippable via the `skipLaunchCeremony` pattern). Routes
-   * through `_exitNetCeremony(false)` so the saved view is restored and
-   * `CeremonyTimeScale.reset()` runs (world dt back to 1.0× — §6 R1). No-op when
-   * no ceremony is active.
+   * Public skip for the net ceremony (every beat, REEL_IN included, must be skippable, like `skipLaunchCeremony`).
+   * Routes through `_exitNetCeremony(false)` so the saved view is restored and `CeremonyTimeScale.reset()` runs (world
+   * dt back to 1.0×, §6 R1). No-op when no ceremony is active.
    * @returns {boolean} true if a ceremony was skipped
    */
   skipNetCeremony() {
-    // reel-visible: the same keys (Esc / Space / Enter) also end a catch focus, which is what is on screen under the ladder
+    // The same keys (Esc / Space / Enter) also end a catch focus, which is what is on screen under the ladder
     const focus = this.ladderCancelCatchFocus('skip key');
     if (!this._netCeremony.active) return focus;
     this._exitNetCeremony(false);
     return true;
   }
 
-  // ==========================================================================
-  // LASSO CATCH CUT (2026-08-26, FEATURE_FLAGS.LASSO_CATCH_CUT)
-  // ==========================================================================
 
   /** Wire the LassoSystem (main.js) — the cut reads the live cast state. */
   setLassoSystem(lassoSystem) {
@@ -3636,9 +2965,8 @@ export class CameraSystem {
   }
 
   /**
-   * Instant abort — ANY player input routes here (keydown via InputManager,
-   * mouse button / wheel via this system's own handlers). The input is never
-   * eaten: the cut steps aside and the action proceeds.
+   * Instant abort: ANY player input routes here (keydown via InputManager, mouse button / wheel via this system's own
+   * handlers). The input is never eaten: the cut steps aside and the action proceeds.
    * @returns {boolean} true if a cut was aborted
    */
   abortLassoCut() {
@@ -3648,21 +2976,14 @@ export class CameraSystem {
   }
 
   /**
-   * LASSO_CONTACT — enter the cut if, and only if, every guard agrees:
-   * flags on, no other cinematic owns the camera, motion is welcome
-   * (prefers-reduced-motion skips), and the player is not actively piloting
-   * (any key already held skips — a held key produces no new keydown, so the
-   * any-input abort alone could not protect that player). Entry is a hard cut
-   * (direct view assignment, the ceremony idiom at _onNetCeremonyStart);
-   * exit eases over EXIT_CUT_SMALL_S. NET_CINEMATIC_ENTERED/EXITED stay
-   * paired on every route so the HUD dim contract holds.
-   *
-   * Round 3 (2026-08-26): the attempt is factored out so a TRANSIENT
-   * subject-sanity refusal (a ghost/out-of-range `_scenePosition` read, a
-   * degenerate reel line) can RETRY on the next camera frames — with the
-   * camera update's own same-frame ship position — instead of skipping the
-   * whole cut (tmp/lasso8-night LP2 / tmp/lasso9-day: one bad read at entry
-   * cost the entire presentation). Policy refusals still answer once.
+   * LASSO_CONTACT: enter the cut if, and only if, every guard agrees: flags on, no other cinematic owns the camera,
+   * motion is welcome (prefers-reduced-motion skips), and the player is not actively piloting (a held key produces no
+   * new keydown, so the any-input abort alone could not protect that player). Entry is a hard cut (direct view
+   * assignment, the ceremony idiom at _onNetCeremonyStart); exit eases over EXIT_CUT_SMALL_S.
+   * NET_CINEMATIC_ENTERED/EXITED stay paired on every route so the HUD dim contract holds.
+   * The attempt is factored out so a TRANSIENT subject-sanity refusal (a ghost/out-of-range `_scenePosition` read, a
+   * degenerate reel line) can RETRY on the next camera frames, with the camera update's own same-frame ship position,
+   * instead of skipping the whole cut. Policy refusals still answer once.
    * @private
    */
   _onLassoContact() {
@@ -3677,11 +2998,10 @@ export class CameraSystem {
   }
 
   /**
-   * One entry attempt against the given ship position (the event path passes
-   * the cached `_lastPlayerPos`; the per-frame retry passes the live one).
-   * @param {THREE.Vector3} shipPos
-   * @returns {('entered'|'refused'|'transient')} — 'transient' means the
-   *   subject exists but its geometry read insane THIS attempt; retry.
+   * One entry attempt against the given ship position (the event path passes the cached `_lastPlayerPos`; the
+   * per-frame retry passes the live one).
+   * @returns {('entered'|'refused'|'transient')} — 'transient' means the subject exists but its geometry read insane
+   *   THIS attempt; retry.
    * @private
    */
   _tryEnterLassoCut(shipPos) {
@@ -3689,9 +3009,9 @@ export class CameraSystem {
     if (!Constants.FEATURE_FLAGS.LASSO_CATCH_CUT) return 'refused';
     const lc = this._lassoCut;
     if (lc.active) return 'refused';
-    // reel-visible: under the zoom ladder the lasso cut's camera never shows (the ladder drives the frame), so
-    // entering it would only leave a NET_CINEMATIC ghost view and a cut nothing advances. The lasso keeps its slow
-    // reel; the ladder camera stays where the player holds it.
+    // Under the zoom ladder the lasso cut's camera never shows (the ladder drives the frame), so entering would only
+    // leave a NET_CINEMATIC ghost view and a cut nothing advances. The lasso keeps its slow reel; the ladder camera
+    // stays where the player holds it.
     if (this._ladderCam.active) return 'refused';
     if (this._netCeremony.active || this._launchCeremony.active) return 'refused';
     if (this.currentView === CameraViews.NET_CINEMATIC) return 'refused';
@@ -3702,15 +3022,12 @@ export class CameraSystem {
     if (!debris) return 'refused';
     if (!debris._scenePosition || !shipPos) return 'transient';
 
-    // Fixed side axis: perpendicular to the reel line in the radial frame at
-    // entry (S4 doctrine — never on the catch↔ship axis; stable for the whole
-    // shot so the escort reads as one held camera, not a chase).
+    // Fixed side axis: perpendicular to the reel line in the radial frame at entry (never on the catch↔ship axis;
+    // stable for the whole shot so the escort reads as one held camera, not a chase).
     const catchPos = lc._vCatch.copy(debris._scenePosition);
-    // Round 3 — entry twin of the 250 m in-shot sanity fence: a lasso subject
-    // lives within LASSO_RANGE of the ship, so a farther read at entry is a
-    // stale/ghost frame, not a subject. Classified TRANSIENT: the reel is
-    // live and next frame's read is fresh (the same-frame pin fix makes this
-    // ~unreachable; the retry is the belt).
+    // Entry twin of the 250 m in-shot sanity fence: a lasso subject lives within LASSO_RANGE of the ship, so a farther
+    // read at entry is a stale/ghost frame, not a subject. Classified TRANSIENT: the reel is live and next frame's read
+    // is fresh.
     if (catchPos.distanceTo(shipPos) > 250 * 0.00001) return 'transient';
     const reelDir = lc._vLook.copy(shipPos).sub(catchPos);
     if (reelDir.lengthSq() < 1e-18) return 'transient';
@@ -3737,21 +3054,15 @@ export class CameraSystem {
   }
 
   /**
-   * Per-frame driver for the cut — TWO shots (2026-08-26 round 2):
-   *   1. WRAP close-up — catch-anchored S4 hold while the wrap cinches (the
-   *      piece is stationary through the wrap window, so nothing translates
-   *      but fabric);
-   *   2. hard cut to the ARRIVAL shot — SHIP-anchored at
-   *      LASSO_CUT_ARRIVAL_HOLD_M with the nose steady in frame while the
-   *      PIECE flies in. Round 1 rode the catch for the whole escort and the
-   *      converging ship read as "mother moving to debris" (owner report);
-   *      a ship-rigid vantage makes the causality unambiguous.
-   * S4 numbers throughout: unit-norm (side 0.94, up 0.34) offset, look at the
-   * catch biased ≤ 4.5 m toward the ship. Release: the reel resolves (the
-   * lasso hands the pin to the adoption) + LASSO_CUT_SETTLE_S, or
-   * LASSO_CUT_MAX_S — both completed payoffs, both before digestion
-   * (berth-secure is 4 s away at adoption). A dead subject or a dropped pin
-   * exits as a truncation.
+   * Per-frame driver for the cut: TWO shots.
+   *   1. WRAP close-up: catch-anchored hold while the wrap cinches (the piece is stationary through the wrap window, so
+   *      nothing translates but fabric);
+   *   2. hard cut to the ARRIVAL shot: SHIP-anchored at LASSO_CUT_ARRIVAL_HOLD_M with the nose steady in frame while the
+   *      PIECE flies in (riding the catch for the whole escort made the converging ship read as "mother moving to
+   *      debris", owner report; a ship-rigid vantage makes the causality unambiguous).
+   * Unit-norm (side 0.94, up 0.34) offset, look at the catch biased ≤ 4.5 m toward the ship. Release: the reel resolves
+   * (the lasso hands the pin to the adoption) + LASSO_CUT_SETTLE_S, or LASSO_CUT_MAX_S: both completed payoffs, both
+   * before digestion (berth-secure is 4 s away at adoption). A dead subject or a dropped pin exits as a truncation.
    * @private
    */
   _updateLassoCut(dt, playerPos) {
@@ -3771,9 +3082,8 @@ export class CameraSystem {
     const ls = this._lassoSystem;
     const reelLive = !!(ls && ls.active && ls.target === debris);
     if (!reelLive) {
-      // The reel resolved this catch (adoption/pending owns the pin now) —
-      // or dropped it. A held pin is the completed read; a released pin
-      // means the catch was lost between the event aborts and this frame.
+      // The reel resolved this catch (adoption/pending owns the pin now) or dropped it. A held pin is the completed
+      // read; a released pin means the catch was lost between the event aborts and this frame.
       if (debris._armPinned !== true) {
         this._exitLassoCut(false, true);
         return null;
@@ -3787,26 +3097,20 @@ export class CameraSystem {
 
     const M_CUT = 0.00001;
     const catchPos = lc._vCatch.copy(debris._scenePosition);
-    // Sanity fence: a lasso subject lives within lasso range of the ship
-    // (fire() refuses beyond LASSO_RANGE; the reel only pulls INWARD). If the
-    // scene position ever reads outside ~250 m, hand the camera back
-    // gracefully instead of framing empty space. Round 3: the ghost read this
-    // fence kept converting into a skipped/dropped cut is FIXED at the source
-    // (the lasso pin is same-frame now — LassoSystem._pinFresh), so this is a
-    // true last-resort; it exits with the epoch rebase like every other
-    // in-update exit.
+    // Sanity fence: a lasso subject lives within lasso range of the ship (fire() refuses beyond LASSO_RANGE; the reel
+    // only pulls INWARD). If the scene position reads outside ~250 m, hand the camera back gracefully instead of
+    // framing empty space. Ghost reads are fixed at the source (the lasso pin is same-frame, LassoSystem._pinFresh), so
+    // this is a last resort; it exits with the epoch rebase like every other in-update exit.
     if (catchPos.distanceTo(playerPos) > 250 * M_CUT) {
       this._exitLassoCut(true, true);
       return null;
     }
-    // Shot switch: the wrap is done when the reel passes the WRAP window
-    // (reelProgress ≥ 0.2), the reel already resolved, or — mocks without a
-    // progress field — a 1.2 s fallback (the real wrap is ~0.6 s).
+    // Shot switch: the wrap is done when the reel passes the WRAP window (reelProgress ≥ 0.2), the reel already
+    // resolved, or (mocks without a progress field) a 1.2 s fallback (the real wrap is ~0.6 s).
     const wrapDone = (ls && typeof ls._reelProgress === 'number' && ls._reelProgress >= 0.2)
       || !reelLive || lc.t >= 1.2;
 
     if (!wrapDone) {
-      // ── Shot 1: WRAP close-up (catch-anchored) ──
       const sizeM = debris.sizeMeter || 2;
       const bundleFloorM = Constants.MOTHER_CATCH_MIN_RENDER_M ?? 1.5;
       const K_BUNDLE = NCx.HOLD_BUNDLE_FRAME_K ?? 4;
@@ -3830,7 +3134,6 @@ export class CameraSystem {
       return { pos, look, up };
     }
 
-    // ── Shot 2: ARRIVAL (ship-anchored — the piece flies IN to the nose) ──
     const holdM = NCx.LASSO_CUT_ARRIVAL_HOLD_M ?? 9.0;
     const up = lc._vUp.copy(playerPos).normalize();
     const side = lc._vSide.copy(lc._sideDir).addScaledVector(up, -lc._sideDir.dot(up));
@@ -3850,22 +3153,14 @@ export class CameraSystem {
   }
 
   /**
-   * Leave the cut — restore FOV + view, un-dim the HUD. Mirrors
-   * _exitNetCeremony's contract in miniature: `active` clears BEFORE the
-   * setView call (no recursion through the setView abort hook), the exit
-   * transition is the sub-metre cut (every lasso subject is sub-metre class),
-   * and NET_CINEMATIC_EXITED fires on every route.
-   * @param {boolean} completedNormally
-   * @param {boolean} [rebaseEpoch=false] — Round 3: true for exits taken
-   *   INSIDE update() (fence / valve / settle / dropped subject), where
-   *   `_lastPlayerPos` already holds THIS frame's ship but the camera still
-   *   holds LAST frame's pose. The camera is shifted by the ship's one-frame
-   *   travel so setView captures a ship-relative start offset instead of a
-   *   cross-epoch difference (which is ~128 m at 60 fps and km-scale under
-   *   the SwiftShader dt clamp — tmp/lasso11-rec frame 44: a 0.2 s exit
-   *   transition played from a 7.7 km start offset). Event-driven aborts
-   *   (keydown / wheel / external setView) run between frames where both
-   *   epochs already agree — they keep the default false.
+   * Leave the cut: restore FOV + view, un-dim the HUD. Mirrors _exitNetCeremony's contract in miniature: `active`
+   * clears BEFORE the setView call (no recursion through the setView abort hook), the exit transition is the sub-metre
+   * cut (every lasso subject is sub-metre class), and NET_CINEMATIC_EXITED fires on every route.
+   * @param {boolean} [rebaseEpoch=false] — true for exits taken INSIDE update() (fence / valve / settle / dropped
+   *   subject), where `_lastPlayerPos` already holds THIS frame's ship but the camera still holds LAST frame's pose. The
+   *   camera is shifted by the ship's one-frame travel so setView captures a ship-relative start offset instead of a
+   *   cross-epoch difference (~128 m at 60 fps, km-scale under the SwiftShader dt clamp). Event-driven aborts (keydown /
+   *   wheel / external setView) run between frames where both epochs already agree: they keep the default false.
    * @private
    */
   _exitLassoCut(completedNormally, rebaseEpoch = false) {
@@ -3891,65 +3186,49 @@ export class CameraSystem {
     eventBus.emit(Events.NET_CINEMATIC_EXITED, { completedNormally: !!completedNormally });
 
     const NCx = Constants.CAPTURE_NET.NET_CEREMONY;
-    // One-shot short cut — the update loop restores the default duration when
-    // the transition completes (same idiom as the ceremony's small exit).
+    // One-shot short cut: the update loop restores the default duration when the transition completes.
     this._transitionDuration = NCx.EXIT_CUT_SMALL_S ?? this._transitionDurationDefault;
     this.setView(prevView);
   }
 
-  // ==========================================================================
-  // INSPECTION CAMERA (S2.1)
-  // ==========================================================================
-
   /**
-   * Enter INSPECTION mode — narrow FOV, close-range orbit around the spacecraft,
-   * plus a contextual wireframe overlay (mother / debris / daughter).
-   *
-   * This is the single entry point for the discrete inspection view: it emits
-   * INSPECTION_TOGGLE exactly once so the wireframe panels show, then transitions
-   * optics. Reached via the legacy bare-I / toggleInspection() path (the V cycle
-   * no longer routes here — close inspection engages as a LOOK AROUND zoom
+   * Enter INSPECTION mode: narrow FOV, close-range orbit around the spacecraft, plus a contextual wireframe overlay
+   * (mother / debris / daughter). The single entry point for the discrete inspection view: emits INSPECTION_TOGGLE
+   * exactly once so the wireframe panels show, then transitions optics. Reached via the legacy bare-I /
+   * toggleInspection() path (the V cycle no longer routes here; close inspection engages as a LOOK AROUND zoom
    * sub-state instead).
-   *
    * @param {('mother'|'debris'|'daughter')} [subject='mother'] overlay to focus.
    * @param {number|null} [targetId=null] debris id (for the 'debris' subject).
    */
   enterInspection(subject = 'mother', targetId = null) {
     if (this.currentView === CameraViews.INSPECTION) return;
 
-    // Copy orbit angles for continuity (if coming from ORBIT)
     if (this.currentView === CameraViews.ORBIT) {
       this.inspection.theta = this.orbit.theta;
       this.inspection.phi = this.orbit.phi;
       this.inspection.distance = Math.min(this.orbit.distance, this.inspection.maxDistance);
     }
 
-    // Save current FOV for restore
     this.inspection.savedFov = this._baseFov;
     this._fovBreathOffset = 0;
     this._fovBreathTarget = 0;
     this._fovBreathTimer = 0;
 
-    // Smooth FOV transition to narrow inspection FOV
     this._fovTransitionStart = this._baseFov;
     this._fovTransitionEnd = this.inspection.fov;
 
-    // Remember the focused subject so exit can toggle the same overlay off.
     this._inspectSubject = subject;
 
     this.setView(CameraViews.INSPECTION);
 
-    // Show the contextual overlay (mother/debris/daughter wireframe panels).
     eventBus.emit(Events.INSPECTION_TOGGLE, { subject, targetId });
 
     console.log(`[CameraSystem] Inspection mode (${subject}). Zoom 2–50m, FOV 35°`);
   }
 
   /**
-   * Guarded for the Node test runner (no window/matchMedia). Used to skip
-   * motion-heavy feedback (the whale-tug micro-shake, §9.11) for users who
-   * opt out of motion. Mirrors GameFlowManager._prefersReducedMotion.
-   * @returns {boolean}
+   * Guarded for the Node test runner (no window/matchMedia). Skips motion-heavy feedback (the whale-tug micro-shake) for
+   * users who opt out of motion. Mirrors GameFlowManager._prefersReducedMotion.
    * @private
    */
   _prefersReducedMotion() {
@@ -3963,63 +3242,45 @@ export class CameraSystem {
   }
 
   /**
-   * Exit INSPECTION mode — restore FOV/near-plane, hide the overlay, and return
-   * to the requested view (defaults to the view active before inspection).
-   * @param {string} [returnTo] a CameraViews value; falls back to _previousView
-   *   then CHASE. cycleView() passes CHASE so V from inspection wraps to FLY.
+   * Exit INSPECTION mode: restore FOV/near plane, hide the overlay, return to the requested view.
+   * @param {string} [returnTo] a CameraViews value; falls back to _previousView then CHASE. cycleView() passes CHASE so
+   *   V from inspection wraps to FLY.
    */
   exitInspection(returnTo) {
     if (this.currentView !== CameraViews.INSPECTION) return;
 
-    // Copy inspection angles back to orbit for continuity
     this.orbit.theta = this.inspection.theta;
     this.orbit.phi = this.inspection.phi;
 
-    // Restore FOV
     this._fovTransitionStart = this._baseFov;
     this._fovTransitionEnd = this.inspection.savedFov || Constants.CAMERA_FOV;
 
-    // Restore near-plane to default
     this.camera.near = Constants.CAMERA_NEAR;
     this.camera.updateProjectionMatrix();
 
-    // Hide the contextual overlay by re-toggling the same subject.
     eventBus.emit(Events.INSPECTION_TOGGLE, { subject: this._inspectSubject || 'mother' });
     this._inspectSubject = null;
 
-    // Default return view. Bare-I / ESC fall back to the prior view (usually
-    // FLY); cycleView() passes CHASE explicitly so V wraps back to FLY.
+    // Default return view: bare-I / ESC fall back to the prior view (usually FLY); cycleView() passes CHASE explicitly.
     const dest = returnTo || this._previousView || CameraViews.CHASE;
     this.setView(dest);
   }
 
-  // ==========================================================================
-  // MENU→SIM HANDOFF INTRO (deep-polish-4)
-  // ==========================================================================
-
   /**
-   * Start the menu→sim intro settle — chase offset snaps to INTRO_START_SCALE
-   * then eases straight back to 1.0 (no dead hold). Call on first ORBITAL_VIEW
-   * entry of a new game. Callers must skip this under reduced motion or when the
-   * departure was skipped (leave the scale at 1.0) — see GameFlowManager.
+   * Start the menu→sim intro settle: chase offset snaps to INTRO_START_SCALE, then eases straight back to 1.0 (no dead
+   * hold). Call on first ORBITAL_VIEW entry of a new game; callers skip it under reduced motion or when the departure
+   * was skipped (leave the scale at 1.0), see GameFlowManager.
    */
   startIntroZoom() {
     this._introScale = Constants.EARTH.INTRO_START_SCALE;
   }
 
-  /**
-   * Force the intro settle to its end state immediately (scale 1.0). Used when
-   * the player skips the menu departure so the sim doesn't play a zoom they
-   * chose to skip.
-   */
+  /** Force the intro settle to its end state (scale 1.0) when the player skips the menu departure. */
   skipIntroZoom() {
     this._introScale = 1.0;
   }
 
-  /**
-   * Compute ARM_PILOT camera — follows arm, looking toward target.
-   * @private
-   */
+  /** ARM_PILOT camera: follows the arm, looking toward the target. @private */
   _computeArmPilot(dt, playerPos, velDir, radialDir) {
     const arm = this.armPilot.arm;
     if (!arm || !arm.position) {
@@ -4028,96 +3289,61 @@ export class CameraSystem {
 
     const armPos = arm.position.clone();
 
-    // STATION_KEEP: inspection-mode framing.
-    //
-    // Goal: camera stays in its standard ARM_PILOT position (5 m behind +
-    // 1.6 m above the daughter) and looks AT the debris.  The daughter moves
-    // around the debris on a θ/φ/R sphere using arrow keys — because the
-    // camera is rigidly attached behind the daughter, sweeping the daughter
-    // around the sphere automatically sweeps the camera too, exposing the
-    // debris from every angle.  Player view layout:
-    //     [camera] → [daughter (foreground)] → [debris (centered)]
-    // The tether trails back past the camera toward the mothership.
-    //
-    // KEY DIFFERENCE from non-SK branch: that branch sets look = arm + fwd ×
-    // 100 m (a phantom point past the daughter) which causes the debris to
-    // drift through the frame as daughter advances toward/past it.  Here the
-    // look-target is the LIVE debris position, so debris is locked in screen
-    // space and the daughter's circumnavigation is what causes the visible
-    // change in viewing angle.
-    //
-    // Use _scenePosition (authoritative orbit-propagated position), not
-    // mesh.position (may be floating-origin-adjusted InstancedMesh container).
+    // STATION_KEEP: inspection-mode framing. The camera stays in its standard ARM_PILOT position (5 m behind + 1.6 m
+    // above the daughter) and looks AT the debris. The daughter moves around the debris on a θ/φ/R sphere with the arrow
+    // keys; the camera is rigidly attached behind her, so sweeping her around the sphere sweeps the camera too, exposing
+    // the debris from every angle. Layout: [camera] → [daughter (foreground)] → [debris (centered)]; the tether trails
+    // back past the camera toward the mothership.
+    // KEY DIFFERENCE from the non-SK branch: that one sets look = arm + fwd × 100 m (a phantom point past the daughter),
+    // so the debris drifts through the frame as she advances toward/past it. Here the look-target is the LIVE debris
+    // position, so the debris is locked in screen space and her circumnavigation causes the change in viewing angle.
+    // Use _scenePosition (authoritative orbit-propagated position), not mesh.position (may be a floating-origin-adjusted
+    // InstancedMesh container).
     if (arm.state === Constants.ARM_STATES.STATION_KEEP && arm._stationKeepTarget) {
       const debrisScenePos = (arm._stationKeepTarget._scenePosition || arm._stationKeepTarget.mesh?.position)?.clone();
       if (!debrisScenePos) return this._computeChase(dt, playerPos, velDir, radialDir);
 
-      // Forward direction = (daughter → debris) so camera goes BEHIND daughter
-      // (away from debris) and looks toward debris.
       const armToDebris = debrisScenePos.clone().sub(armPos);
       if (armToDebris.lengthSq() < 1e-20) {
-        // Degenerate (daughter and debris co-located) — fall back to chase view
         return this._computeChase(dt, playerPos, velDir, radialDir);
       }
       armToDebris.normalize();
 
-      // ── UP VECTOR: FROZEN at SK entry to prevent screen-roll-during-sweep ──
-      //
-      // History: previous attempts used (a) Earth-radial at the daughter's
-      // position `armPos.normalize()` — wobbled at orbit-sphere φ-poles — and
-      // (b) the daughter's local +Y from `arm.group.quaternion` — but that
-      // quaternion changes EVERY frame as daughter slerps to face the new
-      // sweep direction, so the camera up-vector rotated continuously during
-      // arrow-key sweeps, rolling the screen and creating the illusion of the
-      // debris "moving" even though it remained at NDC (0,0).  (Verified by
-      // forensic NDC log showing |Δ| = 0 px while user perceived translation.)
-      //
-      // FIX: Capture Earth-radial at the DEBRIS position when SK is first
-      // entered and reuse the same vector every frame.  Earth-radial-at-debris
-      // is a sensible "up" (away from Earth's centre, agreeing with orbital
-      // intuition) AND it doesn't depend on either daughter's quaternion or
-      // armToDebris, so it doesn't change during sweep — the screen no longer
-      // rolls.  Cleared when arm exits STATION_KEEP.
+      // UP VECTOR: FROZEN at SK entry to prevent screen roll during the sweep. Earth-radial at the daughter
+      // (`armPos.normalize()`) wobbles at the orbit-sphere φ-poles; the daughter's local +Y (`arm.group.quaternion`)
+      // changes EVERY frame as she slerps to face the new sweep direction, rolling the screen and creating the illusion
+      // of the debris "moving" although it stays at NDC (0,0). So capture Earth-radial at the DEBRIS position when SK is
+      // first entered and reuse it every frame: a sensible "up" (away from Earth's centre) that depends on neither the
+      // daughter's quaternion nor armToDebris. Cleared when the arm exits STATION_KEEP.
       if (!this.armPilot._skLockedUp) {
-        // Earth's centre is world origin → Earth-radial at debris = debris
-        // direction unit-vector.
         this.armPilot._skLockedUp = debrisScenePos.clone().normalize();
       }
-      // Orthogonalise the locked vector against current armToDebris so the
-      // 1.6 m offset goes purely in screen-up.  At the orbit-sphere poles the
-      // locked vector becomes nearly parallel to armToDebris — fall back to
-      // un-orthogonalised so we never produce a zero up.
+      // Orthogonalise the locked vector against the current armToDebris so the 1.6 m offset goes purely in screen-up; at
+      // the orbit-sphere poles it becomes nearly parallel to armToDebris, so fall back to un-orthogonalised (never a
+      // zero up).
       const lockedUp = this.armPilot._skLockedUp;
       const upDot = lockedUp.dot(armToDebris);
       const localUp = Math.abs(upDot) > 0.999
         ? lockedUp.clone()
         : lockedUp.clone().addScaledVector(armToDebris, -upDot).normalize();
 
-      // Camera position: 5 m behind daughter (away from debris), 1.6 m above
-      // along the daughter's local up.  Same offsets as the rest of ARM_PILOT.
+      // Camera: 5 m behind the daughter (away from debris), 1.6 m above along her local up (same offsets as the rest of
+      // ARM_PILOT).
       const pos = armPos.clone()
         .addScaledVector(armToDebris, -this.armPilot.offsetBehind)
         .addScaledVector(localUp, this.armPilot.offsetAbove);
 
-      // CRITICAL: look-target uses LIVE debris position every frame, NO LERP.
-      // A 0.5s-time-constant lerp on _skLookTarget that previously lived here
-      // was producing a steady-state lag of v·dt·(1-rate)/rate ≈ 127 m × 0.968
-      // / 0.032 ≈ 3.8 km along the orbit-trailing direction (debris
-      // _scenePosition advances ~127 m/frame at LEO orbital velocity, lerp
-      // rate ≈ 0.032/frame).  The camera appeared to slide off the debris
-      // over time.  Initial smooth-entry is handled by _lookBlendTime in
-      // _setupArmPilotEntry, not by a lookAt lerp.
+      // CRITICAL: the look-target uses the LIVE debris position every frame, NO LERP: a 0.5 s-time-constant lerp gave a
+      // steady-state lag of v·dt·(1-rate)/rate ≈ 127 m × 0.968 / 0.032 ≈ 3.8 km along the orbit-trailing direction
+      // (debris _scenePosition advances ~127 m/frame at LEO orbital velocity, lerp rate ≈ 0.032/frame), so the camera
+      // slid off the debris. The smooth entry is handled by _lookBlendTime in _setupArmPilotEntry, not by a lookAt lerp.
       this.armPilot._skLookTarget = debrisScenePos;  // bookkeeping only
 
-      // Pass the frozen-up vector out so update() uses it for camera.up.
       return { pos, look: debrisScenePos.clone(), up: localUp.clone() };
     }
 
-    // Reset SK state when not in STATION_KEEP. Clears both:
-    //   _skLookTarget — bookkeeping for the live look target
-    //   _skLockedUp   — the up vector frozen at SK entry (so a fresh capture
-    //                   happens next time SK is re-entered, possibly on a
-    //                   different debris with different Earth-radial).
+    // Reset SK state when not in STATION_KEEP: _skLookTarget (bookkeeping for the live look target) and _skLockedUp (the
+    // up vector frozen at SK entry, so a fresh capture happens next time SK is entered, possibly on another debris).
     if (this.armPilot._skLookTarget) {
       this.armPilot._skLookTarget = null;
     }
@@ -4125,10 +3351,8 @@ export class CameraSystem {
       this.armPilot._skLockedUp = null;
     }
 
-    // Camera behind and above the arm.
-    // forwardDir is the direction the camera looks: toward the target debris if
-    // available (so the player sees the debris directly during APPROACH), else
-    // arm velocity, else parent velocity.
+    // Camera behind and above the arm. forwardDir is the direction the camera looks: toward the target debris if
+    // available (so the player sees it directly during APPROACH), else arm velocity, else parent velocity.
     let forwardDir;
     let lookTarget = null;       // explicit lookAt target when we have a debris target
     if (arm.target && arm.target._scenePosition) {
@@ -4137,13 +3361,10 @@ export class CameraSystem {
         forwardDir.normalize();
         lookTarget = arm.target._scenePosition.clone();
       } else {
-        // POLISH FIX (post-capture): in GRAPPLED state _updateGrappled snaps
-        // arm.position onto target._scenePosition, so (target - armPos) is the
-        // zero vector. normalize() leaves it zero, then lookAt(target=armPos)
-        // with camera.up=radial-at-arm produces antiparallel view/up vectors →
-        // gimbal-locked rotation matrix → screen rotates/jitters wildly.
-        // Fall back to a sane forward direction and suppress lookTarget so the
-        // phantom-point branch below renders a stable view.
+        // GRAPPLED: _updateGrappled snaps arm.position onto target._scenePosition, so (target - armPos) is the zero
+        // vector; lookAt(target=armPos) with camera.up=radial-at-arm then gives antiparallel view/up vectors →
+        // gimbal-locked rotation, and the screen rotates/jitters wildly. Fall back to a sane forward direction and
+        // suppress lookTarget so the phantom-point branch below renders a stable view.
         if (arm.velocity && arm.velocity.lengthSq() > 1e-16) {
           forwardDir = arm.velocity.clone().normalize();
         } else if (this.armPilot._prevForward &&
@@ -4152,7 +3373,6 @@ export class CameraSystem {
         } else {
           forwardDir = velDir.clone();
         }
-        // lookTarget stays null → phantom-point look (armPos + fwd × 100m).
       }
     } else if (arm.velocity.lengthSq() > 1e-16) {
       forwardDir = arm.velocity.clone().normalize();
@@ -4160,14 +3380,13 @@ export class CameraSystem {
       forwardDir = velDir.clone();
     }
 
-    // Smooth look-direction blend when first entering ARM PILOT.
-    // Prevents disorienting snap by easing from pre-switch camera forward
-    // to the arm's desired forward over _lookBlendDuration seconds.
+    // Smooth look-direction blend when first entering ARM PILOT: prevents a disorienting snap by easing from the
+    // pre-switch camera forward to the arm's desired forward over _lookBlendDuration seconds.
     if (this.armPilot._lookBlendTime !== undefined &&
         this.armPilot._lookBlendTime < this.armPilot._lookBlendDuration) {
       this.armPilot._lookBlendTime += dt;
       const t = Math.min(1, this.armPilot._lookBlendTime / this.armPilot._lookBlendDuration);
-      const eased = smoothstep01(t); // smoothstep
+      const eased = smoothstep01(t);
 
       forwardDir = new THREE.Vector3().lerpVectors(
         this.armPilot._prevForward,
@@ -4176,28 +3395,20 @@ export class CameraSystem {
       ).normalize();
     }
 
-    // Radial up at arm position — orthogonalized to forwardDir so the
-    // "behind" and "above" offset components are always perpendicular.
-    // Without this, when forwardDir has a radial component (target at
-    // different altitude), the offsets partially cancel and the camera
-    // drifts steadily closer to the daughter.
+    // Radial up at the arm position, orthogonalized to forwardDir so the "behind" and "above" offsets stay
+    // perpendicular; otherwise, when forwardDir has a radial component (target at a different altitude), they partially
+    // cancel and the camera drifts steadily closer to the daughter.
     const rawUp = armPos.clone().normalize();
     const upDot = rawUp.dot(forwardDir);
     const localUp = rawUp.clone().addScaledVector(forwardDir, -upDot).normalize();
 
-    // Position camera behind the arm (constant distance = √(behind² + above²))
     const pos = armPos.clone()
       .addScaledVector(forwardDir, -this.armPilot.offsetBehind)
       .addScaledVector(localUp, this.armPilot.offsetAbove);
 
-    // Look at the actual debris position when a target exists, so the debris
-    // stays locked in screen space as the daughter circles or approaches it.
-    // The previous behaviour (look = armPos + forwardDir × 100m) caused the
-    // debris to appear to slide through frame because the look target was a
-    // phantom point past the daughter rather than the debris itself — once
-    // the daughter passed the debris (APPROACH overshoot), the look target
-    // moved past it too, so the camera framed empty space.
-    // No-target fallback: keep the original "100 m ahead of arm" behavior.
+    // Look at the actual debris position when a target exists, so it stays locked in screen space as the daughter
+    // circles or approaches it (a phantom point 100 m past the daughter slides the debris through the frame, and once
+    // she overshoots in APPROACH the camera frames empty space). No target: look 100 m ahead of the arm.
     const look = lookTarget !== null
       ? lookTarget
       : armPos.clone().addScaledVector(forwardDir, 0.001);
@@ -4205,31 +3416,23 @@ export class CameraSystem {
     return { pos, look };
   }
 
-  // ==========================================================================
-  // MOUSE INPUT
-  // ==========================================================================
-
   /** @private */
   _attachMouseListeners() {
     this.canvas.addEventListener('mousedown', this._boundMouseDown);
     this.canvas.addEventListener('mousemove', this._boundMouseMove);
     this.canvas.addEventListener('mouseup', this._boundMouseUp);
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('mouseup', this._boundWindowMouseUp);
-    // S2: the wheel is owned by the single WheelRouter (window capture). The
-    // zoom logic lives in handleWheelZoom(e), which the router calls on the
-    // legacy (ladder-off) path. No canvas wheel listener here anymore (T3).
+    // The wheel is owned by the single WheelRouter (window capture); the zoom logic lives in handleWheelZoom(e), which
+    // the router calls on the legacy (ladder-off) path. No canvas wheel listener here.
     this.canvas.addEventListener('contextmenu', this._boundContextMenu);
   }
 
   /** @private */
   _onMouseDown(e) {
     this._ionStartupInput('mouse');      // ion start-up: the player's own camera input ends the swing at once
-    // ZOOM LADDER (S4): while the ladder owns the camera, its drag branch owns
-    // the mouse — RETURN so the legacy ORBIT/INSPECTION/free-look paths can
-    // never double-fire. Gated on lc.active: byte-identical when disengaged.
+    // ZOOM LADDER: while the ladder owns the camera, its drag branch owns the mouse; RETURN so the legacy
+    // ORBIT/INSPECTION/free-look paths never double-fire. Gated on lc.active: byte-identical when disengaged.
     if (this._ladderCam.active) {
-      // The shipped "any mouse button aborts the lasso cut" garnish rule holds
-      // under the ladder too.
       if (this._lassoCut.active) this.abortLassoCut();
       const d = this._ladderCam.drag;
       // Left or right click starts a rotate drag on the drag-enabled floors
@@ -4242,12 +3445,11 @@ export class CameraSystem {
       }
       return;
     }
-    // 2026-08-26: any mouse button aborts the lasso cut instantly (the cut is
-    // garnish, never a wall) — the press then acts on the restored view.
+    // Any mouse button aborts the lasso cut instantly (the cut is garnish, never a wall); the press then acts on the
+    // restored view.
     if (this._lassoCut.active) this.abortLassoCut();
     if (this.currentView === CameraViews.ORBIT || this.currentView === CameraViews.INSPECTION) {
       const cfg = this.currentView === CameraViews.INSPECTION ? this.inspection : this.orbit;
-      // Left or right click starts orbit/inspection drag
       if (e.button === 0 || e.button === 2) {
         cfg.isDragging = true;
         cfg.lastMouseX = e.clientX;
@@ -4255,7 +3457,6 @@ export class CameraSystem {
         this._dragStop(cfg);
       }
     } else if (this.currentView === CameraViews.FIRST_PERSON) {
-      // Right click starts free-look
       if (e.button === 2) {
         this.firstPerson.freeLookActive = true;
         this.orbit.lastMouseX = e.clientX;
@@ -4266,11 +3467,10 @@ export class CameraSystem {
 
   /** @private */
   _onMouseMove(e) {
-    // ZOOM LADDER (S4): accumulate rotate-drag velocities exactly like ORBIT
-    // (the turn of the moves since the last frame = delta × rotateSpeed; the speed
-    // coasts per second in _updateLadderCamera). Deliberately NO CAMERA_ORBIT_DRAG emit — that is an
-    // ORBIT-view skills-discovery signal; the ladder keeps the events graph
-    // unchanged. RETURN keeps the legacy paths unreachable while engaged.
+    // ZOOM LADDER: accumulate rotate-drag velocities exactly like ORBIT (the turn of the moves since the last frame =
+    // delta × rotateSpeed; the speed coasts per second in _updateLadderCamera). Deliberately NO CAMERA_ORBIT_DRAG emit:
+    // that is an ORBIT-view skills-discovery signal, and the ladder keeps the events graph unchanged. RETURN keeps the
+    // legacy paths unreachable while engaged.
     if (this._ladderCam.active) {
       const d = this._ladderCam.drag;
       if (d.isDragging) {
@@ -4279,8 +3479,8 @@ export class CameraSystem {
         d.lastMouseX = e.clientX;
         d.lastMouseY = e.clientY;
         this._dragMove(d, -dx * d.rotateSpeed, dy * d.rotateSpeed, false);   // a SET: the last move of a frame wins
-        this.ladderCancelCatchFocus('mouse drag');   // reel-visible: his own camera input ends the catch focus
-        this.ladderCancelEarthTurn('mouse drag');    // u8: so does the floor-4 turn to the focused field
+        this.ladderCancelCatchFocus('mouse drag');   // his own camera input ends the catch focus
+        this.ladderCancelEarthTurn('mouse drag');    // so does the floor-4 turn to the focused field
       }
       return;
     }
@@ -4294,7 +3494,6 @@ export class CameraSystem {
 
       this._dragMove(cfg, -dx * cfg.rotateSpeed, dy * cfg.rotateSpeed, false);
 
-      // Skills discovery: orbit drag event
       eventBus.emit(Events.CAMERA_ORBIT_DRAG);
     } else if (this.currentView === CameraViews.FIRST_PERSON && this.firstPerson.freeLookActive) {
       const dx = e.clientX - this.orbit.lastMouseX;
@@ -4304,20 +3503,17 @@ export class CameraSystem {
 
       this.firstPerson.freeLookYaw += dx * 0.3;
       this.firstPerson.freeLookPitch += dy * 0.3;
-      // Clamp free-look
       this.firstPerson.freeLookYaw = clamp(this.firstPerson.freeLookYaw, -90, 90);
       this.firstPerson.freeLookPitch = clamp(this.firstPerson.freeLookPitch, -45, 45);
 
-      // Skills discovery: free-look event
       eventBus.emit(Events.CAMERA_FREE_LOOK);
     }
   }
 
   /** @private */
   _onMouseUp(e) {
-    // ZOOM LADDER (S4): release the rotate drag; the accumulated velocities
-    // decay as momentum in _updateLadderCamera (ORBIT feel). RETURN keeps the
-    // legacy release paths unreachable while the ladder owns the camera.
+    // ZOOM LADDER: release the rotate drag; the accumulated velocities decay as momentum in _updateLadderCamera (ORBIT
+    // feel). RETURN keeps the legacy release paths unreachable while the ladder owns the camera.
     if (this._ladderCam.active) {
       this._ladderCam.drag.isDragging = false;
       return;
@@ -4330,41 +3526,32 @@ export class CameraSystem {
     }
     if (this.currentView === CameraViews.FIRST_PERSON && e.button === 2) {
       this.firstPerson.freeLookActive = false;
-      // Smoothly return to center
       this.firstPerson.freeLookYaw *= 0.3;
       this.firstPerson.freeLookPitch *= 0.3;
     }
   }
 
   /**
-   * Legacy wheel-zoom logic (chase/orbit/inspection/first-person). No longer a
-   * DOM listener — the single WheelRouter (S2, T3) calls this on the ladder-OFF
-   * path so shipped zoom behavior is byte-identical. Still emits CAMERA_ZOOM
-   * (skills discovery) and drives the inspect Schmitt, exactly as before.
-   * @param {WheelEvent} e
+   * Legacy wheel-zoom logic (chase/orbit/inspection/first-person). Not a DOM listener: the single WheelRouter calls it
+   * on the ladder-OFF path. Emits CAMERA_ZOOM (skills discovery) and drives the inspect Schmitt.
    */
   handleWheelZoom(e) {
     e.preventDefault();
     this._ionStartupInput('wheel');      // ion start-up: the player's own camera input ends the swing at once
 
-    // 2026-08-26: wheel = player input — the lasso cut steps aside instantly.
     if (this._lassoCut.active) this.abortLassoCut();
 
-    // Skills discovery: emit zoom event for any view
     eventBus.emit(Events.CAMERA_ZOOM);
 
     if (this.currentView === CameraViews.ORBIT) {
-      // Zoom in/out. Use finer 3% steps once inside the inspection band so
-      // close mechanical framing is controllable; 5% otherwise.
+      // Zoom in/out: finer 3% steps inside the inspection band so close framing is controllable; 5% otherwise.
       const fine = this.orbit.distance < this.orbit.inspectExitDist;
       const step = fine ? 0.03 : 0.05;
       const zoomDelta = e.deltaY > 0 ? (1 + step) : (1 - step);
       this.orbit.distance *= zoomDelta;
       this.orbit.distance = clamp(this.orbit.distance, this.orbit.minDistance, this.orbit.maxDistance);
-      // Cross the Schmitt trigger → engage/disengage inspection optics+overlay.
       this._evaluateInspectZoom();
     } else if (this.currentView === CameraViews.INSPECTION) {
-      // Inspection zoom (smooth 3% steps for fine control)
       const zoomDelta = e.deltaY > 0 ? 1.03 : 0.97;
       this.inspection.distance *= zoomDelta;
       this.inspection.distance = clamp(this.inspection.distance, this.inspection.minDistance, this.inspection.maxDistance);
@@ -4372,14 +3559,11 @@ export class CameraSystem {
       // Adjust chase distance (smooth 5% steps, min ~10m behind)
       const zoomDelta = e.deltaY > 0 ? 1.05 : 0.95;
       this.chase.offsetBehind *= zoomDelta;
-      // Min lowered to ~4m (was 10m) so FLY can zoom in closer to the ship;
-      // stays outside the ~3m near-clip (CAMERA_NEAR) to avoid hull clipping.
+      // Min ~4 m: stays outside the ~3 m near-clip (CAMERA_NEAR) to avoid hull clipping.
       this.chase.offsetBehind = clamp(this.chase.offsetBehind, 0.00004, 0.001);
       this.chase.offsetAbove = this.chase.offsetBehind * 0.48;
     } else if (this.currentView === CameraViews.TARGET_LOCK) {
-      // Unreachable as of 2026-06-03 (TARGET_LOCK removed from VIEW_CYCLE);
-      // retained for possible re-enable. See _computeTargetLock.
-      // Adjust target lock offset distance
+      // Unreachable (TARGET_LOCK removed from VIEW_CYCLE); retained for possible re-enable. See _computeTargetLock.
       const zoomDelta = e.deltaY > 0 ? 1.1 : 0.9;
       this.targetLock.offsetDistance *= zoomDelta;
       this.targetLock.offsetDistance = clamp(this.targetLock.offsetDistance, 0.0001, 0.005);
@@ -4392,21 +3576,16 @@ export class CameraSystem {
     }
   }
 
-  // ==========================================================================
-  // ZOOM LADDER RIDE ENGINE (S2 — docs/ladder/06-core-api.md, T6)
-  //
-  // The ceremony-BEAT pattern applied to the ladder: LadderController hands the
-  // camera a target FRAME { distU, fov, anchor } derived from (floor, z01), and
-  // this engine dollies along a direction from the anchor — heading-relative on
-  // ship anchors (the ship's orbital frame, B1), inertial on Earth anchors. Rides
-  // (crossings / mini-rides) cubic-in-out interpolate distance + FOV; free
-  // scroll / settle ease toward the live target. Anchor 'earth' aims at the
-  // scene ORIGIN (Earth centre) — the Earth-fixed framing setView() cannot do.
-  // ==========================================================================
+  // ZOOM LADDER RIDE ENGINE (archive/ladder/06-core-api.md). The ceremony-BEAT pattern applied to the ladder:
+  // LadderController hands the camera a target FRAME { distU, fov, anchor } derived from (floor, z01), and this engine
+  // dollies along a direction from the anchor: heading-relative on ship anchors (the ship's orbital frame), inertial on
+  // Earth anchors. Rides (crossings / mini-rides) cubic-in-out interpolate distance + FOV; free scroll / settle ease
+  // toward the live target. Anchor 'earth' aims at the scene ORIGIN (Earth centre): the Earth-fixed framing setView()
+  // cannot do.
 
   /**
-   * Engage the ladder camera. Captures the current camera direction relative to
-   * the frame's anchor so the first floor doesn't snap the view.
+   * Engage the ladder camera. Captures the current camera direction relative to the frame's anchor so the first floor
+   * doesn't snap the view.
    * @param {{distU:number, fov:number, anchor:'ship'|'earth'}} frame
    */
   ladderEngage(frame) {
@@ -4414,21 +3593,19 @@ export class CameraSystem {
     lc.active = true;
     lc.riding = false;
     lc.onDone = null;
-    this._resetCatchFocus('ladder engaged again');   // reel-visible: a fresh engage never inherits a focus
+    this._resetCatchFocus('ladder engaged again');   // a fresh engage never inherits a focus
     this._takeoverDistU = null;
     lc.anchor = frame.anchor;
     lc.targetDistU = frame.distU;
     lc.curDistU = frame.distU;
     lc.fov = frame.fov;
-    this._ladderResetFollow();   // H2: every engage starts on the mother
-    // Seed the dolly direction from the live camera pose (fallback: keep prior).
+    this._ladderResetFollow();   // every engage starts on the mother
     const anchorPos = this._ladderAnchorPos(frame.anchor);
     const d = lc._tmp.copy(this.camera.position).sub(anchorPos);
     if (d.lengthSq() > 1e-20) lc.dir.copy(d).normalize();
-    // B1: the local (orbital-frame) coefficients are projected from THIS world
-    // dir on the first ship-anchored frame (update() owns the live velDir), so
-    // the pose at engage is exactly today's — the frame only starts co-rotating
-    // afterwards. Per-floor drag memory deliberately survives (D5).
+    // The local (orbital-frame) coefficients are projected from THIS world dir on the first ship-anchored frame
+    // (update() owns the live velDir), so the pose at engage is exactly the current one; the frame only starts
+    // co-rotating afterwards. Per-floor drag memory deliberately survives.
     lc.localSeeded = false;
     lc.rideDirSlerp = false;
     lc.floor = (frame.floor != null) ? frame.floor : null;
@@ -4437,19 +3614,18 @@ export class CameraSystem {
     lc.rideFloorFrom = null;
     lc.levelHoldFloor = null;
     this._baseFov = frame.fov;
-    // Drag gating: the mouse rule and the touch rule (see _ladderSetDragGates).
-    // Fresh engage starts with no drag in flight.
+    // Drag gating: the mouse rule and the touch rule (see _ladderSetDragGates). A fresh engage starts with no drag in
+    // flight.
     this._ladderSetDragGates(frame.floor);
     lc.drag.isDragging = false;
     lc.drag.touchHeld = false;
     this._dragStop(lc.drag);
-    this._resetLadderViewReturn();   // fb16: no owed return, glide or wait carries into a fresh engage
-    // Wave 5 (3): the look-at bias starts settled at 0 on every engage (the
-    // pane is enabled by the controller only AFTER engage); the request itself
-    // (paneInsetPx) stays the caller's — main.js owns it through the setter.
+    this._resetLadderViewReturn();   // no owed return, glide or wait carries into a fresh engage
+    // The look-at bias starts settled at 0 on every engage (the pane is enabled by the controller only AFTER engage);
+    // the request itself (paneInsetPx) stays the caller's: main.js owns it through the setter.
     this._ladderResetPaneBias();
-    // F3 inspect absorption: engaging directly on F3 applies the arrival
-    // effects (a re-engage mid-session restores the floor's costume).
+    // F3 inspect absorption: engaging directly on F3 applies the arrival effects (a re-engage mid-session restores the
+    // floor's costume).
     this._ladderApplyInspectFx(frame.floor);
   }
 
@@ -4462,10 +3638,9 @@ export class CameraSystem {
     lc.leveling = false;
     lc.levelT = 0;
     lc.levelHoldFloor = null;
-    this.ladderCancelEarthTurn('ladder disengaged');   // u8
-    this._resetCatchFocus('ladder disengaged');     // reel-visible
-    this._ladderResetFollow();   // H2
-    // Reset the whole drag block — nothing may leak into the next engage.
+    this.ladderCancelEarthTurn('ladder disengaged');
+    this._resetCatchFocus('ladder disengaged');
+    this._ladderResetFollow();
     lc.drag.enabled = false;
     lc.drag.touchEnabled = false;
     lc.drag.isDragging = false;
@@ -4473,53 +3648,37 @@ export class CameraSystem {
     lc.drag.lastMouseX = 0;
     lc.drag.lastMouseY = 0;
     this._dragStop(lc.drag);
-    this._resetLadderViewReturn();   // fb16
-    // Wave 5 (3): no eased look-at bias may leak into the next engage either.
+    this._resetLadderViewReturn();
     this._ladderResetPaneBias();
-    // F3 inspect absorption: a disengage while on F3 reverts the arrival
-    // effects (dim off, overlays off) — the shipped views resume clean.
+    // F3 inspect absorption: a disengage while on F3 reverts the arrival effects (dim off, overlays off): the shipped
+    // views resume clean.
     this._ladderApplyInspectFx(null);
   }
 
   /**
-   * Wave 5 (3) — the F3 look-at bias (08-workbench §2, 01-numbers "F3 look-at
-   * bias"): the ONE inset value. `px` is the signed CSS-pixel width of the
-   * workbench pane covering a viewport edge — positive = a pane on the LEFT
-   * edge (the subject reframes right, to the centre of the uncovered strip),
-   * negative = a pane on the RIGHT edge, 0 = none (both panes open → the caller
-   * nets the two). main.js calls this from the pane's onOpenChange edge — the
-   * SAME signal that feeds the D10 calm cap — never a second path. The camera
-   * applies it on every engaged floor (Session J, plan D-C — the SPECS drawer
-   * lives on every floor; floor 1 only before that), eased over
-   * LADDER_PANE_REFRAME_MS (reduced motion → snap). Non-finite
-   * → 0. Flag-off: the pane is never constructed, this is never called, the
-   * request stays 0 and the ladder never engages → byte-identical.
-   * @param {number} px
+   * The F3 look-at bias (08-workbench §2, 01-numbers "F3 look-at bias"): the ONE inset value. `px` is the signed
+   * CSS-pixel width of the workbench pane covering a viewport edge: positive = a pane on the LEFT edge (the subject
+   * reframes right, to the centre of the uncovered strip), negative = a pane on the RIGHT edge, 0 = none (both panes
+   * open → the caller nets the two). main.js calls this from the pane's onOpenChange edge, the SAME signal that feeds
+   * the calm cap, never a second path. The camera applies it on every engaged floor (the SPECS drawer lives on every
+   * floor), eased over LADDER_PANE_REFRAME_MS (reduced motion → snap). Non-finite → 0. Flag-off: the pane is never
+   * constructed, this is never called, the request stays 0 and the ladder never engages → byte-identical.
    */
   setLadderPaneInset(px) {
     this._ladderCam.paneInsetPx = Number.isFinite(px) ? px : 0;
   }
 
   /**
-   * Session I (plan D-F, the TURNTABLE) — the drawer-open bit for the drag
-   * gate. main.js's ONE workbench-pane edge (_syncWorkbenchPanes) feeds it;
-   * the drag arms on the ship-anchored floors 1–2 only while it is true
-   * (floor 1 since Session I; floor 2 since Session J.5 — the owner's lift,
-   * D-F "any ship-anchored floor"). LIVE re-gate: a drawer opening while the
-   * player already stands on the floor must arm the drag without a ride, and
-   * closing it disarms mid-hold (any in-flight drag and its momentum are
-   * cancelled — the pointer-up path can never race a disabled gate).
-   * FLOOR-2 CLOSE RULE (Session J.5; review fix): floor 2 is the shipped
-   * flying view, so "drawer closed → arrows steer the ship as today" must
-   * hold for the CAMERA too. The SPECS drawer RIDES ALONG across floors, so
-   * the close edge can fire ANYWHERE — the floor-2 turntable MEMORY dies on
-   * every close (else an Earth→2 descent restores it with the drag disarmed —
-   * no way back to the shipped view), and the LIVE pose returns to the
-   * canonical chase-behind pose only when the camera is actually ON floor 2
-   * (off-floor, lc.local is the current floor's pose). Floor 1 keeps its D5
-   * memory (the workbench pose is the player's). Flag-off: the panes are
-   * never constructed, this is never called → byte-identical.
-   * @param {boolean} open
+   * The drawer-open bit for the drag gate (the TURNTABLE). main.js's ONE workbench-pane edge (_syncWorkbenchPanes)
+   * feeds it. LIVE re-gate: a drawer opening while the player already stands on the floor must arm the drag without a
+   * ride, and closing it disarms mid-hold (any in-flight drag and its momentum are cancelled: the pointer-up path can
+   * never race a disabled gate).
+   * FLOOR-2 CLOSE RULE: floor 2 is the shipped flying view, so "drawer closed → arrows steer the ship as today" must
+   * hold for the CAMERA too. The SPECS drawer RIDES ALONG across floors, so the close edge can fire ANYWHERE: the
+   * floor-2 turntable MEMORY dies on every close (else an Earth→2 descent restores it with the drag disarmed: no way
+   * back to the shipped view), and the LIVE pose returns to the canonical chase-behind pose only when the camera is
+   * actually ON floor 2 (off-floor, lc.local is the current floor's pose). Floor 1 keeps its drag memory (the
+   * workbench pose is the player's). Flag-off: the panes are never constructed, this is never called → byte-identical.
    */
   setLadderPaneOpen(open) {
     const lc = this._ladderCam;
@@ -4537,32 +3696,24 @@ export class CameraSystem {
   }
 
   /**
-   * @private The MOUSE drag-gate rule (Session I; floor 2 added Session J.5;
-   * widened 2026-10-20, owner "Mac too"; floor 1 without a drawer 2026-10-25,
-   * owner "mouse drag works great in Floor 2 ... make it work in Floor 1"):
-   * floors 1-4 always, like the finger. Held arrows on floor 1 still turn the
-   * view only with a drawer open (ladderDragNudge's key rule). Floor 5 and
-   * floorless legacy frames never arm.
-   * @param {number|null|undefined} floor
-   * @returns {boolean}
+   * @private The MOUSE drag-gate rule: floors 1-4 always, like the finger (owner 2026-10-20 "Mac too" for floor 2; owner 2026-10-25:
+   * "mouse drag works great in Floor 2 ... make it work in Floor 1"). Held arrows on floor 1 still turn the view only with a drawer open
+   * (ladderDragNudge's key rule). Floor 5 and floorless legacy frames never arm.
    */
   _ladderDragEnabledFor(floor) {
     return floor === 1 || floor === 2 || floor === 3 || floor === 4; // mouse rule
   }
 
   /**
-   * @private The TOUCH drag-gate rule (2026-10-20, owner "one-finger drag turns
-   * the view"): floors 1-4 always, with or without a drawer (a finger has no
-   * other use on the canvas; the ship turns from the turn pad). Floor 5 and
+   * @private The TOUCH drag-gate rule (owner 2026-10-20: "one-finger drag turns the view"): floors 1-4 always, with or
+   * without a drawer (a finger has no other use on the canvas; the ship turns from the turn pad). Floor 5 and
    * floorless frames never arm. A superset of the mouse rule.
-   * @param {number|null|undefined} floor
-   * @returns {boolean}
    */
   _ladderTouchDragEnabledFor(floor) {
     return floor === 1 || floor === 2 || floor === 3 || floor === 4;
   }
 
-  /** @private Re-evaluate both drag gates for `floor` (the five places that used to set drag.enabled). */
+  /** @private Re-evaluate both drag gates for `floor`. */
   _ladderSetDragGates(floor) {
     const d = this._ladderCam.drag;
     d.enabled = this._ladderDragEnabledFor(floor);
@@ -4570,45 +3721,39 @@ export class CameraSystem {
   }
 
   /**
-   * Session I (plan D-F) — the turntable's ARROW nudge: LadderController maps
-   * held arrow keys to this while a drawer is open on floor 1. Same math as
-   * the pointer path (_onMouseMove): the px delta becomes a pending turn (then a per-second coast speed)
-   * through drag.rotateSpeed, decaying through drag.damping per 1/60 s — one drag feel,
-   * two inputs. Gated like a pointer drag: engaged + drag-enabled (mouse rule, or the touch rule for source 'touch') +
-   * not riding (rides own the camera). A nudge is a SET like the pointer's
-   * (never accumulates across frames), so holding a key rotates at a steady
+   * The turntable's ARROW nudge: LadderController maps held arrow keys to this while a drawer is open on floor 1. Same
+   * math as the pointer path (_onMouseMove): the px delta becomes a pending turn (then a per-second coast speed) through
+   * drag.rotateSpeed, decaying through drag.damping per 1/60 s: one drag feel, two inputs. Gated like a pointer drag:
+   * engaged + drag-enabled (mouse rule, or the touch rule for source 'touch') + not riding (rides own the camera). A
+   * nudge is a SET like the pointer's (never accumulates across frames), so holding a key rotates at a steady
    * px-per-call rate and release coasts on the shipped momentum.
    * @param {number} dxPx - horizontal pointer-equivalent px (+ = drag right)
    * @param {number} dyPx - vertical pointer-equivalent px (+ = drag down)
-   * @param {string} [source] - 'touch' = a finger on the glass (TouchControls): gated by the
-   *   touch rule (floors 1-4). Anything else (the turntable's held arrows) keeps the mouse rule.
+   * @param {string} [source] - 'touch' = a finger on the glass (TouchControls): gated by the touch rule (floors 1-4).
+   *   Anything else (the turntable's held arrows) keeps the mouse rule.
    */
   ladderDragNudge(dxPx, dyPx, source) {
     const lc = this._ladderCam;
     if (!lc.active || lc.riding) return;
     if (!(source === 'touch' ? lc.drag.touchEnabled : lc.drag.enabled)) return;
-    // Key rule (2026-10-25): the mouse gate now arms floor 1 always, but held
-    // arrows on floor 1 steer the ship unless a drawer is open (the turntable).
+    // Key rule: the mouse gate arms floor 1 always, but held arrows on floor 1 steer the ship unless a drawer is open
+    // (the turntable).
     if (source !== 'touch' && lc.floor === 1 && !lc.paneOpen) return;
     const dx = Number.isFinite(dxPx) ? dxPx : 0;
     const dy = Number.isFinite(dyPx) ? dyPx : 0;
     if (dx === 0 && dy === 0) return;
     this._ionStartupInput('touch drag'); // ion start-up: the player's own camera input ends the swing at once
-    // Stale-nudge guard (review of cb29fbe8): main.js stops calling update() while
-    // the game is paused, the tab is hidden or the window is blurred, yet a finger
-    // that stays down keeps sending nudges. They would all land in one frame's sum
-    // and fling the view on resume. No ladder update for LADDER_NUDGE_STALE_MS of
-    // wall time = nobody is drawing: the nudge is dropped.
+    // Stale-nudge guard: main.js stops calling update() while the game is paused, the tab is hidden or the window is
+    // blurred, yet a finger that stays down keeps sending nudges; they would all land in one frame's sum and fling the
+    // view on resume. No ladder update for LADDER_NUDGE_STALE_MS of wall time = nobody is drawing: the nudge is dropped.
     if (this._ladderUpdateWallMs !== null &&
         this._wallNowMs() - this._ladderUpdateWallMs > LADDER_NUDGE_STALE_MS) return;
-    this.ladderCancelCatchFocus('touch drag');   // reel-visible: a touch drag is his own camera input too (the mouse path does the same)
-    this.ladderCancelEarthTurn('touch drag');    // u8: and it stops the floor-4 turn to the focused field
-    // Touch coalescing (2026-10-20, iPad "too slow"): a SET keeps only the LAST
-    // event of a frame, so a 120 Hz touchmove on a 60 fps (or 30 fps under load)
-    // canvas threw away half or more of the finger's travel (measured: a
-    // 1180 px swipe 506 deg at 1 event/frame, 262 deg at 2). Several nudges
-    // inside ONE drawn frame therefore SUM; the first nudge of a frame still
-    // SETS (the pointer's law, and the held arrow's one-call-per-frame).
+    this.ladderCancelCatchFocus('touch drag');   // a touch drag is his own camera input too (the mouse path does the same)
+    this.ladderCancelEarthTurn('touch drag');    // and it stops the floor-4 turn to the focused field
+    // Touch coalescing: a SET keeps only the LAST event of a frame, so a 120 Hz touchmove on a 60 fps (or 30 fps under
+    // load) canvas threw away half or more of the finger's travel (a 1180 px swipe: 506 deg at 1 event/frame, 262 deg
+    // at 2). Several nudges inside ONE drawn frame therefore SUM; the first nudge of a frame still SETS (the pointer's
+    // law, and the held arrow's one-call-per-frame).
     const d = lc.drag;
     const addTheta = -dx * d.rotateSpeed, addPhi = dy * d.rotateSpeed;
     const same = d.nudgeSeq === this._ladderUpdateSeq;
@@ -4617,21 +3762,18 @@ export class CameraSystem {
   }
 
   /**
-   * fb16: a finger is held (or let go) on a view drag. TouchControls calls it on the drag's first move and on every end
-   * of the gesture. A held finger is view input even when it does not move (the view return does not start under it).
-   * @param {boolean} on
+   * A finger is held (or let go) on a view drag. TouchControls calls it on the drag's first move and on every end of
+   * the gesture. A held finger is view input even when it does not move (the view return does not start under it).
    */
   ladderSetTouchHeld(on) {
     this._ladderCam.drag.touchHeld = !!on && this._ladderCam.active;
   }
 
-  // ==========================================================================
-  // VIEW RETURN (fb16 V1-V5, owner 2026-10-25) — see LADDER_VIEW_RETURN. After the last view input, once the drag's
-  // coast has stopped, the view waits IDLE_S, then glides home. One state block (lc.viewReturn), one writer of the
-  // pose (this step, after the drag block and before the direction is rebuilt from lc.local).
-  // ==========================================================================
+  // VIEW RETURN (see LADDER_VIEW_RETURN; owner 2026-10-25): after the last view input, once the drag's coast has
+  // stopped, the view waits IDLE_S, then glides home. One state block (lc.viewReturn), one writer of the pose (this
+  // step, after the drag block and before the direction is rebuilt from lc.local).
 
-  /** @private Forget any owed return, glide and wait (engage / disengage). `dragMemory` is kept (D5). */
+  /** @private Forget any owed return, glide and wait (engage / disengage). `dragMemory` is kept. */
   _resetLadderViewReturn() {
     const vr = this._ladderCam.viewReturn;
     vr.dirty = false; vr.moved = false; vr.t = 0; vr.glide = null; vr.due = false;
@@ -4639,11 +3781,10 @@ export class CameraSystem {
   }
 
   /**
-   * fb16 V2 — floor 4 (Earth anchor): true ONCE when the wait after his last view input is over and the view should
-   * go back to the floor's default. The default is the framing main.js's floor-4 block computes (ship and debris field
-   * in view: NavcomFloor.framing), so main.js answers with `ladderTurnEarthDir(fr.dir)` (direction only; the zoom stays).
+   * Floor 4 (Earth anchor): true ONCE when the wait after his last view input is over and the view should go back to
+   * the floor's default. The default is the framing main.js's floor-4 block computes (ship and debris field in view:
+   * NavcomFloor.framing), so main.js answers with `ladderTurnEarthDir(fr.dir)` (direction only; the zoom stays).
    * Cleared by any view input, ride, drawer or turn; floors 1-3 return on their own and floor 5 never.
-   * @returns {boolean}
    */
   ladderViewReturnDue() {
     const lc = this._ladderCam;
@@ -4663,8 +3804,6 @@ export class CameraSystem {
    *    focus or reel view. The wait starts when they end, if the view is still off default (`dirty`).
    *  - A change of anchor type (a ride between ship and Earth floors) is not a view input: arriving on a remembered pose
    *    owes a return, any other arrival does not.
-   * @param {number} coastStep
-   * @param {boolean} shipAnchored
    */
   _stepLadderViewReturn(coastStep, shipAnchored) {
     const lc = this._ladderCam;
@@ -4707,7 +3846,7 @@ export class CameraSystem {
     this._beginLadderViewReturnGlide();
   }
 
-  /** @private The view is home (or a glide ended): nothing owed, and a ride back to this floor lands on the default (V5). */
+  /** @private The view is home (or a glide ended): nothing owed, and a ride back to this floor lands on the default. */
   _finishLadderViewReturn() {
     const lc = this._ladderCam;
     const vr = lc.viewReturn;
@@ -4788,10 +3927,9 @@ export class CameraSystem {
   }
 
   /**
-   * @private CSS-px viewport width for the inset → NDC conversion: the render
-   * canvas's clientWidth (SceneManager sizes it to window.innerWidth, the same
-   * number camera.aspect is built from; tests inject it on the mock canvas).
-   * 0 when unknown → no bias is applied (never NaN, never a guess).
+   * @private CSS-px viewport width for the inset → NDC conversion: the render canvas's clientWidth (SceneManager sizes
+   * it to window.innerWidth, the number camera.aspect is built from; tests inject it on the mock canvas). 0 when
+   * unknown → no bias is applied (never NaN, never a guess).
    */
   _ladderViewportWidthPx() {
     const c = this.canvas;
@@ -4801,13 +3939,12 @@ export class CameraSystem {
 
   /**
    * Free-scroll / settle target (no ride). The camera eases toward it.
-   * @param {{distU:number, fov:number, anchor:'ship'|'earth'}} frame
    */
   ladderSetTarget(frame) {
     const lc = this._ladderCam;
     if (!lc.active) return;
-    // Anchors only change through rides; should a target ever switch anchor
-    // without one, re-project the (continuous) world dir into the new frame.
+    // Anchors only change through rides; should a target switch anchor without one, re-project the (continuous) world
+    // dir into the new frame.
     if (frame.anchor !== lc.anchor) lc.localSeeded = false;
     lc.anchor = frame.anchor;
     lc.targetDistU = frame.distU;
@@ -4826,11 +3963,10 @@ export class CameraSystem {
     this._ionStartupInput('ladder ride');   // ion start-up: a ride (the rail, a floor change) takes the camera; the swing ends at once
     const lc = this._ladderCam;
     if (!lc.active) {
-      // Not engaged (defensive) — complete immediately so the core never wedges.
       if (typeof opts.onDone === 'function') opts.onDone();
       return;
     }
-    const wasRiding = lc.riding;       // B1: a replacement ride may inherit an in-flight dir slerp
+    const wasRiding = lc.riding;       // a replacement ride may inherit an in-flight dir slerp
     lc.riding = true;
     lc.rideT = 0;
     lc.rideDur = Math.max(0.001, (opts.rideMs || 550) / 1000);
@@ -4843,19 +3979,15 @@ export class CameraSystem {
     lc.targetDistU = opts.distU;
     lc.fov = opts.fov;
     lc.onDone = (typeof opts.onDone === 'function') ? opts.onDone : null;
-    // B1 — direction policy per anchor pair (docs/ladder/08-workbench.md B1):
-    //   ship→Earth : `dir` simply stops being rebuilt from the local pose — the
-    //                last rebuilt world dir is frozen (continuity) and then
-    //                holds inertial on the Earth floors.
-    //   Earth→ship : freeze the inertial start dir and slerp it, on the ride's
-    //                ease, toward the live world vector of the ARRIVAL local
-    //                pose — the player's drag memory for the destination floor
-    //                (D5) else the canonical chase-behind pose — so every
-    //                descent lands "back in the cockpit", never facing backwards.
-    //   ship→ship  : the local pose carries over (heading-relative throughout);
-    //                a ride replacing an in-flight Earth→ship slerp (G3 flick
-    //                upgrade/undo) continues that slerp from the current dir so
-    //                the direction never snaps mid-flight.
+    // Direction policy per anchor pair (docs/ladder/08-workbench.md B1):
+    //   ship→Earth : `dir` simply stops being rebuilt from the local pose: the last rebuilt world dir is frozen
+    //                (continuity) and then holds inertial on the Earth floors.
+    //   Earth→ship : freeze the inertial start dir and slerp it, on the ride's ease, toward the live world vector of the
+    //                ARRIVAL local pose (the player's drag memory for the destination floor, else the canonical
+    //                chase-behind pose), so every descent lands "back in the cockpit", never facing backwards.
+    //   ship→ship  : the local pose carries over (heading-relative throughout); a ride replacing an in-flight
+    //                Earth→ship slerp (flick upgrade/undo) continues that slerp from the current dir so the direction
+    //                never snaps mid-flight.
     if (opts.anchor === 'ship') {
       if (lc.rideAnchorFrom === 'earth') {
         lc.rideDirFrom.copy(lc.dir);
@@ -4873,44 +4005,39 @@ export class CameraSystem {
     }
     lc.rideFloorFrom = lc.floor;
     lc.floor = (opts.floor != null) ? opts.floor : null;
-    // Q10: the up at ride start is what an UP-ride holds and a DOWN-ride rolls
-    // away from (so a ride that interrupts a level phase or reverses a half-
-    // rolled ride starts from the CURRENT horizon — never a snap). A cross-
-    // anchor ride owns the up from here, cancelling any level phase; a same-
-    // anchor ride (F6→F7 flicked during leveling) does not touch the up state,
-    // so a running level phase completes on its own clock.
+    // The up at ride start is what an UP-ride holds and a DOWN-ride rolls away from (so a ride that interrupts a level
+    // phase or reverses a half-rolled ride starts from the CURRENT horizon, never a snap). A cross-anchor ride owns the
+    // up from here, cancelling any level phase; a same-anchor ride (F6→F7 flicked during leveling) does not touch the
+    // up state, so a running level phase completes on its own clock.
     if (lc.rideAnchorFrom !== opts.anchor) {
       lc._upStart.copy(this.camera.up).normalize();
       lc.leveling = false;
       lc.levelT = 0;
       lc.levelHoldFloor = null;
     }
-    // A ride owns the camera (G3 flick replacements included): cancel any
-    // in-flight drag and its momentum; re-gate on the destination floor.
-    this.ladderCancelEarthTurn('ride');   // u8: a ride owns `dir` too
+    // A ride owns the camera (flick replacements included): cancel any in-flight drag and its momentum; re-gate on the
+    // destination floor.
+    this.ladderCancelEarthTurn('ride');   // a ride owns `dir` too
     this._ladderSetDragGates(opts.floor);
     lc.drag.isDragging = false;
     this._dragStop(lc.drag);
-    // F3 inspect absorption: the 3/4 down-hump ride applies the ARRIVAL
-    // effects at ride start (destination floor 3 — same moment the render
-    // block swaps, LadderController._startRide); the up-hump ride's
-    // destination floor 4 applies the DEPARTURE inverses.
+    // F3 inspect absorption: the 3/4 down-hump ride applies the ARRIVAL effects at ride start (destination floor 3, the
+    // same moment the render block swaps, LadderController._startRide); the up-hump ride's destination floor 4 applies
+    // the DEPARTURE inverses.
     this._ladderApplyInspectFx(opts.floor);
   }
 
-  /** @returns {boolean} whether the ladder camera currently owns the view. */
   isLadderActive() { return this._ladderCam.active; }
 
   /**
-   * u8-f4-frame-field — turn the floor-4 view (about EARTH_TURN_S) so the debris field at `center` is in the
-   * middle: the camera moves onto the line from Earth's centre through the field (EarthTurn.earthTurnTarget), so
-   * the field sits between the camera and Earth. Only `lc.dir` moves (inertial, as before); the distance, the fov
-   * and the up are untouched. Returns true and stores the turn (a call during a running turn restarts from the
-   * current dir) only when the ladder is engaged on an Earth anchor, `center` is usable (EarthTurn: finite, not
-   * inside Earth) and the camera is above the field by EARTH_TURN_MIN_GAP_U (a field at or above the camera cannot
-   * be shown by turning: the ladder has no live zoom-out). Otherwise false and nothing changes.
+   * Turn the floor-4 view (about EARTH_TURN_S) so the debris field at `center` is in the middle: the camera moves onto
+   * the line from Earth's centre through the field (EarthTurn.earthTurnTarget), so the field sits between the camera
+   * and Earth. Only `lc.dir` moves (inertial); the distance, the fov and the up are untouched. Returns true and stores
+   * the turn (a call during a running turn restarts from the current dir) only when the ladder is engaged on an Earth
+   * anchor, `center` is usable (EarthTurn: finite, not inside Earth) and the camera is above the field by
+   * EARTH_TURN_MIN_GAP_U (a field at or above the camera cannot be shown by turning: the ladder has no live zoom-out).
+   * Otherwise false and nothing changes.
    * @param {{x:number,y:number,z:number}|THREE.Vector3} center  scene units, Earth at the origin
-   * @returns {boolean} whether a turn is now running
    */
   ladderTurnEarthTo(center) {
     const lc = this._ladderCam;
@@ -4925,14 +4052,12 @@ export class CameraSystem {
   }
 
   /**
-   * u10 D3 (owner pick "Floor 4 easier to read", 2026-10-20) — the same 1 s turn as
-   * ladderTurnEarthTo, to a view DIRECTION chosen by the floor-4 framing (NavcomFloor.framing:
-   * the ship–field midpoint, or the field when both cannot fit). Polar angle clamped to the
-   * drag window like every turn target; no distance gap test (the framing picks the distance
-   * and LadderController.frameZoomTo glides to it). Refused off an Earth anchor, on any floor
-   * but 4, disengaged, or for an unusable direction.
+   * The same 1 s turn as ladderTurnEarthTo, to a view DIRECTION chosen by the floor-4 framing (NavcomFloor.framing: the
+   * ship–field midpoint, or the field when both cannot fit; owner pick "Floor 4 easier to read", 2026-10-20). Polar
+   * angle clamped to the drag window like every turn target; no distance gap test (the framing picks the distance and
+   * LadderController.frameZoomTo glides to it). Refused off an Earth anchor, on any floor but 4, disengaged, or for an
+   * unusable direction.
    * @param {{x:number,y:number,z:number}} dir  any non-zero vector from Earth's centre
-   * @returns {boolean} true when the turn starts
    */
   ladderTurnEarthDir(dir) {
     const lc = this._ladderCam;
@@ -4943,21 +4068,21 @@ export class CameraSystem {
     const k = 200 / n;   // a point 200 u out on that ray: beyond Earth's surface (63.71 u), as earthTurnTarget needs
     const target = earthTurnTarget({ x: dir.x * k, y: dir.y * k, z: dir.z * k });
     if (!target) return false;
-    // u10 smoothness: sine in-out, stretched (≤ 1.5 s) when the path would pass 120°/s at its fastest.
+    // Smoothness: sine in-out, stretched (≤ 1.5 s) when the path would pass 120°/s at its fastest.
     lc.earthTurn = { start: lc.dir.clone(), target, t: 0, s: earthFrameTurnS(lc.dir, target), ease: earthFrameEase };
     return true;
   }
 
-  /** u10 D3: the running turn's length in ms (0 when none runs) — LadderController's glide takes the same time. */
+  /** The running turn's length in ms (0 when none runs); LadderController's glide takes the same time. */
   ladderEarthTurnMs() {
     const et = this._ladderCam.earthTurn;
     return et ? (et.s || EARTH_TURN_S) * 1000 : 0;
   }
 
   /**
-   * u8-f4-frame-field — stop the turn to the focused field where it is (the view stays on the way); no-op when none runs.
-   * u10 D4: every call (a mouse drag, a touch drag, a ride, a disengage, an anchor change) also
-   * counts once in `ladderEarthFrameCancels()`, which ends LadderController's framing glide.
+   * Stop the turn to the focused field where it is (the view stays on the way); no-op when none runs. Every call (a
+   * mouse drag, a touch drag, a ride, a disengage, an anchor change) also counts once in `ladderEarthFrameCancels()`,
+   * which ends LadderController's framing glide.
    * @param {string} [cause] for the reader of a call site only (nothing is printed)
    */
   ladderCancelEarthTurn(cause = 'camera input') {
@@ -4965,17 +4090,13 @@ export class CameraSystem {
     this._earthFrameCancels = (this._earthFrameCancels || 0) + 1;
   }
 
-  /** u10 D4: how many times the floor-4 framing was cancelled from the camera side (LadderController watches it). */
+  /** How many times the floor-4 framing was cancelled from the camera side (LadderController watches it). */
   ladderEarthFrameCancels() { return this._earthFrameCancels || 0; }
 
-  /** @returns {boolean} whether the floor-4 turn to the focused field is running. */
   isLadderEarthTurning() { return !!this._ladderCam.earthTurn; }
 
-  // ==========================================================================
-  // CATCH FOCUS (reel-visible) — see CATCH_FOCUS. Camera-layer only: it adds an
-  // anchor offset and a distance pull to the ladder camera's own pose, and never
-  // writes the ladder's state (lc.curDistU / lc.dir / lc.floor / the rides).
-  // ==========================================================================
+  // CATCH FOCUS (see CATCH_FOCUS). Camera-layer only: it adds an anchor offset and a distance pull to the ladder
+  // camera's own pose, and never writes the ladder's state (lc.curDistU / lc.dir / lc.floor / the rides).
 
   /** @returns {object|null} the capture-net system this camera's ship uses (the singleton in the shipped build). */
   _netSystemRef() {
@@ -5052,11 +4173,10 @@ export class CameraSystem {
   _beginCatchFocus(kind, net, d, phase, label, pos, noFarCut = false) {
     const f = this._catchFocus;
     const lc = this._ladderCam;
-    // no-melt: a focus that is still engaged when another catch begins ends first, with its own `end` line (it used to be
-    // overwritten silently, so a catch's focus had a `start` and no `end`).
+    // A focus still engaged when another catch begins ends first, with its own `end` line (so every `start` has an `end`).
     if (f.active && f.engaging) {
-      // the mother's own catch (or a lasso) took the shot: this waiting spell is done with it. Another DAUGHTER's catch is not
-      // a mark: she gets the view back when that focus is released (F1 R3)
+      // the mother's own catch (or a lasso) took the shot: this waiting spell is done with it. Another DAUGHTER's catch
+      // is not a mark: she gets the view back when that focus is released
       if (kind !== 'daughter' && f.spell && f.arm) this._waitViewOff.set(f.arm, f.spell.n);
       this._releaseCatchFocus('a new catch began');
     }
@@ -5073,7 +4193,7 @@ export class CameraSystem {
     // camera's anchor (a daughter's, a far lasso) would take the anchor ease (TAU_S) seconds to cross, leaving the
     // camera far from it for the first ~2 s. The focus snaps in on its first frame and snaps out at its end.
     // The ship is read LIVE (an event fires mid-frame, before this frame's camera update, and `_lastPlayerPos` is the
-    // previous frame's: the ship moves ~78 km/s in scene space, so that is ~1.3 km stale at 60 fps).
+    // previous frame's: the ship moves ~78 km/s in scene space, ~1.3 km stale at 60 fps).
     const p = this._player;
     const now = (p && p.position && p.position.isVector3) ? p.position : this._lastPlayerPos;
     const anchor = this._ladderShipAnchor(now, f.tmp);
@@ -5149,7 +4269,7 @@ export class CameraSystem {
   _releaseCatchFocus(reason = 'done') {
     const f = this._catchFocus;
     if (!f.active || !f.engaging) return;
-    // F2a: his zoom put the shot far from the mother (up to floor 3's edge): the ladder takes that pose over first, so the
+    // His zoom put the shot far from the mother (up to floor 3's edge): the ladder takes that pose over first, so the
     // ease-out is the ladder's own glide home from where the camera stands, not a flight across the whole distance.
     const took = this._focusZoomedDaughter() && this._takeOverCatchFocusPose();
     f.engaging = false;
@@ -5176,17 +4296,17 @@ export class CameraSystem {
         this._reelViewOff = { arm: f.arm, seq: (f.reelSeen || f.reelView) ? seq : seq + 1 };
       }
     }
-    // wait view (F1 R1/R2): HIS input (drag, zoom, wheel, Esc/Space/Enter, a number key, a floor jump) takes the view back to the
+    // wait view: HIS input (drag, zoom, wheel, Esc/Space/Enter, a number key, a floor jump) takes the view back to the
     // mother for good: every daughter waiting at this moment is marked off (else the next frame hands the view to another
     // waiting daughter). A new waiting spell may take it again. A ride, a level change or a piloted daughter are not his input.
     const internal = cause === 'ladder changing level' || cause === 'level changed' || cause === 'daughter piloted' || cause === 'trip start';
     if (was && !internal) this._markWaitSpellsOff();
-    // fix round 1 (FB2): his own camera input leaves the camera WHERE HE PUT IT. The ladder takes over from the pose on
-    // screen (no flight back to the ladder view, up to 50 m in 0.3 s); only the look-at point fades back to the mother.
-    // The internal causes (a ride, a level change, a piloted daughter) and the skip key still walk back as before.
-    // F2a: the same for any end that is not internal when his zoom had moved the shot (Esc, a floor jump, ...).
-    // F3a: a piloted daughter ('daughter piloted': a digit in the haul / held phase, or any other way into the pilot view) is
-    // internal for the wait-view mark, but when his zoom had moved the shot the pose is just as owed to the ladder.
+    // His own camera input leaves the camera WHERE HE PUT IT: the ladder takes over from the pose on screen (no flight
+    // back to the ladder view, up to 50 m in 0.3 s); only the look-at point fades back to the mother. The internal causes
+    // (a ride, a level change, a piloted daughter) and the skip key still walk back. The same for any end that is not
+    // internal when his zoom had moved the shot (Esc, a floor jump, ...). A piloted daughter ('daughter piloted': a
+    // digit in the haul / held phase, or any other way into the pilot view) is internal for the wait-view mark, but when
+    // his zoom had moved the shot the pose is just as owed to the ladder.
     const byInput = cause === 'camera input' || cause === 'mouse drag' || cause === 'touch drag'
       || ((!internal || cause === 'daughter piloted') && this._focusZoomedDaughter());
     const took = was && byInput && this._takeOverCatchFocusPose();
@@ -5198,10 +4318,10 @@ export class CameraSystem {
   }
 
   /**
-   * fix round 1 (FB2): hand the camera's drawn pose (relative to the mother) to the ladder: its direction becomes the
-   * ladder's local pose and its distance the ladder's current and target distance, so the next frame draws exactly the
-   * same position with the focus weight at 0. False (nothing taken) when no focus pose was drawn last frame, the camera
-   * stands farther than TAKEOVER_MAX_U from the mother, or the ladder is not on a still ship anchor.
+   * Hand the camera's drawn pose (relative to the mother) to the ladder: its direction becomes the ladder's local pose
+   * and its distance the ladder's current and target distance, so the next frame draws exactly the same position with
+   * the focus weight at 0. False (nothing taken) when no focus pose was drawn last frame, the camera stands farther than
+   * TAKEOVER_MAX_U from the mother, or the ladder is not on a still ship anchor.
    * @private
    */
   _takeOverCatchFocusPose() {
@@ -5214,16 +4334,15 @@ export class CameraSystem {
     if (!(len > 1e-9) || (len > CATCH_FOCUS.TAKEOVER_MAX_U && !this._focusZoomedDaughter())) return false;
     this._ladderWorldToLocal(f.v.copy(f.camRel).divideScalar(len), lc.local);
     lc.curDistU = len; lc.targetDistU = len;
-    this._takeoverDistU = len;                                              // FB8: the controller puts the ladder's zoom state on it
+    this._takeoverDistU = len;                                              // the controller puts the ladder's zoom state on it
     f.takenOver = true;
-    lc.viewReturn.dirty = true;                                             // fb16 V4: the pose handed back is off the default: it owes a return
+    lc.viewReturn.dirty = true;                                             // the pose handed back is off the default: it owes a return
     return true;
   }
 
   /**
-   * fix round 2 (FB8): the camera distance (scene units) a camera input took over from the catch focus, once; null when
-   * nothing is pending. The ladder controller reads it to put the ladder's zoom state (floor, z01) on that distance.
-   * @returns {number|null}
+   * The camera distance (scene units) a camera input took over from the catch focus, once; null when nothing is
+   * pending. The ladder controller reads it to put the ladder's zoom state (floor, z01) on that distance.
    */
   ladderTakeoverDistU() {
     const d = this._takeoverDistU;
@@ -5292,8 +4411,8 @@ export class CameraSystem {
   /** The distance (scene units) the daughter focus's camera is at from her: for the controller to hand the ladder when a zoom out passes the edge. */
   catchFocusZoomOuterU() { return this._focusZoomOuterU(); }
 
-  /** True while the daughter focus is zoomed in closer than the shot's own framing (the small near plane is then in force).
-   *  Not while the focus is fading out (F2c): a ride then must not push the small near plane again. */
+  /** True while the daughter focus is zoomed in closer than the shot's own framing (the small near plane is then in
+   *  force). Not while the focus is fading out: a ride then must not push the small near plane again. */
   catchFocusZoomIn() {
     const f = this._catchFocus;
     return !!(f.active && f.engaging && f.kind === 'daughter' && f.zoom < 1 - 1e-9);
@@ -5318,8 +4437,7 @@ export class CameraSystem {
 
   /**
    * The furnace starts on the catch: a radiator tip keeps the focus (and names the tip). The nose collar's own furnace
-   * keeps it too (catch-focus: it used to let go here): the focus ends when the collar has eaten the catch, or at
-   * COLLAR_MAX_S.
+   * keeps it too: the focus ends when the collar has eaten the catch, or at COLLAR_MAX_S.
    */
   _onCatchFocusBreakdown(p) {
     const f = this._catchFocus;
@@ -5342,14 +4460,13 @@ export class CameraSystem {
    * A lasso reel that has ended: the net that adopted the catch at the nose collar (podIndex 0, holds this piece), or
    * null while it is not there (yet).
    * @param {object} d - the catch
-   * @returns {object|null}
    */
   _adoptingNet(d) {
     const cns = this._netSystemRef();
     const nets = cns && cns.activeNets;
     if (!Array.isArray(nets)) return null;
-    // no-melt: match by id, not by object identity. A net's `targetDebris` can be a different object (a snapshot) from the
-    // `d` the focus holds, and identity then never found the adopting net (the catch-focus "no net took the catch" bug).
+    // Match by id, not by object identity: a net's `targetDebris` can be a different object (a snapshot) from the `d` the
+    // focus holds, and identity then never found the adopting net (the "no net took the catch" bug).
     for (const n of nets) {
       const td = n && n.targetDebris;
       if (td && (td === d || (d && d.id != null && td.id === d.id)) && n.isActive !== false) return n;
@@ -5358,10 +4475,9 @@ export class CameraSystem {
   }
 
   /**
-   * no-melt: has the catch at the nose collar settled for good? True once the collar's hand-off was tried and declined
+   * Has the catch at the nose collar settled for good? True once the collar's hand-off was tried and declined
    * (nothing is pending: no leash, no cut, no flight), so with no furnace nothing more will happen to it here.
    * @param {object|null} net - the mother net holding the catch
-   * @returns {boolean}
    */
   _collarCatchSettled(net) {
     if (!net || net.state !== 'COLLARED' || net._cargoDeclined !== true || net._leash || net._leashNoseReel) return false;
@@ -5418,7 +4534,7 @@ export class CameraSystem {
       return true;
     }
 
-    // A daughter's reel (reel view, B2) or her catch on the way home: ride with her while she is wound in, then stay a short
+    // A daughter's reel (reel view) or her catch on the way home: ride with her while she is wound in, then stay a short
     // while once she is latched at her strut.
     if (f.phase === 'haul' || f.phase === 'held') {
       const arm = f.arm;
@@ -5463,13 +4579,13 @@ export class CameraSystem {
       if (onView) { f.phase = 'handoff'; f.timer = 0; }
       else if (f.phase === 'reel' && net && (net.state === 'BERTHED' || net.state === 'COLLARED')) { f.phase = 'wait'; f.timer = 0; }
       else if (f.phase === 'wait') {
-        // At the nose collar: a catch too big for a tip cooks right there, a rack catch leaves (CARGO_TRANSFER_START
-        // lets go), a leash catch hands over to the tip phase below. It used to let go after WAIT_S; now it stays until
-        // the collar has processed it, or COLLAR_MAX_S.
+        // At the nose collar: a catch too big for a tip cooks right there, a rack catch leaves (CARGO_TRANSFER_START lets
+        // go), a leash catch hands over to the tip phase below. It stays until the collar has processed it, or
+        // COLLAR_MAX_S.
         f.timer += dt;
         f.collarS += dt;
-        // no-melt: with no furnace the collar never "processes" the catch. The focus ends END_HOLD_S after the catch has
-        // settled there (hand-off declined, nothing pending) instead of waiting for a digest that cannot come.
+        // With no furnace the collar never "processes" the catch: the focus ends END_HOLD_S after the catch has settled
+        // there (hand-off declined, nothing pending) instead of waiting for a digest that cannot come.
         if (!Constants.isFeatureEnabled('FURNACE_COOK') && this._collarCatchSettled(f.net)) { f.phase = 'end'; f.timer = 0; }
         else if (f.collarS > CATCH_FOCUS.COLLAR_MAX_S) { this._releaseCatchFocus('collar time limit'); return false; }
       }
@@ -5483,8 +4599,8 @@ export class CameraSystem {
     if (f.phase === 'tip') {
       f.timer += dt;
       if (!tipHolds(f.tipIndex)) { this._releaseCatchFocus('tip let go of the catch'); return false; }
-      // no-melt: with no furnace the tip never digests the catch. The focus ends END_HOLD_S after the bag has settled on
-      // its tip (the swing onto the boom is done and the leash hand-off has finished).
+      // With no furnace the tip never digests the catch: the focus ends END_HOLD_S after the bag has settled on its tip
+      // (the swing onto the boom is done and the leash hand-off has finished).
       const leashBusy = !!(ld && (typeof ld.isActive === 'function' ? ld.isActive() : ld.busy));
       const swinging = !!(tc && typeof tc.isSwinging === 'function' && tc.isSwinging(f.tipIndex));
       if (!Constants.isFeatureEnabled('FURNACE_COOK') && !leashBusy && !swinging) { f.phase = 'end'; f.timer = 0; }
@@ -5514,9 +4630,9 @@ export class CameraSystem {
   }
 
   /**
-   * reel view (B2): this frame's shot for a daughter being wound home: the middle of her and her catch (just her when
-   * empty-handed), moving toward the strut tip in her last REEL_WIDEN_M, where the shot also widens to REEL_WIDE_M so her
-   * latch onto the tip and the strut are in view. Writes `f.tgt` and `f.wantDist`.
+   * Reel view: this frame's shot for a daughter being wound home: the middle of her and her catch (just her when
+   * empty-handed), moving toward the strut tip in her last REEL_WIDEN_M, where the shot also widens to REEL_WIDE_M so
+   * her latch onto the tip and the strut are in view. Writes `f.tgt` and `f.wantDist`.
    * @param {object} arm - the ArmUnit
    * @param {object|null} d - her catch, if any
    */
@@ -5537,14 +4653,14 @@ export class CameraSystem {
       k = clamp01((CATCH_FOCUS.REEL_WIDEN_M - sepM) / CATCH_FOCUS.REEL_WIDEN_M);
       if (k > 0) f.tgt.lerp(tip, 0.5 * k);
     }
-    // FB7: the shot stands so that the nearest point of her and her catch is clear of the near plane
+    // the shot stands so that the nearest point of her and her catch is clear of the near plane
     let reachM = f.tgt.distanceTo(pos) / M + CATCH_FOCUS.REEL_ARM_R_M;
     if (side > 0) reachM = Math.max(reachM, f.tgt.distanceTo(d._scenePosition) / M + side / 2);
     f.innerDist = (this._deepNearM() + CATCH_FOCUS.REEL_NEAR_CLEAR_M + reachM) * M;   // his zoom: the same clearance rule on the small near plane, without the braking lag
     reachM += CATCH_FOCUS.REEL_LAG_M;
     const lc = this._ladderCam;
     const base = reelViewDistM({ sizeM: side, reachM, nearM: floorNearM(lc && lc.floor) }) * M;
-    f.safeDist = base;                                                     // FB11: the pose below never goes nearer than this
+    f.safeDist = base;                                                     // the pose below never goes nearer than this
     let want = base;
     if (k > 0) want = base + k * Math.max(0, CATCH_FOCUS.REEL_WIDE_M * M - base);
     f.wantDist = want;
@@ -5554,8 +4670,6 @@ export class CameraSystem {
    * wait view (DECISIONS §46 row 1): her states that are part of one waiting spell. A spell runs from her first
    * STATION_KEEP through her capture and reel home; any other state (DOCKED, EXPENDED, DEORBITING, TRANSIT, RETURNING
    * on the FEEP flight ...) ends it, and the next STATION_KEEP is a new spell.
-   * @param {string} st - ArmUnit state
-   * @returns {boolean}
    */
   _waitSpellState(st) {
     const AS = Constants.ARM_STATES;
@@ -5583,7 +4697,7 @@ export class CameraSystem {
 
   /**
    * wait view: each frame, give the view to a daughter who waits for N (STATION_KEEP) when nothing holds the shot, the
-   * ladder is on floors 1-3 and no one flies a daughter. Oldest waiting spell first (W5). Never marks or logs a refusal:
+   * ladder is on floors 1-3 and no one flies a daughter. Oldest waiting spell first. Never marks or logs a refusal:
    * it simply starts later, when the refusal clears.
    */
   _pollWaitView() {
@@ -5654,7 +4768,6 @@ export class CameraSystem {
   /**
    * wait view: a number key (or any other "I will take it from here" input that reaches the camera by name) ends the
    * waiting view for this spell. Does nothing for any other focus.
-   * @param {string} [cause]
    * @returns {boolean} true when a waiting view was up and has been ended
    */
   endWaitView(cause = 'number key') {
@@ -5675,15 +4788,15 @@ export class CameraSystem {
   }
 
   /**
-   * reel view (B2): look for new reels each frame (by reading arm state; no event). Starts the view on the NEWEST daughter
+   * Reel view: look for new reels each frame (by reading arm state; no event). Starts the view on the NEWEST daughter
    * on a reel home, floors 1-3, unless he ended the view of that reel; a view already on an older reel moves to the new one.
    */
   _pollReelView() {
     const f = this._catchFocus;
     const arms = this._player && this._player.armManager && this._player.armManager.arms;
     if (!Array.isArray(arms)) return;
-    // fix round 1 (FB4): never while he pilots a daughter (1-4): the pilot view owns the camera. Nothing is marked as
-    // refused, so when he leaves the pilot view while her reel still runs the view starts then.
+    // Never while he pilots a daughter (1-4): the pilot view owns the camera. Nothing is marked as refused, so when he
+    // leaves the pilot view while her reel still runs the view starts then.
     if (this.currentView === CameraViews.ARM_PILOT || this._ladderFollowTarget()) return;
     let best = null;
     for (const a of arms) {
@@ -5724,9 +4837,9 @@ export class CameraSystem {
     out.normalize();
     const R = this._radialDir;                                            // set by update() this frame
     if (f.reelView) {
-      // B2: off the line, so her tail glow is side-on. Turned about the radial it is a true REEL_OFF_DEG only for a line
-      // about square to the radial; for a line within ~60 deg of it the turn shrinks (measured 9 deg at 26 deg off the
-      // radial, fix round 1 FB5). Then tilt away from the pole about the axis square to both instead.
+      // Off the line, so her tail glow is side-on. Turned about the radial it is a true REEL_OFF_DEG only for a line
+      // about square to the radial; within ~60 deg of it the turn shrinks (measured 9 deg at 26 deg off the radial).
+      // Then tilt away from the pole about the axis square to both instead.
       const th = degToRad(CATCH_FOCUS.REEL_OFF_DEG);
       const line = f.q2a.copy(out);
       out.applyAxisAngle(R, th);
@@ -5748,14 +4861,13 @@ export class CameraSystem {
 
   /**
    * Blend two unit directions by weight t WITHOUT passing the radial pole: the azimuth about the radial turns the short
-   * way (180 deg apart: always the same way, so it is steady) and the elevation is blended on its own (so it stays between
-   * the two ends, which the focus aim keeps outside the ~20 deg pole cone). A plain slerp or lerp between two directions on opposite
-   * sides of the ship passes over the pole, where camera.up (= the radial) flips the view.
+   * way (180 deg apart: always the same way, so it is steady) and the elevation is blended on its own (so it stays
+   * between the two ends, which the focus aim keeps outside the ~20 deg pole cone). A plain slerp or lerp between two
+   * directions on opposite sides of the ship passes over the pole, where camera.up (= the radial) flips the view.
    * @param {THREE.Vector3} a - from (unit)
    * @param {THREE.Vector3} b - to (unit)
    * @param {number} t - 0..1
    * @param {THREE.Vector3} out - may be a or b
-   * @returns {THREE.Vector3} out
    */
   _catchFocusBlendDir(a, b, t, out, keep = null) {
     const R = this._radialDir;
@@ -5771,10 +4883,10 @@ export class CameraSystem {
     ha.normalize(); hb.normalize();
     let ang = Math.atan2(f.q2c.crossVectors(ha, hb).dot(R), ha.dot(hb));    // signed, about the radial
     if (keep && keep.set) {
-      // fix round 1 (FB1): the DRAWN blend keeps its turn continuous: the angle that is within half a turn of last frame's.
-      // (Both the DRAWN blend and the aim's step toward the focus direction: the side rule below flips the way round when the angle leaves the near-opposite band on the far side, which is
-      // a jump of 2 pi x t in the azimuth: measured as a 9.7 deg one-frame blip of the reel view when a daughter's shot
-      // comes round to the far side of the ship.)
+      // The DRAWN blend keeps its turn continuous: the angle within half a turn of last frame's (both the DRAWN blend and
+      // the aim's step toward the focus direction). The side rule below flips the way round when the angle leaves the
+      // near-opposite band on the far side, a jump of 2 pi x t in the azimuth (measured: a 9.7 deg one-frame blip of the
+      // reel view when a daughter's shot comes round to the far side of the ship).
       ang += 2 * Math.PI * Math.round((keep.ang - ang) / (2 * Math.PI));
     } else if (Math.abs(ang) > Math.PI - 0.35) {
       // near opposite the short way is a coin toss that noise would flip every frame: keep the side last taken
@@ -5792,24 +4904,22 @@ export class CameraSystem {
   /**
    * Per ladder frame: advance the blend and ease the focus point. Runs before the pose is written.
    * @param {number} dt - real seconds
-   * @param {THREE.Vector3} playerPos - the mother
    */
   _updateCatchFocus(dt, playerPos) {
     const f = this._catchFocus;
-    this._pollReelView();                                                  // reel view (B2): a daughter wound home gets the shot
+    this._pollReelView();                                                  // a daughter wound home gets the shot (reel view)
     this._pollWaitView();                                                  // wait view: a daughter waiting for N gets it when nothing else holds it
     if (!f.active) { f.w = 0; f.wa = 0; f.azKeep.set = false; return; }
     const lc = this._ladderCam;
     if (f.engaging) {
-      // someone else owns the shot now (the level changed, a ride began, a daughter is piloted or followed)
       const gone = lc.anchor !== 'ship' || (lc.floor != null && (lc.floor < 1 || lc.floor > 3));
       if (gone || lc.riding || this.currentView === CameraViews.ARM_PILOT || this._ladderFollowTarget()) {
         this.ladderCancelCatchFocus(lc.riding ? 'ladder changing level' : gone ? 'level changed' : 'daughter piloted');
       } else if (f.kind === 'daughter' && f.phase === 'station' && this.isIonStartupActive()) {
-        // n-leftovers L5: a trip began (the engines light) while the view waits on a daughter: the mother has the view again. The
-        // wait view only (a catch already being hauled keeps its rules); an internal cause, so it is not his input (no spell marked
-        // off by it). F1.4: THIS waiting spell is marked off here, so the view stays on the mother for the trip and does not go back
-        // to her when the start-up ends; a new waiting spell later may take it. `_reelViewOff` is not touched.
+        // A trip began (the engines light) while the view waits on a daughter: the mother has the view again. The wait
+        // view only (a catch already being hauled keeps its rules); an internal cause, so it is not his input (no spell
+        // marked off by it). THIS waiting spell is marked off here, so the view stays on the mother for the trip and does
+        // not go back to her when the start-up ends; a new waiting spell later may take it. `_reelViewOff` is not touched.
         if (f.spell && f.arm) this._waitViewOff.set(f.arm, f.spell.n);
         this.ladderCancelCatchFocus('trip start');
       } else if (this._catchFocusPoint(dt)) {
@@ -5818,24 +4928,24 @@ export class CameraSystem {
         // round the ship at 6 deg a frame for a second
         let hopCut = false;
         if (!f.snapPending && f.relSeeded && dt > 0) {
-          const dd = focusPointJump(f.tgt, f.rel, f.vel, dt, f.aim);   // FB6: the jump off the point's own predicted path, not its speed
+          const dd = focusPointJump(f.tgt, f.rel, f.vel, dt, f.aim);   // the jump off the point's own predicted path, not its speed
           hopCut = dd > CATCH_FOCUS.HOP_CUT_U && dd / dt >= CATCH_FOCUS.LEAD_MAX_U_S;
         }
         const snap = f.snapPending || hopCut;
         const k = (snap || dt <= 0) ? 1 : 1 - Math.exp(-dt / CATCH_FOCUS.TAU_S);
-        // A first-order ease trails a moving point by v * TAU (1.2 m behind a catch reeled at 2 m/s, which put the
-        // camera 7.1 m from it, not 6): lead the aim by the point's own (filtered) velocity, so the ease keeps
-        // its soft feel and the lag goes. A hop between phases is not a velocity: it keeps the last estimate.
+        // A first-order ease trails a moving point by v * TAU (1.2 m behind a catch reeled at 2 m/s, which put the camera
+        // 7.1 m from it, not 6): lead the aim by the point's own (filtered) velocity, so the ease keeps its soft feel and
+        // the lag goes. A hop between phases is not a velocity: it keeps the last estimate.
         if (f.relSeeded && dt > 0) {
-          const jump = focusPointJump(f.tgt, f.rel, f.vel, dt, f.q2b);   // off its own predicted path (FB6)
+          const jump = focusPointJump(f.tgt, f.rel, f.vel, dt, f.q2b);   // off its own predicted path
           f.aim.copy(f.tgt).sub(f.rel).multiplyScalar(1 / dt);
           if (jump / dt < CATCH_FOCUS.LEAD_MAX_U_S) {
             f.vel.lerp(f.aim, 1 - Math.exp(-dt / CATCH_FOCUS.LEAD_FILTER_S));
             f.jumpRun = 0;
           } else {
-            // a HOP of the focus point: bridged below. The part the filtered velocity already predicts is motion, not a hop:
-            // a reeled daughter cruises at up to 60 m/s and used to count as one hop per frame (FB6)
-            // FB10: a view that starts (or cuts) while she is already fast has a filtered velocity of 0, so EVERY frame is a
+            // a HOP of the focus point: bridged below. The part the filtered velocity already predicts is motion, not a
+            // hop: a reeled daughter cruises at up to 60 m/s and used to count as one hop per frame.
+            // A view that starts (or cuts) while she is already fast has a filtered velocity of 0, so EVERY frame is a
             // "jump" and the velocity was never updated (the camera trailed her by 5-36 m). A hop is ONE frame: the same
             // measured velocity VEL_ACCEPT_N frames running is motion, and the filtered velocity takes it.
             f.jumpRun = (f.jumpRun > 0 && f.lastMeas.distanceTo(f.aim) <= CATCH_FOCUS.VEL_AGREE * f.aim.length()) ? f.jumpRun + 1 : 1;
@@ -5846,13 +4956,13 @@ export class CameraSystem {
         } else f.jumpRun = 0;
         f.rel.copy(f.tgt);
         f.relSeeded = true;
-        // fix round 1 (FB1): the focus point HOPS (collar -> middle of collar and tip -> tip, a second catch while a focus
-        // runs, a newer reel, her catch -> her reel). Everything below (the look-at point, the camera's anchor, its direction)
-        // used to chase the raw point, so a hop was a step in all of them at once (measured: 3.9 deg of camera turn in the
-        // first frame of a 15 m hop; with the aim weight near 1 a look-at that copied the point turned it in ONE frame).
-        // The step is carried in `hop` instead and eased out, critically damped, so it starts at rest: the point everything
-        // below chases is continuous. Ordinary motion passes through untouched (no lag added to a reeled-in catch). A cut
-        // (and a fresh focus's first frame) lands on the point.
+        // The focus point HOPS (collar -> middle of collar and tip -> tip, a second catch while a focus runs, a newer
+        // reel, her catch -> her reel). Everything below (the look-at point, the camera's anchor, its direction) would
+        // chase the raw point, so a hop was a step in all of them at once (measured: 3.9 deg of camera turn in the first
+        // frame of a 15 m hop; with the aim weight near 1 a look-at that copied the point turned it in ONE frame). The
+        // step is carried in `hop` instead and eased out, critically damped, so it starts at rest: the point everything
+        // below chases is continuous. Ordinary motion passes through untouched (no lag added to a reeled-in catch). A
+        // cut (and a fresh focus's first frame) lands on the point.
         if (snap || dt <= 0) { f.hop.set(0, 0, 0); f.hopVel.set(0, 0, 0); if (snap) f.jumpRun = 0; }
         else if (f.hop.lengthSq() > 1e-24 || f.hopVel.lengthSq() > 1e-24) {
           const T = CATCH_FOCUS.LOOK_SMOOTH_S, om = 2 / T, x = om * dt;
@@ -5879,13 +4989,11 @@ export class CameraSystem {
   }
 
   /**
-   * Q10 warp-feed rule (hub wire in main.js): while a cross-anchor ride is going
-   * UP (ship→Earth) — and until its post-ride level phase completes — the
-   * DEPARTURE floor's timeCap must keep driving the TimeAuthority, so the
-   * time-lapse engages only after arrival + leveling, never during the flight.
-   * Down-rides keep the existing destination pre-ramp (time settles first).
-   * @returns {number|null} the departure floor id to hold, or null (the core's
-   *   current floor drives, as before)
+   * Warp-feed rule (hub wire in main.js): while a cross-anchor ride is going UP (ship→Earth), and until its post-ride
+   * level phase completes, the DEPARTURE floor's timeCap must keep driving the TimeAuthority, so the time-lapse engages
+   * only after arrival + leveling, never during the flight. Down-rides keep the existing destination pre-ramp (time
+   * settles first).
+   * @returns {number|null} the departure floor id to hold, or null (the core's current floor drives, as before)
    */
   ladderWarpHoldFloor() {
     const lc = this._ladderCam;
@@ -5895,7 +5003,6 @@ export class CameraSystem {
     return null;
   }
 
-  /** @returns {boolean} true while the post-up-ride level-to-north phase runs (Q10). */
   isLadderLeveling() { return this._ladderCam.leveling; }
 
   /** @private world position of the frame anchor (Earth centre = scene origin;
@@ -5904,8 +5011,8 @@ export class CameraSystem {
     return anchor === 'earth' ? out.set(0, 0, 0) : this._ladderShipAnchor(playerPos, out);
   }
 
-  /** @private H2 — forget the follow target (engage / disengage): the next
-   *  frame starts on the mother and, if she is piloting, blends from there. */
+  /** @private Forget the follow target (engage / disengage): the next frame starts on the mother and, if she is
+   *  piloting, blends from there. */
   _ladderResetFollow() {
     const lc = this._ladderCam;
     lc.followArm = null;
@@ -5915,12 +5022,10 @@ export class CameraSystem {
   }
 
   /**
-   * @private H2 (D1) — who the ship anchor rides with RIGHT NOW. The piloted
-   * daughter while the ladder stands on floor 2 or 3, the view is ARM_PILOT and
-   * she is out flying; null (= the mother) otherwise. Floor 1 stays on the
-   * mother: the workbench, hull outline and dimming there are hers
-   * (_ladderApplyInspectFx). 'earth' floors never ask. Read-only.
-   * @returns {object|null} the ArmUnit, or null
+   * @private Who the ship anchor rides with RIGHT NOW (DECISIONS §15). The piloted daughter while the ladder stands on
+   * floor 2 or 3, the view is ARM_PILOT and she is out flying; null (= the mother) otherwise. Floor 1 stays on the
+   * mother: the workbench, hull outline and dimming there are hers (_ladderApplyInspectFx). 'earth' floors never ask.
+   * Read-only.
    */
   _ladderFollowTarget() {
     const lc = this._ladderCam;
@@ -5936,20 +5041,16 @@ export class CameraSystem {
    * The daughter the ladder camera rides with right now (floors 2-3, piloted, out flying), or null. Public read for
    * the ladder controller: while it is set, zooming in on floor 2 stops at the daughter limit instead of crossing
    * to floor 1 (owner 2026-10-27; FloorContract.DAUGHTER_ZOOM). Read-only.
-   * @returns {object|null}
    */
   ladderFollowedDaughter() { return this._ladderFollowTarget(); }
 
   /**
-   * @private H2 (D1/D2) — the ship-anchor OFFSET from the live mother position
-   * (scene units), the ONE resolver behind _anchorWorld and _ladderAnchorPos so
-   * the two readers cannot drift. Target offset = the followed daughter's live
-   * position minus the mother's (zero for the mother), eased from the offset
-   * captured when the target last changed over SUBJECT_REAIM_MS (cubic in-out,
-   * the one curve). The blend is in offsets, so the anchor rides with the
-   * ship — a lerp between frozen world points would fall behind it (see the
-   * "no position lerp" note in update()). Read-only apart from `out`; `out`
-   * must not be `playerPos`.
+   * @private The ship-anchor OFFSET from the live mother position (scene units), the ONE resolver behind _anchorWorld
+   * and _ladderAnchorPos so the two readers cannot drift. Target offset = the followed daughter's live position minus
+   * the mother's (zero for the mother), eased from the offset captured when the target last changed over
+   * SUBJECT_REAIM_MS (cubic in-out, the one curve). The blend is in offsets, so the anchor rides with the ship: a lerp
+   * between frozen world points would fall behind it (see the "no position lerp" note in update()). Read-only apart
+   * from `out`; `out` must not be `playerPos`.
    */
   _ladderShipOffset(playerPos, out) {
     const lc = this._ladderCam;
@@ -5959,15 +5060,14 @@ export class CameraSystem {
     return out;
   }
 
-  /** @private H2 — the ship anchor in world space (mother, or the blended daughter). */
+  /** @private The ship anchor in world space (mother, or the blended daughter). */
   _ladderShipAnchor(playerPos, out) {
     return this._ladderShipOffset(playerPos, out).add(playerPos);
   }
 
-  /** @private THE ladder up-frame rule (single source — M3 review): Earth-north
-   *  (0,1,0) for an 'earth' anchor, roll-free radial for a ship anchor. Used by
-   *  BOTH the on-floor branch and the cross-anchor ride interpolation endpoints
-   *  of _updateLadderCamera, so the two can never drift apart. Writes `out`. */
+  /** @private THE ladder up-frame rule (single source): Earth-north (0,1,0) for an 'earth' anchor, roll-free radial for
+   *  a ship anchor. Used by BOTH the on-floor branch and the cross-anchor ride interpolation endpoints of
+   *  _updateLadderCamera, so the two can never drift apart. Writes `out`. */
   _ladderUpFor(anchor, radialDir, out) {
     return anchor === 'earth' ? out.set(0, 1, 0) : out.copy(radialDir);
   }
@@ -5997,12 +5097,10 @@ export class CameraSystem {
   }
 
   /**
-   * B1 — build the ship's live orbital frame into lc._R/_T/_N. R = radialDir;
-   * T = velDir orthogonalized against R (Gram-Schmidt — identical to velDir on
-   * a circular orbit, and it keeps the frame orthonormal so the engage-time
-   * projection reproduces the pose exactly); N = R × T (unit, right-handed).
-   * A degenerate velocity (zero, or parallel to R) falls back to the PREVIOUS
-   * T re-orthogonalized against the new R, so the frame never collapses.
+   * Build the ship's live orbital frame into lc._R/_T/_N. R = radialDir; T = velDir orthogonalized against R
+   * (Gram-Schmidt: identical to velDir on a circular orbit, and it keeps the frame orthonormal so the engage-time
+   * projection reproduces the pose exactly); N = R × T (unit, right-handed). A degenerate velocity (zero, or parallel
+   * to R) falls back to the PREVIOUS T re-orthogonalized against the new R, so the frame never collapses.
    * @private
    */
   _ladderShipFrame(radialDir, velDir) {
@@ -6013,7 +5111,6 @@ export class CameraSystem {
     if (velDir && velDir.lengthSq() > 1e-12) c.copy(velDir); else c.copy(T);
     c.addScaledVector(R, -c.dot(R));
     if (c.lengthSq() < 1e-12) {
-      // Live velocity AND the previous T are radial — pick any perpendicular.
       c.copy(T).addScaledVector(R, -T.dot(R));
       if (c.lengthSq() < 1e-12) c.set(0, 1, 0).addScaledVector(R, -R.y);
       if (c.lengthSq() < 1e-12) c.set(1, 0, 0).addScaledVector(R, -R.x);
@@ -6039,10 +5136,9 @@ export class CameraSystem {
   }
 
   /**
-   * @private The canonical chase-behind local pose: behind (t < 0) and slightly
-   * above (r > 0, n = 0) with the elevation of the shipped CHASE offset
-   * (offsetAbove / offsetBehind), so an Earth→ship descent lands where the
-   * shipped chase camera would sit.
+   * @private The canonical chase-behind local pose: behind (t < 0) and slightly above (r > 0, n = 0) with the elevation
+   * of the shipped CHASE offset (offsetAbove / offsetBehind), so an Earth→ship descent lands where the shipped chase
+   * camera would sit.
    */
   _ladderChaseLocal(out) {
     return out.set(this.chase.offsetAbove, -this.chase.offsetBehind, 0).normalize();
@@ -6083,7 +5179,7 @@ export class CameraSystem {
       eventBus.emit(Events.MOTHER_INSPECTION_ENGAGED, {});
       if (!this.orbit.inspectTaught) {
         this.orbit.inspectTaught = true;
-        if (this.testsSwitch) eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active', kind: 'inspect' });   // u6 D3
+        if (this.testsSwitch) eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active', kind: 'inspect' });   // developer line
       }
     } else {
       this._applyInspectDim(false);
@@ -6097,7 +5193,6 @@ export class CameraSystem {
    * @param {number} dt - real seconds
    * @param {THREE.Vector3} playerPos - live ship position (scene units)
    * @param {THREE.Vector3} velDir - unit ship velocity (zero when degenerate)
-   * @param {THREE.Vector3} radialDir - unit ship radial (playerPos normalized)
    * @private
    */
   _updateLadderCamera(dt, playerPos, velDir, radialDir) {
@@ -6109,9 +5204,8 @@ export class CameraSystem {
     const coastStep = coastStepS(this._ladderUpdateWallMs, wallNow);
     this._ladderUpdateWallMs = wallNow;
 
-    // H2 — the follow blend clock, ONCE per frame and before any anchor reader.
-    // A change of target (mother ↔ daughter, daughter A → B, loss) restarts the
-    // soft re-aim from the offset resolved last frame, so the anchor never jumps.
+    // The follow blend clock, ONCE per frame and before any anchor reader. A change of target (mother ↔ daughter,
+    // daughter A → B, loss) restarts the soft re-aim from the offset resolved last frame, so the anchor never jumps.
     const want = this._ladderFollowTarget();
     if (want !== lc.followArm) {
       lc.followFromOff.copy(lc.followLastOff);
@@ -6121,13 +5215,11 @@ export class CameraSystem {
       lc.followT = Math.min(1, lc.followT + dt / (VisualLaw.TIMINGS.SUBJECT_REAIM_MS / 1000));
     }
 
-    // reel-visible: advance the catch-focus blend (needs this frame's follow target; writes nothing of the ladder's).
     this._updateCatchFocus(dt, playerPos);
 
-    // B1: on a ship anchor the dolly direction is heading-relative — build the
-    // live orbital frame first (the drag and the direction rebuild below both
-    // need it), and seed the local pose from the world dir the FIRST time a
-    // ship-anchored frame runs after engage (byte-identical pose at engage).
+    // On a ship anchor the dolly direction is heading-relative: build the live orbital frame first (the drag and the
+    // direction rebuild below both need it), and seed the local pose from the world dir the FIRST time a ship-anchored
+    // frame runs after engage (byte-identical pose at engage).
     const shipAnchored = (lc.anchor === 'ship');
     if (shipAnchored) {
       this._ladderShipFrame(radialDir, velDir);
@@ -6138,14 +5230,14 @@ export class CameraSystem {
     }
 
     let ease = 0;
-    const wasRiding = lc.riding;   // Q10: the completion frame still counts as in-flight for the up rule
+    const wasRiding = lc.riding;   // the completion frame still counts as in-flight for the up rule
     if (lc.riding) {
       lc.rideT += dt / lc.rideDur;
       if (lc.rideT >= 1) {
         lc.rideT = 1;
         lc.riding = false;
       }
-      ease = cubicInOut(lc.rideT); // cubic in-out
+      ease = cubicInOut(lc.rideT);
       lc.curDistU = lerp(lc.rideFromDistU, lc.rideToDistU, ease);
       const fov = lerp(lc.rideFromFov, lc.rideToFov, ease);
       this._baseFov = fov;
@@ -6161,16 +5253,12 @@ export class CameraSystem {
       this._baseFov = lc.fov;
       this.camera.fov = lc.fov;
 
-      // F5/F6 drag-to-rotate (S4): rotate the dolly direction by the
-      // accumulated drag velocities — yaw around the floor's up-frame pole,
-      // pitch around camera-right clamped to ORBIT's pole window — then coast
-      // the speeds (ORBIT momentum, per second: ×damping per 1/60 s, snap to 0 below
-      // 6e-4 rad/s; _coastDrag). On a SHIP anchor (F5) the rotation is applied to the LOCAL pose
-      // — yaw about local R, pitch about local right — so a drag stays
-      // heading-relative as the ship orbits (B1), and the result is remembered
-      // per floor (D5) as the Earth→ship arrival pose. On an Earth anchor (F6)
-      // it rotates the inertial world dir about Earth-north, unchanged. The
-      // lookAt(anchorPos) below is unchanged. Rides never reach here
+      // Drag-to-rotate: rotate the dolly direction by the accumulated drag velocities (yaw around the floor's up-frame
+      // pole, pitch around camera-right clamped to ORBIT's pole window), then coast the speeds (ORBIT momentum, per
+      // second: ×damping per 1/60 s, snap to 0 below 6e-4 rad/s; _coastDrag). On a SHIP anchor the rotation is applied to
+      // the LOCAL pose (yaw about local R, pitch about local right) so a drag stays heading-relative as the ship orbits,
+      // and the result is remembered per floor as the Earth→ship arrival pose. On an Earth anchor it rotates the
+      // inertial world dir about Earth-north. The lookAt(anchorPos) below is unchanged. Rides never reach here
       // (non-riding branch), and ladderStartRide cancels in-flight drags.
       const dg = lc.drag;
       if ((dg.enabled || dg.touchEnabled) && (dg.hasPend || dg.velocityTheta !== 0 || dg.velocityPhi !== 0)) {
@@ -6189,7 +5277,7 @@ export class CameraSystem {
           if (target !== angle) v.applyAxisAngle(right, target - angle);
         }
         v.normalize();
-        if (turn.theta !== 0 || turn.phi !== 0) lc.viewReturn.moved = true;   // fb16 V3: a drag turn was applied this frame (the return's wait restarts)
+        if (turn.theta !== 0 || turn.phi !== 0) lc.viewReturn.moved = true;   // a drag turn was applied this frame (the return's wait restarts)
         if (shipAnchored && lc.floor != null) {
           const m = lc.dragMemory[lc.floor] || (lc.dragMemory[lc.floor] = new THREE.Vector3());
           m.copy(v);
@@ -6197,19 +5285,18 @@ export class CameraSystem {
       }
     }
 
-    // fb16 V1-V5: the view glides back to the floor's default after a pause (before the direction is rebuilt below).
     this._stepLadderViewReturn(coastStep, shipAnchored);
 
-    // u8-f4-frame-field — the turn to the focused field. Only on an Earth anchor (`dir` is the inertial view
-    // direction there) and never while a ride runs (a ride owns the camera; ladderStartRide cancels a running
-    // turn, this also keeps one stored mid-ride still). Each frame's dt is clamped to [0, 0.1] s so a stalled
-    // frame cannot jump the turn. The end is exact (dir = target), then the turn is gone and `dir` is inertial again.
+    // The turn to the focused field. Only on an Earth anchor (`dir` is the inertial view direction there) and never
+    // while a ride runs (a ride owns the camera; ladderStartRide cancels a running turn, this also keeps one stored
+    // mid-ride still). Each frame's dt is clamped to [0, 0.1] s so a stalled frame cannot jump the turn. The end is exact
+    // (dir = target), then the turn is gone and `dir` is inertial again.
     if (lc.earthTurn) {
       if (lc.anchor !== 'earth') {
         this.ladderCancelEarthTurn('anchor changed');
       } else if (!lc.riding) {
         const et = lc.earthTurn;
-        et.t += (Number.isFinite(dt) ? Math.min(Math.max(dt, 0), 0.1) : 0) / (et.s || EARTH_TURN_S);   // u10: a re-frame may be longer
+        et.t += (Number.isFinite(dt) ? Math.min(Math.max(dt, 0), 0.1) : 0) / (et.s || EARTH_TURN_S);   // a re-frame may be longer
         if (et.t >= 1) {
           lc.dir.copy(et.target);
           lc.earthTurn = null;
@@ -6219,12 +5306,10 @@ export class CameraSystem {
       }
     }
 
-    // B1 — resolve the world dolly direction for this frame. Ship anchor: the
-    // local pose on the LIVE frame (heading-relative, like CHASE); during an
-    // Earth→ship ride slerp from the frozen inertial start toward that live
-    // arrival vector on the ride's ease (endpoints exact: ease 0 = start,
-    // ease 1 = arrival). Earth anchor: `dir` is inertial and left untouched
-    // (a ship→Earth ride therefore freezes it at ride start).
+    // Resolve the world dolly direction for this frame. Ship anchor: the local pose on the LIVE frame (heading-relative,
+    // like CHASE); during an Earth→ship ride slerp from the frozen inertial start toward that live arrival vector on the
+    // ride's ease (endpoints exact: ease 0 = start, ease 1 = arrival). Earth anchor: `dir` is inertial and left
+    // untouched (a ship→Earth ride therefore freezes it at ride start).
     if (shipAnchored) {
       const arrival = this._ladderLocalToWorld(lc.local, lc._arrival);
       if (lc.riding && lc.rideDirSlerp) {
@@ -6243,9 +5328,8 @@ export class CameraSystem {
       }
     }
 
-    // Anchor position. During a ride the anchor is LERPED from the source frame's
-    // anchor to the destination's using the same cubic ease, so a cross-anchor
-    // crossing (ship→Earth, F5↔F6) flies smoothly instead of snapping the world
+    // Anchor position. During a ride the anchor is LERPED from the source frame's anchor to the destination's using the
+    // same cubic ease, so a cross-anchor crossing (ship→Earth, F5↔F6) flies smoothly instead of snapping the world
     // origin at ride start. Same-anchor rides (F4↔F5) are unaffected.
     let anchorPos;
     if (lc.riding && lc.rideAnchorFrom !== lc.anchor) {
@@ -6255,40 +5339,35 @@ export class CameraSystem {
     } else {
       anchorPos = this._anchorWorld(lc.anchor, playerPos, this._tmpVecB);
     }
-    this._ladderShipOffset(playerPos, lc.followLastOff);   // H2: where the next target change starts from
-    // reel-visible: the catch focus pulls the anchor toward the catch and the distance in to CATCH_FOCUS.DIST_U by
-    // its blend weight w. The ladder's own state (curDistU, dir, floor, rides) is not touched, so w = 0 is exactly
-    // the pose above. A ship-anchored frame only (a cross-anchor ride has already cancelled the focus).
+    this._ladderShipOffset(playerPos, lc.followLastOff);   // where the next target change starts from
+    // The catch focus pulls the anchor toward the catch and the distance in to CATCH_FOCUS.DIST_U by its blend weight
+    // w. The ladder's own state (curDistU, dir, floor, rides) is not touched, so w = 0 is exactly the pose above. A
+    // ship-anchored frame only (a cross-anchor ride has already cancelled the focus).
     let distU = lc.curDistU;
     let dirUse = lc.dir;
     const cf = this._catchFocus;
-    let lookPos = anchorPos;                       // where the camera looks: the anchor, or (reel-view B1) the piece, reached first
+    let lookPos = anchorPos;                       // where the camera looks: the anchor, or (reel view) the piece, reached first
     if ((cf.wa > 0 || cf.w > 0) && lc.anchor === 'ship' && !(lc.riding && lc.rideAnchorFrom !== lc.anchor)) {
       cf.base.copy(anchorPos);
       lookPos = cf.lookV.copy(anchorPos).addScaledVector(cf.look, cf.wa);
       anchorPos.addScaledVector(cf.off, cf.w);
-      // FB11: the reel view stands at ITS distance, never nearer than the safe shot (a shorter saved ladder distance used to
+      // The reel view stands at ITS distance, never nearer than the safe shot (a shorter saved ladder distance used to
       // win the min and put a 5 m catch inside the 3 m near plane); the catch focus proper keeps the nearer of the two
       const focusDist = ((cf.reelView || cf.phase === 'station' || cf.zoomed) && cf.safeDist > 0) ? Math.max(cf.dist, cf.safeDist) : Math.min(lc.curDistU, cf.dist);
       distU += (focusDist - lc.curDistU) * cf.w;
       if (cf.dirSeeded) dirUse = this._catchFocusBlendDir(lc.dir, cf.dir, cf.w, cf.v, cf.azKeep);   // never over the radial pole
     }
-    // camera = anchor + dir * distance
     this.camera.position.copy(anchorPos).addScaledVector(dirUse, distU);
     if (lookPos !== anchorPos && cf.w > 0) { cf.camRel.copy(this.camera.position).sub(cf.base); cf.camRelOk = true; } else cf.camRelOk = false;
-    // Up-frame (Q10 — "one change at a time: the roll is its own phase"). On-
-    // floor (and same-anchor rides) the up rule is exact: radial for a ship
-    // anchor (roll-free), Earth-north for an earth anchor. Cross-anchor rides
-    // (F5↔F6) are asymmetric so the horizon never rolls during the fast part of
-    // the flight:
-    //   UP   (ship→Earth): the up captured at ride start is HELD for the whole
-    //        flight; on completion the `leveling` phase levels it to Earth-north
-    //        over LADDER_LEVEL_MS (cubic in-out) and exactness resumes after.
-    //   DOWN (Earth→ship): roll from the start up to the LIVE ship-radial during
-    //        the first LADDER_DOWN_ROLL_FRAC of the ride (the dolly barely moves
-    //        there), fully ship-up before the dive dominates.
-    // `wasRiding` classifies the completion frame as still-in-flight so the
-    // held up is what the ride ends on (no snap into the level phase).
+    // Up-frame ("one change at a time: the roll is its own phase"). On-floor (and same-anchor rides) the up rule is
+    // exact: radial for a ship anchor (roll-free), Earth-north for an earth anchor. Cross-anchor rides (F5↔F6) are
+    // asymmetric so the horizon never rolls during the fast part of the flight:
+    //   UP   (ship→Earth): the up captured at ride start is HELD for the whole flight; on completion the `leveling`
+    //        phase levels it to Earth-north over LADDER_LEVEL_MS (cubic in-out) and exactness resumes after.
+    //   DOWN (Earth→ship): roll from the start up to the LIVE ship-radial during the first LADDER_DOWN_ROLL_FRAC of the
+    //        ride (the dolly barely moves there), fully ship-up before the dive dominates.
+    // `wasRiding` classifies the completion frame as still-in-flight so the held up is what the ride ends on (no snap
+    // into the level phase).
     const crossRide = wasRiding && lc.rideAnchorFrom !== lc.anchor;
     if (crossRide && lc.anchor === 'earth') {
       this.camera.up.copy(lc._upStart);
@@ -6311,25 +5390,16 @@ export class CameraSystem {
     } else {
       this._ladderUpFor(lc.anchor, radialDir, this.camera.up);
     }
-    // Wave 5 (3) — the look-at bias (08-workbench §2; F3 before the Session H
-    // renumber, floor 1 until Session J). Target = the requested pane inset
-    // on EVERY engaged floor (Session J, plan D-C: the SPECS drawer lives on
-    // every floor, so the subject reframes into the uncovered strip wherever
-    // a drawer covers an edge — the D-M lift named for Session J, item 3):
-    // the request itself is the ONE pane edge (main.js _syncWorkbenchPanes),
-    // 0 when no drawer is open, so a ride away with the drawer closing drops
-    // the bias exactly as before; a ride with the drawer OPEN carries the bias
-    // to the destination floor. On a target edge the ease re-arms from the
-    // CURRENT value (a reversal mid-ease never snaps); reduced motion settles
-    // at once. The bias is a pure YAW about the camera's own up AFTER the
-    // shipped lookAt: by θ = atan(tan(fov/2) · aspect · b), b = inset /
-    // viewport width, so the anchor projects to x_ndc = b exactly (y_ndc stays
-    // 0) — the centre of the uncovered strip, on ship- and Earth-anchored
-    // floors alike. (Offsetting the look-at point instead would let lookAt
-    // re-orthogonalize the radial up against the new forward → a residual
-    // tilt; the yaw keeps the up exact.) Position, distance, up and the dolly
-    // frame above are untouched; bias 0 → no rotation, the pre-Wave-5 (3)
-    // frame byte-for-byte.
+    // The look-at bias (08-workbench §2). Target = the requested pane inset on EVERY engaged floor (the SPECS drawer
+    // lives on every floor, so the subject reframes into the uncovered strip wherever a drawer covers an edge): the
+    // request itself is the ONE pane edge (main.js _syncWorkbenchPanes), 0 when no drawer is open, so a ride away with
+    // the drawer closing drops the bias; a ride with the drawer OPEN carries the bias to the destination floor. On a
+    // target edge the ease re-arms from the CURRENT value (a reversal mid-ease never snaps); reduced motion settles at
+    // once. The bias is a pure YAW about the camera's own up AFTER the shipped lookAt: by θ = atan(tan(fov/2) · aspect ·
+    // b), b = inset / viewport width, so the anchor projects to x_ndc = b exactly (y_ndc stays 0): the centre of the
+    // uncovered strip, on ship- and Earth-anchored floors alike. (Offsetting the look-at point instead would let lookAt
+    // re-orthogonalize the radial up against the new forward → a residual tilt; the yaw keeps the up exact.) Position,
+    // distance, up and the dolly frame above are untouched; bias 0 → no rotation.
     const insetTarget = lc.paneInsetPx;
     if (insetTarget !== lc.paneBiasTo) {
       lc.paneBiasFrom = lc.paneBiasPx;
@@ -6352,17 +5422,12 @@ export class CameraSystem {
     }
     this.camera.updateProjectionMatrix();
 
-    // Fire the ride-complete callback once, AFTER the final pose is written.
     if (!lc.riding && lc.onDone) {
       const cb = lc.onDone;
       lc.onDone = null;
       cb();
     }
   }
-
-  // ==========================================================================
-  // VIEW INDICATOR HUD
-  // ==========================================================================
 
   /** @private Create the view mode indicator overlay element */
   _createViewIndicator() {
@@ -6371,8 +5436,7 @@ export class CameraSystem {
 
     this._viewIndicator = document.createElement('div');
     this._viewIndicator.id = 'camera-view-indicator';
-    // Delegation 4 (2026-05-31) — Browser-playtest: moved from top:60
-    // (blocked info near comms panel header) down to top:140.
+    // Moved from top:60 (blocked info near the comms panel header) down to top:140.
     this._viewIndicator.style.cssText = `
       position: absolute; top: 140px; left: 50%; transform: translateX(-50%);
       font-family: var(--font-mono); font-size: 0.85rem;
@@ -6387,14 +5451,9 @@ export class CameraSystem {
   }
 
   /**
-   * @private Drive the in-engine inspect background dim.
-   * The dim is a fullscreen vignette drawn in NearFieldRenderPass, in the seam
-   * between the far beauty pass and the near (ship) pass, so it darkens ONLY the
-   * surroundings (Earth/stars/debris) and never the ship or the callout layer.
-   * Replaces the old #inspection-vignette DOM overlay, which painted over the
-   * whole canvas and unevenly dimmed the callout cards. No-op in headless tests
-   * (no sceneManager).
-   * @param {boolean} on
+   * @private Drive the in-engine inspect background dim: a fullscreen vignette drawn in NearFieldRenderPass, in the
+   * seam between the far beauty pass and the near (ship) pass, so it darkens ONLY the surroundings (Earth/stars/debris)
+   * and never the ship or the callout layer. No-op in headless tests (no sceneManager).
    */
   _applyInspectDim(on) {
     const dim = Constants.INSPECTION?.DIM ?? 0.6;
@@ -6410,7 +5469,7 @@ export class CameraSystem {
     // get stuck in LOOK AROUND (or the legacy INSPECTION view) unknowingly.
     const isDefault = view === CameraViews.CHASE;
 
-    // u16b fix 1: glass has no V or 1-4 keys, so the badge is the bare label there (read at draw time, desktop unchanged).
+    // Glass has no V or 1-4 keys, so the badge is the bare label there (read at draw time, desktop unchanged).
     const glass = GestureHints.isGlass();
     if (view === CameraViews.ARM_PILOT) {
       this._viewIndicator.textContent = glass ? `${VIEW_LABELS[view]}` : `${VIEW_LABELS[view]}  [1-4]`;
@@ -6437,22 +5496,15 @@ export class CameraSystem {
     this._viewIndicator.style.opacity = '0';
   }
 
-  // ==========================================================================
-  // CLEANUP
-  // ==========================================================================
-
-  /**
-   * Remove event listeners (call on destroy).
-   */
+  /** Remove event listeners (call on destroy). */
   dispose() {
-    // F3: drain eventBus subscriptions so a disposed instance can never re-arm
-    // a ceremony (and pin CeremonyTimeScale) on a later NET_CEREMONY_START.
+    // Drain eventBus subscriptions so a disposed instance can never re-arm a ceremony (and pin CeremonyTimeScale) on a
+    // later NET_CEREMONY_START.
     if (this._unsubs) {
       for (const off of this._unsubs) { try { off(); } catch { /* already gone */ } }
       this._unsubs.length = 0;
     }
-    // If this instance is tearing down mid-ceremony, hand the world clock back
-    // (§6 R1) rather than leaving the global time scale pinned.
+    // Tearing down mid-ceremony: hand the world clock back (§6 R1) rather than leave the global time scale pinned.
     if (this._netCeremony && this._netCeremony.active) {
       this._exitNetCeremony(false);
     }
@@ -6467,7 +5519,6 @@ export class CameraSystem {
       this._viewIndicator.parentNode.removeChild(this._viewIndicator);
     }
 
-    // Remove fill + rim lights from scene
     if (this._fillLight && this._scene) {
       this._scene.remove(this._fillLight);
       this._fillLight = null;
@@ -6480,7 +5531,6 @@ export class CameraSystem {
 
   /**
    * Whether this camera system should suppress OrbitControls.
-   * @returns {boolean} true if orbit controls should be disabled
    */
   isActive() {
     return true; // CameraSystem always manages the camera when active

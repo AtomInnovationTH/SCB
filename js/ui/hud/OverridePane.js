@@ -1,141 +1,88 @@
 /**
- * OverridePane.js — the SAFETY OVERRIDE demo panel (owner brief 2026-09-06/07;
- * .kilo/plans/1788703905516-safety-override-panel.md, decisions D1–D9).
+ * The SAFETY OVERRIDE demo panel (owner brief 2026-09-06/07): a big cockpit button at the bottom-centre of the HUD. Pressing it slides a 2×2
+ * grid up out of it — DAUGHTERS · RADIATOR / ROSA · FURNACE. Three tap the ship's REAL deploy/retract hardware;
+ * FURNACE has no hardware and is an obviously-broken button that runs a klaxon → "furnace offline" → "containment
+ * failing" → fake self-destruct → 10 s black-screen gag with a POST screen, a systems reboot and a dry word from
+ * Houston.
  *
- * A big sci-fi cockpit button labelled SAFETY OVERRIDE at the bottom-centre of
- * the HUD. Pressing it slides a 2×2 grid up out of it — DAUGHTERS · RADIATOR /
- * ROSA · FURNACE. Three of the four tap the ship's REAL deploy/retract
- * hardware; the fourth has no hardware and is an obviously-broken, fritzing
- * button that runs a klaxon → "furnace offline" → "containment failing" →
- * fake self-destruct → 10 s black-screen gag with a POST screen, a systems
- * reboot and a dry word from Houston.
+ * Control law: the panel receives the SAME `actuators` object the hub builds for RefitPane (`{ rosaFurl,
+ * rosaFeather, struts, flower, flowerSweep }`, each `{ get(), toggle() }`): a tap calls `toggle()` (reverses the
+ * COMMANDED state, plays the click, emits the input event), then `refresh()` re-reads truth through `get()`. Never
+ * an optimistic label flip, never a second click blip (the closure owns the sound).
  *
- * Control law (D1) = SHIPPED. The panel receives the SAME `actuators` object
- * the hub builds for RefitPane (`{ rosaFurl, rosaFeather, struts, flower,
- * flowerSweep }`, each `{ get(), toggle() }`): a tap calls `toggle()` — which
- * reverses the COMMANDED state, plays the click and emits the input event —
- * and then `refresh()` re-reads truth through `get()`. Never an optimistic
- * label flip, never a second click blip (the closure owns the sound).
+ * Mapping: DAUGHTERS → `struts` · RADIATOR → `flowerSweep` · ROSA → `rosaFurl` · FURNACE → the gag.
+ * `rosaFeather` is NOT on the panel.
  *
- * Mapping (D2): DAUGHTERS → `struts` · RADIATOR → `flowerSweep` (the THERMAL
- * family's part is literally "RADIATOR PLATES") · ROSA → `rosaFurl` · FURNACE →
- * the gag. `rosaFeather` is NOT on the panel.
+ * RADIATOR: owner 2026-09-09: pressing override and then "O" or the radiator button must show the full range of
+ * radiator-strut motion. The chip reads `flowerSweep`: FOLDED (LAUNCH geometry, θ 0) ↔ DEPLOYED (146°), 'SLEWING'
+ * while moving; a tap runs PlayerSatellite.toggleFlowerOverride (the whole 146° travel, a press mid-swing reverses),
+ * which the hub only honours while this pane is engaged (`isExpanded()`). The REFIT chip keeps the `flower` STOW ↔
+ * CARGO law. `aria-pressed` = DEPLOYED (the hardware is OUT).
  *
- * RADIATOR (owner amendment 2026-09-09, plan
- * .kilo/plans/1788863400000-radiator-launch-fold-redesign.md last section):
- * "when player presses override button, and press "O" or clicks radiator
- * button, they need to see how radiator struts move, full range of motion".
- * The chip therefore reads the hub's `flowerSweep` actuator — FOLDED (the
- * LAUNCH geometry, θ 0, packs along the barrel, wings folded) ↔ DEPLOYED (the
- * STOW bud 146°), 'SLEWING' while moving; a tap runs
- * PlayerSatellite.toggleFlowerOverride (the whole 146° travel, a press
- * mid-swing reverses), which the hub only honours while this pane is engaged
- * (`isExpanded()`). The REFIT chip keeps the shipped `flower` STOW ↔ CARGO law.
- * `aria-pressed` = DEPLOYED (the hardware is OUT).
+ * Home: a pane-density rung the hub adds as the last MEMBER of the `experimental` composite (the ladder's index 0,
+ * lowest priority): hidden by default on every floor (FloorMask `MASK_PANES.override`, every `DEFAULT_ROOMS` row
+ * 'gone', `memory: true`), the LAST `+` reveals it and the FIRST `-` sheds it. The root is constructed with
+ * `data-density-hidden`; that attribute is THE one visibility bit (this module never writes display:none).
  *
- * Home (D3; ladder reorder rev 3): a pane-density rung the hub adds as the
- * last MEMBER of the `experimental` composite (the ladder's index 0 — the
- * lowest priority: hidden by default on every floor (FloorMask `MASK_PANES.override`,
- * every `DEFAULT_ROOMS` row 'gone', `memory: true`), the LAST `+` reveals it
- * and the FIRST `-` sheds it. The root is constructed with `data-density-hidden`
- * set; that attribute is THE one visibility bit (the module never writes
- * display:none itself).
+ * Placement (owner 2026-09-09: "almost at bottom"): STATIC. A DIRECT child of `#hud-overlay` wearing `.hud-panel`
+ * but WITHOUT the plate (the sheet's id rule beats the class); `bottom: max(12px, env(safe-area-inset-bottom, 0px))`,
+ * `left: 50%` / `translateX(-50%)`, written ONCE in `_build`. Inside the glass thumb-rest band by design, and
+ * outside the edge-wake footer band (132–164), so a press wakes nothing. The root is `pointer-events: none`; only
+ * `.ovr-main` and the OPEN grid take pointer events, so a drag beside the button reaches the canvas. Never a side
+ * column (the columns dim under the F1 callouts).
  *
- * Placement (D4; follow-up 2026-09-09, owner: "almost at bottom" — plan
- * .kilo/plans/1788926404388-hud-followups-0909.md §1.1–6): STATIC. A DIRECT
- * child of `#hud-overlay` wearing `.hud-panel` but WITHOUT the plate
- * (transparent, no border, padding 0 — the sheet's id rule beats the class);
- * `bottom: max(12px, env(safe-area-inset-bottom, 0px))`, `left: 50%` /
- * `translateX(-50%)`, written ONCE in `_build`. Inside the glass thumb-rest
- * band by design: bottom-centre is the most reachable spot (the STORE-chip
- * precedent at bottom 12), and a press there is outside the edge-wake footer
- * band (132–164), so it wakes nothing. The root is `pointer-events: none`;
- * only `.ovr-main` (the 260 × 64 button, `margin: 0 auto` inside the 324
- * grid plate) and the OPEN grid take pointer events, so a drag beside the
- * button reaches the canvas. `setDodge` is RETIRED — nothing is fed per
- * frame. Never a side column (the columns dim under the F1 callouts).
+ * The bottom-centre stacking law (offsets from the viewport bottom): 12–76 gag (20–84 on an iPad with a 20 px
+ * inset) · 88–124 hint ticker · 120 salvage popup (legacy) · 132 toast (`HUD.toastBottomPx`) · 132–164 footer band,
+ * free centre · 148 F1 breadcrumb · 170 warnings · 172 ARM PILOT strip (`HUD.armPilotStripBottomPx`).
+ * `?ladder=0` keeps toast 48 / strip 12 and builds no gag.
  *
- * The bottom-centre stacking law (offsets from the viewport bottom): 12–76
- * gag (20–84 on an iPad with a 20 px inset) · 88–124 hint ticker · 120 salvage
- * popup (legacy) · 132 toast (`HUD.toastBottomPx`) · 132–164 footer band, free
- * centre · 148 F1 breadcrumb · 170 warnings · 172 ARM PILOT strip
- * (`HUD.armPilotStripBottomPx`). `?ladder=0` keeps toast 48 / strip 12 and
- * builds no gag.
+ * CTA: two lines — `.ovr-main-title` "SAFETY OVERRIDE" over `.ovr-main-cta` "PRESS TO TEST ACTUATORS" /
+ * "PRESS TO CLOSE" (pure `mainLabel(expanded)`; the cta inherits CAUTION / PLAYER from the button).
  *
- * CTA: two lines — `.ovr-main-title` "SAFETY OVERRIDE" over `.ovr-main-cta`
- * "PRESS TO TEST ACTUATORS" / "PRESS TO CLOSE" (pure `mainLabel(expanded)`;
- * house uppercase; the cta inherits CAUTION / PLAYER from the button).
+ * The tempting button (owner 2026-09-09, gag v2: "more tempting"): hazard tape top and bottom
+ * (`.ovr-main::before/::after`, 6 px CAUTION / near-black stripes),
+ * a live lamp before the title (`.ovr-main-title::before`). Open ⇒ tape and lamp turn PLAYER with the button. No new
+ * DOM, pseudo-elements only; every colour is `VisualLaw.COLORS`. The ONE motion: a one-shot `ovr-attract` blink
+ * (ATTRACT_MS, three blinks) when the rung REVEALS the panel (hidden → visible), removed by a tracked timer; never
+ * on expand, never idle, never under reduced motion. CAUTION stays steady otherwise (colour law: only THREAT pulses).
  *
- * The tempting button (gag v2, owner 2026-09-09; plan
- * .kilo/plans/1788957399035-furnace-gag-v2.md §1.A): 260 × 64 (was 220 × 56),
- * hazard tape top and bottom (`.ovr-main::before/::after`, 6 px CAUTION /
- * near-black stripes, opacity 0.7, 1 on hover), a live lamp before the title
- * (`.ovr-main-title::before`, a 7 px CAUTION disc with a glow), a deeper hatch
- * (0.18) and glow (0.16). Open ⇒ tape and lamp turn PLAYER with the button.
- * No new DOM — pseudo-elements only; every colour is `VisualLaw.COLORS`. The
- * ONE motion: a one-shot `ovr-attract` blink (ATTRACT_MS 900, three blinks)
- * when the rung REVEALS the panel (hidden → visible), removed by a tracked
- * timer; never on expand, never idle, never under reduced motion. CAUTION
- * stays steady otherwise (the colour law: only THREAT pulses).
+ * Grid open hides what it would cover: `expand()` sets `body[data-ovr-open]`; `collapse()`, `dispose()` and a
+ * GAME_STATE_CHANGE away from gameplay clear it; the sheet hides `#hud-hint-ticker`, `#notification-zone` and
+ * `#arm-pilot-controls` under it (the ticker is z 8000 on body, above the overlay's grid).
  *
- * Grid open hides what it would cover: `expand()` sets `body[data-ovr-open]`;
- * `collapse()`, `dispose()` and a GAME_STATE_CHANGE away from gameplay clear
- * it; the sheet hides `#hud-hint-ticker`, `#notification-zone` and
- * `#arm-pilot-controls` under it (the ticker is z 8000 on body, above the
- * overlay's grid).
+ * Reveal = slide-up in SLIDE_MS; `prefers-reduced-motion` → no transition, no fritz keyframes (steady dim +
+ * FAULT), no shake, no pulse.
  *
- * Reveal (D5) = slide-up: the grid translates up out of the main button in
- * SLIDE_MS (one curve, the RefitPane 270 ms); `prefers-reduced-motion` → no
- * transition, no fritz keyframes (steady dim + FAULT), no shake, no pulse.
+ * The FURNACE gag (owner 2026-09-09, v2) touches NO game state: IDLE → WARN → OVERHEAT → COUNTDOWN → BLACKOUT → RECOVER → IDLE, every timer
+ * through the injected setTimeout/clearTimeout so the FSM runs in Node on fake time. TWO presses arm it
+ * (`PRESSES_TO_ARM`): press 1 = klaxon + THREAT vignette pulse + shake + "Do NOT press that again."; press 2 = the
+ * same alarm + "Furnace overheating. Containment failing." and, OVERHEAT_MS later, the countdown (SELF DESTRUCT
+ * INITIATED, 5 … 1; every numeral change ticks the injected click; the CANCEL button is broken by design). The tick
+ * after 1 is the hit: `audio.playCollision` + a 300 ms haptic + the black veil — a DOM element with a known id
+ * (`#hud-override-veil`) that swallows POINTER events only (Esc still reaches the game). Five seconds of pure black,
+ * then the POST screen (`.ovr-post` inside the veil, ten ASCII lines one per POST_LINE_MS), the CRT tail from
+ * T+8500, RECOVER at T+10000. RECOVER asks the injected systems reboot (`deps.reboot`, HudReboot) to darken every
+ * visible HUD element FIRST, then flickers the veil three times and lifts it onto the bare world and waits for the
+ * reboot's `onDone` (the panels return top → bottom) before the run closes; without the dep (or webdriver / reduced
+ * motion / a `false` return) it is the flickers → IDLE at once. No FURNACE line closes the run. Then
+ * HOUSTON_DELAY_MS later Houston: "Cowboy, did you read the manual." — escalating over the session's runs
+ * (`gagRuns()`, never persisted), "manual" a SPECS deep link (`HOUSTON_LINK`: page one of the manual, landing on its
+ * WARNING box). `navigator.webdriver` builds no veil at all (it must never be mistaken for the real black-screen bug
+ * class, BLACK_SCREEN_TRIAGE.md), so no POST and no reboot either. A GAME_STATE_CHANGE away from gameplay,
+ * GAME_RESET, the rung hiding the panel, a collapse or a dispose aborts and disposes everything at once: the reboot
+ * cancelled (no dark panel left behind), the Houston line dropped.
  *
- * The FURNACE gag (D6; v2 owner 2026-09-09, plan
- * .kilo/plans/1788957399035-furnace-gag-v2.md §1.B) touches NO game state:
- * IDLE → WARN → OVERHEAT → COUNTDOWN → BLACKOUT → RECOVER → IDLE, every timer
- * through the injected setTimeout/clearTimeout so the FSM runs in Node on fake
- * time. TWO presses arm it (`PRESSES_TO_ARM`): press 1 = klaxon + THREAT
- * vignette pulse + shake + "Do NOT press that again."; press 2 = the same alarm
- * + "Furnace overheating. Containment failing." and, OVERHEAT_MS later, the
- * countdown (SELF DESTRUCT INITIATED, 5 … 1 — every numeral change ticks the
- * injected click; the CANCEL button is broken by design). The tick after 1 is
- * the hit: `audio.playCollision` + a 300 ms haptic + the black veil — a DOM
- * element with a known id (`#hud-override-veil`) that swallows POINTER events
- * only (Esc still reaches the game). Five seconds of pure black, then the POST
- * screen (`.ovr-post` inside the veil, ten ASCII lines one per POST_LINE_MS —
- * FURNACE CTRL fails twice), the CRT tail from T+8500, RECOVER at T+10000.
- * RECOVER asks the injected systems reboot (`deps.reboot`, Lane B's HudReboot)
- * to darken every visible HUD element FIRST, then flickers the veil three
- * times and lifts it onto the bare world — "view 0" — and waits for the
- * reboot's `onDone` (the panels return top → bottom) before the run closes;
- * without the dep (or webdriver / reduced motion / a `false` return) it is
- * the flickers → IDLE at once, as before. No FURNACE line closes the run (the
- * RECOVER line was retired 2026-09-09, §7.28). Then HOUSTON_DELAY_MS later
- * Houston: "Cowboy, did you read the manual." — escalating over the session's
- * runs (`gagRuns()`, never persisted), "manual" a SPECS deep link
- * (`HOUSTON_LINK`: page one of the manual, landing on its WARNING box — plan
- * §7.26–28). `navigator.webdriver` builds no veil at
- * all (harness determinism — it must never be mistaken for the real
- * black-screen bug class, BLACK_SCREEN_TRIAGE.md), so no POST and no reboot
- * either. A GAME_STATE_CHANGE away from gameplay, GAME_RESET, the rung hiding
- * the panel, a collapse or a dispose aborts and disposes everything at once —
- * the reboot cancelled (no dark panel left behind), the Houston line dropped.
+ * F1 BAR (DECISIONS §15 row 9): the same four buttons as a flat always-visible bar at the bottom centre of F1 —
+ * `#hud-f1-bar`, a SIBLING root built here and sharing the gag, the actuators and the label/click machinery. Plain
+ * labels with a live state word under each (WINGS · DAUGHTERS · RADIATORS · FURNACE); no hazard-tape main button,
+ * no slide-up. Its ONE visibility bit is FloorMask's `data-floor-gone` (MASK_PANES.f1bar, an attribute pane, shown
+ * on F1 only); styling is injected CSS, never inline. RADIATOR reads / drives the hub's `flowerDeploy` actuator (the
+ * O key's plain toggle, never the override sweep) and a tap inside `tapDebounceMs` of the last one is dropped, so a
+ * touch double-tap can never VENT. FURNACE is the same joke until the furnace is built.
  *
- * F1 BAR (owner 2026-10-08, DECISIONS §15 row 9; plan w2-f1-bar): the same four
- * buttons, as a flat always-visible bar at the bottom centre of F1 —
- * `#hud-f1-bar`, a SIBLING root built here and sharing the gag, the actuators and
- * the label/click machinery. Plain labels with a live state word under each
- * (WINGS · DAUGHTERS · RADIATORS · FURNACE); no hazard-tape main button, no slide-up.
- * Its ONE visibility bit is FloorMask's `data-floor-gone` (MASK_PANES.f1bar, an
- * attribute pane, shown on F1 only); styling is injected CSS, never inline
- * styles. RADIATOR reads / drives the hub's `flowerDeploy` actuator (the O key's
- * plain toggle, never the override sweep) and a tap inside `tapDebounceMs` of the
- * last one is dropped, so a touch double-tap can never VENT. FURNACE is the same
- * joke until the furnace is built. `#hud-override-pane` is unchanged.
- *
- * Everything lives inside the `Constants.LADDER.ENABLED` gate — the hub
- * constructs the pane only there. NO live singletons are imported here (the
- * one import is VisualLaw, pure data): bus / events / audio / reboot / timers /
- * clock are all injected (Node-testable; the reboot is tested against a fake —
- * this module never imports HudReboot).
+ * Everything lives inside the `Constants.LADDER.ENABLED` gate — the hub constructs the pane only there. NO live
+ * singletons are imported (the one import is VisualLaw, pure data): bus / events / audio / reboot / timers / clock
+ * are all injected (Node-testable; the reboot is tested against a fake).
  *
  * @module ui/hud/OverridePane
  */
@@ -153,20 +100,19 @@ export const OVERRIDE_VIGNETTE_ID = 'hud-override-vignette';
 export const OVERRIDE_KEYS = Object.freeze(['daughters', 'radiator', 'rosa', 'furnace']);
 
 export const OVERRIDE_GEOMETRY = Object.freeze({
-  MAIN_W_PX: 260,          // the big button's FIXED width (`margin: 0 auto` inside the 324 grid plate); was 220 (gag v2 2026-09-09: more tempting)
-  MAIN_H_PX: 64,           // was 56 (72 before that) — two lines + the 6 px hazard bands top and bottom; 12 + 64 = 76 < the ticker's 88
-  MAIN_GLASS_MIN_H_PX: 64, // was 56 — still ≥ 44 pt (Apple HIG)
+  MAIN_W_PX: 260,          // the big button's FIXED width (`margin: 0 auto` inside the 324 grid plate)
+  MAIN_H_PX: 64,           // two lines + the 6 px hazard bands top and bottom; 12 + 64 = 76 < the ticker's 88
+  MAIN_GLASS_MIN_H_PX: 64, // ≥ 44 pt (Apple HIG)
   BOTTOM_PX: 12,           // the root's CSS bottom floor: max(12px, env(safe-area-inset-bottom, 0px))
-  BTN_W_PX: 150,           // grid buttons: desktop >= 44 px tall, glass >= 44x44 (Apple HIG 44 pt)
+  BTN_W_PX: 150,           // grid buttons: desktop >= 44 px tall, glass >= 44x44 (HIG 44 pt)
   BTN_H_PX: 44,
   BTN_GLASS_MIN_PX: 44,
   GAP_PX: 8,               // grid gap AND the gap between the grid plate and the main button
-  SLIDE_MS: 270,           // motion law: one curve, 240-300 ms (RefitPane uses 270)
+  SLIDE_MS: 270,           // motion law: one curve, 240-300 ms (RefitPane 270)
 });
 
 /** The F1 bar (DECISIONS §15 row 9): a root of its own, beside the override pane. */
 export const F1_BAR_ID = 'hud-f1-bar';
-/** Bar order, left → right. */
 export const F1_BAR_KEYS = Object.freeze(['wings', 'struts', 'radiator', 'furnace']);
 export const F1_BAR_GEOMETRY = Object.freeze({
   BTN_W_PX: 94,            // each button (owner's floor 88); 4 x 94 + 3 x 8 = 400 keeps the bar clear of a 380 px drawer at 1180 wide
@@ -175,25 +121,24 @@ export const F1_BAR_GEOMETRY = Object.freeze({
   BOTTOM_PX: 12,           // CSS bottom floor: max(12px, env(safe-area-inset-bottom, 0px)); the bar's top is 12 + 48 = 60 < the hint ticker's 88
   TICK_MS: 500,            // the bar's live-state refresh (struts have no arrival event)
   HOLD_VENT_MS: 450,       // a press held this long on RADIATORS sends 180° (= TouchControls' radial holdMs; deps.holdMs overrides)
-  HOLD_SWALLOW_MS: 1000,   // the click after a hold's release is swallowed for this long; a long press that sends no click never eats a later tap
+  HOLD_SWALLOW_MS: 1000,   // the click after a hold's release is swallowed this long; a long press with no click never eats a later tap
   TAP_DEBOUNCE_MS: 600,    // = Constants.THERMAL.FLOWER.VENT_DOUBLE_TAP_MS (main.js passes the live value as deps.tapDebounceMs)
-  // The override pane pulled out on F1 (the panel-count +) sits at the same bottom-centre spot
-  // (12 + 64): the bar lifts above it AND above the transient hint band (Constants.ONBOARDING.TICKER
-  // BOTTOM_PX 88 + ROW_HEIGHT_PX 36 + 8 = 132). With its grid open the bar hides (the grid IS the
-  // four buttons; two RADIATOR buttons doing different things at once would confuse).
+  // The override pane pulled out on F1 sits at the same bottom-centre spot (12 + 64): the bar lifts above it AND
+  // above the hint band (Constants.ONBOARDING.TICKER BOTTOM_PX 88 + ROW_HEIGHT_PX 36 + 8 = 132). With its grid open
+  // the bar hides (two RADIATOR buttons doing different things at once would confuse).
   LIFT_OVER_HINT_PX: 132,
-  // Drawer open: the bar centre keeps at least clamp(380px, 28vw, 440px) (WorkbenchPane's width,
-  // pinned by test-F1Bar) + DRAWER_GAP_PX + half the bar from the left edge — clear of the drawer
-  // and of the SPECS tab riding its inner edge (measured 59-60 wide). Wide screens stay centred.
+  // Drawer open: the bar centre keeps at least clamp(380px, 28vw, 440px) (WorkbenchPane's width, pinned by
+  // test-F1Bar) + DRAWER_GAP_PX + half the bar from the left edge, clear of the drawer and of the SPECS tab riding
+  // its inner edge (measured 59-60 wide). Wide screens stay centred.
   DRAWER_GAP_PX: 72,
-  // FURNACE on the bar has no expand/collapse to reset the two-press joke: a WARN left this long
-  // (or the bar hidden) goes back to IDLE, so press 2 is a deliberate second press. Design value.
+  // FURNACE on the bar has no expand/collapse to reset the two-press joke: a WARN left this long (or the bar
+  // hidden) goes back to IDLE, so press 2 is a deliberate second press.
   FURNACE_RESET_MS: 30000,
 });
 
 export const FURNACE_GAG = Object.freeze({
-  PRESSES_TO_ARM: 2,       // gag v2: press 1 WARN, press 2 OVERHEAT → COUNTDOWN (was three presses)
-  KLAXON_S: 2,             // both presses; AudioSystem's klaxon is single-instance (a second call while one sounds is ignored)
+  PRESSES_TO_ARM: 2,       // press 1 WARN, press 2 OVERHEAT → COUNTDOWN
+  KLAXON_S: 2,             // both presses; AudioSystem's klaxon is single-instance (a call while one sounds is ignored)
   VIGNETTE_MS: 2000,       // WARN: THREAT vignette pulse (real alarms); gag chrome is CAUTION steady
   VIGNETTE_HZ: 2,
   SHAKE_MS: 600,
@@ -201,18 +146,17 @@ export const FURNACE_GAG = Object.freeze({
   COUNTDOWN_FROM: 5,
   COUNTDOWN_STEP_MS: 1000,
   BLACKOUT_MS: 10000,
-  POST_START_MS: 5000,     // 5 s pure black, then the POST lines
-  POST_LINE_MS: 450,       // one POST line per 450 ms (T+5000 … T+9050)
+  POST_START_MS: 5000,     // pure black, then the POST lines
+  POST_LINE_MS: 450,       // T+5000 … T+9050
   CRT_TAIL_MS: 1500,
   RECOVER_FLICKERS: 3,
   RECOVER_FLICKER_MS: 80,
   HOUSTON_DELAY_MS: 1500,  // the Houston line lands this long after the run closes (veil off / reboot done)
-  ATTRACT_MS: 900,         // the one-shot reveal blink on the main button (three blinks; never under reduced motion)
+  ATTRACT_MS: 900,         // the one-shot reveal blink on the main button (three blinks)
   CANCEL_RATE_MS: 400,
 });
 
 export const FURNACE_SENDER = 'FURNACE';
-/** Houston's payload keys (`source` + `channel`) — the house voice, dry, green. */
 export const HOUSTON_SOURCE = 'HOUSTON';
 
 export const FURNACE_LINES = Object.freeze({
@@ -220,17 +164,12 @@ export const FURNACE_LINES = Object.freeze({
   OVERHEAT: Object.freeze({ text: 'WARNING: Furnace overheating. Containment failing.', priority: 'warning' }),
   ARMED:    Object.freeze({ text: 'CRITICAL: Self-destruct sequence initiated.', priority: 'critical' }),
   CANCEL:   Object.freeze({ text: 'CAUTION: Cancel circuit not responding.', priority: 'caution' }),
-  // RECOVER ("Furnace: still offline. Nothing happened. Nothing at all.") was
-  // retired 2026-09-09 (plan 1788957399035 §7.28): Houston is the only voice
-  // after the reboot.
 });
 
 /**
- * Houston's escalating lines, one per gag run in the session (index
- * `min(gagRuns - 1, 1)`; session memory only, never persisted). Dry, no `!`
- * — a `WARNING:` prefix would re-route the line to the ALERT channel. Both
- * contain "manual": both carry HOUSTON_LINK. (The third line, 'We are logging
- * this, Cowboy.', was retired 2026-09-09 — plan 1788957399035 §7.28.)
+ * Houston's escalating lines, one per gag run in the session (index `min(gagRuns - 1, 1)`; never persisted). No `!`
+ * and no `WARNING:` prefix (it would re-route the line to the ALERT channel). Both contain "manual": both carry
+ * HOUSTON_LINK.
  */
 export const HOUSTON_LINES = Object.freeze([
   'Cowboy, did you read the manual.',
@@ -238,17 +177,14 @@ export const HOUSTON_LINES = Object.freeze([
 ]);
 
 /**
- * Houston's "manual" is a link (plan 1788957399035 §7.26–28): the COMMS_MESSAGE
- * `link` — CommsPanel wraps the first whole-word "manual" as a `.glossary-link`
- * that opens the SPECS viewer on page one of the manual (`welcome_cowboy`) and
- * lands on its WARNING box (`anchor: 'warning'`).
+ * The COMMS_MESSAGE `link`: CommsPanel wraps the first whole-word "manual" as a `.glossary-link` that opens the SPECS
+ * viewer on page one of the manual (`welcome_cowboy`), landing on its WARNING box.
  */
 export const HOUSTON_LINK = Object.freeze({ term: 'manual', entryId: 'welcome_cowboy', anchor: 'warning' });
 
 /**
- * The POST screen (the second half of the blackout): ten ASCII lines, one per
- * POST_LINE_MS from POST_START_MS, each its own <div> (textContent) inside
- * `.ovr-post` in the veil. FURNACE CTRL fails twice on purpose.
+ * The POST screen: ten ASCII lines, one per POST_LINE_MS from POST_START_MS, each its own <div> (textContent).
+ * FURNACE CTRL fails twice on purpose.
  */
 export const POST_LINES = Object.freeze([
   'MOTHER ROM v0.9.3 ...... POST',
@@ -263,15 +199,12 @@ export const POST_LINES = Object.freeze([
   'HUD .................... RESTARTING',
 ]);
 
-/** The POST block's class (a child of the veil; goes with it). */
 export const OVERRIDE_POST_CLASS = 'ovr-post';
 
 export const GAG_STATES = Object.freeze(['IDLE', 'WARN', 'OVERHEAT', 'COUNTDOWN', 'BLACKOUT', 'RECOVER']);
 
 /** The centre-screen banner over the countdown numerals (owner 2026-09-07). */
 export const COUNTDOWN_WARNING = 'SELF DESTRUCT INITIATED';
-
-// ── Private constants ──────────────────────────────────────────────────────────
 
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
 const OPEN_ATTR = 'data-ovr-open';
@@ -283,7 +216,7 @@ const SHAKE_CLASS = 'ovr-shake';
 const PULSE_CLASS = 'ovr-pulse';
 const CRT_CLASS = 'ovr-crt';
 const JITTER_CLASS = 'ovr-jitter';
-const ATTRACT_CLASS = 'ovr-attract';  // the main button's one-shot reveal blink (gag v2)
+const ATTRACT_CLASS = 'ovr-attract';  // the main button's one-shot reveal blink
 const JITTER_MS = 200;               // the broken CANCEL's twitch
 const TICK_MS = 1000;                // the 1 Hz label refresh while expanded
 const PAD_PX = 8;
@@ -292,12 +225,10 @@ const Z_COUNTDOWN = 9995;
 const Z_VEIL = 100000;               // above everything incl. the pause overlay
 const NOT_FITTED = 'NOT FITTED';     // RefitPane.ACTUATOR_NOT_FITTED, the flower's present-but-unowned word
 
-/** The house palette (VisualLaw is pure data — no live singleton). */
 const COLOR_PLAYER = `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;     // heritage green — the HUD
-const COLOR_THREAT = `var(--hud-warning, ${VisualLaw.COLORS.THREAT})`;     // red-orange — the ONE pulsing channel (vignette only; gag countdown is CAUTION steady, rev 3)
+const COLOR_THREAT = `var(--hud-warning, ${VisualLaw.COLORS.THREAT})`;     // the ONE pulsing channel (vignette only; the gag countdown is CAUTION steady)
 const COLOR_CAUTION = `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})`;   // steady amber — FAULT, disabled reasons, gag main + countdown
 
-/** The two-line CTA's words (house uppercase). */
 const MAIN_TITLE = 'SAFETY OVERRIDE';
 const CTA_CLOSED = 'PRESS TO TEST ACTUATORS';
 const CTA_OPEN = 'PRESS TO CLOSE';
@@ -306,20 +237,17 @@ const CTA_OPEN = 'PRESS TO CLOSE';
 const BAR_ACTUATOR_OF = Object.freeze({ struts: 'struts', radiator: 'flowerDeploy', wings: 'rosaFurl' });
 const BAR_NAME_OF = Object.freeze({ struts: 'DAUGHTERS', radiator: 'RADIATORS', wings: 'WINGS', furnace: 'FURNACE' });
 const BAR_NULL_STATE = Object.freeze({ struts: 'NO DAUGHTER', radiator: 'OFFLINE', wings: 'OFFLINE' });
-const HOLDING_ATTR = 'data-holding';      // RADIATORS while a press is on its way to the 450 ms hold (not the "pressed" look: that means radiators open)
+const HOLDING_ATTR = 'data-holding';      // RADIATORS while a press is on its way to the hold (not the "pressed" look: that means open)
 const FLOOR_GONE_ATTR = 'data-floor-gone';  // FloorMask's attribute-pane bit (the mask is its one writer)
 
-/** Panel key → actuators key (RADIATOR → the OVERRIDE full-range sweep, amendment 2026-09-09). */
+/** Panel key → actuators key (RADIATOR → the OVERRIDE full-range sweep). */
 const ACTUATOR_OF = Object.freeze({ daughters: 'struts', radiator: 'flowerSweep', rosa: 'rosaFurl' });
 const NAME_OF = Object.freeze({ daughters: 'DAUGHTERS', radiator: 'RADIATOR', rosa: 'ROSA', furnace: 'FURNACE' });
-/** "The hardware is OUT" — the aria-pressed pose (RADIATOR: DEPLOYED = the STOW bud; FOLDED / SLEWING read unpressed). */
+/** "The hardware is OUT": the aria-pressed pose (RADIATOR: FOLDED / SLEWING read unpressed). */
 const OUT_STATE = Object.freeze({ daughters: 'DEPLOYED', radiator: 'DEPLOYED', rosa: 'DEPLOYED' });
-/** The honest reason when `get()` reads null. */
 const NULL_REASON = Object.freeze({ daughters: 'NO DAUGHTER DOCKED', radiator: 'OFFLINE', rosa: 'OFFLINE' });
 
-// ── Private helpers ────────────────────────────────────────────────────────────
-
-/** @private The house matchMedia probe (RefitPane / FloorMask / DetailSlider). */
+/** The house matchMedia probe (RefitPane / FloorMask / DetailSlider). */
 function _prefersReducedMotion() {
   try {
     return !!(typeof window !== 'undefined' &&
@@ -330,7 +258,6 @@ function _prefersReducedMotion() {
   }
 }
 
-/** @private ms clock default. */
 function _nowMs() {
   try {
     if (typeof performance !== 'undefined' && typeof performance.now === 'function') return performance.now();
@@ -338,7 +265,7 @@ function _nowMs() {
   return Date.now();
 }
 
-/** @private classList when present, else the className string (stub documents). */
+/** classList when present, else the className string (stub documents). */
 function _addClass(el, c) {
   if (!el) return;
   if (el.classList && typeof el.classList.add === 'function') { el.classList.add(c); return; }
@@ -347,7 +274,6 @@ function _addClass(el, c) {
   el.className = parts.join(' ');
 }
 
-/** @private */
 function _removeClass(el, c) {
   if (!el) return;
   if (el.classList && typeof el.classList.remove === 'function') { el.classList.remove(c); return; }
@@ -355,7 +281,7 @@ function _removeClass(el, c) {
   el.className = parts.join(' ');
 }
 
-/** @private Remove an element from its document (never throws). */
+/** Never throws. */
 function _removeEl(el) {
   if (!el) return;
   try {
@@ -364,7 +290,7 @@ function _removeEl(el) {
   } catch (_e) { /* stub */ }
 }
 
-/** @private Walk up from a click target to the nearest [data-ovr-key] element. */
+/** Walk up from a click target to the nearest [data-ovr-key] element. */
 function _closestKey(el) {
   let node = el;
   for (let i = 0; node && i < 8; i++) {
@@ -377,23 +303,21 @@ function _closestKey(el) {
 export class OverridePane {
   /**
    * @param {object} [deps] every dep optional, duck-typed, never trusted not to throw
-   * @param {object}   [deps.actuators] the RefitPane actuators object — only `struts`, `flowerSweep`, `rosaFurl` are read
-   * @param {object}   [deps.audio] `{ playClick?(), playKlaxon?(durationS), stopKlaxon?(), playCollision?() }` (the
-   *   AudioSystem singleton): the click is the main button's press AND the countdown's tick; the collision is
-   *   the "took a hit" thud at blackout
-   * @param {object}   [deps.reboot] the systems reboot (HudReboot), `{ play({ onDone }) -> boolean, cancel() }`:
-   *   RECOVER calls `play` FIRST (it darkens every visible HUD element under the veil) and waits for `onDone`
-   *   before the run closes (IDLE, Houston scheduled); a `false` return, a missing dep, webdriver, no veil or
-   *   reduced motion ⇒ the legacy path (flickers → IDLE at once). Every abort calls `cancel()`
+   * @param {object}   [deps.actuators] the RefitPane actuators; the panel reads `struts`, `flowerSweep`, `rosaFurl`
+   * @param {object}   [deps.audio] `{ playClick?(), playKlaxon?(durationS), stopKlaxon?(), playCollision?() }`: the
+   *   click is the main button's press AND the countdown's tick; the collision is the blackout thud
+   * @param {object}   [deps.reboot] HudReboot, `{ play({ onDone }) -> boolean, cancel() }`: RECOVER calls `play` FIRST
+   *   and waits for `onDone` before the run closes; a `false` return, a missing dep, webdriver, no veil or reduced
+   *   motion ⇒ flickers → IDLE at once. Every abort calls `cancel()`
    * @param {object}   [deps.bus] `{ on(event, cb) -> unsubscribe, emit(event, data) }`
    * @param {object}   [deps.events] the Events name table
-   * @param {string[]} [deps.gameplayStates] state ids that count as gameplay; a GAME_STATE_CHANGE to any
-   *   other `to` aborts the gag. Absent / empty ⇒ ANY state change aborts (conservative).
+   * @param {string[]} [deps.gameplayStates] state ids that count as gameplay; a GAME_STATE_CHANGE to any other `to`
+   *   aborts the gag. Absent / empty ⇒ ANY state change aborts.
    * @param {Document|null} [deps.doc] document (default: the global one; null = headless inert)
    * @param {Element}  [deps.parent] root's parent (default: `#hud-overlay`, else `doc.body`)
    * @param {boolean}  [deps.glass] true ⇒ 44 pt buttons
-   * @param {boolean}  [deps.barTick] true ⇒ the F1 bar re-reads the actuators every F1_BAR_GEOMETRY.TICK_MS
-   *   (struts have no arrival event); default off so a bare pane owns no timer
+   * @param {boolean}  [deps.barTick] true ⇒ the F1 bar re-reads the actuators every F1_BAR_GEOMETRY.TICK_MS; default
+   *   off so a bare pane owns no timer
    * @param {number}   [deps.tapDebounceMs] RADIATOR / FURNACE taps closer than this are dropped (main.js: VENT_DOUBLE_TAP_MS)
    * @param {function} [deps.drawerOpen] zero-arg bool: the workbench drawer is open (the bar tick shifts the bar clear of it)
    * @param {boolean}  [deps.webdriver] true ⇒ the gag never builds the black veil (so no POST, no reboot)
@@ -414,16 +338,14 @@ export class OverridePane {
     this._glass = !!deps.glass;
     this._webdriver = !!deps.webdriver;
     this._reducedDep = deps.reducedMotion;
-    // Timers: injected or the globals. Always CALLED DETACHED (`const f = ...; f(cb, ms)`,
-    // never as a method of the pane): window.setTimeout throws "Illegal invocation" when
-    // its `this` is anything but the window — the 2026-09-07 browser witness caught every
-    // gag timer silently dying that way while Node (which ignores `this`) stayed green.
+    // Timers: injected or the globals. Always CALLED DETACHED, never as a method of the pane: window.setTimeout
+    // throws "Illegal invocation" when `this` is not the window (Node ignores `this`, so tests stay green).
     this._setTimeoutFn = typeof deps.setTimeout === 'function' ? deps.setTimeout
       : (typeof setTimeout === 'function' ? (fn, ms) => setTimeout(fn, ms) : null);
     this._clearTimeoutFn = typeof deps.clearTimeout === 'function' ? deps.clearTimeout
       : (typeof clearTimeout === 'function' ? (id) => clearTimeout(id) : null);
     this._now = typeof deps.now === 'function' ? deps.now : _nowMs;
-    this._barTickOn = deps.barTick === true;   // opt-in: the hub passes true (a default timer would show in every pane test's pending count)
+    this._barTickOn = deps.barTick === true;   // opt-in: the hub passes true (a default timer would show in every pane test)
     this._tapDebounceMs = Number.isFinite(deps.tapDebounceMs) ? deps.tapDebounceMs : F1_BAR_GEOMETRY.TAP_DEBOUNCE_MS;
     this._holdMs = Number.isFinite(deps.holdMs) ? deps.holdMs : F1_BAR_GEOMETRY.HOLD_VENT_MS;
 
@@ -441,7 +363,7 @@ export class OverridePane {
     this._barTickId = null;          // the bar's self-rescheduling refresh (NOT a gag timer)
     this._lastRadiatorTapMs = -Infinity;
     this._hold = null;               // the RADIATORS press in flight: { pointerId, timerId, fired, btn }
-    this._swallowClickAtMs = -Infinity;   // > -Infinity while the click after a fired hold is still to be swallowed (stamp = fire / release time)
+    this._swallowClickAtMs = -Infinity;   // > -Infinity while the click after a fired hold is to be swallowed (fire / release time)
     this._lastFurnaceTapMs = -Infinity;
     this._furnacePresses = 0;        // every FURNACE press, bar or grid (the bar's reset checks no press came since)
     this._barFurnacePressNo = -1;    // _furnacePresses right after the bar's last FURNACE press
@@ -455,7 +377,6 @@ export class OverridePane {
     this._tickId = null;             // the 1 Hz refresh while expanded (NOT a gag timer)
     this._attractTimer = null;       // the reveal blink's removal timer (NOT a gag timer; cleared on dispose / re-reveal)
 
-    // The FURNACE gag
     this._gagState = 'IDLE';
     this._pressCount = 0;
     this._gagRuns = 0;               // completed runs this session (Houston escalates; never persisted)
@@ -487,15 +408,10 @@ export class OverridePane {
     this._startBarTick();
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
   /**
-   * The pane-density rung adapter (cached; the HUD domRung shape). The ONE
-   * visibility bit is `data-density-hidden` on the root; hiding the panel also
-   * collapses the grid and aborts any in-flight gag. A REVEAL (hidden →
-   * visible) blinks the main button once (`ovr-attract`, ATTRACT_MS; gag v2 —
-   * the tempting button); `setVisible(true)` on an already-visible root does
-   * not. Never throws headless.
+   * The pane-density rung adapter (cached; the HUD domRung shape). The ONE visibility bit is `data-density-hidden`
+   * on the root; hiding the panel also collapses the grid and aborts any in-flight gag. A REVEAL (hidden → visible)
+   * blinks the main button once (`ovr-attract`); `setVisible(true)` on an already-visible root does not.
    * @returns {{id:string, label:string, isVisible:function, setVisible:function}}
    */
   rung() {
@@ -519,7 +435,7 @@ export class OverridePane {
           if (v) {
             const wasHidden = typeof el.hasAttribute === 'function' && el.hasAttribute(DENSITY_HIDDEN_ATTR);
             el.removeAttribute(DENSITY_HIDDEN_ATTR);
-            if (wasHidden) this._attract();             // the one-shot blink, on REVEAL only
+            if (wasHidden) this._attract();             // on REVEAL only
           } else {
             this._clearAttract();                        // a hidden button has nothing to blink
             el.setAttribute(DENSITY_HIDDEN_ATTR, '');
@@ -530,7 +446,7 @@ export class OverridePane {
     return this._rung;
   }
 
-  /** Re-read the three actuators and repaint the labels (write-on-change; never throws). */
+  /** Re-read the actuators and repaint the labels (write-on-change; never throws). */
   refresh() {
     if (this._disposed || !this._root) return;
     for (const key of OVERRIDE_KEYS) {
@@ -540,15 +456,11 @@ export class OverridePane {
     this._refreshBar();
   }
 
-  /**
-   * Slide the grid up: resets the gag press count, refreshes, starts the 1 Hz
-   * tick, flips the CTA to PRESS TO CLOSE and sets `body[data-ovr-open]` (the
-   * sheet hides the ticker / toast zone / ARM PILOT strip the grid would cover).
-   */
+  /** Slide the grid up: resets the gag press count, starts the 1 Hz tick, flips the CTA and sets `body[data-ovr-open]`. */
   expand() {
     if (this._disposed || this._expanded) return;
     this._expanded = true;
-    this._pressCount = 0;            // per collapsed → expanded session
+    this._pressCount = 0;
     if (this._root) {
       this._root.setAttribute(OPEN_ATTR, '');
       if (this._mainBtn) this._mainBtn.setAttribute('aria-expanded', 'true');
@@ -573,13 +485,11 @@ export class OverridePane {
     this._setBodyOpen(false);
   }
 
-  /** The main button's verb. */
   toggleExpanded() {
     if (this._expanded) this.collapse();
     else this.expand();
   }
 
-  /** @returns {boolean} */
   isExpanded() { return this._expanded; }
 
   /** @returns {string} one of GAG_STATES */
@@ -591,21 +501,18 @@ export class OverridePane {
   /** @returns {number} completed gag runs this session (Houston's escalation index; an abort does not reset it) */
   gagRuns() { return this._gagRuns; }
 
-  /** @returns {object|null} the root element */
   el() { return this._root; }
 
   /** @returns {object|null} the F1 bar's root element (`#hud-f1-bar`) */
   barEl() { return this._bar; }
 
   /**
-   * The F key (H1 2026-10-09): press FURNACE exactly as the bar's button does
-   * (WARN → OVERHEAT → blackout → reboot; touches no game state). On floors
-   * where the bar is hidden its tick resets a WARN, so a second press may just
-   * warn again — accepted.
+   * The F key: press FURNACE exactly as the bar's button does (touches no game state). Where the bar is hidden its
+   * tick resets a WARN, so a second press may just warn again — accepted.
    */
   pressFurnace() { this._barFurnacePress(); }
 
-  /** Abort the gag, clear every timer (incl. the reveal blink), unsubscribe, remove the root, clear `body[data-ovr-open]`; further calls no-op. */
+  /** Abort the gag, clear every timer, unsubscribe, remove the roots, clear `body[data-ovr-open]`; further calls no-op. */
   dispose() {
     if (this._disposed) return;
     this._stopTick();
@@ -649,22 +556,15 @@ export class OverridePane {
     this._timers.clear();
   }
 
-  /**
-   * The pure two-line CTA law (follow-up 2026-09-09 §1.3): the title never
-   * changes; the cta names the press's effect. House uppercase.
-   * @param {boolean} expanded
-   * @returns {{title:string, cta:string}}
-   */
+  /** Pure: the title never changes; the cta names the press's effect. */
   static mainLabel(expanded) {
     return { title: MAIN_TITLE, cta: expanded ? CTA_OPEN : CTA_CLOSED };
   }
 
   /**
-   * The pure label law (STATE-first like the REFIT chips). `pressed` = "the
-   * hardware is OUT". `null` ⇒ disabled with the honest reason; the flower's
-   * 'NOT FITTED' ⇒ disabled; a known state ⇒ the house word; any other non-null
-   * state passes through uppercased, enabled, unpressed. FURNACE is never
-   * disabled — it is BROKEN, not off. Unknown key ⇒ null.
+   * Pure label law (STATE-first like the REFIT chips). `pressed` = "the hardware is OUT". `null` ⇒ disabled with the
+   * honest reason; 'NOT FITTED' ⇒ disabled; any other state passes through uppercased, enabled, unpressed. FURNACE
+   * is never disabled (BROKEN, not off). Unknown key ⇒ null.
    * @param {string} key one of OVERRIDE_KEYS
    * @param {string|null|undefined} state the actuator's `get()`
    * @returns {{text:string, sub?:string, disabled:boolean, pressed:boolean}|null}
@@ -681,11 +581,10 @@ export class OverridePane {
   }
 
   /**
-   * The pure F1-bar label law: plain name + a live state word. `state` is the
-   * actuator's `get()` (struts DEPLOYED / STOWED / null; radiator the hub's
-   * `flowerDeploy` OPEN / CLOSED / MOVING / NOT FITTED / null; wings FURLED /
-   * DEPLOYED / null); `moving` (struts only) = a docked strut is mid-swing.
-   * `pressed` = "the hardware is OUT". FURNACE is the joke: FAULT, never disabled.
+   * Pure F1-bar label law: plain name + a live state word. `state` is the actuator's `get()` (struts DEPLOYED /
+   * STOWED / null; radiator the hub's `flowerDeploy` OPEN / CLOSED / MOVING / NOT FITTED / null; wings FURLED /
+   * DEPLOYED / null); `moving` (struts only) = a docked strut is mid-swing. `pressed` = "the hardware is OUT".
+   * FURNACE: FAULT, never disabled.
    * @param {string} key one of F1_BAR_KEYS
    * @param {string|null|undefined} state
    * @param {{moving?:boolean}} [opts]
@@ -711,9 +610,7 @@ export class OverridePane {
     return { name, state: s, disabled: false, pressed: false };
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-
-  /** @private Inject the style once, build the DOM under `parent` (headless: nothing). */
+  /** Inject the style once, build the DOM under `parent` (headless: nothing). */
   _build(parentDep) {
     const doc = this._doc;
     if (!doc || typeof doc.createElement !== 'function') return;
@@ -726,13 +623,9 @@ export class OverridePane {
     const root = doc.createElement('div');
     root.id = OVERRIDE_PANE_ID;
     root.className = 'hud-panel';
-    // Geometry literals live inline (the style sheet carries the look). STATIC
-    // placement, written once (follow-up 2026-09-09): bottom-centre, 12 px
-    // (or the safe-area inset) off the viewport bottom — nothing dodges it,
-    // nothing feeds it per frame. The root is the 324-wide grid plate's box
-    // and takes NO pointer events; the button and the open grid opt in. Never
-    // a column child: the hub's F1 callouts dim both side columns to 0.35 +
-    // pointer-events:none.
+    // Geometry literals live inline (the style sheet carries the look). STATIC placement, written once; nothing
+    // feeds it per frame. The root is the 324-wide grid plate's box and takes NO pointer events; the button and the
+    // open grid opt in. Never a column child: the hub's F1 callouts dim both side columns to 0.35 + pointer-events:none.
     root.style.position = 'absolute';
     root.style.left = '50%';
     root.style.bottom = `max(${G.BOTTOM_PX}px, env(safe-area-inset-bottom, 0px))`;
@@ -741,7 +634,7 @@ export class OverridePane {
     root.style.boxSizing = 'border-box';
     root.style.padding = '0';
     root.style.pointerEvents = 'none';
-    root.setAttribute(DENSITY_HIDDEN_ATTR, '');       // hidden by default on EVERY floor (D3)
+    root.setAttribute(DENSITY_HIDDEN_ATTR, '');       // hidden by default on EVERY floor
     if (this._glass) root.setAttribute(GLASS_ATTR, '');
     if (this._reducedMotion()) root.setAttribute(REDUCED_ATTR, '');
 
@@ -781,8 +674,7 @@ export class OverridePane {
     main.setAttribute(KEY_ATTR, 'main');
     main.setAttribute('aria-expanded', 'false');
     main.style.pointerEvents = 'auto';               // the ONE hit surface while collapsed (root is none)
-    // Two lines (follow-up 2026-09-09 §1.3): the title over the cta, both from
-    // the pure law; the cta is rewritten on expand / collapse (write-on-change).
+    // Title over the cta, both from the pure law; the cta is rewritten on expand / collapse.
     const label = OverridePane.mainLabel(false);
     const title = doc.createElement('span');
     title.className = 'ovr-main-title';
@@ -807,10 +699,8 @@ export class OverridePane {
   }
 
   /**
-   * @private The F1 bar (DECISIONS §15 row 9): `#hud-f1-bar`, four buttons in a
-   * flat row. Built HIDDEN (`data-floor-gone`, FloorMask's attribute-pane bit —
-   * the mask is its one writer: shown on F1, gone elsewhere and on disengage).
-   * Geometry and look are injected CSS (`_ensureStyle`) — no inline style.
+   * The F1 bar (DECISIONS §15 row 9): `#hud-f1-bar`, four buttons in a flat row. Built HIDDEN (`data-floor-gone`;
+   * FloorMask is its one writer: shown on F1, gone elsewhere and on disengage). Look is injected CSS, no inline style.
    */
   _buildBar(doc, parent) {
     const bar = doc.createElement('div');
@@ -851,7 +741,7 @@ export class OverridePane {
     this._bar = bar;
   }
 
-  /** @private The cta span follows the grid (write-on-change; title is static). */
+  /** The cta span follows the grid (write-on-change; title is static). */
   _applyCta(expanded) {
     const el = this._ctaEl;
     if (!el) return;
@@ -859,12 +749,7 @@ export class OverridePane {
     if (el.textContent !== next) el.textContent = next;
   }
 
-  /**
-   * @private `body[data-ovr-open]` — the sheet hides the hint ticker, the toast
-   * zone and the ARM PILOT strip while the grid is up (they share the
-   * bottom-centre column the grid slides into). Write-on-change; headless /
-   * no body ⇒ nothing.
-   */
+  /** `body[data-ovr-open]`: the sheet hides the hint ticker, toast zone and ARM PILOT strip (same column). Write-on-change. */
   _setBodyOpen(open) {
     const d = this._doc;
     const body = d && d.body;
@@ -877,7 +762,7 @@ export class OverridePane {
     }
   }
 
-  /** @private One <style> per document, idempotent by id. */
+  /** One <style> per document, idempotent by id. */
   _ensureStyle() {
     const doc = this._doc;
     if (!doc || !doc.head || typeof doc.head.appendChild !== 'function') return;
@@ -1231,7 +1116,7 @@ export class OverridePane {
     doc.head.appendChild(style);
   }
 
-  /** @private Subscribe to the actuator input/pose events (refresh) + the abort events. */
+  /** Subscribe to the actuator input/pose events (refresh) + the abort events. */
   _subscribe() {
     const bus = this._bus;
     const E = this._events;
@@ -1254,9 +1139,7 @@ export class OverridePane {
     on('GAME_RESET', () => { this._abortGag(); this.collapse(); this.refresh(); });
   }
 
-  // ── Labels + taps ──────────────────────────────────────────────────────────
-
-  /** @private The actuator's `get()`, null on absence / throw. */
+  /** The actuator's `get()`, null on absence / throw. */
   _readActuator(key) {
     const a = this._actuators && this._actuators[ACTUATOR_OF[key]];
     if (!a || typeof a.get !== 'function') return null;
@@ -1268,7 +1151,7 @@ export class OverridePane {
     }
   }
 
-  /** @private Write one button's model, write-on-change. */
+  /** Write one button's model, write-on-change. */
   _applyModel(key, model) {
     const btn = this._btns[key];
     if (!btn || !model) return;
@@ -1289,7 +1172,7 @@ export class OverridePane {
     this._models[key] = model;
   }
 
-  /** @private The ONE delegated click: main / a real actuator / FURNACE. */
+  /** The ONE delegated click: main / a real actuator / FURNACE. */
   _handleClick(e) {
     if (this._disposed) return;
     const btn = _closestKey(e && e.target);
@@ -1303,25 +1186,23 @@ export class OverridePane {
     if (key === 'furnace') { this._furnacePress(); return; }
     if (!ACTUATOR_OF[key]) return;
     const model = this._models[key] || OverridePane.buttonLabel(key, this._readActuator(key));
-    if (!model || model.disabled) return;                 // a disabled button drops the tap
+    if (!model || model.disabled) return;
     const a = this._actuators && this._actuators[ACTUATOR_OF[key]];
     if (a && typeof a.toggle === 'function') {
-      // The closure owns the click + the input event (one wire, no double blip).
+      // The closure owns the click + the input event (no double blip).
       try { a.toggle(); } catch (_e) { /* dep */ }
     }
     this.refresh();                                       // re-read truth, never an optimistic flip
   }
 
-  // ── The F1 bar: state, taps, tick ──────────────────────────────────────────
-
-  /** @private The struts' mid-swing flag (the actuator's optional `moving()`); false on absence / throw. */
+  /** The struts' mid-swing flag (the actuator's optional `moving()`); false on absence / throw. */
   _strutsMoving() {
     const a = this._actuators && this._actuators.struts;
     if (!a || typeof a.moving !== 'function') return false;
     try { return !!a.moving(); } catch (_e) { return false; }
   }
 
-  /** @private The bar's label model for `key`, from the live actuators. */
+  /** The bar's label model for `key`, from the live actuators. */
   _barModel(key) {
     if (key === 'furnace') return OverridePane.barLabel(key, null);
     const a = this._actuators && this._actuators[BAR_ACTUATOR_OF[key]];
@@ -1332,13 +1213,13 @@ export class OverridePane {
     return OverridePane.barLabel(key, state, key === 'struts' ? { moving: this._strutsMoving() } : undefined);
   }
 
-  /** @private Re-read the actuators and repaint the bar (write-on-change; never throws). */
+  /** Re-read the actuators and repaint the bar (write-on-change; never throws). */
   _refreshBar() {
     if (this._disposed || !this._bar) return;
     for (const key of F1_BAR_KEYS) this._applyBarModel(key, this._barModel(key));
   }
 
-  /** @private Write one bar button's model, write-on-change (two spans; the button is never re-textContent'd). */
+  /** Write one bar button's model, write-on-change (two spans; the button is never re-textContent'd). */
   _applyBarModel(key, model) {
     const btn = this._barBtns[key];
     const parts = this._barParts[key];
@@ -1364,25 +1245,22 @@ export class OverridePane {
   }
 
   /**
-   * @private The bar's ONE delegated click. FURNACE is the joke; the others call
-   * the actuator's `toggle()` (the closure owns the click sound + input event)
-   * and re-read truth. RADIATOR drops a tap inside `tapDebounceMs` of the last
-   * one: `player.toggleFlowerDeploy` reads two taps inside VENT_DOUBLE_TAP_MS as
-   * the push-through VENT, and a touch double-tap must never do that. Every tap
-   * blurs the button first, so Enter never re-presses it.
+   * The bar's ONE delegated click. FURNACE is the joke; the others call the actuator's `toggle()` and re-read truth.
+   * RADIATOR drops a tap inside `tapDebounceMs` of the last one: `player.toggleFlowerDeploy` reads two taps inside
+   * VENT_DOUBLE_TAP_MS as the push-through VENT, which a touch double-tap must never do. Every tap blurs the button
+   * first, so Enter never re-presses it.
    */
   _handleBarClick(e) {
     if (this._disposed) return;
     const btn = _closestKey(e && e.target);
     if (!btn) return;
-    // Drop focus (the StatusPanel fleet-button idiom): a focused button would be
-    // re-pressed by the next Enter (InputManager's Enter does not preventDefault).
+    // A focused button would be re-pressed by the next Enter (InputManager's Enter does not preventDefault).
     try { if (typeof btn.blur === 'function') btn.blur(); } catch (_e) { /* stub */ }
     const key = btn.getAttribute(KEY_ATTR);
     if (key === 'furnace') { this._barFurnacePress(); return; }
     if (!BAR_ACTUATOR_OF[key]) return;
     const model = this._barModels[key] || this._barModel(key);
-    if (!model || model.disabled) return;                 // a disabled button drops the tap
+    if (!model || model.disabled) return;
     if (key === 'radiator') {
       const now = this._now();
       // The click that follows the release of a hold (180° already sent) is not a tap: swallow it once.
@@ -1402,7 +1280,7 @@ export class OverridePane {
   }
 
   /**
-   * @private A press on RADIATORS starts the hold clock (any pointer: finger or mouse). Held `_holdMs` it sends 180°
+   * A press on RADIATORS starts the hold clock (any pointer: finger or mouse). Held `_holdMs` it sends 180°
    * once (`flowerDeploy.vent()`); released earlier it is an ordinary tap (the click toggles as before). A new press
    * ends any old swallow flag, so a long press that sent no click never eats the next real tap.
    */
@@ -1424,7 +1302,7 @@ export class OverridePane {
     hold.timerId = f(() => this._fireHold(hold), this._holdMs);
   }
 
-  /** @private The hold reached `_holdMs` with the finger still on the button: send 180°, stamp the tap debounce. */
+  /** The hold reached `_holdMs` with the finger still on the button: send 180°, stamp the tap debounce. */
   _fireHold(hold) {
     if (this._disposed || this._hold !== hold || hold.fired) return;
     // A floor change (FloorMask hides the bar) while the finger is down: the press belongs to a bar that is gone.
@@ -1442,7 +1320,7 @@ export class OverridePane {
     this._refreshBar();
   }
 
-  /** @private Release: a fired hold re-stamps the swallow clock (the click arrives just after); an early release is a plain tap. */
+  /** Release: a fired hold re-stamps the swallow clock (the click arrives just after); an early release is a plain tap. */
   _handleBarUp(e) {
     const hold = this._hold;
     if (!hold) return;
@@ -1451,7 +1329,7 @@ export class OverridePane {
     this._cancelHold(null, true);
   }
 
-  /** @private Sliding off the button (touch keeps the pointer captured, so no leave event fires) ends the hold, unfired. */
+  /** Sliding off the button (touch keeps the pointer captured, so no leave event fires) ends the hold, unfired. */
   _handleBarMove(e) {
     const hold = this._hold;
     if (!hold || hold.fired || !e) return;
@@ -1465,7 +1343,7 @@ export class OverridePane {
   }
 
   /**
-   * @private End the hold in flight: clear its timer and the holding look. A cancelled or slid-off press does nothing
+   * End the hold in flight: clear its timer and the holding look. A cancelled or slid-off press does nothing
    * (a fired hold has already sent 180°; its swallow flag stays until the click, the next press or 1 s).
    * @param {*} [_e] event arg (unused; lets this be a listener)
    * @param {boolean} [released] true from pointerup
@@ -1483,17 +1361,15 @@ export class OverridePane {
     try { hold.btn.removeAttribute(HOLDING_ATTR); } catch (_e2) { /* stub */ }
   }
 
-  /** @private No iPad long-press menu (and no text selection) on RADIATORS: the hold is ours. */
+  /** No iPad long-press menu (and no text selection) on RADIATORS: the hold is ours. */
   _handleBarMenu(e) {
     const btn = e && _closestKey(e.target);
     if (btn && btn.getAttribute(KEY_ATTR) === 'radiator' && typeof e.preventDefault === 'function') e.preventDefault();
   }
 
   /**
-   * @private FURNACE from the bar: the same two-press joke, minus what the bar
-   * lacks (no expand/collapse resets the count). A tap inside `tapDebounceMs`
-   * of the last one counts once (a touch double tap is one press); a WARN
-   * left FURNACE_RESET_MS — or the bar hidden (the tick) — goes back to IDLE.
+   * FURNACE from the bar: the same two-press joke (no expand/collapse resets the count). A tap inside
+   * `tapDebounceMs` of the last one counts once; a WARN left FURNACE_RESET_MS, or the bar hidden, goes back to IDLE.
    */
   _barFurnacePress() {
     const now = this._now();
@@ -1507,14 +1383,14 @@ export class OverridePane {
       : null;
   }
 
-  /** @private Back to IDLE from a WARN the BAR started, when no FURNACE press came since (a grid WARN keeps its no-timeout law). */
+  /** Back to IDLE from a WARN the BAR started, when no FURNACE press came since (a grid WARN keeps its no-timeout law). */
   _resetBarFurnaceWarn() {
     if (this._gagState !== 'WARN' || this._furnacePresses !== this._barFurnacePressNo) return;
     this._gagState = 'IDLE';
     this._pressCount = 0;
   }
 
-  /** @private `.f1b-drawer` on the bar while the workbench drawer is open (write-on-change; a cheap bool read). */
+  /** `.f1b-drawer` on the bar while the workbench drawer is open (write-on-change; a cheap bool read). */
   _syncBarDrawer() {
     if (!this._bar || !this._drawerOpen) return;
     let open = false;
@@ -1525,12 +1401,12 @@ export class OverridePane {
     else _removeClass(this._bar, 'f1b-drawer');
   }
 
-  /** @private True while FloorMask hides the bar (a floor change, or the bar gone on this floor). */
+  /** True while FloorMask hides the bar (a floor change, or the bar gone on this floor). */
   _barGone() {
     return !!this._bar && typeof this._bar.hasAttribute === 'function' && this._bar.hasAttribute(FLOOR_GONE_ATTR);
   }
 
-  /** @private The bar's live refresh: self-rescheduling; the actuator re-read is skipped while the mask hides the bar. */
+  /** The bar's live refresh: self-rescheduling; the actuator re-read is skipped while the mask hides the bar. */
   _startBarTick() {
     this._stopBarTick();
     if (!this._barTickOn || !this._bar || !this._setTimeoutFn || this._disposed) return;
@@ -1551,7 +1427,6 @@ export class OverridePane {
     }
   }
 
-  /** @private */
   _stopBarTick() {
     if (this._barTickId != null) {
       this._clearTimer(this._barTickId);
@@ -1559,7 +1434,7 @@ export class OverridePane {
     }
   }
 
-  /** @private The 1 Hz label refresh while expanded (labels follow the hotkeys). */
+  /** The 1 Hz label refresh while expanded (labels follow the hotkeys). */
   _startTick() {
     this._stopTick();
     if (!this._root || !this._setTimeoutFn || !this._expanded) return;
@@ -1576,7 +1451,6 @@ export class OverridePane {
     }
   }
 
-  /** @private */
   _stopTick() {
     if (this._tickId != null) {
       this._clearTimer(this._tickId);
@@ -1585,11 +1459,8 @@ export class OverridePane {
   }
 
   /**
-   * @private The one-shot reveal blink (gag v2, the tempting button): `.ovr-main`
-   * wears `ovr-attract` for ATTRACT_MS (three CSS blinks), removed by a tracked
-   * timer. Called ONLY from the rung's hidden → visible edge — never on expand,
-   * never idle. Reduced motion skips the class (the sheet also nulls the
-   * keyframes). A second reveal restarts it (the old timer is cleared).
+   * The one-shot reveal blink: `.ovr-main` wears `ovr-attract` for ATTRACT_MS, removed by a tracked timer. Called
+   * ONLY from the rung's hidden → visible edge. Reduced motion skips the class. A second reveal restarts it.
    */
   _attract() {
     const btn = this._mainBtn;
@@ -1609,7 +1480,7 @@ export class OverridePane {
     }
   }
 
-  /** @private Drop the blink and its timer (dispose, a hide, a re-reveal). Idempotent. */
+  /** Drop the blink and its timer (dispose, a hide, a re-reveal). Idempotent. */
   _clearAttract() {
     if (this._attractTimer != null) {
       this._clearTimer(this._attractTimer);
@@ -1618,12 +1489,7 @@ export class OverridePane {
     _removeClass(this._mainBtn, ATTRACT_CLASS);
   }
 
-  // ── The FURNACE gag ────────────────────────────────────────────────────────
-
-  /**
-   * @private Press 1 → WARN, press 2 (PRESSES_TO_ARM) → OVERHEAT → (a timer)
-   * COUNTDOWN; anything in flight beyond WARN is ignored (ONE gag in flight).
-   */
+  /** Press 1 → WARN, press 2 (PRESSES_TO_ARM) → OVERHEAT → (timer) COUNTDOWN; beyond WARN a press is ignored (ONE gag). */
   _furnacePress() {
     if (this._disposed) return;
     const s = this._gagState;
@@ -1634,7 +1500,7 @@ export class OverridePane {
     else this._overheat();
   }
 
-  /** @private The rejection: klaxon, haptic, THREAT pulse, shake, "Do NOT press that again." */
+  /** The rejection: klaxon, haptic, THREAT pulse, shake, "Do NOT press that again." */
   _warn() {
     this._gagState = 'WARN';
     this._klaxon(FURNACE_GAG.KLAXON_S);
@@ -1645,10 +1511,8 @@ export class OverridePane {
   }
 
   /**
-   * @private The overheat beat (owner: "furnace overheating, containment
-   * failing"): the same alarm again, then OVERHEAT_MS later the countdown. The
-   * klaxon call is the AudioSystem's single instance — ignored while press 1's
-   * still sounds, a fresh one otherwise.
+   * The overheat beat (owner: "furnace overheating, containment failing"): the same alarm again, then OVERHEAT_MS
+   * later the countdown. The klaxon is single-instance: ignored while press 1's still sounds.
    */
   _overheat() {
     this._gagState = 'OVERHEAT';
@@ -1660,7 +1524,6 @@ export class OverridePane {
     this._schedule(() => this._enterCountdown(), FURNACE_GAG.OVERHEAT_MS);
   }
 
-  /** @private */
   _enterCountdown() {
     this._gagState = 'COUNTDOWN';
     this._comm(FURNACE_LINES.ARMED);
@@ -1671,9 +1534,8 @@ export class OverridePane {
   }
 
   /**
-   * @private 5 → 4 → 3 → 2 → 1 (each numeral change ticks — the injected click;
-   * the initial "5" does not, the ARMED line is its beat), and the tick after
-   * "1" → BLACKOUT.
+   * 5 → 1: each numeral change ticks the injected click (the initial "5" does not; the ARMED line is its beat); the
+   * tick after "1" → BLACKOUT.
    */
   _countdownTick() {
     if (this._gagState !== 'COUNTDOWN') return;
@@ -1688,12 +1550,9 @@ export class OverridePane {
   }
 
   /**
-   * @private "Took a hit": the PHYSICAL collision rumble, a longer haptic, then
-   * the veil (never under webdriver). Five seconds of pure black, then the POST
-   * lines land one per POST_LINE_MS from POST_START_MS (T+5000 … T+9050); the
-   * CRT tail flickers the veil — POST text included — from T+8500; RECOVER at
-   * T+10000. No veil (webdriver / no body) ⇒ no POST, no CRT; the recover
-   * timer still runs.
+   * "Took a hit": the collision rumble, a longer haptic, then the veil (never under webdriver). Five seconds of pure
+   * black, then POST lines one per POST_LINE_MS from POST_START_MS (T+5000 … T+9050); the CRT tail flickers the veil
+   * (POST text included) from T+8500; RECOVER at T+10000. No veil ⇒ no POST, no CRT; the recover timer still runs.
    */
   _enterBlackout() {
     this._gagState = 'BLACKOUT';
@@ -1713,11 +1572,7 @@ export class OverridePane {
     this._schedule(() => this._enterRecover(), FURNACE_GAG.BLACKOUT_MS);
   }
 
-  /**
-   * @private One POST line: its own <div> (textContent, never innerHTML)
-   * appended to `.ovr-post` inside the veil (built on the first line). Reduced
-   * motion shows the same static text. No veil ⇒ nothing.
-   */
+  /** One POST line: its own <div> (textContent, never innerHTML) in `.ovr-post` inside the veil (built on the first line). */
   _postLine(i) {
     const veil = this._veil;
     if (!veil || this._gagState !== 'BLACKOUT') return;
@@ -1738,14 +1593,10 @@ export class OverridePane {
   }
 
   /**
-   * @private RECOVER. No veil (webdriver) or reduced motion ⇒ finish at once
-   * (today's path; the systems reboot is never asked). Otherwise, FIRST the
-   * reboot — `reboot.play({ onDone })` darkens every visible HUD element under
-   * the veil — THEN the three veil flickers, then the veil goes: the world is
-   * there, the instruments are dead ("view 0"); the choreography returns them
-   * top → bottom and calls `onDone` → `_finishRecover()`. A missing dep or a
-   * `false` return (nothing to darken) falls back to the flickers →
-   * `_finishRecover()` at once.
+   * RECOVER. No veil (webdriver) or reduced motion ⇒ finish at once (the reboot is never asked). Otherwise FIRST
+   * `reboot.play({ onDone })` darkens every visible HUD element under the veil, THEN the three veil flickers, then
+   * the veil goes (world visible, instruments dead); the choreography returns them top → bottom and calls `onDone` →
+   * `_finishRecover()`. A missing dep or a `false` return falls back to the flickers → `_finishRecover()` at once.
    */
   _enterRecover() {
     this._gagState = 'RECOVER';
@@ -1762,7 +1613,7 @@ export class OverridePane {
     this._recoverFlicker();
   }
 
-  /** @private The three rapid flickers, then the veil goes. */
+  /** The three rapid flickers, then the veil goes. */
   _recoverFlicker() {
     const veil = this._veil;
     if (!veil) { this._afterFlickers(); return; }
@@ -1773,21 +1624,15 @@ export class OverridePane {
     this._schedule(() => this._recoverFlicker(), FURNACE_GAG.RECOVER_FLICKER_MS);
   }
 
-  /**
-   * @private After the flickers: with the reboot running, lift the veil onto
-   * the dark instruments and WAIT for its `onDone`; otherwise finish now.
-   */
+  /** With the reboot running, lift the veil onto the dark instruments and WAIT for its `onDone`; otherwise finish now. */
   _afterFlickers() {
     if (this._rebootHandle) { this._removeVeil(); return; }
     this._finishRecover();
   }
 
   /**
-   * @private The end of a run: veil off (idempotent), the run counted, Houston
-   * scheduled HOUSTON_DELAY_MS later (a tracked gag timer — it outlives the
-   * IDLE state on purpose; an abort clears it), press count 0, IDLE at once.
-   * No FURNACE line here (the RECOVER line was retired, §7.28): after the
-   * reboot Houston is the only voice. Only from RECOVER: a late `onDone`
+   * The end of a run: veil off, run counted, Houston scheduled HOUSTON_DELAY_MS later (a tracked gag timer that
+   * outlives IDLE on purpose; an abort clears it), press count 0, IDLE at once. Only from RECOVER: a late `onDone`
    * after an abort is dropped.
    */
   _finishRecover() {
@@ -1801,7 +1646,7 @@ export class OverridePane {
     this._gagState = 'IDLE';
   }
 
-  /** @private The broken CANCEL: jitters, never cancels, one caution line per CANCEL_RATE_MS. */
+  /** The broken CANCEL: jitters, never cancels, one caution line per CANCEL_RATE_MS. */
   _cancelPress() {
     if (this._disposed || this._gagState !== 'COUNTDOWN') return;
     const btn = this._cancelBtn;
@@ -1818,11 +1663,9 @@ export class OverridePane {
   }
 
   /**
-   * @private Abort + dispose the gag at once (GAME_STATE_CHANGE away from
-   * gameplay, GAME_RESET, the rung hiding the panel, collapse, dispose).
-   * Cancels the systems reboot too (every darkened panel comes back at once —
-   * no dark panel left behind) and drops the pending Houston line. `_gagRuns`
-   * is NOT reset (the session counter). Idempotent.
+   * Abort + dispose the gag at once (GAME_STATE_CHANGE away from gameplay, GAME_RESET, the rung hiding the panel,
+   * collapse, dispose). Cancels the systems reboot too (no dark panel left behind) and drops the pending Houston
+   * line. `_gagRuns` is NOT reset (the session counter). Idempotent.
    */
   _abortGag() {
     for (const id of this._timers) this._clearTimer(id);
@@ -1839,7 +1682,7 @@ export class OverridePane {
     this._recoverSteps = 0;
   }
 
-  /** @private `reboot.cancel?.()` (guarded — idempotent on Lane B's side) + forget the handle. */
+  /** `reboot.cancel?.()` (guarded) + forget the handle. */
   _cancelReboot() {
     const reboot = this._reboot;
     try {
@@ -1849,11 +1692,9 @@ export class OverridePane {
   }
 
   /**
-   * @private A GAME_STATE_CHANGE away from gameplay (shop / pause / menu / end
-   * screens) aborts the gag AND collapses the grid (follow-up 2026-09-09 §1.5:
-   * the collapse also clears `body[data-ovr-open]`, so the ticker / toast zone
-   * / ARM PILOT strip are never left hidden off the flying view). A change TO a
-   * gameplay state keeps the grid as it was.
+   * A GAME_STATE_CHANGE away from gameplay (shop / pause / menu / end screens) aborts the gag AND collapses the grid
+   * (which clears `body[data-ovr-open]`, so the ticker / toast zone / ARM PILOT strip are never left hidden).
+   * A change TO a gameplay state keeps the grid as it was.
    */
   _onStateChange(payload) {
     const to = payload && payload.to;
@@ -1864,21 +1705,17 @@ export class OverridePane {
     }
   }
 
-  // ── Gag DOM ────────────────────────────────────────────────────────────────
-
-  /** @private */
   _canBody() {
     const d = this._doc;
     return !!(d && typeof d.createElement === 'function' && d.body && typeof d.body.appendChild === 'function');
   }
 
-  /** @private */
   _byId(id) {
     const d = this._doc;
     return (d && typeof d.getElementById === 'function') ? d.getElementById(id) : null;
   }
 
-  /** @private The THREAT vignette: pulsing (THREAT is the one pulsing colour) for WARN and OVERHEAT; removed after `ms`. */
+  /** The THREAT vignette (the one pulsing colour) for WARN and OVERHEAT; removed after `ms`. */
   _showVignette(pulse, ms) {
     if (!this._canBody()) return;
     let v = this._vignette;
@@ -1904,13 +1741,12 @@ export class OverridePane {
     this._vignetteTimer = this._schedule(() => { this._vignetteTimer = null; this._removeVignette(); }, ms);
   }
 
-  /** @private */
   _removeVignette() {
     _removeEl(this._vignette);
     this._vignette = null;
   }
 
-  /** @private CSS shake on the HUD overlay + the render canvas (the haptic on glass); skipped under reduced motion. */
+  /** CSS shake on the HUD overlay + the render canvas (the haptic on glass); skipped under reduced motion. */
   _shake(ms) {
     if (this._reducedMotion()) return;
     const els = [this._byId('hud-overlay'), this._byId('game-canvas')].filter(Boolean);
@@ -1921,13 +1757,11 @@ export class OverridePane {
     this._schedule(() => this._unshake(), ms);
   }
 
-  /** @private */
   _unshake() {
     for (const el of this._shaken) _removeClass(el, SHAKE_CLASS);
     this._shaken = [];
   }
 
-  /** @private The centre-screen numerals + the broken CANCEL. */
   _showCountdown() {
     if (!this._canBody()) return;
     this._removeCountdown();
@@ -1965,7 +1799,6 @@ export class OverridePane {
     this._cancelBtn = cancel;
   }
 
-  /** @private */
   _removeCountdown() {
     _removeEl(this._countdown);
     this._countdown = null;
@@ -1973,11 +1806,7 @@ export class OverridePane {
     this._cancelBtn = null;
   }
 
-  /**
-   * @private The black veil: above everything incl. the pause overlay, swallows
-   * POINTER events only — never focused, no key trap, so Esc still pauses. The
-   * POST block (`.ovr-post`) is built inside it by the first POST line.
-   */
+  /** The black veil: above the pause overlay, swallows POINTER events only (no key trap, so Esc still pauses). */
   _showVeil() {
     if (!this._canBody()) return;
     this._removeVeil();
@@ -1988,23 +1817,20 @@ export class OverridePane {
     veil.setAttribute('aria-hidden', 'true');
     veil.style.position = 'fixed';
     veil.style.inset = '0';
-    veil.style.background = '#000'; // the blackout is pure black in BOTH looks (not an ink tint)
+    veil.style.background = '#000'; // pure black in BOTH looks, not an ink tint
     veil.style.zIndex = String(Z_VEIL);
     veil.style.pointerEvents = 'auto';
     doc.body.appendChild(veil);
     this._veil = veil;
   }
 
-  /** @private Idempotent; the POST block goes with the veil. */
   _removeVeil() {
     _removeEl(this._veil);
     this._veil = null;
     this._post = null;
   }
 
-  // ── Small seams ────────────────────────────────────────────────────────────
-
-  /** @private A gag timer: tracked in the Set so abort clears it. Returns the id (null headless). */
+  /** A gag timer, tracked in the Set so abort clears it. Returns the id (null headless). */
   _schedule(fn, ms) {
     if (!this._setTimeoutFn) return null;
     let id = null;
@@ -2023,7 +1849,6 @@ export class OverridePane {
     return id;
   }
 
-  /** @private */
   _clearTimer(id) {
     if (id == null || !this._clearTimeoutFn) return;
     const clearTimer = this._clearTimeoutFn;              // detached call (see the constructor)
@@ -2031,12 +1856,10 @@ export class OverridePane {
   }
 
   /**
-   * @private The FURNACE's comms line. `_reactive: true` is the CommsSystem
-   * guidance arbiter's bypass for feedback to a key the player JUST pressed —
-   * without it the onboarding tiers (commsSuppression tier 0–2) mute the gag
-   * and the button reads as dead instead of broken (the 2026-09-07 witness).
-   * The texts lead with WARNING:/CAUTION:/CRITICAL: on purpose: that is the
-   * ALERT-channel heuristic (sourceToChannel), so they never queue as flavor.
+   * The FURNACE's comms line. `_reactive: true` is the CommsSystem guidance arbiter's bypass for feedback to a key
+   * the player JUST pressed; without it the onboarding tiers (commsSuppression tier 0–2) mute the gag and the button
+   * reads as dead instead of broken. The texts lead with WARNING:/CAUTION:/CRITICAL: on purpose (the ALERT-channel
+   * heuristic, sourceToChannel), so they never queue as flavor.
    */
   _comm(line) {
     const bus = this._bus;
@@ -2048,12 +1871,9 @@ export class OverridePane {
   }
 
   /**
-   * @private Houston's line (gag v2): `source` + `channel` HOUSTON, priority
-   * `info` (green — the dry house voice; a `WARNING:` prefix would re-route it
-   * to ALERT), `_reactive: true` for the same suppression bypass as the FURNACE
-   * lines, `link: HOUSTON_LINK` so CommsPanel renders "manual" as the SPECS
-   * deep link (§7.26). Exactly `{ source, channel, text, priority, _reactive,
-   * link }`.
+   * Houston's line: `source` + `channel` HOUSTON, priority `info` (green; a `WARNING:` prefix would re-route it to
+   * ALERT), `_reactive: true` (same bypass as the FURNACE lines), `link: HOUSTON_LINK` so CommsPanel renders
+   * "manual" as the SPECS deep link.
    */
   _commHouston(text) {
     const bus = this._bus;
@@ -2064,35 +1884,31 @@ export class OverridePane {
     } catch (_e) { /* bus */ }
   }
 
-  /** @private */
   _klaxon(durationS) {
     try {
       if (this._audio && typeof this._audio.playKlaxon === 'function') this._audio.playKlaxon(durationS);
     } catch (_e) { /* audio */ }
   }
 
-  /** @private The injected click: the main button's press and the countdown's tick. */
   _click() {
     try {
       if (this._audio && typeof this._audio.playClick === 'function') this._audio.playClick();
     } catch (_e) { /* audio */ }
   }
 
-  /** @private "Took a hit" — the PHYSICAL collision rumble at blackout (guarded like every audio call). */
   _thud() {
     try {
       if (this._audio && typeof this._audio.playCollision === 'function') this._audio.playCollision();
     } catch (_e) { /* audio */ }
   }
 
-  /** @private iPadOS Safari has no Vibration API — the shake IS the haptic there. */
+  /** iPadOS Safari has no Vibration API: the shake IS the haptic there. */
   _vibrate(ms) {
     try {
       if (typeof navigator !== 'undefined' && navigator && typeof navigator.vibrate === 'function') navigator.vibrate(ms);
     } catch (_e) { /* nav */ }
   }
 
-  /** @private */
   _reducedMotion() {
     const d = this._reducedDep;
     if (typeof d === 'function') {

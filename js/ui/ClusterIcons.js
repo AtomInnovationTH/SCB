@@ -1,41 +1,25 @@
 /**
- * ClusterIcons.js — the Zoom Ladder F6 (NAVCOM) world-icon layer (S5, M3).
+ * @module ui/ClusterIcons — world-icon layer for debris clusters: each cluster as a ring + count, the player ship as a
+ * velocity-aligned chevron. Near-field pass is off and full debris meshes are hidden while it is up.
  *
- * On F6 the near-field render pass is OFF and the full debris meshes are hidden
- * (FloorContract.FLOORS[5].fidelity.debrisMode === 'clusters', costume transform
- * 'ship-to-icon'). This layer draws the replacement: each debris cluster as a
- * ring + count icon, and the player ship as a velocity-aligned chevron
- * (VisualLaw.ICONS.SHAPES: cluster 'ring-count', ship 'chevron').
- *
- * VISUAL LAW (js/core/VisualLaw.js) — pinned by test-FloorContract.js:
+ * VISUAL LAW (js/core/VisualLaw.js), pinned by test-FloorContract.js:
  *   - icon sizes are exactly the 3 bands [12, 18, 24] px (count-weighted);
- *   - color is never the SOLE channel: count → size, focus → color AND scale;
+ *   - colour is never the SOLE channel: count -> size, focus -> colour AND scale;
  *   - clusters read INFO cyan; the focused cluster reads SELECTION blue;
- *   - FUEL-REACHABILITY (optional opts.assessments): unreachable clusters are
- *     dimmed + dash-ringed, marginal read VALUE gold + dashed (never
- *     color-alone), and the FOCUSED cluster's label gains an estimate line
- *     ('ΔV 320 · Gas 2.1 kg · 14 min'); icon hitboxes (ring + count only — the
- *     root stays pointer-events:none) click-dispatch to the onSelect sink;
- *   - at most `labelBudget` (F6 = 7) icons carry a text label, the rest are
- *     ranked out (highest count first) — hover would reveal the rest (S6).
+ *   - FUEL-REACHABILITY (optional opts.assessments): unreachable = dimmed + dash-ringed, marginal = VALUE gold +
+ *     dashed; the FOCUSED cluster's label gains an estimate line; hitboxes are ring + count only (the root stays
+ *     pointer-events:none) and click-dispatch to the onSelect sink;
+ *   - at most `labelBudget` icons carry a text label, the rest are ranked out (highest count first).
  *
- * The projection is INJECTED (`project(worldVec3) -> {x, y, visible}`) so the
- * layout math is unit-testable headless — the module never imports THREE and is
- * fully DOM-guarded (inert + constructible in Node tests). `render()` returns the
- * computed icon descriptors (also what drives the DOM) so tests assert layout,
- * ranking, sizing, and focus without a browser.
- *
- * This is FLOOR CONTENT (parallel track, docs/ladder/03-plan.md): it owns no
- * camera, no debris source, and no game loop — NavcomFloor (S5) feeds it clusters
- * + a projector, and the serial track wires NavcomFloor into main.js.
- *
- * @module ui/ClusterIcons
+ * The projection is INJECTED (`project(worldVec3) -> {x, y, visible}`) so layout is unit-testable headless: no THREE
+ * import, fully DOM-guarded. `render()` returns the icon descriptors that also drive the DOM.
+ * Floor content only: owns no camera, debris source or game loop.
  */
 
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
 
-/** Lane 3e: the FieldRegistry (or a getter) `ClusterIcons.nameLine` names her field from; set by `setFieldRegistry`. */
+/** The FieldRegistry (or a getter) `ClusterIcons.nameLine` names her field from; set by `setFieldRegistry`. */
 let _registrySource = null;
 /** @returns {object|null} the registry when the map-by-height flag is on, else null */
 function _fieldRegistry() {
@@ -44,85 +28,59 @@ function _fieldRegistry() {
   return r && typeof r.isOn === 'function' && r.isOn() ? r : null;
 }
 
-/** Count thresholds mapping a cluster's member count to a VisualLaw size band.
- *  Three bands ↔ SIZES_PX [12, 18, 24]; endpoints pinned by test. */
+/** Count thresholds mapping member count to a VisualLaw size band (SIZES_PX [12, 18, 24]); pinned by test. */
 const SIZE_BREAKS = [25, 100]; // <25 → 12px, <100 → 18px, else 24px
 
-/**
- * FUEL-REACHABILITY (F6): opacity applied to clusters the ΔV budget cannot
- * reach. Verdict encoding is never color-alone (VisualLaw law): unreachable =
- * dim + dashed ring; marginal = VALUE gold + dashed ring; reachable = normal
- * INFO cyan solid. Own-module tunable (house rule: not FloorContract/Constants).
- */
+/** FUEL-REACHABILITY: opacity of clusters the ΔV budget cannot reach (never colour-alone: also a dashed ring). */
 export const UNREACHABLE_DIM_OPACITY = 0.35;
 
-/**
- * u7 D1: the focused cluster's label at the simple level - the verdict in the trip box's
- * own words (TransferWindows.readout), no numbers. Unknown verdict → no label.
- */
+/** The focused cluster's label at the simple level: the verdict in TransferWindows.readout's words, no numbers. */
 const PLAIN_VERDICT_LINE = Object.freeze({
   reachable: 'Enough fuel to go',
   marginal: 'Only just enough fuel',
   unreachable: 'Not enough fuel to go',
 });
 
-/**
- * u10 D1 (owner pick "Floor 4 easier to read", 2026-10-20): the focused field's ring is at least
- * this many px across on every screen (the count bands stay for the other fields).
- */
+/** The focused field's ring is at least this many px across on every screen (DECISIONS: "Floor 4 easier to read"). */
 export const FOCUS_RING_MIN_PX = 28;
-/** u10 D1: the field name beside the focused ring, the ship's `You` and the edge arrow's `You` (px). */
+/** Font size (px) of the field name beside the focused ring and of the ship's / edge arrow's `You`. */
 export const MARKER_LABEL_PX = 13;
-/** u10 D1: the ship chevron's size (px; the 12 px chevron was hard to find on a big screen). */
+/** The ship chevron's size (px). */
 export const SHIP_MARKER_PX = 18;
-/** u10 D1: `You` hangs this far below the chevron's point (px) — below a focused ring (14 px radius) round it. */
+/** `You` hangs this far below the chevron's point (px): clear of a focused ring (14 px radius) round it. */
 export const SHIP_LABEL_DROP_PX = 17;
-/** u10 D3: the ship's edge arrow sits this far inside the viewport edge (px). */
+/** The ship's edge arrow sits this far inside the viewport edge (px). */
 export const EDGE_ARROW_INSET_PX = 28;
-/** u10 D1: the ship marker's plain label (also on its edge arrow). */
+/** The ship marker's plain label (also on its edge arrow). */
 export const SHIP_LABEL = 'You';
-/** u10 D3: mono glyph width as a fraction of the font size (the footprint estimate below). */
+/** Mono glyph width as a fraction of the font size (for the `footprint` estimate). */
 const MONO_EM = 0.62;
-/** u10 D1/D3: a name block changes side only once its ring is this far past Earth's centre on screen (px). */
+/** A name block changes side only once its ring is this far past Earth's centre on screen (px). */
 export const LABEL_FLIP_PX = 8;
 
 export class ClusterIcons {
   /**
    * @param {object} [deps]
-   * @param {function} [deps.simple] - () => boolean, true at the simple level (u7 D1). Absent → today's label.
+   * @param {function} [deps.simple] - () => boolean, true at the simple level. Absent → the numbers label.
    */
   constructor(deps = {}) {
     this._simple = (deps && typeof deps.simple === 'function') ? deps.simple : null;
     this._root = null;
     this._shipEl = null;
     this._icons = new Map();  // clusterId → { el, ring, label }
-    this._sides = new Map();  // u10: clusterId → the name block's side ('left'|'right'), for the hysteresis
+    this._sides = new Map();  // clusterId → the name block's side ('left'|'right'), for the hysteresis
     this._built = false;
     this._visible = false;
     this._onSelect = null;    // click-to-select sink: (clusterId) => void
   }
 
-  /**
-   * Wire the click-to-select sink. Individual icon hitboxes (ring + count
-   * label only — the root stays pointer-events:none) dispatch the cluster id
-   * here; NavcomFloor routes it into focusById().
-   * @param {(id:*) => void} fn
-   */
+  /** Wire the click-to-select sink: icon hitboxes dispatch the cluster id here (NavcomFloor → focusById()). */
   setOnSelect(fn) { this._onSelect = (typeof fn === 'function') ? fn : null; }
 
-  /**
-   * Dispatch a click on a cluster icon to the onSelect sink. Public so the
-   * dispatch path is headless-testable (the DOM listener calls this).
-   * @param {*} id - cluster id
-   */
+  /** Dispatch a click on a cluster icon to the onSelect sink (public so headless tests reach it). */
   clickIcon(id) { if (this._onSelect) this._onSelect(id); }
 
-  /**
-   * Format a reachability assessment as the focused icon's estimate line,
-   * e.g. 'ΔV 320 · Gas 2.1 kg · 14 min'. Pure + static.
-   * @param {{dvCost:number, fuelKg:number, timeS:number}} a
-   * @returns {string}
-   */
+  /** The focused icon's estimate line, e.g. 'ΔV 320 · Gas 2.1 kg · 14 min'. Pure + static. */
   static estimateLine(a) {
     if (!a) return '';
     const dv = Number.isFinite(a.dvCost) ? Math.round(a.dvCost) : '\u2014';
@@ -131,9 +89,8 @@ export class ClusterIcons {
   }
 
   /**
-   * Compact duration for the estimate line. Pure + static.
+   * Compact duration: '45 s' / '14 min' / '2.5 h' ('—' for non-finite). Pure + static.
    * @param {number} s - seconds
-   * @returns {string} '45 s' / '14 min' / '2.5 h' ('—' for non-finite)
    */
   static formatTime(s) {
     if (!Number.isFinite(s)) return '\u2014';
@@ -142,12 +99,7 @@ export class ClusterIcons {
     return `${(s / 3600).toFixed(1)} h`;
   }
 
-  /**
-   * Map a cluster member count to one of the three VisualLaw icon sizes.
-   * Pure + static so the size law is unit-testable.
-   * @param {number} count
-   * @returns {number} px ∈ VisualLaw.ICONS.SIZES_PX ([12, 18, 24])
-   */
+  /** @returns {number} px ∈ VisualLaw.ICONS.SIZES_PX for a member count. Pure + static. */
   static sizeForCount(count) {
     const [small, mid, large] = VisualLaw.ICONS.SIZES_PX;
     const c = count > 0 ? count : 0;
@@ -156,36 +108,26 @@ export class ClusterIcons {
     return large;
   }
 
-  /**
-   * u10 D1: a field's plain name — the trip box's name up to its first comma
-   * ('ISS Band, 180-400 km' → 'ISS Band'). Pure + static.
-   * @param {{name?:string, id?:*}} c
-   * @returns {string}
-   */
+  /** A field's plain name: the trip box's name up to its first comma ('ISS Band, 180-400 km' → 'ISS Band'). */
   static plainName(c) {
     const raw = (c && (c.name || c.id)) != null ? String(c.name || c.id) : '';
     return raw.split(',')[0].trim();
   }
 
-  /**
-   * u10 D1: the line beside the focused ring — plain name and piece count
-   * ('ISS Band · 7 pieces'). Pure + static; plain words at every level.
-   * @param {{name?:string, id?:*, count?:number}} c
-   * @returns {string}
-   */
+  /** The line beside the focused ring: plain name and piece count ('ISS Band · 7 pieces'); plain words at every level. */
   static nameLine(c) {
     let n = (c && c.count > 0) ? c.count : 0;
     const pieces = (k) => `${k} ${k === 1 ? 'piece' : 'pieces'}`;
-    // Nets step 3 lane 3e (FIELDS_BY_HEIGHT): a field is named by its height, not by an inclination band ('Field at 350 km'),
-    // from the registry's field she is at; berthed at a satellite no field is out, so no field line. Flag off: today's text.
+    // FIELDS_BY_HEIGHT: a field is named by its height ('Field at 350 km') from the registry's field she is at;
+    // berthed at a satellite no field is out, so no field line. Flag off: the plain-name text.
     const reg = _fieldRegistry();
     if (reg) {
       if (typeof reg.isBerthed === 'function' ? reg.isBerthed() : !!(reg.berthedSatellite && reg.berthedSatellite())) return '';
-      if (typeof reg.isFree === 'function' && reg.isFree()) return '';     // slice 5 (5d): the free place of a push-down is no field either
+      if (typeof reg.isFree === 'function' && reg.isFree()) return '';     // the free place of a push-down is no field either
       const f = typeof reg.currentField === 'function' ? reg.currentField()
         : (typeof reg.fields === 'function' && typeof reg.currentId === 'function' ? reg.fields().find((x) => x.id === reg.currentId()) : null);
       if (f && Number.isFinite(f.altKm)) {
-        // The cluster snapshot is only re-polled on activate/plan; the height column and the list read the registry live, so this does too.
+        // The cluster snapshot is only re-polled on activate/plan; the height column and list read the registry live.
         if (typeof reg.remainingCount === 'function') { const live = reg.remainingCount(f.id); if (Number.isFinite(live)) n = Math.max(0, live); }
         return `Field at ${Math.round(f.altKm)} km \u00b7 ${pieces(n)}`;
       }
@@ -194,32 +136,24 @@ export class ClusterIcons {
   }
 
   /**
-   * Lane 3e: where `nameLine` finds the field she is at (HeightScale hands its registry over when it is built; null clears it).
-   * `r` is a FieldRegistry or () => one. Flag off (`isOn()` false) or none: `nameLine` is exactly today's.
+   * Where `nameLine` finds the field she is at (HeightScale hands its registry over; null clears it).
+   * `r` is a FieldRegistry or () => one. Flag off (`isOn()` false) or none: plain-name text.
    * @param {object|function|null} r
    */
   static setFieldRegistry(r) { _registrySource = r || null; }
 
-  /**
-   * u10 D1: the on-screen ring size (px) — the count band, x1.25 and at least
-   * FOCUS_RING_MIN_PX when focused. Pure + static.
-   * @param {number} count
-   * @param {boolean} focused
-   * @returns {number}
-   */
+  /** On-screen ring size (px): the count band; focused = x1.25 and at least FOCUS_RING_MIN_PX. Pure + static. */
   static ringPx(count, focused) {
     const band = ClusterIcons.sizeForCount(count);
     return focused ? Math.max(FOCUS_RING_MIN_PX, Math.round(band * 1.25)) : band;
   }
 
   /**
-   * u10 D3: where the ship's edge arrow goes when the ship is off screen — on the
-   * ray from the viewport centre toward the ship's projection (flipped when the
-   * projection is behind the camera), clamped EDGE_ARROW_INSET_PX inside the
-   * edges. Pure + static. null when the ship is on screen.
+   * Where the ship's edge arrow goes when the ship is off screen: on the ray from the viewport centre toward the
+   * ship's projection (flipped when behind the camera), EDGE_ARROW_INSET_PX inside the edges. null when on screen.
    * @param {{x:number, y:number, visible:boolean}} p
-   * @param {number} W
-   * @param {number} H
+   * @param {number} W viewport px
+   * @param {number} H viewport px
    * @returns {{x:number, y:number, angleRad:number}|null}
    */
   static edgeArrow(p, W, H) {
@@ -236,14 +170,10 @@ export class ClusterIcons {
   }
 
   /**
-   * u10 D3: the half-extents (px) round a marker's anchor point that the
-   * framing keeps on screen and off the HUD panels — the union of the focused
-   * field icon (ring, name block beside it: `lines` of text at
-   * MARKER_LABEL_PX, on the side toward Earth's centre) and the ship chevron
-   * with `You` below it, plus 4 px. `inner` is the extent on the side facing
-   * Earth's centre (the name block), `outer` the side away from it; `flip` is
-   * the label's hysteresis band (LABEL_FLIP_PX). Pure + static (an estimate
-   * from the text length; mono glyph ≈ 0.62 em).
+   * Half-extents (px) round a marker's anchor that the framing keeps on screen and off the HUD panels: the union of
+   * the focused field icon (ring + name block of `lines` at MARKER_LABEL_PX, toward Earth's centre) and the ship
+   * chevron with `You` below it, plus 4 px. `inner` faces Earth's centre (the name block), `outer` is the far side;
+   * `flip` is LABEL_FLIP_PX. Pure + static; an estimate from the text length (mono glyph ≈ 0.62 em).
    * @param {{ringPx?:number, lines?:string[]}} [arg]
    * @returns {{inner:number, outer:number, up:number, down:number, flip:number}}
    */
@@ -265,10 +195,9 @@ export class ClusterIcons {
   }
 
   /**
-   * u10 D1/D3: which side of its ring a field's name block goes — toward
-   * Earth's centre on screen (`sideX`), so the text never sticks out past the
-   * shell the framing keeps clear of the panels. Hysteresis: it changes side
-   * only once the ring is LABEL_FLIP_PX past `sideX`. Pure + static.
+   * Which side of its ring a field's name block goes: toward Earth's centre on screen (`sideX`), so the text never
+   * sticks out past the shell the framing keeps clear of the panels. Hysteresis: changes side only once the ring is
+   * LABEL_FLIP_PX past `sideX`. Pure + static.
    * @param {number} x       the ring's screen x
    * @param {number} sideX   Earth's centre's screen x
    * @param {'left'|'right'|null} prev
@@ -281,13 +210,7 @@ export class ClusterIcons {
     return prev || (x > sideX ? 'left' : 'right');
   }
 
-  /**
-   * Rank clusters for the label budget: highest member count first (stable on
-   * ties by id) then truncate to `budget`. Pure + static for testability.
-   * @param {Array<{id:*, count:number}>} clusters
-   * @param {number} budget
-   * @returns {Array} the top `budget` clusters, count-desc
-   */
+  /** Rank clusters for the label budget: highest count first (ties by id), truncated to `budget`. Pure + static. */
   static rank(clusters, budget) {
     const list = Array.isArray(clusters) ? clusters.slice() : [];
     list.sort((a, b) => {
@@ -298,8 +221,6 @@ export class ClusterIcons {
     const n = Math.max(0, budget | 0);
     return list.slice(0, n);
   }
-
-  // ── DOM lifecycle (all no-op headless) ─────────────────────────────────────
 
   /** @private */
   _build() {
@@ -321,8 +242,7 @@ export class ClusterIcons {
   hide() {
     this._visible = false;
     if (this._root) this._root.style.opacity = '0';
-    // Leaving the DOM in place (opacity 0) keeps re-show cheap; positions refresh
-    // on the next render(). Nothing paints while hidden.
+    // The DOM stays in place (opacity 0): re-show is cheap, positions refresh on the next render().
   }
 
   /**
@@ -332,15 +252,13 @@ export class ClusterIcons {
    * @param {object} [opts]
    * @param {number} [opts.budget] - max labelled icons (default F6 labelBudget = 7)
    * @param {*} [opts.focusId] - the currently-focused cluster id (SELECTION blue)
-   * @param {Map|object} [opts.assessments] - FUEL-REACHABILITY: clusterId →
-   *                 ReachabilityModel.assess() result. Absent → the pre-reach
-   *                 rendering, byte-identical.
-   * @param {boolean} [opts.coOrbital] - u7 D1: the focused cluster is at the ship's own height
-   *                 (NavcomFloor passes `!!coOrbitalReadout(win)`); at the simple level it carries no label.
-   * @param {function} [opts.centerOf] - u10 D2: (cluster) => live centre {x,y,z} (NavcomFloor's
-   *                 members-mean, ≤ 2 Hz + extrapolated); absent or null → `cluster.center`.
-   * @param {number} [opts.labelSideX] - u10 D3: Earth's centre's screen x; name blocks sit on the
-   *                 side of their ring that faces it (ClusterIcons.labelSide). Absent → the right side.
+   * @param {Map|object} [opts.assessments] - clusterId → ReachabilityModel.assess() result. Absent → no verdicts.
+   * @param {boolean} [opts.coOrbital] - the focused cluster is at the ship's own height; at the simple level it
+   *                 carries no label.
+   * @param {function} [opts.centerOf] - (cluster) => live centre {x,y,z} (NavcomFloor's members-mean, ≤ 2 Hz +
+   *                 extrapolated); absent or null → `cluster.center`.
+   * @param {number} [opts.labelSideX] - Earth's centre's screen x; name blocks sit on the side of their ring that
+   *                 faces it (ClusterIcons.labelSide). Absent → the right side.
    * @returns {Array<{id:*, name:string, count:number, x:number, y:number, sizePx:number,
    *                  focused:boolean, verdict:?string, estimate:?string, dimmed:boolean,
    *                  ringPx:number, label:?string, labelSide:string}>}
@@ -371,13 +289,13 @@ export class ClusterIcons {
       const verdict = a ? a.verdict : null;
       let estimate = null;
       if (focused && a) {
-        // Height map on: the Hohmann ΔV/Gas/min line contradicts the real-thruster gas and days the column and list show, so it is not drawn.
+        // Height map on: the Hohmann ΔV/Gas/min line contradicts the real-thruster gas and days the column and list show.
         if (!simple) estimate = _fieldRegistry() ? null : ClusterIcons.estimateLine(a);
-        else if (!coOrbital) estimate = PLAIN_VERDICT_LINE[verdict] || null;   // u7 D1: co-orbital → no label
+        else if (!coOrbital) estimate = PLAIN_VERDICT_LINE[verdict] || null;   // co-orbital → no label
       }
       const dimmed = verdict === 'unreachable';
       const ringPx = ClusterIcons.ringPx(c.count, focused);
-      const label = focused ? ClusterIcons.nameLine(c) : null;   // u10 D1: name + count beside the focused ring
+      const label = focused ? ClusterIcons.nameLine(c) : null;
       const prevSide = this._sides.get(c.id) || null;
       const labelSide = sideX == null ? 'right' : ClusterIcons.labelSide(p.x, sideX, prevSide);
       this._sides.set(c.id, labelSide);
@@ -388,7 +306,7 @@ export class ClusterIcons {
       seen.add(c.id);
       this._paintIcon(c, p, sizePx, focused, verdict, estimate, labelSide);
     }
-    // Retire icons no longer in the visible set (idempotent — G1 churn fix).
+    // Retire icons no longer in the visible set (idempotent).
     for (const [id, rec] of this._icons) {
       if (!seen.has(id) && rec._display !== 'none') {
         rec.el.style.display = 'none';
@@ -403,12 +321,9 @@ export class ClusterIcons {
     if (!this._root) return;
     let rec = this._icons.get(cluster.id);
     if (!rec) {
-      // u10 D1: the wrapper is a zero-size anchor AT the projected point; the
-      // ring is centred on it (before u10 the ring+count stack was centred, so
-      // the ring sat a few px off its field). The count sits under the ring;
-      // the name block (plain name · count, then the estimate line) sits beside
-      // the ring at MARKER_LABEL_PX — shown for the focused field, and on hover
-      // for the others.
+      // The wrapper is a zero-size anchor AT the projected point; the ring is centred on it. The count sits under
+      // the ring; the name block (plain name · count, then the estimate line) sits beside it at MARKER_LABEL_PX,
+      // shown for the focused field and on hover for the others.
       const el = document.createElement('div');
       el.style.cssText = 'position:absolute;width:0;height:0;';
       const ring = document.createElement('div');
@@ -422,36 +337,27 @@ export class ClusterIcons {
       el.appendChild(ring);
       el.appendChild(label);
       el.appendChild(name);
-      // Click-to-select: the ROOT stays pointer-events:none; only the ring +
-      // count label (+ the shown name block) are hitboxes (small enough to
-      // never block canvas interaction elsewhere). The listener sits on the
-      // wrapper and dispatches through clickIcon() → the onSelect sink.
+      // The ROOT stays pointer-events:none; only the ring + count label are hitboxes (small enough to never block
+      // canvas interaction). The listener sits on the wrapper and dispatches through clickIcon().
       ring.style.pointerEvents = 'auto';
       ring.style.cursor = 'pointer';
       label.style.pointerEvents = 'auto';
       label.style.cursor = 'pointer';
-      name.style.pointerEvents = 'none';   // u11 D7: a drag that starts on the name pill turns the view; the ring is the tap target
+      name.style.pointerEvents = 'none';   // a drag that starts on the name pill turns the view; the ring is the tap target
       el.addEventListener('click', (ev) => {
         if (ev && ev.stopPropagation) ev.stopPropagation();
         this.clickIcon(cluster.id);
       });
-      // u10 D1: the other fields show their name on hover (a tap focuses them).
+      // The other fields show their name on hover (a tap focuses them).
       const hover = (on) => () => { const r = this._icons.get(cluster.id); if (r) { r._hover = on; this._paintName(r); } };
       ring.addEventListener('pointerenter', hover(true));
       ring.addEventListener('pointerleave', hover(false));
       label.addEventListener('pointerenter', hover(true));
       label.addEventListener('pointerleave', hover(false));
       this._root.appendChild(el);
-      // The `_`-prefixed fields cache the last WRITTEN value of every property
-      // that rarely changes, so the per-frame render only touches left/top
-      // (world-anchored — legitimately changes every frame). G1 (post-M3
-      // play-test): the unconditional writes re-replaced the label text node
-      // every frame — the instrumented probe measured #ladder-cluster-icons
-      // childList mutations at one add+remove per icon per frame (~17 Hz
-      // headless, would be ~120 Hz at 120 fps) for text that almost never
-      // changes. Same-value style writes are cached on the same principle.
-      // est (the focused estimate line) is created LAZILY on first use so the
-      // no-assessment path adds no element.
+      // The `_`-prefixed fields cache the last WRITTEN value of every rarely-changing property, so the per-frame
+      // render only touches left/top. Unconditional writes re-replaced the label text node every frame (one DOM
+      // childList add+remove per icon per frame). `est` is created LAZILY so the no-assessment path adds no element.
       rec = {
         el, ring, label, name, nameLine, est: null,
         _display: null, _dim: null, _focused: null, _color: null, _count: null,
@@ -460,12 +366,11 @@ export class ClusterIcons {
       };
       this._icons.set(cluster.id, rec);
     }
-    // FUEL-REACHABILITY verdict encoding (never color-alone): marginal = VALUE
-    // gold + dashed; unreachable = dimmed + dashed; reachable/unknown = INFO
-    // solid. Focus stays SELECTION blue (double-encoded: thicker ring + scale).
+    // Verdict encoding (never colour-alone): marginal = VALUE gold + dashed; unreachable = dimmed + dashed;
+    // reachable/unknown = INFO solid. Focus stays SELECTION blue (also thicker ring + scale).
     const color = focused ? VisualLaw.COLORS.SELECTION
       : (verdict === 'marginal' ? VisualLaw.COLORS.VALUE : VisualLaw.COLORS.INFO);
-    const dim = ClusterIcons.ringPx(cluster.count, focused);   // u10 D1: focused ≥ FOCUS_RING_MIN_PX
+    const dim = ClusterIcons.ringPx(cluster.count, focused);   // focused ≥ FOCUS_RING_MIN_PX
     if (rec._display !== 'block') { rec.el.style.display = 'block'; rec._display = 'block'; }
     rec.el.style.left = `${p.x}px`;
     rec.el.style.top = `${p.y}px`;
@@ -479,7 +384,7 @@ export class ClusterIcons {
       rec._side = null;   // re-place the name block for the new ring size
     }
     if (rec._side !== labelSide) {
-      // u10 D3: the name block faces Earth's centre (left of a ring right of it, and the reverse).
+      // The name block faces Earth's centre (left of a ring right of it, and the reverse).
       const gap = `${rec._dim / 2 + 6}px`;
       rec.name.style.left = labelSide === 'left' ? '' : gap;
       rec.name.style.right = labelSide === 'left' ? gap : '';
@@ -510,7 +415,7 @@ export class ClusterIcons {
       rec.label.textContent = String(cluster.count);
       rec._count = cluster.count;
     }
-    // u10 D1: the focused field carries its count in the name line, not under the ring.
+    // The focused field carries its count in the name line, not under the ring.
     const labelShown = !focused;
     if (rec._labelShown !== labelShown) {
       rec.label.style.display = labelShown ? 'block' : 'none';
@@ -540,7 +445,7 @@ export class ClusterIcons {
     this._paintName(rec);
   }
 
-  /** @private u10 D1: show the name block for the focused field, or while hovered. */
+  /** @private Show the name block for the focused field, or while hovered. */
   _paintName(rec) {
     const shown = !!(rec._focused || rec._hover);
     if (rec._nameShown !== shown) {
@@ -551,9 +456,8 @@ export class ClusterIcons {
   }
 
   /**
-   * Draw the player ship as a velocity-aligned chevron (ship-to-icon transform),
-   * labelled `You` (u10 D1); off screen, an arrow at the viewport edge pointing
-   * to it, also labelled `You` (u10 D3).
+   * Draw the player ship as a velocity-aligned chevron labelled `You`; off screen, an arrow at the viewport edge
+   * pointing to it, also labelled `You`.
    * @param {{x:number, y:number, visible:boolean}} p - projected ship position
    * @param {number} [angleRad] - screen-space velocity heading (0 = +x)
    * @param {{viewW?:number, viewH?:number}} [opts] - viewport (default: the window's)
@@ -570,7 +474,7 @@ export class ClusterIcons {
     if (!this._root) return out;
     if (!this._shipEl) {
       const el = document.createElement('div');
-      // A CSS chevron (two strokes), tinted PLAYER green (u10: 18 px, 3 px strokes).
+      // A CSS chevron (two strokes), tinted PLAYER green.
       el.style.cssText = [
         'position:absolute', 'transform-origin:center', 'pointer-events:none',
         `width:${SHIP_MARKER_PX}px`, `height:${SHIP_MARKER_PX}px`, 'box-sizing:border-box',
@@ -591,7 +495,7 @@ export class ClusterIcons {
       const arrow = document.createElement('div');
       arrow.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none;display:none;';
       const tri = document.createElement('div');
-      // A solid triangle pointing along +x before the rotation (border trick, PLAYER green).
+      // A solid triangle pointing along +x before the rotation (border trick).
       tri.style.cssText = `position:absolute;left:-8px;top:-9px;width:0;height:0;border-top:9px solid transparent;border-bottom:9px solid transparent;border-left:16px solid ${VisualLaw.COLORS.PLAYER};filter:drop-shadow(0 0 2px rgba(0,0,0,0.9));transform-origin:8px 9px;`;
       const alab = document.createElement('div');
       alab.style.cssText = [
@@ -613,12 +517,11 @@ export class ClusterIcons {
       this._shipDisplay = display;
     }
     if (display === 'block') {
-      // The bare corner (border-left+top) reads as a chevron; rotate to heading.
       this._shipEl.style.left = `${out.x}px`;
       this._shipEl.style.top = `${out.y}px`;
       this._shipEl.style.transform = `translate(-50%,-50%) rotate(${angleRad + Math.PI / 4}rad)`;
       this._shipLabelEl.style.left = `${out.x}px`;
-      this._shipLabelEl.style.top = `${out.y + SHIP_LABEL_DROP_PX}px`;   // below: clear of a focused ring round it
+      this._shipLabelEl.style.top = `${out.y + SHIP_LABEL_DROP_PX}px`;
     }
     const arrowDisplay = out.edge ? 'block' : 'none';
     if (this._shipArrowDisplay !== arrowDisplay) { this._shipArrowEl.style.display = arrowDisplay; this._shipArrowDisplay = arrowDisplay; }

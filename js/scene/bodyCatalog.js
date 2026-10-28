@@ -11,6 +11,7 @@
  */
 
 import { skyBrightness } from './starCatalog.js';
+import { degToRad, radToDeg } from '../core/MathUtil.js';
 
 // The shared brightness curve lives in starCatalog.js as `skyBrightness` (one
 // home so stars and bodies can't diverge); re-exported for the body ladder.
@@ -22,12 +23,12 @@ export { skyBrightness };
  * and label can't desync.
  */
 export function angularToRadius(deg, dist) {
-  return dist * Math.tan((deg * Math.PI / 180) / 2);
+  return dist * Math.tan(degToRad(deg) / 2);
 }
 
 /** Inverse of angularToRadius: angular diameter in degrees. */
 export function radiusToAngular(radius, dist) {
-  return 2 * Math.atan(radius / dist) * 180 / Math.PI;
+  return radToDeg(2 * Math.atan(radius / dist));
 }
 
 /**

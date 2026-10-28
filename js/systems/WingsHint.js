@@ -1,7 +1,5 @@
 /**
- * WingsHint.js — the "open the wings" hint that STAYS until the wings are out
- * (m1-finish, owner 2026-10-17: new players lost the battery with nothing on
- * screen telling them how to stop it).
+ * WingsHint.js — the "open the wings" hint that STAYS until the wings are out (owner 2026-10-17).
  *
  * A start (new game hand-over, CONTINUE, retry) leaves the wings rolled up and
  * the battery at half and falling (DECISIONS §15 row 4, §17 row 1). The comms
@@ -11,30 +9,21 @@
  * row: nothing shows at the start, on keys or on glass, until the wings have
  * been commanded out and rolled back up.)
  *
- *   • `post()` arms the hint and emits `HINT_POSTED { id:'wings_open',
- *     duration:0 }` (persistent: HintTicker only expires rows with a duration
- *     above 0). A later start re-arms it.
- *   • `update(ship, ticker)` once per frame, reading the wing value
- *     (`_rosaFurlProgress`) and the wing command (`_rosaFurlTarget`, 0 or 1).
- *     - Wings out (progress >= WINGS_OUT_PROGRESS): ONE `HINT_SATISFIED`,
- *       disarmed for good.
- *     - Commanded out but still rolling (the roll-out takes about 2.5 s and the
- *       comma key TOGGLES, so a row saying "press ," would invite a press that
- *       rolls them back): the row is taken down (one `HINT_SATISFIED`), the hint
- *       stays armed.
- *     - Commanded rolled up (also: rolled back mid-way): the row is up. If the
- *       ticker no longer holds it (it keeps only 4 rows and drops the oldest,
- *       and this row is posted first) it is posted again. That re-post is what
- *       makes it stay; there are no blind periodic re-emits, and a frame where
- *       nothing changed emits nothing.
- *   • `areOut()` / `needsOpening()` are what SensorSystem reads to word a
- *     refused scan. `needsOpening()` is true when the wings are commanded rolled
- *     up; both are `null` until a frame has seen a ship.
+ *   • `post()` arms the hint and emits `HINT_POSTED { id:'wings_open', duration:0 }` (persistent: HintTicker only
+ *     expires rows with duration > 0). A later start re-arms it.
+ *   • `update(ship, ticker)` per frame reads the wing value (`_rosaFurlProgress`, 0..1) and command
+ *     (`_rosaFurlTarget`, 0 or 1):
+ *     - Out (progress >= WINGS_OUT_PROGRESS): ONE `HINT_SATISFIED`, disarmed for good.
+ *     - Commanded out, still rolling (~2.5 s; the comma key TOGGLES, so a "press ," row would invite a press that
+ *       rolls them back): row taken down (one `HINT_SATISFIED`), hint stays armed.
+ *     - Commanded rolled up (also rolled back mid-way): row up. If the ticker no longer holds it (it keeps 4 rows,
+ *       drops the oldest, and this row is posted first) it is posted again. That re-post is what makes it stay;
+ *       there are no blind periodic re-emits, and an unchanged frame emits nothing.
+ *   • `areOut()` / `needsOpening()` are what SensorSystem reads to word a refused scan; both `null` until a frame
+ *     has seen a ship.
  *   • `reset()` takes the row down too, so a menu round-trip leaves no stale row.
  *
- * Not at the key press and not half-way: the wing value is the ship's single
- * `_rosaFurlProgress` (0..1). A roll-up in mid-flight does not re-arm the hint;
- * only a start or a battery-refused scan does.
+ * A roll-up in mid-flight does not re-arm the hint; only a start or a battery-refused scan does.
  *
  * @module systems/WingsHint
  */
@@ -42,32 +31,26 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 
-/** The ticker row id. */
 export const WINGS_HINT_ID = 'wings_open';
 
 /** Wing progress (0..1) at or above which the wings count as out. */
 export const WINGS_OUT_PROGRESS = 0.98;
 
-/**
- * The row's body (ASCII, u2-one-voice D2): the cap carries the key (`,`), the
- * body says what it does, the key once. On touch the row is the OPEN THE WINGS
- * button instead (HintTicker step button, `press: 'Comma'`).
- */
+// ASCII body (u2-one-voice D2): the cap carries the key, the body says what it does. On touch the row is the
+// OPEN THE WINGS button instead (HintTicker step button, `press: 'Comma'`).
 export const WINGS_HINT_TEXT = 'Open the wings (comma key)';
 
-/** The touch button's label (HintTicker renders the row as this button on glass). */
 export const WINGS_HINT_BUTTON = 'OPEN THE WINGS';
 
 export class WingsHint {
-  /** @param {{ on: Function, emit: Function }} [bus] */
   constructor(bus = eventBus) {
     this._bus = bus;
     this._armed = false;
     /** @type {boolean|null} */
     this._out = null;
-    /** @type {boolean|null} wings commanded rolled up (target < 0.5); null until a ship is seen */
+    /** wings commanded rolled up (target < 0.5); null until a ship is seen */
     this._needsOpening = null;
-    /** We posted the row and have not taken it down (used when there is no ticker to ask). */
+    /** We posted the row and have not taken it down (when there is no ticker to ask). */
     this._rowUp = false;
     /** A START armed the hint silently: no row until the wings are commanded out. */
     this._startQuiet = false;
@@ -85,12 +68,7 @@ export class WingsHint {
     this._emitPost();
   }
 
-  /**
-   * Once per frame, no per-frame work unless armed. `ticker` is the HUD's
-   * HintTicker (`getItemIds()`); absent = we go by what we last posted.
-   * @param {{ _rosaFurlProgress?: number, _rosaFurlTarget?: number }|null} ship
-   * @param {{ getItemIds?: () => string[] }|null} [ticker]
-   */
+  /** Per frame; no work unless armed. `ticker` is the HUD's HintTicker (`getItemIds()`); absent = go by what we posted. */
   update(ship, ticker) {
     if (!ship) return;
     const p = ship._rosaFurlProgress;
@@ -122,23 +100,14 @@ export class WingsHint {
     }
   }
 
-  /**
-   * @returns {boolean|null} true / false once a frame has seen the ship's
-   *   wings; null before that (unit tests, the menu hero) — callers treat null
-   *   as "unknown, change nothing".
-   */
+  /** true/false once a frame has seen the wings; null before (tests, menu hero): callers treat null as "unknown". */
   areOut() { return this._out; }
 
-  /**
-   * @returns {boolean|null} true when the wings are commanded rolled up (a
-   *   scan refused for battery should say "open the wings"); false when they
-   *   are commanded out; null before a frame has seen the ship.
-   */
+  /** true when the wings are commanded rolled up; false when commanded out; null before a frame has seen the ship. */
   needsOpening() { return this._needsOpening; }
 
-  /** Take the row down, disarm and forget the ship (a new game, a retry, tests). */
+  /** Take the row down, disarm, forget the ship. The ticker ignores an unknown id, so this is safe with no row up. */
   reset() {
-    // The ticker ignores an unknown id, so this is safe when no row is up.
     this._bus.emit(Events.HINT_SATISFIED, { id: WINGS_HINT_ID });
     this._armed = false;
     this._out = null;
@@ -147,7 +116,6 @@ export class WingsHint {
     this._startQuiet = false;
   }
 
-  /** @private */
   _emitPost() {
     if (this._startQuiet) return;   // armed at a start: no row, `_rowUp` stays false
     this._rowUp = true;
@@ -165,6 +133,6 @@ export class WingsHint {
   }
 }
 
-/** The shared instance (OpeningDance posts it, SensorSystem reads it, the game loop updates it). */
+/** Shared instance: OpeningDance posts it, SensorSystem reads it, the game loop updates it. */
 export const wingsHint = new WingsHint(eventBus);
 if (Events.GAME_RESET) eventBus.on(Events.GAME_RESET, () => wingsHint.reset());

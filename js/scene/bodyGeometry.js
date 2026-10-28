@@ -14,6 +14,7 @@
  */
 
 import { angularToRadius, radiusToAngular } from './bodyCatalog.js';
+import { lerp } from '../core/MathUtil.js';
 
 // Radial alpha stops of createSunDiscTexture's gradient, kept HERE (the texture
 // factory reads them) because the depth mask must know how far the sprite really
@@ -34,7 +35,7 @@ export function glareAlphaAt(r, stops = SUN_GLARE_STOPS) {
     const a = stops[i - 1], b = stops[i];
     if (r <= b.r) {
       const t = (r - a.r) / (b.r - a.r);
-      return a.a + (b.a - a.a) * t;
+      return lerp(a.a, b.a, t);
     }
   }
   return stops[stops.length - 1].a;
@@ -54,7 +55,7 @@ export function glareVisibleFraction(alphaFloor, stops = SUN_GLARE_STOPS) {
     const a = stops[i - 1], b = stops[i];
     if (b.a <= alphaFloor && a.a > alphaFloor) {
       const t = (a.a - alphaFloor) / (a.a - b.a);
-      return a.r + (b.r - a.r) * t;
+      return lerp(a.r, b.r, t);
     }
   }
   return stops[stops.length - 1].r;

@@ -1,59 +1,33 @@
 /**
- * DetailSlider.js — the DETAIL slider: one horizontal "volume knob" for how
- * many HUD panels show (Session P, plan D5, owner 2026-09-07: "is the rail
- * even needed… volume control"). It replaces the left-edge DISPLAY rail
- * (js/ui/PaneRail.js — nine per-panel switches, 35 % opacity forever) with
- * ONE control: a track, one tick per pane-density rung, a thumb at the
- * current visible count. Drag or tap → `onLevel(n)`; the hub walks
- * PaneDensity.setLevel(n, { quiet: true }). No labels, no toast — the slider
- * IS the readout (Airbus A3: state shows, nothing confirms).
+ * DetailSlider.js — the DETAIL slider: one horizontal "volume knob" for how many HUD panels show (owner 2026-09-07:
+ * "is the rail even needed… volume control"). A track, one tick per pane-density rung, a thumb at the current visible
+ * count. Drag or tap → `onLevel(n)`; the hub walks PaneDensity.setLevel(n, { quiet: true }). No labels, no toast:
+ * the slider IS the readout.
  *
- * WHAT IT IS NOT. It owns no order and no memory: the SHED ORDER is
- * PaneDensity's rung list (plan D5b — override · cargo · orbit … mother
- * last), the slider only walks it; per-floor ROOM memory needs nothing new —
- * `setLevel` walks real down()/up() steps whose `_onFlip` feeds the existing
- * HUD_PANE_VISIBILITY capture (the D5 law), exactly like the `-`/`+` keys.
- * Level 0 is PURE SCENERY: the hub answers `visibleCount() === 0` with
- * `LadderController.setRailsShy(true)`; the slider itself stays wakeable
- * (its visibility is EdgeChrome's — it is NOT in the body[data-pure-scenery]
- * CSS rule, otherwise level 0 would be a trap on glass).
+ * It owns no order and no memory: the SHED ORDER is PaneDensity's rung list, the slider only walks it; per-floor
+ * room memory comes from the real down()/up() steps' `_onFlip` (HUD_PANE_VISIBILITY capture), like the `-`/`+` keys.
+ * Level 0 is PURE SCENERY: the hub answers `visibleCount() === 0` with `LadderController.setRailsShy(true)`; the
+ * slider itself stays wakeable (its visibility is EdgeChrome's; it is NOT in the body[data-pure-scenery] CSS rule,
+ * otherwise level 0 would be a trap on glass).
  *
- * WHERE IT LIVES. The FOOTER BAND's RIGHT slot (§13 ruling 5, 2026-09-24 —
- * was the left slot, plan D7, until the SPECS tab took it):
- * `position:fixed; right:EDGE_PX; bottom:footerBottomPx;
- * height:FOOTER_BAND_PX` — the hub
- * passes `footerBand().bottom` (132 on both surfaces). On GLASS the hit box
- * is TOUCH_PITCH_PX (44) tall: 6 px of transparent padding above and below
- * the 32 px band, the root shifted down by 6 so the VISUAL band still sits
- * at footerBottomPx (Apple HIG 44 pt). F2–F5 only: the hub calls
- * `setShown(floor !== 1)` (the SPECS tab has the left slot on every floor;
- * F1 owns the whole footer band).
+ * Placement: the FOOTER BAND's RIGHT slot (DECISIONS §13 ruling 5): `position:fixed; right:EDGE_PX;
+ * bottom:footerBottomPx; height:FOOTER_BAND_PX`, the hub passes `footerBand().bottom`. On GLASS the hit box is
+ * TOUCH_PITCH_PX (44) tall: 6 px of transparent padding above and below the 32 px band, the root shifted down by 6
+ * so the VISUAL band still sits at footerBottomPx. F2–F5 only: the hub calls `setShown(floor !== 1)`.
  *
- * EDGE CHROME (plan D2/D3). The slider has no idle timer of its own: the
- * hub reads `edgeChrome.phase('slider', now)` per frame and calls
- * `setPhase(phase)` — 'awake' → opacity 1 / visible; 'fading' → opacity
- * IDLE_FADE (0; the CSS `transition: opacity EDGE_FADE_MS` ramps);
- * 'hidden' → visibility hidden. Its own pointerdown / pointermove call
- * `onInteract()` (the hub wakes 'slider'); release calls NOTHING.
+ * Edge chrome: no idle timer of its own. The hub reads `edgeChrome.phase('slider', now)` per frame and calls
+ * `setPhase(phase)`: 'awake' → opacity 1 / visible; 'fading' → opacity IDLE_FADE; 'hidden' → visibility hidden.
+ * Its own pointerdown / pointermove call `onInteract()`; release calls NOTHING.
  *
- * Laws (the GestureSplash / OverridePane header's): DOM fonts none (no
- * text at all — the aria values are the only words); colours from VisualLaw
- * (INFO for the instrument track and ticks, PLAYER for the thumb); no HTML
- * strings (createElement only); no timers / rAF (the refresh throttle reads the caller clock);
- * no window / document listeners (four pointer listeners on its own root
- * are the only edges); never reads the game's constants table; never touches the DOM at
- * import time; constructible headless (no document: every method callable,
- * nothing thrown); every DOM write is write-on-change (G1); emoji-free.
+ * Laws: no text at all (the aria values are the only words); colours from VisualLaw (INFO for track and ticks,
+ * PLAYER for the thumb); no HTML strings (createElement only); no timers / rAF (the refresh throttle reads the
+ * caller clock); no window / document listeners (four pointer listeners on its own root); never reads the game's
+ * constants table; never touches the DOM at import time; constructible headless (no document: every method
+ * callable, nothing thrown); every DOM write is write-on-change; emoji-free.
  *
- * Rev 3 (tmp/plans/1788867799156-hud-pane-ladder-reorder.md, locked #11):
- * 17 detents (levels 0..16), a 3 px drag dead-zone past each detent
- * boundary so a thumb held still never flickers, and optional bold
- * milestone ticks. Tap / release, reduced-motion, and the total() /
- * level() / onLevel contract are unchanged. Milestone names (never on
- * screen): 0 Scenery · 2 Ships · 8 Flight · 10 Ops · 14 Instruments · 16 All.
- * 2026-10-22: the numbers above are the full ladder; the slider shows only the positions that can
- * show right now (up to 14: the alerts ride the last HUD pane and city labels ride the ships, so neither is a
- * position), and the milestones are read live. Ships = position 1.
+ * 17 detents (levels 0..16) with a 3 px drag dead-zone past each detent boundary so a thumb held still never
+ * flickers. The slider shows only the positions that can show right now (up to 14: the alerts ride the last HUD pane
+ * and city labels ride the ships, so neither is a position); the milestones are read live. Ships = position 1.
  *
  * @module ui/DetailSlider
  */
@@ -65,27 +39,23 @@ import { shortScreenNow, watchShortScreen } from './hud/PhoneFold.js';
 /** The root element id (the probe reads its rect, aria-valuenow and tick count). */
 export const DETAIL_SLIDER_ID = 'ladder-detail-slider';
 
-/** The injected stylesheet's id (one <style>, injected once per document). */
 export const DETAIL_SLIDER_STYLE_ID = 'detail-slider-style';
 
-/** Unforced `refresh()` reads the density at most this often (≤ 4 Hz). */
+/** Unforced `refresh()` reads the density at most this often (ms). */
 export const REFRESH_MIN_MS = 250;
 
-/** The track's width in CSS px (the thumb travels its full length). */
 export const TRACK_WIDTH_PX = 160;
 
 /**
- * Drag hysteresis (plan 1788867799156 locked #11): a level change while
- * dragging commits only once the pointer has moved ≥ this many CSS px
- * PAST the detent boundary it would cross. Tap / first contact and
- * release ignore it — detent geometry is unchanged.
+ * Drag hysteresis: a level change while dragging commits only once the pointer has moved ≥ this many CSS px
+ * PAST the detent boundary it would cross. Tap / first contact and release ignore it.
  */
 export const DEADZONE_PX = 3;
 
 /** Horizontal padding inside the root so the thumb has room at 0 % and 100 %. */
 const SIDE_PAD_PX = 8;
 
-/** @private '#rrggbb' → 'rgba(r,g,b,a)' (the RailIndicator idiom). */
+/** @private '#rrggbb' → 'rgba(r,g,b,a)' */
 const _rgba = (hex, a) => {
   const n = parseInt(String(hex).replace('#', ''), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
@@ -110,10 +80,10 @@ const _normalizeMilestones = (arr) => {
 const SHORT_BOTTOM_PX = 8;
 
 /**
- * u5-info-ap-hold D7: where the slider sits on a SHORT screen (phone sideways), in CSS px, built from
- * the same numbers `_applyPlacement` / `_build` use: bottom centre, `SHORT_BOTTOM_PX` above the screen
- * bottom (the visual band), width = track + side padding, height = the 44 px glass box or the footer
- * band. main.js `_edgeBandWake` reads it so a tap on the slider's own spot wakes it.
+ * Where the slider sits on a SHORT screen (phone sideways), in CSS px, from the same numbers `_applyPlacement` /
+ * `_build` use: bottom centre, `SHORT_BOTTOM_PX` above the screen bottom (the visual band), width = track + side
+ * padding, height = the 44 px glass box or the footer band. main.js `_edgeBandWake` reads it so a tap on the
+ * slider's own spot wakes it.
  * @param {number} viewW  innerWidth
  * @param {number} viewH  innerHeight
  * @param {boolean} glass  touch device (the 44 px hit box)
@@ -140,11 +110,10 @@ export class DetailSlider {
     * @param {boolean}  [deps.glass]          true → the 44 pt hit box (6 px pads, bottom shifted down 6).
     * @param {Window|null} [deps.win]         window for the short-screen answer (default: the global one; none = tall).
     *                                         On a SHORT screen (innerHeight < 500, live) the slider sits bottom
-    *                                         centre so it never covers the right column (lane u4-phone-fold).
+    *                                         centre so it never covers the right column.
     * @param {boolean}  [deps.reducedMotion]  true → inline `transition:none` on the root.
     * @param {number[]} [deps.milestones]     LEVEL indices whose ticks render bold (thicker /
-    *                                         longer). Default [] → tick DOM identical to rev 2.
-    *                                         main.js also calls setMilestones after splicing.
+    *                                         longer). Default []. main.js also calls setMilestones after splicing.
     * @param {Document|null} [deps.doc]       document (default: the global one; null = headless, inert).
     * @param {function} [deps.now]            ms clock for the refresh throttle (default performance.now).
     */
@@ -154,7 +123,6 @@ export class DetailSlider {
     this._onLevel = typeof deps.onLevel === 'function' ? deps.onLevel : null;
     this._onInteract = typeof deps.onInteract === 'function' ? deps.onInteract : null;
     this._milestones = _normalizeMilestones(deps.milestones);
-    /** @private live milestone source (setMilestones(fn)); null = fixed array */
     this._milestoneFn = null;
     const fb = Number(deps.footerBottomPx);
     this._footerBottomPx = Number.isFinite(fb) ? fb : (RAIL_GEOMETRY.THUMB_REST_PX + RAIL_GEOMETRY.FOOTER_GAP_PX);
@@ -164,7 +132,6 @@ export class DetailSlider {
       : (typeof document !== 'undefined' ? document : null);
     this._now = typeof deps.now === 'function' ? deps.now : null;
     this._win = deps.win !== undefined ? deps.win : (typeof window !== 'undefined' ? window : null);
-    /** @private the placement last WRITTEN ('tall' | 'short'; write-on-change) and the unwatch fn */
     this._placed = 'tall';
     this._unwatchShort = null;
     this._placeWrites = 0;
@@ -175,14 +142,11 @@ export class DetailSlider {
     this._ticks = [];
     this._listeners = [];
     this._disposed = false;
-    /** @private the last values WRITTEN (write-on-change) */
     this._shown = true;
     this._phase = null;
     this._wroteTotal = null;
     this._wroteLevel = null;
-    /** @private the throttle clock of the last unforced read */
     this._readAt = -Infinity;
-    /** @private the live gesture: cached track rect + the last detent emitted */
     this._active = false;
     this._rect = null;
     this._lastEmitted = null;
@@ -192,11 +156,8 @@ export class DetailSlider {
     this._build();
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
   /**
-   * Re-read `level()` / `total()` — at most every REFRESH_MIN_MS unless
-   * forced — and rewrite the ticks, the thumb and the aria values on change.
+   * Re-read `level()` / `total()` (throttled unless forced); rewrites ticks, thumb and aria values on change.
    * @param {{force?:boolean}} [opts]
    * @returns {boolean} whether the density was read this call
    */
@@ -223,8 +184,7 @@ export class DetailSlider {
   }
 
   /**
-   * Whether the slider is on this floor at all (F2–F5). Independent of the
-   * edge-chrome phase. Write-on-change on `display`.
+   * Whether the slider is on this floor at all (F2–F5). Independent of the edge-chrome phase.
    * @param {boolean} on
    */
   setShown(on) {
@@ -235,9 +195,8 @@ export class DetailSlider {
   }
 
   /**
-   * The edge-chrome phase (the hub reads EdgeChrome per frame): 'awake' →
-   * opacity 1 + visible; 'fading' → opacity IDLE_FADE (the transition ramps);
-   * 'hidden' (or unknown) → visibility hidden + opacity at rest. Write-on-change.
+   * The edge-chrome phase: 'awake' → opacity 1 + visible; 'fading' → opacity IDLE_FADE (the transition ramps);
+   * 'hidden' (or unknown) → visibility hidden + opacity at rest.
    * @param {'awake'|'fading'|'hidden'} phase
    */
   setPhase(phase) {
@@ -258,11 +217,9 @@ export class DetailSlider {
   }
 
   /**
-   * Bold-tick LEVEL indices. main.js computes these from the live ladder
-   * after the rungs are spliced (0 · 2 · 5 · 9 · 13 · 15). Write-on-change;
-   * rebuilds ticks when a refresh has already painted them.
-   * A function instead of an array is kept and re-read on every unthrottled `refresh()`, so the
-   * bold ticks follow a position count that changes (first scan, floor change).
+   * Bold-tick LEVEL indices. main.js computes these from the live ladder after the rungs are spliced.
+   * Rebuilds ticks when a refresh has already painted them. A function instead of an array is kept and re-read on
+   * every unthrottled `refresh()`, so the bold ticks follow a position count that changes (first scan, floor change).
    * @param {number[]|function(): number[]} arr
    */
   setMilestones(arr) {
@@ -278,7 +235,7 @@ export class DetailSlider {
     if (!this._disposed && this._track && this._wroteTotal != null) this._rebuildTicks(this._wroteTotal);
   }
 
-  /** @private the live milestone source, guarded (a throwing source keeps the last milestones) */
+  /** @private guarded: a throwing source keeps the last milestones */
   _readMilestones() {
     try { return this._milestoneFn ? this._milestoneFn() : this._milestones; } catch (_e) { return this._milestones; }
   }
@@ -286,10 +243,8 @@ export class DetailSlider {
   /** @returns {Element|null} the root (null headless / disposed) */
   element() { return this._root; }
 
-  /** @returns {boolean} the setShown state (true at birth) */
   isShown() { return this._shown; }
 
-  /** Release the pointer listeners, remove the root; further calls no-op. */
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
@@ -308,13 +263,9 @@ export class DetailSlider {
     this._ticks = [];
   }
 
-  // ── Pure law ────────────────────────────────────────────────────────────────
-
   /**
-   * The detent under a pointer x: round((x − left) / width × total), clamped
-   * to 0..total. A zero / unmeasured width reads 0.
+   * The detent under a pointer x: round((x − left) / width × total), clamped to 0..total. A zero / unmeasured width reads 0.
    * @param {number} x @param {number} left @param {number} width @param {number} total
-   * @returns {number}
    */
   static detentFor(x, left, width, total) {
     const n = Math.max(0, Math.round(Number(total) || 0));
@@ -325,13 +276,10 @@ export class DetailSlider {
   }
 
   /**
-   * Drag hysteresis around detentFor (plan 1788867799156 locked #11).
-   * Geometry is identical; a change from `current` commits only once x is
-   * ≥ deadzonePx past the boundary being crossed. `current` null / non-finite
-   * → detentFor (tap / first contact).
+   * Drag hysteresis around detentFor: a change from `current` commits only once x is ≥ deadzonePx past the boundary
+   * being crossed. `current` null / non-finite → detentFor (tap / first contact).
    * @param {number} x @param {number} left @param {number} width @param {number} total
    * @param {number|null} current @param {number} [deadzonePx]
-   * @returns {number}
    */
   static detentForDrag(x, left, width, total, current, deadzonePx = DEADZONE_PX) {
     const raw = DetailSlider.detentFor(x, left, width, total);
@@ -357,12 +305,9 @@ export class DetailSlider {
     return `${(Math.max(0, Math.min(n, i)) / n) * 100}%`;
   }
 
-  // ── Build ───────────────────────────────────────────────────────────────────
-
   /**
-   * @private Short screens (phone sideways): bottom centre, `bottom: 8px` less the glass pad (so the
-   * 44 px hit box keeps its 6 px pads), clear of the right column. Tall screens: the footer-right slot
-   * exactly as built. Writes only when the answer flips.
+   * @private Short screens (phone sideways): bottom centre, `bottom: 8px` less the glass pad (so the 44 px hit box
+   * keeps its 6 px pads), clear of the right column. Tall screens: the footer-right slot. Writes only when the answer flips.
    * @param {boolean} short
    */
   _applyPlacement(short) {
@@ -387,7 +332,6 @@ export class DetailSlider {
     }
   }
 
-  /** @private the root under doc.body (headless: nothing) */
   _build() {
     const doc = this._doc;
     if (!doc || typeof doc.createElement !== 'function' || !doc.body || typeof doc.body.appendChild !== 'function') return;
@@ -409,7 +353,7 @@ export class DetailSlider {
     s.zIndex = '35';
     s.touchAction = 'none';
     s.pointerEvents = 'auto';
-    s.visibility = 'hidden';                 // asleep at birth — EdgeChrome decides (the hub's setPhase)
+    s.visibility = 'hidden';                 // asleep at birth: EdgeChrome decides via setPhase
     s.opacity = String(RAIL_GEOMETRY.IDLE_FADE);
     if (this._reducedMotion) s.transition = 'none';
     this._setAttrOn(root, 'role', 'slider');
@@ -445,7 +389,6 @@ export class DetailSlider {
     on('pointercancel', (e) => this._up(e));
   }
 
-  /** @private one <style id="detail-slider-style"> per document */
   _ensureStyle() {
     const doc = this._doc;
     if (!doc || !doc.head || typeof doc.head.appendChild !== 'function') return;
@@ -509,7 +452,7 @@ export class DetailSlider {
     doc.head.appendChild(style);
   }
 
-  /** @private one tick per rung at i / total (i = 1..total); a tick at 0 only when 0 is a milestone. Rebuilt when total or milestones change. */
+  /** @private one tick per rung at i / total (i = 1..total); a tick at 0 only when 0 is a milestone. */
   _rebuildTicks(total) {
     const doc = this._doc;
     const track = this._track;
@@ -531,9 +474,6 @@ export class DetailSlider {
     }
   }
 
-  // ── Pointer law ─────────────────────────────────────────────────────────────
-
-  /** @private pointerdown: capture, cache the track rect, interact, detent */
   _down(e) {
     if (this._disposed || !this._root || !e) return;
     this._active = true;
@@ -548,7 +488,6 @@ export class DetailSlider {
     this._detent(e.clientX);
   }
 
-  /** @private pointermove while live: interact when moved, detent on change */
   _move(e) {
     if (!this._active || this._disposed || !e) return;
     if (e.clientX === this._lastX && e.clientY === this._lastY) return;
@@ -557,7 +496,7 @@ export class DetailSlider {
     this._detent(e.clientX);
   }
 
-  /** @private release: nothing is emitted (the slider IS the readout) */
+  /** @private release: nothing is emitted */
   _up(e) {
     if (!this._active) return;
     this._active = false;
@@ -569,7 +508,7 @@ export class DetailSlider {
     } catch (_err) { /* stub */ }
   }
 
-  /** @private the detent under x → onLevel once per change within the gesture. First contact uses detentFor (tap); later moves use the 3 px dead-zone. */
+  /** @private onLevel once per detent change within the gesture; first contact uses detentFor (tap), later moves the dead-zone. */
   _detent(x) {
     const r = this._rect;
     const total = this._readTotal();
@@ -583,12 +522,11 @@ export class DetailSlider {
     if (this._onLevel) { try { this._onLevel(n); } catch (_err) { /* dep */ } }
   }
 
-  /** @private */
   _interact() {
     if (this._onInteract) { try { this._onInteract(); } catch (_err) { /* dep */ } }
   }
 
-  /** @private the track's rect, guarded (a stub without layout reads 0 wide) */
+  /** @private guarded: a stub without layout reads 0 wide */
   _trackRect() {
     const t = this._track;
     if (!t || typeof t.getBoundingClientRect !== 'function') return { left: 0, width: 0 };
@@ -598,27 +536,21 @@ export class DetailSlider {
     } catch (_e) { return { left: 0, width: 0 }; }
   }
 
-  // ── Reads (guarded) ─────────────────────────────────────────────────────────
-
-  /** @private */
   _readTotal() {
     if (!this._total) return 0;
     try { const n = Math.round(Number(this._total())); return Number.isFinite(n) ? Math.max(0, n) : 0; } catch (_e) { return 0; }
   }
 
-  /** @private */
   _readLevel() {
     if (!this._level) return 0;
     try { const n = Math.round(Number(this._level())); return Number.isFinite(n) ? Math.max(0, n) : 0; } catch (_e) { return 0; }
   }
 
-  /** @private the throttle clock (the injected `now`, else performance.now / Date.now) */
   _clock() {
     if (this._now) { try { return Number(this._now()); } catch (_e) { return NaN; } }
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   }
 
-  /** @private guarded attribute writes */
   _setAttr(k, v) { this._setAttrOn(this._root, k, v); }
   _setAttrOn(el, k, v) {
     if (!el || typeof el.setAttribute !== 'function') return;

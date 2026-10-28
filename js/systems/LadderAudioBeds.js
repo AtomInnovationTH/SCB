@@ -1,51 +1,38 @@
 /**
  * LadderAudioBeds.js — the Zoom Ladder's per-floor ambient audio beds
- * (FloorContract `audioBed`: hull-detail,
- * command-deck, prox-tactical, navcom-drone, downlink-static).
+ * (FloorContract `audioBed`: hull-detail, command-deck, prox-tactical, navcom-drone, downlink-static).
  *
- * One module owns all seven beds. Each bed is a procedural WebAudio loop in
- * the house style (AudioSystem.js startAmbientLoop / startThrusterHum idiom):
- * looped-noise-buffer + biquad-filter layers and low oscillator drones, each
- * layer shaped by an optional slow LFO, all at VERY low gain — beds sit UNDER
- * gameplay sfx, mood not melody. Bed character is entirely data-driven
- * (BED_RECIPES below): retuning a bed is a constants edit, not code surgery.
+ * One module owns all seven beds. Each bed is a procedural WebAudio loop (AudioSystem.js startAmbientLoop /
+ * startThrusterHum idiom): looped-noise-buffer + biquad-filter layers and low oscillator drones, each layer shaped
+ * by an optional slow LFO, all at VERY low gain: beds sit UNDER gameplay sfx, mood not melody. Bed character is
+ * data-driven (BED_RECIPES): retuning a bed is a constants edit.
  *
- * Lifecycle (floor changes drive it — there is NO per-frame API):
- *   setFloor(floorId|null) crossfades ~BED_FADE_MS between beds via
- *   linearRampToValueAtTime gain ramps (scheduled ramps cancelled on every
- *   re-target, the _duckOthers idiom); null fades to silence (disengage).
- *   setEnabled(bool) is the master-mute seam; dispose() tears down.
+ * Lifecycle (floor changes drive it, there is NO per-frame API): setFloor(floorId|null) crossfades ~BED_FADE_MS
+ * between beds via linearRampToValueAtTime gain ramps (scheduled ramps cancelled on every re-target, the
+ * _duckOthers idiom); null fades to silence (disengage). setEnabled(bool) is the master-mute seam; dispose() tears
+ * down.
  *
  * Discipline:
- *   - G1 (docs/ladder/02-traps.md): no per-frame node churn. Nodes are built
- *     lazily on bed activation and condemned on deactivation — graph edits
- *     happen only on floor changes / enable flips, never per frame.
- *   - §13 energy (AudioSystem.js:184-206, Constants.AUDIO): only the ACTIVE
- *     bed's sources run (plus a bounded fade-out overlap). A deactivated bed's
- *     sources get a scheduled stop() at fade end and free their graph via the
- *     first source's `ended` event — the audio thread never carries seven
- *     idle loops (no JS timers either: the WebAudio clock is the scheduler).
- *   - Autoplay: this module NEVER calls ctx.resume()/init(). It plays into the
- *     AudioContext AudioSystem created on a user gesture (MenuScreen.js:811 —
- *     init() + resume()); the deps resolve null until then, so every call
- *     before the gesture is a state-only no-op (AudioSystem unlock pattern).
- *   - Deps optional (NavcomFloor pattern): without a context/destination every
- *     method is a no-op. Headless-safe import: no THREE, no DOM, no EventBus —
- *     the only imports are pure data.
+ *   - G1 (archive/ladder/02-traps.md): no per-frame node churn. Nodes are built lazily on bed activation and
+ *     condemned on deactivation: graph edits happen only on floor changes / enable flips.
+ *   - §13 energy (AudioSystem.js, Constants.AUDIO): only the ACTIVE bed's sources run (plus a bounded fade-out
+ *     overlap). A deactivated bed's sources get a scheduled stop() at fade end and free their graph via the first
+ *     source's `ended` event; no JS timers (the WebAudio clock is the scheduler).
+ *   - Autoplay: this module NEVER calls ctx.resume()/init(). It plays into the AudioContext AudioSystem created on a
+ *     user gesture (MenuScreen.js init() + resume()); the deps resolve null until then, so every call before the
+ *     gesture is a state-only no-op.
+ *   - Deps optional (NavcomFloor pattern): without a context/destination every method is a no-op. Headless-safe
+ *     import: the only imports are pure data (no THREE, DOM or EventBus).
  *
- * Wiring (serial track — see the audio-beds HANDOFF in docs/ladder/03-plan.md):
- * main.js constructs it with AudioSystem's context + padBus (PAD family:
- * beds ride padBus → sfxBus → master, so alarm ducking, setVolume, and the
- * §12.12 ctx suspend gate all govern beds for free) and injects it into
- * LadderController, which calls setFloor(floor) from _applyFloorContent and
- * setFloor(null) from _disengage.
+ * Wiring (see the audio-beds HANDOFF in archive/ladder/03-plan.md): main.js constructs it with AudioSystem's context
+ * + padBus (PAD family: beds ride padBus → sfxBus → master, so alarm ducking, setVolume and the §12.12 ctx suspend
+ * gate all govern beds) and injects it into LadderController, which calls setFloor(floor) from _applyFloorContent
+ * and setFloor(null) from _disengage.
  *
  * @module systems/LadderAudioBeds
  */
 
 import { FloorContract } from '../core/FloorContract.js';
-
-// ── Tunables (own-module, house rule: not FloorContract/Constants) ──────────
 
 /** Crossfade length between beds (and to silence), ms. */
 export const BED_FADE_MS = 1500;
@@ -63,27 +50,21 @@ export const BED_MASTER_GAIN = 1.0;
 export const BED_NOISE_BUFFER_S = 2;
 
 /**
- * BED_RECIPES — per-name synth params (the data-driven bed character table).
- *
- * Shape:
+ * BED_RECIPES — per-name synth params.
  *   { gain, layers: [layer...] }
  *   layer (noise): { kind:'noise', filter:{type,freq,Q}, gain, lfo? }
  *   layer (osc):   { kind:'osc', wave, freq, detune?, filter?, gain, lfo? }
  *   lfo:           { rate, depth, target:'gain'|'freq', wave? }
- *     — a slow oscillator wired lfoOsc → lfoGain(depth) → layerGain.gain (or
- *       filter.frequency). depth is in the target param's units and must keep
- *       base − depth ≥ 0 for gain targets.
+ *     — a slow oscillator wired lfoOsc → lfoGain(depth) → layerGain.gain (or filter.frequency). depth is in the
+ *       target param's units and must keep base − depth ≥ 0 for gain targets.
  *
- * `gain` is the bed's crossfade target on its bed-gain node; layer gains are
- * static texture balance INSIDE the bed. Levels sit at/under the house
- * ambient loop (Constants.AUDIO.AMBIENT_GAIN 0.01, solar hiss 0.005) — beds
+ * `gain` is the bed's crossfade target on its bed-gain node; layer gains are static texture balance INSIDE the
+ * bed. Levels sit at/under the house ambient loop (Constants.AUDIO.AMBIENT_GAIN 0.01, solar hiss 0.005): beds
  * are the floor's room tone, below every gameplay cue.
  */
 export const BED_RECIPES = {
-  // (The old F1 ARCHIVE 'archive-hush' and F2 DEPOT 'depot-hum' recipes left
-  // with their floors — Wave 5 Session H, the 7→5 renumber.)
-  // F1 HULL CAM — EVA closeness: suit-air band of noise, faint structural
-  // fundamental; the bandpass center wanders slowly (helmet-turn air).
+  // F1 HULL CAM: EVA closeness: suit-air band of noise, faint structural fundamental; the bandpass center wanders
+  // slowly (helmet-turn air).
   'hull-detail': {
     gain: 0.011,
     layers: [
@@ -92,8 +73,8 @@ export const BED_RECIPES = {
       { kind: 'osc', wave: 'sine', freq: 120, gain: 0.25 },
     ],
   },
-  // F2 COMMAND — the shipped gameplay floor: barely-there deck air so every
-  // capture cue keeps its full contrast. The quietest bed by design.
+  // F2 COMMAND: the shipped gameplay floor: barely-there deck air so every capture cue keeps its full contrast.
+  // The quietest bed by design.
   'command-deck': {
     gain: 0.008,
     layers: [
@@ -102,8 +83,8 @@ export const BED_RECIPES = {
       { kind: 'osc', wave: 'triangle', freq: 90, gain: 0.18 },
     ],
   },
-  // F3 PROX NET — tactical tension: mid noise band + a slow sweep pulse on a
-  // low tone (radar-scan feel, far under the real conjunction alarms).
+  // F3 PROX NET: tactical tension: mid noise band + a slow sweep pulse on a low tone (radar-scan feel, far under
+  // the real conjunction alarms).
   'prox-tactical': {
     gain: 0.012,
     layers: [
@@ -113,9 +94,8 @@ export const BED_RECIPES = {
         lfo: { rate: 0.25, depth: 0.16, target: 'gain' } },
     ],
   },
-  // F4 NAVCOM — planning drone: a detuned low pair through a lowpass; the
-  // ~0.7 Hz beat between them IS the drone character (no LFO needed on the
-  // pair — the detune supplies the motion; one slow breath on the noise).
+  // F4 NAVCOM: planning drone: a detuned low pair through a lowpass; the ~0.7 Hz beat between them IS the drone
+  // character (the detune supplies the motion; one slow breath on the noise).
   'navcom-drone': {
     gain: 0.013,
     layers: [
@@ -125,8 +105,8 @@ export const BED_RECIPES = {
         lfo: { rate: 0.06, depth: 0.18, target: 'gain' } },
     ],
   },
-  // F5 SDA DOWNLINK — telemetry static: a narrow high noise band gated by a
-  // square LFO into soft ticks, over a faint carrier whistle.
+  // F5 SDA DOWNLINK: telemetry static: a narrow high noise band gated by a square LFO into soft ticks, over a faint
+  // carrier whistle.
   'downlink-static': {
     gain: 0.010,
     layers: [
@@ -144,12 +124,10 @@ const FLOOR_BED = new Map(FloorContract.FLOORS.map((f) => [f.id, f.audioBed]));
 export class LadderAudioBeds {
   /**
    * @param {object} [deps]
-   * @param {AudioContext|function} [deps.context] - AudioSystem's ctx, or a
-   *   zero-arg getter (main.js wires `() => audioSystem.ctx` — null until the
-   *   user-gesture init(), which keeps this module on the unlock pattern).
-   * @param {AudioNode|function}    [deps.destination] - the node beds feed
-   *   (recommended: audioSystem.padBus so ducking/volume/suspend govern beds),
-   *   or a zero-arg getter. Either dep absent/null ⇒ every method is a no-op.
+   * @param {AudioContext|function} [deps.context] - AudioSystem's ctx, or a zero-arg getter (main.js wires
+   *   `() => audioSystem.ctx`, null until the user-gesture init()).
+   * @param {AudioNode|function}    [deps.destination] - the node beds feed (recommended: audioSystem.padBus so
+   *   ducking/volume/suspend govern beds), or a zero-arg getter. Either dep absent/null ⇒ every method is a no-op.
    */
   constructor(deps = {}) {
     this._ctxDep = deps.context || null;
@@ -167,12 +145,9 @@ export class LadderAudioBeds {
     this._disposed = false;
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
   /**
-   * Crossfade the beds to `floorId`'s audioBed (~BED_FADE_MS). null fades to
-   * silence (ladder disengage). Idempotent for the already-active bed. While
-   * disabled (setEnabled(false)) only the floor is remembered — no nodes.
+   * Crossfade the beds to `floorId`'s audioBed (~BED_FADE_MS). null fades to silence (ladder disengage). Idempotent
+   * for the already-active bed. While disabled only the floor is remembered (no nodes).
    * @param {number|null} floorId - FloorContract floor id (1..5) or null
    */
   setFloor(floorId) {
@@ -184,10 +159,8 @@ export class LadderAudioBeds {
   }
 
   /**
-   * Master-mute gate. Disabling fades the active bed out (BED_DISABLE_FADE_MS)
-   * and frees its sources (no muted loops burning the audio thread — §13);
-   * re-enabling rebuilds the remembered floor's bed. Idempotent.
-   * @param {boolean} on
+   * Master-mute gate. Disabling fades the active bed out (BED_DISABLE_FADE_MS) and frees its sources (no muted loops
+   * burning the audio thread, §13); re-enabling rebuilds the remembered floor's bed. Idempotent.
    */
   setEnabled(on) {
     if (this._disposed) return;
@@ -228,16 +201,11 @@ export class LadderAudioBeds {
     this._dest = null;
   }
 
-  /** The bed name currently ramped up, or null (tests/debug). */
   getCurrentBedName() { return this._currentName; }
 
-  // ── Internals ──────────────────────────────────────────────────────────────
-
   /**
-   * @private Resolve the injected context/destination (direct ref or getter).
-   * Retried on every floor change / enable flip: before AudioSystem's
-   * user-gesture init() both resolve null and the module stays a no-op.
-   * @returns {boolean} true when live audio deps are available
+   * Resolve the injected context/destination (direct ref or getter). Retried on every floor change / enable flip:
+   * before AudioSystem's user-gesture init() both resolve null and the module stays a no-op.
    */
   _resolve() {
     if (this._ctx && this._dest) return true;
@@ -250,17 +218,12 @@ export class LadderAudioBeds {
   }
 
   /**
-   * @private Retarget the mix to bed `name` (null = silence) over `fadeS`.
-   * The active-bed ramp and every other live bed's fade-out both cancel any
-   * scheduled ramps first (re-target discipline), so rapid floor changes
-   * never fight stale automation.
-   * @param {string|null} name
-   * @param {number} fadeS
+   * Retarget the mix to bed `name` (null = silence) over `fadeS`. The active-bed ramp and every other live bed's
+   * fade-out both cancel any scheduled ramps first, so rapid floor changes never fight stale automation.
    */
   _crossfadeTo(name, fadeS) {
     if (!this._resolve()) { this._currentName = name; return; }
-    // Idempotence: the requested bed is already the ramped-up one and still
-    // live — nothing to schedule (repeat setFloor on the same floor).
+    // Idempotence: the requested bed is already ramped up and still live (repeat setFloor on the same floor).
     if (name === this._currentName && (name == null || this._live.has(name))) return;
     this._currentName = name;
     const now = this._ctx.currentTime;
@@ -271,8 +234,7 @@ export class LadderAudioBeds {
       this._live.delete(bedName);
     }
     if (name == null) return;
-    // Fade the target in — reuse the live instance (re-target mid-fade) or
-    // build fresh (first use / previously condemned).
+    // Fade the target in: reuse the live instance (re-target mid-fade) or build fresh (first use / condemned).
     let bed = this._live.get(name);
     if (!bed) {
       bed = this._buildBed(name);
@@ -289,13 +251,9 @@ export class LadderAudioBeds {
   }
 
   /**
-   * @private Fade a bed to zero and condemn it: sources get a scheduled
-   * stop() at fade end (+ margin) and the first source's `ended` event frees
-   * the whole sub-graph. Condemned beds are never revived — a return to the
-   * floor builds a fresh instance (bounded overlap, floor-change cadence).
-   * @param {object} bed
-   * @param {number} now  - ctx.currentTime
-   * @param {number} fadeS
+   * Fade a bed to zero and condemn it: sources get a scheduled stop() at fade end (+ margin) and the first source's
+   * `ended` event frees the whole sub-graph. Condemned beds are never revived: a return to the floor builds a fresh
+   * instance (bounded overlap, floor-change cadence).
    */
   _condemn(bed, now, fadeS) {
     const p = bed.gain.gain;
@@ -308,8 +266,8 @@ export class LadderAudioBeds {
     for (const s of bed.sources) {
       try { s.stop(stopAt); } catch (_e) { /* already stopped */ }
     }
-    // One cleanup owner: the first source's ended event (WebAudio clock —
-    // no JS timers; a suspended ctx simply defers it, matching §12.12).
+    // One cleanup owner: the first source's ended event (WebAudio clock, no JS timers; a suspended ctx simply
+    // defers it, matching §12.12).
     const first = bed.sources[0];
     if (first) {
       first.onended = () => this._freeBed(bed);
@@ -318,7 +276,7 @@ export class LadderAudioBeds {
     }
   }
 
-  /** @private Disconnect a bed's whole sub-graph so the nodes can GC. */
+  /** Disconnect a bed's whole sub-graph so the nodes can GC. */
   _freeBed(bed) {
     for (const n of bed.nodes) {
       try { if (n.disconnect) n.disconnect(); } catch (_e) { /* stub */ }
@@ -327,10 +285,7 @@ export class LadderAudioBeds {
     bed.sources.length = 0;
   }
 
-  /**
-   * @private Lazy beds bus: bedGain(per bed) → bus(BED_MASTER_GAIN) →
-   * injected destination. Created once, on the first bed build.
-   */
+  /** Lazy beds bus: bedGain (per bed) → bus (BED_MASTER_GAIN) → injected destination. Created on the first bed build. */
   _ensureBus() {
     if (this._bus) return this._bus;
     const bus = this._ctx.createGain();
@@ -341,10 +296,8 @@ export class LadderAudioBeds {
   }
 
   /**
-   * @private Build one bed instance from its BED_RECIPES entry. All layers
-   * feed a per-bed gain that starts at 0 (the crossfade ramps it up), so a
-   * fresh bed is born silent — never a click, never an autoplay pop.
-   * @param {string} name
+   * Build one bed instance from its BED_RECIPES entry. All layers feed a per-bed gain that starts at 0 (the
+   * crossfade ramps it up), so a fresh bed is born silent: never a click or autoplay pop.
    * @returns {{gain:GainNode, sources:Array, nodes:Array}|null}
    */
   _buildBed(name) {
@@ -360,7 +313,6 @@ export class LadderAudioBeds {
       const nodes = [bedGain];
 
       for (const layer of recipe.layers) {
-        // Source: looped noise buffer or oscillator (house idioms).
         let src;
         if (layer.kind === 'noise') {
           src = ctx.createBufferSource();
@@ -372,7 +324,6 @@ export class LadderAudioBeds {
           src.frequency.value = layer.freq;
           if (layer.detune != null && src.detune) src.detune.value = layer.detune;
         }
-        // Optional shaping filter.
         let head = src;
         let filter = null;
         if (layer.filter) {
@@ -384,7 +335,6 @@ export class LadderAudioBeds {
           head = filter;
           nodes.push(filter);
         }
-        // Layer balance gain → bed gain.
         const layerGain = ctx.createGain();
         layerGain.gain.value = layer.gain;
         head.connect(layerGain);
@@ -418,11 +368,7 @@ export class LadderAudioBeds {
     }
   }
 
-  /**
-   * @private Shared looped white-noise buffer (BED_NOISE_BUFFER_S at the
-   * context's sample rate), built once per context — every noise layer reuses
-   * it (startAmbientLoop shares one buffer the same way).
-   */
+  /** Shared looped white-noise buffer (BED_NOISE_BUFFER_S), built once per context; every noise layer reuses it. */
   _noiseBuffer() {
     if (this._noise && this._noiseCtx === this._ctx) return this._noise;
     const len = Math.max(1, Math.floor(this._ctx.sampleRate * BED_NOISE_BUFFER_S));

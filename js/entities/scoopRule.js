@@ -1,44 +1,39 @@
 /**
- * scoopRule.js - the scoop net's rules, pure (lane u20-nets, 2026-10-23; owner's ruling DECISIONS §38 row 5 / §35 row 1).
+ * scoopRule.js - the scoop net's rules, pure (owner's ruling DECISIONS §38 row 5 / §35 row 1).
  *
- * "Daughters may need ways to combine many small pieces in one net" (owner, 2026-10-23). When a daughter's net closes on
- * its target, every other catchable piece inside the net's mouth joins the target in ONE bag. The bag is one catch (a
- * daughter still holds one catch; the mission counts one of its five); each member is paid as if it had been caught alone.
+ * owner 2026-10-23: "Daughters may need ways to combine many small pieces in one net".
+ * When a daughter's net closes on its target, every other catchable piece inside the net's mouth joins the target in ONE bag. The bag is
+ * one catch (a daughter still holds one catch; the mission counts one of its five); each member is paid as if it had been caught alone.
  *
  * What this module decides (nothing here allocates scene objects; metres throughout, positions are the scene frame / 1e-5):
  *
- *  - THE MOUTH VOLUME. What you see is what you catch: the volume the DRAWN net sweeps (u22-scoop, 2026-10-24; measured from the
- *    real kit, `NetMeshKit.build` / `CaptureNetVisual`, probe tmp/u22-scoop/probe1.mjs). The apex is the net's centre at contact.
- *    The flying net is a cone `coneHeight` long (`mouthR x 2 x CONE_LENGTH_FRAC`, 2.55 m for the 3 m net) opening to the mouth
- *    radius (`DIAMETER / 2`, 1.5 m); in ENVELOP the rim weights then sweep a cylinder of that radius from one `coneHeight` to two
- *    ahead of the apex (2.55 to 5.1 m), and the ring closes back at `coneHeight`. So a piece is inside when, with `z` its distance
- *    ahead of the apex along the net's axis and `rho` its distance from that axis: `0 <= z <= 2 x coneHeight` and
- *    `rho <= mouthR x min(1, z / coneHeight)`. At contact the target is only about 1.8 m ahead of the apex (the contact ball is the
- *    mouth radius x the close-range forgiveness), so pieces beside it and beyond it are inside the net; a piece beside the target
- *    but off the cone near the daughter is not (the net never reached it). Before this the mouth was a ball of `DIAMETER / 2` at the
- *    net's centre, which put the target on its far rim and took only pieces between the daughter and the target (measured in the
- *    browser, 4 of 4 catches, 1.85 m short). The target itself is a member by right (the contact test adds a forgiveness).
- *    The apex is kept as an OFFSET from the target (`mouthOffsetM`, net centre minus target) and the axis as `mouthAxis`, so both
- *    stay right while the net and the group drift together until the bag closes. With no axis (a net that never touched: a test
- *    rig, `forceResolve` without flying) the mouth is the old ball of `DIAMETER / 2` about the offset point.
- *  - WHO IS ELIGIBLE. A piece the net could have been aimed at: alive, in the field (not stored), not held, pinned, parked,
- *    netted, committed to another daughter's net, or already inside a bag, and not itself a bag (no nesting). Background
- *    shards are not in the field's piece list at all, so they are out by construction.
- *  - WHAT FITS. Nearest the target first (nearest the ball's centre when there is no axis); a piece is skipped when the running mass would pass the net's rated mass
- *    (the strain ramp's own rating), and the walk goes on to the next one. The target is always a member, whatever it weighs.
- *  - THE BAG'S SIZE. A closed net is a ball with the mesh's own area, so radius mouth / 4 at the most (docs/research/
- *    2026-10-debris-sizes.md §6). Inside it the pieces pack loosely (fill 0.5; a flat piece, a fragment, fills a quarter of
- *    its bounding cube): `r = max(largest member reach, cbrt(3 / (4 pi) x sum(volume) / 0.5))`, capped at mouth / 4 but never
- *    under the largest member's reach. `sizeMeter` of the bag is `2 r`. All of these are estimates [E], not measurements.
+ *  - THE MOUTH VOLUME. What you see is what you catch: the volume the DRAWN net sweeps (measured 2026-10-24 from the real kit, `NetMeshKit.build` /
+ *    `CaptureNetVisual`). The apex is the net's centre at contact. The flying net is a cone `coneHeight` long (`mouthR x 2 x CONE_LENGTH_FRAC`,
+ *    2.55 m for the 3 m net) opening to the mouth radius (`DIAMETER / 2`, 1.5 m); in ENVELOP the rim weights then sweep a cylinder of that
+ *    radius from one `coneHeight` to two ahead of the apex (2.55 to 5.1 m), and the ring closes back at `coneHeight`. So a piece is inside
+ *    when, with `z` its distance ahead of the apex along the net's axis and `rho` its distance from that axis: `0 <= z <= 2 x coneHeight` and
+ *    `rho <= mouthR x min(1, z / coneHeight)`. At contact the target is only about 1.8 m ahead of the apex (the contact ball is the mouth
+ *    radius x the close-range forgiveness), so pieces beside it and beyond it are inside the net; a piece beside the target but off the cone
+ *    near the daughter is not (the net never reached it). The target itself is a member by right (the contact test adds a forgiveness).
+ *    The apex is kept as an OFFSET from the target (`mouthOffsetM`, net centre minus target) and the axis as `mouthAxis`, so both stay right
+ *    while the net and the group drift together until the bag closes. With no axis (a net that never touched: a test rig, `forceResolve`
+ *    without flying) the mouth is a ball of `DIAMETER / 2` about the offset point.
+ *  - WHO IS ELIGIBLE. A piece the net could have been aimed at: alive, in the field (not stored), not held, pinned, parked, netted, committed
+ *    to another daughter's net, or already inside a bag, and not itself a bag (no nesting). Background shards are not in the field's piece
+ *    list at all, so they are out by construction.
+ *  - WHAT FITS. Nearest the target first (nearest the ball's centre when there is no axis); a piece is skipped when the running mass would
+ *    pass the net's rated mass (the strain ramp's own rating), and the walk goes on to the next one. The target is always a member.
+ *  - THE BAG'S SIZE. A closed net is a ball with the mesh's own area, so radius mouth / 4 at the most (archive/research/2026-10-debris-sizes.md
+ *    §6). Inside it the pieces pack loosely (fill 0.5; a flat piece, a fragment, fills a quarter of its bounding cube):
+ *    `r = max(largest member reach, cbrt(3 / (4 pi) x sum(volume) / 0.5))`, capped at mouth / 4 but never under the largest member's reach.
+ *    `sizeMeter` of the bag is `2 r`. All of these are estimates [E], not measurements.
  *
  * @module entities/scoopRule
  */
 import { Constants } from '../core/Constants.js';
 
 export const SCOOP = Object.freeze({
-  /** how much of the bag's ball the packed pieces fill (doc §6, estimate) */
   PACK_FILL: 0.5,
-  /** how much of its bounding cube a flat piece (a fragment) fills (doc §6, estimate) */
   FLAT_CUBE_FILL: 0.25,
   /** how much of its bounding cube any other piece fills (estimate: a solid box is 1, a hollow body less) */
   BODY_CUBE_FILL: 0.5,
@@ -46,16 +41,10 @@ export const SCOOP = Object.freeze({
   MAX_RADIUS_OF_MOUTH: 0.25,
 });
 
-/** @returns {number} metres per scene unit's inverse: the scene frame is 1 m = SCENE_UNITS_PER_METER */
 function sceneToM() { return 1 / Constants.SCENE_UNITS_PER_METER; }
 
-/**
- * A piece's centre in metres in the scene frame: `_scenePosition` (scene units) when the field has placed it, else a plain
- * `position` in metres (a test rig), else null.
- * @param {{_scenePosition?:{x:number,y:number,z:number}, position?:{x:number,y:number,z:number}}|null} d
- * @param {{x:number,y:number,z:number}} [out]
- * @returns {{x:number,y:number,z:number}|null}
- */
+/** A piece's centre in metres in the scene frame: `_scenePosition` (scene units) when the field has placed it, else a plain `position` in
+ *  metres (a test rig), else null. */
 export function pieceCentreM(d, out = { x: 0, y: 0, z: 0 }) {
   if (!d) return null;
   const sp = d._scenePosition;
@@ -69,44 +58,30 @@ export function pieceCentreM(d, out = { x: 0, y: 0, z: 0 }) {
   return null;
 }
 
-/**
- * Could a net be aimed at this piece, and is it still free? The test for joining a bag (never the target: the target is a
- * member by right).
- * @param {object|null} d candidate
- * @param {number|null} [armId=null] the daughter whose net this is (a piece committed to HER net is not "another's")
- * @returns {boolean}
- */
+/** Could a net be aimed at this piece, and is it still free? The test for joining a bag (never the target, a member by right).
+ *  `armId`: the daughter whose net this is (a piece committed to HER net is not "another's"). */
 export function isScoopable(d, armId = null) {
   if (!d || d.alive === false) return false;
-  if (d._disposed === true) return false;                                        // slice 5 (5d): a piece that was disposed of is no catch, so no bag member
-  if (d.isBag === true || d._inBag === true) return false;                       // no bag inside a bag; no piece in two
+  if (d._disposed === true) return false;
+  if (d.isBag === true || d._inBag === true) return false;
   if (d._captured || d._armPinned || d._capturedByArm || d._motherParked || d._netted) return false;
   if (d._onboardingPinned || d._fieldStored) return false;
-  if (d.hazard === true) return false;                                           // a live hazard is never a pick-up
+  if (d.hazard === true) return false;
   if (d._committedNetArmId != null && d._committedNetArmId !== armId) return false;
   if (!Number.isFinite(d.mass) || !(d.mass >= 0)) return false;
   return true;
 }
 
-/**
- * The drawn mouth's size for a net class: the cone/cylinder radius and the cone's length, in metres, the kit's own formulas
- * (`NetMeshKit.build`: `mouthRadius = D/2 x CONE_OPEN_RADIUS_FRAC`, `coneHeight = mouthRadius x 2 x CONE_LENGTH_FRAC`).
- * @param {{DIAMETER:number}} netClass
- * @returns {{mouthR:number, coneH:number}}
- */
+/** The drawn mouth's size for a net class ({DIAMETER}): the cone/cylinder radius `mouthR` and the cone's length `coneH`, in metres, the
+ *  kit's own formulas (`NetMeshKit.build`: `mouthRadius = D/2 x CONE_OPEN_RADIUS_FRAC`, `coneHeight = mouthRadius x 2 x CONE_LENGTH_FRAC`). */
 export function mouthShape(netClass) {
   const cer = Constants.CAPTURE_NET.NET_CEREMONY;
   const mouthR = ((netClass && netClass.DIAMETER) || 0) / 2 * cer.CONE_OPEN_RADIUS_FRAC;
   return { mouthR, coneH: mouthR * 2 * cer.CONE_LENGTH_FRAC };
 }
 
-/**
- * Is a point inside the volume the drawn net sweeps? (See THE MOUTH VOLUME.) `ax,ay,az` is the net's unit axis.
- * @param {number} px @param {number} py @param {number} pz the point relative to the apex (m)
- * @param {number} ax @param {number} ay @param {number} az unit launch direction
- * @param {number} mouthR @param {number} coneH
- * @returns {boolean}
- */
+/** Is a point inside the volume the drawn net sweeps? (See THE MOUTH VOLUME.) `px,py,pz`: the point relative to the apex (m); `ax,ay,az`: the
+ *  net's unit launch direction. */
 export function insideSweptMouth(px, py, pz, ax, ay, az, mouthR, coneH) {
   const z = px * ax + py * ay + pz * az;
   if (z < 0 || z > 2 * coneH) return false;
@@ -120,9 +95,10 @@ export function insideSweptMouth(px, py, pz, ax, ay, az, mouthR, coneH) {
  * @param {object} target the piece the net was aimed at (always the first member)
  * @param {Iterable<object>} candidates the field's pieces (the target may be among them)
  * @param {{DIAMETER:number, MAX_CAPTURE_MASS?:number}} netClass
- * @param {object} [opts]
- * @param {{x:number,y:number,z:number}|null} [opts.mouthOffsetM] the net's centre (the apex) at contact minus the target's centre (m); null = on the target
- * @param {{x:number,y:number,z:number}|null} [opts.mouthAxis] the net's launch direction at contact (any length); with it the mouth is the drawn net's swept volume, without it a ball
+ * @param {{x:number,y:number,z:number}|null} [opts.mouthOffsetM] the net's centre (the apex) at contact minus the target's centre (m); null = on
+ *   the target
+ * @param {{x:number,y:number,z:number}|null} [opts.mouthAxis] the net's launch direction at contact (any length); with it the mouth is the drawn
+ *   net's swept volume, without it a ball
  * @param {number|null} [opts.armId] the daughter's id (for the committed-net test)
  * @param {number} [opts.ratedMassKg] the rated mass to hold to (default the class rating)
  * @returns {{members: object[], skipped: {id:number, why:string}[]}} members nearest-first after the target
@@ -152,14 +128,14 @@ export function pickScoopMembers(target, candidates, netClass, opts = {}) {
     if (!isScoopable(c, opts.armId ?? null)) continue;
     if (!pieceCentreM(c, p)) continue;
     if (swept) {
-      if (!insideSweptMouth(p.x - cx, p.y - cy, p.z - cz, ax, ay, az, shape.mouthR, shape.coneH)) continue;   // the mouth test: centre inside the drawn net
+      if (!insideSweptMouth(p.x - cx, p.y - cy, p.z - cz, ax, ay, az, shape.mouthR, shape.coneH)) continue;
       const tx = p.x - tC.x, ty = p.y - tC.y, tz = p.z - tC.z;
-      near.push({ c, dist: Math.sqrt(tx * tx + ty * ty + tz * tz) });          // nearest the target first
+      near.push({ c, dist: Math.sqrt(tx * tx + ty * ty + tz * tz) });
       continue;
     }
     const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    if (dist <= R) near.push({ c, dist });                                       // the mouth test: centre inside the ball
+    if (dist <= R) near.push({ c, dist });
   }
   near.sort((a, b) => (a.dist - b.dist) || ((a.c.id ?? 0) - (b.c.id ?? 0)));
   let mass = Number.isFinite(target.mass) ? target.mass : 0;
@@ -179,14 +155,8 @@ export function memberVolumeM3(d) {
   return s * s * s * fill;
 }
 
-/**
- * The bag's size from its members. `reachOf(member)` is the member's drawn reach in metres (`DebrisField.trueReachM`; the
- * caller passes it so this module needs no mesh code).
- * @param {object[]} members
- * @param {{DIAMETER:number}} netClass
- * @param {(d:object)=>number} reachOf
- * @returns {{radiusM:number, sizeMeter:number, massKg:number, packedRadiusM:number, maxReachM:number, capped:boolean}}
- */
+/** The bag's size from its members. `reachOf(member)` is the member's drawn reach in metres (`DebrisField.trueReachM`; the caller passes it so
+ *  this module needs no mesh code). */
 export function bagSize(members, netClass, reachOf) {
   let vol = 0, mass = 0, maxReach = 0;
   for (const d of members) {
@@ -202,7 +172,6 @@ export function bagSize(members, netClass, reachOf) {
   return { radiusM: r, sizeMeter: 2 * r, massKg: mass, packedRadiusM: packed, maxReachM: maxReach, capped };
 }
 
-/** The one comms line a scoop says (nothing is said for one piece). */
 export function scoopLine(daughterName, count) {
   return `${daughterName}'s net took ${count} pieces in one bag.`;
 }

@@ -1,24 +1,19 @@
 /**
  * StarlinkCascadeBoss.js — CH9 "race-the-cascade" boss (MISSION_ARC §6).
  *
- * At the MISSION BOUNDARY into mission `Constants.STARLINK_BOSS.MISSION` (the
- * 40th credited catch → `MISSION_START { missionNumber: 9 }`; Wave 5 Session F
- * re-homed the onset here from `SHOP_DEPLOY`, which the chapter-4+ depot
- * INVITATION made optional), ARM; on the first gameplay frame with no depot stop
- * pending (`_bossLifecycle.MissionOnset` — never under the depot overlay),
- * burst-spawn FRAG_COUNT Starlink fragments and start a WINDOW_MIN game-time
- * timer. The Kessler-cascade tension is delivered as escalating comms — this
- * boss does NOT force a KesslerSystem game-over (failure is never a hard
- * punishment, §9). Outcome is emergent from play:
+ * At the MISSION BOUNDARY into mission `Constants.STARLINK_BOSS.MISSION` (the 40th credited catch → `MISSION_START
+ * { missionNumber: 9 }`; not `SHOP_DEPLOY`, which the chapter-4+ depot INVITATION made optional), ARM; on the first gameplay
+ * frame with no depot stop pending (`_bossLifecycle.MissionOnset`, never under the depot overlay), burst-spawn FRAG_COUNT
+ * Starlink fragments and start a WINDOW_MIN game-time timer. The Kessler-cascade tension is escalating comms; this boss does
+ * NOT force a KesslerSystem game-over (failure is never a hard punishment, §9). Outcome is emergent from play:
  *
- *   • CONTAINED — clear ALL frags before the window → +CONTAIN_BONUS_KG toward
- *     the elevator contract, +CONTAIN_BONUS_CREDITS, and the "contained" codex.
+ *   • CONTAINED — clear ALL frags before the window → +CONTAIN_BONUS_KG toward the elevator contract,
+ *     +CONTAIN_BONUS_CREDITS, and the "contained" codex.
  *   • PARTIAL   — clear ≥ PARTIAL_FRACTION by the window → +PARTIAL_CREDITS, no codex.
  *   • CASCADE   — clear < PARTIAL_FRACTION by the window → "cascade" codex, no bonus.
  *
- * The two codex entries auto-unlock from `STARLINK_BOSS_RESOLVED { outcome }`.
- * Node-safe (no THREE / DOM); shares clear-tracking, the onset rule + the
- * elevator award with the ISS boss via `_bossLifecycle`.
+ * The two codex entries auto-unlock from `STARLINK_BOSS_RESOLVED { outcome }`. Node-safe (no THREE / DOM); shares
+ * clear-tracking, the onset rule + the elevator award with the ISS boss via `_bossLifecycle`.
  *
  * @module systems/StarlinkCascadeBoss
  */
@@ -31,14 +26,10 @@ import { ThreatSet, awardElevatorMass, MissionOnset } from './_bossLifecycle.js'
 
 export class StarlinkCascadeBoss {
   /**
-   * @param {object} deps
-   * @param {object} deps.eventBus
-   * @param {object} [deps.scoringSystem]
-   * @param {object} [deps.debrisField]        — spawnStarlinkField({count}) => { ids }
-   * @param {object} [deps.shopScreen]
-   * @param {object} [deps.persistenceManager]
-   * @param {Function} [deps.depotStopPending] — () => boolean: GameFlowManager.isDepotStopPending(),
-   *   wired by main.js; the armed onset holds while it returns true. Default: never.
+   * @param {object} deps eventBus, scoringSystem, debrisField (spawnStarlinkField({count}) => { ids }), shopScreen,
+   *   persistenceManager
+   * @param {Function} [deps.depotStopPending] () => boolean: GameFlowManager.isDepotStopPending(), wired by main.js; the
+   *   armed onset holds while it returns true. Default: never.
    */
   constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null, depotStopPending = null } = {}) {
     this._eventBus = eventBus;
@@ -61,10 +52,6 @@ export class StarlinkCascadeBoss {
     this._unsubs = [];
     this._disposed = false;
   }
-
-  // --------------------------------------------------------------------------
-  // PUBLIC API
-  // --------------------------------------------------------------------------
 
   init() {
     if (this._disposed || !this._eventBus) return;
@@ -125,10 +112,6 @@ export class StarlinkCascadeBoss {
     this._unsubs.length = 0;
   }
 
-  // --------------------------------------------------------------------------
-  // INTERNAL
-  // --------------------------------------------------------------------------
-
   /** @private ARM at the boundary into the boss mission (`_active || _completed`: once per game). */
   _onMissionStart(data) {
     if (this._active || this._completed) return;
@@ -148,7 +131,6 @@ export class StarlinkCascadeBoss {
     this._start();
   }
 
-  /** @private */
   _start() {
     const cfg = Constants.STARLINK_BOSS;
     const count = cfg.FRAG_COUNT || 35;
@@ -179,7 +161,6 @@ export class StarlinkCascadeBoss {
     this._comms(`Starlink bird just fragmented. ${this._threats.total} pieces tumbling through the shell, and they'll seed a Kessler cascade if they spread. Sweep them inside ${cfg.WINDOW_MIN || 5} minutes.`, 'critical');
   }
 
-  /** @private */
   _onThreatTouched(payload) {
     if (!this._active) return;
     if (this._threats.touch(payload) && this._threats.allCleared) {
@@ -187,7 +168,6 @@ export class StarlinkCascadeBoss {
     }
   }
 
-  /** @private */
   _resolve(outcome) {
     if (!this._active) return;
     const cfg = Constants.STARLINK_BOSS;
@@ -216,7 +196,6 @@ export class StarlinkCascadeBoss {
     this._endRun();
   }
 
-  /** @private */
   _comms(text, priority = 'info') {
     this._eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON',
@@ -227,7 +206,6 @@ export class StarlinkCascadeBoss {
     });
   }
 
-  /** @private */
   _endRun() {
     for (const u of this._runUnsubs) { if (typeof u === 'function') u(); }
     this._runUnsubs.length = 0;
@@ -237,10 +215,8 @@ export class StarlinkCascadeBoss {
     this._imminentFired = false;
   }
 
-  /** @private */
   _serialize() { return { version: 1, completed: this._completed }; }
 
-  /** @private */
   _restore(data) {
     if (data && typeof data.completed === 'boolean') this._completed = data.completed;
   }

@@ -53,7 +53,6 @@ const SELECTED_RETICLE_SCALE = 1.6;   // Selected target is bigger
  *  expansion (px on every side) — an unselected bracket whose BOX (arms + dist
  *  label) touches the band + this pad is skipped whole (never a half-drawn reticle). */
 const SCORE_STRIP_PAD_PX = 8;
-const CALLOUT_DURATION = 8;          // seconds for first-encounter callout labels
 /** Fixed y of the autopilot-engaged chip, and its height (px). `Constants.TEACHING.OVERLAY_AP_BADGE_BOTTOM_PX` must equal
  *  their sum (test-TeachingOverlay.js); `_drawApBadge` draws with both, so the drawing and the constant cannot drift. */
 export const AP_BADGE_TOP_PX = 92;
@@ -361,14 +360,11 @@ export class TargetReticle {
     this._dt = 0;
 
     // First-encounter callout tracking
-    this._progradeFirstSeen = false;
-    this._retroFirstSeen = false;
     this._progradeCalloutTimer = 0;
     this._retroCalloutTimer = 0;
 
-    // Phase 1: Telemetry & relative velocity tracking
+    // Phase 1: Telemetry tracking
     this._thrustDirection = null;
-    this._relativeVelocity = 0;  // relative to selected target, in km/s
 
     // Phase R6: Closure rate / ETA for selected target (prograde marker)
     this._selectedTargetDistKm = 0;
@@ -521,7 +517,6 @@ export class TargetReticle {
     // View-config flags (set by CameraSystem progressive info levels)
     this._viewConfig = {
       showClosureRate: true,
-      showVelocityVectors: true,
     };
 
     // Session O (plan D16 (b), owner 2026-09-07): the score-strip exclusion band,
@@ -695,7 +690,6 @@ export class TargetReticle {
   setViewConfig(config) {
     if (!config) return;
     if (config.showClosureRate !== undefined)    this._viewConfig.showClosureRate    = config.showClosureRate;
-    if (config.showVelocityVectors !== undefined) this._viewConfig.showVelocityVectors = config.showVelocityVectors;
   }
 
   /**
@@ -811,22 +805,6 @@ export class TargetReticle {
     }
 
     const { debrisField, activeSatellites, playerPos, targetSelector } = data;
-
-    // Compute relative velocity to selected target
-    this._relativeVelocity = 0;
-    if (targetSelector && data.playerVel && data.playerOrbit) {
-      const activeTarget = targetSelector.getActiveTarget();
-      if (activeTarget && activeTarget.orbit) {
-        // Sprint 2 / PR A — scratch-output variant.
-        orbitToSceneCartesianInto(activeTarget.orbit, this._tmpCartPos, this._tmpCartVel);
-        const rv = this._tmpCartVel;     // km/s
-        const pv = data.playerVel;       // km/s
-        const dvx = rv.x - pv.x;
-        const dvy = rv.y - pv.y;
-        const dvz = rv.z - pv.z;
-        this._relativeVelocity = Math.sqrt(dvx * dvx + dvy * dvy + dvz * dvz);
-      }
-    }
 
     // Phase R6: Track selected target distance for prograde closure rate + ETA
     this._selectedTargetDistKm = 0;
@@ -960,13 +938,6 @@ export class TargetReticle {
       if (this._pairPiece && this._pairPiece.alive !== false) this._drawPairMarker(this._pairPiece);
     }
 
-    // --- Draw prograde/retrograde velocity markers (Phase 2.3) ---
-    // Gated behind MANUAL_NAV (off by default): these are manual-flight nav aids
-    // for advanced/autopilot-degraded missions, not the autopilot core loop.
-    if (this._viewConfig.showVelocityVectors && Constants.FEATURE_FLAGS.MANUAL_NAV) {
-      this._drawVelocityMarkers(data);
-    }
-
     // Clean up stale closure rate entries
     const activeIds = new Set(this._debrisTargets.map(t => t.id));
     for (const id of this.previousDistances.keys()) {
@@ -982,8 +953,7 @@ export class TargetReticle {
     if (doShake) { this.ctx.restore(); this._shakeX = this._shakeY = 0; }
 
     // Calm-HUD: autopilot-engaged badge — drawn from the top level, AFTER the
-    // shake restore (a mode readout should not shake) and outside the
-    // MANUAL_NAV gate above, so it is actually reachable in normal play.
+    // shake restore (a mode readout should not shake).
     if (this._apEngaged) this._drawApBadge(); else this._apBadgeRect = null;
 
     // Phase 6: Draw lasso cooldown arc (on top, no shake).
@@ -1572,11 +1542,8 @@ export class TargetReticle {
   /**
    * Draw the autopilot-engaged badge at a FIXED screen position.
    *
-   * Deliberately independent of the prograde marker. That marker lives behind
-   * `FEATURE_FLAGS.MANUAL_NAV` (false by default) *and* an `if (proProj.visible)`
-   * check, so the AP indicator that used to be nested inside it never rendered
-   * in normal play — a mode as consequential as "the autopilot is flying my
-   * ship" must not inherit a nav aid's visibility.
+   * A mode as consequential as "the autopilot is flying my ship" is drawn unconditionally,
+   * never inside another overlay's visibility check.
    *
    * Calm-HUD: salience comes from WEIGHT, not motion — a bordered, amber-tinted
    * chip with a static glow, at a stable position so it is learnable. The only
@@ -1829,316 +1796,6 @@ export class TargetReticle {
     ctx.shadowBlur = 0;
     if (!prepped) { prepText(); lay = layoutAt(edge); }
     ctx.fillText(label, lay.lines[0].cx, lay.lines[0].cy);
-
-    ctx.restore();
-  }
-
-  // ==========================================================================
-  // PROGRADE / RETROGRADE VELOCITY MARKERS (Phase 2.3)
-  // ==========================================================================
-
-  /**
-   * Draw prograde (⊙) and retrograde (⊗) markers projected onto the screen
-   * at the player's velocity vector direction — key navigational aids from iWar.
-   * @private
-   * @param {object} data - Game data with playerPos and playerVel
-   */
-  _drawVelocityMarkers(data) {
-    const vel = data.playerVel;
-    if (!vel) return;
-
-    const velVec = new THREE.Vector3(vel.x, vel.y, vel.z);
-    const velMagSq = velVec.lengthSq();
-    if (velMagSq < 1e-14) return; // Essentially stationary
-
-    const velMag = Math.sqrt(velMagSq);
-    const progradeDir = velVec.clone().normalize();
-    const playerPos = data.playerPos instanceof THREE.Vector3
-      ? data.playerPos
-      : new THREE.Vector3(data.playerPos.x, data.playerPos.y, data.playerPos.z);
-
-    // --- Prograde marker: point far ahead in velocity direction ---
-    const progradeWorld = playerPos.clone().add(progradeDir.clone().multiplyScalar(10));
-    const proProj = this._project(progradeWorld);
-    if (proProj.visible) {
-      this._drawProgradeMarker(proProj.x, proProj.y, velMag);
-    }
-
-    // --- Retrograde marker: point far behind (opposite velocity) ---
-    const retrogradeWorld = playerPos.clone().add(progradeDir.clone().multiplyScalar(-10));
-    const retProj = this._project(retrogradeWorld);
-    if (retProj.visible) {
-      this._drawRetrogradeMarker(retProj.x, retProj.y, this._relativeVelocity);
-    }
-  }
-
-  /**
-   * Draw prograde marker ⊙ — circle with center dot.
-   * @private
-   * @param {number} x - Screen X
-   * @param {number} y - Screen Y
-   * @param {number} velMag - Velocity magnitude in km/s (from OrbitalMechanics)
-   */
-  _drawProgradeMarker(x, y, velMag) {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.globalAlpha = 0.9;
-
-    // Outer circle
-    ctx.strokeStyle = COLORS.green;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(x, y, 14, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // Center dot
-    ctx.fillStyle = COLORS.green;
-    ctx.beginPath();
-    ctx.arc(x, y, 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Three prongs (up, left, right) — classic prograde symbol
-    const r = 14;
-    ctx.beginPath();
-    ctx.moveTo(x, y - r); ctx.lineTo(x, y - r - 6);
-    ctx.moveTo(x - r, y); ctx.lineTo(x - r - 6, y);
-    ctx.moveTo(x + r, y); ctx.lineTo(x + r + 6, y);
-    ctx.stroke();
-
-    // First-encounter callout trigger
-    if (!this._progradeFirstSeen) {
-      this._progradeFirstSeen = true;
-      this._progradeCalloutTimer = CALLOUT_DURATION;
-    }
-
-    // Label: Prograde + velocity magnitude (or callout on first encounter)
-    ctx.textAlign = 'left';
-    if (this._progradeCalloutTimer > 0) {
-      // Callout alpha: full for first 6s, fade over last 2s
-      const calloutAlpha = this._progradeCalloutTimer <= 2
-        ? this._progradeCalloutTimer / 2
-        : 1.0;
-      const calloutText = 'Prograde. Direction of travel';
-      ctx.font = mono(13, 'bold');
-      this._drawCalloutPill(x + 22, y - 6, calloutText, COLORS.green, calloutAlpha);
-      ctx.globalAlpha = calloutAlpha;
-      ctx.fillStyle = COLORS.green;
-      ctx.fillText(calloutText, x + 22, y + 4);
-    } else {
-      ctx.font = mono(10);
-      ctx.fillStyle = COLORS.green;
-
-      // Velocity readout (velMag already in km/s from OrbitalMechanics)
-      const velText = velMag >= 1
-        ? `${velMag.toFixed(2)} km/s`
-        : `${(velMag * 1000).toFixed(0)} m/s`;
-      ctx.fillText(`Prograde ${velText}`, x + 22, y + 4);
-
-      let lineY = y + 18;
-
-      // Phase R6: Closure rate + ETA for selected target — shown only when the
-      // closure is actually meaningful (no dead "0 m/s" line when matched).
-      if (this._selectedTargetDistKm > 0) {
-        const cr = this._selectedClosureRate; // km/s, positive = closing (smoothed)
-        // shows from 1.1 m/s, hides below 0.9 m/s (it used to switch at exactly 1 m/s, the number it prints)
-        const crMs = Math.abs(cr) * 1000;
-        this._selClosureShown = this._selClosureShown ? crMs >= 0.9 : crMs >= 1.1;
-        if (this._selClosureShown) {
-          ctx.font = mono(10);
-          ctx.globalAlpha = 0.8;
-          const label = cr > 0 ? 'Closing' : 'Opening';
-          ctx.fillStyle = cr > 0 ? COLORS.green : COLORS.red;
-          const crKms = Math.abs(cr);
-          const crText = crKms >= 1
-            ? `${crKms.toFixed(2)} km/s`
-            : `${(crKms * 1000).toFixed(0)} m/s`;
-          ctx.fillText(`${label}: ${crText}`, x + 22, lineY);
-          lineY += 12;
-        }
-        // ETA when closing on target
-        if (this._selClosureShown && cr > 0) {
-          const etaSec = this._selectedTargetDistKm / cr;
-          if (etaSec < 3600) { // Only show if < 1 hour
-            const etaStr = etaSec > 120
-              ? `${(etaSec / 60).toFixed(1)}m`
-              : `${etaSec.toFixed(0)}s`;
-            ctx.font = mono(10);
-            ctx.fillStyle = COLORS.yellow;
-            ctx.globalAlpha = 0.7;
-            ctx.fillText(`ETA: ${etaStr}`, x + 22, lineY);
-            lineY += 12;
-          }
-        }
-      }
-
-      // Phase R6: Periapsis hint — Oberth effect teaching moment
-      if (this._nearPeriapsis) {
-        ctx.font = mono(10);
-        ctx.fillStyle = COLORS.yellow;
-        ctx.globalAlpha = 0.5;
-        ctx.fillText('Periapsis. Efficient burn', x + 22, lineY);
-      }
-    }
-
-    // Phase 7: Autopilot heading aid — dashed amber line from prograde to the
-    // selected target. Stays here because it needs the prograde screen position.
-    // NOTE: the AP *badge* is deliberately NOT drawn here — see _drawApBadge.
-    if (this._apEngaged) {
-      // Dashed amber heading line from prograde to selected target
-      if (this._selectedScreenPos) {
-        const tx = this._selectedScreenPos.x;
-        const ty = this._selectedScreenPos.y;
-        const dx = tx - x, dy = ty - y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > 30) {
-          ctx.globalAlpha = 0.35;
-          ctx.strokeStyle = COLORS.yellow;
-          ctx.lineWidth = 1;
-          ctx.setLineDash([6, 4]);
-          ctx.beginPath();
-          ctx.moveTo(x + (dx / dist) * 22, y + (dy / dist) * 22); // start past prograde circle
-          ctx.lineTo(tx, ty);
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
-      }
-    }
-
-    ctx.restore();
-  }
-
-  /**
-   * Draw retrograde marker ⊗ — circle with X through it.
-   * @private
-   * @param {number} x - Screen X
-   * @param {number} y - Screen Y
-   * @param {number} [relativeVelocity=0] - Relative velocity to selected target in km/s
-   */
-  _drawRetrogradeMarker(x, y, relativeVelocity = 0) {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.globalAlpha = 0.9;
-
-    // Outer circle
-    ctx.strokeStyle = '#ff8844';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(x, y, 14, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // X through center
-    const d = 9;
-    ctx.beginPath();
-    ctx.moveTo(x - d, y - d); ctx.lineTo(x + d, y + d);
-    ctx.moveTo(x + d, y - d); ctx.lineTo(x - d, y + d);
-    ctx.stroke();
-
-    // Three prongs (down, left, right) — classic retrograde symbol
-    const r = 14;
-    ctx.beginPath();
-    ctx.moveTo(x, y + r); ctx.lineTo(x, y + r + 6);
-    ctx.moveTo(x - r, y); ctx.lineTo(x - r - 6, y);
-    ctx.moveTo(x + r, y); ctx.lineTo(x + r + 6, y);
-    ctx.stroke();
-
-    // First-encounter callout trigger
-    if (!this._retroFirstSeen) {
-      this._retroFirstSeen = true;
-      this._retroCalloutTimer = CALLOUT_DURATION;
-    }
-
-    // Label (or callout on first encounter)
-    ctx.textAlign = 'left';
-    if (this._retroCalloutTimer > 0) {
-      const calloutAlpha = this._retroCalloutTimer <= 2
-        ? this._retroCalloutTimer / 2
-        : 1.0;
-      const calloutText = 'Retrograde. Brake direction';
-      ctx.font = mono(13, 'bold');
-      this._drawCalloutPill(x + 22, y - 6, calloutText, '#ff8844', calloutAlpha);
-      ctx.globalAlpha = calloutAlpha;
-      ctx.fillStyle = '#ff8844';
-      ctx.fillText(calloutText, x + 22, y + 4);
-    } else {
-      ctx.font = mono(10);
-      ctx.fillStyle = '#ff8844';
-      ctx.fillText('Retrograde', x + 22, y + 4);
-
-      // Phase 1: ΔV-to-match readout when a target is selected
-      if (relativeVelocity > 0) {
-        ctx.font = mono(10);
-        ctx.fillStyle = '#ff8844';
-        const relVelMs = relativeVelocity * 1000; // km/s → m/s
-        const matchText = relVelMs < 1000
-          ? `ΔV to match: ${relVelMs.toFixed(1)} m/s`
-          : `ΔV to match: ${relativeVelocity.toFixed(2)} km/s`;
-        ctx.fillText(matchText, x + 22, y + 18);
-
-        // Phase R6: Post-burn ΔV — what remains after matching target velocity
-        if (this._cachedPlayerDeltaV > 0) {
-          const costMs = relVelMs;
-          const postBurn = this._cachedPlayerDeltaV - costMs;
-          const pbColor = postBurn > 200 ? COLORS.green
-            : postBurn > 50 ? COLORS.yellow : COLORS.red;
-          ctx.font = mono(10);
-          ctx.fillStyle = pbColor;
-          ctx.globalAlpha = 0.8;
-          ctx.fillText(`Post-burn ΔV: ${Math.round(postBurn)} m/s`, x + 22, y + 30);
-        }
-      }
-    }
-
-    ctx.restore();
-  }
-
-  // ==========================================================================
-  // CALLOUT PILL HELPER
-  // ==========================================================================
-
-  /**
-   * Draw a semi-transparent dark background pill behind callout text.
-   * @private
-   * @param {number} x - Text X position
-   * @param {number} y - Text Y position (baseline)
-   * @param {string} text - The callout text (used to measure width)
-   * @param {string} color - Border/accent color
-   * @param {number} alpha - Opacity (0-1)
-   */
-  _drawCalloutPill(x, y, text, color, alpha) {
-    const ctx = this.ctx;
-    ctx.save();
-    const metrics = ctx.measureText(text);
-    const pw = metrics.width + 12;
-    const ph = 20;
-    const px = x - 4;
-    const py = y - 4;
-    const r = 4; // corner radius
-
-    // Helper: trace a rounded rectangle path
-    const tracePill = () => {
-      ctx.beginPath();
-      ctx.moveTo(px + r, py);
-      ctx.lineTo(px + pw - r, py);
-      ctx.arcTo(px + pw, py, px + pw, py + r, r);
-      ctx.lineTo(px + pw, py + ph - r);
-      ctx.arcTo(px + pw, py + ph, px + pw - r, py + ph, r);
-      ctx.lineTo(px + r, py + ph);
-      ctx.arcTo(px, py + ph, px, py + ph - r, r);
-      ctx.lineTo(px, py + r);
-      ctx.arcTo(px, py, px + r, py, r);
-      ctx.closePath();
-    };
-
-    ctx.globalAlpha = alpha * 0.7;
-    ctx.fillStyle = '#000000';
-    tracePill();
-    ctx.fill();
-
-    ctx.globalAlpha = alpha * 0.5;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
-    tracePill();
-    ctx.stroke();
 
     ctx.restore();
   }

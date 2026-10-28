@@ -1,55 +1,34 @@
 /**
- * CopilotVoice.js — the COPILOT's spoken phrases (Session M, 2026-09-06).
+ * @module systems/CopilotVoice — the COPILOT's spoken phrases: at most EIGHT short imperative English phrases through
+ * SpeechSynthesis, one per cue: engage / match / align / arrived / off_manual / off / no_target / drift. They are the
+ * co-pilot's voice, not the comms channel's text: none repeats a COMMS_MESSAGE line ('AUTOPILOT ENGAGED. ...' /
+ * 'AUTOPILOT OFF. ...' / 'ON STATION ...') verbatim, and none carries a pictographic glyph.
  *
- * At most EIGHT short imperative English phrases through SpeechSynthesis, one
- * per cue: engage / match / align / arrived / off_manual / off / no_target /
- * drift. They are the co-pilot's voice, not the comms channel's text: none
- * repeats a COMMS_MESSAGE line ('AUTOPILOT ENGAGED. ...' / 'AUTOPILOT OFF. ...'
- * / 'ON STATION ...') verbatim, and none carries a pictographic glyph.
+ * NO DOM. Every dep is injected and optional (see the constructor); `enabled` is false under the dev shot gate (passed
+ * in, never parsed here). Missing synth ⇒ silence; a throwing utterance ⇒ swallowed. Nothing is emitted.
  *
- * NO DOM. Every dep is injected and optional: `synth` (a speechSynthesis-like
- * { speak, cancel, speaking }), `Utterance` (the SpeechSynthesisUtterance
- * constructor), `bus` / `events` (the game EventBus + the Events table; the
- * module defaults to the singletons like CargoPane), `now` (ms clock), and
- * the hub's closures `enabled` (false under the dev shot gate — passed in,
- * never parsed here), `isMuted`, `duck` (AudioSystem.duckForVoice). Missing
- * synth ⇒ silence; a throwing utterance ⇒ swallowed. Nothing is emitted.
+ * ARMING: iPad Safari speaks only inside a user gesture, so `attach(target)` adds ONE `pointerdown` and ONE `keydown`
+ * listener (capture, passive, once) whose first firing calls `arm()`: a primer utterance (a single space at volume 0)
+ * spoken inside that gesture unlocks the synthesiser. No touch* listener anywhere (the desktop touch-listener law).
  *
- * ARMING: iPad Safari speaks only inside a user gesture, so `attach(target)`
- * adds ONE `pointerdown` and ONE `keydown` listener (capture, passive, once)
- * whose first firing calls `arm()`: a primer utterance (a single space at
- * volume 0) spoken inside that gesture unlocks the synthesiser for the cues
- * that follow. No touch* listener anywhere (the desktop touch-listener law).
+ * CUES: `cue(key)` is a no-op unless enabled && armed && synth && Utterance && !isMuted(); utterances are rate-limited
+ * to >= 1500 ms apart (inside the limit the FIRST cue wins — the later one is dropped, never queued); a PHASE cue
+ * (match / align / arrived / drift / off / off_manual) past the limit cancels the current utterance first; `duck(true)`
+ * on utterance start, `duck(false)` on end / error / cancel (balanced — one duck per utterance). The PRIMER is
+ * protected: no cancel() while it may still be queued (until its end / error event, or PRIMER_GRACE_MS after arming
+ * when no event comes) — iOS unlocks on the utterance that actually plays inside the gesture, and a cancel() in that
+ * window would purge it and leave the voice dead for the session.
  *
- * CUES: `cue(key)` is a no-op unless enabled && armed && synth && Utterance
- * && !isMuted(); utterances are rate-limited to >= 1500 ms apart (inside the
- * limit the FIRST cue wins — the later one is dropped, never queued); a PHASE
- * cue (match / align / arrived / drift / off / off_manual) past the limit
- * cancels the current utterance first; `duck(true)` on utterance start,
- * `duck(false)` on end / error / cancel (balanced — one duck per utterance).
- * The PRIMER is protected: no cancel() while it may still be queued (until its
- * end / error event, or PRIMER_GRACE_MS after arming when no event comes) —
- * iOS unlocks on the utterance that actually plays inside the gesture, and a
- * cancel() in that window would purge it and leave the voice dead for the
- * session (Session M review).
- *
- * WIRING: the bus gives engage / off / no_target (AUTOPILOT_ENGAGE — the first
- * one of an engagement only, since the AP re-emits it on a heading-mode change
- * mid-flight — / AUTOPILOT_DISENGAGE by reason / AUTOPILOT_NO_TARGET); the
- * FMA strip's `onPhaseChange` gives match / align / arrived / drift through
- * `phase(prev, next)`. AUTOPILOT_ARRIVED is deliberately NOT subscribed: the
- * HOLD phase already speaks 'arrived' (pinned — no double-speak).
- *
- * @module systems/CopilotVoice
+ * WIRING: the bus gives engage / off / no_target (AUTOPILOT_ENGAGE — the first one of an engagement only, since the AP
+ * re-emits it on a heading-mode change mid-flight — / AUTOPILOT_DISENGAGE by reason / AUTOPILOT_NO_TARGET); the FMA
+ * strip's `onPhaseChange` gives match / align / arrived / drift through `phase(prev, next)`. AUTOPILOT_ARRIVED is
+ * deliberately NOT subscribed: the HOLD phase already speaks 'arrived' (pinned — no double-speak).
  */
 
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 
-/**
- * PHRASES — the whole vocabulary: <= 8 entries, each <= 40 characters, plain
- * ASCII, imperative. Keyed by cue. Frozen; `phrases()` returns this table.
- */
+/** The whole vocabulary: <= 8 entries, each <= 40 characters, plain ASCII, imperative. Keyed by cue. Frozen. */
 export const PHRASES = Object.freeze({
   engage:     'Hands off. Autopilot has the ship.',
   match:      'Matching orbit. Stand by.',
@@ -75,11 +54,8 @@ export const PRIMER_GRACE_MS = 3000;
 
 /**
  * The cue for an autopilot phase change (AutopilotSystem PHASE keys), or null.
- * MATCH_ORBIT ⇒ 'match'; TRAIL_ALIGN ⇒ 'align' (from HOLD it is a fall-back:
- * 'drift'); HOLD ⇒ 'arrived'. RENDEZVOUS_FAR / OFF say nothing here — the bus
- * cues (engage / off) cover them.
- * @param {string|null} prev
- * @param {string|null} next
+ * MATCH_ORBIT ⇒ 'match'; TRAIL_ALIGN ⇒ 'align' (from HOLD it is a fall-back: 'drift'); HOLD ⇒ 'arrived'.
+ * RENDEZVOUS_FAR / OFF say nothing here — the bus cues (engage / off) cover them.
  * @returns {string|null}
  */
 export function cueForPhase(prev, next) {
@@ -104,8 +80,6 @@ export class CopilotVoice {
    * @param {boolean}  [deps.enabled=true] false ⇒ attach adds nothing, cue speaks nothing (the hub passes !devShotGate.requested).
    * @param {function} [deps.isMuted]   () → boolean; true ⇒ cue speaks nothing (default: () => false).
    * @param {function} [deps.duck]      (on: boolean) → void; the mix duck around an utterance (default: none).
-   * @param {string}   [deps.lang='en-US']
-   * @param {number}   [deps.rate=1.0]
    */
   constructor(deps = {}) {
     this._synth = deps.synth || null;
@@ -133,20 +107,14 @@ export class CopilotVoice {
     this._subscribe();
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
-  /** True once a user gesture (or an explicit arm()) has unlocked speech. */
   get armed() { return this._armed; }
 
-  /** The frozen phrase table (for the pin). */
   phrases() { return PHRASES; }
 
   /**
-   * Register the arming gesture listeners on `target` (the hub passes
-   * window): one pointerdown + one keydown, capture / passive / once; the
-   * first to fire arms and both leave. Nothing when disabled, already armed,
-   * disposed, or the target cannot listen.
-   * @param {EventTarget} target
+   * Register the arming gesture listeners on `target` (the hub passes window): one pointerdown + one keydown,
+   * capture / passive / once; the first to fire arms and both leave. Nothing when disabled, already armed, disposed,
+   * or the target cannot listen.
    * @returns {boolean} whether listeners were added
    */
   attach(target) {
@@ -159,11 +127,7 @@ export class CopilotVoice {
     return true;
   }
 
-  /**
-   * Unlock speech: once — speaks the volume-0 primer (inside the caller's
-   * gesture on iOS) and marks the voice armed; the arming listeners leave.
-   * @returns {boolean} whether this call armed
-   */
+  /** Unlock speech, once: speaks the volume-0 primer (inside the caller's gesture on iOS) and marks the voice armed; the arming listeners leave. */
   arm() {
     if (!this._enabled || this._armed || this._disposed) return false;
     this._armed = true;
@@ -183,11 +147,8 @@ export class CopilotVoice {
   }
 
   /**
-   * Speak the phrase for `key` (a PHRASES key). No-op unless enabled, armed,
-   * a synth + Utterance exist, and not muted; rate-limited; phase cues cancel
-   * the current utterance first.
-   * @param {string} key
-   * @returns {boolean} whether an utterance was queued
+   * Speak the phrase for `key` (a PHRASES key). No-op unless enabled, armed, a synth + Utterance exist, and not muted;
+   * rate-limited; phase cues cancel the current utterance first. Returns whether an utterance was queued.
    */
   cue(key) {
     if (this._disposed || !this._enabled || !this._armed) return false;
@@ -203,13 +164,7 @@ export class CopilotVoice {
     return true;
   }
 
-  /**
-   * An autopilot phase change (the FMA strip's onPhaseChange): speaks the
-   * mapped cue, if any.
-   * @param {string|null} prev
-   * @param {string|null} next
-   * @returns {boolean} whether an utterance was queued
-   */
+  /** An autopilot phase change (the FMA strip's onPhaseChange): speaks the mapped cue, if any. */
   phase(prev, next) {
     const key = cueForPhase(prev, next);
     return key ? this.cue(key) : false;
@@ -227,8 +182,6 @@ export class CopilotVoice {
     this._cancel(true);
   }
 
-  // ── Bus ────────────────────────────────────────────────────────────────────
-
   /** @private engage / off / no_target from the autopilot's own events (ARRIVED is the HOLD phase's). */
   _subscribe() {
     const bus = this._bus;
@@ -242,8 +195,8 @@ export class CopilotVoice {
     };
     wire(E.AUTOPILOT_ENGAGE, () => {
       if (this._engaged) return;               // a heading-mode re-emit mid-flight, not a new engagement
-      // The flag records a SPOKEN engagement: a dropped cue (unarmed yet, muted,
-      // inside the rate limit) leaves the door open for the re-emit (review).
+      // The flag records a SPOKEN engagement: a dropped cue (unarmed yet, muted, inside the rate limit) leaves the
+      // door open for the re-emit.
       if (this.cue('engage')) this._engaged = true;
     });
     wire(E.AUTOPILOT_DISENGAGE, (data) => {
@@ -253,17 +206,14 @@ export class CopilotVoice {
     wire(E.AUTOPILOT_NO_TARGET, () => { this.cue('no_target'); });
   }
 
-  // ── Speech (every call guarded) ────────────────────────────────────────────
-
   /** @private isMuted() guarded: a throwing closure reads as muted. */
   _muted() {
     try { return !!this._isMuted(); } catch (_e) { return true; }
   }
 
   /**
-   * @private Build + queue one utterance. `opts.volume` overrides the volume
-   * (the primer's 0); `opts.duck` wires the duck around it. Errors are swallowed.
-   * @returns {boolean} queued
+   * @private Build + queue one utterance. `opts.volume` overrides the volume (the primer's 0); `opts.duck` wires the
+   * duck around it. Errors are swallowed. Returns whether it was queued.
    */
   _speak(text, opts = {}) {
     const synth = this._synth;
@@ -276,9 +226,8 @@ export class CopilotVoice {
       if (opts.volume !== undefined) u.volume = opts.volume;
       const duck = !!(opts.duck && this._duck);
       const done = typeof opts.onDone === 'function' ? opts.onDone : null;
-      // The duck handlers act only while THIS utterance is the latest one: a
-      // cancelled utterance's end / error arrives asynchronously, possibly
-      // after the next one's start — it must not release the new duck (review).
+      // The duck handlers act only while THIS utterance is the latest one: a cancelled utterance's end / error arrives
+      // asynchronously, possibly after the next one's start, and must not release the new duck.
       const gen = ++this._gen;
       if (duck) u.onstart = () => { if (gen === this._gen) this._setDuck(true); };
       if (duck || done) {
@@ -294,9 +243,8 @@ export class CopilotVoice {
   }
 
   /**
-   * @private Cancel whatever is being spoken (guarded) and release the duck —
-   * no event may follow a cancel. While the PRIMER may still be queued the
-   * synth is left alone (`force` = dispose: cancel regardless).
+   * @private Cancel whatever is being spoken (guarded) and release the duck — no event may follow a cancel. While the
+   * PRIMER may still be queued the synth is left alone (`force` = dispose: cancel regardless).
    */
   _cancel(force = false) {
     const synth = this._synth;
@@ -313,7 +261,6 @@ export class CopilotVoice {
     try { this._duck(!!on); } catch (_e) { /* the mix is not the voice's problem */ }
   }
 
-  /** @private Remove the arming listeners (guarded; the fired `once` one is already gone). */
   _detach() {
     const a = this._attached;
     if (!a) return;

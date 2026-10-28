@@ -13,12 +13,10 @@
  * (SensorSystem skips `hazard`), so gating them would hide a danger cue
  * forever. Gate on `discovered === false`, never `!discovered`: snapshot
  * fixtures and non-debris targets carry no `discovered` field and stay marked.
- * The 3D meshes are not gated by this — you can see a piece with your eyes;
- * only the HUD marks need a scan.
+ * The 3D meshes are not gated: only the HUD marks need a scan.
  *
- * Slice 5 (lane 5d, D4): a piece that was DISPOSED OF (`_disposed`: let go by a push-down or a drag sail, or broke loose) is never marked,
- * hazard or not, scanned or not: it stays a drawn collision object, but no bracket, arrow, radar dot or auto-lock ever points at it. Checked
- * FIRST: before this, `hazard === true` alone made a piece marked.
+ * A DISPOSED OF piece (`_disposed`: let go by a push-down or drag sail, or broke loose) is never marked, hazard or not:
+ * it stays a drawn collision object, but no HUD mark points at it. Checked FIRST.
  * @param {{hazard?: boolean, discovered?: boolean, _disposed?: boolean}|null|undefined} d
  * @returns {boolean}
  */

@@ -1,16 +1,12 @@
 /**
- * EnvironmentSystem.js — ST-6.7: Five environmental hazard effects
- *
- * Central coordinator for altitude-dependent and periodic hazards that create
- * strategic pressure on the player:
+ * EnvironmentSystem.js — altitude-dependent and periodic hazards that create strategic pressure on the player:
  *   B1. Atomic Oxygen Erosion (AO)    — below 600 km altitude
  *   B2. MMOD Impacts                   — random micro-impacts scaled by debris density
  *   B3. Safe-Mode Trigger              — 2+ subsystems below 25% health
  *   B4. Radiation Belt Effects          — 2000–12000 km altitude (Van Allen)
  *   B5. Battery Depth-of-Discharge      — cumulative deep-cycle degradation
  *
- * All intervals are in **game-seconds**. The caller passes dt from the main
- * game loop (already time-scaled).
+ * All intervals are in **game-seconds**: the caller passes dt from the main game loop (already time-scaled).
  *
  * @module systems/EnvironmentSystem
  */
@@ -20,9 +16,7 @@ import { Events }    from '../core/Events.js';
 import { persistenceManager } from './PersistenceManager.js';
 import { clamp01 } from '../core/MathUtil.js';
 
-// ============================================================================
-// SEEDED RNG — same multiplicative congruential pattern as DebrisTextureAtlas
-// ============================================================================
+// Seeded RNG: same multiplicative congruential pattern as DebrisTextureAtlas.
 
 /** @private */
 function _seededRandom(seed) {
@@ -32,10 +26,6 @@ function _seededRandom(seed) {
     return (s - 1) / 2147483646;
   };
 }
-
-// ============================================================================
-// ENVIRONMENT SYSTEM
-// ============================================================================
 
 const ENV = () => Constants.ENVIRONMENT || {};
 const DEB = () => Constants.DEBRIS || {};
@@ -55,53 +45,37 @@ export class EnvironmentSystem {
     this._resource = resourceSystem    || null;
     this._skills   = skillsSystem      || null;
 
-    // ── Subsystem health model (0.0–1.0) ──────────────────────────────────
     this._subsystemHealth = { arms: 1.0, sensors: 1.0, comms: 1.0, power: 1.0 };
 
-    // ── AO accumulators ───────────────────────────────────────────────────
     this._aoTimer = 0;
     this._aoFirstWarned = false;
 
-    // ── MMOD accumulators ─────────────────────────────────────────────────
     this._mmodTimer = 0;
     this._mmodRng = _seededRandom(42);
     this._cmeActive = false;    // amplified MMOD during CME
 
-    // ── Safe Mode state ───────────────────────────────────────────────────
     this._safeModeTimer = 0;
     this._safeMode = false;
 
-    // ── Radiation Belt state ──────────────────────────────────────────────
     this._radiationNoiseTimer = 0;
     this._radiationFirstWarned = false;
     this._wasInRadBelt = false;
 
-    // ── Battery DOD state ─────────────────────────────────────────────────
     this._dodCycleCount = 0;
     this._dodBelowThreshold = false;  // currently below deep-discharge threshold
     this._dodFirstWarned = false;
     this._dodPenaltiesApplied = 0;    // how many penalty intervals applied
 
-    // ── Unsub functions ───────────────────────────────────────────────────
     this._unsubs = [];
 
-    // ── Disposed flag ─────────────────────────────────────────────────────
     this._disposed = false;
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
-
-  /**
-   * Start monitoring — subscribe to weather events and persistence.
-   */
   init() {
     if (this._disposed) return;
     const eb = this._eventBus;
     if (!eb) return;
 
-    // Listen for CME / weather events to amplify MMOD
     const onWeatherStart = (data) => {
       if (data && (data.type === 'GEOMAGNETIC_STORM' || data.type === 'Geomagnetic Storm')) {
         this._cmeActive = true;
@@ -120,7 +94,6 @@ export class EnvironmentSystem {
       this._unsubs.push(eb.on(Events.WEATHER_EFFECT_END, onWeatherEnd));
     }
 
-    // Persistence: save environment state
     if (Events.PERSISTENCE_GATHER) {
       this._unsubs.push(eb.on(Events.PERSISTENCE_GATHER, (saveData) => {
         if (!saveData || typeof saveData !== 'object') return;
@@ -134,15 +107,11 @@ export class EnvironmentSystem {
       }));
     }
 
-    // Persistence: restore environment state
     if (Events.PERSISTENCE_LOADED) {
       this._unsubs.push(eb.on(Events.PERSISTENCE_LOADED, () => {
         try {
-          // Read through the exported singleton (PersistenceManager.load()
-          // emits PERSISTENCE_LOADED, so peek() is the non-recursive read).
-          // This used to go through `window.persistenceManager`, which NOTHING
-          // ever assigns — the restore was dead code and environment state was
-          // never reapplied on CONTINUE.
+          // Read through the exported singleton (PersistenceManager.load() emits PERSISTENCE_LOADED, so peek() is
+          // the non-recursive read). NOT `window.persistenceManager`: nothing assigns it.
           const save = persistenceManager.peek();
           if (!save || !save.environment) return;
           const s = save.environment;
@@ -164,7 +133,6 @@ export class EnvironmentSystem {
       }));
     }
 
-    // Reset on game reset
     if (Events.GAME_RESET) {
       this._unsubs.push(eb.on(Events.GAME_RESET, () => this._reset()));
     }
@@ -172,10 +140,6 @@ export class EnvironmentSystem {
     console.log('[EnvironmentSystem] Initialized. 5 hazard effects active');
   }
 
-  /**
-   * Per-frame tick — runs all five sub-effects.
-   * @param {number} dt — delta time in seconds (already time-scaled)
-   */
   update(dt) {
     if (this._disposed) return;
     if (!this._player) return;
@@ -210,9 +174,6 @@ export class EnvironmentSystem {
     return effects;
   }
 
-  /**
-   * @returns {boolean} true if player altitude is within Van Allen belt range
-   */
   isInRadiationBelt() {
     const altKm = this._getAltitudeKm();
     if (altKm === null) return false;
@@ -221,9 +182,6 @@ export class EnvironmentSystem {
            altKm <= (E.RADIATION_BELT_HIGH_KM || 12000);
   }
 
-  /**
-   * @returns {number} Current AO erosion rate (0 if above threshold)
-   */
   getAtomicOxygenRate() {
     const altKm = this._getAltitudeKm();
     if (altKm === null) return 0;
@@ -247,35 +205,20 @@ export class EnvironmentSystem {
     return Math.min(1, (Math.floor(this._dodCycleCount / interval) * loss));
   }
 
-  /**
-   * Get current subsystem health values.
-   * @returns {{ arms: number, sensors: number, comms: number, power: number }}
-   */
   getSubsystemHealth() {
     return { ...this._subsystemHealth };
   }
 
-  /**
-   * Set subsystem health (for testing or external repair).
-   * @param {string} subsystem
-   * @param {number} health — 0.0–1.0
-   */
   setSubsystemHealth(subsystem, health) {
     if (subsystem in this._subsystemHealth) {
       this._subsystemHealth[subsystem] = clamp01(health);
     }
   }
 
-  /**
-   * @returns {boolean} Whether safe mode is currently active
-   */
   isSafeMode() {
     return this._safeMode;
   }
 
-  /**
-   * Unsubscribe all listeners and stop updates.
-   */
   dispose() {
     this._disposed = true;
     for (const unsub of this._unsubs) {
@@ -283,10 +226,6 @@ export class EnvironmentSystem {
     }
     this._unsubs.length = 0;
   }
-
-  // ==========================================================================
-  // INTERNAL — Altitude helper
-  // ==========================================================================
 
   /** @private @returns {number|null} */
   _getAltitudeKm() {
@@ -329,10 +268,6 @@ export class EnvironmentSystem {
     }
   }
 
-  // ==========================================================================
-  // B1: ATOMIC OXYGEN EROSION
-  // ==========================================================================
-
   /** @private */
   _updateAtomicOxygen(dt, altKm) {
     const E = ENV();
@@ -342,7 +277,6 @@ export class EnvironmentSystem {
       return;
     }
 
-    // First entry warning
     if (!this._aoFirstWarned) {
       this._aoFirstWarned = true;
       this._houston('Caution. Atomic oxygen concentration increasing at this altitude. Equipment degradation possible.', 'warning');
@@ -356,7 +290,6 @@ export class EnvironmentSystem {
       let armDeg   = E.AO_ARM_DEGRADATION   || 0.002;
       let panelDeg = E.AO_PANEL_DEGRADATION  || 0.001;
 
-      // Skill mitigation
       if (this._skills && typeof this._skills.isDiscovered === 'function' &&
           this._skills.isDiscovered('manage_power')) {
         const mit = E.AO_SKILL_MITIGATION || 0.5;
@@ -364,14 +297,11 @@ export class EnvironmentSystem {
         panelDeg *= mit;
       }
 
-      // Apply degradation
       this._subsystemHealth.arms = Math.max(0, this._subsystemHealth.arms - armDeg);
 
-      // Mother-wings step 4 (DECISIONS §10, "power follows the panels"): AO
-      // erosion hits the WING (ROSA) health only — the large, thin, exposed
-      // blanket is what atomic oxygen realistically erodes first. The body-
-      // mount cells' `bodyPanelHealth` (backup power) is deliberately left
-      // alone here, so it keeps working when the wings are worn down.
+      // Mother-wings (DECISIONS §10, "power follows the panels"): AO erosion hits the WING (ROSA) health only (the
+      // large, thin, exposed blanket is what atomic oxygen erodes first). The body-mount cells' `bodyPanelHealth`
+      // (backup power) is deliberately left alone, so it keeps working when the wings are worn down.
       if (this._resource && typeof this._resource.solarPanelHealth === 'number') {
         this._resource.solarPanelHealth = Math.max(0, this._resource.solarPanelHealth - panelDeg);
       }
@@ -383,10 +313,6 @@ export class EnvironmentSystem {
       });
     }
   }
-
-  // ==========================================================================
-  // B2: MMOD IMPACTS
-  // ==========================================================================
 
   /** @private */
   _updateMMOD(dt, altKm) {
@@ -402,7 +328,6 @@ export class EnvironmentSystem {
       prob *= (E.MMOD_WEATHER_AMPLIFIER || 1.5);
     }
 
-    // Roll (seeded)
     const roll = this._mmodRng();
     if (roll > prob) return;
 
@@ -413,25 +338,20 @@ export class EnvironmentSystem {
     let damage = E.MMOD_DAMAGE_FRACTION || 0.05;
     let mitigated = false;
 
-    // Skill mitigation
     if (this._skills && typeof this._skills.isDiscovered === 'function' &&
         this._skills.isDiscovered('advanced_sensors')) {
       damage *= (E.MMOD_SKILL_MITIGATION || 0.5);
       mitigated = true;
     }
 
-    // Apply damage
     this._subsystemHealth[subsystem] = Math.max(0, this._subsystemHealth[subsystem] - damage);
 
-    // Houston comms
     const subsystemLabel = subsystem.charAt(0).toUpperCase() + subsystem.slice(1);
-    // comms-after-tutorial D5b: plain words (the old line opened with a raw hazard code).
+    // Plain words (no raw hazard code).
     this._houston(`A tiny piece of space debris hit the ship (${subsystemLabel}). Checking for damage.`, 'warning');
 
-    // Audio cue
     this._emit(Events.AUDIO_CUE, { cue: 'mmod_impact' });
 
-    // Environment effect event
     this._emit(Events.ENVIRONMENT_EFFECT, {
       type: 'mmod_impact',
       subsystem,
@@ -452,10 +372,6 @@ export class EnvironmentSystem {
     return Object.keys(weights).pop();
   }
 
-  // ==========================================================================
-  // B3: SAFE MODE
-  // ==========================================================================
-
   /** @private */
   _updateSafeMode(dt) {
     const E = ENV();
@@ -467,7 +383,6 @@ export class EnvironmentSystem {
     const healthThreshold  = E.SAFE_MODE_HEALTH_THRESHOLD  || 0.25;
     const recoveryThreshold = E.SAFE_MODE_RECOVERY_THRESHOLD || 0.40;
 
-    // Count subsystems below critical threshold
     const belowCritical = [];
     for (const [name, health] of Object.entries(this._subsystemHealth)) {
       if (health < healthThreshold) belowCritical.push(name);
@@ -497,17 +412,12 @@ export class EnvironmentSystem {
     }
   }
 
-  // ==========================================================================
-  // B4: RADIATION BELT
-  // ==========================================================================
-
   /** @private */
   _updateRadiationBelt(dt, altKm) {
     const E = ENV();
     const inBelt = altKm >= (E.RADIATION_BELT_LOW_KM || 2000) &&
                    altKm <= (E.RADIATION_BELT_HIGH_KM || 12000);
 
-    // Entry/exit transitions
     if (inBelt && !this._wasInRadBelt) {
       this._wasInRadBelt = true;
       if (!this._radiationFirstWarned) {
@@ -524,13 +434,11 @@ export class EnvironmentSystem {
 
     if (!inBelt) return;
 
-    // Periodic garbled comms
     this._radiationNoiseTimer += dt;
     const noiseInterval = E.RADIATION_NOISE_INTERVAL_S || 15;
     if (this._radiationNoiseTimer >= noiseInterval) {
       this._radiationNoiseTimer -= noiseInterval;
 
-      // Garbled text
       const garbled = '▓▒░ s█gn█l ░▒▓ …interference… ▓▒░';
       this._emit(Events.COMMS_MESSAGE, {
         text: garbled,
@@ -555,10 +463,6 @@ export class EnvironmentSystem {
     return penalty;
   }
 
-  // ==========================================================================
-  // B5: BATTERY DEPTH-OF-DISCHARGE
-  // ==========================================================================
-
   /** @private */
   _updateBatteryDOD(dt) {
     if (!this._resource) return;
@@ -573,14 +477,12 @@ export class EnvironmentSystem {
     const penaltyInterval  = E.DOD_CYCLE_PENALTY_INTERVAL   || 10;
     const capacityLoss     = E.DOD_CAPACITY_LOSS             || 0.02;
 
-    // Track deep-discharge cycle
     if (!this._dodBelowThreshold && fraction <= deepThreshold) {
       this._dodBelowThreshold = true;
     }
     if (this._dodBelowThreshold && fraction >= rechargeThreshold) {
       this._dodBelowThreshold = false;
 
-      // Completed one deep cycle
       let increment = 1;
       if (this._skills && typeof this._skills.isDiscovered === 'function' &&
           this._skills.isDiscovered('manage_power')) {
@@ -588,25 +490,21 @@ export class EnvironmentSystem {
       }
       this._dodCycleCount += increment;
 
-      // Check if a new penalty interval has been reached
       const newPenalties = Math.floor(this._dodCycleCount / penaltyInterval);
       if (newPenalties > this._dodPenaltiesApplied) {
         const deltaP = newPenalties - this._dodPenaltiesApplied;
         this._dodPenaltiesApplied = newPenalties;
 
-        // Reduce max battery capacity
         if (this._resource && typeof this._resource.batteryMax === 'number') {
           this._resource.batteryMax *= Math.pow(1 - capacityLoss, deltaP);
         }
 
-        // First penalty warning
         if (!this._dodFirstWarned) {
           this._dodFirstWarned = true;
           this._houston('Battery degradation noted. Consider managing power draw to extend service life.', 'warning');
         }
       }
 
-      // Emit DOD event
       const maxCapFrac = this._resource.batteryMax / (Constants.BATTERY_MAX || 1);
       this._emit(Events.ENVIRONMENT_EFFECT, {
         type: 'battery_dod',
@@ -616,10 +514,6 @@ export class EnvironmentSystem {
       });
     }
   }
-
-  // ==========================================================================
-  // MMOD PROBABILITY GETTER (for testing)
-  // ==========================================================================
 
   /**
    * Compute MMOD probability for a given altitude (for testing/display).
@@ -634,10 +528,6 @@ export class EnvironmentSystem {
     }
     return prob;
   }
-
-  // ==========================================================================
-  // RESET
-  // ==========================================================================
 
   /** @private Reset all state to pristine */
   _reset() {

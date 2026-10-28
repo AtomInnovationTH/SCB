@@ -1,27 +1,18 @@
 /**
- * MissionCoach.js — per-chapter coaching engine (CP-4 / MISSION_ARC_IMPLEMENTATION §2).
+ * @module systems/MissionCoach — per-chapter coaching engine. Chapters 2+ are taught as DATA
+ * (`Constants.MISSION_COACH.BEATS_BY_MISSION[N]`); chapter 1 stays with OnboardingDirector.
  *
- * Chapters 2+ are taught here as DATA (`Constants.MISSION_COACH.BEATS_BY_MISSION[N]`);
- * chapter 1 stays with OnboardingDirector. At the MISSION BOUNDARY into mission N
- * (`MISSION_START { missionNumber: N }` — the credited catch that closes chapter
- * N−1; Wave 5 Session F re-homed the onset here from `SHOP_DEPLOY`, "leaving the
- * shop", which the chapter-4+ depot INVITATION made optional) the coach ARMS
- * chapter N and starts it on the first gameplay frame with no depot stop
- * pending (`_bossLifecycle.MissionOnset` — the one rule shared with the bosses:
- * chapters 1–3 hold through the "MISSION N COMPLETE" card and the SHOP and open
- * after DEPLOY; chapter 4+ opens at once behind the glowing DEPOT notch). The
- * mission's beats then run once via a shared {@link BeatSequencer}:
- *   • every beat posts an MISSION-channel, `_postOnboarding`-tagged comms line so
- *     it survives the CP-4 suppression ramp at tiers ≥ 1;
- *   • interactive beats emit `MISSION_BEAT_STARTED` (so TeachingSystem's collision
- *     rule defers/drops redundant overlays) and resolve on their trigger event
- *     (+ optional payload filter) → `MISSION_BEAT_SATISFIED`;
+ * At the MISSION BOUNDARY into mission N (`MISSION_START { missionNumber: N }` — the credited catch that closes
+ * chapter N−1; not `SHOP_DEPLOY`, which the chapter-4+ depot INVITATION made optional) the coach ARMS chapter N and
+ * starts it on the first gameplay frame with no depot stop pending (`_bossLifecycle.MissionOnset`, the one rule shared
+ * with the bosses: chapters 1–3 hold through the "MISSION N COMPLETE" card and the SHOP and open after DEPLOY;
+ * chapter 4+ opens at once behind the glowing DEPOT notch). The beats then run once via a shared {@link BeatSequencer}:
+ *   • every beat posts a MISSION-channel, `_postOnboarding`-tagged comms line so it survives the suppression ramp at
+ *     tiers ≥ 1;
+ *   • interactive beats emit `MISSION_BEAT_STARTED` (so TeachingSystem's collision rule defers/drops redundant
+ *     overlays) and resolve on their trigger event (+ optional payload filter) → `MISSION_BEAT_SATISFIED`;
  *   • an unsatisfied interactive beat re-prompts via `TEACHING_MOMENT_FORCE`.
- * Completion is persisted so a mission is coached only once.
- *
- * Node-safe (no THREE / DOM) — unit-tested against the real EventBus.
- *
- * @module systems/MissionCoach
+ * Completion is persisted so a mission is coached only once. Node-safe (no THREE / DOM).
  */
 
 import { Events } from '../core/Events.js';
@@ -38,11 +29,9 @@ export class MissionCoach {
    * @param {object} [deps.scoringSystem]      — provides getMissionNumber()
    * @param {object} [deps.persistenceManager] — peek() for restore
    * @param {object} [deps.commsSystem]        — optional, for _tempDropToTier protection
-   * @param {Function} [deps.depotStopPending] — () => boolean: a depot stop (the
-   *   boundary dwell timer) is pending — GameFlowManager.isDepotStopPending(),
-   *   wired by main.js. An armed chapter holds while it returns true. Default:
-   *   never pending (headless / tests fire on the next update).
-   * @param {object} [deps.fieldRegistry] — lane 3d: `currentField()` names the field she is at, for a beat's `mapText`.
+   * @param {Function} [deps.depotStopPending] — () => boolean (GameFlowManager.isDepotStopPending(), wired by main.js):
+   *   an armed chapter holds while it returns true. Default: never pending (headless / tests fire on the next update).
+   * @param {object} [deps.fieldRegistry] — `currentField()` names the field she is at, for a beat's `mapText`.
    */
   constructor({ eventBus, scoringSystem = null, persistenceManager = null, commsSystem = null, depotStopPending = null, fieldRegistry = null } = {}) {
     this._eventBus = eventBus;
@@ -67,10 +56,6 @@ export class MissionCoach {
     this._disposed = false;
   }
 
-  // --------------------------------------------------------------------------
-  // PUBLIC API
-  // --------------------------------------------------------------------------
-
   /** Subscribe to triggers. Call once after construction. */
   init() {
     if (this._disposed || !this._eventBus) return;
@@ -82,8 +67,8 @@ export class MissionCoach {
     on(Events.GAME_STATE_CHANGE, (d) => {
       if (d && (d.to === GameStates.GAME_OVER || d.to === GameStates.WIN)) this._onset.cancel();
     });
-    // S4 (pair lesson): the autopilot could not set the double shot up in time (it has said why): the beat ends so the chapter, and the next one
-    // behind it, does not wait for ever.
+    // The autopilot could not set the double shot up in time (it has said why): end the beat so the chapter, and the
+    // next one behind it, does not wait for ever.
     on(Events.PAIR_LESSON_SKIP, () => this.satisfyBeat('ch2_pair_shot'));
     on(Events.GAME_RESET, () => this.reset());
     on(Events.PERSISTENCE_GATHER, (save) => { if (save) save.missionCoach = this._serialize(); });
@@ -93,8 +78,7 @@ export class MissionCoach {
     });
   }
 
-  /** Per-frame tick (gameplay frames only, main.js) — fires an armed chapter,
-   *  then drives narrative dwell + interactive escalation timers. */
+  /** Per-frame tick (gameplay frames only): fires an armed chapter, then drives narrative dwell + escalation timers. */
   update(dt) {
     if (this._disposed) return;
     if (this._onset.armed) {
@@ -108,8 +92,8 @@ export class MissionCoach {
   }
 
   /**
-   * Public path to end the interactive beat `beatId` as satisfied by something other than its own trigger (the same hook the trigger takes).
-   * @param {string} beatId @returns {boolean} true when that beat was the one on screen
+   * End the interactive beat `beatId` as satisfied by something other than its own trigger (the same hook the trigger takes).
+   * @returns {boolean} true when that beat was the one on screen
    */
   satisfyBeat(beatId) {
     if (this._disposed || !this._seq) return false;
@@ -118,7 +102,6 @@ export class MissionCoach {
     return this._seq.satisfy();
   }
 
-  /** @param {number} mission @returns {boolean} */
   hasCoached(mission) {
     return !!this._completedByMission[mission];
   }
@@ -133,7 +116,6 @@ export class MissionCoach {
     return this._onset.mission;
   }
 
-  /** Clear all coaching state (GAME_RESET / new game). */
   reset() {
     this._clearActive();
     this._onset.cancel();
@@ -141,7 +123,6 @@ export class MissionCoach {
     this._activeMission = null;
   }
 
-  /** Remove listeners. */
   dispose() {
     this._disposed = true;
     this._clearActive();
@@ -149,10 +130,6 @@ export class MissionCoach {
     for (const u of this._unsubs) { if (typeof u === 'function') u(); }
     this._unsubs.length = 0;
   }
-
-  // --------------------------------------------------------------------------
-  // INTERNAL
-  // --------------------------------------------------------------------------
 
   /** @private ARM the chapter for the mission that just started (the boundary catch). */
   _onMissionStart(data) {
@@ -195,8 +172,8 @@ export class MissionCoach {
   }
 
   /**
-   * @private Lane 3d: the beat as the player reads it now. Map off (or the list not there to ask on, or no registry): the table's
-   * words exactly. Map on: a beat's `mapText` with `{km}` = the height she is at, and "resupply stop" read as "resupply satellite".
+   * @private The beat as the player reads it now. Map off (or no registry / list to ask on): the table's words exactly.
+   * Map on: a beat's `mapText` with `{km}` = the height she is at, and "resupply stop" read as "resupply satellite".
    */
   _view(beat) {
     let text = beat.text;
@@ -211,7 +188,6 @@ export class MissionCoach {
   _postBeat(beat) {
     this._eventBus.emit(Events.COMMS_MESSAGE, buildBeatComms(this._view(beat)));
 
-    // Clear any prior beat's armed trigger before arming the next.
     this._disarmBeat();
 
     if (beat.type === 'interactive' || beat.type === 'reactive') {

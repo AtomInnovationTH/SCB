@@ -1,20 +1,12 @@
 /**
- * MissionEventSystem.js — ST-4.D Dynamic Mid-Mission Events
- *
- * Listens for existing gameplay events and triggers dynamic mid-mission
- * complications with comms messages and gameplay effects.
- *
- * Five trigger types:
+ * @module systems/MissionEventSystem — dynamic mid-mission events: listens for gameplay events and triggers
+ * complications with comms messages and gameplay effects, gated by the current mission profile.
  *   1. SCAN_DISCOVERY + hydrazine → DEBRIS_HAZARD_REVEALED
  *   2. SCAN_DISCOVERY + synergy metals → SYNERGY_OPPORTUNITY
  *   3. KESSLER_CASCADE → CASCADE_THREAT
  *   4. WEATHER_EFFECT_START (sensorRange < 1) → WEATHER_MISSION_EFFECT
  *   5. Multiple CONJUNCTION_WARNING → CLUSTER_CONJUNCTION
- *
  * All timing constants live in Constants.MISSION_EVENTS.
- * Events are gated by the current mission profile (ST-4.C).
- *
- * @module systems/MissionEventSystem
  */
 
 import { Constants } from '../core/Constants.js';
@@ -24,25 +16,22 @@ import { fetchData } from '../core/dataUrl.js';
 
 export class MissionEventSystem {
   constructor() {
-    /** @private Current mission number */
     this._missionNumber = 1;
 
-    /** @private Current mission profile (from Constants.MISSIONS.PROFILES) */
+    /** @private Current mission profile (Constants.MISSIONS.PROFILES) */
     this._missionProfile = Constants.MISSIONS.PROFILES[0];
 
     /** @private Active synergy opportunity timers — synergyName → expiry timestamp */
     this._synergyTimers = new Map();
 
-    /** @private Running count of conjunction warnings within accumulation window */
+    /** @private Conjunction warnings within the accumulation window */
     this._conjunctionAlertCount = 0;
 
-    /** @private Cooldown between repeated events of the same type (ms) */
     this._eventCooldownMs = Constants.MISSION_EVENTS.COOLDOWN_MS;
 
-    /** @private Last fire timestamp per event type — eventType → timestamp */
+    /** @private Last fire timestamp per event type */
     this._lastEventTime = {};
 
-    /** @private Unsubscribe functions for clean dispose */
     this._unsubs = [];
 
     this._newsEvents = [];           // loaded from news-events.json
@@ -53,52 +42,41 @@ export class MissionEventSystem {
     this._setupListeners();
   }
 
-  // ===========================================================================
-  // LISTENER WIRING
-  // ===========================================================================
 
   /** @private */
   _setupListeners() {
     const u = (evt, fn) => this._unsubs.push(eventBus.on(evt, fn));
 
-    // Track mission transitions (ST-4.C)
     u(Events.MISSION_START, (d) => {
       this._missionNumber = d.missionNumber;
       this._missionProfile = d.profile;
     });
 
-    // Trigger 1+2: Hydrazine hazard / synergy opportunity on scan
+    // Triggers 1+2: hydrazine hazard / synergy opportunity on scan
     u(Events.SCAN_DISCOVERY, (d) => this._onScanDiscovery(d));
 
-    // Trigger 3: Kessler cascade threat
     u(Events.KESSLER_CASCADE, (d) => this._onKesslerCascade(d));
 
-    // Trigger 4: Severe weather mission effect
     u(Events.WEATHER_EFFECT_START, (d) => this._onWeatherStart(d));
 
-    // Trigger 5: Cluster conjunction (accumulate warnings)
+    // Trigger 5: accumulate conjunction warnings
     u(Events.CONJUNCTION_WARNING, (d) => this._onConjunctionWarning(d));
 
-    // --- Epic 8: News mission capture tracking ---
-    // Listen for INTERACTION_CAPTURE to count total captures
+    // News missions: count captures
     this._unsubs.push(eventBus.on(Events.INTERACTION_CAPTURE, () => {
       this._totalCaptures++;
       this._checkNewsUnlocks();
     }));
 
-    // Also count INTERACTION_DEORBIT as captures (debris removed = success)
+    // Deorbits count as captures too (debris removed = success)
     this._unsubs.push(eventBus.on(Events.INTERACTION_DEORBIT, () => {
       this._totalCaptures++;
       this._checkNewsUnlocks();
     }));
 
-    // Reset on game restart
     u(Events.GAME_RESET, () => this.reset());
   }
 
-  // ===========================================================================
-  // LIFECYCLE
-  // ===========================================================================
 
   /** Reset all state for new game. */
   reset() {
@@ -111,10 +89,7 @@ export class MissionEventSystem {
     this._totalCaptures = 0;
   }
 
-  /**
-   * Per-frame update — clean expired synergy timers.
-   * @param {number} _dt — delta time (unused, timers are wall-clock)
-   */
+  /** Per-frame: clean expired synergy timers (wall-clock, so `_dt` is unused). */
   update(_dt) {
     const now = Date.now();
     for (const [name, expiry] of this._synergyTimers) {
@@ -124,21 +99,16 @@ export class MissionEventSystem {
     }
   }
 
-  /** Clean up event listeners. */
   dispose() {
     for (const unsub of this._unsubs) unsub();
     this._unsubs.length = 0;
   }
 
-  // ===========================================================================
-  // TRIGGER 1: HYDRAZINE HAZARD
-  // ===========================================================================
 
   /** @private */
   _onScanDiscovery(data) {
     if (!data) return;
 
-    // --- Trigger 1: Hydrazine hazard ---
     if (this._missionProfile.hydrazine !== false) {
       const hasHydrazine = (data.salvage && data.salvage.hydrazine > 0) ||
                            data.type === 'rocketBody';
@@ -167,13 +137,9 @@ export class MissionEventSystem {
       }
     }
 
-    // --- Trigger 2: Synergy opportunity ---
     this._checkSynergyOpportunity(data);
   }
 
-  // ===========================================================================
-  // TRIGGER 2: SYNERGY OPPORTUNITY
-  // ===========================================================================
 
   /** @private */
   _checkSynergyOpportunity(data) {
@@ -189,7 +155,6 @@ export class MissionEventSystem {
     for (const syn of synergies) {
       const matching = syn.metals.filter(m => metals.includes(m));
       if (matching.length > 0 && matching.length < syn.metals.length) {
-        // Partial match — synergy opportunity!
         const missing = syn.metals.filter(m => !metals.includes(m));
         if (this._synergyTimers.has(syn.name)) continue; // already active
 
@@ -216,9 +181,6 @@ export class MissionEventSystem {
     }
   }
 
-  // ===========================================================================
-  // TRIGGER 3: KESSLER CASCADE
-  // ===========================================================================
 
   /** @private */
   _onKesslerCascade(data) {
@@ -237,9 +199,6 @@ export class MissionEventSystem {
     });
   }
 
-  // ===========================================================================
-  // TRIGGER 4: SEVERE WEATHER
-  // ===========================================================================
 
   /** @private */
   _onWeatherStart(data) {
@@ -264,9 +223,6 @@ export class MissionEventSystem {
     });
   }
 
-  // ===========================================================================
-  // TRIGGER 5: CLUSTER CONJUNCTION
-  // ===========================================================================
 
   /** @private */
   _onConjunctionWarning(_data) {
@@ -295,12 +251,8 @@ export class MissionEventSystem {
     }, windowMs);
   }
 
-  // --- Epic 8: News Events ---
 
-  /**
-   * Load news events from static JSON. Called once after construction.
-   * Offline-first: fetch from local data/, graceful fallback to empty.
-   */
+  /** Load news events from static JSON, once after construction. Offline-first: local data/, falls back to empty. */
   async loadNewsEvents() {
     try {
       const resp = await fetchData('data/news-events.json');
@@ -315,10 +267,7 @@ export class MissionEventSystem {
     }
   }
 
-  /**
-   * Check if any news events should unlock based on current capture count.
-   * Called after each capture/deorbit.
-   */
+  /** Unlock news events whose capture count is reached; called after each capture/deorbit. */
   _checkNewsUnlocks() {
     for (const evt of this._newsEvents) {
       if (this._triggeredNewsIds.has(evt.id)) continue;
@@ -329,9 +278,7 @@ export class MissionEventSystem {
     }
   }
 
-  /**
-   * Fire a news event — emit event + comms message.
-   */
+  /** Fire a news event: emit the event. */
   _triggerNewsEvent(evt) {
     eventBus.emit(Events.NEWS_EVENT_TRIGGERED, {
       eventId: evt.id,
@@ -345,28 +292,19 @@ export class MissionEventSystem {
     });
   }
 
-  /** Provide access for testing */
+  /** Test access */
   get newsEvents() { return this._newsEvents; }
   get triggeredNewsIds() { return this._triggeredNewsIds; }
   get totalCaptures() { return this._totalCaptures; }
   set totalCaptures(n) { this._totalCaptures = n; }
 
-  /** For testing: inject events without fetch */
   _injectNewsEvents(events) {
     this._newsEvents = events;
     this._newsLoaded = true;
   }
 
-  // ===========================================================================
-  // COOLDOWN HELPERS
-  // ===========================================================================
 
-  /**
-   * Check if an event type can fire (cooldown elapsed).
-   * @param {string} eventType
-   * @returns {boolean}
-   * @private
-   */
+  /** @private True when the event type's cooldown has elapsed. */
   _canFire(eventType) {
     const last = this._lastEventTime[eventType] || 0;
     return Date.now() - last >= this._eventCooldownMs;

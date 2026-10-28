@@ -1,21 +1,20 @@
 /**
- * HeightScale - the fields and the resupply satellite on floor 4 (the LEO map), as a height scale at the left edge of the map
- * (Nets step 3 slice 3, lane 3e s3-map-icons; DECISIONS §33 row 6: "floor 4 shows the next fields and the satellite with fuel and
- * travel time"; FEATURE_FLAGS.FIELDS_BY_HEIGHT).
+ * HeightScale - the fields and the resupply satellite on floor 4 (the LEO map) as a height scale at the left edge of
+ * the map (DECISIONS §33 rows 6 and 14; FEATURE_FLAGS.FIELDS_BY_HEIGHT).
  *
- * Why a scale and not icons at map positions: a field is a ring at a HEIGHT in her tilt, not a point (the registry knows only
- * `altKm`), and the cluster icons (ClusterIcons) group the debris by inclination band and height cell, so f350 and f375 share one
- * "ISS Band" icon and the other fields have none (only her own field's pieces are laid out). So the chips stand in a column at
- * the left edge of the screen (off the globe, under the top-left panels, owner 2026-10-23), highest at the top:
- *   "450 km · cleared"   "425 km · 7 pieces"   "Resupply satellite · 500 km"   ...   "You · 352 km" (her real height, marked)
- * While the where-next list is open each chip also carries its row's gas and days ("0.6 kg gas · 5 days", "needs 1.2 kg gas, 0.4 kg
- * short"), the focused row's chip is highlighted, and tapping a chip FOCUSES its row (`WhereNextList.focus`, never a pick: flying
- * stays the list's own tap-again / Space / FLY THERE). Her own field's chip is the Stay row's. Flag off (or no registry): nothing is
- * built, the map is exactly as before.
+ * Why a scale and not icons at map positions: a field is a ring at a HEIGHT in her tilt, not a point (the registry
+ * knows only `altKm`), and ClusterIcons group debris by inclination band and height cell, so f350 and f375 share one
+ * "ISS Band" icon and the other fields have none. The chips stand in a column at the left edge (off the globe, under
+ * the top-left panels), highest at the top:
+ *   "450 km · cleared"   "425 km · 7 pieces"   "Resupply satellite · 500 km"   ...   "You · 352 km" (her real height)
+ * While the where-next list is open each chip also carries its row's gas and days ("0.6 kg gas · 5 days", "needs
+ * 1.2 kg gas, 0.4 kg short"), the focused row's chip is highlighted, and tapping a chip FOCUSES its row
+ * (`WhereNextList.focus`, never a pick: flying stays the list's own tap-again / Space / FLY THERE). Her own field's
+ * chip is the Stay row's. Flag off (or no registry): nothing is built.
  *
- * Pure parts are exported (`buildScaleChips`, `placeColumn`) so the words and the placement are tested without a DOM. The DOM part
- * uses inline styles and only createElement / appendChild / removeChild / setAttribute / textContent / addEventListener, so a tiny
- * fake DOM runs it; with no document nothing is built and every method still answers.
+ * Pure parts (`buildScaleChips`, `placeColumn`) are exported for DOM-free tests. The DOM part uses inline styles and
+ * only createElement / appendChild / removeChild / setAttribute / textContent / addEventListener, so a tiny fake DOM
+ * runs it; with no document nothing is built and every method still answers.
  *
  * @module ui/HeightScale
  */
@@ -25,10 +24,10 @@ import { STOPPED_EVENTS, FOCUS_COLOR } from './WhereNextList.js';
 import { ClusterIcons } from './ClusterIcons.js';
 
 export const HEIGHT_SCALE_ID = 'field-height-scale';
-/** Chip height (px; two lines: the height and pieces, then gas and days): a pointer, and glass (44 px touch target). */
+/** Chip height (px; two lines: height and pieces, then gas and days): pointer, and glass (44 px touch target). */
 export const CHIP_PX_DESKTOP = 36;
 export const CHIP_PX_GLASS = 44;
-/** The smallest a chip shrinks to when the column does not fit (slice 4: 9 fields + 2 satellites are 11 chips + the marker row; two lines of text at 0.7 / 0.64 rem). */
+/** Smallest chip when the column does not fit (9 fields + 2 satellites = 11 chips + the marker row; two lines at 0.7 / 0.64 rem). */
 export const CHIP_PX_MIN = 30;
 /** The "You" marker row's height (px), the gap between rows, the column's width. */
 export const YOU_PX = 22;
@@ -46,10 +45,8 @@ export const RECTS_MS = 500;
 const DOT = '\u00b7';
 const MARK = '\u25b8';
 
-/** @param {number} km @returns {string} her height as "352 km" */
 function kmText(km) { return `${Math.round(km)} km`; }
 
-/** The words under a chip's height while the list is open: that row's gas and days (or why she cannot go). */
 function rowDetail(row) {
   if (!row) return '';
   if (row.state === 'stay') return 'Stay here';
@@ -122,7 +119,6 @@ export function buildScaleChips(reg, list = null) {
   return items;
 }
 
-/** The column's height (px) for its items. */
 export function columnHeight(items, chipPx) {
   let h = 0;
   for (const it of items) h += (it.kind === 'you' ? YOU_PX : chipPx) + GAP_PX;
@@ -137,10 +133,10 @@ export const PANEL_GAP_PX = 8;
 const TOP_ZONE = 0.25;
 
 /**
- * Where the column goes (owner 2026-10-23: "Move them off the globe"): the LEFT EDGE of the screen (left = SIDE_MIN_PX), never
- * beside her marker. Its top is just under the lowest top panel that shares its columns (the rects the caller reads from the DOM:
- * the vitals box, the "AP OFF" strip), then it steps down (8 px) until it clears every other rect (the bottom-left info panel,
- * the where-next list) and her marker (SHIP_GAP_PX wide square, the chevron and its ring); it never goes below the bottom limit.
+ * Where the column goes (DECISIONS §33 row 14): the LEFT EDGE (left = SIDE_MIN_PX), never beside her marker. Its top
+ * is just under the lowest top panel that shares its columns (rects the caller reads from the DOM: the vitals box,
+ * the "AP OFF" strip), then it steps down 8 px until it clears every other rect (bottom-left info panel, where-next
+ * list) and her marker (SHIP_GAP_PX square: chevron and ring); never below the bottom limit.
  * When nothing clears it stays at the top spot (`clear: false`). Pure.
  * @param {{x: number, y: number}} ship her marker's screen position
  * @param {{w: number, h: number, viewW: number, viewH: number, rects?: Array<{x,y,w,h}>}} a
@@ -171,9 +167,9 @@ function columnTop(w, viewH, rects) {
 }
 
 /**
- * Slice 4 (S4): the room the column has at the left edge, px: from its top spot (under the lowest top panel) down to just above the highest
- * panel below it that shares its columns (the bottom-left info panel, the where-next list if it reaches that far left), or the bottom limit.
- * Her marker is not counted: it moves, and the column steps round it. Pure.
+ * The room the column has at the left edge, px: from its top spot (under the lowest top panel) down to just above
+ * the highest panel below it that shares its columns (bottom-left info panel, the where-next list if it reaches that
+ * far left), or the bottom limit. Her marker is not counted: it moves, and the column steps round it. Pure.
  * @param {{w: number, viewW: number, viewH: number, rects?: Array<{x,y,w,h}>}} a
  * @returns {number}
  */
@@ -188,9 +184,9 @@ export function columnRoom({ w, viewH, rects = [] }) {
 }
 
 /**
- * Slice 4 (S4): the chip height for the column: the nominal one (36 px, 44 px on glass) when the column fits in `roomPx`, else the largest
- * height from there down to CHIP_PX_MIN that does (or CHIP_PX_MIN when even that does not fit: the column then overlaps and `placeColumn`
- * says `clear: false`). Pure.
+ * The chip height for the column: nominal (36 px, 44 px on glass) when the column fits in `roomPx`, else the largest
+ * height down to CHIP_PX_MIN that does (CHIP_PX_MIN when even that does not fit: the column overlaps and
+ * `placeColumn` says `clear: false`). Pure.
  * @param {ScaleItem[]} items @param {number} nominalPx @param {number} roomPx
  * @returns {number} px
  */
@@ -208,7 +204,8 @@ export class HeightScale {
    * @param {Document|null} [deps.doc]        document (default: the global one; null = headless)
    * @param {Element} [deps.parent]           where the column goes (default doc.body)
    * @param {function} [deps.glass]           () => true on a touch screen (44 px chips)
-   * @param {function} [deps.yieldTo]         () => true while something takes the column's place (the range map, F1.1): the column hides, and comes back when it is false
+   * @param {function} [deps.yieldTo]         () => true while something takes the column's place (the range map):
+   *   the column hides, and returns when false
    * @param {function} [deps.now]             ms clock (tests)
    */
   constructor(deps = {}) {
@@ -257,15 +254,13 @@ export class HeightScale {
   get chipElements() { return this._els.slice(); }
   get element() { return this._root; }
 
-  // ── Floor 4 shows / hides it (NavcomFloor.activate / deactivate) ───────────
+  // Shown / hidden by NavcomFloor.activate / deactivate.
 
-  /** @private the range map is on screen in the column's place: the column yields (F1.1) */
+  /** @private the range map is on screen in the column's place: the column yields */
   _yielded() { try { return !!this._yieldTo(); } catch (_e) { return false; } }
 
   show() { this._visible = true; if (this._root) this._root.style.display = this._items.length && !this._yielded() ? 'block' : 'none'; }
   hide() { this._visible = false; if (this._root) this._root.style.display = 'none'; }
-
-  // ── Frame ──────────────────────────────────────────────────────────────────
 
   /**
    * One frame while floor 4 is the floor she is on: refresh the chips and put the column at the left edge of the screen. Map off = nothing built.
@@ -292,8 +287,8 @@ export class HeightScale {
     }
     const rects = this._rects.filter((r) => r && r.id !== HEIGHT_SCALE_ID).concat(this._listRect());
     const w = Math.min(WIDTH_PX, W - 2 * SIDE_MIN_PX);
-    // slice 4 (S4): 9 fields + 2 satellites are 11 chips: when the column does not fit between the top panels and the bottom-left panel,
-    // the chips shrink to fit (never below CHIP_PX_MIN)
+    // 11 chips: when the column does not fit between the top panels and the bottom-left panel, the chips shrink
+    // to fit (never below CHIP_PX_MIN)
     const nominal = this._glass() ? CHIP_PX_GLASS : CHIP_PX_DESKTOP;
     const chipPx = fitChipPx(items, nominal, columnRoom({ w, viewW: W, viewH: H, rects }));
     if (chipPx !== this._chipPx) { this._chipPx = chipPx; this._paintKey = null; }
@@ -339,9 +334,6 @@ export class HeightScale {
     this._paint();
   }
 
-  // ── DOM ────────────────────────────────────────────────────────────────────
-
-  /** @private build the root once (hidden). */
   _ensureRoot() {
     if (this._built) return;
     const doc = this._doc;
@@ -362,9 +354,9 @@ export class HeightScale {
   }
 
   /**
-   * @private repaint the chips. The chip ELEMENTS are rebuilt only when the set of chips changes (their ids, kinds, whether a tap
-   * lands, whether there is a second line, glass, list open); a change of text, focus or her height is written into the same
-   * nodes, so a tap that lands while the rows refresh (or her height ticks) is never lost to a rebuilt node.
+   * @private repaint the chips. Chip ELEMENTS are rebuilt only when the set of chips changes (ids, kinds, whether a
+   * tap lands, a second line, glass, list open); changed text, focus or height is written into the same nodes, so a
+   * tap that lands while the rows refresh is never lost to a rebuilt node.
    */
   _paint() {
     if (!this._root) return;
@@ -431,7 +423,7 @@ export class HeightScale {
   }
 
   /**
-   * A tap on a chip: focus its row in the where-next list. Never a pick (flying stays the list's own tap-again / Space / chip).
+   * A tap on a chip: focus its row in the where-next list. Never a pick.
    * @param {string} id the chip id (a field id or the satellite's)
    * @returns {boolean} the focus is on that row now
    */

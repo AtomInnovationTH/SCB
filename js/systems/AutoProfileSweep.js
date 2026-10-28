@@ -1,34 +1,28 @@
 /**
- * AutoProfileSweep.js — Sprint 3 GPU profiling automated capture.
- *
- * Cycles through a fixed list of render configurations in a **single** browser
- * session, capturing a 60-sample GPU median for each one. Dumps the result
- * as JSON to:
+ * AutoProfileSweep.js — automated GPU profiling capture. Cycles through a fixed list of render configurations in a
+ * **single** browser session, capturing a 60-sample GPU median for each, and dumps the result as JSON to:
  *   1. `console.log` (always, formatted),
  *   2. `window.__autoProfileResult` (for devtools fetch),
  *   3. an auto-downloaded `.json` blob (clipboard fallback otherwise).
  *
- * Activated by [`?autoProfile=1`](js/core/ProfileFlags.js:1). The sweep runs
- * in whatever game state the user is in when the page settles — so to capture
- * both MENU and IN-MISSION cells the user reloads twice (once on the menu,
- * once after launching into a mission). **Two sessions total instead of 14.**
+ * Activated by `?autoProfile=1` (js/core/ProfileFlags.js). The sweep runs in whatever game state the user is in when
+ * the page settles, so to capture both MENU and IN-MISSION cells the user reloads twice (once on the menu, once after
+ * launching into a mission): two sessions total instead of 14.
  *
  * Per-config flow:
- *   1. Apply config via [`SceneManager.applyTierWithOverrides`](js/scene/SceneManager.js:1)
- *   2. Settle for `SETTLE_FRAMES` (composer rebuild causes a 1-frame stutter
- *      + driver shader-recompile spike on the very first frame).
+ *   1. Apply config via `SceneManager.applyTierWithOverrides`
+ *   2. Settle for `SETTLE_FRAMES` (composer rebuild causes a 1-frame stutter + driver shader-recompile spike on the
+ *      very first frame).
  *   3. `gpuProbe.resetSamples()` to drop the settle window.
  *   4. Wait until `gpuProbe.getSampleCount() >= SAMPLES_PER_CONFIG`.
- *   5. Read median, draw counts, per-pass medians (if `profilePasses` config),
- *      record snapshot.
+ *   5. Read median, draw counts, per-pass medians (if `profilePasses` config), record snapshot.
  *
  * Total wall-clock per session at 120 fps:
  *   ~9 configs × (30 settle + 60 sample) / 120 = **~7 s of measurement**,
  *   plus ~2 s of initial settle + JSON dump. Well under a minute.
  *
- * Pure orchestrator — depends only on the public APIs of `SceneManager`,
- * `Earth`, and `GpuProbe`. No THREE imports, no scene mutations beyond what
- * those APIs offer.
+ * Pure orchestrator: depends only on the public APIs of `SceneManager`, `Earth`, and `GpuProbe`; no THREE imports, no
+ * scene mutations beyond what those APIs offer.
  *
  * @module systems/AutoProfileSweep
  */
@@ -36,44 +30,34 @@
 import { profileFlags } from '../core/ProfileFlags.js';
 
 /**
- * Number of frames to wait after each config change before resetting the
- * sample window. Composer rebuild causes a 1-frame stutter and driver shader
- * compilation spike on the very first frame after a rebuild, so we drop those
- * by hand.
+ * Frames to wait after each config change before resetting the sample window: a composer rebuild causes a 1-frame
+ * stutter and a driver shader-compile spike on the first frame after it.
  */
 const SETTLE_FRAMES = 30;
 
 /**
- * Number of GPU samples to collect for each config's median. With a 120 Hz
- * display this is ~0.5 s of measurement — long enough to drown out driver
- * scheduler jitter but short enough that a 9-config sweep finishes in <10 s.
+ * GPU samples per config median. With a 120 Hz display this is ~0.5 s: long enough to drown out driver scheduler
+ * jitter, short enough that a 9-config sweep finishes in <10 s.
  */
 const SAMPLES_PER_CONFIG = 60;
 
 /**
- * Maximum frames to wait for `SAMPLES_PER_CONFIG` before giving up on this
- * config and recording whatever we have. Prevents the sweep wedging if the
- * disjoint flag fires repeatedly (or the platform never supplied the GPU
- * extension in the first place — in which case the sweep emits an
- * `unsupported` snapshot rather than hanging forever).
+ * Max frames to wait for `SAMPLES_PER_CONFIG` before recording whatever we have, so the sweep can't wedge if the
+ * disjoint flag fires repeatedly or the platform never supplied the GPU extension (then an `unsupported` snapshot,
+ * not a hang).
  */
 const MAX_FRAMES_PER_CONFIG = 600; // 5 s at 120 Hz
 
 /**
- * Fixed sweep order. Each entry is `{ id, overrides }`; `overrides` is the
- * full payload handed to [`SceneManager.applyTierWithOverrides`](js/scene/SceneManager.js:1).
- *
- * Keep `baseline` first so the very first measurement establishes the per-
- * session anchor that every other row is compared against.
+ * Fixed sweep order. Each entry is `{ id, overrides }`; `overrides` is the full payload for
+ * `SceneManager.applyTierWithOverrides`. Keep `baseline` first: it anchors every other row.
  *
  * @type {ReadonlyArray<{id: string, overrides: object}>}
  */
 export const SWEEP_CONFIGS = Object.freeze([
-  // --- Anchor + per-pass profiling ---
   { id: 'baseline',              overrides: {} },
   { id: 'profilePasses',         overrides: { profilePasses: true } },
 
-  // --- Single-disable rows (round-1) ---
   { id: 'disableEarthNoise',     overrides: { earthLowDetail: true } },
   { id: 'disableBloom',          overrides: { enableBloom: false } },
   { id: 'disableSMAA',           overrides: { enableSMAA: false } },
@@ -82,35 +66,25 @@ export const SWEEP_CONFIGS = Object.freeze([
   { id: 'msaa=0',                overrides: { msaaSamples: 0 } },
   { id: 'pixelRatio=1',          overrides: { pixelRatioCap: 1 } },
 
-  // --- Round-2 multi-disable rows: find the realistic post-process floor ---
-  // The round-1 sum of singles (bloom 19 + smaa 16 + msaa 16 = 51 ms) far
-  // exceeds the 23.65 ms baseline, which means at least two of the three
-  // are bottlenecked on shared work (most likely HalfFloat customRT
-  // bandwidth). Pair-Δ vs sum-of-singles tells us *how* shared:
+  // Multi-disable rows: find the realistic post-process floor. The single-disable sum (bloom 19 + smaa 16 + msaa
+  // 16 = 51 ms) far exceeds the 23.65 ms baseline, so at least two of the three are bottlenecked on shared work (most
+  // likely HalfFloat customRT bandwidth). Pair-Δ vs sum-of-singles tells how shared:
   //   pair-Δ ≈ max(single-Δ)           → fully shared
   //   pair-Δ ≈ single1 + single2       → fully independent
   //   anything in between               → partial overlap
   { id: 'disableBloomAndSMAA',   overrides: { enableBloom: false, enableSMAA: false } },
   { id: 'disableBloomAndMSAA',   overrides: { enableBloom: false, msaaSamples: 0 } },
   { id: 'disableSMAAAndMSAA',    overrides: { enableSMAA: false, msaaSamples: 0 } },
-  // disableAllPost is the realistic floor: RenderPass becomes the *only*
-  // pass, so EffectComposer sets renderToScreen=true on it and the HalfFloat
-  // customRT is never written. Frame cost should approximate just the Earth
-  // FS work + canvas blit.
+  // disableAllPost is the realistic floor: RenderPass becomes the *only* pass, so EffectComposer sets
+  // renderToScreen=true on it and the HalfFloat customRT is never written. Frame cost should approximate just the
+  // Earth FS work + canvas blit.
   { id: 'disableAllPost',        overrides: { enableBloom: false, enableSMAA: false, msaaSamples: 0 } },
 ]);
 
-/**
- * Read fresh game state from the supplied refs each call so the snapshot
- * reflects what the player was actually doing at the moment of capture.
- *
- * @param {object} refs
- * @returns {string}
- */
+/** Read game state fresh each call so the snapshot reflects what the player was doing at capture. */
 function readGameState(refs) {
   try {
-    // Primary source: [`gameState`](js/core/GameState.js:1) singleton — that's
-    // what the rest of the engine reads. `gameFlowManager` mutates it via
+    // Primary source: the `gameState` singleton (js/core/GameState.js), which `gameFlowManager` mutates via
     // `gameState.setState`.
     const gs = refs?.gameState;
     if (gs) {
@@ -124,12 +98,7 @@ function readGameState(refs) {
   return 'UNKNOWN';
 }
 
-/**
- * Read fresh per-pass channel medians from a {@link GpuProbe}.
- *
- * @param {any} gpuProbe
- * @returns {Record<string, { medianMs: number|null, samples: number }>}
- */
+/** Fresh per-pass channel medians from a GpuProbe. */
 function readChannels(gpuProbe) {
   /** @type {Record<string, { medianMs: number|null, samples: number }>} */
   const out = {};
@@ -148,14 +117,7 @@ function readChannels(gpuProbe) {
   return out;
 }
 
-/**
- * Sleep for `n` requestAnimationFrame ticks. Resolves on the rAF callback
- * after the `n`-th tick has fired — so the caller's continuation runs in the
- * frame *after* the wait completes.
- *
- * @param {number} n
- * @returns {Promise<void>}
- */
+/** Sleep `n` rAF ticks; the caller's continuation runs in the frame *after* the wait completes. */
 function waitFrames(n) {
   return new Promise((resolve) => {
     let frames = 0;
@@ -168,14 +130,8 @@ function waitFrames(n) {
 }
 
 /**
- * Wait until `gpuProbe.getSampleCount() >= target` or `maxFrames` rAF ticks
- * have elapsed (whichever comes first). Resolves with `true` if the target
- * was reached, `false` on timeout.
- *
- * @param {any} gpuProbe
- * @param {number} target
- * @param {number} maxFrames
- * @returns {Promise<boolean>}
+ * Wait until `gpuProbe.getSampleCount() >= target` or `maxFrames` rAF ticks elapse. Resolves `true` if the target was
+ * reached, `false` on timeout.
  */
 function waitForSamples(gpuProbe, target, maxFrames) {
   return new Promise((resolve) => {
@@ -192,12 +148,9 @@ function waitForSamples(gpuProbe, target, maxFrames) {
 }
 
 /**
-/**
- * Lazy-install a single fixed-position overlay used both for live progress
- * (sweep is running) and final-result display (sweep is done). The overlay
- * is the primary delivery channel because browsers silently block download
- * blobs and clipboard writes that originate inside a rAF chain (no user
- * gesture). Manual copy-from-modal works regardless.
+ * Lazy-install one fixed overlay for live progress and the final result. It is the primary delivery channel because
+ * browsers silently block download blobs and clipboard writes that originate inside a rAF chain (no user gesture);
+ * manual copy-from-modal works regardless.
  *
  * @returns {{ root: HTMLDivElement, status: HTMLDivElement, pre: HTMLPreElement, copyBtn: HTMLButtonElement, closeBtn: HTMLButtonElement, downloadBtn: HTMLAnchorElement }}
  */
@@ -213,7 +166,6 @@ function ensureOverlay() {
       downloadBtn: /** @type {HTMLAnchorElement} */ (root.querySelector('.ap-download')),
     };
   }
-  // Style block once.
   if (!document.getElementById('auto-profile-overlay-style')) {
     const style = document.createElement('style');
     style.id = 'auto-profile-overlay-style';
@@ -284,17 +236,13 @@ function ensureOverlay() {
   return { root, status, pre, copyBtn, closeBtn, downloadBtn };
 }
 
-/**
- * Orchestrator. Construct once with refs; call `start()` to begin the sweep
- * (a no-op if `?autoProfile=1` is not set).
- */
+/** Orchestrator. Construct once with refs; `start()` begins the sweep (no-op without `?autoProfile=1`). */
 export class AutoProfileSweep {
   /**
    * @param {object} refs
-   * @param {any} refs.sceneManager — must expose `applyTierWithOverrides`,
-   *                                  `currentTier`, `gpuProbe`, `renderer`.
+   * @param {any} refs.sceneManager must expose `applyTierWithOverrides`, `currentTier`, `gpuProbe`, `renderer`.
    * @param {any} [refs.earth]
-   * @param {any} [refs.gameState] — singleton from [`GameState.js`](js/core/GameState.js:1)
+   * @param {any} [refs.gameState] singleton from js/core/GameState.js
    */
   constructor(refs) {
     this._refs = refs || {};
@@ -304,12 +252,7 @@ export class AutoProfileSweep {
     this._results = [];
   }
 
-  /**
-   * Begin the sweep. No-op if `?autoProfile=1` is not active or if a sweep
-   * is already in flight.
-   *
-   * @returns {Promise<void>}
-   */
+  /** Begin the sweep. No-op if `?autoProfile=1` is not active or a sweep is already in flight. */
   async start() {
     if (!profileFlags.autoProfile) return;
     if (this._running) {
@@ -326,18 +269,15 @@ export class AutoProfileSweep {
       console.warn('[AutoProfile] EXT_disjoint_timer_query_webgl2 unavailable. Sweep would record null medians; aborting.');
       return;
     }
-    // Defensive: if the startup probe completion path disabled the probe
-    // (older builds, or a tier-downshift code path that ran before this
-    // sweep started), force it back on so begin/end calls fire each render.
-    // main.js's per-frame `probe.poll()` already runs whenever gpuProbeEnabled
-    // is true, so this single flip restores the full measurement loop.
+    // Defensive: if the startup probe completion (or an earlier tier downshift) disabled the probe, force it back on
+    // so begin/end fire each render; main.js's per-frame `probe.poll()` already runs whenever gpuProbeEnabled is true.
     if (!sm.gpuProbeEnabled) {
       console.info('[AutoProfile] re-enabling sceneManager.gpuProbeEnabled (was off)');
       sm.gpuProbeEnabled = true;
     }
 
-    // Warn but proceed if user combined autoProfile with conflicting disable
-    // flags — the sweep wins on a per-config basis but it's confusing.
+    // Warn but proceed if autoProfile is combined with conflicting disable flags: the sweep wins per config, but it's
+    // confusing.
     const conflicting = [
       'disableEarthNoise', 'disableBloom', 'disableSMAA',
       'disableClouds', 'disableAtmosphere',
@@ -357,10 +297,8 @@ export class AutoProfileSweep {
     const initialState = readGameState(this._refs);
     console.info(`[AutoProfile] starting sweep. State=${initialState}, tier=${sm.currentTier}, configs=${SWEEP_CONFIGS.length}`);
 
-    // Install the in-page overlay so the user can SEE progress + the final
-    // JSON without needing DevTools. Browsers silently block auto-downloads
-    // and clipboard writes from rAF chains; the overlay's buttons fire from
-    // a real user gesture so they Just Work.
+    // Install the in-page overlay so progress + the final JSON are visible without DevTools; its buttons fire from a
+    // real user gesture, so clipboard / download work.
     const overlay = (typeof document !== 'undefined') ? ensureOverlay() : null;
     if (overlay) {
       overlay.status.textContent =
@@ -389,8 +327,7 @@ export class AutoProfileSweep {
       }
     }
 
-    // Restore baseline so the user can keep playing without the last sweep
-    // config persisting.
+    // Restore baseline so the last sweep config doesn't persist.
     try {
       sm.applyTierWithOverrides({});
     } catch (e) {
@@ -402,38 +339,25 @@ export class AutoProfileSweep {
     this._dumpResults(initialState, wallMs, overlay);
   }
 
-  /**
-   * Abort an in-flight sweep. The current config's measurement is discarded.
-   */
+  /** Abort an in-flight sweep; the current config's measurement is discarded. */
   abort() {
     this._aborted = true;
   }
 
-  /**
-   * Apply one config, wait for samples, record a snapshot.
-   *
-   * @private
-   * @param {{ id: string, overrides: object }} cfg
-   * @returns {Promise<void>}
-   */
   async _captureConfig(cfg) {
     const sm = this._refs.sceneManager;
     const probe = sm.gpuProbe;
 
-    // 1. Apply.
     sm.applyTierWithOverrides(cfg.overrides);
 
-    // 2. Settle — drop driver shader-compile + composer-rebuild stutter.
     await waitFrames(SETTLE_FRAMES);
 
-    // 3. Reset sample windows. Stragglers from the previous config that get
-    //    polled in over the next 1–2 frames will skew the median by <2 %.
+    // Reset sample windows. Stragglers from the previous config polled in over the next 1–2 frames skew the median by
+    // <2 %.
     probe.resetSamples();
 
-    // 4. Wait for fresh samples.
     const ok = await waitForSamples(probe, SAMPLES_PER_CONFIG, MAX_FRAMES_PER_CONFIG);
 
-    // 5. Capture.
     const info = sm.renderer?.info || null;
     const gameState = readGameState(this._refs);
     const snapshot = {
@@ -464,27 +388,17 @@ export class AutoProfileSweep {
     );
   }
 
-  /** @private */
   _safeMedian(probe) {
     try {
       const m = probe.getMedianMs();
       return Number.isFinite(m) ? Number(m.toFixed(3)) : null;
     } catch (_e) { return null; }
   }
-  /** @private */
   _safeSampleCount(probe) {
     try { return probe.getSampleCount() | 0; } catch (_e) { return 0; }
   }
 
-  /**
-   * Emit the final JSON blob to console + window global + overlay modal +
-   * (best-effort) downloaded file.
-   *
-   * @private
-   * @param {string} state
-   * @param {number} wallMs
-   * @param {ReturnType<typeof ensureOverlay>|null} overlay
-   */
+  /** @private Emit the final JSON to console + window global + overlay modal + (best-effort) downloaded file. */
   _dumpResults(state, wallMs, overlay) {
     const blob = {
       timestamp: new Date().toISOString(),
@@ -504,9 +418,8 @@ export class AutoProfileSweep {
       try { window.__autoProfileResult = blob; } catch (_e) {}
     }
 
-    // Best-effort auto-download. Browsers may silently block this when the
-    // anchor click originates inside a rAF chain (no user gesture). The
-    // overlay's Copy / Download buttons below are the reliable path.
+    // Best-effort auto-download; browsers may silently block it when the anchor click originates inside a rAF chain
+    // (no user gesture). The overlay's Copy / Download buttons are the reliable path.
     let dataUrl = null;
     let downloadName = `gpu-profile-${state}-${Date.now()}.json`;
     try {
@@ -524,8 +437,7 @@ export class AutoProfileSweep {
       console.warn('[AutoProfile] auto-download failed (browser likely blocked it):', e);
     }
 
-    // PRIMARY delivery channel — the in-page overlay. Buttons here all run
-    // inside a real user gesture so clipboard + download work.
+    // PRIMARY delivery channel: the in-page overlay; its buttons run inside a real user gesture.
     if (overlay) {
       overlay.status.textContent =
         `✓ SWEEP COMPLETE. State=${state}, tier=${blob.tier}, ${wallMs} ms, ${this._results.length} configs`;
@@ -574,8 +486,6 @@ export class AutoProfileSweep {
    * Δ-vs-baseline table: every non-baseline config's `frameMs` minus the
    * baseline's. Positive Δ = savings. Returns null entries when either side
    * is null (e.g. timeout).
-   *
-   * @private
    */
   _computeDeltas() {
     const baseline = this._results.find((r) => r.configId === 'baseline');

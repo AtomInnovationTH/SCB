@@ -13,8 +13,8 @@
  * @module scene/portraitFraming
  */
 import { Vector3 } from 'three';
+import { DEG2RAD } from '../core/MathUtil.js';
 
-const DEG2RAD = Math.PI / 180;
 
 /**
  * Default viewing direction (ship frame +X stbd / +Y up / +Z fore): a 3/4

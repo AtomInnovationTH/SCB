@@ -1,20 +1,16 @@
 /**
- * CatalogLoader.js — ST-6.1 offline data-catalogue service
+ * @module systems/CatalogLoader — offline data-catalogue service.
  *
- * Boots by fetching `/data/META.json` then pulling the listed files in
- * parallel. Caches results in Maps keyed by norad/id for O(1) lookup so
- * hot-path callers (DebrisField, ArmManager, SpaceWeatherSystem) can read
- * without re-parsing JSON.
+ * Boots by fetching `/data/META.json` then pulling the listed files in parallel. Caches results in Maps keyed by
+ * norad/id for O(1) lookup so hot-path callers (DebrisField, ArmManager, SpaceWeatherSystem) can read without
+ * re-parsing JSON.
  *
- * **Back-compat invariant:** if initialization fails (offline mode, 404,
- * reject) the loader resolves anyway with empty catalogues. Every getter
- * returns null / [] gracefully so downstream modules can fall back to their
- * pre-ST-6.1 procedural/random behaviour.
+ * **Back-compat invariant:** if initialization fails (offline mode, 404, reject) the loader resolves anyway with empty
+ * catalogues. Every getter returns null / [] gracefully so downstream modules can fall back to their procedural/random
+ * behaviour.
  *
- * **Node-safe:** no THREE.js, no DOM. `init()` accepts an optional
- * `fetchImpl` dependency-injection so unit tests can stub network I/O.
- *
- * @module systems/CatalogLoader
+ * **Node-safe:** no THREE.js, no DOM. `init()` accepts an optional `fetchImpl` dependency-injection so unit tests can
+ * stub network I/O.
  */
 
 import { Constants } from '../core/Constants.js';
@@ -22,14 +18,11 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { withDataVersion } from '../core/dataUrl.js';
 
-// ============================================================================
-// INTERNAL HELPERS
-// ============================================================================
-
-/** Minimal timeout wrapper around a fetch promise.
- *  @param {Promise} p
- *  @param {number} ms
- *  @returns {Promise}
+/**
+ * Minimal timeout wrapper around a fetch promise.
+ * @param {Promise} p
+ * @param {number} ms
+ * @returns {Promise}
  */
 function _withTimeout(p, ms) {
   return new Promise((resolve, reject) => {
@@ -38,23 +31,19 @@ function _withTimeout(p, ms) {
   });
 }
 
-/** Resolve a fetch implementation: injected > global > throw.
- *  @param {Function|null} injected
- *  @returns {Function}
+/**
+ * Resolve a fetch implementation: injected > global > throw.
+ * @param {Function|null} injected
+ * @returns {Function}
  */
 function _resolveFetch(injected) {
   if (typeof injected === 'function') return injected;
-  // Real network reads are version-stamped so a cache-first Service Worker copy
-  // cannot answer them (see js/core/dataUrl.js). Injected doubles are left
-  // alone — they are not a network, and fixtures key on bare paths.
+  // Real network reads are version-stamped so a cache-first Service Worker copy cannot answer them (see
+  // js/core/dataUrl.js). Injected doubles are left alone: they are not a network, and fixtures key on bare paths.
   if (typeof fetch === 'function') return (path) => fetch(withDataVersion(path));
   // Last-ditch: node's global may still be undefined — caller should inject.
   throw new Error('CatalogLoader: no fetch implementation available (inject fetchImpl for Node).');
 }
-
-// ============================================================================
-// CATALOG LOADER
-// ============================================================================
 
 export class CatalogLoader {
   constructor() {
@@ -87,10 +76,6 @@ export class CatalogLoader {
     /** @type {object} Space-weather payload { cycle_start_game_hour, cycle_length_game_hours, events[] } */
     this._weather = { cycle_start_game_hour: 0, cycle_length_game_hours: 0, events: [] };
   }
-
-  // --------------------------------------------------------------------------
-  // INIT
-  // --------------------------------------------------------------------------
 
   /**
    * Fetch META + all listed files. Always resolves (never rejects).
@@ -129,7 +114,6 @@ export class CatalogLoader {
       // Drop META itself if it's listed (defensive)
       const payloadFiles = files.filter(f => f && f !== metaFile);
 
-      // Parallel fetch — Promise.all resolves with array in order.
       const results = await Promise.all(
         payloadFiles.map(f => fetchJson(basePath + f)
           .then(j => ({ file: f, data: j }))
@@ -216,7 +200,6 @@ export class CatalogLoader {
     }
   }
 
-  /** @private */
   _emitLoaded(ok) {
     const counts = {
       debris: this._debrisList.length,
@@ -234,19 +217,11 @@ export class CatalogLoader {
     }
   }
 
-  // --------------------------------------------------------------------------
-  // STATE
-  // --------------------------------------------------------------------------
-
   /** @returns {boolean} */
   isReady() { return this._ready; }
 
   /** @returns {object|null} META object or null if not loaded. */
   getMeta() { return this._meta; }
-
-  // --------------------------------------------------------------------------
-  // DEBRIS
-  // --------------------------------------------------------------------------
 
   /** @param {string|number} noradId @returns {object|null} */
   getDebrisByNorad(noradId) {
@@ -257,10 +232,6 @@ export class CatalogLoader {
   /** @returns {object[]} */
   getAllDebris() { return this._debrisList.slice(); }
 
-  // --------------------------------------------------------------------------
-  // ACTIVE SATELLITES
-  // --------------------------------------------------------------------------
-
   /** @param {string|number} noradId @returns {object|null} */
   getActiveSat(noradId) {
     if (noradId == null) return null;
@@ -270,23 +241,11 @@ export class CatalogLoader {
   /** @returns {object[]} */
   getAllActiveSats() { return this._activeList.slice(); }
 
-  // --------------------------------------------------------------------------
-  // LAUNCHES
-  // --------------------------------------------------------------------------
-
   /** @returns {object[]} */
   getAllLaunches() { return this._launchList.slice(); }
 
-  // --------------------------------------------------------------------------
-  // GROUND STATIONS
-  // --------------------------------------------------------------------------
-
   /** @returns {object[]} */
   getAllGroundStations() { return this._groundList.slice(); }
-
-  // --------------------------------------------------------------------------
-  // CONSTELLATIONS
-  // --------------------------------------------------------------------------
 
   /** @param {string} id @returns {object|null} */
   getConstellation(id) {
@@ -294,21 +253,21 @@ export class CatalogLoader {
     return this._constellationById.get(String(id)) || null;
   }
 
-  // --------------------------------------------------------------------------
-  // SPACE WEATHER (seeded timeline)
-  // --------------------------------------------------------------------------
-
-  /** Return events scheduled at or before a given game hour.
-   *  @param {number} gameHour
-   *  @returns {object[]} */
+  /**
+   * Events scheduled at or before a given game hour.
+   * @param {number} gameHour
+   * @returns {object[]}
+   */
   getWeatherEventsUpTo(gameHour) {
     if (gameHour == null || gameHour < 0) return [];
     return this._weather.events.filter(e => (e.game_hour || 0) <= gameHour);
   }
 
-  /** Return the next scheduled event strictly after gameHour (or null if past end).
-   *  @param {number} gameHour
-   *  @returns {object|null} */
+  /**
+   * The next scheduled event strictly after gameHour (or null if past the end).
+   * @param {number} gameHour
+   * @returns {object|null}
+   */
   getNextWeatherEvent(gameHour) {
     if (gameHour == null) return null;
     for (const e of this._weather.events) {
@@ -318,14 +277,9 @@ export class CatalogLoader {
   }
 }
 
-// ============================================================================
-// SINGLETON (imported directly, matches the project's singleton pattern)
-// ============================================================================
 export const catalogLoader = new CatalogLoader();
 
-// ============================================================================
-// CJS GUARD — expose for Node tests (can stub fetchImpl)
-// ============================================================================
+// CJS guard: expose for Node tests (can stub fetchImpl)
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { CatalogLoader, catalogLoader };
 }

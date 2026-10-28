@@ -1,25 +1,15 @@
 /**
- * GuidanceTelemetry.js — dev-only guidance instrumentation (Guidance cleanup,
- * Phase 4). DISABLED by default; activate per-session with `?guidanceLog=1`.
+ * @module systems/GuidanceTelemetry — dev-only guidance instrumentation. DISABLED by default; activate per-session with
+ * `?guidanceLog=1` (like `?debug=1`; nothing here runs in the default build). Subscribes to EXISTING events only (no
+ * gameplay coupling) and records a ring buffer of guidance activity so onboarding/coaching pacing can be tuned with data.
  *
- * Subscribes to EXISTING events only (no gameplay coupling) and records a ring
- * buffer of guidance activity so onboarding/coaching pacing can be tuned with
- * data instead of guesswork. Mirrors the existing `?debug=1` / `window.__boot*`
- * dev-flag precedent — nothing here runs in the default build.
- *
- * Metrics captured:
- *   • prompt → action latency — time from a proactive "Press X" guidance comms
- *     to the matching player action event. Tunes autoAdvance / escalation / the
- *     in-range debounce.
- *   • contradiction events — a proactive invite followed by a matching DENIAL
- *     within CONTRA_WINDOW_MS (the exact bug class this cleanup fixes). Should
- *     read 0 after Phase 0.
- *   • overlap events — ≥2 guidance comms within OVERLAP_WINDOW_MS (the "hints
- *     come too fast" feeling).
+ * Metrics:
+ *   • prompt → action latency — time from a proactive "Press X" guidance comms to the matching player action event.
+ *     Tunes autoAdvance / escalation / the in-range debounce.
+ *   • contradiction events — a proactive invite followed by a matching DENIAL within CONTRA_WINDOW_MS. Should read 0.
+ *   • overlap events — ≥2 guidance comms within OVERLAP_WINDOW_MS (the "hints come too fast" feeling).
  *
  * Output: `window.__dumpGuidanceLog()` → console.table + a session summary.
- *
- * @module systems/GuidanceTelemetry
  */
 
 import { eventBus } from '../core/EventBus.js';
@@ -30,8 +20,7 @@ const OVERLAP_WINDOW_MS = 2500;   // ≥2 guidance comms inside this = an overla
 const CONTRA_WINDOW_MS = 6000;    // invite→denial inside this = a contradiction
 const LATENCY_MAX_MS = 30000;     // ignore prompt→action gaps longer than this
 
-// Map a proactive prompt's text → the action event that "answers" it, so we can
-// measure latency and detect contradictions. Keyed by a lowercase substring.
+// A proactive prompt's text → the action event that "answers" it (latency, contradictions). Keyed by a lowercase substring.
 const PROMPT_ANSWERS = [
   { match: 'press n', action: Events.LASSO_FIRED, denial: Events.LASSO_DENIED, label: 'lasso' },
   { match: 'lasso range', action: Events.LASSO_FIRED, denial: Events.LASSO_DENIED, label: 'lasso' },
@@ -62,16 +51,16 @@ export class GuidanceTelemetry {
     this._enabled = true;
     const on = (evt, h) => { if (evt) this._unsubs.push(eventBus.on(evt, h)); };
 
-    // Guidance comms (proactive prompts + denials both flow through here).
+    // Guidance comms (proactive prompts and denials both flow through here)
     on(Events.COMMS_MESSAGE, (d) => this._onComms(d));
 
-    // Action events that "answer" prompts.
+    // Action events that "answer" prompts
     for (const a of PROMPT_ANSWERS) {
       if (a.action) on(a.action, () => this._onAction(a.action));
       if (a.denial) on(a.denial, (d) => this._onDenial(a.denial, d));
     }
 
-    // Beat lifecycle (dwell tracking).
+    // Beat lifecycle (dwell tracking)
     on('onboarding:beatEnter', (d) => this._record('beatEnter', { beatId: d && d.beatId }));
     if (Events.ONBOARDING_COMPLETE) on(Events.ONBOARDING_COMPLETE, () => this._record('onboardingComplete', {}));
     if (Events.GAME_RESET) on(Events.GAME_RESET, () => this._reset());
@@ -101,7 +90,7 @@ export class GuidanceTelemetry {
     const isProactive = !!d._proactive;
     const isDenial = !!d._lassoFeedback && /not in|recharging|busy|depleted|too massive|no targets|no suitable/.test(text);
 
-    // Overlap detection — count guidance comms clustered in a short window.
+    // Overlap: guidance comms clustered in a short window
     this._recentComms = this._recentComms.filter(e => now - e.at <= OVERLAP_WINDOW_MS);
     this._recentComms.push({ text, at: now });
     if (this._recentComms.length >= 2) {
@@ -109,7 +98,7 @@ export class GuidanceTelemetry {
       this._record('overlap', { count: this._recentComms.length, text });
     }
 
-    // Register a proactive prompt as "pending" so a later action/denial resolves it.
+    // A proactive prompt is "pending" until a later action/denial resolves it
     if (isProactive || /press [a-z]|1-4/.test(text)) {
       const ans = PROMPT_ANSWERS.find(a => text.includes(a.match));
       if (ans) {
@@ -123,7 +112,7 @@ export class GuidanceTelemetry {
 
   _onAction(actionEvt) {
     const now = Date.now();
-    // Resolve the oldest matching pending prompt → latency.
+    // Resolve the oldest matching pending prompt → latency
     const idx = this._pendingPrompts.findIndex(p => p.action === actionEvt && now - p.at <= LATENCY_MAX_MS);
     if (idx >= 0) {
       const p = this._pendingPrompts.splice(idx, 1)[0];
@@ -136,7 +125,7 @@ export class GuidanceTelemetry {
 
   _onDenial(denialEvt, data) {
     const now = Date.now();
-    // A pending invite answered by a DENIAL of the same verb = contradiction.
+    // A pending invite answered by a DENIAL of the same verb = contradiction
     const idx = this._pendingPrompts.findIndex(p => p.denial === denialEvt && now - p.at <= CONTRA_WINDOW_MS);
     if (idx >= 0) {
       const p = this._pendingPrompts.splice(idx, 1)[0];

@@ -162,6 +162,7 @@ import { RAIL_GEOMETRY, footerBand } from './ui/RailGeometry.js';
 import { installHudScale } from './ui/HudScale.js';
 import { EdgeChrome } from './ui/EdgeChrome.js';
 import { TouchControls } from './ui/TouchControls.js';
+import { FocusPauseCard } from './ui/FocusPauseCard.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
 import { nearestWithin as tapNearestWithin, TAP_SLOP_PX, TAP_SLOP_MS } from './systems/TapPick.js';
@@ -347,6 +348,19 @@ let _lastLoopTs = -1;
 // cross-check in the blur handler filters false positives from DevTools focus,
 // iframe focus, or child-popup focus. See §14.1 in GPU_PROFILING_REPORT.md.
 let _windowBlurred = false;
+// Pause card on focus loss: the freeze stays; the first click/tap/key resumes (restore code in the focus handler).
+const focusPauseCard = new FocusPauseCard({
+  isRunning: () => gameState.isGameplay(),
+  isPaused: () => !!(gameFlowManager && gameFlowManager.paused),
+  touch: () => TouchControls.detect(),
+  resume: () => {
+    _windowBlurred = false;
+    onboardingDirector?.setFrozen(document.hidden);
+    lastTime = performance.now();
+    _syncAudioCtxState();
+    _flushScheduledFrame();
+  },
+});
 // §14.1-K (2026-08-30 black-rectangle root cause): last keepalive present
 // timestamp while blurred. See the gameLoop blurred branch.
 let _blurKeepalivePresentTs = 0;
@@ -4122,10 +4136,12 @@ async function init() {
       }
       _syncAudioCtxState();
       onboardingDirector?.setFrozen(true);   // tutorial timers stop with the sim
+      if (focusPauseCard.onBlur()) _windowBlurred = true;   // card up: the sim stays frozen on return
     } else {
       // Newly visible — reset the last-frame timer so next dt is small.
       const now = performance.now();
       lastTime = now;
+      focusPauseCard.onVisible();
       onboardingDirector?.setFrozen(_windowBlurred);
       _syncAudioCtxState();   // resumes ctx if state policy says so
       _flushScheduledFrame(); // wakes loop (gameLoop's hidden early-return
@@ -4148,6 +4164,7 @@ async function init() {
     // positive (e.g. DevTools panel focused within the same window).
     if (document.hasFocus()) return;
     _windowBlurred = true;
+    focusPauseCard.onBlur();
     onboardingDirector?.setFrozen(true);   // tutorial timers stop with the sim
     if (audioSystem) {
       if (typeof audioSystem.stopThrusterHum === 'function') audioSystem.stopThrusterHum();
@@ -4163,6 +4180,7 @@ async function init() {
     _flushScheduledFrame(); // reschedule at throttled 5 Hz interval
   });
   window.addEventListener('focus', () => {
+    if (focusPauseCard.onFocus()) return;   // card up: stays frozen until the player's first input
     _windowBlurred = false;
     onboardingDirector?.setFrozen(document.hidden);
     const now = performance.now();

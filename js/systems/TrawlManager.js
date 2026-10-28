@@ -1,7 +1,6 @@
 /**
- * TrawlManager.js — Manages mothership traverse through debris clusters.
- * Controls autopilot approach, traverse speed, tether window tracking,
- * and adaptive difficulty.
+ * TrawlManager.js — mothership traverse through debris clusters: autopilot approach, traverse speed, tether window tracking,
+ * adaptive difficulty.
  * @module systems/TrawlManager
  */
 
@@ -13,66 +12,51 @@ import { clamp } from '../core/MathUtil.js';
 
 export class TrawlManager {
   constructor() {
-    /** @type {object|null} Current active cluster being trawled */
     this.activeCluster = null;
 
     /** @type {number} Traverse speed in scene units/s */
     this.traverseSpeed = Constants.TRAWLING.TRAVERSE_SPEED_DEFAULT;
 
-    /** @type {boolean} Whether trawling is active */
     this.active = false;
 
-    /** @type {Array} Targets currently within tether range */
     this.targetsInRange = [];
 
-    /** @type {number} Catches this pass */
     this.catchesThisPass = 0;
 
     /** @type {number} Opportunities this pass (targets that entered range) */
     this.opportunitiesThisPass = 0;
 
-    /** @type {number} Time in trawl mode (seconds) */
     this.trawlTime = 0;
 
     /** @type {number} Seconds since last target was in range (for auto-end) */
     this._idleTimer = 0;
 
-    /** @type {Set<number>} IDs of targets already warned about window closing */
     this._windowWarned = new Set();
 
-    // Self-reset via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_RESET, () => {
       if (this.active) {
         try { this.endTrawl(); } catch (e) { /* ignore */ }
       }
     });
 
-    // Cached refs from update() for self-managed auto-start and toggle (Batch 3)
+    // Cached refs from update() for the self-managed toggle
     /** @type {object|null} */ this._player = null;
     /** @type {object|null} */ this._debrisField = null;
 
-    // Self-manage toggle via keyboard TRAWL_START (Batch 3 decoupling)
-    //
-    // NOTE (defer-trawl): the former GAME_STATE_CHANGE → ORBITAL_VIEW auto-start
-    // block was removed. It silently moved the mothership for the player on
-    // entering orbital view, which conflicted with the guided active-capture
-    // loop new players are taught. The mechanic is preserved but now only
-    // reachable via the explicit Shift+G entry point below (hidden from the
-    // new-player path until an advanced "Dragnet" mission surfaces it).
+    // Shift+G toggles trawl (TRAWL_START from the keyboard) and is the only entry point. There is no GAME_STATE_CHANGE →
+    // ORBITAL_VIEW auto-start: it silently moved the mothership on entering orbital view, conflicting with the guided
+    // active-capture loop new players are taught. Hidden from the new-player path until an advanced "Dragnet" mission surfaces it.
     eventBus.on(Events.TRAWL_START, (data) => {
-      // Skip if this is a notification from TrawlManager auto-start (has cluster)
+      // Skip notifications from TrawlManager's own auto-start (has cluster) or from an arm (has armId): keyboard commands only
       if (data && data.cluster) return;
-      // Skip if notification from an arm (has armId) — only handle keyboard commands
       if (data && data.armId) return;
 
-      // Toggle trawl mode via Shift+G
       if (this.active) {
         const report = this.endTrawl();
         eventBus.emit(Events.TRAWL_END, report);
         return;
       }
 
-      // Start a new trawl — pick the densest cluster
       if (this._debrisField && this._player) {
         try {
           const clusters = this._debrisField.getDebrisClusters();
@@ -90,8 +74,8 @@ export class TrawlManager {
       }
     });
 
-    // UX-11 #4: external abort request (e.g. autopilot override) — end the sweep
-    // cleanly so TRAWL_SWEEP_COMPLETE fires and dependent flags self-clear.
+    // External abort request (e.g. autopilot override): end the sweep cleanly so TRAWL_SWEEP_COMPLETE fires and dependent
+    // flags self-clear.
     eventBus.on(Events.TRAWL_ABORT, () => {
       if (!this.active) return;
       const report = this.endTrawl();
@@ -101,15 +85,10 @@ export class TrawlManager {
     /** @type {Map<number, number>} Track when each target entered range (id → trawlTime) */
     this._targetEntryTimes = new Map();
 
-    // Wire up ARM_CAPTURED listener for catch registration
     this._onArmCaptured = this._onArmCaptured.bind(this);
   }
 
-  /**
-   * Begin trawling through a cluster.
-   * @param {object} cluster - Cluster from DebrisField.getDebrisClusters()
-   * @param {object} playerSatellite - The player's mothership
-   */
+  /** @param {object} cluster from DebrisField.getDebrisClusters() */
   startTrawl(cluster, playerSatellite) {
     this.activeCluster = cluster;
     this.active = true;
@@ -133,13 +112,8 @@ export class TrawlManager {
     console.log(`[TrawlManager] Trawl started: ${cluster.id} (${cluster.count} targets)`);
   }
 
-  /**
-   * Update trawl state — called each frame during gameplay states.
-   * @param {number} dt - Game delta time
-   * @param {object} data - { playerPos, debrisField, armManager }
-   */
+  /** @param {object} data { playerPos, debrisField, armManager } */
   update(dt, data) {
-    // Cache refs for self-management (auto-start, toggle) — Batch 3
     if (data.player) this._player = data.player;
     if (data.debrisField) this._debrisField = data.debrisField;
 
@@ -147,9 +121,8 @@ export class TrawlManager {
 
     this.trawlTime += dt;
 
-    // UX-11 #4: watchdog — if the active cluster has no live members left the
-    // sweep can never "complete" through normal play; end it now so
-    // TRAWL_SWEEP_COMPLETE fires and the autopilot trawl-block clears.
+    // Watchdog: a cluster with no live members can never "complete" through normal play; end it so TRAWL_SWEEP_COMPLETE fires
+    // and the autopilot trawl-block clears.
     if (this.activeCluster && Array.isArray(this.activeCluster.targets)) {
       const anyAlive = this.activeCluster.targets.some(t => t && t.alive);
       if (!anyAlive) {
@@ -160,18 +133,12 @@ export class TrawlManager {
       }
     }
 
-    // Apply traversal: advance mothership along orbit
     if (data.player && data.player.orbit) {
-      // Move the mothership's true anomaly forward at traverse speed
-      // traverseSpeed is in scene units/s; convert to orbital angle change
-      // angular speed = traverseSpeed / orbitRadius (radians/s)
+      // Advance the mothership's true anomaly: angular speed = traverseSpeed (scene units/s) / orbitRadius (rad/s).
       const orbitRadius = data.player.orbit.semiMajorAxis || 66.71; // scene units
-      // T2 sweep: the mothership traverse runs at the base game rate. The old
-      // hardcoded ×10 was TIME_SCALE_GAMEPLAY inlined; route it through the ONE
-      // authority (byte-identical — BASE_SCALE === Constants.TIME_SCALE_GAMEPLAY).
+      // Traverse runs at the base game rate, routed through the ONE authority (BASE_SCALE === Constants.TIME_SCALE_GAMEPLAY).
       const angularIncrement = (this.traverseSpeed / orbitRadius) * dt * TimeAuthority.BASE_SCALE;
       data.player.orbit.trueAnomaly += angularIncrement;
-      // Wrap true anomaly to [0, 2π]
       if (data.player.orbit.trueAnomaly > 2 * Math.PI) {
         data.player.orbit.trueAnomaly -= 2 * Math.PI;
       }
@@ -180,17 +147,14 @@ export class TrawlManager {
     const { playerPos, debrisField, armManager } = data;
     if (!playerPos || !debrisField) return;
 
-    // Determine max tether range (based on largest deployed/available arm)
     const maxRange = this._getMaxTetherRange(armManager);
     const maxRangeScene = maxRange * Constants.SCENE_SCALE; // km to scene units
 
-    // Get all debris within tether sphere
     const nearbyDebris = debrisField.getDebrisNear(playerPos, maxRangeScene);
 
-    // Track targets entering/exiting range
     this._updateTargetWindows(nearbyDebris, maxRangeScene, playerPos);
 
-    // Track idle time for auto-end (no targets in range for IDLE_TIMEOUT seconds)
+    // Auto-end after IDLE_TIMEOUT seconds with no targets in range
     if (this.targetsInRange.length > 0) {
       this._idleTimer = 0;
     } else {
@@ -203,28 +167,18 @@ export class TrawlManager {
     }
   }
 
-  /**
-   * Track which targets just entered range, are in range, or just left.
-   * Also check for window-closing warnings.
-   * @private
-   * @param {Array} nearbyDebris - Debris within range
-   * @param {number} maxRange - Max tether range in scene units
-   * @param {THREE.Vector3} playerPos - Player position
-   */
+  /** Track which targets entered / are in / left range, plus window-closing warnings. @param {number} maxRange scene units */
   _updateTargetWindows(nearbyDebris, maxRange, playerPos) {
     const nearbyIds = new Set(nearbyDebris.map(d => d.id));
     const prevIds = new Set(this.targetsInRange.map(d => d.id));
     const maxRangeKm = maxRange / Constants.SCENE_SCALE;
 
-    // New targets entering range
     for (const debris of nearbyDebris) {
       if (!prevIds.has(debris.id)) {
         this.opportunitiesThisPass++;
 
-        // Record entry time
         this._targetEntryTimes.set(debris.id, this.trawlTime);
 
-        // Estimate window duration based on traverse speed and range
         const distKm = debris.distance / Constants.SCENE_SCALE;
         const estimatedWindowSec = this._estimateWindowDuration(distKm, maxRangeKm);
 
@@ -238,7 +192,6 @@ export class TrawlManager {
       }
     }
 
-    // Targets leaving range
     for (const prev of this.targetsInRange) {
       if (!nearbyIds.has(prev.id)) {
         const entryTime = this._targetEntryTimes.get(prev.id);
@@ -249,12 +202,11 @@ export class TrawlManager {
           debrisId: prev.id,
           windowDurationSec: windowDuration,
         });
-        // Clean up window warning tracking
         this._windowWarned.delete(prev.id);
       }
     }
 
-    // Check for window-closing warnings (beyond threshold of max range = drifting out)
+    // Window closing: past the threshold fraction of max range = drifting out
     const closingThreshold = Constants.TRAWLING.WINDOW_CLOSING_THRESHOLD;
     for (const debris of nearbyDebris) {
       const dist = debris.distance; // already computed by getDebrisNear
@@ -281,17 +233,9 @@ export class TrawlManager {
     this.targetsInRange = nearbyDebris;
   }
 
-  /**
-   * Estimate how long a target will remain in tether range.
-   * Based on current traverse speed and distance from player.
-   * @param {number} currentDistKm - current distance in km
-   * @param {number} maxRangeKm - max tether range in km
-   * @returns {number} estimated seconds in range
-   */
+  /** Seconds a target stays in tether range: chord through the sphere at this distance ÷ traverse speed (distances in km). */
   _estimateWindowDuration(currentDistKm, maxRangeKm) {
     if (this.traverseSpeed <= 0) return 999;
-    // Chord length through sphere at this distance
-    // Approximate: window ≈ 2 * sqrt(maxRange² - dist²) / traverseSpeedKm
     const traverseSpeedKm = this.traverseSpeed / Constants.SCENE_SCALE;
     const distRatio = Math.min(currentDistKm / maxRangeKm, 0.99);
     const chordHalf = maxRangeKm * Math.sqrt(1 - distRatio * distRatio);
@@ -299,12 +243,7 @@ export class TrawlManager {
     return Math.round(windowSec);
   }
 
-  /**
-   * Get the maximum tether range in km based on available arms.
-   * @private
-   * @param {object} armManager - ArmManager instance
-   * @returns {number} Max range in km
-   */
+  /** Max tether range in km from the available arms. @private */
   _getMaxTetherRange(armManager) {
     if (!armManager) return 2.0; // default 2 km (Weaver V3)
     let maxKm = 0.5; // minimum = Spinner range
@@ -316,10 +255,6 @@ export class TrawlManager {
     return maxKm;
   }
 
-  /**
-   * End the current trawl pass.
-   * @returns {object} Sweep report data
-   */
   endTrawl() {
     eventBus.off(Events.ARM_CAPTURED, this._onArmCaptured);
 
@@ -333,7 +268,7 @@ export class TrawlManager {
       trawlTimeSec: this.trawlTime,
     };
 
-    // Adapt speed for next pass (persistent — carries over between passes)
+    // Speed adapts for the next pass and persists between passes
     this._adaptSpeed(report.catchRatio);
 
     eventBus.emit(Events.COMMS_MESSAGE, {
@@ -341,7 +276,6 @@ export class TrawlManager {
       priority: 'info',
     });
 
-    // Emit sweep complete event for RewardSystem to compile full report
     eventBus.emit(Events.TRAWL_SWEEP_COMPLETE, {
       duration: this.trawlTime,
       targetsEntered: this.opportunitiesThisPass,
@@ -359,16 +293,10 @@ export class TrawlManager {
     return report;
   }
 
-  /**
-   * Adapt traverse speed based on performance.
-   * @private
-   * @param {number} catchRatio - Ratio of catches to opportunities (0-1)
-   */
   _adaptSpeed(catchRatio) {
     const T = Constants.TRAWLING;
 
     if (catchRatio > T.SPEED_MAINTAIN_HIGH) {
-      // Player crushing it → speed up
       this.traverseSpeed *= T.SPEED_ADAPT_UP;
       eventBus.emit(Events.COMMS_MESSAGE, {
         speaker: 'HOUSTON',
@@ -376,7 +304,6 @@ export class TrawlManager {
         priority: 1,
       });
     } else if (catchRatio < T.SPEED_MAINTAIN_LOW) {
-      // Player struggling → slow down
       this.traverseSpeed *= T.SPEED_ADAPT_DOWN;
       eventBus.emit(Events.COMMS_MESSAGE, {
         speaker: 'HOUSTON',
@@ -385,29 +312,18 @@ export class TrawlManager {
       });
     }
 
-    // Clamp
     this.traverseSpeed = clamp(this.traverseSpeed, T.SPEED_MIN, T.SPEED_MAX);
   }
 
-  /**
-   * Handler for ARM_CAPTURED events during trawl.
-   * @private
-   * @param {object} data - ARM_CAPTURED event data
-   */
   _onArmCaptured(data) {
     if (!this.active) return;
     this.registerCatch();
   }
 
-  /**
-   * Register a catch during trawl.
-   * Called when ARM_CAPTURED fires while trawling.
-   */
   registerCatch() {
     this.catchesThisPass++;
   }
 }
 
-/** Singleton instance */
 export const trawlManager = new TrawlManager();
 export default TrawlManager;

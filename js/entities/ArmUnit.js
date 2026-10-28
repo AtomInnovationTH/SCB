@@ -1386,25 +1386,11 @@ export class ArmUnit {
      *  this trip (ArmManager.carryCheck reads it; the trip clears it at its start, `reset()` too). */
     this._carryGaveUp = false;
 
-    // ── ST-9.3 C-3: Config G Aim + Hinge State ──
+    // ── ST-9.3 C-3: Config G Aim ──
     /** Meridian sweep angle α ∈ [0, π]. 0=stowed(−Y), π/2=equatorial, π=zenith(+Y) */
     this._aimAlpha = 0;
     /** launch-smooth: the eased strut move in progress (see setAimAlpha's `ease`), else null. */
     this._aimEase = null;
-
-    /**
-     * Hinge state: 'ROTATE' (motor drives, brake off) or 'LOCKED' (brake on, motor off).
-     * Gated by FEATURE_FLAGS.LOCKABLE_HINGE — when false, hinge behaves as always-ROTATE.
-     * @type {string}
-     */
-    this._hingeState = Constants.HINGE_STATES.ROTATE;
-
-    /**
-     * Timer for auto-unlock after fire recoil settles.
-     * When > 0, counts down; at 0 the hinge auto-unlocks.
-     * @type {number}
-     */
-    this._hingeSettleTimer = 0;
 
     // Config G geometry — set by ArmManager._initArms() after construction
     /** @type {THREE.Vector3|null} */ this._hingePosition = null;
@@ -3292,8 +3278,6 @@ export class ArmUnit {
    * Clamped to [STRUT_SWEEP_MIN, STRUT_SWEEP_MAX] (0 to π).
    * Per-frame delta clamped to STRUT_SLEW_RATE × dt.
    *
-   * Rejected if hinge is LOCKED (when LOCKABLE_HINGE feature flag is on).
-   *
    * launch-smooth: with an `ease` the strut does not start and stop dead: the move from the angle it is at
    * when the ease begins to `alpha` speeds up at STRUT_EASE_ACCEL, coasts at a peak (never above AIM_TURN_STRUT_PACE, 15°/s: the mother's turn keeps its pace) and
    * slows down at the same rate, lasting `ease.durationS` (or, when that is 0 / missing / shorter than the move can be
@@ -3306,14 +3290,9 @@ export class ArmUnit {
    * @param {number} [dt=0] — frame deltaTime for slew-rate clamping.
    *   If 0, snaps immediately (used for initialization).
    * @param {{durationS?:number}|null} [ease=null] — launch-smooth: ease the move (see above)
-   * @returns {boolean} true if alpha was changed, false if rejected (hinge locked)
+   * @returns {boolean} true if alpha was changed
    */
   setAimAlpha(alpha, dt = 0, ease = null) {
-    // Hinge lock gate (only enforced when feature flag is on)
-    if (Constants.FEATURE_FLAGS.LOCKABLE_HINGE && this._hingeState === Constants.HINGE_STATES.LOCKED) {
-      return false; // Rotation rejected — hinge is locked
-    }
-
     const V5 = Constants.OCTOPUS_V5;
     const target = clamp(V5.STRUT_SWEEP_MAX, V5.STRUT_SWEEP_MIN, alpha);
 
@@ -3371,70 +3350,6 @@ export class ArmUnit {
     const V5 = Constants.OCTOPUS_V5;
     return this._aimAlpha < V5.HIGH_RECOIL_ALPHA_LOW ||
            this._aimAlpha > V5.HIGH_RECOIL_ALPHA_HIGH;
-  }
-
-  // ==========================================================================
-  // ST-9.3 C-3: LOCKABLE HINGE STATE MACHINE (Gap #9)
-  // ==========================================================================
-
-  /**
-   * Lock the hinge brake (ROTATE → LOCKED). No-op if already locked.
-   * Gated behind FEATURE_FLAGS.LOCKABLE_HINGE — when false, this is a no-op.
-   * Emits EVENTS.ARM_HINGE_LOCKED on successful transition.
-   */
-  lockHinge() {
-    if (!Constants.FEATURE_FLAGS.LOCKABLE_HINGE) return;
-    if (this._hingeState === Constants.HINGE_STATES.LOCKED) return;
-
-    this._hingeState = Constants.HINGE_STATES.LOCKED;
-    eventBus.emit(Events.ARM_HINGE_LOCKED, { armIndex: this.index });
-  }
-
-  /**
-   * Unlock the hinge brake (LOCKED → ROTATE). No-op if already unlocked.
-   * Gated behind FEATURE_FLAGS.LOCKABLE_HINGE — when false, this is a no-op.
-   * Emits EVENTS.ARM_HINGE_UNLOCKED on successful transition.
-   */
-  unlockHinge() {
-    if (!Constants.FEATURE_FLAGS.LOCKABLE_HINGE) return;
-    if (this._hingeState === Constants.HINGE_STATES.ROTATE) return;
-
-    this._hingeState = Constants.HINGE_STATES.ROTATE;
-    eventBus.emit(Events.ARM_HINGE_UNLOCKED, { armIndex: this.index });
-  }
-
-  /**
-   * Query hinge lock state.
-   * @returns {boolean} true if hinge is locked AND LOCKABLE_HINGE flag is on.
-   *   Returns false if the feature flag is off (hinge always rotatable).
-   */
-  isHingeLocked() {
-    if (!Constants.FEATURE_FLAGS.LOCKABLE_HINGE) return false;
-    return this._hingeState === Constants.HINGE_STATES.LOCKED;
-  }
-
-  /**
-   * Get the raw hinge state string regardless of feature flag.
-   * Used by HUD display and tests.
-   * @returns {string} 'ROTATE' or 'LOCKED'
-   */
-  getHingeState() {
-    return this._hingeState;
-  }
-
-  /**
-   * Tick the hinge settle timer. Call each frame from the update loop.
-   * When timer expires, the hinge auto-unlocks.
-   * @param {number} dt — frame delta time
-   * @private
-   */
-  _tickHingeSettle(dt) {
-    if (this._hingeSettleTimer <= 0) return;
-    this._hingeSettleTimer -= dt;
-    if (this._hingeSettleTimer <= 0) {
-      this._hingeSettleTimer = 0;
-      this.unlockHinge();
-    }
   }
 
   // ==========================================================================
@@ -3553,10 +3468,8 @@ export class ArmUnit {
     this.launchDirection = null;
     // Don't reset springTier/tetherTier — those are upgrades
 
-    // C-3: Reset aim/hinge state
+    // C-3: Reset aim state
     this._aimAlpha = 0;
-    this._hingeState = Constants.HINGE_STATES.ROTATE;
-    this._hingeSettleTimer = 0;
 
     this.mesh.visible = false;
     this.tetherLine.visible = false;
@@ -3578,9 +3491,6 @@ export class ArmUnit {
    this.stateTimer += dt;
    this._lastDt = dt;   // dock-seat: PlayerSatellite.postArmUpdate eases her attitude by this frame's time
    this._rackClockS = (this._rackClockS || 0) + dt;   // rack-centre: times a cell-down slide (stateTimer is reset by the unload)
-
-   // C-3: Tick hinge auto-unlock settle timer
-   this._tickHingeSettle(dt);
 
    // §11.3: reaction-wheel momentum bleed (magnetorquers) — every state.
    this._tickWheelDecay(dt);

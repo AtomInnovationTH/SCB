@@ -1,25 +1,18 @@
 /**
- * UpdateCard.js — the menu "NEW VERSION READY" card (Session J.5 item 5).
+ * UpdateCard.js — the menu "NEW VERSION READY" card.
  *
- * A pure DOM builder over an injected `document`: no bus, no Events, no
- * Constants, no timers, no animation. MenuScreen mounts it inside
- * `#menu-header` right after `#menu-continue-wrapper` when UpdateWatch has a
- * pending payload, and removes it on LATER. It never exists in the DOM until
- * an update arrives (a `?ladder=0` boot stays byte-identical), and never
- * renders outside `#menu-screen` (the menu hides → the card hides with it).
+ * A pure DOM builder over an injected `document`: no bus, no Events, no Constants, no timers, no animation. MenuScreen
+ * mounts it inside `#menu-header` right after `#menu-continue-wrapper` when UpdateWatch has a pending payload, and
+ * removes it on LATER. It never exists in the DOM until an update arrives (a `?ladder=0` boot stays byte-identical), and
+ * never renders outside `#menu-screen` (the menu hides → the card hides with it).
  *
- * THE LOOK: the translucent `#menu-left` card (rgba(4,12,30,0.52) plate,
- * blur(6px), 1px rgba(0,255,136,0.14) hairline, 8px radius), the house mono
- * token (B612 Mono since Session L),
- * #00ff88 — a STEADY letter-spaced title (no pulse, no emoji anywhere), an
- * optional bullet list (omitted entirely when empty), a big primary
- * `RESTART NOW` button and a quiet `LATER` text button; both ≥ 44 px tall
- * (the touch-target minimum). Text goes in through `textContent` only.
+ * THE LOOK: the translucent `#menu-left` card plate, the house mono token, #00ff88 — a STEADY letter-spaced title (no
+ * pulse, no emoji anywhere), an optional bullet list (omitted entirely when empty), a big primary `RESTART NOW` button
+ * and a quiet `LATER` text button; both ≥ 44 px tall (the touch-target minimum). Text goes in through `textContent` only.
  *
  * @module ui/UpdateCard
  */
 
-/** The card's fixed numbers + strings (own-module export; the house rule). */
 export const UPDATE_CARD = Object.freeze({
   ID: 'menu-update-card',
   UPDATE_BTN_ID: 'menu-update-btn',
@@ -34,7 +27,6 @@ export const UPDATE_CARD = Object.freeze({
   BUTTON_MIN_H_PX: 44,
 });
 
-// Session L: the B612 Mono token (index.html :root --font-mono; the token carries its own local fallback).
 const FONT = 'var(--font-mono)';
 
 const CARD_CSS = `
@@ -72,11 +64,7 @@ const LATER_BTN_CSS = `
 /**
  * Build the card. Pure: touches only `doc` and the returned subtree.
  * @param {Document|object} doc  the document (injected — the test drives a fake)
- * @param {object} p
- * @param {string} [p.hash]            the new build's short sha (rendered as a quiet caption)
  * @param {string[]} [p.bullets]       ≤ 3 strings; `[]` / absent → no list at all
- * @param {Function} [p.onUpdate]      RESTART NOW click
- * @param {Function} [p.onLater]       LATER click
  * @returns {HTMLElement|object} `#menu-update-card`
  */
 export function buildUpdateCard(doc, { hash, bullets, onUpdate, onLater } = {}) {

@@ -1,5 +1,5 @@
 /**
- * CoMCalculator.js — Center-of-Mass Tracking + Thruster Plume Interlock
+ * CoMCalculator.js — Center-of-Mass, inertia and thruster plume-cone checks
  * ST-9.12 (C-9) — Config G Gaps #5 + #8
  *
  * Computes spacecraft CoM offset from barrel center considering:
@@ -39,8 +39,6 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
-import { eventBus } from '../core/EventBus.js';
-import { Events } from '../core/Events.js';
 import { heldSlotAnchorInto, rackOffsetFor, catchLongAxisInto, nextFreeRackCell } from '../entities/ArmUnit.js';
 import { composeDockedArmQuat } from '../entities/ArmDockBasis.js';
 import { DebrisField } from '../entities/DebrisField.js';           // net-duck D1: the drawn scale of a held catch
@@ -1270,7 +1268,7 @@ function _armHoldsCargoInCone(arm, dp, alpha, playerSatellite, n, dx, dy, dz, ha
  * at `armIndex` hold cargo whose box-chain sits in ANY thruster's cone at its
  * live booking? Applies the SAME skip filter as checkPlumeInterference
  * (detached/expended arms and missing dock positions are skipped). READ-ONLY —
- * what thrust refuses is THRUSTER_INTERLOCK's business, untouched.
+ * what thrust refuses is not decided here.
  *
  * @param {object} armManager — with .arms[], ._dockPositions[]
  * @param {number} armIndex
@@ -1467,8 +1465,7 @@ export function heldCargoFoulsCorridorAt(armManager, armIndex, alphaRad, anchor,
  * is tested at its live booking through the box-chain volume model
  * (heldCargoPlumeChainInto → _ballInPlumeCone). An arm conflicts if its TIP
  * is in the cone OR any held piece's chain touches it. EMPTY arms take
- * exactly the pre-S9 path (byte-identical results). The interlock stays
- * dormant — THRUSTER_INTERLOCK semantics are untouched; S9 changes what this
+ * exactly the pre-S9 path (byte-identical results). S9 changes what this
  * check SEES, never what thrust REFUSES.
  *
  * @param {object} armManager — with .arms[], ._dockPositions[]
@@ -1549,164 +1546,6 @@ export function checkPlumeInterference(armManager, thrusterId) {
   return { blocked: false, conflictingArms: [], reason: '' };
 }
 
-/**
- * Check all thrusters for plume conflicts and return a map of blocked thrusters.
- *
- * @param {object} armManager
- * @returns {Object<string, string>} Map: { thrusterId → blockedReason } (only blocked thrusters)
- */
-export function getActiveBlocks(armManager) {
-  const thrusters = Constants.THRUSTERS;
-  if (!thrusters) return {};
-
-  const blocks = {};
-  for (const t of thrusters) {
-    const result = checkPlumeInterference(armManager, t.id);
-    if (result.blocked) {
-      blocks[t.id] = result.reason;
-    }
-  }
-  return blocks;
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// §3  CoM Drift Warning State Machine
-// ═══════════════════════════════════════════════════════════════════════════
-
-/** @type {boolean} Whether a drift warning is currently active (for debouncing) */
-let _driftWarningActive = false;
-
-/** @type {Object<string, boolean>} Per-thruster block state (for edge detection) */
-const _thrusterBlockState = {};
-
-/**
- * Update CoM drift warning state. Call once per frame (or at HUD rate).
- * Emits COM_DRIFT_WARNING on threshold crossing up, COM_DRIFT_CLEARED on crossing down.
- * Debounced: only emits on state transitions.
- *
- * @param {object} armManager
- * @param {object} [playerSatellite]
- * @returns {{ offsetM: number, isWarning: boolean, suggestedArm: number|null }}
- */
-export function updateDriftWarning(armManager, playerSatellite) {
-  if (!Constants.FEATURE_FLAGS.COM_TRACKING) {
-    // Flag off: silently return zero drift, no events
-    if (_driftWarningActive) {
-      _driftWarningActive = false;
-    }
-    return { offsetM: 0, isWarning: false, suggestedArm: null };
-  }
-
-  const offsetM = computeCoMDrift(armManager, playerSatellite);
-  const threshold = Constants.COM_DRIFT_WARN_THRESHOLD;
-  const isOverThreshold = offsetM >= threshold;
-
-  let suggestedArm = null;
-
-  if (isOverThreshold && !_driftWarningActive) {
-    // Threshold crossing UP → emit warning
-    _driftWarningActive = true;
-    suggestedArm = suggestStowArm(armManager, playerSatellite);
-    eventBus.emit(Events.COM_DRIFT_WARNING, {
-      offsetM,
-      threshold,
-      suggestedStowArm: suggestedArm,
-    });
-  } else if (!isOverThreshold && _driftWarningActive) {
-    // Threshold crossing DOWN → emit cleared
-    _driftWarningActive = false;
-    eventBus.emit(Events.COM_DRIFT_CLEARED, { offsetM });
-  } else if (isOverThreshold) {
-    // Still over threshold — compute suggestion for HUD but don't re-emit
-    suggestedArm = suggestStowArm(armManager, playerSatellite);
-  }
-
-  return { offsetM, isWarning: _driftWarningActive, suggestedArm };
-}
-
-/**
- * Update thruster block state and emit edge events.
- * Call once per frame/HUD-tick when THRUSTER_INTERLOCK flag is ON.
- *
- * @param {object} armManager
- * @returns {Object<string, string>} current blocks map { thrusterId → reason }
- */
-export function updateThrusterBlocks(armManager) {
-  if (!Constants.FEATURE_FLAGS.THRUSTER_INTERLOCK) {
-    // Flag off: clear all block state, no events
-    for (const id of Object.keys(_thrusterBlockState)) {
-      if (_thrusterBlockState[id]) {
-        _thrusterBlockState[id] = false;
-      }
-    }
-    return {};
-  }
-
-  const thrusters = Constants.THRUSTERS;
-  if (!thrusters) return {};
-
-  const currentBlocks = {};
-
-  for (const t of thrusters) {
-    const result = checkPlumeInterference(armManager, t.id);
-    const wasBlocked = !!_thrusterBlockState[t.id];
-
-    if (result.blocked && !wasBlocked) {
-      _thrusterBlockState[t.id] = true;
-      eventBus.emit(Events.THRUSTER_BLOCKED_PLUME, {
-        thrusterId: t.id,
-        conflictingArms: result.conflictingArms,
-        reason: result.reason,
-      });
-    } else if (!result.blocked && wasBlocked) {
-      _thrusterBlockState[t.id] = false;
-      eventBus.emit(Events.THRUSTER_UNBLOCKED, { thrusterId: t.id });
-    }
-
-    if (result.blocked) {
-      currentBlocks[t.id] = result.reason;
-    }
-  }
-
-  return currentBlocks;
-}
-
-/**
- * Reset internal state (for testing / new game).
- */
-export function resetCoMState() {
-  _driftWarningActive = false;
-  for (const id of Object.keys(_thrusterBlockState)) {
-    delete _thrusterBlockState[id];
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// §4  CoM-Induced Torque Helper
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Compute the torque vector induced when thrust F acts through a CoM that is
- * offset from the thrust line.
- *
- *   τ = r × F
- *
- * where r is the CoM position (offset from origin which is the thrust-line anchor).
- * Returns the torque vector in body coordinates (N·m if F is in Newtons, r in meters).
- *
- * @param {{x:number,y:number,z:number}} comPos — CoM offset from origin (meters)
- * @param {{x:number,y:number,z:number}} thrustForce — thrust force vector (N)
- * @returns {{x:number, y:number, z:number}} torque vector (N·m)
- */
-export function computeInducedTorque(comPos, thrustForce) {
-  return {
-    x: comPos.y * thrustForce.z - comPos.z * thrustForce.y,
-    y: comPos.z * thrustForce.x - comPos.x * thrustForce.z,
-    z: comPos.x * thrustForce.y - comPos.y * thrustForce.x,
-  };
-}
-
 // Default export: namespace convenience
 export default {
   computeCoM,
@@ -1714,7 +1553,6 @@ export default {
   computeCoMDrift,
   computeCoMDriftVector,
   computeCoMOffsetFromThrustVector,
-  computeInducedTorque,
   suggestStowArm,
   heldCargoBookingMeters,
   heldInHandBookingMeters,
@@ -1723,8 +1561,4 @@ export default {
   strutTipMeters,
   strutMidpointMeters,
   checkPlumeInterference,
-  getActiveBlocks,
-  updateDriftWarning,
-  updateThrusterBlocks,
-  resetCoMState,
 };

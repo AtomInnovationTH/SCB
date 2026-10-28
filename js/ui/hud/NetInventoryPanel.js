@@ -1,25 +1,13 @@
 /**
- * NetInventoryPanel.js — Compact lasso + net inventory chips
+ * NetInventoryPanel.js — Compact lasso + net inventory chips, mounted under the right-column StatusPanel.
  *
- * Delegation 4 (2026-05-31). A small flat-row widget mounted under the
- * right-column [`StatusPanel`](js/ui/hud/StatusPanel.js:1).  Renders two chips:
+ *   • LASSO chip — the mother's nets remaining / max (ONE count, DECISIONS §33), from
+ *     `Events.NET_INVENTORY_CHANGED` `{ source:'mother', motherNets }`.
+ *   • NETS chip — per-arm net total summed, from the same event; hover tooltip shows the per-arm breakdown.
  *
- *   [LASSO 12/20]   [NETS 3+2+1=6/12]
+ * Threshold crossings into the low/critical band emit `Events.INVENTORY_LOW` once, gated by a cooldown.
  *
- *   • LASSO chip — the mother's nets remaining / max (ONE count, DECISIONS §33),
- *     driven by [`Events.NET_INVENTORY_CHANGED`](js/core/Events.js:541)
- *     `{ source:'mother', motherNets }`.
- *   • NETS chip — per-arm net total summed, driven by
- *     [`Events.NET_INVENTORY_CHANGED`](js/core/Events.js:541).  Hover
- *     tooltip shows the per-arm breakdown (browser `title` attribute).
- *
- * Threshold-based colour transitions emit
- * [`Events.INVENTORY_LOW`](js/core/Events.js:1) once per crossing into the
- * low/critical band, gated by a configurable cooldown so the HOUSTON comms
- * hint does not spam the player.
- *
- * Node-safe: gracefully no-ops when DOM is unavailable.  All thresholds and
- * the cooldown window come from [`Constants.INVENTORY`](js/core/Constants.js:1).
+ * Node-safe: no-ops when DOM is unavailable. Thresholds and cooldown come from `Constants.INVENTORY`.
  *
  * @module ui/hud/NetInventoryPanel
  */
@@ -28,10 +16,6 @@ import { eventBus } from '../../core/EventBus.js';
 import { Events }   from '../../core/Events.js';
 import { Constants } from '../../core/Constants.js';
 import { restockTail } from '../../systems/resupplyWords.js';
-
-// ───────────────────────────────────────────────────────────────────────────
-// CONFIG
-// ───────────────────────────────────────────────────────────────────────────
 
 const COLOR_OK       = 'var(--hud-normal, #88ffcc)';
 const COLOR_LOW      = 'var(--hud-caution, #ffcc44)';
@@ -57,35 +41,17 @@ function _hasDOM() {
   return typeof document !== 'undefined';
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// PURE LOGIC (exported for tests)
-// ───────────────────────────────────────────────────────────────────────────
-
-/**
- * Classify a remaining/threshold pair into 'ok' | 'low' | 'critical'.
- * @param {number} remaining
- * @param {number} lowThreshold
- * @param {number} critThreshold
- * @returns {'ok'|'low'|'critical'}
- */
+/** Classify a remaining/threshold pair into 'ok' | 'low' | 'critical'. */
 export function classifySeverity(remaining, lowThreshold, critThreshold) {
   if (remaining <= critThreshold) return 'critical';
   if (remaining <= lowThreshold)  return 'low';
   return 'ok';
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// PANEL
-// ───────────────────────────────────────────────────────────────────────────
-
 export class NetInventoryPanel {
   /**
    * @param {HTMLElement} [container] — DOM mount point (defaults to document.body)
-   * @param {object} [opts]
-   * @param {object} [opts.eventBus] — override (tests pass a mock)
-   * @param {object} [opts.armManager] — for initial-state polling of net counts
-   * @param {object} [opts.lassoSystem] — for initial-state polling of lasso ammo
-   * @param {Function} [opts.now] — clock injection for tests; defaults to Date.now
+   * @param {object} [opts] — eventBus, armManager, lassoSystem, now (clock injection for tests)
    */
   constructor(container, opts = {}) {
     this._eventBus   = opts.eventBus   || eventBus;
@@ -122,8 +88,6 @@ export class NetInventoryPanel {
     this._render();
   }
 
-  // ─── PUBLIC API ────────────────────────────────────────────────────────
-
   /** Test helper — returns the current state snapshot. */
   getState() {
     return {
@@ -151,11 +115,7 @@ export class NetInventoryPanel {
     this._root = this._lassoChip = this._netChip = null;
   }
 
-  /**
-   * Force a re-poll of arm + lasso state.  Public so HUD can call when the
-   * dependencies become available after construction (lassoSystem and
-   * armManager are wired in a multi-stage init).
-   */
+  /** Force a re-poll of arm + lasso state; HUD calls it once the deps (wired in a multi-stage init) exist. */
   refresh() {
     this._pollInitial();
     this._render();
@@ -164,18 +124,11 @@ export class NetInventoryPanel {
   setArmManager(armManager) { this._armManager = armManager; this.refresh(); }
   setLassoSystem(lassoSystem) { this._lasso = lassoSystem; this.refresh(); }
 
-  /**
-   * Show or hide the chip row.  Browser-playtest Bug 3 (Delegation 4):
-   * keeps the widget hidden during the onboarding pipeline so the
-   * "50/50, 8/8" emoji noise no longer distracts first-run players.
-   * @param {boolean} visible
-   */
+  /** Show or hide the chip row (hidden during the onboarding pipeline). */
   setVisible(visible) {
     if (!this._root) return;
     this._root.style.display = visible ? 'flex' : 'none';
   }
-
-  // ─── INTERNAL — DOM ───────────────────────────────────────────────────
 
   _build() {
     if (!_hasDOM() || !this._container) return;
@@ -193,17 +146,12 @@ export class NetInventoryPanel {
       "font-family: var(--font-mono)",
       'font-size:12px',
       'white-space:nowrap',
-      // Delegation 4 (2026-05-31) — Browser-playtest Bug 3:
-      // hide until onboarding completes (or on a veteran save).  Mounts
-      // hidden; HUD un-hides on ONBOARDING_COMPLETE (and constructor
-      // un-hides immediately when there is no pipeline to wait for).
+      // mounts hidden until onboarding completes (or a veteran save)
       'display:none',
     ].join(';') + ';';
     this._root = row;
 
-    // Delegation 4 — Browser-playtest Bug 3: plain text glyphs (no emoji)
-    // and short labels.  Per-arm net breakdown lives in the chip title
-    // tooltip only — inline label is total/max.
+    // Inline label is total/max; the per-arm breakdown lives in the chip title only.
     this._lassoChip = this._buildChip('LASSO', '. /. ', '');
     this._netChip   = this._buildChip('NETS',  '. /. ', '');
     row.appendChild(this._lassoChip);
@@ -248,8 +196,6 @@ export class NetInventoryPanel {
     chip.style.color       = color;
   }
 
-  // ─── INTERNAL — EVENT WIRING ───────────────────────────────────────────
-
   _wireListeners() {
     const eb = this._eventBus;
     if (!eb) return;
@@ -259,16 +205,12 @@ export class NetInventoryPanel {
     };
     on(Events.NET_INVENTORY_CHANGED, (d) => this._onNetInventory(d));
 
-    // Delegation 4 (2026-05-31) — Browser-playtest: NetInventoryPanel is
-    // SUSPENDED (never displayed). The widget is too cryptic for the current
-    // UX maturity level. It stays mounted so event wiring and state tracking
-    // still work (tests pass), but setVisible is never called.
-    // See ROADMAP.md for the redesign ticket.
+    // SUSPENDED: never displayed (too cryptic). It stays mounted so event wiring and state tracking
+    // still work, but setVisible is never called.
   }
 
   /** Poll the initial state from injected systems (events only fire on change). */
   _pollInitial() {
-    // Lasso ammo — direct query.
     if (this._lasso && typeof this._lasso.getAmmo === 'function') {
       const cur = this._lasso.getAmmo() ?? 0;
       const max = (Constants && Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
@@ -276,7 +218,6 @@ export class NetInventoryPanel {
       this._lasso_state.remaining = cur;
       this._lasso_state.max = max;
     }
-    // Per-arm net inventory.
     if (this._armManager) {
       const arms = (this._armManager.arms || this._armManager.getArms?.() || []);
       const perArm = [];
@@ -300,13 +241,11 @@ export class NetInventoryPanel {
     this._reclassify(/*emit=*/false);
   }
 
-  // ─── EVENT HANDLERS ────────────────────────────────────────────────────
-
   _onNetInventory(d) {
     // DECISIONS §33: the mother's one count rides on every mother event as `motherNets`.
     if (d && d.source === 'mother' && Number.isFinite(d.motherNets)) {
       this._lasso_state.remaining = d.motherNets;
-      // nets-step2: the capacity grows with the line-fibre upgrade; the mother's events carry it as podMax.
+      // capacity grows with the line-fibre upgrade; the mother's events carry it as podMax.
       const podCap = Array.isArray(d.podMax) ? d.podMax.reduce((a, b) => a + (b || 0), 0) : 0;
       const mag = podCap > 0 ? podCap : (this._lasso_state.max || (Constants && Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
         && Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE));
@@ -337,8 +276,6 @@ export class NetInventoryPanel {
     this._render();
   }
 
-  // ─── CORE — CLASSIFY + COMMS ───────────────────────────────────────────
-
   _reclassify(emit) {
     const T = _tuning();
     const prevLasso = this._lasso_state.severity;
@@ -354,23 +291,19 @@ export class NetInventoryPanel {
 
     if (!emit) return;
 
-    // Determine kind of low event to emit (transition from ok→low/critical
-    // or low→critical). Only emit on rising severity — not on recovery.
+    // Only emit on rising severity (ok→low/critical, low→critical), not on recovery.
     const RANK = { ok: 0, low: 1, critical: 2 };
     const lassoEsc = RANK[newLasso] > RANK[prevLasso];
     const netEsc   = RANK[newNet]   > RANK[prevNet];
     if (!lassoEsc && !netEsc) return;
 
-    // Cooldown gate.  The first ever emit (`_lastLowEmitAt === 0`) always
-    // passes — players who run out of capture tools immediately should still
-    // hear the warning.  Subsequent emits are throttled by LOW_HINT_COOLDOWN_MS.
+    // Cooldown gate; the first ever emit (`_lastLowEmitAt === 0`) always passes.
     const now = this._now();
     if (this._lastLowEmitAt > 0
         && (now - this._lastLowEmitAt) < (T.LOW_HINT_COOLDOWN_MS || 60000)) {
       return;
     }
 
-    // Determine kind + severity for payload.
     let kind = lassoEsc && netEsc ? 'both' : (lassoEsc ? 'lasso' : 'nets');
     let critical = (newLasso === 'critical' && (kind === 'lasso' || kind === 'both'))
                 || (newNet   === 'critical' && (kind === 'nets'  || kind === 'both'));
@@ -384,17 +317,12 @@ export class NetInventoryPanel {
       nets:  { total: this._net_state.total,           max: this._net_state.max  },
     });
 
-    // No comms line from here (review R4, 2026-10-20). This panel is never shown, yet it kept posting "Low on nets,
-    // Cowboy..." for the daughters' nets (even at 0). The player's net lines are the one-line prompts of DECISIONS §33
-    // row 8: the mother's ("One mother net left.", "Out of mother nets. Press D to send a daughter.") and a daughter's
-    // ("Out of nets. Restock at the resupply stop."). INVENTORY_LOW above stays for any listener.
+    // No comms line from here: the player's net lines are the one-line prompts of DECISIONS §33 row 8.
+    // INVENTORY_LOW above stays for any listener.
   }
-
-  // ─── RENDER ────────────────────────────────────────────────────────────
 
   _render() {
     if (!_hasDOM() || !this._root) return;
-    // Lasso chip text + colour.
     if (this._lassoChip) {
       const remaining = this._lasso_state.remaining ?? 0;
       const max       = this._lasso_state.max ?? 0;
@@ -403,11 +331,7 @@ export class NetInventoryPanel {
       this._lassoChip.title = `Lasso shots: ${label}.  ${restockTail()}`;
       this._styleChip(this._lassoChip, this._lasso_state.severity);
     }
-    // Net chip text + breakdown tooltip + colour.
-    // Delegation 4 (2026-05-31) — Browser-playtest Bug 3: inline label is
-    // ALWAYS just `total/max` (e.g. "8/8").  The per-arm breakdown
-    // ("2+2+2+2") is preserved only in the chip's hover tooltip — it was
-    // adding noise to first-run players staring at "NETS 2+2+2+2=8/8".
+    // Inline label is ALWAYS just `total/max`; the per-arm breakdown is only in the hover tooltip.
     if (this._netChip) {
       const perArm = this._net_state.perArm;
       const total  = this._net_state.total;

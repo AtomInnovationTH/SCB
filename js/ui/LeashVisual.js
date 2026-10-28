@@ -1,30 +1,20 @@
 /**
- * LeashVisual.js — what the leash hand-off looks like (lane l6-look).
+ * LeashVisual.js — draws the leash hand-off from `player.leashDriver.view()` every frame:
+ *   1. the LINE: one Line2 in the SCENE, not under the ship (ShipKeepOut reads every mesh under the ship).
+ *   2. the real-size BAG: a wire sphere with a washer at its neck, one for each tip plus one for the hand-off. Created
+ *      once and swapped in/out, never scaled from the big net bag. A tip's bag stays drawn while its slot is filled,
+ *      through stow and cooking.
+ *   3. each tip cone's SWIVEL (PlayerSatellite owns the pivot's POSITION; this class sets only its ROTATION).
+ * owner 2026-10-25: the ball "looks good on the tips". A catch that wears its own net (`netVisual.wearsNet`) gets NO
+ * ball while the leash is in flight from the collar to the tip (its net IS the bag then); once it sits on a radiator
+ * tip the ball is drawn round it again, fading in 0.5 s and out when the slot empties. A net-less catch gets it throughout.
  *
- * Reads `player.leashDriver.view()` (lane l5b/l5c) and draws, every frame:
- *   1. the LINE — one Line2 in the SCENE (not under the ship: ShipKeepOut reads every mesh under the ship):
- *      anchor -> bag before the catch, anchor -> tip (straight) then tip -> bag (a little sag) once the line
- *      runs through the tip. Same material kit as the net's own tether, but the line's true width (2 x LEASH.LINE_RADIUS_M). Hidden while the hand-off
- *      is not running, when the line is cut, and in the nose reel (the net's own tether is drawn then).
- *   2. the REAL-SIZE BAG — a low-poly wire sphere (catch radius + 3 cm) with a steel washer at its neck, one for
- *      each tip plus one for the hand-off, created once and swapped in/out (never scaled from the big net bag).
- *      A tip's bag stays drawn while its slot is filled — through stow and cooking — and goes when it is digested.
- *   3. the CONE SWIVEL — each tip's slotted cone hangs on a pivot at its narrow end (PlayerSatellite owns the
- *      pivot's POSITION); this class sets only its ROTATION: along the line while the line runs through that tip,
- *      along the boom otherwise, eased.
- * tip-ball (owner 2026-10-25: "looks good on the tips"; net-bag 2026-10-24 first hid it everywhere): a catch that wears its own
- * net (`netVisual.wearsNet`) gets NO ball while the leash is in flight from the collar to the tip (the sudden bubble the owner
- * complained of; its net IS the bag then, the washer ring and the line stay), but once it sits on a radiator tip the ball is
- * drawn round it again, over the net CaptureNetVisual keeps on the catch, fading in 0.5 s and out when the slot empties. A
- * net-less catch gets the ball throughout, as before.
- *
- * WHERE IT DRAWS (fix round 1, F2): the ship is drawn in a second pass after a depth clear (NearFieldRenderPass), so
- * anything left in the first pass is painted over by the hull. Everything here hangs on ONE root group
- * (`this.root`, a child of the scene — NOT of the ship, ShipKeepOut reads every mesh under the ship) that is
- * registered with `sceneManager.registerNearFieldRoot` the same way the ship is: the near pass then scales it x1e5
- * about the camera (1 unit = 1 metre) and depth-tests it against the hull. The root sits at the ship every frame and
- * its children are placed relative to it (so the near-field depth bracket, which is taken around the roots, is not
- * stretched to the world origin). In that pass a world-unit line width is in METRES: 2 x LEASH.LINE_RADIUS_M = the true 1 cm line.
+ * WHERE IT DRAWS: the ship is drawn in a second pass after a depth clear (NearFieldRenderPass), so anything left in
+ * the first pass is painted over by the hull. Everything here hangs on ONE root group (`this.root`, a child of the
+ * scene) registered with `sceneManager.registerNearFieldRoot` like the ship: the near pass scales it x1e5 about the
+ * camera (1 unit = 1 metre) and depth-tests it against the hull. The root sits at the ship every frame and its
+ * children are placed relative to it (so the near-field depth bracket is not stretched to the world origin). In
+ * that pass a world-unit line width is in METRES: 2 x LEASH.LINE_RADIUS_M = the true 1 cm line.
  *
  * Units: scene units (1 m = 1e-5) for everything handed in/out of `view()`. No per-frame allocation.
  */
@@ -41,32 +31,29 @@ import { DebrisField } from '../entities/DebrisField.js';
 const M = Constants.SCENE_UNITS_PER_METER;
 const SEGMENTS = 20;                 // line segments (21 points) — the net tether's count
 const TIP_SEGMENTS = 6;              // of those, anchor -> tip while the line runs through the tip
-const SAG_FRAC = Constants.CAPTURE_NET.NET_TETHER.SAG_FRAC;   // the net tether's sag idiom
+const SAG_FRAC = Constants.CAPTURE_NET.NET_TETHER.SAG_FRAC;
 const BAG_MARGIN_M = 0.03;           // the drawn bag stands this far outside the catch
 /**
- * Radius (m) the catch is DRAWN at, measured from the point the catch is pinned and the bag is centred on: the render
+ * Radius (m) the catch is DRAWN at, from the point the catch is pinned and the bag is centred on: the render
  * scale the renderer really uses (DebrisField.effectiveRenderScale, floor included) times the mesh's farthest vertex
  * from its origin. `sizeMeter` is not the drawn size (test-DebrisField-SizeSSOT): this is 0.76 - 1.8 x sizeMeter.
  * @param {{sizeMeter?: number, sceneSize?: number, type?: string, id?: number}|null} d the catch
- * @returns {number}
  */
 export function drawnCatchRadiusM(d) {
   const scale = (d && DebrisField.effectiveRenderScale(d)) || 0.4 * Constants.SCENE_UNITS_PER_METER;
   return scale / Constants.SCENE_UNITS_PER_METER * DebrisWireframe.getOriginRadius(d ? d.type : undefined, d ? d.id : 0);
 }
 /**
- * Radius (m) of the wire bag the leash hand-off draws round a catch: the catch as drawn plus the margin, so the bag
- * encloses it. CaptureNetVisual cinches the net bag to this size over the hand-off, so the swap at the latch does not
- * change the bag's size.
+ * Radius (m) of the wire bag the hand-off draws round a catch: the catch as drawn plus the margin.
+ * CaptureNetVisual cinches the net bag to this size over the hand-off, so the swap at the latch does not change it.
  * @param {{sizeMeter?: number}|null} d the catch
- * @returns {number}
  */
 export function wireBagRadiusM(d) {
   return Math.max(0.02, drawnCatchRadiusM(d)) + BAG_MARGIN_M;
 }
-const BAG_FADE_S = 0.5;              // real-size bag fades in/out over this long
+const BAG_FADE_S = 0.5;
 const BAG_OPACITY = 0.55;
-const CONE_EASE_PER_S = 8;           // cone swivel easing rate (1/s)
+const CONE_EASE_PER_S = 8;           // 1/s
 const WASHER_RADIUS_M = 0.028;       // fits the 40 mm cone mouth
 const WASHER_TUBE_M = 0.008;
 
@@ -86,10 +73,9 @@ const _qI = new THREE.Quaternion();
 export class LeashVisual {
   /**
    * @param {{ scene: THREE.Scene, player: object, sceneManager?: object }} deps — `player.leashDriver`,
-   *   `player.tipCargo` and `player._flowerGroups` are read each frame (any may be absent: nothing is drawn then);
-   *   `sceneManager.registerNearFieldRoot` (when present) puts the root in the near-field pass with the ship.
-   *   `netVisual` (optional, `wearsNet(debris)`): a catch that wears its own net bag gets no wire sphere (the net IS the
-   *   bag; net-bag, owner 2026-10-24) — its washer ring and the line stay. Absent: every catch gets the sphere.
+   *   `player.tipCargo` and `player._flowerGroups` are read each frame (any may be absent: nothing is drawn then).
+   *   `netVisual` (optional, `wearsNet(debris)`): a catch that wears its own net bag gets no wire sphere in flight —
+   *   its washer ring and the line stay. Absent: every catch gets the sphere.
    */
   constructor({ scene, player, sceneManager = null, netVisual = null }) {
     this.scene = scene;
@@ -97,12 +83,11 @@ export class LeashVisual {
     this.sceneManager = sceneManager;
     this.netVisual = netVisual;
 
-    // ONE root, registered as a near-field root (see the header); line and bags are its children.
+    // ONE root, registered as a near-field root (see the header).
     this.root = new THREE.Group();
     this.root.name = 'LeashVisualRoot';
     scene.add(this.root);
 
-    // ── the line ──
     this.positions = new Float32Array((SEGMENTS + 1) * 3);          // anchor-relative, scene units
     const geo = new LineGeometry();
     geo.setPositions(this.positions);
@@ -110,7 +95,7 @@ export class LeashVisual {
       color: Constants.NET_WEB.WEB_COLOR,
       transparent: true,
       opacity: 0.7,
-      linewidth: 2 * Constants.LEASH.LINE_RADIUS_M,       // the real line's diameter (1 cm): world units, and in the near pass 1 unit = 1 m
+      linewidth: 2 * Constants.LEASH.LINE_RADIUS_M,       // the real line's diameter (1 cm); near pass: 1 unit = 1 m
       worldUnits: true,
       dashed: false,
       blending: THREE.NormalBlending,
@@ -125,7 +110,7 @@ export class LeashVisual {
     this.segBuffer = geo.attributes.instanceStart.data;             // written in place every frame
     this.root.add(this.line);
 
-    // ── real-size bags: slots 0-3 = tips, 4 = the hand-off ──
+    // bags: slots 0-3 = tips, 4 = the hand-off
     this.wireGeo = new THREE.IcosahedronGeometry(1, 2);             // unit sphere, 320 faces, drawn as wire
     this.washerGeo = new THREE.TorusGeometry(WASHER_RADIUS_M * M, WASHER_TUBE_M * M, 8, 48);
     this.washerMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, metalness: 0.8, roughness: 0.35 });
@@ -152,8 +137,7 @@ export class LeashVisual {
       this.bags.push({ group, wire, wireMat, washer, alpha: 0, sa: 0 });   // sa: the sphere's own fade (0..1), <= alpha in effect
     }
 
-    // Same as the ship (main.js registerNearFieldRoot(player)): drawn in the depth-cleared near pass, so the hull
-    // cannot paint over the line or the bags and they are depth-tested against it.
+    // Like the ship: drawn in the depth-cleared near pass, so the hull cannot paint over the line or bags.
     if (sceneManager && typeof sceneManager.registerNearFieldRoot === 'function') sceneManager.registerNearFieldRoot(this.root);
   }
 
@@ -177,11 +161,9 @@ export class LeashVisual {
   }
 
   /**
-   * l8b: the view's points are copied in the driver's step, BEFORE the ship and the catch move for the frame, so they
-   * trail the live scene by one frame of orbital travel (browser probe 2026-10-15: 0.04 scene units = km, the
-   * hand-off bag and the line drawn a frame behind the root, i.e. nowhere near the catch). The catch's own
-   * `_scenePosition` is live, so every view point is shifted by (live catch - view.bagWorld); the points then agree
-   * with the root and the catch in the same frame.
+   * The view's points are copied in the driver's step, BEFORE the ship and the catch move for the frame, so they
+   * trail the live scene by one frame of orbital travel (0.04 scene units = km). The catch's own `_scenePosition` is
+   * live, so every view point is shifted by (live catch - view.bagWorld) to agree with the root and the catch.
    */
   _framePoints(view) {
     this._fp = false;
@@ -197,8 +179,6 @@ export class LeashVisual {
     if (view.tipWorld) _vT.set(view.tipWorld.x + dx, view.tipWorld.y + dy, view.tipWorld.z + dz);
     this._fp = true;
   }
-
-  // ── the line ──────────────────────────────────────────────────────────────
 
   _updateLine(view) {
     const line = this.line;
@@ -222,8 +202,7 @@ export class LeashVisual {
     }
     const slack = Math.max(0, (view.reelLenM || 0) * M - total);
     const sag = slack * SAG_FRAC;
-    // sag direction: perpendicular to the sagging chord, biased "up" the way the net tether does:
-    // lateral = normalize(cross(up, axis)), up = +Y (or +X when the axis is nearly vertical)
+    // Sag direction as the net tether does: normalize(cross(up, axis)), up = +Y (or +X when the axis is nearly vertical)
     _a.copy(_d);
     if (_a.lengthSq() > 1e-30) _a.normalize(); else _a.set(1, 0, 0);
     const ux = Math.abs(_a.y) > 0.95 ? 1 : 0, uy = ux ? 0 : 1;
@@ -254,15 +233,13 @@ export class LeashVisual {
     this.segBuffer.needsUpdate = true;
   }
 
-  // ── the real-size bags ────────────────────────────────────────────────────
-
   _updateBags(view, dt) {
     const tc = this.player && this.player.tipCargo;
     const hand = this.bags[4];
-    // l8b D2: exactly one bag around the catch in every frame. The hand-off bag (slot 4) is drawn while the view
+    // Exactly one bag around the catch in every frame. The hand-off bag (slot 4) is drawn while the view
     // runs and has a bag point; a tip bag (from tipCargo) is drawn for a held catch UNLESS the hand-off bag is
-    // drawn for that same catch this frame. When one takes over from the other the opacity is carried over and the
-    // old one goes in the same frame (no cross-fade of two bags, no frame with neither).
+    // drawn for that same catch this frame. When one takes over the opacity is carried over and the old one goes
+    // in the same frame (no cross-fade of two bags, no frame with neither).
     const handShown = !!(view && view.bagWorld && Number.isFinite(view.bagWorld.x));
     const hd = view ? view.debris : null;
     const prevHandD = this._handDebris;
@@ -280,11 +257,11 @@ export class LeashVisual {
       }
     }
     if (handShown) {
-      // the neck faces the line: toward the tip once the line runs through it, else toward the anchor
+      // neck faces the line: toward the tip once the line runs through it, else the anchor
       const toward = view.tipEngaged && view.tipWorld ? _vT : (view.anchorWorld ? _vA : null);
       if (toward) _b.copy(toward).sub(_vB); else _b.set(0, 0, 1);
-      // tip-ball (owner 2026-10-25): a netted catch gets no ball while the leash is in flight (the sudden bubble), but once it
-      // sits on a tip (the hand-off view runs on a while after the latch) the ball fades in round it as on every tip catch
+      // A netted catch gets no ball in flight, but once it sits on a tip (the hand-off view runs on a while after
+      // the latch) the ball fades in round it as on every tip catch.
       let onTip = false;
       if (tc && typeof tc.debrisAt === 'function') for (let i = 0; i < 4 && !onTip; i++) onTip = tc.debrisAt(i) === hd;
       this._showBag(hand, _vB, _b, this._radiusM(hd), dt, true, onTip || !this._netted(hd));
@@ -295,13 +272,12 @@ export class LeashVisual {
     }
   }
 
-  /** net-bag: true when the catch wears its own net bag (no ball in flight on the leash). */
+  /** True when the catch wears its own net bag (no ball in flight on the leash). */
   _netted(d) {
     const nv = this.netVisual;
     return !!(nv && typeof nv.wearsNet === 'function' && d && nv.wearsNet(d));
   }
 
-  /** Drop a bag at once (its opacity went to the bag that takes over). */
   _hideNow(bag) {
     bag.alpha = 0;
     bag.sa = 0;
@@ -321,8 +297,8 @@ export class LeashVisual {
       const R = radiusM + BAG_MARGIN_M;
       bag.group.position.copy(pos).sub(this.root.position);          // root-relative
       bag.wire.scale.setScalar(R * M);
-      // the ball has its own fade: in when it is allowed (the same 0.5 s as the bag), gone at once when it is not (a netted
-      // catch in flight); a fade-out of the bag takes the ball down with it, never up
+      // The ball has its own fade: in when allowed (same 0.5 s), gone at once when not (a netted catch in flight);
+      // a fade-out of the bag takes the ball down with it, never up.
       bag.sa = wire ? Math.min(1, bag.sa + step) : 0;
       if (neck.lengthSq() > 1e-30) {
         neck.normalize();
@@ -337,8 +313,6 @@ export class LeashVisual {
     bag.wireMat.opacity = BAG_OPACITY * Math.min(bag.alpha, bag.sa);
     bag.group.visible = bag.alpha > 0;
   }
-
-  // ── the cone swivel ───────────────────────────────────────────────────────
 
   _updateCones(view, dt) {
     const groups = this.player && this.player._flowerGroups;

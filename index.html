@@ -3,6 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <!-- Content-Security-Policy (DECISIONS §47). Each inline script is allowed by its sha256: editing one changes its
+       hash (js/test/test-Csp.js recomputes them). style-src 'unsafe-inline' is needed: modules inject style elements and set
+       element.style. frame-ancestors cannot be set from a meta tag. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-Mne3CI18ZSns61UE2acmcxBJb8wPiixDKJMLGynStww=' 'sha256-bS6TH4AmylABQK59URpMch9A2kmGNAtRyxotYaO0B7s=' 'sha256-6RscYRhz9pESEQY5/W6zXwWqD6FxDl+tZihZI6Uld5g=' 'sha256-YBeyyDeXLSXFrzkvw5ic5y+edJHIQ6HKLG2ztio63oQ=' 'sha256-HtJC/y0hIPDeDWNACSHUGKYFOv6nV+ze4ifKGJgH3FY='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'none'">
   <!-- iPad port Phase 1 (Ipad.md §2.8): home-screen web-app shell. The WebClip /
        Add-to-Home-Screen container reads these to run fullscreen without
        browser chrome; viewport-fit=cover unlocks env(safe-area-inset-*). -->

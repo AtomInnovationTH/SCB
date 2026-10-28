@@ -700,11 +700,7 @@ export const Events = {
   /** News/bounty event triggered. Payload: { eventId, name, bounty, debris[] } */
   NEWS_EVENT_TRIGGERED:    'mission:newsEventTriggered',
 
-  // Arm hinge + dual-fire
-  /** Hinge brake engaged. Payload: { armIndex } */
-  ARM_HINGE_LOCKED:        'arm:hingeLocked',
-  /** Hinge brake released. Payload: { armIndex } */
-  ARM_HINGE_UNLOCKED:      'arm:hingeUnlocked',
+  // Dual-fire
   /** Daughter net-fire recoil kick (FEATURE_FLAGS.DAUGHTER_NET_RECOIL); visuals hook (counter-burn flash), emitted by
    *  ArmUnit.applyNetFireRecoil. Payload: { armIndex, armId, dv: {x,y,z} (m/s, world axes), dvMps, netClass } */
   ARM_RECOIL_KICK:         'arm:recoilKick',
@@ -717,16 +713,6 @@ export const Events = {
   OPENING_DANCE_HANDOVER:    'openingDance:handover',
   /** The dance's last beat is done; the dance owns nothing any more. Payload: {} */
   OPENING_DANCE_COMPLETE:    'openingDance:complete',
-
-  // CoM + plume interlock
-  /** CoM drift exceeds threshold. Payload: { offsetM, threshold, suggestedStowArm } */
-  COM_DRIFT_WARNING:         'com:driftWarning',
-  /** CoM drift returns below threshold. Payload: { offsetM } */
-  COM_DRIFT_CLEARED:         'com:driftCleared',
-  /** Thruster blocked by strut in plume cone. Payload: { thrusterId, conflictingArms, reason } */
-  THRUSTER_BLOCKED_PLUME:    'thruster:blockedPlume',
-  /** Thruster unblocked (strut moved out of cone). Payload: { thrusterId } */
-  THRUSTER_UNBLOCKED:        'thruster:unblocked',
 
   // Capture net
   /** Net projectile launched. Payload: { source:'mother'|'daughter', armIndex?, podIndex?, netClass, remaining } */

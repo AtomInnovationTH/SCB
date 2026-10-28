@@ -18,6 +18,8 @@
  * @module scene/sunStaging
  */
 
+import { clamp } from '../core/MathUtil.js';
+
 const TWO_PI = 2 * Math.PI;
 
 /** Target dot(sunDir, spawnDir): cos(60°), sun ≈30° above the local horizon (lit but angled, never flat noon light). */
@@ -61,7 +63,7 @@ export function stagedSunYaw(sunDir, spawnPos, targetDot = OPENING_SUN_TARGET_DO
   // Clamp covers both unreachable cases: needed > 1 → Δaz = 0 (highest reachable
   // sun); needed < −1 → Δaz = π (every yaw is above target, take the minimum).
   const needed = (targetDot - sy * py) / (hs * hp);
-  const dAz = Math.acos(Math.max(-1, Math.min(1, needed)));
+  const dAz = Math.acos(clamp(needed, -1, 1));
 
   const azSun = Math.atan2(sunDir.z, sunDir.x);
   const azSpawn = Math.atan2(spawnPos.z, spawnPos.x);

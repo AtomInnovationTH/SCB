@@ -1,8 +1,6 @@
 /**
- * CargoSystem — manages the player's cargo hold for salvaged materials.
- * Tracks metal inventory by type, total mass, market value, and
- * potential ΔV if used as propellant.
- * @module systems/CargoSystem
+ * @module systems/CargoSystem — the player's cargo hold for salvaged materials: metal inventory by type, total mass,
+ * market value, and potential ΔV if used as propellant.
  */
 
 import { Constants } from '../core/Constants.js';
@@ -18,7 +16,6 @@ export class CargoSystem {
   }
 
   _setupListeners() {
-    // Listen for salvage recovered events to auto-store metals
     eventBus.on(Events.CARGO_STORE, (data) => this.storeMetal(data));
   }
 
@@ -28,11 +25,10 @@ export class CargoSystem {
    * @returns {{ stored: boolean, overflow: number }}
    */
   storeMetal(data) {
-    // Guard: CARGO_STORE is also emitted as a capture *notification* (e.g.
-    // CaptureNet's { debrisId, mass, netCapture } payload), which is NOT a
-    // refined-metal entry. Only well-formed metal payloads (a string metalId +
-    // a finite positive massKg) are stored — otherwise a Map entry keyed
-    // `undefined` with NaN mass corrupts the manifest and crashes the shop.
+    // Guard: CARGO_STORE is also emitted as a capture *notification* (e.g. CaptureNet's { debrisId, mass,
+    // netCapture }), which is NOT a refined-metal entry. Only well-formed metal payloads (a string metalId + a finite
+    // positive massKg) are stored: otherwise a Map entry keyed `undefined` with NaN mass corrupts the manifest and
+    // crashes the shop.
     if (!data || typeof data.metalId !== 'string' || !data.metalId
         || !Number.isFinite(data.massKg) || data.massKg <= 0) {
       return { stored: false, overflow: 0 };
@@ -83,8 +79,8 @@ export class CargoSystem {
         sender: 'CARGO',
         text: `+${toStore.toFixed(1)}kg ${data.name}`,
         priority: 'info',
-        // comms-after-tutorial D3/D4: the per-metal weight line stays hidden. Its siblings above and in
-        // this file (hold full, no empty slot, overflow lost, bay expanded) share sender CARGO and stay shown.
+        // The per-metal weight line stays hidden. Its siblings above and in this file (hold full, no empty slot,
+        // overflow lost, bay expanded) share sender CARGO and stay shown.
         _quiet: true,
       });
     }
@@ -92,12 +88,7 @@ export class CargoSystem {
     return { stored: true, overflow };
   }
 
-  /**
-   * Remove metal from cargo (for selling or using as fuel).
-   * @param {string} metalId
-   * @param {number} massKg - amount to remove
-   * @returns {number} actual mass removed
-   */
+  /** Remove metal from cargo (for selling or using as fuel). `massKg` is the amount to remove; returns the mass actually removed. */
   removeMetal(metalId, massKg) {
     if (!this._cargo.has(metalId)) return 0;
     const entry = this._cargo.get(metalId);
@@ -116,10 +107,6 @@ export class CargoSystem {
     return removed;
   }
 
-  /**
-   * Get total market value of all cargo.
-   * @returns {number}
-   */
   getTotalValue() {
     let total = 0;
     for (const [, entry] of this._cargo) {
@@ -129,7 +116,7 @@ export class CargoSystem {
   }
 
   /**
-   * Get cargo manifest for UI display.
+   * Cargo manifest for UI display.
    * @returns {Array<{metalId: string, name: string, massKg: number, value: number, color: string, canBurnAsFuel: boolean, ispAsThrust: number}>}
    */
   getManifest() {
@@ -145,15 +132,10 @@ export class CargoSystem {
         ispAsThrust: entry.ispAsThrust,
       });
     }
-    // Sort by value descending
     items.sort((a, b) => b.value - a.value);
     return items;
   }
 
-  /**
-   * Get full cargo status summary.
-   * @returns {object}
-   */
   getStatus() {
     return {
       totalMassKg: Math.round(this._totalMassKg * 10) / 10,
@@ -165,10 +147,6 @@ export class CargoSystem {
     };
   }
 
-  /**
-   * Serialize cargo state for persistence.
-   * @returns {object}
-   */
   serialize() {
     const entries = [];
     for (const [metalId, entry] of this._cargo) {
@@ -177,10 +155,6 @@ export class CargoSystem {
     return { entries, totalMassKg: this._totalMassKg, capacityKg: this._capacityKg };
   }
 
-  /**
-   * Restore cargo state from persistence data.
-   * @param {object} data
-   */
   restore(data) {
     this._cargo.clear();
     this._totalMassKg = 0;
@@ -205,7 +179,6 @@ export class CargoSystem {
     if (data && data.capacityKg) this._capacityKg = data.capacityKg;
   }
 
-  /** Reset cargo to empty. */
   reset() {
     this._cargo.clear();
     this._totalMassKg = 0;
@@ -213,18 +186,15 @@ export class CargoSystem {
   }
 
   /**
-   * Apply a shop upgrade that affects cargo capacity (E2 Cargo Bay chain).
+   * Apply a shop upgrade that affects cargo capacity (Cargo Bay chain).
    *
-   * The `cargoCapacity` effect carries the ABSOLUTE target hold size in
-   * `data.value` (e.g. 1500, 3000), so the handler is a plain assignment and is
-   * therefore IDEMPOTENT — safe to re-run on the save-restore path (which routes
-   * through EFFECT_ROUTES → CARGO_SYSTEM just like purchase). We never shrink the
-   * hold below what a bigger tier already granted (upgrades don't stack down),
-   * and we never drop the hold below the current stored mass.
+   * The `cargoCapacity` effect carries the ABSOLUTE target hold size in `data.value` (e.g. 1500, 3000), so the handler
+   * is a plain assignment and is therefore IDEMPOTENT — safe to re-run on the save-restore path (which routes through
+   * EFFECT_ROUTES → CARGO_SYSTEM just like purchase). We never shrink the hold below what a bigger tier already
+   * granted (upgrades don't stack down), and we never drop the hold below the current stored mass.
    *
-   * WHY THIS EXISTS (E2): the elevator win needs cargo THROUGHPUT — before this,
-   * the hold was constant at CARGO_CAPACITY_KG (500) with no upgrade path, so
-   * 12 depots × 500 kg = 6,000 kg < the 10,000 kg contract. This is the reachability fix.
+   * Why: the elevator win needs cargo THROUGHPUT; with a constant 500 kg hold (CARGO_CAPACITY_KG), 12 depots × 500 kg
+   * = 6,000 kg < the 10,000 kg contract.
    *
    * @param {object} data - { effect: 'cargoCapacity', value: number (absolute kg) }
    */
@@ -245,7 +215,6 @@ export class CargoSystem {
     });
   }
 
-  /** Cleanup. */
   dispose() {
     // Could remove event listeners here if needed
   }

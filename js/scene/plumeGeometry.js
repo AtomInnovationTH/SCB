@@ -11,6 +11,7 @@
  */
 
 import * as THREE from 'three';
+import { clamp01 } from '../core/MathUtil.js';
 
 /**
  * @param {number} rNear  radius at the nozzle exit (scene units)
@@ -26,7 +27,7 @@ export function makePlumeFrustum(rNear, rFar, len, radial = 12, rings = 4) {
   const n = pos.count;
   const colors = new Float32Array(n * 4);
   for (let v = 0; v < n; v++) {
-    const normY = Math.min(1, Math.max(0, pos.getY(v) / len)); // 0 near → 1 far
+    const normY = clamp01(pos.getY(v) / len); // 0 near → 1 far
     const a = Math.pow(1 - normY, 1.3);                        // fade to 0 aft
     colors[v * 4] = 1; colors[v * 4 + 1] = 1; colors[v * 4 + 2] = 1; colors[v * 4 + 3] = a;
   }

@@ -14,6 +14,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { Constants } from '../core/Constants.js';
 import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlpha, skyBrightness, galacticBasis, mwCenterProfile, mwGreatRiftMask, mwDensity, raDecToUnit } from './starCatalog.js';
+import { DEG2RAD, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 /**
  * RA (hours, 0–24) and Dec (degrees) to cartesian on the star sphere.
@@ -22,7 +23,7 @@ import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlp
  */
 export function raDec2xyz(raHours, decDeg, radius) {
   const ra = raHours * (Math.PI / 12);   // hours → radians
-  const dec = decDeg * (Math.PI / 180);  // degrees → radians
+  const dec = decDeg * DEG2RAD;  // degrees → radians
   return new THREE.Vector3(
     radius * Math.cos(dec) * Math.cos(ra),
     radius * Math.sin(dec),
@@ -91,7 +92,7 @@ export const STAR_SIGMA_MATCH = 0.3;
 export const STEADY_GAIN_EXPOSURE = 1.05;
 
 /** The old sprite profile: smoothstep(1,0,r) squared (the hard core). */
-export function oldProfile(r) { const t = Math.min(1, Math.max(0, 1 - r)); const s = t * t * (3 - 2 * t); return s * s; }
+export function oldProfile(r) { const t = clamp01(1 - r); const s = smoothstep01(t); return s * s; }
 /** Total light of the old profile over the unit disc (midpoint rule). */
 export function oldProfileLight() { let a = 0; const n = 4000; for (let i = 0; i < n; i++) { const r = (i + 0.5) / n; a += oldProfile(r) * r; } return 2 * Math.PI * a / n; }
 /** Gaussian fraction-of-radius sigma for a sprite drawn `drawnPx` wide: >= sigmaPx canvas px, never narrower than the old-shape match. */
@@ -121,7 +122,7 @@ export function acesFilmic(x) {
   const v = x / 0.6;
   const a = v * (v + 0.0245786) - 0.000090537;
   const b = v * (0.983729 * v + 0.4329510) + 0.238081;
-  return Math.min(1, Math.max(0, a / b));
+  return clamp01(a / b);
 }
 const _srgbEnc = (l) => (l <= 0.0031308 ? l * 12.92 : 1.055 * Math.pow(l, 1 / 2.4) - 0.055);
 const _srgbDec = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
@@ -406,7 +407,7 @@ export class Starfield {
         positions[i * 3 + 1] = p.y;
         positions[i * 3 + 2] = p.z;
 
-        sizes[i] = Math.max(sizeMin, Math.min(sizeBase, sizeBase - sizeSlope * star.mag));
+        sizes[i] = clamp(sizeBase - sizeSlope * star.mag, sizeMin, sizeBase);
         // skyBrightness: the one curve shared with the planets (bodyCatalog); Rigel reads 2.019, bloom-safe.
         const brightness = skyBrightness(star.mag, brightMin, brightMax, brightSoft);
         const c = spectralColorFor(star.spec);
@@ -576,7 +577,7 @@ export class Starfield {
       t1.copy(Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0))
         .cross(dir).normalize();
       const t2 = new THREE.Vector3().crossVectors(dir, t1).normalize();
-      const D = Math.PI / 180;
+      const D = DEG2RAD;
       return { dir, t1, t2, a: Math.tan(cd.aDeg * D), b: Math.tan(cd.bDeg * D) };
     });
 
@@ -601,7 +602,7 @@ export class Starfield {
       // smudges off the band.
       const isHaze = placed < C.MW_HAZE_COUNT;
       const halo = !isHaze && Math.random() < C.MW_HALO_FRACTION;
-      const width = C.MW_BAND_WIDTH * (1 + (C.MW_BAND_WIDTH_CENTER - 1) * structure)
+      const width = C.MW_BAND_WIDTH * lerp(1, C.MW_BAND_WIDTH_CENTER, structure)
         * (halo ? C.MW_HALO_WIDTH_MULT : 1);
       // Three uniforms summed: a bell that reaches zero smoothly (two give a
       // hard stop, a visible band edge).
@@ -980,15 +981,15 @@ export class Starfield {
     const lp = toPoint.length();
     if (lp < 1e-6) return 1;
     const cos = toPoint.dot(toEarth) / (lp * camDist);
-    const theta = Math.acos(Math.max(-1, Math.min(1, cos)));
+    const theta = Math.acos(clamp(cos, -1, 1));
 
     const band = Math.min(
       Constants.CONSTELLATION_LIMB_FADE_MAX,
       Math.max(Constants.CONSTELLATION_LIMB_FADE_MIN,
         Constants.CONSTELLATION_LIMB_FADE_SCALE * thetaLimb)
     );
-    const t = Math.max(0, Math.min(1, (theta - thetaLimb) / band));
-    return t * t * (3 - 2 * t);
+    const t = clamp01((theta - thetaLimb) / band);
+    return smoothstep01(t);
   }
 
   /**

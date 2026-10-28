@@ -1,13 +1,11 @@
 /**
- * PowerDistribution.js — FS2-heritage Energy Transfer System (ETS)
- * Player distributes total ship power across 3 buses:
+ * PowerDistribution.js — FS2-heritage Energy Transfer System (ETS): ship power across 3 buses.
  *   THRUST  — Ion drive efficiency (Isp scaling)
  *   SENSORS — Detection range scaling
  *   ARMS    — Arm beacon power + recharge rate
- * 
- * Total always sums to 100%. Default: 40/30/30.
- * Keys: 1/2/3 select bus, [ decrease 10%, ] increase 10%.
- * 
+ *
+ * Total always sums to 100%. Default 40/30/30. Keys: 1/2/3 select bus, [ and ] step 10%.
+ *
  * @module systems/PowerDistribution
  */
 
@@ -26,40 +24,33 @@ const MIN_ALLOC = 0;  // Minimum per bus (can go to 0)
 
 class PowerDistribution {
   constructor() {
-    // Allocation percentages (always sum to 100)
+    // Allocation percentages (sum 100).
     this.thrust = 40;
     this.sensors = 30;
     this.arms = 30;
 
-    // Currently selected bus (for [ ] adjustment)
     this.selectedBus = PowerBuses.THRUST;
 
-    // Computed effective multipliers (0.0 - 1.0+)
-    // These are what other systems read
+    // Effective multipliers (0.0 - 1.0+); what other systems read.
     this.thrustMultiplier = 1.0;
     this.sensorMultiplier = 1.0;
     this.armMultiplier = 1.0;
 
-    // Total available power (watts) — set by ResourceSystem each frame
+    // Watts; set by ResourceSystem each frame.
     this.totalPower = 8000;
 
-    // Warning state
     this._lastArmWarning = 0;
 
-    // Sprint 3: Skill-based gate — suppress low-power alerts until power management discovered
+    // Low-power alerts stay suppressed until power management is discovered.
     this._powerMgmtDiscovered = false;
     eventBus.on(Events.SKILL_DISCOVERED, (d) => {
         if (d?.skillId === 'manage_power') this._powerMgmtDiscovered = true;
     });
 
-    // Initialize multipliers from default allocations
     this._updateMultipliers();
   }
 
-  /**
-   * Select a bus for [ ] adjustment
-   * @param {string} bus - PowerBuses.THRUST | SENSORS | ARMS
-   */
+  /** @param {string} bus - PowerBuses.THRUST | SENSORS | ARMS */
   selectBus(bus) {
     if (Object.values(PowerBuses).includes(bus)) {
       this.selectedBus = bus;
@@ -67,23 +58,15 @@ class PowerDistribution {
     }
   }
 
-  /**
-   * Increase selected bus by STEP%, decrease others proportionally
-   */
   increaseSelected() {
     this._adjustBus(this.selectedBus, STEP);
   }
 
-  /**
-   * Decrease selected bus by STEP%, increase others proportionally
-   */
   decreaseSelected() {
     this._adjustBus(this.selectedBus, -STEP);
   }
 
-  /**
-   * Adjust a bus by delta%, redistributing to/from others proportionally
-   */
+  /** Adjust a bus by delta%, redistributing to/from the others proportionally. */
   _adjustBus(bus, delta) {
     const current = this[bus];
     const newVal = clamp(current + delta, MIN_ALLOC, 100);
@@ -91,35 +74,32 @@ class PowerDistribution {
 
     if (actualDelta === 0) return;
 
-    // Get the other two buses
     const allBuses = [PowerBuses.THRUST, PowerBuses.SENSORS, PowerBuses.ARMS];
     const others = allBuses.filter(b => b !== bus);
 
-    // Distribute the inverse delta proportionally among the others
     const otherTotal = others.reduce((sum, b) => sum + this[b], 0);
 
     if (otherTotal === 0 && actualDelta > 0) {
-      // Can't increase if others are at 0 — would need to take from somewhere
+      // Others at 0: nothing to take from.
       return;
     }
 
     this[bus] = newVal;
 
     if (otherTotal > 0) {
-      // Distribute proportionally
       for (const other of others) {
         const proportion = this[other] / otherTotal;
         this[other] = Math.max(MIN_ALLOC, Math.round(this[other] - actualDelta * proportion));
       }
     } else {
-      // Others are 0, split delta equally
+      // Others are 0: split equally.
       const split = Math.round(-actualDelta / others.length);
       for (const other of others) {
         this[other] = Math.max(MIN_ALLOC, split);
       }
     }
 
-    // Fix rounding — ensure sum is exactly 100
+    // Rounding fix: sum must be exactly 100.
     const sum = this.thrust + this.sensors + this.arms;
     if (sum !== 100) {
       const diff = 100 - sum;
@@ -131,10 +111,7 @@ class PowerDistribution {
     eventBus.emit(Events.POWER_CHANGED, this.getState());
   }
 
-  /**
-   * Update effective multipliers from allocations.
-   * Multiplier curve: below 30% → steep dropoff. Above 50% → diminishing returns.
-   */
+
   _updateMultipliers() {
     this.thrustMultiplier = this._allocationToMultiplier(this.thrust);
     this.sensorMultiplier = this._allocationToMultiplier(this.sensors);
@@ -142,7 +119,7 @@ class PowerDistribution {
   }
 
   /**
-   * Convert allocation % to effective multiplier.
+   * Allocation % to effective multiplier: steep dropoff below 30%, diminishing returns above 50%.
    * 0% → 0.0 (disabled)
    * 10% → 0.3
    * 30% → 0.7 (minimum useful)
@@ -159,13 +136,12 @@ class PowerDistribution {
   }
 
   /**
-   * Called each frame to check for dangerous configurations
-   * @param {number} dt - Delta time
+   * Per frame: warn on dangerous configurations.
+   * @param {number} dt
    * @param {object} context - { armsDeployed: number }
    */
   update(dt, context) {
-    // Warn if arms are deployed but ARMS bus is at 0
-    // Phase 8: Suppress low-power alerts during early tutorial (§6)
+    // Warn if arms are deployed but the ARMS bus is at 0; suppressed during the early tutorial.
     if (!this._powerMgmtDiscovered) return;
     if (context && context.armsDeployed > 0 && this.arms === 0) {
       const now = performance.now();
@@ -179,9 +155,7 @@ class PowerDistribution {
     }
   }
 
-  /**
-   * Get current state for HUD display
-   */
+  /** For HUD display. */
   getState() {
     return {
       thrust: this.thrust,
@@ -194,16 +168,10 @@ class PowerDistribution {
     };
   }
 
-  /**
-   * Serialize for persistence
-   */
   serialize() {
     return { thrust: this.thrust, sensors: this.sensors, arms: this.arms };
   }
 
-  /**
-   * Reset to defaults (new game / retry)
-   */
   reset() {
     this.thrust = 40;
     this.sensors = 30;
@@ -213,9 +181,6 @@ class PowerDistribution {
     this._updateMultipliers();
   }
 
-  /**
-   * Restore from save
-   */
   restore(data) {
     if (data) {
       this.thrust = data.thrust ?? 40;

@@ -1,42 +1,26 @@
 /**
- * WorkbenchPane.js — Session U: the ONE workbench drawer — SPECS + the F1
- * REFIT block in one side-anchored pane (LEFT on every floor, §13 r5; plan
- * .kilo/plans/1788954873769-one-workbench-pane.md, owner 2026-09-09; docs/
- * ladder/08-workbench.md §2 "Session U — ONE workbench pane (layout)";
- * 01-numbers.md "Workbench panes").
+ * The ONE workbench drawer (owner 2026-09-09): SPECS + the F1 REFIT block in one side-anchored pane (LEFT on every
+ * floor, DECISIONS §13 r5; docs/ladder/08-workbench.md §2; docs/ladder/01-numbers.md "Workbench panes").
  *
- * LINEAGE. Every line of chrome here is lifted verbatim-with-rename from the
- * two drawers it replaces, so the numbers and the laws are the shipped ones:
- *   - Wave 5 Session B (LibraryPane): the self-contained lazily-built pane,
- *     the slide (PANE_SLIDE_MS), the idle fade to 70 % (IDLE_FADE_*), the tab
- *     count + the ONCE-per-rise pulse (TAB_PULSE_MS), the reduced-motion
- *     probe (the FloorMask.js house matchMedia shape);
- *   - Session C / Session D (owner decision 3): the root is the positioning +
- *     TRANSFORM shell (width, z, the slide; paints nothing, takes no pointer
- *     events); the BODY inside it carries border / background / padding / the
- *     scroll; the TAB is a child of the root at the pane's INNER edge and
- *     rides the slide (closed = the screen edge, open = the inner edge, never
- *     over the content). `openEntry(id, { via, anchor })` keeps the click
- *     anchor — the shell never turns a deep link into an entry-less open;
- *   - Session P (plan D2/D6/D7): the FOOTER TAB — a horizontal plate in the
- *     footer band's LEFT slot (`bottom` = footerBottomPx − the root bottom in
- *     force, height RAIL_GEOMETRY.FOOTER_BAND_PX), and the edge-chrome truth
- *     table (pinned OR open → awake, else the hub's per-frame `setTabPhase`);
- *   - Session T: the framed part portrait rides the same openEntry anchor
- *     (`partId` with or without a screen point — `showPart` builds it);
- *   - RefitPane Session H (plan D-H): the depot INVITATION on the tab edge
- *     (`setInvitation` / `isInvited`, VALUE gold + the steady INVITE_HALO —
- *     imported from RailIndicator, the ONE definition; Session L review).
+ * Chrome lineage (the numbers and laws are the shipped ones from the two drawers it replaces):
+ *   - LibraryPane: the lazily-built pane, the slide (PANE_SLIDE_MS), the idle fade to 70 % (IDLE_FADE_*), the tab
+ *     count + the ONCE-per-rise pulse (TAB_PULSE_MS), the reduced-motion probe (FloorMask.js house matchMedia shape);
+ *   - the root is the positioning + TRANSFORM shell (width, z, the slide; paints nothing, takes no pointer events);
+ *     the BODY carries border / background / padding / the scroll; the TAB is a child of the root at the pane's INNER
+ *     edge (owner decision) and rides the slide (closed = the screen edge, open = the inner edge, never over the content).
+ *     `openEntry(id, { via, anchor })` keeps the click anchor — the shell never turns a deep link into an entry-less open;
+ *   - the FOOTER TAB: a horizontal plate in the footer band's LEFT slot (`bottom` = footerBottomPx − the root bottom
+ *     in force, height RAIL_GEOMETRY.FOOTER_BAND_PX) and the edge-chrome truth table (pinned OR open → awake, else
+ *     the hub's per-frame `setTabPhase`);
+ *   - the framed part portrait rides the same openEntry anchor (`partId` with or without a screen point; `showPart`);
+ *   - the depot INVITATION on the tab edge (`setInvitation` / `isInvited`, VALUE gold + the steady INVITE_HALO from
+ *     RailIndicator, the ONE definition).
  *
- * ARCHITECTURE (plan D5): ONE shell, TWO hosted section engines. This module
- * owns the root `#ladder-workbench`, the tab `#ladder-workbench-tab`, the
- * slide, the idle fade, the edge-chrome tab phase, reduced motion, the RTL
- * variable (`--workbench-dir`), the anchor SIDE (§13 r5, 2026-09-24: LEFT on
- * EVERY floor — the C3 floor-keyed side and its open-edge re-fire are
- * retired), the invitation glow, ONE open state and ONE `onOpenChange` edge.
- * `LibraryPane` (the SPECS dossier: HEAD +
- * TAIL) and `RefitPane` (the REFIT block, F1 only) are hosted section
- * engines: they render into the three slots the shell mounts them in —
+ * ARCHITECTURE: ONE shell, TWO hosted section engines. This module owns the root `#ladder-workbench`, the tab
+ * `#ladder-workbench-tab`, the slide, the idle fade, the edge-chrome tab phase, reduced motion, the variable
+ * (`--workbench-dir`), the anchor SIDE (LEFT on EVERY floor), the invitation glow, ONE open state and ONE
+ * `onOpenChange` edge. `LibraryPane` (the SPECS dossier: HEAD + TAIL) and `RefitPane` (the REFIT block, F1 only) are
+ * hosted engines that render into the three slots the shell mounts them in:
  *
  *   #ladder-workbench                    the transform shell (left-anchored on every
  *    └ .workbench-body                   floor; top 56, bottom 96 on F2–F5 / 16 on F1
@@ -47,76 +31,46 @@
  *       └ .workbench-tail   ← (the library's second container)           … Learn
  *    └ #ladder-workbench-tab             'SPECS ' + <span.workbench-tab-count>
  *
- * The BODY shrink-wraps its content (`height:auto; max-height:100%`, plan D4 /
- * Q3) so no drawer ever shows an empty bottom half; it scrolls when the
- * dossier + the REFIT block outgrow the column. **F1 exception (§13 r1,
- * 2026-09-24): the drawer uses the height** — there the body FILLS the root
- * (`height:100%`, still `overflow-y:auto`) and the root's bottom drops to
- * `ROOT_BOTTOM_PX_F1` (16 px), so the whole column is drawer. Every engine
- * call is duck-typed and no-op-safe (`_call`): a missing method is a no-op
- * and a throwing engine never breaks the shell's own edge — the shell's state
- * machine (open bit, slide, tab, the onOpenChange edge) always completes.
+ * The BODY shrink-wraps its content (`height:auto; max-height:100%`) so no drawer ever shows an empty bottom half;
+ * it scrolls when the dossier + the REFIT block outgrow the column. **F1 exception (§13 r1): the drawer uses the
+ * height** — the body FILLS the root (`height:100%`, still `overflow-y:auto`) and the root's bottom drops to
+ * `ROOT_BOTTOM_PX_F1` (16 px). Every engine call is duck-typed and no-op-safe (`_call`): a missing method is a no-op
+ * and a throwing engine never breaks the shell's own edge (open bit, slide, tab, onOpenChange always complete).
  *
- * THE TAB (plan D3, owner: "SPECS on every floor"). The word is `SPECS`
- * everywhere; the count is ONE number at a time: on F1 the GOLD affordable-
- * refit count when > 0 (`refit.affordableCount()`), else the unread count
- * (`library.unreadCount()`); off F1 the unread count. VALUE gold, `''` at 0.
- * It pulses ONCE when the displayed number RISES from a non-null baseline
- * (the boot paint never pulses; reduced motion never pulses — the count change
- * is the whole signal). The engines' `onRefresh` hook repaints it on the same
- * edge a BUY / chip tap / related click repaints the engine (plan §7: without
- * it a BUY would leave a stale gold count until the next shell edge).
- * `setFloor(floor)` pins the tab awake on F1 (the workbench affordance never
- * sleeps there), hands it to the edge-chrome phase elsewhere, and applies the
- * FLOOR LAYOUT write-on-change (§13 r1: on F1 the root's bottom drops to
- * ROOT_BOTTOM_PX_F1 and the body fills it; F2–F5 keep the shrink-wrap). The
- * anchor side is LEFT on EVERY floor (§13 r5, 2026-09-24) — the C3
- * floor-keyed side and its open-edge re-fire are retired.
- * An OPEN pane's tab is its handle and is awake on any floor. `display:block`
- * while enabled on every floor; `body[data-pure-scenery]` (index.html) hides
- * it under level 0.
+ * THE TAB (owner: "SPECS on every floor"). The word is `SPECS` everywhere; the count is ONE number at a time: on F1
+ * the GOLD affordable-refit count when > 0 (`refit.affordableCount()`), else the unread count
+ * (`library.unreadCount()`); off F1 the unread count. VALUE gold, `''` at 0. It pulses ONCE when the displayed number
+ * RISES from a non-null baseline (the boot paint never pulses; reduced motion never pulses). The engines'
+ * `onRefresh` hook repaints it on the same edge a BUY / chip tap / related click repaints the engine (else a BUY
+ * leaves a stale gold count). `setFloor(floor)` pins the tab awake on F1, hands it to the edge-chrome phase
+ * elsewhere, and applies the FLOOR LAYOUT write-on-change. An OPEN pane's tab is its handle and is awake on any
+ * floor. `display:block` while enabled on every floor; `body[data-pure-scenery]` (index.html) hides it under level 0.
  *
- * ORDERS THAT MATTER (plan §3 / §7):
- *   open(opts)        refit.open(opts) when the REFIT section is enabled (F1) →
- *                     library.open() → _settle(). First-visit: `{ firstVisit:
- *                     true }` focuses the RECOMMENDED card BEFORE the library
- *                     adopts its subject (the hub's `_specsSubject` reads
- *                     `refit.focusedCodexId()`), or the subject resolves to
- *                     the pre-focus card.
- *   openEntry(id, o)  library.openEntry(id, o) — NEVER library.open() (that
- *                     drops the click anchor) → refit.open() if enabled and the
- *                     shell is closed → _settle() if closed.
- *   showPart(part)    the F1 click verb (D6): refit.focusPart(part) → the
- *                     dossier on part.codexId with { via: part.name, anchor }
- *                     (else library.open()) → the shell opens if closed →
- *                     library.scanPart(part) (the unlock request, as today).
- *   close()           `_open = false` FIRST (the Session I re-entrancy law: the
- *                     hub re-reads isOpen() inside the edge) → library.close()
- *                     → refit.close() → slide out → tab → onOpenChange(false).
- *   dispose()         timers, DOM; onOpenChange(false) only if it was open,
- *                     after `_open = false`. The engines are the hub's: the
- *                     shell closes them and drops their containers, it does
- *                     not dispose them.
+ * ORDERS THAT MATTER:
+ *   open(opts)        refit.open(opts) when the REFIT section is enabled (F1) → library.open() → _settle().
+ *                     `{ firstVisit: true }` focuses the RECOMMENDED card BEFORE the library adopts its subject (the
+ *                     hub's `_specsSubject` reads `refit.focusedCodexId()`), or the subject resolves to the
+ *                     pre-focus card.
+ *   openEntry(id, o)  library.openEntry(id, o) — NEVER library.open() (that drops the click anchor) → refit.open()
+ *                     if enabled and the shell is closed → _settle() if closed.
+ *   showPart(part)    the F1 click verb: refit.focusPart(part) → the dossier on part.codexId with { via: part.name,
+ *                     anchor } (else library.open()) → the shell opens if closed → library.scanPart(part).
+ *   close()           `_open = false` FIRST (re-entrancy law: the hub re-reads isOpen() inside the edge) →
+ *                     library.close() → refit.close() → slide out → tab → onOpenChange(false).
+ *   dispose()         timers, DOM; onOpenChange(false) only if it was open, after `_open = false`. The engines are
+ *                     the hub's: the shell closes them and drops their containers, it does not dispose them.
  *
- * TIMINGS (module constants — VisualLaw has no pane-timing entry yet; the
- * 01-numbers "Workbench panes" table is the canonical source until the
- * VisualLaw entries land with a later consumer per 08-workbench §9; do NOT add
- * one here): PANE_SLIDE_MS = 270 (inside the 240–300 ms law, equal to
- * CameraSystem.LADDER_PANE_REFRAME_MS by design — the subject and the pane
- * arrive together), IDLE_FADE_OPACITY = 0.7 / IDLE_FADE_MS = 6000 ("idle panes
- * fade to 70 %, never vanish" — pointer wakes it), TAB_PULSE_MS = 900.
- * Reduced motion: the root never moves; the BODY fades in place; the tab flips
- * between the screen edge (closed) and the inner edge (open) through
- * `--workbench-open` and stays visible + clickable while the pane is closed.
- * ONE CSS variable (`--workbench-dir`, -1 left-anchored) carries the slide
- * direction and the tab's side: the drawer is LEFT-only (§13 r5 — no RTL
- * mirror is implemented), so -1 is baked at build and every transform and
- * the tab follow it.
+ * TIMINGS (module constants; the 01-numbers "Workbench panes" table is canonical; do NOT add VisualLaw entries
+ * here): PANE_SLIDE_MS = 270 (inside the 240–300 ms law, equal to CameraSystem.LADDER_PANE_REFRAME_MS by design: the
+ * subject and the pane arrive together), IDLE_FADE_OPACITY = 0.7 / IDLE_FADE_MS = 6000 (pointer wakes it),
+ * TAB_PULSE_MS = 900. Reduced motion: the root never moves; the BODY fades in place; the tab flips between the
+ * screen edge (closed) and the inner edge (open) through `--workbench-open` and stays visible + clickable while
+ * closed. ONE CSS variable (`--workbench-dir`, -1 left-anchored) carries the slide direction and the tab's side: the
+ * drawer is LEFT-only (no RTL mirror is implemented), so -1 is baked at build.
  *
- * NO eventBus/Events import and NO live singletons — the shell touches the
- * world through the two engines and the injected `onOpenChange` only, so the
- * module is headless-safe (no DOM at import, inert without a usable `doc`) and
- * the `?ladder=0` boot never constructs it.
+ * NO eventBus/Events import and NO live singletons: the shell touches the world through the two engines and the
+ * injected `onOpenChange` only, so it is headless-safe (no DOM at import, inert without a usable `doc`) and the
+ * `?ladder=0` boot never constructs it.
  *
  * @module ui/WorkbenchPane
  */
@@ -126,55 +80,43 @@ import { RAIL_GEOMETRY } from './RailGeometry.js';
 import { GestureHints } from './hud/GestureHints.js';
 import { INVITE_HALO } from './RailIndicator.js';
 
-/** Pane slide duration (ms) — inside the 240–300 ms house window
- *  (01-numbers "Workbench panes"; equals CameraSystem.LADDER_PANE_REFRAME_MS). */
+/** Pane slide duration (ms): inside the 240–300 ms house window; equals CameraSystem.LADDER_PANE_REFRAME_MS. */
 export const PANE_SLIDE_MS = 270;
-/** Idle panes fade to 70 %, never vanish (08-workbench §2 Motion). */
+/** Idle panes fade to 70 %, never vanish. */
 export const IDLE_FADE_OPACITY = 0.7;
-/** Idle threshold before the fade applies (ms). */
 export const IDLE_FADE_MS = 6000;
-/** Pane root stacking (the shipped workbench-pane layer). The edge tab is a
- *  CHILD of the root at the pane's inner edge (Session D, owner decision 3) —
- *  it rides the pane's transform and needs no z step of its own. */
+/** Pane root stacking. The edge tab is a CHILD of the root, rides its transform and needs no z step of its own. */
 export const PANE_Z_INDEX = 35;
-/** The pane root's CSS `bottom` (px) — the footer tab's `bottom` is the band's
- *  bottom minus this (Session P, plan D7). */
+/** The pane root's CSS `bottom` (px); the footer tab's `bottom` is the band's bottom minus this. */
 export const ROOT_BOTTOM_PX = 96;
-/** The F1 exception (§13 r1, 2026-09-24): on the workbench floor the drawer
- *  USES the height — the root's bottom drops to 16 px and the body fills it
- *  (F2–F5 keep ROOT_BOTTOM_PX + the shrink-wrap). */
+/** The F1 exception (§13 r1): the drawer USES the height; the body fills the root (F2–F5 keep ROOT_BOTTOM_PX + shrink-wrap). */
 export const ROOT_BOTTOM_PX_F1 = 16;
-/** Tab pulse length (ms) — the ONE pulse a rising count earns (§2 Grammar). */
+/** Tab pulse length (ms): the ONE pulse a rising count earns. */
 export const TAB_PULSE_MS = 900;
-/** range-map D8 (owner 2026-10-25): the floor-1 drawer's MAIN MENU button — the first tap arms it for this long,
- *  a second tap inside the window leaves; later it disarms (no accidental exit on touch, no save added). */
+/** DECISIONS §42: the floor-1 drawer's MAIN MENU button: the first tap arms it for this long, a second tap inside
+ *  the window leaves; later it disarms (no accidental exit on touch, no save added). */
 export const MAIN_MENU_ARM_MS = 3000;
 export const MAIN_MENU_LABEL = 'MAIN MENU';
 export const MAIN_MENU_ARMED_LABEL = 'TAP AGAIN TO LEAVE';
-/** F1.6: the second tap while the game cannot go to the menu (a catch in progress): no leave, this label for this long. */
+/** The second tap while the game cannot go to the menu (a catch in progress): no leave, this label for this long. */
 export const MAIN_MENU_REFUSED_LABEL = 'Finish the catch first';
 export const MAIN_MENU_REFUSED_MS = 2000;
 
 /**
- * u6 D9 (2026-10-19): should the SPECS tab step aside? On a short (phone) screen an OPEN
- * DAUGHTERS pane covers the whole tab (measured: 2,359 px² plate / 3,243 px² hit area on both
- * phones) and there is no room under it, so while the drawer is closed and DAUGHTERS is open and
- * shown the tab takes no box and no taps. Taller screens never yield. Pure.
+ * Should the SPECS tab step aside? On a short (phone) screen an OPEN DAUGHTERS pane covers the whole tab (measured:
+ * 2,359 px² plate / 3,243 px² hit area) with no room under it, so while the drawer is closed and DAUGHTERS is open
+ * and shown the tab takes no box and no taps. Taller screens never yield. Pure.
  * @param {{drawerOpen?:boolean, short?:boolean, armsShown?:boolean, armsFolded?:boolean}} s
- * @returns {boolean}
  */
 export function shouldYieldSpecsTab(s = {}) {
   return !s.drawerOpen && !!s.short && !!s.armsShown && !s.armsFolded;
 }
-/** The drawer chrome's edge border (body + tab); the left anchor's dead
- *  border side and corner rounding are baked in `_build` (§13 r5). */
+/** The drawer chrome's edge border (body + tab); the left anchor's dead side and corner rounding are baked in `_build`. */
 const EDGE_BORDER = '1px solid rgba(0,204,255,0.4)';
 
-/** Monotonic ms clock (DOM-guarded module — Date.now fallback headless). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
-/** Write a CSS custom property (the real DOM needs setProperty; a fake-DOM
- *  style object takes the key directly — tests read it back). */
+/** Write a CSS custom property (the real DOM needs setProperty; a fake-DOM style object takes the key directly). */
 function _setVar(el, name, value) {
   const st = el && el.style;
   if (!st) return;
@@ -182,7 +124,7 @@ function _setVar(el, name, value) {
   else st[name] = value;
 }
 
-/** House reduced-motion probe (the FloorMask.js:188-196 shape). */
+/** House reduced-motion probe (the `FloorMask.js` `_prefersReducedMotion` shape). */
 function _prefersReducedMotion() {
   try {
     return !!(typeof window !== 'undefined' &&
@@ -195,41 +137,31 @@ function _prefersReducedMotion() {
 
 export class WorkbenchPane {
   /**
-   * Every dep optional; the shell is inert headless (no DOM at import, no DOM
-   * without a usable doc) and never throws on a missing dep or engine method.
+   * Every dep optional; the shell is inert headless and never throws on a missing dep or engine method.
    * @param {object} [deps]
    * @param {Document} [deps.doc] - document to build into (default: global)
    * @param {function} [deps.now] - monotonic ms clock (tests)
    * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
-   * @param {boolean} [deps.glass] - the boot's glass answer (the house idiom;
-   *   main.js passes `_glassBoot`). Recorded on the shell for parity with the
-   *   hub's construction line. The D10 44-pt targets are the engines' (each
-   *   takes its own `glass` dep); the shell's one glass law (u4-phone-fold D6)
-   *   is the SPECS tab's HIT AREA: a transparent child 44 (TOUCH_PITCH_PX) tall
-   *   on glass, 32 (FOOTER_BAND_PX) otherwise, centred on the plate. The visible
-   *   plate (border, background) stays FOOTER_BAND_PX tall at the same place
-   *   (review fix 2: the owner's D6 - the tab looks the same).
-   * @param {number} [deps.footerBottomPx] - the FOOTER BAND's bottom offset
-   *   from the viewport bottom (the hub passes RailGeometry.footerBand().bottom
-   *   = 132); the tab's own `bottom` is that minus the root's 96. Default: the
+   * @param {boolean} [deps.glass] - the boot's glass answer (main.js `_glassBoot`). The 44-pt targets are the
+   *   engines' (each takes its own `glass` dep); the shell's one glass law is the SPECS tab's HIT AREA: a transparent
+   *   child 44 (TOUCH_PITCH_PX) tall on glass, 32 (FOOTER_BAND_PX) otherwise, centred on the plate. The visible plate
+   *   stays FOOTER_BAND_PX tall at the same place (the tab looks the same).
+   * @param {number} [deps.footerBottomPx] - the FOOTER BAND's bottom offset from the viewport bottom (the hub passes
+   *   RailGeometry.footerBand().bottom = 132); the tab's own `bottom` is that minus the root's 96. Default: the
    *   thumb rest + gap.
-   * @param {object} [deps.library] - the hosted SPECS section engine
-   *   (LibraryPane): mount({ head, tail, onRefresh }), setEnabled, open,
-   *   openEntry, close, forgetEntry, scanPart, refresh, unreadCount
-   * @param {object} [deps.refit] - the hosted REFIT section engine (RefitPane):
-   *   mount(el, { onRefresh }), setEnabled, open({ firstVisit }), close,
-   *   focusPart, refresh, affordableCount
-   * @param {function} [deps.onMainMenu] - () => void: the drawer's MAIN MENU button, on its SECOND tap within
-   *   MAIN_MENU_ARM_MS (range-map D8). main.js wires it to the PAUSE_MENU event; the shell keeps no
-   *   bus import.
+   * @param {object} [deps.library] - the hosted SPECS engine (LibraryPane): mount({ head, tail, onRefresh }),
+   *   setEnabled, open, openEntry, close, forgetEntry, scanPart, refresh, unreadCount
+   * @param {object} [deps.refit] - the hosted REFIT engine (RefitPane): mount(el, { onRefresh }), setEnabled,
+   *   open({ firstVisit }), close, focusPart, refresh, affordableCount
+   * @param {function} [deps.onMainMenu] - () => void: the MAIN MENU button, on its SECOND tap within MAIN_MENU_ARM_MS
+   *   (main.js wires it to the PAUSE_MENU event; the shell keeps no bus import).
    * @param {function} [deps.canLeave] - () => boolean: the game can go to the menu now (main.js reads the GameState
    *   transition table). Asked on the SECOND tap; false = no `onMainMenu`, the button says MAIN_MENU_REFUSED_LABEL for
-   *   MAIN_MENU_REFUSED_MS (F1.6: the flow manager aborts the trip and the berth before it finds the move refused). Absent = allowed.
-   * @param {function} [deps.onOpenChange] - (isOpen) => void: the ONE open edge
-   *   (main.js fans it into _syncWorkbenchPanes — the camera inset, the callout
-   *   insets, the calm cap, WORKBENCH_RESUME on close). Fires on open and on
-   *   close only (§13 r5 retired the C3 side-change re-fire: the anchor is
-   *   LEFT on every floor, so a floor ride never moves it).
+   *   MAIN_MENU_REFUSED_MS (else the flow manager aborts the trip and the berth before it finds the move refused).
+   *   Absent = allowed.
+   * @param {function} [deps.onOpenChange] - (isOpen) => void: the ONE open edge (main.js fans it into
+   *   _syncWorkbenchPanes: the camera inset, the callout insets, the calm cap, WORKBENCH_RESUME on close). Fires on
+   *   open and on close only; the anchor is LEFT on every floor, so a floor ride never moves it.
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -243,24 +175,18 @@ export class WorkbenchPane {
     this._onMainMenu = deps.onMainMenu || null;
     this._canLeave = typeof deps.canLeave === 'function' ? deps.canLeave : null;
     this._menuRefusedTimer = null;
-    this._menuBtn = null;         // the MAIN MENU button, the last child of the body (floor 1 only)
+    this._menuBtn = null;         // the MAIN MENU button, last child of the body (floor 1 only)
     this._menuArmedAt = null;     // the clock reading of the first tap while armed, else null
     this._menuTimer = null;
-    // Session P (plan D7): the FOOTER BAND's bottom offset from the viewport
-    // bottom (the hub passes RailGeometry.footerBand().bottom = 132); the tab's
-    // own `bottom` is that minus the root's 96. Default: the thumb rest + gap.
     const fb = Number(deps.footerBottomPx);
     this._footerBottomPx = Number.isFinite(fb) ? fb : (RAIL_GEOMETRY.THUMB_REST_PX + RAIL_GEOMETRY.FOOTER_GAP_PX);
 
     this._enabled = false;
-    /** @private the floor the controller last applied (null until told); the REFIT section is enabled iff 1 */
+    /** the floor the controller last applied (null until told); the REFIT section is enabled iff 1 */
     this._floor = null;
-    /** @private the F1 layout last WRITTEN to the DOM (§13 r1; write-on-change
-     * like the tab phase — the build bakes the initial values). */
+    /** the F1 layout last WRITTEN to the DOM (write-on-change; the build bakes the initial values) */
     this._floorLayoutWritten = null;
-    /** @private the anchor side (§13 r5, 2026-09-24): true = LEFT — on EVERY
-     * floor (the C3 floor-keyed side is retired). The drawer is left-only
-     * (no RTL mirror is implemented); `isLeft()` reads it (main.js). */
+    /** the anchor side: true = LEFT on EVERY floor (the drawer is left-only); `isLeft()` reads it (main.js) */
     this._left = true;
     this._open = false;
     this._built = false;
@@ -271,90 +197,65 @@ export class WorkbenchPane {
     this._refitSlot = null;       // .workbench-refit (RefitPane section)
     this._tail = null;            // .workbench-tail  (LibraryPane TAIL)
     this._tab = null;             // the edge tab, a child of the root at its inner edge
-    this._tabHit = null;          // its transparent hit layer (44 px on glass; u4 review fix 2)
+    this._tabHit = null;          // its transparent hit layer (44 px on glass)
     this._tabCount = null;
-    this._closeBtn = null;        // the ESC × button, a child of the root at its top-right (§13 r5 — the body scrolls, the X must not)
-    // Session P (plan D2/D6): whether the tab is PINNED awake on THIS floor
-    // (F1 — the workbench affordance; setFloor writes it at every floor apply).
-    // Off the workbench the tab is EDGE CHROME: it follows the hub's
-    // setTabPhase while closed, and an open pane is always awake (its handle).
-    // Default true so every behaviour outside the controller (tests, an
-    // unwired boot) holds — the LibraryPane default.
+    this._closeBtn = null;        // the ESC × button, a child of the root at its top-right (the body scrolls, the X must not)
+    // Whether the tab is PINNED awake on THIS floor (F1; setFloor writes it at every floor apply). Off F1 the tab is
+    // EDGE CHROME: it follows the hub's setTabPhase while closed, and an open pane is always awake. Default true so
+    // behaviour outside the controller (tests, an unwired boot) holds.
     this._tabPinned = true;
-    /** @private the last EdgeChrome phase the hub wrote ('awake'|'fading'|'hidden'); hidden until told */
+    /** the last EdgeChrome phase the hub wrote ('awake'|'fading'|'hidden'); hidden until told */
     this._chromePhase = 'hidden';
-    /** @private the effective phase last WRITTEN to the tab (write-on-change) */
+    /** the effective phase last WRITTEN to the tab (write-on-change) */
     this._tabPhaseWritten = null;
-    /** @private u6 D9: the tab steps aside (display:none: no box, no taps, no edge wake) */
+    /** the tab steps aside (display:none: no box, no taps, no edge wake) */
     this._tabYield = false;
     this._lastTabText = null;
-    // Count/pulse state: baseline null so the FIRST paint (boot state) never
-    // pulses; only a RISE afterwards (a new unlock, a newly affordable fit) does.
+    // Baseline null so the FIRST paint never pulses; only a later RISE does.
     this._lastCount = null;
     this._pulseTimer = null;
     this._pulseCount = 0;         // total pulses fired (tests/witness probe)
-    // Idle fade state (open panes fade to 70 % after IDLE_FADE_MS, pointer wakes).
     this._lastActivityMs = this._now();
     this._idle = false;
     this._idleTimer = null;
-    // The depot invitation (RefitPane Session H): a pure flag until the tab exists.
+    // The depot invitation: a pure flag until the tab exists.
     this._invited = false;
   }
 
-  // ── Engine plumbing (duck-typed, no-op-safe) ───────────────────────────────
-
-  /**
-   * @private Call one engine method when it exists; a missing engine / method
-   * is a no-op (undefined), a throwing engine is swallowed like every other
-   * injected dep (the shell's own edge must always complete).
-   */
+  /** Call one engine method when it exists; a missing engine / method is a no-op, a throwing engine is swallowed. */
   _call(engine, method, ...args) {
     if (!engine || typeof engine[method] !== 'function') return undefined;
     try { return engine[method](...args); } catch (_e) { return undefined; }
   }
 
-  /** @private A guarded numeric read (a count): finite and > 0, else 0. */
+  /** A guarded count read: finite and > 0, else 0. */
   _count(engine, method) {
     const v = this._call(engine, method);
     return (Number.isFinite(v) && v > 0) ? v : 0;
   }
 
-  /** @private The REFIT section is live only while the shell is enabled on F1 (D7). */
+  /** The REFIT section is live only while the shell is enabled on F1. */
   _refitOn() {
     return this._enabled && this._floor === 1;
   }
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
-
-  /** @returns {boolean} */
   isOpen() { return this._open; }
 
-  /**
-   * The pane's anchor side (§13 r5, 2026-09-24): true = LEFT — on EVERY floor
-   * (the C3 floor-keyed side is retired; the drawer never moves). The hub's
-   * `_syncWorkbenchPanes` reads it on the open edge to sign the camera bias
-   * and place the callout insets.
-   * @returns {boolean}
-   */
+  /** True = LEFT, on EVERY floor (the drawer never moves). The hub's `_syncWorkbenchPanes` signs the camera bias and callout insets from it. */
   isLeft() { return this._left; }
 
   /**
-   * The pane's laid-out width in CSS px (its box, border-box: the
-   * clamp(380px, 28vw, 440px) of 01-numbers, times the HUD scale on a big screen) — 0 headless or before the root
-   * is built, never NaN. The number main.js hands to
-   * `CameraSystem.setLadderPaneInset` (signed by `isLeft()`: +w left, -w
-   * right) and `motherCallouts.setPaneInsets` (the side's slot gets w, the
-   * other 0) on the onOpenChange edge. A layout read: call it on edges
-   * only, never per frame.
+   * The pane's laid-out width in CSS px (border-box: the clamp(380px, 28vw, 440px) times the HUD scale on a big
+   * screen); 0 headless or before the root is built, never NaN. main.js hands it to
+   * `CameraSystem.setLadderPaneInset` (signed by `isLeft()`: +w left, -w right) and `motherCallouts.setPaneInsets`
+   * on the onOpenChange edge. A layout read: edges only, never per frame.
    * @returns {number}
    */
   widthPx() {
     const root = this._root;
     if (!root) return 0;
-    // u12-drawer-text D1b: the DRAWN width. offsetWidth ignores a CSS scale on the box, getBoundingClientRect() does
-    // not (the slide translate never changes a width). Today the scaled screens widen the root itself to the drawn
-    // body width (index.html), so both agree; reading the drawn box keeps the camera inset and the callout insets
-    // right if the scale ever moves onto the root. Fake / headless roots without a rect fall back to offsetWidth.
+    // The DRAWN width: offsetWidth ignores a CSS scale on the box, getBoundingClientRect() does not (the slide
+    // translate never changes a width). Fake / headless roots without a rect fall back to offsetWidth.
     let w = NaN;
     if (typeof root.getBoundingClientRect === 'function') {
       try { const r = root.getBoundingClientRect(); w = r ? r.width : NaN; } catch (_e) { w = NaN; }
@@ -364,10 +265,8 @@ export class WorkbenchPane {
   }
 
   /**
-   * Controller engage / disengage (every floor). On: build lazily, enable the
-   * SPECS engine, enable the REFIT engine iff the floor is 1, tab
-   * display:block, refresh. Off: close(), both engines disabled, tab
-   * display:none. Idempotent; headless no-op beyond state.
+   * Controller engage / disengage (every floor). On: build lazily, enable the SPECS engine, enable the REFIT engine
+   * iff the floor is 1, tab display:block, refresh. Off: close(), both engines disabled, tab display:none. Idempotent.
    * @param {boolean} on
    */
   setEnabled(on) {
@@ -389,16 +288,9 @@ export class WorkbenchPane {
   }
 
   /**
-   * The controller's floor write — at EVERY floor apply, before any open.
-   * The REFIT section is enabled iff floor === 1 (hides its slot + clears
-   * ghosting off F1 — the engine's setEnabled); the tab is PINNED awake iff
-   * floor === 1 (else the edge-chrome phase rules); the count repaints (the
-   * F1 gold count vs the unread count); and the FLOOR LAYOUT applies
-   * write-on-change (§13 r1: on F1 the root's bottom drops to
-   * ROOT_BOTTOM_PX_F1 and the body fills the root — F2–F5 keep the 96 bottom
-   * + the shrink-wrap). The anchor side is LEFT on every floor (§13 r5) —
-   * setFloor never moves it, and the C3 open-edge re-fire is retired: the
-   * one edge stays open/close-owned.
+   * The controller's floor write, at EVERY floor apply, before any open. The REFIT section is enabled iff floor === 1;
+   * the tab is PINNED awake iff floor === 1 (else the edge-chrome phase rules); the count repaints; and the FLOOR
+   * LAYOUT applies write-on-change (§13 r1). setFloor never moves the anchor side: the one edge stays open/close-owned.
    * @param {number} floor
    */
   setFloor(floor) {
@@ -411,11 +303,9 @@ export class WorkbenchPane {
   }
 
   /**
-   * Session P (plan D2): the hub's per-frame EDGE-CHROME write —
-   * `edgeChrome.phase('tab', now)`. Effective phase = pinned OR open → 'awake',
-   * else this phase: 'awake' → opacity 1 + visible; 'fading' → opacity
-   * RAIL_GEOMETRY.IDLE_FADE (the CSS `transition: opacity EDGE_FADE_MS` ramps);
-   * 'hidden' (or unknown) → visibility hidden. Write-on-change (G1).
+   * The hub's per-frame EDGE-CHROME write (`edgeChrome.phase('tab', now)`). Effective phase = pinned OR open →
+   * 'awake', else this phase: 'awake' → opacity 1 + visible; 'fading' → opacity RAIL_GEOMETRY.IDLE_FADE (the CSS
+   * `transition: opacity EDGE_FADE_MS` ramps); 'hidden' (or unknown) → visibility hidden. Write-on-change.
    * @param {'awake'|'fading'|'hidden'} phase
    */
   setTabPhase(phase) {
@@ -426,9 +316,8 @@ export class WorkbenchPane {
   }
 
   /**
-   * u6 D9: step the SPECS tab aside (or back). While on, the tab plate and its hit layer take no
-   * box and no taps (`display:none`, so an edge wake cannot show them either); off restores
-   * today's behaviour. Write-on-change; the hub calls it once a frame.
+   * Step the SPECS tab aside (or back): the plate and its hit layer take no box and no taps (`display:none`, so an
+   * edge wake cannot show them either). Write-on-change; the hub calls it once a frame.
    * @param {boolean} on
    */
   setTabYield(on) {
@@ -439,10 +328,8 @@ export class WorkbenchPane {
   }
 
   /**
-   * ENTRY-LESS open (tab / Space / swipe / flick / restore). No-op while
-   * disabled. ORDER MATTERS (plan §3 / §7): the REFIT engine opens FIRST
-   * (`{ firstVisit: true }` focuses the RECOMMENDED card) so the SPECS engine's
-   * subject adopt sees the focused card; then the shell settles.
+   * ENTRY-LESS open (tab / Space / swipe / flick / restore). No-op while disabled. ORDER MATTERS: the REFIT engine
+   * opens FIRST (`{ firstVisit: true }` focuses the RECOMMENDED card) so the SPECS engine's subject adopt sees it.
    * @param {{ firstVisit?: boolean }} [opts] - forwarded to refit.open
    */
   open(opts) {
@@ -453,12 +340,10 @@ export class WorkbenchPane {
   }
 
   /**
-   * Deep link (REFIT title, RELATED chip, ticker chip, the hub's follow): the
-   * SPECS engine shows the entry — `library.openEntry(id, opts)` keeps the
-   * click anchor; the shell NEVER calls `library.open()` on this path. A
-   * closed shell opens (the REFIT engine too, when enabled); an open one
-   * retargets in place (ONE open edge). While disabled the engine stores the
-   * entry for the next open (its own contract) and the shell stays shut.
+   * Deep link (REFIT title, RELATED chip, ticker chip, the hub's follow): `library.openEntry(id, opts)` keeps the
+   * click anchor; the shell NEVER calls `library.open()` on this path. A closed shell opens (the REFIT engine too,
+   * when enabled); an open one retargets in place (ONE open edge). While disabled the engine stores the entry for the
+   * next open and the shell stays shut.
    * @param {string} id - codex entry id
    * @param {{ via?: string, anchor?: object|null }} [opts]
    * @returns {boolean} true when the engine resolved the entry
@@ -473,14 +358,11 @@ export class WorkbenchPane {
   }
 
   /**
-   * The F1 click verb (plan D6): a hull part / callout-card click shows the
-   * part's dossier — the REFIT engine focuses its subsystem, the SPECS engine
-   * opens the part's entry with `via` = the clicked callout name and the click
-   * anchor (portrait: `part.screen` + `part.bounds` + `partId`; an off-screen
-   * part still carries `{ partId }`), the shell opens if closed, and the
-   * Subnautica unlock request rides `library.scanPart(part)` as today. A part
-   * without an entry lands the dossier on the subject (`library.open()`).
-   * Null part → no-op.
+   * The F1 click verb: a hull part / callout-card click shows the part's dossier. The REFIT engine focuses its
+   * subsystem, the SPECS engine opens the part's entry with `via` = the clicked callout name and the click anchor
+   * (portrait: `part.screen` + `part.bounds` + `partId`; an off-screen part still carries `{ partId }`), the shell
+   * opens if closed, and the unlock request rides `library.scanPart(part)`. A part without an entry lands the
+   * dossier on the subject (`library.open()`). Null part → no-op.
    * @param {{ id?:string, name?:string, codexId?:string|null, screen?:{x:number,y:number}|null, bounds?:object|null }|null} part
    */
   showPart(part) {
@@ -501,7 +383,7 @@ export class WorkbenchPane {
     this._call(this._library, 'scanPart', part);
   }
 
-  /** @private The shell's own open edge: `_open` flips, slide in, wake, tab, ONE onOpenChange(true). */
+  /** The shell's own open edge: `_open` flips, slide in, wake, tab, ONE onOpenChange(true). */
   _settle() {
     if (this._open || !this._enabled || this._disposed) return;
     this._open = true;
@@ -513,10 +395,8 @@ export class WorkbenchPane {
   }
 
   /**
-   * Close the pane. `_open = false` FIRST (the Session I re-entrancy law —
-   * the hub re-reads isOpen() inside the edge), then both engines close,
-   * the root slides out, the tab follows the phase rules, ONE
-   * onOpenChange(false). Idempotent.
+   * Close the pane. `_open = false` FIRST (the hub re-reads isOpen() inside the edge), then both engines close, the
+   * root slides out, ONE onOpenChange(false). Idempotent.
    */
   close() {
     if (!this._open) return;
@@ -531,13 +411,11 @@ export class WorkbenchPane {
     if (this._onOpenChange) { try { this._onOpenChange(false); } catch (_e) { /* dep */ } }
   }
 
-  /** Edge-tab click / Space: toggle. */
   toggle() { if (this._open) this.close(); else this.open(); }
 
   /**
-   * Forget the remembered entry while CLOSED (Session J, plan D-C): the hub
-   * calls it on a floor arrival / selection change while the pane is shut so
-   * the next entry-less open adopts the subject. The SPECS engine's verb.
+   * Forget the remembered entry while CLOSED: the hub calls it on a floor arrival / selection change while the pane
+   * is shut so the next entry-less open adopts the subject.
    * @returns {boolean} true when an entry was forgotten
    */
   forgetEntry() {
@@ -545,8 +423,7 @@ export class WorkbenchPane {
   }
 
   /**
-   * The Subnautica rule (08-workbench §2): a LOCKED part's entry gets an unlock
-   * request over the ONE existing path — the SPECS engine's verb. Never opens.
+   * A LOCKED part's entry gets an unlock request over the ONE existing path (08-workbench §2). Never opens.
    * @param {{ codexId?: string|null }|null} part
    * @returns {boolean} true when an unlock was requested
    */
@@ -554,11 +431,7 @@ export class WorkbenchPane {
     return this._call(this._library, 'scanPart', part) === true;
   }
 
-  /**
-   * Recompute + repaint: both engines, then the tab count (write-on-change;
-   * the pulse fires on a rise). Called on interaction edges + the hub's
-   * CODEX_UNLOCKED / CODEX_VIEWED listeners — never per frame.
-   */
+  /** Repaint both engines, then the tab count (the pulse fires on a rise). On interaction edges + CODEX_UNLOCKED / CODEX_VIEWED; never per frame. */
   refresh() {
     this._call(this._library, 'refresh');
     this._call(this._refit, 'refresh');
@@ -566,13 +439,9 @@ export class WorkbenchPane {
   }
 
   /**
-   * The depot INVITATION on the tab (Wave 5 Session H, plan D-H; moved here
-   * from RefitPane with the tab): main.js's ONE DEPOT_INVITATION listener feeds
-   * the rail's notch-1 glow (WHERE) AND this tab glow (WHAT: the workbench is
-   * the shop). `open` true → the tab edge wears VALUE gold with the steady
-   * halo (VisualLaw: gold never pulses); false (entered / lapsed / reset) →
-   * the resting INFO frame. Write-on-change; state survives enable/disable
-   * cycles (the tab keeps its dress while hidden); headless = pure flag.
+   * The depot INVITATION on the tab: main.js's ONE DEPOT_INVITATION listener feeds the rail's notch-1 glow (WHERE)
+   * AND this tab glow (WHAT: the workbench is the shop). `open` true → the tab edge wears VALUE gold with the steady
+   * halo (gold never pulses); false → the resting INFO frame. Write-on-change; survives enable/disable cycles.
    * @param {boolean} open
    */
   setInvitation(open) {
@@ -582,30 +451,23 @@ export class WorkbenchPane {
     this._applyInvitation();
   }
 
-  /** @returns {boolean} true while the invitation window is open (the tab glows). */
   isInvited() { return this._invited; }
 
-  /** @private Dress/undress the tab edge for the invitation (steady, G1: edges only). */
   _applyInvitation() {
     if (!this._tab) return;
     if (this._invited) {
       this._tab.style.borderColor = VisualLaw.COLORS.VALUE;
-      this._tab.style.boxShadow = INVITE_HALO;                          // the rail's INVITE_HALO law — ONE definition (Session L review)
+      this._tab.style.boxShadow = INVITE_HALO;
     } else {
       this._tab.style.borderColor = 'rgba(0,204,255,0.4)';             // the resting INFO frame
       this._tab.style.boxShadow = 'none';
     }
   }
 
-  /**
-   * Remove every node + timer; the instance stays inert afterwards. The close
-   * edge fires only if the pane was open, and observes isOpen() === false
-   * (the Session I follow-up (h) order). The engines are the hub's: an open
-   * shell closes them; their containers go with the root.
-   */
+  /** Remove every node + timer; the instance stays inert. The close edge fires only if the pane was open, and observes isOpen() === false. */
   dispose() {
     this._disposed = true;
-    if (this._offGlassLabel) { this._offGlassLabel(); this._offGlassLabel = null; }   // u15b: the glass listener dies with the pane
+    if (this._offGlassLabel) { this._offGlassLabel(); this._offGlassLabel = null; }
     this._clearIdleTimer();
     this._clearPulseTimer();
     this._disarmMainMenu();
@@ -631,9 +493,7 @@ export class WorkbenchPane {
     this._tabPhaseWritten = null;
   }
 
-  // ── DOM (guarded; nothing at import) ───────────────────────────────────────
-
-  /** @private Effective reduced-motion read (dep overrides the house probe). */
+  /** Effective reduced-motion read (dep overrides the house probe). */
   _reducedMotion() {
     const dep = this._reducedMotionDep;
     if (typeof dep === 'function') { try { return !!dep(); } catch (_e) { return false; } }
@@ -642,37 +502,32 @@ export class WorkbenchPane {
   }
 
   /**
-   * @private Session P (plan D6/D7): the tab's CSS `bottom` inside the pane
-   * root — the footer band's bottom (viewport offset) minus the root bottom
-   * IN FORCE (§13 r1: ROOT_BOTTOM_PX off F1, ROOT_BOTTOM_PX_F1 on F1), never
-   * negative — the plate stays inside the 132–164 band on every floor.
-   * 132 → 36 off F1, 116 on F1.
-   * @returns {number}
+   * The tab's CSS `bottom` inside the pane root: the footer band's bottom minus the root bottom IN FORCE, never
+   * negative, so the plate stays inside the 132–164 band (132 → 36 off F1, 116 on F1).
    */
   _tabBottomCss() {
     return Math.max(0, Math.round(this._footerBottomPx - this._rootBottomInForce()));
   }
 
-  /** @private u4-phone-fold D6: the SPECS tab's TAP height - 44 on glass, the footer band's 32 otherwise. */
+  /** The SPECS tab's TAP height: 44 on glass, the footer band's 32 otherwise. */
   _tabHitPx() {
     return this._glass ? RAIL_GEOMETRY.TOUCH_PITCH_PX : RAIL_GEOMETRY.FOOTER_BAND_PX;
   }
 
-  /** @private How far the transparent hit layer reaches past the plate's top and bottom edge: (44 - 32) / 2 = 6 on glass, 0 off. */
+  /** How far the hit layer reaches past the plate's top and bottom edge: (44 - 32) / 2 = 6 on glass, 0 off. */
   _tabHitOutsetPx() {
     return (this._tabHitPx() - RAIL_GEOMETRY.FOOTER_BAND_PX) / 2;
   }
 
-  /** @private The root bottom actually in force (§13 r1): F1 → 16, else 96. */
+  /** The root bottom in force: F1 → 16, else 96. */
   _rootBottomInForce() {
     return this._floor === 1 ? ROOT_BOTTOM_PX_F1 : ROOT_BOTTOM_PX;
   }
 
-  /** @private The F1 floor layout (§13 r1), write-on-change like the tab
-   *  phase: the root's `bottom`, the body's fill vs shrink-wrap, and the
-   *  tab's `bottom` (the footer band never moves). `_build` bakes the
-   *  initial values into the cssText and records the flag; a floor ride
-   *  re-writes only on a real F1↔F2+ change. */
+  /**
+   * The F1 floor layout (§13 r1), write-on-change: the root's `bottom`, the body's fill vs shrink-wrap, and the tab's
+   * `bottom` (the footer band never moves). `_build` bakes the initial values; only a real F1↔F2+ change re-writes.
+   */
   _applyFloorLayout() {
     const f1 = this._floor === 1;
     if (f1 === this._floorLayoutWritten) return;
@@ -691,9 +546,8 @@ export class WorkbenchPane {
     if (!f1) this._disarmMainMenu();
   }
 
-  /** @private range-map D8: the MAIN MENU button's tap. Unarmed (or past the window) → arm and relabel; a second
-   *  tap inside MAIN_MENU_ARM_MS → disarm and, if the game can go to the menu (`canLeave`, F1.6), call `onMainMenu` once;
-   *  if it cannot, say so for MAIN_MENU_REFUSED_MS and call nothing. */
+  /** The MAIN MENU button's tap. Unarmed (or past the window) → arm and relabel; a second tap inside MAIN_MENU_ARM_MS
+   *  → disarm and, if `canLeave`, call `onMainMenu` once; if it cannot, say so for MAIN_MENU_REFUSED_MS and call nothing. */
   _tapMainMenu() {
     const now = this._now();
     if (this._menuArmedAt !== null && now - this._menuArmedAt <= MAIN_MENU_ARM_MS) {
@@ -710,13 +564,13 @@ export class WorkbenchPane {
     if (this._menuTimer && typeof this._menuTimer.unref === 'function') this._menuTimer.unref();
   }
 
-  /** @private F1.6: may the game go to the menu now (a dep that throws counts as yes: the old behaviour)? */
+  /** May the game go to the menu now (a dep that throws counts as yes)? */
   _leaveAllowed() {
     if (!this._canLeave) return true;
     try { return !!this._canLeave(); } catch (_e) { return true; }
   }
 
-  /** @private F1.6: the second tap found the move refused: the label says why, then goes back. */
+  /** The second tap found the move refused: the label says why, then goes back. */
   _refuseMainMenu() {
     if (this._menuBtn) this._menuBtn.textContent = MAIN_MENU_REFUSED_LABEL;
     this._clearMenuRefusal(true);
@@ -727,13 +581,13 @@ export class WorkbenchPane {
     if (this._menuRefusedTimer && typeof this._menuRefusedTimer.unref === 'function') this._menuRefusedTimer.unref();
   }
 
-  /** @private @param {boolean} [keepLabel] leave the label as it is (the caller sets it) */
+  /** @param {boolean} [keepLabel] leave the label as it is (the caller sets it) */
   _clearMenuRefusal(keepLabel) {
     if (this._menuRefusedTimer) { clearTimeout(this._menuRefusedTimer); this._menuRefusedTimer = null; }
     if (!keepLabel && this._menuBtn && this._menuBtn.textContent === MAIN_MENU_REFUSED_LABEL) this._menuBtn.textContent = MAIN_MENU_LABEL;
   }
 
-  /** @private Back to the plain MAIN MENU label (3 s passed, the drawer closed, or the floor changed). */
+  /** Back to the plain MAIN MENU label (window passed, the drawer closed, or the floor changed). */
   _disarmMainMenu() {
     this._menuArmedAt = null;
     if (this._menuTimer) { clearTimeout(this._menuTimer); this._menuTimer = null; }
@@ -741,7 +595,7 @@ export class WorkbenchPane {
     if (this._menuBtn) this._menuBtn.textContent = MAIN_MENU_LABEL;
   }
 
-  /** @private Build the shell once, then mount the two engines into its slots. */
+  /** Build the shell once, then mount the two engines into its slots. */
   _build() {
     if (this._built || this._disposed) return;
     const doc = this._doc;
@@ -749,17 +603,10 @@ export class WorkbenchPane {
     this._built = true;
     const reduced = this._reducedMotion();
 
-    // The pane ROOT — 380–440 px wide, LEFT-anchored on every floor (§13 r5)
-    // — is the positioning + TRANSFORM shell (Session D): it carries the
-    // slide, the width clamp and the z layer, paints nothing itself and takes
-    // no pointer events; the BODY (the panel: border, background, padding,
-    // the scrolling content) and the edge TAB are its children, so the tab
-    // RIDES the pane's transform. --workbench-dir is the ONE mirror variable
-    // (-1 — the drawer is left-only, §13 r5; no RTL mirror is implemented):
-    // every transform and the tab's side follow it. --workbench-open
-    // (0|1) is the reduced-motion tab position (the root never moves there;
-    // see _applyOpenState). The root's `bottom` is the one in force (§13 r1:
-    // 16 on F1, 96 off).
+    // The ROOT is the positioning + TRANSFORM shell: it carries the slide, the width clamp and the z layer, paints
+    // nothing and takes no pointer events; the BODY and the edge TAB are its children, so the tab RIDES the
+    // transform. --workbench-dir is the ONE mirror variable (-1: left-only, §13 r5): every transform and the tab's
+    // side follow it. --workbench-open (0|1) is the reduced-motion tab position (see _applyOpenState).
     const f1 = this._floor === 1;
     const root = doc.createElement('div');
     root.id = 'ladder-workbench';
@@ -768,22 +615,14 @@ export class WorkbenchPane {
       'position:absolute', 'left:0', 'top:56px', `bottom:${this._rootBottomInForce()}px`, `z-index:${PANE_Z_INDEX}`,
       'width:clamp(380px, 28vw, 440px)', 'box-sizing:border-box',
       'pointer-events:none', '--workbench-dir:-1', '--workbench-open:1',
-      // Slide (transform) in the normal path; the reduced-motion class swaps
-      // the slide for a fade of the BODY at the same duration (08-workbench §2
-      // Motion) — the root then never moves, so the tab stays visible.
+      // Reduced motion swaps the slide for a fade of the BODY at the same duration; the root never moves.
       reduced
         ? ''
         : `transition:transform ${PANE_SLIDE_MS}ms cubic-bezier(0.65,0,0.35,1), opacity 400ms ease`,
     ].join(';');
 
-    // The body — the panel the player reads. Anchored to the root's top; it
-    // SHRINK-WRAPS its content off F1 (plan D4 / Q3: `height:auto;
-    // max-height:100%` — no empty column below the last block) and scrolls
-    // past the fold; on F1 it FILLS the root instead (§13 r1 — the drawer
-    // uses the height; `height:100%`, still `overflow-y:auto`).
-    // Border / background / padding / font = the shipped .library-body. The
-    // border's dead side mirrors the anchor: the side against the screen
-    // edge carries no border, the corners round away from it.
+    // The body: SHRINK-WRAPS its content off F1 and scrolls past the fold; on F1 it FILLS the root (§13 r1).
+    // The side against the screen edge carries no border, the corners round away from it.
     const body = doc.createElement('div');
     body.className = 'workbench-body';
     body.style.cssText = [
@@ -797,18 +636,13 @@ export class WorkbenchPane {
     ].join(';');
     root.appendChild(body);
 
-    // The three section slots in the D1 order — Identity (the SPECS head),
-    // Upgrade (the REFIT block; the engine hides it off F1), Learn (the SPECS
-    // tail). Real children (never innerHTML) so the engines' containers
-    // survive every repaint of their neighbours.
+    // The three section slots in order: Identity (SPECS head), Upgrade (REFIT; the engine hides it off F1), Learn
+    // (SPECS tail). Real children (never innerHTML) so the engines' containers survive their neighbours' repaints.
     const head = doc.createElement('div');
     head.className = 'workbench-head';
-    // §13 r5: the shell pads the head slot's RIGHT side past the ESC × button
-    // so the engine's own right-edge chrome (LibraryPane's MAXIMIZE ↗ — its
-    // .library-header is flex space-between) is never under the X. The pad is
-    // the SHELL's (engines own no chrome); 96 px ≥ the button's ~86 px
-    // content width (estimate: 16 px mono 'ESC ×' + 0.15 em spacing + 24 px
-    // padding + 2 px border).
+    // The shell pads the head slot's RIGHT side past the ESC × button so the engine's right-edge chrome (LibraryPane's
+    // MAXIMIZE ↗) is never under the X. 96 px ≥ the button's ~86 px width (estimate: 16 px mono 'ESC ×' + 0.15 em
+    // spacing + 24 px padding + 2 px border).
     head.style.paddingRight = '96px';
     const refitSlot = doc.createElement('div');
     refitSlot.className = 'workbench-refit';
@@ -818,8 +652,8 @@ export class WorkbenchPane {
     body.appendChild(refitSlot);
     body.appendChild(tail);
 
-    // range-map D8: MAIN MENU, the last child of the floor-1 drawer body (a touch screen has no pause screen). The
-    // close button's chrome at full width; the first tap arms it, a second within MAIN_MENU_ARM_MS leaves.
+    // MAIN MENU, the last child of the floor-1 drawer body (a touch screen has no pause screen). The close button's
+    // chrome at full width; the first tap arms it, a second within MAIN_MENU_ARM_MS leaves.
     const menuBtn = doc.createElement('button');
     menuBtn.id = 'workbench-main-menu-btn';
     menuBtn.className = 'workbench-main-menu';
@@ -839,23 +673,16 @@ export class WorkbenchPane {
     body.appendChild(menuBtn);
     this._menuBtn = menuBtn;
 
-    // The ESC × close button (§13 r5): the tech library's chrome — the
-    // #codex-close-btn inline style (CodexViewerUI) plus the 44 px touch
-    // target — a child of the ROOT at the drawer's top-right corner (the
-    // inner edge, toward the ship). The root's top-right IS the body's (the
-    // body is top/left/right:0 inside it), but the BODY is the scroll
-    // container — an absolutely positioned child of it scrolls away with
-    // long REFIT content, so the X lives on the non-scrolling transform
-    // shell, z-index above the body, pointer-events:auto (the root takes
-    // none). Under reduced motion it hides with the body (_applyOpenState);
-    // in the slide path it rides the root off-screen like the body does.
-    // Click → close(); NO close on outside click (clicking the ship is how
-    // parts are chosen); Esc and the tab keep their halves.
+    // The ESC × close button: the #codex-close-btn inline style (CodexViewerUI) plus the 44 px touch target, a child
+    // of the ROOT at the drawer's top-right corner. The BODY is the scroll container, so a child of it would scroll
+    // away with long REFIT content: the X lives on the non-scrolling shell, z-index above the body,
+    // pointer-events:auto. Under reduced motion it hides with the body (_applyOpenState); otherwise it rides the
+    // root's slide. NO close on outside click (clicking the ship is how parts are chosen).
     const closeBtn = doc.createElement('button');
     closeBtn.id = 'workbench-close-btn';
     closeBtn.className = 'workbench-close';
-    // u15b B-T7: on glass there is no Esc key - "CLOSE ×". The hub flips glass AFTER this pane is built (D7), so the label
-    // is also re-applied the moment glass turns on.
+    // On glass there is no Esc key: "CLOSE ×". The hub flips glass AFTER this pane is built, so the label is
+    // re-applied the moment glass turns on.
     const closeLabel = () => {
       const g = this._glass || GestureHints.isGlass();
       closeBtn.textContent = g ? 'CLOSE ×' : 'ESC ×';
@@ -878,21 +705,13 @@ export class WorkbenchPane {
     });
     root.appendChild(closeBtn);
 
-    // The edge tab (08-workbench §2 Grammar). A CHILD of the root at the
-    // pane's INNER edge (Session D, owner decision 3): closed, the root's
-    // slide parks it exactly at the screen edge; open, it sits on the pane's
-    // inner edge — never over the content. The side follows the ONE mirror
-    // variable: left = 50% − dir·50% (dir 1 → the root's left edge) and the
-    // −100 % self-translate puts the tab outside the box; under reduced motion
-    // --workbench-open flips it between the screen edge (closed) and the inner
-    // edge (open) because the root never moves. Session P (plan D6/D7): a
-    // HORIZONTAL plate in the FOOTER BAND — the right slot for a right-anchored
-    // pane, the LEFT slot (§13 r5) — `bottom` = the band's
-    // bottom minus the root's 96, height FOOTER_BAND_PX; its opacity /
-    // visibility are the edge-chrome truth table's (the hub's setTabPhase +
-    // setFloor's pin), the ramp `opacity EDGE_FADE_MS` (none under reduced
-    // motion — instant, like every other reduced-motion step). The border's
-    // dead side mirrors the anchor like the body's.
+    // The edge tab (08-workbench §2). A CHILD of the root at the pane's INNER edge: closed, the root's slide parks it
+    // at the screen edge; open, it sits on the inner edge, never over the content. The side follows the mirror
+    // variable: left = 50% − dir·50% and the −100 % self-translate puts the tab outside the box; under reduced
+    // motion --workbench-open flips it between the screen edge (closed) and the inner edge (open) because the root
+    // never moves. A HORIZONTAL plate in the FOOTER BAND's LEFT slot: `bottom` = the band's bottom minus the root's
+    // bottom, height FOOTER_BAND_PX; its opacity / visibility are the edge-chrome truth table's (setTabPhase +
+    // setFloor's pin), ramped by `opacity EDGE_FADE_MS` (none under reduced motion).
     const tab = doc.createElement('div');
     tab.id = 'ladder-workbench-tab';
     tab.style.cssText = [
@@ -905,25 +724,23 @@ export class WorkbenchPane {
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
       'font-family: var(--font-mono)', 'font-size:0.62rem', 'letter-spacing:0.08em',
       'user-select:none', 'display:none', 'pointer-events:auto',
-      // The pulse animates through transition (reduced motion never sets it);
-      // the edge-chrome fade rides the same property list.
+      // The pulse animates through transition (never under reduced motion); the edge-chrome fade rides it too.
       reduced ? '' : `transition:box-shadow ${TAB_PULSE_MS / 3}ms ease, opacity ${RAIL_GEOMETRY.EDGE_FADE_MS}ms ease`,
     ].join(';');
-    // Built as real children (never innerHTML) so the count node survives
-    // every repaint and fake-DOM test docs need no querySelector.
+    // Real children (never innerHTML) so the count node survives every repaint and fake-DOM docs need no querySelector.
     const tabLabel = doc.createElement('span');
     tabLabel.textContent = 'SPECS ';
     const tabCount = doc.createElement('span');
     tabCount.className = 'workbench-tab-count';
     tabCount.style.cssText = `color:${VisualLaw.COLORS.VALUE};font-weight:bold`;
-    // u4 review fix 2: the 44 px tap area is a TRANSPARENT child reaching past the plate's top / bottom
-    // edges; the plate (border, background) stays 32 px. Taps on it bubble to the tab's click handler.
+    // The 44 px tap area is a TRANSPARENT child reaching past the plate's top / bottom edges; the plate stays 32 px.
+    // Taps on it bubble to the tab's click handler.
     const tabHit = doc.createElement('div');
     tabHit.id = 'ladder-workbench-tab-hit';
     tabHit.className = 'workbench-tab-hit';
     tabHit.style.cssText = [
-      // the layer is placed against the tab's PADDING box (inside its 1 px border), so -1 reaches the border edge
-      // (measured: -6 gave 42 px, the plate's 32 + 2 x 6 less its two borders)
+      // Placed against the tab's PADDING box (inside its 1 px border), so -1 reaches the border edge (measured: -6
+      // gave 42 px, the plate's 32 + 2 x 6 less its two borders).
       'position:absolute', 'left:0', 'right:-1px',
       `top:${-(this._tabHitOutsetPx() + 1)}px`, `bottom:${-(this._tabHitOutsetPx() + 1)}px`,
       'background:transparent', 'pointer-events:auto',
@@ -944,29 +761,26 @@ export class WorkbenchPane {
     this._tabCount = tabCount;
     this._tabHit = tabHit;
     this._closeBtn = closeBtn;
-    this._floorLayoutWritten = f1;  // the cssText above baked the floor layout (§13 r1)
+    this._floorLayoutWritten = f1;  // the cssText above baked the floor layout
     this._tabPhaseWritten = null;   // the phase truth table writes the fresh tab
     this._applyTabPhase();
     this._applyOpenState();
-    this._applyInvitation();        // a pre-build setInvitation lands once built (Session H)
+    this._applyInvitation();        // a pre-build setInvitation lands once built
 
-    // Delegated wake (one listener set — G1, the PaneHelp pattern): on the
-    // root, so the engines' content and the tab share it (the tab's own click
-    // above toggles; here it only wakes). The engines' own delegated clicks
-    // ([data-max], [data-rel], [data-buy], chips) live on their containers.
+    // Delegated wake on the root, so the engines' content and the tab share it (the tab's own click toggles; here it
+    // only wakes). The engines' own delegated clicks ([data-max], [data-rel], [data-buy], chips) live on their containers.
     root.addEventListener('click', () => this._wake());
     root.addEventListener('pointermove', () => this._wake());
     root.addEventListener('pointerdown', () => this._wake());
 
-    // Mount the two hosted section engines into their slots. `onRefresh` is
-    // the tab's stale-count guard (plan §7): a BUY / chip tap / related click
-    // repaints the engine, and the shell's count follows on the same edge.
+    // `onRefresh` is the tab's stale-count guard: a BUY / chip tap / related click repaints the engine, and the
+    // shell's count follows on the same edge.
     const onRefresh = () => this._paintTab();
     this._call(this._library, 'mount', { head, tail, onRefresh });
     this._call(this._refit, 'mount', refitSlot, { onRefresh });
   }
 
-  /** @private The tab's actual display: enabled → block (every floor); the phase decides the rest. */
+  /** Enabled → block (every floor); the phase decides the rest. */
   _applyTabShown() {
     if (this._tab) {
       const css = (this._enabled && !this._tabYield) ? 'block' : 'none';
@@ -975,7 +789,7 @@ export class WorkbenchPane {
     this._applyTabPhase();
   }
 
-  /** @private setFloor's pin: F1 → the tab is always awake; elsewhere the edge-chrome phase rules. */
+  /** setFloor's pin: F1 → the tab is always awake; elsewhere the edge-chrome phase rules. */
   _setTabPinned(on) {
     on = !!on;
     if (on === this._tabPinned) return;
@@ -983,7 +797,7 @@ export class WorkbenchPane {
     this._applyTabPhase();
   }
 
-  /** @private the pinned / open / chrome truth table → opacity + visibility, on change */
+  /** The pinned / open / chrome truth table → opacity + visibility, on change. */
   _applyTabPhase() {
     const want = (this._tabPinned || this._open) ? 'awake' : this._chromePhase;
     if (want === this._tabPhaseWritten) return;
@@ -1001,11 +815,10 @@ export class WorkbenchPane {
     }
   }
 
-  /** @private Slide (root) / fade (body) to the current open state; the tab
-   *  rides the root in the slide path and flips edges in the fade path. The
-   *  ESC × close button tracks the BODY's fade under reduced motion (the
-   *  root never moves there, so it must hide with the body when closed) and
-   *  rides the root's slide otherwise. */
+  /**
+   * Slide (root) / fade (body) to the current open state; the tab rides the root in the slide path and flips edges in
+   * the fade path. The ESC × button tracks the BODY's fade under reduced motion and rides the slide otherwise.
+   */
   _applyOpenState() {
     const root = this._root;
     if (!root) return;
@@ -1024,16 +837,12 @@ export class WorkbenchPane {
         closeBtn.style.opacity = this._open ? '1' : '0';
         closeBtn.style.visibility = this._open ? 'visible' : 'hidden';
       }
-      // The tab stays visible + clickable while the body is hidden: closed it
-      // sits at the screen edge, open at the pane's inner edge (a snap —
-      // reduced motion permits it).
+      // The tab stays visible + clickable while the body is hidden (a snap between edges; reduced motion permits it).
       _setVar(root, '--workbench-open', this._open ? '1' : '0');
     } else {
       root.className = '';
-      // One CSS variable mirrors the slide for the anchor side
-      // (--workbench-dir: -1 = the left anchor flips it); the pane slides out
-      // toward its anchored screen edge by exactly its width, so the
-      // tab riding at its inner edge parks at the screen edge when closed.
+      // The pane slides out toward its anchored screen edge by exactly its width, so the tab at its inner edge parks
+      // at the screen edge when closed.
       root.style.transform = this._open
         ? 'translateX(0)'
         : 'translateX(calc(var(--workbench-dir, 1) * 100%))';
@@ -1045,19 +854,13 @@ export class WorkbenchPane {
     }
   }
 
-  // ── The tab count (plan D3) ────────────────────────────────────────────────
-
-  /**
-   * @private The ONE displayed number: on F1 the gold affordable-refit count
-   * when > 0, else the unread count; off F1 the unread count. Guarded reads.
-   * @returns {number}
-   */
+  /** The ONE displayed number: on F1 the gold affordable-refit count when > 0, else the unread count; off F1 the unread count. */
   _tabCountValue() {
     const affordable = (this._floor === 1) ? this._count(this._refit, 'affordableCount') : 0;
     return affordable > 0 ? affordable : this._count(this._library, 'unreadCount');
   }
 
-  /** @private Tab count paint (write-on-change) + the ONE pulse on a rise. */
+  /** Tab count paint (write-on-change) + the ONE pulse on a rise. */
   _paintTab() {
     const n = this._tabCountValue();
     if (this._tabCount) {
@@ -1067,15 +870,12 @@ export class WorkbenchPane {
         this._lastTabText = text;
       }
     }
-    // Pulse ONCE when the displayed number RISES (a new unlock landed, a fit
-    // became affordable). The boot baseline (null) never pulses; a drop never
-    // pulses.
+    // Pulse ONCE on a RISE (new unlock, a fit became affordable); never on the boot baseline or a drop.
     if (this._lastCount != null && n > this._lastCount) this._pulse();
     this._lastCount = n;
   }
 
-  /** @private One tab pulse (§2: "pulses once on a new unlock"). Reduced
-   *  motion: no animation — the count change is the whole signal. */
+  /** One tab pulse. Reduced motion: no animation; the count change is the whole signal. */
   _pulse() {
     this._pulseCount++;
     if (!this._tab || this._reducedMotion()) return;
@@ -1085,8 +885,7 @@ export class WorkbenchPane {
     this._pulseTimer = setTimeout(() => this._pulseTick(), TAB_PULSE_MS);
   }
 
-  /** @private Pulse end (timer-fired; tests drive it directly). The invitation
-   *  dress, when worn, returns under the pulse (the steady halo is the rest state). */
+  /** Pulse end (tests drive it directly). The invitation dress, when worn, returns (the steady halo is the rest state). */
   _pulseTick() {
     this._pulseTimer = null;
     if (!this._tab) return;
@@ -1094,7 +893,6 @@ export class WorkbenchPane {
     if (this._tab.classList && this._tab.classList.remove) this._tab.classList.remove('workbench-tab-pulse');
   }
 
-  /** @private */
   _clearPulseTimer() {
     if (this._pulseTimer != null) {
       clearTimeout(this._pulseTimer);
@@ -1102,9 +900,6 @@ export class WorkbenchPane {
     }
   }
 
-  // ── Idle fade (open panes dim to 70 %, pointer wakes — §2 Motion) ─────────
-
-  /** @private */
   _clearIdleTimer() {
     if (this._idleTimer != null) {
       clearTimeout(this._idleTimer);
@@ -1112,7 +907,7 @@ export class WorkbenchPane {
     }
   }
 
-  /** @private Activity: restore full opacity + re-arm the idle window. */
+  /** Activity: restore full opacity + re-arm the idle window. */
   _wake() {
     this._lastActivityMs = this._now();
     if (this._idle) {
@@ -1125,7 +920,6 @@ export class WorkbenchPane {
     this._armIdleTimer();
   }
 
-  /** @private */
   _armIdleTimer() {
     this._clearIdleTimer();
     if (!this._open || !this._root || this._disposed) return;
@@ -1133,10 +927,8 @@ export class WorkbenchPane {
   }
 
   /**
-   * @private The idle beat (timer-fired; tests drive it directly with an
-   * injected clock): past IDLE_FADE_MS of no activity while open → fade to
-   * IDLE_FADE_OPACITY — never display:none, never visibility loss (the pane
-   * "never vanishes"); otherwise re-arm for the remainder.
+   * The idle beat (tests drive it with an injected clock): past IDLE_FADE_MS of no activity while open → fade to
+   * IDLE_FADE_OPACITY, never display:none or visibility loss; otherwise re-arm for the remainder.
    */
   _idleTick() {
     this._idleTimer = null;

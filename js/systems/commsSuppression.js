@@ -1,20 +1,14 @@
 /**
- * commsSuppression.js — CP-4 guidance-arbiter suppression core (pure).
+ * @module systems/commsSuppression — guidance-arbiter suppression core (pure): the graduated "who's allowed to talk
+ * right now" model from archive/GUIDANCE_ARBITER_SPEC.md §2–§2.1, dependency-light (imports only Constants — no
+ * AudioSystem/DOM) so CommsSystem AND the Node test harness share ONE implementation (no copy-drift).
  *
- * The graduated "who's allowed to talk right now" model from
- * GUIDANCE_ARBITER_SPEC.md §2–§2.1, extracted as a dependency-light module
- * (imports only Constants — no AudioSystem/DOM) so CommsSystem AND the Node
- * test harness share ONE implementation (no copy-drift).
- *
- * Replaces the old binary `_onboardingActive` gate with a 0–3 tier model:
+ * 0–3 tier model:
  *   Tier 0 — OnboardingDirector running: only tag-bypassed lines pass.
- *   Tier 1 — 0–30 s after ONBOARDING_COMPLETE: + HOUSTON, MISSION. (comms-after-tutorial D2: the
- *            real tutorial end, ONBOARDING_MASTERED, goes straight to tier 3; the ramp only runs for a
- *            COMPLETE that follows STARTED without it.)
+ *   Tier 1 — 0–30 s after ONBOARDING_COMPLETE: + HOUSTON, MISSION. (The real tutorial end, ONBOARDING_MASTERED, goes
+ *            straight to tier 3; the ramp only runs for a COMPLETE that follows STARTED without it.)
  *   Tier 2 — 30–60 s after: + ALERT, CMD.
  *   Tier 3 — 60 s+ (steady state, and the DEFAULT for non-onboarding play): all.
- *
- * @module systems/commsSuppression
  */
 
 import { Constants } from '../core/Constants.js';
@@ -26,7 +20,7 @@ export const SUPPRESSION_TIER_CHANNELS = {
 };
 
 /**
- * Decide whether a message passes the current suppression tier.
+ * Whether a message passes the current suppression tier.
  *
  * Tag bypasses (spec §2.1):
  *   • `_critical: true`     — passes at ANY tier (live-asset/conjunction, survival).
@@ -50,54 +44,38 @@ export const SUPPRESSION_TIER_CHANNELS = {
  *
  * @param {number} tier      — current suppression tier (0..3)
  * @param {string} channel   — classified channel (CMD/ALERT/HOUSTON/SCI/FLAVOR/MISSION)
- * @param {object} [data]    — message payload (carries the bypass tags)
- * @param {string} [priority]— message priority ('INFO'|'WARNING'|'CRITICAL'|…)
  * @returns {boolean} true ⇒ show the message; false ⇒ suppress it
  */
 export function messagePassesSuppression(tier, channel, data = {}, priority = null) {
   const d = data || {};
 
-  // comms-after-tutorial D3: a `_quiet` line (per-metal weights, ground-station passes, praise,
-  // scenery and display tips - the owner's "stay hidden" kinds) is dropped at EVERY tier, veterans
-  // included. This is the ONE check; both CommsSystem gates (listener + addMessage) run it before a
-  // line is stored or counted toward coalescing. It outranks even `_critical`: a hidden kind is never urgent.
+  // A `_quiet` line (per-metal weights, ground-station passes, praise, scenery and display tips: the owner's "stay
+  // hidden" kinds) is dropped at EVERY tier, veterans included. This is the ONE check; both CommsSystem gates
+  // (listener + addMessage) run it before a line is stored or counted toward coalescing. It outranks even
+  // `_critical`: a hidden kind is never urgent.
   if (d._quiet === true) return false;
 
-  // Explicit critical tag bypasses every tier (incl. 0) — never mute these.
+  // Explicit critical tag bypasses every tier (incl. 0).
   if (d._critical === true) return true;
-  // Reactive feedback for a key the player JUST pressed (e.g. a display toggle)
-  // is never muted — otherwise the control reads as broken while the Director
-  // runs (tier 0) or right after a GAME_RESET restarts the pipeline. Same
-  // rationale as the `_lassoFeedback` capture-denial bypass below.
+  // Reactive feedback for a key the player JUST pressed is never muted (the control would read as broken while the
+  // Director runs or right after a GAME_RESET).
   if (d._reactive === true) return true;
-  // Actionable lasso/net DENIAL always reaches the player (reactive: they
-  // pressed a key and it failed). Proactive invitations (`_proactive`) do NOT
-  // get this bypass — they are tier-gated below so they never override tier 0.
+  // Actionable lasso/net DENIAL always reaches the player; proactive invitations (`_proactive`) are tier-gated below.
   if (d._lassoFeedback && !d._proactive) return true;
-  // The Director's own onboarding script (the only non-critical line at tier 0).
   if (d._onboarding) return true;
 
   // Tier 0 (onboarding): nothing else passes.
   if (tier <= 0) return false;
 
-  // From tier 1 up: a CRITICAL-priority alert is never suppressed.
   if (priority && String(priority).toUpperCase() === 'CRITICAL') return true;
-  // MissionCoach beats pass once onboarding has ended.
   if (d._postOnboarding) return true;
-  // Steady state.
   if (tier >= 3) return true;
 
-  // Ramp tiers 1–2: gate by the allowed-channel set.
   const allowed = SUPPRESSION_TIER_CHANNELS[tier];
   return allowed ? allowed.has(channel) : true;
 }
 
-/**
- * Map elapsed seconds since ONBOARDING_COMPLETE to the ramp tier (1→2→3).
- * @param {number} elapsedS — seconds since onboarding completed
- * @param {{TIER2_AFTER_S:number, TIER3_AFTER_S:number}} [ramp]
- * @returns {1|2|3}
- */
+/** Elapsed seconds since ONBOARDING_COMPLETE → ramp tier (1→2→3). */
 export function rampSuppressionTier(elapsedS, ramp) {
   const R = ramp || (Constants.COMMS && Constants.COMMS.SUPPRESSION_RAMP)
     || { TIER2_AFTER_S: 30, TIER3_AFTER_S: 60 };
@@ -107,13 +85,9 @@ export function rampSuppressionTier(elapsedS, ramp) {
 }
 
 /**
- * Decide the suppression tier to enter on ONBOARDING_COMPLETE.
- *
- * Guidance cleanup (Phase 1): the graduated wake ramp (tier 1 → 3 over ~60 s)
- * should only run when the Director pipeline ACTUALLY ran. A returning veteran
- * is veteran-skipped — the Director emits ONBOARDING_COMPLETE WITHOUT a prior
- * ONBOARDING_STARTED — and must stay at the steady-state default tier 3 rather
- * than starting muted for a minute.
+ * Suppression tier to enter on ONBOARDING_COMPLETE. The wake ramp (tier 1 → 3 over ~60 s) runs only when the Director
+ * pipeline ACTUALLY ran: a returning veteran is veteran-skipped (ONBOARDING_COMPLETE WITHOUT a prior
+ * ONBOARDING_STARTED) and must stay at the steady-state tier 3 rather than start muted for a minute.
  *
  * @param {boolean} onboardingWasRun — did ONBOARDING_STARTED fire this session?
  * @returns {1|3} 1 ⇒ begin the wake ramp; 3 ⇒ steady state (no ramp).

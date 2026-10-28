@@ -7,6 +7,7 @@
  * @module scene/radiatorRailTexture
  */
 import * as THREE from 'three';
+import { lerp } from '../core/MathUtil.js';
 
 const _cache = new Map();
 
@@ -35,7 +36,7 @@ export function getRadiatorRailTexture({ lengthM, widthM, rails, endInsetM, face
     let rgb = f;
     for (const [cv, hex] of cvList) {                          // later bands paint over earlier ones
       const k = Math.min(1, cu * cv);
-      if (k > 0) rgb = [0, 1, 2].map((p) => rgb[p] + ((((hex >> (16 - 8 * p)) & 255) - rgb[p]) * k));
+      if (k > 0) rgb = [0, 1, 2].map((p) => lerp(rgb[p], (hex >> (16 - 8 * p)) & 255, k));
     }
     return rgb;
   };
