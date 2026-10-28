@@ -4350,7 +4350,7 @@ export class AutopilotSystem {
     }
     return {
       phase: 'search', done: kept.length === 0, i: 0, sols: null, k: 0, c: null, last: false, best: null, T1, armA, armB, type, g, R0, r1, kept, tolRad, rate,
-      rateG: PS.FUEL_G_PER_DEG[type], capG: PS.FUEL_G[type], next: null,
+      rateG: PS.FUEL_G_PER_DEG[type], capG: PS.FUEL_G[type], next: null, planeMaxDeg: this._pairPlaneMax(),
     };
   }
 
@@ -4366,11 +4366,20 @@ export class AutopilotSystem {
     do { this._pairSearchUnit(st); } while (!st.done && (budgetMs <= 0 || performance.now() - t0 < budgetMs));
   }
 
-  /** @private the larger of the pair's two launch misses the finder accepts (deg): the wheel kit turns the tethers into their planes without gas, so it gets the wider `_KIT` limit (never the tighter one) */
+  /**
+   * @private the larger of the pair's two launch misses the finder accepts (deg): the wheel kit turns the tethers into their planes without gas,
+   * so it gets the wider `_KIT` limit (never the tighter one), but only while the wheels can run: the kit is aboard AND the battery is at or
+   * over `WHEELS.MIN_BATTERY_WH` (read as `wheelsUsable()` reads it, with no battery wired = not power-limited; not its off-play-frame check:
+   * the offer must not depend on that flag). A kit with a flat battery gets the tight limit. The limit follows the battery at every search and
+   * at the refresh that ends it (no stored limit): a standing offer over the tight limit is dropped at the first refresh after the battery falls under the line.
+   */
   _pairPlaneMax() {
     const PS = Constants.PAIR_SHOT, p = this._player, base = PS.PLANE_MISS_MAX_DEG ?? Infinity;
     const kit = !!p && typeof p.hasWheelKit === 'function' && p.hasWheelKit();
-    return kit ? Math.max(base, PS.PLANE_MISS_MAX_DEG_KIT ?? base) : base;
+    if (!kit) return base;
+    const b = p.resources ? p.resources.battery : undefined;
+    const runs = !Number.isFinite(b) || b >= Constants.WHEELS.MIN_BATTERY_WH;
+    return runs ? Math.max(base, PS.PLANE_MISS_MAX_DEG_KIT ?? base) : base;
   }
 
   /** @private one unit of the search: the next answer of the candidate in hand, or else the next candidate's solve */
@@ -4390,7 +4399,7 @@ export class AutopilotSystem {
       if (r.missA > PS.MISS_DEG || r.missB > PS.MISS_DEG || r.turnDeg > PS.TURN_DEG + 1e-6) return null;
       // S5 pair plane: a line that leaves a piece far off its strut's swing plane makes the mother turn it into the plane during the reel,
       // and that turn costs more than the pair saves (Constants PAIR_SHOT.PLANE_MISS_MAX_DEG)
-      if (Math.max(r.missA, r.missB) > this._pairPlaneMax()) { st.why = st.why || {}; st.why['pair plane'] = (st.why['pair plane'] || 0) + 1; return null; }
+      if (Math.max(r.missA, r.missB) > st.planeMaxDeg) { st.why = st.why || {}; st.why['pair plane'] = (st.why['pair plane'] || 0) + 1; return null; }
       const fuelG = rateG * (r.missA + r.missB);
       if (fuelG > capG) return null;
       const flight = r.alpha <= Math.PI / 2 ? 2 * r.alpha : 2 * Math.PI - 2 * r.alpha;   // the angle the two daughters fly apart by
@@ -4510,7 +4519,7 @@ export class AutopilotSystem {
     const R0 = pairRotationOf(p.quaternion), r1 = this._pairRel(cur.t1, [0, 0, 0]), r2 = this._pairRel(cur.t2, [0, 0, 0]);
     const r = solvePairAimAll(cur.g, R0, r1, r2, { turnDeg: PS.TURN_DEG }).find((x) => !pairTethersCross(cur.g, pairAttitudeFor(R0, x.n), x.alpha, x.swap, r1, r2));
     if (!r || r.missA > PS.MISS_DEG || r.missB > PS.MISS_DEG) return null;
-    if (Math.max(r.missA, r.missB) > this._pairPlaneMax()) return null;                                  // S5 pair plane: as in the search
+    if (Math.max(r.missA, r.missB) > this._pairPlaneMax()) return null;            // S5 pair plane: as in the search, with the limit the battery gives now
     if (typeof am.pairLineBlockedAt === 'function' && am.pairLineBlockedAt(cur.armA, cur.armB, r.alpha)) return null;
     const fuelG = PS.FUEL_G_PER_DEG[cur.type] * (r.missA + r.missB);
     if (fuelG > PS.FUEL_G[cur.type]) return null;

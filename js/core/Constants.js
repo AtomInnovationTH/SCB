@@ -5457,6 +5457,8 @@ export const Constants = {
     PLANE_MISS_MAX_DEG: 4.0,
     // With the wheel kit the plane turn costs no gas (the wheels turn her), so the pair still wins at every miss measured, 2-6.5 deg (f-2 + f-3 pair 24.1 g at
     // 6.0 vs two singles 160 g; PAIR_FIELDS pair 0.23 g either way). Capped at the reel's tolerance, 5.0: past it the reel turns anyway, which costs only time.
+    // The kit limit applies only while the wheels can run (kit aboard and battery >= WHEELS.MIN_BATTERY_WH, read at every search and every refresh of a standing offer): a kit with a flat battery gets PLANE_MISS_MAX_DEG.
+    // Measured 2026-10-28: the small daughters (spinners) at these same two limits: reel-start plane error 4.26 deg at a 4.0 miss without the kit, 4.9 at 5.0 with it, no turn; without the kit the pair costs under two singles (8.9 g against 18.5 g), with the kit the same as two singles (0.074 g each, measured): no limit of their own.
     PLANE_MISS_MAX_DEG_KIT: 5.0,
     FIRE_MISS_DEG: 12,       // at the spring: a pair whose lines have drifted past this is not fired (the gap over MISS_DEG is the aim's own stop error)
     SPREAD_MIN_DEG: 0,       // P5: the least flight angle between the two daughters (set from the measured closest approach; 0 = none)

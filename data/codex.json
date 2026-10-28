@@ -3289,7 +3289,8 @@
         "org_orbitaid",
         "org_orbital_lasers",
         "org_skyperfect_jsat",
-        "org_esa_debris"
+        "org_esa_debris",
+        "org_uk_space_agency"
       ],
       "i18n": {
         "title": "Who Actually Cleans Orbit",
@@ -5435,7 +5436,8 @@
       "startUnlocked": true,
       "related": [
         "world_who_removes",
-        "world_who_tracks"
+        "world_who_tracks",
+        "org_uk_space_agency"
       ],
       "i18n": {
         "title": "ESA Space Debris Office and Clean Space",
@@ -5588,6 +5590,24 @@
         "shortText": "A Japanese rocket company building ZERO, not yet flown.",
         "fullText": "Interstellar Technologies is a Japanese rocket company building ZERO, a two-stage rocket meant to lift up to 1,000 kg to low orbit. ZERO has not flown yet: the launch pad is due to be finished in the first quarter of 2027.\n\nOn 31 March 2026 the company passed a government funding checkpoint worth up to 7.37 billion yen more, and said it had booked seven satellites for ZERO's first flight. Its earlier small MOMO rocket has made seven flights to space and back.",
         "realWorld": "Sources (read 2026-10-27): Interstellar Technologies news, 23 Jul 2026 (Launch Complex 1 completion expected Q1 2027; seven suborbital MOMO launches): https://www.istellartech.com/en_news/11390; news, 31 Mar 2026 (SBIR Phase 3 stage-gate passed; up to 7.37 billion yen added, up to 15.4 billion in total; seven private satellites secured for the first flight): https://www.istellartech.com/en_news/11166; ZERO page (undated; up to 1,000 kg to low orbit): https://www.istellartech.com/en/launch/zero/. No first-flight date found.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_uk_space_agency",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_removes",
+        "org_esa_debris"
+      ],
+      "i18n": {
+        "title": "UK Space Agency",
+        "shortText": "Britain's space agency, paying for a first national debris-removal mission.",
+        "fullText": "In October 2026 the UK Space Agency chose ClearSpace UK to lead its Active Debris Removal mission, a contract worth £61 million (about $81 million). The plan is to remove two defunct British-registered satellites from low orbit. They have not been named yet.\n\nRobotic arms are meant to grab each satellite, and thrusters then push it into a controlled re-entry. Launch is planned for 2029 from SaxaVord on Unst, in the Shetland Islands, with removals between 2029 and 2032. The agency has asked UK residents to suggest a name for the mission; names floated elsewhere online are not its choice.",
+        "realWorld": "Sources (read 2026-10-27): ClearSpace press release, 15 Oct 2026 (£61 million; two UK-registered defunct satellites in low orbit; launch 2029): https://clearspace.today/news/clearspace-prime-uk-active-debris-removal-contract; New Atlas, 22 Oct 2026 (about US$81 million; SaxaVord; removals 2029 to 2032; robotic manipulators grapple the target, then a controlled re-entry): https://newatlas.com/space-systems/britain-space-junk-cleanup-mission-keep-space-tidy/; Shetland News, 15 Oct 2026 (launch from Unst planned for 2029, could take until 2032): https://www.shetnews.co.uk/2026/10/15/space-debris-mission-set-launch/; UK Space Agency blog, 15 Oct 2026 (naming competition for UK residents, closes 10 Dec 2026): https://space.blog.gov.uk/2026/10/15/name-the-uk-space-agencys-first-national-mission-%f0%9f%9b%b0%ef%b8%8f%f0%9f%8c%8d/. The dollar figure rests on New Atlas alone.",
         "unlockHint": "Reach orbit."
       },
       "lastVerified": "2026-10"
