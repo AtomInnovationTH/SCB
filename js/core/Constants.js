@@ -1388,9 +1388,10 @@ export const Constants = {
     CLOSE_RANGE_M:  10,      // inspect up close: within this (owner 2026-10-28; ADRAS-J reached 15 m)...
     COVER_DEG:      160,     // ...and two of the directions piece -> inspector kept there are at least this far apart: she has seen it from opposite sides (estimate)
     SAMPLE_DEG:     5,       // a new direction is kept only after it moved this far from every one kept (estimate)
+    TETHER_CLEAR_M: 1,       // an inspecting daughter keeps the whole mother-to-daughter line at least sizeMeter/2 + this from the piece's centre (the piece is taken as a sphere; B1 2026-10-28: the line crossed it)
+    TETHER_TURN_M:  0.5,     // ...and turns her arc round this much before that (her position lags her goal by a few frames)
     SPIN_RANGE_M:   50,      // measure the spin: within this (estimate)...
-    SPIN_MIN_S:     30,      // ...for one full turn of the piece, at least this long...
-    SPIN_MAX_S:     120,     // ...and at most this long, game seconds, accumulated (estimate)
+    SPIN_MIN_S:     30,      // ...for one full turn of the piece AS DRAWN (DossierSystem.drawnSpinRadS: the draw's own cap, DEBRIS_MAX_VISUAL_TUMBLE_DEG_S, applies), game seconds, accumulated; this long only for a piece that does not spin
   },
 
   // Debris Dossier — progressive reveal "treasure chest" data

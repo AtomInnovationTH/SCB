@@ -980,6 +980,7 @@ const _rhV2 = new THREE.Vector3();
 const _rhV3 = new THREE.Vector3();
 let _reelSeqCounter = 0;                 // reel-view: the order reels began in, across all daughters
 const _failTip = new THREE.Vector3();   // fail-reel: her strut tip, world, for the 200 m rule
+const _inspTip = new THREE.Vector3();   // big-rules B1: her strut tip, world, for the inspection arc's tether clearance
 const _rhV4 = new THREE.Vector3();
 const _rhV5 = new THREE.Vector3();
 const _rhQ1 = new THREE.Quaternion();
@@ -5378,23 +5379,57 @@ export class ArmUnit {
    */
   _driveInspectSweep(dt) {
     const SK = Constants.STATION_KEEP;
+    const target = this._stationKeepTarget;
     const hold = 0.9 * Constants.INSPECT.CLOSE_RANGE_M;
     if (this._standoffTargetR > hold) this._standoffTargetR = hold;
     if (!this._standoffSettling && this._standoffR > hold) this._standoffR = hold;
     if (this._standoffSettling) { this._thetaRate = 0; return false; }       // arrive first
-    const sw = this._inspectSweep || (this._inspectSweep = { dir: 1 });
+    const sw = this._inspectSweep || (this._inspectSweep = { dir: 1, hit: 0, armed: true, prevClr: Infinity });
     const lim = (SK.THETA_LIMIT_DEG || 120) * Math.PI / 180;
-    if (sw.dir > 0 && this._orbitTheta >= lim - 1e-6) sw.dir = -1;
-    else if (sw.dir < 0 && this._orbitTheta <= -lim + 1e-6) {
-      this._inspectSweep = null;
-      eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.displayName}: Inspection done, coming home.`, priority: 'info' });
-      this.recallFromStationKeep();
-      return true;
+    // B1: the tether is a straight line mother -> her, and the piece (a sphere of radius sizeMeter / 2) must stay clear of it. Behind the
+    // piece (seen from the mother) the line runs through it, so the arc turns round before: at the first frame the line is within
+    // (radius + TETHER_CLEAR_M + TETHER_TURN_M) of the centre and still closing. It re-arms once the line has opened out again.
+    const I = Constants.INSPECT;
+    const need = (target.sizeMeter || 0) / 2 + I.TETHER_CLEAR_M;
+    const clr = this._inspectTetherClearM(target);
+    let edge = 0;                                   // +1: the limit of the +direction was reached, -1: of the - direction
+    if (this._orbitTheta >= lim - 1e-6 && sw.dir > 0) edge = 1;
+    else if (this._orbitTheta <= -lim + 1e-6 && sw.dir < 0) edge = -1;
+    if (clr != null) {
+      if (!sw.armed && clr > need + 2 * I.TETHER_TURN_M) sw.armed = true;
+      if (sw.armed && !edge && clr < need + I.TETHER_TURN_M && clr <= sw.prevClr) { edge = sw.dir; sw.armed = false; }
+      sw.prevClr = clr;
+    }
+    if (edge) {
+      sw.hit |= edge > 0 ? 1 : 2;
+      if (sw.hit === 3) {                           // both ends of her arc seen: that is the inspection
+        this._inspectSweep = null;
+        eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.displayName}: Inspection done, coming home.`, priority: 'info' });
+        this.recallFromStationKeep();
+        return true;
+      }
+      sw.dir = -edge;
     }
     this._thetaRate = sw.dir * SK.ORBIT_RATE;
     this._phiRate = -(this._skPitch0 + this._orbitPhi);                      // 1 per second toward the equator of the hold frame
     this._radiusRate = 0;
     return false;
+  }
+
+  /**
+   * @private B1: the distance (metres) from the centre of her piece to the whole tether line (her strut tip -> her), or null before a mother
+   * position has been seen (a bare test rig). The segment, not the points: the line can cross a piece that both ends are clear of.
+   */
+  _inspectTetherClearM(target) {
+    const c = target && target._scenePosition;
+    if (!c || !this.strutTipWorldInto(_inspTip)) return null;
+    const ax = _inspTip.x, ay = _inspTip.y, az = _inspTip.z;
+    const bx = this.position.x - ax, by = this.position.y - ay, bz = this.position.z - az;
+    const len2 = bx * bx + by * by + bz * bz;
+    let u = len2 > 0 ? ((c.x - ax) * bx + (c.y - ay) * by + (c.z - az) * bz) / len2 : 0;
+    u = Math.max(0, Math.min(1, u));
+    const dx = ax + u * bx - c.x, dy = ay + u * by - c.y, dz = az + u * bz - c.z;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) / M;
   }
 
   /** @private Exit STATION_KEEP and transition to RETURNING */

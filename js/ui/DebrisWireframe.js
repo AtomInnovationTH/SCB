@@ -18,7 +18,7 @@ import { GameStates } from '../core/GameState.js';
 import { DebrisTextureAtlas, getUVOffsetForType, getBaseColorForType, getEmissiveForMOID } from './DebrisTextureAtlas.js';
 import { FlagDecalSystem, getUVOffsetForCountry, hasFlag } from './FlagDecalSystem.js';
 import { salvageGasKg } from '../systems/ResourceSystem.js';
-import { dossierSystem, DOSSIER_TIERS, appraiseSalvage, inspectStepLines } from '../systems/DossierSystem.js';
+import { dossierSystem, DossierSystem, DOSSIER_TIERS, appraiseSalvage, inspectStepLines } from '../systems/DossierSystem.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { mono } from '../core/Typeface.js';
 import { currentHudScale } from './HudScale.js';
@@ -1980,7 +1980,8 @@ export class DebrisWireframe {
       const label = TYPE_LABELS[t.type] || t.type;
       const massStr = t.mass != null ? `${t.mass.toFixed(1)}kg` : '?';
       const sizeStr = t.sizeMeter != null ? `${t.sizeMeter.toFixed(1)}m` : '?';
-      const tumbleDeg = ((t.tumbleRate || 0) * DEG).toFixed(1);
+      // A piece she does not catch reads the spin as drawn, the same rate its spin step measures (B2: one clock)
+      const tumbleDeg = ((dossierSystem.inspectPay(t) ? DossierSystem.drawnSpinRadS(t) : (t.tumbleRate || 0)) * DEG).toFixed(1);
 
       ctx.fillText(`${label}  ${massStr}  ${sizeStr}`, WIRE_CX, infoY);
 
@@ -2030,7 +2031,7 @@ export class DebrisWireframe {
       // fragmentation roll uses (resolveFragSeverity / effectiveFragility),
       // NOT the material-adjusted effectiveBrittleness (zone-risk only), so
       // the displayed number can't drift from what's actually rolled.
-      if (t.brittleness != null) {
+      if (t.brittleness != null && !stepsShown) {   // (a piece she does not catch: the four step lines take the room)
         const b = Math.max(0, Math.min(1, t.brittleness));
         ctx.font = mono(10);
         ctx.fillStyle = b >= 0.7 ? ZONE_COLORS.RED : b >= 0.4 ? ZONE_COLORS.YELLOW : ZONE_COLORS.GREEN;
@@ -2092,26 +2093,28 @@ export class DebrisWireframe {
     }
     ctx.font = mono(10, 'bold');
     ctx.fillStyle = '#00ffaa';
-    ctx.fillText(line2, WIRE_CX, infoY + 14);
-    this._renderInspectLines(ctx, infoY + 28);   // a piece over her catch limit: its characterising steps in two more lines
+    // A piece over her catch limit: its four characterising steps take the second line's place (the 200 px panel has no room for both)
+    if (this._renderInspectLines(ctx, infoY + 12) === infoY + 12) ctx.fillText(line2, WIRE_CX, infoY + 14);
   }
 
   /**
-   * big-rules T3: the two step lines of a piece she does not catch ("Too big to catch · orbit done" / "fly-around 40 % (within 10 m)
-   * · spin –"; DossierSystem.inspectStepLines, each at most 44 characters for the 280 px panel). Draws nothing for any other piece.
+   * big-rules T3/B3: the four step lines of a piece she does not catch, each with its credits ("Too big to catch · found 386 cr done" /
+   * "orbit 771 cr · within 200 m" / "fly-around 1543 cr · 40 %" / "spin 1157 cr · within 50 m"; DossierSystem.inspectStepLines, each at
+   * most 38 characters so the 280 px panel keeps its padding). Draws nothing for any other piece. Lines are 11 px apart, so four fit
+   * between `y` and the 200 px panel's foot when `y` is at most 164.
    * @private
-   * @returns {number} the y for what follows (y + 24 after the two lines, y unchanged when there are none)
+   * @returns {number} the y for what follows (y + 44 after the four lines, y unchanged when there are none)
    */
   _renderInspectLines(ctx, y) {
     const lines = inspectStepLines(dossierSystem.getInspectState(this._target));
     if (!lines) return y;
     ctx.textAlign = 'center';
-    for (let i = 0; i < 2; i++) {   // one font site for both lines (the first bold and yellow)
+    for (let i = 0; i < lines.length; i++) {   // one font site for all lines (the first bold and yellow)
       ctx.font = mono(10, i === 0 ? 'bold' : undefined);
       ctx.fillStyle = i === 0 ? '#ffcc00' : INFO_COLOR;
-      ctx.fillText(lines[i], WIRE_CX, y + 12 * i);
+      ctx.fillText(lines[i], WIRE_CX, y + 11 * i);
     }
-    return y + 24;
+    return y + 44;
   }
 
   /**
@@ -2167,14 +2170,16 @@ export class DebrisWireframe {
     const massStr = t.mass != null ? `~${t.mass.toFixed(0)}kg` : '?';
     const sizeStr = t.sizeMeter != null ? `${t.sizeMeter.toFixed(1)}m` : '?';
     ctx.fillText(`${label}  ${massStr}  ${sizeStr}`, WIRE_CX, infoY);
-    const tumbleDeg = ((t.tumbleRate || 0) * DEG).toFixed(1);
-    ctx.fillText(`Tumble: ${tumbleDeg}\u00B0/s   Mat: \u2588\u2588\u2588\u2588`, WIRE_CX, infoY + 12);
+    // A piece over her catch limit shows its four characterising steps from the second line on (she cannot catch it, so its salvage is no
+    // use to her, its spin is what its spin step measures, and the 200 px panel has no room for more): no tumble line, no survey prompt.
+    const stepsShown = this._renderInspectLines(ctx, infoY + 12) !== infoY + 12;
+    if (!stepsShown) {
+      const tumbleDeg = ((t.tumbleRate || 0) * DEG).toFixed(1);
+      ctx.fillText(`Tumble: ${tumbleDeg}\u00B0/s   Mat: \u2588\u2588\u2588\u2588`, WIRE_CX, infoY + 12);
+    }
 
-    // Redacted manifest — one ▓-row per real salvage line. A piece over her catch limit shows its characterising steps here instead (she
-    // cannot catch it, so its salvage is no use to her, and the 200 px panel has no room for both).
+    // Redacted manifest — one ▓-row per real salvage line.
     let y = infoY + 24;
-    const stepsShown = this._renderInspectLines(ctx, y) !== y;
-    if (stepsShown) y += 24;
     if (!stepsShown && t.hasSalvage && t.salvage) {
       const { rows } = appraiseSalvage(t.salvage);
       const n = Math.max(1, Math.min(3, rows.length || 1));
@@ -2204,10 +2209,12 @@ export class DebrisWireframe {
       ctx.beginPath();
       ctx.arc(rx, ry, 10, -Math.PI / 2, -Math.PI / 2 + TWO_PI * progress);
       ctx.stroke();
-      ctx.font = mono(10, 'bold');
-      ctx.fillStyle = '#00ffaa';
-      ctx.fillText(`SURVEYING ${Math.round(progress * 100)}%`, WIRE_CX, y + 2);
-    } else {
+      if (!stepsShown) {
+        ctx.font = mono(10, 'bold');
+        ctx.fillStyle = '#00ffaa';
+        ctx.fillText(`SURVEYING ${Math.round(progress * 100)}%`, WIRE_CX, y + 2);
+      }
+    } else if (!stepsShown) {
       ctx.font = mono(10);
       ctx.fillStyle = DIM_COLOR;
       ctx.fillText(`close to ${D.DETAIL_SCAN_RANGE_M || 50}m to survey`, WIRE_CX, y + 2);

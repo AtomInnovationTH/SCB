@@ -74,36 +74,32 @@ export function appraiseSalvage(salvage) {
   return { rows, total };
 }
 
-/** The longest step line the 280 px panel holds (mono 10 px, about 6.4 px a character). */
-const MAX_LINE = 44;
-
 /**
- * The TARGET INFO panel's step lines for a piece she does not catch (INSPECT, DECISIONS §49 row 3), in plain words and short enough for
- * the 280 px panel (each line at most 44 characters at 10 px mono, about 6 px a character). Pure.
- *   line 1: `Too big to catch · orbit done`            (or `orbit 35 %`, or `orbit – (within 200 m)` before it starts)
- *   line 2: `fly-around 40 % (within 10 m) · spin –`    (a finished fly-around reads `fly-around done`; a measured spin reads
- *           `Spins 1.2° a second`, in place of `spin –` / `spin 45 %`)
+ * The TARGET INFO panel's step lines for a piece she does not catch (INSPECT, DECISIONS §49 row 3), in plain words, with each step's
+ * credits on its own line (B3 2026-10-28) and short enough for the 280 px panel with its padding kept (at most 38 characters at 10 px mono, about 6.6 px each: 250 px of 280). Pure.
+ *   1: `Too big to catch · found 386 cr done`
+ *   2: `orbit 771 cr · within 200 m`  (`orbit 771 cr · 35 %`, `orbit 771 cr done`)
+ *   3: `fly-around 1543 cr · within 10 m`  (`· 40 %`, `done`)
+ *   4: `spin 1157 cr · within 50 m`  (`· 45 %`; a measured spin reads `Spins 1.0° a second · 1157 cr done`)
  * @param {ReturnType<DossierSystem['getInspectState']>} st
- * @returns {[string, string]|null} null when the piece is not one
+ * @returns {[string, string, string, string]|null} null when the piece is not one
  */
 export function inspectStepLines(st) {
   if (!st) return null;
   const I = Constants.INSPECT;
+  const pay = st.pay || {};
   const pct = (p) => `${Math.max(1, Math.min(99, Math.round(p * 100)))} %`;
-  const DASH = '\u2013';
   const MID = ' \u00B7 ';
-  const orbit = st.orbit.done ? 'orbit done'
-    : st.orbit.pct > 0 ? `orbit ${pct(st.orbit.pct)}`
-    : `orbit ${DASH} (within ${I.ORBIT_RANGE_M} m)`;
-  const spin = st.spin.done ? `Spins ${st.spin.degS.toFixed(st.spin.degS < 10 ? 1 : 0)}\u00B0 a second`
-    : st.spin.pct > 0 ? `spin ${pct(st.spin.pct)}`
-    : `spin ${DASH}`;
-  const flyWords = (hint) => (st.inspect.done ? 'fly-around done'
-    : `fly-around ${st.inspect.pct > 0 ? pct(st.inspect.pct) : DASH}${hint ? ` (within ${I.CLOSE_RANGE_M} m)` : ''}`);
-  // the distance hint goes first when the line is too long for the panel
-  let fly = flyWords(true);
-  if (fly.length + MID.length + spin.length > MAX_LINE) fly = flyWords(false);
-  return [`Too big to catch${MID}${orbit}`, `${fly}${MID}${spin}`];
+  const tail = (step, range) => (step.done ? ' done' : step.pct > 0 ? `${MID}${pct(step.pct)}` : `${MID}within ${range} m`);
+  const spin = st.spin.done
+    ? `Spins ${st.spin.degS.toFixed(st.spin.degS < 10 ? 1 : 0)}\u00B0 a second${MID}${pay.spin} cr done`
+    : `spin ${pay.spin} cr${tail(st.spin, I.SPIN_RANGE_M)}`;
+  return [
+    `Too big to catch${MID}found ${pay.find} cr${st.find.done ? ' done' : ''}`,
+    `orbit ${pay.orbit} cr${tail(st.orbit, I.ORBIT_RANGE_M)}`,
+    `fly-around ${pay.inspect} cr${tail(st.inspect, I.CLOSE_RANGE_M)}`,
+    spin,
+  ];
 }
 
 export class DossierSystem {
@@ -369,7 +365,7 @@ export class DossierSystem {
    * The panel's view of a piece's characterising steps, or null when it is not such a piece.
    * `pct` is 0-1 progress of a step in flight; a paid step is done.
    * @param {object|null} target
-   * @returns {{total:number, find:{done:boolean}, orbit:{done:boolean, pct:number}, inspect:{done:boolean, pct:number},
+   * @returns {{total:number, pay:{find:number, orbit:number, inspect:number, spin:number}, find:{done:boolean}, orbit:{done:boolean, pct:number}, inspect:{done:boolean, pct:number},
    *   spin:{done:boolean, pct:number, degS:number}}|null}
    */
   getInspectState(target) {
@@ -384,19 +380,30 @@ export class DossierSystem {
     const turnS = DossierSystem._spinTurnS(target);
     return {
       total: ip.total,
+      pay: ip.pay,
       find: { done: paid.has('find') },
       orbit: { done: paid.has('orbit'), pct: paid.has('orbit') ? 1 : clamp01((pr.orbitS || 0) / I.ORBIT_TIME_S) },
       inspect: { done: paid.has('inspect'), pct: paid.has('inspect') ? 1 : clamp01((pr.spreadDeg || 0) / I.COVER_DEG) },
-      spin: { done: paid.has('spin'), pct: paid.has('spin') ? 1 : clamp01((pr.spinS || 0) / turnS), degS: Math.abs(target.tumbleRate || 0) * (180 / Math.PI) },
+      spin: { done: paid.has('spin'), pct: paid.has('spin') ? 1 : clamp01((pr.spinS || 0) / turnS), degS: DossierSystem.drawnSpinRadS(target) * (180 / Math.PI) },
     };
   }
 
-  /** @private One full turn of the piece in game seconds, held between SPIN_MIN_S and SPIN_MAX_S. */
+  /**
+   * The spin AS DRAWN, in radians per game second at the shipped base rate (B2 2026-10-28). The 3D draw turns a piece by
+   * `min(|tumbleRate| x BASE_SCALE, DEBRIS_MAX_VISUAL_TUMBLE_DEG_S)` per real second (DebrisField._advanceTumble: a cap chosen for smooth
+   * motion, "jagged object rotating fast"), so the Meteor 2's 1.5 deg/s true spin is drawn at 1.0 deg per game second. The step's turn
+   * and the plain-words rate both use this, so the label, the drawn turn and the step are one clock.
+   */
+  static drawnSpinRadS(target) {
+    const base = TimeAuthority.BASE_SCALE;
+    const cap = ((Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity) * Math.PI) / 180;
+    return Math.min(Math.abs(target.tumbleRate || 0) * base, cap) / base;
+  }
+
+  /** @private One full turn of the piece as drawn, in game seconds (SPIN_MIN_S for a piece that does not spin). */
   static _spinTurnS(target) {
-    const I = Constants.INSPECT;
-    const w = Math.abs(target.tumbleRate || 0);
-    const turn = w > 1e-9 ? (2 * Math.PI) / w : Infinity;
-    return Math.max(I.SPIN_MIN_S, Math.min(I.SPIN_MAX_S, turn));
+    const w = DossierSystem.drawnSpinRadS(target);
+    return w > 1e-9 ? (2 * Math.PI) / w : Constants.INSPECT.SPIN_MIN_S;
   }
 
   /** @returns {Array<{k:string, s:string[]}>} the paid steps, for the save (empty = nothing to write). */
@@ -470,7 +477,7 @@ export class DossierSystem {
       }
     }
 
-    // 4. Measure its spin: within SPIN_RANGE_M for one full turn of the piece (held to SPIN_MIN_S..SPIN_MAX_S).
+    // 4. Measure its spin: within SPIN_RANGE_M for one full turn of the piece as drawn (one clock with the label).
     if (!paid.has('spin') && bestM <= I.SPIN_RANGE_M) {
       pr.spinS += step;
       if (pr.spinS >= DossierSystem._spinTurnS(target)) this._payInspect(target, key, 'spin', ip.pay.spin);
@@ -498,7 +505,7 @@ export class DossierSystem {
     paid.add(stepName);
     eventBus.emit(Events.SCORING_AWARD, { points: credits, reason: words });
     const rate = stepName === 'spin'
-      ? ` ${(Math.abs(target.tumbleRate || 0) * (180 / Math.PI)).toFixed(1)}\u00B0 a second,` : '';
+      ? ` ${(DossierSystem.drawnSpinRadS(target) * (180 / Math.PI)).toFixed(1)}\u00B0 a second,` : '';
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
       text: `${words}:${rate} ${credits} credits.`,
