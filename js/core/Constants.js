@@ -1820,6 +1820,35 @@ export const Constants = {
   // rack-snug: the SAME number seats a parked rack catch against her +Z end
   // (one number, the net). rack-centre: and spaces cell 1 from cell 0's catch along her axis.
   ARM_HOLD_NET_GAP_M: 0.03,            // metres
+  // snug-ring (owner 10-27, DECISIONS section 28 row 5): a piece SEATS in a small ring at her net launcher, only the net between.
+  // The seat is found by sweeping the piece along the hold axis until it first touches her real drawn mesh (ring included),
+  // then backing off so the true surface-to-surface gap is ARM_HOLD_NET_GAP_M minus this margin (the sweep sees vertices, not
+  // every edge crossing, so it aims a little inside the 3 cm window: 2.7 cm). est.
+  ARM_SEAT_GAP_MARGIN_M: 0.003,        // metres
+  // snug-ring: the seat sweep is for pieces up to this size (a bag, a ball, always). Bigger racked catches keep the support-plane rule:
+  // the hold-pose tables, the neighbour sweeps and the resupply satellite's haul planners were measured against that layout (est: 1.0 m)
+  ARM_SEAT_MAX_SIZE_M: 1.0,            // metres
+  // snug-ring F1a: the exact seat solve is 10-21 ms for a cubesat / 0.5 m / 1 m piece (measured), so while a piece turns on her
+  // (the carried spin, the spin payoff) the last answer stands until it has turned more than SEAT_RESOLVE_DEG in her frame, and a
+  // re-solve is at most one per SEAT_RESOLVE_MIN_S per catch (and one per frame across all daughters). est: 5 degrees, 0.5 s.
+  SEAT_RESOLVE_DEG: 5,                 // degrees
+  SEAT_RESOLVE_MIN_S: 0.5,             // seconds
+  // snug-ring F2a: a re-solve moves the seat by up to 2-3 cm (measured, 1 m piece); the piece eases to each answer, at most this much
+  // per frame (est: 4.5 mm, under the 5 mm bound), and is never left more than SEAT_EASE_LAG_M short of the answer (est: 2 cm, inside
+  // the 2.7 cm gap) so the ease cannot press it into her.
+  SEAT_EASE_STEP_M: 0.0045,            // metres per frame
+  SEAT_EASE_LAG_M: 0.02,               // metres
+  // net reel: the old support rule sets the cell until the line is within this of it, then the exact seat is solved (est)
+  SEAT_REEL_NEAR_M: 0.2,               // metres
+  // snug-ring R1: her seat ring, a thin capture ring of the same kind as the mother's (no petals, hooks or latches), coaxial with
+  // and OUTSIDE the net-launcher lip. Inner radius = lip outer radius + GAP_TO_LIP_M; tube radius TUBE_R_M (a 2.5 mm tube); the
+  // ring stands on the launcher face. Aluminium: its mass is logged (ArmUnit.seatRingMassKg), NOT booked into her live mass.
+  DAUGHTER_SEAT_RING: {
+    GAP_TO_LIP_M: 0.0015,              // metres, lip outer radius -> ring inner radius (est)
+    TUBE_R_M: 0.00125,                 // metres, tube radius: a 2.5 mm tube whose top (2.5 mm) stays under the lip top (3 / 2.5 mm), so her support, the racks and the
+                                       // planners' reach numbers do not move (est; the aft S-band omni's 20 mm clearance at the dock also left little to give)
+    DENSITY_KG_M3: 2700,               // aluminium
+  },
   // catch-snug: the move from the tight in-hand pin to the rack slot at the end of
   // docking glides over this long (smoothstep) instead of jumping in one frame.
   ARM_HOLD_GLIDE_S: 1.0,               // seconds
@@ -7302,6 +7331,12 @@ export const Constants = {
     STRAIN_GATE_DEG_S: 5.0,        // °/s — at/below: guaranteed hold (the despin play)
     STRAIN_RATE_RATED_DEG_S: 30.0, // °/s — full rip band at this residual wrench rate
     RIP_PROB_PER_S: 1.0,           // /s — rip chance at full band (× band × dt per frame)
+    // snug-ring R3 (owner 10-27, "Ring + real spin"): the catch's spin is NOT deleted at net close; it keeps turning while reeled
+    // and, at the seat (the net reel's end), its angular momentum L goes into her and is cancelled with her own cold gas
+    // (DAUGHTER_COLD_GAS jet). Effective lever of the jet about her centre (estimate: her body half-length is about 0.15 m):
+    SEAT_LEVER_M: 0.10,            // m (est) - torque = jet thrust x lever (weaver 0.10, spinner 0.05 N·m)
+    SEAT_CAP_BOTTLE_FRAC: 0.10,    // at most this fraction of her FULL bottle per seat; any L left is bled by the eddy damper
+    SEAT_G0: 9.80665,              // m/s^2, exhaust speed = DAUGHTER_COLD_GAS.ISP_S x this
   },
 
   // =========================================================================

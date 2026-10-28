@@ -77,9 +77,10 @@ export function buildNoseRoute(p) {
 /**
  * The virtual (top-reach) catch's centre in her frame, from the real catch's: the catch is the same shape at the same
  * attitude drawn at `R / r` times the size, its nearest point one net gap off her end whatever the size (`rackCellOffsetInto`,
- * cell 0: z = herSupport + gap + nearest-extent, the extent linear in the size). `h` = herSupport + gap.
+ * cell 0: z = h + nearest-extent, the extent linear in the size). `h` = the plane the real catch's nearest point stands off:
+ * herSupport + gap by the support rule, or (snug-ring, the seat sweep) the real cell's z minus the real catch's nearest extent.
  * @param {THREE.Vector3} cReal   (0, 0, h + s) for the real catch
- * @param {number} h              herSupportZM() + ARM_HOLD_NET_GAP_M
+ * @param {number} h              the plane the real catch's nearest extent starts from (see above)
  * @param {number} reachM         the real catch's reach
  * @param {number} bucketReachM   the bucket's top reach R
  * @param {THREE.Vector3} out
