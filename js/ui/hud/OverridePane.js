@@ -1,8 +1,9 @@
 /**
  * The SAFETY OVERRIDE demo panel (owner brief 2026-09-06/07): a big cockpit button at the bottom-centre of the HUD. Pressing it slides a 2×2
  * grid up out of it — DAUGHTERS · RADIATOR / ROSA · FURNACE. Three tap the ship's REAL deploy/retract hardware;
- * FURNACE has no hardware and is an obviously-broken button that runs a klaxon → "furnace offline" → "containment
- * failing" → fake self-destruct → 10 s black-screen gag with a POST screen, a systems reboot and a dry word from
+ * FURNACE has no hardware: it is a furnace TEST that draws two demo melt bags and then turns into the joke — a calm
+ * test of one furnace, a strain flash with two, and on the third press a klaxon → "containment failing" → fake
+ * self-destruct → 10 s black-screen gag with a POST screen, a systems reboot and a dry word from
  * Houston.
  *
  * Control law: the panel receives the SAME `actuators` object the hub builds for RefitPane (`{ rosaFurl,
@@ -50,14 +51,18 @@
  * GAME_STATE_CHANGE away from gameplay clear it; the sheet hides `#hud-hint-ticker`, `#notification-zone` and
  * `#arm-pilot-controls` under it (the ticker is z 8000 on body, above the overlay's grid).
  *
- * Reveal = slide-up in SLIDE_MS; `prefers-reduced-motion` → no transition, no fritz keyframes (steady dim +
- * FAULT), no shake, no pulse.
+ * Reveal = slide-up in SLIDE_MS; `prefers-reduced-motion` → no transition, no shake, no pulse (the FURNACE TEST
+ * button is a steady amber button either way).
  *
- * The FURNACE gag (owner 2026-09-09, v2) touches NO game state: IDLE → WARN → OVERHEAT → COUNTDOWN → BLACKOUT → RECOVER → IDLE, every timer
- * through the injected setTimeout/clearTimeout so the FSM runs in Node on fake time. TWO presses arm it
- * (`PRESSES_TO_ARM`): press 1 = klaxon + THREAT vignette pulse + shake + "Do NOT press that again."; press 2 = the
- * same alarm + "Furnace overheating. Containment failing." and, OVERHEAT_MS later, the countdown (SELF DESTRUCT
- * INITIATED, 5 … 1; every numeral change ticks the injected click; the CANCEL button is broken by design). The tick
+ * The FURNACE test (owner 2026-10-28; the gag itself 2026-09-09, v2) touches NO game state: IDLE → TEST1 → TEST2 → OVERHEAT → COUNTDOWN →
+ * BLACKOUT → RECOVER → IDLE, every timer through the injected setTimeout/clearTimeout so the FSM runs in Node on fake time. THREE
+ * presses arm the joke (`PRESSES_TO_ARM`): press 1 = a calm click, one tip's melt bag opens out and glows (a `TipCargo.showPartBag`
+ * drawing with `demo: true`, via `deps.tipCargo`; never a tip holding a real bag, a part bag or reserved; no radiator limit; no
+ * mass or credits) + "Furnace 1 test: mirror on, bag at 660 °C."; press 2 = a second bag, the short warning tone, a steady AMBER edge
+ * flash (1.5 s) + "Furnaces 1 and 2 on: both mirrors need the Sun, the ship is straining to hold it. Stop the test."; press 3 = the
+ * klaxon + THREAT pulse + shake + "Furnace overheating. Containment failing." and, OVERHEAT_MS later, the countdown (SELF DESTRUCT
+ * INITIATED, 5 … 1; every numeral change ticks the injected click; the CANCEL button is broken by design). The demo bags clear at the
+ * black-out, and on a reset, an abort, a collapse or the bar's 30 s timeout. The tick
  * after 1 is the hit: `audio.playCollision` + a 300 ms haptic + the black veil — a DOM element with a known id
  * (`#hud-override-veil`) that swallows POINTER events only (Esc still reaches the game). Five seconds of pure black,
  * then the POST screen (`.ovr-post` inside the veil, ten ASCII lines one per POST_LINE_MS), the CRT tail from
@@ -78,7 +83,7 @@
  * no slide-up. Its ONE visibility bit is FloorMask's `data-floor-gone` (MASK_PANES.f1bar, an attribute pane, shown
  * on F1 only); styling is injected CSS, never inline. RADIATOR reads / drives the hub's `flowerDeploy` actuator (the
  * O key's plain toggle, never the override sweep) and a tap inside `tapDebounceMs` of the last one is dropped, so a
- * touch double-tap can never VENT. FURNACE is the same joke until the furnace is built.
+ * touch double-tap can never VENT. FURNACE is the same test-then-joke.
  *
  * Everything lives inside the `Constants.LADDER.ENABLED` gate — the hub constructs the pane only there. NO live
  * singletons are imported (the one import is VisualLaw, pure data): bus / events / audio / reboot / timers / clock
@@ -137,9 +142,15 @@ export const F1_BAR_GEOMETRY = Object.freeze({
 });
 
 export const FURNACE_GAG = Object.freeze({
-  PRESSES_TO_ARM: 2,       // press 1 WARN, press 2 OVERHEAT → COUNTDOWN
-  KLAXON_S: 2,             // both presses; AudioSystem's klaxon is single-instance (a call while one sounds is ignored)
-  VIGNETTE_MS: 2000,       // WARN: THREAT vignette pulse (real alarms); gag chrome is CAUTION steady
+  PRESSES_TO_ARM: 3,       // press 1 TEST1 (one bag), press 2 TEST2 (two bags, amber flash), press 3 OVERHEAT → COUNTDOWN
+  KLAXON_S: 2,             // press 3 only; AudioSystem's klaxon is single-instance (a call while one sounds is ignored)
+  TEST_PULSE_MS: 1500,     // TEST2: the steady amber edge flash (CAUTION never pulses; never the red THREAT)
+  DEMO_TYPE: 'rocketBody', // the demo bag's piece type (the one a real melt of a rocket body draws); only its reach matters
+  DEMO_SIZE_M: 0.7,        // the demo bag's packed-part diameter (m): reach 0.46 m for this type (measured 2026-10-28), inside a tip's limit; it never sets a radiator band
+  DEMO_FRAC_FROM: 0.3,     // the bag opens out from this melt fraction (small) to 1 (full)
+  DEMO_OPEN_MS: 1500,      // ... over this long
+  DEMO_OPEN_SHOWS: 8,      // ... in this many draws (each rebuilds the bag's skin): 1 at the press + 7 steps
+  VIGNETTE_MS: 2000,       // OVERHEAT: THREAT vignette pulse (real alarms); gag chrome is CAUTION steady
   VIGNETTE_HZ: 2,
   SHAKE_MS: 600,
   OVERHEAT_MS: 1800,       // OVERHEAT: the vignette pulse AND the beat before the countdown ("containment failing")
@@ -160,7 +171,9 @@ export const FURNACE_SENDER = 'FURNACE';
 export const HOUSTON_SOURCE = 'HOUSTON';
 
 export const FURNACE_LINES = Object.freeze({
-  WARN:     Object.freeze({ text: 'WARNING: Furnace offline. Safety override rejected. Do NOT press that again.', priority: 'warning' }),
+  TEST1:    Object.freeze({ text: 'Furnace 1 test: mirror on, bag at 660 \u00b0C.', priority: 'info' }),
+  // The owner's line as designed, no prefix; `channel: 'ALERT'` routes it to the ALERT channel like the gag's other warnings (`_comm`, CommsSystem sourceToChannel).
+  TEST2:    Object.freeze({ text: 'Furnaces 1 and 2 on: both mirrors need the Sun, the ship is straining to hold it. Stop the test.', priority: 'caution', channel: 'ALERT' }),
   OVERHEAT: Object.freeze({ text: 'WARNING: Furnace overheating. Containment failing.', priority: 'warning' }),
   ARMED:    Object.freeze({ text: 'CRITICAL: Self-destruct sequence initiated.', priority: 'critical' }),
   CANCEL:   Object.freeze({ text: 'CAUTION: Cancel circuit not responding.', priority: 'caution' }),
@@ -201,7 +214,7 @@ export const POST_LINES = Object.freeze([
 
 export const OVERRIDE_POST_CLASS = 'ovr-post';
 
-export const GAG_STATES = Object.freeze(['IDLE', 'WARN', 'OVERHEAT', 'COUNTDOWN', 'BLACKOUT', 'RECOVER']);
+export const GAG_STATES = Object.freeze(['IDLE', 'TEST1', 'TEST2', 'OVERHEAT', 'COUNTDOWN', 'BLACKOUT', 'RECOVER']);
 
 /** The centre-screen banner over the countdown numerals (owner 2026-09-07). */
 export const COUNTDOWN_WARNING = 'SELF DESTRUCT INITIATED';
@@ -223,11 +236,13 @@ const PAD_PX = 8;
 const Z_VIGNETTE = 9990;
 const Z_COUNTDOWN = 9995;
 const Z_VEIL = 100000;               // above everything incl. the pause overlay
+/** The demo bags' tip order: TipCargo.pickTip's (azimuth 40 -> 220 -> 140 -> 320), so two bags sit on opposite sides of the ship. */
+const DEMO_TIP_ORDER = Object.freeze([0, 2, 1, 3]);
 const NOT_FITTED = 'NOT FITTED';     // RefitPane.ACTUATOR_NOT_FITTED, the flower's present-but-unowned word
 
 const COLOR_PLAYER = `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;     // heritage green — the HUD
 const COLOR_THREAT = `var(--hud-warning, ${VisualLaw.COLORS.THREAT})`;     // the ONE pulsing channel (vignette only; the gag countdown is CAUTION steady)
-const COLOR_CAUTION = `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})`;   // steady amber — FAULT, disabled reasons, gag main + countdown
+const COLOR_CAUTION = `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})`;   // steady amber — TEST label, disabled reasons, gag main + countdown + the test's strain flash
 
 const MAIN_TITLE = 'SAFETY OVERRIDE';
 const CTA_CLOSED = 'PRESS TO TEST ACTUATORS';
@@ -320,6 +335,8 @@ export class OverridePane {
    *   off so a bare pane owns no timer
    * @param {number}   [deps.tapDebounceMs] RADIATOR / FURNACE taps closer than this are dropped (main.js: VENT_DOUBLE_TAP_MS)
    * @param {function} [deps.drawerOpen] zero-arg bool: the workbench drawer is open (the bar tick shifts the bar clear of it)
+   * @param {function} [deps.tipCargo] zero-arg getter of the ship's TipCargo (`showPartBag` / `clearPartBags`); the
+   *   furnace test draws its demo bags there. Absent / null ⇒ the test keeps its lines and tones, no drawing
    * @param {boolean}  [deps.webdriver] true ⇒ the gag never builds the black veil (so no POST, no reboot)
    * @param {boolean|function} [deps.reducedMotion] override for the matchMedia probe
    * @param {function} [deps.setTimeout] injected timer (default: the global)
@@ -346,6 +363,8 @@ export class OverridePane {
       : (typeof clearTimeout === 'function' ? (id) => clearTimeout(id) : null);
     this._now = typeof deps.now === 'function' ? deps.now : _nowMs;
     this._barTickOn = deps.barTick === true;   // opt-in: the hub passes true (a default timer would show in every pane test)
+    this._tipCargoFn = typeof deps.tipCargo === 'function' ? deps.tipCargo : null;
+    this._demoTips = [];             // tips wearing a furnace-test demo bag (drawings only; cleared on every exit path)
     this._tapDebounceMs = Number.isFinite(deps.tapDebounceMs) ? deps.tapDebounceMs : F1_BAR_GEOMETRY.TAP_DEBOUNCE_MS;
     this._holdMs = Number.isFinite(deps.holdMs) ? deps.holdMs : F1_BAR_GEOMETRY.HOLD_VENT_MS;
 
@@ -564,13 +583,13 @@ export class OverridePane {
   /**
    * Pure label law (STATE-first like the REFIT chips). `pressed` = "the hardware is OUT". `null` ⇒ disabled with the
    * honest reason; 'NOT FITTED' ⇒ disabled; any other state passes through uppercased, enabled, unpressed. FURNACE
-   * is never disabled (BROKEN, not off). Unknown key ⇒ null.
+   * is never disabled. Unknown key ⇒ null.
    * @param {string} key one of OVERRIDE_KEYS
    * @param {string|null|undefined} state the actuator's `get()`
    * @returns {{text:string, sub?:string, disabled:boolean, pressed:boolean}|null}
    */
   static buttonLabel(key, state) {
-    if (key === 'furnace') return { text: NAME_OF.furnace, sub: 'FAULT', disabled: false, pressed: false };
+    if (key === 'furnace') return { text: NAME_OF.furnace, sub: 'TEST', disabled: false, pressed: false };
     const name = NAME_OF[key];
     if (!name || !ACTUATOR_OF[key]) return null;
     const sep = ' \u00b7 ';
@@ -584,7 +603,7 @@ export class OverridePane {
    * Pure F1-bar label law: plain name + a live state word. `state` is the actuator's `get()` (struts DEPLOYED /
    * STOWED / null; radiator the hub's `flowerDeploy` OPEN / CLOSED / MOVING / NOT FITTED / null; wings FURLED /
    * DEPLOYED / null); `moving` (struts only) = a docked strut is mid-swing. `pressed` = "the hardware is OUT".
-   * FURNACE: FAULT, never disabled.
+   * FURNACE: TEST, never disabled.
    * @param {string} key one of F1_BAR_KEYS
    * @param {string|null|undefined} state
    * @param {{moving?:boolean}} [opts]
@@ -593,7 +612,7 @@ export class OverridePane {
   static barLabel(key, state, opts = {}) {
     const name = BAR_NAME_OF[key];
     if (!name) return null;
-    if (key === 'furnace') return { name, state: 'FAULT', disabled: false, pressed: false };
+    if (key === 'furnace') return { name, state: 'TEST', disabled: false, pressed: false };
     if (state == null) return { name, state: BAR_NULL_STATE[key], disabled: true, pressed: false };
     const s = String(state).toUpperCase();
     if (s === NOT_FITTED) return { name, state: NOT_FITTED, disabled: true, pressed: false };
@@ -930,7 +949,7 @@ export class OverridePane {
       ${P} .ovr-btn:hover:not(:disabled) { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.14); }
       ${P} .ovr-btn[aria-pressed="true"] { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.2); border-color: ${COLOR_PLAYER}; }
       ${P} .ovr-btn:disabled { color: ${COLOR_CAUTION}; opacity: 0.55; cursor: not-allowed; border-color: rgb(var(--hud-caution-rgb, 255 170 0) / 0.35); background: rgb(var(--hud-caution-rgb, 255 170 0) / 0.04); }
-      /* FURNACE: obviously broken — irregular fritz + amber FAULT */
+      /* FURNACE TEST: a normal steady amber button (the test works now; it no longer flickers like a broken one) */
       ${P} .ovr-furnace {
         display: flex;
         flex-direction: column;
@@ -941,25 +960,8 @@ export class OverridePane {
         border-color: rgb(var(--hud-caution-rgb, 255 170 0) / 0.5);
         background: rgb(var(--hud-caution-rgb, 255 170 0) / 0.05);
       }
-      /* The fritz runs ONLY while the grid is open: visibility:hidden does not pause a CSS
-         animation, and the panel is collapsed most of its life (review 2026-09-07). */
-      ${P}[${OPEN_ATTR}] .ovr-furnace { animation: ovr-fritz 2.7s infinite; }
       ${P} .ovr-furnace .ovr-name { font-size: 12px; letter-spacing: 0.06em; }
       ${P} .ovr-furnace .ovr-sub { font-size: 11px; letter-spacing: 0.22em; color: ${COLOR_CAUTION}; }
-      @keyframes ovr-fritz {
-        0%   { opacity: 1; text-shadow: none; }
-        7%   { opacity: 0.55; text-shadow: 0 0 5px ${COLOR_CAUTION}; }
-        11%  { opacity: 1; text-shadow: none; }
-        23%  { opacity: 0.8; }
-        29%  { opacity: 1; }
-        46%  { opacity: 0.4; text-shadow: 0 0 7px ${COLOR_CAUTION}; }
-        49%  { opacity: 0.95; }
-        63%  { opacity: 0.85; text-shadow: 0 0 3px ${COLOR_CAUTION}; }
-        67%  { opacity: 1; }
-        88%  { opacity: 0.5; text-shadow: 0 0 6px ${COLOR_CAUTION}; }
-        91%  { opacity: 1; }
-        100% { opacity: 1; text-shadow: none; }
-      }
       /* Glass: 44 pt hit boxes (Apple HIG); the main button's fixed 260 x 64 already clears it */
       ${P}[${GLASS_ATTR}] .ovr-btn { min-height: ${G.BTN_GLASS_MIN_PX}px; min-width: ${G.BTN_GLASS_MIN_PX}px; font-size: 13px; }
       ${P}[${GLASS_ATTR}] .ovr-main { min-height: ${G.MAIN_GLASS_MIN_H_PX}px; }
@@ -1102,14 +1104,12 @@ export class OverridePane {
         text-align: left;
         pointer-events: none;
       }
-      /* Reduced motion: no slide, no fritz (steady dim + FAULT), no shake / pulse / flicker, no reveal blink */
+      /* Reduced motion: no slide, no shake / pulse / flicker, no reveal blink */
       ${P}[${REDUCED_ATTR}], ${P}[${REDUCED_ATTR}] .ovr-grid { transition: none; }
-      ${P}[${REDUCED_ATTR}] .ovr-furnace { animation: none; opacity: 0.55; }
       ${P}[${REDUCED_ATTR}] .${ATTRACT_CLASS} { animation: none; }
       @media (prefers-reduced-motion: reduce) {
         ${BAR} .f1b-btn { transition: none; }
         ${P}, ${P} .ovr-grid { transition: none; }
-        ${P} .ovr-furnace { animation: none; opacity: 0.55; }
         ${P} .${ATTRACT_CLASS}, .${PULSE_CLASS}, .${SHAKE_CLASS}, .${JITTER_CLASS}, #${OVERRIDE_VEIL_ID}.${CRT_CLASS}, #${OVERRIDE_COUNTDOWN_ID} .ovr-count, #${OVERRIDE_COUNTDOWN_ID} .ovr-warn { animation: none !important; }
       }
     `;
@@ -1368,8 +1368,9 @@ export class OverridePane {
   }
 
   /**
-   * FURNACE from the bar: the same two-press joke (no expand/collapse resets the count). A tap inside
-   * `tapDebounceMs` of the last one counts once; a WARN left FURNACE_RESET_MS, or the bar hidden, goes back to IDLE.
+   * FURNACE from the bar: the same three-press test (no expand/collapse resets the count). A tap inside
+   * `tapDebounceMs` of the last one counts once; a test (one or two furnaces) left FURNACE_RESET_MS, or the bar hidden,
+   * goes back to IDLE and its demo bags clear.
    */
   _barFurnacePress() {
     const now = this._now();
@@ -1378,14 +1379,21 @@ export class OverridePane {
     this._furnacePress();
     this._barFurnacePressNo = this._furnacePresses;
     if (this._barFurnaceResetId != null) this._clearTimer(this._barFurnaceResetId);
-    this._barFurnaceResetId = this._gagState === 'WARN'
+    this._barFurnaceResetId = this._testRunning()
       ? this._schedule(() => { this._barFurnaceResetId = null; this._resetBarFurnaceWarn(); }, F1_BAR_GEOMETRY.FURNACE_RESET_MS)
       : null;
   }
 
-  /** Back to IDLE from a WARN the BAR started, when no FURNACE press came since (a grid WARN keeps its no-timeout law). */
+  /** True while the test shows one or two furnaces (before the joke's third press). */
+  _testRunning() { return this._gagState === 'TEST1' || this._gagState === 'TEST2'; }
+
+  /**
+   * Back to IDLE from a test the BAR started, when no FURNACE press came since (a grid test keeps its no-timeout
+   * law: its collapse aborts it). Clears the demo bags and the press count.
+   */
   _resetBarFurnaceWarn() {
-    if (this._gagState !== 'WARN' || this._furnacePresses !== this._barFurnacePressNo) return;
+    if (!this._testRunning() || this._furnacePresses !== this._barFurnacePressNo) return;
+    this._clearDemoBags();
     this._gagState = 'IDLE';
     this._pressCount = 0;
   }
@@ -1489,25 +1497,116 @@ export class OverridePane {
     _removeClass(this._mainBtn, ATTRACT_CLASS);
   }
 
-  /** Press 1 → WARN, press 2 (PRESSES_TO_ARM) → OVERHEAT → (timer) COUNTDOWN; beyond WARN a press is ignored (ONE gag). */
+  /**
+   * Press 1 → TEST1 (one furnace runs), press 2 → TEST2 (two, a strain flash), press 3 (PRESSES_TO_ARM) → OVERHEAT →
+   * (timer) COUNTDOWN; beyond TEST2 a press is ignored (ONE gag).
+   */
   _furnacePress() {
     if (this._disposed) return;
     const s = this._gagState;
     if (s === 'OVERHEAT' || s === 'COUNTDOWN' || s === 'BLACKOUT' || s === 'RECOVER') return;
     this._furnacePresses += 1;
     this._pressCount += 1;
-    if (this._pressCount < FURNACE_GAG.PRESSES_TO_ARM) this._warn();
+    if (this._pressCount < FURNACE_GAG.PRESSES_TO_ARM - 1) this._test1();
+    else if (this._pressCount < FURNACE_GAG.PRESSES_TO_ARM) this._test2();
     else this._overheat();
   }
 
-  /** The rejection: klaxon, haptic, THREAT pulse, shake, "Do NOT press that again." */
-  _warn() {
-    this._gagState = 'WARN';
-    this._klaxon(FURNACE_GAG.KLAXON_S);
-    this._vibrate(200);
-    this._showVignette(true, FURNACE_GAG.VIGNETTE_MS);
-    this._shake(FURNACE_GAG.SHAKE_MS);
-    this._comm(FURNACE_LINES.WARN);
+  /** Press 1: a calm click, one bag opens and glows, "Furnace 1 test: ...". No klaxon, no red, no shake. */
+  _test1() {
+    this._gagState = 'TEST1';
+    this._click();
+    this._openDemoBag();
+    this._comm(FURNACE_LINES.TEST1);
+  }
+
+  /** Press 2: a second bag, the short warning tone, a steady AMBER edge flash for 1.5 s (CAUTION never pulses; never the red THREAT), the strain line. */
+  _test2() {
+    this._gagState = 'TEST2';
+    this._warningTone();
+    this._vibrate(80);
+    this._showVignette(false, FURNACE_GAG.TEST_PULSE_MS, COLOR_CAUTION);
+    this._openDemoBag();
+    this._comm(FURNACE_LINES.TEST2);
+  }
+
+  /** The injected short warning earcon (AudioSystem.playWarning); never the klaxon. */
+  _warningTone() {
+    try {
+      if (this._audio && typeof this._audio.playWarning === 'function') this._audio.playWarning();
+    } catch (_e) { /* audio */ }
+  }
+
+  /** The ship's TipCargo, or null (no dep, the getter threw, nothing built yet). */
+  _tipCargo() {
+    if (!this._tipCargoFn) return null;
+    try { return this._tipCargoFn() || null; } catch (_e) { return null; }
+  }
+
+  /** A tip a demo bag must not touch: it holds a real bag, is reserved for a carry or a melt, or already shows a part bag. */
+  _tipBusy(tc, i) {
+    if (typeof tc.has === 'function' && tc.has(i)) return true;
+    if (typeof tc.isReserved === 'function' && tc.isReserved(i)) return true;
+    if (typeof tc.hasPartBag === 'function' && tc.hasPartBag(i)) return true;
+    return false;
+  }
+
+  /** The demo bag's `showPartBag` call: `demo: true` keeps it off the radiators and below any real bag. */
+  _showDemoBag(tc, i, frac) {
+    try {
+      return tc.showPartBag(i, { type: FURNACE_GAG.DEMO_TYPE, sizeM: FURNACE_GAG.DEMO_SIZE_M, frac, demo: true }) === true;
+    } catch (_e) { return false; }
+  }
+
+  /**
+   * Open a demo bag on the first free tip (DEMO_TIP_ORDER): small first, then DEMO_OPEN_SHOWS draws over DEMO_OPEN_MS up
+   * to full (reduced motion: full at once). A drawing only: no mass, no credits, no radiator limit. No free tip, no
+   * TipCargo, or a tip that cannot show it ⇒ nothing is drawn and the lines go on.
+   * @returns {boolean} a bag was opened
+   */
+  _openDemoBag() {
+    const tc = this._tipCargo();
+    if (!tc || typeof tc.showPartBag !== 'function') return false;
+    const F = FURNACE_GAG;
+    const instant = this._reducedMotion();
+    for (const i of DEMO_TIP_ORDER) {
+      if (this._demoTips.includes(i) || this._tipBusy(tc, i)) continue;
+      if (!this._showDemoBag(tc, i, instant ? 1 : F.DEMO_FRAC_FROM)) continue;
+      this._demoTips.push(i);
+      if (!instant) this._growDemoBag(i, 1);
+      return true;
+    }
+    return false;
+  }
+
+  /** Draw step k (1..DEMO_OPEN_SHOWS-1) of tip i's opening; stops when the bag is gone or a real melt took the tip. */
+  _growDemoBag(i, k) {
+    const F = FURNACE_GAG;
+    if (k >= F.DEMO_OPEN_SHOWS) return;
+    this._schedule(() => {
+      if (!this._demoTips.includes(i)) return;
+      const tc = this._tipCargo();
+      const frac = F.DEMO_FRAC_FROM + (1 - F.DEMO_FRAC_FROM) * (k / (F.DEMO_OPEN_SHOWS - 1));
+      if (!tc || !this._showDemoBag(tc, i, frac)) {
+        // A real bag or melt owns the tip now (leave it alone), or the radiators opened past the band (take our drawing off).
+        this._demoTips = this._demoTips.filter((t) => t !== i);
+        try { if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags(i, true); } catch (_e) { /* dep */ }
+        return;
+      }
+      this._growDemoBag(i, k + 1);
+    }, F.DEMO_OPEN_MS / (F.DEMO_OPEN_SHOWS - 1));
+  }
+
+  /** Take every demo bag off its tip (a real melt's bag on a tip is never cleared: `demoOnly`). Idempotent; never throws. */
+  _clearDemoBags() {
+    const tips = this._demoTips;
+    this._demoTips = [];
+    if (!tips.length) return;
+    const tc = this._tipCargo();
+    if (!tc || typeof tc.clearPartBags !== 'function') return;
+    for (const i of tips) {
+      try { tc.clearPartBags(i, true); } catch (_e) { /* dep */ }
+    }
   }
 
   /**
@@ -1556,6 +1655,7 @@ export class OverridePane {
    */
   _enterBlackout() {
     this._gagState = 'BLACKOUT';
+    this._clearDemoBags();                                // the bags clear at the black-out
     this._removeCountdown();
     this._thud();
     this._vibrate(300);
@@ -1639,6 +1739,7 @@ export class OverridePane {
     if (this._gagState !== 'RECOVER') return;
     this._rebootHandle = null;
     this._removeVeil();
+    this._clearDemoBags();
     this._gagRuns += 1;
     const text = HOUSTON_LINES[Math.min(this._gagRuns - 1, HOUSTON_LINES.length - 1)];
     this._schedule(() => this._commHouston(text), FURNACE_GAG.HOUSTON_DELAY_MS);
@@ -1675,6 +1776,7 @@ export class OverridePane {
     this._removeVeil();
     this._removeCountdown();
     this._removeVignette();
+    this._clearDemoBags();
     this._unshake();
     try { if (this._audio && typeof this._audio.stopKlaxon === 'function') this._audio.stopKlaxon(); } catch (_e) { /* audio */ }
     this._gagState = 'IDLE';
@@ -1715,8 +1817,11 @@ export class OverridePane {
     return (d && typeof d.getElementById === 'function') ? d.getElementById(id) : null;
   }
 
-  /** The THREAT vignette (the one pulsing colour) for WARN and OVERHEAT; removed after `ms`. */
-  _showVignette(pulse, ms) {
+  /**
+   * The edge vignette: THREAT (the one pulsing red channel) for OVERHEAT, CAUTION amber for the test's strain flash
+   * (TEST2); removed after `ms`. A second call re-colours the live one.
+   */
+  _showVignette(pulse, ms, color = COLOR_THREAT) {
     if (!this._canBody()) return;
     let v = this._vignette;
     if (!v) {
@@ -1728,10 +1833,10 @@ export class OverridePane {
       v.style.inset = '0';
       v.style.pointerEvents = 'none';
       v.style.zIndex = String(Z_VIGNETTE);
-      v.style.background = `radial-gradient(ellipse at center, transparent 55%, ${COLOR_THREAT} 100%)`;
       doc.body.appendChild(v);
       this._vignette = v;
     }
+    v.style.background = `radial-gradient(ellipse at center, transparent 55%, ${color} 100%)`;
     if (pulse && !this._reducedMotion()) _addClass(v, PULSE_CLASS);
     else _removeClass(v, PULSE_CLASS);
     if (this._vignetteTimer != null) {
@@ -1858,15 +1963,18 @@ export class OverridePane {
   /**
    * The FURNACE's comms line. `_reactive: true` is the CommsSystem guidance arbiter's bypass for feedback to a key
    * the player JUST pressed; without it the onboarding tiers (commsSuppression tier 0–2) mute the gag and the button
-   * reads as dead instead of broken. The texts lead with WARNING:/CAUTION:/CRITICAL: on purpose (the ALERT-channel
-   * heuristic, sourceToChannel), so they never queue as flavor.
+   * reads as dead instead of broken. The gag's warnings lead with WARNING:/CAUTION:/CRITICAL: on purpose (the ALERT-channel
+   * heuristic, sourceToChannel), so they never queue as flavor; a line with its own `channel` (the test's press-2 line,
+   * which has no prefix) sends it explicitly instead.
    */
   _comm(line) {
     const bus = this._bus;
     const E = this._events;
     if (!bus || typeof bus.emit !== 'function' || !E || !E.COMMS_MESSAGE || !line) return;
     try {
-      bus.emit(E.COMMS_MESSAGE, { sender: FURNACE_SENDER, text: line.text, priority: line.priority, _reactive: true });
+      const msg = { sender: FURNACE_SENDER, text: line.text, priority: line.priority, _reactive: true };
+      if (line.channel) msg.channel = line.channel;
+      bus.emit(E.COMMS_MESSAGE, msg);
     } catch (_e) { /* bus */ }
   }
 

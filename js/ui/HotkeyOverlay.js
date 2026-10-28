@@ -251,7 +251,7 @@ export const HOTKEY_GROUPS = [
       [['8'], 'Nav ball', { id: 'nav' }],
       [['U'], 'Big catch: pick what to do', { id: 'big_catch' }],
       'gap',
-      [['F'], 'Furnace (not built)', { id: 'furnace' }],
+      [['F'], 'Furnace test (press 3 times)', { id: 'furnace' }],
       [['F2'], 'Thruster metal', { grey: 'not yet', id: 'thruster_metal' }],
       [['Shift G'], 'Net sweep', { grey: 'not yet', id: 'net_sweep' }],
       'gap',

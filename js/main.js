@@ -3286,6 +3286,8 @@ async function init() {
       tapDebounceMs: Constants.THERMAL.FLOWER.VENT_DOUBLE_TAP_MS,
       // The workbench's ONE open state: the bar tick keeps the bar clear of the open drawer.
       drawerOpen: () => !!(workbenchPane && workbenchPane.isOpen()),
+      // FURNACE test: its demo melt bags are drawn on the tips through TipCargo (read live: the ship is built before the pane).
+      tipCargo: () => (player && player.tipCargo) || null,
     });
     hotkeyOverlay.mountF1Button(document.getElementById('hud-overlay'));   // H1: floor-1 "?" (FloorMask f1bar pane)
     if (hud && hud.paneDensity) {

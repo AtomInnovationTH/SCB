@@ -568,6 +568,7 @@ export class TipCargo {
       anchor: { kind: 'tip', index: i },   // one object per bag, reused by every event (no per-frame allocation)
     };
     this._slots[i] = slot;
+    this.clearPartBags(i, true);                   // a furnace-test demo bag on the tip gives way to the real bag
     this._reserved[i] = false;                     // a stow (the carry's or a leash's) ends any reservation of the slot
     this._place(slot, rec);
     debris._captured = true;
@@ -605,7 +606,7 @@ export class TipCargo {
     }
     // lane 5e: a part bag shown on a tip holds the radiators at its band exactly as a real bag of its reach does
     for (const b of this._partBags) {
-      if (!b) continue;
+      if (!b || b.demo) continue;                  // a furnace-test demo bag never holds the radiators
       const deg = bandDegForRadius(b.radiusM);
       const rad = ((deg === null ? TIP_BAND[TIP_BAND.length - 1][1] : deg) * Math.PI) / 180;
       if (rad < best) best = rad;
@@ -622,8 +623,11 @@ export class TipCargo {
    * bag of its drawn reach does (the part's size with its parent's geometry, `DebrisField.trueReachM`: 0.70 m reads the 134 deg row), at its FULL
    * size, so the radiators settle once and do not chase the shrinking bag. The ceiling lifts at `clearPartBags`.
    * @param {number} i tip index (0..3)
-   * @param {{type: string, sizeM: number, frac?: number}} spec `sizeM` the packed part's diameter (m), `frac` 1 = whole .. 0 = melted
-   * @returns {boolean} false when the tip does not exist, holds a real bag, or the part does not fit a tip
+   * @param {{type: string, sizeM: number, frac?: number, demo?: boolean}} spec `sizeM` the packed part's diameter (m), `frac` 1 = whole .. 0 = melted;
+   *   `demo` true = the OVERRIDE panel's furnace test (a drawing and nothing else): it is left out of `maxRadiatorThetaRad()`, it never replaces a real
+   *   melt's bag on the tip (returns false), and a real `showPartBag` (no `demo`) on the tip takes it over; `stow` on the tip drops it
+   *   A demo is also refused while tip i's radiator is open past the band row of its reach (the angle a real bag would have capped it at).
+   * @returns {boolean} false when the tip does not exist, holds a real bag, or the part does not fit a tip (or a demo meets a real melt's bag, or the radiators are open past its band)
    */
   showPartBag(i, spec = {}) {
     if (!(i >= 0 && i < SLOT_COUNT) || this._slots[i]) return false;
@@ -632,7 +636,10 @@ export class TipCargo {
     const radiusM = DebrisField.trueReachM({ type: spec.type, id: 1, sizeMeter: spec.sizeM }, 0);
     if (!this.fits(radiusM)) return false;
     let b = this._partBags[i];
-    if (!b) b = this._partBags[i] = { i, type: spec.type, sizeM: spec.sizeM, radiusM, frac: 1, mesh: null };
+    if (b && spec.demo === true && !b.demo) return false;        // a real melt's bag stays
+    if (spec.demo === true && this._radiatorsPastBand(i, radiusM)) return false;   // no cap holds the radiators for a demo bag, so none is drawn where the cap would have protected
+    if (!b) b = this._partBags[i] = { i, type: spec.type, sizeM: spec.sizeM, radiusM, frac: 1, mesh: null, demo: false };
+    b.demo = spec.demo === true;
     b.type = spec.type; b.sizeM = spec.sizeM; b.radiusM = radiusM;
     b.frac = Number.isFinite(spec.frac) ? Math.max(0, Math.min(1, spec.frac)) : 1;
     if (!b.mesh) {
@@ -654,19 +661,30 @@ export class TipCargo {
     return true;
   }
 
+  /** Is tip i's radiator open past the band row for `radiusM` (where a real bag would cap it)? Unknown angle reads as not past. */
+  _radiatorsPastBand(i, radiusM) {
+    const p = this.player;
+    if (!p) return false;
+    const th = typeof p.petalThetaRad === 'function' ? p.petalThetaRad(Constants.THERMAL.FLOWER.AZIMUTHS_DEG[i]) : p._flowerThetaRad;
+    if (!Number.isFinite(th)) return false;
+    const deg = bandDegForRadius(radiusM);
+    const bandRad = ((deg === null ? TIP_BAND[TIP_BAND.length - 1][1] : deg) * Math.PI) / 180;
+    return th > bandRad + 1e-6;
+  }
+
   /** Is a part bag shown on tip i (or on any tip)? */
   hasPartBag(i) { return i === undefined ? this._partBags.some(Boolean) : !!this._partBags[i]; }
 
   /** The part bag on tip i, as `{type, sizeM, radiusM, frac, builds}` (a copy; `builds` = how many skins have been built for it so far), or null. */
-  partBagAt(i) { const b = this._partBags[i]; return b ? { type: b.type, sizeM: b.sizeM, radiusM: b.radiusM, frac: b.frac, builds: b.builds } : null; }
+  partBagAt(i) { const b = this._partBags[i]; return b ? { type: b.type, sizeM: b.sizeM, radiusM: b.radiusM, frac: b.frac, builds: b.builds, demo: b.demo === true } : null; }
 
-  /** Take the part bag off tip `i` (all four when `i` is omitted): the drawing goes and the radiator ceiling it set is lifted. */
-  clearPartBags(i) {
+  /** Take the part bag off tip `i` (all four when `i` is omitted): the drawing goes and the radiator ceiling it set is lifted. `demoOnly` leaves a real melt's bag alone. */
+  clearPartBags(i, demoOnly = false) {
     const from = i === undefined ? 0 : i;
     const to = i === undefined ? SLOT_COUNT : i + 1;
     for (let k = from; k < to; k++) {
       const b = this._partBags[k];
-      if (!b) continue;
+      if (!b || (demoOnly && !b.demo)) continue;
       if (b.mesh) {
         if (b.mesh.parent) b.mesh.parent.remove(b.mesh);
         b.mesh.visible = false;
