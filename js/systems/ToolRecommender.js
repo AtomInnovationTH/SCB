@@ -93,7 +93,11 @@ export function recommendArmTool(opts = {}) {
       // Daughter can. The hint routes the player to the right platform.
       const whaleCap = (CN.MEDIUM && CN.MEDIUM.MAX_CAPTURE_MASS) || 500;
       scores.NET = 1;
-      hints.NET = mass > whaleCap
+      // big-rules R5: over the mother's own catch limit nothing catches it: inspect it (within 10 m)
+      const limit = (CN.LARGE && CN.LARGE.CATCH_LIMIT_KG) || 0;
+      hints.NET = limit > 0 && mass > limit
+        ? 'Too big to catch: inspect it (within 10 m)'
+        : mass > whaleCap
         ? 'whale — Mother\'s Large Net only'
         : (armType === 'spinner' ? 'too big — send a Large Daughter' : 'oversize for this net');
     } else {

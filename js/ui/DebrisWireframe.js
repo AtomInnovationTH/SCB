@@ -18,7 +18,7 @@ import { GameStates } from '../core/GameState.js';
 import { DebrisTextureAtlas, getUVOffsetForType, getBaseColorForType, getEmissiveForMOID } from './DebrisTextureAtlas.js';
 import { FlagDecalSystem, getUVOffsetForCountry, hasFlag } from './FlagDecalSystem.js';
 import { salvageGasKg } from '../systems/ResourceSystem.js';
-import { dossierSystem, DOSSIER_TIERS, appraiseSalvage } from '../systems/DossierSystem.js';
+import { dossierSystem, DOSSIER_TIERS, appraiseSalvage, inspectStepLines } from '../systems/DossierSystem.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { mono } from '../core/Typeface.js';
 import { currentHudScale } from './HudScale.js';
@@ -2021,6 +2021,11 @@ export class DebrisWireframe {
         rowY += 12;
       }
 
+      // big-rules T3: a piece over her catch limit: its characterising steps (and no salvage manifest: she cannot catch it)
+      const stepsY = this._renderInspectLines(ctx, rowY);
+      const stepsShown = stepsY !== rowY;
+      rowY = stepsY;
+
       // Brittleness — the FRAG-chip driver. Show the RAW brittleness the
       // fragmentation roll uses (resolveFragSeverity / effectiveFragility),
       // NOT the material-adjusted effectiveBrittleness (zone-risk only), so
@@ -2034,7 +2039,7 @@ export class DebrisWireframe {
       }
 
       // Decrypted salvage manifest with credit values (typewriter reveal).
-      this._renderProfiledManifest(ctx, Math.max(rowY, infoY + 36));
+      if (!stepsShown) this._renderProfiledManifest(ctx, Math.max(rowY, infoY + 36));
     }
   }
 
@@ -2088,6 +2093,25 @@ export class DebrisWireframe {
     ctx.font = mono(10, 'bold');
     ctx.fillStyle = '#00ffaa';
     ctx.fillText(line2, WIRE_CX, infoY + 14);
+    this._renderInspectLines(ctx, infoY + 28);   // a piece over her catch limit: its characterising steps in two more lines
+  }
+
+  /**
+   * big-rules T3: the two step lines of a piece she does not catch ("Too big to catch · orbit done" / "fly-around 40 % (within 10 m)
+   * · spin –"; DossierSystem.inspectStepLines, each at most 44 characters for the 280 px panel). Draws nothing for any other piece.
+   * @private
+   * @returns {number} the y for what follows (y + 24 after the two lines, y unchanged when there are none)
+   */
+  _renderInspectLines(ctx, y) {
+    const lines = inspectStepLines(dossierSystem.getInspectState(this._target));
+    if (!lines) return y;
+    ctx.textAlign = 'center';
+    for (let i = 0; i < 2; i++) {   // one font site for both lines (the first bold and yellow)
+      ctx.font = mono(10, i === 0 ? 'bold' : undefined);
+      ctx.fillStyle = i === 0 ? '#ffcc00' : INFO_COLOR;
+      ctx.fillText(lines[i], WIRE_CX, y + 12 * i);
+    }
+    return y + 24;
   }
 
   /**
@@ -2146,9 +2170,12 @@ export class DebrisWireframe {
     const tumbleDeg = ((t.tumbleRate || 0) * DEG).toFixed(1);
     ctx.fillText(`Tumble: ${tumbleDeg}\u00B0/s   Mat: \u2588\u2588\u2588\u2588`, WIRE_CX, infoY + 12);
 
-    // Redacted manifest — one ▓-row per real salvage line.
+    // Redacted manifest — one ▓-row per real salvage line. A piece over her catch limit shows its characterising steps here instead (she
+    // cannot catch it, so its salvage is no use to her, and the 200 px panel has no room for both).
     let y = infoY + 24;
-    if (t.hasSalvage && t.salvage) {
+    const stepsShown = this._renderInspectLines(ctx, y) !== y;
+    if (stepsShown) y += 24;
+    if (!stepsShown && t.hasSalvage && t.salvage) {
       const { rows } = appraiseSalvage(t.salvage);
       const n = Math.max(1, Math.min(3, rows.length || 1));
       ctx.fillStyle = '#ffcc00';

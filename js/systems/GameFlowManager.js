@@ -27,6 +27,7 @@ import {
 } from './BigMelt.js';
 import { lifetimeYears, dragAreaM2, sailLifeYears } from './OrbitLifetime.js';
 import { FREE_ID } from './FieldRegistry.js';
+import { dossierSystem } from './DossierSystem.js';
 import { DebrisField } from '../entities/DebrisField.js';
 import { activeResupplySatellite } from '../entities/ResupplySatellite.js';
 import { trawlManager } from './TrawlManager.js';
@@ -731,6 +732,8 @@ export class GameFlowManager {
       // Nets step 3 slice 5 (lane 5b, P5): the big pieces she was still holding come back on their holders (nothing pays at load). AFTER the
       // arms' reset and the registry's restore; a game-over save carries none.
       if (save.gameOver !== true && Array.isArray(save.bigPieces)) this._restoreBigPieces(save.bigPieces);
+      // big-rules (§49 row 3): the characterising steps already paid for pieces over her catch limit come back (nothing pays at load).
+      if (save.gameOver !== true) dossierSystem.restoreInspect(save.inspectPaid);
       // lane 5e (E7): the hold comes back (entries only: the capacity is the upgrades' replay above). An old save has none and the hold stays as it is.
       if (save.gameOver !== true && save.cargoHold && Array.isArray(save.cargoHold.entries)
         && this._refs.cargoSystem && typeof this._refs.cargoSystem.restore === 'function') {

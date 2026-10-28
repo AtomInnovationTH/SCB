@@ -76,24 +76,243 @@ const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _X = new THREE.Vector3(1, 0, 0);
 
-// lane 5e: one shared lumpy ball (a bundle of folded wall sections in a net) and one dull-metal material for every part bag; never disposed
-let _partBagGeo = null;
-let _partBagMat = null;
-function partBagGeometry() {
-  if (_partBagGeo) return _partBagGeo;
-  const g = new THREE.IcosahedronGeometry(1, 1);
-  const pos = g.attributes.position;
-  for (let k = 0; k < pos.count; k++) {            // a fixed lumpy pattern (no random: the bag looks the same every time)
-    const bump = 1 + 0.12 * Math.sin(k * 12.9898 + 4.1414) * Math.cos(k * 3.7);
-    pos.setXYZ(k, pos.getX(k) * bump, pos.getY(k) * bump, pos.getZ(k) * bump);
+// Melt bag look (owner 2026-10-27, "a bunch of grey triangles in a sphere shape ... research more"): a woven ceramic-fibre cloth bag stretched
+// taut over the cut parts: ONE closed, smooth skin (a detail-6 icosphere with its corners merged by position, so no corner moves twice and there are no
+// gaps) whose shape is the CONVEX HULL of a few packed part corners (cloth stretched over boxes and tubes: flat-ish faces, soft ridges, a few corner
+// points), woven cloth, a small dazzling focus spot inside a dull-red halo where the furnace heats it, and the hull relaxing toward a plain sphere as the
+// parts melt and surface tension rounds them (docs/research/2026-10-slice5-big-pieces.md).
+/** Hull weight k: how far the skin follows the packed parts (1 = their hull, 0 = a sphere). 0.8 down to frac 0.3, then fading to 0.1 at frac 0 (round 2: the bag is only drawn while melting, so the parts must show). */
+export const PART_BAG_HULL_FULL = 0.8;
+export const PART_BAG_HULL_FLOOR = 0.1;
+/** The hull weight holds at its full value down to this melt fraction, then fades (round 2). */
+export const PART_BAG_HULL_HOLD = 0.3;
+const PART_BAG_SMOOTH_ITERS = 3;               // edge softening passes (round 1 used 6: the faces blurred into an egg)
+/** A bag's skin is rebuilt only when its melt fraction has moved by more than this since the last build. */
+export const PART_BAG_REBUILD_STEP = 0.02;
+const PART_BAG_CLOTH = 0xcdc4aa;          // warm cream, darker than white so sunlight does not blow it out (round 2: no blue or grey tint): ESTIMATE, not sourced
+const PART_BAG_ROUGHNESS = 0.95;
+const PART_BAG_BUMP = 0.5;                // ESTIMATE
+const PART_BAG_WEAVE_REPEAT = [48, 24];   // weave tiles around / pole to pole of the bag (u spans 2 pi, v spans pi): 48 repeats around, a fine weave, round 2: ESTIMATE
+const PART_BAG_WEAVE_SWING = 0.07;        // luminance swing of the weave, 7 % (round 2: 5-8 %, barely visible at 3 m)
+const PART_BAG_WEAVE_TINT = [255, 249, 232];   // warm cream tint of the weave texture: R >= G > B
+const PART_BAG_GLOW_EMISSIVE = 1.0;       // the dazzling core is emissive 1.0; the halo's own colour is dimmed in the texture
+const PART_BAG_CORE_COLOR = [255, 240, 190];   // white-yellow focus spot: ESTIMATE
+const PART_BAG_HALO_PEAK = [178, 38, 6];       // cherry red at the halo's inner edge, red 0.7 of full (cloth next to a ~1 kW focus runs far hotter than the 660 C melt; round 2): ESTIMATE
+const PART_BAG_CORE_R = 0.09;             // core radius, in bag radii (angular, on the +X side): 8-10 % per the owner round
+const PART_BAG_HALO_R = 0.25;             // halo radius, in bag radii
+const PART_BAG_GLOW_WINDOW = 0.36;        // the glow texture covers dir.y, dir.z in -0.36..0.36 (a cap about 21 deg across), black outside; the far side is pushed out of range
+export const PART_BAG_WEAVE_SIZE = 64;
+export const PART_BAG_GLOW_SIZE = 64;
+
+function seededRng(seed) {                 // mulberry32
+  let a = (Math.imul(seed | 0, 2654435761) + 0x9e3779b9) >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+let _partBagBase = null;
+/** The unit icosphere (detail 6) with corners merged by position, vertex neighbours, and the two uv sets (weave, focus glow). */
+function partBagBase() {
+  if (_partBagBase) return _partBagBase;
+  const src = new THREE.IcosahedronGeometry(1, 6);          // detail 6 (plan said 3: 320 triangles gave a visibly polygonal outline; 980 is still ~500 vertices) non-indexed: three corners per triangle, shared corners repeated
+  const sp = src.attributes.position;
+  const ids = new Map();
+  const dirs = [];
+  const index = [];
+  for (let k = 0; k < sp.count; k++) {
+    const x = sp.getX(k), y = sp.getY(k), z = sp.getZ(k);
+    const key = `${Math.round(x * 1e4)},${Math.round(y * 1e4)},${Math.round(z * 1e4)}`;
+    let id = ids.get(key);
+    if (id === undefined) { id = dirs.length / 3; ids.set(key, id); dirs.push(x, y, z); }
+    index.push(id);
   }
+  src.dispose();
+  const n = dirs.length / 3;
+  const nb = Array.from({ length: n }, () => new Set());
+  for (let t = 0; t < index.length; t += 3) {
+    for (let e = 0; e < 3; e++) { const a = index[t + e], b = index[t + (e + 1) % 3]; nb[a].add(b); nb[b].add(a); }
+  }
+  const nbr = nb.map((s) => Array.from(s));
+  // weave uv: longitude/latitude about the Y axis, the seam on the -X side (away from the furnace); glow uv: the dir.y, dir.z plane, only on the +X cap
+  const uv = new Float32Array(2 * n);
+  const uv1 = new Float32Array(2 * n);
+  for (let v = 0; v < n; v++) {
+    const x = dirs[3 * v], y = dirs[3 * v + 1], z = dirs[3 * v + 2];
+    uv[2 * v] = Math.atan2(z, x) / (2 * Math.PI) + 0.5;
+    uv[2 * v + 1] = Math.acos(Math.max(-1, Math.min(1, y))) / Math.PI;
+    if (x > 0.5) { uv1[2 * v] = 0.5 + y / (2 * PART_BAG_GLOW_WINDOW); uv1[2 * v + 1] = 0.5 + z / (2 * PART_BAG_GLOW_WINDOW); }
+    else { uv1[2 * v] = 5; uv1[2 * v + 1] = 5; }
+  }
+  _partBagBase = { dirs: new Float32Array(dirs), index, nbr, uv, uv1, n, hulls: new Map() };
+  return _partBagBase;
+}
+
+/** The packed parts' corners for a seed and attempt: 6-8 corners, well spread in direction (at least ~50 deg apart), radii 0.7-1.3, so the hull has a few big flat-ish faces. */
+function partBagCorners(seed, attempt = 0) {
+  const rng = seededRng(seed + 7919 * attempt);
+  const n = 6 + Math.floor(rng() * 3);
+  const pts = [];
+  for (let guard = 0; pts.length < n && guard < 400; guard++) {
+    const d = new THREE.Vector3(rng() - 0.5, rng() - 0.5, rng() - 0.5);
+    if (d.lengthSq() < 1e-4) continue;
+    d.normalize();
+    const minDot = guard < 200 ? 0.64 : 0.8;                   // cos 50 deg, relaxed late so the loop always ends
+    if (pts.some((q) => q.clone().normalize().dot(d) > minDot)) continue;
+    pts.push(d.multiplyScalar(0.7 + 0.6 * rng()));
+  }
+  return pts;
+}
+/** Hull planes (unit normal n, distance h from the origin) of a point set that holds the origin inside: every triple's plane with all points on one side. */
+function hullPlanes(pts) {
+  const planes = [];
+  const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), nrm = new THREE.Vector3();
+  for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) for (let k = j + 1; k < pts.length; k++) {
+    e1.subVectors(pts[j], pts[i]); e2.subVectors(pts[k], pts[i]); nrm.crossVectors(e1, e2);
+    const len = nrm.length();
+    if (len < 1e-6) continue;
+    nrm.divideScalar(len);
+    let h = nrm.dot(pts[i]);
+    let sgn = 1;
+    if (h < 0) { h = -h; sgn = -1; }
+    if (h < 0.05) continue;
+    let ok = true;
+    for (const p of pts) { if (sgn * nrm.dot(p) > h + 1e-6) { ok = false; break; } }
+    if (ok) planes.push([sgn * nrm.x, sgn * nrm.y, sgn * nrm.z, h]);
+  }
+  return planes;
+}
+/** The hull's radius along every skin direction, softened (cloth rounds the edges), the largest = 1. Cached per seed. */
+function partBagHull(seed) {
+  const base = partBagBase();
+  const hit = base.hulls.get(seed);
+  if (hit) return hit;
+  let r = null;
+  for (let attempt = 0; attempt < 24 && !r; attempt++) {      // keep the first packing whose hull closes round the centre (origin inside, no flat sliver)
+    const planes = hullPlanes(partBagCorners(seed, attempt));
+    const cand = new Float32Array(base.n);
+    let ok = planes.length >= 4, lo = Infinity;
+    for (let v = 0; v < base.n && ok; v++) {
+      const x = base.dirs[3 * v], y = base.dirs[3 * v + 1], z = base.dirs[3 * v + 2];
+      let m = Infinity;
+      for (const pl of planes) { const c = x * pl[0] + y * pl[1] + z * pl[2]; if (c > 1e-6) m = Math.min(m, pl[3] / c); }
+      if (!Number.isFinite(m)) ok = false;
+      cand[v] = m; lo = Math.min(lo, m);
+    }
+    if (ok && lo > 0.3) r = cand;
+  }
+  if (!r) r = new Float32Array(base.n).fill(1);
+  for (let it = 0; it < PART_BAG_SMOOTH_ITERS; it++) {          // cloth rounds the edges a little: relax each radius toward its neighbours' mean
+    const nx = new Float32Array(base.n);
+    for (let v = 0; v < base.n; v++) {
+      let sum = 0; const ns = base.nbr[v];
+      for (let q = 0; q < ns.length; q++) sum += r[ns[q]];
+      nx[v] = 0.5 * r[v] + 0.5 * sum / ns.length;
+    }
+    r = nx;
+  }
+  let peak = 0;
+  for (let v = 0; v < base.n; v++) peak = Math.max(peak, r[v]);
+  for (let v = 0; v < base.n; v++) r[v] /= peak;
+  if (base.hulls.size >= 16) base.hulls.clear();
+  base.hulls.set(seed, r);
+  return r;
+}
+/** How closely the skin follows the packed parts' hull for a melt fraction: 0.8 down to frac 0.3 (the bag is only drawn while melting, so the parts must show), then fading to 0.1 at frac 0. */
+export function partBagHullK(frac) {
+  const f = Math.max(0, Math.min(1, Number.isFinite(frac) ? frac : 1));
+  if (f >= PART_BAG_HULL_HOLD) return PART_BAG_HULL_FULL;
+  return PART_BAG_HULL_FLOOR + (PART_BAG_HULL_FULL - PART_BAG_HULL_FLOOR) * (f / PART_BAG_HULL_HOLD);
+}
+/** A fresh closed, indexed, smooth-shaded skin for a melt fraction and a bag seed (the caller owns it and disposes it). */
+export function buildPartBagGeometry(frac, seed = 0) {
+  const base = partBagBase();
+  const hull = partBagHull(seed);
+  const k = partBagHullK(frac);
+  const grow = 1 + 0.1 * k;                                   // the largest radius stays inside the old 1.12 the radiator ceiling was measured with
+  const pos = new Float32Array(3 * base.n);
+  for (let v = 0; v < base.n; v++) {
+    const r = grow * (1 + k * (hull[v] - 1));
+    pos[3 * v] = base.dirs[3 * v] * r; pos[3 * v + 1] = base.dirs[3 * v + 1] * r; pos[3 * v + 2] = base.dirs[3 * v + 2] * r;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(base.uv.slice(), 2));
+  g.setAttribute('uv1', new THREE.BufferAttribute(base.uv1.slice(), 2));
+  g.setIndex(base.index.slice());
   g.computeVertexNormals();
-  _partBagGeo = g;
   return g;
 }
+
+function dataTexture(data, size) {
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.needsUpdate = true;
+  return tex;
+}
+let _partBagGlow = null;
+/** The focus glow, 64x64 over dir.y, dir.z: a small white-yellow core (emissive ~1.0) inside a dull-red halo, black outside. Used through uv1 (texture channel 1). No `document` needed. */
+export function partBagGlowMap() {
+  if (_partBagGlow) return _partBagGlow;
+  const W = PART_BAG_GLOW_SIZE;
+  const data = new Uint8Array(W * W * 4);
+  for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+    const dy = ((x + 0.5) / W - 0.5) * 2 * PART_BAG_GLOW_WINDOW, dz = ((y + 0.5) / W - 0.5) * 2 * PART_BAG_GLOW_WINDOW;
+    const rho = Math.hypot(dy, dz);
+    const halo = Math.pow(Math.max(0, Math.min(1, (PART_BAG_HALO_R - rho) / (PART_BAG_HALO_R - PART_BAG_CORE_R))), 0.7);   // 1 at the core's edge, 0 at 25 % of the radius; the 0.7 power keeps it clearly lit at mid radius
+    const t = Math.max(0, Math.min(1, (PART_BAG_CORE_R + 0.01 - rho) / 0.03));         // 1 inside about 0.07 .. 0 at 0.10
+    const core = t * t * (3 - 2 * t);
+    const o = 4 * (y * W + x);
+    for (let c = 0; c < 3; c++) data[o + c] = Math.round(PART_BAG_HALO_PEAK[c] * halo * (1 - core) + PART_BAG_CORE_COLOR[c] * core);
+    data[o + 3] = 255;
+  }
+  const tex = dataTexture(data, W);
+  if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.channel = 1;
+  _partBagGlow = tex;
+  return tex;
+}
+let _partBagWeave = null;
+/** The woven look, 64x64 warm cream, low contrast (8x8-texel cells, plain weave: warp over weft and back, tiled 48x24 over the bag): used as colour map and bump map. Procedural, no `document`. */
+export function partBagWeaveMap() {
+  if (_partBagWeave) return _partBagWeave;
+  const W = PART_BAG_WEAVE_SIZE, C = 8;
+  const data = new Uint8Array(W * W * 4);
+  for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+    const cx = Math.floor(x / C), cy = Math.floor(y / C);
+    const along = ((cx + cy) % 2 === 0) ? (x % C) : (y % C);       // across the thread on top: it is round, bright at its crown
+    const crown = Math.sin(Math.PI * (along + 0.5) / C);
+    const grain = ((Math.imul(x * 73856093 ^ y * 19349663, 2654435761) >>> 24) / 255 - 0.5) * 0.15 * PART_BAG_WEAVE_SWING;   // fibre noise
+    const g = Math.max(0, Math.min(1, 1 - PART_BAG_WEAVE_SWING * (1 - crown) + grain));    // brightest 1.0 at the thread crown, 7 % darker between threads
+    const o = 4 * (y * W + x);
+    for (let c = 0; c < 3; c++) data[o + c] = Math.round(PART_BAG_WEAVE_TINT[c] * g);
+    data[o + 3] = 255;
+  }
+  const tex = dataTexture(data, W);
+  if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(PART_BAG_WEAVE_REPEAT[0], PART_BAG_WEAVE_REPEAT[1]);
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.anisotropy = 4;
+  return tex;
+}
 function partBagMaterial() {
-  if (!_partBagMat) _partBagMat = new THREE.MeshStandardMaterial({ color: 0x8c949e, roughness: 0.85, metalness: 0.35, flatShading: true });
-  return _partBagMat;
+  const weave = partBagWeaveMap();
+  return new THREE.MeshStandardMaterial({
+    color: PART_BAG_CLOTH, roughness: PART_BAG_ROUGHNESS, metalness: 0,
+    map: weave, bumpMap: weave, bumpScale: PART_BAG_BUMP,
+    emissive: 0xffffff, emissiveMap: partBagGlowMap(), emissiveIntensity: PART_BAG_GLOW_EMISSIVE,
+  });
 }
 
 /** Band row (deg) for a bag radius, or null when the bag is too big for a tip. */
@@ -397,8 +616,8 @@ export class TipCargo {
   // ── part bags (Nets step 3 slice 5, lane 5e: a big piece melting in a tip furnace) ─────────────────────
 
   /**
-   * Show (or update) the bag of the PART of a big piece being melted in tip i's furnace: a drawn bundle of folded wall sections pinned to the
-   * tip like a real bag, shrinking as it melts. It is only a drawing: no field body, no CATCH_PROCESSED, no NET_CONSUMED, no mass booking (the
+   * Show (or update) the bag of the PART of a big piece being melted in tip i's furnace: a woven ceramic-cloth bag (one closed skin stretched over the packed parts' hull, a dazzling
+   * focus spot in a dull-red halo on its furnace +X side) pinned to the tip like a real bag, rounding and shrinking as it melts. It is only a drawing: no field body, no CATCH_PROCESSED, no NET_CONSUMED, no mass booking (the
    * part's kilograms are still in the piece until it melts, GameFlowManager books them then). It counts in `maxRadiatorThetaRad()` exactly as a real
    * bag of its drawn reach does (the part's size with its parent's geometry, `DebrisField.trueReachM`: 0.70 m reads the 134 deg row), at its FULL
    * size, so the radiators settle once and do not chase the shrinking bag. The ceiling lifts at `clearPartBags`.
@@ -416,7 +635,14 @@ export class TipCargo {
     if (!b) b = this._partBags[i] = { i, type: spec.type, sizeM: spec.sizeM, radiusM, frac: 1, mesh: null };
     b.type = spec.type; b.sizeM = spec.sizeM; b.radiusM = radiusM;
     b.frac = Number.isFinite(spec.frac) ? Math.max(0, Math.min(1, spec.frac)) : 1;
-    if (!b.mesh) b.mesh = new THREE.Mesh(partBagGeometry(), partBagMaterial());
+    if (!b.mesh) {
+      b.mesh = new THREE.Mesh(buildPartBagGeometry(b.frac, b.i), partBagMaterial());
+      b.builtFrac = b.frac; b.builds = 1;
+    } else if (Math.abs(b.frac - b.builtFrac) > PART_BAG_REBUILD_STEP + 1e-6) {      // the lumps fade as it melts: a new skin per 0.02 of melt
+      b.mesh.geometry.dispose();
+      b.mesh.geometry = buildPartBagGeometry(b.frac, b.i);
+      b.builtFrac = b.frac; b.builds++;
+    }
     const mesh = b.mesh;
     if (mesh.parent !== rec.hinge) rec.hinge.add(mesh);          // pinned to the radiator: it turns with the petal and the ship
     mesh.layers.mask = rec.hinge.layers.mask;                    // the ship's near-field pass
@@ -431,8 +657,8 @@ export class TipCargo {
   /** Is a part bag shown on tip i (or on any tip)? */
   hasPartBag(i) { return i === undefined ? this._partBags.some(Boolean) : !!this._partBags[i]; }
 
-  /** The part bag on tip i, as `{type, sizeM, radiusM, frac}` (a copy), or null. */
-  partBagAt(i) { const b = this._partBags[i]; return b ? { type: b.type, sizeM: b.sizeM, radiusM: b.radiusM, frac: b.frac } : null; }
+  /** The part bag on tip i, as `{type, sizeM, radiusM, frac, builds}` (a copy; `builds` = how many skins have been built for it so far), or null. */
+  partBagAt(i) { const b = this._partBags[i]; return b ? { type: b.type, sizeM: b.sizeM, radiusM: b.radiusM, frac: b.frac, builds: b.builds } : null; }
 
   /** Take the part bag off tip `i` (all four when `i` is omitted): the drawing goes and the radiator ceiling it set is lifted. */
   clearPartBags(i) {
@@ -441,7 +667,12 @@ export class TipCargo {
     for (let k = from; k < to; k++) {
       const b = this._partBags[k];
       if (!b) continue;
-      if (b.mesh) { if (b.mesh.parent) b.mesh.parent.remove(b.mesh); b.mesh.visible = false; }
+      if (b.mesh) {
+        if (b.mesh.parent) b.mesh.parent.remove(b.mesh);
+        b.mesh.visible = false;
+        b.mesh.geometry.dispose();
+        b.mesh.material.dispose();                 // per bag; the shared glow and weave textures stay
+      }
       this._partBags[k] = null;
     }
   }

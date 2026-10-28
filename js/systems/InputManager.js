@@ -19,7 +19,7 @@ import {
   classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, targetRangeM, netRangeLine,
   netReachForMassM, netFlightSpeedMps, predictedRangeAtArrivalM, driftOutOfReachLine,
 } from './netRouting.js';
-import { computeLeadAim, netMaxReachM } from '../entities/CaptureNet.js';
+import { computeLeadAim, netMaxReachM, overCatchLimit, catchLimitLine } from '../entities/CaptureNet.js';
 import { tripRefuses } from './TransferTrip.js';
 import { isFree, samePiece, netRefusalLine, wrapRefusalLine, SCAN_FIRST_LINE, DAUGHTERS_ONLY_LINE, fanOutNoneText, daughtersHeldBackLine } from './PieceClaim.js';
 import { openingDance } from './OpeningDance.js';
@@ -3185,6 +3185,11 @@ export class InputManager {
       // Mass rating — hard refuse above the net's rated mass (strain roll in
       // the 80–100% band lands with Phase A; a 23 t CZ-5B can never be held).
       const mass = target.mass || 0;
+      // The mother's catch limit (§49 row 1, 1,500 kg): the ship's limit, not the net's strength. Plain words, never a net rating.
+      if (overCatchLimit(mass, netClass)) {
+        refuse(catchLimitLine(mass, netClass));
+        return true;
+      }
       const rated = (netClass && netClass.MAX_CAPTURE_MASS) || 0;
       if (rated > 0 && mass > rated) {
         refuse(`Beyond net rating — ${mass >= 1000 ? `${(mass / 1000).toFixed(1)} t` : `${Math.round(mass)} kg`} exceeds the ${(rated / 1000).toFixed(0)} t ${(netClass && netClass.NAME) || 'Large Net'}.`);

@@ -1372,6 +1372,27 @@ export const Constants = {
     FRAG_CHIP_MIN:        0.10,  // FRAG chip renders at/above this risk
   },
 
+  // Characterising a piece she does not catch (DECISIONS §49 row 3, owner 2026-10-28; DossierSystem). A piece over her catch limit
+  // (CAPTURE_NET.LARGE.CATCH_LIMIT_KG) with an owner who pays a removal fee pays one SEVENTH of that fee for four steps, each once
+  // per piece: find it, pinpoint its orbit, inspect it up close, measure its spin. Owner's rulings: the 1/7 (question tool 2026-10-28,
+  // "1/7 of removal fee (Recommended)"; real anchor: ADRAS-J's inspection contract was about 1/7 of the removal contract that used
+  // its data; estimate from two figures) and the 10 m ("within say 10 meters for full inspection", 2026-10-28). The split (10/20/40/30)
+  // and every other distance and time are ESTIMATES (coordinator, 2026-10-28). The inspector is the closest of the mother and her
+  // undocked daughters, as the survey's.
+  INSPECT: {
+    FEE_SHARE:      1 / 7,   // of the piece's removal fee (BigPieceValues.removalFeeCr), the four steps together
+    SPLIT: { find: 0.10, orbit: 0.20, inspect: 0.40, spin: 0.30 },   // estimate; the last step takes the rounding rest
+    ORBIT_RANGE_M:  200,     // pinpoint the orbit: within this (estimate; the Meteor 2 already sits ~1 km out, so 2 km would pay for nothing)...
+    ORBIT_TIME_S:   60,      // ...for this long, game seconds, accumulated (the clock waits while she is out of range) (estimate)
+    MIN_HOLD_M:     6,       // a daughter inspecting never holds closer than this, the wheel included (the Meteor 2 is 4.4-5 m across: 4 m left ~1.5 m to its surface; estimate)
+    CLOSE_RANGE_M:  10,      // inspect up close: within this (owner 2026-10-28; ADRAS-J reached 15 m)...
+    COVER_DEG:      160,     // ...and two of the directions piece -> inspector kept there are at least this far apart: she has seen it from opposite sides (estimate)
+    SAMPLE_DEG:     5,       // a new direction is kept only after it moved this far from every one kept (estimate)
+    SPIN_RANGE_M:   50,      // measure the spin: within this (estimate)...
+    SPIN_MIN_S:     30,      // ...for one full turn of the piece, at least this long...
+    SPIN_MAX_S:     120,     // ...and at most this long, game seconds, accumulated (estimate)
+  },
+
   // Debris Dossier — progressive reveal "treasure chest" data
   // (capture-feedback overhaul Phase 1.5). The reticle is for ACTING; the
   // dossier pane (DebrisWireframe) is for KNOWING.
@@ -4623,7 +4644,11 @@ export const Constants = {
       HUB_MASS:         0.150,     // kg (§2.3)
       CONE_HALF_ANGLE:  15,        // degrees (§2.1)
       SPIN_HZ:          2,         // (§6.1)
-      MAX_CAPTURE_MASS: 5000,      // kg (§6.1)
+      MAX_CAPTURE_MASS: 5000,      // kg (§6.1) the net's STRENGTH rating (its strain/slip band is read against this; unchanged)
+      // The mother's catch limit (owner 2026-10-27, DECISIONS §49 row 1: "up to 1,500 kg"). It is the SHIP's practical limit
+      // (the trip gas), not the net's strength, so it is a separate number: a piece OVER it is refused (exactly 1,500 stays
+      // catchable). Lowering MAX_CAPTURE_MASS instead would give every 1,500 kg catch a ~35 % slip chance.
+      CATCH_LIMIT_KG:   1500,      // kg
       // Net ladder: 4 nets in the Mother's one centred launcher (§2.9; was
       // 2 nets/pod x 2 pods until 2026-10-13, the same 4 whale captures per
       // load). Whale hunts are the Mother's premium, delta-v-costly job — the
@@ -5835,9 +5860,11 @@ export const Constants = {
   // mother net). The field's seed rolls where each piece sits along the track and, inside each row's ranges, how heavy it is: the
   // SAME roll picks mass and size, so a heavier piece is a bigger one (the four fields differ). Every piece is a real catalogue
   // class (names below; data/debris-catalog.json at 700-960 km), in HER orbit's tilt (the catalogue's own 70-99 deg is not used),
-  // and every piece is something she can catch: its largest side stays at or under CATCH_MAX_SIDE_M (a margin under the
-  // 6 m mother net, CAPTURE_NET.LARGE.DIAMETER), its mass under the mother net's 5,000 kg, its tumble under the net's 10 deg/s
-  // limit (DEBRIS_TYPES / assessNetFit). The numbers are ESTIMATES to tune except where a catalogue entry is named: the catalogue's own
+  // and every piece fits her net: its largest side stays at or under CATCH_MAX_SIDE_M (a margin under the 6 m mother net,
+  // CAPTURE_NET.LARGE.DIAMETER), its mass under the net's 5,000 kg strength, its tumble under the net's 10 deg/s
+  // limit (DEBRIS_TYPES / assessNetFit). Mass is the exception to "she can catch it": the Meteor 2 row (1,800-2,700 kg) is over her
+  // 1,500 kg catch limit (CAPTURE_NET.LARGE.CATCH_LIMIT_KG, DECISIONS §49): she does not catch it, she is paid for characterising
+  // it. The numbers are ESTIMATES to tune except where a catalogue entry is named: the catalogue's own
   // stage sizes (SL-14 R/B 6 m, Meteor-1 R/B 6.5 m, SL-8 R/B 6.5 m) are over the mouth, so the stage rows are named estimates
   // cut to fit (a stage whose side the net cannot swallow would be a piece she could never catch, which is not what a field is for).
   // Row fields: `types`/`material` (which parked spare a row claims: DebrisField._claimHeavySpare), `massMin..massMax` kg and

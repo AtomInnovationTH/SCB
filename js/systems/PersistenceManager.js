@@ -165,6 +165,10 @@ class PersistenceManager {
         // mass, size, owner, areaM2, fieldId, fieldRow, fate, holder, caughtAtMs, members?}]. Handed in by saveGame (BigPieces ledger); written
         // only when there are some, so a save with none (every old one, and a game-over save) is byte-for-byte what it was. Additive.
         ...(Array.isArray(data.bigPieces) && data.bigPieces.length ? { bigPieces: data.bigPieces } : {}),
+        // big-rules (DECISIONS §49 row 3): the characterising steps already paid for pieces over her catch limit, `[{k: 'fieldId|fieldRow',
+        // s: ['find','orbit',...]}]` - contributed via PERSISTENCE_GATHER by DossierSystem (piece ids do not survive a reload, a field and
+        // its row do), restored by GameFlowManager on Continue so a reload never pays a step twice. Written only when something was paid. Additive.
+        ...(Array.isArray(data.inspectPaid) && data.inspectPaid.length ? { inspectPaid: data.inspectPaid } : {}),
         // Nets step 3 slice 5 (lane 5e, E7): the cargo hold's stacks `{entries: [{metalId, name, massKg, color, ispAsThrust, marketValue}]}`
         // (CargoSystem.serialize): the orbit metal the tip furnaces make, and every other metal the hold carries. Written only when the hold holds
         // something. Additive (no SAVE_VERSION bump).

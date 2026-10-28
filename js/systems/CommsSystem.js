@@ -800,19 +800,22 @@ export class CommsSystem {
     // (the net's line is every other tool's). Plain words, no symbols (Ruling 0); the number keys that pilot her are in the
     // help page, not here. On glass `chipPhrase` turns each "Press N to ..." into its button (STICK PAD / CLOSE GRIPPER / USE MAGNET).
     // hints-scan D3 (owner 2026-10-26): when N goes to the mother's net or to another daughter, the line names her number key.
-    const inPositionLine = (tool, armId) => flyFirstLine(armId, (tool === 'PAD' ? 'Daughter in position. Press N to stick the pad on.'
-      : tool === 'GRIPPER' ? 'Daughter in position. Press N to grip it.'
-        : tool === 'MAGNET' ? 'Daughter in position. Press N to use the magnet.'
-          : 'Daughter in position. Press N to net it.'));
+    const inPositionLine = (tool, armId, inspect = false) => inspect === true
+      // big-rules S1: over the catch limit she only inspects it: no "Press N", so no net chip on glass either
+      ? 'Daughter in position, inspecting it. No net.'
+      : flyFirstLine(armId, (tool === 'PAD' ? 'Daughter in position. Press N to stick the pad on.'
+        : tool === 'GRIPPER' ? 'Daughter in position. Press N to grip it.'
+          : tool === 'MAGNET' ? 'Daughter in position. Press N to use the magnet.'
+            : 'Daughter in position. Press N to net it.'));
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const armId = daughterDisplayName(data?.armId) || 'SYSTEM';
-      this.addMessage('INFO', armId, inPositionLine(data?.tool, data?.armId), { channel: 'CMD' });
+      this.addMessage('INFO', armId, inPositionLine(data?.tool, data?.armId, data?.inspect), { channel: 'CMD' });
     });
     // u18c D5: the PLAYER changed her tool (backquote or CHANGE TOOL): say the new tool's line once. The recommendation
     // ArmUnit makes on station-keep entry emits TOOL_SELECTED too, without `byPlayer`: the entry line above covers it.
     eventBus.on(Events.TOOL_SELECTED, (data) => {
       if (!data || data.byPlayer !== true) return;
-      this.addMessage('INFO', daughterDisplayName(data.armId) || 'SYSTEM', inPositionLine(data.tool, data.armId), { channel: 'CMD' });
+      this.addMessage('INFO', daughterDisplayName(data.armId) || 'SYSTEM', inPositionLine(data.tool, data.armId, data.inspect), { channel: 'CMD' });
     });
   }
 

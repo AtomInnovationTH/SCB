@@ -22,7 +22,7 @@ import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { strutLocalDirection, composeDockedArmQuat, bestStrutAlpha, carryDirInto, carryFinalQuatInto, carryRotFrac } from './ArmDockBasis.js';
 import { buildNoseRoute, virtualCentreInto } from './NoseRoute.js';
-import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedHerFrameAttitude, applyHerFrameAttitude, clearShipRelativeAttitude, clearRackCell } from './CaptureNet.js';
+import { isInspectOnlyMass, captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedHerFrameAttitude, applyHerFrameAttitude, clearShipRelativeAttitude, clearRackCell } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
 import { daughterOutOfNetsLine, pressNToLine } from '../systems/netRouting.js';
@@ -1447,7 +1447,7 @@ export class ArmUnit {
         this._standoffR += data.radiusStep;
         // Immediate clamp so HUD readout reflects the bounded value
         // even if the next physics tick is delayed.
-        this._standoffR = clamp(this._standoffR, this._rMin, this._rMax);
+        this._standoffR = clamp(this._standoffR, this._minHoldM(), this._rMax);
       }
     });
 
@@ -2587,7 +2587,9 @@ export class ArmUnit {
       this._postDeployRefusalHint('fuel', 'Daughter out of fuel. Deploy another [1-4] or refuel');
       return false;
     }
-    if (target.mass && target.mass > this.config.maxCaptureMass) {
+    // big-rules R2: over the mother's catch limit a daughter goes to INSPECT (her usual approach and hold, her arc, home; no net): no mass refusal
+    const inspecting = isInspectOnlyMass(target.mass);
+    if (target.mass && target.mass > this.config.maxCaptureMass && !inspecting) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${this.displayName}: Target too massive (${target.mass}kg > ${this.config.maxCaptureMass}kg)`,
         priority: 'warning',
@@ -2596,6 +2598,7 @@ export class ArmUnit {
       return false;
     }
     this.target = target;
+    this._inspectSweep = null;              // R2: a fresh inspection arc for this trip
     this._fuelAtDeploy = this.fuel;         // Track for efficiency scoring
     this._startingDistance = 0;             // Phase 8: reset for approach beep fraction
     this._smoothDriftVel = null;            // Reset EMA-smoothed drift for fresh approach
@@ -2658,6 +2661,7 @@ export class ArmUnit {
     eventBus.emit(Events.ARM_DEPLOYED, {
       armId: this.id, type: this.type, targetId: target.id,
     });
+    if (inspecting) eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.displayName} going to inspect it, no net.`, priority: 'info' });
     return true;
   }
 
@@ -3117,6 +3121,7 @@ export class ArmUnit {
   manualNetDeploy() {
     if (this.state !== S.TRANSIT && this.state !== S.APPROACH) return false;
     if (!this.target) return false;
+    if (this._inspectOnlyRefuses()) return false;     // big-rules R2
 
     // 2026-05-28 (Item 8): mirror the inventory gate from captureFromStationKeep
     // so the ARM_PILOT manual-deploy path also fails loudly when the daughter
@@ -4528,6 +4533,7 @@ export class ArmUnit {
               standoffR: _so,
               isPiloted: this.isManual(),
               tool: this.selectedTool,   // the recommended tool (refreshed on SK entry): the holding line names it
+              inspect: isInspectOnlyMass(this.target.mass),   // big-rules S1: over the catch limit she only inspects: no net line, no net chip
             });
             return;
           }
@@ -4671,6 +4677,7 @@ export class ArmUnit {
           standoffR: standoff,
           isPiloted: this.isManual(),
           tool: this.selectedTool,   // the recommended tool (refreshed on SK entry): the holding line names it
+          inspect: isInspectOnlyMass(this.target.mass),   // big-rules S1
         });
         return;
       }
@@ -4678,7 +4685,7 @@ export class ArmUnit {
 
     // Close enough for net deployment
     const netThreshold = this.config.bodyDims[2] * M * 5;
-    if (dist < netThreshold) {
+    if (dist < netThreshold && !isInspectOnlyMass(this.target.mass)) {   // big-rules R2: an inspection never throws a net
       this._transitionTo(S.NETTING);
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${this.displayName}: Deploying ${this.config.netSize}m net`,
@@ -4718,6 +4725,10 @@ export class ArmUnit {
       // Phase 3c: MAGNET secondary — eddy-current detumble on conductive targets.
       this._updateEddyDamp(dt, target);
     }
+
+    // big-rules R2: over the mother's catch limit she is here to INSPECT: the hold at most CLOSE_RANGE_M out, then her arc, then home
+    const inspecting = isInspectOnlyMass(target.mass);
+    if (inspecting && this._driveInspectSweep(dt)) return;
 
     // Update spherical coordinates from input rates
     this._orbitTheta += this._thetaRate * dt;
@@ -4800,9 +4811,9 @@ export class ArmUnit {
     // can exceed _rMax — only enforce the lower bound so the ease can bring it
     // down through the band; once settled the normal [_rMin,_rMax] clamp holds.
     if (this._standoffSettling) {
-      this._standoffR = Math.max(this._rMin, this._standoffR);
+      this._standoffR = Math.max(this._minHoldM(), this._standoffR);
     } else {
-      this._standoffR = clamp(this._standoffR, this._rMin, this._rMax);
+      this._standoffR = clamp(this._standoffR, this._minHoldM(), this._rMax);
     }
 
     // Target position in scene coordinates — use _scenePosition (orbit-propagated)
@@ -5448,8 +5459,37 @@ export class ArmUnit {
     this._orbitPhi   = 0;
   }
 
+  /**
+   * @private big-rules R2: a daughter holding station at a piece over the mother's catch limit (no net; DECISIONS §49 row 3). She keeps the
+   * hold inside `INSPECT.CLOSE_RANGE_M` (the full inspection is within 10 m), levels her orbit onto the equator of her hold frame (so the arc
+   * covers the piece from opposite sides whatever way she arrived), sweeps +THETA_LIMIT then -THETA_LIMIT at ORBIT_RATE, and recalls herself
+   * (the same recall as the pilot's: RETURNING). The arrow keys move nothing meanwhile.
+   * @returns {boolean} true when she has left STATION_KEEP this frame (the caller stops)
+   */
+  _driveInspectSweep(dt) {
+    const SK = Constants.STATION_KEEP;
+    const hold = 0.9 * Constants.INSPECT.CLOSE_RANGE_M;
+    if (this._standoffTargetR > hold) this._standoffTargetR = hold;
+    if (!this._standoffSettling && this._standoffR > hold) this._standoffR = hold;
+    if (this._standoffSettling) { this._thetaRate = 0; return false; }       // arrive first
+    const sw = this._inspectSweep || (this._inspectSweep = { dir: 1 });
+    const lim = (SK.THETA_LIMIT_DEG || 120) * Math.PI / 180;
+    if (sw.dir > 0 && this._orbitTheta >= lim - 1e-6) sw.dir = -1;
+    else if (sw.dir < 0 && this._orbitTheta <= -lim + 1e-6) {
+      this._inspectSweep = null;
+      eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.displayName}: Inspection done, coming home.`, priority: 'info' });
+      this.recallFromStationKeep();
+      return true;
+    }
+    this._thetaRate = sw.dir * SK.ORBIT_RATE;
+    this._phiRate = -(this._skPitch0 + this._orbitPhi);                      // 1 per second toward the equator of the hold frame
+    this._radiusRate = 0;
+    return false;
+  }
+
   /** @private Exit STATION_KEEP and transition to RETURNING */
   _exitStationKeep(reason) {
+    this._inspectSweep = null;
     eventBus.emit(Events.STATION_KEEP_EXITED, {
       armId: this.id,
       reason: reason,
@@ -5484,9 +5524,39 @@ export class ArmUnit {
     this._transitionTo(S.RETURNING);
   }
 
+  /**
+   * big-rules S1/S4: is she on an inspection (her piece is over the mother's catch limit: no net, no tool)?
+   * @returns {boolean}
+   */
+  isInspecting() {
+    const t = this._stationKeepTarget || this.target;
+    return !!t && isInspectOnlyMass(t.mass);
+  }
+
+  /**
+   * @private big-rules S4: the closest she holds. Her normal band floor (4 m) except on an inspection, where it is
+   * `INSPECT.MIN_HOLD_M` (the Meteor 2 is 4.4-5 m across, so 4 m leaves ~1.5 m to its surface: an estimate).
+   */
+  _minHoldM() {
+    return this.isInspecting() ? Math.max(this._rMin, Constants.INSPECT.MIN_HOLD_M) : this._rMin;
+  }
+
+  /**
+   * @private big-rules R2: a daughter at a piece over the mother's catch limit launches no net and works no tool (she only inspects it).
+   * @returns {boolean} true when she refuses (and said so)
+   */
+  _inspectOnlyRefuses() {
+    const t = this._stationKeepTarget || this.target;
+    if (!t || !isInspectOnlyMass(t.mass)) return false;
+    audioSystem.playDeny();
+    eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.displayName}: only inspecting it, no net.`, priority: 'warning' });
+    return true;
+  }
+
   /** Public: Capture debris from STATION_KEEP → NETTING */
   captureFromStationKeep() {
     if (this.state !== S.STATION_KEEP) return false;
+    if (this._inspectOnlyRefuses()) return false;
 
     // §13 Q5: Net inventory gate — when CAPTURE_NET is ON and nets exhausted,
     // emit NET_EMPTY_CLICK + click-fail audio + comms message instead of
@@ -5750,7 +5820,7 @@ export class ArmUnit {
     // u18c D5: marked as the PLAYER's choice (the backquote key or her CHANGE TOOL button): CommsSystem says the new tool's
     // in-position line for this and never for _refreshToolRecommendation's own emit on station-keep entry. Only while she
     // holds station (the line says "in position"); the key and the button allow nothing else today (u18 review).
-    eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: next, byPlayer: this.state === S.STATION_KEEP });
+    eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: next, byPlayer: this.state === S.STATION_KEEP, inspect: isInspectOnlyMass(((this._stationKeepTarget || this.target) || {}).mass) });
     return next;
   }
 
@@ -5801,6 +5871,7 @@ export class ArmUnit {
    */
   magneticGrapple() {
     if (this.state !== S.STATION_KEEP) return false;
+    if (this._inspectOnlyRefuses()) return false;
     const target = this._stationKeepTarget || this.target;
     if (!target) { audioSystem.playDeny(); return false; }
 
@@ -6245,6 +6316,7 @@ export class ArmUnit {
    */
   gripperGrapple() {
     if (this.state !== S.STATION_KEEP) return false;
+    if (this._inspectOnlyRefuses()) return false;
     if (!Constants.isFeatureEnabled('WEAVER_GRIPPER')) return this._toolOffline('GRIPPER');
     const target = this._stationKeepTarget || this.target;
     if (!target) { audioSystem.playDeny(); return false; }
@@ -6365,6 +6437,7 @@ export class ArmUnit {
    */
   padContact() {
     if (this.state !== S.STATION_KEEP) return false;
+    if (this._inspectOnlyRefuses()) return false;
     if (!Constants.isFeatureEnabled('SPINNER_PAD')) return this._toolOffline('PAD');
     const target = this._stationKeepTarget || this.target;
     if (!target) { audioSystem.playDeny(); return false; }

@@ -855,6 +855,40 @@ export function computeLeadAim(armPos, targetPos, relVel, launchSpeed, out = nul
 }
 
 /**
+ * The mother's catch limit (DECISIONS §49 row 1; `CAPTURE_NET.LARGE.CATCH_LIMIT_KG`, 1,500 kg): a piece OVER it is refused
+ * (exactly the limit stays catchable). It is the ship's practical limit, not the net's strength (`MAX_CAPTURE_MASS`, which
+ * the strain/slip band reads), so it is its own check. A net class with no limit never refuses here.
+ * @param {number} mass kg
+ * @param {{CATCH_LIMIT_KG?:number}|null} netClass
+ * @returns {boolean}
+ */
+export function overCatchLimit(mass, netClass) {
+  const limit = netClass && netClass.CATCH_LIMIT_KG;
+  return limit > 0 && (mass || 0) > limit;
+}
+
+/**
+ * The one plain line for a piece over the mother's catch limit ("Too heavy for us: 2.7 t (we take up to 1.5 t). Inspect it instead.").
+ * @param {number} mass kg
+ * @param {{CATCH_LIMIT_KG?:number}} netClass
+ * @returns {string}
+ */
+export function catchLimitLine(mass, netClass) {
+  const t = (kg) => `${(kg / 1000).toFixed(1)} t`;
+  return `Too heavy for us: ${t(mass)} (we take up to ${t(netClass.CATCH_LIMIT_KG)}). Inspect it instead.`;
+}
+
+/**
+ * A piece over the mother's catch limit is not caught but inspected (DECISIONS §49 row 3): a daughter sent at it flies her usual approach to
+ * her hold, sweeps it and comes home, and fires no net (big-rules R2). The same limit as the mother's (`overCatchLimit`, the LARGE net class).
+ * @param {number} mass kg
+ * @returns {boolean}
+ */
+export function isInspectOnlyMass(mass) {
+  return overCatchLimit(mass, Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE);
+}
+
+/**
  * Item 4 (2026-06-12): pre-fire net-fit assessment — the SINGLE source for
  * the reticle width/mass advisory, the TargetPanel capture-fit badge, and the
  * ToolRecommender width fork. Pure + Node-safe.
@@ -904,6 +938,7 @@ export function assessNetFit(target, netClass, approachDir = null) {
       return { fit: 'TOO_WIDE', label: 'TOO WIDE' };
     }
   }
+  if (overCatchLimit(mass, netClass)) return { fit: 'TOO_HEAVY', label: 'TOO BIG TO CATCH' };
   if (mass > cap) return { fit: 'TOO_HEAVY', label: 'TOO HEAVY' };
   const P = Constants.NET_TUMBLE_PENALTY || { IN_SPEC_DEG: 10 };
   const tumbleDeg = (target.tumbleRate != null)
@@ -5695,6 +5730,13 @@ export class CaptureNetSystem {
     if (tripRefuses('net')) return null;            // trip-melt D7: no net while the ship burns to the next field
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return null;
     if (target && target._disposed === true) return null;       // slice 5 (5d, D4): a piece that was disposed of is no catch
+    // big-rules R4: the catch limit at the source (§49 row 1), so every caller (the N key, the autopilot, the dev scenario) is refused the same way
+    if (target && overCatchLimit(target.mass, Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE)) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: catchLimitLine(target.mass, Constants.CAPTURE_NET.LARGE), source: 'SYSTEM', channel: 'CMD', priority: 'warning',
+      });
+      return null;
+    }
     if (!(podIndex >= 0) || podIndex >= this._motherPodCount()) return null;
     // Phase 0.3 (capture-feedback overhaul): refusals speak — mirror the
     // LassoSystem denial-comms style so the player knows WHY nothing fired

@@ -2096,7 +2096,7 @@ export class AutopilotSystem {
     const ts = this._targetSelector;
     const target = piece || (ts && typeof ts.getActiveTarget === 'function' ? ts.getActiveTarget() : null);
     if (!target || target._disposed === true || target.alive === false || !target._scenePosition) return null;
-    if ((target.mass || 0) > arm.config.maxCaptureMass) return null;
+    if ((target.mass || 0) > arm.config.maxCaptureMass && !((target.mass || 0) > Constants.CAPTURE_NET.LARGE.CATCH_LIMIT_KG)) return null;   // big-rules R2: over the catch limit she is sent to inspect, no net
     if (checkActiveSatArming(target, am._catalogLoader, QUIET_BUS)) return null;      // an active satellite is never a target (the launch refuses it)
     const dx = target._scenePosition.x - arm.position.x, dy = target._scenePosition.y - arm.position.y, dz = target._scenePosition.z - arm.position.z;
     if (Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_UNITS_PER_METER > arm.config.tetherMax * Constants.ARM_DEPLOY_RANGE_FRACTION) return null;

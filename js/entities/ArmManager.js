@@ -24,7 +24,7 @@ import { StrutAutoController } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit, planeTurnLeftRad } from './ArmUnit.js';
 import { DebrisField } from './DebrisField.js';
-import { clearRackCell, berthAnchorLocalInto, catchHomeDistM, homeShapeKey } from './CaptureNet.js';
+import { clearRackCell, berthAnchorLocalInto, catchHomeDistM, homeShapeKey, isInspectOnlyMass } from './CaptureNet.js';
 import { noseBucketFor, noseRadiatorsOk, noseWindowSpans } from './NoseRoute.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
@@ -854,8 +854,8 @@ export class ArmManager {
       return false;
     }
 
-    // Check mass compatibility
-    if (targetMass > arm.config.maxCaptureMass) {
+    // Check mass compatibility (big-rules R2: a piece over the mother's catch limit is sent a daughter to INSPECT, no net: the mass refusal does not apply)
+    if (targetMass > arm.config.maxCaptureMass && !isInspectOnlyMass(targetMass)) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${arm.displayName} cannot capture ${targetMass}kg (max ${arm.config.maxCaptureMass}kg)`,
         priority: 'warning',
@@ -1225,7 +1225,7 @@ export class ArmManager {
   _armShortfall(arm, piece) {
     const cfg = arm && arm.config;
     if (!cfg) return null;
-    if (cfg.maxCaptureMass !== undefined && (piece.mass || 1) > cfg.maxCaptureMass) return 'heavy';
+    if (cfg.maxCaptureMass !== undefined && (piece.mass || 1) > cfg.maxCaptureMass && !isInspectOnlyMass(piece.mass || 1)) return 'heavy';
     const tp = piece._scenePosition;
     if (tp && arm.position && cfg.tetherMax > 0) {
       const distM = Math.hypot(tp.x - arm.position.x, tp.y - arm.position.y, tp.z - arm.position.z) / M;
@@ -1266,7 +1266,7 @@ export class ArmManager {
     const first = preferType || (mass > Constants.SPINNER_MAX_CAPTURE_MASS ? 'weaver' : 'spinner');
     const other = first === 'weaver' ? 'spinner' : 'weaver';
     const dir = this._shipDirTo(target);
-    const cap = (a) => !(a.config && a.config.maxCaptureMass !== undefined) || mass <= a.config.maxCaptureMass;
+    const cap = (a) => !(a.config && a.config.maxCaptureMass !== undefined) || mass <= a.config.maxCaptureMass || isInspectOnlyMass(mass);   // R2: over the catch limit = an inspection, any daughter
     const clear = (a) => cap(a) && (!fits || fits(a)) && !this._crossingArm(a, target);
     const arm = this._findDockedArm(first, dir, clear) || this._findDockedArm(other, dir, clear);
     if (arm) return { arm, refusal: null };
@@ -1317,7 +1317,7 @@ export class ArmManager {
     if (!crossed) return null;
     const mass = target.mass || 1;
     const dir = this._shipDirTo(target);
-    const clear = (a) => (!(a.config && a.config.maxCaptureMass !== undefined) || mass <= a.config.maxCaptureMass)
+    const clear = (a) => (!(a.config && a.config.maxCaptureMass !== undefined) || mass <= a.config.maxCaptureMass || isInspectOnlyMass(mass))
       && !this._crossingArm(a, target);
     const alt = this._findDockedArm(arm.type, dir, clear)
       || this._findDockedArm(arm.type === 'weaver' ? 'spinner' : 'weaver', dir, clear);
@@ -5551,7 +5551,7 @@ export class ArmManager {
     for (const type of order) {
       const eligible = arms.filter((a) => a && a.type === type && armCanLaunchNow(a));
       if (eligible.length > 0) {
-        out.ready = eligible.some((a) => mass <= a.config.maxCaptureMass);
+        out.ready = eligible.some((a) => mass <= a.config.maxCaptureMass || isInspectOnlyMass(mass));
         break;
       }
     }
@@ -5561,7 +5561,7 @@ export class ArmManager {
       if (!a || a.state === S.EXPENDED || a.state === S.ADRIFT || a.isDetached) continue;
       if (a.state === S.HOLDING_CATCH) { counts.holding++; continue; }
       if (!(a.fuel > 5)) { counts.noFuel++; continue; }
-      if (mass > a.config.maxCaptureMass) { counts.heavy++; continue; }
+      if (mass > a.config.maxCaptureMass && !isInspectOnlyMass(mass)) { counts.heavy++; continue; }
       out.wait = true;    // docked with the spring reloading / aim-reserved, or out on her line: she will be ready
     }
     if (out.wait) return out;

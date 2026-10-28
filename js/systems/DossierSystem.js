@@ -30,6 +30,8 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { salvageGasKg } from './ResourceSystem.js';
+import { pieceValues } from './BigPieceValues.js';
+import { TimeAuthority } from './TimeAuthority.js';
 
 /** 1 metre in scene units (matches ArmUnit / DockingReticle M). */
 const M = 0.00001;
@@ -72,6 +74,38 @@ export function appraiseSalvage(salvage) {
   return { rows, total };
 }
 
+/** The longest step line the 280 px panel holds (mono 10 px, about 6.4 px a character). */
+const MAX_LINE = 44;
+
+/**
+ * The TARGET INFO panel's step lines for a piece she does not catch (INSPECT, DECISIONS §49 row 3), in plain words and short enough for
+ * the 280 px panel (each line at most 44 characters at 10 px mono, about 6 px a character). Pure.
+ *   line 1: `Too big to catch · orbit done`            (or `orbit 35 %`, or `orbit – (within 200 m)` before it starts)
+ *   line 2: `fly-around 40 % (within 10 m) · spin –`    (a finished fly-around reads `fly-around done`; a measured spin reads
+ *           `Spins 1.2° a second`, in place of `spin –` / `spin 45 %`)
+ * @param {ReturnType<DossierSystem['getInspectState']>} st
+ * @returns {[string, string]|null} null when the piece is not one
+ */
+export function inspectStepLines(st) {
+  if (!st) return null;
+  const I = Constants.INSPECT;
+  const pct = (p) => `${Math.max(1, Math.min(99, Math.round(p * 100)))} %`;
+  const DASH = '\u2013';
+  const MID = ' \u00B7 ';
+  const orbit = st.orbit.done ? 'orbit done'
+    : st.orbit.pct > 0 ? `orbit ${pct(st.orbit.pct)}`
+    : `orbit ${DASH} (within ${I.ORBIT_RANGE_M} m)`;
+  const spin = st.spin.done ? `Spins ${st.spin.degS.toFixed(st.spin.degS < 10 ? 1 : 0)}\u00B0 a second`
+    : st.spin.pct > 0 ? `spin ${pct(st.spin.pct)}`
+    : `spin ${DASH}`;
+  const flyWords = (hint) => (st.inspect.done ? 'fly-around done'
+    : `fly-around ${st.inspect.pct > 0 ? pct(st.inspect.pct) : DASH}${hint ? ` (within ${I.CLOSE_RANGE_M} m)` : ''}`);
+  // the distance hint goes first when the line is too long for the panel
+  let fly = flyWords(true);
+  if (fly.length + MID.length + spin.length > MAX_LINE) fly = flyWords(false);
+  return [`Too big to catch${MID}${orbit}`, `${fly}${MID}${spin}`];
+}
+
 export class DossierSystem {
   constructor() {
     /** @type {Set<*>} debris ids with Full Profile unlocked (session). */
@@ -80,6 +114,10 @@ export class DossierSystem {
     this._bountyPaid = new Set();
     /** @type {{id:*, elapsed:number}|null} survey in progress on the active target. */
     this._survey = null;
+    /** @type {Map<string, Set<string>>} `${fieldId}|${fieldRow}` -> the characterising steps already paid (INSPECT; persisted). */
+    this._inspectPaid = new Map();
+    /** @type {Map<string, object>} the same key -> progress of the steps in flight (session only: a reload starts them over). */
+    this._inspectProg = new Map();
 
     // First-credit legibility (Workstream 1): during onboarding, defer the
     // survey-bounty payout so the player's first salient credit gain is the net
@@ -90,12 +128,20 @@ export class DossierSystem {
     this._firstCaptureDone = false;
     /** @type {Map<*, number>} debrisId → deferred bounty amount (released later). */
     this._deferredBounties = new Map();
+    /** @type {Map<string, {key:string, step:string}>} INSPECT steps earned during onboarding: their credits sit in `_deferredBounties` under the same
+     *  `${key}|${step}` and the step counts as paid (saved) only when they are released, so a reload in between loses nothing (big-rules R6). */
+    this._deferredInspect = new Map();
 
     // Store unsubscribe handles so instances (e.g. in tests) can detach from the
     // shared eventBus and avoid accumulating handlers / cross-instance bleed.
     /** @type {Array<Function>} */
     this._unsubs = [];
     this._unsubs.push(eventBus.on(Events.GAME_RESET, () => this.reset()));
+    // INSPECT: the paid steps ride the save (PersistenceManager's whitelist key `inspectPaid`); GameFlowManager restores them on Continue.
+    this._unsubs.push(eventBus.on(Events.PERSISTENCE_GATHER, (saveData) => {
+      const list = this.serializeInspect();
+      if (saveData && list.length) saveData.inspectPaid = list;
+    }));
 
     // Gate deferral on ONBOARDING_STARTED actually firing (veteran-skip emits
     // ONBOARDING_COMPLETE without STARTED → never defers; pays immediately).
@@ -141,10 +187,13 @@ export class DossierSystem {
   reset() {
     this._profiled.clear();
     this._bountyPaid.clear();
+    this._inspectPaid.clear();
+    this._inspectProg.clear();
     this._survey = null;
     this._onboardingActive = false;
     this._firstCaptureDone = false;
     this._deferredBounties.clear();
+    this._deferredInspect.clear();
   }
 
   /**
@@ -160,6 +209,13 @@ export class DossierSystem {
     let total = 0;
     for (const amount of this._deferredBounties.values()) total += amount;
     this._deferredBounties.clear();
+    // the deferred characterising steps are paid now: they join the saved ones (R6)
+    for (const { key, step } of this._deferredInspect.values()) {
+      let set = this._inspectPaid.get(key);
+      if (!set) { set = new Set(); this._inspectPaid.set(key, set); }
+      set.add(step);
+    }
+    this._deferredInspect.clear();
     if (total <= 0) return;
 
     eventBus.emit(Events.SCORING_AWARD, {
@@ -225,29 +281,45 @@ export class DossierSystem {
    * @param {{x,y,z}|null} ctx.playerPos — mother position (scene units)
    * @param {object|null} ctx.armManager — for daughter positions
    * @param {object|null} ctx.target — active/selected debris
+   * @param {boolean} [ctx.worldHeld] — the world clock is stopped (a workbench drawer is open): the INSPECT clocks wait
+   * @param {number} [ctx.gameDt] — the game-time step for the INSPECT clocks (default: the time authority's base step, `TimeAuthority.baseGameDt(dt)`, the step
+   *   the piece's tumble animation turns by; the survey keeps real seconds)
    */
-  update(dt, { playerPos = null, armManager = null, target = null } = {}) {
+  update(dt, { playerPos = null, armManager = null, target = null, worldHeld = false, gameDt = undefined } = {}) {
     const D = Constants.DOSSIER || {};
-    if (!target || target.alive === false || target.discovered === false
-        || this._profiled.has(target.id)) {
+    if (!target || target.alive === false || target.discovered === false) {
       this._survey = null;
       return;
     }
     const tPos = target._scenePosition;
     if (!tPos) { this._survey = null; return; }
 
-    // Closest platform distance (metres).
+    // Closest platform (the mother or a deployed daughter): distance in metres, its position and which platform it is.
     let bestM = Infinity;
-    const distM = (p) => {
+    let bestPos = null;
+    let bestWho = null;
+    const consider = (p, who) => {
       const dx = p.x - tPos.x, dy = p.y - tPos.y, dz = p.z - tPos.z;
-      return Math.sqrt(dx * dx + dy * dy + dz * dz) / M;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) / M;
+      if (d < bestM) { bestM = d; bestPos = p; bestWho = who; }
     };
-    if (playerPos) bestM = Math.min(bestM, distM(playerPos));
+    if (playerPos) consider(playerPos, 'mother');
     if (armManager && Array.isArray(armManager.arms)) {
-      for (const arm of armManager.arms) {
-        if (!arm || arm.state === 'DOCKED' || !arm.position) continue;
-        bestM = Math.min(bestM, distM(arm.position));
-      }
+      armManager.arms.forEach((arm, i) => {
+        if (!arm || arm.state === 'DOCKED' || !arm.position) return;
+        consider(arm.position, `arm${arm.id ?? i}`);
+      });
+    }
+
+    // The characterising steps run BEFORE the profiled early return: a piece over her catch limit is profiled after 3 s, and
+    // its close inspection and spin measurement go on afterwards.
+    // One clock (R3): the timers run on the game-time step the tumble animation uses, and wait while the world is held still.
+    const gdt = worldHeld ? 0 : (Number.isFinite(gameDt) ? gameDt : TimeAuthority.baseGameDt(dt));
+    this._updateInspect(gdt, target, tPos, bestM, bestPos);
+
+    if (this._profiled.has(target.id)) {
+      this._survey = null;
+      return;
     }
 
     if (bestM <= (D.DETAIL_SCAN_RANGE_M || 50)) {
@@ -264,6 +336,176 @@ export class DossierSystem {
     }
   }
 
+  // ==========================================================================
+  // CHARACTERISING A PIECE SHE DOES NOT CATCH (INSPECT, DECISIONS §49 row 3)
+  // ==========================================================================
+
+  /** The key a piece's paid steps are saved under: piece ids do not survive a reload, a field and its row do. */
+  static inspectKey(target) {
+    return `${target.fieldId ?? '-'}|${target.fieldRow ?? target.id}`;
+  }
+
+  /**
+   * What this piece pays for being characterised: the total in credits, or 0 when it is not such a piece (she can catch it, it has no
+   * owner to pay, or its owner has abandoned it). Whole credits: the fourth step takes the rounding rest.
+   * @param {object|null} target
+   * @returns {{total:number, pay:{find:number, orbit:number, inspect:number, spin:number}}|null} null = not an inspect piece
+   */
+  inspectPay(target) {
+    const I = Constants.INSPECT;
+    const limit = Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE && Constants.CAPTURE_NET.LARGE.CATCH_LIMIT_KG;
+    if (!I || !target || !(limit > 0) || !((target.mass || 0) > limit)) return null;
+    const fee = pieceValues(target).removalFeeCr;
+    if (!(fee > 0)) return null;
+    const total = Math.round(fee * I.FEE_SHARE);
+    if (!(total > 0)) return null;
+    const find = Math.round(total * I.SPLIT.find);
+    const orbit = Math.round(total * I.SPLIT.orbit);
+    const inspect = Math.round(total * I.SPLIT.inspect);
+    return { total, pay: { find, orbit, inspect, spin: total - find - orbit - inspect } };
+  }
+
+  /**
+   * The panel's view of a piece's characterising steps, or null when it is not such a piece.
+   * `pct` is 0-1 progress of a step in flight; a paid step is done.
+   * @param {object|null} target
+   * @returns {{total:number, find:{done:boolean}, orbit:{done:boolean, pct:number}, inspect:{done:boolean, pct:number},
+   *   spin:{done:boolean, pct:number, degS:number}}|null}
+   */
+  getInspectState(target) {
+    const ip = this.inspectPay(target);
+    if (!ip) return null;
+    const I = Constants.INSPECT;
+    const key = DossierSystem.inspectKey(target);
+    const paidSet = this._inspectPaid.get(key) || new Set();
+    const paid = { has: (st) => paidSet.has(st) || this._deferredInspect.has(`${key}|${st}`) };   // earned but held back for the first catch counts as done on the panel
+    const pr = this._inspectProg.get(key) || {};
+    const clamp01 = (x) => Math.max(0, Math.min(1, x));
+    const turnS = DossierSystem._spinTurnS(target);
+    return {
+      total: ip.total,
+      find: { done: paid.has('find') },
+      orbit: { done: paid.has('orbit'), pct: paid.has('orbit') ? 1 : clamp01((pr.orbitS || 0) / I.ORBIT_TIME_S) },
+      inspect: { done: paid.has('inspect'), pct: paid.has('inspect') ? 1 : clamp01((pr.spreadDeg || 0) / I.COVER_DEG) },
+      spin: { done: paid.has('spin'), pct: paid.has('spin') ? 1 : clamp01((pr.spinS || 0) / turnS), degS: Math.abs(target.tumbleRate || 0) * (180 / Math.PI) },
+    };
+  }
+
+  /** @private One full turn of the piece in game seconds, held between SPIN_MIN_S and SPIN_MAX_S. */
+  static _spinTurnS(target) {
+    const I = Constants.INSPECT;
+    const w = Math.abs(target.tumbleRate || 0);
+    const turn = w > 1e-9 ? (2 * Math.PI) / w : Infinity;
+    return Math.max(I.SPIN_MIN_S, Math.min(I.SPIN_MAX_S, turn));
+  }
+
+  /** @returns {Array<{k:string, s:string[]}>} the paid steps, for the save (empty = nothing to write). */
+  serializeInspect() {
+    const out = [];
+    for (const [k, set] of this._inspectPaid) if (set.size) out.push({ k, s: [...set] });
+    return out;
+  }
+
+  /**
+   * Put the paid steps back after a load (nothing pays). Anything malformed is ignored.
+   * @param {Array<{k:string, s:string[]}>|null|undefined} list
+   */
+  restoreInspect(list) {
+    this._inspectPaid.clear();
+    if (!Array.isArray(list)) return;
+    const STEPS = ['find', 'orbit', 'inspect', 'spin'];
+    for (const e of list) {
+      if (!e || typeof e.k !== 'string' || !Array.isArray(e.s)) continue;
+      const set = new Set(e.s.filter((x) => STEPS.includes(x)));
+      if (set.size) this._inspectPaid.set(e.k, set);
+    }
+  }
+
+  /**
+   * The four steps of a piece over her catch limit, for the selected target (`bestM` the closest platform's distance in m, `bestPos` its
+   * position; `dt` game seconds). Each pays once per piece.
+   * @private
+   */
+  _updateInspect(dt, target, tPos, bestM, bestPos) {
+    const ip = this.inspectPay(target);
+    if (!ip) return;
+    const I = Constants.INSPECT;
+    const key = DossierSystem.inspectKey(target);
+    let paidSet = this._inspectPaid.get(key);
+    if (!paidSet) { paidSet = new Set(); this._inspectPaid.set(key, paidSet); }
+    const paid = { has: (st) => paidSet.has(st) || this._deferredInspect.has(`${key}|${st}`) };
+    let pr = this._inspectProg.get(key);
+    if (!pr) { pr = { orbitS: 0, spreadDeg: 0, dirs: [], spinS: 0 }; this._inspectProg.set(key, pr); }
+    const step = Number.isFinite(dt) && dt > 0 ? dt : 0;
+
+    // 1. Find: discovered and selected as her target.
+    if (!paid.has('find')) this._payInspect(target, key, 'find', ip.pay.find);
+
+    // 2. Pinpoint its orbit: within ORBIT_RANGE_M for ORBIT_TIME_S (accumulated).
+    if (!paid.has('orbit') && bestM <= I.ORBIT_RANGE_M) {
+      pr.orbitS += step;
+      if (pr.orbitS >= I.ORBIT_TIME_S) this._payInspect(target, key, 'orbit', ip.pay.orbit);
+    }
+
+    // 3. Inspect up close: coverage. While within CLOSE_RANGE_M, keep the directions piece -> inspector (a new one only after it moved
+    //    SAMPLE_DEG from every one kept); done when two are COVER_DEG apart: she has seen it from opposite sides. Leaving the range
+    //    keeps them (the same inspection), and the mother and a daughter add to the same set. Straight fly-bys and a wobble never reach it.
+    if (!paid.has('inspect') && bestM <= I.CLOSE_RANGE_M && bestPos) {
+      const dx = bestPos.x - tPos.x, dy = bestPos.y - tPos.y, dz = bestPos.z - tPos.z;
+      const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (len > 1e-12) {
+        const dir = { x: dx / len, y: dy / len, z: dz / len };
+        const angleTo = (o) => Math.acos(Math.max(-1, Math.min(1, dir.x * o.x + dir.y * o.y + dir.z * o.z))) * (180 / Math.PI);
+        let widest = 0, fresh = true;
+        for (const o of pr.dirs) {
+          const a = angleTo(o);
+          if (a < I.SAMPLE_DEG) { fresh = false; break; }
+          if (a > widest) widest = a;
+        }
+        if (fresh) {
+          pr.dirs.push(dir);
+          if (widest > pr.spreadDeg) pr.spreadDeg = widest;
+          if (pr.spreadDeg >= I.COVER_DEG) this._payInspect(target, key, 'inspect', ip.pay.inspect);
+        }
+      }
+    }
+
+    // 4. Measure its spin: within SPIN_RANGE_M for one full turn of the piece (held to SPIN_MIN_S..SPIN_MAX_S).
+    if (!paid.has('spin') && bestM <= I.SPIN_RANGE_M) {
+      pr.spinS += step;
+      if (pr.spinS >= DossierSystem._spinTurnS(target)) this._payInspect(target, key, 'spin', ip.pay.spin);
+    }
+  }
+
+  /** @private Pay one step once: a SCORING_AWARD and one plain Houston line (held back during onboarding, like the survey bounty). */
+  _payInspect(target, key, stepName, credits) {
+    const paid = this._inspectPaid.get(key);
+    const dkey = `${key}|${stepName}`;
+    if (!paid || paid.has(stepName) || this._deferredInspect.has(dkey)) return;
+    if (!(credits > 0)) { paid.add(stepName); return; }
+    const words = {
+      find: 'Target found',
+      orbit: 'Orbit pinpointed',
+      inspect: 'Close inspection done',
+      spin: 'Spin measured',
+    }[stepName];
+    if (this._onboardingActive && !this._firstCaptureDone) {
+      // held back for the first catch: NOT paid yet, so not saved as paid either (R6)
+      this._deferredBounties.set(dkey, credits);
+      this._deferredInspect.set(dkey, { key, step: stepName });
+      return;
+    }
+    paid.add(stepName);
+    eventBus.emit(Events.SCORING_AWARD, { points: credits, reason: words });
+    const rate = stepName === 'spin'
+      ? ` ${(Math.abs(target.tumbleRate || 0) * (180 / Math.PI)).toFixed(1)}\u00B0 a second,` : '';
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'HOUSTON',
+      text: `${words}:${rate} ${credits} credits.`,
+      priority: 'success',
+    });
+  }
+
   /**
    * Unlock the Full Profile: emit DEBRIS_PROFILED, pay the one-time survey
    * bounty (data IS income; capturing the appraised debris is the jackpot).
@@ -277,7 +519,9 @@ export class DossierSystem {
 
     let bountyPaid = false;
     let bountyDeferred = false;
-    if (!this._bountyPaid.has(target.id) && (D.SURVEY_BOUNTY || 0) > 0) {
+    // a piece over her catch limit pays its four characterising steps instead of the flat bounty (no double pay)
+    const characterised = this.inspectPay(target) !== null;
+    if (!characterised && !this._bountyPaid.has(target.id) && (D.SURVEY_BOUNTY || 0) > 0) {
       this._bountyPaid.add(target.id);
       if (this._onboardingActive && !this._firstCaptureDone) {
         // Defer the payout: keep the visual profile reveal ("chest opens"), but

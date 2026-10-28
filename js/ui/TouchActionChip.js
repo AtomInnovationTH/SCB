@@ -239,7 +239,7 @@ export class TouchActionChip {
     on(Events.CARGO_TRANSFER_COMPLETE, re((d) => { this._catchLeft(d && d.debrisId); }));
     on(Events.ARM_DEPLOYED, re(() => { this._denied = false; this._daughterOut = true; }));
     if (!getHolding) {
-      on(Events.STATION_KEEP_ENTERED, re((d) => { if (d && d.armId != null) this._holding.set(d.armId, d.tool || null); }));
+      on(Events.STATION_KEEP_ENTERED, re((d) => { if (d && d.armId != null && d.inspect !== true) this._holding.set(d.armId, d.tool || null); }));   // big-rules S1: an inspecting daughter is no net holder
       on(Events.STATION_KEEP_EXITED, re((d) => { if (d && d.armId != null) this._holding.delete(d.armId); }));
     }
     // R7c: an empty-canvas tap scan (SCAN_QUICK) sends no keydown; it ends a "Tap SCAN" line chip like the key does.

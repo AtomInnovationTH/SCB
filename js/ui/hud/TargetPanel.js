@@ -15,7 +15,7 @@ import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
 import { computeTotalSalvageDeltaV } from '../../entities/OrbitalMechanics.js';
-import { assessNetFit, presentedWidthForApproach, getNetClassForType, renderedSpanM, renderedSpanOverflows } from '../../entities/CaptureNet.js';
+import { assessNetFit, overCatchLimit, presentedWidthForApproach, getNetClassForType, renderedSpanM, renderedSpanOverflows } from '../../entities/CaptureNet.js';
 import { classifyNetTarget } from '../../systems/netRouting.js';
 import { computeToolOdds, computeBestTool, toolShortLabel, makeNetOddsLockCache } from '../../systems/ToolOdds.js';
 import { dossierSystem, appraiseSalvage } from '../../systems/DossierSystem.js';
@@ -983,6 +983,8 @@ export class TargetPanel {
    */
   _renderMotherOddsBadge(t) {
     const CN = Constants.CAPTURE_NET;
+    // §49 row 1: a piece over her 1,500 kg catch limit is not caught, it is characterised (the step line shows how): no odds
+    const tooBig = overCatchLimit(t.mass || 0, CN && CN.LARGE);
     // Wave-4 QA #3: the mother pod's pre-fire odds surface. One persistent
     // lock cache for the whale badge — lock-stable cling factors compute once
     // per locked whale instead of per 2 Hz re-render; the input-keyed contract
@@ -991,7 +993,7 @@ export class TargetPanel {
     // The per-row daughter planning badges above keep the fresh path: they
     // sweep MANY targets per render, where a single-slot cache buys nothing.
     if (!this._motherOddsLockCache) this._motherOddsLockCache = makeNetOddsLockCache();
-    const odds = computeToolOdds({
+    const odds = tooBig ? null : computeToolOdds({
       armType: 'mother',
       target: t,
       netClass: CN && CN.LARGE,
@@ -1009,11 +1011,12 @@ export class TargetPanel {
       const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${CN.LARGE.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
       return `<span style="color:${col};font-size:10px;font-weight:bold;" title="Mother Large Net odds${tip}">${pct}%${this._glassNow() ? '' : ' [N]'}</span>`;   // u15b: no key letter on glass
     }
-    const blocker = (o && o.blocker) || 'NO NET';
-    const word = blocker === 'WIDE' ? 'TOO WIDE'
+    const blocker = tooBig ? 'BIG' : (o && o.blocker) || 'NO NET';
+    const word = blocker === 'BIG' ? 'Too big to catch'
+      : blocker === 'WIDE' ? 'TOO WIDE'
       : blocker === 'HEAVY' ? 'TOO HEAVY'
       : blocker === 'EMPTY' ? 'NO NETS' : blocker;
-    return `<span style="color:${this._targetLaw ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})` : 'var(--hud-warning, #ff7755)'};font-size:10px;font-weight:bold;" title="Mother Large Net">${word}</span>`;
+    return `<span style="color:${this._targetLaw ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})` : 'var(--hud-warning, #ff7755)'};font-size:10px;font-weight:bold;" title="${tooBig ? `Over the mother's ${CN.LARGE.CATCH_LIMIT_KG} kg catch limit: inspect it instead` : 'Mother Large Net'}">${word}</span>`;
   }
 
   /**

@@ -3588,7 +3588,7 @@ async function init() {
         // R1: "a daughter is holding" is read from the arm's state (the same lookup N uses), never from enter/exit events.
         getHolding: () => {
           const a = inputManager && inputManager.nDaughter ? inputManager.nDaughter() : null;   // pilot-aware (hints-scan review)
-          return a ? (a.selectedTool || 'NET') : null;
+          return a && !(a.isInspecting && a.isInspecting()) ? (a.selectedTool || 'NET') : null;   // big-rules S1: an inspecting daughter has no net to launch: no chip
         },
         getFarState: _touchFarState,
         getReelable: _daughterReelable,   // R9
@@ -7565,6 +7565,8 @@ function gameLoop(timestamp) {
         playerPos: player.getPosition(),
         armManager,
         target: targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null,
+        gameDt: dtWorld,         // big-rules F4: the time authority's step (warp included), the one the tumble animation turns by
+        worldHeld: _worldHeld,   // big-rules R3: the characterising clocks run on game time and wait with the world
       });
     } catch (e) { console.error('[GameLoop] dossierSystem:', e); }
     if (!_worldHeld) { try { kesslerSystem.update(dt); } catch (e) { console.error('[GameLoop] kesslerSystem:', e); } }
