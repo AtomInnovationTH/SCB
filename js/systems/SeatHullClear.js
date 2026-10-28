@@ -1,27 +1,31 @@
 /**
- * SeatHullClear.js - big-seat F2a (re-review 10-28): "a seated big piece never touches the mother".
+ * SeatHullClear.js - "a seated big piece never touches the mother".
  *
- * The snug seat (ArmUnit `seatStandoffM`) puts a piece 2.7 cm off HER end, nearer her than the old support rule by 0.1-1.5 m, and it only knows her
- * own mesh. A 3-5.5 m piece then reaches back over the mother at some of the strut angles the hold planner may pick (the 5 degree grid 34 ... 99
- * and 100: `_holdPoseOf`, `holdPoseGridDeg`): the re-review measured a 5 m dead satellite touching hull, solar wings or a neighbour strut in 2-3 of
- * 30 attitudes at the 100 degree cap and at the 34 degree duck fallback in 1-15 of 30; the old layout was 666 mm clear at the least.
+ * The snug seat (ArmUnit `seatStandoffM`) puts a piece 2.7 cm off HER end, 0.1-1.5 m nearer than the old support rule,
+ * and only knows her own mesh. A 3-5.5 m piece can then reach back over the mother at some of the strut angles the hold
+ * planner may pick (the 5 degree grid 34 ... 99 and 100: `_holdPoseOf`, `holdPoseGridDeg`): a 5 m dead satellite touched
+ * hull, solar wings or a neighbour strut in 2-3 of 30 attitudes at the 100 degree cap and in 1-15 of 30 at the 34 degree
+ * duck fallback (measured); the old layout was at least 666 mm clear.
  *
- * The rule: when a piece over `SEAT_HULL.OVER_M` is seated, its SEATED mesh is placed at every grid angle (the same placement chain as the radiator
- * check, `heldCargoBookingMeters`) and measured against the hull, the nose ring, the solar wings and the other three struts. If it comes within
- * `CLEAR_M + SAMPLE_MARGIN_M` anywhere, the piece keeps the old (support-rule) distance for as long as that memo (its attitude on her) stands. One
- * exact verdict per solve (it rides on the seat memo, `d._seatMemo.hull`), never per frame.
+ * The rule: when a piece over `SEAT_HULL.OVER_M` is seated, its SEATED mesh is placed at every grid angle (the same
+ * placement chain as the radiator check, `heldCargoBookingMeters`) and measured against the hull, the nose ring, the
+ * solar wings and the other three struts. If it comes within `CLEAR_M + SAMPLE_MARGIN_M` anywhere, the piece keeps the
+ * support-rule distance for as long as that memo (its attitude on her) stands. One exact verdict per solve (it rides on
+ * the seat memo, `d._seatMemo.hull`), never per frame.
  *
  * What it measures against (ship frame, from the live ship once, then reposed by RIGID moves of the parts that move):
  *   - hull, nose ring, launch cradles excluded (radiators are `HoldWingClear`'s): the drawn triangles, exact;
- *   - the two solar wings always fully rolled out (a piece's verdict stands while it is held and the player can roll them out any time), at the
- *     sun-tracking tilt's limits, half way and level (`SEAT_HULL.WING_TILT_SAMPLES` x the ship's max tilt);
+ *   - the two solar wings always fully rolled out (the verdict stands while the piece is held and the player can roll
+ *     them out any time), at the sun-tracking tilt's limits, half way and level (`SEAT_HULL.WING_TILT_SAMPLES` x the
+ *     ship's max tilt);
  *   - the other three struts (everything under their pivots) at `STRUT_POSES_DEG`;
- *   - her own strut is not measured here (analytic tube, test-DaughterSeatRingBig3/4 F1b); the radiators are the wing profile's.
+ *   - her own strut is not measured here (analytic tube, test-DaughterSeatRingBig3/4); the radiators are the wing profile's;
  *   - the other three daughters docked at their strut tips at the same angles (their solid triangles, `buildSeatGeo`).
- * Not covered (named in DECISIONS section 28 row 5): wings feathered edge-on, a neighbour's strut at an angle between the sampled poses, a second
- * piece in cell 1, the seat of a piece held in hand away from the dock.
+ * Not covered (named in DECISIONS section 28 row 5): wings feathered edge-on, a neighbour's strut at an angle between
+ * the sampled poses, a second piece in cell 1, the seat of a piece held in hand away from the dock.
  *
- * Needs a real ship (`strutGroups`) and the dock position the manager stored on the arm; anything else answers "clear" (a bare test arm).
+ * Needs a real ship (`strutGroups`) and the dock position the manager stored on the arm; anything else answers "clear"
+ * (a bare test arm).
  * @module systems/SeatHullClear
  */
 import * as THREE from 'three';
@@ -32,16 +36,15 @@ import { buildSeatGeo } from '../entities/ArmUnit.js';
 import { DebrisField } from '../entities/DebrisField.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { workDone, workReset, holdPoseGridDeg, gridNew, gridStep, gridMinD2, prepPiece, trisRun, placeTris, isFxLike } from './HoldWingClear.js';
+import { DEG2RAD, clamp01 } from '../core/MathUtil.js';
 
 const M = Constants.SCENE_UNITS_PER_METER;
-const D2R = Math.PI / 180;
 const POSES = holdPoseGridDeg();
 const _from = new THREE.Vector3(0, -1, 0);
 
 /** Counters for probes and tests. */
 export const seatHullStats = { checks: 0, kitBuilds: 0, armGrids: 0, worstMs: 0, lastMs: 0, points: 0, worstPoints: 0 };
 
-// ── the obstacle kit ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** Ship-frame matrix (scene units) of an object's PARENT chain up to (not including) the ship. */
 function parentChainInto(o, ship, out) {
   out.identity();
@@ -97,9 +100,9 @@ function kitSigOf(ship) {
 }
 
 /**
- * Runs `fn` with both solar wings at their fully rolled-out shape, then puts each wing back exactly as it was. A verdict stays on the piece for as
- * long as it is held, and the player can roll the wings out at any time (a toggle), so the wings are measured at the shape that fills the most room;
- * the rolled-up shape lies inside it (F3a, review 10-28: 31 of 240 configs passed with the wings rolled up and failed rolled out).
+ * Runs `fn` with both solar wings fully rolled out, then puts each wing back exactly as it was. The player can roll the
+ * wings out at any time and the rolled-up shape lies inside the rolled-out one (31 of 240 configs passed rolled up and
+ * failed rolled out).
  */
 function withWingsOut(ship, fn) {
   const wraps = [ship._rosaPanelWrapper1, ship._rosaPanelWrapper2];
@@ -110,7 +113,7 @@ function withWingsOut(ship, fn) {
     return fn();
   } finally {
     if (canSet) {
-      wraps.forEach((w, k) => { if (w) ship._setRosaWingProgress(k + 1, Math.min(1, Math.max(0, (saved[k] - 0.05) / 0.95))); });
+      wraps.forEach((w, k) => { if (w) ship._setRosaWingProgress(k + 1, clamp01((saved[k] - 0.05) / 0.95)); });
       wraps.forEach((w, k) => { if (w) w.scale.x = saved[k]; });
     }
   }
@@ -145,7 +148,7 @@ function buildKitNow(ship, arms) {
   });
   const common = [];
   appendMoved(common, stat, null);
-  const maxTilt = typeof ship._rosaMaxTiltRad === 'function' ? ship._rosaMaxTiltRad() : 30 * D2R;
+  const maxTilt = typeof ship._rosaMaxTiltRad === 'function' ? ship._rosaMaxTiltRad() : 30 * DEG2RAD;
   const eul = new THREE.Euler(), qn = new THREE.Quaternion();
   wingPivots.forEach((pv, k) => {
     for (const f of SH.WING_TILT_SAMPLES) {
@@ -157,9 +160,9 @@ function buildKitNow(ship, arms) {
   const strutAt = strutPivots.map((pv, j) => {
     const out = [];
     for (const deg of SH.STRUT_POSES_DEG) {
-      strutLocalDirection(deg * D2R, ship.strutGroups[j].azRad, _dirTmp);
+      strutLocalDirection(deg * DEG2RAD, ship.strutGroups[j].azRad, _dirTmp);
       appendMoved(out, strutLive[j], relativeMove(pv, ship, qn.setFromUnitVectors(_from, _dirTmp)));
-      appendDaughter(out, ship, j, deg * D2R, arms);
+      appendDaughter(out, ship, j, deg * DEG2RAD, arms);
     }
     return out;
   });
@@ -176,7 +179,7 @@ function appendDaughter(out, ship, j, alpha, arms) {
   const geo = nb && nb.mesh ? buildSeatGeo(nb.mesh) : null;
   if (!geo || !dp) return;
   const tip = strutTipMeters(dp, alpha);
-  const az = Number.isFinite(dp.azimuthDeg) ? dp.azimuthDeg * D2R : ship.strutGroups[j].azRad;
+  const az = Number.isFinite(dp.azimuthDeg) ? dp.azimuthDeg * DEG2RAD : ship.strutGroups[j].azRad;
   strutLocalDirection(alpha, az, _dirTmp);
   composeDockedArmQuat(_dirTmp, az, _dq);
   const T = geo.tris;
@@ -195,9 +198,9 @@ function kitFor(ship, arms) {
 }
 
 /**
- * F3b: build the obstacle set when the arms are set up, so the first big catch does not pay for it (measured 10-28: about 90 ms on the carry world's
- * ship, once; each daughter's own grid of the other three struts, 20 ms, stays lazy: building all four here doubled the cost for every test that
- * sets up a real ship). A ship without struts, or a bare test ship, does nothing.
+ * Build the obstacle set when the arms are set up, so the first big catch does not pay for it (about 90 ms on the carry
+ * world's ship, once; each daughter's own grid of the other three struts, 20 ms, stays lazy: building all four here
+ * doubled the cost for every test that sets up a real ship). A ship without struts, or a bare test ship, does nothing.
  * @param {object} ship the player satellite
  * @param {object[]} arms the manager's arms (ArmUnit, `_dockPos` and `mesh` set)
  */
@@ -217,7 +220,6 @@ function armGridFor(kit, i) {
   return g;
 }
 
-// ── the piece ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const _preps = new Map();
 /** The piece's drawn triangles in its own frame (m), cut once to `HOLD_CLEAR.SPLIT_M`; cached by shape and drawn scale. */
 function prepFor(d) {
@@ -263,7 +265,7 @@ export function seatHullClear(arm, d, q, zM) {
   _proxy._qLocalHer.set(q.x, q.y, q.z, q.w);
   let ok = true;
   for (let k = 0; k < POSES.length && ok; k++) {
-    heldCargoBookingMeters(arm, dp, POSES[k] * D2R, ship, 0, d.sizeMeter || 0, _book, null, _proxy, _poseQ);
+    heldCargoBookingMeters(arm, dp, POSES[k] * DEG2RAD, ship, 0, d.sizeMeter || 0, _book, null, _proxy, _poseQ);
     let placed = false;
     for (const g of grids) {
       const B = prep.reach + clearM, B2 = B * B;

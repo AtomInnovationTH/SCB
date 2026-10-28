@@ -3,19 +3,14 @@
  * category. Toggle with the ? key (Slash), the menu's ? button or the ? button
  * at the top right of floor 1 (mountF1Button). Escape or ? closes.
  *
- * Layout: full-screen overlay → centered panel → a short overview (what you are
- * doing and why, the reward, the next key), then a grid of
- * group cards (Start here / Daughters / Ship & views; each a labelled list of
- * key chip → description rows) plus two closed, expandable sections: Stuck?
- * and Advanced.
- * Mirrors the visual language of CodexViewerUI (dark panel, cyan accents,
- * the house mono token) so it feels native to the HUD.
+ * Layout: full-screen overlay → centered panel → a short overview (what you are doing and why, the reward, the next
+ * key), then a grid of group cards (Start here / Daughters / Ship & views; each a labelled list of key chip →
+ * description rows) plus three closed, expandable sections: Stuck?, Questions (FAQ) and Advanced.
+ * Mirrors the visual language of CodexViewerUI (dark panel, cyan accents, the house mono token).
  *
- * Language (DECISIONS §44, owner 2026-10-27): the page shows in the language
- * the menu picker holds (settingsManager.getLanguage()). The English words are
- * the rows below; the other six languages come from helpText.js, keyed by each
- * row's `id`. The page is read again on every show() and rebuilt on
- * Events.LANGUAGE_CHANGED.
+ * Language (DECISIONS §44, owner 2026-10-27): the page shows in the language the menu picker holds
+ * (settingsManager.getLanguage()). The English words are the rows below; the other six languages come from
+ * helpText.js, keyed by each row's `id`. The page is read again on every show() and rebuilt on Events.LANGUAGE_CHANGED.
  *
  * @module ui/HotkeyOverlay
  */
@@ -29,65 +24,43 @@ import { helpTextFor } from './helpText.js';
 // title, hint and group names drop both for these languages (DECISIONS §44).
 const UNSPACED_LANGUAGES = new Set(['th', 'ja', 'hi', 'ta']);
 
-// Grouped hotkey reference. Each group → list of rows
-// `[chips, description, opts?]`. `chips` is an array; a chip may itself contain
-// a separator like '/' which is rendered as plain text between two key caps.
-// `opts` (H1, 2026-10-09):
-//   • { grey: '<reason>' } — a bound key whose feature is not built / not
-//     unlocked: shown greyed with "— <reason>" after the description. Advanced
-//     only (test-HelpTruth pins that).
-//   • { pointer: true }    — a mouse / touch row: its chips are words, not keys,
-//     so the key-vs-binding checks skip it.
-// A group with `collapsed: true` renders as a native closed <details> whose
-// summary reads "<title> (<row count>)"; it is closed on every open.
+// Grouped hotkey reference. Each group → list of rows `[chips, description, opts?]`. `chips` is an array; a chip may
+// itself contain a separator like '/' which is rendered as plain text between two key caps.
+// `opts`:
+//   • { grey: '<reason>' } — a bound key whose feature is not built / not unlocked: shown greyed with "— <reason>"
+//     after the description. Advanced only (test-HelpTruth pins that).
+//   • { pointer: true }    — a mouse / touch row: its chips are words, not keys, so the key-vs-binding checks skip it.
+// A group with `collapsed: true` renders as a native closed <details> whose summary reads "<title> (<row count>)"; it
+// is closed on every open.
 //
-// Hotkey reorg 2026-06-14: mode-based layout (was topic-based).
-//   Rebuilt from the real bindings 2026-10-06 (w1-first-minute D2, owner
-//   2026-09-30 "Help menu needs updating. Some commands are obsolete."): rows
-//   describe what the key does TODAY with the zoom ladder on (the default) —
-//   Space is the view's main action, Esc moves back between views — in
-//   plain words.
-//   H1 2026-10-09 (owner rulings, DECISIONS "Owner answers 2026-10-09"): ONE
-//   list, opened by the menu's ? and a ? at the top right of floor 1 (and the
-//   ? key). Groups are now Basics / Daughters / Ship / Advanced, rare keys sit
-//   in the closed Advanced section, unbuilt ones are greyed. Gone from the page
-//   because the key does nothing now: V on the mother, Enter, M, ` as a map,
-//   Shift V.
-//   H3 2026-10-10 (owner: "simplify help menu … one line is better than 2, make
-//   help page wide, make descriptions brief"): one line per row, short words,
-//   wide page; Space spelled out; the Shift , dodge row dropped (the key is
-//   still bound). `keyWidth` is the key column of that card, measured so its
-//   widest chip set fits (no runtime measuring: the tests build a fake DOM).
-//   2026-10-10 owner: "remove: PgUp PgDn Zoom out / in" — the row is gone (the
-//   wheel row covers zoom); the keys stay bound (test-HelpTruth allowlist).
-//   H5 2026-10-12 (owner: rank by when the key is needed; a new player wants a
-//   glance, a key, or a fix): columns run in the order the game first asks for
-//   the key — Start here (the mission-1 keys, ≤ 7 rows; turning first because
-//   players try to move first; the mother only turns by hand, autopilot moves
-//   her) → Daughters (chapter 2) → Ship & views. Stuck? lines are the symptom as
-//   a question, then the fix. Everything rare sits in Advanced, sorted the same
-//   way; opening it is the full list. The ? row is gone (you are in help).
-//   2026-10-12 owner: zoom and touch rows on top of Start here; "N Launch net";
-//   B Buy upgrades moved to Ship & views; Stuck? closed and expandable like
-//   Advanced (both full width under the three cards, closed on every open).
-//   Later 2026-10-12 owner: "1 – 4 Select a daughter" tops Daughters; O . ,
-//   (radiator, struts, wings) moved to the bottom of Ship & views. Then: cards
-//   only as tall as their rows; "V Change view to mother" last in Daughters;
-//   T / Tab first in Ship & views. A small blank gap ('gap' row) under
-//   J Journal sets the hardware rows apart.
-//   Advanced 2026-10-12 (owner "go"): three columns lined up under the three
-//   cards, each continuing its card in order of need ('col' starts the next);
-//   small gaps between clusters; unbuilt keys and the dev key last. Shorter
-//   words so three columns fit 1180 wide; Shift Z still steps back a part.
-//   2026-10-17 owner ruling (DECISIONS §26): B still opens the upgrade drawer to look, but buying and
-//   selling happen only at the resupply stop after a mission, so the B row says so.
-// The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
-// fails when a bound key is missing here or a chip names an unbound key.
+// Owner rulings behind the layout:
+//   owner 2026-09-30: "Help menu needs updating. Some commands are obsolete." Rows describe what the key does TODAY
+//     with the zoom ladder on (the default): Space is the view's main action, Esc moves back between views.
+//   owner 2026-10-09 (DECISIONS "Owner answers 2026-10-09"): ONE list, opened by the menu's ?, a ? at the top right of
+//     floor 1 (mountF1Button) and the ? key; rare keys sit in the closed Advanced section, unbuilt ones greyed.
+//   owner 2026-10-10: "simplify help menu … one line is better than 2, make help page wide, make descriptions brief":
+//     one line per row, short words, Space spelled out. "remove: PgUp PgDn Zoom out / in": the row is gone (the wheel row
+//     covers zoom), the keys stay bound (test-HelpTruth allowlist). `keyWidth` is the key column of that card, measured
+//     so its widest chip set fits (no runtime measuring: the tests build a fake DOM).
+//   Left off the page on purpose: V on the mother, Enter, M, ` as a map and Shift V (the key does nothing now), the
+//     Shift , dodge row (the key is still bound), the ? row (you are in help).
+//   owner 2026-10-12: rank by when the key is needed. Columns run in the order the game first asks for the key: Start
+//     here (the mission-1 keys, ≤ 7 rows; turning first because players try to move first) → Daughters → Ship & views;
+//     zoom and touch rows on top of Start here; "1 – 4 Select a daughter" tops Daughters, "V Change view to mother" is
+//     last; "N Launch net"; T / Tab first in Ship & views, B (Buy upgrades) in Ship & views; O . , (radiator, struts, wings)
+//     at the bottom of Ship & views, set apart by a 'gap' row. Cards are only as tall as their rows. Stuck? lines are
+//     the symptom as a question, then the fix; Stuck? and Advanced are closed and expandable, full width under the
+//     three cards. Advanced has three columns lined up under the three cards, each continuing its card in order of
+//     need ('col' starts the next), small gaps between clusters, unbuilt keys and the dev key last. Shift Z still steps
+//     back a part.
+//   owner 2026-10-17 (DECISIONS §26): B still opens the upgrade drawer to look, but buying and selling happen only at
+//     the resupply stop after a mission, so the B row says so.
+// The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js fails when a bound key is missing here
+// or a chip names an unbound key.
 export const HOTKEY_GROUPS = [
   {
-    // The mission-1 keys: zoom and touch on top (owner 2026-10-12), then in the
-    // order the game first asks for them: turn (players try to move first),
-    // scan, net, fly to it.
+    // The mission-1 keys, in the order the game first asks for them: turn (players try to move first; the mother only
+    // turns by hand, autopilot moves her), scan, net, fly to it.
     // Every row's opts carries a stable `id` (js/ui/helpText.js keys its translations by it, DECISIONS §44);
     // every group carries one too.
     id: 'start',
@@ -104,9 +77,7 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
-    // Chapter 2: select, launch and reel the daughters. 1–4 on top, "Select"
-    // (owner 2026-10-12): D and R act on the selected one. V (back to the
-    // mother's view) at the bottom, owner's words.
+    // Chapter 2: select, launch and reel the daughters. D and R act on the selected one.
     id: 'daughters',
     title: 'Daughters',
     keyWidth: '112px',
@@ -122,8 +93,7 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
-    // Next target on top, then the views and look-up keys, then the mother's
-    // hardware at the bottom (owner 2026-10-12).
+    // Next target on top, then the views and look-up keys, then the mother's hardware at the bottom.
     id: 'ship',
     title: 'Ship & views',
     keyWidth: '112px',
@@ -142,8 +112,7 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
-    // Symptom as a question, then the fix. Closed until opened, like Advanced
-    // (owner 2026-10-12).
+    // Symptom as a question, then the fix. Closed until opened, like Advanced.
     id: 'stuck',
     title: 'Stuck?',
     collapsed: true,
@@ -156,11 +125,11 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
-    // A short FAQ (owner 2026-10-28, DECISIONS row "Help", owner 2026-10-28): one closed section like Stuck?; each question is its own
+    // A short FAQ (owner 2026-10-28, DECISIONS row "Help"): one closed section like Stuck?; each question is its own
     // <details>, several can stay open. No key rows (`rows` stays empty so the row tests never see it); the
-    // questions live in `items` and every answer was checked against the code (tmp/plans/faq-help-1028.md Log).
-    // Answers are at most two sentences of at most 20 words, plain words. `link` = a data/codex.json entry id
-    // (opened in the Tech library); translations are keyed by item id in helpText.js (`faq.items`).
+    // questions live in `items`. Answers are at most two sentences of at most 20 words, plain words. `link` = a
+    // data/codex.json entry id (opened in the Tech library); translations are keyed by item id in helpText.js
+    // (`faq.items`).
     id: 'faq',
     title: 'Questions',
     collapsed: true,
@@ -200,19 +169,17 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
-    // Rare keys, dev keys and unbuilt features: closed until opened, so the
-    // page stays short. Sorted like the cards above: start keys, then daughter
-    // keys, then ship / view keys.
+    // Rare keys, dev keys and unbuilt features: closed until opened, so the page stays short. Sorted like the cards
+    // above: start keys, then daughter keys, then ship / view keys.
     id: 'advanced',
     title: 'Advanced',
     collapsed: true,
     keyWidth: '112px',
-    // Three columns under the three cards (owner 2026-10-12), each continuing
-    // the card above it, rows in order of need; 'col' starts the next column,
-    // 'gap' is a small blank space. Unbuilt keys and the dev key go last.
+    // Three columns under the three cards, each continuing the card above it, rows in order of need; 'col' starts the
+    // next column, 'gap' is a small blank space. Unbuilt keys and the dev key go last. Words are short so three
+    // columns fit 1180 px wide.
     rows: [
-      // Each column follows the card above it (owner 2026-10-12): pick / look
-      // first, then act, out / in switches and leave-type keys last.
+      // Each column: pick / look first, then act, out / in switches and leave-type keys last.
       // More for Start here: look → scan → pick a part → net → fly / power.
       [['Drag'], 'Turn the view', { pointer: true, id: 'turn_view' }],
       [['Main menu'], 'Touch: drawer bottom, tap twice', { pointer: true, id: 'drawer' }],
@@ -241,8 +208,7 @@ export const HOTKEY_GROUPS = [
       [['X'], 'Cut tether', { id: 'cut' }],
       [['Ctrl Shift D'], 'Burn up catch', { id: 'burn' }],
       'col',
-      // More for Ship & views: inspect → panels (the two the game teaches
-      // first) → unbuilt → the dev key, set apart.
+      // More for Ship & views: inspect → panels (the two the game teaches first) → unbuilt → the dev key, set apart.
       [['Point · click'], 'Inspect / upgrade a part', { pointer: true, id: 'inspect' }],
       [['−', '+'], 'Fewer / more panels', { id: 'panels' }],
       [['5', '6'], 'Cities / constellations', { id: 'cities' }],
@@ -274,17 +240,13 @@ export class HotkeyOverlay {
     this._setupListeners();
   }
 
-  // ==========================================================================
-  // PUBLIC
-  // ==========================================================================
-
   toggle() { this._visible ? this.hide() : this.show(); }
 
   show() {
     this._visible = true;
     // A language picked while the page was hidden (or before it listened) shows on this open.
     this._syncLanguage();
-    // Advanced is closed on every open (H1 D1).
+    // Stuck?, Questions and Advanced are closed on every open.
     if (typeof this._overlay.querySelectorAll === 'function') {
       for (const d of this._overlay.querySelectorAll('details')) d.open = false;
     }
@@ -301,10 +263,9 @@ export class HotkeyOverlay {
   isVisible() { return this._visible; }
 
   /**
-   * Floor-1 help button (H1 2026-10-09): a ? at the top right of the screen that
-   * opens this same list — the twin of the menu's #menu-help-btn, same look and
-   * size. Built HIDDEN (`data-floor-gone`): FloorMask owns its one visibility
-   * bit (the `f1bar` attribute pane: shown on F1, gone on F2–F5 and the menu).
+   * Floor-1 help button: a ? at the top right of the screen that opens this same list; the twin of the menu's
+   * #menu-help-btn, same look and size. Built HIDDEN (`data-floor-gone`): FloorMask owns its one visibility bit
+   * (the `f1bar` attribute pane: shown on F1, gone on F2–F5 and the menu).
    * @param {HTMLElement|null} parent  #hud-overlay
    * @returns {HTMLButtonElement|null}
    */
@@ -315,8 +276,8 @@ export class HotkeyOverlay {
     if (!doc.getElementById('hud-f1-help-style')) {
       const style = doc.createElement('style');
       style.id = 'hud-f1-help-style';
-      // Same colours, weight, border and radius as #menu-help-btn (MenuScreen).
-      // #hud-overlay is pointer-events:none, so the button turns them back on.
+      // Same colours, weight, border and radius as #menu-help-btn (MenuScreen). #hud-overlay is pointer-events:none, so
+      // the button turns them back on.
       style.textContent = `
         #hud-f1-help {
           position: fixed; top: max(16px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right));
@@ -350,10 +311,6 @@ export class HotkeyOverlay {
     this._f1Button = btn;
     return btn;
   }
-
-  // ==========================================================================
-  // DOM CONSTRUCTION
-  // ==========================================================================
 
   /** @private */
   _buildDOM() {
@@ -417,25 +374,20 @@ export class HotkeyOverlay {
 
     const body = document.createElement('div');
     Object.assign(body.style, {
-      // Three cards (Start here / Daughters / Ship & views) side by side; the
-      // closed Stuck? and Advanced sections are full width below. Scrolls
-      // vertically when it does not
-      // fit (2026-10-06, measured in headless Chromium: the old overflow:hidden
-      // clipped rows at 1024×768 and even at 1920×1080).
+      // Three cards (Start here / Daughters / Ship & views) side by side; the closed Stuck?, Questions and Advanced
+      // sections are full width below. Scrolls vertically when it does not fit (overflow:hidden clipped rows at
+      // 1024×768 and even at 1920×1080, measured in headless Chromium).
       flex: '1', minHeight: '0', overflowX: 'hidden', overflowY: 'auto', padding: '16px 18px',
       display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-      // alignItems start: each card is only as tall as its own rows (owner
-      // 2026-10-12: shorter Start here / Daughters boxes), not stretched to
-      // the tallest card in the row.
+      // alignItems start: each card is only as tall as its own rows, not stretched to the tallest card in the row.
       gap: '14px', alignContent: 'start', alignItems: 'start',
     });
-    // The ladder's window-capture WheelRouter preventDefaults + zooms every
-    // wheel in gameplay; this marker hands wheels over the cards back to the
-    // page so the list scrolls (WheelRouter._inPassthrough).
+    // The ladder's window-capture WheelRouter preventDefaults + zooms every wheel in gameplay; this marker hands wheels
+    // over the cards back to the page so the list scrolls (WheelRouter._inPassthrough).
     body.setAttribute('data-wheel-passthrough', '');
 
-    // The overview above the cards (H5 D3, reworded by DECISIONS §44 row 4): one or two plain sentences, static, in
-    // the player's language. Quieter than the key rows (smaller, dimmer).
+    // The overview above the cards (DECISIONS §44 row 4): one or two plain sentences, static, in the player's
+    // language. Quieter than the key rows (smaller, dimmer).
     const goal = document.createElement('div');
     goal.id = 'hotkey-goal';
     goal.textContent = T.overview;
@@ -497,7 +449,7 @@ export class HotkeyOverlay {
       letterSpacing: '0.14em', textTransform: 'uppercase',
     };
     Object.assign(title.style, titleStyle);
-    // Text only: a group's title is its name (no glyph — Session L, plan D-J).
+    // Text only: a group's title is its name (no glyph).
     const T = this._text();
     const rowCount = Array.isArray(group.items) ? group.items.length : group.rows.filter(r => Array.isArray(r)).length;
     const groupTitle = T.groups[group.id] || group.title;
@@ -505,10 +457,9 @@ export class HotkeyOverlay {
     title.textContent = collapsed ? `${groupTitle} (${rowCount})` : groupTitle;
     card.appendChild(title);
 
-    // Rows go straight into a plain card; a collapsed <details> wraps them in a
-    // body. With 'col' marks (Advanced) the body is three columns lined up
-    // under the three cards above; without (Stuck?) the rows flow into as many
-    // columns as fit.
+    // Rows go straight into a plain card; a collapsed <details> wraps them in a body. With 'col' marks (Advanced) the
+    // body is three columns lined up under the three cards above; without (Stuck?) the rows flow into as many columns
+    // as fit.
     const columns = group.rows.includes('col');
     let host = card;
     if (collapsed) {
@@ -516,8 +467,8 @@ export class HotkeyOverlay {
       card.style.gridColumn = '1 / -1';
       host = document.createElement('div');
       Object.assign(host.style, {
-        // 44px = the cards' 14px gap + 2 × their 15px border-and-padding, so each
-        // column's left edge sits under the rows of the card above it.
+        // 44px = the cards' 14px gap + 2 × their 15px border-and-padding, so each column's left edge sits under the
+        // rows of the card above it.
         display: 'grid',
         gridTemplateColumns: columns ? 'repeat(3, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(420px, 1fr))',
         columnGap: columns ? '44px' : '28px', marginTop: '10px',
@@ -550,7 +501,7 @@ export class HotkeyOverlay {
         continue;
       }
       if (row === 'gap') {
-        // A small blank space, no line (owner 2026-10-12: under J Journal).
+        // A small blank space, no line.
         const gap = document.createElement('div');
         gap.style.height = '8px';
         target.appendChild(gap);
@@ -564,8 +515,8 @@ export class HotkeyOverlay {
 
   /**
    * @private One FAQ question in the page's language: a <details> whose summary is the question and whose body is the
-   * answer and, when the item has a `link`, one button that closes help and opens that Tech library entry.
-   * A missing or empty translation falls back to the English words.
+   * answer and, when the item has a `link`, one button that closes help and opens that Tech library entry. A missing or
+   * empty translation falls back to the English words.
    */
   _makeFaqItem(item) {
     const T = this._text();
@@ -647,8 +598,7 @@ export class HotkeyOverlay {
 
   /**
    * @private Build a single key→description row: children[0] the keys,
-   * children[1] the label. One line, never wraps (H3); `keyWidth` is the card's
-   * measured key column (default 100px).
+   * children[1] the label. One line, never wraps; `keyWidth` is the card's measured key column (default 100px).
    */
   _makeRow(keys, desc, opts = null, keyWidth = '100px') {
     const pointer = !!(opts && opts.pointer);
@@ -674,9 +624,8 @@ export class HotkeyOverlay {
         keyWrap.appendChild(word);
         continue;
       }
-      // Separators ('/', '–') render as plain dim text, not key caps. A bare
-      // '+' is a real key cap (the pane-density chip, paired with the '−' cap),
-      // so it is NOT treated as a separator.
+      // Separators ('/', '–') render as plain dim text, not key caps. A bare '+' is a real key cap (the pane-density
+      // chip, paired with the '−' cap), so it is NOT treated as a separator.
       if (k === '/' || k === '–') {
         const sep = document.createElement('span');
         sep.textContent = k;
@@ -689,7 +638,7 @@ export class HotkeyOverlay {
 
     const label = document.createElement('span');
     Object.assign(label.style, { color: '#cfcfcf', flex: '1', lineHeight: '1.35', whiteSpace: 'nowrap' });
-    label.textContent = wordsFor(grey ? `${desc} — ${grey}` : desc);   // lane 3d: the B row says "resupply satellite" with the map on
+    label.textContent = wordsFor(grey ? `${desc} — ${grey}` : desc);   // wordsFor: the B row says "resupply satellite" with the map on
 
     row.appendChild(keyWrap);
     row.appendChild(label);
@@ -710,14 +659,9 @@ export class HotkeyOverlay {
     return cap;
   }
 
-  // ==========================================================================
-  // EVENT LISTENERS
-  // ==========================================================================
-
   /** @private */
   _setupListeners() {
-    // Stored bound ref (MenuScreen / BriefingScreen convention) so a future
-    // dispose() can actually detach this.
+    // Stored bound ref (MenuScreen / BriefingScreen convention) so dispose() can detach it.
     this._boundKeyDown = this._onKeyDown.bind(this);
     window.addEventListener('keydown', this._boundKeyDown, true);
     // The picker's choice rebuilds the page at once, shown or hidden (DECISIONS §44).
@@ -739,22 +683,18 @@ export class HotkeyOverlay {
   /**
    * @private Capture-phase key handling while the list is open.
    *
-   * While visible this SWALLOWS every game/UI key (capture phase, so it runs
-   * before everyone else) and only ESC (close) is acted on. The ?/Slash toggle
-   * is deliberately passed through — InputManager's open-overlay intercept owns
+   * While visible this SWALLOWS every game/UI key (capture phase, so it runs before everyone else) and only ESC
+   * (close) is acted on. The ?/Slash toggle is deliberately passed through: InputManager's open-overlay intercept owns
    * the close-on-? path (and its click SFX).
    *
-   * Why blanket-block rather than block a key list: since 2026-07-28 the list
-   * opens from ANY screen, and several screens own their own window keydown
-   * listeners that InputManager cannot suppress for us — MenuScreen starts the
-   * mission on Enter, and BriefingScreen launches on Enter, quick-starts on Q,
-   * and moves target selection on ↑/↓/Tab. All of those would otherwise fire
-   * behind the open overlay. SkillsPane's expanded overlay uses the same
-   * block-everything shape. Nothing is lost in gameplay: InputManager already
-   * ignores every key while this overlay is visible.
+   * Why blanket-block rather than block a key list: the list opens from ANY screen, and several screens own their own
+   * window keydown listeners that InputManager cannot suppress for us: MenuScreen starts the mission on Enter, and
+   * BriefingScreen launches on Enter, quick-starts on Q and moves target selection on ↑/↓/Tab. All of those would
+   * otherwise fire behind the open overlay. SkillsPane's expanded overlay uses the same block-everything shape.
+   * Nothing is lost in gameplay: InputManager already ignores every key while this overlay is visible.
    *
-   * Modifier combos (Cmd/Ctrl/Alt) and F-keys are passed through untouched so
-   * browser shortcuts (reload, devtools, tab switching) keep working.
+   * Modifier combos (Cmd/Ctrl/Alt) and F-keys are passed through untouched so browser shortcuts (reload, devtools,
+   * tab switching) keep working.
    *
    * @param {KeyboardEvent} e
    */

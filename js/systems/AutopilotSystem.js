@@ -69,7 +69,7 @@ export function autopilotOffText(reason) {
 /** The `_arrivalSaidFor` key of an engagement with no locked target (cluster / heading arrivals). */
 const ARRIVAL_NO_LOCK = Symbol('arrivalNoLock');
 
-/** The ONE arrival line after the tutorial, by what the mother can still do (DECISIONS §33 row 8): nets left, N nets it;
+/** The ONE arrival line after the tutorial, by what the mother can still do (DECISIONS §33 row 3): nets left, N nets it;
  * none left, a daughter takes it (D), unless the piece is over 500 kg (the N key's band, netRouting.classifyNetTarget):
  * then only a resupply restock helps. Plain words (Ruling 0). Unknown mass follows the net rule. Pure.
  * @param {number} [mass] target mass in kg
@@ -617,7 +617,7 @@ export class AutopilotSystem {
     /** @type {boolean} */
     this._engaged = false;
 
-    /** @type {number} The mother's nets, cached for the arrival line (DECISIONS §33 row 8): follows
+    /** @type {number} The mother's nets, cached for the arrival line (DECISIONS §33 row 3): follows
      *  NET_INVENTORY_CHANGED { source:'mother', motherNets }, reset by GAME_RESET. */
     this._motherNetsLeft = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
     /** @type {number} The mother's magazine capacity (4 at the start; 6 / 8 / 10 after the upgrade), from the podMax
@@ -2958,7 +2958,7 @@ export class AutopilotSystem {
   }
 
   _setupListeners() {
-    // The mother's nets, for the arrival line (DECISIONS §33 row 8): CaptureNetSystem owns the one count and announces it on every
+    // The mother's nets, for the arrival line (DECISIONS §33 row 9): CaptureNetSystem owns the one count and announces it on every
     // change; a new game puts the full magazine back.
     eventBus.on(Events.NET_INVENTORY_CHANGED, (data) => {
       if (!data || data.source !== 'mother') return;

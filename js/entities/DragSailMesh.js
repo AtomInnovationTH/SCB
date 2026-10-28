@@ -1,20 +1,19 @@
 /**
- * DragSailMesh - the look of a drag sail on a big piece that was let go (Nets step 3 slice 5, lane 5d; plan D5; DECISIONS §33 row 16).
+ * DragSailMesh - the look of a drag sail on a big piece that was let go (DECISIONS §33 row 16).
  *
- * A real drag sail, as the owner ruled 2026-10-27 ("like real ones": a thin shiny film held flat by four stiff poles): a small deployer
- * box bolted to the piece's -Y face (the stage's engine end), four thin carbon poles running from the box out to the corners of a square,
- * and a thin aluminised film in four triangles between the poles (25 m2 = `Constants.BIG_PIECES.SAIL.areaM2`, HPS ADEO-L class; drawn area =
+ * owner 2026-10-27: a real drag sail, "like real ones": a thin shiny film held flat by four stiff poles. A small deployer box is bolted
+ * to the piece's -Y face (the stage's engine end), four thin carbon poles run from the box to the corners of a square, and a thin
+ * aluminised film fills four triangles between the poles (25 m2 = `Constants.BIG_PIECES.SAIL.areaM2`, HPS ADEO-L class; drawn area =
  * the physics area). The film plane is perpendicular to the piece's Y axis, just beyond the box; nothing joins it to the stage's centre.
- * It is built in METRES and scaled to the scene by `DebrisField`'s own LOD ratio, so it shrinks and goes with the piece it hangs on
- * (`_lodScale`: 0 when the piece is too far to draw). It turns with the piece (the same tumble quaternion) and is hidden or removed with it:
- * a removed or dead piece takes its sail away on the next `sync`.
+ * Built in METRES and scaled to the scene by `DebrisField`'s own LOD ratio (`_lodScale`: 0 when the piece is too far to draw). It turns
+ * with the piece (the same tumble quaternion); a removed or dead piece takes its sail away on the next `sync`.
  *
- * `DebrisField.attachSail(d)` makes one (lazily creates the set) and `DebrisField.update` calls `sync` (the draw hook: ONE line). Nothing here
- * touches game state; with no document / WebGL nothing is drawn but the objects still build (three.js scene graph only).
+ * `DebrisField.attachSail(d)` makes one (lazily creates the set); `DebrisField.update` calls `sync` (the draw hook: ONE line).
+ * Nothing here touches game state; with no document / WebGL the objects still build (three.js scene graph only).
  *
- * MEASURED (2026-10-27, node probe over `DebrisWireframe.getGeometry('rocketBody')` vertices, x `sizeMeter`): the SL-14 stage's furthest -Y point
+ * MEASURED (node probe over `DebrisWireframe.getGeometry('rocketBody')` vertices, x `sizeMeter`): the SL-14 stage's furthest -Y point
  * is the engine bell's rim at -0.5 x sizeMeter (r 0.423); the throat cone inside the bell ends 0.029 x sizeMeter short of it, so a box that
- * touches the rim and a film beyond the box clear every vertex (pinned by test-DragSail.js T1 and T4, with mutations). ESTIMATES (owner's eyes
+ * touches the rim and a film beyond the box clear every vertex (pinned by test-DragSail.js T1 and T4). ESTIMATES (the owner's eyes
  * still to judge): the box size (0.6 x 0.35 x 0.6 m, ADEO-L class), the pole diameter (5 cm), the 3 cm sag, the film's gloss and the pole
  * colour. `d._meltK` shortens a piece along Y and is ignored here (a known limit: the box then floats a little).
  * @module entities/DragSailMesh
@@ -118,7 +117,7 @@ export function buildSailMesh(sideM = sailSideM(), endYM = -2.5) {
   return g;
 }
 
-/** The sails of one DebrisField: one group per piece, each following its piece. */
+/** The sails of one DebrisField: one group per piece. */
 export class DragSailSet {
   /** @param {THREE.Object3D} parent where the sails go (the field's own group, so they share its floating origin) */
   constructor(parent) {
@@ -131,7 +130,7 @@ export class DragSailSet {
   get size() { return this._rec.size; }
   has(id) { return this._rec.has(id); }
 
-  /** The group drawn for piece `id` (tests / probes), or null. */
+  /** The group drawn for piece `id`, or null. */
   groupOf(id) { const r = this._rec.get(id); return r ? r.group : null; }
 
   /** @param {object} d the field's own body @returns {boolean} false when it already has one (or has no id) */

@@ -1,7 +1,6 @@
 /**
  * GameFlowManager.js — Manages game state transitions, event wiring,
  * save/load orchestration, and all game flow logic.
- * Extracted from main.js (Session 9, Phase 2C).
  * @module systems/GameFlowManager
  */
 
@@ -50,28 +49,28 @@ import {
   RESOURCE_SYSTEM, PLAYER, ARM_MANAGER, SENSOR_EVENT, DAUGHTER_NET, DAUGHTER_NET_EFFECT_TYPE,
   KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT, CARGO_SYSTEM,
 } from './upgradeEffectRoutes.js';
+import { clamp01 } from '../core/MathUtil.js';
 
 /**
  * Shop cadence — the depot stop fires at every MISSION boundary, i.e. every
- * DEBRIS_PER_MISSION credited clears. ONE source of truth
- * (Constants.MISSIONS.DEBRIS_PER_MISSION, the same number ScoringSystem's
- * mission counter and missionProgress.js divide by); the three former `% 5`
- * literals here were the T8 "shop cadence hardcoded" trap
- * (docs/ladder/02-traps.md). Exported so test-shop-cadence can pin the
- * equality with ScoringSystem's mission length.
+ * DEBRIS_PER_MISSION credited clears. ONE source of truth: the same number
+ * ScoringSystem's mission counter and missionProgress.js divide by (never a
+ * hardcoded `% 5`; archive/ladder/02-traps.md T8). Exported so test-shop-cadence
+ * can pin the equality with ScoringSystem's mission length.
  */
 export const SHOP_CADENCE = Constants.MISSIONS.DEBRIS_PER_MISSION;
 
 /**
- * Lane 3c: where the end of a mission leads, in the words of the lines that promise it ("Clear 4 more for ..."): the resupply satellite when
- * it is the stop (flag on, floor 4 there), else today's "depot resupply". `self` may be a test stub without the question (today's words).
+ * Where the end of a mission leads, in the words of the lines that promise it ("Clear 4 more for ..."): the resupply
+ * satellite when it is the stop (flag on, floor 4 there), else "depot resupply". `self` may be a test stub without
+ * `_satelliteIsTheStop`.
  * @param {object} self a GameFlowManager @returns {string}
  */
 function stopWords(self) {
   return self && typeof self._satelliteIsTheStop === 'function' && self._satelliteIsTheStop() ? 'the resupply satellite' : 'depot resupply';
 }
 
-/** @private Slice 5 (5d): "23 years" / "1 year" for a life in years (rounded, never under a year). */
+/** @private "23 years" / "1 year" for a life in years (rounded, never under a year). */
 function yearsWords(y) {
   const n = Math.max(1, Math.round(y));
   return `${n} ${n === 1 ? 'year' : 'years'}`;
@@ -80,7 +79,7 @@ function yearsWords(y) {
 /** The boot trickle's last line ("Sensor array calibrating...") is at 2600 ms; a non-dance new game says its start lines after it. */
 const START_LINES_AFTER_TRICKLE_MS = 2700;
 
-/** @private let-go-bag: "5 weeks" / "10 days" for a life in years (days under two weeks, never under a day). */
+/** @private "5 weeks" / "10 days" for a life in years (days under two weeks, never under a day). */
 function lifeWords(years) {
   const days = Math.max(1, Math.round(years * 365.25));
   if (days < 14) return `${days} ${days === 1 ? 'day' : 'days'}`;
@@ -89,7 +88,7 @@ function lifeWords(years) {
   return yearsWords(years);
 }
 
-/** @private let-go-bag: a bag let go drifts away from her at this speed (km/s: 0.5 m/s, an estimate) and is gone this many seconds later. */
+/** @private A bag let go drifts away from her at this speed (km/s: 0.5 m/s, an estimate) and is gone this many seconds later. */
 const BAG_DRIFT_KMS = 0.0005;
 const BAG_GONE_S = 8;
 
@@ -108,85 +107,78 @@ export class GameFlowManager {
     this._shopTimeoutId = null;
 
     /**
-     * Wave 5 Session K (plan D-B / D-E — one shop): true from the
-     * WORKBENCH_STOP this manager emits (the ladder-on-gameplay depot entry,
-     * `_stopAtWorkbench`) until the hub's WORKBENCH_RESUME (both drawers
-     * closed) or any exit from gameplay. `isDepotStopPending()` reads it
-     * alongside the dwell timer so the mission-keyed onsets (MissionCoach, the
-     * bosses) hold through the break exactly as they held through the
-     * full-screen SHOP. Never set with the ladder off.
+     * True from the WORKBENCH_STOP this manager emits (the ladder-on-gameplay depot entry, `_stopAtWorkbench`) until the
+     * hub's WORKBENCH_RESUME (both drawers closed) or any exit from gameplay. `isDepotStopPending()` reads it alongside
+     * the dwell timer so the mission-keyed onsets (MissionCoach, the bosses) hold through the break exactly as they held
+     * through the full-screen SHOP. Never set with the ladder off.
      */
     this._workbenchBreak = false;
 
     /**
-     * Wave 5 Session E (08-workbench §5 D3): the open depot INVITATION, or
-     * null — `{ chapter, debrisCleared }` from the boundary catch that opened
-     * it. In-memory only (never saved): a reload simply has no invitation
-     * open. Closed by any SHOP entry ('entered'), the next credited catch
-     * ('lapsed' — owner decision 2), terminal states and resetGame ('reset').
+     * The open depot INVITATION, or null — `{ chapter, debrisCleared }` from the boundary catch that opened it.
+     * In-memory only (never saved). Closed by any SHOP entry ('entered'), the next credited catch ('lapsed'; owner
+     * 2026-09-04), terminal states and resetGame ('reset').
      */
     this._depotInvitation = null;
 
     /**
-     * u1-resupply-stop D1 (owner ruling 2026-10-17, DECISIONS §26): true while the ship is "at the resupply stop"
-     * — the only time credits may be spent or earned in the shop. OPENS when a mission is completed
-     * (`_onMissionBoundary`), when GAMEOVER_CONTINUE sends the player to the shop, and when a save made at a mission
-     * boundary is continued. CLOSES at the next credited catch, and on game over / win / menu / reset. Nothing else
-     * closes it (not the invitation's 'entered', not WORKBENCH_RESUME, not SHOP_DEPLOY). Pushed to the shop through
-     * `_setResupplyStop`; read by `atResupplyStop()`. In-memory: a reload re-derives it from the saved mission count.
+     * owner 2026-10-17, DECISIONS §26: true while the ship is "at the resupply stop" — the only time credits may be
+     * spent or earned in the shop. OPENS when a mission is completed (`_onMissionBoundary`), when GAMEOVER_CONTINUE
+     * sends the player to the shop, and when a save made at a mission boundary is continued. CLOSES at the next
+     * credited catch, and on game over / win / menu / reset. Nothing else closes it (not the invitation's 'entered',
+     * not WORKBENCH_RESUME, not SHOP_DEPLOY). Pushed to the shop through `_setResupplyStop`; read by `atResupplyStop()`.
+     * In-memory: a reload re-derives it from the saved mission count.
      */
     this._atResupplyStop = false;
 
     /**
-     * trip-melt D2 (owner 2026-10-19): the burn between missions. A completed mission begins this trip instead of
-     * starting the next mission at once; the mission starts (MISSION_START, the next field) when the burn ends. The
-     * station unloads nothing (the catches stay where they are parked and the tip furnaces melt them on the trip).
-     * Created in `init` once the ship exists. In-memory only: a save holds no trip.
+     * owner 2026-10-19: the burn between missions. A completed mission begins this trip instead of starting the next
+     * mission at once; the mission starts (MISSION_START, the next field) when the burn ends. The station unloads
+     * nothing (the tip furnaces melt the parked catches on the trip). Created in `init` once the ship exists.
+     * In-memory only: a save holds no trip.
      * @type {TransferTrip}
      */
     this._trip = new TransferTrip();
-    /** trip-melt-2 D12a: the boundary count a credit reached during a trip, run after the trip's mission start, or null. */
+    /** The boundary count a credit reached during a trip, run after the trip's mission start, or null. */
     this._deferredBoundary = null;
     /**
-     * Nets step 3 slice 2b (lane 2b-2, FIELDS_BY_HEIGHT): floor 4 exists and hosts the "where next" list (main.js sets it once the
-     * list is built, inside the ladder block). With the flag on and this set, a mission boundary opens the choice instead of
-     * flying to `defaultNext()`; with `?ladder=0` (no floor 4) or in a rig that never wired it, `defaultNext()` as before.
+     * FEATURE_FLAGS.FIELDS_BY_HEIGHT: floor 4 exists and hosts the "where next" list (main.js sets it once the list is
+     * built, inside the ladder block). With the flag on and this set, a mission boundary opens the choice instead of
+     * flying to `defaultNext()`; with `?ladder=0` (no floor 4) or in a rig that never wired it, `defaultNext()`.
      */
     this._whereNextOn = false;
 
     /**
-     * w1-hud-calm review fix (2026-10-05): the first INVITATION pays the
-     * first-depot floor and persists FIRST_DEPOT_VISITED, but the player has
-     * not come down yet — so the first-visit framing (the REFIT drawer's
-     * RECOMMENDED starter chip) is OWED to the next workbench stop.
-     * `_stopAtWorkbench` consumes it (read + clear). In-memory only: a reload
-     * between the invitation and the visit loses the chip, never the credits.
+     * The first INVITATION pays the first-depot floor and persists FIRST_DEPOT_VISITED, but the player has not come
+     * down yet — so the first-visit framing (the REFIT drawer's RECOMMENDED starter chip) is OWED to the next
+     * workbench stop. `_stopAtWorkbench` consumes it (read + clear). In-memory only: a reload between the invitation
+     * and the visit loses the chip, never the credits.
      */
     this._firstVisitOwed = false;
 
     /**
-     * c2-fifth-catch D2: the next mission's start, held while the credited
-     * catch is still sitting at the nose. `{ debrisId, elapsedS, start }` or null,
-     * `start` being the continuation that fires the mission transition.
-     * Only set for a PARKED credit that crosses a mission boundary with the
-     * depot invitation branch live (ladder on). Released by the catch leaving
-     * the nose (see `_releaseMissionStart`) or by `update(dt)` once
+     * The next mission's start, held while the credited catch is still sitting at the nose.
+     * `{ debrisId, elapsedS, start }` or null, `start` being the continuation that fires the mission transition.
+     * Only set for a PARKED credit that crosses a mission boundary with the depot invitation branch live (ladder on).
+     * Released by the catch leaving the nose (see `_releaseMissionStart`) or by `update(dt)` once
      * `Constants.MISSIONS.START_AFTER_CATCH_MAX_S` game seconds have passed.
-     * In-memory only: a save during the hold is as safe as any Continue (the
-     * mission number is derived from `debrisCleared`; loading emits no start).
+     * In-memory only: a save during the hold is as safe as any Continue (the mission number is derived from
+     * `debrisCleared`; loading emits no start).
      * @type {{debrisId: number|string, elapsedS: number, start: () => void}|null}
      */
     this._pendingMissionStart = null;
 
     /**
-     * t1-stranded D1/D2: seconds of running gameplay the ship has been stranded (both gas tanks empty, no way to
-     * buy a resupply — mid-mission, or at the stop with too little to pay — nothing under way that could pay). Ends the run at Constants.STRANDED_GRACE_S.
+     * Seconds of running gameplay the ship has been stranded (both gas tanks empty, no way to buy a resupply —
+     * mid-mission, or at the stop with too little to pay — nothing under way that could pay). Ends the run at
+     * Constants.STRANDED_GRACE_S.
      * @type {number}
      */
     this._strandedS = 0;
     /**
-     * Lane 3c (C3): this stranded spell has already been offered the call to the resupply satellite (the line was said and the list opened,
-     * or she was choosing). Declined (she picked Stay), the countdown runs as it always did. Cleared when the spell ends and on a new run.
+     * This stranded spell has already been offered the call to the resupply satellite (the line was said and the list
+     * opened, or she was choosing). Declined (she picked Stay), the countdown runs as usual. Cleared when the spell
+     * ends and on a new run.
      * @type {boolean}
      */
     this._callOffered = false;
@@ -200,27 +192,23 @@ export class GameFlowManager {
     /** @type {boolean} Guard: elevator contract win already triggered */
     this._elevatorWinTriggered = false;
 
-    /** @type {boolean} S1 Fix L2: Guard against duplicate GAME_WIN handling */
+    /** @type {boolean} Guard against duplicate GAME_WIN handling */
     this._winTriggered = false;
 
-    /** @type {boolean} Tracks wireframe assessment state (Batch 3 — replaces debrisWireframe.hasAssessedTarget()) */
+    /** @type {boolean} Tracks wireframe assessment state */
     this._wireframeAssessed = false;
 
-    // --- First Experience guidance state ---
     /** @type {boolean} First ORBITAL_VIEW entry this game (for auto-target + opening comms) */
     this._firstOrbitalView = true;
-    /** @type {boolean} deep-polish-4: suppress the menu→sim intro zoom on the
-     *  next new-game ORBITAL_VIEW entry (set when the player SKIPS the menu
-     *  departure — MENU_START { skipped:true }). Consumed once, then reset. */
+    /** @type {boolean} Suppress the menu→sim intro zoom on the next new-game ORBITAL_VIEW entry (set when the player
+     *  SKIPS the menu departure — MENU_START { skipped:true }). Consumed once, then reset. */
     this._suppressIntroZoom = false;
     /** @type {Set<string>} One-shot comms already sent this game */
     this._firstTimeComms = new Set();
 
-    // --- Onboarding gating (Guidance cleanup, Phase 0) ---
-    // Track whether the OnboardingDirector pipeline is running (used by opening
-    // comms gating below). The reward-first spine (.kilo plan) hands target
-    // acquisition to AutoLockController from the first frame, so the old
-    // `target`-beat deferral + auto-target are gone (AutoLockController owns it).
+    // --- Onboarding gating ---
+    // Whether the OnboardingDirector pipeline is running (gates the opening comms below). Target acquisition belongs
+    // to AutoLockController from the first frame.
     /** @type {boolean} */
     this._onboardingRunning = false;
     eventBus.on(Events.ONBOARDING_STARTED, () => {
@@ -245,12 +233,9 @@ export class GameFlowManager {
    *   Screens:  shopScreen (_hasUpgrade, saveGame)
    *   Systems:  resourceSystem
    *
-   * Imported singletons (not in _refs):
-   *   targetSelector  — imported from TargetSelector.js
-   *   kesslerSystem   — imported from KesslerSystem.js
-   *   trawlManager    — imported from TrawlManager.js (active check for deployTrawl guard)
+   * targetSelector, kesslerSystem and trawlManager are imported singletons (not in _refs).
    *
-   * Decoupled via EventBus (17 removed):
+   * Other screens, HUD, overlays and systems listen on the EventBus, not _refs. Who listens to what:
    *   Screens:  menuScreen, gameOverScreen → GAME_STATE_CHANGE
    *             briefingScreen → GAME_STATE_CHANGE (payload.targets)
    *   UI:       hud → GAME_STATE_CHANGE + VIEW_CONFIG_CHANGE + HUD_TARGET_CLICK + PAUSE events
@@ -270,16 +255,15 @@ export class GameFlowManager {
   init(refs) {
     this._refs = refs;
     this._syncTripDeps();
-    this._bindBigPieces();   // slice 5 (5b): the ledger reads the holders (nets, racks) through these
-    // u1-resupply-stop D1: the real game starts mid-mission — the shop's trade gate is closed until the first
-    // completed mission (a shop that was never told stays permissive, so bare test rigs are unaffected).
+    this._bindBigPieces();   // the ledger reads the holders (nets, racks) through these
+    // The real game starts mid-mission: the shop's trade gate is closed until the first completed mission (a shop
+    // that was never told stays permissive, so bare test rigs are unaffected).
     this._setResupplyStop(false);
   }
 
   /**
-   * u1-resupply-stop D1: is the ship at the resupply stop right now (a completed mission, or the game-over
-   * shop, and no credited catch since)? The shop's trade gate and the REFIT chips read this through the
-   * shop's pushed flag; tests and the HUD may read it here.
+   * Is the ship at the resupply stop right now (a completed mission, or the game-over shop, and no credited catch
+   * since)? The shop's trade gate and the REFIT chips read this through the shop's pushed flag.
    * @returns {boolean}
    */
   atResupplyStop() {
@@ -312,9 +296,9 @@ export class GameFlowManager {
   }
 
   /**
-   * Nets step 3 slice 3 (S7; FEATURE_FLAGS.FIELDS_BY_HEIGHT; DECISIONS §33 row 7): is the resupply SATELLITE where buying happens?
-   * True with the flag on AND floor 4 there to ask on (the "where next" list: with `?ladder=0` there is no list, so no satellite to
-   * fly to and today's stop after every mission stays). Read live (the flags are flipped per rig).
+   * FEATURE_FLAGS.FIELDS_BY_HEIGHT, DECISIONS §33 row 7: is the resupply SATELLITE where buying happens? True with the
+   * flag on AND floor 4 there to ask on (the "where next" list: with `?ladder=0` there is no list, so no satellite to fly
+   * to and the stop after every mission stays). Read live (the flags are flipped per rig).
    * @returns {boolean}
    * @private
    */
@@ -329,22 +313,12 @@ export class GameFlowManager {
     if (shop && typeof shop.setSatelliteStop === 'function') shop.setSatelliteStop(this._satelliteIsTheStop());
   }
 
-  // ==========================================================================
-  // VIEW CONFIG
-  // ==========================================================================
-
-  /** Apply current camera-view info-level config to HUD + self-managing overlays. */
   applyViewConfig() {
     const { cameraSystem } = this._refs;
     const view = cameraSystem ? cameraSystem.getView() : 'CHASE';
     const config = VIEW_INFO_LEVELS[view] || VIEW_INFO_LEVELS.CHASE;
-    // HUD + overlays self-manage visibility via this event
     eventBus.emit(Events.VIEW_CONFIG_CHANGE, config);
   }
-
-  // ==========================================================================
-  // STATE TRANSITIONS
-  // ==========================================================================
 
   /**
    * Transition to a new game state, managing UI visibility.
@@ -355,55 +329,38 @@ export class GameFlowManager {
     const {
       cameraSystem, debrisField, player,
     } = this._refs;
-    // targetSelector: imported singleton
-    // kesslerSystem: imported singleton
-    // trawlManager: self-manages via GAME_STATE_CHANGE
-    // debrisWireframe: self-manages via TARGET_SELECTED/CLEARED + GAME_RESET
-
     const from = gameState.currentState;
 
-    // Wave 5 Session K (plan D-B — ONE SHOP; the granted GFM lift, site 1 of
-    // 4): with the ladder on, GAMEPLAY never enters the SHOP GameState. Every
-    // caller that asks for it from a gameplay state — the chapter 1–3 boundary
-    // dwell (site 2 calls the same method directly), the B key (InputManager),
-    // the glass STORE chip (main.js openShop), any legacy timer — is redirected
-    // into the WORKBENCH BREAK: one event, the hub rides the player down to the
-    // workbench and opens the REFIT drawer (the shop). Not gameplay (the
-    // GAME_OVER → SHOP continue) or ladder off → the shipped state flip below,
-    // byte-identical.
+    // With the ladder on, GAMEPLAY never enters the SHOP GameState: every gameplay caller (the chapter 1–3 boundary
+    // dwell, the B key, the glass STORE chip, any legacy timer) is redirected into the WORKBENCH BREAK (the hub rides
+    // the player down and opens the REFIT drawer). GAME_OVER → SHOP continue, or ladder off → the plain flip below.
     if (state === GameStates.SHOP && this._ladderOn() && gameState.isGameplay()) {
       this._stopAtWorkbench(false);
       return;
     }
-    // The break is a GAMEPLAY condition: any exit from gameplay (GAME_OVER /
-    // WIN / the pause menu's MENU) ends it — the ladder disengages and closes
-    // the drawer on its own; nothing may stay pending into the next run.
+    // The break is a GAMEPLAY condition: any exit from gameplay (GAME_OVER / WIN / the pause menu's MENU) ends it;
+    // nothing may stay pending into the next run.
     if (state === GameStates.GAME_OVER || state === GameStates.WIN || state === GameStates.MENU) {
       this._workbenchBreak = false;
-      this._setResupplyStop(false);   // u1-resupply-stop D1: game over / win / menu end the stop
-      this._trip.abort();             // trip-melt D9: a trip belongs to the run that just ended (the mission is NOT started)
-      this._deferredBoundary = null;  // trip-melt-2 D12a
-      this._clearBerth();             // slice 3: nor does a berth at the resupply satellite
+      this._setResupplyStop(false);   // game over / win / menu end the stop
+      this._trip.abort();             // a trip belongs to the run that just ended (the mission is NOT started)
+      this._deferredBoundary = null;
+      this._clearBerth();             // nor does a berth at the resupply satellite
     }
 
-    // First-depot visit signal, computed BEFORE the flag is persisted so the
-    // shop can render its one-time framing/⭐ on the actual first visit. Passed
-    // through GAME_STATE_CHANGE (the flag write below would otherwise flip to
-    // true before ShopScreen reads storage in its own handler).
+    // First-depot visit signal, computed BEFORE the flag is persisted (the write below would flip it to true before
+    // ShopScreen reads storage in its own GAME_STATE_CHANGE handler).
     let firstDepotVisit = false;
 
-    // Clear pending shop timeout on terminal states (and any open depot invitation)
     if (state === GameStates.GAME_OVER || state === GameStates.WIN) {
       if (this._shopTimeoutId) { timerManager.clear(this._shopTimeoutId); this._shopTimeoutId = null; }
       this._closeDepotInvitation('reset');
-      this._pendingMissionStart = null;   // c2-fifth-catch D2: a held start belongs to the run that just ended
+      this._pendingMissionStart = null;   // a held start belongs to the run that just ended
     }
 
-    // Force state for reset scenarios
     if (from === state && state === GameStates.MENU) {
       gameState.currentState = GameStates.MENU;
     } else if (from !== state) {
-      // Use the state manager for validation where possible
       const valid = gameState.setState(state, payload);
       if (!valid) {
         console.warn(`[GameFlow] Rejected transition: ${from} → ${state}`);
@@ -413,12 +370,10 @@ export class GameFlowManager {
 
     switch (state) {
       case GameStates.MENU:
-        // HUD self-manages visibility via GAME_STATE_CHANGE
         this.paused = false;
         break;
 
       case GameStates.BRIEFING: {
-        // HUD self-manages visibility via GAME_STATE_CHANGE
         // BriefingScreen receives targets via GAME_STATE_CHANGE payload
         const targets = debrisField.getTargetList(player.getOrbitalElements());
         payload = { targets, playerOrbit: player.getOrbitalElements() };
@@ -426,22 +381,16 @@ export class GameFlowManager {
       }
 
       case GameStates.ORBITAL_VIEW:
-        // HUD self-manages visibility via GAME_STATE_CHANGE
         this.applyViewConfig();
         this.approachTarget = null;
         this.approachComplete = false;
 
-        // Activate score-group HUD panel after a short delay (pacing).
-        // Gated on _firstOrbitalView so the timer runs exactly once — on the
-        // player's very first ORBITAL_VIEW entry of a new game. This prevents:
-        //   (a) stacking duplicate timers on SHOP → ORBITAL_VIEW returns
-        //   (b) re-firing on saved-game continues (MENU_CONTINUE sets
-        //       _firstOrbitalView = false and emits HUD_GROUP_ACTIVATE directly)
+        // Score-group HUD panel activates after a short delay. Gated on _firstOrbitalView so the timer runs once, on the
+        // first ORBITAL_VIEW entry of a new game: no duplicate timers on SHOP → ORBITAL_VIEW returns, no re-fire on
+        // saved-game continues (MENU_CONTINUE sets _firstOrbitalView = false and emits HUD_GROUP_ACTIVATE directly).
         if (this._firstOrbitalView) {
-          // deep-polish-4: menu→sim intro settle — chase offset starts scaled
-          // and eases straight into formation (no dead hold). Skipped entirely
-          // under reduced motion (a11y) or when the player skipped the menu
-          // departure, so the scale stays at 1.0 in those paths.
+          // Menu→sim intro settle: chase offset starts scaled and eases into formation. Skipped under reduced motion
+          // or when the player skipped the menu departure (scale stays 1.0).
           const reduced = this._prefersReducedMotion();
           if (cameraSystem) {
             if (reduced || this._suppressIntroZoom) {
@@ -452,15 +401,10 @@ export class GameFlowManager {
           }
           this._suppressIntroZoom = false;
 
-          // Comms boot trickle — messages arrive during the ~1.5-2 s settle.
-          // Retimed off the removed 4 s hold; staggered so nothing arrives as a
-          // wall. owner=this for grouped teardown; inner guards no-op on state
-          // change (these are first-run intro callbacks).
-          // T6: "EVA crew clear." lands first (handoff+~0.3s) — the acknowledgment
-          // that the astronaut cleared the hull, which is what UNLOCKS the power-up
-          // (the start lines "Arrived ..." and "Systems... nominal." then read as the result).
-          // Tagged _onboarding so it passes the tier-0 suppression gate during the
-          // OnboardingDirector intro (raw HOUSTON lines are muted at tier 0).
+          // Comms boot trickle during the ~1.5-2 s settle, staggered. owner=this for grouped teardown; inner guards
+          // no-op on state change. "EVA crew clear." lands first: the astronaut cleared the hull, which UNLOCKS the
+          // power-up (the start lines then read as the result). Tagged _onboarding so it passes the tier-0 suppression
+          // gate (raw HOUSTON lines are muted at tier 0).
           timerManager.setTimeout(() => {
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'HOUSTON', channel: 'CMD', priority: 'info',
@@ -475,11 +419,8 @@ export class GameFlowManager {
             });
           }, 800, { owner: this });
           timerManager.setTimeout(() => {
-            // De-collision (wave0): this line's job is "systems coming alive"
-            // flavor ONLY. The telemetry call-out belongs to the Director's
-            // `handshake` beat (telemetry + "Reticle is live" instruction),
-            // which lands ~1.3 s later — do NOT reintroduce a telemetry clause
-            // here or two near-identical lines stack in the comms panel.
+            // "Systems coming alive" flavor ONLY. The telemetry call-out belongs to the Director's `handshake` beat
+            // (~1.3 s later): do NOT add a telemetry clause here or two near-identical lines stack in the comms panel.
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'HOUSTON', channel: 'CMD', priority: 'info',
               text: 'Comms are up, Cowboy. Loud and clear.', _onboarding: true,
@@ -492,9 +433,7 @@ export class GameFlowManager {
             });
           }, 2600, { owner: this });
 
-          // Score-group HUD panel powers on during the settle so the arrival is
-          // one gesture (overlaps the camera easing into formation). Re-keyed
-          // off the removed VLEO hold to a fixed settle-aligned delay.
+          // Score-group HUD panel powers on during the settle, overlapping the camera easing into formation.
           if (this._scoreGroupTimer !== null) timerManager.clear(this._scoreGroupTimer);
           this._scoreGroupTimer = timerManager.setTimeout(() => {
             this._scoreGroupTimer = null;
@@ -502,13 +441,10 @@ export class GameFlowManager {
           }, 2000, { owner: this });
         }
 
-        // Phase 2: Auto-start trawl — TrawlManager self-manages via GAME_STATE_CHANGE (Batch 3)
         break;
 
       case GameStates.APPROACH:
-        // HUD self-manages visibility via GAME_STATE_CHANGE
         this.applyViewConfig();
-        // Switch to target lock camera if we have a target
         if (this.approachTarget && cameraSystem) {
           const targetCart = orbitToSceneCartesian(this.approachTarget.orbit);
           const targetPos = new THREE.Vector3(targetCart.position.x, targetCart.position.y, targetCart.position.z);
@@ -517,90 +453,66 @@ export class GameFlowManager {
         break;
 
       case GameStates.INTERACTION:
-        // HUD self-manages visibility via GAME_STATE_CHANGE
         this.applyViewConfig();
         break;
 
       case GameStates.SHOP:
-        // HUD self-manages visibility via GAME_STATE_CHANGE
-        // u1-resupply-stop D4: the first-visit floor is paid at the resupply stop only (a mid-mission look at the
-        // full-screen shop pays nothing — the first invitation pays it, and the framing is owed to the next stop).
+        // The first-visit floor is paid at the resupply stop only (a mid-mission look at the full-screen shop pays
+        // nothing — the first invitation pays it, and the framing is owed to the next stop).
         firstDepotVisit = this._atResupplyStop ? this._applyFirstDepotFloor() : false;
-        // Any depot entry (the doorway, the B key, the iPad chip) takes the
-        // open invitation up — the notch glow ends (Wave 5 Session E).
+        // Any depot entry (the doorway, the B key, the iPad chip) takes the open invitation up — the notch glow ends.
         this._closeDepotInvitation('entered');
         break;
 
       case GameStates.GAME_OVER:
-        // t1-stranded D4: the ONLY save that carries the game-over flag; menu CONTINUE reads it
+        // The ONLY save that carries the game-over flag; menu CONTINUE reads it
         this.saveGame({ gameOver: true }); // Persist progress before game over
-        // HUD self-manages visibility via GAME_STATE_CHANGE
         break;
 
       case GameStates.WIN:
         this.saveGame(); // Persist final score on victory
-        // HUD self-manages visibility via GAME_STATE_CHANGE
         break;
     }
 
-    // Notify self-managing UI screens and overlays
     eventBus.emit(Events.GAME_STATE_CHANGE, { from, to: state, payload, firstDepotVisit });
 
     console.log(`[GameState] ${from} → ${state}`);
   }
 
-  // ==========================================================================
-  // EVENT HANDLERS
-  // ==========================================================================
-
-  /** Wire up all EventBus handlers for game flow events. */
   setupEventHandlers() {
     const {
       debrisField, player, armManager, cameraSystem,
       resourceSystem,
       shopScreen,
     } = this._refs;
-    // targetSelector: imported singleton
-    // kesslerSystem: imported singleton
-    // debrisWireframe: self-manages via events (Batch 3)
-    // trawlManager: self-manages via events (Batch 3)
 
-    // ==================================================================
-    // MENU EVENTS
-    // ==================================================================
+    // --- Menu events ---
 
     // Menu → Start (skip briefing, go straight to orbital gameplay)
     eventBus.on(Events.MENU_START, (data) => {
-      // keepOpeningDance: inferred HERE, at the call site, where the inference
-      // is actually sound — at MENU_START "a dance is running" means exactly
-      // "the bind a few lines below takes it over", so resetGame must not land
-      // it on endState. Every other caller (CONTINUE, GAMEOVER retry/menu)
-      // leaves it false. It must NOT be a bare `true`: on a flag-off, reduced
-      // motion or ?shot boot no dance is running, and resetGame is the ONLY
-      // production endState call — passing true there booted the daughters
-      // stowed at α 0 instead of the one open pose.
-      // Without the dance (reduced motion, flag off, ?shot) the start lines wait for the boot trickle below (EVA crew clear,
-      // Comms are up ...) so they are the last lines before the first action; with it, comms is held until the hand-over.
+      // keepOpeningDance is inferred HERE: at MENU_START "a dance is running" means "the bind below takes it over", so
+      // resetGame must not land it on endState. It must NOT be a bare `true`: on a flag-off, reduced-motion or ?shot
+      // boot no dance runs, and resetGame is the ONLY production endState call (true there booted the daughters
+      // stowed at α 0 instead of the one open pose). Without the dance the start lines wait for the boot trickle
+      // below (EVA crew clear, Comms are up ...) so they are the last lines before the first action; with it, comms
+      // is held until the hand-over.
       const danceRuns = openingDance.isActive();
       this.resetGame({ keepOpeningDance: danceRuns, newGame: true, deferStartLine: !danceRuns, armNow: true });
       if (!danceRuns) {
         timerManager.setTimeout(() => { openingDance.postStartLine(); }, START_LINES_AFTER_TRICKLE_MS, { owner: this });
       }
-      // deep-polish-4: if the player SKIPPED the menu departure, suppress the
-      // sim intro zoom too (respect the skip). Set AFTER resetGame(), which
-      // clears the flag. Read once by the ORBITAL_VIEW enter below.
+      // If the player SKIPPED the menu departure, suppress the sim intro zoom too. Set AFTER resetGame(), which clears
+      // the flag.
       this._suppressIntroZoom = !!(data && data.skipped);
       this._applyStartLocation();   // place ground track over the player's home region
       this._stageOpeningLight();    // fresh M1 spawn opens sunlit (new-game paths only)
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
-      persistenceManager.backupSave(); // F1 save-guard: back up before New Game clears it
+      persistenceManager.backupSave(); // back up before New Game clears it
       persistenceManager.deleteSave(); // New Game clears any existing save
-      // Opening dance (2026-09-16): the sim ship joins the unfold HERE — after
-      // resetGame() (whose snapFlowerToStow / furl reset just ran) and in the
-      // same tick, so no frame draws a deployed ship after the cut. A skipped
-      // menu still starts the game side from the cut-time state (2.70 s). When
-      // the dance is NOT running (?shot / harness, reduced motion, flag off),
-      // resetGame() already landed the ship on openingDance.endState().
+      // The sim ship joins the unfold HERE: after resetGame() (whose snapFlowerToStow / furl reset just ran), in the
+      // same tick, so no frame draws a deployed ship after the cut. A skipped menu still starts the game side from the
+      // cut-time state (2.70 s). With no dance running (?shot / harness, reduced motion, flag off) resetGame() already
+      // landed the ship on openingDance.endState().
       if (openingDance.isActive()) {
         openingDance.advanceClockToCutTime();
         openingDance.bindShip(this._refs.player);
@@ -620,7 +532,7 @@ export class GameFlowManager {
       this._applyStartLocation();   // place ground track over the player's home region
       this._stageOpeningLight();    // fresh M1 spawn opens sunlit (new-game paths only)
       gameState.currentState = GameStates.MENU;
-      persistenceManager.backupSave(); // F1 save-guard: back up before New Game clears it
+      persistenceManager.backupSave(); // back up before New Game clears it
       persistenceManager.deleteSave(); // New Game clears any existing save
       this.transitionToState(GameStates.ORBITAL_VIEW);
     });
@@ -629,7 +541,6 @@ export class GameFlowManager {
     eventBus.on(Events.MENU_CONTINUE, () => {
       const save = persistenceManager.load();
       if (!save) {
-        // No valid save — fall back to new game
         eventBus.emit(Events.MENU_START);
         return;
       }
@@ -641,15 +552,13 @@ export class GameFlowManager {
       this._applyStartLocation();   // place ground track over the player's home region
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
 
-      // Skip first-experience guidance for returning players
-      // (must be AFTER resetGame which resets these flags)
+      // Skip first-experience guidance for returning players (must be AFTER resetGame, which resets these flags)
       this._firstOrbitalView = false;
       this._firstTimeComms = new Set([
         'orbital_view_opening', 'first_target',
         'first_capture', 'drift_recovery',
       ]);
 
-      // Restore scoring state
       scoringSystem.restore({
         totalScore: save.totalScore,
         credits: save.credits,
@@ -660,19 +569,15 @@ export class GameFlowManager {
         debrisByTier: save.stats?.debrisByTier || { data: 0, deorbit: 0, capture: 0 },
       });
 
-      // Restore upgraded resource capacities and the saved gas levels (s1-gas-survives-load; battery starts at half)
+      // Restore upgraded resource capacities and the saved gas levels (battery starts at half)
       resourceSystem.restore(save.resourceMaxes || {});
 
-      // Restore power distribution allocations
       powerDistribution.restore(save.power || null);
 
-      // Restore shop purchase history
       shopScreen.restorePurchases(save.upgrades || []);
 
-      // Restore elevator contract mass (Phase 5)
       if (save.contractMassKg && shopScreen) {
         shopScreen.setContractMass(save.contractMassKg);
-        // Emit update so HUD mini-indicator reflects restored state
         eventBus.emit(Events.CONTRACT_UPDATE, {
           contractMassKg: save.contractMassKg,
           targetMassKg: (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000,
@@ -681,151 +586,129 @@ export class GameFlowManager {
 
       // Subsystem degradation trackers: SubsystemEvents self-restores via PERSISTENCE_LOADED
 
-      // Re-apply all upgrade effects to game systems (PlayerSatellite, SensorSystem,
-      // ArmManager, KesslerSystem). ResourceSystem maxes (xenonMax, coldGasMax,
-      // batteryMax) — plus the power-infra effects supercapUpgrade/rtgPower/
-      // powerBeaming — are already restored by resourceSystem.restore() above,
-      // so the { restore: true } route skips their RESOURCE_SYSTEM leg to avoid
-      // double-counting the cumulative += additions. Non-resource legs (e.g.
-      // supercapUpgrade → player MPD-cooling flag) still re-apply.
+      // Re-apply upgrade effects (PlayerSatellite, SensorSystem, ArmManager, KesslerSystem). ResourceSystem maxes and the
+      // power-infra effects (supercapUpgrade/rtgPower/powerBeaming) are already restored by resourceSystem.restore() above,
+      // so { restore: true } skips their RESOURCE_SYSTEM leg (no double-counting of the cumulative +=). Non-resource legs
+      // (e.g. supercapUpgrade → player MPD-cooling flag) still re-apply.
       shopScreen.forEachPurchasedUpgrade((data) => {
         this.applyUpgradeEffect(data, { restore: true });
       });
 
-      // Item 100: restore the launch-speed dial AFTER the upgrade replay so a
-      // saved speed clamps to the restored spring tier's ceiling (old saves
-      // carry no key → the clamped default stands).
+      // Restore the launch-speed dial AFTER the upgrade replay so a saved speed clamps to the restored spring tier's
+      // ceiling (old saves carry no key → the clamped default stands).
       if (typeof save.launchSpeed === 'number' && this._refs.armManager) {
         this._refs.armManager.setFleetLaunchSpeed(save.launchSpeed);
       }
 
-      // Reaction wheels: the stored spin goes back AFTER the upgrade replay has re-installed the kit (a game-over save carries none:
-      // CONTINUE after it is a fresh attempt). An old save, or one made without the kit, has no `wheelH` and the wheels stay empty.
+      // Reaction wheels: the stored spin goes back AFTER the upgrade replay has re-installed the kit (a game-over save
+      // carries none: CONTINUE after it is a fresh attempt). An old save, or one without the kit, has no `wheelH`: wheels stay empty.
       if (save.gameOver !== true && Array.isArray(save.wheelH) && this._refs.player
         && typeof this._refs.player.restoreWheelState === 'function') {
         this._refs.player.restoreWheelState(save.wheelH);
       }
 
-      // Nets step 3 lane 3f (§34 row 10): the daughters' ion fuel and cold gas, back on the daughters they were saved from. AFTER
-      // resetGame's armManager.reset() (ArmUnit.reset() fills both tanks) and AFTER the upgrade replay (armFuelMax can raise a full
-      // tank). An old save, and a game-over save, carry none: the tanks stay full, as they always were.
+      // §34 row 10: the daughters' ion fuel and cold gas, back on the daughters they were saved from. AFTER resetGame's
+      // armManager.reset() (ArmUnit.reset() fills both tanks) and AFTER the upgrade replay (armFuelMax can raise a full
+      // tank). An old save, and a game-over save, carry none: the tanks stay full.
       if (save.gameOver !== true && Array.isArray(save.daughters) && this._refs.armManager
         && typeof this._refs.armManager.restoreSupplyState === 'function') {
         this._refs.armManager.restoreSupplyState(save.daughters);
       }
 
-      // Rollout backfill: FIRST_DEPOT_VISITED is newer than some saves. Without
-      // this, _applyFirstDepotFloor() (gated on that flag) would fire its
-      // one-time "first cleanup contract settled" credit floor on the next depot
-      // visit of every PRE-EXISTING player, mutating veteran wallets and showing
-      // new-pilot framing. A loaded save with any progression (debris cleared or
-      // upgrades bought) is by definition past its true first depot, so mark the
-      // flag seen for them. Genuinely fresh profiles start via MENU_START and
-      // still earn the bonus on their real first depot.
-      // Nets step 3 slice 3, lane 3c (C4c, owed from the 3a review): with the satellite as the stop the first stop is the first BERTH, and a
-      // reload before it must not mark it visited (the 600 floor still pays there). A berth marks it by paying (`_applyFirstDepotFloor`).
+      // Rollout backfill: FIRST_DEPOT_VISITED is newer than some saves. Without this, _applyFirstDepotFloor() would fire its
+      // one-time "first cleanup contract settled" credit floor on the next depot visit of every PRE-EXISTING player. A loaded
+      // save with any progression (debris cleared or upgrades bought) is past its true first depot, so mark the flag seen;
+      // fresh profiles start via MENU_START and still earn the bonus. With the satellite as the stop the first stop is the
+      // first BERTH, and a reload before it must not mark it visited (the 600 floor still pays there); a berth marks it by
+      // paying (`_applyFirstDepotFloor`).
       const pastFirstDepot = !this._satelliteIsTheStop() && ((save.debrisCleared || 0) > 0
         || (Array.isArray(save.upgrades) && save.upgrades.length > 0));
       if (pastFirstDepot && !persistenceManager.getCeremonyFlag('FIRST_DEPOT_VISITED')) {
         persistenceManager.setCeremonyFlag('FIRST_DEPOT_VISITED', true);
       }
 
-      // Sync to gameState
       gameState.debrisCleared = save.debrisCleared || 0;
       gameState.score = save.totalScore || 0;
 
-      // u23 B3: with the map OFF nothing else tells the field which mission this is (a load fires no MISSION_START and GAME_RESET left
-      // 1): a saved mission 3 would run the mission-1 shard law, no extras, the mission-1 hide and the 2 km cull. Map ON gets the number
-      // through the registry's restore below. AFTER `debrisCleared` is set (the scorer's mission number reads the cleared count).
+      // With the map OFF nothing else tells the field which mission this is (a load fires no MISSION_START and GAME_RESET left
+      // 1): a saved mission 3 would run the mission-1 shard law, no extras, the mission-1 hide and the 2 km cull. Map ON gets
+      // the number through the registry's restore below. AFTER `debrisCleared` is set (the scorer's mission number reads it).
       if (save.gameOver !== true && !(this._refs.fieldRegistry && this._refs.fieldRegistry.isOn())
           && this._refs.debrisField && typeof this._refs.debrisField.setMissionNumber === 'function') {
         this._refs.debrisField.setMissionNumber(scoringSystem.getMissionNumber());
       }
 
-      // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): resetGame put her at the start altitude; with the flag on, the field the
-      // save was made in puts her back at ITS height with ITS remaining pieces (DebrisField lays them out on its next
-      // update: a load fires no MISSION_START). A game-over save restarts at the start field (the CONTINUE rule below).
+      // FIELDS_BY_HEIGHT: resetGame put her at the start altitude; with the flag on, the field the save was made in puts her
+      // back at ITS height with ITS remaining pieces (DebrisField lays them out on its next update: a load fires no
+      // MISSION_START). A game-over save restarts at the start field (the CONTINUE rule below).
       gameState.shipDays = Number.isFinite(save.shipDays) && save.shipDays > 0 ? save.shipDays : 0;
       if (save.gameOver !== true && this._refs.fieldRegistry && this._refs.fieldRegistry.isOn()) {
-        // (the scorer's own, UNCAPPED mission number - the one MISSION_START carries and the registry's `at` follows; the arc's
-        // `missionNum` stops at 12, so past 60 catches a boundary save would never look owed)
+        // The scorer's own UNCAPPED mission number (the one MISSION_START carries and the registry's `at` follows); the arc's
+        // `missionNum` stops at 12, so past 60 catches a boundary save would never look owed.
         this._refs.fieldRegistry.restore(save.fields, { missionNumber: scoringSystem.getMissionNumber() });
       }
-      // Nets step 3 slice 5 (lane 5b, P5): the big pieces she was still holding come back on their holders (nothing pays at load). AFTER the
-      // arms' reset and the registry's restore; a game-over save carries none.
+      // The big pieces she was still holding come back on their holders (nothing pays at load). AFTER the arms' reset and
+      // the registry's restore; a game-over save carries none.
       if (save.gameOver !== true && Array.isArray(save.bigPieces)) this._restoreBigPieces(save.bigPieces);
       // big-rules (§49 row 3): the characterising steps already paid for pieces over her catch limit come back (nothing pays at load).
       if (save.gameOver !== true) dossierSystem.restoreInspect(save.inspectPaid);
-      // lane 5e (E7): the hold comes back (entries only: the capacity is the upgrades' replay above). An old save has none and the hold stays as it is.
+      // The hold comes back (entries only: the capacity is the upgrades' replay above). An old save has none: the hold stays.
       if (save.gameOver !== true && save.cargoHold && Array.isArray(save.cargoHold.entries)
         && this._refs.cargoSystem && typeof this._refs.cargoSystem.restore === 'function') {
         this._refs.cargoSystem.restore({ entries: save.cargoHold.entries });
       }
 
-      // Notify self-managing systems that a saved game was loaded
-      // (TutorialSystem listens to skip tutorial for veterans)
+      // TutorialSystem listens to this to skip the tutorial for veterans
       eventBus.emit(Events.PERSISTENCE_LOADED);
 
-      // t1-stranded D4: a save written on entering GAME_OVER is continued by the SAME rule as the game-over
-      // screen's CONTINUE — half the credits, fresh mission, start-fill gas, upgrades kept, then the shop.
-      // The save is loaded exactly as above, then this hands off to the very same GAMEOVER_CONTINUE listeners
-      // (no welcome-back comms, no flight route). MENU -> SHOP is not a valid transition and GAME_OVER -> SHOP
-      // is, so the state is set by hand first (as at the top of this handler). The listener's own save carries
-      // no flag, so a second menu CONTINUE does not halve again.
+      // A save written on entering GAME_OVER is continued by the SAME rule as the game-over screen's CONTINUE (half the
+      // credits, fresh mission, start-fill gas, upgrades kept, then the shop): this hands off to the same GAMEOVER_CONTINUE
+      // listeners (no welcome-back comms, no flight route). MENU -> SHOP is not a valid transition and GAME_OVER -> SHOP is,
+      // so the state is set by hand first. The listener's own save carries no flag, so a second CONTINUE does not halve again.
       if (save.gameOver === true) {
         gameState.currentState = GameStates.GAME_OVER;
         this._continueAfterGameOver();
         return;
       }
 
-      // The start lines, now that the saved field is known: "Arrived ...", "Systems... nominal.", the silent wings arm and
-      // the StartOpening arm, once (a game-over save returned above: GAMEOVER_CONTINUE -> endState posts its own).
+      // The start lines, now that the saved field is known ("Arrived ...", "Systems... nominal.", the silent wings arm, the
+      // StartOpening arm), once. A game-over save returned above (GAMEOVER_CONTINUE -> endState posts its own).
       openingDance.postStartLine();
 
-      // u1-resupply-stop D1: a save made at a mission boundary (a multiple of DEBRIS_PER_MISSION cleared, no catch
-      // since) reloads AT the stop — closing the game must not close the shop. Any other count reloads mid-mission.
-      // (resetGame above closed it; the gameOver save returned earlier and GAMEOVER_CONTINUE opens its own stop.)
-      // F2: a save written inside the game-over shop carries `resupplyStop: true` (0 cleared, so the count cannot
-      // say); old saves without the key keep the boundary-count rule.
-      // Nets step 3 slice 3 (S7): with the satellite as the stop a boundary count opens nothing (the stop is at the satellite): only a save
-      // that says so (`resupplyStop`: written berthed, or inside the game-over shop) or a registry that loaded berthed reopens buying.
+      // A save made at a mission boundary (a multiple of DEBRIS_PER_MISSION cleared, no catch since) reloads AT the stop —
+      // closing the game must not close the shop. Any other count reloads mid-mission (resetGame above closed it; the
+      // gameOver save returned earlier and GAMEOVER_CONTINUE opens its own stop). A save written inside the game-over shop
+      // carries `resupplyStop: true` (0 cleared, so the count cannot say); old saves without the key keep the boundary-count
+      // rule. With the satellite as the stop a boundary count opens nothing (the stop is at the satellite): only a save that
+      // says so (`resupplyStop`: written berthed, or inside the game-over shop) or a registry that loaded berthed reopens buying.
       const loadedReg = this._refs.fieldRegistry;
       const berthedAtLoad = !!(loadedReg && loadedReg.isOn() && loadedReg.isBerthed());
       this._setResupplyStop(berthedAtLoad || save.resupplyStop === true
         || (!this._satelliteIsTheStop() && this._isMissionBoundaryCount(gameState.debrisCleared)));
 
-      // Returning players already know what the score bar is — activate it
-      // immediately (no 2 s settle delay). The ORBITAL_VIEW timer is gated behind
-      // _firstOrbitalView (set false above) so it won't fire for this path.
+      // Returning players already know the score bar: activate it at once (the ORBITAL_VIEW settle timer is gated behind
+      // _firstOrbitalView, false here).
       eventBus.emit(Events.HUD_GROUP_ACTIVATE, { group: 'score' });
 
-      // Continue routes straight to flight (like new game) — no BRIEFING card
-      // on startup. _firstOrbitalView is false (set above), so the ORBITAL_VIEW
-      // entry skips the new-player intro zoom / boot trickle / score-group timer.
-      // MENU → ORBITAL_VIEW is a valid transition (js/core/GameState.js:27).
+      // Continue routes straight to flight (no BRIEFING card). _firstOrbitalView is false, so ORBITAL_VIEW entry skips the
+      // new-player intro zoom / boot trickle / score-group timer. MENU → ORBITAL_VIEW is a valid transition
+      // (GameState.js VALID_TRANSITIONS).
       this.transitionToState(GameStates.ORBITAL_VIEW);
 
-      // Welcome-back comms uplink — mission context (mission #, objective)
-      // arrives as a short HOUSTON trickle AFTER the handoff, replacing the
-      // BRIEFING card's decision UI. Emitted after the transition so CommsSystem
-      // has self-started on GAME_STATE_CHANGE → ORBITAL_VIEW (js/systems/CommsSystem.js:404).
-      //
-      // Mission-arc math is shared with BriefingScreen via getMissionProgress
-      // (js/core/missionProgress.js) so the comms line can never drift from the
-      // briefing card. getStats() reads debrisCleared from gameState (set above),
-      // so it reflects the restored save.
+      // Welcome-back comms: mission # and objective arrive as a short HOUSTON trickle AFTER the handoff, emitted after the
+      // transition so CommsSystem has self-started on GAME_STATE_CHANGE → ORBITAL_VIEW (CommsSystem.js constructor).
+      // Mission-arc math is shared with BriefingScreen via getMissionProgress (missionProgress.js) so the line cannot
+      // drift from the briefing card; getStats() reads debrisCleared from gameState (set above), so it reflects the
+      // restored save.
       const stats = scoringSystem.getStats();
       const { perMission, missionNum, debrisUntilShop } = getMissionProgress(stats.debrisCleared);
       const objectiveText = debrisUntilShop >= perMission
         ? (stopWords(this) === 'depot resupply' ? `Clear ${perMission} debris to reach the depot.` : `Clear ${perMission} debris, then pick your next field on the LEO map.`)
         : `Clear ${debrisUntilShop} more debris for ${stopWords(this)}.`;
 
-      // Both lines tagged _onboarding to pass the tier-0 suppression gate: on
-      // continue resetGame()'s GAME_RESET restarts the OnboardingDirector pipeline,
-      // so comms may sit at tier 0 when these fire (all non-tagged lines muted,
-      // js/systems/commsSuppression.js:59-62). channel: 'HOUSTON' passes at ramp
-      // tier 1; the _onboarding tag covers tier 0 (same precedent as the boot
-      // trickle's "EVA crew clear." line, GFM:233-238). owner=this for teardown.
+      // Both lines tagged _onboarding to pass the tier-0 suppression gate: on continue resetGame()'s GAME_RESET restarts the
+      // OnboardingDirector pipeline, so comms may sit at tier 0 when these fire (untagged lines are muted there;
+      // commsSuppression.js messagePassesSuppression). channel: 'HOUSTON' passes at ramp tier 1. owner=this for teardown.
       timerManager.setTimeout(() => {
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'HOUSTON', channel: 'HOUSTON', priority: 'info',
@@ -840,11 +723,8 @@ export class GameFlowManager {
       }, 2200, { owner: this });
     });
 
-    // ==================================================================
-    // BRIEFING EVENTS (retry path only — GAMEOVER_RETRY → BRIEFING)
-    // ==================================================================
+    // --- Briefing events (retry path only: GAMEOVER_RETRY → BRIEFING) ---
 
-    // Briefing → Approach with selected target
     eventBus.on(Events.BRIEFING_COMMENCE, (data) => {
       if (data.target) {
         const debris = debrisField.getDebrisById(data.target.id);
@@ -857,33 +737,25 @@ export class GameFlowManager {
       }
     });
 
-    // Briefing → Free roam (skip to orbital view)
     eventBus.on(Events.BRIEFING_SKIP, () => {
       this.transitionToState(GameStates.ORBITAL_VIEW);
     });
 
-    // ==================================================================
-    // SHOP EVENTS
-    // ==================================================================
+    // --- Shop events ---
 
-    // Shop → Deploy (back to orbital)
     eventBus.on(Events.SHOP_DEPLOY, () => {
       this.applyUpgrades();
       this.saveGame();
       this.transitionToState(GameStates.ORBITAL_VIEW);
 
-      // Phase 5: Elevator contract win — trigger after returning to gameplay
-      // (SHOP → WIN is not a valid state transition, so we go via ORBITAL_VIEW)
+      // Elevator contract win, after returning to gameplay (SHOP → WIN is not a valid transition, so via ORBITAL_VIEW)
       if (this._elevatorWinTriggered) this._fireElevatorWin();
     });
 
-    // Wave 5 Session K (GFM lift, site 4 of 4): the WORKBENCH BREAK ends — the
-    // hub emits this when both drawers are closed after a WORKBENCH_STOP (a
-    // ride up closes REFIT; leaving gameplay never gets here — the redirect's
-    // exit rule releases the flag instead). The new home of what SHOP_DEPLOY
-    // did for the full-screen shop: the save (upgrades already applied live on
-    // UPGRADE_PURCHASED; `applyUpgrades` is the shipped no-op) and the release
-    // of the onset hold. No state flip: the player never left ORBITAL_VIEW.
+    // The WORKBENCH BREAK ends: the hub emits this when both drawers are closed after a WORKBENCH_STOP (a ride up closes
+    // REFIT; leaving gameplay never gets here — the redirect's exit rule releases the flag instead). Does what SHOP_DEPLOY
+    // does for the full-screen shop: the save (upgrades already applied live on UPGRADE_PURCHASED; `applyUpgrades` is the
+    // shipped no-op) and the release of the onset hold. No state flip: the player never left ORBITAL_VIEW.
     // MissionMilestones keeps its own listener for the recap.
     eventBus.on(Events.WORKBENCH_RESUME, () => {
       if (!this._workbenchBreak) return;
@@ -891,11 +763,8 @@ export class GameFlowManager {
       this.saveGame();
     });
 
-    // ==================================================================
-    // GAME OVER EVENTS
-    // ==================================================================
+    // --- Game over events ---
 
-    // Game over → Retry
     eventBus.on(Events.GAMEOVER_RETRY, () => {
       persistenceManager.deleteSave(); // clear stale save on retry
       // The start lines wait for the way back into the field (GAME_OVER -> BRIEFING wipes the comms log): see the
@@ -905,7 +774,6 @@ export class GameFlowManager {
       this.transitionToState(GameStates.BRIEFING);
     });
 
-    // Game over → Main menu
     eventBus.on(Events.GAMEOVER_MENU, () => {
       this.resetGame();
       this.transitionToState(GameStates.MENU);
@@ -914,74 +782,64 @@ export class GameFlowManager {
     // Game over → Continue (roguelite: keep upgrades, 50% credit penalty)
     eventBus.on(Events.GAMEOVER_CONTINUE, () => {
       const carriedCredits = Math.floor(scoringSystem.credits * 0.5);
-      // slice 5 (5b): a fresh attempt: nothing is pending (cleared BEFORE the arms reset, so a rack that drops its piece says nothing)
+      // A fresh attempt: nothing is pending (cleared BEFORE the arms reset, so a rack that drops its piece says nothing)
       bigPieces.clear();
       this._unplacedBig = [];
-      this._meltFinals = [];                // lane 5e: no melted piece waits to be let go, no save is owed
-      this._goneBags = [];                  // let-go-bag: no let-go bag is left to take off the field
+      this._meltFinals = [];                // no melted piece waits to be let go, no save is owed
+      this._goneBags = [];                  // no let-go bag is left to take off the field
       this._meltSaveOwed = false;
 
       // Reset game counters but keep gameState.currentState at GAME_OVER for valid → SHOP transition
       gameState.score = 0;
       gameState.debrisCleared = 0;
       gameState.missionTime = 0;
-      gameState.shipDays = 0;   // slice 2b: the FieldRegistry resets itself on this event
+      gameState.shipDays = 0;   // the FieldRegistry resets itself on this event
 
-      // Reset scoring, then restore carried credits
       scoringSystem.reset();
       scoringSystem.credits = carriedCredits;
 
-      // Reset resources
       resourceSystem.reset();
 
-      // Reset player orbit to starting position (over the player's home region)
       player.orbit.semiMajorAxis = Constants.EARTH_RADIUS + Constants.START_ALTITUDE;
       player.orbit.trueAnomaly = 0;
       this._applyStartLocation();
 
-      // Reset target selection (imported singleton — emits TARGET_CLEARED → DebrisWireframe self-clears)
-      // silent: reset clear, not a real target loss — suppresses the audio earcon.
+      // Reset target selection (emits TARGET_CLEARED → DebrisWireframe self-clears); silent: not a real target loss, so
+      // no audio earcon.
       targetSelector.setTarget(null, { silent: true });
 
       // Reset arms (field-resets the existing ArmUnit instances — stored upgrades re-applied below)
       if (armManager) armManager.reset();
-      // turn-gas D3: nothing of the reel push (gathered Δv, the turn it kicked) survives into the next run
+      // Nothing of the reel push (gathered Δv, the turn it kicked) survives into the next run
       if (player && player.clearReelPushState) player.clearReelPushState();
       // Reaction wheels: a fresh attempt starts with empty wheels (the upgrade replay below re-installs the kit)
       if (player && player.resetWheelState) player.resetWheelState();
 
-      // Opening dance: this is the ONE game-over exit that does its own partial
-      // reset instead of calling resetGame(), so it needs the invariant call by
-      // hand. A collision inside the ~17.5 s unfold is perfectly possible, and
-      // without this the dance would keep running (and its wall clock keep
-      // advancing) through the SHOP, then fire its hand-over — pose snap and
-      // Houston line — on the first tick after the player redeploys.
+      // Opening dance: this is the ONE game-over exit that does its own partial reset instead of calling resetGame(), so
+      // it needs the invariant call by hand: a collision inside the ~17.5 s unfold is possible, and without this the dance
+      // would keep running through the SHOP and fire its hand-over (pose snap, Houston line) after the player redeploys.
       // A retry restarts at the start field (FieldRegistry's own GAMEOVER_CONTINUE listener resets it too): said as
-      // `atStart`, so the "Arrived" wording never depends on which listener ran first.
-      // The lines wait for the way back into the field: GAME_OVER -> SHOP wipes the comms log (CommsSystem.reset), so
-      // they are posted when the shop is left (GAME_STATE_CHANGE listener below).
+      // `atStart`, so the "Arrived" wording never depends on which listener ran first. The lines wait for the way back
+      // into the field: GAME_OVER -> SHOP wipes the comms log (CommsSystem.reset), so they are posted when the shop is
+      // left (GAME_STATE_CHANGE listener below).
       if (player) openingDance.endState(player, { atStart: true, deferStartLine: true });
 
       this.approachTarget = null;
       this.approachComplete = false;
 
-      // Reset camera to default chase view
       if (cameraSystem) cameraSystem.setView(CameraViews.CHASE);
 
-      // KesslerSystem self-resets via GAMEOVER_CONTINUE listener (Batch 3)
+      // KesslerSystem self-resets via GAMEOVER_CONTINUE listener
 
-      // Re-apply ALL purchased upgrade effects (systems were just reset)
       shopScreen.forEachPurchasedUpgrade((data) => {
         this.applyUpgradeEffect(data);
       });
 
-      // u1-resupply-stop D1/F2: the game-over shop is a resupply stop (open BEFORE the save, so a reload inside
-      // the shop keeps it, and before the shop shows, so its first render already trades); it stays open through
-      // SHOP_DEPLOY until the first credited catch.
+      // The game-over shop is a resupply stop: open BEFORE the save (a reload inside the shop keeps it) and before the
+      // shop shows (its first render already trades); stays open through SHOP_DEPLOY until the first credited catch.
       this._setResupplyStop(true);
       this.saveGame();
 
-      // Comms notification
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Continuing mission. Upgrades retained, 50% credit penalty applied',
         priority: 'high',
@@ -990,13 +848,9 @@ export class GameFlowManager {
       this.transitionToState(GameStates.SHOP);
     });
 
-    // ==================================================================
-    // HUD / SCORING / INTERACTION EVENTS
-    // ==================================================================
+    // --- HUD / scoring / interaction events ---
 
-    // HUD target click → select target
-    // TargetReticle, NavSphere & HUD self-manage via HUD_TARGET_CLICK listener
-    // DebrisWireframe self-manages via TARGET_SELECTED listener (Batch 3)
+    // HUD target click → select target (TargetReticle, NavSphere, HUD and DebrisWireframe self-manage via their listeners)
     eventBus.on(Events.HUD_TARGET_CLICK, (data) => {
       const debris = debrisField.getDebrisById(data.id);
       if (debris) {
@@ -1004,19 +858,16 @@ export class GameFlowManager {
       }
     });
 
-    // Scoring events
     eventBus.on(Events.SCORE_UPDATE, (data) => {
       gameState.score = data.total;
       gameState.debrisCleared = data.debrisCleared || gameState.debrisCleared;
     });
 
-    // Interaction complete events → return to orbital view
     eventBus.on(Events.INTERACTION_DEORBIT, () => {
       gameState.clearDebris();
       timerManager.setTimeout(() => {
         if (gameState.currentState === GameStates.INTERACTION) {
-          // Check for shop visit at every mission boundary (SHOP_CADENCE = the
-          // mission length, Constants.MISSIONS.DEBRIS_PER_MISSION — T8 SSOT)
+          // Shop visit at every mission boundary (SHOP_CADENCE = Constants.MISSIONS.DEBRIS_PER_MISSION)
           if (gameState.debrisCleared % SHOP_CADENCE === 0 && gameState.debrisCleared > 0) {
             this.transitionToState(GameStates.SHOP);
           } else {
@@ -1039,81 +890,55 @@ export class GameFlowManager {
       }, 1500, { owner: this });
     });
 
-    // ==================================================================
-    // GAME OVER CONDITIONS
-    // ==================================================================
+    // --- Game over conditions ---
 
-    // Shield absorption now self-managed by KesslerSystem (Batch 3).
-    // KesslerSystem listens for GAME_KESSLER, GAME_COLLISION, ACTIVE_SAT_COLLISION
-    // and emits COLLISION_GAME_OVER only when shields are depleted.
+    // KesslerSystem absorbs shields itself: it listens for GAME_KESSLER, GAME_COLLISION, ACTIVE_SAT_COLLISION and emits
+    // COLLISION_GAME_OVER only when shields are depleted.
     eventBus.on(Events.COLLISION_GAME_OVER, ({ reason }) => {
       this.transitionToState(GameStates.GAME_OVER, reason);
     });
 
     eventBus.on(Events.GAME_WIN, () => {
-      // S1 Fix L2: Idempotency guard — only handle win once
+      // Idempotency guard: handle the win once
       if (this._winTriggered) return;
       this._winTriggered = true;
       this.transitionToState(GameStates.WIN);
     });
 
-    // ==================================================================
-    // ELEVATOR CONTRACT WIN CONDITION (Phase 5)
-    // Second win path: accumulate ELEVATOR_CONTRACT.TARGET_MASS_KG of
-    // refined metal via the space elevator to complete the contract.
-    // ShopScreen._contributeToElevator() handles credit awards and emits
-    // CONTRACT_COMPLETE when mass threshold is reached.  We only flag
-    // for the win transition here — SHOP → WIN is invalid, so the actual
-    // GAME_WIN fires in the SHOP_DEPLOY handler after returning to
-    // ORBITAL_VIEW.
-    // Wave 5 Session K (GFM lift, site 4 of 4 — the win RE-HOME): with one
-    // shop the contribution comes from the CARGO pane IN gameplay (the drawer
-    // holds no GameState), and a boss crossing the target (awardElevatorMass)
-    // would otherwise never reach a SHOP_DEPLOY with the ladder on — so when
-    // the contract completes in a gameplay state WITH THE LADDER ON the win
-    // fires NOW (ORBITAL_VIEW → WIN is legal; 08 §2 "ORBITAL_VIEW → WIN").
-    // Ladder off (K review): the shipped flag-and-wait, byte-identical — the
-    // full-screen SHOP fires it on SHOP_DEPLOY. Contract-first ordering
-    // survives: the flag is set before either fire, `_winTriggered` keeps the
-    // WIN single (test-win-race).
-    // ==================================================================
+    // --- Elevator contract win (second win path) ---
+    // Accumulate ELEVATOR_CONTRACT.TARGET_MASS_KG of refined metal via the space elevator. ShopScreen._contributeToElevator()
+    // awards credits and emits CONTRACT_COMPLETE at the threshold; here we only flag the win — SHOP → WIN is invalid, so
+    // GAME_WIN fires in the SHOP_DEPLOY handler after returning to ORBITAL_VIEW. With the ladder on, the contribution comes
+    // from the CARGO pane IN gameplay and a boss crossing the target (awardElevatorMass) would never reach a SHOP_DEPLOY,
+    // so when the contract completes in a gameplay state the win fires NOW (ORBITAL_VIEW → WIN is legal). Ladder off: flag
+    // and wait for SHOP_DEPLOY. The flag is set before either fire and `_winTriggered` keeps the WIN single (test-win-race).
 
     eventBus.on(Events.CONTRACT_COMPLETE, () => {
       this._elevatorWinTriggered = true;
       if (this._ladderOn() && gameState.isGameplay()) this._fireElevatorWin();
     });
 
-    // Resource depletion → game over (from ResourceSystem)
     eventBus.on(Events.RESOURCE_DEPLETED, (data) => {
       if (gameState.isGameplay()) {
         this.transitionToState(GameStates.GAME_OVER, data.reason || 'fuel');
       }
     });
 
-    // ==================================================================
-    // UPGRADE / SAVE EVENTS
-    // ==================================================================
+    // --- Upgrade / save events ---
 
-    // Upgrade purchased
     eventBus.on(Events.UPGRADE_PURCHASED, (data) => {
       this.applyUpgradeEffect(data);
       this.saveGame();
     });
 
-    // ==================================================================
-    // CAMERA EVENTS
-    // ==================================================================
+    // --- Camera events ---
 
-    // Camera view change → distribute info-level config
     eventBus.on(Events.CAMERA_VIEW_CHANGE, () => {
       this.applyViewConfig();
     });
 
-    // ==================================================================
-    // ARM DEPLOYMENT — engineered auto-failure + camera stay-in-place
-    // (No auto-switch to TARGET_LOCK: the perpendicular framing caused a
-    //  disorienting 90° CW camera swing every time G was pressed.)
-    // ==================================================================
+    // --- Arm deployment: engineered auto-failure; the camera stays in place (no auto-switch to TARGET_LOCK: the
+    // perpendicular framing caused a disorienting 90° CW swing every time G was pressed) ---
 
     eventBus.on(Events.ARM_DEPLOYED, (data) => {
       // Engineered auto-capture failure: after clearing 8+ debris,
@@ -1126,37 +951,24 @@ export class GameFlowManager {
       }
     });
 
-    // ==================================================================
-    // V3 ARM CAPTURE COMPLETION → score + debris removal
-    // When an arm returns with captured debris, remove the debris from the
-    // field, award score, and notify comms.
-    // ==================================================================
+    // --- V3 arm capture completion → score + debris removal ---
 
-    // Dock completion: ArmUnit._updateDocking emits DEBRIS_CAPTURED (parked:true)
-    // once the daughter docks with her catch (~3s after arrival).
+    // Dock completion: ArmUnit._updateDocking emits DEBRIS_CAPTURED (parked:true) once the daughter docks with her catch
+    // (~3s after arrival).
     //
-    // PARK-THE-CATCH (2026-06-06): capturing no longer removes the debris at the
-    // mother. The catch parks cinched in the net at the daughter's strut tip
-    // (state HOLDING_CATCH) until a future furnace-transfer/breakdown step, which
-    // will own the eventual field removal. So there is intentionally NO
-    // removeDebris wired to DEBRIS_CAPTURED any more — the event is consumed only
-    // as the capture-secured signal (e.g. the first_capture teaching beat, in
-    // TeachingSystem). Scoring/salvage still happens in the ARM_RETURNED handler.
+    // Capturing does not remove the debris at the mother: the catch parks cinched in the net at the daughter's strut tip
+    // (state HOLDING_CATCH). So there is intentionally NO removeDebris wired to DEBRIS_CAPTURED — the event is only the
+    // capture-secured signal (e.g. the first_capture teaching beat, in TeachingSystem).
 
-    // PARK-THE-CATCH delivery timing (ARCHITECTURE.md:277, Captured-debris lifecycle): salvage + scoring + field
-    // removal no longer fire on ARM_RETURNED (dock ARRIVAL). They fire on
-    // CATCH_PROCESSED — emitted by ArmUnit._updateHoldingCatch once the parked
-    // catch finishes its furnace-transfer window. This defers the reward to the
-    // processing step AND is the moment the parked catch clears (so the daughter
-    // reloads — otherwise 4 parked catches stall capture). Arm pilot exit on
-    // ARM_RETURNED remains self-managed by InputManager.
-    // Staged furnace breakdown (Item 1, 2026-06-11): the chop begins ~2 s into the
-    // park. Comms narrate the breakdown here (single owner); completion comms fire
-    // on CATCH_PROCESSED below. Gameplay (salvage/score/remove) still keys off the
-    // single CATCH_PROCESSED only — this handler is comms-only.
+    // Salvage + scoring + field removal fire on CATCH_PROCESSED (ARCHITECTURE.md, Captured-debris lifecycle), emitted by
+    // ArmUnit._updateHoldingCatch once the parked catch finishes its furnace-transfer window — the moment the catch clears
+    // so the daughter reloads (otherwise 4 parked catches stall capture), not on ARM_RETURNED (dock arrival). Arm pilot
+    // exit on ARM_RETURNED stays self-managed by InputManager.
+    // Comms narrate the staged breakdown (the chop begins ~2 s into the park) here (single owner); completion comms fire
+    // on CATCH_PROCESSED below. Gameplay keys off CATCH_PROCESSED only — this handler is comms-only.
     eventBus.on(Events.CATCH_BREAKDOWN_START, (data) => {
-      // no-melt: nothing is chopped for a furnace that does not exist (the event cannot fire with the cook off; the
-      // guard keeps a stray emit from printing a line that promises one).
+      // Nothing is chopped for a furnace that does not exist (the event cannot fire with the cook off; the guard keeps a
+      // stray emit from printing a line that promises one).
       if (!Constants.isFeatureEnabled('FURNACE_COOK')) return;
       eventBus.emit(Events.COMMS_SEND, {
         source: (data.armId || 'DAUGHTER').toUpperCase(),
@@ -1167,14 +979,12 @@ export class GameFlowManager {
 
     eventBus.on(Events.CATCH_PROCESSED, (data) => {
       if (data.debrisId != null) {
-        // Get debris data before removal (for scoring)
         const debris = debrisField ? debrisField.getDebrisById(data.debrisId) : null;
 
         // Get arm data BEFORE removal (manual capture + fuel efficiency)
         const returningArm = armManager ? armManager.arms.find(a => a.id === data.armId) : null;
         const manualCapture = returningArm ? returningArm._manualCapture : false;
 
-        // Fuel efficiency: compare fuel at deploy vs current
         let fuelEfficient = false;
         if (returningArm && manualCapture) {
           const fuelUsed = (returningArm._fuelAtDeploy || 100) - (returningArm.fuel || 0);
@@ -1182,69 +992,54 @@ export class GameFlowManager {
           fuelEfficient = fuelUsed < avgFuelPerCapture * 0.5; // Used less than 50% of average
         }
 
-        // Field removal happens HERE (the furnace consumes the catch). It was
-        // intentionally deferred off ARM_RETURNED / DEBRIS_CAPTURED under
-        // park-the-catch; CATCH_PROCESSED is the step that owns it. The catch
-        // stayed alive + pinned at the strut through the dock + transfer window;
-        // now it is broken down for salvage and removed from the field.
+        // Field removal happens HERE (the furnace consumes the catch), deferred off ARM_RETURNED / DEBRIS_CAPTURED: the
+        // catch stayed alive + pinned at the strut through the dock + transfer window, then is broken down for salvage.
 
-        // Check tactical assessment bonus (tracked via WIREFRAME_ASSESSED event — Batch 3)
         const assessed = this._wireframeAssessed;
 
-        // Check if debris has salvageable resources
         const hasSalvage = debris && debris.hasSalvage && debris.salvage;
 
-        // Cargo-continuity register item 37 (2026-08-15): credit pays ONCE
-        // per body, however many times CATCH_PROCESSED fires for it. A mated
-        // body is KEPT ({ parked: true } skips the removal below) and stays
-        // re-targetable: [K] re-seats its orbit and clears _captured, so a
-        // re-capture mates it again and re-emits { parked: true }; and a
-        // mated-then-S7-transferred piece later digests on a daughter rack,
-        // whose feed-end emit carries no digested flag (the rack cannot know
-        // the mate already paid). The emitter-side digested contract (S13(c))
-        // cannot see either path, so the handler keeps its own ledger on the
-        // body. The credit legs skip a body already paid; comms and field
+        // Credit pays ONCE per body, however many times CATCH_PROCESSED fires for it. A mated body is KEPT ({ parked: true }
+        // skips the removal below) and stays re-targetable: [K] re-seats its orbit and clears _captured, so a re-capture
+        // mates it again and re-emits { parked: true }; a mated-then-transferred piece later digests on a daughter rack,
+        // whose feed-end emit carries no digested flag. The emitter-side digested contract cannot see either path, so
+        // the handler keeps its own ledger on the body. The credit legs skip a body already paid; comms and field
         // removal still run — the consumption is real.
         const creditPaid = !!(debris && debris._credited);
-        // Nets step 3 slice 5 (lane 5b, C2): the COUNT is split from the PAY. `countCatch` is what `payCredit` always was (not a digest
-        // completion, not yet credited) and drives everything the count drove: the field row, `clearDebris`, the mission start, the
-        // save, the boundary. The pay (`awardPoints`, salvage) is per body and skips a BIG piece (a high-field stage or satellite, a
-        // bag's big member): it pays when it is disposed of (`disposeBigPiece`), not here.
+        // The COUNT is split from the PAY. `countCatch` (not a digest completion, not yet credited) drives everything the
+        // count drove: the field row, `clearDebris`, the mission start, the save, the boundary. The pay (`awardPoints`,
+        // salvage) is per body and skips a BIG piece (high-field stage, satellite, a bag's big member): it pays on `disposeBigPiece`.
         const countCatch = !data.digested && !creditPaid;
 
-        // Nets step 3 (lane s3-field-credit): a credited catch has left its field, even one kept aboard ({ parked: true }: mated
-        // at the nose collar or parked on a rack, paid but not removed below; the removal is the only other place a row leaves).
-        // The row leaves HERE, before the credit legs, the boundary's where-next list and the credit's save read the rows in
-        // this same handler; the later DEBRIS_REMOVED (a digest, a burn) finds it gone. Explicit, not a registry listener: that
-        // would work only while main.js builds the registry before this handler's init. No field tag, no body: nothing changes.
+        // A credited catch has left its field, even one kept aboard ({ parked: true }: mated at the nose collar or parked
+        // on a rack, paid but not removed below; the removal is the only other place a row leaves). The row leaves HERE,
+        // before the credit legs (the boundary's where-next list and the credit's save read the rows in this handler); the
+        // later DEBRIS_REMOVED (a digest, a burn) finds it gone. Explicit, not a registry listener: that would depend on
+        // main.js building the registry before this handler's init. No field tag, no body: nothing changes.
         if (debris && this._refs && this._refs.fieldRegistry) this._refs.fieldRegistry.markCaught(debris);
-        // u20-nets: a scoop bag has no field row of its own; each member's row leaves its field here, as a solo catch's does
-        // (a member's live `fieldId` is parked while it is in the bag; its snapshot in `bagMembers` carries the row).
+        // A scoop bag has no field row of its own; each member's row leaves its field here, as a solo catch's does (a member's
+        // live `fieldId` is parked while it is in the bag; its snapshot in `bagMembers` carries the row).
         const bodies = this._creditBodies(debris);
         if (debris && debris.isBag === true && this._refs && this._refs.fieldRegistry) {
           for (const m of (debris.bagMembers || [])) this._refs.fieldRegistry.markCaught(m);
         }
-        // slice 5 (5b): the bodies this catch counts but does not pay (C1: type rocketBody|defunctSat with an owner, the map on), and
-        // whether the body held is itself pending (a big solo piece, or a bag with big members).
+        // The bodies this catch counts but does not pay (type rocketBody|defunctSat with an owner, the map on), and whether
+        // the body held is itself pending (a big solo piece, or a bag with big members).
         const bigOn = countCatch && this._bigPiecesOn();
         const deferred = bigOn ? bodies.filter((b) => isBigPiece(b, true)) : [];
         const bigHeld = bigOn && isBigPiece(debris, true);
 
-        // Cargo-continuity S13(c): a collar completion carries { digested: true } —
-        // a SECOND CATCH_PROCESSED for a body already credited at the mate
-        // ({ parked: true }). The comms split and the field removal still run
-        // below (the body IS consumed now), but credit pays NOTHING twice:
-        // score, manual-capture bookkeeping, salvage, the cleared counter and
-        // the autosave all belong to the single credited event.
+        // A collar completion carries { digested: true } — a SECOND CATCH_PROCESSED for a body already credited at the mate
+        // ({ parked: true }). The comms split and the field removal still run below (the body IS consumed now), but credit
+        // pays NOTHING twice: score, manual-capture bookkeeping, salvage, the cleared counter and the autosave all belong to
+        // the single credited event.
         if (countCatch) {
-        // Award score via scoring system. `method` honours the emitter —
-        // 'arm' for daughters, 'mother' for a berthed whale (§4.8/§19).
-        // ScoringSystem's METHOD_BONUS[method] || 1.0 accepts any string, so
-        // a new method needs no scoring-model change.
-        // u20-nets (owner 2026-10-23, "pay per piece, one catch"): a scoop bag pays EVERY member exactly as if it had been caught
-        // alone (one award each, with that member's own salvage flag); `gameState.clearDebris()` below still runs once, so the
-        // bag is one of the mission's five catches.
-        // u23 BF3: "a bag of N pieces" counts exactly the members THIS credit pays (not already-paid ones, not big ones that pay
+        // Award score via scoring system. `method` honours the emitter — 'arm' for daughters, 'mother' for a berthed whale
+        // (§4.8/§19). ScoringSystem's METHOD_BONUS[method] || 1.0 accepts any string, so a new method needs no scoring-model
+        // change.
+        // A scoop bag pays EVERY member exactly as if it had been caught alone (one award each, with that member's own
+        // salvage flag); `gameState.clearDebris()` below still runs once, so the bag is one of the mission's five catches.
+        // "a bag of N pieces" counts exactly the members THIS credit pays (not already-paid ones, not big ones that pay
         // later), the same set as the summed credits; kg is those members' own mass (their `bagMembers` snapshot, else the body's).
         const bagInfo = (debris && debris.isBag === true && Array.isArray(debris.bagMembers))
           ? (() => {
@@ -1257,7 +1052,7 @@ export class GameFlowManager {
           })()
           : null;
         for (const body of bodies) {
-          // slice 5 (5b): a big body is counted (below) and pays nothing here; it is never paid again on its own either
+          // A big body is counted (below) and pays nothing here; it is never paid again on its own either
           if (deferred.includes(body)) { if (body && body !== debris) body._credited = true; continue; }
           scoringSystem.awardPoints({
             debris: body || { type: 'fragment', mass: 100, tumbleRate: 0, brittleness: 0 },
@@ -1268,23 +1063,21 @@ export class GameFlowManager {
             fuelEfficient: fuelEfficient,
             salvageRecovered: !!(body && body.hasSalvage && body.salvage),
             detachedCapture: returningArm?.isDetached || false,
-            // u23 B1: the payoff line shows a bag as one catch ("a bag of 12 pieces"), summing its members' awards
+            // The payoff line shows a bag as one catch ("a bag of 12 pieces"), summing its members' awards
             bag: bagInfo,
           });
           if (body && body !== debris) body._credited = true;      // a member: never paid again on its own
         }
 
-        // Reset manual capture flag after scoring
         if (returningArm) {
           returningArm._manualCapture = false;
         }
 
-        // Register item 37: mark the body paid — a re-mate after jettison +
-        // re-capture, or the rack feed-end of a transferred piece, skips
+        // Mark the body paid — a re-mate after jettison + re-capture, or the rack feed-end of a transferred piece, skips
         // every credit leg above and below.
         if (debris) debris._credited = true;
-        // slice 5 (5b, P2/P3): a pending big piece waits in the ledger (`_credited` stays true, `_disposal` holds its pay) and the
-        // player is told in plain words that it will pay later. The streak is not advanced by it (it paid nothing).
+        // A pending big piece waits in the ledger (`_credited` stays true, `_disposal` holds its pay) and the player is told
+        // in plain words that it will pay later. The streak is not advanced by it (it paid nothing).
         if (bigHeld && bigPieces.register(debris)) {
           eventBus.emit(Events.COMMS_MESSAGE, {
             source: 'HOUSTON', channel: 'CMD', priority: 'good', _keep: true,
@@ -1293,19 +1086,14 @@ export class GameFlowManager {
         }
         } // end countCatch (count and credit legs)
 
-        // Comms notification (via EventBus — CommsSystem self-manages).
-        // §4.8: honour data.source so a mother catch stops reading "DAUGHTER".
-        // Register item 26 (closed by cargo-continuity S8): a mother catch
-        // emits CATCH_PROCESSED { parked: true } at the PARK boundary — credit
-        // lands but the body is visibly still sitting at the nose in its net,
-        // so "fully processed" ran ahead of the visual. Split the line:
-        // parked → secured; digested (daughter furnace feed-end, or the
-        // collar's digestion completion — S13(c)) → processed.
-        // no-melt: a daughter's rack credit ({ parked: true, source: 'rack' }) is not "at the nose" (ArmUnit says its own
-        // "Catch secured at the strut" line), and with no furnace "fully processed" is never true: say nothing.
-        // nets-1b: a mother catch's "parked at the nose" line is no longer said here, at the mate, before anyone knows
-        // where the catch goes (a radiator leash or a daughter's rack take it; the line then lied). R5: nothing says it
-        // any more; when the catch really stays at the nose, CaptureNet's reason line (`_tryCargoTransfer`) says where.
+        // Comms notification (via EventBus — CommsSystem self-manages). §4.8: honour data.source so a mother catch stops
+        // reading "DAUGHTER". A mother catch emits CATCH_PROCESSED { parked: true } at the PARK boundary (credit lands but
+        // the body still sits at the nose in its net), so "fully processed" would run ahead of the visual: only digested
+        // (daughter furnace feed-end, or the collar's digestion completion) → processed. A daughter's rack credit
+        // ({ parked: true, source: 'rack' }) is not "at the nose" (ArmUnit says its own "Catch secured at the strut" line),
+        // and with no furnace "fully processed" is never true: say nothing. A mother catch's "parked at the nose" line is
+        // not said here, before anyone knows where the catch goes (a radiator leash or a daughter's rack take it); when the
+        // catch really stays at the nose, CaptureNet's reason line (`_tryCargoTransfer`) says where.
         if (!data.parked && Constants.isFeatureEnabled('FURNACE_COOK')) {
           eventBus.emit(Events.COMMS_SEND, {
             source: (data.source || data.armId || 'DAUGHTER').toUpperCase(),
@@ -1314,21 +1102,20 @@ export class GameFlowManager {
           });
         }
 
-        // --- SALVAGE RECOVERY (Session 10) ---
-        // u20-nets: one pass per paid body (a solo catch: itself; a scoop bag: each member, its own salvage; the bag's own is empty)
-        const outerDebris = debris;     // u23 BF2: the loop variable below shadows the held body
+        // --- Salvage recovery ---
+        // One pass per paid body (a solo catch: itself; a scoop bag: each member, its own salvage; the bag's own is empty)
+        const outerDebris = debris;     // the loop variable below shadows the held body
         for (const debris of (countCatch ? bodies.filter((b) => !deferred.includes(b)) : [])) {
         const hasSalvage = debris && debris.hasSalvage && debris.salvage;
         if (hasSalvage) {
           const salvage = debris.salvage;
           const refineryMult = this._hasUpgrade('refinery_arm') ? 1.5 : 1.0;
 
-          // Xenon → main satellite fuel
-          // g1-gas-upgrades D8: salvaged gas is MASS — today's argon amount in kg, loaded as kg of the gas
-          // IN the tank (the resupply path, clamped to free space), named for the real gas and the real kg.
+          // Xenon → main satellite fuel. Salvaged gas is MASS: today's argon amount in kg, loaded as kg of the gas IN the
+          // tank (the resupply path, clamped to free space), named for the real gas and the real kg.
           if (salvage.xenon > 0 && resourceSystem) {
             const wantKg = salvageGasKg(salvage.xenon) * refineryMult;
-            const gotKg = resourceSystem.resupplyEngineGas(wantKg, { source: 'salvage' });    // range-map D4: the range map's "catches gave" counts this path only
+            const gotKg = resourceSystem.resupplyEngineGas(wantKg, { source: 'salvage' });    // the range map's "catches gave" counts this path only
             const gasName = (Constants.FUELS[resourceSystem.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL]).name;
             eventBus.emit(Events.COMMS_MESSAGE, {
               text: gotKg > 0
@@ -1338,9 +1125,9 @@ export class GameFlowManager {
             });
           }
 
-          // Indium → the mother's indium store (lane 3f, DECISIONS §4 "Docked servicing": salvaged indium goes to a mother-side
-          // store, never straight into a daughter tank; a daughter's tank only fills through a docked cartridge swap). What
-          // does not fit the store is lost, and one plain line says so.
+          // Indium → the mother's indium store (DECISIONS §4 "Docked servicing": salvaged indium goes to a mother-side store,
+          // never straight into a daughter tank; a daughter's tank only fills through a docked cartridge swap). What does not
+          // fit the store is lost, and one plain line says so.
           if (salvage.indium > 0 && resourceSystem) {
             const wantKg = salvage.indium * refineryMult;
             const gotKg = resourceSystem.addIndium(wantKg);
@@ -1355,7 +1142,6 @@ export class GameFlowManager {
             });
           }
 
-          // GaAs → solar panel health restoration
           if (salvage.gaAs > 0 && resourceSystem) {
             resourceSystem.replenishPanelHealth(salvage.gaAs * refineryMult);
             eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1364,7 +1150,6 @@ export class GameFlowManager {
             });
           }
 
-          // Battery → direct charge
           if (salvage.battery > 0 && resourceSystem) {
             resourceSystem.replenish('battery', salvage.battery * refineryMult);
             eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1373,11 +1158,10 @@ export class GameFlowManager {
             });
           }
 
-          // Hydrazine → cold gas (requires upgrade, handled by check)
           if (salvage.hydrazine > 0 && resourceSystem) {
             const hasHazmat = this._hasUpgrade('hazmat_handler');
             if (hasHazmat) {
-              // fu-gas GD1: the salvaged kg go into the tank AS kg (the pool is 20 units = 6 kg); the line reports what fit
+              // The salvaged kg go into the tank AS kg (the pool is 20 units = 6 kg); the line reports what fit
               const coldGasKg = salvage.hydrazine * refineryMult * Constants.SALVAGE_HYDRAZINE_COLDGAS_RATIO;
               const poolBefore = resourceSystem.coldGas;
               resourceSystem.replenish('coldGas', coldGasKgToPool(coldGasKg));
@@ -1394,7 +1178,7 @@ export class GameFlowManager {
             }
           }
 
-          // F16: Lithium → MPD thruster propellant
+          // Lithium → MPD thruster propellant
           if (salvage.lithium > 0 && resourceSystem) {
             const liAmount = salvage.lithium * refineryMult;
             resourceSystem.addLithium(liAmount);
@@ -1404,7 +1188,7 @@ export class GameFlowManager {
             });
           }
 
-          // --- METAL CARGO STORAGE (Phase 2) ---
+          // --- Metal cargo storage ---
           const metalSalvage = (salvage.metals || []).filter(s => s.type === 'metal');
           for (const metal of metalSalvage) {
             eventBus.emit(Events.CARGO_STORE, {
@@ -1417,10 +1201,8 @@ export class GameFlowManager {
             });
           }
 
-          // Emit salvage recovered event
           eventBus.emit(Events.SALVAGE_RECOVERED, { debris, salvage });
 
-          // Phase 8: Emit salvage reveal for loot popup + audio
           const revealMetals = (salvage.metals || []).map(m => ({
             name: m.name || m.subtype || 'Unknown',
             subtype: m.subtype,
@@ -1432,66 +1214,52 @@ export class GameFlowManager {
             metals: revealMetals,
             totalMass,
             debrisType: debris ? (debris.type || 'debris') : 'debris',
-            // u23 BF2: the members of one bag share an id, so the HUD's materials line can sum the whole bag
+            // The members of one bag share an id, so the HUD's materials line can sum the whole bag
             ...(outerDebris && outerDebris.isBag === true ? { bagId: outerDebris.id } : null),
           });
         }
         }
 
-        // trip-melt-2 D12a: was a trip ALREADY running when this credit landed? (Read before `_startMissionAfterCredit` below, which
-        // begins the trip for a boundary credit: that credit's own boundary runs at once, as before.)
+        // Was a trip ALREADY running when this credit landed? Read before `_startMissionAfterCredit` below, which begins the
+        // trip for a boundary credit: that credit's own boundary runs at once.
         const tripRunningBeforeCredit = this._trip.isActive();
-        // Update game state debris counter (belt-and-suspenders with scoringSystem)
         if (countCatch) gameState.clearDebris();
-        // Wave 5 Session F (D4): the mission boundary check runs HERE, right
-        // after the increment — not inside awardPoints() above, where it read
-        // the pre-catch count and fired MISSION_START one catch late (03-plan
-        // Session E FINDINGS (f)). The 5th catch now starts mission 2 with
-        // { missionNumber: 2 }; the ONE depot decision (_onMissionBoundary
-        // below) follows it in the same tick. A digested / already-paid body
-        // (countCatch false) moved no counter and starts nothing.
-        // c2-fifth-catch D2: a parked boundary credit holds this start.
+        // The mission boundary check runs HERE, right after the increment — not inside awardPoints() above, where it read the
+        // pre-catch count and fired MISSION_START one catch late. The 5th catch starts mission 2 with { missionNumber: 2 };
+        // the ONE depot decision (_onMissionBoundary below) follows it in the same tick. A digested / already-paid body
+        // (countCatch false) moved no counter and starts nothing. A parked boundary credit holds this start.
         if (countCatch) this._startMissionAfterCredit(data, () => { scoringSystem.checkMissionTransition(); });
 
-        // Furnace consumed the catch — remove it from the field (emits
-        // DEBRIS_REMOVED; wireframe/pins self-clear). Deferred here from the old
-        // ARM_RETURNED/DEBRIS_CAPTURED path under park-the-catch.
-        // Cargo-continuity S3: { parked: true } (a mother catch at the end of
-        // its securing timer) keeps the body — credit landed, but the catch
-        // MATES at the nose collar inside its net instead of being removed on
-        // camera (S13(c)). The collar's digestion completion carries
-        // { digested: true } — removal runs (the body IS consumed).
+        // Furnace consumed the catch — remove it from the field (emits DEBRIS_REMOVED; wireframe/pins self-clear).
+        // { parked: true } (a mother catch at the end of its securing timer) keeps the body — credit landed, but the catch
+        // MATES at the nose collar inside its net instead of being removed on camera. The collar's digestion completion
+        // carries { digested: true } — removal runs (the body IS consumed).
         if (debrisField && data.debrisId != null && !data.parked) {
           debrisField.removeDebris(data.debrisId);
         }
 
-        // Auto-save after successful capture
-        // (F2: this catch is about to close any open stop below, so the save must not carry it. trip-melt G1: during
-        // the trip nothing closes it, so the save carries the stop as it is.)
+        // Auto-save after successful capture (this catch is about to close any open stop below, so the save must not carry
+        // it; during the trip nothing closes it, so the save carries the stop as it is)
         if (countCatch) this.saveGame({ resupplyStop: this._trip.isActive() && this._atResupplyStop === true });
 
-        // Wireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
-
-        // Auto-clear dead target — only if current target is the captured debris.
-        // InputManager.handleCaptureAdvance already selects the next-best target
-        // on ARM_CAPTURED / LASSO_CAPTURED. Only provide fallback if nothing selected.
+        // Auto-clear dead target — only if current target is the captured debris. InputManager.handleCaptureAdvance already
+        // selects the next-best target on ARM_CAPTURED / LASSO_CAPTURED; this is the fallback if nothing is selected.
         const currentTarget = targetSelector.activeTarget;
         if (currentTarget && debris && currentTarget.id === (debris.id ?? data.debrisId)) {
-          // Silent: this clear is capture bookkeeping — the capture voice
-          // (clamp/success/ka-ching) already tells the story; a descending
-          // "target lost" earcon here would contradict the reward.
+          // Silent: capture bookkeeping — the capture voice (clamp/success/ka-ching) already tells the story; a descending
+          // "target lost" earcon would contradict the reward.
           targetSelector.setTarget(null, { silent: true });
         }
         if (!targetSelector.activeTarget) {
           const playerPos = player ? player.getPosition() : null;
           if (playerPos && debrisField) {
             const nearby = debrisField.getDebrisNear(playerPos, 0.5); // wide radius
-            // 2026-10-18: the NEAREST eligible piece within AUTOLOCK.RANGE_M, else
-            // nothing — a 385 km auto-pick emptied the argon in mission 2.
+            // The NEAREST eligible piece within AUTOLOCK.RANGE_M, else nothing — a 385 km auto-pick emptied the argon in
+            // mission 2.
             const rangeM = Constants.AUTOLOCK.RANGE_M;
             let nextTarget = null;
             for (const d of nearby) {
-              if (!d || !d.discovered || !d.alive || d._captured || d._disposed || d.hazard === true) continue;     // (slice 5, 5d: never a piece that was disposed of)
+              if (!d || !d.discovered || !d.alive || d._captured || d._disposed || d.hazard === true) continue;     // (never a piece that was disposed of)
               if (!(d.distanceKm * 1000 <= rangeM)) continue;
               if (!nextTarget || d.distanceKm < nextTarget.distanceKm) nextTarget = d;
             }
@@ -1504,10 +1272,8 @@ export class GameFlowManager {
           }
         }
 
-        // Auto-camera: return to COMMAND view after capture delivery.
-        // NOTE (2026-06-03): TARGET_LOCK is currently unreachable (removed from
-        // CameraSystem's VIEW_CYCLE), so this revert is a no-op today. Retained
-        // intentionally so it keeps working if TARGET_LOCK is re-enabled.
+        // Auto-camera: return to COMMAND view after capture delivery. TARGET_LOCK is currently unreachable (removed from
+        // CameraSystem's VIEW_CYCLE), so this revert is a no-op today; kept so it works if TARGET_LOCK is re-enabled.
         if (cameraSystem && cameraSystem.currentView === CameraViews.TARGET_LOCK) {
           timerManager.setTimeout(() => {
             if (cameraSystem.currentView === CameraViews.TARGET_LOCK) {
@@ -1517,43 +1283,37 @@ export class GameFlowManager {
         }
 
         // ── Mission boundary: every SHOP_CADENCE (= DEBRIS_PER_MISSION) debris cleared ──
-        // (digested completions didn't advance the counter — the modulo would
-        // re-fire on the mate's multiple; S13(c). Same for a body the
-        // ledger already paid — register item 37.) The ONE depot decision per
-        // catch lives in _onMissionBoundary (Wave 5 Session E).
+        // (digested completions and bodies the ledger already paid didn't advance the counter — the modulo would re-fire on
+        // the mate's multiple.) The ONE depot decision per catch lives in _onMissionBoundary.
         const debrisCount = gameState.debrisCleared;
         if (countCatch && debrisCount > 0 && debrisCount % SHOP_CADENCE === 0) {
           if (gameState.isGameplay()) {
-            // trip-melt-2 D12a: a boundary reached by a credit while the trip waits or burns (five credits in one trip)
-            // must not run mid-trip: the invitation, the stop and the saved state belong to the arrival. It runs after
-            // the trip's mission start (`_beginTripThen`).
+            // A boundary reached by a credit while the trip waits or burns (five credits in one trip) must not run mid-trip:
+            // the invitation, the stop and the saved state belong to the arrival. It runs after the trip's mission start
+            // (`_beginTripThen`).
             if (tripRunningBeforeCredit) this._deferredBoundary = debrisCount;
             else this._onMissionBoundary(debrisCount);
           }
         } else if (countCatch) {
-          // u1-resupply-stop D1: the player has flown out for the next mission — the stop closes at this credited
-          // catch whether or not the invitation was still open (a visit closes the invitation as 'entered'; it
-          // does not close the stop).
-          // trip-melt G1 (DECISIONS §26): not while the trip waits or burns - the player has not flown anywhere yet;
-          // the stop and its invitation close at the first credited catch AFTER the trip.
+          // The player has flown out for the next mission — the stop closes at this credited catch whether or not the
+          // invitation was still open (a visit closes the invitation as 'entered'; it does not close the stop). DECISIONS §26:
+          // not while the trip waits or burns — the player has not flown anywhere yet; the stop and its invitation close at
+          // the first credited catch AFTER the trip.
           if (!this._trip.isActive()) {
             this._setResupplyStop(false);
-            // The invitation window is "until the next credited catch" (owner
-            // decision 2, 2026-09-04): a catch that is not a boundary lapses it.
+            // owner 2026-09-04: the invitation window is "until the next credited catch"; a catch that is not a boundary
+            // lapses it.
             this._closeDepotInvitation('lapsed');
           }
-          // M1 guidance T7: the per-catch progress line (guided chapters only;
-          // the boundary catch above is the ceremony's, not this line's).
+          // The per-catch progress line (guided chapters only; the boundary catch above is the ceremony's, not this line's).
           this._postMissionProgressLine();
         }
       }
     });
 
-    // c2-fifth-catch D2: the credited catch leaving the nose releases a held
-    // mission start. Registered AFTER the credit handler above, so on a
-    // digestion the field removal has already run when the start fires. Ids
-    // are matched: a piece cut off a big catch emits its own transferComplete
-    // while the catch itself still sits at the nose — that must not start it.
+    // The credited catch leaving the nose releases a held mission start. Registered AFTER the credit handler above, so on a
+    // digestion the field removal has already run when the start fires. Ids are matched: a piece cut off a big catch emits
+    // its own transferComplete while the catch itself still sits at the nose — that must not start it.
     eventBus.on(Events.CATCH_PROCESSED, (data) => {
       if (data && data.digested) this._releaseMissionStartFor(data.debrisId);
     });
@@ -1563,23 +1323,17 @@ export class GameFlowManager {
     eventBus.on(Events.NET_RELEASED, (data) => {
       this._releaseMissionStartFor(data && data.debrisId);
     });
-    this._wireBigPieceFates();   // slice 5 (5b, C7): BIG_PIECE_FATE reaches the fate executors the wave 2 lanes define
+    this._wireBigPieceFates();   // BIG_PIECE_FATE reaches the fate executors
 
-    // Arm pilot exit on ARM_EXPENDED now self-managed by InputManager
-
-    // ==================================================================
-    // ARM DEORBIT SACRIFICE — score + remove debris (Session 10)
-    // ==================================================================
+    // --- Arm deorbit sacrifice: score + remove debris ---
 
     eventBus.on(Events.ARM_DEORBIT, (data) => {
       const { armId, fuelAtStart, totalMass, debrisId } = data;
 
-      // Get debris data before removal for scoring
       const debris = debrisField && debrisId != null
         ? debrisField.getDebrisById(debrisId) : null;
 
-      // Calculate deorbit ΔV based on fuel and mass
-      // Approximate: remaining impulse / total mass
+      // Approximate ΔV: remaining impulse / total mass
       const arm = armManager ? armManager.arms.find(a => a.id === armId) : null;
       const totalImpulse = arm
         ? (arm.type === 'weaver' ? Constants.WEAVER_TOTAL_IMPULSE : Constants.SPINNER_TOTAL_IMPULSE)
@@ -1587,7 +1341,6 @@ export class GameFlowManager {
       const remainingImpulse = totalImpulse * (fuelAtStart / 100);
       const deorbitDV = remainingImpulse / totalMass; // m/s
 
-      // Determine multiplier based on ΔV achieved
       let deorbitMult = Constants.DEORBIT_MULTIPLIER_BASE;
       if (fuelAtStart < 5) {
         deorbitMult = Constants.DEORBIT_MULTIPLIER_EMERGENCY;
@@ -1602,14 +1355,13 @@ export class GameFlowManager {
         deorbitMult = Constants.DEORBIT_MULTIPLIER_REENTRY;
       }
 
-      // Remove debris from field
       if (debrisField && debrisId != null) {
         debrisField.removeDebris(debrisId);
       }
 
-      // Nets step 3 slice 5 (lane 5b, C5 "Other ways"): a daughter's sacrifice carrying a PENDING big piece (counted at the catch, not
-      // yet paid) re-enters it at once, so it pays the removal fee (`fatePay(d, 'push')`, through `disposeBigPiece`) and does NOT count
-      // again: no `clearDebris`, no mission boundary, no `awardPoints` (it was counted at the catch).
+      // A daughter's sacrifice carrying a PENDING big piece (counted at the catch, not yet paid) re-enters it at once, so it
+      // pays the removal fee (`fatePay(d, 'push')`, through `disposeBigPiece`) and does NOT count again: no `clearDebris`, no
+      // mission boundary, no `awardPoints`.
       if (debris && bigPieces.isPending(debris)) {
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `\u0394V burn: ${deorbitDV.toFixed(1)} m/s. Perigee lowered ~${perigeeDropKm.toFixed(0)} km`,
@@ -1624,17 +1376,15 @@ export class GameFlowManager {
         return;
       }
 
-      // Award score with deorbit multiplier
-      // Check tactical assessment bonus (tracked via WIREFRAME_ASSESSED event — Batch 3)
       const assessed = this._wireframeAssessed;
-      // u20-nets: a scoop bag burns up as its members: each is paid as if it had been sacrificed alone and leaves its field row
-      // (the bag has none of its own); the sacrifice is still ONE clear (`clearDebris()` below).
+      // A scoop bag burns up as its members: each is paid as if it had been sacrificed alone and leaves its field row (the
+      // bag has none of its own); the sacrifice is still ONE clear (`clearDebris()` below).
       const deorbitBodies = this._creditBodies(debris);
       if (debris && debris.isBag === true && this._refs && this._refs.fieldRegistry) {
         for (const m of (debris.bagMembers || [])) this._refs.fieldRegistry.markCaught(m);
       }
-      // slice 5 (5b): a big piece sacrificed before it was ever counted still counts as this one clear, but pays its removal fee
-      // (below, through the ledger) instead of a catch credit.
+      // A big piece sacrificed before it was ever counted still counts as this one clear, but pays its removal fee (below,
+      // through the ledger) instead of a catch credit.
       const bigSacrificed = this._bigPiecesOn() ? deorbitBodies.filter((b) => isBigPiece(b, true)) : [];
       for (const body of deorbitBodies) {
         if (bigSacrificed.includes(body)) { if (body && body !== debris) body._credited = true; continue; }
@@ -1661,40 +1411,30 @@ export class GameFlowManager {
         });
       }
 
-      // Comms: report ΔV and perigee lowering
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `\u0394V burn: ${deorbitDV.toFixed(1)} m/s. Perigee lowered ~${perigeeDropKm.toFixed(0)} km`,
         priority: 'info',
       });
 
-      // Update game state
       gameState.clearDebris();
       const atBoundary = this._isMissionBoundaryCount(gameState.debrisCleared);
-      // trip-melt G1: a sacrifice that lands while the trip waits or burns neither closes the stop nor starts a mission.
+      // A sacrifice that lands while the trip waits or burns neither closes the stop nor starts a mission.
       const tripOn = this._trip.isActive();
-      // u1 D1: a sacrifice that completes a mission opens the stop; any other closes it. Slice 3 (S7): with the satellite as the stop it opens nothing here.
+      // A sacrifice that completes a mission opens the stop; any other closes it. With the satellite as the stop it opens nothing here.
       if (!tripOn) this._setResupplyStop(atBoundary && !this._satelliteIsTheStop());
-      // Wave 5 Session F (D4): the second credited-clear path (Ctrl+Shift+D →
-      // ARM_DEORBIT_CMD → ArmUnit.startDeorbit) — the mission boundary check
-      // follows its increment too, so a sacrifice that lands the 5th clear
-      // starts mission 2 on time. (This path has never carried the depot
-      // decision — pre-existing, FINDINGS.)
-      // trip-melt D2: at a boundary the trip begins instead, and the mission starts when it ends.
+      // The second credited-clear path (Ctrl+Shift+D → ARM_DEORBIT_CMD → ArmUnit.startDeorbit): the mission boundary check
+      // follows its increment too, so a sacrifice that lands the 5th clear starts mission 2 on time. This path has never
+      // carried the depot decision. At a boundary the trip begins instead, and the mission starts when it ends.
       if (atBoundary) this._beginTripThen(() => scoringSystem.checkMissionTransition());
       else if (!tripOn) scoringSystem.checkMissionTransition();
-      // M1 guidance T7: the per-catch progress line rides this credited clear
-      // too; its own boundary guard keeps a sacrifice that lands the 5th
-      // clear quiet (there is no ceremony here to speak for it — FINDINGS).
+      // The per-catch progress line rides this credited clear too; its own boundary guard keeps a sacrifice that lands the
+      // 5th clear quiet (there is no ceremony here to speak for it).
       this._postMissionProgressLine();
       this.saveGame();
 
-      // Wireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
-
-      // Play deorbit sound
       if (audioSystem) audioSystem.playDeorbitBurn();
     });
 
-    // Phase 6: Tether Detach — ARM_LOST penalty
     eventBus.on(Events.ARM_LOST, (data) => {
       const penalty = Constants.DETACH_FAIL_PENALTY;
       scoringSystem.totalScore += penalty;
@@ -1707,19 +1447,13 @@ export class GameFlowManager {
       console.log(`[GameFlow] Arm ${data.armId} lost. Penalty ${penalty}`);
     });
 
-    // Debris removed externally — DebrisWireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
-    // TargetSelector auto-clears dead targets in update()
+    // DebrisWireframe self-clears on DEBRIS_REMOVED; TargetSelector auto-clears dead targets in update()
 
-    // COMMS MENU ARM DEPLOY listener removed 2026-06-12 (UX-11 #9): its only
-    // emitters (RadialMenu, CommsPanel.executeCommsCommand) were deleted.
-    // preferType deploy still works via Events.ARM_DEPLOY_TO (TargetSelector).
+    // preferType deploy goes via Events.ARM_DEPLOY_TO (TargetSelector).
 
-    // ==================================================================
-    // TRAWL DEPLOYMENT (Phase 6 / S7-B: wired to TrawlManager)
-    // ==================================================================
-
-    // TrawlManager self-manages toggle + start via TRAWL_START listener (Batch 3)
-    // GFM only handles the legacy armManager.deployTrawl() call when trawl STARTS (not ends)
+    // --- Trawl deployment ---
+    // TrawlManager self-manages toggle + start via its TRAWL_START listener; GFM only handles the legacy
+    // armManager.deployTrawl() call when trawl STARTS (not ends)
     eventBus.on(Events.TRAWL_START, (data) => {
       if (data && data.cluster) return;  // notification from TrawlManager auto-start
       if (data && data.armId) return;    // notification from an arm
@@ -1731,9 +1465,7 @@ export class GameFlowManager {
       }
     });
 
-    // ==================================================================
-    // WIREFRAME ASSESSMENT TRACKING (Batch 3 — replaces debrisWireframe.hasAssessedTarget())
-    // ==================================================================
+    // --- Wireframe assessment tracking ---
     eventBus.on(Events.WIREFRAME_ASSESSED, () => {
       this._wireframeAssessed = true;
     });
@@ -1744,9 +1476,7 @@ export class GameFlowManager {
       this._wireframeAssessed = false;
     });
 
-    // ==================================================================
-    // TRAWL COMMS — target entering/exiting/window closing (Phase 2)
-    // ==================================================================
+    // --- Trawl comms: target entering/exiting/window closing ---
 
     eventBus.on(Events.TRAWL_TARGET_ENTERING, ({ type, mass }) => {
       const typeName = type || 'debris';
@@ -1764,40 +1494,31 @@ export class GameFlowManager {
     });
 
     eventBus.on(Events.TRAWL_TARGET_EXITED, ({ debrisId }) => {
-      // Silent — just track. Could add a subtle audio cue later.
     });
 
-    // Pause menu events (S1 Fix L1: use Events constants instead of raw strings)
     eventBus.on(Events.PAUSE_RESUME, () => {
       this.paused = false;
-      // HUD.hidePause() now self-managed via PAUSE_RESUME listener
     });
 
     eventBus.on(Events.PAUSE_MENU, () => {
       this.paused = false;
-      // HUD.hidePause() now self-managed via PAUSE_MENU listener
       this.transitionToState(GameStates.MENU);
     });
 
-    // ==================================================================
-    // FIRST EXPERIENCE — Contextual Comms Guidance (§7)
+    // --- First experience: contextual comms guidance (§7) ---
     // One-shot messages keyed by _firstTimeComms Set. Resets on resetGame().
-    // ==================================================================
 
-    // First ORBITAL_VIEW: opening comms guidance. deep-polish-4: the 4 s VLEO
-    // hold is gone; guidance now trickles in AFTER the boot comms + settle, and
-    // the two lines are split into separate timers so they never land together.
+    // First ORBITAL_VIEW: opening comms guidance trickles in AFTER the boot comms + settle, the two lines split into
+    // separate timers so they never land together.
     eventBus.on(Events.GAME_STATE_CHANGE, ({ from, to }) => {
       // A retry / game-over CONTINUE held its start lines (the game-over exit wipes the comms log): the player is back
       // in the field when the shop or the briefing is left for flight. Once; nothing pending = nothing happens.
       if ((from === 'SHOP' || from === 'BRIEFING') && (to === 'ORBITAL_VIEW' || to === 'APPROACH')) {
         openingDance.postStartLine();
       }
-      // Any ORBITAL_VIEW entry WITHOUT the opening beats (Continue, or
-      // returning from a screen): no scripted cameo is coming, so the ambient
-      // scheduler's defer window is pointless — open it immediately. Without
-      // this, Continue sessions waited out the 30 s defer and the watchable
-      // window for pads like Sriharikota-on-th (~17–26 s) closed unfired.
+      // Any ORBITAL_VIEW entry WITHOUT the opening beats (Continue, or returning from a screen): no scripted cameo is
+      // coming, so the ambient scheduler's defer window is pointless — open it immediately (else Continue sessions waited
+      // out the 30 s defer and the watchable window for pads like Sriharikota-on-th, ~17–26 s, closed unfired).
       if (to === 'ORBITAL_VIEW' && !this._firstOrbitalView) {
         ambientLaunchScheduler.skipScriptedDefer();
       }
@@ -1809,18 +1530,15 @@ export class GameFlowManager {
           const { debrisField, player } = this._refs;
           if (!player || !debrisField) return;
 
-          // Opening dance: this fires at cut+3.6 s — mid-unfold. The dance is
-          // wordless (decision 12: suppress at source, do NOT hold — a held
-          // line would replay at hand-over); the onboarding pipeline that
-          // starts at hand-over owns the teaching instead. Consumed, not
-          // deferred, so it never lands later either.
+          // Opening dance: this fires at cut+3.6 s — mid-unfold. The dance is wordless (suppress at source, do NOT hold — a
+          // held line would replay at hand-over); the onboarding pipeline that starts at hand-over owns the teaching.
+          // Consumed, not deferred, so it never lands later either.
           if (openingDance.isActive()) {
             this._firstTimeComms.add('orbital_view_opening');
             return;
           }
 
-          // Target acquisition is owned by AutoLockController (reward-first
-          // spine) from the first frame — no auto-target call needed here.
+          // Target acquisition is owned by AutoLockController from the first frame — no auto-target call here.
           if (!this._firstTimeComms.has('orbital_view_opening')) {
             this._firstTimeComms.add('orbital_view_opening');
             eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1831,51 +1549,40 @@ export class GameFlowManager {
           }
         }, 3600, { owner: this });
 
-        // u5-info-ap-hold D6: the one-time "Place names are on your Earth view. Press 5 to hide them."
-        // line is gone (coordinator decision 2026-10-19): it names a key on a keyless device and sat
-        // between the wings and the scan as noise. The 5 key stays in the Help list.
+        // Deliberately no "Place names are on your Earth view. Press 5 to hide them." line: it names a key on a keyless device.
 
-        // Launch cameo — a single plume rises from the player's home spaceport
-        // during the opening pass. The pad may not be above the horizon at the
-        // 7 s mark (e.g. en/Canaveral rises ~15 s in), so poll every 2 s for up
-        // to 90 s and fire the moment it's in view; give up silently after that
-        // (no distraction mid-game).
+        // Launch cameo — a single plume rises from the player's home spaceport during the opening pass. The pad may not be
+        // above the horizon at the 7 s mark (e.g. en/Canaveral rises ~15 s in), so poll every 2 s for up to 90 s and fire
+        // the moment it's in view; give up silently after that (no distraction mid-game).
         timerManager.setTimeout(() => {
           if (this._firstTimeComms.has('orbital_view_cameo')) return;
           this._firstTimeComms.add('orbital_view_cameo');
           const lang = settingsManager.getLanguageEntry();
-          // Pad coordinates resolve from the shared cities list (single source).
           const pad = padFor(lang && lang.code, cityLabels.getCities());
           if (!pad) return;
           const announce = () => {
-            // Tie the 3D event to the reference layer: a short cyan flash on
-            // the pad's pill at ignition ("launching NOW") — then the plume
-            // itself holds the eye.
+            // Tie the 3D event to the reference layer: a short cyan flash on the pad's pill at ignition ("launching NOW").
             cityLabels.pulse(pad.name, LAUNCH_FLASH_S);
-            // Opening dance: the cameo poll first lands at cut+7 s — exactly
-            // the hand-over instant. The plume still rises; only the comms
-            // line waits (the dance is wordless, and the Houston hand-over
-            // line + onboarding boot beat own that moment). A later poll
-            // announces normally if the pad is still unfired.
+            // Opening dance: the cameo poll first lands at cut+7 s — exactly the hand-over instant. The plume still rises; only
+            // the comms line waits (the dance is wordless, and the Houston hand-over line + onboarding boot beat own that
+            // moment). A later poll announces normally if the pad is still unfired.
             if (openingDance.isActive()) return;
             eventBus.emit(Events.COMMS_MESSAGE, {
               sender: 'SPACECRAFT',
               text: `${pad.vehicle} lifting off from ${pad.name} — 350 km below you.`,
               priority: 'info',
-              _quiet: true,   // comms-after-tutorial D4: scenery stays hidden
+              _quiet: true,   // scenery stays hidden
             });
           };
           let tries = 0;
           const attempt = () => {
             if (launchCameo.fire(pad)) {
-              // The scripted fire owns this pad for the pass — ambient must
-              // not double-fire it when the pad's watchable edge registers.
+              // The scripted fire owns this pad for the pass — ambient must not double-fire it when the pad's watchable edge registers.
               ambientLaunchScheduler.markFiredExternally(pad.name);
               announce();
               return;
             }
-            // 45 × 2 s = 90 s of coverage — a pad rising from behind the limb
-            // at spawn (en ≈ 15 s, ja ≈ 3 s) is caught well inside the pass.
+            // 45 × 2 s = 90 s of coverage — a pad rising from behind the limb at spawn (en ≈ 15 s, ja ≈ 3 s) is caught inside the pass.
             if (++tries < 45) timerManager.setTimeout(attempt, 2000, { owner: this });
           };
           attempt();
@@ -1894,7 +1601,7 @@ export class GameFlowManager {
             target.type === 'defunctSat' ? 'Satellite' : 'Contact';
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: 'SPACECRAFT',
-            // u2-one-voice D3: no key name - the Director's one step (the net chip) is the voice.
+            // No key name: the Director's one step (the net chip) is the voice.
             text: `${typeLabel} locked.`,
             priority: 'info',
           });
@@ -1902,16 +1609,14 @@ export class GameFlowManager {
       }
     });
 
-    // Item 3 (2026-06-12): first net launch — one SCI line teaching the yo-yo
-    // despin physics the player just watched (canister blossoms open and the
-    // spin visibly slows with NO thruster firing). Pairs with the Codex entry
-    // 'net_yo_yo_despin' (also unlocked by NET_FIRED).
+    // First net launch — one SCI line teaching the yo-yo despin physics the player just watched (canister blossoms open and
+    // the spin visibly slows with NO thruster firing). Pairs with the Codex entry 'net_yo_yo_despin' (also unlocked by NET_FIRED).
     eventBus.on(Events.NET_FIRED, () => {
       if (!this._firstTimeComms.has('first_net_physics')) {
         this._firstTimeComms.add('first_net_physics');
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'SCI', channel: 'SCI',
-          // nets-1b (Ruling 0): two short plain sentences, no tag, no symbols, no bracketed key.
+          // Ruling 0: two short plain sentences, no tag, no symbols, no bracketed key.
           text: 'Watch the net slow its spin as it opens, like a skater opening her arms. Press I to read more.',
           priority: 'info',
         });
@@ -1920,7 +1625,6 @@ export class GameFlowManager {
 
     // Arrival advice (N lasso / D daughter) comes from AutopilotSystem's single "In position." line.
     eventBus.on(Events.AUTOPILOT_ARRIVED, () => {
-      // Drift recovery: one-shot 8s delayed check
       if (!this._firstTimeComms.has('drift_recovery')) {
         const arrivedTarget = targetSelector.getActiveTarget();
         if (arrivedTarget) {
@@ -1942,7 +1646,7 @@ export class GameFlowManager {
                 sender: 'SPACECRAFT',
                 text: 'Target drifting. Press A to re-approach.',
                 priority: 'info',
-                _keep: true,   // comms-after-tutorial D6: the next step - never folded into "x N queued"
+                _keep: true,   // the next step - never folded into "x N queued"
               });
             }
           }, 8000, { owner: this });
@@ -1950,11 +1654,9 @@ export class GameFlowManager {
       }
     });
 
-    // First capture: hint next target
     const onFirstCapture = () => {
-      // During onboarding the Director owns the post-capture flow (`captured` →
-      // `solo_intro` → `solo_practice` beats teach "find another"). Skip this
-      // duplicate "Press T" line then. (Guidance cleanup, Phase 2.)
+      // During onboarding the Director owns the post-capture flow (`captured` → `solo_intro` → `solo_practice` beats teach
+      // "find another"): skip this duplicate "Press T" line then.
       if (this._onboardingRunning) return;
       if (!this._firstTimeComms.has('first_capture')) {
         this._firstTimeComms.add('first_capture');
@@ -1969,25 +1671,16 @@ export class GameFlowManager {
     eventBus.on(Events.LASSO_CAPTURED, onFirstCapture);
   }
 
-  // ==========================================================================
-  // GAME RESET
-  // ==========================================================================
-
   /**
-   * Place the player's starting orbit so its ground track passes over the home
-   * region of the selected menu language (e.g. Japanese → over Japan, Thai →
-   * over Thailand). Inclination is set from the language's `incDeg` (derived
-   * from the nation's real launch latitude; default 51.6° ISS band), then RAAN
-   * + true anomaly are aimed at the anchor sub-point via subPointToOrbit(). The
-   * anchor latitude is ≤ incDeg by design (see Languages.js) so the pass is not
-   * clamped. Setting inclination before MISSION_START means the welcome debris
-   * field (spawned in the player's own orbit) inherits the chosen tilt. Called
-   * on New Game after resetGame() (which zeroes trueAnomaly).
+   * Place the player's starting orbit so its ground track passes over the home region of the selected menu language
+   * (e.g. Japanese → over Japan). Inclination comes from the language's `incDeg` (the nation's real launch latitude;
+   * default 51.6° ISS band), then RAAN + true anomaly are aimed at the anchor sub-point via subPointToOrbit(). The anchor
+   * latitude is ≤ incDeg by design (see Languages.js) so the pass is not clamped. Setting inclination before MISSION_START
+   * means the welcome debris field (spawned in the player's own orbit) inherits the chosen tilt. Called on New Game after
+   * resetGame() (which zeroes trueAnomaly).
    */
   /**
-   * @private Detect the OS/browser "reduce motion" accessibility preference.
-   * Guarded for the Node test runner (no window/matchMedia). Used to skip the
-   * menu→sim intro camera zoom for users who opt out of motion.
+   * @private OS "reduce motion" preference (false without window/matchMedia, i.e. in Node tests). Skips the intro zoom.
    * @returns {boolean}
    */
   _prefersReducedMotion() {
@@ -2001,32 +1694,22 @@ export class GameFlowManager {
   }
 
   /**
-   * Apply the per-language starting orbit (ground track over the player's home
-   * region). Called on ALL restart paths — New Game (MENU_START/FAST_START),
-   * Continue (MENU_CONTINUE), and game-over Continue/Retry — so language choice
-   * always determines the start orbit regardless of whether a save exists.
+   * Apply the per-language starting orbit (ground track over the player's home region). Called on ALL restart
+   * paths (New Game, Continue, game-over Continue/Retry).
    *
-   * Two staging tweaks make the opening pass read well:
-   *  • ABEAM (START_ABEAM_DEG): the track is re-aimed at a point offset
-   *    perpendicular to the pass, so the home city slides by ~200 km off the
-   *    STARBOARD side instead of vanishing under the nose — noticeable out the
-   *    "right window", never shoved in the player's face, and visible for the
-   *    whole pass.
-   *  • LEAD (START_TRACK_LEAD_DEG): the spawn is backed off along-track so
-   *    the city first appears AHEAD and then drifts past abeam.
+   * Two staging tweaks:
+   *  • ABEAM (START_ABEAM_DEG): the track is re-aimed at a point offset perpendicular to the pass, so the home city
+   *    slides ~200 km off the STARBOARD side instead of vanishing under the nose.
+   *  • LEAD (START_TRACK_LEAD_DEG): the spawn is backed off along-track so the city first appears AHEAD, then drifts
+   *    past abeam.
    *
-   * Branch selection: Languages.descending picks the southbound (descending)
-   * solution of subPointToOrbit when the interesting corridor lies on that
-   * half of the orbit (e.g. English over the Eastern Seaboard).
+   * Languages.descending picks the southbound (descending) solution of subPointToOrbit (e.g. English over the
+   * Eastern Seaboard).
    *
-   * Register item 50: the same orbit also re-derives the FIELD regime
-   * (regimeFromStartOrbit → DebrisField.reseatFieldRegime) — a mid-menu
-   * language switch otherwise leaves the assembled field on the boot
-   * language's plane while the player starts on the live one. Orbits only
-   * (sma/ecc preserved; cast/mesh slots are construction-bound); an
-   * unchanged language is a value-compared no-op, so non-switch paths are
-   * untouched. Runs after the player writes so the welcome cluster's lazy
-   * first-frame spawn (player-frame copy) lands on the re-seated plane.
+   * The same orbit also re-derives the FIELD regime (regimeFromStartOrbit → DebrisField.reseatFieldRegime), so a
+   * mid-menu language switch doesn't leave the field on the boot language's plane. Orbits only (sma/ecc preserved);
+   * an unchanged language is a value-compared no-op. Runs after the player writes so the welcome cluster's lazy
+   * first-frame spawn lands on the re-seated plane.
    */
   _applyStartLocation() {
     const { player, debrisField } = this._refs;
@@ -2038,34 +1721,24 @@ export class GameFlowManager {
     player.orbit.inclination = orbit.inclination;
     player.orbit.raan = orbit.raan;
     player.orbit.trueAnomaly = orbit.trueAnomaly;
-    // subPointToOrbit() assumes a circular orbit with argPerigee=0
-    // (OrbitalMechanics.js:229). Neither field is reset elsewhere on restart,
-    // so a played (thrusted) session could mis-aim the anchor pass. Reset here
-    // to keep this the one authoritative "starting orbit" function.
+    // subPointToOrbit() (OrbitalMechanics.js) assumes a circular orbit with argPerigee=0; nothing else resets them
+    // on restart, so a thrusted session would mis-aim the anchor pass.
     player.orbit.eccentricity = 0.0001;
     player.orbit.argPerigee = 0;
 
-    // The field shares the player's plane from the SAME orbit computation
-    // (one read — no second computeStartOrbit call). The typeof guard keeps
-    // legacy mocks (no reseatFieldRegime) byte-identical.
+    // The field shares the player's plane from the SAME orbit computation. The typeof guard keeps legacy mocks
+    // (no reseatFieldRegime) working.
     if (debrisField && typeof debrisField.reseatFieldRegime === 'function') {
       debrisField.reseatFieldRegime(regimeFromStartOrbit(orbit));
     }
   }
 
   /**
-   * Stage the opening light for a FRESH game start (the initial Mission-1
-   * spawn). Called ONLY from the new-game menu paths (MENU_START /
-   * MENU_FAST_START — the paths that delete the save), immediately after
-   * _applyStartLocation, so the freshly-written start orbit IS the spawn
-   * point. Deliberately NOT called on Continue (saved games keep the pure
-   * real-clock sky), game-over Retry/Continue, or any mid-session path —
-   * and the sun is never re-seeded mid-session, so the staged offset simply
-   * becomes the new anchor the stylized day/night cycle runs forward from
-   * (SunLight.stageOpeningLight — the sun is not frozen).
-   *
-   * The typeof guard keeps legacy mocks/tests (refs without sunLight)
-   * byte-identical, matching the reseatFieldRegime convention above.
+   * Stage the opening light for a FRESH game start. Called ONLY from the new-game menu paths (MENU_START /
+   * MENU_FAST_START), right after _applyStartLocation, so the start orbit IS the spawn point. Deliberately NOT called
+   * on Continue (saved games keep the real-clock sky), game-over Retry/Continue, or any mid-session path; the staged
+   * offset becomes the anchor the stylized day/night cycle runs forward from (SunLight.stageOpeningLight).
+   * The typeof guard keeps legacy mocks (refs without sunLight) working.
    */
   _stageOpeningLight() {
     const { player, sunLight } = this._refs;
@@ -2079,20 +1752,14 @@ export class GameFlowManager {
    * Reset game state for new attempt.
    *
    * @param {object} [opts]
-   * @param {boolean} [opts.keepOpeningDance=false] — the caller is a NEW-GAME
-   *   start that binds the sim ship to a live opening dance immediately after
-   *   this returns (MENU_START / MENU_FAST_START), so the finished pose must
-   *   NOT be applied here. Every other caller — CONTINUE, GAMEOVER retry,
-   *   GAMEOVER menu — leaves this false and lands on `openingDance.endState()`,
-   *   which also stops any dance still in flight. Inferring this from
-   *   `openingDance.isActive()` is what it replaces: that could not tell a
-   *   new-game start from a retry that happened to land mid-unfold, and the
-   *   retry then kept a packed ship on screen.
+   * @param {boolean} [opts.keepOpeningDance=false] — true only for a NEW-GAME start (MENU_START / MENU_FAST_START),
+   *   which binds the sim ship to a live opening dance right after this returns, so the finished pose must NOT be
+   *   applied here. Every other caller lands on `openingDance.endState()`, which also stops a dance in flight.
    */
   resetGame(opts) {
     const keepOpeningDance = !!(opts && opts.keepOpeningDance);
-    // Start lines (owner 2026-10-28): a new game says "first debris field" even when the field map is off; CONTINUE
-    // posts them itself after the load (the saved field is known only then).
+    // owner 2026-10-28: a new game says "first debris field" even when the field map is off; CONTINUE posts the start
+    // lines itself after the load (the saved field is known only then).
     const newGame = !!(opts && opts.newGame);
     const deferStartLine = !!(opts && opts.deferStartLine);
     const armNow = !!(opts && opts.armNow);
@@ -2101,59 +1768,45 @@ export class GameFlowManager {
       player, armManager,
       cameraSystem, resourceSystem,
     } = this._refs;
-    // targetSelector: imported singleton
-    // debrisWireframe: self-manages via GAME_RESET listener
-    // kesslerSystem: self-manages via GAME_RESET listener
+    // targetSelector, debrisWireframe, kesslerSystem: singletons / self-reset via GAME_RESET
 
-    // slice 5 (5b): a new game or a reset: no big piece is pending any more (cleared BEFORE GAME_RESET and the arms' reset, so a rack
-    // that drops its piece says nothing, and the restored-piece retry list is forgotten)
+    // No big piece is pending any more. Cleared BEFORE GAME_RESET and the arms' reset, so a rack that drops its
+    // piece says nothing and the restored-piece retry list is forgotten.
     bigPieces.clear();
     this._unplacedBig = [];
-    this._meltFinals = [];                  // lane 5e: no melted piece waits to be let go, no save is owed
-    this._goneBags = [];                    // let-go-bag: no let-go bag is left to take off the field
+    this._meltFinals = [];                  // no melted piece waits to be let go, no save is owed
+    this._goneBags = [];                    // no let-go bag is left to take off the field
     this._meltSaveOwed = false;
 
-    // Notify self-resetting systems (CommsSystem, KesslerSystem,
-    // TutorialSystem, TrawlManager listen for this)
+    // Notify self-resetting systems (CommsSystem, KesslerSystem, TutorialSystem, TrawlManager)
     eventBus.emit(Events.GAME_RESET);
 
     gameState.reset();
     scoringSystem.reset();
-
-    // Reset player resources (delegated to ResourceSystem)
     resourceSystem.reset();
 
-    // Reset orbit to starting position
     player.orbit.semiMajorAxis = Constants.EARTH_RADIUS + Constants.START_ALTITUDE;
     player.orbit.trueAnomaly = 0;
 
-    // Reset ROSA furl state so a retry never inherits a furled array.
+    // A retry never inherits a furled array.
     if (player.resetRosaFurlState) player.resetRosaFurlState();
-    // Owner amendment 2026-09-09 (OVERRIDE radiator sweep): the fold is now
-    // reachable in play, so a run can end with the flower FOLDED (lock armed,
-    // FEEP inhibited, ROSA held centred). The retry hand-off
-    // snaps to the STOW bud, lock + hold cleared
-    // (one THERMAL_FLOWER_RELEASED if the lock was armed). No-op unfitted.
+    // owner 2026-09-09: a run can end with the flower FOLDED (lock armed, FEEP inhibited, ROSA held centred); retry
+    // snaps it to the STOW bud, lock + hold cleared (one THERMAL_FLOWER_RELEASED if armed). No-op unfitted.
     if (player.snapFlowerToStow) player.snapFlowerToStow();
 
-    // Reset target selection (imported singleton — emits TARGET_CLEARED → DebrisWireframe self-clears)
-    // silent: reset clear, not a real target loss — suppresses the audio earcon.
+    // silent: a reset clear, not a real target loss (no audio earcon). Emits TARGET_CLEARED → DebrisWireframe self-clears.
     targetSelector.setTarget(null, { silent: true });
 
-    // Reset V3 arm manager
     if (armManager) armManager.reset();
-    // turn-gas D3: nothing of the reel push (gathered Δv, the turn it kicked) survives into the next run
+    // Nothing of the reel push (gathered Δv, the turn it kicked) survives into the next run.
     if (player && player.clearReelPushState) player.clearReelPushState();
-    // Reaction wheels: the run's kit goes with its purchases (a continued save's upgrade replay puts it back) and the wheels stand empty
+    // The run's wheel kit goes with its purchases (a continued save's upgrade replay puts it back); wheels stand empty.
     if (player && player.resetWheelState) player.resetWheelState();
 
-    // Opening dance (2026-09-16): every path that does NOT run the dance lands
-    // on the open pose — CONTINUE, GAMEOVER retry, reduced motion, flag off,
-    // the ?shot harness — so a ship is never seen packed outside a running
-    // dance. AFTER armManager.reset() (which parks the daughters at α 0) so the
-    // strut latch survives. The ONE exception is the new-game start, which
-    // says so explicitly (`keepOpeningDance`) and binds the sim ship to the
-    // live progress in the same tick.
+    // Every path that does NOT run the opening dance (CONTINUE, GAMEOVER retry, reduced motion, flag off, ?shot
+    // harness) lands on the open pose, so a packed ship is never seen outside a running dance. AFTER
+    // armManager.reset() (which parks the daughters at α 0) so the strut latch survives. The new-game start is the
+    // one exception (`keepOpeningDance`): it binds the sim ship to the live progress in the same tick.
     if (player && !keepOpeningDance) {
       openingDance.endState(player, { newGame, deferStartLine, armNow, atStart });
     }
@@ -2161,51 +1814,42 @@ export class GameFlowManager {
     this.approachTarget = null;
     this.approachComplete = false;
 
-    // Reset camera to default chase view
     if (cameraSystem) {
       cameraSystem.setView(CameraViews.CHASE);
     }
 
-    // Reset power distribution to defaults
     powerDistribution.reset();
 
-    // Reset elevator contract mass (Phase 5)
     const { shopScreen } = this._refs;
     if (shopScreen) shopScreen.setContractMass(0);
     this._elevatorWinTriggered = false;
-    this._winTriggered = false;  // S1 Fix L2: reset guard on new game
+    this._winTriggered = false;
 
-    // Reset first-experience guidance
     this._firstOrbitalView = true;
     this._suppressIntroZoom = false;
     this._firstTimeComms = new Set();
 
-    // Clear score-group activation timer
     if (this._scoreGroupTimer !== null) {
       timerManager.clear(this._scoreGroupTimer);
       this._scoreGroupTimer = null;
     }
-    // PR 5 / P2.8: also kill the shop-trigger debounce and any other
-    // pending timers owned by this GameFlowManager. Prevents a stale
-    // "return to depot" auto-transition firing after a Game Over reset.
+    // Also kill the shop-trigger debounce, so no stale "return to depot" transition fires after a Game Over reset.
     if (this._shopTimeoutId !== null) {
       timerManager.clear(this._shopTimeoutId);
       this._shopTimeoutId = null;
     }
     // An open depot invitation belongs to the game that just ended.
     this._closeDepotInvitation('reset');
-    this._setResupplyStop(false);         // u1-resupply-stop D1: a new run starts mid-mission
-    this._pendingMissionStart = null;     // c2-fifth-catch D2: so does a held mission start
-    this._trip.abort();                   // trip-melt D9: and a trip (no mission start, the plume and the hold released)
-    this._deferredBoundary = null;        // trip-melt-2 D12a: a boundary deferred by that trip dies with it
-    this._strandedS = 0;                  // t1-stranded: a new run starts with no stranded spell
-    this._callOffered = false;            // lane 3c: nor an offered call
+    this._setResupplyStop(false);         // a new run starts mid-mission
+    this._pendingMissionStart = null;     // ... with no held mission start
+    this._trip.abort();                   // ... and no trip (no mission start, the plume and the hold released)
+    this._deferredBoundary = null;        // a boundary deferred by that trip dies with it
+    this._strandedS = 0;                  // no stranded spell
+    this._callOffered = false;            // nor an offered call
     timerManager.clearByOwner(this);
   }
 
-  // ==========================================================================
-  // UPGRADES
-  // ==========================================================================
+  // --- upgrades ---
 
   /** Apply purchased upgrades to game systems */
   applyUpgrades() {
@@ -2213,14 +1857,10 @@ export class GameFlowManager {
   }
 
   /**
-   * The elevator-contract GAME_WIN (Phase 5 / Phase E), in ONE place since
-   * Wave 5 Session K: fired from SHOP_DEPLOY after the full-screen shop (the
-   * shipped path — SHOP → WIN is invalid, so it waits for ORBITAL_VIEW) and
-   * directly from CONTRACT_COMPLETE when the contribution lands in gameplay
-   * (the CARGO pane, one shop). The GAME_WIN handler's `_winTriggered` guard
-   * keeps the WIN single whichever path fires first. Tags the win so the
-   * GameOverScreen shows the anchor-run (elevator) variant and the endgame
-   * codex unlocks gate correctly.
+   * The elevator-contract GAME_WIN, in ONE place: fired from SHOP_DEPLOY after the full-screen shop (SHOP → WIN is
+   * invalid, so it waits for ORBITAL_VIEW) and directly from CONTRACT_COMPLETE when the contribution lands in
+   * gameplay (the CARGO pane). The GAME_WIN handler's `_winTriggered` guard keeps the WIN single whichever path
+   * fires first. Tags the win so the GameOverScreen shows the elevator variant and the endgame codex unlocks gate.
    * @private
    */
   _fireElevatorWin() {
@@ -2235,14 +1875,12 @@ export class GameFlowManager {
   }
 
   /**
-   * Apply a specific upgrade effect — routes to the correct system(s) via the
-   * exported EFFECT_ROUTES map (F4). Every catalog effect is guaranteed a route
-   * by test-shop-effects.js, so a shop item can no longer be silently inert.
+   * Apply a specific upgrade effect — routes to the correct system(s) via the exported EFFECT_ROUTES map. Every
+   * catalog effect is guaranteed a route by test-shop-effects.js, so a shop item can't be silently inert.
    * @param {object} data — { effect, value, id, ... } (the catalog row)
-   * @param {{ restore?: boolean }} [opts] — restore=true is the MENU_CONTINUE
-   *   load path, where ResourceSystem.restore() has already set absolute maxes;
-   *   the RESOURCE_SYSTEM route is then skipped for RESOURCE_RESTORED_EFFECTS to
-   *   avoid double-counting cumulative bumps (e.g. batteryMax). Purchase and
+   * @param {{ restore?: boolean }} [opts] — restore=true is the MENU_CONTINUE load path, where
+   *   ResourceSystem.restore() has already set absolute maxes; the RESOURCE_SYSTEM route is then skipped for
+   *   RESOURCE_RESTORED_EFFECTS to avoid double-counting cumulative bumps (e.g. batteryMax). Purchase and
    *   GAMEOVER_CONTINUE (from a reset base) pass no opts → full route.
    */
   applyUpgradeEffect(data, opts = {}) {
@@ -2286,12 +1924,9 @@ export class GameFlowManager {
       }
     }
 
-    // F6: UPGRADE_APPLIED had ZERO emitters, so codex entries keyed to it
-    // (tether_materials, trackable_vs_dark, plus the mpd_burst fallback) were
-    // permanently locked. Emit it here — the single point every applied upgrade
-    // flows through (purchase, restore, gameover-continue) — so those unlock and
-    // legacy saves repair on load. Codex unlock is idempotent, so re-emitting on
-    // restore is harmless. Payload carries the id/effect the matchers key on.
+    // UPGRADE_APPLIED is emitted here, the single point every applied upgrade flows through (purchase, restore,
+    // gameover-continue), so codex entries keyed to it (tether_materials, trackable_vs_dark, mpd_burst fallback)
+    // unlock and legacy saves repair on load. Codex unlock is idempotent, so re-emitting on restore is harmless.
     eventBus.emit(Events.UPGRADE_APPLIED, {
       id: data.id,
       effect: data.effect,
@@ -2299,40 +1934,36 @@ export class GameFlowManager {
     });
   }
 
-  // ==========================================================================
-  // SAVE / LOAD
-  // ==========================================================================
+  // --- save / load ---
 
   /**
    * Save current game state to localStorage.
-   * @param {{ gameOver?: boolean }} [opts] - t1-stranded D4: `gameOver: true` ONLY from the GAME_OVER entry; the
-   *   save then carries `gameOver: true` so menu CONTINUE applies the game-over CONTINUE rule. Every other call
-   *   writes no flag.
+   * @param {{ gameOver?: boolean }} [opts] - `gameOver: true` ONLY from the GAME_OVER entry; the save then carries
+   *   `gameOver: true` so menu CONTINUE applies the game-over CONTINUE rule. Every other call writes no flag.
    */
   saveGame(opts) {
-    // Nets step 3 slice 2b: a save written while she is flying to a field would hold the gas billed so far and the field she
-    // LEFT (the trip is not saved as a trip). So none is written mid-flight: a reload then finds the save of the mission
-    // boundary - at the field she left, with the gas she had before the trip - and the arrival writes the next one.
-    // (A game-over save is always written.)
-    // Lane 3c: nor while a called satellite is on its way (the 1,000 credits are paid in memory, the berth is not there yet): a reload
-    // finds the save from before the call, with the credits she had, and the stuck spell offers the call again.
+    // No save mid-flight to a field: it would hold the gas billed so far and the field she LEFT (a trip is not saved as
+    // a trip). A reload then finds the mission-boundary save (field she left, gas before the trip); the arrival writes
+    // the next. A game-over save is always written.
+    // Nor while a called satellite is on its way (the 1,000 credits are paid in memory, the berth is not there yet): a
+    // reload finds the save from before the call, and the stuck spell offers the call again.
     if (this._trip && (this._trip.isCalling() || (this._trip.isBurning() && this._trip.field)) && !(opts && opts.gameOver === true)) return;
     const { shopScreen, resourceSystem } = this._refs;
     const scoring = scoringSystem.serialize();
     const resources = resourceSystem.serialize();
-    // s1-gas-survives-load D3: a game-over save carries no gas levels — CONTINUE after a game over is a fresh
-    // attempt (like retry), so the load falls back to the start fill. Every other save keeps the levels.
+    // A game-over save carries no gas levels: CONTINUE after a game over is a fresh attempt (like retry), so the load
+    // falls back to the start fill. Every other save keeps the levels.
     if (gameState.currentState === GameStates.GAME_OVER) {
       delete resources.xenon;
       delete resources.coldGas;
-      delete resources.indiumStoreKg;   // lane 3f: a fresh attempt starts the indium store empty too
-      delete resources.dragSails;       // slice 5 (5a): ... and with no drag sails
+      delete resources.indiumStoreKg;   // a fresh attempt starts the indium store empty too
+      delete resources.dragSails;       // ... and with no drag sails
     }
     const upgrades = shopScreen.getSerializableUpgrades();
 
     const saveData = {
       gameOver: !!(opts && opts.gameOver === true),
-      // u1-resupply-stop F2: the stop survives a reload inside the game-over shop (see MENU_CONTINUE).
+      // The stop survives a reload inside the game-over shop (see MENU_CONTINUE).
       resupplyStop: (opts && typeof opts.resupplyStop === 'boolean') ? opts.resupplyStop : this._atResupplyStop === true,
       credits: scoring.credits,
       totalScore: scoring.totalScore,
@@ -2342,13 +1973,11 @@ export class GameFlowManager {
       upgrades: upgrades,
       resourceMaxes: resources,
       power: powerDistribution.serialize(),
-      // Item 100: the fleet launch-speed dial setting (restored after the
-      // upgrade replay so the equipped spring tier clamps it).
+      // Fleet launch-speed dial (restored after the upgrade replay so the equipped spring tier clamps it).
       launchSpeed: this._refs.armManager?.getFleetLaunchSpeed?.(),
       contractMassKg: shopScreen ? shopScreen.getContractMass() : 0,
-      // Preserve profile-permanent ceremony flags across full saves. Without
-      // this, saveGame() would reset the whitelist to defaults (false) and drop
-      // flags like FIRST_NET_DEPLOY / FIRST_DEPOT_VISITED set via setCeremonyFlag.
+      // Preserve profile-permanent ceremony flags, else the whitelist resets to defaults (false) and drops flags
+      // like FIRST_NET_DEPLOY / FIRST_DEPOT_VISITED set via setCeremonyFlag.
       ceremonyFlags: persistenceManager.peek()?.ceremonyFlags || {},
       stats: {
         totalCaptures: scoring.totalCaptures,
@@ -2360,34 +1989,33 @@ export class GameFlowManager {
       },
     };
 
-    // Nets step 3 lane 3f (DECISIONS §34 row 10): each daughter's ion fuel and cold gas ride in the save, so a reload keeps the fuel she
-    // had spent. A game-over save carries none (CONTINUE is a fresh attempt: every tank full, as the xenon and cold gas levels above).
+    // DECISIONS §34 row 10: each daughter's ion fuel and cold gas ride in the save, so a reload keeps the fuel she had
+    // spent. A game-over save carries none (CONTINUE is a fresh attempt: every tank full).
     if (gameState.currentState !== GameStates.GAME_OVER && this._refs.armManager && typeof this._refs.armManager.getSupplyState === 'function') {
       saveData.daughters = this._refs.armManager.getSupplyState();
     }
 
-    // Reaction wheels: the stored spin (N·m·s, [x, y, z]) rides in the save when the kit is aboard; a game-over save carries none
-    // (CONTINUE is a fresh attempt). No kit: no key, the save is what it was.
+    // Reaction wheels: the stored spin (N·m·s, [x, y, z]) rides in the save when the kit is aboard; a game-over save
+    // carries none. No kit: no key.
     if (gameState.currentState !== GameStates.GAME_OVER && this._refs.player && typeof this._refs.player.getWheelState === 'function') {
       const wheelH = this._refs.player.getWheelState();
       if (wheelH) saveData.wheelH = wheelH;
     }
 
-    // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): the field she is at, which pieces of each field are left, and the days the
-    // trips have added. `serialize()` answers null with the flag off, so a flag-off save is exactly what it was.
+    // FIELDS_BY_HEIGHT: the field she is at, which pieces of each field are left, and the days the trips have added.
+    // `serialize()` answers null with the flag off.
     const fieldsSave = this._refs.fieldRegistry ? this._refs.fieldRegistry.serialize() : null;
     if (fieldsSave) {
       saveData.fields = fieldsSave;
       if (gameState.shipDays > 0) saveData.shipDays = gameState.shipDays;
     }
 
-    // Nets step 3 slice 5 (lane 5b, P5): the big pieces still aboard (counted at the catch, paid when disposed of), each with its fate and
-    // its holder, so a reload puts them back on her. A game-over save carries none (CONTINUE is a fresh attempt: nothing pending).
+    // The big pieces still aboard (counted at the catch, paid when disposed of), each with its fate and holder, so a
+    // reload puts them back on her. A game-over save carries none.
     if (gameState.currentState !== GameStates.GAME_OVER) {
       const pending = bigPieces.serialize();
       if (pending.length) saveData.bigPieces = pending;
-      // lane 5e (E7): the hold (orbit metal the furnaces made, and the small catches' metal, which a reload used to lose). Written only when
-      // it holds something, so a save with an empty hold is what it was.
+      // The hold (orbit metal the furnaces made, and the small catches' metal). Written only when it holds something.
       const cs = this._refs.cargoSystem;
       const hold = cs && typeof cs.serialize === 'function' ? cs.serialize() : null;
       if (hold && hold.entries.length) saveData.cargoHold = { entries: hold.entries };
@@ -2399,34 +2027,21 @@ export class GameFlowManager {
     persistenceManager.save(saveData);
   }
 
-  // ==========================================================================
-  // DEPOT AND CHAPTERS (Wave 5 Session E — docs/ladder/08-workbench.md §5 D3)
-  // ==========================================================================
+  // --- depot and chapters (docs/ladder/08-workbench.md §5 D3) ---
 
   /**
-   * Wave 5 Session F (D4): is a depot STOP pending — the boundary dwell timer
-   * (`_shopTimeoutId`: the card's COMPLETE_CARD_MS with the ladder on, the
-   * shipped silent 2500 ms with it off) scheduled and not yet fired? The
-   * mission-keyed onsets (MissionCoach chapters, the ISS / Starlink bosses) ARM
-   * on MISSION_START — which now fires on the boundary catch, in this same
-   * handler, BEFORE `_onMissionBoundary` schedules the stop — and hold while
-   * this is true, so a boss never starts under the depot overlay; they fire on
-   * the first gameplay frame after the SHOP closes (the timer nulls itself when
-   * it fires; DEPLOY or the Esc exit both resume gameplay). An invitation
-   * (every chapter with the ladder on — owner 2026-10-05, DECISIONS §14 —
-   * unless MISSIONS.FORCED_DEPOT_STOP is turned back on) schedules nothing → false →
-   * the onset fires at once, invitation open or not. Wired to the three
-   * consumers as a predicate by main.js (`_bossLifecycle.MissionOnset` is the
-   * shared rule). Read-only; nothing else keys on it.
+   * Is a depot STOP pending: the boundary dwell timer (`_shopTimeoutId`: the card's COMPLETE_CARD_MS with the ladder
+   * on, a silent 2500 ms with it off) scheduled and not yet fired? The mission-keyed onsets (MissionCoach chapters,
+   * the ISS / Starlink bosses) ARM on MISSION_START, which fires on the boundary catch in the same handler BEFORE
+   * `_onMissionBoundary` schedules the stop, and hold while this is true, so a boss never starts under the depot
+   * overlay; they fire on the first gameplay frame after the SHOP closes (the timer nulls itself when it fires).
+   * An invitation (every chapter with the ladder on — owner 2026-10-05, DECISIONS §14 — unless
+   * MISSIONS.FORCED_DEPOT_STOP is on) schedules nothing → false → the onset fires at once. Wired to the three
+   * consumers as a predicate by main.js (`_bossLifecycle.MissionOnset` is the shared rule). Read-only.
    *
-   * Wave 5 Session K (GFM lift, site 3 of 4): with the ladder on the stop is
-   * no longer a GameState — the break happens IN gameplay (the workbench
-   * floor, the REFIT drawer open) — so the hold ALSO covers the WORKBENCH
-   * BREAK: true from `_stopAtWorkbench` (WORKBENCH_STOP) until the hub's
-   * WORKBENCH_RESUME (both drawers closed) or any exit from gameplay. Chapter
-   * beats start only after the drawer closes, exactly as they started only
-   * after the SHOP closed. Ladder off `_workbenchBreak` is never set: the
-   * predicate reads the dwell timer alone, as shipped.
+   * With the ladder on the stop is not a GameState (the break happens IN gameplay, the REFIT drawer open), so the
+   * hold ALSO covers the WORKBENCH BREAK: true from `_stopAtWorkbench` (WORKBENCH_STOP) until the hub's
+   * WORKBENCH_RESUME (both drawers closed) or any exit from gameplay. Ladder off, `_workbenchBreak` is never set.
    * @returns {boolean}
    */
   isDepotStopPending() {
@@ -2439,44 +2054,36 @@ export class GameFlowManager {
   }
 
   /**
-   * c2-fifth-catch D2 — what a credited catch does with the mission start.
+   * What a credited catch does with the mission start.
    *
-   * The credit tick pays, narrates and (on a boundary) invites; it does not
-   * also start the next mission while the catch is still at the nose — that
-   * piled the mission's pieces, its lines and a collision-avoidance burn on
-   * top of the catch that was still being carried away
-   * (docs/research/2026-10-capture-repros.md, Repro C). So a PARKED credit
-   * (the catch sits at the nose) that lands on a mission boundary with the
-   * depot-invitation branch live (the same test `_onMissionBoundary` applies)
-   * keeps `start` — the continuation that fires the mission transition — until
-   * the catch is off the nose (`_releaseMissionStartFor`) or the cap runs out
-   * (`update`). Everything else — a daughter-fed catch, a non-boundary clear,
-   * the forced stop, the ladder off — runs `start` at once, as it always did.
-   * A credit arriving during a hold drops the old hold first and then goes
-   * through the same decision itself (ScoringSystem's dedupe means one start).
+   * The credit tick pays, narrates and (on a boundary) invites; it does not also start the next mission while the
+   * catch is still at the nose (that piled the mission's pieces, lines and a collision-avoidance burn on top of it;
+   * archive/research/2026-10-capture-repros.md, Repro C). So a PARKED credit (the catch sits at the nose) that lands
+   * on a mission boundary with the depot-invitation branch live (the same test `_onMissionBoundary` applies) keeps
+   * `start` until the catch is off the nose (`_releaseMissionStartFor`) or the cap runs out (`update`). Everything
+   * else (a daughter-fed catch, a non-boundary clear, the forced stop, the ladder off) runs `start` at once.
+   * A credit arriving during a hold drops the old hold first, then decides itself (ScoringSystem's dedupe means one
+   * start).
    * @param {{debrisId?: number|string, parked?: boolean}} data - the CATCH_PROCESSED payload
    * @param {() => void} start - fires the mission transition (scoringSystem.checkMissionTransition)
    * @private
    */
   _startMissionAfterCredit(data, start) {
-    // trip-melt G1: a catch credited while the trip waits for its daughters or burns (a daughter home with a catch, a
-    // net that was already in flight) starts nothing: the burn's end runs the scorer (`start` of the trip), which
-    // starts whichever mission is then due.
+    // A catch credited while the trip waits for its daughters or burns starts nothing: the burn's end runs the
+    // scorer (`start` of the trip), which starts whichever mission is then due.
     if (this._trip.isActive()) return;
     this._pendingMissionStart = null;
     const M = Constants.MISSIONS;
     const debrisCount = gameState.debrisCleared;
     const { missionsCompleted, perMission, debrisUntilShop } = getMissionProgress(debrisCount);
     const atBoundary = debrisCount > 0 && debrisUntilShop === perMission;
-    // trip-melt D2: at a boundary the next mission starts when the burn to it ends, not now. `go` is the continuation
-    // a held start releases into as well (every release path ends in `p.start()`), so the hold and the trip compose:
-    // hold until the catch is off the nose, then burn, then start.
+    // At a boundary the next mission starts when the burn to it ends, not now. `go` is also the continuation a held
+    // start releases into (every release path ends in `p.start()`): hold until the catch is off the nose, burn, start.
     const go = atBoundary ? () => this._beginTripThen(start) : start;
-    // Mirror of _onMissionBoundary's invitation test — keep the two in step
-    // (test-FifthCatchCalm pins that they agree).
+    // Mirror of _onMissionBoundary's invitation test; keep the two in step (test-FifthCatchCalm pins that they agree).
     const invites = this._ladderOn() &&
       (!M.FORCED_DEPOT_STOP || missionsCompleted > M.FORCED_DEPOT_CHAPTERS);
-    // no-melt: a daughter's rack credit (source 'rack') is not a catch sitting at the nose: nothing to wait for.
+    // A daughter's rack credit (source 'rack') is not a catch sitting at the nose: nothing to wait for.
     if (data && data.parked && data.source !== 'rack' && data.debrisId != null && atBoundary && invites && gameState.isGameplay()) {
       this._pendingMissionStart = { debrisId: data.debrisId, elapsedS: 0, start: go };
       return;
@@ -2485,9 +2092,9 @@ export class GameFlowManager {
   }
 
   /**
-   * trip-melt D2: begin the transfer trip, with `start` (the mission transition) as what runs when the burn ends.
+   * Begin the transfer trip, with `start` (the mission transition) as what runs when the burn ends.
    * The trip needs a ship and gameplay; without them (or with FEATURE_FLAGS.TRANSFER_TRIP off) the mission starts
-   * at once, as it did before the trip existed.
+   * at once.
    * @param {() => void} start
    * @private
    */
@@ -2495,18 +2102,19 @@ export class GameFlowManager {
     const r = this._refs;
     if (!Constants.isFeatureEnabled('TRANSFER_TRIP') || !r || !r.player || !gameState.isGameplay()) { start(); return; }
     this._syncTripDeps();
-    // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): with the flag on the boundary flies her to another field: the one the player picks on
-    // the "where next" list (lane 2b-2), or with no floor 4 to ask on the nearest one she can reach (`FieldRegistry.defaultNext`);
-    // none = she stays and the next mission starts at once. The arrival adds the profile's days to the ship's clock, starts the
+    // FIELDS_BY_HEIGHT on: the boundary flies her to another field: the one the player picks on the "where next"
+    // list, or with no floor 4 to ask on the nearest she can reach (`FieldRegistry.defaultNext`); none = she stays
+    // and the next mission starts at once. The arrival adds the profile's days to the ship's clock, starts the
     // mission (MISSION_START lays the field out) and saves.
     const reg = r.fieldRegistry;
     if (reg && reg.isOn()) {
       if (this._trip.isActive()) return;           // a trip is already on its way (or she is choosing): its arrival starts whichever mission is due
-      // Lane 2b-2: with floor 4 there to ask on, the player picks the field (or Stay) on the LEO map; the trip waits in phase `choose`.
+      // With floor 4 there to ask on, the player picks the field (or Stay) on the LEO map; the trip waits in phase `choose`.
       if (this._whereNextOn) { this._openWhereNext(start); return; }
-      // Lane 3c (C4b, owed from the 3a review): a berthed save loaded with no list to ask on (`?ladder=0`) lets go of the satellite first, so
-      // buying closes; the nearest field is read while she is still berthed (every field counts, from the satellite) and flown to with the
-      // berth gone (a trip that cannot go would otherwise open a choice nobody can answer). With nowhere to fly she goes back to her field.
+      // A berthed save loaded with no list to ask on (`?ladder=0`) lets go of the satellite first, so buying closes;
+      // the nearest field is read while she is still berthed (every field counts, from the satellite) and flown to
+      // with the berth gone (a trip that cannot go would otherwise open a choice nobody can answer). With nowhere to
+      // fly she goes back to her field.
       const berth = typeof reg.berthedSatellite === 'function' ? reg.berthedSatellite() : null;
       const field = reg.defaultNext();
       if (berth) { this._leaveBerth(berth); this._clearBerth(); }
@@ -2516,8 +2124,8 @@ export class GameFlowManager {
       }
       return;
     }
-    // trip-melt-2 D12a: a credit that reached the next boundary DURING the trip ran no boundary then (see the credit
-    // handler); it runs now, once the burn has ended and the mission it started has fired MISSION_START.
+    // A credit that reached the next boundary DURING the trip ran no boundary then (see the credit handler); it runs
+    // now, once the burn has ended and the mission it started has fired MISSION_START.
     this._trip.begin(() => {
       start();
       this._runDeferredBoundary();
@@ -2525,8 +2133,8 @@ export class GameFlowManager {
   }
 
   /**
-   * @private Nets step 3 slice 2b: begin the trip to `field`. The arrival adds the profile's days to the ship's clock, starts the
-   * mission (MISSION_START lays the field out), runs the boundary a mid-trip credit reached, and saves.
+   * @private Begin the trip to `field`. The arrival adds the profile's days to the ship's clock, starts the mission
+   * (MISSION_START lays the field out), runs the boundary a mid-trip credit reached, and saves.
    * @param {object} field a FieldRegistry field
    * @param {() => void} start the mission transition
    * @returns {boolean} false = the gas does not cover the whole profile (nothing begins; the words were said)
@@ -2535,14 +2143,14 @@ export class GameFlowManager {
     const reg = this._refs && this._refs.fieldRegistry;
     const toSat = !!(reg && typeof reg.satelliteById === 'function' && reg.satelliteById(field.id));
     const fromBerth = !!(reg && typeof reg.isBerthed === 'function' && reg.isBerthed());
-    const fromFree = !!(reg && typeof reg.isFree === 'function' && reg.isFree());       // slice 5 (5d): the free place of a push-down is no field to start a mission at
+    const fromFree = !!(reg && typeof reg.isFree === 'function' && reg.isFree());       // the free place of a push-down is no field to start a mission at
     return !!this._trip.begin(() => {
       const leg = this._trip.lastLeg;
       this._trip.lastLeg = null;
       if (leg) gameState.shipDays += leg.days;
-      // Nets step 3 slice 3: a trip that is not to a field she will start a mission at. A trip to the satellite that arrived berths her
-      // (no mission starts: the same start waits for the field she picks from there); one that could not go (`_stay`: no gas once planned
-      // with her real mass, her nose could not be pointed) is a refused pick, from the berth too: she is where she was and the list is back.
+      // A trip to the satellite that arrived berths her (no mission starts: the same start waits for the field she
+      // picks from there). One that could not go (`_stay`: no gas once planned with her real mass, her nose could not
+      // be pointed) is a refused pick, from the berth too: she is where she was and the list is back.
       if (toSat && leg) { this._arriveAtSatellite(field, start); return; }
       if (!leg && (toSat || fromBerth || fromFree)) { this._tripCouldNotGo(start, fromBerth); return; }
       start();
@@ -2552,10 +2160,9 @@ export class GameFlowManager {
   }
 
   /**
-   * @private Nets step 3 slice 3 (S4, S5): the trip to the resupply satellite has arrived (the registry has berthed her: `arrive`). She
-   * is handed any catch still mated at her nose collar, the stop opens (buying), the first berth tops credits up, one line says what to
-   * do, `RESUPPLY_BERTH {berthed}` goes out, the game saves, and the list opens again from here with the SAME mission start kept: no
-   * mission starts at the satellite, and a boundary a mid-choice credit deferred waits for the field she picks.
+   * @private The trip to the resupply satellite has arrived (the registry has berthed her). The berth opens (buying,
+   * collar catches handed over), the game saves, and the list opens again from here with the SAME mission start kept:
+   * no mission starts at the satellite, and a boundary a mid-choice credit deferred waits for the field she picks.
    * @param {object} sat the satellite @param {() => void} start the mission transition kept for the field pick
    */
   _arriveAtSatellite(sat, start) {
@@ -2565,16 +2172,16 @@ export class GameFlowManager {
   }
 
   /**
-   * @private The berth proper (arrival, or a trip from it that could not go and put her back). `again`: the second kind (the floor and the
-   * line were done at the first berth).
+   * @private The berth proper (arrival, or a trip from it that could not go and put her back). `again`: the second
+   * kind (the floor and the line were done at the first berth).
    * @param {object} sat @param {boolean} again
    */
   _enterBerth(sat, again) {
     this._handOverCollarCatches();
-    this._handOverMarkedPieces();                                        // slice 5 (5f): every big piece on a rack marked for the satellite
+    this._handOverMarkedPieces();                                        // every big piece on a rack marked for the satellite
     this._setResupplyStop(true);                                         // buying and selling open (the same flag today's stop uses)
     if (!again) {
-      // the first-depot floor moves here (the boundary no longer opens the invitation that paid it): once per profile, the framing owed
+      // The first-depot floor moves here (the boundary no longer opens the invitation that paid it): once per profile.
       if (this._applyFirstDepotFloor()) this._firstVisitOwed = true;
       eventBus.emit(Events.COMMS_MESSAGE, { text: this._berthLine(), priority: 'info', _keep: true });
     }
@@ -2582,24 +2189,25 @@ export class GameFlowManager {
   }
 
   /**
-   * @private S5: a catch still mated at her nose collar (no free tip on the trip) goes to the satellite first. It was paid at the mate
-   * (CATCH_PROCESSED { parked: true }), so the hand-over credits nothing: the net leaves the system (CaptureNet.handOverCollarCatch frees
-   * the collar) and the body leaves the field (`removeDebris`: its row was already taken at the credit). Catches on the daughters' racks and
-   * the radiator tips stay with her.
+   * @private A catch still mated at her nose collar (no free tip on the trip) goes to the satellite first. It was
+   * paid at the mate (CATCH_PROCESSED { parked: true }), so the hand-over credits nothing: the net leaves the system
+   * and the body leaves the field (`removeDebris`: its row was already taken at the credit). Catches on the daughters'
+   * racks and the radiator tips stay with her.
    */
   _handOverCollarCatches() {
     const cns = captureNetSystem;
     const df = this._refs && this._refs.debrisField;
     if (!cns || typeof cns.handOverCollarCatch !== 'function') return;
-    // slice 5 (5f, H1; fix round 3): a pending big piece at the collar is one no daughter could take; the satellite berths at the collar, so it takes
-    // that piece too, of any fate, and PAYS it as the satellite fate. It is planned first (the same haul rule as a rack piece) and goes, paid, only
-    // when a line out passes; until then it stays on the collar and the satellite waits (`setDockGate`): nothing is paid for a piece it cannot take.
+    // A pending big piece at the collar is one no daughter could take; the satellite berths at the collar, so it takes
+    // that piece too (any fate) and PAYS it as the satellite fate: planned first, gone (paid) only when a line out
+    // passes. Until then it stays on the collar and the satellite waits (`setDockGate`): nothing is paid for a piece
+    // it cannot take.
     const atCollar = bigPieces.pendingAboard().filter((e) => e.holder === 'collar').map((e) => e.debris);
     if (atCollar.length && this._askSatellite(atCollar, { atCollar: true })) return;
     for (let i = 0; i < 8; i++) {                                        // (one collar: the loop is only a bound)
       const id = cns.handOverCollarCatch();
       if (id == null) break;
-      // no satellite entity to draw it (a headless run): the old hand-over, the body leaves at once. Partly melted (5e): paid on what is left, no collector.
+      // No satellite entity to draw it (a headless run): the body leaves at once. Partly melted: paid on what is left, no collector.
       const body = df && typeof df.getDebrisById === 'function' ? df.getDebrisById(id) : null;
       if (body && bigPieces.isPending(body)) {
         const pay = this._satellitePay(body);
@@ -2613,21 +2221,19 @@ export class GameFlowManager {
     }
   }
 
-  // ======================================================================================================
-  // Nets step 3 slice 5 (lane 5f): hand a big piece to the resupply satellite (DECISIONS §33 row 16 "hand it to a satellite").
-  // ======================================================================================================
+  // --- hand a big piece to the resupply satellite (DECISIONS §33 row 16 "hand it to a satellite") ---
 
-  /** @private The share of a piece still to pay: 1 whole, less when 5e's furnaces have melted part of it (`_disposal.meltDoneKg` of `massAtCatch`). */
+  /** @private The share of a piece still to pay: 1 whole, less when the furnaces have melted part of it (`_disposal.meltDoneKg` of `massAtCatch`). */
   _meltShare(d) {
     const x = d && d._disposal;
     const done = x && Number.isFinite(x.meltDoneKg) ? x.meltDoneKg : 0;
     if (!(done > 0)) return 1;
     const total = Number.isFinite(x.massAtCatch) && x.massAtCatch > 0 ? x.massAtCatch : d.mass;
-    return total > 0 ? Math.min(1, Math.max(0, 1 - done / total)) : 1;
+    return total > 0 ? clamp01(1 - done / total) : 1;
   }
 
   /**
-   * @private What the satellite pays for a piece (C3 + C7 "Melt progress"): whole, `fatePay(d, 'satellite')`; partly melted, (removal fee +
+   * @private What the satellite pays for a piece: whole, `fatePay(d, 'satellite')`; partly melted, (removal fee +
    * parts after the owner's share) x the share still left, collector 0 (not whole). Valued on the mass it had when caught.
    */
   _satellitePay(d) {
@@ -2645,17 +2251,17 @@ export class GameFlowManager {
   }
 
   /**
-   * @private H3: the satellite's arm takes the piece (it is pinned to the grip until the stow, then removed); with no satellite entity to
-   * draw it (a headless run) it is removed at once. Callers ask `canTake` BEFORE freeing or paying a piece (`_handOverPiece`), so a take the
-   * satellite refuses never gets here with a satellite present.
+   * @private The satellite's arm takes the piece (pinned to the grip until the stow, then removed); with no satellite
+   * entity to draw it (a headless run) it is removed at once. Callers ask `canTake` BEFORE freeing or paying a piece
+   * (`_handOverPiece`), so a take the satellite refuses never gets here with a satellite present.
    */
   _takeBySatellite(d) {
     const df = this._refs && this._refs.debrisField;
     const remove = () => { if (df && typeof df.removeDebris === 'function') df.removeDebris(d.id); };
-    d._disposed = true;                                                  // never lockable or catchable again (5d reads the same flag)
+    d._disposed = true;                                                  // never lockable or catchable again
     const sat = activeResupplySatellite();
     if (sat && typeof sat.takePiece === 'function') {
-      // a satellite that refuses (it cleared this piece with `canTake` a moment ago, so it does not) takes nothing: the piece is NOT removed undrawn
+      // A satellite that refuses takes nothing: the piece is NOT removed undrawn.
       if (sat.takePiece(d, { debrisField: df, onDone: remove })) return true;
       d._disposed = false;
       return false;
@@ -2665,13 +2271,13 @@ export class GameFlowManager {
   }
 
   /**
-   * @private G6 / fix round 3 (K1, K3): ask the satellite to take these pieces (still on their holders). It plans each in the order it will take
-   * them, against her hull, her daughters and the other pieces (`ResupplySatellite.requestTakes`: the rack pieces after the radiators have
-   * folded to 90 deg, the planning spread over the next frames), and calls back with the ones it can take: each of those is detached, taken and
-   * paid in that frame; a piece it cannot reach gets a comms line and stays aboard, unpaid, its fate still `satellite`: nothing vanishes. The
-   * satellite waits at hover until its plans are done. A piece on the collar it cannot take keeps the collar occupied: it waits for it to clear.
-   * Lane s5-letgo (L2): a piece that is moving between holders (`_pieceInTransit`) is not planned: the satellite waits for it
-   * (`ResupplySatellite.awaitSeated`) and it is asked for again, as what its holder is by then, once it is seated.
+   * @private Ask the satellite to take these pieces (still on their holders). It plans each in the order it will take
+   * them, against her hull, her daughters and the other pieces (`ResupplySatellite.requestTakes`: rack pieces after the
+   * radiators have folded to 90 deg, planning spread over the next frames) and calls back with the ones it can take:
+   * each is detached, taken and paid in that frame. A piece it cannot reach gets a comms line and stays aboard, unpaid,
+   * its fate still `satellite`: nothing vanishes. The satellite waits at hover until its plans are done; a piece on the
+   * collar it cannot take keeps the collar occupied. A piece moving between holders (`_pieceInTransit`) is not planned:
+   * the satellite waits for it (`ResupplySatellite.awaitSeated`) and it is asked for again once seated.
    * @param {object[]} pieces the ledger's bodies
    * @param {{atCollar?: boolean, noWait?: boolean}} [o] `atCollar`: the berth's own hand-over of the nose piece (its own pay line); `noWait`: ask now even for a
    *   piece in transit (the wait for it timed out: the old answer, a line)
@@ -2687,8 +2293,9 @@ export class GameFlowManager {
     const racks = list.filter((d) => !collar.includes(d));
     const waitFor = (ds) => sat.awaitSeated(ds, {
       moving: (d) => this._pieceInTransit(d),
-      // fix round 1 (M1): asked for again only if it is still on the collar (the collar asks for pieces of any fate) or is marked for the satellite: a push or
-      // keep piece that flew from the nose to a rack is no business of hers (she would fold her radiators and plan a take for nothing)
+      // Asked for again only if it is still on the collar (the collar asks for pieces of any fate) or is marked for the
+      // satellite: a push or keep piece that flew from the nose to a rack is no business of hers (she would fold her
+      // radiators and plan a take for nothing).
       onSeated: (seated, timedOut) => {
         const mine = (d) => bigPieces.isPending(d) && (bigPieces.holderOf(d.id) === 'collar' || (d._disposal && d._disposal.fate === 'satellite'));
         this._askSatellite(seated.filter(mine), { atCollar, noWait: timedOut });
@@ -2699,13 +2306,14 @@ export class GameFlowManager {
         if (!bigPieces.isPending(d)) continue;                           // (disposed some other way while it was planned)
         if (!collarGroup && !(d._disposal && d._disposal.fate === 'satellite')) continue;   // (the fate was changed while it was planned)
         if (ok.has(d) && this._handOverPiece(d, { collarLead: collarGroup && atCollar })) continue;
-        // fix round 1 (M2): the piece left its holder while it was planned (the nose hand-off came due in the middle of the plan): wait for it again
+        // The piece left its holder while it was planned (the nose hand-off came due in the middle): wait for it again.
         if (!noWait && typeof sat.awaitSeated === 'function' && this._pieceInTransit(d) && waitFor([d])) continue;
-        // no line out (or it could not be taken after all: the plan went stale, it could not be freed): it stays aboard, unpaid, its fate unchanged
+        // No line out (or it could not be taken after all: the plan went stale, it could not be freed): it stays aboard, unpaid, its fate unchanged
         eventBus.emit(Events.COMMS_MESSAGE, { text: `The satellite could not reach the ${pieceName(d)}. It stays aboard.`, priority: 'info', _keep: true });
       }
-      // a piece still on the collar (no line out, or not freed): the satellite waits for the collar to clear before it docks; after the cap
-      // (`TAKE_WAIT_MAX_S`) it says so and goes away WITHOUT docking (fix round 4, M1): no hover for good, no visits for swaps while it is on her nose
+      // A piece still on the collar (no line out, or not freed): the satellite waits for the collar to clear before it
+      // docks; after the cap (`TAKE_WAIT_MAX_S`) it says so and goes away WITHOUT docking: no hover for good, no
+      // visits for swaps while it is on her nose.
       if (collarGroup && group.some((d) => bigPieces.isPending(d) && bigPieces.holderOf(d.id) === 'collar')) {
         sat.setDockGate(() => bigPieces.pendingAboard().some((e) => e.holder === 'collar'), {
           onGiveUp: () => {
@@ -2723,9 +2331,10 @@ export class GameFlowManager {
   }
 
   /**
-   * @private Lane s5-letgo (L2): is this held piece moving between holders right now: the mother net around it not yet collared and processed, flying to a
-   * daughter (TRANSFERRING) or on a leash, or its daughter carrying it or not yet holding it? Its holder would refuse to let go (`handOverCollarCatch`,
-   * `detachHeldCatch`: the same refusals), and a plan made on it is stale within frames (`ResupplySatellite._planFits`). A piece held by nothing is not.
+   * @private Is this held piece moving between holders right now: the mother net around it not yet collared and
+   * processed, flying to a daughter (TRANSFERRING) or on a leash, or its daughter carrying it or not yet holding it?
+   * Its holder would refuse to let go (`handOverCollarCatch`, `detachHeldCatch`: the same refusals), and a plan made
+   * on it is stale within frames (`ResupplySatellite._planFits`). A piece held by nothing is not.
    * @param {object} d the ledger's body @returns {boolean}
    */
   _pieceInTransit(d) {
@@ -2738,9 +2347,10 @@ export class GameFlowManager {
       const net = nets.find((n) => n && n._isMother && n.targetDebris && n.targetDebris.id === d.id);
       if (!net) return false;
       if (net.state !== S.COLLARED || !net._berthProcessed || !!net._leash || !!net._leashNoseReel) return true;
-      // fix round 1 (M2): seated, but the nose hand-off is about to start: the first-tick decision not yet made (`_cargoDeclined` false), or the retry armed
-      // (`releaseNoseRetry` sets `_cargoRetryS` over `RETRY_S`: the next net tick tries the transfer). A plan made now would meet a flying piece. (The 0.5 s
-      // cadence itself is not read: a retry that comes due in the middle of a plan is caught by `settle`, which waits again for a piece that has left.)
+      // Seated, but the nose hand-off is about to start: the first-tick decision not yet made (`_cargoDeclined` false),
+      // or the retry armed (`releaseNoseRetry` sets `_cargoRetryS` over `RETRY_S`: the next net tick tries the
+      // transfer). A plan made now would meet a flying piece. (The 0.5 s cadence itself is not read: a retry that comes
+      // due in the middle of a plan is caught by `settle`, which waits again for a piece that has left.)
       const CT = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.CARGO_TRANSFER) || {};
       return net._cargoDeclined === false || (net._cargoRetryS || 0) >= (CT.RETRY_S ?? 0.5);
     }
@@ -2750,10 +2360,11 @@ export class GameFlowManager {
   }
 
   /**
-   * @private H1/H2: hand one held big piece (a rack, or the collar while berthed) to the satellite and pay it: the take, the detach, the pay. With a
-   * satellite entity the piece must be one it planned a take for (`canTake`): it is asked about BEFORE anything is freed or paid, and (fix round 4, M7)
-   * the take is ACCEPTED before the piece is detached: a satellite that refuses leaves the piece on its holder, untouched; a holder that cannot let
-   * go (in transit, being cut) has the take taken back (`cancelTake`). The piece is never loose and unpaid.
+   * @private Hand one held big piece (a rack, or the collar while berthed) to the satellite and pay it: the take, the
+   * detach, the pay. With a satellite entity the piece must be one it planned a take for (`canTake`): it is asked
+   * BEFORE anything is freed or paid, and the take is ACCEPTED before the piece is detached: a satellite that refuses
+   * leaves the piece on its holder, untouched; a holder that cannot let go (in transit, being cut) has the take taken
+   * back (`cancelTake`). The piece is never loose and unpaid.
    * @param {object} d the ledger's body
    * @param {{collarLead?: boolean}} [o] `collarLead`: the berth's own line for the nose piece
    * @returns {boolean} false when it could not be detached (in transit, being cut, held by nothing) or the arm cannot take it (it stays aboard)
@@ -2785,7 +2396,7 @@ export class GameFlowManager {
     return this.disposeBigPiece(body.id, { fate: 'satellite', totalCr: pay.totalCr, line: `${lead}${payLine(body, pay)}` });
   }
 
-  /** @private H1: at a berth, every held big piece marked for the satellite on a rack goes over; unmarked ones stay with her, pay pending. */
+  /** @private At a berth, every held big piece marked for the satellite on a rack goes over; unmarked ones stay with her, pay pending. */
   _handOverMarkedPieces() {
     const marked = bigPieces.pendingAboard().filter((e) => e.fate === 'satellite' && e.holder && e.holder !== 'collar').map((e) => e.debris);
     if (!marked.length) return;
@@ -2794,7 +2405,7 @@ export class GameFlowManager {
   }
 
   /**
-   * C7 / H2: the fate list picked "hand it to a satellite" (the pick is recorded by `setFate`). Berthed: the piece is planned and goes over
+   * The fate list picked "hand it to a satellite" (the pick is recorded by `setFate`). Berthed: the piece is planned and goes over
    * (a rack piece after the radiators have folded); not berthed: nothing here, the berth does it (`_handOverMarkedPieces`). Acts only on a
    * piece whose pending fate is `satellite`.
    * @param {{debrisId: (number|string), fate: string}} e
@@ -2807,12 +2418,9 @@ export class GameFlowManager {
     if (!this._askSatellite([d])) this._handOverPiece(d);
   }
 
-  // ======================================================================================================
-  // Nets step 3 slice 5 (lane 5b): big pieces pay when they are DISPOSED OF (BigPieces.js; plan C2, C5, C7). The names below are the
-  // contract the wave 2 lanes (fate list 5c, push/sail 5d, hand-over 5f, melt 5e) build on.
-  // ======================================================================================================
+  // --- big pieces pay when they are DISPOSED OF (BigPieces.js) ---
 
-  /** @private Is the map on (C1: with `?fields=0` nothing is a big piece and every catch pays at the catch)? Read live. */
+  /** @private Is the map on (with `?fields=0` nothing is a big piece and every catch pays at the catch)? Read live. */
   _bigPiecesOn() {
     const reg = this._refs && this._refs.fieldRegistry;
     return !!(reg && typeof reg.isOn === 'function' && reg.isOn());
@@ -2828,13 +2436,13 @@ export class GameFlowManager {
   }
 
   /**
-   * C7: record the way a pending big piece will be disposed of (`satellite|push|sail|keep|melt`) and save. The fate list calls it on a
+   * Record the way a pending big piece will be disposed of (`satellite|push|sail|keep|melt`) and save. The fate list calls it on a
    * pick, then emits BIG_PIECE_FATE for the executor.
    * @param {number|string} id the piece's debris id @param {string} fate @returns {boolean} false for an unknown piece or fate
    */
   setFate(id, fate) {
     if (!FATES.includes(fate)) return false;
-    // lane 5e (E5): a piece the furnaces have melted a part of stays there until it is melted: no new fate once meltDoneKg > 0
+    // A piece the furnaces have melted a part of stays there until it is melted: no new fate once meltDoneKg > 0.
     const inFurnaces = bigPieces.get(id);
     if (inFurnaces && this._inFurnaces(inFurnaces)) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -2848,7 +2456,7 @@ export class GameFlowManager {
   }
 
   /**
-   * C7: free a pending big piece from the holder it is on, for a disposal that moves it (a push or a sail lets it go, a hand-over takes it).
+   * Free a pending big piece from the holder it is on, for a disposal that moves it (a push or a sail lets it go, a hand-over takes it).
    * It stays in the field, unpinned and alive; the caller re-seats its orbit, lets it go or removes it. The collar is freed, or that
    * ONE daughter's rack entry is removed (her rack is then empty and she reloads). It is NOT paid and stays pending until
    * `disposeBigPiece`.
@@ -2868,7 +2476,7 @@ export class GameFlowManager {
       freed = !!r.armManager.detachHeldCatch(id);
     }
     if (!freed) return null;
-    // the holder's own entry may be a snapshot: the field's body must be free of every pin too
+    // The holder's own entry may be a snapshot: the field's body must be free of every pin too.
     if (captureNetSystem && typeof captureNetSystem._clearCatchPins === 'function') captureNetSystem._clearCatchPins(d);
     d._capturedByArm = null;
     d._rackFromMotherNet = false;
@@ -2876,7 +2484,7 @@ export class GameFlowManager {
   }
 
   /**
-   * C7: a pending big piece is disposed of and paid. Adds `totalCr` to the wallet and the score total, says `line` (written by the caller:
+   * A pending big piece is disposed of and paid. Adds `totalCr` to the wallet and the score total, says `line` (written by the caller:
    * its action words + `payLine`), emits BIG_PIECE_DISPOSED, clears the pending pay and saves. Pays once: false when nothing is pending
    * under `id` (a second call, an unknown piece, a piece that broke loose).
    * @param {number|string} id @param {{fate?: string, totalCr?: number, line?: string}} [o] @returns {boolean}
@@ -2894,8 +2502,8 @@ export class GameFlowManager {
   }
 
   /**
-   * C7: wire BIG_PIECE_FATE once: each pick is handed to the executor of its fate when that lane defined one (`_fateSatellite` 5f,
-   * `_fateSail` 5d, `_fateMelt` 5e). `push` and `keep` need none: the push is a trip the where-next list owns, keep is the default.
+   * Wire BIG_PIECE_FATE once: each pick is handed to the executor of its fate (`_fateSatellite`, `_fateSail`, `_fateMelt`).
+   * `push` and `keep` need none: the push is a trip the where-next list owns, keep is the default.
    * @private
    */
   _wireBigPieceFates() {
@@ -2908,7 +2516,7 @@ export class GameFlowManager {
   }
 
   /**
-   * P5 load: rebuild the saved ledger onto its holders (nothing pays). Each entry becomes a real field body (`restoreHeldPiece`; a bag of two
+   * Load: rebuild the saved ledger onto its holders (nothing pays). Each entry becomes a real field body (`restoreHeldPiece`; a bag of two
    * or more big pieces is re-bagged with `mergeIntoBag`), then goes onto its holder: the daughter it was saved on (else any free daughter),
    * else the collar. A piece no holder could take yet is tried again every frame (`_placeUnplacedBig`) so it is never lost to a busy collar.
    * @private
@@ -2928,9 +2536,9 @@ export class GameFlowManager {
   }
 
   /**
-   * @private Seat one restored piece on a holder. Saved on a daughter's rack: that daughter, else any free one (ArmManager.restoreHeldCatch),
-   * else the collar. Saved at the collar: the collar (a piece no daughter could take stays at the nose; today's routing moves it later if
-   * one can); on a retry (`retry`: the collar was busy) a free daughter's rack too.
+   * @private Seat one restored piece on a holder. Saved on a daughter's rack: that daughter, else any free one
+   * (ArmManager.restoreHeldCatch), else the collar. Saved at the collar: the collar (a piece no daughter could take
+   * stays at the nose); on a retry (`retry`: the collar was busy) a free daughter's rack too.
    * @param {object} body @param {('collar'|{armId: string}|null)} holder @param {boolean} [retry=false] @returns {boolean} true when it is held
    */
   _placeBigPiece(body, holder, retry = false) {
@@ -2959,19 +2567,20 @@ export class GameFlowManager {
     this._unplacedBig = still;
   }
 
-  // ==========================================================================
-  // MELT IT FOR METAL (Nets step 3 slice 5, lane 5e; DECISIONS §33 row 16-17; BigMelt.js for the pure rules, plan E1-E8)
+  // --- melt it for metal (DECISIONS §33 row 16-17; BigMelt.js has the pure rules) ---
   //
-  // A big piece marked "melt" is cut into parts and the four radiator-tip furnaces melt them during trip burns, on the ship's clock: the
-  // schedule is planned when the burn begins (BigMelt.planBurn) and played over the burn's real seconds (TransferTrip.setBurnWork: begin, tick
-  // with the fraction played, end). At each cut the piece is drawn shorter; the part's bag shrinks on its tip while it melts; when the part is
-  // melted the piece's mass falls by it, the metal goes to the hold and its share of the removal fee (less the owner's share of the metal) is paid.
-  // The last part removes the piece and says the trip's line. Nothing is paid or stored until a part is melted; every started part finishes.
-  // ==========================================================================
+  // A big piece marked "melt" is cut into parts and the four radiator-tip furnaces melt them during trip burns, on the
+  // ship's clock: the schedule is planned when the burn begins (BigMelt.planBurn) and played over the burn's real
+  // seconds (TransferTrip.setBurnWork: begin, tick with the fraction played, end). At each cut the piece is drawn
+  // shorter; the part's bag shrinks on its tip while it melts; when the part is melted the piece's mass falls by it,
+  // the metal goes to the hold and its share of the removal fee (less the owner's share of the metal) is paid. The
+  // last part removes the piece and says the trip's line. Nothing is paid or stored until a part is melted; every
+  // started part finishes.
 
   /**
-   * @private Has a part of this piece been melted (E5)? It then keeps the fate `melt` until it is gone. A piece that is only scheduled in the
-   * burn, or has a part cut and not yet melted, may still change its fate: the work drops it (`_meltAdvance`) and draws it whole again.
+   * @private Has a part of this piece been melted? It then keeps the fate `melt` until it is gone. A piece that is only
+   * scheduled in the burn, or has a part cut and not yet melted, may still change its fate: the work drops it
+   * (`_meltAdvance`) and draws it whole again.
    */
   _inFurnaces(d) {
     return !!(d && d._disposal && (d._disposal.meltDoneKg || 0) > 0);
@@ -2983,7 +2592,7 @@ export class GameFlowManager {
   }
 
   /**
-   * BIG_PIECE_FATE `melt` (the fate list's pick, 5c): says where the piece goes. The work is done by the trip: nothing moves, melts or pays now.
+   * BIG_PIECE_FATE `melt` (the fate list's pick): says where the piece goes. The work is done by the trip: nothing moves, melts or pays now.
    * @private @param {{debrisId: (number|string), fate: string}} e
    */
   _fateMelt(e) {
@@ -3017,7 +2626,7 @@ export class GameFlowManager {
     return tips;
   }
 
-  /** @private Room in the hold for orbit metal, kg (E6): free kilograms, 0 when the 20 stacks are full and orbit metal has none. */
+  /** @private Room in the hold for orbit metal, kg: free kilograms, 0 when the 20 stacks are full and orbit metal has none. */
   _holdRoomKg() {
     const cs = this._refs && this._refs.cargoSystem;
     if (!cs || typeof cs.serialize !== 'function') return Infinity;
@@ -3037,8 +2646,8 @@ export class GameFlowManager {
   }
 
   /**
-   * @private A piece's mass falls to `mass` (a part was melted): the field's body, the collar net's ledger and every rack entry that holds it,
-   * and her inertia (her live mass reads these, so range and handling follow the melt).
+   * @private A piece's mass falls to `mass` (a part was melted): the field's body, the collar net's ledger and every
+   * rack entry that holds it, and her inertia (her live mass reads these, so range and handling follow the melt).
    * @param {object} d @param {number} mass kg
    */
   _setHeldPieceMass(d, mass) {
@@ -3073,7 +2682,7 @@ export class GameFlowManager {
   }
 
   /**
-   * Burn begins (E1): plan the trip's work from what is aboard now. Melt-marked pieces oldest first, the free tips as furnaces, the hold's room.
+   * Burn begins: plan the trip's work from what is aboard now. Melt-marked pieces oldest first, the free tips as furnaces, the hold's room.
    * Says why when nothing can run. @private @param {{days: number, playSeconds: number}} info planned days of the burn
    */
   _meltBegin({ days }) {
@@ -3100,7 +2709,7 @@ export class GameFlowManager {
     const byId = new Map(specs.map((x) => [x.id, x.d]));
     const tc = this._refs.player && this._refs.player.tipCargo;
     const used = [...new Set(plan.parts.map((x) => x.tip))];
-    // a furnace that is working is not a tip a small catch can take: the tip is held for the trip's work
+    // A furnace that is working is not a tip a small catch can take: the tip is held for the trip's work.
     if (tc && typeof tc.reserve === 'function') for (const i of used) tc.reserve(i);
     for (const d of byId.values()) if (plan.parts.some((x) => x.pieceId === d.id)) d._meltBusy = true;
     this._melt = {
@@ -3118,10 +2727,10 @@ export class GameFlowManager {
   _meltTick({ frac }) {
     const m = this._melt;
     if (!m) return;
-    this._meltAdvance(m, Math.max(0, Math.min(1, frac)) * m.burnShipS);
+    this._meltAdvance(m, clamp01(frac) * m.burnShipS);
   }
 
-  /** @private A tip whose last scheduled part is over is free for a small catch again, not only when the burn ends (F1). */
+  /** @private A tip whose last scheduled part is over is free for a small catch again, not only when the burn ends. */
   _meltReleaseTips(m) {
     const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
     if (!tc || typeof tc.unreserve !== 'function') return;
@@ -3172,9 +2781,10 @@ export class GameFlowManager {
   }
 
   /**
-   * @private The hold cannot take a part's metal when it melts (small catches on other tips added metal during the burn, F2): the work stops for
-   * this trip. Every part not yet melted is dropped (bags cleared, the cuts drawn whole again); nothing of them is paid or stored, their kg stay
-   * in the remainder, and the trip says the hold is full once, at its end.
+   * @private The hold cannot take a part's metal when it melts (small catches on other tips added metal during the
+   * burn): the work stops for this trip. Every part not yet melted is dropped (bags cleared, the cuts drawn whole
+   * again); nothing of them is paid or stored, their kg stay in the remainder, and the trip says the hold is full
+   * once, at its end.
    */
   _meltStopWork(m) {
     const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
@@ -3202,7 +2812,7 @@ export class GameFlowManager {
     const isLast = kg >= d.mass - 1e-9;
     const after = isLast ? L.massAtCatch : before + kg;
     const acct = meltAccount(d, L.massAtCatch, before, after);
-    if (acct.metalKg > this._holdRoomKg() + 1e-9) {   // F2: the room is checked where the metal goes in (small catches on other tips add metal during the burn)
+    if (acct.metalKg > this._holdRoomKg() + 1e-9) {   // room is checked where the metal goes in: other tips' catches add metal mid-burn
       this._meltStopWork(m);
       return;
     }
@@ -3217,7 +2827,7 @@ export class GameFlowManager {
     if (!t) { t = { name: pieceName(d), kg: 0, metalKg: 0, feeCr: 0, shareCr: 0, netCr: 0, holder: acct.holder }; m.totals.set(d.id, t); }
     t.kg += acct.kg; t.metalKg += acct.metalKg; t.feeCr += acct.feeCr; t.shareCr += acct.shareCr; t.netCr += acct.netCr;
     if (!isLast) { this.payBigPieceShare(d.id, { cr: acct.netCr }); return; }
-    // the last part: the piece is gone, paid once, and the trip says its line
+    // last part: the piece is gone, paid once, the trip says its line
     m.said.add(d.id);
     this._meltFinals = this._meltFinals || [];
     this._meltFinals.push({ id: d.id, cr: acct.netCr, line: tripLine(t) });
@@ -3225,8 +2835,7 @@ export class GameFlowManager {
   }
 
   /**
-   * C7: pay a share of a pending big piece without disposing of it (a part of a melt): credits and score, no event, no line. The piece stays
-   * pending. 0 for a piece that is not pending. (5f's satellite pays its remainder through `disposeBigPiece`.)
+   * Pay a share of a pending big piece (a part of a melt): credits and score, no event, no line; it stays pending. 0 if not pending.
    * @param {number|string} id @param {{cr?: number}} [o] @returns {number} what was paid
    */
   payBigPieceShare(id, { cr = 0 } = {}) {
@@ -3236,10 +2845,7 @@ export class GameFlowManager {
     return paid;
   }
 
-  /**
-   * @private Take the pieces whose last part is melted off their holders and out of the sky, then pay them as disposed (one BIG_PIECE_DISPOSED each).
-   * A piece the collar or rack cannot let go of yet (in transit, being cut) is tried again every frame.
-   */
+  /** @private Pay pieces whose last part is melted as disposed; one the collar or rack cannot let go of yet is retried every frame. */
   _meltSettleFinals() {
     const list = this._meltFinals;
     if (!list || !list.length) return;
@@ -3257,9 +2863,8 @@ export class GameFlowManager {
   }
 
   /**
-   * The burn is over (E2). `completed`: the profile played out, so every part the furnaces started is finished (the plan fits the burn), and
-   * each piece the trip worked on says its line; otherwise nothing more is melted. The drawing is put back: no part bags, the tips free, every
-   * piece drawn at what is left of it. A save is owed (nothing saves during a burn). @private
+   * @private The burn is over. `completed`: the profile played out, so every started part is finished and each piece worked
+   * on says its line; otherwise nothing more is melted. The drawing is put back: no part bags, tips free, pieces at what is left.
    * @param {{completed: boolean}} info
    */
   _meltEnd({ completed }) {
@@ -3279,12 +2884,11 @@ export class GameFlowManager {
       this._meltReshape(d, 0);
     }
     if ((m.plan.stop === 'hold' || m.holdFull) && completed) this._meltSay(HOLD_FULL_LINE, 'info');
-    // nothing saves during a burn: a burn that arrived owes the save of what it melted, paid and stored; one cut short (a reset, the menu) leaves
-    // the save of the boundary before it, which is consistent with the full piece, the old hold and the old credits
+    // nothing saves during a burn: a completed one owes the save; one cut short (a reset, the menu) leaves the earlier boundary save
     this._meltSaveOwed = !!completed;
   }
 
-  /** @private Frame hook (one length check and one flag read when idle): retry pieces whose last part is melted, and save once the burn is over. */
+  /** @private Frame hook: retry pieces whose last part is melted, and save once the burn is over. */
   _meltFrame() {
     if (this._meltFinals && this._meltFinals.length) this._meltSettleFinals();
     if (this._meltSaveOwed && !this._trip.isBurning()) {
@@ -3294,8 +2898,8 @@ export class GameFlowManager {
   }
 
   /**
-   * @private A trip begun from the list that did not go (the words were said by the trip): the choice is put back as after a refused pick,
-   * rebuilt. From the berth she never left in fact: buying opens again and `RESUPPLY_BERTH {berthed}` says so (no line, no floor).
+   * @private A trip begun from the list that did not go (the trip said why): the choice is put back, rebuilt. From the berth she
+   * never left: buying opens again and `RESUPPLY_BERTH {berthed}` says so (no line, no floor).
    * @param {() => void} start @param {boolean} fromBerth
    */
   _tripCouldNotGo(start, fromBerth) {
@@ -3305,26 +2909,24 @@ export class GameFlowManager {
     this._trip.choose({ start }, { again: true });
   }
 
-  /** @private Nets step 3 slice 3: she lets go of the satellite (the trip from it begins): buying closes, `RESUPPLY_BERTH {left}`. */
   _leaveBerth(sat) {
     this._setResupplyStop(false);
     eventBus.emit(Events.RESUPPLY_BERTH, { phase: 'left', satId: sat.id, altKm: sat.altKm });
   }
 
-  /** @private A game over, a win or the menu: she is no longer berthed anywhere (the registry's reset follows on a new run). */
   _clearBerth() {
     const reg = this._refs && this._refs.fieldRegistry;
     if (reg && typeof reg.clearBerth === 'function') reg.clearBerth();
   }
 
-  /** @private The mother nets aboard now (the list pre-focuses the satellite with none), or undefined when it cannot be read. */
+  /** @private Mother nets aboard now (the list pre-focuses the satellite with none), or undefined when unreadable. */
   _motherNetsAboard() {
     return captureNetSystem && typeof captureNetSystem.getMotherNetCount === 'function' ? captureNetSystem.getMotherNetCount() : undefined;
   }
 
   /**
-   * Lane 3c: is a mission start owed, i.e. did a boundary ask her where next (the scorer's mission number is above the last mission that
-   * started)? False in the middle of a mission: the list opened because she is out of gas, and trips wait for the mission's end.
+   * Is a mission start owed (the scorer's mission number is above the last mission that started)? False mid-mission: the list
+   * opened because she is out of gas, and trips wait for the mission's end.
    * @returns {boolean}
    */
   missionStartOwed() {
@@ -3333,29 +2935,29 @@ export class GameFlowManager {
     return scoringSystem.getMissionNumber() > reg.lastMissionStarted();
   }
 
-  /** Lane 3c: what the "where next" rows need besides the registry (main.js `getRows` and every list this class builds read it). */
+  /** What the "where next" rows need besides the registry (main.js `getRows` and every list built here read it). */
   whereNextRowsOpts() {
     return {
       motherNets: this._motherNetsAboard(), credits: scoringSystem.credits, gasCredits: this._gasBuyPrice(), startOwed: this.missionStartOwed(),
       turnWaitS: this._turnWaitsS(),
-      bigPieces: this._bigPiecesOn() ? bigPieces.pendingAboard() : [],      // slice 5 (5d): the push rows and the satellite rows' hand-over words
+      bigPieces: this._bigPiecesOn() ? bigPieces.pendingAboard() : [],      // the push rows and the satellite rows' hand-over words
     };
   }
 
   /**
-   * @private Slice 4 (S2): the real seconds a trip begun now would wait for her nose, up and down (the autopilot reads her attitude): the list's
-   * days include it, because the trip counts that wait as flown time. Undefined when the attitude cannot be read (the days are then the profile's).
+   * @private Real seconds a trip begun now would wait for her nose, up and down (the list's days include it: the trip counts
+   * that wait as flown time). Undefined when the attitude cannot be read.
    * @returns {{up: number, down: number}|undefined}
    */
   _turnWaitsS() {
-    if (!this._shipCanTurn()) return { up: 0, down: 0 };       // a daughter still on her line: the trip flies no turn (TransferTrip._canTurn), so no wait
+    if (!this._shipCanTurn()) return { up: 0, down: 0 };       // the trip flies no turn (TransferTrip._canTurn), so no wait
     const ap = this._refs && this._refs.autopilotSystem;
     return ap && typeof ap.tripTurnWaitsS === 'function' ? (ap.tripTurnWaitsS() || undefined) : undefined;
   }
 
   /**
-   * @private Nothing limits the ship's turn: the same two limits `TransferTrip._canTurn` reads (a daughter out on a tether holds the rotation
-   * lock; one clamped for a launch). Without the turn the trip flies no turn wait (fix round 1, F3), so the list adds none either.
+   * @private Nothing limits the ship's turn: the two limits `TransferTrip._canTurn` reads (a daughter out on a tether holds the
+   * rotation lock; one clamped for a launch).
    * @returns {boolean}
    */
   _shipCanTurn() {
@@ -3366,8 +2968,8 @@ export class GameFlowManager {
   }
 
   /**
-   * @private Review fix F1: what one engine-gas buy costs now (`upgradeCostNow`, the ONE price accessor): the call needs it on top of its own
-   * price, because at the berth the stop rule "credits + cargo below the gas price = stranded" ends the run 15 s after an arrival without it.
+   * @private What one engine-gas buy costs now (`upgradeCostNow`, the ONE price accessor): a call needs it on top of its own
+   * price, else at the berth "credits + cargo below the gas price = stranded" ends the run 15 s after arrival.
    * @returns {number} credits (0 when the price cannot be read: the call then needs only its own price)
    */
   _gasBuyPrice() {
@@ -3377,7 +2979,7 @@ export class GameFlowManager {
     return Number.isFinite(price) && price > 0 ? price : 0;
   }
 
-  /** @private The berth line: a satellite called to her mid-mission sends her to Stay here (there is no field to fly to), else the usual. */
+  /** @private A satellite called to her mid-mission sends her to Stay here (no field to fly to), else the usual line. */
   _berthLine() {
     const reg = this._refs && this._refs.fieldRegistry;
     return reg && typeof reg.berthedHere === 'function' && reg.berthedHere() && !this.missionStartOwed() ? BERTH_MISSION_LINE : BERTH_LINE;
@@ -3386,32 +2988,28 @@ export class GameFlowManager {
   /** main.js: floor 4 exists and hosts the "where next" list (see `_whereNextOn`). @param {boolean} on */
   setWhereNextAvailable(on) {
     this._whereNextOn = !!on;
-    this._pushTradeWording();                  // slice 3: with the list there the satellite is the stop: the shop's refusal names it
+    this._pushTradeWording();                  // with the list there the satellite is the stop: the shop's refusal names it
   }
 
   /**
-   * @private Nets step 3 slice 2b, lane 2b-2 (decision K): open the "where next" choice. Nothing she can pick (no reachable field
-   * and nothing left here) says so and starts the next mission where she is, as `defaultNext()` = none does; otherwise the trip
-   * waits in phase `choose` with the mission start kept for the pick, one comms line says what to do, and `Events.WHERE_NEXT`
-   * opens the list on floor 4 (main.js). The choice waits for her: no timeout.
-   * Slice 3: berthed at the resupply satellite (the list reopened from it, or a load into the berth) nothing starts here ever: with
-   * nothing she can pick the list stays open with the line "Buy gas at the workbench, then pick a field." and the opening line is the
-   * berth's (not "Mission done").
+   * @private Open the "where next" choice. Nothing she can pick (no reachable field, nothing left here) says so and starts the
+   * next mission where she is; otherwise the trip waits in phase `choose` with the mission start kept for the pick, one comms
+   * line says what to do, and `Events.WHERE_NEXT` opens the list on floor 4 (main.js). No timeout. Berthed at the resupply
+   * satellite nothing starts here ever: with nothing she can pick the list stays open with "Buy gas at the workbench, then
+   * pick a field." and the opening line is the berth's (not "Mission done").
    * @param {() => void} start the mission transition
    * @param {{said?: boolean}} [opts] `said`: the line was just said (the berth arrival says its own)
    */
   _openWhereNext(start, opts) {
     const reg = this._refs.fieldRegistry;
     const berthed = typeof reg.isBerthed === 'function' && reg.isBerthed();
-    // Fix round 1, F2: the free height of a push-down is no field to start a mission at (nothing is laid out there). With nothing she can
-    // pick she stays, as at a berth: the choice stays open, the line says why, and the list is there to pick from once the gas or the
-    // wallet allows.
+    // the free height of a push-down is no field to start a mission at (nothing is laid out): she stays, as at a berth
     const freeHere = !berthed && typeof reg.isFree === 'function' && reg.isFree();
     const rows = buildWhereNextRows(reg, this.whereNextRowsOpts());
     if (rows.line) {
       eventBus.emit(Events.COMMS_MESSAGE, { text: rows.line, priority: 'info', _keep: true });
       if (!berthed && !freeHere) { start(); return; }
-      if (freeHere) opts = { ...opts, said: true };                        // (the line above is the opening line: not "Mission done")
+      if (freeHere) opts = { ...opts, said: true };                        // the line above is the opening line: not "Mission done"
     }
     this._syncTripDeps();
     if (!(opts && opts.said)) eventBus.emit(Events.COMMS_MESSAGE, { text: berthed ? this._berthLine() : OPEN_LINE, priority: 'info', _keep: true });
@@ -3419,10 +3017,10 @@ export class GameFlowManager {
   }
 
   /**
-   * Nets step 3 slice 2b, lane 2b-2: the player's pick on the "where next" list. A field id begins the trip to it (the arrival is as
-   * after any trip); STAY_ID starts the next mission where she is, runs the boundary a mid-choice credit reached and always saves
-   * (the boundary save says the trip is still owed). A pick that cannot be flown (the gas changed, the field was emptied) puts the
-   * choice back and rebuilds the list; it never leaves the choice, or the next catch would start the mission unasked.
+   * The player's pick on the "where next" list. A field id begins the trip to it; STAY_ID starts the next mission where she is,
+   * runs the boundary a mid-choice credit reached and always saves (the boundary save says the trip is still owed). A pick that
+   * cannot be flown (the gas changed, the field was emptied) puts the choice back and rebuilds the list: leaving the choice
+   * would let the next catch start the mission unasked.
    * @param {string} id a field id ('f400') or STAY_ID
    * @returns {boolean} true = the trip began or the mission started here; false = nothing happened (not choosing, or refused)
    */
@@ -3431,19 +3029,19 @@ export class GameFlowManager {
     const reg = this._refs && this._refs.fieldRegistry;
     if (!trip.isChoosing() || !reg) return false;
     const choice = trip.choice;
-    const start = choice && typeof choice.start === 'function' ? choice.start : () => {};        // (`_openWhereNext` always hands one)
-    // Nets step 3 slice 3: berthed at the satellite she FLEW to no field is hers and there is no Stay (S6); the satellite itself is a pick
-    // only from a field (S4). A satellite CALLED to her (lane 3c) leaves her field hers: Stay lets go of it, the mission goes on here.
+    const start = choice && typeof choice.start === 'function' ? choice.start : () => {};
+    // berthed at the satellite she FLEW to: no field is hers and there is no Stay; the satellite itself is a pick only from a
+    // field. A satellite CALLED to her leaves her field hers: Stay lets go of it, the mission goes on here.
     const berth = typeof reg.berthedSatellite === 'function' ? reg.berthedSatellite() : null;
     const atSat = !!berth && !(typeof reg.berthedHere === 'function' && reg.berthedHere());
     const owed = this.missionStartOwed();
     if (id === CALL_ID) return this._callSatellite(choice, start);
-    if (typeof id === 'string' && id.startsWith(PUSH_PREFIX)) return this._pickPush(id, choice, start, berth);    // slice 5 (5d, D2)
+    if (typeof id === 'string' && id.startsWith(PUSH_PREFIX)) return this._pickPush(id, choice, start, berth);
     if (id === STAY_ID) {
-      if (atSat) return false;                                             // no Stay at the satellite (the list has no such row)
-      if (owed && reg.remainingCount(reg.currentId()) <= 0) return false;  // nothing here to stay for (the list has no such row; a mission going on always has one)
+      if (atSat) return false;
+      if (owed && reg.remainingCount(reg.currentId()) <= 0) return false;  // nothing here to stay for
       trip.leaveChoice();
-      if (berth) { this._leaveBerth(berth); this._clearBerth(); }          // a called satellite lets go: buying closes, the field is hers again
+      if (berth) { this._leaveBerth(berth); this._clearBerth(); }          // a called satellite: the field is hers again
       start();
       this._runDeferredBoundary();
       this.saveGame();
@@ -3452,29 +3050,26 @@ export class GameFlowManager {
     const sat = typeof reg.satelliteById === 'function' ? reg.satelliteById(id) : null;
     const field = sat || reg.fieldById(id);
     if (!field) return false;
-    if (!owed) return false;                                               // trips wait for the end of a mission that is going on (the rows say so)
-    if (sat ? !!(berth && berth.id === sat.id) : (!atSat && field.id === reg.currentId())) return false;     // (berthed: that satellite is where she is, the other one is a pick (fix round 1, F4); the field she left is a pick)
+    if (!owed) return false;
+    if (sat ? !!(berth && berth.id === sat.id) : (!atSat && field.id === reg.currentId())) return false;     // already there
     if (!sat && reg.remainingCount(field.id) <= 0) return false;
     this._syncTripDeps();
     trip.leaveChoice();                                                    // idle again, so `begin` accepts the trip
     if (this._flyToField(field, start)) {
-      if (berth) this._leaveBerth(berth);                                  // the trip began: buying closes, she lets go
+      if (berth) this._leaveBerth(berth);
       return true;
     }
-    trip.choose(choice, { again: true });                                  // the gas changed: back to the list, rebuilt, with the refusal said
+    trip.choose(choice, { again: true });                                  // the gas changed: back to the list, refusal said
     return false;
   }
 
-  // ======================================================================
-  // Nets step 3 slice 5, lane 5d: push it down and let go; drag sail and let go (plan D1-D6, C5, C7)
-  // ======================================================================
+  // push it down and let go; drag sail and let go
 
   /**
-   * @private D2: a push row of the where-next list was picked. The row must be there and selectable (the same rows the player sees: the
-   * piece is still held, marked "push", her gas covers the push and the climb back). It flies a trip to the piece's own height (the free
-   * place, `{id: 'free', altKm}`): the piece stays on her rack or collar the whole way and lets go ONLY on arrival (`_pushArrived`). A
-   * piece she is already at or below the height of needs no trip: it lets go here and the list opens again. A trip that cannot begin
-   * (the gas changed) puts the list back with the refusal said.
+   * @private A push row was picked. The row must be there and selectable (the piece still held, marked "push", her gas covers
+   * the push and the climb back). It flies a trip to the piece's own height (the free place, `{id: 'free', altKm}`): the piece
+   * stays on her rack or collar the whole way and lets go ONLY on arrival (`_pushArrived`). A piece she is already at or below
+   * needs no trip: it lets go here. A trip that cannot begin puts the list back with the refusal said.
    * @param {string} id the row id (`push:<debrisId>`) @param {object} choice the open choice @param {() => void} start the mission transition kept
    * @param {object|null} berth the satellite she is berthed at, if any
    * @returns {boolean} true = the trip began or the piece let go
@@ -3492,23 +3087,23 @@ export class GameFlowManager {
       return true;
     }
     this._syncTripDeps();
-    trip.leaveChoice();                                                    // idle again, so `begin` accepts the trip
+    trip.leaveChoice();
     const field = { id: FREE_ID, altKm: row.targetKm };
     const fromBerth = !!berth && !(typeof reg.berthedHere === 'function' && reg.berthedHere());
     const began = trip.begin(() => this._pushArrived(row.debrisId, field, start, fromBerth), { field });
     if (began) {
-      if (berth) this._leaveBerth(berth);                                  // the trip began: buying closes, she lets go
+      if (berth) this._leaveBerth(berth);
       return true;
     }
-    trip.choose(choice, { again: true });                                  // the gas changed: back to the list, rebuilt, with the refusal said
+    trip.choose(choice, { again: true });
     return false;
   }
 
   /**
-   * @private D2: the push trip ended. The registry has put her at the free place (`arrive('free', {altKm})`, in TransferTrip._end). The
-   * trip's days go on the clock; the piece lets go NOW (never before: D-M1) and is paid; the game saves; the list opens again from here
-   * with the satellites and fields (no Stay: the place has no pieces) and the SAME mission start kept. A trip that could not go (no gas
-   * once planned with her real mass, her nose could not be pointed) is a refused pick: she is where she was and the list is back.
+   * @private The push trip ended; the registry has put her at the free place (`arrive('free', {altKm})`, in TransferTrip._end).
+   * The days go on the clock; the piece lets go NOW (never before) and is paid; the game saves; the list opens again from here
+   * (no Stay: the place has no pieces) with the SAME mission start kept. A trip that could not go (no gas once planned with her
+   * real mass, her nose could not be pointed) is a refused pick: she is where she was.
    * @param {number|string} id the piece @param {{id: string, altKm: number}} field the free place @param {() => void} start @param {boolean} fromBerth
    */
   _pushArrived(id, field, start, fromBerth) {
@@ -3518,8 +3113,8 @@ export class GameFlowManager {
     gameState.shipDays += leg.days;
     const reg = this._refs && this._refs.fieldRegistry;
     const here = reg && typeof reg.altitudeKm === 'function' && Number.isFinite(reg.altitudeKm()) ? reg.altitudeKm() : field.altKm;
-    // Fix round 1, F1: the fate list can change the piece's fate during the trip (satellite, sail, keep...). It lets go only if "push" still
-    // stands; otherwise she keeps it, says so, and the list opens from the free height (a piece she still holds pays nothing here).
+    // the fate list can change the piece's fate during the trip: it lets go only if "push" still stands; otherwise she keeps it
+    // (it pays nothing here), says so, and the list opens from the free height
     const still = bigPieces.has(id) && bigPieces.fateOf(id) === 'push';
     let said = false;
     if (still) said = this._letGoBig(id, 'push', { altKm: here });
@@ -3531,17 +3126,15 @@ export class GameFlowManager {
     this._openWhereNext(start, { said });
   }
 
-  // ======================================================================
-  // let-go-bag (owner 2026-10-28, "Add 'let the bag go'"): a parked bag of small pieces nobody wants is let go where she is
-  // ======================================================================
+  // let-go-bag: a parked bag of small pieces nobody wants is let go where she is
 
   /**
-   * K with nothing at the mother's collar: the bag a daughter holds on her rack is let go, when none of its pieces carries salvage ("not
-   * worth salvaging"). Nothing parking added needs reversing: the pieces paid at parking (`_credited`, they stay credited: that credit is the
-   * removal) and a bag without salvage never took the salvage bonus or resources. A bag with salvage is worth keeping: one line, no change.
-   * The daughter's rack gives the bag up (`detachHeldCatch`: her net is used up, NET_CONSUMED, she reloads and can be sent again; null
-   * while she carries it), then the bag is disposed of as `_letGoBig` does (re-seated on its own orbit, field row cleared, `_disposed`),
-   * and given a small push away from her so it visibly drifts off; `_goneBagsFrame` takes it off the field a few seconds later.
+   * K with nothing at the mother's collar: the bag a daughter holds on her rack is let go when none of its pieces carries
+   * salvage. Nothing parking added needs reversing: pieces paid at parking stay credited (`_credited`; that credit is the
+   * removal) and a bag without salvage never took the bonus or resources. A bag with salvage is kept: one line, no change.
+   * The rack gives the bag up (`detachHeldCatch`: her net is used up, NET_CONSUMED, she reloads; null while she carries it),
+   * then the bag is disposed of as `_letGoBig` does and pushed away from her so it visibly drifts off; `_goneBagsFrame` takes
+   * it off the field a few seconds later.
    * @returns {boolean} the bag was let go
    */
   letGoRackBag() {
@@ -3559,13 +3152,13 @@ export class GameFlowManager {
     const altKm = reg && typeof reg.altitudeKm === 'function' && Number.isFinite(reg.altitudeKm()) ? reg.altitudeKm()
       : (player && typeof player.getAltitudeKm === 'function' ? player.getAltitudeKm() : NaN);
     const years = lifetimeYears(altKm, bag.mass, dragAreaM2(bag));
-    // where she holds it NOW: the pin is the authority while it is held (the drawn position can be a frame old), and the rack gives the pin up below
+    // where she holds it NOW: the pin is the authority while held (the drawn position can be a frame old); the rack gives it up below
     const pin = bag._armPinPos && Number.isFinite(bag._armPinPos.x) ? { x: bag._armPinPos.x, y: bag._armPinPos.y, z: bag._armPinPos.z } : null;
-    // R3: the net art stays drawn around the drifting bag until it is gone (CaptureNetVisual reads the mark; the release below would end it)
+    // the net art stays drawn around the drifting bag until it is gone (CaptureNetVisual reads the mark; the release would end it)
     bag._letGoDrift = true;
     if (!am.detachHeldCatch(bag.id)) { bag._letGoDrift = false; say('The bag is not free to let go yet.'); return false; }
     const canon = df && typeof df.getDebrisById === 'function' ? df.getDebrisById(bag.id) : null;
-    // R4: the rack's entry may be a snapshot of the field's body: its pins go too (as `detachHeldPiece` does)
+    // the rack's entry may be a snapshot of the field's body: its pins go too (as `detachHeldPiece` does)
     for (const b of [bag, canon]) {
       if (!b) continue;
       if (captureNetSystem && typeof captureNetSystem._clearCatchPins === 'function') captureNetSystem._clearCatchPins(b);
@@ -3574,7 +3167,7 @@ export class GameFlowManager {
     }
     const bodies = [bag];
     if (canon && canon !== bag) { canon._letGoDrift = true; bodies.push(canon); }
-    // the same ONE computation K's release uses, plus a push away from her so it drifts off (the piece shares her velocity otherwise)
+    // K's release computation, plus a push away from her (the piece shares her velocity otherwise)
     const v = player && typeof player.getVelocity === 'function' ? player.getVelocity() : null;
     const pp = player && typeof player.getPosition === 'function' ? player.getPosition() : null;
     for (const b of bodies) {
@@ -3599,7 +3192,7 @@ export class GameFlowManager {
     return true;
   }
 
-  /** @private let-go-bag: a bag let go BAG_GONE_S seconds ago drifts out of sight: it is taken off the field (the departure removal is the fallback). */
+  /** @private A bag let go BAG_GONE_S seconds ago drifts out of sight and is taken off the field (departure removal is the fallback). */
   _goneBagsFrame(dt) {
     const df = this._refs && this._refs.debrisField;
     const keep = [];
@@ -3612,11 +3205,10 @@ export class GameFlowManager {
   }
 
   /**
-   * @private D2/D5 shared: let a held big piece go where she is, and pay it. `detachHeldPiece` takes it off its holder (null: not held, in
-   * transit or being cut: nothing happens, said, and the piece stays pending); then the 5b review trap: the body is put on its OWN orbit in
-   * the same tick (`CaptureNet.reseatBodyOrbit`, the one computation K's release uses) and its field row is cleared, so it neither flies the
-   * stale orbit it carried while held nor is stored at her next departure; it is `_disposed` (never locked or caught again; `DebrisField`
-   * removes it when she next departs). The pay and the line go through `disposeBigPiece` (pays once, saves).
+   * @private Let a held big piece go where she is, and pay it (push and sail). `detachHeldPiece` takes it off its holder (null:
+   * not held, in transit or being cut: said, the piece stays pending); the body is put on its OWN orbit in the same tick
+   * (`CaptureNet.reseatBodyOrbit`) and its field row cleared, so it neither flies the stale held orbit nor is stored at her next
+   * departure; it is `_disposed` (never locked or caught again; `DebrisField` removes it then). `disposeBigPiece` pays once and saves.
    * @param {number|string} id @param {'push'|'sail'} fate
    * @param {{altKm?: number, sail?: boolean}} [o] `altKm`: where she is (default her height now); `sail`: fit one drag sail first
    * @returns {boolean} the piece was let go and paid
@@ -3649,7 +3241,7 @@ export class GameFlowManager {
       const years = sailLifeYears(d, altKm);
       pay = fatePay(d, 'sail', { lifeYears: years });
       const A = Constants.BIG_PIECES.SAIL.areaM2;
-      for (const b of bodies) b.areaM2 = (dragAreaM2(b) || 0) + A;       // its drag area now includes the sail (the lifetime maths read it)
+      for (const b of bodies) b.areaM2 = (dragAreaM2(b) || 0) + A;       // drag area includes the sail (the lifetime maths read it)
       if (df && typeof df.attachSail === 'function') df.attachSail(canon || d);
       const lead = `Drag sail out, let go: it ${Number.isFinite(years) ? `re-enters in about ${yearsWords(years)}` : 'would stay up'}.`;
       const over = !(Number.isFinite(years) && years <= Constants.BIG_PIECES.RULE_YEARS);
@@ -3666,10 +3258,10 @@ export class GameFlowManager {
   }
 
   /**
-   * @private D5 (C7): the fate list picked "drag sail" for a held big piece (`BIG_PIECE_FATE`, from `_wireBigPieceFates`). Acts only when the
-   * ledger says the piece's fate IS sail and it is still held. With a sail in her stock: one is used (and its mass leaves her with the
-   * piece), the piece lets go where she is, drawn with the sail, and pays the removal fee only when its life with the sail is within 25
-   * years. With no sail aboard nothing happens (one line; the piece stays pending).
+   * @private The fate list picked "drag sail" for a held big piece (`BIG_PIECE_FATE`, from `_wireBigPieceFates`). Acts only when
+   * the ledger says the fate IS sail and the piece is still held. One sail is used (its mass leaves her with the piece), the
+   * piece lets go where she is, drawn with the sail, and pays the removal fee only when its life with the sail is within 25
+   * years. With no sail aboard: one line, the piece stays pending.
    * @param {{debrisId: (number|string), fate: string}} e
    * @returns {boolean} the sail was fitted and the piece let go
    */
@@ -3679,7 +3271,7 @@ export class GameFlowManager {
     const d0 = bigPieces.get(id);
     const rs = this._refs && this._refs.resourceSystem;
     if (!d0) return false;
-    if (this._trip && this._trip.isBurning()) {                            // fix round 1, F3: no hands on the piece while the thruster fires
+    if (this._trip && this._trip.isBurning()) {                            // no hands on the piece while the thruster fires
       eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: 'Fit the sail after the burn.', priority: 'info', _keep: true });
       return false;
     }
@@ -3691,11 +3283,11 @@ export class GameFlowManager {
   }
 
   /**
-   * @private Lane 3c (C2; §33 row 7 "Stuck: call it to you for 1,000 credits"): the call row was picked. The row must be on the list and
-   * selectable (the same rows the player sees: not berthed, the satellite cannot be flown to, the wallet covers the call); the credits go
-   * at once; she holds where she is while the satellite comes (TransferTrip phase `call`, RESUPPLY_BERTH {coming}); when it arrives the
-   * days go on the ship's clock and she is berthed here (`_arriveAtSatellite`: buying, the first-berth floor, the collar hand-over, the
-   * line, the save, the list again with the SAME start kept). A call that cannot begin gives the credits back and puts the list back.
+   * @private §33 row 7 "Stuck: call it to you for 1,000 credits": the call row was picked (it must be on the list and
+   * selectable: not berthed, the satellite cannot be flown to, the wallet covers the call). The credits go at once; she holds
+   * where she is while the satellite comes (TransferTrip phase `call`, RESUPPLY_BERTH {coming}); on arrival the days go on the
+   * ship's clock and she is berthed here (`_arriveAtSatellite`), the list again with the SAME start kept. A call that cannot
+   * begin gives the credits back and puts the list back.
    * @param {object} choice the open choice (put back on a refusal) @param {() => void} start the mission transition kept for the pick
    * @returns {boolean} true = the satellite is on its way
    */
@@ -3723,18 +3315,17 @@ export class GameFlowManager {
   }
 
   /**
-   * @private Nets step 3 slice 2b (FIELDS_BY_HEIGHT; review F1): the mission boundary credit writes its save while the trip to the
-   * next field is still to be flown (the daughters are coming home), and a mid-flight save is skipped, so a reload of it finds her
-   * at the field she left with the next mission's catch count. The save says so (`FieldRegistry` keeps the last mission that
-   * started); after the load, once her field is laid out, the boundary is taken again: the trip begins from here, with the gas
-   * she had before it. With floor 4 there to ask on (lane 2b-2) `_beginTripThen` opens the "where next" list here.
+   * @private The mission boundary credit saves while the trip to the next field is still to be flown (a mid-flight save is
+   * skipped), so a reload finds her at the field she left with the next mission's catch count. The save says so (`FieldRegistry`
+   * keeps the last mission that started); once her field is laid out after the load, the boundary is taken again: the trip begins
+   * from here, with the gas she had before it. With floor 4 there to ask on, `_beginTripThen` opens the "where next" list.
    * @param {number} dt real seconds (0 while the world is held)
    */
   _resumeOwedTrip(dt) {
     const reg = this._refs && this._refs.fieldRegistry;
     if (!reg || typeof reg.takeResumeTrip !== 'function' || !(dt > 0) || this._trip.isActive() || !gameState.isGameplay()) return;
     if (!reg.takeResumeTrip()) return;
-    // (the one call site of the mission check that follows no clearDebris(): the start a load found owed; test-ScoringSystem pins it)
+    // the one mission check that follows no clearDebris(): the start a load found owed (test-ScoringSystem pins it)
     this._beginTripThen(() => { scoringSystem.checkMissionTransition(); });
   }
 
@@ -3746,7 +3337,7 @@ export class GameFlowManager {
     this._onMissionBoundary(n);
   }
 
-  /** @private Hand the trip the collaborators it reads (cheap; also run from init, tests set _refs directly). */
+  /** @private Hand the trip its collaborators (cheap; also run from init; tests set _refs directly). */
   _syncTripDeps() {
     const r = this._refs || {};
     const am = r.armManager;
@@ -3757,15 +3348,14 @@ export class GameFlowManager {
       noseWaiting: () => this._noseCanLeash(),
       carryBusy: () => !!(am && typeof am.isCarrying === 'function' && am.isCarrying()),
       rackCanCarry: () => !!(am && typeof am.rackCanCarry === 'function' && am.rackCanCarry()),
-      // Nets step 3 slice 2b: the trip's face of the field registry (the piece store is DebrisField's; the selection is cleared
-      // because a stored piece may be the target)
+      // the trip's face of the field registry (the piece store is DebrisField's; the selection is cleared: a stored piece may be the target)
       fields: r.fieldRegistry ? {
         planTo: (f, o) => r.fieldRegistry.planTo(f, o),
         depart: () => { r.fieldRegistry.depart(); targetSelector.setTarget(null, { silent: true }); },
         arrive: (id, o) => r.fieldRegistry.arrive(id, o),
       } : null,
     });
-    this._trip.setBurnWork(this._burnWorkFace());   // slice 5 (5e): the tip furnaces' melt rides the burn on the ship's clock
+    this._trip.setBurnWork(this._burnWorkFace());   // the tip furnaces' melt rides the burn on the ship's clock
   }
 
   /** The transfer trip (tests and main.js read its state). */
@@ -3774,14 +3364,13 @@ export class GameFlowManager {
   /** True while a trip burns: the world clock targets Constants.TRIP.TIME_RATE (main.js). */
   isTripRunning() { return this._trip.isBurning(); }
 
-  /** Nets step 3 slice 2b (lane 2b-2): the mission boundary is waiting for the player's pick on the "where next" list (the FMA strip's line). */
+  /** The boundary waits for a pick on the "where next" list (the FMA strip's line). */
   isWhereNextPending() { return this._trip.isChoosing(); }
 
   /**
-   * trip-melt D6: is a catch at the nose collar waiting to move to a radiator tip - one the hand-off can still take?
-   * A hand-off under way counts. Read-only mirror of `CaptureNetSystem._tryLeash`'s preconditions (it fits a tip, a tip
-   * is free, the tip is in reach, the gas is enough); a catch that fails one of them is not waited for. Rack
-   * catches (trip-melt-2) are not asked here.
+   * Is a catch at the nose collar waiting to move to a radiator tip that the hand-off can still take? A hand-off under way
+   * counts. Read-only mirror of `CaptureNetSystem._tryLeash`'s preconditions (fits a tip, a tip is free and in reach, enough
+   * gas); a catch failing one is not waited for. Rack catches are not asked here.
    * @returns {boolean}
    * @private
    */
@@ -3795,8 +3384,7 @@ export class GameFlowManager {
     const cook = Constants.isFeatureEnabled('FURNACE_COOK');
     for (const net of nets) {
       if (!net || !net._isMother) continue;
-      // a hand-off with the catch still on its way to a tip: the trip waits for it to land (once it has landed the
-      // tip holds it, and a driver that is only putting the radiators back is not a reason to burn on)
+      // a hand-off with the catch still on its way to a tip: wait for it to land (a driver only putting the radiators back is not a reason to burn on)
       if (net._leash || net._leashNoseReel) return true;
       if (net.state !== COLLARED || net._leashFailed) continue;
       const d = net.targetDebris;
@@ -3805,8 +3393,8 @@ export class GameFlowManager {
       const tip = tc.pickTip();
       if (tip == null) continue;
       if (!(drv.canReach(d, tip) || drv.canReachAtNose(net, d, tip))) continue;
-      // trip-melt G3: a hand-off the driver refuses right now (a daughter out on her tether, the radiators busy, a turn
-      // under way) is not waited for: `_tryLeash` would decline it too, and the trip would burn to its 120 s cap for nothing.
+      // a hand-off the driver refuses now (daughter on her tether, radiators busy, a turn under way) is not waited for:
+      // `_tryLeash` would decline it too, and the trip would burn to its 120 s cap for nothing
       if (typeof drv.refusal === 'function' && drv.refusal(net)) continue;
       if (!cook && typeof drv.gasShort === 'function' && drv.gasShort(net, d, tip, { noseReel: !drv.canReach(d, tip) })) continue;
       return true;
@@ -3815,9 +3403,9 @@ export class GameFlowManager {
   }
 
   /**
-   * u20-nets: the bodies a credit pays. A solo catch (or no body at all) is `[debris]`; a scoop bag is its members' own bodies
-   * (`bagMembers[i].piece`), so every member is scored and salvaged exactly as if it had been caught alone, while the caller
-   * still counts ONE catch (`gameState.clearDebris()` once). A member already paid is left out.
+   * The bodies a credit pays. A solo catch (or no body at all) is `[debris]`; a scoop bag is its members' own bodies
+   * (`bagMembers[i].piece`), so every member is scored and salvaged as if caught alone, while the caller still counts ONE
+   * catch (`gameState.clearDebris()` once). A member already paid is left out.
    * @param {object|null} debris the held body the credit came for
    * @returns {Array<object|null>}
    * @private
@@ -3830,8 +3418,7 @@ export class GameFlowManager {
   }
 
   /**
-   * Release the held mission start if `debrisId` is the catch it waits on.
-   * Any other id (a piece cut off the catch, another net) is ignored.
+   * Release the held mission start if `debrisId` is the catch it waits on; any other id (a piece cut off it, another net) is ignored.
    * @param {number|string|undefined} debrisId
    * @private
    */
@@ -3850,32 +3437,29 @@ export class GameFlowManager {
   }
 
   /**
-   * Per-frame tick (main.js, right after gameState.update): counts GAME time
-   * toward the held mission start's cap. Never a timer — the hold must follow
-   * a paused or held world (dt 0 counts nothing) and the depot flow pins that
-   * no timer is created at a boundary.
+   * Per-frame tick (main.js, right after gameState.update): counts GAME time toward the held mission start's cap. Never a
+   * timer: the hold must follow a paused or held world (dt 0 counts nothing); the depot flow pins that no boundary timer exists.
    * @param {number} dt - seconds of game time this frame (0 while the world is held)
    */
   update(dt) {
-    // t1-stranded D1: first, before the held-mission-start early return below (that one returns on almost every frame)
+    // first, before the held-mission-start early return below (it returns on almost every frame)
     this._updateStranded(dt);
     this._resumeOwedTrip(dt);
-    if (this._unplacedBig && this._unplacedBig.length) this._placeUnplacedBig();   // slice 5 (5b): a restored piece no holder could take yet
-    if (this._goneBags && this._goneBags.length) this._goneBagsFrame(dt);                  // let-go-bag: a bag that drifted off is taken off the field
-    if ((this._meltFinals && this._meltFinals.length) || this._meltSaveOwed) this._meltFrame();   // slice 5 (5e): a melted piece to let go of, a save owed
-    // trip-melt D2/D6: the burn between missions (waits for the daughters, then burns; `dt` is 0 while the world is held)
+    if (this._unplacedBig && this._unplacedBig.length) this._placeUnplacedBig();   // a restored piece no holder could take yet
+    if (this._goneBags && this._goneBags.length) this._goneBagsFrame(dt);                  // a bag that drifted off is taken off the field
+    if ((this._meltFinals && this._meltFinals.length) || this._meltSaveOwed) this._meltFrame();   // a melted piece to let go of, a save owed
+    // the burn between missions (waits for the daughters, then burns; `dt` is 0 while the world is held)
     this._trip.update(dt);
     const p = this._pendingMissionStart;
     if (!p) return;
     if (!(dt > 0) || !gameState.isGameplay()) return;
-    // no-melt: with no furnace a catch the nose cannot place never leaves it by itself, so the hold has nothing to wait
-    // for once the hand-off has been tried and declined. (A hand-off still under way keeps the hold, and its cap.)
+    // with no furnace a catch the nose cannot place never leaves it by itself, so the hold has nothing to wait for once the
+    // hand-off has been tried and declined (a hand-off still under way keeps the hold, and its cap)
     if (!Constants.isFeatureEnabled('FURNACE_COOK') && typeof captureNetSystem.getNoseFullLine === 'function' && captureNetSystem.getNoseFullLine()) { this._releaseMissionStart(); return; }
     p.elapsedS += dt;
-    // l5c-reach E6: while the leash hand-off carries the catch to a radiator tip the 20 s cap does not run
-    // (the hand-off is ~45-120 s; the catch leaving the nose releases the start by itself). A safety cap of
-    // LEASH.MISSION_WAIT_MAX_S game seconds in total still ends the wait if the hand-off never finishes.
-    // Ref path: this._refs.player.leashDriver (built in main.js; absent in headless tests).
+    // while the leash hand-off carries the catch to a radiator tip the idle cap does not run (the hand-off is ~45-120 s; the
+    // catch leaving the nose releases the start by itself). LEASH.MISSION_WAIT_MAX_S game seconds in total still ends the wait.
+    // leashDriver is built in main.js; absent in headless tests.
     if (p.elapsedS >= Constants.LEASH.MISSION_WAIT_MAX_S) { this._releaseMissionStart(); return; }
     const busy = !!(this._refs && this._refs.player && this._refs.player.leashDriver && this._refs.player.leashDriver.busy);
     if (busy) return;
@@ -3885,29 +3469,23 @@ export class GameFlowManager {
   }
 
   /**
-   * t1-stranded D4: menu CONTINUE of a game-over save hands off to the game-over screen's CONTINUE: the very same
-   * listeners run (the GFM one above, KesslerSystem's self-reset). A method rather than an inline emit so the
-   * GAMEOVER_CONTINUE listener stays the first place the event name appears in this file (test-OpeningDance and
-   * test-SunStaging slice that listener's body by source text).
+   * Menu CONTINUE of a game-over save runs the game-over screen's CONTINUE listeners (the GFM one above, KesslerSystem's
+   * self-reset). A method, not an inline emit, so the GAMEOVER_CONTINUE listener stays the first place the event name appears
+   * in this file (test-OpeningDance and test-SunStaging slice that listener's body by source text).
    * @private
    */
   _continueAfterGameOver() {
     eventBus.emit(Events.GAMEOVER_CONTINUE);
   }
 
-  // ==========================================================================
-  // STRANDED (t1-stranded) — out of gas and unable to pay for more ends the run
-  // ==========================================================================
+  // STRANDED: out of gas and unable to pay for more ends the run
 
   /**
    * The two "empty" levels the thrust paths use, in the tanks' own units.
-   *  - `ion`: engine pool units one second of full ion thrust costs. Mirrors ionGasUnits
-   *    (PlayerSatellite.js:134): ṁ = c·m·Δv/(Isp·g0), pool = ṁ/kgFull·100, with Δv = the autopilot's thrust ceiling
-   *    Constants.AUTOPILOT.MAX_ACCEL (× the tank gas's thrustScale) for 1 s, m = the ship's total mass
-   *    (armManager.getMassBudget), c = the Efficient Ion Drive gain × the THRUST-bus split
-   *    (PlayerSatellite.js:53 consumptionMultiplier).
-   *  - `cold`: cold-gas units one second of full RCS attitude command costs: `_coldGasRate` × RCS_ATTITUDE_N2_FACTOR
-   *    (PlayerSatellite.js:8934 / :8428). Below this the tank cannot pay a one-second command.
+   *  - `ion`: engine pool units one second of full ion thrust costs. Mirrors `ionGasUnits` (PlayerSatellite.js):
+   *    ṁ = c·m·Δv/(Isp·g0), pool = ṁ/kgFull·100, Δv = Constants.AUTOPILOT.MAX_ACCEL (× the tank gas's thrustScale) for 1 s,
+   *    m = total ship mass (armManager.getMassBudget), c = Efficient Ion Drive gain × THRUST-bus split (`consumptionMultiplier`).
+   *  - `cold`: cold-gas units one second of full RCS attitude command costs: `_coldGasRate` × RCS_ATTITUDE_N2_FACTOR.
    * A float residue (1e-6) is below both, so it counts as empty.
    * @returns {{ion: number, cold: number}}
    * @private
@@ -3946,8 +3524,7 @@ export class GameFlowManager {
   /**
    * Credits the CARGO pane would pay right now for everything in the hold: SELL ALL (ShopScreen._sellAllCargo ->
    * computeSaleValue: SELL_PRICE_MODIFIER, plus the bulk bonus on the total), plus the elevator's per-kg bonus on
-   * refined metal while the contract is still open (a contribution pays sale value + bonus). Needs neither depot
-   * nor thrust. 0 with no cargo system.
+   * refined metal while the contract is still open. Needs neither depot nor thrust. 0 with no cargo system.
    * @returns {number}
    * @private
    */
@@ -3966,11 +3543,10 @@ export class GameFlowManager {
   }
 
   /**
-   * x1-held-catch D1: has this held piece been paid for? A catch pays exactly once, in the CATCH_PROCESSED handler
-   * above (`payCredit`): it marks the FIELD object `debris._credited = true` (looked up by id). A holder may keep a
-   * shallow SNAPSHOT of that body instead (a mother net's `targetDebris`, and the very object `_stowHeldCatch` pushes
-   * onto a daughter's rack after the cargo hand-off), so the field object is read first, then the piece's own flag.
-   * A piece that is missing, or has no id to look up, counts as NOT paid: it keeps blocking, as before this rule.
+   * Has this held piece been paid for? A catch pays exactly once, in the CATCH_PROCESSED handler above (`payCredit`), which
+   * marks the FIELD object `debris._credited = true` (looked up by id). A holder may keep a shallow SNAPSHOT instead (a mother
+   * net's `targetDebris`, the object `_stowHeldCatch` pushes onto a rack), so the field object is read first, then the piece's
+   * own flag. A piece that is missing, or has no id, counts as NOT paid.
    * @param {object|null|undefined} piece - a rack entry, a tip-cargo debris, a daughter's in-hand catch, a net's target
    * @returns {boolean}
    * @private
@@ -3986,26 +3562,23 @@ export class GameFlowManager {
   }
 
   /**
-   * D1 (d): is anything under way that could still pay credits or load gas without the mother thrusting?
-   * Credits, salvage and gas all land in ONE place, the catch's CATCH_PROCESSED credit (see `_piecePaid`); a catch that
-   * has been paid can never pay again, however long it takes to digest. So a held catch blocks only until it is paid
-   * (x1-held-catch D1-D3). Predicates (each guarded: headless tests wire only some of these):
-   *  - a daughter out: any arm whose state is not DOCKED / EXPENDED / ADRIFT / RELOADING / HOLDING_CATCH (ArmManager.js:2283
-   *    getDeployedCount counts ADRIFT and RELOADING too, which the plan says must not block, so the filter is
-   *    spelled out here). She winches home within seconds, so every other out state blocks. ADRIFT stays non-blocking:
-   *    R drops an adrift daughter's catch unpaid (ArmUnit.recall).
-   *  - a daughter holding a catch: any piece on her rack (arm.heldCatches) that is not yet paid; HOLDING_CATCH blocks
-   *    only while a rack piece or her in-hand capturedDebris is unpaid. A rack digests in max(6 s, 2 s/kg) (up to
-   *    2000 s, slower in eclipse) but pays nothing at its end once the mate or an earlier digestion has paid.
-   *  - tip cargo: a piece on a radiator tip (player.tipCargo.debrisAt(i)) that is not yet paid; tip cargo is always
-   *    already paid in the game, so this is the same rule, not a special case.
-   *  - a mother-net catch or net in flight: any active mother net not in {FOLDED, STOWED, MISSED, RELEASED} - that
-   *    is BERTHED / COLLARED / TRANSFERRING (ArmManager.js:2836-2890) and the flight states before them
-   *    (ArmManager.js:2671-2672 netInFlight); CaptureNet.activeNets (CaptureNet.js:3370). A COLLARED or TRANSFERRING net
-   *    blocks only while its catch is unpaid (`net._berthProcessed` is set when the mate pays, CaptureNet.js ~:3549);
-   *    a paid catch can sit at the collar for good (over 2000 kg, no daughter to take it, a cut plan under way).
-   *  - a leash hand-off carrying a catch: player.leashDriver.isActive() (LeashDriver.js:167).
-   *  - the lasso: lassoSystem.active (LassoSystem.js:89).
+   * Is anything under way that could still pay credits or load gas without the mother thrusting?
+   * Credits, salvage and gas all land in ONE place, the catch's CATCH_PROCESSED credit (see `_piecePaid`); a paid catch can
+   * never pay again, however long it takes to digest, so a held catch blocks only until it is paid.
+   * Predicates (each guarded: headless tests wire only some of these):
+   *  - a daughter out: any arm whose state is not DOCKED / EXPENDED / ADRIFT / RELOADING / HOLDING_CATCH (ArmManager
+   *    `getDeployedCount` counts ADRIFT and RELOADING too, which must not block). She winches home within seconds, so every
+   *    other out state blocks. ADRIFT stays non-blocking: R drops an adrift daughter's catch unpaid (ArmUnit.recall).
+   *  - a daughter holding a catch: any piece on her rack (arm.heldCatches) not yet paid; HOLDING_CATCH blocks only while a
+   *    rack piece or her in-hand capturedDebris is unpaid. A rack digests in max(6 s, 2 s/kg) (up to 2000 s, slower in
+   *    eclipse) but pays nothing at its end once the mate or an earlier digestion has paid.
+   *  - tip cargo: a piece on a radiator tip (player.tipCargo.debrisAt(i)) not yet paid; always already paid in the game.
+   *  - a mother-net catch or net in flight: any active mother net (CaptureNet.activeNets) not in {FOLDED, STOWED, MISSED,
+   *    RELEASED}, i.e. BERTHED / COLLARED / TRANSFERRING and the flight states before them (ArmManager `netInFlight`).
+   *    A COLLARED or TRANSFERRING net blocks only while its catch is unpaid (`net._berthProcessed` is set when the mate
+   *    pays); a paid catch can sit at the collar for good (over 2000 kg, no daughter to take it, a cut plan under way).
+   *  - a leash hand-off carrying a catch: player.leashDriver.isActive().
+   *  - the lasso: lassoSystem.active.
    * @returns {boolean}
    * @private
    */
@@ -4057,17 +3630,15 @@ export class GameFlowManager {
   }
 
   /**
-   * D1: is the ship stranded RIGHT NOW? All of (a)-(d) hold: gameplay; both tanks empty (below one second of thrust);
-   * (c) the ship is not at the resupply stop (nothing can be bought mid-mission — u1-resupply-stop D6), or it is
-   * and the credits plus the cargo's sale value cannot buy the engine-gas resupply row (or it is not purchasable);
-   * nothing under way could still pay.
+   * Is the ship stranded RIGHT NOW? All hold: gameplay; both tanks empty (below one second of thrust); the ship is not at
+   * the resupply stop (nothing can be bought mid-mission), or it is and the credits plus the cargo's sale value cannot buy
+   * the engine-gas resupply row (or it is not purchasable); nothing under way could still pay.
    * @returns {boolean}
    * @private
    */
   _isStranded() {
     if (!gameState.isGameplay()) return false;
-    // Lane 3c: she has paid for the call and the satellite is on its way: she is not stranded, she is waiting for it (else the grace would
-    // end the run mid-wait, with the credits gone and no gas bought yet).
+    // she has paid for the call and the satellite is on its way: not stranded, waiting (else the grace would end the run mid-wait)
     if (this._trip && this._trip.isCalling()) return false;
     const { resourceSystem, shopScreen } = this._refs || {};
     if (!resourceSystem) return false;
@@ -4077,23 +3648,23 @@ export class GameFlowManager {
     const row = UPGRADES.find((u) => u.id === 'gas_resupply');
     const owned = shopScreen && shopScreen.purchasedUpgrades;
     const purchasable = !!row && upgradePrereqsMet(row, owned || new Map(), (f) => Constants.isFeatureEnabled(f));
-    // u1-resupply-stop D6 (owner 2026-10-17: there is no store in the middle of space): credits and cargo can pay
-    // for gas only AT the resupply stop. Mid-mission nothing can be bought, so condition (c) holds whatever the
-    // wallet; at the stop it holds when credits plus the cargo's sale value fall short of the resupply price.
+    // owner 2026-10-17: there is no store in the middle of space. Credits and cargo can pay for gas only AT the resupply
+    // stop: mid-mission nothing can be bought, whatever the wallet; at the stop it holds when credits plus the cargo's sale
+    // value fall short of the resupply price
     if (purchasable && this._atResupplyStop) {
       const wealth = scoringSystem.credits + this._strandedCargoCredits();
       if (wealth >= upgradeCostNow(row, resourceSystem)) return false;
     }
     // Last of the tank checks: it needs the ship-mass lookup, so a frame with gas or money never pays for it.
     if (!(resourceSystem.xenon < this._strandedIonThreshold())) return false;   // engine gas for >= 1 s of thrust
-    // Lane 3c (C2): while the list is open with a call she can pay for, she is not stranded: the call is the way out, and the choice
-    // waits for her (declined, the stranded countdown below runs as it always did).
+    // while the list is open with a call she can pay for, she is not stranded: the call is the way out and the choice waits for
+    // her (declined, the stranded countdown runs)
     if (this._trip && this._trip.isChoosing() && this._callSelectable()) return false;
     return !this._paymentUnderWay();
   }
 
   /**
-   * @private Lane 3c: both tanks below one second of thrust, nothing else considered (the wallet, the stop, payments under way): what
+   * @private Both tanks below one second of thrust, nothing else considered (the wallet, the stop, payments under way): what
    * `_isStranded` starts from. Ends an offered call's spell when gas comes back.
    * @returns {boolean}
    */
@@ -4106,11 +3677,10 @@ export class GameFlowManager {
   }
 
   /**
-   * @private Lane 3c: would the list show a call row she can pick right now, for a ship that is OUT OF GAS (every caller has established
-   * that: `_isStranded` past its tank checks, `_outOfGas`)? The satellite is the stop, she is not berthed, there is a satellite, and the
-   * wallet covers the call. Out of gas the satellite row cannot be flown to (a trip needs gas for its whole profile; one second of
-   * thrust is not that), so the call row is there and selectable: this needs no rows (they cost a trip plan per field, and this runs
-   * every frame while she looks at the list). The pick itself (`_callSatellite`) asks the real rows.
+   * @private Would the list show a call row she can pick right now, for a ship that is OUT OF GAS (every caller has established
+   * that)? The satellite is the stop, she is not berthed, there is a satellite, and the wallet covers the call. Out of gas the
+   * satellite row cannot be flown to (a trip needs gas for its whole profile), so the call row is there: this needs no rows
+   * (a trip plan per field; this runs every frame while she looks at the list). `_callSatellite` asks the real rows.
    * @returns {boolean}
    */
   _callSelectable() {
@@ -4121,15 +3691,14 @@ export class GameFlowManager {
   }
 
   /**
-   * @private Lane 3c (C3; §33 row 7): out of gas away from the satellite with the call paid for by her wallet, the countdown does not run:
-   * ONE line says she can call it, and the list opens (in the middle of a mission nothing is owed: the kept start is the scorer's own
-   * check, a no-op unless a mission is due). Offered once per spell: she may stay (then the countdown runs as before). While a trip waits
-   * or burns, today's rules hold.
+   * @private §33 row 7: out of gas away from the satellite with the call covered by her wallet, the countdown does not run:
+   * ONE line says she can call it, and the list opens (mid-mission the kept start is the scorer's own check, a no-op unless a
+   * mission is due). Offered once per spell: she may stay (then the countdown runs). While a trip waits or burns, the usual rules hold.
    * @returns {boolean} true = she is being offered the call (no countdown)
    */
   _strandedCallOffer() {
     const trip = this._trip;
-    if (trip.isActive()) return false;           // choosing: `_isStranded` already says "not stranded" while the call is on the list; waiting or burning: today's rules
+    if (trip.isActive()) return false;           // choosing: `_isStranded` already says "not stranded" while the call is on the list
     if (this._callOffered) return false;         // she was offered it and stayed
     if (!this._callSelectable()) return false;
     this._callOffered = true;
@@ -4139,9 +3708,9 @@ export class GameFlowManager {
   }
 
   /**
-   * D1/D2 per-frame step: the stranded timer. A held world (dt 0) advances nothing and changes nothing. When any of
-   * (a)-(d) stops holding the timer resets and the spell may announce again. At STRANDED_GRACE_S emits
-   * RESOURCE_DEPLETED { reason: 'stranded' } once (the listener moves to GAME_OVER) and resets.
+   * Per-frame step: the stranded timer. A held world (dt 0) advances nothing and changes nothing. When `_isStranded` stops
+   * holding, the timer resets and the spell may announce again. At STRANDED_GRACE_S emits RESOURCE_DEPLETED
+   * { reason: 'stranded' } once (the listener moves to GAME_OVER) and resets.
    * @param {number} dt - seconds of game time this frame
    * @private
    */
@@ -4150,9 +3719,8 @@ export class GameFlowManager {
     if (!(dt > 0)) return;
     if (!this._isStranded()) {
       this._strandedS = 0;
-      // Lane 3c: an offered call's spell lasts while she is out of gas; a list that was already open at a boundary (nothing offered yet)
-      // says the same line once, here, where the countdown would have started
-      // (only while it matters - an offered call, or a list open - so a frame of normal flight never pays for the tank lookup)
+      // an offered call's spell lasts while she is out of gas; a list already open at a boundary (nothing offered yet) says the
+      // same line once, here, where the countdown would have started (only while it matters, so normal flight skips the tank lookup)
       if (this._callOffered || this._trip.isChoosing()) {
         if (!this._outOfGas()) this._callOffered = false;
         else if (!this._callOffered && this._trip.isChoosing() && this._callSelectable()) {
@@ -4165,7 +3733,7 @@ export class GameFlowManager {
     if (this._strandedCallOffer()) { this._strandedS = 0; return; }
     const grace = Constants.STRANDED_GRACE_S;
     if (this._strandedS === 0) {
-      // D6: mid-mission the wallet is irrelevant (nothing can be bought); at the stop it is the reason.
+      // mid-mission the wallet is irrelevant (nothing can be bought); at the stop it is the reason
       const why = this._atResupplyStop ? 'Out of gas, and not enough credits to buy more.' : 'Out of gas.';
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${why} The mission ends in ${grace} s unless a catch is under way.`,
@@ -4181,25 +3749,17 @@ export class GameFlowManager {
   }
 
   /**
-   * Wave 5 Session K — the ONE ladder-on-gameplay depot entry (plan D-B: one
-   * shop, one place). Called by the `transitionToState(SHOP)` redirect (site 1)
-   * and by the boundary dwell (site 2); never with the ladder off, never
-   * outside gameplay. Does what the SHOP entry did for the depot bookkeeping —
-   * the first-depot grant (`_applyFirstDepotFloor`, the one rule) and the
-   * invitation close ('entered') — then opens the break and emits
-   * WORKBENCH_STOP for the hub (ride down at the crossing duration + open the
-   * REFIT drawer with the first-visit chip). A stop while the break is already
-   * open (B pressed at the workbench; the dwell landing after a B-key visit
-   * that is still open) is a no-op: the player is already there.
-   * @param {boolean} boundary - true from the chapter dwell, false from B /
-   *   the STORE chip / a legacy caller
+   * The ONE ladder-on-gameplay depot entry. Called by the `transitionToState(SHOP)` redirect and by the boundary dwell; never
+   * with the ladder off, never outside gameplay. Does the depot bookkeeping (`_applyFirstDepotFloor`, invitation close
+   * 'entered'), then opens the break and emits WORKBENCH_STOP for the hub (ride down + open the REFIT drawer with the
+   * first-visit chip). A stop while the break is already open (B at the workbench; the dwell after a B-key visit) is a no-op.
+   * @param {boolean} boundary - true from the chapter dwell, false from B / the STORE chip / a legacy caller
    * @private
    */
   _stopAtWorkbench(boundary) {
     if (this._workbenchBreak) return;
-    // First visit = the floor pays now, OR the first invitation already paid it
-    // and the framing is still owed (consumed here, once).
-    // u1-resupply-stop D4: the floor is paid at the resupply stop only; a mid-mission look pays nothing.
+    // First visit = the floor pays now, OR the first invitation already paid it and the framing is still owed (consumed here,
+    // once). The floor is paid at the resupply stop only; a mid-mission look pays nothing.
     const floorPaid = this._atResupplyStop ? this._applyFirstDepotFloor() : false;
     const owed = this._firstVisitOwed;
     this._firstVisitOwed = false;
@@ -4216,79 +3776,53 @@ export class GameFlowManager {
   }
 
   /**
-   * The ONE depot decision at a mission boundary — called by the CATCH_PROCESSED
-   * handler when a credited catch lands exactly on a SHOP_CADENCE multiple while
-   * in gameplay (the sole live SHOP-entry decision per catch; the legacy
-   * INTERACTION_* timers below are production-unreachable — see
+   * The ONE depot decision at a mission boundary, called by the CATCH_PROCESSED handler when a credited catch lands exactly
+   * on a SHOP_CADENCE multiple while in gameplay (the legacy INTERACTION_* timers below are production-unreachable, see
    * test-shop-cadence "legacy INTERACTION paths").
    *
-   *   • Ladder OFF (`?ladder=0` / LADDER.ENABLED false): the shipped path,
-   *     byte-identical — the comms line + the silent 2500 ms `_shopTimeoutId`
-   *     → SHOP. Chapters and the doorway are workbench features built behind
-   *     the ladder flag (08-workbench §10); without the rail and the F3
-   *     doorway an invitation has nowhere to point.
-   *   • Chapters 1..FORCED_DEPOT_CHAPTERS with `MISSIONS.FORCED_DEPOT_STOP`
-   *     true (OFF since the owner ruling 2026-10-05 — docs/DECISIONS.md §14:
-   *     after every mission the depot is an invitation, from chapter 1; this
-   *     branch is kept behind the flag, not deleted; with the flag false the
-   *     ladder-on boundary is the invitation path below for EVERY chapter) —
-   *     the completed chapter, every boundary catch closes one): the forced stop made CEREMONIAL. The comms
-   *     line stays; a "MISSION N COMPLETE" card lands on the shipped teaching
-   *     toast (TEACHING_MOMENT_FORCE → TeachingSystem._forceShow →
-   *     TeachingOverlay — owner decision 4: reuse, no new DOM surface) and
-   *     the SAME `_shopTimeoutId` timer, now the card's dwell
-   *     (MISSIONS.COMPLETE_CARD_MS — owner decision 1: a fixed 2.5 s, the old
-   *     timer's length), flips into the SHOP as the card finishes fading (the
-   *     card holds for dwell − TEACHING.FADE_OUT_MS). The card IS the cause:
-   *     one timer, one number, no silent cut.
-   *   • Every chapter (flag false, the default) or chapter
-   *     FORCED_DEPOT_CHAPTERS+1 on (flag true): NO forced stop — the depot is an
-   *     INVITATION (`_openDepotInvitation`): comms "UPGRADES AVAILABLE" (owner
-   *     wording 2026-09-05 — the doorway is retired, Session H), ONE
-   *     `DEPOT_INVITATION { open: true }` (the WHERE rail's notch 1 AND the
-   *     REFIT tab glow — VisualLaw VALUE, steady), and the first-depot 600 cr
-   *     floor moves to the first invitation if the depot was never entered
-   *     (the SAME `_applyFirstDepotFloor` — one grant rule, one place, two
-   *     callers). Getting there is the ordinary ride down to floor 1 — the
-   *     shop is the REFIT drawer, one shop, one place; nothing in ZoomLadder
-   *     softens. The window is "until the next credited catch" (owner decision
-   *     2): the CATCH_PROCESSED handler lapses it; any SHOP entry closes it as
-   *     'entered'.
+   *   • Ladder OFF (`?ladder=0` / LADDER.ENABLED false): the shipped path, byte-identical: the comms line + the silent
+   *     2500 ms `_shopTimeoutId` → SHOP (an invitation needs the ladder's rail: 08-workbench §10).
+   *   • Chapters 1..FORCED_DEPOT_CHAPTERS with `MISSIONS.FORCED_DEPOT_STOP` true (OFF since docs/DECISIONS.md §14; kept behind
+   *     the flag, not deleted): the forced stop made CEREMONIAL. The comms line stays; a "MISSION N COMPLETE" card lands on the
+   *     shipped teaching toast (TEACHING_MOMENT_FORCE → TeachingSystem._forceShow → TeachingOverlay; owner decision: reuse, no
+   *     new DOM surface) and the SAME `_shopTimeoutId` timer, now the card's dwell (MISSIONS.COMPLETE_CARD_MS; owner decision:
+   *     a fixed 2.5 s, the old timer's length), flips into the SHOP as the card finishes fading (dwell − TEACHING.FADE_OUT_MS).
+   *   • Every chapter (flag false, the default) or chapter FORCED_DEPOT_CHAPTERS+1 on (flag true): NO forced stop, the depot
+   *     is an INVITATION (`_openDepotInvitation`): comms "UPGRADES AVAILABLE" (owner wording 2026-09-05), ONE
+   *     `DEPOT_INVITATION { open: true }` (the WHERE rail's notch 1 AND the REFIT tab glow, VisualLaw VALUE, steady), and the
+   *     first-depot 600 cr floor moves to the first invitation if the depot was never entered (the SAME
+   *     `_applyFirstDepotFloor`). The window is "until the next credited catch" (owner decision): the CATCH_PROCESSED handler
+   *     lapses it; any SHOP entry closes it as 'entered'.
+   *   • `_satelliteIsTheStop()` (flag on, floor 4 there): none of the above. The boundary opens NO stop and no invitation
+   *     (buying moved to the resupply satellite, reached from the "where next" list); only the MISSION_COMPLETE headline stays.
    *
-   *   • Nets step 3 slice 3 (S7; `_satelliteIsTheStop()`: flag on, floor 4 there): none of the above. The boundary opens NO stop and no
-   *     invitation (buying moved to the resupply satellite, reached from the "where next" list); only the MISSION_COMPLETE headline stays.
-   *
-   * @param {number} debrisCount - gameState.debrisCleared at the boundary (a
-   *   positive multiple of SHOP_CADENCE)
+   * @param {number} debrisCount - gameState.debrisCleared at the boundary (a positive multiple of SHOP_CADENCE)
    * @private
    */
   _onMissionBoundary(debrisCount) {
     const M = Constants.MISSIONS;
     const ladderOn = !!(Constants.LADDER && Constants.LADDER.ENABLED);
     const { missionsCompleted } = getMissionProgress(debrisCount);
-    // Nets step 3 slice 3 (S7; DECISIONS §33 row 7): with the resupply satellite as the stop (flag on, floor 4 there to ask on) a completed
-    // mission opens NO stop and no depot invitation: all buying moved to the satellite, reached by the "where next" list the 5th catch
-    // opens. The "MISSION N COMPLETE" headline and its cue stay (the same event the invitation used to carry).
+    // DECISIONS §33 row 7: with the resupply satellite as the stop (flag on, floor 4 there to ask on) a completed mission opens
+    // NO stop and no depot invitation: all buying moved to the satellite, reached by the "where next" list the 5th catch opens
     if (this._satelliteIsTheStop()) {
       eventBus.emit(Events.MISSION_COMPLETE, { mission: missionsCompleted, debrisCleared: debrisCount });
       return;
     }
-    // u1-resupply-stop D1: a completed mission opens the resupply stop on EVERY path below (the ladder-on
-    // invitation, the forced stop, the ladder-off boundary shop) — it stays open until the next credited catch.
+    // a completed mission opens the resupply stop on EVERY path below; it stays open until the next credited catch
     this._setResupplyStop(true);
     if (ladderOn && (!M.FORCED_DEPOT_STOP || missionsCompleted > M.FORCED_DEPOT_CHAPTERS)) {
       this._openDepotInvitation(debrisCount, missionsCompleted);
       return;
     }
-    // The forced stop (every chapter with the ladder off; chapters 1..N with it
-    // on). The comms line stays (shipped text, shipped priority).
+    // The forced stop (every chapter with the ladder off; chapters 1..N with it on); the comms line is the shipped text
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `${debrisCount} debris cleared. Return to depot for resupply`,
       priority: 'high',
     });
     let dwellMs = 2500;   // the shipped silent cut (ladder off)
     if (ladderOn) {
-      // The card ceremony — the dwell becomes the card's.
+      // the card ceremony: the dwell becomes the card's
       dwellMs = M.COMPLETE_CARD_MS;
       const fadeMs = (Constants.TEACHING && Constants.TEACHING.FADE_OUT_MS) || 500;
       eventBus.emit(Events.TEACHING_MOMENT_FORCE, {
@@ -4301,10 +3835,8 @@ export class GameFlowManager {
     }
     this._shopTimeoutId = timerManager.setTimeout(() => {
       if (gameState.isGameplay()) {
-        // Session K (GFM lift, site 2 of 4): the dwell lands on the WORKBENCH
-        // with the ladder on — the ride down + the REFIT drawer, the boundary
-        // flagged so the hub can tell the ceremony from a B-key visit. Ladder
-        // off: the shipped SHOP flip, byte-identical.
+        // ladder on: the dwell lands on the WORKBENCH (ride down + REFIT drawer), the boundary flagged so the hub can tell
+        // the ceremony from a B-key visit; ladder off: the shipped SHOP flip, byte-identical
         if (this._ladderOn()) this._stopAtWorkbench(true);
         else this.transitionToState(GameStates.SHOP);
       }
@@ -4313,30 +3845,24 @@ export class GameFlowManager {
   }
 
   /**
-   * Open the depot invitation — after every mission with the ladder on (owner
-   * ruling 2026-10-05, docs/DECISIONS.md §14; chapter FORCED_DEPOT_CHAPTERS+1 on
-   * only when MISSIONS.FORCED_DEPOT_STOP is true).
-   * A boundary landing while one is already open (only possible if the window
-   * outlived a whole chapter — it cannot, the next catch lapses it) simply
-   * re-opens it for the new chapter: the notch glow is idempotent.
+   * Open the depot invitation: after every mission with the ladder on (docs/DECISIONS.md §14; chapter
+   * FORCED_DEPOT_CHAPTERS+1 on only when MISSIONS.FORCED_DEPOT_STOP is true). Re-opening one already open is harmless
+   * (the notch glow is idempotent).
    * @param {number} debrisCount
    * @param {number} missionsCompleted - the chapter just completed
    * @private
    */
   _openDepotInvitation(debrisCount, missionsCompleted) {
-    // The first-depot floor moves to the first INVITATION when the depot was
-    // never entered — the same one-shot rule + flag as the SHOP entry (a
-    // visited profile returns false and pays nothing).
+    // the first-depot floor moves to the first INVITATION when the depot was never entered (a visited profile pays nothing)
     const firstInvitation = this._applyFirstDepotFloor();
     if (firstInvitation) this._firstVisitOwed = true;   // the framing waits for the visit
     this._depotInvitation = { chapter: missionsCompleted + 1, debrisCleared: debrisCount };
-    // m1-finish: the "mission complete" moment — a headline that fades by itself and one
-    // success cue (HUD / AudioSystem listen). Not a stop: no card, no hold (DECISIONS §14).
+    // a headline that fades by itself and one success cue (HUD / AudioSystem listen); not a stop: no card, no hold (DECISIONS §14)
     eventBus.emit(Events.MISSION_COMPLETE, { mission: missionsCompleted, debrisCleared: debrisCount });
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `UPGRADES AVAILABLE \u2014 ${debrisCount} debris cleared. Come down when ready, or fly on. The stop closes at your next catch.`,
       priority: 'high',
-      _keep: true,   // comms-after-tutorial D6: the next step - never folded into "x N queued"
+      _keep: true,   // the next step: never folded into "x N queued"
     });
     eventBus.emit(Events.DEPOT_INVITATION, {
       open: true, chapter: missionsCompleted + 1, debrisCleared: debrisCount, firstInvitation,
@@ -4344,10 +3870,8 @@ export class GameFlowManager {
   }
 
   /**
-   * Close the open depot invitation, if any: ONE `DEPOT_INVITATION { open:
-   * false, reason }` so the rail's notch glow ends. Idempotent — nothing open,
-   * nothing emitted (every caller is a "maybe": SHOP entry, the next catch,
-   * terminal states, resetGame).
+   * Close the open depot invitation, if any: ONE `DEPOT_INVITATION { open: false, reason }`. Idempotent: nothing open,
+   * nothing emitted (every caller is a "maybe": SHOP entry, the next catch, terminal states, resetGame).
    * @param {'entered'|'lapsed'|'reset'} reason
    * @private
    */
@@ -4359,33 +3883,20 @@ export class GameFlowManager {
   }
 
   /**
-   * Per-catch progress line (M1 guidance T7, missions 1–3 only): after each
-   * credited clear that is NOT a mission boundary, one short HOUSTON line —
-   * "Mission N: k/5 cleared. Clear m more for depot resupply." — so a new
-   * player always knows where they stand in the chapter (the owner report was
-   * a cluster that "drifts away / vanishes" with nothing telling the player
-   * how much is left). Same vocabulary as the continue-flow objective line
-   * above ("Clear N more debris for depot resupply."); no new terms.
+   * Per-catch progress line (missions 1–3 only): after each credited clear that is NOT a mission boundary, one short HOUSTON
+   * line, "Mission N: k/5 cleared. Clear m more for depot resupply."
+   * owner report: a cluster "drifts away / vanishes" with nothing saying how much is left.
    *
-   *   • Guided chapters only: `isGuidedChapterNumber(missionNum)` — the
-   *     profile's `guidedCluster` flag, missions 1–3 (FORCED_DEPOT_CHAPTERS).
-   *     From mission 4 on the chapter count is ambient — no line. (The depot
-   *     is an invitation after every mission since owner 2026-10-05,
-   *     DECISIONS §14 — the line still says how far off the next one is.) The mission number comes from the pure
-   *     `getMissionProgress(gameState.debrisCleared)`, which IS correct on a
-   *     bare Continue (no MISSION_START fires on restore — DebrisField's
-   *     profile-based isGuidedChapter() would read M1 there).
-   *   • The boundary catch is skipped (debrisUntilShop === perMission ⇔ the
-   *     count just landed on a multiple): `_onMissionBoundary` already shows
-   *     the "UPGRADES AVAILABLE" invitation there (the "MISSION N COMPLETE"
-   *     card only with MISSIONS.FORCED_DEPOT_STOP on). Callers: the CATCH_PROCESSED non-boundary
-   *     branch (which never lands on a boundary, so the guard is belt-and-
-   *     braces) and the ARM_DEORBIT sacrifice path (which has no boundary
-   *     handling of its own — the guard is what keeps the 5th clear quiet).
-   *   • Suppression: `_postOnboarding` — passes from tier 1 on (HOUSTON
-   *     channel passes at ramp tier 1 anyway); at tier 0, while the Director's
-   *     first beats run, it is muted BY DESIGN: `first_catch` / `second_catch`
-   *     narrate those catches.
+   *   • Guided chapters only: `isGuidedChapterNumber(missionNum)`, the profile's `guidedCluster` flag, missions 1–3
+   *     (FORCED_DEPOT_CHAPTERS). From mission 4 on the chapter count is ambient: no line (the depot is an invitation after
+   *     every mission, DECISIONS §14; the line still says how far off the next one is). The mission number comes from the
+   *     pure `getMissionProgress(gameState.debrisCleared)`, which IS correct on a bare Continue (no MISSION_START fires on
+   *     restore; DebrisField's profile-based isGuidedChapter() would read M1 there).
+   *   • The boundary catch is skipped (debrisUntilShop === perMission ⇔ the count just landed on a multiple):
+   *     `_onMissionBoundary` already shows the invitation there. Callers: the CATCH_PROCESSED non-boundary branch (the guard
+   *     is belt-and-braces) and the ARM_DEORBIT sacrifice path (no boundary handling of its own: the guard keeps the 5th clear quiet).
+   *   • Suppression: `_postOnboarding` passes from tier 1 on; at tier 0, while the Director's first beats run, it is muted BY
+   *     DESIGN: `first_catch` / `second_catch` narrate those catches.
    * @private
    */
   _postMissionProgressLine() {
@@ -4397,27 +3908,18 @@ export class GameFlowManager {
       source: 'HOUSTON', channel: 'HOUSTON', priority: 'info',
       text: `Mission ${missionNum}: ${cleared}/${perMission} cleared. Clear ${debrisUntilShop} more for ${stopWords(this)}.`,
       _postOnboarding: true,
-      _keep: true,   // comms-after-tutorial D6: mission progress - never folded into "x N queued"
+      _keep: true,   // mission progress: never folded into "x N queued"
     });
   }
 
   /**
-   * First-depot settlement (first-credit legibility + early-shop tension plan).
-   * On the player's true first depot visit only — gated by the profile-permanent
-   * FIRST_DEPOT_VISITED ceremony flag — pay a one-time, on-theme "first cleanup
-   * contract settled" bonus that tops the wallet UP TO Constants.SHOP.FIRST_DEPOT_FLOOR
-   * if it is below that. This guarantees one ~500 starter is affordable without
-   * gifting two upgrades or the 800 net. Runs once per profile and survives
-   * GAMEOVER_CONTINUE (which resets debrisCleared but not the flag).
-   * Called on SHOP entry (a depot arrival), never on SHOP_DEPLOY (exit) — and,
-   * since Wave 5 Session E, at the first depot INVITATION (after every mission
-   * since owner 2026-10-05, DECISIONS §14 — so from mission 1): the floor moves
-   * to the invitation when the depot was never entered, and the first-visit
-   * framing is owed to the next workbench stop (`_firstVisitOwed`). ONE rule, ONE flag, two callers.
-   * @returns {boolean} true when this was the first depot visit (so the shop can
-   *   render its one-time first-visit framing + recommended-starter ⭐). The
-   *   FIRST_DEPOT_VISITED flag is persisted here, so callers must use this
-   *   return value rather than re-reading the flag afterward.
+   * First-depot settlement: on the true first depot visit only (profile-permanent FIRST_DEPOT_VISITED ceremony flag) tops the
+   * wallet UP TO Constants.SHOP.FIRST_DEPOT_FLOOR, so one ~500 starter is affordable without gifting two upgrades or the 800
+   * net. Survives GAMEOVER_CONTINUE (which resets debrisCleared but not the flag). Called on SHOP entry (never SHOP_DEPLOY)
+   * and at the first depot INVITATION (after every mission, DECISIONS §14): the floor moves to the invitation when the depot
+   * was never entered, and the first-visit framing is owed to the next workbench stop (`_firstVisitOwed`).
+   * @returns {boolean} true when this was the first depot visit (the shop renders its one-time framing + recommended-starter ⭐).
+   *   The flag is persisted here, so callers use this return value rather than re-reading it.
    * @private
    */
   _applyFirstDepotFloor() {
@@ -4434,18 +3936,13 @@ export class GameFlowManager {
       });
     }
 
-    // Persist the new credits, then mark the flag (read-modify-write preserves
-    // the freshly-saved wallet + other ceremony flags).
+    // persist the new credits, then mark the flag (read-modify-write preserves the saved wallet + other ceremony flags)
     this.saveGame();
     persistenceManager.setCeremonyFlag('FIRST_DEPOT_VISITED', true);
     return true;
   }
 
-  // ==========================================================================
-  // HELPERS
-  // ==========================================================================
   /**
-   * Check if a specific upgrade has been purchased.
    * @param {string} upgradeId - e.g. 'hazmat_handler', 'salvage_scanner'
    * @returns {boolean}
    */
@@ -4459,16 +3956,9 @@ export class GameFlowManager {
     return found;
   }
 
-  // ==========================================================================
-  // ARM DEPLOYMENT
-  // ==========================================================================
-
-  /**
-   * Deploy a V3 Octopus arm to capture the selected debris target.
-   */
+  /** Deploy a V3 Octopus arm at the selected debris target. */
   deployArm() {
     const { armManager } = this._refs;
-    // targetSelector: imported singleton
     const target = targetSelector.getActiveTarget();
     if (!target || !target.alive) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -4482,19 +3972,13 @@ export class GameFlowManager {
     const dockedBefore = (armManager.arms || []).filter(a => a.state === Constants.ARM_STATES.DOCKED);
     const deployed = armManager.deployArm(target);
 
-    // Aim-before-launch: when a rotation ceremony is in flight, deployArm returns
-    // true at ceremony START (the daughter hasn't launched yet). Suppress the
-    // premature "deployed" confirmation — AutopilotSystem already posted the
-    // "Rotating to launch attitude" comms, and the real launch fires after the
-    // slew resolves. Only confirm here for immediate (non-ceremony) deploys.
-    // mother-aims: the same holds for a strut-only launch that waits for her strut to swing
-    // (the mother cannot turn): deployArm is true, no arm has left the dock yet.
+    // deployArm returns true at the START of a rotation ceremony or a strut-only launch (the mother cannot turn): no arm has
+    // left the dock yet, so the "deployed" confirmation is suppressed (AutopilotSystem posts "Rotating to launch attitude")
     const ceremonyInFlight = (armManager._autopilot
       && typeof armManager._autopilot.isAiming === 'function'
       && armManager._autopilot.isAiming())
       || (dockedBefore.length > 0 && dockedBefore.every(a => a.state === Constants.ARM_STATES.DOCKED));
 
-    // UX: Confirm deployment via comms (ARM_PILOT is auto-entered by InputManager)
     if (deployed && !ceremonyInFlight) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Daughter deployed. Press her number to fly her.',
@@ -4503,20 +3987,8 @@ export class GameFlowManager {
         priority: 'info',
       });
     } else if (!deployed) {
-      // H1 2026-10-09: `else if (!deployed)` — a ceremony-in-flight deploy
-      // (deployed true, daughter not launched yet) used to fall in here and post
-      // a false "Launch refused" while the daughter launched anyway.
-      // 2026-05-15 polish task 5: G-key fail-quiet was the user-reported
-      // bug. ArmManager.deployArm() already emits specific COMMS_MESSAGE
-      // events for the common rejection paths (no-arm, safe-mode, no
-      // power, mass exceeded, active-sat treaty, etc.). The one silent
-      // path is when ArmManager finds a docked arm but ArmUnit.deploy()
-      // returns false (state mismatch, spring uncharged via internal
-      // check). We backstop with a generic-but-actionable fallback so
-      // the player never wonders why nothing happened. The specific
-      // ArmManager comms will still have fired first if applicable.
-      // Inspect the fleet to give the most useful diagnostic when the
-      // ArmManager path produced no signal.
+      // ArmManager.deployArm() already emits specific comms for the common rejections; the one silent path is a docked arm
+      // whose ArmUnit.deploy() returns false (state mismatch, spring uncharged): backstop with a reason read from the fleet
       const arms = armManager.arms || [];
       const docked   = arms.filter(a => a.state === Constants.ARM_STATES.DOCKED);
       const charged  = docked.filter(a => a.springCharged !== false);

@@ -317,7 +317,7 @@ export class NetInventoryPanel {
       nets:  { total: this._net_state.total,           max: this._net_state.max  },
     });
 
-    // No comms line from here: the player's net lines are the one-line prompts of DECISIONS §33 row 8.
+    // No comms line from here: the player's net lines are the one-line prompts of DECISIONS §33 row 3.
     // INVENTORY_LOW above stays for any listener.
   }
 

@@ -1,14 +1,14 @@
 /**
- * stillPlayingText.js — the words of the "Still playing?" card in every language the menu picker offers (fresh-start D3,
- * owner 2026-10-28), in the pattern of js/ui/helpText.js (DECISIONS §44): English is the base, every other language
- * block may leave a string out and `stillPlayingTextFor` shows the English one instead.
+ * stillPlayingText.js — the words of the "Still playing?" card in every language the menu picker offers, in the pattern
+ * of js/ui/helpText.js (DECISIONS §44): English is the base, a language block may leave a string out and
+ * `stillPlayingTextFor` shows the English one.
  *
  * `line` holds `{n}`, replaced by the seconds left. Thai, Japanese, Hindi and Tamil drop letter spacing and CSS capitals
  * (§44 row 5: they break joined scripts): `NO_SPACING_LANGS`.
  *
  * REVIEW STATUS: the six translations are model-made and have not been checked by a native speaker.
  *
- * Pure data and one lookup: no DOM, no settings read here (the card passes the code in).
+ * Pure data and one lookup: no DOM, no settings read (the card passes the code in).
  * @module ui/stillPlayingText
  */
 
@@ -44,7 +44,6 @@ export function stillPlayingTextFor(code) {
   return out;
 }
 
-/** The countdown line with the seconds filled in. */
 export function countdownLine(code, n) {
   return stillPlayingTextFor(code).line.replace('{n}', String(Math.max(0, Math.ceil(n))));
 }

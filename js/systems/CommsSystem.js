@@ -696,7 +696,7 @@ export class CommsSystem {
       this.addMessage('INFO', daughterDisplayName(data?.armId) || 'SYSTEM', 'Spring re-charged. Ready for next deploy.', { channel: 'CMD' });
     });
 
-    // STATION_KEEP_ENTERED → ONE line, one action (DECISIONS §33 row 8). The daughter holds station; N works her
+    // STATION_KEEP_ENTERED → ONE line, one action (DECISIONS §33 row 3). The daughter holds station; N works her
     // recommended tool (InputManager KeyN reaches a holding daughter without pilot mode). The pad, the gripper and the
     // magnet each say their own word (the net's line is every other tool's). Plain words, no symbols (Ruling 0); the
     // number keys that pilot her are in the help page, not here. On glass `chipPhrase` turns each "Press N to ..." into

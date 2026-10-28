@@ -1,16 +1,14 @@
 /**
- * @module ui/StillPlayingCard — the "Still playing?" card of the shared-iPad show mode (fresh-start D3, owner
- * 2026-10-28; plan tmp/plans/fresh-start-1028.md). It asks, after 60 s without a touch, whether the player is still
- * there. "Keep playing" (a tap anywhere outside the buttons, or Esc / Enter / Space) returns to the exact state;
- * "New player" (or the countdown reaching zero) starts the reset (IdleReset.js).
+ * @module ui/StillPlayingCard — the "Still playing?" card of the shared-iPad show mode (DECISIONS §52 row 2).
+ * "Keep playing" (a tap anywhere outside the buttons, or Esc / Enter / Space) returns to the exact state; "New player"
+ * (or the countdown reaching zero) starts the reset (IdleReset.js).
  *
- *  - `StillPlayingCard`: the DOM (a modal over the HUD). Built with an injected `doc`, so a test drives a fake.
- *    Words come from stillPlayingText.js in the player's language (English when a string is missing). Buttons are at
- *    least 44 x 44 CSS px (Apple's touch minimum).
- *  - `wireStillPlaying`: the glue main.js calls once. It builds the idle clock (IdleReset) and the card, pauses the game
- *    behind the card through the SAME path as Esc (`InputManager.togglePause`, which emits PAUSE_RESUME on the way back),
- *    only when the card did the pausing, and runs the countdown from the clock's own timer (a paused game loop schedules
- *    no frames, so the loop cannot drive it).
+ *  - `StillPlayingCard`: the DOM (a modal over the HUD), built with an injected `doc` (tests drive a fake). Words come
+ *    from stillPlayingText.js.
+ *  - `wireStillPlaying`: the glue main.js calls once. It builds the idle clock and the card, pauses the game behind the
+ *    card through the SAME path as Esc (`InputManager.togglePause`, which emits PAUSE_RESUME on the way back), only when
+ *    the card did the pausing, and runs the countdown from the clock's own timer (a paused game loop schedules no
+ *    frames, so the loop cannot drive it).
  *
  * While the card is up it swallows Esc, Enter and Space in the capture phase (Esc would toggle pause, Enter on the menu
  * would start a game) and keeps every other key and touch from reaching the game under it.
@@ -19,7 +17,7 @@
 import { IdleReset } from '../systems/IdleReset.js';
 import { stillPlayingTextFor, countdownLine, NO_SPACING_LANGS } from './stillPlayingText.js';
 
-/** Smallest touch target (Apple HIG): both buttons are at least this many CSS px each way. */
+/** Smallest touch target (Apple HIG), CSS px each way. */
 export const BUTTON_MIN_PX = 44;
 /** Above the HUD and its panes (the highest game layer is 99999), below the debug overlay. */
 export const CARD_Z = 100000;
@@ -56,13 +54,10 @@ export class StillPlayingCard {
   /** @returns {boolean} */
   isOpen() { return this._el !== null; }
 
-  /** The overlay element while open (tests read it), else null. */
+  /** The overlay element while open, else null. */
   get element() { return this._el; }
 
-  /**
-   * Show the card with the full countdown.
-   * @param {number} seconds
-   */
+  /** @param {number} seconds the full countdown */
   open(seconds) {
     if (this._el || !this._doc) return;
     const doc = this._doc;
@@ -131,12 +126,10 @@ export class StillPlayingCard {
     try { if (this._keepBtn.focus) this._keepBtn.focus(); } catch (_) { /* no focus in a fake */ }
   }
 
-  /** Update the countdown line. */
   setRemaining(seconds) {
     if (this._lineEl) this._lineEl.textContent = countdownLine(this._lang, seconds);
   }
 
-  /** Remove the card and let go of the keys. */
   close() {
     if (this._win && this._win.removeEventListener) this._win.removeEventListener('keydown', this._keyHandler, true);
     const el = this._el;
@@ -144,7 +137,6 @@ export class StillPlayingCard {
     if (el && el.parentNode && el.parentNode.removeChild) el.parentNode.removeChild(el);
   }
 
-  /** @private Capture-phase keydown while the card is up. */
   _onKey(e) {
     if (!this._el || !e) return;
     const key = e.key;
@@ -163,7 +155,7 @@ export class StillPlayingCard {
 }
 
 /**
- * Build the idle clock and the card and join them to the game. Returns what main.js feeds.
+ * Build the idle clock and the card and join them to the game.
  * @param {object} d
  * @param {Document|object} d.doc
  * @param {object} [d.win]
@@ -212,8 +204,8 @@ export function wireStillPlaying(d) {
 }
 
 /**
- * Run the idle clock's own timer and its come-back-from-hidden tick ONLY while show mode is on (owner/coordinator
- * 2026-10-28, F1.1: off means off, with no timer and no listener). Turning it on starts them, off stops them.
+ * Run the idle clock's own timer and its come-back-from-hidden tick ONLY while show mode is on (off means off: no timer,
+ * no listener). Turning it on starts them, off stops them.
  * @param {object} d
  * @param {{ isOn: Function, onChange: Function }} d.showMode
  * @param {{ tick: Function }} d.kit              what wireStillPlaying returned

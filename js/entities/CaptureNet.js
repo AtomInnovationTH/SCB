@@ -1,13 +1,6 @@
 /**
- * CaptureNet.js — Capture Net Projectile + System Manager
- * ST-9.4 C-6: Config G Capture Net (Sub-Tasks a–e)
- *
- * Implements the full net capture cycle per CAPTURE_NET.md:
- *   a) Net projectile + deploy mechanics (state machine, flight physics)
- *   b) Catch detection + tangle quality (cling probability, frag risk)
- *   c) Reel-in + tension (motor reel, abort/release)
- *   d) Stow + cargo hand-off (inventory depletion, debris transfer)
- *   e) HUD indicators (inventory tracking, reel progress, captured mass)
+ * CaptureNet.js — Capture Net Projectile + System Manager (net capture cycle per CAPTURE_NET.md):
+ * deploy and flight, catch and tangle quality, reel-in and tension, stow and cargo hand-off, HUD indicators.
  *
  * All behavior gated behind FEATURE_FLAGS.CAPTURE_NET (default false).
  *
@@ -23,44 +16,39 @@ import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 import { reseatOrbitFromScene, orbitToSceneCartesianInto } from './OrbitalMechanics.js';
 import { strutTipFoulsCorridor } from './ArmDockBasis.js';
-// Debris cutting step 5 (CUT_AT_NOSE): the pure planner — called ONCE when a
-// collared catch is over the hand-off gate.
+// CUT_AT_NOSE: the pure planner, called ONCE when a collared catch is over the hand-off gate.
 import { planCuts } from '../systems/cutPlanner.js';
 import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE, targetRangeM, netMaxReachM } from '../systems/netRouting.js';
-export { netMaxReachM };   // net-reach-ticker: the function moved to netRouting.js (the reticle reads it without this module)
-// Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
-// (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
+export { netMaxReachM };   // lives in netRouting.js: the reticle reads it without this module
+// The carrier scorer lives with the CoM maths (ONE computation: it reuses computeCoM/strutTipMeters).
 import { suggestCargoArm, countEmptyDockedDaughters, heldCargoFoulsCorridorAt } from '../systems/CoMCalculator.js';
 import { tripRefuses, tripLeashRefuses } from '../systems/TransferTrip.js';
 import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js';
 import { pickScoopMembers, scoopLine } from './scoopRule.js';
-// Nets step 3 slice 5 (lane 5b): a pending BIG piece (counted at the catch, pays when disposed of) is never let go by K, never auto-cut,
+// A pending BIG piece (counted at the catch, pays when disposed of) is never let go by K, never auto-cut,
 // and says its own collar line. Looked up by id: a net may hold a snapshot of the field's body.
 import { bigPieces, pieceName } from '../systems/BigPieces.js';
 import * as THREE from 'three';
+import { RAD2DEG, degToRad, clamp01, clamp, lerp } from '../core/MathUtil.js';
 
-const _heldNeck = { x: 0, y: 0, z: 0 };   // net-cinch: scratch for a daughter's held-net neck (scene units)
+const _heldNeck = { x: 0, y: 0, z: 0 };   // scratch: a daughter's held-net neck (scene units)
 
 const CN = Constants.CAPTURE_NET;
 const STATES = CN.STATES;
 const MODES = CN.MODES;
-// Cargo hand-off tuning (cargo-continuity S7). Same aliasing discipline as CN:
-// a live object reference, so a test that retunes a key is seen immediately.
+// Cargo hand-off tuning. A live object reference like CN, so a test that retunes a key is seen immediately.
 const CT = CN.CARGO_TRANSFER || {};
 const FEATURE_FLAGS = Constants.FEATURE_FLAGS;
-// no-melt (owner 2026-10-18): the plain refusal for a new catch while the nose holds one that has nowhere to go.
-// trip-melt G8 (owner 2026-10-19): nothing is unloaded by a station any more; a catch that fits a tip goes to a furnace
-// on the trip to the next field.
+// owner 2026-10-18: a new catch is refused while the nose holds one that has nowhere to go. Nothing is unloaded by a
+// station (owner 2026-10-19): a catch that fits a tip goes to a furnace on the trip to the next field.
 const NOSE_FULL_LINE = 'Nose is full: this catch has nowhere to go yet. '
   + 'It stays at the collar and goes to a furnace on the trip to the next field if it fits one. Press K to let it go.';
-// R1 (fix round 1): the same refusal while a cut is paused at the nose for want of an empty daughter.
-// ("Press K to let it go." is the sentence the touch wording knows (GestureHints GLASS_LINES / chipPhrase): any other tail would
-// name a key on glass.)
+// The same refusal while a cut is paused at the nose for want of an empty daughter.
+// "Press K to let it go." is the sentence the touch wording knows (GestureHints GLASS_LINES / chipPhrase): any other tail
+// would name a key on glass.
 const NOSE_FULL_CUT_LINE = 'Nose is full: the cut catch has pieces that still need an empty daughter. Press K to let it go.';
 
-// Module-level scratch objects for the mother reel/berth per-frame math —
-// the reel/berth path must not allocate per frame (plan §13: use the Into
-// accessors and scratch vectors).
+// Scratch for the mother reel/berth per-frame math: that path must not allocate per frame (use the Into accessors).
 const _v3a = new THREE.Vector3();
 const _v3b = new THREE.Vector3();
 const _v3c = new THREE.Vector3();
@@ -71,9 +59,9 @@ const _v3g = new THREE.Vector3();
 const _anchorLocal = { x: 0, y: 0, z: 0 };
 
 /**
- * The ONE berth anchor (S13(e)) in ship-local metres: the collar object, ON the axis at (0, 0, BERTH_COLLAR_Z_M), read from the anchor
+ * The ONE berth anchor in ship-local metres: the collar object, ON the axis at (0, 0, BERTH_COLLAR_Z_M), read from the anchor
  * Object3D when the real ship is present, falling back to the launcher muzzle local (headless mocks without the collar anchor) and then to
- * the documented constant. `_corridorClear` and ArmManager's holder duck (net-duck) read it here, so they cannot disagree.
+ * the documented constant. `_corridorClear` and ArmManager's holder duck read it here, so they cannot disagree.
  * @param {object|null} player
  * @param {number} podIndex
  * @param {{x:number,y:number,z:number}} out
@@ -89,33 +77,24 @@ export function berthAnchorLocalInto(player, podIndex, out) {
 }
 const _q0  = new THREE.Quaternion();
 const _q1  = new THREE.Quaternion();
-// Cargo hand-off scratch (cargo-continuity S7 — the transfer beat runs every
-// frame of the flight, so it allocates nothing either).
+// Per-frame scratch (no allocation): cargo hand-off transfer beat; CUT_AT_NOSE waiting-piece pin (every COLLARED frame);
+// catch/ship velocity sampling at CAPTURED (tug); held-catch attitude + ship pose (cargo flight, rack pin).
 const _v3f = new THREE.Vector3();
-// Cut-at-nose scratch (CUT_AT_NOSE): the waiting-piece pin runs every COLLARED
-// frame — same no-allocation rule.
 const _v3cut = new THREE.Vector3();
-// Tug scratch (Phase B §9) — catch/ship velocity sampling at CAPTURED.
 const _tugScratchPos = { x: 0, y: 0, z: 0 };
 const _tugScratchVel = { x: 0, y: 0, z: 0 };
-// Held-catch attitude + ship pose scratch (c1-catch-pose) — the cargo flight and
-// the rack pin run every frame, so they allocate nothing.
 const _qCatchPose = new THREE.Quaternion();
 const _qShip = new THREE.Quaternion();
 const _qShipInv = new THREE.Quaternion();
 const _vShipPos = new THREE.Vector3();
 
-// ── Held-catch attitude in the SHIP's frame (c1-catch-pose, D3/D4) ────────
-// A catch held rigidly by the ship (collar, cargo flight, a docked daughter's
-// rack) turns WITH the ship — DECISIONS Ruling 0, physically real. The nose hold
-// does it through `NetProjectile._qLocal`; the cargo flight now does too, and on
-// arrival hands the ship-relative attitude to the daughter's rack as
-// `d._qLocalShip` (a THREE.Quaternion = shipQuat⁻¹ × catchQuat). The rack pin
-// (`ArmUnit._pinHeldCatches`) writes shipQuat × `_qLocalShip` back into the
-// catch's `tumbleAxis`/`tumbleAngle`, which `DebrisField.pinCapturedDebris`
-// reads for the drawn instance (a debris has no quaternion field). Research
-// 2026-10 capture-repros, Repro B. Every helper is a quiet no-op when the catch
-// has no `tumbleAxis` or the quaternion is absent (test stubs, early boot).
+// Held-catch attitude in the SHIP's frame. A catch held rigidly by the ship (collar, cargo flight, a docked daughter's
+// rack) turns WITH the ship — DECISIONS Ruling 0, physically real. The nose hold does it through `NetProjectile._qLocal`;
+// the cargo flight hands the ship-relative attitude to the daughter's rack on arrival as
+// `d._qLocalShip` (a THREE.Quaternion = shipQuat⁻¹ × catchQuat). The rack pin (`ArmUnit._pinHeldCatches`) writes
+// shipQuat × `_qLocalShip` back into the catch's `tumbleAxis`/`tumbleAngle`, which `DebrisField.pinCapturedDebris` reads
+// for the drawn instance (a debris has no quaternion field). Every helper is a quiet no-op when the catch has no
+// `tumbleAxis` or the quaternion is absent (test stubs, early boot).
 
 /**
  * The catch's attitude (tumbleAxis/tumbleAngle) as a quaternion.
@@ -147,14 +126,11 @@ function canonicalOf(d, debrisField = null) {
 /**
  * Copy the catch's attitude onto the object DebrisField actually DRAWS.
  *
- * A lasso / net catch is a shallow SNAPSHOT of the field's debris (measured in
- * the browser, c1-catch-pose D7: `net.targetDebris !== debrisMap.get(id)`, it
- * shares only the `tumbleAxis` Vector3 and owns its own `tumbleAngle` number).
- * `pinCapturedDebris` reads `canonical.tumbleAxis` + `canonical.tumbleAngle`
- * for the drawn instance, so an attitude written only onto the snapshot reaches
- * the screen as (new axis, STALE angle) — the catch looks frozen in the world
- * while the ship turns. Mirror the pair onto the canonical object by id; a no-op
- * when the catch IS canonical or no field is reachable (tests, early boot).
+ * A lasso / net catch is a shallow SNAPSHOT of the field's debris (`net.targetDebris !== debrisMap.get(id)`; it
+ * shares only the `tumbleAxis` Vector3 and owns its own `tumbleAngle` number). `pinCapturedDebris` reads
+ * `canonical.tumbleAxis` + `canonical.tumbleAngle`, so an attitude written only onto the snapshot reaches the screen as
+ * (new axis, STALE angle) and the catch looks frozen while the ship turns. Mirror the pair onto the canonical object
+ * by id; a no-op when the catch IS canonical or no field is reachable (tests, early boot).
  * @param {object} d — the catch whose tumbleAxis/tumbleAngle were just written
  * @param {object|null} [debrisField] — defaults to the capture system's field
  */
@@ -170,15 +146,14 @@ export function mirrorCatchAttitude(d, debrisField = null) {
 }
 
 /**
- * Write a quaternion back into the catch's tumbleAxis/tumbleAngle (the same
- * decomposition `NetProjectile._applyCatchOrientation` uses) and mirror it onto
- * the drawn (canonical) object.
+ * Write a quaternion back into the catch's tumbleAxis/tumbleAngle (the decomposition
+ * `NetProjectile._applyCatchOrientation` uses) and mirror it onto the drawn (canonical) object.
  * @param {object} d — debris with a tumbleAxis
  * @param {THREE.Quaternion} q
  * @param {object|null} [debrisField]
  */
 export function writeCatchAttitude(d, q, debrisField = null) {
-  const w = Math.max(-1, Math.min(1, q.w));
+  const w = clamp(q.w, -1, 1);
   const angle = 2 * Math.acos(w);
   const s = Math.sqrt(Math.max(0, 1 - w * w));
   const ax = d.tumbleAxis;
@@ -191,9 +166,8 @@ export function writeCatchAttitude(d, q, debrisField = null) {
 }
 
 /**
- * Record the catch's CURRENT attitude relative to the ship:
- * `d._qLocalShip = shipQuat⁻¹ × catchQuat`. Always overwrites (the caller
- * decides when a hand-off or a fresh stow is happening).
+ * Record the catch's CURRENT attitude relative to the ship: `d._qLocalShip = shipQuat⁻¹ × catchQuat`.
+ * Always overwrites (the caller decides when a hand-off or a fresh stow is happening).
  * @param {object} d — debris
  * @param {{x:number,y:number,z:number,w:number}|null} shipQuat
  * @param {object|null} [debrisField] — resolves the canonical (drawn) object
@@ -229,11 +203,10 @@ export function clearShipRelativeAttitude(d) {
   if (d) d._qLocalShip = null;
 }
 
-// ── A rack cell is a place on HER (rack-snug, 2026-10-18; Decisions 1, 4) ────
-// A catch parked on a daughter's cargo rack is rigid in HER body frame from the moment its cell is assigned:
-// `d._rackCell` (0|1), `d._rackLocalM` (centre, her frame, metres), `d._qLocalHer` (her⁻¹ × the catch's attitude)
-// and `d._rackArm` (the daughter who owns the cell; a cargo flight assigns at its start, the stow keeps it).
-// Turning the ship or swinging her strut carries the catch with her; world up plays no part. The tip bags and every
+// A rack cell is a place on HER body. A catch parked on a daughter's cargo rack is rigid in HER body frame from the moment
+// its cell is assigned: `d._rackCell` (0|1), `d._rackLocalM` (centre, her frame, metres), `d._qLocalHer` (her⁻¹ × the
+// catch's attitude) and `d._rackArm` (the daughter who owns the cell; a cargo flight assigns at its start, the stow keeps
+// it). Turning the ship or swinging her strut carries the catch with her; world up plays no part. The tip bags and every
 // other user of `applyShipRelativeAttitude` keep the ship-relative form above.
 
 /**
@@ -275,16 +248,15 @@ export function clearRackCell(d) {
   d._rackLocalM = null;
   d._qLocalHer = null;
   d._rackArm = null;
-  d._rackBelow = null;     // rack-centre: the cell-0 piece cell 1 was placed on (ArmUnit._assignRackCellWith)
-  d._rackSlide = null;     // rack-centre: a running cell-1 → cell-0 slide (ArmUnit._lowerRackCell)
-  d._rackFromMotherNet = false;   // hold-catch FA1: and the mark that the mother's net put it there
-  d._wingClear = null;            // hold-clear D1: its radiator-wing profile was for that cell and attitude
+  d._rackBelow = null;     // the cell-0 piece cell 1 was placed on (ArmUnit._assignRackCellWith)
+  d._rackSlide = null;     // a running cell-1 → cell-0 slide (ArmUnit._lowerRackCell)
+  d._rackFromMotherNet = false;   // and the mark that the mother's net put it there
+  d._wingClear = null;            // its radiator-wing profile was for that cell and attitude
 }
 
 /**
- * The ship's live pose for the cargo arcs: position (scene units) into `outPos`,
- * orientation into `outQuat`. False when the player cannot supply both — the
- * caller then keeps today's frozen world-frame behaviour (never throws).
+ * The ship's live pose for the cargo arcs: position (scene units) into `outPos`, orientation into `outQuat`.
+ * False when the player cannot supply both (the caller keeps the frozen world-frame behaviour; never throws).
  * @param {object|null} player
  * @param {THREE.Vector3} outPos
  * @param {THREE.Quaternion} outQuat
@@ -299,28 +271,21 @@ function readShipPose(player, outPos, outQuat) {
   return true;
 }
 
-/** C1: base capture-tension readout (N) — one source for the three former
- *  identical `1.0 + capturedMass × 0.1` sites. HUD-facing garnish only. */
+/** Base capture-tension readout (N); HUD-facing garnish only. */
 function baseCaptureTensionN(capturedMass) {
   return 1.0 + capturedMass * 0.1;
 }
 
 /**
- * Register item 81 — drop a tether-snapped runaway's stale claim at the moment
- * a mother-side capture path takes ownership. A tether snap leaves the runaway
- * re-targetable (`_captured = false`) but back-referenced by the EXPENDED
- * arm's `_severedCatch`, which re-pins it to the drifting daughter every frame
- * until TETHER_SNAP_RELEASE_DELAY_S releases it (ArmUnit._updateExpended) —
- * and would otherwise fire that release on the NEW owner's held catch. The
- * `_updateExpended` re-capture guard checks only `_capturedByArm !== this`,
- * which a DAUGHTER re-capture satisfies (pinned: test-ArmUnit-CaptureFailure)
- * but the mother/lasso paths never write `_capturedByArm`. So the capture-time
- * seams (`_enterMotherReel` / `adoptLassoCatch`) call this once ownership is
- * certain (past the entry/adoption refusal gates): the arm-side claim AND the
- * debris-side back-reference both clear — the latter so a later [K] jettison
- * can't re-pin the freed piece to the long-gone drifter (DebrisField's
- * `_pinToArm` branch passes EXPENDED in its state filter). Null-safe: a fresh
- * catch (`_capturedByArm` unset) is a byte-identical no-op.
+ * Drop a tether-snapped runaway's stale claim when a mother-side capture path takes ownership. A tether snap leaves the
+ * runaway re-targetable (`_captured = false`) but back-referenced by the EXPENDED arm's `_severedCatch`, which re-pins
+ * it to the drifting daughter every frame until TETHER_SNAP_RELEASE_DELAY_S releases it (ArmUnit._updateExpended) and
+ * would otherwise fire that release on the NEW owner's held catch. The `_updateExpended` re-capture guard checks only
+ * `_capturedByArm !== this`, which a DAUGHTER re-capture satisfies (pinned: test-ArmUnit-CaptureFailure) but the
+ * mother/lasso paths never write `_capturedByArm`. So `_enterMotherReel` / `adoptLassoCatch` call this once ownership is
+ * certain (past the entry/adoption refusal gates): the arm-side claim AND the debris-side back-reference both clear,
+ * the latter so a later [K] jettison can't re-pin the freed piece to the long-gone drifter (DebrisField's `_pinToArm`
+ * branch passes EXPENDED in its state filter). Null-safe: a fresh catch (`_capturedByArm` unset) is a no-op.
  * @param {object|null} d — the debris being captured
  */
 function dropSeveredCatchClaim(d) {
@@ -332,26 +297,18 @@ function dropSeveredCatchClaim(d) {
 }
 
 /**
- * Register item 74 — ONE fore-extent read for the collar queue, shared by both
- * consumers (the lasso pend's `getCollarQueueDepthM` and the corridor gate's
- * `_queueHoldLevelM`): how far a mother net's catch reaches fore of the berth
- * anchor, in metres — apex + seat + half, where the apex is the net's true
- * station level:
- *   - a corridor-held REELING net: its frozen `_corridorHoldLevelM` slot (the
- *     REELING guard keeps a stale hold flag from a MISSED net from counting);
- *   - a berthed/collared/transferring net: `max(base, _effectiveStandoffM)` —
- *     extended-standoff honest;
- *   - anything else (inbound, missed): the base standoff — an inbound net
- *     reserves its eventual berth footprint (conservative), byte-identical to
- *     the pre-74 base formula.
- * `atStation` is the corridor gate's queue membership (held or berthed — an
- * inbound net takes its slot when its own gate engages); the lasso pend
- * counts every member at its level. Pre-74 the pend read the base standoff
- * for every net, so a waiting lasso catch pinned INSIDE a corridor-held or
- * extended-standoff body (11.50 reported for an 18.50 far face).
- * Fills the module scratch (the reel/berth path must not allocate per frame,
- * plan §13); the returned primitives are copied by destructuring at the call
- * site, and the helper calls nothing that could re-enter it.
+ * ONE fore-extent read for the collar queue, shared by both consumers (the lasso pend's `getCollarQueueDepthM` and the
+ * corridor gate's `_queueHoldLevelM`): how far a mother net's catch reaches fore of the berth anchor, in metres —
+ * apex + seat + half, where the apex is the net's true station level:
+ *   - a corridor-held REELING net: its frozen `_corridorHoldLevelM` slot (the REELING guard keeps a stale hold flag from
+ *     a MISSED net from counting);
+ *   - a berthed/collared/transferring net: `max(base, _effectiveStandoffM)` — extended-standoff honest;
+ *   - anything else (inbound, missed): the base standoff — an inbound net reserves its eventual berth footprint
+ *     (conservative).
+ * `atStation` is the corridor gate's queue membership (held or berthed — an inbound net takes its slot when its own
+ * gate engages); the lasso pend counts every member at its level.
+ * Fills the module scratch (the reel/berth path must not allocate per frame); the returned primitives are copied by
+ * destructuring at the call site, and the helper calls nothing that could re-enter it.
  * @param {object} net — a mother NetProjectile with a live targetDebris
  * @returns {{fore: number, atStation: boolean}} the shared scratch
  */
@@ -359,8 +316,8 @@ const _foreExtent74 = { fore: 0, atStation: false };
 function motherNetForeExtentM(net) {
   const d = net.targetDebris;
   const half = (d.sizeMeter || 2) / 2;
-  // l8-reel-collar: the berth footprint is HOME (bag mouth at the ring, catch seated on it), not the old
-  // size/2 + 1.0 m standoff. `_homeApexM`/`_homeSeatM` are seeded at reel entry (null before: the old base).
+  // The berth footprint is HOME (bag mouth at the ring, catch seated on it). `_homeApexM`/`_homeSeatM` are seeded at reel
+  // entry (null before: the size/2 + 1.0 m standoff).
   const base = net._homeApexM ?? (half + (CN.BERTH_CLEARANCE_M ?? 1.0));
   const held = net.state === STATES.REELING
     && net._corridorHold && net._corridorHoldLevelM != null;
@@ -376,15 +333,13 @@ function motherNetForeExtentM(net) {
   return _foreExtent74;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// §0b  l8-reel-collar — the catch's HOME on the collar axis
-// ═══════════════════════════════════════════════════════════════════════════
+// The catch's HOME on the collar axis.
 
 const _homeScratchC = [0, 0, 0];
 const _homeIgnore = ['BerthCollar', 'BerthFace', 'nose catch'];
 const _homeOpts = { ignore: _homeIgnore };
 
-// big-catch-home D2 — the corridor gate's keep-out read: the capsule's two ends (ship-local metres), the query options
+// The corridor gate's keep-out read: the capsule's two ends (ship-local metres), the query options
 // and the ignore list (every keep-out category EXCEPT the radiators 'rad'; tip bags are catch spheres, never ignored).
 const _corrA = [0, 0, 0];
 const _corrB = [0, 0, 0];
@@ -467,21 +422,20 @@ export function catchHomeZ(keepOut, r) {
 }
 
 /**
- * The largest drawn reach (m) a catch is still seated by (home-seat): the same limit as TipCargo.MAX_BAG_R_M (a tip
- * takes a bag up to 0.75 m). Mirrored here, not imported: TipCargo imports CaptureNet (a cycle); test-HomeSeatTrueReach
- * pins the two equal.
+ * The largest drawn reach (m) a catch is still seated by: the same limit as TipCargo.MAX_BAG_R_M (a tip takes a bag up
+ * to 0.75 m). Mirrored here, not imported: TipCargo imports CaptureNet (a cycle); test-HomeSeatTrueReach pins the two equal.
  */
 export const TIP_HOME_MAX_REACH_M = 0.75;
 
 /**
- * What, besides a catch's radius and the collar's z, sets its home: the radiators' angle and the bags on the tips (`ArmManager.getKeepOut`
- * reads both; a bag moves with its radiator). A string that changes when either does (angle to 0.001 deg, each bag's index, radius and
- * centre to 1 mm), `''` for a ship with no radiators or a mock, and `null` while the radiators are SWINGING or ANY tip bag is turning onto
- * its boom (`tipCargo.isSwinging(i)`): a home read then is not trusted once the swing ends (`catchHomeDistM` recomputes on the first read
- * after), and a read during the swing reuses what is cached rather than paying a recompute (25-115 ms: 47-62 keep-out queries, measured
- * u22 2026-10-24) every frame the HUD polls. The daughters' strut poses are
- * left out on purpose: the nose route is flown, and certified, against the seat of the ship with its struts parked, and a strut that
- * swings during the flight must not move the seat she is flying to.
+ * What, besides a catch's radius and the collar's z, sets its home: the radiators' angle and the bags on the tips
+ * (`ArmManager.getKeepOut` reads both; a bag moves with its radiator). A string that changes when either does (angle to
+ * 0.001 deg, each bag's index, radius and centre to 1 mm), `''` for a ship with no radiators or a mock, and `null` while the
+ * radiators are SWINGING or ANY tip bag is turning onto its boom (`tipCargo.isSwinging(i)`): a home read then is not
+ * trusted once the swing ends (`catchHomeDistM` recomputes on the first read after), and a read during the swing reuses
+ * what is cached rather than paying a recompute (25-115 ms: 47-62 keep-out queries, measured) every frame the HUD polls.
+ * The daughters' strut poses are left out on purpose: the nose route is flown, and certified, against the seat of the
+ * ship with its struts parked, and a strut that swings during the flight must not move the seat she is flying to.
  * @param {object|null} player PlayerSatellite
  * @returns {string|null}
  */
@@ -490,10 +444,10 @@ export function homeShapeKey(player) {
   const tgt = player._flowerTargetTheta;
   if ((typeof tgt === 'number' && Math.abs(tgt - player._flowerThetaRad) > 1e-4) || player.flowerPetalsBusy === true) return null;
   const tc = player.tipCargo;
-  // a bag turning onto its boom (10 deg/s, up to ~9 s) moves every frame, so its centre would change the key every frame: 780 recomputes of
-  // ~25 ms in 13 s of one swing (fix round 1 review, u22 2026-10-24). Same rule as a radiator swing: reuse the cache, recompute once it ends.
+  // a bag turning onto its boom (10 deg/s, up to ~9 s) moves every frame, so its centre would change the key every frame
+  // (780 recomputes of ~25 ms in 13 s of one swing). Same rule as a radiator swing: reuse the cache, recompute once it ends.
   if (tc && typeof tc.isSwinging === 'function') for (let i = 0; i < 4; i++) if (tc.isSwinging(i)) return null;
-  let key = String(Math.round(player._flowerThetaRad * (180 / Math.PI) * 1000));
+  let key = String(Math.round(player._flowerThetaRad * RAD2DEG * 1000));
   if (tc && typeof tc.count === 'function' && typeof tc.spheres === 'function' && tc.count() > 0) {
     for (const sp of tc.spheres()) key += `|${sp.name}:${Math.round(sp.r * 1000)}:${Math.round(sp.c.x * 1000)},${Math.round(sp.c.y * 1000)},${Math.round(sp.c.z * 1000)}`;
   }
@@ -502,13 +456,13 @@ export function homeShapeKey(player) {
 
 /**
  * Home distance (metres) of a catch's CENTRE from the berth anchor (the collar plane) along the collar axis.
- * Cached on the debris per radius AND per ship shape (`_homeCache`, `homeShapeKey`): the home is read off the keep-out, which holds the
- * radiators and the bags on their tips, so a cache made for another radiator angle or another set of tip bags is not read
- * (u22-nose-tipbags, 2026-10-24: a bag seated at 140°, the radiators then closed over it, and the nose seat stayed at its open-angle
+ * Cached on the debris per radius AND per ship shape (`_homeCache`, `homeShapeKey`): the home is read off the keep-out,
+ * which holds the radiators and the bags on their tips, so a cache made for another radiator angle or another set of tip
+ * bags is not read (a bag seated at 140°, the radiators then closed over it, and the nose seat stayed at its open-angle
  * z 1.64 m while the closed bag sat at 1.74 m: the leash snagged it; a fresh seat is z 2.20 m).
  * On the 2.30 m radiators the answer is the same at every radiator angle for r <= 1.4 m with no bag on a tip (measured
- * 2026-10-17 at every whole degree 0-180°: `REEL_HOME.ALL_ANGLE_HOME.angleFreeMaxR`), so there it is the current-pose
- * home (`catchHomeZ`) exactly as before. A bigger catch's current-pose home moves with the angle (r 4.0: 5.349 at
+ * at every whole degree 0-180°: `REEL_HOME.ALL_ANGLE_HOME.angleFreeMaxR`), so there it is the current-pose
+ * home (`catchHomeZ`). A bigger catch's current-pose home moves with the angle (r 4.0: 5.349 at
  * 146°, 5.402 at 3°) and a catch parked at the 146° one fouls the tip cone when the radiators then close (-32.4 mm
  * at 3°), so above `angleFreeMaxR` the home is the HIGHER of the current-pose home and the measured every-angle one:
  * `RING_TOUCH_Z_M + r + lift(r)`, lift linear between the two bracketing `ALL_ANGLE_HOME` rows. The table term applies
@@ -521,14 +475,13 @@ export function homeShapeKey(player) {
  * @param {object} player — PlayerSatellite (collar anchor z)
  * @param {object|null} armManager — for `getKeepOut()`
  * @param {object} d — the catch (sizeMeter, type, id). The seating radius is its drawn reach (`DebrisField.trueReachM`) when that
- *   is <= TIP_HOME_MAX_REACH_M (a tip takes it; home-seat, 2026-10-18), else `sizeMeter / 2` (typeless pieces: the same number).
+ *   is <= TIP_HOME_MAX_REACH_M (a tip takes it), else `sizeMeter / 2` (typeless pieces: the same number).
  * @returns {number} metres from the berth anchor
  */
 export function catchHomeDistM(player, armManager, d) {
-  // home-seat (2026-10-18): the radius the catch is SEATED by is its drawn reach (DebrisField.trueReachM, the same
-  // number the tip hand-off uses as its bag radius) when that reach fits a tip (<= TIP_HOME_MAX_REACH_M); a bigger
-  // catch keeps sizeMeter / 2, because its drawn reach would run past the measured ALL_ANGLE_HOME rows. A typeless
-  // piece has trueReachM = sizeMeter / 2, so its home is unchanged.
+  // The seating radius is the drawn reach (DebrisField.trueReachM, the tip hand-off's bag radius) when it fits a tip
+  // (<= TIP_HOME_MAX_REACH_M); a bigger catch keeps sizeMeter / 2, because its drawn reach would run past the measured
+  // ALL_ANGLE_HOME rows. A typeless piece has trueReachM = sizeMeter / 2.
   const nominalR = (d && d.sizeMeter ? d.sizeMeter : 2) / 2;
   const reachR = DebrisField.trueReachM(d, 2);
   const r = reachR <= TIP_HOME_MAX_REACH_M + 1e-9 ? reachR : nominalR;
@@ -543,7 +496,7 @@ export function catchHomeDistM(player, armManager, d) {
   let ko = null;
   try { ko = armManager && typeof armManager.getKeepOut === 'function' ? armManager.getKeepOut() : null; } catch (_e) { ko = null; }
   const home = catchHomeZ(ko, r);
-  // big-catch-every-angle: above angleFreeMaxR the home must also clear every OTHER radiator angle (ALL_ANGLE_HOME).
+  // above angleFreeMaxR the home must also clear every OTHER radiator angle (ALL_ANGLE_HOME).
   const T = CN.REEL_HOME.ALL_ANGLE_HOME;
   let z = home.z, allAngleLiftM = null, unchecked = !!home.unchecked, blocker = home.blocker, top = home.top;
   if (ko && typeof ko.sphere === 'function' && !home.unchecked && T && r > T.angleFreeMaxR + 1e-9) {
@@ -553,7 +506,7 @@ export function catchHomeDistM(player, armManager, d) {
     } else {
       let i = 0;
       while (i + 1 < n - 1 && r > R[i + 1]) i++;                                  // R[i] < r <= R[i + 1] (i + 1 <= n - 1)
-      const t = Math.min(1, Math.max(0, (r - R[i]) / (R[i + 1] - R[i])));
+      const t = clamp01((r - R[i]) / (R[i + 1] - R[i]));
       allAngleLiftM = L[i] + t * (L[i + 1] - L[i]);
       z = Math.max(home.z, home.touchZ + allAngleLiftM);
     }
@@ -570,9 +523,7 @@ export function catchHomeDistM(player, armManager, d) {
   return distM;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// §1  Pure Functions — Cling Probability + Frag Risk
-// ═══════════════════════════════════════════════════════════════════════════
+// Pure functions: cling probability + frag risk
 
 /**
  * Get the net class spec for a given platform type.
@@ -609,11 +560,9 @@ export function computeClingProbability(params) {
     spinFraction = 1.0,
     targetTumbleRate = null,
   } = params;
-  // Wave-4 QA #3 (CAPTURE_NET.md §10 concern 3): the factor stack is split into
-  // a lock-stable phase and a live phase so the pre-fire HUD path can cache the
-  // former at target-lock. This fresh path recomputes BOTH phases every call —
-  // it is the composition of the two, so cached and fresh output are identical
-  // by construction (same functions, same multiplication order).
+  // The factor stack is split into a lock-stable phase and a live phase so the pre-fire HUD path can cache the former at
+  // target-lock. This fresh path recomputes BOTH every call: cached and fresh output are identical by construction
+  // (same functions, same multiplication order).
   const lock = computeClingLockFactors(params, _clingLockScratch);
   return finishClingProbability(lock, {
     range,
@@ -622,23 +571,18 @@ export function computeClingProbability(params) {
   });
 }
 
-/** Module scratch for the fresh (uncached) path — reused per call, never
- *  allocated per frame (same discipline as the _v3a/_q0 scratch above). */
+/** Scratch for the fresh (uncached) path: reused per call, never allocated per frame. */
 const _clingLockScratch = {
   fVelocity: 1, fContact: 1, fRoughness: 1, fTension: 1,
   prefix: 0, sureShotVelOK: false,
 };
 
 /**
- * Wave-4 QA #3 — lock-stable phase of the §3.3 factor stack. Everything here
- * depends only on inputs that hold still while a target stays locked (pBase
- * from the capture mode, launch/optimal speed, contact fraction, surface
- * roughness, tether tension nominal). `prefix` is the left-associated product
- * pBase × f_velocity × f_contact × f_roughness — exactly the first four steps
- * of the original chain, so finishing it with the live factors reproduces the
- * un-split arithmetic bit for bit.
- * Mutates and returns `out` (caller-owned slot; no per-frame allocation —
- * the computeLeadAim `out` idiom).
+ * Lock-stable phase of the §3.3 factor stack. Everything here depends only on inputs that hold still while a target
+ * stays locked (pBase from the capture mode, launch/optimal speed, contact fraction, surface roughness, tether tension
+ * nominal). `prefix` is the left-associated product pBase × f_velocity × f_contact × f_roughness, so finishing it with
+ * the live factors reproduces the un-split arithmetic bit for bit.
+ * Mutates and returns `out` (caller-owned slot; no per-frame allocation).
  * @param {object} params — same shape as computeClingProbability
  * @param {object} out — {fVelocity, fContact, fRoughness, fTension, prefix, sureShotVelOK}
  * @returns {object} out
@@ -653,65 +597,58 @@ export function computeClingLockFactors(params, out) {
     tensionFraction = 1.0,
   } = params;
   const vRange = 10; // m/s velocity range for clamp
-  out.fVelocity  = Math.max(0.3, Math.min(1.0, 1.0 - Math.abs(vRel - vOptimal) / vRange));
+  out.fVelocity  = clamp(1.0 - Math.abs(vRel - vOptimal) / vRange, 0.3, 1.0);
   out.fContact   = Math.min(contactFraction, 1.0);
-  // 2026-06-11 tuning: floor the roughness multiplier — smooth surfaces are
-  // harder to wrap, but the raw material scale (solar cell 0.2, aluminum 0.4)
-  // multiplied a perfect shot down to "feels broken" odds.
+  // floor the roughness multiplier: smooth surfaces are harder to wrap, but the raw material scale (solar cell 0.2,
+  // aluminum 0.4) multiplied a perfect shot down to "feels broken" odds.
   out.fRoughness = Math.max(CN.ROUGHNESS_FLOOR ?? 0, roughness);
-  out.fTension   = Math.max(0.6, Math.min(1.0, tensionFraction));
+  out.fTension   = clamp(tensionFraction, 0.6, 1.0);
   out.prefix     = pBase * out.fVelocity * out.fContact * out.fRoughness;
-  // Sure-shot's velocity gate is lock-stable too (pre-fire always evaluates it
-  // at vRel === vOptimal === launch speed ⇒ 1.0).
+  // Sure-shot's velocity gate is lock-stable too (pre-fire evaluates it at vRel === vOptimal === launch speed ⇒ 1.0).
   out.sureShotVelOK = out.fVelocity >= 0.99;
   return out;
 }
 
 /**
- * Wave-4 QA #3 — live phase of the §3.3 factor stack: the genuinely per-frame
- * factors (f_spin from the projected arrival spin, f_distance from range) and
- * the slowly-varying tumble factor, applied to the cached lock-stable prefix
- * IN THE ORIGINAL ORDER:
+ * Live phase of the §3.3 factor stack: the per-frame factors (f_spin from the projected arrival spin, f_distance from
+ * range) and the slowly-varying tumble factor, applied to the cached lock-stable prefix IN THE ORIGINAL ORDER:
  *   raw = (((prefix × f_spin) × f_tension) × f_distance) × f_tumble
- * which is the exact left-to-right association of the un-split §3.3 chain —
- * the cache-equality contract is arithmetic, not approximate.
+ * the exact left-to-right association of the un-split chain: cache equality is arithmetic, not approximate.
  * @param {object} lock — result of computeClingLockFactors
  * @param {object} live — {range, spinFraction, fTumble (computeTumbleModifier output)}
  * @returns {number} P_cling ∈ [0, 1]
  */
 export function finishClingProbability(lock, live) {
   const { range = 50, spinFraction = 1.0, fTumble = 1.0 } = live;
-  const fSpin = Math.max(0.5, Math.min(1.2, spinFraction));
+  const fSpin = clamp(spinFraction, 0.5, 1.2);
   // Distance modifier: f_distance = clamp(1.1 - 0.003 × range, 0.85, 1.1)
-  const fDistance = Math.max(0.85, Math.min(1.1, 1.1 - 0.003 * range));
+  const fDistance = clamp(1.1 - 0.003 * range, 0.85, 1.1);
   const raw = lock.prefix * fSpin * lock.fTension * fDistance * fTumble;
-  let p = Math.max(0, Math.min(1, raw)); // clamp to valid probability
+  let p = clamp01(raw); // clamp to valid probability
 
-  // 2026-06-11 tuning: SURE-SHOT floor. A well-executed shot — close range,
-  // target de-tumbled to in-spec (or tumble untracked), nominal launch speed,
-  // fresh net spin — succeeds reliably. This is the payoff the game teaches
-  // ("close the distance, de-spin [L]"); distant/tumbling/sloppy shots keep
-  // the full physics stack, so aim and setup still matter.
+  // SURE-SHOT floor. A well-executed shot (close range, target de-tumbled to in-spec or tumble untracked, nominal launch
+  // speed, fresh net spin) succeeds reliably: the payoff the game teaches ("close the distance, de-spin [L]");
+  // distant/tumbling/sloppy shots keep the full physics stack, so aim and setup still matter.
   const sureShot = range <= (CN.CLOSE_RANGE ?? 30)
     && fTumble >= 1.0
     && lock.sureShotVelOK
     && spinFraction >= 0.8;
   if (sureShot) {
-    p = Math.max(p, Math.min(1, CN.SURE_SHOT_MIN_CLING ?? 0));
+    p = clamp(CN.SURE_SHOT_MIN_CLING ?? 0, p, 1);
   }
   return p;
 }
 
 /**
- * CP-2 net-cling tumble modifier. 1.0 when tumble is unknown or at/below the
- * in-spec spin; ramps linearly down to NET_TUMBLE_PENALTY.FLOOR above it.
+ * CP-2 net-cling tumble modifier. 1.0 when tumble is unknown or at/below the in-spec spin; ramps linearly down to
+ * NET_TUMBLE_PENALTY.FLOOR above it.
  * @param {number|null} tumbleRateRad — target tumble in rad/s (null ⇒ no penalty)
  * @returns {number} f_tumble ∈ [FLOOR, 1.0]
  */
 export function computeTumbleModifier(tumbleRateRad) {
   if (tumbleRateRad == null) return 1.0;
   const P = Constants.NET_TUMBLE_PENALTY || { IN_SPEC_DEG: 10, PER_DEG: 0.012, FLOOR: 0.4 };
-  const tumbleDeg = Math.abs(tumbleRateRad) * (180 / Math.PI);
+  const tumbleDeg = Math.abs(tumbleRateRad) * RAD2DEG;
   if (tumbleDeg <= P.IN_SPEC_DEG) return 1.0;
   return Math.max(P.FLOOR, 1.0 - (tumbleDeg - P.IN_SPEC_DEG) * P.PER_DEG);
 }
@@ -722,14 +659,12 @@ export function computeTumbleModifier(tumbleRateRad) {
  * @returns {number} f_distance ∈ [0.85, 1.1]
  */
 export function computeDistanceModifier(range) {
-  return Math.max(0.85, Math.min(1.1, 1.1 - 0.003 * range));
+  return clamp(1.1 - 0.003 * range, 0.85, 1.1);
 }
 
 /**
- * UX-11 #1: effective catch radius with close-range forgiveness.
- * Inside CLOSE_RANGE the net mouth wraps slightly beyond its disc, so the
- * intersection test widens by CATCH_RADIUS_FORGIVENESS. Outside CLOSE_RANGE
- * the geometric radius applies unchanged — aim still matters at distance.
+ * Effective catch radius with close-range forgiveness: inside CLOSE_RANGE the net mouth wraps slightly beyond its disc,
+ * so the intersection test widens by CATCH_RADIUS_FORGIVENESS. Outside it the geometric radius applies unchanged.
  * @param {number} mouthRadius — net mouth radius (metres)
  * @param {number} range — distance travelled / range to target (metres)
  * @returns {number} effective radius (metres)
@@ -740,13 +675,10 @@ export function effectiveCatchRadius(mouthRadius, range) {
 }
 
 /**
- * §11.2 mouth-collapse floor: centripetal tension per rim weight at a given
- * spin — F/wt = m·ω²·r with ω = 2π·spinHz and r = DIAMETER/2. The SAME
- * quantity the §11.1 audit table and the test-Crossbow-Constants derivation
- * guard compute at the settled SPIN_HZ; here it runs LIVE on the decaying
- * in-flight spinRate (the same decayed spin f_spin already reads) so
- * NetProjectile can check the mouth-open condition
- * (F/wt ≥ CN.MOUTH_TENSION_FLOOR_N) per flight frame. Pure + Node-safe.
+ * §11.2 mouth-collapse floor: centripetal tension per rim weight at a given spin — F/wt = m·ω²·r with ω = 2π·spinHz and
+ * r = DIAMETER/2. The SAME quantity the §11.1 audit table and the test-Crossbow-Constants derivation guard compute at
+ * the settled SPIN_HZ; here it runs LIVE on the decaying in-flight spinRate (the one f_spin reads) so NetProjectile can
+ * check the mouth-open condition (F/wt ≥ CN.MOUTH_TENSION_FLOOR_N) per flight frame. Pure + Node-safe.
  * @param {{RIM_WEIGHT_MASS?:number, DIAMETER?:number}|null} netClass
  * @param {number} spinHz — live spin (Hz)
  * @returns {number} tension per rim weight (N); 0 when class data is missing
@@ -759,12 +691,9 @@ export function rimTensionPerWeightN(netClass, spinHz) {
 }
 
 /**
- * Local cone radius at an axial depth ahead of the apex.
- * The bag is a cone: apex at local origin, mouth ring at local z = −coneHeight
- * (js/ui/NetMeshKit.js:364-365). Depth `a` metres ahead of the apex therefore
- * sees a local radius mouthRadius × (a / coneHeight). Returns 0 outside
- * [0, coneHeight] — a target behind the apex or past the mouth plane sees no
- * cone at all. Pure + Node-safe.
+ * Local cone radius at an axial depth ahead of the apex. The bag is a cone: apex at local origin, mouth ring at local
+ * z = −coneHeight (NetMeshKit.js `buildWebPositions`). Depth `a` metres ahead of the apex sees a local radius
+ * mouthRadius × (a / coneHeight). Returns 0 outside [0, coneHeight]. Pure + Node-safe.
  * @param {number} mouthRadius — net mouth radius (metres)
  * @param {number} coneHeight — apex-to-mouth axial length (metres)
  * @param {number} axialDepth — metres ahead of the apex along the cone axis
@@ -776,11 +705,9 @@ export function coneRadiusAtDepth(mouthRadius, coneHeight, axialDepth) {
 }
 
 /**
- * Cone containment test for a target expressed in the kit's local frame.
- * localZ is NEGATIVE ahead of the apex (the mouth sits at local z = −coneHeight);
- * localR is the lateral off-axis distance (hypot(localX, localY)). Inclusive on
- * the wall: a target exactly at r == coneRadiusAtDepth(a) counts as inside.
- * Pure + Node-safe.
+ * Cone containment test for a target expressed in the kit's local frame. localZ is NEGATIVE ahead of the apex (the mouth
+ * sits at local z = −coneHeight); localR is the lateral off-axis distance (hypot(localX, localY)). Inclusive on the
+ * wall: a target exactly at r == coneRadiusAtDepth(a) counts as inside. Pure + Node-safe.
  * @param {number} localZ — kit-local z of the target (negative ahead of apex)
  * @param {number} localR — lateral off-axis distance (metres)
  * @param {number} mouthRadius — net mouth radius (metres)
@@ -794,14 +721,11 @@ export function isInsideCone(localZ, localR, mouthRadius, coneHeight) {
 }
 
 /**
- * Largest lateral offset that still yields containment at the brake instant.
- * BRAKE fires when the apex-to-target distance equals the catch radius R, so
- * a² + r² = R² at that instant; containment requires r ≤ k·a with
- * k = mouthRadius / coneHeight. Solving gives R·mouthRadius / hypot(mouthRadius,
- * coneHeight). Valid only while R ≤ coneHeight — if the brake sphere exceeds the
- * bag depth the net brakes with the target still ahead of the mouth plane and
- * containment at the brake instant is geometrically impossible; returns NaN then.
- * Pure + Node-safe.
+ * Largest lateral offset that still yields containment at the brake instant. BRAKE fires when the apex-to-target
+ * distance equals the catch radius R, so a² + r² = R² at that instant; containment requires r ≤ k·a with
+ * k = mouthRadius / coneHeight. Solving gives R·mouthRadius / hypot(mouthRadius, coneHeight). Valid only while
+ * R ≤ coneHeight — if the brake sphere exceeds the bag depth the net brakes with the target still ahead of the mouth
+ * plane and containment at the brake instant is geometrically impossible; returns NaN then. Pure + Node-safe.
  * @param {number} catchRadius — the BRAKE-trigger sphere radius (metres)
  * @param {number} mouthRadius — net mouth radius (metres)
  * @param {number} coneHeight — apex-to-mouth axial length (metres)
@@ -813,18 +737,16 @@ export function maxImpactParameter(catchRadius, mouthRadius, coneHeight) {
 }
 
 /**
- * UX-11 #1: lead-aim direction + off-axis angle for the pre-fire readout.
- * Mirrors the lead computation in ArmUnit._updateNettingFSM: aim where the
- * target will be when the net arrives (targetPos + relVel × dist/launchSpeed).
+ * Lead-aim direction + off-axis angle for the pre-fire readout. Mirrors the lead computation in
+ * ArmUnit._updateNettingFSM: aim where the target will be when the net arrives (targetPos + relVel × dist/launchSpeed).
  * All inputs share one unit system (scene units OR metres — consistent).
  *
  * @param {{x,y,z}} armPos — launcher position
  * @param {{x,y,z}} targetPos — target position now
  * @param {{x,y,z}|null} relVel — target velocity relative to launcher (units/s)
  * @param {number} launchSpeed — net speed in the same length units per second
- * @param {{dir:{x,y,z}, offAxisDeg:number}} [out] — optional preallocated result to
- *   write into (avoids per-frame allocation on hot aim paths). When omitted a
- *   fresh object is returned.
+ * @param {{dir:{x,y,z}, offAxisDeg:number}} [out] — optional preallocated result (avoids per-frame allocation on hot aim
+ *   paths); when omitted a fresh object is returned.
  * @returns {{ dir: {x,y,z}, offAxisDeg: number }} lead direction + angle between
  *   the lead direction and the direct bearing (0 when no lead is needed)
  */
@@ -846,10 +768,8 @@ export function computeLeadAim(armPos, targetPos, relVel, launchSpeed, out = nul
   const dir = out ? out.dir : { x: 0, y: 0, z: 0 };
   dir.x = dx / dLen; dir.y = dy / dLen; dir.z = dz / dLen;
 
-  // Angle between lead dir and direct bearing
-  const dot = Math.max(-1, Math.min(1,
-    (dir.x * bx + dir.y * by + dir.z * bz) / bLen));
-  const offAxisDeg = Math.acos(dot) * (180 / Math.PI);
+  const dot = clamp((dir.x * bx + dir.y * by + dir.z * bz) / bLen, -1, 1);
+  const offAxisDeg = Math.acos(dot) * RAD2DEG;
   if (out) { out.offAxisDeg = offAxisDeg; return out; }
   return { dir, offAxisDeg };
 }
@@ -880,7 +800,7 @@ export function catchLimitLine(mass, netClass) {
 
 /**
  * A piece over the mother's catch limit is not caught but inspected (DECISIONS §49 row 3): a daughter sent at it flies her usual approach to
- * her hold, sweeps it and comes home, and fires no net (big-rules R2). The same limit as the mother's (`overCatchLimit`, the LARGE net class).
+ * her hold, sweeps it and comes home, and fires no net. The same limit as the mother's (`overCatchLimit`, the LARGE net class).
  * @param {number} mass kg
  * @returns {boolean}
  */
@@ -889,15 +809,13 @@ export function isInspectOnlyMass(mass) {
 }
 
 /**
- * Item 4 (2026-06-12): pre-fire net-fit assessment — the SINGLE source for
- * the reticle width/mass advisory, the TargetPanel capture-fit badge, and the
- * ToolRecommender width fork. Pure + Node-safe.
+ * Pre-fire net-fit assessment — the SINGLE source for the reticle width/mass advisory, the TargetPanel capture-fit
+ * badge, and the ToolRecommender width fork. Pure + Node-safe.
  *
- * Precedence: width (deterministic post-catch failure) > mass (refused at
- * deploy / strain risk) > tumble (recoverable — de-spin first).
+ * Precedence: width (deterministic post-catch failure) > mass (refused at deploy / strain risk) > tumble (recoverable —
+ * de-spin first).
  *
- * Phase 2 (capture-feedback overhaul): with ASPECT_CAPTURE on and aspect data
- * present, the width fork becomes orientation-aware:
+ * With ASPECT_CAPTURE on and aspect data present, the width fork is orientation-aware:
  *   • TOO_WIDE — even end-on the cross-section (widthM) exceeds the mouth.
  *   • ASPECT   — fits END-ON ONLY (widthM ≤ mouth < presented/length); pass
  *     `approachDir` for the live verdict, omit it for the static one.
@@ -923,11 +841,10 @@ export function assessNetFit(target, netClass, approachDir = null) {
     if (aspectOn && lengthM > widthM) {
       if (widthM > dia) return { fit: 'TOO_WIDE', label: 'TOO WIDE' };  // even end-on
       if (lengthM > dia) {
-        // Fits end-on only. With a live approach direction report the CURRENT
-        // presentation; statically report the aspect opportunity.
+        // Fits end-on only. With a live approach direction report the CURRENT presentation; statically report the aspect
+        // opportunity.
         if (approachDir) {
-          // The live presentation routes through the ONE mouth-fit predicate
-          // (register item 21a); the widthM tier above stays a static test.
+          // The live presentation routes through the ONE mouth-fit predicate; the widthM tier above stays a static test.
           if (!fitsMouth(target, netClass, approachDir)) return { fit: 'ASPECT', label: 'END-ON ONLY' };
           // currently presented end-on → fits; fall through to mass/tumble
         } else {
@@ -942,38 +859,30 @@ export function assessNetFit(target, netClass, approachDir = null) {
   if (mass > cap) return { fit: 'TOO_HEAVY', label: 'TOO HEAVY' };
   const P = Constants.NET_TUMBLE_PENALTY || { IN_SPEC_DEG: 10 };
   const tumbleDeg = (target.tumbleRate != null)
-    ? Math.abs(target.tumbleRate) * (180 / Math.PI) : 0;
+    ? Math.abs(target.tumbleRate) * RAD2DEG : 0;
   if (tumbleDeg > (P.IN_SPEC_DEG ?? 10)) return { fit: 'DESPIN_FIRST', label: 'DE-SPIN FIRST' };
   return { fit: 'OK', label: 'NET \u2713' };
 }
 
 /**
- * Register item 17 (2026-08-19): the DRAWN worst-axis span of a target's
- * mesh in metres — the rendered truth the verdict deliberately never
- * consults (item 7b, owner-declined mesh-truthful verdicts: the logical
- * lengthM/widthM govern, the 0.66×–4.62× per-type stylization is accepted).
- * Exists for ONE consumer class: HUD advisories that qualify an OK verdict
- * (DockingReticle's advisory line, TargetPanel's fit badges). MUST NOT feed
- * a verdict — fitsMouth and the oversize_aspect bounces stay logical;
+ * The DRAWN worst-axis span of a target's mesh in metres — the rendered truth the verdict deliberately never consults
+ * (owner-declined: mesh-truthful verdicts; the logical lengthM/widthM govern, the 0.66×–4.62× per-type stylization is
+ * accepted). Exists for ONE consumer class: HUD advisories that qualify an OK verdict (DockingReticle's advisory line,
+ * TargetPanel's fit badges). MUST NOT feed a verdict — fitsMouth and the oversize_aspect bounces stay logical;
  * routing this into a refusal is exactly the declined option.
  *
  * span = 2 × baseRenderScale × boundingRadius ÷ (Constants.SCENE_SCALE/1000)
- * — the free-debris draw scale (DebrisField owns that SSOT; the same
- * derivation as its METRE_SCENE at DebrisField.js:61, no second hard-coded
- * 1e-5) × the mesh bounding-SPHERE radius (DebrisWireframe owns it; primed
- * via getGeometry first, the scaleForRenderRadiusM pattern, so the
- * uncached-returns-1 trap cannot fire), scene units → metres. Measured
- * headless (tmp/i17-span.mjs): defunctSat 5 → 18.22 m, rocketBody 5 →
- * 10.22 m — the worst-axis form deliberately exceeds the review's box-axis
- * spans (18.1 / 7.8 m); a box-axis rule would slip rocketBody 5 (7.8 < 8)
- * past the chip although the bag pierces it by 2.210 m.
+ * — the free-debris draw scale (DebrisField owns that SSOT; the same derivation as its METRE_SCENE, no second
+ * hard-coded 1e-5) × the mesh bounding-SPHERE radius (DebrisWireframe owns it; primed via getGeometry first, so the
+ * uncached-returns-1 trap cannot fire), scene units → metres. Measured headless: defunctSat 5 → 18.22 m, rocketBody 5 →
+ * 10.22 m — the worst-axis form deliberately exceeds box-axis spans (18.1 / 7.8 m); a box-axis rule would slip
+ * rocketBody 5 (7.8 < 8) past the chip although the bag pierces it by 2.210 m.
  *
- * Lives here, not in DebrisField: it COMPOSES the two homes and both are
- * already imported — a DebrisField home would add a DebrisField→
- * DebrisWireframe import edge.
+ * Lives here, not in DebrisField: it COMPOSES the two homes and both are already imported — a DebrisField home would
+ * add a DebrisField→DebrisWireframe import edge.
  *
- * Graceful + Node-safe: null target / no type / no size ⇒ 0 (no span claim);
- * getGeometry builds headless (test-Cubesat proves it).
+ * Graceful + Node-safe: null target / no type / no size ⇒ 0 (no span claim); getGeometry builds headless
+ * (test-Cubesat proves it).
  * @param {object|null} target
  * @returns {number} drawn worst-axis span in metres (0 when unknown)
  */
@@ -987,12 +896,9 @@ export function renderedSpanM(target) {
 }
 
 /**
- * Register item 17: the ONE overflow-advisory rule — does the DRAWN span
- * exceed this net class's mouth? The verdict-is-OK half stays with the
- * caller's own signal (assessNetFit at the reticle/fit segs, green NET odds
- * at the badges); this predicates only the rendered-overflow half so the
- * HUD surfaces cannot drift on the rule (the item-21 lesson: one home, not
- * sites that merely agree). Strictly-greater, and a mouthless class never
+ * The ONE overflow-advisory rule — does the DRAWN span exceed this net class's mouth? The verdict-is-OK half stays with
+ * the caller's own signal (assessNetFit at the reticle/fit segs, green NET odds at the badges); this predicates only the
+ * rendered-overflow half so the HUD surfaces cannot drift on the rule. Strictly-greater, and a mouthless class never
  * claims overflow — the same form as fitsMouth. Advisory only.
  * @param {object|null} target
  * @param {{DIAMETER?:number}|null} netClass
@@ -1004,14 +910,11 @@ export function renderedSpanOverflows(target, netClass) {
   return renderedSpanM(target) > dia;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// §1b  Orientation-based capture geometry (Phase 2 — ASPECT_CAPTURE)
-// ═══════════════════════════════════════════════════════════════════════════
+// Orientation-based capture geometry (ASPECT_CAPTURE)
 
 /**
- * Width an elongated body presents to a net approaching at angle θ from its
- * long axis: end-on (θ=0) → widthM; broadside (θ=90°) → lengthM.
- * Pure + Node-safe.
+ * Width an elongated body presents to a net approaching at angle θ from its long axis: end-on (θ=0) → widthM;
+ * broadside (θ=90°) → lengthM. Pure + Node-safe.
  *
  * @param {number} lengthM — long-axis extent (m)
  * @param {number} widthM — cross-section width (m)
@@ -1019,15 +922,15 @@ export function renderedSpanOverflows(target, netClass) {
  * @returns {number} presented width (m)
  */
 export function presentedWidth(lengthM, widthM, cosTheta) {
-  const c = Math.max(-1, Math.min(1, cosTheta || 0));
+  const c = clamp(cosTheta || 0, -1, 1);
   const sinTheta = Math.sqrt(Math.max(0, 1 - c * c));
   return Math.max(widthM || 0, (lengthM || 0) * sinTheta);
 }
 
 /**
- * World-space long axis of a debris: the type's LOCAL long axis rotated by the
- * live tumble orientation quat(tumbleAxis, tumbleAngle) — exactly the rotation
- * DebrisField applies to the mesh (setFromAxisAngle). Rodrigues form, no THREE.
+ * World-space long axis of a debris: the type's LOCAL long axis rotated by the live tumble orientation
+ * quat(tumbleAxis, tumbleAngle) — exactly the rotation DebrisField applies to the mesh (setFromAxisAngle).
+ * Rodrigues form, no THREE.
  *
  * @param {{type?:string, tumbleAxis?:{x,y,z}, tumbleAngle?:number}} debris
  * @returns {{x:number,y:number,z:number}} unit long axis (world space)
@@ -1054,10 +957,8 @@ export function worldLongAxis(debris) {
 }
 
 /**
- * Live presented width of a debris for a given approach direction.
- * Falls back to the scalar sizeMeter when aspect data is missing (graceful —
- * fragments / legacy saves / catalog rows pre-derivation).
- *
+ * Live presented width of a debris for an approach direction. Falls back to scalar sizeMeter when aspect data is
+ * missing (fragments, legacy saves).
  * @param {object} debris — with lengthM/widthM (else sizeMeter), tumbleAxis/Angle
  * @param {{x:number,y:number,z:number}} approachDir — launcher→target (any length)
  * @returns {number} presented width (m)
@@ -1078,29 +979,17 @@ export function presentedWidthForApproach(debris, approachDir) {
 }
 
 /**
- * The ONE mouth-fit verdict (register item 21a): does the target's presented
- * width clear this net class's mouth? Pre-item-21 the comparison was written
- * at FOUR sites that merely agreed — `assessNetFit`'s live ASPECT tier, the
- * ToolOdds WIDE blocker, and both oversize_aspect bounces (contact + reel
- * entry) — while the one-quantity doctrine governed only the geometry
- * (`presentedWidthForApproach`). Now the verdict has one home too.
- *
- * The refusal is STRICTLY-greater and a mouthless class never refuses, so a
- * NaN presented width never refuses — byte-matching every pre-item-21 site.
- *
- * `assessNetFit`'s widthM tier (TOO_WIDE — the static end-on cross-section)
- * deliberately stays inline: it tests a DIFFERENT quantity (widthM, not the
- * live presentation), and routing it through here would compute worldLongAxis
- * only to throw it away.
- *
+ * The ONE mouth-fit verdict: does the target's presented width clear this net class's mouth? Shared by
+ * `assessNetFit`'s live ASPECT tier, the ToolOdds WIDE blocker and both oversize_aspect bounces (contact + reel entry).
+ * Refusal is STRICTLY-greater; a mouthless class, or a NaN presented width, never refuses.
+ * `assessNetFit`'s widthM tier (TOO_WIDE, static end-on cross-section) deliberately stays inline: it tests a different
+ * quantity, and routing it here would compute worldLongAxis only to discard it.
  * @param {object|null} target
  * @param {{DIAMETER?:number}|null} netClass
  * @param {{x:number,y:number,z:number}|null} [approachDir] — launcher→target
  *   (any length); ignored when `presentedM` is given
- * @param {number} [presentedM] — a PRECOMPUTED presented width: the contact-
- *   time store (reel entry re-judges the SAME presentation, not the live one
- *   the drifted tumble would now give) or the odds caller's override. Omit to
- *   compute the live presentation.
+ * @param {number} [presentedM] — a PRECOMPUTED presented width: the contact-time store (reel entry re-judges the SAME
+ *   presentation, not the live one the drifted tumble would give) or the odds caller's override
  * @returns {boolean} true when the mouth fits the presentation
  */
 export function fitsMouth(target, netClass, approachDir = null, presentedM = undefined) {
@@ -1112,27 +1001,14 @@ export function fitsMouth(target, netClass, approachDir = null, presentedM = und
 }
 
 /**
- * The ONE strain-band ramp (register item 88): where in the overload band does
- * this payload sit? Pre-item-88 the interpolation —
- * `strain = payloadMass / rated; safe = NET_STRAIN_SAFE_FRACTION ?? 0.8;
- * t = min(1, (strain − safe) / max(1e-6, 1 − safe))` — was written at FOUR
- * sites that merely agreed: the daughter reel-start slip
- * (`ArmUnit._checkNetIntegrityOnReel`), the boost rip (`ArmUnit._updateReeling`),
- * the mother reel entry (`_enterMotherReel`), and the declared odds mirror
- * (`ToolOdds.computeStrainFailProbability`). The two ArmUnit sites differ in
- * CAP semantics (one-shot `pMax × t` vs per-second `pPerS × t × dt`), so what
- * is shared is the BAND RAMP, not the roll: the ramp lives here (beside
- * `fitsMouth` — homing it in ToolOdds would force a CaptureNet→ToolOdds
- * 2-cycle; this adds zero import edges) and each site keeps its own cap.
- *
- * Returns 0 for a non-positive mass/rating and at/below the safe fraction —
- * byte-matching every pre-item-88 site, whose guards made the roll unreachable
- * there (and the mirror return 0).
- *
+ * The ONE strain-band ramp: where in the overload band does this payload sit? Shared by the daughter reel-start slip
+ * (`ArmUnit._checkNetIntegrityOnReel`), the boost rip (`ArmUnit._updateReeling`), the mother reel entry
+ * (`_enterMotherReel`) and the odds mirror (`ToolOdds.computeStrainFailProbability`). Only the ramp is shared; each
+ * site keeps its own cap (ArmUnit: one-shot `pMax × t` vs per-second `pPerS × t × dt`). Lives here, not in ToolOdds,
+ * to avoid a CaptureNet→ToolOdds import cycle. Returns 0 for non-positive mass/rating and at/below the safe fraction.
  * @param {number} payloadMass — kg
  * @param {number} ratedMass   — the net's rated mass (kg; MAX_CAPTURE_MASS)
- * @returns {number} band position t ∈ [0, 1]: 0 at/below the safe fraction,
- *   1 at/above 100 % rated
+ * @returns {number} band position t ∈ [0, 1]: 0 at/below the safe fraction, 1 at/above 100 % rated
  */
 export function strainBandT(payloadMass, ratedMass) {
   if (!(payloadMass > 0) || !(ratedMass > 0)) return 0;
@@ -1143,9 +1019,7 @@ export function strainBandT(payloadMass, ratedMass) {
 }
 
 /**
- * Compute fragmentation risk based on target fragility and impact KE.
- * Per CAPTURE_NET.md §5.1–§5.4.
- *
+ * Fragmentation risk from target fragility and impact KE (CAPTURE_NET.md §5.1–§5.4).
  * @param {object} params
  * @param {number} params.netMass       — net mass in kg
  * @param {number} params.vRel          — relative velocity at contact (m/s)
@@ -1155,8 +1029,7 @@ export function strainBandT(payloadMass, ratedMass) {
  */
 export function computeFragRisk(params) {
   const { netMass, vRel, targetFragility = 0.05, range = 50 } = params;
-  // Impact kinetic energy: ΔKE = ½ × m_net × v_rel²
-  const ke = 0.5 * netMass * vRel * vRel;
+  const ke = 0.5 * netMass * vRel * vRel;   // J
   // Reference KE: Medium Net at 10 m/s = 34 J
   const keScale = Math.min(ke / 34, 2.0);
   let risk = targetFragility * keScale;
@@ -1168,13 +1041,12 @@ export function computeFragRisk(params) {
     risk *= 1.5;  // increased at edge of envelope
   }
 
-  return Math.max(0, Math.min(1, risk));
+  return clamp01(risk);
 }
 
 /**
- * Phase 3b: base fragility for computeFragRisk. Brittleness (per-debris,
- * surfaced by the close-range survey) drives the FRAG chip when no explicit
- * fragility is set — "brittleness drives fragmentation risk".
+ * Base fragility for computeFragRisk. Per-debris brittleness (close-range survey) drives the FRAG chip when no
+ * explicit fragility is set.
  * @param {object|null} target
  * @returns {number} base frag risk 0..1
  */
@@ -1186,11 +1058,8 @@ export function effectiveFragility(target) {
 }
 
 /**
- * Phase 3b (capture-feedback overhaul): fragmentation severity tier.
- * Severity = brittleness × KE factor (vRel excess over the optimal wrap
- * speed). Nominal-speed shots on tough targets crack at worst; a hot approach
- * on a brittle body shatters. Pure + deterministic given countRoll.
- *
+ * Fragmentation severity tier. Severity = brittleness × KE factor (vRel excess over the optimal wrap speed).
+ * Deterministic given countRoll.
  * @param {object} params
  * @param {number} [params.brittleness=0.5] — per-debris 0..1 (DebrisField)
  * @param {number} [params.vRel=10] — contact speed (m/s)
@@ -1202,22 +1071,21 @@ export function effectiveFragility(target) {
 export function resolveFragSeverity({ brittleness = 0.5, vRel = 10, vOptimal = 10, countRoll = 0.5 } = {}) {
   const FS = Constants.FRAG_SEVERITY || {};
   const keFactor = Math.min(2, Math.max(0.5, vRel / Math.max(1e-6, vOptimal)));
-  const severity = Math.max(0, Math.min(1, brittleness)) * (keFactor / 2);
+  const severity = clamp01(brittleness) * (keFactor / 2);
   const tier = severity >= (FS.SHATTER_SEVERITY ?? 0.75) ? 'shatter'
     : severity >= (FS.BREAKUP_SEVERITY ?? 0.45) ? 'breakup'
     : 'crack';
   const band = tier === 'shatter' ? (FS.SHATTER_FRAGS || [8, 12])
     : tier === 'breakup' ? (FS.BREAKUP_FRAGS || [3, 6])
     : (FS.CRACK_FRAGS || [1, 2]);
-  const r = Math.max(0, Math.min(1, countRoll));
+  const r = clamp01(countRoll);
   const fragmentCount = band[0] + Math.round(r * (band[1] - band[0]));
   return { tier, severity, fragmentCount, destroyTarget: tier !== 'crack' };
 }
 
 /**
- * UX-11 #1: map a NET_CATCH_MISS reason to an actionable player-facing line.
- * Returns null only for 'forced' (scripted/test resolves stay silent); unknown
- * reasons fall through to a generic re-line-the-shot message.
+ * Map a NET_CATCH_MISS reason to a player-facing line. null only for 'forced' (scripted/test resolves stay silent);
+ * unknown reasons get a generic re-line-the-shot message.
  * @param {string} reason — 'timeout'|'tether_limit'|'cling_failed'|'oversize_aspect'|'fragmented'|'mouth_collapsed'|'forced'|…
  * @returns {string|null}
  */
@@ -1227,45 +1095,33 @@ export function missReasonToText(reason) {
     case 'tether_limit':
       return 'Net overshot. Line up the reticle and re-fire. Net reeling back; inventory restored.';
     case 'out_of_range':
-      // net-range: the piece drifted past the net's reach before contact.
       return 'Net missed: the piece drifted out of range. Close in and re-fire. Net reeling back.';
     case 'cling_failed':
       return 'Net grazed it. Wrap didn\'t hold. Close the distance or de-spin the target (hold L), then re-fire.';
     case 'oversize_aspect':
-      // Phase 2: deterministic broadside bounce — teach the orientation fix.
       return 'Net bounced off broadside. Too wide this way. De-spin, then come around end-on so the net swallows it lengthwise.';
     case 'fragmented':
-      // Phase 3b: the impact broke the target up — teach the gentle approach.
       return 'Impact broke the target apart. Fragments are now tracked. Approach slower on brittle debris (CINCH wraps gentler).';
     case 'mouth_collapsed':
-      // §11.2 mouth-collapse floor: rim spin decayed below the tension floor
-      // mid-flight — DISTINCT from the plain-miss default so the player learns
-      // the shot was doomed by range, not by aim.
+      // §11.2: rim spin decayed below the tension floor mid-flight. Distinct from the plain miss so the player learns
+      // the shot was doomed by range, not aim.
       return 'Net mouth collapsed mid-flight — shot too long. Rim spin bled below the tension floor. Close the distance, then re-fire.';
     case 'forced':
       return null;   // scripted/test resolves stay silent
     default:
-      // Phase 2: generic line instead of silent null — a miss should never
-      // leave the player guessing.
       return 'Net missed. Re-line the shot and fire again. Net reeling back.';
   }
 }
 
 /**
- * Cargo-continuity S5 (owner item 7): map a NET_CATCH_MISS reason to its staged
- * failure beat, or null when the miss gets no staging. ONE home — the logic
- * side (CaptureNetSystem's deferred auto-reel) and the visual side
- * (CaptureNetVisual's beat) must never diverge on which failures are staged.
- *   'bounce' — oversize_aspect: the bag slaps the broadside face and recoils,
- *              the mouth never closes (drape up, then down).
- *   'slip'   — strain_slip: the welded cinch releases and the catch slides out
- *              of the mouth (cinchFrac back toward 0).
- * cling_failed gets no staging (the wrap never closed — there is nothing to
- * release), fragmented is owned by the fragmentation machinery, and
- * timeout/tether_limit/target_lost have no target in frame. mouth_collapsed
- * (§11.2) is deliberately unstaged THIS wave — the windsock-flutter beat is a
- * later visual task keyed off NetProjectile.mouthCollapsed / the
- * NET_MOUTH_COLLAPSED event, not off this mapper.
+ * Map a NET_CATCH_MISS reason to its staged failure beat, or null when the miss gets no staging. ONE home: the logic
+ * side (CaptureNetSystem's deferred auto-reel) and the visual side (CaptureNetVisual) must agree on which failures
+ * are staged.
+ *   'bounce' — oversize_aspect: the bag slaps the broadside face and recoils, the mouth never closes.
+ *   'slip'   — strain_slip: the welded cinch releases and the catch slides out of the mouth (cinchFrac toward 0).
+ * Unstaged: cling_failed (wrap never closed), fragmented (owned by the fragmentation machinery),
+ * timeout/tether_limit/target_lost (no target in frame). mouth_collapsed (§11.2) is deliberately unstaged: a later
+ * visual beat keys off NetProjectile.mouthCollapsed / the NET_MOUTH_COLLAPSED event, not off this mapper.
  * @param {string} reason
  * @returns {'bounce'|'slip'|null}
  */
@@ -1278,9 +1134,7 @@ export function missFailureKind(reason) {
 }
 
 /**
- * Auto-recommend capture mode based on target data.
- * Per CAPTURE_NET.md §3.6.
- *
+ * Auto-recommend capture mode (CAPTURE_NET.md §3.6).
  * @param {object} target — debris with optional .hasSolarPanels, .surfaceRoughness, .vRel
  * @returns {'SLAM_WRAP'|'CINCH'}
  */
@@ -1292,14 +1146,8 @@ export function recommendCaptureMode(target) {
   return MODES.SLAM_WRAP;
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════════
-// §2  NetProjectile — Per-Net State Machine
-// ═══════════════════════════════════════════════════════════════════════════
-
 /**
- * Represents a single net in flight through its full capture cycle.
- *
+ * A single net in flight through its full capture cycle.
  * State machine (CAPTURE_NET.md §2.4):
  *   FOLDED → LAUNCHING → SPINNING_UP → FLIGHT →
  *     (slam) CONTACT → SECURE_CHECK → CAPTURED/MISSED → REELING → STOWED
@@ -1329,32 +1177,26 @@ export class NetProjectile {
     /** @type {object|null} Reference to source arm for inventory restoration (§3.5) */
     this._sourceArm     = config.sourceArm || null;
 
-    /** @type {function(THREE.Vector3):THREE.Vector3|null} Mother-pod launcher
-     *  anchor provider — writes the pod muzzle's CURRENT world position (scene
-     *  units) into the supplied scratch vector. This is the mother-path
-     *  replacement for `_sourceArm.position`: the ship translates at ~0.7 scene
-     *  units/s (70 km/s apparent), so any anchor read once at launch is ~45 km
-     *  stale by the end of the first 0.65 s. The provider is polled every frame
-     *  the net needs the launcher frame. Null on the headless test path. */
+    /** @type {function(THREE.Vector3):THREE.Vector3|null} Mother-pod launcher anchor provider: writes the pod muzzle's
+     *  CURRENT world position (scene units) into the supplied scratch vector. Polled every frame (the ship moves ~0.7
+     *  scene units/s, so an anchor read once at launch is ~45 km stale after 0.65 s). Null on the headless test path. */
     this._anchorProvider = config.anchorProvider || null;
-    /** @type {THREE.Vector3|null} Scratch for the anchor provider (allocated
-     *  lazily on first use — headless tests never touch it). */
+    /** @type {THREE.Vector3|null} Scratch for the anchor provider (lazy: headless tests never touch it). */
     this._anchorScratch  = null;
 
-    /** @type {boolean} Daughter capture being hauled by the ArmUnit — hold the
-     *  net's own reel (bag stays cinched on the debris) until the arm delivers. */
+    /** @type {boolean} Daughter capture hauled by the ArmUnit: hold the net's own reel (bag stays cinched) until delivery. */
     this._heldByArm     = false;
-    /** @type {{x:number,y:number,z:number}|null} u20-nets: the net's centre at contact minus the target's centre, metres
+    /** @type {{x:number,y:number,z:number}|null} Net centre at contact minus target centre, metres
      *  (null until contact: the scoop then centres its mouth on the target). */
     this._mouthOffsetM  = null;
-    /** @type {{x:number,y:number,z:number}|null} u22-scoop: the net's launch direction at contact (the drawn mouth's axis; null until contact: the scoop then uses a ball). */
+    /** @type {{x:number,y:number,z:number}|null} Net launch direction at contact (the drawn mouth's axis;
+     *  null until contact: the scoop then uses a ball). */
     this._mouthAxis     = null;
-    /** @type {boolean} u20-nets: this net already took a scoop (its targetDebris is the bag). */
+    /** @type {boolean} This net already took a scoop (its targetDebris is the bag). */
     this._scooped       = false;
-    /** @type {number} Register item 28: kg the held catch carried when the arm
-     *  LOST it (integrity slip / boost rip / tether-snap drift-end / reset drop
-     *  / severed-claim transfer) instead of delivering it to the furnace. 0 on
-     *  every other path — a delivered catch keeps its mass in capturedMass. */
+    /** @type {number} kg the held catch carried when the arm LOST it (integrity slip / boost rip / tether-snap
+     *  drift-end / reset drop / severed-claim transfer) instead of delivering it to the furnace. 0 on every other
+     *  path: a delivered catch keeps its mass in capturedMass. */
     this._releasedMassKg = 0;
 
     // ── Runtime state ──
@@ -1365,18 +1207,13 @@ export class NetProjectile {
     this.position      = { ...this.launchPosition };
     this.speed         = this.netClass.LAUNCH_SPEED;
     this.spinRate      = 0;           // current Hz
-    /** @type {number} §11.2: live per-rim-weight tension (N) from the decayed
-     *  in-flight spin — rimTensionPerWeightN(netClass, spinRate). Updated each
-     *  FLIGHT tick (0 before flight: the bag is still folded/blossoming, so a
-     *  mouth-tension claim would be meaningless). Telemetry runs for EVERY
-     *  class; since the §11.2 LARGE resolution (2026-08-27) the collapse
-     *  latch does too — no class is skipped. */
+    /** @type {number} §11.2: live per-rim-weight tension (N) from the decayed in-flight spin,
+     *  rimTensionPerWeightN(netClass, spinRate). Updated each FLIGHT tick; 0 before flight (bag still folded).
+     *  Telemetry and the collapse latch run for every class. */
     this.rimTensionN   = 0;
-    /** @type {boolean} §11.2 mouth-collapse latch: true once rimTensionN fell
-     *  below CN.MOUTH_TENSION_FLOOR_N during FLIGHT (one-way — in-flight decay
-     *  is monotonic, nothing re-spins a net mid-flight). While true, contact
-     *  resolves as a 'mouth_collapsed' MISS instead of a wrap. Queryable state
-     *  for HUD/visuals; NET_MOUTH_COLLAPSED fires once at the latch. */
+    /** @type {boolean} §11.2 mouth-collapse latch: true once rimTensionN fell below CN.MOUTH_TENSION_FLOOR_N during
+     *  FLIGHT (one-way: in-flight decay is monotonic). While true, contact resolves as a 'mouth_collapsed' MISS
+     *  instead of a wrap. NET_MOUTH_COLLAPSED fires once at the latch. */
     this.mouthCollapsed = false;
     this.tetherPaidOut = 0;           // metres
     this.reelProgress  = 0;           // 0..1
@@ -1390,54 +1227,39 @@ export class NetProjectile {
     this._clingRoll        = 0;
     this._clingProbability = 0;
     this._fragRisk         = 0;
-    this._presentedWidthM  = null;   // Phase 2: presented width at contact (m)
+    this._presentedWidthM  = null;   // presented width at contact (m)
 
     // Flag for CaptureNetSystem to detect state changes from forceResolve()
     this._resultProcessed  = false;
 
-    // ── Mother berth (mother-net-reel plan §8) — podIndex ≥ 0 && armIndex < 0 ──
-    /** @type {object|null} Injected context { player, debrisField } — set by
-     *  CaptureNetSystem.fireMotherNet from init(deps). Backs the ship-relative
-     *  reel pin and the pinCapturedDebris API. */
+    // Mother berth state (podIndex ≥ 0 && armIndex < 0)
+    /** @type {object|null} Injected context { player, debrisField } (CaptureNetSystem.fireMotherNet, from init(deps)).
+     *  Backs the ship-relative reel pin and the pinCapturedDebris API. */
     this._ctx            = null;
-    /** @type {number|null} Ship-relative reel: remaining distance muzzle→bag
-     *  APEX (the tether end the winch reels — the catch rides _catchSeatM
-     *  metres deeper) in METRES. Seeded at REELING entry from the debris's
-     *  live _scenePosition minus the seat depth, then monotonically eased to
-     *  the berth standoff. Single source for reelProgress on the mother path. */
+    /** @type {number|null} Ship-relative reel: remaining distance muzzle→bag APEX (the tether end the winch reels; the
+     *  catch rides _catchSeatM metres deeper), METRES. Seeded at REELING entry from the debris's live _scenePosition
+     *  minus the seat depth, then monotonically eased to the berth standoff. Single source for reelProgress. */
     this._remainingM     = null;
-    /** @type {number|null} The seeded _remainingM at REELING entry — the
-     *  reelProgress denominator (review fix: do NOT derive from tetherPaidOut,
-     *  which disagrees with the live seed after contact→reel drift). */
+    /** @type {number|null} The seeded _remainingM at REELING entry: the reelProgress denominator. Do NOT derive it
+     *  from tetherPaidOut (disagrees with the live seed after contact→reel drift). */
     this._reelSeedM      = null;
-    /** @type {number} Net-domain seconds since reel entry, accumulated in the
-     *  reel/berth ticks — the ramp key for the readability floor's engagement
-     *  (whale-in-cone item 15: the floor eases in over
-     *  MOTHER_CATCH_MIN_RENDER_RAMP_S instead of popping on the first reel
-     *  frame). Seeded 0 at _enterMotherReel, NEVER reset while held — keying
-     *  on stateTimer would re-ramp at BERTHED entry (stateTimer resets on
-     *  every _transitionTo), a second pop at the nose. */
+    /** @type {number} Net-domain seconds since reel entry (reel/berth ticks): the ramp key for the readability
+     *  floor, which eases in over MOTHER_CATCH_MIN_RENDER_RAMP_S. Seeded 0 at _enterMotherReel, NEVER reset while
+     *  held: keying on stateTimer would re-ramp at BERTHED entry (stateTimer resets on every _transitionTo). */
     this._floorRampT     = 0;
-    /** @type {number|null} Depth (metres) the catch rides INSIDE the bag past
-     *  the apex, along the frozen bag axis (launchDirection). Seeded at
-     *  REELING entry from the live capture geometry — the depth the cinch
-     *  left the catch at (aM ≈ 4.5 m on a LARGE net). The reel/berth pin
-     *  writes apex + launchDirection × _catchSeatM so the catch stays wrapped
-     *  in the drawn bag (whale-in-cone follow-up 2: _updateMotherReel /
-     *  updateBerthHold used to pin net.position and the debris to the SAME
-     *  point — the catch rode the bag apex unwrapped, the metres gate's
-     *  COLOCATION-DEFECT). */
+    /** @type {number|null} Depth (metres) the catch rides INSIDE the bag past the apex, along the frozen bag axis
+     *  (launchDirection). Seeded at REELING entry from the live capture geometry (aM ≈ 4.5 m on a LARGE net). The
+     *  reel/berth pin writes apex + launchDirection × _catchSeatM so the catch stays wrapped in the drawn bag, not
+     *  colocated with the apex. */
     this._catchSeatM     = null;
     /** @type {THREE.Vector3|null} Lateral offset (scene units), decayed to 0. */
     this._lateral        = null;
-    /** @type {THREE.Vector3|null} Lagged ship-forward (scene units) — a raw
-     *  live fwd would whip a 5 t catch across the sky on a mid-reel slew. */
+    /** @type {THREE.Vector3|null} Lagged ship-forward (scene units): a raw live fwd would whip a 5 t catch across
+     *  the sky on a mid-reel slew. */
     this._fwdLagged      = null;
-    /** @type {THREE.Quaternion|null} Catch attitude in the SHIP frame, captured
-     *  at berth entry: qLocal = shipQuat⁻¹ × qCatch. Every frame the berth hold
-     *  writes shipQuat × qLocal back into tumbleAxis/tumbleAngle so the catch
-     *  rotates rigidly WITH the ship (plan §1.2 — otherwise it visibly swivels
-     *  inside the net on every slew). */
+    /** @type {THREE.Quaternion|null} Catch attitude in the SHIP frame, captured at berth entry:
+     *  qLocal = shipQuat⁻¹ × qCatch. The berth hold writes shipQuat × qLocal back into tumbleAxis/tumbleAngle every
+     *  frame so the catch rotates rigidly WITH the ship. */
     this._qLocal         = null;
     /** @type {number} BERTH_SECURE_S countdown once BERTHED; ≤ 0 → processed. */
     this._berthTimer     = -1;
@@ -1445,77 +1267,62 @@ export class NetProjectile {
     this._berthProcessed = false;
     /** @type {number|null} Deterministic strain-roll override for tests. */
     this._strainRollOverride = null;
-    /** @type {number|null} Deterministic cling-roll override for tests / the
-     *  shot harness (`__netScenario`). 0 ⇒ guaranteed catch; read at the
-     *  `_clingRoll <= _clingProbability` compare in `_resolveCatch`. */
+    /** @type {number|null} Deterministic cling-roll override for tests / the shot harness (`__netScenario`).
+     *  0 ⇒ guaranteed catch; read at the `_clingRoll <= _clingProbability` compare in `_resolveCatch`. */
     this._clingRollOverride = null;
-    /** @type {boolean} Set when the mother reel has no berth context (headless
-     *  test path — no player/debrisField): the reel falls through to the
-     *  daughter-style reel-back so the net still stows/prunes instead of
-     *  looping MISSED→REELING on the re-armed auto-reel. */
+    /** @type {boolean} Set when the mother reel has no berth context (headless test path): the reel falls through to
+     *  the daughter-style reel-back so the net still stows/prunes instead of looping MISSED→REELING. */
     this._motherReelFallback = false;
-    /** @type {'bounce'|'slip'|null} Cargo-continuity S5: the staged failure
-     *  beat this net's miss earned (missFailureKind). While MISSED with a
-     *  non-null kind, the system's auto-reel holds for FAILURE_STAGING_S so
-     *  the beat plays at the contact point before the empty reel-back. */
+    /** @type {'bounce'|'slip'|null} The staged failure beat this net's miss earned (missFailureKind). While MISSED
+     *  with a non-null kind, the system's auto-reel holds for FAILURE_STAGING_S so the beat plays at the contact
+     *  point before the empty reel-back. */
     this._failureKind = null;
-    // ── Reel corridor clearance (mother-net-reel plan §10 Phase C-lite) ──
-    /** @type {boolean} True while the reel is holding at CORRIDOR_HOLD_M
-     *  waiting for the recovery corridor to clear. */
+    // Reel corridor clearance
+    /** @type {boolean} True while the reel holds at CORRIDOR_HOLD_M waiting for the recovery corridor to clear. */
     this._corridorHold = false;
-    /** @type {number} Seconds spent in the corridor hold; at CORRIDOR_TIMEOUT_S
-     *  the reel berths at CORRIDOR_EXTENDED_STANDOFF_M rather than clip through. */
+    /** @type {number} Seconds in the corridor hold; at CORRIDOR_TIMEOUT_S the reel berths at
+     *  CORRIDOR_EXTENDED_STANDOFF_M rather than clip through. */
     this._corridorTimer = 0;
-    /** @type {boolean} True once the corridor gate has timed out — latches the
-     *  gate OFF for the rest of the reel so it cannot re-arm against the same
-     *  still-blocked corridor (the berth completes at the held range). */
+    /** @type {boolean} True once the corridor gate has timed out: latches the gate OFF for the rest of the reel so it
+     *  cannot re-arm against the same blocked corridor (the berth completes at the held range). */
     this._corridorTimedOut = false;
-    /** @type {number} The _remainingM at corridor-hold engagement — the hold
-     *  freezes the approach HERE (never pushes it back out). Register item 73:
-     *  EXCEPT the queue level — the latch takes max(engagement range, queue
-     *  level) and the hold glides OUT to it at reel speed (see the ease in
-     *  _updateMotherReel). */
+    /** @type {number} The _remainingM at corridor-hold engagement: the hold freezes the approach HERE (never pushes it
+     *  back out), EXCEPT the queue level: the latch takes max(engagement range, queue level) and the hold glides OUT
+     *  to it at reel speed (see the ease in _updateMotherReel). */
     this._corridorHoldLevelM = 0;
-    /** @type {boolean} Register item 73 — true when the corridor-hold latch
-     *  was queue-raised past the engagement range (the drain-race): the hold
-     *  glides OUT to the latch, and a timeout mid-glide completes the glide
-     *  to the raised standoff (never an outward pop). False with an empty
-     *  queue ⇒ the single-catch case is byte-identical. */
+    /** @type {boolean} True when the corridor-hold latch was queue-raised past the engagement range (the drain-race):
+     *  the hold glides OUT to the latch, and a timeout mid-glide completes the glide to the raised standoff (never an
+     *  outward pop). False with an empty queue. */
     this._corridorGlide = false;
-    /** @type {boolean} True once the corridor gate has emitted its Houston line
-     *  (once per net — a corridor that clears and re-blocks does not re-announce). */
+    /** @type {boolean} True once the corridor gate has emitted its Houston line (once per net, even if the corridor
+     *  clears and re-blocks). */
     this._corridorAnnounced = false;
     /** @type {number|null} The berth standoff actually in force — normally
      *  sizeMeter/2 + BERTH_CLEARANCE_M, raised to CORRIDOR_EXTENDED_STANDOFF_M
      *  after a corridor timeout. */
     this._effectiveStandoffM = null;
-    /** @type {boolean} Phase B §9: the line-taut tug fires exactly once, at
-     *  the CAPTURED transition (mother path only). */
+    /** @type {boolean} The line-taut tug fires exactly once, at the CAPTURED transition (mother path only). */
     this._tugApplied = false;
-    /** @type {THREE.Vector3|null} §9.8 windowed tug delivery: the feel vector
-     *  (scene units/s) fed into _rcsVelocity over NET_TUG_WINDOW_S by
-     *  CaptureNetSystem.update. Null when no window is active. Dies with the
-     *  net, so a jettison mid-window correctly abandons the remainder. */
+    /** @type {THREE.Vector3|null} Windowed tug delivery: the feel vector (scene units/s) fed into _rcsVelocity over
+     *  NET_TUG_WINDOW_S by CaptureNetSystem.update. Null when no window is active. Dies with the net, so a jettison
+     *  mid-window abandons the remainder. */
     this._tugFeelScene = null;
     /** @type {number} Seconds of the tug window already delivered. */
     this._tugElapsed = 0;
-    // ── Phase D.7 garnish (mother-net-reel plan §11.7) ──
-    /** @type {number} (a) Tumble carryover: residual spin (rad/s) the wrapped
-     *  bundle keeps at ENVELOP, decaying over TUMBLE_CARRYOVER_DECAY_S. Fed
-     *  into the berth-hold orientation as a small extra pitch term. */
+    // Berth garnish
+    /** @type {number} Tumble carryover: residual spin (rad/s) the wrapped bundle keeps at ENVELOP, decaying over
+     *  TUMBLE_CARRYOVER_DECAY_S. Fed into the berth-hold orientation as a small extra pitch term. */
     this._tumbleCarryover = 0;
-    // V7: ACCUMULATED residual-spin angle (rad). The pre-V7 twin sites applied
-    // one frame's increment to a freshly rebuilt quaternion each frame, so the
-    // carryover never accumulated — a sub-degree offset decaying to nothing.
+    // ACCUMULATED residual-spin angle (rad): the increment must accumulate across frames, not be applied to a freshly
+    // rebuilt quaternion each frame (that decays to a sub-degree offset).
     this._tumbleCarryAngle = 0;
-    /** @type {number} (b) Berthed pendulum: angular offset (rad) of the
-     *  berthed bundle off the lagged-forward axis, driven by the same
-     *  critically damped spring as the reel-direction lag, re-excited by RCS. */
+    /** @type {number} Berthed pendulum: angular offset (rad) of the berthed bundle off the lagged-forward axis, driven
+     *  by the same critically damped spring as the reel-direction lag, re-excited by RCS. */
     this._pendulumAngle = 0;
     /** @type {number} Pendulum angular velocity (rad/s). */
     this._pendulumVel = 0;
 
-    // ── Q2 Ceremony event emission guards (CEREMONY_REDESIGN.md §5.2) ──
+    // Ceremony event emission guards (archive/CEREMONY_REDESIGN.md §5.2)
     this._ceremonyStartEmitted    = false;
     this._brakeImminentEmitted    = false;
     this._brakeFiredEmitted       = false;
@@ -1524,24 +1331,18 @@ export class NetProjectile {
     this._lastCinchBucket         = -1;
   }
 
-  // ── Tick ────────────────────────────────────────────────────────────────
-
   /**
-   * Launcher anchor in scene units, current frame. Daughter path reads the
-   * source arm's live position; mother-pod path polls the anchor provider
-   * (pod muzzle world position). Returns null on the headless test path —
-   * callers fall back to the metres-based absolute-position logic.
+   * Launcher anchor in scene units, current frame. Daughter path: the source arm's live position; mother-pod path:
+   * the anchor provider (pod muzzle world position). Null on the headless test path (callers fall back to the
+   * metres-based absolute-position logic).
    * @returns {THREE.Vector3|null}
    * @private
    */
   _anchorScene() {
     if (this._sourceArm) {
-      // Daughter path (net-canister continuity fix): anchor at the arm's
-      // net-launcher canister MUZZLE (mesh-derived, scene units) when the arm
-      // exposes it, so the per-frame co-orbiting sync, the contact math and
-      // the rendered net/tether all share the visible launch point instead of
-      // the body centre. Mock arms without the method keep the old
-      // arm-centre anchor (headless back-compat).
+      // Anchor at the arm's net-launcher canister MUZZLE (mesh-derived, scene units) when the arm exposes it, so the
+      // per-frame co-orbiting sync, contact math and rendered net/tether share the visible launch point. Mock arms
+      // without the method keep the arm-centre anchor (headless).
       if (typeof this._sourceArm.getNetMuzzleWorldInto === 'function') {
         if (!this._anchorScratch) this._anchorScratch = new THREE.Vector3();
         return this._sourceArm.getNetMuzzleWorldInto(this._anchorScratch);
@@ -1562,10 +1363,8 @@ export class NetProjectile {
   update(dt) {
     if (!this.isActive) return;
 
-    // Q2 Ceremony: emit start event on first tick.
-    // NOTE: emitted BEFORE the scale read below so that CameraSystem's
-    // _onNetCeremonyStart handler (synchronous via EventBus) can publish the
-    // first beat's timeScale to CeremonyTimeScale before we apply it.
+    // Emit BEFORE the scale read below: CameraSystem's _onNetCeremonyStart handler (synchronous via EventBus) must
+    // publish the first beat's timeScale to CeremonyTimeScale before we apply it.
     if (FEATURE_FLAGS.NET_CEREMONY && !this._ceremonyStartEmitted) {
       this._ceremonyStartEmitted = true;
       eventBus.emit(Events.NET_CEREMONY_START, {
@@ -1575,56 +1374,22 @@ export class NetProjectile {
       });
     }
 
-    // Stage 4 (CEREMONY_REDESIGN.md §5, §6 R1): apply ceremony time-dilation to
-    // THIS projectile's internal dt only. World dt (orbital propagation,
-    // debris field, conjunctions, station-keep, etc.) is unaffected — the
-    // scaling happens here, not at the caller (captureNetSystem.update). When
-    // the flag is OFF or no ceremony is active, CeremonyTimeScale.get() === 1.0
-    // (short-circuit) and this is a no-op multiply.
+    // Ceremony time-dilation (archive/CEREMONY_REDESIGN.md §5, §6 R1): scales THIS projectile's internal dt only;
+    // world dt is unaffected. CeremonyTimeScale.get() === 1.0 when the flag is off or no ceremony is active.
     const scale = FEATURE_FLAGS.NET_CEREMONY ? CeremonyTimeScale.get() : 1.0;
     dt = dt * scale;
 
     this.stateTimer += dt;
 
-    // 2026-05-25 — Q2 visual-drift fix (THE "NET DISAPPEARS" BUG).
-    //
-    // Only `_updateFlight` updates `this.position` from the arm's current
-    // scene position; `_updateBrake/Envelop/CinchClosing/SecureCheck` do NOT.
-    // After contact, `net.position` therefore FREEZES at the arm's position
-    // at the moment of contact, while the arm itself keeps orbiting at
-    // ~7 km/s (LEO). [`CaptureNetVisual.update`](js/ui/CaptureNetVisual.js:484)
-    // reads `net.position * M` every frame and places the visual group there,
-    // so the visual is locked to a stale world point that drifts off-frame
-    // within ~1 s of contact.
-    //
-    // CameraSystem._computeNetScenePos meanwhile uses `arm.position + launchDir
-    // * distanceTraveled * M` (CURRENT arm position), so the camera tracks the
-    // arm's co-orbiting frame. Result: camera and visual end up in different
-    // reference frames, and the user sees the bag VANISH right when the
-    // engulf/cinch should start playing — exactly the user-reported symptom.
-    //
-    // Fix: keep `this.position` synced to the arm's current scene position
-    // during ALL post-FLIGHT states.  Each block below documents WHY:
-    //
-    //   CONTACT/BRAKE/ENVELOP/CINCH_CLOSING/SECURE_CHECK — visual stays
-    //     anchored at the launch-distance point in the arm's co-orbiting
-    //     frame (FLIGHT already does this work; running it twice is harmless).
-    //
-    //   REELING — 2026-05-28 (Item 2 fix): _updateReeling had a misleading
-    //     comment claiming it "has its own position logic", but it only
-    //     updates reelProgress (a 0→1 scalar), not position.  Result: net
-    //     visual froze at the orbital-frame contact point while the arm
-    //     co-orbited at 7 km/s, so the user saw the net VANISH the moment
-    //     REELING started.  Now we track the arm AND slide the effective
-    //     launch distance from `tetherPaidOut → 0` as reelProgress
-    //     advances 0→1, so the net visually reels in toward the arm.
-    // Mother-net-reel plan §7.3: the sync now ALSO covers LAUNCHING and
-    // SPINNING_UP (the first 0.65 s). Previously the net sat at its absolute
-    // launch point for those states while the launcher co-orbited at ~0.7
-    // scene units/s — ~0.45 units (~45 km apparent) of drift before FLIGHT
-    // even began. distanceTraveled is 0 during both states, so the sync seats
-    // the net exactly on the moving muzzle. (Fixes the daughter's first
-    // 0.65 s too — daughter regression pass required.)
+    // Only `_updateFlight` updates `this.position` from the arm's scene position; after contact it would freeze while
+    // the arm co-orbits at ~7 km/s (the visual drifts off-frame and the camera, which tracks the arm's current
+    // position, ends up in a different frame: the "net disappears" bug). So sync it to the arm's current scene
+    // position in ALL states after launch:
+    //   LAUNCHING/SPINNING_UP — distanceTraveled is 0, so this seats the net on the moving muzzle (the launcher moves
+    //     ~0.7 scene units/s: ~45 km apparent drift over the first 0.65 s otherwise).
+    //   CONTACT..SECURE_CHECK — visual stays at the launch-distance point in the arm's co-orbiting frame.
+    //   REELING — also slides the effective launch distance tetherPaidOut → 0 as reelProgress goes 0→1
+    //     (_updateReeling updates only that scalar, not position).
     const anchor = this._anchorScene();
     if (anchor
         && (this.state === STATES.LAUNCHING
@@ -1634,18 +1399,10 @@ export class NetProjectile {
             || this.state === STATES.ENVELOP
             || this.state === STATES.CINCH_CLOSING
             || this.state === STATES.SECURE_CHECK
-            // S5 failure staging: MISSED used to be a ZERO-frame state (the
-            // system auto-reeled in the same tick), so a frozen position never
-            // rendered. A staged failure now HOLDS MISSED for
-            // FAILURE_STAGING_S — without this the bag would sit at its
-            // absolute contact point while the launcher co-orbits away at
-            // ~0.7 scene units/s (~100 km over the beat), i.e. the beat would
-            // play on a bag that vanishes (TRAP 1 / plan §2 C2 all over again).
-            // Both staged reasons fire while distanceTraveled === tetherPaidOut
-            // (oversize at the SECURE_CHECK resolve; strain slip on the FIRST
-            // reel tick), so this holds the bag exactly where SECURE_CHECK left
-            // it AND matches the empty reel-back's progress-0 value below —
-            // continuous in, continuous out.
+            // MISSED holds for FAILURE_STAGING_S on a staged failure. Without the sync the bag would sit at its absolute
+            // contact point while the launcher co-orbits away (~0.7 scene units/s), so the beat would play on a vanished
+            // bag. Both staged reasons fire while distanceTraveled === tetherPaidOut, so this holds the bag where
+            // SECURE_CHECK left it and matches the empty reel-back's progress-0 value (continuous in and out).
             || this.state === STATES.MISSED)) {
       const M_NET = Constants.SCENE_UNITS_PER_METER;
       this.position.x = anchor.x / M_NET + this.launchDirection.x * this.distanceTraveled;
@@ -1653,31 +1410,21 @@ export class NetProjectile {
       this.position.z = anchor.z / M_NET + this.launchDirection.z * this.distanceTraveled;
     } else if (anchor && this.state === STATES.REELING) {
       const M_NET = Constants.SCENE_UNITS_PER_METER;
-      // Mother physical-reel path: _updateMotherReel owns net.position (it
-      // writes the bag apex from the ship-relative pin every tick), so this
-      // sync is dead — and it must NOT run: it rewrites net.position to
-      // whale − mouthR before _enterMotherReel reads it, which would pollute
-      // the catch-seat measurement (whale-in-cone follow-up 2).
+      // Mother physical-reel path: _updateMotherReel owns net.position (writes the bag apex from the ship-relative pin
+      // every tick). This sync must NOT run there: it rewrites net.position to whale − mouthR before _enterMotherReel
+      // reads it, polluting the catch-seat measurement.
       const motherPhysical = this._isMother
         && this.catchResult === 'success' && !this._motherReelFallback;
-      // 2026-06-05 (v2 — visual-only, no physics coupling): for a SUCCESSFUL
-      // catch, keep the bag locked ONTO the captured debris so the cinched net
-      // and its catch never separate while the daughter hauls it home (the
-      // user-reported "net doesn't cinch around / bring back the debris" bug).
-      // We follow the debris's live scene position — which DebrisField already
-      // drives (its orbit until the daughter snaps onto it, then the daughter's
-      // position) — and seat the bag apex one mouth-radius BEHIND the debris
-      // along the launch axis, so the forward drawstring ring wraps the debris's
-      // FAR side (opposite the daughter). This ONLY writes the net's visual
-      // position; nothing reads net.position back into the arm/debris/autopilot,
-      // so there is no feedback or station-keep coupling.
+      // Successful catch: lock the bag ONTO the captured debris (its live scene position, driven by DebrisField) so net
+      // and catch never separate during the haul. Apex sits one mouth-radius BEHIND the debris along the launch axis,
+      // so the drawstring ring wraps the FAR side. Visual only: nothing reads net.position back into arm/debris/autopilot.
       const sp = (!motherPhysical && this.catchResult === 'success') ? this.targetDebris?._scenePosition : null;
       if (motherPhysical) {
         // _updateMotherReel writes net.position later this same tick.
       } else if (sp) {
         if (this._heldByArm && this._sourceArm) {
-          // net-cinch: a daughter's held net sits where its bag is drawn — the neck on the tow line from her muzzle to
-          // the catch, touching the catch's rear (entities/heldBagShape.js: the one rule CaptureNetVisual draws and
+          // A daughter's held net sits where its bag is drawn: the neck on the tow line from her muzzle to the catch,
+          // touching the catch's rear (entities/heldBagShape.js: the one rule CaptureNetVisual draws and
           // ArmUnit._rhSyncBag winds the line to), not one flight-mouth radius behind it
           heldBagNeckInto(_heldNeck, sp, anchor, this.launchDirection, heldBagRadiusScene(this.targetDebris), DAUGHTER_STAND_M);
           this.position.x = _heldNeck.x / M_NET;
@@ -1690,10 +1437,8 @@ export class NetProjectile {
           this.position.z = sp.z / M_NET - this.launchDirection.z * back;
         }
       } else {
-        // Empty net (miss) — reel the bag back to the launcher. Effective
-        // launch distance shrinks from `tetherPaidOut` (contact distance)
-        // toward 0 as `reelProgress` advances 0→1; at progress=1 the net
-        // rendezvous with the launcher.
+        // Empty net (miss): reel the bag back; effective launch distance shrinks from tetherPaidOut to 0 as
+        // reelProgress goes 0→1.
         const eff = this.tetherPaidOut * Math.max(0, 1 - this.reelProgress);
         this.position.x = anchor.x / M_NET + this.launchDirection.x * eff;
         this.position.y = anchor.y / M_NET + this.launchDirection.y * eff;
@@ -1731,8 +1476,6 @@ export class NetProjectile {
     return this.podIndex >= 0 && this.armIndex < 0;
   }
 
-  // ── State transitions ──────────────────────────────────────────────────
-
   /** @private */
   _transitionTo(newState) {
     this.state = newState;
@@ -1748,21 +1491,14 @@ export class NetProjectile {
 
   /** Phase 2: Yo-yo despin spin-up (0.5 s) */
   _updateSpinningUp(dt) {
-    // Yo-yo despin, STYLIZED (Item 2; §11.6 doc fix 2026-08-27): the folded
-    // canister starts fast and despins as the rim weights deploy and the bag
-    // blossoms. The DIRECTION is the real yo-yo effect (I grows with r, so ω
-    // must fall), but the SPIN_FOLDED_MULT = 3 ratio is a deliberate visual
-    // simplification, NOT closed-form L = Iω conservation: 3× implies a
-    // fictional folded radius of r_open/√3 (≈ 2.3 m on LARGE — not a
-    // canister), while true conservation from a ~5 cm folded radius would
-    // need (r_open/r_fold)² ≈ 6400× on LARGE — an invisible blur. The 3×
-    // keeps the "unwinds fast, blossoms, settles" read animation-legible.
-    // Same note at the constant (Constants.js CAPTURE_NET.SPIN_FOLDED_MULT).
+    // Yo-yo despin, STYLIZED (§11.6): the direction is the real effect (I grows with r, so ω falls), but
+    // SPIN_FOLDED_MULT = 3 is a deliberate visual simplification, NOT L = Iω conservation (3× implies a fictional
+    // folded radius r_open/√3 ≈ 2.3 m on LARGE; true conservation from a ~5 cm radius would need ≈ 6400×, an
+    // invisible blur). Same note at Constants.js CAPTURE_NET.SPIN_FOLDED_MULT.
     const foldedMult = CN.SPIN_FOLDED_MULT != null ? CN.SPIN_FOLDED_MULT : 1.0;
     const fraction = Math.min(this.stateTimer / CN.SPIN_UP_TIME, 1);
     const startHz = this.netClass.SPIN_HZ * foldedMult;
-    // Lerp from the folded (fast) spin down to the settled design spin.
-    this.spinRate = startHz + (this.netClass.SPIN_HZ - startHz) * fraction;
+    this.spinRate = lerp(startHz, this.netClass.SPIN_HZ, fraction);
     if (this.stateTimer >= CN.SPIN_UP_TIME) {
       this.spinRate = this.netClass.SPIN_HZ;
       this._transitionTo(STATES.FLIGHT);
@@ -1776,14 +1512,9 @@ export class NetProjectile {
     this.distanceTraveled += dist;
     this.tetherPaidOut += dist;
 
-    // Slow in-flight spin decay (Item 2): mesh flexing + rim drag bleed angular
-    // momentum, so long shots arrive with spinFraction < 1 → live f_spin penalty
-    // in computeClingProbability ("fire inside the envelope or the wrap is weak").
-    // Per-class override first (the MAX_FLIGHT_TIME idiom): LARGE bleeds at
-    // 0.04/s — its rim carries ~8× the specific angular momentum of the
-    // daughter nets, and the §11.2 LARGE resolution keys off it (derivation
-    // at Constants.js CN.LARGE.SPIN_DECAY_PER_S). SMALL/MEDIUM have no
-    // override and keep the shared CN.SPIN_DECAY_PER_S bit-identically.
+    // Slow in-flight spin decay (mesh flexing + rim drag): long shots arrive with spinFraction < 1, a live f_spin
+    // penalty in computeClingProbability. Per-class override first (LARGE 0.04/s; derivation at Constants.js
+    // CN.LARGE.SPIN_DECAY_PER_S, §11.2); SMALL/MEDIUM use the shared CN.SPIN_DECAY_PER_S.
     const decayPerS = this.netClass.SPIN_DECAY_PER_S ?? CN.SPIN_DECAY_PER_S ?? 0;
     if (decayPerS > 0 && this.spinRate > 0) {
       this.spinRate = Math.max(0, this.spinRate - this.netClass.SPIN_HZ * decayPerS * dt);
@@ -1794,8 +1525,7 @@ export class NetProjectile {
     this.position.y += this.launchDirection.y * dist;
     this.position.z += this.launchDirection.z * dist;
 
-    // PROD path: also update position from the launcher's current co-orbiting
-    // frame so CaptureNetVisual renders the net near the ship, not 7 km behind.
+    // PROD path: sync from the launcher's co-orbiting frame so CaptureNetVisual renders the net near the ship.
     const M_NET = Constants.SCENE_UNITS_PER_METER;  // 1 m in scene units (matches ArmUnit.M)
     const anchor = this._anchorScene();
     if (anchor) {
@@ -1804,60 +1534,35 @@ export class NetProjectile {
       this.position.z = anchor.z / M_NET + this.launchDirection.z * this.distanceTraveled;
     }
 
-    // Check max flight time (§2.4 phase 3). Per-class override (LARGE gets
-    // 11 s so its reach reaches the 100 m tether limit); daughters keep the
-    // shared CN.MAX_FLIGHT_TIME.
+    // Max flight time (§2.4 phase 3); per-class override (LARGE 11 s reaches the 100 m tether limit).
     const maxFlightTime = this.netClass.MAX_FLIGHT_TIME ?? CN.MAX_FLIGHT_TIME;
     if (this.flightTime >= maxFlightTime) {
       this._miss('timeout');
       return;
     }
 
-    // Check tether limit
     if (this.tetherPaidOut >= this.netClass.TETHER_MAX) {
       this._miss('tether_limit');
       return;
     }
 
-    // Mother-net-reel plan §7.7: dead-target guard. DebrisField.removeDebris
-    // sets alive=false and FREEZES _scenePosition, so a stale truthy position
-    // would keep passing the intersection check below against a body that no
-    // longer exists. Route to the miss path instead.
+    // Dead-target guard: DebrisField.removeDebris sets alive=false and FREEZES _scenePosition, so a stale position
+    // would keep passing the intersection check below.
     if (this.targetDebris && this.targetDebris.alive === false) {
       this._miss('target_lost');
       return;
     }
 
-    // ── §11.2 mouth-collapse floor (2026-08-27) ──
-    // Live rim tension from the SAME decayed spin f_spin reads:
-    // F/wt = m·(2π·spinRate)²·r (rimTensionPerWeightN). Below
-    // CN.MOUTH_TENSION_FLOOR_N the rim weights can no longer hold the bag
-    // mouth open in 0g — the mouth is collapsed, and any contact resolves as
-    // a distinct 'mouth_collapsed' MISS at the intersection check below (the
-    // bag streams like a windsock; it cannot wrap). One-way latch: in-flight
-    // decay is monotonic. Evaluated AFTER the timeout/tether/dead-target
-    // guards so a net that dies of 'timeout' on the same tick keeps its
-    // legacy reason at ANY dt (MEDIUM's floor crossing sits ~51 ms past its
-    // 8 s timeout — unreachable by derivation, but the ordering makes it
-    // structural, not arithmetic). The latch runs for EVERY class — the
-    // wave-2 LARGE deferral (netClass.MOUTH_COLLAPSE_DEFERRED) is RESOLVED
-    // (2026-08-27 owner rebalance): LARGE's per-class SPIN_DECAY_PER_S
-    // override (0.04/s, read above) moves its crossing to t* ≈ 13.51 s
-    // ≈ 135 m, outside every reachable contact (tether pay-out 10 s,
-    // MAX_FLIGHT 11 s) with ≥ 2.5 s margin, so 68–100 m whale shots arrive
-    // above the floor honestly (≥ 17.1 N at max reach) instead of being
-    // skipped. Derivation at Constants.js CN.LARGE.SPIN_DECAY_PER_S; pins in
-    // test-CaptureNet-MouthCollapse.js. Telemetry (rimTensionN) runs for
-    // every class.
-    //
-    // Gameplay-legibility choice (§11.2 fix option "floor check ⇒ forced
-    // MISS", over cutting SD-NET's RANGE/MAX_FLIGHT to ~25 m): the long shot
-    // stays TAKEABLE and fails honestly with its own comms line
-    // (missReasonToText 'mouth_collapsed' — "shot too long"), teaching the
-    // envelope through consequence. The range-clamp alternative would touch
-    // RANGE/MAX_FLIGHT constants mirrored by the reticle/odds/refusal
-    // surfaces — outside this wave's flight/contact scope — and would
-    // silently forbid the input instead of explaining the failure.
+    // §11.2 mouth-collapse floor. Live rim tension from the SAME decayed spin f_spin reads (rimTensionPerWeightN,
+    // F/wt = m·(2π·spinRate)²·r). Below CN.MOUTH_TENSION_FLOOR_N the rim weights cannot hold the mouth open in 0g:
+    // any contact resolves as a distinct 'mouth_collapsed' MISS at the intersection check below. One-way latch
+    // (in-flight decay is monotonic), evaluated AFTER the timeout/tether/dead-target guards so a net that times out on
+    // the same tick keeps that reason at any dt. Runs for EVERY class: LARGE's SPIN_DECAY_PER_S override (0.04/s, owner rebalance 2026-08-27) puts
+    // its crossing at t* ≈ 13.51 s ≈ 135 m, outside every reachable contact (≥ 2.5 s margin); derivation at
+    // Constants.js CN.LARGE.SPIN_DECAY_PER_S, pins in test-CaptureNet-MouthCollapse.js.
+    // The long shot stays TAKEABLE and fails with its own comms line (missReasonToText 'mouth_collapsed') instead of a
+    // range clamp, which would touch RANGE/MAX_FLIGHT constants mirrored by the reticle/odds/refusal surfaces and
+    // silently forbid the input.
     this.rimTensionN = rimTensionPerWeightN(this.netClass, this.spinRate);
     const mouthFloorN = CN.MOUTH_TENSION_FLOOR_N;
     if (!this.mouthCollapsed && mouthFloorN > 0
@@ -1872,9 +1577,8 @@ export class NetProjectile {
       });
     }
 
-    // Check range to target (intersection = distance < net radius)
-    // PROD: use launcher-relative scene position (co-orbiting reference frame).
-    // TEST: use absolute metres (mock .position, no anchor).
+    // Intersection = distance < net radius. PROD: launcher-relative scene position (co-orbiting frame);
+    // TEST: absolute metres (mock .position, no anchor).
     if (this.targetDebris) {
       const sp = this.targetDebris._scenePosition;
       const ap = anchor;
@@ -1887,11 +1591,11 @@ export class NetProjectile {
         const dy = sp.y - netY;
         const dz = sp.z - netZ;
         const distScene = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        // UX-11 #1: close-range forgiveness — near-grazes inside CLOSE_RANGE count.
+        // close-range forgiveness: near-grazes inside CLOSE_RANGE count
         const radiusScene = effectiveCatchRadius(
           this.netClass.DIAMETER / 2, this.distanceTraveled
         ) * M_NET;
-        // Q2 Ceremony: brake-imminent lookahead (cinch path only)
+        // brake-imminent lookahead (cinch path only)
         if (FEATURE_FLAGS.NET_CEREMONY && !this._brakeImminentEmitted
             && this.captureMode === MODES.CINCH) {
           const brakeThreshScene = (this.speed * 0.3 + this.netClass.DIAMETER / 2) * M_NET;
@@ -1905,9 +1609,9 @@ export class NetProjectile {
           }
         }
         if (distScene <= radiusScene) {
-          // net-range: the mother's net never catches a piece beyond its advertised reach (netMaxReachM, 100 m for the
-          // large net), measured the way the HUD and the fire gate measure it: ship centre → piece (targetRangeM). The
-          // 3 m mouth radius and a piece drifting away during the 10 s flight could otherwise close a catch past it.
+          // The mother's net never catches a piece beyond its advertised reach (netMaxReachM, 100 m for the large net),
+          // measured as the HUD and fire gate do: ship centre → piece (targetRangeM). The 3 m mouth radius plus a
+          // piece drifting away over the 10 s flight could otherwise close a catch past it.
           if (this._anchorProvider && !this._sourceArm) {
             const shipPos = (this._ctx && this._ctx.player && typeof this._ctx.player.getPosition === 'function')
               ? this._ctx.player.getPosition() : ap;
@@ -1916,15 +1620,14 @@ export class NetProjectile {
               return;
             }
           }
-          // §11.2: contact while the mouth is collapsed cannot wrap — resolve
-          // as the distinct MISS so comms can teach the range limit.
+          // §11.2: a collapsed mouth cannot wrap: distinct MISS so comms teach the range limit.
           if (this.mouthCollapsed) {
             this._miss('mouth_collapsed');
             return;
           }
-          // u20-nets: where the mouth is, relative to the target, at contact (metres; the scoop reads it when the net closes)
+          // where the mouth is relative to the target at contact (metres; the scoop reads it when the net closes)
           this._mouthOffsetM = { x: -dx / M_NET, y: -dy / M_NET, z: -dz / M_NET };
-          this._mouthAxis = { x: this.launchDirection.x, y: this.launchDirection.y, z: this.launchDirection.z };   // u22-scoop: the drawn net's axis
+          this._mouthAxis = { x: this.launchDirection.x, y: this.launchDirection.y, z: this.launchDirection.z };   // the drawn net's axis
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
           } else {
@@ -1938,7 +1641,7 @@ export class NetProjectile {
         const dy = (tp.y || 0) - this.position.y;
         const dz = (tp.z || 0) - this.position.z;
         const distToTarget = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        // Q2 Ceremony: brake-imminent lookahead (cinch path only)
+        // brake-imminent lookahead (cinch path only)
         if (FEATURE_FLAGS.NET_CEREMONY && !this._brakeImminentEmitted
             && this.captureMode === MODES.CINCH) {
           const brakeThresh = this.speed * 0.3 + this.netClass.DIAMETER / 2;
@@ -1957,8 +1660,8 @@ export class NetProjectile {
             this._miss('mouth_collapsed');
             return;
           }
-          this._mouthOffsetM = { x: -dx, y: -dy, z: -dz };   // u20-nets: the mouth relative to the target at contact (metres)
-          this._mouthAxis = { x: this.launchDirection.x, y: this.launchDirection.y, z: this.launchDirection.z };   // u22-scoop: the drawn net's axis
+          this._mouthOffsetM = { x: -dx, y: -dy, z: -dz };   // mouth relative to the target at contact (metres)
+          this._mouthAxis = { x: this.launchDirection.x, y: this.launchDirection.y, z: this.launchDirection.z };   // the drawn net's axis
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
           } else {
@@ -1978,7 +1681,6 @@ export class NetProjectile {
 
   /** Phase 5b-A: Tether brake (cinch path) */
   _updateBrake(dt) {
-    // Q2 Ceremony: emit brake-fired on state entry
     if (FEATURE_FLAGS.NET_CEREMONY && !this._brakeFiredEmitted) {
       this._brakeFiredEmitted = true;
       eventBus.emit(Events.NET_BRAKE_FIRED, {
@@ -1994,7 +1696,6 @@ export class NetProjectile {
 
   /** Phase 5b-B: Rim weights sweep past target */
   _updateEnvelop(dt) {
-    // Q2 Ceremony: emit envelop peak at 50% of ENVELOP_TIME
     if (FEATURE_FLAGS.NET_CEREMONY && !this._envelopPeakEmitted
         && this.stateTimer >= CN.ENVELOP_TIME * 0.5) {
       this._envelopPeakEmitted = true;
@@ -2010,7 +1711,6 @@ export class NetProjectile {
 
   /** Phase 5b-C: Drawstring cinch closing */
   _updateCinchClosing(dt) {
-    // Q2 Ceremony: emit cinch progress at discrete 10% thresholds
     if (FEATURE_FLAGS.NET_CEREMONY) {
       const fraction = Math.min(this.stateTimer / CN.CINCH_CLOSE_TIME, 1);
       const bucket = Math.floor(fraction * 10);
@@ -2037,39 +1737,28 @@ export class NetProjectile {
 
   /** Phase 7: Reel-in — motor pulls net+debris back */
   _updateReeling(dt) {
-    // ── MOTHER PHYSICAL REEL (mother-net-reel plan §8 A1) ─────────────────
-    // Ship-relative, pinned through debrisField.pinCapturedDebris every frame.
-    // TRAP 1 (plan §0): NEVER step the pin toward the pod in absolute
-    // coordinates — the ship translates ~0.7 scene units/s while the reel
+    // MOTHER PHYSICAL REEL: ship-relative, pinned through debrisField.pinCapturedDebris every frame.
+    // NEVER step the pin toward the pod in absolute coordinates: the ship translates ~0.7 scene units/s while the reel
     // closes at 2e-5 units/s, so an absolute reel diverges ~35,000×.
-    // TRAP 3: NEVER write _armPinPos raw and rely on DebrisField.update to
-    // render it — that ran EARLIER this frame, so the catch lands one frame
-    // (~1.17 km at 60 fps) behind the nose. pinCapturedDebris force-writes
-    // the instance matrix in the same call, so frame order stops mattering.
+    // NEVER write _armPinPos raw and rely on DebrisField.update to render it: that ran EARLIER this frame, so the
+    // catch lands one frame (~1.17 km at 60 fps) behind the nose. pinCapturedDebris force-writes the instance matrix
+    // in the same call, so frame order stops mattering.
     if (this._isMother && this.catchResult === 'success' && !this._motherReelFallback) {
       this._updateMotherReel(dt);
-      // _updateMotherReel sets _motherReelFallback when no berth context
-      // exists (headless path) — fall through to the daughter reel-back so
-      // the net still stows and prunes instead of looping on a miss.
+      // _updateMotherReel sets _motherReelFallback when there is no berth context (headless): fall through to the
+      // daughter reel-back so the net still stows and prunes instead of looping on a miss.
       if (!this._motherReelFallback) return;
     }
 
-    // ── Held daughter catch: keep the bag cinched on the debris until the arm
-    // delivers it. The net's own reel is short (tetherPaidOut/REEL_SPEED) and
-    // would otherwise STOW — removing the bag visual — long before the daughter
-    // finishes hauling, so the netted catch appeared to vanish mid-haul. The
-    // position-follow above keeps the bag locked onto the debris while we hold;
-    // we release the hold (and stow) once the catch is no longer pinned to a
-    // captor: docked (debris removed/alive=false, pin cleared), net failure
-    // (pin cleared), or tether snap's bounded drift (pin finally cleared).
+    // Held daughter catch: keep the bag cinched on the debris until the arm delivers it (the net's own short reel
+    // would STOW and remove the bag visual mid-haul). Released (and stowed) once the catch is no longer pinned to a
+    // captor: docked (alive=false, pin cleared), net failure (pin cleared), or the tether-snap bounded drift's end.
     if (this._heldByArm) {
       const d = this.targetDebris;
       const stillHauling = !!(d && d.alive !== false && d._capturedByArm);
       if (stillHauling) {
-        // REEL_PROFILE_V2 (plan Q3): during the SNUG sub-phase the arm sets
-        // `_snugTargetN` — pull the bag tight to that explicit cinch tension so
-        // daughter+net+debris rigidize into one unit before the haul. Otherwise
-        // hold at the base mass formula (legacy behaviour).
+        // SNUG sub-phase: the arm sets `_snugTargetN`; pull the bag to that cinch tension so daughter+net+debris
+        // rigidize into one unit before the haul. Otherwise hold at the base mass formula.
         this.tensionN = (this._snugTargetN != null)
           ? this._snugTargetN
           : baseCaptureTensionN(this.capturedMass);
@@ -2078,14 +1767,10 @@ export class NetProjectile {
       this._heldByArm = false;        // delivered / lost → stow promptly
       this._snugTargetN = null;
       this.reelProgress = 1.0;
-      // Register item 28: the hold ends two ways — DELIVERED (the arm's furnace
-      // hand-off: _updateHoldingCatch marks the piece _breakdownActive as it
-      // releases the cinch, ArmUnit.js) or LOST (integrity slip / boost rip /
-      // tether-snap drift-end / reset drop / severed-claim transfer — the catch
-      // left the arm without reaching the furnace). Only a delivery may report
-      // its mass at completion; a loss stows EMPTY and reports releasedMass
-      // instead, so no listener reads a successful-looking capturedMass for a
-      // body that drifted away.
+      // The hold ends DELIVERED (furnace hand-off: _updateHoldingCatch marks the piece _breakdownActive as it releases
+      // the cinch, ArmUnit.js) or LOST (integrity slip / boost rip / tether-snap drift-end / reset drop /
+      // severed-claim transfer). Only a delivery reports its mass at completion; a loss stows EMPTY and reports
+      // releasedMass, so no listener reads a successful-looking capturedMass for a body that drifted away.
       if (!(d && d._breakdownActive)) this._releasedMassKg = this.capturedMass;
     }
 
@@ -2097,7 +1782,7 @@ export class NetProjectile {
       this.reelProgress = Math.min(1.0, this.reelProgress + reelRate * dt);
     }
 
-    // Tension: base + mass factor (simplified — real model in ST-9.5)
+    // Tension: base + mass factor (simplified)
     this.tensionN = baseCaptureTensionN(this.capturedMass);
 
     if (this.reelProgress >= 1.0) {
@@ -2114,8 +1799,6 @@ export class NetProjectile {
     }
   }
 
-  // ── Mother physical reel + berth (mother-net-reel plan §8) ─────────────
-
   /**
    * @private Mother REELING entry: strain/oversize roll, then seed the
    * ship-relative reel state from the debris's LIVE _scenePosition (one frame
@@ -2128,14 +1811,11 @@ export class NetProjectile {
     const player = this._ctx?.player;
     if (!d || !player) return false;
 
-    // §4.3 strain/oversize roll — the odds model already prices this
-    // (ToolOdds.computeNetOdds multiplies by 1 − computeStrainFailProbability),
+    // Strain/oversize roll: ToolOdds.computeNetOdds already prices it (× 1 − computeStrainFailProbability),
     // so the HUD would otherwise promise a slip that can never happen.
     const rated = this.netClass.MAX_CAPTURE_MASS || 0;
     const mass = d.mass || 0;
-    // Re-judge the SAME presentation contact recorded (not the live one the
-    // carried tumble has drifted to) through the ONE mouth-fit predicate
-    // (register item 21a).
+    // Re-judge the presentation width recorded at contact (not the live tumble) through the one mouth-fit predicate.
     const presented = this._presentedWidthM ?? d.sizeMeter ?? 0;
     if (!fitsMouth(d, this.netClass, null, presented)) {
       this._miss('oversize_aspect');
@@ -2143,8 +1823,7 @@ export class NetProjectile {
     }
     if (rated > 0 && mass > 0) {
       const strain = mass / rated;
-      // The band ramp routes through the ONE strain-band helper (register item
-      // 88); the CAP stays here — a one-shot roll vs NET_STRAIN_FAIL_PROB_MAX.
+      // Band ramp: the one strain-band helper; the cap stays here (one-shot roll vs NET_STRAIN_FAIL_PROB_MAX).
       const t = strainBandT(mass, rated);
       if (t > 0) {
         const pMax = Constants.NET_STRAIN_FAIL_PROB_MAX ?? 0;
@@ -2161,23 +1840,15 @@ export class NetProjectile {
       }
     }
 
-    // Register item 81: past the gates, this entry IS the mother taking
-    // ownership — drop a tether-snapped runaway's stale severed claim so the
-    // EXPENDED arm's _updateExpended never fights the berth-line pin (and its
-    // 8 s drift release never fires on this net's held catch). Placed AFTER
-    // the refusal gates above: a refused entry leaves the bounded-drift
-    // release armed (the runaway stays the drifting arm's business).
+    // Past the gates the mother takes ownership: drop a tether-snapped runaway's stale severed claim so the EXPENDED
+    // arm's _updateExpended never fights the berth-line pin (its 8 s drift release must not fire on this held catch).
+    // MUST stay AFTER the refusal gates: a refused entry leaves the bounded-drift release armed.
     dropSeveredCatchClaim(d);
 
-    // Seed ship-relative reel state.
     const M_NET = Constants.SCENE_UNITS_PER_METER;
-    // S13(e): the reel/berth homes on the COLLAR anchor (the berth-approach
-    // corridor is the collar's), while the seat below keeps the launcher
-    // muzzle (_anchorScene): the brake apex is on the launch line. The
-    // muzzle→collar offset rides in the lateral seed and decays across the reel
-    // (the existing _settleFwdLagged mechanism), so the hand-off never snaps.
-    // Since 2026-10-13 the muzzle is ON the axis, 30 mm behind the collar, so
-    // that offset is purely axial (it was 0.45 m sideways for the pod pair).
+    // The reel/berth homes on the COLLAR anchor (the berth-approach corridor is the collar's); the seat below keeps the
+    // launcher muzzle (_anchorScene) because the brake apex is on the launch line. The muzzle→collar offset (axial,
+    // muzzle 30 mm behind the collar) rides in the lateral seed and decays across the reel (_settleFwdLagged).
     const anchorWorld = (typeof player.getNetBerthCollarPositionInto === 'function')
       ? player.getNetBerthCollarPositionInto(new THREE.Vector3())
       : (typeof player.getNetPodPositionInto === 'function')
@@ -2186,19 +1857,11 @@ export class NetProjectile {
     const sp = d._scenePosition;
     if (sp) {
       const dx = sp.x - anchorWorld.x, dy = sp.y - anchorWorld.y, dz = sp.z - anchorWorld.z;
-      // Whale-in-cone follow-up 2 (reel/berth co-location): the catch rides
-      // INSIDE the bag at the depth the capture left it — not AT the apex.
-      // The seat is its depth past the brake apex along the frozen bag axis
-      // (launchDirection — the same axis CaptureNetVisual orients the drawn
-      // bag to every frame, so pin, mesh and probe can never drift). The
-      // brake apex is anchor + launchDir × distanceTraveled (the formula the
-      // post-FLIGHT anchor-sync writes every tick, :815). Read the LIVE
-      // anchor — never net.position, which is FROZEN in the absolute frame
-      // from the last SECURE_CHECK tick: one frame of orbital drift is
-      // ~1.17 km at 60 fps (~8 km in the headless harness), which would pin
-      // the catch kilometres from the bag (measured 2026-08-05:
-      // _catchSeatM = 7612.69 m on a one-frame-stale anchor). anchor + sp
-      // are both live, so the seat is drift-free.
+      // The catch rides INSIDE the bag at the depth the capture left it, not AT the apex. Seat = its depth past the
+      // brake apex (anchor + launchDir × distanceTraveled) along the frozen bag axis (launchDirection, the axis
+      // CaptureNetVisual draws the bag on, so pin, mesh and probe never drift). Read the LIVE anchor, NEVER
+      // net.position: it is frozen in the absolute frame from the last SECURE_CHECK tick, and one frame of orbital
+      // drift (~1.17 km at 60 fps) would pin the catch kilometres from the bag.
       const L = this.launchDirection;
       const anchor = this._anchorScene();
       const seatM = (L && anchor) ? Math.max(0,
@@ -2207,12 +1870,9 @@ export class NetProjectile {
         + ((sp.z - anchor.z) / M_NET) * L.z
         - this.distanceTraveled) : 0;
       this._catchSeatM = seatM;
-      // _remainingM is the APEX (tether end) distance along the ship axis, and
-      // `_lateral` the apex's offset off it: apex = catch − launchDirection ×
-      // seat, split into its axial and perpendicular parts (l8-reel-collar: this
-      // is exact, so the pin reproduces the live catch position to the last
-      // bit at entry — the old |d| − seat form was off by lateral²/2R for an
-      // off-axis catch, a snap at the CAPTURED→REELING hand-off).
+      // _remainingM = APEX (tether end) distance along the ship axis; `_lateral` = the apex's offset off it.
+      // apex = catch − launchDirection × seat, split into axial and perpendicular parts. Exact, so the pin reproduces
+      // the live catch position at entry (no snap at the CAPTURED→REELING hand-off).
       const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion).normalize();
       const ax = dx - (L ? L.x * seatM * M_NET : 0);
       const ay = dy - (L ? L.y * seatM * M_NET : 0);
@@ -2226,19 +1886,14 @@ export class NetProjectile {
       this._lateral = new THREE.Vector3();
     }
     this._seedReelHome(d, player);
-    // Review fix: the reelProgress denominator must be the ACTUAL seeded
-    // remaining distance, not tetherPaidOut — the two disagree whenever the
-    // catch drifted between contact and reel entry (or a close target made
-    // tetherPaidOut < berthStandoffM), which collapsed the denominator to
-    // ~0 and snapped progress 0→1 instead of easing.
+    // The reelProgress denominator is the ACTUAL seeded remaining distance, not tetherPaidOut (they disagree after
+    // drift between contact and reel entry, or a close target; a ~0 denominator snaps progress 0→1).
     this._reelSeedM = Math.max(this._remainingM, 1e-3);
-    // Item 15: the readability floor's engagement ramp starts at reel entry
-    // (see _catchFloorScale). Seeded HERE, once — never at BERTHED.
+    // Seeded HERE, once (reel entry), never at BERTHED.
     this._floorRampT = 0;
     this._fwdLagged = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion).normalize();
 
-    // Capture the catch's attitude in the SHIP frame so the berth hold can
-    // rotate it rigidly with the ship (plan §1.2).
+    // Catch attitude in the SHIP frame, so the berth hold rotates it rigidly with the ship.
     if (d.tumbleAxis && player.quaternion) {
       const qCatch = new THREE.Quaternion().setFromAxisAngle(d.tumbleAxis, d.tumbleAngle || 0);
       this._qLocal = player.quaternion.clone().invert().multiply(qCatch);
@@ -2246,37 +1901,31 @@ export class NetProjectile {
       this._qLocal = new THREE.Quaternion();
     }
 
-    // Phase D.7 (a) — tumble carryover: seed the residual spin the wrapped
-    // bundle keeps at ENVELOP (the plan's "decaying spin over ~4–6 s instead
-    // of the hard stop"). Capped; decays in _updateMotherReel/updateBerthHold.
+    // Tumble carryover: residual spin (rad/s, capped) the wrapped bundle keeps at ENVELOP; decays in
+    // _updateMotherReel/updateBerthHold.
     const tumbleRate = Math.abs(d.tumbleRate || 0);
     this._tumbleCarryover = Math.min(tumbleRate, CN.TUMBLE_CARRYOVER_MAX_RAD_S ?? 0.6);
-    this._tumbleCarryAngle = 0;   // V7: accumulation starts fresh each catch
+    this._tumbleCarryAngle = 0;   // accumulation starts fresh each catch
     return true;
   }
 
   /**
    * @private The `_catchRenderMin` VALUE for the reel/berth write sites (and LeashDriver's `easeFull`).
-   *
-   * reel-visible (owner 2026-10-16, DECISIONS §25 row 2: "the reel-in must be seen"; Ruling 0, physically real
-   * wins): a mother-net catch is drawn at its TRUE size from capture to latch. The CAPTURE_NET readability floor
-   * (MOTHER_CATCH_MIN_RENDER_M, 2.0 m: whale-in-cone items 8/15, l8-reel-collar D3) drew a 0.3 m piece up to 3.3x
-   * big at reel start and shrank it between 20 m and 3 m from the collar: the owner saw "debris and net magically
-   * shrink". The value written is now the piece's BASE render scale, which DebrisField.catchRenderFloorScale (its
-   * predicate only raises, `_catchRenderMin > base`) treats as no floor, so every reader (the probe, the bag's
-   * contents spec, both matrix writers, LeashDriver's easeFull) sees the real size. The floor constants stay in
-   * Constants.js (the lasso path and the non-ladder ceremony hold distance still read their own).
+   * DECISIONS §25 row 2 ("the reel-in must be seen"; Ruling 0): a mother-net catch is drawn at its TRUE size from
+   * capture to latch. The value is the piece's BASE render scale, which DebrisField.catchRenderFloorScale (it only
+   * raises, `_catchRenderMin > base`) treats as no floor, so every reader sees the real size. The floor constants
+   * (MOTHER_CATCH_MIN_RENDER_M) stay in Constants.js: the lasso path and the non-ladder ceremony hold distance read them.
    * @param {object} d — the canonical catch debris
-   * @param {number} _dt — unused (the old ramp clock)
+   * @param {number} _dt — unused
    * @returns {number} scene-unit scale for `_catchRenderMin` (== the base render scale)
    */
   _catchFloorScale(d, _dt) {
-    return DebrisField.baseRenderScale(d);   // item 19: ONE static for the base
+    return DebrisField.baseRenderScale(d);
   }
 
   /**
-   * @private l8-reel-collar — seed the HOME state at reel entry (or lazily, for a net a test put into REELING /
-   * BERTHED by hand): where the catch's centre ends on the collar axis, and the apex / seat that put it there.
+   * @private Seed the HOME state at reel entry (or lazily, for a net a test put into REELING / BERTHED by hand):
+   * where the catch's centre ends on the collar axis, and the apex / seat that put it there.
    * Home seat = the catch centre's distance from the ring's fore face; the bag's mouth (apex) sits at the ring.
    * @param {object} d — the caught debris
    * @param {object} player — mother ship (collar z, keep-out)
@@ -2295,7 +1944,7 @@ export class NetProjectile {
   }
 
   /**
-   * @private l8-reel-collar — the reel's progress p (0 at the seed, 1 with the apex at home) for apex distance `A`.
+   * @private Reel progress p (0 at the seed, 1 with the apex at home) for apex distance `A`.
    * @param {number} A — apex distance along the ship axis from the collar, metres
    * @returns {number} 0..1
    */
@@ -2307,18 +1956,17 @@ export class NetProjectile {
   }
 
   /**
-   * @private l8-reel-collar — the seat law. As the apex comes in the catch slides toward the bag's mouth (seat
-   * S0 → home seat, linear in p) and the bag axis turns from the captured launch direction onto the ship axis
-   * (normalised lerp, weight p). Writes `_catchSeatM` and `launchDirection` in place (the visual orients the bag to
-   * it, the pins read it), so pin, mesh and every reader stay one geometry. At p = 1 the axis IS the ship axis, the
-   * seat IS the home seat: the catch is on the collar axis at home.
+   * @private The seat law. As the apex comes in, the catch slides toward the bag's mouth (seat S0 → home seat, linear
+   * in p) and the bag axis turns from the captured launch direction onto the ship axis (normalised lerp, weight p).
+   * Writes `_catchSeatM` and `launchDirection` in place (visual and pins read them: one geometry). At p = 1 the catch
+   * is on the collar axis at home.
    * @param {number} A — apex distance, metres
    * @returns {number} p
    */
   _applySeatLaw(A) {
     const p = this._seatProgress(A);
     const S0 = this._seat0M ?? this._catchSeatM ?? 0;
-    this._catchSeatM = S0 + (this._homeSeatM - S0) * p;
+    this._catchSeatM = lerp(S0, this._homeSeatM, p);
     const L0 = this._ldir0, f = this._fwdLagged, L = this.launchDirection;
     if (L0 && f && L) {
       const x = (1 - p) * L0.x + p * f.x, y = (1 - p) * L0.y + p * f.y, z = (1 - p) * L0.z + p * f.z;
@@ -2329,16 +1977,15 @@ export class NetProjectile {
   }
 
   /**
-   * @private l8-reel-collar — the catch centre's distance from the collar plane along the ship axis for apex
-   * distance `A` (closed form of the seat law; monotone in A for any sane launch angle). Used to step the apex so the
-   * CATCH moves at the commanded speed.
-   * @param {number} A
+   * @private The catch centre's distance from the collar plane along the ship axis for apex distance `A` (closed form
+   * of the seat law; monotone in A for any sane launch angle), so the CATCH moves at the commanded speed.
+   * @param {number} A — apex distance, metres
    * @returns {number} metres
    */
   _catchAxialAt(A) {
     const p = this._seatProgress(A);
     const S0 = this._seat0M ?? 0;
-    const S = S0 + (this._homeSeatM - S0) * p;
+    const S = lerp(S0, this._homeSeatM, p);
     const L0 = this._ldir0, f = this._fwdLagged;
     let dot = 1;
     if (L0 && f) {
@@ -2350,10 +1997,10 @@ export class NetProjectile {
   }
 
   /**
-   * @private l8-reel-collar — the catch's commanded speed `crem` metres from its end: the class reel speed, then
-   * a constant-deceleration slow-down (DECEL_MPS2) that reaches SLOW_MPS at SLOW_ZONE_M and holds it to arrival.
+   * @private The catch's commanded speed `crem` metres from its end: the class reel speed, then a constant
+   * deceleration (DECEL_MPS2) that reaches SLOW_MPS at SLOW_ZONE_M and holds it to arrival.
    * @param {number} crem — catch distance still to go, metres
-   * @param {number} nominalMps
+   * @param {number} nominalMps — class reel speed, m/s
    * @returns {number} m/s
    */
   _reelCatchSpeed(crem, nominalMps) {
@@ -2363,9 +2010,8 @@ export class NetProjectile {
   }
 
   /**
-   * l8-reel-collar — seconds the inward reel still needs at the commanded profile (cruise at the class reel speed,
-   * the constant-deceleration slow-down, the creep over the last SLOW_ZONE_M). An estimate for callers that size a
-   * wall-clock bound (CameraSystem's REEL_IN beat); null before the reel is seeded.
+   * Seconds the inward reel still needs at the commanded profile (cruise, deceleration, creep over the last
+   * SLOW_ZONE_M); an estimate for CameraSystem's REEL_IN wall-clock bound. null before the reel is seeded.
    * @returns {number|null} seconds
    */
   reelEtaS() {
@@ -2375,7 +2021,7 @@ export class NetProjectile {
     const crem = Math.max(0, this._catchAxialAt(this._remainingM) - this._catchAxialAt(endA));
     const v = this.netClass?.REEL_SPEED || 2.0;
     const creepM = H.SLOW_ZONE_M + (H.DECEL_LEAD_M ?? 0);
-    // the profile is v = SLOW + sqrt(2 a x) (x = distance beyond the creep): the slow-down spans (v - SLOW)^2 / 2a
+    // profile v = SLOW + sqrt(2 a x), x = distance beyond the creep: the slow-down spans (v - SLOW)^2 / 2a
     const decelM = (v - H.SLOW_MPS) * (v - H.SLOW_MPS) / (2 * H.DECEL_MPS2);
     const cruiseM = Math.max(0, crem - creepM - decelM);
     const decelInM = Math.min(decelM, Math.max(0, crem - creepM));
@@ -2383,11 +2029,10 @@ export class NetProjectile {
   }
 
   /**
-   * @private l8-reel-collar — one frame of the inward reel: the CATCH advances `_reelCatchSpeed × dt` toward its end
-   * (the apex distance `endA`), and the apex is whatever puts it there (bisection on the monotone closed form).
-   * Never overshoots: the step that would reach the end lands exactly on it.
-   * @param {number} dt
-   * @param {number} nominalMps
+   * @private One frame of the inward reel: the CATCH advances `_reelCatchSpeed × dt` toward its end, and the apex is
+   * whatever puts it there (bisection on the monotone closed form). Never overshoots: the final step lands on the end.
+   * @param {number} dt — seconds
+   * @param {number} nominalMps — class reel speed, m/s
    * @param {number} endA — apex distance at the end of the reel (home, or the extended standoff)
    */
   _reelStepCatch(dt, nominalMps, endA) {
@@ -2406,18 +2051,9 @@ export class NetProjectile {
   }
 
   /**
-   * Small-catch plan W4 (2026-08-25) — the DRAWN bundle's radius in metres:
-   * what the ceremony camera is actually holding on. `sizeMeter` is the
-   * logical size; the renderer draws effectiveRenderScale × boundingRadius.
-   * (Before reel-visible, 2026-10-17, the net-held readability floor raised
-   * every sub-floor catch to ~MOTHER_CATCH_MIN_RENDER_M — measured
-   * tmp/frag-before: a 0.5 m fragment drew at 2.0 m radius from REEL_IN on;
-   * `_catchFloorScale` now returns the base scale, so this is the true size.)
-   * The camera's hold-distance formula
-   * reads THIS (through the one clamp-aware SSOT chain), so the shot frames
-   * the bundle the player sees, never the invisible logical size. Returns 0
-   * with no target (callers fall back to the sizeMeter-only term); headless
-   * camera mocks simply omit the method — same fallback.
+   * The DRAWN bundle's radius in metres (effectiveRenderScale × boundingRadius; `sizeMeter` is the logical size).
+   * The camera's hold-distance formula reads THIS, so the shot frames the bundle the player sees. 0 with no target
+   * (callers fall back to the sizeMeter-only term; headless camera mocks omit the method, same fallback).
    * @returns {number} drawn bundle radius in metres (0 = no target)
    */
   heldBundleRadiusM() {
@@ -2438,10 +2074,8 @@ export class NetProjectile {
     const d = this.targetDebris;
     const player = this._ctx?.player;
     const debrisField = this._ctx?.debrisField;
-    // No berth context (headless test path, or a mother net fired without
-    // init(deps)): fall through to the daughter-style reel-back below rather
-    // than missing — a miss here would loop MISSED→REELING→MISSED via the
-    // re-armed auto-reel and never prune.
+    // No berth context (headless test, or a mother net fired without init(deps)): fall through to the daughter-style
+    // reel-back rather than missing: a miss here would loop MISSED→REELING→MISSED via the re-armed auto-reel.
     if (!d || !player || !debrisField) { this._motherReelFallback = true; return; }
     if (d.alive === false) { this._miss('target_lost'); return; }
 
@@ -2450,47 +2084,30 @@ export class NetProjectile {
     }
 
     const M_NET = Constants.SCENE_UNITS_PER_METER;
-    // The standoff in force: raised to CORRIDOR_EXTENDED_STANDOFF_M after a
-    // corridor-timeout berth (Phase C-lite, plan §10).
-    // l8-reel-collar: the APEX target at home is the bag's mouth at the ring
-    // (CN.REEL_HOME.APEX_AT_RING_M), NOT the old size/2 + 1.0 m standoff. A
-    // corridor-timeout berth still raises it (the extended standoff).
+    // Standoff in force: the APEX target at home is the bag's mouth at the ring (CN.REEL_HOME.APEX_AT_RING_M);
+    // a corridor-timeout berth raises it to CORRIDOR_EXTENDED_STANDOFF_M.
     if (this._homeSeatM == null) this._seedReelHome(d, player);
     const baseStandoffM = this._homeApexM;
     if (this._effectiveStandoffM == null) this._effectiveStandoffM = baseStandoffM;
     const berthStandoffM = Math.max(baseStandoffM, this._effectiveStandoffM);
 
-    // ── Corridor gate (Phase C-lite, plan §10): pause the final approach
-    // CORRIDOR_HOLD_M out until the recovery corridor (a cylinder along
-    // ship-local +Z from the muzzle, radius = sizeMeter/2 + BERTH_CLEARANCE_M)
-    // is clear of strut tips (a forward-swept strut blocks whether or not it
-    // holds a daughter catch). S13(d): the lasso-cargo read is gone; S13(e): mated
-    // cargo joined the obstacle set (see _corridorClear). On timeout, berth at the
-    // extended standoff rather than clip through.
-    // Register item 66: the mated-cargo hold STACKS — the gate's level is
-    // raised past the queue's fore-extent so each queued catch holds clear of
-    // the previous one's far face (two catches frozen at the same 10 m level
-    // co-locate — co-located reads as one). 0 with an empty queue ⇒ the
-    // CORRIDOR_HOLD_M floor stands byte-identical (the single-catch case —
-    // the gated scenario — never sees the queue term).
+    // Corridor gate: pause the final approach CORRIDOR_HOLD_M out until the recovery corridor (see _corridorClear) is
+    // clear. On timeout, berth at the extended standoff rather than clip through.
+    // The mated-cargo hold STACKS: the gate level is raised past the queue's fore-extent so each queued catch holds
+    // clear of the previous one's far face (catches frozen at the same level would co-locate). Empty queue → 0, so
+    // the CORRIDOR_HOLD_M floor stands.
     const queueHoldM = this._queueHoldLevelM(d);
     const holdM = Math.max(berthStandoffM, CN.CORRIDOR_HOLD_M ?? 10, queueHoldM);
     if (!this._corridorTimedOut && this._remainingM <= holdM && !this._corridorClear(d)) {
       if (!this._corridorHold) {
         this._corridorHold = true;
         this._corridorTimer = 0;
-        // Freeze at the CURRENT range, never above it: a catch seeded inside
-        // the gate range (a very close shot) must not pop outward to holdM.
-        // Register item 73 — EXCEPT the queue level: when mated cargo raised
-        // the hold past the current range (the drain-race — this catch sailed
-        // through the gate range while the leader was REELING-not-held, then
-        // the leader berthed and the queue term appeared beneath it), freezing
-        // here pins this catch INSIDE the member's far face (two drawn bodies
-        // interpenetrating — a continuity-law violation). The latch takes the
-        // queue level and the hold glides OUT to it at reel speed (the ease
-        // below) — the one bounded, documented exception to the monotonic-ease
-        // invariant. Empty queue ⇒ queueHoldM 0 ⇒ the latch is the current
-        // range, byte-identical (the single-catch case never glides).
+        // Freeze at the CURRENT range, never above it: a catch seeded inside the gate range must not pop outward to
+        // holdM. EXCEPT the queue level: when mated cargo raised the hold past the current range (drain-race: this
+        // catch passed the gate while the leader was still reeling, then the leader berthed), freezing here would pin
+        // it INSIDE the member's far face (interpenetrating bodies, a continuity-law violation). The latch takes the
+        // queue level and the hold glides OUT to it at reel speed (ease below): the one bounded exception to the
+        // monotonic-ease invariant. Empty queue → the latch is the current range, no glide.
         this._corridorHoldLevelM = Math.max(this._remainingM, queueHoldM);
         this._corridorGlide = this._corridorHoldLevelM > this._remainingM;
       }
@@ -2503,130 +2120,95 @@ export class NetProjectile {
         });
       }
       if (this._corridorTimer >= (CN.CORRIDOR_TIMEOUT_S ?? 8)) {
-        // Timeout — berth AT the held position (clamped into [base, extended]).
-        // For strut tips and mated cargo the hold level is already outside every
-        // intruder's reach — that is why the gate froze the approach there — so
-        // completing at the held range neither slides inward past the intruder
-        // nor pops outward. NOT so for the radiator read (big-catch-home): a
-        // radiator or tip bag that folds in during the last metres can latch the
-        // hold with the catch already touching it, and this timeout berths it
-        // there anyway (plan D3 accepted it; open item, docs/research/2026-10-leash.md).
+        // Timeout: berth AT the held position (clamped into [base, extended]). For strut tips and mated cargo the
+        // hold level is already outside every intruder's reach, so berthing there neither slides in past the
+        // intruder nor pops outward. NOT so for the radiator read: a radiator or tip bag that folds in during the
+        // last metres can latch the hold with the catch already touching it, and the timeout berths it there anyway
+        // (accepted; open item, archive/research/2026-10-leash.md).
         const extended = Math.max(holdM, CN.CORRIDOR_EXTENDED_STANDOFF_M ?? 10);
         this._effectiveStandoffM = Math.min(Math.max(baseStandoffM, this._corridorHoldLevelM), extended);
-        // Keep _corridorHold TRUE for the rest of this frame: berthStandoffM
-        // was derived at the top of the tick from the OLD standoff, so letting
-        // the ease run now would step remainingM below the new standoff and
-        // the next frame would clamp it back OUT — a one-frame outward pop
-        // violating the monotonic-ease invariant. The latch below makes the
-        // gate condition false next frame, and the resume branch clears the
-        // hold there, when the ease runs against the correct standoff.
-        this._corridorTimedOut = true;   // latch: the gate must not re-arm
-                                         // against the same blocked corridor
-                                         // while the berth completes.
+        // Keep _corridorHold TRUE for the rest of this frame: berthStandoffM came from the OLD standoff, so easing now
+        // would step remainingM below the new one and the next frame would clamp it back OUT (a one-frame outward
+        // pop). The latch below makes the gate false next frame; the resume branch then clears the hold.
+        this._corridorTimedOut = true;   // latch: the gate must not re-arm while the berth completes
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `Deck not clear — berthing at extended standoff (${Math.round(this._effectiveStandoffM)} m).`,
           source: 'HOUSTON', priority: 'warning',
         });
       }
-      // Hold: the approach stays at the latch (still pinned below) — nothing
-      // moves remainingM while held except the item-73 queue-glide, which
-      // runs in the ease below (bounded, at reel speed, never past the latch).
+      // Hold: only the queue-glide (ease below) moves remainingM while held.
     } else if (this._corridorHold) {
       // Corridor cleared (or we were never blocked) — resume the approach.
       this._corridorHold = false;
       this._corridorTimer = 0;
-      // A timeout mid-glide keeps the glide flag: the berth completes the
-      // glide OUT to the raised standoff (the ease below) — never a pop.
+      // A timeout mid-glide keeps the glide flag: the berth completes the glide OUT to the raised standoff.
       if (!this._corridorTimedOut) this._corridorGlide = false;
     }
 
-    // Monotonic ease-in (never decelerate mid-reel so the tether cannot
-    // re-slack and re-snap). Mild long-tether speed-up lands the duration in
-    // the ~5–25 s window (REEL_SPEED 2.0 on a 100 m shot would else be ~50 s).
+    // Monotonic ease-in (never decelerate mid-reel: the tether must not re-slack and re-snap). The long-tether
+    // speed-up keeps the duration in ~5–25 s (REEL_SPEED 2.0 on a 100 m shot would be ~50 s).
     const reelSpeed = (this._remainingM >= (CN.REEL_LONG_TETHER_M ?? 40))
       ? this.netClass.REEL_SPEED * (CN.REEL_LONG_TETHER_MULT ?? 3.0)
       : this.netClass.REEL_SPEED;
-    const remBeforeM = this._remainingM;   // w4-power D5: the reel's travel this frame
+    const remBeforeM = this._remainingM;   // reel travel this frame (motor bill below)
     if (!this._corridorHold) {
       if (this._corridorGlide && this._remainingM < berthStandoffM) {
-        // Item 73: a hold that timed out mid-glide completes the glide OUT to
-        // the raised standoff at reel speed — the berth is AT the latch, and
-        // an outward pop to it would violate the continuity law.
+        // A hold that timed out mid-glide completes the glide OUT to the raised standoff at reel speed (no outward pop).
         this._remainingM = Math.min(berthStandoffM, this._remainingM + reelSpeed * dt);
       } else {
-        // l8-reel-collar: the speed (and the arrival taper) is the CATCH's, so the
-        // last 0.30 m runs at <= 0.10 m/s whatever the seat; the apex follows.
+        // The speed (and arrival taper) is the CATCH's: the last 0.30 m runs at <= 0.10 m/s whatever the seat.
         this._reelStepCatch(dt, reelSpeed, berthStandoffM);
       }
     } else if (this._remainingM < this._corridorHoldLevelM) {
-      // Item 73: the queue-glide — the one bounded OUTWARD move the reel
-      // makes (the documented exception to the monotonic-ease invariant named
-      // above): the drain-race follower backs out to the queue-cleared latch
-      // at reel speed, never past it, so it never freezes inside the leader's
-      // far face. reelProgress reads backward during the glide — the honest
-      // read (the catch IS backing out to the gate).
+      // Queue-glide: the one bounded OUTWARD move (the exception to the monotonic ease): the drain-race follower
+      // backs out to the queue-cleared latch at reel speed, never past it. reelProgress reads backward meanwhile.
       this._remainingM = Math.min(this._corridorHoldLevelM, this._remainingM + reelSpeed * dt);
     }
 
-    // reelProgress: remainingM is the single source (no external consumer, so
-    // free to redefine). 0 at the seeded range (_reelSeedM), 1 at the standoff.
-    // During a corridor hold remainingM freezes, so progress freezes with it —
-    // the honest read (the catch IS parked at the gate).
+    // reelProgress from remainingM: 0 at the seeded range (_reelSeedM), 1 at the standoff; frozen during a corridor hold.
     const seedM = Math.max(berthStandoffM + 1e-3, this._reelSeedM ?? this.tetherPaidOut ?? berthStandoffM + 1e-3);
-    this.reelProgress = Math.min(1, Math.max(0,
-      1 - (this._remainingM - berthStandoffM) / (seedM - berthStandoffM)));
+    this.reelProgress = clamp01(1 - (this._remainingM - berthStandoffM) / (seedM - berthStandoffM));
 
-    // Rotation lag: run the ship forward through a critically damped spring so
-    // a mid-reel slew lags and settles instead of whipping the catch.
+    // Rotation lag: critically damped spring on ship-forward, so a mid-reel slew doesn't whip the catch.
     this._settleFwdLagged(player, dt);
 
-    // Pin anchor: berth anchor (the collar — S13(e)) + lagged-fwd · remainingM
-    // + lateral (scene units) — the bag's APEX, i.e. the tether end the winch
-    // actually reels.
+    // Pin anchor (scene units): collar berth anchor + lagged-fwd · remainingM + lateral = the bag's APEX (tether end).
     const anchorWorld = (typeof player.getNetBerthCollarPositionInto === 'function')
       ? player.getNetBerthCollarPositionInto(_v3c)
       : (typeof player.getNetPodPositionInto === 'function')
         ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
-    // l8-reel-collar: the seat shrinks and the bag axis turns onto the ship
-    // axis as the apex nears the ring (progress p 0 → 1), and the apex's lateral
-    // offset dies with it, so at home the catch is exactly on the collar axis.
+    // As the apex nears the ring (p 0 → 1) the seat shrinks, the bag axis turns onto the ship axis and the lateral
+    // offset dies, so at home the catch is exactly on the collar axis.
     const seatP = this._applySeatLaw(this._remainingM);
     _v3d.copy(anchorWorld)
       .addScaledVector(this._fwdLagged, this._remainingM * M_NET)
       .addScaledVector(this._lateral, 1 - seatP);
 
-    // net.position is the bag's apex anchor (CaptureNetVisual seats the kit
-    // there × M every frame; the tether draws to it) — written BEFORE the
-    // seat offset goes into the catch pin below.
+    // net.position = the bag's apex anchor (CaptureNetVisual seats the kit there × M; the tether draws to it);
+    // written BEFORE the seat offset goes into the catch pin below.
     this.position.x = _v3d.x / M_NET;
     this.position.y = _v3d.y / M_NET;
     this.position.z = _v3d.z / M_NET;
 
-    // The catch rides _catchSeatM metres INSIDE the bag along the bag axis
-    // (launchDirection — the axis the visual orients to), not AT the apex
-    // (whale-in-cone follow-up 2: co-locating the two left the catch on the
-    // bag apex unwrapped — the metres gate's COLOCATION-DEFECT).
+    // The catch rides _catchSeatM metres INSIDE the bag along launchDirection, not AT the apex (else it sits on the
+    // apex unwrapped: the metres gate's COLOCATION-DEFECT).
     if (this._catchSeatM) _v3d.addScaledVector(this.launchDirection, this._catchSeatM * M_NET);
     this._reelDistM = Math.hypot(_v3d.x - anchorWorld.x, _v3d.y - anchorWorld.y, _v3d.z - anchorWorld.z) / M_NET;
 
-    // Orientation follows the ship (plan §1.2), PLUS the Phase D.7 (a)
-    // tumble-carryover offset — shared helper (V7: the twin sites are one
-    // implementation now, so the accumulation fix cannot drift apart again).
+    // Orientation follows the ship plus the tumble-carryover offset (shared helper).
     this._applyCatchOrientation(d, player, dt);
 
     d._armPinned = true;
     d._captured = true;
-    d._catchRenderMin = this._catchFloorScale(d, dt);   // item 15: ramped at reel entry
+    d._catchRenderMin = this._catchFloorScale(d, dt);
     debrisField.pinCapturedDebris(d, _v3d);
 
-    // Tension readout (HUD): base + mass factor, same shape as the daughter.
+    // Tension readout (HUD), same shape as the daughter.
     this.tensionN = baseCaptureTensionN(this.capturedMass);
 
-    // w4-power D5 (owner 2026-10-12: "Reel on mother costs"): the mother's net
-    // reel bills her battery while it turns — line tension × line speed ÷
-    // REEL_EFFICIENCY, floored at its 15 W motor, capped at HAUL_MOTOR_POWER.
-    // A corridor hold (no travel) bills nothing; neither does a held-world
-    // frame (the ship's `_motorBillHeld`, set from dtWorld in its update()).
+    // owner 2026-10-12: "Reel on mother costs": the net reel bills the battery while it turns: line tension × line
+    // speed ÷ REEL_EFFICIENCY, floored at its 15 W motor, capped at HAUL_MOTOR_POWER. A corridor hold (no travel) and a
+    // held-world frame (the ship's `_motorBillHeld`) bill nothing.
     const reelTravelM = Math.abs(this._remainingM - remBeforeM);
     if (dt > 0 && reelTravelM > 0 && player._motorBillHeld !== true) {
       const rs = player._resourceSystem;
@@ -2637,12 +2219,8 @@ export class NetProjectile {
       }
     }
 
-    // Completion → BERTHED. Item 73: a queue-glide still travelling OUT to a
-    // timeout-raised standoff has NOT completed — the check below reads
-    // remainingM ≤ standoff as arrival, true from the WRONG side mid-glide
-    // (the berth hold would then snap the pin to the standoff — an outward
-    // pop). Wait for the glide to arrive. glideIncomplete is false on every
-    // pre-73 path (the flag is never set with an empty queue).
+    // Completion → BERTHED. A queue-glide still travelling OUT to a timeout-raised standoff has NOT completed:
+    // remainingM ≤ standoff is true from the WRONG side mid-glide (the berth hold would snap the pin outward).
     const glideIncomplete = this._corridorGlide && this._remainingM < berthStandoffM - 1e-9;
     if (!glideIncomplete && this._remainingM <= berthStandoffM + 1e-6) {
       this._transitionTo(STATES.BERTHED);
@@ -2666,39 +2244,24 @@ export class NetProjectile {
   }
 
   /**
-   * @private Recovery-corridor test (mother-net-reel plan §10 Phase C-lite).
-   * Analytic — no mesh collision exists anywhere in this codebase. The
-   * corridor is a cylinder along ship-local +Z from the berth anchor (S13(e):
-   * the COLLAR — the berth-approach corridor is the collar's, S12 M2 reading
-   * 8; the launch corridor is a separate matter, owned by the fire-time foul
-   * read getCollarShotFoul), radius =
-   * debris.sizeMeter/2 + BERTH_CLEARANCE_M. It must contain:
-   *   1. NO strut tip (strutLocalDirection(α, az) × STRUT_LENGTH from the
-   *      collar pivot — at α≈π a 1.70 m strut tip reaches ~2.5 m fore, past
-   *      the muzzle plane at z ≈ 1.30 m; a forward-swept strut blocks whether
-   *      or not it holds a catch);
-   *   2. NO mated cargo (S13(e): every OTHER mother net's docked catch —
-   *      BERTHED/COLLARED/TRANSFERRING — is an obstacle to THIS approach, so
-   *      a second catch holds at the gate instead of seating inside the
-   *      occupant; a berthing net's own catch exempts itself, as today).
-   *   3. NO radiator part and NO bag held on a radiator tip (big-catch-home
-   *      D2): a READ of the ship keep-out (`armManager.getKeepOut()`, exact
-   *      triangles / spheres), ONLY categories 'rad' and spheres named 'tip
-   *      bag N'. The catch is a capsule of radius sizeMeter/2 on the collar
-   *      axis, from its CURRENT distance from the anchor (never nearer than
-   *      home) down to its home distance; a part closer than
-   *      REEL_HOME.CLEARANCE_M holds the reel. The cylinder above is NOT
-   *      applied to the radiators (it would hold every catch while they are
-   *      closed — their tips sit inside it at 2-13° though the real gap is
-   *      >= 0.085 m). The home is not refreshed when the radiators move after
-   *      reel entry (D3): this read holds the reel and the timeout berths it.
-   *      No keep-out (a mock armManager with only `arms`) -> this read passes.
-   * The lasso cargo-cell read is GONE (S13(d)) — a lassoed piece rides this
-   * same mother berth path (adoptLassoCatch), so it is never an obstacle to
-   * itself.
-   * Everything is evaluated in the SHIP-LOCAL frame with the origin at the
-   * berth anchor, so the test is attitude- and position-free and needs no
-   * world-space round-trip.
+   * @private Recovery-corridor test, analytic (no mesh collision exists). The corridor is a cylinder along ship-local
+   * +Z from the berth anchor (the COLLAR; the launch corridor is separate, owned by the fire-time foul read
+   * getCollarShotFoul), radius = debris.sizeMeter/2 + BERTH_CLEARANCE_M. It must contain:
+   *   1. NO strut tip (strutLocalDirection(α, az) × STRUT_LENGTH from the collar pivot; at α≈π a 1.70 m strut tip
+   *      reaches ~2.5 m fore, past the muzzle plane at z ≈ 1.30 m; a forward-swept strut blocks whether or not it
+   *      holds a catch);
+   *   2. NO mated cargo (every OTHER mother net's docked catch, BERTHED/COLLARED/TRANSFERRING, is an obstacle, so a
+   *      second catch holds at the gate instead of seating inside the occupant; a net's own catch exempts itself);
+   *   3. NO radiator part and NO bag held on a radiator tip: a READ of the ship keep-out (`armManager.getKeepOut()`,
+   *      exact triangles / spheres), ONLY categories 'rad' and spheres named 'tip bag N'. The catch is a capsule of
+   *      radius sizeMeter/2 on the collar axis, from its CURRENT distance from the anchor (never nearer than home)
+   *      down to its home distance; a part closer than REEL_HOME.CLEARANCE_M holds the reel. The cylinder is NOT
+   *      applied to the radiators (it would hold every catch while they are closed: their tips sit inside it at
+   *      2-13° though the real gap is >= 0.085 m). The home is not refreshed when the radiators move after reel
+   *      entry: this read holds the reel and the timeout berths it. No keep-out (a mock armManager with only
+   *      `arms`) -> this read passes.
+   * A lassoed piece rides the same mother berth path (adoptLassoCatch), so it is never an obstacle to itself.
+   * Evaluated SHIP-LOCAL with the origin at the berth anchor: attitude- and position-free.
    * @param {object} d — the caught debris (for the corridor radius)
    * @returns {boolean} true when the corridor is clear
    */
@@ -2712,38 +2275,25 @@ export class NetProjectile {
     const radiusSq = radiusM * radiusM;
     const M_NET = Constants.SCENE_UNITS_PER_METER;
 
-    // Everything is evaluated SHIP-LOCAL with the origin at the berth anchor
-    // (S13(e): the collar, ON the axis at (0, 0, BERTH_COLLAR_Z_M) — read from
-    // the anchor Object3D when the real ship is present, falling back to the
-    // launcher muzzle local (headless mocks without the collar anchor) and then to
-    // the documented constant), so the test is attitude- and position-free.
+    // Origin = the berth anchor: the collar, ON the axis at (0, 0, BERTH_COLLAR_Z_M), read from the anchor Object3D;
+    // falls back to the launcher muzzle local (headless mocks), then to the documented constant.
     berthAnchorLocalInto(player, this.podIndex, _anchorLocal);
     const mx = _anchorLocal.x, my = _anchorLocal.y, mz = _anchorLocal.z;
 
-    // Cylinder axis = ship-local +Z. A point is INSIDE when its axial
-    // coordinate z > 0 (fore of the muzzle plane) — intruders aft of the
-    // muzzle can't be clipped by an incoming catch — AND its radial
-    // (x,y) distance from the axis < radiusM.
+    // Cylinder axis = ship-local +Z. INSIDE = z > 0 (fore of the muzzle plane; intruders aft can't be clipped by an
+    // incoming catch) AND radial (x,y) distance from the axis < radiusM.
     const testLocal = (lx, ly, lz) => {
       if (lz <= 0) return false;                       // aft of the muzzle plane
       return (lx * lx + ly * ly) < radiusSq;
     };
 
-    // ── 1. Strut tips, and the catches the daughters HOLD ──
-    // (net-duck 2026-10-23: the tip read below still says nothing about a held catch's BODY, which sits well off the tip — a 5 m
-    // catch above ~44° can stand in the corridor with its tip clear — so each daughter's held catch is read as well, further down.)
-    // Strut geometry is ship-local by construction: pivot at
-    // (cos az·collarR, sin az·collarR, collarY), tip at pivot +
-    // strutLocalDirection(α, az) × STRUT_LENGTH. A forward-swept strut is the
-    // blocker whether or not it holds a catch: whenever a tip is fore of the
-    // muzzle plane (tipZ > 0) its radial is
-    // ≤ 2.10 m (DECISIONS §11: collarR 0.40 + STRUT_LENGTH 1.70, was 2.01 m
-    // at 1.60), while the smallest whale-class corridor radius in the catalog
-    // is 2.40 m (FENGYUN-1C, 2.8 m), so the tip test always fires first. (And
-    // capturedDebris is set at CAPTURED/GRAPPLED — long before the daughter is
-    // back at the tip — so a held-catch check keyed on it would test the wrong
-    // position anyway.) Revisit if strut length, collar radius or the minimum
-    // whale size changes enough to close that 0.30 m margin (was 0.39 m).
+    // 1. Strut tips, and the catches the daughters HOLD. The tip alone says nothing about a held catch's BODY, which
+    // sits well off the tip (a 5 m catch above ~44° can stand in the corridor with its tip clear): read below.
+    // Strut geometry is ship-local: pivot (cos az·collarR, sin az·collarR, collarY), tip = pivot +
+    // strutLocalDirection(α, az) × STRUT_LENGTH. A tip fore of the muzzle plane (tipZ > 0) has radial
+    // ≤ 2.10 m (DECISIONS §11: collarR 0.40 + STRUT_LENGTH 1.70), while the smallest whale-class corridor radius in
+    // the catalog is 2.40 m (FENGYUN-1C, 2.8 m), so the tip test always fires first. Revisit if strut length, collar
+    // radius or the minimum whale size closes that 0.30 m margin.
     const armManager = this._ctx?.armManager;
     const arms = armManager?.arms;
     if (arms && arms.length) {
@@ -2754,36 +2304,27 @@ export class NetProjectile {
         const arm = arms[i];
         if (!arm) continue;
         const alpha = (typeof arm.getAimAlpha === 'function') ? arm.getAimAlpha() : Math.PI / 2;
-        const azRad = (arm._azimuthDeg || 0) * Math.PI / 180;
-        // ONE geometry (ArmDockBasis.strutTipFoulsCorridor) — shared with
-        // ArmManager's lean-aside duck and its re-pose pre-check, so the duck
-        // can never disagree with this, the authoritative gate.
+        const azRad = degToRad(arm._azimuthDeg || 0);
+        // ONE geometry (ArmDockBasis.strutTipFoulsCorridor), shared with ArmManager's lean-aside duck and re-pose
+        // pre-check, so the duck never disagrees with this authoritative gate.
         if (strutTipFoulsCorridor(alpha, azRad, collarR, collarY, strutLen, _anchorLocal, radiusM)) {
           return false;
         }
-        // net-duck D1 (owner 2026-10-22: "out of the way of mother net"): a daughter's HELD catch is a body on her strut, and above
-        // ~44 deg a big one sits across this corridor although her tip does not (measured: tmp/plans/net-duck.md Log, T0a). The
-        // drawn mesh of every rack piece at her LIVE angle is read against the same cylinder; a mock arm manager with no dock
-        // positions, or a held piece with no mass, is skipped. (The comment above was written when a held catch was keyed on
-        // `capturedDebris`, which is the in-hand haul; the rack pieces are what stand at the tip.)
+        // owner 2026-10-22: "out of the way of mother net": a daughter's HELD catch is a body on her strut; above ~44°
+        // a big one sits across this corridor although her tip does not. The drawn mesh of every rack piece at her LIVE
+        // angle is read against the same cylinder (not `capturedDebris`, the in-hand haul, set long before the daughter
+        // is back at the tip); a mock arm manager with no dock positions, or a held piece with no mass, is skipped.
         if (heldCargoFoulsCorridorAt(armManager, i, alpha, _anchorLocal, radiusM)) {
           return false;
         }
       }
     }
 
-    // ── 2. Mated cargo (S13(e)) ──
-    // Every OTHER mother net's docked catch (BERTHED/COLLARED/TRANSFERRING) is
-    // an obstacle to THIS approach: with the occupancy refusal retired, a
-    // second catch can come home while the collar is occupied, and without
-    // this read it would seat INSIDE the occupant (two drawn bodies
-    // interpenetrating — a continuity-law violation). The gate holds the
-    // approach at CORRIDOR_HOLD_M (10 m — 9 m clear of the occupant's near
-    // face, which sits exactly BERTH_CLEARANCE_M fore of the collar plane at
-    // every class by the seat rule) and the existing timeout berths it at the
-    // extended standoff — a tandem hold on the axis, honestly announced.
-    // Exemption (as today): a berthing net's OWN catch is never its own
-    // obstacle — it is the thing coming in.
+    // 2. Mated cargo: every OTHER mother net's docked catch is an obstacle to THIS approach (a second catch can come
+    // home while the collar is occupied and would seat INSIDE the occupant: a continuity-law violation). The gate
+    // holds at CORRIDOR_HOLD_M (10 m, 9 m clear of the occupant's near face, which sits exactly BERTH_CLEARANCE_M
+    // fore of the collar plane at every class) and the timeout berths it at the extended standoff (a tandem hold).
+    // A berthing net's OWN catch is exempt.
     const cns = this._ctx?.captureNetSystem;
     if (cns && Array.isArray(cns.activeNets) && player.quaternion) {
       const collarWorld = (typeof player.getNetBerthCollarPositionInto === 'function')
@@ -2797,21 +2338,14 @@ export class NetProjectile {
         const od = other.targetDebris;
         const sp = od && od.alive !== false ? od._scenePosition : null;
         if (!sp) continue;
-        // Cargo centre in the corridor frame: q⁻¹·(pin − collarWorld), in
-        // metres, origin at the berth anchor.
+        // Cargo centre in the corridor frame: q⁻¹·(pin − collarWorld), metres.
         _v3d.copy(sp).sub(collarWorld).applyQuaternion(_q0);
         if (testLocal(_v3d.x / M_NET, _v3d.y / M_NET, _v3d.z / M_NET)) return false;
       }
     }
 
-    // ── 3. Radiators and tip bags (big-catch-home D2) — a READ of the ship keep-out ──
-    // The analytic r + BERTH_CLEARANCE_M cylinder would hold EVERY catch whenever the radiators are closed (their tips
-    // sit inside it at 2-13°, yet the real catch clears them by 0.085 m or more), so the radiators and the bags on the
-    // tips are read as exact triangles / spheres instead: the catch is a capsule of radius sizeMeter/2 on the collar
-    // axis, from its CURRENT distance from the anchor down to its home distance, and any radiator part or tip bag
-    // closer than CLEARANCE_M holds the reel (the existing hold/timeout then handles it; no radiator command, §3.1).
-    // A home found earlier is not refreshed (D3): radiators that moved since reel entry foul it and are caught HERE.
-    // No keep-out (mock armManagers with only `arms`) -> this read passes, byte-identical to before.
+    // 3. Radiators and tip bags: exact keep-out read (see the JSDoc); no radiator command is issued. A home found
+    // earlier is not refreshed: radiators that moved since reel entry foul it and are caught HERE.
     let ko = null;
     try { ko = armManager && typeof armManager.getKeepOut === 'function' ? armManager.getKeepOut() : null; } catch (_e) { ko = null; }
     if (ko && typeof ko.segment === 'function') {
@@ -2843,29 +2377,16 @@ export class NetProjectile {
   }
 
   /**
-   * @private Register item 66 — the level (metres from the berth anchor) at
-   * which THIS net's corridor gate must hold so its catch clears the queue
-   * already at the station; 0 when no other mother net holds a position
-   * there. Reads the shared `motherNetForeExtentM` (register item 74 — ONE
-   * fore-extent computation for both queue consumers: the two refinements
-   * the queue stack needs, now shared with the lasso pend):
-   *   - members are nets HOLDING a station position: a corridor-held REELING
-   *     net (its frozen `_corridorHoldLevelM` slot — the REELING guard keeps
-   *     a stale hold flag from a MISSED net from counting) or a berthed/
-   *     collared/transferring net (its berth standoff, extended-standoff
-   *     honest via `_effectiveStandoffM`). An inbound net not yet at its gate
-   *     is not a member — it takes its slot when its own gate engages (the
-   *     hold latch makes the order first-come, inner-most), and a timed-out
-   *     member reads the same level on both branches, so a held→berthed
-   *     transition never moves the queue.
-   *   - the returned level seats THIS catch's near face one
-   *     BERTH_CLEARANCE_M past the deepest member's far face
-   *     (near = level + _catchSeatM − sizeMeter/2), so two queued catches
-   *     can never freeze at the same level and co-locate (co-located reads
-   *     as one — a continuity-law cosmetic violation).
-   * The timeout's `extended` derives from this holdM, so a queue-raised
-   * hold berths at its queue-cleared level. 0 with an empty queue ⇒ the
-   * gate's CORRIDOR_HOLD_M floor is byte-identical to the pre-66 code.
+   * @private The level (metres from the berth anchor) at which THIS net's corridor gate must hold so its catch clears
+   * the queue already at the station; 0 when no other mother net holds a position there. Reads the shared
+   * `motherNetForeExtentM` (one fore-extent computation for both queue consumers, shared with the lasso pend):
+   *   - members are nets HOLDING a station position: a corridor-held REELING net (its frozen `_corridorHoldLevelM`
+   *     slot; the REELING guard keeps a stale hold flag from a MISSED net from counting) or a berthed / collared /
+   *     transferring net (its berth standoff, via `_effectiveStandoffM`). An inbound net not yet at its gate is not a
+   *     member: it takes its slot when its own gate engages (first-come, inner-most).
+   *   - the level seats THIS catch's near face one BERTH_CLEARANCE_M past the deepest member's far face
+   *     (near = level + _catchSeatM − sizeMeter/2), so two queued catches never freeze at the same level and co-locate.
+   * The timeout's `extended` derives from this holdM, so a queue-raised hold berths at its queue-cleared level.
    * @param {object} d — this net's caught debris
    * @returns {number} metres
    */
@@ -2883,18 +2404,16 @@ export class NetProjectile {
       if (fore > ext) ext = fore;
     }
     if (ext <= 0) return 0;
-    // near face = level + seat − half ≥ ext + clearance.
-    // l8-reel-collar: the seat at the hold is between the captured depth and the home seat; the HOME seat is the
-    // smallest, so the level it gives is the conservative (largest) one.
+    // near face = level + seat − half ≥ ext + clearance. The HOME seat is the smallest the hold can have, so the level
+    // it gives is the conservative (largest) one.
     const seat = this._homeSeatM ?? this._catchSeatM ?? 0;
     const halfSelf = (d.sizeMeter || 2) / 2;
     return ext + (CN.BERTH_CLEARANCE_M ?? 1.0) + halfSelf - seat;
   }
 
   /**
-   * Mother BERTHED per-frame hold (driven by CaptureNetSystem.update — the
-   * projectile's own switch no-ops on BERTHED). Freezes the reel formula at
-   * the standoff: same code path, same pin API, same ship-relative frame.
+   * Mother BERTHED per-frame hold (driven by CaptureNetSystem.update; the projectile's own switch no-ops on BERTHED).
+   * Freezes the reel formula at the standoff: same pin API, same ship-relative frame.
    * @param {number} dt
    * @returns {boolean} false when the berth should tear down (dead target)
    */
@@ -2903,23 +2422,14 @@ export class NetProjectile {
     const player = this._ctx?.player;
     const debrisField = this._ctx?.debrisField;
     if (!d || !player || !debrisField) return false;
-    // §4.19: the berth-hold alive guard is what cleans up a mission transition
-    // (a BERTHED net survives getState holding a debris ref that no longer
-    // exists). NOT optional polish.
+    // NOT optional: this alive guard cleans up a mission transition (a BERTHED net survives getState holding a
+    // debris ref that no longer exists).
     if (d.alive === false) return false;
 
     const M_NET = Constants.SCENE_UNITS_PER_METER;
-    // Respect the corridor-timeout extended standoff (Phase C-lite): a berth
-    // forced out to CORRIDOR_EXTENDED_STANDOFF_M must HOLD there — recomputing
-    // the base standoff here would slide the catch inward at the berth.
-    // S13(c): this IS the collar seat. S13(e): the seat is referenced to the
-    // COLLAR anchor (the ring plane z = 1.30, ON the axis; the launcher muzzle
-    // is 30 mm behind it since 2026-10-13) — cargo centre at collar + fwd ×
-    // (sizeMeter/2 + BERTH_CLEARANCE_M 1.0) is exactly "cargo surface at the
-    // ring, centre at ring-z + size/2 + clearance" — the seat the rigid
-    // complete-berth mate holds (no pendulum from COLLARED on, see below).
-    // l8-reel-collar: HOME — the bag's mouth at the ring, the catch seated on the collar axis
-    // (CN.REEL_HOME). A corridor-timeout berth still holds at its extended standoff.
+    // HOME = the bag's mouth at the ring, the catch seated on the collar axis (CN.REEL_HOME; collar anchor = ring
+    // plane z = 1.30, ON the axis, launcher muzzle 30 mm behind it): the seat the rigid complete-berth mate holds.
+    // A corridor-timeout berth MUST hold at its extended standoff: recomputing the base one would slide the catch inward.
     if (this._homeSeatM == null) this._seedReelHome(d, player);
     const baseStandoffM = this._homeApexM;
     const berthStandoffM = Math.max(baseStandoffM, this._effectiveStandoffM ?? baseStandoffM);
@@ -2927,37 +2437,25 @@ export class NetProjectile {
 
     this._settleFwdLagged(player, dt);
 
-    // Phase D.7 (b) — berthed pendulum: the bundle swings on a critically
-    // damped spring (~0.5 Hz, decays ~5 s), re-excited by RCS translation.
-    // The swing is an angular offset off the lagged-forward axis, applied as a
-    // small lateral displacement at the standoff distance. Semi-implicit
-    // (dt-robust at 30/120 fps). Phase D.8 (§11.8): garnish — dropped at LOW
-    // tier (the berth hold itself is structure and stays).
-    // S13(c): the pendulum applies through BERTHED only — a tethered berth
-    // swings; a collar mate is RIGID and does not (the BERTHED→COLLARED
-    // transition zeroes _pendulumAngle/_pendulumVel). In COLLARED the residual
-    // _lateral simply decays to the boresight (the guide cone re-centres the
-    // body over ~½ s — no snap, no pop).
+    // Berthed pendulum: the bundle swings on a critically damped spring (~0.5 Hz, decays ~5 s), re-excited by RCS
+    // translation; an angular offset off the lagged-forward axis, applied as a lateral displacement at the standoff
+    // distance. Semi-implicit (dt-robust at 30/120 fps). Garnish: dropped at LOW tier (the berth hold stays).
+    // BERTHED only: a tethered berth swings, a collar mate is RIGID (BERTHED→COLLARED zeroes _pendulumAngle/Vel;
+    // the residual _lateral then decays to the boresight as the guide cone re-centres the body over ~½ s).
     const collared = this.state === STATES.COLLARED;
     if (CN.BERTH_PENDULUM_ENABLED !== false && !collared) {
       const pOmega = 2 * Math.PI * (CN.BERTH_PENDULUM_FREQ_HZ ?? 0.5);
       const pZeta = 1.0;
       const pK = pOmega * pOmega, pC = 2 * pZeta * pOmega;
-      // RCS re-excite: translation velocity kicks the pendulum. _rcsVelocity is
-      // in scene-units/s; convert to m/s (÷ M_NET) so the coefficient reads in
-      // rad-per-metre and matches how the rest of this file reasons in metres.
-      // Scaled by dt like every other term in this integrator: the excitation is
-      // applied EVERY frame the RCS velocity is non-zero (thrust plus its
-      // RCS_DAMPING tail), so an unscaled kick made the swing framerate-dependent
-      // (~2.1× at 120 fps vs 60 fps) AND saturated BERTH_PENDULUM_MAX_RAD after
-      // ~0.3 s of held thrust, turning the damped swing into a hard clamp.
-      // With dt, the total kick over a burst is ∫v·dt = the RCS displacement in
+      // RCS re-excite: _rcsVelocity (scene-units/s) ÷ M_NET = m/s. MUST scale by dt: the kick is applied every frame
+      // the RCS velocity is non-zero, so an unscaled kick was framerate-dependent (~2.1× at 120 vs 60 fps) and
+      // saturated BERTH_PENDULUM_MAX_RAD in ~0.3 s. With dt the total kick is ∫v·dt = the RCS displacement in
       // metres, so the coefficient is rad/s of swing per metre of drift.
       if (player._rcsVelocity) {
         const rcsMps = player._rcsVelocity.length() / M_NET;
         this._pendulumVel += rcsMps * dt * (CN.BERTH_PENDULUM_RCS_EXCITE ?? 0.6);
       }
-      // Spring toward 0 (the boresight), capped.
+      // Spring toward the boresight, capped.
       const pAccel = -pK * this._pendulumAngle - pC * this._pendulumVel;
       this._pendulumVel += pAccel * dt;
       this._pendulumAngle += this._pendulumVel * dt;
@@ -2966,10 +2464,8 @@ export class NetProjectile {
         this._pendulumAngle = Math.sign(this._pendulumAngle) * pMax;
         this._pendulumVel = 0;
       }
-      // Apply the swing as a lateral offset at the standoff distance.
       if (Math.abs(this._pendulumAngle) > 1e-9) {
-        // Swing direction: perpendicular to fwd, in the ship's local XZ plane
-        // (a yaw swing — reads as the bundle swaying side-to-side on the line).
+        // Swing direction: perpendicular to fwd, ship-local XZ plane (a yaw swing).
         _v3e.crossVectors(this._fwdLagged, _v3a.set(0, 1, 0).applyQuaternion(player.quaternion)).normalize();
         if (_v3e.lengthSq() > 1e-9) {
           const swingM = Math.tan(this._pendulumAngle) * berthStandoffM;
@@ -2982,9 +2478,9 @@ export class NetProjectile {
       ? player.getNetBerthCollarPositionInto(_v3c)
       : (typeof player.getNetPodPositionInto === 'function')
         ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
-    // The seat and the bag axis were fixed by the last reel tick (`_applySeatLaw`); the hold only reads them — the
-    // seat is NOT re-derived here, so the nose reel (a fallback for a catch parked deeper than the line reaches)
-    // can still shrink `_catchSeatM`. At HOME the bag axis follows the ship axis (the mouth is on the ring).
+    // Seat and bag axis come from the last reel tick (`_applySeatLaw`); NOT re-derived here, so the nose reel
+    // (fallback for a catch parked deeper than the line reaches) can still shrink `_catchSeatM`. At HOME the bag axis
+    // follows the ship axis.
     const seatP = this._seatProgress(berthStandoffM);
     if (seatP >= 1 && this.launchDirection && this._fwdLagged) {
       this.launchDirection.x = this._fwdLagged.x; this.launchDirection.y = this._fwdLagged.y; this.launchDirection.z = this._fwdLagged.z;
@@ -2993,31 +2489,27 @@ export class NetProjectile {
       .addScaledVector(this._fwdLagged, berthStandoffM * M_NET)
       .addScaledVector(this._lateral, 1 - seatP);
 
-    // net.position = the bag's apex anchor (the tether end), written BEFORE
-    // the seat offset — same split as _updateMotherReel, so the catch stays
-    // seated INSIDE the bag through the berth hold instead of riding the apex.
+    // net.position = the bag's apex anchor, written BEFORE the seat offset (as in _updateMotherReel), so the catch
+    // stays seated INSIDE the bag.
     this.position.x = _v3d.x / M_NET;
     this.position.y = _v3d.y / M_NET;
     this.position.z = _v3d.z / M_NET;
     if (this._catchSeatM) _v3d.addScaledVector(this.launchDirection, this._catchSeatM * M_NET);
     this._reelDistM = Math.hypot(_v3d.x - anchorWorld.x, _v3d.y - anchorWorld.y, _v3d.z - anchorWorld.z) / M_NET;
 
-    // Phase D.7 (a) — tumble carryover (shared helper — V7, same as the reel path).
     this._applyCatchOrientation(d, player, dt);
 
     d._armPinned = true;
     d._captured = true;
-    // S3 orbit continuity: the mother hold owns this position from berth entry
-    // on — freeze the catch's own orbit propagation (DebrisField skips only
-    // _onboardingPinned otherwise) so a later jettison re-seats from the pin
-    // instead of snapping to an orbit that kept drifting during the hold.
+    // The mother hold owns this position from berth entry: freeze the catch's own orbit propagation (DebrisField
+    // skips only _onboardingPinned otherwise) so a later jettison re-seats from the pin, not a drifted orbit.
     d._motherParked = true;
-    d._catchRenderMin = this._catchFloorScale(d, dt);   // item 15: ramp continues; never restarts at berth
+    d._catchRenderMin = this._catchFloorScale(d, dt);
     debrisField.pinCapturedDebris(d, _v3d);
     if (this._noseAdopted) {
-      // u20-nose fix 2: the ship pose this pin was made against. The pin is written at the END of a frame (captureNetSystem.update runs after
-      // armManager.update, js/main.js ~:7302 / ~:7323) and the daughter's tug check reads it at the START of the next, after player.update has
-      // moved the ship (about 2.6 km a frame at the game clock): read against the live pose the catch was always "2.6 km off its seat".
+      // The ship pose this pin was made against. The pin is written at the END of a frame (captureNetSystem.update runs
+      // after armManager.update) and the daughter's tug check reads it at the START of the next, after player.update
+      // has moved the ship (~2.6 km a frame at the game clock): against the live pose the catch is always "2.6 km off".
       (this._holdShipPos ||= new THREE.Vector3()).copy(player.position);
       (this._holdShipQuat ||= new THREE.Quaternion()).copy(player.quaternion);
       this._holdSeq = this._ctx?.captureNetSystem?._frameSeq ?? 0;
@@ -3026,9 +2518,9 @@ export class NetProjectile {
   }
 
   /**
-   * u20-nose fix 2: the ship pose (position, attitude) the catch's last pin was made against, for a daughter's tug check to read
-   * `target._scenePosition` in the frame it was pinned in. null when this net did not pin in the system's latest update (its hold
-   * stopped running): the check then counts the hand-over as not held, as it would for a catch that is left behind.
+   * The ship pose (position, attitude) the catch's last pin was made against, for a daughter's tug check to read
+   * `target._scenePosition` in the frame it was pinned in. null when this net did not pin in the system's latest
+   * update (its hold stopped): the check then counts the hand-over as not held.
    * @returns {{pos:THREE.Vector3, quat:THREE.Quaternion}|null}
    */
   lastPinFrame() {
@@ -3039,11 +2531,9 @@ export class NetProjectile {
   }
 
   /**
-   * @private C1: the reel/berth rotation-lag spring, hoisted from two identical
-   * inline sites (_updateMotherReel + updateBerthHold). Runs the ship forward
-   * through a critically damped spring (~0.8 Hz settle) so a mid-reel slew lags
-   * and settles instead of whipping the catch, and decays the lateral offset
-   * toward the boresight as the bundle reels in. Writes _fwdLagged + _lateral.
+   * @private The reel/berth rotation-lag spring: runs the ship forward through a critically damped spring (~0.8 Hz
+   * settle) so a mid-reel slew doesn't whip the catch, and decays the lateral offset toward the boresight.
+   * Writes _fwdLagged + _lateral.
    * @param {object} player — mother ship (quaternion read)
    * @param {number} dt — seconds
    */
@@ -3055,26 +2545,14 @@ export class NetProjectile {
     _v3b.copy(fwdTarget).sub(this._fwdLagged);          // displacement
     this._fwdLagged.addScaledVector(_v3b, Math.min(1, k * dt * dt + c * dt));
     this._fwdLagged.normalize();
-    // Lateral decay (catch swings onto the boresight as it reels in).
     this._lateral.multiplyScalar(Math.max(0, 1 - 2.0 * dt));
   }
 
   /**
-   * @private Shared reel/berth orientation: ship-rigid attitude (plan §1.2)
-   * PLUS the Phase D.7 (a) tumble carryover — a small extra pitch term on top
-   * of the ship-rigid attitude, decaying over TUMBLE_CARRYOVER_DECAY_S. The
-   * two share the orientation channel (tumbleAxis/tumbleAngle), so the
-   * carryover is composed as an additional rotation about the ship-local X
-   * (pitch) axis — the same axis the tug's angular kick uses.
-   *
-   * V7: the residual spin is now ACCUMULATED — `_tumbleCarryAngle` integrates
-   * `_tumbleCarryover × dt` (mod 2π), mirroring how `_pendulumAngle` /
-   * `_pendulumVel` already integrate, so the catch visibly spins down in the
-   * bag. The pre-V7 twin sites applied one frame's increment to a freshly
-   * rebuilt quaternion each frame, so it never accumulated: a sub-degree
-   * offset that decayed to nothing. Hoisted into one helper so the two call
-   * sites cannot drift apart again. The accumulated angle outlives the rate on
-   * purpose — see the in-body note.
+   * @private Shared reel/berth orientation: ship-rigid attitude plus the tumble carryover, an extra rotation about
+   * the ship-local X (pitch) axis (the tug's angular kick axis), decaying over TUMBLE_CARRYOVER_DECAY_S. The residual
+   * spin is ACCUMULATED: `_tumbleCarryAngle` integrates `_tumbleCarryover × dt` (mod 2π), so the catch visibly spins
+   * down in the bag. The accumulated angle outlives the rate on purpose (see the in-body note).
    * @param {object} d — the caught debris (tumbleAxis/tumbleAngle written)
    * @param {object} player — mother ship (quaternion read)
    * @param {number} dt — seconds
@@ -3089,48 +2567,35 @@ export class NetProjectile {
         // Decay the residual (exponential, dt-robust).
         this._tumbleCarryover *= Math.exp(-dt / (CN.TUMBLE_CARRYOVER_DECAY_S ?? 5.0));
       }
-      // …but KEEP APPLYING the accumulated angle after it dies. The rate and the
-      // angle are separate quantities: the rate decaying to zero means the catch
-      // has finished spinning down, not that it teleports back to its
-      // pre-tumble attitude. Both used to sit behind the same `> 1e-6` gate,
-      // which was harmless pre-V7 (the angle was one frame's sub-degree
-      // increment) but became a one-frame snap of up to ∫0.6·e^(−t/5)dt = 3 rad
-      // ≈ 172° once V7 made the accumulation real. Reachable on any catch held
-      // past ~66 s (corridor timeout / a long berth hold).
+      // …but KEEP APPLYING the accumulated angle after the rate dies: a spun-down catch must not teleport back to its
+      // pre-tumble attitude. Gating both behind `> 1e-6` snaps up to ∫0.6·e^(−t/5)dt = 3 rad ≈ 172° on any catch held
+      // past ~66 s (corridor timeout / long berth hold).
       if (this._tumbleCarryAngle !== 0) {
         _q1.setFromAxisAngle(_v3e.set(1, 0, 0), this._tumbleCarryAngle);
         _q0.multiply(_q1);
       }
     }
-    const w = Math.max(-1, Math.min(1, _q0.w));
+    const w = clamp(_q0.w, -1, 1);
     const angle = 2 * Math.acos(w);
     const s = Math.sqrt(Math.max(0, 1 - w * w));
     if (s > 1e-6) d.tumbleAxis.set(_q0.x / s, _q0.y / s, _q0.z / s);
     else d.tumbleAxis.set(0, 1, 0);
     d.tumbleAngle = angle;
-    // c1-catch-pose (D7 finding): `d` is a snapshot in the real game; the drawn
-    // object is the field's canonical one. Put the pair there too, or the nose
-    // hold's attitude never reaches the screen (measured: 78° of an 86° ship
-    // turn went unfollowed in BERTHED on the shipped build).
+    // `d` is a snapshot in the real game; the drawn object is the field's canonical one. Mirror the pair there, or the
+    // nose hold's attitude never reaches the screen.
     mirrorCatchAttitude(d, this._ctx?.debrisField);
   }
 
-  // ── Catch resolution ───────────────────────────────────────────────────
-
   /** @private Roll cling probability and resolve capture */
   _resolveCatch() {
-    // Dead-target guard (mother-net-reel plan §7.7): the body may have been
-    // removed (fragmented by another interaction, deorbited) while the net
-    // was wrapping. Never award a catch against a dead reference.
+    // Dead-target guard: the body may have been removed (fragmented, deorbited) while the net was wrapping.
     if (this.targetDebris && this.targetDebris.alive === false) {
       this._miss('target_lost');
       return;
     }
 
-    // Phase 2 (ASPECT_CAPTURE): presented width at CONTACT — the moment the
-    // mouth meets the body decides whether it can swallow it. Broadside on an
-    // oversize presentation is a deterministic bounce, not a bad roll. The
-    // verdict routes through the ONE mouth-fit predicate (register item 21a).
+    // ASPECT_CAPTURE: the presented width at CONTACT decides whether the mouth can swallow the body; broadside on an
+    // oversize presentation is a deterministic bounce, not a bad roll (the one mouth-fit predicate).
     if (Constants.isFeatureEnabled('ASPECT_CAPTURE') && this.targetDebris) {
       this._presentedWidthM = presentedWidthForApproach(this.targetDebris, this.launchDirection);
       if (!fitsMouth(this.targetDebris, this.netClass, this.launchDirection, this._presentedWidthM)) {
@@ -3139,40 +2604,28 @@ export class NetProjectile {
       }
     }
 
-    // Determine P_base from capture mode
     const pBase = this.captureMode === MODES.CINCH
-      ? CN.CINCH_P_BASE.RIGHT_HARDER   // 0.93 — default for cinch
-      : CN.SLAM_P_BASE.RIGHT_HARDER;   // 0.80 — default for slam
+      ? CN.CINCH_P_BASE.RIGHT_HARDER   // 0.93
+      : CN.SLAM_P_BASE.RIGHT_HARDER;   // 0.80
 
     const params = {
       pBase,
       vRel:            this.speed,
       vOptimal:        this.netClass.LAUNCH_SPEED,
       range:           this.distanceTraveled,
-      // §11.7 decision (2026-08-27): NEUTRALIZED — resolve-time spin never
-      // reads above design. Derivation: raw spinRate/SPIN_HZ exceeds 1 only
-      // inside the launch transient (CAST_WINDUP 0.15 s + SPIN_UP_TIME 0.5 s
-      // = the first 0.65 s), where the folded canister despins from
-      // SPIN_HZ × SPIN_FOLDED_MULT (3×) down to 1×; an unclamped fraction up
-      // to 3.0 would ride computeClingProbability's f_spin ceiling
-      // (min(1.2, ·)) into a hidden +20% cling bonus for point-blank shots.
-      // That window is UNREACHABLE in the live FSM — contact checks exist
-      // only in FLIGHT and _updateSpinningUp exits with spinRate === SPIN_HZ
-      // exactly — so this clamp changes no reachable path; it pins the
-      // boundary against future FSM edits (e.g. letting point-blank contact
-      // interrupt SPINNING_UP). Neutralized rather than kept-as-reward
-      // because (a) §12.2 already prices ≤ 25 m as sure-shot ≥ 0.80 — the
-      // close-range reward exists and is documented; (b) the 3× transient is
-      // an animation-legibility artifact (§11.6), not a catch-quality claim;
-      // (c) ToolOdds.estimateSpinFractionAtContact is ∈ [0, 1] by contract,
-      // so the HUD could never show the bonus — an "honest numbers" breach.
-      // Sub-1 in-flight decay penalties are untouched. Pinned in
-      // test-CaptureNet-Bookkeeping.js so retunes re-derive consciously.
+      // NEUTRALIZED: resolve-time spin never reads above design. Raw spinRate/SPIN_HZ exceeds 1 only in the launch
+      // transient (CAST_WINDUP 0.15 s + SPIN_UP_TIME 0.5 s, folded canister despinning from 3× to 1×), which is
+      // unreachable in the live FSM (contact checks exist only in FLIGHT; _updateSpinningUp exits at exactly SPIN_HZ).
+      // The clamp pins that boundary against FSM edits: unclamped, up to 3.0 would ride computeClingProbability's
+      // f_spin ceiling (min(1.2, ·)) into a hidden +20% point-blank cling bonus. Not kept as a reward because the
+      // close-range reward is already priced (§12.2: ≤ 25 m is sure-shot ≥ 0.80), the 3× transient is an
+      // animation-legibility artifact (§11.6), and ToolOdds.estimateSpinFractionAtContact is in [0, 1], so the HUD
+      // could never show it ("honest numbers"). Pinned in test-CaptureNet-Bookkeeping.js.
       spinFraction:    Math.min(this.spinRate / this.netClass.SPIN_HZ, 1.0),
       tensionFraction: 1.0,
       contactFraction: 1.0,
       roughness:       this.targetDebris?.surfaceRoughness || 1.0,
-      // CP-2: a high-tumble target sheds the net — detumble it first (mother laser).
+      // A high-tumble target sheds the net: detumble it first (mother laser).
       targetTumbleRate: Constants.isFeatureEnabled('LASER_DESPIN')
         ? (this.targetDebris?.tumbleRate ?? null)
         : null,
@@ -3181,10 +2634,8 @@ export class NetProjectile {
     this._clingProbability = computeClingProbability(params);
     this._clingRoll = Math.random();
 
-    // Phase 3b (capture-feedback overhaul): the frag risk is now ROLLED, not
-    // just computed. The consequence chain was already built — handleFragmentation
-    // (mercy rule) → NET_FRAGMENTATION; INTERACTION_FRAGMENTATION → KesslerSystem
-    // counts it and DebrisField sheds/replaces the body.
+    // The frag risk is ROLLED: handleFragmentation (mercy rule) → NET_FRAGMENTATION; INTERACTION_FRAGMENTATION →
+    // KesslerSystem counts it and DebrisField sheds/replaces the body.
     this._fragRisk = computeFragRisk({
       netMass:         this.netClass.MASS,
       vRel:            this.speed,
@@ -3226,38 +2677,20 @@ export class NetProjectile {
   }
 
   /**
-   * Phase B §9.8–9.10 — the line-taut tug (mother path only).
-   *
-   * At CAPTURED the tether snaps straight: the whale's residual momentum
-   * relative to the Mother transfers through the net. Honest ratio up to
-   * 177:1 (23 t vs 130 kg), so the NET_TUG_MAX_DV_MS cap does nearly all the
-   * work. Three coupled effects:
-   *
-   *   1. Spring soft-capture (the shock absorber, §9.8): the feel component is
-   *      spread over NET_TUG_WINDOW_S into _rcsVelocity by the windowed
-   *      delivery in CaptureNetSystem.update — Σ(step/window) === 1 exactly at
-   *      any frame rate, so the delivered impulse is dt-robust. The residual
-   *      decay is RCS_DAMPING's inherited per-frame behaviour (shared with
-   *      manual RCS, deliberately out of scope). Feel-only; never mutates the
-   *      orbit. NET_TUG_FEEL_MULT scales the share so the ~2× transient (same
-   *      magnitude drives orbit + _rcsVelocity) is deliberate, not accidental.
-   *   2. Kept orbit impulse (one-shot, NOT spread): the capped Δv goes through
-   *      applyCartesianImpulse with { noBill: true } — passive momentum
-   *      transfer bills no fuel/battery and ignores the power gates. The kept
-   *      Δv is a genuine ΔV-economy event (comms'd, cancellable with RCS, NOT
-   *      auto-nulled — keep-or-cancel by design). A false return means the
-   *      altitude-envelope guard refused it: comms must say so honestly
-   *      ("tug damped — envelope limit") rather than claiming kept Δv.
-   *   3. Angular kick: τ_x = r_y·F_z — the ROW_DZ muzzle lever (±6 cm in ship
-   *      Y) × the AXIAL tug, the single term _applyMotherNetRecoil models.
-   *      Signed so a forward pull pitches opposite to an aft recoil at the
-   *      same muzzle. RCS springs it back (~2 s, ζ=1); attitude hold survives.
-   *
-   * relVel derivation: the catch's orbital velocity (orbitToSceneCartesianInto
-   * on its own elements — it keeps propagating while pinned) minus the
-   * Mother's getVelocity(). This is the same quantity the pre-fire drift
-   * refusal measures via its EMA, but sampled exactly once at the taut moment.
-   *
+   * Line-taut tug (mother path only, Phase B §9.8–9.10). At CAPTURED the whale's residual momentum relative to the
+   * Mother transfers through the net (up to 177:1 mass ratio, 23 t vs 130 kg, so the NET_TUG_MAX_DV_MS cap does nearly all the work):
+   *   1. Feel: spread over NET_TUG_WINDOW_S into _rcsVelocity by the windowed delivery in CaptureNetSystem.update
+   *      (Σ(step/window) === 1 at any frame rate). Never mutates the orbit. NET_TUG_FEEL_MULT scales it; the ~2×
+   *      transient (the same magnitude drives orbit + _rcsVelocity) is deliberate. RCS_DAMPING decay is shared with
+   *      manual RCS, deliberately out of scope.
+   *   2. Orbit: the capped Δv goes once through applyCartesianImpulse with { noBill: true } (no fuel/battery, ignores
+   *      power gates). Keep-or-cancel by design: cancellable with RCS, NOT auto-nulled. A false return means the
+   *      altitude-envelope guard refused it: comms must say "tug damped — envelope limit", not claim kept Δv.
+   *   3. Angular kick: τ_x = r_y·F_z, the ROW_DZ muzzle lever (±6 cm in ship Y) × the AXIAL tug (the one term
+   *      _applyMotherNetRecoil models). Signed so a forward pull pitches opposite to an aft recoil. RCS springs it
+   *      back (~2 s, ζ=1); attitude hold survives.
+   * relVel = the catch's orbital velocity (orbitToSceneCartesianInto on its own elements; it keeps propagating while
+   * pinned) minus the Mother's getVelocity(), sampled once at the taut moment.
    * @private
    */
   _applyCaptureTug() {
@@ -3269,46 +2702,32 @@ export class NetProjectile {
     if (typeof player.applyCartesianImpulse !== 'function') return;
     if (typeof player.getVelocity !== 'function') return;
 
-    // A tease-pinned catch rides the mother's frame: orbit propagation is
-    // SKIPPED while _onboardingPinned (DebrisField update loop), so the
-    // elements below carry a velocity stale by the whole pin duration —
-    // measured ~1.2 km/s phantom relative velocity after a ~95 s pin
-    // (2026-08-02 P1 probe), which capped dvMag and armed a full-scale camera
-    // shake for a catch that was, physically, co-moving with the ship. The
-    // honest relative velocity of a piece held in the mother's frame is ~0,
-    // and a zero-relative-velocity catch yanks nothing (same early return as
-    // the matched-velocity case below).
+    // A tease-pinned catch rides the mother's frame (~0 relative velocity), but orbit propagation is skipped while
+    // _onboardingPinned, so its elements carry a stale velocity (measured ~1.2 km/s phantom after a ~95 s pin).
     if (d._onboardingPinned) return;
 
-    // Catch orbital velocity (km/s) at its current elements.
-    orbitToSceneCartesianInto(d.orbit, _tugScratchPos, _tugScratchVel);
+    orbitToSceneCartesianInto(d.orbit, _tugScratchPos, _tugScratchVel);   // km/s
     const shipV = player.getVelocity();
-    // Relative velocity catch − ship, converted km/s → m/s.
+    // catch − ship, km/s → m/s
     const rvx = (_tugScratchVel.x - shipV.x) * 1000;
     const rvy = (_tugScratchVel.y - shipV.y) * 1000;
     const rvz = (_tugScratchVel.z - shipV.z) * 1000;
     const relSpeed = Math.sqrt(rvx * rvx + rvy * rvy + rvz * rvz);
-    if (relSpeed < 1e-3) return;   // matched velocity → no tug (zero-relVel case)
+    if (relSpeed < 1e-3) return;   // matched velocity → no tug
 
-    // Momentum the catch carries relative to the ship, shared by mass ratio,
-    // capped. m_catch·v_rel is the full momentum; the ship's share of the
-    // velocity change is m_catch/(m_catch + m_ship) of v_rel.
+    // The ship's share of the velocity change is m_catch/(m_catch + m_ship) of v_rel, capped.
     const mCatch = d.mass || this.capturedMass || 1;
     const mShip = player.mass || 130;
     const share = mCatch / (mCatch + mShip);
     const cap = CN.NET_TUG_MAX_DV_MS ?? 0.5;
     const dvMag = Math.min(relSpeed * share, cap);
 
-    // Direction the ship gets PULLED: toward the catch's relative motion
-    // (the tether drags the Mother after the whale).
+    // The tether drags the Mother after the whale.
     const inv = 1 / relSpeed;
     const dvWorld = _v3e.set(rvx * inv, rvy * inv, rvz * inv).multiplyScalar(dvMag);
 
-    // Minor 5 (review): snapshot everything needed AFTER the impulse call into
-    // plain locals BEFORE it. applyCartesianImpulse synchronously emits
-    // COMMS_MESSAGE / THRUST_VISUAL / RESOURCE_CONSUME, and a future listener
-    // re-entering CaptureNet would clobber the module scratch (_v3e/_v3b/_q0)
-    // the comms dirTag and the angular kick are computed from.
+    // Snapshot into plain locals BEFORE the impulse call: it synchronously emits COMMS_MESSAGE / THRUST_VISUAL /
+    // RESOURCE_CONSUME, and a listener re-entering CaptureNet would clobber the module scratch (_v3e/_v3b/_q0).
     let localTugX = 0, localTugY = 0, localTugZ = 0;
     if (player.quaternion) {
       _q0.copy(player.quaternion).invert();
@@ -3316,13 +2735,10 @@ export class NetProjectile {
       localTugX = _v3b.x; localTugY = _v3b.y; localTugZ = _v3b.z;
     }
 
-    // (2) Kept orbit impulse — one-shot, no billing, envelope guard surfaced.
+    // (2) orbit impulse
     const applied = player.applyCartesianImpulse(dvWorld, 0, { noBill: true });
 
-    // (1) Spring soft-capture (§9.8): seed the windowed delivery. The feel
-    // vector is stored on the net and fed into _rcsVelocity over
-    // NET_TUG_WINDOW_S by CaptureNetSystem.update — Σ(step/window) === 1
-    // exactly at any frame rate. M = 1e-5 scene-units-per-metre.
+    // (1) feel: seed the windowed delivery (CaptureNetSystem.update). 1e-5 scene units per metre.
     const windowS = CN.NET_TUG_WINDOW_S ?? 0.65;
     const feelMult = CN.NET_TUG_FEEL_MULT ?? 1.0;
     if (player._rcsVelocity && feelMult > 0 && windowS > 0) {
@@ -3331,29 +2747,23 @@ export class NetProjectile {
       this._tugElapsed = 0;
     }
 
-    // (3) Angular kick: τ_x = r_y·F_z — the ROW_DZ lever × the AXIAL tug
-    // (review item 1: the previous |F_y| term zeroed the pitch for a
-    // boresight tug — the dominant case — and mis-levered the lateral one).
+    // (3) angular kick
     if (player.quaternion && typeof player.mass === 'number') {
       const muzzles = player._netPodMuzzles;
       const muzzle = muzzles && muzzles[this.podIndex];
       const muzzleLocalY = muzzle ? muzzle.position.y : 0;
       if (Math.abs(muzzleLocalY) > 1e-9) {
-        // Angular impulse ∝ linear momentum transferred × lever / I. Reuse
-        // the recoil shape: I = m·0.25; momentum = m_ship·dv (N·s).
+        // Angular impulse ∝ momentum × lever / I, the recoil shape: I = m·0.25.
         const I = mShip * 0.25;
         const leverM = Math.abs(muzzleLocalY) / 1e-5;   // scene units → metres
         const j = mShip * dvMag;                        // N·s (kg·m/s)
         const pitchSign = muzzleLocalY >= 0 ? -1 : 1;
-        // Signed axial component: −Z (aft, the recoil case) → +1 so the
-        // expression reduces exactly to _applyMotherNetRecoil; +Z (forward
-        // pull) → −1. Clamped to ±1.
-        const axial = Math.max(-1, Math.min(1, -localTugZ / Math.max(1e-9, dvMag)));
+        // Signed axial: −Z (aft, the recoil case) → +1 (reduces exactly to _applyMotherNetRecoil); +Z → −1.
+        const axial = clamp(-localTugZ / Math.max(1e-9, dvMag), -1, 1);
         player._recoilPitchVel += pitchSign * (j * leverM / I) * axial;
       }
     }
 
-    // Comms — magnitude + direction, or the honest envelope refusal.
     if (applied) {
       const dirTag = Math.abs(localTugZ) > Math.max(Math.abs(localTugX), Math.abs(localTugY))
         ? (localTugZ > 0 ? 'prograde' : 'retrograde') : 'lateral';
@@ -3368,8 +2778,7 @@ export class NetProjectile {
       });
     }
 
-    // Camera micro-shake payload (CameraSystem listens, whale-only, scaled by
-    // imparted Δv, skipped under prefers-reduced-motion — §9.11).
+    // CameraSystem listens: whale-only shake scaled by imparted Δv, skipped under prefers-reduced-motion (§9.11).
     eventBus.emit(Events.NET_MOTHER_TUG, {
       podIndex: this.podIndex,
       dvMs: applied ? dvMag : 0,
@@ -3377,26 +2786,24 @@ export class NetProjectile {
     });
   }
 
-  /** @private Transition to CAPTURED + emit event */
   /**
-   * u20-nets (2026-10-23, DECISIONS §38 row 5): a DAUGHTER's net that closed on its target keeps every other catchable piece
-   * inside its mouth too, in ONE bag (`DebrisField.mergeIntoBag`). Members, mouth volume, fit and bag size: `scoopRule.js`.
-   * One piece in the mouth: nothing changes (the same piece stays held). The mother's net never scoops. Called once, as the
-   * catch is confirmed, before the mass and the events read `targetDebris`: from here on the net, the daughter and every
-   * system downstream hold the bag.
+   * DECISIONS §38 row 5: a DAUGHTER's net that closed on its target keeps every other catchable piece in its mouth too,
+   * in ONE bag (`DebrisField.mergeIntoBag`; members, mouth volume, fit and bag size: `scoopRule.js`). One piece in the
+   * mouth: nothing changes. The mother's net never scoops. Called once, before the mass and the events read
+   * `targetDebris`: from here on everything downstream holds the bag.
    * @private
    * @returns {object|null} the bag, or null when nothing was scooped
    */
   _scoopIntoBag() {
     if (this._scooped || this._isMother || !(this.armIndex >= 0)) return null;
     const target = this.targetDebris;
-    // a daughter's net carries no `_ctx` (only the mother's do): the system's own field handle, as `canonicalOf` reads it
+    // a daughter's net carries no `_ctx`: use the system's field handle, as `canonicalOf` does
     const field = (this._ctx && this._ctx.debrisField) || (captureNetSystem && captureNetSystem._debrisField) || null;
     if (!target || target.isBag === true || !field || typeof field.mergeIntoBag !== 'function'
         || !Array.isArray(field.debrisList)) return null;
     const arm = this._sourceArm || null;
     const rated = (arm && arm._netRatedMass > 0) ? arm._netRatedMass : (this.netClass.MAX_CAPTURE_MASS || Infinity);
-    // The net may hold a snapshot of its target (`canonicalOf`): the members must be the field's own objects.
+    // the net may hold a snapshot of its target (`canonicalOf`): members must be the field's own objects
     const canon = (typeof field.getDebrisById === 'function' && target.id != null && field.getDebrisById(target.id)) || target;
     if (canon.alive === false) return null;
     const { members } = pickScoopMembers(canon, field.debrisList, this.netClass, {
@@ -3418,6 +2825,7 @@ export class NetProjectile {
     return bag;
   }
 
+  /** @private Transition to CAPTURED + emit event */
   _captureSuccess() {
     this._scoopIntoBag();
     this.catchResult = 'success';
@@ -3425,11 +2833,8 @@ export class NetProjectile {
     this.tangleQuality = this._clingProbability;
     this._transitionTo(STATES.CAPTURED);
 
-    // Phase B §9 — the line-taut tug. The tether just snapped straight on a
-    // whale with residual relative velocity: the catch yanks the Mother.
-    // Runs BEFORE the event emits so the tug's comms/camera payloads read as
-    // part of the capture beat. Mother path only (the daughter's arm absorbs
-    // its own catch momentum).
+    // Line-taut tug (Phase B §9). ORDER: before the event emits, so its comms/camera payloads read as part of the
+    // capture beat. Mother path only (the daughter's arm absorbs its own momentum).
     if (this._isMother) this._applyCaptureTug();
 
     eventBus.emit(Events.NET_CATCH_SUCCESS, {
@@ -3441,7 +2846,6 @@ export class NetProjectile {
       mode:          this.captureMode,
     });
 
-    // Q2 Ceremony: emit ceremony complete
     if (FEATURE_FLAGS.NET_CEREMONY && !this._ceremonyCompleteEmitted) {
       this._ceremonyCompleteEmitted = true;
       eventBus.emit(Events.NET_CEREMONY_COMPLETE, {
@@ -3457,16 +2861,12 @@ export class NetProjectile {
   _miss(reason) {
     this.catchResult = 'miss';
     this._transitionTo(STATES.MISSED);
-    // S5 failure staging: a staged reason (bounce/slip) holds MISSED for
-    // FAILURE_STAGING_S in the system's auto-reel below, so the visual beat
-    // plays at the contact point before the empty reel-back. Unstaged
-    // reasons keep the same-tick auto-reel.
+    // a staged reason (bounce/slip) holds MISSED for FAILURE_STAGING_S in the system's auto-reel; unstaged reasons
+    // auto-reel the same tick
     this._failureKind = missFailureKind(reason);
-    // Review fix (strain-slip lifecycle): a miss can fire AFTER the net already
-    // passed CAPTURED→REELING (the mother strain roll at reel entry), which
-    // set _resultProcessed in CaptureNetSystem.update(). Without resetting it,
-    // needsAutoReel never re-arms and the net strands in MISSED forever —
-    // never pruned, inventory never restored, pins never cleared.
+    // A miss can fire AFTER CAPTURED→REELING (the mother strain roll at reel entry), which set _resultProcessed in
+    // CaptureNetSystem.update(). Reset it, or needsAutoReel never re-arms and the net strands in MISSED forever
+    // (never pruned, inventory never restored, pins never cleared).
     this._resultProcessed = false;
 
     eventBus.emit(Events.NET_CATCH_MISS, {
@@ -3477,7 +2877,6 @@ export class NetProjectile {
       reason,
     });
 
-    // Q2 Ceremony: emit ceremony complete
     if (FEATURE_FLAGS.NET_CEREMONY && !this._ceremonyCompleteEmitted) {
       this._ceremonyCompleteEmitted = true;
       eventBus.emit(Events.NET_CEREMONY_COMPLETE, {
@@ -3488,8 +2887,6 @@ export class NetProjectile {
       });
     }
   }
-
-  // ── Player Commands ────────────────────────────────────────────────────
 
   /**
    * Start reel-in (player command after catch or miss).
@@ -3509,10 +2906,9 @@ export class NetProjectile {
   }
 
   /**
-   * Release / abort: let debris and net go. Net inventory is consumed.
-   * BERTHED/COLLARED is the manual jettison ([K]) — clears pins, re-seats the
-   * orbit, frees the launcher. The securing timer (if still running) is
-   * cancelled; a COLLARED catch was already credited (that score is not revoked).
+   * Release / abort: let debris and net go; the net is consumed. From BERTHED/COLLARED this is the manual jettison
+   * ([K]): clears pins, re-seats the orbit, frees the launcher, cancels a running securing timer. A COLLARED catch
+   * was already credited (not revoked).
    * @returns {boolean} Whether release occurred
    */
   release() {
@@ -3523,11 +2919,8 @@ export class NetProjectile {
         this.state !== STATES.COLLARED) return false;
 
     const wasBerthed = this.state === STATES.BERTHED || this.state === STATES.COLLARED;
-    // S13(c): a mid-cook jettison — the collar's chop was running when the body
-    // left. Stop the breakdown beat honestly: the unflown chunks + the ghost
-    // bag dispose WITHOUT the draw-in (the body left the furnace, not into it);
-    // chunks already committed keep flying to the bus. The half-cooked piece
-    // keeps its _digestProgress — the invested cook is conserved.
+    // Mid-cook jettison: stop the breakdown beat. Unflown chunks + the ghost bag dispose WITHOUT the draw-in; chunks
+    // already committed keep flying to the bus. The half-cooked piece keeps its _digestProgress.
     const dPre = this.targetDebris;
     if (dPre && dPre._breakdownActive) {
       dPre._breakdownActive = false;
@@ -3547,14 +2940,10 @@ export class NetProjectile {
       debrisId: this.targetDebris?.id,
     });
     if (wasBerthed) {
-      // The jettisoned mass just LEFT the berthed ledger (capturedMass zeroed
-      // above; RELEASED drops out of getBerthedMassKg). NET_RELEASED's
-      // listeners (autopilot hold, visual, audio) never invalidate the
-      // attitude inertia, so invalidate the cache directly — the item-63 seam
-      // for a mass-exit that crosses no arm-state change (register item 67(a)).
+      // The mass left the berthed ledger (RELEASED drops out of getBerthedMassKg), but no NET_RELEASED listener
+      // invalidates the attitude inertia: do it here (a mass-exit that crosses no arm-state change).
       const player = this._ctx?.player;
       if (player && '_attitudeInertia' in player) player._attitudeInertia = null;
-      // §4.9: jettison consumes the net — say so.
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Catch released — net expended, launcher clear.',
         source: 'HOUSTON', priority: 'info',
@@ -3564,9 +2953,7 @@ export class NetProjectile {
   }
 
   /**
-   * Force the net into a deterministic result (for testing / scripted events).
-   * Bypasses the random roll.
-   *
+   * Force a deterministic result (tests / scripted events); bypasses the random roll.
    * @param {boolean} success — true for catch, false for miss
    * @param {number} [probability=1.0] — cling probability to report
    */
@@ -3597,9 +2984,7 @@ export class CaptureNetSystem {
     /** @type {NetProjectile[]} Active nets in flight / capture / reel */
     this.activeNets = [];
 
-    // Mother Large Net launcher inventory: one entry per launcher
-    // (MOTHER_POD_COUNT = 1 since 2026-10-13, so a one-element array [count];
-    // it was [podA_count, podB_count] for the two ±0.45 m pods).
+    // Mother Large Net launcher inventory: one entry per launcher (one-element [count] at MOTHER_POD_COUNT = 1).
     this._motherPodInventory = new Array(this._motherPodCount()).fill(0);
     this._motherPodMax       = new Array(this._motherPodCount()).fill(0);
 
@@ -3620,33 +3005,24 @@ export class CaptureNetSystem {
     // First-fragmentation mercy rule (§5.7)
     this._playerHasFragmented = false;
 
-    /** @type {object|null} Injected deps (player, debrisField) — stored by
-     *  init(deps) BEFORE the feature-flag check so a flag-off init still
-     *  leaves the references usable when the flag flips on later. */
+    /** @type {object|null} Injected deps: stored by init(deps) BEFORE the feature-flag check, so a flag-off init
+     *  still leaves them usable if the flag flips on later. */
     this._player = null;
     this._debrisField = null;
-    /** @type {object|null} Optional AudioSystem ref for the winch pitch
-     *  (Phase B §9.3). Injected via init(deps.audioSystem); optional-chained
-     *  so headless tests and the no-audio path stay silent. */
+    /** @type {object|null} Optional (winch pitch, Phase B §9.3); optional-chained so headless tests stay silent. */
     this._audioSystem = null;
-    /** @type {object|null} Optional ArmManager + LassoSystem refs for the
-     *  Phase C-lite recovery-corridor test (strut tips, held daughter
-     *  catches, lasso cargo cells). Absent ⇒ corridor vacuously clear. */
+    /** @type {object|null} Optional: the recovery-corridor test (strut tips, held daughter catches, lasso cargo
+     *  cells). Absent ⇒ corridor vacuously clear. */
     this._armManager = null;
     this._lassoSystem = null;
   }
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────
-
   /**
-   * Initialise inventory to Dyneema Y0 defaults.
-   * Called once at game start / after load.
-   * @param {object} [deps] — { player, debrisField, audioSystem, armManager,
-   *   lassoSystem } context references. `player` backs the mother-pod anchor
-   *   provider; `debrisField` backs the Phase-A pin API (pinCapturedDebris);
-   *   `audioSystem` backs the Phase-B winch pitch; `armManager`/`lassoSystem`
-   *   back the Phase C-lite recovery-corridor test. Optional — the no-arg
-   *   call stays valid for headless tests and test-main-wiring.
+   * Initialise inventory to Dyneema Y0 defaults (game start / after load).
+   * @param {object} [deps] — { player, debrisField, audioSystem, armManager, lassoSystem } context references.
+   *   `player` backs the mother-pod anchor provider; `debrisField` the pin API (pinCapturedDebris); `audioSystem`
+   *   the winch pitch; `armManager`/`lassoSystem` the recovery-corridor test. Optional: no-arg stays valid for
+   *   headless tests and test-main-wiring.
    */
   init(deps = {}) {
     this._player = deps.player || this._player || null;
@@ -3654,12 +3030,12 @@ export class CaptureNetSystem {
     this._audioSystem = deps.audioSystem || this._audioSystem || null;
     this._armManager = deps.armManager || this._armManager || null;
     this._lassoSystem = deps.lassoSystem || this._lassoSystem || null;
-    // followups-1018 D3: room appearing (a tip slot or a rack cell freeing, both emit NET_CONSUMED synchronously)
-    // re-arms a declined collar catch in the same tick. Re-subscribed on every init so a cleared bus cannot orphan it.
+    // Room appearing (a tip slot or a rack cell freeing, both emit NET_CONSUMED synchronously) re-arms a declined
+    // collar catch in the same tick. Re-subscribed on every init so a cleared bus cannot orphan it.
     if (this._unsubNetConsumed) this._unsubNetConsumed();
     this._unsubNetConsumed = eventBus.on(Events.NET_CONSUMED, (p) => this._onRoomFreed(p));
-    // DECISIONS §33 (2026-10-20): a new game, or a restart after game over, gives the mother her 4 nets back.
-    // GameFlowManager.resetGame emits GAME_RESET; reset() is NOT used here (it zeroes the count and has no caller).
+    // DECISIONS §33: a new game, or a restart after game over, gives the mother her 4 nets back (GameFlowManager.resetGame
+    // emits GAME_RESET). reset() is NOT used here: it zeroes the count.
     if (this._unsubGameReset) this._unsubGameReset();
     this._unsubGameReset = eventBus.on(Events.GAME_RESET, () => this._reseedMotherNets());
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
@@ -3718,15 +3094,9 @@ export class CaptureNetSystem {
       }
     }
 
-    // Tick active nets
-    // Daughter-net audio fix (2026-08-27): the flight-whistle state poll
-    // (review item 3) is hoisted OUT of the mother-only block — the whistle
-    // means "a net projectile is in flight" for EITHER launcher family now
-    // that daughter fires start it too (at daughter gain). AudioSystem keeps
-    // ONE whistle instance, so the stop must be "no active net is in a
-    // flight state", not "this net left flight": a berthed mother net
-    // parked at the collar would otherwise kill a flying daughter's whistle
-    // every frame (and pod A's berthed cargo would kill pod B's whistle).
+    // The flight whistle means "a net projectile is in flight" for EITHER launcher family. AudioSystem keeps ONE
+    // whistle instance, so the stop must be "no active net is in a flight state", not "this net left flight": a
+    // berthed mother net at the collar would otherwise kill a flying daughter's whistle every frame.
     let anyNetInFlight = false;
     for (let i = this.activeNets.length - 1; i >= 0; i--) {
       const net = this.activeNets[i];
@@ -3734,14 +3104,10 @@ export class CaptureNetSystem {
 
       net.update(dt);
 
-      // Auto-start reel on capture/miss — detects both in-loop transitions
-      // AND external state changes (e.g. forceResolve called between updates)
+      // Catches in-loop transitions AND external state changes (e.g. forceResolve between updates)
       const needsAutoReel = (net.state === STATES.CAPTURED || net.state === STATES.MISSED)
         && !net._resultProcessed
-        // S5 failure staging: a staged miss holds at the contact point for
-        // FAILURE_STAGING_S so the bounce/slip beat plays before the empty
-        // reel-back (the visual runs on the same wall-clock dt). The player
-        // can still startReel() manually to cut the beat short.
+        // a staged miss holds at the contact point for FAILURE_STAGING_S (wall-clock dt); startReel() cuts it short
         && !(net.state === STATES.MISSED && net._failureKind
              && net.stateTimer < (CN.FAILURE_STAGING_S ?? 0));
       if (needsAutoReel) {
@@ -3752,25 +3118,18 @@ export class CaptureNetSystem {
         const key = net.armIndex >= 0 ? `arm_${net.armIndex}` : `pod_${net.podIndex}`;
         this._cooldownTimers.set(key, cooldown);
 
-        // Daughter captures are hauled home by the ArmUnit, not reeled by the
-        // net itself. Hold the net's reel (bag stays cinched on the debris) so
-        // the netted catch doesn't visually vanish mid-haul; _updateReeling
-        // auto-releases the hold once the daughter delivers (debris unpinned).
-        // Mother-pod captures (podIndex≥0) and misses reel/stow normally.
+        // Daughter captures are hauled home by the ArmUnit: hold the net's reel (bag stays cinched) so the catch
+        // doesn't vanish mid-haul; _updateReeling releases the hold once the debris is unpinned. Mother captures
+        // (podIndex≥0) and misses reel/stow normally.
         if (net.armIndex >= 0 && net.catchResult === 'success') {
           net._heldByArm = true;
         }
 
-        // Auto-start reel (player can still release / override)
         net.startReel();
       }
 
-      // Review item 3 (both families): the flight whistle means "projectile
-      // in flight" — record whether THIS net still is; the shared stop runs
-      // after the loop when no net is. A state poll, NOT the NET_BRAKE_FIRED
-      // hook: that event is gated on FEATURE_FLAGS.NET_CEREMONY, and plan §6
-      // forbids routing anything load-bearing through a flag REALITY_MODE
-      // forces false. Placed BEFORE any `continue` below so every net is
+      // Whistle poll: a state poll, NOT the NET_BRAKE_FIRED hook (gated on FEATURE_FLAGS.NET_CEREMONY, and nothing
+      // load-bearing may route through a flag REALITY_MODE forces false). BEFORE any `continue` below, so every net is
       // counted every frame.
       if (net.state === STATES.LAUNCHING
           || net.state === STATES.SPINNING_UP
@@ -3778,13 +3137,9 @@ export class CaptureNetSystem {
         anyNetInFlight = true;
       }
 
-      // ── Mother per-frame housekeeping (Phase B) ─────────────────────────
       if (net._isMother) {
-        // §9.8 — dt-robust tug delivery. The feel vector seeded at CAPTURED is
-        // fed into _rcsVelocity over NET_TUG_WINDOW_S; step is clamped to the
-        // remaining window, so Σ(step/window) === 1 exactly at any frame rate.
-        // The residual decay is RCS_DAMPING's inherited per-frame behaviour
-        // (shared with manual RCS — deliberately out of scope).
+        // §9.8 dt-robust tug delivery: the feel vector seeded at CAPTURED goes into _rcsVelocity over
+        // NET_TUG_WINDOW_S; step is clamped to the remaining window, so Σ(step/window) === 1 at any frame rate.
         if (net._tugFeelScene && net._tugElapsed < (CN.NET_TUG_WINDOW_S ?? 0.65)) {
           const player = this._player;
           if (player && player._rcsVelocity) {
@@ -3792,9 +3147,7 @@ export class CaptureNetSystem {
             const step = Math.min(dt, windowS - net._tugElapsed);
             net._tugElapsed += step;
             player._rcsVelocity.addScaledVector(net._tugFeelScene, step / windowS);
-            // Minor 6 (review): mirror the manual-RCS clamp
-            // (PlayerSatellite.js:5193) — the tug must not stack past
-            // RCS_MAX_SPEED on top of existing drift.
+            // mirror the manual-RCS clamp (PlayerSatellite): the tug must not stack past RCS_MAX_SPEED on drift
             const maxV = Constants.RCS_MAX_SPEED;
             if (maxV > 0 && player._rcsVelocity.length() > maxV) {
               player._rcsVelocity.normalize().multiplyScalar(maxV);
@@ -3804,30 +3157,21 @@ export class CaptureNetSystem {
           }
         }
 
-        // (Review item 3's whistle stop moved to the shared any-net-in-flight
-        // poll above/below — the whistle is one instance serving BOTH
-        // launcher families now, so a per-net mother stop would clip a
-        // flying daughter's whistle and vice versa.)
-
-        // §9.3: drive the winch pitch from the live reel distance.
-        // Cheap — one setTargetAtTime on a running loop, no-op otherwise.
+        // §9.3: winch pitch from the live reel distance
         if (net.state === STATES.REELING && net._remainingM != null) {
           this._audioSystem?.updateNetReelPitch?.(net._remainingM, net._reelSeedM);
         }
       }
 
-      // ── Mother BERTHED/COLLARED hold + securing timer (§8 A2 + cargo-continuity S3) ──
-      // The projectile's own switch no-ops on both states; the per-frame hold
-      // runs here because the system owns the player/debrisField refs. The hold
-      // survives pruning (isActive stays true, state never STOWED/RELEASED).
-      // S3: the hold keeps running in the terminal state — if the pin ever stops,
-      // the catch falls back to the orbit branch and reads as released.
+      // Mother BERTHED/COLLARED hold + securing timer (§8 A2). The projectile's own switch no-ops on both states;
+      // the hold runs here because the system owns the player/debrisField refs. It survives pruning (isActive stays
+      // true, state never STOWED/RELEASED) and keeps running in the terminal state: if the pin ever stops, the catch
+      // falls back to the orbit branch and reads as released.
       if (net.state === STATES.BERTHED || net.state === STATES.COLLARED) {
         const holding = net.updateBerthHold(dt);
         if (!holding) {
-          // Dead target while docked (§4.19 mission-transition guard): clear
-          // the dock, pins and visual, free the launcher. Do NOT stow as if
-          // the catch succeeded (the daughter's death-in-hand behaviour).
+          // Dead target while docked (§4.19 mission-transition guard): clear dock, pins and visual, free the
+          // launcher. Do NOT stow as if the catch succeeded.
           this._teardownBerth(net);
           this.activeNets.splice(i, 1);
           continue;
@@ -3835,12 +3179,9 @@ export class CaptureNetSystem {
         if (net.state === STATES.BERTHED && !net._berthProcessed && net._berthTimer > 0) {
           net._berthTimer -= dt;
           if (net._berthTimer <= 0) {
-            // §19 terminal credit + S13(c) mating: the existing GameFlowManager
-            // CATCH_PROCESSED path awards score + salvage + clearDebris() +
-            // autosave. { parked: true } skips ONLY the field removal — the
-            // body is KEPT, now MATED at the nose berthing collar inside its
-            // net (the net IS the container). No teardown, no splice: the hold
-            // above keeps pinning the catch every frame.
+            // §19 terminal credit: GameFlowManager's CATCH_PROCESSED path awards score + salvage + autosave.
+            // { parked: true } skips ONLY the field removal: the body is KEPT, MATED at the nose berthing collar
+            // inside its net. No teardown, no splice: the hold above keeps pinning the catch every frame.
             net._berthProcessed = true;
             eventBus.emit(Events.CATCH_PROCESSED, {
               debrisId: net.targetDebris?.id,
@@ -3850,10 +3191,8 @@ export class CaptureNetSystem {
               method:   'mother',
               parked:   true,
             });
-            // A rigid mate does not swing: the berth pendulum applies through
-            // BERTHED only (updateBerthHold) and must not carry energy across
-            // the mate. The residual _lateral decays to the boresight inside
-            // the hold (the guide cone re-centres the body — no snap).
+            // A rigid mate does not swing: the berth pendulum (BERTHED only, updateBerthHold) must not carry energy
+            // across the mate. The residual _lateral decays to the boresight inside the hold (no snap).
             net._pendulumAngle = 0;
             net._pendulumVel = 0;
             net._transitionTo(STATES.COLLARED);
@@ -3861,63 +3200,38 @@ export class CaptureNetSystem {
           }
         }
 
-        // l5c-reach E1: the leash driver is pulling this catch in to the nose (the berth seat shrinks, the hold
-        // above keeps pinning it). The hand-off decision, the furnace clock and the retry all wait for it.
+        // The leash driver is pulling this catch in to the nose (the hold above keeps pinning it): the hand-off
+        // decision, the furnace clock and the retry all wait for it.
         if (net.state === STATES.COLLARED && net._leashNoseReel) continue;
 
-        // ── Cargo hand-off decision (cargo-continuity S7 + the T2 race fix) ──
-        // AUTOMATIC by owner ruling: the player holds no information the ship
-        // lacks, so there is no keypress. The hand-off is decided on the FIRST
-        // COLLARED tick — BEFORE the digestion clock below, because the crane
-        // must win the race with the collar furnace: the chop commits at
-        // span/(45·sunScale) real seconds after the mate (+1.33 s at 3 kg,
-        // +4.43 s at 10 kg in sunlight), so the old DELAY_S 5.0 dwell cooked
-        // every 3–11 kg piece at the collar. While the ship cannot stow (every
-        // daughter out, every rack full, or the body over the mass gate) the
-        // catch stays collared and the refusal comms says so (once — S13(e):
-        // it no longer claims the launcher is blocked; firing is only ever
-        // refused per-shot by the foul read). Retry is silent.
-        // S13(c) routing (the ruling made concrete): the ≤ 2000 kg gate decides
-        // collar-vs-tip — a piece under the gate may leave for a strut tip;
-        // above it, collar-only until digested or dumped.
+        // Cargo hand-off decision. AUTOMATIC by owner ruling (the player holds no information the ship lacks): no
+        // keypress. Decided on the FIRST COLLARED tick, BEFORE the digestion clock below: the crane must win the
+        // race with the collar furnace, whose chop commits span/(45·sunScale) real seconds after the mate (+1.33 s
+        // at 3 kg, +4.43 s at 10 kg in sunlight). While the ship cannot stow (every daughter out, every rack full,
+        // or the body over the mass gate) the catch stays collared and the refusal comms says so once; the retry
+        // is silent. The ≤ 2000 kg gate decides collar-vs-tip: under it a piece may leave for a strut tip; above
+        // it, collar-only until digested or dumped.
         if (net.state === STATES.COLLARED && !net._cargoDeclined) {
-          // `continue` on a successful start, mirroring the BERTHED→COLLARED
-          // transition above: one state change per tick, so the flight always
-          // begins at t=0 on its own frame instead of consuming the trigger
-          // frame's (possibly huge) dt in one jump — and the digestion clock
-          // below never ticks on an accepted piece (it leaves whole, with
-          // _digestProgress 0).
+          // `continue` on success: one state change per tick, so the flight begins at t=0 on its own frame (not
+          // consuming the trigger frame's possibly huge dt), and the digestion clock never ticks on an accepted piece.
           if (this._tryCargoTransfer(net)) continue;
-          // Declined for ANY reason (no armManager, no qualifying carrier,
-          // refusal, the furnace guard): record it and fall through — the
-          // digest ticks in THIS frame, so a declined path's cook timeline is
-          // unchanged.
+          // Declined for ANY reason: record it and fall through, so the digest ticks in THIS frame.
           net._cargoDeclined = true;
         }
 
-        // ── S13(c): the collar's digestion clock (register item 47) ──────
-        // The collared piece cooks on the SAME sun-scaled transit clock the
-        // daughter rack runs (the concentrator doesn't care where the crucible
-        // is). At completion the beat fires NET_CONSUMED + CATCH_PROCESSED
-        // (digested — the mate already paid the credit, GameFlowManager skips
-        // it) and the collar frees. A completed digest splices the net in-tick
-        // (the same one-state-change-per-tick idiom as the mate above).
-        // CUT_AT_NOSE (plan L4): while pieces remain to cut (or one is
-        // waiting/flying) the clock is FROZEN — `_breakdownStarted` would
-        // close the transfer window and the boss would cook mid-cut. Flag OFF
-        // → `_cutActive` is always false → byte-identical.
+        // Collar digestion clock: the piece cooks on the SAME sun-scaled transit clock as the daughter rack. At
+        // completion the beat fires NET_CONSUMED + CATCH_PROCESSED (digested; the mate already paid the credit,
+        // GameFlowManager skips it) and the collar frees. A completed digest splices the net in-tick.
+        // CUT_AT_NOSE: while pieces remain to cut (or one is waiting/flying) the clock is FROZEN, else
+        // `_breakdownStarted` would close the transfer window and the boss would cook mid-cut.
         if (net.state === STATES.COLLARED
             && !this._cutActive(net) && this._tickCollarDigestion(net, dt)) {
           this.activeNets.splice(i, 1);
           continue;
         }
 
-        // ── Cargo hand-off retry (cargo-continuity S7) ────────────────────
-        // After a decline, silently re-offer on the RETRY_S cadence: the
-        // scorer allocates (computeCoM), and an unstowable catch can sit
-        // collared for minutes — the net path must not allocate per frame
-        // (plan §13). The transfer fires by itself the moment a daughter
-        // docks or a cell frees.
+        // After a decline, silently re-offer on the RETRY_S cadence: the scorer allocates (computeCoM) and an
+        // unstowable catch can sit collared for minutes, so the net path must not allocate per frame.
         if (net.state === STATES.COLLARED && net._cargoDeclined) {
           net._cargoRetryS = (net._cargoRetryS || 0) + dt;
           if (net._cargoRetryS >= (CT.RETRY_S ?? 0.5)) {
@@ -3926,25 +3240,19 @@ export class CaptureNetSystem {
           }
         }
 
-        // ── CUT_AT_NOSE: the cut driver (plan L1/L5/L7) ───────────────────
-        // One piece at a time: CUT_S game-seconds per cut (machine time, not
-        // sun-scaled), the piece departs only when the crane is free and a
-        // daughter qualifies, and the held part is never cut off — the
-        // ordinary retry above takes it once the plan is done. No state
-        // change here: the boss stays COLLARED; the detached piece rides its
-        // own synthetic net (L7).
+        // CUT_AT_NOSE cut driver: one piece at a time, CUT_S game-seconds per cut (machine time, not sun-scaled);
+        // a piece departs only when the crane is free and a daughter qualifies; the held part is never cut off (the
+        // retry above takes it once the plan is done). The boss stays COLLARED; the detached piece rides its own
+        // synthetic net.
         if (net.state === STATES.COLLARED && net._cutPlan && FEATURE_FLAGS.CUT_AT_NOSE) {
           this._driveCutAtNose(net, dt);
         }
       }
 
-      // ── Cargo hand-off beat (cargo-continuity S7) ───────────────────────
-      // The catch + its bag fly the FurnaceBreakdownVisual chunk arc backwards:
-      // nose → strut tip, whole catch, no chunk pool, no scale ramp. The pin is
-      // rewritten EVERY frame (a gap reads as a release — S3's lesson) and the
-      // net's own position rides the same curve so the bag stays the container.
-      // Leash hand-off (lane l5b-wire): a net on its leash is driven by LeashDriver.update
-      // (main.js, right after this system) — it pins the catch and moves the net itself.
+      // Cargo hand-off beat: the catch + its bag fly the FurnaceBreakdownVisual chunk arc backwards (nose → strut
+      // tip, whole catch, no chunk pool, no scale ramp). The pin is rewritten EVERY frame (a gap reads as a release)
+      // and the net rides the same curve so the bag stays the container. A net on its leash is driven by
+      // LeashDriver.update (main.js, right after this system), which pins the catch and moves the net itself.
       if (net.state === STATES.TRANSFERRING && !net._leash) {
         if (this._updateCargoTransfer(net, dt)) {
           this.activeNets.splice(i, 1);      // handed over: the net's job is done
@@ -3952,27 +3260,22 @@ export class CaptureNetSystem {
         }
       }
 
-      // Remove terminal nets + handle inventory / cargo consequences.
-      // BERTHED and COLLARED are deliberately absent — a held net must hit
-      // neither the prune predicate nor the STOWED cargo hand-off (§8 A2, S3).
+      // Remove terminal nets. BERTHED and COLLARED are deliberately absent: a held net must hit neither the prune
+      // predicate nor the STOWED cargo hand-off (§8 A2).
       if (!net.isActive || net.state === STATES.STOWED || net.state === STATES.RELEASED) {
-        // Mother exits (miss / release / forceResolve) — clear any pins the
-        // reel/berth wrote. Idempotent; most exits fire before any pin exists.
+        // Mother exits (miss / release / forceResolve): clear any pins the reel/berth wrote (idempotent).
         if (net._isMother) {
           this._clearCatchPins(net.targetDebris);
-          // CUT_AT_NOSE: the [K] jettison path never calls _teardownBerth —
-          // release a still-waiting cut piece here (same law: cargo is never
-          // destroyed; the piece becomes free salvage at its last pin).
+          // CUT_AT_NOSE: the [K] jettison path never calls _teardownBerth: release a still-waiting cut piece here
+          // (cargo is never destroyed; it becomes free salvage at its last pin).
           if (net._cutPiece && !net._cutPieceFlying) this._releaseCutPiece(net._cutPiece);
         }
 
-        // DECISIONS §33 row 1 (2026-10-20): a fired net is used up, hit or miss. A missed net cannot be refolded
-        // in space, so nothing is restored here (the §3.5 refund of the old reusable-net rule is gone).
+        // DECISIONS §33 row 1: a fired net is used up, hit or miss (a missed net cannot be refolded in space), so
+        // nothing is restored here.
 
-        // ST-9.4d: Cargo hand-off — successful capture reeled to platform.
-        // Gated OFF for mother catches (§8 A2): the berth + securing timer
-        // replaces the daughter's cargo-store path (a mother catch berths, it
-        // is never stuffed into a cargo cell it cannot fit).
+        // Cargo hand-off of a successful capture. Gated OFF for mother catches (§8 A2): they berth instead of being
+        // stuffed into a cargo cell they cannot fit.
         if (net.state === STATES.STOWED && net.catchResult === 'success' && net.capturedMass > 0
             && !(net.podIndex >= 0 && net.armIndex < 0)) {
           eventBus.emit(Events.CARGO_STORE, {
@@ -3985,9 +3288,8 @@ export class CaptureNetSystem {
           });
         }
 
-        // Manual jettison from BERTHED ([K]) — re-seat the orbit so the whale
-        // resumes from where it was released, not wherever its own orbit
-        // propagated to while pinned (§8 A2). Net is expended (no restore).
+        // Manual jettison from BERTHED ([K]): re-seat the orbit so the whale resumes where it was released, not
+        // where its own orbit propagated to while pinned (§8 A2).
         if (net.state === STATES.RELEASED && net._isMother) {
           this._reseatOrbitOnRelease(net);
         }
@@ -3996,67 +3298,45 @@ export class CaptureNetSystem {
       }
     }
 
-    // Review item 3 chokepoint (extended to daughters, 2026-08-27): the
-    // whistle survives only while SOME active net is in a flight state.
-    // Covers every path with no per-launcher stop event — expiry misses are
-    // event-stopped, but this poll is the backstop that makes a leaked
-    // daughter (or mother) whistle structurally impossible. No-op when no
-    // whistle is running; optional-chained for headless tests without audio.
+    // Backstop: the whistle survives only while SOME active net is in a flight state (expiry misses are
+    // event-stopped; this makes a leaked whistle structurally impossible).
     if (!anyNetInFlight) this._audioSystem?.stopNetFlightWhistle?.();
   }
 
   /**
-   * Cargo-continuity S7 — try to hand a COLLARED catch to a daughter's cargo rack.
-   *
-   * Automatic by owner ruling (2026-08-12): no hotkey. `suggestCargoArm` is the
-   * single gatekeeper for "may this piece go to a daughter, and which one" — it
-   * owns the mass gate, the free-cell rule, the home rule and the
-   * last-capture-capable-daughter guard. When it declines, the catch stays at
-   * the collar (S3's launcher block is then real information) and the refusal
-   * comms fires exactly ONCE per mate; the retry is silent, so the transfer
-   * happens by itself the moment a daughter docks or a cell frees. S13(c): the
-   * start anchor is the collar seat ({kind:'collar'}).
-   *
+   * Try to hand a COLLARED catch to a daughter's cargo rack. Automatic by owner ruling 2026-08-12 (no hotkey).
+   * `suggestCargoArm` is the single gatekeeper for "may this piece go to a daughter, and which one": it owns the mass
+   * gate, the free-cell rule, the home rule and the last-capture-capable-daughter guard. When it declines, the catch
+   * stays at the collar and the refusal comms fires exactly ONCE per mate; the retry is silent. The start anchor is
+   * the collar seat ({kind:'collar'}).
    * @param {NetProjectile} net — a COLLARED mother net
    * @returns {boolean} true when the beat started
    * @private
    */
   _tryCargoTransfer(net) {
-    const M_NET = Constants.SCENE_UNITS_PER_METER;  // 1 m in scene units (file convention: a local per method)
+    const M_NET = Constants.SCENE_UNITS_PER_METER;  // 1 m in scene units
     const d = net.targetDebris;
     const player = this._player;
     const armManager = this._armManager;
     if (!d || !armManager || !Array.isArray(armManager.arms)) return false;
 
-    // CUT_AT_NOSE (plan L3/L5): while a cut plan is under way the boss is
-    // MID-CUT — the pieces leave one at a time below, and the boss itself may
-    // only take this ordinary path once the plan is done and only the held
-    // part remains (it is then ≤ the gate by construction). Silent decline:
-    // the plan's own comms already spoke; the cut driver owns the timeline.
+    // CUT_AT_NOSE: mid-cut the boss may take this path only once the plan is done and only the held part remains
+    // (then ≤ the gate by construction). Silent decline: the cut driver owns the timeline and its comms.
     if (this._cutActive(net)) return false;
 
-    // S13(c) pre-commit review: once the collar's furnace has COMMITTED to the
-    // piece (the chop START fired), the transfer window is closed — you cannot
-    // crane a half-eaten body. Without this guard a late acceptance (racks were
-    // full past the hold fraction, or a light piece's short span) would fly a
-    // mid-chop/mid-feed body — already shrinking, chunks committed — to the
-    // rack: the collar-anchored ghost bag + unflown pool chunks leak forever
-    // (NET_CONSUMED for that anchor never comes), the rack fires a SECOND
-    // BREAKDOWN_START, and the drawn body rides the crane invisible. Silent
-    // decline (not a refusal — no comms): the furnace owns it now; the cook
+    // Once the collar's furnace has COMMITTED (the chop START fired) the transfer window is closed: a late
+    // acceptance would fly a half-eaten body to the rack, leak the collar-anchored ghost bag + unflown chunks
+    // (NET_CONSUMED for that anchor never comes) and fire a SECOND BREAKDOWN_START. Silent decline: the cook
     // completes at the collar and the mass leaves the ledger exactly once.
     if (net._breakdownStarted) return false;
 
-    // Leash hand-off (lane l5b-wire, DECISIONS §1): a small catch goes to a radiator tip on its
-    // own leash. A leash that failed (snag, rejected turn) brought the catch back to the nose:
-    // no second try. With FURNACE_COOK on, never the rack either — the nose furnace takes it
-    // (coordinator ruling 2026-10-14). With it off (no-melt, DECISIONS §12) nothing at the nose
-    // takes it, so a failed hand-off skips the leash block and goes to the daughter rack below —
-    // no ship turn, no gas (lane leash-fail-rack). The 0.5 s retry above re-offers it; with no
-    // free cell the usual refusal line is said once. It waits (silently) until the hand-off has
-    // finished: the net is relatched when the catch is home, but the radiators are still unfolding
-    // for ~9 s and the failure line comes at the end (measured: rack flight at 35.0-38.1 s with the
-    // radiators folded, "did not work" at 43.9 s). The rack beat starts after the radiators are home.
+    // Leash hand-off (DECISIONS §1): a small catch goes to a radiator tip on its own leash. A leash that failed
+    // (snag, rejected turn) brought the catch back to the nose: no second try. With FURNACE_COOK on, never the rack
+    // either: the nose furnace takes it (coordinator ruling 2026-10-14). With it off (no-melt, DECISIONS §12) nothing at the nose
+    // takes it, so a failed hand-off skips the leash block and goes to the daughter rack below (no ship turn, no
+    // gas); with no free cell the usual refusal line is said once. It waits silently until the hand-off has finished:
+    // the net is relatched when the catch is home, but the radiators are still unfolding (~9 s) and the failure line
+    // comes at the end, so the rack beat starts only after the radiators are home.
     let gasShort = false;
     if (net._leashFailed) {
       if (Constants.isFeatureEnabled('FURNACE_COOK')) return false;
@@ -4066,16 +3346,14 @@ export class CaptureNetSystem {
       const verdict = this._tryLeash(net, d);
       if (verdict === 'started') return true;
       if (verdict === 'declined') return false;
-      // gas-low-fail-fast D1/D2: 'rack' because the tank cannot pay for the swing (not because the catch is too big or
-      // no tip is free). The line is chosen below, once we know whether a cell is free.
+      // 'rack' because the tank cannot pay for the swing (not because the catch is too big or no tip is free); the
+      // line is chosen below, once we know whether a cell is free.
       gasShort = net._gasShort === true;
     }
 
     const massKg = net.capturedMass || d.mass || 0;
-    // CUT_AT_NOSE dust guard: the planner guarantees every piece ≤
-    // maxPieceKg×(1+1e-9); a float-dust overhang on the held part (≤1e-6 kg)
-    // must not strand it at the gate forever — clamp it to the gate. The
-    // ledger effect is below every conservation tolerance.
+    // CUT_AT_NOSE dust guard: the planner guarantees every piece ≤ maxPieceKg×(1+1e-9); clamp a float-dust overhang
+    // on the held part (≤1e-6 kg, below every conservation tolerance) so it is not stranded at the gate forever.
     const _gate = CT.MAX_KG ?? 2000;
     let gateMassKg = massKg;
     if (net._cutPlan && net._cutNext >= net._cutPlan.pieces.length - 1
@@ -4083,19 +3361,16 @@ export class CaptureNetSystem {
       gateMassKg = _gate;
     }
     const booked = this._armsWithCargoOnTheWay();
-    const armIndex = suggestCargoArm(armManager, player, gateMassKg, 0, booked, DebrisField.trueReachM(d, d.sizeMeter || 0));   // hold-clear D7: + her reach
+    const armIndex = suggestCargoArm(armManager, player, gateMassKg, 0, booked, DebrisField.trueReachM(d, d.sizeMeter || 0));   // + her reach
     if (armIndex == null) {
       if (!net._cargoRefused) {
         net._cargoRefused = true;
         const overGate = gateMassKg > _gate;
-        // CUT_AT_NOSE (plan L1/L2): the over-gate refusal is where the cut
-        // planner is called — exactly once, at the receiver's own limit (no
-        // new number). Requires a spawn-capable field (a DebrisField without
-        // spawnCutPiece — a mock, or a legacy build — keeps today's refusal
-        // and the collar ride; a cut plan whose pieces cannot be drawn is
-        // worse than no cut plan).
-        // Nets step 3 slice 5 (lane 5b, C5): a pending BIG piece is never cut automatically: it stays whole at the collar (only the melt,
-        // lane 5e, cuts one), and says so in its own words (no K: K does not let it go).
+        // CUT_AT_NOSE: the over-gate refusal is where the cut planner is called, exactly once, at the receiver's own
+        // limit. Requires a spawn-capable field (without spawnCutPiece, e.g. a mock, the refusal and collar ride
+        // stand: a cut plan whose pieces cannot be drawn is worse than none).
+        // A pending BIG piece is never cut automatically: it stays whole at the collar (only the melt cuts one) and
+        // says so in its own words (no K: K does not let it go).
         const bigPending = bigPieces.isPending(d);
         if (overGate && !bigPending && FEATURE_FLAGS.CUT_AT_NOSE
             && this._debrisField
@@ -4118,22 +3393,19 @@ export class CaptureNetSystem {
             priority: 'warning',
           });
         } else if (gasShort && !overGate) {
-          // gas-low-fail-fast D2: the catch could not go by radiator for want of gas AND no daughter can take it:
-          // ONE line that names both and the way out, instead of the usual refusal line. Once per catch (the latch
-          // outlives `_cargoRefused`, which a rack flight that is called off re-arms).
-          // nets-1b R5: the catch really stays at the nose; this line is the only one (it says no daughter has a cell, and
-          // how to let it go), so there is no separate "parked at the nose" line.
+          // No gas for the radiator AND no daughter can take it: ONE line naming both and the way out, instead of the
+          // usual refusal line. Once per catch (the latch outlives `_cargoRefused`, which a called-off rack flight
+          // re-arms). It is the only line: no separate "parked at the nose" line.
           this._sayGasShort(net, 'full');
         } else {
-          // nets-1b R5: stays at the nose (no cell, or over the gate with no cut). The reason line below already says
-          // where it stays, so it is the only line: no separate "parked at the nose" line, and plain words for the key.
-          // no-melt: the furnaces run only on the trip to the next field (trip-melt) - do not promise one now.
+          // Stays at the nose (no cell, or over the gate with no cut); the reason line below says so and is the only
+          // line. No-melt: the furnaces run only on the trip to the next field, so do not promise one now.
           const furnace = Constants.isFeatureEnabled('FURNACE_COOK');
           const fate = furnace
             ? 'It rides the collar until the furnace takes it. Press K to let it go.'
             : 'It stays at the collar and goes to a furnace on the trip to the next field if it fits one. Press K to let it go.';
-          // one-catch (owner 2026-10-22): a daughter holds one catch, so "no daughter can take it" has two true reasons: each
-          // one is away or already holds a catch, or exactly one is home and empty and stays ready for the next capture.
+          // A daughter holds one catch (owner 2026-10-22), so "no daughter can take it" has two true reasons: each is
+          // away or already holds a catch, or exactly one is home and empty and stays ready for the next capture.
           const keptReady = countEmptyDockedDaughters(armManager, booked) > 0;
           eventBus.emit(Events.COMMS_MESSAGE, {
             source: 'HOUSTON', channel: 'CMD',
@@ -4152,16 +3424,13 @@ export class CaptureNetSystem {
     const arm = armManager.arms[armIndex];
     if (!arm) return false;
 
-    // gas-low-fail-fast D2: the swing to a radiator was skipped for want of steering gas and a cell is free — say why
-    // the catch goes to the rack (it never left the nose, so there is no "did not work" line). Once per catch.
+    // The swing to a radiator was skipped for want of steering gas and a cell is free: say why the catch goes to the
+    // rack (it never left the nose, so no "did not work" line). Once per catch.
     if (gasShort) this._sayGasShort(net, 'rack');
 
-    // Endpoints, both exact so neither end snaps. START is the catch's LIVE
-    // drawn position — `_scenePosition`, what `pinCapturedDebris` wrote last
-    // frame (plan correction: NOT the bus centre; the collared catch lives at
-    // the berth-hold pin, and the bag apex sits `_catchSeatM` short of it). END
-    // is the rack SLOT the piece will occupy, so the arc lands exactly where
-    // `_pinHeldCatches` takes over.
+    // Endpoints, both exact so neither end snaps. START is the catch's LIVE drawn position (`_scenePosition`, what
+    // `pinCapturedDebris` wrote last frame), NOT the bus centre: the bag apex sits `_catchSeatM` short of the berth-hold
+    // pin. END is the rack SLOT the piece will occupy, so the arc lands where `_pinHeldCatches` takes over.
     const seatM = (net._catchSeatM || 0) * M_NET;
     let start;
     if (d._scenePosition && d._scenePosition.lengthSq() > 0) {
@@ -4176,14 +3445,10 @@ export class CaptureNetSystem {
     }
     const end = _v3g.copy(this._cargoSlotWorld(arm, d, _v3g));
 
-    // The three control points are born in the world, then also stored in the
-    // SHIP's frame: the flight re-derives them from the live ship pose every
-    // frame, so the arc rides with the ship instead of staying where the ship
-    // WAS when the beat began (research 2026-10 capture-repros A2: drawn up to
-    // ~232 km away, then snapping back to the strut).
+    // The three control points are born in the world and also stored in the SHIP's frame: the flight re-derives them
+    // from the live ship pose every frame, so the arc rides with the ship (else drawn up to ~232 km away).
     this._seedCargoArc(net, start, end);
-    // The catch turns with the ship for the whole flight (D3): make sure the
-    // net knows its ship-relative attitude before the first flight frame.
+    // The catch turns with the ship for the whole flight: seed its ship-relative attitude before the first frame.
     this._seedCatchLocal(net, d);
     net._cargoArmIndex = armIndex;
     net._cargoS = 0;
@@ -4204,10 +3469,9 @@ export class CaptureNetSystem {
   }
 
   /**
-   * R2 (fix round 1): the arm indices that already have a cargo flight on the way - a whole catch or a cut piece in
-   * TRANSFERRING with a daughter as its carrier (a leash flight to a radiator tip carries no `_cargoArmIndex`). Such a
-   * daughter is still DOCKED with an empty rack until the piece lands, so `heldCatches` alone cannot tell the next
-   * booking to leave her out; `suggestCargoArm` counts each one as holding a catch.
+   * The arm indices that already have a cargo flight on the way: a whole catch or a cut piece in TRANSFERRING with a
+   * daughter as its carrier (a leash flight carries no `_cargoArmIndex`). Such a daughter is still DOCKED with an empty
+   * rack until the piece lands, so `heldCatches` alone cannot exclude her; `suggestCargoArm` counts each as holding a catch.
    * @returns {Set<number>}
    * @private
    */
@@ -4221,13 +3485,11 @@ export class CaptureNetSystem {
   }
 
   /**
-   * gas-low-fail-fast D2 — tell the player the tank is too low to swing this catch to a radiator, once per catch.
-   * `'rack'` = a cell is free, the catch goes to the daughter rack now; `'full'` = no daughter can take it, so it waits
-   * at the nose (the player can let it go with [K]). The latch (`net._gasShortSaid`) is on the net, so a new catch
-   * starts clear, and the 0.5 s retry cannot repeat a line. One exception, so no line is left untrue: a 'rack' line
-   * followed by a rack flight that was called off (the daughter left her strut) with no cell free after all says the
-   * 'full' line; and a 'full' line followed by a cell that frees needs no second line (the rack's own "Catch stowed"
-   * line follows).
+   * Tell the player the tank is too low to swing this catch to a radiator, once per catch (latch `net._gasShortSaid`
+   * on the net, so the 0.5 s retry cannot repeat a line). `'rack'` = a cell is free, the catch goes to the daughter
+   * rack now; `'full'` = no daughter can take it, so it waits at the nose ([K] lets it go). One exception, so no line is
+   * left untrue: a 'rack' line followed by a called-off rack flight with no cell free after all says the 'full' line;
+   * a 'full' line followed by a cell that frees needs no second line (the rack's own "Catch stowed" line follows).
    * @param {NetProjectile} net
    * @param {'rack'|'full'} kind
    * @private
@@ -4242,22 +3504,21 @@ export class CaptureNetSystem {
         ? 'Not enough steering gas to swing the catch to a radiator. Stowing it on the rack.'
         : 'Not enough steering gas to swing the catch to a radiator, and no daughter can take it. Press K to let it go.',
       priority: 'warning',
-      _critical: true, // review 2026-10-19: past the onboarding tier filter, so the screen always says why (owner 23:26Z)
+      _critical: true, // past the onboarding tier filter, so the screen always says why (owner 2026-10-18 23:26Z)
     });
   }
 
   /**
-   * Leash hand-off (lane l5b-wire) — D1. Decide whether this COLLARED catch goes by leash.
+   * Decide whether this COLLARED catch goes by leash.
    * @param {NetProjectile} net
    * @param {object} d — the catch
-   * @returns {'started'|'declined'|'rack'} 'rack' = not a leash catch (too big for a tip, no
-   *   free tip, no driver): the caller takes today's path unchanged. 'declined' = it fits but
-   *   cannot start now (refusal said once per reason): retried on the usual 0.5 s cadence,
-   *   never sent to the rack.
+   * @returns {'started'|'declined'|'rack'} 'rack' = not a leash catch (too big for a tip, no free tip, no driver):
+   *   the caller takes the rack path. 'declined' = fits but cannot start now (refusal said once per reason):
+   *   retried on the usual 0.5 s cadence, never sent to the rack.
    * @private
    */
   _tryLeash(net, d) {
-    net._gasShort = false;         // gas-low-fail-fast: set below only when THIS call finds the tank short for the swing
+    net._gasShort = false;         // set below only when THIS call finds the tank short for the swing
     const player = this._player;
     const drv = player && player.leashDriver;
     const tc = player && player.tipCargo;
@@ -4266,31 +3527,28 @@ export class CaptureNetSystem {
     if (!tc.fits(radiusM)) return 'rack';
     const tip = tc.pickTip();
     if (tip == null) return 'rack';
-    // Out of the line's reach at the berth seat (a mother-net catch rides 3.3-5.0 m deep in the bag, 5.9-7.5 m
-    // from the ship centre, measured l5c-reach Step 0): the net's winch first pulls it in to the nose
-    // (l5c-reach E1) if the line can reach it from there; if it cannot even then, folding the radiators would be
-    // for nothing and today's rack path takes it.
+    // Out of the line's reach at the berth seat (a mother-net catch rides 3.3-5.0 m deep in the bag, 5.9-7.5 m from the
+    // ship centre, measured): the net's winch first pulls it in to the nose if the line can reach it from there;
+    // if not even then, the rack path takes it (folding the radiators would be for nothing).
     let noseReel = false;
     if (typeof drv.canReach === 'function' && !drv.canReach(d, tip)) {
       if (typeof drv.canReachAtNose !== 'function' || !drv.canReachAtNose(net, d, tip)) return 'rack';
       noseReel = true;
     }
-    // gas-low-fail-fast D1: a hand-off pays for one steering-gas turn. If the tank cannot pay for it, do not fold the
-    // radiators for nothing — the old path ran ~41 s, said nothing, and ended in the same refusal at the turn. The catch
-    // takes the rack path now; `_tryCargoTransfer` says why (once) when it knows whether a cell is free. D3: with the
-    // furnace on, the nose furnace takes a failed catch, so the old path stays exactly as it was.
+    // A hand-off pays for one steering-gas turn. If the tank cannot pay, take the rack path now instead of folding the
+    // radiators for nothing; `_tryCargoTransfer` says why (once) when it knows whether a cell is free. With the
+    // furnace on, the nose furnace takes a failed catch, so this check is skipped.
     if (!Constants.isFeatureEnabled('FURNACE_COOK') && typeof drv.gasShort === 'function'
         && drv.gasShort(net, d, tip, { noseReel })) {
       net._gasShort = true;
       return 'rack';
     }
-    // u23: a profile trip shows ONE flown pass. Once it has begun the leash starts for no other catch (the retry would beat the trip's own look);
-    // the trip hands this one to a tip unflown. Silent: nothing is wrong, and no line is owed. The pass's own leash is let through.
+    // A profile trip shows ONE flown pass: once begun, the leash starts for no other catch (the trip hands this one to
+    // a tip unflown). Silent; the pass's own leash is let through.
     if (tripLeashRefuses(net)) return 'declined';
     const why = drv.refusal(net);
     if (why) {
-      // A 'busy' refusal (the previous catch still holds the leash driver) is never spoken: this catch simply starts
-      // when the retry finds the driver free ("Handing the catch to radiator N" is then the one line).
+      // A 'busy' refusal (previous catch still holds the driver) is never spoken: this catch starts when the retry finds it free.
       drv.announceRefusal(net, why);
       return 'declined';
     }
@@ -4298,16 +3556,15 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Take a net out of play in this very tick (lane l5b-wire): the leash driver calls it right
-   * after it stows the catch on a radiator tip, so the nose ledger and the tip ledger never
-   * both hold the mass, and the next tick's prune never clears the pins of the stowed body.
-   * Safe to call outside the update loop only (it splices `activeNets`).
+   * Take a net out of play in this very tick: the leash driver calls it right after it stows the catch on a radiator
+   * tip, so the nose ledger and the tip ledger never both hold the mass, and the next tick's prune never clears the
+   * pins of the stowed body. Safe to call outside the update loop only (it splices `activeNets`).
    * @param {NetProjectile} net
    * @returns {boolean} true when the net was in the list
    */
   removeNetNow(net) {
     net.isActive = false;
-    net._leashNoseReel = false;      // l5c-reach: a net taken out of play is no longer being reeled in to the nose
+    net._leashNoseReel = false;
     const i = this.activeNets.indexOf(net);
     if (i < 0) return false;
     this.activeNets.splice(i, 1);
@@ -4315,19 +3572,11 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Cargo-continuity S7 — the transfer beat, one frame.
-   *
-   * Drives ONE curve: the bag's apex anchor (`net.position`) and the catch's pin
-   * both come from the same Bézier evaluation, with the same seat offset the
-   * berth hold uses, so the catch stays seated INSIDE its bag in transit ("cargo
-   * stored in nets"). The pin is rewritten every frame — if it ever stops, the
-   * catch falls back to the orbit branch and reads as released.
-   *
-   * On arrival the piece is stowed on the rack and the daughter is put into
-   * HOLDING_CATCH (the pin loop in ArmManager only services REELING/DOCKING/
-   * HOLDING_CATCH, so a DOCKED carrier must transition or the piece would go
-   * unpinned for a frame). Mother-side fields are cleared to exactly what a
-   * daughter-caught rack piece carries.
+   * The transfer beat, one frame. ONE Bézier curve drives both the bag's apex anchor (`net.position`) and the catch's
+   * pin, with the berth hold's seat offset, so the catch stays seated INSIDE its bag. The pin is rewritten every frame:
+   * if it stops, the catch falls back to the orbit branch and reads as released. On arrival the piece is stowed on the
+   * rack and the daughter goes into HOLDING_CATCH (ArmManager's pin loop only services REELING/DOCKING/HOLDING_CATCH,
+   * so a DOCKED carrier must transition or the piece goes unpinned for a frame).
    *
    * @param {NetProjectile} net — a TRANSFERRING mother net
    * @param {number} dt — seconds
@@ -4335,21 +3584,18 @@ export class CaptureNetSystem {
    * @private
    */
   _updateCargoTransfer(net, dt) {
-    const M_NET = Constants.SCENE_UNITS_PER_METER;  // 1 m in scene units (file convention: a local per method)
+    const M_NET = Constants.SCENE_UNITS_PER_METER;  // 1 m in scene units
     const d = net.targetDebris;
     const debrisField = this._debrisField;
     const armManager = this._armManager;
     const arm = armManager?.arms?.[net._cargoArmIndex];
 
-    // Target or carrier lost mid-beat (mission transition / detach): put the
-    // catch back at the collar rather than dropping it — cargo is never destroyed.
+    // Target or carrier lost mid-beat (mission transition / detach): put the catch back at the collar; cargo is never destroyed.
     if (!d || d.alive === false || !arm || !net._cargoFrom || !net._cargoTo) {
-      clearRackCell(d);                 // rack-snug: an aborted flight forgets the cell it was heading for
-      // CUT_AT_NOSE: a cut piece never "goes back to the collar" — the boss
-      // owns the collar. The piece returns to the nose as a waiting piece
-      // (the driver re-pins it and retries), or is simply dropped from the
-      // cut bookkeeping if it died with the transition. The piece net is
-      // spliced either way; the boss net's COLLARED hold is untouched.
+      clearRackCell(d);                 // an aborted flight forgets the cell it was heading for
+      // CUT_AT_NOSE: a cut piece never "goes back to the collar" (the boss owns it). It returns to the nose as a
+      // waiting piece (the driver re-pins and retries), or is dropped from the cut bookkeeping if it died. The piece
+      // net is spliced either way; the boss net's COLLARED hold is untouched.
       if (net._cutBossNet) {
         const bossNet = net._cutBossNet;
         net._cutBossNet = null;
@@ -4368,18 +3614,13 @@ export class CaptureNetSystem {
       return true;
     }
 
-    // The carrier LEFT her strut mid-flight (the player can still deploy her —
-    // she is DOCKED, not HOLDING_CATCH, until arrival). Abort: her rack pin only
-    // runs in REELING/DOCKING/HOLDING_CATCH, so delivering to a departing arm
-    // would orphan the piece and it would read as released. The catch goes back
-    // to the collar and the retry re-picks a carrier.
+    // The carrier LEFT her strut mid-flight (DOCKED, not HOLDING_CATCH, until arrival). Abort: her rack pin only runs
+    // in REELING/DOCKING/HOLDING_CATCH, so delivering to a departing arm would orphan the piece. Back to the collar;
+    // the retry re-picks a carrier.
     const SA = Constants.ARM_STATES;
     if (arm.state !== SA.DOCKED && arm.state !== SA.HOLDING_CATCH) {
-      clearRackCell(d);                 // rack-snug: the retry computes a fresh cell (the carrier may differ)
-      // CUT_AT_NOSE: same abort, cut-piece routing — back to the nose as a
-      // waiting piece; the piece net splices (never COLLARED: the collar's
-      // occupant is the boss). The comms line below is still true: the cargo
-      // stays at the collar station.
+      clearRackCell(d);                 // the retry computes a fresh cell (the carrier may differ)
+      // CUT_AT_NOSE: same cut-piece routing as above. The comms line below is still true.
       if (net._cutBossNet) {
         const bossNet = net._cutBossNet;
         net._cutBossNet = null;
@@ -4402,10 +3643,8 @@ export class CaptureNetSystem {
       return false;
     }
 
-    // The arc rides with the ship: rebuild its control points from the LIVE ship
-    // pose, and take the landing point live from the rack slot, so the beat
-    // lands on the strut that is actually there. The catch also turns with the
-    // ship (the nose hold's rigid attitude, run on through the flight).
+    // The arc rides with the ship: control points from the LIVE ship pose, landing point from the rack slot. The
+    // catch also turns with the ship.
     this._refreshCargoArc(net, arm, d);
     this._seedCatchLocal(net, d);
     if (this._player && this._player.quaternion) {
@@ -4414,14 +3653,10 @@ export class CaptureNetSystem {
 
     net._cargoS = Math.min(net._cargoDur, (net._cargoS || 0) + dt);
     const t = net._cargoDur > 0 ? net._cargoS / net._cargoDur : 1;
-    // Ease in-out so the catch leaves and arrives gently (an instant start reads
-    // as a kick, which the momentum model does not fund).
+    // Ease in-out: an instant start reads as a kick, which the momentum model does not fund.
     const te = t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t);
 
-    // Quadratic Bézier B(te) = (1−te)²·P0 + 2(1−te)·te·C + te²·P1.
-    // This curve carries the CATCH (both endpoints are catch positions), and the
-    // bag apex is derived from it — the same apex/seat split as updateBerthHold,
-    // just in the other direction, so the catch stays seated inside its bag.
+    // Quadratic Bézier B(te) = (1−te)²·P0 + 2(1−te)·te·C + te²·P1; it carries the CATCH, the bag apex is derived.
     const u = 1 - te;
     _v3d.copy(net._cargoFrom).multiplyScalar(u * u)
       .addScaledVector(net._cargoCtrl, 2 * u * te)
@@ -4445,17 +3680,15 @@ export class CaptureNetSystem {
 
     if (net._cargoS < net._cargoDur) return false;
 
-    // ── Arrival: the rack takes ownership ──
+    // Arrival: the rack takes ownership
     const stowed = (typeof arm._stowHeldCatch === 'function')
       ? arm._stowHeldCatch(d, this._player?.quaternion || null)
       : false;
     if (!stowed) {
-      clearRackCell(d);                 // rack-snug: the cell it was heading for is gone; the retry assigns a fresh one
-      // Rack filled during the beat (should be unreachable — the scorer reserved
-      // a cell). Keep the cargo: put it back on the collar and let the retry pick
-      // another carrier.
-      // CUT_AT_NOSE: a refused cut piece returns to the waiting pool on its
-      // boss net (never COLLARED) and the piece net splices.
+      clearRackCell(d);                 // the retry assigns a fresh cell
+      // Rack filled during the beat (should be unreachable: the scorer reserved a cell). Keep the cargo: back on the
+      // collar, the retry picks another carrier.
+      // CUT_AT_NOSE: a refused cut piece returns to the waiting pool on its boss net; the piece net splices.
       if (net._cutBossNet) {
         const bossNet = net._cutBossNet;
         net._cutBossNet = null;
@@ -4468,34 +3701,29 @@ export class CaptureNetSystem {
       return false;
     }
 
-    // Mother-side fields → exactly what a daughter-caught rack piece carries.
-    // _captured stays true (the rack holds it), _armPinned/_armPinPos are
-    // rewritten by the rack pin below, _motherParked clears so the piece behaves
-    // like every other held piece, and _catchRenderMin is DELIBERATELY kept: the
-    // readability floor is what the player has been looking at for the whole
-    // ceremony, and clearing it would pop the drawn size at the strut.
+    // Mother-side fields → what a daughter-caught rack piece carries. _captured stays true (the rack holds it),
+    // _armPinned/_armPinPos are rewritten by the rack pin below, _motherParked clears, and _catchRenderMin is
+    // DELIBERATELY kept: clearing it would pop the drawn size at the strut.
     d._motherParked = false;
     d._capturedByArm = arm;
-    // hold-catch FA1 (owner 2026-10-22 "Keep: radiator right away"): this catch is the MOTHER's - it only waited on a rack because no
-    // radiator tip was free. ArmManager._tickMissionCarry moves a marked catch to a tip as soon as one is; a catch the daughter
-    // caught herself carries no mark and stays with her. Cleared with the cell (clearRackCell).
+    // owner 2026-10-22 "Keep: radiator right away": this catch is the MOTHER's; it only waited on a rack because no
+    // radiator tip was free. ArmManager._tickMissionCarry moves a marked catch to a tip as soon as one is; a catch the
+    // daughter caught herself carries no mark. Cleared with the cell (clearRackCell).
     d._rackFromMotherNet = true;
 
     const S = Constants.ARM_STATES;
     if (arm.state !== S.HOLDING_CATCH) {
       arm._breakdownStarted = false;       // fresh furnace bookkeeping for the piece
       arm._breakdownChunksFired = 0;
-      // NOTE: `capturedDebris` is deliberately NOT cleared. A DOCKED arm should
-      // have none, but nulling it would destroy cargo if she somehow did — that
-      // is bug B1's exact shape, and the two laws (§1) forbid it.
+      // NOTE: `capturedDebris` is deliberately NOT cleared. A DOCKED arm should have none, but nulling it would
+      // destroy cargo if she somehow did, which the two laws (§1) forbid.
       if (typeof arm._transitionTo === 'function') arm._transitionTo(S.HOLDING_CATCH);
       else arm.state = S.HOLDING_CATCH;
     }
-    // rack-snug (Decisions 1, 4): the rack takes the catch as a place on HER. Its cell, offset and her-frame attitude
-    // were assigned when the flight began (`_cargoSlotWorld`) and `_stowHeldCatch` kept them, so the arc's end
-    // is exactly where the pin below holds it — no jump at the strut — and from here on it turns with her
-    // (`_pinHeldCatches`, every frame). A carrier with no rack seam of her own (a duck-typed stub) keeps the old
-    // ship-relative attitude.
+    // The rack takes the catch as a place on HER. Its cell, offset and her-frame attitude were assigned when the
+    // flight began (`_cargoSlotWorld`) and `_stowHeldCatch` kept them, so the arc's end is exactly where the pin below
+    // holds it (no jump at the strut) and from here on it turns with her (`_pinHeldCatches`, every frame). A carrier
+    // with no rack seam (a duck-typed stub) keeps the ship-relative attitude.
     if (!d._qLocalHer) seedShipRelativeAttitude(d, this._player?.quaternion, this._debrisField);
     if (typeof arm._pinHeldCatches === 'function') {
       arm._pinHeldCatches(
@@ -4505,15 +3733,11 @@ export class CaptureNetSystem {
 
     net.isActive = false;
     net._berthTimer = -1;
-    // The caller splices this net in the SAME tick, so the update loop never
-    // sees it again — which is why the prune's STOWED/RELEASED consequences (pin
-    // clearing, orbit re-seat, inventory restore) cannot fire on a delivered net
-    // and undo the rack's pin. This marker is for any reader holding a stale
-    // reference: the flight is over and the cargo belongs to the arm now.
+    // The caller splices this net in the SAME tick, so the prune's STOWED/RELEASED consequences (pin clearing, orbit
+    // re-seat, inventory restore) cannot fire on a delivered net and undo the rack's pin. The marker is for a reader
+    // holding a stale reference: the cargo belongs to the arm now.
     net._cargoDelivered = true;
-    // CUT_AT_NOSE: the boss net learns the piece is off its books — the next
-    // cut may begin. (Harmless if the boss net was itself torn down meanwhile:
-    // this only writes a field on a dead object.)
+    // CUT_AT_NOSE: the boss net learns the piece is off its books, so the next cut may begin.
     if (net._cutBossNet) {
       net._cutBossNet._cutPiece = null;
       net._cutBossNet._cutPieceFlying = false;
@@ -4526,32 +3750,25 @@ export class CaptureNetSystem {
       armIndex:  net._cargoArmIndex,
       armId:     arm.id,
       cellIndex: Number.isInteger(d._rackCell) ? d._rackCell : Math.max(0, (arm.heldCatches?.length || 1) - 1),
-      // CUT_AT_NOSE (plan L6): the documented payload, plus ONE extra field
-      // on the cut-piece path only. Ordinary transfers carry no `cut` key —
-      // byte-identical to the pre-flag payload.
+      // CUT_AT_NOSE: one extra field on the cut-piece path only; ordinary transfers carry no `cut` key.
       ...(net._cutMeta ? { cut: net._cutMeta } : {}),
     });
 
-    // ONE player-facing line for the whole beat (the arc is its own feedback):
-    // who took the cargo. That is how the automatic CG-first choice teaches
-    // itself without an arm-picker UI.
+    // ONE player-facing line for the whole beat (the arc is its own feedback): who took the cargo.
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON', channel: 'CMD',
       text: `Catch stowed on ${arm.displayName || arm.id}. Launcher clear.`,
       priority: 'success',
-      _keep: true, // comms-after-tutorial D6: where a catch went is never folded into "× N queued"
+      _keep: true, // where a catch went is never folded into "× N queued"
     });
     return true;
   }
 
   /**
-   * Born-in-the-world control points for a cargo arc (whole catch or cut
-   * piece), plus the same three points in the SHIP's frame
-   * (`_cargoFromLocal/_cargoCtrlLocal/_cargoToLocal` = q⁻¹ × (world − shipPos)).
-   * `_cargoFrom/_cargoCtrl/_cargoTo` stay the live WORLD points (rewritten each
-   * frame by `_refreshCargoArc`). With no ship pose to read (a stub without a
-   * quaternion), no local points exist and the world points stay frozen — today's
-   * behaviour.
+   * Control points for a cargo arc (whole catch or cut piece), plus the same three points in the SHIP's frame
+   * (`_cargoFromLocal/_cargoCtrlLocal/_cargoToLocal` = q⁻¹ × (world − shipPos)). `_cargoFrom/_cargoCtrl/_cargoTo` stay
+   * the live WORLD points (rewritten each frame by `_refreshCargoArc`). With no ship pose to read, no local points
+   * exist and the world points stay frozen.
    * @param {NetProjectile} net — the TRANSFERRING net (or about to be)
    * @param {THREE.Vector3} start — catch position, scene units (scratch ok)
    * @param {THREE.Vector3} end — rack slot, scene units (scratch ok)
@@ -4561,9 +3778,8 @@ export class CaptureNetSystem {
     const M_NET = Constants.SCENE_UNITS_PER_METER;
     net._cargoFrom = start.clone();
     net._cargoTo = end.clone();
-    // Quadratic Bézier control point: bulge outward (away from the strut tip)
-    // so the catch arcs around the hull instead of shearing through it — the
-    // same shape as the furnace chunk arc, run backwards.
+    // Bézier control point: bulge outward (away from the strut tip) so the catch arcs around the hull instead of
+    // shearing through it; the furnace chunk arc's shape, run backwards.
     net._cargoCtrl = start.clone().lerp(end, 0.5);
     _v3a.copy(start).sub(end);
     if (_v3a.lengthSq() > 1e-12) {
@@ -4581,11 +3797,8 @@ export class CaptureNetSystem {
   }
 
   /**
-   * One frame of the ship-riding arc: rebuild `_cargoFrom/_cargoCtrl` from the
-   * ship-frame points and the live ship pose, and take `_cargoTo` live from the
-   * rack slot (the strut that is actually there — the same computation the rack
-   * pin will use on arrival, so the beat ends exactly on it). No-op when the
-   * arc was born without a ship pose or the player can no longer supply one.
+   * One frame of the ship-riding arc: rebuild `_cargoFrom/_cargoCtrl` from the ship-frame points and the live ship
+   * pose, and take `_cargoTo` live from the rack slot. No-op when the arc was born without a ship pose.
    * @private
    */
   _refreshCargoArc(net, arm, d) {
@@ -4597,11 +3810,9 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Make sure a flying net knows the catch's attitude in the ship's frame
-   * (`net._qLocal`, shipQuat⁻¹ × catchQuat). The berth and `adoptLassoCatch`
-   * already set it; a path that never berthed (a cut piece) gets it here, once,
-   * from the catch's current attitude. No-op when it exists, or when the catch
-   * has no tumbleAxis / the player no quaternion.
+   * Ensure a flying net knows the catch's attitude in the ship's frame (`net._qLocal`, shipQuat⁻¹ × catchQuat); a
+   * path that never berthed (a cut piece) gets it here, once. No-op when it exists, or when the catch has no
+   * tumbleAxis / the player no quaternion.
    * @private
    */
   _seedCatchLocal(net, d) {
@@ -4613,14 +3824,10 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Cargo-continuity S7 — where a piece will sit once it is on the rack, so the
-   * transfer arc ends exactly where `_pinHeldCatches` will hold it (no arrival
-   * snap). Delegates to `ArmUnit.heldSlotWorldInto` — ONE computation for the
-   * rack's geometry, shared by the pin and the arc, so the two cannot drift.
-   *
-   * rack-snug (Decision 4): the first call for this carrier (the start of the flight) ASSIGNS the cell — its
-   * offset on her, and the piece's attitude in her frame — so the flight's end is known; later calls (the arc is
-   * rebuilt every frame) find the assignment valid and only read it. `_stowHeldCatch` keeps it on arrival.
+   * Where a piece will sit once it is on the rack, so the transfer arc ends exactly where `_pinHeldCatches` will hold
+   * it (no arrival snap). Delegates to `ArmUnit.heldSlotWorldInto`, the ONE computation of the rack's geometry.
+   * The first call for this carrier ASSIGNS the cell (offset on her, attitude in her frame); later calls (the arc is
+   * rebuilt every frame) only read it. `_stowHeldCatch` keeps it on arrival.
    * @param {object} arm — the carrier
    * @param {object} d — the piece being handed over
    * @param {THREE.Vector3} out
@@ -4640,26 +3847,22 @@ export class CaptureNetSystem {
     return out.copy(arm.position || _v3a.set(0, 0, 0));
   }
 
-  // ── CUT_AT_NOSE: the cut machinery (plan L1–L9) ────────────────────────
-  // Board on the BOSS net (the COLLARED mother net whose target is over the
-  // hand-off gate):
-  //   _cutPlan            the planCuts result (pieces in chop order; the LAST
-  //                       piece is the held part — never cut off, L3)
+  // CUT_AT_NOSE: the cut machinery.
+  // Board on the BOSS net (the COLLARED mother net whose target is over the hand-off gate):
+  //   _cutPlan            the planCuts result (pieces in chop order; the LAST piece is the held part, never cut off)
   //   _cutOriginalMassKg  the boss's mass at plan time (size reference)
   //   _cutNext            index of the next piece to DETACH
   //   _cutProgressS       game-seconds accumulated toward that detach
   //   _cutPiece           the detached piece (waiting at the nose or flying)
   //   _cutPieceFlying     true while that piece's flight is under way
   //   _cutRetryS          launch-retry accumulator (CT.RETRY_S cadence)
-  //   _cutWaitingSaid     the waiting comms line, once per pause (L9; re-armed when a piece leaves)
-  //   _cutWaiting         true while the cut is PAUSED: the piece at the nose has no empty daughter to go to (R1)
+  //   _cutWaitingSaid     the waiting comms line, once per pause (re-armed when a piece leaves)
+  //   _cutWaiting         true while the cut is PAUSED: the piece at the nose has no empty daughter to go to
 
   /**
-   * True while a cut plan exists and is not finished — i.e. the boss must
-   * not take the ordinary hand-off (`_tryCargoTransfer` guard) and the
-   * collar digestion must not tick (plan L4: `_breakdownStarted` would close
-   * the transfer window and cook the boss mid-cut). Flag OFF ⇒ no net ever
-   * carries `_cutPlan` ⇒ always false ⇒ both call sites byte-identical.
+   * True while a cut plan exists and is not finished: the boss must not take the ordinary hand-off
+   * (`_tryCargoTransfer` guard) and the collar digestion must not tick (`_breakdownStarted` would close the transfer
+   * window and cook the boss mid-cut). Flag OFF ⇒ no net carries `_cutPlan` ⇒ always false.
    * @param {NetProjectile} net
    * @returns {boolean}
    * @private
@@ -4671,10 +3874,9 @@ export class CaptureNetSystem {
   }
 
   /**
-   * The cut driver — one COLLARED frame of the chop (plan L5). Serialised:
-   * exactly one piece is detached-and-not-delivered at a time. No state
-   * change on the boss net (it stays COLLARED, mated, pin held); the detached
-   * piece rides its own synthetic net (L7).
+   * The cut driver: one COLLARED frame of the chop. Serialised: exactly one piece is detached-and-not-delivered at a
+   * time. No state change on the boss net (it stays COLLARED, mated, pin held); the detached piece rides its own
+   * synthetic net.
    * @param {NetProjectile} net — a COLLARED mother net with `_cutPlan`
    * @param {number} dt — real seconds
    * @private
@@ -4687,9 +3889,8 @@ export class CaptureNetSystem {
 
     if (net._cutPiece) {
       if (net._cutPieceFlying) return;   // the piece net drives the flight
-      // The waiting piece: held at the nose, just fore of the boss (a clamp
-      // seat, DECISIONS §12 ruling 4 — the piece exists, drawn, until the
-      // crane can take it). Pinned EVERY frame: a gap reads as a release.
+      // The waiting piece: held at the nose, just fore of the boss (a clamp seat, DECISIONS §12 ruling 4: the piece
+      // exists, drawn, until the crane can take it). Pinned EVERY frame: a gap reads as a release.
       const piece = net._cutPiece;
       piece._captured = true;
       piece._motherParked = true;
@@ -4712,12 +3913,10 @@ export class CaptureNetSystem {
       return;
     }
 
-    // Nothing outstanding: is there another piece to cut off? The LAST piece
-    // of the plan is the held part — never detached (L3).
+    // Nothing outstanding: is there another piece to cut off? The LAST piece of the plan is the held part, never detached.
     if (net._cutNext >= plan.pieces.length - 1) return;
 
-    // CUT_S GAME-seconds per cut: dt × BASE_SCALE, deliberately NOT
-    // sun-scaled — the cutter is a machine, not a plant.
+    // CUT_S GAME-seconds per cut: dt × BASE_SCALE, deliberately NOT sun-scaled (the cutter is a machine, not a plant).
     net._cutProgressS = (net._cutProgressS || 0) + dt * TimeAuthority.BASE_SCALE;
     if (net._cutProgressS >= (CN.CUT_S ?? 60)) {
       net._cutProgressS = 0;
@@ -4726,9 +3925,8 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Detach the next planned piece: spawn it (a real, drawn debris object —
-   * L7) and move its mass and salvage off the boss's books (L3: the ledger
-   * conserves at every step).
+   * Detach the next planned piece: spawn it (a real, drawn debris object) and move its mass and salvage off the
+   * boss's books (the ledger conserves at every step).
    * @param {NetProjectile} net
    * @private
    */
@@ -4739,9 +3937,8 @@ export class CaptureNetSystem {
     const debrisField = this._debrisField;
     if (!d || d.alive === false || !spec || !(spec.massKg > 0)
         || typeof debrisField.spawnCutPiece !== 'function') {
-      // Unreachable from a validated plan with a spawn-capable field (the
-      // plan is only created after that capability check). Abandon quietly:
-      // legacy behaviour resumes (the boss rides the collar; the cook wins).
+      // Unreachable from a validated plan with a spawn-capable field (the plan is only created after that check).
+      // Abandon quietly: the boss rides the collar; the cook wins.
       console.warn('[CaptureNet] CUT_AT_NOSE: spawn unavailable — cutting abandoned');
       net._cutPlan = null;
       net._cutPiece = null;
@@ -4749,8 +3946,7 @@ export class CaptureNetSystem {
       return;
     }
 
-    // Seat the piece just fore of the boss's live pin (the same spot the
-    // waiting-piece hold above keeps it at).
+    // Seat the piece just fore of the boss's live pin (the spot the waiting-piece hold keeps it at).
     const M_NET = Constants.SCENE_UNITS_PER_METER;
     const offM = ((d.sizeMeter || 2) / 2) + 1.0;
     _v3cut.copy(d._scenePosition || _v3a.set(0, 0, 0));
@@ -4768,14 +3964,12 @@ export class CaptureNetSystem {
       return;
     }
 
-    // The boss loses EXACTLY the piece's amounts (plan L3 — the planner
-    // conserves, so sequential subtraction leaves the held part at its
-    // planned value within float dust).
+    // The boss loses EXACTLY the piece's amounts (the planner conserves, so sequential subtraction leaves the held
+    // part at its planned value within float dust).
     d.mass -= spec.massKg;
     net.capturedMass = Math.max(0, (net.capturedMass || 0) - spec.massKg);
     if (d.salvage && spec.salvage) {
-      // The six scalar names mirror cutPlanner's SALVAGE_SCALARS (kept in
-      // sync by test-CutAtNose's conservation pin, which fails on drift).
+      // The six scalar names mirror cutPlanner's SALVAGE_SCALARS (test-CutAtNose's conservation pin fails on drift).
       for (const f of ['xenon', 'indium', 'gaAs', 'battery', 'hydrazine', 'lithium']) {
         if (typeof d.salvage[f] === 'number' && typeof spec.salvage[f] === 'number') {
           d.salvage[f] -= spec.salvage[f];
@@ -4801,20 +3995,16 @@ export class CaptureNetSystem {
     net._cutNext++;
     net._cutPiece = piece;
     net._cutRetryS = 0;
-    // First launch attempt right away (a piece may leave the moment it is
-    // off); the RETRY_S cadence takes over if no daughter qualifies.
+    // First launch attempt right away; the RETRY_S cadence takes over if no daughter qualifies.
     this._launchCutPiece(net, piece);
   }
 
   /**
-   * Launch one cut piece to a rack (plan L5/L6/L7): the piece rides a
-   * synthetic mother net born directly in TRANSFERRING — the same
-   * `_updateCargoTransfer` Bézier / pin-every-frame / stow beat a whole
-   * catch flies, with `_ceremonyStartEmitted` set (no launch ceremony) and
-   * NO bag: no net is spent on a cut piece, the piece is its own container
-   * (the `adoptLassoCatch` quiet-hand-off idiom). Departs only when the
-   * crane is free (no mother transfer in flight) and `suggestCargoArm`
-   * qualifies a carrier at the PIECE's mass.
+   * Launch one cut piece to a rack: the piece rides a synthetic mother net born directly in TRANSFERRING (the same
+   * `_updateCargoTransfer` Bézier / pin-every-frame / stow beat a whole catch flies), with `_ceremonyStartEmitted` set
+   * (no launch ceremony) and NO bag: no net is spent on a cut piece (the `adoptLassoCatch` quiet-hand-off idiom).
+   * Departs only when the crane is free (no mother transfer in flight) and `suggestCargoArm` qualifies a carrier at
+   * the PIECE's mass.
    * @param {NetProjectile} net — the boss net
    * @param {object} piece — the waiting cut piece
    * @private
@@ -4830,16 +4020,16 @@ export class CaptureNetSystem {
       (n) => n._isMother && n.state === STATES.TRANSFERRING)) return;
 
     const armIndex = suggestCargoArm(armManager, player, piece.mass, piece.sizeMeter,
-      this._armsWithCargoOnTheWay(), DebrisField.trueReachM(piece, piece.sizeMeter || 0));   // hold-clear D7: + its reach
+      this._armsWithCargoOnTheWay(), DebrisField.trueReachM(piece, piece.sizeMeter || 0));   // + the piece's reach
     if (armIndex == null) {
-      // R1 (fix round 1): no empty daughter may take the piece, so the cut is PAUSED at the nose. It resumes by itself when a
-      // daughter is home and empty (this retry, every RETRY_S); [K] lets the rest go. L9: plain words, once per pause.
+      // No empty daughter may take the piece, so the cut is PAUSED at the nose. It resumes by itself when a daughter
+      // is home and empty (this retry, every RETRY_S); [K] lets the rest go. Plain words, once per pause.
       net._cutWaiting = true;
       if (!net._cutWaitingSaid) {
         net._cutWaitingSaid = true;
-        // Pieces still to be placed: the one waiting at the nose plus every piece after it (the held part counts). "it" in the
-        // tail is the catch: K releases the waiting piece and the uncut remainder together.
-        // `_cutNext` has already moved past the waiting piece, and each earlier piece has been delivered (one at a time).
+        // Pieces still to be placed: the one waiting at the nose plus every piece after it (the held part counts).
+        // `_cutNext` has already moved past the waiting piece. "it" in the text is the catch: K releases the waiting
+        // piece and the uncut remainder together.
         const left = Math.max(1, net._cutPlan.pieces.length - net._cutNext + 1);
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'HOUSTON', channel: 'CMD',
@@ -4850,7 +4040,7 @@ export class CaptureNetSystem {
       return;
     }
     net._cutWaiting = false;
-    net._cutWaitingSaid = false;          // a later pause (another piece with no empty daughter) speaks again
+    net._cutWaitingSaid = false;          // a later pause speaks again
     const arm = armManager.arms[armIndex];
     if (!arm || !piece._scenePosition) return;
 
@@ -4879,22 +4069,18 @@ export class CaptureNetSystem {
     };
     pieceNet.catchResult = 'success';
     pieceNet.capturedMass = piece.mass;
-    // Quiet by construction: no NET_FIRED (no bag ever attaches — the piece
-    // is its own container), no ceremony beats (adoptLassoCatch's suppression
-    // idiom — `update()` would otherwise fire NET_CEREMONY_START on the
-    // first tick of a fresh net).
+    // Quiet by construction: no NET_FIRED (no bag ever attaches), no ceremony beats (`update()` would otherwise fire
+    // NET_CEREMONY_START on the first tick of a fresh net).
     pieceNet._ceremonyStartEmitted = true;
-    // Net-less seat: the pin IS the piece position; there is no bag apex to
-    // offset from.
+    // Net-less seat: the pin IS the piece position; there is no bag apex to offset from.
     pieceNet._catchSeatM = 0;
-    // Same arc shape as the whole-catch beat (bulge away from the strut tip),
-    // and the same ship-riding control points + ship-relative attitude.
+    // Same arc shape and ship-riding control points / attitude as the whole-catch beat.
     this._seedCargoArc(pieceNet, start, end);
     this._seedCatchLocal(pieceNet, piece);
     pieceNet._cargoArmIndex = armIndex;
     pieceNet._cargoS = 0;
     pieceNet._cargoDur = Math.max(1e-3, CT.FLIGHT_S ?? 3.0);
-    // L6: the one extra field both transfer events carry on this path.
+    // The one extra field both transfer events carry on this path.
     pieceNet._cutMeta = {
       parentId: net.targetDebris?.id,
       index: piece.cutIndex,
@@ -4917,11 +4103,10 @@ export class CaptureNetSystem {
       cut:  { ...pieceNet._cutMeta },
     });
 
-    // L9: when the LAST cut piece leaves the nose, the plan is done cutting
-    // — only the held part remains, and it fits a daughter's rack.
+    // When the LAST cut piece leaves the nose, only the held part remains, and it fits a daughter's rack.
     if (net._cutNext >= net._cutPlan.pieces.length - 1 && !net._cutLastSaid) {
       net._cutLastSaid = true;
-      // R1: the held part goes by the ordinary hand-off once the last piece has landed. The over-gate refusal spoke at the
+      // The held part goes by the ordinary hand-off once the last piece has landed. The over-gate refusal spoke at the
       // start of the cut; if no daughter can take the held part either, its own line must speak (Press K), not silence.
       net._cargoRefused = false;
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -4933,11 +4118,9 @@ export class CaptureNetSystem {
   }
 
   /**
-   * CUT_AT_NOSE — release an orphaned waiting piece to the field (boss
-   * jettisoned or died mid-cut). Cargo is never destroyed: the piece is its
-   * own body now — un-pinned, orbit re-seated from its last position, free
-   * (still `_credited`: the mate paid for the whole body, a re-capture must
-   * not pay again).
+   * CUT_AT_NOSE: release an orphaned waiting piece to the field (boss jettisoned or died mid-cut). Cargo is never
+   * destroyed: the piece is its own body now, un-pinned, orbit re-seated from its last position, free (still
+   * `_credited`: the mate paid for the whole body, a re-capture must not pay again).
    * @param {object} piece
    * @private
    */
@@ -4950,7 +4133,7 @@ export class CaptureNetSystem {
     piece._motherParked = false;
     piece._catchRenderMin = 0;
     clearShipRelativeAttitude(piece);
-    clearRackCell(piece);                 // rack-snug: a cut piece that was heading for a cell forgets it
+    clearRackCell(piece);                 // a cut piece that was heading for a cell forgets it
     if (piece._scenePosition && piece.orbit) {
       reseatOrbitFromScene(piece.orbit, piece._scenePosition,
         player?.getVelocity ? player.getVelocity() : null);
@@ -4958,19 +4141,12 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Cargo-continuity S13(c) (register item 47) — the collar's digestion clock.
-   * One frame of the mother-side furnace: the collared piece cooks on the SAME
-   * law the daughter rack runs (ArmUnit._updateHoldingCatch) — span
-   * `FT.digestSpanS(massKg)` (register item 48: the ONE home), progress
-   * dt × TIME_SCALE_GAMEPLAY × sunScale (ArmManager writes _digestSunScale on
-   * this system from the one ResourceSystem multiplier SSOT; ?? 1.0 keeps
-   * legacy mocks byte-identical), phase mapped onto [0, FEED_S] so the
-   * hold/chop/feed fractions and the chunk cadence are identical. The
-   * staged beat reuses the breakdown machinery with the {kind:'collar'}
-   * anchor: chunks arc collar → bus, NET_CONSUMED carries the pod, and the
-   * completion CATCH_PROCESSED carries { digested: true } — the mate already
-   * paid the credit ({ parked: true }), so GameFlowManager runs removal +
-   * comms but pays NOTHING twice (single-fire contract).
+   * The collar's digestion clock: one frame of the mother-side furnace, on the SAME law the daughter rack runs
+   * (ArmUnit._updateHoldingCatch): span `FT.digestSpanS(massKg)`, progress dt × TIME_SCALE_GAMEPLAY × sunScale
+   * (ArmManager writes _digestSunScale from the ResourceSystem multiplier; ?? 1.0 for mocks), phase mapped onto
+   * [0, FEED_S]. The staged beat reuses the breakdown machinery with the {kind:'collar'} anchor; the completion
+   * CATCH_PROCESSED carries { digested: true }: the mate already paid ({ parked: true }), so GameFlowManager runs
+   * removal + comms but pays NOTHING twice.
    *
    * @param {NetProjectile} net — a COLLARED mother net
    * @param {number} dt — seconds
@@ -4980,27 +4156,25 @@ export class CaptureNetSystem {
   _tickCollarDigestion(net, dt) {
     const d = net.targetDebris;
     if (!d) return false;
-    if (bigPieces.isPending(d)) return false;   // slice 5 (5b): a pending big piece is never cooked at the collar: it pays when disposed of
-    // no-melt (owner 2026-10-18, "Stay full size, no melting"): no furnace, no cook clock. The catch stays welded
-    // full size at the collar (the berth hold pins it) until a tip furnace takes it on the trip or [K] jettisons it.
+    if (bigPieces.isPending(d)) return false;   // a pending big piece is never cooked at the collar: it pays when disposed of
+    // owner 2026-10-18, "Stay full size, no melting": no furnace, no cook clock. The catch stays
+    // welded full size at the collar (the berth hold pins it) until a tip furnace takes it on the trip or [K] jettisons it.
     if (!Constants.isFeatureEnabled('FURNACE_COOK')) return false;
     const FT = Constants.FURNACE_TRANSFER;
     const HOLD_S = FT.HOLD_S, CHOP_S = FT.CHOP_S, FEED_S = FT.FEED_S;
     const CHUNK_COUNT = FT.CHUNK_COUNT;
-    const span = FT.digestSpanS(d.mass);   // item 48: the ONE span-law home
+    const span = FT.digestSpanS(d.mass);
     const sunScale = this._digestSunScale ?? 1.0;
     d._digestProgress = (d._digestProgress || 0) + dt * TimeAuthority.BASE_SCALE * sunScale;
     const t = Math.min(FEED_S, (d._digestProgress / span) * FEED_S);
-    // The chop ramp reads this derived phase time (ArmManager's rack ramp reads
-    // arm._digestPhaseT — one convention, one home per hold).
+    // The chop ramp reads this derived phase time (ArmManager's rack ramp reads arm._digestPhaseT: one convention).
     net._digestPhaseT = t;
 
-    // Lazy-init the per-collar breakdown bookkeeping (safe if a test sets
-    // COLLARED directly — same idiom as ArmUnit's HOLDING_CATCH).
+    // Lazy-init the per-collar breakdown bookkeeping (safe if a test sets COLLARED directly).
     if (net._breakdownStarted === undefined) net._breakdownStarted = false;
     if (net._breakdownChunksFired === undefined) net._breakdownChunksFired = 0;
 
-    if (t < HOLD_S) return false;   // hold: welded full-size — the berth hold pins it
+    if (t < HOLD_S) return false;   // hold: welded full-size, the berth hold pins it
 
     // Fire the chop-start exactly once when we cross into the chop phase.
     if (!net._breakdownStarted) {
@@ -5012,15 +4186,10 @@ export class CaptureNetSystem {
       });
     }
 
-    // The staged chop: shrink the original out of view across the chop window
-    // (the same ramp ArmManager's pin loop runs at the rack) so the chunks are
-    // what the player sees being fed — the catch comes apart, never pops.
-    // updateBerthHold pinned at scaleMul 1 earlier this tick; this re-pin is
-    // the last write this frame.
-    // Small-catch plan W3 (2026-08-25): the ramp now reads the ONE law home
-    // (FT.chopScaleMul — byte-identical values) so the collar bag's deflation
-    // (CaptureNetVisual reads the same helper off the same _digestPhaseT) can
-    // never drift from the instance scale it is wrapping.
+    // The staged chop: shrink the original out of view across the chop window (the ramp ArmManager's pin loop runs at
+    // the rack) so the chunks are what the player sees being fed. updateBerthHold pinned at scaleMul 1 earlier this
+    // tick; this re-pin is the last write this frame. The ramp is FT.chopScaleMul, which CaptureNetVisual also reads
+    // off the same _digestPhaseT, so the collar bag's deflation cannot drift from the instance scale.
     if (d._breakdownActive) {
       const scaleMul = FT.chopScaleMul(t);
       if (this._debrisField && typeof this._debrisField.pinCapturedDebris === 'function' && d._armPinPos) {
@@ -5044,14 +4213,11 @@ export class CaptureNetSystem {
       return false;
     }
 
-    if (t < FEED_S) return false;   // mid-chop: the hold phase pins above; nothing more
+    if (t < FEED_S) return false;   // mid-chop: the hold phase pins above
 
-    // ── Digestion complete: the furnace ate the body; the collar frees ──
-    // Mirrors the rack feed-end: flush any chunks a long frame skipped, release
-    // the hold first (the body is consumed — the furnace owns it), then
-    // NET_CONSUMED (the bag draws in — the net IS the container, fed in with
-    // the debris), then the ONE CATCH_PROCESSED (digested: true — removal +
-    // the processed comms line run; the mate's credit does not re-fire).
+    // Digestion complete: the furnace ate the body; the collar frees. Mirrors the rack feed-end: flush any chunks a
+    // long frame skipped, release the hold first (the furnace owns the body), then NET_CONSUMED (the bag draws in: the
+    // net IS the container), then the ONE CATCH_PROCESSED (digested: true; the mate's credit does not re-fire).
     while (net._breakdownChunksFired < CHUNK_COUNT) {
       const index = net._breakdownChunksFired;
       eventBus.emit(Events.CATCH_BREAKDOWN_CHUNK, {
@@ -5064,16 +4230,11 @@ export class CaptureNetSystem {
     this._clearCatchPins(d);
     net.isActive = false;
     net._berthTimer = -1;
-    // Marker for any reader holding a stale reference (the transfer beat's
-    // _cargoDelivered idiom): the cargo was digested; the net's job is done.
+    // Marker for a reader holding a stale reference (as `_cargoDelivered`): the cargo was digested.
     net._digestedOut = true;
-    // The catch's mass just LEFT the berthed ledger (the caller splices the net
-    // this same tick). A mother berth invalidates the attitude inertia via
-    // NET_BERTHED and a rack arrival via ARM_STATE_CHANGE; this completion emits
-    // only NET_CONSUMED + CATCH_PROCESSED — neither invalidates — so invalidate
-    // the cache directly: the mirror of adoptLassoCatch's entry-side
-    // invalidation, and the seam for any mass-exit that doesn't cross an
-    // arm-state change (register item 63).
+    // The catch's mass just LEFT the berthed ledger (the caller splices the net this tick). NET_CONSUMED +
+    // CATCH_PROCESSED do not invalidate the attitude-inertia cache (NET_BERTHED / ARM_STATE_CHANGE do), so invalidate
+    // it directly (the mirror of adoptLassoCatch's entry side).
     const player = this._player;
     if (player && '_attitudeInertia' in player) player._attitudeInertia = null;
     eventBus.emit(Events.NET_CONSUMED, {
@@ -5088,8 +4249,7 @@ export class CaptureNetSystem {
   }
 
   /**
-   * §8 A2 — the pin-clearing chokepoint that did not exist. Mother nets have
-   * no ArmUnit, so nothing else ever clears the debris pin flags the
+   * The pin-clearing chokepoint: mother nets have no ArmUnit, so nothing else clears the debris pin flags the
    * reel/berth writes. Idempotent by design; call from EVERY mother exit.
    * @param {object|null} debris
    * @private
@@ -5102,40 +4262,30 @@ export class CaptureNetSystem {
     debris._motherParked = false;
     debris._catchRenderMin = 0;
     clearShipRelativeAttitude(debris);   // a released catch tumbles on its own again
-    clearRackCell(debris);               // rack-snug: and forgets any cell a cargo flight had assigned
+    clearRackCell(debris);               // and forgets any cell a cargo flight had assigned
   }
 
   /**
-   * §8 A2 — tear down a berthed catch: clear pins, drop the docked slot, free
-   * the launcher. The bag visual is removed by CaptureNetVisual's own
-   * STOWED/RELEASED handling via the fade path; here we emit nothing visual —
-   * the net is spliced out of activeNets by the caller, and _getNet then
-   * returns null so the visual removes itself next frame.
+   * Tear down a berthed catch: clear pins, drop the docked slot, free the launcher. The bag visual removes itself
+   * (CaptureNetVisual's STOWED/RELEASED fade path) once the caller splices the net and _getNet returns null.
    * @param {NetProjectile} net
    * @private
    */
   _teardownBerth(net) {
     this._clearCatchPins(net.targetDebris);
-    // CUT_AT_NOSE: a boss torn down mid-cut (mission transition, [K] jettison
-    // upstream of the prune block) must not leave a waiting piece orphaned at
-    // a stale nose pin. Cargo is never destroyed: the piece is its own body
-    // now — release it to the field as free, still-paid salvage.
+    // CUT_AT_NOSE: a boss torn down mid-cut (mission transition, [K] jettison upstream of the prune block) must not
+    // leave a waiting piece orphaned at a stale nose pin: release it to the field as free, still-paid salvage.
     if (net._cutPiece && !net._cutPieceFlying) this._releaseCutPiece(net._cutPiece);
     net.isActive = false;
     net._berthTimer = -1;
   }
 
   /**
-   * §8 A2 — re-seat the released catch's orbit from the release position +
-   * the mother's velocity. DebrisField.update skips orbit propagation only
-   * for _onboardingPinned / _motherParked, NOT _armPinned, so a pinned catch's
-   * trueAnomaly kept advancing and a jettisoned whale would snap to wherever
-   * its own orbit went. The rebuild itself is the ONE shared computation
-   * (reseatOrbitFromScene — applyCartesianImpulse's recipe, all-element
-   * validation, the [0, 0.1] eccentricity clamp), also read by the
-   * ArmManager.reset() cargo release (register item 71). The arm path
-   * deliberately accepts the snap (ArmUnit.js:4494-4497) — do not copy that
-   * 2 m in front of the camera.
+   * Re-seat the released catch's orbit from the release position + the mother's velocity. DebrisField.update skips
+   * orbit propagation only for _onboardingPinned / _motherParked, NOT _armPinned, so a pinned catch's trueAnomaly
+   * kept advancing and a jettisoned whale would snap to wherever its own orbit went. The rebuild is the ONE shared
+   * computation (reseatOrbitFromScene), also read by the ArmManager.reset() cargo release. The arm path deliberately
+   * accepts the snap (ArmUnit) — do not copy that 2 m in front of the camera.
    * @param {NetProjectile} net
    * @private
    */
@@ -5144,9 +4294,9 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Nets step 3 slice 5 (lane 5d): `_reseatOrbitOnRelease` for a body that no net holds any more (a big piece let go by a push-down or a
-   * drag sail: `GameFlowManager.detachHeldPiece` has already taken the net away). The same ONE computation, so the piece flies on from
-   * where it was pinned with her velocity, never along the stale orbit it carried while it was held. No behaviour change for K.
+   * `_reseatOrbitOnRelease` for a body that no net holds any more (a big piece let go by a push-down or a drag sail:
+   * `GameFlowManager.detachHeldPiece` has already taken the net away), so the piece flies on from where it was pinned
+   * with her velocity, never along its stale held-time orbit.
    * @param {object|null} d the field's own body @returns {boolean} the orbit was re-seated
    */
   reseatBodyOrbit(d) {
@@ -5157,16 +4307,9 @@ export class CaptureNetSystem {
   }
 
   /**
-   * §8 A2 — berthed mass for the translational thrust scaling (plan §4.4).
-   * Structured as a sum over attachments so a future CoM upgrade is
-   * non-breaking. Replaces the dead getCapturedNetMass for the mother path.
-   *
-   * Cargo-continuity S7: TRANSFERRING counts too. The piece is in flight between
-   * the nose and a strut tip, still aboard, and the daughter's rack does not own
-   * it until arrival — so counting it here for the whole beat is what makes the
-   * cargo ledger continuous at the hand-off. S13(c): COLLARED is the nose-side
-   * station — the collar holds the mass until the furnace eats it or the rack
-   * takes it.
+   * Berthed mass for the translational thrust scaling, summed over attachments. TRANSFERRING counts (in flight, still
+   * aboard; the rack does not own it until arrival) so the cargo ledger stays continuous. COLLARED is the nose-side
+   * station: the collar holds the mass until the furnace eats it or the rack takes it.
    * @returns {number} kg currently held at the mother launcher (incl. in transit)
    */
   getBerthedMassKg() {
@@ -5181,16 +4324,11 @@ export class CaptureNetSystem {
   }
 
   /**
-   * §8 A2 — the docked catch accessor. S13(e): the occupancy FIRE gate is
-   * retired (a shot refuses only when its own corridor fouls the mated
-   * cargo — getCollarShotFoul). This survives as the
-   * read for HUD/status (StatusPanel), the lasso's single-station soft-block
-   * (the collar holds ONE body), the adoption guard, releaseDockedCatch, and
-   * the foul read.
+   * The docked catch accessor, read by HUD/status (StatusPanel), the lasso's single-station soft-block (the collar
+   * holds ONE body), the adoption guard, releaseDockedCatch, and the foul read. A shot refuses only when its own
+   * corridor fouls the mated cargo (getCollarShotFoul), not on occupancy.
    *
-   * Cargo-continuity S7: TRANSFERRING counts. The catch is crossing from the
-   * collar for the length of the beat — the station frees when the piece lands
-   * on the rack, not when it leaves the nose.
+   * TRANSFERRING counts: the station frees when the piece lands on the rack, not when it leaves the nose.
    * @returns {NetProjectile|null}
    */
   getDockedCatch() {
@@ -5200,15 +4338,10 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Register item 48 — the collar cook, readable. The HUD's mother digest
-   * segment polls this at 10 Hz (the `getDockedCatch` precedent): while a
-   * collared piece digests, report its progress through the ONE span-law home
-   * (`FURNACE_TRANSFER.digestSpanS`) so the player sees the cook the S8
-   * transit clock runs. BERTHED is the pre-cook securing window (the berth
-   * tag shows there); TRANSFERRING pauses the cook for the flight and the
-   * daughter's rack reports the piece on arrival — only COLLARED cooks at the
-   * collar. Field-only reads + `|| 0` / `?? 1.0` guards keep legacy mocks
-   * byte-identical.
+   * The collar cook, readable (HUD polls at 10 Hz): progress through the ONE span-law home
+   * (`FURNACE_TRANSFER.digestSpanS`). BERTHED is the pre-cook securing window; TRANSFERRING pauses the cook and the
+   * daughter's rack reports the piece on arrival, so only COLLARED cooks at the collar. `|| 0` / `?? 1.0` guards keep
+   * legacy mocks working.
    *
    * @returns {{frac: number, sunScale: number, kg: number}|null} the cook, or
    *   null when no mother net is COLLARED with a target
@@ -5219,19 +4352,18 @@ export class CaptureNetSystem {
     if (!d) return null;
     const span = Constants.FURNACE_TRANSFER.digestSpanS(d.mass);
     return {
-      frac: Math.min(1, Math.max(0, (d._digestProgress || 0) / span)),
+      frac: clamp01((d._digestProgress || 0) / span),
       sunScale: this._digestSunScale ?? 1.0,
       kg: d.mass || 0,
     };
   }
 
   /**
-   * followups-1018 D3: something just left a tip slot or a rack cell (NET_CONSUMED: `TipCargo.releaseSlot` for the
-   * station unload and a tip jettison, `ArmManager.unloadHeldCatches` for the racks), so room may exist now. Clear the
-   * sticky `_cargoDeclined` on every COLLARED mother net other than the one consumed, in this same tick: the nose-full
-   * line, the camera reader and the mission-start reader stop saying "nowhere to go" at once, and the first-tick
-   * decision runs again on the next net update (a retry that still finds no room declines again, silently: the refusal
-   * comms is once per catch, `_cargoRefused`).
+   * Something just left a tip slot or a rack cell (NET_CONSUMED: `TipCargo.releaseSlot`, `ArmManager.unloadHeldCatches`),
+   * so room may exist now. Clear the sticky `_cargoDeclined` on every COLLARED mother net other than the one
+   * consumed, in this same tick: the nose-full line, the camera reader and the mission-start reader stop saying
+   * "nowhere to go" at once, and the first-tick decision runs again (a retry that still finds no room declines again,
+   * silently: the refusal comms is once per catch, `_cargoRefused`).
    * @param {{debrisId?: (number|string)}} [p] - the NET_CONSUMED payload
    * @private
    */
@@ -5246,17 +4378,16 @@ export class CaptureNetSystem {
   }
 
   /**
-   * no-melt: the plain refusal for a new catch while the nose collar is holding one that has nowhere to go, or null.
-   * With no furnace the nose never empties by itself; once the hand-off has been tried and declined (every tip full or
-   * too small, every daughter cell taken, a catch too heavy) the catch stays at the collar - a tip furnace takes it on
-   * the trip to the next field if it fits one - or [K] jettisons it. While a hand-off is still pending (securing, a leash under way, a piece in
-   * flight, a cut under way) this returns null and today's refusals speak. Shared by the mother net (N), the lasso and
-   * the InputManager pre-flight, so the words live in one place. Pure read: it emits nothing.
+   * no-melt: the plain refusal for a new catch while the nose collar holds one that has nowhere to go, or null.
+   * Without a furnace the nose never empties by itself: once the hand-off was tried and declined, the catch stays at
+   * the collar (a tip furnace takes it on the trip to the next field if it fits) or [K] jettisons it. While a hand-off
+   * is still pending (securing, leash, piece in flight, cut under way) it returns null. Shared by the mother net (N),
+   * the lasso and the InputManager pre-flight. Pure read: it emits nothing.
    * @returns {string|null}
    */
   getNoseFullLine() {
-    // R1 (fix round 1): a cut that ran out of empty daughters is paused at the nose - the rest of the catch and the piece
-    // wait there, so a new net is refused in plain words (furnace or not: the cut never cooks the boss, L4).
+    // a cut that ran out of empty daughters is paused at the nose: a new net is refused (furnace or not: the cut never
+    // cooks the boss)
     for (const n of this.activeNets) {
       if (n._isMother && n.state === STATES.COLLARED && n._cutWaiting && n._cutPiece && !n._cutPieceFlying
           && this._cutActive(n)) return NOSE_FULL_CUT_LINE;
@@ -5265,7 +4396,7 @@ export class CaptureNetSystem {
     for (const n of this.activeNets) {
       if (!n._isMother || n.state !== STATES.COLLARED) continue;
       if (!n._cargoDeclined || n._leash || n._leashNoseReel || this._cutActive(n)) continue;
-      // Nets step 3 slice 5 (lane 5b): K does not let a pending big piece go, so this refusal does not offer it.
+      // K does not let a pending big piece go, so this refusal does not offer it.
       if (bigPieces.isPending(n.targetDebris)) {
         return `Nose is full: the ${pieceName(n.targetDebris)} stays at your nose and no daughter can take it. It pays when you dispose of it.`;
       }
@@ -5275,12 +4406,11 @@ export class CaptureNetSystem {
   }
 
   /**
-   * no-melt: the station takes the catch parked at the nose collar (the resupply stop; GameFlowManager). The catch is
-   * already paid (the mate credited it), so nothing is credited or digested here: the pins clear, the net leaves the
-   * system and the collar is free again. The caller removes the body from the field. A catch still being reeled,
-   * flown, leashed or cut is left alone.
-   * Slice 5 (lane 5b): with `onlyId` it frees the collar of THAT piece only (`GameFlowManager.detachHeldPiece`: a big piece being
-   * disposed of; the caller clears the field body's own pins, a net may hold a snapshot of it).
+   * no-melt: the station takes the catch parked at the nose collar (the resupply stop; GameFlowManager). Already paid
+   * (the mate credited it): nothing is credited or digested, the pins clear and the net leaves the system. The caller
+   * removes the body from the field. A catch still being reeled, flown, leashed or cut is left alone.
+   * With `onlyId` it frees the collar of THAT piece only (`GameFlowManager.detachHeldPiece`: a big piece being disposed
+   * of; the caller clears the field body's own pins, a net may hold a snapshot of it).
    * @param {number|string|null} [onlyId] - hand over only the net around this debris id
    * @returns {number|string|null} the debris id handed over, or null when nothing was handed over
    */
@@ -5308,30 +4438,18 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Cargo-continuity S13(e) — the per-shot foul read that REPLACED the
-   * occupancy block. Firing is never refused because cargo exists as such; but
-   * a collared body sits on-axis fore of the nose, and a shot at a dead-ahead
-   * target sweeps a cone no launcher site clears (probe tmp/s13e-podsite.log:
-   * the cone reaches cargo radius only fore of the cargo — with whale cargo
-   * mated, EVERY forward shot fouls, foul cone ≥ 90° at every class). So a
-   * specific shot whose corridor intersects the mated cargo refuses per-shot.
-   * Owner 2026-10-13 (one launcher, centred): the muzzle is now ON the
-   * cargo's axis, but the answer for a nose-direction shot is the same as it
-   * was from ±0.45 m — it fouled then and fouls now, at every catch size the
-   * Large Net takes (measured, see the w7 plan Log): a held catch at the
-   * collar blocks the shot; fire again once it has left.
+   * Per-shot foul read (firing is never refused because cargo exists as such). A collared body sits on-axis fore of
+   * the nose, and a dead-ahead shot sweeps a cone no launcher site clears (foul cone >= 90 deg at every class, whale
+   * cargo mated: every forward shot fouls). So a shot whose corridor intersects the mated cargo refuses per-shot:
+   * the muzzle is on the cargo's axis (one launcher, centred), a held catch at the collar blocks the shot, fire again
+   * once it has left.
    *
-   * Geometry: closest approach of the shot ray (launchPos + t·launchDir, t>0)
-   * to the docked catch's live pin (the drawn truth — _scenePosition is what
-   * pinCapturedDebris wrote this frame, so BERTHED swing, the TRANSFERRING
-   * arc and the collar seat are all read exactly as drawn). Foul when the
-   * approach is closer than the cargo radius + BERTH_CLEARANCE_M (the berth's
-   * own keep-out — ONE clearance constant).
+   * Geometry: closest approach of the shot ray (launchPos + t*launchDir, t>0) to the docked catch's live pin
+   * (`_scenePosition`, as `pinCapturedDebris` wrote it this frame: BERTHED swing, TRANSFERRING arc and collar seat all
+   * read as drawn). Foul when closer than the cargo radius + BERTH_CLEARANCE_M (the berth's own keep-out).
    *
-   * @param {number} podIndex — the firing launcher (always 0; unused today, the
-   *   cargo read is launcher-independent, but the signature keeps the call sites honest)
-   * @param {{x:number,y:number,z:number}} launchPos — shot origin, METRES
-   *   (the NetProjectile/fireMotherNet convention)
+   * @param {number} podIndex — the firing launcher (always 0; unused, the read is launcher-independent)
+   * @param {{x:number,y:number,z:number}} launchPos — shot origin, METRES (the NetProjectile/fireMotherNet convention)
    * @param {{x:number,y:number,z:number}} launchDir — unit shot direction
    * @returns {NetProjectile|null} the fouled docked net, or null when clear
    */
@@ -5361,22 +4479,19 @@ export class CaptureNetSystem {
   }
 
   /**
-   * §8 A2 — manual jettison ([K]). Releases the berthed/parked catch: pins
-   * cleared, orbit re-seated, net expended, launcher freed. The securing timer
-   * (if still running) is cancelled — jettison before expiry means NO score;
-   * a parked catch was already credited.
+   * Manual jettison ([K]). Releases the berthed/parked catch: pins cleared, orbit re-seated, net expended, launcher
+   * freed. A still-running securing timer is cancelled: jettison before expiry means NO score; a parked catch was
+   * already credited.
    *
-   * Cargo-continuity S7: a hand-off in flight is IRREVOCABLE — the beat is ~3 s,
-   * and releasing mid-arc would drop a body that is neither on the tether nor on
-   * the rack (there is no honest position for it). The refusal speaks so [K] is
-   * never silently ignored.
+   * A hand-off in flight is IRREVOCABLE (~3 s beat; releasing mid-arc would drop a body that is neither on the tether
+   * nor on the rack). The refusal speaks so [K] is never silently ignored.
    * @returns {boolean} whether a docked catch was released
    */
   releaseDockedCatch() {
     const net = this.getDockedCatch();
     if (!net) return false;
     if (net.state === STATES.TRANSFERRING) {
-      // l5c-reach E10: the leash hand-off (net._leash) is not a flight to a daughter
+      // the leash hand-off (net._leash) is not a flight to a daughter
       const onLeash = net._leash === true;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD',
@@ -5387,9 +4502,9 @@ export class CaptureNetSystem {
       });
       return false;
     }
-    // Nets step 3 slice 5 (lane 5b, C5): a pending BIG piece pays when it is disposed of; letting it go would throw the pay away, so K
-    // (and the LET GO chip, the same call) refuses in plain words and changes nothing. A piece not yet mated (the securing timer still
-    // running) is not pending: K works there as it always did.
+    // A pending BIG piece pays when it is disposed of; letting it go would throw the pay away, so K (and the LET GO
+    // chip, the same call) refuses in plain words and changes nothing. A piece not yet mated (securing timer still
+    // running) is not pending: K works there.
     if (bigPieces.isPending(net.targetDebris)) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD',
@@ -5398,7 +4513,7 @@ export class CaptureNetSystem {
       });
       return false;
     }
-    // l5c-reach E10: [K] during the nose reel-in stops the reel cleanly before the release.
+    // [K] during the nose reel-in stops the reel cleanly before the release.
     if (net._leashNoseReel) {
       const drv = this._player && this._player.leashDriver;
       if (drv && typeof drv.cancelNoseReel === 'function') drv.cancelNoseReel(net);
@@ -5408,50 +4523,35 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Cargo-continuity S13(d) — adopt a lassoed piece onto the ONE holding model.
+   * Adopt a lassoed piece onto the ONE holding model.
    *
-   * The lasso's reel delivers the catch to the collar seat; this builds a mother
-   * net ALREADY BERTHED there, so the piece rides the exact machinery an S3
-   * mother catch does: the berth hold pins it at the collar, the securing timer
-   * mates it (CATCH_PROCESSED { parked: true } — credit lands exactly once), it
-   * joins the berthed ledger (getBerthedMassKg), then the S7 auto-transfer or the
-   * S8 collar-digestion clock finishes it (CATCH_PROCESSED { digested: true } →
-   * removal). This repairs the gap that lasso cargo mass joined NO ledger under
-   * the deleted cell model (the cells were not nets).
+   * The lasso's reel delivers the catch to the collar seat; this builds a mother net ALREADY BERTHED there, so the
+   * piece rides the mother catch machinery: the berth hold pins it at the collar, the securing timer mates it
+   * (CATCH_PROCESSED { parked: true }: credit lands exactly once), it joins the berthed ledger (getBerthedMassKg),
+   * then the auto-transfer or the collar-digestion clock finishes it (CATCH_PROCESSED { digested: true }, removal).
    *
-   * Deliberately emits NEITHER NET_FIRED NOR NET_BERTHED: those chain the mother
-   * launch recoil, the autopilot attitude-hold, the berth clunk/chime and the
-   * PARK_HOLD camera beat — all mother-launch ceremony the lasso's capture UX must
-   * not inherit. The lasso fires its own LASSO_STOWED/CAPTURED beats at reel
-   * completion; this is pure storage machinery.
+   * Deliberately emits NEITHER NET_FIRED NOR NET_BERTHED: those chain the mother launch recoil, the autopilot
+   * attitude-hold, the berth clunk/chime and the PARK_HOLD camera beat, which the lasso's capture UX must not
+   * inherit. The lasso fires its own LASSO_STOWED/CAPTURED beats at reel completion; this is pure storage machinery.
    *
    * @param {object} target — the lassoed debris (alive, pinned by the lasso reel)
-   * @returns {NetProjectile|null} the berthed net, or null when the dock is busy
-   *   (the caller holds the piece off and retries — cargo is never destroyed) or
-   *   the system has no player/debrisField context.
+   * @returns {NetProjectile|null} the berthed net, or null when the dock is busy (the caller holds the piece off and
+   *   retries: cargo is never destroyed) or the system has no player/debrisField context.
    */
   adoptLassoCatch(target) {
     const player = this._player;
     const debrisField = this._debrisField;
     if (!target || target.alive === false || !player || !debrisField) return null;
-    // Single-station guard: the collar holds ONE body. The caller pends while the
-    // dock is busy; refuse here defensively rather than double-berth.
+    // the collar holds ONE body; the caller pends while the dock is busy
     if (this.getDockedCatch() || this.hasMotherNetInFlight()) return null;
 
-    // Register item 81 (lasso path): adoption is the ownership transfer onto
-    // the one holding model — drop a severed runaway's stale claim HERE, past
-    // the busy guard (a refused adoption pends, and the pend keeps the
-    // EXPENDED arm's bounded-drift release armed; the claim also deliberately
-    // survives the lasso's reel, whose failure paths return the runaway to
-    // that same release — item-78 semantics).
+    // Adoption is the ownership transfer onto the one holding model: drop a severed runaway's stale claim HERE, past
+    // the busy guard (a refused adoption pends, and the pend keeps the EXPENDED arm's bounded-drift release armed; the
+    // claim also deliberately survives the lasso's reel, whose failure paths return the runaway to that same release).
     dropSeveredCatchClaim(target);
 
     const M_NET = Constants.SCENE_UNITS_PER_METER;
-    // l8-reel-collar: the adopted piece is born at HOME (the same place the mother reel ends: bag mouth at the
-    // ring, catch seated on the collar axis) — no 1.0 m standoff, no 2.856 m bag seat. LassoSystem's reel
-    // delivers to the same point (catchHomeDistM), so the hand-off does not snap.
-    // S13(e): the adoption seats on the COLLAR anchor (on-axis), not the
-    // launcher muzzle (30 mm behind it since 2026-10-13).
+    // The collar anchor (on-axis), not the launcher muzzle (30 mm behind it).
     const berthAnchor = (typeof player.getNetBerthCollarPositionInto === 'function')
       ? player.getNetBerthCollarPositionInto(new THREE.Vector3())
       : (typeof player.getNetPodPositionInto === 'function')
@@ -5469,10 +4569,8 @@ export class CaptureNetSystem {
       anchorProvider: (out) => player.getNetPodPositionInto(0, out),
     });
 
-    // Berth seeds — the state the mother reel would hand off at the standoff, for
-    // a piece delivered already seated at the collar. The ctx mirrors
-    // fireMotherNet's shape (the corridor gate reads armManager/lassoSystem on
-    // REELING; harmless here — the net is already BERTHED).
+    // Berth seeds: the state the mother reel hands off at, for a piece delivered already seated at the collar. The ctx
+    // mirrors fireMotherNet's shape (the corridor gate reads armManager/lassoSystem on REELING; harmless here).
     net._ctx = {
       player,
       debrisField,
@@ -5488,18 +4586,9 @@ export class CaptureNetSystem {
     net._reelSeedM = apexM;
     net._effectiveStandoffM = apexM;
     net._seedReelHome(target, player);
-    // 2026-08-26 round 2 (ENGULF) — the piece rides INSIDE the bag, not at the
-    // apex tip. Seat depth 0 pinned the catch AT the bag apex: the drawn bag
-    // extended fore of it, so the piece read "alongside the net" at the nose
-    // (owner: "net/Bag is supposed to be AROUND the debris, engulfing"). The
-    // pod path already seats catches inside the bag at their capture depth
-    // (whale-in-cone follow-up 2, _updateMotherReel); adoption now uses the
-    // fixed ADOPT_CATCH_SEAT_M (byte-equal to WRAP_SEAT_FRAC × the CN.LARGE
-    // bag cone height — the one-home law pinned in test-Constants), and the
-    // lasso reel delivers the piece to collar-seat + fwd × the SAME constant
-    // (LassoSystem._reelDeliveryWorld), so the hand-off stays pin-exact — the
-    // no-snap contract holds with the piece engulfed instead of alongside.
-    // l8-reel-collar: the seat is the HOME seat now (was ADOPT_CATCH_SEAT_M 2.856); the apex is at the ring.
+    // Born at HOME (where the mother reel ends: bag mouth at the ring, catch seated on the collar axis, INSIDE the bag).
+    // LassoSystem's reel delivers to the same point (catchHomeDistM), so the hand-off does not snap.
+    // owner 2026-08-26: the net/bag is AROUND the debris, engulfing it.
     net._catchSeatM = net._homeSeatM;
     net._seat0M = net._homeSeatM;
     net._reelDistM = net._homeCatchM;
@@ -5511,21 +4600,14 @@ export class CaptureNetSystem {
     } else {
       net._qLocal = new THREE.Quaternion();
     }
-    // Seed the old item-15 ramp clock DONE (re-ramping from 0 would have popped the drawn size at adoption). Since
-    // reel-visible _catchFloorScale ignores the clock and returns the true base scale, so this is bookkeeping only.
+    // ramp clock seeded DONE (re-ramping from 0 would pop the drawn size); `_catchFloorScale` ignores the clock, so
+    // this is bookkeeping only
     net._floorRampT = CN.MOTHER_CATCH_MIN_RENDER_RAMP_S ?? 0.6;
     net._berthTimer = CN.BERTH_SECURE_S ?? 4.0;
     net._berthProcessed = false;
-    // The adopted catch never LAUNCHES — it is born BERTHED at the collar.
-    // NetProjectile.update() emits NET_CEREMONY_START on the first tick of a
-    // fresh net, which replayed the ENTIRE launch beat list (pod prefire →
-    // glamour → approach → envelop → cinch) over a net that never flies: the
-    // letterboxed camera dollied around the nose, then chased beat anchors
-    // hundreds of km into empty space while the catch digested underneath
-    // (tmp/lasso-take frames 010–024: camToShipM 141 810 → 502 981 m during
-    // BRAKE_ENVELOP/CINCH — the owner's "what is the camera doing after the
-    // debris shrinks" report). Same rationale as the NET_BERTHED suppression
-    // below: adoption is the QUIET hand-off — none of the spectacle.
+    // Born BERTHED, never LAUNCHED: NetProjectile.update() emits NET_CEREMONY_START on a fresh net's first tick, which
+    // would replay the whole launch beat list over a net that never flies (the camera chased beat anchors hundreds of
+    // km into empty space while the catch digested). Adoption is the QUIET hand-off.
     net._ceremonyStartEmitted = true;
     net._tumbleCarryover = Math.min(Math.abs(target.tumbleRate || 0), CN.TUMBLE_CARRYOVER_MAX_RAD_S ?? 0.6);
     net._tumbleCarryAngle = 0;
@@ -5533,36 +4615,27 @@ export class CaptureNetSystem {
 
     this.activeNets.push(net);
 
-    // 2026-08-26 — attach the standard berthed-bag VISUAL. NET_FIRED /
-    // NET_BERTHED / NET_CEREMONY_START stay suppressed on this path (launch
-    // recoil, autopilot attitude-hold, berth clunk, camera beats — the
-    // spectacle adoption must not inherit), but the visual-only gap they left
-    // was real: CaptureNetVisual creates bags on NET_FIRED alone, so every
-    // adopted lasso catch sat at the collar as a BARE floored icosahedron
-    // through berth + digestion and then chop-shrank in the open
-    // (tmp/lasso2-day-before f005–f010 — the owner's "debris shrinks wrapped
-    // in a geodesic bubble" on the REAL catch path). NET_ADOPTED has exactly
-    // one consumer by design: the visual attaches the same cinched bag +
-    // welded film + W3 chop deflation an S3 mother berth gets.
+    // Attach the standard berthed-bag VISUAL: NET_FIRED / NET_BERTHED / NET_CEREMONY_START stay suppressed here, but
+    // CaptureNetVisual creates bags on NET_FIRED alone, so an adopted catch would sit at the collar as a BARE
+    // icosahedron through berth + digestion. NET_ADOPTED has exactly one consumer by design: the visual attaches the
+    // same cinched bag + welded film + chop deflation a mother berth gets.
     eventBus.emit(Events.NET_ADOPTED, { podIndex: 0, armIndex: -1 });
 
-    // The catch's mass just entered the berthed ledger. A mother berth invalidates
-    // the attitude inertia via NET_BERTHED; this path must not emit that event (it
-    // chains the launch/berth ceremony), so invalidate the cache directly — same
-    // effect, none of the spectacle.
+    // The catch's mass just entered the berthed ledger. A mother berth invalidates the attitude inertia via
+    // NET_BERTHED, which this path must not emit: invalidate the cache directly.
     if ('_attitudeInertia' in player) player._attitudeInertia = null;
 
     return net;
   }
 
   /**
-   * u20-nose — a daughter hands the catch she holds to the nose (docs/research/2026-10-nose-handoff.md). Modelled on
-   * `adoptLassoCatch`: the catch is already seated on the collar axis (she flew it to the seat the mother's own catches use,
-   * `catchHomeDistM`), so the net is born AT HOME, no reel, no snap, and goes straight to COLLARED: the mate already
-   * happened (her rack paid the catch when it was parked there, `ArmUnit` rack park, `CATCH_PROCESSED` source 'rack'), so there is
-   * no berth timer and no second credit. The adopted net behaves like a mother catch at the collar everywhere (the leash,
-   * trip melting, K lets go, cut rules, the net-shot foul). The first-tick hand-off decision stays OFF (`_cargoDeclined`, retry
-   * parked) until the daughter is home: the leash cannot turn the ship under her. `ArmUnit` calls `releaseNoseRetry(net)` then.
+   * A daughter hands the catch she holds to the nose (archive/research/2026-10-nose-handoff.md). Modelled on
+   * `adoptLassoCatch`: the catch is already seated on the collar axis (she flew it to the seat the mother's own catches
+   * use, `catchHomeDistM`), so the net is born AT HOME, no reel, no snap, and goes straight to COLLARED: the mate
+   * already happened (her rack paid it, `ArmUnit` rack park, `CATCH_PROCESSED` source 'rack'), so no berth timer and
+   * no second credit. It behaves like a mother catch at the collar everywhere (leash, trip melting, K, cut rules,
+   * net-shot foul). The first-tick hand-off decision stays OFF (`_cargoDeclined`, retry parked) until the daughter is
+   * home: the leash cannot turn the ship under her. `ArmUnit` calls `releaseNoseRetry(net)` then.
    *
    * @param {object} target — the catch (alive, pinned to the daughter's rack until this call)
    * @returns {NetProjectile|null} the collared net, or null when the nose is busy / the system has no player or debris field
@@ -5615,7 +4688,7 @@ export class CaptureNetSystem {
     net._tumbleCarryAngle = 0;
     net._pendulumAngle = 0;
     net._pendulumVel = 0;
-    // MATED already: paid on her rack, no berth timer (BERTHED -> COLLARED is the mate), no CATCH_PROCESSED here.
+    // MATED already (paid on her rack): no berth timer (BERTHED -> COLLARED is the mate), no CATCH_PROCESSED here.
     net._berthTimer = 0;
     net._berthProcessed = true;
     net._noseAdopted = true;
@@ -5626,20 +4699,21 @@ export class CaptureNetSystem {
     this.activeNets.push(net);
     eventBus.emit(Events.NET_ADOPTED, { podIndex: 0, armIndex: -1 });
     if ('_attitudeInertia' in player) player._attitudeInertia = null;
-    // No gap: the net's own hold writes the catch's pin NOW, so the one frame between this call and the next net tick is not unpinned.
+    // No gap: the net's own hold writes the catch's pin NOW, so the frame before the next net tick is not unpinned.
     net.updateBerthHold(0);
     return net;
   }
 
-  /** u20-nose: the daughter is home - let the adopted net try its leash hand-off on the very next tick. */
+  /** The daughter is home: let the adopted net try its leash hand-off on the very next tick. */
   releaseNoseRetry(net) {
     if (net && net._noseAdopted) net._cargoRetryS = 1e9;
   }
 
   /**
-   * u20-nose: take back a daughter's hand-over before she lets go (the tug test failed, or her carry was aborted): the net leaves the list (the
-   * visual follows the list) and stops holding. Unlike `_teardownBerth` it does NOT clear the catch's pins and rack record: the catch goes back to
-   * the daughter's rack as it was (`ArmUnit._noseRollback` restores what the net's hold wrote). Returns true when the net was in play.
+   * Take back a daughter's hand-over before she lets go (tug test failed, or her carry aborted): the net leaves the
+   * list (the visual follows the list) and stops holding. Unlike `_teardownBerth` it does NOT clear the catch's pins
+   * and rack record: the catch goes back to the daughter's rack as it was (`ArmUnit._noseRollback`).
+   * Returns true when the net was in play.
    */
   cancelDaughterAdoption(net) {
     if (!net) return false;
@@ -5651,8 +4725,8 @@ export class CaptureNetSystem {
   }
 
   /**
-   * l8-reel-collar — metres from the berth anchor (the collar plane) to where a catch's centre ends on the collar
-   * axis (HOME, see `catchHomeDistM`). The lasso's reel and adoption read this so they agree with the mother reel.
+   * Metres from the berth anchor (the collar plane) to where a catch's centre ends on the collar axis (HOME, see
+   * `catchHomeDistM`). The lasso's reel and adoption read this so they agree with the mother reel.
    * @param {object} d — the catch (sizeMeter)
    * @returns {number} metres
    */
@@ -5661,16 +4735,11 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Cargo-continuity S13(d) — fore extent (metres from the collar plane —
-   * the berth anchor, S13(e)) of the
-   * busiest active mother-net berth, 0 when the collar station is clear. A lassoed
-   * piece waiting for the collar holds this far ahead of the seat so it never
-   * overlaps the occupant (docked or inbound). Conservative: an inbound net
-   * reserves its eventual berth footprint. Register item 74: the read is the
-   * shared `motherNetForeExtentM` — a corridor-held or extended-standoff
-   * member reports its TRUE far face (its frozen slot / honest apex), so the
-   * pend can no longer pin inside the tandem body; with no held/extended
-   * member the base formula stands byte-identical.
+   * Fore extent (metres from the collar plane, the berth anchor) of the busiest active mother-net berth, 0 when the
+   * collar station is clear. A lassoed piece waiting for the collar holds this far ahead of the seat so it never
+   * overlaps the occupant (docked or inbound). Conservative: an inbound net reserves its eventual berth footprint.
+   * Reads the shared `motherNetForeExtentM`: a corridor-held or extended-standoff member reports its TRUE far face
+   * (frozen slot / honest apex), so the pend cannot pin inside the tandem body.
    * @returns {number} metres
    */
   getCollarQueueDepthM() {
@@ -5686,9 +4755,7 @@ export class CaptureNetSystem {
     return ext;
   }
 
-  /**
-   * Reset to clean state (game reset / new session).
-   */
+  /** Reset to clean state (game reset / new session). */
   reset() {
     this.activeNets = [];
     this._cooldownTimers.clear();
@@ -5696,17 +4763,13 @@ export class CaptureNetSystem {
     this._motherPodMax       = new Array(this._motherPodCount()).fill(0);
     this._initialized = false;
     this._playerHasFragmented = false;
-    // Phase B §9.5: kill any running net loops — a reset drops every net with
-    // no terminal events, so the whistle/winch would otherwise stick (the
-    // classic bug). Optional-chained: headless tests inject no audioSystem.
+    // a reset drops every net with no terminal events, so the whistle/winch loops would stick; optional-chained:
+    // headless tests inject no audioSystem
     this._audioSystem?._stopNetLoops?.();
   }
 
-  // ── Fire Commands ──────────────────────────────────────────────────────
-
   /**
-   * Number of Mother Large Net launchers (CAPTURE_NET.MOTHER_POD_COUNT: 1 since
-   * 2026-10-13 — owner: one launcher, centred). Never below 1.
+   * Number of Mother Large Net launchers (CAPTURE_NET.MOTHER_POD_COUNT: one, centred). Never below 1.
    * @private
    * @returns {number}
    */
@@ -5718,8 +4781,7 @@ export class CaptureNetSystem {
   /**
    * Fire a Large Net from the Mother's launcher.
    *
-   * @param {number} podIndex   — the launcher index; always 0 (one launcher
-   *   since 2026-10-13, the podIndex API is kept)
+   * @param {number} podIndex   — the launcher index; always 0 (the podIndex API is kept)
    * @param {object} launchPos  — world position {x, y, z} in metres
    * @param {object} launchDir  — normalised direction {x, y, z}
    * @param {object} target     — debris object (with .position, .mass, .id)
@@ -5727,10 +4789,10 @@ export class CaptureNetSystem {
    * @returns {NetProjectile|null} The created projectile, or null on failure
    */
   fireMotherNet(podIndex, launchPos, launchDir, target, mode) {
-    if (tripRefuses('net')) return null;            // trip-melt D7: no net while the ship burns to the next field
+    if (tripRefuses('net')) return null;            // no net while the ship burns to the next field
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return null;
-    if (target && target._disposed === true) return null;       // slice 5 (5d, D4): a piece that was disposed of is no catch
-    // big-rules R4: the catch limit at the source (§49 row 1), so every caller (the N key, the autopilot, the dev scenario) is refused the same way
+    if (target && target._disposed === true) return null;       // a piece that was disposed of is no catch
+    // the catch limit at the source (§49 row 1), so every caller (N key, autopilot, dev scenario) is refused the same way
     if (target && overCatchLimit(target.mass, Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE)) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: catchLimitLine(target.mass, Constants.CAPTURE_NET.LARGE), source: 'SYSTEM', channel: 'CMD', priority: 'warning',
@@ -5738,9 +4800,7 @@ export class CaptureNetSystem {
       return null;
     }
     if (!(podIndex >= 0) || podIndex >= this._motherPodCount()) return null;
-    // Phase 0.3 (capture-feedback overhaul): refusals speak — mirror the
-    // LassoSystem denial-comms style so the player knows WHY nothing fired
-    // and what fixes it (wait N s / send a daughter).
+    // Refusals speak (as in LassoSystem) so the player knows WHY nothing fired and what fixes it.
     // DECISIONS §33 row 3: at 0 nets there is ONE line, the same one the small-net path says.
     if (this._motherPodInventory[podIndex] <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -5761,13 +4821,9 @@ export class CaptureNetSystem {
       });
       return null;
     }
-    // S13(e): the §8 A2 occupancy refusal is RETIRED — cargo occupancy is not
-    // a fire refusal as such. What remains is per-shot and geometric: a shot
-    // whose corridor intersects the mated cargo refuses with aim information
-    // (not a blocked launcher). Since 2026-10-13 the launcher is back on the
-    // axis, where the catch seat is, so a catch held at the collar fouls every
-    // shot (owner-approved physics: the catch is in the way).
-    // no-melt: a catch at the collar with nowhere to go refuses every new net, in plain words (once per press).
+    // No fire refusal for cargo occupancy as such; only the per-shot foul below. The launcher is on the axis, where
+    // the catch seat is, so a catch held at the collar fouls every shot (owner-approved physics: the catch is in the way).
+    // A catch at the collar with nowhere to go refuses every new net, in plain words (once per press).
     const full = this.getNoseFullLine();
     if (full) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -5786,21 +4842,13 @@ export class CaptureNetSystem {
       return null;
     }
 
-    // Deplete inventory (a launched net is used up, hit or miss: DECISIONS §33 row 1)
+    // A launched net is used up, hit or miss (DECISIONS §33 row 1)
     this._motherPodInventory[podIndex]--;
 
-    // CEREMONY_REDESIGN §4 / NET_CEREMONY alignment (2026-05-25):
-    // When NET_CEREMONY is on, the ceremony's beats 5–6 (BRAKE_ENVELOP, CINCH)
-    // assume the CINCH FSM path. SLAM_WRAP physics skips ENVELOP and CINCH_CLOSING
-    // entirely (CONTACT → SECURE_CHECK → CAPTURED in <1 s game-time), so the
-    // visual renders no engulf or cinch animation during those beats — confirmed
-    // by browser log ([NET_CINEMATIC] CEREMONY_START captureMode=SLAM_WRAP) and
-    // by inspecting [`CaptureNet._updateContact`](js/entities/CaptureNet.js:387).
-    // Force CINCH when the auto-recommender would otherwise pick SLAM_WRAP, so
-    // the FSM traverses BRAKE→ENVELOP→CINCH_CLOSING and the ceremony visual
-    // matches the camera beats. Explicit `mode` argument is still honoured
-    // (preserves test paths and future explicit-mode UI). CINCH_P_BASE is
-    // ≥ SLAM_P_BASE in all pairings, so no score regression.
+    // NET_CEREMONY beats 5-6 (BRAKE_ENVELOP, CINCH) assume the CINCH FSM path: SLAM_WRAP skips ENVELOP and
+    // CINCH_CLOSING (CONTACT -> SECURE_CHECK -> CAPTURED in <1 s), so the visual would show no engulf or cinch.
+    // Force CINCH when the auto-recommender would pick SLAM_WRAP; an explicit `mode` is still honoured. CINCH_P_BASE
+    // is >= SLAM_P_BASE in all pairings, so no score regression.
     let resolvedMode = mode || recommendCaptureMode(target);
     if (!mode && Constants.FEATURE_FLAGS.NET_CEREMONY) {
       resolvedMode = MODES.CINCH;
@@ -5814,23 +4862,17 @@ export class CaptureNetSystem {
       launchDirection: launchDir,
       targetDebris:   target,
       captureMode:    resolvedMode,
-      // Mother-pod launcher anchor: polled every frame for the pod muzzle's
-      // CURRENT world position (scene units). Without it every
-      // `_sourceArm?.position` block is skipped and the net renders at a
-      // stale absolute point that drifts ~45 km apparent in the first 0.65 s
-      // (mother-net-reel plan §7.2). Falls back to the metres-based test
-      // path when no player ref was injected (headless mocks).
+      // Polled every frame for the pod muzzle's CURRENT world position (scene units). Without it the net renders at a
+      // stale absolute point that drifts ~45 km apparent in the first 0.65 s. Null falls back to the metres-based test
+      // path (headless mocks, no player ref).
       anchorProvider: this._player
         ? (out) => (typeof this._player.getNetPodPositionInto === 'function'
             ? this._player.getNetPodPositionInto(podIndex, out)
             : out)
         : null,
     });
-    // Phase-A berth context (player for the ship-relative reel frame,
-    // debrisField for the pinCapturedDebris API — plan §1.1). Phase C-lite
-    // adds armManager + lassoSystem for the recovery-corridor test (§10).
-    // S13(e): the system back-reference lets the corridor gate read the OTHER
-    // docked nets' cargo (the mated-cargo obstacle class).
+    // Berth context: player (ship-relative reel frame), debrisField (pinCapturedDebris API), armManager + lassoSystem
+    // (recovery-corridor test), and the system itself (the corridor gate reads the OTHER docked nets' cargo).
     net._ctx = {
       player: this._player,
       debrisField: this._debrisField,
@@ -5882,14 +4924,10 @@ export class CaptureNetSystem {
 
     const netClass = (arm.config?.type === 'weaver') ? CN.MEDIUM : CN.SMALL;
 
-    // Net-canister continuity fix: the net leaves the arm's fore net-launcher
-    // canister, not the body centre. When the arm exposes the mesh-derived
-    // muzzle (real ArmUnit), override the caller-supplied launch position with
-    // it — the SAME source _anchorScene() polls every frame, so net.position
-    // and the co-orbiting anchor agree from tick 0 and the flight/contact
-    // math shifts by exactly the canister offset (~0.11–0.20 m along the
-    // nose). Mock arms without the method keep the explicit launchPos
-    // (headless test path). Muzzle is scene units → convert to metres.
+    // The net leaves the arm's fore net-launcher canister, not the body centre: when the arm exposes the mesh-derived
+    // muzzle (real ArmUnit), it overrides the caller's launch position (the SAME source `_anchorScene()` polls, so
+    // net.position and the co-orbiting anchor agree from tick 0; ~0.11-0.20 m along the nose). Mock arms keep the
+    // explicit launchPos. Muzzle is scene units -> metres.
     let spawnPos = launchPos;
     if (typeof arm.getNetMuzzleWorldInto === 'function') {
       const M_NET = Constants.SCENE_UNITS_PER_METER;   // 1 m in scene units (matches ArmUnit.M)
@@ -5898,9 +4936,7 @@ export class CaptureNetSystem {
       spawnPos = { x: mz.x / M_NET, y: mz.y / M_NET, z: mz.z / M_NET };
     }
 
-    // CEREMONY_REDESIGN §4 / NET_CEREMONY alignment (2026-05-25): see fireMotherNet
-    // above for full rationale. Force CINCH so beats 5–6 visuals (ENVELOP, CINCH_CLOSING)
-    // actually render during the ceremony — SLAM_WRAP path skips those states.
+    // Force CINCH so the ENVELOP / CINCH_CLOSING visuals render during the ceremony (rationale: see fireMotherNet).
     let resolvedMode = mode || recommendCaptureMode(target);
     if (!mode && Constants.FEATURE_FLAGS.NET_CEREMONY) {
       resolvedMode = MODES.CINCH;
@@ -5914,7 +4950,7 @@ export class CaptureNetSystem {
       launchDirection: launchDir,
       targetDebris:   target,
       captureMode:    resolvedMode,
-      sourceArm:      arm,           // §3.5: retained for inventory restoration on miss
+      sourceArm:      arm,           // retained for inventory restoration on miss
     });
 
     this.activeNets.push(net);
@@ -5924,13 +4960,8 @@ export class CaptureNetSystem {
     eventBus.emit(Events.NET_FIRED, {
       source:   'daughter',
       armIndex,
-      // Daughter-net audio fix (2026-08-27): podIndex is EXPLICIT, not absent.
-      // AudioSystem's mother gate used to read `data.podIndex < 0` — with the
-      // field missing, `undefined < 0 === false`, so a DAUGHTER fire started
-      // the mother canister thump + flight-whistle loop, and every pod-gated
-      // stop hook then ignored the daughter's terminal events: a leaked
-      // whistle until session reset. Gating must be deliberate, never an
-      // accident of a missing field.
+      // EXPLICIT, not absent: AudioSystem's mother gate reads `data.podIndex < 0`, and `undefined < 0` is false, so a
+      // daughter fire started the mother canister thump + whistle loop and leaked it until session reset.
       podIndex: -1,
       netClass: netClass === CN.MEDIUM ? 'MEDIUM' : 'SMALL',
       remaining,
@@ -5945,8 +4976,6 @@ export class CaptureNetSystem {
     return net;
   }
 
-  // ── Queries (ST-9.4e — HUD) ───────────────────────────────────────────
-
   /** Total Mother Large Net count (the launcher magazine; sums the array). */
   getMotherNetCount() {
     let n = 0;
@@ -5959,9 +4988,8 @@ export class CaptureNetSystem {
 
   /**
    * Mass of the mother's nets aboard, kg: count x the current line-fibre tier's packed-net mass
-   * (Constants.TETHER_TIERS[tier].netMassKg.mother; 1.425 kg at the start tier). Every loaded net weighs the current
-   * tier's mass (nets bought before an upgrade count as re-packed: a simplification). The net's flight physics keep
-   * CAPTURE_NET.LARGE.MASS.
+   * (Constants.TETHER_TIERS[tier].netMassKg.mother; 1.425 kg at the start tier). Nets bought before an upgrade count
+   * as re-packed (a simplification). The net's flight physics keep CAPTURE_NET.LARGE.MASS.
    */
   getMotherNetMassKg() {
     const row = Constants.TETHER_TIERS[this._motherNetTier];
@@ -5971,9 +4999,8 @@ export class CaptureNetSystem {
 
   /**
    * Line-fibre upgrade (ArmManager.applyTetherUpgrade, the one hub): raise the mother's magazine to `n` nets.
-   * Capacity never drops. The loaded count stays as it is (the new cartridges arrive empty and fill at the stop at
-   * today's price) unless `fill` is set, which is the save-load path: every launcher full. Emits
-   * NET_INVENTORY_CHANGED (mother, with the new podMax) so the launcher face, the HUD and the autopilot follow.
+   * Capacity never drops. The loaded count stays (new cartridges arrive empty and fill at the stop) unless `fill` is
+   * set (the save-load path: every launcher full). Emits NET_INVENTORY_CHANGED (mother, with the new podMax).
    * @param {number} n nets the launcher holds at this tier
    * @param {{tier?: number, fill?: boolean}} [opts] `tier` = the TETHER_TIERS index (for the net mass; derived from `n`
    *   when absent), `fill` = load every cartridge
@@ -5992,8 +5019,8 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Spend one mother net for a shot that has really launched (the small-net path in LassoSystem calls this at the point
-   * of launch, after every refusal check; fireMotherNet spends its own). One count for both paths, DECISIONS §33 row 1.
+   * Spend one mother net for a shot that has really launched (the small-net path in LassoSystem calls this at launch,
+   * after every refusal check; fireMotherNet spends its own). One count for both paths, DECISIONS §33 row 1.
    * @returns {boolean} true if a net was spent, false at 0 (or flag off)
    */
   spendMotherNet() {
@@ -6010,8 +5037,8 @@ export class CaptureNetSystem {
   }
 
   /**
-   * One line when a shot leaves exactly one mother net ("One mother net left." replaces the old "running low at 5"
-   * warning). Emitted from here so a lasso shot and a heavy-piece shot both say it, once.
+   * One line when a shot leaves exactly one mother net. Emitted from here so a lasso shot and a heavy-piece shot both
+   * say it, once.
    * @private
    */
   _announceLastMotherNet() {
@@ -6035,20 +5062,18 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Set the Mother launcher inventory (persistence restore). Accepts a number
-   * or any array (a legacy two-pod save [a, b] is summed), and is capped at
-   * the magazine size.
+   * Set the Mother launcher inventory (persistence restore). Accepts a number or any array (a legacy two-pod save
+   * [a, b] is summed), capped at the magazine size.
    */
   setMotherPodInventory(counts) {
     const total = this._sumLegacyPodCounts(counts);
     if (total === null) return;
-    this._motherPodInventory = [Math.max(0, Math.min(total, this._motherPodMax[0] || 0))];
+    this._motherPodInventory = [clamp(this._motherPodMax[0] || 0, 0, total)];
   }
 
   /**
-   * Sum a saved launcher count: a number, or an array of per-launcher counts
-   * (the pre-2026-10-13 save carried [podA, podB]). Non-finite / negative
-   * entries count as 0. Returns null when `counts` is neither.
+   * Sum a saved launcher count: a number, or an array of per-launcher counts (the old two-pod save [podA, podB]).
+   * Non-finite / negative entries count as 0. Returns null when `counts` is neither.
    * @private
    * @param {number|number[]} counts
    * @returns {number|null}
@@ -6081,9 +5106,8 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Load exactly one Large Net into the Mother launcher if it has space (shop
-   * restock — one net per 250 cr purchase, matching REPLACEMENT_COST; net
-   * ladder Phase B, mirrors the daughters' per-net reload economy).
+   * Load exactly one Large Net into the Mother launcher if it has space (shop restock: one net per purchase,
+   * REPLACEMENT_COST, mirroring the daughters' per-net reload economy).
    * @returns {boolean} true if a net was loaded
    */
   loadOneMotherNet() {
@@ -6112,10 +5136,8 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Whether the Mother launcher is in its post-fire cooldown. InputManager's
-   * pre-slew gate calls this (it was wired behind a `typeof` guard against a
-   * method that never existed — mother-net-reel plan §2 C4 — so a cooldown
-   * fire used to run the entire aim slew before being refused).
+   * Whether the Mother launcher is in its post-fire cooldown (InputManager's pre-slew gate, so a cooldown fire is
+   * refused before the aim slew runs).
    * @param {number} podIndex
    * @returns {boolean}
    */
@@ -6124,9 +5146,7 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Net class fired by a mother pod. The lead-aim provider in InputManager
-   * calls this for the launch speed (previously hardcoded `10.0 * M` behind
-   * another typeof guard — §2 C4 — which silently desynced from any retune).
+   * Net class fired by a mother pod (InputManager's lead-aim provider reads the launch speed from it).
    * @param {number} podIndex — the one launcher fires LARGE
    * @returns {object} CN.LARGE
    */
@@ -6135,13 +5155,10 @@ export class CaptureNetSystem {
   }
 
   /**
-   * True when any mother-pod net (podIndex ≥ 0) is in a non-terminal,
-   * non-berthed state. Firing a second net from the same launcher frame
-   * breaks the VISUAL (the visual map is keyed `pod_${podIndex}` and
-   * early-returns when the key exists — mother-net-reel plan §4.5) as well
-   * as the physics, so the InputManager refusal gates on this. BERTHED is
-   * excluded — a berthed catch has its own per-shot read (S13(e):
-   * getCollarShotFoul — firing is never occupancy-refused).
+   * True when any mother-pod net (podIndex >= 0) is in a non-terminal, non-berthed state. A second net from the same
+   * launcher frame breaks the VISUAL (the visual map is keyed `pod_${podIndex}` and early-returns when the key
+   * exists) as well as the physics, so the InputManager refusal gates on this. BERTHED is excluded: a berthed catch
+   * has its own per-shot read (`getCollarShotFoul`).
    * @returns {boolean}
    */
   hasMotherNetInFlight() {
@@ -6176,8 +5193,6 @@ export class CaptureNetSystem {
     return this._cooldownTimers.get(`${type}_${index}`) || 0;
   }
 
-  // ── Mercy Rule (§5.7) ─────────────────────────────────────────────────
-
   /** Whether the player has ever caused fragmentation. */
   get playerHasFragmented() { return this._playerHasFragmented; }
   set playerHasFragmented(v) { this._playerHasFragmented = !!v; }
@@ -6194,7 +5209,7 @@ export class CaptureNetSystem {
     const mercyApplied = CN.FRAG_MERCY_FIRST_FREE && !this._playerHasFragmented;
     this._playerHasFragmented = true;
 
-    // Phase 3b: apply the §5.5 credit penalty (waived on the first-time mercy).
+    // the credit penalty (waived on the first-time mercy)
     if (!mercyApplied && (CN.FRAG_CREDIT_PENALTY || 0) > 0 && fragmentCount > 0) {
       eventBus.emit(Events.SCORING_AWARD, {
         points: -(CN.FRAG_CREDIT_PENALTY * fragmentCount),
@@ -6211,12 +5226,9 @@ export class CaptureNetSystem {
     return mercyApplied;
   }
 
-  // ── Persistence (ST-9.4d — inventory round-trip) ──────────────────────
-
   /**
-   * Get serialisable state for PersistenceManager. `motherPodInventory` is a
-   * one-element array [n] since 2026-10-13 (it was [podA, podB]; restoreState
-   * still reads the old shape).
+   * Get serialisable state for PersistenceManager. `motherPodInventory` is a one-element array [n]
+   * (`restoreState` still reads the old two-pod shape).
    * @returns {object}
    */
   getState() {
@@ -6234,13 +5246,9 @@ export class CaptureNetSystem {
     if (!state) return;
     const saved = this._sumLegacyPodCounts(state.motherPodInventory);
     if (saved !== null) {
-      // Ensure the magazine max is seeded (init() normally does this before
-      // restore, but guard for out-of-order load paths) so the clamp below has
-      // a real ceiling. Then clamp the restored total to it — a save written
-      // before the net-ladder MAGAZINE_SIZE downsize can carry counts above
-      // the cap and must not load an over-max magazine.
-      // Owner 2026-10-13: ONE launcher. A legacy two-pod save ([a, b], one
-      // count per ±0.45 m pod) is summed and capped: [2, 1] -> [3], [3, 4] -> [4].
+      // Seed the magazine max if init() has not (out-of-order load paths) so the clamp has a real ceiling: a save from
+      // before the MAGAZINE_SIZE downsize can carry counts above the cap and must not load an over-max magazine.
+      // One launcher: a legacy two-pod save ([a, b]) is summed and capped: [2, 1] -> [3], [3, 4] -> [4].
       // No save-version bump; the writer (getState) emits [n].
       if (!this._motherPodMax.some((m) => m > 0)) {
         this._motherPodMax = new Array(this._motherPodCount()).fill(this._motherNetCapacity);
@@ -6252,17 +5260,11 @@ export class CaptureNetSystem {
     }
     this._initialized = true;
 
-    // Emit so listeners (launcher caps, HUD NetInventoryPanel) sync to the restored
-    // magazine — restore previously mutated inventory silently, leaving any
-    // listener showing stale state after a load. Mirrors init()'s emit.
+    // Emit so listeners (launcher caps, HUD NetInventoryPanel) sync to the restored magazine. Mirrors init()'s emit.
     this._emitMotherInventory(true);
   }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════════
-// §4  Singleton Export
-// ═══════════════════════════════════════════════════════════════════════════
 
 /** Singleton CaptureNetSystem instance. */
 export const captureNetSystem = new CaptureNetSystem();

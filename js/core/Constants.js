@@ -3,103 +3,50 @@
  * @module core/Constants
  */
 
-// W1 net-reach — ONE "close enough to net" number. NET_LOCK_RANGE_M (reticle
-// "in range", autolock, the OUT OF RANGE state) and LASSO_RANGE (the lasso's
-// fire gate) are both this value, so the reticle can never say "in range" for a
-// cast that is refused, nor the reverse. Hoisted above the literal because
-// LASSO_RANGE appears before NET_LOCK_RANGE_M in it.
+import { degToRad, clamp01 } from './MathUtil.js';
+import { VisualLaw } from './VisualLaw.js';
+
+// ONE "close enough to net" number: NET_LOCK_RANGE_M (reticle "in range", autolock, OUT OF RANGE) and LASSO_RANGE
+// (lasso fire gate) both use it, so the reticle never says "in range" for a refused cast. Hoisted: LASSO_RANGE
+// appears before NET_LOCK_RANGE_M in the literal.
 const NET_REACH_M = 90;
 
 export const Constants = {
-  // === VERSION ===
-  // Single source of truth for the displayed app version. VERSION is the raw
-  // value; VERSION_LABEL is the exact string the UI renders (menu title tag,
-  // and any other ES-module UI). NON-module consumers (e.g. sw.js cache name)
-  // must be updated by hand — keep them in sync here.
+  // --- VERSION ---
+  // VERSION is the raw value; VERSION_LABEL is the exact string the UI renders. NON-module consumers (e.g. sw.js
+  // cache name) must be updated by hand — keep them in sync here.
   VERSION: '1.02',
   VERSION_LABEL: 'V1.02',
 
-  // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as
-  // ?v=<DATA_VERSION>). Deliberately SEPARATE from VERSION: a curated-content
-  // edit must invalidate cached JSON without moving the user-visible release
-  // number. Bump this on every ./data/ content change; leave VERSION for
-  // actual releases.
-  // '1003'→'1004': P2 thermal-arc codex batch (20 entries, single-stamp rule —
-  // later phases add ZERO codex stamps; P1 ledger §9).
-  // '1004'→'1005': Wave-4 pane-help PLAYBOOK batch (9 pane_* entries,
-  // docs/ladder/08-workbench.md §11).
-  // '1005'→'1006': Wave-5 (2) REFIT pane PLAYBOOK entry (pane_refit + the two
-  // symmetric PLAYBOOK backlinks, docs/ladder/08-workbench.md §2).
-  // '1006'→'1007': Wave-5 (Session B) TECH LIBRARY pane PLAYBOOK entry
-  // (pane_library + the two symmetric backlinks, docs/ladder/08-workbench.md §2).
-  // '1007'→'1008': Wave-5 (Session C) callout-bridge review — two hardwareNames
-  // moves (STRUT HINGES → vacuum_mechanisms, S-BAND OMNI (AFT) →
-  // frequency_bands; no entries added or removed, docs/ladder/08-workbench.md §2).
-  // '1008'→'1009': Wave-5 (Session D) bridge lines — one `hardwareNote`
-  // sentence on each of the 24 hardware entries (the part and what it does on
-  // THIS ship, then the concept; no entries added or removed, 08-workbench §2).
-  // '1009'→'1010': Wave-5 (Session D) structure briefings — five entries for
-  // the briefing-less callout parts (aft_thruster_deck, fore_bulkhead,
-  // sensor_deck, nav_lights, tip_hardpoints; owner decision 1) + their
-  // symmetric backlinks; 215 → 220 entries (08-workbench §2 / §7).
-  // '1010'→'1011': Wave-5 (Session L) cluster / band data pass — seven cluster_*
-  // + five band_* briefings for the floor-4 SPECS subject; 220 → 232 entries.
-  // '1011'→'1012': Mother audit — docking_berthing.hardwareNames gains the
-  // DOCKING COLLAR card (the T1 nose-collar card, renamed; owner 2026-09-08);
-  // no entries added or removed (232).
-  // '1012'→'1013': Design 7b radiator launch fold — space_radiator.fullText
-  // and vacuum_mechanisms.fullText gain the fold-in-two / launch-lock
-  // sentences (GEO-comsat pattern; owner 2026-09-08); no entries added or
-  // removed (232).
-  // '1013'→'1014': Session U ONE workbench pane — pane_library retitled "The
-  // SPECS Pane" (the click verb: portrait + the clicked name + summary, the F1
-  // REFIT block inside it, the gold count, MAXIMIZE, Esc) and pane_refit
-  // rewritten as the REFIT block inside SPECS at the ship close-up (Space, BUY
-  // one click, hover-ghost, chips); no left/right-pane language; no entries
-  // added or removed (232). Plan 1788954873769 A1.5.
-  // '1014'→'1015': F1 workbench Lane D — the capture_collar hardware entry
-  // (the debris-capture nose collar briefing; DOCKING COLLAR retargeted off
-  // docking_berthing, which keeps DAUGHTER BERTHS; CARGO deep-links it too);
-  // 232 → 233 entries. Plan 1789561832042, 2026-09-23.
-  // '1015'→'1016': F1 follow-up Lane H — DAUGHTER STRUTS appended to
-  // docking_berthing.hardwareNames (the daughter cradle struts callout card);
-  // no entries added or removed (233). DECISIONS §13 r4, 2026-09-24.
+  // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as ?v=<DATA_VERSION>). Deliberately SEPARATE
+  // from VERSION: a curated-content edit must invalidate cached JSON without moving the release number. Bump it on
+  // every ./data/ content change; leave VERSION for actual releases.
   DATA_VERSION: '1016',
+  // owner 2026-09-08: the T1 nose-collar card is the DOCKING COLLAR card (docking_berthing.hardwareNames). The DAUGHTER
+  // STRUTS card (daughter cradle struts callout) was appended to that list later, no entries added: DECISIONS §13 r4.
 
-  // ============================================================================
-  // === INPUT (Delegation 1, 2026-05-31) ===
-  // Hotkey-handler tuning knobs.  Add new flags here when InputManager grows
-  // additional feature gates.  Keep values intentionally minimal — UI key
-  // labels live in their respective UI modules, not in Constants.
-  // ============================================================================
+  // --- INPUT ---
+  // Hotkey-handler tuning knobs; UI key labels live in their UI modules, not here.
   INPUT: {
     /**
-     * Drop bare-`I` keydowns to defeat macOS Voice Control / dictation ASR
-     * phantom keystrokes from in-game audio.  Default OFF since the bare-I
-     * Inspection rebind landed (Delegation 1, 2026-05-31).  Toggle to `true`
-     * if ASR regressions reappear (e.g. on certain mic/voice-control configs).
+     * Drop bare-`I` keydowns to defeat macOS Voice Control / dictation ASR phantom keystrokes from in-game audio.
+     * Default OFF; toggle to `true` if ASR regressions reappear.
      */
     SUPPRESS_BARE_I: false,
   },
 
-  // === SCENE SCALE ===
+  // --- SCENE SCALE ---
   // 1 unit = 100 km. Requires logarithmicDepthBuffer: true.
   SCENE_SCALE: 0.01,
-  // ms — settle window after COMMS_PANEL_RESIZED during which cached panel
-  // geometry is recomputed each frame. Slightly longer than the CSS height
-  // transition (0.3s in CommsPanel.js) so listeners don't snap mid-animation.
+  // ms — settle window after COMMS_PANEL_RESIZED while cached panel geometry is recomputed each frame. Slightly
+  // longer than the CSS height transition (0.3s in CommsPanel.js) so listeners don't snap mid-animation.
   COMMS_RESIZE_SETTLE_MS: 340,
   EARTH_RADIUS: 63.71,            // 6371 km × 0.01
   EARTH_RADIUS_KM: 6371,
-  // Metres → scene units: the ONE authoritative copy (CAPTURE_NET.md §11.7
-  // hoist, 2026-08-27). Derivation: 1 scene unit = 100 km = 1e5 m ⇒ 1 m =
-  // 1e-5 scene units; equivalently SCENE_SCALE (0.01 scene units per km)
-  // ÷ 1000 m/km — 0.01/1000 === 0.00001 is exact in IEEE-754 (pinned in
-  // test-CaptureNet-Bookkeeping.js). Consumed by ArmUnit.js (module `M`)
-  // and every CaptureNet.js per-method `M_NET` local — both previously
-  // re-declared the bare 0.00001 literal ("drift risk if scene scale ever
-  // changes", §11.7). Other modules still carry historical `const M =
-  // 0.00001` mirrors; point new code at this constant instead.
+  // Metres → scene units: the ONE authoritative copy. 1 scene unit = 100 km = 1e5 m ⇒ 1 m = 1e-5; equivalently
+  // SCENE_SCALE ÷ 1000 m/km — 0.01/1000 === 0.00001 is exact in IEEE-754 (pinned in test-CaptureNet-Bookkeeping.js).
+  // Consumed by ArmUnit.js (module `M`) and every CaptureNet.js `M_NET` local; point new code here, not at a bare
+  // 0.00001 literal.
   SCENE_UNITS_PER_METER: 0.00001,
 
   // === PHYSICAL CONSTANTS ===
@@ -116,34 +63,30 @@ export const Constants = {
   START_ALTITUDE: 3.5,            // 350 km × 0.01
   START_ALTITUDE_KM: 350,
 
-  // === MOTHER DRAG: HER MASS AND HER AREA (M1 welcome-drift fix 2026-09-09; live since Nets step 3 slice 2a, 2026-10-22) ===
-  // The mother's atmospheric drag is OrbitalMechanics.atmosphericDrag(alt, v, area, mass). Her area and mass are LIVE now:
-  //   • mass   = PlayerSatellite.mass, the ArmManager mass budget (gas burnt, nets fired, daughters out, catches aboard);
-  //   • area   = PlayerSatellite.dragAreaM2(), MotherDragArea.js: her projected area across her velocity, from her real
-  //              attitude, radiator angle and wing turn, by the CORE_AREA_M2 table below (the old bare 20 m2 was a guess:
-  //              the real nose-first area is 3.2 m2 with the wings edge-on and 5.9 m2 with them facing forward).
-  // The welcome cluster (DebrisField.dragDecelFor) must still SHARE her coefficient each frame, or it drifts away
-  // (M1: spawned co-orbital at 350 km, the pieces' own A/m 1-17x smaller than hers, they stayed higher and, lower orbit =
-  // faster, she pulled ahead: > 2 km in ~4 real minutes with no key pressed). Each frame the welcome pieces use the area
-  // and mass her drag block USED that frame (PlayerSatellite.lastDragAreaM2 / lastDragMassKg, handed over by
-  // DebrisField.setMotherDragSource): same coefficient => same per-frame SMA step => lock-step decay. With no source or
-  // no frame yet they use her REFERENCE coefficient: MotherDragArea.referenceDragAreaM2() (nose-first, radiators 146 deg,
-  // wings tracking the sun) over MASS_KG.
+  // --- MOTHER DRAG: HER MASS AND HER AREA ---
+  // Drag is OrbitalMechanics.atmosphericDrag(alt, v, area, mass), with live inputs:
+  //   • mass = PlayerSatellite.mass, the ArmManager mass budget (gas burnt, nets fired, daughters out, catches aboard);
+  //   • area = PlayerSatellite.dragAreaM2() (MotherDragArea.js): projected area across her velocity from her real
+  //            attitude, radiator angle and wing turn, via the CORE_AREA_M2 table below (the old bare 20 m2 was a guess:
+  //            the real nose-first area is 3.2 m2 with the wings edge-on and 5.9 m2 with them facing forward).
+  // The welcome cluster (DebrisField.dragDecelFor) must SHARE her coefficient each frame or it drifts away from her
+  // (lower orbit = faster). Each frame the welcome pieces use the area and mass her drag block USED
+  // (PlayerSatellite.lastDragAreaM2 / lastDragMassKg, via DebrisField.setMotherDragSource): same coefficient => same
+  // per-frame SMA step => lock-step decay. With no source or no frame yet they use her REFERENCE coefficient:
+  // MotherDragArea.referenceDragAreaM2() (nose-first, radiators 146 deg, wings tracking the sun) over MASS_KG.
   //
-  // MASS_KG = 294.28 kg: her START mass with both radiator pairs fitted (the game fits them at boot:
-  // FLOWER_PREINSTALLED, main.js applyUpgrade flowerPairA/B). Measured 2026-10-22 on the full rig of test-LiveMass.js (a
-  // real ArmManager + ResourceSystem + CaptureNetSystem, both pairs applied): ArmManager.getMassBudget().shipMassKg =
-  // core dry 255.10 (incl. 51.6 kg of radiators) + cold gas 3.6 + docked daughters 17.4 + argon 12.5 + 4 nets 5.7.
-  // History: 130 (a guess) -> 242.68 (slice 1, radiator pairs left out) -> 294.28. test-LiveMass.js keeps it within
-  // 0.05 kg of that budget. It is the START mass: the fallback of PlayerSatellite.mass (no arm manager) and the mass
+  // MASS_KG = 294.28 kg: her START mass with both radiator pairs fitted (the game fits them at boot: FLOWER_PREINSTALLED,
+  // main.js applyUpgrade flowerPairA/B). Measured on test-LiveMass.js's full rig: ArmManager.getMassBudget().shipMassKg
+  // = core dry 255.10 (incl. 51.6 kg of radiators) + cold gas 3.6 + docked daughters 17.4 + argon 12.5 + 4 nets 5.7.
+  // test-LiveMass.js keeps it within 0.05 kg of that. Fallback of PlayerSatellite.mass (no arm manager) and the mass
   // the reference drag is taken at.
   //
-  // CORE_AREA_M2 = her projected area across each body axis, the ship WITHOUT the two ROSA blankets (booms, rolls,
-  // daughters as built stay), wings at 0 deg, by radiator angle. Columns: radiator angle (deg), across X, across Y, across Z
-  // (m2; Z is nose-first). Measured 2026-10-22 from the built meshes, union of the visible non-FX triangles on a 1 cm
-  // grid (js/test/_projectedArea.js; tmp/step3/core-table.mjs): the same at 0.5 cm and 0.25 cm differs by <= 0.015 m2,
-  // at 2 cm by <= 0.04 on X, 0.14 on Y (thin rods), 0.044 on Z. test-MotherDragArea.js re-measures every cell and
-  // fails if the ship changed (a row moves by more than 5 % or 0.05 m2): re-run that probe and paste the table.
+  // CORE_AREA_M2 = projected area across each body axis, ship WITHOUT the two ROSA blankets, wings at 0 deg, by
+  // radiator angle. Columns: radiator angle (deg), across X, across Y, across Z (m2; Z is nose-first). Measured from
+  // the built meshes, union of visible non-FX triangles on a 1 cm grid (js/test/_projectedArea.js; probe
+  // tmp/step3/core-table.mjs): 0.5 cm and 0.25 cm
+  // differ by <= 0.015 m2, 2 cm by <= 0.04 on X, 0.14 on Y (thin rods), 0.044 on Z. test-MotherDragArea.js re-measures
+  // every cell and fails if a row moves by more than 5 % or 0.05 m2: re-run that probe and paste the table.
   // The model off the axes is in MotherDragArea.js (p-norm 1.5 + two flat wing plates; max 38 %, median 5.5 % against
   // the meshes on 360 poses).
   MOTHER_DRAG: {
@@ -159,96 +102,70 @@ export const Constants = {
     ],
   },
 
-  // === DRAG CEILING (Nets step 3 slice 1, 2026-10-21) ===
-  // Altitude above which atmosphericDrag is not applied (km). 1000 km is the
-  // top of the published air table (OrbitalMechanics.atmosphericDensity, 0
-  // above it). Read by the mother (PlayerSatellite.update) and the debris loop
-  // (DebrisField.update); both used a bare 600 before.
+  // --- DRAG CEILING ---
+  // Altitude above which atmosphericDrag is not applied (km). 1000 km is the top of the published air table
+  // (OrbitalMechanics.atmosphericDensity, 0 above it). Read by PlayerSatellite.update and DebrisField.update.
   DRAG_CEILING_KM: 1000,
 
-  // === RENDERING ===
-  FLOATING_ORIGIN_ENABLED: true,    // UX-4: Camera-relative instanced mesh positions to avoid float32 jitter
+  // --- RENDERING ---
+  FLOATING_ORIGIN_ENABLED: true,    // Camera-relative instanced mesh positions to avoid float32 jitter
 
-  // Project-wide render order (FIX_PLAN §2; bands extended §2-followup round 4).
-  //
-  // renderOrder is a GLOBAL sort key across ALL scene objects, not per-object.
-  // Mother (PlayerSatellite) and daughter (ArmUnit) are SEPARATE top-level scene
-  // objects, so a shared scale makes their meshes tie at the dock seam (both at
-  // DETAIL) and resolve by ambiguous depth. The bands below give each layer a
-  // distinct slot and add a small DAUGHTER_BIAS so a docked daughter resolves
-  // cleanly against the mother's strut tip instead of z-fighting it.
-  //
-  // NOTE: the renderer uses logarithmicDepthBuffer (SceneManager.js), under which
-  // polygonOffset units are non-linear and only separate coplanar faces at one
-  // viewing distance. Prefer renderOrder + a tiny geometric Z stagger over
-  // polygonOffset for deterministic layering.
+  // Project-wide render order. renderOrder is a GLOBAL sort key across ALL scene objects. Mother (PlayerSatellite) and
+  // daughter (ArmUnit) are SEPARATE top-level scene objects, so a shared scale would tie their meshes at the dock seam;
+  // the bands give each layer a distinct slot plus a small DAUGHTER_BIAS so a docked daughter doesn't z-fight the
+  // mother's strut tip.
+  // NOTE: the renderer uses logarithmicDepthBuffer (SceneManager.js), under which polygonOffset units are non-linear
+  // and only separate coplanar faces at one viewing distance. Prefer renderOrder + a tiny geometric Z stagger.
   RENDER_ORDER: {
     EARTH: 0,
     SPACECRAFT_OPAQUE: 1,
     SPACECRAFT_DETAIL: 2,    // channels, pockets, accent rings
     SPACECRAFT_TRANSPARENT: 3, // grid overlays, wireframes
     SPACECRAFT_ADDITIVE: 4,   // glow rings, plumes (drawn after solid geometry)
-    // Connectors span mother↔daughter; draw just above solid geometry so they
-    // sit on the hull they bridge without z-fighting either craft.
+    // Connectors span mother↔daughter; just above solid geometry so they sit on the hull they bridge.
     SPACECRAFT_CONNECTOR: 5,  // tethers, bridle legs, net tether
-    // Bias added to a docked daughter's meshes (group-level) so the whole craft
-    // resolves in front of the strut-tip collar it overlaps. Small enough not to
-    // cross into the connector/additive bands.
+    // Group-level bias on a docked daughter's meshes so the craft resolves in front of the strut-tip collar it
+    // overlaps. Small enough not to cross into the connector/additive bands.
     DAUGHTER_BIAS: 0.5,
     HUD: 10,
   },
 
-  // === DETAIL LOD CULL (Epic — visual-audit Phase 6) ===
-  // Distance-hysteresis switch for the Mother's + daughters' mm-scale INERT
-  // hardware (pins, clips, rib rings, seams, accent rings, bolts, bushings, FEEP
-  // liners/grid discs/bosses, spring coils, guide rails, cable lines; daughter
-  // EPM rings/hardpoints/gimbals/panel-lines). Beyond ~40 m these are sub-pixel
-  // yet still cost a draw call + vertex work every frame. main.js feeds the live
-  // camera→craft distance (scene units) to player/armManager.setCameraDistance();
-  // the flip happens only when a threshold is CROSSED (state change, not per
-  // frame). Hysteresis (hide>40, show<30) prevents flip-flop at the boundary.
-  // Gameplay-communicative meshes (nav/strobe/dock lights, daughter status
-  // lights, reel LEDs, plumes, tethers) are NEVER in the cull set — they carry
-  // state at distance. Values in METRES (multiplied by M at the call site).
-  // View configs (CameraSystem): CHASE ≈16.5 m, ARM_PILOT ≈5 m keep full detail;
-  // OVERVIEW zoomed out drops it.
+  // --- DETAIL LOD CULL ---
+  // Distance-hysteresis switch for mm-scale INERT hardware on mother + daughters (pins, clips, rib rings, seams,
+  // bolts, bushings, FEEP liners, spring coils, rails, cable lines, EPM rings/hardpoints/gimbals). Beyond ~40 m these
+  // are sub-pixel yet still cost draw calls. main.js feeds camera→craft distance (scene units) to
+  // player/armManager.setCameraDistance(); the flip happens only when a threshold is CROSSED (hide>40, show<30).
+  // Gameplay-communicative meshes (nav/strobe/dock lights, status lights, reel LEDs, plumes, tethers) are NEVER in the
+  // cull set. Values in METRES (multiplied by M at the call site). CameraSystem: CHASE ≈16.5 m and ARM_PILOT ≈5 m keep
+  // full detail; OVERVIEW zoomed out drops it.
   DETAIL_CULL: { HIDE_M: 40, SHOW_M: 30 },
 
-  // === LIGHT FX SIZES (z-layer-and-lights-fix Batch 1) ===
-  // Single tunable block for nav/dock/status light core + halo sizes and steady
-  // opacities. User feedback: the prior lights were TOO BIG — this shrinks them.
-  // ALL sizes are in METRES; call sites multiply by M (1 m = 1e-5 scene units).
-  // Halo values feed makeLightHalo(scaleM) — pass as `M * LIGHT_FX.<HALO>`.
-  // Keep this the ONLY place these sizes live so iteration is a one-line edit.
-  // STROBE_HDR is the near-white flash peak multiplier — only that peak crosses
-  // the sim bloom threshold (2.5) to pop; do not drop below ~2.6 or the sim
-  // strobe stops blooming (menu bloom threshold is ~1.0 — see MenuScene3D).
+  // --- LIGHT FX SIZES ---
+  // The ONLY place nav/dock/status light core + halo sizes and steady opacities live. ALL sizes in METRES; call sites
+  // multiply by M (1 m = 1e-5 scene units). Halo values feed makeLightHalo(scaleM) — pass as `M * LIGHT_FX.<HALO>`.
+  // STROBE_HDR is the near-white flash peak multiplier — only that peak crosses the sim bloom threshold (2.5); do not
+  // drop below ~2.6 or the sim strobe stops blooming (menu bloom threshold is ~1.0 — see MenuScene3D).
   LIGHT_FX: {
-    NAV_CORE_R: 0.025,        // m — port/starboard/strobe core sphere radius (was 0.04)
-    NAV_HALO: 0.14,           // m — nav halo sprite size (was 0.30)
-    NAV_HALO_OPACITY: 0.40,   // steady port/starboard halo opacity (was 0.65)
-    STROBE_HALO: 0.17,        // m — strobe halo sprite size (was 0.345 = 0.30×1.15)
+    NAV_CORE_R: 0.025,        // m — port/starboard/strobe core sphere radius
+    NAV_HALO: 0.14,           // m — nav halo sprite size
+    NAV_HALO_OPACITY: 0.40,   // steady port/starboard halo opacity
+    STROBE_HALO: 0.17,        // m — strobe halo sprite size
     STROBE_HDR: 3.5,          // strobe flash-peak HDR multiplier (keep ≥ ~2.6)
-    STATUS_HALO: 0.05,        // m — daughter status-light halo size (was 0.11)
-    STATUS_HALO_OPACITY: 0.6, // daughter status-light halo opacity (was 0.85)
+    STATUS_HALO: 0.05,        // m — daughter status-light halo size
+    STATUS_HALO_OPACITY: 0.6, // daughter status-light halo opacity
   },
 
-  // === CAMERA ===
-  CAMERA_NEAR: 0.00003,           // ~3 m minimum (lowered from 10m to prevent panel clipping at close zoom)
+  // --- CAMERA ---
+  CAMERA_NEAR: 0.00003,           // ~3 m minimum (low enough to prevent panel clipping at close zoom)
   CAMERA_FAR: 500,                // ~50,000 km maximum
-  CAMERA_FOV: 55,                 // COMMAND/TACTICAL base FOV (ST-5.3: 65→55°)
+  CAMERA_FOV: 55,                 // COMMAND/TACTICAL base FOV
   CAMERA_FOV_ARM_PILOT: 40,      // ARM_PILOT narrow FOV
 
-  // === INSPECTION (diagnostic treatment, 2026-06-03) ===
-  // Light visual treatment when the INSPECT view is active: a vignette that
-  // dims the surroundings so the inspected craft reads clearly, plus an
-  // optional edge-outline on the mothership hull. NOT a full scene wireframe —
-  // the callouts live in the in-world ui/MotherCallouts.js overlay.
-  //
-  // 2026-07 (round 6): the vignette is now drawn IN-ENGINE, in the seam between
-  // the far and near render passes (NearFieldRenderPass), so DIM darkens ONLY the
-  // background (Earth/stars/debris) — never the ship or the callout cards. It was
-  // a DOM overlay painted over the whole canvas, which unevenly dimmed the rails.
+  // --- INSPECTION ---
+  // Visual treatment when the INSPECT view is active: a vignette that dims the surroundings so the inspected craft
+  // reads clearly, plus an optional edge-outline on the mothership hull. The vignette is drawn IN-ENGINE, between the
+  // far and near render passes (NearFieldRenderPass), so DIM darkens ONLY the background (Earth/stars/debris) — never
+  // the ship or the callout cards. Callouts live in the in-world ui/MotherCallouts.js overlay.
   INSPECTION: {
     DIM: 0.6,                     // background vignette peak (corner) darkness (0 = off, 1 = black)
     HULL_OUTLINE: true,           // toggle the mothership hull edge-outline
@@ -256,24 +173,18 @@ export const Constants = {
     HULL_OUTLINE_THRESHOLD_DEG: 20, // EdgesGeometry thresholdAngle (deg)
   },
 
-  // === INSPECT CALLOUTS (side-rail label overhaul, 2026-07-25) ===
-  // Config for the in-world inspection callouts (ui/MotherCallouts.js): system
-  // identity hues, risk badge colours, screen-space side-rail layout params, and
-  // per-tier on-screen label sizes. Kept here (not hardcoded in MotherCallouts)
-  // so the look is tunable in one place.
+  // --- INSPECT CALLOUTS ---
+  // Config for the in-world inspection callouts (ui/MotherCallouts.js): system identity hues, risk badge colours,
+  // screen-space side-rail layout, per-tier label sizes. Kept here so the look is tunable in one place.
   CALLOUTS: {
-    // Blueprint / engineering-HUD accent family (round 4). One hue family,
-    // mono type, corner brackets, hairline leaders.
+    // Blueprint / engineering-HUD accent family: one hue family, mono type, corner brackets, hairline leaders.
     ACCENT:      '#7fd4e8',
     ACCENT_DIM:  '#3d6e7e',
-    // Text ink for card titles + data rows (round 4 blueprint). Single source
-    // so the card generator and any caller-side override can't drift.
+    // Text ink for card titles + data rows; single source so the card generator and callers can't drift.
     INK:         '#dfeef5',
     INK_DIM:     '#9fb8c4',
-    // Hue = system identity (6 groups). Risk is shown as a small badge dot on
-    // the card, NOT by label colour (the old scheme read all-green).
-    // Round 4: re-valued to low-saturation tints within ~±20° of cyan so the
-    // whole callout layer reads as one blueprint family.
+    // Hue = system identity (6 groups). Risk is a small badge dot on the card, NOT label colour. Low-saturation tints
+    // within ~±20° of cyan so the whole callout layer reads as one blueprint family.
     SYSTEM_HUES: {
       POWER:      '#9adfd2', // pale teal
       PROPULSION: '#8fb8e8', // steel blue
@@ -281,8 +192,7 @@ export const Constants = {
       SENSORS:    '#7fd4e8', // accent cyan
       COMMS:      '#74c4e6', // sky cyan
       CAPTURE:    '#8fdcc4', // seafoam
-      THERMAL:    '#a3d9c9', // mint teal — P2 aft flower family (P1 ledger §7:
-                             // EVERY family needs a hue row HERE or it renders
+      THERMAL:    '#a3d9c9', // mint teal — aft flower family (EVERY family needs a hue row HERE or it renders
                              // fallback-hued and the miss is invisible in tests)
     },
     // Risk badge dot colours reuse the shared wireframe palette.
@@ -298,129 +208,110 @@ export const Constants = {
     RAIL_GAP_NDC:      0.03,  // vertical PADDING between stacked cards (min gap)
     SIDE_HYSTERESIS:   0.12,  // |ΔNDC.x| past centre before a label flips rail side
                               // wide-ish — flips should be rare; the 1.5 s dwell
-                              // + fade-swap hide the rest (round 4)
+                              // + fade-swap hide the rest
     ORDER_HYSTERESIS:  0.04,  // anchor-Y separation before two labels swap stack order
     EASE_RATE:         12.0,  // screen-space position ease rate (k = 1 − exp(−rate·dt))
     OFFSCREEN_NDC:     1.1,   // hide callouts whose anchor projects beyond ±this
     ELBOW_STUB_NDC:    0.05,  // horizontal leader stub length off the card edge
-    DETAIL_REVEAL_NDC: 0.25,  // T6: detail parts within this NDC radius of the
+    DETAIL_REVEAL_NDC: 0.25,  // detail parts within this NDC radius of the
                               // focused part reveal even across systems
-    FREE_STANDING_R_M: 0.6,   // Mother fixes 4/4 (c): a bound flowerGated row whose
-                              // live anchor is beyond this ship-frame radius (m) rides a
-                              // deployed strut clear of every hull-mounted part (hull
-                              // 0.40, tracker mouths / RCS bells ≤ 0.52) — the facing
-                              // gate's hull-normal proxy is skipped for it
+    FREE_STANDING_R_M: 0.6,   // a bound flowerGated row whose live anchor is beyond this ship-frame radius (m)
+                              // rides a deployed strut clear of every hull-mounted part (hull 0.40, tracker
+                              // mouths / RCS bells ≤ 0.52) — the facing gate's hull-normal proxy is skipped for it
 
     // --- On-screen label heights, as a fraction of viewport height (NDC-ish) ---
-    // Each value is the on-screen height of the card's TITLE BLOCK (the 0-row
-    // height, 106 logical px); total card height = this × card.heightFactor.
-    // Sized MANUALLY from distWorld × tan(fov/2) in MotherCallouts._positionCard
-    // (NOT sizeAttenuation:false — that attenuation branch is skipped, see
-    // three/src/objects/Sprite.js:144). Card aspect scales the width, and
-    // aspect × heightFactor = CARD_W_OVER_TITLE_H ≈ 6.04 for every card (R15;
-    // card canvas widened 512→640 in round-3 T4 for plain-English titles).
-    // Texture budget (R14/T4): ~46 MB resident (33 compact + 1 focused card) —
+    // Each value is the on-screen height of the card's TITLE BLOCK (the 0-row height, 106 logical px); total card
+    // height = this × card.heightFactor. Sized MANUALLY from distWorld × tan(fov/2) in MotherCallouts._positionCard
+    // (NOT sizeAttenuation:false — that branch is skipped, see three/src/objects/Sprite.js). aspect × heightFactor
+    // = CARD_W_OVER_TITLE_H ≈ 6.04 for every card. Texture budget: ~46 MB resident (33 compact + 1 focused card) —
     // hover is a material-level effect, not a per-rec texture variant.
     SIZE_SYSTEM:  0.052,  // Band-1 system group labels
     SIZE_MAJOR:   0.040,  // major part cards
     SIZE_DETAIL:  0.030,  // detail-tier cards (COMPONENT band only)
     SIZE_CARD:    0.046,  // focused COMPONENT card (~15% larger than major: 0.040 × 1.15)
-    DOT_SIZE:     0.016,  // anchor dot on-screen size (round 5: 0.012 → 0.016 —
-                          // bracket ticks were sub-pixel over bright hull)
+    DOT_SIZE:     0.016,  // anchor dot on-screen size (bracket ticks were sub-pixel over bright hull at less)
 
     LIVE_REFRESH_HZ: 2,   // max focused-card live-data refresh rate
     SHIP_BOUND_M:   1.5,  // approx ship silhouette radius (wings) in metres for rail X
-    // Round 6 (binary legibility): a shown card's target opacity is floored here
-    // so a card is always clearly readable, never a muddy translucent ghost.
-    // Declutter is done by HIDING (target → 0), not by fading toward invisible.
-    // The band crossfade still eases through lower values in-flight; this floors
-    // only the TARGET. Kept in lockstep with the _pickBestRec pick gate.
+    // A shown card's target opacity is floored here so it is always clearly readable, never a muddy ghost. Declutter
+    // is done by HIDING (target → 0). The band crossfade still eases through lower values in-flight; this floors only
+    // the TARGET. Kept in lockstep with the _pickBestRec pick gate.
     MIN_CARD_OP:    0.5,
-    // §13 r3 (2026-09-24): after the pointer leaves a system (hover gone and
-    // nothing new hovered/pinned), that system stays "open" this long before
-    // its part labels fold back — the fold reads deliberate, not flickery.
+    // §13 r3: after the pointer leaves a system (hover gone, nothing new hovered/pinned), it stays "open"
+    // this long before its part labels fold back — the fold reads deliberate, not flickery.
     OPEN_LINGER_MS: 1000,
   },
 
-  // === RESOURCE DEFAULTS ===
-  XENON_FUEL_MAX: 100,            // POOL UNITS, not kg (h3-argon-engine): 100 = one full 60 L base engine tank of
-                                   // whichever gas is loaded (FUELS[gas].kgFull kg). Name kept; rename is later cleanup.
-  ENGINE_TANK_DRY_MASS_KG: 9.5,   // h3-argon-engine D3: the 60 L, 200 bar Ti/COPV tank itself (research §2.2 fit; the
-                                   // 263 kg F2 dry figure did not count it). Carried as dry mass in getMassBudget().
-  ENGINE_TANK_VOLUME_L: 60,       // h3-argon-engine: base engine tank volume (documentation; kgFull is derived from it)
+  // --- RESOURCE DEFAULTS ---
+  XENON_FUEL_MAX: 100,            // POOL UNITS, not kg: 100 = one full 60 L base engine tank of whichever gas is loaded
+                                   // (FUELS[gas].kgFull kg). Name kept; rename is later cleanup.
+  ENGINE_TANK_DRY_MASS_KG: 9.5,   // the 60 L, 200 bar Ti/COPV tank itself (research §2.2 fit). Carried as dry mass in getMassBudget().
+  ENGINE_TANK_VOLUME_L: 60,       // base engine tank volume (documentation; kgFull is derived from it)
   COLD_GAS_MAX: 20,               // tank units, NOT kg: 20 units = 6 kg of nitrogen (0.3 kg a unit; the start fill of 12 units = the 3.6 kg in the mass budget)
-  COLD_GAS_LOW_FRAC: 0.25,        // gas-low-fail-fast D4: "steering gas low" — a fraction of COLD_GAS_MAX (coldGas / coldGasMax); the HUD
+  COLD_GAS_LOW_FRAC: 0.25,        // "steering gas low" — a fraction of COLD_GAS_MAX (coldGas / coldGasMax); the HUD
                                    // gas meter turns amber below the same fraction (VitalsPane reads this), the comms line is sent once on crossing it
   COLD_GAS_LOW_REARM_FRAC: 0.35,  // ...and re-arms only after the tank is back above this fraction (a refill), so a tank hovering at a quarter says it once
   BATTERY_MAX: 600,               // Wh — the ship's own spec (OCTOPUS_CORE_BATTERY /
                                    // OCTOPUS_V5.CORE_BATTERY, both 600; equality pinned in
-                                   // test-shop-effects). Was a 100 Wh 'simplified' placeholder
-                                   // while the battery recharged from a bugged 8,166 W rate.
-  BATTERY_START_FRACTION: 0.5,    // w4-power D1 (owner 2026-10-12: "battery is 50% and dropping
-                                   // until wings open"): every boot — new game, retry, loaded save —
-                                   // starts at this fraction of the (rebased) max; saves carry no charge.
-  PROPELLANT_START_FRACTION: 0.6, // h1-mother-pane D5 (owner 2026-10-14: "they start with the cheapest for
-                                   // modern satellites.. and only 60% full"): the engine tank AND the cold-gas
-                                   // tank start at this fraction of their max on every boot (new game, retry,
-                                   // loaded save), the same paths as BATTERY_START_FRACTION.
+                                   // test-shop-effects)
+  BATTERY_START_FRACTION: 0.5,    // owner 2026-10-12: "battery is 50% and dropping until wings open". Every boot —
+                                   // new game, retry, loaded save — starts at this fraction of the max; saves carry no charge.
+  PROPELLANT_START_FRACTION: 0.6, // owner 2026-10-14: "they start with the cheapest for
+                                   // modern satellites.. and only 60% full": the engine tank AND the cold-gas
+                                   // tank start at this fraction of their max on every boot, like BATTERY_START_FRACTION.
 
-  // g1-gas-upgrades D1 (owner 2026-10-14: "every kg is expensive to send up on rockets"; DECISIONS §2b): engine gas
-  // is priced by what it costs to launch. Price per kg = (LAUNCH_USD_PER_KG + FUELS[gas].usdPerKg) / USD_PER_CREDIT.
+  // DECISIONS §2b (owner 2026-10-14: "every kg is expensive to send up on rockets"): engine gas is priced by what it
+  // costs to launch.
+  // Price per kg = (LAUNCH_USD_PER_KG + FUELS[gas].usdPerKg) / USD_PER_CREDIT.
   LAUNCH_USD_PER_KG: 7000,        // research §3: about the same whatever the gas
   USD_PER_CREDIT: 100,            // anchor: the old extra-tank row, 600 cr for +10.4 kg argon, about $121 per credit; rounded
   GAS_RESUPPLY_KG: 5,             // one "Engine Gas Resupply" load, kg
-  // t1-stranded D2: both tanks empty AND the credits (plus what the cargo would sell for) cannot buy one resupply AND
-  // nothing that could still pay is under way (a daughter out, a catch held, a net or lasso in flight) -> the
-  // mission ends after this many seconds of running gameplay (GameFlowManager.update; a held world counts nothing).
+  // Both tanks empty AND the credits (plus what the cargo would sell for) cannot buy one resupply AND nothing that
+  // could still pay is under way (a daughter out, a catch held, a net or lasso in flight) -> the mission ends after
+  // this many seconds of running gameplay (GameFlowManager.update; a held world counts nothing).
   STRANDED_GRACE_S: 15,
 
-  // === SHIP HEAT (w2-heat, 2026-10-08) =======================================
-  // DECISIONS §15 rows 2/4/5/6 + §2 rows 5–7: the ship heats up from what the
-  // player does, warns at 60 / 85 °C, and opens its radiator itself a little
-  // late. ONE lump (js/systems/ThermalSystem.js):
+  // --- SHIP HEAT ---
+  // DECISIONS §15 rows 2/4/5/6 + §2 rows 5–7: the ship heats up from what the player does, warns at 60 / 85 °C, and
+  // opens its radiator itself a little late. ONE lump (js/systems/ThermalSystem.js):
   //   C dT/dt = P_in − P_out
-  //   P_in  = every watt drawn from the battery (the ResourceSystem ledger —
-  //           every drawn watt ends as heat) + SUN_HULL_W in daylight (0 in shadow)
+  //   P_in  = every watt drawn from the battery (the ResourceSystem ledger — every drawn watt ends as heat)
+  //           + SUN_HULL_W in daylight (0 in shadow)
   //   P_out = σ ε A_eff (T⁴ − SINK_K⁴),
   //   A_eff = HULL_AREA_M2 + RAD_AREA_M2 × (G_CLOSED + (1 − G_CLOSED) × openFrac) × flow
-  //   flow  = the coolant loop (L4 radiator-loop, owner 2026-10-20): 0 at or below LOOP_OFF_C, 1 at or above
+  //   flow  = the coolant loop (owner 2026-10-20): 0 at or below LOOP_OFF_C, 1 at or above
   //           LOOP_FULL_C, linear between — an open radiator sheds heat only while the coolant flows
-  // The lump is NOT the whole 130 kg ship (≈ 117 kJ/K): it is the electronics
-  // bay and the heat-pipe saddle that feeds the radiator — the mass that warms
-  // first. The load table is taken AS GIVEN (base 500 W, ion 5 kW, autopilot
-  // ≈ 5.6 kW at full command at any frame rate (until 2026-10-18 it grew with the frame time: 5.6 kW at
-  // 60 fps, up to 25 kW at 10 fps)); its scale is a logged
-  // follow-up, not tuned here. Tuning targets T1–T6 (DECISIONS §15 row 6) are
-  // pinned in js/test/test-ShipHeat.js — see docs/ladder/01-numbers.md "Ship
-  // heat and scan cost".
+  // The lump is NOT the whole 130 kg ship (≈ 117 kJ/K): it is the electronics bay and the heat-pipe saddle that
+  // feeds the radiator — the mass that warms first. The load table is taken AS GIVEN (base 500 W, ion 5 kW, autopilot
+  // ≈ 5.6 kW at full command at any frame rate); its scale is a logged follow-up, not tuned here. Tuning targets
+  // T1–T6 (DECISIONS §15 row 6) are pinned in js/test/test-ShipHeat.js — see docs/ladder/01-numbers.md "Ship heat
+  // and scan cost".
   SHIP_HEAT: {
     // ── The clock (the battery's own — do NOT retune) ──
-    // ResourceSystem.update adds solarRate(W) × dt × 0.001 per REAL second and
-    // a battery unit is 1 Wh = 3,600 J, so a watt moves 3.6 J per real second:
-    // the battery integrates at 3.6× real time. Heat runs on the SAME clock, so
-    // a watt means the same thing on the battery meter and the heat meter.
+    // ResourceSystem.update adds solarRate(W) × dt × 0.001 per REAL second and a battery unit is 1 Wh = 3,600 J, so a
+    // watt moves 3.6 J per real second: the battery integrates at 3.6× real time. Heat runs on the SAME clock, so a
+    // watt means the same thing on the battery meter and the heat meter.
     UNIT_J: 3600,               // J per battery unit (1 Wh)
     W_PER_UNIT_S: 1000,         // HUD watts per battery unit drawn per real second (÷ 0.001)
 
     // ── The lump (each a physical reading; tuned to §15 row 6 by the probe) ──
-    // Measured (test-ShipHeat.js "D6 targets", rest 146° and 0° alike): idle
-    // daylight closed eq 35.1 °C (shadow 24.2); scripted M1 closed first warns
-    // at 152 s (peak 62.4); auto-open at 70 → < 55 °C in ~21 s; M1 opened at
+    // Measured (test-ShipHeat.js "D6 targets", rest 146° and 0° alike): idle daylight closed eq 35.1 °C (shadow
+    // 24.2); scripted M1 closed first warns at 152 s (peak 62.4); auto-open at 70 → < 55 °C in ~21 s; M1 opened at
     // start peaks 36 °C; 3 wide scans held closed peak 93 °C.
-    // v12-radiator-20 (owner 2026-10-16, "20 cm, please"): radiators 20 cm shorter, so RAD_AREA_M2 8.12 → 7.20 (real geometry, 4 × 1.50 × 0.60 × 2)
-    // and the two guessed inputs nudged the least that keeps the behaviour above: SINK_K 220 → 205 (−7 %), SUN_HULL_W 120 → 110 (−8 %)
-    // (all 54 test-ShipHeat tests, targets unedited; idle eq 35.2 °C vs 35.1). Sweep: tmp/probes/rs-sweep.mjs (SINK_K 190–220 × SUN_HULL_W 40–120);
-    // 01-numbers.md "Ship heat, power and scan cost". (The 25 cm step, 6.96 m², had needed SINK_K 195 and the heater cap 950 W; superseded.)
+    // Radiators are 20 cm shorter (owner 2026-10-16), so RAD_AREA_M2 is the real geometry (4 × 1.50 × 0.60 × 2) and the
+    // two guessed inputs (SINK_K, SUN_HULL_W) are the least nudge that keeps the behaviour above (all test-ShipHeat
+    // tests, targets unedited; idle eq 35.2 °C vs 35.1). Sweep: tmp/probes/rs-sweep.mjs (SINK_K 190–220 × SUN_HULL_W
+    // 40–120). See 01-numbers.md "Ship heat, power and scan cost".
     HEAT_CAPACITY_J_PER_K: 16000, // ≈ 18 kg of aluminium (900 J/kg·K): avionics boxes + bay + saddle
     EMISSIVITY: 0.85,           // white paint / OSR radiator faces (typical 0.8–0.9)
-    SINK_K: 205,                // tuned (est; 220 before the 20 cm radiator step): Earth IR alone on a plate seeing ~⅓ Earth (237 W/m²)
+    SINK_K: 205,                // tuned (est): Earth IR alone on a plate seeing ~⅓ Earth (237 W/m²)
                                 // gives ≈ 193 K; daylight albedo and the warm hull in view raise it
     HULL_AREA_M2: 0.3,          // tuned (est): MLI hull leak as ε 0.85-equivalent area (~6 m² × ε* 0.03 / 0.85 + body cells' share)
-    RAD_AREA_M2: 7.20,          // 4 plates × 1.50 × 0.60 m (3.60 m² rectangle; the built meshes give 3.582 — the wings end 15 mm short) × 2 faces at full bloom (was 8.12 at 1.70 m; test-RadiatorShort pins it to the geometry)
+    RAD_AREA_M2: 7.20,          // 4 plates × 1.50 × 0.60 m (3.60 m² rectangle; the built meshes give 3.582 — the wings end 15 mm short) × 2 faces at full bloom (test-RadiatorShort pins it to the geometry)
     G_CLOSED: 0.20,             // folded flat (§15 row 4) each pack shows one 0.32 m face outward (~¼ of
                                 // the two-sided area), partly hidden by the barrel and wings → ~0.2
-    SUN_HULL_W: 110,            // tuned (est; was 120 before the 20 cm radiator step): daylight sun reaching the bay — body cells' waste heat share + MLI leak (0 in shadow)
-    // ── The coolant loop (L4 radiator-loop, owner 2026-10-20: "radiators can be open without transferring heat; a
+    SUN_HULL_W: 110,            // tuned (est): daylight sun reaching the bay — body cells' waste heat share + MLI leak (0 in shadow)
+    // ── The coolant loop (owner 2026-10-20: "radiators can be open without transferring heat; a
     //    radiator can be on a running engine without cooling the engine") ──
     // A thermostat valve the ship runs by itself (no player control, no pump draw yet): flow = 0 below LOOP_OFF_C, 1
     // above LOOP_FULL_C, linear between. Real pumped loops hold the electronics near room temperature (typical
@@ -435,8 +326,8 @@ export const Constants = {
                                 // does not move until the player does something (§2 row 6)
 
     // ── Bands and lines (§15 row 5, §2 row 5 — a ladder, never a cliff) ──
-    YELLOW_C: 60,               // "Ship warming up" — economic pain starts here (later rounds)
-    RED_C: 85,                  // "Ship hot" — tools refuse here (later rounds; no refusals yet)
+    YELLOW_C: 60,               // "Ship warming up" — economic pain starts here
+    RED_C: 85,                  // "Ship hot" — tools refuse here
     REARM_C: 5,                 // a line re-arms this far below its threshold (once per crossing)
     TREND_TAU_S: 2,             // real s — smoothing of dT/dt for the trend arrow
     TREND_C_PER_S: 0.02,        // °C per real second (1.2 °C/min) — slower reads as steady
@@ -450,44 +341,34 @@ export const Constants = {
     POWER_TAU_S: 0.5,           // real s — in/out watts are smoothed over ~0.5 s
   },
 
-  // === HEATERS (w4-power D7, 2026-10-12 — the "what else" in the owner's list) ===
-  // Lithium cells must not get cold. Below HOLD_C the battery heaters draw the
-  // power that holds HOLD_C: what the lump radiates now, minus every other heat
-  // input, plus a pull toward HOLD_C (C/PULL_S W per K) — continuous, so it
-  // fades out within ~1 K above HOLD_C instead of switching (ThermalSystem
-  // _updateHeater). Billed through the battery like a motor, so its heat is
-  // what warms the ship. No auto-close (owner ruling 2026-10-09). Since L4
-  // radiator-loop (2026-10-20) the coolant stops at SHIP_HEAT.LOOP_OFF_C (20 °C),
-  // so an open radiator no longer drags the ship down to the heaters; the comms
-  // line just says the heaters are keeping the cells above freezing.
+  // --- HEATERS ---
+  // Lithium cells must not get cold. Below HOLD_C the battery heaters draw the power that holds HOLD_C: what the lump
+  // radiates now, minus every other heat input, plus a pull toward HOLD_C (C/PULL_S W per K) — continuous, so it
+  // fades out within ~1 K above HOLD_C instead of switching (ThermalSystem _updateHeater). Billed through the battery
+  // like a motor, so its heat is what warms the ship. No auto-close (owner ruling 2026-10-09). The coolant stops at
+  // SHIP_HEAT.LOOP_OFF_C (20 °C), so an open radiator doesn't drag the ship down to the heaters.
   HEATER: {
     ENABLED: true,              // the one-line veto
     HOLD_C: 0,                  // °C — lithium-ion charge floor (cells must stay above freezing)
-    // Measured from the model (SHIP_HEAT constants, w4-power probe): radiator
-    // at 180° (openFrac 1, A_eff 7.50 m²), eclipse (no SUN_HULL_W), base load
-    // 500 W: σ·ε·A_eff·(273.15⁴ − 205⁴) − 500 W = 873.9 W at 7.20 m² radiators
-    // → rounded up to 880 W. test-PowerCosts recomputes it. L4 radiator-loop: sized
-    // with the coolant forced to flow 1 (the worst case, the valve stuck open) — in
-    // normal running the coolant is off at 0 °C and the heaters need only the hull
-    // leak (≈ 55 W at 0 °C), so the cap is far above any real need (a follow-up).
-    // (v12-radiator-20: was 810 W at 8.12 m² and SINK_K 220; the 25 cm step had 950 W at SINK_K 195.)
+    // Measured from the model (SHIP_HEAT constants): radiator at 180° (openFrac 1, A_eff 7.50 m²), eclipse (no
+    // SUN_HULL_W), base load 500 W: σ·ε·A_eff·(273.15⁴ − 205⁴) − 500 W = 873.9 W → rounded up to 880 W.
+    // test-PowerCosts recomputes it. Sized with the coolant forced to flow 1 (worst case, valve stuck open) — in
+    // normal running the coolant is off at 0 °C and the heaters need only the hull leak (≈ 55 W at 0 °C), so the cap
+    // is far above any real need.
     MAX_W: 880,
     PULL_S: 20,                 // battery-clock s — how hard the hold pulls back to HOLD_C
     LINE_AFTER_S: 10,           // game s of heater running before the comms line
     LINE_EVERY_S: 300,          // at most one heater line per 5 min of game time
   },
 
-  // === MOTOR DRAW (w4-power D5, 2026-10-12 — owner: "adjusting wings and
-  // open/closing costs battery and thermals … 8 motors on strut cost energy
-  // and thermals. Reel on mother costs") ======================================
-  // The ONE table of what each motor draws while it moves. Billed in that
-  // motor's per-frame motion step, only on frames it actually moves, through
-  // ResourceSystem.billWatts (W ÷ SHIP_HEAT.W_PER_UNIT_S × dt battery units —
-  // the base load's own conversion), so a 15 W motor shows +15 W on the meter
-  // and its heat follows through the ledger. Held frames bill nothing. Sized
-  // physically (Ruling 0) — never inflated for feel. Sources: NASA Small
-  // Spacecraft State of the Art 2026, ch. 6 Table 6-5 "Commercial Actuator
-  // Mechanisms" (https://www.nasa.gov/smallsat-institute/sst-soa/structures-materials-and-mechanisms/).
+  // --- MOTOR DRAW ---
+  // The ONE table of what each motor draws while it moves (owner 2026-10-12: wing, strut, radiator and reel motors
+  // cost battery and thermals). Billed in that motor's per-frame motion step, only on frames it actually moves,
+  // through ResourceSystem.billWatts (W ÷ SHIP_HEAT.W_PER_UNIT_S × dt battery units — the base load's own
+  // conversion), so a 15 W motor shows +15 W on the meter and its heat follows through the ledger. Held frames bill
+  // nothing. Sized physically (Ruling 0) — never inflated for feel. Sources: NASA Small Spacecraft State of the Art
+  // 2026, ch. 6 Table 6-5 "Commercial Actuator Mechanisms"
+  // (https://www.nasa.gov/smallsat-institute/sst-soa/structures-materials-and-mechanisms/).
   MOTOR_DRAW_W: {
     STRUT_HINGE: 15,            // ×4 strut hinge motor boxes (StrutMotorBox_) — a geared rotary drive
                                 // swinging a strut + daughter: Moog Type 2 SADM 15 W (Table 6-5)
@@ -608,217 +489,134 @@ export const Constants = {
   STAR_SPHERE_RADIUS: 400,
 
   // --- Constellation stick figures (Starfield._createConstellations) ---
-  // Deliberately faint: "noticeable if you look, not distracting". The earlier
-  // pass (§18 Fix 3) pushed these UP to fight ACES crush, which made the lines
-  // read as rocket launch trails where they were hard-clipped by the Earth
-  // silhouette. The clipping — not the brightness — was the real cue, so it is
-  // now solved by the LIMB_FADE_* ramp below and these can come back down.
-  CONSTELLATION_LINE_COLOR: 0x7d8ba3,   // desaturated slate blue-grey (was 0x6688cc)
-  CONSTELLATION_LINE_OPACITY: 0.30,     // was 0.7
-  CONSTELLATION_LINE_WIDTH: 1.25,       // px — was 2.0 (no MSAA; SMAA/FXAA carries it)
-  CONSTELLATION_LABEL_OPACITY: 0.28,    // was 0.34
-  // Soft limb fade: constellation lines dissolve BEFORE they reach the Earth
-  // limb glow instead of being hard-clipped at the silhouette by depthTest.
-  // The fade band is a fraction of Earth's apparent angular radius (so it
-  // behaves both in LEO, where Earth fills the frame, and in far orbit where
-  // the disc is small), then clamped to absolute radians at both ends.
+  // Deliberately faint ("noticeable if you look, not distracting"). The Earth-limb hard clip, not brightness, made the
+  // lines read as launch trails; the LIMB_FADE_* ramp below solves that.
+  CONSTELLATION_LINE_COLOR: 0x7d8ba3,   // desaturated slate blue-grey
+  CONSTELLATION_LINE_OPACITY: 0.30,
+  CONSTELLATION_LINE_WIDTH: 1.25,       // px (no MSAA; SMAA/FXAA carries it)
+  CONSTELLATION_LABEL_OPACITY: 0.28,
+  // Soft limb fade: lines dissolve BEFORE the Earth limb glow instead of being hard-clipped by depthTest. The band is
+  // a fraction of Earth's apparent angular radius (works in LEO and in far orbit), then clamped to absolute radians.
   CONSTELLATION_LIMB_FADE_SCALE: 0.35,
   CONSTELLATION_LIMB_FADE_MIN: 0.035,   // ~2°
   CONSTELLATION_LIMB_FADE_MAX: 0.35,    // ~20°
-  // Gap trimmed off each end of a constellation line segment so it stops short
-  // of the star core instead of ending on top of it (a normal-blended line over
-  // an additive star dims the core). 2.5 units at radius 400 ≈ 0.36° ≈ 6 px —
-  // comfortably clear of a ~4.5 px star without reading as a broken figure.
-  // The per-segment trim is clamped to 25% of the segment length so the short
-  // Shaula–Lesath arm (~2.9 units) is not inverted.
+  // Gap trimmed off each end of a line segment so it stops short of the star core (a normal-blended line over an
+  // additive star dims the core). 2.5 units at radius 400 ≈ 0.36° ≈ 6 px, clear of a ~4.5 px star. The trim is clamped
+  // to 25% of the segment length so the short Shaula–Lesath arm (~2.9 units) is not inverted.
   CONSTELLATION_LINE_GAP: 2.5,
 
   // --- Named bright stars at the constellation vertices (Starfield._create) ---
-  // The 49 catalogue stars are written into indices 0..48 of the main star
-  // Points. Size carries the magnitude range (stars are capped at 2.0 to stay
-  // under the bloom threshold, so brightness alone cannot separate mag 0.1
-  // from mag 3.5 under ACES); brightness carries the truth. Both are monotone
-  // in magnitude so nothing out-sizes or out-shines something genuinely
-  // brighter. These are tuned from captures — keep them reachable here.
+  // The 49 catalogue stars are written into indices 0..48 of the main star Points. Size carries the magnitude range
+  // (stars are capped at 2.0 to stay under the bloom threshold, so brightness alone cannot separate mag 0.1 from mag
+  // 3.5 under ACES); brightness carries the truth. Both are monotone in magnitude. Tuned from captures.
   STAR_MAG_SIZE_BASE: 4.6,    // size attribute at mag 0 (Rigel ≈ 4.5 → ~6.75 px quad)
   STAR_MAG_SIZE_SLOPE: 0.75,  // size attribute lost per magnitude
   STAR_MAG_SIZE_MIN: 1.3,     // floor so the faintest catalogue star (Eta Leo 3.49) stays visible.
-                              // MUST stay strictly above STAR_FIELD_SIZE_FLOOR — the
-                              // catalogue-out-sizes-field hierarchy is guarded by a test.
-  STAR_MAG_BRIGHT_MIN: 0.45,  // knee, NOT a hard floor — pow(10,-0.4(mag-1)) drops below
-                              // 0.45 for mag > ~1.87 (32 of the 49 catalogue stars), and
-                              // a hard clamp there would flatten all of them to identical
-                              // brightness. Below the knee the soft-floor curve (see
-                              // STAR_MAG_BRIGHT_FLOOR_SOFT) keeps strict magnitude ordering
-                              // while holding the faint end above the random field instead
-                              // of crushing to invisible under ACES.
-  STAR_MAG_BRIGHT_FLOOR_SOFT: 0.85, // sub-knee asymptote ratio: brightness never drops
-                              // below MIN×0.85 = 0.3825 no matter how faint the raw value.
-                              // MUST stay strictly above STAR_FIELD_BRIGHT (0.32) with a
-                              // real margin — the faintest named star must out-peak every
-                              // field star — and the test suite asserts this.
-  STAR_MAG_BRIGHT_MAX: 2.0,   // ceiling — COUPLED to BLOOM_THRESHOLD (2.5): peak fragment
-                              // value is 1.0 × 2.0 × uOpacity 0.95 = 1.9. Do NOT raise past
-                              // 2.0 without reading that threshold — stars must not bloom
+                              // MUST stay strictly above STAR_FIELD_SIZE_FLOOR (a test guards the hierarchy).
+  STAR_MAG_BRIGHT_MIN: 0.45,  // knee, NOT a hard floor — pow(10,-0.4(mag-1)) drops below 0.45 for mag > ~1.87 (32 of
+                              // the 49 catalogue stars); a hard clamp would flatten them all. Below the knee the
+                              // soft-floor curve (STAR_MAG_BRIGHT_FLOOR_SOFT) keeps strict magnitude ordering while
+                              // holding the faint end above the random field instead of crushing under ACES.
+  STAR_MAG_BRIGHT_FLOOR_SOFT: 0.85, // sub-knee asymptote ratio: brightness never drops below MIN×0.85 = 0.3825.
+                              // MUST stay strictly above STAR_FIELD_BRIGHT (0.32) with a real margin — the faintest
+                              // named star must out-peak every field star (the test suite asserts this).
+  STAR_MAG_BRIGHT_MAX: 2.0,   // ceiling — COUPLED to BLOOM_THRESHOLD (2.5): peak fragment value is
+                              // 1.0 × 2.0 × uOpacity 0.95 = 1.9. Do NOT raise past 2.0: stars must not bloom
                               // (bloom is reserved for the Sun and Venus).
 
   // --- Bloom threshold (the one number the whole HDR sky is coupled to) ---
-  // The UnrealBloom pass blooms any fragment above this value; SceneManager owns
-  // the pass and reads this constant (`?bloomThreshold=N` still overrides for
-  // profiling). It lives here, not as a literal in SceneManager, because three
-  // separate systems are coupled to it and must agree:
+  // The UnrealBloom pass blooms any fragment above this value; SceneManager owns the pass and reads this constant
+  // (`?bloomThreshold=N` still overrides for profiling). Three systems are coupled to it and must agree:
   //   1. the star ceiling above (stars must stay under it),
   //   2. the planet ladder (bodyCatalog/skyBrightness — only Venus crosses it, D3),
   //   3. the bloom GATE (SunLight.isBloomSourceVisible → SceneManager.setBloomEnabled),
   //      which skips the whole mip chain when no source above this value is on screen.
-  // Raising or lowering it changes which bodies bloom AND which bodies must keep
-  // the pass alive, so the gate derives its source list from this same number.
+  // Changing it changes which bodies bloom AND which must keep the pass alive; the gate derives its list from it.
   BLOOM_THRESHOLD: 2.5,
 
   // --- Faint random field (Starfield._create, indices 49..STAR_COUNT) ---
-  // The ~10k procedural stars are the FAINT TAIL of the same magnitude→size
-  // curve the catalogue stars use — the two populations sit on one curve and
-  // only the faint, unrecognizable end is invented (decorative, per doctrine B).
-  // Counts rise toward the faint end (log N ∝ 0.6·m, the real sky's roughly
-  // exponential star-count law), so most field stars are near-invisible and the
-  // few brighter ones read as a natural tail, not a uniform speckle.
-  STAR_FIELD_MAG_MIN: 4.4,    // brightest random star — MUST stay strictly under the
-                              // faintest catalogue star (Eta Leo 3.49 → attribute 1.98)
-                              // so Stage 1's hierarchy survives. 4.4 → attribute 1.3.
+  // The ~10k procedural stars are the FAINT TAIL of the same magnitude→size curve the catalogue stars use; only the
+  // faint, unrecognizable end is invented (decorative, per doctrine B). Counts rise toward the faint end
+  // (log N ∝ 0.6·m, the real sky's roughly exponential star-count law).
+  STAR_FIELD_MAG_MIN: 4.4,    // brightest random star — MUST stay strictly under the faintest catalogue star
+                              // (Eta Leo 3.49 → attribute 1.98). 4.4 → attribute 1.3.
   STAR_FIELD_MAG_MAX: 7.0,    // faintest random star (~naked-eye limit)
-  // Field brightness is a CONSTANT, not the magnitude curve — deliberately.
-  // pow(10, -0.4*(mag-1)) yields 0.044 at mag 4.4 down to 0.004 at mag 7.0, so
-  // every field star is far below any floor that would keep it visible: the
-  // curve cannot carry brightness information across the field's range at all.
-  // Size (via the 1.2 px floor) and aAlpha carry the magnitude instead — the
-  // same division of labour the catalogue stars use.
-  // MUST stay strictly below the soft-floor asymptote STAR_MAG_BRIGHT_MIN ×
-  // STAR_MAG_BRIGHT_FLOOR_SOFT (0.3825), which is the peak of the FAINTEST
-  // catalogue star (Eta Leo). A field star at or above it ties the named stars
-  // in peak luminance and breaks Stage 1's hierarchy.
+  // Field brightness is a CONSTANT, not the magnitude curve — deliberately: pow(10, -0.4*(mag-1)) yields 0.044 at
+  // mag 4.4 down to 0.004 at mag 7.0, far below any floor that keeps a star visible. Size (via the 1.2 px floor) and
+  // aAlpha carry the magnitude instead, as for the catalogue stars.
+  // MUST stay strictly below the soft-floor asymptote STAR_MAG_BRIGHT_MIN × STAR_MAG_BRIGHT_FLOOR_SOFT (0.3825), the
+  // peak of the FAINTEST catalogue star (Eta Leo); at or above it a field star ties the named stars in peak luminance.
   STAR_FIELD_BRIGHT: 0.32,
-  STAR_FIELD_SIZE_FLOOR: 1.2, // px — size never drops below this; below the floor the
-                              // per-star aAlpha carries the remaining faintness. This is
-                              // the standard cure for sub-pixel crawl (a 0.5 px speck at
-                              // full brightness shimmers as it crosses texel centres).
-                              // MUST stay strictly below STAR_MAG_SIZE_MIN (1.3) — guarded
-                              // by a test; the catalogue-out-sizes-field hierarchy depends
-                              // on it (today it holds only implicitly, via MAG_MIN 4.4
-                              // landing exactly at attribute 1.3).
-  STAR_FIELD_ALPHA_MIN: 0.15, // aAlpha at MAG_MAX — the faintest stars are barely-there
-                              // but not zero (zero would drop them from the draw entirely
+  STAR_FIELD_SIZE_FLOOR: 1.2, // px — size never drops below this; per-star aAlpha carries the remaining faintness
+                              // (the standard cure for sub-pixel crawl). MUST stay strictly below STAR_MAG_SIZE_MIN
+                              // (1.3) — guarded by a test; it holds only implicitly, via MAG_MIN 4.4 landing exactly
+                              // at attribute 1.3.
+  STAR_FIELD_ALPHA_MIN: 0.15, // aAlpha at MAG_MAX — barely-there but not zero (zero would drop them from the draw
                               // and leave a hard magnitude cutout).
 
   // --- Milky Way band (Starfield._createMilkyWay) ---
-  // The band is built on the REAL galactic basis (galacticBasis() in
-  // starCatalog.js: pole RA 12.85h Dec +27.13°, center RA 17.76h Dec −28.9°), so
-  // it runs through Sagittarius / Cygnus / Cassiopeia as it really does. These
-  // constants own the count, presence, size floor, and the licensed structure.
-  MW_COUNT: 12000,              // GRAIN points. Was 5,000 — and at 5,000 the band was not
-                                // merely faint, it was ABSENT. Per-point peak is capped
-                                // just under STAR_FIELD_BRIGHT so the band can never
-                                // out-shine a real star (see MW_OPACITY), which means
-                                // presence MUST come from coverage and additive overlap —
-                                // the doctrine stated at MW_CYGNUS_BOOST below, "density
-                                // IS perceived brightness". 5,000 points over a band ~30°
-                                // wide and 360° long is far too sparse for that overlap.
-                                //
-                                // Chosen by measurement, not by guess. Camera pointed at
-                                // the galactic centre vs the galactic pole, sampling the
-                                // SAME screen box so the HUD and vignette cancel exactly:
+  // Built on the REAL galactic basis (galacticBasis() in starCatalog.js: pole RA 12.85h Dec +27.13°, center RA 17.76h
+  // Dec −28.9°), so it runs through Sagittarius / Cygnus / Cassiopeia as it really does. These constants own the
+  // count, presence, size floor, and the licensed structure.
+  MW_COUNT: 12000,              // GRAIN points. Per-point peak is capped just under STAR_FIELD_BRIGHT so the band can
+                                // never out-shine a real star (see MW_OPACITY), so presence MUST come from coverage
+                                // and additive overlap ("density IS perceived brightness", MW_CYGNUS_BOOST below).
+                                // Chosen by measurement: camera at the galactic centre vs the pole, same screen box
+                                // so the HUD and vignette cancel:
                                 //   count    band mean   band lit%   band / pole
                                 //    5,000     0.92        1.27%       3.7x
                                 //   20,000     2.83        4.10%      11.6x
                                 //   40,000     5.21        7.43%      21.0x
-                                // The off-band background is unchanged at every count
-                                // (0.25 mean / 0.31% lit), so raising this densifies ONLY
-                                // the band — it cannot swamp the constellations, and
-                                // Scorpius stays legible in the 40,000 capture.
-                                //
-                                // Cost is one buffer, not one draw call per point: frame
-                                // rate measured 105 fps at 5,000 and 121 fps at 40,000
-                                // (i.e. no measurable cost; the difference is noise).
-                                // Do NOT instead raise MW_BRIGHT_MAX — that breaks the
-                                // star hierarchy that the whole sky is built on.
+                                // The off-band background is unchanged at every count (0.25 mean / 0.31% lit), so
+                                // raising this densifies ONLY the band; Scorpius stays legible at 40,000.
+                                // Cost is one buffer, not a draw call per point: 105 fps at 5,000, 121 fps at 40,000
+                                // (noise). Do NOT instead raise MW_BRIGHT_MAX — it breaks the star hierarchy.
                                 // Total sky points = 10,000 field+catalogue + MW_COUNT.
-  // ---- Haze layer: what actually makes it look like a band ----------------
-  // Density alone cannot produce haze. 40,000 grain points measured 21x brighter
-  // than off-band and still read as "splattered spray paint", because discrete
-  // dots stay discrete no matter how many you add. These few large, very dim,
-  // additively-blended sprites overlap into continuous glow instead. The grain
-  // count above then drops back to a texture role rather than doing all the work.
+  // ---- Haze layer: what actually makes it look like a band ----
+  // Density alone cannot produce haze: 40,000 grain points were 21x brighter than off-band and still read as
+  // "splattered spray paint", because discrete dots stay discrete. These few large, very dim, additively-blended
+  // sprites overlap into continuous glow; the grain count above is then only a texture role.
   MW_HAZE_COUNT: 9000,          // haze sprites (cheap: same buffer, same draw call)
   MW_HAZE_SIZE_MIN: 16,         // attribute units; x uSizeScale 1.5 => ~24 px
   MW_HAZE_SIZE_MAX: 38,         //                                   => ~57 px
-  MW_HAZE_BRIGHT_MULT: 1.6,     // haze colour multiplier, applied on top of the band's
-                                // per-point brightness. Decouples the glow from the GRAIN
-                                // brightness: grain must stay well under a real field star,
-                                // while the haze needs to keep its level. Safe against the
-                                // per-point peak rule because haze contribution is
-                                // colour x opacity x MW_HAZE_ALPHA (~0.008), far below the
-                                // 0.32 field-star value — the alpha is what gates it.
-  MW_HAZE_ALPHA: 0.020,         // per-sprite alpha. MUST stay tiny — the glow comes
-                                // from summing many, and the per-point peak rule
-                                // (see MW_OPACITY) still holds because alpha only
-                                // ever reduces a point's contribution.
-  MW_OPACITY: 0.75,             // uOpacity for the band material (was 0.55 — too faint
-                                // to notice). COUPLING to STAR_FIELD_BRIGHT (0.32): every
-                                // band point's peak = vColor × uOpacity × vAlpha must stay
-                                // BELOW 0.32 so the band never out-points an actual star.
-                                // With MW_BRIGHT_MAX 0.42 and vAlpha ≤ 1 the peak is
+  MW_HAZE_BRIGHT_MULT: 1.6,     // haze colour multiplier on top of the band's per-point brightness. Decouples the glow
+                                // from GRAIN brightness (grain must stay well under a real field star). Safe against
+                                // the per-point peak rule: haze contribution is colour x opacity x MW_HAZE_ALPHA
+                                // (~0.008), far below the 0.32 field-star value.
+  MW_HAZE_ALPHA: 0.020,         // per-sprite alpha. MUST stay tiny — the glow comes from summing many, and the
+                                // per-point peak rule (see MW_OPACITY) holds because alpha only reduces a contribution.
+  MW_OPACITY: 0.75,             // uOpacity for the band material. COUPLING to STAR_FIELD_BRIGHT (0.32): every band
+                                // point's peak = vColor × uOpacity × vAlpha must stay BELOW 0.32 so the band never
+                                // out-points an actual star. With MW_BRIGHT_MAX 0.42 and vAlpha ≤ 1 the peak is
                                 // 0.42 × 0.75 = 0.315 < 0.32.
-  // Band GRAIN brightness. Was 0.42, which put the brightest band point at
-  // 0.42 x 0.75 = 0.315 against the faintest field star's 0.32 — technically under
-  // the cap, but 98% of it, so band grain was visually indistinguishable from real
-  // catalogue stars. That value dates from when grain had to carry the whole band's
-  // presence; the haze layer does that now, so grain can be what it physically is.
-  // The Milky Way is UNRESOLVED: its individual stars are below naked-eye
-  // separation, so they must be the faintest thing in the sky, not rivals to real
-  // stars. 0.21 x 0.75 = 0.158, about half a faint field star.
+  // Band GRAIN brightness. The Milky Way is UNRESOLVED: its individual stars are below naked-eye separation, so they
+  // must be the faintest thing in the sky, not rivals to real stars; the haze layer carries the band's presence.
   MW_BRIGHT_MAX: 0.26,          // brightest band point's color multiplier (pre-opacity).
                                 // See the MW_OPACITY coupling — the product must stay < 0.32.
   MW_BRIGHT_MIN: 0.05,          // faintest band point (per-point variation for texture).
-  MW_SIZE_FLOOR: 1.2,           // px — MUST equal STAR_FIELD_SIZE_FLOOR. The band's old
-                                // 0.4–0.9 px points were the exact sub-pixel crawl class
-                                // the floor cured; band points get the same floor.
-  MW_SIZE_VAR: 1.4,             // px — grain spans MW_SIZE_FLOOR … FLOOR + VAR (1.2 → 2.6); the old 4.5 max out-sized real field stars.
-  // Licensed structure (per doctrine B — the shape is real, the contrast is
-  // exaggerated ~2× over real so it reads at a glance):
+  MW_SIZE_FLOOR: 1.2,           // px — MUST equal STAR_FIELD_SIZE_FLOOR (sub-pixel points crawl; same floor).
+  MW_SIZE_VAR: 1.4,             // px — grain spans MW_SIZE_FLOOR … FLOOR + VAR (1.2 → 2.6); larger would out-size real field stars.
+  // Licensed structure (per doctrine B — the shape is real, the contrast is exaggerated ~2× so it reads at a glance):
   MW_CENTER_CONTRAST: 2.0,      // center:anticenter density/brightness ratio (licensed).
   MW_BAND_WIDTH: 0.16,          // base latitude half-width (radians) of the band.
-  MW_BAND_WIDTH_CENTER: 1.6,    // width multiplier at the galactic center (band is widest
-                                // near Sagittarius, like the real galaxy).
-  // Halo component: a fraction of the band points are scattered 3× wider and
-  // drawn dimmer, giving a bright core in a broad faint glow (like real Milky
-  // Way photographs). The three-uniform scatter (Starfield.js) arrives at zero
-  // smoothly; the halo carries that smooth fall past the core's own edge, so
-  // the band thins out to ~30° instead of stopping dead at ~14°.
+  MW_BAND_WIDTH_CENTER: 1.6,    // width multiplier at the galactic center (band is widest near Sagittarius).
+  // Halo component: a fraction of the band points are scattered 3× wider and drawn dimmer, giving a bright core in a
+  // broad faint glow. The three-uniform scatter (Starfield.js) arrives at zero smoothly; the halo carries that fall
+  // past the core's own edge, so the band thins out to ~30° instead of stopping dead at ~14°.
   MW_HALO_FRACTION: 0.25,       // fraction of band points in the wide faint halo
   MW_HALO_WIDTH_MULT: 3.0,      // halo scatter width multiplier
-  MW_HALO_BRIGHT_MULT: 0.8,     // halo per-point brightness multiplier (only ever
-                                // dims, so the MW_BRIGHT_MAX cap is untouched)
-  // Great Rift — the dark lane from Cygnus to Sagittarius (negative space, not black paint).
-  // The Great Rift — the dark dust lane that SPLITS the band lengthwise. This is
-  // the band's second most recognisable feature after the band itself, and it was
-  // previously both half-missing and far too narrow to read:
-  //   - it ran l=0 → 80° only, stopping dead at Sagittarius. The published extent
-  //     runs Cygnus → Serpens-Aquila → Ophiuchus → Sagittarius → CENTAURUS, so the
-  //     entire Sgr-to-Centaurus half of the feature was simply absent.
-  //   - the half-width was 0.05 rad (5.7° full) against a band ~29° wide. The rift
-  //     "appears as clear as the bright bulge" and "divides the bright band
-  //     vertically" — it cannot do that at 20% of the band's width.
-  // Published span: Cygnus l≈80° to Centaurus l≈310° (= −50°), which is ~130° of
-  // longitude, matching "the Great Rift covers one third of the Milky Way".
+  MW_HALO_BRIGHT_MULT: 0.8,     // halo per-point brightness multiplier (only ever dims, so the MW_BRIGHT_MAX cap holds)
+  // Great Rift — the dark dust lane that SPLITS the band lengthwise (negative space, not black paint). It must span
+  // the published extent Cygnus → Serpens-Aquila → Ophiuchus → Sagittarius → CENTAURUS (l≈80° to l≈310° = −50°,
+  // ~130° of longitude, "one third of the Milky Way") and be wide enough to "divide the bright band vertically".
   MW_RIFT_LONG_MIN: -0.87,      // radians — Centaurus end (l≈310°).
   MW_RIFT_LONG_MAX: 1.40,       // radians — Cygnus end (l≈80°, Northern Coalsack).
   MW_RIFT_OFFSET: -0.03,        // latitude offset of the lane centre (radians off-plane),
                                 // so the lane splits the band into two flanking strips.
   MW_RIFT_WIDTH: 0.075,         // lane half-width (radians, ~4.3°) at the narrow Cygnus end.
-                                // Sized to SPLIT the ~29°-wide band into two flanking
-                                // strips, not to erase it: at 0.09 with a 2.2 broadening
-                                // the lane reached 20° at Sagittarius and swallowed the
-                                // bright bulge, which the rift obscures but does not
-                                // remove — the Sagittarius star clouds still flank it.
+                                // Sized to SPLIT the ~29°-wide band into two flanking strips, not to erase it: wider
+                                // (0.09 with a 2.2 broadening) swallowed the bright bulge, which the rift obscures
+                                // but does not remove — the Sagittarius star clouds still flank it.
   MW_RIFT_BROADEN: 1.5,         // width multiplier where it broadens out (~12° full at Sgr).
   MW_RIFT_BROADEN_LONG: 0.26,   // radians — Ophiuchus (l≈15°), where the rift is widest.
   MW_RIFT_BROADEN_WIDTH: 0.55,  // radians — how far the broadening reaches along the lane.
@@ -828,37 +626,23 @@ export const Constants = {
   // Cygnus star-cloud enhancement (the bright cloud around Cygnus).
   MW_CYGNUS_LONG: 1.4,          // radians (l≈80°).
   MW_CYGNUS_WIDTH: 0.25,        // gaussian width (radians).
-  // Density multiplier at the Cygnus centre. HARD CEILING, guarded by a test:
-  // the centre profile has already fallen to ~0.792 by this longitude, so any
-  // boost above 1/0.792 = 1.262 makes Cygnus DENSER than Sagittarius — which is
-  // what 1.7 did (1.35× denser), inverting the documented "brightest at the
-  // galactic centre" structure. Because band presence comes from COVERAGE and not
-  // per-point peak (see MW_OPACITY), density IS perceived brightness, so the
-  // brightest region simply sat in the wrong place. Raising MW_CENTER_CONTRAST
-  // cannot buy headroom — that term asymptotes near 0.585 at this longitude and
-  // would need a contrast above 130. See starCatalog.mwDensity, which composes
-  // the two terms for BOTH the builder and the test (they were separate before,
-  // which is how a 1.35× inversion passed a "density falls monotonically" test).
+  // Density multiplier at the Cygnus centre. HARD CEILING, guarded by a test: the centre profile has already fallen to
+  // ~0.792 by this longitude, so any boost above 1/0.792 = 1.262 makes Cygnus DENSER than Sagittarius, inverting the
+  // "brightest at the galactic centre" structure (band presence comes from COVERAGE, so density IS perceived
+  // brightness; see MW_OPACITY). Raising MW_CENTER_CONTRAST cannot buy headroom — that term asymptotes near 0.585 at
+  // this longitude and would need a contrast above 130. starCatalog.mwDensity composes the two terms for BOTH the
+  // builder and the test.
   MW_CYGNUS_BOOST: 1.25,
 
-  // ---- Bright star clouds: the band is PATCHY, not a smooth glow -----------
-  // The Milky Way's naked-eye character comes from discrete bright knots flanking
-  // the Great Rift. These are placed from PUBLISHED coordinates only.
-  //
-  // Researched, and most of the famous names turned out to be unusable: the
-  // Scutum, Cygnus and Norma Star Clouds have NO published coordinates or extent
-  // — no dedicated catalogue entry, no SIMBAD record under those names, they appear
-  // only as examples in prose. Rather than invent plausible positions for them,
-  // they are omitted. (Cygnus still gets its longitude density boost above, which
-  // is a separate, already-tested mechanism.)
-  //
-  // Positions are RA (hours) / Dec (degrees), J2000, converted with raDecToUnit at
-  // build time. Sizes are the published apparent extents, as half-widths here.
-  // Semi-axes are HALF the published apparent size (a = along RA, b = along Dec).
+  // ---- Bright star clouds: the band is PATCHY, not a smooth glow ----
+  // The naked-eye character comes from discrete bright knots flanking the Great Rift, placed from PUBLISHED
+  // coordinates only. The Scutum, Cygnus and Norma Star Clouds have NO published coordinates or extent (no catalogue
+  // entry, no SIMBAD record; prose examples only), so they are omitted rather than invented.
+  // Positions are RA (hours) / Dec (degrees), J2000, converted with raDecToUnit at build time. Semi-axes are HALF the
+  // published apparent size (a = along RA, b = along Dec).
   MW_STAR_CLOUDS: [
-    // Wikipedia, "Large Sagittarius Star Cloud": apparent size 6°x4°. NOTE the
-    // source gives RA/Dec only to whole hour/degree, so this is a rough locator
-    // by the source's own admission — good enough for a diffuse 6° cloud.
+    // Wikipedia, "Large Sagittarius Star Cloud": apparent size 6°x4°. The source gives RA/Dec only to whole
+    // hour/degree: a rough locator, good enough for a diffuse 6° cloud.
     { name: 'Large Sagittarius Star Cloud', ra: 18.0,   dec: -29.0,   aDeg: 3.0, bDeg: 2.0 },
     // Wikipedia, "Small Sagittarius Star Cloud" (M24 / IC 4715), citing O'Meara,
     // The Messier Objects (2014) p.117: apparent size 2°x1°.
@@ -867,144 +651,96 @@ export const Constants = {
     // star cloud proper, but it is the bright naked-eye knot of the Carina Milky Way.
     { name: 'Carina Nebula',                ra: 10.752, dec: -59.868, aDeg: 1.0, bDeg: 1.0 },
   ],
-  // Fraction of band points redirected into the clouds. Presence comes from DENSITY,
-  // never from per-point brightness — boosting brightness would break the "no band
-  // point out-peaks a star" cap (see MW_OPACITY).
-  //
-  // DERIVED, because eyeballing this failed twice. The clouds total ~23.6 sq deg and
-  // the band's ambient density near the galactic centre is ~5 points/sq deg, so they
-  // already contain ~117 points before any boost. A real star cloud is a 2-3x
-  // brightening of the surrounding band, so the extra budget is only ~120-230 points:
+  // Fraction of band points redirected into the clouds. Presence comes from DENSITY, never per-point brightness
+  // (that would break the "no band point out-peaks a star" cap, see MW_OPACITY).
+  // DERIVED: the clouds total ~23.6 sq deg and the band's ambient density near the galactic centre is ~5 points/sq
+  // deg, so they already contain ~117 points. A real star cloud is a 2-3x brightening of the surrounding band, so
+  // the extra budget is ~120-230 points:
   //     2.0x -> 0.0056     2.5x -> 0.0084     3.0x -> 0.0112
-  // 0.14 and 0.05 were tried and both rendered as globular clusters with a visible
-  // rim — 0.05 is a 10x spike, which is a cluster by definition, not a cloud.
+  // 0.14 and 0.05 both rendered as globular clusters with a visible rim (0.05 is a 10x spike).
   MW_CLOUD_EXTRA_FRACTION: 0.011,
 
-  // =========================================================================
   // SUN / MOON / PLANETS (SunLight.js) — the naked-eye bodies
-  // =========================================================================
-  // Sizes live in bodyCatalog.js (displayAngularDeg) as the single source of
-  // truth; these constants own the DISTANCES, opacities, halos, labels and the
-  // depth-mask geometry. Every brightness ceiling notes its coupling to the
-  // 2.5 bloom threshold (SceneManager) — bloom is reserved for the Sun and
-  // Venus (D3), so nothing else may cross it.
+  // Sizes live in bodyCatalog.js (displayAngularDeg), the single source of truth; these constants own the DISTANCES,
+  // opacities, halos, labels and depth-mask geometry. Every brightness ceiling is coupled to the 2.5 bloom threshold
+  // (SceneManager): bloom is reserved for the Sun and Venus (D3), so nothing else may cross it.
 
   // --- Distances (world units) ---
-  // The bodies are camera-facing billboards at fixed distances inside the star
-  // shell. Sun/Moon/planets sit at slightly different distances so their depth
-  // ordering is deterministic; the ANGULAR sizes are what matter visually and
-  // those come from bodyCatalog.displayAngularDeg at these distances.
+  // Camera-facing billboards at fixed distances inside the star shell, slightly different so their depth ordering is
+  // deterministic; the ANGULAR sizes (bodyCatalog.displayAngularDeg) are what matter visually.
   SUN_DIST: 450,                // sun glare sprite + core reference distance
   MOON_DIST: 430,               // moon disc distance (~1.49° → radius ~5.6)
   PLANET_DIST: 440,             // planet disc distance
   PLANET_GLOW_DIST: 438,        // glow halo sits slightly BEHIND its disc
-  // Depth masks are placed just INSIDE the star shell so they have smaller
-  // depth values than the stars and can occlude them. COUPLED to
-  // STAR_SPHERE_RADIUS (400): the mask must be < 400 or it cannot hide stars,
-  // and far enough inside that the 0.98 ray-solve margin in _updateSunDisc
-  // keeps it in front of the shell at altitude.
+  // Depth masks sit just INSIDE the star shell so their depth is smaller than the stars' and they can occlude them.
+  // COUPLED to STAR_SPHERE_RADIUS (400): the mask must be < 400 or it cannot hide stars, and far enough inside that
+  // the 0.98 ray-solve margin in _updateSunDisc keeps it in front of the shell at altitude.
   BODY_DEPTH_MASK_DIST: 398,
 
   // --- Sun ---
-  // The glare sprite scale and the depth-mask radius are BOTH derived from
-  // bodyCatalog's Sun displayAngularDeg (1.49°, Moon parity) in bodyGeometry
-  // (sunGeometry) — one source of truth so they can never desync (that desync was
-  // F6: glare 1.91° vs mask 1.15° let stars show inside the glare). No
-  // SUN_GLARE_SCALE constant by design.
+  // The glare sprite scale and the depth-mask radius are BOTH derived from bodyCatalog's Sun displayAngularDeg (1.49°,
+  // Moon parity) in bodyGeometry (sunGeometry), so they can never desync (glare wider than mask let stars show inside
+  // the glare). No SUN_GLARE_SCALE constant by design.
   SUN_GLARE_OPACITY: 0.95,      // additive; multiplies the HDR peak below.
-  // The Sun is the one body MEANT to bloom (D3) — and it did NOT, which was a
-  // latent defect: the sprite was plain LDR (colour ≤ 1 × opacity 0.95 ≈ 0.95),
-  // so it could never reach BLOOM_THRESHOLD 2.5 and the pass produced nothing
-  // from it. The "halo" was only the texture's own skirt. This is the HDR peak
-  // the sprite's core now renders at, applied exactly like the planet ladder
-  // (tint × PEAK / (maxChannel × opacity), so the peak channel lands here).
-  // COUPLING to BLOOM_THRESHOLD: must exceed 2.5 for the core to bloom at all.
-  // At 3.0 the core (texture alpha ≥ 0.88) crosses it and the glow skirt
-  // (alpha 0.25 → 0.75) stays under, so the solid disc blooms and the skirt does
-  // not — which is the intent. Costs nothing: the bloom pass is already running
-  // on every sun-visible frame (the gate is open), it just had no sun to work on.
+  // The Sun is the one body MEANT to bloom (D3). This is the HDR peak the sprite's core renders at, applied like the
+  // planet ladder (tint × PEAK / (maxChannel × opacity), so the peak channel lands here).
+  // COUPLING to BLOOM_THRESHOLD: must exceed 2.5 for the core to bloom at all. At 3.0 the core (texture alpha ≥ 0.88)
+  // crosses it and the glow skirt (alpha 0.25 → 0.75) stays under, so the solid disc blooms and the skirt does not.
   SUN_HDR_PEAK: 3.0,
-  // How far the glare texture visibly glows, as the alpha below which it stops
-  // being perceptible. The depth mask is sized to THIS extent, not to the
-  // sprite's square: the sprite reaches alpha 0 at its rim, so masking to the
-  // full sprite deleted stars from a ~3 px ring of effectively empty sky (an
-  // invisible hole — the inverse of F6, and undetectable by a "zero stars inside
-  // the mask" test, which passes trivially once the mask covers everything).
-  // With the shipped gradient stops (bodyGeometry.SUN_GLARE_STOPS) 0.10 puts the
-  // mask at 0.90 of the sprite = 1.341° vs the 1.49° disc.
+  // The alpha below which the glare texture stops being perceptible. The depth mask is sized to THIS extent, not to
+  // the sprite's square: the sprite reaches alpha 0 at its rim, so masking the full sprite deleted stars from a ~3 px
+  // ring of empty sky (an invisible hole a "zero stars inside the mask" test cannot see). With the shipped gradient
+  // stops (bodyGeometry.SUN_GLARE_STOPS) 0.10 puts the mask at 0.90 of the sprite = 1.341° vs the 1.49° disc.
   SUN_GLARE_VISIBLE_ALPHA: 0.10,
   SUN_LABEL_OFFSET: 15,         // world units below the disc (camera-relative)
   // --- Moon ---
-  MOON_BASE_OPACITY: 0.85,      // NormalBlending disc; the shader owns phase (Stage 3
-                                // replaced whole-disc dimming with a real terminator
-                                // + earthshine — see _updateMoon). MUST stay under
-                                // BLOOM_THRESHOLD: the Moon must never bloom.
-  // Depth-mask radius as a FRACTION of the moon's disc radius (was an independent
-  // literal 5.2, which is this × 5.5915 — the same desync class as F6, just
-  // smaller: changing the Moon's displayAngularDeg silently changed the
-  // relationship). Slightly inside the disc because the texture's limb fade makes
-  // the outer rim translucent, so masking to the geometric edge would hide stars
-  // behind nothing. Stays FULL-DISC at every phase — the unlit limb is still
-  // solid rock and really does occlude stars.
+  MOON_BASE_OPACITY: 0.85,      // NormalBlending disc; the shader owns phase (real terminator + earthshine, see
+                                // _updateMoon). MUST stay under BLOOM_THRESHOLD: the Moon must never bloom.
+  // Depth-mask radius as a FRACTION of the moon's disc radius (so changing the Moon's displayAngularDeg keeps the
+  // relationship; the fraction is ≈ 5.2 / 5.5915). Slightly inside the disc because the texture's limb fade makes the
+  // outer rim translucent. Stays FULL-DISC at every phase — the unlit limb is still solid rock and occludes stars.
   MOON_MASK_FRACTION: 0.93,
   MOON_LABEL_OFFSET: 14,        // ≈ radius (5.59) + 8, the planet convention
-  // --- Moon Stage 3: real terminator + earthshine ---
-  // (The F2 phase floors — MOON_PHASE_BRIGHTNESS_FLOOR / _OPACITY_FLOOR /
-  // _OPACITY_SCALE — were deleted when Stage 3 landed the terminator: the shader
-  // now shades a sphere normal, so there is no whole-disc opacity to floor.)
-  // Earthshine: the ashen light on the unlit limb (Earth-reflected sunlight).
-  // LICENSED — true earthshine is far dimmer than 6% of the lit side; this is
-  // the value that keeps a new moon readable as a faint disc for real reasons,
-  // replacing the F2 whole-disc opacity floor. Applied to the UNLIT fraction
-  // only: color = tex × (lit + earthshine × (1 − lit)).
+  // --- Moon: real terminator + earthshine ---
+  // Earthshine: the ashen light on the unlit limb (Earth-reflected sunlight). LICENSED — true earthshine is far dimmer
+  // than 6% of the lit side; this keeps a new moon readable as a faint disc. Applied to the UNLIT fraction only:
+  // color = tex × (lit + earthshine × (1 − lit)).
   MOON_EARTHSHINE: 0.06,
-  // Terminator softness: the smoothstep half-width k on dot(normal, sunDirView).
-  // Small enough that the crescent horns stay sharp, large enough that the
-  // terminator doesn't alias across the 24 px disc.
+  // Terminator softness: the smoothstep half-width k on dot(normal, sunDirView). Small enough that the crescent horns
+  // stay sharp, large enough that the terminator doesn't alias across the 24 px disc.
   MOON_TERMINATOR_SOFTNESS: 0.05,
 
   // --- Planets (shared) ---
-  // Stage 5 brightness mechanism (the resolved "pick one"): opacity is 1.0 and
-  // the skyBrightness ladder is applied DIRECTLY as the HDR color multiplier
-  // B(mag) on each disc. COUPLING to the 2.5 bloom threshold (SceneManager):
-  // with NormalBlending the rendered peak is color × texture × opacity = (tint ×
-  // B(mag)) × texPeak × 1.0. For flat discs (texPeak 1) the peak channel is
-  // tint_peak × B(mag) — Venus (near-white) 2.74 blooms, Jupiter 2.39 / Mars
-  // 2.28 / Mercury ~1.6 (tint-weighted) / Saturn 1.58 all stay under. Only Venus
-  // blooms (D3). The multiplier MUST use the same skyBrightness curve the stars
-  // use (starCatalog.js) or the planets and stars fork onto two curves (F5).
+  // Opacity is 1.0 and the skyBrightness ladder is applied DIRECTLY as the HDR color multiplier B(mag) on each disc.
+  // COUPLING to the 2.5 bloom threshold (SceneManager): with NormalBlending the rendered peak is color × texture ×
+  // opacity = (tint × B(mag)) × texPeak × 1.0. For flat discs (texPeak 1) the peak channel is tint_peak × B(mag) —
+  // Venus (near-white) 2.74 blooms; Jupiter 2.39 / Mars 2.28 / Mercury ~1.6 (tint-weighted) / Saturn 1.58 stay
+  // under. Only Venus blooms (D3). The multiplier MUST use the same skyBrightness curve the stars use
+  // (starCatalog.js) or the planets and stars fork onto two curves (F5).
   PLANET_DISC_OPACITY: 1.0,
   PLANET_GLOW_OPACITY: 0.6,     // additive halo behind the disc
-  PLANET_GLOW_RADIUS_FACTOR: 1.25, // halo radius = this × body radius (was 1.5×).
-                                // The glow plane's full width = 2 × halo radius.
+  PLANET_GLOW_RADIUS_FACTOR: 1.25, // halo radius = this × body radius; the glow plane's full width = 2 × halo radius.
   PLANET_LABEL_OFFSET: 8,       // label sits radius + this below the disc
   BODY_LABEL_SCALE_X: 50,       // shared planetarium label sprite scale
   BODY_LABEL_SCALE_Y: 12,
   BODY_LABEL_OPACITY: 0.34,
 
   // --- Per-planet sun-angle offsets (decorative positions, degrees) ---
-  // deg = fixed elongation from the sun angle (decorative, per doctrine B). The
-  // halo radius now derives from the disc radius (PLANET_GLOW_RADIUS_FACTOR), so
-  // there are no per-planet PLANET_*_GLOW constants.
+  // deg = fixed elongation from the sun angle (decorative, per doctrine B). The halo radius derives from the disc
+  // radius (PLANET_GLOW_RADIUS_FACTOR), so there are no per-planet PLANET_*_GLOW constants.
   PLANET_MERCURY_DEG: 20,
   PLANET_VENUS_DEG: 40,
   PLANET_MARS_DEG: 170,
   PLANET_JUPITER_DEG: 90,
   PLANET_SATURN_DEG: 130,
-  // Saturn's rings need a full-square PlaneGeometry billboard (the rings extend
-  // past the globe's inscribed circle). The plane size is DERIVED in bodyGeometry
-  // (planetGeometry) from the catalogue's ringSpanAngularDeg, because the drawn
-  // rings fill only SATURN_RING.spanFraction (0.8626) of the texture — sizing the
-  // plane to the intended span directly would render the rings 14% small (the
-  // plan's trap 2). No PLANET_SATURN_PLANE_SIZE constant by design; the ring
-  // proportions live once in bodyGeometry.SATURN_RING, shared by the texture and
-  // the elliptical depth mask (F7).
+  // Saturn's rings need a full-square PlaneGeometry billboard (they extend past the globe's inscribed circle). The
+  // plane size is DERIVED in bodyGeometry (planetGeometry) from the catalogue's ringSpanAngularDeg, because the drawn
+  // rings fill only SATURN_RING.spanFraction (0.8626) of the texture — sizing the plane to the intended span directly
+  // would render the rings 14% small. No PLANET_SATURN_PLANE_SIZE constant by design; the ring proportions live once
+  // in bodyGeometry.SATURN_RING, shared by the texture and the elliptical depth mask (F7).
 
-  // =========================================================================
-  // V3 OCTOPUS ADR SATELLITE (from V3 Octopus.md Appendix F)
-  // 6-arm configuration: 3 Weaver (large) + 3 Spinner (small), hexagonal
-  // V4 "Opussy" GSL upgrades available as unlockable tech path
-  // =========================================================================
+  // --- V3 OCTOPUS ADR SATELLITE (from V3 Octopus.md Appendix F) ---
+  // 6-arm configuration: 3 Weaver (large) + 3 Spinner (small), hexagonal; V4 "Opussy" GSL upgrades are an unlockable tech path.
 
   // --- Core ("The Brain") ---
   OCTOPUS_CORE_DRY_MASS: 170,           // kg
@@ -1012,23 +748,21 @@ export const Constants = {
   OCTOPUS_CORE_BATTERY: 600,            // Wh
   OCTOPUS_CORE_HALL_ISP: 1500,          // s — fallback (h3-argon-engine: the active fuel's FUELS[..].isp is the ship's Isp; xenon = 1500 too)
 
-  // ── Rigid-body attitude dynamics (supersedes kinematic rotation) ──
-  // Lives OUTSIDE FEATURE_FLAGS deliberately (D7): REALITY_MODE forces every
-  // FEATURE_FLAGS.* false, and disabling *physics* is not what REALITY_MODE means.
-  // (The master switch and the legacy kinematic path it restored — old mass*0.25
-  // MOI + kinematic slerp — were removed 2026-10-16.)
+  // ── Rigid-body attitude dynamics ──
+  // Lives OUTSIDE FEATURE_FLAGS deliberately (D7): REALITY_MODE forces every FEATURE_FLAGS.* false, and disabling
+  // *physics* is not what REALITY_MODE means.
   ATTITUDE: {
     NOZZLE_THRUST_N: 40.0,      // per-nozzle cold-gas thrust — the single feel dial (D1).
-                                // 40 N chosen over raising MAX_RATE: higher thrust shortens the
-                                // burn, so overshoot improves (17.1° → 10.7°) instead of degrading
-                                // (17° → 24° at 0.9 rad/s), and spin-up tightens 1.01 s → 0.63 s.
+                                // 40 N chosen over raising MAX_RATE: higher thrust shortens the burn, so overshoot
+                                // improves (17.1° → 10.7°) instead of degrading (17° → 24° at 0.9 rad/s), and spin-up
+                                // tightens 1.01 s → 0.63 s.
     MAX_RATE: 0.6,              // rad/s angular-rate cap (D1: 34°/s)
     RECENTER_RATE: 0.1,         // rad/s (5.7°/s) — target return rate toward prograde
     RECENTER_GAIN: 1.0,         // 1/s — ω_target = clamp(GAIN·θ, RECENTER_RATE)
     HOLD_DEADBAND_RAD: 0.035,   // ~2°, no recenter inside this
     INERTIA_MAX_FACTOR: 3.0,    // D6 berthed-mass clamp: total ≤ 3× stowed transverse
     COLD_GAS_BASE_RATE: 0.5,    // tank units per second of one full couple (PlayerSatellite `_coldGasRate`, before the shop's efficiency upgrade)
-    RCS_ATTITUDE_N2_FACTOR: 1.0, // the REAL steering-gas price since 2026-10-24 (owner): assigned from NOZZLE_THRUST_N, Isp, G0 right after this literal
+    RCS_ATTITUDE_N2_FACTOR: 1.0, // owner 2026-10-24: the REAL steering-gas price; assigned from NOZZLE_THRUST_N, Isp, G0 right after this literal
   },
 
   // ── Sloth mode (owner 2026-10-23, DECISIONS §37): with the steering gas out, the four tail ion boxes turn her slowly ──
@@ -1050,7 +784,7 @@ export const Constants = {
     AIM_SLACK_S: 60,             // seconds added to a slow aim's time-out on top of twice its planned time
   },
 
-  // ── Reaction-wheel kit (owner 2026-10-23/24, DECISIONS §2 row 9; docs/research/2026-10-reaction-wheels.md): the standard 3-wheel
+  // ── Reaction-wheel kit (owner 2026-10-23/24, DECISIONS §2 row 9; archive/research/2026-10-reaction-wheels.md): the standard 3-wheel
   // rung. One RW4-class wheel per body axis (x pitch, y yaw, z roll), a magnetic coil per axis that slowly bleeds the stored spin
   // into the Earth's field, and the electronics. Wheels turn her for nothing but battery; the cold gas stays for fast turns and as
   // backup. The kit is structure (on the axis, z = Z_M): it counts in her dry mass and her inertia, not in her centre of mass.
@@ -1076,9 +810,9 @@ export const Constants = {
     MIN_BATTERY_WH: 0.5,         // below this the wheels give no torque (AutopilotSystem BATTERY_EMPTY_WH)
     SERVO_ZONE_S: 2,             // the wheel rate-null is proportional inside alpha x this (rad/s): full torque outside, no chatter inside
     REST_RAD_S: 1e-7,            // below this rate error a wheel-made spin counts as stopped
-    // F2 (moving targets): an aim at a drifting piece goes to the wheels only while their room rate covers the piece's line-of-sight
-    // rate this many times over (coordinator's choice; a ship that cannot out-turn the bearing never catches it), and the aim measures
-    // that rate itself (the first seconds), because no caller can say it at the request.
+    // Moving targets: an aim at a drifting piece goes to the wheels only while their room rate covers the piece's
+    // line-of-sight rate this many times over (coordinator's choice; a ship that cannot out-turn the bearing never
+    // catches it), and the aim measures that rate itself (the first seconds), because no caller can say it at the request.
     LOS_COVER: 2,
     LOS_SETTLE_S: 0.3,           // s: a stateful aim provider (the lead-aim's smoothing, 20 % a frame) settles before the bearing's rate is read
     LOS_CHECK_S: 0.8,            // s: the first look at the measured rate; the aim is re-judged every LOS_RECHECK_S after
@@ -1088,8 +822,8 @@ export const Constants = {
     AIM_HANDOVER_S: 5,
   },
 
-  // FIX_PLAN §3: Tether-aware rotation limits (exponential spring-resistance model).
-  // When daughters are tethered, the mother's rotation is dampened by an "elastic" tether:
+  // Tether-aware rotation limits (exponential spring-resistance model). With daughters tethered, the mother's
+  // rotation is dampened by an "elastic" tether:
   //   effectiveRate = baseRate · (1 − |θ|/θ_max)^STIFFNESS_EXPONENT
   // — Initial keypress feels normal (rate=baseRate at θ=0).
   // — Sustained pressure builds displacement → rate falls toward 0 at the wall.
@@ -1119,7 +853,7 @@ export const Constants = {
   WEAVER_TOTAL_IMPULSE: 5500,           // Ns (Enpulsion NANO R3)
   WEAVER_THRUST: 0.00035,              // N (0.35 mN FEEP)
   WEAVER_TETHER_LENGTH: 2000,           // m (2 km)
-  WEAVER_NET_SIZE: 3.0,                 // m (3×3 deployed Dyneema SK78; 5 m until 2026-10-23, DECISIONS §38 row 5; = CAPTURE_NET.MEDIUM.DIAMETER)
+  WEAVER_NET_SIZE: 3.0,                 // m (3×3 deployed Dyneema SK78, DECISIONS §38 row 5; = CAPTURE_NET.MEDIUM.DIAMETER)
   WEAVER_MAX_CAPTURE_MASS: 500,         // kg
   WEAVER_BODY: [0.2, 0.2, 0.3],       // m [x, y, z] dimensions
   WEAVER_CAPTURES_PER_FUEL: 33,        // captures before FEEP depletion
@@ -1147,19 +881,14 @@ export const Constants = {
   TETHER_SEGMENTS: 24,                 // line segments for catenary render
   TETHER_SAG_FACTOR: 0.015,           // catenary sag amplitude as fraction of current separation
   TETHER_SAG_PARALLEL_THRESHOLD: 1e-6, // threshold for tether-parallel-to-gravity degeneracy detection
-  // Wave1 tension feedback (2026-08-27): the daughter tether tint is driven by
-  // the TENSION fraction (tetherTension / tetherBreakStrength) through the
-  // REEL_TENSION_WARNING / REEL_TENSION_CRITICAL thresholds — the same pair the
-  // DockingReticle tension bar and StatusPanel stress readout already use — and
-  // eased per frame with this time constant so the line can never strobe (the
-  // retired always-on driver keyed off DISTANCE strain and flashed red/white in
-  // the orbital frame). The creak floor rate-limits the daughter's
-  // Events.TETHER_TENSION emits per arm (AudioSystem's per-armId cooldown still
-  // applies downstream); see ArmUnit._updateReeling for the owner note.
+  // Tension feedback: the daughter tether tint is driven by the TENSION fraction (tetherTension / tetherBreakStrength)
+  // through the REEL_TENSION_WARNING / REEL_TENSION_CRITICAL thresholds (the pair the DockingReticle tension bar and
+  // StatusPanel stress readout use), eased per frame with this time constant so the line can never strobe (a
+  // distance-strain driver flashed red/white in the orbital frame). The creak floor rate-limits the daughter's
+  // Events.TETHER_TENSION emits per arm (AudioSystem's per-armId cooldown still applies downstream); see
+  // ArmUnit._updateReeling for the owner note.
   TETHER_COLOR_EASE_TAU_S: 0.25,       // s — exponential ease of the tether tint toward its tension target
   TETHER_CREAK_MIN_INTERVAL_S: 1.5,    // s — hard floor between daughter TETHER_TENSION creak emits (per arm)
-
-
 
   // --- Arm State Machine ---
   ARM_STATES: {
@@ -1173,46 +902,45 @@ export const Constants = {
     RETURNING: 'RETURNING',
     DOCKING: 'DOCKING',
     TRAWLING: 'TRAWLING',          // Slow sweep — passive debris collection along orbit path
-    DEORBITING: 'DEORBITING',      // One-way sacrifice — burning all fuel retrograde (Session 10)
-    WEB_SHOT: 'WEB_SHOT',          // Brief GSL web shot launch animation (Sprint D1)
-    LAUNCHING: 'LAUNCHING',        // V5 — Replaces UNDOCKING — crossbow spring release (0.05s)
-    REELING: 'REELING',            // V5 — Replaces HAULING — strut-reel motor haul (the winch pulls; reel-gas 2026-10-21: under REEL_HOME her ion thread keeps the line tight and her cold-gas jet brakes)
-    RELOADING: 'RELOADING',        // V5 — worm gear compresses spring
+    DEORBITING: 'DEORBITING',      // One-way sacrifice — burning all fuel retrograde
+    WEB_SHOT: 'WEB_SHOT',          // Brief GSL web shot launch animation
+    LAUNCHING: 'LAUNCHING',        // crossbow spring release (0.05s)
+    REELING: 'REELING',            // strut-reel motor haul (the winch pulls; under REEL_HOME her ion thread keeps the line tight and her cold-gas jet brakes)
+    RELOADING: 'RELOADING',        // worm gear compresses spring
     HOLDING_CATCH: 'HOLDING_CATCH', // Daughter docked at strut tip holding a captured debris in-net, awaiting furnace transfer (occupied — not redeployable, not reloaded)
-    ABLATING: 'ABLATING',          // V5 — 10W laser de-spin/nudge
-    SCANNING: 'SCANNING',          // V5 — pulse scan distributed sensor array
-    STATION_KEEP: 'STATION_KEEP',  // V8 — hold position relative to debris (orbital-crane)
+    ABLATING: 'ABLATING',          // 10W laser de-spin/nudge
+    SCANNING: 'SCANNING',          // pulse scan distributed sensor array
+    STATION_KEEP: 'STATION_KEEP',  // hold position relative to debris (orbital-crane)
     ADRIFT: 'ADRIFT',              // Out of usable FEEP but STILL TETHERED & powered — recoverable.
                                    //   Thrusters offline (no working propellant); avionics/beacon live,
                                    //   so the mother can still reel her home, the player can still
                                    //   select/pilot (1-4), and she can be disconnected. NOT lost.
     EXPENDED: 'EXPENDED',          // Genuinely lost — tether snapped, detached & out of range/fuel,
                                    //   or deorbit burn complete. Terminal; no recovery.
-    MAGNETIC_GRAPPLE: 'MAGNETIC_GRAPPLE',  // P2 — EPM contact + 50 N hold + reel (DAUGHTER_MULTITOOL)
-    GRIPPER_GRAPPLE:  'GRIPPER_GRAPPLE',   // P3 — 3-jaw chuck on protruding fixture (reserved)
-    PAD_CONTACT:      'PAD_CONTACT',       // P4 — multi-modal pad contact attempt (reserved)
-    // trip-melt-2 (carry, 2026-10-19): a daughter carries a rack catch to a radiator-tip furnace on the trip and comes home.
+    MAGNETIC_GRAPPLE: 'MAGNETIC_GRAPPLE',  // EPM contact + 50 N hold + reel (DAUGHTER_MULTITOOL)
+    GRIPPER_GRAPPLE:  'GRIPPER_GRAPPLE',   // 3-jaw chuck on protruding fixture (reserved)
+    PAD_CONTACT:      'PAD_CONTACT',       // multi-modal pad contact attempt (reserved)
+    // Carry: a daughter carries a rack catch to a radiator-tip furnace on the trip and comes home.
     CARRY_PREP:       'CARRY_PREP',        // docked: the strut and the radiators move to the carry pose
     CARRY_OUT:        'CARRY_OUT',         // clamp release, then the straight flight to the tip (her docked attitude, ship-relative)
     CARRY_HANDOFF:    'CARRY_HANDOFF',     // the catch leaves her rack for the tip, a beat at the tip
     CARRY_BACK:       'CARRY_BACK',        // the same line in reverse, wound by her strut reel
   },
 
-  // --- Daughter multi-tool (DAUGHTER_MULTITOOL_SPEC §4.1) ---
-  // Per-arm tool inventory (Y0 baseline; static-by-class, read on construction).
+  // --- Daughter multi-tool (archive/DAUGHTER_MULTITOOL_SPEC.md §4.1) ---
+  // Per-arm tool inventory (static-by-class, read on construction).
   // Tool kinds are the bare strings 'NET' | 'MAGNET' | 'GRIPPER' | 'PAD'.
   DAUGHTER_TOOLSETS: {
     weaver:  ['NET', 'GRIPPER', 'MAGNET'],   // ordered: primary first (§2 table)
     spinner: ['NET', 'PAD'],                 // DECISIONS §33 row 2 / u18 D7: four nets + a sticky pad, no magnet (the large daughter keeps hers)
   },
 
-  // EPM magnetic-grapple tuning (cite EPIC10_DEEP_ANALYSIS.md:3322-3326).
-  // §13 Q4 heterogeneous-spacecraft model: real sats / rocket bodies have steel
-  // bolts / brackets even when the hull is Al or Ti.
+  // EPM magnetic-grapple tuning (archive/EPIC10_DEEP_ANALYSIS.md). Heterogeneous-spacecraft model (§13 Q4):
+  // real sats / rocket bodies have steel bolts / brackets even when the hull is Al or Ti.
   MAGNETIC_GRAPPLE: {
     CONTACT_RANGE_M:        0.5,    // EPM contact window (touch −Y face to ≤0.5 m)
-    HOLD_FORCE_N:           50,     // EPIC10 line 3322
-    MAX_DEBRIS_MASS_KG:     500,    // EPIC10 line 3325
+    HOLD_FORCE_N:           50,     // EPIC10
+    MAX_DEBRIS_MASS_KG:     500,    // EPIC10
     ENERGIZE_PULSE_S:       0.3,    // pole-face blue flash 1.0→0.0 over 0.3 s
     RELEASE_PULSE_S:        0.2,    // red flash 1.0→0.0 over 0.2 s
     CLOSE_TIMEOUT_S:        6.0,    // max CLOSING duration before MAGNETIC_GRIP_FAILED
@@ -1222,7 +950,7 @@ export const Constants = {
     P_GRIP_NON_FERROUS:     0.05,   // all-Al fragment / composite — residual flux only
   },
 
-  // 3-jaw gripper tuning (P3; cite archive/V3 Octopus.md:820-828).
+  // 3-jaw gripper tuning (reserved; archive/V3 Octopus.md).
   GRIPPER_GRAPPLE: {
     REACH_M:            0.30,   // jaws extend 30 cm beyond −Y face
     GRIP_DIAMETER_M:    0.050,  // 50 mm aperture
@@ -1236,12 +964,12 @@ export const Constants = {
     MAX_DEBRIS_MASS_KG: 2000,   // mechanical limit; doc-aspirational
   },
 
-  // Multi-modal pad tuning (P4; cite archive/V3 Octopus.md:799-818).
+  // Multi-modal pad tuning (reserved; archive/V3 Octopus.md).
   PAD_CONTACT: {
     PAD_RADIUS_M:        0.080,   // 8 cm contact patch
     CONTACT_VEL_MAX_M_S: 0.20,    // any faster and the pad bounces (soft-contact regime)
     APPROACH_TIMEOUT_S:  75.0,    // safety cap on APPROACH_SOFT, >= 2x the measured 12 m approach (35.0 s, a tiny piece); a timeout fails as 'timeout'
-    // Soft final approach (nets-1b, 2026-10-20): she rides with the piece and closes to its SURFACE (reach + PAD_RADIUS_M
+    // Soft final approach: she rides with the piece and closes to its SURFACE (reach + PAD_RADIUS_M
     // from its centre, `DebrisField.trueReachM`) at v = clamp(GAIN*gap, MIN, MAX). Gain, min and max are estimates (owner
     // may veto). Measured (test-PadApproach.js, 60 fps, 0.5 m fragment): 8 m -> contact at 26.6 s, 12 m -> 34.6 s, still or
     // drifting at 0.5 m/s alike; touch speed = the commanded closing speed at contact = 0.03 m/s (limit 0.20).
@@ -1255,7 +983,7 @@ export const Constants = {
     GECKO_TEMP_MAX_C:    80,
     UV_CURE_DOSES_Y0:    10,      // per-arm magazine (§13 Q3 — hard cap; 0 ⇒ uv_cure removed)
     ADHESION_MODES: ['gecko', 'hooks', 'electrostatic', 'magnet', 'uv_cure'],
-    // Auto-resolved on contact by surface metadata (V3 Octopus.md:811-816):
+    // Auto-resolved on contact by surface metadata (archive/V3 Octopus.md):
     //  1. material ∈ {steel,iron_alloy}                          → magnet
     //  2. material ∈ {mli_mylar} OR roughness > 0.7              → hooks
     //  3. material ∈ {aluminum,kapton,glass_ceramic,solar_cell}  → gecko (warm window)
@@ -1272,15 +1000,11 @@ export const Constants = {
     MODE_GLYPHS: { gecko: 'g', hooks: 'h', electrostatic: 'e', magnet: 'm', uv_cure: 'u' },
   },
 
-  // Daughter→furnace transfer (park-the-catch delivery; ARCHITECTURE.md:277, Captured-debris lifecycle). A parked
-  // HOLDING_CATCH catch is handed to the mother's furnace over this window, then
-  // the daughter reloads. Salvage + scoring fire on transfer COMPLETION (the
-  // CATCH_PROCESSED event), not on dock arrival (ARM_RETURNED) — this is the
-  // fix for the premature-scoring + indefinite-park debt.
+  // Daughter→furnace transfer (park-the-catch delivery; ARCHITECTURE.md, Captured-debris lifecycle). A parked
+  // HOLDING_CATCH catch is handed to the mother's furnace over this window, then the daughter reloads. Salvage + scoring
+  // fire on transfer COMPLETION (the CATCH_PROCESSED event), not on dock arrival (ARM_RETURNED).
   FURNACE_TRANSFER: {
-    // Staged furnace breakdown (2026-06-11 daughter-cycle polish, Item 1): the
-    // parked catch is no longer ingested in one frame. Three phases run off the
-    // daughter's HOLDING_CATCH stateTimer:
+    // Staged furnace breakdown: three phases run off the daughter's HOLDING_CATCH stateTimer:
     //   hold  [0, HOLD_S)            — catch held full-size, cinched in the net
     //   chop  [HOLD_S, CHOP_S)       — catch separated into CHUNK_COUNT pieces
     //   feed  [CHOP_S, FEED_S)       — chunks stream to the mother's furnace, then
@@ -1290,64 +1014,50 @@ export const Constants = {
     CHOP_S: 5.0,        // chop spans [HOLD_S, CHOP_S) = 3.0 s
     FEED_S: 9.0,        // feed spans [CHOP_S, FEED_S) = 4.0 s; chunks stream in here
     CHUNK_COUNT: 5,     // pieces the catch is chopped into (visual + CHUNK events)
-    // Back-compat: the total window length (was the only field pre-staging). Any
-    // reader expecting "the furnace window elapsed" still gets the right total.
+    // The total window length; any reader expecting "the furnace window elapsed" gets the right total.
     get DURATION_S() { return this.FEED_S; },
-    // ── Cargo-continuity S8 (2026-08-13): digestion on the TRANSIT clock ──
-    // The staged hold/chop/feed timeline above stays as the ANIMATION; its
-    // progress is driven by a slow per-piece digestion clock, not the 9 s
-    // stateTimer window:
+    // --- Digestion on the TRANSIT clock ---
+    // The staged hold/chop/feed timeline above stays as the ANIMATION; its progress is driven by a slow per-piece
+    // digestion clock, not the 9 s stateTimer window:
     //   span per piece = clamp(massKg × S_PER_KG, MIN_S, MAX_S)  (game-seconds)
-    //   phase time t   = (progress / span) × FEED_S   — same fractions, same
-    //   chunk cadence; the timeline code is unchanged.
-    // Physics anchor (owner design review 2026-08-13): melting metal costs
-    // ~1 MJ/kg. The mother's 2 kW panels need ~8 min/kg — electric cooking is
-    // practical for small pieces only. A net-mouth-sized solar concentrator
-    // (~50 m² → ~50 kW thermal) gives 20 game-s/kg. Progress accrues at
-    // dt × TIME_SCALE_GAMEPLAY whenever the world ticks (full rate flying,
-    // 0.1× crawl in menu/shop backgrounds — the world itself runs at 0.1×
-    // there), scaled by sun: 1.0 in sunlight, ECLIPSE_RATE in eclipse (the
-    // panel:concentrator ratio ≈ 2 kW / 50 kW — an ember trickle that finishes
+    //   phase time t   = (progress / span) × FEED_S   — same fractions, same chunk cadence
+    // Physics anchor (owner 2026-08-13): melting metal costs ~1 MJ/kg. The mother's 2 kW panels need ~8 min/kg —
+    // electric cooking is practical for small pieces only. A net-mouth-sized solar concentrator (~50 m² → ~50 kW
+    // thermal) gives 20 game-s/kg. Progress accrues at dt × TIME_SCALE_GAMEPLAY whenever the world ticks (full rate
+    // flying, 0.1× crawl in menu/shop backgrounds — the world itself runs at 0.1× there), scaled by sun: 1.0 in
+    // sunlight, ECLIPSE_RATE in eclipse (the panel:concentrator ratio ≈ 2 kW / 50 kW — an ember trickle that finishes
     // shards but barely moves stages; "small = electric, large = solar").
     TRANSIT_DIGEST_S_PER_KG: 20,  // game-seconds per kg (50 kW thermal ÷ ~1 MJ/kg)
     TRANSIT_DIGEST_MIN_S: 60,     // floor — even a shard takes a beat (6 wall-s)
     TRANSIT_DIGEST_MAX_S: 20000,  // pacing cap — biggest transferable piece ≈ 30 wall-min of sun
     TRANSIT_DIGEST_ECLIPSE_RATE: 0.04,  // eclipse trickle = panel/concentrator ratio
-    // Register item 48: the span law's ONE home (was mirrored in-line by both
-    // timeline owners — ArmUnit._updateHoldingCatch and
-    // CaptureNetSystem._tickCollarDigestion — and by every test's spanFor; the
-    // HUD readout would have been a third home). Values byte-identical to the
-    // pre-extraction in-line clamp. The HUD cook readouts divide
-    // `_digestProgress` by this — one law, one computation.
+    // The span law's ONE home (ArmUnit._updateHoldingCatch, CaptureNetSystem._tickCollarDigestion and the HUD cook
+    // readouts, which divide `_digestProgress` by this, all read it).
     digestSpanS(massKg) {
       return Math.min(this.TRANSIT_DIGEST_MAX_S,
         Math.max(this.TRANSIT_DIGEST_MIN_S,
           (massKg || 0) * this.TRANSIT_DIGEST_S_PER_KG));
     },
-    // Small-catch plan W3 (2026-08-25): the chop's scale-out ramp — the ONE
-    // home (the digestSpanS precedent). Was mirrored in-line by both pin
-    // writers (ArmManager's rack loop and CaptureNet._tickCollarDigestion),
-    // and the collar-bag deflation (CaptureNetVisual) would have been a third
-    // copy — three homes for one ramp is how the bag and the catch drift
-    // apart mid-chop. Values byte-identical to the pre-extraction in-line
-    // expression: 1 at/before HOLD_S, easing linearly to the 0.001 floor at
-    // CHOP_S (never 0 — a zero instance scale corrupts the matrix).
+    // The chop's scale-out ramp — the ONE home (ArmManager's rack loop, CaptureNet._tickCollarDigestion and the
+    // collar-bag deflation in CaptureNetVisual all read it; separate copies let the bag and the catch drift apart
+    // mid-chop). 1 at/before HOLD_S, easing linearly to the 0.001 floor at CHOP_S (never 0 — a zero instance scale
+    // corrupts the matrix).
     // @param {number} phaseT — progress-derived phase time on [0, FEED_S]
     //   (arm._digestPhaseT / net._digestPhaseT; callers may fall back to
     //   stateTimer for legacy mocks)
     // @returns {number} instance-scale multiplier in (0.001 … 1]
     chopScaleMul(phaseT) {
       const span = Math.max(1e-6, this.CHOP_S - this.HOLD_S);
-      const frac = Math.min(1, Math.max(0, ((phaseT || 0) - this.HOLD_S) / span));
+      const frac = clamp01(((phaseT || 0) - this.HOLD_S) / span);
       return Math.max(0.001, 1 - frac);
     },
   },
 
-  // Tool-selection HUD constants (DAUGHTER_MULTITOOL_SPEC §4.1).
+  // Tool-selection HUD constants (archive/DAUGHTER_MULTITOOL_SPEC.md §4.1).
   TOOL_HUD: {
     PANEL_WIDTH_PX:    180,
     HIGHLIGHT_COLOR:   '#ffd166',          // selected (▶)
-    // ── Capture Odds Strip (capture-feedback overhaul Phase 1b) ──
+    // --- Capture Odds Strip ---
     COL_WIDTH_PX:      48,                 // fixed columns in cycle order
     ODDS_FONT_PX:      14,                 // the % is the hero
     LABEL_FONT_PX:     9,                  // names are footnotes
@@ -1359,8 +1069,7 @@ export const Constants = {
     COLOR_BLOCKER:     '#ff5555',          // blocker word
   },
 
-  // Unified live tool-odds model (capture-feedback overhaul Phase 1a).
-  // ToolOdds.js is the SSOT for every % the HUD shows; same pure fns as the
+  // Unified live tool-odds model. ToolOdds.js is the SSOT for every % the HUD shows; same pure fns as the
   // resolve rolls ("honest numbers").
   TOOL_ODDS: {
     REFRESH_HZ:           10,    // arm._toolOdds recompute rate during STATION_KEEP
@@ -1372,32 +1081,30 @@ export const Constants = {
     FRAG_CHIP_MIN:        0.10,  // FRAG chip renders at/above this risk
   },
 
-  // Characterising a piece she does not catch (DECISIONS §49 row 3, owner 2026-10-28; DossierSystem). A piece over her catch limit
-  // (CAPTURE_NET.LARGE.CATCH_LIMIT_KG) with an owner who pays a removal fee pays one SEVENTH of that fee for four steps, each once
-  // per piece: find it, pinpoint its orbit, inspect it up close, measure its spin. Owner's rulings: the 1/7 (question tool 2026-10-28,
-  // "1/7 of removal fee (Recommended)"; real anchor: ADRAS-J's inspection contract was about 1/7 of the removal contract that used
-  // its data; estimate from two figures) and the 10 m ("within say 10 meters for full inspection", 2026-10-28). The split (10/20/40/30)
-  // and every other distance and time are ESTIMATES (coordinator, 2026-10-28). The inspector is the closest of the mother and her
-  // undocked daughters, as the survey's.
+  // Characterising a piece she does not catch (DECISIONS §49 row 3, owner 2026-10-28; DossierSystem). A piece over her catch
+  // limit (CAPTURE_NET.LARGE.CATCH_LIMIT_KG) with an owner who pays a removal fee pays one SEVENTH of that fee for four steps,
+  // each once per piece: find it, pinpoint its orbit, inspect it up close, measure its spin. The 1/7 (real anchor: ADRAS-J's
+  // inspection contract was about 1/7 of the removal contract that used its data; estimate from two figures) and the 10 m are
+  // owner rulings; the split (10/20/40/30) and every other distance and time are ESTIMATES. The inspector is the closest of
+  // the mother and her undocked daughters, as the survey's.
   INSPECT: {
     FEE_SHARE:      1 / 7,   // of the piece's removal fee (BigPieceValues.removalFeeCr), the four steps together
     SPLIT: { find: 0.10, orbit: 0.20, inspect: 0.40, spin: 0.30 },   // estimate; the last step takes the rounding rest
     ORBIT_RANGE_M:  200,     // pinpoint the orbit: within this (estimate; the Meteor 2 already sits ~1 km out, so 2 km would pay for nothing)...
     ORBIT_TIME_S:   60,      // ...for this long, game seconds, accumulated (the clock waits while she is out of range) (estimate)
     MIN_HOLD_M:     6,       // a daughter inspecting never holds closer than this, the wheel included (the Meteor 2 is 4.4-5 m across: 4 m left ~1.5 m to its surface; estimate)
-    CLOSE_RANGE_M:  10,      // inspect up close: within this (owner 2026-10-28; ADRAS-J reached 15 m)...
+    CLOSE_RANGE_M:  10,      // inspect up close: within this (owner ruling; ADRAS-J reached 15 m)...
     COVER_DEG:      160,     // ...and two of the directions piece -> inspector kept there are at least this far apart: she has seen it from opposite sides (estimate)
     SAMPLE_DEG:     5,       // a new direction is kept only after it moved this far from every one kept (estimate)
-    TETHER_CLEAR_M: 1,       // an inspecting daughter keeps the whole mother-to-daughter line at least sizeMeter/2 + this from the piece's centre (the piece is taken as a sphere; B1 2026-10-28: the line crossed it)
+    TETHER_CLEAR_M: 1,       // an inspecting daughter keeps the whole mother-to-daughter line at least sizeMeter/2 + this from the piece's centre (the piece is taken as a sphere)
     TETHER_TURN_M:  0.5,     // ...and turns her arc round this much before that (her position lags her goal by a few frames)
-    GIVE_UP_EDGES:  8,       // C1: she keeps sweeping (the turn margin dropped to 0 after the first full arc) until the fly-around is paid; after this many turn-rounds without it she says why and goes home (estimate)
-    STALE_S:        2,       // C1/C2: the dossier's "still open" stamp on her piece counts for this many of her seconds; older (piece deselected) she goes by her arc
+    GIVE_UP_EDGES:  8,       // she keeps sweeping (the turn margin dropped to 0 after the first full arc) until the fly-around is paid; after this many turn-rounds without it she says why and goes home (estimate)
+    STALE_S:        2,       // the dossier's "still open" stamp on her piece counts for this many of her seconds; older (piece deselected) she goes by her arc
     SPIN_RANGE_M:   50,      // measure the spin: within this (estimate)...
     SPIN_MIN_S:     30,      // ...for one full turn of the piece AS DRAWN (DossierSystem.drawnSpinRadS: the draw's own cap, DEBRIS_MAX_VISUAL_TUMBLE_DEG_S, applies), game seconds, accumulated; this long only for a piece that does not spin
   },
 
-  // Debris Dossier — progressive reveal "treasure chest" data
-  // (capture-feedback overhaul Phase 1.5). The reticle is for ACTING; the
+  // Debris Dossier — progressive reveal "treasure chest" data. The reticle is for ACTING; the
   // dossier pane (DebrisWireframe) is for KNOWING.
   DOSSIER: {
     DETAIL_SCAN_RANGE_M:    50,    // hold a platform within this of the target…
@@ -1417,7 +1124,7 @@ export const Constants = {
     },
   },
 
-  // Shop / depot tuning (first-credit legibility + early-shop tension plan).
+  // Shop / depot tuning.
   SHOP: {
     // First-depot affordability floor. On the true first depot visit only
     // (gated by the FIRST_DEPOT_VISITED ceremony flag), a one-time on-theme
@@ -1427,33 +1134,21 @@ export const Constants = {
     // Single source of truth for the full non-consumable upgrade catalog value
     // (Σ cost×maxLevel over UPGRADES). Used by the capture-credits taper and the
     // shop-pacing guardrail test, which asserts this equals the computed sum so
-    // it can never silently drift when the catalog changes.
-    // Register item 101 (2026-08-21): 46 400 → 42 800 — the legacy tether cards
-    // (long_tether 600 + gsl_tether_v4 3 000) retired from the catalog; the
-    // tether tier ladder is the one reach track. Re-derived on the SSOT pin's
-    // own sanctioned path (test-shop-pacing computes Σ UPGRADES live).
-    // P2 flower hardware (2026-08-27): 42 800 → 45 000 — category #9
-    // "Thermal & Services" opens with the aft-flower pair rows
-    // (flower_pair_a 1 200 + flower_pair_b 1 000; placeholder economy-pass
-    // prices per the charter). Same sanctioned path: the pacing test computes
-    // Σ UPGRADES live and this pin re-derives with it.
-    // g1-gas-upgrades (2026-10-16): 45 000 → 47 130 — the one-way gas rows gas_krypton 920 + gas_xenon 1 210
-    // (priced by launch mass, ResourceSystem.gasPriceCr). The gas resupply is a consumable and is excluded,
-    // like mother_net_restock.
-    // Reaction-wheel kit (2026-10-24): 47 130 → 47 930 — the one card reaction_wheels 800 (Constants.WHEELS.PRICE_CR; owner 10-24).
+    // it can never silently drift when the catalog changes (the test computes Σ UPGRADES live; re-derive this with it).
+    // Consumables are excluded (gas resupply, mother_net_restock).
     CATALOG_TOTAL_CR: 47930,
     // Ordered recommendation preference for the starter highlight. The shop
     // marks the first item here that is un-owned and currently affordable.
     RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],
   },
 
-  // Orientation-based capture (capture-feedback overhaul Phase 2).
+  // Orientation-based capture.
   // Elongated debris presents a different width depending on the approach
   // angle: broadside = lengthM (often un-nettable), end-on = widthM (the 5 m
   // mouth swallows a 2 m cross-section lengthwise). Gated by
   // FEATURE_FLAGS.ASPECT_CAPTURE.
   ASPECT_CAPTURE: {
-    // length:width ratio per procedural debris type (2a). 1.0 = symmetric.
+    // length:width ratio per procedural debris type. 1.0 = symmetric.
     ASPECT_BY_TYPE: {
       rocketBody:    3.5,
       defunctSat:    1.6,
@@ -1473,7 +1168,7 @@ export const Constants = {
     END_ON_FIT_MARGIN: 1.0,
   },
 
-  // Player reel-speed control (capture-feedback overhaul Phase 3a).
+  // Player reel-speed control.
   // Hold Shift during REELING for BOOST ×2 — saves time, raises tension
   // (∝ reelSpeed²) toward the NET-RIP and TETHER-SNAP thresholds. Nominal
   // reel stays risk-free for in-spec catches, so cautious play is never
@@ -1487,35 +1182,33 @@ export const Constants = {
                               //   recoverable — reuses the strain-slip path)
   },
 
-  // ── Reel-in / re-dock inertia overhaul (FEATURE_FLAGS.REEL_PROFILE_V2) ──────
-  // See plan reel-in-redock-inertia.md. All speeds are game-scale m/s applied
-  // over REAL dt (matching the legacy REELING convention; NOT game-time).
+  // --- Reel-in / re-dock inertia (FEATURE_FLAGS.REEL_PROFILE_V2) ---
+  // All speeds are game-scale m/s applied over REAL dt (matching the legacy REELING convention; NOT game-time).
 
-  // Q1 — Daughter reel-in trapezoidal velocity profile (accel → cruise → decel).
+  // Daughter reel-in trapezoidal velocity profile (accel → cruise → decel).
   // Replaces the constant REEL_IN_SPEED_* haul speed when the flag is ON; the
   // legacy constants are retained as the V_DOCK-band fallback / test-mock compat.
   REEL_PROFILE: {
     V_CRUISE_MAX:        60,    // m/s — cruise cap (empty / light catch)
     V_DOCK:              1.0,   // m/s — gentle speed entering the soft-dock window
     ACCEL:               3.4,   // m/s² — ramp-down magnitude: sets the recall speed from 50 m / 200 m
-                                //   (decel bound √(1+2·a·d), below the 60 m/s cap there). Was 8.0;
-                                //   3.4 makes a recall ~1.5× slower (owner 2026-10-16: "a little
-                                //   slower would be realistic"; lane arms-default).
+                                //   (decel bound √(1+2·a·d), below the 60 m/s cap there). owner 2026-10-16: "a little
+                                //   slower would be realistic".
     DECEL_DISTANCE_M:    15,    // m — begin ramp-down within this of the strut dock
     HAUL_MOTOR_POWER:    2500,  // sets v_cruise = POWER / max(T_reel, T_MIN)
     T_MIN:               5,     // N — denominator floor so light catches hit V_CRUISE_MAX
     CRUISE_TENSION_FRACTION: 0.85, // cap cruise so T_reel ≤ break×this (snap invariant:
                                    //   any in-spec catch stays under the tether break strength)
     BOOST_LOCKOUT_IN_DECEL: true, // disable REEL_BOOST inside DECEL_DISTANCE_M
-    // reel-gas (owner 2026-10-21, DECISIONS §REEL-IN PHYSICS): under REEL_HOME the reel PULLS HER UP to speed at this rate
-    // (no jump from 0 to peak), then cruises, then brakes on her cold-gas jet (DAUGHTER_COLD_GAS) at min(ACCEL, jet / MARGIN).
+    // Under REEL_HOME the reel PULLS HER UP to speed at this rate
+    // (no jump from 0 to peak), then cruises, then brakes on her cold-gas jet (DAUGHTER_COLD_GAS) at min(ACCEL, jet / MARGIN)
+    // (DECISIONS §REEL-IN PHYSICS).
     // Game-scale m/s per REAL s (true accel = /100: 10 -> 0.1 m/s^2; a 27 kg catch then pulls ~2.7 N, far under the 100 N line).
     // The legacy path (REEL_HOME off, detached arms) never reads it. (est)
     PULL_ACCEL:          10,
   },
 
-  // reel-gas (owner 2026-10-21: "Add a gas jet": "A small gas jet on each daughter, refilled from the mother's gas at the
-  // strut. She comes in about as fast as today and brakes in the last 15 m."). A cold-gas (N2) thruster on each daughter, aft
+  // Cold gas for the daughters: a cold-gas (N2) thruster on each daughter, aft
   // (-Z, which faces the mother on the tail-first reel). It brakes the reel-home haul (ArmUnit._rhReelStep); the mother's
   // `coldGas` refills the bottle while she is docked (ArmUnit._updateColdGasRefill). Values marked (est) are estimates the
   // owner may veto. Tests: js/test/test-ReelGas.js.
@@ -1528,7 +1221,8 @@ export const Constants = {
     EMPTY_KG:   1e-5,                            // kg - below this the bottle is empty: no jet, her ion thruster is the only brake
   },
 
-  // Nets step 3 lane 3f (owner 2026-10-23, "Cold gas and ion fuel"; DECISIONS §4 docked servicing, §34 rows 5 and 10): what the
+  // Resupply satellite wares for the daughters (owner 2026-10-23, "Cold gas and ion fuel"; DECISIONS §4 docked servicing,
+  // §34 rows 5 and 10): what the
   // resupply satellite sells for the daughters. A nitrogen buy fills the mother's cold-gas tank (which tops up docked daughters,
   // §34 row 5). An ion-fuel cartridge (cast indium: a cartridge, never a fluid, §4) is handed over by the satellite's arm into the
   // mother's indium store; a docked daughter swaps cartridges with it over SWAP_GAME_S. Values marked (est) are the coordinator's
@@ -1543,7 +1237,7 @@ export const Constants = {
     SWAP_GAME_S: 30,               // game seconds a docked cartridge swap takes (est; the same time base as the cold-gas refill, so 3 real s)
   },
 
-  // reel-home (2026-10-19, FEATURE_FLAGS.REEL_HOME, owner design): a daughter's catch comes home on reels. No jump at net
+  // reel-home (FEATURE_FLAGS.REEL_HOME): a daughter's catch comes home on reels. No jump at net
   // close: her net winds the catch to its rack cell on her nose (NET only, no fuel, centre of mass kept:
   // ArmUnit._rhNetReelStep). Then REELING goes TAIL FIRST (no winding while she is more than TAIL_FIRST_TOL_DEG off), her
   // strut follows her (STRUT_MIN..MAX_DEG, _aimReserved: ArmManager._updateReelHome) and the mother turns to put the line
@@ -1551,9 +1245,9 @@ export const Constants = {
   // (_motherTurnBlock(exceptArm)). At ALIGN_DIST_M a line more than ALIGN_TOL_DEG off the strut axis holds the reel; after
   // ALIGN_WAIT_S she lines herself up on her thrusters (mass-scaled fuel, ARM_RESERVE_FUEL included: it is kept for a safe
   // reel-home), else she holds for the mother and looks again every second. DOCKING no longer flips her or bills thruster
-  // fuel; a catch already in its cell has no glide. reel-gas (owner 2026-10-20/21) SUPERSEDES the old "no thruster fires on
-  // the reel": the strut reel is a sim now - her aft ion thread keeps the line tight (a tiny billed FEEP cost), the reel pulls
-  // her up (REEL_PROFILE.PULL_ACCEL) and she brakes on her cold-gas jet (DAUGHTER_COLD_GAS); only the 2 m line-up is her own
+  // fuel; a catch already in its cell has no glide. The strut reel is a sim: her aft ion thread keeps the line tight (a tiny
+  // billed FEEP cost), the reel pulls her up (REEL_PROFILE.PULL_ACCEL) and she brakes on her cold-gas jet
+  // (DAUGHTER_COLD_GAS); only the 2 m line-up is her own
   // fore burn. Tests: js/test/test-ReelHome.js, test-ReelGas.js. Values marked (est) are estimates, not measurements.
   REEL_HOME: {
     NET_REEL_MPS:        0.5,   // m/s (est) — her net winds the catch in to her nose at this CLOSING speed (line shortening)
@@ -1567,7 +1261,7 @@ export const Constants = {
     ALIGN_SPEED_MPS:     0.5,   // m/s (est) — her own line-up speed on the circle round the tip
     ALIGN_CLEAR_M:       0.15,  // m — the line-up arc stays this far off the ship (keep-out query)
     ARRIVE_TOL_DEG:      0.5,   // the catch is brought on to her axis only once her nose is this close to the line
-    TURN_RETRY_S:        1.0,   // s between mother-turn requests for one reel (D11a: was a lifetime cap of 6 requests; a refusal counts too)
+    TURN_RETRY_S:        1.0,   // s between mother-turn requests for one reel (a refusal counts too)
     TURN_MAX_DEG:        60,    // a mother turn bigger than this is not asked for (she lines herself up instead); a running plane turn stops when more than this is left (her lever on the axis is gone)
   },
 
@@ -1575,20 +1269,25 @@ export const Constants = {
   // while any radiator wing is between BAND_LO and BAND_HI, no docked daughter holding a catch is below LIFT_DEG and no reeling
   // daughter with a catch is inside HOLD_M of her strut tip; and no daughter comes inside HOLD_M while her approach is short of
   // the 34 deg floor (REEL_HOME.STRUT_MIN_DEG) by more than REEL_HOME.PLANE_TOL_DEG with a mother turn running or askable.
-  // Measured 2026-10-23 (tmp/plans/reel-hold.md T0/T1, real meshes, exact point-to-triangle): a 0.95 m catch on a 34 deg strut
+  // Measured (real meshes, exact point-to-triangle): a 0.95 m catch on a 34 deg strut
   // touches a wing at 75-90 deg and is under 0.15 m at 75-100 deg (at 69 deg: >= 0.41 m); the last 5 m of a reel with a catch is
   // 0.00 m from a wing at 60-110 deg; a bare daughter is >= 0.25 m. ArmUnit._rhReelStep (the hold brakes to rest),
   // ArmManager.reelHoldReason / radiatorBandBlocked, PlayerSatellite._updateFlower (the wings wait at the band's edge).
   // Tests: js/test/test-ReelHold.js.
   REEL_HOLD: {
     HOLD_M:        5,      // m from her strut tip: the reel stops her here (at rest) while there is a reason; no catch comes inside
-    BAND_LO_DEG:   45,     // wing angles (deg) a catch near the hull is not clear of: the radiators wait before this edge ... (T1: 0 of 1408 catches bad at 45, 16 bad at 50)
-    BAND_HI_DEG:   130,    // ... and before this one (a wing already inside keeps moving: leaving is the safe way). hold-clear round 1 F1: was 115. Measured on 3520 configs (2112 random attitudes + the 1408 grid), net refusals + 'never' fall 425 (115) -> 268 (130) -> 175 (145) as the edge rises, because the angles above 115 move from the set her hold pose must clear to the set her lift must clear. 145 is NOT shipped (coordinator 2026-10-24): it reaches into 133-146, where the wings stand or carry in normal play (park 135, tip cargo 134-146, CARRY.OTHERS_RANGES_DEG), so a C hand-off lifted the neighbour holder mid-carry; 130 is the highest edge below them.
+    BAND_LO_DEG:   45,     // wing angles (deg) a catch near the hull is not clear of: the radiators wait before this edge ... (0 of 1408 catches bad at 45, 16 bad at 50)
+    // Measured on 3520 configs (2112 random attitudes + the 1408 grid): net refusals + 'never' fall 425 (edge 115) -> 268 (130)
+    // -> 175 (145) as the edge rises, because the angles above the edge move from the set her hold pose must clear to the set
+    // her lift must clear. 145 is deliberately NOT used: it reaches into 133-146, where the wings stand or carry in normal play
+    // (park 135, tip cargo 134-146, CARRY.OTHERS_RANGES_DEG), so a C hand-off lifted the neighbour holder mid-carry; 130 is
+    // the highest edge below them.
+    BAND_HI_DEG:   130,    // ... and before this one (a wing already inside keeps moving: leaving is the safe way)
     LIFT_DEG:      69,     // a holder lifts her catch to at least this while the wings move (the carry's measured-clear angle)
-    // T1 (tmp/rh/band.md, real meshes: 11 shapes x 8 sizes x arms 0/1 x 8 rack attitudes = 1408, wings 0-180 per 5 deg): the lowest strut
+    // Real meshes: 11 shapes x 8 sizes x arms 0/1 x 8 rack attitudes = 1408, wings 0-180 per 5 deg: the lowest strut
     // angle at which EVERY catch of that size (worst of all types and attitudes) is CLEAR_M off every wing in the band and plume-clear.
     // [max catch size m, deg]. 13 of the 1408 (sizes 3-5 m, rocket bodies / mission debris at rack attitudes 4-5) have no clear pose up to
-    // 100 deg: they are lifted to 100 like their size (coordinator 2026-10-23: worst case per size; a size table cannot name them without
+    // 100 deg: they are lifted to 100 like their size (worst case per size; a size table cannot name them without
     // shutting the radiators for every big catch). A real 'never' is only a pose that is plume-blocked at every angle (`_radClearPose`).
     CLEAR_ROWS:    [[1, 69], [1.5, 84], [2, 94], [3, 99], [Infinity, 100]],
     CLEAR_M:       0.158,  // m: the carry gate's clearance line; a pose whose catch comes nearer than this to a wing in the band is not clear
@@ -1602,38 +1301,35 @@ export const Constants = {
 
   // hold-clear (owner 2026-10-23: "a held catch never touches a radiator wing"): HoldWingClear.js judges every daughter's held catch,
   // from its real mesh and its frozen attitude, against the radiator parts (REEL_HOLD.CLEAR_M off every part, REEL_HOLD.BAND_*
-  // for the band). Numbers measured in tmp/plans/hold-clear.md T1 (this block's Log lines carry the sources); ArmManager,
-  // CoMCalculator.suggestCargoArm and HoldWingClear read them.
+  // for the band). ArmManager, CoMCalculator.suggestCargoArm and HoldWingClear read the numbers (measured).
   HOLD_CLEAR: {
     ENABLED:        true,                 // false = today's plume-only hold pose everywhere (the pre-wing tests pin the plume / net / band rules with it off)
     REST_STEP_DEG:  5,                    // sampling step of the wing angles outside the band (0 .. BAND_LO and BAND_HI .. 180; both band edges, 180 and the stands below are always in)
     REST_STAND_DEG: [0, 135, 146, 180],   // the angles the wings stand at outside the band (closed/launch 0, park 135, open 146, vent 180: THERMAL.FLOWER)
-    REST_MARGIN_M:  0.01,                 // m added to REEL_HOLD.CLEAR_M for the rest check: the angles are sampled, the wings sweep (round 1 F1: 5° steps need <= 0.005 m, twice that is set)
+    REST_MARGIN_M:  0.01,                 // m added to REEL_HOLD.CLEAR_M for the rest check: the angles are sampled, the wings sweep (5° steps need <= 0.005 m, twice that is set)
     BAND_STEP_DEG:  3,                    // sampling step of the band (REEL_HOLD.BAND_LO_DEG .. BAND_HI_DEG, both edges in)
-    BAND_MARGIN_M:  0.01,                 // m added to REEL_HOLD.CLEAR_M for the band check (round 1 F1: 3° steps need <= 0.005 m, twice that is set)
-    UNITS_PER_FRAME: 150000,              // work points one frame may run (HoldWingClear: 1 point is about 10 ns of distance-query work; T1 calibrates)
+    BAND_MARGIN_M:  0.01,                 // m added to REEL_HOLD.CLEAR_M for the band check (3° steps need <= 0.005 m, twice that is set)
+    UNITS_PER_FRAME: 150000,              // work points one frame may run (HoldWingClear: 1 point is about 10 ns of distance-query work)
     CELL_M:         0.25,                 // m: cell of the radiator triangle grid
     SIMPLIFY_TRIS:  12,                   // a radiator part finer than this many triangles is replaced by its bounding box (it contains it)
     LEAF_M:         0.02,                 // m: a piece of a catch surface this small that is still not provably clear counts as blocked
     BALL_CAP_POINTS: 40000,               // work points the whole-piece pre-test (one big ball query) may spend before the exact way takes over: bounds a frame's overrun
     MAX_QUERIES:    6000,                 // distance queries one pose may spend on one grid before the rest of it counts as blocked
     SPLIT_M:        0.3,                  // m: the catch's triangles are cut to this size once, before the pose loop
-    MAX_HOLD_REACH_M: 4.5,                // m: a mother-net catch of more reach than this goes to no daughter (T1: 2608 configs, 6..12 m included; the smallest reach with no wing-clear hold pose is 4.519 m, missionDebris 8 m; every catch up to 4.5 m has one)
-    PENDING_FORCE_POINTS: 10000000,       // the most work points a press spends finishing her pending profiles itself, ALL of them together (T1: 3.5-6 ns per point = 35-60 ms); round 1 F3: counted as work actually done (the old estimate was 3-6x low); what is left stays pending, the press says she is still stowing
+    MAX_HOLD_REACH_M: 4.5,                // m: a mother-net catch of more reach than this goes to no daughter (2608 configs, 6..12 m included; the smallest reach with no wing-clear hold pose is 4.519 m, missionDebris 8 m; every catch up to 4.5 m has one)
+    PENDING_FORCE_POINTS: 10000000,       // the most work points a press spends finishing her pending profiles itself, ALL of them together (3.5-6 ns per point = 35-60 ms), counted as work actually done; what is left stays pending, the press says she is still stowing
   },
 
-  // fail-reel (owner 2026-10-21, DECISIONS: a failed catch winds her home): when a catch fails (pad bounce, net miss, slip,
+  // fail-reel (DECISIONS: a failed catch winds her home): when a catch fails (pad bounce, net miss, slip,
   // rip) under REEL_HOME, a daughter within AUTO_REEL_MAX_M of her strut tip is reeled straight home on her strut line;
-  // farther out she holds near the piece for a retry and the comms line gives the reel-in time, so he can choose
-  // (owner 12:37Z: "auto reel-in on failure for close debris. over 500 meters, consider retry versus reel-in time").
-  // 2026-10-22 (owner, play feedback): "yes, straight home ... maybe <200 meters?" -> 200 m; the line says what happened,
-  // the distance and the time. Reel times (probe, weaver/spinner, no catch): see tmp/plans/feedback-1022.md Log (B5).
+  // farther out she holds near the piece for a retry and the comms line gives the reel-in time, so he can choose.
+  // The line says what happened, the distance and the time.
   // Tests: js/test/test-FailReel.js, test-ReelView.js.
   FAIL_REEL: {
-    AUTO_REEL_MAX_M: 200,   // m from her strut tip (owner 2026-10-22; was 500)
+    AUTO_REEL_MAX_M: 200,   // m from her strut tip
   },
 
-  // trip-melt-2 "carry" (2026-10-19, owner: catches "need to be melted down in the furnace during the long ion burn";
+  // carry (owner: catches "need to be melted down in the furnace during the long ion burn";
   // DECISIONS §29 row 4): while the trip burns a daughter carries the catch on her rack to HER radiator's tip furnace and
   // comes home (ArmUnit CARRY_PREP/OUT/HANDOFF/BACK, ArmManager.requestCarry, TransferTrip's once-a-second scheduler).
   // The pose of each carry (strut angle, radiator angle) and whether a size row may be carried at all come from the
@@ -1645,32 +1341,29 @@ export const Constants = {
     HANDOFF_S:         1.0,    // s (est) — the beat at the tip once the bag is seated, before CARRY_BACK starts
     STRUT_ARRIVE_DEG:  0.05,   // CARRY_PREP's strut is over when it is this close to the carry angle: the carry re-arms the strut's target until it lands EXACTLY (the driver alone stops 0.57° short), and the gate is certified for this tolerance (js/test/_carryGate.js STRUT_ARRIVE_DEG)
     THETA_ARRIVE_DEG:  0.01,   // ... and her petal this close to the carry angle (it lands exactly: PlayerSatellite._stepPetalHolds)
-    // petal-single (Decisions 4, 7): the carry is certified for the other three petals standing anywhere in these shared-angle
+    // The carry is certified for the other three petals standing anywhere in these shared-angle
     // ranges (closed, or open - 146°, or lower when a bag on a tip caps it: TipCargo TIP_BAND 134..146 less the 0.57° settle) and for the other three
     // struts within NEIGHBOUR_TOL_DEG of NEIGHBOUR_REST_DEG (the strut driver stops within 0.01 rad of its target). A carry
     // outside them waits (it is not a give-up). STRUT_REC_*: the recorded strut angles the strut sweep was certified for.
     OTHERS_RANGES_DEG: [[0, 1], [133, 146]],
     NEIGHBOUR_REST_DEG: 34,
     NEIGHBOUR_TOL_DEG:  0.6,
-    // hold-catch FA3 (2026-10-22): the gate above was measured with the other three daughters EMPTY at the rest angle. A neighbour
-    // holding a catch stands at her hold pose with the catch on her nose, and a carry now also accepts that (a neighbour within
+    // The gate above was measured with the other three daughters EMPTY at the rest angle. A neighbour
+    // holding a catch stands at her hold pose with the catch on her nose, and a carry also accepts that (a neighbour within
     // NEIGHBOUR_TOL_DEG of her own hold pose, `ArmManager.holdPoseFor`). The whole carry path (strut sweep, flight, swing back, petal
-    // sweep) was measured against such a neighbour at her REAL hold pose, 10 722 cases: every catch shape (11) x size x rack attitude
-    // (js/test/_carryNeighbour.js, test-HoldCatchNeighbour.js; the table is in the plan Log). The line is the gate's, 0.158 m.
-    //   - catches up to 1.5 m (0.3, 1, 1.25, 1.5 m; all 30 attitudes): never closer than 0.218 m. The first failure is a 1.75 m rocket
-    //     body (0.123 m); 2 m catches fail in 24 of 1 344 cases at 34° (down to 0.062 m); 155 of 10 722 cases fail in all.
-    //   - catches over 2 m stand at 34-59° and fail in a few per cent of the shape x attitude cases (to a touch); they stand at 64° and up
-    //     clear: 0 of 461 cases fail from 64° up (0.195 m at 64°, 0.31 m at 69° and up; 2.8-5 m).
-    // hold-clear round 1 F2 (2026-10-24): the radiator-wing rule raises a hold pose (BAND_HI_DEG 130: 1103 of 3520 configs - 2112 random attitudes + the
-    // 1408 grid - by 5-40°), so the figures above, taken at the plume poses, were taken again at the NEW pose of every raised catch, against all three
+    // sweep) was measured against such a neighbour at her REAL hold pose: every catch shape (11) x size x rack attitude
+    // (js/test/_carryNeighbour.js, test-HoldCatchNeighbour.js). The line is the gate's, 0.158 m.
+    // The radiator-wing rule raises a hold pose (BAND_HI_DEG 130: 1103 of 3520 configs - 2112 random attitudes + the
+    // 1408 grid - by 5-40°), so the neighbour distances were measured at the NEW pose of every raised catch, against all three
     // other carriers (3309 full measurements: tmp/f2-nb.mjs, plan Log): catches <= 1.5 m (stand at 39° or 44°): 372, none below the line, the worst
     // +0.229 m over it; catches over 1.5 m at 69° and up: 216, none below, +0.154 m; over 1.5 m below 69°: 2721, 4 below (down to -0.121 m) - those the rule
     // below already refuses and lifts, so no pass exists for a pose that was not measured. The lift poses of a neighbour are unchanged in all 1103.
     // A neighbour holding a catch that passes neither test blocks the carry ('neighbour-catch'; it clears when that catch goes).
-    // big-seat 2026-10-28: every piece now sits at its exact 0.027 m seat (ARM_SEAT_MAX_SIZE_M = Infinity), 0.1-1.5 m nearer her than before for pieces
-    // over 1 m, so the table above was measured AGAIN with its generator (js/test/_carryNeighbour.js, carrier 0 beside daughter 2, 11 shapes x 30
+    // Every piece sits at its exact 0.027 m seat (ARM_SEAT_MAX_SIZE_M = Infinity), 0.1-1.5 m nearer her than the old seat for pieces
+    // over 1 m, so the figures below were measured AGAIN with its generator (js/test/_carryNeighbour.js, carrier 0 beside daughter 2, 11 shapes x 30
     // attitudes, at her real hold pose; tmp/nbgrid.mjs, notes tmp/notes/neighbour.md), line 0.158 m, margin asked for 0.05 m over it:
-    //   - up to 1.5 m at 34°: 0.3 m 0.600, 1 m 0.440, 1.25 m 0.300 (rocket body, att 25), 1.5 m 0.171 (same piece: 0.013 m over the line; it was 0.218);
+    //   - up to 1.5 m at 34°: 0.3 m 0.600, 1 m 0.440, 1.25 m 0.300 (rocket body, att 25), 1.5 m 0.171 (same piece:
+    //     0.013 m over the line; it was 0.218);
     //     1.75 m 0.061, 2 m -0.025 (touch). Raised poses of 1-1.5 m catches (39-64°, 1320 reads; 44 raised 1-1.25 m catches at their wing-rule pose): >= 0.270 m.
     //   - 69° and up, lifted or held (all 30 attitudes at 69°, a third at 79 / 89 / 100°, 1.75-5 m): 1.75 and 2 m clear (0.600), 2.8 m 0.252 m (rocket
     //     body, att 25, at 69°), 3 m 0.162 m (4 mm over the line), 4 m 23 of 660 below (touch), 5 m 62 of 598 below (down to -0.035 m, a cubesat's swing back).
@@ -1680,7 +1373,7 @@ export const Constants = {
     // ('neighbour-catch') and cannot be lifted out of the way (`_neighbourLiftRad` answers null) until it goes.
     NEIGHBOUR_CATCH_MAX_SIZE_M: 1.25,
     NEIGHBOUR_CATCH_HIGH_POSE_DEG: 69,     // a neighbour standing at/above this angle (measured clear with margin) ...
-    NEIGHBOUR_CATCH_HIGH_MAX_SIZE_M: 2.8,  // ... may hold any catch up to this size (the biggest measured with 0.05 m to spare; it was 5)
+    NEIGHBOUR_CATCH_HIGH_MAX_SIZE_M: 2.8,  // ... may hold any catch up to this size (the biggest measured with 0.05 m to spare)
     STRUT_REC_LO_DEG:   34,
     STRUT_REC_HI_DEG:   180,
     THETA_MAX_DEG:      133,   // no gate entry holds her petal higher: the tip band (>= 133.4°) would push it down mid-carry
@@ -1689,10 +1382,10 @@ export const Constants = {
     CHECK_S:           1.0,    // real seconds between two looks of the trip's carry scheduler
     FINISH_GRACE_S:    60,     // real seconds past TRIP.MAX_REAL_S an in-flight carry gets to finish; then it is aborted
     CLEAR_M:           0.15,   // m — the clearance the gate table was measured to (js/test/_carryGate.js CLEAR_M)
-    OWN_STRUT_FREE_M:  0.4,    // m — the gate was measured with her own strut not counted for the first 0.4 m of the flight (plan: 0.3; she is leaving its tip collar)
-    OWN_TIP_FREE_M:    0.4,    // m — ... and, for the last 0.4 m, the DELIVERED catch alone is not counted against the receiving tip's pad, stalk and cone (it is seated against them); her body, her strut and her other catch keep CLEAR_M to the whole radiator (Decision 7a)
-    SEAT_CLEAR_M:      0.10,   // m — in that last 0.4 m the DELIVERED catch keeps this (not CLEAR_M) to the rest of the receiving petal: seated against the cone it is 0.12-0.19 m from the boom end whatever she does (measured, js/test/_carryGate.js OWN_TIP_SEAT_CLEAR_M; DEVIATION from Decision 7a)
-    // The measured gate table (Decision 5; petal-single: one swinging petal and a TURNING flight), generated offline:
+    OWN_STRUT_FREE_M:  0.4,    // m — the gate was measured with her own strut not counted for the first 0.4 m of the flight (she is leaving its tip collar)
+    OWN_TIP_FREE_M:    0.4,    // m — ... and, for the last 0.4 m, the DELIVERED catch alone is not counted against the receiving tip's pad, stalk and cone (it is seated against them); her body, her strut and her other catch keep CLEAR_M to the whole radiator
+    SEAT_CLEAR_M:      0.10,   // m — in that last 0.4 m the DELIVERED catch keeps this (not CLEAR_M) to the rest of the receiving petal: seated against the cone it is 0.12-0.19 m from the boom end whatever she does (measured, js/test/_carryGate.js OWN_TIP_SEAT_CLEAR_M; DEVIATION from the strict CLEAR_M line)
+    // The measured gate table (one swinging petal and a TURNING flight), generated offline:
     // `node scripts/probes/carry-gate-gen.mjs --all` (js/test/_carryGate.js: exact point-to-triangle clearance on the real ship,
     // 30 fixed attitudes, every shape of the size row, BOTH daughters of the pair, every certified shared angle of the other
     // petals) -> js/test/fixtures/carry-gate.json; this block is `node scripts/probes/carry-gate-to-constants.mjs` of that file
@@ -1700,12 +1393,12 @@ export const Constants = {
     // 0 = up to 0.5 m, 1 = up to 1.5 m; the larger rows hold no catch that fits a tip). strutDeg / thetaDeg = her strut and HER
     // petal at the seat; dir = how her body trails while she seats the catch (ArmDockBasis carryDirInto: 0 = along the boom
     // outward). A missing key = no pose clears the line for that row (the daughter keeps the catch, one comms line). Pair = the
-    // body type (weaver: 64 and 244 deg; spinner: 116 and 296 deg). Generated 2026-10-20, run times in the plan Log.
-    // 2026-10-23 roll-90 (hinge roll above strut 90 deg): weaver 130/30 re-verified (min 0.1585 m); spinner regenerated
-    // exhaustively (571 candidates tried): 124/34 -> 126/36 (min 0.1581 m, flight 1.104 m, swing-back closed 0.282 -> 0.263 m).
+    // body type (weaver: 64 and 244 deg; spinner: 116 and 296 deg).
+    // Weaver 130/30 re-verified for the hinge roll above strut 90 deg (min 0.1585 m); spinner regenerated
+    // exhaustively (571 candidates tried): 126/36 (min 0.1581 m, flight 1.104 m, swing-back closed 0.263 m).
     // Result: only row 0 (catch up to 0.5 m), cell 0 (one catch on the rack) has a pose, for both pairs; the other six entries
     // (row 1, and cell 1 = a second catch on the rack) were searched exhaustively and none passes: those catches stay on the rack.
-    // swingBackReachM (review R8): the way BACK, with the catch in the tip bag - the largest catch reach (m, `DebrisField.trueReachM`)
+    // swingBackReachM: the way BACK, with the catch in the tip bag - the largest catch reach (m, `DebrisField.trueReachM`)
     // whose petal swing back keeps 0.15 m to the ship, her strut and her body, per shared angle of the radiators: closed
     // (0-1 deg) or open (133-146 deg). A bigger catch waits for the other range (ArmManager.carryCheck 'swing-back').
     GATE: {
@@ -1713,11 +1406,11 @@ export const Constants = {
       spinner: { '0|0': { strutDeg: 126, thetaDeg: 36, dir: 0, swingBackReachM: { closed: 0.263, open: 0.75 } } },
     },
 
-    // u20-nose (2026-10-23; owner 01:55Z "yes, can hand debris from daughter to mother nose"; 12:55Z "Nose route for longer catches"):
+    // Nose hand-off (owner: "yes, can hand debris from daughter to mother nose"; "Nose route for longer catches"):
     // a catch the direct carry never takes (longer than 0.5 m: no GATE row) goes the other way round: the daughter flies it from her strut tip
     // to the mother's nose collar, the nose adopts it (CaptureNet.adoptDaughterCatch), she flies home body only, and the leash takes it on to a
     // free tip (the mother-catch path). Measured in scripts/probes/nose-handoff-path.mjs, nothing here is a guess unless marked (est);
-    // docs/research/2026-10-nose-handoff.md ("As built" and "Her line, measured") has the run lines. The route itself is ONE function,
+    // archive/research/2026-10-nose-handoff.md ("As built" and "Her line, measured") has the run lines. The route itself is ONE function,
     // js/entities/NoseRoute.js (game and probe), so what flies is what was certified. Tests: js/test/test-NoseRoute.js.
     NOSE: {
       ENABLED: true,
@@ -1734,11 +1427,15 @@ export const Constants = {
       // the radiators stand in one of the bucket's windows: `windowsDeg` = [[loDeg, hiDeg, bagMaxM], ...], read by `noseRadiatorsOk`: the
       // shared angle in [lo, hi] AND no bag on any tip bigger than bagMaxM (reach, m; 0 = none on a tip). A window is the span between two
       // angles the rows were run at (<= 2 deg apart), with a bag of radius bagMaxM on all four tips where bagMaxM > 0.
-      // Fix round 1 (coordinator 2026-10-23): a window is offered only where it was run. u22-nose-tipbags (2026-10-24): a bag on a tip caps
-      // the radiators (TipCargo.TIP_BAND) and nothing moves them back, so the windows must cover the angles the cap holds them at; the rows
-      // are in docs/research/2026-10-nose-tipbags.md (commands and pass counts); CLOSED is offered with NO bag on any tip (bagMaxM 0) in every bucket: with a bag the seat climbs with the bag's size (a 0.30 m catch, 0°: 1.620 m with a 0.15 bag, 1.759 at 0.18, 1.900 at 0.22) and the rows (0.15, 0.22, 0.32, 0.42, 0.50 only) are not monotone in the radius (the 0.30 bucket fails at 0.15, 329/330), so a window with a bag between the radii run would be unrun (fix round 1, 2026-10-24). Reaches at or below the first loM, above the last
+      // A window is offered only where it was run. A bag on a tip caps the radiators (TipCargo.TIP_BAND) and nothing moves
+      // them back, so the windows must cover the angles the cap holds them at; the rows are in
+      // archive/research/2026-10-nose-tipbags.md (commands and pass counts). CLOSED is offered with NO bag on any tip
+      // (bagMaxM 0) in every bucket: with a bag the seat climbs with the bag's size (a 0.30 m catch, 0°: 1.620 m with a 0.15
+      // bag, 1.759 at 0.18, 1.900 at 0.22) and the rows (0.15, 0.22, 0.32, 0.42, 0.50 only) are not monotone in the radius
+      // (the 0.30 bucket fails at 0.15, 329/330), so a window with a bag between the radii run would be unrun. Reaches at or
+      // below the first loM, above the last
       // topM, or in no bucket refuse in plain words; so do radiators settled outside every window ('radiators-angle', never clears by waiting).
-      // Fix round 1 F3 (2026-10-24): the 134° band (bags of reach 0.60-0.75) settles at 132.86-134.00° depending on the frame step (60 Hz 134.000, 120 Hz 133.875,
+      // The 134° band (bags of reach 0.60-0.75) settles at 132.86-134.00° depending on the frame step (60 Hz 134.000, 120 Hz 133.875,
       // from closed 132.9), so the three smaller buckets' lowest open window starts at 132.75 (rows at 132.75 and 133.25 all 330/330, tipbags doc §3b); the 0.75 bucket stays at 138° (134° and 136° fail 329/330).
       BUCKETS: [
         { loM: 0.27, topM: 0.30, windowsDeg: [[0, 1, 0], [132.75, 136, 0.75], [136, 138, 0.60], [138, 140, 0.50], [140, 142, 0.40], [142, 144, 0.30], [144, 146, 0.15], [145.5, 146.5, 0]] },   // route certified from reach 0.25; her line (0.03 m rule) passes from 0.27 (0.265 misses by 0.0003 m): reach 0.27 and below refuse.
@@ -1747,7 +1444,7 @@ export const Constants = {
         { loM: 0.63, topM: 0.75, windowsDeg: [[0, 1, 0], [138, 140, 0.50], [140, 142, 0.40], [142, 144, 0.30], [144, 146, 0.15], [145.5, 146.5, 0]] },   // its 134° and 136° fail 329/330 (a swing-out item at a radiator wing frame) with or without bags: from 138°
       ],
       SEAT_BEAT_S:      1.0,    // s at the seat before the checks (the carry's HANDOFF_S)
-      SEAT_TOL_M:       0.06,   // m: the catch's centre must be this close to the collar axis point at the seat (the leash latch funnel, docs/research/2026-10-leash.md)
+      SEAT_TOL_M:       0.06,   // m: the catch's centre must be this close to the collar axis point at the seat (the leash latch funnel, archive/research/2026-10-leash.md)
       SEAT_SPEED_MPS:   0.03,   // m/s: and at rest (the leash latch's own limit)
       TUG_M:            0.03,   // m she backs along the axis after the nose has the catch, before she lets go (2-5 cm)
       TUG_HOLD_M:       0.01,   // m: while she backs, the catch must stay this close to its seat (the nose holds it); else the hand-over is taken back (est: a latch that holds keeps it within a centimetre)
@@ -1757,14 +1454,14 @@ export const Constants = {
     },
   },
 
-  // Q3 — Stage-1 net snug-up (rigidize daughter+net+debris into one unit).
+  // --- Net snug-up (rigidize daughter+net+debris into one unit) ---
   CATCH_SNUG: {
     TENSION_TARGET_N:    8,     // N — snug pull tightening the bag to the −Y face
     SETTLE_S:            0.4,   // s — settle so the cinch impulse damps before haul
     // over-strain reuses NET_STRAIN_* + _checkNetIntegrityOnReel (recoverable rip)
   },
 
-  // Q4 — FEEP soft re-dock (mass-scaled fuel debit; abstract model — see plan §Q4).
+  // --- FEEP soft re-dock (mass-scaled fuel debit; abstract model) ---
   REDOCK_FEEP: {
     SOFT_DOCK_VEL:       0.10,  // m/s — max |v_rel| to strut allowed at contact
     ARREST_DISTANCE_M:   8,     // m — arrest active within this of dock
@@ -1773,15 +1470,15 @@ export const Constants = {
     MISSION1_FREE:       true,  // no debit during the learning mission
   },
 
-  // Rev-3 — Yoke / tether-plume clearance (prerequisite for FEEP-during-reel).
+  // --- Yoke / tether-plume clearance (prerequisite for FEEP-during-reel) ---
   // The +Y wishbone bridle keeps the tether outside the ±Z FEEP exhaust cone;
   // ±15° beam steering is electrostatic (no moving parts, free) — the yoke's
   // job is tether-plume clearance, NOT vectoring.
   //
-  // Wave2 arrest-gate reconciliation (see ArmUnit._tetherPlumeClearance):
+  // Arrest-gate reconciliation (see ArmUnit._tetherPlumeClearance):
   // MIN_TETHER_PLUME_DEG 30 is the LEGACY worst-case budget — plume half-angle
-  // 20° + 10° of UNCOMMANDED vector wander (CROSSBOW_ARMS.md: "FEEP plume
-  // half-angle: 20° + vectoring 10° = 30° worst case"). The Rev-3 whole-haul
+  // 20° + 10° of UNCOMMANDED vector wander (archive/CROSSBOW_ARMS.md: "FEEP plume
+  // half-angle: 20° + vectoring 10° = 30° worst case"). The whole-haul
   // reel attitude converges the nose ONTO the dock line (probe: 0.00° at the
   // arrest window), so a nose-referenced 30° test can never pass in production
   // dock geometry. During the arrest the vector loop is actively COMMANDED, so
@@ -1798,16 +1495,15 @@ export const Constants = {
   YOKE_CLEARANCE: {
     MIN_TETHER_PLUME_DEG:   30,   // legacy no-assist clearance (= 20° cone + 10° uncommanded wander); at/above this no steer is engaged
     REEL_ATTITUDE_SLERP:    0.1,  // slew rate to the nose-at-strut / bridle-trailing attitude
-    PLUME_HALF_ANGLE_DEG:   20,   // indium FEEP exhaust cone half-angle (CROSSBOW_ARMS.md §FEEP; plan Rev-3 §1.2)
-    VECTOR_ENVELOPE_DEG:    15,   // electrostatic beam-steer authority — free, no moving parts (plan Rev-3)
+    PLUME_HALF_ANGLE_DEG:   20,   // indium FEEP exhaust cone half-angle (archive/CROSSBOW_ARMS.md §FEEP)
+    VECTOR_ENVELOPE_DEG:    15,   // electrostatic beam-steer authority — free, no moving parts
     STEER_JITTER_DEG:        2,   // closed-loop residual pointing error when the vector is COMMANDED (replaces the 10° open-loop wander term)
     ARREST_STEER_DEG:       15,   // deliberate arrest-window nose offset AWAY from the bridle side; thrust-along-travel loss 1−cos(15°) ≈ 3.4% is priced into the arrest debit
     ARREST_STEER_LEAD_M:     6,   // blend lead ahead of ARREST_DISTANCE_M: w(d)=clamp01(((ARREST+LEAD)−d)/LEAD) — engages at 14 m (inside DECEL_DISTANCE_M 15, so the whole maneuver lives in the braking approach), FULL at 8 m, because the one-shot gate/debit fires on the FIRST frame inside the window; a strictly-inside blend would leave the entry-frame nose un-steered and re-create the always-fouls bug. Sized 6 m so the REEL_ATTITUDE_SLERP (per-frame 0.1) still delivers enough of the offset at entry (steerNeeded ≤ VECTOR_ENVELOPE_DEG) even at ~20 fps through the ~12–14 m/s decel band.
     BRIDLE_APEX_Y_FRAC:   0.70,   // hardware SSOT: bridle gimbal apex at local (0, +0.70·by, 0) — MUST match the bridle-leg geometry in ArmUnit._createMesh (weaver by=0.2 m ⇒ 0.14 m tether standoff)
   },
 
-
-  // Eddy-current detumble (capture-feedback overhaul Phase 3c).
+  // Eddy-current detumble.
   // MAGNET secondary: while station-keeping with MAGNET selected near a
   // CONDUCTIVE target, the EPM's rotating field induces eddy currents that
   // bleed tumble — a daughter-local detumble option independent of the
@@ -1818,8 +1514,8 @@ export const Constants = {
     CONDUCTIVE_MATERIALS: ['aluminum', 'steel', 'titanium'],
   },
 
-  // Fragmentation severity tiers (capture-feedback overhaul Phase 3b).
-  // The dormant frag risk (computeFragRisk at _resolveCatch) is now ROLLED;
+  // Fragmentation severity tiers.
+  // The frag risk (computeFragRisk at _resolveCatch) is ROLLED;
   // severity scales with vRel excess × brittleness:
   //   crack   — debris survives, 1-2 frags shed, capture continues, score ding
   //   breakup — target destroyed → 3-6 fragments replace it, capture fails
@@ -1836,51 +1532,50 @@ export const Constants = {
   // --- Arm Operations ---
   ARM_DETACH_DURATION: 2.0,            // seconds (real-time undock animation)
   ARM_DOCK_DURATION: 3.0,              // seconds (real-time re-dock)
-  // Standoff between the daughter and her pinned catch (Issue 13, 2026-06-12):
+  // Standoff between the daughter and her pinned catch:
   // the catch is held at arm.position + holdDir × (sizeMeter/2 + clearance) so
   // the daughter never renders INSIDE a catch larger than herself. ≈ daughter
   // half-length + net bag slack.
-  // catch-snug (2026-10-18): this 1.0 m is NO LONGER the in-hand standoff for a
-  // catch that has a drawn mesh (owner: "debris seems to float .5 meter away from
+  // This 1.0 m is NOT the in-hand standoff for a
+  // catch that has a drawn mesh (owner 2026-10-18: "debris seems to float .5 meter away from
   // end of daughter, should be reeled in firmly"). A typed catch in hand sits
   // ARM_HOLD_NET_GAP_M off her end, recomputed each frame from the two drawn
   // shapes (ArmUnit catchHoldStandoffM -> debris._holdStandoffM). It remains the
   // typeless in-hand fallback (`_pinCatchToSelf`: a catch with no type — old saves, rigs).
-  // rack-snug (2026-10-18): it is NOT the rack's standoff any more — a rack cell is a place
+  // It is NOT the rack's standoff either — a rack cell is a place
   // on the daughter (ArmUnit.rackCellOffsetInto: her +Z support + the catch's drawn extent +
-  // ARM_HOLD_NET_GAP_M, on her axis; rack-centre 2026-10-19), nothing here enters it.
+  // ARM_HOLD_NET_GAP_M, on her axis), nothing here enters it.
   ARM_HOLD_CLEARANCE_M: 1.0,           // metres
-  // catch-snug: air gap (the net, ~3 cm) between the daughter's end and the nearest
+  // Air gap (the net, ~3 cm) between the daughter's end and the nearest
   // drawn point of a catch held in hand (pulled in, reeling, docking).
-  // rack-snug: the SAME number seats a parked rack catch against her +Z end
-  // (one number, the net). rack-centre: and spaces cell 1 from cell 0's catch along her axis.
+  // The SAME number seats a parked rack catch against her +Z end
+  // (one number, the net) and spaces cell 1 from cell 0's catch along her axis.
   ARM_HOLD_NET_GAP_M: 0.03,            // metres
   // snug-ring (owner 10-27, DECISIONS section 28 row 5): a piece SEATS in a small ring at her net launcher, only the net between.
   // The seat is found by sweeping the piece along the hold axis until it first touches her real drawn mesh (ring included),
   // then backing off so the true surface-to-surface gap is ARM_HOLD_NET_GAP_M minus this margin (the sweep sees vertices, not
   // every edge crossing, so it aims a little inside the 3 cm window: 2.7 cm). est.
   ARM_SEAT_GAP_MARGIN_M: 0.003,        // metres
-  // snug-ring: the seat sweep is for pieces up to this size (a bag, a ball, always). It was 1.0 m on 10-27 (bigger racked catches kept the
-  // support-plane rule: the hold poses, neighbour sweeps and satellite haul planners were measured against that layout); big-seat 10-28
-  // removed the limit (Infinity): every piece a daughter holds, up to the 5.5 m longest side in any field (CATCH_MAX_SIDE_M), seats with a
-  // true gap of 0.027 m, and the tables that read the layout were re-derived with their generators (see the Log of tmp/plans/owed-1028.md).
+  // The seat sweep is for pieces up to this size (a bag, a ball, always). Infinity: every piece a daughter holds, up to the
+  // 5.5 m longest side in any field (CATCH_MAX_SIDE_M), seats with a true gap of 0.027 m; the tables that read the layout
+  // (hold poses, neighbour sweeps, satellite haul planners) were re-derived with their generators.
   ARM_SEAT_MAX_SIZE_M: Infinity,       // metres
-  // snug-ring F1a: the exact seat solve is 10-21 ms for a cubesat / 0.5 m / 1 m piece (measured), so while a piece turns on her
+  // The exact seat solve is 10-21 ms for a cubesat / 0.5 m / 1 m piece (measured), so while a piece turns on her
   // (the carried spin, the spin payoff) the last answer stands until it has turned more than SEAT_RESOLVE_DEG in her frame, and a
   // re-solve is at most one per SEAT_RESOLVE_MIN_S per catch (and one per frame across all daughters). est: 5 degrees, 0.5 s.
-  // big-seat F1a (review 10-28): over this size (m) a piece is not held at the last answer while it turns: where a big piece first touches
+  // Over SEAT_TURN_GUARD_OVER_M (m) a piece is not held at the last answer while it turns: where a big piece first touches
   // her is not smooth in the turn (a flat side swings round: measured 0.2-4.7 times the lever, tmp/f1/ratio.mjs), so while it turns it
-  // takes the support rule (cannot overlap) and is solved once it is still. It is the old 1 m cap, kept for this one rule: up to 1 m the
-  // 5 degree / 0.5 s rule above was measured clear (test-DaughterSeatRing.js F2a).
+  // takes the support rule (cannot overlap) and is solved once it is still. Up to 1 m the
+  // 5 degree / 0.5 s rule above was measured clear (test-DaughterSeatRing.js).
   SEAT_TURN_GUARD_OVER_M: 1.0,         // metres
   SEAT_TURN_FREE_M: 0.002,             // metres: the piece's farthest point has moved less than this since the solve: the answer stands (est: under the 3 mm margin)
-  SEAT_TURN_FAST_M: 0.001,             // metres per frame (F2b: per frame, not per call): a farthest point moving faster than this (60 mm/s at 60 fps) is "turning" (est)
+  SEAT_TURN_FAST_M: 0.001,             // metres per frame (per frame, not per call): a farthest point moving faster than this (60 mm/s at 60 fps) is "turning" (est)
   SEAT_TURN_SLOW_MAX_M: 0.04,          // metres: a creeping piece whose solve is held back by the budget stands out by what it has moved, up to this (est)
-  // big-seat F2a (re-review 10-28): a piece over this size (m) that is seated is also measured against the mother (hull, nose ring, solar wings, the
+  // A piece over this size (m) that is seated is also measured against the mother (hull, nose ring, solar wings, the
   // other struts) at every hold-pose grid angle (SeatHullClear.js); within CLEAR_M + SAMPLE_MARGIN_M anywhere, it keeps the old support-rule distance
-  // for as long as its attitude on her stands. The old layout was 666 mm clear at the least (measured 10-28), so the old distance is the safe one.
+  // for as long as its attitude on her stands. The old layout was 666 mm clear at the least (measured), so the old distance is the safe one.
   SEAT_HULL: {
-    OVER_M: 1.0,                       // metres: up to this the seat was measured clear of the mother in the 10-27 lane (estimate: the 3-5.5 m pieces are the ones that reach)
+    OVER_M: 1.0,                       // metres: up to this the seat was measured clear of the mother (estimate: the 3-5.5 m pieces are the ones that reach)
     CLEAR_M: 0.02,                     // metres: the line the owner's "never touches" is held to (the seat's own window is 0.02-0.032)
     SAMPLE_MARGIN_M: 0.01,             // metres on top: the strut poses and wing tilts are samples (est: the radiator check uses the same 0.01)
     STRUT_POSES_DEG: [34, 67, 100],    // degrees: the other three struts' angles measured (their rest angle, the middle, the hold cap)
@@ -1890,14 +1585,14 @@ export const Constants = {
   },
   SEAT_RESOLVE_DEG: 5,                 // degrees
   SEAT_RESOLVE_MIN_S: 0.5,             // seconds
-  // snug-ring F2a: a re-solve moves the seat by up to 2-3 cm (measured, 1 m piece); the piece eases to each answer, at most this much
+  // A re-solve moves the seat by up to 2-3 cm (measured, 1 m piece); the piece eases to each answer, at most this much
   // per frame (est: 4.5 mm, under the 5 mm bound), and is never left more than SEAT_EASE_LAG_M short of the answer (est: 2 cm, inside
   // the 2.7 cm gap) so the ease cannot press it into her.
   SEAT_EASE_STEP_M: 0.0045,            // metres per frame
   SEAT_EASE_LAG_M: 0.02,               // metres
   // net reel: the old support rule sets the cell until the line is within this of it, then the exact seat is solved (est)
   SEAT_REEL_NEAR_M: 0.2,               // metres
-  // snug-ring R1: her seat ring, a thin capture ring of the same kind as the mother's (no petals, hooks or latches), coaxial with
+  // Her seat ring: a thin capture ring of the same kind as the mother's (no petals, hooks or latches), coaxial with
   // and OUTSIDE the net-launcher lip. Inner radius = lip outer radius + GAP_TO_LIP_M; tube radius TUBE_R_M (a 2.5 mm tube); the
   // ring stands on the launcher face. Aluminium: its mass is logged (ArmUnit.seatRingMassKg), NOT booked into her live mass.
   DAUGHTER_SEAT_RING: {
@@ -1906,87 +1601,62 @@ export const Constants = {
                                        // planners' reach numbers do not move (est; the aft S-band omni's 20 mm clearance at the dock also left little to give)
     DENSITY_KG_M3: 2700,               // aluminium
   },
-  // catch-snug: the move from the tight in-hand pin to the rack slot at the end of
+  // The move from the tight in-hand pin to the rack slot at the end of
   // docking glides over this long (smoothstep) instead of jumping in one frame.
   ARM_HOLD_GLIDE_S: 1.0,               // seconds
-  // (rack-snug 2026-10-18: the rack no longer uses this — a parked catch sits beside her end, out of
+  // (The rack does not use this — a parked catch sits beside her end, out of
   // the swing plane, fixed in HER frame. Its one remaining reader is CoMCalculator's booking of a
   // catch held IN HAND, which keeps its base geometry: hold axis from the net's launch direction,
   // slot-0 lateral bias along world up.) While in hand the full-size catch is biased laterally
   // (perpendicular to the outboard hold axis) by this factor × catch radius so
-  // the bag never eclipses the ~1 m daughter on the camera→daughter view axis
-  // (re-dock "daughter disappeared for 2 s" fix). 0 = pure outboard (old).
+  // the bag never eclipses the ~1 m daughter on the camera→daughter view axis. 0 = pure outboard.
   ARM_HOLD_LATERAL_BIAS: 1.0,
-  // Cargo-continuity S6 (2026-08-12): a parked daughter's hold is a cargo RACK — capacity in pieces pinned at the strut tip.
-  // one-catch (owner 2026-10-22 13:01Z, after a mother catch landed on a daughter that already held one: "Currently daughter
-  // can only hold one debris"): ONE piece, her own or one the mother puts on her. Cell 0's place and the trip's carry of it
-  // are the same as before; cell 1 (rack-centre: stacked on cell 0's catch along her axis) is no longer reached.
-  // rack-snug: a parked catch is a place on her, fixed in her frame. rack-centre (2026-10-19, owner "debris is off
-  // center from daughter"): cell 0 is centred on her axis.
+  // A parked daughter's hold is a cargo RACK — capacity in pieces pinned at the strut tip. ONE piece, her own or one the
+  // mother puts on her (one catch each); cell 1 (stacked on cell 0's catch along her axis) is not reached.
+  // A parked catch is a place on her, fixed in her frame (owner 2026-10-19: "debris is off center from daughter"): cell 0 is
+  // centred on her axis.
   DAUGHTER_CARGO_CELLS: 1,
 
-  // ── S9 strut posing (2026-08-22, register item 32): the held-cargo plume
-  // band. Measured, not guessed — tmp/i32s9-box-probe.log (the item-32 sweep
-  // re-run under the BOX volume model: dims from setDebrisSize lengthM/widthM,
-  // oriented by the booking's hold frame, enclosed exactly by a 4-ball chain).
+  // --- Held-cargo plume band ---
+  // Measured, not guessed. Box volume model: dims from setDebrisSize lengthM/widthM,
+  // oriented by the booking's hold frame, enclosed exactly by a 4-ball chain.
   // Each row: any piece whose sizeMeter is <= maxSizM bites a 35° aft cone
   // somewhere on the attitude ring at aim angles UP TO maxBiteADeg (worst
   // aspect; the fat defunctSat hull, not the skinny rocketBody). safeAlphaMin
   // adds a +10° margin and is the re-pose DESTINATION FLOOR — a loaded
   // HOLDING_CATCH daughter parked at α >= her floor can never present cargo to
-  // a plume at ANY attitude (the ring is the bound, i32 V9). The sphere's old
-  // "clear at α >= 71°" bound is FALSIFIED by the box: a 12.4 m fat hull bites
-  // to 106° (exact-box 80°, the chain's rounding is the margin's room).
-  // RE-MEASURED 2026-09-24 (DECISIONS §5a): re-run against the corrected
-  // Constants.THRUSTERS (apex 0.200 m / z −1.075 — was falsely 0.500 m /
-  // z −2.000). Every row but the largest needed its floor raised (the
-  // nearer, wider corrected cone bites farther for a small piece close to
-  // the axis); the largest class barely moved (106° here vs 107° before —
-  // the two errors partly offset at that extreme). Old → new (maxBiteADeg):
-  // 11→16, 30→33, 45→48, 65→67, 86→87, 107→106.
-  // RE-MEASURED 2026-10-19 (lane rack-snug): a parked rack catch is no longer slotted
-  // round a world-up ring at the strut tip — it sits in a cell ON the daughter, beside
-  // her end, fixed in her frame (ArmUnit.rackCellOffsetInto). The ring phase is gone;
-  // the probe (tmp/rack-snug-plume-probe.mjs → js/test/fixtures/rack-snug-plume.json,
-  // shared code js/test/_rackSnugPlume.js) calls the REAL cell function and CoMCalculator's
-  // box-chain over 4 daughters × cells 0,1 × 30 catch attitudes in her frame (6 axis-aligned
-  // + 24 seeded, js/test/_rackSnugAttitudes.js) × α 0–180° (1° grid) × every size/aspect
-  // case (aspect bound as before: all three aspect types at every named size, plus every
-  // fragment mesh and the cubesat). The deepest row is measured over pieces the game can
-  // spawn there (defunctSat ≤ 8 × 1.15 jitter = 9.2 m, rocketBody ≤ 12.65 m): the old
-  // "fat 12.4 m hull" (a 12.4 m defunctSat) is a test fixture, not a spawnable piece, and
-  // under the new cells it bites at every α to 180° so no floor could express it. Old → new
-  // (maxBiteADeg): 16→10, 33→28, 48→48, 67→75, 87→115, 106→141 (the large pieces now sit
-  // 4–6 m to the side of her end, which brings the fat hulls into the cone farther out;
-  // the small ones sit nearer her axis than the old √2·(size/2 + 1 m) standoff).
-  // RE-MEASURED 2026-10-19 (lane rack-centre, owner "debris is off center from daughter"): the cells moved ONTO her axis —
-  // cell 0 centred, cell 1 stacked on the same axis beyond cell 0's catch (ArmUnit.rackCellOffsetInto). Same generator
-  // (tmp/rack-snug-plume-probe.mjs → js/test/fixtures/rack-snug-plume.json, js/test/_rackSnugPlume.js) and sampling
-  // (4 daughters × cells 0,1 × the 30 attitudes × α 0–180° 1° grid × every size/aspect case, deepest row over spawnable
-  // pieces only); a cell-1 placement now has a second piece of the SAME case in cell 0 (in 3 of the 30 attitudes:
-  // the same as cell 1's, and the two that put cell 1 nearest / farthest: js/test/_rackSnugAttitudes.js
-  // `belowAttitudeIndices`), and the plume check reads both pieces. Old → new (maxBiteADeg): 10→15, 28→31, 48→55,
-  // 75→89, 115→115, 141→124 (measured, not explained: the causes were not separated; the new worst cases are named
-  // in the fixture's `worst` per row — cell 1 sets the two smallest rows, cell 0 the rest).
-  // Read by ArmManager's re-pose driver and the S9 tests; the plume CHECK
-  // itself is band-free (it tests geometry, not policy).
+  // a plume at ANY attitude (the ring is the bound). The sphere model's
+  // "clear at α >= 71°" bound is FALSIFIED by the box.
+  // Measured against the corrected Constants.THRUSTERS (DECISIONS §5a: apex 0.200 m / z −1.075).
+  // A parked rack catch sits in a cell ON the daughter, beside
+  // her end, on her axis (ArmUnit.rackCellOffsetInto): cell 0 centred, cell 1 stacked beyond cell 0's catch. The
+  // probe generator (scripts/probes/rack-snug-gen.mjs plume → js/test/fixtures/rack-snug-plume.json, shared code
+  // js/test/_rackSnugPlume.js) calls the REAL cell function and CoMCalculator's box-chain over 4 daughters × cells 0,1 ×
+  // 30 catch attitudes in her frame (6 axis-aligned + 24 seeded, js/test/_rackSnugAttitudes.js) × α 0–180° (1° grid) ×
+  // every size/aspect case (all three aspect types at every named size, plus every fragment mesh and the cubesat). The deepest
+  // row is measured over pieces the game can spawn there (defunctSat ≤ 8 × 1.15 jitter = 9.2 m, rocketBody ≤ 12.65 m): a
+  // 12.4 m defunctSat is a test fixture, not a spawnable piece. A cell-1 placement has a second piece of the SAME case in
+  // cell 0 (in 3 of the 30 attitudes: the same as cell 1's, and the two that put cell 1 nearest / farthest:
+  // js/test/_rackSnugAttitudes.js `belowAttitudeIndices`), and the plume check reads both pieces. The new worst cases are
+  // named in the fixture's `worst` per row.
+  // Every rack piece sits at its true 0.027 m gap, so the larger pieces reach further into the plumes. maxBiteADeg: 15, 31;
+  // 2.8 m 60; 5 m 136 (a 5 m dead satellite, attitude 16); the two rows above 5 m bite at EVERY strut angle (180°; floors
+  // 190° = never clear). Dead satellite: 4 m 94, 4.5 m 113, 5 m 136, 5.5 m 180 (tmp/bite-sizes.mjs). Nothing reads rows
+  // above 5 m at run time (the hold
+  // pose is the exact check at the real angle, ArmManager.holdPoseAlpha, never the ladder; a daughter's net takes at most
+  // 5.5 m, 500 kg).
   // 2026-10-23 roll-90 (hinge roll): these two rows re-measure at 120° / 130°; the floors 125° / 134° still clear, by 5° / 4°.
-  // big-seat 2026-10-28 (the 1 m seat limit is gone: every rack piece sits at its true 0.027 m gap, nearer her, so the larger pieces reach further into
-  // the plumes): re-measured with the same generator (scripts/probes/rack-snug-gen.mjs plume, js/test/_rackSnugPlume.js; `CAP=1` reproduces the rows
-  // above 15 / 31 / 55 / 89 and the roll-90 120 / 130 exactly, the check that the generator is the old one). maxBiteADeg: 15, 31 as before; 2.8 m
-  // 55 -> 60; 5 m 89 -> 136 (a 5 m dead satellite, attitude 16); the two rows above 5 m bite at EVERY strut angle (180°; floors 190° = never clear).
-  // By shape (worst of the 30 attitudes, old -> new): rocket body 5 m 61 -> 64, fragment 5 m 64 -> 65, mission debris 54 -> 54, dead satellite
-  // 4 m 75 -> 94, 4.5 m 82 -> 113, 5 m 89 -> 136, 5.5 m 95 -> 180 (tmp/bite-sizes.mjs). Nothing reads rows above 5 m at run time (the hold pose
-  // is the exact check at the real angle, ArmManager.holdPoseAlpha, never the ladder; a daughter's net takes at most 5.5 m, 500 kg).
+  // Read by ArmManager's re-pose driver and the plume tests; the plume CHECK
+  // itself is band-free (it tests geometry, not policy).
   PLUME_CARGO_ALPHA_LADDER: [
-    { maxSizM: 0.5,  maxBiteADeg: 15,  safeAlphaMinRad: 25 * Math.PI / 180 },
-    { maxSizM: 1.5,  maxBiteADeg: 31,  safeAlphaMinRad: 41 * Math.PI / 180 },
-    { maxSizM: 2.8,  maxBiteADeg: 60,  safeAlphaMinRad: 70 * Math.PI / 180 },
-    { maxSizM: 5.0,  maxBiteADeg: 136, safeAlphaMinRad: 146 * Math.PI / 180 },
-    { maxSizM: 8.0,  maxBiteADeg: 180, safeAlphaMinRad: 190 * Math.PI / 180 },
-    { maxSizM: Infinity, maxBiteADeg: 180, safeAlphaMinRad: 190 * Math.PI / 180 },
+    { maxSizM: 0.5,  maxBiteADeg: 15,  safeAlphaMinRad: degToRad(25) },
+    { maxSizM: 1.5,  maxBiteADeg: 31,  safeAlphaMinRad: degToRad(41) },
+    { maxSizM: 2.8,  maxBiteADeg: 60,  safeAlphaMinRad: degToRad(70) },
+    { maxSizM: 5.0,  maxBiteADeg: 136, safeAlphaMinRad: degToRad(146) },
+    { maxSizM: 8.0,  maxBiteADeg: 180, safeAlphaMinRad: degToRad(190) },
+    { maxSizM: Infinity, maxBiteADeg: 180, safeAlphaMinRad: degToRad(190) },
   ],
-  // The ONE band read (the digestSpanS in-table-method precedent): the piece's
+  // The ONE band read: the piece's
   // re-pose floor for its size class — ceil to the NEXT row (intermediate
   // sizes inherit the deeper floor; conservative direction preserved).
   plumeCargoSafeAlphaMin(sizeMeter) {
@@ -2004,8 +1674,7 @@ export const Constants = {
   // Per-arm net inventory capacity (§13 Q5 — depletion is a real Y0 fail state)
   // These values MUST equal CAPTURE_NET.MEDIUM/SMALL.MAGAZINE_SIZE (drift-guard
   // test enforces). Payload-fraction invariant justifying 4/4:
-  //   Large Daughter (weaver): 4 × 0.317 kg / 6.6 kg ≈ 19% (was 2 × 0.68 kg ≈ 21% until 2026-10-23, DECISIONS §38 row 5:
-  //     four 3 m nets in place of two 5 m nets)
+  //   Large Daughter (weaver): 4 × 0.317 kg / 6.6 kg ≈ 19% (DECISIONS §38 row 5: four 3 m nets in place of two 5 m nets)
   //   Small Daughter (spinner): 4 × 0.12 kg / 2.1 kg ≈ 23%
   ARM_NET_CAPACITY: {
     weaver:  4,
@@ -2021,7 +1690,7 @@ export const Constants = {
   OCTOPUS_TOTAL_DRY_MASS: 214,         // kg (without propellant)
   OCTOPUS_ARM_COUNT: 6,                // 3 Weaver + 3 Spinner
 
-  // --- Web Shot (Sprint D1) ---
+  // --- Web Shot ---
   WEB_SHOT_DURATION: 2.0,                // seconds — launch animation
   WEB_SHOT_COOLDOWN: 10.0,               // seconds between shots
   WEB_SHOT_DRAG_MULT: 5.0,               // drag multiplier applied to hit debris
@@ -2034,296 +1703,202 @@ export const Constants = {
   V4_TETHER_LENGTH_MULT: 6.25,        // Same mass → 6.25× longer reach (12.5 km)
   V4_NET_SIZE_MULT: 10.0,             // Same mass → 10× net area (50×50m)
 
-  // ============================================================================
-  // OCTOPUS V5 BASELINE (Epic 9 — V5 Hardware)
-  // Consolidated parameter block for the V5 satellite (Hex Umbrella default).
-  // Mirrors V3 OCTOPUS_* flat-key structure for downstream consistency.
-  // Detailed crossbow/tether/spring sub-systems remain in their own blocks below.
-  // ============================================================================
+  // OCTOPUS V5 BASELINE: consolidated parameter block for the V5 satellite (mirrors V3 OCTOPUS_* flat keys).
   OCTOPUS_V5: {
-    // ── Barrel Geometry (CHANGED: 1.2×1.0 → 2.0×0.8 Config G) ──
-    CORE_LENGTH: 2.0,              // m — was 1.2
-    CORE_ACROSS_FLATS: 0.8,        // m — was 1.0
-    CORE_ASPECT_RATIO: 2.5,        // NEW
+    // --- Barrel geometry ---
+    CORE_LENGTH: 2.0,              // m
+    CORE_ACROSS_FLATS: 0.8,        // m
+    CORE_ASPECT_RATIO: 2.5,
 
-    // ── Collar (NEW) ──
-    // DECISIONS §11 (2026-09-23, ratified): the strut hinge moves 10 cm
-    // forward onto the FRONT ring (was the back/middle collar at 0.90,
-    // matched to the original quad-ring frame). The front ring is the
-    // strongest part of the body ("the ends, right? Strongest part of mother
-    // is end hoops?" — owner). Everything hanging off the pivot (stow
-    // channels, reel/spring stations, dock offsets, callout/blueprint
-    // anchors) derives from this constant — see PlayerSatellite.js
-    // _buildStruts and _carveStowGrooves.
-    COLLAR_Y: 1.00,                // m from barrel center (+Y) — was 0.90
+    // --- Collar ---
+    // DECISIONS §11: the strut hinge sits on the FRONT ring, the strongest part of the body. Everything hanging off
+    // the pivot (stow channels, reel/spring stations, dock offsets, callout/blueprint anchors) derives from this
+    // constant — see PlayerSatellite.js _buildStruts and _carveStowGrooves.
+    COLLAR_Y: 1.00,                // m from barrel center (+Y)
     COLLAR_RADIUS: 0.40,           // m
 
-    // ── Nose berthing collar (S13(c) — B is doctrine) ──
-    // The fore docking port reborn as functional hardware: whale-class cargo
-    // mates rigidly, on-axis, at the nose. The ring sits at the seat plane
-    // (z = 1.30); the net leaves from just behind it. Seat rule: cargo surface at the ring plane — cargo centre
-    // at BERTH_COLLAR_Z_M + sizeMeter/2 + CAPTURE_NET.BERTH_CLEARANCE_M 1.0
-    // (mirrors ARM_HOLD_CLEARANCE_M).
-    // History: S13(e) (2026-08-14) moved the two Large Net pods to ±0.45 m off
-    // the boresight (until 2026-10-13) so the collar owned the axis alone,
-    // which brought back a launch-recoil yaw lever (billed in N₂). Owner 2026-10-13 ("now there are
-    // 2 large net launchers at nose of mother. Should be one, centered.") —
-    // ONE launcher, on the axis, INSIDE the collar, firing through its bore;
-    // the collar and the berth anchor are untouched. The muzzle sits at
-    // x = y = 0, so the shot has no lever about the centre of mass (the turning
-    // kick is gone). See NET_LAUNCHER_* below.
-    BERTH_COLLAR_Z_M: 1.30,        // m — collar seat plane, ship-local z (the net now leaves 30 mm behind it, from NET_LAUNCHER_MUZZLE_Z_M)
+    // --- Nose berthing collar ---
+    // Whale-class cargo mates rigidly, on-axis, at the nose. The ring sits at the seat plane (z = 1.30); the net
+    // leaves from just behind it. Seat rule: cargo surface at the ring plane — cargo centre at
+    // BERTH_COLLAR_Z_M + sizeMeter/2 + CAPTURE_NET.BERTH_CLEARANCE_M 1.0 (mirrors ARM_HOLD_CLEARANCE_M).
+    // owner 2026-10-13: ONE Large Net launcher, centered on the axis (see NET_LAUNCHER_* below); the muzzle at
+    // x = y = 0 means the shot has no lever about the centre of mass (no turning kick).
+    BERTH_COLLAR_Z_M: 1.30,        // m — collar seat plane, ship-local z (the net leaves 30 mm behind it, from NET_LAUNCHER_MUZZLE_Z_M)
     BERTH_COLLAR_INNER_R_M: 0.16,  // m — bore radius
-    // Design 6 (2026-09-08, "sensors need visual clearance to see"): the collar
-    // is a SKELETON — a thin capture ring (tube r 0.020 → R = INNER + TUBE =
-    // 0.180, outer 0.200) on four inclined struts whose feet stand on the sensor
-    // turntable at radial 0.30. The old torus (tube 0.07, annulus 0.16–0.30)
-    // stood 2–6 cm in front of the four ring optics and blocked 80–100 % of
-    // their cones (plan §1a); BERTH_COLLAR_OUTER_R_M (0.30, the guide-cone
-    // root) retired with the cone — the same 0.30 lives on as the strut
-    // footprint. Bore and seat plane unchanged: the DOCKING COLLAR card and the
-    // CARGO blueprint print "0.32 m bore" from INNER_R.
+    // The collar is a SKELETON so the sensors keep visual clearance: a thin capture ring (tube r 0.020 →
+    // R = INNER + TUBE = 0.180, outer 0.200) on four inclined struts whose feet stand on the sensor turntable at
+    // radial 0.30. The DOCKING COLLAR card and the CARGO blueprint print "0.32 m bore" from INNER_R.
     BERTH_COLLAR_TUBE_R_M: 0.020,  // m — capture-ring tube radius (ring R = INNER_R + TUBE_R)
     BERTH_COLLAR_STRUT_FOOT_R_M: 0.30, // m — strut foot radial on the turntable top (z 1.05)
-    // ── The one Large Net launcher (owner 2026-10-13: "one, centered") ──
-    // A gunmetal cylinder on the long axis (x = y = 0), standing on the sensor
-    // turntable INSIDE the collar bore and firing through it. Probe-sited
-    // 2026-10-13 (tmp/netpod-centre-candidate.log, gaps good to ~1.5 mm): at
-    // r 0.12 with its front face at z 1.27 it keeps ring tube 47.1 mm, optics
-    // (IR / EO / LIDAR / LaserBaffle) 40.0 mm, collar struts 54.8 mm, fore sun
-    // pucks 57.8 mm; 15 mm to everything is reached only at r 0.145. The
-    // corridor along the nose from z 1.27 is clear to radius 0.155 (set by the
-    // sun pucks; the ring's inner edge is at 0.1597).
+    // --- The one Large Net launcher ---
+    // A gunmetal cylinder on the long axis (x = y = 0), standing on the sensor turntable INSIDE the collar bore and
+    // firing through it. Probe-sited (tmp/netpod-centre-candidate.log, gaps good to ~1.5 mm): at r 0.12 with its
+    // front face at z 1.27 it keeps ring tube 47.1 mm, optics (IR / EO / LIDAR / LaserBaffle) 40.0 mm, collar struts
+    // 54.8 mm, fore sun pucks 57.8 mm; 15 mm to everything is reached only at r 0.145. The corridor along the nose
+    // from z 1.27 is clear to radius 0.155 (set by the sun pucks; the ring's inner edge is at 0.1597).
     NET_LAUNCHER_R_M: 0.12,        // m — launcher housing radius
     NET_LAUNCHER_MUZZLE_Z_M: 1.27, // m — front face = muzzle plane, 10 mm behind the ring (ring tube spans z 1.28-1.32)
     NET_LAUNCHER_BASE_Z_M: 1.050,  // m — base buried 5 mm in the turntable (top 1.055), through the berth plate (z 1.055-1.060)
 
-    // ── Strut (NEW — replaces short-strut spec) ──
-    // DECISIONS §11: +10 cm to match the +10 cm hinge move, so the stowed
-    // daughter keeps the same pocket (pocket z = COLLAR_Y − STRUT_LENGTH is
-    // an invariant of the move: 0.90 − 1.60 == 1.00 − 1.70 == −0.70).
-    STRUT_LENGTH: 1.70,            // m (hinge to daughter dock) — was 1.60
+    // --- Strut ---
+    // DECISIONS §11: pocket z = COLLAR_Y − STRUT_LENGTH (= −0.70) is invariant, so the stowed daughter keeps its pocket.
+    STRUT_LENGTH: 1.70,            // m (hinge to daughter dock)
     STRUT_TUBE_OD: 0.050,          // m
     STRUT_TUBE_WALL: 0.002,        // m
     STRUT_MASS: 4.5,               // kg (structure + reel + spring + hinge)
     STRUT_SWEEP_MIN: 0,            // rad
-    STRUT_SWEEP_MAX: Math.PI,      // rad (180°) — the RANGE; unchanged by the opening-dance plan
-    // 19.5°/s (owner 2026-10-27: "daughter strut pivot should be 30% faster, for practical playability"; one rate for
-    // all, no setting). It was 15°/s, slowed 50% so new players could see the strut deploy. The radiators keep their own
-    // 15°/s (THERMAL.FLOWER.SLEW_RATE_RAD_S, a separate number since 2026-10-27).
-    STRUT_SLEW_RATE: 19.5 * Math.PI / 180, // rad/s (19.5°/s: 0→180° takes 9.2 s)
-    // AIM_TURN_STRUT_PACE (owner 2026-10-27, "keep the mother's turn pace": "Only the visible swing gets faster. Launches take
-    // as long as before and cost the same gas."). The mother's aim turn is timed to end together with the strut's swing, so
-    // a faster strut would have made her turn faster too (measured: aimed launch +18% gas, ChestShot median 113.8 -> 134.8 g;
-    // pair shots 5.24 -> 6.77 g). The TURN's timing therefore reads this pace, the old 15°/s, wherever it asks "how long
-    // does the strut need": ArmUnit.aimEaseMinTime and the eased profile, and AutopilotSystem's aim/pair/carry plans
-    // (ArmManager's launch-gate swing and its give-up clock read STRUT_SLEW_RATE: no turn paces that swing). A strut in a
-    // launch aim is eased to finish with that turn, so it never goes above
-    // this pace there. Every swing that no launch turn paces (the "." toggle, resting pose, hold pose, reel home,
-    // auto-deploy) uses STRUT_SLEW_RATE.
-    AIM_TURN_STRUT_PACE: 15 * Math.PI / 180, // rad/s (15°/s, the strut rate before 2026-10-27)
-    // launch-smooth: the strut of a daughter being aimed (the launch ceremony) does not jump to full speed and stop dead:
-    // it speeds up at this rate, coasts at its peak (never above AIM_TURN_STRUT_PACE) and slows at this rate, so it starts
-    // and ends together with the mother's own turn (her ramps are ~0.3 s). Only a caller that passes an `ease` to
-    // `setAimAlpha` is eased; every other strut move keeps the constant rate above.
-    STRUT_EASE_ACCEL: 50 * Math.PI / 180, // rad/s² (50°/s²: AIM_TURN_STRUT_PACE, 15°/s, in 0.3 s; unchanged by the 19.5°/s strut)
+    STRUT_SWEEP_MAX: Math.PI,      // rad (180°) — the RANGE
+    // owner 2026-10-27: one strut rate for all, no setting. The radiators keep their own 15°/s
+    // (THERMAL.FLOWER.SLEW_RATE_RAD_S).
+    STRUT_SLEW_RATE: degToRad(19.5), // rad/s (19.5°/s: 0→180° takes 9.2 s)
+    // AIM_TURN_STRUT_PACE (owner 2026-10-27, "keep the mother's turn pace"): only the visible swing gets faster;
+    // launches take as long as before and cost the same gas. The mother's aim turn is timed to end with the strut's
+    // swing, so a faster strut would speed her turn too (measured: aimed launch +18% gas, ChestShot median
+    // 113.8 -> 134.8 g). The TURN's timing therefore reads this pace (ArmUnit.aimEaseMinTime and the eased profile,
+    // AutopilotSystem's aim/pair/carry plans); ArmManager's launch-gate swing and give-up clock read STRUT_SLEW_RATE.
+    // Every swing that no launch turn paces (the "." toggle, resting pose, hold pose, reel home, auto-deploy) uses
+    // STRUT_SLEW_RATE.
+    AIM_TURN_STRUT_PACE: degToRad(15), // rad/s (15°/s)
+    // The strut of a daughter being aimed does not jump to full speed and stop dead: it speeds up at this rate,
+    // coasts at its peak (never above AIM_TURN_STRUT_PACE) and slows at this rate, so it starts and ends with the
+    // mother's own turn (her ramps are ~0.3 s). Only a caller that passes an `ease` to `setAimAlpha` is eased.
+    STRUT_EASE_ACCEL: degToRad(50), // rad/s² (50°/s²: AIM_TURN_STRUT_PACE, 15°/s, in 0.3 s)
 
     // The "." strut toggle has two angles, both measured from the tail
     // (0° along the hull toward the tail, 90° straight out, 180° along the nose).
-    // STRUT_REST_ALPHA: ONE press opens here, 34° — swept back from the nose at
-    // the radiators' angle, mirrored (radiators are 146° from the nose; owner
-    // 2026-10-14: "try daughter struts at swept back ... opposite 146 degree",
-    // "I said 146 but meant 34"). Measured (tmp/probes/strut34/): tips z -0.41,
-    // 1.34 m off axis, never fouls the 1.30 m catch plane; strut-to-radiator
-    // >= 51 mm over the whole radiator sweep, hull 176 mm, neighbours 305 mm;
-    // swing 0->34 1.74 s at 19.5°/s (2.27 s at the old 15°/s; STRUT_SLEW_RATE), 136 J for four struts at 15°/s (about 23% less now).
-    STRUT_REST_ALPHA: 34 * Math.PI / 180, // rad (34°)
-    // hold-catch (owner 2026-10-22: "daughters that catch debris should hold it, and their strut should move to default
-    // position"): a daughter aboard with a catch keeps her strut at the lowest of 34°, 39°, 44° ... where her catch is clear
-    // of the thruster plumes (ArmManager.holdPoseAlpha, the exact box check at the real angle), and never above
-    // HOLD_POSE_MAX_DEG: the mother-net path (CaptureNet._corridorClear) is clear of a strut tip for every inbound size up to
-    // 100° (the tip crosses the muzzle plane at about 100°, probe 2026-10-22, DECISIONS §35). 0° is never a hold pose: the rest
-    // cradle touches the hull, and a 5 m catch touches the open radiators there (tmp/probe-hold-0deg.mjs). The slew and a
-    // "." press leave 1° of slack (DEADBAND) so the driver does not chase the strut driver's own 0.57° arrival tolerance.
+    // STRUT_REST_ALPHA: ONE press opens here, 34° — swept back from the nose at the radiators' angle, mirrored
+    // (radiators are 146° from the nose; owner 2026-10-14: "try daughter struts at swept back ... opposite 146
+    // degree", "I said 146 but meant 34"). Measured (tmp/probes/strut34/): tips z -0.41, 1.34 m off axis, never
+    // fouls the 1.30 m catch plane; strut-to-radiator >= 51 mm over the whole radiator sweep, hull 176 mm,
+    // neighbours 305 mm.
+    STRUT_REST_ALPHA: degToRad(34), // rad (34°)
+    // hold-catch (owner 2026-10-22): a daughter aboard with a catch keeps her strut at the lowest of 34°, 39°,
+    // 44° ... where her catch is clear of the thruster plumes (ArmManager.holdPoseAlpha, the exact box check at the
+    // real angle), and never above HOLD_POSE_MAX_DEG: the mother-net path (CaptureNet._corridorClear) is clear of a
+    // strut tip for every inbound size up to 100° (the tip crosses the muzzle plane at about 100°, DECISIONS §35).
+    // 0° is never a hold pose: the rest cradle touches the hull, and a 5 m catch touches the open radiators there
+    // (tmp/probe-hold-0deg.mjs). The slew and a "." press leave 1° of slack (DEADBAND) so the driver does not chase
+    // the strut driver's own 0.57° arrival tolerance.
     HOLD_POSE_MAX_DEG: 100,
     HOLD_POSE_STEP_DEG: 5,
     HOLD_POSE_DEADBAND_DEG: 1,
-    // STRUT_DEPLOY_ALPHA: a DOUBLE TAP opens to 90°, straight out sideways; it is
-    // also the catch-duck angle (ArmManager duck target/release). Was the single-
-    // press target 2026-10-12 and 146° before that (opening-dance plan, 2026-09-16).
-    // Measured: at 90° the tip is aft of the muzzle plane (z 1.0 vs 1.30), so no
-    // catch of any size can touch it; swing 34->90 2.87 s at 19.5°/s (3.73 s at the old 15°/s).
-    // STRUT_SWEEP_MAX above is untouched — the RANGE stays [0, π].
-    STRUT_DEPLOY_ALPHA: 90 * Math.PI / 180, // rad (90°)
-    // "Open" means past HALF the rest angle (17°): a strut that arrives at
-    // 33.99° — or is stopped short — still reads open, so the toggle closes it
-    // and the DAUGHTERS pane gate opens from the first press. Read by
+    // STRUT_DEPLOY_ALPHA: a DOUBLE TAP opens to 90°, straight out sideways; it is also the catch-duck angle
+    // (ArmManager duck target/release). Measured: at 90° the tip is aft of the muzzle plane (z 1.0 vs 1.30), so no
+    // catch of any size can touch it.
+    STRUT_DEPLOY_ALPHA: degToRad(90), // rad (90°)
+    // "Open" means past HALF the rest angle (17°): a strut that arrives at 33.99° — or is stopped short — still
+    // reads open, so the toggle closes it and the DAUGHTERS pane gate opens from the first press. Read by
     // ArmManager.strutsDeployed() and toggleStruts(); derived so it cannot drift.
     get STRUT_OPEN_THRESHOLD() { return this.STRUT_REST_ALPHA / 2; },
-    // Double-tap window: a second "." press inside it opens to STRUT_DEPLOY_ALPHA
-    // (90°) whatever the first press did; no tap sequence targets 180° (the range
-    // allows it, the button does not — owner 2026-10-14). Matches the radiator's
-    // VENT_DOUBLE_TAP_MS so one gesture means one thing everywhere.
+    // Double-tap window: a second "." press inside it opens to STRUT_DEPLOY_ALPHA (90°) whatever the first press
+    // did; no tap sequence targets 180° (the range allows it, the button does not — owner 2026-10-14). Matches the
+    // radiator's VENT_DOUBLE_TAP_MS.
     STRUT_PUSH_WINDOW_MS: 600,
 
-    // Daughter-arm automation (lane arms-auto; DECISIONS §25 ruling 5): the struts
-    // start closed at 0° and stay closed until the first opening of the run (a piece
-    // within NET_LOCK_RANGE_M (90 m), a catch under way, or a "." press); from then on
-    // they REST at STRUT_REST_ALPHA (34°, lane arms-default, owner 2026-10-16) and never
-    // fold flat on their own. They ease back to 34° OVERRIDE_S after a "." press. Real
-    // motor rate throughout (STRUT_SLEW_RATE, 19.5°/s); nothing here teleports. Read by
-    // systems/StrutAuto.js.
-    // DEMO_TOP_RAD: the once-per-player full-range show goes out to this angle. Probe
-    // 2026-10-15: strut 0-180° in 2° steps x 20 radiator/wing states, clear from 4° (0-2° is
-    // the rest cradle, touching by design). Tightest gaps: 22 mm hull at 4°, 30 mm radiator
-    // plate at 6° (radiator then at 2°; it rests at 0° since 2026-10-16), 54 mm wing clamp at 8° (tilt -30°); neighbours 190 mm and
-    // nose collar 207 mm at 180°. So DEMO_TOP_RAD = 180°.
+    // Daughter-arm automation (DECISIONS §25 ruling 5): the struts start closed at 0° and stay closed until the
+    // first opening of the run (a piece within NET_LOCK_RANGE_M (90 m), a catch under way, or a "." press); from
+    // then on they REST at STRUT_REST_ALPHA (34°, owner 2026-10-16) and never fold flat on their own. They ease back
+    // to 34° OVERRIDE_S after a "." press. Real motor rate throughout (STRUT_SLEW_RATE). Read by systems/StrutAuto.js.
+    // DEMO_TOP_RAD: the once-per-player full-range show goes out to this angle. Probe: strut 0-180° in 2° steps x
+    // 20 radiator/wing states, clear from 4° (0-2° is the rest cradle, touching by design); tightest gaps 22 mm hull
+    // at 4°, 30 mm radiator plate at 6°, 54 mm wing clamp at 8°; neighbours 190 mm and nose collar 207 mm at 180°.
     STRUT_AUTO: {
       OVERRIDE_S: 10,                 // s after the arm ARRIVES at the player's angle
       HANDOFF_S: 3,                   // s hands-off after a launch/leash/duck ends
       SCAN_INTERVAL_S: 0.5,           // s between debris scans (2 Hz)
       LEAVE_FACTOR: 1.1,              // enter at <= 90 m, leave only past 99 m
-      DEADBAND_RAD: 2 * Math.PI / 180, // rad — no re-command inside 2°
+      DEADBAND_RAD: degToRad(2), // rad — no re-command inside 2°
       DEMO_TOP_RAD: Math.PI,          // rad (180°) — measured clear
-      DEMO_CLEAR_M: 0.006,            // m — the show turns back if the gap falls under this (proxy at radiator 0°: min 7.3 mm at strut 162°, measured 2026-10-17)
-      DEMO_CHECK_FROM_RAD: 30 * Math.PI / 180, // rad — below this the strut is near its rest cradle (touching by design); the coarse proxy (55 mm capsule + 0.13 m sphere) reads -4.9..9.9 mm at 9-29° with the radiator at 0° while the real meshes measure >= 9.6 mm (log in plan)
+      DEMO_CLEAR_M: 0.006,            // m — the show turns back if the gap falls under this (proxy at radiator 0°: min 7.3 mm at strut 162°, measured)
+      DEMO_CHECK_FROM_RAD: degToRad(30), // rad — below this the strut is near its rest cradle (touching by design); the coarse proxy (55 mm capsule + 0.13 m sphere) reads -4.9..9.9 mm at 9-29° with the radiator at 0° while the real meshes measure >= 9.6 mm
     },
 
-    // ── Recoil Safety (NEW — ST-9.3 C-3) ──
+    // --- Recoil safety ---
     HIGH_RECOIL_ALPHA_LOW:  Math.PI / 6,     // rad (30°) — below this = high axial recoil
     HIGH_RECOIL_ALPHA_HIGH: 5 * Math.PI / 6, // rad (150°) — above this = high axial recoil
 
-    // ── 3-Plane Layout (NEW) ──
+    // --- 3-plane layout ---
     ROSA_PLANE_AZIMUTH: 0,         // rad (0° and 180° plane)
-    ARM_PLANE_OFFSET: 64 * Math.PI / 180, // rad (64° from ROSA)
-    // Derived: arm azimuths [64°, 116°, 244°, 296°] for Y0 Quad (strut re-clock
-    // trial: each azimuth moved 4° away from its nearest ROSA root to clear the
-    // radiator fold; read by nothing at runtime — Y0_QUAD.azimuths is the SSOT)
+    ARM_PLANE_OFFSET: degToRad(64), // rad (64° from ROSA)
+    // Arm azimuths [64°, 116°, 244°, 296°] for Y0 Quad: read by nothing at runtime — Y0_QUAD.azimuths is the SSOT.
 
-    // ── ROSA Panels (NEW — replaces rigid wing spec) ──
-    // Square-cornered rectangle (Option B accuracy pass): real ROSA wings are
-    // plain rectangles, so the former ROSA_CHAMFER corner cut was dropped.
+    // --- ROSA panels ---
+    // Square-cornered rectangle: real ROSA wings are plain rectangles.
     ROSA_WIDTH: 1.0,               // m
     ROSA_LENGTH: 2.0,              // m
-    // Mother-wings step 4 (DECISIONS §10, "power follows the panels, realistic
-    // wins"): ROSA_POWER/BODY_MOUNT_POWER/TOTAL_SOLAR_POWER and the furl/feather
-    // fractions derived from them are REMOVED. _updateSolarPower now sums each
-    // wing's and each body cell's own real area × incidence × furl instead of
-    // scaling a table peak by a generic sunAngle. BODY_MOUNT_AREA_M2 is the one
-    // number kept from the table era — the real, measured total body-cell face
-    // area (44 built BarrelSolarPanel_* cells after the 2026-09-24 half-width
-    // re-lay; drift-pinned against the built ship in test-MotherPower) — used by the real power path AND to correct the top-level
-    // `Constants.SOLAR_PANEL_AREA` (was a generic, unrelated 20 m² placeholder;
-    // now the real total = 2 wings + this). Re-measure if the cells lane
-    // changes the layout.
+    // DECISIONS §10 ("power follows the panels, realistic wins"): _updateSolarPower sums each wing's and each body
+    // cell's own real area × incidence × furl; there is no table peak (no ROSA_POWER / BODY_MOUNT_POWER /
+    // TOTAL_SOLAR_POWER / *_POWER_FRACTION). BODY_MOUNT_AREA_M2 is the real, measured total body-cell face area
+    // (44 built BarrelSolarPanel_* cells; drift-pinned against the built ship in test-MotherPower), used by the real
+    // power path AND to correct the top-level `Constants.SOLAR_PANEL_AREA` (= 2 wings + this). Re-measure if the
+    // cell layout changes.
     BODY_MOUNT_AREA_M2: 1.609,      // m² — measured, sum of built body-cell faces
-    // Body-cell shading estimate (mother-wings step 4): a per-cell sun-ray vs
-    // wings/struts/radiator raycast, throttled to this rate — cos(sun,normal)
-    // stays live every frame, only the (pricier) occlusion test is cached.
-    BODY_SHADE_UPDATE_S: 0.5,      // s — throttle period (2 Hz), per plan §4 "≤1-2 Hz"
+    // Body-cell shading estimate: a per-cell sun-ray vs wings/struts/radiator raycast, throttled to this rate —
+    // cos(sun,normal) stays live every frame, only the (pricier) occlusion test is cached.
+    BODY_SHADE_UPDATE_S: 0.5,      // s — throttle period (2 Hz)
     BODY_SHADE_MAX_DIST_M: 3.0,    // m — beyond this nothing on the ship can shade a cell
 
-    // ── ROSA fidelity geometry (verified vs. real Redwire/NASA ROSA) ──
-    // Real ROSA: flexible PV "center wing" with a high-strain composite slit-tube
-    // boom along EACH long edge, rolled onto a root spool/mandrel ("like a tape
-    // measure"). Deploys passively via boom strain energy. The Mother is a
-    // (gameplay-liberty) motorised re-furlable variant — real ROSA is one-way.
-    // Evidence for the one-way claim, re-verified 2026-09-22: the June 2017 ISS
-    // flight test is the only time anyone tried to take one back. After a
-    // 12-day test, controllers could not lock the array in its stowed
-    // configuration and it was jettisoned on 30 June rather than retrieved. The
-    // codex entry `rosa_solar_array` tells the player exactly this, so the
-    // fiction is disclosed rather than quietly assumed.
+    // --- ROSA fidelity geometry (verified vs. real Redwire/NASA ROSA) ---
+    // Real ROSA: flexible PV "center wing" with a high-strain composite slit-tube boom along EACH long edge, rolled
+    // onto a root spool/mandrel. Deploys passively via boom strain energy. The Mother is a (gameplay-liberty)
+    // motorised re-furlable variant — real ROSA is one-way (June 2017 ISS flight test: the array could not be locked
+    // stowed after 12 days and was jettisoned on 30 June). The codex entry `rosa_solar_array` tells the player
+    // exactly this, so the fiction is disclosed rather than quietly assumed.
     ROSA_BOOM_OD: 0.020,           // m — slit-tube edge boom diameter (both long edges)
     ROSA_DRUM_R: 0.050,            // m — root roller drum / mandrel radius
-    // Rolled stack thickness, the INPUT to the furled-coil radius (see
-    // PlayerSatellite.rosaFurledCoilRadiusM: R = sqrt(drumR² + width·t/π)).
-    // A real ROSA blanket — IMM/thin-film cells on a flexible substrate — is
-    // well under 1 mm; the balance here is the flattened slit-tube booms, which
-    // ride the long edges and thicken the wrap at z = ±1.0. 1.5 mm over the
-    // 1.0 m width puts the furled coil at r ≈ 0.0546 m. With the spool axis at
-    // 0.49 (see ROSA_BRACKET_LEN) its inboard face sits at 0.4354 m; measured
-    // on the built model by test-RosaFurl, that is 35 mm clear of the hull and
-    // 24 mm clear of the nearest body PV corner.
+    // Rolled stack thickness, the INPUT to the furled-coil radius (PlayerSatellite.rosaFurledCoilRadiusM:
+    // R = sqrt(drumR² + width·t/π)). A real ROSA blanket is well under 1 mm; the balance is the flattened slit-tube
+    // booms on the long edges. 1.5 mm over the 1.0 m width puts the furled coil at r ≈ 0.0546 m; with the spool axis
+    // at 0.49 its inboard face sits at 0.4354 m — measured by test-RosaFurl: 35 mm clear of the hull, 24 mm clear of
+    // the nearest body PV corner.
     ROSA_BLANKET_T: 0.0015,        // m — blanket + flattened-boom stack thickness
     ROSA_SPREADER_OD: 0.010,      // m — slim tip spreader / leading-edge deploy bar
-    // Root mounting bracket standoff from the bus. This is what holds the
-    // furled roll off the hull, so it is sized BY the coil: with
-    // ROSA_ROOT_DRUM_FRAC the spool axis lands at COLLAR_RADIUS + 0.070 +
-    // 0.4·0.050 = 0.49 m (PlayerSatellite.rosaSpoolAxisM), and a furled coil of
-    // r 0.0546 then reaches in to 0.4354 m.
-    // Was 0.060 (spool at 0.48). The body PV is tiled on FLAT 22.5° facets, so
-    // a panel's azimuth corners lift to ~1.034·R ≈ 0.4136 — well proud of the
-    // 1.014·R face — and at 0.48 the nearest corner (BarrelSolarPanel_11, the
-    // 11.25° facet) cleared a furled coil by only 13.6 mm, under the 20 mm gate.
-    // Note the ±8° `rosaKeep` PV keep-out in _buildBodyPanels cannot help here:
-    // facet CENTRES land at 11.25°, so no facet is ever within 8° of a ROSA
-    // root and the keep-out never fires. 10 mm more standoff is the honest
-    // lever — it is the part whose job this is. Pinned by test-RosaFurl.
+    // Root mounting bracket standoff from the bus: it holds the furled roll off the hull, so it is sized BY the
+    // coil: the spool axis lands at COLLAR_RADIUS + 0.070 + 0.4·0.050 = 0.49 m (PlayerSatellite.rosaSpoolAxisM). The
+    // body PV is tiled on FLAT 22.5° facets, so a panel's azimuth corners lift to ~1.034·R ≈ 0.4136; the nearest
+    // corner (BarrelSolarPanel_11, the 11.25° facet) must clear a furled coil by the 20 mm gate. The ±8° `rosaKeep`
+    // PV keep-out in _buildBodyPanels cannot help: facet CENTRES land at 11.25°, so it never fires. Pinned by
+    // test-RosaFurl.
     ROSA_BRACKET_LEN: 0.070,      // m — root mounting bracket standoff from bus
     // The spool axis sits this fraction of a drum radius beyond the bracket:
     //   spoolAxis = COLLAR_RADIUS + ROSA_BRACKET_LEN + FRAC·ROSA_DRUM_R.
-    // Named because PlayerSatellite.rosaSpoolAxisM() is the single source the
-    // runtime AND the coil-clearance pins all read; it was a bare 0.4 literal
-    // typed out in three places.
+    // PlayerSatellite.rosaSpoolAxisM() is the single source the runtime AND the coil-clearance pins all read.
     ROSA_ROOT_DRUM_FRAC: 0.4,     // — spool-axis standoff, in drum radii
-    // Furl/unfurl runtime control (",") — snappy ~2.5 s full cycle (fraction/s).
-    ROSA_FURL_RATE: 0.40,          // 1/s — progress change per second when furling/unfurling
-    // Feather (Shift+",") — park the wings edge-on to a hazard. Snappier than a
-    // full furl (it only swings the tilt pivot, no roll-out), so retract is fast
-    // and most power is retained until the edge turns away from the sun.
+    ROSA_FURL_RATE: 0.40,          // 1/s — progress change per second when furling/unfurling (~2.5 s full cycle)
+    // Feather (Shift+",") — park the wings edge-on to a hazard. Snappier than a full furl (it only swings the tilt
+    // pivot, no roll-out), so retract is fast and most power is retained until the edge turns away from the sun.
     ROSA_FEATHER_RATE: 0.60,       // 1/s — feather progress change per second
-    // Tier-aware sun-track tilt clamp. Y0 struts sit 64° off the ROSA plane, so
-    // the loose ±30° clamp clears them; Y1+ tiers add 30°/330° struts only 30°
-    // from the plane, so when a strut is within ~30° the clamp tightens to this.
+    // Tier-aware sun-track tilt clamp. Y0 struts sit 64° off the ROSA plane, so the loose ±30° clamp clears them;
+    // Y1+ tiers add 30°/330° struts only 30° from the plane, so when a strut is within ~30° the clamp tightens to this.
     ROSA_TILT_CLAMP_TIGHT_DEG: 18, // deg — tighter sun-track tilt at higher tiers
-    // Mother-wings step 4: ROSA_POWER_FRACTION / BODY_MOUNT_POWER_FRACTION
-    // REMOVED (see the note by BODY_MOUNT_AREA_M2 above) — each surface now
-    // earns its own power from its own real area × incidence × furl.
 
-    // ── Mid-ring + wing motor box (mother-wings step 1/2, DECISIONS §10) ──
-    // The inside ring frame at mid-body (z=0) that wing hardware bolts to,
-    // instead of the three brackets that used to hang off the tilting
-    // sun-tracking pivot and swing clear of the hull at high tilt (owner:
-    // "3 black pillars seem to float on top of solar cells").
+    // --- Mid-ring + wing motor box (DECISIONS §10) ---
+    // The inside ring frame at mid-body (z=0) that wing hardware bolts to (owner: "3 black pillars seem to float on
+    // top of solar cells" — brackets on the tilting pivot swung clear of the hull at high tilt).
     MID_RING_INSET: 0.010,        // m — ring radius = COLLAR_RADIUS − this (just inside the skin)
     MID_RING_TUBE_R: 0.006,       // m — ring frame tube radius
-    // Fixed motor box: bolted to the body (child of the ship, NOT the tilting
-    // pivot) at each wing root (az 0°/180°, z=0). The drum's own axis is ON
-    // the tilt rotation axis (rosaSpoolAxisM = 0.49 m from the ship axis,
-    // drum radius ROSA_DRUM_R = 0.05 m — tilt-invariant, only spins in place),
-    // so its closest approach to the hull is a HARD ceiling: 0.49 − 0.05 =
-    // 0.44 m. The box's outer face (COLLAR_RADIUS + pad + deep = 0.40 + 0.003
-    // + 0.015 = 0.418 m) clears that by 22 mm at every tilt, by construction —
-    // measured `tmp/probe-rosa-tilt.mjs`. The on-axis yoke
-    // (`ROSA_Bracket_{0,180}deg`, −0.010…+0.060 pivot-local x = 0.390…0.460 m
-    // ship-frame) necessarily passes THROUGH this box — that is the design:
-    // the box is the fixed motor housing, the yoke is the output coupling
-    // shaft poking out through it to the drum (measured 1.7–2.2 mm to the
-    // housing wall — a real close-fit shaft seal, not a floating gap).
+    // Fixed motor box: bolted to the body (child of the ship, NOT the tilting pivot) at each wing root (az 0°/180°,
+    // z=0). The drum's own axis is ON the tilt axis (rosaSpoolAxisM = 0.49 m, drum radius 0.05 m — tilt-invariant),
+    // so its closest approach to the hull is a HARD ceiling: 0.49 − 0.05 = 0.44 m. The box's outer face
+    // (COLLAR_RADIUS + pad + deep = 0.418 m) clears that by 22 mm at every tilt (tmp/probe-rosa-tilt.mjs). The
+    // on-axis yoke (`ROSA_Bracket_{0,180}deg`, 0.390…0.460 m ship-frame) passes THROUGH this box by design: the box
+    // is the fixed motor housing, the yoke the output coupling shaft to the drum (measured 1.7–2.2 mm to the housing
+    // wall — a close-fit shaft seal, not a floating gap).
     WING_MOTOR_BOX_LEN: 0.080,    // m — axial (Z) extent
     WING_MOTOR_BOX_WIDE: 0.070,   // m — tangential (Y) extent
     WING_MOTOR_BOX_DEEP: 0.015,   // m — radial (X) extent
     WING_MOTOR_PAD_H: 0.003,      // m — standoff pad between the hull and the motor box
 
-    // ── Wing-drum launch clamps (mother-wings step 3, DECISIONS §10) ──
-    // Each drum end is held to the front/back end ring (z = ±CORE_LENGTH/2)
-    // by a re-latchable hold-down latch (closed when the wings are fully
-    // rolled up, open before the wing unrolls or tilts). The drum-half
-    // rides the drum (a collar at the drum's own tip, z ±1.02·ROSA_LENGTH/2).
-    // The BODY half is a hold-down BRACKET BOLTED TO THE END RING: a block
-    // bearing on the barrel's last WING_CLAMP_LAND of length and overhanging
-    // the rim under the drum collar, its top WING_CLAMP_SEAT_GAP below the
-    // collar. A release PIN (the real part: a pin-puller) bridges that gap
-    // while latched and withdraws into the bracket at release; the bracket
-    // itself never moves. Owner 2026-09-24 ("4 new floating black discs"):
-    // the first build put the body half on the DRUM's axis, 30 mm off the
-    // skin with no mount — measured tmp/clamp-float.mjs — so once the wing
-    // tilted away it hung in space. Why the bracket can never be hit: the
-    // wing tilts about the radial (x) axis, so no wing point ever changes its
-    // height x above that side of the body; the wing's lowest point at the ends is the drum collar
-    // (spoolAxis − 1.2·ROSA_DRUM_R = 0.430 m), and the bracket top is
-    // SEAT_GAP under it at every tilt. Measured: tmp/clamp-site.mjs.
+    // --- Wing-drum launch clamps (DECISIONS §10) ---
+    // Each drum end is held to the front/back end ring (z = ±CORE_LENGTH/2) by a re-latchable hold-down latch
+    // (closed when the wings are fully rolled up, open before the wing unrolls or tilts). The drum-half rides the
+    // drum (a collar at the drum's own tip, z ±1.02·ROSA_LENGTH/2). The BODY half is a hold-down BRACKET BOLTED TO
+    // THE END RING: a block bearing on the barrel's last WING_CLAMP_LAND of length and overhanging the rim under the
+    // drum collar, its top WING_CLAMP_SEAT_GAP below the collar. A release PIN (a pin-puller) bridges that gap while
+    // latched and withdraws into the bracket at release; the bracket itself never moves. owner 2026-09-24 ("4 new
+    // floating black discs"): the body half must be mounted, not hung in space once the wing tilts away. The
+    // bracket can never be hit: the wing tilts about the radial (x) axis, so its lowest point at the ends is the
+    // drum collar (spoolAxis − 1.2·ROSA_DRUM_R = 0.430 m) at every tilt, SEAT_GAP above the bracket top (tmp/clamp-site.mjs).
     WING_CLAMP_LEN: 0.012,        // m — drum collar axial length
     WING_CLAMP_SEAT_GAP: 0.005,   // m — bracket top below the drum collar (the pin bridges it)
     WING_CLAMP_W: 0.030,          // m — bracket width (tangential)
@@ -2331,235 +1906,150 @@ export const Constants = {
     WING_CLAMP_PIN_R: 0.005,      // m — release-pin radius
     WING_CLAMP_RELATCH_TILT_DEG: 0.5,  // deg — both wing tilts within this of 0 lets the re-stow latch close (owner 2026-09-25; tilt then snaps to exactly 0)
 
-    // ── Hinge (NEW) ──
+    // --- Hinge ---
     HINGE_MOTOR_TORQUE: 10,        // N·m
     HINGE_BEARING: 'Si3N4_MoS2',
 
-    // ── Launch Vehicle (NEW) ──
-    // Design 7b (2026-09-08) re-pinned the envelope from the built model in its
-    // launch state (daughters in their channels, ROSA furled, the aft flower
-    // fore-folded along the barrel — probe 7b.4c B′). At that time the furled
-    // coils set the diameter at Ø1.275.
-    //
-    // ROSA coil-physics fix: the coil radius is now DERIVED (see
-    // PlayerSatellite.rosaFurledCoilRadiusM) instead of being a styled ×3 scale,
-    // and the standoff bracket grew to hold it off the body PV, so a furled coil
-    // reaches 0.49 + 0.0546 = 0.5446 → Ø1.089 and NO LONGER sets the diameter.
-    // The widest stowed item is now the folded flower pack (r_max 0.546 →
-    // Ø1.092), measured by test-FlowerLaunchFold T7(ii).
-    // The stack got 18 cm narrower purely by telling the truth about the coil.
-    // Length (until 2026-10-15): FEEP exits (z −1.075) to folded flower tips (z 1.505); now set by the sun-sensor windows (z 1.332) — see STOWED_ENVELOPE_LEN.
+    // --- Launch vehicle ---
+    // Envelope pinned from the built model in its launch state (daughters in their channels, ROSA furled, the aft
+    // flower fore-folded along the barrel). The furled ROSA coil radius is DERIVED (PlayerSatellite.rosaFurledCoilRadiusM):
+    // a furled coil reaches 0.49 + 0.0546 = 0.5446 → Ø1.089 and does not set the diameter; the widest stowed item is
+    // the folded flower pack (r_max 0.546 → Ø1.092), measured by test-FlowerLaunchFold T7(ii).
     LAUNCH_VEHICLE: 'SSLV',
-    STOWED_ENVELOPE_DIA: 1.13,     // m — folded flower packs Ø1.121 (was Ø1.092 before the 20 mm wing gap cleared the boom; furled ROSA coils Ø1.089 sit inside)
+    STOWED_ENVELOPE_DIA: 1.13,     // m — folded flower packs Ø1.121; furled ROSA coils Ø1.089 sit inside
 
-    // v12-radiator-20 (owner 2026-10-16): the folded tips now end at +1.305, inside the docking collar (ring z 1.280–1.320), so
-    // they no longer set the length. Measured (tmp/probes/rs-top.mjs, LAUNCH hull state, real meshes): hull z −1.085 (FEEP neutralisers)
-    // … +1.332 (SunSensor windows) = 2.417 m → 2.42. Was 2.58 = FEEP −1.075 … folded tips +1.505.
+    // The folded flower tips end at +1.305, inside the docking collar (ring z 1.280–1.320), so they do not set the
+    // length. Measured (tmp/probes/rs-top.mjs, LAUNCH hull state, real meshes): hull z −1.085 (FEEP neutralisers)
+    // … +1.332 (SunSensor windows) = 2.417 m → 2.42.
     STOWED_ENVELOPE_LEN: 2.42,     // m — FEEP/neutralisers −1.085 … sun-sensor windows +1.332 (folded flower tips +1.305 are inside)
 
-    // ── Mass Budget (UPDATED for Config G — §10.11 canonical) ──
-    // Cargo-continuity S13(c): +15 kg for the nose berthing collar (B is
-    // doctrine — the 2026-08-14 owner ruling): coreDry 161 → 176, the budget's
-    // ship is 179 → 194 kg, wet 242.4 → 257.4, ΔV 3096 → 2897 m/s empty (the
-    // S12 memo's structural row, measured M1).
-    TOTAL_DRY_MASS: 211.4,         // was 196.4
-    CORE_DRY_MASS: 176.0,          // was 161 — bus + ROSA + body-mount + collar (S13(c))
-    CORE_WET_MASS: 222,            // was 216 — 176 + 40 + 6 (collar-era dry + carried propellant; register item 56)
-    WEAVER_MASS: 6.6,              // unchanged
-    SPINNER_MASS: 2.1,             // unchanged
+    // --- Mass budget (§10.11 canonical) ---
+    // Every tier's bus includes the +15 kg nose berthing collar (core hardware, not tier hardware).
+    TOTAL_DRY_MASS: 211.4,
+    CORE_DRY_MASS: 176.0,          // bus + ROSA + body-mount + collar
+    CORE_WET_MASS: 222,            // 176 + 40 + 6 (collar-era dry + carried propellant; register item 56)
+    WEAVER_MASS: 6.6,
+    SPINNER_MASS: 2.1,
     FRONT_ARM_MASS: 6.6,           // retained for Y3
     BACK_ARM_MASS: 6.6,            // retained for Y3
 
-    // ── Arm Counts (keeping same structure) ──
+    // --- Arm counts ---
     ARM_COUNT: 4,
     WEAVER_COUNT: 2,
     SPINNER_COUNT: 2,
     FRONT_ARM_COUNT: 0,
     BACK_ARM_COUNT: 0,
 
-    // ── Geometry (DEPRECATED equatorial values → Config G replacements) ──
+    // --- Geometry ---
     BACK_ARM_OFFSET: 0.3,          // DEPRECATED — no back arm at Y0
 
-    // ── Power & Thrust (carried forward) ──
+    // --- Power & thrust ---
     CORE_BATTERY: 600,             // Wh
     CORE_SOLAR_AREA: 5.0,          // m²
-    CORE_SOLAR_POWER: 1900,        // W — DEPRECATED legacy Epic-9 mass-table figure;
-                                    // the live power path is _updateSolarPower's
-                                    // per-cell/per-wing sum (top-level
-                                    // Constants.SOLAR_PANEL_AREA is the current
-                                    // real-total-area figure, mother-wings step 4)
+    CORE_SOLAR_POWER: 1900,        // W — DEPRECATED legacy mass-table figure; live power is _updateSolarPower's per-cell/per-wing sum
     CORE_LASER_POWER: 200,         // W
     CORE_LASER_OPTICAL: 120,       // W
     CORE_HALL_THRUST: 0.01,        // N
     CORE_HALL_ISP: 1500,           // s
 
-    // ── Tether (unchanged) ──
+    // --- Tether ---
     TETHER_LENGTH_DEFAULT: 2000,   // m
     TETHER_MATERIAL: 'Dyneema SK78',
   },
 
-  // ============================================================================
-  // ST-9.2 ARM TECH LADDER — Quad Y0 → Hex Y1 → Octo Y3
-  // Progression from 4 to 8 arms. Only Quad ships; Hex/Octo are reserved rows
-  // (the shipyard-refit switch that once gated them was removed).
-  // See CROSSBOW_ARMS.md §12.5 + §25 for mass derivation.
-  // ============================================================================
+  // ARM TECH LADDER — Quad Y0 → Hex Y1 → Octo Y3. Only Quad ships; Hex/Octo are reserved rows.
+  // Mass derivation: archive/CROSSBOW_ARMS.md §12.5 + §25.
   ARM_LADDER: {
-    // S13(c): every tier's bus carries the +15 kg nose collar (the collar is
-    // core hardware, not tier hardware) — Y0 211.4/257.4, deltas unchanged.
+    // Every tier's bus carries the +15 kg nose collar (core hardware) — Y0 211.4/257.4.
     Y0_QUAD: { armCount: 4, weaverCount: 2, spinnerCount: 2, frontArmCount: 0, backArmCount: 0, dryMass: 211.4, wetMass: 257.4, unlocked: true,  tier: 0, azimuths: [64, 116, 244, 296] },
     Y1_HEX:  { armCount: 6, weaverCount: 3, spinnerCount: 3, frontArmCount: 0, backArmCount: 0, dryMass: 223.0, wetMass: 269.0, unlocked: false, tier: 1, azimuths: [30, 90, 150, 210, 270, 330] },
     Y3_OCTO: { armCount: 8, weaverCount: 3, spinnerCount: 3, frontArmCount: 1, backArmCount: 1, dryMass: 237.0, wetMass: 283.0, unlocked: false, tier: 3, azimuths: [30, 90, 150, 210, 270, 330], endFaceArms: ['+Z', '-Z'] },
   },
 
-  // ============================================================================
-  // THERMAL (P2 — flower hardware, observe-only; block reserved by the P1
-  // ledger .kilo/plans/1787831047000-aft-rim-allocation-and-reservations.md §5)
-  // ============================================================================
-  // AFT FLOWER — 4 rigid aft-pivot struts with radiator plates and inert tip
-  // hardpoints. The struts "open LIKE A FLOWER" (owner grammar — keep verbatim).
-  // OBSERVE-ONLY at P2: they draw and slew, throttle nothing; thermal state and
-  // numbers are P3, throttle P4, tip cargo booking P5.
-  //
-  // Every number below is pinned by tmp/flower-pose-band.mjs (probe 2, byte-
-  // stable; P1 re-derivation gate passed: margin = 0.21199·R + 0.20021,
-  // conservative ceiling 147.35° at R=4, straight-aft limit R=1.714 m, cargo
-  // pose 1.9 m bag +0.780 m) and tmp/flower-mass-budget.mjs (probe 4).
-  // The P1 allocation table is BINDING: stations at az 45/135/225/315
-  // ± 11.25° (Design 7b clocks the hinges to 40/140/220/320 — INSIDE those
-  // grants), hinge band z −1.000..−0.886 at r 0.34..0.51 (Design 7b widened
-  // the bracket band from 0.46 — the owner-approved launch-only amendment),
-  // deployed envelope z ≤ −1.0, pose band θ ∈ [90°,146°] under thrust,
-  // θ ≥ 90° in orbit; θ ∈ [0°, 90°) exists ONLY under the one-shot launch
-  // lock (Design 7b, .kilo/plans/1788863400000-radiator-launch-fold-redesign.md).
+  // THERMAL: aft flower hardware — 4 rigid aft-pivot struts with radiator plates and inert tip hardpoints. The
+  // struts "open LIKE A FLOWER" (owner grammar — keep verbatim).
+  // Every number below is pinned by tmp/flower-pose-band.mjs (margin = 0.21199·R + 0.20021, conservative ceiling
+  // 147.35° at R=4, straight-aft limit R=1.714 m, cargo pose 1.9 m bag +0.780 m) and tmp/flower-mass-budget.mjs.
+  // The aft-rim allocation table is BINDING: stations at az 45/135/225/315 ± 11.25° (the hinges at 40/140/220/320
+  // are INSIDE those grants), hinge band z −1.000..−0.886 at r 0.34..0.51 (owner-approved launch-only widening),
+  // deployed envelope z ≤ −1.0, pose band θ ∈ [90°,146°] under thrust, θ ≥ 90° in orbit; θ ∈ [0°, 90°) exists ONLY
+  // under the one-shot launch lock.
   THERMAL: {
     FLOWER: {
-      // ── Stations (allocation table rows FLOWER-NE/NW/SW/SE, binding) ──
-      // Design 7b (2026-09-08, "has to fold to fit in rocket for launch"): the
-      // flower folds FORE along the barrel for launch (θ 0), so the fore-folded
-      // boom root must thread the lane between the docked weaver bodies (az
-      // 60 ± 12.5°, r to 0.528 in the pocket band) on the OUTBOARD side and the
-      // MGA patch (az 9.8..40.2, r 0.424), the net-launcher pods (two at
-      // ±0.45 m until 2026-10-13; one centred launcher now) and the furled
-      // ROSA coil on the INBOARD side. That balance landed on 41°.
+      // --- Stations (allocation table rows FLOWER-NE/NW/SW/SE, binding) ---
+      // The fore-folded boom root must thread the lane between the docked weaver bodies (az 60 ± 12.5°, r to 0.528 in
+      // the pocket band) on the OUTBOARD side and the MGA patch (az 9.8..40.2, r 0.424), the net launcher and the
+      // furled ROSA coil on the INBOARD side. That balance lands on 40°.
       //
-      // ROSA coil-physics fix: the coil radius became derived rather than
-      // styled (PlayerSatellite.rosaFurledCoilRadiusM ≈ 0.0546 vs the old
-      // 0.1575), moving the coil wall 103 mm inboard and lifting the constraint
-      // that had held the stations OFF the ROSA plane — the old note's "40° →
-      // coil 23 mm" is now "40° → coil 129 mm".
+      // The inboard wall that binds is the PLUME CONE at the STOW pose. The main FEEP sit at az 0/90/180/270, so the
+      // stations are squeezed between a thruster at 0° and a daughter at 64°; STOW (146°) is the thrust-band ceiling,
+      // the one ladder pose held while the engines burn. The 0.70 m STOW-specific gate was never derived from a stated
+      // margin (DECISIONS §5a: it was fitted to a Constants.THRUSTERS table that did not match the built ship).
+      // Measured on the corrected table (real apexes r 0.200 m / z −1.075, tmp/flower-reclock-probe.mjs convention):
       //
-      // But the coil was never the only inboard wall, and the one that binds
-      // now is the PLUME CONE at the STOW pose. The main FEEP sit at az
-      // 0/90/180/270, so the stations are squeezed between a thruster at 0° and
-      // a daughter at 64°; STOW (146°) is the thrust-band ceiling, i.e. the one
-      // ladder pose held while the engines burn — a higher STOW-specific gate
-      // WAS intended here (vs the 0.15 m P1 floor for PARK/CARGO) precisely
-      // because that is where exhaust would play on a radiator, but the 0.70 m
-      // number below was never actually derived from a stated margin (DECISIONS
-      // §5a, 2026-09-24: it was fitted to a Constants.THRUSTERS table that did
-      // not match the built ship). Re-measured on the CORRECTED table (real
-      // apexes r 0.200 m / z −1.075, tmp/flower-reclock-probe.mjs convention):
-      //
-      //     az   hull(MGA)  weaver   coil    STOW cone (corrected 2026-09-24)
-      //     41     0.023    0.025    0.137     0.267     <- old station
-      //     40     0.022    0.032    0.129     0.265     <- new station
-      //     39     0.022    0.040    0.121     0.262
+      //     az   hull(MGA)  weaver   coil    STOW cone
+      //     41     0.023    0.025    0.137     0.267
+      //     40     0.022    0.032    0.129     0.265     <- station
       //     38     0.023    0.048    0.112     0.260
       //     36     0.026    0.063    0.096     0.255
       //
-      // Every row now fails the 0.70 m gate (they always did — the gate was
-      // reading a defective 0.71-ish measurement, not the real ~0.26 m); the
-      // RELATIVE ordering across stations is unchanged (the correction scales
-      // every row by the same wider-cone factor), so 40° is still the least
-      // costly station on this axis. What the real STOW floor should be is an
-      // owner call (HANDOFF "Open / owed"); it does not reopen the 40° choice.
-      //
-      // So the coil fix buys 2° of honest room, not the ~11° an azimuth-only
-      // reading of it suggests. 40° takes it: +28 % docked-daughter clearance
-      // (25 → 32 mm) with 12 mm still in hand on the binding cone gate and 2°
-      // to its cliff. Going further trades a years-long plume-contamination
-      // margin for millimetres of visual gap — the wrong trade, and the lever
-      // for a larger gain is the MGA patch or the STOW angle, not this number.
-      // Pairs stay exact diagonals (trim-neutral); 40° is inside the P1
-      // ±11.25° station grant (33.75..56.25).
+      // Every row fails the 0.70 m gate (the real cone is ~0.26 m); the ordering across stations is unchanged, so 40°
+      // is the least costly station. What the real STOW floor should be is an owner call (HANDOFF "Open / owed"); it
+      // does not reopen the 40° choice. 40° gives +28 % docked-daughter clearance (25 → 32 mm) with 12 mm still in
+      // hand on the binding cone gate and 2° to its cliff; going further trades plume-contamination margin for
+      // millimetres of visual gap. Pairs stay exact diagonals (trim-neutral); 40° is inside the ±11.25° station
+      // grant (33.75..56.25).
       AZIMUTHS_DEG: [40, 140, 220, 320],
-      PAIR_A_AZ_DEG: [40, 220],    // trim-neutral diagonal (S12 ⟂-CoM 0.0000)
+      PAIR_A_AZ_DEG: [40, 220],    // trim-neutral diagonal (⟂-CoM 0.0000)
       PAIR_B_AZ_DEG: [140, 320],   // second diagonal — shop stages pairs
-      // Hinge pin r 0.475 (was 0.40 = the rim). The clevis stands 7.5 cm above
-      // the rim so the fore-folded boom's inner surface (0.475 − 0.03 = 0.445)
-      // passes OVER the body-PV facet corners (r 0.412) and the MGA patch's
-      // near corner (az 39.5°, r 0.4236) — measured on the built model (T7,
-      // exact point-to-triangle): PV 0.036 / MGA 0.023 m. The plan's 0.47 came
-      // from the probe's 8-point boom sampling (MGA "0.023"); the real Ø60 mm
-      // tube at 0.47 clears the MGA corner by only 0.0178 — under the T7 (i)
-      // gate of 0.020 — so the pin rose 5 mm (WING_GAP_M shrank 5 mm to keep
-      // the pack r_max at 0.546; it later grew to 0.020 to clear the boom, r_max
-      // 0.560 — see WING_GAP_M). The P1 ring is still the rim r 0.40; the
-      // bracket box spans r 0.37..0.51 (the amended band's top).
+      // Hinge pin r 0.475 (the rim is 0.40). The clevis stands 7.5 cm above the rim so the fore-folded boom's inner
+      // surface (0.475 − 0.03 = 0.445) passes OVER the body-PV facet corners (r 0.412) and the MGA patch's near
+      // corner (az 39.5°, r 0.4236) — measured on the built model (T7, exact point-to-triangle): PV 0.036 / MGA
+      // 0.023 m (the real Ø60 mm tube at r 0.47 clears the MGA corner by only 0.0178, under the T7 (i) gate of
+      // 0.020). WING_GAP_M trades against this to keep the pack r_max. The bracket box spans r 0.37..0.51.
       HINGE_R_M: 0.475,
       HINGE_Z_M: -1.0,             // rim plane
 
-      // ── Design 7b two-layer folding plate (GEO-comsat pattern) ──
-      // Each 1.50 × 0.60 plate (1.70 before 2026-10-16) is a 0.30 m CENTRE panel on the boom plus two
-      // FULL 0.15 m wings hinged along the boom line on 2.5 cm offset hinges
-      // (butt-jointed when open — width 0.60, area 3.582 m² built: 3.60 less the
-      // wings' 15 mm tip inset; test-FlowerPose). For launch the wings fold onto the centre side by side
-      // (one layer, meeting edge-to-edge at the boom line) and the strut
-      // swings to θ 0: four 0.32 × 0.117 × 1.50 m packs (hinges included) along the
-      // barrel. Wing angle is a pure function of θ (lanyard law, T4) — no new
-      // persisted state; orbit always shows them open.
+      // --- Two-layer folding plate (GEO-comsat pattern) ---
+      // Each 1.50 × 0.60 plate is a 0.30 m CENTRE panel on the boom plus two FULL 0.15 m wings hinged along the boom
+      // line on 2.5 cm offset hinges (butt-jointed when open — width 0.60, area 3.582 m² built: 3.60 less the
+      // wings' 15 mm tip inset; test-FlowerPose). For launch the wings fold onto the centre side by side and the
+      // strut swings to θ 0: four 0.32 × 0.117 × 1.50 m packs (hinges included) along the barrel. Wing angle is a
+      // pure function of θ (lanyard law, T4) — no persisted state; orbit always shows them open.
       PLATE_CENTRE_HALF_WIDTH_M: 0.15,   // centre panel ±0.15 (wings 0.15..0.30)
-      // Folded layer gap. Was 0.005 — measured 2026-09-24 (owner: "some magic
-      // handwaving", tmp/radiator-fold-audit.mjs): the Ø60 mm boom stands
-      // 15 mm proud of the centre panel's faces, so at 5 mm the folded wings
-      // sat 10 mm deep in the boom along their whole length. 0.015 exactly
-      // touches it; 0.020 clears it by 5 mm (tmp/radiator-fold-fix.mjs).
-      // Hinge-axis standoff = (gap + thick) / 2 = 0.025 below the mid-plane.
+      // Folded layer gap: the Ø60 mm boom stands 15 mm proud of the centre panel's faces. 0.015 exactly touches it;
+      // 0.020 clears it by 5 mm (tmp/radiator-fold-fix.mjs). Hinge-axis standoff = (gap + thick) / 2 = 0.025.
       WING_GAP_M: 0.020,
-      // The wings stop this far short of the plate's tip end: folded, they
-      // move under the centre panel, where the Ø100 mm tip boss (boom x
-      // 2.44…2.505 at the old 2.5 m boom; it moves with the boom end, so about
-      // 2.24…2.305 at 2.30 m — shifted by 0.20, not re-probed) would otherwise
-      // hold their last 10 mm (measured, same probes). 15 mm → 5 mm clear of the boss.
+      // The wings stop this far short of the plate's tip end: folded, they move under the centre panel, where the
+      // Ø100 mm tip boss (boom x about 2.24…2.305; not re-probed) would otherwise hold their last 10 mm.
       WING_TIP_INSET_M: 0.015,
-      // Real hinge hardware on each fold line (the design booked 0.4 kg per
-      // strut for "the two wing hinge lines" and never built them — nothing
-      // joined a wing to the centre panel). Two hinges per line, each a
-      // panel-side lug and a wing-side lug on one axis: a barrel of radius
-      // (standoff − thick/2) = 10 mm, which touches the centre panel's lower
-      // edge AND the wing's inner edge in every pose, with a 2 mm leaf bolted
-      // along the face it belongs to.
+      // Real hinge hardware on each fold line: two hinges per line, each a panel-side lug and a wing-side lug on one
+      // axis (barrel radius 10 mm, touching the centre panel's lower edge AND the wing's inner edge in every pose),
+      // with a 2 mm leaf bolted along the face it belongs to.
       WING_HINGE_X_M: [-0.6, 0.6],  // hinge centres, along the strut from the plate centre
       WING_HINGE_LUG_M: 0.04,       // each lug's length along the axis (lugs 10 mm apart)
       WING_HINGE_LEAF_M: 0.03,      // leaf reach from the axis across the panel face
       WING_SEAM_M: 0.02,           // dark hinge-seam strip on the centre panel's edge (reads at 3 m)
       SEAM_END_INSET_M: 0.01,      // both seam sets stop 1 cm short of each panel end (log-depth: end caps never coplanar)
-      // (KNUCKLE_M [0.08, 0.03] — the buried centre-panel knuckle blocks — removed 2026-09-09 with the set itself, owner's request; the wing knuckles are sized inline in _buildFlowerPair)
+      // The wing knuckles are sized inline in _buildFlowerPair.
       WING_OPEN_DEG: 180,          // deployed dihedral — 180 = wings flat in the plate plane (owner Q4)
       WING_OPEN_START_DEG: 60,     // lanyard: the wings start opening at θ 60° …
       WING_OPEN_END_DEG: 90,       // … and latch flat by θ 90° (the full bloom)
 
-      // ── Geometry (probe 2 §1/§4: min enforced-cone clearance with THIS
-      //    plate at stow/park/cargo = 0.571/0.746/1.062 m — all ≥ 0.15 floor;
-      //    plate root 0.601 m off the Y3 X=0 sweep plane vs 0.28 grant) ──
-      STRUT_LENGTH_M: 2.30,        // v12-radiator-20 (owner 2026-10-16, "20 cm, please"): was 2.5; tips end just inside the docking collar (closed 2° pad top z 1.305 vs ring front face 1.320). Bare-strut band ceiling 148.76° > reserved 146° was measured at 2.5
+      // --- Geometry (min enforced-cone clearance with THIS plate at stow/park/cargo = 0.571/0.746/1.062 m, all
+      //     ≥ 0.15 floor; plate root 0.601 m off the Y3 X=0 sweep plane vs 0.28 grant) ---
+      STRUT_LENGTH_M: 2.30,        // owner 2026-10-16 ("20 cm, please"); tips end just inside the docking collar (closed 2° pad top z 1.305 vs ring front face 1.320)
       STRUT_RADIUS_M: 0.030,       // boom tube
       PLATE_HALF_WIDTH_M: 0.30,    // TANGENTIAL half-width (allocation clause)
-      PLATE_START_M: 0.75,         // ≥ w/2 + 0.28/sin45 off the sweep plane (probe §1e)
-      PLATE_END_M: 2.25,           // 0.05 m bare at the tip for the hardpoint (was 2.45)
+      PLATE_START_M: 0.75,         // ≥ w/2 + 0.28/sin45 off the sweep plane
+      PLATE_END_M: 2.25,           // 0.05 m bare at the tip for the hardpoint
       PLATE_THICK_M: 0.03,
 
-      // ── Pose ladder (probe 2 §4; θ from +Z, α_aft = 180° − θ — P1 ledger
-      //    §10 row 7 convention). The orbit band was [90°,146°] until
-      //    DECISIONS §15 row 4 (2026-10-08) added CLOSED below it. ──
+      // --- Pose ladder (θ from +Z, α_aft = 180° − θ). CLOSED sits below the [90°,146°] orbit band (DECISIONS §15 row 4). ---
       //
-      // CLOSED — the orbit REST pose, FULLY FOLDED at 0° (owner 2026-10-16: "radiator struts should start in fully
-      // closed position. The slightly open position after clamp release is just too much reality for a sim,
-      // confusing, not needed now. Perhaps later for advanced players or flight engineers that care about every
-      // detail"). It was 2° (DECISIONS §15 row 4, 2026-10-08/09) only to keep the repo's 20 mm design margin while a
-      // daughter strut swings past. Measured 2026-10-16 on the built model (probe on main 01c96e30; real meshes
-      // incl. the daughters and hinge parts, exact point-to-triangle, ±3 mm):
+      // CLOSED — the orbit REST pose, FULLY FOLDED at 0° (owner 2026-10-16: radiators start fully closed). It was 2°
+      // (DECISIONS §15 row 4, 2026-10-08/09) only to keep the 20 mm design margin while a daughter strut swings past.
+      // Measured on the built model (real meshes incl. the daughters and hinge parts, exact point-to-triangle, ±3 mm):
       //
       //                                      radiator 0°            radiator 2°
       //   min gap, strut sweep 0-180°        9.6 mm (strut 9.0°)    26.1 mm (strut 6.9°)
@@ -2567,191 +2057,116 @@ export const Constants = {
       //   strut angles under 20 mm           3-15° (25 of 361)      none
       //
       // No contact anywhere (closest pair: the daughter clip on strut 3 vs that radiator's plate). Net-launch path
-      // 305 mm (385 at 2°), plume cones 0.325 m (0.326). So a stowed radiator
-      // is held to a 9 mm margin (test-StartPose D0), every other angle keeps 20 mm. Older rows, 2026-10-09
-      // (tmp/probes/start-pose-fold.mjs, 20 mm gate): θ 1 → 18.5 mm, 1.5 → 22.5, 5 → ≥ 40; fixed hull 21.8 mm
-      // at 0° (MGA patch), 45.2 at 2°; wings at their 5° dodge 40.9 mm at 0°, 78.3 at 2°.
-      // Every θ 0-90 sits fore of every FEEP apex (3-D ≥ 0.325 m to the 35° cones), so thrust is allowed over the
-      // whole driver band [0°, 146°]. The side-wings fold on the lanyard below 60°. Power/sensor costs of a folded
-      // radiator (measured at 2°, 2026-10-09; not re-measured at 0°): solar sphere average 527 W vs 634 W at the
-      // bloom, the folded packs block most of the MGA patch and sun sensors 2/3.
+      // 305 mm, plume cones 0.325 m. So a stowed radiator is held to a 9 mm margin (test-StartPose D0), every other
+      // angle keeps 20 mm. Every θ 0-90 sits fore of every FEEP apex (3-D ≥ 0.325 m to the 35° cones), so thrust is
+      // allowed over the whole driver band [0°, 146°]. The side-wings fold on the lanyard below 60°. Power/sensor
+      // costs of a folded radiator (measured at 2°): solar sphere average 527 W vs 634 W at the bloom, the folded
+      // packs block most of the MGA patch and sun sensors 2/3.
       POSE_CLOSED_DEG: 0,
-      REST_POSE: 'CLOSED',         // the orbit rest (D4 contract: boot, the
-                                   // opening dance, every endState(), O's
-                                   // closed end); 'STOW' is the old bud
-      // The OPEN pose — 146° (owner 2026-10-09, DECISIONS §15 "Radiator
-      // angles"): what O, the F1 bar, the REFIT chip and the heat auto-open
-      // all open a closed radiator to, and where it settles back to from 180°
-      // (RETURN_TO_OPEN_S below, or at once when ion thrust is commanded).
-      // The player can still push on to POSE_VENT_DEG (180°) or fold to 0°.
+      REST_POSE: 'CLOSED',         // the orbit rest (D4 contract: boot, the opening dance, every endState(), O's closed end)
+      // The OPEN pose — 146° (owner 2026-10-09, DECISIONS §15 "Radiator angles"): what O, the F1 bar, the REFIT chip
+      // and the heat auto-open all open a closed radiator to, and where it settles back to from 180°
+      // (RETURN_TO_OPEN_S below, or at once when ion thrust is commanded). The player can still push on to
+      // POSE_VENT_DEG (180°) or fold to 0°.
       OPEN_POSE: 'STOW',
-      // θ of REST_POSE — the ONE rest-pose → angle mapping (PlayerSatellite.
-      // _flowerRestDeg and OpeningDance both read it). An unknown name falls
-      // back to the 146° bud, the owner's stated fallback.
+      // θ of REST_POSE — the ONE rest-pose → angle mapping (PlayerSatellite._flowerRestDeg and OpeningDance both
+      // read it). An unknown name falls back to the 146° bud, the owner's stated fallback.
       get REST_DEG() {
         const F = Constants.THERMAL.FLOWER;
         const map = { CLOSED: F.POSE_CLOSED_DEG, STOW: F.POSE_STOW_DEG, PARK: F.POSE_PARK_DEG, CARGO: F.POSE_CARGO_DEG };
         const deg = map[F.REST_POSE];
         return Number.isFinite(deg) ? deg : F.POSE_STOW_DEG;
       },
-      // θ of OPEN_POSE — same mapping as REST_DEG; an unknown name falls back
-      // to POSE_STOW_DEG (146°), the owner's stated open angle.
+      // θ of OPEN_POSE — same mapping as REST_DEG; an unknown name falls back to POSE_STOW_DEG (146°).
       get OPEN_DEG() {
         const F = Constants.THERMAL.FLOWER;
         const map = { CLOSED: F.POSE_CLOSED_DEG, STOW: F.POSE_STOW_DEG, PARK: F.POSE_PARK_DEG, CARGO: F.POSE_CARGO_DEG };
         const deg = map[F.OPEN_POSE];
         return Number.isFinite(deg) ? deg : F.POSE_STOW_DEG;
       },
-      // Real seconds a radiator pushed past OPEN_DEG (to POSE_VENT_DEG) may
-      // sit there after the player's last radiator command before it settles
-      // back to OPEN_DEG by itself (DECISIONS §15, owner 2026-10-09).
+      // Real seconds a radiator pushed past OPEN_DEG (to POSE_VENT_DEG) may sit there after the player's last
+      // radiator command before it settles back to OPEN_DEG by itself (DECISIONS §15, owner 2026-10-09).
       RETURN_TO_OPEN_S: 30,
-      // "…unless debris blocks the path" (owner 2026-10-09). Measured
-      // 2026-10-10 (lane w3-radiator-146, tmp/radiator-intrusion-probe2.mjs,
-      // real petal + ArmUnit meshes, spheres of the cargo's size at the game's
-      // own heldSlotAnchorInto slot, lateral axis swept 360°): the struts, the
-      // docked daughters and the nose-collar catch clear the petals over
-      // θ 146–180° (≥ 158 mm; the gate is 20 mm), but CARGO HELD ON A DOCKED
-      // DAUGHTER overlaps them while that daughter's strut angle α is low.
-      // Rows [sizeMeter ≤, first α in degrees (5° grid) that clears 20 mm for
-      // petals anywhere in 146–180°]; a size between rows takes the next
-      // (deeper) row, unknown size the last. Coarse: sphere model, ±~40 mm
-      // point-cloud thinning. While any such cargo sits below its row the
-      // automatic swings to OPEN_DEG (the 30 s settle, the ion-thrust swing)
-      // wait; the player's own commands are untouched (DECISIONS §11: held
-      // cargo is out of scope for the fold corridor).
-      // RE-MEASURED 2026-10-19 (lane rack-snug, Decision 6): a parked rack catch is no longer a sphere on a world-up ring at
-      // the strut tip — it is the REAL drawn mesh in a cell on the daughter, beside her end, fixed in her frame
-      // (ArmUnit.rackCellOffsetInto). tmp/rack-snug-radiator-probe.mjs (shared code js/test/_rackSnugRadiator.js, fixture
-      // js/test/fixtures/rack-snug-radiator.json): 4 real daughters × cells 0,1 × the 30 seeded catch attitudes in her frame
-      // (js/test/_rackSnugAttitudes.js) × α 0–90° (5° grid) × every size/type case (every fragment mesh; defunctSat to
-      // 9.2 m and rocketBody to 12.65 m, the largest the game spawns) against every petal triangle over θ 146–180° (2°
-      // steps), clear = 20 mm. A case's value is the smallest grid α from which every higher α clears. Old → new:
-      // 25→15 (≤ 0.5 m), 30→25 (≤ 1 m), 35→30 (≤ 1.5 m), 40→55 (beyond: rocketBody 8 m sets it; defunctSat 9.2 m 55,
-      // 8 m 50). Small cargo now clears sooner (it sits beside her end, not 1 m round the ring); the large rows rise
-      // (a long body parked beside her end reaches the petals farther out). Every row still sits below the plume floor.
-      // RE-MEASURED 2026-10-19 (lane rack-centre, owner "debris is off center from daughter"): the cells moved ONTO her
-      // axis (cell 0 centred, cell 1 stacked beyond it: ArmUnit.rackCellOffsetInto). Same probe
-      // (tmp/rack-snug-radiator-probe.mjs → js/test/fixtures/rack-snug-radiator.json) and sampling; a cell-1 placement
-      // has a second piece of the SAME case in cell 0 (3 of the 30 attitudes: js/test/_rackSnugAttitudes.js
-      // `belowAttitudeIndices`). Old → new: 15→20 (≤ 0.5 m), 25→30 (≤ 1 m), 30→35 (≤ 1.5 m), 55→80 (beyond: defunctSat
-      // 8 / 9.2 m and rocketBody 8 / 11 / 12.65 m all 80, rocketBody 5 m 75, defunctSat 5 m 65, rocketBody 3 m 55,
-      // defunctSat 3 m 45, defunctSat 2.2 m 35).
-      // FIX ROUND 1 (lane rack-centre, 2026-10-19, review): the single beyond row (80°, set by 8–12.65 m hulls) sat above
-      // the plume floor of the 1.6–2.8 m class (65°), so a 2.2 m catch re-posed to its plume floor would still have held
-      // the radiator's automatic swing back until 80°. Rows added at ≤ 2.8 m and ≤ 5 m (the plume ladder's bounds); same
-      // probe (cases defunctSat/rocketBody 2.8 m added; --skip-checks), same fixture. Old → new (this lane's first
-      // numbers → now): 80 → 50 (1.5–2.8 m: rocketBody 2.8 m 50, 2.8 defunctSat 40, 2.2 defunctSat 35), 80 → 75 (2.8–5 m:
-      // rocketBody 5 m 75, defunctSat 5 m 65, rocketBody 3 m 55, defunctSat 3 m 45), beyond 80 (unchanged: defunctSat 8 /
-      // 9.2 m, rocketBody 8 / 11 / 12.65 m). Every row now sits below the plume floor of its class (25/41/65/99/125/134°).
-      // big-seat 2026-10-28 (every rack piece now seats at its true 0.027 m gap, nearer her): re-measured with the same generator
-      // (scripts/probes/rack-snug-gen.mjs radiator, js/test/_rackSnugRadiator.js, 61 cases of the fixture, strut angles 5° grid from 90°, the sweep of
-      // the pieces above 5 m run up to 180°): 2.8 m row 50 -> 55 (rocket body 2.8 m), 5 m row 75 -> 80 (rocket body 5 m; dead sat 5 m 65 -> 70), the
-      // open row 80 -> 145 (dead sat 8 / 9.2 m 145; rocket body 8 / 11 / 12.65 m 105-110): no daughter's net takes a piece that big (<= 5.5 m), so the
-      // open row only protects a piece handed to her rack some other way; the rows at and below 1.5 m are unchanged (the 1 m seat limit never reached them).
+      // "…unless debris blocks the path" (owner 2026-10-09). Measured (tmp/radiator-intrusion-probe2.mjs, real petal
+      // + ArmUnit meshes, lateral axis swept 360°): the struts, the docked daughters and the nose-collar catch clear
+      // the petals over θ 146–180° (≥ 158 mm; the gate is 20 mm), but CARGO HELD ON A DOCKED DAUGHTER overlaps them
+      // while that daughter's strut angle α is low. Rows [sizeMeter ≤, first α in degrees (5° grid) that clears 20 mm
+      // for petals anywhere in 146–180°]; a size between rows takes the next (deeper) row, unknown size the last.
+      // While any such cargo sits below its row the automatic swings to OPEN_DEG (the 30 s settle, the ion-thrust
+      // swing) wait; the player's own commands are untouched (DECISIONS §11: held cargo is out of scope for the fold
+      // corridor).
+      // The rows are measured on the REAL drawn mesh in a rack cell on the daughter (ArmUnit.rackCellOffsetInto: cell 0
+      // centred on her axis, cell 1 stacked beyond it), every piece seated at its true 0.027 m gap:
+      // tmp/rack-snug-radiator-probe.mjs (shared code js/test/_rackSnugRadiator.js, fixture
+      // js/test/fixtures/rack-snug-radiator.json; generator scripts/probes/rack-snug-gen.mjs radiator): 61 cases × the
+      // 30 seeded catch attitudes in her frame (js/test/_rackSnugAttitudes.js; a cell-1 placement has a second piece
+      // of the SAME case in cell 0 for 3 of them, `belowAttitudeIndices`) × α 5° grid from 90° (pieces above 5 m up
+      // to 180°) × every size/type case (defunctSat to 9.2 m, rocketBody to 12.65 m, the largest the game spawns)
+      // against every petal triangle over θ 146–180° (2° steps), clear = 20 mm. A case's value is the smallest grid
+      // α from which every higher α clears. The open row 145 (dead sat 8 / 9.2 m 145; rocket body 8 / 11 / 12.65 m
+      // 105-110) only protects a piece handed to her rack some other way: no daughter's net takes a piece that big
+      // (<= 5.5 m). Plume floors of the size classes: 25/41/65/99/125/134°.
       CARGO_CLEAR_ALPHA_ROWS: [[0.5, 20], [1, 30], [1.5, 35], [2.8, 55], [5, 80], [Infinity, 145]],
-      POSE_STOW_DEG: 146,          // band-edge bud: θ→180° camps the Y3 axial
-                                   // reserve (r ≤ 0.45, ANY R — probe §2
-                                   // discovery) and is plume-illegal for
-                                   // R > 1.714 m under thrust
-      POSE_PARK_DEG: 135,          // radiator-duty pose (P3/P5 consume via
-                                   // setFlowerPose; brief §2.1 pose grammar)
-      POSE_CARGO_DEG: 90,          // the 90° bloom — tips at the rim plane, fore
-                                   // of the cone apexes, plume-clear at any R.
-                                   // Still a valid angle (dev flag, openFrac's
-                                   // full scale); nothing in play commands it
-                                   // since OPEN_POSE became 146°
-      POSE_FLOOR_DEG: 0,           // θ ≥ CLOSED in ORBIT — enforced IN the driver
-                                   // (= POSE_CLOSED_DEG = POSE_LAUNCH_DEG since
-                                   // 2026-10-16; it was 2, and 90 (the bloom)
-                                   // before DECISIONS §15 row 4). Also the low
-                                   // edge of the thrust band.
+      POSE_STOW_DEG: 146,          // band-edge bud: θ→180° camps the Y3 axial reserve (r ≤ 0.45, ANY R); plume-illegal for R > 1.714 m under thrust
+      POSE_PARK_DEG: 135,          // radiator-duty pose (consumed via setFlowerPose)
+      POSE_CARGO_DEG: 90,          // the 90° bloom — tips at the rim plane, fore of the cone apexes, plume-clear at any R.
+                                   // Still a valid angle (dev flag, openFrac's full scale); nothing in play commands it
+      POSE_FLOOR_DEG: 0,           // θ ≥ CLOSED in ORBIT — enforced IN the driver (= POSE_CLOSED_DEG = POSE_LAUNCH_DEG;
+                                   // DECISIONS §15 row 4). Also the low edge of the thrust band.
       // Tip stalks (leash tip hardware, PlayerSatellite._updateTipStalks): retracted at or below this θ and linearly out
-      // over the next 1° — 2°..3°, as when the closed floor was 2°. Its own constant: the floor is now 0°.
+      // over the next 1° (2°..3°). Its own constant, independent of the closed floor.
       STALK_FROM_DEG: 2,
-      POSE_THRUST_MAX_DEG: 146,    // P1 global keep-out 7 (reserved band edge)
-      // VENT — the deliberate over-open pose past the bud, reached only by a
-      // double-command (PlayerSatellite.toggleFlowerDeploy) and warned in COMMS.
+      POSE_THRUST_MAX_DEG: 146,    // global keep-out (reserved band edge)
+      // VENT — the deliberate over-open pose past the bud, reached only by a double-command
+      // (PlayerSatellite.toggleFlowerDeploy) and warned in COMMS.
       //
-      // Owner ask was "almost 180", then explicitly "full 180 for radiators,
-      // into exhaust cone, with warnings" (2026-09-22). An earlier pass set
-      // this to 158 — the last θ clear of BOTH hazards — which confused a
-      // HAZARD with a WALL. Re-measured on the built model
-      // (tmp/full180-collision-probe.mjs): nothing physically blocks the swing.
+      // owner 2026-09-22: "full 180 for radiators, into exhaust cone, with warnings". 158 (the last θ clear of BOTH
+      // hazards) would confuse a HAZARD with a WALL. Measured on the built model (tmp/full180-collision-probe.mjs):
+      // nothing physically blocks the swing.
       //
       //     θ     cone clear   Y3 camped   nearest hull mesh
       //    146      0.712        0.000       0.0531   ← the bud
-      //    158      0.094        0.000       0.0487
       //    160     -0.005        0.000       0.0481   ← enters the plume cone
       //    171.5    ~-0.6        0.000+      0.0458   ← starts camping Y3
       //    180      -0.935       1.662       0.0452   ← full open
       //
-      // The tightest PHYSICAL gap over the whole 146→180 sweep is 45.2 mm to
-      // Barrel_ConfigG at 180°, against the project's 20 mm gate; furled-coil
-      // penetration is 0.000 throughout and deck clearance never drops below
-      // 0.145 m. So 180 is reachable and the arm never touches the ship.
-      //
-      // What 180 costs is real but is not a collision: the panel sits 0.935 m
-      // INSIDE an exhaust cone and camps 1.662 m of the Y3 axial reserve. Both
-      // are warned in COMMS (POSE_VENT_CONE_DEG / POSE_VENT_Y3_DEG below).
-      // Thrust is already refused above POSE_THRUST_MAX_DEG by
-      // _flowerPoseBandGuard, so the cone is only dangerous if the drive could
-      // fire — and it cannot. No safety rule is relaxed to allow this pose.
-      //
-      // 146 still is not arbitrary: it is exactly where exhaust standoff
-      // reaches its 0.70 m floor, which is why the bud sits there.
+      // The tightest PHYSICAL gap over the 146→180 sweep is 45.2 mm to Barrel_ConfigG at 180°, against the 20 mm gate;
+      // furled-coil penetration is 0.000 throughout. What 180 costs is not a collision: the panel sits 0.935 m INSIDE
+      // an exhaust cone and camps 1.662 m of the Y3 axial reserve. Both are warned in COMMS (POSE_VENT_CONE_DEG /
+      // POSE_VENT_Y3_DEG below). Thrust is already refused above POSE_THRUST_MAX_DEG by _flowerPoseBandGuard, so the
+      // cone is only dangerous if the drive could fire — and it cannot. No safety rule is relaxed for this pose.
+      // 146 is not arbitrary: it is exactly where exhaust standoff reaches its 0.70 m floor.
       POSE_VENT_DEG: 180,
-      // Measured warning thresholds on the way out (0.5° sweep,
-      // tmp/vent-thresholds.mjs). Used for the escalating COMMS lines only —
-      // neither is a limit, and neither stops the swing.
+      // Measured warning thresholds on the way out (0.5° sweep, tmp/vent-thresholds.mjs). Used for the escalating
+      // COMMS lines only — neither is a limit, and neither stops the swing.
       POSE_VENT_CONE_DEG: 160,     // first θ inside an enforced plume cone
       POSE_VENT_Y3_DEG: 171.5,     // first θ camping the Y3 axial reserve
-      // Window for the second bud command that pushes through to the vent.
-      // Long enough to be a comfortable deliberate double-tap, short enough
-      // that two unrelated stow presses never read as one.
+      // Window for the second bud command that pushes through to the vent. Long enough to be a comfortable
+      // deliberate double-tap, short enough that two unrelated stow presses never read as one.
       VENT_DOUBLE_TAP_MS: 600,
-      // Design 7b LAUNCH pose: θ 0 — the strut lies FORE along the barrel with
-      // its wings folded (four 0.30 × 0.101 × 1.50 m packs at r ≤ 0.560, tips
-      // z 1.305 at the 2.30 m boom; 0.546 and 1.505 when the probe 7b.4c B′ below was run: MGA 0.023 / PV 0.031 / weaver 0.025 / coil
-      // 0.032 m). Reachable ONLY under the launch lock: setFlowerPose('LAUNCH')
-      // while a launch driver is active, the ?shot=1 dev hook with
-      // { force: true }, or — owner amendment 2026-09-09 — the SAFETY OVERRIDE
-      // sweep with { override: true } (PlayerSatellite.toggleFlowerOverride);
-      // the lock clears the frame the release swing reaches POSE_FLOOR_DEG and
-      // re-arms from orbit ONLY under OVERRIDE. The driver targets
-      // POSE_LAUNCH_DEG − 0.5° and lets the floor clamp hold θ at exactly 0
-      // (no SETTLE_EPS residual — the mock stopped 0.5° short).
+      // LAUNCH pose: θ 0 — the strut lies FORE along the barrel with its wings folded (four 0.30 × 0.101 × 1.50 m
+      // packs at r ≤ 0.560, tips z 1.305 at the 2.30 m boom; clearances MGA 0.023 / PV 0.031 / weaver 0.025 / coil
+      // 0.032 m). Reachable ONLY under the launch lock: setFlowerPose('LAUNCH') while a launch driver is active, the
+      // ?shot=1 dev hook with { force: true }, or — owner amendment 2026-09-09 — the SAFETY OVERRIDE sweep with
+      // { override: true } (PlayerSatellite.toggleFlowerOverride); the lock clears the frame the release swing
+      // reaches POSE_FLOOR_DEG and re-arms from orbit ONLY under OVERRIDE. The driver targets POSE_LAUNCH_DEG − 0.5°
+      // and lets the floor clamp hold θ at exactly 0 (no SETTLE_EPS residual).
       POSE_LAUNCH_DEG: 0,
-      // DECISIONS §10 (2026-09-23) — the automatic solar-wing dodge. The
-      // wings never make the radiator wait: the tilt law itself clamps to a
-      // clearance curve measured against the REAL meshes (the rebuilt
-      // tmp/probe-rosa-tilt.mjs and tmp/every-door-fine.mjs; validation: the
-      // bloom clash reproduces the DECISIONS §5 Debt number exactly — 16.7 mm
-      // at tilt 18°, θ 90). Two curves, one clamp (the minimum):
-      //
-      //   θ-curve (petals ↔ wings, tightest tilt keeping the 20 mm gate):
-      //     7° at θ 0, 20° at θ 10, 18° at θ 20, 15° plateau θ 30–90,
-      //     unconstrained (≥30°) above θ 100; non-monotone at θ 80–90 (the
-      //     gap recovers at 25–30°) — the law uses the conservative prefix.
-      //   α-curve (struts+daughters ↔ wings, at the orbit rest): no
-      //     constraint at α 0–5 and α 80–180; inside α 10–75 the ceiling
-      //     runs 30–60° with contacts at every feather-range tilt — i.e.
-      //     only FEATHERING (60–120°) clashes, never the ±30° tracking.
-      //
-      // With margin (the limits sit ≥3° under the measured safe prefix at
-      // every grid point):
-      //
-      // 2026-10-09 re-measure (lane w2-start-pose, tmp/probes/start-pose-fold.mjs
-      // §A, 1° tilt steps, conservative prefix): safe tilt 6° at θ 0, 8° at
-      // θ 2 (CLOSED), 15° at θ 5, 15–16° across θ 10–90, 17° at θ 95–97 and
-      // unconstrained (30°) from θ 98. The MID threshold was 95, so the law
-      // let a wing track 18–30° at θ 95–97: raised to 100 (the "above θ 100"
-      // the curve above already said). And the clamp now takes the LOWEST θ
-      // of a commanded swing from the command on (`_rosaDodgeLimitRad`): with
-      // the θ thresholds alone (MID 100) a close 146° → 2° with the wings
-      // feathered touched a petal (0.0 mm at θ 80), 90° → 2° came to 18.1 mm
-      // and the 146° → 90° O-press 13.5 mm (14.8 with MID 95, as shipped);
-      // with the early clamp they are 78.5 / 66.9 / 59.1 mm (§G).
+      // DECISIONS §10 — the automatic solar-wing dodge. The wings never make the radiator wait: the tilt law itself
+      // clamps to a clearance curve measured against the REAL meshes (tmp/probe-rosa-tilt.mjs and
+      // tmp/every-door-fine.mjs; the bloom clash reproduces the DECISIONS §5 Debt number exactly — 16.7 mm at tilt
+      // 18°, θ 90). Two curves, one clamp (the minimum):
+      //   θ-curve (petals ↔ wings, tightest tilt keeping the 20 mm gate): 7° at θ 0, 20° at θ 10, 18° at θ 20, 15°
+      //     plateau θ 30–90, unconstrained (≥30°) above θ 100; non-monotone at θ 80–90 — the law uses the
+      //     conservative prefix.
+      //   α-curve (struts+daughters ↔ wings, at the orbit rest): no constraint at α 0–5 and α 80–180; inside α 10–75
+      //     the ceiling runs 30–60° with contacts at every feather-range tilt — only FEATHERING (60–120°) clashes,
+      //     never the ±30° tracking.
+      // The limits sit ≥3° under the measured safe prefix at every grid point (tmp/probes/start-pose-fold.mjs §A, 1°
+      // tilt steps): safe tilt 6° at θ 0, 8° at θ 2, 15° at θ 5, 15–16° across θ 10–90, 17° at θ 95–97 and
+      // unconstrained (30°) from θ 98, hence MID = 100. The clamp takes the LOWEST θ of a commanded swing from the
+      // command on (`_rosaDodgeLimitRad`): with the θ thresholds alone a close 146° → 2° with the wings feathered
+      // touched a petal (0.0 mm at θ 80); with the early clamp the worst folds keep 59–79 mm (§G).
       WING_DODGE_LOW_THETA_DEG: 8,    // below this θ (folded flat): 5° limit
       WING_DODGE_LOW_LIMIT_DEG: 5,    // (measured 7° at θ 0; 8° at θ 2)
       WING_DODGE_MID_THETA_DEG: 100,  // below this θ (fold corridor + bloom): 12°
@@ -2759,62 +2174,39 @@ export const Constants = {
       WING_DODGE_ALPHA_LO_DEG: 5,     // strut-α band inside which feathering
       WING_DODGE_ALPHA_HI_DEG: 80,    // contacts the wing root hardware
       WING_DODGE_ALPHA_LIMIT_DEG: 25, // (measured ceiling ≥30° across α 10–75)
-      // DECISIONS §11 (2026-09-23, hinge +10cm / strut +10cm) re-measured
-      // (tmp/every-door-fine.mjs, tmp/every-door-dodge-limit.mjs): the raw
-      // (undodged) contact zone is α≈14–54 (worst 1.29 mm at α24, feather120)
-      // — still inside the [5,80] band with margin on both sides — and at the
-      // clamped 25° limit the worst gap across α 0–90 is 100.7 mm, nowhere
-      // near the 20 mm gate. All three constants stand unchanged.
-      // The clamp is applied AFTER the feather blend (the dodge wins over a
-      // feather request while the radiator is low or a strut is swung), and a
-      // fold in flight uses the LOW limit from the moment it arms — the wing
-      // motor (rate 1.75/s, τ ≈ 0.57 s) then beats the radiator to every θ
-      // by ≥1 s (feather 120° → 5° takes 2.05 s; the constraint first binds
-      // below θ 95, 3.4 s into the 15°/s swing). Power cost: the clamp only
-      // binds when the sun is off the wing plane by more than the limit —
-      // worst case ~5% of wing power at the bloom park (cos 18°), ~9% folded
-      // (cos 25°, while a folded radiator shadows the wings anyway), ~0.4%
-      // with struts aimed (cos 5°).
+      // DECISIONS §11 (hinge/strut +10 cm) re-measured (tmp/every-door-dodge-limit.mjs): the raw (undodged) contact
+      // zone is α≈14–54 (worst 1.29 mm at α24, feather120) — inside the [5,80] band with margin on both sides — and
+      // at the clamped 25° limit the worst gap across α 0–90 is 100.7 mm.
+      // The clamp is applied AFTER the feather blend (the dodge wins over a feather request while the radiator is
+      // low or a strut is swung), and a fold in flight uses the LOW limit from the moment it arms — the wing motor
+      // (rate 1.75/s, τ ≈ 0.57 s) then beats the radiator to every θ by ≥1 s (feather 120° → 5° takes 2.05 s; the
+      // constraint first binds below θ 95, 3.4 s into the 15°/s swing). Power cost: worst case ~5% of wing power at
+      // the bloom park (cos 18°), ~9% folded (cos 25°), ~0.4% with struts aimed (cos 5°).
 
-      // The ROSA is not the only thing in the fold corridor. The DAUGHTER ARMS
-      // root at z +0.90 r 0.40 (az 64/116/244/296) and the petals fold FORE
-      // past them — the folded plate and a swung-out strut can occupy the
-      // same space (tmp/fold-vs-strut-fine.mjs, tmp/interlock-numbers.mjs).
-      // DECISIONS §11 (2026-09-23, ratified): a new player can't read a
-      // halfway-stop interlock, so the fold no longer waits for the struts —
-      // FOLD_ARM_STOW_TOL_DEG and the wait it drove (`_armsStowedForFold`,
-      // `_noteArmStowWait`) are REMOVED. Held cargo in the corridor stays out
-      // of scope (not measured here).
+      // The DAUGHTER ARMS root at z +0.90 r 0.40 (az 64/116/244/296) and the petals fold FORE past them — the folded
+      // plate and a swung-out strut can occupy the same space (tmp/fold-vs-strut-fine.mjs, tmp/interlock-numbers.mjs).
+      // DECISIONS §11: the fold does not wait for the struts (a new player can't read a halfway-stop interlock).
+      // Held cargo in the corridor stays out of scope.
 
-      // ── Slew (the RADIATOR's own rate. It used to mirror the daughter struts' rate; since 2026-10-27 the struts
-      //    swing at 19.5°/s (owner) and the radiators stay 15°/s; test-FlowerPose.js pins both) ──
-      SLEW_RATE_RAD_S: 15 * Math.PI / 180,   // 15°/s — full O swing 146°→90° in 3.73 s
+      // --- Slew (the RADIATOR's own rate, separate from the struts' 19.5°/s; test-FlowerPose.js pins both) ---
+      SLEW_RATE_RAD_S: degToRad(15),   // 15°/s — full O swing 146°→90° in 3.73 s
       SETTLE_EPS_RAD: 0.01,        // latch clears within 0.01 rad (daughter contract)
 
-      // ── Mass (probe 4: plate 1.02 m² × 9 kg/m² sandwich + 2.5 m boom
-      //    ≈ 1.0 kg/m + bracket/bosses/tip 0.82 kg = 12.5 kg per strut).
-      //    Design 7b re-price: +0.4 kg/strut for the two wing hinge lines
-      //    (piano hinges, torsion springs, two latches, the taller clevis — an
-      //    engineering estimate, not a probe number) → 12.9 / 25.8. Budget
-      //    taxes at full tanks re-derived with tmp/flower-mass-budget.mjs:
-      //    pair A −288.7 m/s (2896 → 2607), pair B −236.3 m/s (2607 → 2371)
-      //    (the shop rows SAY this out loud — §8.1 doctrine). ──
+      // --- Mass (plate 1.02 m² × 9 kg/m² sandwich + 2.5 m boom ≈ 1.0 kg/m + bracket/bosses/tip 0.82 kg = 12.5 kg per
+      //    strut; +0.4 kg/strut for the two wing hinge lines (piano hinges, torsion springs, two latches, the taller
+      //    clevis — an engineering estimate, not a probe number) → 12.9 / 25.8. Budget taxes at full tanks
+      //    (tmp/flower-mass-budget.mjs): pair A −288.7 m/s (2896 → 2607), pair B −236.3 m/s (2607 → 2371)
+      //    (the shop rows SAY this out loud — §8.1 doctrine). ---
       STRUT_DRY_MASS_KG: 12.9,
       PAIR_DRY_MASS_KG: 25.8,
 
-      // v12-radiator-20: STRUT_LENGTH_M is now 2.30 (was 2.5). These bands were derived at R 2.5 and are NOT re-derived for 2.30 (tmp/flower-pose-band.mjs
-      // hard-codes its R 2.5 gates); nothing in js/ reads TIP_BAG_BANDS (rg), only test-FlowerPose's paper-pin check. A rough re-sweep at the earlier
-      // 25 cm step (R 2.25; tmp/probes/rs-bands.mjs, a coarser method that does not reproduce the 2.5 figures) said the bands move by a few degrees;
-      // none was run at 2.30: re-derive before P5 uses them.
-      // ── Per-size tip-bag pose bands (probe 2 §1c′, R=2.5, exact tip-sphere
-      //    vs enforced cones at the LIVE pin — hinge r 0.475, stations
-      //    40/140/220/320; tmp/flower-pose-band.mjs reads both from this
-      //    block: exact 146.0000 / 137.6014 / 125.7107 / 115.5860). Design 7b
-      //    re-derived them (was 146.0 / 136.7 / 124.8 / 114.6 at 45 / 0.40 —
-      //    kept in the probe as its §0-class gate): every band widens slightly
-      //    because the taller clevis moves the tip outboard, farther from the
-      //    cones. PAPER PIN for P5 — tips are INERT at P2 (no booking, no
-      //    cargo logic). Whale-class NEVER goes aft. ──
+      // These bands were derived at R 2.5 and are NOT re-derived for STRUT_LENGTH_M 2.30 (tmp/flower-pose-band.mjs
+      // hard-codes its R 2.5 gates); nothing in js/ reads TIP_BAG_BANDS (rg), only test-FlowerPose's paper-pin check.
+      // A rough re-sweep at R 2.25 (tmp/probes/rs-bands.mjs, a coarser method) said the bands move by a few degrees;
+      // none was run at 2.30: re-derive before tip cargo booking uses them.
+      // --- Per-size tip-bag pose bands (R=2.5, exact tip-sphere vs enforced cones at the LIVE pin — hinge r 0.475,
+      //    stations 40/140/220/320; tmp/flower-pose-band.mjs reads both from this block: exact 146.0000 / 137.6014 /
+      //    125.7107 / 115.5860). PAPER PIN — tips are INERT (no booking, no cargo logic). Whale-class NEVER goes aft. ---
       TIP_BAG_BANDS: [
         { bagRadiusM: 0.5, maxThetaDeg: 146.0 },
         { bagRadiusM: 1.0, maxThetaDeg: 137.6 },
@@ -2824,222 +2216,156 @@ export const Constants = {
     },
   },
 
-  // ============================================================================
-  // EPIC 9 FEATURE FLAGS (default false; flipped on per shipyard/shop unlock)
-  // ST-9.9 Reality Mode toggle forces ALL of these to false at runtime.
-  // ============================================================================
+  // FEATURE_FLAGS (flipped on per shipyard/shop unlock). Reality Mode forces ALL of these to false at runtime.
   FEATURE_FLAGS: {
-    LASER_DESPIN:          true,   // CP-2 ON — mother-mounted de-spin laser (hold L) + net tumble coupling
-    REALITY_MODE:          false,  // ST-9.9 — locks all FEATURE_* false (master)
+    LASER_DESPIN:          true,   // mother-mounted de-spin laser (hold L) + net tumble coupling
+    REALITY_MODE:          false,  // locks all FEATURE_* false (master)
 
-    // The OPENING DANCE (2026-09-16) — the ship unpacks itself. Starts in the
-    // menu as the EVA astronaut jets off the hull she is welding, cascades
-    // radiator → solar wings → daughters at the SHIPPED hardware rates, and
-    // hands the player the wheel ~7.8 s after the menu cuts away. Off = the
-    // ship simply boots deployed (OpeningDance.endState), exactly as before.
-    // This REPLACED the 60 s rocket launch (that sequence, its cinematic and
-    // its switch were removed 2026-10-16); no scaffolding for a "full launch"
-    // exists, deliberately.
+    // The OPENING DANCE — the ship unpacks itself: the EVA astronaut jets off the hull, then radiator → solar wings →
+    // daughters at the SHIPPED hardware rates, and the player gets the wheel ~7.8 s after the menu cuts away. Off =
+    // the ship simply boots deployed (OpeningDance.endState). No scaffolding for a "full launch" sequence, deliberately.
     OPENING_DANCE:             true,
-    // Scripted launch-plume cameo from the player's home spaceport during the
-    // opening orbital pass (js/scene/LaunchCameo.js). AMBIENT extends it: any
-    // pad fires a plume as it orbits into visual range (rate-limited, silent).
+    // Scripted launch-plume cameo from the player's home spaceport during the opening orbital pass
+    // (js/scene/LaunchCameo.js). AMBIENT: any pad fires a plume as it orbits into visual range (rate-limited, silent).
     LAUNCH_CAMEO:              true,
     LAUNCH_CAMEO_AMBIENT:      true,
-    SEMI_AUTO_AIM:             true,   // ST-9.3  — Mother auto-rotation aim (aim-before-launch)
+    SEMI_AUTO_AIM:             true,   // Mother auto-rotation aim (aim-before-launch)
 
-    // NEW — ST-9.4 C-6: Capture Net System
-    CAPTURE_NET:               true,   // ST-9.4  — full capture net projectile + inventory (P1 ON)
+    CAPTURE_NET:               true,   // full capture net projectile + inventory
 
-    // NEW — CP-1 / DAUGHTER_MULTITOOL_SPEC: real per-arm tool choice
-    DAUGHTER_MULTITOOL:        true,   // P2 ON — tool-selection HUD, backtick cycle, MAGNETIC_GRAPPLE
-    WEAVER_GRIPPER:            true,   // P3 ON — Weaver tertiary gripper jaws (GRIPPER_GRAPPLE)
-    SPINNER_PAD:               true,   // P4 ON — Spinner secondary multi-modal pad (PAD_CONTACT)
+    // DAUGHTER_MULTITOOL_SPEC: real per-arm tool choice
+    DAUGHTER_MULTITOOL:        true,   // tool-selection HUD, backtick cycle, MAGNETIC_GRAPPLE
+    WEAVER_GRIPPER:            true,   // Weaver tertiary gripper jaws (GRIPPER_GRAPPLE)
+    SPINNER_PAD:               true,   // Spinner secondary multi-modal pad (PAD_CONTACT)
 
-    // NEW — P2 aft flower preview (owner ruling 2026-08-27: "just flip it on.
-    // you can flip it off later p3"). ON: both flower pairs are pre-installed
-    // at boot (stowed bud; O deploys) and the two shop rows are HIDDEN so
-    // nobody pays credits for hardware already aboard. The 50 kg mass tax
-    // rides along honestly (hardware aboard = mass aboard). P3 flips this to
-    // false when the thermal loop lands and the shop becomes the real gate —
-    // that flip is a licensed FEATURE_FLAGS-pin re-derive (43→…, count pin in
-    // test-Constants.js) plus nothing else: the purchase path, mass carrier,
-    // and byte-identity tests below it are already flag-agnostic.
+    // Aft flower preview (owner 2026-08-27: "just flip it on. you can flip it off later"). ON: both flower pairs
+    // are pre-installed at boot (stowed bud; O deploys) and the two shop rows are HIDDEN so nobody pays credits for
+    // hardware already aboard; the 50 kg mass tax rides along. Flipping this to false is a licensed FEATURE_FLAGS-pin
+    // re-derive (count pin in test-Constants.js) plus nothing else: the purchase path, mass carrier and
+    // byte-identity tests are flag-agnostic.
     FLOWER_PREINSTALLED:       true,
 
-    // NEW — C-11 Integration: Recoil Physics (deferred from C-3)
-    RECOIL_PHYSICS:            true,   // C-11 — angular impulse from dual-fire + mother-net launch applied to Mother (2026-07-23: wired to a real transient-attitude integrator; was a dead accumulator)
+    RECOIL_PHYSICS:            true,   // angular impulse from dual-fire + mother-net launch applied to Mother (a real transient-attitude integrator)
 
-    // NEW — Q2 Net-Launch Ceremony (CEREMONY_REDESIGN.md §5)
-    NET_CEREMONY:              true,   // Q2 net-launch ceremony; default ON (Stage 6 flip, 2026-05-24)
+    NET_CEREMONY:              true,   // net-launch ceremony (archive/CEREMONY_REDESIGN.md §5)
 
-    // NEW — CP-3 / BIG_PICTURE §24: cluster transfer-ellipse + launch-window countdown
-    CLUSTER_TRANSFER_WINDOW:   true,   // CP-3 ON — DebrisMap shows Depart/Arrive/ΔV + countdown per selected cluster
+    CLUSTER_TRANSFER_WINDOW:   true,   // DebrisMap shows Depart/Arrive/ΔV + countdown per selected cluster (archive/BIG_PICTURE.md §24)
 
-    // NEW — capture-feedback overhaul Phase 2: orientation-based capture.
-    // Presented-width gating (broadside 0% → end-on ~100%) at contact +
-    // reel; togglable during tuning like CAPTURE_NET / LASER_DESPIN.
-    ASPECT_CAPTURE:            true,
+    ASPECT_CAPTURE:            true,   // presented-width gating (broadside 0% → end-on ~100%) at contact + reel
 
-    // NEW — capture-feedback overhaul Phase 3a: hold Shift → boost reel ×2.
-    // Impatience is allowed but priced: boost raises net-rip + snap risk.
-    REEL_BOOST:                true,
+    REEL_BOOST:                true,   // hold Shift → boost reel ×2; priced: raises net-rip + snap risk
 
-    // NEW — reel-in/re-dock inertia overhaul (reel-in-redock-inertia plan).
-    // Trapezoidal haul velocity profile (Q1) + combined-mass tension (Q2) +
-    // explicit SNUG rigidize (Q3) + FEEP soft re-dock arrest with yoke
-    // tether-plume clearance (Q4). ON since 2026-08-27 (wave1 flip): catch mass
-    // now prices the haul home — power-bounded cruise v=√(P/(m_unit·coeff)),
-    // snap-invariant tension cap, SNUG cinch, one-shot FEEP arrest debit
-    // (MISSION1_FREE). The legacy constant-speed reel (REEL_IN_SPEED_*) remains
-    // the flag-OFF fallback, unchanged and test-covered.
+    // Reel-in/re-dock inertia: trapezoidal haul velocity profile + combined-mass tension + SNUG rigidize + FEEP soft
+    // re-dock arrest: catch mass prices the haul home — power-bounded cruise v=√(P/(m_unit·coeff)), snap-invariant
+    // tension cap, one-shot FEEP arrest debit (MISSION1_FREE). The legacy constant-speed reel (REEL_IN_SPEED_*)
+    // remains the flag-OFF fallback, test-covered.
     REEL_PROFILE_V2:           true,
 
-    // reel-home (2026-10-19, owner design): a daughter does not jump to her catch. Her net winds the catch in to her
-    // nose first (the pair's centre of mass stays put), then the strut reel winds her home TAIL-FIRST onto the strut
-    // tip, catch leading away, the strut swinging and the mother turning to meet her line. Off: the old path
-    // (jump to the catch, nose-first reel, catch outboard of her). Read through Constants.isFeatureEnabled('REEL_HOME'),
-    // so REALITY_MODE can never turn it on.
+    // reel-home (owner design): a daughter does not jump to her catch. Her net winds the catch in to her nose first
+    // (the pair's centre of mass stays put), then the strut reel winds her home TAIL-FIRST onto the strut tip, catch
+    // leading away, the strut swinging and the mother turning to meet her line. Off: jump to the catch, nose-first
+    // reel, catch outboard of her. Read through Constants.isFeatureEnabled('REEL_HOME'), so REALITY_MODE can never
+    // turn it on.
     REEL_HOME:                 true,
 
-    // NEW — mother-net capture ceremony (.kilo/plans/mother-net-capture-ceremony.md)
-    // Phase 2: kinematic net open-on-launch + cinch-on-capture animation.
-    LASSO_NET_KINEMATICS:      true,   // Phase 2 — net opens on spin-up, cinches on contact (visual only)
-    // Phase 3: mass-driven reel tension, CoM pull, tangle/break risk. Still hard-
-    // gated OFF on M1 and for ≤ LASSO_MAX_CAPTURE_MASS regardless of this flag.
-    LASSO_REEL_PHYSICS:        true,   // Phase 3 — real reel tension + ship pull + break risk (M2+/heavy only)
-    // 2026-08-26 — the SHORT lasso-catch cut (owner: "the capture deserves a
-    // tasteful, SHORT presentation — never a beat reel"). A single continuous
-    // ~3 s catch-framed shot from wrap contact through the reel escort,
-    // S4 grammar (catch framed, ship as context), the HUD dimmed only while it
-    // runs (the black letterbox bars left 2026-09-09), released before
-    // digestion, aborted instantly by ANY player input, skipped under
-    // prefers-reduced-motion and while any key is already held.
-    // Rides NET_CEREMONY (the cinema-mode HUD contract); OFF = post-4988797
-    // player-cam-only behaviour, byte-identical.
+    LASSO_NET_KINEMATICS:      true,   // net opens on spin-up, cinches on contact (visual only)
+    // Mass-driven reel tension, CoM pull, tangle/break risk. Still hard-gated OFF on M1 and for
+    // ≤ LASSO_MAX_CAPTURE_MASS regardless of this flag.
+    LASSO_REEL_PHYSICS:        true,   // real reel tension + ship pull + break risk (M2+/heavy only)
+    // owner 2026-08-26: "the capture deserves a tasteful, SHORT presentation — never a beat reel". A single
+    // continuous ~3 s catch-framed shot from wrap contact through the reel escort, the HUD dimmed only while it runs,
+    // aborted instantly by ANY player input, skipped under prefers-reduced-motion and while any key is already held.
+    // Rides NET_CEREMONY (the cinema-mode HUD contract); OFF = player-cam-only behaviour, byte-identical.
     LASSO_CATCH_CUT:           true,
 
-    // 2026-08-27 — CAPTURE_NET.md §11.4/§11.3 momentum-torque audit, daughter
-    // side. ON: a daughter net launch (fireDaughterNet via ArmUnit NETTING)
-    // kicks the daughter back by Δv = m_net·LAUNCH_SPEED / m_daughter
-    // (≈1.03 m/s MEDIUM/Weaver, ≈0.57 m/s SMALL/Spinner — derived live from
-    // Constants, never hardcoded), modeled as a critically-damped transient
-    // the SK/NETTING hold loop visibly fights and re-absorbs (~1–2 s), with a
-    // FUEL_RATE_MANEUVER-style RCS surcharge billed for the recovery, plus the
-    // §11.3 reaction-wheel scalar (per-fire increment, slow bleed, saturation
-    // ⇒ paid RCS desat per subsequent fire). Tuning: Constants.DAUGHTER_NET_RECOIL.
-    // OFF = byte-identical legacy behaviour (zero displacement, zero billing).
-    // Mother pod recoil (PlayerSatellite._applyMotherNetRecoil) is untouched.
+    // CAPTURE_NET.md §11.4/§11.3 momentum-torque audit, daughter side. ON: a daughter net launch (fireDaughterNet via
+    // ArmUnit NETTING) kicks the daughter back by Δv = m_net·LAUNCH_SPEED / m_daughter (≈1.03 m/s MEDIUM/Weaver,
+    // ≈0.57 m/s SMALL/Spinner — derived live from Constants), a critically-damped transient the SK/NETTING hold loop
+    // visibly fights (~1–2 s), with a FUEL_RATE_MANEUVER-style RCS surcharge for the recovery, plus the §11.3
+    // reaction-wheel scalar (per-fire increment, slow bleed, saturation ⇒ paid RCS desat). Tuning:
+    // Constants.DAUGHTER_NET_RECOIL. OFF = byte-identical legacy (zero displacement, zero billing). Mother pod
+    // recoil (PlayerSatellite._applyMotherNetRecoil) is untouched.
     DAUGHTER_NET_RECOIL:       true,
 
-    // 2026-08-27 — CAPTURE_NET.md §11.5 momentum-torque audit, daughter side
-    // (the audit's "highest gameplay value" item, #1 in the §11.8 order).
-    // ON: a daughter NET catch no longer arrests the target's spin angular
-    // momentum for free. L = Iω is computed from the debris' LIVE tumble at
-    // the cinch (I = 0.1·m·d², solid-sphere model) and transferred into a
-    // visible critically-damped settle of the caught bundle over
-    // t_settle = L/τ_tether (clamped ~2–4 s; the audit's τ = L/t_settle,
-    // solved for time). A cleanly settled catch ends de-spun (tumbleRate 0).
-    // Above STRAIN_GATE_DEG_S the wrench rolls a recoverable net rip
-    // (NET_FAILED/NET_TORN, boost-rip idiom): the catch drifts free with the
-    // UN-transferred remainder resumed as real tumble — lasing a tumbler
-    // below the gate before netting is now the correct play, which is what
-    // makes LASER_DESPIN a torque-management necessity instead of a
-    // cling-probability buff. Tuning: Constants.CAPTURE_TORQUE_SETTLE.
-    // Daughter net-FSM captures only; the mother lasso/berth spine (M1
-    // onboarding) is untouched. OFF = byte-identical instant-arrest legacy.
+    // CAPTURE_NET.md §11.5 momentum-torque audit, daughter side. ON: a daughter NET catch does not arrest the
+    // target's spin for free. L = Iω from the debris' LIVE tumble at the cinch (I = 0.1·m·d², solid-sphere model) is
+    // transferred into a critically-damped settle of the caught bundle over t_settle = L/τ_tether (clamped ~2–4 s);
+    // a cleanly settled catch ends de-spun. Above STRAIN_GATE_DEG_S the wrench rolls a recoverable net rip
+    // (NET_FAILED/NET_TORN, boost-rip idiom): the catch drifts free with the UN-transferred remainder resumed as real
+    // tumble — so lasing a tumbler below the gate before netting is the correct play (LASER_DESPIN is a
+    // torque-management necessity, not a cling-probability buff). Tuning: Constants.CAPTURE_TORQUE_SETTLE. Daughter
+    // net-FSM captures only; the mother lasso/berth spine (M1 onboarding) is untouched. OFF = byte-identical
+    // instant-arrest legacy.
     CAPTURE_TORQUE_SETTLE:     true,
 
-    // Debris cutting step 5 — call the cut planner when a collared catch is
-    // too heavy for one daughter's rack (over CARGO_TRANSFER.MAX_KG): the
-    // collar refuses once, plans pieces at the receiver's limit, and cuts one
-    // piece at a time at the nose; each piece flies the same crane arc as a
-    // whole catch, and the held remainder leaves last by the ordinary
-    // transfer. No cooking while cutting. Tuning: Constants.CAPTURE_NET.CUT_S.
-    // OFF = byte-identical legacy (the whole body rides the collar until the
-    // furnace takes it, or jettison [K]).
+    // Call the cut planner when a collared catch is too heavy for one daughter's rack (over CARGO_TRANSFER.MAX_KG):
+    // the collar refuses once, plans pieces at the receiver's limit, and cuts one piece at a time at the nose; each
+    // piece flies the same crane arc as a whole catch, the remainder leaves last by the ordinary transfer. No
+    // cooking while cutting. Tuning: Constants.CAPTURE_NET.CUT_S. OFF = legacy (the whole body rides the collar
+    // until the furnace takes it, or jettison [K]).
     CUT_AT_NOSE:              true,
 
-    // Leash hand-off (lane l5b-wire; docs/research/2026-10-leash.md, DECISIONS §1):
-    // a small mother catch (radius <= 0.75 m, TipCargo MAX_BAG_R_M) leaves the nose on its own leash and
-    // is reeled onto a radiator tip (js/systems/LeashDriver.js). OFF = the catch
-    // goes by today's flight to a daughter's rack (CaptureNetSystem._updateCargoTransfer).
+    // Leash hand-off (archive/research/2026-10-leash.md, DECISIONS §1): a small mother catch (radius <= 0.75 m,
+    // TipCargo MAX_BAG_R_M) leaves the nose on its own leash and is reeled onto a radiator tip
+    // (js/systems/LeashDriver.js). OFF = the catch flies to a daughter's rack (CaptureNetSystem._updateCargoTransfer).
     LEASH_HANDOFF:            true,
 
-    // Daughter-arm automation (lane arms-auto; DECISIONS §25 ruling 5): the struts
-    // move on their own (0° idle, 34° when a piece is within 90 m), a "." press
-    // holds 10 s, and the full range is shown once per player. OFF = manual only.
+    // Daughter-arm automation (DECISIONS §25 ruling 5): the struts move on their own (0° idle, 34° when a piece is
+    // within 90 m), a "." press holds 10 s, and the full range is shown once per player. OFF = manual only.
     STRUT_AUTO:               true,
 
-    // Launch-aim (lane launch-aim, 2026-10-16): a daughter's strut first swings (at its real
-    // strut rate, 19.5°/s) to the best angle toward where she is going, then the spring pushes her along the
-    // strut; the launch cut-scene never moves a strut. OFF = today's bearing launch + 4x swing.
+    // Launch-aim: a daughter's strut first swings (at its real strut rate, 19.5°/s) to the best angle toward where
+    // she is going, then the spring pushes her along the strut; the launch cut-scene never moves a strut. OFF =
+    // bearing launch + 4x swing.
     LAUNCH_AIMS_STRUT:        true,
 
-    // Furnace cook (lane no-melt, owner 2026-10-18: "debris still magically shrinks, should handoff and stay same size
-    // until furnace works and is activated" -> "Stay full size, no melting"). DECISIONS §12 Q3: the collar cook has no
+    // Furnace cook (owner 2026-10-18: "debris still magically shrinks, should handoff and stay same size until
+    // furnace works and is activated" -> "Stay full size, no melting"). DECISIONS §12 Q3: the collar cook has no
     // hardware behind it. OFF: nothing cooks, melts, chops or shrinks a catch anywhere (radiator tip, nose collar,
-    // daughter rack): a catch stays full size where it was parked until the station takes it at the resupply stop.
-    // ON: today's staged cook (hold, chop, feed, digested CATCH_PROCESSED), kept for the day a real furnace exists.
-    // Read through Constants.isFeatureEnabled('FURNACE_COOK'), so REALITY_MODE can never turn it on.
+    // daughter rack) until the station takes it at the resupply stop. ON: the staged cook (hold, chop, feed,
+    // digested CATCH_PROCESSED), kept for the day a real furnace exists. Read through
+    // Constants.isFeatureEnabled('FURNACE_COOK'), so REALITY_MODE can never turn it on.
     FURNACE_COOK:             false,
 
-    // Transfer trip (lane trip-melt-1, owner 2026-10-19, DECISIONS §29 rows 1 and 4: "they need to be melted down in the
-    // furnace during the long ion burn/transition to next debris field"). ON: a completed mission does not start the
-    // next one at once - the ship burns to the next field for a while (js/systems/TransferTrip.js), the four radiator-tip
-    // furnaces melt the catches parked on them (the tip cook runs on the trip only; FURNACE_COOK stays off for the nose
-    // collar and the daughter racks), and the next mission starts when the trip ends. OFF: the next mission starts at once
-    // and nothing melts. Read through Constants.isFeatureEnabled('TRANSFER_TRIP').
+    // Transfer trip (owner 2026-10-19, DECISIONS §29 rows 1 and 4: "they need to be melted down in the furnace
+    // during the long ion burn/transition to next debris field"). ON: a completed mission does not start the next
+    // one at once - the ship burns to the next field (js/systems/TransferTrip.js), the four radiator-tip furnaces
+    // melt the catches parked on them (the tip cook runs on the trip only; FURNACE_COOK stays off for the nose
+    // collar and the daughter racks), and the next mission starts when the trip ends. OFF: the next mission starts
+    // at once and nothing melts. Read through Constants.isFeatureEnabled('TRANSFER_TRIP').
     TRANSFER_TRIP:            true,
 
-    // Fields by height (Nets step 3 slice 2b, DECISIONS §33 rows 6 and 10; js/systems/FieldRegistry.js, TripProfile.js).
-    // ON (the default since slice 4, 2026-10-23: the map goes live with the second satellite and the high fields): the debris
-    // fields are destinations stacked by height (Constants.FIELDS); a mission boundary flies the mother to another field with
-    // her real thruster (the trip plays a climb or descent from the drag-and-thrust profile), fields keep the pieces nobody
-    // caught, and the field state and the ship days are saved. OFF (`?fields=0` for a boot): today's game exactly (the flat
-    // 20 m/s trip that does not move her, a fresh welcome field every mission, the stop after every mission).
-    // Read through Constants.isFeatureEnabled('FIELDS_BY_HEIGHT'), so REALITY_MODE can never turn it on.
+    // Fields by height (DECISIONS §33 rows 6 and 10; js/systems/FieldRegistry.js, TripProfile.js). ON: the debris
+    // fields are destinations stacked by height (Constants.FIELDS); a mission boundary flies the mother to another
+    // field with her real thruster (a climb or descent from the drag-and-thrust profile), fields keep the pieces
+    // nobody caught, and the field state and ship days are saved. OFF (`?fields=0` for a boot): the flat 20 m/s trip
+    // that does not move her, a fresh welcome field every mission. Read through
+    // Constants.isFeatureEnabled('FIELDS_BY_HEIGHT'), so REALITY_MODE can never turn it on.
     FIELDS_BY_HEIGHT:         true,
 
-    // Melt a big piece for metal (Nets step 3 slice 5, lane 5c adds the flag, lane 5e builds the melt; plan C7). ON since
-    // the slice-5 integration (2026-10-24, after 5c and 5e merged; test-BigPieceChain.js runs the chain). Off: the fate
-    // list's melt row says "the furnaces cannot take it yet" and cannot be picked. Read through Constants.isFeatureEnabled('BIG_MELT').
+    // Melt a big piece for metal (test-BigPieceChain.js runs the chain). Off: the fate list's melt row says "the
+    // furnaces cannot take it yet" and cannot be picked. Read through Constants.isFeatureEnabled('BIG_MELT').
     BIG_MELT:                 true,
   },
 
-  // =========================================================================
-  // CONFIG G PLUME CLEARANCE (NEW — for ST-9.12 #8)
-  // =========================================================================
-  PLUME_HALF_ANGLE: 35 * Math.PI / 180,  // rad — sourced: 25.5°±2.5° measured In-FEEP
+  // PLUME CLEARANCE
+  PLUME_HALF_ANGLE: degToRad(35),  // rad — sourced: 25.5°±2.5° measured In-FEEP
                                          // beam divergence (LISA Pathfinder qualification) ×1.25
                                          // charge-exchange margin; a real shielded design caps at 60°
 
-  // =========================================================================
-  // MAIN THRUSTER NOZZLE GEOMETRY (NEW — ST-9.12 C-9, Gap #8)
-  // =========================================================================
-  // 4 main dual-metal FEEP thrusters on the aft face (−Z), cross pattern.
-  // Positions match PlayerSatellite._buildThrusters() visual placement (in
-  // meters): radius 0.200 m (mainPositions ±M*0.2), bell exit z −1.075
-  // (nozzle body z −1.0, half-length 0.075 — the same plane STOWED_ENVELOPE_LEN
-  // calls "FEEP exits −1.075"). CORRECTED 2026-09-24 (DECISIONS §5a): this
-  // table used to read 0.500 m / z −2.000 while its own comment claimed a
-  // match — apexes were 0.300 m too far outboard and 0.925 m too far aft, so
-  // every plume cone under-reached (the real cone is WIDER: at the STOW petal
-  // tip the modelled radius was 0.751 m vs the true 1.399 m). A drift-guard
-  // test (test-FlowerLaunchFold.js) now measures the built MainFEEP_* meshes
-  // against this table so the two cannot silently disagree again — it does
-  // not read this table INTO the builder (PlayerSatellite.js is out of this
-  // fix's scope), so a future change to either side still needs both edited.
-  // Config G clearance analysis (ARM_PIVOT_GAPS_EXPLAINER §8):
-  //   Arms sit at azimuths 64°/116°/244°/296° (ROSA at 0°/180°). The measured plume gate is the
-  //   radiator's (DECISIONS §5a; test-FlowerLaunchFold.js). The daughter struts have no clearance
-  //   floor: `CoMCalculator.checkPlumeInterference` tests each strut tip and any held cargo against
-  //   the −Z plume cone at runtime (every frame, via the thrust-block list). Edge case (register item 61's reconciled rows): the Y3 Octo
-  //   (flag-gated, unlocked:false) aft end-face arm (−Z) at α≈π/2 places its tip at
-  //   z ≈ −2.6 m — past the corrected nozzle plane (−1.075). NOT RE-VERIFIED under
-  //   this fix (dormant tier, dormant interlock, out of scope — DECISIONS §5a); any
-  //   HELD cargo there still books further aft, where S9's box-chain check sees the
-  //   foul on the LIVE Y0_QUAD tier regardless.
+  // MAIN THRUSTER NOZZLE GEOMETRY
+  // 4 main dual-metal FEEP thrusters on the aft face (−Z), cross pattern. Positions match
+  // PlayerSatellite._buildThrusters() visual placement (in meters): radius 0.200 m (mainPositions ±M*0.2), bell exit
+  // z −1.075 (nozzle body z −1.0, half-length 0.075 — the same plane STOWED_ENVELOPE_LEN calls "FEEP exits −1.075").
+  // DECISIONS §5a: a drift-guard test (test-FlowerLaunchFold.js) measures the built MainFEEP_* meshes against this
+  // table; it does not read this table INTO the builder, so a change to either side still needs both edited.
+  // Config G clearance analysis (archive/ARM_PIVOT_GAPS_EXPLAINER.md §8): arms sit at azimuths 64°/116°/244°/296°
+  // (ROSA at 0°/180°). The measured plume gate is the radiator's (DECISIONS §5a; test-FlowerLaunchFold.js). The
+  // daughter struts have no clearance floor: `CoMCalculator.checkPlumeInterference` tests each strut tip and any held
+  // cargo against the −Z plume cone every frame (via the thrust-block list). Edge case: the Y3 Octo (flag-gated,
+  // unlocked:false) aft end-face arm (−Z) at α≈π/2 places its tip at z ≈ −2.6 m — past the corrected nozzle plane
+  // (−1.075). NOT RE-VERIFIED (dormant tier, dormant interlock, out of scope — DECISIONS §5a); any HELD cargo there
+  // still books further aft, where S9's box-chain check sees the foul on the LIVE Y0_QUAD tier regardless.
   THRUSTERS: [
     { id: 'HT_TOP',    nozzlePos: { x:  0,    y:  0.2,  z: -1.075 }, thrustDir: { x: 0, y: 0, z: -1 } },
     { id: 'HT_BOTTOM', nozzlePos: { x:  0,    y: -0.2,  z: -1.075 }, thrustDir: { x: 0, y: 0, z: -1 } },
@@ -3047,25 +2373,20 @@ export const Constants = {
     { id: 'HT_LEFT',   nozzlePos: { x: -0.2,  y:  0,    z: -1.075 }, thrustDir: { x: 0, y: 0, z: -1 } },
   ],
 
-  // =========================================================================
-  // TAIL ION-BOX GLOW — lerp rate and nozzle-liner emissive for the four tail boxes.
-  // (Name kept from the old per-nozzle turn mapping, removed 2026-10-22: turns are cold
-  // gas and light only the bells; these boxes glow only while the ion engine pushes.)
-  // =========================================================================
+  // TAIL ION-BOX GLOW — lerp rate and nozzle-liner emissive for the four tail boxes (they glow only while the ion
+  // engine pushes; turns are cold gas and light only the bells).
   DIFFERENTIAL_THRUST: {
     LERP_RATE: 8,                    // per-second exponential approach rate (matches legacy glow lerp)
     INNER_EMISSIVE_BASE: 0.3,       // idle emissive intensity for nozzle interior liner
     INNER_EMISSIVE_FIRE_SCALE: 1.2, // additional emissiveIntensity per unit firing intensity
   },
 
-  // =========================================================================
   // ION START-UP (owner 2026-10-25, DECISIONS §37 row 7: "seeing them flicker to life and ramp up to full power [is] a
   // great visual reward at the end of each mission"). The first seconds of a trip's burn (js/systems/TransferTrip.js):
   // the four tail boxes light in two opposite pairs (top+bottom, then right+left, so the push stays balanced), each
   // pair sputtering and then swelling to full; the camera swings behind her, a hum rises, and the trip line shows once
-  // all four burn. The push, the gas and the world clock follow the lit share (TransferTrip header). Colours are
-  // today's (argon's real plume colour is unconfirmed).
-  // =========================================================================
+  // all four burn. The push, the gas and the world clock follow the lit share (TransferTrip header). Argon's real
+  // plume colour is unconfirmed.
   ION_STARTUP: {
     PAIR_GAP_S: 1.0,       // the second pair starts this long after the first
     FLICKER_S: 0.6,        // each pair sputters this long (the pulses below), then swells
@@ -3075,10 +2396,10 @@ export const Constants = {
     RAMP_S: 1.5,           // a smooth swell (smoothstep) from the sputter to full output
     SETTLE_S: 0.9,         // all four steady at full before the line shows and the clock may speed up
     // Camera (CameraSystem): it eases to a view behind and a little to the side of the tail, holds while they light and for
-    // CAM_HOLD_S after the line shows (so he sees all four at full power), then eases back to her previous view over CAM_OUT_S;
-    // his own camera input ends it at once. Metres in her own frame (+Z nose; the tail face is z = -1.075).
+    // CAM_HOLD_S after the line shows, then eases back to her previous view over CAM_OUT_S; his own camera input ends
+    // it at once. Metres in her own frame (+Z nose; the tail face is z = -1.075).
     CAM_IN_S: 1.5,
-    CAM_HOLD_S: 1.5,       // the close view stays this long after all four are lit (F1.4, 10-25 visual check)
+    CAM_HOLD_S: 1.5,       // the close view stays this long after all four are lit
     CAM_OUT_S: 2.0,
     CAM_AFT_M: 5.5,        // camera this far aft of her centre
     CAM_SIDE_M: 2.6,       // ... this far to her side (+X)
@@ -3091,56 +2412,36 @@ export const Constants = {
     HUM_GAIN_CRUISE: 0.025,
   },
 
-  // =========================================================================
-  // OPENING DANCE (2026-09-16) — the beat table for the ship unpacking itself.
-  // Every beat-table figure of the plan's table lives HERE, in ONE block. The
-  // DURATIONS are not repeated: they are derived in js/systems/OpeningDance.js
-  // from the shipped hardware rates (OCTOPUS_V5.ROSA_FURL_RATE 0.40/s → 2.5 s
-  // per wing; THERMAL.FLOWER.SLEW_RATE_RAD_S 15°/s for the radiator), so the
-  // dance always teaches the speeds the player will later command. t = 0 is
-  // jet-off, NOT the departure start.
-  //
-  // DECISIONS §15 row 4 (2026-10-08, lane w2-start-pose): the ship starts
-  // CLOSED. The radiator stays folded (it rests at its 0° launch latch, no ease
-  // to 2° any more — owner 2026-10-16) and the daughter struts stay shut, so the
-  // two solar wings ARE the unfold, and the hand-over is the moment wing 2 is
-  // out — 8.70 s (was 9.73). The wings keep 5.20 / 6.20: they start as the
-  // camera's dive lands, so the intro DOLLY (LadderController
-  // INTRO_DANCE_DOLLY_MS) finishes before the hand-over pulls the camera
-  // back (measured on :8092 2026-10-09: a 6.70 s hand-over arrived in the
-  // dive's landing frame, so every boot skipped the dolly).
-  // =========================================================================
+  // OPENING DANCE — the beat table for the ship unpacking itself. Every beat-table figure lives HERE, in ONE block.
+  // The DURATIONS are derived in js/systems/OpeningDance.js from the shipped hardware rates
+  // (OCTOPUS_V5.ROSA_FURL_RATE 0.40/s → 2.5 s per wing; THERMAL.FLOWER.SLEW_RATE_RAD_S 15°/s for the radiator), so
+  // the dance always teaches the speeds the player will later command. t = 0 is jet-off, NOT the departure start.
+  // DECISIONS §15 row 4: the ship starts CLOSED (radiator folded at its 0° launch latch, daughter struts shut), so the
+  // two solar wings ARE the unfold and the hand-over is the moment wing 2 is out — 8.70 s. The wings start as the
+  // camera's dive lands, so the intro DOLLY (LadderController INTRO_DANCE_DOLLY_MS) finishes before the hand-over
+  // pulls the camera back.
   OPENING_DANCE: {
     BEAT_JETOFF: 0.26,            // fraction of the menu departure at which the EVA astronaut jets off (t = 0 = start + 0.26 × durationMs)
     MENU_DEPARTURE_MS: 3650,      // the MenuScreen departure the beat table is measured against (fallback when the payload carries none)
     T_CUT_S: 2.70,                // the menu→game cut (MENU_START) in dance time: 0.95 s jet-off + 2.70 s = the 3.65 s departure
     WING1_START_S: 5.20,          // ROSA wing 1 roll-out start, as the intro dive lands (2.5 s at ROSA_FURL_RATE → seated 7.70)
     WING2_START_S: 6.20,          // ROSA wing 2 roll-out start (→ seated 8.70 = the hand-over)
-    SKIP_FADE_S: 0.5,             // any input fast-forwards the remaining unfold over this window (decision 10)
+    SKIP_FADE_S: 0.5,             // any input fast-forwards the remaining unfold over this window
   },
 
-  // =========================================================================
-  // V5 CROSSBOW ARMS — Spring-launched tethered arms with reel-in capture
-  // See CROSSBOW_ARMS.md for full specification
-  // =========================================================================
-
-  // ── V5 Crossbow Arms ──
+  // V5 CROSSBOW ARMS — Spring-launched tethered arms with reel-in capture (spec: archive/CROSSBOW_ARMS.md)
 
   // --- Crossbow Spring Physics ---
   CROSSBOW_DRAW_DISTANCE: 0.25,           // meters — spring compression distance
   CROSSBOW_SPRING_K_WEAVER: 17600,        // N/m — spring constant for 11kg Weaver at 10 m/s
   CROSSBOW_SPRING_K_SPINNER: 5920,        // N/m — spring constant for 3.7kg Spinner at 10 m/s
   CROSSBOW_RELEASE_TIME: 0.05,            // seconds — spring release duration (40ms)
-  CROSSBOW_UNDOCK_TIME: 1.5,              // seconds — magnetic clamp release + crossbow charge
-                                           // (increased from 0.3s so player sees strut aim + charge before launch)
+  CROSSBOW_UNDOCK_TIME: 1.5,              // seconds — magnetic clamp release + crossbow charge (long enough that the player sees strut aim + charge)
   CROSSBOW_LAUNCH_SPEED_DEFAULT: 10.0,    // m/s — default launch speed (physically justified)
   CROSSBOW_LAUNCH_SPEED_MIN: 3.0,         // m/s — minimum selectable launch speed
-  // Register item 76(b) (2026-08-16): CROSSBOW_LAUNCH_SPEED_MAX (was 20.0) removed —
-  // import-only; the real clamp is setLaunchSpeed's [MIN, tier.maxSpeed] (ArmUnit.js).
-  // Register item 100 (2026-08-21): the speed DIAL shipped — `;` down / `'` up,
-  // fleet-wide via ArmManager.setFleetLaunchSpeed (default stays DEFAULT; the API
-  // clamps to the equipped spring tier's ceiling). HUD readout lives in the arms
-  // panel header (StatusPanel._renderArmPanel).
+  // The launch-speed DIAL: `;` down / `'` up, fleet-wide via ArmManager.setFleetLaunchSpeed (default stays DEFAULT;
+  // the clamp is setLaunchSpeed's [MIN, tier.maxSpeed] in ArmUnit.js, the equipped spring tier's ceiling). HUD readout
+  // lives in the arms panel header (StatusPanel._renderArmPanel).
   CROSSBOW_SPEED_STEP: 0.5,               // m/s — one dial notch per keypress (hold to sweep)
 
   // --- Reload Mechanism ---
@@ -3149,31 +2450,21 @@ export const Constants = {
 
   // --- Tether Reel (on mothership) ---
   REEL_IN_SPEED_EMPTY: 2.0,              // m/s — reel-in speed unloaded (game-scale)
-  REEL_IN_SPEED_LOADED: 4.0,             // m/s — reel-in speed with captured debris (POLISH: bumped from 1.4 for snappier retrieval)
-  // Register item 76(c) (2026-08-17): REEL_MOTOR_POWER (was 25 W) removed —
-  // import-only, zero reads. Reel and reload power bill through MOTOR_DRAW_W
-  // since w4-power D5 (ArmUnit reload: CROSSBOW_RELOAD_POWER; the reels:
-  // tension × speed ÷ efficiency). The reel's live rows
-  // surround this note: the speeds above, the brake/tension rows below.
+  REEL_IN_SPEED_LOADED: 4.0,             // m/s — reel-in speed with captured debris
+  // Reel and reload power bill through MOTOR_DRAW_W (ArmUnit reload: CROSSBOW_RELOAD_POWER; the reels:
+  // tension × speed ÷ efficiency).
   REEL_BRAKE_FORCE_MAX: 500,             // N — maximum magnetic clutch brake force
   REEL_TENSION_WARNING: 0.7,             // fraction of break strength → yellow HUD
   REEL_TENSION_CRITICAL: 0.9,            // fraction of break strength → red HUD
-  // Register item 83(b) (2026-08-17, owner-ruled DELETE): REEL_LEVEL_WIND_SPEED
-  // (was 0.02 m/s — traverse speed for even spooling) removed — zero reads in
-  // tracked history (grep- AND git-proven); no spool/traverse is modelled. The
-  // level-wind mechanism is design narrative (CROSSBOW_ARMS §14.6, :1802); the
-  // reel's live rows are the speeds above and the brake/tension rows here.
+  // No level-wind/spool traverse is modelled (design narrative: archive/CROSSBOW_ARMS.md §14.6).
 
   // --- Capture-failure model & release dynamics ---
-  // Two distinct post-capture failure modes (see ArmUnit._updateGrappled /
-  // _updateReeling):
-  //   1. NET FAILURE (recoverable): the net loses its grip on a near-rated,
-  //      heavy catch. Debris slips free and drifts (re-capturable); the
-  //      daughter keeps her mother-tether and returns to reload. Probabilistic,
-  //      scaling with how close the payload is to the net's rated mass.
-  //   2. TETHER SNAP (catastrophic): the mother↔daughter cable parts under
-  //      reel load. Daughter + catch are cut loose and drift off together.
-  //      Deterministic on overload; retuned so an in-spec catch never snaps.
+  // Two distinct post-capture failure modes (see ArmUnit._updateGrappled / _updateReeling):
+  //   1. NET FAILURE (recoverable): the net loses its grip on a near-rated, heavy catch. Debris slips free and drifts
+  //      (re-capturable); the daughter keeps her mother-tether and returns to reload. Probabilistic, scaling with how
+  //      close the payload is to the net's rated mass.
+  //   2. TETHER SNAP (catastrophic): the mother↔daughter cable parts under reel load. Daughter + catch are cut loose
+  //      and drift off together. Deterministic on overload; tuned so an in-spec catch never snaps.
   REEL_TENSION_COEFF: 0.04,              // tension(N) = (armMass+payloadMass)×reelSpeed×coeff.
                                          //   Tuned so a max in-spec Weaver catch
                                          //   (~500 kg) reels home under the default
@@ -3184,22 +2475,17 @@ export const Constants = {
                                          //   ramp from SAFE_FRACTION → 1.0). Set 0 to disable.
   CAPTURE_RELEASE_SEPARATION_MPS: 1.2,   // m/s separation/recoil imparted to the daughter
                                          //   when a catch is lost (snap dynamics).
-  TETHER_SNAP_RELEASE_DELAY_S: 8.0,      // s — after a tether snap the catch drifts pinned
-                                         //   to the EXPENDED daughter for this long (so it
-                                         //   reads as "tumbling off with her"), then the pin
-                                         //   is released so the runaway debris resumes its
-                                         //   orbit + normal LOD instead of leaking full detail.
-
+  TETHER_SNAP_RELEASE_DELAY_S: 8.0,      // s — after a tether snap the catch drifts pinned to the EXPENDED daughter for
+                                         //   this long (reads as "tumbling off with her"), then the pin is released so
+                                         //   the runaway debris resumes its orbit + normal LOD.
 
   // --- Dual-Fire / Recoil ---
   DUALFIRE_SYNC_WINDOW: 0.01,            // seconds — max timing offset for dual fire
   DUALFIRE_RECOIL_WEAVER: 0.509,         // m/s — single Weaver recoil on 130kg mothership
   DUALFIRE_RECOIL_SPINNER: 0.171,        // m/s — single Spinner recoil
   DUALFIRE_RCS_COMPENSATION_N2: 3.7,     // grams N₂ — RCS cost per single Weaver shot
-  // The net recoil's ANGULAR channel (an off-axis muzzle; zero since the one
-  // centred launcher, owner 2026-10-13) is billed as real couple gas by
-  // PlayerSatellite._billTurnNullN2 (turn-gas, 2026-10-23; the 0.44 m
-  // doghouse-lever conversion it replaced was ~39x too cheap).
+  // The net recoil's ANGULAR channel (an off-axis muzzle; zero since the one centred launcher, owner 2026-10-13) is
+  // billed as real couple gas by PlayerSatellite._billTurnNullN2.
 
   // --- Pulse Scan ---
   PULSE_SCAN_DURATION: 2.0,              // seconds — all arms fire simultaneously
@@ -3207,39 +2493,32 @@ export const Constants = {
   PULSE_SCAN_COOLDOWN: 30.0,             // seconds — cooldown between pulse scans
   PULSE_SCAN_POWER: 50,                  // watts — total power draw during scan
 
-  // =========================================================================
   // ACTIVE SCAN SYSTEM — Player-initiated scanning for treasure hunting
-  // =========================================================================
   SCAN: {
-    REVEAL_BASE_RANGE: 5.0,   // 500 km in scene units — base radius for scan target reveal (UX-3 #9)
+    REVEAL_BASE_RANGE: 5.0,   // 500 km in scene units — base radius for scan target reveal
     REVEAL_STAGGER_MS: 120,   // ms between each target reveal (smooth, snappy cadence)
-    SESSION_SCAN_CAP: 5000,   // S2.4: max total scan credits per session (anti-spam)
-    // w2-heat D2 (DECISIONS §15 row 2 — "scanning costs battery and heat, like
-    // mana … noticeable until upgraded"). A scan costs POWER_COST × the 600 Wh
-    // base battery (BATTERY_MAX) × COST_MULT, in Wh. SWEEP_SHARE of it is the
-    // sweep, paid the instant the scan starts (refused — "Battery too low to
-    // scan." — when the battery cannot pay it); the rest is the onboard
-    // computer's analysis, a steady load over ANALYSIS_S real seconds. Every
-    // drawn watt ends as heat (ThermalSystem). Read by SensorSystem.getScanCost.
-    COST_MULT: 1,             // the one upgrade lever (later rounds; no shop item yet)
+    SESSION_SCAN_CAP: 5000,   // max total scan credits per session (anti-spam)
+    // DECISIONS §15 row 2 — "scanning costs battery and heat, like mana … noticeable until upgraded". A scan costs
+    // POWER_COST × the 600 Wh base battery (BATTERY_MAX) × COST_MULT, in Wh. SWEEP_SHARE of it is the sweep, paid
+    // the instant the scan starts (refused — "Battery too low to scan." — when the battery cannot pay it); the rest
+    // is the onboard computer's analysis, a steady load over ANALYSIS_S real seconds. Every drawn watt ends as heat
+    // (ThermalSystem). Read by SensorSystem.getScanCost.
+    COST_MULT: 1,             // the one upgrade lever (no shop item yet)
     SWEEP_SHARE: 1 / 3,       // the sweep's share; the computer's analysis is the rest
-    // w4-power D6 (owner 2026-10-12: "first scan should hit thermals and battery
-    // harder"): with no tracks yet the first scan of every boot searches the
-    // whole sky, so it costs at least the wide scan's energy whatever scan is
-    // pressed (× COST_MULT; the normal sweep / analysis split, the analysis over
-    // WIDE.ANALYSIS_S). Later scans pay their own cost. Not persisted.
-    // 90 → 160 Wh (owner 2026-10-18, "First scan hotter": mission 1 must warn
-    // about heat through normal play; replay tmp/heat-opts/replay2.mjs, option 2).
+    // owner 2026-10-18 ("First scan hotter": mission 1 must warn about heat through normal play): with no tracks yet
+    // the first scan of every boot searches the whole sky, so it costs at least the wide scan's energy whatever scan
+    // is pressed (× COST_MULT; the normal sweep / analysis split, the analysis over WIDE.ANALYSIS_S). Later scans
+    // pay their own cost. Not persisted. (Replay: tmp/heat-opts/replay2.mjs, option 2.)
     COLD_SEARCH_WH: 160,
     QUICK: {
       DURATION: 0.3,          // seconds to complete quick scan (fast S→reward feedback)
-      COOLDOWN: 5.0,          // seconds between quick scans (raised from 3.0 — anti-spam)
+      COOLDOWN: 5.0,          // seconds between quick scans (anti-spam)
       POWER_COST: 0.06,       // × 600 Wh = 36 Wh: 12 Wh sweep + 24 Wh analysis
       ANALYSIS_S: 3.5,        // real s → 24 Wh / 3.5 s = 6.9 kW on the battery clock
       DISCOVERY_CHANCE: 0.20, // 20% chance to find hidden debris
       REWARD: 50,             // base credits for survey data (modified by diminishing returns)
       RANGE_MULTIPLIER: 1.0,  // uses current sensor range
-      MAX_REVEALS: 5,         // targets discovered per quick scan (UX-3 #9)
+      MAX_REVEALS: 5,         // targets discovered per quick scan
     },
     WIDE: {
       DURATION: 4.0,          // seconds for wide aperture scan
@@ -3251,13 +2530,11 @@ export const Constants = {
       DISCOVERY_REWARD: 100,  // bonus per new contact found
       RANGE_MULTIPLIER: 2.0,  // double current sensor range
       MAX_DISCOVERIES: 3,     // up to 3 hidden objects per scan
-      MAX_REVEALS: 10,        // targets discovered per wide scan (UX-3 #9)
+      MAX_REVEALS: 10,        // targets discovered per wide scan
     },
   },
 
-  // =========================================================================
   // AUTO-TOOL RECOMMENDATION — MW2-style auto-pick for best capture tool
-  // =========================================================================
   TOOL_RECOMMENDATION: {
     LASSO_MAX_MASS: 10,         // kg — lasso effective up to this mass
     SPINNER_MAX_MASS: 50,       // kg — spinner arm for small/medium
@@ -3265,17 +2542,13 @@ export const Constants = {
     WEAVER_MIN_MASS: 200,       // kg — weaver for large debris
     TRAWL_MIN_COUNT: 3,         // minimum cluster size for trawl recommendation
     TRAWL_MAX_INDIVIDUAL_MASS: 20, // kg — trawl only for small fragments
-    // Whale band: above WEAVER_MAX_CAPTURE_MASS (500 kg) no daughter tool can
-    // take the catch (ArmUnit hard-refuses > 500 kg, lasso caps at 10, trawl at
-    // 50) — the mother's Large Net pod is the only legal tool. Recommend
-    // 'mother' so the tool chip stops reading WEAVER for a whale and the
-    // autopilot trail distance picks up D_TRAIL_NET instead of D_TRAIL_ARMS.
+    // Whale band: above WEAVER_MAX_CAPTURE_MASS (500 kg) no daughter tool can take the catch (ArmUnit hard-refuses
+    // > 500 kg, lasso caps at 10, trawl at 50) — the mother's Large Net pod is the only legal tool. Recommend 'mother'
+    // so the tool chip stops reading WEAVER and the autopilot trail distance picks up D_TRAIL_NET, not D_TRAIL_ARMS.
     MOTHER_MIN_MASS: 500,       // kg — mother Large Net pod above this mass
   },
 
-  // =========================================================================
-  // TARGET RANKING — Composite Target Priority Index (TPI) (FIX_PLAN §4)
-  // =========================================================================
+  // TARGET RANKING — Composite Target Priority Index (TPI) (archive/FIX_PLAN.md §4)
   // TPI = W_DIST * distScore + W_DV * dvScore + W_THREAT * threatScore + W_VALUE * valueScore
   // Each factor normalized to 0..1; lower TPI = higher priority
   TARGET_RANKING: {
@@ -3300,55 +2573,51 @@ export const Constants = {
   ABLATION_DURATION_MAX: 30,             // seconds — max continuous ablation
   ABLATION_DESPIN_RATE: 0.1,             // rad/s² — angular deceleration applied
 
-  // CP-2 — mother-mounted de-spin laser (BIG_PICTURE §16; GAME_DESIGN "10W laser de-spin").
+  // Mother-mounted de-spin laser (archive/BIG_PICTURE.md §16; GAME_DESIGN "10W laser de-spin").
   // Hold-to-fire assist that bleeds a tumbling target's spin down until a net can cling.
   DESPIN_LASER: {
     RANGE_M:            5000,     // mother optic reach (scene-wide; >> the 50 m daughter ablation)
     DESPIN_RATE_RAD_S2: 0.30,     // angular deceleration applied while firing
     IN_SPEC_DEG:        10,       // tumble at/below this is net-safe → "tumble in spec, net it"
-    BEAM_COLOR:         0x66ddff, // cyan glow (BIG_PICTURE §16.4)
+    BEAM_COLOR:         0x66ddff, // cyan glow (archive/BIG_PICTURE.md §16.4)
     BEAM_OPACITY:       0.7,
   },
-  // Net cling tumble penalty (CP-2) — high target tumble reduces cling; detumble restores it.
-  // This is the live-path coupling that makes the de-spin laser actually matter for capture.
+  // Net cling tumble penalty — high target tumble reduces cling; detumble restores it. This is the live-path
+  // coupling that makes the de-spin laser actually matter for capture.
   NET_TUMBLE_PENALTY: {
     IN_SPEC_DEG: 10,     // no penalty at/below this tumble
     PER_DEG:     0.012,  // cling-multiplier loss per °/s above in-spec
     FLOOR:       0.4,    // minimum multiplier (never makes a catch strictly impossible)
-    // Wave-4 QA #3 (CAPTURE_NET.md §10 concern 3): tumble-factor cache
-    // invalidation epsilon for the pre-fire odds lock cache
-    // (ToolOdds.makeNetOddsLockCache). |Δ tumbleRate| beyond this recomputes
-    // f_tumble. tumbleRate only changes via discrete writes (despin laser
-    // 0.30 rad/s², eddy damp 0.10 rad/s², torque settle → 0, remainder
-    // resume), so the smallest real per-frame step is ~0.10 × dt ≈ 4e-4 rad/s
-    // even at 240 fps — 5 orders above this epsilon. Every real write
-    // therefore recomputes (the displayed odds stay numerically identical to
-    // a fresh computation), while bit-stable re-reads skip the work.
+    // Tumble-factor cache invalidation epsilon for the pre-fire odds lock cache (ToolOdds.makeNetOddsLockCache;
+    // CAPTURE_NET.md §10 concern 3). |Δ tumbleRate| beyond this recomputes f_tumble. tumbleRate only changes via
+    // discrete writes (despin laser 0.30 rad/s², eddy damp 0.10 rad/s², torque settle → 0, remainder resume), so the
+    // smallest real per-frame step is ~0.10 × dt ≈ 4e-4 rad/s even at 240 fps — 5 orders above this epsilon. Every
+    // real write therefore recomputes (the displayed odds stay numerically identical to a fresh computation), while
+    // bit-stable re-reads skip the work.
     RATE_EPS_RAD_S: 1e-9,
   },
 
   // --- V5 Arm Configuration ---
-  V5_ARM_COUNT: 4,                       // Total arms: 2W + 2S (Y0 Quad baseline — ST-9.2)
+  V5_ARM_COUNT: 4,                       // Total arms: 2W + 2S (Y0 Quad baseline)
   V5_WEAVER_MASS: 6.6,                   // kg — 40% lighter (reel on mothership)
   V5_SPINNER_MASS: 2.1,                  // kg — 40% lighter (reel on mothership)
   V5_FRONT_ARM_TYPE: 'spinner',          // prograde arm type
   V5_BACK_ARM_TYPE: 'spinner',           // retrograde arm type
 
   // --- Tether Materials (upgrade tiers) ---
-  // 2026-10-21 (DECISIONS §33 row 5, lane nets-step2): the tether tier IS the line-fibre upgrade. One purchase raises the
-  // tether length (maxLength, as before) AND the net capacities: `nets` = mother / large daughter / small daughter
-  // (4/2/4 at the start tier = CAPTURE_NET.LARGE/MEDIUM/SMALL.MAGAZINE_SIZE, drift-tested). `label` is what the player
-  // reads (Ruling 0: plain words; `name` stays the code-side key and the purchase payload). `netMassKg` is the mass of
-  // ONE packed mother / large / small net at that fibre: MESH_MASS * mf + RIM_WEIGHT_COUNT * RIM_WEIGHT_MASS + HUB_MASS,
+  // DECISIONS §33 row 5: the tether tier IS the line-fibre upgrade. One purchase raises the tether length
+  // (maxLength) AND the net capacities: `nets` = mother / large daughter / small daughter (4/2/4 at the start tier =
+  // CAPTURE_NET.LARGE/MEDIUM/SMALL.MAGAZINE_SIZE, drift-tested). `label` is what the player reads (Ruling 0: plain
+  // words; `name` stays the code-side key and the purchase payload). `netMassKg` is the mass of ONE packed mother /
+  // large / small net at that fibre: MESH_MASS * mf + RIM_WEIGHT_COUNT * RIM_WEIGHT_MASS + HUB_MASS,
   // mf = [1, 0.970, 0.469, 0.0375, 0.0156] (strength and density per fibre: Dyneema 3.5 GPa 0.97 g/cm3, Zylon 5.8 GPa
-  // 1.56, carbon nanotube yarn 10 GPa 1.3 (speculative), graphene from the game's own GSL rows 2.0 (future tech; the best
-  // graphene fibre made today is 5.9 GPa)). ESTIMATES from the probe tmp/netpack/step2.mjs (packing fraction 0.5), not
-  // measurements; the drawn cartridges (netCellLayout) are sized to hold them (test-NetPack).
-  // 2026-10-23 (DECISIONS §38 row 5): the LARGE daughter now carries four 3 m nets (0.317 kg each at the start tier) in
-  // place of two 5 m nets, so `nets.large` is 4 / 6 / 8 / 10 / 10 (was 2 / 3 / 4 / 5 / 5; the ladder doubles, the last two
-  // tiers still tie) and `netMassKg.large` follows the same MESH x mf + rim + hub formula with the 3 m net's parts
-  // (MESH 0.149, 4 x 0.030, hub 0.048). Packed, every tier fits the large can (js/test/_netPack.js; 73 % full at the
-  // start tier, was 92 %).
+  // 1.56, carbon nanotube yarn 10 GPa 1.3 (speculative), graphene from the game's own GSL rows 2.0 (future tech; the
+  // best graphene fibre made today is 5.9 GPa)). ESTIMATES from the probe tmp/netpack/step2.mjs (packing fraction
+  // 0.5), not measurements; the drawn cartridges (netCellLayout) are sized to hold them (test-NetPack).
+  // DECISIONS §38 row 5: the LARGE daughter carries four 3 m nets (0.317 kg each at the start tier), so `nets.large`
+  // is 4 / 6 / 8 / 10 / 10 and `netMassKg.large` follows the same MESH x mf + rim + hub formula with the 3 m net's
+  // parts (MESH 0.149, 4 x 0.030, hub 0.048). Packed, every tier fits the large can (js/test/_netPack.js; 73 % full
+  // at the start tier).
   TETHER_TIERS: [
     { name: 'Dyneema',   label: 'Dyneema',          breakStrength: 100,  mass_per_km: 0.8,  maxLength: 2000,  cost: 0,
       nets: { mother: 4,  large: 4,  small: 4  }, netMassKg: { mother: 1.425, large: 0.317, small: 0.120 } },
@@ -3363,9 +2632,7 @@ export const Constants = {
   ],
 
   // --- Spring Upgrade Tiers ---
-  // Register item 76(a) (2026-08-16): reloadMult (0.5 / 1.0 / 2.25 / 4.0 / 6.25)
-  // removed from all five rows — read nowhere; the shipped reloads carry no tier
-  // multiplier (the FSM reaches reload duration only via the maxSpeed clamp).
+  // The shipped reloads carry no tier multiplier (the FSM reaches reload duration only via the maxSpeed clamp).
   SPRING_TIERS: [
     { name: 'Steel T1',      maxSpeed: 7.1,  cost: 0 },
     { name: 'Maraging T2',   maxSpeed: 10.0, cost: 800 },
@@ -3374,7 +2641,7 @@ export const Constants = {
     { name: 'Metamat T5',    maxSpeed: 25.0, cost: 30000 },
   ],
 
-  // =========================================================================
+  // SALVAGE SYSTEM — Recoverable resources from captured debris
   // SALVAGE SYSTEM — Recoverable resources from captured debris (Session 10)
   // =========================================================================
 
@@ -3414,30 +2681,23 @@ export const Constants = {
 
   // --- Salvage Scoring ---
   SALVAGE_SCORE_MULTIPLIER: 1.15,     // ×1.15 when salvage recovered
-  // E1 retune: soft-cap on the PRODUCT of situational capture multipliers
-  // (assessment ×1.3 · manual ×2 · fuel-eff ×1.25 · salvage ×1.15 · detach ×2 ·
-  // deorbit). Stacked, these reached ~×7.5 and made a single lucky catch pay a
-  // whole shop tier. Capped so the ceiling is a deliberate skill target, tunable.
+  // Soft-cap on the PRODUCT of situational capture multipliers (assessment ×1.3 · manual ×2 · fuel-eff ×1.25 ·
+  // salvage ×1.15 · detach ×2 · deorbit). Stacked, these reach ~×7.5 and would make a single lucky catch pay a whole
+  // shop tier. Capped so the ceiling is a deliberate skill target, tunable.
   SITUATIONAL_MULT_SOFT_CAP: 2.5,
-  // S1 credits rebalance (2026-07-23): a SEPARATE, lower soft cap applied only to
-  // the CREDITS ledger's situational product inside awardPoints(). The score
-  // ledger keeps the 2.5 cap (skill rating untouched); the wallet is capped
-  // lower so skilled manual play earns ~+50% credits over auto-capture rather
-  // than the pre-fix ~6–7× catalog that let a skilled player buy out the shop
-  // early and kill the accumulate-and-upgrade loop. Tunable; must stay
-  // ≤ SITUATIONAL_MULT_SOFT_CAP (guardrail test asserts this).
+  // A SEPARATE, lower soft cap applied only to the CREDITS ledger's situational product inside awardPoints(). The
+  // score ledger keeps the 2.5 cap (skill rating untouched); the wallet is capped lower so skilled manual play earns
+  // ~+50% credits over auto-capture rather than a ~6–7× catalog that lets a skilled player buy out the shop early
+  // and kill the accumulate-and-upgrade loop. Tunable; must stay ≤ SITUATIONAL_MULT_SOFT_CAP (guardrail test asserts
+  // this).
   SITUATIONAL_MULT_SOFT_CAP_CREDITS: 1.5,
-  // S1 credits rebalance: per-RUN capture-credits taper. Capture credits pay
-  // full value until cumulative per-run capture earnings reach START_X×catalog,
-  // then scale down linearly so cumulative capture credits asymptotically
-  // approach CEILING_X×catalog. Multiples of SHOP.CATALOG_TOTAL_CR. Sales and
-  // contract income (addCredits) are OUTSIDE the taper by design — the late-game
-  // money loop shifts from raw captures to refine-and-contribute.
+  // Per-RUN capture-credits taper. Capture credits pay full value until cumulative per-run capture earnings reach
+  // START_X×catalog, then scale down linearly so cumulative capture credits asymptotically approach CEILING_X×catalog.
+  // Multiples of SHOP.CATALOG_TOTAL_CR. Sales and contract income (addCredits) are OUTSIDE the taper by design — the
+  // late-game money loop shifts from raw captures to refine-and-contribute.
   CAPTURE_CREDITS_TAPER: { START_X: 1.5, CEILING_X: 2.5 },
 
-  // =========================================================================
-  // DEORBIT SACRIFICE SYSTEM — One-way arm missions (Session 10)
-  // =========================================================================
+  // DEORBIT SACRIFICE SYSTEM — One-way arm missions
 
   DEORBIT_MULTIPLIER_BASE: 1.5,       // Standard sacrifice bonus
   DEORBIT_MULTIPLIER_HIGH_DV: 1.8,    // >20 m/s retrograde burn achieved
@@ -3446,9 +2706,7 @@ export const Constants = {
   DEORBIT_HIGH_DV_THRESHOLD: 20,      // m/s — threshold for high-ΔV bonus
   DEORBIT_REENTRY_PERIGEE: 200,       // km — perigee for reentry bonus
 
-  // =========================================================================
-  // METAL SALVAGE ECONOMY — Recoverable metals from debris (Phase 2)
-  // =========================================================================
+  // METAL SALVAGE ECONOMY — Recoverable metals from debris
 
   METALS: {
     ALUMINUM: {
@@ -3547,31 +2805,26 @@ export const Constants = {
   // --- Cargo Hold ---
   CARGO_CAPACITY_KG: 500,        // base cargo hold capacity in kg
   CARGO_CAPACITY_SLOTS: 20,      // max distinct material stacks
-  // E2 Cargo Bay upgrade chain — absolute hold targets (CargoSystem.applyUpgrade
-  // assigns, not accumulates, so restore-replay is idempotent). The elevator win
-  // needs throughput: 12 depots × TIER3 (3,000) ≫ the 10,000 kg contract.
+  // E2 Cargo Bay upgrade chain — absolute hold targets (CargoSystem.applyUpgrade assigns, not accumulates, so
+  // restore-replay is idempotent). The elevator win needs throughput: 12 depots × TIER3 (3,000) ≫ the 10,000 kg contract.
   CARGO_BAY_TIER2_KG: 1500,      // cargo_bay_2: base 500 → 1,500 (+1,000)
   CARGO_BAY_TIER3_KG: 3000,      // cargo_bay_3: 1,500 → 3,000 (+1,500)
 
-  // =========================================================================
-  // FUELS — Dual-Mode Hall Thruster Propellant Definitions (Phase 4)
-  // One thruster, multiple fuels. T key cycles. Isp affects ΔV efficiency.
-  // =========================================================================
+  // FUELS — Dual-Mode Hall Thruster Propellant Definitions. One thruster, multiple fuels. T key cycles. Isp affects ΔV efficiency.
 
   FUELS: {
-    // h3-argon-engine (owner 2026-10-15, DECISIONS §23 row 2: "Argon, 60 L tank"): the ship's own tank
-    // holds ONE engine gas — argon by default, krypton / xenon are later upgrades. All three burn
-    // from the same pool (`res.xenon`, kept name: 100 = one full 60 L, 200 bar base tank), so each has
-    // resourceKey 'xenon'. isp / thrustScale / kgFull are sourced in
-    // docs/research/2026-10-propellant-and-tanks.md §2.2-2.3 / §5.2.
-    // kgFull = gas mass that fills the 60 L, 200 bar tank at 20 C (NIST density, research §2.2 table).
+    // owner 2026-10-15, DECISIONS §23 row 2: "Argon, 60 L tank". The ship's own tank holds ONE engine gas — argon by
+    // default, krypton / xenon are later upgrades. All three burn from the same pool (`res.xenon`, kept name: 100 =
+    // one full 60 L, 200 bar base tank), so each has resourceKey 'xenon'. isp / thrustScale / kgFull are sourced in
+    // archive/research/2026-10-propellant-and-tanks.md §2.2-2.3 / §5.2. kgFull = gas mass that fills the 60 L, 200 bar
+    // tank at 20 C (NIST density, research §2.2 table).
     argon: {
       id: 'argon',
       name: 'Argon',
       isp: 1700,          // seconds — ESTIMATE (research §2.3: small Hall thrusters get ~Kr's Isp on Ar)
       thrustScale: 0.46,  // 18 / 39 mN at 600 W (CAMILA anode-efficiency ratio vs xenon, research §2.3)
       kgFull: 20.8,       // kg in 60 L @ 200 bar (research §2.2)
-      usdPerKg: 10,       // g1-gas-upgrades D1: gas price, research §2.4 (the launch cost per kg is LAUNCH_USD_PER_KG)
+      usdPerKg: 10,       // gas price, research §2.4 (the launch cost per kg is LAUNCH_USD_PER_KG)
       color: '#9fb8c8',   // cool grey-blue
       resourceKey: 'xenon', // burns from the ship tank pool (pool key kept; it holds whichever gas is loaded)
       fromCargo: false,
@@ -3582,7 +2835,7 @@ export const Constants = {
       isp: 1650,          // seconds — Busek 1.5 kW lab data: Kr +140..190 s over Xe (IEPC-2017-26), research §2.3
       thrustScale: 0.67,  // 26 / 39 mN at 600 W (research §2.3)
       kgFull: 58.0,       // kg in 60 L @ 200 bar (research §2.2)
-      usdPerKg: 400,      // g1-gas-upgrades D1 (research §2.4)
+      usdPerKg: 400,      // research §2.4
       color: '#b39ddb',
       resourceKey: 'xenon',
       fromCargo: false,
@@ -3590,10 +2843,10 @@ export const Constants = {
     xenon: {
       id: 'xenon',
       name: 'Xenon',
-      isp: 1500,          // seconds — Busek BHT-600 "up to 1500 s"; equals OCTOPUS_CORE_HALL_ISP (was 1600 here)
+      isp: 1500,          // seconds — Busek BHT-600 "up to 1500 s"; equals OCTOPUS_CORE_HALL_ISP
       thrustScale: 1.0,   // baseline thrust (39 mN at 600 W, Busek BHT-600)
       kgFull: 129.2,      // kg in 60 L @ 200 bar (research §2.2)
-      usdPerKg: 2700,     // g1-gas-upgrades D1 (research §2.4)
+      usdPerKg: 2700,     // research §2.4
       color: '#4fc3f7',   // light blue
       resourceKey: 'xenon', // consumes from ResourceSystem xenon tank
       fromCargo: false,    // uses ship's built-in tank
@@ -3640,50 +2893,39 @@ export const Constants = {
     },
   },
 
-  DEFAULT_FUEL: 'argon',   // h3-argon-engine: the cheapest gas for modern satellites (DECISIONS §23)
+  DEFAULT_FUEL: 'argon',   // the cheapest gas for modern satellites (DECISIONS §23)
 
-  // =========================================================================
-  // MPD THRUSTER — Magnetoplasmadynamic Tier 3 Propulsion (F16)
-  // High-thrust lithium-propellant system with cathode erosion mechanic
-  // =========================================================================
+  // MPD THRUSTER — Magnetoplasmadynamic Tier 3 Propulsion: high-thrust lithium-propellant system with cathode erosion mechanic
 
   MPD_CATHODE_LIFE: 600,             // seconds of operation before erosion
   MPD_LITHIUM_CAPACITY: 100,         // max lithium units
-  MPD_PASSIVE_THRUST_MULT: 1.5,      // F2: passive ion-drive boost while MPD installed (folds MPD gain into the normal drive; the burst path stays dormant). +50% primary thrust for the GEO/ch11 climb.
+  MPD_PASSIVE_THRUST_MULT: 1.5,      // passive ion-drive boost while MPD installed (folds MPD gain into the normal drive; the burst path stays dormant). +50% primary thrust for the GEO/ch11 climb.
 
-  // --- MPD Burst Mode (S3b) ---
+  // --- MPD Burst Mode ---
   MPD_BURST_COOL_RATE: 0.3,               // heat units/s passive dissipation
   MPD_BURST_COOL_RATE_SUPERCAP: 0.5,      // heat dissipation with supercap upgrade
   MPD_BURST_OVERHEAT_THRESHOLD: 40,       // heat units for thermal shutdown
 
-
-
-  // =========================================================================
-  // MARKET & BOUNTY SYSTEM (Phase 5)
-  // =========================================================================
+  // MARKET & BOUNTY SYSTEM
 
   MARKET: {
-    // Bounty premiums by debris type (multiplier on base capture score)
-    // Keys must match DEBRIS_TYPES values (camelCase game IDs)
+    // Bounty premiums by debris type (multiplier on base capture score); keys match DEBRIS_TYPES values.
     BOUNTY_PREMIUMS: {
-      fragment: 1.2,         // E1 retune: was 1.8 — fragments are the bulk of catches;
+      fragment: 1.2,         // fragments are the bulk of catches
       missionDebris: 1.5,    // mission debris: moderate premium
       defunctSat: 1.0,       // base rate
       rocketBody: 0.8,       // large bodies: lower bounty but more salvage metal
       cubesat: 1.4,          // small whole microsat: dense/valuable graduation catch
     },
 
-    // Selling price modifier (cargo sells at this fraction of listed marketValue)
-    SELL_PRICE_MODIFIER: 0.85,  // 85% of listed value (market spread)
+    SELL_PRICE_MODIFIER: 0.85,  // 85% of listed marketValue (market spread)
 
-    // Bulk bonus: selling > 50kg at once gets a bonus
+    // Bulk bonus: selling > 50kg at once
     BULK_THRESHOLD_KG: 50,
     BULK_BONUS_MULTIPLIER: 1.15,
   },
 
-  // =========================================================================
-  // SPACE ELEVATOR CONTRACT — Endgame Win Condition (Phase 5)
-  // =========================================================================
+  // SPACE ELEVATOR CONTRACT — Endgame Win Condition
 
   ELEVATOR_CONTRACT: {
     TARGET_MASS_KG: 10000,     // 10,000 kg to complete the contract
@@ -3693,9 +2935,7 @@ export const Constants = {
     WIN_BONUS: 50000,          // credits bonus for completing the contract
   },
 
-  // =========================================================================
-  // TRAWLING — Passive debris collection along orbit path (Phase 6)
-  // =========================================================================
+  // TRAWLING — Passive debris collection along orbit path
 
   TRAWLING: {
     MAX_TRAWL_ARMS: 3,                    // max arms that can trawl simultaneously
@@ -3717,9 +2957,7 @@ export const Constants = {
     DEPLOY_SPEED: 2,                      // m/s — trawl net deployment speed
   },
 
-  // =========================================================================
-  // EDT — Electrodynamic Tether deployment to attract small debris (Phase 6)
-  // =========================================================================
+  // EDT — Electrodynamic Tether deployment to attract small debris
 
   EDT: {
     DEPLOY_LENGTH_KM: 0.1,     // 100m tether
@@ -3730,22 +2968,20 @@ export const Constants = {
     DEPLOY_TIME: 5,            // seconds to deploy
   },
 
-  // =========================================================================
-  // ROUTE PLANNER — ΔV-optimal multi-target visit order (Phase 6)
-  // =========================================================================
+  // ROUTE PLANNER — ΔV-optimal multi-target visit order
 
   ROUTE_PLANNER: {
     MAX_WAYPOINTS: 6,          // max targets in a planned route
     DISPLAY_DV_THRESHOLD: 0.01, // don't show ΔV < 10 m/s legs
   },
 
-  // === HUD Configuration (Phase R4) ===
+  // HUD Configuration
   HUD: {
     COLORS: {
-      GREEN: '#00ff88',
-      AMBER: '#ffaa00',
+      GREEN: VisualLaw.COLORS.PLAYER,
+      AMBER: VisualLaw.COLORS.CAUTION,
       RED: '#ff4444',
-      BLUE: '#4488ff',
+      BLUE: VisualLaw.COLORS.SELECTION,
       WHITE: '#ccddcc',
     },
     THRESHOLDS: {
@@ -3763,39 +2999,18 @@ export const Constants = {
     MAX_ALERT_PULSE_HZ: 0.5,
   },
 
-  // === Audio Configuration (Phase R4) ===
+  // Audio Configuration
   AUDIO: {
     AMBIENT_GAIN: 0.01,
-    // §14.6 (Sprint 4) removed SFX_GAIN: 0.15 — declared but never referenced
-    // anywhere in the codebase. The SFX bus uses a hardcoded 0.7 gain at
-    // [`AudioSystem.js:116`](js/systems/AudioSystem.js:116). Keep AMBIENT_GAIN
-    // (used by opt-in `?ambient=1`) and ALERT_GAIN (used by warning/conjunction
-    // earcons — see AudioSystem.js:1820, 1848).
+    // AMBIENT_GAIN is used by opt-in `?ambient=1`; ALERT_GAIN by warning/conjunction earcons (AudioSystem.js
+    // `_playAlarmBeeps`, `_startContinuousAlarm`). The SFX bus uses a hardcoded 0.7 gain (AudioSystem.js `init`).
     ALERT_GAIN: 0.20,
-    // §13 Sprint 4 escalation — gameplay ambient loop default OFF.
-    //
-    // Root cause investigation: even after the low-power AudioContext fix
-    // (latencyHint:'playback' + sampleRate:22050, §13.5), the user reported
-    // the fan still triggered on sim-start (MENU → ORBITAL_VIEW). A/B test
-    // with ?noAudio=1 confirmed the audio thread is still the trigger.
-    //
-    // The ambient loop creates two continuously-looping BufferSource nodes
-    // (white noise) + two BiquadFilter nodes (bandpass) that keep the audio
-    // render thread permanently busy from the moment ORBITAL_VIEW starts.
-    // Even at 22 kHz the filters process every render quantum (~46 ms at
-    // 1024-sample 'playback' buffer = ~22 wakeups/s per filter chain, plus
-    // every gain ramp scheduled via linearRampToValueAtTime). On Apple
-    // Silicon this is enough to push Energy Impact across the SMC fan-trip
-    // threshold.
-    //
-    // Toggling the ambient loop off means the AudioContext still exists
-    // (so SFX play instantly without resume-latency) but no continuous
-    // sources are running between SFX events. The audio thread can c-state
-    // park between callbacks.
-    //
-    // URL flag override: `?ambient=1` enables it for users who want the
-    // engine-room sound (and accept the energy cost). `?noAmbient=1` is
-    // also accepted for symmetry but is the default.
+    // Gameplay ambient loop default OFF: its continuously-looping noise BufferSources + bandpass BiquadFilters keep
+    // the audio render thread permanently busy from the moment ORBITAL_VIEW starts (~22 wakeups/s per filter chain even
+    // at 22 kHz), enough on Apple Silicon to push Energy Impact across the SMC fan-trip threshold (A/B with
+    // ?noAudio=1 confirmed it, even after the low-power AudioContext fix: latencyHint:'playback' + sampleRate:22050).
+    // With the loop off the AudioContext still exists (SFX play instantly, no resume-latency) but the audio thread can
+    // c-state park between SFX events. `?ambient=1` enables it (accepting the energy cost); `?noAmbient=1` is the default.
     AMBIENT_LOOP_ENABLED: false,
     EARCON_FREQUENCIES: {
       SUCCESS: [261, 329, 392],    // C4, E4, G4 — ascending major
@@ -3803,10 +3018,8 @@ export const Constants = {
       CONFIRM: [600, 600],          // two same-pitch blips
       CYCLE: [400, 450, 500, 550, 600],  // ascending steps for T key
     },
-    // Audio Vocabulary Overhaul (2026-07-23) — per-family bus default gains.
-    // Tuning-only table (see plan §P2); NOT surfaced as settings sliders.
-    // Every family bus routes → sfxBus → master. Start flat at 1.0 except a
-    // slightly quieter TICK so input confirms sit under informative cues.
+    // Per-family bus default gains. Tuning-only table; NOT surfaced as settings sliders. Every family bus routes →
+    // sfxBus → master. Flat at 1.0 except a slightly quieter TICK so input confirms sit under informative cues.
     FAMILY_GAIN: {
       physical: 1.0,
       radio: 1.0,
@@ -3817,9 +3030,8 @@ export const Constants = {
       reward: 1.0,
       pad: 1.0,
     },
-    // P6 — core-loop range-closing ticker: a soft PING blip whose cadence
-    // rises as the player closes on a selected out-of-net-range target (the
-    // audio partner of the reticle distance readout).
+    // Core-loop range-closing ticker: a soft PING blip whose cadence rises as the player closes on a selected
+    // out-of-net-range target (the audio partner of the reticle distance readout).
     RANGE_TICKER: {
       ENABLED: true,
       START_M: 2000, // only tick when distM < START_M
@@ -3827,228 +3039,148 @@ export const Constants = {
       MAX_HZ: 3,     // cadence just outside net range (close)
       GAIN: 0.05,
     },
-    // Startup legibility (2026-07-24): several cues fire from AUTOMATION in
-    // the first seconds of a mission with zero player action — the dossier
-    // manifest typewriter (auto-locked target's passive survey) and the first
-    // onboarding hint chime. Each lands as an unexplained noise while the
-    // player is still parsing the departure handoff. Suppress these
-    // non-essential cues for this window after entering gameplay from the
-    // menu; their visuals (typewriter rows, hint card) still appear, and cues
-    // fired after the window keep their voice. Danger/ALARM cues are never
-    // gated by this.
+    // Several cues fire from AUTOMATION in the first seconds of a mission with zero player action — the dossier
+    // manifest typewriter (auto-locked target's passive survey) and the first onboarding hint chime. Each lands as
+    // an unexplained noise while the player is still parsing the departure handoff. Suppress these non-essential
+    // cues for this window after entering gameplay from the menu; their visuals (typewriter rows, hint card) still
+    // appear, and cues fired after the window keep their voice. Danger/ALARM cues are never gated by this.
     STARTUP_CUE_GRACE_S: 30,
   },
 
-  // =========================================================================
-  // GAMEPLAY LOOP — Phase 1 Core Feel (from GAMEPLAY_LOOP.md)
-  // =========================================================================
+  // GAMEPLAY LOOP
 
   // --- Lasso System ---
-  LASSO_RANGE: NET_REACH_M,            // meters — === NET_LOCK_RANGE_M (W1 net-reach D1: the gate is the in-range ring the player sees; was 200)
-  LASSO_SPEED: 10,                     // m/s launch velocity — 10 m/s (50% slower) for deliberate space-sim cast feel
+  LASSO_RANGE: NET_REACH_M,            // meters — === NET_LOCK_RANGE_M (the gate is the in-range ring the player sees)
+  LASSO_SPEED: 10,                     // m/s launch velocity — slow for a deliberate space-sim cast feel
                                        // accounts for TIME_SCALE_GAMEPLAY×10 so apparent speed is 100 m/s game-time
-  LASSO_MAX_FLIGHT_TIME: 8,            // seconds real-time before auto-retract. MEASURED (c64c911, static target): the head flies
+  LASSO_MAX_FLIGHT_TIME: 8,            // seconds real-time before auto-retract. MEASURED (static target): the head flies
                                        // LASSO_SPEED × TIME_SCALE_GAMEPLAY = 100 m/s per REAL second, so 8 s ≈ 808 m of physical reach —
                                        // far past the 90 m LASSO_RANGE gate. test-NetReachTruth.js pins reach ≥ 1.1 × NET_LOCK_RANGE_M.
   LASSO_REEL_SPEED: 0.33,             // reel-in progress per real second (0→1; ~3 s total) — SLOWER than outbound to avoid tangles
   LASSO_MAX_CAPTURE_MASS: 10,          // kg
-  // LASSO_AMMO_MAX retired 2026-10-20 (DECISIONS §33): the mother has ONE count of nets,
-  // CAPTURE_NET.LARGE.MAGAZINE_SIZE (4), owned by CaptureNetSystem. The old 50 "small net shots" are gone.
-  LASSO_FORWARD_ARC_DOT: 0.3,         // UX-3 #4 — min dot product for forward hemisphere (~72° cone)
+  // The mother has ONE count of nets, CAPTURE_NET.LARGE.MAGAZINE_SIZE (4), owned by CaptureNetSystem (DECISIONS §33).
+  LASSO_FORWARD_ARC_DOT: 0.3,         // min dot product for forward hemisphere (~72° cone)
   LASSO_CAST_WINDUP: 0.15,            // seconds — brief charging delay before lasso fires (cast feel)
   LASSO_COOLDOWN_CATCH: 2,            // seconds — cooldown after successful catch before next cast
   LASSO_COOLDOWN_MISS: 1,             // seconds — cooldown after miss/retract before next cast
   LASSO_PROJECTILE_MASS: 2.5,         // kg — mass of lasso net projectile (for recoil compensation)
 
-  // --- Mother-net capture ceremony Phase 1 (visible throw) ---
-  // .kilo/plans/mother-net-capture-ceremony.md §1A/1B/1C.
-  // The first guided catch was invisible: contact fired at LASSO_CONTACT_RADIUS_M
-  // (20 m) while guided #1 is pinned at ~22 m, so the net travelled ~2 m (~0.02 s)
-  // at the 100 m/real-s rate. These make even a point-blank throw read as a real
-  // arc that leaves the nose canister and travels.
+  // --- Mother-net capture ceremony: visible throw ---
+  // Contact must not fire at point-blank range in ~0.02 s; even a close throw reads as a real arc from the nose canister.
   LASSO_MIN_FLIGHT_TIME: 0.8,         // seconds real-time — contact cannot fire before this, so the throw is always clearly seen
-  LASSO_CONTACT_RADIUS_M: 6,          // metres — base contact radius (replaces the flat 20 m). Scaled down for near targets.
+  LASSO_CONTACT_RADIUS_M: 6,          // metres — base contact radius. Scaled down for near targets.
   LASSO_CONTACT_RADIUS_FRACTION: 0.35,// contactRadius = min(LASSO_CONTACT_RADIUS_M, fraction × launchDistance), floored
   LASSO_CONTACT_RADIUS_FLOOR_M: 3,    // metres — never shrink the contact test below this (so contact still triggers)
   LASSO_MUZZLE_OFFSET_M: 8,           // metres — forward (+Z/prograde) muzzle offset; net spawns/anchors at the nose, not the hull centre
   LASSO_RECOIL_KICK_M: 2.5,           // metres — peak cosmetic mesh kick opposite launch (visual only; no orbit/fuel change)
   LASSO_RECOIL_DECAY: 5.0,            // 1/s — critically-damped spring rate for the recoil kick to settle back
   LASSO_MUZZLE_FLASH_TIME: 0.25,      // seconds — brief muzzle puff lifetime
-  // Round 3 (2026-08-26, V4): the launch frame read as a blown-out white blob
-  // on every take (tmp/lasso9-day f001) — a 5 m near-solid white sphere
-  // (10 m geo × 0.5 scale at 0.95 opacity) parked at the nose right where the
-  // opening web crosses it in screen space. Tamed to a genuine sub-bloom puff:
-  // ~1.8 m radius at 0.4 peak opacity — the thwip stays visible, the frame
-  // stays readable. Same 0.25 s life.
+  // Muzzle flash: a sub-bloom puff (~1.8 m radius) so the launch frame stays readable (not a blown-out white blob at the nose).
   LASSO_MUZZLE_FLASH_SCALE: 0.18,     // multiplier on the muzzle-flash sphere (small puff, not a hull-sized white blob)
-  LASSO_MUZZLE_FLASH_OPACITY: 0.4,    // peak opacity at launch (was a hardcoded 0.95 — solid white)
+  LASSO_MUZZLE_FLASH_OPACITY: 0.4,    // peak opacity at launch
 
-  // --- Mother-net capture ceremony Phase 3 (reel-in physics) ---
-  // .kilo/plans/mother-net-capture-ceremony.md §PHASE 3 (flag LASSO_REEL_PHYSICS).
+  // --- Mother-net capture ceremony: reel-in physics (flag LASSO_REEL_PHYSICS) ---
   // GATED OFF on Mission 1 AND for capturedMass ≤ LASSO_MAX_CAPTURE_MASS (10 kg),
   // so M1 / welcome catches reel EXACTLY as today regardless of the flag. Only
   // heavier later catches feel mass-driven tension, a CoM pull, and break risk.
-  LASSO_TENSION_BASE_N: 1.0,          // N — baseline tether tension (mirrors CaptureNet.js:879)
+  LASSO_TENSION_BASE_N: 1.0,          // N — baseline tether tension (mirrors CaptureNet.js `baseCaptureTensionN`)
   LASSO_TENSION_PER_KG: 0.1,          // N per kg of captured mass (mirrors CaptureNet model)
   LASSO_NET_RATED_MASS_KG: 50,        // kg — Mother-net rated payload; strain = capturedMass / rated
   LASSO_REEL_PULL_GAIN: 0.6,          // dimensionless — CoM nudge scale (× mass/shipMass × reelRate), clamped by RCS_MAX_SPEED
-  LASSO_REEL_TORQUE_GAIN: 0.8,        // dimensionless — attitude tug scale: reeling a heavy OFF-AXIS catch swings the Mother's nose toward it (× massRatio × lateral tether dir), fed to the recoil-attitude springs and RCS-nulled (2026-07-23)
+  LASSO_REEL_TORQUE_GAIN: 0.8,        // dimensionless — attitude tug scale: reeling a heavy OFF-AXIS catch swings the Mother's nose toward it (× massRatio × lateral tether dir), fed to the recoil-attitude springs and RCS-nulled
   LASSO_NET_BREAK_TIME_S: 2.0,        // seconds above NET_STRAIN_SAFE_FRACTION before the tether snaps
 
   // --- Mother-net capture ceremony: net-held catch readability floor ---
-  // A captured M1 welcome FRAGMENT is physically tiny (~0.6 m → 0.000006 scene
-  // units), so at the gameplay camera distance it rendered sub-pixel: the catch
-  // was pinned + reeled to the nose correctly but was INVISIBLE inside the net
-  // and at the hull (owner: "debris seems to disappear ... should be visible in
-  // the net"). While a catch is HELD by the Mother net (reel → cargo/furnace),
-  // clamp its apparent render size up to this floor so it reads as a real catch.
-  // Scoped to lasso-held catches only (via debris._catchRenderMin) so the
-  // Daughter's small nets are unaffected. Stays well under the 7 m net mouth /
-  // ~1.75 m cinched mouth, so it reads as "in the net", never bursting out.
-  // This is a RENDERED RADIUS in metres — the write sites divide by the mesh's
-  // bounding radius via DebrisWireframe.scaleForRenderRadiusM (whale-in-cone
-  // item 8: stored as a raw scale the real floor was minM × br, mesh-dependent).
-  // NAME COLLISION (register item 23): CAPTURE_NET.MOTHER_CATCH_MIN_RENDER_M
-  // (2.0, :2676) is a DIFFERENT floor with the same name — THIS top-level one
-  // (1.5) is the lasso FLIGHT-WEB floor; the CAPTURE_NET one is the ceremony
-  // bag's.
+  // A captured M1 welcome FRAGMENT is physically tiny (~0.6 m), so at the gameplay camera distance it rendered
+  // sub-pixel and was invisible inside the net. While a catch is HELD by the Mother net (reel → cargo/furnace),
+  // clamp its apparent render size up to this floor. Scoped to lasso-held catches only (via debris._catchRenderMin)
+  // so the Daughter's small nets are unaffected. Stays well under the 7 m net mouth / ~1.75 m cinched mouth.
+  // A RENDERED RADIUS in metres: the write sites divide by the mesh's bounding radius via
+  // DebrisWireframe.scaleForRenderRadiusM.
+  // NAME COLLISION: CAPTURE_NET.MOTHER_CATCH_MIN_RENDER_M (2.0) is a DIFFERENT floor with the same name — THIS
+  // top-level one (1.5) is the lasso FLIGHT-WEB floor; the CAPTURE_NET one is the ceremony bag's.
   MOTHER_CATCH_MIN_RENDER_M: 1.5,     // metres — min apparent size of a net-held catch
 
 
-  // --- Net-lock range SSOT (onboarding reward-first spine) ---
-  // Single source of truth for "close enough to net". Drives (a) the autolock
-  // in-range test, (b) the in-range-only lock earcon, (c) the OUT OF RANGE
-  // reticle state, and (d) TARGET_IN_RANGE/OUT_OF_RANGE events. Reconciles the
-  // old split between CaptureNet.BASELINE_RANGE_MAX (75 m) and LASSO_RANGE
-  // (was a 200 m fire gate; W1 net-reach D1 made LASSO_RANGE this same number).
-  // 90 m sits well inside the lasso's measured physical reach (~808 m, see
-  // LASSO_MAX_FLIGHT_TIME) while reading as "right on top of it" for a new player.
+  // --- Net-lock range SSOT ---
+  // Single source of truth for "close enough to net": the autolock in-range test, the in-range-only lock earcon,
+  // the OUT OF RANGE reticle state, and TARGET_IN_RANGE/OUT_OF_RANGE events. 90 m sits well inside the lasso's
+  // measured physical reach (~808 m, see LASSO_MAX_FLIGHT_TIME) while reading as "right on top of it".
   NET_LOCK_RANGE_M: NET_REACH_M,
 
-  // --- Front-arc autolock (reward-first onboarding) ---
-  // The reticle auto-selects the nearest forward, in-range debris so a new
-  // player gets the satisfying lock + first catch in the first ~10 s. Permanent
-  // assist for all players (Settings toggle can disable); manual T/click always
-  // overrides. See .kilo/plans/new-player-onboarding-flow.md Phase 1.
+  // --- Front-arc autolock ---
+  // The reticle auto-selects the nearest forward, in-range debris so a new player gets a lock + first catch in the
+  // first ~10 s. Permanent assist (Settings toggle can disable); manual T/click always overrides.
   AUTOLOCK: {
     ENABLED: true,                     // master toggle (Settings can flip per-save)
     ARC_DOT: 0.5,                      // min dot(forward, toDebris) — ~60° half-cone front arc
     RANGE_M: 5000,                     // candidate search radius (m); the in-range test uses NET_LOCK_RANGE_M
     REACQUIRE: true,                   // auto-advance to next candidate after a capture
     REACQUIRE_DELAY_MS: 800,           // pause after a catch before the next lock (lets the reward register)
-    // Guided-chapter fallback (M1 guidance, 2026-09-09): when the forward arc
-    // holds nothing, a GUIDED chapter (MISSIONS.PROFILES[].guidedCluster —
-    // missions 1–3) locks the nearest alive piece ANYWHERE within
-    // GUIDED_FALLBACK_RANGE_M instead of leaving the reticle empty. The
-    // selected-target off-screen arrow then points at it (behind-camera is
-    // handled by TargetReticle._getEdgePosition) and the yellow OUT OF RANGE
-    // state says "press A" — so a player whose cluster drifted behind the
-    // mother is never left with nothing to steer toward. Cost: one extra O(n)
-    // getDebrisNear pass, only on frames with no target and an empty arc.
+    // Guided chapters (MISSIONS.PROFILES[].guidedCluster — missions 1–3): when the forward arc holds nothing, lock
+    // the nearest alive piece ANYWHERE within GUIDED_FALLBACK_RANGE_M, so a cluster that drifted behind the mother
+    // still gives something to steer toward. Cost: one extra O(n) getDebrisNear pass, only with no target and an empty arc.
     GUIDED_FALLBACK_ANY_ARC: true,     // fall back to nearest-any in guided chapters (DebrisField.isGuidedChapter())
     GUIDED_FALLBACK_RANGE_M: 100000,   // metres — the fallback search radius (100 km: the whole drifted cluster, not the whole field)
   },
 
-  // --- Capture Net Visual (ST-2.4 → FIX-2.4a → v2 polish) ---
+  // --- Capture Net Visual ---
   NET_SPIN_HZ: 4,                       // rotations per second during flight (gyroscopic stabilisation)
-  NET_COMPACT_SCALE: 0.45,              // scale factor during reel-in (was 0.15 — too small to see)
-  // Phase 2 net kinematics (flag LASSO_NET_KINEMATICS) — open-on-launch + cinch-on-capture.
+  NET_COMPACT_SCALE: 0.45,              // scale factor during reel-in
+  // Net kinematics (flag LASSO_NET_KINEMATICS) — open-on-launch + cinch-on-capture.
   NET_SPIN_UP_TIME: 0.4,                // seconds — net opens from compact to full as gyro spin ramps
   NET_LAUNCH_COMPACT_FRAC: 0.3,         // mouth radius fraction at launch (leaves the canister compact, then opens)
   // Tether catenary
   NET_TETHER_SAG: 2.0,                   // metres — catenary sag at tether midpoint
-  NET_TETHER_SEGMENTS: 24,              // segments along tether curve (more = smoother sag — was 20)
+  NET_TETHER_SEGMENTS: 24,              // segments along tether curve (more = smoother sag)
 
 
   // --- Unified "web in space" net look (NetMeshKit — both Mother + Daughter) ---
-  // The Mother net (LassoSystem) renders through the shared NetMeshKit, sized +
-  // styled by these knobs so it reads as a delicate translucent WEB the small
-  // operator casts — never the rejected 8 m chrome octagon-cage + 3 m boulders.
-  // The "small child / large balloon" scale rule (GAME_DESIGN.md §2.1): the net
-  // is subordinate to mother + catch. (The old 8 m perimeter / 1.5 m weight
-  // spheres and their BOLAS_* aliases were deleted 2026-10-17: nothing read them.)
+  // A delicate translucent WEB the small operator casts; "small child / large balloon" scale rule
+  // (GAME_DESIGN.md §2.1): the net is subordinate to mother + catch.
   NET_WEB: {
-    MOTHER_DIAMETER:    6.0,    // m — Mother net mouth diameter. 6 m since 2026-10-20 (DECISIONS §33
-                                // row 1: four nets must each fit in their own cartridge; was 7 m,
-                                // and the large net itself was 8 m). Matches CAPTURE_NET.LARGE.DIAMETER.
-    WEB_COLOR:          0xffe9c8, // warm ivory Dyneema (V5 nudge from 0xeaf1ff —
-                                // the threads read warmer against black + the
-                                // Earth limb; still bright enough not to gray-out
-                                // at the in-game (distant) framing).
-    WEB_OPACITY:        0.8,    // translucent but luminous — at the real fire
-                                // distance the fine threads must not gray out
-                                // (was 0.6, read cold/faint in-game — §B luminance).
-    EDGE_NODE_COUNT:    6,      // edge-node glints (was 4 boulders)
-    EDGE_NODE_RADIUS_M: 0.10,   // m — tiny glints, not ballast (was 1.5 m; ~match daughter 0.08)
-    // (removed 2026-06-30) REEL_COLOR — the web no longer tints green on capture.
-    // A real net doesn't change colour when it grips; capture state lives on the
-    // HUD/comms now (see LassoSystem reel-in + CaptureNetVisual realism pass).
-    // The web is a fat-line orb-weaver spoke+ring mesh (LineSegments2 +
-    // LineMaterial from three/addons/lines): RADIAL_SPOKES radial threads
-    // (apex→rim) + RING_COUNT concentric "spiral thread" rings. Fat-lines carry
-    // real screen-space width + built-in AA, so an ultralight (physically sub-mm
-    // Dyneema) thread renders as a soft, legible ivory web — never the rejected
-    // cold 1-px aliased line. Browser-tunable.
-    // Counts restored to the owner-approved spike (22×6, ~20×6): finer than this
-    // reads as gray fuzz at the distant in-game framing; coarser cells read
-    // clearly as a *net*. Width bumped so threads stay legible when small.
+    MOTHER_DIAMETER:    6.0,    // m — Mother net mouth diameter (DECISIONS §33 row 1: four nets must each fit in
+                                // their own cartridge). Matches CAPTURE_NET.LARGE.DIAMETER.
+    WEB_COLOR:          0xffe9c8, // warm ivory Dyneema — threads read warmer against black + the Earth limb
+    WEB_OPACITY:        0.8,    // translucent but luminous — at the real fire distance the fine threads must not gray out
+    EDGE_NODE_COUNT:    6,      // edge-node glints
+    EDGE_NODE_RADIUS_M: 0.10,   // m — tiny glints, not ballast (~match daughter 0.08)
+    // Fat-line orb-weaver spoke+ring mesh (LineSegments2 + LineMaterial): RADIAL_SPOKES radial threads (apex→rim) +
+    // RING_COUNT concentric rings. Fat-lines carry real screen-space width + built-in AA, so a physically sub-mm
+    // Dyneema thread renders as a legible ivory web. Finer counts read as gray fuzz at the distant in-game
+    // framing; coarser cells read clearly as a *net*. Browser-tunable.
     RADIAL_SPOKES:      20,     // radial threads — clear web cells at distance (16–24)
     RING_COUNT:         6,      // concentric rings — clear mesh (4–6)
     LINE_WIDTH_PX:      2.4,    // fat-line thread width px — legible ivory strand at the in-game distance
     NODE_ADDITIVE:      true,   // edge-node glints use additive sparkle (threads stay flat/translucent)
-    // V3 — tether width in METRES for the worldUnits Line2 variant: the strand
-    // carries real geometry-like thickness (thickens on approach, AA-smooth at
-    // distance), replacing fixed screen px. Physically sub-mm Dyneema — 5 cm is
-    // the honest gossamer read at the 5–60 m ceremony framing (the rejected
-    // TubeGeometry at r ≈ 0.06 m staircased; the fat line does not).
+    // Tether width in METRES (worldUnits Line2): thickens on approach, AA-smooth at distance. 5 cm is the honest
+    // gossamer read at the 5–60 m ceremony framing (physically sub-mm Dyneema).
     TETHER_WIDTH_M:     0.05,
-    // V4 — per-thread depth shading (depthWrite stays FALSE by design): vertex
-    // colours dim toward this fraction of the base colour across the bag's own
-    // view-depth extent, so the far side of the bag recedes. Self-normalized
-    // per frame (bag min/max distance), so it reads at any camera range.
+    // Per-thread depth shading (depthWrite stays FALSE by design): vertex colours dim toward this fraction of the
+    // base colour across the bag's own view-depth extent (self-normalized per frame, so it reads at any camera range).
     DEPTH_DIM_FRACTION: 0.5,
-    // V6 — cinch flash: rim-node emissive ramps briefly past the 2.5 bloom
-    // threshold (SceneManager bloomPass.threshold) as the bag seats, then
-    // settles back down. The cinch snap lands at fraction ≥ 0.85, so the ramp
-    // peaks there and holds through the weld, decaying over NODE_FLASH_SETTLE_S
+    // Cinch flash: rim-node emissive ramps briefly past the 2.5 bloom threshold (SceneManager bloomPass.threshold)
+    // as the bag seats (snap at fraction ≥ 0.85), holds through the weld, decays over NODE_FLASH_SETTLE_S
     // (wall clock — a garnish transient, not a state signal).
     NODE_EMISSIVE_BASE: 0.6,        // resting rim-node glint (sub-bloom)
     NODE_EMISSIVE_CINCH_PEAK: 3.2,  // cinch flash peak — 28% over the 2.5 threshold
     NODE_FLASH_SETTLE_S: 1.2,       // seconds to decay peak → base after the weld
-    // V8 — sell contact: the membrane compresses where the catch presses into
-    // the bag (an inward dent peaked at the catch's seat, scaled by the same
-    // drape parameter driving ENVELOP), and a brief sub-bloom rim light marks
-    // the first touch (V6's cinch flash owns the bloom crossing).
+    // Sell contact: the membrane dents inward where the catch presses into the bag (peaked at the seat, scaled by
+    // the drape parameter driving ENVELOP); a brief sub-bloom rim light marks the first touch.
     CONTACT_COMPRESS_FRAC: 0.08,    // mouthRadius × this — press depth at the seat
     CONTACT_FLASH_PEAK: 1.5,        // rim-node emissive bump at first touch (sub-bloom)
     CONTACT_FLASH_SETTLE_S: 0.6,    // seconds the touch glow takes to settle
-    // V2 — lit membrane under the threads (the hybrid web). A MeshPhysicalMaterial
-    // film driven by the SAME drape functions as the threads, so sun + earthshine
-    // read on the bag while the web reveals the catch through it. Inherits the
-    // threads' reveal rule: transparent, depthWrite:false. envMap comes from
-    // getOrbitalFoilEnv(renderer) via NetMeshKit.setEnvTexture (null headless →
-    // scene.environment applies).
+    // Lit membrane under the threads: a MeshPhysicalMaterial film driven by the SAME drape functions as the threads,
+    // so sun + earthshine read on the bag while the web reveals the catch. Transparent, depthWrite:false. envMap
+    // comes from getOrbitalFoilEnv(renderer) via NetMeshKit.setEnvTexture (null headless → scene.environment).
     MEMBRANE_OPACITY:   0.28,   // faint film — reads as fabric, never a wall (× web opacity fade)
-    // 2026-08-25 (bubble-look fix): as the drawstring closes, the film fades
-    // toward this rest so the CATCH reads through its own wrap — the closed
-    // bag was a flat opaque tent ("party balloon / paper airplane" in the
-    // tmp/cinema PARK_HOLD frames) because 0.28 × DoubleSide self-overlap
-    // compounds to ~0.5. Lerped by cinchFrac in NetMeshKit.updateWebDrape, so
-    // it is smooth by construction and reverses on a failure release.
+    // As the drawstring closes the film fades toward this rest so the CATCH reads through its own wrap (0.28 ×
+    // DoubleSide self-overlap compounds to ~0.5, a flat opaque tent). Lerped by cinchFrac in NetMeshKit.updateWebDrape.
     MEMBRANE_OPACITY_WELDED: 0.13,
-    // 2026-08-25 (small-catch plan W2a): the welded rest is SIZE-AWARE. 0.13
-    // was derived on the ~2 m cubesat — a catch you look INTO the bag at, its
-    // silhouette carrying the read. A sub-metre fragment's closed bag is a
-    // thin near-axis bundle (measured tmp/frag-before: drawn rim 0.36–0.42 m
-    // at cinch=1, film 0.13 ⇒ effectively invisible — the owner's "just a
-    // cone, nothing looks like fabric"). The welded target now lerps toward
-    // this SMALL rest as the catch's LOGICAL size (sizeMeter — stable through
-    // the whole ceremony, unlike the floored rendered radius) drops through
-    // the band below: sizeM ≥ LARGE_SIZE_M keeps the 0.13 whale look
-    // bit-identical; sizeM ≤ SMALL_SIZE_M reads as bunched fabric at 0.24.
-    // Applied in NetMeshKit.updateWebDrape (the one welded-fade home); a
-    // missing/zero catch size keeps the plain welded rest, so legacy mocks
-    // and empty (miss) bags are byte-identical.
+    // The welded rest is SIZE-AWARE: 0.13 suits a ~2 m cubesat, but a sub-metre fragment's closed bag is a thin
+    // near-axis bundle where 0.13 is effectively invisible. The welded target lerps toward this SMALL rest as the
+    // catch's LOGICAL size (sizeMeter — stable through the ceremony, unlike the floored rendered radius) drops
+    // through the band below. A missing/zero catch size keeps the plain welded rest (legacy mocks, empty miss bags).
     MEMBRANE_OPACITY_WELDED_SMALL: 0.24,
     MEMBRANE_WELDED_LARGE_SIZE_M: 2.0,   // ≥ this logical size → welded 0.13 (whale class)
     MEMBRANE_WELDED_SMALL_SIZE_M: 0.8,   // ≤ this logical size → welded 0.24 (fragment class)
@@ -4056,74 +3188,40 @@ export const Constants = {
     MEMBRANE_TRANSMISSION: 0.15, // low — a hint of light through the film
     MEMBRANE_SHEEN:     0.5,    // fabric sheen response
     MEMBRANE_ENV_INTENSITY: 0.9,
-    // 2026-08-26 (night readability): the membrane is the bag's ONLY lit body
-    // surface (MeshPhysicalMaterial) — in Earth shadow the directional sun
-    // drops to 0.05 and the film goes pitch black, so an active capture reads
-    // as bare threads ("no bag, just a cone" — tmp/lasso-take f019,
-    // tmp/lasso2-night-before f003–f008). A tiny UNCONDITIONAL emissive floor
-    // (the DebrisField.js:1304–1329 night-side precedent: heavily desaturated
-    // tint, intensity low enough to vanish in daylight) keeps the film's
-    // silhouette readable at night without moving any day value: the fabric/
-    // pixel gates are day-lit + one-sided (fail only BELOW baseline − tol),
-    // and every opacity constant above is untouched. The web/tether threads
-    // are unlit LineMaterials and never needed this. Nets only exist during
-    // captures, so this IS "active capture reads on the night side".
+    // Night readability: the membrane is the bag's ONLY lit surface — in Earth shadow the sun drops to 0.05 and the
+    // film goes pitch black. A tiny UNCONDITIONAL emissive floor (desaturated, vanishes in daylight) keeps the
+    // silhouette readable at night without moving any day value (fabric/pixel gates are day-lit, one-sided).
     MEMBRANE_EMISSIVE_FLOOR: 0.12,
-    // 2026-08-26 (owner round 2) — the wrap/berth ENGULF seat: the caught
-    // piece rides at this fraction of the cone height INSIDE the web/bag
-    // (fabric on both sides = engulfed), never at the apex tip where it read
-    // "alongside the net" (owner: "the debris is not even inside the net").
-    // The pod path already does this (whale-in-cone follow-up 2: _catchSeatM
-    // = the depth the capture left the catch at); this is the lasso/adoption
-    // counterpart, one dial for both kits.
+    // owner 2026-08-26: the wrap/berth ENGULF seat: the caught piece rides at this fraction of the cone height INSIDE the
+    // web/bag (fabric on both sides = engulfed), never at the apex tip where it reads "alongside the net".
+    // The pod path does the same (_catchSeatM); this is the lasso/adoption counterpart, one dial for both kits.
     WRAP_SEAT_FRAC: 0.42,
-    // 2026-08-26 (owner round 2) — organic flight web: the cast net billows
-    // (per-spoke sinusoidal undulation, the kit's jiggle channel) instead of
-    // flying as a mathematically perfect cone (owner: "a net does NOT need to
-    // look like a boring symmetric cone"). Amp is a fraction of the mouth
-    // radius; drape stays 0 in flight so contents floors and the welded fade
-    // are untouched by construction.
+    // owner 2026-08-26: organic flight web: the cast net billows (per-spoke sinusoidal undulation) instead of flying
+    // as a perfect symmetric cone. Amp is a fraction of the mouth radius; drape stays 0 in flight.
     FLIGHT_BILLOW_FRAC: 0.08,
     FLIGHT_BILLOW_HZ: 0.9,
-    // 2026-08-27 (§11.2 deferred presentation — the "windsock-flutter" beat
-    // missFailureKind deliberately left unstaged in Wave 2): a SMALL net whose
-    // rim spin bled through MOUTH_TENSION_FLOOR_N latches the one-way
-    // NetProjectile.mouthCollapsed; the RENDER side alone (CaptureNetVisual)
-    // eases the mouth toward the drawstring-closed radius and ripples the
-    // slack fabric. Keyed off the queryable latch only — the visual never
-    // recomputes tension physics.
+    // "Windsock-flutter" (archive/CAPTURE_NET_physics_audit_2026-06.md §11.2, missFailureKind): a SMALL net whose rim
+    // spin bled through MOUTH_TENSION_FLOOR_N latches the one-way NetProjectile.mouthCollapsed; the RENDER side
+    // alone (CaptureNetVisual) eases the mouth toward the drawstring-closed radius and ripples the slack fabric.
+    // Keyed off the queryable latch only — the visual never recomputes tension physics.
     MOUTH_COLLAPSE_CINCH_FRAC: 0.65,   // fraction of a FULL drawstring close the dead mouth pinches to — rim lands ≈45% of open: clearly slack, never the welded 1.0 only a real catch earns
     MOUTH_COLLAPSE_EASE_S: 0.4,        // s, latch → full slack pose — inside the <0.5 s read budget, slow enough not to pop
     MOUTH_COLLAPSE_FLUTTER_FRAC: 0.10, // mouthRadius × this — windsock ripple amp, seated between the ENVELOP (0.12) / CINCH (0.06) settle-jiggles; garnish-gated like both
-    // 2026-08-26 (owner round 2) — the held bag over a SUB-METRE catch read
-    // as a bare thread lattice ("WTF is that geodesic globe") because the
-    // floored contents box inflates the dome while the film rests near-clear:
-    // the BERTHED/COLLARED thread opacity now lerps 0.55 → this rest across
-    // the same [SMALL_SIZE_M … LARGE_SIZE_M] band as the welded film, so the
-    // fabric (film + rosette) carries the small-bag read and the lattice
-    // recedes. Whale-class (≥ LARGE_SIZE_M) and size-less mocks stay at the
-    // 0.55 byte — the gated pod subjects never move.
+    // A held bag over a SUB-METRE catch reads as a bare thread lattice (the floored contents box inflates the dome
+    // while the film rests near-clear): the BERTHED/COLLARED thread opacity lerps 0.55 → this rest across the same
+    // [SMALL_SIZE_M … LARGE_SIZE_M] band as the welded film. Whale-class and size-less mocks stay at 0.55.
     THREAD_OPACITY_HELD_SMALL: 0.30,
-    // 2026-08-26 (round 3, V3) — sock gather: after the cinch the mouth-side
-    // fabric trailed as an EMPTY gathered sock behind the bundle (the mouth
-    // ring + drawstring park on the mouth plane, ~3 m behind a sub-metre
-    // piece). The LASSO wrap now gathers the mouth ring toward the contents'
-    // far face (drawstring-rosette language) — a ring-z lever of the lasso
-    // kit only (NetMeshKit updateWebDrape `mouthGather`); the pod-path bag
-    // never passes it, so every gate-pinned geometry family is untouched by
-    // construction. FRAC = how far toward the far face the rosette lands
-    // (1 = ON the face); RAMP = reel-progress span after WRAP_END over which
-    // the gather eases in (the wrap itself stays the round-2 look).
+    // Sock gather: after the cinch the mouth-side fabric would trail as an EMPTY gathered sock behind a sub-metre
+    // piece. The LASSO wrap gathers the mouth ring toward the contents' far face (NetMeshKit updateWebDrape
+    // `mouthGather`; the pod-path bag never passes it). FRAC = how far toward the far face the rosette lands
+    // (1 = ON the face); RAMP = reel-progress span after WRAP_END over which the gather eases in.
     WRAP_SOCK_GATHER_FRAC: 0.75,
     WRAP_SOCK_GATHER_RAMP: 0.25,
   },
 
-  // =========================================================================
-  // CAPTURE NET SYSTEM — ST-9.4 C-6 (Config G)
-  // Per CAPTURE_NET.md §2–§6 canonical spec. Gated by FEATURE_FLAGS.CAPTURE_NET.
-  // =========================================================================
+  // CAPTURE NET SYSTEM (CAPTURE_NET.md §2–§6 canonical spec; gated by FEATURE_FLAGS.CAPTURE_NET)
   CAPTURE_NET: {
-    // ── Net Projectile States ──
+    // --- Net Projectile States ---
     STATES: {
       FOLDED:        'FOLDED',
       LAUNCHING:     'LAUNCHING',
@@ -4139,97 +3237,65 @@ export const Constants = {
       REELING:       'REELING',       // motor reel-in
       STOWED:        'STOWED',        // back at platform
       RELEASED:      'RELEASED',      // player abort — net+debris float free
-      // Mother-net-reel plan §8 A2: terminal mother-catch state. The catch is
-      // pinned at the pod muzzle standoff, visible in the cinched net, adds
-      // translational mass, and slews/burns with the ship until the securing
-      // timer (BERTH_SECURE_S) commits it for score + salvage and parks it
-      // (cargo-continuity S3), or the player jettisons it [K]. Replaces STOWED
-      // for mother catches.
+      // Terminal mother-catch state: the catch is pinned at the pod muzzle standoff, visible in the cinched
+      // net, adds translational mass, and slews/burns with the ship until the securing timer (BERTH_SECURE_S)
+      // commits it for score + salvage and parks it, or the player jettisons it [K]. Replaces STOWED for
+      // mother catches.
       BERTHED:       'BERTHED',       // catch docked at the mother launcher
-      // Cargo-continuity S3 → S13(c): after the securing timer (BERTH_SECURE_S)
-      // commits the credit, the catch MATES at the nose berthing collar — the
-      // rigid on-axis station the owner ruling made doctrine (2026-08-14, B).
-      // Held at the collar seat inside its net until the mother-side digestion
-      // clock consumes it (the S8 transit clock at the collar), the S7 transfer
-      // hands it to a daughter rack, or it is jettisoned [K]. Nothing is
-      // removed on camera; the berth hold pins it every frame;
-      // getDockedCatch()/getBerthedMassKg() count COLLARED. S13(e): the
-      // occupancy refusal is gone — the pods are off the boresight and a shot
-      // refuses only when its own corridor fouls the mated cargo (per-shot,
-      // geometric). The net IS the container — the bag is never faded. (Named
-      // PARKED pre-S13(c), when the same hold swung on the tether pendulum —
-      // a rigid mate does not.)
+      // After the securing timer commits the credit, the catch MATES at the nose berthing collar — the
+      // rigid on-axis station (owner ruling 2026-08-14). Held at the collar seat inside its net until the
+      // mother-side digestion clock consumes it, a transfer hands it to a daughter rack, or it is
+      // jettisoned [K]. Nothing is removed on camera; the berth hold pins it every frame;
+      // getDockedCatch()/getBerthedMassKg() count COLLARED. A shot refuses only when its own corridor
+      // fouls the mated cargo (per-shot, geometric). The net IS the container — the bag is never faded.
       COLLARED:      'COLLARED',      // credited catch mated at the nose berthing collar
-      // Cargo-continuity S7: the catch is in flight from the collar seat to a
-      // daughter's cargo rack, still inside its net (the bag is the container in
-      // transit). The mass keeps counting as berthed for the whole beat — it
-      // drops at arrival, when the rack picks the piece up, so the cargo ledger
-      // is continuous across the hand-off. S13(e): getDockedCatch() survives as
-      // an accessor (HUD/status + the per-shot foul read); it no longer gates
-      // the launcher.
+      // The catch is in flight from the collar seat to a daughter's cargo rack, still inside its net. The
+      // mass keeps counting as berthed for the whole beat — it drops at arrival, when the rack picks the
+      // piece up, so the cargo ledger is continuous across the hand-off. getDockedCatch() survives as an
+      // accessor (HUD/status + the per-shot foul read); it does not gate the launcher.
       TRANSFERRING:  'TRANSFERRING',  // collared catch flying nose → strut tip
     },
 
-    // ── Capture Modes ──
+    // --- Capture Modes ---
     MODES: {
       SLAM_WRAP: 'SLAM_WRAP',   // durable targets
       CINCH:     'CINCH',       // delicate targets (tether-brake bag)
     },
 
-    // ── Phase Timings (seconds) — per CAPTURE_NET.md §2.4 ──
+    // --- Phase Timings (seconds) — per CAPTURE_NET.md §2.4 ---
     CAST_WINDUP:          0.15,   // crossbow spring release (§2.4 phase 1)
     SPIN_UP_TIME:         0.5,    // yo-yo despin (§2.4 phase 2)
-    // ── Yo-yo despin spin visual (2026-06-11 Item 2; §11.6 doc fix 2026-08-27:
-    //    STYLIZED, not L-conserving) ──
-    // A folded net canister spins FAST and DESPINS as the rim weights deploy and
-    // the radius grows — the DIRECTION of the effect is the real yo-yo despin
-    // (I ∝ r², so ω falls as the mouth blossoms; RemoveDEBRIS 2018 flight HW spun
-    // ~1–2 Hz once blossomed). The MAGNITUDE is a deliberate visual
-    // simplification: closed-form L = Iω conservation from a ~5 cm folded radius
-    // would demand a ~(r_open/r_fold)² = (4.0/0.05)² ≈ 6400× spin ratio on LARGE
-    // — an invisible blur at 12 kHz-equivalent. The 3× below instead implies a
-    // fictional folded radius of r_open/√3 (≈ 2.3 m on LARGE — not a canister),
-    // chosen so the "unwind fast, blossom, settle" beat reads at
-    // animation-legible rates. So spin STARTS high and SETTLES to the class
-    // SPIN_HZ as the mouth opens — the previous 0→SPIN_HZ ramp was
-    // angular-momentum backwards in DIRECTION, which is the part worth keeping
-    // honest. The rim-weight tension table below shows SPIN_HZ alone already
-    // holds the mouth open (>10 N per spoke), so the elevated folded spin is
-    // purely the "unwind" transient.
+    // --- Yo-yo despin spin visual (STYLIZED, not L-conserving) ---
+    // A folded canister spins FAST and DESPINS as the rim weights deploy and the radius grows — the DIRECTION is
+    // the real yo-yo despin (I ∝ r²; RemoveDEBRIS 2018 flight HW spun ~1–2 Hz once blossomed). The MAGNITUDE is a
+    // deliberate visual simplification: closed-form L = Iω from a ~5 cm folded radius would demand a
+    // (4.0/0.05)² ≈ 6400× spin ratio on LARGE — an invisible blur. The 3× below implies a fictional folded
+    // radius of r_open/√3 (≈ 2.3 m on LARGE) so the "unwind fast, blossom, settle" beat reads at animation-legible
+    // rates. SPIN_HZ alone already holds the mouth open (>10 N per spoke, see the table below), so the elevated
+    // folded spin is purely the "unwind" transient.
     SPIN_FOLDED_MULT:     3.0,    // canister starts at SPIN_HZ × this, decays to SPIN_HZ (stylized visual ratio — see note above)
     // Slow in-flight spin decay (mesh flexing + rim drag). Makes spinFraction a
     // LIVE gameplay factor in computeClingProbability: long shots arrive with
     // spinFraction < 1 → f_spin penalty → "fire inside the envelope or the wrap is
-    // weak". Tuned (Item 2 risk note) so an in-envelope (≤100 m / ≤~1 s) shot loses
+    // weak". Tuned so an in-envelope (≤100 m / ≤~1 s) shot loses
     // <10% spin → Y0 difficulty does not regress. Shared default for the
-    // daughter classes; LARGE carries a per-class override (the
-    // MAX_FLIGHT_TIME idiom: netClass.SPIN_DECAY_PER_S ?? this) — §11.2
-    // LARGE resolution, derivation at the LARGE block.
+    // daughter classes; LARGE carries a per-class override (netClass.SPIN_DECAY_PER_S ?? this) —
+    // §11.2 LARGE resolution, derivation at the LARGE block.
     SPIN_DECAY_PER_S:     0.08,   // fraction of SPIN_HZ lost per second of flight (SMALL/MEDIUM; LARGE overrides — see class block)
-    // ── §11.2 mouth-collapse floor (2026-08-27) ──
-    // The mouth-open condition (§11.1 audit table + the test-Crossbow-Constants
-    // derivation guard) is F/wt = RIM_WEIGHT_MASS · (2π·spin)² · (DIAMETER/2)
-    // ≥ 10 N per rim weight — this constant IS that audit figure. With the
-    // linear in-flight decay above (spin(t) = SPIN_HZ · (1 − SPIN_DECAY_PER_S·t))
-    // and F ∝ ω², live tension falls as F(t) = F₀ · (1 − SPIN_DECAY_PER_S·t)²,
-    // so the floor is crossed at
-    //   t* = (1 − √(MOUTH_TENSION_FLOOR_N / F₀)) / SPIN_DECAY_PER_S,
-    // where F₀ = F/wt at the settled SPIN_HZ. From the live class constants
-    // (re-derived + pinned in test-CaptureNet-MouthCollapse.js):
-    //   SMALL  F₀ ≈ 16.0 N → t* ≈ 2.61 s ≈ 26 m at 10 m/s — INSIDE its 8 s /
-    //          100 m envelope: the §11.2 gap. NetProjectile latches
-    //          `mouthCollapsed` in flight and contact resolves as a distinct
-    //          'mouth_collapsed' MISS (§11.2 floor-check fix).
-    //   MEDIUM F₀ ≈ 79.0 N → t* ≈ 8.05 s — beyond its 8 s MAX_FLIGHT_TIME by
-    //          only ~51 ms: unreachable, enforcement provably inert.
-    //   LARGE  F₀ ≈ 47.4 N → t* ≈ 13.51 s ≈ 135 m at its per-class
-    //          SPIN_DECAY_PER_S 0.04 override (§11.2 LARGE resolution,
-    //          2026-08-27 — see the LARGE block for the full derivation).
-    //          OUTSIDE every reachable contact (tether pay-out 10 s,
-    //          MAX_FLIGHT_TIME 11 s) by ≥ 2.5 s: enforcement live for the
-    //          class and provably inert, and the 100 m whale envelope stays
-    //          honest (worst reachable arrival ≈ 17.1 N ≥ floor). The former
-    //          LARGE.MOUTH_COLLAPSE_DEFERRED escape hatch is retired.
+    // --- §11.2 mouth-collapse floor ---
+    // The mouth-open condition (§11.1 audit table + the test-Crossbow-Constants derivation guard) is
+    // F/wt = RIM_WEIGHT_MASS · (2π·spin)² · (DIAMETER/2) ≥ 10 N per rim weight — this constant IS that audit
+    // figure. With linear in-flight decay (spin(t) = SPIN_HZ · (1 − SPIN_DECAY_PER_S·t)) and F ∝ ω², the floor
+    // is crossed at t* = (1 − √(MOUTH_TENSION_FLOOR_N / F₀)) / SPIN_DECAY_PER_S, where F₀ = F/wt at the settled
+    // SPIN_HZ. From the class constants (re-derived + pinned in test-CaptureNet-MouthCollapse.js):
+    //   SMALL  F₀ ≈ 16.0 N → t* ≈ 2.61 s ≈ 26 m at 10 m/s — INSIDE its 8 s / 100 m envelope. NetProjectile
+    //          latches `mouthCollapsed` in flight and contact resolves as a distinct 'mouth_collapsed' MISS.
+    //   MEDIUM F₀ ≈ 79.0 N → t* ≈ 8.05 s — beyond its 8 s MAX_FLIGHT_TIME by only ~51 ms: unreachable,
+    //          enforcement provably inert.
+    //   LARGE  F₀ ≈ 47.4 N → t* ≈ 13.51 s ≈ 135 m at its per-class SPIN_DECAY_PER_S 0.04 override (see the LARGE
+    //          block): OUTSIDE every reachable contact (tether pay-out 10 s, MAX_FLIGHT_TIME 11 s) by ≥ 2.5 s, so
+    //          enforcement is live for the class yet provably inert and the 100 m whale envelope stays honest
+    //          (worst reachable arrival ≈ 17.1 N ≥ floor).
     MOUTH_TENSION_FLOOR_N: 10,    // N per rim weight — mouth-open floor (§11.1/§11.2)
     MAX_FLIGHT_TIME:      8,      // max tether pay-out (§2.4 phase 3)
     SLAM_CONTACT_TIME:    0.5,    // slam-wrap wrap duration (§2.4 phase 5a, min)
@@ -4239,73 +3305,44 @@ export const Constants = {
     SECURE_CHECK_TIME:    0.2,    // capture probability roll (§2.4 phase 6)
     MAGAZINE_ADVANCE_TIME: 0.5,   // next net rotates into position (§2.4 phase 8)
 
-    // ── Cooldowns (seconds) ──
+    // --- Cooldowns (seconds) ---
     COOLDOWN_CATCH:       2,      // after success before re-fire (LASSO_COOLDOWN_CATCH)
     COOLDOWN_MISS:        1,      // after miss before re-fire (LASSO_COOLDOWN_MISS)
 
-    // ── Failure staging (cargo-continuity S5, owner item 7) ──
-    // A failure used to be a state flip to MISSED plus an empty reel-back:
-    // nothing deformed, nothing slid off, nothing tore. The three modelled
-    // failures now get a staged beat built from kit drives that already exist:
-    // a broadside BOUNCE pulses the drape up then recoils (the mouth never
-    // closes), a STRAIN SLIP releases the cinch so the catch slides out of the
-    // mouth, and a boost-reel RIP zeroes a wedge of spokes in the web's
-    // per-vertex colour buffer (a visible hole) for the catch to drift out of.
-    // The net holds MISSED for FAILURE_STAGING_S so the beat plays at the
-    // contact point before the empty reel-back starts. Real seconds —
-    // CaptureNet runs on wall-clock dt (ARCHITECTURE §13).
+    // --- Failure staging ---
+    // The three modelled failures get a staged beat from existing kit drives: a broadside BOUNCE pulses the drape up
+    // then recoils, a STRAIN SLIP releases the cinch so the catch slides out, a boost-reel RIP zeroes a wedge of spokes
+    // (a visible hole). The net holds MISSED for FAILURE_STAGING_S so the beat plays at the contact point before the
+    // empty reel-back. Real seconds — CaptureNet runs on wall-clock dt (ARCHITECTURE §13).
     FAILURE_STAGING_S:    1.4,
     NET_TEAR_SPOKE_START: 2,    // first spoke of the torn wedge (kit web layout)
     NET_TEAR_SPOKE_COUNT: 5,    // wedge width — 5 of 20 spokes = a 90° gash
 
-    // ── Mother berth (mother-net-reel plan §8) ──
-    // Berth clearance: the reel completes when the catch's near face is this
-    // far from the muzzle (mirrors ARM_HOLD_CLEARANCE_M). Completion range =
-    // debris.sizeMeter/2 + BERTH_CLEARANCE_M.
+    // --- Mother berth ---
+    // Berth clearance: the reel completes when the catch's near face is this far from the muzzle (mirrors
+    // ARM_HOLD_CLEARANCE_M). Completion range = debris.sizeMeter/2 + BERTH_CLEARANCE_M.
     BERTH_CLEARANCE_M:    1.0,
-    // 2026-08-26 (owner round 2) — the ADOPTED catch's interior seat depth:
-    // the lasso hand-off previously set _catchSeatM = 0, pinning the piece AT
-    // the bag apex — visually "alongside the bag", never inside it (owner:
-    // "net/Bag is supposed to be AROUND the debris, engulfing"). The pod path
-    // already seats catches INSIDE the bag at their capture depth (whale-in-
-    // cone follow-up 2); adoption now uses this fixed seat, and the lasso
-    // reel delivers the piece to collar-seat + fwd × THIS so the hand-off
-    // still lands pin-exact (no snap). ONE-HOME LAW: byte-equal to
-    // WRAP_SEAT_FRAC × the CN.LARGE bag cone height —
-    //   (DIAMETER/2 × CONE_OPEN_RADIUS_FRAC) × 2 × CONE_LENGTH_FRAC ×
-    //   WRAP_SEAT_FRAC = 3.0 × 2 × 0.85 × 0.42 = 2.142 —
+    // The ADOPTED catch's interior seat depth: the piece sits INSIDE the bag (the net is AROUND the debris, engulfing).
+    // The lasso reel delivers the piece to collar-seat + fwd × THIS so the hand-off lands pin-exact (no snap).
+    // ONE-HOME LAW: byte-equal to WRAP_SEAT_FRAC × the CN.LARGE bag cone height (6 m net, DECISIONS §33 row 1) —
+    //   (DIAMETER/2 × CONE_OPEN_RADIUS_FRAC) × 2 × CONE_LENGTH_FRAC × WRAP_SEAT_FRAC = 3.0 × 2 × 0.85 × 0.42 = 2.142 —
     // pinned by test so the derivation cannot drift from the drawn bag.
-    // (2.856 until the large net went 8 -> 6 m, DECISIONS §33 row 1, 2026-10-20: 4.0 -> 3.0 m radius.)
     ADOPT_CATCH_SEAT_M:   2.142,
-    // l8-reel-collar (DECISIONS §25, owner 2026-10-15: "debris should be reeled-in
-    // firm against docking collar"): the reel goes ALL THE WAY to the collar —
-    // no 1.0 m standoff, no parked seat. HOME = the catch centre on the collar
-    // axis: max(RING_TOUCH_Z_M + r, clearZ(r)), clearZ(r) the smallest bag-centre
-    // z that clears every ship part by CLEARANCE_M (ShipKeepOut, measured once
-    // per catch at reel entry; tmp/probes collar/RESULTS.md: 1.390 … 1.828 for
-    // r 0.10 … 0.50). On the 2.30 m radiators the home is the same at every
-    // radiator angle for r <= 1.4 (measured 2026-10-17 at EVERY whole degree
-    // 0-180°: spread 0.00 mm on the rows 0.15 … 1.4; the 2.466-at-3° figure was
-    // the 2.5 m arms). A bigger bag's home moves with the angle (r 2-3: 16-41 mm;
-    // r 4.0: 5.349 at 146°, 5.402 at 3°, set by the radiator tip cone), so a
-    // single query at reel entry is the home for THAT angle only — a catch
-    // parked there fouls the cone when the radiators close later (r 4.0 at 146°,
-    // then 3°: -32.4 mm). big-catch-every-angle (2026-10-17): ALL_ANGLE_HOME
-    // (below) lifts the home of every catch above angleFreeMaxR so it clears at
-    // EVERY angle; catchHomeDistM reads it. Big catches (a later boss level,
-    // owner 2026-10-15) are OPEN: this block makes today's biggest piece (the
-    // act-3 rocket body, sizeM 8 -> r 4.0) correct and designs no boss.
-    // big-catch-home (2026-10-17): the sweep used to start at SEARCH_TOP_Z_M
-    // only, so for r >= 3.2 (ring-touch z 1.32 + r above 4.5) it never ran and
-    // the home was the UNCHECKED ring-touch z: r 4.0 z 5.320 where the true
-    // clear home is 5.349 (5.402 at 3°) — 8.7 mm inside a sun-sensor window at
-    // 7 angles, 61.0 mm inside the tip cone at 3° (r 3.2: 7.9 / 50.8 mm), all
-    // measured on the real meshes. The sweep now starts at
-    // max(SEARCH_TOP_Z_M, ring-touch z + MAX_ABOVE_TOUCH_M) — SEARCH_TOP_Z_M
-    // is only the floor of that start (r <= 1.18 m: unchanged). If the sphere
-    // at that start is itself blocked, the ring-touch z is kept but flagged
-    // (`unchecked`, home source 'unchecked', one console.warn per catch).
-    // BERTH_CLEARANCE_M above stays as the CORRIDOR / queue-spacing radius only.
+    // DECISIONS §25 (owner 2026-10-15: "debris should be reeled-in firm against docking collar"): the reel
+    // goes ALL THE WAY to the collar — no standoff, no parked seat. HOME = the catch centre on the collar
+    // axis: max(RING_TOUCH_Z_M + r, clearZ(r)), clearZ(r) the smallest bag-centre z that clears every ship part
+    // by CLEARANCE_M (ShipKeepOut, measured once per catch at reel entry; 1.390 … 1.828 for r 0.10 … 0.50). On
+    // the 2.30 m radiators the home is the same at every radiator angle for r <= 1.4 (measured at EVERY whole
+    // degree 0-180°: spread 0.00 mm on the rows 0.15 … 1.4). A bigger bag's home moves with the angle (r 2-3:
+    // 16-41 mm; r 4.0: 5.349 at 146°, 5.402 at 3°, set by the radiator tip cone), so a query at reel entry is the
+    // home for THAT angle only. ALL_ANGLE_HOME (below) lifts the home of every catch above angleFreeMaxR so it
+    // clears at EVERY angle; catchHomeDistM reads it. Big catches (a later boss level) are OPEN: this block makes
+    // today's biggest piece (the act-3 rocket body, sizeM 8 -> r 4.0) correct and designs no boss.
+    // The sweep starts at max(SEARCH_TOP_Z_M, ring-touch z + MAX_ABOVE_TOUCH_M); starting at SEARCH_TOP_Z_M
+    // only would skip the sweep for r >= 3.2 and leave an UNCHECKED ring-touch home (r 4.0: 5.320 vs clear home
+    // 5.349). If the sphere at that start is itself blocked, the ring-touch z is kept but flagged (`unchecked`,
+    // home source 'unchecked', one console.warn per catch). BERTH_CLEARANCE_M above stays as the CORRIDOR /
+    // queue-spacing radius only.
     REEL_HOME: {
       RING_TOUCH_Z_M:   1.32,   // ship-local z of the ring's fore face: a bag of radius r touches it at 1.32 + r
       CLEARANCE_M:      0.02,   // bag surface to every ship part at home (owner rule)
@@ -4314,254 +3351,171 @@ export const Constants = {
       BISECT_M:         0.001,  // bisection stops at 1 mm
       MAX_ABOVE_TOUCH_M: 2.0,   // a clearZ more than this above ring-touch is a bad query: fall back to ring-touch
       APEX_AT_RING_M:   0.02,   // the bag's mouth (the tether end) sits this far fore of the collar plane at home = the ring's fore face
-      // big-catch-every-angle (2026-10-17): the home that clears the bare ship at EVERY radiator angle. MEASURED on the
-      // real meshes (tmp/probes/followups-1017/allangle/allangle.mjs): catchHomeZ(keep-out, r) at every whole degree
-      // 0-180°, no tip bags, no held catches, arms as built. liftM[i] = max over the angles of (home z) minus the
-      // ring-touch z (RING_TOUCH_Z_M + r), rounded UP to 0.1 mm; it includes the hull part (r 0.5: 0.0075 m) and, above
-      // angleFreeMaxR, the radiator tip cone at 3° (r 4.0: 5.402 vs 5.320 = 0.082). Each row's home spread over the
-      // angles: 0.00 mm for 0.15 … 1.4, then 16.4 (r 2.0), 31.3, 40.6, 47.7, 53.1 (r 4.0), 57.0, 60.2 mm (r 5.0) —
-      // the worst angle is 3° on every row above 1.4. angleFreeMaxR = the largest row whose spread AND every smaller
-      // row's is < BISECT_M: at or below it the home does not move with the angle, so catchHomeDistM adds NO term (the
-      // current-pose home, byte-identical to before). Above it: home z = max(current-pose home, RING_TOUCH_Z_M + r +
-      // lift(r)), lift linear between the two rows that bracket r (the test checks every row and the midpoints on the
-      // meshes: test-BigCatchHome p1). Above the last row there is no measurement: the home is flagged `unchecked`.
+      // The home that clears the bare ship at EVERY radiator angle. MEASURED on the real meshes
+      // (tmp/probes/followups-1017/allangle/allangle.mjs): catchHomeZ(keep-out, r)
+      // at every whole degree 0-180°, no tip bags, no held catches. liftM[i] = max over the angles of (home z) minus
+      // the ring-touch z (RING_TOUCH_Z_M + r), rounded UP to 0.1 mm; it includes the hull part (r 0.5: 0.0075 m) and,
+      // above angleFreeMaxR, the radiator tip cone at 3° (r 4.0: 5.402 vs 5.320 = 0.082). Home spread over the angles:
+      // 0.00 mm for 0.15 … 1.4, then 16.4 (r 2.0) … 53.1 (r 4.0) … 60.2 mm (r 5.0), worst at 3°. angleFreeMaxR = the
+      // largest row whose spread AND every smaller row's is < BISECT_M: at or below it catchHomeDistM adds NO term.
+      // Above it: home z = max(current-pose home, RING_TOUCH_Z_M + r + lift(r)), lift linear between the two rows
+      // that bracket r (test-BigCatchHome p1). Above the last row there is no measurement: flagged `unchecked`.
       ALL_ANGLE_HOME: {
         radiiM: [0.15, 0.30, 0.50, 0.75, 1.0, 1.4, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0],
         liftM:  [0, 0, 0.0075, 0.0160, 0.0197, 0.0235, 0.0422, 0.0586, 0.0688, 0.0766, 0.0821, 0.0868, 0.0899],
         angleFreeMaxR: 1.4,
       },
-      // Speed profile for the CATCH centre (the nominal speed is the net class reel speed): full speed, then a
-      // constant-deceleration (DECEL_MPS2, an estimate) slow-down that reaches SLOW_MPS at SLOW_ZONE_M from home and
-      // holds it to arrival.
+      // Speed profile for the CATCH centre (nominal = the net class reel speed): full speed, then a
+      // constant-deceleration (DECEL_MPS2, an estimate) slow-down that reaches SLOW_MPS at SLOW_ZONE_M from home.
       SLOW_ZONE_M:      0.30,
-      SLOW_MPS:         0.10,   // <= 0.10 m/s arrival and in the last 0.30 m (LATCH_ALIGNED_MPS class contact speed); fb16 2026-10-25: was 0.08 (the crawl lasted 5 s)
+      SLOW_MPS:         0.10,   // <= 0.10 m/s arrival and in the last 0.30 m (LATCH_ALIGNED_MPS class contact speed)
       DECEL_MPS2:       1.0,    // m/s^2 — estimate: 2 m/s -> 0.08 m/s over ~2 m
       DECEL_LEAD_M:     0.10,   // the slow-down reaches SLOW_MPS this much BEFORE the slow zone, so a frame that straddles its edge is already slow
-      // Drawn size (D3): the net-held readability floor applies at >= FLOOR_FAR_M from the collar, eases to the true
-      // size by FLOOR_NEAR_M (smoothstep). Per frame the drawn size never moves more than FLOOR_MAX_STEP_FRAC of the floor.
+      // Drawn size: the net-held readability floor applies at >= FLOOR_FAR_M from the collar, eases to the true
+      // size by FLOOR_NEAR_M (smoothstep); per frame it never moves more than FLOOR_MAX_STEP_FRAC of the floor.
       FLOOR_FAR_M:      20,
       FLOOR_NEAR_M:     3,
       FLOOR_MAX_STEP_FRAC: 0.15,
     },
-    // Securing ceremony: after NET_BERTHED the catch sits at the launcher for
-    // this long while Houston reads the mass, then CATCH_PROCESSED fires with
-    // source:'mother' (score + salvage + clearDebris + autosave via the
-    // existing GameFlowManager path — plan §19) and the catch PARKS (S3: the
-    // body is KEPT at the nose — { parked: true } skips only the field
-    // removal). Jettison [K] before expiry aborts with NO score and the whale
-    // back in the field.
+    // Securing ceremony: after BERTHED the catch sits at the launcher this long while Houston reads the mass, then
+    // CATCH_PROCESSED fires with source:'mother' (score + salvage + clearDebris + autosave via GameFlowManager) and
+    // the catch PARKS ({ parked: true } keeps the body at the nose). Jettison [K] before expiry aborts with NO
+    // score and the whale back in the field.
     BERTH_SECURE_S:       1.5,
-    // Long-tether reel speed-up: at REEL_SPEED 2.0 a 100 m shot would reel for
-    // ~50 s wall-clock. The ease below is monotonic (never decelerates mid-
-    // reel, so the tether cannot re-slack and re-snap) and lands the duration
-    // in the ~5–25 s window. remainingM is the single source for reelProgress.
+    // Long-tether reel speed-up: at REEL_SPEED 2.0 a 100 m shot would reel ~50 s. The ease is monotonic (never
+    // decelerates mid-reel, so the tether cannot re-slack and re-snap) and lands the duration in ~5–25 s.
     REEL_LONG_TETHER_M:   40,     // beyond this the reel speeds up
     REEL_LONG_TETHER_MULT: 3.0,   // speed multiplier at/above the long-tether range
 
-    // ── Reel corridor clearance (mother-net-reel plan §10 Phase C-lite) ──
-    // The reel pauses its final approach CORRIDOR_HOLD_M from the muzzle until
-    // the corridor test passes (a cylinder along ship-local +Z from the muzzle,
-    // radius = debris.sizeMeter/2 + BERTH_CLEARANCE_M, must contain no strut
-    // tip / held daughter catch / lasso cargo cell). Analytic — no mesh
-    // collision exists anywhere in this codebase. On CORRIDOR_TIMEOUT_S the
-    // reel berths at CORRIDOR_EXTENDED_STANDOFF_M instead of clipping through.
-    // Full clear-the-deck choreography (auto-park intruding struts) is
-    // deferred until playtest shows real clipping.
-    // big-catch-home (2026-10-17): the gate ALSO reads the ship keep-out for the
-    // RADIATORS and the bags on their tips — the catch as a capsule (radius
-    // sizeMeter/2) on the collar axis from its current distance down to its
-    // home; any radiator part or tip bag closer than REEL_HOME.CLEARANCE_M holds
-    // the reel (read only, no radiator command). The r + BERTH_CLEARANCE_M
-    // cylinder is deliberately NOT applied to them: the closed radiators' tips
-    // (2-13°) sit inside it for every r, yet a catch clears them by 0.085 m or
-    // more (measured), so the cylinder would hold every catch whenever they are
-    // closed. A home found before the radiators moved is not refreshed: this
-    // read holds it and the timeout below berths it.
+    // --- Reel corridor clearance ---
+    // The reel pauses CORRIDOR_HOLD_M from the muzzle until the corridor test passes (a cylinder along ship-local +Z
+    // from the muzzle, radius = debris.sizeMeter/2 + BERTH_CLEARANCE_M, with no strut tip / held daughter catch /
+    // lasso cargo cell). Analytic — no mesh collision exists in this codebase. On CORRIDOR_TIMEOUT_S the reel berths
+    // at CORRIDOR_EXTENDED_STANDOFF_M instead of clipping through. Auto-parking intruding struts is deferred
+    // until playtest shows real clipping.
+    // The gate ALSO reads the ship keep-out for the RADIATORS and the bags on their tips — the catch as a capsule
+    // (radius sizeMeter/2) on the collar axis from its current distance down to its home; any radiator part or
+    // tip bag closer than REEL_HOME.CLEARANCE_M holds the reel (read only). The r + BERTH_CLEARANCE_M cylinder is
+    // deliberately NOT applied to them: the closed radiators' tips (2-13°) sit inside it for every r, yet a catch
+    // clears them by 0.085 m or more (measured). A home found before the radiators moved is not refreshed: the
+    // timeout below berths it.
     CORRIDOR_HOLD_M:              10,   // m from the muzzle where the gate arms
     CORRIDOR_TIMEOUT_S:           8,    // s held before berthing at extended standoff
-    // Extended standoff: berth here on timeout. Must be ≥ CORRIDOR_HOLD_M —
-    // the hold range is already clear of every intruder: a π-swept strut tip
-    // reaches only ~2.5 m fore, and at the 10 m hold even an 11 m whale's near
-    // face sits at 4.5 m — also clear of the 4 m lasso cargo row. That is the
-    // §4.13 overlap settlement: the gate holds until the furnace feed
-    // (FEED_S ≤ 9 s) frees the cell, else the timeout berth is geometrically
-    // clear of it. No lateral-spread constant needed.
+    // Extended standoff: berth here on timeout. Must be ≥ CORRIDOR_HOLD_M — the hold range is already clear of
+    // every intruder: a π-swept strut tip reaches only ~2.5 m fore, and at the 10 m hold even an 11 m whale's near
+    // face sits at 4.5 m, clear of the 4 m lasso cargo row (the §4.13 overlap settlement: the gate holds until the
+    // furnace feed, FEED_S ≤ 9 s, frees the cell). No lateral-spread constant needed.
     CORRIDOR_EXTENDED_STANDOFF_M: 10,
-    // Berthed-mass translational effect (plan §8 A2 / §4.4). Applied ONLY in
-    // PlayerSatellite._applyThrust as one massFactor scaling ti AND mag;
-    // rotation stays kinematic and applyCartesianImpulse is deliberately
-    // unscaled (the AP models RCS/station-keeping, not the main engine).
-    // The clamp is NOT optional: raw (130+5000)/130 ≈ 39× and 23 t ≈ 178×
-    // would leave thrust authority at 0.5–2.5% — a soft-lock.
+    // Berthed-mass translational effect: applied ONLY in PlayerSatellite._applyThrust as one massFactor scaling
+    // ti AND mag; rotation stays kinematic and applyCartesianImpulse is deliberately unscaled. The clamp is NOT
+    // optional: raw (130+5000)/130 ≈ 39× and 23 t ≈ 178× would leave thrust authority at 0.5–2.5% — a soft-lock.
     MASS_EFFECT_MULT:     1.0,
-    MASS_EFFECT_MAX:      2.0,    // max massFactor divisor (2–3× per plan)
-    // Render floor for a pinned mother catch — a RENDERED RADIUS in metres,
-    // converted to an instance scale at the write sites via
-    // DebrisWireframe.scaleForRenderRadiusM (÷ mesh bounding radius —
-    // whale-in-cone item 8) — keeps a 500 kg+ catch legible at the muzzle
-    // standoff.
-    // NAME COLLISION (register item 23): the top-level
-    // MOTHER_CATCH_MIN_RENDER_M (1.5, :2377) is a DIFFERENT floor with the
+    MASS_EFFECT_MAX:      2.0,    // max massFactor divisor (2–3×)
+    // Render floor for a pinned mother catch — a RENDERED RADIUS in metres (converted at the write sites via
+    // DebrisWireframe.scaleForRenderRadiusM) — keeps a 500 kg+ catch legible at the muzzle standoff.
+    // NAME COLLISION: the top-level MOTHER_CATCH_MIN_RENDER_M (1.5) is a DIFFERENT floor with the
     // same name — THIS CAPTURE_NET-scoped one (2.0) is the CEREMONY-BAG
     // floor; the top-level one is the lasso flight-web floor.
     MOTHER_CATCH_MIN_RENDER_M: 2.0,
-    // Reel-entry engagement ramp for the floor above (whale-in-cone item 15,
-    // 2026-08-09 — owner decision: RAMP, plan 1786237166000). Pre-item-15 the
-    // floor engaged at full strength on the FIRST reel frame — a measured
-    // one-frame pop of 1.31× (2 m catch) to 3.33× (0.6 m fragment) at exactly
-    // the instant the ceremony camera is on the catch. The reel/berth write
-    // sites now ease the WRITTEN VALUE base → floor over this many NET-domain
-    // seconds (the ceremony-scaled dt the net's own update applies, so the
-    // ramp stretches under slow-mo like every other net animation). Readers
-    // are untouched — the one clamp-aware SSOT effectiveRenderScale still owns
-    // the predicate — and the scenario's _catchRenderMin property freeze
-    // swallows the write whatever its value, so every gate stays bit-identical.
-    // 0 degenerates to the pre-item-15 step. Feel knob: retune freely; it is
-    // not a gate quantity.
+    // Reel-entry engagement ramp for the floor above (owner 2026-08-09: RAMP): the floor engaged at full strength on the
+    // FIRST reel frame — a one-frame pop of 1.31× (2 m catch) to 3.33× (0.6 m fragment) while the ceremony camera is
+    // on the catch. The reel/berth write sites ease the WRITTEN VALUE base → floor over this many NET-domain
+    // seconds (ceremony-scaled dt, so it stretches under slow-mo like every net animation). Readers are untouched —
+    // effectiveRenderScale still owns the predicate. 0 = a step. Feel knob, not a gate quantity.
     MOTHER_CATCH_MIN_RENDER_RAMP_S: 0.6,
 
-    // ── Cargo hand-off: parked catch → daughter rack (cargo-continuity S7) ──
-    // The mother's nose is the only place a tethered mass can be towed (it must
-    // ride the thrust axis or every burn torques a non-rigid line), and it is
-    // also where the one launcher fires from (on the axis, through the collar
-    // bore). So a parked catch blocks the launcher by PHYSICS, and the only rigid attachment
-    // point this ship models is a daughter's strut tip. Hence the hand-off.
-    //
-    // Owner ruling (2026-08-12 design review): AUTOMATIC, no hotkey — the player
-    // holds no information the ship lacks (fuel, rack occupancy and the CG
-    // arithmetic are all better known to the ship), so a keypress would be a
-    // confirmation dialog with one option. The ship acts, names the carrier in
-    // comms, and refuses ONCE when it cannot.
+    // --- Cargo hand-off: parked catch → daughter rack ---
+    // The mother's nose is the only place a tethered mass can be towed (it must ride the thrust axis or every burn
+    // torques a non-rigid line) and also where the one launcher fires from (through the collar bore). So a parked
+    // catch blocks the launcher by PHYSICS, and the only rigid attachment point this ship models is a daughter's
+    // strut tip. Hence the hand-off.
+    // owner 2026-08-12: the hand-off is AUTOMATIC, no hotkey — the player holds no information the ship lacks (fuel,
+    // rack occupancy and the CG arithmetic). The ship acts, names the carrier in comms, and refuses ONCE when it cannot.
     CARGO_TRANSFER: {
-      // UNREAD since the T2 race fix (2026-09-23): the hand-off is decided on
-      // the first COLLARED tick, not after a dwell — the collar chop commits
-      // +1.33 s (3 kg) to +4.43 s (10 kg) after the mate in sunlight, so any
-      // dwell loses the race. Kept, value unchanged, only as a possible
-      // duration for the later camera slice (T6b); the PARK_HOLD beats it
-      // might ride are 4.0/6.0 s.
+      // UNREAD: the hand-off is decided on the first COLLARED tick, not after a dwell — the collar chop commits
+      // +1.33 s (3 kg) to +4.43 s (10 kg) after the mate in sunlight, so any dwell loses the race. Kept, value
+      // unchanged, only as a possible duration for a later camera slice.
       DELAY_S:        5.0,
-      // Retry cadence after a declined hand-off (no carrier qualifies, or the
-      // furnace guard owns the piece). The scorer runs computeCoM, which
-      // allocates — the net path must not allocate per frame (plan §13), and a
-      // catch can sit unstowable for minutes.
+      // Retry cadence after a declined hand-off (no carrier qualifies, or the furnace guard owns the piece). The
+      // scorer runs computeCoM, which allocates — the net path must not allocate per frame.
       RETRY_S:        0.5,
-      // Flight time nose → strut tip. Short deliberately: the physically honest
-      // version is a 20–40 s slow walk (a 3 s toss implies ~5 m/s and ~1.5 m/s of
-      // reaction on the mother before arrest), but that needs momentum
-      // bookkeeping and an abort path — a separate order. 3 s matches the
-      // FurnaceBreakdownVisual chunk-arc idiom this beat reuses.
+      // Flight time nose → strut tip. Short deliberately: the physically honest version is a 20–40 s slow walk (a 3 s
+      // toss implies ~5 m/s and ~1.5 m/s of reaction on the mother), but that needs momentum bookkeeping and an
+      // abort path. 3 s matches the FurnaceBreakdownVisual chunk-arc idiom this beat reuses.
       FLIGHT_S:       3.0,
-      // Outward bulge of the quadratic Bézier control point (metres), so the
-      // catch arcs around the hull instead of shearing through it. Same shape as
-      // the furnace chunk arc, run backwards.
+      // Outward bulge of the quadratic Bézier control point (metres), so the catch arcs around the hull.
       ARC_BULGE_M:    2.0,
-      // Mass gate (kg). Above this a body stays on the tether at the nose until
-      // it is digested or jettisoned — it does NOT go to a strut tip. Physical
-      // rationale: at 44–114× the 201 kg mother (SL-16 8.9 t, CZ-5B 23 t) the
-      // system CoM sits inside the cargo, so moving that mass OFF the thrust axis
-      // is the wrong move. Measured against data/debris-catalog.json: 24 objects
-      // in 500–2000 kg are stowable, 22 heavier ones are not — so the whale's
-      // SIZE decides the player's options. Tuning, not doctrine.
+      // Mass gate (kg). Above this a body stays on the tether at the nose until digested or jettisoned — it does NOT
+      // go to a strut tip: at 44–114× the 201 kg mother (SL-16 8.9 t, CZ-5B 23 t) the system CoM sits inside the
+      // cargo, so moving that mass OFF the thrust axis is the wrong move. Measured against
+      // data/debris-catalog.json: 24 objects in 500–2000 kg are stowable, 22 heavier ones are not. Tuning, not doctrine.
       MAX_KG:         2000,
-      // Carrier scorer weights (plan §2.2.1): CG-drift improvement first,
-      // "this daughter can't usefully deploy anyway" second. Deployability is
-      // propellant ONLY — there is no per-arm panel-health field in the tree.
+      // Carrier scorer weights: CG-drift improvement first, "this daughter can't usefully deploy anyway" second.
+      // Deployability is propellant ONLY — there is no per-arm panel-health field in the tree.
       W_CG:           1.0,
       W_DEPLOY:       0.5,
     },
 
-    // Debris cutting step 5 (CUT_AT_NOSE): one cut takes this many GAME
-    // seconds at the nose (dt × TimeAuthority.BASE_SCALE, deliberately NOT
-    // sun-scaled — the cutter is a machine, not a plant). 60 game-s = 6 real
-    // seconds per piece.
-    // PLACEHOLDER — unsourced; electron-beam cut rate research is owed
-    // (cutting plan §6 step 2). Tuning, not doctrine.
+    // Debris cutting (CUT_AT_NOSE): one cut takes this many GAME seconds at the nose (dt × TimeAuthority.BASE_SCALE,
+    // deliberately NOT sun-scaled — the cutter is a machine, not a plant): 60 game-s = 6 real seconds per piece.
+    // PLACEHOLDER — unsourced; electron-beam cut rate research is owed. Tuning, not doctrine.
     CUT_S: 60,
 
-    // ── Line-taut tug (mother-net-reel plan §9 Phase B) ──
-    // When the net cinches onto a whale with residual relative velocity, the
-    // tether goes taut and the catch yanks the Mother. The honest momentum
-    // ratio is up to 177:1 (23 t vs 130 kg), so the cap below does nearly all
-    // the work — it is the difference between "the Mother is visibly yanked"
-    // and "the Mother is flung off-station". The tug is applied two ways:
-    //   1. a 0.5–0.8 s critically damped spring window into _rcsVelocity
-    //      (the shock absorber — feel-only, decays), and
-    //   2. a REAL orbit impulse via applyCartesianImpulse with billing
-    //      SKIPPED (passive momentum transfer costs no propellant) — the kept
-    //      Δv is a genuine ΔV-economy event, comms'd and cancellable with RCS.
+    // --- Line-taut tug ---
+    // When the net cinches onto a whale with residual relative velocity, the tether goes taut and the catch yanks
+    // the Mother. The honest momentum ratio is up to 177:1 (23 t vs 130 kg), so the cap below does nearly all the
+    // work — the difference between "visibly yanked" and "flung off-station". Applied two ways:
+    //   1. a 0.5–0.8 s critically damped spring window into _rcsVelocity (the shock absorber — feel-only, decays), and
+    //   2. a REAL orbit impulse via applyCartesianImpulse with billing SKIPPED (passive momentum transfer costs no
+    //      propellant) — the kept Δv is a genuine ΔV-economy event, comms'd and cancellable with RCS.
     // Do NOT call _autoRcsCompensation on the tug (keep-or-cancel by design).
     NET_TUG_MAX_DV_MS:    0.5,    // m/s — cap on the kept orbit impulse
     NET_TUG_WINDOW_S:     0.65,   // s — spring soft-capture window (0.5–0.8)
-    // Share of the tug Δv that also drives _rcsVelocity (the feel component,
-    // spread over NET_TUG_WINDOW_S — dt-robust by construction). The same
-    // magnitude drives the orbit AND _rcsVelocity, so at 1.0 the transient
-    // reads as ~2× the permanent Δv for the window duration: that overshoot is
-    // the yank, now deliberate and tunable rather than accidental. Lower it
-    // (0.5) if playtest says the yank overshoots.
+    // Share of the tug Δv that also drives _rcsVelocity (the feel component, spread over NET_TUG_WINDOW_S). The same
+    // magnitude drives the orbit AND _rcsVelocity, so at 1.0 the transient reads as ~2× the permanent Δv for the
+    // window: that overshoot is the yank. Lower it (0.5) if playtest says the yank overshoots.
     NET_TUG_FEEL_MULT:    1.0,
 
-    // ── Phase D.7 garnish (mother-net-reel plan §11.7) ──
-    // (a) Tumble carryover: the wrapped bundle keeps a decaying spin at ENVELOP
-    // instead of the hard tumble freeze (_advanceTumble returns early on
-    // _armPinned). The residual decays over TUMBLE_CARRYOVER_DECAY_S and feeds
-    // a small extra pitch term into the berth-hold orientation. Shares the
-    // orientation channel with §1.2 (ship-frame qLocal), so the two are built
-    // together: the carryover is an offset ON TOP of the ship-rigid attitude.
+    // --- Berth garnish ---
+    // (a) Tumble carryover: the wrapped bundle keeps a decaying spin at ENVELOP instead of the hard tumble freeze
+    // (_advanceTumble returns early on _armPinned); the residual feeds a small extra pitch term into the berth-hold
+    // orientation, an offset ON TOP of the ship-rigid attitude (shares the ship-frame qLocal channel).
     TUMBLE_CARRYOVER_DECAY_S: 5.0,   // s — residual spin decays to ~0 over 4–6 s
     TUMBLE_CARRYOVER_MAX_RAD_S: 0.6, // rad/s — cap on the carried residual
-    // (b) Berthed pendulum: the berthed bundle swings on the same critically
-    // damped spring the reel-direction lag uses (~0.5 Hz), re-excited by RCS
-    // translation. Angle is an offset off the lagged-forward axis; the spring is
-    // semi-implicit (dt-robust at 30/120 fps). NOTE: at critical damping (zeta=1)
-    // the decay time is fully determined by FREQ_HZ — there is deliberately no
-    // separate DECAY_S knob, because a second constant would not be read and
-    // would drift from the real behaviour (~1 s to 1/e at 0.5 Hz).
+    // (b) Berthed pendulum: the berthed bundle swings on the same critically damped spring the reel-direction lag
+    // uses (~0.5 Hz), re-excited by RCS translation; semi-implicit (dt-robust at 30/120 fps). At critical damping
+    // (zeta=1) the decay time is fully determined by FREQ_HZ — there is deliberately no separate DECAY_S knob
+    // (a second constant would not be read and would drift from the real ~1 s to 1/e at 0.5 Hz).
     BERTH_PENDULUM_FREQ_HZ:  0.5,    // Hz — swing frequency (also sets the decay)
-    BERTH_PENDULUM_MAX_RAD:  0.15,   // rad — cap (~8.6°). V7 garnish rescale from
-                                    // 0.06 (~3.4°, ~1–2% of the bag's silhouette —
-                                    // invisible at the ceremony framing) into the
-                                    // ~5–8% band. Clearance is standoff-INVARIANT,
-                                    // which is why raising the cap is safe: the
-                                    // call site applies tan(angle) × berthStandoffM,
-                                    // i.e. the bundle sways on a fixed-angle cone
-                                    // about the muzzle, so the axial
-                                    // BERTH_CLEARANCE_M margin is untouched and the
-                                    // lateral excursion grows only in proportion to
-                                    // how far out the catch already is. Read the cap
-                                    // as the 8.6° cone half-angle, NOT as "0.68 m at
-                                    // the 4.5 m standoff" — that framing invites the
-                                    // false conclusion that a larger standoff
-                                    // (rocketBody 6.5 m, CORRIDOR_EXTENDED_STANDOFF_M
-                                    // 10 m) erodes clearance.
-    // rad/s of swing velocity per METRE of RCS drift. The call site converts
-    // _rcsVelocity to m/s and scales by dt, so the total kick over a burst is the
-    // RCS displacement — framerate-independent. Tuned against real input: RCS
-    // equilibrium was ~0.38 m/s (the removed RCS_IMPULSE vs RCS_DAMPING) and RCS_MAX_SPEED is
-    // 0.5 m/s, so a ~1 s burst gives ~0.02 rad (~⅓ of MAX_RAD) and a short tap
-    // reads as a gentle sway. Do NOT tune this against a single-frame kick.
+    BERTH_PENDULUM_MAX_RAD:  0.15,   // rad — cap (~8.6°), ~5–8% of the bag's silhouette at the ceremony framing.
+                                    // Clearance is standoff-INVARIANT, which is why raising the cap is safe: the
+                                    // call site applies tan(angle) × berthStandoffM, i.e. the bundle sways on a
+                                    // fixed-angle cone about the muzzle, so the axial BERTH_CLEARANCE_M margin
+                                    // is untouched. Read the cap as the 8.6° cone half-angle, NOT as "0.68 m at
+                                    // the 4.5 m standoff" — a larger standoff (rocketBody 6.5 m,
+                                    // CORRIDOR_EXTENDED_STANDOFF_M 10 m) does not erode clearance.
+    // rad/s of swing velocity per METRE of RCS drift (the call site converts _rcsVelocity to m/s and scales by dt,
+    // so the kick over a burst is the RCS displacement — framerate-independent). Tuned against real input: RCS
+    // equilibrium was ~0.38 m/s and RCS_MAX_SPEED is 0.5 m/s, so a ~1 s burst gives ~0.02 rad (~⅓ of MAX_RAD) and a
+    // short tap reads as a gentle sway. Do NOT tune this against a single-frame kick.
     BERTH_PENDULUM_RCS_EXCITE: 0.6,
-    // Phase D.8 (§11.8): every garnish item sits behind its own constant so a
-    // LOW tier (or a tuning pass) can drop it without touching the structure.
-    // The pendulum is a physics-side garnish (it feeds the berth-hold pin), so
-    // its gate lives here rather than in CaptureNetVisual's tier check.
+    // Every garnish item sits behind its own constant so a LOW tier can drop it. The pendulum is a physics-side
+    // garnish (it feeds the berth-hold pin), so its gate lives here rather than in CaptureNetVisual's tier check.
     BERTH_PENDULUM_ENABLED:  true,
-    // 2026-08-25 (capture-lock direction): OFF by default — a caught debris is
-    // WELDED to the ship the moment the wrap takes. The V7 "spins down inside
-    // the bag" garnish read as the catch still tumbling after capture, which
-    // contradicts the capture read (docked = locked, mother and daughter both).
-    // The mechanism + its tests stay (test-CaptureNet-MotherBerth.js forces the
-    // flag on to pin the maths); this default is the shipped behaviour.
+    // OFF by default — a caught debris is WELDED to the ship the moment the wrap takes; a catch still tumbling
+    // inside the bag contradicts the capture read (docked = locked, mother and daughter both). The mechanism + its
+    // tests stay (test-CaptureNet-MotherBerth.js forces the flag on to pin the maths).
     TUMBLE_CARRYOVER_ENABLED: false,
 
-    // ── Reel-cycle lifetime ──
+    // --- Reel-cycle lifetime ---
     REEL_CYCLE_LIFE:      20,     // §6.6: deploy/reel cycles before tether replacement
 
-    // ── Distance zones (metres) — per §3.3 + QA Q-4 ──
+    // --- Distance zones (metres) — per §3.3 + QA Q-4 ---
     CLOSE_RANGE:          30,     // <30 m = bonus zone (f_distance = 1.1)
     BASELINE_RANGE_MAX:   75,     // 30–75 m = standard (f_distance = 1.0)
     ENVELOPE_RANGE:       100,    // max engagement envelope
 
-    // ── UX-11 #1: close-range catch forgiveness + off-axis warning ──
+    // --- Close-range catch forgiveness + off-axis warning ---
     // The net mouth physically wraps a little beyond its disc at close range,
     // so a near-graze inside CLOSE_RANGE counts as contact. Conservative —
     // applies ONLY inside CLOSE_RANGE; the cling-probability physics is
@@ -4569,7 +3523,7 @@ export const Constants = {
     CATCH_RADIUS_FORGIVENESS: 1.25,  // effective mouth-radius multiplier (< CLOSE_RANGE only)
     OFF_AXIS_WARN_DEG:        12,    // pre-fire HUD warns when lead angle exceeds this
 
-    // ── Cling-probability gameplay floors (2026-06-11 tuning) ──
+    // --- Cling-probability gameplay floors ---
     // Without these, the multiplicative factor stack made a PERFECT
     // point-blank shot on common materials nearly hopeless (aluminum sat:
     // ~28%, solar-cell sat: ~16%) — players read it as "nets don't work".
@@ -4582,7 +3536,7 @@ export const Constants = {
     ROUGHNESS_FLOOR:      0.6,
     SURE_SHOT_MIN_CLING:  0.8,
 
-    // ── Cling probability base values — per §3.4 ──
+    // --- Cling probability base values — per §3.4 ---
     SLAM_P_BASE: {
       RIGHT_RIGHT:   0.90,   // right net, right target
       RIGHT_HARDER:  0.80,   // right net, harder target
@@ -4596,32 +3550,29 @@ export const Constants = {
       WRONG_NET:     0.85,
     },
 
-    // ── Tangle base probabilities — per §4.6 (the tangle mechanic and its switch are gone) ──
+    // --- Tangle base probabilities — per §4.6 (the tangle mechanic and its switch are gone) ---
     TANGLE_SELF_P:          0.015,
     TANGLE_MOTHER_P:        0.02,
     TANGLE_DAUGHTER_P:      0.05,
     TANGLE_CROSS_DEBRIS_P:  0.008,
     TANGLE_REEL_IN_P:       0.04,
 
-    // ── Fragmentation ──
+    // --- Fragmentation ---
     FRAG_REP_PENALTY:       10,     // reputation lost per fragment (§5.5)
     FRAG_CREDIT_PENALTY:    50,     // credits lost per fragment (§5.5)
     FRAG_MERCY_FIRST_FREE:  true,   // first-fragmentation waives penalties (§5.7)
 
-    // ── Mother launcher config — per §2.9 ──
-    // Owner 2026-10-13: ONE launcher, centred on the nose (was 2 symmetric pods
-    // A and B at +-0.45 m). The magazine total is unchanged at 4 nets
-    // (LARGE.MAGAZINE_SIZE 4 x 1 launcher; was 2 x 2). Name kept: it counts
-    // launchers, and the `podIndex` API stays (always 0).
-    MOTHER_POD_COUNT:       1,      // 1 launcher (was 2 symmetric pods A and B, until 2026-10-13)
+    // --- Mother launcher config — per §2.9 ---
+    // ONE launcher, centred on the nose. The magazine total is 4 nets
+    // (LARGE.MAGAZINE_SIZE 4 x 1 launcher). Name kept: it counts
+    // launchers, and the `podIndex` API stays (always 0). (owner 2026-10-13)
+    MOTHER_POD_COUNT:       1,      // 1 launcher
     MOTHER_POD_SPRING_E:    100,    // J per launcher (§2.8)
     GUIDE_RING_MASS:        0.080,  // kg (§2.9.3)
 
-    // ═══════════════════════════════════════════════════════════
-    // Per-Platform Net Class Specs — per §6.1
-    // ═══════════════════════════════════════════════════════════
+    // --- Per-Platform Net Class Specs — per §6.1 ---
 
-    // ── Rim Weight Spin-Rate Physics (2026-05-28 Item 5 doc, no code change) ──
+    // --- Rim Weight Spin-Rate Physics ---
     //
     //   F_centripetal_per_weight = m × ω² × r,  where ω = 2π × SPIN_HZ
     //
@@ -4633,36 +3584,26 @@ export const Constants = {
     //   | Class  | D (m) | RIM_WT_COUNT | RIM_WT_MASS (kg) | SPIN_HZ | RPM | r (m) | ω (rad/s) | F/wt (N) |
     //   |--------|-------|--------------|------------------|---------|-----|-------|-----------|----------|
     //   | LARGE  | 6.0   | 8            | 0.075            | 2       | 120 | 3.0   | 12.57     | 35.5     |
-    //   | MEDIUM | 3.0   | 4            | 0.030            | 6.667   | 400 | 1.5   | 41.89     | 78.9     |   (5 m / 0.050 kg / 4 Hz until 2026-10-23: same rim speed, same pull)
+    //   | MEDIUM | 3.0   | 4            | 0.030            | 6.667   | 400 | 1.5   | 41.89     | 78.9     |
     //   | SMALL  | 1.5   | 4            | 0.015            | 6       | 360 | 0.75  | 37.70     | 16.0     |
     //
-    //   Re-derived 2026-06-12 (Item 3 audit): all three classes hold > 10 N per
-    //   rim weight at the SETTLED (mouth-open) spin — the design floor for
-    //   keeping the bag mouth open in 0g. Guarded by a derivation test in
-    //   test-Crossbow-Constants.js (asserts F/wt ≥ 10 N), so future SPIN_HZ /
-    //   RIM_WEIGHT_MASS retunes can't silently collapse a net mouth.
+    //   All three classes hold > 10 N per rim weight at the SETTLED (mouth-open) spin — the design floor for
+    //   keeping the bag mouth open in 0g (if F/wt < 5 N the mouth collapses). Guarded by a derivation test in
+    //   test-Crossbow-Constants.js (asserts F/wt ≥ 10 N): re-derive F/wt on any SPIN_HZ / RIM_WEIGHT_MASS retune.
+    //   Break strength of Dyneema SK78 is ~3500 N for a 1 mm² strand, far above these.
     //
-    //   Where does the torque go? (the player-facing physics, also taught in
-    //   the Codex "Net spin & the yo-yo despin" entry + first-launch SCI line):
-    //   the launcher spin-table torques the canister at launch; the equal-and-
-    //   opposite reaction goes into the daughter's reaction wheel/body. The
-    //   mouth-open "despin" from SPIN_HZ × SPIN_FOLDED_MULT down to SPIN_HZ is
-    //   radius growth (I ∝ r², yo-yo effect), NOT an external torque — though
-    //   the 3× RATIO is a stylized visual, not closed-form L conservation (see
-    //   the SPIN_FOLDED_MULT note above), and in flight SPIN_DECAY_PER_S
-    //   deliberately bleeds a little L (mesh flex + rim drag) for gameplay.
+    //   Where does the torque go? (taught in the Codex "Net spin & the yo-yo despin" entry + first-launch SCI
+    //   line): the launcher spin-table torques the canister at launch; the equal-and-opposite reaction goes into
+    //   the daughter's reaction wheel/body. The mouth-open "despin" from SPIN_HZ × SPIN_FOLDED_MULT down to
+    //   SPIN_HZ is radius growth (I ∝ r²), NOT an external torque — though the 3× RATIO is a stylized visual
+    //   (see SPIN_FOLDED_MULT), and in flight SPIN_DECAY_PER_S deliberately bleeds a little L for gameplay.
     //
-    //   All three are comfortably above the 5-10 N tension threshold and well
-    //   below Dyneema SK78 break strength (~3500 N for a 1 mm² strand).  If
-    //   you bump SPIN_HZ to dial in visual spin speed, re-derive F/wt to ensure
-    //   you stay > 10 N per weight; if F/wt < 5 N, the bag mouth collapses.
-    //
-    // ── Large Net (M-NET) — Mother pod ──
+    // --- Large Net (M-NET) — Mother pod ---
     LARGE: {
       CODE:             'M-NET',
       NAME:             'Large Net',
-      DIAMETER:         6.0,       // m deployed (§2.1; 8.0 until 2026-10-20, DECISIONS §33 row 1)
-      MASS:             1.425,     // kg total net+hub (§2.3): mesh + 8 rim weights + hub (was 1.95 at 8 m)
+      DIAMETER:         6.0,       // m deployed (§2.1; DECISIONS §33 row 1)
+      MASS:             1.425,     // kg total net+hub (§2.3): mesh + 8 rim weights + hub
       MESH_MASS:        0.675,     // kg mesh only (Dyneema Y0); mesh scales with area: 1.200 x (6/8)^2
       RIM_WEIGHT_COUNT: 8,         // (§2.1)
       RIM_WEIGHT_MASS:  0.075,     // kg each (§2.1)
@@ -4674,13 +3615,10 @@ export const Constants = {
       // (the trip gas), not the net's strength, so it is a separate number: a piece OVER it is refused (exactly 1,500 stays
       // catchable). Lowering MAX_CAPTURE_MASS instead would give every 1,500 kg catch a ~35 % slip chance.
       CATCH_LIMIT_KG:   1500,      // kg
-      // Net ladder: 4 nets in the Mother's one centred launcher (§2.9; was
-      // 2 nets/pod x 2 pods until 2026-10-13, the same 4 whale captures per
-      // load). Whale hunts are the Mother's premium, delta-v-costly job — the
-      // scarce magazine enforces "burn only for whales" doctrine.
+      // Net ladder: 4 nets in the Mother's one centred launcher (§2.9). Whale hunts are the Mother's premium,
+      // delta-v-costly job — the scarce magazine enforces "burn only for whales" doctrine.
       MAGAZINE_SIZE:    4,         // nets in the one launcher, Dyneema Y0 (§6.4)
-      // No RELOAD_TIME in any net class (register items 42 + 68, swept
-      // 2026-08-15): the documented 30/15/5 s reloads were never in the sim —
+      // No RELOAD_TIME in any net class: the documented 30/15/5 s reloads were never in the sim —
       // nothing read them. The mother's live re-fire gate is the per-pod
       // COOLDOWN_CATCH (2 s) / COOLDOWN_MISS (1 s) plus the magazine above —
       // scarcity is quantity, not rate. Daughter magazines refill instantly
@@ -4693,96 +3631,70 @@ export const Constants = {
       TETHER_MAX:       100,       // m (§6.1)
       RANGE:            100,       // m engagement envelope (§2.8)
       LAUNCH_SPEED:     10.0,      // m/s (§2.8)
-      // Per-class flight-time override (mother-net-reel plan §7.5): the shared
+      // Per-class flight-time override: the shared
       // CN.MAX_FLIGHT_TIME (8 s) caps the LARGE net at 80 m — short of the
       // 100 m tether and the 100 m ENVELOPE_RANGE the reticle advertises.
       // 11 s puts reach at min(100 tether, 10×11) = 100 m so reticle, odds,
       // refusal and doc all agree. Daughters keep the shared 8 s default.
       MAX_FLIGHT_TIME:  11,        // s — overrides CN.MAX_FLIGHT_TIME for this class
-      // §11.2 mouth-collapse floor — LARGE RESOLVED by physics retune
-      // (2026-08-27 owner rebalance; replaces the MOUTH_COLLAPSE_DEFERRED
-      // escape hatch that lived here). History: the 2026-06-12 audit called
-      // LARGE "fine" against the then-shared 8 s cap; the 2026-07-26
-      // MAX_FLIGHT_TIME override above (8 s → 11 s, for 100 m reach) put the
-      // shared-decay floor crossing t* ≈ 6.76 s ≈ 68 m INSIDE the flight
-      // window (min(11 s, 10 s tether pay-out)), exposing every 68–100 m
-      // whale shot; wave-2 shipped the floor SMALL-enforced with LARGE
-      // consciously deferred. Resolution: a per-class in-flight spin-decay
-      // override (read as netClass.SPIN_DECAY_PER_S ?? CN.SPIN_DECAY_PER_S —
-      // the MAX_FLIGHT_TIME idiom above), NOT an F-side retune, because
-      // t* = (1 − √(FLOOR/F₀))/decay is √-limited on the F side: clearing
-      // the 11 s window at the shared 0.08 decay needs F₀ ≥ 10/(1−0.08·11)²
-      // ≈ 694 N (14.6×) — SPIN_HZ 7.65 Hz (rim speed ~192 m/s, breaks the
-      // big-slow/small-fast class ladder and the 3× folded-spin visual) or
-      // 1.1 kg rim weights (8.8 kg of rim on a 1.95 kg net — breaks the
-      // MASS/SPRING_ENERGY/LAUNCH_SPEED triple, ½·1.95·10² ≈ 97.5 J ≈ 100 J).
-      // The decay knob is linear in t*, and the physics is honest: the
-      // 8 %/s bleed (mesh flex + rim drag) was tuned on the daughter
-      // classes, while fractional decay scales ∝ τ_drag/(I_rim·ω) and the
-      // whale net carries far more rim inertia per kg of flexing mesh
-      // (LARGE 8×0.075×4² = 9.6 kg·m² / 1.2 kg mesh = 8.0; MEDIUM 3.1;
-      // SMALL 0.84) — halving its fractional bleed is conservative against
-      // that ≥ 2.6× scaling. [Numbers below are the 8 m net's; at the 6 m net of 2026-10-20 (DECISIONS §33)
-      // F₀ = 35.53 N, t* = 11.74 s ≈ 117 m, worst 100 m arrival 12.8 N: still outside both caps, margins
-      // 1.74 s (tether) / 0.74 s (MAX_FLIGHT) — pinned in test-CaptureNet-MouthCollapse.js.]
-      // Result: F₀ ≈ 47.37 N crosses the 10 N floor at
-      // t* = (1 − √(10/47.37))/0.04 ≈ 13.51 s ≈ 135 m — OUTSIDE every
-      // reachable contact (tether pay-out ends flight at 10 s / 100 m,
-      // MAX_FLIGHT_TIME at 11 s) with ≥ 2.5 s margin against BOTH caps, so
-      // the floor latch (now live for LARGE — no class is skipped) is
-      // provably inert and the taught 100 m envelope stays honest: worst
-      // reachable arrival = 47.37·(1 − 0.04·10)² ≈ 17.1 N ≥ 10 N floor.
-      // f_spin knock-on (disclosed, §12.2 re-derived — the cling CURVE and
-      // its clamps are byte-untouched): long-shot arrival spinFraction rises
-      // (80 m: 0.36 → 0.68), lifting long-whale odds; SMALL/MEDIUM carry no
-      // override and keep the shared 0.08 bit-identically. Pre-fire odds
-      // (ToolOdds.estimateSpinFractionAtContact) honour this override so
-      // displayed % and resolve roll agree. Derivation + margins pinned in
-      // test-CaptureNet-MouthCollapse.js; retunes of SPIN_HZ /
-      // RIM_WEIGHT_MASS / DIAMETER / this override / MAX_FLIGHT_TIME /
-      // TETHER_MAX break those pins so the decision is re-derived
-      // consciously.
+      // §11.2 mouth-collapse floor — LARGE resolved by a per-class in-flight spin-decay override (read as
+      // netClass.SPIN_DECAY_PER_S ?? CN.SPIN_DECAY_PER_S — the MAX_FLIGHT_TIME idiom above), NOT an F-side
+      // retune: with the 11 s MAX_FLIGHT_TIME the shared-decay floor crossing fell INSIDE the flight window
+      // (t* ≈ 6.76 s ≈ 68 m on the 8 m net). t* is √-limited on the F side: clearing the 11 s window at the shared
+      // 0.08 decay needs F₀ ≥ 10/(1−0.08·11)² ≈ 694 N (14.6×) — SPIN_HZ 7.65 Hz (breaks the big-slow/small-fast
+      // class ladder and the 3× folded-spin visual) or 1.1 kg rim weights (breaks the MASS/SPRING_ENERGY/
+      // LAUNCH_SPEED triple). Halving the fractional bleed is physical: the whale net carries far more rim
+      // inertia per kg of flexing mesh (LARGE 8×0.075×4² = 9.6 kg·m² / 1.2 kg mesh = 8.0; MEDIUM 3.1; SMALL 0.84).
+      // Numbers for the 8 m net: F₀ ≈ 47.37 N, t* ≈ 13.51 s ≈ 135 m, worst reachable arrival ≈ 17.1 N ≥ 10 N floor;
+      // at the 6 m net (DECISIONS §33) F₀ = 35.53 N, t* = 11.74 s ≈ 117 m, worst 100 m arrival 12.8 N: still
+      // outside both caps (tether pay-out ends flight at 10 s / 100 m, MAX_FLIGHT_TIME 11 s), margins 1.74 s
+      // (tether) / 0.74 s (MAX_FLIGHT) — pinned in test-CaptureNet-MouthCollapse.js; retunes of SPIN_HZ /
+      // RIM_WEIGHT_MASS / DIAMETER / this override / MAX_FLIGHT_TIME / TETHER_MAX break those pins.
+      // f_spin knock-on (§12.2; the cling CURVE and its clamps are untouched): long-shot arrival
+      // spinFraction rises (80 m: 0.36 → 0.68), lifting long-whale odds; SMALL/MEDIUM keep the shared 0.08.
+      // Pre-fire odds (ToolOdds.estimateSpinFractionAtContact) honour this override so displayed % and
+      // resolve roll agree.
       SPIN_DECAY_PER_S: 0.04,      // fraction of SPIN_HZ lost per second — LARGE-only override of CN.SPIN_DECAY_PER_S (§11.2 resolution)
       SPRING_ENERGY:    100,       // J (§2.8)
       REPLACEMENT_COST: 250,       // credits (§6.1)
     },
 
-    // ── Medium Net (LD-NET) — Weaver / Large Daughter ──
-    // 2026-10-23 (DECISIONS §38 row 5; owner: "3m is a guess ... daughters may need more smaller nets"): the large daughter
-    // carries FOUR 3 m nets, each lighter, in place of two 5 m nets (doc docs/research/2026-10-debris-sizes.md §6: takes 9 of
+    // --- Medium Net (LD-NET) — Weaver / Large Daughter ---
+    // DECISIONS §38 row 5 (owner 2026-10-23: "3m is a guess ... daughters may need more smaller nets"): the large daughter
+    // carries FOUR 3 m nets, each lighter, in place of two 5 m nets (archive/research/2026-10-debris-sizes.md §6: takes 9 of
     // the 11 targets from mission 2 on any way round, 11 of 11 pointed well; misses only the 4.5 m satellite sideways, the
-    // mother's job). Mass method (doc §6, estimates): mesh 0.0165 kg/m^2 x 3^2 = 0.149 kg; rim weights and hub scale with the
-    // mouth (x 3/5: 4 x 0.030 kg, 0.048 kg) => 0.317 kg per net, 1.268 kg for four (the 5 m pair weighed 1.36 kg).
+    // mother's job). Mass method (same doc §6, estimates): mesh 0.0165 kg/m^2 x 3^2 = 0.149 kg; rim weights and hub scale with the
+    // mouth (x 3/5: 4 x 0.030 kg, 0.048 kg) => 0.317 kg per net, 1.268 kg for four.
     // MAX_CAPTURE_MASS stays 500 kg: that rating was never derived from mesh, rim or thread count (it is the "target
     // envelope" row of CAPTURE_NET.md §6.1; its one physics tie is the tether: (arm + 500 kg) x 2 m/s x REEL_TENSION_COEFF
     // = 40.5 N under the start tier's 100 N break strength). The 3 m net's own cords (8 spokes of 1.0 mm Dyneema SK78,
     // 3.6 GPa = 22.6 kN; 8.1 kN even at 0.6 mm cord) carry far more than any tether can pull, so the net is not the weak link.
-    // SPIN_HZ 4 -> 20/3 keeps the RIM SPEED (62.8 m/s) and so the pull per weight exactly as it was: F = m w^2 r =
-    // 0.030 x (2 pi 20/3)^2 x 1.5 = 78.96 N, the 5 m net's value (0.050 x (2 pi 4)^2 x 2.5). At 4 Hz the 3 m net would pull
+    // SPIN_HZ 20/3 keeps the RIM SPEED (62.8 m/s) and so the pull per weight of the former 5 m net: F = m w^2 r =
+    // 0.030 x (2 pi 20/3)^2 x 1.5 = 78.96 N. At 4 Hz the 3 m net would pull
     // 28.4 N and its mouth would collapse past ~51 m (floor 10 N, 8 %/s bleed), where today's never does inside its 8 s
     // flight window (test-CaptureNet-MouthCollapse pins 8.051 s). SPRING_ENERGY = 1/2 x 0.317 x 10^2 = 15.9 J (read nowhere).
     MEDIUM: {
       CODE:             'LD-NET',
       NAME:             'Medium Net',
-      DIAMETER:         3.0,       // was 5.0 until 2026-10-23
-      MASS:             0.317,     // was 0.68
-      MESH_MASS:        0.149,     // was 0.400 (area: 0.0165 kg/m^2 x 3^2)
+      DIAMETER:         3.0,
+      MASS:             0.317,
+      MESH_MASS:        0.149,     // area: 0.0165 kg/m^2 x 3^2
       RIM_WEIGHT_COUNT: 4,
-      RIM_WEIGHT_MASS:  0.030,     // was 0.050 (x 3/5)
-      HUB_MASS:         0.048,     // was 0.080 (x 3/5)
+      RIM_WEIGHT_MASS:  0.030,
+      HUB_MASS:         0.048,
       CONE_HALF_ANGLE:  12,
-      SPIN_HZ:          20 / 3,    // was 4: same rim speed, same 78.96 N per weight (see above)
+      SPIN_HZ:          20 / 3,    // same rim speed, same 78.96 N per weight (see above)
       MAX_CAPTURE_MASS: 500,
-      MAGAZINE_SIZE:    4,         // was 2
+      MAGAZINE_SIZE:    4,
       REEL_SPEED:       2.0,
       TETHER_MAX:       100,
       RANGE:            100,
       LAUNCH_SPEED:     10.0,
-      SPRING_ENERGY:    16,        // J, was 34 (1/2 x 0.317 x 10^2)
+      SPRING_ENERGY:    16,        // J (1/2 x 0.317 x 10^2)
       REPLACEMENT_COST: 100,
     },
 
-    // ── Small Net (SD-NET) — Spinner / Small Daughter ──
+    // --- Small Net (SD-NET) — Spinner / Small Daughter ---
     SMALL: {
       CODE:             'SD-NET',
       NAME:             'Small Net',
@@ -4804,30 +3716,22 @@ export const Constants = {
       REPLACEMENT_COST: 25,
     },
 
-    // ═══════════════════════════════════════════════════════════
-    // Q2 NET-LAUNCH CEREMONY — per CEREMONY_REDESIGN.md §5.1
-    // Scaffolding only (Stage 0); no read sites until Stages 1–3.
-    // Gated by FEATURE_FLAGS.NET_CEREMONY.
-    // ═══════════════════════════════════════════════════════════
+    // NET-LAUNCH CEREMONY — per archive/CEREMONY_REDESIGN.md §5.1; gated by FEATURE_FLAGS.NET_CEREMONY.
     NET_CEREMONY: {
-      // ── Per-beat physics time scales (apply ONLY to NetProjectile / CaptureNetVisual) ──
-      // 2026-05-25 pacing retune (post-Q2 visibility fix):
-      //   The engulf (ENVELOP, 1.5 g) and cinch (CINCH_CLOSING, 2.0 g) animations
-      //   are the only beats where the user reads the *mechanism* — brake event,
-      //   inertial overshoot, drawstring close. Each must play end-to-end inside
-      //   its named camera beat. Pre-retune the named beats only delivered 2.06 g
-      //   of physics across BRAKE_ENVELOP+CINCH+SECURED_SETTLE vs the 4.0 g the
-      //   animation needs (0.5+1.5+2.0); 48% of the cinch finished AFTER the
-      //   cinematic exited at 1.0× from ARM_PILOT, reading as "too fast."
-      //   New scales 0.5/0.5 keep clear "cinematic slowmo" feel while permitting
-      //   wall-clock beats short enough to hold attention (≤4 s each).
+      // --- Per-beat physics time scales (apply ONLY to NetProjectile / CaptureNetVisual) ---
+      // The engulf (ENVELOP, 1.5 g) and cinch (CINCH_CLOSING, 2.0 g) animations
+      // are the only beats where the user reads the *mechanism* — brake event,
+      // inertial overshoot, drawstring close. Each must play end-to-end inside
+      // its named camera beat (4.0 g of physics across BRAKE_ENVELOP+CINCH+SECURED_SETTLE:
+      // 0.5+1.5+2.0). Scales 0.5/0.5 keep a clear "cinematic slowmo" feel while keeping
+      // wall-clock beats short enough to hold attention (≤4 s each).
       TIME_SCALE_PRE_FLIGHT:  0.4,   // beats 1–2 (§5.1)
       TIME_SCALE_GLAMOUR:     0.5,   // beat 3 (§5.1)
       TIME_SCALE_APPROACH:    0.6,   // beat 4 (§5.1)
-      TIME_SCALE_BRAKE:       0.5,   // beat 5 — 50% slowmo (was 0.3, too heavy)
-      TIME_SCALE_CINCH:       0.5,   // beat 6 — match BRAKE scale (was 0.4)
+      TIME_SCALE_BRAKE:       0.5,   // beat 5 — 50% slowmo
+      TIME_SCALE_CINCH:       0.5,   // beat 6 — match BRAKE scale
 
-      // ── Wall-clock beat durations (seconds, NOT physics-time) — §5.1 ──
+      // --- Wall-clock beat durations (seconds, NOT physics-time) — §5.1 ---
       // Invariant (enforced by tests): for beats whose name maps to an FSM state
       // animation, beat.duration × beat.timeScale ≥ corresponding state duration.
       //   BRAKE_ENVELOP × TIME_SCALE_BRAKE ≥ BRAKE_TIME + ENVELOP_TIME (= 2.0 g)
@@ -4839,132 +3743,86 @@ export const Constants = {
         GLAMOUR_SHOT:       1.5,
         APPROACH_DOLLY_MIN: 1.5,    // beat 4 variable, clamped [min, max]
         APPROACH_DOLLY_MAX: 2.5,
-        BRAKE_ENVELOP:      4.0,    // 4.0 × 0.5 = 2.0 g → BRAKE(0.5) + full ENVELOP(1.5) (was 2.2)
-        CINCH:              4.0,    // 4.0 × 0.5 = 2.0 g → full CINCH_CLOSING(2.0) (was 2.0)
-        SECURED_SETTLE:     1.0,    // 1.0 × 1.0 = 1.0 g → SECURE_CHECK + held "captured" beat (was 0.6)
+        BRAKE_ENVELOP:      4.0,    // 4.0 × 0.5 = 2.0 g → BRAKE(0.5) + full ENVELOP(1.5)
+        CINCH:              4.0,    // 4.0 × 0.5 = 2.0 g → full CINCH_CLOSING(2.0)
+        SECURED_SETTLE:     1.0,    // 1.0 × 1.0 = 1.0 g → SECURE_CHECK + held "captured" beat
       },
 
-      // ── Subsequent-deploy highlights cut — §4 + §5.1 ──
-      // 2026-05-25 retune: previous 3-beat cut (GLAMOUR + BRAKE_ENVELOP + CINCH
-      // at 0.7×) totalled 6.65 s wall × 0.5 scale = 3.33 g of physics. The
-      // FSM needs ~3.95 g (LAUNCHING 0.15 + SPINNING_UP 0.5 + FLIGHT 3.3 for a
-      // 33 m target) just to CONTACT the target — the ceremony was exiting
-      // BEFORE the net touched the debris, so the engulf and cinch then played
-      // at 1.0× from ARM_PILOT, off-frame. New cut includes APPROACH_DOLLY
-      // (the FLIGHT-framing beat, which force-advances on NET_BRAKE_FIRED so
-      // it doesn't over-run) and SECURED_SETTLE (the "captured" hold beat).
-      // HIGHLIGHTS_TIME_SCALE raised to 1.0 because the FSM-vs-camera physics
-      // alignment fixed in the engulf/cinch retune assumes full-duration beats.
-      // Only beats 1–2 (POD_MUZZLE_PREFIRE, MUZZLE_EXIT_SPINUP) remain skipped
-      // for subsequent deploys — those are the first-time "look, the pod fires
-      // a net!" teaching moments, redundant after the player has seen them.
+      // --- Subsequent-deploy highlights cut — §4 + §5.1 ---
+      // The FSM needs ~3.95 g (LAUNCHING 0.15 + SPINNING_UP 0.5 + FLIGHT 3.3 for a 33 m target) just to CONTACT the
+      // target, so the cut must not exit before the net touches the debris: it includes APPROACH_DOLLY (force-advances
+      // on NET_BRAKE_FIRED) and SECURED_SETTLE. HIGHLIGHTS_TIME_SCALE is 1.0 because the FSM-vs-camera alignment assumes
+      // full-duration beats. Only beats 1–2 (POD_MUZZLE_PREFIRE, MUZZLE_EXIT_SPINUP) are skipped: first-time teaching
+      // moments, redundant after the player has seen them.
       HIGHLIGHTS_CUT_BEATS:   ['GLAMOUR_SHOT', 'APPROACH_DOLLY', 'BRAKE_ENVELOP', 'CINCH', 'SECURED_SETTLE'],
       HIGHLIGHTS_TIME_SCALE:  1.0,
 
-      // ── REEL_IN beat (mother-net-reel plan §11.2 Phase D.2) ──
-      // A trailing beat chained after SECURED_SETTLE for mother catches only,
-      // released to the player cam at berth (NET_BERTHED → the PARK_HOLD chain,
-      // S4) or at this wall-clock cap — whichever first. The cap exists so a
-      // corridor hold (≤ 8 s) or a 100 m long-tether reel never holds a
-      // cinematic for the full ~25 s. The beat runs at 1.0× timeScale:
-      // CeremonyTimeScale multiplies the reel's dt (§4.15), so a slowmo beat
-      // would literally slow the winch — the reel IS the spectacle, don't
-      // dilate it. Skipped entirely under prefers-reduced-motion and for
-      // daughter catches (arm-framed already).
-      // S4 (2026-08-11): the old "3/4 view framing mother + incoming catch"
-      // spec was the measured retreat (REELING 22.6 m / BERTHED 22.9 m — a
-      // 1.5 m catch read ~68 px). REEL_IN now frames THE CATCH (~8–12 m hold,
-      // mother as context) — see CameraSystem._netCeremonyBeatPos.
+      // --- REEL_IN beat ---
+      // A trailing beat chained after SECURED_SETTLE for mother catches only, released to the player cam at berth
+      // (NET_BERTHED → the PARK_HOLD chain) or at this wall-clock cap — whichever first. The cap keeps a corridor hold
+      // (≤ 8 s) or a 100 m long-tether reel from holding a cinematic for the full ~25 s. Runs at 1.0× timeScale:
+      // CeremonyTimeScale multiplies the reel's dt (§4.15), so a slowmo beat would literally slow the winch — the reel
+      // IS the spectacle. Skipped under prefers-reduced-motion and for daughter catches (arm-framed already).
+      // REEL_IN frames THE CATCH (~8–12 m hold, mother as context) — see CameraSystem._netCeremonyBeatPos; a 3/4 view
+      // framing mother + incoming catch measured as a retreat (a 1.5 m catch read ~68 px).
       REEL_BEAT_MAX_S:      12.0,   // wall-clock cap (never hold for 40 s)
       REEL_BEAT_FOV:        42,
-      // 2026-08-25 (ceremony filmstrip analysis): the REEL_IN dolly used to
-      // ease across its WHOLE duration (up to 12 s), so the camera spent most
-      // of the beat mid-flight between the muzzle-side SECURED_SETTLE pose and
-      // the catch-framed hold — the package read ~100 px against empty stars
-      // for 6–8 s (frames 021–027 of the tmp/cinema strip). The dolly now
-      // saturates in this many seconds, then HOLDS the catch-framed escort
-      // shot while the winch does the work (motion comes from the catch
-      // closing on the nose, not from a camera still in transit).
+      // The dolly saturates in this many seconds, then HOLDS the catch-framed escort shot while the winch does the
+      // work (easing across the whole duration left the package ~100 px against empty stars for 6–8 s).
       REEL_DOLLY_IN_S:      2.5,
 
-      // ── PARK_HOLD beat (cargo-continuity S4) ──
-      // Chained at NET_BERTHED from the REEL_IN beat: under S3 the catch PARKS
-      // at the nose instead of being deleted, so the berth IS the payoff — the
-      // camera holds on the parked catch (same ~8–12 m catch-framed hold as
-      // REEL_IN, so the chain is seamless) then releases by the clock. The
-      // first-ever mother catch holds longer — the first_net_park teaching
-      // moment (TeachingSystem, fired by CATCH_PROCESSED { parked: true })
-      // lands during it.
-      // 2026-08-25 trim (filmstrip analysis): 5/10 s → 4/6 s. The hold is a
-      // static shot of a parked bag — the payoff lands in the first ~2 s and
-      // the collar digestion continues on the player cam afterwards. The
-      // first-ever hold keeps enough length for the teaching toast, no more.
+      // --- PARK_HOLD beat ---
+      // Chained at NET_BERTHED from REEL_IN: the catch PARKS at the nose, so the berth IS the payoff — the camera holds
+      // on the parked catch (same ~8–12 m catch-framed hold, so the chain is seamless) then releases by the clock.
+      // The first-ever mother catch holds longer — the first_net_park teaching moment (TeachingSystem, fired by
+      // CATCH_PROCESSED { parked: true }) lands during it. The payoff lands in the first ~2 s; the collar digestion
+      // continues on the player cam afterwards.
       PARK_HOLD_S:          4.0,
       PARK_HOLD_FIRST_S:    6.0,
-      // ── Small-catch plan W4 (2026-08-25) — size-aware hold + clean exit ──
-      // HOLD_BUNDLE_FRAME_K: the REEL_IN/PARK_HOLD hold distance tracks the
-      // DRAWN bundle (net.heldBundleRadiusM — the readability floor draws a
-      // sub-metre catch at ~2.0 m radius from reel entry): hold K bundle-radii
-      // off, so the bundle's diameter subtends 2·atan(1/K) ≈ 28° of the 42°
-      // beat FOV at K = 4 — the verified after2 whale composition expressed
-      // as an invariant. The 8 m clamp floor = K × MOTHER_CATCH_MIN_RENDER_M:
-      // both verified subjects sit exactly ON the old 8 m hold.
+      // Size-aware hold + clean exit. HOLD_BUNDLE_FRAME_K: the REEL_IN/PARK_HOLD hold distance tracks the DRAWN
+      // bundle (net.heldBundleRadiusM — the readability floor draws a sub-metre catch at ~2.0 m radius): hold K
+      // bundle-radii off, so the bundle's diameter subtends 2·atan(1/K) ≈ 28° of the 42° beat FOV at K = 4. The 8 m
+      // clamp floor = K × MOTHER_CATCH_MIN_RENDER_M.
       HOLD_BUNDLE_FRAME_K:  4,
-      // Sub-metre catches digest fast (digestSpanS floors at 60 game-s ≈ 6
-      // wall-s sunlit) and the chop used to run right as the PARK_HOLD clock
-      // released the camera — the ball shrank IN THE OPEN over the exit
-      // transition (the owner's "camera drifts after the geometric ball
-      // shrinks"; measured tmp/frag-before f40–f45). For catches under
-      // PARK_HOLD_DIGEST_MAX_SIZE_M the park hold now extends through berth
-      // secure + digestion up to CHOP END (+ pad, capped — eclipse dilates
-      // the digest clock ×25, the cap is the release valve), so the W3
-      // deflate-and-fade plays INSIDE the held shot and the beat ends on a
-      // clean cut. The PARK_HOLD guard also releases the frame `_digestedOut`
+      // Sub-metre catches digest fast (digestSpanS floors at 60 game-s ≈ 6 wall-s sunlit), so the chop would run
+      // right as the PARK_HOLD clock released the camera and the ball would shrink IN THE OPEN over the exit
+      // transition. For catches under PARK_HOLD_DIGEST_MAX_SIZE_M the hold extends through berth secure + digestion
+      // up to CHOP END (+ pad, capped — eclipse dilates the digest clock ×25, the cap is the release valve), so the
+      // deflate-and-fade plays INSIDE the held shot. The PARK_HOLD guard also releases the frame `_digestedOut`
       // lands, whichever comes first.
       PARK_HOLD_DIGEST_MAX_SIZE_M: 1.0,   // sizeMeter < this → hold through the chop
       PARK_HOLD_DIGEST_PAD_S:      1.0,   // breath after chop end, before the cut
       PARK_HOLD_DIGEST_CAP_S:      12.0,  // hard cap (eclipse trickle, huge spans)
-      // Exit cut for tiny subjects: the standard 0.5 s view transition eased
-      // over a subject that just got consumed reads as aimless drift — cut in
-      // this many seconds instead when the parked bundle was sub-metre.
+      // Exit cut for tiny subjects: the standard 0.5 s view transition over a consumed subject reads as aimless
+      // drift — cut in this many seconds instead when the parked bundle was sub-metre.
       EXIT_CUT_SMALL_S:            0.2,
 
-      // ── Lasso catch cut (FEATURE_FLAGS.LASSO_CATCH_CUT, 2026-08-26) ──
+      // --- Lasso catch cut (FEATURE_FLAGS.LASSO_CATCH_CUT) ---
       // One continuous catch-framed shot: enter at LASSO_CONTACT (hard cut),
-      // hold the S4 grammar off the wrapped piece while the reel escorts it
+      // hold the PARK_HOLD grammar off the wrapped piece while the reel escorts it
       // to the nose, release ≤ LASSO_CUT_MAX_S after entry (adoption lands at
       // ~3 s: 0.6 s wrap + 2.4 s haul at LASSO_REEL_SPEED 0.33), well before
       // the berth-secure clock (4 s) starts digestion. The exit reuses
       // EXIT_CUT_SMALL_S — every lasso subject is sub-metre class.
       LASSO_CUT_MAX_S:             4.0,   // hard release valve (binding 2–4 s)
       LASSO_CUT_SETTLE_S:          0.4,   // breath after the reel resolves, before the cut
-      // 2026-08-26 round 2: the cut is TWO shots — wrap close-up
-      // (catch-anchored, the piece is stationary through the wrap window),
-      // then a hard cut to the ARRIVAL shot: ship-anchored at this hold, the
-      // nose steady in frame while the PIECE flies in. The round-1 escort
-      // rode the catch, so the converging ship read as "mother moving to
-      // debris" (owner report) — anchoring shot 2 to the ship makes the
-      // causality unambiguous: debris gets reeled in to mother.
+      // The cut is TWO shots — wrap close-up (catch-anchored, the piece is stationary through the wrap
+      // window), then a hard cut to the ARRIVAL shot: ship-anchored at this hold, the nose steady in frame
+      // while the PIECE flies in. A catch-riding escort made the converging ship read as "mother moving to
+      // debris"; anchoring shot 2 to the ship makes the causality unambiguous: debris gets reeled in to mother.
       LASSO_CUT_ARRIVAL_HOLD_M:    9.0,
 
-      // ── Visual geometry ratios — §5.1 ──
+      // --- Visual geometry ratios — §5.1 ---
       CONE_OPEN_RADIUS_FRAC:         1.0,    // mouth radius / (D_mesh × 0.5)
-      // 2026-05-28 (Item 1 tuning): CONE_LENGTH_FRAC bumped from 0.55 → 0.85.
       // The cinch ring contracts at local z = -coneHeight (mouth plane).
-      // With CONE_OPEN_RADIUS_FRAC=1.0, target sits at z ≈ -mouthRadius =
-      // -0.5 × D.  At the previous 0.55 value, coneH = 0.55 × D and the
-      // gap |z_ring - z_target| = 0.05 × D ≈ 0.4 m for D=8 — well inside
-      // the half-extent of any LARGE-bin debris.  Result: the ring cinched
-      // through the middle of the debris instead of past its leading edge.
-      // At 0.85: coneH = 0.85 × D → gap = 0.35 × D = 2.8 m (LARGE) / 1.75 m
-      // (MEDIUM) / 0.525 m (SMALL), so the ring closes around the debris's
-      // forward leading edge rather than its midpoint.  Camera CINCH /
-      // BRAKE_ENVELOP lookAt offsets in CameraSystem._netCeremonyBeatLook
+      // With CONE_OPEN_RADIUS_FRAC=1.0, target sits at z ≈ -mouthRadius = -0.5 × D. At 0.85: coneH = 0.85 × D →
+      // gap = 0.35 × D = 2.8 m (D=8) / 1.75 m (MEDIUM, former 5 m) / 0.525 m (SMALL), so the ring closes around
+      // the debris's forward leading edge rather than its midpoint (0.55 cinched through the middle of the debris).
+      // Camera CINCH / BRAKE_ENVELOP lookAt offsets in CameraSystem._netCeremonyBeatLook
       // are kept in sync (they reference 0.85 / 0.425 = coneH/2 directly).
       CONE_LENGTH_FRAC:              0.85,   // apex-to-mouth axial length / (D_mesh × 0.5)
       DRAWSTRING_RADIUS_FRAC_CLOSED: 0.15,   // weight radius at end of cinch / r_open
-      // Whale-in-cone phase 3 (D2): the drawn bag floors on a spherical
-      // envelope around its contents — margin × the ball's cross-section
+      // The drawn bag floors on a spherical envelope around its contents — margin × the ball's cross-section
       // radius at each ring z (NetMeshKit.contentsFloorRadius). 1.1 = the bag
       // tightens ONTO the catch with a 10% gap, never through it.
       CONTENTS_FLOOR_MARGIN:           1.1,
@@ -4973,13 +3831,12 @@ export const Constants = {
       TETHER_TENSION_THICKEN_FACTOR: 2.5,    // line width × this on NET_BRAKE_FIRED
     },
 
-    // ── Phase D.4/D.5 tether + web-drape garnish (§11.8: one tuning surface) ──
-    // Moved out of CaptureNetVisual module-locals so every garnish item lives
-    // behind a Constant. The catenary strand bows with slack, snaps taut with a
+    // --- Tether + web-drape garnish (one tuning surface) ---
+    // The catenary strand bows with slack, snaps taut with a
     // decaying lateral twang, and pulses emissive above the bloom threshold; the
     // web settle-jiggles as it drapes and shrink-wraps.
     NET_TETHER: {
-      SEGMENTS:          20,      // catenary samples (16–24 per plan)
+      SEGMENTS:          20,      // catenary samples (16–24)
       TWANG_S:           0.2,     // decaying lateral twang window (s)
       TWANG_AMP_M:       0.35,    // peak lateral twang amplitude (m)
       SAG_FRAC:          0.06,    // sag = slack × this (of straight distance)
@@ -4987,32 +3844,30 @@ export const Constants = {
       EMISSIVE_S:        0.35,    // bloom pulse window at line-taut (s)
       EMISSIVE_HDR:      2.8,     // > 2.5 bloom threshold (SceneManager)
       BASE_COLOR:        0xddddee,
-      DRAPE_JIGGLE_ENVELOP_FRAC: 0.12,  // mouthRadius × this — V7 garnish rescale
-                                    // (was 0.04 ≈ 2% of the bag silhouette —
-                                    // invisible; now ~6% — the settle reads)
-      DRAPE_JIGGLE_CINCH_FRAC:   0.06,  // mouthRadius × this — V7 rescale (was 0.02)
+      DRAPE_JIGGLE_ENVELOP_FRAC: 0.12,  // mouthRadius × this (~6% of the bag silhouette — the settle reads)
+      DRAPE_JIGGLE_CINCH_FRAC:   0.06,  // mouthRadius × this
       DRAPE_JIGGLE_HZ:           2.5,   // settle-jiggle rate
     },
   },
 
-  // --- Leash hand-off (mother nose -> radiator tip) -----------------------
-  // docs/research/2026-10-leash.md + DECISIONS §1/§19. Used by
+  // --- Leash hand-off (mother nose -> radiator tip) ---
+  // archive/research/2026-10-leash.md + DECISIONS §1/§19. Used by
   // js/systems/LeashTransfer.js (pure; the wiring lane reads it, nothing else).
   // Each number carries its source; "estimate" = no measured source.
   // Metres, seconds, newtons, kg.
   LEASH: {
     // Ship turn (the turn itself belongs to the autopilot; passed through)
     TURN_MAX_RATE_DEG:   5,      // °/s peak — tmp/research/leash/turn-dynamics.md
-    TURN_ACCEL_DEG:      4,      // °/s² ramp — turn-dynamics.md; fb16 2026-10-25: was 2. Gas is set by the PEAK rate (TURN_MAX_RATE_DEG, unchanged at 5), not the ramp: measured 174.6 g per hand-off at ramps 2, 4 and 8 °/s²; the turn takes 38° in 10.2 s / 8.9 s / 8.3 s
-    PAYOUT_DURING_FOLD:  true,   // fb16 2026-10-25: the nose lets go and the line pays out while the receiving radiator folds (the turn still waits for it); false = the old order, fold first
-    PAYOUT_FOLD_MARGIN_S: 0.3,   // s — fb16: the payout is timed to end this long before the fold lands (LeashTransfer._payoutDue)
-    UNFOLD_DURING_SWING: true,   // fb16 2026-10-25: the radiator opens while the bag swings onto the boom; false = the old order, swing first
-    HOLD_SLEW_DEG_S:     25,     // °/s — fb16 (owner 2026-10-25, "a little faster"): the held radiator petal's fold to the hand-off angle, unfold and way home. A hinge motor commanded faster is still physical; the player's radiators stay at THERMAL.FLOWER.SLEW_RATE_RAD_S (15°/s, readability) and the daughter struts swing at OCTOPUS_V5.STRUT_SLEW_RATE (19.5°/s, owner 10-27), a daughter's carry rides the radiator rate. Read by LeashDriver (the slew it passes to the ship) and by LeashTransfer._payoutDue (how long the fold still has to run, to time the payout).
-    WHEEL_TURN_X:        1.5,    // F2.4: the reaction wheels take the hand-off turn only when they need at most this many times the gas plan (the swing is tuned to the gas profile)
+    TURN_ACCEL_DEG:      4,      // °/s² ramp — turn-dynamics.md. Gas is set by the PEAK rate (TURN_MAX_RATE_DEG, unchanged at 5), not the ramp: measured 174.6 g per hand-off at ramps 2, 4 and 8 °/s²; the turn takes 38° in 10.2 s / 8.9 s / 8.3 s
+    PAYOUT_DURING_FOLD:  true,   // the nose lets go and the line pays out while the receiving radiator folds (the turn still waits for it); false = fold first
+    PAYOUT_FOLD_MARGIN_S: 0.3,   // s — the payout is timed to end this long before the fold lands (LeashTransfer._payoutDue)
+    UNFOLD_DURING_SWING: true,   // the radiator opens while the bag swings onto the boom; false = swing first
+    HOLD_SLEW_DEG_S:     25,     // °/s — owner 2026-10-25, "a little faster": the held radiator petal's fold to the hand-off angle, unfold and way home. A hinge motor commanded faster is still physical; the player's radiators stay at THERMAL.FLOWER.SLEW_RATE_RAD_S (15°/s, readability) and the daughter struts swing at OCTOPUS_V5.STRUT_SLEW_RATE (19.5°/s, owner 10-27), a daughter's carry rides the radiator rate. Read by LeashDriver (the slew it passes to the ship) and by LeashTransfer._payoutDue (how long the fold still has to run, to time the payout).
+    WHEEL_TURN_X:        1.5,    // the reaction wheels take the hand-off turn only when they need at most this many times the gas plan (the swing is tuned to the gas profile)
     // Reel
     REEL_SPEED_MPS:      0.05,   // estimate; <= LATCH_ALIGNED_MPS (arrival speed = reel speed)
     REEL_ACCEL_MPS2:     0.05,   // estimate; TSS-1 ramped the reel (NTRS 19970011947)
-    PAYOUT_PUSH_MPS:     0.05,   // estimate (separation spring); fb16 2026-10-25: was 0.02 (the payout took 8-18 s and looked frozen)
+    PAYOUT_PUSH_MPS:     0.05,   // estimate (separation spring)
     PAYOUT_MAX_MPS:      0.25,   // clutch cap; peak line demand 0.113 m/s in a 5°/s turn (reviewer probe)
     TAKEUP_MPS:          0.05,   // estimate
     BACK_TENSION_PER_KG: 5e-4,   // N/kg — estimate (line never slack, TSS); bag drifts <= 0.05 m over a turn
@@ -5034,11 +3889,11 @@ export const Constants = {
     CATCH_TOL_M:         0.05,   // estimate: latch point to the line, at the end of the turn
     // Hand-off geometry
     D_MIN_M:             0.3,    // m — bag-to-tip range on the line, probe d range
-    D_MIN_PER_R:         1.2,    // radii — l8-reel-collar D5: a bag of radius r starts its line at least this many radii from the tip (r 0.50: 0.6 m; at 0.3 m it snagged the tip's own strut); r <= 0.25 m stays at D_MIN_M
-    D_MAX_M:             2.0,    // m — estimate; d up to 2.0 is used as is (REEL covers the extra length); beyond → 'too far' (fix round 1 F4)
+    D_MIN_PER_R:         1.2,    // radii — a bag of radius r starts its line at least this many radii from the tip (r 0.50: 0.6 m; at 0.3 m it snagged the tip's own strut); r <= 0.25 m stays at D_MIN_M
+    D_MAX_M:             2.0,    // m — estimate; d up to 2.0 is used as is (REEL covers the extra length); beyond → 'too far'
     HANDOFF_THETA_DEG:   3,      // radiator angle when LeashTransfer is built without one (tests); the game asks handoffThetaDeg(), whose no-bag-held answer is HANDOFF_THETA_TABLE.noneDeg (3° up to a 0.60 m catch, 18° for 0.75 m) — measured tmp/probes/leash/lat15b/ at 2.5 m, re-measured at 2.30 m below
     // Waits and tolerances
-    THETA_TOL_DEG:       1.0,    // ° — FOLD/UNFOLD wait; the radiator arrival latch stops 0.5° short of a 146°→3° target at every frame step 1/120–1/20 s (l5b-hold plan check 2026-10-14)
+    THETA_TOL_DEG:       1.0,    // ° — FOLD/UNFOLD wait; the radiator arrival latch stops 0.5° short of a 146°→3° target at every frame step 1/120–1/20 s
     HOME_REEL_MPS:       0.025,  // m/s — estimate; REEL_HOME reels in this fast at most: the bag passes the nose at <= LATCH_OK_MPS (a pull-only line cannot slow it once the reel stops)
     HOME_TOL_M:          0.05,   // m — estimate; REEL_HOME ends when the bag is this close to its nose spot (and slow)
     SLACK_S:             1.0,    // s of slack before the SLACK event
@@ -5049,38 +3904,27 @@ export const Constants = {
     LIFT_OUT_M:          0.10,   // m — estimate; REEL_HOME from the tip pays out this much to lift out of the slot
     CONTACT_M:           0.005,  // m — estimate; latch contact when the neck is within this of the tip
     PAYOUT_ACCEPT_M:     0.02,   // m — estimate; PAYOUT replan accepts |payoutM| below this
-    // Wiring (lane l5b-wire)
-    NOSE_REEL_MPS:       0.10,   // m/s — estimate (lane l5c-reach): the winch pulls a catch seated deep in the bag in to the nose before the hand-off; the same <= 10 cm/s contact limit as the tip latch (LATCH_ALIGNED_MPS). fb16 fix round 1: now only the START and ARRIVAL speed (it was the whole pull-in: 2.6 m took 26.4 s)
-    NOSE_REEL_FAST_MPS:  0.35,   // m/s — fb16 fix round 1 (estimate; the net's own reel-in cruises at 2 m/s): the pull-in's cruise speed. 2.64 m now takes ~8 s (measured tmp/fb16/deep.mjs)
-    NOSE_REEL_ZONE_M:    0.30,   // m — fb16: the pull-in brakes at a constant rate over the last 0.30 m, down to NOSE_REEL_MPS at the nose (the net's own reel-in uses SLOW_ZONE_M 0.30 too)
-    NOSE_REEL_ACCEL_MPS2: 0.5,   // m/s^2 — fb16: the pull-in's start-up ramp (estimate), 0.10 -> 0.35 m/s in 0.5 s
-    MISSION_WAIT_MAX_S:  240,    // game s — estimate (lane l5c-reach): the longest the next mission waits for a leash hand-off (GameFlowManager); the 20 s MISSIONS.START_AFTER_CATCH_MAX_S cap does not run while the hand-off is busy
-    EXPECTED_S:          23,     // s — fb16 2026-10-25: was 45 (an estimate: two radiator slews + a 30° turn + reel, at the old rates). MEASURED on the probe rig (tmp/fb16/probe.mjs, machine start to DONE): 22.7 s for a 1.0 m piece (26.0 s for a 0.3 m piece, the payout there outlasts the fold), rounded up; the constant itself is read only by LeashDriver (start(), _beginMachine(): net._cargoDur = EXPECTED_S; and the cap of net._cargoS while the machine runs). The cargo bar and the camera's park-hold (CameraSystem, the catch focus) read that net field, never this constant
-    ANCHOR_AZ_R_M:       0.16,   // m — line anchor radius on the capture ring rim = OCTOPUS_V5.BERTH_COLLAR_INNER_R_M (probes tmp/probes/leash/lat15b/lib3.mjs:10 measured with 0.16)
-    // Radiator angle for the hand-off (degrees) by arriving bag radius (row) and the largest bag already
-    // held on a tip (column; `noneDeg` = nothing held). Measured at the 2.30 m radiators, v12-big-bags 2026-10-16
-    // (tmp/probes/arm-length/ho5.mjs, summary tmp/v12bb/summ.txt, table in docs/research/2026-10-leash.md): every
-    // clearance >= 0.02 m on the real ship meshes, tilts 0/±limit, the same for all four tips, the other three tips each
-    // holding a bag of the column's radius, the line starting minHandoffD(Ra) = max(0.3, 1.2·Ra) from the tip. A cell is
-    // the lowest angle >= 3° where it AND the next degree pass (the radiators stop up to ~1° above a target). A radius
-    // rounds UP to the next row/column. The 0.60 and 0.75 rows sit at 13° and 18° because the bag's clearance to its own
-    // strut dips to 19.2 mm (0.60 m) and 16.7 mm (0.75 m) at 8-9° and only clears 0.02 m again from 13° / 18°.
-    // 0.50/0.40 raised 5→6 2026-10-17: 0.41–0.46 m arriving with 0.40 m held need 6° (0.01 m sweep).
-    // RE-MEASURED 2026-10-18 (lane leash-held-angle) with the catch AT THE NOSE, as the game starts it (the 2026-10-16 table was
-    // measured with the catch off the nose): at the old angle the arriving catch overlapped the held bag and the line "touched a
-    // held catch" (mission 1 catch 2, reach 0.373 m beside catch 1, r 0.32 m: 4° snagged, 6° passes). Method: the whole hand-off on
-    // the real ship (LeashWiring rig, 30 fps, typed fragments, arriving 4 kg, furnace cook off), the cell's angle forced; a pass
-    // = a latch AND the end of the hand-off (DONE, no snag). Every held bag at the column's radius, three fills in the game's
-    // tip order 0, 2, 1, 3 (held {0} → arriving tip 2; {0,2} → tip 1; {0,2,1} → tip 3), and three arriving radii per row: the row's
-    // edge, the midpoint to the row below and just above the row below (the pass angle is U-shaped in the arriving radius: a
-    // small catch sits lower and needs MORE, so the bottom of a low row binds; row 0.15 uses 0.15 and 0.125). A cell is the
-    // smallest angle that passes in all of those, plus 1° (so the angle below it passes too). No cell was lowered: the 16 that pass at
-    // their old value and one degree under it keep it (3° cells in the low rows and columns, the 13° cells of row 0.60, the 18° cells
-    // of row 0.75 up to column 0.60); the other 48 rose, by up to 6°.
-    // No bag held (`noneDeg`) re-checked at 3° and 2°, arriving tips 0 and 2, all three radii: unchanged. Every cell is under the 45°
-    // cap (the hull touches at 52°). The new cells were run again through the game's own lookup (552 runs, all pass) and with all 12
-    // single-held tip pairs (768 runs, all pass). Probe: tmp/probe/grid.mjs (gitignored; raw runs in tmp/probe/out/);
-    // summary in docs/research/2026-10-leash.md.
+    // Wiring
+    NOSE_REEL_MPS:       0.10,   // m/s — estimate: the winch pulls a catch seated deep in the bag in to the nose before the hand-off; the same <= 10 cm/s contact limit as the tip latch (LATCH_ALIGNED_MPS). Only the START and ARRIVAL speed of the pull-in
+    NOSE_REEL_FAST_MPS:  0.35,   // m/s — estimate (the net's own reel-in cruises at 2 m/s): the pull-in's cruise speed. 2.64 m takes ~8 s (measured tmp/fb16/deep.mjs)
+    NOSE_REEL_ZONE_M:    0.30,   // m — the pull-in brakes at a constant rate over the last 0.30 m, down to NOSE_REEL_MPS at the nose (the net's own reel-in uses SLOW_ZONE_M 0.30 too)
+    NOSE_REEL_ACCEL_MPS2: 0.5,   // m/s^2 — the pull-in's start-up ramp (estimate), 0.10 -> 0.35 m/s in 0.5 s
+    MISSION_WAIT_MAX_S:  240,    // game s — estimate: the longest the next mission waits for a leash hand-off (GameFlowManager); the 20 s MISSIONS.START_AFTER_CATCH_MAX_S cap does not run while the hand-off is busy
+    EXPECTED_S:          23,     // s — MEASURED on the probe rig (tmp/fb16/probe.mjs, machine start to DONE): 22.7 s for a 1.0 m piece (26.0 s for a 0.3 m piece, the payout there outlasts the fold), rounded up; the constant itself is read only by LeashDriver (start(), _beginMachine(): net._cargoDur = EXPECTED_S; and the cap of net._cargoS while the machine runs). The cargo bar and the camera's park-hold (CameraSystem, the catch focus) read that net field, never this constant
+    ANCHOR_AZ_R_M:       0.16,   // m — line anchor radius on the capture ring rim = OCTOPUS_V5.BERTH_COLLAR_INNER_R_M (probes tmp/probes/leash/lat15b/lib3.mjs measured with 0.16)
+    // Radiator angle for the hand-off (degrees) by arriving bag radius (row) and the largest bag already held on a
+    // tip (column; `noneDeg` = nothing held). Measured at the 2.30 m radiators with the catch AT THE NOSE, as the
+    // game starts it (tmp/probes/arm-length/ho5.mjs, table in archive/research/2026-10-leash.md): the whole
+    // hand-off on the real ship meshes (LeashWiring rig, 30 fps, typed fragments, arriving 4 kg, furnace cook off),
+    // the cell's angle forced; a pass = a latch AND the end of the hand-off (DONE, no snag), every clearance >= 0.02 m,
+    // tilts 0/±limit, the same for all four tips, held bags at the column's radius filling tips in the game's order
+    // 0, 2, 1, 3, the line starting minHandoffD(Ra) = max(0.3, 1.2·Ra) from the tip. Three arriving radii per row
+    // (the row's edge, the midpoint to the row below, just above the row below: the pass angle is U-shaped in the
+    // arriving radius, a small catch sits lower and needs MORE). A cell is the smallest angle that passes in all of
+    // those, plus 1° (the radiators stop up to ~1° above a target). A radius rounds UP to the next row/column. The
+    // 0.60 and 0.75 rows sit at 13° and 18° because the bag's clearance to its own strut dips to 19.2 mm (0.60 m) and
+    // 16.7 mm (0.75 m) at 8-9° and only clears 0.02 m again from 13° / 18°. No bag held (`noneDeg`) re-checked at 3°
+    // and 2°. Every cell is under the 45° cap (the hull touches at 52°). Probe: tmp/probe/grid.mjs (gitignored).
     HANDOFF_THETA_TABLE: {
       radiiM: [0.15, 0.22, 0.30, 0.35, 0.40, 0.50, 0.60, 0.75],
       noneDeg: [3, 3, 3, 3, 3, 3, 3, 18],   // nothing held: one entry per row
@@ -5108,39 +3952,33 @@ export const Constants = {
   RCS_MAX_SPEED: 0.000005,            // scene units/s — max RCS drift speed (0.5 m/s real)
   RCS_DAMPING: 0.95,                  // velocity damping per frame when not thrusting (stops quickly)
 
-  // --- Reel push (lane reel-push, owner 2026-10-22: "make the reel pull move and turn the mother, like real physics") ---
+  // --- Reel push (owner 2026-10-22: "make the reel pull move and turn the mother, like real physics") ---
   // The reel line pulls both ends: the mother feels the line tension toward the daughter at her strut tip (a Δv in
   // her real orbit through applyCartesianImpulse, a torque into her attitude springs), and the daughter's arrival speed
   // as one latch bump. Momentum, not a burn: unbilled. Units: the tension is true newtons and acts for game seconds
   // (real dt x TIME_SCALE_GAMEPLAY), so the Δv is T x dt_game / mass in true m/s, the unit the mother-net tug hands over.
   REEL_PUSH: {
-    ENABLED: true,                    // false = the mother stays put during a reel (the old behaviour)
+    ENABLED: true,                    // false = the mother stays put during a reel
     MIN_DV_MS: 1e-4,                  // m/s - smaller Δv is gathered until it passes this, then applied in one call. The
                                       // orbit element round trip inside applyCartesianImpulse is only good to about 1e-6..1e-5 m/s
-                                      // (measured 2026-10-22), and the ion thread alone adds ~7e-7 m/s a frame.
-    // Fix round 1 (coordinator review of 357ad486, 2026-10-22): the push is momentum, but two things that take it back out
-    // are NOT free. (1) The autopilot HOLD copies the locked target's orbit into hers every frame, which erases the Δv: that
+                                      // (measured), and the ion thread alone adds ~7e-7 m/s a frame.
+    // The push is momentum, but two things that take it back out are NOT free. (1) The autopilot HOLD copies the
+    // locked target's orbit into hers every frame, which erases the Δv: that
     // is a station-keeping burn on her cold-gas thrusters. m = M x Δv / (Isp x g0), billed through RESOURCE_CONSUME coldGas.
     // (2) Her attitude hold takes the turn back out: billed as real couple gas, |L| x 2F / (tau x Isp x g0)
-    // (PlayerSatellite._billTurnNullN2, turn-gas 2026-10-23).
+    // (PlayerSatellite._billTurnNullN2).
     HOLD_ISP_S: 60,                   // s - her cold-gas thrusters (the same 60 as DAUGHTER_COLD_GAS.ISP_S)
     PUFF_EVERY_S: 0.3,                // s (real) - at most one burst of cold-gas puffs this often, so it reads as puffs not a plume
   },
 
-  // --- Catch Juice (S4 — Core Feel) ---
+  // --- Catch Juice ---
   CATCH_SHAKE_DURATION: 0.3,           // seconds — camera micro-shake on capture
-  CATCH_SHAKE_INTENSITY: 0.000003,     // scene units (= 0.3 m) — shake amplitude.
-                                       // Was 0.003 "scene units" — a metres-vs-scene-units
-                                       // mis-read that put ±300 m of random jitter on the
-                                       // camera for the whole shake window, in every view,
-                                       // ceremony included (measured 2026-08-02, P1 probe:
-                                       // 150–420 m camera arcs scrambling the mother catch's
-                                       // SECURED_SETTLE frames). A micro-shake is ~0.3 m.
+  CATCH_SHAKE_INTENSITY: 0.000003,     // scene units (= 0.3 m) — shake amplitude. A micro-shake is ~0.3 m: a
+                                       // metres-vs-scene-units mis-read (0.003) once put ±300 m of jitter on the
+                                       // camera for the whole shake window, ceremony included.
 
 
-  // =========================================================================
-  // SALVAGE SYNERGIES — Complementary metal bonuses (Phase 5 Rewards)
-  // =========================================================================
+  // SALVAGE SYNERGIES — complementary metal bonuses
 
   SALVAGE_SYNERGIES: [
     { metals: ['GALLIUM', 'COPPER'],           name: 'Complete Solar Array',   points: 300 },
@@ -5157,7 +3995,7 @@ export const Constants = {
   ],
   SWEEP_REPORT_TIMEOUT: 15,             // seconds before auto-dismiss of sweep report
 
-  // --- Tether Detach (Phase 6 — Risk-Reward Redline Mechanic) ---
+  // --- Tether Detach (risk-reward redline mechanic) ---
   DETACH_SCORE_MULT: 2.0,              // untethered catch multiplier
   DETACH_SACRIFICE_MULT: 2.5,          // deorbit sacrifice multiplier
   DETACH_FAIL_PENALTY: -500,           // score penalty for lost arm
@@ -5168,43 +4006,36 @@ export const Constants = {
   DETACH_MAX_DISTANCE: 50000,          // meters (50 km) — auto-destroy detached arm if it drifts beyond this
 
   // --- Emergency FEEP reserve (tethered reel-home safety margin) ---
-  // A NON-detached daughter never burns her tank to zero on a job. She keeps
-  // this much FEEP (% of tank) in reserve so that, when reeled home on the
-  // mother's winch, she can maintain tether tension and fire the soft-dock
-  // arrest (REDOCK_FEEP) — neutralizing inertia so neither she nor her catch
-  // slams the strut/mother. When a working/flying daughter hits this floor she
-  // does NOT die: she goes ADRIFT (recoverable, still commandable on the tether).
-  // The reserve is only ever spent on the way home (REELING / DOCKING) or a
-  // deorbit burn; if it runs dry mid-reel the winch still finishes the job.
-  // (Detached daughters have no tether to winch, so the reserve cannot help
-  //  them — they still expend at zero. See ArmUnit._consumeFuel.)
+  // A NON-detached daughter keeps this much FEEP (% of tank) in reserve so that, reeled home on the mother's winch,
+  // she can maintain tether tension and fire the soft-dock arrest (REDOCK_FEEP) so neither she nor her catch slams
+  // the strut/mother. A working daughter that hits this floor goes ADRIFT (recoverable, commandable on the tether),
+  // not dead. The reserve is spent only on the way home (REELING / DOCKING) or a deorbit burn. Detached daughters
+  // have no tether to winch, so they still expend at zero (ArmUnit._consumeFuel).
   ARM_RESERVE_FUEL: 5,                 // % of tank held back for a safe reel-home
 
-  // --- Deploy gate + daughter fuel economy (register item 100, 2026-08-21) ---
+  // --- Deploy gate + daughter fuel economy ---
   // The deploy gate is tether-tier-aware: a daughter may launch at a target out
   // to tetherMax × ARM_DEPLOY_RANGE_FRACTION. The fraction keeps 0.15 of slack
   // to the 0.95× auto-recall guard against in-transit drift (measured metres-
-  // scale; instrument tmp/i100-sweep.mjs). Replaces the pre-GSL-ladder literal
-  // min(500, tetherMax × 0.5) — at T5 GSL-100 the weaver radius is 8 km, the
-  // 16 km sweep doctrine (item 76(d), owner-ruled).
+  // scale; instrument tmp/i100-sweep.mjs). At T5 GSL-100 the weaver radius is 8 km, the
+  // 16 km sweep doctrine (owner-ruled).
   ARM_DEPLOY_RANGE_FRACTION: 0.8,
   // Daughter FEEP tank as total Δv (m/s) — the economy anchor the HUD's
-  // remainingDeltaV already assumed (ArmUnit.getStatus). TRANSIT/APPROACH
+  // remainingDeltaV assumes (ArmUnit.getStatus). TRANSIT/APPROACH
   // autopilot fuel is billed against it as commanded impulse (Σ|dv| / 50 ×
   // 100 %): the spring pays launch kinetic energy, the FEEP pays only for
-  // corrections + the arrival kill. Replaces the time-based 1.5 %/s TRANSIT
-  // rate that capped any powered sortie at ~63 s (630 m @10 m/s — measured,
-  // tmp/i100-sweep.mjs) and billed slow shots MORE than fast ones.
+  // corrections + the arrival kill (a time-based rate would cap any powered sortie at ~63 s and
+  // bill slow shots MORE than fast ones).
   ARM_TOTAL_DELTAV: 50,                  // m/s of FEEP Δv per 100% daughter tank
 
-  // --- NavSphere Tether Zones (Phase 3 — reserve constants) ---
+  // --- NavSphere Tether Zones (reserve constants) ---
   NAVSPHERE_LASSO_RING_COLOR: 'rgba(255, 255, 255, 0.3)',
   NAVSPHERE_SPINNER_RING_COLOR: 'rgba(0, 255, 136, 0.25)',
   NAVSPHERE_WEAVER_RING_COLOR: 'rgba(0, 204, 255, 0.2)',
 
-  // --- NavSphere Distance Encoding (Sprint S5-A) ---
+  // --- NavSphere Distance Encoding ---
   NAVSPHERE: {
-    SPHERE_RADIUS: 140,               // px (matches current value)
+    SPHERE_RADIUS: 140,               // px
     INNER_ZONE_KM: 5,                 // tactical zone boundary
     OUTER_ZONE_KM_MAX: 100,           // max awareness zone
     ZONE_SPLIT: 0.50,                 // fraction of radius for inner zone
@@ -5217,16 +4048,16 @@ export const Constants = {
     CLOSURE_APPROACHING_THRESHOLD: -0.0001,
     CLOSURE_RECEDING_THRESHOLD: 0.0001,
     COLOR_APPROACHING: '#ff4444',
-    COLOR_ORBIT_CROSS: '#ffaa00',
-    COLOR_RECEDING: '#00ff88',
+    COLOR_ORBIT_CROSS: VisualLaw.COLORS.CAUTION,
+    COLOR_RECEDING: VisualLaw.COLORS.PLAYER,
     COLOR_ZONE_BOUNDARY: 'rgba(255, 170, 0, 0.25)',
     MAX_VELOCITY_TAILS: 50,
     MAX_SHAPE_CONTACTS_VISIBLE: 200,
-    // ST-5.4: NavSphere stalks, lock-on ring, geo readout, velocity arrows
+    // NavSphere stalks, lock-on ring, geo readout, velocity arrows
     STALK_MAX_FRACTION: 0.25,            // stalk length as fraction of sphere radius R
     STALK_LINE_WIDTH: 0.8,
     STALK_ALPHA: 0.5,
-    // Calm-HUD: LOCK_ON_PULSE_RATE removed — the lock-on ring is steady for all
+    // Calm-HUD: the lock-on ring is steady for all
     // MOID badges (colour differentiates threat); no standing ring oscillation.
     LOCK_ON_OUTER_RADIUS_MULT: 1.5,      // × dot radius
     LOCK_ON_INNER_RADIUS_MULT: 1.1,      // × dot radius
@@ -5236,36 +4067,31 @@ export const Constants = {
     VELOCITY_ARROW_MAX_LENGTH_PX: 4,
   },
 
-  // =========================================================================
-  // CODEX (Phase 7 — Learning Systems)
-  // =========================================================================
+  // CODEX
   CODEX: {
-    UNLOCK_COOLDOWN: 20,              // seconds between unlocks (reduced from 30 for better game feel)
-    // Startup legibility (2026-07-24): passive codex triggers (e.g. the first
-    // delayed comms message) fire 5-20 s into a mission — the original 3 s
-    // grace still let the 3-note unlock chime land inside the opening
+    UNLOCK_COOLDOWN: 20,              // seconds between unlocks
+    // Startup legibility: passive codex triggers (e.g. the first
+    // delayed comms message) fire 5-20 s into a mission — a short
+    // grace would let the 3-note unlock chime land inside the opening
     // comms/departure cluster with zero player action. Unlocks QUEUE during
     // grace (not dropped): toast + chime release together once the opening
     // settles, so the pairing that teaches the sound stays intact.
     STARTUP_GRACE_S: 30,
   },
 
-  // =========================================================================
-  // CONJUNCTION GATING (ST-2.1 — prevents early-game alert panic)
-  // + MOID badge thresholds & CA speed-up (ST-6.3)
-  // =========================================================================
+  // CONJUNCTION GATING (prevents early-game alert panic) + MOID badge thresholds & CA speed-up
   CONJUNCTION: {
     MIN_CAPTURES: 1,            // Minimum captures before first alert allowed
     MIN_ELAPSED_S: 120,         // Seconds after first capture before first alert
     PRIMER_LEAD_S: 5,           // Comms primer fires this many seconds before first overlay
 
-    // ST-6.3: MOID badge thresholds (metres)
+    // MOID badge thresholds (metres)
     MOID_HI_M: 5_000,          // <5 km  → HI (red, "imminent")
     MOID_MD_M: 25_000,         // <25 km → MD (yellow, "monitor")
     MOID_LO_M: 100_000,        // <100 km → LO (blue-green, "noted")
     MOID_SAFE_M: Infinity,     // ≥100 km → SAFE (not surfaced)
 
-    // ST-6.3: Badge UI colours & labels
+    // Badge UI colours & labels
     BADGE_COLOR_HI: '#ff3344',
     BADGE_COLOR_MD: '#ddcc00',
     BADGE_COLOR_LO: '#22aadd',
@@ -5273,19 +4099,17 @@ export const Constants = {
     BADGE_LABEL_MD: 'MD',
     BADGE_LABEL_LO: 'LO',
 
-    // ST-6.3: CA speed-up — only top-N MOID-ranked pairs enter the CA hot loop
+    // CA speed-up — only top-N MOID-ranked pairs enter the CA hot loop
     CA_TOP_N: 32,
     CA_MOID_PREFILTER_M: 150_000, // objects with MOID above this excluded from CA
 
-    // ST-6.3: MOID recompute cadence (game-time seconds)
+    // MOID recompute cadence (game-time seconds)
     MOID_RECOMPUTE_INTERVAL_S: 5.0,
     MOID_COARSE_SAMPLES: 8,
     MOID_REFINE_SAMPLES: 8,
   },
 
-  // =========================================================================
-  // SPACE WEATHER (Phase 7 — Learning Systems)
-  // =========================================================================
+  // SPACE WEATHER
   SPACE_WEATHER: {
     SOLAR_FLARE_MIN_INTERVAL: 300,
     SOLAR_FLARE_MAX_INTERVAL: 600,
@@ -5301,9 +4125,7 @@ export const Constants = {
     ECLIPSE_INTERVAL: 5520,
   },
 
-  // =========================================================================
-  // SUBSYSTEM EVENTS (Phase 7B — Spacecraft Subsystems)
-  // =========================================================================
+  // SUBSYSTEM EVENTS (spacecraft subsystems)
   SUBSYSTEMS: {
     GROUND_STATION_INTERVAL: [300, 400],   // min/max seconds
     GROUND_STATION_WINDOW: [30, 90],       // min/max seconds of contact
@@ -5323,9 +4145,7 @@ export const Constants = {
     RADIATION_DOSE_INTERVAL: 900,
   },
 
-  // =========================================================================
-  // COLLISION AVOIDANCE — Semi-autonomous evasive maneuver system
-  // =========================================================================
+  // COLLISION AVOIDANCE — semi-autonomous evasive maneuver system
   COLLISION_AVOIDANCE: {
     SCAN_RADIUS: 0.05,              // scene units (5 km)
     SCAN_RADIUS_SQ: 0.0025,         // pre-computed squared
@@ -5335,97 +4155,71 @@ export const Constants = {
     WARN_THRESHOLD: 0.003,          // scene units (300 m)
     TRAWL_AVOIDANCE_RADIUS_M: 50,   // meters — tighter threshold during trawl
     TRAWL_AVOIDANCE_RADIUS: 0.0005, // scene units (50 m)
-    LOOK_AHEAD_S: 10,               // seconds — prediction window (WORLD/orbital-mechanics
-                                     // seconds — see real-dodge lane clock-consistency note
-                                     // on _evaluateAndDodge: `tca` is derived from the same
-                                     // physical orbital-velocity vectors that drive orbit
-                                     // propagation via gameDt = dtReal × TIME_SCALE_GAMEPLAY,
-                                     // so 10 "TCA seconds" here elapse in ~1 real wall-clock
-                                     // second at the shipped 10× rate. CA's own scan/cooldown/
-                                     // override timers below run on REAL dt. The contact
-                                     // sweep (_scanAndProcessContacts) now also measures its
-                                     // look-ahead window in WORLD seconds — main.js passes
-                                     // dtWorld to update().)
+    LOOK_AHEAD_S: 10,               // seconds — prediction window in WORLD seconds: `tca` comes from the physical
+                                     // orbital-velocity vectors (gameDt = dtReal × TIME_SCALE_GAMEPLAY), so 10 "TCA
+                                     // seconds" elapse in ~1 real second at the shipped 10× rate. CA's own scan/
+                                     // cooldown/override timers below run on REAL dt. The contact sweep
+                                     // (_scanAndProcessContacts) also measures its look-ahead in WORLD seconds
+                                     // (main.js passes dtWorld to update()).
     SCAN_INTERVAL: 0.25,            // seconds — scan every 250 ms (4 Hz)
-    // Contact sweep (q2-contact-sweep): the contact scan's look-ahead window is the
-    // WORLD seconds that passed since the previous scan (main.js passes dtWorld),
-    // not SCAN_INTERVAL real seconds; it is clamped to this many world seconds.
-    // s2-fast-time-hits (2026-10-17): it ALSO sets the world-time cadence — the contact
-    // scan runs every SCAN_INTERVAL real s OR every this many world s, whichever comes
-    // first (F4 ~every 3 frames, F5 every frame); the dodge scan stays at 4 Hz real.
+    // Contact sweep: the look-ahead window is the WORLD seconds since the previous scan (main.js passes dtWorld),
+    // clamped to this many world seconds. It ALSO sets the world-time cadence — the contact scan runs every
+    // SCAN_INTERVAL real s OR every this many world s, whichever comes first (F4 ~every 3 frames, F5 every
+    // frame); the dodge scan stays at 4 Hz real.
     CONTACT_WINDOW_MAX_S: 10,       // world seconds — max contact look-ahead window
     // Backward chord: longest world gap it spans; a chord between true positions errs ~1/4 of a straight line (25 s: 13 m at 2 km/s, 67 m at 10 km/s, so <= ~17 m).
     CONTACT_CHORD_MAX_S: 25,        // world seconds
     // The contact pre-filter reaches SCAN_RADIUS + this speed x the window: the
     // fastest crossing in LEO (measured max relative speed 15.6 km/s at mission-2 start).
     CONTACT_PREFILTER_SPEED_MS: 16000, // m/s
-    // real-dodge lane (2026-09-15): BASE_DODGE_DV is now a FLOOR, not a peak.
-    // The dodge magnitude is geometry-driven (see DODGE_DV_CEILING_MS below);
-    // this is the minimum committed burn once a dodge fires, so a threat that
-    // technically needs less than this still gets a meaningful nudge.
+    // BASE_DODGE_DV is a FLOOR, not a peak: the dodge magnitude is geometry-driven (see DODGE_DV_CEILING_MS), so a
+    // threat that technically needs less still gets a meaningful nudge.
     BASE_DODGE_DV: 0.5,             // m/s — minimum dodge burn (floor)
-    // Per-dodge Δv ceiling — thruster authority + economic sanity. Sized so a
-    // dodge fired at the full LOOK_AHEAD_S TCA can just reach AVOIDANCE_RADIUS_M
-    // (100 m / 10 s = 10 m/s); demands above this are honestly reported
-    // insufficient (CA_DODGE_INSUFFICIENT / "BRACE") rather than silently
-    // under-delivered.
+    // Per-dodge Δv ceiling — thruster authority + economic sanity. Sized so a dodge fired at the full LOOK_AHEAD_S
+    // TCA can just reach AVOIDANCE_RADIUS_M (100 m / 10 s = 10 m/s); demands above this are honestly reported
+    // insufficient (CA_DODGE_INSUFFICIENT / "BRACE") rather than silently under-delivered.
     DODGE_DV_CEILING_MS: 10.0,      // m/s — per-dodge Δv ceiling
-    // Floor for the Δv-needed division (desiredMiss − predictedMiss) / tca —
-    // guards against a near-zero TCA blowing up the requested burn. Any threat
-    // this close is already ceiling-clamped to BRACE regardless of this floor.
+    // Floor for the Δv-needed division (desiredMiss − predictedMiss) / tca — guards against a near-zero TCA blowing
+    // up the requested burn. Any threat this close is already ceiling-clamped to BRACE.
     DV_MIN_TCA_S: 0.5,              // seconds (world time, same clock as `tca`)
-    // Nominal billing window passed to applyCartesianImpulse for a one-shot
-    // dodge burn (the burn itself is instantaneous; this only scales the
-    // rate-based fuel/battery charge inside applyCartesianImpulse). Kept equal
-    // to SCAN_INTERVAL — the system's own decision cadence — rather than a
-    // second invented constant.
+    // Nominal billing window passed to applyCartesianImpulse for a one-shot dodge burn (the burn is instantaneous;
+    // this only scales the rate-based fuel/battery charge). Kept equal to SCAN_INTERVAL, the system's decision cadence.
     DODGE_BILLING_WINDOW_S: 0.25,   // seconds
-    // Reserve floor (fraction of XENON_FUEL_MAX / BATTERY_MAX): below this,
-    // CA declines to spend the player's last margin autonomously and reports
-    // an explicit refusal instead of firing (applyCartesianImpulse's own
-    // gates only trip at exactly empty/interlocked — this is a proactive
-    // floor above that).
+    // Reserve floor (fraction of XENON_FUEL_MAX / BATTERY_MAX): below this CA declines to spend the player's last
+    // margin autonomously and reports an explicit refusal (applyCartesianImpulse's own gates only trip at exactly
+    // empty/interlocked — this is a proactive floor above that).
     PROPELLANT_RESERVE_FRAC: 0.05,  // 5% of tank/battery capacity
     COOLDOWN: 3.0,                  // seconds between dodges
     OVERRIDE_WINDOW: 1.5,           // seconds — player input cancels dodge
     ALERT_DISPLAY_TIME: 3.0,        // seconds — HUD threat indicator duration
-    /** @deprecated Tutorial system removed Sprint 3. Retained for reference only. */
+    /** @deprecated Tutorial system removed. Retained for reference only. */
     TUTORIAL_MIN_STAGE: 7,          // suppress during tutorial stages 0-6 (DEPLOY stage onward in new 10-stage tutorial)
     ENABLED_DEFAULT: true,          // system on by default
 
-    // --- Comms quieting (Delegation 1 follow-up, 2026-05-31) -----------------
-    // Reviewer feedback after the rebind verification pass: CA dodge comms
-    // ("CAUTION: COLLISION AVOIDANCE. Dodge burn fired …") were spamming the
-    // new player on mission 1, drowning out the welcoming onboarding tone we
-    // want. Dodges still fire silently — only the COMMS_MESSAGE side-channel
-    // is gated, and only for the routine/sufficient case (real-dodge lane,
-    // 2026-09-15: insufficient-dodge and refusal comms bypass this gate —
-    // those are safety-critical and must always reach the player).  Two layers:
-    //   1. Mission-number floor — no CA comms below missionNumber < N.
-    //   2. Rate limit — at most one CA comms every COMMS_RATE_LIMIT_S seconds
-    //      once the floor is reached (so even mid-game the channel stays
-    //      readable instead of becoming a wall of yellow).
-    // Tune freely; the system reads these every emit-site.
+    // --- Comms quieting ---
+    // Routine CA dodge comms ("CAUTION: COLLISION AVOIDANCE. Dodge burn fired …") spammed the new player on mission 1.
+    // Dodges still fire silently — only the COMMS_MESSAGE side-channel is gated, and only for the routine/sufficient
+    // case (insufficient-dodge and refusal comms bypass this gate: safety-critical). Two layers:
+    //   1. Mission-number floor: no CA comms below missionNumber < N.
+    //   2. Rate limit: at most one CA comms every COMMS_RATE_LIMIT_S seconds once the floor is reached.
+    // The system reads these at every emit-site.
     COMMS_MIN_MISSION:    3,    // mission number at which CA comms first speak
                                 // (mission = floor(debrisCleared / 5) + 1, so
                                 //  3 ≈ after 10 captures — a true "veteran" gate)
     COMMS_RATE_LIMIT_S:  12,    // seconds between consecutive CA comms
   },
 
-  // =========================================================================
-  // COLLISION MODEL (D2, ROADMAP §4 P2) — graduated debris-contact consequences
+  // COLLISION MODEL — graduated debris-contact consequences.
   // Consumed by the pure classifier `js/systems/collisionModel.js` and emitted
   // from CollisionAvoidanceSystem's existing 4 Hz scan (no new per-frame scan).
   // CA (when enabled) dodges most threats before contact; this model fires on
   // the genuine failures CA can't prevent (CA off, manual ramming, kessler
-  // storms). All distances metres, speeds m/s, energy kJ. See COLLISION_MODEL
-  // classifier + KesslerSystem GAME_COLLISION router.
-  // =========================================================================
+  // storms). All distances metres, speeds m/s, energy kJ.
   COLLISION_MODEL: {
     HULL_RADIUS_M:        12,   // mother-ship contact radius (fallback when caller omits it)
     CONTACT_MARGIN_M:     8,    // added to hull radius → physical-contact envelope (~20 m)
-    WARN_RADIUS_M:        300,  // D2 near-miss proximity-warning envelope (this model's own knob; the CA dodge path has a separate, currently-unused WARN_THRESHOLD_M)
-    GLANCING_MIN_SPEED_MS: 2,   // below this closing speed a contact is inert (docking/reel drift-in); also the floor for a dodge (r1-release-dodge) and a proximity warning (r3-slow-warning)
+    WARN_RADIUS_M:        300,  // near-miss proximity-warning envelope (this model's own knob; the CA dodge path has a separate, currently-unused WARN_THRESHOLD_M)
+    GLANCING_MIN_SPEED_MS: 2,   // below this closing speed a contact is inert (docking/reel drift-in); also the floor for a dodge and a proximity warning
     HARD_IMPACT_KJ:       250,  // kinetic energy ≥ this → 'hard' (shield/game-over); else 'glancing'
     // Per-debris re-fire cooldowns so a single lingering pass ≠ machine-gun events.
     WARN_COOLDOWN_S:      6,    // seconds between repeat COLLISION_WARNING for the same debris
@@ -5440,22 +4234,19 @@ export const Constants = {
   },
 
 
-  // =========================================================================
-  // AUTOPILOT — Trailing-rendezvous controller (see AUTOPILOT_ANALYSIS.md §D)
+  // AUTOPILOT — trailing-rendezvous controller (archive/AUTOPILOT_ANALYSIS.md §D)
   // All distances in metres, velocities in m/s unless noted. Scene conversion
   // uses M = 1e-5 scene units / metre. See AutopilotSystem.js for usage.
-  // =========================================================================
-  // ==========================================================================
-  // AIM-BEFORE-LAUNCH (aim-before-launch plan §Tolerances)
+
+  // AIM-BEFORE-LAUNCH
   // Physical alignment tolerances + rotation rate for the Mother net /
   // daughter launch ceremony. Kept in one block for playtest tuning.
-  // ==========================================================================
   AIM: {
     /** Mother net: ship +Z must align with the lead-intercept dir this tightly. */
     NET_AIM_TOLERANCE_DEG: 0.5,
-    /** Daughter deploy: physical strut fire dir vs target (TRANSIT corrects the rest). launch-smooth: 1°, was 5°.
-     *  The aim now slows to a stop at the target (eased, `_tickAimEased`), so it ends with ~0 rate instead of
-     *  stopping the turn dead 5° short and snapping the last degrees. */
+    /** Daughter deploy: physical strut fire dir vs target (TRANSIT corrects the rest).
+     *  The aim slows to a stop at the target (eased, `_tickAimEased`), so it ends with ~0 rate instead of
+     *  stopping the turn dead short and snapping the last degrees. */
     DAUGHTER_AIM_TOLERANCE_DEG: 1,
     /** Abort the aim sequence if it cannot converge within this many seconds. */
     AIM_TIMEOUT_S: 30,
@@ -5465,27 +4256,24 @@ export const Constants = {
     ONBOARDING_ROT_RATE_MULT: 1.0,
   },
 
-  // ==========================================================================
-  // CHEST SHOT (owner 2026-10-25, DECISIONS §38 row 5; plan daughter-pairs-1025 S1): a daughter launched along the line through
-  // the mother's centre of mass kicks her not at all. The daughter aim picks, per shot, the cheaper (gas) of today's angle and that
-  // chest angle (Q1 a); with the wheel kit AND a wheel axis over half full it also scans the strut's angles, keeps those whose kick lowers that axis, and credits the kick (F1.1).
-  // ==========================================================================
+  // CHEST SHOT (owner 2026-10-25, DECISIONS §38 row 5): a daughter launched along the line through
+  // the mother's centre of mass kicks her not at all. The daughter aim picks, per shot, the cheaper (gas) of the quick
+  // angle and that chest angle; with the wheel kit AND a wheel axis over half full it also scans the strut's angles,
+  // keeps those whose kick lowers that axis, and credits the kick.
   CHEST_SHOT: {
     ENABLED: true,
-    SCAN_STEP_DEG: 5,        // the kit's scan over the strut's reachable angle (T3)
-    WHEEL_CREDIT_FRAC: 0.5,  // the kit's scan of other angles runs, and a kick that lowers the fullest wheel axis is credited, only when that axis is over this full (T3)
+    SCAN_STEP_DEG: 5,        // the kit's scan over the strut's reachable angle
+    WHEEL_CREDIT_FRAC: 0.5,  // the kit's scan of other angles runs, and a kick that lowers the fullest wheel axis is credited, only when that axis is over this full
     EMPTIES_SAY_NMS: 1,      // "This launch also empties the wheels." only when the credit changed the pick and the fullest axis ends this much lower, N·m·s
     TIE_FRAC: 0.02,          // two shots whose gas differs by less than this (or TIE_G) cost the same: the quicker one is taken
     TIE_G: 0.5,              // g
     QUICK_FRAC: 0.10,        // the aim line names the other way ("quick: ...") only when its gas differs by more than this
   },
 
-  // ==========================================================================
-  // PAIR SHOT (owner 2026-10-25 00:11Z / 02:23Z "2 a", DECISIONS §38 row 5; plan daughter-pairs-1025 S2): two opposite daughters of one
+  // PAIR SHOT (owner 2026-10-25, "2 a", DECISIONS §38 row 5): two opposite daughters of one
   // type (struts 0+2 weavers, 1+3 spinners) leave in the same frame at the SAME strut angle, so their kicks cancel (measured: net 0 at every
   // angle). The mother turns (yaw/pitch only, her roll kept) so that each launch line lies within MISS_DEG of its own piece; each daughter
   // steers the rest herself on her own fuel (measured, tmp/pairs/s2/RESULT.md: 0.37 g per degree of miss for a weaver, 0.125 g a spinner).
-  // ==========================================================================
   PAIR_SHOT: {
     ENABLED: true,
     MISS_DEG: 10,            // each daughter's launch line within this of her piece (measured: practical for 100 % of start-field pairs)
@@ -5498,32 +4286,35 @@ export const Constants = {
     MAX_CANDIDATES: 8,       // the nearest pieces by bearing tried as the second piece
     REPLAN_S: 0.5,           // the offer is looked at again at most this often (and sooner when she turns or a piece is picked)
     HOLD_RATIO: 0.8,         // a standing offer is kept until a new pair beats its cost by this ratio
-    // S5 pair plane (plan daughter-pairs-1025; DECISIONS §38 row 5): the reel turns each tether into its strut's plane once a piece lies more than
-    // REEL_HOME.PLANE_TOL_DEG (5) off it, 94-119 g a turn without the wheel kit. The plane error at the start of the reel is the launch miss + 0.3-0.5 deg
-    // (measured 2026-10-27, main 9b041cb2, promises run every frame as in the browser: the mother holds her launch attitude, 0.00 deg of drift). The old
-    // limit of 2.0 came from a rig that ran the launch callback 0.33 s late, which let the mother drift back toward prograde (about twice the miss). Measured
-    // without the kit, pair f-2 + f-3 (5 + 6 kg): 41.4 g at miss 2.0, 42.3 g at 4.0, 48.1 g at 5.45, first reel turn at 5.93 deg (323 g, two singles 264-268 g);
-    // PAIR_FIELDS weaver pair: 12.8 g at 4.0, 13.9 g at 4.5, 167 g at 5.0 (one turn; two singles 58 g). 4.0 keeps 0.5 deg of margin under the 5 deg tolerance.
+    // Pair plane (DECISIONS §38 row 5): the reel turns each tether into its strut's plane once a piece lies more than
+    // REEL_HOME.PLANE_TOL_DEG (5) off it, 94-119 g a turn without the wheel kit. The plane error at the start of the
+    // reel is the launch miss + 0.3-0.5 deg (measured 2026-10-27, promises run every frame as in the browser: the
+    // mother holds her launch attitude). Measured without the kit, pair f-2 + f-3 (5 + 6 kg): 41.4 g at miss 2.0,
+    // 42.3 g at 4.0, 48.1 g at 5.45, first reel turn at 5.93 deg (323 g, two singles 264-268 g); PAIR_FIELDS weaver
+    // pair: 12.8 g at 4.0, 13.9 g at 4.5, 167 g at 5.0 (one turn; two singles 58 g). 4.0 keeps 0.5 deg of margin
+    // under the 5 deg tolerance.
     PLANE_MISS_MAX_DEG: 4.0,
-    // With the wheel kit the plane turn costs no gas (the wheels turn her), so the pair still wins at every miss measured, 2-6.5 deg (f-2 + f-3 pair 24.1 g at
-    // 6.0 vs two singles 160 g; PAIR_FIELDS pair 0.23 g either way). Capped at the reel's tolerance, 5.0: past it the reel turns anyway, which costs only time.
-    // The kit limit applies only while the wheels can run (kit aboard and battery >= WHEELS.MIN_BATTERY_WH, read at every search and every refresh of a standing offer): a kit with a flat battery gets PLANE_MISS_MAX_DEG.
-    // Measured 2026-10-28: the small daughters (spinners) at these same two limits: reel-start plane error 4.26 deg at a 4.0 miss without the kit, 4.9 at 5.0 with it, no turn; without the kit the pair costs under two singles (8.9 g against 18.5 g), with the kit the same as two singles (0.074 g each, measured): no limit of their own.
+    // With the wheel kit the plane turn costs no gas (the wheels turn her), so the pair still wins at every miss
+    // measured, 2-6.5 deg (f-2 + f-3 pair 24.1 g at 6.0 vs two singles 160 g; PAIR_FIELDS pair 0.23 g either way).
+    // Capped at the reel's tolerance, 5.0: past it the reel turns anyway, which costs only time. The kit limit
+    // applies only while the wheels can run (kit aboard and battery >= WHEELS.MIN_BATTERY_WH, read at every search
+    // and every refresh of a standing offer): a kit with a flat battery gets PLANE_MISS_MAX_DEG.
+    // Measured 2026-10-28: the small daughters (spinners) at these same two limits: reel-start plane error 4.26 deg at
+    // a 4.0 miss without the kit, 4.9 at 5.0 with it, no turn; without the kit the pair costs under two singles (8.9 g
+    // against 18.5 g), with the kit the same as two singles (0.074 g each): no limit of their own.
     PLANE_MISS_MAX_DEG_KIT: 5.0,
     FIRE_MISS_DEG: 12,       // at the spring: a pair whose lines have drifted past this is not fired (the gap over MISS_DEG is the aim's own stop error)
-    SPREAD_MIN_DEG: 0,       // P5: the least flight angle between the two daughters (set from the measured closest approach; 0 = none)
-    // S3 pair-home (plan daughter-pairs-1025): a pair comes home together. Mission-clock seconds (one frame = 1/60 s, the clock the arms run on).
+    SPREAD_MIN_DEG: 0,       // the least flight angle between the two daughters (set from the measured closest approach; 0 = none)
+    // Pair-home: a pair comes home together. Mission-clock seconds (one frame = 1/60 s, the clock the arms run on).
     HOME_WAIT_S: 60,         // a daughter whose catch is in its cell waits at most this long for her partner's (0 = never waits)
     HOME_GAP_S: 30,          // the finder offers no pair whose predicted catch times differ by more than this (Infinity = no rule)
     HOME_EQUAL_PULL: false,  // both reels pull with the lighter catch's tension (the heavier accelerates more slowly). OFF: measured WORSE (unequal catches 2 kg / 10 kg: 32.6 g vs 16.2 g of reel gas); the kicks' lever arms differ, so equal tension does not cancel
   },
 
-  // ==========================================================================
-  // WHEEL PRE-TURN (owner 2026-10-25 02:23Z: "if a target is selected, the reaction wheel could intelligently immediately start pivoting
-  // mother for best angle ... save gas"; plan daughter-pairs-1025 S1b): with the wheel kit, a docked daughter picked (keys 1-4) and a piece
+  // WHEEL PRE-TURN (owner 2026-10-25: "if a target is selected, the reaction wheel could intelligently immediately start pivoting
+  // mother for best angle ... save gas"): with the wheel kit, a docked daughter picked (keys 1-4) and a piece
   // picked, the wheels start turning her toward the shot the chooser would take, no gas, at the wheels' own pace; firing hands the rest to
   // the normal aim. Daughters only (the mother's own net shots get none yet).
-  // ==========================================================================
   WHEEL_PRETURN: {
     ENABLED: true,
     MIN_BATTERY_FRAC: 0.30,  // the pre-turn starts, and goes on, only with the battery over this fraction (each wheel draws up to 150 W)
@@ -5533,36 +4324,26 @@ export const Constants = {
 
   AUTOPILOT: {
     // --- Tool-aware trailing distance (metres behind debris along V_d) ---
-    D_TRAIL_LASSO:   70,   // m — park INSIDE the 90 m lasso/net range (LASSO_RANGE === NET_LOCK_RANGE_M); 70 + POS_TOL 15 < 90. Was 120 (inside the old 200 m gate, outside the new one)
+    D_TRAIL_LASSO:   70,   // m — park INSIDE the 90 m lasso/net range (LASSO_RANGE === NET_LOCK_RANGE_M); 70 + POS_TOL 15 < 90
     D_TRAIL_ARMS:    35,   // m — spinner/weaver arm reach (~50 m)
     D_TRAIL_TRAWL:   150,  // m — trawl sweep trailing centroid
     D_TRAIL_DEFAULT: 80,   // m — fallback when no tool recommendation
-    // Mother Large Net (whale) hold. Must sit INSIDE the sure-shot band:
-    // SURE_SHOT_MIN_CLING needs range ≤ CLOSE_RANGE(30) AND spinFraction ≥ 0.8,
-    // and spinFraction = 1 − 0.08·(range/10) hits 0.8 at exactly 25 m. 20 m
-    // leaves margin against the AP's own VEL_TOL (0.5 m/s orbital = 5 m/s
-    // apparent) residual, which moves the range ~45 m over a 9 s slew+flight.
+    // Mother Large Net (whale) hold. Must sit INSIDE the sure-shot band: SURE_SHOT_MIN_CLING needs range ≤
+    // CLOSE_RANGE(30) AND spinFraction ≥ 0.8, and spinFraction = 1 − 0.08·(range/10) hits 0.8 at exactly 25 m. 20 m
+    // leaves margin against the AP's own VEL_TOL (0.5 m/s orbital = 5 m/s apparent) residual, which moves the
+    // range ~45 m over a 9 s slew+flight.
     D_TRAIL_NET:     20,   // m — mother pod Large Net sure-shot hold
 
-    // --- In-reach rotate-only thresholds ------------------------------------
-    // When the debris is ALREADY within the active tool's capture reach there
-    // is no need to translate (fly in) to the tight trailing point — the
-    // mother only needs to ROTATE to point at the target and hold position.
-    // The per-tool reach is NOT duplicated here: AutopilotSystem._getToolReach()
-    // derives it directly from the canonical tool constants so retuning the
-    // tether length / projectile range automatically propagates:
-    //   weaver  → WEAVER_TETHER_LENGTH  (2000 m tether)
-    //   spinner → SPINNER_TETHER_LENGTH (500 m tether)
-    //   lasso   → LASSO_RANGE           (90 m = NET_LOCK_RANGE_M, the lasso fire gate)
-    //   trawl   → D_TRAIL_TRAWL          (150 m sweep stand-off; ≥ trail so the
-    //             rotate-only optimization can engage rather than overflying it)
-    // Only the AP-owned policy values live here:
-    REACH_DEFAULT:   200,  // m — conservative fallback when no tool recommendation. NOTE: nothing reads this today (the AutopilotSystem._getToolReach() named above does not exist — grep c64c911); the per-tool reach is the tool's own constant (lasso = LASSO_RANGE = 90 m)
+    // --- In-reach rotate-only thresholds ---
+    // When the debris is ALREADY within the active tool's capture reach, the mother only ROTATES to point at the
+    // target and holds position (no fly-in to the tight trailing point). The per-tool reach is NOT duplicated here:
+    // AutopilotSystem._getToolReach() derives it from the canonical tool constants (weaver WEAVER_TETHER_LENGTH 2000 m,
+    // spinner SPINNER_TETHER_LENGTH 500 m, lasso LASSO_RANGE = NET_LOCK_RANGE_M 90 m, trawl D_TRAIL_TRAWL 150 m: ≥ trail
+    // so rotate-only can engage rather than overfly). Only the AP-owned policy values live here:
+    REACH_DEFAULT:   200,  // m — conservative fallback when no tool recommendation. NOTE: nothing reads this today (the AutopilotSystem._getToolReach() named above does not exist); the per-tool reach is the tool's own constant (lasso = LASSO_RANGE = 90 m)
 
-    // Hysteresis band around the reach boundary. Once inside REACH the
-    // autopilot enters rotate-only mode and will only resume translating if
-    // the target drifts beyond REACH·(1 + REACH_HYSTERESIS). Prevents
-    // translate↔rotate-only oscillation right at the boundary.
+    // Hysteresis band around the reach boundary: once inside REACH the autopilot enters rotate-only mode and only
+    // resumes translating if the target drifts beyond REACH·(1 + REACH_HYSTERESIS) (prevents oscillation at the boundary).
     REACH_HYSTERESIS: 0.15, // +15 % exit band
 
     // --- Tolerance bands (state machine transitions) ---
@@ -5574,40 +4355,30 @@ export const Constants = {
     FAR_TO_MATCH_POS: 500, // m — RENDEZVOUS_FAR → MATCH_ORBIT when pos err below this
     HOLD_DURATION:    1.5, // s — HOLD phase duration before auto-disengage
 
-    // Dwell/debounce before HOLD → TRAIL_ALIGN demotion. A station-keeping
-    // excursion (posErr > 4·POS_TOL OR velErr > 4·VEL_TOL) must persist for at
-    // least this long before the phase drops back to TRAIL_ALIGN. Absorbs
-    // single-frame transients (CA dodge settling, one-frame measurement lag,
-    // frame-boundary drag mismatch) that previously flickered the phase chip
-    // ALIGN ↔ HOLD indefinitely. See .kilo/plans/autopilot-align-hold-loop.md.
+    // Dwell/debounce before HOLD → TRAIL_ALIGN demotion: a station-keeping excursion (posErr > 4·POS_TOL OR velErr >
+    // 4·VEL_TOL) must persist this long before the phase drops back. Absorbs single-frame transients (CA dodge
+    // settling, measurement lag, frame-boundary drag mismatch) that flickered the phase chip ALIGN ↔ HOLD.
     HOLD_EXIT_DWELL_S: 0.3, // s — sustained-excursion time before HOLD demotes
 
     // --- Control law ---
-    // Predictive quadratic-braking velocity profile (see AUTOPILOT_ANALYSIS.md §D
-    // Retrospective #2 for rationale). Desired closing speed:
-    //   v*(r) = min(V_CAP, √(2·A_BRAKE·max(r − POS_TOL, 0)))
-    // where A_BRAKE = MAX_ACCEL·BRAKE_FRACTION leaves headroom for transverse
-    // corrections. Commanded ΔV = KP_VEL·(v*·goalDir + relV_mps), clamped by
-    // MAX_ACCEL·dt. This replaces a proportional-only law that had no
-    // predictive-braking term and overshot by hundreds of metres from >500 m
-    // engage distance.
+    // Predictive quadratic-braking velocity profile (archive/AUTOPILOT_ANALYSIS.md §D Retrospective #2). Desired
+    // closing speed: v*(r) = min(V_CAP, √(2·A_BRAKE·max(r − POS_TOL, 0))), A_BRAKE = MAX_ACCEL·BRAKE_FRACTION (headroom
+    // for transverse corrections). Commanded ΔV = KP_VEL·(v*·goalDir + relV_mps), clamped by MAX_ACCEL·dt. A
+    // proportional-only law had no predictive braking and overshot by hundreds of metres from >500 m.
     MAX_ACCEL:        2.0, // m/s² — clamp per-tick commanded acceleration
     KP_VEL:           0.8, // dimensionless — velocity tracking gain
     BRAKE_FRACTION:   0.5, // fraction of MAX_ACCEL reserved for along-track braking
     V_CAP:           50.0, // m/s — hard cap on commanded closing speed v*
     KP_POS:           0.2, // 1/s — deprecated; retained for compatibility, not used in control law
 
-    // --- Station-keeping recoil compensation (ST-4.B) ---
+    // --- Station-keeping recoil compensation ---
     STATION_KEEP_COMPENSATION: true,  // master toggle for tool-fire recoil compensation in HOLD
     STATION_KEEP_EFFICIENCY:   0.85,  // fraction of theoretical ΔV applied (thruster losses)
   },
 
-  // =========================================================================
-  // SKILLS DISCOVERY — Replaces linear 10-stage tutorial
-  // See archive/SKILLS_ARCHITECTURE.md for full specification (34 discoverable skills)
-  // =========================================================================
+  // SKILLS DISCOVERY (spec: archive/SKILLS_ARCHITECTURE.md)
   SKILLS: {
-    // --- State Transition Thresholds ---
+    // --- State thresholds ---
     PRACTICE_COUNT_DEFAULT: 5,       // uses to reach PRACTICED state
     PRACTICE_COUNT_SCAN: 3,          // quick actions need fewer uses
     PRACTICE_COUNT_CATCH: 3,         // significant actions need fewer uses
@@ -5616,13 +4387,13 @@ export const Constants = {
     MASTERY_COUNT_CATCH: 10,         // catch skills master faster
     MASTERY_MIN_TIME: 300,           // seconds (5 min minimum before mastery)
 
-    // --- UI Timing ---
+    // --- UI timing ---
     PANE_SHOW_DURATION: 4000,        // ms — how long pane stays visible after discovery
     PANE_FIRST_SKILL_DURATION: 8000, // ms — first 3 discoveries get longer display
     PANE_FADE_DURATION: 600,         // ms — fade out animation
     MASTERED_FADE_DELAY: 30000,      // ms — delay before mastered skills fade from pane
 
-    // --- Spaced Repetition (SM-2 variant) ---
+    // --- Spaced repetition (SM-2 variant) ---
     REMINDER_BASE_INTERVAL: 45,      // seconds — base interval between reminders
     REMINDER_MAX_INTERVAL: 86400,    // seconds — cap at 24h
     REMINDER_MIN_INTERVAL: 30,       // seconds — floor
@@ -5630,12 +4401,12 @@ export const Constants = {
     REMINDER_FREQUENCY_CAP: 3,       // max reminders per cap window
     REMINDER_CAP_WINDOW: 300,        // seconds — window for frequency cap
 
-    // --- CP-4 universal hint-gating rule (GUIDANCE_ARBITER_SPEC §3 / §3.1) ---
+    // --- Universal hint-gating rule (GUIDANCE_ARBITER_SPEC §3 / §3.1) ---
     MAX_UNHEEDED_NUDGES: 3,          // per-skill: fall silent after this many unheeded nudges
     RECENT_FAILURE_TTL_S: 30,        // a failure counts as "recent" for this long (s)
     RECENT_FAILURE_BUFFER: 12,       // ring-buffer size for recent-failure causes
     VETERAN_SKILL_THRESHOLD: 0.7,    // fraction of skills discovered ⇒ veteran (ticker, not modal)
-    // Failure-event → cause tag for the _recentFailures ring buffer.
+    // Failure event → cause tag for the _recentFailures ring buffer.
     FAILURE_CAUSES: {
       NET_FAILED:          'net-fail',
       NET_CATCH_MISS:      'net-miss',
@@ -5645,54 +4416,53 @@ export const Constants = {
       ARM_CAPTURE_FAILED:  'capture-fail',
     },
 
-    // --- Blitz Detection (veteran/expert player) ---
+    // --- Blitz detection (veteran/expert player) ---
     BLITZ_WINDOW: 8000,              // ms — variable ratio window for early rapid discovery
     BLITZ_SUPPRESS_CHANCE: 0.3,      // probability of suppressing reminder during blitz
     BLITZ_THRESHOLD: 15,             // skills in detection window → expert mode
     BLITZ_DETECTION_WINDOW: 300,     // seconds (5 min) — window for blitz rate calculation
 
-    // --- Discovery Queue ---
+    // --- Discovery queue ---
     DISCOVERY_COOLDOWN: 3,           // seconds between pane popups
     DISCOVERY_BATCH_THRESHOLD: 5,    // above this → batch notification
     EARLY_DISCOVERY_COUNT: 10,       // first N discoveries get variable ratio reinforcement
 
-    // --- Safety Gates ---
+    // --- Safety gates ---
     DETACH_MIN_CATCHES: 2,           // mastery_detach requires ≥2 total catches
     TRAWL_MIN_CATCHES: 1,            // collect_trawl requires ≥1 total catch
 
-    // --- Tier Definitions (5 tiers with progression colors) ---
+    // --- Tiers ---
     TIERS: [
-      { id: 'orientation',  tier: 1, label: 'Orientation',  color: '#00ff88' },
+      { id: 'orientation',  tier: 1, label: 'Orientation',  color: VisualLaw.COLORS.PLAYER },
       { id: 'core_tools',   tier: 2, label: 'Core Tools',   color: '#44ddff' },
-      { id: 'proficiency',  tier: 3, label: 'Proficiency',  color: '#4488ff' },
+      { id: 'proficiency',  tier: 3, label: 'Proficiency',  color: VisualLaw.COLORS.SELECTION },
       { id: 'advanced',     tier: 4, label: 'Advanced',     color: '#8866ff' },
       { id: 'mastery',      tier: 5, label: 'Mastery',      color: '#cc44dd' },
     ],
 
-    // --- Skill Catalog (41 skills) -----------------------------------------------------------
+    // --- Skill catalog ---
     // Fields: id, label, key, say?, tier, category, hudGroup, prereqs, prereqType, noReminder, triggerEvent, triggerFilter?
-    // say: the plain phrase a stale-skill reminder shows ("Press S to scan."), nets-1b; none -> the label alone, no key glue.
+    // say: the plain phrase a stale-skill reminder shows ("Press S to scan."); none -> the label alone, no key glue.
     // triggerEvent: Events.js constant name (string key) or null if auto/timer/needs new event
-    // triggerFilter: OPTIONAL (data) => boolean — payload predicate so several skills can share one
-    //   triggerEvent but discriminate by payload (e.g. ARM_CAPTURED{manual:true}, SCAN_INITIATED{type:'wide'}).
-    //   Omit for fire-on-every-event behavior. See GUIDANCE_ARBITER_SPEC §5 / SkillsSystem._setupListeners.
+    // triggerFilter: OPTIONAL (data) => boolean payload predicate, so several skills can share one triggerEvent
+    //   (e.g. ARM_CAPTURED{manual:true}, SCAN_INITIATED{type:'wide'}). Omit to fire on every event.
+    //   See GUIDANCE_ARBITER_SPEC §5 / SkillsSystem._setupListeners.
     // prereqType: 'none' | 'soft' | 'hard' | 'safety'
     //   none   — independent, discoverable any time in any order
     //   soft   — works without prereq but system provides contextual guidance
     //   hard   — physically impossible without prior game state
     //   safety — irreversible destructive action gated by catch count
     CATALOG: [
-      // ── Tier 1: Orientation (6 skills — independent, any order) ─────────
+      // ── Tier 1: Orientation ──
       { id: 'nav_zoom',         label: 'Zoom',         key: 'Scroll', say: 'Scroll to zoom.',    tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_ZOOM' },
       { id: 'nav_rotate',       label: 'Rotate View',  key: 'Drag', say: 'Drag to look around.',      tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_ORBIT_DRAG' },
       { id: 'nav_camera',       label: 'Camera Views', key: 'V', say: 'Press V to change the camera view.',         tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_VIEW_CHANGE' },
       { id: 'nav_arrows',       label: 'Ship Rotation', key: '←↑↓→', say: 'Use the arrow keys to turn.',    tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'TUTORIAL_ARROW_INPUT' },
       { id: 'nav_throttle',     label: 'Throttle',     key: '+/-', say: 'Press Shift and plus or minus to change the thrust.', tier: 1, category: 'nav',      hudGroup: 'propulsion',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'THROTTLE_CHANGE' },
       { id: 'scan_quick',       label: 'Quick Scan',   key: 'S', say: 'Press S to scan.',         tier: 1, category: 'scan',      hudGroup: 'targets',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_QUICK' },
-      // ── Delegation 4 (2026-05-31): two Tier-1 skills added to back the onboarding `struts` and `inspect` beats. ──
       { id: 'arm_struts',       label: 'Strut Deployment', key: '.', say: 'Press the period key to move the struts out or in.',      tier: 1, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'STRUT_DEPLOY_INPUT' },
       { id: 'inspect_mother',   label: 'Spacecraft Inspection (V, then scroll in)', key: 'V', say: 'Press V, then scroll in, to look over the ship.', tier: 1, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'INSPECTION_TOGGLE' },
-      // ── Tier 2: Core Tools (6 skills) ───────────────────────────────────
+      // ── Tier 2: Core Tools ──
       { id: 'scan_wide',            label: 'Wide Scan',    key: 'Shift+S', say: 'Press Shift S for a wide scan.',     tier: 2, category: 'scan',      hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_WIDE' },
       { id: 'nav_target',           label: 'Target Selection', key: 'T', say: 'Press T to pick the next target.', tier: 2, category: 'nav',     hudGroup: 'target-info',   prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'TARGET_SELECTED' },
       { id: 'nav_autopilot',        label: 'Autopilot',    key: 'A', say: 'Press A to fly to your target.',     tier: 2, category: 'nav',       hudGroup: 'orbit-mfd',     prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'AUTOPILOT_ENGAGE' },
@@ -5700,55 +4470,39 @@ export const Constants = {
       { id: 'collect_lasso',        label: 'Lasso',        key: 'N', say: 'Press N to launch the net.', tier: 2, category: 'collect',   hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'LASSO_FIRED' },
       { id: 'awareness_mouse_look', label: 'Mouse Look',   key: null,    tier: 2, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: true,  triggerEvent: 'CAMERA_FREE_LOOK' },
 
-      // ── Tier 3: Proficiency (7 skills) ──────────────────────────────────
+      // ── Tier 3: Proficiency ──
       { id: 'nav_autopilot_no_target', label: 'Autopilot w/o Target', key: null, tier: 3, category: 'nav',    hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: true,  triggerEvent: 'AUTOPILOT_NO_TARGET' },
       { id: 'scan_discovery',          label: 'Scan Discovery',       key: null, tier: 3, category: 'scan',   hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_DISCOVERY' },
       { id: 'collect_dual_fire',       label: 'Dual Launch',            key: null, tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'hard', noReminder: false, triggerEvent: 'DUAL_FIRE' },
       { id: 'manage_power',            label: 'Power Distribution',   key: 'Shift+1/2/3', say: 'Press Shift and 1, 2 or 3 to pick a power line.', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
       { id: 'manage_comms',            label: 'Comms Menu',           key: '7', say: 'Press 7 for comms.',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
       { id: 'manage_codex',            label: 'SPECS',                key: 'I', say: 'Press I to read the specs.',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
-      // ── CP-4 ch2 (MissionCoach): Daughter piloting (payload-discriminated via triggerFilter) ──
+      // Daughter piloting (payload-discriminated via triggerFilter)
       { id: 'arm_pilot',         label: 'Daughter Piloting', key: '1-4', say: 'Press 1 to 4 to pick a daughter to fly.', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
       { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'N', say: 'Press N to use the daughter\'s tool.', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
-      // ── CP-4 ch4 (MissionCoach): Cluster/transfer agency on the Debris Map (CP-3) ──
-      // M retired 2026-10-09 (H1): the F4 plan-transfer / F3 approach emit
-      // DEBRIS_MAP_CLUSTER_SELECTED through LadderBridge, so no key opens this skill.
+      // No key opens strategic_map: plan-transfer / approach emit DEBRIS_MAP_CLUSTER_SELECTED through LadderBridge.
       { id: 'strategic_map',     label: 'Transfer Map',      key: null, tier: 3, category: 'nav',     hudGroup: null,    prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED' },
-      // ── CP-4 Phase D (MissionCoach chapters 8/9/11) ──────────────────────────
-      // ch8 confirm-before-fire: discovered when the player trips the active-sat treaty
-      //   guard (ActiveSatGuard emits CONJUNCTION_ALERT{reason:'ACTIVE_SAT_ARMING'}).
-      // ch9 fleet command: the C-hold radial wheel was REMOVED (UX-11 #9) —
-      //   dual-arm throughput is taught via direct keys. The skill keeps its
-      //   historical id ('radial_menu') so old saves restore cleanly, but it
-      //   now tracks the fleet-recall verb (Shift+R → ARM_RECALL_ALL; was
-      //   H / Shift+O before the 2026-06-12 hotkey cleanup).
-      // ch11 orbital_hohmann (u16a): discovered when the ch11_hohmann lesson is finished, i.e. the
-      //   player flew a cluster transfer (FLY THERE / Space) after the lesson pointed at the LEO
-      //   window pane. The old CLUSTER_WINDOW_OPEN trigger only fired from a dev key (Shift+A);
-      //   the porkchop viz is deferred (EN-5/6).
+      // confirm_before_fire: discovered when the player trips the active-sat treaty guard
+      //   (ActiveSatGuard emits CONJUNCTION_ALERT{reason:'ACTIVE_SAT_ARMING'}).
+      // radial_menu: keeps its historical id so old saves restore cleanly; it now tracks the fleet-recall verb
+      //   (Shift+R → ARM_RECALL_ALL). The C-hold radial wheel is gone; dual-arm throughput is taught via direct keys.
+      // orbital_hohmann: discovered when the ch11_hohmann lesson is finished (the player flew a cluster transfer,
+      //   FLY THERE / Space, after the lesson pointed at the LEO window pane). The porkchop viz is deferred (EN-5/6).
       { id: 'confirm_before_fire', label: 'Confirm Before Launch', key: null, tier: 3, category: 'awareness', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true,  triggerEvent: 'CONJUNCTION_ALERT', triggerFilter: (d) => d && d.reason === 'ACTIVE_SAT_ARMING' },
       { id: 'radial_menu',         label: 'Fleet Recall',        key: 'Shift+R', say: 'Press Shift R to reel in all daughters.',  tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_RECALL_ALL' },
-      // ── item 100 (2026-08-21): the launch-speed dial. Discovered by moving
-      //   the dial (LAUNCH_SPEED_CHANGED); the ch10 wide-sweep beat teaches its
+      // speed_dial: discovered by moving the dial (LAUNCH_SPEED_CHANGED); the wide-sweep beat teaches its
       //   application (ARM_CAPTURED rangeM ≥ 1000 — the tether-gated unlock).
       { id: 'speed_dial',          label: 'Launch-Speed Dial',   key: "; / '", say: 'Press the semicolon or apostrophe key to change the launch speed.',   tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'LAUNCH_SPEED_CHANGED' },
       { id: 'orbital_hohmann',     label: 'Hohmann Window',      key: null, tier: 4, category: 'nav',       hudGroup: null,    prereqs: [], prereqType: 'soft', noReminder: false, triggerEvent: 'MISSION_BEAT_SATISFIED', triggerFilter: (d) => !!d && d.beatId === 'ch11_hohmann' },
 
-      // ── Tier 4: Advanced (8 skills) ─────────────────────────────────────
-      // F5: was triggerEvent 'ORBIT_MFD_TOGGLE' — that event has NO emitter
-      // (OrbitMFD is constructed + frame-updated but its toggle() was never
-      // wired to a key), so this skill was undiscoverable and gated nav_hohmann.
-      // Repointed to the live orbital-survey read (Debris Map cluster select),
-      // which is the surface that now teaches orbital-element reading. Revive
-      // the OrbitMFD panel + repoint back if it ships.
+      // ── Tier 4: Advanced ──
+      // nav_orbit_mfd: ORBIT_MFD_TOGGLE has no emitter (OrbitMFD toggle() is wired to no key), so the skill fires on
+      // the live orbital-survey read (Debris Map cluster select). Repoint back if the OrbitMFD panel ships.
       { id: 'nav_orbit_mfd',      label: 'Orbit MFD Reading',   key: null,  tier: 4, category: 'nav',       hudGroup: null,  prereqs: ['nav_autopilot'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED' },
       { id: 'collect_pulse_scan', label: 'Pulse Scan',           key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'PULSE_SCAN_START' },
       { id: 'collect_lasso_miss', label: 'Lasso Miss Recovery',  key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: ['collect_lasso'],   prereqType: 'hard',   noReminder: true,  triggerEvent: 'LASSO_MISSED' },
-      // defer-trawl: "Dragnet" (formerly "Trawl"). Re-tiered to Advanced and
-      // hard-gated behind `dragnet_unlock` — a flag the (future) advanced
-      // Dragnet mission grants. Until then this stays UNDISCOVERED for new
-      // players: Shift+G still emits TRAWL_START (testable) but the skill never
-      // surfaces in the Discovery pane / reminders. noReminder keeps it silent.
+      // collect_trawl ("Dragnet"): hard-gated behind `dragnet_unlock`, a flag the future Dragnet mission grants. Until
+      // then it stays undiscovered: Shift+G still emits TRAWL_START but the skill never surfaces; noReminder keeps it silent.
       { id: 'collect_trawl',      label: 'Dragnet',              key: 'Shift+G', tier: 4, category: 'collect', hudGroup: null,  prereqs: ['dragnet_unlock'],  prereqType: 'hard',   noReminder: true,  triggerEvent: 'TRAWL_START' },
       // F is the furnace joke until a furnace is built (DECISIONS §15): id/key/event stay, the game never nags for it.
       { id: 'manage_forge',       label: 'Furnace',              key: 'F', tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'FORGE_TOGGLE' },
@@ -5758,27 +4512,25 @@ export const Constants = {
       { id: 'awareness_kessler',  label: 'Kessler Event',        key: null, tier: 4, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'KESSLER_CASCADE' },
       { id: 'awareness_weather',  label: 'Space Weather',        key: null, tier: 4, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'WEATHER_EFFECT_START' },
 
-      // ── Tier 5: Mastery (7 skills) ──────────────────────────────────────
+      // ── Tier 5: Mastery ──
       { id: 'nav_hohmann',        label: 'Hohmann Transfer',     key: null,  tier: 5, category: 'nav',       hudGroup: null,  prereqs: ['nav_orbit_mfd'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'AUTOPILOT_ARRIVED' },
       { id: 'collect_arm_pilot',  label: 'DAUGHTER PILOT Mode',       key: '1-4', say: 'Press 1 to 4 to pick a daughter to fly.',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'soft',   noReminder: false, triggerEvent: 'ARM_SELECT' },
       { id: 'mastery_detach',     label: 'Risk Detach',          key: 'X', say: 'Press X to cut a daughter loose.',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: ['collect_deploy'],  prereqType: 'safety', noReminder: false, triggerEvent: 'ARM_DETACHED',       safetyGate: { minCatches: 2 } },
-      // F5: was key 'T' + triggerEvent 'TOOL_CYCLE'. T is now "Target debris"
-      // and TOOL_CYCLE has no emitter; the tool-cycle verb moved to Backquote in
-      // ARM_PILOT/STATION_KEEP, which emits TOOL_SELECTED (ArmUnit cycleTool).
-      // Repointed so the skill is discoverable; glyph updated to the live key.
+      // mastery_tool_cycle: tool-cycle verb is Backquote in ARM_PILOT/STATION_KEEP, which emits TOOL_SELECTED
+      // (ArmUnit cycleTool); TOOL_CYCLE has no emitter.
       { id: 'mastery_tool_cycle', label: 'Tool Cycling',         key: '`', say: 'Press the backtick key for the next tool.', tier: 5, category: 'manage', hudGroup: null, prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'TOOL_SELECTED' },
       { id: 'mastery_ca_dodge',   label: 'CA Manual Override',   key: null,  tier: 5, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'CA_DODGE_EXECUTED' },
       { id: 'mastery_synergy',    label: 'Synergistic Salvage',  key: null,  tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'hard',   noReminder: false, triggerEvent: 'SYNERGY_BONUS' },
       { id: 'mastery_full_sweep', label: 'Full Sweep',           key: null,  tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'hard',   noReminder: false, triggerEvent: 'TRAWL_SWEEP_COMPLETE' },
     ],
 
-    // --- Celebration (ST-3.4: PRACTICED / MASTERED feedback) ---
+    // --- Celebration (PRACTICED / MASTERED feedback) ---
     CELEBRATION: {
         PRACTICE_FLASH_MS: 650,
         MASTERY_FLASH_MS: 1200,
     },
 
-    // --- Discovery Pane (ST-3.1: NOVICE checklist mode) ---
+    // --- Discovery pane (NOVICE checklist mode) ---
     DISCOVERY_PANE: {
         CHECKLIST_SUGGESTION_COUNT: 3,
         CHECKLIST_DONE_LINGER_MS: 3000,
@@ -5786,15 +4538,15 @@ export const Constants = {
     },
   },
 
-  // === HUD PANEL READABILITY (ST-2.2) ===
+  // --- HUD panel readability ---
   SELECTED_ROW_ALPHA: 0.22,             // Target list selected‐row highlight
   SELECTED_ROW_GLOW_ALPHA: 0.4,         // Inset box-shadow glow
   SELECTED_ROW_TEXT_GLOW: 0.5,          // Text-shadow on selected name
   WIREFRAME_BG_ALPHA: 0.95,             // Debris wireframe panel background
-  RETICLE_BRACKET_WIDTH: 2.0,           // Unselected bracket lineWidth (up from 1.5)
-  RETICLE_BRACKET_WIDTH_SELECTED: 3.0,  // Selected bracket lineWidth (up from 2.5)
+  RETICLE_BRACKET_WIDTH: 2.0,           // Unselected bracket lineWidth
+  RETICLE_BRACKET_WIDTH_SELECTED: 3.0,  // Selected bracket lineWidth
 
-  // === DEBRIS VISUAL MATERIALS (ST-2.3) ===
+  // --- Debris visual materials ---
   DEBRIS_MATERIALS: {
     aluminum:   { metalness: 0.9,  roughness: 0.3,  color: 0xC0C0C0 },   // bright reflective
     titanium:   { metalness: 0.85, roughness: 0.4,  color: 0x8A9BA8 },   // darker metallic
@@ -5804,20 +4556,14 @@ export const Constants = {
     steel:      { metalness: 0.85, roughness: 0.55, color: 0x808890 },   // ferromagnetic hull (P2 magnet target)
   },
 
-  // === DEBRIS VISUAL TUMBLE CLAMPING (ST-2.3 → v2e) ===
-  // v2e: Reduced from 30°/s → 10°/s per user feedback ("jagged object rotating fast").
-  // At 60fps that's 0.17°/frame — much smoother perceived motion on small
-  // jagged geometry without compromising the "actively tumbling" feel.
+  // --- Debris visual tumble clamping ---
+  // 10°/s is 0.17°/frame at 60 fps: smooth on small jagged geometry, still reads as tumbling.
   DEBRIS_MAX_VISUAL_TUMBLE_DEG_S: 10,   // max visual tumble rate in °/s (real time) — 3D scene
   WIREFRAME_MAX_TUMBLE_DEG_S: 8,        // max wireframe tumble rate in °/s — lower for Canvas2D comfort
 
-  // === DEBRIS FRAGMENT VARIATION (ST-2.3) ===
   DEBRIS_FRAGMENT_VARIANTS: 7,           // number of distinct fragment geometry variants
 
-  // =========================================================================
-  // SKILL_GATES — Sprint 3 skill-based feature gating thresholds
-  // Replaces removed TutorialSystem stage-number gates.
-  // =========================================================================
+  // SKILL_GATES — skill-based feature gating thresholds
   SKILL_GATES: {
     CONJUNCTION_MIN_CATCHES: 1,          // minimum captures before conjunction alerts fire
     CONJUNCTION_MIN_ELAPSED_S: 120,      // seconds after first capture before conjunction alerts
@@ -5825,35 +4571,31 @@ export const Constants = {
     SUBSYSTEM_MIN_CATCHES: 1,           // minimum captures before subsystem chatter
   },
 
-  // =========================================================================
-  // DEBRIS MAP (ST-4.A — Cluster-ranked strategic sweep planning overlay)
-  // =========================================================================
+  // DEBRIS MAP (cluster-ranked strategic sweep planning overlay)
   DEBRIS_MAP: {
     POLL_INTERVAL_S: 5,       // seconds between cluster re-polls
     MAX_DISPLAY: 5,           // top-N clusters shown in the map
     MAX_DV_MS: 500,           // clusters requiring > this ΔV (m/s) are "unreachable"
-    WINDOW_IMMINENT_S: 10,    // CP-3 — countdown turns cyan + beeps at this T-minus (s)
+    WINDOW_IMMINENT_S: 10,    // countdown turns cyan + beeps at this T-minus (s)
   },
 
-  // =========================================================================
-  // TRIP - the burn to the next debris field (lane trip-melt-1, owner 2026-10-19, DECISIONS §29;
-  // js/systems/TransferTrip.js, FEATURE_FLAGS.TRANSFER_TRIP)
-  // =========================================================================
+  // TRIP — the burn to the next debris field (owner 2026-10-19, DECISIONS §29; js/systems/TransferTrip.js,
+  // FEATURE_FLAGS.TRANSFER_TRIP)
   TRIP: {
-    TIME_RATE: 100,        // world-clock target while the trip burns (the F5 rate, FloorContract timeCap)
-    HANDOFF_RATE: 1,       // world-clock target while a leash hand-off or a carry runs on the trip (the base rate: 10x game time; trip-melt-2 D12b)
+    TIME_RATE: 100,        // world-clock target while the trip burns (FloorContract timeCap)
+    HANDOFF_RATE: 1,       // world-clock target while a leash hand-off or a carry runs on the trip (base rate: 10x game time)
     DV_MPS: 20,            // m/s billed per trip: the gas of a small altitude change (coordinator ESTIMATE, owner may tune); spread over the first MIN_REAL_S
     MIN_REAL_S: 10,        // real seconds: the shortest burn, even with nothing to melt
     MAX_REAL_S: 120,       // real seconds: the longest; an unfinished melt keeps its progress for the next trip
     WAIT_DOCK_MAX_S: 60,   // real seconds the trip waits for daughters to come home; then it burns as the ship points
     REFUSAL_GAP_S: 2,      // real seconds between two "Burning to the next field." refusal lines of one kind
 
-    // ── Fields by height (FEATURE_FLAGS.FIELDS_BY_HEIGHT; TripProfile.js, TransferTrip.js) ────────────────────────────────
+    // ── Fields by height (FEATURE_FLAGS.FIELDS_BY_HEIGHT; TripProfile.js, TransferTrip.js) ──
     // The real thruster (DECISIONS §33 row 10): the Busek BHT-600 pushes 39 mN on xenon at 600 W; the loaded gas pushes
-    // `FUELS[gas].thrustScale` of that (argon 0.46 = 18 mN). The research doc quotes both ("18 / 39 mN at 600 W").
+    // `FUELS[gas].thrustScale` of that (argon 0.46 = 18 mN).
     XENON_THRUST_N: 0.039,
     PROFILE_STEP_S: 60,    // game seconds per step of the trip profile (the integrator of TripProfile.js)
-    PROFILE_MAX_DAYS: 400, // a profile that has not arrived by then does not (drag beats the push, or a typo): not flyable
+    PROFILE_MAX_DAYS: 400, // a profile that has not arrived by then is not flyable (drag beats the push, or a typo)
     // The trip PLAYS the profile (row 10: "sped up to 1-2 minutes"): P = clamp(PLAY_BASE_S + PLAY_PER_DAY_S x days, PLAY_MIN_S,
     // PLAY_MAX_S) real seconds. A 5-day climb plays in 68 s, a 17-day one in 86 s, a 40-day one in 120 s.
     PLAY_BASE_S: 60,
@@ -5863,38 +4605,35 @@ export const Constants = {
     BURN_POSE_MAX_DEG: 146, // the radiators the profile is flown at (THERMAL.FLOWER.POSE_THRUST_MAX_DEG, the burn band's edge)
     TURN_OK_DEG: 10,        // the push counts once her nose is within this of the burn attitude (a descent turns a half turn first)
     TURN_WAIT_MAX_S: 45,    // ... but the profile never waits longer than this for the turn (real s; the turn itself takes about 16 s)
-    // Review R1: at an empty battery (under 0.5 Wh) the ship cannot hold her nose and the trip's turn lets go; the trip asks for
-    // it again once the battery holds this much (Wh). Higher than the off line on purpose: at the trip's 100x clock an eclipse
-    // lasts ~2 real s and the base load takes ~1 Wh of it (measured 2026-10-22, research doc), so 2 Wh rides one out and the
-    // turn does not let go again at the next shadow. No time limit: without power she waits for it.
+    // At an empty battery (under 0.5 Wh) the ship cannot hold her nose and the trip's turn lets go; the trip asks for it
+    // again once the battery holds this much (Wh). Higher than the off line on purpose: at the trip's 100x clock an eclipse
+    // lasts ~2 real s and the base load takes ~1 Wh of it (measured, research doc), so 2 Wh rides one out. No time limit:
+    // without power she waits for it.
     TURN_POWER_WH: 2,
-    // DEV ONLY (URL `?skipTrip=1`, main.js; owner 2026-10-27, to test the missions without the long trip): when above 0, every
-    // between-mission trip (flown or called satellite) plays in this many real seconds, and its dock and turn waits are capped at it.
-    // 0 = off (the real trip). Credits, gas, days, arrival and the next mission are exactly as in a real trip (the gas and the ship's days
-    // follow the share played). The trip does not pause for power. Read by TripProfile.playSeconds / tripWaitCap and TransferTrip.
+    // DEV ONLY (URL `?skipTrip=1`, main.js; owner 2026-10-27): when above 0, every between-mission trip (flown or called
+    // satellite) plays in this many real seconds, and its dock and turn waits are capped at it. 0 = off (the real trip).
+    // Credits, gas, days, arrival and the next mission match a real trip (gas and days follow the share played). The trip does
+    // not pause for power. Read by TripProfile.playSeconds / tripWaitCap and TransferTrip.
     SKIP_S: 0,
   },
 
-  // =========================================================================
-  // HIGH_FIELD - the rows of a HIGH field: dead satellites and rocket stages (Nets step 3 slice 4, lane 4a; DECISIONS §33 row 6:
+  // HIGH_FIELD — the rows of a HIGH field: dead satellites and rocket stages (DECISIONS §33 row 6:
   // "dead satellites and rocket stages at 750-900 km"; DebrisField._spawnWelcomeField, FieldRegistry)
-  // =========================================================================
-  // The same 7 rows lay out every `kind: 'high'` field in FIELDS.LIST, through the field spawn path that lays out WELCOME_FIELD
-  // for a low field: row i of the table is piece i of the field. Per field: 2 upper stages (800-1,500 kg), 2 dead satellites over
-  // 500 kg (the mother net takes them: a daughter's net stops at 500 kg) and 3 dead satellites of 50-500 kg (a large daughter or the
-  // mother net). The field's seed rolls where each piece sits along the track and, inside each row's ranges, how heavy it is: the
-  // SAME roll picks mass and size, so a heavier piece is a bigger one (the four fields differ). Every piece is a real catalogue
-  // class (names below; data/debris-catalog.json at 700-960 km), in HER orbit's tilt (the catalogue's own 70-99 deg is not used),
-  // and every piece fits her net: its largest side stays at or under CATCH_MAX_SIDE_M (a margin under the 6 m mother net,
-  // CAPTURE_NET.LARGE.DIAMETER), its mass under the net's 5,000 kg strength, its tumble under the net's 10 deg/s
-  // limit (DEBRIS_TYPES / assessNetFit). Mass is the exception to "she can catch it": the Meteor 2 row (1,800-2,700 kg) is over her
-  // 1,500 kg catch limit (CAPTURE_NET.LARGE.CATCH_LIMIT_KG, DECISIONS §49): she does not catch it, she is paid for characterising
-  // it. The numbers are ESTIMATES to tune except where a catalogue entry is named: the catalogue's own
-  // stage sizes (SL-14 R/B 6 m, Meteor-1 R/B 6.5 m, SL-8 R/B 6.5 m) are over the mouth, so the stage rows are named estimates
-  // cut to fit (a stage whose side the net cannot swallow would be a piece she could never catch, which is not what a field is for).
+  // The same 7 rows lay out every `kind: 'high'` field in FIELDS.LIST (row i of the table is piece i of the field), through
+  // the path that lays out WELCOME_FIELD for a low field. Per field: 2 upper stages (800-1,500 kg), 2 dead satellites over
+  // 500 kg (the mother net takes them: a daughter's net stops at 500 kg) and 3 dead satellites of 50-500 kg. The field's seed
+  // rolls where each piece sits along the track and, inside each row's ranges, how heavy it is: the SAME roll picks mass and
+  // size, so a heavier piece is a bigger one. Every piece is a real catalogue class (data/debris-catalog.json at 700-960 km),
+  // in HER orbit's tilt (the catalogue's own 70-99 deg is not used), and fits her net: largest side at or under
+  // CATCH_MAX_SIDE_M (a margin under the 6 m mother net, CAPTURE_NET.LARGE.DIAMETER), mass under the net's 5,000 kg strength,
+  // tumble under the net's 10 deg/s limit (DEBRIS_TYPES / assessNetFit).
+  // Mass is the exception: the Meteor 2 row (1,800-2,700 kg) is over her 1,500 kg catch limit
+  // (CAPTURE_NET.LARGE.CATCH_LIMIT_KG, DECISIONS §49): she does not catch it, she is paid for characterising it.
+  // The numbers are ESTIMATES to tune except where a catalogue entry is named: the catalogue's own stage sizes (SL-14 R/B 6 m,
+  // Meteor-1 R/B 6.5 m, SL-8 R/B 6.5 m) are over the mouth, so the stage rows are named estimates cut to fit.
   // Row fields: `types`/`material` (which parked spare a row claims: DebrisField._claimHeavySpare), `massMin..massMax` kg and
-  // `sizeMin..sizeMax` m (one roll), `tumbleDegS` (the spin, deg/s), and the placement in HER frame as for WELCOME_FIELD: `fwdMinM..
-  // fwdMaxM` ahead along-track (m; the seed rolls inside), `latM` right (+), `radM` up (+). Bands never overlap; all of them stay
+  // `sizeMin..sizeMax` m (one roll), `tumbleDegS` (deg/s), and the placement in HER frame as for WELCOME_FIELD: `fwdMinM..
+  // fwdMaxM` ahead along-track (m; the seed rolls inside), `latM` right (+), `radM` up (+). Bands never overlap; all stay
   // inside RESEAT.DIST_M (3,000 m).
   HIGH_FIELD: [
     { name: 'Dead upper stage (SL-14 class)',     types: ['rocketBody'], material: 'aluminum',  massMin: 1200, massMax: 1500, sizeMin: 5.2, sizeMax: 5.5, tumbleDegS: 2.5,
@@ -5926,9 +4665,9 @@ export const Constants = {
       owner: { name: null, status: 'abandoned', launchYear: 2009, notable: 'Its company is gone.' },   // estimate; always set: an abandoned piece is still big
       areaM2: 1.9 },    // box 1.7 x 0.9 x 0.9 m
   ],
-  // BIG_PIECES - what a big piece (a HIGH_FIELD stage or satellite: `owner` set) pays when it is DISPOSED OF, not at the catch (slice 5, lane 5a;
-  // DECISIONS §33 row 16-17; BigPieceValues.js, OrbitLifetime.js). Estimates to tune. Metal in orbit is priced like her gas: the launch price
-  // per kg (`IN_ORBIT_CR_PER_KG`, derived, never a literal). The anchor pays that plus the elevator contract's bonus per kg.
+  // BIG_PIECES — what a big piece (a HIGH_FIELD stage or satellite: `owner` set) pays when DISPOSED OF, not at the catch
+  // (DECISIONS §33 row 16-17; BigPieceValues.js, OrbitLifetime.js). Estimates to tune. Metal in orbit is priced like her gas: the
+  // launch price per kg (`IN_ORBIT_CR_PER_KG`, derived, never a literal). The anchor pays that plus the elevator contract's bonus per kg.
   BIG_PIECES: {
     TYPES: ['rocketBody', 'defunctSat'],                          // the types a big piece can be
     METAL_FRACTION: { rocketBody: 0.6, defunctSat: 0.45 },        // share of the mass that is scrap metal
@@ -5943,9 +4682,9 @@ export const Constants = {
     get IN_ORBIT_CR_PER_KG() { return Constants.LAUNCH_USD_PER_KG / Constants.USD_PER_CREDIT; },          // 70
     get ANCHOR_PREMIUM_CR_PER_KG() { return Constants.ELEVATOR_CONTRACT.BONUS_CREDITS_PER_KG; },           // 5: the anchor's bonus per kg
   },
-  // BIG_MELT - melting a big piece for metal in the four radiator-tip furnaces, on the SHIP'S clock during trip burns (slice 5, lane 5e;
-  // DECISIONS §33 rows 16-17: "4 furnaces, one on each radiator strut", "many hours or days of realtime to melt debris"; BigMelt.js). The
-  // trip's days and the hold set the pace, not the delivery. Every number is an ESTIMATE to tune except where it says measured.
+  // BIG_MELT — melting a big piece for metal in the four radiator-tip furnaces, on the SHIP'S clock during trip burns
+  // (DECISIONS §33 rows 16-17: "4 furnaces, one on each radiator strut", "many hours or days of realtime to melt debris"; BigMelt.js).
+  // The trip's days and the hold set the pace, not the delivery. Every number is an ESTIMATE to tune except where it says measured.
   BIG_MELT: {
     PACKED_KG_M3: 100,          // a cut part is folded wall sections packed to this density; sets the part size (BigMelt.PART_KG) and the bag's size
     REACH_LIMIT_M: 0.70,        // m: a part's drawn reach limit - a margin under the tip's 0.75 m fit (TipCargo MAX_BAG_R_M); its band row is 134 deg
@@ -5960,36 +4699,33 @@ export const Constants = {
   },
   CATCH_MAX_SIDE_M: 5.5,    // m: no HIGH_FIELD piece is longer than this (the mother net's 6 m mouth less a margin)
 
-  // The parked heavy spares (lane 4a, H2a): `DebrisField._generateDebris` builds ONE spare for every row of every high field (4 x 7 = 28),
-  // of that row's type and material, after the live pool. A spare is parked out of play (not alive, not tracked, not drawn, not counted
-  // in any total or mission) until a high field claims it; a stored, claimed or caught spare is parked again on a new run.
-  // PARK_SIZE_M is the size a spare is built at: under the flag size (DEBRIS_VISUAL.FLAG_MIN_SIZE_M), so it never gets a flag overlay.
-  // SEED_XOR keys the spares' own random stream off the boot seed (disjoint from the assembly's and the background's, so neither moves).
+  // The parked heavy spares: `DebrisField._generateDebris` builds ONE spare for every row of every high field (4 x 7 = 28),
+  // of that row's type and material, after the live pool. A spare is parked out of play (not alive, tracked, drawn or counted)
+  // until a high field claims it; a stored, claimed or caught spare is parked again on a new run.
+  // PARK_SIZE_M is under the flag size (DEBRIS_VISUAL.FLAG_MIN_SIZE_M), so a spare never gets a flag overlay.
+  // SEED_XOR keys the spares' own random stream off the boot seed (disjoint from the assembly's and the background's).
   HEAVY_SPARES: {
     PARK_SIZE_M: 0.5,
     SEED_XOR: 0x4EA77A5E,
-    // u20-debris v2: more parked defunctSat bodies for the MISSION satellites (MISSION_SAT below), appended after the 28 so the high
-    // fields' spares keep their ids and draws. A mission satellite claims from THIS pool only and a high field never takes one, so
-    // neither can starve the other; a body whose piece has been cleared (removed from the sky) is parked again and claimable by the
-    // next mission satellite (DebrisField._claimHeavySpare, pool 'mission'). The pool holds `Constants.missionPoolMaterials()` bodies:
-    // one per field (the "absent" rule lets each field hold one uncaught mission satellite, so that many can be out at once) plus
-    // MISSION_POOL_EXTRA for satellites caught and still on their way to credit (fix round 1, F3: the owner's "one dead satellite
-    // every mission" must not run dry). Materials cycle through MISSION_POOL_CYCLE (the two the cast's satellites use).
+    // More parked defunctSat bodies for the MISSION satellites (MISSION_SAT below), appended after the 28 so the high
+    // fields' spares keep their ids and draws. A mission satellite claims from THIS pool only and a high field never takes one;
+    // a body whose piece has been cleared is parked again and claimable by the next mission satellite (DebrisField._claimHeavySpare,
+    // pool 'mission'). The pool holds `Constants.missionPoolMaterials()` bodies: one per field (the "absent" rule lets each
+    // field hold one uncaught mission satellite) plus MISSION_POOL_EXTRA for satellites caught and still on their way to
+    // credit (the owner's "one dead satellite every mission" must not run dry). Materials cycle through MISSION_POOL_CYCLE.
     MISSION_POOL_CYCLE: ['mli_mylar', 'aluminum'],
     MISSION_POOL_EXTRA: 2,
   },
 
-  // =========================================================================
-  // SMALL_GROUP and MISSION_SAT - the small-piece group and the dead satellite of every mission from mission 4 on (lane u20-debris
-  // v2, owner 2026-10-23/24, DECISIONS §38 rows 3 and 4; DebrisField.groupSpec / missionSatSpec / _spawnWelcomeField,
-  // FieldRegistry; docs/research/2026-10-debris-sizes.md). Missions 1-3 are untouched (mission 1 is the training mission).
-  // =========================================================================
+  // SMALL_GROUP and MISSION_SAT — the small-piece group and the dead satellite of every mission from mission 4 on (owner
+  // 2026-10-23/24, DECISIONS §38 rows 3 and 4; DebrisField.groupSpec / missionSatSpec / _spawnWelcomeField, FieldRegistry;
+  // archive/research/2026-10-debris-sizes.md). Missions 1-3 are untouched (mission 1 is the training mission).
   // A group is COUNT_MIN..COUNT_MAX pieces (the field's seed rolls the count) of SIZE_MIN_M..SIZE_MAX_M, every one inside a
-  // flat disc of SPREAD_R_M radius (so any two are at most 2 x SPREAD_R_M = 2.8 m apart, under the 3 m a large daughter's net
+  // flat disc of SPREAD_R_M radius (any two at most 2 x SPREAD_R_M = 2.8 m apart, under the 3 m a large daughter's net
   // scoops: BALL_M), laid out in her frame (along-track and cross-track offsets, the same radial height) so the cloud neither
-  // drifts nor breathes past BALL_M: the pieces share her semi-major axis and the welcome field's drag rule. All numbers
-  // are ESTIMATES to tune. Each piece and the satellite draw from their OWN seeded stream (field seed ^ SEED_XOR, the variant
-  // and the row mixed in), never the global Math.random, so no other piece moves.
+  // drifts nor breathes past BALL_M: the pieces share her semi-major axis and the welcome field's drag rule. All numbers are
+  // ESTIMATES to tune. Each piece and the satellite draw from their OWN seeded stream (field seed ^ SEED_XOR, the variant and
+  // the row mixed in), never the global Math.random, so no other piece moves.
   // `variant` 0 is a low field's OWN group (f375-f450, its content in place of the welcome rows: nearer, OWN_*); variant 1 is
   // the group a mission adds to f350 or a high field (EXTRA_*: in the gap of both tables, 60-90 m from every other row).
   // Rows beyond a field's own table: EXTRA_ROW0 + i is the i-th piece of the extra group, SAT_ROW the extra satellite.
@@ -6010,10 +4746,8 @@ export const Constants = {
     SAT_ROW: 300,
   },
 
-  // =========================================================================
-  // PAIR_FIELDS - pieces laid out in pairs so a two-daughter shot comes up (owner 2026-10-25, DECISIONS §38 row 7; DebrisField.pairSpec,
-  // FieldRegistry._addPairRows; docs/research/2026-10-debris-sizes.md)
-  // =========================================================================
+  // PAIR_FIELDS — pieces laid out in pairs so a two-daughter shot comes up (owner 2026-10-25, DECISIONS §38 row 7;
+  // DebrisField.pairSpec, FieldRegistry._addPairRows; archive/research/2026-10-debris-sizes.md)
   // From mission FROM_MISSION on, the field she starts at gets PAIRS pairs of small fragments (rows ROW0 .. ROW0 + 2 x PAIRS - 1; row
   // ROW0 + 2p + m is member m of pair p), unless it still holds an uncaught one. Pair p is built for the struts of KINDS[p]: the two OPPOSITE
   // struts at ONE angle alpha (equal alpha = the two launch kicks cancel, a pair shot). Each piece sits on the launch line of its strut at
@@ -6021,12 +4755,12 @@ export const Constants = {
   // z = ahead = fwdM; measured with js/test/_fieldsRig.js, which flies her the way a trip ends), so from there both lines hit their pieces
   // with no turn. A pair is "weaver-size" or "spinner-size" by the struts it is built for and the range it sits at: the weaver pair 420-620 m
   // out (a weaver's deploy range is 1,600 m), the spinner pair 135-200 m (a spinner's is 400 m). Every piece is a fragment of the group's
-  // size law (<= 5 kg, so either net takes it); the weaver pair is the bigger. PF1.2 (review 10-25): the pieces drift against her while she
-  // holds her attitude (the radial and cross-track offsets of a piece swing round once an orbit; 1 real s = 10 game s), and the swing is the
-  // piece's offset off her track, 0.9 x range x sin(alpha): so alpha is 152-162 (weaver) and 160-168 (spinner), a spinner pair 135-200 m out.
+  // size law (<= 5 kg, so either net takes it); the weaver pair is the bigger. The pieces drift against her while she holds her attitude
+  // (the radial and cross-track offsets of a piece swing round once an orbit; 1 real s = 10 game s), and the swing is the
+  // piece's offset off her track, 0.9 x range x sin(alpha): so alpha is 152-162 (weaver) and 160-168 (spinner).
   // The two daughters leave 24-62 deg apart (2 x asin(sin alpha)): apart, never parallel. MEASURED (tmp/rv/window.mjs, her nose forward /
-  // nose backwards / rolled 30 deg, LVLH held, 9 fields): both pairs stay hittable (<= 10 deg after a turn of <= 30 deg, roll kept) for >= 180 s
-  // real time (the old bands: 80-110 s on six fields). Own seeded stream (SEED_XOR), so no other piece moves; all numbers are ESTIMATES to tune.
+  // nose backwards / rolled 30 deg, LVLH held, 9 fields): both pairs stay hittable (<= 10 deg after a turn of <= 30 deg, roll kept) for
+  // >= 180 s real time. SEED_XOR gives its own seeded stream; all numbers are ESTIMATES to tune.
   // HINGE_R_M / HINGE_Z_M are the strut hinge ring's radius and height in the ship frame (measured with strutTipMeters; test-PairFields
   // re-measures them against the live ship); the strut is OCTOPUS_V5.STRUT_LENGTH long.
   PAIR_FIELDS: {
@@ -6056,21 +4790,19 @@ export const Constants = {
     SEED_XOR: 0x5A7E111E,
   },
 
-  // =========================================================================
-  // FIELDS - the debris fields, stacked by height in the start orbit's tilt and node (Nets step 3 slice 2b,
-  // DECISIONS §33 row 6; js/systems/FieldRegistry.js, FEATURE_FLAGS.FIELDS_BY_HEIGHT)
-  // =========================================================================
-  // The start field (350 km, mission 1) is today's welcome field, unchanged. The four small fields above it follow row 6:
-  // "small pieces at 350-450 km" in the SAME tilt and node as the start orbit (tilting costs 134 m/s per degree, research doc).
-  // The START field holds PIECES pieces laid out like DebrisField's WELCOME_FIELD rows (3-10 kg fragments and a cubesat, the rows' own
-  // masses); `seed` fixes the along-track rolls of the free rows, so the same field always looks the same.
-  // u20-debris v2 (DECISIONS §38 row 4): each of the four other low fields holds ONE small-piece group (SMALL_GROUP: 8-12 pieces of
-  // 0.10-0.30 m inside 3 m; the count is `smallGroupCount(seed)`) in place of the welcome rows, from its own seeded stream; and from
-  // mission 4 on the mission adds to the field it starts at the extras SMALL_GROUP / MISSION_SAT describe (rows 200+ and 300).
-  // Slice 4 (lane 4a): every field has a `kind`. `low` = the WELCOME_FIELD rows above (PIECES of them); `high` = the HIGH_FIELD rows
-  // (one piece per row: HIGH_FIELD.length). A field with no `kind` is `low`. Four high fields at 750-900 km (row 6: "dead
-  // satellites and rocket stages at 750-900 km"): 7 start + the four low groups (8-12 each: 8 to 12 x 4 = 32-48; 40 for the seeds as listed)
-  // + 28 high = about 75 pieces (before the mission extras), and a run is won at 60 (WIN_DEBRIS_COUNT).
+  // FIELDS — the debris fields, stacked by height in the start orbit's tilt and node (DECISIONS §33 row 6;
+  // js/systems/FieldRegistry.js, FEATURE_FLAGS.FIELDS_BY_HEIGHT)
+  // The start field (350 km, mission 1) is the welcome field. The four small fields above it follow row 6: "small pieces at
+  // 350-450 km" in the SAME tilt and node as the start orbit (tilting costs 134 m/s per degree, research doc).
+  // The START field holds PIECES pieces laid out like DebrisField's WELCOME_FIELD rows (3-10 kg fragments and a cubesat);
+  // `seed` fixes the along-track rolls of the free rows, so the same field always looks the same.
+  // DECISIONS §38 row 4: each of the four other low fields holds ONE small-piece group (SMALL_GROUP; the count is
+  // `smallGroupCount(seed)`) in place of the welcome rows, from its own seeded stream; and from mission 4 on the mission
+  // adds to the field it starts at the extras SMALL_GROUP / MISSION_SAT describe (rows 200+ and 300).
+  // Every field has a `kind`: `low` = the WELCOME_FIELD rows (PIECES of them); `high` = the HIGH_FIELD rows (one piece per
+  // row); no `kind` is `low`. Four high fields at 750-900 km (row 6: "dead satellites and rocket stages at 750-900 km").
+  // Total: 7 start + 4 low groups (8-12 each; 40 for the seeds as listed) + 28 high = about 75 pieces before the mission
+  // extras, and a run is won at 60 (WIN_DEBRIS_COUNT).
   // Heights, counts and seeds are ESTIMATES to tune (§33: "counts and prices are estimates to tune").
   FIELDS: {
     PIECES: 7,
@@ -6087,41 +4819,37 @@ export const Constants = {
     ],
   },
 
-  // =========================================================================
-  // RESUPPLY - the resupply satellite (Nets step 3 slice 3, DECISIONS §33 rows 2, 7, 10; js/systems/FieldRegistry.js,
-  // GameFlowManager; FEATURE_FLAGS.FIELDS_BY_HEIGHT)
-  // =========================================================================
-  // Row 7: "Resupply satellite about 150 km above the start fields (about 85 m/s): it berths the mother at her nose collar, its arm
-  // swaps net cartridges, it pumps gas; all buying moves there." One satellite at 500 km (350 -> 500 km = 84.5 m/s, research doc
-  // 2026-10-trips-by-height), in the start orbit's tilt and node like the fields. Slice 4 (lane 4a, H4) adds the second one at 825 km, in
-  // the same tilt and node, between the 800 and 850 km high fields: the same place with the same buying (a trip from one to the other is
-  // an ordinary trip by `planTo`). Both are listed here, in height order; every satellite reader goes through `FieldRegistry.satellites()`.
-  // It is a PLACE, not a field: she is at a field or berthed at a satellite, and nothing is laid out while she is berthed.
-  // CALL_CREDITS is row 7's "Stuck: call it to you for 1,000 credits" (slice 3 lane 3c: the "where next" list's call row,
-  // GameFlowManager._callSatellite). CALL_DAYS_EST is an ESTIMATE, not a measurement: the days a called satellite takes when the
-  // real trip profile to its height cannot be read (the thruster cannot fly it); 16 = the 350 -> 500 km trip's days with drag off
-  // (research doc 2026-10-trips-by-height). The satellite's own thruster is not modelled; with a readable profile the row and the
-  // wait use that profile's days.
+  // RESUPPLY — the resupply satellite (DECISIONS §33 rows 2, 7, 10; js/systems/FieldRegistry.js, GameFlowManager;
+  // FEATURE_FLAGS.FIELDS_BY_HEIGHT)
+  // Row 7: "Resupply satellite about 150 km above the start fields (about 85 m/s): it berths the mother at her nose collar, its
+  // arm swaps net cartridges, it pumps gas; all buying moves there." One satellite at 500 km (350 -> 500 km = 84.5 m/s,
+  // research doc 2026-10-trips-by-height), in the start orbit's tilt and node like the fields. A second one at 825 km, same
+  // tilt and node, sits between the 800 and 850 km high fields: the same place with the same buying (a trip from one to the
+  // other is an ordinary trip by `planTo`). Both are listed here, in height order; every satellite reader goes through
+  // `FieldRegistry.satellites()`. It is a PLACE, not a field: nothing is laid out while she is berthed.
+  // CALL_CREDITS is row 7's "Stuck: call it to you for 1,000 credits" (the "where next" list's call row,
+  // GameFlowManager._callSatellite). CALL_DAYS_EST is an ESTIMATE: the days a called satellite takes when the real trip
+  // profile to its height cannot be read (the thruster cannot fly it); 16 = the 350 -> 500 km trip's days with drag off
+  // (research doc 2026-10-trips-by-height). The satellite's own thruster is not modelled; with a readable profile the row and
+  // the wait use that profile's days.
   RESUPPLY: {
     SATS: [
       { id: 'sat500', altKm: 500, name: 'Resupply satellite' },
-      { id: 'sat825', altKm: 825, name: 'Resupply satellite' },      // slice 4 (lane 4a, H4): the second, near the high fields
+      { id: 'sat825', altKm: 825, name: 'Resupply satellite' },      // the second, near the high fields
     ],
     CALL_CREDITS: 1000,
     CALL_DAYS_EST: 16,
   },
 
-  // =========================================================================
-  // RANGE_MAP - the orbital range map beside the "where next" list (range-map lane, owner 2026-10-25: "an orbital map to clearly
+  // RANGE_MAP — the orbital range map beside the "where next" list (owner 2026-10-25: "an orbital map to clearly
   // understand their range and choices with current fuel and salvage fuel"; "rings around Earth"; js/systems/RangeMapModel.js,
   // js/ui/RangeMap.js). Screens: a 16" MacBook (1728x1117) and a 13" iPad held sideways (about 1366x1024), DECISIONS §32.
-  // =========================================================================
-  // Where it sits (F1.1, 2026-10-25): the LEFT side, in the height column's place (the column yields while the map shows), below the top HUD
-  // strip (about y 0-262), clear of the list (bottom centre: WhereNextList.js BOTTOM_PX, WIDTH_PX, TOP_CLEAR_PX; test-RangeMapModel pins these copies
-  // to the list's own), the floor rail (right edge, mid-height: RAIL_*) and the footer band (REFIT tab, detail slider: top 164 px up). The open
-  // drawer (left, z 35) may cover it: he opened it. The ring sizes are not to scale (rank of height, not kilometres) so eleven rings can be read:
-  // EARTH_FRAC, BREAK_KM and BREAK_EXTRA set the look; the label box is an ESTIMATE of the drawn text (LABEL_CHAR_PX per mono character), the view
-  // draws inside it.
+  // It sits on the LEFT, in the height column's place (the column yields while the map shows), below the top HUD strip
+  // (about y 0-262), clear of the list (bottom centre: WhereNextList.js BOTTOM_PX, WIDTH_PX, TOP_CLEAR_PX; test-RangeMapModel
+  // pins these copies to the list's own), the floor rail (right edge, mid-height: RAIL_*) and the footer band (REFIT tab,
+  // detail slider: top 164 px up). The open drawer (left, z 35) may cover it. Ring sizes are not to scale (rank of height,
+  // not kilometres) so eleven rings can be read: EARTH_FRAC, BREAK_KM and BREAK_EXTRA set the look; the label box is an
+  // ESTIMATE of the drawn text (LABEL_CHAR_PX per mono character), the view draws inside it.
   RANGE_MAP: {
     TOP_PX: 280,              // the map's top edge, below the top HUD strip
     LEFT_PX: 8,               // the left edge (the height column's own: HeightScale SIDE_MIN_PX)
@@ -6175,7 +4903,7 @@ export const Constants = {
       GREY: 'rgba(150,160,170,0.55)',      // a ring she cannot reach (also dashed)
       CLEARED: 'rgba(120,130,140,0.35)',
       HERE: 'rgba(255,225,168,1)',         // her own ring (and her dot)
-      FOCUS: '#4488ff',                    // the focused ring (VisualLaw.COLORS.SELECTION)
+      FOCUS: VisualLaw.COLORS.SELECTION,                    // the focused ring (VisualLaw.COLORS.SELECTION)
       REACH: 'rgba(0,204,255,0.24)',       // the reach band (F1.4: was 0.10, not told from the Earth's glow in the shots)
       REACH_EDGE: 'rgba(130,235,255,0.95)', // its firm outer edge, at the furthest ring she can reach
       REACH_EDGE_SOFT: 'rgba(130,235,255,0.45)', // and its inner edge
@@ -6190,52 +4918,34 @@ export const Constants = {
     },
   },
 
-  // =========================================================================
-  // MISSIONS — ST-4.C Mission Spawn Difficulty Profiles
-  // Each profile applies when missionNumber >= minMission (highest matching wins).
-  // =========================================================================
+  // MISSIONS — mission spawn difficulty profiles. Each profile applies when missionNumber >= minMission (highest matching wins).
   MISSIONS: {
     DEBRIS_PER_MISSION: 5,    // matches existing Math.floor(debrisCleared / 5) + 1
-    // Wave 5 Session E — the chapter ceremony (docs/ladder/08-workbench.md §5
-    // D3; numbers in docs/ladder/01-numbers.md "Depot and chapters"). Both
-    // gate on Constants.LADDER.ENABLED — a ?ladder=0 boot keeps the shipped
-    // catch → comms → 2500 ms → SHOP path byte-identical.
-    // Owner ruling 2026-10-05 (docs/DECISIONS.md §14): after EVERY mission the depot
-    // is an invitation — non-blocking, from chapter 1. false = no forced stop (the
-    // boundary always takes GameFlowManager._openDepotInvitation); true restores the
-    // old chapters-1..FORCED_DEPOT_CHAPTERS card → workbench stop. Ladder off ignores it.
+    // Chapter ceremony (docs/ladder/08-workbench.md §5 D3; numbers in docs/ladder/01-numbers.md "Depot and chapters").
+    // Both gate on Constants.LADDER.ENABLED — a ?ladder=0 boot keeps the catch → comms → 2500 ms → SHOP path byte-identical.
+    // docs/DECISIONS.md §14: after EVERY mission the depot is an invitation — non-blocking, from chapter 1. false = no forced stop
+    // (the boundary always takes GameFlowManager._openDepotInvitation); true gives chapters 1..FORCED_DEPOT_CHAPTERS a card →
+    // workbench stop. Ladder off ignores it.
     FORCED_DEPOT_STOP: false,
     FORCED_DEPOT_CHAPTERS: 3, // the GUIDED chapters 1..N (guidedCluster, per-catch progress line, boss hold rule); the end of each forces the depot stop ONLY when FORCED_DEPOT_STOP is true — otherwise every chapter's depot is an INVITATION
-    COMPLETE_CARD_MS: 2500,   // "MISSION N COMPLETE" card → SHOP dwell (owner decision 1: a fixed dwell, the old silent timer's length); the card holds for this minus TEACHING.FADE_OUT_MS so it has faded when the depot opens
-    START_AFTER_CATCH_MAX_S: 20, // game seconds: the longest the next mission waits, after a boundary catch that is parked at the nose, for that catch to leave it (c2-fifth-catch D2) — cap only; the catch leaving (hand-off done / digested / released) starts it sooner
-    // RESEAT (M1 guidance T6, owner decision 2026-09-09): the welcome-cluster
-    // re-seat safety net in DebrisField._reseatDriftedWelcome — GUIDED chapters
-    // only (the guidedCluster profiles below). A welcomeSpawn piece that has
-    // been farther than DIST_M from the mother for DWELL_S of REAL time (seen
-    // far at every ~2 s scan across the dwell; back in range once resets it)
-    // AND is not being approached (no AUTOPILOT_TARGET_LOCK on it, no daughter
-    // flying to it) is put back on its cone-fan slot ahead of the ship. "Far AND
-    // not being approached" is the whole gate: a piece the autopilot or a
-    // daughter is closing on is never moved, however far. It is a teleport, so
-    // it exists only because a player who cannot finish an early mission may
-    // quit for good (root causes fixed by T1/T2/T4 — this catches the
-    // unforeseen, e.g. a manual impulse). DIST_M sits well outside the 1.4 km
-    // fan + its breathing and inside the 5 km AutoLock search; DWELL_S is
+    COMPLETE_CARD_MS: 2500,   // "MISSION N COMPLETE" card → SHOP dwell (owner decision: a fixed dwell); the card holds for this minus TEACHING.FADE_OUT_MS so it has faded when the depot opens
+    START_AFTER_CATCH_MAX_S: 20, // game seconds: the longest the next mission waits, after a boundary catch parked at the nose, for that catch to leave it — cap only; the catch leaving (hand-off done / digested / released) starts it sooner
+    // RESEAT (owner 2026-09-09): the welcome-cluster re-seat safety net in DebrisField._reseatDriftedWelcome — GUIDED chapters
+    // only (the guidedCluster profiles below). A welcomeSpawn piece that has been farther than DIST_M from the mother for DWELL_S
+    // of REAL time (seen far at every ~2 s scan across the dwell; back in range once resets it) AND is not being approached (no
+    // AUTOPILOT_TARGET_LOCK on it, no daughter flying to it) is put back on its cone-fan slot ahead of the ship. "Far AND not
+    // being approached" is the whole gate: a piece the autopilot or a daughter is closing on is never moved. It is a teleport,
+    // so it exists only because a player who cannot finish an early mission may quit for good; it catches the unforeseen, e.g.
+    // a manual impulse. DIST_M sits well outside the 1.4 km fan + its breathing and inside the 5 km AutoLock search; DWELL_S is
     // wall-clock (player-experience timer), not game time.
     RESEAT: { DIST_M: 3000, DWELL_S: 10 },
-    // guidedCluster (M1 guidance, 2026-09-09): the GUIDED chapters are missions
-    // 1–3 — the same FORCED_DEPOT_CHAPTERS boundary (profiles 'Orientation' +
-    // 'First Operations'). In a guided chapter the welcome cluster is kept
-    // findable: AutoLock falls back to the nearest piece ANYWHERE when the
-    // forward arc is empty (AUTOLOCK.GUIDED_FALLBACK_ANY_ARC) and HOUSTON
-    // posts a per-catch progress line (GameFlowManager); the re-seat safety
-    // net (T6, DebrisField._reseatDriftedWelcome, RESEAT above) reads the same
-    // flag via DebrisField.isGuidedChapter().
-    // Owner rationale: a player who cannot finish an early mission may quit
-    // for good; later missions have many small pieces and some will always
-    // drift — accepted there, so it is false from mission 4 on. Explicit on
-    // EVERY entry; readers treat a missing flag as false
-    // (core/missionProgress.isGuidedChapterNumber, DebrisField.isGuidedChapter).
+    // guidedCluster: the GUIDED chapters are missions 1–3 — the same FORCED_DEPOT_CHAPTERS boundary (profiles 'Orientation' +
+    // 'First Operations'). In a guided chapter the welcome cluster is kept findable: AutoLock falls back to the nearest piece
+    // ANYWHERE when the forward arc is empty (AUTOLOCK.GUIDED_FALLBACK_ANY_ARC) and HOUSTON posts a per-catch progress line
+    // (GameFlowManager); the re-seat net (RESEAT above) reads the same flag via DebrisField.isGuidedChapter().
+    // Later missions have many small pieces and some will always drift — accepted there, so it is false from mission 4 on.
+    // Explicit on EVERY entry; readers treat a missing flag as false (core/missionProgress.isGuidedChapterNumber,
+    // DebrisField.isGuidedChapter).
     PROFILES: [
       {
         minMission: 1,
@@ -6249,9 +4959,9 @@ export const Constants = {
         untracked: 0,         // count of untracked (scan-reveal) debris
         weather: false,       // suppress weather events
         activeSats: false,    // no active satellite hazards
-        collisionWarnings: false, // Phase 3: mission 1 is onboarding — suppress
-                                  // the steady debris-proximity warning strip
+        collisionWarnings: false, // mission 1 is onboarding — suppress the steady debris-proximity warning strip
       },
+
       {
         minMission: 2,
         label: 'First Operations',
@@ -6311,9 +5021,7 @@ export const Constants = {
     ],
   },
 
-  // =========================================================================
-  // MISSION EVENTS — ST-4.D Dynamic Mid-Mission Event System
-  // =========================================================================
+  // MISSION EVENTS — dynamic mid-mission events
   MISSION_EVENTS: {
     COOLDOWN_MS: 30000,                         // minimum 30s between repeated events of same type
     SYNERGY_TIMER_MS: 300000,                   // 5 minutes for synergy opportunity window
@@ -6322,17 +5030,13 @@ export const Constants = {
     HYDRAZINE_BONUS_POINTS: 500,                // points awarded for hydrazine hazard discovery
   },
 
-  // =========================================================================
-  // CH5 ISS CONJUNCTION BOSS — MISSION_ARC_IMPLEMENTATION.md §6
-  //
-  // The "protect-the-asset" boss. On SHOP_DEPLOY into mission 5, spawn FRAG_COUNT
-  // Cosmos-1408 fragments in the ISS forward track and start a TCA_HOURS game-time
-  // countdown. Outcomes (emergent from play — no modal):
+  // CH5 ISS CONJUNCTION BOSS (MISSION_ARC_IMPLEMENTATION.md §6)
+  // The "protect-the-asset" boss. On SHOP_DEPLOY into mission 5, spawn FRAG_COUNT Cosmos-1408 fragments in the ISS forward
+  // track and start a TCA_HOURS game-time countdown. Outcomes (emergent from play — no modal):
   //   • Intercept: clear all frags before TCA → +INTERCEPT_BONUS_KG + credits + SAVER codex
   //   • Decline:   clear none (or ISS_BOSS_DECLINE) → ISS autonomous reboost, PDAM codex, no penalty
   //   • Miss:      cleared ≥1 but not all by TCA → ISS reboosts, HYDRAZINE codex, bonus lost
   //                (the frags they DID clear still score normally via the capture flow)
-  // =========================================================================
   ISS_BOSS: {
     MISSION: 5,                       // chapter / mission number that triggers the boss
     FRAG_COUNT: 6,                    // Cosmos-1408 threat fragments to clear
@@ -6354,18 +5058,13 @@ export const Constants = {
     },
   },
 
-  // =========================================================================
-  // CH9 STARLINK FRAGMENTATION BOSS — MISSION_ARC §6
-  //
-  // The "race-the-cascade" boss. On SHOP_DEPLOY into mission 9, burst-spawn
-  // FRAG_COUNT Starlink fragments and start a WINDOW_MIN game-time timer. The
-  // tension (a Kessler cascade) is narrative comms — the boss does NOT force a
-  // KesslerSystem game-over (decline/failure is never a hard punishment, §9).
-  // Outcomes (emergent from play):
+  // CH9 STARLINK FRAGMENTATION BOSS (MISSION_ARC §6)
+  // The "race-the-cascade" boss. On SHOP_DEPLOY into mission 9, burst-spawn FRAG_COUNT Starlink fragments and start a WINDOW_MIN
+  // game-time timer. The tension (a Kessler cascade) is narrative comms — the boss does NOT force a KesslerSystem game-over
+  // (decline/failure is never a hard punishment, §9). Outcomes (emergent from play):
   //   • Contained: clear all frags before the window → +CONTAIN_BONUS_KG + credits + CONTAINED codex
   //   • Partial:   clear ≥ PARTIAL_FRACTION by the window → reduced credit, no codex penalty
   //   • Cascade:   clear < PARTIAL_FRACTION by the window → CASCADE codex, bonus lost
-  // =========================================================================
   STARLINK_BOSS: {
     MISSION: 9,
     FRAG_COUNT: 35,                   // fragments burst-spawned
@@ -6389,50 +5088,44 @@ export const Constants = {
     },
   },
 
-  // === COMMS SYSTEM (ST-5.1) ===
+  // COMMS
   COMMS: {
     CHANNELS: ['CMD', 'ALERT', 'HOUSTON', 'SCI', 'FLAVOR', 'MISSION'],
     CHANNEL_COLORS: {
-      CMD: '#ffaa00',
+      CMD: VisualLaw.COLORS.CAUTION,
       ALERT: '#ff4444',
       HOUSTON: '#88ffcc',
-      SCI: '#00ccff',
+      SCI: VisualLaw.COLORS.INFO,
       FLAVOR: '#888888',
       MISSION: '#ffd700',
     },
     DEFAULT_CHANNEL: 'FLAVOR',
     COALESCE_THRESHOLD_COUNT: 3,
     COALESCE_WINDOW_MS: 2000,
-    // CP-4 guidance arbiter — graduated post-onboarding suppression ramp (s of play).
+    // Guidance arbiter — graduated post-onboarding suppression ramp (s of play).
     // Tier 1 (0→TIER2) HOUSTON+MISSION only · Tier 2 (→TIER3) +ALERT+CMD · Tier 3 all.
     SUPPRESSION_RAMP: { TIER2_AFTER_S: 30, TIER3_AFTER_S: 60 },
-    // q3-mother-pane D3: the 'line' step's height is MOTHER's collapsed height (VITALS_COLLAPSED_HEIGHT_PX, js/ui/hud/VitalsPane.js —
+    // The 'line' step's height is MOTHER's collapsed height (VITALS_COLLAPSED_HEIGHT_PX, js/ui/hud/VitalsPane.js —
     // Constants must not import UI); it shows PANE_LINES_MIN messages (≥1 full message always visible).
-    // rev 3 — the right arm's top follows it; 144/300 on demand
+    // The right arm's top follows it; 144/300 on demand.
     PANE_STEP_DEFAULT: 'line',
     PANE_HEIGHT_PX: 144,
-    PANE_WIDTH_PX: 480,                   // fits ~70 chars per line (UX-2 #11)
+    PANE_WIDTH_PX: 480,                   // fits ~70 chars per line
     PANE_LINES_MIN: 2,                    // 'line' step message count (2 → at least one full message visible)
-    PANE_LINES_DEFAULT: 4,                // collapsed line count (UX-2 #11)
-    PANE_LINES_EXPANDED: 10,              // expanded line count (UX-2 #10)
+    PANE_LINES_DEFAULT: 4,                // collapsed line count
+    PANE_LINES_EXPANDED: 10,              // expanded line count
     PANE_EXPAND_HEIGHT_PX: 300,
     PANE_EXPAND_HOLD_MS: 3000,
-    // comms-min-show (owner 2026-10-20, "Each stays 3 seconds"): the pane shows messages one at a time - a new one
+    // owner 2026-10-20 ("Each stays 3 seconds", docs/DECISIONS.md §18 row 7): the pane shows messages one at a time - a new one
     // replaces the newest row only after the last one has been on screen PANE_MIN_SHOW_S seconds; warnings jump the
     // queue. At most PANE_QUEUE_MAX messages wait; past that the oldest waiting one is skipped (it stays in the log).
     PANE_MIN_SHOW_S: 3,
     PANE_QUEUE_MAX: 4,
     STRIPE_WIDTH_PX: 3,
-    // (UX-11 #9: C_HOLD_THRESHOLD_MS / C_TAP_MAX_MS / RADIAL_* removed with
-    // the C-hold radial menu — C acts on keydown with zero delay.)
   },
 
-  // ============================================================================
-  // ST-6.6: TECHNOLOGY READINESS LEVEL (TRL) — NASA scale 1–9
-  // Used for colour-coded badges on Codex entries, Shop upgrades, and the
-  // active-tool indicator. Display-only metadata — NEVER used for gating.
-  // See BIG_PICTURE.md §25 for TRL rationale and V5 composition baseline.
-  // ============================================================================
+  // TRL — NASA technology readiness level, scale 1–9. Used for colour-coded badges on Codex entries, Shop upgrades, and the
+  // active-tool indicator. Display-only metadata — NEVER used for gating. See BIG_PICTURE.md §25 for TRL rationale.
   TRL: {
     // --- Tier threshold levels ---
     FLIGHT_PROVEN_MIN: 9,      // exactly TRL 9 → flight-proven
@@ -6457,10 +5150,8 @@ export const Constants = {
     MAX_VALID: 9,
   },
 
-  // ============================================================================
-  // ST-6.1: OFFLINE CATALOGUE (CatalogLoader paths + timeouts)
-  // Paths are relative to index.html; loader issues parallel fetches from META.
-  // ============================================================================
+  // CATALOG — offline catalogue (CatalogLoader paths + timeouts). Paths are relative to index.html; the loader issues
+  // parallel fetches from META.
   CATALOG: {
     BASE_PATH: './data/',
     META_FILE: 'META.json',
@@ -6468,99 +5159,73 @@ export const Constants = {
     MAX_PARALLEL_FETCHES: 8,
   },
 
-  // ============================================================================
-  // ST-6.1: DEBRIS FIELD ALTITUDE BANDS (7-band layout — VLEO + MEO added)
-  // Weights sum to ~1.0. Shared by interactive debris + background Points.
+  // DEBRIS — field altitude bands (7 bands: VLEO … MEO). Weights sum to ~1.0, shared by interactive debris + background Points.
   // Real catalogue entries predominantly occupy VLEO (ISS-class), LEO, and MEO.
-  // ============================================================================
   DEBRIS: {
     INTERACTIVE_COUNT: 800,
     BACKGROUND_COUNT: 5000,
-    // S11(a) — a field is ONE orbital regime (plan 1786401864178-cargo-continuity
-    // S11; register item 38). The interactive field is assembled inside the
-    // player's start plane: altitude = the containing ALT_BANDS cell below,
-    // inclination/RAAN = the start orbit ± these half-widths. ±0.5° keeps the
-    // worst-case pairwise plane difference ≈ 1° (~135 m/s at VLEO) — neighbours,
-    // not the km/s strangers the owner ruled out ("objects in different planes
-    // are not in the same field"). Catalogue admission filters on alt+inc ONLY:
-    // real entries keep their real RAANs (the Zenit shell's RAANs really are
-    // spread 60° apart — measured in data/debris-catalog.json).
+    // A field is ONE orbital regime. The interactive field is assembled inside the player's start plane: altitude = the
+    // containing ALT_BANDS cell below, inclination/RAAN = the start orbit ± these half-widths. ±0.5° keeps the worst-case
+    // pairwise plane difference ≈ 1° (~135 m/s at VLEO) — neighbours, not the km/s strangers the owner ruled out ("objects in
+    // different planes are not in the same field"). Catalogue admission filters on alt+inc ONLY: real entries keep their real
+    // RAANs (the Zenit shell's RAANs really are spread 60° apart — measured in data/debris-catalog.json).
     FIELD_REGIME: {
       INC_TOL_DEG: 0.5,
       RAAN_TOL_DEG: 0.5,
     },
-    // S11(b) — TWO POPULATIONS, TWO RULES (plan 1786401864178-cargo-continuity
-    // §5 S11 piece (b)). The field = a dense power-law BACKGROUND/HAZARD cloud
-    // (numerous, uncapturable, feeds ConjunctionSystem + the look of the sky)
-    // + exactly DEBRIS_PER_MISSION authored FOREGROUND targets with a
-    // three-act shape (owner: "the first mission needs a beginning, middle,
-    // end… the whale as act three, not as 24 % of the furniture").
+    // TWO POPULATIONS, TWO RULES. The field = a dense power-law BACKGROUND/HAZARD cloud (numerous, uncapturable, feeds
+    // ConjunctionSystem + the look of the sky) + exactly DEBRIS_PER_MISSION authored FOREGROUND targets with a three-act
+    // shape (owner: "the first mission needs a beginning, middle, end… the whale as act three, not as 24 % of the furniture").
     //
-    // The hazard cloud's fragment SIZES follow the NASA Standard Breakup
-    // Model cumulative count law N(≥Lc) ∝ Lc^−LAMBDA (collision 1.71 /
-    // explosion 1.6; characteristic length Lc). Range is sub-half-metre
-    // shards: honestly uncapturable (no net weave or grapple engages them) —
-    // that is what makes the cloud furniture and a collision hazard, not a
-    // target list. The mass LAW for interactive debris shipped in S11(c)
-    // (MASS_LAW below; register item 39 CLOSED).
+    // The hazard cloud's fragment SIZES follow the NASA Standard Breakup Model cumulative count law N(≥Lc) ∝ Lc^−LAMBDA
+    // (collision 1.71 / explosion 1.6; characteristic length Lc). Range is sub-half-metre shards: honestly uncapturable (no
+    // net weave or grapple engages them) — that is what makes the cloud furniture and a collision hazard, not a target
+    // list. The mass LAW for interactive debris is MASS_LAW below.
     //
-    // u20-debris (owner 2026-10-23, DECISIONS §38 row 1: "the background cloud becomes mostly 2–10 cm pieces, as in real space;
-    // only pieces over 10 cm count as known to radar. Nothing new to catch, the sky looks the same"): from mission
+    // owner 2026-10-23, DECISIONS §38 row 1: "the background cloud becomes mostly 2–10 cm pieces, as in real space;
+    // only pieces over 10 cm count as known to radar. Nothing new to catch, the sky looks the same". From mission
     // LATER_FROM_MISSION the shards span SIZE_MIN_M–SIZE_MAX_M (2–50 cm) and a shard is `tracked` iff it is TRACKED_MIN_M or
     // bigger (ESA/NASA: radar follows pieces from about 10 cm; research doc 2026-10-debris-sizes §2). Mission 1 is left alone
-    // (§38 rows 1 and 4): its cloud keeps the old 0.10–0.50 m edge (FIRST_SIZE_MIN_M), all untracked, and so does the sky's
-    // dot cloud (DOT_SIZE_MIN_M: the dots' look is unchanged). Both laws read the SAME seeded draw, so the stream never moves.
-    // MASS_MIN_KG: the mass floor of a background shard (fragment massMin 0.01 kg is shared with the mission targets and
-    // stays); a 2 cm shard follows the mass law, about 0.002 kg.
+    // (§38 rows 1 and 4): its cloud keeps the 0.10–0.50 m edge (FIRST_SIZE_MIN_M), all untracked, and so does the sky's
+    // dot cloud (DOT_SIZE_MIN_M). Both laws read the SAME seeded draw, so the stream never moves.
     HAZARD_CLOUD: {
       LAMBDA: 1.71,          // SBM collision exponent (explosion: 1.6 — the band is [1.6, 1.71])
       SIZE_MIN_M: 0.02,      // m — lower edge of the shard cloud from mission LATER_FROM_MISSION (real: mostly 2–10 cm)
       SIZE_MAX_M: 0.5,       // m — upper edge (sub-half-metre ⇒ uncapturable-class)
-      FIRST_SIZE_MIN_M: 0.1, // m — lower edge in mission 1 (unchanged: DECISIONS §38 rows 1 and 4)
-      DOT_SIZE_MIN_M: 0.1,   // m — the 5000 sky dots' size mapping keeps today's edge (the sky looks the same)
+      FIRST_SIZE_MIN_M: 0.1, // m — lower edge in mission 1 (DECISIONS §38 rows 1 and 4)
+      DOT_SIZE_MIN_M: 0.1,   // m — the 5000 sky dots' size mapping keeps this edge (the sky looks the same)
       LATER_FROM_MISSION: 2, // the shard law above applies from this mission on
       TRACKED_MIN_M: 0.1,    // m — a shard of this size or bigger is tracked (known to radar); smaller is not
-      MASS_MIN_KG: 0.0001,   // kg — floor of a background shard's mass from mission LATER_FROM_MISSION (the law gives ≈0.002 kg at 2 cm)
+      MASS_MIN_KG: 0.0001,   // kg — floor of a background shard's mass from mission LATER_FROM_MISSION (the law gives ≈0.002 kg at 2 cm; fragment massMin 0.01 kg is shared with the mission targets and stays)
     },
-    // S11(c) — THE MASS LAW (plan 1786401864178-cargo-continuity §5 S11 piece
-    // (c); register item 39). NASA Standard Breakup Model (Johnson et al. 2001,
-    // "NASA's New Breakup Model of EVOLVE 4.0", Adv. Space Res. 28(9):1377):
-    //   • cross-sectional area from characteristic length: A = AREA_COEF·Lc^AREA_EXP
-    //     (the SBM's Lc↔A relation, Lc = (A/AREA_COEF)^(1/AREA_EXP));
-    //   • area-to-mass ratio χ = log10(A/M [m²/kg]) log-normal — collision
-    //     fragments in the shard regime carry μ = −0.9, σ = 0.45 (the SOCIT/
-    //     on-orbit collision fit; the <8 cm explosion fit is size-dependent and
-    //     deliberately not modelled — the cloud is a collision-fragment population);
-    //   • hazard mass = A / 10^χ (CatalogConverter.sampleSbmMassKg — size is
-    //     drawn first, mass DERIVES; the measured cumulative mass exponent lands
-    //     ≈0.6 over the cloud's range, inside the SBM band 0.6–0.85 — the
-    //     log-normal scatter flattens the λ/AREA_EXP ≈ 0.853 asymptote).
-    // MASS_CUM_EXP is the interactive fragment/missionDebris draw's cumulative
-    // mass exponent N(≥m) ∝ m^−MASS_CUM_EXP (inverse-CDF, same clamped discipline
-    // as samplePowerLawSize): the collision asymptote λ/AREA_EXP = 1.71/2.0047
-    // ≈ 0.853. Intact bodies are NOT a power law — they are launch history and
-    // draw from the catalogue's real masses (CatalogConverter.buildIntactMassPools).
+    // THE MASS LAW. NASA Standard Breakup Model (Johnson et al. 2001, "NASA's New Breakup Model of EVOLVE 4.0",
+    // Adv. Space Res. 28(9):1377):
+    //   • cross-sectional area from characteristic length: A = AREA_COEF·Lc^AREA_EXP (the SBM's Lc↔A relation,
+    //     Lc = (A/AREA_COEF)^(1/AREA_EXP));
+    //   • area-to-mass ratio χ = log10(A/M [m²/kg]) log-normal — collision fragments in the shard regime carry μ = −0.9,
+    //     σ = 0.45 (the SOCIT/on-orbit collision fit; the <8 cm explosion fit is size-dependent and deliberately not
+    //     modelled — the cloud is a collision-fragment population);
+    //   • hazard mass = A / 10^χ (CatalogConverter.sampleSbmMassKg — size is drawn first, mass DERIVES; the measured
+    //     cumulative mass exponent lands ≈0.6 over the cloud's range, inside the SBM band 0.6–0.85 — the log-normal scatter
+    //     flattens the λ/AREA_EXP ≈ 0.853 asymptote).
+    // MASS_CUM_EXP is the interactive fragment/missionDebris draw's exponent N(≥m) ∝ m^−MASS_CUM_EXP (inverse-CDF, same
+    // clamped discipline as samplePowerLawSize): the collision asymptote λ/AREA_EXP = 1.71/2.0047 ≈ 0.853. Intact bodies are
+    // NOT a power law: they draw from the catalogue's real masses (CatalogConverter.buildIntactMassPools).
     MASS_LAW: {
       AREA_COEF: 0.556945,   // m² — SBM area–length coefficient
       AREA_EXP: 2.0047,      // SBM area–length exponent
-      AM_LOG10_MEAN: -0.9,   // μ of log10(A/M [m²/kg]) — collision fragments
-      AM_LOG10_SIGMA: 0.45,  // σ of log10(A/M [m²/kg]) — collision fragments
+      AM_LOG10_MEAN: -0.9,   // μ of log10(A/M [m²/kg]) (collision fragments)
+      AM_LOG10_SIGMA: 0.45,  // σ of log10(A/M [m²/kg]) (collision fragments)
       MASS_CUM_EXP: 0.85,    // cumulative mass exponent, interactive fragment draw
     },
-    // The authored foreground cast — exactly MISSIONS.DEBRIS_PER_MISSION rows
-    // (drift-guarded in test-DebrisFieldPopulations.js), in engagement order:
-    //   act 1 — one easy warm-up: small, slow, every tool works.
-    //   act 2 — three pieces that demand the tools and a decision.
-    //   act 3 — the finale: the intact body (mother-net only; the ONE member
-    //           over TOOL_RECOMMENDATION.MOTHER_MIN_MASS).
-    // Mass/size/tumble are AUTHORED (not drawn) — this is the only place
-    // S11(b) reshapes type/mass/material; orbits are still the seeded
-    // in-regime draw from DebrisField. A real in-band catalogue whale
-    // (> MOTHER_MIN_MASS) substitutes the act-3 row when one exists
-    // (buildRegimeDebrisSeeds owns the pick; the start regime has none —
-    // register item 51 — so the production cast is all-procedural today).
-    // altKm is authored ONLY where gate-critical (see row 4's note); every
-    // other orbit element stays the seeded in-band draw.
+    // The authored foreground cast — exactly MISSIONS.DEBRIS_PER_MISSION rows (drift-guarded in test-DebrisFieldPopulations.js),
+    // in engagement order: act 1 — one easy warm-up (small, slow, every tool works); act 2 — three pieces that demand the
+    // tools and a decision; act 3 — the finale: the intact body (mother-net only; the ONE member over
+    // TOOL_RECOMMENDATION.MOTHER_MIN_MASS).
+    // Mass/size/tumble are AUTHORED (not drawn); orbits are still the seeded in-regime draw from DebrisField. A real in-band
+    // catalogue whale (> MOTHER_MIN_MASS) substitutes the act-3 row when one exists (buildRegimeDebrisSeeds owns the pick; the
+    // start regime has none, so the production cast is all-procedural). altKm is authored ONLY where gate-critical (see the
+    // cubesat row); every other orbit element stays the seeded in-band draw.
     FOREGROUND_CAST: [
       { act: 1, type: 'missionDebris', massKg: 1.5, sizeM: 0.35, tumbleDeg: 4, material: 'composite',
         note: 'warm-up — slow small operational debris; lasso/spinner/daughter all work' },
@@ -6584,10 +5249,7 @@ export const Constants = {
     ],
   },
 
-  // ============================================================================
-  // ST-6.2: DEBRIS VISUAL — Type texture atlas + Flag decal atlas constants
-  // Procedural Canvas2D textures; no external image files.
-  // ============================================================================
+  // DEBRIS_VISUAL — type texture atlas + flag decal atlas (procedural Canvas2D textures; no external image files)
   DEBRIS_VISUAL: {
     ATLAS_SIZE: 2048,           // px; type texture atlas dimension (2048 = crisp surface detail on close approach)
     FLAG_ATLAS_SIZE: 1024,      // px; flag decal atlas dimension (1024 = crisp decals up close)
@@ -6612,86 +5274,70 @@ export const Constants = {
     // Wireframe / textured toggle
     DEFAULT_MODE: 'textured',   // 'textured' | 'wireframe'
 
-    // Item 12 (2026-06-12): flag decal gating + physical sizing.
-    // Flags are SIZE-gated: any object at least this wide carries a national
-    // marking (rocket bodies, defunct sats, and large derelict satellites the
-    // catalog tags "debris"). Small operational debris (missionDebris) and
-    // sub-threshold fragments never get flags:
+    // Flags are SIZE-gated: any object at least this wide carries a national marking (rocket bodies, defunct sats, and
+    // large derelict satellites the catalog tags "debris"). Small operational debris (missionDebris) and sub-threshold
+    // fragments never get flags:
     FLAG_MIN_SIZE_M: 2,         // m — fragments/small junk never get flags
-    // Decal width = clamp(sizeMeter × FACTOR, MIN..MAX) metres (was a fixed
-    // 0.7-local-unit plane that read tiny on an 8 m rocket body):
+    // Decal width = clamp(sizeMeter × FACTOR, MIN..MAX) metres:
     FLAG_SIZE_FACTOR: 0.12,
     FLAG_DECAL_MIN_M: 0.4,
     FLAG_DECAL_MAX_M: 1.6,
   },
 
-  // ============================================================================
-  // ST-6.5: TEACHING SYSTEM — First-encounter contextual overlays
-  // Non-blocking, show-once teaching moments triggered by game events.
-  // ============================================================================
+  // TEACHING — first-encounter contextual overlays: non-blocking, show-once teaching moments triggered by game events.
   TEACHING: {
     OVERLAY_WIDTH_PX: 400,
     OVERLAY_MIN_WIDTH_PX: 280,
     OVERLAY_TOP_MARGIN_PX: 20,
-    // u13-polish D1 (screens at least OVERLAY_WIDE_MIN_PX wide; narrower = phones, frozen, keep the 20 px margin):
-    // the card sits OVERLAY_GAP_PX below the lowest of the score strip, the line under it, the collision warning and
-    // the autopilot badge (drawn on the canvas at y 92 + 19 = 111, js/ui/TargetReticle.js AP_BADGE_TOP_PX). The strip fallback is used only when the strip's element
-    // is not in the page: top 8 + 28 tall, times the HUD scale (--hud-scale 1.25 on big screens).
+    // Screens at least OVERLAY_WIDE_MIN_PX wide (narrower = phones, frozen: keep the 20 px margin): the card sits
+    // OVERLAY_GAP_PX below the lowest of the score strip, the line under it, the collision warning and the autopilot badge
+    // (drawn on the canvas at y 92 + 19 = 111, js/ui/TargetReticle.js AP_BADGE_TOP_PX). The strip fallback is used only when
+    // the strip's element is not in the page: top 8 + 28 tall, times the HUD scale (--hud-scale 1.25 on big screens).
     OVERLAY_WIDE_MIN_PX: 920,
     OVERLAY_GAP_PX: 8,
     OVERLAY_STRIP_TOP_PX: 8,
     OVERLAY_STRIP_H_PX: 28,
     OVERLAY_AP_BADGE_BOTTOM_PX: 111,
     OVERLAY_BG: 'rgba(0, 10, 20, 0.85)',
-    OVERLAY_BORDER_COLOR: '#00ccff',
-    OVERLAY_TITLE_COLOR: '#00ccff',
+    OVERLAY_BORDER_COLOR: VisualLaw.COLORS.INFO,
+    OVERLAY_TITLE_COLOR: VisualLaw.COLORS.INFO,
     OVERLAY_BODY_COLOR: '#ccddee',
     FADE_IN_MS: 300,
     FADE_OUT_MS: 500,
     MAX_QUEUE_DEPTH: 3,
     DEFAULT_DURATION_MS: 7000,
     PERSISTENCE_KEY: 'teachingSeen',
-    QUEUE_DRAIN_INTERVAL_S: 6,   // CP-4 §4 — drain queued overlays at ≤1 per this many seconds
-    TOTAL_MOMENTS: 29,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap; Phase 0.6: +first_high_tumble_target/first_despin_in_spec; Phase 1.5: +first_detail_scan; Phase 2: +first_aspect_target; Phase 3b: +first_fragmentation; Net ladder: +first_small_daughter_deploy/first_large_daughter_deploy/first_whale_target/first_deltav_waste; cargo-continuity S4: +first_net_park; item 100 (2026-08-21): +speed_dial (29→30); t6: -the strategic-map moment (30→29)
+    QUEUE_DRAIN_INTERVAL_S: 6,   // drain queued overlays at ≤1 per this many seconds
+    TOTAL_MOMENTS: 29,           // number of teaching moments (test-pinned)
   },
 
-  // ============================================================================
-  // ZOOM LADDER (M0 — docs/ladder/00-spec.md)
-  // Master switches only. Deliberately NOT in FEATURE_FLAGS (test-Constants.js
-  // pins that object at exactly 43 entries) — named block per the
-  // TEACHING/ONBOARDING precedent. Floor data lives in js/core/FloorContract.js
-  // (pure data, validated by js/test/test-FloorContract.js); visual rules in
-  // js/core/VisualLaw.js.
-  // ============================================================================
+  // ZOOM LADDER (docs/ladder/00-spec.md) — master switches only. Deliberately NOT in FEATURE_FLAGS (test-Constants.js
+  // pins that object at exactly 43 entries) — named block per the TEACHING/ONBOARDING precedent. Floor data lives in
+  // js/core/FloorContract.js (pure data, validated by js/test/test-FloorContract.js); visual rules in js/core/VisualLaw.js.
   LADDER: {
-    ENABLED: true,           // master switch — ON since 2026-09-02 (owner decision, early M6 flip; docs/ladder/03-plan.md); ?ladder=0 forces off for this boot (A/B), ?ladder=1 is now a no-op
-    DEV_FULL_ACCESS: true,   // INERT since the Session H renumber: no shipping floor carries entryRequiresDock (03-plan Session H FINDINGS (d)); the ZoomLadder gate mechanism stays live for the M6 campaign-gating roadmap
-    INVERT_SCROLL: false,    // S2 WheelRouter: invert scroll direction (00-spec §4 "an invert setting exists")
-    COPILOT_VOICE: false,    // owner 2026-09-08 rev 3: the Autopilot voice is off by default; a constant, not a setting
+    ENABLED: true,           // master switch (owner decision; archive/ladder/03-plan.md); ?ladder=0 forces off for this boot (A/B), ?ladder=1 is a no-op
+    DEV_FULL_ACCESS: true,   // INERT: no shipping floor carries entryRequiresDock; the ZoomLadder gate mechanism stays live for the campaign-gating roadmap
+    INVERT_SCROLL: false,    // WheelRouter: invert scroll direction (00-spec §4 "an invert setting exists")
+    COPILOT_VOICE: false,    // owner 2026-09-08: the Autopilot voice is off by default; a constant, not a setting
   },
 
-  // ============================================================================
-  // MISSION COACH (CP-4 — MISSION_ARC_IMPLEMENTATION.md §2)
-  //
-  // The per-chapter coaching engine. Triggers on SHOP_DEPLOY into a mission,
-  // runs that mission's beat table on top of the guidance arbiter (every beat's
-  // comms is `_postOnboarding`-tagged; interactive beats emit MISSION_BEAT_*).
-  // A chapter is DATA, not code: add/split chapters by editing BEATS_BY_MISSION.
+  // MISSION COACH (MISSION_ARC_IMPLEMENTATION.md §2) — the per-chapter coaching engine. Triggers on SHOP_DEPLOY into a
+  // mission, runs that mission's beat table on top of the guidance arbiter (every beat's comms is `_postOnboarding`-tagged;
+  // interactive beats emit MISSION_BEAT_*). A chapter is DATA, not code: add/split chapters by editing BEATS_BY_MISSION.
   // Chapter 1 is owned by OnboardingDirector, not MissionCoach.
-  // ============================================================================
   MISSION_COACH: {
     PERSISTENCE_KEY: 'spacecowboy_mission_coach_v1',
     NARRATIVE_HOLD_MS: 5000,   // narrative beat dwell before auto-advancing
     ESCALATE_MS: 22000,        // interactive beat → re-prompt (TEACHING_MOMENT_FORCE) after this idle
-    PAIR_LESSON_SKIP_S: 120,   // S4: the Mission 2 double-shot lesson ends with a plain line when no pair stands this long after both daughters of a pair are ready (counted from then, not from the beat's start; a standing offer is never skipped) (ESTIMATE; else the chapter, and the next one behind it, would wait for ever)
-    PAIR_LESSON_CAP_S: 600,    // S4 F1: the overall cap from the beat's start (mission-clock s), for daughters that never become ready: then the "not ready" line (ESTIMATE; a daughter's trip is about 149 s, H5)
+    PAIR_LESSON_SKIP_S: 120,   // the Mission 2 double-shot lesson ends with a plain line when no pair stands this long after both daughters of a pair are ready (counted from then, not from the beat's start; a standing offer is never skipped) (ESTIMATE; else the chapter, and the next one behind it, would wait for ever)
+    PAIR_LESSON_CAP_S: 600,    // the overall cap from the beat's start (mission-clock s), for daughters that never become ready: then the "not ready" line (ESTIMATE; a daughter's trip is about 149 s)
     /**
      * Per-mission beat tables. Each beat:
      *   { id, type:'narrative'|'interactive'|'reactive', text, source?, channel?,
      *     skillId?, triggerEvent? (Events key), triggerFilter?(data)=>bool,
      *     holdMs?, escalateMs?, title?, body? (escalation overlay),
-     *     mapText? (lane 3d: the words when fields by height is on and the LEO map is there to ask on; `{km}` = the height of the
-     *     field she is at, read by MissionCoach from the field registry; absent or no registry = `text`, exactly as before) }
+     *     mapText? (the words when fields by height is on and the LEO map is there to ask on; `{km}` = the height of the
+     *     field she is at, read by MissionCoach from the field registry; absent or no registry = `text`) }
      */
     BEATS_BY_MISSION: {
       // ── Chapter 2 — First Operations: Daughter piloting ──
@@ -6725,8 +5371,8 @@ export const Constants = {
           title: 'MANUAL CAPTURE',
           body: 'Close on a target under manual pilot and press N to net it for 2× score.',
         },
-        // owner 2026-10-26 ("1. Mission 2 lesson", plan daughter-pairs-1025 S4): one double shot. AutopilotSystem sets it up on
-        // MISSION_BEAT_STARTED (waits for both daughters, marks the pair, selects her); the Q key (touch: PAIR) fires it (DUAL_FIRE).
+        // Mission 2 double-shot lesson (owner 2026-10-26; docs/DECISIONS.md): AutopilotSystem sets it up on MISSION_BEAT_STARTED
+        // (waits for both daughters, marks the pair, selects her); the Q key (touch: PAIR) fires it (DUAL_FIRE).
         {
           id: 'ch2_pair_shot',
           type: 'interactive',
@@ -6790,9 +5436,8 @@ export const Constants = {
         },
       ],
 
-      // ── Chapter 5 is the ISS conjunction boss (IssConjunctionBoss.js / Constants.ISS_BOSS);
-      //    these beats teach the manual burn timing the intercept needs. The boss
-      //    system owns the spawn, TCA countdown, choice resolution + codex/awards. ──
+      // ── Chapter 5 is the ISS conjunction boss (IssConjunctionBoss.js / Constants.ISS_BOSS); these beats teach the
+      //    manual burn timing the intercept needs. The boss system owns the spawn, TCA countdown, choice resolution + codex/awards. ──
       5: [
         {
           id: 'ch5_intro',
@@ -6854,10 +5499,8 @@ export const Constants = {
       ],
 
       // ── Chapter 8 — Hubble Watch: consolidation + confirm-before-fire (LEO-Mid 540) ──
-      //    No new tool (the 80% reinforced). The active-sat treaty guard is the
-      //    teaching moment for the `confirm_before_fire` skill (discovered when the
-      //    player trips ActiveSatGuard's CONJUNCTION_ALERT), so these beats are
-      //    narrative — no blocking interactive/reactive beat.
+      //    No new tool. The active-sat treaty guard teaches `confirm_before_fire` (discovered when the player trips
+      //    ActiveSatGuard's CONJUNCTION_ALERT), so these beats are narrative — no blocking interactive/reactive beat.
       8: [
         {
           id: 'ch8_intro',
@@ -6873,10 +5516,8 @@ export const Constants = {
         },
       ],
 
-      // ── Chapter 9 is the Starlink cascade boss (StarlinkCascadeBoss.js); this
-      //    beat teaches dual-arm throughput for the 35-frag race. The C-hold
-      //    radial wheel was removed (UX-11 #9) — direct keys now: D deploys,
-      //    1-4 select & switch/pilot daughters, Shift+R recalls the fleet.
+      // ── Chapter 9 is the Starlink cascade boss (StarlinkCascadeBoss.js); this beat teaches dual-arm throughput for the
+      //    35-frag race with direct keys: D deploys, 1-4 select & switch/pilot daughters, Shift+R recalls the fleet.
       //    Satisfied by any daughter deployment during the chapter. ──
       9: [
         {
@@ -6892,8 +5533,7 @@ export const Constants = {
       ],
 
       // ── Chapter 10 — Belt Transit: radiation-belt timing (MEO 19,000, GPS band) ──
-      //    Narrative consolidation (reinforces ch9 dual-arm); the "new concept" is
-      //    SAA/Van-Allen timing, taught as briefing comms — no new skill.
+      //    Narrative consolidation; the "new concept" is SAA/Van-Allen timing, taught as briefing comms — no new skill.
       10: [
         {
           id: 'ch10_intro',
@@ -6907,10 +5547,8 @@ export const Constants = {
           source: 'HOUSTON',
           text: 'Watch the South Atlantic Anomaly. The belt dips low there and dose spikes. Run both daughters through the clean windows together; don\'t get caught reeling mid-belt.',
         },
-        // Register item 100 (2026-08-21): the first mission beat that NEEDS the
-        // wide sweep — a capture past 1 km from Mother is impossible under the
-        // pre-feature 500 m deploy gate. Reachable at Zylon T2 tether (gate
-        // 3.2 km) with any spring; the escalation names the paired purchase +
+        // The first mission beat that NEEDS the wide sweep — a capture past 1 km from Mother is impossible under the 500 m
+        // deploy gate. Reachable at Zylon T2 tether (gate 3.2 km) with any spring; the escalation names the paired purchase +
         // the dial (100 s transit @10 m/s vs 50 s @20 — the reload∝v² trade).
         {
           id: 'ch10_widesweep',
@@ -6926,9 +5564,8 @@ export const Constants = {
       ],
 
       // ── Chapter 11 — GEO Transit / Thaicom 4: Hohmann window + Hassan handover (GEO 35,786) ──
-      //    The porkchop/Lambert viz is deferred to ROADMAP EN-5/6. u16a (owner 2026-10-22):
-      //    the lesson teaches the transfer-window pane on the LEO view (it shows when the
-      //    cheapest climb lines up) and finishes when the player flies a cluster transfer
+      //    The porkchop/Lambert viz is deferred (EN-5/6). owner 2026-10-22: the lesson teaches the transfer-window pane on
+      //    the LEO view (it shows when the cheapest climb lines up) and finishes when the player flies a cluster transfer
       //    (DEBRIS_MAP_CLUSTER_SELECTED, as ch7); `orbital_hohmann` is discovered with it.
       11: [
         {
@@ -6955,12 +5592,10 @@ export const Constants = {
         },
       ],
 
-      // ── Chapter 12 — Anchor Set: the elevator finale (F2 Option A) ──
-      //    Consolidation chapter — NO new plate/tool (ROADMAP §4 guardrail). Caps
-      //    the 12-chapter arc: HASSAN frames the final contract mass, one interactive
-      //    beat lands on a live elevator contribution (CONTRACT_UPDATE — emitted from
-      //    ShopScreen._contributeToElevator and _bossLifecycle.awardElevatorMass), then
-      //    a closing narrative. The elevator win itself is owned by CONTRACT_COMPLETE /
+      // ── Chapter 12 — Anchor Set: the elevator finale ──
+      //    Consolidation chapter — NO new plate/tool. HASSAN frames the final contract mass, one interactive beat lands on a
+      //    live elevator contribution (CONTRACT_UPDATE — emitted from ShopScreen._contributeToElevator and
+      //    _bossLifecycle.awardElevatorMass), then a closing narrative. The elevator win itself is owned by CONTRACT_COMPLETE /
       //    the debris-count GAME_WIN; these beats only narrate the home stretch.
       12: [
         {
@@ -6989,27 +5624,15 @@ export const Constants = {
     },
   },
 
-  // ============================================================================
-  // ONBOARDING (Delegation 2 — 2026-05-31)
-  //
-  // Bottom-screen hint ticker + OnboardingDirector beat lifecycle.  See:
+  // ONBOARDING — bottom-screen hint ticker + OnboardingDirector beat lifecycle. See:
   //   • [`js/systems/OnboardingDirector.js`](js/systems/OnboardingDirector.js:1)
   //   • [`js/ui/hud/HintTicker.js`](js/ui/hud/HintTicker.js:1)
-  //
-  // All tuning knobs for the 16-beat first-experience pipeline live here.
-  // Persistence key is versioned so a future redesign can bump it without
-  // colliding with the v1 storage layout.
-  // ============================================================================
+  // All tuning knobs for the first-experience pipeline live here. The persistence key is versioned so a redesign can bump
+  // it without colliding with the old storage layout.
   ONBOARDING: {
-    /** localStorage key for the OnboardingDirector save blob.
-     *  v3 (2026-06-17): reward-first capture spine replaces the 18-beat
-     *  camera/attitude lecture (new beat ids). Bumped so v1/v2 saves don't
-     *  resume mid-pipeline against the new beat list.
-     *  v4 (2026-09-06, Wave 5 Session N): the intro ride now lands a first-time
-     *  player on the workbench (floor 1) where the MAP pane's beat runs before
-     *  the flying lessons; a mid-pipeline v3 blob would resume the flying beats
-     *  against the new opening — bumped so every player starts the spine
-     *  fresh (04-test-pins 5). */
+    /** localStorage key for the OnboardingDirector save blob. Bump it when the beat list changes (a saved blob would
+     *  resume mid-pipeline against the new beats); v4: the intro ride lands a first-time player on the workbench
+     *  (floor 1), where the MAP pane's beat runs before the flying lessons (04-test-pins 5). */
     STORAGE_KEY: 'spacecowboy_onboarding_v4',
 
     /** Default credit award per satisfied beat (where `credit` not set). */
@@ -7052,39 +5675,31 @@ export const Constants = {
       KEY_CHIP_BG_GAMEPLAY: '#0a2a3a', // cyan tinted background pill
       KEY_CHIP_BG_MODIFIER: '#3a2a0a', // amber for Shift/Ctrl combos
       KEY_CHIP_BG_MOUSE: '#2a0a3a',    // purple for mouse glyphs
-      ACCENT_BORDER: '#00ccff',
+      ACCENT_BORDER: VisualLaw.COLORS.INFO,
     },
   },
 
-  // ============================================================================
-  // INVENTORY (Delegation 4 — 2026-05-31)
-  //
-  // Thresholds + cooldowns for [`NetInventoryPanel.js`](js/ui/hud/NetInventoryPanel.js:1)
-  // and the HOUSTON low-ammo comms hint.  All edits to this namespace are
-  // safe to ship — purely cosmetic UX tuning.
-  // ============================================================================
+  // INVENTORY — thresholds + cooldowns for [`NetInventoryPanel.js`](js/ui/hud/NetInventoryPanel.js:1) and the HOUSTON
+  // low-ammo comms hint. Purely cosmetic UX tuning.
   INVENTORY: {
-    LASSO_LOW_THRESHOLD:     1,       // chip turns yellow at this remaining count (the mother's nets: 4 at start; 5 until 2026-10-20, when the 50-shot lasso count went)
+    LASSO_LOW_THRESHOLD:     1,       // chip turns yellow at this remaining count (the mother's nets: 4 at start)
     LASSO_CRITICAL_THRESHOLD: 0,      // chip turns red at this remaining count
     NETS_LOW_THRESHOLD:      3,       // chip turns yellow at this net total
     NETS_CRITICAL_THRESHOLD: 0,       // chip turns red at this net total
     LOW_HINT_COOLDOWN_MS:    60000,   // suppress repeat low-ammo comms within this window
   },
 
-  // ============================================================================
-  // ST-6.7: ENVIRONMENT HAZARD SYSTEM — Five periodic/altitude-dependent effects
-  // that create strategic pressure on the player. Degradation rates are tuned
-  // for "long-session gradually accumulates" not "instant death".
-  // ============================================================================
+  // ENVIRONMENT — hazard system: five periodic/altitude-dependent effects that create strategic pressure. Degradation
+  // rates are tuned for "long-session gradually accumulates" not "instant death".
   ENVIRONMENT: {
-    // ── Atomic Oxygen ──────────────────────────────────────────────────────
+    // ── Atomic Oxygen ──
     AO_THRESHOLD_KM: 600,
     AO_TICK_INTERVAL_S: 10,
     AO_ARM_DEGRADATION: 0.002,         // 0.2% per tick
     AO_PANEL_DEGRADATION: 0.001,       // 0.1% per tick
     AO_SKILL_MITIGATION: 0.5,          // halved with manage_power
 
-    // ── MMOD (Micro-Meteoroid / Orbital Debris) ───────────────────────────
+    // ── MMOD (Micro-Meteoroid / Orbital Debris) ──
     MMOD_CHECK_INTERVAL_S: 30,
     MMOD_BASE_PROBABILITY: 0.02,       // 2% per check
     MMOD_DAMAGE_FRACTION: 0.05,        // 5% of subsystem health
@@ -7092,13 +5707,13 @@ export const Constants = {
     MMOD_SKILL_MITIGATION: 0.5,        // halved with advanced_sensors
     MMOD_WEATHER_AMPLIFIER: 1.5,       // during CME → ×1.5 probability
 
-    // ── Safe Mode ─────────────────────────────────────────────────────────
+    // ── Safe Mode ──
     SAFE_MODE_CHECK_INTERVAL_S: 10,
     SAFE_MODE_HEALTH_THRESHOLD: 0.25,
     SAFE_MODE_RECOVERY_THRESHOLD: 0.40,
     SAFE_MODE_SENSOR_PENALTY: 0.5,
 
-    // ── Radiation Belt ────────────────────────────────────────────────────
+    // ── Radiation Belt ──
     RADIATION_BELT_LOW_KM: 2000,
     RADIATION_BELT_HIGH_KM: 12000,
     RADIATION_SENSOR_PENALTY: 0.3,
@@ -7106,7 +5721,7 @@ export const Constants = {
     RADIATION_NOISE_INTERVAL_S: 15,
     RADIATION_SKILL_MITIGATION: 0.6,   // 60% reduction with radiation_hardening
 
-    // ── Battery Depth-of-Discharge ────────────────────────────────────────
+    // ── Battery Depth-of-Discharge ──
     DOD_DEEP_DISCHARGE_THRESHOLD: 0.2,
     DOD_RECHARGE_THRESHOLD: 0.8,
     DOD_CYCLE_PENALTY_INTERVAL: 10,
@@ -7114,11 +5729,7 @@ export const Constants = {
     DOD_SKILL_MITIGATION: 0.5,         // halved with manage_power
   },
 
-  // =========================================================================
-  // EPIC 8 — STATION_KEEP & FEEP ION THRUSTER PARAMETERS
-  // =========================================================================
-
-  // === ION_THRUSTER — FEEP engine parameters ===
+  // ION_THRUSTER — FEEP engine parameters
   ION_THRUSTER: {
     WEAVER_MAX_THRUST: 0.00128,    // N — peak thrust Weaver arm
     SPINNER_MAX_THRUST: 0.0008,    // N — peak thrust Spinner arm
@@ -7140,28 +5751,24 @@ export const Constants = {
     ISP_DEORBIT: 4000,             // s — max thrust for deorbit
   },
 
-  // === STATION_KEEP — orbital-crane positioning ===
-  // ── Idle-watchdog hints (Item 3, 2026-06-11) — data-driven anti-stuck guidance ──
+  // ARM_IDLE_HINTS — idle-watchdog hints: data-driven anti-stuck guidance.
   // ArmIdleAdvisor watches each arm's FSM state once per second. When an arm sits
   // in `state` for ≥ `idleS` seconds AND the `when` predicate holds, it fires the
   // hint ONCE per deployment (reset on any state change), routed through
   // TEACHING_MOMENT_FORCE. Veterans (SkillsSystem.isVeteran) are skipped entirely.
-  // `icon` is the short text tag TeachingOverlay shows beside the title (plan D-J:
-  // no pictographs; <= 4 chars).
+  // `icon` is the short text tag TeachingOverlay shows beside the title (no pictographs; <= 4 chars).
   // `when` keys: 'noNetInFlightHasNets' | 'noNetInFlight' | 'outOfNets' | 'always'.
-  // `tool` (optional, hold-catch 2026-10-22): the row applies only while her selected tool is this one (an arm with no
+  // `tool` (optional): the row applies only while her selected tool is this one (an arm with no
   // selectedTool counts as 'NET'); rows without it apply to every tool.
   ARM_IDLE_HINTS: [
     {
-      // Guidance cleanup (Phase 2/3): the manual-pilot nudge formerly lived in
-      // ArmUnit (fired raw on the first 3 deploys, no veteran gating). It now
-      // lives here so it is veteran-gated + deployment-scoped like every other
-      // idle hint. Carries the 2× score incentive the old line had.
+      // The manual-pilot nudge lives here so it is veteran-gated + deployment-scoped like every other idle hint.
+      // Carries the 2× score incentive.
       state: 'TRANSIT', idleS: 3, when: 'always',
       hintId: 'transit_pilot_nudge', title: 'Daughter in transit',
       text: 'Press 1-4 to take manual control. A piloted capture scores 2×.',
       icon: 'FLY',
-      // u2-one-voice D7: the chip form (HintTicker step chip: cap = glyph, body = chip).
+      // The chip form (HintTicker step chip: cap = glyph, body = chip).
       chip: 'Fly her: 2× score', glyph: '1-4', keys: ['Digit1', 'Digit2', 'Digit3', 'Digit4'],
     },
     {
@@ -7171,7 +5778,7 @@ export const Constants = {
       icon: 'NET',
       chip: 'Launch her net', glyph: 'N', keys: ['KeyN'],
     },
-    // hold-catch (owner 2026-10-22: "Hints at bottom of screen say press N for net, but default is sticky pad"): the same
+    // owner 2026-10-22 ("Hints at bottom of screen say press N for net, but default is sticky pad"): the same
     // chip for the tool she is holding (ArmUnit.selectedTool, set by the tool recommender when she enters station-keep, which
     // runs before this fires). One row per tool, each fires once per deployment; N works the selected tool (InputManager
     // KeyN). PAD, MAGNET and GRIPPER need no nets, so their rows only need a free line (no net in flight).
@@ -7201,12 +5808,11 @@ export const Constants = {
       hintId: 'sk_out_of_nets', title: 'Out of nets',
       text: 'Out of nets. Restock at the resupply stop.',   // = netRouting.DAUGHTER_OUT_OF_NETS_LINE (DECISIONS §33 row 8)
       icon: 'NETS',
-      // Review R3: no key to press (nets are bought at the stop, nothing reloads on docking), so a glyph-only '!' cap.
+      // No key to press (nets are bought at the stop, nothing reloads on docking), so a glyph-only '!' cap.
       chip: 'Restock at the stop', glyph: '!', keys: [],
     },
   ],
-  // ARM_PILOT idle hint is mode-based (not an FSM state), handled directly by the
-  // advisor against InputManager's pilot mode.
+  // ARM_PILOT idle hint is mode-based (not an FSM state): the advisor handles it against InputManager's pilot mode.
   ARM_PILOT_IDLE: {
     idleS: 45, hintId: 'arm_pilot_return',
     title: 'Piloting a daughter', icon: 'FLY',
@@ -7214,98 +5820,55 @@ export const Constants = {
     chip: 'Back to the ship', glyph: 'Esc', keys: ['Escape'],
   },
 
+  // STATION_KEEP — orbital-crane positioning
   STATION_KEEP: {
     DEFAULT_STANDOFF_MULT: 1.5,    // × debris size for initial standoff
-    DEFAULT_STANDOFF: 8.0,         // m — initial standoff on SK entry (mid-band of
-                                   //     4–12 m so ±/=/wheel give equal zoom range
-                                   //     in either direction. Debug session
-                                   //     2026-05-17 polish.
-    MIN_STANDOFF: 4.0,             // m — minimum standoff distance (debug session
-                                   //     2026-05-15 polish: widened 8→4 per user.
-                                   //     At a 50° FOV the near plane (≥0.01 scene
-                                   //     units = 1m world) still clears comfortably.
-                                   //     The pilot now has room for close-inspection
-                                   //     framing while ±/=/wheel give live zoom
-                                   //     control over the full 4–12 m band.
-    MAX_STANDOFF: 12.0,            // m — maximum standoff distance (debug session
-                                   //     2026-05-15 polish: tightened 15→12 so the
-                                   //     debris stays a meaningful size in frame
-                                   //     even at the far end; 12 m also fits the
-                                   //     mouse-wheel granularity (0.5 m / tick →
-                                   //     16 ticks to traverse the full band).
-    WHEEL_STEP_M: 0.5,             // m per mouse-wheel tick — instantaneous
-                                   //     radius delta (not rate-based). 16 ticks
-                                   //     covers the 4→12 m range.
+    DEFAULT_STANDOFF: 8.0,         // m — initial standoff on SK entry (mid-band of 4–12 m so ±/=/wheel give equal zoom range either way)
+    MIN_STANDOFF: 4.0,             // m — minimum standoff; at a 50° FOV the near plane (≥0.01 scene units = 1 m world) still clears, so the pilot has close-inspection framing
+    MAX_STANDOFF: 12.0,            // m — maximum standoff; the debris stays a meaningful size in frame, and 12 m fits the wheel step (0.5 m/tick → 16 ticks across the band)
+    WHEEL_STEP_M: 0.5,             // m per mouse-wheel tick — instantaneous radius delta (not rate-based)
     ORBIT_RATE: 0.5,               // rad/s — orbit angular rate
     ORBIT_RATE_FINE: 0.125,        // rad/s — fine orbit angular rate
     RADIUS_RATE: 1.0,              // m/s — radial approach/retreat rate
     RADIUS_RATE_FINE: 0.25,        // m/s — fine radial rate
     MAX_LATITUDE: 80,              // deg — max phi angle from equator
     TETHER_SAFETY_MARGIN: 10,      // deg — phi margin for tether clearance
-    THETA_LIMIT_DEG: 120,          // deg — max θ swing ±around entry value during SK.
-                                   // Prevents tether wrap (mother→arm tether tangles
-                                   // around the debris past ~180°) and pilot
-                                   // disorientation (mother leaves peripheral view
-                                   // past ~90°). 120° = comfortable 240° inspection
-                                   // arc keeping mother in view and tether unwound.
-                                   // See debug session 2026-05-15.
-    // ── Auto-return (Pattern C: dwell-then-ease) ──
+    THETA_LIMIT_DEG: 120,          // deg — max θ swing ±around entry value during SK. Prevents tether wrap (the tether tangles
+                                   // around the debris past ~180°) and pilot disorientation (mother leaves peripheral view
+                                   // past ~90°). 120° = 240° inspection arc keeping mother in view and tether unwound.
+    // ── Auto-return (dwell-then-ease) ──
     // 1. Hold arrow → daughter rotates.
     // 2. Release → daughter freezes for AUTO_RETURN_DWELL_S (no motion).
     // 3. After dwell → exponential ease back to entry (τ = AUTO_RETURN_TIME_CONSTANT_S).
     // 4. Press any arrow → cancel ease, reset dwell.
-    // Recentering is fully automatic (dwell-then-ease); there is no manual
-    // recenter key.
-    AUTO_RETURN_DWELL_S:        3.0,  // s — quiet time before auto-return begins.
-                                      // Long enough to read a label or line up a
-                                      // screenshot without the camera fighting you.
-    AUTO_RETURN_TIME_CONSTANT_S: 4.0, // s — exponential time constant during
-                                      // ease-back.  Gentle: 92 % returned by
-                                      // t_dwell+9 s ≈ 12 s.
-    AUTO_RETURN_DEADZONE_DEG:   2.0,  // deg — once |θ| AND |φ| are inside this
-                                      // band, snap to exact 0 so the camera
-                                      // doesn't asymptote forever.
+    // Recentering is fully automatic; there is no manual recenter key.
+    AUTO_RETURN_DWELL_S:        3.0,  // s — quiet time before auto-return begins (long enough to read a label or line up a screenshot)
+    AUTO_RETURN_TIME_CONSTANT_S: 4.0, // s — exponential time constant during ease-back. Gentle: 92 % returned by t_dwell+9 s ≈ 12 s.
+    AUTO_RETURN_DEADZONE_DEG:   2.0,  // deg — once |θ| AND |φ| are inside this band, snap to exact 0 so the camera doesn't asymptote forever
     STATIONKEEP_LERP_RATE: 0.8,   // lerp factor for position smoothing
-    STANDOFF_SETTLE_TAU_S: 0.6,   // s — exponential time constant for easing the
-                                  //     standoff radius from the ACTUAL SK-entry
-                                  //     distance down to the nominal standoff.
-                                  //     The SK gate fires at ENTRY_DISTANCE_MULT ×
-                                  //     standoff (up to ~2×) while the daughter is
-                                  //     still closing, so without this ease the
-                                  //     0.8/frame position lerp yanks the daughter
-                                  //     (and the rigidly-attached pilot camera) the
-                                  //     whole gate→standoff gap in ~3 frames — the
-                                  //     "speeds up then camera jumps" artifact.
-                                  //     ~0.6s glides her in. Pilot radius input
-                                  //     cancels the settle immediately.
+    STANDOFF_SETTLE_TAU_S: 0.6,   // s — exponential time constant for easing the standoff radius from the ACTUAL SK-entry
+                                  //     distance down to the nominal standoff. The SK gate fires at ENTRY_DISTANCE_MULT ×
+                                  //     standoff (up to ~2×) while the daughter is still closing; without this ease the
+                                  //     0.8/frame lerp yanks her (and the rigidly-attached pilot camera) the whole gate→standoff
+                                  //     gap in ~3 frames. Pilot radius input cancels the settle immediately.
     FUEL_RATE_STATIONKEEP: 0.02,  // kg/s — fuel consumption holding
     FUEL_RATE_MANEUVER: 0.1,      // kg/s — fuel consumption maneuvering
-    ENTRY_MAX_VELOCITY: 3.0,      // m/s — max relative vel to enter SK.  Raised from 2.0: realistic arrivals show relV ~1.9 m/s (controller residual after drift cancellation + V_CAP*0.3 ≈ 2.1 m/s nominal approach speed) which is INSIDE the 2.0 m/s gate by only 0.1 m/s — not enough margin for variation.  3.0 m/s gives 1.0 m/s headroom and matches the actual achievable steady-state of the proportional controller.  See debug session 2026-05-09.
-    ENTRY_DISTANCE_MULT: 2.0,     // ×standoff — distance gate for SK entry.  Widened from 1.3 hardcoded: the APPROACH controller's brake profile + EMA-smoothed drift compensation produces a settling band of ~1.5–2.0× standoff (e.g. observed dist=17m for standoff=10m, see debug logs).  1.3× gate (13 m) was inside the achievable band so SK never fired.  2.0× = 20 m comfortably captures the band so the daughter actually transitions to STATION_KEEP and the SK lerp pulls her into the standoff sphere.
+    ENTRY_MAX_VELOCITY: 3.0,      // m/s — max relative vel to enter SK. Realistic arrivals show relV ~1.9 m/s (controller residual after drift cancellation + V_CAP*0.3 ≈ 2.1 m/s nominal approach speed); 3.0 m/s gives 1.0 m/s headroom and matches the proportional controller's steady state.
+    ENTRY_DISTANCE_MULT: 2.0,     // ×standoff — distance gate for SK entry. The APPROACH controller's brake profile + EMA-smoothed drift compensation settle at ~1.5–2.0× standoff (observed dist=17 m for standoff=10 m); 2.0× = 20 m captures the band so the daughter transitions to STATION_KEEP and the SK lerp pulls her into the standoff sphere.
   },
 
-  // =========================================================================
-  // DAUGHTER_NET_RECOIL — CAPTURE_NET.md §11.4 (linear recoil) + §11.3 (wheel
-  // saturation scalar), daughter side. Gated by FEATURE_FLAGS.DAUGHTER_NET_RECOIL.
-  //
-  // The kick itself carries NO magnitude constants — Δv is derived at fire
-  // time from the ACTUAL net class (CAPTURE_NET.*.MASS × LAUNCH_SPEED) over
-  // the arm's config.mass (V5_WEAVER_MASS / V5_SPINNER_MASS). This block only
+  // DAUGHTER_NET_RECOIL — CAPTURE_NET.md §11.4 (linear recoil) + §11.3 (wheel saturation scalar), daughter side. Gated by
+  // FEATURE_FLAGS.DAUGHTER_NET_RECOIL.
+  // The kick itself carries NO magnitude constants — Δv is derived at fire time from the ACTUAL net class
+  // (CAPTURE_NET.*.MASS × LAUNCH_SPEED) over the arm's config.mass (V5_WEAVER_MASS / V5_SPINNER_MASS). This block only
   // tunes the RECOVERY response and the §11.3 wheel bookkeeping.
-  //
-  // The daughter's SK/NETTING hold is kinematic (STATIONKEEP_LERP_RATE pulls
-  // position onto the hold sphere at 0.8/frame), so the kick is modeled as a
-  // critically-damped controller transient: an offset x with ẍ = −2ωẋ − ω²x
-  // seeded by the impulse (x=0, ẋ=−Δv·launchDir). The hold goal is displaced
-  // by x each frame — she is visibly shoved off the hold sphere, the RCS
-  // "fights" it, and x returns to 0 with no teleport and no permanent offset.
-  // ω = 3.0 ⇒ peak displacement Δv/(ω·e) (≈13 cm Weaver/MEDIUM, ≈7 cm
-  // Spinner/SMALL) at t≈0.33 s, residual < 5 % of peak by t≈1.95 s — inside
-  // the "hold loop visibly fights over ~1–2 s" design window and settled
-  // before a typical net flight resolves (SK standoff 4–12 m ⇒ contact at
-  // ~0.5–1.3 s, capture phases add ~1+ s). SK entry gates (ENTRY_MAX_VELOCITY
-  // 3.0) and all STATION_KEEP constants are deliberately untouched.
-  // =========================================================================
+  // The daughter's SK/NETTING hold is kinematic (STATIONKEEP_LERP_RATE pulls position onto the hold sphere at 0.8/frame),
+  // so the kick is a critically-damped controller transient: an offset x with ẍ = −2ωẋ − ω²x seeded by the impulse
+  // (x=0, ẋ=−Δv·launchDir). The hold goal is displaced by x each frame — she is shoved off the hold sphere, the RCS "fights"
+  // it, and x returns to 0 with no teleport and no permanent offset. ω = 3.0 ⇒ peak displacement Δv/(ω·e) (≈13 cm
+  // Weaver/MEDIUM, ≈7 cm Spinner/SMALL) at t≈0.33 s, residual < 5 % of peak by t≈1.95 s — inside the "hold loop visibly
+  // fights over ~1–2 s" window and settled before a typical net flight resolves (SK standoff 4–12 m ⇒ contact at ~0.5–1.3 s,
+  // capture phases add ~1+ s). SK entry gates (ENTRY_MAX_VELOCITY 3.0) and all STATION_KEEP constants are deliberately untouched.
   DAUGHTER_NET_RECOIL: {
     CONTROLLER_OMEGA: 3.0,        // rad/s — critically-damped RCS null response
     SETTLE_EPS_OFFSET_M: 0.01,    // m — |offset| below this (with vel eps) snaps to settled
@@ -7321,57 +5884,33 @@ export const Constants = {
     WHEEL_DESAT_DUMP: 1.0,            // momentum units the paid desat burn removes
   },
 
-  // =========================================================================
-  // CAPTURE_TORQUE_SETTLE — CAPTURE_NET.md §11.5, daughter side. Gated by
-  // FEATURE_FLAGS.CAPTURE_TORQUE_SETTLE. Makes captured-debris angular
-  // momentum real: the cinch transfers L into the tether instead of deleting
-  // it (legacy: DebrisField._advanceTumble simply stops advancing).
-  //
-  // I MODEL — uniform solid sphere of diameter sizeMeter:
-  //   I = (2/5)·m·(d/2)² = INERTIA_COEFF·m·d², INERTIA_COEFF = 0.1.
-  //   Real debris brackets this: a thin rod tumbling transverse is
-  //   (1/12)·m·L² ≈ 0.083·m·L², a solid sphere is exactly 0.1·m·d². Both
-  //   inputs (mass, sizeMeter = max extent) already live on every debris
-  //   record, so the model needs no new authored data.
-  //
-  // τ DERIVATION — the audit's fix sketch is τ = L/t_settle. We hold the
-  //   TORQUE budget fixed (the tether/net rig can only damp so hard) and
-  //   solve for time:  t_settle = L / TETHER_DAMP_TORQUE_NM, clamped to
-  //   [T_SETTLE_MIN_S, T_SETTLE_MAX_S] so every settle stays readable.
-  //   Reference tumbler (the audit's example): 500 kg, 6 m, 10°/s ⇒
-  //   I = 0.1·500·36 = 1800 kg·m²; ω₀ = 0.17453 rad/s; L = 314.16 N·m·s;
-  //   t_settle = 314.16/105 ≈ 2.99 s (mid-band); implied τ ≈ 105 N·m.
-  //   Light fragments clamp to the 2 s floor (tether authority dwarfs their
-  //   L); >420 N·m·s whales clamp to the 4 s ceiling.
-  //
-  // TRANSIENT — same critically-damped closed form as DAUGHTER_NET_RECOIL
-  //   (_updateRecoilKick), one angular DOF about the debris' own tumbleAxis:
-  //   θ̈ = −2λθ̇ − λ²θ with θ(0)=0, θ̇(0)=ω₀ ⇒ θ(t) = ω₀·t·e^(−λt).
-  //   λ = SETTLE_U / t_settle: the envelope vs peak is u·e^(1−u) (u = λt),
-  //   ≈ 4% at u = 6 — so the transient is visually done AT t_settle and the
-  //   eps snap zeroes the sub-degree residue there (no asymptote). The catch
-  //   wrenches forward to θ_peak = ω₀/(λe) at t = t_settle/6, then the
-  //   tether visibly hauls it back to the cinched pose. Reference tumbler:
-  //   θ_peak ≈ 1.84° real ≈ 18.4° rendered (×TIME_SCALE_GAMEPLAY, the same
-  //   visual convention _advanceTumble applies to free tumble) at t ≈ 0.5 s.
-  //   The debris' rendered channel is seedAngle + θ·TIME_SCALE_GAMEPLAY, so
-  //   the wrench rate is continuous with the pre-capture visual spin.
-  //
-  // STRAIN GATE — while the residual wrench rate |θ̇| exceeds
-  //   STRAIN_GATE_DEG_S (real °/s) during GRAPPLED/REELING, the net rolls a
-  //   per-second recoverable rip (REEL_BOOST.RIP_PROB_PER_S idiom; the
-  //   consequence path mirrors _ripNetDuringBoost / NET_STRAIN_*'s
-  //   recoverable slip): rip probability = RIP_PROB_PER_S × band × dt with
-  //   band = clamp((rate − GATE)/(RATED − GATE), 0, 1). The band is anchored
-  //   to ABSOLUTE rates rather than strainBandT's rated-mass fractions
-  //   because the gate is a rate line, not a capacity fraction. GATE = 5°/s
-  //   (audit's number) sits below DESPIN_LASER.IN_SPEC_DEG = 10°/s: a
-  //   just-in-spec catch carries only ~⅕ band for well under a second of
-  //   exposure (≈1% rip), so "Tumble in spec. Net it." stays honest, while
-  //   an un-lased 30°/s+ tumbler rides the full band and rips often.
-  //   On rip the UN-transferred remainder resumes as real tumble
-  //   (tumbleRate = |θ̇|, axis flipped if the tether was mid counter-swing).
-  // =========================================================================
+  // CAPTURE_TORQUE_SETTLE — CAPTURE_NET.md §11.5, daughter side. Gated by FEATURE_FLAGS.CAPTURE_TORQUE_SETTLE. Makes
+  // captured-debris angular momentum real: the cinch transfers L into the tether instead of deleting it (legacy:
+  // DebrisField._advanceTumble simply stops advancing).
+  // I MODEL — uniform solid sphere of diameter sizeMeter: I = (2/5)·m·(d/2)² = INERTIA_COEFF·m·d², INERTIA_COEFF = 0.1.
+  //   Real debris brackets this: a thin rod tumbling transverse is (1/12)·m·L² ≈ 0.083·m·L². Both inputs (mass,
+  //   sizeMeter = max extent) already live on every debris record.
+  // τ DERIVATION — τ = L/t_settle. The TORQUE budget is fixed (the tether/net rig can only damp so hard) and time is solved:
+  //   t_settle = L / TETHER_DAMP_TORQUE_NM, clamped to [T_SETTLE_MIN_S, T_SETTLE_MAX_S] so every settle stays readable.
+  //   Reference tumbler: 500 kg, 6 m, 10°/s ⇒ I = 0.1·500·36 = 1800 kg·m²; ω₀ = 0.17453 rad/s; L = 314.16 N·m·s;
+  //   t_settle = 314.16/105 ≈ 2.99 s (mid-band); implied τ ≈ 105 N·m. Light fragments clamp to the 2 s floor (tether
+  //   authority dwarfs their L); >420 N·m·s whales clamp to the 4 s ceiling.
+  // TRANSIENT — same critically-damped closed form as DAUGHTER_NET_RECOIL (_updateRecoilKick), one angular DOF about the
+  //   debris' own tumbleAxis: θ̈ = −2λθ̇ − λ²θ with θ(0)=0, θ̇(0)=ω₀ ⇒ θ(t) = ω₀·t·e^(−λt). λ = SETTLE_U / t_settle: the
+  //   envelope vs peak is u·e^(1−u) (u = λt), ≈ 4% at u = 6 — so the transient is visually done AT t_settle and the eps snap
+  //   zeroes the sub-degree residue there (no asymptote). The catch wrenches forward to θ_peak = ω₀/(λe) at t = t_settle/6,
+  //   then the tether hauls it back to the cinched pose. Reference tumbler: θ_peak ≈ 1.84° real ≈ 18.4° rendered
+  //   (×TIME_SCALE_GAMEPLAY, the visual convention _advanceTumble applies to free tumble) at t ≈ 0.5 s. The rendered channel is
+  //   seedAngle + θ·TIME_SCALE_GAMEPLAY, so the wrench rate is continuous with the pre-capture visual spin.
+  // STRAIN GATE — while the residual wrench rate |θ̇| exceeds STRAIN_GATE_DEG_S (real °/s) during GRAPPLED/REELING, the net
+  //   rolls a per-second recoverable rip (REEL_BOOST.RIP_PROB_PER_S idiom; the consequence path mirrors _ripNetDuringBoost /
+  //   NET_STRAIN_*'s recoverable slip): rip probability = RIP_PROB_PER_S × band × dt with
+  //   band = clamp((rate − GATE)/(RATED − GATE), 0, 1). The band is anchored to ABSOLUTE rates rather than strainBandT's
+  //   rated-mass fractions because the gate is a rate line, not a capacity fraction. GATE = 5°/s sits below
+  //   DESPIN_LASER.IN_SPEC_DEG = 10°/s: a just-in-spec catch carries only ~⅕ band for well under a second of exposure (≈1% rip),
+  //   so "Tumble in spec. Net it." stays honest, while an un-lased 30°/s+ tumbler rides the full band and rips often.
+  //   On rip the UN-transferred remainder resumes as real tumble (tumbleRate = |θ̇|, axis flipped if the tether was mid
+  //   counter-swing).
   CAPTURE_TORQUE_SETTLE: {
     INERTIA_COEFF: 0.1,            // I = coeff·m·d² — solid sphere of diameter sizeMeter
     TETHER_DAMP_TORQUE_NM: 105,    // N·m — tether damping-torque budget (τ in τ = L/t_settle)
@@ -7385,7 +5924,7 @@ export const Constants = {
     STRAIN_GATE_DEG_S: 5.0,        // °/s — at/below: guaranteed hold (the despin play)
     STRAIN_RATE_RATED_DEG_S: 30.0, // °/s — full rip band at this residual wrench rate
     RIP_PROB_PER_S: 1.0,           // /s — rip chance at full band (× band × dt per frame)
-    // snug-ring R3 (owner 10-27, "Ring + real spin"): the catch's spin is NOT deleted at net close; it keeps turning while reeled
+    // The catch's spin is NOT deleted at net close (owner 10-27, "Ring + real spin"); it keeps turning while reeled
     // and, at the seat (the net reel's end), its angular momentum L goes into her and is cancelled with her own cold gas
     // (DAUGHTER_COLD_GAS jet). Effective lever of the jet about her centre (estimate: her body half-length is about 0.15 m):
     SEAT_LEVER_M: 0.10,            // m (est) - torque = jet thrust x lever (weaver 0.10, spinner 0.05 N·m)
@@ -7393,25 +5932,21 @@ export const Constants = {
     SEAT_G0: 9.80665,              // m/s^2, exhaust speed = DAUGHTER_COLD_GAS.ISP_S x this
   },
 
-  // =========================================================================
-  // DAUGHTER_AUTOPILOT — Proportional controller for arm TRANSIT + APPROACH
-  // Mirrors mother AutopilotSystem.js control law (§D quadratic braking + relV
-  // velocity matching). Values scaled for FEEP micro-thrusters on daughter arms.
+  // DAUGHTER_AUTOPILOT — proportional controller for arm TRANSIT + APPROACH. Mirrors mother AutopilotSystem.js control law
+  // (quadratic braking + relV velocity matching). Values scaled for FEEP micro-thrusters on daughter arms.
   //
-  // V_CAP = 10 m/s matches CROSSBOW_LAUNCH_SPEED_DEFAULT so the braking profile
-  // sqrt(2·A_BRAKE·r) is the dominant control term, not the cap. Old V_CAP=0.5
-  // caused the profile to saturate at 2.5m, making the arm brake immediately
-  // from 10 m/s launch speed and then crawl. See debug session 2026-05-04.
-  // =========================================================================
+  // V_CAP = 10 m/s matches CROSSBOW_LAUNCH_SPEED_DEFAULT so the braking profile sqrt(2·A_BRAKE·r) is the dominant control
+  // term, not the cap: a low cap saturates the profile at 2.5 m, making the arm brake immediately from the 10 m/s launch
+  // speed and then crawl.
   DAUGHTER_AUTOPILOT: {
-    MAX_ACCEL:      0.5,   // m/s² — game-feel acceleration (was 0.1; 4× less than mother's 2.0)
+    MAX_ACCEL:      0.5,   // m/s² — game-feel acceleration (4× less than mother's 2.0)
     KP_VEL:         0.8,   // dimensionless — velocity tracking gain (same as mother)
     BRAKE_FRACTION: 0.5,   // fraction of MAX_ACCEL for along-track braking
     V_CAP:          7.1,   // m/s — fallback cap (T1 spring speed). TRANSIT uses _launchSpeedMps dynamically.
     DRIFT_EMA_ALPHA: 0.1,  // EMA smoothing factor for orbital drift velocity (0=frozen, 1=raw)
   },
 
-  // === TETHER_TENSION — tether force parameters ===
+  // TETHER_TENSION — tether force parameters
   TETHER_TENSION: {
     TARGET_TENSION: 2.0,           // N — nominal tether tension
     MIN_TENSION: 0.4,              // N — minimum safe tension
@@ -7421,9 +5956,9 @@ export const Constants = {
     FEEP_TENSION_AUTHORITY: 0.001, // N — FEEP authority for tension
   },
 
-  // === ION_THRUSTER_METALS — FEEP propellant characteristics ===
+  // ION_THRUSTER_METALS — FEEP propellant characteristics
   // Based on real FEEP research: Enpulsion IFM Nano (indium), ESA studies (gallium, bismuth)
-  // No thrust-per-watt field: it is 2·η/(g0·Isp), so it moves with Isp (ion-real 2026-10-28; docs/research/2026-10-ion-real.md).
+  // No thrust-per-watt field: it is 2·η/(g0·Isp), so it moves with Isp (docs/research/2026-10-ion-real.md).
   ION_THRUSTER_METALS: {
     indium:   { ispMin: 4000,  ispMax: 19000, mass: 114.8, unlock: 'default',        trl: 9 },
     gallium:  { ispMin: 6000,  ispMax: 25000, mass: 69.7,  unlock: 'forge_gallium',  trl: 7, heater_W: 2 },
@@ -7434,11 +5969,9 @@ export const Constants = {
     tungsten: { ispMin: 1500,  ispMax: 3500,  mass: 183.8, unlock: 'forge_tungsten', trl: 4, requires: 'mpd_class_power' },
   },
 
-  // ============================================================================
-  // EPIC 9 FEATURE HELPERS
-  // ============================================================================
+  // --- Feature helpers ---
 
-  /** u20-debris v2 (fix round 1, F3): the material of each parked mission-satellite body: FIELDS.LIST.length + MISSION_POOL_EXTRA of them. */
+  /** The material of each parked mission-satellite body: FIELDS.LIST.length + MISSION_POOL_EXTRA of them. */
   missionPoolMaterials() {
     const hs = this.HEAVY_SPARES;
     const n = ((this.FIELDS && this.FIELDS.LIST) ? this.FIELDS.LIST.length : 0) + (hs.MISSION_POOL_EXTRA | 0);
@@ -7446,7 +5979,7 @@ export const Constants = {
   },
 
   smallGroupCount(seed, variant = 0) {
-    // u20-debris v2: how many pieces a field's small-piece group holds (SMALL_GROUP.COUNT_MIN..COUNT_MAX), a pure function of the
+    // How many pieces a field's small-piece group holds (SMALL_GROUP.COUNT_MIN..COUNT_MAX), a pure function of the
     // field's seed and the variant (0 = a low field's own group, 1 = the group a mission adds). Lives here, not in DebrisField,
     // so FieldRegistry can read it without importing a file that pulls in three.
     const G = this.SMALL_GROUP;
@@ -7473,79 +6006,49 @@ export const Constants = {
     return this.FEATURE_FLAGS.REALITY_MODE === true;
   },
 
-  // === DEBUG / DIAGNOSTICS (PR 5) ===
-  // Verbose runtime logging — off by default. Enable per-session via
-  // ?debug=1 in the URL (see main.js bootstrap), which flips the flags
-  // below to true before any module reads them.
+  // DEBUG / DIAGNOSTICS — verbose runtime logging, off by default. Enable per-session via ?debug=1 in the URL (see main.js
+  // bootstrap), which flips the flags below to true before any module reads them.
   DEBUG: {
-    // SceneManager._logDiagnostics() + Earth LOD selection log.
-    // When false these blocks are cheap no-ops.
+    // SceneManager._logDiagnostics() + Earth LOD selection log. When false these blocks are cheap no-ops.
     LOG_RENDERER_DIAGNOSTICS: false,
-    // PR 6 / P3.15: Per-60-frame draw-call profiling log.
-    // Enable via ?profile=1 URL flag (see main.js bootstrap).
+    // Per-60-frame draw-call profiling log. Enable via ?profile=1 URL flag (see main.js bootstrap).
     LOG_DRAW_CALLS: false,
-    // Sprint 2 / Phase A: 1 Hz performance report overlay.
-    // Enable via ?perfReport=1 URL flag (see main.js bootstrap).
+    // 1 Hz performance report overlay. Enable via ?perfReport=1 URL flag (see main.js bootstrap).
     PERF_REPORT_OVERLAY: false,
     // Ctrl+D debug-overlay hotkey. Off in production so Ctrl+D stays the
     // browser's bookmark shortcut; flipped by ?debug=1 (see main.js bootstrap).
     DEBUG_OVERLAY_HOTKEY: false,
   },
 
-  // === PERFORMANCE TUNING (PR 3 + PR 4) ===
+  // PERFORMANCE TUNING
   PERF: {
-    // --- Session I (2026-09-05): the adaptive frame schedule (plan D-G/D-F).
-    // Pacing is "draw every Nth refresh" by FRAME COUNTING against the
-    // measured rAF period (js/core/FrameSched.js), never a time threshold —
-    // the old opt-in FRAME_CAP ms-gate is RETIRED (it skipped unevenly against
-    // a 120 Hz rAF stream; its null default had shipped no cap since PR 3).
-    // The skip factor clamps at N = max(1, round(measuredHz / target)), so a
-    // display at or below the target (60 Hz at rest, headless SwiftShader)
-    // never skips a frame.
+    // The adaptive frame schedule: pacing is "draw every Nth refresh" by FRAME COUNTING against the measured rAF period
+    // (js/core/FrameSched.js), never a time threshold (a ms-gate skips unevenly against a 120 Hz rAF stream). The skip
+    // factor clamps at N = max(1, round(measuredHz / target)), so a display at or below the target (60 Hz at rest,
+    // headless SwiftShader) never skips a frame.
     REST_FPS: 60,        // gameplay at rest: draw ~60 fps (native during input/rides)
     BOOST_MS: 1000,      // native-refresh window after any input in gameplay
     HOLD_FPS: 10,        // drawer-open heartbeat (world clock 0 — D-F held world)
     HOLD_BOOST_MS: 500,  // native window after input while a drawer is open
 
-    // --- PR 4 / P1.5: Quality tier system ---
-    // Each tier is a config object consumed by SceneManager._setupPostProcessing()
-    // and the renderer pixelRatio setter. QualityManager.selectInitialTier()
-    // picks one of these at bootstrap; runtimeAdapt() can downshift live.
+    // --- Quality tiers ---
+    // Each tier is a config object consumed by SceneManager._setupPostProcessing() and the renderer pixelRatio setter.
+    // QualityManager.selectInitialTier() picks one at bootstrap; runtimeAdapt() can downshift live.
     //   msaaSamples     — MultisampledRenderTarget samples (0 = none)
     //   enableBloom     — UnrealBloomPass added to composer when true
     //   enableSMAA      — SMAAPass added to composer when true
     //   pixelRatioCap   — renderer.setPixelRatio(min(devicePR, cap))
-    //   useFXAAFallback — adds an FXAA ShaderPass (post-OutputPass) when SMAA is
-    //                     off, for lighter edge AA on top of MSAA. Wired in
-    //                     SceneManager._setupPostProcessing. Chain when active:
-    //                     RenderPass + UnrealBloomPass + OutputPass + FXAA.
-    // Sprint 3 GPU profiling — Phase C.1 (2026-05-23): HIGH `pixelRatioCap` lowered
-    // from 2 → 1.5 based on round-2 sweep data. At pr=2 the M4 Max renders at
-    // 5760×3600 (20.7 M fragments) and every fragment-bound pass (Earth FS,
-    // bloom mip chain, SMAA, MSAA resolve) pays for it. Post-C.1 measurement:
-    // baseline 10.52 → 4.82 ms MENU (-5.7 ms), 11.07 → 5.12 IN-MISSION (-5.95 ms).
-    // The 54% cost reduction from a 44% fragment reduction is the cache /
-    // bandwidth-pressure signature — at pr=2 we were over the M4 Max memory
-    // ceiling; at pr=1.5 we drop below it and gain super-linearly.
-    //
-    // Sprint 3 GPU profiling — Phase C.2 (2026-05-23): HIGH `enableSMAA` flipped
-    // false. With 4× MSAA still active on the customRT, geometric edges already
-    // get smoothed; SMAA's marginal contribution (shader / transparent-edge AA)
-    // costs 1.77 ms IN-MISSION at pr=1.5 — too high for the visual benefit at
-    // retina-class density.
-    //
-    // Polish pass 2 (2026-07-10): HIGH `useFXAAFallback` flipped true. The
-    // OutputPass now sits before FXAA (MSAA → bloom → OutputPass → FXAA), so
-    // FXAA receives tone-mapped sRGB luma — the input it needs and was denied
-    // pre-OutputPass, which is why it was previously judged ineffective. MSAA-4
-    // alone leaves residual stair-stepping on the extreme-contrast Earth limb;
-    // FXAA (~0.3 ms) kills that sawtooth for far less than SMAA's 1.77 ms.
-    // C2 (Earth-visuals): HIGH `useFXAAFallback` flipped back to false. 4× MSAA in
-    // the composer RT already resolves geometric edges; the earlier polish-pass
-    // rationale (FXAA kills residual limb sawtooth) was calibrated against the
-    // A1-bug wash. With Phase A landed, FXAA's ~0.3 ms full-frame luma smear reads
-    // as redundant texture softening on the now-crisp disc. Kept ON for MEDIUM,
-    // where MSAA is only 2× and the extra edge cleanup still earns its keep.
+    //   useFXAAFallback — adds an FXAA ShaderPass (post-OutputPass) when SMAA is off, for lighter edge AA on top of MSAA
+    //                     (SceneManager._setupPostProcessing; chain: RenderPass + UnrealBloomPass + OutputPass + FXAA).
+    // HIGH `pixelRatioCap` is 1.5, not 2: at pr=2 the M4 Max renders 5760×3600 (20.7 M fragments) and every fragment-bound
+    // pass (Earth FS, bloom mip chain, SMAA, MSAA resolve) pays for it. Measured at 1.5: MENU 4.82 ms, IN-MISSION 5.12 ms —
+    // a 54% cost cut for a 44% fragment cut (cache / bandwidth pressure: at pr=2 the M4 Max is over its memory ceiling).
+    // HIGH `enableSMAA` is false: with 4× MSAA on the customRT geometric edges are already smoothed; SMAA costs 1.77 ms
+    // IN-MISSION at pr=1.5 — too high for the visual benefit at retina density.
+    // HIGH `useFXAAFallback` is false: 4× MSAA in the composer RT already resolves geometric edges, and FXAA's ~0.3 ms
+    // full-frame luma smear reads as redundant softening on the now-crisp Earth disc. MEDIUM keeps it ON, where MSAA is only
+    // 2× and the extra edge cleanup still earns its keep. (OutputPass sits before FXAA: MSAA → bloom → OutputPass → FXAA,
+    // so FXAA sees tone-mapped sRGB luma.)
     QUALITY_TIERS: {
       HIGH:   { msaaSamples: 4, enableBloom: true,  enableSMAA: false, pixelRatioCap: 1.5, useFXAAFallback: false },
       MEDIUM: { msaaSamples: 2, enableBloom: true,  enableSMAA: false, pixelRatioCap: 1.5, useFXAAFallback: true  },
@@ -7559,43 +6062,29 @@ export const Constants = {
     ADAPT_FPS_THRESHOLD: 50,
     // Cooldown frames after a tier change before another change is allowed.
     ADAPT_COOLDOWN_FRAMES: 300,
-    // Sprint 2 / PR B — auto-upshift gate. Median FPS at or above this triggers
-    // a tier promotion (one step up). Wider hysteresis band than downshift (50 → 58)
-    // prevents HIGH ↔ MEDIUM ping-pong when the workload sits near the threshold.
+    // Auto-upshift gate. Median FPS at or above this triggers a tier promotion (one step up). Wider hysteresis band than
+    // downshift (50 → 58) prevents HIGH ↔ MEDIUM ping-pong when the workload sits near the threshold.
     ADAPT_UPSHIFT_FPS_THRESHOLD: 58,
-    // Sprint 2 / PR B — upshift cooldown (frames). Longer than the downshift
-    // cooldown (300) because upshifting is optimistic — we want to be sure the
-    // workload really has eased before re-enabling heavier post-FX.
+    // Upshift cooldown (frames). Longer than the downshift cooldown (300) because upshifting is optimistic — we want to
+    // be sure the workload really has eased before re-enabling heavier post-FX.
     ADAPT_UPSHIFT_COOLDOWN_FRAMES: 600,
-    // PR 6 / P3.11: GPU runtime probe — EXT_disjoint_timer_query_webgl2.
-    // If the median GPU frame time over the probe window exceeds this (ms),
-    // request a tier downshift. Only runs once at startup.
-    // P3 (2026-07-20): 14 → 7. Calibrated against the pre-Sprint-3 23.65 ms
-    // warm-GPU baseline; post-fix HIGH runs ~3.5-4 ms so 14 could never trigger
-    // and runtime adapt was effectively disabled (GPU_PROFILING_REPORT §10.4).
-    // 7 ms ≈ 2× the post-fix HIGH baseline: fires only on genuinely struggling
-    // devices, still far under the 16.7 ms frame budget.
+    // GPU runtime probe — EXT_disjoint_timer_query_webgl2. If the median GPU frame time over the probe window exceeds this
+    // (ms), request a tier downshift. Only runs once at startup. HIGH runs ~3.5-4 ms, so 7 ms ≈ 2× that baseline: fires
+    // only on genuinely struggling devices, still far under the 16.7 ms frame budget (GPU_PROFILING_REPORT §10.4).
     GPU_PROBE_THRESHOLD_MS: 7,
     // Number of frames in the probe sampling window.
     GPU_PROBE_FRAMES: 60,
-    // Warmup/settle guard (ms). Adaptive tier changes — both the one-shot GPU
-    // startup probe and the runtime FPS adapt loop — are suppressed for this
-    // long after boot AND after each transition into a heavier state (menu →
-    // briefing → sim). One-time startup costs (shader compilation, 16K Earth
-    // texture decode/upload, debris-field build) spike GPU time and FPS well
-    // past steady state; without this window the probe/adapt would read that
-    // transient as sustained load and permanently downshift a capable machine
-    // (e.g. an M4 Max that holds HIGH at ~5 ms/frame — see Phase C.1 note above).
-    // A genuinely slow device still downshifts once the window elapses.
+    // Warmup/settle guard (ms). Adaptive tier changes — both the one-shot GPU startup probe and the runtime FPS adapt loop —
+    // are suppressed for this long after boot AND after each transition into a heavier state (menu → briefing → sim).
+    // One-time startup costs (shader compilation, 16K Earth texture decode/upload, debris-field build) spike GPU time and FPS
+    // well past steady state; without this window the probe/adapt would read that transient as sustained load and permanently
+    // downshift a capable machine (e.g. an M4 Max that holds HIGH at ~5 ms/frame). A genuinely slow device still downshifts
+    // once the window elapses.
     ADAPT_WARMUP_MS: 2500,
   },
 
-  // ============================================================================
-  // === WIREFRAMES (Delegation 3, 2026-05-31) ===
-  // Shared visual constants for Mother / Daughter / Debris wireframe panels.
-  // DaughterWireframe imports these; existing DebrisWireframe keeps its own
-  // internal constants for backward compatibility.
-  // ============================================================================
+  // WIREFRAMES — shared visual constants for Mother / Daughter / Debris wireframe panels. DaughterWireframe imports these;
+  // existing DebrisWireframe keeps its own internal constants.
   WIREFRAMES: {
     PANEL_SIZE_NORMAL:    { w: 280, h: 200 },
     PANEL_SIZE_EXPANDED:  { w: 380, h: 280 },
@@ -7608,11 +6097,10 @@ export const Constants = {
   },
 };
 
-// Steering-gas price: REAL since 2026-10-24 (owner "2 A", DECISIONS §1, §37 row 11). The factor multiplies the base rate
+// Steering-gas price is REAL (owner 2026-10-24 "2 A", DECISIONS §1, §37 row 11). The factor multiplies the base rate
 // (COLD_GAS_BASE_RATE units/s) into the bill, so it is derived, never typed: one couple (two nozzles) burns
 // 2 x NOZZLE_THRUST_N / (HOLD_ISP_S x G0) kg/s, and a tank unit is OCTOPUS_CORE_COLD_GAS / COLD_GAS_MAX kg (0.3).
-// 0.136 kg/s over 0.3 kg x 0.5 units/s = 0.906. It was 1.6 until then (an old rule, to make the wheels worth buying;
-// MEASURED 2026-10-17: a 60 degree arrow turn cost 5.7% of the tank).
+// 0.136 kg/s over 0.3 kg x 0.5 units/s = 0.906.
 Constants.ATTITUDE.RCS_ATTITUDE_N2_FACTOR =
   (2 * Constants.ATTITUDE.NOZZLE_THRUST_N / (Constants.REEL_PUSH.HOLD_ISP_S * Constants.G0)) /
   ((Constants.OCTOPUS_CORE_COLD_GAS / Constants.COLD_GAS_MAX) * Constants.ATTITUDE.COLD_GAS_BASE_RATE);
@@ -7624,11 +6112,7 @@ Constants.WHEELS.MASS_KG =
 Constants.WHEELS.COIL_TORQUE_NM =
   Constants.WHEELS.COIL_MOMENT_AM2 * Constants.WHEELS.FIELD_T * Constants.WHEELS.FIELD_ALLOWANCE;
 
-// ============================================================================
-// ST-6.6: TRL PURE HELPERS — exported for UI and tests.
-// These are intentionally side-effect-free and DOM-free so they can run in
-// Node.js test context.
-// ============================================================================
+// TRL pure helpers — exported for UI and tests; side-effect-free and DOM-free so they run in Node.
 
 /**
  * Validate a TRL value (must be integer in [MIN_VALID..MAX_VALID]).
@@ -7642,12 +6126,8 @@ export function isValidTRL(trl, C) {
 }
 
 /**
- * Map a TRL integer to one of four badge colours.
- * TRL 9   → COLOR_FLIGHT_PROVEN  (green)
- * TRL 7–8 → COLOR_MATURE         (yellow)
- * TRL 4–6 → COLOR_RESEARCH       (amber)
- * TRL 1–3 → COLOR_SPECULATIVE    (red)
- * Invalid TRL → COLOR_SPECULATIVE (fail-loud red).
+ * Map a TRL integer to one of four badge colours: 9 → COLOR_FLIGHT_PROVEN, 7–8 → COLOR_MATURE, 4–6 → COLOR_RESEARCH,
+ * 1–3 → COLOR_SPECULATIVE. Invalid TRL → COLOR_SPECULATIVE (fail-loud red).
  * @param {number} trl
  * @param {object} [C=Constants.TRL]
  * @returns {string} hex colour
@@ -7677,11 +6157,8 @@ export function trlToLabel(trl, C) {
 }
 
 /**
- * UX-11 #10: player-facing "Tech Level" presentation strings.
- * The internal data keys stay TRL (Constants.TRL, entry.trl) — only the
- * vocabulary shown to the player changes. Badge: "Tech Level n"; full label:
- * "Tech Level n: <tier word>". Apply in BOTH CodexViewerUI and ShopScreen
- * so "TRL" never survives anywhere player-facing.
+ * Player-facing "Tech Level" strings. The internal data keys stay TRL (Constants.TRL, entry.trl) — only the vocabulary
+ * shown to the player changes. Apply in BOTH CodexViewerUI and ShopScreen so "TRL" never survives player-facing.
  * @param {number} trl
  * @param {object} [C=Constants.TRL]
  * @returns {string} e.g. "Tech Level 9: Flight-proven"
@@ -7699,7 +6176,7 @@ export function techLevelBadgeText(trl) {
   return `Tech Level ${trl}`;
 }
 
-// CJS guard — expose pure helpers for Node.js tests (same pattern as Epic 5).
+// CJS guard — expose pure helpers for Node.js tests.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     Constants, trlToBadgeColor, trlToLabel, isValidTRL,

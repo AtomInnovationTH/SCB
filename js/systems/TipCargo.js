@@ -1,34 +1,25 @@
 /**
- * TipCargo.js — bags held on the radiator tips (lane l5a-tip-cargo).
+ * TipCargo.js — the HOLDER for bags on the radiator tips: one bag per tip, 4 slots.
  *
- * DECISIONS §1 (the leash ends at a radiator tip, where the tip magnet latches
- * the steel washer at the net's neck), §12 (pieces go to furnaces on the
- * radiator tips; the furnace is not built — the stand-in cook is the existing
- * span law), §5a (hardware keeps 0.15 m outside the engine plume cones).
+ * DECISIONS §1 (the leash ends at a radiator tip, where the tip magnet latches the steel washer at the net's neck),
+ * §12 (pieces go to furnaces on the radiator tips; the furnace is not built, the stand-in cook is the existing span
+ * law), §5a (hardware keeps 0.15 m outside the engine plume cones).
  *
- * This is only the HOLDER. One bag per radiator tip (4 slots). Nothing puts a
- * bag here yet except tests — lane l5b wires the leash to `stow()`.
- *
- * The holder mirrors the daughter rack (ArmUnit._pinHeldCatches /
- * _updateHoldingCatch):
- *   - PIN: every frame — "a gap reads as a release". The bag centre is the
- *     latch point + radius · dir, where `dir` lives in the radiator HINGE
- *     frame so the bag turns with the radiator and with the ship. After
- *     `swingToBoom(i)` the dir slews to the boom axis at SWING_RATE_DEG_S.
- *   - COOK: the same clock (`dt · BASE_SCALE · sunScale`), span
- *     (`FURNACE_TRANSFER.digestSpanS(mass)`), phases (hold / chop / feed),
- *     chop scale and `_breakdownActive` as the rack, each tip on its own clock.
+ * Mirrors the daughter rack (ArmUnit._pinHeldCatches / _updateHoldingCatch):
+ *   - PIN: every frame ("a gap reads as a release"). The bag centre is the latch point + radius · dir, where `dir`
+ *     lives in the radiator HINGE frame so the bag turns with the radiator and the ship. After `swingToBoom(i)` the
+ *     dir slews to the boom axis at SWING_RATE_DEG_S.
+ *   - COOK: the same clock (`dt · BASE_SCALE · sunScale`), span (`FURNACE_TRANSFER.digestSpanS(mass)`), phases
+ *     (hold / chop / feed), chop scale and `_breakdownActive` as the rack, each tip on its own clock.
  *     Ends with CATCH_PROCESSED { digested: true, source: 'tip', tipIndex }.
- *   - BOOKS: `massBookings()` feeds CoMCalculator.computeCoM / computeInertia;
- *     `totalMassKg()` feeds ArmManager.getCargoMassKg.
- *   - RADIATOR CEILING: `maxRadiatorThetaRad()` is read by
- *     PlayerSatellite._updateFlower — a bag on a tip must stay out of the
- *     engine plume cones, so the radiators may not open past the band row for
- *     the largest bag held (measured, tmp/probes/leash/lat15/bsum.txt).
+ *   - BOOKS: `massBookings()` feeds CoMCalculator.computeCoM / computeInertia; `totalMassKg()` feeds
+ *     ArmManager.getCargoMassKg.
+ *   - RADIATOR CEILING: `maxRadiatorThetaRad()` is read by PlayerSatellite._updateFlower: a bag on a tip must stay
+ *     out of the engine plume cones, so the radiators may not open past the band row for the largest bag held
+ *     (measured, tmp/probes/leash/lat15/bsum.txt).
  *
- * Frames: positions handed to the debris field are scene units in the world
- * frame (1 m = 1e-5). `massBookings()` / `spheres()` are metres in the ship
- * body frame (the frame `strutTipMeters` uses: barrel long axis = Z).
+ * Frames: positions handed to the debris field are scene units in the world frame (1 m = 1e-5). `massBookings()` /
+ * `spheres()` are metres in the ship body frame (the frame `strutTipMeters` uses: barrel long axis = Z).
  */
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
@@ -42,28 +33,24 @@ import {
   clearShipRelativeAttitude,
 } from '../entities/CaptureNet.js';
 import { DebrisField } from '../entities/DebrisField.js';
+import { degToRad, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 const M = Constants.SCENE_UNITS_PER_METER ?? 0.00001;
 
 /** Latch point offset beyond the pad origin along the outward boom (m). Measured: lat15/bsum.txt. */
 export const TIP_STALK_M = 0.15;
 /**
- * Largest bag radius a tip takes (m). 0.75 since v12-big-bags (the 2.30 m radiators): every radius up to 0.75 has a
- * measured hand-off angle with and without bags held on the other tips — Constants.LEASH.HANDOFF_THETA_TABLE,
- * tmp/v12bb/summ.txt. (0.50 at the 2.5 m radiators.)
+ * Largest bag radius a tip takes (m): every radius up to it has a measured hand-off angle with and without bags held
+ * on the other tips (Constants.LEASH.HANDOFF_THETA_TABLE, tmp/v12bb/summ.txt).
  */
 export const MAX_BAG_R_M = 0.75;
 /**
- * Bag radius (m) → max radiator angle (deg) with that bag on a tip, 0.15 m
- * floor to every engine plume cone (the same for all four tips). Measured with
- * the 0.15 m latch — tmp/probes/leash/lat15/bsum.txt at 2.5 m; re-measured at
- * the 2.30 m radiators (tmp/probes/arm-length/band.mjs, tmp/v12bb/band-s0.2.txt:
- * 0.10 146 | 0.15 145 | 0.22 143.5 | 0.30 142 | 0.40 140 | 0.50 138 | 0.60 136.5 |
- * 0.75 134; the old rows are unchanged, the new ones are floored to a whole degree
- * like the old). A bag takes the row for the next radius at or above its own.
+ * Bag radius (m) → max radiator angle (deg) with that bag on a tip, 0.15 m floor to every engine plume cone (the same
+ * for all four tips), floored to a whole degree. Measured with the 0.15 m latch at the 2.30 m radiators
+ * (tmp/probes/arm-length/band.mjs, tmp/v12bb/band-s0.2.txt). A bag takes the row for the next radius at or above its own.
  */
 export const TIP_BAND = [[0.10, 146], [0.15, 145], [0.22, 143], [0.30, 142], [0.40, 140], [0.50, 138], [0.60, 136], [0.75, 134]];
-/** How fast a bag turns from the line it arrived on to the boom axis (deg/s). ESTIMATE, not measured. fb16 2026-10-25: was 10 (the swing took 6-7 s). */
+/** How fast a bag turns from the line it arrived on to the boom axis (deg/s). ESTIMATE, not measured. */
 export const SWING_RATE_DEG_S = 20;
 /** Tip order for the next free tip: azimuth 40 → 220 → 140 → 320 (AZIMUTHS_DEG indices). */
 const PICK_ORDER = [0, 2, 1, 3];
@@ -76,28 +63,31 @@ const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _X = new THREE.Vector3(1, 0, 0);
 
-// Melt bag look (owner 2026-10-27, "a bunch of grey triangles in a sphere shape ... research more"): a woven ceramic-fibre cloth bag stretched
-// taut over the cut parts: ONE closed, smooth skin (a detail-6 icosphere with its corners merged by position, so no corner moves twice and there are no
-// gaps) whose shape is the CONVEX HULL of a few packed part corners (cloth stretched over boxes and tubes: flat-ish faces, soft ridges, a few corner
-// points), woven cloth, a small dazzling focus spot inside a dull-red halo where the furnace heats it, and the hull relaxing toward a plain sphere as the
-// parts melt and surface tension rounds them (docs/research/2026-10-slice5-big-pieces.md).
-/** Hull weight k: how far the skin follows the packed parts (1 = their hull, 0 = a sphere). 0.8 down to frac 0.3, then fading to 0.1 at frac 0 (round 2: the bag is only drawn while melting, so the parts must show). */
+// Melt bag look (owner 2026-10-27, "a bunch of grey triangles in a sphere shape ... research more"): a woven ceramic-fibre
+// cloth bag stretched taut over the cut parts: ONE closed, smooth skin (a detail-6 icosphere, corners merged by position
+// so no corner moves twice and there are no gaps) shaped as the CONVEX HULL of a few packed part corners (flat-ish faces,
+// soft ridges), a small dazzling focus spot inside a dull-red halo where the furnace heats it, and the hull relaxing
+// toward a sphere as the parts melt (docs/research/2026-10-slice5-big-pieces.md).
+/**
+ * Hull weight k: how far the skin follows the packed parts (1 = their hull, 0 = a sphere). 0.8 down to frac 0.3, then
+ * fading to 0.1 at frac 0 (the bag is only drawn while melting, so the parts must show).
+ */
 export const PART_BAG_HULL_FULL = 0.8;
 export const PART_BAG_HULL_FLOOR = 0.1;
-/** The hull weight holds at its full value down to this melt fraction, then fades (round 2). */
+/** The hull weight holds at its full value down to this melt fraction, then fades. */
 export const PART_BAG_HULL_HOLD = 0.3;
-const PART_BAG_SMOOTH_ITERS = 3;               // edge softening passes (round 1 used 6: the faces blurred into an egg)
+const PART_BAG_SMOOTH_ITERS = 3;               // edge softening passes (6 blurred the faces into an egg)
 /** A bag's skin is rebuilt only when its melt fraction has moved by more than this since the last build. */
 export const PART_BAG_REBUILD_STEP = 0.02;
-const PART_BAG_CLOTH = 0xcdc4aa;          // warm cream, darker than white so sunlight does not blow it out (round 2: no blue or grey tint): ESTIMATE, not sourced
+const PART_BAG_CLOTH = 0xcdc4aa;          // warm cream, darker than white so sunlight does not blow it out, no blue or grey tint: ESTIMATE, not sourced
 const PART_BAG_ROUGHNESS = 0.95;
 const PART_BAG_BUMP = 0.5;                // ESTIMATE
-const PART_BAG_WEAVE_REPEAT = [48, 24];   // weave tiles around / pole to pole of the bag (u spans 2 pi, v spans pi): 48 repeats around, a fine weave, round 2: ESTIMATE
-const PART_BAG_WEAVE_SWING = 0.07;        // luminance swing of the weave, 7 % (round 2: 5-8 %, barely visible at 3 m)
+const PART_BAG_WEAVE_REPEAT = [48, 24];   // weave tiles around / pole to pole (u spans 2 pi, v spans pi): ESTIMATE
+const PART_BAG_WEAVE_SWING = 0.07;        // luminance swing of the weave, 7 % (5-8 %: barely visible at 3 m)
 const PART_BAG_WEAVE_TINT = [255, 249, 232];   // warm cream tint of the weave texture: R >= G > B
 const PART_BAG_GLOW_EMISSIVE = 1.0;       // the dazzling core is emissive 1.0; the halo's own colour is dimmed in the texture
 const PART_BAG_CORE_COLOR = [255, 240, 190];   // white-yellow focus spot: ESTIMATE
-const PART_BAG_HALO_PEAK = [178, 38, 6];       // cherry red at the halo's inner edge, red 0.7 of full (cloth next to a ~1 kW focus runs far hotter than the 660 C melt; round 2): ESTIMATE
+const PART_BAG_HALO_PEAK = [178, 38, 6];       // cherry red at the halo's inner edge, red 0.7 of full (cloth next to a ~1 kW focus runs far hotter than the 660 C melt): ESTIMATE
 const PART_BAG_CORE_R = 0.09;             // core radius, in bag radii (angular, on the +X side): 8-10 % per the owner round
 const PART_BAG_HALO_R = 0.25;             // halo radius, in bag radii
 const PART_BAG_GLOW_WINDOW = 0.36;        // the glow texture covers dir.y, dir.z in -0.36..0.36 (a cap about 21 deg across), black outside; the far side is pushed out of range
@@ -119,7 +109,7 @@ let _partBagBase = null;
 /** The unit icosphere (detail 6) with corners merged by position, vertex neighbours, and the two uv sets (weave, focus glow). */
 function partBagBase() {
   if (_partBagBase) return _partBagBase;
-  const src = new THREE.IcosahedronGeometry(1, 6);          // detail 6 (plan said 3: 320 triangles gave a visibly polygonal outline; 980 is still ~500 vertices) non-indexed: three corners per triangle, shared corners repeated
+  const src = new THREE.IcosahedronGeometry(1, 6);          // detail 6 (3 gave a visibly polygonal outline); non-indexed: three corners per triangle, shared corners repeated
   const sp = src.attributes.position;
   const ids = new Map();
   const dirs = [];
@@ -144,7 +134,7 @@ function partBagBase() {
   for (let v = 0; v < n; v++) {
     const x = dirs[3 * v], y = dirs[3 * v + 1], z = dirs[3 * v + 2];
     uv[2 * v] = Math.atan2(z, x) / (2 * Math.PI) + 0.5;
-    uv[2 * v + 1] = Math.acos(Math.max(-1, Math.min(1, y))) / Math.PI;
+    uv[2 * v + 1] = Math.acos(clamp(y, -1, 1)) / Math.PI;
     if (x > 0.5) { uv1[2 * v] = 0.5 + y / (2 * PART_BAG_GLOW_WINDOW); uv1[2 * v + 1] = 0.5 + z / (2 * PART_BAG_GLOW_WINDOW); }
     else { uv1[2 * v] = 5; uv1[2 * v + 1] = 5; }
   }
@@ -222,11 +212,11 @@ function partBagHull(seed) {
   base.hulls.set(seed, r);
   return r;
 }
-/** How closely the skin follows the packed parts' hull for a melt fraction: 0.8 down to frac 0.3 (the bag is only drawn while melting, so the parts must show), then fading to 0.1 at frac 0. */
+/** Hull weight for a melt fraction (PART_BAG_HULL_*). */
 export function partBagHullK(frac) {
-  const f = Math.max(0, Math.min(1, Number.isFinite(frac) ? frac : 1));
+  const f = clamp01(Number.isFinite(frac) ? frac : 1);
   if (f >= PART_BAG_HULL_HOLD) return PART_BAG_HULL_FULL;
-  return PART_BAG_HULL_FLOOR + (PART_BAG_HULL_FULL - PART_BAG_HULL_FLOOR) * (f / PART_BAG_HULL_HOLD);
+  return lerp(PART_BAG_HULL_FLOOR, PART_BAG_HULL_FULL, f / PART_BAG_HULL_HOLD);
 }
 /** A fresh closed, indexed, smooth-shaded skin for a melt fraction and a bag seed (the caller owns it and disposes it). */
 export function buildPartBagGeometry(frac, seed = 0) {
@@ -262,9 +252,9 @@ export function partBagGlowMap() {
   for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
     const dy = ((x + 0.5) / W - 0.5) * 2 * PART_BAG_GLOW_WINDOW, dz = ((y + 0.5) / W - 0.5) * 2 * PART_BAG_GLOW_WINDOW;
     const rho = Math.hypot(dy, dz);
-    const halo = Math.pow(Math.max(0, Math.min(1, (PART_BAG_HALO_R - rho) / (PART_BAG_HALO_R - PART_BAG_CORE_R))), 0.7);   // 1 at the core's edge, 0 at 25 % of the radius; the 0.7 power keeps it clearly lit at mid radius
-    const t = Math.max(0, Math.min(1, (PART_BAG_CORE_R + 0.01 - rho) / 0.03));         // 1 inside about 0.07 .. 0 at 0.10
-    const core = t * t * (3 - 2 * t);
+    const halo = Math.pow(clamp01((PART_BAG_HALO_R - rho) / (PART_BAG_HALO_R - PART_BAG_CORE_R)), 0.7);   // 1 at the core's edge, 0 at 25 % of the radius; the 0.7 power keeps it clearly lit at mid radius
+    const t = clamp01((PART_BAG_CORE_R + 0.01 - rho) / 0.03);         // 1 inside about 0.07 .. 0 at 0.10
+    const core = smoothstep01(t);
     const o = 4 * (y * W + x);
     for (let c = 0; c < 3; c++) data[o + c] = Math.round(PART_BAG_HALO_PEAK[c] * halo * (1 - core) + PART_BAG_CORE_COLOR[c] * core);
     data[o + 3] = 255;
@@ -289,8 +279,8 @@ export function partBagWeaveMap() {
     const cx = Math.floor(x / C), cy = Math.floor(y / C);
     const along = ((cx + cy) % 2 === 0) ? (x % C) : (y % C);       // across the thread on top: it is round, bright at its crown
     const crown = Math.sin(Math.PI * (along + 0.5) / C);
-    const grain = ((Math.imul(x * 73856093 ^ y * 19349663, 2654435761) >>> 24) / 255 - 0.5) * 0.15 * PART_BAG_WEAVE_SWING;   // fibre noise
-    const g = Math.max(0, Math.min(1, 1 - PART_BAG_WEAVE_SWING * (1 - crown) + grain));    // brightest 1.0 at the thread crown, 7 % darker between threads
+    const grain = ((Math.imul(x * 73856093 ^ y * 19349663, 2654435761) >>> 24) / 255 - 0.5) * 0.15 * PART_BAG_WEAVE_SWING;
+    const g = clamp01(1 - PART_BAG_WEAVE_SWING * (1 - crown) + grain);    // brightest 1.0 at the thread crown, 7 % darker between threads
     const o = 4 * (y * W + x);
     for (let c = 0; c < 3; c++) data[o + c] = Math.round(PART_BAG_WEAVE_TINT[c] * g);
     data[o + 3] = 255;
@@ -335,12 +325,12 @@ export class TipCargo {
     this.eventBus = bus;
     /** @type {Array<null|object>} one bag per tip */
     this._slots = [null, null, null, null];
-    /** trip-melt-2 (carry): tips a daughter is carrying a catch to (see `reserve`) */
+    /** tips a daughter is carrying a catch to (see `reserve`) */
     this._reserved = [false, false, false, false];
     this._tipCache = [null, null, null, null];
     this._bookings = [];
-    this._lastThetas = [null, null, null, null];   // petal-single: each occupied tip's petal angle at the last update
-    /** Nets step 3 slice 5 (lane 5e): the part of a big piece being melted in tip i's furnace, drawn as a bag (see `showPartBag`) */
+    this._lastThetas = [null, null, null, null];   // each occupied tip's petal angle at the last update
+    /** the part of a big piece being melted in tip i's furnace, drawn as a bag (see `showPartBag`) */
     this._partBags = [null, null, null, null];
     this._boundReset = () => this.reset();
     this.eventBus.on(Events.GAME_RESET, this._boundReset);
@@ -353,7 +343,7 @@ export class TipCargo {
     this.eventBus.off(Events.GAMEOVER_CONTINUE, this._boundReset);
   }
 
-  // ── tip hardware (found lazily by name — pairs are installed late) ───────
+  // tip hardware: found lazily by name (pairs are installed late)
 
   /** @returns {{hinge:THREE.Object3D, tip:THREE.Object3D, pad:THREE.Object3D|null}|null} */
   _tipRec(i) {
@@ -438,13 +428,10 @@ export class TipCargo {
     return out;
   }
 
-  // ── slots ────────────────────────────────────────────────────────────────
-
   /**
    * Next free tip that exists (order az 40 → 220 → 140 → 320), or null. A tip a daughter is carrying to is not free.
-   * petal-single (owner 2026-10-19, "debris should be transferred to radiators first so daughters stay available"): a free
-   * tip whose daughter holds no catch is preferred, so a nose catch does not take the tip a loaded daughter is waiting for
-   * while another tip is free; with every free tip wanted by a loaded daughter, the order above decides.
+   * A free tip whose daughter holds no catch is preferred, so a nose catch does not take the tip a loaded daughter is
+   * waiting for while another tip is free; with every free tip wanted by a loaded daughter, the order above decides.
    */
   pickTip() {
     let wanted = null;
@@ -464,8 +451,8 @@ export class TipCargo {
   }
 
   /**
-   * trip-melt-2 (carry): hold tip i's slot for a daughter on her way with a catch — `pickTip` skips it until the stow
-   * (which clears it), `unreserve`, or `reset`.
+   * Hold tip i's slot for a daughter on her way with a catch: `pickTip` skips it until the stow (which clears it),
+   * `unreserve`, or `reset`.
    * @returns {boolean} false when the tip is taken, already reserved, or does not exist
    */
   reserve(i) {
@@ -501,9 +488,9 @@ export class TipCargo {
 
   has(i) { return !!this._slots[i]; }
   /**
-   * l6-look — what the mother digest line prints ("Tips 1/2", "cooking 40%"). Returns ONE reused object, so a
-   * 10 Hz readout allocates nothing: `held` bags, `tips` fitted (2 per radiator pair, 4 with both), `cookingPct`
-   * (0..100, the furthest-along bag's share of its cook clock) or null while nothing is cooking.
+   * What the mother digest line prints ("Tips 1/2", "cooking 40%"). Returns ONE reused object, so a 10 Hz readout
+   * allocates nothing: `held` bags, `tips` fitted (2 per radiator pair, 4 with both), `cookingPct` (0..100, the
+   * furthest-along bag's share of its cook clock) or null while nothing is cooking.
    * @returns {{held:number, tips:number, cookingPct:number|null}}
    */
   digest() {
@@ -601,32 +588,35 @@ export class TipCargo {
     for (const s of this._slots) {
       if (!s) continue;
       const deg = bandDegForRadius(s.radiusM);
-      const rad = ((deg === null ? TIP_BAND[TIP_BAND.length - 1][1] : deg) * Math.PI) / 180;
+      const rad = degToRad(deg === null ? TIP_BAND[TIP_BAND.length - 1][1] : deg);
       if (rad < best) best = rad;
     }
-    // lane 5e: a part bag shown on a tip holds the radiators at its band exactly as a real bag of its reach does
+    // a part bag shown on a tip holds the radiators at its band exactly as a real bag of its reach does
     for (const b of this._partBags) {
       if (!b || b.demo) continue;                  // a furnace-test demo bag never holds the radiators
       const deg = bandDegForRadius(b.radiusM);
-      const rad = ((deg === null ? TIP_BAND[TIP_BAND.length - 1][1] : deg) * Math.PI) / 180;
+      const rad = degToRad(deg === null ? TIP_BAND[TIP_BAND.length - 1][1] : deg);
       if (rad < best) best = rad;
     }
     return best;
   }
 
-  // ── part bags (Nets step 3 slice 5, lane 5e: a big piece melting in a tip furnace) ─────────────────────
+  // part bags: a big piece melting in a tip furnace
 
   /**
-   * Show (or update) the bag of the PART of a big piece being melted in tip i's furnace: a woven ceramic-cloth bag (one closed skin stretched over the packed parts' hull, a dazzling
-   * focus spot in a dull-red halo on its furnace +X side) pinned to the tip like a real bag, rounding and shrinking as it melts. It is only a drawing: no field body, no CATCH_PROCESSED, no NET_CONSUMED, no mass booking (the
-   * part's kilograms are still in the piece until it melts, GameFlowManager books them then). It counts in `maxRadiatorThetaRad()` exactly as a real
-   * bag of its drawn reach does (the part's size with its parent's geometry, `DebrisField.trueReachM`: 0.70 m reads the 134 deg row), at its FULL
-   * size, so the radiators settle once and do not chase the shrinking bag. The ceiling lifts at `clearPartBags`.
+   * Show (or update) the bag of the PART of a big piece being melted in tip i's furnace: a woven ceramic-cloth bag (one
+   * closed skin over the packed parts' hull, a dazzling focus spot in a dull-red halo on its furnace +X side) pinned to
+   * the tip like a real bag, rounding and shrinking as it melts. Only a drawing: no field body, no CATCH_PROCESSED, no
+   * NET_CONSUMED, no mass booking (the part's kilograms stay in the piece until it melts, GameFlowManager books them
+   * then). It counts in `maxRadiatorThetaRad()` as a real bag of its drawn reach does (the part's size with its
+   * parent's geometry, `DebrisField.trueReachM`: 0.70 m reads the 134 deg row), at its FULL size, so the radiators
+   * settle once and do not chase the shrinking bag. The ceiling lifts at `clearPartBags`.
    * @param {number} i tip index (0..3)
    * @param {{type: string, sizeM: number, frac?: number, demo?: boolean}} spec `sizeM` the packed part's diameter (m), `frac` 1 = whole .. 0 = melted;
-   *   `demo` true = the OVERRIDE panel's furnace test (a drawing and nothing else): it is left out of `maxRadiatorThetaRad()`, it never replaces a real
-   *   melt's bag on the tip (returns false), and a real `showPartBag` (no `demo`) on the tip takes it over; `stow` on the tip drops it
-   *   A demo is also refused while tip i's radiator is open past the band row of its reach (the angle a real bag would have capped it at).
+   *   `demo` true = the OVERRIDE panel's furnace test (a drawing and nothing else): it is left out of
+   *   `maxRadiatorThetaRad()`, it never replaces a real melt's bag on the tip (returns false), and a real `showPartBag`
+   *   (no `demo`) on the tip takes it over; `stow` on the tip drops it. A demo is also refused while tip i's radiator is
+   *   open past the band row of its reach (the angle a real bag would have capped it at).
    * @returns {boolean} false when the tip does not exist, holds a real bag, or the part does not fit a tip (or a demo meets a real melt's bag, or the radiators are open past its band)
    */
   showPartBag(i, spec = {}) {
@@ -641,7 +631,7 @@ export class TipCargo {
     if (!b) b = this._partBags[i] = { i, type: spec.type, sizeM: spec.sizeM, radiusM, frac: 1, mesh: null, demo: false };
     b.demo = spec.demo === true;
     b.type = spec.type; b.sizeM = spec.sizeM; b.radiusM = radiusM;
-    b.frac = Number.isFinite(spec.frac) ? Math.max(0, Math.min(1, spec.frac)) : 1;
+    b.frac = Number.isFinite(spec.frac) ? clamp01(spec.frac) : 1;
     if (!b.mesh) {
       b.mesh = new THREE.Mesh(buildPartBagGeometry(b.frac, b.i), partBagMaterial());
       b.builtFrac = b.frac; b.builds = 1;
@@ -668,7 +658,7 @@ export class TipCargo {
     const th = typeof p.petalThetaRad === 'function' ? p.petalThetaRad(Constants.THERMAL.FLOWER.AZIMUTHS_DEG[i]) : p._flowerThetaRad;
     if (!Number.isFinite(th)) return false;
     const deg = bandDegForRadius(radiusM);
-    const bandRad = ((deg === null ? TIP_BAND[TIP_BAND.length - 1][1] : deg) * Math.PI) / 180;
+    const bandRad = degToRad(deg === null ? TIP_BAND[TIP_BAND.length - 1][1] : deg);
     return th > bandRad + 1e-6;
   }
 
@@ -695,8 +685,6 @@ export class TipCargo {
     }
   }
 
-  // ── placement ────────────────────────────────────────────────────────────
-
   /** Bag centre for a slot: scene-unit world into slot.pos, metres ship-frame into slot.posShip. */
   _place(slot, rec) {
     // latch + r·dir in the hinge frame, then to ship / world
@@ -714,15 +702,13 @@ export class TipCargo {
     const cos = Math.max(-1, Math.min(1, d.dot(_X)));
     const angle = Math.acos(cos);
     if (angle < 1e-9) { d.copy(_X); slot.swinging = false; return; }
-    const step = (SWING_RATE_DEG_S * Math.PI / 180) * dt;
+    const step = (degToRad(SWING_RATE_DEG_S)) * dt;
     if (step >= angle) { d.copy(_X); slot.swinging = false; return; }
     _v1.crossVectors(d, _X);
     if (_v1.lengthSq() < 1e-12) _v1.set(0, 0, 1);   // exactly opposite: any perpendicular will do
     _v1.normalize();
     d.applyAxisAngle(_v1, step).normalize();
   }
-
-  // ── per-frame ────────────────────────────────────────────────────────────
 
   /**
    * Pin every bag and run its cook. `dt` is the game step (0 while the world is
@@ -742,8 +728,8 @@ export class TipCargo {
       this._place(slot, rec);
       this._cook(slot, dt);
     }
-    // The radiator swing moves the bags (books): the cached inertia must follow. petal-single: each bag rides ITS petal, so
-    // the check is per tip (a held petal swings while the rest stay still).
+    // The radiator swing moves the bags (books): the cached inertia must follow. Each bag rides ITS petal, so the check
+    // is per tip (a held petal swings while the rest stay still).
     if (any) {
       let moved = false;
       for (let i = 0; i < SLOT_COUNT; i++) {
@@ -779,11 +765,10 @@ export class TipCargo {
     const bus = this.eventBus;
     const anchor = slot.anchor;
 
-    // no-melt (owner 2026-10-18, "Stay full size, no melting"): with no furnace the clock never runs, so the bag
-    // never reaches the hold/chop/feed phases below - no breakdown events, no shrink, the slot stays held.
-    // trip-melt D5 (owner 2026-10-19, "melted down in the furnace during the long ion burn"): the four tip furnaces
-    // cook while a transfer trip burns, and only then (the nose collar and the racks have no furnace: their flag
-    // reads stay FURNACE_COOK alone). Same span, same sun factor, same real-dt clock.
+    // With no furnace the clock never runs, so the bag never reaches the hold/chop/feed phases below: no breakdown
+    // events, no shrink, the slot stays held. The four tip furnaces cook while a transfer trip burns, and only then (the
+    // nose collar and the racks have no furnace: their flag reads stay FURNACE_COOK alone). Same span, same sun factor,
+    // same real-dt clock.
     const cook = Constants.isFeatureEnabled('FURNACE_COOK') || tripMelting();
     if (dt > 0 && cook) {
       const span = FT.digestSpanS(slot.massKg);
@@ -852,11 +837,12 @@ export class TipCargo {
   }
 
   /**
-   * u23 (owner 2026-10-24, "each catch moves to a free tip and melts before you arrive"; DECISIONS §33 row 17: many hours or days of realtime to melt
-   * debris): finish every melt in progress NOW, the end of a transfer trip's days. Each occupied tip gets its whole span and the melt's own
-   * completion runs (`_cook(slot, 0)`, the code `update` runs at the end of the span), so the chunks, `NET_CONSUMED` and `CATCH_PROCESSED`
-   * (`digested: true`, source 'tip') fire exactly as in play and the tip is free. Only while melting runs (the furnace flag, or a trip burning:
-   * `tripMelting`); outside one it does nothing. A tip whose hardware is gone is left, as `update` leaves it.
+   * owner 2026-10-24: "each catch moves to a free tip and melts before you arrive" (DECISIONS §33 row 17: many hours or
+   * days of realtime to melt debris). Finish every melt in progress NOW, the end of a transfer trip's days. Each occupied
+   * tip gets its whole span and the melt's own completion runs (`_cook(slot, 0)`, the code `update` runs at the end of
+   * the span), so the chunks, `NET_CONSUMED` and `CATCH_PROCESSED` (`digested: true`, source 'tip') fire exactly as in
+   * play and the tip is free. Only while melting runs (the furnace flag, or a trip burning: `tripMelting`); outside one
+   * it does nothing. A tip whose hardware is gone is left, as `update` leaves it.
    * @returns {number} how many bags melted
    */
   finishMelts() {
@@ -873,8 +859,6 @@ export class TipCargo {
     }
     return n;
   }
-
-  // ── books ────────────────────────────────────────────────────────────────
 
   /**
    * Held mass and where it sits, for computeCoM / computeInertia.
@@ -906,14 +890,11 @@ export class TipCargo {
     return out;
   }
 
-  // ── station hand-over ────────────────────────────────────────────────────
-
   /**
-   * no-melt: let go of tip i's bag WITHOUT cooking it (the old station hand-over; the station takes nothing since
-   * trip-melt-1, so only tests call it now). Frees the
-   * slot and clears every pin the tip wrote; the caller owns what happens to the body (the game removes it from the
-   * field, already paid). Emits NET_CONSUMED so the bag visual clears the way the cook's end does; no
-   * CATCH_PROCESSED (nothing is credited or digested).
+   * Let go of tip i's bag WITHOUT cooking it (only tests call it now). Frees the slot and clears every pin the tip
+   * wrote; the caller owns what happens to the body (the game removes it from the field, already paid). Emits
+   * NET_CONSUMED so the bag visual clears the way the cook's end does; no CATCH_PROCESSED (nothing is credited or
+   * digested).
    * @param {number} i tip index (0..3)
    * @returns {object|null} the released debris, or null when the tip is empty
    */
@@ -932,8 +913,6 @@ export class TipCargo {
     this.eventBus.emit(Events.NET_CONSUMED, { armId: 'mother', debrisId: d.id, anchor: s.anchor });
     return d;
   }
-
-  // ── reset ────────────────────────────────────────────────────────────────
 
   /** Drop every bag: release the bodies to the field as free, re-targetable pieces. */
   reset() {

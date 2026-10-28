@@ -1,12 +1,9 @@
 /**
- * @module systems/ShowMode — "show mode": this device is a shared iPad (owner 2026-10-28; plan
- * tmp/plans/fresh-start-1028.md D1). While it is on, IdleReset's clock runs and asks "Still playing?" after 60 s
- * without a touch; off (the default) the game behaves exactly as before: no clock, no card, home players never lose a
- * game to a timer.
+ * @module systems/ShowMode — "show mode": this device is a shared iPad (DECISIONS §52). While on, IdleReset's clock runs
+ * and asks "Still playing?" after 60 s without a touch; off (the default) there is no clock and no card.
  *
- * On: open the game once with `?show=1` (remembered on that device, StorageKeys.SHOW_MODE), or the menu's
- * "Show mode (shared iPad)" toggle (a Home Screen web app keeps its own storage and always opens `./`, so the toggle is
- * the way in there). Off: `?show=0` or the same toggle.
+ * On: `?show=1` once (remembered on that device, StorageKeys.SHOW_MODE) or the menu toggle (a Home Screen web app keeps
+ * its own storage and always opens `./`, so the toggle is the way in there). Off: `?show=0` or the same toggle.
  *
  * THIS MODULE'S BODY RUNS AT IMPORT, and main.js imports it FIRST: (1) finish a New player reset that was cut short
  * (`bootWipeIfPending`), before SettingsManager, OnboardingDirector and the rest read storage; (2) apply `?show=`.
@@ -43,7 +40,7 @@ export function readShowMode(storage) {
 }
 
 /**
- * Write the switch. Off removes the key (the device is back to a plain install).
+ * Off removes the key.
  * @returns {boolean} true when storage took the write
  */
 export function writeShowMode(on, storage) {
@@ -56,10 +53,7 @@ export function writeShowMode(on, storage) {
   } catch (_) { return false; }
 }
 
-/**
- * Apply a `?show=` switch from the URL.
- * @returns {boolean|null} the new state, or null when the URL carried no (valid) switch
- */
+/** @returns {boolean|null} the new state, or null when the URL carried no (valid) switch */
 export function applyShowParam(search, storage) {
   const v = parseShowParam(search);
   if (v === null) return null;
@@ -67,7 +61,7 @@ export function applyShowParam(search, storage) {
   return v;
 }
 
-/** Live state for this page (the menu toggle, the "Show mode" mark and the idle clock all read it). */
+/** Live state for this page (the menu toggle, the "Show mode" mark and the idle clock read it). */
 export class ShowModeState {
   /** @param {object} [storage] localStorage-like; omitted = the page's */
   constructor(storage) {
@@ -80,7 +74,7 @@ export class ShowModeState {
   isOn() { return this._on; }
 
   /**
-   * Switch on or off, persist, tell the subscribers when it changed.
+   * Persists, and tells the subscribers when it changed.
    * @param {boolean} on
    * @returns {boolean} the state now
    */
@@ -94,20 +88,20 @@ export class ShowModeState {
     return this._on;
   }
 
-  /** Re-read storage (after the URL switch ran, or in a test). */
+  /** Re-read storage (after the URL switch ran). */
   refresh() { this._on = readShowMode(this._storage); return this._on; }
 
   /** @param {(on:boolean)=>void} fn @returns {()=>void} unsubscribe */
   onChange(fn) { this._subs.add(fn); return () => this._subs.delete(fn); }
 }
 
-// ── import-time work (see the header) ────────────────────────────────────────
+// import-time work (see the header)
 try { bootWipeIfPending(); } catch (_) { /* never block the boot */ }
 try {
   if (typeof location !== 'undefined') applyShowParam(location.search);
 } catch (_) { /* never block the boot */ }
 
-/** The page's show mode. Built after the URL switch has been applied. */
+/** Built after the URL switch has been applied. */
 export const showMode = new ShowModeState();
 
 export default showMode;

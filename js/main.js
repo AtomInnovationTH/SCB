@@ -6,12 +6,9 @@
 
 import * as THREE from 'three';
 
-// Shared-iPad show mode (owner 2026-10-28). FIRST import on purpose: its module body finishes a cut-short New player
+// Shared-iPad show mode. FIRST import on purpose: its module body finishes a cut-short New player
 // reset and applies ?show= before any store below reads storage (SettingsManager builds at import).
 import './systems/ShowMode.js';
-
-// [DBG-KEY-CAPTURE] window-level keydown sniffer removed (noise on every keystroke).
-// Re-enable only when diagnosing ASR / accessibility / focus key-injection issues.
 
 import { Constants } from './core/Constants.js';
 import { eventBus } from './core/EventBus.js';
@@ -86,9 +83,8 @@ import { GameOverScreen } from './ui/GameOverScreen.js';
 import { TargetReticle } from './ui/TargetReticle.js';
 import { NavSphere } from './ui/NavSphere.js';
 import { DebrisMap } from './ui/DebrisMap.js';
-// DebrisWireframe is now created by HUD.js (integrated right-column layout)
-// Whale-in-cone phase 3: main ALSO imports it directly for the scenario probe's
-// bounding-radius reads (getBoundingRadius is a static cached accessor).
+// HUD.js creates the DebrisWireframe; main also imports it for the scenario probe's bounding-radius reads
+// (getBoundingRadius is a static cached accessor).
 import { DebrisWireframe } from './ui/DebrisWireframe.js';
 import { drawnRimRadiusAtDepth, contentsFloorRadius, contentsFloorRadiusBox, contentsFloorClamped, contentsBoxValid, chordBoxPenetration } from './ui/NetMeshKit.js';
 import { DockingReticle } from './ui/DockingReticle.js';
@@ -102,8 +98,8 @@ import { SkillsPane } from './ui/hud/SkillsPane.js';
 import { TestsPane } from './ui/hud/TestsPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
 import { armIdleAdvisor } from './systems/ArmIdleAdvisor.js';
-import { setNResolver } from './systems/netRouting.js';   // hints-scan D1: one answer to "does N work her"
-import { wireScanShowsTargets } from './ui/hud/TargetPanel.js';   // hints-scan D5: every scan press shows the Targets pane
+import { setNResolver } from './systems/netRouting.js';
+import { wireScanShowsTargets } from './ui/hud/TargetPanel.js';
 import { guidanceTelemetry } from './systems/GuidanceTelemetry.js';
 import { navRecoveryAdvisor } from './systems/NavRecoveryAdvisor.js';
 import { targetAcquisition } from './systems/TargetAcquisition.js';
@@ -157,7 +153,7 @@ import { CopilotVoice } from './systems/CopilotVoice.js';
 import { GestureSplash } from './ui/GestureSplash.js';
 import { TouchMapStore } from './systems/TouchMapStore.js';
 import { StrutAutoStore } from './systems/StrutAuto.js';
-import { FloorWordsStore, floorWordsToShow, FLOOR_WORDS_MS } from './systems/FloorWordsStore.js';   // u7 D6
+import { FloorWordsStore, floorWordsToShow, FLOOR_WORDS_MS } from './systems/FloorWordsStore.js';
 import { RAIL_GEOMETRY, footerBand } from './ui/RailGeometry.js';
 import { installHudScale } from './ui/HudScale.js';
 import { EdgeChrome } from './ui/EdgeChrome.js';
@@ -167,7 +163,7 @@ import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
 import { nearestWithin as tapNearestWithin, TAP_SLOP_PX, TAP_SLOP_MS } from './systems/TapPick.js';
 import { pressKey as dispatchKeyPress } from './core/KeyDispatch.js';
-import { holdKey as dispatchKeyHold, releaseKey as dispatchKeyRelease } from './core/KeyDispatch.js';   // u15a: DE-SPIN holds KeyL
+import { holdKey as dispatchKeyHold, releaseKey as dispatchKeyRelease } from './core/KeyDispatch.js';   // DE-SPIN holds KeyL
 import { TouchActionChip } from './ui/TouchActionChip.js';
 import { TouchVerbButton } from './ui/TouchVerbButton.js';
 import { WhereNextList } from './ui/WhereNextList.js';
@@ -195,9 +191,8 @@ import { viewCover, coverSkipsPaint } from './ui/viewCover.js';
 import { FrameSched, SAMPLE_WINDOW, MAX_SAMPLE_MS } from './core/FrameSched.js';
 import { AutoProfileSweep } from './systems/AutoProfileSweep.js';
 import { gameState as _gameStateRefForProfile } from './core/GameState.js';
-// Session R (plan D17 / §14.2): the typeface law's JS mirror — the hub asks
-// for the four B612 faces once at boot and the epoch tells cached textures
-// when the face question is settled. House grammar: OUTSIDE every ladder gate.
+// Typeface law's JS mirror: asks for the four B612 faces once at boot; the epoch tells cached textures when the
+// face question is settled. OUTSIDE every ladder gate.
 import { loadFaces, fontEpoch } from './core/Typeface.js';
 import { degToRad, radToDeg, clamp01, clamp } from './core/MathUtil.js';
 
@@ -209,24 +204,17 @@ let sceneManager;
 let earth;
 let starfield;
 let sunLight;
-let leashVisual = null;   // l6-look: built after the capture-net visual (CAPTURE_NET on), updated each frame
+let leashVisual = null;   // built after the capture-net visual (CAPTURE_NET on), updated each frame
 let motherCarriedRoot = null;   // identity group: net / leash / lasso / furnace drawings that ride with the mother (see _syncMotherCarried)
-// Black-flicker triage: `?bfp=1|2` in-page probe (js/core/BlackFrameProbe.js).
-// Null in normal play — the per-frame hook below is a single falsy check.
+// `?bfp=1|2` black-flicker probe (js/core/BlackFrameProbe.js). Null in normal play: the per-frame hook is one falsy check.
 let blackFrameProbe = null;
-let blackPatchHeal = null; // F4/F5 black-box self-repair (core/BlackPatchHeal.js); ?heal=0 builds nothing
-// Mother audit (integrate/harness): one-frame draw-call meter, armed only by
-// window.__scbDrawCalls() inside the ?shot block. Null in normal play — the
-// two per-frame hooks around sceneManager.render() are a single falsy check.
+let blackPatchHeal = null; // black-box self-repair (core/BlackPatchHeal.js); ?heal=0 builds nothing
+// One-frame draw-call meter, armed only by window.__scbDrawCalls() inside the ?shot block. Null in normal play.
 let _shotDrawMeter = null;
 let lastTime = 0;
 
-// --- Diagnostic: ?logPause=1 — opt-in per-second pause/state log.
-// Parsed once at module load; never spams logs by default. Set to true via
-// `?logPause=1` URL flag. The gameLoop samples per-frame counters and emits
-// a one-line summary every ~1 s while enabled. Use this to confirm which
-// `gameState.currentState` value is live when the user thinks the game is
-// "paused" but the GPU is still busy.
+// `?logPause=1`: opt-in per-second pause/state log, parsed once at module load. The gameLoop emits a one-line
+// summary every ~1 s; shows which `gameState.currentState` is live when the game looks paused but the GPU is busy.
 const _logPauseEnabled = (() => {
   try {
     return new URLSearchParams(devSearch(window.location)).get('logPause') === '1';
@@ -239,19 +227,11 @@ if (_logPauseEnabled) {
   console.info('[logPause] enabled via ?logPause=1. Per-second pause/state diagnostic active');
 }
 
-// --- Diagnostic: ?logBoot=1 — opt-in boot timeline profiler.
-// Sprint 4 §13: investigate the "fan turns on before CPU/GPU has time to get
-// hot" symptom. SMC fan controller responds to brief die-temp impulses (Energy
-// Impact + dwell time, not just steady-state CPU%); once die temp crosses
-// ~60-65 °C it ramps and hysteresis keeps it spinning 5-15 min.
-//
-// This profiler captures `performance.now()` deltas between every major init
-// phase (catalog load, scene/earth construct, debris build, renderer.compile,
-// first rAF, first frame, async texture loads), then dumps a sorted timeline
-// summary so the dominant phase pops out.
-//
-// External modules call `window.__bootMark?.('phase')` (optional chaining =
-// zero overhead when flag is off; we only attach the global when enabled).
+// `?logBoot=1`: opt-in boot timeline profiler. Captures `performance.now()` deltas between init phases (catalog
+// load, scene/earth construct, debris build, renderer.compile, first rAF, first frame, async texture loads) and
+// dumps a sorted summary so the dominant phase pops out. The Mac fan reacts to brief die-temp impulses, so boot
+// spikes matter, not only steady CPU%.
+// External modules call `window.__bootMark?.('phase')`; the global is attached only when the flag is on.
 const _logBootEnabled = (() => {
   try {
     return new URLSearchParams(devSearch(window.location)).get('logBoot') === '1';
@@ -260,10 +240,8 @@ const _logBootEnabled = (() => {
 const _bootT0 = (typeof performance !== 'undefined') ? performance.now() : 0;
 let _bootMarks = [];
 let _bootFirstFrameMarked = false;
-// §13 dropped the "single-emit" gate. The timeline is now continuous: marks
-// keep being appended (init phases, audio lifecycle, per-frame spikes) and the
-// user can call `window.__dumpBootTimeline()` from DevTools at any moment to
-// snapshot. Bounded auto-capture window is 60 s (see _bootSpikeWindowOver).
+// Marks keep being appended (init phases, audio lifecycle, per-frame spikes); `window.__dumpBootTimeline()` snapshots
+// at any moment. Auto-capture window is 60 s.
 const _bootSpikeWindowMs = 60_000;
 const _bootSpikeThresholdMs = 30; // Any render() > 30 ms is recorded as a spike
 let _bootSpikeCount = 0;
@@ -274,10 +252,8 @@ function _bootMark(phase) {
   _bootMarks.push({ phase, t, dt: t - prev });
 }
 /**
- * §13 spike detector. Called from gameLoop with the elapsed render time. Adds
- * a timeline mark when render() exceeds the threshold so post-boot spikes
- * (e.g. entering ORBITAL_VIEW, opening Strategic Map, etc.) are also captured.
- * Auto-disables after 60 s to bound memory; the user can re-enable by reload.
+ * Spike detector, called from gameLoop with the elapsed render time. Marks renders over the threshold so post-boot
+ * spikes (entering ORBITAL_VIEW, opening Strategic Map) are captured. Stops after 60 s to bound memory.
  */
 function _bootSpikeDetect(renderMs) {
   if (!_logBootEnabled) return;
@@ -312,42 +288,21 @@ if (_logBootEnabled) {
   _bootMark('main.js eval (post-imports, T0)');
 }
 
-// --- rAF gate: `_rafScheduled` debounce.
-// Why this exists: the previous gameLoop unconditionally re-scheduled
-// `requestAnimationFrame(gameLoop)` at the top of every tick. That meant
-// even when `gameFlowManager.paused === true` and our render() was skipped,
-// the rAF callback kept firing at the display's refresh rate (e.g. 120 Hz).
-// The browser's compositor stays awake whenever rAF is pumping, which is
-// what consumed ~40 % of the Renderer-process GPU on user's M4 Max during
-// ESC pause (confirmed by `?logPause=1` showing `rendered/s=0 skipped/s=120`
-// while Activity Monitor still reported 40 % on "Google Chrome Helper (Renderer)").
-//
-// Fix: gate the next-frame scheduling through `_scheduleNextFrame()`, which
-// dedups concurrent requests via `_rafScheduled`. The gameLoop only
-// re-schedules when there is real work to render. Wake hooks (visibility
-// change, PAUSE_RESUME event) explicitly call `_scheduleNextFrame()` to
-// restart the loop.
+// rAF gate: `_rafScheduled` debounce. gameLoop must not re-schedule `requestAnimationFrame(gameLoop)` every tick: a
+// pumping rAF keeps the compositor awake (~40 % Renderer GPU while paused) even when render() is skipped. Next-frame
+// scheduling goes through `_scheduleNextFrame()`, which dedups via `_rafScheduled`; gameLoop re-schedules only when
+// there is real work. Wake hooks (visibility change, PAUSE_RESUME) call `_scheduleNextFrame()` to restart the loop.
 let _rafScheduled = false;
-// Session I follow-up (review, 2026-09-05): the pending rAF's id. `_flushScheduledFrame`
-// could always cancel a pending throttle setTimeout but NEVER a directly-scheduled
-// rAF — so any wake hook (focus, PAUSE_RESUME, STATE_CHANGE, visibilitychange)
-// that fired while an rAF was pending scheduled a SECOND loop, permanently:
-// probe evidence (tmp/probe-session-i-dup.mjs, headed Chromium, 120 Hz M4 Max)
-// showed entries/frame 1→2→3→4 with each window 'focus', i.e. 240–480 full
-// composer renders/s. The handle makes every pending frame cancellable.
+// The pending rAF's id, so every pending frame is cancellable. Without it a wake hook (focus, PAUSE_RESUME,
+// STATE_CHANGE, visibilitychange) firing while an rAF was pending scheduled a SECOND loop, permanently.
 let _rafHandle = 0;
-// Belt-and-braces for the same leak: all rAF callbacks of one animation frame
-// share ONE DOMHighResTimeStamp, so a second gameLoop entry with the SAME
-// timestamp is always a duplicate loop — it returns without rescheduling and
-// the extra loop dies even if it somehow got scheduled.
+// Belt-and-braces for the same leak: all rAF callbacks of one animation frame share ONE DOMHighResTimeStamp, so a
+// gameLoop entry with the SAME timestamp is a duplicate loop; it returns without rescheduling and dies.
 let _lastLoopTs = -1;
-// §14.1 Window-blur throttle flag. `visibilitychange` only fires when the
-// *tab* is hidden (e.g. switching to another browser tab). It does NOT fire
-// when the user Cmd-Tabs to another macOS app — the browser window is still
-// on-screen so `document.hidden` stays false. To pause the sim on app-switch
-// we listen for `window blur/focus` and set this flag. The `document.hasFocus()`
-// cross-check in the blur handler filters false positives from DevTools focus,
-// iframe focus, or child-popup focus. See §14.1 in GPU_PROFILING_REPORT.md.
+// Window-blur throttle flag. `visibilitychange` fires only when the *tab* is hidden, not on Cmd-Tab to another app
+// (`document.hidden` stays false), so the sim pauses on `window blur/focus` and sets this flag. The
+// `document.hasFocus()` cross-check in the blur handler filters false positives (DevTools, iframe, child popup).
+// See archive/GPU_PROFILING_REPORT.md §14.1.
 let _windowBlurred = false;
 // Pause card on focus loss: the freeze stays; the first click/tap/key resumes (restore code in the focus handler).
 const focusPauseCard = new FocusPauseCard({
@@ -362,49 +317,33 @@ const focusPauseCard = new FocusPauseCard({
     _flushScheduledFrame();
   },
 });
-// §14.1-K (2026-08-30 black-rectangle root cause): last keepalive present
-// timestamp while blurred. See the gameLoop blurred branch.
+// Last keepalive present timestamp while blurred (see the gameLoop blurred branch).
 let _blurKeepalivePresentTs = 0;
-// Diagnostic: tracks every _scheduleNextFrame() invocation (caller + when).
-// Emits a console row once per second under `?logPause=1`. Lets us find the
-// rogue caller that keeps the loop alive while paused.
+// Tracks every _scheduleNextFrame() call (caller + when); one console row per second under `?logPause=1`.
 let _rafCallerCounts = Object.create(null);
 let _rafLastReport = 0;
-// §12.12 Pending throttle setTimeout handle. Tracked so STATE_CHANGE and
-// PAUSE_RESUME can cancel the pending throttle and reschedule immediately at
-// the new state's interval (otherwise the old throttle delays transitions by
-// up to 200 ms).
+// Pending throttle setTimeout handle: STATE_CHANGE and PAUSE_RESUME cancel it and reschedule at the new state's
+// interval (else transitions lag up to 200 ms).
 let _scheduleTimeoutHandle = null;
 
 /**
- * §12.12 State-aware rAF dispatch interval (ms).
- *   0   → follow display refresh (immediate rAF) — active gameplay only.
- *   >0  → throttle via setTimeout before rAF — for menu / pause / hidden.
- *
- * Rationale: anything > 0 lets the browser compositor and JS engine sleep
- * between dispatches. On macOS this is what allows Apple Silicon Efficiency
- * cores to reach deep c-states; the Energy Impact metric (which drives the
- * SMC fan controller) drops accordingly. Indistinguishable to the user for
- * UI screens since the camera barely moves and entity sim is already at 10 %.
+ * State-aware rAF dispatch interval (ms): 0 follows display refresh (active gameplay only); >0 throttles via
+ * setTimeout before rAF (menu / pause / hidden), letting the browser and Apple Silicon efficiency cores sleep
+ * (lower Energy Impact, which drives the SMC fan). Not noticeable on UI screens: the camera barely moves and the
+ * entity sim is already at 10 %.
  */
 function _getScheduleIntervalMs() {
-  // ESC pause: aggressive 5 Hz throttle (§12.4) — render() is skipped anyway.
+  // ESC pause: 5 Hz; render() is skipped anyway.
   if (gameFlowManager.paused) return 200;
- // Tab hidden: also throttle defensively. In practice the gameLoop early-
- // returns at `document.hidden` without calling _scheduleNextFrame, so this
- // branch is only hit when an event listener wakes the loop while hidden.
+ // Tab hidden: gameLoop early-returns at `document.hidden` without calling _scheduleNextFrame, so this branch is
+ // only hit when an event listener wakes the loop while hidden.
  if (document.hidden) return 200;
- // §14.1 (revision 4, 2026-08-31) Window blurred (Cmd-Tab / click into another
- // app): the window is still ON-SCREEN, so run at ~30 fps — bfp evidence
- // (dump-1788177490) showed black-rectangle flicker persisting even with 5 Hz
- // keepalive presents; a 30 fps present cadence leaves the compositor no purge
- // window at all. The sim stays frozen (gameLoop blurred branch); only
- // present cost remains. Truly hidden tabs still fully halt above.
+ // Window blurred (Cmd-Tab / click into another app): still ON-SCREEN, so ~30 fps; a 30 fps present cadence leaves
+ // the compositor no purge window (black-rectangle flicker persisted with 5 Hz keepalive presents). The sim stays
+ // frozen (gameLoop blurred branch); only present cost remains.
  if (_windowBlurred) return 33;
-  // Menu / Briefing / Shop / Game-over / Win — user is reading UI, not flying.
-  // 30 Hz is indistinguishable from display refresh for static-camera
-  // background scenes (entity sim already runs at 10 % speed in `!isActive`).
-  // Cuts compositor + JS work 2-4× on 60/120 Hz displays.
+  // Menu / Briefing / Shop / Game-over / Win: 30 Hz is indistinguishable from display refresh for static-camera
+  // scenes (entity sim already runs at 10 % speed in `!isActive`); cuts compositor + JS work 2-4×.
   if (!gameState.isGameplay()) return 33; // ~30 fps
   // Active gameplay — display refresh.
   return 0;
@@ -412,8 +351,7 @@ function _getScheduleIntervalMs() {
 
 function _scheduleNextFrame() {
   if (_logPauseEnabled) {
-    // Two stack-frames up: line that called _scheduleNextFrame().
-    // Take only the location portion so the histogram is readable.
+    // Caller histogram: take only the location part of the stack row.
     const stack = new Error().stack || '';
     const lines = stack.split('\n');
     // Skip the Error() row + this function's row → caller is index 2.
@@ -434,21 +372,16 @@ function _scheduleNextFrame() {
 }
 
 /**
- * §12.12 Cancel any pending throttle setTimeout and reschedule immediately at
- * the current state's interval. Call from event handlers that change the
- * required frame rate (STATE_CHANGE, PAUSE_RESUME, PAUSE_MENU, visibility).
- * Prevents up-to-200 ms latency on state transitions out of pause / menu.
+ * Cancel any pending throttle setTimeout and reschedule immediately at the current state's interval. Call from
+ * handlers that change the required frame rate (STATE_CHANGE, PAUSE_RESUME, PAUSE_MENU, visibility).
  */
 function _flushScheduledFrame() {
   if (_scheduleTimeoutHandle != null) {
     clearTimeout(_scheduleTimeoutHandle);
     _scheduleTimeoutHandle = null;
   }
-  // Session I follow-up (review): a directly-pending rAF must be cancelled too,
-  // or this flush schedules a SECOND loop beside it — each survives forever
-  // (both reschedule at the end of their own gameLoop entry). This was the
-  // duplicate-loop leak: one Cmd-Tab / focus / state flip while an rAF was
-  // pending doubled every subsequent frame's sim + composer render.
+  // A directly-pending rAF must be cancelled too, or this flush schedules a SECOND loop beside it; both reschedule
+  // at the end of their own gameLoop entry and survive forever (doubling every frame's sim + composer render).
   if (_rafHandle) {
     cancelAnimationFrame(_rafHandle);
     _rafHandle = 0;
@@ -458,60 +391,51 @@ function _flushScheduledFrame() {
 }
 
 /**
- * §12.12 Predicate: should the AudioContext be in `'running'` state right now?
- * Returns false for any "user-idle" condition: paused, hidden tab, menu /
- * briefing / shop screens. Returns true for active gameplay AND end-screens
- * (GAME_OVER / WIN have death / victory stings that may still need to play).
+ * Predicate: should the AudioContext be 'running' now? False for paused, hidden tab, menu / briefing / shop;
+ * true for active gameplay AND end-screens (GAME_OVER / WIN stings may still play).
  */
 function _shouldAudioRun() {
   if (!audioSystem || !audioSystem.ctx) return false;
   if (gameFlowManager.paused) return false;
   if (document.hidden) return false;
-  if (_windowBlurred) return false; // §14.1 — app-switch via Cmd-Tab
+  if (_windowBlurred) return false; // app-switch via Cmd-Tab
   if (gameState.isGameplay()) return true;
-  // End-screens may have audio stings playing — keep ctx alive briefly.
+  // End-screen stings: keep ctx alive.
   if (gameState.currentState === GameStates.GAME_OVER) return true;
   if (gameState.currentState === GameStates.WIN) return true;
   return false; // MENU, BRIEFING, SHOP
 }
 
 /**
- * §12.12 Single suspend/resume point for the AudioContext. Idempotent —
- * checks current `ctx.state` and only acts when it disagrees with policy.
- * Called from STATE_CHANGE, PAUSE_RESUME, PAUSE_MENU, visibilitychange,
- * window blur/focus (§14.1), and the pause branch in gameLoop.
+ * Single suspend/resume point for the AudioContext. Idempotent: acts only when `ctx.state` disagrees with policy.
+ * Called from STATE_CHANGE, PAUSE_RESUME, PAUSE_MENU, visibilitychange, window blur/focus, and the gameLoop pause branch.
  */
 function _syncAudioCtxState() {
   if (!audioSystem || !audioSystem.ctx) return;
   const should = _shouldAudioRun();
   const state = audioSystem.ctx.state;
-  // 'interrupted' is WebKit's non-standard park state (an iPadOS audio
-  // interruption that ended while the page was hidden stays there on return —
-  // visibilitychange lands HERE, and the one-shot InputManager unlock never
-  // re-fires). Resuming from it is the only way sound comes back. Job 1 iPad
-  // audit 2026-09-06; pinned (test-main-wiring). 'closed' is never resumed.
+  // 'interrupted' is WebKit's non-standard park state: an iPadOS audio interruption that ended while the page was
+  // hidden stays there on return (visibilitychange lands HERE; the one-shot InputManager unlock never re-fires).
+  // Resuming from it is the only way sound comes back; pinned (test-main-wiring). 'closed' is never resumed.
   if (should && (state === 'suspended' || state === 'interrupted')) {
     const p = audioSystem.ctx.resume();
-    if (p && typeof p.catch === 'function') p.catch(() => {});   // review hygiene: never an unhandled rejection
+    if (p && typeof p.catch === 'function') p.catch(() => {});   // never an unhandled rejection
   } else if (!should && state === 'running') {
     audioSystem.ctx.suspend();
   }
 }
 
 /**
- * Hide the entire HUD overlay during pause to silence CSS animations and
- * any composite work on `.hud-panel` elements. Uses `visibility: hidden`
- * (not `display: none`) so we don't churn the layout engine on every
- * pause toggle. The pause overlay sits OUTSIDE `#hud-overlay`, so it
- * stays visible.
+ * Hide the whole HUD overlay during pause (silences CSS animations / composite work on `.hud-panel`). Uses
+ * `visibility: hidden`, not `display: none`, to avoid layout churn on every toggle. The pause overlay sits OUTSIDE
+ * `#hud-overlay`, so it stays visible.
  * @param {boolean} hide
  */
 function _setHudHidden(hide) {
   const hud = document.getElementById('hud-overlay');
   if (hud) hud.style.visibility = hide ? 'hidden' : 'visible';
-  // Body-mounted priority panels (mission objective + control mode) live OUTSIDE
-  // #hud-overlay so they stay bright/un-occluded during play — but they must
-  // still hide with the rest of the HUD on pause/menu.
+  // Body-mounted priority panels (mission objective + control mode) live OUTSIDE #hud-overlay but must still hide
+  // on pause/menu.
   if (typeof document.querySelectorAll === 'function') {
     document.querySelectorAll('.hud-top-priority').forEach((el) => {
       el.style.visibility = hide ? 'hidden' : 'visible';
@@ -532,35 +456,27 @@ function _emitRafCallerDiagnostic(timestamp) {
   console.log(`[logPause] _scheduleNextFrame callers/s: ${summary}`);
 }
 
-// Session I (2026-09-05) — the adaptive frame schedule (plan D-G/D-F; the
-// policy laws live in js/core/FrameSched.js, this block owns the loop state).
-// Pacing is "draw every Nth refresh" by FRAME COUNTING against the MEASURED
-// rAF period — never a time threshold. The historic FRAME_CAP ms-gate is
-// RETIRED (its null default had shipped "no cap" since PR 3; a ms interval
-// against a 120 Hz rAF stream skips unevenly — the old judder).
+// Adaptive frame schedule (the policy laws live in js/core/FrameSched.js; this block owns the loop state). Pacing is
+// "draw every Nth refresh" by FRAME COUNTING against the MEASURED rAF period, never a time threshold (a ms interval
+// against a 120 Hz rAF stream skips unevenly: judder).
 let frameCount = 0;
-// Rolling rAF-to-rAF deltas (bounded at FrameSched.SAMPLE_WINDOW; deltas over
-// MAX_SAMPLE_MS are scheduling gaps, not display cadence, and are dropped).
+// Rolling rAF-to-rAF deltas (bounded at FrameSched.SAMPLE_WINDOW; deltas over MAX_SAMPLE_MS are scheduling gaps,
+// not display cadence, and are dropped).
 const _rafDeltas = [];
 let _lastRafTs = 0;
-// Last boost-worthy input (pointer / touch / wheel / key / pane edge /
-// purchase), on the rAF/performance.now clock.
+// Last boost-worthy input (pointer / touch / wheel / key / pane edge / purchase), on the rAF/performance.now clock.
 let _schedLastInputMs = -1e9;
 let _schedTick = 0;                 // rAF-entry counter for the Nth-beat draw
-// Review (unpushed, 2026-09-05): the cadence median is CACHED — recomputed on
-// drawn ticks only (a skipped tick must not pay a 30-sample clone+sort at
-// native refresh) — and plan() reads ONE reused args object (G1, the
-// _taFrameArgs pattern). null until the sample window fills → N = 1.
+// The cadence median is CACHED, recomputed on drawn ticks only (a skipped tick must not pay a 30-sample clone+sort),
+// and plan() reads ONE reused args object (no per-frame allocation). null until the sample window fills → N = 1.
 let _rafPeriodMs = null;
 const _planArgs = { cover: 'none', nowMs: 0, lastInputMs: 0, riding: false, dragLive: false, mechLive: false, periodMs: null, perf: Constants.PERF };
 let _launchCeremonyLive = false;    // intro ride (LAUNCH_CEREMONY_* events)
-// THE published policy witness (one object, fields mutated per frame; the
-// headless gate asserts POLICY — mode + n — never fps: SwiftShader runs
-// ~4 fps and its measured period clamps N to 1 by design).
+// The published policy witness (one object, fields mutated per frame; the headless gate asserts POLICY, mode + n,
+// never fps: SwiftShader runs ~4 fps and its measured period clamps N to 1 by design).
 const _frameSched = { mode: 'rest', n: 1 };
 if (typeof window !== 'undefined' && isDevHost()) window.__frameSched = _frameSched;
-// Session I turntable (D-F): scratch for the arrow-blanking shim around
-// inputManager.processInput (one object, reused — G1).
+// Scratch for the arrow-blanking shim around inputManager.processInput (one reused object).
 const _turnSaved = { up: false, down: false, left: false, right: false };
 /** Note a boost-worthy input on the rAF clock (passive; never wakes the loop —
  *  in gameplay the loop always has a pending rAF, so the next entry sees it). */
@@ -575,8 +491,8 @@ function _noteRealInput() {
   _menuUntouchedSince = performance.now();   // the menu freeze's own clock (also while the card is up)
   if (_menuFrozen) _wakeMenuFreeze();        // the waking tap is not swallowed: passive listener, the target still gets it
 }
-/** Show mode: the untouched start screen freezes into a still picture after `_menuFreezeS` seconds (owner 2026-10-28; plan
- *  menu-freeze-1028). `_menuUntouchedSince` is set at boot, on entering MENU and on every real input; `_menuFrozen` is true
+/** Show mode: the untouched start screen freezes into a still picture after `_menuFreezeS` seconds.
+ *  `_menuUntouchedSince` is set at boot, on entering MENU and on every real input; `_menuFrozen` is true
  *  from the freeze until the wake. Both loops stop: gameLoop returns without scheduling, and the hero scene's own rAF is paused. */
 let _menuUntouchedSince = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
 let _menuFrozen = false;
@@ -599,41 +515,32 @@ function _wakeMenuFreeze() {
   if (hero && typeof hero.resume === 'function') hero.resume();
   _flushScheduledFrame();
 }
-/** Shared-iPad show mode (owner 2026-10-28): the idle clock + "Still playing?" card, built once at boot (see `wireStillPlaying`). */
+/** Shared-iPad show mode: the idle clock + "Still playing?" card, built once at boot (see `wireStillPlaying`). */
 let _idleKit = null;
 
-// Lane A (F1 six-fixes plan, 2026-09-16, step 1/4) — mechLive: is any mother
-// actuator (flower / ROSA furl / ROSA feather / ROSA wing tilt / struts)
-// ACTUALLY MOVING right now? Detected from motion, never from intent/target
-// latches or armManager.strutsDeployed() — both can read true while nothing
-// moves (a daughter strut resting open at 90°). The scheduler runs on EVERY
-// rAF entry, before the sim; the sim (and
-// these actuators) only advance on DRAWN ticks, after it. So the comparison
-// is latched once per DRAWN frame, after armManager.update, and consumed at
-// the NEXT frame's plan() site — comparing at the plan site itself would
-// throw away a skipped tick's unchanged read.
+// mechLive: is any mother actuator (flower / ROSA furl / ROSA feather / ROSA wing tilt / struts) ACTUALLY MOVING
+// right now? Detected from motion, never from intent/target latches or armManager.strutsDeployed(): both can read
+// true while nothing moves (a daughter strut resting open at 90°). The scheduler runs on EVERY rAF entry, before
+// the sim; the sim (and these actuators) only advance on DRAWN ticks, after it. So the comparison is latched once
+// per DRAWN frame, after armManager.update, and consumed at the NEXT frame's plan() site (comparing at the plan
+// site itself would throw away a skipped tick's unchanged read).
 let _mechLive = false;
-// Two reused arrays, swapped by re-filling `_mechCur` then copying into
-// `_mechPrev` — G1: never allocate a literal per frame.
+// Two reused arrays, swapped by re-filling `_mechCur` then copying into `_mechPrev` (never allocate per frame).
 let _mechPrev = [];
 let _mechCur = [];
-// A live mechanism reads as "moving" above a SPEED, not a per-frame step, so
-// the answer agrees at both frame rates (10 fps hold vs native boost) — an
-// eased motion near its end can otherwise flip-flop between "moving" and
-// "stopped" as the rate changes. ~0.34°/s (1e-4 rad per 60 Hz frame); every
-// real actuator is far above it (the slowest slew is 15°/s = 0.26 rad/s).
+// A live mechanism reads as "moving" above a SPEED, not a per-frame step, so the answer agrees at both frame rates
+// (10 fps hold vs native boost); an eased motion near its end can otherwise flip-flop. ~0.34°/s (1e-4 rad per
+// 60 Hz frame); every real actuator is far above it (the slowest slew is 15°/s = 0.26 rad/s).
 const MECH_EPS_RAD_PER_S = 0.006;
 
-/** Fill `out` (a reused array) with this drawn frame's live actuator values.
- *  Guards every read — player/armManager may be absent before boot — and
- *  never throws: a throw here must read as "not moving", never crash the
- *  loop. @returns {number[]} `out`, for chaining. */
+/** Fill `out` (a reused array) with this drawn frame's live actuator values. Guards every read (player/armManager
+ *  may be absent before boot); a throw here must read as "not moving", never crash the loop. @returns {number[]} `out`. */
 function _fillMechValues(out) {
   out.length = 0;
   try {
     if (player) {
       out.push(player._flowerThetaRad || 0);
-      // petal-single: a held petal swings while the shared angle stands still; four values, always (same length every frame)
+      // a held petal swings while the shared angle stands still; four values, always (same length every frame)
       if (typeof player.petalThetaRad === 'function') {
         for (const az of Constants.THERMAL.FLOWER.AZIMUTHS_DEG) out.push(player.petalThetaRad(az) || 0);
       }
@@ -651,53 +558,43 @@ function _fillMechValues(out) {
   return out;
 }
 
-// PR 4 / P1.5 — Quality tier auto-adapt rolling FPS history + cooldown counter.
-// Owned here (not inside SceneManager) so the gameLoop owns both the producer
-// (frame timing) and the consumer (runtimeAdapt call). SceneManager owns the
-// renderer/post-processing state via sceneManager.applyTier().
+// Quality tier auto-adapt rolling FPS history + cooldown counter. Owned here (not in SceneManager) so the gameLoop
+// owns both the producer (frame timing) and the consumer (runtimeAdapt); SceneManager owns renderer/post state via
+// sceneManager.applyTier().
 const _fpsHistory = [];
 let _framesSinceLastTierChange = Constants.PERF.ADAPT_COOLDOWN_FRAMES; // start "cooled down" so the first decision is gated only by history length
 const _ADAPT_CHECK_INTERVAL = 60; // call runtimeAdapt every N frames
 
-// Zoom Ladder G1 (post-M3 play-test): runtime-adapt holdoff while the ladder is
-// actually moving (mid-ride, or within the derived 900 ms gesture+settle window
-// of the last ladder input — LadderController.ADAPT_HOLDOFF_MS). Ride frames
-// are camera-flight transients (FOV/near/far swaps, full-disc Earth fill,
-// first-use texture binds); feeding them to runtimeAdapt flip-flops the tier on
-// boundary machines (play-test log: GPU probe median 7.53 ms vs 7 ms threshold,
-// HIGH→MEDIUM→HIGH inside 40 s) and every applyTier() rebuild is a visible
-// full-screen flash. While held off we neither SAMPLE fps history nor RUN the
-// check, so a post-ride decision can't be made from mid-ride frames either.
-// Flag-off byte-identical: Constants.LADDER.ENABLED short-circuits first, and
-// with the flag off the controller can never engage anyway.
+// Runtime-adapt holdoff while the ladder is actually moving (mid-ride, or within the derived 900 ms gesture+settle
+// window of the last ladder input — LadderController.ADAPT_HOLDOFF_MS). Ride frames are camera-flight transients
+// (FOV/near/far swaps, full-disc Earth fill, first-use texture binds); feeding them to runtimeAdapt flip-flops the
+// tier on boundary machines, and every applyTier() rebuild is a visible full-screen flash. While held off we neither
+// SAMPLE fps history nor RUN the check. Constants.LADDER.ENABLED short-circuits first (flag off: byte-identical).
 const _ladderAdaptHoldoff = (nowMs) => !!(Constants.LADDER && Constants.LADDER.ENABLED &&
   ladderController && ladderController.adaptHoldoff && ladderController.adaptHoldoff(nowMs));
 
-// PR 6 / P3.15 — Draw-call profiling frame counter (separate from _ADAPT_CHECK_INTERVAL).
+// Draw-call profiling frame counter (separate from _ADAPT_CHECK_INTERVAL).
 let _profileFrameCount = 0;
 
-// PR 6 / P3.11 — GPU probe one-shot flag. Once the probe window completes
-// (GPU_PROBE_FRAMES samples), we check the median and optionally downshift.
-// After that, the flag flips true and the probe is disabled for the session.
+// GPU probe one-shot flag: once the probe window completes (GPU_PROBE_FRAMES samples) we check the median and
+// optionally downshift; then the probe is disabled for the session.
 let _gpuProbeComplete = false;
 
-// st2-start-quick D1 — once-only flag: the sound-system prewarm is scheduled after
-// the first draw has finished (independent of ?logBoot, which gates only the marks).
+// Once-only flag: the sound-system prewarm is scheduled after the first draw has finished (independent of ?logBoot,
+// which gates only the marks).
 let _audioPrewarmScheduled = false;
 
-// Perf warmup/settle guard (Constants.PERF.ADAPT_WARMUP_MS). Timestamp (rAF /
-// performance.now clock) before which adaptive tier changes are suppressed, so
-// one-time startup transients (shader compile, texture upload, scene build)
-// can't trigger a spurious permanent downgrade. Initialised on the first active
-// frame and re-armed on each GAME_STATE_CHANGE into a heavier (non-MENU) state.
+// Perf warmup/settle guard (Constants.PERF.ADAPT_WARMUP_MS). Timestamp (rAF / performance.now clock) before which
+// adaptive tier changes are suppressed, so startup transients (shader compile, texture upload, scene build) can't
+// trigger a spurious permanent downgrade. Initialised on the first active frame and re-armed on each
+// GAME_STATE_CHANGE into a heavier (non-MENU) state.
 let _perfSettleUntil = 0;
 
-// Catch slo-mo state (Phase 1C)
+// Catch slo-mo state
 let slowMoTimer = 0;
 let slowMoFactor = 1.0;
 
-// Sprint 2 / PR A — scratch outputs for `orbitToSceneCartesianInto` in the
-// approach-distance check (per-frame while in APPROACH state).
+// Scratch outputs for `orbitToSceneCartesianInto` in the per-frame approach-distance check (APPROACH state).
 const _approachCartPos = { x: 0, y: 0, z: 0 };
 const _approachCartVel = { x: 0, y: 0, z: 0 };
 const _approachTargetVec3 = new THREE.Vector3();
@@ -707,28 +604,28 @@ const _lassoVelScratch = new THREE.Vector3();
 // Entities
 let player;
 let debrisField;
-let fieldRegistry; // Nets step 3 slice 2b: the debris fields by height and which of their pieces are left (FIELDS_BY_HEIGHT)
+let fieldRegistry; // the debris fields by height and which of their pieces are left (FIELDS_BY_HEIGHT)
 let activeSatellites;
-let resupplySatellite; // Nets step 3 slice 3 lane 3b: the resupply satellite's look (its own group; never an ActiveSatellite)
+let resupplySatellite; // the resupply satellite's look (its own group; never an ActiveSatellite)
 let armManager;
-let floorWordsStore = null;   // u7 D6: which floors' "LEO means ..." line this player has seen (built in init, read in the game loop)
+let floorWordsStore = null;   // which floors' "LEO means ..." line this player has seen (built in init, read in the game loop)
 let motherCallouts;
 // Systems (targetSelector, kesslerSystem, trawlManager imported as singletons above)
 let cameraSystem;
 let commsSystem;
 let autoLockController;
-/** Reward-first spine: live OUT-OF-RANGE flag for the selected target, fed into
- *  the OnboardingDirector contextProvider for the `range_wall` gate. */
+/** Live OUT-OF-RANGE flag for the selected target, fed into the OnboardingDirector contextProvider for the
+ *  `range_wall` gate. */
 let _onboardingTargetOutOfRange = false;
-let touchActionChip = null;   // u11: the touch net / daughter button (glass only)
-let touchVerbButton = null;   // u15a: FLY THERE (floor 4) and DE-SPIN (floors 2-3, hold) - glass only
-let whereNextList = null;     // Nets step 3 slice 2b (lane 2b-2): the "where next" list floor 4 hosts (ui/WhereNextList.js); built in the ladder block
-let fateList = null;          // Nets step 3 slice 5 (lane 5c): the fate list of a big catch (ui/FateList.js); built after the input manager, U opens it
+let touchActionChip = null;   // the touch net / daughter button (glass only)
+let touchVerbButton = null;   // FLY THERE (floor 4) and DE-SPIN (floors 2-3, hold) - glass only
+let whereNextList = null;     // the "where next" list floor 4 hosts (ui/WhereNextList.js); built in the ladder block
+let fateList = null;          // the fate list of a big catch (ui/FateList.js); built after the input manager, U opens it
 let whereNextJumpOwed = false; // the choice opened and the ladder has not yet taken her to floor 4
 /**
- * Nets step 3 slice 2b (lane 2b-2): take her to floor 4 once, when the "where next" choice opens. A jump the ladder refuses (a ride is
- * running, it is not engaged yet) is tried again each frame until she is there; it never pulls her back after that, and it waits while
- * the depot drawer is open. Leaving floor 4 keeps the choice pending (the list is there again on return).
+ * Take her to floor 4 once, when the "where next" choice opens. A jump the ladder refuses (a ride is running, it is
+ * not engaged yet) is tried again each frame until she is there; it never pulls her back after that, and it waits
+ * while the depot drawer is open. Leaving floor 4 keeps the choice pending (the list is there again on return).
  */
 function whereNextJump() {
   if (!whereNextJumpOwed || !ladderController) return;
@@ -739,8 +636,8 @@ function whereNextJump() {
   ladderController.jump({ toFloor: 4 });
 }
 /**
- * Nets step 3 slice 2b (lane 2b-2): the game would swallow a Space - the same cases as the FLY THERE chip's `isInputBlocked` (the chip
- * exists on glass only; the list also takes mouse clicks). A tap on a "where next" row does nothing then.
+ * The game would swallow a Space - the same cases as the FLY THERE chip's `isInputBlocked` (the chip exists on glass
+ * only; the list also takes mouse clicks). A tap on a "where next" row does nothing then.
  */
 function whereNextInputBlocked() {
   return !gameState.isGameplay() || !!(gameFlowManager && gameFlowManager.paused)
@@ -751,7 +648,7 @@ function whereNextInputBlocked() {
       || (cameraSystem._netCeremony && cameraSystem._netCeremony.active)));
 }
 /**
- * u11 R2/R4c/R6/R12: the ONE daughter that D would launch at the selected piece, and can she go. SEND DAUGHTER is
+ * The ONE daughter that D would launch at the selected piece, and can she go. SEND DAUGHTER is
  * offered only for her (one helper feeds `hasDaughter`, the far state, the range-wall `daughterReady` flag and the
  * "daughter" line chips), so no chip offers a launch the game would refuse. D's own choice, mirrored:
  *   · a DOCKED daughter selected with 1-4 is the one (InputManager KeyD -> deployArmByIndex), else
@@ -759,9 +656,9 @@ function whereNextInputBlocked() {
  *     `_findDockedArm` (docked, spring charged, fuel > 5, not held back for aiming; the dock best aligned with the
  *     piece, else the most fuel), the other type when the first has none.
  * She can go when she passes that same gate, still has nets, can hold the piece's mass (ArmUnit.deploy) and the piece is
- * within her reach (tetherMax x ARM_DEPLOY_RANGE_FRACTION, the "Target 492m away (max 400m)" refusal), and (u14b B4) the game's
- * `ArmManager.daughterLaunchReadiness` agrees (safe mode, ARM power). R4 run: taps at
- * t=162 s and 177 s were refused because an "any daughter" test passed while the daughter D picked was out of reach.
+ * within her reach (tetherMax x ARM_DEPLOY_RANGE_FRACTION, the "Target 492m away (max 400m)" refusal), and the game's
+ * `ArmManager.daughterLaunchReadiness` agrees (safe mode, ARM power). An "any daughter" test is wrong: the daughter
+ * D picks can be out of reach.
  * @param {object} [target] the piece (default: the selected one; none = no mass or reach test)
  */
 function _daughterReadyWithNets(target) {
@@ -772,7 +669,7 @@ function _daughterReadyWithNets(target) {
     : (targetSelector && targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null);
   const gate = (a) => !!a && a.state === S.DOCKED && !!a.springCharged && a.fuel > 5 && !a._aimReserved;
   const sel = armManager.selectedArmIndex >= 0 ? arms[armManager.selectedArmIndex] : null;
-  // u14b B4: the game's own launch rule (safe mode, ARM power, the arm deployArm picks and its mass), read without
+  // The game's own launch rule (safe mode, ARM power, the arm deployArm picks and its mass), read without
   // side effects. The two branches below mirror KeyD (InputManager): a daughter picked with 1-4 and docked launches by
   // index (deployArmByIndex: safe mode and ARM power refuse; nothing else the query adds), else deployArm (the query's
   // `ready`). Both then pass the checks below that the query does not make (nets, reach of THAT arm).
@@ -810,11 +707,11 @@ function _daughterReadyWithNets(target) {
   return true;
 }
 /**
- * u11 R9: R would bring home a daughter that is out and idle - adrift (fuel spent, still on the tether), holding
+ * R would bring home a daughter that is out and idle - adrift (fuel spent, still on the tether), holding
  * station or trawling - so the REEL chip frees her. KeyR acts on ONE arm (ArmManager.recallClosestDeployed): the
  * selected daughter if she can be recalled, else the closest recallable one. So this asks about THAT arm:
  * the selected recallable arm must be idle; with no selected recallable arm, every recallable arm must be idle
- * (whichever is closest). R3 run (r3a, t=225 s): Small 2 adrift but Large 2, selected and mid-flight, got the R.
+ * (whichever is closest).
  * Recallable = the game's own rule: not docked / expended / returning / docking / holding a catch / carrying one /
  * cut loose. Not mid-flight (REEL would cancel the catch she was sent for).
  */
@@ -832,7 +729,7 @@ function _daughterReelable() {
   return out.length > 0 && out.every(idle);
 }
 /**
- * u11 R2: for a selected piece beyond net reach, once the tutorial is over: can a docked daughter with nets reach it
+ * For a selected piece beyond net reach, once the tutorial is over: can a docked daughter with nets reach it
  * (InputManager's own test for OUT_OF_NET_RANGE_LINE), and is the autopilot already flying? null = no piece, or the
  * tutorial still teaches (its range-wall beat owns the autopilot lesson).
  */
@@ -844,13 +741,13 @@ function _touchFarState() {
   try { daughterCan = !!(inputManager && inputManager._beyondNetReachButDaughterCan(t)) && _daughterReadyWithNets(t); } catch (_e) { /* best-effort */ }
   return { daughterCan, autopilot: !!(autopilotSystem && autopilotSystem.engaged) };
 }
-let _onboardingTargetInRange = false;   // u11 D3: the selected target is within net reach (the range wall's net nudge)
+let _onboardingTargetInRange = false;   // the selected target is within net reach (the range wall's net nudge)
 let missionCoach;
 let issConjunctionBoss;
 let starlinkCascadeBoss;
 let resourceSystem;
-let rangeMap = null;          // range-map D1: the orbital range map beside the where-next list (ui/RangeMap.js); built in the ladder block
-let missionGasTally = null;   // range-map D4: "this mission" engine gas for the range map's second gas line (built with the where-next list)
+let rangeMap = null;          // the orbital range map beside the where-next list (ui/RangeMap.js); built in the ladder block
+let missionGasTally = null;   // "this mission" engine gas for the range map's second gas line (built with the where-next list)
 let sensorSystem;
 let cargoSystem;
 let conjunctionSystem;
@@ -871,7 +768,7 @@ let environmentSystem;
 // UI
 let hud;
 let menuScreen;
-let updateWatch;      // Session J.5 — the menu UPDATE card's watcher (flag-independent)
+let updateWatch;      // the menu UPDATE card's watcher (flag-independent)
 let briefingScreen;
 let shopScreen;
 let gameOverScreen;
@@ -891,158 +788,116 @@ let teachingOverlay;
 let onboardingDirector;
 let guidanceDirector;
 
-// Zoom Ladder (S2 skeleton — behind Constants.LADDER.ENABLED)
+// Zoom Ladder (behind Constants.LADDER.ENABLED)
 let wheelRouter;
 let ladderController;
-/** Owner 2026-10-20: the ship opens on the player's first action (systems/StartOpening.js); built in init. */
+/** The ship opens on the player's first action (systems/StartOpening.js); built in init. */
 let startOpening = null;
 let railIndicator;
-// Session P (plan D5, owner 2026-09-07: "is the rail even needed… volume
-// control") — the DETAIL slider (js/ui/DetailSlider.js): ONE horizontal
-// track in the footer's left slot, one tick per pane-density rung, the thumb
-// at the visible count; drag / tap → PaneDensity.setLevel (the D5 room
-// capture rides the existing flip edge), level 0 = pure scenery. It replaced
-// the left DISPLAY rail (PaneRail — nine per-panel switches, retired here).
-// Constructed ONLY inside the LADDER.ENABLED gate; shown on F2–F5 by
-// LadderController (`detailSlider` dep); its edge-chrome phase is written
-// per frame in the anchor block below; refreshed per frame (≤ 4 Hz inside).
+// The DETAIL slider (js/ui/DetailSlider.js; owner 2026-09-07: a volume-control-style slider instead of the rail):
+// ONE horizontal track in the footer's left slot, one tick per pane-density rung, the thumb at the visible count;
+// drag / tap → PaneDensity.setLevel, level 0 = pure scenery. Constructed ONLY inside the LADDER.ENABLED gate; shown
+// on F2–F5 by LadderController (`detailSlider` dep); its edge-chrome phase is written per frame in the anchor block
+// below; refreshed per frame (≤ 4 Hz inside).
 let detailSlider = null;
 let touchControls;
 
-// Zoom Ladder S3 — the ONE world-time choke point (T2). Owns dtWorld/warp; pins
-// the shipped base rate whenever the ladder is disengaged (byte-identical).
+// The ONE world-time choke point. Owns dtWorld/warp; pins the shipped base rate whenever the ladder is disengaged.
 let timeAuthority;
-// Reused per-frame arg object for timeAuthority.update (M3 review: the update
-// runs on the shipped flag-off path too, so the args must not allocate per
-// frame; TimeAuthority.update destructures synchronously and retains nothing).
+// Reused per-frame arg object for timeAuthority.update: it runs on the flag-off path too, so no per-frame
+// allocation; update destructures synchronously and retains nothing.
 const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: false };
-// Drawer-open signal (Session I, plan D-F — was the D10 calm cap): true while
-// the workbench drawer (Session U: the ONE pane — SPECS + the F1 REFIT block)
-// is open — feeds TimeAuthority.calmCap so the world clock STOPS while reading
-// (rail: HOLD), the viewCover 'partial' value (the frame scheduler's heartbeat)
-// and the camera's turntable gate. Written by _syncWorkbenchPanes (the ONE
-// pane edge, Session B) from the shell's onOpenChange; false whenever the
-// ladder is off (the sync helper only exists inside the LADDER.ENABLED gate).
+// Drawer-open signal: true while the workbench drawer (the ONE pane: SPECS + the F1 REFIT block) is open. Feeds
+// TimeAuthority.calmCap so the world clock STOPS while reading (rail: HOLD), the viewCover 'partial' value (the
+// frame scheduler's heartbeat) and the camera's turntable gate. Written by _syncWorkbenchPanes (the ONE pane edge)
+// from the shell's onOpenChange; false whenever the ladder is off.
 let _workbenchPaneOpen = false;
-// Wave 5 Session K (plan D-B — one shop): the WORKBENCH BREAK is open — set on
-// GameFlowManager's WORKBENCH_STOP (after the ride + the pane open took),
-// cleared when the hub emits WORKBENCH_RESUME (the drawer closed, from the
-// SAME _syncWorkbenchPanes edge) or when gameplay ends. Lives here (not in
-// GameFlowManager's flag) because the END of a break is a drawer edge only the
-// hub sees. False whenever the ladder is off (never set outside the gate).
+// The WORKBENCH BREAK is open: set on GameFlowManager's WORKBENCH_STOP (after the ride + the pane open took),
+// cleared when the hub emits WORKBENCH_RESUME (the drawer closed, from the SAME _syncWorkbenchPanes edge) or when
+// gameplay ends. Lives here, not in GameFlowManager's flag, because the END of a break is a drawer edge only the
+// hub sees. False whenever the ladder is off.
 let _workbenchBreak = false;
-// Q10 level-phase sound edge state: last frame's camera leveling flag (rise
-// edge → one LadderSfx settle cue). False whenever the ladder is disengaged.
+// Level-phase sound edge state: last frame's camera leveling flag (rise edge → one LadderSfx settle cue). False
+// whenever the ladder is disengaged.
 let _ladderLevelingPrev = false;
-// Session O (plan D9, owner 2026-09-07): the build-stamp floor law. The hub
-// writes `body[data-ladder-floor]` = the engaged floor's id (the
-// data-pure-scenery attribute pattern; CSS hides #build-stamp for floors
-// ≠ 1 — menu + F1 only, delivery loop intact). Last-written value, so the
-// per-frame block writes the attribute ONLY on change (G1). null = no
-// attribute (menu / pause → menu / ?ladder=0 → the stamp shows).
+// Build-stamp floor law: the hub writes `body[data-ladder-floor]` = the engaged floor's id (CSS hides #build-stamp
+// for floors ≠ 1: menu + F1 only). Last-written value, so the per-frame block writes the attribute ONLY on change.
+// null = no attribute (menu / pause → menu / ?ladder=0 → the stamp shows).
 let _ladderFloorAttr = null;
-let _vitalsUnderDrawer = false;   // w4-power D4: the meters hide under the open F1 drawer (last written)
+let _vitalsUnderDrawer = false;   // the meters hide under the open F1 drawer (last written)
 
-// Zoom Ladder F6 (NAVCOM) floor content orchestrator (S5). Constructed in the
-// ladder block, injected into LadderController (activates/ticks on F6), and
-// ticked explicitly from the loop with the live projector below.
+// F6 (NAVCOM) floor content orchestrator. Constructed in the ladder block, injected into LadderController
+// (activates/ticks on F6), and ticked explicitly from the loop with the live projector below.
 let navcomFloor;
-// u8-f4-frame-field: the trigger's memory for the floor-4 turn to the focused field (EarthTurn.earthTurnTrigger).
+// The trigger's memory for the floor-4 turn to the focused field (EarthTurn.earthTurnTrigger).
 let f4WasSettled = false;
 let f4LastFocusId = null;
 
-// Zoom Ladder Wave-2 floor content orchestrators (S4 serial hub wire): F5
-// (PROX NET), F7 (SDA), F3 (HULL CAM). Same lifecycle as navcomFloor —
-// constructed in the ladder block, injected into LadderController (which owns
-// activate/deactivate + Space verbs), ticked from the loop below (single-ticker
-// pattern). Inert while LADDER.ENABLED is false (never activated).
+// Floor orchestrators F5 (PROX NET), F7 (SDA), F3 (HULL CAM). Same lifecycle as navcomFloor: constructed in the
+// ladder block, injected into LadderController (which owns activate/deactivate + Space verbs), ticked from the loop
+// below. Inert while LADDER.ENABLED is false.
 let proxNetFloor;
 let sdaFloor;
 let hullcamFloor;
-// Zoom Ladder Wave 5 (2) — the F1 REFIT section engine (RefitPane: the
-// seven-subsystem index, the ranked fits, BUY, the wallet). Since Session U
-// (plan 1788954873769 D5) it is a HOSTED section engine — it renders into the
-// slot the WorkbenchPane shell mounts it in and owns no root / tab / slide.
-// UNLIKE the floor orchestrators above it is only CONSTRUCTED while
-// Constants.LADDER.ENABLED is true (the same live flag every ladder gate
-// reads): a ?ladder=0 boot builds no pane, wires no onPartClick, and the
-// shipped part-click → Library path stays byte-identical (pinned in
-// test-LadderController).
+// The F1 REFIT section engine (RefitPane: the seven-subsystem index, the ranked fits, BUY, the wallet). A HOSTED
+// section engine: renders into the slot the WorkbenchPane shell mounts it in; owns no root / tab / slide.
+// UNLIKE the floor orchestrators above it is only CONSTRUCTED while Constants.LADDER.ENABLED is true: a ?ladder=0
+// boot builds no pane, wires no onPartClick, and the shipped part-click → Library path stays byte-identical
+// (pinned in test-LadderController).
 let refitPane;
-// Zoom Ladder Wave 5 (Session B) — the SPECS section engine (LibraryPane: the
-// shipped viewer's entry as a dossier — portrait, summary, specs, RELATED).
-// Session U: hosted by the WorkbenchPane shell like refitPane (head + tail
-// containers). Same construction law as refitPane: built ONLY while
-// Constants.LADDER.ENABLED is true, so a ?ladder=0 boot builds no pane and
-// every shipped codex path (part click → full-screen Library, I key, deep
-// links) stays byte-identical (pinned in test-LadderController).
+// The SPECS section engine (LibraryPane: the shipped viewer's entry as a dossier: portrait, summary, specs,
+// RELATED). Hosted by the WorkbenchPane shell like refitPane. Same construction law: built ONLY while
+// Constants.LADDER.ENABLED is true, so a ?ladder=0 boot keeps every shipped codex path (part click → full-screen
+// Library, I key, deep links) byte-identical (pinned in test-LadderController).
 let libraryPane;
-// Session U (plan 1788954873769, D5) — the ONE workbench pane
-// (js/ui/WorkbenchPane.js): the drawer, left on every floor (§13 r5;
-// gestures follow it, §13 r6 2026-09-26), hosts BOTH engines
-// above (Identity → Upgrade → Learn, D1) and owns the root, the footer-band
-// SPECS tab, the slide, the idle fade, the edge-chrome tab phase, the
-// invitation glow, ONE open state and ONE onOpenChange edge. Everything the
-// hub says to the workbench goes through it — the engines are touched only at
-// construction. Same construction law: built ONLY inside the LADDER gate.
+// The ONE workbench pane (js/ui/WorkbenchPane.js): the drawer, left on every floor (§13 r5; gestures follow it,
+// §13 r6), hosts BOTH engines above (Identity → Upgrade → Learn) and owns the root, the footer-band SPECS tab, the
+// slide, the idle fade, the edge-chrome tab phase, the invitation glow, ONE open state and ONE onOpenChange edge.
+// Everything the hub says to the workbench goes through it; the engines are touched only at construction. Built
+// ONLY inside the LADDER gate.
 let workbenchPane;
-// Wave 5 Session K (plan D-B / D-L) — the CARGO pane (js/ui/hud/CargoPane.js):
-// the manifest + SELL / SELL ALL / -> ELEVATOR over ShopScreen's public
-// wrappers, a pane-density rung. Same construction law: built ONLY inside the
-// LADDER.ENABLED gate (a ?ladder=0 boot builds no pane, pushes no rung).
+// The CARGO pane (js/ui/hud/CargoPane.js): the manifest + SELL / SELL ALL / -> ELEVATOR over ShopScreen's public
+// wrappers, a pane-density rung. Built ONLY inside the LADDER.ENABLED gate (a ?ladder=0 boot builds no pane,
+// pushes no rung).
 let cargoPane = null;
-// Left-arm overlay riders (Cargo → Orbit → Autopilot → Pin). Built ONCE
-// inside the LADDER gate after the panes exist (plan Task 8).
+// Left-arm overlay riders (Cargo → Orbit → Autopilot → Pin). Built ONCE inside the LADDER gate after the panes exist.
 let _leftRiders = null;
 // SAFETY OVERRIDE demo panel (owner 2026-09-07) — LADDER gate only.
 let overridePane = null;
-// The FURNACE gag's "systems reboot" (plan 1788957399035 §1.C) — every shown
-// HUD element dark, then back top → bottom; the pane's `reboot` dep. Gate only.
+// The FURNACE gag's "systems reboot": every shown HUD element dark, then back top → bottom; the pane's `reboot` dep.
+// Gate only.
 let hudReboot = null;
-// Wave 5 Session M (plan "Session M — Instruments") — the three instruments +
-// the copilot's voice: ORBIT (js/ui/hud/OrbitPane.js, the fixed text slots —
-// text only since 2026-09-08), COPILOT (js/ui/hud/FmaStrip.js, the
-// flight-mode annunciator inside the left column + js/systems/CopilotVoice.js,
-// the spoken phrases) and NEXT (js/ui/hud/NextPane.js, the upcoming events).
-// Same construction law as CARGO: built ONLY inside the LADDER.ENABLED gate.
+// The three instruments + the copilot's voice: ORBIT (js/ui/hud/OrbitPane.js, the fixed text slots, text only),
+// COPILOT (js/ui/hud/FmaStrip.js, the flight-mode annunciator inside the left column + js/systems/CopilotVoice.js,
+// the spoken phrases) and NEXT (js/ui/hud/NextPane.js, the upcoming events). Same construction law as CARGO: built
+// ONLY inside the LADDER.ENABLED gate.
 let orbitPane = null;
 let fmaStrip = null;
 let nextPane = null;
 let copilotVoice = null;
-// Session O (plan D4, owner 2026-09-07) — the first-run gesture splash
-// (js/ui/GestureSplash.js: a 3 s MEMO naming PINCH and HOLD on glass, WHEEL
-// and N on the desktop — the retired six-row TOUCH MAP / KEY MAP card's
-// exact wiring slot) and its player-owned record (js/systems/TouchMapStore.js,
-// StorageKeys.TOUCH_MAP, unchanged).
+// The first-run gesture splash (owner 2026-09-07; js/ui/GestureSplash.js: a 3 s MEMO naming PINCH and HOLD on glass,
+// WHEEL and N on the desktop) and its player-owned record (js/systems/TouchMapStore.js, StorageKeys.TOUCH_MAP).
 // Built ONLY inside the LADDER.ENABLED gate, and only for a FIRST RUN.
 let touchMapStore = null;
 let gestureSplash = null;
 /**
- * Session N: the ?shot harness boots a fresh context every run, so the splash
- * (a first-run surface) and the intro ride (every New Game since 2026-09-09)
- * would land in EVERY gate picture; the harness suppresses both unless the
- * run asks for them with `&intro=1` (read once at boot beside the other URL
- * flags — a dev-only override, never a `shot` reader: DevShotGate stays the
- * ONE of those).
+ * The ?shot harness boots a fresh context every run, so the splash (a first-run surface) and the intro ride (every
+ * New Game) would land in EVERY gate picture; the harness suppresses both unless the run asks for them with
+ * `&intro=1` (read once at boot beside the other URL flags: a dev-only override, never a `shot` reader; DevShotGate
+ * stays the ONE of those).
  */
 let _introForced = false;
 /**
- * Session N review, re-aimed 2026-09-09 (owner: "fly-by every time"): the
- * intro ride flies ONCE PER MENU DEPARTURE — set when armed on GAME_RESET,
- * re-opened by the GAME_STATE_CHANGE → MENU listener inside the ladder gate
- * (every New Game entered from the menu flies), and otherwise left CLOSED: a
- * GAMEOVER retry's GAME_RESET in the same session (no MENU visit) must not
- * replay the descent (its first engage may be an APPROACH frame), and a
- * CONTINUE's disarm (PERSISTENCE_LOADED) leaves it closed too — that run's
- * retry is a retry, not a new game; the next MENU visit re-opens it.
+ * The intro ride flies ONCE PER MENU DEPARTURE (owner 2026-09-09: "fly-by every time"): set when armed on
+ * GAME_RESET, re-opened by the GAME_STATE_CHANGE → MENU listener inside the ladder gate (every New Game entered from
+ * the menu flies), and otherwise left CLOSED: a GAMEOVER retry's GAME_RESET in the same session (no MENU visit) must
+ * not replay the descent (its first engage may be an APPROACH frame), and a CONTINUE's disarm (PERSISTENCE_LOADED)
+ * leaves it closed too; the next MENU visit re-opens it.
  */
 let _introFlown = false;
 /**
- * Session N: is this boot a FIRST-TIME player's run? The MAP store's first-run
- * bit under the harness policy (the same policy _introRideAllowed applies —
- * that helper reads no first-run bit). Since 2026-09-09 this gates ONLY the
- * GestureSplash (the retired MAP checklist's slot) — the intro ride no longer
- * reads it (see _introRideAllowed below).
+ * Is this boot a FIRST-TIME player's run? The MAP store's first-run bit under the harness policy (the same policy
+ * _introRideAllowed applies; that helper reads no first-run bit). Gates ONLY the GestureSplash, not the intro ride.
  */
 function _introFirstRun() {
   if (!touchMapStore || typeof touchMapStore.isFirstRun !== 'function') return false;
@@ -1050,51 +905,43 @@ function _introFirstRun() {
   try { return !!touchMapStore.isFirstRun(); } catch (_e) { return false; }
 }
 /**
- * 2026-09-09 (owner: "fly-by every time" — the menu→game fly-by had become a
- * first-run-only surface once the splash was dismissed): may this boot fly the
- * intro ride at all? The ONE harness policy, shared with _introFirstRun: the
- * ?shot harness boots a fresh context every run, so the ride would land in
- * EVERY gate picture — suppressed unless the run asks with `&intro=1`
- * (_introForced; DevShotGate stays the ONE `shot` reader). No first-run
- * read here: every New Game entered from the menu flies.
+ * owner 2026-09-09: the intro fly-by runs on every New Game entered from the menu (no first-run read here).
+ * May this boot fly it at all? Same harness policy as _introFirstRun: the ?shot harness boots a fresh context
+ * every run, so the ride would land in EVERY gate picture - suppressed unless the run asks with `&intro=1`
+ * (_introForced; DevShotGate stays the ONE `shot` reader).
  */
 function _introRideAllowed() {
   return !(devShotGate.requested && !_introForced);
 }
-/** Session N: the a11y preference — the intro is PLACED, not ridden, when the player asked for reduced motion. */
+/** The intro is PLACED, not ridden, when the player asked for reduced motion. */
 function _prefersReducedMotion() {
   try {
     return !!(typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   } catch (_e) { return false; }
 }
-/** Session M: the hint ticker's band from the bottom (its BOTTOM_PX + ROW_HEIGHT_PX) — the ORBIT pane's floor never enters it. */
+/** The hint ticker's band from the bottom (its BOTTOM_PX + ROW_HEIGHT_PX) — the ORBIT pane's floor never enters it. */
 const _HINT_BAND_PX = ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).BOTTOM_PX + ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).ROW_HEIGHT_PX;
-// Session P (plan D2/D3/D7, owner 2026-09-07) — the DARK COCKPIT's edge law.
-// `edgeChrome` is the ONE pure core (js/ui/EdgeChrome.js: timestamps, no
-// timers) every piece of EDGE CHROME reads per frame — the WHERE rail (inside
-// RailIndicator.refresh), the DETAIL slider and the SPECS tab (the anchor block
-// below, write-on-change). `_FOOTER` is the FOOTER BAND (RailGeometry.footerBand:
-// { bottom, top } offsets from the viewport bottom — 132 / 164 on both surfaces),
-// the one fixed strip directly above the transient band that the tabs and the
-// slider live in and every other rider's floor stops at. Both are built only
-// inside the LADDER gate (null flag-off → every consumer no-ops).
+// The DARK COCKPIT's edge law (owner 2026-09-07).
+// `edgeChrome` is the ONE pure core (js/ui/EdgeChrome.js: timestamps, no timers) every piece of EDGE CHROME reads
+// per frame — the WHERE rail (inside RailIndicator.refresh), the DETAIL slider and the SPECS tab (the anchor block
+// below, write-on-change). `_FOOTER` is the FOOTER BAND (RailGeometry.footerBand: { bottom, top } offsets from the
+// viewport bottom — 132 / 164 on both surfaces), the one fixed strip directly above the transient band that the
+// tabs and the slider live in and every other rider's floor stops at. Both are built only inside the LADDER gate
+// (null flag-off → every consumer no-ops).
 let edgeChrome = null;
 let _FOOTER = null;
-/** Session P: the desktop edge-hover wake's last evaluation (≤ 10 Hz by timestamp). */
+/** The desktop edge-hover wake's last evaluation (≤ 10 Hz by timestamp). */
 let _edgeHoverAtMs = -Infinity;
 const _EDGE_HOVER_MIN_MS = 100;
 /**
- * Session P (plan D3) — THE EDGE-WAKE BANDS, the one band test both input
- * surfaces feed (the desktop document pointer listener; TouchControls'
- * `onEdgeTouch` on glass). Edge-scoped, never any-touch: a centre tap wakes
- * nothing — chrome that flickers on every tap is its own distraction.
+ * THE EDGE-WAKE BANDS, the one band test both input surfaces feed (the desktop document pointer listener;
+ * TouchControls' `onEdgeTouch` on glass). Edge-scoped, never any-touch: a centre tap wakes nothing.
  *   right band  x ≥ innerWidth − EDGE_WAKE_PX            → rail + slider
  *   left band   x ≤ EDGE_WAKE_PX                         → tab
  *   footer band innerHeight − top ≤ y ≤ innerHeight − bottom → slider + tab
- * (§13 ruling 5, 2026-09-24: the DETAIL slider moved to the right slot, the
- * SPECS tab to the left — each band wakes the chrome that lives in it.)
- * Returns which band(s) matched (a probe / test witness) or null. Flag-off /
- * before init: `edgeChrome` is null → nothing.
+ * (§13 ruling 5: the DETAIL slider lives in the right slot, the SPECS tab in the left — each band wakes the
+ * chrome that lives in it.)
+ * Returns which band(s) matched (a probe / test witness) or null. Flag-off / before init: `edgeChrome` is null → nothing.
  * @param {number} x @param {number} y @param {number} [nowMs]
  * @returns {string|null}
  */
@@ -1112,9 +959,8 @@ function _edgeBandWake(x, y, nowMs) {
     edgeChrome.wake('slider', t); edgeChrome.wake('tab', t);
     hit = hit ? `${hit}+footer` : 'footer';
   }
-  // u5-info-ap-hold D7: on a short screen (phone sideways) the slider sits bottom centre, off every band
-  // above, so a tap on its own spot (grown 16 px each side) wakes it. Tall screens: unchanged. The globals
-  // are guarded (test-EdgeChrome evaluates this function's source in a sandbox).
+  // On a short screen the slider sits bottom centre, off every band above, so a tap on its own spot
+  // (grown 16 px each side) wakes it. The globals are guarded (test-EdgeChrome evaluates this function's source in a sandbox).
   if (typeof isShortScreen === 'function' && typeof shortSliderRect === 'function' && isShortScreen(h)) {
     const r = shortSliderRect(w, h, typeof _glassBoot !== 'undefined' && !!_glassBoot);
     const grow = 16;
@@ -1126,16 +972,14 @@ function _edgeBandWake(x, y, nowMs) {
   return hit;
 }
 /**
- * Session P (plan D5/D7): the LEFT HUD column's bottom edge — the ORBIT pane's
- * ceiling now that the DISPLAY rail (whose 1 Hz dodge read used to carry it)
- * is retired. ONE layout read per second by the frame clock, cached; null
- * while the column is empty / unlaid (= no ceiling) or headless.
+ * The LEFT HUD column's bottom edge — the ORBIT pane's ceiling. ONE layout read per second by the frame clock,
+ * cached; null while the column is empty / unlaid (= no ceiling) or headless.
  * @param {number} nowMs
  * @returns {number|null}
  */
 let _leftColBottom = null;
 let _leftColAt = -Infinity;
-const _daughtersFold = new DaughtersFoldKeeper();   // u5 D2: folds / gives back DAUGHTERS for the flying strip
+const _daughtersFold = new DaughtersFoldKeeper();   // folds / gives back DAUGHTERS for the flying strip
 const _LEFT_COL_MS = 1000;
 function _leftColumnBottom(nowMs) {
   if (nowMs - _leftColAt < _LEFT_COL_MS) return _leftColBottom;
@@ -1145,20 +989,17 @@ function _leftColumnBottom(nowMs) {
   _leftColBottom = (r && r.height > 0) ? r.bottom : null;
   return _leftColBottom;
 }
-/** Session M: the debris clusters for the NEXT pane's TRANSFER row, re-bucketed at most every CLUSTERS_MS (getDebrisClusters walks every debris). */
+/** The debris clusters for the NEXT pane's TRANSFER row, re-bucketed at most every CLUSTERS_MS (getDebrisClusters walks every debris). */
 let _clustersCache = null;
 let _clustersAt = -Infinity;
 const _CLUSTERS_MS = 10000;
-// Session Q (plan D15 / D15c, owner 2026-09-07) — THE TARGET COLOUR LAW's hub
-// inputs: ONE reused object (zero per-frame allocation), rebuilt per frame while
-// the ladder is active and handed to TargetReticle (`colorLaw`) and, through
-// HUD.update, to TargetPanel (`targetLaw`) — the same debris wears the same
-// colour on its bracket, its arrow and its row (js/ui/hud/TargetColorLaw.js).
+// THE TARGET COLOUR LAW's hub inputs (owner 2026-09-07): ONE reused object (zero per-frame allocation), rebuilt per
+// frame while the ladder is active and handed to TargetReticle (`colorLaw`) and, through HUD.update, to TargetPanel
+// (`targetLaw`) — the same debris wears the same colour on its bracket, its arrow and its row (js/ui/hud/TargetColorLaw.js).
 //   reachKm    the ready TETHER reach TargetPanel computes (hud.reachKm(); 0 = no arm ready)
 //   threatId / threatTier   the conjunction threat record (getStatus().currentThreat: RED = danger, YELLOW = CLOSE PASS)
 //   apTargetId the autopilot's locked debris (AUTOPILOT_TARGET_LOCK / UNLOCK — one gated listener pair below)
-// Flag-off / disengaged: the consumers receive null → their shipped palettes,
-// byte-identical (the Session O `exclusionRect` idiom).
+// Flag-off / disengaged: the consumers receive null → their shipped palettes, byte-identical.
 let _apTargetId = null;
 const _targetLaw = { reachKm: 0, threatId: null, threatTier: null, apTargetId: null };
 function _refreshTargetLaw() {
@@ -1176,56 +1017,39 @@ function _instrumentClusters() {
   if (_clustersCache && (now - _clustersAt) < _CLUSTERS_MS) return _clustersCache;
   let list = null;
   try { list = debrisField.getDebrisClusters(); } catch (_e) { list = null; }
-  // The row is 280 px wide: the subject is the cluster ID (`iss-400`), upper-
-  // cased — not the long display name; the live members ride along so the
-  // pane phases the window from the representative orbit (clusterToOrbitKm).
+  // The row is 280 px wide: the subject is the cluster ID (`iss-400`), upper-cased — not the long display name;
+  // the live members ride along so the pane phases the window from the representative orbit (clusterToOrbitKm).
   _clustersCache = Array.isArray(list)
-    ? list.map((c) => ({ id: c.id, name: String(c.id || c.name || '').toUpperCase(), label: String(c.name || ''), avgAltKm: c.avgAltKm, targets: c.targets }))   // u6 D5: `label` = the display name (`ISS Band, 180-400 km`), plain-word NEXT rows
+    ? list.map((c) => ({ id: c.id, name: String(c.id || c.name || '').toUpperCase(), label: String(c.name || ''), avgAltKm: c.avgAltKm, targets: c.targets }))   // `label` = the display name (`ISS Band, 180-400 km`), plain-word NEXT rows
     : null;
   _clustersAt = now;
   return _clustersCache;
 }
 /** The boot's ONE glass read (TouchControls' narrow detectGlass gate; module scope: init sets it, the gameLoop reads it). */
 let _glassBoot = false;
-// Session R (plan §14.2): the answer to the boot's ONE `loadFaces()` — null
-// until the four faces settle, then true (every face usable) or false (a face
-// failed / a headless boot: the fallback is what is drawn). Read by the `?shot`
-// probe (`__fontsOk`); nothing in the game branches on it — the epoch does.
+// `loadFaces()` result: null until the four faces settle, then true (every face usable) or false (a face failed /
+// headless: the fallback is drawn). Read by the `?shot` probe (`__fontsOk`); nothing in the game branches on it.
 let _fontsOk = null;
-// Session J (plan D-C) — "the library follows": retarget an OPEN SPECS pane to
-// the current floor's subject (assigned inside the LADDER.ENABLED gate; null
-// flag-off, so the controller's onSubjectChange dep is a no-op there).
+// "The library follows": retarget an OPEN SPECS pane to the current floor's subject (set inside the LADDER.ENABLED
+// gate; null flag-off, so the controller's onSubjectChange dep is a no-op there).
 let _specsFollow = null;
-// Zoom Ladder Wave 5 (Session G) — the PLAYER-owned view store (D5 "rooms you
-// can rearrange": FloorMask's per-floor room memory + the F3 pane open-state,
-// its own key `sc_ladder_view_v1`, separate from the run save — the
-// SettingsManager rule). Same construction law as the panes: built ONLY while
-// Constants.LADDER.ENABLED is true, so a ?ladder=0 boot never reads or writes
-// the key (pinned in test-LadderController).
+// The PLAYER-owned view store (FloorMask's per-floor room memory + the F3 pane open-state), its own key
+// `sc_ladder_view_v1`, separate from the run save — the SettingsManager rule. Built ONLY while
+// Constants.LADDER.ENABLED is true, so a ?ladder=0 boot never reads or writes the key (pinned in test-LadderController).
 let ladderViewStore;
 
-// Zoom Ladder per-floor audio beds (S6, Wave-3 serial hub wire): constructed
-// in the ladder block against AudioSystem GETTERS (the unlock pattern) and
-// injected into LadderController, which crossfades beds on floor arrivals and
-// fades to silence on disengage. Inert while LADDER.ENABLED is false.
+// The three ladder objects below are built in the ladder block, injected into LadderController, and inert while
+// LADDER.ENABLED is false. Audio beds and sfx take AudioSystem GETTERS (the unlock pattern).
+// Per-floor audio beds: crossfaded on floor arrivals, faded to silence on disengage.
 let ladderAudioBeds;
-// Zoom Ladder Wave-4 FloorMask (08-workbench D8/§4 map rule): per-floor HUD
-// pane tiers (shown/faint/gone) over the pane-density rung layer (Session O,
-// plan D8: the vitals line left — cryptic, every number duplicated elsewhere).
-// Constructed in the ladder block against the live hud; injected into
-// LadderController (applies rooms on floor arrivals, restores the shipped
-// cockpit on disengage). Inert while LADDER.ENABLED is false (never driven).
+// FloorMask: per-floor HUD pane tiers (shown/faint/gone) over the pane-density rung layer; applies rooms on floor
+// arrivals, restores the shipped cockpit on disengage.
 let ladderFloorMask;
-// Zoom Ladder interaction sfx (S4 Wave 4, serial hub wire): constructed in the
-// ladder block against AudioSystem GETTERS (the unlock pattern) and injected
-// into LadderController as the optional `sfx` dep — ratchet from `charge`,
-// clunk from `cross.direction`, flick tick, undo chime (06-core-api: audio is
-// not a decision type). Inert while LADDER.ENABLED is false.
+// Interaction sfx (the optional `sfx` dep): ratchet from `charge`, clunk from `cross.direction`, flick tick, undo chime.
 let ladderSfx;
 
-// Zoom Ladder F6 world→screen projector, built off the live ladder camera.
-// NavcomFloor consumes it to place the cluster ring+count icons and the ship
-// chevron; |z| <= 1 keeps only points inside the camera near/far planes visible.
+// World→screen projector off the live ladder camera, for NavcomFloor's cluster icons and ship chevron;
+// |z| <= 1 keeps only points inside the camera near/far planes visible.
 const _navProjV = new THREE.Vector3();
 function navcomProject(worldVec3) {
   const cam = cameraSystem && cameraSystem.camera;
@@ -1238,36 +1062,26 @@ function navcomProject(worldVec3) {
   };
 }
 
-// Zoom Ladder F3 (HULL CAM) scratch vector: ship-local → world → screen
-// projector composition + one-time anchor resolution (no per-frame allocation).
+// Scratch vectors (no per-frame allocation): HULL CAM projection; the LIBRARY photo subject (open / entry edge
+// only); the SPECS part portrait (ship-frame → world conversions via _shipDirToWorld, ship up / fore for the image up).
 const _hullTmp = new THREE.Vector3();
-// Session C: the LIBRARY pane's photo subject projection scratch (read on the
-// pane's open / entry edge only — never per frame; one reused vector).
 const _photoTmp = new THREE.Vector3();
-// Session T (SPECS pane part imagery): the part portrait's scratch — the
-// ship-frame → world direction conversions (_shipDirToWorld) and the ship's
-// up / fore for the image up. Read at the photo edge only, never per frame.
 const _portraitDir = new THREE.Vector3();
 const _portraitUp = new THREE.Vector3();
 const _portraitFore = new THREE.Vector3();
 const _portraitQuat = new THREE.Quaternion();
-// Session T: the ONE reused canvas the portrait's RGBA8 readback is blitted onto
-// (rows flipped — readRenderTargetPixels is bottom-up) for the pane's drawImage.
-// Built on the first framed photo, resized only when the render size changes.
+// The ONE reused canvas the portrait's RGBA8 readback is blitted onto (rows flipped — readRenderTargetPixels is
+// bottom-up) for the pane's drawImage. Built on the first framed photo, resized only when the render size changes.
 let _portraitCanvas = null;
 let _portraitImage = null;
-// Session T: the last framed portrait's frame facts (part id, the `single`
-// instance chosen, the ship-frame dir, fill, the fit method / distance / roll)
-// — a ?shot probe for the witness (window.__scbLastPortraitFrame); null until
-// a framed photo lands. Written per click, never per frame.
+// The last framed portrait's frame facts (part id, `single` instance, ship-frame dir, fill, fit method / distance /
+// roll) — a ?shot probe (window.__scbLastPortraitFrame); null until a framed photo lands. Written per click.
 let _lastPortraitFrame = null;
 
 /**
- * Session T — turn a SHIP-frame direction (+X stbd / +Y up / +Z fore — the
- * MotherCallouts PORTRAIT_OVERRIDES table's frame, `PlayerSatellite`'s local
- * axes) into a WORLD unit direction through the player's world quaternion.
- * Reads the live attitude, so the same table row follows the LVLH roll. Null
- * when there is no player / a degenerate input.
+ * Turn a SHIP-frame direction (+X stbd / +Y up / +Z fore — the MotherCallouts PORTRAIT_OVERRIDES table's frame,
+ * `PlayerSatellite`'s local axes) into a WORLD unit direction through the player's world quaternion.
+ * Reads the live attitude, so the same table row follows the LVLH roll. Null when there is no player / a degenerate input.
  * @param {number[]|{x:number,y:number,z:number}} dir
  * @param {THREE.Vector3} [out] scratch (default _portraitDir)
  * @returns {THREE.Vector3|null}
@@ -1282,18 +1096,14 @@ function _shipDirToWorld(dir, out = _portraitDir) {
 }
 
 /**
- * Session T — the framed PART PORTRAIT for the LIBRARY pane's photo edge: the
- * clicked part's world pick-mesh box (MotherCallouts.getPartFrame) → the view
- * direction (the pose table's ship-frame row through _shipDirToWorld, else the
- * player's side, else the §2.2 default — portraitDirFor) → the image up
- * (ship up, or ship fore for a top/bottom-down shot — portraitUpFor) → ONE
- * SceneManager.renderPartPortrait with the callout layer, every outline
- * (MotherCallouts.withHiddenForPortrait) and the inspect hull outline
- * (PlayerSatellite.withHullOutlineHidden) hidden → the RGBA8 readback blitted
- * (rows flipped) onto the reused _portraitCanvas. Returns { canvas, framed:
- * true } or null on ANY miss (no callouts / no frame / a null render / no 2D
- * context) — the pane then takes today's live crop, byte-identical. Never
- * throws; per click, never per frame.
+ * The framed PART PORTRAIT for the LIBRARY pane's photo edge: the clicked part's world pick-mesh box
+ * (MotherCallouts.getPartFrame) → the view direction (the pose table's ship-frame row through _shipDirToWorld,
+ * else the player's side, else the §2.2 default — portraitDirFor) → the image up (ship up, or ship fore for a
+ * top/bottom-down shot — portraitUpFor) → ONE SceneManager.renderPartPortrait with the callout layer, every
+ * outline (MotherCallouts.withHiddenForPortrait) and the inspect hull outline (PlayerSatellite.withHullOutlineHidden)
+ * hidden → the RGBA8 readback blitted (rows flipped) onto the reused _portraitCanvas. Returns { canvas, framed:
+ * true } or null on ANY miss (no callouts / no frame / a null render / no 2D context) — the pane then takes the
+ * live crop, byte-identical. Never throws; per click, never per frame.
  * @param {string} partId
  * @returns {{ canvas: HTMLCanvasElement, framed: true }|null}
  */
@@ -1336,34 +1146,23 @@ function _portraitFor(partId) {
   ctx.putImageData(_portraitImage, 0, 0);
   return { canvas: _portraitCanvas, framed: true };
 }
-// Session J (D-I): the long-press hit-test's scratch (the selected target's
-// position — read per hold, never per frame; one reused vector).
+// The long-press hit-test's scratch (the selected target's position — read per hold).
 const _holdTmp = new THREE.Vector3();
 
-// Input
 let inputManager;
-
-// ============================================================================
-// INITIALIZATION
-// ============================================================================
 
 async function init() {
   _bootMark('init() entry');
   // u9-big-text (DECISIONS §32): the HUD scale (1.25 on a screen >= 1280 x 880, else 1) is written on <html> before any
   // panel is built, so the first layout is already the scaled one; write-on-change on resize (js/ui/HudScale.js).
   installHudScale();
-  // Session R (plan D17 / §14.2): the ONE explicit request for the four B612
-  // faces — the first line of the boot, before anything rasterises text, so
-  // the canvas instruments no longer depend on a DOM element happening to use
-  // each weight. Headless (no document.fonts) → resolves false, no epoch bump.
-  // House grammar (the typeface applies to EVERY boot, ?ladder=0 included):
+  // The ONE explicit request for the four B612 faces — the first line of the boot, before anything rasterises text.
+  // Headless (no document.fonts) → resolves false. The typeface applies to EVERY boot, ?ladder=0 included:
   // deliberately OUTSIDE every Constants.LADDER.ENABLED gate.
   const _fontsReady = loadFaces((typeof document !== 'undefined' && document.fonts) ? document.fonts : null);
   _fontsReady.then((ok) => { _fontsOk = ok; });
-  // PR 5 / P2.10 — URL flag parsing (must run before any module reads
-  // Constants.DEBUG). SceneManager handles its own `?tier=` override; we
-  // only handle `?debug=1` here so the diagnostics gate flips on for the
-  // very first _logDiagnostics() / Earth LOD log call this session.
+  // URL flag parsing (must run before any module reads Constants.DEBUG). SceneManager handles its own `?tier=`
+  // override; only `?debug=1` is handled here, so the diagnostics gate is on for the first _logDiagnostics() call.
   try {
     const urlParams = new URLSearchParams(devSearch(window.location));
     if (urlParams.get('debug') === '1') {
@@ -1377,25 +1176,21 @@ async function init() {
       Constants.TRIP.SKIP_S = 3;
       console.info('[Dev] trips skipped via ?skipTrip=1 (3 s)');
     }
-    // PR 6 / P3.15: ?profile=1 enables per-60-frame draw-call logging.
+    // ?profile=1: per-60-frame draw-call logging.
     if (urlParams.get('profile') === '1') {
       Constants.DEBUG.LOG_DRAW_CALLS = true;
       console.info('[Profile] draw-call profiling enabled via ?profile=1');
     }
-    // Sprint 2 / Phase A: ?perfReport=1 — defer overlay attach until after the
-    // SceneManager + DebrisField exist (handled near the end of init()).
+    // ?perfReport=1: the overlay attaches near the end of init(), once SceneManager + DebrisField exist.
     if (urlParams.get('perfReport') === '1') {
       Constants.DEBUG.PERF_REPORT_OVERLAY = true;
       console.info('[PerfReport] overlay scheduled via ?perfReport=1');
     }
-    // Zoom Ladder per-boot override (iPad port, 2026-09-02). The shipped
-    // source default is TRUE since 2026-09-02 (owner flip; test-FloorContract
-    // pins it), so ?ladder=1 is a no-op and ?ladder=0 is the useful one: a
-    // symmetric force-OFF for this boot only (A/B against the legacy zoom).
-    // Every consumer (LadderController engage, WheelRouter ownership,
-    // InputManager floor keys, CameraSystem anchors, main's adapt-holdoff)
-    // reads Constants.LADDER.ENABLED LIVE, so a boot-time flip is
-    // behaviorally identical to shipping the other value.
+    // Zoom Ladder per-boot override. owner 2026-09-02: the source default is TRUE (test-FloorContract pins it), so ?ladder=1
+    // is a no-op and ?ladder=0 is the useful one: a symmetric force-OFF for this boot only (A/B against the legacy
+    // zoom). Every consumer (LadderController engage, WheelRouter ownership, InputManager floor keys, CameraSystem
+    // anchors, main's adapt-holdoff) reads Constants.LADDER.ENABLED LIVE, so a boot-time flip is behaviorally
+    // identical to shipping the other value.
     {
       const lp = urlParams.get('ladder');
       if (lp === '1') {
@@ -1405,19 +1200,14 @@ async function init() {
         Constants.LADDER.ENABLED = false;
       }
     }
-    // Session N: `&intro=1` lets a ?shot harness run see the intro ride (every
-    // New Game from the menu since 2026-09-09) and the first-run GestureSplash
-    // (both suppressed under the harness otherwise — see _introRideAllowed /
-    // _introFirstRun).
+    // `&intro=1` lets a ?shot harness run see the intro ride and the first-run GestureSplash (both suppressed under
+    // the harness otherwise — see _introRideAllowed / _introFirstRun).
     _introForced = urlParams.get('intro') === '1';
-    // Guidance cleanup (Phase 4): ?guidanceLog=1 enables dev-only guidance
-    // telemetry (prompt→action latency, contradiction + overlap counts).
-    // No-op in the default build; snapshot via window.__dumpGuidanceLog().
+    // ?guidanceLog=1: dev-only guidance telemetry (prompt-to-action latency, contradiction + overlap counts);
+    // snapshot via window.__dumpGuidanceLog(). No-op in the default build.
     if (urlParams.get('guidanceLog') === '1') {
       guidanceTelemetry.enable();
     }
-    // Sprint 3 GPU profiling: ?autoProfile=1 enables [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1)
-    // — scheduled near the end of init() once SceneManager + Earth exist.
     if (profileFlags.autoProfile) {
       console.info('[AutoProfile] scheduled via ?autoProfile=1. Will auto-start once scene settles. To re-run in another game state, call window.startAutoProfile() from DevTools.');
     }
@@ -1428,19 +1218,15 @@ async function init() {
   const canvas = document.getElementById('game-canvas');
   if (!canvas) {
     console.error('[main] #game-canvas not found');
-    // F7: this is a non-throwing early return, so the index.html error/rejection
-    // handlers won't fire — surface the failure card explicitly so boot doesn't
-    // hang on the loading screen with no feedback.
+    // Non-throwing early return: index.html's error handlers won't fire, so surface the failure card explicitly.
     if (typeof window !== 'undefined' && typeof window.__showBootFailure === 'function') {
       window.__showBootFailure('SYSTEMS OFFLINE', 'Render canvas missing — the page did not load correctly.');
     }
     return;
   }
 
-  // --- ST-6.1: Offline Catalogue — fetch before entities so DebrisField can
-  //     populate real NORAD-tagged debris in hybrid mode. On fetch failure
-  //     catalogLoader.init() resolves false and DebrisField transparently
-  //     falls back to pure procedural generation.
+  // Offline catalogue — fetch before entities so DebrisField can use real NORAD-tagged debris (hybrid mode). On
+  // failure catalogLoader.init() resolves false and DebrisField falls back to procedural generation.
   try {
     await catalogLoader.init();
   } catch (e) {
@@ -1448,73 +1234,49 @@ async function init() {
   }
   _bootMark('CatalogLoader.init complete');
 
-  // --- Scene Manager (renderer, camera, post-processing) ---
   sceneManager = new SceneManager(canvas);
-  // Session I (plan D-G, step 4): glass renders at pixel ratio 1.0 — the
-  // retina render target quadruples fragment work the game never leans on.
-  // Session I follow-up (review, (l)): the NARROW glass gate — a coarse PRIMARY
-  // pointer + real touch points (TouchControls.detectGlass) — so a hybrid
-  // laptop driven by a mouse keeps its hi-DPI picture; the broad detect() stays
-  // the touch-affordance gate below. Desktop never takes the clamp —
-  // byte-identical. The current tier's ratio re-applies inside the setter.
+  // Glass renders at pixel ratio 1.0 — the retina render target quadruples fragment work. The NARROW glass gate
+  // (a coarse PRIMARY pointer + real touch points: TouchControls.detectGlass) keeps a mouse-driven hybrid laptop's
+  // hi-DPI picture; the broad detect() stays the touch-affordance gate below. The current tier's ratio re-applies
+  // inside the setter.
   _glassBoot = TouchControls.detectGlass();   // the ONE glass read this boot (pixel cap, the rail hit boxes, the tab floor)
   if (_glassBoot) sceneManager.setGlassPixelRatioCap(true);
-  // Session P (plan D7): the FOOTER BAND for this boot — pure data from the
-  // glass bit and the ticker band; the ladder's riders and the footer's
-  // occupants read it per frame. Gated (the openShop ternary): a ?ladder=0
-  // boot has no footer.
+  // The FOOTER BAND for this boot — read per frame by the ladder's riders and the footer's occupants. Gated: a
+  // ?ladder=0 boot has no footer.
   _FOOTER = (Constants.LADDER && Constants.LADDER.ENABLED) ? footerBand({ glass: _glassBoot, hintBandPx: _HINT_BAND_PX }) : null;
   const scene = sceneManager.getScene();
   const camera = sceneManager.getCamera();
-  // Everything that rides with the mother and is drawn as its own scene object (net, leash, lasso web, furnace chunks) is
-  // parented to this identity group, so it hides and shows with her in ONE place (_syncMotherCarried): a group at the origin
-  // with no rotation or scale moves nothing. Held DEBRIS is the other half of that rule (DebrisField.syncHeldWithMother).
+  // Everything that rides with the mother as its own scene object (net, leash, lasso web, furnace chunks) is
+  // parented to this identity group, so it hides and shows with her in ONE place (_syncMotherCarried): a group at
+  // the origin with no rotation or scale moves nothing. Held DEBRIS is the other half (DebrisField.syncHeldWithMother).
   motherCarriedRoot = new THREE.Group();
   motherCarriedRoot.name = 'MotherCarried';
   scene.add(motherCarriedRoot);
   _bootMark('SceneManager constructed (renderer + composer + bloom)');
 
-  // --- Earth (visual centerpiece) ---
   earth = new Earth(scene, { renderer: sceneManager.renderer });
-  // Sprint 2 / PR C — register so SceneManager.applyTier() can toggle the
-  // LOW_DETAIL fragment-shader branch when the tier changes.
   sceneManager.setEarth(earth);
-  // Black-flicker triage: `?bfp=1|2` installs the self-serve verdict probe
-  // (badge + rate-limited console warns). Returns null when the flag is off.
+  // `?bfp=1|2` installs the black-flicker verdict probe (null when the flag is off).
   blackFrameProbe = installBlackFrameProbe({ sceneManager, earth });
-  // Black-box self-repair (owner 2026-10-08, BLACK_SCREEN_TRIAGE.md Producer 4):
-  // getLadder is a getter because ladderController is assigned later (and never
-  // on a ?ladder=0 boot); onResize is hoisted, so the 'canvas' step can use it.
+  // Black-box self-repair (owner 2026-10-08, BLACK_SCREEN_TRIAGE.md Producer 4): getLadder is a getter because ladderController is
+  // assigned later (and never on a ?ladder=0 boot); onResize is hoisted, so the 'canvas' step can use it.
   blackPatchHeal = installBlackPatchHeal({ sceneManager, earth, getLadder: () => ladderController, steps: { canvas: () => onResize() } });
   _bootMark('Earth constructor returned (textures still decoding async)');
 
-  // --- Starfield (background) ---
   starfield = new Starfield(scene);
-  // Session O (plan D11, owner 2026-09-07): constellations ship OFF by
-  // default and are REMEMBERED. The objects are born hidden inside Starfield,
-  // so the very first frame is already clean — including the MENU backdrop,
-  // which is this same live sky seen through the transparent menu canvas
-  // (backdrop-reveal note below). A stored `true` restores the figures for a
-  // veteran who turned them on; a fresh profile stays off. Global by design —
-  // the one Session O change that applies to the menu and `?ladder=0` too
-  // (plan §9). The setting owns the RESTING state (intent).
+  // Constellations ship OFF by default and are REMEMBERED (owner 2026-09-07). The objects are born hidden inside
+  // Starfield, so the very first frame (the MENU backdrop included) is already clean. A stored `true` restores the
+  // figures for a veteran who turned them on. Global by design: applies to the menu and `?ladder=0` too.
   if (starfield && settingsManager.getConstellations()) {
     starfield.setConstellationsVisible(true);
   }
-  // 2026-09-09 (owner: "constellation figures must not show on the MENU —
-  // they distract from the hero mother"; plan 1788926404388 §1.19-20): the
-  // MENU MASK. A veteran's stored `true` above used to paint the figures over
-  // the hero mother through the transparent menu. Starfield's second bit
-  // (`setMenuSuppressed`) hides the objects while the game state is MENU and
-  // leaves the INTENT untouched — so the 6 key, the Sky-labels rung prior and
-  // the F5 SDA prior (three writers already sharing the one intent bit with
-  // capture/restore priors) cannot race it: a mask composes, a fourth prior
-  // would not. Applied once from the current state (the boot menu — no
-  // GAME_STATE_CHANGE fires for the initial MENU) and then on every
-  // GAME_STATE_CHANGE (payload `{ from, to }`, GameFlowManager.transitionToState).
-  // MENU only: SHOP / BRIEFING / PAUSED / the end screens are not the hero
-  // view. OUTSIDE the ladder gate on purpose — the menu is universal, so a
-  // `?ladder=0` boot gets the same clean menu.
+  // owner 2026-09-09: constellation figures must not show on the MENU (they distract from the hero mother).
+  // The MENU MASK: Starfield's second bit (`setMenuSuppressed`) hides the objects while the game state is MENU and
+  // leaves the INTENT untouched — so the 6 key, the Sky-labels rung prior and the F5 SDA prior (three writers
+  // already sharing the one intent bit with capture/restore priors) cannot race it: a mask composes, a fourth prior
+  // would not. Applied once from the current state (no GAME_STATE_CHANGE fires for the initial MENU) and then on
+  // every GAME_STATE_CHANGE (payload `{ from, to }`). MENU only: SHOP / BRIEFING / PAUSED / the end screens are not
+  // the hero view. OUTSIDE the ladder gate on purpose: a `?ladder=0` boot gets the same clean menu.
   if (starfield && typeof starfield.setMenuSuppressed === 'function') {
     starfield.setMenuSuppressed(gameState.currentState === GameStates.MENU);
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
@@ -1522,19 +1284,14 @@ async function init() {
     });
   }
 
-  // --- Sun Light (dynamic day/night) ---
   sunLight = new SunLight(scene, sceneManager);
 
-  // --- Player Satellite ---
   player = new PlayerSatellite(scene);
 
-  // P2 aft flower — ON by default (owner ruling 2026-08-27, FEATURE_FLAGS.
-  // FLOWER_PREINSTALLED: "just flip it on. you can flip it off later p3").
-  // Both pairs install at boot through the SAME applyUpgrade effect path a
-  // shop purchase drives (stowed bud — press O). While the flag is ON the
-  // two shop rows are hidden (ShopScreen) so nobody pays for hardware
-  // already aboard. The `?flower` URL param remains as the preview override
-  // for when P3 flips the flag off:
+  // P2 aft flower — ON by default (owner 2026-08-27, FEATURE_FLAGS.FLOWER_PREINSTALLED: "just flip it on. you can
+  // flip it off later p3"). Both pairs install at boot through the SAME applyUpgrade path a shop purchase drives
+  // (stowed bud — press O); the two shop rows are hidden while the flag is ON. The `?flower` URL param is the
+  // preview override for when the flag is off:
   //   ?flower or ?flower=2 → both pairs   ?flower=1 → pair A only
   //   ?flower=bloom        → both pairs + slews open to the 90° cargo bloom
   {
@@ -1546,26 +1303,19 @@ async function init() {
       if (fp === 'bloom') player.setFlowerPose('CARGO');
     }
   }
-  // Nets step 3 slice 2b: `?fields` turns on fields by height for this boot (FEATURE_FLAGS.FIELDS_BY_HEIGHT, on by default):
-  // the mission boundary flies her to another debris field with her real thruster instead of burning in place.
-  // `?fields=0` / `off` / `false` mean OFF (lane 3d: any value used to turn it on).
+  // `?fields` turns on fields by height for this boot (FEATURE_FLAGS.FIELDS_BY_HEIGHT, on by default); `?fields=0` /
+  // `off` / `false` mean OFF. The mission boundary then flies her to another debris field instead of burning in place.
   { const fieldsParam = fieldsFromSearch(devSearch(window.location)); if (fieldsParam !== null) Constants.FEATURE_FLAGS.FIELDS_BY_HEIGHT = fieldsParam; }
-  // MLI foil v6: per-material orbital envMap on the gold MLI (near-mirror foil
-  // needs a contrasty environment to reflect, not the near-uniform RoomEnvironment
-  // that leaves it a smooth brass pipe). scene.environment is unchanged for the
-  // rest of the ship/debris. Per-material envMap ignores scene.environmentIntensity;
-  // brightness set via envMapIntensity here.
-  player.applyFoilEnv(sceneManager.getRenderer(), 1.0); // v6.1 calm: 1.4→1.0
-  // Z-layer fix: render the ship in the near-field depth pass. At 1 unit = 100 km
-  // with a log-depth buffer + far=500, the ~2 m ship sits on the flat toe of the
-  // depth curve and its hull layers (PV cells, seams, caps…) z-fight. The
-  // near-field pass re-renders it in a tight depth range (~500× more precision),
-  // matching the clean look the menu gets from its ×1e5 scaled hero. Registered
-  // AFTER SunLight so registerNearFieldRoot() can tag the scene lights too.
-  // GUARDED: a stale service-worker-cached SceneManager.js (older than this
-  // main.js) would lack this method — degrade gracefully (sim still boots; the
-  // z-fix is simply inactive until the cache refreshes) instead of hard-crashing
-  // init into "SYSTEMS OFFLINE". A hard refresh / SW cache bump restores it.
+  // Per-material orbital envMap on the gold MLI foil (near-mirror foil needs a contrasty environment to reflect, not
+  // the near-uniform RoomEnvironment). Per-material envMap ignores scene.environmentIntensity; brightness set via
+  // envMapIntensity here.
+  player.applyFoilEnv(sceneManager.getRenderer(), 1.0);
+  // Render the ship in the near-field depth pass. At 1 unit = 100 km with a log-depth buffer + far=500, the ~2 m ship
+  // sits on the flat toe of the depth curve and its hull layers (PV cells, seams, caps…) z-fight; the near-field pass
+  // re-renders it in a tight depth range (~500× more precision). Registered AFTER SunLight so registerNearFieldRoot()
+  // can tag the scene lights too.
+  // GUARDED: a stale service-worker-cached SceneManager.js would lack this method — degrade (z-fix inactive until
+  // the cache refreshes) instead of hard-crashing init into "SYSTEMS OFFLINE".
   if (typeof sceneManager.registerNearFieldRoot === 'function') {
     sceneManager.registerNearFieldRoot(player);
   } else {
@@ -1574,14 +1324,10 @@ async function init() {
   }
   _bootMark('Starfield + SunLight + Player constructed');
 
-  // --- Debris Field (ST-6.1: hybrid mode consumes catalogLoader if ready) ---
-  // S11(a): the field is ONE orbital regime centred on the boot language's
-  // start orbit — the same computeStartOrbit read that GameFlowManager's
-  // _applyStartLocation makes on every start path, so the field is co-orbital
-  // with the player by construction (register item 38). Register item 50: a
-  // mid-menu language switch re-derives the regime on the start path —
-  // _applyStartLocation calls DebrisField.reseatFieldRegime (orbits only,
-  // same-regime no-op). Per-boot seed, logged so a reported field is
+  // The debris field is ONE orbital regime centred on the boot language's start orbit — the same computeStartOrbit
+  // read that GameFlowManager's _applyStartLocation makes on every start path, so it is co-orbital with the player by
+  // construction. A mid-menu language switch re-derives the regime (_applyStartLocation calls
+  // DebrisField.reseatFieldRegime: orbits only, same-regime no-op). Per-boot seed, logged so a reported field is
   // reproducible.
   let _fieldRegime = null;
   try {
@@ -1591,121 +1337,96 @@ async function init() {
   }
   const _fieldSeed = (Date.now() >>> 0);
   debrisField = new DebrisField(scene, { catalogLoader, seed: _fieldSeed, fieldRegime: _fieldRegime });
-  // catch-near-pass: a piece the ship holds is drawn in the near-field pass while it is near the ship (the hull cannot
-  // paint over it). Guarded like registerNearFieldRoot above (a stale cached module just leaves the pieces far pass).
+  // A piece the ship holds is drawn in the near-field pass while it is near the ship (the hull cannot paint over
+  // it). Guarded like registerNearFieldRoot above (a stale cached module just leaves the pieces in the far pass).
   if (typeof debrisField.attachNearField === 'function') debrisField.attachNearField(sceneManager, player);
   _bootMark('DebrisField constructed (5 authored + ~795 hazard + 5000 background)');
-  // Nets step 3 slice 2b: the fields by height. Inert with FIELDS_BY_HEIGHT off (the field then lays out today's welcome field).
   fieldRegistry = new FieldRegistry();
   fieldRegistry.init({ debrisField, player });
   // The start lines' "Arrived ..." wording follows the field she is at (null with the field map off: new game only).
   openingDance.setFieldProvider(() => (fieldRegistry ? fieldRegistry.startLineField() : null));
   debrisField.setFieldSource(fieldRegistry);
-  // Nets step 3 slice 3 lane 3b: the resupply satellite's look (RESUPPLY_BERTH events). Its own group in the scene, NOT one of the
-  // ActiveSatellites below (those end the run on contact); near-field membership is its own (within 8.5 m of her). Hidden on floors
-  // 4 and 5 through a getter: ladderController is built later in boot. Ticked after player.update in the loop.
+  // The resupply satellite's look (RESUPPLY_BERTH events): its own group in the scene, NOT one of the
+  // ActiveSatellites below (those end the run on contact); near-field membership is its own (within 8.5 m of her).
+  // Hidden on floors 4 and 5 through a getter (ladderController is built later in boot). Ticked after player.update.
   resupplySatellite = new ResupplySatellite({
     scene, sceneManager, player, fieldRegistry,
     floor: () => ((ladderController && ladderController.isActive()) ? ladderController.currentFloor() : null),
   });
 
-  // --- Active Satellites ---
   activeSatellites = new ActiveSatellites(scene);
 
-  // --- Config G Arm Manager (Y0 Quad: 4 arms — 2 Weaver + 2 Spinner) ---
   armManager = new ArmManager(scene, player);
   armManager.setDebrisField(debrisField);
   // Daughter arms mostly move themselves; the once-per-player full-range show (DECISIONS §25 ruling 5).
   armManager.setStrutAutoStore(new StrutAutoStore());
-  floorWordsStore = new FloorWordsStore();   // u7 D6: LEO / GEO explained once, kept across reloads and New Game
-  // Bags held on the radiator tips (lane l5a-tip-cargo). Always built; empty until the leash (l5b) stows a bag.
+  floorWordsStore = new FloorWordsStore();   // LEO / GEO explained once, kept across reloads and New Game
+  // Bags held on the radiator tips. Always built; empty until the leash stows a bag.
   player.tipCargo = new TipCargo({ player, debrisField, armManager, eventBus });
-  armManager.setCatalogLoader(catalogLoader);    // ST-6.1: active-sat treaty guard
-  // z-layer fix (A.6): let docked/close daughters join the near-field depth pass
-  // so they aren't occluded by it and don't z-fight the mother's strut-tip collars.
+  armManager.setCatalogLoader(catalogLoader);    // active-sat treaty guard
+  // Daughters join the near-field depth pass when docked/close, so it doesn't occlude them or z-fight the mother's
+  // strut-tip collars.
   if (typeof armManager.setSceneManager === 'function') {
     armManager.setSceneManager(sceneManager);
   }
-  // M1 guidance T6: the welcome-cluster re-seat safety net asks "is a daughter
-  // flying to this id?" before it moves a lost piece back in front of the
-  // mother — the same test CollisionAvoidanceSystem._isArmTarget makes
-  // (mirrored here, not imported, so DebrisField never holds an ArmManager
-  // reference). Wired once, here, where both exist; optional-method guard in
-  // the setMenuBackdropBoost style.
+  // The welcome-cluster re-seat safety net asks "is a daughter flying to this id?" before it moves a lost piece back
+  // in front of the mother — the same test CollisionAvoidanceSystem._isArmTarget makes (mirrored here, not
+  // imported, so DebrisField never holds an ArmManager reference). Optional-method guard.
   if (typeof debrisField.setReseatGuard === 'function') {
     debrisField.setReseatGuard((id) => !!(armManager && Array.isArray(armManager.arms) &&
       armManager.arms.some((a) => a && a.target && a.target.id === id)));
   }
 
-  // --- Target Selector: imported singleton from TargetSelector.js ---
-
-  // --- Extracted Systems (Sprint 4A) ---
   resourceSystem = new ResourceSystem();
   resourceSystem.setPlayer(player);
-  scoringSystem.setPlayer(player);  // ST-4.E: Wire player ref for ΔV tracking
+  scoringSystem.setPlayer(player);  // ΔV tracking
   armManager.setResourceSystem(resourceSystem);
   sensorSystem = new SensorSystem();
-  // w2-heat (DECISIONS §15 rows 2/4/5/6): scans pay battery (and so heat);
-  // the ship's heat lump registers on the resource system (getThermalSnapshot)
-  // and is ticked in the loop right after resourceSystem.update.
+  // DECISIONS §15 rows 2/4/5/6: scans pay battery (and so heat); the ship's heat lump registers on the resource
+  // system (getThermalSnapshot) and is ticked in the loop right after resourceSystem.update.
   sensorSystem.setResourceSystem(resourceSystem);
   resourceSystem.createThermalSystem(player);
-  // kesslerSystem: imported singleton from KesslerSystem.js
   cargoSystem = new CargoSystem();
   conjunctionSystem = new ConjunctionSystem();
-  // trawlManager: imported singleton from TrawlManager.js
   autopilotSystem = new AutopilotSystem();
   collisionAvoidanceSystem = new CollisionAvoidanceSystem();
-  // The leash hand-off driver (lane l5b-wire): CaptureNetSystem._tryCargoTransfer asks it; the game loop ticks it.
+  // The leash hand-off driver: CaptureNetSystem._tryCargoTransfer asks it; the game loop ticks it.
   player.leashDriver = new LeashDriver({ player, autopilot: autopilotSystem, captureNetSystem, debrisField, armManager, eventBus });
 
-  // --- Phase 4A: Skills + Lasso systems ---
   skillsSystem = new SkillsSystem();
   lassoSystem = new LassoSystem(motherCarriedRoot);
-  lassoSystem.setSkillsSystem(skillsSystem); // Phase 3 hint-gating + veteran downgrade
-  lassoSystem.setPlayer(player); // Phase 1C — cosmetic launch-recoil mesh kick
-  // catch-near-pass (Decision 2): the lasso web around a held piece is drawn in the same pass as the piece.
+  lassoSystem.setSkillsSystem(skillsSystem); // hint-gating + veteran downgrade
+  lassoSystem.setPlayer(player); // cosmetic launch-recoil mesh kick
+  // The lasso web around a held piece is drawn in the same pass as the piece.
   if (typeof lassoSystem.attachNearField === 'function') lassoSystem.attachNearField(sceneManager, player);
 
-  // --- Phase 5 Rewards: RewardSystem + SweepReportUI ---
   rewardSystem = new RewardSystem();
   sweepReportUI = new SweepReportUI();
 
-  // --- Phase 7: Learning Systems (Codex + Space Weather + Subsystem Events) ---
-  // Codex content is offline-first JSON (data/codex.json). Loaded here and
-  // injected; on any failure the system constructs empty (graceful).
+  // Codex content is offline-first JSON (data/codex.json); on any failure the system constructs empty (graceful).
   const codexData = await loadCodexData();
   codexSystem = new CodexSystem(codexData);
-  // Slice 8: let the manage_codex SM-2 reminder resurface unread entries.
+  // Lets the manage_codex SM-2 reminder resurface unread entries.
   skillsSystem.setCodexSystem(codexSystem);
-  // ST-6.1: seeded replay if catalogLoader is ready
   spaceWeatherSystem = new SpaceWeatherSystem({ catalogLoader });
   subsystemEvents = new SubsystemEvents();
 
-  // --- ST-4.D: Dynamic Mid-Mission Events ---
   missionEventSystem = new MissionEventSystem();
   reputationSystem = new ReputationSystem();
 
-  // Load news events (offline-first, graceful failure)
   missionEventSystem.loadNewsEvents();
 
-  // --- ST-6.7: Environment Hazards (AO, MMOD, Safe-Mode, Radiation, Battery DOD) ---
   environmentSystem = new EnvironmentSystem(eventBus, player, powerDistribution, resourceSystem, skillsSystem);
   environmentSystem.init();
   _bootMark('Subsystems constructed (resource/sensor/cargo/conjunction/autopilot/skills/lasso/rewards/codex/spaceWeather/missionEvents/environment)');
 
-  // --- F17: Codex Viewer UI (browse unlocked entries) ---
-  // Lane E (F1 workbench plan, 2026-09-23): the full-screen reader mirrors the
-  // SPECS pane's imagery — an unlocked HARDWARE entry floats its rendered part
-  // portrait beside the prose with a HARDWARE facts block. The adapter matches
-  // the entry's hardwareNames to its MOTHER_CALLOUT_SYSTEMS part (one scan,
-  // then that part's id), reuses the ONE _portraitFor renderer, and hands the
-  // viewer a PRIVATE canvas copy (the reused _portraitCanvas is redrawn by the
-  // next framed photo — copying it at once, whole, keeps this render stable).
-  // The copy is skipped (null) when the render or the 2D context misses —
-  // the reader is then text-only, never a broken frame. Ladder-gated like the
-  // SPECS pane's own wiring: a ?ladder=0 boot passes NO deps at all, and the
-  // reader's construction + behaviour stay byte-identical to before.
+  // Codex viewer: the full-screen reader mirrors the SPECS pane's imagery — an unlocked HARDWARE entry floats its
+  // rendered part portrait beside the prose with a HARDWARE facts block. The adapter matches the entry's
+  // hardwareNames to its MOTHER_CALLOUT_SYSTEMS part (one scan, then that part's id), reuses the ONE _portraitFor
+  // renderer, and hands the viewer a PRIVATE canvas copy (the reused _portraitCanvas is redrawn by the next framed
+  // photo — copying it at once, whole, keeps this render stable). The copy is skipped (null) when the render or the
+  // 2D context misses — the reader is then text-only. Ladder-gated like the SPECS pane's own wiring: a ?ladder=0
+  // boot passes NO deps at all.
   codexViewerUI = new CodexViewerUI(codexSystem, (Constants.LADDER && Constants.LADDER.ENABLED) ? {
     portraitFor: (entry) => {
       if (!entry || !Array.isArray(entry.hardwareNames) || !entry.hardwareNames.length) return null;
@@ -1733,43 +1454,31 @@ async function init() {
     },
   } : undefined);
 
-  // --- Inline glossary first-use seen-state (§11.8) — persists which terms the
-  // player has already seen so the first-use cue stops nagging veterans. ---
+  // Inline glossary first-use seen-state (§11.8): the first-use cue stops nagging veterans.
   glossaryState = new GlossaryState();
 
-  // --- Keyboard shortcut reference overlay (? toggles a grouped hotkey list) ---
   hotkeyOverlay = new HotkeyOverlay();
 
-  // --- ST-6.5: Teaching System (first-encounter contextual overlays) ---
   teachingOverlay = new TeachingOverlay(document.body);
   teachingSystem = new TeachingSystem(eventBus);
   teachingSystem.onShow = (moment) => teachingOverlay.show(moment);
-  teachingSystem.setSkillsSystem(skillsSystem); // CP-4 §3.1 veteran downgrade + hint-gating
+  teachingSystem.setSkillsSystem(skillsSystem); // veteran downgrade + hint-gating
   teachingSystem.init();
 
-  // --- Delegation 2 (2026-05-31): OnboardingDirector ---
-  // Orchestrates the 16-beat first-experience pipeline (boot → handshake →
-  // arrows → struts → zoom → inspect → scan → target → autopilot → decision
-  // → lasso/daughter → complete).  Subscribes to MISSION_START and walks
-  // each beat: emits HOUSTON comms, posts to bottom-screen ticker, soft
-  // chime, brightens related HUD panel via SKILL_DISCOVERED.  Escalates
-  // un-satisfied beats to TeachingSystem after 15 s.
+  // OnboardingDirector: the 16-beat first-experience pipeline (boot → handshake → arrows → struts → zoom → inspect
+  // → scan → target → autopilot → decision → lasso/daughter → complete). Subscribes to MISSION_START and walks each
+  // beat: HOUSTON comms, bottom-screen ticker, soft chime, brightens the related HUD panel via SKILL_DISCOVERED.
+  // Escalates un-satisfied beats to TeachingSystem after 15 s.
   guidanceDirector = new GuidanceDirector({ skillsSystem, settingsManager });
 
-  // Reward-first spine: track the live in/out-of-range state of the selected
-  // target so the Director's `range_wall` beat (requiresOutOfRange) holds until
-  // the reticle actually reports OUT OF RANGE. Updated by AutoLockController's
-  // crossing events.
+  // Track the live in/out-of-range state of the selected target so the Director's `range_wall` beat
+  // (requiresOutOfRange) holds until the reticle actually reports OUT OF RANGE (AutoLockController's crossing events).
   //
-  // IMPORTANT (ordering): these flag-setters MUST be registered BEFORE the
-  // OnboardingDirector below. EventBus delivers in registration order, and the
-  // Director re-checks the range_wall gate on TARGET_OUT_OF_RANGE via its
-  // contextProvider (which reads this flag). If the Director's handler ran
-  // first, it would read the stale `false`, leave the gate closed, and the gate
-  // would only open on the next nudge event (AUTOPILOT_ENGAGE) — which is also
-  // range_wall's trigger, collapsing the teach into a single tick. Setting the
-  // flag first means the gate opens the instant the reticle reports OUT OF
-  // RANGE, so the "too far — press A" coaching is shown before the player acts.
+  // IMPORTANT (ordering): these flag-setters MUST be registered BEFORE the OnboardingDirector below. EventBus
+  // delivers in registration order, and the Director re-checks the range_wall gate on TARGET_OUT_OF_RANGE via its
+  // contextProvider (which reads this flag). If the Director's handler ran first, it would read the stale `false`,
+  // leave the gate closed, and the gate would only open on the next nudge event (AUTOPILOT_ENGAGE) — which is also
+  // range_wall's trigger, collapsing the teach into a single tick.
   eventBus.on(Events.TARGET_OUT_OF_RANGE, () => { _onboardingTargetOutOfRange = true; _onboardingTargetInRange = false; });
   eventBus.on(Events.TARGET_IN_RANGE, () => { _onboardingTargetOutOfRange = false; _onboardingTargetInRange = true; });
   eventBus.on(Events.TARGET_CLEARED, () => { _onboardingTargetOutOfRange = false; _onboardingTargetInRange = false; });
@@ -1782,9 +1491,7 @@ async function init() {
     teachingSystem,
     persistenceManager,
     guidanceDirector,
-    // Live game context for conditional onboarding beats (#1 target gating,
-    // #3 capture-proximity gating). Returns counts/distances the director uses
-    // to decide whether a beat is actionable yet.
+    // Live game context for conditional onboarding beats: counts/distances deciding whether a beat is actionable yet.
     contextProvider: () => {
       let trackedContacts = 0;
       let nearestDebrisM = null;
@@ -1794,8 +1501,8 @@ async function init() {
         }
         const playerPos = player && player.getPosition ? player.getPosition() : null;
         if (debrisField && playerPos && typeof debrisField.getDebrisNear === 'function') {
-          // Nearest discovered debris distance (metres). 5 km search window: getDebrisNear takes SCENE units (1 unit = 100 km,
-          // Constants.SCENE_SCALE = 0.01 per km), so 5 km is 5 * SCENE_SCALE; a bare 5.0 was 500 km and gave "Debris 335654 meters".
+          // Nearest discovered debris distance (metres). 5 km search window: getDebrisNear takes SCENE units
+          // (1 unit = 100 km, Constants.SCENE_SCALE = 0.01 per km), so 5 km is 5 * SCENE_SCALE.
           const near = debrisField.getDebrisNear(playerPos, 5 * Constants.SCENE_SCALE);
           let bestKm = Infinity;
           for (const d of (near || [])) {
@@ -1807,84 +1514,65 @@ async function init() {
         }
       } catch (_e) { /* context is best-effort */ }
       const hasTarget = !!(targetSelector && targetSelector.getActiveTarget && targetSelector.getActiveTarget());
-      // Zoom Ladder (owner, 2026-09-02 evening): away from the flying view
-      // (F3 hull / F5–F7 icon floors) the player is exploring, not stuck —
-      // the Director defers its stall escalation and ignores ladder inputs.
-      // ladderController is constructed later in boot; read live, guarded.
+      // Zoom Ladder, owner 2026-09-02: away from the flying view (F3 hull / F5–F7 icon floors) the player is exploring,
+      // not stuck — the Director
+      // defers its stall escalation and ignores ladder inputs. ladderController is constructed later in boot; read live, guarded.
       let ladderAway = false;
       try {
         ladderAway = !!(ladderController && ladderController.isActive() && ladderController.currentFloor() !== 2);
       } catch (_e) { /* best-effort */ }
       return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange, targetInRange: _onboardingTargetInRange, daughterReady: _daughterReadyWithNets(), ladderAway };
     },
-    // Ladder reorder rev 3: live floor for the DETAIL onboarding beat.
-    // ladderController is constructed later; read live (GestureSplash idiom).
+    // Live floor for the DETAIL onboarding beat. ladderController is constructed later; read live (GestureSplash idiom).
     floorProvider: () => ((ladderController && !ladderController.isRiding() && !(ladderController.introInFlight && ladderController.introInFlight())) ? ladderController.currentFloor() : null),
-    // Opening dance (plan 1789086956154 Task 5): the ORBITAL_VIEW start defers
-    // while the unfold is running — the dance is wordless; the boot beat waits
-    // for OPENING_DANCE_HANDOVER (the Director listens for it itself). Flag
-    // off / ?shot / reduced motion → isActive() is false → unchanged behavior.
+    // The ORBITAL_VIEW start defers while the opening-dance unfold is running — the dance is wordless; the boot beat
+    // waits for OPENING_DANCE_HANDOVER (the Director listens for it itself). Flag off / ?shot / reduced motion →
+    // isActive() is false → unchanged behavior.
     deferWhile: () => openingDance.isActive(),
-    // u14b B5: the magazine a run starts with at the bought fibre tier (6/8/10), not the start-tier 4.
+    // The magazine a run starts with at the bought fibre tier (6/8/10), not the start-tier 4.
     getMotherNetCapacity: () => captureNetSystem.getMotherNetCapacity(),
   });
 
 
-  // Phase 4: Wire cargo system to resource system for dual-mode fuel
-  resourceSystem.setCargoSystem(cargoSystem);
+  resourceSystem.setCargoSystem(cargoSystem);   // dual-mode fuel
   player.setResourceSystem(resourceSystem);
   player.setCargoSystem(cargoSystem);
 
-  // --- Camera System (replaces old manual follow) ---
   cameraSystem = new CameraSystem(camera, canvas, scene, sceneManager);
-  cameraSystem.setPlayer(player);   // mother-net-reel plan §11.1 — pod-muzzle anchor for the mother net ceremony
+  cameraSystem.setPlayer(player);   // pod-muzzle anchor for the mother net ceremony
 
-  // --- Mothership inspection callouts (in-world 3D labels; replaces the 2D
-  // wireframe pane). Gated internally on the inspection events. ---
+  // Mothership inspection callouts (in-world 3D labels); gated internally on the inspection events.
   motherCallouts = new MotherCallouts(player, camera, {
     canvas,
-    // Session U (plan 1788954873769, D6 — the F1 click verb is the part's
-    // DOSSIER): with the ladder ON, clicking a hull part or its card shows the
-    // part in the ONE workbench pane — `WorkbenchPane.showPart(part)` focuses
-    // the REFIT block on the part's subsystem (8→7 refitIndex; D12 detached
-    // parts, D13 THERMAL), opens the SPECS entry with `via` = the clicked
-    // callout name + the click anchor (the framed portrait — the record's
-    // `screen` / `bounds` / `id` ride the call, so nothing goes stale), OPENS
-    // the pane if it was closed, and files the Subnautica unlock request
-    // (scanPart: a LOCKED entry → CODEX_UNLOCK_REQUEST over the one path).
-    // This replaces Wave 5 (2) D-a ("click = the REFIT card") + Session C
-    // ("the library follows only while open"): the matching label is now
-    // guaranteed on every click. workbenchPane is constructed in the ladder
-    // block BELOW (late-binding closure, the getLadderController style); the
-    // guard makes a pre-construction click a no-op. Flag-off (?ladder=0): NO
-    // onPartClick key is passed at all, so MotherCallouts' one CODEX_OPEN_ENTRY
-    // emitter runs exactly as shipped (byte-identical, pinned in
-    // test-LadderController).
+    // With the ladder ON, the F1 click verb is the part's DOSSIER: clicking a hull part or its card shows the part
+    // in the ONE workbench pane — `WorkbenchPane.showPart(part)` focuses the REFIT block on the part's subsystem
+    // (8→7 refitIndex; detached parts, THERMAL), opens the SPECS entry with `via` = the clicked callout name + the
+    // click anchor (the framed portrait — the record's `screen` / `bounds` / `id` ride the call, so nothing goes
+    // stale), OPENS the pane if it was closed, and files the Subnautica unlock request (scanPart: a LOCKED entry →
+    // CODEX_UNLOCK_REQUEST over the one path). workbenchPane is constructed in the ladder block BELOW (late-binding
+    // closure, the getLadderController style); the guard makes a pre-construction click a no-op. Flag-off
+    // (?ladder=0): NO onPartClick key is passed at all, so MotherCallouts' one CODEX_OPEN_ENTRY emitter runs
+    // unchanged (pinned in test-LadderController).
     ...((Constants.LADDER && Constants.LADDER.ENABLED) ? {
       onPartClick: (part) => { if (workbenchPane) workbenchPane.showPart(part); },
     } : {}),
   });
 
-  // --- Camera: start following the player ---
   const startPos = player.getPosition();
   camera.position.copy(startPos);
   camera.position.y += 0.00008;
 
-  // --- Comms System ---
   commsSystem = new CommsSystem();
 
-  // --- CP-4 MissionCoach (chapters 2+ coaching; chapter 1 stays with OnboardingDirector) ---
-  // Wave 5 Session F (D4): the chapter onset keys on MISSION_START (the mission
-  // boundary) and holds while a depot stop is pending — the predicate is
-  // GameFlowManager's (the ONE depot decision per catch); gameFlowManager is the
-  // imported singleton, read lazily per gameplay frame, so init() order is moot.
+  // MissionCoach (chapters 2+; chapter 1 stays with OnboardingDirector): the chapter onset keys on MISSION_START and
+  // holds while a depot stop is pending — the predicate is GameFlowManager's (the ONE depot decision per catch);
+  // gameFlowManager is the imported singleton, read lazily per gameplay frame, so init() order is moot.
   const depotStopPending = () => gameFlowManager.isDepotStopPending();
   missionCoach = new MissionCoach({ eventBus, scoringSystem, persistenceManager, commsSystem, depotStopPending, fieldRegistry });
   missionCoach.init();
 
-  // Late-bind live-data + codex context into the inspection callouts. Done here
-  // (not in the constructor) because motherCallouts is built before commsSystem;
-  // every reference is optional and cards degrade to static rows if missing.
+  // Late-bind live-data + codex context into the inspection callouts (not in the constructor: motherCallouts is
+  // built before commsSystem); every reference is optional and cards degrade to static rows if missing.
   if (motherCallouts?.setLiveCtx) {
     motherCallouts.setLiveCtx({
       resourceSystem, commsSystem, codexSystem,
@@ -1892,29 +1580,22 @@ async function init() {
     });
   }
 
-  // --- Build UI ---
   hud = new HUD();
   hud.setCityLabels(cityLabels);
-  // Delegation 4 (2026-05-31) — Browser-playtest: NetInventoryPanel is
-  // SUSPENDED (never displayed) pending a UX redesign. See ROADMAP.md.
-  // The panel still mounts so internal event tracking works, but setVisible
-  // is never called.
+  // NetInventoryPanel is SUSPENDED (never displayed) pending a UX redesign (archive/ROADMAP.md). The panel still
+  // mounts so internal event tracking works, but setVisible is never called.
   menuScreen = new MenuScreen(sceneManager ? sceneManager.currentTier : null);
-  menuScreen.setHelpOpener(() => hotkeyOverlay && hotkeyOverlay.toggle());   // w1-first-minute D3: menu "?" = the ? key's list
-  // Session J.5 (owner item 5) — the menu NEW VERSION READY card's watcher.
-  // With a service worker the truth is a build installed and waiting (js/core/
-  // UpdateWatch.js); data/build-tag.json (sw.js serves it local-first, from the
-  // running build's cache) is the baseline read here at boot and the truth when
-  // there is no worker. Checked once per start (the first MENU entry, or a return
-  // after ≥ 1 h hidden — the iPad resumed days later), once more a minute later if
-  // nothing was found, then not again (owner 2026-10-18, DECISIONS §16); also on a
-  // serviceWorker controllerchange (a reason to
-  // re-read, never a second truth). A new hash → Events.UPDATE_AVAILABLE once
-  // per build → MenuScreen mounts the card (menu ONLY); before a game has begun,
-  // Events.UPDATE_AUTO_APPLY → the menu switches to it by itself. Flag-INDEPENDENT by
-  // owner law: a ?ladder=0 fallback build must still be able to say "update
-  // ready" (the module never reads Constants.LADDER; no DOM until a change).
-  // Started BEFORE the boot MENU transition below so the first menu counts.
+  menuScreen.setHelpOpener(() => hotkeyOverlay && hotkeyOverlay.toggle());   // menu "?" = the ? key's list
+  // The menu NEW VERSION READY card's watcher. With a service worker the truth is a build installed and waiting
+  // (js/core/UpdateWatch.js); data/build-tag.json (sw.js serves it local-first, from the running build's cache) is
+  // the baseline read here at boot and the truth when there is no worker. Checked once per start (the first MENU
+  // entry, or a return after ≥ 1 h hidden — the iPad resumed days later), once more a minute later if nothing was
+  // found, then not again (owner 2026-10-18, DECISIONS §16); also on a serviceWorker controllerchange (a reason to
+  // re-read, never a second truth). A new hash → Events.UPDATE_AVAILABLE once per build → MenuScreen mounts the card
+  // (menu ONLY); before a game has begun, Events.UPDATE_AUTO_APPLY → the menu switches to it by itself.
+  // Flag-INDEPENDENT by owner law: a ?ladder=0 fallback build must still be able to say "update ready" (the module
+  // never reads Constants.LADDER; no DOM until a change). Started BEFORE the boot MENU transition below so the
+  // first menu counts.
   updateWatch = new UpdateWatch({ eventBus, events: Events, menuState: GameStates.MENU });
   updateWatch.start();
   menuScreen.setUpdateChecker(() => updateWatch.checkNow());   // the notes card's "Check for updates" (owner 2026-10-26)
@@ -1922,51 +1603,42 @@ async function init() {
   shopScreen = new ShopScreen();
   gameOverScreen = new GameOverScreen();
 
-  // --- Target Reticle (Canvas 2D overlay) ---
   targetReticle = new TargetReticle(camera);
   targetReticle.setVisible(false);
 
-  // --- Nav Sphere (Canvas 2D 3D-radar) ---
   navSphere = new NavSphere(camera);
   navSphere.setVisible(false);
 
-  // --- Debris Wireframe — now created by HUD (integrated right-column layout) ---
-  debrisWireframe = hud.debrisWireframe;
+  debrisWireframe = hud.debrisWireframe;   // created by HUD (integrated right-column layout)
 
-  // --- Docking Reticle (Canvas 2D ARM PILOT overlay) ---
   dockingReticle = new DockingReticle(camera, scene);
   dockingReticle.setVisible(false);
-  // u17 A-T1 (D2): the glass captions name a button only while it is on screen; both are read when a caption is drawn.
+  // The glass captions name a button only while it is on screen; both are read when a caption is drawn.
   dockingReticle.setGlassControls({
     hasStepButton: (label) => !!(hud && hud.hintTicker && hud.hintTicker.hasStepButton(label)),
     isDespinUp: () => !!(touchVerbButton && touchVerbButton._despinShown),
     isTurnPadUp: () => !!(touchControls && touchControls.isTurnPadShown()),
-    // u18c D6: the piloted daughter's CHANGE TOOL button is on her DAUGHTERS row (StatusPanel.toolButtonUp).
+    // The piloted daughter's CHANGE TOOL button is on her DAUGHTERS row (StatusPanel.toolButtonUp).
     toolButtonUp: () => {
       const a = inputManager && inputManager.armPilotMode && cameraSystem && cameraSystem.getPilotedArm ? cameraSystem.getPilotedArm() : null;
       return !!(a && hud && hud.statusPanel && hud.statusPanel.toolButtonUp(a.index));
     },
   });
 
-  // --- Velocity Streaks (Canvas 2D acceleration overlay — Phase 4) ---
   velocityStreaks = new VelocityStreaks();
   // Canvas starts visible — empty overlay is transparent, no visual impact;
   // STATE_CHANGE listener hides/clears when leaving gameplay states
 
-  // --- Debris Map (ST-4.A — full-screen strategic sweep planning overlay) ---
   debrisMap = new DebrisMap();
 
-  // --- Debug Overlay (Ctrl+D toggle) ---
   debugOverlay = new DebugOverlay();
   _bootMark('UI constructed (HUD/Menu/Briefing/Shop/GameOver/Reticles/NavSphere/DebrisMap/DebugOverlay)');
 
-  // --- Connect comms to HUD ---
   hud.setCommsSystem(commsSystem);
 
-  // --- Connect NavSphere to HUD so the right pane column reserves the correct
-  //     vertical slot and reclaims it when the sphere is minimized/hidden ---
+  // The right pane column reserves its slot for the NavSphere and reclaims it when the sphere is minimized/hidden.
   if (typeof hud.setNavSphere === 'function') hud.setNavSphere(navSphere);
-  // u7 D2: on a short screen the corner orb sits under the right column (comms, NEXT) instead of over it.
+  // On a short screen the corner orb sits under the right column (comms, NEXT) instead of over it.
   // The closure reads `nextPane` lazily (a module-level `let`, built later); no layout read, cached numbers only.
   if (typeof navSphere.setCornerTopProvider === 'function') {
     navSphere.setCornerTopProvider(() => {
@@ -1976,110 +1648,85 @@ async function init() {
     });
   }
 
-  // Pane-density pure-scenery rung also drops the constellation name labels.
+  // Pane-density pure-scenery rung also drops the constellation name labels, the Sun / Moon / planet name labels
+  // (sky-labels rung) and can hide the mother ship for an empty-orbit view.
   if (typeof hud.setStarfield === 'function') hud.setStarfield(starfield);
-
-  // …and the Sun / Moon / planet name labels (sky-labels rung).
   if (typeof hud.setSunLight === 'function') hud.setSunLight(sunLight);
-
-  // Pure-scenery rung can also hide the mother ship for an empty-orbit view.
   if (typeof hud.setMotherCraft === 'function') hud.setMotherCraft(player);
 
-  // --- Connect V3 arm manager to HUD + player satellite ---
   if (armManager) hud.setArmManager(armManager);
-  // u18c D4: her row's CHANGE TOOL button shows only for the daughter being piloted (read when a row is drawn).
+  // Her row's CHANGE TOOL button shows only for the daughter being piloted (read when a row is drawn).
   hud.statusPanel.setPilotedArmGetter(() => (inputManager && inputManager.armPilotMode && cameraSystem && cameraSystem.getPilotedArm ? cameraSystem.getPilotedArm() : null));
   if (armManager) player.setArmManager(armManager);
-  debrisField.setMotherDragSource(player);   // Nets step 3 slice 2a: the welcome pieces share her drag coefficient (the area and mass her last drag step used)
-  // Delegation 4 (2026-05-31): wire LassoSystem into HUD so NetInventoryPanel
-  // can poll initial ammo state.
-  if (lassoSystem && typeof hud.setLassoSystem === 'function') hud.setLassoSystem(lassoSystem);
+  debrisField.setMotherDragSource(player);   // the welcome pieces share her drag coefficient (the area and mass her last drag step used)
+  if (lassoSystem && typeof hud.setLassoSystem === 'function') hud.setLassoSystem(lassoSystem);   // NetInventoryPanel polls initial ammo state
 
-  // V-8: Capture net system + visual effects
   if (Constants.FEATURE_FLAGS.CAPTURE_NET) {
-    captureNetSystem.init({ player, debrisField, audioSystem, armManager, lassoSystem });   // ST-9.4: initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + Phase-A pin API + Phase-B winch pitch + Phase C-lite corridor test
+    captureNetSystem.init({ player, debrisField, audioSystem, armManager, lassoSystem });   // initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + pin API + winch pitch + corridor test
     player.setCaptureNetSystem(captureNetSystem);     // §4.4: berthed-mass translational scaling in _applyThrust
-    lassoSystem.setCaptureNetSystem(captureNetSystem);   // Cargo-continuity S13(d): a lassoed catch adopts onto the nose-collar berth (the one holding model)
-    debrisField.setReseatNetSource(captureNetSystem);   // 2026-10-14: the welcome re-seat never moves a piece a mother net is flying at or holding
-    cameraSystem.setLassoSystem(lassoSystem);   // 2026-08-26: the short lasso catch cut reads the live cast state
-    captureNetVisual.init(motherCarriedRoot, player, captureNetSystem, sceneManager, scene);   // sceneManager backs the Phase D.8 LOW-tier garnish gate
-    // Item 1: staged furnace-breakdown choreography (chunks → furnace, net drawn in).
+    lassoSystem.setCaptureNetSystem(captureNetSystem);   // a lassoed catch adopts onto the nose-collar berth (the one holding model)
+    debrisField.setReseatNetSource(captureNetSystem);   // the welcome re-seat never moves a piece a mother net is flying at or holding
+    cameraSystem.setLassoSystem(lassoSystem);   // the short lasso catch cut reads the live cast state
+    captureNetVisual.init(motherCarriedRoot, player, captureNetSystem, sceneManager, scene);   // sceneManager backs the LOW-tier garnish gate
+    // Staged furnace-breakdown choreography (chunks → furnace, net drawn in).
     furnaceBreakdownVisual.init(motherCarriedRoot, player);
-    // l6-look: the leash hand-off — line, real-size bags, cone swivel (reads player.leashDriver.view()).
-    leashVisual = new LeashVisual({ scene: motherCarriedRoot, player, sceneManager, netVisual: captureNetVisual });   // F2: drawn in the near-field pass with the ship
+    // The leash hand-off — line, real-size bags, cone swivel (reads player.leashDriver.view()).
+    leashVisual = new LeashVisual({ scene: motherCarriedRoot, player, sceneManager, netVisual: captureNetVisual });   // drawn in the near-field pass with the ship
   }
 
-  // CP-2: mother-mounted de-spin laser (flag-gated; operates on the active target)
   if (Constants.FEATURE_FLAGS.LASER_DESPIN) {
     despinLaser.init({ scene, player, targetSelector });
   }
 
-  // Reward-first onboarding: front-arc autolock + net-range tracking.
-  // Auto-selects the nearest forward debris so a new player gets the lock +
-  // first catch in the first ~10 s; emits TARGET_IN_RANGE/OUT_OF_RANGE to drive
-  // the reticle flip, the in-range-only lock earcon, and the range→AP gate.
+  // Reward-first onboarding: front-arc autolock + net-range tracking. Auto-selects the nearest forward debris so a
+  // new player gets the lock + first catch in the first ~10 s; emits TARGET_IN_RANGE/OUT_OF_RANGE (reticle flip,
+  // in-range-only lock earcon, range→AP gate).
   autoLockController = new AutoLockController({ player, debrisField, settingsManager });
 
-  // --- F17: Connect codex system to HUD badge + badge click toggle ---
   hud.setCodexSystem(codexSystem);
-  // Feed glossary seen-state to the comms panel so inline terms drop their
-  // first-use cue once seen.
+  // Feed glossary seen-state to the comms panel so inline terms drop their first-use cue once seen.
   if (glossaryState && hud.commsPanel && typeof hud.commsPanel.setGlossaryState === 'function') {
     hud.commsPanel.setGlossaryState(glossaryState);
   }
   eventBus.on('codex:toggleUI', () => { if (codexViewerUI) codexViewerUI.toggle(); });
   // Glossary deep-link (§11.8): a clicked inline term opens the viewer on its entry.
-  // `anchor` (gag v2 §7.27) rides through: Houston's "manual" lands on page one's WARNING box.
+  // `anchor` rides through: Houston's "manual" lands on page one's WARNING box.
   eventBus.on(Events.CODEX_OPEN_ENTRY, (data) => {
     if (codexViewerUI && data && data.id) codexViewerUI.openEntry(data.id, { anchor: data.anchor });
   });
 
-  // --- Connect shop screen to game over screen (for upgrade count display) ---
   gameOverScreen.setShopScreen(shopScreen);
 
-  // --- Phase 5: Wire cargo & scoring refs into shop for sell/contribute ---
   shopScreen.setCargoSystem(cargoSystem);
-  shopScreen.setResourceSystem(resourceSystem);   // g1-gas-upgrades D5: the resupply is priced by the tank gas
+  shopScreen.setResourceSystem(resourceSystem);   // the resupply is priced by the tank gas
   shopScreen.setScoringSystem(scoringSystem);
 
-  // --- CH5 ISS conjunction boss (MISSION_ARC §6) — protect-the-asset event ---
-  // Needs the shop (elevator-mass award) + debrisField (ISS-track spawn), so it
-  // is constructed after shopScreen is wired, unlike MissionCoach above. Onset:
-  // MISSION_START into mission 5 + the same depotStopPending hold (D4).
+  // CH5 ISS conjunction boss (protect-the-asset). Needs the shop (elevator-mass award) + debrisField (ISS-track
+  // spawn), so it is constructed after shopScreen is wired, unlike MissionCoach above. Onset: MISSION_START into
+  // mission 5 + the same depotStopPending hold.
   issConjunctionBoss = new IssConjunctionBoss({
     eventBus, scoringSystem, debrisField, shopScreen, persistenceManager, depotStopPending,
   });
   issConjunctionBoss.init();
 
-  // --- CH9 Starlink fragmentation boss (MISSION_ARC §6) — race-the-cascade event ---
+  // CH9 Starlink fragmentation boss (race-the-cascade).
   starlinkCascadeBoss = new StarlinkCascadeBoss({
     eventBus, scoringSystem, debrisField, shopScreen, persistenceManager, depotStopPending,
   });
   starlinkCascadeBoss.init();
 
-  // --- GameFlowManager: init with reduced refs (13 decoupled via EventBus) ---
-  // Removed: menuScreen, gameOverScreen (GAME_STATE_CHANGE)
-  //          targetReticle, navSphere, dockingReticle (VIEW_CONFIG_CHANGE / GAME_STATE_CHANGE)
-  //          sensorSystem (SENSOR_UPGRADE)
-  //          commsSystem (GAME_STATE_CHANGE + COMMS_SEND + GAME_RESET), inputManager (ARM_RETURNED + ARM_EXPENDED)
-  //          hud (GAME_STATE_CHANGE + VIEW_CONFIG_CHANGE + HUD_TARGET_CLICK + PAUSE events)
-  //          briefingScreen (GAME_STATE_CHANGE payload.targets)
-  //          subsystemEvents (PERSISTENCE_LOADED + PERSISTENCE_GATHER)
-  //          debrisWireframe (TARGET_SELECTED/CLEARED + GAME_RESET + DEBRIS_REMOVED + WIREFRAME_ASSESSED)
-  //          kesslerSystem (COLLISION_GAME_OVER + GAME_RESET + GAMEOVER_CONTINUE — imported singleton)
-  //          targetSelector (imported singleton)
-  //          trawlManager (GAME_STATE_CHANGE + TRAWL_START — imported singleton)
+  // GameFlowManager gets reduced refs: the other 13 (screens, reticles, hud, comms, subsystemEvents, debrisWireframe,
+  // kessler, trawl, targetSelector ...) are decoupled via EventBus (GAME_STATE_CHANGE, VIEW_CONFIG_CHANGE, ...).
   gameFlowManager.init({
     player, debrisField, armManager, cameraSystem,
     shopScreen,
     resourceSystem, cargoSystem,
-    lassoSystem, // t1-stranded D1(d): a lasso in flight blocks the stranded rule
-    sunLight, // M1 opening-light staging (_stageOpeningLight, new-game paths only)
-    autopilotSystem, // trip-melt D4: the transfer trip's prograde hold (holdPrograde / releasePrograde)
-    fieldRegistry, // Nets step 3 slice 2b: the field she is at, the save block, where the trip goes (FIELDS_BY_HEIGHT)
+    lassoSystem, // a lasso in flight blocks the stranded rule
+    sunLight, // opening-light staging (_stageOpeningLight, new-game paths only)
+    autopilotSystem, // the transfer trip's prograde hold (holdPrograde / releasePrograde)
+    fieldRegistry, // the field she is at, the save block, where the trip goes (FIELDS_BY_HEIGHT)
   });
 
-  // --- F15: Wire autopilot dependencies ---
   autopilotSystem.init({
     player, targetSelector, trawlManager, debrisField, armManager,
     targetAcquisition,
@@ -2087,8 +1734,7 @@ async function init() {
   // Aim-before-launch: give ArmManager the autopilot for the daughter ceremony.
   if (typeof armManager.setAutopilot === 'function') armManager.setAutopilot(autopilotSystem);
 
-  // --- UX-11 #5: Earth city labels (5 key, off by default, persisted) ---
-  // Offline-first local JSON; attaches to the command-view Earth.
+  // Earth city labels (5 key, off by default, persisted): offline-first local JSON, attached to the command-view Earth.
   cityLabels.load().then((count) => {
     if (!count) return;
     cityLabels.attach({
@@ -2096,23 +1742,19 @@ async function init() {
       radius: Constants.EARTH_RADIUS,
       camera,
       container: document.getElementById('hud-overlay'),
-      // The command-view Earth uses a default SphereGeometry equirectangular
-      // texture (prime meridian at +X, east toward -Z). latLonToPosition runs
-      // east toward +Z, so mirror longitude to align labels with continents.
+      // The command-view Earth uses a default SphereGeometry equirectangular texture (prime meridian at +X, east
+      // toward -Z). latLonToPosition runs east toward +Z, so mirror longitude to align labels with continents.
       mirrorLon: true,
-      // Selectivity caps: in-view peaks are 22-39 labels, so 28 binds only in
-      // the densest stretches (Europe, East Asia, Ganges plain). 6 = measured
-      // global peak pads-in-one-view, so pads are never truncated here.
+      // In-view peaks are 22-39 labels, so 28 binds only in the densest stretches. 6 = measured
+      // global peak pads-in-one-view, so pads are never truncated.
       maxVisible: 28,
       maxVisibleLaunch: 6,
-      // Pills never draw through the ship: hide a dot that lies inside the
-      // ship's screen circle (live position, no clone; radius covers every radiator pose).
+      // Hide a dot inside the ship's screen circle (live position; radius covers every radiator pose).
       occluders: cityLabels.shipOccluders(() => player && player.position),
     });
 
-    // --- Launch cameo: a single plume rises from the player's home spaceport
-    // during the opening pass. Anchored to the same Earth group + mirrorLon
-    // convention as the city labels; fired by GameFlowManager on first ORBITAL_VIEW.
+    // Launch cameo: one plume from the home spaceport, same Earth group + mirrorLon as the city labels;
+    // fired by GameFlowManager on first ORBITAL_VIEW.
     launchCameo.attach({
       parent: earth.getGroup(),
       radius: Constants.EARTH_RADIUS,
@@ -2120,13 +1762,11 @@ async function init() {
       mirrorLon: true,
       sunLight,
     });
-    // A reset within the 16 s cameo window must clear _active, or the next
-    // game's fire() is silently refused (review finding).
+    // A reset within the 16 s cameo window must clear _active, or the next game's fire() is silently refused.
     eventBus.on(Events.GAME_RESET, () => launchCameo.reset());
 
-    // --- Ambient launches: any pad fires a plume as it orbits into view
-    // (e.g. Sriharikota rises ~30 s into the Thai orbit). Silent by design —
-    // the pad's label pill pulses instead of a comms line. Cooldown-limited.
+    // Ambient launches: any pad fires a plume as it orbits into view. Silent by design (the pad's label pill
+    // pulses instead of a comms line). Cooldown-limited.
     ambientLaunchScheduler.init({
       camera,
       parent: earth.getGroup(),
@@ -2136,13 +1776,11 @@ async function init() {
     });
   }).catch((e) => console.warn('[main] cityLabels:', e));
 
-  // --- Input Manager ---
   inputManager = new InputManager();
-  // --- Skills Pane (mounted on #hud-overlay, after HUD build) ---
+  // Skills pane mounts on #hud-overlay, after the HUD build.
   const hudOverlay = document.getElementById('hud-overlay');
   skillsPane = new SkillsPane(hudOverlay);
-  testsPane = new TestsPane(hudOverlay); // u6 D2: closed Tests fold-out (sound list inside); inert unless ?tests=1 / ?sounds=1
-  // Enable skill-based progressive HUD revelation
+  testsPane = new TestsPane(hudOverlay); // closed Tests fold-out (sound list inside); inert unless ?tests=1 / ?sounds=1
   hud.enableSkillReveal();
 
   inputManager.init({
@@ -2150,13 +1788,13 @@ async function init() {
     debrisField, debrisWireframe, dockingReticle, hud, targetReticle,
     navSphere, debrisMap, audioSystem, debugOverlay, sensorSystem,
     lassoSystem, autopilotSystem, codexViewerUI, hotkeyOverlay,
-    // Scan auto-select: unified acquire helper (Shift+N / Shift+A route here).
+    // Unified acquire helper (Shift+N / Shift+A route here).
     targetAcquisition,
-    // Net ladder Phase B: Mother Large Net routing (>500 kg → fireMotherNet).
+    // Mother Large Net routing (>500 kg → fireMotherNet).
     captureNetSystem,
-    // Hotkey revamp 2026-06-14: starfield (6 = constellation labels toggle).
+    // Key 6 = constellation labels toggle.
     starfield,
-    // Delegation 2 (2026-05-31): smart-default Space key consults the Director.
+    // Smart-default Space key consults the Director.
     onboardingDirector,
     transitionToState: (s, p) => gameFlowManager.transitionToState(s, p),
     deployArm: () => gameFlowManager.deployArm(),
@@ -2166,39 +1804,32 @@ async function init() {
     setLastTime: (t) => { lastTime = t; },
     setApproachTarget: (t) => { gameFlowManager.approachTarget = t; },
     setApproachComplete: (v) => { gameFlowManager.approachComplete = v; },
-    // Zoom Ladder key bindings (00-spec §5: Esc / PgUp / PgDn / Space ride or
-    // verb the ladder). A closure, not a direct ref, because LadderController is
-    // constructed in the ladder block BELOW this init call — same late-binding
-    // style as the gameFlowManager closures above. InputManager forwards these
-    // keys only while ladderController.isActive() (flag on + gameplay + engaged),
-    // so with LADDER.ENABLED false the key handling is byte-identical.
+    // Zoom Ladder keys (00-spec §5: Esc / PgUp / PgDn / Space). A closure, not a direct ref: LadderController
+    // is constructed in the ladder block BELOW this init call. InputManager forwards these keys only while
+    // ladderController.isActive() (flag on + gameplay + engaged).
     getLadderController: () => ladderController,
-    // slice 5 (5c): U opens / closes the fate list of a big catch (late-binding closure: the list is built right after this init).
+    // U opens / closes the fate list of a big catch (late-binding: the list is built right after this init).
     getFateList: () => fateList,
-    // let-go-bag: K with nothing at the collar lets go of a no-salvage bag on a daughter's rack (late-binding closure, as above).
+    // K with nothing at the collar lets go of a no-salvage bag on a daughter's rack (late-binding).
     letGoRackBag: () => gameFlowManager.letGoRackBag(),
-    // SAFETY OVERRIDE radiator sweep (owner 2026-09-09): while the OVERRIDE
-    // panel is engaged (grid up) the O key runs PlayerSatellite.toggleFlowerOverride
-    // — the full FOLDED ↔ DEPLOYED travel — instead of the STOW ↔ CARGO toggle.
-    // Same late-binding closure style as getLadderController (overridePane is
-    // constructed in the ladder block below); absent / collapsed → false, and
-    // the key is byte-identical to the shipped handler.
+    // SAFETY OVERRIDE radiator sweep (owner 2026-09-09): while the OVERRIDE panel is engaged (grid up) the O key
+    // runs PlayerSatellite.toggleFlowerOverride (the full FOLDED ↔ DEPLOYED travel) instead of the STOW ↔ CARGO
+    // toggle. Late-binding (overridePane is built in the ladder block below); absent / collapsed → false.
     isOverrideEngaged: () => !!(overridePane && typeof overridePane.isExpanded === 'function' && overridePane.isExpanded()),
-    // H1 2026-10-09: the F key runs the F1-bar FURNACE gag (same late binding).
+    // The F key runs the F1-bar FURNACE gag (late-binding).
     pressFurnace: () => { if (overridePane && typeof overridePane.pressFurnace === 'function') overridePane.pressFurnace(); },
   });
   inputManager.start();
-  // 2026-08-26: the lasso catch cut never STARTS over active piloting — a key
-  // held before wrap contact produces no fresh keydown, so the cut's
-  // any-input abort alone could not protect that player.
+  // The lasso catch cut never STARTS over active piloting: a key held before wrap contact produces no fresh
+  // keydown, so the cut's any-input abort alone could not protect that player.
   cameraSystem.setLassoCutInputProbe(() => inputManager.anyKeyHeld());
   _bootMark('InputManager started + gameFlowManager.init');
 
-  // --- Fate list (Nets step 3 slice 5, lane 5c; plan C6, L2-L4) ---
-  // A big caught piece pays when it is disposed of, so the player picks the way here: U (floors 2-4) or the CHOOSE chip on glass opens the
+  // --- Fate list ---
+  // A big caught piece pays when disposed of, so the player picks the way here: U (floors 2-4) or the CHOOSE chip on glass opens the
   // list for the pieces aboard; a pick goes to `setFate`, and only a true answer emits BIG_PIECE_FATE for the fate's executor. Built here,
-  // BEFORE the ladder block, so its capture-phase key listener runs ahead of the ladder's. While it is open the where-next list (floor 4)
-  // is held hidden (`holdWhereNext`: it stays pending and comes back on close). Not inside the ladder gate: `?ladder=0` has no floors,
+  // BEFORE the ladder block, so its capture-phase key listener runs ahead of the ladder's. While open, the where-next list (floor 4)
+  // is held hidden (`holdWhereNext`: stays pending, returns on close). Not inside the ladder gate: `?ladder=0` has no floors,
   // and a big piece must still have a way to be disposed of there.
   fateList = new FateList({
     doc: document,
@@ -2215,104 +1846,80 @@ async function init() {
     inGameplay: () => gameState.isGameplay(),
     onOpenChange: (open) => { if (navcomFloor && navcomFloor.holdWhereNext) navcomFloor.holdWhereNext(open); },
   });
-  // L4: the Targets pane's selected row says what a big piece pays when disposed of (the owner and the value ride on the field body).
+  // The Targets pane's selected row says what a big piece pays when disposed of (owner and value ride on the field body).
   if (hud && hud.targetPanel && hud.targetPanel.setPieceLookup) hud.targetPanel.setPieceLookup((id) => debrisField.getDebrisById(id));
 
-  // --- Zoom Ladder (S2 walking skeleton — docs/ladder/03-plan.md M1) ---
-  // The single WheelRouter (T3) owns ALL wheel input: it replaces the three
-  // shipped listeners (InputManager window-capture, CameraSystem canvas, and
-  // the since-deleted strategic map's own canvas) and dispatches to the
-  // arm-SK branch, the ladder (flag on), or the legacy zoom (flag off).
-  // LadderController owns the pure ZoomLadder core + the CameraSystem ride
-  // engine + the per-floor render block; the rail is the S2 stub. Everything is
-  // inert while Constants.LADDER.ENABLED is false (?ladder=0) — shipped
-  // behavior stays byte-identical.
-  // Session P (plan D2): the edge-chrome core is built FIRST, gated (the
-  // openShop ternary), and handed to the rail (RailIndicator applies its phase
-  // per refresh) and to the controller (the floor / ride / pure-scenery wake
-  // sources). Flag-off: null → `new RailIndicator({ edgeChrome: null })` is the
-  // Session J rail exactly.
+  // --- Zoom Ladder (archive/ladder/03-plan.md M1) ---
+  // The single WheelRouter owns ALL wheel input: it replaces the three shipped listeners (InputManager
+  // window-capture, CameraSystem canvas, the deleted strategic map's canvas) and dispatches to the arm-SK branch,
+  // the ladder (flag on), or the legacy zoom (flag off). LadderController owns the pure ZoomLadder core + the
+  // CameraSystem ride engine + the per-floor render block. Everything is inert while Constants.LADDER.ENABLED
+  // is false (?ladder=0).
+  // The edge-chrome core is built FIRST, gated (the openShop ternary), and handed to the rail (RailIndicator
+  // applies its phase per refresh) and to the controller (floor / ride / pure-scenery wake sources).
+  // Flag-off: null → `new RailIndicator({ edgeChrome: null })`.
   edgeChrome = (Constants.LADDER && Constants.LADDER.ENABLED) ? new EdgeChrome({ reducedMotion: _prefersReducedMotion() }) : null;
   railIndicator = new RailIndicator({ edgeChrome });
-  // Zoom Ladder F6 (NAVCOM) content orchestrator (S5, M3). Constructed INSIDE the
-  // ladder block (T8: EventBus/costume order = construction order) and injected
-  // into LadderController, which activates/ticks it on F6 arrival and dispatches
-  // its 'plan-transfer' Space verb. The live world→screen projector is built off
-  // the ladder camera; onPlanTransfer routes the planned transfer into the
-  // shipped approach autopilot. Inert while LADDER.ENABLED is false (never
-  // activated), so shipped behavior stays byte-identical.
+  // F6 (NAVCOM) content orchestrator. Constructed INSIDE the ladder block (EventBus/costume order =
+  // construction order) and injected into LadderController, which activates/ticks it on F6 arrival and
+  // dispatches its 'plan-transfer' Space verb. The world→screen projector is built off the ladder camera;
+  // onPlanTransfer routes the planned transfer into the shipped approach autopilot. Never activated while
+  // LADDER.ENABLED is false.
   navcomFloor = new NavcomFloor({
-    simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // u6 D7: plain trip lines at the simple level
+    simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // plain trip lines at the simple level
     clusterSource: debrisField,
     player,
     project: navcomProject,
-    // H1 2026-10-09: LadderBridge re-emits DEBRIS_MAP_CLUSTER_SELECTED (the
-    // retired debris map's wire) before the transfer engages.
+    // LadderBridge re-emits DEBRIS_MAP_CLUSTER_SELECTED (the retired debris map's wire) before the transfer engages.
     onPlanTransfer: (cluster) => { clusterSelected(eventBus, Events, cluster); return autopilotSystem.engageCluster(cluster); },
-    // F6 FUEL-REACHABILITY: Tsiolkovsky remaining-ΔV SSOT. Optional dep — without it
-    // the floor renders as before. armManager is constructed earlier (~:715). Inert
-    // while LADDER.ENABLED is false.
+    // F6 fuel reachability: Tsiolkovsky remaining-ΔV SSOT. Optional dep; without it the floor renders as before.
     getMassBudget: () => armManager.getMassBudget(),
   });
-  // Zoom Ladder F5 (PROX NET) content orchestrator (S4). Same contract as
-  // navcomFloor: constructed inside the ladder block, injected into
-  // LadderController (activates it on debrisMode 'tactical', dispatches its
-  // 'approach' Space verb). getFocusedCluster is the F6→F5 HANDOFF — the
-  // cluster focused on NAVCOM is the corridor target here. Inert while
-  // LADDER.ENABLED is false (never activated): byte-identical.
+  // F5 (PROX NET) content orchestrator. Same contract as navcomFloor: built inside the ladder block, injected
+  // into LadderController (activates on debrisMode 'tactical', dispatches its 'approach' Space verb).
+  // getFocusedCluster is the F6→F5 handoff: the cluster focused on NAVCOM is the corridor target here.
   proxNetFloor = new ProxNetFloor({
-    simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // u6 D6: title line only at the simple level
+    simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // title line only at the simple level
     debrisSource: debrisField,
     player,
-    // F5 corner minimap ('NavSphere:corner-minimap'): the SHIPPED orb,
-    // re-mounted small while PROX NET is active (ProxMiniSphere adapter).
+    // F5 corner minimap ('NavSphere:corner-minimap'): the shipped orb, re-mounted small while PROX NET is active.
     navSphere,
     getFocusedCluster: () => navcomFloor.getFocusedCluster(),
     onApproach: (cluster, arrivalPoint) => {
-      clusterSelected(eventBus, Events, cluster);   // H1: LadderBridge, before engage
+      clusterSelected(eventBus, Events, cluster);   // LadderBridge, before engage
       return autopilotSystem.engageCluster(cluster, { arrivalPoint });
     },
   });
-  // Zoom Ladder F7 (SDA) content orchestrator (S4): screen-space mass-band
-  // chart over live cluster/active-sat/Kessler aggregates (both singletons
-  // imported above). Activated on debrisMode 'massBands'; Space flips the
-  // VALUE↔THREAT lens. Inert while LADDER.ENABLED is false.
+  // F7 (SDA) content orchestrator: screen-space mass-band chart over live cluster/active-sat/Kessler
+  // aggregates. Activated on debrisMode 'massBands'; Space flips the VALUE↔THREAT lens.
   sdaFloor = new SdaFloor({
     clusterSource: debrisField,
     satSource: () => catalogLoader.getAllActiveSats(),
     kessler: kesslerSystem,
   });
-  // Zoom Ladder F3 (HULL CAM) content orchestrator (S4): ship-local blueprint
-  // callouts. The projector composes player.localToWorld with the SAME
-  // world→screen projector navcomFloor uses; anchor positions resolve from the
-  // live ship meshes once per name (MotherCallouts._resolveAnchor pattern —
-  // the anchor meshes are static, e.g. AftThrusterDeck). Providers feed the
-  // detail-lens live rows (MotherCallouts._liveRows sources); every ref
-  // guarded, and HullCamFloor itself swallows provider throws (best-effort).
-  // The providers object is HOISTED so the Wave-5 REFIT pane consumes the
-  // SAME rows (one source of live-row truth — 08-workbench §2 "the providers
-  // that already feed FUEL / LINK"). `power` and `cargo` have no provider: the
-  // static spec rows of the blueprint manifest carry those two cards.
+  // F3 (HULL CAM) content orchestrator: ship-local blueprint callouts. The projector composes
+  // player.localToWorld with the SAME world→screen projector navcomFloor uses; anchor positions resolve from the
+  // live ship meshes once per name (the anchor meshes are static, e.g. AftThrusterDeck). Providers feed the
+  // detail-lens live rows; every ref guarded, and HullCamFloor swallows provider throws (best-effort).
+  // The providers object is HOISTED so the REFIT pane consumes the SAME rows (08-workbench §2). `power` and
+  // `cargo` have no provider: the static spec rows of the blueprint manifest carry those two cards.
   const hullcamProviders = {
     engineering: () => {
-      // Fuel row honesty rule (MotherCallouts 'feep' live row, R4): a
-      // cargo-fed metal is NOT drawn from the xenon tank — never report
-      // xenon kg under its name.
+      // Fuel row honesty: a cargo-fed metal is NOT drawn from the xenon tank, so never report xenon kg under its name.
       if (!resourceSystem || !resourceSystem.getStatus) return [];
       const st = resourceSystem.getStatus();
       const fuel = resourceSystem.getCurrentFuel ? resourceSystem.getCurrentFuel() : null;
-      // g1-gas-upgrades D9: the pool is a percentage of the base tank, not kg — print the real kilograms.
+      // The pool is a percentage of the base tank, not kg: print the real kilograms.
       const gasNow = Math.round(engineGasKg(st));
       const gasCap = Math.round(engineGasKg({ xenon: st.xenonMax, tankGasId: st.tankGasId }));
       if (fuel && !fuel.fromCargo) return [`FUEL ${st.currentFuelName} ${gasNow}/${gasCap} kg`];
       if (fuel) return [`FUEL ${st.currentFuelName} (CARGO)`];
       return [`FUEL ${gasNow}/${gasCap} kg`];
     },
-    // comms-after-tutorial D6c: tier 3 = nothing suppressed, so SUPPRESSED only below it.
+    // Tier 3 = nothing suppressed, so SUPPRESSED only below it.
     comms: () => (commsSystem && commsSystem.getSuppressionTier
       ? [`LINK: ${commsSystem.getSuppressionTier() < 3 ? 'SUPPRESSED' : 'NOMINAL'}`] : []),
-    // thermal: omitted until the flower refit lands — the static MLI spec
-    // rows from the blueprint manifest carry that card.
+    // thermal: omitted until the flower refit lands (the static MLI spec rows carry that card).
   };
   hullcamFloor = new HullCamFloor({
     player,
@@ -2338,38 +1945,35 @@ async function init() {
     },
     providers: hullcamProviders,
   });
-  // Zoom Ladder Wave 5 (2) — the REFIT section engine (the seven-subsystem
-  // index, exactly three ranked alternatives, one-click BUY). Since Session U
-  // it is a block INSIDE the one workbench pane (floor 1 only — the shell
-  // shows it there); D-b: Space toggles that pane via the controller's
-  // `workbench` dep below. Constructed ONLY while the ladder flag is on — the
-  // same live Constants.LADDER.ENABLED every ladder consumer reads (?ladder=0
-  // boots build no pane; test-LadderController pins it). Beside hullcamFloor
-  // by design: it shares hullcamProviders (the SAME live-row objects).
-  // Wave 5 (Session B): the SPECS engine joins it in the same gate; Session U:
-  // the WorkbenchPane shell that hosts both is constructed right after them.
+  // REFIT section engine (seven-subsystem index, exactly three ranked alternatives, one-click BUY): a block
+  // INSIDE the one workbench pane (floor 1 only); Space toggles that pane via the controller's `workbench` dep
+  // below. Constructed ONLY while the ladder flag is on, the same live Constants.LADDER.ENABLED every ladder
+  // consumer reads (?ladder=0 boots build no pane; test-LadderController pins it). Beside hullcamFloor by
+  // design: it shares hullcamProviders. The SPECS engine joins it in the same gate; the WorkbenchPane shell
+  // that hosts both is constructed right after them.
   if (Constants.LADDER && Constants.LADDER.ENABLED) {
-    // Nets step 3 slice 2b (lane 2b-2, FIELDS_BY_HEIGHT): the "where next" list floor 4 hosts. Inside the ladder gate: with ?ladder=0
-    // there is no floor 4, the flow manager is never told it can ask, and a mission boundary flies to defaultNext() as before.
+    // The "where next" list floor 4 hosts. Inside the ladder gate: with ?ladder=0 there is no floor 4, the flow
+    // manager is never told it can ask, and a mission boundary flies to defaultNext().
     whereNextList = new WhereNextList({
       doc: (typeof document !== 'undefined') ? document : null,
-      // slice 3: with no mother nets aboard (mission 1 used all four) the resupply satellite is the pre-focused row; lane 3c: the wallet
-      // (the call row) and whether a mission start is owed (a mission going on keeps trips for later) come with the nets from the flow manager
+      // With no mother nets aboard (mission 1 used all four) the resupply satellite is the pre-focused row. The wallet
+      // (the call row) and whether a mission start is owed (a mission going on keeps trips for later) come from the flow manager.
       getRows: () => buildWhereNextRows(fieldRegistry, gameFlowManager.whereNextRowsOpts()),
-      onPick: (id) => { if (rangeMap) rangeMap.notePick(id); return gameFlowManager.pickWhereNext(id); },   // range-map D6: the map keeps the rows she picked from
+      onPick: (id) => { if (rangeMap) rangeMap.notePick(id); return gameFlowManager.pickWhereNext(id); },   // the map keeps the rows she picked from
       glass: () => GestureHints.isGlass(),
       isInputBlocked: () => whereNextInputBlocked(),
     });
     navcomFloor.setWhereNext(whereNextList);
-    // range-map D4: what her catches gave and her own moves used since the last where-next pick (a trip's burn is not counted)
+    // What her catches gave and her own moves used since the last where-next pick (a trip's burn is not counted).
     missionGasTally = new MissionGasTally({ counters: () => resourceSystem, isBurning: isTripBurning });
     missionGasTally.mark();
     bindMissionGasTally(missionGasTally, eventBus, Events);
-    // lane 3e (s3-map-icons): the fields and the satellite by height beside her marker (draws only with the fields flag on)
-    // F1.1: the height column yields to the range map (it stands in the column's place on the left while the map shows)
+    // The fields and the satellite by height beside her marker (draws only with the fields flag on). The height
+    // column yields to the range map (the map stands in the column's place on the left while it shows).
     navcomFloor.setHeightScale(new HeightScale({ registry: () => fieldRegistry, list: whereNextList, glass: () => GestureHints.isGlass(), yieldTo: () => !!(rangeMap && rangeMap.isShown()) }));
-    // range-map D1: rings by height around Earth, her reach with the gas aboard, her path to the pick (left side of floor 4, the height column's place; it follows the
-    // list's focus, keeps the pick through wait, hides for the engines' start-up and follows the trip). Updated each frame after the navcom tick.
+    // Rings by height around Earth, her reach with the gas aboard, her path to the pick (left side of floor 4, the height
+    // column's place; follows the list's focus, keeps the pick through wait, hides for the engines' start-up and follows
+    // the trip). Updated each frame after the navcom tick.
     rangeMap = new RangeMap({
       list: whereNextList,
       registry: () => fieldRegistry,
@@ -2379,14 +1983,14 @@ async function init() {
       gas: () => ({ aboardKg: engineGasKg(resourceSystem), tankKg: engineGasKg({ xenon: resourceSystem.xenonMax, tankGasId: resourceSystem.tankGasId }) }),
       tally: () => missionGasTally,
       reducedMotion: _prefersReducedMotion,
-      // F1.1: the floor rail (right edge, mid-height) is the thing the map keeps clear of on a narrow screen; null = its design place
+      // The floor rail (right edge, mid-height) is what the map keeps clear of on a narrow screen; null = its design place.
       rail: () => (railIndicator ? { left: railIndicator.leftPx(), bottom: railIndicator.bottomPx() } : null),
-      // F2.1: the bottom-left transfer-window box grows to three-plus lines on a trip; the text block stays above its live top
+      // The bottom-left transfer-window box grows to three-plus lines on a trip; the text block stays above its live top.
       box: () => (navcomFloor && navcomFloor.transferWindows && navcomFloor.transferWindows.heightPx ? { height: navcomFloor.transferWindows.heightPx() } : null),
     });
     gameFlowManager.setWhereNextAvailable(true);
-    // The choice opens / closes (TransferTrip phase `choose`): show the rows and take her to floor 4; a refused pick that puts the
-    // choice back (`again`) only rebuilds the rows.
+    // The choice opens / closes (TransferTrip phase `choose`): show the rows and take her to floor 4; a refused pick that
+    // puts the choice back (`again`) only rebuilds the rows.
     eventBus.on(Events.WHERE_NEXT, (d) => {
       const open = !!(d && d.open);
       if (whereNextList) whereNextList.setPending(open);
@@ -2394,32 +1998,20 @@ async function init() {
       if (!open) whereNextJumpOwed = false;
       whereNextJump();
     });
-    // ONE workbench-pane edge, four consumers (Session B — never a second
-    // signal path). The shell's ONE onOpenChange calls this (Session U: one
-    // pane, one open state — the two engines have no open edge of their own;
-    // C3, plan 1789561832042: it also re-fires when an OPEN pane changes
-    // anchor side, so the side-signed feeds below flip with the drawer); it
-    // writes:
-    //   1. `_workbenchPaneOpen` — the held-world signal (Session I, D-F) the
-    //      loop applies through TimeAuthority.calmCap (drawer open → clock 0),
-    //      the scheduler's 'partial' cover and the turntable gate;
-    //   2. the ONE `CameraSystem.setLadderPaneInset` value (Wave 5 (3)),
-    //      SIGNED BY SIDE: the drawer is left on every floor (§13 r5;
-    //      gestures follow it, §13 r6 2026-09-26) → +width (the subject
-    //      lands right of centre), closed → 0. The camera does the rest
-    //      (270 ms ease, reduced-motion snap, released on
-    //      ride/close/disengage);
-    //   3. the MotherCallouts pane-edge inset pair (Session B commit 3) so
-    //      the callout columns stay out from under the pane — the drawer's
-    //      own side gets the pane's width, the other edge 0 (the left edge
-    //      on every floor — §13 r5; the left column carries Mother and
-    //      Daughters).
-    // widthPx() is a layout read — edges only, never per frame (G1).
-    // Session K: the END of a workbench break is this same edge — the drawer
-    // closed while a break is open → ONE WORKBENCH_RESUME (GameFlowManager
-    // releases its onset hold + saves; MissionMilestones recaps). Leaving
-    // gameplay never emits (GameFlowManager's exit rule releases the flag
-    // itself; the GAME_STATE_CHANGE listener below drops ours).
+    // ONE workbench-pane edge, four consumers (never a second signal path). The shell's ONE onOpenChange calls
+    // this; it also re-fires when an OPEN pane changes anchor side, so the side-signed feeds below flip with the
+    // drawer. It writes:
+    //   1. `_workbenchPaneOpen`: the held-world signal the loop applies through TimeAuthority.calmCap (drawer open
+    //      → clock 0), the scheduler's 'partial' cover and the turntable gate;
+    //   2. the ONE `CameraSystem.setLadderPaneInset` value, SIGNED BY SIDE: the drawer is left on every floor
+    //      (§13 r5; gestures follow it, §13 r6) → +width (the subject lands right of centre), closed → 0. The
+    //      camera does the rest (270 ms ease, reduced-motion snap, released on ride/close/disengage);
+    //   3. the MotherCallouts pane-edge inset pair, so the callout columns stay out from under the pane: the
+    //      drawer's own side gets the pane's width, the other edge 0 (the left column carries Mother and Daughters).
+    // widthPx() is a layout read: edges only, never per frame.
+    // The END of a workbench break is this same edge: drawer closed while a break is open → ONE WORKBENCH_RESUME
+    // (GameFlowManager releases its onset hold + saves; MissionMilestones recaps). Leaving gameplay never emits
+    // (GameFlowManager's exit rule releases the flag itself; the GAME_STATE_CHANGE listener below drops ours).
     const _endWorkbenchBreak = (reason) => {
       if (!_workbenchBreak) return;
       _workbenchBreak = false;
@@ -2429,37 +2021,27 @@ async function init() {
     const _syncWorkbenchPanes = () => {
       const open = !!(workbenchPane && workbenchPane.isOpen());
       _workbenchPaneOpen = open;
-      // Session I: a pane slide is a boost-worthy edge (FrameSched — the
-      // drawer animates at native rate), and the camera learns the drawer
-      // state for the floor-1 TURNTABLE drag gate (D-F; live re-gate — no
-      // ride needed to arm/disarm).
+      // A pane slide is a boost-worthy edge (FrameSched: the drawer animates at native rate); the camera learns the
+      // drawer state for the floor-1 TURNTABLE drag gate (live re-gate; no ride needed to arm/disarm).
       _noteSchedInput();
       if (cameraSystem.setLadderPaneOpen) cameraSystem.setLadderPaneOpen(open);
-      // The drawer's anchor side — left on every floor (§13 r5; gestures
-      // follow it, §13 r6 2026-09-26); `isLeft()` is the read.
+      // The drawer's anchor side: left on every floor (§13 r5; gestures follow it, §13 r6); `isLeft()` is the read.
       const left = !!(workbenchPane && workbenchPane.isLeft && workbenchPane.isLeft());
       const w = open ? workbenchPane.widthPx() : 0;
       cameraSystem.setLadderPaneInset(left ? w : -w);                      // LEFT pane → +width, RIGHT → negative
       motherCallouts.setPaneInsets(left ? w : 0, left ? 0 : w);
-      // Consumer 4 (Wave 5 Session G — D5 pane memory): the controller records
-      // the pane open-state into the player store as the player's intent —
-      // only while engaged and never for its own teardown close / the engage
-      // re-open (it tells them apart itself). Same ONE edge, no second signal
-      // path; write-on-change inside the store (G1). ladderController is
-      // constructed below — read live, guarded (this closure runs on edges only).
+      // Consumer 4: the controller records the pane open-state into the player store as the player's intent, only
+      // while engaged and never for its own teardown close / the engage re-open (it tells them apart itself).
+      // Write-on-change inside the store. ladderController is constructed below: read live, guarded.
       if (ladderController) ladderController.notePaneChange();
-      // Session K: the drawer closed during a break → the break ends.
+      // Drawer closed during a break → the break ends.
       if (!open) _endWorkbenchBreak('closed');
     };
     // (Session U: the below-~1100-px one-pane rule and LibraryPane's breakpoint
-    // export retired with the second drawer, plan D9. There is one pane;
-    // nothing collapses.)
-    // Session J (plan D-C, item 3) — the SPECS SUBJECT: what the player is
-    // looking at on the CURRENT floor, gathered from live reads on an edge
-    // (pane open / target selected / floor arrival / lens flip — never per
-    // frame) and resolved by the ONE pure table module. Every read is guarded:
-    // the modules construct in ladder-block order and some are absent flag-off
-    // (this closure only exists inside the gate anyway).
+    // export retired: there is one pane; nothing collapses.)
+    // The SPECS SUBJECT: what the player is looking at on the CURRENT floor, gathered from live reads on an edge
+    // (pane open / target selected / floor arrival / lens flip, never per frame) and resolved by the ONE pure table
+    // module. Every read is guarded: modules construct in ladder-block order and some are absent flag-off.
     const _specsSubject = () => {
       const floor = (ladderController && ladderController.currentFloor) ? ladderController.currentFloor() : null;
       const part = (motherCallouts && motherCallouts.getFocusedPart) ? motherCallouts.getFocusedPart() : null;
@@ -2468,26 +2050,20 @@ async function init() {
         partCodexId: (part && part.codexId) || null,
         refitCodexId: (refitPane && refitPane.focusedCodexId) ? refitPane.focusedCodexId() : null,
         target: targetSelector.getActiveTarget(),
-        // Session L review (J FINDINGS (d), the wire the cut hub session
-        // missed): the focused NAVCOM cluster OBJECT — SpecsSubject resolves
-        // it to its inclination-family entry (cluster_<family>) with the
-        // altitude band as `secondary`; `clusterFocused` stays the shipped
-        // flag-only fallback (hohmann_transfer) for a cluster it cannot name.
+        // The focused NAVCOM cluster OBJECT: SpecsSubject resolves it to its inclination-family entry
+        // (cluster_<family>) with the altitude band as `secondary`; `clusterFocused` stays the flag-only fallback
+        // (hohmann_transfer) for a cluster it cannot name.
         cluster: (navcomFloor && navcomFloor.getFocusedCluster) ? navcomFloor.getFocusedCluster() : null,
         clusterFocused: !!(navcomFloor && navcomFloor.getFocusedCluster && navcomFloor.getFocusedCluster()),
         lens: (sdaFloor && sdaFloor.getLens) ? sdaFloor.getLens() : null,
       });
     };
-    // "The library follows" (Session C for hull clicks; Session J generalises
-    // it to every floor): retarget an OPEN workbench pane to the current
-    // subject through the shell's ONE openEntry path (it keeps the anchor and
-    // never runs the entry-less open); a CLOSED pane forgets its page so the
-    // next open lands on the new subject. Never opens a closed pane — a floor
-    // arrival / selection is not the player's open verb; a null subject leaves
-    // an open pane's entry alone (the reader keeps its page). Module-level so
-    // the controller's onSubjectChange dep (constructed after the gate) can
-    // reach it. (Session U: the hull CLICK no longer rides this — D6's
-    // showPart opens the pane itself; this is the arrival / selection follow.)
+    // "The library follows": retarget an OPEN workbench pane to the current subject through the shell's ONE
+    // openEntry path (keeps the anchor, never runs the entry-less open); a CLOSED pane forgets its page so the next
+    // open lands on the new subject. Never opens a closed pane (a floor arrival / selection is not the player's
+    // open verb); a null subject leaves an open pane's entry alone. Module-level so the controller's
+    // onSubjectChange dep (constructed after the gate) can reach it. The hull CLICK does not ride this (showPart
+    // opens the pane itself).
     _specsFollow = () => {
       if (!workbenchPane) return;
       if (!workbenchPane.isOpen()) {
@@ -2497,30 +2073,25 @@ async function init() {
       const id = _specsSubject();
       if (id) workbenchPane.openEntry(id);
     };
-    // SAFETY OVERRIDE panel (owner 2026-09-07, plan D1): ONE actuators object,
-    // two consumers — RefitPane's chips and OverridePane's buttons drive the
-    // SAME toggles (shipped control law: a tap reverses the COMMANDED state,
-    // the pane re-reads truth; the closures own the click + the input events).
-    // "OVERRIDE engaged" = the SAFETY OVERRIDE panel's grid is up (the main
-    // button pressed). A late-binding read: overridePane is constructed below
-    // (inside the ladder block); absent / collapsed / disposed → false.
+    // SAFETY OVERRIDE panel (owner 2026-09-07): ONE actuators object, two consumers: RefitPane's chips and
+    // OverridePane's buttons drive the SAME toggles (a tap reverses the COMMANDED state, the pane re-reads truth).
+    // "OVERRIDE engaged" = the panel's grid is up (main button pressed). Late-binding: overridePane is constructed
+    // below; absent / collapsed / disposed → false.
     const _isOverrideEngaged = () => !!(overridePane && typeof overridePane.isExpanded === 'function' && overridePane.isExpanded());
-    // RADIATOR rest angle from the REST_POSE name (w2-start-pose contract:
-    // REST_POSE 'CLOSED' → POSE_CLOSED_DEG); the 146° bud while either is absent.
+    // RADIATOR rest angle from the REST_POSE name (REST_POSE 'CLOSED' → POSE_CLOSED_DEG); POSE_STOW_DEG (146°)
+    // while either is absent.
     const _flowerRestDeg = (FL) => {
       const deg = FL.REST_POSE ? FL[`POSE_${FL.REST_POSE}_DEG`] : undefined;
       return Number.isFinite(deg) ? deg : FL.POSE_STOW_DEG;
     };
-    // The toggle direction (the "." law): a COMMANDED θ (rad) nearer the open
-    // angle (FL.OPEN_DEG, 146° — DECISIONS §15 "Radiator angles") than the rest
-    // pose is "open", so a tap closes it.
+    // Toggle direction (the "." law): a COMMANDED θ (rad) nearer the open angle (FL.OPEN_DEG, 146°;
+    // DECISIONS §15 "Radiator angles") than the rest pose is "open", so a tap closes it.
     const _flowerCommandedOpen = (thetaRad, FL) => {
       const deg = radToDeg(thetaRad);
       return Math.abs(deg - FL.OPEN_DEG) < Math.abs(deg - _flowerRestDeg(FL));
     };
-    // The ONE radiator readout (F1 bar + REFIT chip, D4): MOVING while a slew is
-    // pending (incl. the 180° → open-angle settle), else getFlowerStatus().openFrac
-    // >= 0.5 → OPEN (the open angle and 180° both read 1), below → CLOSED.
+    // The ONE radiator readout (F1 bar + REFIT chip): MOVING while a slew is pending (incl. the 180° → open-angle
+    // settle), else getFlowerStatus().openFrac >= 0.5 → OPEN (the open angle and 180° both read 1), below → CLOSED.
     const _flowerReadout = () => {
       const st = player.getFlowerStatus();
       if (!st) return 'NOT FITTED';
@@ -2547,10 +2118,8 @@ async function init() {
         },
       },
       struts: {
-        // No chip unless a DOCKED daughter can take the write (toggleStruts
-        // returns null otherwise — a STOWED chip whose tap did nothing was
-        // the Session L review's NIT); daughters away → the card shows no
-        // STRUTS chip until one berths.
+        // No chip unless a DOCKED daughter can take the write (toggleStruts returns null otherwise); daughters
+        // away → no STRUTS chip until one berths.
         get: () => (armManager && armManager.arms && typeof armManager.strutsDeployed === 'function'
           && armManager.arms.some((a) => a && a.state === Constants.ARM_STATES.DOCKED))
           ? (armManager.strutsDeployed() ? 'DEPLOYED' : 'STOWED') : null,
@@ -2563,23 +2132,19 @@ async function init() {
         moving: () => !!(armManager && armManager.arms
           && armManager.arms.some((a) => a && a.state === Constants.ARM_STATES.DOCKED && a._strutTargetAlpha !== undefined)),
       },
-      // RADIATOR open / closed (F1 bar + REFIT chip). The REST pose is the closed
-      // one (w2-start-pose contract: THERMAL.FLOWER.REST_POSE 'CLOSED' /
-      // POSE_CLOSED_DEG, falling back to the STOW pose / POSE_STOW_DEG while
-      // absent); a tap opens to THERMAL.FLOWER.OPEN_POSE (OPEN_DEG — DECISIONS
-      // §15 "Radiator angles"). `getFlowerStatus().openFrac` is 0 at rest, 1 from
-      // the 90° mark up: >= 0.5 reads OPEN (the one rule for every radiator readout).
+      // RADIATOR open / closed (F1 bar + REFIT chip). REST pose = the closed one (THERMAL.FLOWER.REST_POSE 'CLOSED' /
+      // POSE_CLOSED_DEG, falling back to STOW / POSE_STOW_DEG while absent); a tap opens to THERMAL.FLOWER.OPEN_POSE
+      // (OPEN_DEG, 146°; the ruling is cited at _flowerCommandedOpen). `getFlowerStatus().openFrac` is 0 at rest,
+      // 1 from the 90° mark up: >= 0.5 reads OPEN (the one rule for every radiator readout).
       flower: {
         get: () => {
           if (!player || typeof player.getFlowerPairCount !== 'function') return null;
           if (player.getFlowerPairCount() === 0) return 'NOT FITTED';
           const FL = Constants.THERMAL && Constants.THERMAL.FLOWER;
           if (!FL || typeof player.getFlowerStatus !== 'function') return null;
-          // Owner amendment 2026-09-09 (plan 1788863400000 last section, spec 4):
-          // a flower left FOLDED by the SAFETY OVERRIDE sweep (launch lock armed,
-          // commanded / live θ at the fold, 0°) says so on the REFIT chip too
-          // — 'FLOWER · FOLDED', unpressed. Otherwise the bar's readout (D4).
-          // (The rest is 0° too since 2026-10-16, so the lock — not the angle — tells a fold from the rest.)
+          // Owner amendment 2026-09-09: a flower left FOLDED by the SAFETY OVERRIDE sweep (launch lock armed,
+          // commanded / live θ at the fold, 0°) reads 'FOLDED' on the REFIT chip too, unpressed; otherwise the
+          // bar's readout. (The rest is 0° too, so the lock, not the angle, tells a fold from the rest.)
           const cmd = player._flowerTargetTheta ?? player._flowerThetaRad;
           if (player.flowerLaunchLocked === true && cmd <= (FL.POSE_LAUNCH_DEG * Math.PI) / 180 + 1e-9) return 'FOLDED';
           return _flowerReadout();
@@ -2600,11 +2165,10 @@ async function init() {
           });
         },
       },
-      // The F1 bar's RADIATOR button (DECISIONS §15 row 9): the O key's plain
-      // toggle — KeyO's else-branch (InputManager) — never the override sweep.
-      // State is the LIVE `getFlowerStatus().openFrac` (>= 0.5 OPEN, else
-      // CLOSED), MOVING while a slew is pending. The pane drops taps inside
-      // VENT_DOUBLE_TAP_MS (deps.tapDebounceMs), so a touch double-tap never VENTs.
+      // The F1 bar's RADIATOR button (DECISIONS §15 row 9): the O key's plain toggle (KeyO's else-branch in
+      // InputManager), never the override sweep. State is the LIVE `getFlowerStatus().openFrac` (>= 0.5 OPEN, else
+      // CLOSED), MOVING while a slew is pending. The pane drops taps inside VENT_DOUBLE_TAP_MS
+      // (deps.tapDebounceMs), so a touch double-tap never VENTs.
       flowerDeploy: {
         get: () => {
           if (!player || typeof player.getFlowerStatus !== 'function') return null;
@@ -2613,8 +2177,8 @@ async function init() {
         toggle: () => {
           if (!player || typeof player.toggleFlowerDeploy !== 'function'
             || typeof player.getFlowerPairCount !== 'function' || player.getFlowerPairCount() === 0) return;
-          // A tap inside VENT_DOUBLE_TAP_MS of the last O press / tap would be read
-          // as the push-through (vent / fold) — the bar never sends that gesture.
+          // A tap inside VENT_DOUBLE_TAP_MS of the last O press / tap would read as the push-through (vent / fold);
+          // the bar never sends that gesture.
           const lastTap = player._lastFlowerTap;
           if (lastTap !== undefined && performance.now() - lastTap < Constants.THERMAL.FLOWER.VENT_DOUBLE_TAP_MS) return;
           const deploying = player.toggleFlowerDeploy();
@@ -2638,24 +2202,17 @@ async function init() {
           eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying: true });
         },
       },
-      // SAFETY OVERRIDE radiator sweep (owner 2026-09-09: "when player presses
-      // override button, and press "O" or clicks radiator button, they need to
-      // see how radiator struts move, full range of motion"; plan
-      // .kilo/plans/1788863400000-radiator-launch-fold-redesign.md, last
-      // section). The OverridePane's RADIATOR chip reads THIS actuator (not
-      // `flower`): FOLDED (LAUNCH θ 0, packs along the barrel, wings folded) ↔
-      // DEPLOYED (STOW 146) over the whole travel, 'SLEWING' while moving. The
-      // toggle is PlayerSatellite.toggleFlowerOverride — the ONE production path
-      // that arms the launch lock — and it is
-      // reachable ONLY while the pane is engaged (isExpanded): a collapsed pane
-      // makes this a no-op, so REFIT / plain O / autopilot never fold the
-      // flower. The O key takes the same path through isOverrideEngaged
-      // (InputManager deps). FEEP thrust stays inhibited the whole time the
-      // lock is armed or θ < 90° (the 7b guard) — the HUD thermal line says so.
-      // DECISIONS §10: the wings DODGE clear themselves (the tilt law clamps
-      // through PlayerSatellite._rosaDodgeLimitRad while a fold is in flight)
-      // — nothing here to sequence, and since DECISIONS §11 nothing gates
-      // the fold at all: it runs to 0° whatever the struts are doing.
+      // SAFETY OVERRIDE radiator sweep (owner 2026-09-09: "when player presses override button, and press "O" or
+      // clicks radiator button, they need to see how radiator struts move, full range of motion"). The OverridePane's
+      // RADIATOR chip reads THIS actuator (not `flower`): FOLDED (LAUNCH θ 0, packs along the barrel, wings folded) ↔
+      // DEPLOYED (STOW 146) over the whole travel, 'SLEWING' while moving. The toggle is
+      // PlayerSatellite.toggleFlowerOverride, the ONE production path that arms the launch lock, reachable ONLY while
+      // the pane is engaged (isExpanded): a collapsed pane makes this a no-op, so REFIT / plain O / autopilot never
+      // fold the flower. The O key takes the same path through isOverrideEngaged (InputManager deps). FEEP thrust
+      // stays inhibited the whole time the lock is armed or θ < 90°; the HUD thermal line says so.
+      // DECISIONS §10: the wings DODGE clear themselves (the tilt law clamps through
+      // PlayerSatellite._rosaDodgeLimitRad while a fold is in flight); nothing here to sequence, and since
+      // DECISIONS §11 nothing gates the fold at all: it runs to 0° whatever the struts are doing.
       flowerSweep: {
         get: () => {
           if (!player || typeof player.getFlowerPairCount !== 'function') return null;
@@ -2688,97 +2245,66 @@ async function init() {
     refitPane = new RefitPane({
       providers: hullcamProviders,
       getCredits: () => scoringSystem.credits,
-      // "N catches away" (08-workbench §2): average credits per catch from the
-      // running totals; null before the first catch → the pane shows cost only.
+      // "N catches away" (08-workbench §2): average credits per catch from the running totals; null before the
+      // first catch → the pane shows cost only.
       getAvgCreditsPerCatch: () => (gameState.debrisCleared > 0
         ? scoringSystem.captureCreditsEarned / gameState.debrisCleared
         : null),
       getUpgradeLevel: (id) => shopScreen.purchasedUpgrades.get(id) || 0,
-      // One-click LIVE buy through the shop's own guarded flow (maxLevel /
-      // E5 prereqs / wallet) — ShopScreen.purchaseUpgrade, the public wrapper.
+      // One-click LIVE buy through the shop's guarded flow (maxLevel / prereqs / wallet): ShopScreen.purchaseUpgrade.
       purchase: (id) => shopScreen.purchaseUpgrade(id),
-      // u1-resupply-stop D3: buying happens only at the resupply stop after a mission — mid-mission the chips
-      // read "buy at the resupply stop" and the tab's gold count promises nothing.
+      // Buying happens only at the resupply stop after a mission: mid-mission the chips read "buy at the resupply
+      // stop" and the tab's gold count promises nothing.
       getAtStop: () => gameFlowManager.atResupplyStop(),
-      // Alternative hover → the hull hardware pulses cyan (MotherCallouts
-      // ghost outlines, the one outline system).
+      // Alternative hover → the hull hardware pulses cyan (MotherCallouts ghost outlines).
       onGhost: (ids) => motherCallouts.setGhostOutline(ids),
-      // Live alternative rows (Session B commit 4 — the Wave-5 (2) FINDINGS,
-      // closed): the fittingCatalog `current` adapters read these deps. A
-      // GETTER returning a fresh object, so every read resolves the LIVE
-      // module bindings (kesslerSystem/captureNetSystem are imported
-      // singletons; the rest are init()-order lets — some construct after
-      // this pane). hasUpgrade mirrors the pane's own getUpgradeLevel truth
-      // (ShopScreen.purchasedUpgrades — the same map GameFlowManager's
-      // runtime checks walk). The catalog's safeAdapter wrapper turns any
-      // missing/throwing read into undefined → the static base, never a
-      // crash.
+      // Live alternative rows: the fittingCatalog `current` adapters read these deps. A GETTER returning a fresh
+      // object, so every read resolves the LIVE module bindings (kesslerSystem/captureNetSystem are imported
+      // singletons; the rest are init()-order lets, some constructed after this pane). hasUpgrade mirrors
+      // getUpgradeLevel's truth (ShopScreen.purchasedUpgrades). The catalog's safeAdapter turns any missing/throwing
+      // read into undefined → the static base.
       adapterDeps: () => ({
         player, resourceSystem, kesslerSystem, sensorSystem, cargoSystem,
         armManager, captureNetSystem,
         hasUpgrade: (id) => (shopScreen.purchasedUpgrades.get(id) || 0) > 0,
       }),
-      // Card title / spec term → the SPECS dossier on that entry while the
-      // workbench exists (08-workbench §3 "tap → TECH LIBRARY slides in"; the
-      // full-screen viewer stays one click away via MAXIMIZE). Session U: the
-      // shell's openEntry — it keeps the anchor, opens the pane if closed and
-      // never runs the entry-less open. Without the shell the emit below is
-      // the shipped deep-link path, byte-identical — and it IS the flag-off
-      // path by construction (no pane is ever built there, so onOpenEntry
-      // itself never exists).
+      // Card title / spec term → the SPECS dossier on that entry while the workbench exists (08-workbench §3; the
+      // full-screen viewer stays one click away via MAXIMIZE). The shell's openEntry keeps the anchor, opens the pane
+      // if closed and never runs the entry-less open. Without the shell the emit below is the flag-off path (no pane
+      // is ever built there).
       onOpenEntry: (codexId) => {
         if (!codexId) return;
         if (workbenchPane) { workbenchPane.openEntry(codexId); return; }
         eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: codexId });
       },
-      // (Session U: no `onOpenChange` / `footerBottomPx` here — the engine has
-      // no open state and no tab of its own; both live on the WorkbenchPane
-      // shell constructed below.)
-      // Session K (one shop): the first-visit RECOMMENDED chip — the shop's
-      // own pure starter pick (un-owned + affordable, fades once any starter
-      // is owned), read once on open({ firstVisit }).
+      // No `onOpenChange` / `footerBottomPx` here: both live on the WorkbenchPane shell constructed below.
+      // The first-visit RECOMMENDED chip: the shop's own pure starter pick (un-owned + affordable, fades once any
+      // starter is owned), read once on open({ firstVisit }).
       getRecommended: () => recommendedStarter(UPGRADES, shopScreen.purchasedUpgrades, scoringSystem.credits),
-      // Session L: the boot's glass answer — the actuator chips wear the 44 pt
-      // box; Session U (D10): BUY buttons, alternative rows and the subsystem
-      // chips too.
+      // The boot's glass answer: actuator chips wear the 44 pt box, and so do BUY buttons, alternative rows and the
+      // subsystem chips.
       glass: _glassBoot,
-      // Session L (plan item 4 — "REFIT cards gain actuator toggles ... through
-      // the existing actions"): the SAME PlayerSatellite / ArmManager surface
-      // the hotkeys drive (InputManager Comma / Period / KeyO, untouched) and
-      // the same input events, emitted here as the hotkey handler emits them.
-      // The get()s read the COMMANDED target each toggle writes (the pane
-      // refreshes on interaction edges, so a progress read would leave the
-      // chip stale until the next tap); PlayerSatellite has no public readers
-      // for the three targets — read by the MotherCallouts.js
-      // `_rosaFurlProgress` precedent. Session L review: a chip that SHOWS the
-      // commanded state must REVERSE it on a tap — the hotkeys' toggle*()
-      // decide from the live animated pose, so a second tap before the slew's
-      // mid-point re-asserted the same target (a dead window of half a slew:
-      // ~1.25 s arrays, ~1.9 s flower) while the label read the new state. The
-      // chips therefore go through the public SETTERS (setRosaFurl /
-      // setRosaFeather / setFlowerPose — the same commanded-target writes, the
-      // same events) and flip what the label shows; the keys keep their law.
+      // REFIT cards gain actuator toggles through the SAME PlayerSatellite / ArmManager surface the hotkeys drive
+      // (InputManager Comma / Period / KeyO) and the same input events. The get()s read the COMMANDED target each
+      // toggle writes (the pane refreshes on interaction edges, so a progress read would leave the chip stale until
+      // the next tap); PlayerSatellite has no public readers for the three targets (MotherCallouts.js
+      // `_rosaFurlProgress` precedent). A chip that SHOWS the commanded state must REVERSE it on a tap: the hotkeys'
+      // toggle*() decide from the live animated pose, so a second tap before the slew's mid-point re-asserted the same
+      // target (a dead window of half a slew: ~1.25 s arrays, ~1.9 s flower). The chips therefore go through the
+      // public SETTERS (setRosaFurl / setRosaFeather / setFlowerPose) and flip what the label shows; the keys keep
+      // their law.
       actuators: ladderActuators,
     });
-    // The TECH LIBRARY pane engine (08-workbench §10's LibraryPane — the
-    // adapter over the shipped viewer; SPECS to the player since plan D-C.
-    // Session U: hosted in the workbench pane's HEAD + TAIL containers, D1
-    // Identity → … → Learn). Reads the SAME codexSystem the
-    // viewer reads; every routed action rides an EXISTING path:
-    //   onMaximize    → the CODEX_OPEN_ENTRY deep link (the full-screen
-    //                   viewer — the exact route every deep link uses today);
-    //   requestUnlock → CODEX_UNLOCK_REQUEST (the ONE unlock path:
-    //                   CodexSystem's queue → ticker ack chip → chime +
-    //                   CODEX_UNLOCKED on its own schedule — Subnautica §2);
-    //   onViewed      → CODEX_VIEWED (the viewer's own seen contract —
-    //                   CodexSystem.markSeen stays the one seen-writer).
-    // Session O follow-up (owner 2026-09-07, after the first calm-defaults
-    // look: "still 3 SPECS toasts along the bottom at start — that is
-    // clutter; suppress all SPECS popups for now"): the "+ SPECS: <title>"
-    // unlock chips are silenced while the ladder is on. The unlocks still
-    // land (queue, chime, CODEX_UNLOCKED) and the SPECS badge counts them —
-    // the badge is the doorway now. Session Q's merged transient slot decides
-    // the chips' final home. Inside the gate: ?ladder=0 keeps the chips.
+    // The TECH LIBRARY pane engine (08-workbench §10's LibraryPane, the adapter over the shipped viewer), hosted in
+    // the workbench pane's HEAD + TAIL containers. Reads the SAME codexSystem the viewer reads; every routed action
+    // rides an EXISTING path:
+    //   onMaximize    → the CODEX_OPEN_ENTRY deep link (the full-screen viewer);
+    //   requestUnlock → CODEX_UNLOCK_REQUEST (the ONE unlock path: CodexSystem's queue → ticker ack chip → chime +
+    //                   CODEX_UNLOCKED on its own schedule);
+    //   onViewed      → CODEX_VIEWED (CodexSystem.markSeen stays the one seen-writer).
+    // owner 2026-09-07: "still 3 SPECS toasts along the bottom at start — that is clutter; suppress all SPECS popups
+    // for now". The "+ SPECS: <title>" unlock chips are silenced while the ladder is on; the unlocks still land
+    // (queue, chime, CODEX_UNLOCKED) and the SPECS badge counts them. Inside the gate: ?ladder=0 keeps the chips.
     if (codexSystem && codexSystem.setAckChips) codexSystem.setAckChips(false);
     libraryPane = new LibraryPane({
       codex: codexSystem,
@@ -2791,43 +2317,28 @@ async function init() {
       onViewed: (id) => {
         if (id) eventBus.emit(Events.CODEX_VIEWED, { id });
       },
-      // Session C: what the player is looking at, for an ENTRY-LESS open (tab
-      // click / toggle / the swipe) — the pane lands on it instead of the
-      // prompt. Session J (plan D-C, "SPECS on every floor"): PER FLOOR, through
-      // the ONE resolver (SpecsSubject.resolveSubject — pure, pinned tables):
-      // floor 1 the focused hull part (MotherCallouts.getFocusedPart — live in
-      // the COMPONENT band, null elsewhere), else the REFIT card's manifest
-      // deep link (RefitPane.focusedCodexId), exactly as shipped; floors 2–3
-      // the SELECTED TARGET's entry (catalog name → catalog_* entry, untracked
-      // → dark debris, else the mass band → the tool that catches it); floor 4
-      // the focused cluster → the transfer physics, else the window concept;
-      // floor 5 the chart lens. A GETTER: read on the open edge only, never per
-      // frame; the pane stays eventless and never sees any of these modules.
-      // The floor comes from the controller (constructed below — read live).
+      // What the player is looking at, for an ENTRY-LESS open (tab click / toggle / the swipe): the pane lands on it
+      // instead of the prompt. PER FLOOR, through the ONE resolver (SpecsSubject.resolveSubject, pure, pinned
+      // tables): floor 1 the focused hull part (MotherCallouts.getFocusedPart, live in the COMPONENT band, null
+      // elsewhere), else the REFIT card's manifest deep link (RefitPane.focusedCodexId); floors 2–3 the SELECTED
+      // TARGET's entry (catalog name → catalog_* entry, untracked → dark debris, else the mass band → the tool that
+      // catches it); floor 4 the focused cluster → the transfer physics, else the window concept; floor 5 the chart
+      // lens. A GETTER: read on the open edge only, never per frame. The floor comes from the controller
+      // (constructed below, read live).
       subject: () => _specsSubject(),
-      // Session C, owner decision 2 — "the photo you just took" (08-workbench
-      // §2): the pane crops the LIVE render canvas around the subject. The
-      // subject point is the ship's projection (the F3 subject; the callout
-      // anchor itself is not exposed — MotherCallouts is read-only here) in
-      // drawing-buffer px (canvas.width/height, not CSS px — drawImage source
-      // space). The pane defers the read ONE animation frame (a synchronous
-      // read in the click task is blank on the shipped renderer —
-      // preserveDrawingBuffer is false; the next rAF runs after this loop's
-      // render, before present: the BlackFrameProbe legality) and falls back
-      // to the emoji header on any failure. A GETTER, read per photo on the
-      // open / entry edge only — never per frame (Session C's live crop touched
-      // no SceneManager code; Session T's portrait below is the one render).
-      // Session T (plan §1.6, option E — owner 2026-09-08): the pane passes the
-      // edge's anchor and a hint. `hint === 'live'` (the pane's retry after a
-      // blank framed read) or a portrait miss → the live crop exactly as
-      // shipped. Otherwise the FRAMED PART PORTRAIT: the part id is the click
-      // anchor's `partId`, or — for an entry-less open (tab / toggle) — the
-      // focused hull part (MotherCallouts.getFocusedPart, COMPONENT band only);
-      // _portraitFor renders it once (callouts + outlines hidden, the inspect
-      // hull outline hidden) onto the reused portrait canvas → { canvas,
-      // framed: true } and the pane crops nothing (the whole canvas is the
-      // photo). Any miss (no callouts, a card-only part, a null render) → the
-      // live crop, byte-identical to Session D.
+      // "The photo you just took" (08-workbench §2; owner decision): the pane crops the LIVE render canvas around the
+      // subject. The subject point is the ship's projection (the callout anchor itself is not exposed) in
+      // drawing-buffer px (canvas.width/height, not CSS px: drawImage source space). The pane defers the read ONE
+      // animation frame (a synchronous read in the click task is blank on the shipped renderer: preserveDrawingBuffer
+      // is false; the next rAF runs after this loop's render, before present: the BlackFrameProbe legality) and falls
+      // back to the emoji header on any failure. A GETTER, read per photo on the open / entry edge only.
+      // owner 2026-09-08: the pane passes the edge's anchor and a hint. `hint === 'live'` (the pane's retry after a
+      // blank framed read) or a portrait miss → the live crop. Otherwise the FRAMED PART PORTRAIT: the part id is the
+      // click anchor's `partId`, or, for an entry-less open (tab / toggle), the focused hull part
+      // (MotherCallouts.getFocusedPart, COMPONENT band only); _portraitFor renders it once (callouts + outlines
+      // hidden, the inspect hull outline hidden) onto the reused portrait canvas → { canvas, framed: true } and the
+      // pane crops nothing (the whole canvas is the photo). Any miss (no callouts, a card-only part, a null render)
+      // → the live crop.
       photoSource: (anchor, hint) => {
         if (hint !== 'live') {
           let id = (anchor && typeof anchor.partId === 'string') ? anchor.partId : null;
@@ -2848,67 +2359,50 @@ async function init() {
           y: (-_photoTmp.y * 0.5 + 0.5) * canvas.height,
         };
       },
-      // (Session U: no `onOpenChange` / `footerBottomPx` — the engine has no
-      // open state and no tab; the WorkbenchPane shell below owns both.)
+      // No `onOpenChange` / `footerBottomPx`: the WorkbenchPane shell below owns both.
     });
-    // Session U (plan 1788954873769, §3) — the ONE workbench pane: the shell
-    // that hosts the two engines above (library → HEAD + TAIL, refit → the
-    // floor-1 slot between them) and owns the root (#ladder-workbench, RIGHT,
-    // width clamp(380px, 28vw, 440px), body shrink-wrapped to content — D2/D4),
-    // the footer-band SPECS tab (RIGHT slot: bottom = the band's bottom − the
-    // root's 96 = 36 px — the ONE band table; the count is the F1 GOLD
-    // affordable-refit count when > 0, else the unread count — D3), the slide,
-    // the idle fade, the edge-chrome tab phase (written per frame below), the
-    // reduced-motion + RTL laws, the DEPOT_INVITATION glow, ONE open state and
-    // ONE onOpenChange edge → _syncWorkbenchPanes (D10 calm cap, the camera
-    // inset, the callout insets, D5 memory, the break end). Everything the hub
-    // says to the workbench from here on goes through this object; the engines
-    // are touched only at their construction above. `glass`: the boot's answer
-    // (44 pt targets — D10). Inside the gate: a ?ladder=0 boot builds no shell.
+    // The ONE workbench pane: the shell that hosts the two engines above (library → HEAD + TAIL, refit → the floor-1
+    // slot between them) and owns the root (#ladder-workbench, RIGHT, width clamp(380px, 28vw, 440px), body
+    // shrink-wrapped to content), the footer-band SPECS tab (RIGHT slot: bottom = the band's bottom − the root's 96
+    // = 36 px, the ONE band table; the count is the F1 GOLD affordable-refit count when > 0, else the unread count),
+    // the slide, the idle fade, the edge-chrome tab phase (written per frame below), the reduced-motion + RTL laws,
+    // the DEPOT_INVITATION glow, ONE open state and ONE onOpenChange edge → _syncWorkbenchPanes (calm cap, camera
+    // inset, callout insets, pane memory, the break end). Everything the hub says to the workbench goes through this
+    // object; the engines are touched only at their construction above. `glass`: the boot's answer (44 pt targets).
+    // Inside the gate: a ?ladder=0 boot builds no shell.
     workbenchPane = new WorkbenchPane({
       library: libraryPane,
       refit: refitPane,
       glass: _glassBoot,
       footerBottomPx: _FOOTER ? _FOOTER.bottom : undefined,
       onOpenChange: () => _syncWorkbenchPanes(),
-      // range-map D8: the floor-1 drawer's MAIN MENU button (second tap) -> the live pause-menu handler
+      // The floor-1 drawer's MAIN MENU button (second tap) -> the live pause-menu handler
       onMainMenu: () => eventBus.emit(Events.PAUSE_MENU),
-      // F1.6: only while the state machine allows MENU (INTERACTION does not: the flow manager would abort the trip and the berth, then refuse)
+      // Only while the state machine allows MENU (INTERACTION does not: the flow manager would abort the trip and the berth, then refuse)
       canLeave: () => gameState.canTransitionTo(GameStates.MENU),
     });
-    // Tab truth on change, never per frame (G1): a landed unlock repaints the
-    // unread count (and fires the shell's ONE pulse); a read entry drops it.
-    // Session U: the shell's refresh — both engines + the tab paint.
-    // Registered inside the gate — a ?ladder=0 boot adds no listeners.
+    // Tab truth on change, never per frame: a landed unlock repaints the unread count (and fires the shell's ONE
+    // pulse); a read entry drops it. Registered inside the gate: a ?ladder=0 boot adds no listeners.
     eventBus.on(Events.CODEX_UNLOCKED, () => { if (workbenchPane) workbenchPane.refresh(); });
     eventBus.on(Events.CODEX_VIEWED, () => { if (workbenchPane) workbenchPane.refresh(); });
-    // u1-resupply-stop F1: the tab's gold "can buy" count is cached from the last refresh — repaint it the moment the
-    // stop opens or closes, so it never stays gold after the stop ends (same pane refresh as the codex events).
+    // The tab's gold "can buy" count is cached from the last refresh: repaint it the moment the resupply stop opens
+    // or closes, so it never stays gold after the stop ends.
     if (shopScreen && typeof shopScreen.onResupplyStopChange === 'function') {
       shopScreen.onResupplyStopChange(() => { if (workbenchPane) workbenchPane.refresh(); });
     }
-    // Session J item 3 (plan D-C): "the unlock chip's tap opens SPECS on the
-    // new entry" — the ticker's "+ Library" ack row (CodexSystem posts it with
-    // `codexId`) is tappable ONLY while this sink is wired, and it lands on the
-    // workbench pane through the shell's ONE openEntry path (the pane opens if
-    // closed: a tap on a doorway is the player's verb). Inside the gate: a
-    // ?ladder=0 boot wires no sink → the row renders the shipped click-through
-    // chip byte-for-byte.
+    // "The unlock chip's tap opens SPECS on the new entry": the ticker's "+ Library" ack row (CodexSystem posts it
+    // with `codexId`) is tappable ONLY while this sink is wired, and it lands on the workbench pane through the
+    // shell's ONE openEntry path (the pane opens if closed: a tap on a doorway is the player's verb). Inside the
+    // gate: a ?ladder=0 boot wires no sink.
     if (hud && hud.hintTicker && hud.hintTicker.setChipTap) {
       hud.hintTicker.setChipTap(({ id }) => { if (id && workbenchPane) workbenchPane.openEntry(id); });
     }
-    // Session J (plan D-C) — a TARGET SELECTION is a subject change on the
-    // flying floors: (1) the Subnautica rule generalises from hull parts to
-    // targets — a selected target whose entry is LOCKED requests its unlock
-    // through the workbench's ONE scanPart path (CodexSystem's queue: ack chip
-    // now, chime + CODEX_UNLOCKED on its own schedule; startUnlocked entries
-    // are safe no-ops) — "exploration is how the library fills"; (2) an OPEN
-    // pane follows the selection. TARGET_SELECTED is the ONE downstream of
-    // every selection path (the HUD row click's HUD_TARGET_CLICK →
-    // GameFlowManager → targetSelector.setTarget, Tab/T, the Session J canvas
-    // tap, autopilot's re-acquire), so one listener covers them all. Floors
-    // 2–3 only — the target is the subject there; elsewhere the floor's own
-    // subject stands.
+    // A TARGET SELECTION is a subject change on the flying floors: (1) the Subnautica rule generalises from hull
+    // parts to targets: a selected target whose entry is LOCKED requests its unlock through the workbench's ONE
+    // scanPart path (CodexSystem's queue: ack chip now, chime + CODEX_UNLOCKED on its own schedule; startUnlocked
+    // entries are safe no-ops); (2) an OPEN pane follows the selection. TARGET_SELECTED is the ONE downstream of
+    // every selection path (HUD row click, Tab/T, canvas tap, autopilot's re-acquire), so one listener covers
+    // them all. Floors 2–3 only: the target is the subject there; elsewhere the floor's own subject stands.
     eventBus.on(Events.TARGET_SELECTED, () => {
       if (!workbenchPane || !ladderController) return;
       const floor = ladderController.currentFloor();
@@ -2917,92 +2411,64 @@ async function init() {
       if (id) workbenchPane.scanPart({ codexId: id });
       _specsFollow();
     });
-    // Session J — the CAPTURE-phase key router (LadderController.routeKeyDown):
-    // arrows under the turntable (Session I FINDINGS (b) — the keydown-path
-    // autopilot disengage in InputManager :445–452 ran before any per-frame
-    // shim could blank the key; here the press writes the public key bit and
-    // never reaches InputManager's bubble-phase handler), Tab on floors 3/4
-    // (the insertion-candidate / cluster cycles no input produced — item 6).
-    // Capture on window runs BEFORE InputManager's own window listener
-    // (bubble); stopImmediatePropagation drops the event for it. Inside the
-    // gate: a ?ladder=0 boot installs nothing, and the router is inert while
-    // disengaged, so every other key and every flag-off frame is byte-identical.
+    // The CAPTURE-phase key router (LadderController.routeKeyDown): arrows under the turntable (the keydown-path
+    // autopilot disengage in InputManager runs before any per-frame shim could blank the key; here the press writes
+    // the public key bit and never reaches InputManager's bubble-phase handler), Tab on floors 3/4 (the
+    // insertion-candidate / cluster cycles). Capture on window runs BEFORE InputManager's own window listener
+    // (bubble); stopImmediatePropagation drops the event for it. Inside the gate: a ?ladder=0 boot installs nothing,
+    // and the router is inert while disengaged.
     window.addEventListener('keydown', (e) => {
       if (ladderController && ladderController.routeKeyDown(e)) e.stopImmediatePropagation();
     }, true);
-    // Wave 5 (Session E) — the depot INVITATION (08-workbench §5 D3): from
-    // chapter 4 on GameFlowManager (the ONE depot decision per catch) emits
-    // DEPOT_INVITATION instead of forcing the stop. Since the Session H 7→5
-    // renumber the glow points at the WORKBENCH: the rail's notch-1 gold
-    // (WHERE — come down) AND the workbench tab's gold edge (WHAT — the drawer
-    // holds the shop; plan D-H; Session U: the shell's setInvitation, moved
-    // there from RefitPane), both until { open: false } — entered / lapsed /
-    // reset. ONE listener, two write-on-change setters; the rail stays
-    // EventBus-free and the controller is not involved (no chapter knowledge
-    // in the hub). Inside the gate: a ?ladder=0 boot adds no listener, and
-    // never emits it either.
+    // The depot INVITATION (08-workbench §5): from chapter 4 on GameFlowManager (the ONE depot decision per catch)
+    // emits DEPOT_INVITATION instead of forcing the stop. The glow points at the WORKBENCH: the rail's notch-1 gold
+    // (WHERE: come down) AND the workbench tab's gold edge (WHAT: the drawer holds the shop), both until
+    // { open: false } (entered / lapsed / reset). ONE listener, two write-on-change setters; the rail stays
+    // EventBus-free and the controller is not involved (no chapter knowledge in the hub). Inside the gate: a
+    // ?ladder=0 boot adds no listener and never emits it.
     eventBus.on(Events.DEPOT_INVITATION, (d) => {
       if (railIndicator) railIndicator.setDepotInvitation(!!(d && d.open));
       if (workbenchPane && workbenchPane.setInvitation) workbenchPane.setInvitation(!!(d && d.open));
     });
-    // Wave 5 Session K (plan D-B / D-E — ONE SHOP): the WORKBENCH BREAK.
-    // GameFlowManager's ONE ladder-on depot entry (the chapter 1–3 dwell, the
-    // B key, the glass STORE chip — every transitionToState(SHOP) from
-    // gameplay is redirected there) emits WORKBENCH_STOP; the hub answers with
-    // the CEREMONY RIDE (LadderController.rideToWorkbench: floor 1 at the
-    // crossing duration, the same _apply path as every ride — the workbench
-    // learns floor 1 on arrival, so its REFIT block shows) and opens the
-    // workbench pane (the shop is its REFIT block) with the first-visit
-    // RECOMMENDED chip when GameFlowManager says so (Session U: the shell's
-    // open({ firstVisit }) focuses the RECOMMENDED card FIRST, then adopts the
-    // subject — §3 order). The world is held under the drawer (D-F). The break
-    // ends on the drawer edge above (_endWorkbenchBreak → WORKBENCH_RESUME).
-    // If the ride/open could not take (the ladder not engaged — no screen to
-    // hold), the break ends at once so nothing stays pending. Inside the gate:
-    // never emitted with the ladder off, so the ?ladder=0 boot keeps the
-    // full-screen shop as shipped.
+    // The WORKBENCH BREAK. GameFlowManager's ONE ladder-on depot entry (the chapter 1–3 dwell, the B key, the glass
+    // STORE chip: every transitionToState(SHOP) from gameplay is redirected there) emits WORKBENCH_STOP; the hub
+    // answers with the CEREMONY RIDE (LadderController.rideToWorkbench: floor 1 at the crossing duration, the same
+    // _apply path as every ride; the workbench learns floor 1 on arrival, so its REFIT block shows) and opens the
+    // workbench pane (the shop is its REFIT block) with the first-visit RECOMMENDED chip when GameFlowManager says
+    // so (the shell's open({ firstVisit }) focuses the RECOMMENDED card FIRST, then adopts the subject). The world
+    // is held under the drawer. The break ends on the drawer edge above (_endWorkbenchBreak → WORKBENCH_RESUME).
+    // If the ride/open could not take (the ladder not engaged: no screen to hold), the break ends at once so
+    // nothing stays pending. Inside the gate: never emitted with the ladder off.
     eventBus.on(Events.WORKBENCH_STOP, (d) => {
       if (ladderController && ladderController.rideToWorkbench) ladderController.rideToWorkbench();
       if (workbenchPane) workbenchPane.open({ firstVisit: !!(d && d.firstDepotVisit) });
-      // The Session N.5 cargo force-show ("the ceremony shows the till itself")
-      // was removed 2026-09-23 (plan 1789561832042, C2): it overrode
-      // DEFAULT_ROOMS[1]'s cargo:'gone' and D5 persisted the flip, so the pane
-      // never left. Selling stays reachable through the REFIT block and the
-      // `+` walk.
+      // No cargo force-show here: it overrode DEFAULT_ROOMS[1]'s cargo:'gone' and the persisted flip meant the pane
+      // never left. Selling stays reachable through the REFIT block and the `+` walk.
       _workbenchBreak = true;
       if (!_workbenchPaneOpen) _endWorkbenchBreak('refused');
     });
-    // Leaving gameplay ends the break without a RESUME (GameFlowManager's own
-    // exit rule released its flag; the ladder disengages and closes the drawer).
+    // Leaving gameplay ends the break without a RESUME (GameFlowManager's own exit rule released its flag; the
+    // ladder disengages and closes the drawer).
     eventBus.on(Events.GAME_STATE_CHANGE, () => {
       if (_workbenchBreak && !gameState.isGameplay()) _workbenchBreak = false;
     });
-    // Wave 5 (Session G) — D5 persistence of view prefs + floor (08-workbench
-    // §11), two stores by ownership (owner decisions 1a / 1b, 2026-09-04):
-    //   PLAYER store `sc_ladder_view_v1` (LadderViewStore — the SettingsManager
-    //   pattern: own key, load in ctor, save on change, private-mode-safe):
-    //   FloorMask's per-floor rooms + the F3 pane open-state. Survives New Game —
-    //   a rearranged room belongs to the player, not the run. The controller
-    //   imports the rooms at construction, exports them on every floor change,
-    //   records the panes on the ONE edge above, re-opens them at engage on F3.
-    //   RUN save `save.ladder = { floor, z01 }`: gathered here on
-    //   PERSISTENCE_GATHER (LadderController.viewState — the hull, never the
-    //   doorway mid-ride), restored on PERSISTENCE_LOADED into the core BEFORE
-    //   the first engage (MENU_CONTINUE emits it before ORBITAL_VIEW), so a
-    //   continue re-engages where the player left; a NEW game has no save →
-    //   the intro ride as shipped. GAME_RESET clears the run's floor memory
-    //   (the core back to the shipped initial view) and arms the new game's
-    //   first engage to forget the player's reveals of default-hidden panes
-    //   (a `+` past a floor's room); every other room entry stays, and a
-    //   continue (PERSISTENCE_LOADED) keeps the room exactly.
-    // All inside the gate: a ?ladder=0 boot constructs no store, registers no
-    // listener, never writes the key, and its save never carries `ladder`
-    // (PersistenceManager omits the key when absent) — byte-identical.
+    // D5 persistence of view prefs + floor (08-workbench §11), two stores by ownership (owner decisions 1a / 1b,
+    // 2026-09-04):
+    //   PLAYER store `sc_ladder_view_v1` (LadderViewStore, the SettingsManager pattern: own key, load in ctor, save
+    //   on change, private-mode-safe): FloorMask's per-floor rooms + the F3 pane open-state. Survives New Game: a
+    //   rearranged room belongs to the player, not the run. The controller imports the rooms at construction,
+    //   exports them on every floor change, records the panes on the ONE edge above, re-opens them at engage on F3.
+    //   RUN save `save.ladder = { floor, z01 }`: gathered here on PERSISTENCE_GATHER (LadderController.viewState:
+    //   the hull, never the doorway mid-ride), restored on PERSISTENCE_LOADED into the core BEFORE the first engage
+    //   (MENU_CONTINUE emits it before ORBITAL_VIEW), so a continue re-engages where the player left; a NEW game has
+    //   no save → the intro ride. GAME_RESET clears the run's floor memory (the core back to the initial view) and
+    //   arms the new game's first engage to forget the player's reveals of default-hidden panes (a `+` past a
+    //   floor's room); every other room entry stays, and a continue (PERSISTENCE_LOADED) keeps the room exactly.
+    // All inside the gate: a ?ladder=0 boot constructs no store, registers no listener, never writes the key, and
+    // its save never carries `ladder` (PersistenceManager omits the key when absent).
     ladderViewStore = new LadderViewStore();
-    // Session N: the MAP store — player-owned like the view store (its own
-    // key, load in ctor, save on change, private-mode-safe); its first-run bit
-    // is the ONE signal for the GestureSplash (since 2026-09-09 no longer the
-    // intro ride's — every New Game from the menu flies, see GAME_RESET below).
+    // The MAP store: player-owned like the view store (its own key, load in ctor, save on change, private-mode-safe);
+    // its first-run bit is the ONE signal for the GestureSplash (every New Game from the menu flies; see GAME_RESET below).
     touchMapStore = new TouchMapStore();
     eventBus.on(Events.PERSISTENCE_GATHER, (saveData) => {
       if (!saveData || !ladderController) return;
@@ -3011,12 +2477,9 @@ async function init() {
     });
     eventBus.on(Events.PERSISTENCE_LOADED, () => {
       if (!ladderController) return;
-      // Session N: a CONTINUE is not a new game — an intro ride armed by the
-      // GAME_RESET that resetGame() emitted a moment ago is dropped here, and
-      // the saved view is restored as before. The `_introFlown` latch stays
-      // CLOSED (2026-09-09 — it used to re-open here): a GAMEOVER retry after
-      // a continue must not dive onto an APPROACH frame either; the MENU
-      // listener below is the ONE re-open.
+      // A CONTINUE is not a new game: an intro ride armed by the GAME_RESET that resetGame() emitted a moment ago is
+      // dropped here, and the saved view is restored. The `_introFlown` latch stays CLOSED: a GAMEOVER retry after
+      // a continue must not dive onto an APPROACH frame either; the MENU listener below is the ONE re-open.
       ladderController.disarmIntroRide();
       const save = persistenceManager.peek();
       ladderController.restoreView(save ? save.ladder : null);
@@ -3024,35 +2487,23 @@ async function init() {
     eventBus.on(Events.GAME_RESET, () => {
       if (!ladderController) return;
       ladderController.resetView();
-      // Session N (plan item 2), re-aimed Session N.5 + N.5b (owner 2026-09-07
-      // — "first make me care" / "you had great visuals from menu to f1") and
-      // again 2026-09-09 (owner: "the menu→game fly-by is gone — fly-by every
-      // time"): EVERY New Game entered from the menu flies the intro FLYBY at
-      // the first engage — the silent DIVE from the top floor to the HULL
-      // (the shot), one breath, then the silent pull-back to the FLYING floor
-      // where the game starts; the workbench (callouts, REFIT, specs) waits
-      // for the first WORKBENCH_STOP. Player input mid-flyby cancels the rest
-      // of it. Reduced motion places the core on the landing floor instead
-      // (no ride). The ?shot harness (unless &intro=1) keeps the shipped
-      // floor (_introRideAllowed). The `_introFlown` latch keeps the Session N
-      // review law: a GAMEOVER retry's GAME_RESET in the same session (no
-      // MENU visit) never replays the descent onto an APPROACH frame — the
-      // latch re-opens only on the GAME_STATE_CHANGE → MENU below. A CONTINUE
-      // disarms this on PERSISTENCE_LOADED (above). The first-run bit
-      // (_introFirstRun) now gates only the GestureSplash.
+      // owner 2026-09-09: "the menu→game fly-by is gone — fly-by every time". EVERY New Game entered from the menu
+      // flies the intro FLYBY at the first engage: the silent DIVE from the top floor to the HULL (the shot), one
+      // breath, then the silent pull-back to the FLYING floor where the game starts; the workbench (callouts,
+      // REFIT, specs) waits for the first WORKBENCH_STOP. Player input mid-flyby cancels the rest of it. Reduced
+      // motion places the core on the landing floor instead (no ride). The ?shot harness (unless &intro=1) keeps
+      // the shipped floor (_introRideAllowed). The `_introFlown` latch: a GAMEOVER retry's GAME_RESET in the same
+      // session (no MENU visit) never replays the descent onto an APPROACH frame; the latch re-opens only on the
+      // GAME_STATE_CHANGE → MENU below. A CONTINUE disarms this on PERSISTENCE_LOADED (above). The first-run bit
+      // (_introFirstRun) gates only the GestureSplash.
       if (_introRideAllowed() && !_introFlown) {
-        // Opening dance (2026-09-16, plan task 4 — "close, then drift out"):
-        // while the dance runs, the flyby is the dance's — the dive lands
-        // CLOSE on the hull (z01 0.23 ≈ 2.67 m) as the petals crack, the
-        // dwell's dolly drifts out to z01 0.82 ≈ 5.59 m through the wings'
-        // roll-out (2.0 s, ending before the 8.70 s hand-over), and
-        // OPENING_DANCE_HANDOVER (the listener right below) ends the dwell the
-        // moment the wings are out — dwellMs is only
-        // the CEILING (hand-over + 2 s) for a dropped event, never the
-        // duration. Flag OFF (Constants.FEATURE_FLAGS.OPENING_DANCE): no
-        // dance runs and no hand-over ever fires — arm TODAY'S flyby (dive →
-        // the 800 ms breath → pull), never the ceiling, or the camera would
-        // squat at the hull for the full ceiling with nothing to wait for.
+        // Opening dance: while it runs, the flyby is the dance's: the dive lands CLOSE on the hull (z01 0.23 ≈ 2.67 m)
+        // as the petals crack, the dwell's dolly drifts out to z01 0.82 ≈ 5.59 m through the wings' roll-out (2.0 s,
+        // ending before the 8.70 s hand-over), and OPENING_DANCE_HANDOVER (the listener right below) ends the dwell the
+        // moment the wings are out; dwellMs is only the CEILING (hand-over + 2 s) for a dropped event, never the
+        // duration. Flag OFF (Constants.FEATURE_FLAGS.OPENING_DANCE): no dance runs and no hand-over ever fires, so arm
+        // the plain flyby (dive → the 800 ms breath → pull), never the ceiling, or the camera would squat at the hull
+        // for the full ceiling with nothing to wait for.
         const _danceCamera = !!(Constants.FEATURE_FLAGS.OPENING_DANCE);
         ladderController.armIntroRide({
           rideMs: INTRO_RIDE_MS,
@@ -3066,45 +2517,30 @@ async function init() {
         _introFlown = true;
       }
     });
-    // Opening dance (plan task 4): the dance's HANDOVER is the ONE signal
-    // that ends the intro dwell — normal completion AND the skip both arrive
-    // here, so the camera never waits on its ceiling when the dance has
-    // already handed over, and never jumps ahead of it either (the ceiling
-    // is the fallback; the event is the truth). One listener, beside the
-    // arm above; inside the gate a ?ladder=0 boot registers nothing.
+    // The dance's HANDOVER is the ONE signal that ends the intro dwell (normal completion AND the skip arrive here), so
+    // the camera never waits on its ceiling when the dance has handed over, and never jumps ahead of it (the ceiling
+    // is the fallback; the event is the truth). Inside the gate a ?ladder=0 boot registers nothing.
     eventBus.on(Events.OPENING_DANCE_HANDOVER, () => {
       if (ladderController) ladderController.endIntroDwellEarly();
     });
-    // 2026-09-09 (owner: "fly-by every time"): the ONE re-open of the
-    // `_introFlown` latch — back on the MENU (a game over's MENU button, a
-    // pause quit; the boot menu needs none — the latch starts open), the
-    // next New Game flies again.
-    // Payload `{ from, to }` (GameFlowManager.transitionToState). MENU only:
-    // BRIEFING (a retry's route), SHOP, PAUSED and the end screens are not a
-    // menu departure. Inside the gate: a ?ladder=0 boot registers nothing.
+    // The ONE re-open of the `_introFlown` latch (owner 2026-09-09: "fly-by every time"): back on the MENU (a game
+    // over's MENU button, a pause quit; the boot menu needs none, the latch starts open), the next New Game flies again.
+    // Payload `{ from, to }` (GameFlowManager.transitionToState). MENU only: BRIEFING (a retry's route), SHOP, PAUSED
+    // and the end screens are not a menu departure. Inside the gate: a ?ladder=0 boot registers nothing.
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
       if (to === GameStates.MENU) _introFlown = false;
     });
-    // Wave 5 (Session H) — JOB A, the D5 room-memory WRITE GAP (03-plan
-    // Session G FINDINGS (c)): a pane shown/hidden by its key (0/9/8, the
-    // density -/+ or the iPad slider) and then a reload with NO floor change
-    // in between was never persisted — FloorMask captures only inside
-    // setFloor(). The four player edges emit ONE ladder-agnostic signal AFTER
-    // the bit flips (Events.HUD_PANE_VISIBILITY); this ONE listener — inside
-    // the gate, so a ?ladder=0 boot registers nothing and does no work —
-    // captures the applied floor's room and exports it to the player store
-    // (write-on-change inside the store; an event-rate edge, never per frame).
-    // ladderController is constructed below — read live, guarded.
-    // Session P (plan D5): the DETAIL slider replaces the DISPLAY rail here.
-    // Getter deps only — the slider imports no bus and never sees the HUD:
-    // the rung count and the live visible count (the ONE pane-visibility bit,
-    // T8), the level sink (PaneDensity.setLevel walks real down()/up() steps,
-    // quiet — the slider IS the readout; each step's `_onFlip` emits the
-    // HUD_PANE_VISIBILITY edge the listener below captures, exactly as for the
-    // `-`/`+` keys; a level of 0 bows the rails out — pure scenery — and any
-    // higher level brings them back), the interact sink (its own touch wakes
-    // it), and the footer's bottom from the ONE band table. The `onFlip` sink
-    // the rail carried is gone: main.js emits no HUD_PANE_VISIBILITY any more.
+    // D5 room-memory write gap: a pane shown/hidden by its key (0/9/8, the density -/+ or the iPad slider) and then a
+    // reload with NO floor change in between was never persisted, since FloorMask captures only inside setFloor().
+    // The four player edges emit ONE ladder-agnostic signal AFTER the bit flips (Events.HUD_PANE_VISIBILITY); this ONE
+    // listener (inside the gate, so a ?ladder=0 boot registers nothing) captures the applied floor's room and exports
+    // it to the player store (write-on-change inside the store; an event-rate edge, never per frame).
+    // ladderController is constructed below: read live, guarded.
+    // The DETAIL slider: getter deps only (it imports no bus and never sees the HUD): the rung count and the live
+    // visible count (the ONE pane-visibility bit), the level sink (PaneDensity.setLevel walks real down()/up() steps,
+    // quiet: the slider IS the readout; each step's `_onFlip` emits the HUD_PANE_VISIBILITY edge the listener below
+    // captures, as for the `-`/`+` keys; a level of 0 bows the rails out, pure scenery, and any higher level brings
+    // them back), the interact sink (its own touch wakes it), and the footer's bottom from the ONE band table.
     detailSlider = new DetailSlider({
       // Positions = the steps that can show right now (visible, or hidden by the ladder): before the
       // first scan the target marks and both target panes wait, so the slider has fewer positions.
@@ -3126,44 +2562,33 @@ async function init() {
       reducedMotion: _prefersReducedMotion(),
     });
     eventBus.on(Events.HUD_PANE_VISIBILITY, () => {
-      // CLEAN VIEW is a MODE, not a room edit (owner 2026-09-06): while the
-      // density holds a `-` stash, no flip is remembered — the room memory
-      // keeps the pre-clear room, so a reload (or the next floor) brings the
-      // HUD back; `+` restores from the stash. Every other flip captures as
-      // before (the D5 law).
+      // CLEAN VIEW is a MODE, not a room edit (owner 2026-09-06): while the density holds a `-` stash, no flip is
+      // remembered: the room memory keeps the pre-clear room, so a reload (or the next floor) brings the HUD back;
+      // `+` restores from the stash. Every other flip captures.
       const pd = hud && hud.paneDensity;
       const cleanView = !!(pd && typeof pd.hasStash === 'function' && pd.hasStash());
       if (ladderController && !cleanView) ladderController.noteRoomChange();
-      // Ladder reorder rev 3: the SPECS tab + build stamp follow
-      // hudClear() (density flips only — FloorMask applies never emit this
-      // event, so F1 keeps SPECS pinned). Rails still sleep only at level 0
-      // via setRailsShy in onLevel / HUD_DENSITY_DOWN/UP.
+      // The SPECS tab + build stamp follow hudClear() (density flips only: FloorMask applies never emit this event,
+      // so F1 keeps SPECS pinned). Rails still sleep only at level 0 via setRailsShy in onLevel / HUD_DENSITY_DOWN/UP.
       if (ladderController && typeof ladderController.setHudClear === 'function' && pd && typeof pd.hudClear === 'function') ladderController.setHudClear(pd.hudClear());
-      // Session P (plan D3/D5): any pane flip (the `-`/`+` keys, 0/9/8, the
-      // slider's own detents) is a slider WAKE source, and the thumb follows
-      // now (forced — the per-frame refresh is throttled to 4 Hz).
+      // Any pane flip (the `-`/`+` keys, 0/9/8, the slider's own detents) is a slider WAKE source, and the thumb
+      // follows now (forced: the per-frame refresh is throttled to 4 Hz).
       if (edgeChrome) edgeChrome.wake('slider');
       if (detailSlider) detailSlider.refresh({ force: true });
     });
-    // Session Q (plan D15c, owner 2026-09-07): the autopilot's locked target —
-    // ONE gated listener pair (graph-safe: both events have their emitters in
-    // AutopilotSystem._refreshTargetLock / _releaseTargetLock). While the AP
-    // flies to a debris the reticle and the TARGETS row paint it magenta
-    // (computer-managed, Airbus A2); the cluster variant carries `targetId`
-    // and no `debrisId` → null, harmless. `?ladder=0` never adds these.
+    // The autopilot's locked target (owner 2026-09-07): ONE gated listener pair (graph-safe: both events have their
+    // emitters in AutopilotSystem._refreshTargetLock / _releaseTargetLock). While the AP flies to a debris the
+    // reticle and the TARGETS row paint it magenta (computer-managed); the cluster variant carries `targetId` and no
+    // `debrisId` → null, harmless. `?ladder=0` never adds these.
     eventBus.on(Events.AUTOPILOT_TARGET_LOCK, (d) => {
       _apTargetId = (d && d.debrisId != null) ? d.debrisId : null;
     });
     eventBus.on(Events.AUTOPILOT_TARGET_UNLOCK, () => { _apTargetId = null; });
-    // `-` / `+` (owner 2026-09-07, REVERSING the 2026-09-06 one-press CLEAN
-    // VIEW): the bare keys walk ONE rung per press again — the shipped
-    // PaneDensity.down()/up(); clearOnDown stays false, so the stash
-    // machinery sleeps (kept for the API; hasStash() reads false and every
-    // flip captures through D5 exactly as the H-era keys did). The walk now
-    // runs ALL THE WAY OUT: when a `-` press finds the rungs already clear,
-    // the RAILS bow out too (pure scenery — nothing on screen but the world),
-    // and the first `+` brings the rails back before the rungs restore. Any
-    // ride or a fresh engage also ends the shy state (LadderController).
+    // `-` / `+` (owner 2026-09-07, reversing the 2026-09-06 one-press CLEAN VIEW): the bare keys walk ONE rung per
+    // press, PaneDensity.down()/up(); clearOnDown stays false, so the stash machinery sleeps (kept for the API;
+    // hasStash() reads false and every flip captures through D5). The walk runs ALL THE WAY OUT: when a `-` press
+    // finds the rungs already clear, the RAILS bow out too (pure scenery), and the first `+` brings the rails back
+    // before the rungs restore. Any ride or a fresh engage also ends the shy state (LadderController).
     // Inside the gate: a ?ladder=0 boot never adds these listeners.
     eventBus.on(Events.HUD_DENSITY_DOWN, () => {
       const pd = hud && hud.paneDensity;
@@ -3173,34 +2598,27 @@ async function init() {
     eventBus.on(Events.HUD_DENSITY_UP, () => {
       if (ladderController) ladderController.setRailsShy(false);
     });
-    // Wave 5 Session K (plan D-B / D-L) — the CARGO pane: the cargo manifest
-    // with SELL / SELL ALL / -> ELEVATOR through ShopScreen's PUBLIC wrappers
-    // (the one sale pipeline), a pane-density RUNG like TARGET / DAUGHTERS. A
-    // DIRECT child of #hud-overlay, not a column: HUD.js dims both columns to
-    // 0.35 + pointer-events:none under the hull callouts, and the shop floor
-    // IS the callout floor. Its rung is insertBefore('debris') below — before
-    // ladderFloorMask is constructed and long before the first setFloor
-    // (FloorMask._resolve caches the rung map ONCE at that first apply; the
-    // DETAIL slider reads the same live array). Fed per frame by setDodge in
-    // the gameLoop. Inside the gate: a ?ladder=0 boot builds no pane and
-    // pushes no rung — the HUD.js base 10 rungs are the `?ladder=0` order.
+    // The CARGO pane: the cargo manifest with SELL / SELL ALL / -> ELEVATOR through ShopScreen's PUBLIC wrappers (the
+    // one sale pipeline), a pane-density RUNG like TARGET / DAUGHTERS. A DIRECT child of #hud-overlay, not a column:
+    // HUD.js dims both columns to 0.35 + pointer-events:none under the hull callouts, and the shop floor IS the callout
+    // floor. Its rung is insertBefore('debris') below, before ladderFloorMask is constructed and long before the first
+    // setFloor (FloorMask._resolve caches the rung map ONCE at that first apply; the DETAIL slider reads the same live
+    // array). Fed per frame by setDodge in the gameLoop. Inside the gate: a ?ladder=0 boot builds no pane and pushes no
+    // rung (the HUD.js base 10 rungs are the `?ladder=0` order).
     cargoPane = new CargoPane({
       cargo: cargoSystem,
       shop: shopScreen,
       glass: _glassBoot,
     });
-    // Wave 5 Session M (plan "Session M — Instruments"): ORBIT, COPILOT, NEXT.
-    // Three more RUNG panes of the CARGO shape, constructed HERE (before
-    // ladderFloorMask, before the first setFloor — FloorMask._resolve caches
-    // the rung map once) with GETTER deps (timeAuthority is constructed after
-    // this block; every other source is read live, guarded). Rooms:
-    // FloorMask.DEFAULT_ROOMS (ORBIT + COPILOT F2/F3, COPILOT faint F4, NEXT
-    // F3/F4). Anchors and 1 Hz ticks ride the gameLoop below. Inside the gate:
-    // a ?ladder=0 boot builds none of this and pushes no rung.
+    // ORBIT, COPILOT, NEXT: three more RUNG panes of the CARGO shape, constructed HERE (before ladderFloorMask, before
+    // the first setFloor: FloorMask._resolve caches the rung map once) with GETTER deps (timeAuthority is constructed
+    // after this block; every other source is read live, guarded). Rooms: FloorMask.DEFAULT_ROOMS (ORBIT + COPILOT
+    // F2/F3, COPILOT faint F4, NEXT F3/F4). Anchors and 1 Hz ticks ride the gameLoop below. Inside the gate: a
+    // ?ladder=0 boot builds none of this and pushes no rung.
     orbitPane = new OrbitPane({
       glass: _glassBoot,
       player,
-      inShadow: () => !!(player && player._inShadow),           // the MotherCallouts precedent: no public reader (FINDINGS)
+      inShadow: () => !!(player && player._inShadow),           // no public reader (MotherCallouts precedent)
       budget: () => (armManager && armManager.getMassBudget) ? armManager.getMassBudget() : null,
       missionTime: () => gameState.missionTime,
       sunDir: () => (sunLight ? sunLight.sunDirection : null),
@@ -3224,10 +2642,10 @@ async function init() {
     fmaStrip = new FmaStrip({
       fma: () => ((autopilotSystem && autopilotSystem.fmaState) ? autopilotSystem.fmaState() : null),
       onPhaseChange: (prev, next, state) => { if (copilotVoice) copilotVoice.phase(prev, next, state); },
-      // u5-info-ap-hold D2: floor 2 shows the strip while the autopilot flies, in plain words at the simple level.
+      // Floor 2 shows the strip while the autopilot flies, in plain words at the simple level.
       floor: () => (ladderFloorMask && ladderFloorMask.getAppliedFloor ? ladderFloorMask.getAppliedFloor() : null),
       simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),
-      // Nets step 3 slice 2b (lane 2b-2): the boundary waits for her pick of the next field ("Where next? Pick on the LEO map").
+      // The boundary waits for her pick of the next field ("Where next? Pick on the LEO map").
       choosing: () => !!(gameFlowManager && gameFlowManager.isWhereNextPending && gameFlowManager.isWhereNextPending()),
     });
     // The strip holds no listener (test-FmaStrip pins that): the hub tells it at once, not at the next 1 s poll.
@@ -3235,11 +2653,10 @@ async function init() {
     eventBus.on(Events.AUTOPILOT_DISENGAGE, () => { if (fmaStrip) fmaStrip.setFlying(false); });
     nextPane = new NextPane({
       glass: _glassBoot,
-      // Rev 3 Task 6 (locked #5): NEXT is the right arm's LAST column child
-      // (Targets → Debris → Next), position:relative inside #hud-right-column;
-      // the per-frame setDodge is a no-op now (the column glides as one).
+      // NEXT is the right arm's LAST column child (Targets → Debris → Next), position:relative inside
+      // #hud-right-column; the per-frame setDodge is a no-op now (the column glides as one).
       parent: hud.rightColumnEl,
-      simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // u6 D5: plain words at the simple level
+      simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // plain words at the simple level
       clusters: _instrumentClusters,
       playerAltKm: () => (player ? player.getAltitudeKm() : null),
       orbit: () => (player ? player.getOrbitalElements() : null),
@@ -3257,19 +2674,13 @@ async function init() {
         return list.map((g) => ({ name: g.name || g.id, lat: g.lat_deg, lon: g.lon_deg }));
       },
     });
-    // SAFETY OVERRIDE demo panel (owner 2026-09-07,
-    // .kilo/plans/1788703905516-safety-override-panel.md). Bottom-centre, a
-    // direct child of #hud-overlay; the SAME actuators object as RefitPane
-    // (D1); the gag never touches game state (D6). Ladder reorder rev 3: a
-    // member of `experimental` via addMember (still the last `+`); hidden by
-    // default on every floor. addMember BEFORE the first FloorMask setFloor
-    // (its _resolve caches the rung map once) — the mask's MASK_PANES.override
-    // row + every DEFAULT_ROOMS row say 'gone'.
-    // FURNACE gag v2 (plan 1788957399035 §1.20): the systems reboot rides in
-    // as the pane's `reboot` dep — RECOVER darkens every shown HUD element under
-    // the veil and returns them top → bottom with relay clacks (HudReboot.js).
-    // Constructed first so the dep is live at the pane's construction; the
-    // module owns no game state and no visibility bit (classes only).
+    // SAFETY OVERRIDE demo panel (owner 2026-09-07). Bottom-centre, a direct child of #hud-overlay; the SAME actuators
+    // object as RefitPane; the gag never touches game state. A member of `experimental` via addMember (still the last
+    // `+`); hidden by default on every floor. addMember BEFORE the first FloorMask setFloor (its _resolve caches the
+    // rung map once): the mask's MASK_PANES.override row + every DEFAULT_ROOMS row say 'gone'.
+    // FURNACE gag: the systems reboot rides in as the pane's `reboot` dep: RECOVER darkens every shown HUD element
+    // under the veil and returns them top → bottom with relay clacks (HudReboot.js). Constructed first so the dep is
+    // live at the pane's construction; the module owns no game state and no visibility bit (classes only).
     hudReboot = new HudReboot({ doc: document, audio: audioSystem });
     overridePane = new OverridePane({
       actuators: ladderActuators,
@@ -3309,21 +2720,18 @@ async function init() {
       const exp = pd && typeof pd.find === 'function' ? pd.find('experimental') : null;
       if (exp && typeof exp.addMember === 'function') exp.addMember(overridePane.rung());
       if (detailSlider && typeof detailSlider.setMilestones === 'function' && pd && Array.isArray(pd.rungs)) {
-        // Scenery · Ships · Flight · Ops · Instruments · All. Ships = the one last step (ships and city
-        // labels together). Flight is the suffix that starts at the target marks: marks, daughters, comms,
-        // score, the mother box (meters + MOTHER section), ships & city labels. The alerts & indicators are
-        // no step: they hide with the last HUD step. (The marks hide just before the daughters, so they
-        // join Flight.)
-        // The slider counts only the steps that can show right now, so the levels are read live
+        // Scenery · Ships · Flight · Ops · Instruments · All. Ships = the one last step (ships + city labels).
+        // Flight = the suffix starting at the target marks: marks, daughters, comms, score, the mother box, ships &
+        // city labels. Alerts & indicators are no step: they hide with the last HUD step.
+        // The slider counts only the steps that can show right now, so levels are read live
         // (DetailSlider.refresh calls this on every unthrottled read).
         const lvl = (id) => (typeof pd.levelOf === 'function' ? pd.levelOf(id) : null);
         const milestones = () => [0, lvl('craft'), lvl('targetmarks'), lvl('debris'), lvl('copilot'),
           typeof pd.availableCount === 'function' ? pd.availableCount() : pd.rungs.length].filter(n => Number.isFinite(n));
         detailSlider.setMilestones(milestones);
       }
-      // Plan Task 8: left-arm overlay riders, once, after the rungs exist.
-      // Order top→bottom: Cargo, Orbit, Autopilot, Pin. hidden() is the
-      // density bit (hud.isRungVisible); apply → setStack / setPinAnchor.
+      // Left-arm overlay riders, once, after the rungs exist. Order top→bottom: Cargo, Orbit, Autopilot, Pin.
+      // hidden() is the density bit (hud.isRungVisible).
       _leftRiders = [
         {
           id: 'cargo',
@@ -3343,7 +2751,7 @@ async function init() {
         },
         {
           id: 'copilot',
-          // u5 D2: the strip held on screen by the autopilot flying on floor 2 takes its room under the last visible pane.
+          // The strip held on screen by the autopilot flying on floor 2 takes its room under the last visible pane.
           hidden: () => !((fmaStrip && fmaStrip.isFlyingShown && fmaStrip.isFlyingShown())
             || (hud && typeof hud.isRungVisible === 'function' && hud.isRungVisible('copilot'))),
           naturalPx: () => fmaStrip.naturalPx(),
@@ -3351,7 +2759,7 @@ async function init() {
           minPx: () => null,
           apply: (top, height, mode) => {
             if (fmaStrip && fmaStrip.setStack) fmaStrip.setStack(top, height, mode);
-            // u5 D2: no room on a short screen = DAUGHTERS folds, once per flight (the keeper, stepped each frame below).
+            // No room on a short screen = DAUGHTERS folds, once per flight (the keeper, stepped each frame below).
             _daughtersFold.setMode(mode);
           },
         },
@@ -3365,55 +2773,37 @@ async function init() {
         },
       ];
     }
-    // Session O (plan D4) — the first-run gesture splash: the LAST child of
-    // #hud-left-column (the retired TOUCH MAP card's slot; on the workbench
-    // the column is otherwise empty, so the splash sits top-left alone; on
-    // the flying floor — where the intro now LANDS (owner 2026-09-07) — it
-    // follows the fleet rows and the rail's existing column dodge covers it).
-    // Not a rung, not a room pane: it shows for 3 s on the first F2 landing,
-    // once per player (the store's bit, sc_touch_map_v1 as-is).
-    // The floor getter reads null while the intro flyby is in flight / a ride
-    // is riding — so the splash lands only AFTER the intro settled on F2
-    // (its own descent never counts as the player's arrival).
-    // Built only for a first run under the harness policy (a ?shot boot
-    // without &intro=1 never sees it); a veteran's boot constructs nothing.
+    // First-run gesture splash: the LAST child of #hud-left-column (on the flying floor it follows the fleet rows;
+    // the rail's existing column dodge covers it). Not a rung, not a room pane: shows for 3 s on the first F2
+    // landing, once per player (the store's bit, sc_touch_map_v1).
+    // owner 2026-09-07: the intro lands on the flying floor (F2).
+    // The floor getter reads null while the intro flyby is in flight / a ride is riding, so the splash lands only
+    // AFTER the intro settled on F2 (its own descent never counts as the player's arrival).
+    // Built only for a first run under the harness policy (a ?shot boot without &intro=1 never sees it).
     if (_introFirstRun()) {
       gestureSplash = new GestureSplash({
         glass: _glassBoot,
         store: touchMapStore,
         floor: () => ((ladderController && !ladderController.isRiding() && !(ladderController.introInFlight && ladderController.introInFlight())) ? ladderController.currentFloor() : null),
-        // u2-one-voice D6: the arrival is about the wings; in mission 1 the zoom memo waits
-        // for the 3rd catch (the detail chip's gate). Mission 2+ first run: as before.
+        // The arrival is about the wings; in mission 1 the zoom memo waits for the 3rd catch (the detail chip's gate).
         quiet: () => scoringSystem.getMissionNumber() === 1 && !(gameState.debrisCleared >= 3),
       });
     }
   }
-  // (The Wave-3 ArchiveFloor bridge — the hosted codex as the old F1 costume —
-  // left with the ARCHIVE row in the Session H 7→5 renumber. The Tech Library
-  // is the F1 workbench pane + the full-screen reader, exactly as before.)
-  // Zoom Ladder per-floor audio beds (FloorContract audioBed). GETTERS, not
-  // refs: audioSystem.ctx/padBus are null until the menu-click gesture runs
-  // audioSystem.init() (unlock pattern) — the beds resolve them lazily on the
-  // first post-unlock floor change. padBus ⇒ beds ride padBus → sfxBus →
-  // master, so alarm ducking, setVolume, and the §12.12 suspend gate govern
-  // them for free. Inert while LADDER.ENABLED is false (never driven).
+  // Per-floor audio beds (FloorContract audioBed). GETTERS, not refs: audioSystem.ctx/padBus are null until the
+  // menu-click gesture runs audioSystem.init() (unlock pattern); the beds resolve them lazily on the first
+  // post-unlock floor change. Beds ride padBus → sfxBus → master (alarm ducking, setVolume, §12.12 suspend gate).
   ladderAudioBeds = new LadderAudioBeds({
     context: () => audioSystem.ctx,
     destination: () => audioSystem.padBus || audioSystem.master,
   });
-  // Zoom Ladder Wave-4 FloorMask: reads hud.paneDensity.rungs (the ONE pane
-  // visibility bit, T8). Session O (plan D8, owner 2026-09-07): the vitals
-  // line left — cryptic, every number duplicated elsewhere — so there is no
-  // rate getter any more; module + test stay dormant in the tree.
+  // FloorMask reads hud.paneDensity.rungs (the ONE pane visibility bit).
+  // owner 2026-09-07: no vitals line (cryptic, every number duplicated elsewhere), so no rate getter.
   ladderFloorMask = new FloorMask({
     hud,
   });
-  // Zoom Ladder interaction sfx (00-spec §4 + 08-workbench §2 "Sound").
-  // GETTERS, not refs (the unlock pattern above). tickBus, NOT padBus: these
-  // are input confirms — the TICK family is where gameplay input-confirm cues
-  // live (AudioSystem.playClick → tickBus; FAMILY_GAIN.tick 0.8) — riding
-  // tickBus → sfxBus → master so alarm ducking, setVolume, and the §12.12
-  // suspend gate govern them for free.
+  // Interaction sfx. GETTERS, not refs (unlock pattern above). tickBus, NOT padBus: input confirms belong to the
+  // TICK family (AudioSystem.playClick → tickBus; FAMILY_GAIN.tick 0.8); same sfxBus → master ducking/suspend rules.
   ladderSfx = new LadderSfx({
     context: () => audioSystem.ctx,
     destination: () => audioSystem.tickBus || audioSystem.master,
@@ -3423,23 +2813,15 @@ async function init() {
     sceneManager,
     gameState,
     rail: railIndicator,
-    // Session P (plan D5): the DETAIL slider — the `rail` mirror's successor
-    // for the left slot: shown on F2–F5 (setShown(floor !== 1) at every floor
-    // apply), hidden at disengage. Flag-off: never constructed → null →
-    // byte-identical. (The DISPLAY rail's `paneRail` dep retired with it.)
+    // The DETAIL slider: shown on F2–F5 (setShown(floor !== 1) at every floor apply), hidden at disengage.
     detailSlider,
-    // Session P (plan D2/D3): the edge-chrome core — the controller wakes it on
-    // every floor apply (+ boxes the arrival notch), on a ride, and puts it to
-    // SLEEP instead of hiding the WHERE rail under pure scenery (asleep is
-    // wakeable — the edge touch is the way back on glass). Flag-off: null.
+    // Edge-chrome core: woken on every floor apply (+ boxes the arrival notch) and on a ride; put to SLEEP instead of
+    // hiding the WHERE rail under pure scenery (asleep is wakeable: the edge touch is the way back on glass).
     edgeChrome,
-    // PURE SCENERY completion (owner 2026-09-07, plan D7): when the `-` walk
-    // has cleared every rung and bowed the rails out, ONE body attribute also
-    // hides the SPECS tab and #build-stamp (index.html
-    // `body[data-pure-scenery]`, CSS !important beats inline writes — the
-    // data-density-hidden discipline; Session O D8/D10: the vitals line and the
-    // glass STORE chip left the rule with the cockpit). Transient: `+`,
-    // any ride or a fresh engage clears it. Gated: ?ladder=0 passes null.
+    // owner 2026-09-07: PURE SCENERY completion: when the `-` walk has cleared every rung and bowed the rails out,
+    // ONE body attribute also hides the SPECS tab and #build-stamp (index.html `body[data-pure-scenery]`;
+    // CSS !important beats inline writes, the data-density-hidden discipline). Transient: `+`, any ride or a fresh
+    // engage clears it. Gated: ?ladder=0 passes null.
     pureScenery: (Constants.LADDER && Constants.LADDER.ENABLED) ? {
       hide: () => document.body.toggleAttribute('data-pure-scenery', true),
       show: () => document.body.toggleAttribute('data-pure-scenery', false),
@@ -3447,79 +2829,54 @@ async function init() {
     navcom: navcomFloor,
     proxNet: proxNetFloor,
     sdaFloor,
-    // Session I (plan D-F, the turntable): the PUBLIC key-state map — held
-    // arrows orbit the camera while a drawer is open on the workbench floor
-    // (the controller maps them to ladderDragNudge; the gameLoop shim blanks
-    // them around processInput so the ship never sees them). InputManager
-    // itself is untouched (do-not-edit; `keys` is public by the D-I grammar).
+    // The PUBLIC key-state map (turntable): held arrows orbit the camera while a drawer is open on the workbench
+    // floor (the controller maps them to ladderDragNudge; the gameLoop shim blanks them around processInput so the
+    // ship never sees them). InputManager itself is untouched (do-not-edit; `keys` is public).
     inputKeys: inputManager.keys,
-    // NO `hullcam` injection (owner, 2026-09-02): HullCamFloor/BlueprintOverlay
-    // are NOT the F3 costume — MotherCallouts is (the shipped in-world cards:
-    // 26 parts in 8 colour-coded systems, zoom bands = the 5 m lens split, live
-    // rows, Library links; it activates itself on the camera's F3 arrival
-    // signal, INSPECT_HULL_OUTLINE). The seven title pills the hullcam floor
-    // painted on the hull leave with this line. hullcamFloor stays constructed
-    // above as the seven-subsystem refit index (fittingCatalog imports its
-    // manifest) for the Wave-5 REFIT pane, which decides whether to re-inject;
-    // its per-frame tick below is guarded on isActive() and so stays inert.
-    // The controller's `hullcam` seam itself is unchanged (pinned).
-    // Session U (plan 1788954873769, D5): the ONE workbench pane is the
-    // controller's pane dep — it replaced the Wave 5 (2) `refit` (F1-keyed) and
-    // the Session B `library` (every floor) deps. Enabled on every floor and
-    // told the floor at every apply (setEnabled(true) + setFloor(floor): the
-    // REFIT block shows on floor 1 only, the tab is pinned awake there),
-    // disabled + closed at disengage; Space's 'lens-toggle' toggles it (D-b,
-    // owner 2026-09-03); Esc closes it through closeTopPane(); the horizontal
-    // swipe pages it two-position on every floor. Flag-off: workbenchPane is
-    // undefined (never constructed) → the dep is null → every controller path
-    // is byte-identical, and Space on F1 stays the shipped silent no-op.
+    // owner 2026-09-02: NO `hullcam` injection. HullCamFloor/BlueprintOverlay are NOT the F3 costume; MotherCallouts
+    // is (in-world cards: 26 parts in 8 colour-coded systems, zoom bands = the 5 m lens split, live rows, Library
+    // links; activates itself on the camera's F3 arrival signal, INSPECT_HULL_OUTLINE).
+    // hullcamFloor stays constructed above as the seven-subsystem refit index (fittingCatalog imports its manifest);
+    // its per-frame tick below is guarded on isActive() and stays inert. The controller's `hullcam` seam is pinned.
+    // The ONE workbench pane is the controller's pane dep. Enabled on every floor and told the floor at every
+    // apply (setEnabled(true) + setFloor(floor): the REFIT block shows on floor 1 only, the tab is pinned awake
+    // there); disabled + closed at disengage. owner 2026-09-03: Space's 'lens-toggle' toggles it; Esc closes it
+    // through closeTopPane(); the horizontal swipe pages it two-position on every floor. Flag-off: workbenchPane is
+    // undefined → the dep is null, and Space on F1 stays the shipped silent no-op.
     workbench: workbenchPane,
-    // Session J (plan D-C): the floor's SUBJECT changed (arrival, lens flip,
-    // plan) → an OPEN SPECS pane follows through its ONE openEntry path.
-    // Flag-off: _specsFollow stays null → the dep is a no-op.
+    // The floor's SUBJECT changed (arrival, lens flip, plan) → an OPEN SPECS pane follows through its ONE
+    // openEntry path. Flag-off: _specsFollow stays null → no-op.
     onSubjectChange: () => { if (_specsFollow) _specsFollow(); },
-    // Session J item 6: floor 2's Space verb 'approach-autopilot' = the A path
-    // (AutopilotSystem.toggle — the SAME call InputManager's KeyA makes).
+    // Floor 2's Space verb 'approach-autopilot' = the A path (AutopilotSystem.toggle, the SAME call InputManager's
+    // KeyA makes).
     autopilot: autopilotSystem,
-    // (The Wave-3 `archive` bridge and the Session E `depot` doorway host both
-    // retired with their floors — Wave 5 Session H, the 7→5 renumber. The SHOP
-    // still arrives through GameFlowManager's own transitions: mission
-    // boundaries and the B key; the codex through the LIBRARY pane + MAXIMIZE.)
     audioBeds: ladderAudioBeds,
-    // Wave-4 map rule (D8/§4): per-floor pane rooms + the vitals always-set.
     floorMask: ladderFloorMask,
-    // Wave 5 (Session G): the PLAYER-owned view store — FloorMask's rooms +
-    // the F3 pane open-state persist through it (D5). Flag-off: ladderViewStore
-    // is undefined (never constructed) → the dep is null → byte-identical.
+    // The PLAYER-owned view store: FloorMask's rooms + the F3 pane open-state persist through it.
+    // Flag-off: ladderViewStore is undefined → the dep is null.
     viewStore: ladderViewStore,
     sfx: ladderSfx,
-    // F7 hides the constellation figures under the SDA chart and restores the
-    // player's 6-key prior on leave/disengage.
+    // F7 hides the constellation figures under the SDA chart and restores the player's 6-key prior on
+    // leave/disengage.
     starfield,
-    // F5 (SDA) also suppresses the Earth city/landmark pills under the chart —
-    // transient (never persisted), so the 5-key preference owns the resting
-    // state on leave/disengage.
+    // F5 (SDA) also suppresses the Earth city/landmark pills under the chart: transient (never persisted), so the
+    // 5-key preference owns the resting state on leave/disengage.
     cityLabels,
-    // Reticle gating (F4/F5 ship-is-icon floors — NAVCOM/SDA): the controller
-    // hides the aiming reticles on floors >= 4 and restores them on <= 3 /
-    // disengage.
-    // Optional deps — inert while LADDER.ENABLED is false (never engaged).
+    // Reticle gating (F4/F5 ship-is-icon floors): the controller hides the aiming reticles on floors >= 4 and
+    // restores them on <= 3 / disengage. Optional deps, inert while LADDER.ENABLED is false.
     targetReticle,
     dockingReticle,
   });
-  // Zoom Ladder F6/F7 render-block content refs (T1 'ship-to-icon'): SceneManager
-  // hides the full debris meshes + the world ship mesh on floors whose debrisMode
-  // iconizes them (F6 'clusters'), and re-asserts the hide across applyTier().
-  // The starfield ref drives the Earth-anchored floors' camera-follow star shell
-  // (F6/F7 BLACK-SKY fix — SceneManager.setLadderFloorFidelity toggles
-  // Starfield.setFollowCamera; the per-frame starfield.update() already receives
-  // the camera). Storing refs mutates nothing and the hide/follow only fires from
-  // an engaged floor's request, so with LADDER.ENABLED false this is byte-identical.
+  // Render-block content refs (T1 'ship-to-icon'): SceneManager hides the full debris meshes + the world ship mesh
+  // on floors whose debrisMode iconizes them (F6 'clusters'), and re-asserts the hide across applyTier().
+  // The starfield ref drives the Earth-anchored floors' camera-follow star shell (SceneManager.setLadderFloorFidelity
+  // toggles Starfield.setFollowCamera; the per-frame starfield.update() already receives the camera).
+  // With LADDER.ENABLED false nothing fires.
   if (sceneManager.setLadderContentRefs) {
     sceneManager.setLadderContentRefs({ debrisField, ship: player, starfield });
   }
-  // S3 — the ONE dtReal/dtWorld choke point (T2). Ticked each frame from the
-  // game loop; pins the shipped base rate while the ladder is disengaged.
+  // The ONE dtReal/dtWorld choke point (T2). Ticked each frame from the game loop; pins the shipped base rate
+  // while the ladder is disengaged.
   timeAuthority = new TimeAuthority();
   wheelRouter = new WheelRouter({
     canvas,
@@ -3529,13 +2886,11 @@ async function init() {
   });
   wheelRouter.start();
 
-  // Owner 2026-10-20 (DECISIONS "Opening at the start"): every start leaves the
-  // ship closed (wings rolled up, radiators 0°, daughter struts 0°) until the
-  // player's FIRST ACTION (any key, tap, drag or scroll); then the wings roll
-  // out, the radiators open to 146° and the struts go to 34°, on Mac and iPad,
-  // with one comms line saying why. OpeningDance arms it whenever the start
-  // state is applied (hand-over + endState); the listeners judge the input at
-  // capture time and act after the input's own handlers (systems/StartOpening.js).
+  // Owner 2026-10-20 (DECISIONS "Opening at the start"): every start leaves the ship closed (wings rolled up,
+  // radiators 0°, daughter struts 0°) until the player's FIRST ACTION (any key, tap, drag or scroll); then the wings
+  // roll out, the radiators open to 146° and the struts go to 34°, on Mac and iPad, with one comms line saying why.
+  // OpeningDance arms it whenever the start state is applied (hand-over + endState); the listeners judge the input
+  // at capture time and act after the input's own handlers (systems/StartOpening.js).
   // Unconditional: the ladder gate does not touch it (a ?ladder=0 boot opens too).
   const _openingShip = shipOpeningActuators({ getPlayer: () => player, getArmManager: () => armManager });
   startOpening = new StartOpening({
@@ -3559,43 +2914,21 @@ async function init() {
     if (to === GameStates.MENU && startOpening) startOpening.disarm();
   });
 
-  // --- iPad port (Ipad.md §4.5): touch controls, real-detection gated.
-  // Desktop and headless contexts see zero listeners + zero DOM by
-  // construction, so every existing suite stays byte-identical. Pinch
-  // synthesizes wheel input through the SAME WheelRouter dispatch as the
-  // physical wheel; a one-finger drag on the ladder rail drives
-  // ladderController.jump({toFloor}) (its own rail-notch API). Session J (plan
-  // D-I, the two-thumb grammar): a one-finger canvas drag turns the SHIP by
-  // writing the PUBLIC inputManager.keys arrows (or orbits the camera while a
-  // drawer is open — the turntable), a tap resolves through _touchTap below,
-  // a long-press on the selected target opens the radial (verbs press keys
-  // through KeyDispatch — the SAME key paths), an edge-band swipe opens the
-  // drawers. The density slider + LIBRARY chip retired (the DISPLAY rail and the
-  // SPECS-everywhere tab replaced them); the STORE chip stays until Session K.
-  // An optional telemetry beacon logs zoom-feel gestures + the floor crossings
-  // they cause to the cable server (touch-only).
+  // --- iPad port (Ipad.md §4.5): touch controls, real-detection gated. Desktop and headless contexts see zero
+  // listeners + zero DOM by construction. Pinch synthesizes wheel input through the SAME WheelRouter dispatch as the
+  // physical wheel. Two-thumb grammar: a one-finger canvas drag turns the SHIP by writing the PUBLIC
+  // inputManager.keys arrows (or orbits the camera while a drawer is open: the turntable); a long-press on the
+  // selected target opens the radial (verbs press keys through KeyDispatch, the SAME key paths).
   //
-  // Session J (D-I, item 2) — THE TAP: the ONE selection universe. On the
-  // flying floors (2–3) the nearest member of the TARGET PANE's list — the
-  // SAME TPI-sorted list Tab/T cycle (TargetAcquisition.getEligibleTargets:
-  // debrisField.getEnhancedTargetList + the tracked-unless-IR filter
-  // InputManager._cycleTarget applies — ONE helper, review fix) — projected
-  // through the live camera (navcomProject, CSS px), within
-  // TapPick.TAP_RADIUS_PX 44 → the ONE selection event HUD_TARGET_CLICK {id}
-  // (GameFlowManager / HUD / TargetReticle / NavSphere already listen; the
-  // Session J TARGET_SELECTED follow rides downstream); on floor 3 an
-  // insertion candidate's screen point wins first (ProxNetFloor.
-  // lastInsertionPoints → selectInsertion(zone) — the overlay canvas is
-  // pointer-events:none, so the hit-test lives here). Tap empty → SCAN_QUICK
-  // (the S key's event) unless `opts.scanOnMiss === false` (the desktop click
-  // below — tap-empty = scan is glass grammar, desktop has S). Floor 1 is
-  // MotherCallouts' pointer path (a hull part — untouched), floor 4's cluster
-  // icons take their own taps, floor 5 has no tap verb; the ladder disengaged
-  // → nothing (the flag-off glass boot keeps the shipped tap-nothing).
-  // Allocation at tap rate only. Session J FINDINGS (a) CLOSED (owner
-  // 2026-09-06): the resolver is hoisted out of the touch gate so the desktop
-  // canvas click (inside the LADDER gate, below) resolves through the SAME
-  // function — one selection universe, two input surfaces.
+  // THE TAP: the ONE selection universe. On the flying floors (2–3) the nearest member of the TARGET PANE's list
+  // (the SAME TPI-sorted list Tab/T cycle: TargetAcquisition.getEligibleTargets) projected through the live camera
+  // (navcomProject, CSS px), within TapPick.TAP_RADIUS_PX 44 → the ONE selection event HUD_TARGET_CLICK {id}.
+  // On floor 3 an insertion candidate's screen point wins first (ProxNetFloor.lastInsertionPoints →
+  // selectInsertion(zone); the overlay canvas is pointer-events:none, so the hit-test lives here). Tap empty →
+  // SCAN_QUICK (the S key's event) unless `opts.scanOnMiss === false` (the desktop click below: tap-empty = scan is
+  // glass grammar, desktop has S). Floor 1 is MotherCallouts' pointer path, floor 4's cluster icons take their own
+  // taps, floor 5 has no tap verb; the ladder disengaged → nothing. Allocation at tap rate only.
+  // The resolver is hoisted out of the touch gate so the desktop canvas click (below) resolves through it too.
   const _touchTap = ({ x, y }, opts) => {
     if (!ladderController || !ladderController.isActive()) return null;
     const floor = ladderController.currentFloor();
@@ -3604,10 +2937,8 @@ async function init() {
       if (hit) { proxNetFloor.selectInsertion(hit.point.zone); return 'insertion'; }
     }
     if (floor !== 2 && floor !== 3) return null;
-    // The ONE eligibility rule (review fix): TargetAcquisition.getEligibleTargets
-    // owns "the TPI list, tracked unless the IR scanner sees dark" — the same
-    // rule InputManager._cycleTarget applies — so the tap can never split the
-    // selection universe from the Tab/T cycle.
+    // The ONE eligibility rule is TargetAcquisition.getEligibleTargets (the same rule InputManager._cycleTarget
+    // applies), so the tap can never split the selection universe from the Tab/T cycle.
     const list = targetAcquisition.getEligibleTargets();
     const pts = [];
     for (const t of list) {
@@ -3620,30 +2951,25 @@ async function init() {
     const hit = tapNearestWithin(pts, x, y);
     if (hit) { eventBus.emit(Events.HUD_TARGET_CLICK, { id: hit.point.id }); return 'target'; }
     if (opts && opts.scanOnMiss === false) return null;
-    // u11 D5: this tap is the player's first action - it opens the wings (StartOpening); the next empty tap scans.
+    // This tap is the player's first action: it opens the wings (StartOpening); the next empty tap scans.
     if (startOpening && startOpening.isPointerPending()) return 'opening';
     eventBus.emit(Events.SCAN_QUICK);
     return 'scan';
   };
   if (TouchControls.detect()) {
-    // Session J item 5 (plan D-I): on glass every verb hint SPEAKS ITS GESTURE
-    // — the ONE key→gesture table (GestureHints) is consulted at render time
-    // by the ticker chip/body and the stall card; the data stays key-based.
-    // Flipped once, here, under the same broad touch gate as the affordances;
-    // desktop never flips it → desktop rendering byte-identical.
+    // On glass every verb hint SPEAKS ITS GESTURE (the ONE key→gesture table, GestureHints, read at render time;
+    // the data stays key-based). Flipped once, here, under the broad touch gate.
     GestureHints.setGlass(true);
-    // u2-one-voice D8: on touch the step chip IS the button - a tap presses the SAME key
-    // (KeyDispatch -> window), so the wings / scan / net / autopilot paths are the keyboard's.
+    // On touch the step chip IS the button: a tap presses the SAME key (KeyDispatch -> window).
     if (hud && hud.hintTicker && hud.hintTicker.setStepTap) {
-      // Owner 2026-10-20: a tap on a wings chip is the first action - its pointerdown is already
-      // waiting in StartOpening, which sets the wings out after this click. The chip's own comma press
-      // is a toggle, so hold it back while that tap waits (it could only roll the wings back up).
-      // (No chip is up at a start since 2026-10-28; this only guards a tap that races the first action.)
+      // Owner 2026-10-20: a tap on a wings chip is the first action; its pointerdown already waits in StartOpening,
+      // which sets the wings out after this click. The chip's own comma press is a toggle, so hold it back while that
+      // tap waits (it could only roll the wings back up).
       hud.hintTicker.setStepTap((code) => {
         if (startOpening && startOpening.ownsStepTap(code)) return;
         dispatchKeyPress(code);
       });
-      // u11 D1/D2: whenever the game asks for the net or a daughter, that button is on screen (floors 2-3).
+      // Whenever the game asks for the net or a daughter, that button is on screen (floors 2-3).
       touchActionChip = new TouchActionChip({
         eventBus,
         ticker: hud.hintTicker,
@@ -3651,19 +2977,19 @@ async function init() {
           ? ladderController.currentFloor() : null),
         getMotherNets: () => captureNetSystem.getMotherNetCount(),
         hasDaughter: _daughterReadyWithNets,
-        // R1: "a daughter is holding" is read from the arm's state (the same lookup N uses), never from enter/exit events.
+        // "A daughter is holding" is read from the arm's state (the same lookup N uses), never from enter/exit events.
         getHolding: () => {
-          const a = inputManager && inputManager.nDaughter ? inputManager.nDaughter() : null;   // pilot-aware (hints-scan review)
-          return a && !(a.isInspecting && a.isInspecting()) ? (a.selectedTool || 'NET') : null;   // big-rules S1: an inspecting daughter has no net to launch: no chip
+          const a = inputManager && inputManager.nDaughter ? inputManager.nDaughter() : null;   // pilot-aware
+          return a && !(a.isInspecting && a.isInspecting()) ? (a.selectedTool || 'NET') : null;   // an inspecting daughter has no net to launch: no chip
         },
         getFarState: _touchFarState,
-        getReelable: _daughterReelable,   // R9
-        // slice 5 (5c, F1): the CHOOSE button (U) stands whenever any big piece is aboard (picked or not: a pick can be changed)
+        getReelable: _daughterReelable,
+        // The CHOOSE button (U) stands whenever any big piece is aboard (picked or not: a pick can be changed)
         // and the fate list is closed, as a state chip; the catch line only adds it first, for 30 s.
         getChoosePending: () => !!(fateList && !fateList.isOpen() && pendingAboard().length > 0),
-        // let-go-bag: a daughter holds a bag with no salvage on her rack (K lets it go)
+        // A daughter holds a bag with no salvage on her rack (K lets it go)
         getRackBag: () => { if (captureNetSystem.getDockedCatch()) return false; const o = armManager && armManager.rackBagOffer ? armManager.rackBagOffer() : null; return !!(o && o.bag && !o.salvage); },
-        // u15a A-T4: the manual-capture lesson's LAUNCH NET waits for a piloted daughter in flight (N then nets by hand).
+        // The manual-capture lesson's LAUNCH NET waits for a piloted daughter in flight (N then nets by hand).
         getPilotState: () => {
           if (!inputManager || !inputManager.armPilotMode || !cameraSystem || !cameraSystem.getPilotedArm) return null;
           const a = cameraSystem.getPilotedArm();
@@ -3671,7 +2997,7 @@ async function init() {
         },
       });
     }
-    // u15a A-T1 / A-T3: FLY THERE (floor 4) and DE-SPIN (hold, floors 2-3). Both press keys through KeyDispatch, so the
+    // FLY THERE (floor 4) and DE-SPIN (hold, floors 2-3). Both press keys through KeyDispatch, so the
     // ladder's Space verb and the held-L laser read are the keyboard's own paths. Parent is <body>: #hud-overlay is a
     // z-10 stacking context under the world labels.
     touchVerbButton = new TouchVerbButton({
@@ -3683,7 +3009,7 @@ async function init() {
         ? ladderController.currentFloor() : null),
       isRiding: () => !!(ladderController && ladderController.isRiding && ladderController.isRiding()),
       getFocusedCluster: () => (navcomFloor && navcomFloor.getFocusedCluster ? navcomFloor.getFocusedCluster() : null),
-      // Nets step 3 slice 2b (lane 2b-2): while the "where next" list is open the chip is the pick (FLY THERE / STAY; its tap is Space).
+      // While the "where next" list is open the chip is the pick (FLY THERE / STAY; its tap is Space).
       getChoiceLabel: () => (navcomFloor && navcomFloor.choiceLabel ? navcomFloor.choiceLabel() : null),
       // Space / KeyL are swallowed or ignored in exactly these cases (InputManager: the codex, help and old-map intercepts,
       // the launch / net ceremony Space-skips, processInput's overlayOpen); a paused or non-gameplay game acts on neither.
@@ -3707,11 +3033,11 @@ async function init() {
         const tp = t && t._scenePosition;
         return mp && tp ? mp.distanceTo(tp) / 0.00001 : null;   // DespinLaser: scene units per metre
       },
-      getActiveTarget: () => targetSelector && targetSelector.getActiveTarget(),   // u16b WIDE SCAN deps
+      getActiveTarget: () => targetSelector && targetSelector.getActiveTarget(),   // WIDE SCAN deps
       isPiloting: () => !!(inputManager && inputManager.armPilotMode),
       isWideScanLearned: () => !!(skillsSystem && skillsSystem.isDiscovered('scan_wide')),
       getWideScanState: () => sensorSystem && sensorSystem.getScanStatus(),
-      // s5 gaps G1: CHOOSE (U) in the glass button row, floors 2-4 (floors 3-4 have no hint strip for the chip).
+      // CHOOSE (U) in the glass button row, floors 2-4 (floors 3-4 have no hint strip for the chip).
       getChoosePending: () => !!(fateList && !fateList.isOpen() && pendingAboard().length > 0),
       isChooseChipUp: () => !!(touchActionChip && touchActionChip.isChooseUp && touchActionChip.isChooseUp()),
     });
@@ -3739,15 +3065,10 @@ async function init() {
       wheelRouter,
       ladderController,
       gameState,
-      // The STORE tap chip retired with the ladder on (Session O, plan D10,
-      // owner 2026-09-07 — reverses the Session K KEPT call): on glass the
-      // route is pinch to F1, tap REFIT — no one-tap shop in the thumb rest
-      // while the ladder is on. `?ladder=0` (flag off) keeps the shipped
-      // full-screen shop exactly as before. (The chip itself is built by
-      // TouchControls only when this dep is a function; null → no dock,
-      // no element — pinned in test-TouchControls.) The LIBRARY chip left with
-      // Session J: the SPECS tab (F1, Session O D6) and the right-edge swipe
-      // open the pane.
+      // owner 2026-09-07: no STORE tap chip with the ladder on: on glass the route is pinch to F1, tap REFIT, with no
+      // one-tap shop in the thumb rest. `?ladder=0` (flag off) keeps the shipped full-screen shop. (The chip is
+      // built by TouchControls only when this dep is a function; null → no dock, no element — pinned in
+      // test-TouchControls.) The SPECS tab (F1) and the right-edge swipe open the pane.
       openShop: (Constants.LADDER && Constants.LADDER.ENABLED) ? null : () => {
         if (gameState.getState() === GameStates.ORBITAL_VIEW) {
           gameFlowManager.transitionToState(GameStates.SHOP);
@@ -3755,48 +3076,37 @@ async function init() {
         }
       },
       telemetry: touchTelemetry,
-      // Session J (D-I) — the two-thumb grammar's sinks:
+      // The two-thumb grammar's sinks:
       inputKeys: inputManager.keys,      // the PUBLIC key map (InputManager untouched) — the turn pad = ship turn
       cameraSystem,                       // ladderDragNudge(dx, dy, 'touch') — one-finger drag = turn the view (floors 1-4)
       onTap: _touchTap,
       onHold: _touchHold,
       pressKey: (code) => dispatchKeyPress(code),   // the radial's verbs press the SAME keys (KeyDispatch → window)
       pairOffered: () => !!(autopilotSystem && autopilotSystem.getPairOffer && autopilotSystem.getPairOffer()),   // pair-shot: the PAIR button shows only then
-      // The edge-band swipe: the workbench pane's own open()/close() (its
-      // onOpenChange edge carries the held world + the camera inset). The
-      // drawer is left on every floor (§13 r5); gestures follow it (§13 r6,
-      // 2026-09-26) — the LEFT edge band pages it ('library' is
-      // TouchControls' name for the drawer); the right band's swipes still
-      // classify but dispatch nothing. A
-      // disabled shell (disengaged / flag-off) ignores open().
+      // The edge-band swipe: the workbench pane's own open()/close() (its onOpenChange edge carries the held world +
+      // the camera inset). The drawer is left on every floor (§13 r5); gestures follow it (§13 r6, 2026-09-26): the
+      // LEFT edge band pages it ('library' is TouchControls' name for the drawer); the right band's swipes still
+      // classify but dispatch nothing. A disabled shell (disengaged / flag-off) ignores open().
       openPane: (which, open) => {
         if (which !== 'library' || !workbenchPane) return;
         if (open) workbenchPane.open(); else workbenchPane.close();
       },
-      // Session P (plan D3): where a touch LANDED (canvas touchstart, the rail
-      // grip) → the hub's edge-wake bands. Coordinates only; TouchControls
-      // never decides what wakes. Gated like openShop: ?ladder=0 passes null.
+      // Where a touch LANDED (canvas touchstart, the rail grip) → the hub's edge-wake bands. Coordinates only.
+      // Gated like openShop: ?ladder=0 passes null.
       onEdgeTouch: (Constants.LADDER && Constants.LADDER.ENABLED) ? (x, y) => { _edgeBandWake(x, y); } : null,
     });
     touchControls.start();
     _bootMark('TouchControls started');
   }
 
-  // Session J FINDINGS (a) CLOSED (owner call 2026-09-06) — DESKTOP
-  // CLICK-TO-SELECT. D-I assumed the tap "falls out free" of a shared pointer
-  // path; it lived in the touch layer. Now a canvas `click` resolves through
-  // the SAME _touchTap above (one selection universe, two input surfaces).
-  // Rules: (1) inside the LADDER gate — a ?ladder=0 boot binds nothing (the
-  // shipped desktop has no canvas click verb; byte-identical, pinned); (2)
-  // pointer-typed — a `touch` pointer belongs to TouchControls (its tap already
-  // resolved; its preventDefault suppresses the trailing click anyway), so
-  // only mouse / pen presses count; (3) MotherCallouts' slop law (TapPick's
-  // TAP_SLOP_PX/MS — the ONE copy, review fix) — a drag-release (the floors
-  // 3/4 camera drag, the floor-1
-  // turntable) is never a click; (4) select-only (`scanOnMiss:false`) — a
-  // click on empty sky does nothing, the desktop has S. HUD surfaces sit on
-  // #hud-overlay children with their own pointer-events, so only canvas
-  // clicks arrive here. Allocation at click rate only.
+  // DESKTOP CLICK-TO-SELECT (owner call 2026-09-06): a canvas `click` resolves through the SAME _touchTap above (one selection universe,
+  // two input surfaces). Rules: (1) inside the LADDER gate: a ?ladder=0 boot binds nothing (the shipped desktop has
+  // no canvas click verb; pinned); (2) pointer-typed: a `touch` pointer belongs to TouchControls (its tap already
+  // resolved; its preventDefault suppresses the trailing click anyway), so only mouse / pen presses count;
+  // (3) MotherCallouts' slop law (TapPick's TAP_SLOP_PX/MS, the ONE copy): a drag-release (the floors 3/4 camera
+  // drag, the floor-1 turntable) is never a click; (4) select-only (`scanOnMiss:false`): a click on empty sky does
+  // nothing, the desktop has S. HUD surfaces sit on #hud-overlay children with their own pointer-events, so only
+  // canvas clicks arrive here. Allocation at click rate only.
   if (Constants.LADDER && Constants.LADDER.ENABLED) {
     let _clickDown = null;
     canvas.addEventListener('pointerdown', (e) => {
@@ -3810,16 +3120,13 @@ async function init() {
       if (Math.abs(e.clientX - d.x) > TAP_SLOP_PX || Math.abs(e.clientY - d.y) > TAP_SLOP_PX || (performance.now() - d.t) > TAP_SLOP_MS) return;
       _touchTap({ x: e.clientX, y: e.clientY }, { scanOnMiss: false });
     });
-    // Session P (plan D3): the DESKTOP edge wake — ONE passive `document`
-    // handler for `pointermove` (≤ 10 Hz by timestamp: a hover sweep costs one
-    // band test per 100 ms) and `pointerdown` (never throttled: a click on
-    // faded chrome lands on the canvas and MUST wake it). Coordinates only, no
-    // preventDefault (02-traps T3: InputManager's window capture listeners and
-    // the frame scheduler's `_noteSchedInput` are untouched; no document-level
-    // pointermove existed before this one). Chosen over transparent edge
-    // strips, which would steal canvas drags. Glass fires the same band test
-    // through TouchControls' `onEdgeTouch` (its canvas handler preventDefaults
-    // the touch, and a `pointerdown` still arrives here first — idempotent).
+    // The DESKTOP edge wake: ONE passive `document` handler for `pointermove` (≤ 10 Hz by timestamp: a hover sweep
+    // costs one band test per 100 ms) and `pointerdown` (never throttled: a click on faded chrome lands on the canvas
+    // and MUST wake it). Coordinates only, no preventDefault (InputManager's window capture listeners and the frame
+    // scheduler's `_noteSchedInput` are untouched; no document-level pointermove existed before this one). Chosen over
+    // transparent edge strips, which would steal canvas drags. Glass fires the same band test through TouchControls'
+    // `onEdgeTouch` (its canvas handler preventDefaults the touch, and a `pointerdown` still arrives here first:
+    // idempotent).
     const _onEdgePointer = (e) => {
       const t = performance.now();
       if (e.type === 'pointermove') {
@@ -3833,14 +3140,14 @@ async function init() {
   }
 
   // --- Item 3: anti-stuck idle watchdog (data-driven, veteran-gated) ---
-  // hints-scan D1/D3 (owner 2026-10-26): one answer to "does N work her tool now" (InputManager.nWorksDaughter), read by the
+  // owner 2026-10-26: one answer to "does N work her tool now" (InputManager.nWorksDaughter), read by the
   // idle tool chips (dep below) and by the lines said for a daughter (Comms in-position line, ArmUnit retry lines: registry).
   const _armOf = (a) => ((a && typeof a === 'object') ? a : (armManager.arms || []).find((x) => x && x.id === a) || null);
   const _nWorks = (a, holdPiece = null) => {
     const arm = _armOf(a);
     return !!(arm && inputManager && inputManager.nWorksDaughter(arm, holdPiece));
   };
-  // n-leftovers L1: while he flies a daughter N works HER tool; a mother-net line says "Esc, then N" (or waits when Esc would recall her).
+  // While he flies a daughter N works HER tool; a mother-net line says "Esc, then N" (or waits when Esc would recall her).
   const _pilotedArm = () => ((inputManager && inputManager.armPilotMode && cameraSystem && cameraSystem.getPilotedArm) ? cameraSystem.getPilotedArm() : null);
   setNResolver({
     works: _nWorks,
@@ -3862,7 +3169,7 @@ async function init() {
     isPiloted: (arm) => !!(inputManager && inputManager.armPilotMode && cameraSystem && cameraSystem.getPilotedArm && cameraSystem.getPilotedArm() === arm),
   });
 
-  // --- hints-scan D5 (owner 2026-10-26): "pressing S scan should probably make Targets pane appear, if it was hidden." ---
+  // owner 2026-10-26: "pressing S scan should probably make Targets pane appear, if it was hidden."
   // Every scan press (S, Shift+S, the touch SCAN / WIDE SCAN buttons, a tap on empty canvas) shows the Targets pane, even when
   // the scanner refuses (cooldown): he asked to see the targets. Reveal only (TargetPanel.show never hides). Only on the flying
   // floor (2): floors 1, 3, 4, 5 keep Targets away by design (FloorMask rooms), so nothing changes there.
@@ -3872,7 +3179,7 @@ async function init() {
     getFloor: () => ((ladderController && ladderController.isActive && ladderController.isActive()) ? ladderController.currentFloor() : null),
   });
 
-  // --- UX-11 #11: "you're lost" recovery advisor (empty-scan bearing + out-of-range watchdog) ---
+  // --- "You're lost" recovery advisor (empty-scan bearing + out-of-range watchdog) ---
   navRecoveryAdvisor.init({
     player,
     debrisField,
@@ -3880,11 +3187,10 @@ async function init() {
     skillsSystem,
   });
 
-  // --- Scan auto-select: unify every programmatic acquire behind one helper ---
-  // After a scan settles with nothing selected, auto-select the best pane
-  // contact and coach the next verb (N/D in range, A out of range). Also backs
-  // Shift+N / Shift+A and autopilot's no-target fallback. Purely event-driven —
-  // no per-frame update. Wired after HUD/reticle/navSphere exist.
+  // --- Scan auto-select: one helper for every programmatic acquire ---
+  // After a scan settles with nothing selected, auto-select the best pane contact and coach the next verb (N/D in
+  // range, A out of range). Also backs Shift+N / Shift+A and autopilot's no-target fallback. Purely event-driven.
+  // Wired after HUD/reticle/navSphere exist.
   targetAcquisition.init({
     player,
     debrisField,
@@ -3898,9 +3204,8 @@ async function init() {
     guidanceDirector,
   });
 
-  // --- UX-11 #12: dual-objective milestone comms (25/50/75/90% of either win track) ---
-  // Live getters keep the SHOP_DEPLOY recap correct across save restore
-  // (event caches alone go stale — review fix).
+  // --- Dual-objective milestone comms (25/50/75/90% of either win track) ---
+  // Live getters keep the SHOP_DEPLOY recap correct across save restore (event caches alone go stale).
   missionMilestones.init({
     getCleared: () => gameState.debrisCleared,
     getContractKg: () => (shopScreen && typeof shopScreen.getContractMass === 'function'
@@ -3915,23 +3220,19 @@ async function init() {
   // --- Event listeners for game flow (delegated to GameFlowManager) ---
   gameFlowManager.setupEventHandlers();
 
-  // Sim mode: NO slo-mo on capture. Previously triggered CATCH_SLOWMO on
-  // ARM_CAPTURED and LASSO_CAPTURED ("catch juice"). Arcade behaviour; removed
-  // per user feedback — real capture is unremarkable momentum transfer.
-  // Detach slo-mo below is retained (losing an arm is a significant event).
+  // Sim mode: NO slo-mo on capture (real capture is unremarkable momentum transfer). The detach slo-mo below stays
+  // (losing an arm is a significant event).
 
-  // --- Phase 6: Tether detach slo-mo + dramatic moment ---
+  // --- Tether detach slo-mo + dramatic moment ---
   eventBus.on(Events.ARM_DETACHED, () => {
     slowMoTimer = Constants.DETACH_SLOWMO_DURATION;
     slowMoFactor = Constants.DETACH_SLOWMO_FACTOR;
   });
 
-  // --- Delegation 2 (2026-05-31): Welcome field on first mission ever ---
-  // On the player's very first MISSION_START we seed the curated 7–8 fragment
-  // welcome cluster in the player's own orbit so the onboarding `scan` and
-  // `target` beats have guaranteed contacts.  Subsequent missions / continues
-  // skip the spawn (the legacy _spawnWelcomeField mission-1 gate also fires
-  // — the public method is idempotent against _welcomeFieldSpawned).
+  // --- Welcome field on first mission ever ---
+  // On the player's very first MISSION_START we seed the curated 7–8 fragment welcome cluster in the player's own
+  // orbit so the onboarding `scan` and `target` beats have guaranteed contacts. Later missions / continues skip it
+  // (the public method is idempotent against _welcomeFieldSpawned).
   eventBus.on(Events.MISSION_START, (data) => {
     try {
       const firstEver = !(persistenceManager?.peek?.()?.stats?.missionsCompleted > 0);
@@ -3948,7 +3249,7 @@ async function init() {
     }
   });
 
-  // --- Delegation 2 (2026-05-31): brighten struts when the `struts` beat enters ---
+  // --- Brighten struts when the `struts` beat enters ---
   eventBus.on('onboarding:beatEnter', (data) => {
     if (!data || data.beatId !== 'struts') return;
     if (player && typeof player.highlightStrutsForBeat === 'function') {
@@ -3957,15 +3258,11 @@ async function init() {
   });
 
   // --- Pause overlay: reset lastTime to avoid time-jump on unpause ---
-  // Also wake the rAF loop AND restore HUD visibility — gameLoop is hard-
-  // throttled to ~5 Hz while paused (see `_scheduleNextFrame()` design note),
-  // and the HUD is hidden via `_setHudHidden()` to silence its CSS animations
-  // and any composite work. PAUSE_RESUME and PAUSE_MENU are the unpause
-  // channels; both must restore the HUD + wake the loop.
-  // §12.12 Unified unpause path. _syncAudioCtxState() handles ctx.resume
-  // (only if policy says we need audio — gameplay yes, transitioning to
-  // menu no). _flushScheduledFrame cancels the 5 Hz pause throttle so the
-  // next frame runs immediately rather than after the 200 ms setTimeout.
+  // Also wake the rAF loop AND restore HUD visibility: gameLoop is hard-throttled to ~5 Hz while paused (see
+  // `_scheduleNextFrame()` design note) and the HUD is hidden via `_setHudHidden()`. PAUSE_RESUME and PAUSE_MENU are
+  // the unpause channels; both must restore the HUD + wake the loop.
+  // §12.12 Unified unpause path. _syncAudioCtxState() handles ctx.resume (only if policy says we need audio).
+  // _flushScheduledFrame cancels the 5 Hz pause throttle so the next frame runs at once, not after the 200 ms timeout.
   eventBus.on(Events.PAUSE_RESUME, () => {
     lastTime = performance.now();
     _setHudHidden(false);
@@ -3979,18 +3276,12 @@ async function init() {
     _flushScheduledFrame();
   });
 
-  // §12.12 State-aware resource sync. Fires on every game-state transition.
-  // Three responsibilities:
-  //   (a) Stop looping audio when LEAVING a gameplay state, so a thruster
-  //       hum or ΔV alarm doesn't drone over the briefing / shop / game-over
-  //       screen. (Previously done per-frame in the !isActive branch — moved
-  //       here so it fires once per transition instead of 120 ×/sec.)
-  //   (b) _syncAudioCtxState — suspend ctx when entering menu / briefing / shop
-  //       (no audio needed), resume when entering gameplay.
-  //   (c) _flushScheduledFrame — the new state's frame interval is different
-  //       (e.g. menu 30 fps → gameplay display-refresh); reschedule now rather
-  //       than letting the old throttle's setTimeout(33 ms) delay the first
-  //       gameplay frame.
+  // §12.12 State-aware resource sync. Fires on every game-state transition:
+  //   (a) Stop looping audio when LEAVING a gameplay state, so a thruster hum or ΔV alarm doesn't drone over the
+  //       briefing / shop / game-over screen (once per transition, not 120 ×/sec per frame).
+  //   (b) _syncAudioCtxState: suspend ctx when entering menu / briefing / shop, resume when entering gameplay.
+  //   (c) _flushScheduledFrame: the new state's frame interval differs (e.g. menu 30 fps → gameplay display-refresh);
+  //       reschedule now rather than letting the old throttle's setTimeout(33 ms) delay the first gameplay frame.
   eventBus.on(Events.STATE_CHANGE, ({ from, to }) => {
     const gameplayStates = [
       GameStates.ORBITAL_VIEW,
@@ -4010,20 +3301,16 @@ async function init() {
     _flushScheduledFrame();
   });
 
-  // --- Backdrop reveal (Option A): hide the gameplay ship during MENU ---
-  // The menu canvas is now transparent, so the live orbital scene (Earth,
-  // constellations, background debris) shows through behind the MenuScene3D
-  // hero plate. The gameplay PlayerSatellite would otherwise appear as a
-  // "second Mother" behind the hero. Hide the player root (+ docked arm
-  // visuals) on entering MENU and restore on ANY exit (start, continue, and
-  // the pause→menu path). The slow follow-camera still frames Earth/debris
-  // even with the ship hidden (it tracks the hidden ship's position).
+  // --- Backdrop reveal: hide the gameplay ship during MENU ---
+  // The menu canvas is transparent, so the live orbital scene shows through behind the MenuScene3D hero plate; the
+  // gameplay PlayerSatellite would otherwise appear as a "second Mother" behind the hero. Hide the player root (+
+  // docked arm visuals) on entering MENU and restore on ANY exit (start, continue, and the pause→menu path). The slow
+  // follow-camera still frames Earth/debris (it tracks the hidden ship's position).
   // Owned here (not in MenuScreen) so the screen doesn't touch gameplay entities.
   const _setPlayerShipHidden = (hide) => {
     if (player) player.visible = !hide;
-    // Docked daughters are separate scene objects tracking the struts; at MENU
-    // they're always deployed on their struts, so hide their groups too
-    // so nothing peeks out behind the hero.
+    // Docked daughters are separate scene objects tracking the struts; at MENU they're always deployed on their
+    // struts, so hide their groups too so nothing peeks out behind the hero.
     if (armManager && Array.isArray(armManager.arms)) {
       for (const arm of armManager.arms) {
         if (arm && arm.group) arm.group.visible = !hide;
@@ -4033,46 +3320,37 @@ async function init() {
   eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
     const inMenu = to === GameStates.MENU;
     _setPlayerShipHidden(inMenu);
-    // Boost the background debris cloud so it reads as a visible dust field
-    // behind the transparent menu, and restore it on any exit. Restoring
-    // re-applies whatever hidden state was active (e.g. the Mission-1 hide).
+    // Boost the background debris cloud so it reads as a visible dust field behind the transparent menu, and restore
+    // it on any exit. Restoring re-applies whatever hidden state was active (e.g. the Mission-1 hide).
     if (debrisField && typeof debrisField.setMenuBackdropBoost === 'function') {
       debrisField.setMenuBackdropBoost(inMenu);
     }
-    // Re-arm the perf warmup/settle guard when entering a heavier state (menu →
-    // briefing → sim). Building the mission scene spikes GPU time / drops FPS
-    // for a beat; the settle window suppresses both FPS sampling and runtimeAdapt
-    // until it elapses (see gameLoop), so that transient never enters the history.
-    // Also clear any stale pre-transition gameplay samples so the post-settle
-    // window starts empty.
+    // Re-arm the perf warmup/settle guard when entering a heavier state (menu → briefing → sim). Building the
+    // mission scene spikes GPU time / drops FPS for a beat; the settle window suppresses both FPS sampling and
+    // runtimeAdapt until it elapses (see gameLoop), so that transient never enters the history.
+    // Also clear any stale pre-transition gameplay samples so the post-settle window starts empty.
     if (!inMenu) {
       _perfSettleUntil = performance.now() + Constants.PERF.ADAPT_WARMUP_MS;
       _fpsHistory.length = 0;
     }
   });
 
-  // T4: reveal the real player ship EARLY — at ~65% of the menu→sim pull-back,
-  // while still in MENU — so it is rendered + lit behind the receding hero and
-  // the swap at the cut has no visibility pop / first-render hitch. Idempotent
-  // with the GAME_STATE_CHANGE unhide that follows at MENU_START.
+  // Reveal the real player ship EARLY (~65% of the menu→sim pull-back, still in MENU) so it is rendered + lit
+  // behind the receding hero and the swap at the cut has no visibility pop / first-render hitch. Idempotent with
+  // the GAME_STATE_CHANGE unhide that follows at MENU_START.
   eventBus.on(Events.MENU_DEPARTURE_REVEAL, () => {
     _setPlayerShipHidden(false);
-    // Opening dance (2026-09-16, plan task 3): the sim ship is revealed BEHIND
-    // the still-frame-filling hero — pack it now (belt and braces; the live
-    // dance pose is applied at MENU_START's bind). Only on a NEW-GAME
-    // departure: CONTINUE's short departure never arms the dance, and packing
-    // there would flash furled wings at the returning player.
+    // The sim ship is revealed BEHIND the still-frame-filling hero: pack it now (belt and braces; the live dance
+    // pose is applied at MENU_START's bind). Only on a NEW-GAME departure: CONTINUE's short departure never arms
+    // the dance, and packing there would flash furled wings at the returning player.
     if (_danceDeparture) openingDance.applyPacked(player);
   });
 
-  // Opening dance (plan task 3): arm the clock at MENU_DEPARTURE_START. t = 0
-  // is jet-off — 0.26 × the departure duration — NOT the departure start (no
-  // new jet-off event; MenuScene3D's own astronaut timeline shares the figure).
-  // Only the NEW-GAME departure arms it: CONTINUE fires MENU_DEPARTURE_START
-  // too (600 ms short pull-back) but lands on endState instead, and the
-  // ?shot / harness policy mirrors _introRideAllowed (suppressed unless
-  // &intro=1). Reduced motion never emits this event at all (straight cut).
-  // _danceDeparture latches for the reveal handler above.
+  // Opening dance: arm the clock at MENU_DEPARTURE_START. t = 0 is jet-off (0.26 × the departure duration), NOT the
+  // departure start (no new jet-off event; MenuScene3D's own astronaut timeline shares the figure).
+  // Only the NEW-GAME departure arms it: CONTINUE fires MENU_DEPARTURE_START too (600 ms short pull-back) but lands
+  // on endState instead, and the ?shot / harness policy mirrors _introRideAllowed (suppressed unless &intro=1).
+  // Reduced motion never emits this event at all (straight cut). _danceDeparture latches for the reveal handler above.
   let _danceDeparture = false;
   eventBus.on(Events.MENU_DEPARTURE_START, ({ event, durationMs } = {}) => {
     _danceDeparture = (event === Events.MENU_START) && _introRideAllowed();
@@ -4081,31 +3359,25 @@ async function init() {
     openingDance.start({
       t0Ms: performance.now() + Constants.OPENING_DANCE.BEAT_JETOFF * durMs,
     });
-    // ONE deferred tick at jet-off: the t = 0 beat edges (latch clunk + the
-    // ship's own STOW latch) fire while the state is still MENU, where the
-    // game loop's openingDance.tick site (inside the isGameplay gate) has
-    // not been reached yet. Idempotent edges make a late fire harmless (a
-    // skipped menu fires it after the clock was advanced to cut-time).
+    // ONE deferred tick at jet-off: the t = 0 beat edges (latch clunk + the ship's own STOW latch) fire while the
+    // state is still MENU, where the game loop's openingDance.tick site (inside the isGameplay gate) has not been
+    // reached yet. Idempotent edges make a late fire harmless.
     const jetoffMs = Math.max(0, Math.round(Constants.OPENING_DANCE.BEAT_JETOFF * durMs));
     timerManager.setTimeout(() => {
       try { openingDance.tick(0); } catch (e) { console.error('[GameLoop] openingDance jet-off tick:', e); }
     }, jetoffMs, { owner: 'openingDance' });
   });
-  // Reset the latch when the menu returns (a later CONTINUE departure must
-  // not pack the ship on reveal).
+  // Reset the latch when the menu returns (a later CONTINUE departure must not pack the ship on reveal).
   if (Events.GAME_STATE_CHANGE) {
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
       if (to === 'MENU') _danceDeparture = false;
     });
   }
 
-  // #5 (deep-polish-4): power-up FLASH mask at the menu→sim cut — but ONLY for the
-  // 'partial' orientation treatment. The randomly-chosen 'flyaround' treatment
-  // arcs the camera behind + de-rolls the hull so the cut is already orientation-
-  // seamless and needs no mask (a flash there would be gratuitous). MenuScene3D
-  // announces the per-departure mode via MENU_ORIENT_MODE. A brief blue-white
-  // "reactor ignition" surge, centered on the ship, spanning the handoff frame;
-  // narratively the ship powering up. Gentler under prefers-reduced-motion.
+  // Power-up FLASH mask at the menu→sim cut, ONLY for the 'partial' orientation treatment: the randomly-chosen
+  // 'flyaround' treatment is already orientation-seamless and needs no mask. MenuScene3D announces the per-departure
+  // mode via MENU_ORIENT_MODE. A brief blue-white "reactor ignition" surge centered on the ship, spanning the
+  // handoff frame; gentler under prefers-reduced-motion.
   let _orientMode = 'partial';
   eventBus.on(Events.MENU_ORIENT_MODE, ({ mode } = {}) => { _orientMode = mode || 'partial'; });
   let _powerupFlashEl = null;
@@ -4138,11 +3410,10 @@ async function init() {
   eventBus.on(Events.MENU_START, _triggerPowerupFlash);
   eventBus.on(Events.MENU_CONTINUE, _triggerPowerupFlash);
 
-  // iPad web-app (Ipad.md §3): viewport truth lives in visualViewport — bar
-  // swipes and the home-screen container resize it without a window resize
-  // event, so BOTH sources are wired. onResize renders synchronously (~2–3 ms
-  // GPU, see its comment), and one rotation gesture fires both sources — the
-  // size-key guard makes each effective size change pay exactly once.
+  // iPad web-app (Ipad.md §3): viewport truth lives in visualViewport: bar swipes and the home-screen container
+  // resize it without a window resize event, so BOTH sources are wired. onResize renders synchronously (~2–3 ms
+  // GPU, see its comment), and one rotation gesture fires both sources, so the size-key guard makes each effective
+  // size change pay exactly once.
   let _lastResizeKey = '';
   const _resizeDeduped = () => {
     const vv = window.visualViewport;
@@ -4157,52 +3428,42 @@ async function init() {
     window.visualViewport.addEventListener('resize', _resizeDeduped);
   }
 
-  // --- PR 3 / P1.4: Pause render loop on hidden tab to save CPU/GPU and prevent
-  // dt-spike on resume. Also stop any looping audio so it doesn't drone in
-  // background tabs. Uses only existing AudioSystem public methods.
+  // --- Pause the render loop on a hidden tab (saves CPU/GPU, prevents a dt-spike on resume) and stop looping audio ---
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      // §12.12 Newly hidden — silence loops AND suspend the AudioContext.
-      // (Previously only stopped loops; the ctx itself stayed `running` at
-      // 44.1 kHz, keeping the audio thread warm. _syncAudioCtxState now
-      // suspends it since _shouldAudioRun()→false when hidden.)
+      // §12.12 Newly hidden: silence loops AND suspend the AudioContext (_syncAudioCtxState suspends it since
+      // _shouldAudioRun()→false when hidden).
       if (audioSystem) {
         if (typeof audioSystem.stopThrusterHum === 'function') audioSystem.stopThrusterHum();
         if (typeof audioSystem.stopDeltaVAlarm === 'function') audioSystem.stopDeltaVAlarm();
         if (typeof audioSystem.stopAmbientLoop === 'function') audioSystem.stopAmbientLoop();
         if (typeof audioSystem.stopLassoWireWhistle === 'function') audioSystem.stopLassoWireWhistle();
         if (typeof audioSystem.stopAlignmentTone === 'function') audioSystem.stopAlignmentTone();
-        if (typeof audioSystem._stopNetLoops === 'function') audioSystem._stopNetLoops();   // mother net whistle + winch (Phase B)
+        if (typeof audioSystem._stopNetLoops === 'function') audioSystem._stopNetLoops();   // mother net whistle + winch
       }
       _syncAudioCtxState();
       onboardingDirector?.setFrozen(true);   // tutorial timers stop with the sim
       if (focusPauseCard.onBlur()) _windowBlurred = true;   // card up: the sim stays frozen on return
     } else {
-      // Newly visible — reset the last-frame timer so next dt is small.
+      // Newly visible: reset the last-frame timer so next dt is small.
       const now = performance.now();
       lastTime = now;
       focusPauseCard.onVisible();
       onboardingDirector?.setFrozen(_windowBlurred);
       _syncAudioCtxState();   // resumes ctx if state policy says so
       if (_menuFrozen) _wakeMenuFreeze();   // a frozen menu wakes both loops when the tab is seen again
-      _flushScheduledFrame(); // wakes loop (gameLoop's hidden early-return
-                              // skipped scheduling the next rAF)
+      _flushScheduledFrame(); // wakes loop (gameLoop's hidden early-return skipped scheduling the next rAF)
     }
   });
 
-  // §14.1 Window blur/focus — pause sim when the user Cmd-Tabs to another
-  // macOS application. `visibilitychange` does NOT fire in this scenario
-  // because the browser tab is still on-screen (document.hidden stays false).
-  // The `document.hasFocus()` cross-check filters false positives from
-  // DevTools gaining focus, iframe focus, or child-popup focus — in those
-  // cases the *window* receives `blur` but `document.hasFocus()` often
-  // remains true because focus moved within the same browsing context.
-  // NOTE: window.blur is not stub-able in the Node test runner (jsdom does
-  // not implement the Page Visibility / Focus APIs). Manual browser testing
-  // required. See §14.1 in GPU_PROFILING_REPORT.md.
+  // §14.1 Window blur/focus: pause the sim when the user Cmd-Tabs to another macOS application. `visibilitychange`
+  // does NOT fire then (the tab is still on-screen, document.hidden stays false). The `document.hasFocus()`
+  // cross-check filters false positives from DevTools gaining focus, iframe focus, or child-popup focus: the
+  // *window* receives `blur` but `document.hasFocus()` often stays true because focus moved within the same
+  // browsing context.
+  // NOTE: window.blur is not stub-able in the Node test runner (jsdom lacks the Page Visibility / Focus APIs);
+  // manual browser testing required. See §14.1 in archive/GPU_PROFILING_REPORT.md.
   window.addEventListener('blur', () => {
-    // Double-check: if the document still has focus, this is a false
-    // positive (e.g. DevTools panel focused within the same window).
     if (document.hasFocus()) return;
     _windowBlurred = true;
     focusPauseCard.onBlur();
@@ -4213,11 +3474,11 @@ async function init() {
       if (typeof audioSystem.stopAmbientLoop === 'function') audioSystem.stopAmbientLoop();
       if (typeof audioSystem.stopLassoWireWhistle === 'function') audioSystem.stopLassoWireWhistle();
       if (typeof audioSystem.stopAlignmentTone === 'function') audioSystem.stopAlignmentTone();
-      if (typeof audioSystem._stopNetLoops === 'function') audioSystem._stopNetLoops();   // mother net whistle + winch (Phase B)
+      if (typeof audioSystem._stopNetLoops === 'function') audioSystem._stopNetLoops();   // mother net whistle + winch
     }
     _syncAudioCtxState();
-    // Do NOT call _setHudHidden(true) — when the user alt-tabs back the
-    // HUD should still be visible (only hide on actual ESC pause).
+    // Do NOT call _setHudHidden(true): when the user alt-tabs back the HUD should still be visible (only hide on
+    // actual ESC pause).
     _flushScheduledFrame(); // reschedule at throttled 5 Hz interval
   });
   window.addEventListener('focus', () => {
@@ -4230,14 +3491,11 @@ async function init() {
     _flushScheduledFrame();
   });
 
-  // Session I — boost sources for the adaptive frame schedule (FrameSched):
-  // any pointer / touch / wheel / key input returns the loop to native refresh
-  // for PERF.BOOST_MS (HOLD_BOOST_MS under an open drawer). Capture-phase +
-  // passive: sees every input regardless of target/preventDefault, costs one
-  // timestamp write. Hover changes ride the pointermove note (a hover IS a
-  // pointer move); pane slides and purchases are noted below (the pane edge in
-  // _syncWorkbenchPanes, UPGRADE_PURCHASED here — a card click is already a
-  // pointerdown, the event covers keyboard/queued purchases).
+  // Boost sources for the adaptive frame schedule (FrameSched): any pointer / touch / wheel / key input returns the
+  // loop to native refresh for PERF.BOOST_MS (HOLD_BOOST_MS under an open drawer). Capture-phase + passive: sees
+  // every input regardless of target/preventDefault, costs one timestamp write. Hover changes ride the pointermove
+  // note; pane slides and purchases are noted below (the pane edge in _syncWorkbenchPanes, UPGRADE_PURCHASED here:
+  // a card click is already a pointerdown, the event covers keyboard/queued purchases).
   for (const ev of ['pointerdown', 'pointermove', 'wheel', 'keydown', 'touchstart']) {
     window.addEventListener(ev, _noteRealInput, { capture: true, passive: true });
   }
@@ -4268,21 +3526,17 @@ async function init() {
   // Show mode: the untouched start screen freezes after 2 min (`?idleS=N` scales it to 2 x N, show mode and dev host only, §47 row 8).
   _menuFreezeS = menuFreezeS(idleOverrideS(devSearch(), showMode.isOn()));
   _menuUntouchedSince = performance.now();
-  // The intro launch ceremony is a camera ride: native while it flies (the
-  // same TeachingSystem blocker signal pair — plan Session I step 2).
+  // The intro launch ceremony is a camera ride: native while it flies (the same TeachingSystem blocker signal pair).
   if (Events.LAUNCH_CEREMONY_START) eventBus.on(Events.LAUNCH_CEREMONY_START, () => { _launchCeremonyLive = true; });
   if (Events.LAUNCH_CEREMONY_COMPLETE) eventBus.on(Events.LAUNCH_CEREMONY_COMPLETE, () => { _launchCeremonyLive = false; });
-  // Session I follow-up (review): a SKIPPED ceremony (ESC/Space/Enter/D, or
-  // the dead-arm guard) never emitted COMPLETE — _launchCeremonyLive stayed
-  // true and the scheduler boosted to native for the rest of the session.
+  // A SKIPPED ceremony (ESC/Space/Enter/D, or the dead-arm guard) never emits COMPLETE: without this _launchCeremonyLive
+  // stays true and the scheduler boosts to native for the rest of the session.
   if (Events.LAUNCH_CEREMONY_ABORT) eventBus.on(Events.LAUNCH_CEREMONY_ABORT, () => { _launchCeremonyLive = false; });
 
   // --- Hide loading screen ---
-  // F7 boot resilience: this is the ONE place the loading screen is dismissed —
-  // it fires only after init() has succeeded this far, so a failed boot leaves
-  // the screen up and the index.html error handler can surface a failure card.
-  // The `__bootOk` flag tells those handlers boot succeeded, so post-boot
-  // runtime errors don't get mistaken for a boot failure.
+  // The ONE place the loading screen is dismissed: it fires only after init() has succeeded this far, so a failed
+  // boot leaves the screen up and the index.html error handler can surface a failure card. The `__bootOk` flag tells
+  // those handlers boot succeeded, so post-boot runtime errors don't get mistaken for a boot failure.
   if (typeof window !== 'undefined') window.__bootOk = true;
   const loadingScreen = document.getElementById('loading-screen');
   if (loadingScreen) {
@@ -4294,15 +3548,14 @@ async function init() {
   gameState.currentState = GameStates.MENU;
   gameFlowManager.transitionToState(GameStates.MENU);
 
-  // --- Menu orbit preview: aim the live backdrop at the selected language's
-  // home corridor, and re-aim it (rate-capped ramp up/down) on LANGUAGE_CHANGED.
-  // Cosmetic only — game start paths re-stage the same orbit authoritatively.
+  // --- Menu orbit preview: aim the live backdrop at the selected language's home corridor, and re-aim it
+  // (rate-capped ramp up/down) on LANGUAGE_CHANGED. Cosmetic only: game start paths re-stage the same orbit
+  // authoritatively.
   menuOrbitPreview.init({ player });
 
   console.log('[Space Cowboy] Engine initialized. Starting game loop…');
 
-  // PR 3 / P1.6 — Pre-compile shaders before first RAF to avoid first-frame stutter
-  // when materials are encountered for the first time during gameplay.
+  // Pre-compile shaders before the first RAF to avoid first-frame stutter.
   _bootMark('renderer.compile(). START (synchronous shader compile of all materials + composer passes)');
   try {
     sceneManager.renderer.compile(sceneManager.scene, sceneManager.camera);
@@ -4311,8 +3564,7 @@ async function init() {
   }
   _bootMark('renderer.compile(). END');
 
-  // Sprint 2 / Phase A: attach Perf Report overlay if requested via ?perfReport=1.
-  // Defers until SceneManager + DebrisField are constructed so refs are live.
+  // Perf Report overlay (?perfReport=1); attached after SceneManager + DebrisField exist so refs are live.
   if (Constants.DEBUG && Constants.DEBUG.PERF_REPORT_OVERLAY) {
     try {
       const boot = captureBootInfo({
@@ -4336,11 +3588,8 @@ async function init() {
     }
   }
 
-  // Sprint 3 GPU profiling: wire [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1)
-  // when `?autoProfile=1`. Sweep auto-starts after a 5 s settle so the user
-  // can transition to ORBITAL_VIEW first if they want the in-mission state.
-  // Expose a global re-trigger so the user can run again in a different state
-  // (e.g. captured MENU, now wants IN-MISSION) without reloading.
+  // GPU profiling: wire [`AutoProfileSweep`](js/systems/AutoProfileSweep.js) when `?autoProfile=1`. Auto-starts after
+  // a 5 s settle so the user can reach ORBITAL_VIEW first; a global re-trigger allows a re-run in another state.
   if (profileFlags.autoProfile) {
     try {
       const sweep = new AutoProfileSweep({
@@ -4366,34 +3615,26 @@ async function init() {
       .catch((e) => console.warn('[FlickTrace] init failed:', e));
   }
 
-  // --- Net-visual screenshot loop (Phase 0 + auto-capture) ---
+  // --- Net-visual screenshot loop ---
   // Dev-only, gated by `?shot=1` or `?shotauto=1` — the ONE shared predicate
-  // (js/core/DevShotGate.js), which also flips on `preserveDrawingBuffer`
-  // in SceneManager. Closes the "blind agent" loop: an agent on this host can
-  // read back the exact #game-canvas pixels — no screen-recording permission,
-  // no foreground-window dependency, no pause overlay obscuring the net.
+  // (js/core/DevShotGate.js), which also flips on `preserveDrawingBuffer` in SceneManager. Lets an agent read back
+  // the exact #game-canvas pixels — no screen-recording permission, no foreground window, no pause overlay.
   //
   //   window.__netPause(true|false) → freeze / resume the current frame
   //   window.__netShot('name')      → download ~/Downloads/netshot-<name>-<ts>.png
   //   window.__netAuto(true|false)  → auto-capture at each net FSM key beat
   //
-  // Auto-capture (on by default with `?shotauto=1`, or `__netAuto(true)`) snaps a
-  // frame at the net's deterministic ceremony beats (fired / envelop / brake /
-  // cinch / captured / reel / berth / reelin / secured) for BOTH the Mother
-  // (lasso:*) and Daughter (net:*) — removing manual-timing guesswork. The last
-  // three are the Phase D mother beats (berth, reel-in end, secured) this net
-  // visual plan is judged on. Files: netshot-auto-<beat>-<ts>.png.
+  // Auto-capture (on by default with `?shotauto=1`, or `__netAuto(true)`) snaps a frame at the net's ceremony beats
+  // (fired / envelop / brake / cinch / captured / reel / berth / reelin / secured) for BOTH the Mother (lasso:*)
+  // and Daughter (net:*). Files: netshot-auto-<beat>-<ts>.png.
   try {
     if (devShotGate.requested) {
       const _netCapture = (name) => {
         const cv = document.getElementById('game-canvas');
         if (!cv) { console.error('[netShot] #game-canvas not found'); return; }
-        // preserveDrawingBuffer (set by the same DevShotGate predicate) keeps
-        // the last rendered frame readable even while paused. The WebGL
-        // frame's alpha is 0 in most pixels (the composer writes colour
-        // without alpha), so a direct
-        // toDataURL() yields a *transparent* PNG viewers show as white —
-        // composite onto opaque black first so the export matches the screen.
+        // preserveDrawingBuffer (set by the same DevShotGate predicate) keeps the last frame readable while paused.
+        // The frame's alpha is 0 in most pixels (the composer writes colour without alpha), so a direct toDataURL()
+        // yields a *transparent* PNG shown as white — composite onto opaque black first.
         const flat = document.createElement('canvas');
         flat.width = cv.width;
         flat.height = cv.height;
@@ -4430,43 +3671,25 @@ async function init() {
         return next;
       };
       window.__netShot = _netCapture;
-      window.__overridePane = overridePane;   // SAFETY OVERRIDE panel (the gag's black veil #hud-override-veil is a DOM element, never the black-screen bug class — BLACK_SCREEN_TRIAGE.md)
-      window.__hudReboot = hudReboot;         // the systems reboot (HudReboot.js) — a ?shot boot builds no veil by law, so the witness drives play() directly (tmp/gag-reboot-shots.mjs)
+      window.__overridePane = overridePane;   // SAFETY OVERRIDE panel (its black veil #hud-override-veil is a DOM element, never the black-screen bug class — BLACK_SCREEN_TRIAGE.md)
+      window.__hudReboot = hudReboot;         // systems reboot (HudReboot.js) — a ?shot boot builds no veil by law, so the witness drives play() directly
 
-      // ── Inspection camera hook (round-5 visual QA) ──
+      // ── Inspection camera hook ──
       //   window.__scbInspect(thetaDeg, phiDeg, distM)
-      //     → ORBIT view at the given orbit angles + camera-ship distance in
-      //       metres; engages the zoom-inspection sub-state when distM < 12
-      //       via the normal Schmitt trigger (so vignette/FOV/callouts all
-      //       follow the real code path).
+      //     → ORBIT view at the given orbit angles + camera-ship distance in metres; engages the zoom-inspection
+      //       sub-state when distM < 12 via the normal Schmitt trigger (vignette/FOV/callouts follow the real path).
       //   window.__scbInspectView(distM)
       //     → discrete INSPECTION view at the given distance.
       //
-      //   BOTH THROW WHILE THE ZOOM LADDER IS ENGAGED (2026-09-22). The ladder
-      //   is the highest-priority camera driver — CameraSystem's "Zoom Ladder
-      //   override (S2)" branch bypasses the normal view path entirely — so the
-      //   orbit/inspection fields these two hooks write are never read again.
-      //   They used to write them anyway and return a cheerful {view, distM}
-      //   object describing what they would have done. That silent no-op cost a
-      //   whole strut-visibility investigation: every frame was shot at ~100 m
-      //   while labelled 9.68 m, the ship was 110 px wide, and three separate
-      //   "defects" were diagnosed and nearly fixed before the instrument itself
-      //   was suspected.
-      //
-      //   They THROW rather than return an error, because returning one does not
-      //   reach anybody: the 25 call sites in 12 scripts/visual-ab/ scripts
-      //   (counted 2026-09-22) all invoked these hooks as
-      //   `await page.evaluate(() => window.__scbInspect(...))` and discarded
-      //   the result, and only 2 of those 12 scripts forward browser console
-      //   output. A throw crosses page.evaluate as a rejected promise and fails
-      //   the harness process, which is the only signal every caller already
-      //   respects. Refusing quietly would have reproduced the very bug this
-      //   guard exists to end.
-      //   Harness scripts now aim through scripts/visual-ab/camera-aim.mjs,
-      //   which drives __scbInspectAxis and then CHECKS the result against
-      //   __scbCamPose() — a measured camera-to-ship distance, not an echo.
-      // Distances map to callout bands: SYSTEM ≥ 9 m, PART 5.5–8 m,
-      // COMPONENT < 5.5 m (BAND in ui/MotherCallouts.js).
+      //   BOTH THROW WHILE THE ZOOM LADDER IS ENGAGED. The ladder is the highest-priority camera driver —
+      //   CameraSystem's "Zoom Ladder override (S2)" branch bypasses the normal view path — so the orbit/inspection
+      //   fields these hooks write are never read again. A silent no-op there once left every screenshot at the
+      //   wrong distance. They THROW (not return an error) because callers discard return values
+      //   (`await page.evaluate(() => window.__scbInspect(...))`); a throw crosses page.evaluate as a rejected
+      //   promise and fails the harness process.
+      //   Harness scripts aim through scripts/visual-ab/camera-aim.mjs, which drives __scbInspectAxis and CHECKS
+      //   the result against __scbCamPose() — a measured camera-to-ship distance, not an echo.
+      // Distances map to callout bands: SYSTEM ≥ 9 m, PART 5.5–8 m, COMPONENT < 5.5 m (BAND in ui/MotherCallouts.js).
       const _camHookRefusal = (hook, code, why) => {
         const floor = (window.__ladder && window.__ladder.currentFloor) ? window.__ladder.currentFloor() : null;
         const err = new Error(`[scb] ${hook} refused (${code}, floor ${floor}): ${why}`);
@@ -4505,32 +3728,22 @@ async function init() {
         return { view: cameraSystem.currentView, distM };
       };
 
-      // ── Axis-aim hook (Mother visual audit, Task 0a) ──
+      // ── Axis-aim hook ──
       //   window.__scbInspectAxis(dir, distM)
-      //     dir: 'fore'|'aft'|'port'|'starboard'|'up'|'down' or a ship-frame
-      //     [x,y,z] direction the camera should sit on (e.g. [1, 0.6, 0.9] =
-      //     starboard-high-fore quarter). Model-truth regardless of the ship's
-      //     LVLH attitude (NOT deterministic across runs —
-      //     scripts/visual-ab/capture.mjs), which is why __scbInspect's raw
-      //     theta cannot be aimed at "the nose". Ladder off → writes the legacy
-      //     orbit (like __scbInspect). Ladder engaged → writes the ship-anchored
-      //     ladder pose (lc.local) and pins the distance, so it also works on F1.
-      //     dir may also be { thetaDeg, phiDeg }: the legacy __scbInspect orbit
-      //     angles (LVLH frame — phi from the radial pole, theta round it from
-      //     ahead toward lateral, _computeOrbit's convention), so the scripts
-      //     written against __scbInspect keep their exact camera direction on
-      //     every floor.
-      //   REFUSES (throws) wherever its own write would be discarded — the
-      //   same silent-no-op class as __scbInspect (DECISIONS.md "must fail loudly"):
-      //     • ladder on an EARTH-anchored floor: the orbit fallback below would
-      //       write fields the ladder never reads;
-      //     • ladder mid-ride: the ride lerp overwrites curDistU every frame
-      //       until it lands (CameraSystem._updateLadderCamera).
-      //   window.__scbCamPose() — the read-back: the MEASURED camera-to-ship
-      //     distance plus which driver owns the camera. A hook reporting what
-      //     it wrote is how the strut investigation went wrong; check this.
-      //   window.__THREE — the module namespace, for the harness truth log
-      //     (project a mesh's world position to screen).
+      //     dir: 'fore'|'aft'|'port'|'starboard'|'up'|'down' or a ship-frame [x,y,z] direction the camera sits on
+      //     (e.g. [1, 0.6, 0.9] = starboard-high-fore quarter). Model-truth regardless of the ship's LVLH attitude
+      //     (NOT deterministic across runs — scripts/visual-ab/capture.mjs), which is why __scbInspect's raw theta
+      //     cannot aim at "the nose". Ladder off → writes the legacy orbit. Ladder engaged → writes the
+      //     ship-anchored ladder pose (lc.local) and pins the distance.
+      //     dir may also be { thetaDeg, phiDeg }: the legacy __scbInspect angles (LVLH frame — phi from the radial
+      //     pole, theta round it from ahead toward lateral, _computeOrbit's convention).
+      //   REFUSES (throws) wherever its own write would be discarded (DECISIONS.md "must fail loudly"):
+      //     • ladder on an EARTH-anchored floor: the orbit fallback below would write fields the ladder never reads;
+      //     • ladder mid-ride: the ride lerp overwrites curDistU every frame until it lands
+      //       (CameraSystem._updateLadderCamera).
+      //   window.__scbCamPose() — the read-back: the MEASURED camera-to-ship distance plus which driver owns the
+      //     camera. Check this; a hook reporting what it wrote is not a measurement.
+      //   window.__THREE — the module namespace, for the harness truth log (project a mesh's world position to screen).
       window.__THREE = THREE;
       window.__scbInspectAxis = (dir = 'fore', distM = 3) => {
         if (!cameraSystem || !player) return 'no cameraSystem/player';
@@ -4584,10 +3797,8 @@ async function init() {
         const off = camPos.clone().sub(shipPos).normalize();   // ship → camera, in __scbInspect's LVLH angles
         return {
           driver: ladder ? 'ladder' : 'view',
-          // Flag on but not yet engaged = the ladder is ABOUT to take the camera
-          // (it engages on its next update once gameplay starts). An aim written
-          // in that window is discarded a frame later — measured 2026-09-22: the
-          // first aim after menu start landed at 24.49 m instead of 4 m.
+          // Flag on but not yet engaged = the ladder is ABOUT to take the camera (it engages on its next update once
+          // gameplay starts); an aim written in that window is discarded a frame later.
           ladderEnabled: !!(Constants.LADDER && Constants.LADDER.ENABLED),
           view: cameraSystem.currentView,
           floor: (ladder && window.__ladder) ? window.__ladder.currentFloor() : null,
@@ -4600,21 +3811,15 @@ async function init() {
         };
       };
 
-      // ── P2 flower portrait hook (charter TASK J harness) ──
-      //   window.__scbFlower(pairs)   → install aft-flower pair A (≥1) /
-      //     pairs A+B (≥2) through the SAME applyUpgrade effect path a shop
-      //     purchase drives, then report getFlowerStatus().
-      //   window.__scbFlowerPose(p, opts) → drive the slew latch to a named
-      //     ladder pose ('STOW' | 'PARK' | 'CARGO'). Design 7b: 'LAUNCH' (the
-      //     fore-folded fairing pose) is refused from orbit unless the caller
-      //     passes { force: true } — the dev-only override the frames harness
-      //     uses; no production path arms it any more (the launch sequence was removed).
-      //   window.__scbLaunchConfig(on) → Design 7b: the whole ship in its
-      //     launch configuration (ROSA furled, docked struts to α 0 in their
-      //     channels, flower LAUNCH) — the three writes of the 7b mock script
-      //     in one call; `false` restores what `true` recorded and releases
-      //     the flower to STOW through the ordinary release path (the lock
-      //     clears at 90°).
+      // ── Flower portrait hook ──
+      //   window.__scbFlower(pairs)   → install aft-flower pair A (≥1) / pairs A+B (≥2) through the SAME
+      //     applyUpgrade effect path a shop purchase drives, then report getFlowerStatus().
+      //   window.__scbFlowerPose(p, opts) → drive the slew latch to a named ladder pose ('STOW' | 'PARK' | 'CARGO').
+      //     'LAUNCH' (the fore-folded fairing pose) is refused from orbit unless the caller passes { force: true } —
+      //     the dev-only override the frames harness uses; no production path arms it.
+      //   window.__scbLaunchConfig(on) → the whole ship in its launch configuration (ROSA furled, docked struts to
+      //     α 0 in their channels, flower LAUNCH) in one call; `false` restores what `true` recorded and releases
+      //     the flower to STOW through the ordinary release path (the lock clears at 90°).
       window.__scbFlower = (pairs = 2) => {
         if (!player) return 'no player';
         if (pairs >= 1) player.applyUpgrade({ effect: 'flowerPairA', value: 1 });
@@ -4651,30 +3856,23 @@ async function init() {
           player._rosaManualControl = false;
           player._rosaFurlTarget = 1.0;
         }
-        // The release back to the orbit rest (CLOSED since DECISIONS §15 row 4): the lock clears at the 0° rest (was a 2° floor until 2026-10-16).
+        // The release back to the orbit rest (CLOSED per DECISIONS §15 row 4): the lock clears at the 0° rest.
         const target = player.setFlowerPose(Constants.THERMAL.FLOWER.REST_POSE || 'STOW');
         return { on: false, struts: docked.length, flower: target, status: player.getFlowerStatus() };
       };
 
-      // ── Sky-pose hook (Stage 1 sky realism) ──
+      // ── Sky-pose hook ──
       //   window.__scbSkyPose(target, distM)
-      //     → ORBIT view centred on a fixed patch of sky. `target` is either
-      //       { ra, dec } (RA hours, Dec degrees) or a figure name like
-      //       'CYGNUS' — the name path averages that figure's star directions
-      //       and normalizes, which is exactly what "frame the whole figure"
-      //       needs. Unlike __scbInspect's raw theta/phi (interpreted in the
-      //       ship's rotating LVLH frame), this points at a fixed patch of sky
-      //       regardless of where the ship is in its orbit — the acceptance
-      //       criteria need that reproducibility.
-      //     Returns the solved { theta, phi } plus an `occluded` flag — true
-      //     when the target's angle to the Earth-centre direction is inside the
-      //     limb angle (a figure genuinely behind Earth is physics, not a
-      //     tooling failure, and the flag stops that being debugged as one).
+      //     → ORBIT view centred on a fixed patch of sky. `target` is either { ra, dec } (RA hours, Dec degrees)
+      //       or a figure name like 'CYGNUS' (averages that figure's star directions and normalizes). Unlike
+      //       __scbInspect's raw theta/phi (in the ship's rotating LVLH frame), this points at a fixed patch of sky
+      //       regardless of where the ship is in its orbit.
+      //     Returns the solved { theta, phi } plus an `occluded` flag — true when the target's angle to the
+      //     Earth-centre direction is inside the limb angle (a figure behind Earth is physics, not a tooling failure).
       window.__scbSkyPose = (target, distM = 60) => {
         if (!cameraSystem) return 'no cameraSystem';
         const R = Constants.STAR_SPHERE_RADIUS;
-        // Resolve the target to a unit world-space sky direction, reusing
-        // Starfield's raDec2xyz so the basis convention stays in one place.
+        // Resolve the target to a unit world-space sky direction via Starfield's raDec2xyz (one basis convention).
         let dir;
         if (typeof target === 'string') {
           const fig = CONSTELLATION_FIGURES.find((f) => f.name === target.toUpperCase());
@@ -4691,10 +3889,8 @@ async function init() {
           return { error: 'target must be { ra, dec } or a figure name' };
         }
 
-        // Solve the orbit angles that centre `dir` and write them exactly as
-        // __scbInspect does. The basis must be current — update() caches it
-        // every frame, so by the time a capture harness can call this the
-        // first frame has already run.
+        // Solve the orbit angles that centre `dir` and write them as __scbInspect does. The basis must be current
+        // (update() caches it every frame).
         const { theta, phi } = cameraSystem.solveOrbitAnglesForDirection(dir);
         cameraSystem.setView('ORBIT');
         const o = cameraSystem.orbit;
@@ -4704,13 +3900,10 @@ async function init() {
         o.velocityTheta = 0;
         o.velocityPhi = 0;
 
-        // Occlusion: is the target inside the Earth limb as seen from the
-        // camera? Reuses _limbFadeFactor's geometry — factor 0 means fully
-        // inside the limb (hidden), 1 means clear. The star's world position
-        // includes the shell group's offset: (0,0,0) world-fixed (shipped), or
-        // the camera pose while the ladder's F6/F7 follow mode is on
-        // (Starfield.setFollowCamera) — without the add, this hook desyncs
-        // from the followed shell.
+        // Occlusion: is the target inside the Earth limb as seen from the camera? Reuses _limbFadeFactor's
+        // geometry (0 = fully inside the limb, 1 = clear). The star's world position includes the shell group's
+        // offset: (0,0,0) world-fixed (shipped), or the camera pose while the ladder's F6/F7 follow mode is on
+        // (Starfield.setFollowCamera) — without the add, this hook desyncs from the followed shell.
         let occluded = false;
         const cam = cameraSystem.camera;
         if (cam && starfield) {
@@ -4720,23 +3913,17 @@ async function init() {
         return { theta, phi, occluded };
       };
 
-      // Renderer info snapshot for the sky perf baseline (doctrine A.4) —
-      // draw calls / points / triangles, read at HIGH and LOW so later sky
-      // stages have something to diff against.
+      // Renderer info snapshot for the sky perf baseline: draw calls / points / triangles, read at HIGH and LOW.
       window.__scbRendererInfo = () => {
         if (!sceneManager || !sceneManager.renderer) return null;
         const r = sceneManager.renderer.info.render;
         return { calls: r.calls, points: r.points, triangles: r.triangles, lines: r.lines };
       };
-      // Mother audit (integrate/harness) — whole-frame draw calls for the plan's
-      // "≤ +12 draw calls" gate. renderer.info auto-resets at EVERY
-      // renderer.render(), and the composer runs several passes per frame, so
-      // __scbRendererInfo() read between frames sees only the LAST pass
-      // ({calls: 1, triangles: 1} — Phase 0 VERDICT quirk 8). __scbDrawCalls()
-      // arms a one-frame meter in the game loop: autoReset off + info.reset()
-      // right before sceneManager.render(), a read right after it, autoReset
-      // restored — one Promise per call, resolving { calls, triangles, points,
-      // lines } for ONE complete composer frame (null when nothing renders).
+      // Whole-frame draw calls for the "≤ +12 draw calls" gate. renderer.info auto-resets at EVERY
+      // renderer.render(), and the composer runs several passes per frame, so __scbRendererInfo() read between
+      // frames sees only the LAST pass. __scbDrawCalls() arms a one-frame meter in the game loop: autoReset off +
+      // info.reset() right before sceneManager.render(), a read right after it, autoReset restored — one Promise
+      // per call, resolving { calls, triangles, points, lines } for ONE complete composer frame (null when nothing renders).
       window.__scbDrawCalls = () => new Promise((resolve) => {
         if (!sceneManager || !sceneManager.renderer) { resolve(null); return; }
         const r = sceneManager.renderer;
@@ -4752,16 +3939,15 @@ async function init() {
           },
         };
       });
-      // Raw handle for the perf harness, which needs to control info.autoReset
-      // to get clean per-frame totals across the composer's multiple passes.
+      // Raw handle for the perf harness (it controls info.autoReset for per-frame totals across composer passes).
       window.__scbSceneManager = () => sceneManager;
-      // Ion start-up (lane ion-startup, DECISIONS §37 row 7) - CAPTURE ONLY: starts the trip's burn from a loaded game so a witness can film
-      // the four engines lighting (frames every 0.5 s: scripts in tmp/). The flat trip by default; `{ field: true }` flies the nearest
-      // reachable field instead (the strip's trip text, a profile burn). Either way the arrival callback starts NO mission. Returns
+      // Ion start-up (DECISIONS §37 row 7) - CAPTURE ONLY: starts the trip's burn from a loaded game so a witness can film
+      // the four engines lighting (frames every 0.5 s). The flat trip by default; `{ field: true }` flies the nearest
+      // reachable field instead. Either way the arrival callback starts NO mission. Returns
       // `{ begun, phase }` (phase 'wait' until the next frame starts the burn: the daughters are home) or `{ begun: false, why }`.
       // `{ read: true }` starts nothing and returns the lighting stage's state `{ phase, elapsedS, ionS, lighting, glow: the four glow levels, camera, comms: the store's last three lines, panel: what the panel has waiting / on screen }`.
-      // `{ comms: true }` first ends the tutorial's comms silence (what a finished tutorial does: tier 3), so the trip line shows in the panel
-      // as it does at the end of a real mission; a fresh capture game is still at tier 0, which hides every line that is not the tutorial's.
+      // `{ comms: true }` first ends the tutorial's comms silence (tier 3), so the trip line shows in the panel
+      // as at the end of a real mission; a fresh capture game is at tier 0, which hides every non-tutorial line.
       window.__scbTripBurnDemo = (opts = {}) => {
         const trip = gameFlowManager && gameFlowManager.trip;
         if (!trip) return { begun: false, why: 'no trip' };
@@ -4781,24 +3967,17 @@ async function init() {
         const begun = trip.begin(() => { trip.lastLeg = null; }, field ? { field } : undefined);
         return { begun: !!begun, phase: trip._phase };
       };
-      // Session T (SPECS pane part imagery, plan T2/T8): the last PART PORTRAIT
-      // render's stats — the near render's draw calls / triangles (read from
-      // renderer.info right after it, before the output quad resets them), the
-      // CPU-blocking ms of render + output + readback, count / nulls / the last
-      // null's reason, ok, and the target size. One render per hull click, never
-      // per frame — the specs-portraits.mjs witness logs it beside `framed`.
+      // Last PART PORTRAIT render's stats: the near render's draw calls / triangles (read from renderer.info right
+      // after it, before the output quad resets them), CPU-blocking ms of render + output + readback, count / nulls /
+      // the last null's reason, ok, and the target size. One render per hull click, never per frame.
       window.__scbPortraitCalls = () => (sceneManager && sceneManager.getPortraitStats ? sceneManager.getPortraitStats() : null);
-      // …and the last framed portrait's frame facts (part id, the `single`
-      // instance, dir, fill, fit method / distance m / roll) — the witness pins
-      // the instance choice run to run.
+      // …and the last framed portrait's frame facts (part id, the `single` instance, dir, fill, fit method /
+      // distance m / roll).
       window.__scbLastPortraitFrame = () => _lastPortraitFrame;
 
-      // Project a sky direction (ra hours, dec degrees) to canvas pixels, so a
-      // capture harness can aim a crop / measurement at an exact star without
-      // re-deriving the sky basis. Returns { x, y, behind } in CSS pixels.
-      // The shell-group offset keeps this honest in the ladder's F6/F7
-      // camera-follow mode (Starfield.setFollowCamera): world-fixed (shipped)
-      // the group sits at the origin and the add is a no-op.
+      // Project a sky direction (ra hours, dec degrees) to canvas pixels: { x, y, behind } in CSS pixels. The
+      // shell-group offset keeps this honest in the ladder's F6/F7 camera-follow mode (Starfield.setFollowCamera);
+      // world-fixed (shipped) the group sits at the origin and the add is a no-op.
       window.__scbProject = (ra, dec) => {
         const cam = cameraSystem && cameraSystem.camera;
         if (!cam) return null;
@@ -4813,16 +3992,13 @@ async function init() {
         };
       };
 
-      // ── Body-info hook (sun/moon/planets cleanup, Stage 0) ──
+      // ── Body-info hook ──
       //   window.__scbBodyInfo()
-      //     → for each of Sun / Moon / the 5 planets: world position, ra/dec
-      //       (inverse of Starfield's raDec2xyz convention), live
-      //       material.opacity + blending, geometry radius, computed angular
-      //       diameter, and the projected screen x/y + px diameter. The
-      //       measurement harness must never guess object names — the bodies
-      //       are read straight out of SunLight's own structures. px/° uses the
-      //       camera's *live* vertical FOV (the inspect zoom and ARM_PILOT view
-      //       change it, so Constants.CAMERA_FOV is not safe here).
+      //     → for each of Sun / Moon / the 5 planets: world position, ra/dec (inverse of Starfield's raDec2xyz
+      //       convention), live material.opacity + blending, geometry radius, angular diameter, and the projected
+      //       screen x/y + px diameter. Bodies are read from SunLight's own structures (never guess object names).
+      //       px/° uses the camera's *live* vertical FOV (inspect zoom and ARM_PILOT change it, so
+      //       Constants.CAMERA_FOV is not safe here).
       window.__scbBodyInfo = () => {
         const cam = cameraSystem && cameraSystem.camera;
         const cv = document.getElementById('game-canvas');
@@ -4871,7 +4047,7 @@ async function init() {
         if (sunLight.moonMesh) {
           out.bodies.Moon = Object.assign(project(sunLight.moonMesh, sunLight.moonMesh.geometry.parameters.radius), {
             opacity: sunLight._moonMaterial.uniforms
-              ? sunLight._moonMaterial.uniforms.uOpacity.value   // Stage 3 ShaderMaterial
+              ? sunLight._moonMaterial.uniforms.uOpacity.value   // ShaderMaterial
               : sunLight._moonMaterial.opacity,
             blending: blendingName(sunLight._moonMaterial.blending),
             geometryRadius: sunLight.moonMesh.geometry.parameters.radius,
@@ -4880,9 +4056,8 @@ async function init() {
           });
         }
         // Planets: SunLight._planets holds { name, disc, glow, label, depthMask, deg, radius }.
-        // Saturn's disc is a PlaneGeometry(planeSize²) — report the globe radius
-        // (radius) as the body's angular size, and the plane half-extent as the
-        // ring span, since the two answer different questions.
+        // Saturn's disc is a PlaneGeometry(planeSize²) — report the globe radius (radius) as the body's angular
+        // size, and the plane half-extent as the ring span, since the two answer different questions.
         if (sunLight._planets) {
           for (const p of sunLight._planets) {
             const gp = p.disc.geometry.parameters;
@@ -4894,10 +4069,9 @@ async function init() {
               geometryRadius: isPlane ? gp.width / 2 : gp.radius,
               kind: isPlane ? 'ring-plane' : 'disc',
               visible: p.disc.visible,
-              // Ring span for the ring-plane bodies: the drawn rings end at
-              // ~2.27 globe radii on a texture where globeR = 0.19 × size, so
-              // the visible span is ~0.86 of the plane. Report the plane's
-              // angular width; the harness measures the real span from pixels.
+              // Ring span for the ring-plane bodies: the drawn rings end at ~2.27 globe radii on a texture where
+              // globeR = 0.19 × size, so the visible span is ~0.86 of the plane. Report the plane's angular width;
+              // the harness measures the real span from pixels.
               planeAngularWidthDeg: isPlane
                 ? radToDeg(2 * Math.atan(gp.width / 2 / p.disc.position.distanceTo(cam.position)))
                 : undefined,
@@ -4907,97 +4081,78 @@ async function init() {
         return out;
       };
 
-      // ── Moon-phase hook (sun/moon/planets cleanup, Stage 0) ──
+      // ── Moon-phase hook ──
       //   window.__scbSetMoonPhase(frac)
-      //     → forces the moon's elongation so it can be captured at any phase
-      //       without waiting days: 0 = new (beside the sun), 0.5 = full
-      //       (opposite the sun). The lever already exists — _updateMoon builds
-      //       the direction from `moonAngle = sunAngle + _moonAzOffset`, so
-      //       _moonAzOffset *is* the elongation. Setting it to frac × 2π makes
-      //       the existing dot-product phase math follow; there is no parallel
-      //       phase variable. Returns the applied offset in degrees.
+      //     → forces the moon's elongation so it can be captured at any phase: 0 = new (beside the sun),
+      //       0.5 = full (opposite the sun). _updateMoon builds the direction from
+      //       `moonAngle = sunAngle + _moonAzOffset`, so _moonAzOffset *is* the elongation; setting it to
+      //       frac × 2π makes the existing dot-product phase math follow (no parallel phase variable).
+      //       Returns the applied offset in degrees.
       window.__scbSetMoonPhase = (frac) => {
         if (!sunLight || typeof frac !== 'number' || !isFinite(frac)) return null;
         sunLight._moonAzOffset = frac * 2 * Math.PI;
         return { moonAzOffsetDeg: frac * 360 };
       };
-      // Debug handle for click-path / layout introspection (codex click debug).
+      // Debug handle for click-path / layout introspection.
       window.__callouts = motherCallouts;
-      // Wave 5 (2): the REFIT engine handle for the witness harness (undefined
-      // on a ?ladder=0 boot — never constructed there). Session U: a hosted
-      // section engine — open/close/tab live on __workbench below.
+      // The REFIT engine handle for the witness harness (undefined on a ?ladder=0 boot — never constructed there).
+      // A hosted section engine — open/close/tab live on __workbench below.
       window.__refit = refitPane;
-      // Wave 5 (Session B): the SPECS engine handle, same contract (its photo
-      // counters / current entry are what scripts/visual-ab/specs-portraits.mjs reads).
+      // The SPECS engine handle (its photo counters / current entry are what scripts/visual-ab/specs-portraits.mjs reads).
       window.__library = libraryPane;
-      // Session U (plan 1788954873769): the ONE workbench pane — the shell's
-      // open / close / toggle / openEntry / showPart / isOpen / widthPx for the
-      // gate pictures and specs-portraits.mjs (undefined on a ?ladder=0 boot).
+      // The ONE workbench pane — the shell's open / close / toggle / openEntry / showPart / isOpen / widthPx
+      // (undefined on a ?ladder=0 boot).
       window.__workbench = workbenchPane;
-      // Session S: the help overlay, the tech library and the conjunction monitor
-      // for the gate pictures (help / specs / a seeded CONJUNCTION row).
+      // The help overlay, the tech library and the conjunction monitor.
       window.__codex = codexViewerUI;
       window.__hotkeyOverlay = hotkeyOverlay;
       window.__conjunction = conjunctionSystem;
-      // Session I: the world-clock handle for the thermal gate (rate 0 under
-      // HOLD — the policy witness beside window.__frameSched, which is always
+      // The world-clock handle (rate 0 under HOLD — the policy witness beside window.__frameSched, which is always
       // published). ?shot-gated like every harness handle here.
       window.__timeAuthority = timeAuthority;
-      // Session J.5: the update watcher (booted hash / check() / pending()) for
-      // the MODE=update gate leg — always constructed (flag-independent).
+      // The update watcher (booted hash / check() / pending()) — always constructed (flag-independent).
       window.__updateWatch = updateWatch;
-      // Session J: the controller (floor / turntable / isActive probes for the
-      // hasTouch gate); Session P: the DETAIL slider (null on a ?ladder=0 boot —
-      // never constructed there; the DISPLAY rail's handle retired with it).
+      // The controller (floor / turntable / isActive probes); the DETAIL slider (null on a ?ladder=0 boot — never
+      // constructed there).
       window.__ladder = ladderController;
       window.__detailSlider = detailSlider;
-      // Session P (plan D2/D18): the edge-chrome core (null on a ?ladder=0
-      // boot) — the gate pictures wake the chrome with `EVAL=window.__edgeChrome.wake()`.
+      // The edge-chrome core (null on a ?ladder=0 boot); wake it with `EVAL=window.__edgeChrome.wake()`.
       window.__edgeChrome = edgeChrome;
       window.__edgeBandWake = _edgeBandWake;
-      // Session Q (plan D15): the target colour law's live inputs (a getter —
-      // the reused object; its fields are null / 0 on a ?ladder=0 boot).
+      // The target colour law's live inputs (a getter — the reused object; its fields are null / 0 on a ?ladder=0 boot).
       window.__targetLaw = () => _targetLaw;
-      // Session Q (plan D12): the alert hierarchy's state (policy, inhibit,
-      // visible, held) — the inhibit gate picture reads `held`.
+      // The alert hierarchy's state (policy, inhibit, visible, held).
       window.__alerts = () => (hud && hud.alertState ? hud.alertState() : null);
-      // Session Q: the HUD itself (the inhibit gate picture seeds the arbiter
-      // through showNotification / showWarning; the house `__cargoPane` idiom).
+      // The HUD itself (seeds the arbiter through showNotification / showWarning; the house `__cargoPane` idiom).
       window.__hud = () => hud;
-      // Session R (plan §14.2): the typeface epoch (0 until the four faces
-      // settle, then 1) and the boot's loadFaces() answer (null / true / false)
-      // — the gate pictures' FONTS line reads both.
+      // The typeface epoch (0 until the four faces settle, then 1) and the boot's loadFaces() answer (null / true / false).
       window.__fontEpoch = () => fontEpoch.value();
       window.__fontsOk = () => _fontsOk;
-      // Session K: the CARGO pane (null on a ?ladder=0 boot — never constructed).
+      // The CARGO pane (null on a ?ladder=0 boot — never constructed).
       window.__cargoPane = cargoPane;
-      // Session M: the instruments + the voice (null on a ?ladder=0 boot).
+      // The instruments + the voice (null on a ?ladder=0 boot).
       window.__orbitPane = orbitPane;
       window.__fmaStrip = fmaStrip;
       window.__nextPane = nextPane;
       window.__copilotVoice = copilotVoice;
-      // Session O (plan D4): the first-run gesture splash + its store (the
-      // splash is null unless this boot is a first run under the harness policy).
+      // The first-run gesture splash + its store (the splash is null unless this boot is a first run under the
+      // harness policy).
       window.__gestureSplash = gestureSplash;
       window.__touchMapStore = touchMapStore;
-      // Session J gate witnesses (getters, the __scbSceneManager pattern): the
-      // debris field (to project a target for the tap), the input manager (its
-      // PUBLIC keys map — the drag's witness), the autopilot (the F2 Space verb).
+      // Getters (the __scbSceneManager pattern): the debris field (to project a target for the tap), the input
+      // manager (its PUBLIC keys map), the autopilot (the F2 Space verb).
       window.__scbDebrisField = () => debrisField;
       window.__scbInputManager = () => inputManager;
       window.__scbAutopilot = () => autopilotSystem;
       window.__touchControls = () => touchControls;   // undefined on a no-touch boot (never constructed)
-      // Debug handle for SunLight — lets a capture harness inspect bodies and
-      // (for verification) temporarily reposition a body that is occluded all
-      // session. Read-only intent; mutations are the harness's responsibility.
+      // Debug handle for SunLight — inspect bodies and (for verification) temporarily reposition an occluded body.
+      // Read-only intent; mutations are the harness's responsibility.
       window.__scbSunLight = sunLight;
 
-      // ── Galactic-coordinate hook (Milky Way, Stage 6) ──
+      // ── Galactic-coordinate hook ──
       //   window.__scbGalactic(L_deg, b_deg) → { ra, dec }
-      //     Converts galactic longitude/latitude (degrees) to RA/Dec using the
-      //     real galactic basis, so a capture harness can pose at / project any
-      //     band point (the band centerline is b=0). Inverse of the basis that
-      //     orients the band.
+      //     Converts galactic longitude/latitude (degrees) to RA/Dec using the real galactic basis (the band
+      //     centerline is b=0); inverse of the basis that orients the band.
       window.__scbGalactic = (Ldeg, bdeg) => {
         const b = galacticBasis();
         const L = degToRad(Ldeg), lat = degToRad(bdeg);
@@ -5014,8 +4169,7 @@ async function init() {
       // ── Deterministic auto-capture at net FSM key beats ──
       let _autoOn = devShotGate.shotautoRequested;
       const _beatsDone = new Set();   // debounce: one shot per beat per net cycle
-      // Snap after the new state has had two frames to render (and a touch of
-      // settle) so the captured frame shows the beat, not the transition into it.
+      // Snap after the new state has had two frames to render (and a touch of settle), so the frame shows the beat.
       const _snap = (beat, delayMs = 140) => {
         if (!_autoOn || _beatsDone.has(beat)) return;
         _beatsDone.add(beat);
@@ -5046,16 +4200,12 @@ async function init() {
         });
         if (Events.NET_CATCH_SUCCESS) eventBus.on(Events.NET_CATCH_SUCCESS, () => _snap('captured', 250));
         if (Events.NET_REEL_STARTED)  eventBus.on(Events.NET_REEL_STARTED,  () => _snap('reel', 250));
-        // Phase D mother beats (visual-centerpiece plan §5 S1) — the berth,
-        // reel-in end, and secured beats this plan is judged on. NET_BERTHED
-        // fires the clunk-settle at the launcher (the REEL_IN cinematic is
-        // released here, so `berth` captures its resolved pose); NET_REEL_COMPLETED
-        // marks the reel-in cinematic's end. `secured` is wired to NET_BERTHED +
-        // HALF the securing timer — NOT NET_CEREMONY_COMPLETE: that event fires
-        // at catch time, microseconds after NET_CATCH_SUCCESS, so the old wiring
-        // made `secured` a misnamed duplicate of `captured` (P2.3). Mid-hold is
-        // the truthful secured pose (catch settled at the pod) with a safe margin
-        // before CATCH_PROCESSED removes it at the full BERTH_SECURE_S.
+        // Mother beats: the berth, reel-in end, and secured beats. NET_BERTHED fires the clunk-settle at the
+        // launcher (the REEL_IN cinematic is released here, so `berth` captures its resolved pose);
+        // NET_REEL_COMPLETED marks the reel-in cinematic's end. `secured` is wired to NET_BERTHED + HALF the securing
+        // timer — NOT NET_CEREMONY_COMPLETE: that fires at catch time, microseconds after NET_CATCH_SUCCESS, so it
+        // would make `secured` a duplicate of `captured`. Mid-hold is the truthful secured pose (catch settled at
+        // the pod) with a safe margin before CATCH_PROCESSED removes it at the full BERTH_SECURE_S.
         if (Events.NET_BERTHED)         eventBus.on(Events.NET_BERTHED,         () => {
           _snap('berth', 350);
           _snap('secured', (Constants.CAPTURE_NET?.BERTH_SECURE_S ?? 4.0) * 500);
@@ -5063,35 +4213,27 @@ async function init() {
         if (Events.NET_REEL_COMPLETED)  eventBus.on(Events.NET_REEL_COMPLETED,  () => _snap('reelin', 300));
       }
 
-      // ── Deterministic whale-capture scenario (mother-net visual plan T2) ──
+      // ── Deterministic whale-capture scenario ──
       //   window.__netScenario()
-      //     → stages the identical mother-net capture every run: skips the
-      //       intro zoom, pins a fixed rocketBody whale 25 m off the nose,
-      //       fires pod 0 with every capture roll overridden (cling 0 =
-      //       catch, frag/strain 1 = never), so before/after screenshots
-      //       compare the LOOK, not the RNG. Pair with __netAuto(true) to
+      //     → stages the identical mother-net capture every run: skips the intro zoom, pins a fixed rocketBody whale
+      //       25 m off the nose, fires pod 0 with every capture roll overridden (cling 0 = catch, frag/strain 1 =
+      //       never), so before/after screenshots compare the LOOK, not the RNG. Pair with __netAuto(true) to
       //       collect the 9 ceremony beats.
-      //     Returns { ok, whaleId, mass, distanceM, podIndex } or
-      //     { ok: false, reason } — guarded, never throws.
-      //     Options: `__netScenario({ tumble })` where `tumble` is 'nominal'
-      //       (default), 'adverse', 'off', or { kitAxis, kitDeg } — register item
-      //       13: the catch's tumble attitude is pinned in the KIT frame so both
-      //       live gates measure one attitude instead of a per-run draw. Read the
-      //       applied pin back with `__netScenarioTumblePin()`.
+      //     Returns { ok, whaleId, mass, distanceM, podIndex } or { ok: false, reason } — guarded, never throws.
+      //     Options: `__netScenario({ tumble })` where `tumble` is 'nominal' (default), 'adverse', 'off', or
+      //       { kitAxis, kitDeg }: the catch's tumble attitude is pinned in the KIT frame so both live gates measure
+      //       one attitude instead of a per-run draw. Read the applied pin back with `__netScenarioTumblePin()`.
       let _scenarioPinReleaseOff = null;
       let _scenarioNet = null;
       let _scenarioAimInvariant = null;
       let _scenarioTumblePin = null;
-      // ── Register item 13: the catch's pinned tumble presets ──────────────
-      // Plan: .kilo/plans/1786017377440-pin-scenario-catch-tumble.md (D3/D4).
-      // Attitudes are KIT-frame (kit −Z is the launch bearing, so X/Y lie across
-      // the bag mouth), measured with tmp/g6-attitude-{sweep,local}.mjs over the
+      // ── The catch's pinned tumble presets ──────────────
+      // Attitudes are KIT-frame (kit −Z is the launch bearing, so X/Y lie across the bag mouth), measured over the
       // shared NetMeshKit.chordBoxPenetration export:
       //   nominal x@120° → chord 0.447 m, flat to ±10 mm per ±5°, presents 2.58 m
       //   adverse y@150° → chord 0.666 m (the box-core plateau), flat to ±1 mm
-      // Never re-pick a preset by trying attitudes until a gate reads well: both
-      // the pixel band and item 12's before/after are derived from these numbers,
-      // so a move must re-run the sweep and be recorded in the plan.
+      // Never re-pick a preset by trying attitudes until a gate reads well: the pixel band and the before/after
+      // comparison derive from these numbers, so a move must re-run the sweep.
       const _SCENARIO_TUMBLE_PRESETS = {
         nominal: { name: 'nominal', kitAxis: { x: 1, y: 0, z: 0 }, kitDeg: 120 },
         adverse: { name: 'adverse', kitAxis: { x: 0, y: 1, z: 0 }, kitDeg: 150 },
@@ -5103,11 +4245,9 @@ async function init() {
         if (typeof t === 'string') return _SCENARIO_TUMBLE_PRESETS[t] || null;
         if (typeof t === 'object' && t.kitAxis) {
           const a = t.kitAxis;
-          // Pass the numbers through UNCOERCED — `+x || 0` would turn a typo'd
-          // angle into a silent 0° pin, which reads as a valid gate measurement
-          // of the wrong attitude. worldTumbleForKitAttitude rejects anything
-          // non-finite, so a bad custom spec becomes "no pin" and the harness
-          // fails loudly instead.
+          // Pass the numbers through UNCOERCED — `+x || 0` would turn a typo'd angle into a silent 0° pin.
+          // worldTumbleForKitAttitude rejects anything non-finite, so a bad custom spec becomes "no pin" and the
+          // harness fails loudly.
           return {
             name: t.name || 'custom',
             kitAxis: { x: a.x ?? a[0], y: a.y ?? a[1], z: a.z ?? a[2] },
@@ -5116,31 +4256,24 @@ async function init() {
         }
         return null;
       };
-      // Whale-in-cone plan Task 2.5 — read-back for the aim-invariant unit test.
+      // Read-back for the aim-invariant unit test.
       window.__netScenarioAimInvariant = () => _scenarioAimInvariant;
-      // Register item 13 — read-back for the harness's provenance line and its
-      // achieved-vs-intended attitude check (null ⇒ no pin was applied).
+      // Read-back for the harness's provenance line and its achieved-vs-intended attitude check (null ⇒ no pin applied).
       window.__netScenarioTumblePin = () => _scenarioTumblePin;
-      // ── Register item 14 (2026-08-07): the ship-attitude hold ─────────────
-      // Plan: .kilo/plans/1786068498588-pin-scenario-ship-attitude.md.
-      // The tumble pin (item 13) holds the CATCH's attitude exactly, but from
-      // REELING on CaptureNet._applyCatchOrientation rewrites it every frame as
-      // shipQuat ⊗ _qLocal, and the ship tracks PROGRADE (PlayerSatellite's
-      // rigid path rebuilds quaternion = prograde ⊗ _manualRotation from the
-      // live orbital velocity each frame). As the orbit propagates at 10× world
-      // time, the ship's rotation conjugates the catch away from the pin —
-      // measured ATTITUDE-DRIFT 4.5–9.0° by end of window, BERTHED chord max
-      // 0.282–0.284 vs the stable REELING 0.159. Because the chord metric is a
-      // MAX over the seated window and the berth hold's length is wall-clock/
-      // frame-rate luck (setTimeout snaps under the dt cap), the headline max
-      // was run-length-dependent on identical code. This hold removes the drift
-      // at the root: latch the ship's quaternion at NET_CATCH_SUCCESS (the value
-      // _qLocal is latched against at reel entry, so the catch's attitude stays
-      // EXACTLY the pin in both auto-reel orderings) and overwrite the compose
-      // every frame until CATCH_PROCESSED. Staging-only; zero production change.
+      // ── The ship-attitude hold ─────────────
+      // The tumble pin holds the CATCH's attitude exactly, but from REELING on
+      // CaptureNet._applyCatchOrientation rewrites it every frame as shipQuat ⊗ _qLocal, and the ship tracks
+      // PROGRADE (PlayerSatellite's rigid path rebuilds quaternion = prograde ⊗ _manualRotation from the live
+      // orbital velocity each frame). As the orbit propagates at 10× world time, the ship's rotation conjugates the
+      // catch away from the pin (measured 4.5–9.0° drift by end of window). The chord metric is a MAX over the seated
+      // window and the berth hold's length is wall-clock/frame-rate luck (setTimeout snaps under the dt cap), so
+      // without this hold the headline max was run-length-dependent. The hold latches the ship's quaternion at
+      // NET_CATCH_SUCCESS (the value _qLocal is latched against at reel entry, so the catch's attitude stays EXACTLY
+      // the pin in both auto-reel orderings) and overwrites the compose every frame until CATCH_PROCESSED.
+      // Staging-only; zero production change.
       //   `ship` option: undefined ⇒ hold whenever a tumble pin is applied;
-      //   'off'/null/false ⇒ never hold (the item-13-era control basis).
-      //   TUMBLE off ⇒ never hold (the pre-item-13 lottery stays untouched).
+      //   'off'/null/false ⇒ never hold.
+      //   TUMBLE off ⇒ never hold.
       const _SHIP_HOLD = { armed: false, engaged: false, everEngaged: false, quat: null };
       let _scenarioShipHoldOff = null;
       const _resolveScenarioShip = (s) => {
@@ -5148,15 +4281,12 @@ async function init() {
         if (s === null || s === false || s === 'off' || s === 'none') return false;
         return s === true || s === 'hold';
       };
-      // Smooth handback (plan D3): fold the held offset into _manualRotation so
-      // the next prograde compose equals the held attitude and the RECENTER_RATE
-      // servo eases it back to prograde — no ~10° snap in a long-lived dev page.
-      // NOTE: everEngaged is deliberately NOT cleared here — it survives
-      // disengagement so the harness's end-of-window check can distinguish
-      // "held the whole window, then processed" from "never engaged" (a run that
-      // reaches CATCH_PROCESSED before the drift read is a VALID held run).
-      // It resets only where no held measurement can exist: re-staging,
-      // fire-refusal, and a catch MISS (all start a fresh hold lifecycle).
+      // Smooth handback: fold the held offset into _manualRotation so the next prograde compose equals the held
+      // attitude and the RECENTER_RATE servo eases it back to prograde — no ~10° snap in a long-lived dev page.
+      // NOTE: everEngaged is deliberately NOT cleared here — it survives disengagement so the harness's end-of-window
+      // check can distinguish "held the whole window, then processed" from "never engaged" (a run that reaches
+      // CATCH_PROCESSED before the drift read is a VALID held run). It resets only where no held measurement can
+      // exist: re-staging, fire-refusal, and a catch MISS (all start a fresh hold lifecycle).
       const _disengageShipHold = () => {
         try {
           if (_SHIP_HOLD.engaged && _SHIP_HOLD.quat && player?._manualRotation) {
@@ -5167,12 +4297,10 @@ async function init() {
         } catch (_e) { /* dev-only handback; never break the scenario */ }
         _SHIP_HOLD.armed = false; _SHIP_HOLD.engaged = false; _SHIP_HOLD.quat = null;
       };
-      // Called once per frame from gameLoop, IMMEDIATELY after player.update —
-      // the call site is load-bearing: the reel/berth ticks read
-      // player.quaternion inside captureNetSystem.update later this frame, so
-      // the overwrite must land after the prograde compose and before that read
-      // (an end-of-loop site would be overwritten before the net ever sees it).
-      // One null-check per frame when disarmed (the freeze hooks' cost contract).
+      // Called once per frame from gameLoop, IMMEDIATELY after player.update — the call site is load-bearing: the
+      // reel/berth ticks read player.quaternion inside captureNetSystem.update later this frame, so the overwrite
+      // must land after the prograde compose and before that read (an end-of-loop site would be overwritten before
+      // the net ever sees it). One null-check per frame when disarmed (the freeze hooks' cost contract).
       window.__netShipHoldTick = () => {
         if (!_SHIP_HOLD.armed) return;
         try {
@@ -5188,14 +4316,11 @@ async function init() {
           ? { x: +_SHIP_HOLD.quat.x.toFixed(6), y: +_SHIP_HOLD.quat.y.toFixed(6), z: +_SHIP_HOLD.quat.z.toFixed(6), w: +_SHIP_HOLD.quat.w.toFixed(6) }
           : null,
       });
-      // Dev-only live-net accessor for scenario forensics (same __net* hook
-      // convention as __netScenarioProbe; read-only — never mutate through it).
+      // Dev-only live-net accessor for scenario forensics (read-only — never mutate through it).
       window.__scbScenarioNet = () => _scenarioNet;
-      // Register item 9: the DRAWN catch scale, decomposed from the instance
-      // matrix the pin actually wrote, beside the clamp-aware SSOT read — the
-      // direct probe-vs-pixels agreement witness (i8a read probe 2.000 while the
-      // unclamped pin drew 1.522). On-demand pure function, no tick, no
-      // per-frame cost (the __net* cost contract).
+      // The DRAWN catch scale, decomposed from the instance matrix the pin actually wrote, beside the clamp-aware
+      // SSOT read — the direct probe-vs-pixels agreement witness. On-demand pure function, no tick, no per-frame cost
+      // (the __net* cost contract).
       window.__netDrawnScale = () => {
         try {
           const M = 0.00001;
@@ -5222,7 +4347,7 @@ async function init() {
           };
         } catch (e) { return { ok: false, reason: String(e) }; }
       };
-      // hold-look (2026-10-24): jump straight into "a daughter is home holding a real 3-5 m piece" (js/dev/holdScenario.js; ?shot=1 only).
+      // hold-look: jump straight into "a daughter is home holding a real 3-5 m piece" (js/dev/holdScenario.js; ?shot=1 only).
       //   __holdScenario({ daughter: 1, sizeM: 4, radiatorsDeg: 146, fillOthers: null, motherTarget: null })  ->  { ok, pieces, status }
       //   __holdStatus()  ->  daughters' state / strut angle / catch size / wing-profile state, radiators' angle
       window.__holdScenario = (opts) => stageHoldScenario({
@@ -5260,44 +4385,32 @@ async function init() {
           const list = debrisField.debrisList || [];
           if (!list.length) return { ok: false, reason: 'debris field empty' };
 
-          // ── Small-catch plan W1 (2026-08-25): `subject` option ──────────
-          // 'whale' (default) = the historical ~2 m cubesat staging below,
-          // byte-identical (the regression subject every recorded gate ran
-          // against). 'fragment' = the owner's REAL catch class: a live
-          // welcome-field icosahedron fragment, sub-metre logical size, real
-          // fragment mass, and — deliberately — NO `_catchRenderMin` freeze:
-          // the production readability floor (CN.MOTHER_CATCH_MIN_RENDER_M
-          // ramp from reel entry) is part of the look under diagnosis (the
-          // "geometric ball" IS the floored icosahedron). Everything else
-          // (25 m prograde pin, aimed fire, roll overrides, tumble pin, ship
-          // hold) is shared so the two subjects differ ONLY in the catch.
+          // `subject` option: 'whale' (default) = the ~2 m cubesat staging below, byte-identical (the regression
+          // subject every recorded gate ran against). 'fragment' = the owner's REAL catch class: a live welcome-field
+          // icosahedron fragment, sub-metre logical size, real fragment mass, and — deliberately — NO
+          // `_catchRenderMin` freeze: the production readability floor (CN.MOTHER_CATCH_MIN_RENDER_M ramp from reel
+          // entry) is part of the look under diagnosis (the "geometric ball" IS the floored icosahedron).
+          // Everything else (25 m prograde pin, aimed fire, roll overrides, tumble pin, ship hold) is shared so the
+          // two subjects differ ONLY in the catch.
           const subject = (opts && opts.subject === 'fragment') ? 'fragment' : 'whale';
 
           // 1. The intro zoom eases over real dt — kill it so framing is fixed.
           cameraSystem.skipIntroZoom?.();
 
           // 2. Pick the whale deterministically from the LIVE welcome cluster.
-          //
-          //    MEASURED: on mission 1 DebrisField's enforcement pass kills
-          //    every piece that is not `welcomeSpawn` — `alive = false`,
-          //    `tracked = false`, instance scaled to zero (DebrisField.js
-          //    :1428-1436 for the blanket hide, :1478-1487 for the distance
-          //    cull). A naive `find(type === 'rocketBody')` therefore returns
-          //    a CORPSE: dead pieces are skipped by the update loop, so their
-          //    `_scenePosition` freezes (it read 5817 km out, drifting at the
-          //    ship's own 7.7 km/s) and the net has nothing to fly at — a
-          //    pre-flight range refusal, i.e. the missing envelop/brake/cinch
-          //    beats. Restrict to live welcome pieces, prefer a rocketBody,
-          //    else take the heaviest and raise its mass to whale grade.
-          //    `_meshKey` is still NEVER reassigned (see Traps) — only mass,
-          //    which is what MOTHER_MIN_MASS actually gates on.
+          //    On mission 1 DebrisField's enforcement pass (blanket hide + distance cull) kills every piece that is
+          //    not `welcomeSpawn` — `alive = false`, `tracked = false`, instance scaled to zero. A naive
+          //    `find(type === 'rocketBody')` therefore returns a CORPSE: dead pieces are skipped by the update loop,
+          //    so their `_scenePosition` freezes (5817 km out, drifting at the ship's own 7.7 km/s) and the net has
+          //    nothing to fly at (pre-flight range refusal: no envelop/brake/cinch beats). Restrict to live welcome
+          //    pieces, prefer a rocketBody, else take the heaviest and raise its mass to whale grade.
+          //    `_meshKey` is still NEVER reassigned (see Traps) — only mass, which MOTHER_MIN_MASS gates on.
           const live = list.filter(d => d && d.alive && d.welcomeSpawn);
           let whale;
           if (subject === 'fragment') {
-            // W1: the welcome cluster is mostly `fragment` rows (#1–#6), so a
-            // live pick always exists on mission 1. Prefer a CHUNK variant —
-            // the plate variants are flat shards, and the diagnosis under
-            // repro (D2's "geometric ball") is the icosahedron BODY read.
+            // The welcome cluster is mostly `fragment` rows (#1–#6), so a live pick always exists on mission 1.
+            // Prefer a CHUNK variant — the plate variants are flat shards, and the diagnosis under repro
+            // ("geometric ball") is the icosahedron BODY read.
             // Deterministic: first match in list order, same idiom as the
             // whale's find().
             const NV = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
@@ -5309,75 +4422,39 @@ async function init() {
           }
           if (!whale) return { ok: false, reason: 'no live welcome-field debris (mission-1 enforcement hides catalog pieces)' };
 
-          // 3. Fixed silhouette + physics. Whale-in-cone phase 3 (D1):
-          //    sizeMeter is NOT the rendered size — the renderer scales the
-          //    instance by sceneSize, and the rendered extent is
-          //    renderScale × DebrisWireframe.getBoundingRadius(type, id).
-          //    Derive the size from a DESIRED RENDERED RADIUS, then raise it
-          //    to CN.MOTHER_CATCH_MIN_RENDER_M so the net-held readability
-          //    clamp (DebrisField._updateInstanceTransform, W5) is a no-op and
-          //    the catch cannot pop 1.5× larger at the CAPTURED transition.
-          //    (The old "7 m presents under the 8 m net diameter from any
-          //    tumble angle" comment compared a logical sizeMeter against the
-          //    mouth DIAMETER while the renderer read a different field
-          //    entirely — right intent, wrong arithmetic — and ignored the
-          //    drape/cinch shrink that decides what the beat shows.)
-          //    600 kg clears the 500 kg whale threshold (MOTHER_MIN_MASS),
-          //    ~12% of the LARGE net's 5000 kg rating so the strain roll never
-          //    arms; oversize_aspect is safe (presentedWidthForApproach reads
-          //    lengthM/sizeMeter — 2.0 m ≪ the 8 m DIAMETER). Knock-ons, both
-          //    scenario-only: the berth standoff drops 4.5 m → 2.0 m (W12) and
-          //    the HUD target panel / ToolOdds / ToolRecommender see a 2.0 m
-          //    target instead of 7 m.
-          //    Register item 7 (2026-08-10): that oversize line is now TRUE by
-          //    the value it names — post-item-7 the setter re-derives
-          //    lengthM/widthM (2.0 / 1.82) instead of leaving the stale 0.30 /
-          //    0.27 this comment's claim accidentally relied on.
+          // 3. Fixed silhouette + physics. sizeMeter is NOT the rendered size: the renderer scales the instance
+          //    by sceneSize, and the rendered extent is renderScale × DebrisWireframe.getBoundingRadius(type, id).
+          //    Derive the size from a DESIRED RENDERED RADIUS, then raise it to CN.MOTHER_CATCH_MIN_RENDER_M so
+          //    the net-held readability clamp (DebrisField._updateInstanceTransform) is a no-op and the catch
+          //    cannot pop 1.5× larger at the CAPTURED transition.
+          //    600 kg clears the 500 kg whale threshold (MOTHER_MIN_MASS), ~12% of the LARGE net's 5000 kg
+          //    rating so the strain roll never arms; oversize_aspect is safe (presentedWidthForApproach reads
+          //    lengthM/sizeMeter — 2.0 m ≪ the 8 m DIAMETER). Scenario-only knock-ons: the berth standoff is
+          //    2.0 m (not 4.5 m) and the HUD target panel / ToolOdds / ToolRecommender see a 2.0 m target.
           if (subject === 'fragment') {
-            // W1 fragment staging (small-catch plan, 2026-08-25) — production-
-            // faithful on purpose, the OPPOSITE of the whale branch below:
-            //   • 0.5 m logical size — the owner's 0.3–0.6 m band; rendered
-            //     radius = 0.5 × br(variant) ≈ 0.5–0.65 m (sub-metre).
-            //   • 2 kg — the real fragment mass band (0.01–5 kg), so the
-            //     collar digestion runs the digestSpanS FLOOR (60 game-s ≈
-            //     6 wall-s) and the filmstrip can include the whole chop/feed
-            //     tail (D2/W3's subject) inside a sane CAP_MS.
-            //   • NO `_catchRenderMin` freeze and NO mass raise — the
-            //     production readability floor (CN.MOTHER_CATCH_MIN_RENDER_M
-            //     ramp from reel entry, CaptureNet._catchFloorScale) and the
-            //     real small-catch arithmetic ARE the look under diagnosis.
-            //     Every recorded whale gate stays on the frozen branch below,
-            //     bit-comparable with its own history.
+            // Production-faithful on purpose, the OPPOSITE of the whale branch below:
+            //   • 0.5 m logical size — the owner's 0.3–0.6 m band; rendered radius = 0.5 × br(variant) ≈ 0.5–0.65 m.
+            //   • 2 kg — the real fragment mass band (0.01–5 kg), so the collar digestion runs the digestSpanS
+            //     FLOOR (60 game-s ≈ 6 wall-s) and the filmstrip can include the whole chop/feed tail inside CAP_MS.
+            //   • NO `_catchRenderMin` freeze and NO mass raise — the production readability floor
+            //     (CN.MOTHER_CATCH_MIN_RENDER_M ramp from reel entry, CaptureNet._catchFloorScale) and the real
+            //     small-catch arithmetic ARE the look under diagnosis.
             whale.mass = 2;
             DebrisField.setDebrisSize(whale, 0.5);
             whale.brittleness = 0.3;
           } else {
           whale.mass = 600;
-          // Register item 8 (2026-08-07; plan 1786109997497): freeze the staged
-          // whale's `_catchRenderMin` at 0 — swallow the per-frame floor writes
-          // from the reel/berth ticks. The corrected floor (a true rendered-
-          // radius floor in metres now) is a gameplay READABILITY aid that
-          // deliberately draws a sub-floor held catch larger than physics and
-          // fattens the bag's contents box to match (CaptureNetVisual reads the
-          // clamp-aware effectiveRenderScale — W5 by design). The scenario's
-          // measurement subject is the opposite contract (SCALE-GATE + popFactor
-          // ≈ 1.00: the rendered whale IS the whale physics believes in), and
-          // pre-item-8 D1's sizing made the buggy floor a no-op. Post-fix the
-          // floor fires on the staged whale (measured live this session:
-          // rendered radius 1.522 → 2.000 m at the catch, popFactor 1.314, and
-          // the held-state chord family re-basing 0.159 → 0.208 as the box
-          // fattens). A per-frame zeroing tick CANNOT work — the reel/berth
-          // ticks rewrite the field later the same frame, before the visual's
-          // floor read. Freezing the property on the staged object is the only
-          // race-free opt-out: dev-only, per-debris, zero production code
-          // change — every gate stays bit-comparable with the item-14 family
-          // while production catches keep the corrected floor.
-          // Register item 9 (2026-08-08; plan 1786153380617): the freeze now
-          // covers BOTH matrix writers — `pinCapturedDebris` reads the floor
-          // through `effectiveRenderScale` too, whose predicate reads this
-          // getter's 0 exactly as `_updateInstanceTransform`'s does. So the
-          // staged whale still draws at physics size on every frame, and the
-          // measured gate family below is unchanged by that unification.
+          // Freeze the staged whale's `_catchRenderMin` at 0 — swallow the per-frame floor writes from the
+          // reel/berth ticks. The production floor (a rendered-radius floor in metres) is a READABILITY aid
+          // that deliberately draws a sub-floor held catch larger than physics and fattens the bag's contents
+          // box to match (CaptureNetVisual reads the clamp-aware effectiveRenderScale). This scenario's
+          // measurement subject is the opposite contract (SCALE-GATE + popFactor ≈ 1.00: the rendered whale
+          // IS the whale physics believes in); without the freeze the floor fires (rendered radius
+          // 1.522 → 2.000 m, popFactor 1.314). A per-frame zeroing tick CANNOT work — the reel/berth ticks
+          // rewrite the field later the same frame, before the visual's floor read. Freezing the property on
+          // the staged object is the only race-free opt-out: dev-only, per-debris, no production change.
+          // It covers BOTH matrix writers: `pinCapturedDebris` reads the floor through `effectiveRenderScale`
+          // too, whose predicate reads this getter's 0 exactly as `_updateInstanceTransform`'s does.
           try {
             Object.defineProperty(whale, '_catchRenderMin', {
               get: () => 0, set: () => {}, configurable: true,
@@ -5391,33 +4468,22 @@ async function init() {
             Constants.CAPTURE_NET.MOTHER_CATCH_MIN_RENDER_M,
           ));                               // cubesat br 0.7610 ⇒ sizeMeter 2.0 ⇒ rendered radius 1.522 m
           whale.brittleness = 0.3;
-          }   // end whale-subject staging (W1: fragment branch above)
+          }   // end whale-subject staging (fragment branch above)
 
           // 4. Put the whale 25 m ahead — CO-ORBITAL FIRST, then pinned.
+          //    `_onboardingPinned` alone does NOT move a distant body (measured: a whale 5817 km away stayed
+          //    there with every pin precondition satisfied; the orbit branch keeps authoring `_scenePosition`).
+          //    The tease pin is a hold-in-place override for pieces ALREADY co-orbital with the mother
+          //    (spawnWelcomeField repositions them first), not a teleport. So copy the mother's elements onto
+          //    the whale and advance its true anomaly by the along-track angle for 25 m; then the orbit branch
+          //    and the pin agree, and the net's 11 s flight envelope reaches it.
           //
-          //    MEASURED, not assumed: `_onboardingPinned` alone does NOT move
-          //    a distant body. With every pin precondition satisfied
-          //    (_onboardingPinned, _motherFwd/_motherRight, instance slot,
-          //    canonical ref) a whale 5817 km away stayed 5817 km away while
-          //    the pin arithmetic itself was correct (~60 m) — the orbit
-          //    branch keeps authoring `_scenePosition`. The tease pin is a
-          //    hold-in-place override for pieces ALREADY co-orbital with the
-          //    mother (spawnWelcomeField repositions them first); it is not a
-          //    teleport. So copy the mother's elements onto the whale and
-          //    advance its true anomaly by the along-track angle for 25 m —
-          //    then the orbit branch and the pin agree, and the net's 11 s
-          //    flight envelope actually reaches it.
-          //
-          //    25 m, not 60: `launchDirection` is frozen at fire
-          //    (CaptureNet.js:501) while the pinned whale rides the ROTATING
-          //    LVLH frame, and the orbit propagates at TIME_SCALE_GAMEPLAY 10×
-          //    wall while the net flies at ~0.5× ceremony dilation — per metre
-          //    of flight the frame rotates ~2.3 mrad, so a 60 m stage lands
-          //    ~7 m wide of the mouth (measured 2026-08-02: netToWhaleM min
-          //    7.0 m vs the 4 m LARGE radius → deterministic miss, no contact
-          //    beats ever fire). At 25 m the error is ~1.4 m ≪ 4 m, the shot
-          //    is inside CN.CLOSE_RANGE (30 m) so CATCH_RADIUS_FORGIVENESS
-          //    applies, and the catch resolves inside the ceremony beats.
+          //    25 m, not 60: `launchDirection` is frozen at fire (CaptureNet.js constructor) while the pinned whale rides the
+          //    ROTATING LVLH frame, and the orbit propagates at TIME_SCALE_GAMEPLAY 10× wall while the net
+          //    flies at ~0.5× ceremony dilation — per metre of flight the frame rotates ~2.3 mrad, so a 60 m
+          //    stage lands ~7 m wide of the mouth (measured: netToWhaleM min 7.0 m vs the 4 m LARGE radius).
+          //    At 25 m the error is ~1.4 m ≪ 4 m, the shot is inside CN.CLOSE_RANGE (30 m) so
+          //    CATCH_RADIUS_FORGIVENESS applies, and the catch resolves inside the ceremony beats.
           const M = 0.00001; // 1 metre in scene units (same M as InputManager)
           const pElems = (typeof player.getOrbitalElements === 'function')
             ? player.getOrbitalElements() : null;
@@ -5429,12 +4495,10 @@ async function init() {
           whale.orbit.raan          = pElems.raan;
           whale.orbit.argPerigee    = pElems.argPerigee;
           whale.orbit.meanMotion    = pElems.meanMotion;
-          // Along-track angle for 25 m at this radius (elements are in scene
-          // units: 1 scene unit = 100 km, so 25 m = 25e-5).
+          // Along-track angle for 25 m (elements in scene units: 1 scene unit = 100 km).
           const dNu = (25 * M) / Math.max(1e-9, pElems.semiMajorAxis);
           whale.orbit.trueAnomaly = pElems.trueAnomaly + dNu;
-          // Pin as well: it holds the piece steady in the mother's frame for
-          // the render/selection path, and registering the id is what makes
+          // Pin as well: it holds the piece steady in the mother's frame, and registering the id is what makes
           // DebrisField compute the _motherFwd/_motherRight basis at all.
           whale._onboardingPinned = true;
           whale._onboardingPinFwd = 25 * M;
@@ -5444,18 +4508,13 @@ async function init() {
           // 5. Select it so every aiming/reticle path agrees on the target.
           targetSelector.setTarget(whale, { source: 'onboarding_pick' });
 
-          // 6. Fire pod 0 AT the pinned whale — not along ship +Z. The pin
-          //    sits on the prograde axis, and nose ≠ prograde whenever the
-          //    attitude is driven (opening dance, slews), so an aimed
-          //    shot is the only attitude-independent fire. Compute the pin
-          //    position analytically (same math as DebrisField's basis):
-          //    pinnedPos = playerPos + prograde × 25 m; dir = muzzle → pin.
+          // 6. Fire pod 0 AT the pinned whale, not along ship +Z: the pin sits on the prograde axis, and
+          //    nose ≠ prograde whenever the attitude is driven, so an aimed shot is the only
+          //    attitude-independent fire. pinnedPos = playerPos + prograde × 25 m; dir = muzzle → pin.
           const pOrbit = (typeof player.getOrbitalElements === 'function')
             ? player.getOrbitalElements() : null;
           if (!pOrbit) return { ok: false, reason: 'no player orbit' };
-          // orbitToSceneCartesianInto needs a position write-slot, but only the
-          // velocity (_cv) is consumed here — position comes from playerPos.
-          // _cp is a throwaway required by the helper, never read.
+          // Only the velocity (_cv) is consumed; _cp is a throwaway write-slot the helper requires.
           const _cp = { x: 0, y: 0, z: 0 }, _cv = { x: 0, y: 0, z: 0 };
           orbitToSceneCartesianInto(pOrbit, _cp, _cv);
           void _cp;
@@ -5466,14 +4525,11 @@ async function init() {
             y: playerPos.y + (_cv.y / vl) * 25 * M,
             z: playerPos.z + (_cv.z / vl) * 25 * M,
           };
-          // Whale-in-cone plan: freeze the whale's pin basis at FIRE-time prograde.
-          // The ceremony runs ~19 s wall-clock but the world/orbit propagate at
-          // TIME_SCALE_GAMEPLAY×10 (~190 s), slewing prograde ~12.5°. The pin
-          // normally tracks live prograde (DebrisField._motherFwd rebuilt each
-          // frame), so the whale would ride that slew and walk laterally out of
-          // the frozen capture cone. Latching the fire-time basis keeps the
-          // pinned target on the same frozen line the net flies. Build the basis
-          // with DebrisField's exact construction (fwd = prograde, right = fwd×radial).
+          // Freeze the whale's pin basis at FIRE-time prograde. The ceremony runs ~19 s wall-clock but the
+          // orbit propagates at TIME_SCALE_GAMEPLAY×10 (~190 s), slewing prograde ~12.5°. The pin normally
+          // tracks live prograde (DebrisField._motherFwd rebuilt each frame), so the whale would walk
+          // laterally out of the frozen capture cone. Build the basis with DebrisField's exact construction
+          // (fwd = prograde, right = fwd×radial).
           const _rl = Math.hypot(playerPos.x, playerPos.y, playerPos.z) || 1;
           const _fx = _cv.x / vl, _fy = _cv.y / vl, _fz = _cv.z / vl;
           const _rx = playerPos.x / _rl, _ry = playerPos.y / _rl, _rz = playerPos.z / _rl;
@@ -5488,37 +4544,21 @@ async function init() {
           const b = new THREE.Vector3(pinnedPos.x - posScene.x, pinnedPos.y - posScene.y, pinnedPos.z - posScene.z);
           if (b.lengthSq() > 0) b.normalize();
           let dir = { x: b.x, y: b.y, z: b.z };
-          // Whale-in-cone plan Task 2 (2026-08-04): the direct muzzle→pin bearing
-          // IS the correct aim. The pinned whale's _scenePosition and this
-          // pinnedPos are the same formula (playerPos + prograde×25 m,
-          // DebrisField.js:1834-1841), both relative to playerPos, so ship
-          // translation cancels exactly and the only residual target drift is
-          // prograde rotation (~1.1e-3 rad/s × 25 m ≈ 0.03 m/s ≈ 7 cm over the
-          // flight) — below any clearance threshold. The previous off-axis bias
-          // (deleted here) flew the net ~4.9 m wide of the whale; it had been
-          // tuned to satisfy a net-centre-range gate that could not see the
-          // miss. A lead term here is unjustified and is the vector for that
-          // regression — do not reintroduce one.
-          // TRAP (plan §0): the pod accessor returns SCENE UNITS,
-          // NetProjectile works in METRES — divide by M.
+          // The direct muzzle→pin bearing IS the correct aim: the pinned whale's _scenePosition and pinnedPos
+          // are the same formula (playerPos + prograde×25 m, DebrisField.js update, the tease-pin branch), both relative to playerPos, so ship
+          // translation cancels and the only residual drift is prograde rotation (~1.1e-3 rad/s × 25 m ≈
+          // 0.03 m/s ≈ 7 cm over the flight). A lead term or off-axis bias is unjustified (the old one flew
+          // the net ~4.9 m wide) — do not reintroduce one.
+          // TRAP: the pod accessor returns SCENE UNITS, NetProjectile works in METRES — divide by M.
           const posMetres = { x: posScene.x / M, y: posScene.y / M, z: posScene.z / M };
 
-          // 7. Release the pin the moment the catch resolves (either way):
-          //    the reel/berth drives the whale via its own _armPinned pins,
-          //    and _updateInstanceTransform checks _onboardingPinned FIRST —
-          //    an unreleased tease pin would glue the whale at 25 m while
-          //    the net package reels in empty (the LASSO_CONTACT hazard).
-          //    BACKSTOP ONLY: DebrisField's own NET_CATCH_SUCCESS listener
-          //    (DebrisField.js:633) already releases the pin on this event.
-          //    An unconditional second _clearOnboardingPin re-syncs the orbit
-          //    with _onboardingPinFwd already zeroed — trueAnomaly = the
-          //    ship's exact phase — and TELEPORTS the whale onto the ship
-          //    (measured 2026-08-05: spRelShip = 0 at REELING entry, so the
-          //    reel seeded at the standoff and "completed" instantly, the
-          //    REEL_IN beat never chained, and the berth camera geometry was
-          //    measured against a catch that was never reeled). Gate on the
-          //    pin still being held; _clearOnboardingPin is now idempotent
-          //    too, but never rely on a double release being safe.
+          // 7. Release the pin the moment the catch resolves (either way): the reel/berth drives the whale via
+          //    its own _armPinned pins, and _updateInstanceTransform checks _onboardingPinned FIRST — an
+          //    unreleased tease pin would glue the whale at 25 m while the net reels in empty.
+          //    BACKSTOP ONLY: DebrisField's own NET_CATCH_SUCCESS listener already releases the pin. An
+          //    unconditional second _clearOnboardingPin re-syncs the orbit with _onboardingPinFwd already
+          //    zeroed (trueAnomaly = the ship's exact phase) and TELEPORTS the whale onto the ship, so the reel
+          //    "completes" instantly and REEL_IN never chains. Gate on the pin still being held.
           if (typeof _scenarioPinReleaseOff === 'function') _scenarioPinReleaseOff();
           const release = () => {
             if (debrisField._onboardingPinIds?.has(whale.id)) {
@@ -5531,11 +4571,9 @@ async function init() {
           const offNo  = eventBus.on(Events.NET_CATCH_MISS, release);
           _scenarioPinReleaseOff = () => { offOk?.(); offNo?.(); };
 
-          // ── Scenario fire-time forensics (net-look remediation Task 4) ──
-          // The net flies a frozen world-space line, so WHICH point it aims at
-          // decides whether the whale passes through the mouth. Report the lead
-          // direction vs the direct bearing, and the resulting aimed world point
-          // vs the whale's live rendered position, ship-relative metres.
+          // Scenario fire-time forensics: the net flies a frozen world-space line, so WHICH point it aims at
+          // decides whether the whale passes through the mouth. Reports lead direction vs direct bearing and
+          // the aimed world point vs the whale's live rendered position, ship-relative metres.
           try {
             const ship = player.getPosition?.();
             const rel = (v) => (v && ship)
@@ -5554,33 +4592,23 @@ async function init() {
             console.info(`[netScenario/fire] muzzle=${JSON.stringify(muzzRel)} aim(prograde+25m)=${JSON.stringify(aimRel)} leadDir=[${dir.x.toFixed(4)},${dir.y.toFixed(4)},${dir.z.toFixed(4)}] leadAim25m=${JSON.stringify(leadRel)} whaleLive=${JSON.stringify(whaleRel)} whaleAimGapM=${whaleAimGap}`);
           } catch (_e) { /* best-effort */ }
 
-          // ── 7.5 Pin the catch's tumble (register item 13, 2026-08-06) ──
-          // Plan: .kilo/plans/1786017377440-pin-scenario-catch-tumble.md.
-          // MEASURED: the frozen attitude both live gates measure was FOUR
-          // independent draws — spawn tumbleAxis, spawn tumbleAngle, spawn
-          // tumbleRate and the frame-quantized time to capture. Nothing is
-          // frozen before capture (DebrisField._advanceTumble only early-returns
-          // on _capturedByArm/_armPinned, first set at REELING entry), so the
-          // pixel gate's pinned CINCH still is grabbed off a live 10 °/s tumble
-          // (the DEBRIS_MAX_VISUAL_TUMBLE_DEG_S clamp), and after capture
-          // CaptureNet._applyCatchOrientation rewrites the attitude every frame
-          // from the ship frame plus a spawn-rate-dependent carryover spin.
-          // Cost, measured: whalePxFrac spanned [0.184, 0.361] and chordPierceM
-          // 0.243–0.666 on IDENTICAL code (register items 5/13).
+          // ── 7.5 Pin the catch's tumble ──
+          // Without the pin the frozen attitude both live gates measure is FOUR independent draws: spawn
+          // tumbleAxis, tumbleAngle, tumbleRate and the frame-quantized time to capture. Nothing is frozen
+          // before capture (DebrisField._advanceTumble only early-returns on _capturedByArm/_armPinned, first
+          // set at REELING entry), so the pixel gate's pinned CINCH still is grabbed off a live 10 °/s tumble
+          // (DEBRIS_MAX_VISUAL_TUMBLE_DEG_S clamp), and after capture CaptureNet._applyCatchOrientation
+          // rewrites the attitude every frame from the ship frame plus a spawn-rate-dependent carryover spin
+          // (measured on identical code: whalePxFrac spanned [0.184, 0.361], chordPierceM 0.243–0.666).
           //
-          // The pin is three writes and no production change: rate 0 makes
-          // _advanceTumble a no-op AND zeroes _tumbleCarryover (min(0, cap)), so
-          // the attitude holds from staging through BERTHED. It is expressed in
-          // the KIT frame — the frame the floor/chord maths and the CINCH camera
-          // actually read (qB2K = qKit⁻¹ ⊗ tumble) — via the one shared
-          // conversion in CaptureNetVisual, so the pinned number cannot drift if
-          // the staging bearing ever moves. NOMINAL x@120° was chosen on a
-          // 312-attitude sweep: chord 0.447 m (mid-family, 0.2 m under the live
-          // 0.65 sanity bound) and the flattest neighbourhood measured (±10 mm
-          // per ±5°); ADVERSE y@150° is the measured core plateau (0.666 ±1 mm),
-          // kept selectable so pinning does not hide the worst case.
-          // Trade recorded: the harness catch no longer spins down in the bag,
-          // and one attitude is not orientation coverage — that lives in
+          // The pin is three writes, no production change: rate 0 makes _advanceTumble a no-op AND zeroes
+          // _tumbleCarryover (min(0, cap)), so the attitude holds from staging through BERTHED. It is
+          // expressed in the KIT frame (the frame the floor/chord maths and the CINCH camera read:
+          // qB2K = qKit⁻¹ ⊗ tumble) via the one shared conversion in CaptureNetVisual. NOMINAL x@120° was
+          // chosen on a 312-attitude sweep: chord 0.447 m (mid-family, 0.2 m under the live 0.65 sanity bound),
+          // flattest neighbourhood (±10 mm per ±5°); ADVERSE y@150° is the measured core plateau
+          // (0.666 ±1 mm), kept selectable so pinning does not hide the worst case.
+          // The harness catch no longer spins down in the bag, and one attitude is not orientation coverage: that lives in
           // tmp/g6-attitude-sweep.mjs and the ADVERSE pass.
           _scenarioTumblePin = null;
           try {
@@ -5602,26 +4630,21 @@ async function init() {
                   kitDeg: spec.kitDeg,
                   worldAxis: { x: +pin.axis.x.toFixed(6), y: +pin.axis.y.toFixed(6), z: +pin.axis.z.toFixed(6) },
                   worldAngleDeg: +(radToDeg(pin.angle)).toFixed(3),
-                  // The rows the box spec will carry (v_box = R·v_kit ⇒ matrix of
-                  // qB2K⁻¹): what the harness compares the LIVE spec against, so a
-                  // convention slip or a lost pin fails loudly instead of silently
-                  // returning both gates to a lottery.
+                  // Rows the box spec will carry (v_box = R·v_kit ⇒ matrix of qB2K⁻¹): the harness compares the
+                  // LIVE spec against them, so a convention slip or a lost pin fails loudly.
                   boxInKitRows: boxRowsForKitAttitude(spec.kitAxis, degToRad(spec.kitDeg)),
                 };
               }
             }
           } catch (_e) { /* dev-only staging aid; never break the scenario */ }
 
-          // ── 7.6 Arm the ship-attitude hold (register item 14, 2026-08-07) ──
-          // Plan: .kilo/plans/1786068498588-pin-scenario-ship-attitude.md. The
-          // latch listens for the SAME catch event the pin release above uses;
-          // engagement is the latch + the per-frame overwrite in
-          // __netShipHoldTick (call site there is load-bearing). Disengagement
-          // at CATCH_PROCESSED hands back smoothly via _manualRotation (D3); a
-          // miss (rolls are overridden, but hygiene) or a re-stage disarms.
+          // ── 7.6 Arm the ship-attitude hold ──
+          // The latch listens for the SAME catch event the pin release above uses; engagement is the latch +
+          // the per-frame overwrite in __netShipHoldTick (call site there is load-bearing). Disengagement at
+          // CATCH_PROCESSED hands back smoothly via _manualRotation; a miss or a re-stage disarms.
           if (typeof _scenarioShipHoldOff === 'function') _scenarioShipHoldOff();
           _scenarioShipHoldOff = null;
-          _disengageShipHold();   // smooth handback if a prior hold was engaged (D3); resets flags either way
+          _disengageShipHold();   // smooth handback if a prior hold was engaged; resets flags either way
           _SHIP_HOLD.everEngaged = false;   // a fresh staging starts a new hold lifecycle
           try {
             if (_scenarioTumblePin && _resolveScenarioShip(opts && opts.ship)) {
@@ -5670,10 +4693,8 @@ async function init() {
           net._strainRollOverride = 1.0;  // never strain-slips
           _scenarioNet = net;
 
-          // Whale-in-cone plan Task 2.5 — expose the invariant the harness unit
-          // test asserts: the fired launchDirection must be within 0.5° of the
-          // direct muzzle→pin bearing (a lead/bias would violate it). Fire-time
-          // snapshot; never read back into gameplay.
+          // Invariant the harness unit test asserts: the fired launchDirection is within 0.5° of the direct
+          // muzzle→pin bearing (a lead/bias would violate it). Fire-time snapshot; never read back into gameplay.
           _scenarioAimInvariant = {
             launchDirection: { x: dir.x, y: dir.y, z: dir.z },
             muzzleScene: { x: posScene.x, y: posScene.y, z: posScene.z },
@@ -5690,27 +4711,19 @@ async function init() {
         }
       };
 
-      // Balloon→fabric (F5): the drawn rim at the whale's depth + the pierce
-      // metric, computed ONLY through the NetMeshKit exports (with the identical
-      // open-cone clamp the mesh uses — Task 7) so probe/recorder and mesh can
-      // never drift. With a contentsBox on the handle the floor varies per spoke
-      // angle, so the honest metric is per-angle: drawnRim = MIN over angles;
-      // pierceM = MAX over angles of (hull surface distance − drawn rim), so a
-      // positive pierceM still means the film cuts into the catch (the gate's
-      // sign convention is unchanged). Sphere fallback keeps the original
-      // bounding-sphere-vs-rim semantics. `natural` is drawnRimRadiusAtDepth at
-      // the whale's depth (scene units); renderRadiusM is the bounding-sphere
-      // render radius in METRES.
-      // Returns the SHARED scratch `_netDp` (allocation-free per frame — the
-      // recorder calls this every frame while enabled): callers read fields
-      // immediately and never retain the reference.
+      // The drawn rim at the whale's depth + the pierce metric, computed ONLY through the NetMeshKit exports
+      // (identical open-cone clamp the mesh uses) so probe/recorder and mesh can never drift. With a
+      // contentsBox on the handle the floor varies per spoke angle: drawnRim = MIN over angles; pierceM = MAX
+      // over angles of (hull surface distance − drawn rim), so positive pierceM means the film cuts into the
+      // catch. Sphere fallback keeps the bounding-sphere-vs-rim semantics. `natural` is drawnRimRadiusAtDepth
+      // at the whale's depth (scene units); renderRadiusM is the bounding-sphere render radius in METRES.
+      // Returns the SHARED scratch `_netDp` (allocation-free; the recorder calls this every frame): callers
+      // read fields immediately and never retain the reference.
       const _netDp = { drawnRimM: null, pierceM: null, fillFrac: null, boxFloorM: null, chordPierceM: null };
       const _netDpBox = [null, null, null];
       function _netDrawnRimPierce(kh, lpZ, natural, renderRadiusM, M) {
-        // The open-cone clamp the mesh applies at the whale's depth: the cone
-        // radius at the ring's DRAPED z — here the ring AT this depth, i.e. the
-        // static cone radius mouthRadius·(a/H). Identical rule, identical maths
-        // (probe/mesh never drift); mouthRadius at/past the mouth plane.
+        // Open-cone clamp the mesh applies at the whale's depth: the static cone radius mouthRadius·(a/H) at
+        // the ring's DRAPED z (the ring AT this depth); mouthRadius at/past the mouth plane.
         const openCone = kh.mouthRadius * clamp01(-lpZ / kh.coneHeight);
         const cB = kh._contentsBox ?? null;
         if (kh._drape > 0 && contentsBoxValid(cB)) {
@@ -5735,19 +4748,16 @@ async function init() {
           _netDpBox[1] = +(cB.hy / M).toFixed(3);
           _netDpBox[2] = +(cB.hz / M).toFixed(3);
           _netDp.boxFloorM = _netDpBox;
-          // Follow-up 4: the DRAWN polyline, not just the envelope — worst
-          // chord penetration into the UNMARGINED box over every lattice edge
-          // (positive = the film touches the hull; same sign as pierceM). The
-          // kit export reads the handle's LIVE membranePositions, so the
-          // bicone tents are included by construction and probe ≡ mesh. ~17k
-          // point evals; probe/recorder are dev-only, never a production cost.
+          // The DRAWN polyline, not just the envelope: worst chord penetration into the UNMARGINED box over
+          // every lattice edge (positive = the film touches the hull; same sign as pierceM). The kit export
+          // reads the handle's LIVE membranePositions, so bicone tents are included and probe ≡ mesh.
+          // ~17k point evals; dev-only.
           const chordWorst = chordBoxPenetration(kh.membranePositions, kh.rings, kh.radialSpokes, cB);
           _netDp.chordPierceM = chordWorst === null ? null : +(chordWorst / M).toFixed(3);
           return _netDp;
         }
-        // F4 legacy sphere fallback — unreachable from the production drivers
-        // (they always supply a valid box with contentsRadius); kept for parity
-        // with the kit's sphere branch and the Task-5/7 test contract.
+        // Legacy sphere fallback — unreachable from the production drivers (they always supply a valid box
+        // with contentsRadius); kept for parity with the kit's sphere branch and its test contract.
         const floor = (kh._drape > 0)
           ? Math.min(contentsFloorRadius(lpZ, kh._contentsZ ?? 0, kh._contentsR ?? 0), openCone)
           : 0;
@@ -5760,13 +4770,10 @@ async function init() {
         return _netDp;
       }
 
-      // ── Scenario probe (harness diagnostics) ──
-      //   window.__netScenarioProbe()
-      //     → live state of the staged scenario: the net's FSM state and
-      //       flight progress, and the whale's ACTUAL distance from the pod
-      //       muzzle. This is how you tell a real contact from a flight
-      //       time-out: if whaleDistM is not ~25, the prograde pin never
-      //       took, and the net is flying at empty space.
+      // ── Scenario probe: window.__netScenarioProbe() ──
+      // Live state of the staged scenario: the net's FSM state and flight progress, and the whale's ACTUAL
+      // distance from the pod muzzle. If whaleDistM is not ~25, the prograde pin never took and the net is
+      // flying at empty space (a flight time-out, not a real contact).
       window.__netScenarioProbe = () => {
         try {
           const M = 0.00001;
@@ -5780,19 +4787,15 @@ async function init() {
           return {
             netState:      net?.state ?? null,
             catchResult:   net?.catchResult ?? null,
-            // Small-catch plan W1/W3: the collar digestion's live phase — the
-            // filmstrip needs to know when the chop runs (D2's bare-shrink
-            // window) and when the body is consumed (`_digestedOut`, set the
-            // tick the net is spliced), so the capture loop can hold through
-            // the whole tail instead of stopping at COLLARED entry.
+            // Collar digestion's live phase: the filmstrip needs to know when the chop runs and when the body
+            // is consumed (`_digestedOut`, set the tick the net is spliced), so the capture loop holds
+            // through the whole tail instead of stopping at COLLARED entry.
             digestPhaseT:  net?._digestPhaseT != null ? +net._digestPhaseT.toFixed(2) : null,
             breakdownActive: !!whale?._breakdownActive,
             digested:      net?._digestedOut === true,
-            // Live perf tier. Written in exactly two places, both inside
-            // SceneManager (:95 initial via _detectInitialTier, :562 inside
-            // applyTier), so a plain read here is race-free. Reported on every
-            // probe call so a capture run cannot quietly drift back into
-            // measuring the LOW-tier degraded path while claiming otherwise.
+            // Live perf tier (written only inside SceneManager: initial _detectInitialTier and applyTier, so a
+            // plain read is race-free). Reported on every call so a capture run cannot quietly measure the
+            // LOW-tier degraded path.
             tier:          sceneManager?.currentTier ?? null,
             flightTime:    net ? +net.flightTime.toFixed(2) : null,
             travelledM:    net ? +net.distanceTraveled.toFixed(1) : null,
@@ -5803,19 +4806,17 @@ async function init() {
             motherRightSet: !!debrisField?._motherRight,
             pinIds:        debrisField?._onboardingPinIds?.size ?? null,
             clingOverride: net?._clingRollOverride ?? null,
-            // Decisive: the net's OWN distance to the whale. If this stays
-            // ~25 m while travelledM climbs, the net is flying off-axis.
+            // Decisive: the net's OWN distance to the whale; if it stays ~25 m while travelledM climbs, the
+            // net is flying off-axis.
             netToWhaleM: (() => {
               if (!net?.position || !sp) return null;
               return +(Math.hypot(sp.x / M - net.position.x, sp.y / M - net.position.y,
                                   sp.z / M - net.position.z)).toFixed(1);
             })(),
-            // Cone-containment (net-fabric-look phase 2): the whale in the
-            // ceremony bag's LOCAL frame (apex z=0, mouth z=-coneH). The whale
-            // is visually inside the bag ⇔ zM ∈ [-coneH, 0] and rM (lateral
-            // off-axis) ≤ mouthRadius × t. net-centre distance (netToWhaleM)
-            // cannot see an off-axis whale; this can. The harness tracks the
-            // min rM and whether insideCone was ever true through CONTACT→CINCH.
+            // Cone-containment: the whale in the ceremony bag's LOCAL frame (apex z=0, mouth z=-coneH). Inside
+            // the bag ⇔ zM ∈ [-coneH, 0] and rM (lateral off-axis) ≤ mouthRadius × t. netToWhaleM cannot see an
+            // off-axis whale; this can. The harness tracks the min rM and whether insideCone was ever true
+            // through CONTACT→CINCH.
             whaleLocal: (() => {
               try {
                 const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
@@ -5827,13 +4828,10 @@ async function init() {
                 kh.group.worldToLocal(lp);
                 const zM = lp.z / M, rM = Math.hypot(lp.x, lp.y) / M;
                 const mouthRM = kh.mouthRadius / M, coneHM = kh.coneHeight / M;
-                // Containment is computed by the SHARED predicate (whale-in-cone
-                // Task 1) so probe, harness and tests cannot drift.
+                // Containment uses the SHARED predicate so probe, harness and tests cannot drift.
                 const coneR = coneRadiusAtDepth(mouthRM, coneHM, -zM);
                 const clearance = coneR - rM;
-                // Review §Minor: the deficit must use the RENDERED radius —
-                // sizeMeter/2 is not the rendered size (W5), so the old
-                // expression under-read by ~0.5 m on the ceremony whale.
+                // The deficit must use the RENDERED radius (sizeMeter/2 is not the rendered size).
                 DebrisWireframe.getGeometry(whale.type, whale.id);
                 const brL = DebrisWireframe.getBoundingRadius(whale.type, whale.id) || 1;
                 const whaleHalfM = DebrisField.effectiveRenderScale(whale) * brL / M;
@@ -5848,33 +4846,27 @@ async function init() {
                 };
               } catch (_e) { return null; }
             })(),
-            // ── Whale-in-cone phase 3 (Task 2.1): scale-aware witness block ──
-            // sizeMeter is NOT the rendered size — the renderer scales the
-            // instance by sceneSize (raised to _catchRenderMin while _armPinned,
-            // W5) and the rendered extent is renderScale × boundingRadius. This
-            // block measures the RENDERED whale against the DRAWN bag rim, so a
-            // sub-metre crumb can never again satisfy a 7 m gate. All metre
-            // fields are true metres; renderScale/sceneSize are scene units.
+            // ── Scale-aware witness block ──
+            // sizeMeter is NOT the rendered size: the renderer scales the instance by sceneSize (raised to
+            // _catchRenderMin while _armPinned) and the rendered extent is renderScale × boundingRadius. This
+            // block measures the RENDERED whale against the DRAWN bag rim. All metre fields are true metres;
+            // renderScale/sceneSize are scene units.
             whaleScale: (() => {
               try {
                 if (!whale) return null;
-                // Populate the br cache FIRST — getBoundingRadius returns 1 for
-                // an uncached key (W2 trap), which would mis-size everything
-                // downstream by up to 31%.
+                // Populate the br cache FIRST — getBoundingRadius returns 1 for an uncached key, which would
+                // mis-size everything downstream by up to 31%.
                 DebrisWireframe.getGeometry(whale.type, whale.id);
                 const br = DebrisWireframe.getBoundingRadius(whale.type, whale.id) || 1;
-                // Read the effective scale through the Task-3 SSOT helper so
-                // probe and renderer cannot drift.
+                // Read the effective scale through the shared helper so probe and renderer cannot drift.
                 const renderScale = DebrisField.effectiveRenderScale(whale);
                 const renderRadiusM = renderScale * br / M;
                 const sm = whale.sizeMeter ?? null;
                 const ss = whale.sceneSize ?? null;
                 const consistent = (typeof sm === 'number' && typeof ss === 'number')
                   ? Math.abs(ss - sm * 1e-5) < 1e-12 : null;
-                // Drawn rim at the whale's depth, via the Task-1 NetMeshKit
-                // exports — including the contents floor the Task-5 driver
-                // stores on the handle (absent pre-Task-5 ⇒ floor 0 ⇒ the
-                // natural drape/cinch radius, i.e. exactly what the mesh draws).
+                // Drawn rim at the whale's depth, via the NetMeshKit exports, including the contents floor the
+                // driver stores on the handle (absent ⇒ floor 0 ⇒ the natural drape/cinch radius).
                 let drapeFrac = null, cinchFrac = null, drawnRimM = null, pierceM = null, fillFrac = null, boxFloorM = null, chordPierceM = null;
                 let membraneOpacity = null;
                 const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
@@ -5886,18 +4878,14 @@ async function init() {
                   kh.group.worldToLocal(lp);
                   drapeFrac = kh._drape ?? null;
                   cinchFrac = kh._cinchFrac ?? null;
-                  // Small-catch plan W2a: the film's LIVE opacity — the welded
-                  // fade is the lever under test, so the harness reads the
-                  // material the mesh actually renders with, not a re-derived
-                  // constant.
+                  // The film's LIVE opacity: the harness reads the material the mesh renders with, not a
+                  // re-derived constant.
                   membraneOpacity = kh.membraneMat ? +kh.membraneMat.opacity.toFixed(4) : null;
                   const natural = drawnRimRadiusAtDepth(-lp.z, kh.mouthRadius, kh.coneHeight,
                     kh._drape ?? 0, kh._cinchFrac ?? 0,
                     Constants.CAPTURE_NET.NET_CEREMONY.DRAWSTRING_RADIUS_FRAC_CLOSED);
-                  // F5: the shared helper applies the IDENTICAL floor + open-cone
-                  // clamp the mesh uses (Task 7's rule, now box-aware) — probe
-                  // and mesh must never drift (R1's apex balloon passed the gate
-                  // that way).
+                  // The shared helper applies the IDENTICAL floor + open-cone clamp the mesh uses, so probe and
+                  // mesh never drift.
                   const dp = _netDrawnRimPierce(kh, lp.z, natural, renderRadiusM, M);
                   drawnRimM = dp.drawnRimM;
                   pierceM = dp.pierceM;
@@ -5920,23 +4908,18 @@ async function init() {
                 };
               } catch (_e) { return null; }
             })(),
-            // Pin-branch forensics: is the whale the object the field
-            // actually renders, and where would the pin put it?
+            // Pin-branch forensics: is the whale the object the field actually renders?
             hasInstance:   !!debrisField?._instanceLookup?.has(whale?.id),
             sameAsMapRef:  debrisField?.debrisMap?.get(whale?.id) === whale,
             sameAsListRef: debrisField?.debrisList?.find(d => d && d.id === whale?.id) === whale,
             alive:         whale?.alive,
-            // Validation: must read 1 after every scenario run (the ceremony
-            // releases the time scale on exit; a stuck value would dilate the
-            // whole world).
+            // Must read 1 after every scenario run (the ceremony releases the time scale on exit; a stuck
+            // value would dilate the whole world).
             ceremonyTimeScale: (typeof CeremonyTimeScale !== 'undefined' && CeremonyTimeScale.get)
               ? +CeremonyTimeScale.get().toFixed(3) : null,
-            // P0a: sun state for the determinism contract. The capture scripts
-            // pin _sunPhase0/_sunYaw0/elapsedTime before staging (the defaults
-            // are seeded from the real wall clock — SunLight._seedSkyFromClock
-            // — so unpinned runs are lit by luck of their capture date and S0
-            // vs S1 A/B is meaningless). Logged so a silent regression is
-            // visible in the probe output.
+            // Sun state for the determinism contract. Capture scripts pin _sunPhase0/_sunYaw0/elapsedTime
+            // before staging (defaults are seeded from the real wall clock, SunLight._seedSkyFromClock, so
+            // unpinned runs are lit by luck of capture date and A/B is meaningless).
             sun: (() => {
               if (!sunLight) return null;
               const d = sunLight.sunDirection;
@@ -5947,21 +4930,18 @@ async function init() {
                 dir: d ? [+d.x.toFixed(4), +d.y.toFixed(4), +d.z.toFixed(4)] : null,
               };
             })(),
-            // Reel-internals forensics (P1 re-diagnosis): the post-catch pin
-            // writes net.position AND whale._scenePosition to the same point
-            // ~1.2e6 m off-ship. Name the garbage term: _remainingM (m),
-            // _lateral (scene units), _fwdLagged (should be unit), and the
-            // absolute magnitudes that expose a frame mix-up.
+            // Reel-internals forensics: the post-catch pin writes net.position AND whale._scenePosition to the
+            // same point. Name the garbage term: _remainingM (m), _lateral (scene units), _fwdLagged (should be
+            // unit), and the absolute magnitudes that expose a frame mix-up.
             reelRemainingM:  net?._remainingM != null ? +net._remainingM.toFixed(2) : null,
             reelLateralMag:  net?._lateral ? +net._lateral.length().toExponential(2) : null,
             reelFwdLaggedMag: net?._fwdLagged ? +net._fwdLagged.length().toFixed(4) : null,
             whaleAbsMagM:    sp ? +(Math.hypot(sp.x, sp.y, sp.z) / M).toFixed(0) : null,
             shipAbsMagM:     (() => { const pp = player?.getPosition?.(); return pp ? +(Math.hypot(pp.x, pp.y, pp.z) / M).toFixed(0) : null; })(),
             floatOriginMagM: (() => { const fo = debrisField?._floatingOrigin; return fo ? +(Math.hypot(fo.x, fo.y, fo.z) / M).toFixed(0) : null; })(),
-            // Attitude-transient forensics (P1 re-diagnosis #3): the capture
-            // tug's angular kick (CaptureNet.js:1786) injects _recoilPitchVel
-            // with I = mShip×0.25 — a 0.5 m radius of gyration for a ~5 m
-            // hull, ~100× under the real MOI. Watch the actual rad/s at catch.
+            // Attitude-transient forensics: the capture tug's angular kick (CaptureNet.js _applyCaptureTug) injects _recoilPitchVel
+            // with I = mShip×0.25 (0.5 m radius of gyration for a ~5 m hull, ~100× under the real MOI).
+            // Watch the actual rad/s at catch.
             recoilPitchVel:   player?._recoilPitchVel   != null ? +player._recoilPitchVel.toFixed(4)   : null,
             recoilPitchAngle: player?._recoilPitchAngle != null ? +player._recoilPitchAngle.toFixed(4) : null,
             recoilYawVel:     player?._recoilYawVel     != null ? +player._recoilYawVel.toFixed(4)     : null,
@@ -5984,16 +4964,10 @@ async function init() {
               const ex = pp.x + f.x * fwd, ey = pp.y + f.y * fwd, ez = pp.z + f.z * fwd;
               return +(Math.hypot(sp.x - ex, sp.y - ey, sp.z - ez) / M).toFixed(1);
             })(),
-            // ── Net-visual density forensics (net-look remediation, Task 0) ──
-            // Per-visual web density + camera distance, keyed by visual key
-            // ('pod_0', 'arm_1', …). Guards the V9 regression that this plan
-            // fixed: the shipped web had been stuck at 12×4 (60 membrane verts)
-            // instead of the 20×6 build density (140) because the density LOD
-            // (since DELETED) forced LOW-tier nets to the far density. There is
-            // no runtime LOD any more — density is fixed at build density — so
-            // this block reports the raw kit density, not an LOD level. memVerts
-            // is DERIVED from the membrane buffer (NetMeshKit sizes it
-            // (rings+1) × radialSpokes × 3), not invented.
+            // Per-visual web density + camera distance, keyed by visual key ('pod_0', 'arm_1', …). There is no
+            // runtime density LOD: density is fixed at build density (20×6, 140 membrane verts), so this
+            // reports the raw kit density. memVerts is DERIVED from the membrane buffer (NetMeshKit sizes it
+            // (rings+1) × radialSpokes × 3).
             nets: (() => {
               try {
                 const cam = sceneManager?.camera;
@@ -6011,8 +4985,7 @@ async function init() {
                     radialSpokes: kh?.radialSpokes ?? null,
                     rings: kh?.rings ?? null,
                     memVerts: kh?.membranePositions ? kh.membranePositions.length / 3 : null,
-                    // Same expression the V9 LOD block used: vis.group is added
-                    // directly to the scene, so .position IS world space.
+                    // vis.group is added directly to the scene, so .position IS world space.
                     camDM: (cam && gp) ? +(gp.distanceTo(cam.position) / M).toFixed(1) : null,
                     groupRelShipM: relM(gp),
                   };
@@ -6024,12 +4997,10 @@ async function init() {
                 };
               } catch { return null; }
             })(),
-            // ── P1.1 ceremony-camera forensics (harness-only) ──
-            // The captured/reel/secured beats land inside SECURED_SETTLE, whose
-            // mother-path pose is anchored 5 m BEHIND the pod muzzle (the shared
-            // ARM_PILOT_START branch). Hypothesis: that puts the camera in/behind
-            // the hull with the ship occluding the whale → black frames. Report
-            // the geometry so the hypothesis is confirmed/refuted BEFORE the fix:
+            // ── Ceremony-camera forensics (harness-only) ──
+            // The captured/reel/secured beats land inside SECURED_SETTLE, whose mother-path pose is anchored
+            // 5 m BEHIND the pod muzzle (the shared ARM_PILOT_START branch): the camera can sit in/behind the
+            // hull with the ship occluding the whale. Fields:
             //   camInsideHullConst — camera within the 12 m contact radius
             //   camBehindPodM     — signed distance along pod→whale (neg = behind)
             //   whaleOccluded     — cam→whale segment passes inside the hull radius
@@ -6057,11 +5028,9 @@ async function init() {
                                      + (cam.position.z - pod.z) * pwZ) / pwLen / M).toFixed(2);
                   }
                   camToWhaleM = +(Math.hypot(sp.x - cam.position.x, sp.y - cam.position.y, sp.z - cam.position.z) / M).toFixed(1);
-                  // Decisive occlusion test: raycast camera→whale against the
-                  // actual ship meshes. If a hull mesh is hit before the whale,
-                  // the ship is genuinely between camera and catch (P1 black
-                  // frames). The naive "segment passes near ship centre" proxy
-                  // is useless here — near-hull cameras always trip it.
+                  // Decisive occlusion test: raycast camera→whale against the actual ship meshes; a hull mesh
+                  // hit before the whale means the ship is between camera and catch. (A "segment passes near
+                  // ship centre" proxy is useless: near-hull cameras always trip it.)
                   try {
                     const ray = new THREE.Raycaster(
                       cam.position.clone(),
@@ -6080,15 +5049,12 @@ async function init() {
                 return {
                   active: c.active, beatKey: beat?.key ?? null, beatIndex: c.beatIndex,
                   beatTimer: +c.beatTimer.toFixed(2),
-                  // P2.4: whether the trailing REEL_IN beat chained after the
-                  // capture beats (CameraSystem._tryChainReelBeat). Reported so
-                  // the chaining stays a measured fact, not an assumption.
+                  // Whether the trailing REEL_IN beat chained after the capture beats
+                  // (CameraSystem._tryChainReelBeat).
                   reelBeatChained: c._reelBeatChained === true,
-                  // P0b: the live beat list + the first-ever 7-beat contract.
-                  // A reused browser profile (or a second net) gets the 5-beat
-                  // highlights cut instead — different beats, different
-                  // durations, uncomparable numbers. The capture script aborts
-                  // loudly when this reads false.
+                  // The live beat list + the first-ever 7-beat contract. A reused browser profile (or a second
+                  // net) gets the 5-beat highlights cut: different beats and durations, uncomparable numbers.
+                  // The capture script aborts when this reads false.
                   beatKeys: (c.beats || []).map(b => b.key),
                   beatListOk: (() => {
                     const keys = (c.beats || []).map(b => b.key);
@@ -6101,10 +5067,8 @@ async function init() {
                   camInsideHullConst: camToShipM < hullR,
                   camInsideBound: boundR != null ? camToShipM < boundR : null,
                   camBehindPodM, camToWhaleM, hullHitM, whaleOccluded,
-                  // Raw anchor forensics (ship-relative metres): whichever of
-                  // these jumps to 1e5+ is the corrupted ceremony input. The
-                  // post-catch SECURED_SETTLE window flings the camera across
-                  // hundreds of km — name the field, don't guess.
+                  // Raw anchor forensics (ship-relative metres): whichever jumps to 1e5+ is the corrupted
+                  // ceremony input.
                   _rel: (() => {
                     const rel = (v) => v ? [+((v.x - ship.x) / M).toFixed(1), +((v.y - ship.y) / M).toFixed(1), +((v.z - ship.z) / M).toFixed(1)] : null;
                     return {
@@ -6124,12 +5088,9 @@ async function init() {
         }
       };
 
-      // ── Lasso capture probe (2026-08-26 round 2 — dev-only, ?shot=1) ──
-      // The lasso path has no __netScenario staging: real-play captures need a
-      // stateless getter for the live cast + cut + adopted-bag geometry, all
-      // ship-relative metres, so a film take can NAME the broken anchor
-      // instead of eyeballing frames. Same devShotGate surface as the __net*
-      // family above.
+      // ── Lasso capture probe (dev-only, ?shot=1) ──
+      // The lasso path has no __netScenario staging: a stateless getter for the live cast + cut +
+      // adopted-bag geometry, all ship-relative metres. Same devShotGate surface as the __net* family above.
       window.__scbLassoProbe = () => {
         try {
           const M = 0.00001;
@@ -6191,16 +5152,13 @@ async function init() {
         }
       };
 
-      // ── Lasso per-frame flight recorder (2026-08-26 round 3 — dev-only) ──
-      // The 1 Hz LP lines named the ~7.7 km ghost but not its WRITER: one
-      // clamped SwiftShader frame of apparent orbital travel IS ~7700 m, so a
-      // one-frame-stale anchor and a genuine teleport look identical at
-      // capture cadence. This ring buffer samples END-OF-FRAME truth every
-      // rAF tick while armed (same call-site doctrine as __netProbeTick):
-      // ship, camera, cut/view state, and the piece's anchors (rendered
-      // _scenePosition, the lasso arm pin) — ship-relative metres, so the
-      // frame the garbage lands names its source FIELD directly. Zero cost
-      // beyond one boolean check unless __scbLassoRec(true).
+      // ── Lasso per-frame flight recorder (dev-only) ──
+      // One clamped SwiftShader frame of apparent orbital travel IS ~7700 m, so a one-frame-stale anchor and a
+      // genuine teleport look identical at 1 Hz capture cadence. This ring buffer samples END-OF-FRAME truth
+      // every rAF tick while armed (same call-site doctrine as __netProbeTick): ship, camera, cut/view state,
+      // and the piece's anchors (rendered _scenePosition, the lasso arm pin), ship-relative metres, so the
+      // frame the garbage lands names its source FIELD. Zero cost beyond one boolean check unless
+      // __scbLassoRec(true).
       const _LREC = { on: false, buf: [], cap: 4000, n: 0 };
       window.__scbLassoRec = (on) => { _LREC.on = !!on; return _LREC.on; };
       window.__scbLassoRecDump = () => ({ n: _LREC.n, samples: _LREC.buf });
@@ -6239,14 +5197,11 @@ async function init() {
         } catch (_e) { /* the recorder must never break the loop */ }
       };
 
-      // ── Per-frame probe recorder (whale-in-cone plan, Task 1.4) ──
-      // `__netScenarioProbe()` is a stateless getter and the harness polls it at
-      // 1 Hz — too coarse to see the brake instant, which is a single frame
-      // inside a slow-motion beat. This recorder captures a SLIM sample every
-      // frame while enabled. It deliberately does NOT call __netScenarioProbe()
-      // per frame (~40 fields, includes a raycast) — it reuses the few fields
-      // that actually matter. Ring buffer, capped; off by default; zero cost
-      // beyond one boolean check when disabled.
+      // ── Per-frame probe recorder ──
+      // `__netScenarioProbe()` is a stateless getter polled at 1 Hz, too coarse to see the brake instant (a
+      // single frame inside a slow-motion beat). This recorder captures a SLIM sample every frame while
+      // enabled; it deliberately does NOT call __netScenarioProbe() per frame (~40 fields, includes a
+      // raycast). Ring buffer, capped; off by default; zero cost beyond one boolean check when disabled.
       //   __netProbeRecord(true|false) → enable/disable capture
       //   __netProbeDump()             → { samples, dropped, startedAtMs, hz }
       //   __netProbeClear()            → empty the buffer
@@ -6271,8 +5226,8 @@ async function init() {
           hz: spanMs > 0 ? +(n / (spanMs / 1000)).toFixed(1) : null,
         };
       };
-      // Called once per frame from gameLoop (see end of gameLoop). Builds the
-      // slim sample inline; any failure leaves the buffer untouched.
+      // Called once per frame from gameLoop. Builds the slim sample inline; any failure leaves the buffer
+      // untouched.
       window.__netProbeTick = (nowMs) => {
         if (!_PROBE_REC.on) return;
         try {
@@ -6285,9 +5240,8 @@ async function init() {
           const beat = c?.beats?.[c.beatIndex];
           // Cone-local whale via the SHARED predicates (same frame as the probe).
           let aM = null, rM = null, zM = null, coneR = null, inside = null;
-          // Whale-in-cone phase 3 (Task 2.1): scale-aware fields on the SLIM
-          // sample. br via the cached accessor (getGeometry first — uncached
-          // returns 1); render scale via the Task-3 SSOT helper.
+          // Scale-aware fields on the SLIM sample: br via the cached accessor (getGeometry first — uncached
+          // returns 1); render scale via the shared effectiveRenderScale helper.
           let whaleType = null, whaleRenderRadiusM = null, sceneSizeConsistent = null;
           let drapeFrac = null, cinchFrac = null, drawnRimAtWhaleM = null, pierceM = null, chordPierceM = null;
           const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
@@ -6303,9 +5257,8 @@ async function init() {
             const mouthRM = kh.mouthRadius / M, coneHM = kh.coneHeight / M;
             coneR = +coneRadiusAtDepth(mouthRM, coneHM, aM).toFixed(2);
             inside = isInsideCone(zM, rM, mouthRM, coneHM);
-            // Scale witness: rendered whale radius vs the DRAWN rim at its
-            // depth (natural drape/cinch radius + the Task-5 contents floor
-            // when the driver supplies one; absent ⇒ 0 ⇒ natural only).
+            // Scale witness: rendered whale radius vs the DRAWN rim at its depth
+            // (natural drape/cinch radius + the contents floor when supplied; absent ⇒ natural only).
             DebrisWireframe.getGeometry(whale.type, whale.id);
             const br = DebrisWireframe.getBoundingRadius(whale.type, whale.id) || 1;
             whaleType = whale.type ?? null;
@@ -6318,40 +5271,21 @@ async function init() {
             const natural = drawnRimRadiusAtDepth(-lp.z, kh.mouthRadius, kh.coneHeight,
               kh._drape ?? 0, kh._cinchFrac ?? 0,
               Constants.CAPTURE_NET.NET_CEREMONY.DRAWSTRING_RADIUS_FRAC_CLOSED);
-            // F5: identical floor + open-cone clamp as the mesh, box-aware,
-            // via the shared helper — probe/recorder and mesh must never drift.
+            // Shared helper: identical floor + open-cone clamp as the mesh; probe/recorder and mesh must never drift.
             const dp = _netDrawnRimPierce(kh, lp.z, natural, whaleRenderRadiusM, M);
             drawnRimAtWhaleM = dp.drawnRimM;
             pierceM = dp.pierceM;
             chordPierceM = dp.chordPierceM;
           }
-          // Anchor-drag witness: lateral displacement of the LIVE muzzle anchor
-          // since fire, measured perpendicular to the frozen launchDirection.
-          // Read the live anchor directly (pod muzzle scene position ÷ M →
-          // metres) so units match net.position (metres). This is the single
-          // moving term in the frozen-line update (CaptureNet.js:924): the
-          // whale is pinned (sceneVsExpectedM = 0), launchDirection is frozen,
-          // so ANY growth in the whale's cone-local lateral offset r is exactly
-          // Wrap the per-frame recorder sample. (The former anchorDxM witness was
-          // removed: it measured the anchor's huge absolute orbital drift — the
-          // ship translates ~10× world-time — not the small lateral component,
-          // so it was a red herring. cone-local rM/aM/clearanceM are the honest
-          // containment witnesses.)
+          // Per-frame recorder sample. Cone-local rM/aM/clearanceM are the containment witnesses (metres).
           const netToWhaleM = net.position
             ? +(Math.hypot(sp.x / M - net.position.x, sp.y / M - net.position.y, sp.z / M - net.position.z)).toFixed(2)
             : null;
           const s = {
             tMs: Math.round(nowMs),
-            // Register item 11: the frame this sample belongs to. `tMs` is the
-            // rAF timestamp and it is NOT unique — measured 2026-08-09, in
-            // roughly half of the runs gameLoop runs TWICE per rAF (second pass
-            // at dt ≈ 0), so two distinct frames share one timestamp and
-            // per-timestamp reasoning cannot tell that from one frame recorded
-            // twice. With `frameCount` (advanced once per pass, inside the
-            // isActive block) the gate proves Δframe = 1 across the whole
-            // buffer — no frame missed, none duplicated — and prints the
-            // DUP-FRAMES witness. One number on an object literal that is
-            // already built: no allocation, recorder-only.
+            // `tMs` (rAF timestamp) is NOT unique: gameLoop can run TWICE per rAF (second pass at dt ≈ 0).
+            // `frameCount` (advanced once per pass, inside the isActive block) lets the gate prove
+            // Δframe = 1 across the buffer and print the DUP-FRAMES witness.
             frame: frameCount,
             netState: net.state ?? null,
             beatKey: beat?.key ?? null,
@@ -6363,10 +5297,10 @@ async function init() {
             clearanceM: (coneR != null && rM != null) ? +(coneR - rM).toFixed(2) : null,
             insideCone: inside,
             pinned: !!whale._onboardingPinned,
-            // Whale-in-cone phase 3 scale witness (null when no kit handle).
+            // Scale witness (null when no kit handle).
             whaleType, whaleRenderRadiusM, sceneSizeConsistent,
             drapeFrac, cinchFrac, drawnRimAtWhaleM, pierceM,
-            // Follow-up 4: drawn-polyline chord clearance (null off the box path).
+            // Drawn-polyline chord clearance (null off the box path).
             chordPierceM,
           };
           if (_PROBE_REC.buf.length >= _PROBE_REC.cap) { _PROBE_REC.dropped++; return; }
@@ -6376,21 +5310,11 @@ async function init() {
       };
 
 
-      // ── Net-visual gate (net-fabric-look phase 2, Task 1) ──
-      // Dev-only, same `window.__net*` convention as __netScenarioProbe. Three
-      // hooks that make "looks like fabric" a measured number:
-      //   __netFreeze(true|false)        → alias of __netPause (freeze the sim/
-      //                                    sun/camera so two captures are the
-      //                                    same instant; phase 1 C4 used this).
-      //   __netVisualToggle(part, on)    → set .visible on kit meshes for
-      //                                    part ∈ {membrane, web, nodes,
-      //                                    tether, all}. The A/B differential
-      //                                    C6 needed and never had.
-      //   __netRoi()                     → project the ceremony bag's mouth-rim
-      //                                    ring + apex into screen space and
-      //                                    report a deterministic ROI, plus the
-      //                                    membrane material/env instrumentation
-      //                                    Task 2's H1–H5 forensics read.
+      // Net-visual gate: dev-only, same `window.__net*` convention as __netScenarioProbe.
+      //   __netFreeze(true|false)        → alias of __netPause (freeze sim/sun/camera so two captures are the same instant).
+      //   __netVisualToggle(part, on)    → set .visible on kit meshes, part ∈ {membrane, web, nodes, tether, all}.
+      //   __netRoi()                     → project the ceremony bag's mouth-rim ring + apex into screen space
+      //                                    and report a deterministic ROI plus membrane material/env info.
       window.__netFreeze = (val) => window.__netPause(val);
 
       // Force one render while paused (the game loop early-returns before
@@ -6418,10 +5342,8 @@ async function init() {
       };
 
 
-      // Dev-only style override for live ceremony visuals (net-fabric-look Task
-      // 3/4 + the gate's prove-fail): lineWidthPx sets the web thread width,
-      // membraneOpacity sets the membrane material opacity directly. Passing a
-      // field as null leaves it untouched (so one field can be A/B'd at a time).
+      // Dev-only style override for live ceremony visuals: lineWidthPx = web thread width,
+      // membraneOpacity = membrane material opacity. A null field is left untouched.
       window.__netWebStyle = (cfg = {}) => {
         try {
           const snap = {};
@@ -6442,10 +5364,8 @@ async function init() {
         } catch (e) { return { error: String((e && e.message) || e) }; }
       };
 
-      // Dev-only membrane configuration + visibility A/B for Task 2 forensics
-      // (net-fabric-look). The as-shipped membrane mesh is built hidden and no
-      // FSM ever shows it (filmShare measured 0). This forces it visible and
-      // applies one material field at a time so the harness can settle H1–H5.
+      // Dev-only membrane configuration + visibility A/B. The shipped membrane mesh is built hidden and
+      // no FSM shows it; this forces it visible and applies material fields one at a time.
       // Fields: { visible, transmission, opacity, side('front'|'double'),
       //          renderOrder, depthWrite, roughness, sheen, envMapIntensity }.
       // Omitted fields are left untouched. Returns the applied values.
@@ -6480,10 +5400,8 @@ async function init() {
         } catch (e) { return { error: String((e && e.message) || e) }; }
       };
 
-      // Dev-only whale visibility toggle for the manual-gate pixel check
-      // (net-fabric-look phase 2): zero-scales the scenario whale's instance so
-      // |A − A_noWhale| isolates exactly the whale's pixels — the one way to
-      // answer "is the whale visibly inside the net?" without eyes on the PNG.
+      // Dev-only whale visibility toggle: zero-scales the scenario whale's instance so
+      // |A − A_noWhale| isolates exactly the whale's pixels.
       let _whaleSavedMatrix = null;
       window.__netWhaleToggle = (on) => {
         try {
@@ -6505,10 +5423,8 @@ async function init() {
         } catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
       };
 
-      // Dev-only physics→screen projection for the manual gate (net-fabric-look
-      // phase 2): projects net.position, whale._scenePosition and the pod
-      // muzzle through the camera so the harness can tell whether the RENDERED
-      // whale/bag sit where the physics says they should.
+      // Dev-only physics→screen projection: net.position, whale._scenePosition and the pod muzzle
+      // through the camera, to check the RENDERED whale/bag sit where the physics says.
       window.__netProject = () => {
         try {
           const M = 1e-5; // 1 metre in scene units (same M as the probe)
@@ -6530,8 +5446,7 @@ async function init() {
           const sp = whale?._scenePosition;
           const pod = (player && typeof player.getNetPodPosition === 'function') ? player.getNetPodPosition(0) : null;
           // Cone-containment: the whale in the ceremony kit's LOCAL frame.
-          // local -Z = launch axis; inside the bag ⇔ local z ∈ [-coneH, 0] and
-          // local radius < mouthRadius(t). This is the deferred phase-1 metric.
+          // local -Z = launch axis; inside the bag ⇔ local z ∈ [-coneH, 0] and local radius < mouthRadius(t).
           let whaleLocal = null, insideCone = null;
           try {
             const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
@@ -6545,8 +5460,7 @@ async function init() {
               const mouthRM = kh.mouthRadius / M, coneHM = kh.coneHeight / M;
               const t = -zM / coneHM;
               whaleLocal = { zM: +zM.toFixed(2), rM: +rM.toFixed(2), t: +t.toFixed(2), mouthRadiusM: +mouthRM.toFixed(2), coneHeightM: +coneHM.toFixed(2) };
-              // Use the SHARED predicate (same as probe + recorder) so the three
-              // containment tools cannot drift.
+              // Shared predicate (same as probe + recorder) so the containment tools cannot drift.
               insideCone = isInsideCone(zM, rM, mouthRM, coneHM);
             }
           } catch (_e) {}
@@ -6640,8 +5554,7 @@ async function init() {
             const y0 = Math.max(0, Math.round(minPxY - 1));
             const x1 = Math.min(bufW, Math.round(maxPxX + 1));
             const y1 = Math.min(bufH, Math.round(maxPxY + 1));
-            // camInsideBag: camera inside the cone (local z in [-coneH,0] and
-            // local radius < mouthRadius at that z).
+            // camInsideBag: camera inside the cone (local z in [-coneH,0], radius < mouthRadius there).
             let camInsideBag = false;
             try {
               lp.copy(cam.position);
@@ -6688,12 +5601,9 @@ async function init() {
         } catch (e) { return { error: String((e && e.message) || e) }; }
       };
 
-      //   window.__netContentsBox() → the ceremony kit handle's stored contents
-      //   spec EXACTLY as the floor/chord maths sees it: the 15-number box
-      //   (metres for lengths, unitless rotation rows) + the full drape state
-      //   (drape/cinch/jiggle). Follow-up 4 forensics: replay the LIVE spec
-      //   through the kit exports offline (tmp instruments) so a gate reading
-      //   can be dissected edge-by-edge without re-deriving anything.
+      //   window.__netContentsBox() → the ceremony kit handle's stored contents spec exactly as the
+      //   floor/chord maths sees it: the 15-number box (metres for lengths, unitless rotation rows)
+      //   + the full drape state (drape/cinch/jiggle).
       window.__netContentsBox = () => {
         try {
           const M = 0.00001;
@@ -6719,21 +5629,13 @@ async function init() {
           };
         } catch (e) { return { error: String((e && e.message) || e) }; }
       };
-      // ── Follow-up 5 (2026-08-06): armed cinch freeze — pin the pixel gate's
-      // capture instant to a probe quantity, never a wall-clock poll ──
-      // Plan: .kilo/plans/1786005074767-pin-pixel-gate-capture-instant.md.
-      // The CINCH still used to be grabbed when the harness's 300 ms poll first
-      // saw beatKey 'CINCH', plus a 700 ms wall settle — under the 0.1 s dt cap
-      // the beat's wall duration stretches 8–20+ s with headless frame rate, so
-      // the freeze landed anywhere in the first ~40 % of the camera dolly and
-      // whalePxFrac flaked ±30 % on identical code (0.217–0.402, register item
-      // 5). This hook freezes the sim ITSELF on the first frame where the
-      // ceremony kit's cinchFrac reaches the pinned target during the CINCH
-      // beat — frame-quantized to ≤ 2.5 % of the cinch, never wall-clock.
+      // Armed cinch freeze: pins the pixel gate's capture instant to a probe quantity, never a
+      // wall-clock poll (under the 0.1 s dt cap the beat's wall duration varies 8–20+ s with
+      // headless frame rate). Freezes the sim ITSELF on the first frame where the ceremony kit's
+      // cinchFrac reaches the target during the CINCH beat (frame-quantized to ≤ 2.5 % of the cinch).
       //   __netArmCinchFreeze(target) → arm (null/omitted disarms)
       //   __netCinchFreezeStatus()    → { armed, target, fired }
-      // Dev-only; one boolean check per frame when disarmed (same cost contract
-      // as the probe recorder).
+      // Dev-only; one boolean check per frame when disarmed.
       const _CINCH_FREEZE = { armed: false, target: 0, fired: null };
       window.__netArmCinchFreeze = (target) => {
         if (typeof target === 'number' && isFinite(target)) {
@@ -6751,19 +5653,17 @@ async function init() {
         target: _CINCH_FREEZE.target,
         fired: _CINCH_FREEZE.fired,
       });
-      // Called once per frame from gameLoop, right after __netProbeTick — i.e.
-      // after updateCamera + render, so the frame the freeze holds is exactly
-      // the frame this check observes. The beatKey conjunct is load-bearing:
-      // cinchFrac stays 1 through REELING/BERTHED, so without it a late cinch
-      // would freeze a SECURED_SETTLE frame and call it CINCH.
+      // Called once per frame from gameLoop, right after __netProbeTick (after updateCamera + render),
+      // so the frame the freeze holds is exactly the frame this check observes. The beatKey conjunct
+      // is load-bearing: cinchFrac stays 1 through REELING/BERTHED, so without it a late cinch would
+      // freeze a SECURED_SETTLE frame and call it CINCH.
       window.__netCinchFreezeTick = () => {
         if (!_CINCH_FREEZE.armed) return;
         try {
           const c = cameraSystem?._netCeremony;
           const beat = c?.beats?.[c.beatIndex];
           if (beat?.key !== 'CINCH') return;
-          // Allocation-free kit-handle lookup (per-frame path): direct pod_0
-          // hit, else scan values without the spread array.
+          // Allocation-free kit-handle lookup (per-frame path).
           const av = captureNetVisual?._activeVisuals;
           let vis0 = av?.get('pod_0');
           if (!vis0 && av) for (const v of av.values()) { if (v?.useCeremony) { vis0 = v; break; } }
@@ -6779,21 +5679,14 @@ async function init() {
           window.__netPause(true);       // the SAME pause path the manual freeze uses
         } catch (_e) { /* freeze hook must never break the game loop */ }
       };
-      // ── Register item 6 (2026-08-07): armed beat-PHASE freeze — pin the
-      // fabric gate's per-beat capture instants to the ceremony clock, never a
-      // wall-clock poll. Plan:
-      // .kilo/plans/1786058581397-pin-fabric-gate-capture-instants.md.
-      // The fabric gate's four gated beats were grabbed on first-sight + 700 ms
-      // wall — the same flake class follow-up 5 fixed for the pixel gate's
-      // CINCH still (same-code re-checks failed filmShare by 0.0009). This hook
-      // is the phase-keyed sibling of the cinch freeze: it pauses the sim on
-      // the first frame where beatTimer/beat.duration reaches the pinned phase
-      // DURING the named beat — frame-quantized to ≤ 0.1/duration of the phase.
+      // Armed beat-PHASE freeze: pins the fabric gate's per-beat capture instants to the ceremony
+      // clock, never a wall-clock poll. Phase-keyed sibling of the cinch freeze: pauses the sim on
+      // the first frame where beatTimer/beat.duration reaches the target phase DURING the named
+      // beat (frame-quantized to ≤ 0.1/duration of the phase). CINCH keeps the cinch hook
+      // (cinchFrac is the composition quantity there); this hook is for the other beats.
       //   __netArmBeatFreeze(beatKey, targetPhase) → arm (null disarms)
       //   __netBeatFreezeStatus()                 → { armed, beatKey, targetPhase, fired }
-      // Dev-only; one boolean check per frame when disarmed (same cost contract
-      // as the cinch hook). CINCH keeps the cinch hook (cinchFrac is the
-      // composition quantity there); this hook is for the other beats.
+      // Dev-only; one boolean check per frame when disarmed.
       const _BEAT_FREEZE = { armed: false, beatKey: null, targetPhase: 0, fired: null };
       window.__netArmBeatFreeze = (beatKey, targetPhase) => {
         if (typeof beatKey === 'string' && typeof targetPhase === 'number' && isFinite(targetPhase)) {
@@ -6814,24 +5707,19 @@ async function init() {
         targetPhase: _BEAT_FREEZE.targetPhase,
         fired: _BEAT_FREEZE.fired,
       });
-      // Same call-site and same-frame doctrine as the cinch tick (runs after
-      // __netProbeTick, post updateCamera + render). The beatKey conjunct is
-      // load-bearing: beatTimer keeps its value when a beat force-advances or
-      // the ceremony exits, so without it a late arm could freeze a frame from
-      // the WRONG beat. A beat whose phase never reaches the target (e.g.
-      // APPROACH_DOLLY force-advancing on NET_BRAKE_FIRED below it) simply
-      // never fires — the harness fails loudly instead of certifying a
-      // mis-timed still.
+      // Same call-site and same-frame doctrine as the cinch tick (after __netProbeTick, post
+      // updateCamera + render). The beatKey conjunct is load-bearing: beatTimer keeps its value when
+      // a beat force-advances or the ceremony exits, so without it a late arm could freeze a frame
+      // from the WRONG beat. A beat whose phase never reaches the target (e.g. APPROACH_DOLLY
+      // force-advancing on NET_BRAKE_FIRED below it) never fires — the harness fails loudly
+      // instead of certifying a mis-timed still.
       window.__netBeatFreezeTick = () => {
         if (!_BEAT_FREEZE.armed) return;
         try {
           const c = cameraSystem?._netCeremony;
-          // `active` is load-bearing alongside the beatKey conjunct: beatIndex
-          // and beatTimer KEEP their values when the ceremony exits, so an arm
-          // that lands after the exit (or after the beat already passed the
-          // target) would otherwise fire on a frame whose camera has moved on
-          // and label it with the beat's name — certifying a still from outside
-          // the beat. A missed target must fail loudly in the harness instead.
+          // `active` is load-bearing alongside the beatKey conjunct: beatIndex and beatTimer KEEP their
+          // values when the ceremony exits, so a late arm would fire on a frame whose camera has moved
+          // on and label it with the beat's name. A missed target must fail loudly in the harness.
           if (c?.active !== true) return;
           const beat = c.beats?.[c.beatIndex];
           if (!beat || beat.key !== _BEAT_FREEZE.beatKey) return;
@@ -6850,11 +5738,8 @@ async function init() {
       console.info('[netRoi] ready. __netRoi(), __netVisualToggle(part, on), __netFreeze(true).');
 
 
-      // ── deep-polish-4 T2: menu→sim handoff apparent-size probe ──
-      // Analytic (no pixel classification): projects each model's bounding
-      // sphere through its own camera to a vertical screen-height fraction, so
-      // the harness (tmp/scb_handoff.cjs) can gate the match-cut on a <20% size
-      // discontinuity and read the INTRO_START_SCALE that makes hero≈ship.
+      // Menu→sim handoff apparent-size probe. Analytic (no pixel classification): projects each
+      // model's bounding sphere through its own camera to a vertical screen-height fraction.
       //   hero  = receding menu MenuScene3D Mother at the handoff (orbitR→8)
       //   ship  = sim PlayerSatellite in chase at INTRO_START_SCALE (the cut)
       // fracH  = 2·atan(radius / distance) / vFOV — units cancel per model.
@@ -6923,8 +5808,7 @@ async function init() {
  * with the current `gameFlowManager.paused` flag, `gameState.currentState`,
  * and the rendered/skipped frame counts since the last emit. Opt-in only
  * (gated by `_logPauseEnabled` at every call site); zero overhead in normal
- * play. Helper lives at module scope so it can be called from inside the
- * gameLoop without re-allocating per frame.
+ * play. Module scope so the gameLoop can call it without per-frame allocation.
  *
  * @param {number} timestamp - rAF high-res timestamp (ms)
  * @param {boolean} skippedThisFrame - true if pause early-return fired
@@ -6936,12 +5820,12 @@ function _emitPauseDiagnostic(timestamp, skippedThisFrame) {
   const skipped = _logPauseFramesSkipped;
   _logPauseFramesRendered = 0;
   _logPauseFramesSkipped = 0;
-  // §12.11 AudioContext state: 'running' while paused = audio scheduler ticking
+  // AudioContext state: 'running' while paused = audio scheduler ticking
   // at 44.1 kHz, keeping an efficiency core warm and preventing low-power state.
   const audioCtxState = (audioSystem && audioSystem.ctx)
     ? audioSystem.ctx.state
     : 'n/a';
-  // §12.12 frameInterval shows the throttle target the schedule policy picked
+  // frameInterval = the throttle target the schedule policy picked
   // for this state (0 = display refresh, 33 = 30 fps menu, 200 = 5 fps pause).
   const intervalMs = _getScheduleIntervalMs();
   console.log(
@@ -6966,30 +5850,23 @@ function _syncMotherCarried() {
 }
 
 function gameLoop(timestamp) {
-  // §13 boot timeline (?logBoot=1) — one-shot mark on the very first rAF
-  // dispatch. The delta from "init() complete — first rAF scheduled" to here
-  // measures rAF latency (browser compositor / GPU process startup), separate
-  // from the cost of the first render() call itself (marked below).
+  // One-shot mark on the very first rAF dispatch (?logBoot=1): the delta from
+  // "init() complete" measures rAF latency, separate from the first render() cost.
   if (_logBootEnabled && !_bootFirstFrameMarked) {
     _bootMark('first gameLoop() entry (rAF fired)');
   }
-  // Session I follow-up (review): duplicate-loop guard. Every rAF callback of
-  // one animation frame receives the SAME DOMHighResTimeStamp, so a second
-  // entry with an identical timestamp is always a duplicate scheduled loop
-  // (the _flushScheduledFrame leak, now also cancelled at the source). Return
-  // WITHOUT touching _rafScheduled and WITHOUT rescheduling — the extra loop
-  // dies here; the frame's real entry already owns the reschedule.
+  // Duplicate-loop guard. Every rAF callback of one animation frame receives the SAME
+  // DOMHighResTimeStamp, so a second entry with an identical timestamp is always a duplicate
+  // scheduled loop. Return WITHOUT touching _rafScheduled and WITHOUT rescheduling — the extra
+  // loop dies here; the frame's real entry already owns the reschedule.
   if (timestamp === _lastLoopTs) return;
   _lastLoopTs = timestamp;
-  // We're now running this tick — clear the dedup flag so wakeups can
-  // re-schedule. Schedule the next frame only at the end (when we know
-  // we want to keep running). Wake hooks call `_scheduleNextFrame()` to
-  // restart the loop after an inert period.
+  // Clear the dedup flag so wakeups can re-schedule. The next frame is scheduled only at the end
+  // (when we want to keep running); wake hooks call `_scheduleNextFrame()` to restart after an inert period.
   _rafScheduled = false;
 
-  // PR 3 / P1.4 — Skip work entirely when tab is hidden. Reset lastTime so the
-  // first frame after resume has a small dt (instead of a multi-second spike).
-  // Note: we do NOT schedule the next frame — `visibilitychange` will wake us.
+  // Skip work entirely when the tab is hidden. Reset lastTime so the first frame after resume has a
+  // small dt (not a multi-second spike). We do NOT schedule the next frame — `visibilitychange` wakes us.
   if (document.hidden) {
     lastTime = timestamp;
     return;
@@ -6997,26 +5874,14 @@ function gameLoop(timestamp) {
   // Show mode: an untouched start screen is a still picture after 2 min (both loops). Checked BEFORE the blurred branch
   // on purpose: a frozen menu does not keep the 30 fps presents (§14.1) that a blurred window otherwise needs.
   if (_menuShouldFreeze(timestamp)) return;
-  // §14.1 (revised 3, 2026-08-31) — Window blurred (user clicked another macOS
-  // app; the browser window can still be fully VISIBLE beside it). The sim
-  // halts (zero update work, dt frozen via lastTime), but the canvas layer is
-  // KEPT ALIVE by re-presenting one frame on EVERY ~5 Hz wake while blurred:
-  // after seconds with no present, Chromium's compositor purges the layer's
-  // tiles and the visible-but-unfocused window shows a flickering BLACK
-  // RECTANGLE over the canvas (the long-hunted "black flicker" — probe
-  // evidence in js/core/BlackFrameProbe.js dumps: 12–28 s rAF starvations with
-  // visibilityState 'visible' and zero occlusion events, healing on any
-  // focus-restoring window event: resize, fullscreen, DevTools).
-  // Revision 3 evidence (bfp-dump-1788174453, Chrome 152 / ANGLE-Metal M4 Max):
-  // the revised-2 cadence of one present per 2 s STILL flickered black during a
-  // 7.4 s blur window at F6/F7 — the compositor purged tiles between the 2 s
-  // presents. Present-per-wake is ~5 fps ≈ 4 % of the 120 Hz frame budget, so
-  // the §14.1 energy goal ("GPU idles when switching apps") still holds.
-  // Revision 4 (2026-08-31, bfp-dump-1788177490): rev-3's 5 Hz presents STILL
-  // flickered black (0 starve / 0 gap events, blur windows 3.2 s + 4.4 s) —
-  // present cadence alone is not the whole story on Chrome 152 + ANGLE-Metal.
-  // Now: render EVERY blurred wake at a ~30 fps schedule (see
-  // _getScheduleIntervalMs) — no compositor purge window, sim still frozen.
+  // Window blurred (§14.1; user clicked another macOS app, browser window may still be fully VISIBLE).
+  // The sim halts (zero update work, dt frozen via lastTime), but the canvas layer is KEPT ALIVE by
+  // re-presenting one frame on EVERY blurred wake (~30 fps schedule, see _getScheduleIntervalMs):
+  // after seconds with no present, Chromium's compositor purges the layer's tiles and the visible-but-
+  // unfocused window shows a flickering BLACK RECTANGLE (probe evidence: js/core/BlackFrameProbe.js
+  // dumps — rAF starvations with visibilityState 'visible'). Cadences of 1 per 2 s and 5 Hz still
+  // flickered on Chrome 152 + ANGLE-Metal. Presenting at ~30 fps keeps the §14.1 energy goal
+  // ("GPU idles when switching apps").
   if (_windowBlurred) {
     lastTime = timestamp;
     _blurKeepalivePresentTs = timestamp;
@@ -7030,19 +5895,11 @@ function gameLoop(timestamp) {
     return;
   }
 
-  // Session I — measure the display's real rAF cadence (median of the last
-  // SAMPLE_WINDOW deltas → FrameSched.medianPeriodMs). Sampled on every
-  // visible, unblurred rAF entry — skipped ticks included, because the sample
-  // measures the DISPLAY, not the draw rate. Deltas above MAX_SAMPLE_MS are
-  // scheduling gaps (menus/pause throttles, tab switches), not cadence.
-  // Session I follow-up (review, (i)): UNPAUSED GAMEPLAY entries only — the
-  // menu/shop/briefing states run on a ~33 ms setTimeout throttle and ESC
-  // pause on 200 ms, both under MAX_SAMPLE_MS, so they were entering the
-  // window as fake cadence (a ~0.25 s over-draw after every menu visit). The
-  // gameplay samples survive a menu visit untouched — the display did not
-  // change — so N is right on the very first frame back. `_lastRafTs` still
-  // advances on every entry (the first gameplay delta is measured against a
-  // real neighbour, never a stale one).
+  // Measure the display's real rAF cadence (median of the last SAMPLE_WINDOW deltas → FrameSched.medianPeriodMs).
+  // UNPAUSED GAMEPLAY entries only, skipped ticks included (the sample measures the DISPLAY, not the draw rate):
+  // menu/shop/briefing run on a ~33 ms setTimeout throttle and ESC pause on 200 ms, both under MAX_SAMPLE_MS,
+  // and would enter the window as fake cadence. Deltas above MAX_SAMPLE_MS are scheduling gaps, not cadence.
+  // `_lastRafTs` still advances on every entry so the first gameplay delta is against a real neighbour.
   if (_lastRafTs > 0 && gameState.isGameplay() && !gameFlowManager.paused) {
     const _rafDelta = timestamp - _lastRafTs;
     if (_rafDelta > 0 && _rafDelta <= MAX_SAMPLE_MS) {
@@ -7052,52 +5909,38 @@ function gameLoop(timestamp) {
   }
   _lastRafTs = timestamp;
 
-  // Debug overlay frame time: recorded on DRAWN frames only, below (Session I
-  // follow-up (j)) — a skipped tick is not a frame. It used to record here on
-  // every rAF entry against `lastTime`, which only advances on drawn frames, so
-  // the overlay painted a sawtooth (8, 17, 25 … 100 ms under the 10 fps hold)
-  // instead of the true cadence.
+  // Debug overlay frame time: recorded on DRAWN frames only, below — a skipped tick is not a frame
+  // (recording on every rAF entry against `lastTime` painted a sawtooth under the 10 fps hold).
 
   if (gameFlowManager.paused) {
     audioSystem.stopThrusterHum();
     audioSystem.stopDeltaVAlarm();
-    // §12.12 Suspend ctx via centralised policy helper. Previously inlined
-    // the `if (ctx.state === 'running') ctx.suspend()` check; now the helper
-    // covers all suspend / resume call sites consistently.
+    // Suspend ctx via the centralised policy helper.
     _syncAudioCtxState();
-    // Hide the HUD overlay so CSS animations + any composite work on
-    // `.hud-panel` elements stop. Idempotent (no-op if already hidden).
+    // Hide the HUD overlay so CSS animations + composite work on `.hud-panel` stop. Idempotent.
     _setHudHidden(true);
     if (_logPauseEnabled) {
       _logPauseFramesSkipped++;
       _emitPauseDiagnostic(timestamp, true);
       _emitRafCallerDiagnostic(timestamp);
     }
-    // Do NOT schedule next rAF — let the browser compositor sleep.
-    // `PAUSE_RESUME` / `PAUSE_MENU` event handlers will wake the loop.
-    // This is the fix for the "40 % GPU while paused" symptom: previously
-    // the rAF callback kept pumping at the display refresh rate (e.g. 120 Hz)
-    // even though `sceneManager.render()` was skipped, which kept the
-    // browser's compositor in 120 Hz mode and consumed ~40 % of the
-    // Renderer-process GPU on macOS.
+    // Do NOT schedule next rAF — let the browser compositor sleep; `PAUSE_RESUME` / `PAUSE_MENU`
+    // handlers wake the loop. Pumping rAF at display refresh while paused kept the compositor in
+    // 120 Hz mode (~40 % of the Renderer-process GPU on macOS).
     return;
   }
   if (_logPauseEnabled) {
     _logPauseFramesRendered++;
     _emitPauseDiagnostic(timestamp, false);
   }
-  // Active frame — schedule the next rAF. Placed here (not at the top of
-  // the function) so that the `document.hidden` and `gameFlowManager.paused`
-  // early-returns above genuinely halt the loop.
+  // Active frame — schedule the next rAF here (not at the top) so the `document.hidden` and
+  // `gameFlowManager.paused` early-returns above genuinely halt the loop.
   _scheduleNextFrame();
 
-  // Render policy (08-workbench §2): ONE viewCover signal per frame, computed
-  // HERE so both consumers read the same value — the frame SCHEDULER below
-  // ('partial' = a workbench drawer is open → the held-world heartbeat) and
-  // the paint skip at the render site ('full' = an opaque plate covers the
-  // canvas → the whole composer + HUD write is skipped). Session I plumbs the
-  // pane-open bit (plan step 1): _workbenchPaneOpen is the same D-F signal
-  // that zeroes the world clock through TimeAuthority.calmCap.
+  // Render policy: ONE viewCover signal per frame, computed HERE so both consumers read the same value —
+  // the frame SCHEDULER below ('partial' = a workbench drawer is open → held-world heartbeat) and the
+  // paint skip at the render site ('full' = an opaque plate covers the canvas → composer + HUD write skipped).
+  // _workbenchPaneOpen is the same signal that zeroes the world clock through TimeAuthority.calmCap.
   const _cover = viewCover({
     codexVisible: !!(codexViewerUI && codexViewerUI.isVisible && codexViewerUI.isVisible()),
     shopVisible: !!(shopScreen && shopScreen.visible),
@@ -7105,20 +5948,17 @@ function gameLoop(timestamp) {
   });
   const _skipPaint = coverSkipsPaint(_cover, { diagnosticsArmed: !!blackFrameProbe || !!devShotGate.requested });
 
-  // Session I — the adaptive frame schedule (FrameSched; plan D-G/D-F).
-  // Draw every Nth REFRESH by frame counting; a skipped refresh skips the
-  // WHOLE tick (sim + render) after the reschedule above, so `dt` accumulates
-  // to the drawn frame — identical to a slower display, no partial-tick
-  // logic. Gameplay only: menus/pause/hidden/blur keep their shipped interval
-  // throttles above. Diagnostics that read the framebuffer force native
+  // Adaptive frame schedule (FrameSched). Draw every Nth REFRESH by frame counting; a skipped
+  // refresh skips the WHOLE tick (sim + render) after the reschedule above, so `dt` accumulates to
+  // the drawn frame — identical to a slower display. Gameplay only: menus/pause/hidden/blur keep
+  // their interval throttles above. Diagnostics that read the framebuffer force native
   // (?bfp; a pending ?shot capture) — same law as coverSkipsPaint.
   _schedTick++;
   if (gameState.isGameplay()) {
     const _dragS = (cameraSystem && cameraSystem._ladderCam) ? cameraSystem._ladderCam.drag : null;
-    // Review (unpushed, 2026-09-05): ONE reused args object (the _taFrameArgs
-    // pattern — G1) and the CACHED cadence median — a skipped tick must stay
-    // near-free, so neither an object literal nor the 30-sample clone+sort
-    // runs here at native refresh; the median refreshes on drawn ticks below.
+    // ONE reused args object (the _taFrameArgs pattern) and the CACHED cadence median — a skipped
+    // tick must stay near-free: no object literal nor 30-sample clone+sort here at native refresh;
+    // the median refreshes on drawn ticks below.
     _planArgs.cover = _cover;
     _planArgs.nowMs = timestamp;
     _planArgs.lastInputMs = _schedLastInputMs;
@@ -7135,79 +5975,61 @@ function gameLoop(timestamp) {
       if (_logPauseEnabled) _logPauseFramesSkipped++;
       return; // whole tick skipped — next rAF is already scheduled
     }
-    // Drawn tick: refresh the cached cadence median at the DRAW rate (10/s
-    // under hold, 60 at rest, native under boost) instead of every rAF entry.
-    // The window is 0.25 s of samples and the display cadence is slow-moving,
-    // so a ≤ 100 ms lag in the estimate is invisible; N only ever errs toward
+    // Drawn tick: refresh the cached cadence median at the DRAW rate (10/s under hold, 60 at rest,
+    // native under boost), not every rAF entry. A ≤ 100 ms lag is invisible; N only errs toward
     // drawing more (a stale, larger period → a smaller N).
     _rafPeriodMs = FrameSched.medianPeriodMs(_rafDeltas);
   } else {
     _frameSched.mode = 'rest';
     _frameSched.n = 1;
-    // Lane A step 4: gameplay is not running — reset the mechLive latch so a
-    // stale "moving" read can never survive into the next gameplay tick.
+    // Gameplay is not running — reset the mechLive latch so a stale "moving" read can never
+    // survive into the next gameplay tick.
     _mechLive = false;
   }
 
   // Delta time in seconds (cap to prevent spiral of death)
   const realDt = Math.min((timestamp - lastTime) / 1000, 0.1);
-  // Debug overlay frame time — DRAWN frames only, unclamped (Session I
-  // follow-up (j)): the true time between two presented frames (100 ms under
-  // the 10 fps hold; 8.3 under boost on 120 Hz), never a skipped-tick ramp.
+  // Debug overlay frame time — DRAWN frames only, unclamped: the true time between two presented
+  // frames (100 ms under the 10 fps hold; 8.3 under boost on 120 Hz), never a skipped-tick ramp.
   if (debugOverlay && lastTime > 0) debugOverlay.recordFrame(timestamp - lastTime);
   lastTime = timestamp;
 
-  // PR 4 / P1.5 — Quality tier FPS sampling + auto-adapt.
-  // Placed AFTER the paused early-return so we never feed inflated
-  // frametimes (pause keeps `lastTime` stale) into the runtimeAdapt window.
-  // Uses fresh `realDt` (already cap-clamped) — getLastFps() on DebugOverlay
-  // works on the same underlying sample but isn't gated on pause, so we
-  // intentionally compute fps locally from realDt here.
+  // Quality tier FPS sampling + auto-adapt. After the paused early-return so we never feed inflated
+  // frametimes (pause keeps `lastTime` stale) into the runtimeAdapt window. Uses the cap-clamped
+  // `realDt`; computed locally because getLastFps() on DebugOverlay isn't gated on pause.
   if (realDt > 0) {
-    // Perf warmup/settle guard — start the clock on the first active frame so
-    // the GPU probe + runtimeAdapt below ignore startup transients (see
-    // Constants.PERF.ADAPT_WARMUP_MS).
+    // Perf warmup/settle guard — start the clock on the first active frame so the GPU probe +
+    // runtimeAdapt below ignore startup transients (see Constants.PERF.ADAPT_WARMUP_MS).
     if (_perfSettleUntil === 0) _perfSettleUntil = timestamp + Constants.PERF.ADAPT_WARMUP_MS;
     const fps = 1 / realDt;
-    // Only sample real gameplay frames, AND only after the warmup/settle window
-    // has elapsed. Menu / briefing / shop / game-over are intentionally throttled
-    // to ~30 fps (see _getScheduleIntervalMs), below the 50 fps downshift threshold
-    // — feeding them to runtimeAdapt would read the deliberate throttle as a slow
-    // GPU and downshift the tier on a static UI screen. The `timestamp >=
-    // _perfSettleUntil` gate keeps one-time startup/mission-build transients
-    // (shader compile, texture upload, scene build) OUT of the history entirely, so
-    // the first post-settle decision can't be a median dominated by that jank.
-    // Startup/non-gameplay assessment is the GPU probe's job (it measures per-frame
-    // GPU ms, which the frame-schedule throttle does not skew).
-    // Zoom Ladder G1: ladder ride/gesture frames are excluded the same way —
-    // they are deliberate camera-flight transients, not steady state (see
-    // _ladderAdaptHoldoff above).
-    // Session I follow-up (review): only NATIVE frames feed the history —
-    // `_frameSched.n === 1`. When the scheduler is deliberately skipping
-    // (hold n≈6-12, rest n=2 on a >60 Hz display), 1/realDt measures the
-    // SCHEDULE, not the machine (live probe: 30 s idle in a drawer sampled
-    // ~10-20 fps and drove HIGH → MEDIUM → LOW, a full post-chain rebuild
-    // flash mid-read). The gate self-heals for genuine slowness: a machine
-    // that cannot hold the target stretches the measured rAF period until
-    // skipFactor collapses to n = 1 — and its honest fps samples flow again.
+    // Only sample real gameplay frames, AND only after the warmup/settle window has elapsed.
+    // Menu / briefing / shop / game-over are throttled to ~30 fps (see _getScheduleIntervalMs),
+    // below the 50 fps downshift threshold — feeding them to runtimeAdapt would read the
+    // deliberate throttle as a slow GPU and downshift the tier on a static UI screen. The
+    // `timestamp >= _perfSettleUntil` gate keeps startup/mission-build transients (shader compile,
+    // texture upload, scene build) out of the history. Startup/non-gameplay assessment is the GPU
+    // probe's job (it measures per-frame GPU ms, which the frame-schedule throttle does not skew).
+    // Ladder ride/gesture frames are excluded the same way (deliberate camera-flight transients,
+    // see _ladderAdaptHoldoff above).
+    // Only NATIVE frames feed the history (`_frameSched.n === 1`): when the scheduler is
+    // deliberately skipping (hold n≈6-12, rest n=2 on a >60 Hz display), 1/realDt measures the
+    // SCHEDULE, not the machine (idle in a drawer sampled ~10-20 fps and drove HIGH → MEDIUM → LOW,
+    // a full post-chain rebuild flash). The gate self-heals for genuine slowness: a machine that
+    // cannot hold the target stretches the measured rAF period until skipFactor collapses to n = 1.
     const _adaptHold = _ladderAdaptHoldoff(timestamp);
     if (gameState.isGameplay() && timestamp >= _perfSettleUntil && !_adaptHold && Number.isFinite(fps) && fps > 0 && _frameSched.n === 1) {
       _fpsHistory.push(fps);
       if (_fpsHistory.length > Constants.PERF.FPS_HISTORY_SIZE) _fpsHistory.shift();
     }
     _framesSinceLastTierChange++;
-    // Cadence: every N frames since last tier change. Uses our own counter
-    // (not `frameCount`, which only ticks during gameplay). runtimeAdapt is
-    // gated on isGameplay() too (matching the sampling gate above), so a
-    // throttled UI screen can never drive an FPS-based tier change.
+    // Cadence: every N frames since last tier change, on our own counter (`frameCount` only ticks
+    // during gameplay). runtimeAdapt is gated on isGameplay() too, so a throttled UI screen can
+    // never drive an FPS-based tier change.
     //
-    // Sprint 3 GPU profiling: `?autoProfile=1` requires tier stability across
-    // configurations (otherwise the disable-X delta-vs-baseline is measuring
-    // tier-change drift instead of the toggled feature). Skip runtimeAdapt
-    // entirely while a profile sweep session is live.
-    // Session I follow-up (review): never DECIDE under an open drawer either
-    // (`_cover === 'partial'`) — the world is held, the history is pre-hold
-    // data, and an applyTier rebuild is a visible full-screen flash while the
+    // `?autoProfile=1` needs tier stability across configurations (else the disable-X delta
+    // measures tier-change drift): skip runtimeAdapt while a profile sweep session is live.
+    // Never DECIDE under an open drawer either (`_cover === 'partial'`): the world is held, the
+    // history is pre-hold data, and an applyTier rebuild is a visible full-screen flash while the
     // player reads. Adapt resumes on the close edge with the same history.
     if (sceneManager && gameState.isGameplay() && !profileFlags.autoProfile && !profileFlags.pinTier && timestamp >= _perfSettleUntil && !_adaptHold && _cover !== 'partial' && (_framesSinceLastTierChange % _ADAPT_CHECK_INTERVAL) === 0) {
       const decision = runtimeAdapt({
@@ -7216,8 +6038,7 @@ function gameLoop(timestamp) {
         framesSinceLastChange: _framesSinceLastTierChange,
         threshold: Constants.PERF.ADAPT_FPS_THRESHOLD,
         cooldownFrames: Constants.PERF.ADAPT_COOLDOWN_FRAMES,
-        // Sprint 2 / PR B — auto-upshift gate. Wider cooldown + threshold
-        // creates a hysteresis band that prevents tier ping-pong.
+        // Auto-upshift gate: wider cooldown + threshold make a hysteresis band that prevents tier ping-pong.
         upshiftThreshold: Constants.PERF.ADAPT_UPSHIFT_FPS_THRESHOLD,
         upshiftCooldownFrames: Constants.PERF.ADAPT_UPSHIFT_COOLDOWN_FRAMES,
         historySize: Constants.PERF.FPS_HISTORY_SIZE,
@@ -7241,7 +6062,7 @@ function gameLoop(timestamp) {
     }
   }
 
-  // Apply slo-mo factor (Phase 1C — catch juice)
+  // Apply slo-mo factor (catch juice)
   let dt = realDt;
   if (slowMoTimer > 0) {
     slowMoTimer -= realDt;
@@ -7251,29 +6072,25 @@ function gameLoop(timestamp) {
     }
   }
 
-  // --- Zoom Ladder S3: the ONE world-time choke point (T2) ---------------
-  // `dt` above is dtReal (real, slow-mo-scaled) — it drives camera, UI,
-  // ceremonies, attitude, resources, animations. The TimeAuthority derives the
-  // world-simulation delta `dtWorld = dtReal × BASE_SCALE × warp` from it, once
-  // per frame, and hands it to the orbital/environmental systems below. Warp
-  // only ever leaves 1× when the ladder is engaged (flag on + gameplay); while
-  // disengaged the authority pins the shipped base rate with no ramp, so
-  // `dtWorld === dt × Constants.TIME_SCALE_GAMEPLAY` bit-for-bit (byte-identical).
+  // --- The ONE world-time choke point ---
+  // `dt` above is dtReal (real, slow-mo-scaled) — it drives camera, UI, ceremonies, attitude,
+  // resources, animations. The TimeAuthority derives the world-simulation delta
+  // `dtWorld = dtReal × BASE_SCALE × warp` from it, once per frame, and hands it to the
+  // orbital/environmental systems below. Warp only leaves 1× when the ladder is engaged (flag on +
+  // gameplay); while disengaged the authority pins the shipped base rate with no ramp, so
+  // `dtWorld === dt × Constants.TIME_SCALE_GAMEPLAY` bit-for-bit.
   //
-  // The warp target is the CURRENT floor's timeCap; during a crossing the
-  // ZoomLadder core already reports the DESTINATION floor as current, so this
-  // pre-ramps toward the arrival rate during the ride. An active conjunction
-  // alert is the danger signal that clamps warp back to 1× (S4 refines this to
-  // the full alarm horizon).
+  // The warp target is the CURRENT floor's timeCap; during a crossing the ZoomLadder core already
+  // reports the DESTINATION floor as current, so this pre-ramps toward the arrival rate during the
+  // ride. An active conjunction alert clamps warp back to 1×.
   //
-  // Q10 (docs/ladder/08-workbench.md §8, "the roll is its own phase"): while a
-  // cross-anchor ride is going UP (F5→F6) — and until its post-ride level phase
-  // completes — the camera reports the DEPARTURE floor as a hold, whose cap
-  // wins, so the time-lapse engages only after arrival + leveling, never during
-  // the flight. Down-rides report no hold: the existing destination pre-ramp
-  // settles time first (TimeAuthority.ladderTargetCap is the pure rule).
+  // docs/ladder/08-workbench.md §8, "the roll is its own phase": while a cross-anchor ride is going
+  // UP (F5→F6) — and until its post-ride level phase completes — the camera reports the DEPARTURE
+  // floor as a hold, whose cap wins, so the time-lapse engages only after arrival + leveling, never
+  // during the flight. Down-rides report no hold: the destination pre-ramp settles time first
+  // (TimeAuthority.ladderTargetCap is the pure rule).
   const _ladderActive = !!(ladderController && ladderController.isActive && ladderController.isActive());
-  // u16a (owner 2026-10-22, DECISIONS §13 row 5 rule extended): the full-screen help page (a tap on a HUD pane opens the
+  // owner 2026-10-22, DECISIONS §13 row 5 rule extended: the full-screen help page (a tap on a HUD pane opens the
   // codex SPECS page) stops the world exactly like the side drawer. ONE combined value per frame, read by BOTH clamps below
   // (calmCap and tripWarpArgs), so every consumer the drawer reaches (dtWorld -> _worldHeld -> GameFlowManager, TipCargo,
   // the hazard systems; the trip clock) follows with no other edit. TimeAuthority.worldHoldOpen is the testable rule.
@@ -7291,69 +6108,52 @@ function gameLoop(timestamp) {
     const _holdRow = (_hold != null) ? FloorContract.byId(_hold) : null;
     const _holdCap = _holdRow ? _holdRow.timeCap : null;
     _floorCap = TimeAuthority.ladderTargetCap(_floorCap, _holdCap);
-    // Held world (Session I, plan D-F — supersedes the D10 1× calm cap): an
-    // open workbench drawer clamps the warp target to 0 — the world clock
-    // STOPS while you shop or read (the rail reads HOLD; the frame scheduler
-    // is on its 10 fps heartbeat). Applied AFTER the Q10 hold rule; a clamp,
-    // never a raise.
+    // Held world: an open workbench drawer clamps the warp target to 0 — the world clock STOPS
+    // while you shop or read (the rail reads HOLD; the frame scheduler is on its 10 fps heartbeat).
+    // Applied AFTER the hold rule above; a clamp, never a raise.
     _floorCap = TimeAuthority.calmCap(_floorCap, _worldHoldOpen);
   }
-  // Q10 level-phase sound (S4): one settle cue on the RISE edge of the
-  // camera's post-arrival level-to-north phase (~600 ms, "its own sound" —
-  // 08-workbench §8 Q10). Flag-off/disengaged: _ladderActive false pins the
-  // edge state false — zero work on the shipped path.
+  // One settle cue on the RISE edge of the camera's post-arrival level-to-north phase (~600 ms).
+  // _ladderActive false pins the edge state false.
   const _leveling = _ladderActive &&
     !!(cameraSystem && cameraSystem.isLadderLeveling && cameraSystem.isLadderLeveling());
   if (_leveling && !_ladderLevelingPrev && ladderSfx) ladderSfx.onLevelPhase();
   _ladderLevelingPrev = _leveling;
   // Danger cap: only meaningful while warp can apply (ladder engaged or a trip burning), so skip
-  // the getStatus() read entirely on the shipped flag-off path (no per-frame
-  // allocation there). timeAuthority.update ignores dangerActive when inactive.
-  // trip-melt D3 (owner 2026-10-19, DECISIONS §29): while the burn to the next field runs, the world clock targets
-  // Constants.TRIP.TIME_RATE (the F5 rate) whatever the floor or the ladder state - `tripWarpArgs` (TransferTrip.js)
+  // the getStatus() read otherwise (no per-frame allocation). timeAuthority.update ignores dangerActive when inactive.
+  // DECISIONS §29 (owner 2026-10-19): while the burn to the next field runs, the world clock targets
+  // Constants.TRIP.TIME_RATE whatever the floor or the ladder state - `tripWarpArgs` (TransferTrip.js)
   // fills the args. The open drawer still holds the clock at 0 and a conjunction alert still clamps it to 1x (safety
-  // wins). Without a trip it hands the ladder's own values through unchanged (byte-identical).
+  // wins). Without a trip it hands the ladder's own values through unchanged.
   const _alertActive = (_ladderActive || gameFlowManager.isTripRunning()) &&
     !!(conjunctionSystem && conjunctionSystem.getStatus && conjunctionSystem.getStatus().alertActive);
   tripWarpArgs(_taFrameArgs, {
     dtReal: dt, ladderActive: _ladderActive, floorCap: _floorCap,
     workbenchOpen: _worldHoldOpen, alertActive: _alertActive,
-    gameplay: gameState.isGameplay(),   // trip-melt G6: the full-screen shop (ladder off) pauses the trip's clock like the drawer
+    gameplay: gameState.isGameplay(),   // the full-screen shop (ladder off) pauses the trip's clock like the drawer
   });
   timeAuthority.update(_taFrameArgs);
   const dtWorld = timeAuthority.dtWorld;
-  // Session I follow-up (review, FINDINGS (k)): THE HELD WORLD IS HELD. While a
-  // workbench drawer is open the world clock is 0 (calmCap → 0, the rail reads
-  // HOLD) — but the hazard systems below ticked on REAL dt regardless: the ISS
-  // TCA and the Starlink window (dt × BASE_SCALE game-time), the MMOD damage
-  // rolls / SAFE_MODE, and the collision-consequence scan (up to a game-over)
-  // all advanced while the player shopped or read — D-F's "nothing bad
-  // happens" was not true. The ONE gate: a system that can change the
-  // player's fate does not tick while the world clock is stopped. Flag-off is
-  // byte-identical (inactive TimeAuthority pins rate 1 → dtWorld > 0); the
-  // ~0.6 s ramp to 0 on the open edge still ticks (rate > 0), by design.
+  // THE HELD WORLD IS HELD. While a workbench drawer is open the world clock is 0 (calmCap → 0, the rail reads
+  // HOLD). The ONE gate: a system that can change the player's fate (ISS TCA, Starlink window, MMOD damage rolls /
+  // SAFE_MODE, the collision-consequence scan) does not tick while the world clock is stopped. Inactive
+  // TimeAuthority pins rate 1 → dtWorld > 0; the ~0.6 s ramp to 0 on the open edge still ticks (rate > 0), by design.
   const _worldHeld = !(dtWorld > 0);
-  // Rail warp readout (VisualLaw.RAIL.SHOWS 'warp-readout'; 08-workbench §2):
-  // the live rate, only while the ladder is engaged. setRate is write-on-change
-  // and ≤ 4 Hz internally (G1), so the per-frame call is free. Flag-off:
-  // _ladderActive is false → never called.
+  // Rail warp readout (VisualLaw.RAIL.SHOWS 'warp-readout'): the live rate, only while the ladder is engaged.
+  // setRate is write-on-change and ≤ 4 Hz internally, so the per-frame call is free.
   if (_ladderActive && railIndicator && railIndicator.setRate) railIndicator.setRate(timeAuthority.rate);
-  // Session O (plan D9, owner 2026-09-07): build-stamp floor law — write
-  // `body[data-ladder-floor]` = the engaged floor's id, write-on-change (G1): the
-  // attribute appears only when it changes; per-frame reads are cheap getState
-  // snapshots, so the per-frame call is free). Disengaged (menu, pause → menu,
-  // ?ladder=0) → null → removeAttribute → the stamp shows (delivery loop
-  // intact). The pure-scenery rule still hides it on F1 transiently (index.html).
-  // Gated on the flag: ?ladder=0 does ZERO DOM writes (byte-identical).
+  // Build-stamp floor law: write `body[data-ladder-floor]` = the engaged floor's id, write-on-change. Disengaged
+  // (menu, pause → menu, ?ladder=0) → null → removeAttribute → the stamp shows. The pure-scenery rule still hides
+  // it on F1 transiently (index.html). Gated on the flag: ?ladder=0 does ZERO DOM writes.
   if (Constants.LADDER && Constants.LADDER.ENABLED) {
     const _floorNow = _ladderActive ? ladderController.currentFloor() : null;
-    const _floorAttr = (_floorNow != null) ? String(_floorNow) : null;   // never "null" — a null core read writes no attribute (review N5)
+    const _floorAttr = (_floorNow != null) ? String(_floorNow) : null;   // never "null" — a null core read writes no attribute
     if (_floorAttr !== _ladderFloorAttr) {
       _ladderFloorAttr = _floorAttr;
       if (_floorAttr) document.body.setAttribute('data-ladder-floor', _floorAttr);
       else document.body.removeAttribute('data-ladder-floor');
     }
-    // u7 D6: the first player-chosen arrival on floor 4 / 5 says what the rail's word means, once. One call a
+    // The first player-chosen arrival on floor 4 / 5 says what the rail's word means, once. One call a
     // frame; the rule is pure (floorWordsToShow). Nothing is sent or marked while toasts are muted.
     if (_ladderActive && floorWordsStore && _floorNow != null && !floorWordsStore.allTaught()) {
       const _fwText = floorWordsToShow({
@@ -7369,52 +6169,38 @@ function gameLoop(timestamp) {
       }
     }
     const _hideVitals = _floorAttr === '1' && !!(workbenchPane && workbenchPane.isOpen && workbenchPane.isOpen());
-    if (_hideVitals !== _vitalsUnderDrawer) {   // write-on-change; the drawer covers the meters only on F1 (w4-power D4, measured)
+    if (_hideVitals !== _vitalsUnderDrawer) {   // write-on-change; the drawer covers the meters only on F1 (measured)
       _vitalsUnderDrawer = _hideVitals; const _vEl = document.getElementById('hud-vitals'); if (_vEl) _vEl.style.visibility = _hideVitals ? 'hidden' : '';
-      setChipsUnderDrawer(_hideVitals);   // the drawer's bar reaches the DISCOVERIES / ORB chips too (R1)
+      setChipsUnderDrawer(_hideVitals);   // the drawer's bar reaches the DISCOVERIES / ORB chips too
     }
   }
-  // Session P (plan D5): the DETAIL slider follows the live visible count
-  // (≤ 4 Hz inside; a pane-flip edge forces it at once through the listener in
-  // the ladder gate) and wears its EDGE-CHROME phase — EdgeChrome is read per
-  // frame, the slider writes on change (G1). Its bottom-left slot is the
-  // footer band; the hub never measures it.
+  // The DETAIL slider follows the live visible count (≤ 4 Hz inside; a pane-flip edge forces it at once through the
+  // listener in the ladder gate) and wears its EDGE-CHROME phase, read per frame. Its bottom-left slot is the footer
+  // band; the hub never measures it.
   if (_ladderActive && detailSlider) {
     detailSlider.refresh();
     if (edgeChrome) detailSlider.setPhase(edgeChrome.phase('slider', timestamp));
   }
-  // Session L (Session K FINDINGS (a)): the hull callout columns clear the
-  // WHERE rail — the rail is MotherCallouts' SECOND inset source, merged with
-  // the drawers' by max (write-on-change inside setRailInsets). The accessor
-  // is a cached number from the rail's own 1 Hz dodge read — no layout read
-  // here; a hidden rail reads null and that side falls back to the drawer's
-  // inset. Session P: the LEFT side is always null now — the DISPLAY rail
-  // retired and the DETAIL slider lives in the footer band, below the callout
-  // columns' reach. Flag-off / disengaged: never called (the shipped
-  // drawer-only insets).
+  // The hull callout columns clear the WHERE rail — the rail is MotherCallouts' SECOND inset source, merged with
+  // the drawers' by max (write-on-change inside setRailInsets). The accessor is a cached number from the rail's own
+  // 1 Hz dodge read — no layout read here; a hidden rail reads null and that side falls back to the drawer's inset.
+  // The LEFT side is always null: the DETAIL slider lives in the footer band, below the callout columns' reach.
   if (_ladderActive && motherCallouts && motherCallouts.setRailInsets) {
     const wl = (railIndicator && railIndicator.leftPx) ? railIndicator.leftPx() : null;
     motherCallouts.setRailInsets(null, wl == null ? null : window.innerWidth - wl);
   }
-  // THE FOOTER BAND (Session P, plan D7; owner 2026-09-07: "consistent place
-  // directly above right thumb area"): ONE fixed strip — `_FOOTER` (132–164 px
-  // from the bottom on both surfaces) — replaced the three dodge chains
-  // (tab-under-rail, cargo-under-tab, orbit-under-rail). The SPECS tab (right;
-  // Session U: the ONE workbench pane's tab — the left REFIT tab retired with
-  // the left drawer) and the DETAIL slider (left) LIVE in it (their own
-  // `bottom`); every other rider's FLOOR is the footer's top — CARGO, NEXT and
-  // ORBIT each subtract their own GAP_PX inside, so they sit 8 px above the
-  // band. The SPECS tab is EDGE CHROME off the workbench: its phase is written
-  // here per frame from the ONE core (pinned on F1 / open anywhere = awake
-  // inside the shell's truth table; write-on-change). Every input below is a
-  // cached number — no layout read here; the setters are write-on-change, so
-  // the per-frame calls are free.
+  // THE FOOTER BAND, owner 2026-09-07: "consistent place directly above right thumb area". ONE fixed strip —
+  // `_FOOTER` (132–164 px from the bottom on both surfaces). The SPECS tab (right; the ONE workbench pane's tab)
+  // and the DETAIL slider (left) LIVE in it (their own `bottom`); every other rider's FLOOR is the footer's top —
+  // CARGO, NEXT and ORBIT each subtract their own GAP_PX inside, so they sit 8 px above the band. The SPECS tab is
+  // EDGE CHROME off the workbench: its phase is written here per frame from the ONE core (pinned on F1 / open
+  // anywhere = awake inside the shell's truth table). Every input is a cached number — no layout read here.
   const footerFloor = window.innerHeight - (_FOOTER ? _FOOTER.top : (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
   if (_ladderActive && workbenchPane && workbenchPane.setTabPhase && edgeChrome) {
     workbenchPane.setTabPhase(edgeChrome.phase('tab', timestamp));
   }
-  // u6 D9: on a phone an open DAUGHTERS pane covers the SPECS tab - the tab steps aside (write-on-change inside).
-  // Round 1 F5: with the ladder off the yield is released (once, on change), so it never sticks.
+  // On a phone an open DAUGHTERS pane covers the SPECS tab - the tab steps aside (write-on-change inside).
+  // With the ladder off the yield is released (once, on change), so it never sticks.
   if (workbenchPane && workbenchPane.setTabYield) {
     const _sp = hud && hud.statusPanel;
     workbenchPane.setTabYield(_ladderActive && shouldYieldSpecsTab({
@@ -7424,17 +6210,13 @@ function gameLoop(timestamp) {
       armsFolded: !!(_sp && _sp.isFolded && _sp.isFolded()),
     }));
   }
-  // SAFETY OVERRIDE panel: STATIC since 2026-09-09 (plan
-  // 1788926404388-hud-followups-0909.md §1.1 — "almost at bottom"): its root
-  // writes `bottom: max(12px, env(safe-area-inset-bottom))` once in _build;
-  // the per-frame setDodge (hint-band / thumb-rest floor + the ORBIT band
-  // re-centre) is retired with it. Nothing here feeds the gag.
-  // Plan Task 8: left-arm overlay stack (Cargo → Orbit → Autopilot → Pin).
-  // Guard matches the old dodge chain: `_ladderActive`. Ceiling is the left
+  // SAFETY OVERRIDE panel: STATIC — its root writes `bottom: max(12px, env(safe-area-inset-bottom))` once in
+  // _build; nothing here feeds the gag.
+  // Left-arm overlay stack (Cargo → Orbit → Autopilot → Pin), guarded by `_ladderActive`. Ceiling is the left
   // HUD column's cached bottom + GAP; floor is the footer band − GAP. Skip
   // when the column is unlaid (null ceiling) so riders do not flash-hide.
   if (_ladderActive && _leftRiders) {
-    // u5 D2: before the layout, so a fold / give-back is seen by it this frame.
+    // Before the layout, so a fold / give-back is seen by it this frame.
     if (fmaStrip && _daughtersFold.step(fmaStrip.isFlyingShown(), hud && hud.statusPanel)) _leftColAt = -Infinity;   // re-read the column bottom now
     const _leftCeil = _leftColumnBottom(timestamp);
     if (_leftCeil != null) {
@@ -7446,65 +6228,45 @@ function gameLoop(timestamp) {
     }
   }
 
-  // Session O (plan D12; owner 2026-09-07): the hub sets the toast policy on
-  // engage, clears on disengage — flag-off (?ladder=0) = null = today. HUD.js'
-  // setToastPolicy is itself write-on-change, so the per-frame call is free:
-  // engaged → the ONE drop table kills confirmations/notices/views/inspect/memo
-  // (density per-step toasts included — force does not save them); disengaged /
-  // menu / flag-off → null = shipped behavior (every kind shows).
+  // owner 2026-09-07: the hub sets the toast policy on engage, clears on disengage (null = every kind shows). setToastPolicy is
+  // write-on-change, so the per-frame call is free: engaged → the ONE drop table kills
+  // confirmations/notices/views/inspect/memo (density per-step toasts included — force does not save them).
   if (hud && hud.setToastPolicy) hud.setToastPolicy(_ladderActive ? 'engaged' : null);
-  // Session Q (plan D12c): the INTRO INHIBIT — while the engaged intro flyby is
-  // in flight (LadderController.introInFlight: the dive, the dwell, the pull)
-  // every alert below red is held and replays when the window closes (Qantas
-  // 32; the first catch is the player's landing). Write-on-change inside;
-  // false off the ladder / disengaged; the live-approach window is HUD's own
-  // (the 2 Hz targets tick).
-  // Toast-inhibit audit (opening dance, plan task 8 / decision 12): the dance
-  // does NOT extend this inhibit. An inhibited HUD prompt is HELD and REPLAYED
-  // when the window closes — extending it across the unfold would parade every
-  // held alert at hand-over. Silence during the dance is enforced AT SOURCE
-  // (PlayerSatellite._danceDrivesMe gates, GameFlowManager's opening-comms and
-  // cameo gates, OnboardingDirector's deferWhile) — the intro-ride inhibit
-  // here keeps doing exactly what it did before the dance existed.
+  // INTRO INHIBIT — while the engaged intro flyby is in flight (LadderController.introInFlight: the dive, the dwell,
+  // the pull) every alert below red is held and replays when the window closes. Write-on-change inside; false off the
+  // ladder / disengaged; the live-approach window is HUD's own (the 2 Hz targets tick).
+  // The opening dance does NOT extend this inhibit: an inhibited HUD prompt is HELD and REPLAYED when the window
+  // closes, so extending it across the unfold would parade every held alert at hand-over. Silence during the dance is
+  // enforced AT SOURCE (PlayerSatellite._danceDrivesMe gates, GameFlowManager's opening-comms and cameo gates,
+  // OnboardingDirector's deferWhile).
   if (hud && hud.setToastInhibit) hud.setToastInhibit(_ladderActive && !!(ladderController && ladderController.introInFlight && ladderController.introInFlight()));
 
   const currentState = gameState.currentState;
 
-  // Render policy: `_cover` / `_skipPaint` were computed at the TOP of the
-  // tick (the ONE viewCover signal per frame — the frame scheduler consumes
-  // 'partial' there; Session I). Under a 'full' cover (Tech Library open /
-  // ShopScreen plate — both ~opaque) the scene paint and the HUD DOM writes
-  // are skipped below; the SIM POLICY IS UNCHANGED (every system still
-  // ticks). MenuScreen is not a cover (its plate is translucent; the live
-  // scene behind it is the design). Never skipped while the BlackFrameProbe
-  // (?bfp) or the ?shot harness is armed — both read the framebuffer and a
-  // skipped render would read as the black they triage.
+  // Render policy: `_cover` / `_skipPaint` were computed at the TOP of the tick (the ONE viewCover signal per
+  // frame — the frame scheduler consumes 'partial' there). Under a 'full' cover (Tech Library open / ShopScreen
+  // plate — both ~opaque) the scene paint and the HUD DOM writes are skipped below; the SIM POLICY IS UNCHANGED
+  // (every system still ticks). MenuScreen is not a cover (its plate is translucent). Never skipped while the
+  // BlackFrameProbe (?bfp) or the ?shot harness is armed — both read the framebuffer and a skipped render would
+  // read as the black they triage.
 
   // --- Always update visuals (scene renders behind menus) ---
-  // Held world (Session I follow-up, Lane A step 5): freeze the sky — sun,
-  // Earth and starfield — by passing dt=0 rather than skipping the call.
-  // sunDir is still the return value and is consumed below by
-  // earth.setSunDirection / spaceWeatherSystem / player.update; a skipped
-  // call would leave it stale. Accepted side effect: the eclipse-intensity
-  // blend and _updateAutoExposure also key off dt, so exposure stops
-  // adapting while held (owner-facing report item, not fixed here — no lane
-  // owns SunLight.js). The sky stops dead rather than easing to a halt:
-  // _worldHeld only turns true once the ~0.6 s world-clock ramp to 0
-  // finishes, so the sun runs at full rate through the ramp and then stops.
+  // Held world: freeze the sky — sun, Earth and starfield — by passing dt=0 rather than skipping the call.
+  // sunDir is still the return value and is consumed below by earth.setSunDirection / spaceWeatherSystem /
+  // player.update; a skipped call would leave it stale. Side effect: the eclipse-intensity blend and
+  // _updateAutoExposure also key off dt, so exposure stops adapting while held. _worldHeld only turns true once the
+  // ~0.6 s world-clock ramp to 0 finishes, so the sun runs at full rate through the ramp and then stops.
   const sunDir = sunLight.update(_worldHeld ? 0 : dt, player.getPosition());
   earth.setSunDirection(sunDir);
   earth.update(_worldHeld ? 0 : dt);
-  // P2: bloom gate — skips the whole UnrealBloom mip chain on frames where
-  // nothing can cross the threshold. NOT sun-only: Venus rides the brightness
-  // ladder at 2.74 (> Constants.BLOOM_THRESHOLD) and its visibility is
-  // independent of the sun's, so the gate asks SunLight for any visible
-  // threshold-crossing source (see SunLight.isBloomSourceVisible).
+  // Bloom gate — skips the whole UnrealBloom mip chain on frames where nothing can cross the threshold. NOT
+  // sun-only: Venus rides the brightness ladder at 2.74 (> Constants.BLOOM_THRESHOLD) and its visibility is
+  // independent of the sun's, so the gate asks SunLight for any visible threshold-crossing source.
   sceneManager.setBloomEnabled(sunLight.isBloomSourceVisible());
-  // B2: feed the renderer's CAPPED pixel ratio (HIGH tier caps at 1.5), not
-  // window.devicePixelRatio (=2.0), so gl_PointSize maps to the true physical
-  // render-target and stars aren't ~33% oversized.
+  // Feed the renderer's CAPPED pixel ratio (HIGH tier caps at 1.5), not window.devicePixelRatio (=2.0), so
+  // gl_PointSize maps to the true physical render-target and stars aren't ~33% oversized.
   starfield.update(_worldHeld ? 0 : dt, sceneManager.getRenderer().getPixelRatio(), sceneManager.getCamera());
-  // UX-11 #5: city-label cull/fade (no-op while hidden)
+  // City-label cull/fade (no-op while hidden)
   try { cityLabels.update(); } catch (e) { console.error('[GameLoop] cityLabels:', e); }
   try { launchCameo.update(dt); } catch (e) { console.error('[GameLoop] launchCameo:', e); }
   try { ambientLaunchScheduler.update(dt); } catch (e) { console.error('[GameLoop] ambientLaunch:', e); }
@@ -7518,16 +6280,13 @@ function gameLoop(timestamp) {
     frameCount++;
     debrisField.setFrameId(frameCount);
 
-    // Process input. Session I TURNTABLE shim (plan D-F): while a drawer is
-    // open on the workbench floor, the ARROWS belong to the camera turntable
-    // (LadderController maps them to ladderDragNudge in its update below) and
-    // must never steer the SHIP — no attitude command, no RCS puff, at held
-    // time. InputManager is do-not-edit; its `keys` map is a PUBLIC object
-    // (the D-I grammar), so the arrows are blanked around this ONE consumer
-    // and restored immediately — the physical key state survives for the
-    // controller's read and for ordinary flying the moment the drawer closes.
-    // (The keydown-path side effect — autopilot disengage on the FIRST arrow
-    // press, InputManager :445-450 — is out of this shim's reach: FINDINGS.)
+    // Process input. TURNTABLE shim: while a drawer is open on the workbench floor, the ARROWS belong to the camera
+    // turntable (LadderController maps them to ladderDragNudge in its update below) and must never steer the SHIP —
+    // no attitude command, no RCS puff, at held time. InputManager is do-not-edit; its `keys` map is a PUBLIC
+    // object, so the arrows are blanked around this ONE consumer and restored immediately — the physical key state
+    // survives for the controller's read and for ordinary flying the moment the drawer closes.
+    // (The keydown-path side effect — autopilot disengage on the FIRST arrow press, InputManager.js _handleKeyDown — is out of this
+    // shim's reach.)
     const _turntable = !!(ladderController && ladderController.turntableActive
       && ladderController.turntableActive());
     if (_turntable) {
@@ -7535,8 +6294,7 @@ function gameLoop(timestamp) {
       _turnSaved.up = !!k.ArrowUp; _turnSaved.down = !!k.ArrowDown;
       _turnSaved.left = !!k.ArrowLeft; _turnSaved.right = !!k.ArrowRight;
       k.ArrowUp = k.ArrowDown = k.ArrowLeft = k.ArrowRight = false;
-      // Session I follow-up (review, (g)): the restore rides a finally — a
-      // throw inside processInput must never leave the arrows blanked (the
+      // The restore rides a finally — a throw inside processInput must never leave the arrows blanked (the
       // physical key state would be dead until the next keydown re-set it).
       try {
         inputManager.processInput(dt);
@@ -7552,90 +6310,79 @@ function gameLoop(timestamp) {
     try { autopilotSystem.update(dt, dtWorld); } catch (e) { console.error('[GameLoop] autopilotSystem:', e); }
 
     // Collision Avoidance — after autopilot, before player.update (dodge impulse applied to _rcsVelocity)
-    // Held world (Session I follow-up): no scan, no dodge, no consequence while the clock is 0.
+    // Held world: no scan, no dodge, no consequence while the clock is 0.
     if (!_worldHeld) { try { collisionAvoidanceSystem.update(dt, dtWorld); } catch (e) { console.error('[GameLoop] collisionAvoidance:', e); } }
 
-    // Update game state timer
-    // Held world (Session I follow-up): pass zero rather than skipping the
-    // call — the body is missionTime += dt followed by the GAME_WIN check,
-    // and the win check must stay live even while a drawer is open.
+    // Game state timer: pass zero when held rather than skipping the call — the body is missionTime += dt
+    // followed by the GAME_WIN check, and the win check must stay live even while a drawer is open.
     gameState.update(_worldHeld ? 0 : dt);
     gameFlowManager.update(_worldHeld ? 0 : dt);
 
     // Update entities (with error boundaries — single system crash won't freeze game)
     try { player.update(dt, sunDir, dtWorld); } catch (e) { console.error('[GameLoop] player.update:', e); }
-    // Register item 14: ship-attitude hold. Runs IMMEDIATELY after the prograde
-    // compose so the overwrite lands before the net's reel/berth ticks read
-    // player.quaternion in captureNetSystem.update below — an end-of-loop site
-    // (with the freeze ticks) would be overwritten by the next frame's compose
-    // BEFORE the net sees it. One null-check per frame when disarmed. Dev-only.
+    // Ship-attitude hold (dev-only). Runs IMMEDIATELY after the prograde compose so the overwrite lands before the
+    // net's reel/berth ticks read player.quaternion in captureNetSystem.update below — an end-of-loop site would be
+    // overwritten by the next frame's compose BEFORE the net sees it. One null-check per frame when disarmed.
     if (window.__netShipHoldTick) window.__netShipHoldTick();
     try { debrisField.update(dt, player.getPosition(), player.getOrbitalElements(), dtWorld); } catch (e) { console.error('[GameLoop] debrisField:', e); }
     try { activeSatellites.update(dt, player.getPosition(), dtWorld); } catch (e) { console.error('[GameLoop] activeSats:', e); }
 
-    // Update V3 arm manager
-    // Held world (Session I follow-up, owner 2026-09-23): the pulse-scan
-    // cooldowns, auto-capture feed and furnace digestion are "fate" and must
-    // stop with everything else under _worldHeld. Zero time still runs
-    // arm.update for every arm, so a DOCKED daughter keeps re-clamping to the
-    // ship's live position/attitude (it must, so it stays attached if the
+    // Arm manager. Held world, owner 2026-09-23: fate clocks (pulse-scan cooldowns, auto-capture feed, furnace
+    // digestion, resourceSystem) stop with the drawer open. Zero time still runs arm.update for every arm, so a
+    // DOCKED daughter keeps re-clamping to the ship's live position/attitude (it must, so it stays attached if the
     // ship turns) — passing zero rather than skipping the call does both.
     if (armManager) { try { armManager.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] armManager:', e); } }
 
-    // Lane A (F1 six-fixes plan, step 4) — latch mechLive for the NEXT
-    // frame's scheduler decision. Must run AFTER armManager.update (the
+    // Latch mechLive for the NEXT frame's scheduler decision. Must run AFTER armManager.update (the
     // struts) and the flower/ROSA writes inside player.update above, and on
     // DRAWN frames only — see the comment above _mechPrev.
     _fillMechValues(_mechCur);
     _mechLive = FrameSched.anyMoved(_mechPrev, _mechCur, MECH_EPS_RAD_PER_S * dt);
     { const _tmp = _mechPrev; _mechPrev = _mechCur; _mechCur = _tmp; }
 
-    // V-4: Sync docked-arm mesh visibility (must run AFTER arm._updateDocked)
+    // Sync docked-arm mesh visibility (must run AFTER arm._updateDocked)
     try { player.postArmUpdate(); } catch (e) { console.error('[GameLoop] postArmUpdate:', e); }
 
-    // Opening dance (2026-09-16): beat-edge emission only — the pose itself is
+    // Opening dance: beat-edge emission only — the pose itself is
     // derived from the wall clock so the menu loop and this loop always agree.
     // The game loop only reaches here post-cut (isGameplay); the ONE pre-cut
     // beat edge (t = 0, jet-off) is fired by the deferred tick scheduled in the
     // MENU_DEPARTURE_START handler while the state is still MENU.
     try { openingDance.tick(dt); } catch (e) { console.error('[GameLoop] openingDance:', e); }
 
-    // V-8: Capture net FSM + visual effects (flag-gated internally)
+    // Capture net FSM + visual effects (flag-gated internally)
     try { captureNetSystem.update(dt); } catch (e) { console.error('[GameLoop] captureNetSystem:', e); }
-    // Lane 3b: the resupply satellite sits on her nose collar: after player.update (Rule G), real time (its arm plays while the world is held).
-    // Slice 5 (5f): the take of a big piece runs on game time, so its second argument is zero while the world is held.
+    // The resupply satellite sits on her nose collar: after player.update (Rule G), real time (its arm plays while the world is held).
+    // The take of a big piece runs on game time, so its second argument is zero while the world is held.
     try { resupplySatellite.update(dt, _worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] resupplySatellite:', e); }
     // The leash hand-off: radiators, ship turn, pin and push (zero time while the world is held).
     if (player.leashDriver) { try { player.leashDriver.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] leashDriver:', e); } }
     // Bags on the radiator tips: pin every frame, cook on the rack's clock (zero time while the world is held).
     if (player.tipCargo) { try { player.tipCargo.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] tipCargo:', e); } }
     try { captureNetVisual.update(dt); } catch (e) { console.error('[GameLoop] captureNetVisual:', e); }
-    // l6-look: after the driver, tip cargo and the net visual — it reads the view and the pinned catches.
+    // After the driver, tip cargo and the net visual — it reads the view and the pinned catches.
     if (leashVisual) { try { leashVisual.update(dt); } catch (e) { console.error('[GameLoop] leashVisual:', e); } }
     try { furnaceBreakdownVisual.update(dt); } catch (e) { console.error('[GameLoop] furnaceBreakdownVisual:', e); }
 
-    // CP-2: mother-mounted de-spin laser (flag-gated internally)
+    // De-spin laser (flag-gated internally)
     try { despinLaser.update(dt); } catch (e) { console.error('[GameLoop] despinLaser:', e); }
 
-    // CP-4 §4: drain deferred teaching overlays (≤1 per QUEUE_DRAIN_INTERVAL_S)
-    // Held world (owner 2026-09-23): zero time stalls the _drainTimer
-    // countdown, so a QUEUED tip normally waits for the drawer to close.
-    // Accepted exception: a tip already due when the drawer opened can still
-    // show once (see the plan's Lane A step 6 report note).
+    // Drain deferred teaching overlays (≤1 per QUEUE_DRAIN_INTERVAL_S). Held world: zero time stalls the
+    // _drainTimer countdown, so a QUEUED tip normally waits for the drawer to close; a tip already due when the
+    // drawer opened can still show once.
     try { teachingSystem.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] teachingSystem:', e); }
 
-    // Item 3: anti-stuck idle watchdog (1 Hz internally; veteran-gated)
+    // Anti-stuck idle watchdog (1 Hz internally; veteran-gated)
     try { armIdleAdvisor.update(dt); } catch (e) { console.error('[GameLoop] armIdleAdvisor:', e); }
 
-    // UX-11 #11: lost-in-space recovery advisor (5 s scan cadence internally; veteran-gated watchdog)
+    // Lost-in-space recovery advisor (5 s scan cadence internally; veteran-gated watchdog)
     try { navRecoveryAdvisor.update(dt); } catch (e) { console.error('[GameLoop] navRecoveryAdvisor:', e); }
 
-    // CP-4: MissionCoach beat timers (narrative dwell + interactive escalation)
+    // MissionCoach beat timers (narrative dwell + interactive escalation)
     try { if (missionCoach) missionCoach.update(dt); } catch (e) { console.error('[GameLoop] missionCoach:', e); }
-    // CH5: ISS conjunction boss TCA countdown (game-time)
-    // CH9: Starlink cascade boss containment window (game-time)
-    // Held world (Session I follow-up): the countdowns (and an armed onset) wait
-    // for the world clock — a boss cannot start or run out while you shop or read.
+    // ISS conjunction boss TCA countdown and Starlink cascade boss containment window (game-time). Held world:
+    // the countdowns (and an armed onset) wait for the world clock — a boss cannot start or run out while you
+    // shop or read.
     if (!_worldHeld) {
       try { if (issConjunctionBoss) issConjunctionBoss.update(dt); } catch (e) { console.error('[GameLoop] issConjunctionBoss:', e); }
       try { if (starlinkCascadeBoss) starlinkCascadeBoss.update(dt); } catch (e) { console.error('[GameLoop] starlinkCascadeBoss:', e); }
@@ -7648,34 +6395,32 @@ function gameLoop(timestamp) {
     // dead target is cleared first, allowing immediate reacquire).
     try { if (autoLockController) autoLockController.update(dt); } catch (e) { console.error('[GameLoop] autoLockController:', e); }
 
-    // Update extracted systems
-    // Held world (Session I follow-up, owner 2026-09-23): fate clocks stop
-    // while a drawer is open — closes the HANDOFF audit item.
+    // Extracted systems. Held world: fate clocks stop while a drawer is open.
     if (!_worldHeld) { try { resourceSystem.update(dt); } catch (e) { console.error('[GameLoop] resourceSystem:', e); } }
     try { if (missionGasTally) missionGasTally.update(); } catch (e) { console.error('[GameLoop] missionGasTally:', e); }
-    // w2-heat: scan analysis load + ship heat on the battery's clock, held with
+    // Scan analysis load + ship heat on the battery's clock, held with
     // it. Held: what the battery bills meanwhile (base load) neither heats the
     // ship nor spikes the power meter on release; a running analysis pauses.
     if (!_worldHeld) { try { sensorSystem.drawAnalysis(dt); const _heat = resourceSystem.getThermalSource(); if (_heat) _heat.update(dt); } catch (e) { console.error('[GameLoop] thermal:', e); } }
     else { try { resourceSystem.discardHeldFrame(); const _heat = resourceSystem.getThermalSource(); if (_heat) _heat.skipHeld(); } catch (e) { console.error('[GameLoop] thermal (held):', e); } }
     try { sensorSystem.update(dt, player.getPosition(), debrisField); } catch (e) { console.error('[GameLoop] sensorSystem:', e); }
-    // m1-finish: the wings hint stays until the wings are out. Outside the held-world guard on
+    // The wings hint stays until the wings are out. Outside the held-world guard on
     // purpose: it is a screen row, not a fate clock, and it must go the frame the wings are out.
     try { wingsHint.update(player, hud && hud.hintTicker); } catch (e) { console.error('[GameLoop] wingsHint:', e); }
-    try { if (hud) hud.syncHintPlacement(); } catch (e) { console.error('[GameLoop] hintPlacement:', e); }   // u7 D5b
-    // Phase 1.5 (capture-feedback overhaul): close-range survey → Full Profile
+    try { if (hud) hud.syncHintPlacement(); } catch (e) { console.error('[GameLoop] hintPlacement:', e); }
+    // Close-range survey → Full Profile
     try {
       dossierSystem.update(dt, {
         playerPos: player.getPosition(),
         armManager,
         target: targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null,
-        gameDt: dtWorld,         // big-rules F4: the time authority's step (warp included), the one the tumble animation turns by
-        worldHeld: _worldHeld,   // big-rules R3: the characterising clocks run on game time and wait with the world
+        gameDt: dtWorld,         // the time authority's step (warp included), the one the tumble animation turns by
+        worldHeld: _worldHeld,   // the characterising clocks run on game time and wait with the world
       });
     } catch (e) { console.error('[GameLoop] dossierSystem:', e); }
     if (!_worldHeld) { try { kesslerSystem.update(dt); } catch (e) { console.error('[GameLoop] kesslerSystem:', e); } }
 
-    // Update trawl manager (Phase 2 — trawl system)
+    // Trawl manager
     try {
       trawlManager.update(dt, {
         playerPos: player.getPosition(),
@@ -7685,7 +6430,7 @@ function gameLoop(timestamp) {
       });
     } catch (e) { console.error('[GameLoop] trawlManager:', e); }
 
-    // Update skills system (Phase 4A — skill tracking)
+    // Skills system
     if (skillsSystem) {
       try { skillsSystem.update(dt); } catch (e) { console.error('[GameLoop] skillsSystem:', e); }
     }
@@ -7693,14 +6438,11 @@ function gameLoop(timestamp) {
       try { skillsPane.update(dt); } catch (e) { console.error('[GameLoop] skillsPane:', e); }
     }
 
-    // Update lasso system (Phase 4A — projectile flight + reel-in)
+    // Lasso system (projectile flight + reel-in)
     try {
-      // Aim-before-launch: the lasso geometry (muzzle, flight, reel-in
-      // destination, cargo cells) is built around this "forward" dir. Feed it the
-      // ship's actual NOSE (+Z) rather than the velocity vector, so after the
-      // mother slews to face the debris the catch reels straight back to the
-      // current nose instead of the old prograde-relative spot off to the side.
-      // When idle the nose already tracks prograde, so idle behaviour is unchanged.
+      // The lasso geometry (muzzle, flight, reel-in destination, cargo cells) is built around this "forward" dir.
+      // Feed it the ship's actual NOSE (+Z) rather than the velocity vector, so after the mother slews to face the
+      // debris the catch reels straight back to the current nose. When idle the nose already tracks prograde.
       const _noseDir = player.quaternion
         ? _lassoVelScratch.set(0, 0, 1).applyQuaternion(player.quaternion).normalize()
         : (() => { const _lv = player.getVelocity();
@@ -7709,13 +6451,13 @@ function gameLoop(timestamp) {
       lassoSystem.update(dt, player.getPosition(), debrisField, targetSelector.getActiveTarget(), _noseDir);
     } catch (e) { console.error('[GameLoop] lassoSystem:', e); }
 
-    // Update reward system (Phase 5 Rewards — milestone checks)
+    // Reward system (milestone checks)
     try { rewardSystem.update(dt, armManager); } catch (e) { console.error('[GameLoop] rewardSystem:', e); }
 
-    // Update mission event system (ST-4.D — mid-mission complications)
+    // Mission event system (mid-mission complications)
     if (!_worldHeld) { try { missionEventSystem.update(dt); } catch (e) { console.error('[GameLoop] missionEventSystem:', e); } }
 
-    // Update learning systems (Phase 7 — Codex + Space Weather)
+    // Learning systems (Codex + Space Weather)
     try { codexSystem.update(dt); } catch (e) { console.error('[GameLoop] codexSystem:', e); }
     if (!_worldHeld) {
       try {
@@ -7726,13 +6468,13 @@ function gameLoop(timestamp) {
       } catch (e) { console.error('[GameLoop] spaceWeatherSystem:', e); }
     }
 
-    // Update environment hazards (ST-6.7 — AO, MMOD, Safe-Mode, Radiation, Battery DOD)
-    // Held world (Session I follow-up): no erosion, no MMOD roll, no DOD tick while the clock is 0.
+    // Environment hazards (AO, MMOD, Safe-Mode, Radiation, Battery DOD)
+    // Held world: no erosion, no MMOD roll, no DOD tick while the clock is 0.
     if (environmentSystem && !_worldHeld) {
       try { environmentSystem.update(dt); } catch (e) { console.error('[GameLoop] environmentSystem:', e); }
     }
 
-    // Update subsystem events (Phase 7B — spacecraft subsystem ambiance)
+    // Subsystem events (spacecraft subsystem ambiance)
     if (!_worldHeld) {
       try {
         subsystemEvents.update(dt, {
@@ -7744,15 +6486,15 @@ function gameLoop(timestamp) {
       } catch (e) { console.error('[GameLoop] subsystemEvents:', e); }
     }
 
-    // Update conjunction alert system (Sprint C1). S3: dtWorld drives the MOID
-    // timer; above ~10× warp detection switches to MOID screening (T2).
+    // Conjunction alert system. dtWorld drives the MOID
+    // timer; above ~10× warp detection switches to MOID screening.
     try {
       conjunctionSystem.update(dt, gameState, debrisField.debrisList,
         player.getPosition(), player.getVelocity(), inputManager.isArmPilotMode(),
         dtWorld, timeAuthority.isMoidScreening());
     } catch (e) { console.error('[GameLoop] conjunctionSystem:', e); }
 
-    // Update power distribution (warnings for dangerous configs)
+    // Power distribution (warnings for dangerous configs)
     try {
       powerDistribution.update(dt, {
         armsDeployed: armManager ? armManager.getDeployedCount() : 0,
@@ -7765,9 +6507,9 @@ function gameLoop(timestamp) {
       gameFlowManager.transitionToState(GameStates.GAME_OVER, 'reentry');
     }
 
-    // Fuel game-over is now handled by ResourceSystem → Events.RESOURCE_DEPLETED event
+    // Fuel game-over is handled by ResourceSystem → Events.RESOURCE_DEPLETED event
 
-    // Approach state logic — Sprint 2 / PR A — scratch-output variant.
+    // Approach state logic (scratch-output variant).
     if (currentState === GameStates.APPROACH && gameFlowManager.approachTarget && gameFlowManager.approachTarget.alive) {
       orbitToSceneCartesianInto(
         gameFlowManager.approachTarget.orbit, _approachCartPos, _approachCartVel
@@ -7792,10 +6534,9 @@ function gameLoop(timestamp) {
     // --- Camera update via CameraSystem ---
     updateCamera(dt, timestamp);
 
-    // Session Q (plan D15): the target colour law's inputs, rebuilt ONCE per
-    // frame here (the reused object) and handed to the HUD (→ TargetPanel rows)
-    // and, below, to the reticle — null off the ladder (both consumers paint
-    // their shipped palettes).
+    // The target colour law's inputs, rebuilt ONCE per frame here (the reused object) and handed to the HUD
+    // (→ TargetPanel rows) and, below, to the reticle — null off the ladder (both consumers paint their shipped
+    // palettes).
     const _lawFrame = _ladderActive ? _refreshTargetLaw() : null;
     // HUD update — skipped under a 'full' viewCover (the HUD is invisible
     // behind the plate; it re-syncs on the first uncovered frame — its own
@@ -7808,39 +6549,32 @@ function gameLoop(timestamp) {
       sensorSystem,
       autopilotSystem,
       cameraSystem,
-      armManager,                          // Delegation 3: daughter wireframe + arm count
+      armManager,                          // daughter wireframe + arm count
       cargoStatus: cargoSystem.getStatus(),
-      targetLaw: _lawFrame,                // Session Q (plan D15): → TargetPanel rows / dot / odds
+      targetLaw: _lawFrame,                // → TargetPanel rows / dot / odds
     });
-    // Session M: the instruments' 1 Hz ticks (each self-throttles on the frame
-    // clock and writes on change; under a full cover the DOM is invisible, so
-    // they wait with the HUD). Flag-off / disengaged: never constructed / never
-    // called.
+    // The instruments' 1 Hz ticks (each self-throttles on the frame clock and writes on change; under a full
+    // cover the DOM is invisible, so they wait with the HUD). Never constructed / never called off the ladder.
     if (!_skipPaint && _ladderActive) {
       if (orbitPane) orbitPane.update(timestamp);
       if (fmaStrip) fmaStrip.update(timestamp);
       if (nextPane) nextPane.update(timestamp);
-      if (gestureSplash) gestureSplash.update(timestamp);   // Session O (plan D4): the first-run splash's per-frame tick
-      // Session P (plan D3/D4): the SPLASH HOLD — while the 3 s memo shows, every
-      // piece of edge chrome stays awake, so a first-time player sees where the
-      // rail, the slider and the tab live; the chrome then fades IDLE_FADE_MS
-      // after the splash ends (or after the first input).
+      if (gestureSplash) gestureSplash.update(timestamp);   // the first-run splash's per-frame tick
+      // SPLASH HOLD — while the 3 s memo shows, every piece of edge chrome stays awake, so a first-time player sees
+      // where the rail, the slider and the tab live; the chrome then fades IDLE_FADE_MS after the splash ends (or
+      // after the first input).
       if (edgeChrome && gestureSplash && gestureSplash.isActive()) edgeChrome.wake(undefined, timestamp);
     }
 
-    // --- Debris Map update (ST-4.A) ---
+    // Debris Map update
     if (debrisMap) {
       debrisMap.update(dt, { debrisField, player, autopilotSystem });
     }
 
-    // Register item 43: the per-frame ΔV alarm poll is deleted — it read
-    // `budget.percentage`, a field getMassBudget() has never had (NaN → tier 0
-    // → the idempotence guard tore down the honest alarm every frame). The ONE
-    // driver is StatusPanel's 10 Hz DELTAV_UPDATE event → AudioSystem's
-    // listener (AudioSystem.js). Out-of-gameplay silencing is unchanged —
-    // STATE_CHANGE / pause / blur / visibilitychange all call stopDeltaVAlarm().
+    // There is no per-frame ΔV alarm poll: the ONE driver is StatusPanel's 10 Hz DELTAV_UPDATE event →
+    // AudioSystem's listener. STATE_CHANGE / pause / blur / visibilitychange all call stopDeltaVAlarm().
 
-    // --- Target Reticle update (Canvas 2D overlay) ---
+    // Target Reticle update (Canvas 2D overlay)
     if (targetReticle) {
       // ARM PILOT: use daughter arm position/velocity so distances, closure
       // rates, and range indicators are accurate from the arm's perspective.
@@ -7875,14 +6609,11 @@ function gameLoop(timestamp) {
         targetSelector,
         playerOrbit: player.orbit,
         skTargetId: _skTargetIdForReticle,
-        // pair-shot (S2): the pair's second piece gets its own mark while a pair is offered (AutopilotSystem.getPairOffer)
+        // The pair's second piece gets its own mark while a pair is offered (AutopilotSystem.getPairOffer)
         pairPiece: (() => { const o = autopilotSystem && autopilotSystem.getPairOffer ? autopilotSystem.getPairOffer() : null; return o ? o.t2 : null; })(),
-        // Session O (plan D16 (b), owner 2026-09-07): the score strip's rect
-        // as the exclusion band for debris brackets (cached by HUD; null off the
-        // ladder → byte-identical shipped path — the ladder-on idiom above).
+        // owner 2026-09-07: the score strip's rect as the exclusion band for debris brackets (cached by HUD; null off the ladder).
         exclusionRect: _ladderActive ? hud.scoreStripRect() : null,
-        // Session Q (plan D15 / D15c): the target colour law's inputs — the
-        // same idiom; null off the ladder → the reticle's shipped palette.
+        // The target colour law's inputs — same idiom; null off the ladder → the reticle's shipped palette.
         colorLaw: _lawFrame,
         telemetry: {
           deltaVSpent: player.getDeltaVSpent(),
@@ -7892,7 +6623,7 @@ function gameLoop(timestamp) {
       });
     }
 
-    // --- Nav Sphere update (Canvas 2D radar) ---
+    // Nav Sphere update (Canvas 2D radar)
     if (navSphere) {
       const _pilotArm = (inputManager.isArmPilotMode() && cameraSystem) ? cameraSystem.getPilotedArm() : null;
       navSphere.update(dt, {
@@ -7908,16 +6639,14 @@ function gameLoop(timestamp) {
       });
     }
 
-    // Debris Wireframe update is now handled by HUD.update() (integrated layout)
+    // Debris Wireframe update is handled by HUD.update() (integrated layout)
 
-    // --- Docking Reticle update (ARM PILOT overlay) ---
+    // Docking Reticle update (ARM PILOT overlay)
     if (dockingReticle) {
-      // Zoom Ladder F6/F7: while the engaged floor iconizes the ship, the
-      // ladder suppresses the aiming reticles (LadderController._setReticlesHidden
-      // owns the hide). This per-frame re-show must not fight it — while
-      // suppressed, fall to the else branch so the overlay stays hidden every
-      // frame. reticlesSuppressed() is allocation-free and false whenever the
-      // ladder is off/disengaged, so the shipped path is byte-identical.
+      // While the engaged floor iconizes the ship, the ladder suppresses the aiming reticles
+      // (LadderController._setReticlesHidden owns the hide). This per-frame re-show must not fight it — while
+      // suppressed, fall to the else branch so the overlay stays hidden every frame. reticlesSuppressed() is
+      // allocation-free and false whenever the ladder is off/disengaged.
       const _ladderReticleSuppress = !!(ladderController
         && ladderController.reticlesSuppressed && ladderController.reticlesSuppressed());
       if (!_ladderReticleSuppress && inputManager.isArmPilotMode() && cameraSystem) {
@@ -7932,25 +6661,20 @@ function gameLoop(timestamp) {
       dockingReticle.update(dt);
     }
 
-    // --- Velocity Streaks update (Canvas 2D acceleration overlay) ---
+    // Velocity Streaks update (Canvas 2D acceleration overlay)
     if (velocityStreaks) {
       velocityStreaks.update(dt);
     }
 
-    // --- Comms System update ---
+    // Comms System update
     if (commsSystem) {
       commsSystem.update(dt, { debrisField, player, activeSatellites });
     }
   } else {
-    // §12.12 Per-frame `stopThrusterHum / stopDeltaVAlarm`
-    // calls removed from this branch — moved to the STATE_CHANGE listener
-    // (init() block above) which fires once per transition instead of
-    // 30-120 times per second across menu / briefing / shop screens. The
-    // calls were idempotent (no-ops if already stopped), so removing them
-    // here has no behavioural effect.
+    // The thruster-hum / ΔV-alarm stops live in the STATE_CHANGE listener (init() above), once per transition.
 
     // Menu/briefing/shop states — still animate scene slowly
-    try { player.update(dt * 0.1, sunDir, undefined, true); /* true: no motor billing off-play (w4-power) */ } catch (e) { console.error('[GameLoop] player.update (bg):', e); }
+    try { player.update(dt * 0.1, sunDir, undefined, true); /* true: no motor billing off-play */ } catch (e) { console.error('[GameLoop] player.update (bg):', e); }
     try { debrisField.update(dt * 0.1); } catch (e) { console.error('[GameLoop] debrisField (bg):', e); }
     try { activeSatellites.update(dt * 0.1); } catch (e) { console.error('[GameLoop] activeSats (bg):', e); }
     if (armManager) { try { armManager.update(dt * 0.1, { noStrutAuto: true }); } catch (e) { console.error('[GameLoop] armManager (bg):', e); } }
@@ -7960,7 +6684,7 @@ function gameLoop(timestamp) {
     updateCamera(dt, timestamp);
   }
 
-  // --- Debug overlay update ---
+  // Debug overlay update
   if (debugOverlay && debugOverlay.visible) {
     const renderer = sceneManager.getRenderer();
     const renderInfo = renderer ? renderer.info : {};
@@ -7976,24 +6700,19 @@ function gameLoop(timestamp) {
       drawCalls: renderInfo.render?.calls || 0,
       triangles: renderInfo.render?.triangles || 0,
       textures: renderInfo.memory?.textures || 0,
-      // Mission-1 welcome-field per-piece size/position/visibility diagnostics
-      // (empty array on later missions). Lets us tune the first-mission cluster.
+      // Mission-1 welcome-field per-piece size/position/visibility diagnostics (empty array on later missions).
       welcomeDebris: (debrisField && typeof debrisField.getWelcomeFieldDiagnostics === 'function')
         ? debrisField.getWelcomeFieldDiagnostics(player ? player.getPosition() : null)
         : [],
     });
   }
 
-  // --- Render ---
-  // ST-6.4: When strategic map is open, render map scene directly (no composer);
-  // otherwise use normal EffectComposer pipeline.
-  // §13 boot timeline (?logBoot=1) — bracket the first render() call to
-  // separate "rAF dispatch latency" (gameLoop entry mark above) from the
-  // actual GPU work on the first frame (lazy Metal pipeline state object
-  // compile, 16K texture upload + mipmap-gen — both deferred by Three.js
-  // until first use even though renderer.compile() was called at boot).
-  // Also wrap EVERY render() to feed the spike-detector for post-boot spikes
-  // (e.g. entering ORBITAL_VIEW, first time atmosphere/clouds bind, etc.).
+  // Render. When the strategic map is open, render the map scene directly (no composer);
+  // otherwise use the normal EffectComposer pipeline.
+  // Boot timeline (?logBoot=1): bracket the first render() call to separate "rAF dispatch latency" (gameLoop entry
+  // mark above) from the actual GPU work on the first frame (lazy Metal pipeline state object compile, 16K texture
+  // upload + mipmap-gen — both deferred by Three.js until first use even though renderer.compile() was called at
+  // boot). EVERY render() also feeds the spike-detector for post-boot spikes.
   const _bootFirstRenderCall = (_logBootEnabled && !_bootFirstFrameMarked);
   const _bootRenderStart = _logBootEnabled ? performance.now() : 0;
   if (_bootFirstRenderCall) {
@@ -8002,18 +6721,16 @@ function gameLoop(timestamp) {
   _syncMotherCarried();   // held pieces + net/leash visuals go with the mother this frame (floor changes land after the field update)
   if (_shotDrawMeter) _shotDrawMeter.before();   // ?shot draw-call meter (null in play)
   if (!_skipPaint) {
-    // viewCover 'full' (Tech Library / ShopScreen plate): the whole composer
-    // pipeline is skipped — the canvas keeps its last presented frame under
-    // the ~opaque plate. Never skipped while ?bfp / ?shot are armed.
+    // viewCover 'full' (Tech Library / ShopScreen plate): the whole composer pipeline is skipped — the canvas keeps
+    // its last presented frame under the ~opaque plate. Never skipped while ?bfp / ?shot are armed.
     sceneManager.render();
   }
   if (_shotDrawMeter) _shotDrawMeter.after();
   if (_bootFirstRenderCall) {
     _bootMark('first sceneManager.render(). END');
   }
-  // st2-start-quick D1: the first draw is done — build the sound system in an idle
-  // moment (desktop only, see scheduleAudioPrewarm) so the first click does not
-  // pay for it. The menu keeps the context suspended (_syncAudioCtxState).
+  // The first draw is done — build the sound system in an idle moment (desktop only, see scheduleAudioPrewarm) so
+  // the first click does not pay for it. The menu keeps the context suspended (_syncAudioCtxState).
   if (!_audioPrewarmScheduled) {
     _audioPrewarmScheduled = true;
     scheduleAudioPrewarm({ win: window, audio: audioSystem, afterInit: _syncAudioCtxState });
@@ -8025,27 +6742,22 @@ function gameLoop(timestamp) {
   // Black-flicker triage (?bfp): must run INSIDE this rAF task, right after the
   // frame's final render, so its readbacks see this frame's buffer pre-present.
   if (blackFrameProbe) blackFrameProbe.tick(timestamp);
-  // Black-box self-repair: same rAF task, same pre-present buffer. Skipped when
-  // this frame's scene render was (viewCover plate) — the buffer
-  // then holds no scene. Never part of diagnosticsArmed / _frameSched.n.
+  // Black-box self-repair: same rAF task, same pre-present buffer. Skipped when this frame's scene render was
+  // (viewCover plate) — the buffer then holds no scene. Never part of diagnosticsArmed / _frameSched.n.
   if (blackPatchHeal && !_skipPaint) blackPatchHeal.tick(timestamp);
 
-  // §13 boot-timeline: mark the very first rendered frame. Continuous capture
-  // mode — user calls window.__dumpBootTimeline() from DevTools when they want
-  // a snapshot; we still emit one auto-summary after 5 s to confirm the
-  // diagnostic is working end-to-end. Idempotent via `_bootFirstFrameMarked`.
+  // Boot timeline: mark the very first rendered frame. Continuous capture mode — call window.__dumpBootTimeline()
+  // from DevTools for a snapshot; one auto-summary is still emitted after 5 s. Idempotent via `_bootFirstFrameMarked`.
   if (_logBootEnabled && !_bootFirstFrameMarked) {
     _bootFirstFrameMarked = true;
     _bootMark('first frame rendered (top-of-gameLoop work + render() done)');
     setTimeout(() => _emitBootTimeline('first frame + 5 s settle (auto)'), 5000);
   }
 
-  // PR 6 / P3.11: GPU probe — poll completed timer queries every frame
-  // while the probe is enabled. Two phases:
+  // GPU probe — poll completed timer queries every frame while the probe is enabled. Two phases:
   //   1. Startup probe (samples until GPU_PROBE_FRAMES, then evaluates tier).
-  //   2. AutoProfileSweep (Sprint 3) — keeps the probe alive past the
-  //      startup window when `?autoProfile=1` is set so the sweep can
-  //      measure each config.
+  //   2. AutoProfileSweep — keeps the probe alive past the startup window when `?autoProfile=1` is set so the
+  //      sweep can measure each config.
   if (sceneManager.gpuProbe && sceneManager.gpuProbeEnabled) {
     sceneManager.gpuProbe.poll();
   }
@@ -8062,11 +6774,8 @@ function gameLoop(timestamp) {
       const medianMs = probe.getMedianMs();
       const threshold = Constants.PERF.GPU_PROBE_THRESHOLD_MS;
       console.log(`[Perf] GPU probe complete: median=${medianMs.toFixed(2)}ms threshold=${threshold}ms (${probe.getSampleCount()} samples)`);
-      // Sprint 3 GPU profiling: skip the tier-downshift action when
-      // `?autoProfile=1` is set. The sweep must measure each config at a
-      // fixed tier; an auto-downshift in the first 0.5 s of the session
-      // would render every later config's delta meaningless. The downshift
-      // recommendation is still logged for visibility.
+      // Skip the tier-downshift action when `?autoProfile=1` is set: the sweep must measure each config at a fixed
+      // tier. The downshift recommendation is still logged.
       if (medianMs > threshold && sceneManager.currentTier !== 'LOW' && !profileFlags.autoProfile && !profileFlags.pinTier) {
         // Find one step down from the current tier
         const idx = TIER_ORDER.indexOf(sceneManager.currentTier);
@@ -8086,9 +6795,8 @@ function gameLoop(timestamp) {
       } else if (medianMs > threshold && (profileFlags.autoProfile || profileFlags.pinTier)) {
         console.log(`[Perf] GPU probe: median ${medianMs.toFixed(1)}ms > ${threshold}ms but tier downshift suppressed (?autoProfile=1 or ?pinTier=1)`);
       }
-      // Sprint 3 GPU profiling: keep the probe alive when `?autoProfile=1`
-      // is set. Otherwise dispose to free GL queries (the original PR 6
-      // behaviour — startup probe is one-shot).
+      // Keep the probe alive when `?autoProfile=1` is set. Otherwise dispose to free GL queries (startup probe is
+      // one-shot).
       if (profileFlags.autoProfile) {
         probe.resetSamples();
         console.log('[Perf] GPU probe kept alive for AutoProfileSweep (?autoProfile=1)');
@@ -8099,7 +6807,7 @@ function gameLoop(timestamp) {
     }
   }
 
-  // PR 6 / P3.15: Draw-call profiling (every 60 frames when ?profile=1).
+  // Draw-call profiling (every 60 frames when ?profile=1).
   if (Constants.DEBUG.LOG_DRAW_CALLS) {
     _profileFrameCount++;
     if (_profileFrameCount >= 60) {
@@ -8109,17 +6817,17 @@ function gameLoop(timestamp) {
     }
   }
 
-  // Whale-in-cone Task 1.4: per-frame probe recorder. One boolean check when
+  // Per-frame probe recorder. One boolean check when
   // disabled; builds a slim cone-containment sample when __netProbeRecord(true).
   if (window.__netProbeTick) window.__netProbeTick(timestamp);
-  // Lasso flight recorder (round 3) — same end-of-loop doctrine: the sample
+  // Lasso flight recorder — same end-of-loop doctrine: the sample
   // is END-OF-FRAME truth for exactly the rendered frame.
   if (window.__scbLassoRecTick) window.__scbLassoRecTick(timestamp);
-  // Whale-in-cone follow-up 5: armed cinch freeze. Runs after the recorder tick
+  // Armed cinch freeze. Runs after the recorder tick
   // (end of loop, post-render) so the frame the freeze holds is exactly the
   // frame the check observes. One boolean check when disarmed.
   if (window.__netCinchFreezeTick) window.__netCinchFreezeTick();
-  // Register item 6: armed beat-phase freeze. Same call-site doctrine as the
+  // Armed beat-phase freeze. Same call-site doctrine as the
   // cinch tick above (end of loop, post-render ⇒ the frozen frame IS the
   // rendered frame). One boolean check when disarmed.
   if (window.__netBeatFreezeTick) window.__netBeatFreezeTick();
@@ -8151,23 +6859,19 @@ function updateCamera(dt, timestamp) {
   );
   cameraSystem.setThrustMagnitude(Math.min(1.0, thrustMag * 1000));
 
-  // Zoom Ladder (S2): tick the core (charge decay, settle-back, alarm/ride
-  // escalation) + apply decisions BEFORE the camera update reads the ladder
-  // frame. `timestamp` is the shared performance.now-based monotonic clock the
-  // WheelRouter also feeds ladder.wheel(). Internally gated on the flag +
-  // gameplay, so this is inert when Constants.LADDER.ENABLED is false.
+  // Tick the ladder core (charge decay, settle-back, alarm/ride escalation) + apply decisions BEFORE the camera
+  // update reads the ladder frame. `timestamp` is the shared performance.now-based monotonic clock the WheelRouter
+  // also feeds ladder.wheel(). Internally gated on the flag + gameplay (inert when Constants.LADDER.ENABLED is false).
   if (ladderController) ladderController.update(timestamp);
-  if (whereNextJumpOwed) whereNextJump();       // lane 2b-2: a "where next" jump the ladder refused is tried again
+  if (whereNextJumpOwed) whereNextJump();       // a "where next" jump the ladder refused is tried again
 
   // Update the camera system
   cameraSystem.update(dt, playerPos, playerVel, playerQuat);
 
-  // Zoom Ladder F6 (NAVCOM): tick the floor content AFTER the camera update so
-  // the cluster icons + ship chevron read THIS frame's camera pose (no one-frame
-  // lag). This is the SINGLE navcom ticker (LadderController no longer ticks it).
-  // NavcomFloor.update() self-gates on active; we ALSO gate the projector/heading
-  // work on isActive() so the shipped flag-off path does zero extra per-frame work
-  // (byte-identical). navcom is active only on F6 while the ladder is engaged.
+  // NAVCOM: tick the floor content AFTER the camera update so the cluster icons + ship chevron read THIS frame's
+  // camera pose (no one-frame lag). This is the SINGLE navcom ticker. NavcomFloor.update() self-gates on active; we
+  // ALSO gate the projector/heading work on isActive() so the flag-off path does zero extra per-frame work.
+  // Navcom is active only on F6 while the ladder is engaged.
   if (navcomFloor && navcomFloor.isActive()) {
     const shipPos = player.getPosition();
     const vel = player.getVelocity();
@@ -8180,16 +6884,16 @@ function updateCamera(dt, timestamp) {
       z: shipPos.z + (vel.z / vmag) * eps,
     });
     const shipAngleRad = Math.atan2(s1.y - s0.y, s1.x - s0.x);
-    // fb16 V2 (owner 2026-10-25): 4 s after his last drag on floor 4 the camera asks for the view back. Answer it with the
+    // owner 2026-10-25: 4 s after his last drag on floor 4 the camera asks for the view back. Answer it with the
     // same framing turn the arrival uses, direction only (no frameZoomTo: the zoom stays where he put it).
     if (cameraSystem.ladderViewReturnDue()) {
       const back = navcomFloor.framing({ shipPos, shipVel: vel, project: navcomProject, fovDeg: cameraSystem.camera.fov });
       if (back) cameraSystem.ladderTurnEarthDir(back.dir);
     }
     navcomFloor.update({ project: navcomProject, shipPos, shipAngleRad });
-    // u8-f4-frame-field: on floor 4 the camera re-frames (about 1 s): once each time a ride into floor 4 ends,
+    // On floor 4 the camera re-frames (about 1 s): once each time a ride into floor 4 ends,
     // and each time the focus changes while there (Tab, a click on an icon).
-    // u10 D3: it turns to where your ship AND the field are both in view, and glides out until the whole
+    // It turns to where your ship AND the field are both in view, and glides out until the whole
     // low-orbit shell they move in fits clear of the panels (EarthTurn.earthFrame); the field wins when
     // both cannot. A drag or the wheel/pinch stops it until the next arrival or focus change.
     const f4Focus = navcomFloor.getFocusedCluster();
@@ -8205,12 +6909,11 @@ function updateCamera(dt, timestamp) {
   } else {
     f4WasSettled = false; f4LastFocusId = null;   // so the next arrival on floor 4 re-frames again
   }
-  // range-map D1/D6: the range map reads the list, the trip and the camera of THIS frame; it hides itself when floor 4 is not active
+  // The range map reads the list, the trip and the camera of THIS frame; it hides itself when floor 4 is not active
   try { if (rangeMap) rangeMap.update(); } catch (e) { console.error('[GameLoop] rangeMap:', e); }
 
-  // Zoom Ladder F5 (PROX NET): same single-ticker pattern as navcom — after
-  // cameraSystem.update so the overlay reads this frame's pose. F5 and F6
-  // are never active together, so at most one block runs per frame.
+  // PROX NET (F5): same single-ticker pattern as navcom — after cameraSystem.update so the overlay reads this
+  // frame's pose. F5 and F6 are never active together, so at most one block runs per frame.
   if (proxNetFloor && proxNetFloor.isActive()) {
     const shipPos = player.getPosition();
     const vel = player.getVelocity();
@@ -8226,21 +6929,20 @@ function updateCamera(dt, timestamp) {
     proxNetFloor.update({ project: navcomProject, shipPos, shipAngleRad });
   }
 
-  // Zoom Ladder F7 (SDA): screen-space chart — no projector or ship pose
-  // needed; the floor self-throttles its data refresh (2 s cadence).
+  // SDA (F7): screen-space chart — no projector or ship pose needed; the floor self-throttles its data refresh
+  // (2 s cadence).
   if (sdaFloor && sdaFloor.isActive()) sdaFloor.update();
 
-  // Zoom Ladder F3 (HULL CAM): the camera→subject distance in METRES drives
-  // the overview/detail lens split; centerX (the subject's screen x) picks the
-  // rail side for the callout cards. Reads this frame's camera pose, so it
-  // stays in the same after-cameraSystem.update slot as navcom.
+  // HULL CAM (F3): the camera→subject distance in METRES drives the overview/detail lens split; centerX (the
+  // subject's screen x) picks the rail side for the callout cards. Reads this frame's camera pose, so it stays in
+  // the same after-cameraSystem.update slot as navcom.
   if (hullcamFloor && hullcamFloor.isActive()) {
     const _hcam = cameraSystem.camera;
     const distM = _hcam.position.distanceTo(playerPos) / Constants.SCENE_UNITS_PER_METER;
     hullcamFloor.update({ distM, centerX: navcomProject(playerPos).x });
   }
 
-  // Detail-LOD cull (Phase 6): feed the fresh camera→craft distance (scene units)
+  // Detail-LOD cull: feed the fresh camera→craft distance (scene units)
   // to the Mother + daughters so their inert mm-scale hardware hides when far.
   // Craft code stays camera-agnostic; this is the single owner of the distance.
   const _cam = sceneManager.getCamera();
@@ -8268,14 +6970,11 @@ function updateCamera(dt, timestamp) {
 
 function onResize() {
   sceneManager.resize();
-  // Resize-tick repaint (2026-08-30): during a live window drag the compositor
-  // rescales the LAST rendered frame into the new canvas box instantly (no JS),
-  // while the screen-anchored DOM overlays (city/station labels) only move when
-  // the next rAF frame reprojects them — so the Earth visibly stretches ahead
-  // of its labels ("city names lag behind when shrinking horizontally").
-  // Rendering + reprojecting synchronously in the SAME resize tick keeps the
-  // canvas content and the DOM labels locked together. Cost: one extra render
-  // per resize event (~2–3 ms GPU on the reference M4), only while resizing.
+  // Resize-tick repaint: during a live window drag the compositor rescales the LAST rendered frame into the new
+  // canvas box instantly (no JS), while the screen-anchored DOM overlays (city/station labels) only move when the
+  // next rAF frame reprojects them — so the Earth visibly stretches ahead of its labels. Rendering + reprojecting
+  // synchronously in the SAME resize tick keeps them locked together. Cost: one extra render per resize event
+  // (~2–3 ms GPU on the reference M4), only while resizing.
   try {
     _syncMotherCarried();
     sceneManager.render();

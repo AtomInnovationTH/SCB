@@ -7,10 +7,9 @@
 
 const STATE = Object.freeze({ HIDDEN: 'hidden', BLURRED: 'blurred', ARMED: 'armed' });
 
-/** Inputs that resume while the card is up. */
 const RESUME_EVENTS = ['pointerdown', 'touchstart', 'keydown'];
 
-/** Releases of the resuming input, swallowed once so a click or key can't end on the game. */
+/** Releases of the resuming input, swallowed once so it can't end on the game. */
 const TAIL_EVENTS = ['pointerup', 'mouseup', 'mousedown', 'touchstart', 'touchend', 'touchcancel', 'click', 'keyup'];
 
 /** ms after a resume in which the matching release (and key repeats) is still swallowed. */
@@ -81,8 +80,8 @@ export class FocusPauseCard {
     this._el = null;
     this._hint = null;
     this._tail = null;
-    // All listeners live from construction (main.js builds the card at import): stopImmediatePropagation can't
-    // pre-empt a window-capture listener registered earlier (StartOpening's first-action capture would see the click).
+    // All listeners live from construction (main.js builds the card at import): stopImmediatePropagation can't pre-empt
+    // a window-capture listener registered earlier (StartOpening's first-action capture would see the click).
     this._onEvent = (e) => this._event(e);
     if (this._win && typeof this._win.addEventListener === 'function') {
       for (const t of new Set([...RESUME_EVENTS, ...TAIL_EVENTS])) this._win.addEventListener(t, this._onEvent, LISTEN);
@@ -92,7 +91,7 @@ export class FocusPauseCard {
   get state() { return this._state; }
   get isShown() { return this._state !== STATE.HIDDEN; }
 
-  /** Window lost focus. Shows the card while the world runs, with no Esc menu or YIELD_TO card open. @returns {boolean} card is up */
+  /** Window lost focus: shows the card while the world runs, no Esc menu or YIELD_TO card open. @returns {boolean} card is up */
   onBlur() {
     if (this._state !== STATE.HIDDEN) return true;
     if (!this._isRunning() || this._isPaused() || this._yieldTo()) return false;

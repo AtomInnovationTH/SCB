@@ -14,9 +14,10 @@
  *   • The B row has two ids, `upgrades` (the stop after a mission) and `upgrades_map` (the satellite, when the range
  *     map is on), chosen by the same condition `wordsFor()` uses for English.
  *
- *   • The FAQ ("Questions", DECISIONS row "Help", owner 2026-10-28): the group title is `groups.faq` and the link label plus every question and
- *     answer is `faq` ({ link, items: { <id>: { q, a } } }); both sit in the FAQ section further down and are merged into
- *     each block by `withFaq`. English questions and answers live in HOTKEY_GROUPS (the `faq` group's `items`).
+ *   • The FAQ ("Questions", DECISIONS row "Help", owner 2026-10-28): the group title is `groups.faq`; the link label and
+ *     every question and answer is `faq` ({ link, items: { <id>: { q, a } } }). Both sit in the FAQ section further down
+ *     and are merged into each block by `withFaq`. English questions and answers live in HOTKEY_GROUPS (the `faq`
+ *     group's `items`).
  *
  * REVIEW STATUS: the six translations (th, ja, es, pt, hi, ta) are model-made and have not been checked by a native
  * speaker. A reviewer edits one language block; `helpTextFor` falls back to English for any missing or empty key, and
@@ -502,11 +503,11 @@ const TA = {
   },
 };
 
-// ── The FAQ ("Questions", owner 2026-10-28, DECISIONS row "Help") ───────────────────────────────────────────────────────
-// English lives in HOTKEY_GROUPS (the `faq` group's `items`); only the link label is here. Every other language holds the
-// group title, the link label and a question and an answer for each item id. They sit in this one section (not inside the
-// language blocks above) and are merged into the blocks by `withFaq` below, so a reviewer editing a block's rows never
-// touches them. Model-made like the rest (REVIEW STATUS above). Numerals stay digits; a missing or empty string → English.
+// The FAQ (owner 2026-10-28, DECISIONS row "Help"). English lives in HOTKEY_GROUPS (the `faq` group's `items`); only
+// the link label is here. Every other language holds the group title, the link label and a question and an answer for
+// each item id. They sit in this one section (not inside the language blocks above) and are merged into the blocks by
+// `withFaq` below, so a reviewer editing a block's rows never touches them. Model-made like the rest (REVIEW STATUS
+// above). Numerals stay digits; a missing or empty string → English.
 const FAQ_LINK_EN = 'More in the Tech library';
 
 const FAQ_TEXT = {
@@ -665,8 +666,7 @@ export function helpTextFor(code) {
   out.groups = block.groups || {};
   out.rows = block.rows || {};
   out.chips = block.chips || {};
-  // The FAQ: the link label (English when missing or empty) and the per-item questions and answers (the overlay falls
-  // back to the English item row by row).
+  // FAQ link label (English when missing or empty); the overlay falls back to the English item row by row.
   const faq = block.faq || {};
   out.faq = { link: isText(faq.link) ? faq.link : FAQ_LINK_EN, items: faq.items || {} };
   return out;

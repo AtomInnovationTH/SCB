@@ -12,7 +12,7 @@ import { TimeAuthority } from './TimeAuthority.js';
 export const OUT_OF_MOTHER_NETS_LINE = 'Out of mother nets. Press D to send a daughter.';
 
 /**
- * N on a piece beyond the reach of the net that would fire, but inside a docked daughter's reach (DECISIONS §33 row 8).
+ * N on a piece beyond the reach of the net that would fire, but inside a docked daughter's reach (DECISIONS §33 row 3).
  * Not said while the mission-1 tutorial runs (its range beat teaches the autopilot instead).
  */
 export const OUT_OF_NET_RANGE_LINE = 'Out of net range. Press D to send a daughter.';

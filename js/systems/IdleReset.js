@@ -1,40 +1,32 @@
 /**
- * @module systems/IdleReset — "the next person on a shared iPad gets a fresh game" (owner 2026-10-28; plan
- * tmp/plans/fresh-start-1028.md, DECISIONS "shared iPad").
- *
+ * @module systems/IdleReset — "the next person on a shared iPad gets a fresh game" (DECISIONS §52).
  * Two halves, both free of the DOM and of THREE (Node-safe):
  *
  *  1. THE NEW PLAYER RESET (`resetForNewPlayer`, `bootWipeIfPending`, `needsReset`): `CLEAR_KEYS` are every per-player
- *     key (the run save and its backup, the tutorial, the once-per-player hints, the view memory); `KEEP_KEYS` are
- *     the ones a reset leaves (device and diagnostics keys). test-StorageKeysCovered.js scans js/ and fails for a key
- *     that is in neither list, so a key added later gets classified by whoever adds it. The language goes back to
- *     DEFAULT_LANGUAGE (Thai; the owner's pick, 10-28), the other settings stay.
+ *     key; `KEEP_KEYS` are the ones a reset leaves (device and diagnostics keys). test-StorageKeysCovered.js scans js/
+ *     and fails for a key that is in neither list. The language goes back to DEFAULT_LANGUAGE, the other settings stay.
  *  2. THE IDLE CLOCK (`IdleReset`): real seconds since the last input, minus the time the game spent playing itself
- *     out (`isHeldByAutoPlay`). After IDLE_S (60) it raises "Still playing?"; COUNTDOWN_S (20, WCAG 2.2.1) later it
- *     resets. Time is injected, so a test drives it with a fake clock. It only runs while show mode is on
- *     (ShowMode.js): a player at home never loses a game to a timer.
+ *     out (`isHeldByAutoPlay`). After IDLE_S it raises "Still playing?"; COUNTDOWN_S later it resets. Time is
+ *     injected (fake clock in tests). It only runs while show mode is on (ShowMode.js).
  *
- * Idle time is WALL-CLOCK time since the last input (Date.now, which keeps ticking while a tab is hidden or an iPad is
- * auto-locked), minus held time. Coming back from a hidden tab is not input, so an iPad that was left on a game and
- * woke after the lock shows the card at once with its full 20 s: the next person who wakes it gets the card.
+ * Idle time is WALL-CLOCK time since the last input (Date.now keeps ticking while a tab is hidden or an iPad is
+ * auto-locked), minus held time. Coming back from a hidden tab is not input, so an iPad that woke after the lock shows
+ * the card at once with its full 20 s.
  */
 
 import { StorageKeys } from '../core/StorageKeys.js';
 import { DEFAULT_LANGUAGE } from '../core/Languages.js';
 
-/** Real seconds without an input before the "Still playing?" card shows (owner 2026-10-28: 60 s). */
+/** Real seconds without an input before the "Still playing?" card shows. */
 export const IDLE_S = 60;
 /** Seconds the card waits for an answer before it resets (WCAG 2.2.1: at least 20 s to answer). */
 export const COUNTDOWN_S = 20;
-/** One continuous hold excuses at most this many real seconds; after that the clock counts anyway. */
+/** One continuous hold excuses at most this many real seconds. */
 export const HOLD_MAX_S = 180;
 /** A gap between two ticks longer than this (hidden tab, locked iPad) is wall-clock time that counts, never a hold. */
 export const TICK_GAP_MAX_MS = 5000;
 
-/**
- * Every per-player localStorage key a New player reset removes. Reserved keys (no reader or writer yet) are in the list
- * on purpose: when a feature starts writing one, it is already cleared.
- */
+/** Every per-player localStorage key a New player reset removes. Reserved keys (no writer yet) are listed on purpose. */
 export const CLEAR_KEYS = Object.freeze([
   StorageKeys.SAVE,
   StorageKeys.SAVE_BACKUP,
@@ -53,8 +45,8 @@ export const CLEAR_KEYS = Object.freeze([
 
 /**
  * Keys a reset never removes. SETTINGS is kept but its `language` goes back to the default. SHOW_MODE is the device's
- * own switch; the what's-new pair stays so the next player is not shown the update card again; the black-screen ring is
- * device diagnostics. RESET_PENDING and AUTO_UPDATE are sessionStorage (the update loop guard must survive).
+ * switch; the what's-new pair stays so the next player gets no update card; the black-screen ring is diagnostics.
+ * RESET_PENDING and AUTO_UPDATE are sessionStorage (the update loop guard must survive).
  */
 export const KEEP_KEYS = Object.freeze([
   StorageKeys.SETTINGS,
@@ -70,12 +62,11 @@ export const KEEP_KEYS = Object.freeze([
 function defaultLocal() {
   try { return globalThis.localStorage || null; } catch (_) { return null; }
 }
-/** The page's sessionStorage; null when there is none or touching it throws. */
+/** Same for sessionStorage. */
 function defaultSession() {
   try { return globalThis.sessionStorage || null; } catch (_) { return null; }
 }
 
-/** Remove every CLEAR key and put the language back to the default (the other settings stay). */
 function wipe(ls) {
   if (!ls) return;
   for (const k of CLEAR_KEYS) {
@@ -92,9 +83,9 @@ function wipe(ls) {
 }
 
 /**
- * The New player reset. Order matters: (1) lock the save so a late timer cannot write the run back, (2) set the
- * sessionStorage marker so the next boot wipes again (OnboardingDirector, TeachingSystem, CommsPanel and the settings
- * can all write once more before the page is gone), (3) wipe, (4) reload, so every in-memory store starts fresh too.
+ * The New player reset. ORDER: (1) lock the save so a late timer cannot write the run back, (2) set the sessionStorage
+ * marker so the next boot wipes again (OnboardingDirector, TeachingSystem, CommsPanel and the settings can all write
+ * once more before the page is gone), (3) wipe, (4) reload, so every in-memory store starts fresh too.
  * @param {object} [d]
  * @param {object} [d.storage]   localStorage-like { getItem, setItem, removeItem }; omitted = the page's
  * @param {object} [d.session]   sessionStorage-like { setItem }; omitted = the page's
@@ -114,9 +105,8 @@ export function resetForNewPlayer({ storage, session, reload, lockSaves } = {}) 
 }
 
 /**
- * First thing at boot, before any store reads storage (ShowMode.js runs it from its module body, and main.js imports
- * that module first): a pending marker means a reset ran just before this reload, so wipe again, set the language to
- * the default and remove the marker.
+ * First thing at boot, before any store reads storage (ShowMode.js runs it from its module body; main.js imports that
+ * module first): a pending marker means a reset ran just before this reload, so wipe again and remove the marker.
  * @param {{ storage?: object, session?: object }} [d]
  * @returns {boolean} true when a pending reset was finished
  */
@@ -131,7 +121,6 @@ export function bootWipeIfPending({ storage, session } = {}) {
   return true;
 }
 
-/** Parse a JSON blob; null when absent or broken. */
 function readJson(ls, key) {
   try {
     const raw = ls.getItem(key);
@@ -141,9 +130,8 @@ function readJson(ls, key) {
 
 /**
  * Is there anything on this device that a reset would clear? A save (or its backup), tutorial progress, any hint or
- * view memory, or a language other than the default. Keys that boot writes by itself do not count: CITY_LABELS is
- * written only when a player toggles, but is kept out of this answer so a boot that ever touches it cannot make an idle
- * menu look used. A menu straight after boot answers false.
+ * view memory, or a language other than the default. CITY_LABELS is deliberately left out, so a boot that ever touches
+ * it cannot make an idle menu look used. A menu straight after boot answers false.
  * @param {object} [storage] localStorage-like { getItem }; omitted = the page's
  * @returns {boolean}
  */
@@ -166,7 +154,7 @@ export function needsReset(storage) {
   return false;
 }
 
-/** Daughter states that play out by themselves (flight out, the reel and the flight home, a carry to a tip). */
+/** Daughter states that play out by themselves. */
 export const HOLD_ARM_STATES = Object.freeze([
   'TRANSIT', 'REELING', 'HAULING', 'RETURNING', 'DOCKING', 'CARRY_OUT', 'CARRY_BACK',
 ]);
@@ -175,7 +163,7 @@ export const HOLD_ARM_STATES = Object.freeze([
  * Is the game playing itself out right now, with nothing for the player to do? Every source is optional (a missing
  * one holds nothing). Deliberately NOT a hold: the whole TransferTrip (`TransferTrip.isActive()`), because its `choose`
  * phase waits for the player and `wait` can wait for power with no limit; only the burn, the satellite call and the
- * ship's slow turn on the tail boxes are held, and a hold is capped at HOLD_MAX_S by the clock.
+ * ship's slow turn on the tail boxes are held.
  * @param {{ trip?: object, cameraSystem?: object, autopilot?: object, arms?: object[] }} src
  * @returns {boolean}
  */
@@ -194,7 +182,7 @@ export function isHeldByAutoPlay({ trip, cameraSystem, autopilot, arms } = {}) {
 }
 
 /**
- * Parse the test-only `?idleS=<seconds>` switch. Honoured only while show mode is on (the caller passes that in).
+ * Parse the test-only `?idleS=<seconds>` switch; honoured only while show mode is on.
  * @param {string} search  location.search
  * @param {boolean} showOn
  * @returns {number|null} seconds (1..3600) or null
@@ -207,12 +195,12 @@ export function idleOverrideS(search, showOn) {
   return Number.isFinite(v) && v >= 1 && v <= 3600 ? v : null;
 }
 
-/** Show mode: an untouched start screen becomes a still picture after this many real seconds (owner 2026-10-28: 2 minutes). */
+/** An untouched start screen becomes a still picture after this many real seconds (DECISIONS §52 row 5). */
 export const MENU_FREEZE_S = 120;
 
 /**
- * Seconds until the untouched menu freezes. `?idleS=N` (show mode only; see `idleOverrideS`) scales it for look checks
- * to twice N, so `?idleS=5` freezes at 10 s, after the card (5 s) as in the real 60 s / 120 s order.
+ * Seconds until the untouched menu freezes. `?idleS=N` (see `idleOverrideS`) makes it 2N, so `?idleS=5` freezes at
+ * 10 s, after the card (5 s) as in the real 60 s / 120 s order.
  * @param {number|null|undefined} overrideS the parsed `?idleS=` value, or null/undefined
  * @returns {number}
  */
@@ -221,8 +209,8 @@ export function menuFreezeS(overrideS) {
 }
 
 /**
- * Show mode: should the start screen stop drawing (both loops) right now? True only with show mode on, the MENU state
- * and `freezeS` real seconds since the menu was last touched or entered. Its own timestamp, not `IdleReset.idleSeconds()`:
+ * Should the start screen stop drawing (both loops) right now? True only with show mode on, the MENU state and
+ * `freezeS` real seconds since the menu was last touched or entered. Its own timestamp, not `IdleReset.idleSeconds()`:
  * that clock restarts every tick on a clean menu (no save) and is cut short by the card and the reset on a used one.
  * @param {{ showOn: boolean, state: string, nowMs: number, menuUntouchedSince: number, freezeS: number }} a
  * @returns {boolean}
@@ -233,10 +221,7 @@ export function shouldFreezeMenu({ showOn, state, nowMs, menuUntouchedSince, fre
   return (nowMs - menuUntouchedSince) / 1000 >= freezeS;
 }
 
-/**
- * The idle clock and the card's state machine ('idle' | 'card'). The card's look is StillPlayingCard.js; this class
- * knows nothing of the DOM, the game loop or the pause.
- */
+/** The idle clock and the card's state machine ('idle' | 'card'). The card's look is StillPlayingCard.js. */
 export class IdleReset {
   /**
    * @param {object} d
@@ -271,7 +256,6 @@ export class IdleReset {
     this._restart();
   }
 
-  /** @private Start the count over from now. */
   _restart() {
     const t = this._now();
     this._lastInput = t;
@@ -282,13 +266,12 @@ export class IdleReset {
     this._lastShown = null;
   }
 
-  /** An input (pointer, touch, wheel or key) happened. Ignored while the card is up: the card answers for itself. */
+  /** An input happened. Ignored while the card is up: the card answers for itself. */
   noteInput() {
     if (this.state === 'card') return;
     this._restart();
   }
 
-  /** Real seconds without input, minus the held time. */
   idleSeconds() {
     return Math.max(0, (this._now() - this._lastInput - this._heldMs) / 1000);
   }
@@ -299,17 +282,15 @@ export class IdleReset {
     return Math.max(0, this.countdownS - (this._now() - this._cardAt) / 1000);
   }
 
-  /** @private Should idle time count right now? */
   _counts() {
     if (!this._enabled()) return false;
     return !this._onMenu() || this._needsReset();
   }
 
   /**
-   * Advance the clock. Call about four times a second, and when the page becomes visible again.
-   * Hold accounting: a hold excuses the time between two ticks only when the gap is short (a gap longer than
-   * TICK_GAP_MAX_MS is a hidden tab or a locked iPad and always counts), and one continuous hold excuses at most
-   * HOLD_MAX_S.
+   * Advance the clock: about four times a second, and when the page becomes visible again. A hold excuses the time
+   * between two ticks only when the gap is short (longer than TICK_GAP_MAX_MS = hidden tab or locked iPad, always
+   * counts), and one continuous hold excuses at most HOLD_MAX_S.
    */
   tick() {
     const t = this._now();
@@ -342,7 +323,6 @@ export class IdleReset {
     }
   }
 
-  /** Keep playing: the card goes, the clock starts over, nothing is reset. */
   keepPlaying() {
     if (this.state !== 'card') return;
     this.state = 'idle';
@@ -350,13 +330,12 @@ export class IdleReset {
     this._onKeep();
   }
 
-  /** New player (button or countdown zero): the reset, once. */
+  /** The reset, once (button or countdown zero). */
   newPlayer() {
     if (this.state !== 'card') return;
     this._doReset();
   }
 
-  /** @private */
   _doReset() {
     if (this._resetDone) return;
     this._resetDone = true;

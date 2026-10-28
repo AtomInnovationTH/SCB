@@ -6516,8 +6516,6 @@ export class PlayerSatellite extends THREE.Group {
         deltaVSpent: this._deltaVSpent,
         thrustDirection: this._thrustDirection,
         lastThrustType: this._lastThrustType,
-        deltaV: this._telemetryDeltaV(),   // the HUD figure (getMassBudget); no game reader (test-ArgonEngine pins it)
-        consumptionMultiplier: consumptionMultiplier(this),   // c (Isp_eff = Isp / c); no game reader
         currentFuelId: currentFuel.id || Constants.DEFAULT_FUEL,
         currentIsp: currentFuel.isp || Constants.OCTOPUS_CORE_HALL_ISP,
         throttleLevel: this.throttleLevel,
@@ -9154,13 +9152,6 @@ export class PlayerSatellite extends THREE.Group {
    * autopilot scales its braking rate by it.
    */
   getThrustScale() { return activeThrustScale(this); }
-
-  /** @private remaining ΔV (m/s) from the ArmManager budget, or undefined when it is not wired */
-  _telemetryDeltaV() {
-    const am = this.armManager;
-    if (!am || typeof am.getMassBudget !== 'function') return undefined;
-    try { return am.getMassBudget().deltaV; } catch (_) { return undefined; }
-  }
 
   get hasMPD() { return this._hasMPD; }
 
