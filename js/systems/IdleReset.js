@@ -207,6 +207,32 @@ export function idleOverrideS(search, showOn) {
   return Number.isFinite(v) && v >= 1 && v <= 3600 ? v : null;
 }
 
+/** Show mode: an untouched start screen becomes a still picture after this many real seconds (owner 2026-10-28: 2 minutes). */
+export const MENU_FREEZE_S = 120;
+
+/**
+ * Seconds until the untouched menu freezes. `?idleS=N` (show mode only; see `idleOverrideS`) scales it for look checks
+ * to twice N, so `?idleS=5` freezes at 10 s, after the card (5 s) as in the real 60 s / 120 s order.
+ * @param {number|null|undefined} overrideS the parsed `?idleS=` value, or null/undefined
+ * @returns {number}
+ */
+export function menuFreezeS(overrideS) {
+  return Number.isFinite(overrideS) && overrideS > 0 ? overrideS * 2 : MENU_FREEZE_S;
+}
+
+/**
+ * Show mode: should the start screen stop drawing (both loops) right now? True only with show mode on, the MENU state
+ * and `freezeS` real seconds since the menu was last touched or entered. Its own timestamp, not `IdleReset.idleSeconds()`:
+ * that clock restarts every tick on a clean menu (no save) and is cut short by the card and the reset on a used one.
+ * @param {{ showOn: boolean, state: string, nowMs: number, menuUntouchedSince: number, freezeS: number }} a
+ * @returns {boolean}
+ */
+export function shouldFreezeMenu({ showOn, state, nowMs, menuUntouchedSince, freezeS } = {}) {
+  if (showOn !== true || state !== 'MENU') return false;
+  if (!Number.isFinite(nowMs) || !Number.isFinite(menuUntouchedSince) || !Number.isFinite(freezeS)) return false;
+  return (nowMs - menuUntouchedSince) / 1000 >= freezeS;
+}
+
 /**
  * The idle clock and the card's state machine ('idle' | 'card'). The card's look is StillPlayingCard.js; this class
  * knows nothing of the DOM, the game loop or the pause.

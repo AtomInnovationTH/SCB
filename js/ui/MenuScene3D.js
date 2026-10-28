@@ -993,6 +993,7 @@ export class MenuScene3D {
     this._raf     = null;
     this._clock   = new THREE.Clock(false);
     this._running = false;
+    this._paused  = false;       // pause(): own rAF cancelled by the show-mode menu freeze; resume() restarts it
     this._weldPos = new THREE.Vector3();
     this._weldLight = null;
     this._sparkSystem = null;
@@ -1483,8 +1484,30 @@ export class MenuScene3D {
     this._tick();
   }
 
+  /**
+   * Show-mode menu freeze (owner 2026-10-28): stop drawing and leave the last picture on the canvas. Only the rAF is
+   * cancelled: no departure, pose or clock reset, so `resume()` carries on without a jump. No-op unless running.
+   */
+  pause() {
+    if (!this._running || this._paused) return;
+    this._paused = true;
+    if (this._raf) {
+      cancelAnimationFrame(this._raf);
+      this._raf = null;
+    }
+  }
+
+  /** Wake from `pause()`: restart the rAF. No-op unless running and paused (a stopped scene stays stopped). */
+  resume() {
+    if (!this._running || !this._paused) return;
+    this._paused = false;
+    this._lastFrameT = 0;   // draw the very next frame; `_tick` caps dt at 50 ms, so the sway does not jump
+    this._tick();
+  }
+
   stop() {
     this._running = false;
+    this._paused = false;
     this._clock.stop();
     if (this._raf) {
       cancelAnimationFrame(this._raf);
@@ -2000,6 +2023,11 @@ export class MenuScene3D {
     if (this._composer) this._composer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    // Show-mode menu freeze: a resize clears the canvas and no tick will redraw it, so draw the still picture once.
+    if (this._paused) {
+      if (this._composer) this._composer.render();
+      else this.renderer.render(this.scene, this.camera);
+    }
   }
 }
 

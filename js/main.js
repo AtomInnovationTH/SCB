@@ -118,7 +118,7 @@ import { GuidanceDirector } from './systems/GuidanceDirector.js';
 import { settingsManager } from './systems/SettingsManager.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
 import { showMode } from './systems/ShowMode.js';   // shared-iPad show mode (the side-effect import at the top ran its boot work)
-import { isHeldByAutoPlay, resetForNewPlayer, idleOverrideS } from './systems/IdleReset.js';
+import { isHeldByAutoPlay, resetForNewPlayer, idleOverrideS, shouldFreezeMenu, menuFreezeS, MENU_FREEZE_S } from './systems/IdleReset.js';
 import { wireStillPlaying, wireIdleTimers } from './ui/StillPlayingCard.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController, INTRO_RIDE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
@@ -571,6 +571,32 @@ function _noteSchedInput() {
 function _noteRealInput() {
   _noteSchedInput();
   if (_idleKit) _idleKit.noteInput();
+  _menuUntouchedSince = performance.now();   // the menu freeze's own clock (also while the card is up)
+  if (_menuFrozen) _wakeMenuFreeze();        // the waking tap is not swallowed: passive listener, the target still gets it
+}
+/** Show mode: the untouched start screen freezes into a still picture after `_menuFreezeS` seconds (owner 2026-10-28; plan
+ *  menu-freeze-1028). `_menuUntouchedSince` is set at boot, on entering MENU and on every real input; `_menuFrozen` is true
+ *  from the freeze until the wake. Both loops stop: gameLoop returns without scheduling, and the hero scene's own rAF is paused. */
+let _menuUntouchedSince = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+let _menuFrozen = false;
+let _menuFreezeS = MENU_FREEZE_S;
+function _menuHeroScene() { return (menuScreen && menuScreen._menuScene3D) || null; }
+/** Called from gameLoop (the menu runs at ~30 fps, so every frame sees it). True = stop here, schedule nothing. */
+function _menuShouldFreeze(nowMs) {
+  if (!shouldFreezeMenu({ showOn: showMode.isOn(), state: gameState.currentState, nowMs, menuUntouchedSince: _menuUntouchedSince, freezeS: _menuFreezeS })) return false;
+  _menuFrozen = true;
+  const hero = _menuHeroScene();
+  if (hero && typeof hero.pause === 'function') hero.pause();
+  return true;
+}
+/** Wake both loops at once; only when frozen (callers check). Counts from now again. */
+function _wakeMenuFreeze() {
+  _menuFrozen = false;
+  _menuUntouchedSince = performance.now();
+  lastTime = _menuUntouchedSince;
+  const hero = _menuHeroScene();
+  if (hero && typeof hero.resume === 'function') hero.resume();
+  _flushScheduledFrame();
 }
 /** Shared-iPad show mode (owner 2026-10-28): the idle clock + "Still playing?" card, built once at boot (see `wireStillPlaying`). */
 let _idleKit = null;
@@ -3976,6 +4002,8 @@ async function init() {
       if (typeof audioSystem.stopDeltaVAlarm === 'function') audioSystem.stopDeltaVAlarm();
     }
     _syncAudioCtxState();
+    if (to === GameStates.MENU) _menuUntouchedSince = performance.now();   // the menu freeze counts from entering MENU
+    if (_menuFrozen) _wakeMenuFreeze();   // a state change without input still wakes both loops
     _flushScheduledFrame();
   });
 
@@ -4153,6 +4181,7 @@ async function init() {
       focusPauseCard.onVisible();
       onboardingDirector?.setFrozen(_windowBlurred);
       _syncAudioCtxState();   // resumes ctx if state policy says so
+      if (_menuFrozen) _wakeMenuFreeze();   // a frozen menu wakes both loops when the tab is seen again
       _flushScheduledFrame(); // wakes loop (gameLoop's hidden early-return
                               // skipped scheduling the next rAF)
     }
@@ -4233,6 +4262,9 @@ async function init() {
   });
   // The 250 ms timer and the come-back tick exist only while show mode is on (off = no timer, no listener).
   wireIdleTimers({ showMode, kit: _idleKit, doc: document });
+  // Show mode: the untouched start screen freezes after 2 min (`?idleS=N` scales it to 2 x N, show mode only).
+  _menuFreezeS = menuFreezeS(idleOverrideS(typeof location !== 'undefined' ? location.search : '', showMode.isOn()));
+  _menuUntouchedSince = performance.now();
   // The intro launch ceremony is a camera ride: native while it flies (the
   // same TeachingSystem blocker signal pair — plan Session I step 2).
   if (Events.LAUNCH_CEREMONY_START) eventBus.on(Events.LAUNCH_CEREMONY_START, () => { _launchCeremonyLive = true; });
@@ -6959,6 +6991,9 @@ function gameLoop(timestamp) {
     lastTime = timestamp;
     return;
   }
+  // Show mode: an untouched start screen is a still picture after 2 min (both loops). Checked BEFORE the blurred branch
+  // on purpose: a frozen menu does not keep the 30 fps presents (§14.1) that a blurred window otherwise needs.
+  if (_menuShouldFreeze(timestamp)) return;
   // §14.1 (revised 3, 2026-08-31) — Window blurred (user clicked another macOS
   // app; the browser window can still be fully VISIBLE beside it). The sim
   // halts (zero update work, dt frozen via lastTime), but the canvas layer is
