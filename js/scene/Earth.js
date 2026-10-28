@@ -1,19 +1,10 @@
-/**
- * Earth.js — Texture-mapped Earth with day/night, clouds, and atmosphere
- * THE visual centerpiece of Space Cowboy
- * Uses NASA Blue Marble textures for photorealistic rendering
- * Atmosphere: thin bright limb glow (ISS-like), Rayleigh scattering
- * @module scene/Earth
- */
+/** Textured Earth with day/night, clouds and limb atmosphere, plus its picture loader. @module scene/Earth */
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { profileFlags } from '../core/ProfileFlags.js';
 import { TouchControls } from '../ui/TouchControls.js';
 
-// ============================================================================
-// EARTH SURFACE SHADER (texture-based day/night with specular oceans)
-// ============================================================================
 const earthSurfaceVertexShader = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_vertex>
@@ -41,12 +32,7 @@ void main() {
 }
 `;
 
-// ============================================================================
-// SHARED SIMPLEX NOISE (GLSL)
-// ============================================================================
-// Extracted from the surface fragment shader as a shared GLSL string so it can be
-// reused without duplicating the ~50-line Ashima simplex. Injected via template
-// interpolation. (Currently consumed only by the surface shader's terrain detail.)
+// Ashima simplex noise as a shared GLSL string, injected by template interpolation (used only by the surface shader's terrain detail).
 const simplexNoiseGLSL = /* glsl */ `
 // Simplex-like noise for procedural terrain detail
 // Based on Ashima Arts webgl-noise (3-component, fast)
@@ -99,34 +85,17 @@ float snoise(vec3 v) {
 }
 `;
 
-// ============================================================================
-// SHARED LIGHTING (GLSL)
-// ============================================================================
-// A2 Lambert modeling term, shared by the surface and cloud fragment shaders via
-// template interpolation so their day-side shading curves cannot drift. Adds a
-// luminance gradient from the sub-solar point toward the terminator; the 0.25
-// floor keeps the terminator from crushing to black (earthshine lifts the dark
-// side further below).
-// B4 (2026-07-20): pow(NdotL, 0.6) → 0.8. The 0.6 curve was so flat it erased the
-// sub-solar → terminator gradient, so a full-phase disc read as a flat bright ball
-// (a compounding cause of the "milky/washed" look). 0.8 restores a visible falloff
-// while staying softer than a literal Lambert (1.0); the 0.25 floor is unchanged so
-// the terminator band and cloud shading near the terminator do not crush.
+// Lambert term shared by the surface and cloud shaders so their day-side curves cannot drift. The 0.25 floor keeps
+// the terminator from crushing to black (earthshine lifts the dark side). Exponent 0.8: 0.6 erased the
+// sub-solar → terminator gradient (flat "milky" disc); 1.0 would be literal Lambert.
 const lambertTermGLSL = /* glsl */ `
 float lambertTerm(float NdotL) {
   return mix(0.25, 1.0, pow(clamp(NdotL, 0.0, 1.0), 0.8));
 }
 `;
 
-// ============================================================================
-// SHARED CLOUD COVERAGE RAMP (GLSL)
-// ============================================================================
-// The alpha window that turns a grayscale cloud texel into coverage. Interpolated
-// into BOTH the cloud layer (its rendered alpha, cloudFragmentShader) and the
-// surface shader (its cast shadow, earthSurfaceFragmentShader) so the two can
-// never drift out of registration — retune the window HERE once and the rendered
-// clouds and their cast shadows follow together (P1, 2026-07-20). Dial wider
-// (e.g. 0.36→0.86) or narrower to taste; both consumers track it.
+// Alpha window turning a grayscale cloud texel into coverage. Interpolated into BOTH cloudFragmentShader (alpha)
+// and earthSurfaceFragmentShader (cast shadow) so they cannot drift out of registration: retune only here.
 const cloudCoverageRampGLSL = /* glsl */ `
 #define CLOUD_COVERAGE_LO 0.42
 #define CLOUD_COVERAGE_HI 0.80
@@ -420,9 +389,6 @@ void main() {
 }
 `;
 
-// ============================================================================
-// CLOUD LAYER SHADER (texture-based)
-// ============================================================================
 const cloudVertexShader = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_vertex>
@@ -528,18 +494,9 @@ void main() {
 }
 `;
 
-// ============================================================================
-// ATMOSPHERE SHADER — analytic limb scattering.
-// Per-fragment impact-parameter altitude + exponential density falloff:
-// brightest at the limb base (Earth's edge), fades smoothly to zero before the
-// mesh's geometric edge — no hard silhouette cutoff (the flaw of normal-based
-// Fresnel rims). Rayleigh altitude gradient (cyan-white → blue → violet),
-// narrow saturated terminator sunset, gold Mie forward-scatter hotspot toward
-// the sun, and a thin greenish night airglow band.
-// Perf: log depth is encoded in the vertex shader (early-Z preserved, so the
-// occluded Earth-disc half of the shell is culled before shading); analytic
-// shading reads only `position` (normal/uv attributes stripped).
-// ============================================================================
+// Analytic limb scattering: per-fragment impact-parameter altitude + exponential density, fading to zero before
+// the mesh edge (no hard silhouette like normal-based Fresnel rims). Log depth is encoded in the vertex shader
+// (early-Z kept, so the occluded half of the shell is culled); reads only `position` (normal/uv stripped).
 const atmosphereVertexShader = /* glsl */ `
 varying vec3 vWorldPosition;
 
@@ -646,44 +603,23 @@ void main() {
 }
 `;
 
-// ============================================================================
-// TEXTURE LOADER + AVIF SUPPORT PROBE (PR P0.1)  +  OFF-THREAD PICTURES (st3)
-// ============================================================================
-//
-// AVIF compresses Earth textures ~5× smaller than JPG at visually equivalent
-// quality (e.g. earth_day_16k: 19 MB JPG → 3.9 MB AVIF). We probe browser AVIF
-// support once at module load via Image.decode() on a 1×1 AVIF data-URL and
-// cache the boolean. loadTexture() then prefers the `.avif` sibling on
-// supporting browsers (Chrome 85+, Edge 85+, Firefox 93+, Safari 16+) and
-// transparently falls back to the original `.jpg` everywhere else.
-//
-// st3-earth-quick (2026-10-18): the three Earth pictures used to be decoded and
-// uploaded in one 3.8 s block at the first draw (phase-1 measurement,
-// docs/research/2026-10-startup.md). They are now decoded OFF the main thread
-// with THREE.ImageBitmapLoader, and each bitmap is freed after its upload
-// (see onEarthTextureUpdate / attachEarthRestore). A second module-level probe
-// (probeBitmapOrientation) proves the bitmap path puts north up with the same
-// texels before it is used; if it fails, or there is no DOM, every file takes
-// the old TextureLoader path.
-//
-// The probes use top-level await so the booleans are settled before any Earth
-// instance is constructed. In non-browser environments (Node test runner) the
-// `Image` global is absent, both probes short-circuit to `false`, and Earth.js
-// continues to behave exactly as before — important because test-EarthLOD.js
-// imports `selectLOD` from this module.
+// AVIF is ~5× smaller than JPG (earth_day_16k: 19 MB → 3.9 MB). loadTexture prefers the `.avif` sibling when a
+// one-time Image.decode() probe of a 1×1 AVIF data-URL passes, else `.jpg`.
+// Pictures decode off the main thread (THREE.ImageBitmapLoader; each bitmap freed after upload, see
+// onEarthTextureUpdate / attachEarthRestore) once probeBitmapOrientation proves north-up with the same texels;
+// otherwise the TextureLoader path runs.
+// The probes use top-level await so they settle before any Earth is constructed. In Node (no `Image`) both
+// are false (test-EarthLOD imports selectLOD from this module).
 let textureLoader = new THREE.TextureLoader();
 
-// 2×2 AVIF still-picture, av1 codec, ~311 bytes. Generated locally with
-// `ffmpeg -f lavfi -i color=c=black:s=2x2 -c:v libaom-av1 -still-picture 1
-//  -crf 30 -b:v 0` and verified to decode cleanly with libavif's avifdec.
-// Sufficient payload to verify the browser ships a working AVIF decoder —
-// `Image.decode()` will reject on the data-URL if AVIF is not supported.
+// 2×2 AVIF still-picture, av1, ~311 bytes: `ffmpeg -f lavfi -i color=c=black:s=2x2 -c:v libaom-av1 -still-picture 1
+// -crf 30 -b:v 0`, verified with libavif's avifdec. Image.decode() rejects on it if AVIF is unsupported.
 const AVIF_PROBE_DATA_URL =
   'data:image/avif;base64,AAAAIGZ0eXBhdmlmAAAAAGF2aWZtaWYxbWlhZk1BMUIAAAD5bWV0YQAAAAAAAAAvaGRscgAAAAAAAAAAcGljdAAAAAAAAAAAAAAAAFBpY3R1cmVIYW5kbGVyAAAAAA5waXRtAAAAAAABAAAAHmlsb2MAAAAARAAAAQABAAAAAQAAASEAAAAWAAAAKGlpbmYAAAAAAAEAAAAaaW5mZQIAAAAAAQAAYXYwMUNvbG9yAAAAAGppcHJwAAAAS2lwY28AAAAUaXNwZQAAAAAAAAACAAAAAgAAABBwaXhpAAAAAAMICAgAAAAMYXYxQ4EADAAAAAATY29scm5jbHgAAgACAAIAAAAAF2lwbWEAAAAAAAAAAQABBAECgwQAAAAebWRhdAoFGAA2wCAyDReAAABIAAAADAZusnI=';
 
 async function probeAvifSupport() {
   if (typeof Image === 'undefined' || typeof document === 'undefined') {
-    return false; // Node / non-DOM environment (test runner)
+    return false;
   }
   try {
     const probe = new Image();
@@ -699,16 +635,10 @@ async function probeAvifSupport() {
 const BITMAP_LOADER_OPTIONS = Object.freeze({ imageOrientation: 'flipY', premultiplyAlpha: 'none' });
 
 /**
- * st3 D3 self-test gate: does the off-thread bitmap path give the same picture
- * the HTML-image path gives? Draws a tiny canvas (top row red, bottom row
- * blue), encodes it to PNG, decodes it with `createImageBitmap(blob, …exact
- * loader options…)`, draws the bitmap back and reads it. True only when the
- * rows came back flipped (imageOrientation 'flipY' honoured; three ignores
- * texture.flipY for bitmaps). False — never a throw — with no DOM, no
- * createImageBitmap, or any failure; the caller then uses the old path.
- *
- * @param {{doc?: Document, createBitmap?: Function}} [inputs]  injectable for tests
- * @returns {Promise<boolean>}
+ * Does the off-thread bitmap path give the same picture as the HTML-image path? Draws a 2×1 canvas (top red,
+ * bottom blue), round-trips it via createImageBitmap with the exact loader options and reads it back: true only
+ * when the rows came back flipped (three ignores texture.flipY for bitmaps). Never throws: false with no DOM,
+ * no createImageBitmap, or on any failure.
  */
 export async function probeBitmapOrientation({ doc, createBitmap } = {}) {
   try {
@@ -718,8 +648,8 @@ export async function probeBitmapOrientation({ doc, createBitmap } = {}) {
     const src = d.createElement('canvas');
     src.width = 2; src.height = 2;
     const sctx = src.getContext('2d');
-    sctx.fillStyle = 'rgb(255,0,0)'; sctx.fillRect(0, 0, 2, 1); // top row red
-    sctx.fillStyle = 'rgb(0,0,255)'; sctx.fillRect(0, 1, 2, 1); // bottom row blue
+    sctx.fillStyle = 'rgb(255,0,0)'; sctx.fillRect(0, 0, 2, 1);
+    sctx.fillStyle = 'rgb(0,0,255)'; sctx.fillRect(0, 1, 2, 1);
     const blob = await new Promise((resolve, reject) => {
       src.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob gave null'))), 'image/png');
     });
@@ -741,18 +671,12 @@ export async function probeBitmapOrientation({ doc, createBitmap } = {}) {
   }
 }
 
-/** Longest start-up wait for the orientation self-test (ms) before the old image path is used. */
+/** Longest start-up wait (ms) for the orientation self-test before the old image path is used. */
 export const BITMAP_PROBE_TIMEOUT_MS = 500;
 
 /**
- * Race the self-test against a timer so a callback that never fires (e.g. a
- * `toBlob` that is never called) cannot hang module evaluation, and with it the
- * game's start. Resolves false on timeout, on a throw, or on a non-true result;
- * the timer is cleared when the test wins. A late result is ignored.
- *
- * @param {() => Promise<boolean>} [test]  the self-test (injectable for tests)
- * @param {number} [ms]
- * @returns {Promise<boolean>}
+ * Race the self-test against a timer so a callback that never fires (e.g. `toBlob`) cannot hang module
+ * evaluation and the game's start. False on timeout, throw or non-true result; a late result is ignored.
  */
 export function gateBitmapProbe(test = probeBitmapOrientation, ms = BITMAP_PROBE_TIMEOUT_MS) {
   let timer = null;
@@ -763,40 +687,29 @@ export function gateBitmapProbe(test = probeBitmapOrientation, ms = BITMAP_PROBE
   return Promise.race([run, timeout]).finally(() => clearTimeout(timer));
 }
 
-// ----------------------------------------------------------------------------
-// st8 (2026-10-19): the decode itself in a Worker.
-// ImageBitmapLoader's createImageBitmap(blob, {imageOrientation:'flipY', …}) still
-// RESOLVES on the main thread, and the flip makes that one frame 105–160 ms long
-// when each 16k picture arrives (probe: 108–125 ms main thread, 9 ms with the same
-// call in a Worker, 0 of 134 M pixels different; docs/research/2026-10-startup.md,
-// "Phase 5"). So the file is fetched AND decoded in one inline Worker (no new
-// file) and the finished bitmap is transferred back; everything after that (the
-// strips, the one-shot upload, the pixel check) is unchanged. The worker is used
-// only after the same 2×2 orientation self-test passed INSIDE the worker; on any
-// worker problem the main-thread ImageBitmapLoader path runs as before.
-// ----------------------------------------------------------------------------
+// ImageBitmapLoader's createImageBitmap(blob, {imageOrientation:'flipY'}) RESOLVES on the main thread, and the
+// flip makes a 105–160 ms frame per 16k picture (9 ms in a Worker, 0 of 134 M pixels different; archive/research/2026-10-startup.md,
+// "Phase 5"). So fetch AND decode run in one inline Worker and the bitmap is transferred back. The worker is used
+// only after the 2×2 orientation self-test passed INSIDE it; on any worker problem the main-thread loader runs.
 
 /** createImageBitmap options of the worker path: exactly what three's loader passes. */
 export const WORKER_DECODE_OPTIONS = Object.freeze({ ...BITMAP_LOADER_OPTIONS, colorSpaceConversion: 'none' });
 
 /**
- * The worker's program. Written as a function so node tests can run it against a
- * fake scope; the browser gets its source text (`DECODE_WORKER_SOURCE`). It must
- * stay self-contained (no closure over this module). Messages in:
- *   {id, type:'selftest', options}     → {id, ok}
- *   {id, type:'decode', url, options}  → {id, bitmap} (transferred) | {id, error}
- * `fetch` uses the default (same-origin) credentials, like three's loader with
- * crossOrigin 'anonymous'; the page's service worker serves it when the page is
- * controlled (probe: blob-URL workers inherit the page's controller).
- * @param {object} scope  the worker's global (`self`)
+ * The worker's program: a function so node tests can run it against a fake scope; the browser gets its source text
+ * (DECODE_WORKER_SOURCE). Must stay self-contained (no closure over this module). Messages:
+ *   in {id, type:'selftest', options} → {id, ok}
+ *   in {id, type:'decode', url, options} → {id, bitmap} (transferred) | {id, error}
+ * `fetch` uses default same-origin credentials (like three's loader with crossOrigin 'anonymous'); the page's
+ * service worker serves it when the page is controlled (blob-URL workers inherit the controller).
  */
 export function decodeWorkerMain(scope) {
   async function selfTest(options) {
     const OC = scope.OffscreenCanvas;
     const src = new OC(2, 2);
     const g = src.getContext('2d');
-    g.fillStyle = 'rgb(255,0,0)'; g.fillRect(0, 0, 2, 1); // top row red
-    g.fillStyle = 'rgb(0,0,255)'; g.fillRect(0, 1, 2, 1); // bottom row blue
+    g.fillStyle = 'rgb(255,0,0)'; g.fillRect(0, 0, 2, 1);
+    g.fillStyle = 'rgb(0,0,255)'; g.fillRect(0, 1, 2, 1);
     const blob = await src.convertToBlob({ type: 'image/png' });
     const bmp = await scope.createImageBitmap(blob, options);
     try {
@@ -834,17 +747,14 @@ export const WORKER_DECODE_TIMEOUT_MS = 90000;
 export const DECODE_WORKER_SOURCE = `(${decodeWorkerMain.toString()})(self);`;
 
 /**
- * Main-thread end of the decode worker: one promise per request, ids to match
- * the replies. Any worker error (script error, message error) fails every
- * pending request and marks the worker dead; callers then use the main-thread
- * loader. Wraps anything with postMessage / onmessage / onerror / terminate.
+ * Main-thread end of the decode worker: one promise per request, matched by id. Any worker error fails every
+ * pending request and marks the worker dead; callers then use the main-thread loader.
  */
 export class EarthDecodeWorker {
   /**
    * @param {{postMessage: Function, terminate?: Function}} worker
    * @param {object} [options]  createImageBitmap options sent with every request
-   * @param {number} [timeoutMs]  a decode request that gets no answer for this long fails (the
-   *   page then uses the main-thread loader); a browser can kill a worker without telling us
+   * @param {number} [timeoutMs]  a request with no answer for this long fails (a browser can kill a worker silently)
    */
   constructor(worker, options = WORKER_DECODE_OPTIONS, timeoutMs = WORKER_DECODE_TIMEOUT_MS) {
     this.worker = worker;
@@ -895,14 +805,12 @@ export class EarthDecodeWorker {
     });
   }
 
-  /** @returns {Promise<boolean>} the orientation self-test, run inside the worker */
   selfTest() { return this._send({ type: 'selftest' }).then((r) => r.ok === true); }
 
   /**
    * Fetch and decode one picture in the worker.
    * @param {string} url  absolute (a blob: worker cannot resolve relative paths)
-   * @param {object} [extra]  st9: createImageBitmap options added for this request only (e.g. a smaller size)
-   * @returns {Promise<ImageBitmap>}
+   * @param {object} [extra]  createImageBitmap options added for this request only (e.g. a smaller size)
    */
   decode(url, extra) {
     return this._send({ type: 'decode', url }, extra).then((r) => {
@@ -914,8 +822,8 @@ export class EarthDecodeWorker {
   terminate() {
     if (this.terminated) return; // each rejected request's handler retires the worker again
     this.terminated = true;
-    // Requests still in flight are rejected, not dropped: each caller then falls back to the
-    // main-thread loader (the message is not "HTTP nnn", so it is not read as a missing file).
+    // In-flight requests are rejected, not dropped: each caller falls back to the main-thread loader (the message
+    // is not "HTTP nnn", so it is not read as a missing file).
     this._die(new Error('decode worker retired'));
     try { this.worker.terminate && this.worker.terminate(); } catch (_e) { /* best effort */ }
   }
@@ -936,11 +844,7 @@ let decodeWorker = null;
 /** null while the worker's self-test runs; true / false afterwards. */
 let workerPathOk = null;
 
-/**
- * Start the worker and its self-test (bounded by the same 500 ms as the main-thread
- * test). Never throws; resolves false with no DOM / Worker / Blob URL support.
- * @returns {Promise<boolean>}
- */
+/** Start the worker and its self-test (bounded like the main-thread test). Never throws; false with no DOM / Worker / Blob URL. */
 async function probeWorkerDecode() {
   let w = null;
   let blobUrl = null;
@@ -962,9 +866,8 @@ async function probeWorkerDecode() {
   }
 }
 
-// Not awaited by module evaluation (the self-test starts now, in parallel with the
-// two probes below; a picture asked for before it ends waits for it, see
-// loadLevel). So the start-up wait is exactly what it was before the worker.
+// Not awaited by module evaluation: the self-test runs in parallel with the probes below; a picture asked for
+// before it ends waits for it (see loadLevel).
 let workerProbe = probeWorkerDecode().then((ok) => {
   if (workerPathOk === null) workerPathOk = ok === true;
   if (typeof console !== 'undefined' && typeof document !== 'undefined') {
@@ -973,8 +876,7 @@ let workerProbe = probeWorkerDecode().then((ok) => {
   return workerPathOk;
 });
 
-// Both probes run in parallel (no added wait at module load); the bitmap
-// self-test is bounded by BITMAP_PROBE_TIMEOUT_MS. The AVIF probe is not.
+// Both probes run in parallel (no added wait). Only the bitmap self-test is bounded (BITMAP_PROBE_TIMEOUT_MS), not the AVIF probe.
 const [avifSupported, bitmapProbeResult] = await Promise.all([probeAvifSupport(), gateBitmapProbe()]);
 let bitmapPathOk = bitmapProbeResult === true;
 
@@ -983,33 +885,27 @@ if (typeof console !== 'undefined' && typeof document !== 'undefined') {
   console.log(`[Earth] off-thread picture decode: ${bitmapPathOk ? 'YES (ImageBitmap)' : 'NO (image loader)'}`);
 }
 
-/**
- * Module-level getter so external code (e.g. [`PerfReportOverlay`](js/ui/PerfReportOverlay.js:1))
- * can surface AVIF capability without touching the private module variable.
- * @returns {boolean} Whether the browser successfully decoded the AVIF probe.
- */
+/** Whether the browser decoded the AVIF probe (for PerfReportOverlay). */
 export function isAvifSupported() {
   return avifSupported === true;
 }
 
-/** @returns {boolean} Whether Earth pictures are decoded off-thread (st3 D3 probe passed). */
 export function isBitmapPathSupported() {
   return bitmapPathOk === true;
 }
 
-/** @returns {boolean} Whether the pictures are decoded in a Worker (st8; false while its self-test still runs). */
 export function isWorkerDecodeSupported() {
   return bitmapPathOk === true && workerPathOk === true && !!decodeWorker && !decodeWorker.dead;
 }
 
 let bitmapLoader = null;
-/** st6 test seam: true / false forces the strip path on / off; null = decide from the browser. */
+/** test seam: true / false forces the strip path on / off; null = decide from the browser. */
 let stripsForced = null;
-/** st7 test seam: replaces the run-time pixel check of the strip path (see EarthStripFeeder.verify). */
+/** test seam: replaces the run-time pixel check of the strip path (see EarthStripFeeder.verify). */
 let stripCheckHook = null;
-/** st9 test seam: false = no small pictures (the pre-st9 single stage); true = the normal behaviour. */
+/** test seam: false = no small pictures; true = normal. */
 let smallFirstOn = true;
-/** st9 test seam: replaces performance.now() for the picture blend. */
+/** test seam: replaces performance.now() for the picture blend. */
 let clockHook = null;
 /** Created lazily: node has no createImageBitmap and a module-level `new` would warn in every test. */
 function getBitmapLoader() {
@@ -1018,19 +914,14 @@ function getBitmapLoader() {
 }
 
 /**
- * Test seam: inject a fake bitmap loader / image loader, the D3 result and the
- * strip switch (st6; null = decide from the browser). Returns a function that
- * restores the previous state.
- * st7: `stripCheck(renderer, feeder)` (boolean or promise of one) replaces the run-time pixel check.
- * st8: `decodeWorker` (an EarthDecodeWorker-like object, or null for "no worker") replaces
- * the decode worker; `offlineEnv` replaces what the 16k-for-offline step reads from the browser;
- * `firstFrame: false` keeps the worker waiting for the game's first frame (default after
- * injecting a worker: already drawn); `firstFrameTimeoutMs` shortens the hidden-tab fallback;
- * `pendingWorker` (a worker-like) leaves its self-test "still running" until the returned
- * function's `.settleWorker(true|false)` is called.
- * st9: `smallFirst` (false = no small pictures) and `clock` (a function replacing performance.now()
- * for the picture blend; null = the real clock).
- * @param {{bitmapLoader?: object|null, imageLoader?: object, bitmapOk?: boolean, stripsOk?: boolean|null, stripCheck?: Function|null, decodeWorker?: object|null, offlineEnv?: object|null, smallFirst?: boolean, clock?: Function|null}} o
+ * Test seam: inject fake loaders, probe results and the strip switch (null = decide from the browser). Returns a
+ * function that restores the previous state.
+ * `stripCheck(renderer, feeder)` (boolean or promise) replaces the run-time pixel check; `decodeWorker`
+ * (EarthDecodeWorker-like, or null = no worker) replaces the worker; `offlineEnv` replaces what the 16k-for-offline
+ * step reads from the browser; `firstFrame: false` keeps the worker waiting for the first frame (default after
+ * injecting a worker: already drawn); `firstFrameTimeoutMs` shortens the hidden-tab fallback; `pendingWorker`
+ * leaves its self-test "still running" until the returned function's `.settleWorker(true|false)`;
+ * `smallFirst` (false = no small pictures); `clock` replaces performance.now() for the blend (null = real).
  */
 export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapOk, stripsOk, stripCheck, decodeWorker: dw, offlineEnv, firstFrame, firstFrameTimeoutMs, pendingWorker, smallFirst, clock } = {}) {
   const prev = {
@@ -1048,7 +939,7 @@ export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapO
   if (stripCheck !== undefined) stripCheckHook = stripCheck;
   if (dw !== undefined) { decodeWorker = dw; workerPathOk = dw !== null; }
   if (offlineEnv !== undefined) { offlineEnvOverride = offlineEnv; ensuredOffline = new Set(); }
-  // A test that injects a worker gets the "first frame is drawn" state unless it asks for the pre-frame state.
+  // An injected worker gets the "first frame drawn" state unless the test asks for the pre-frame state.
   if (dw !== undefined || firstFrame !== undefined) { firstFrameSeen = firstFrame !== false; frameWaiters = []; }
   if (firstFrameTimeoutMs !== undefined) firstFrameFallbackMs = firstFrameTimeoutMs;
   let settleWorker = null;
@@ -1072,16 +963,10 @@ export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapO
 }
 
 /**
- * OPEN-2 triage (night-side city lights black on 16k / ANGLE-Metal): every
- * texture-load outcome is also recorded into `window.__earthTexEvents` so the
- * `?bfp` badge-click dump carries decode/fallback history — the user is done
- * with console work, and a silent AVIF decode failure of the 512 MB night map
- * (handle live, image empty → samples black) is exactly the E2 hypothesis this
- * must witness. Capped ring, try/catch'd, no-op outside the DOM (Node tests).
- *
- * @param {string} kind   'loaded' | 'ready' | 'shown' (st9: blend started) | 'avif-fail' | 'bitmap-fail' | 'fallback-loaded' | 'error'
- * @param {string} file   path as requested
- * @param {{width?: number, height?: number}|null} image  decoded image, if any
+ * Records every texture-load outcome in `window.__earthTexEvents` so the `?bfp` badge-click dump carries the
+ * decode/fallback history (a silent AVIF decode failure of the 512 MB night map samples black). Capped ring,
+ * try/catch'd, no-op outside the DOM.
+ * @param {string} kind  'loaded' | 'ready' | 'shown' (blend started) | 'avif-fail' | 'bitmap-fail' | 'fallback-loaded' | 'error'
  */
 function recordTexEvent(kind, file, image) {
   try {
@@ -1098,7 +983,7 @@ function recordTexEvent(kind, file, image) {
   } catch (_e) { /* diagnostics must never break texture loading */ }
 }
 
-/** Boot-timeline mark (?logBoot=1) — same text as before st3, so probes keep reading it. */
+/** Boot-timeline mark (?logBoot=1); probes read the text. */
 function bootMark(text) {
   try {
     // eslint-disable-next-line no-undef
@@ -1106,16 +991,13 @@ function bootMark(text) {
   } catch (_e) { /* swallow — diagnostic only */ }
 }
 
-/** True when `img` is an ImageBitmap-like object that has not been closed yet. */
 function isOpenBitmap(img) {
   return !!img && typeof img.close === 'function' && img.width > 0;
 }
 
 /**
- * Give a texture a new picture. A texture that has been uploaded once keeps its
- * GL storage (three allocates immutable storage once per GL texture), so the
- * texture is disposed first — otherwise a bigger picture would go into the old
- * (e.g. 1×1 restore placeholder) storage and the Earth would stay blank.
+ * Give a texture a new picture. It is disposed first: three allocates immutable GL storage once per texture, so a
+ * bigger picture would otherwise go into the old (e.g. 1×1 placeholder) storage and the Earth would stay blank.
  */
 function setEarthImage(tex, image) {
   if (tex.userData.uploaded) tex.dispose();
@@ -1124,12 +1006,10 @@ function setEarthImage(tex, image) {
 }
 
 /**
- * `texture.onUpdate` (three calls it after every upload). Acts only when
- * `tex.image` is an open ImageBitmap at call time: remember its size for the
- * diagnostics (a closed bitmap reads 0×0), then free its memory. The 1×1
- * restore placeholder is ignored.
- * st8: a one-shot upload of the tier's own picture also counts as "complete" for
- * the 16k-for-offline step (the strip path reports through Earth._setPicture).
+ * `texture.onUpdate` (three calls it after every upload). Acts only when `tex.image` is an open ImageBitmap:
+ * records its size for the diagnostics (a closed bitmap reads 0×0), then frees its memory. The 1×1 restore
+ * placeholder is ignored. A one-shot upload of the tier's own picture also counts as "complete" for the
+ * 16k-for-offline step (the strip path reports through Earth._setPicture).
  */
 function onEarthTextureUpdate(tex) {
   tex.userData.uploaded = true;
@@ -1141,12 +1021,7 @@ function onEarthTextureUpdate(tex) {
   try { img.close(); } catch (_e) { /* best effort */ }
 }
 
-/**
- * st8 D3: the files of one picture, best first: the tier's own file, then each
- * smaller tier (16k → 8k → base). Pure; exported for tests.
- * @param {string} path  JPG path as given to loadTexture, e.g. 'textures/earth_day_16k.jpg'
- * @returns {string[]}
- */
+/** The files of one picture, best first: the tier's own file, then each smaller tier (16k → 8k → base). Pure; exported for tests. */
 export function pictureChain(path) {
   const m = /^(.*\/earth_(?:day|night|clouds))(_16k|_8k)?(\.jpg)$/i.exec(path);
   if (!m) return [path];
@@ -1164,7 +1039,6 @@ function tierSources(src) {
 
 const fileName = (p) => String(p).split('/').pop();
 
-/** Load (or reload) the picture of an Earth texture into `tex`. */
 function loadEarthImage(tex) {
   const seq = (tex.userData.loadSeq = (tex.userData.loadSeq || 0) + 1);
   delete tex.userData.loadedLevel;
@@ -1172,9 +1046,8 @@ function loadEarthImage(tex) {
 }
 
 /**
- * The next smaller tier of a picture whose file could not be had on any path
- * (offline, 404, undecodable). Logs one line naming it. False when there is none
- * (the texture then samples black, as before).
+ * The next smaller tier of a picture whose file could not be had on any path (offline, 404, undecodable); logs
+ * one line naming it. False when there is none (the texture then samples black).
  */
 function nextTier(tex, seq, level) {
   if (tex.userData.loadSeq !== seq) return true;
@@ -1195,10 +1068,7 @@ let frameTimers = [];
 export const FIRST_FRAME_FALLBACK_MS = 5000;
 let firstFrameFallbackMs = FIRST_FRAME_FALLBACK_MS;
 
-/**
- * Runs `fn` once, after the game's first frame (or at once if it has been drawn).
- * st9: `urgent` puts it ahead of the others that are waiting (the small pictures are asked for first).
- */
+/** Runs `fn` once, after the game's first frame (at once if already drawn). `urgent` puts it ahead of the waiting ones. */
 function afterFirstFrame(fn, urgent = false) {
   if (firstFrameSeen) { fn(); return; }
   let done = false;
@@ -1212,7 +1082,6 @@ function afterFirstFrame(fn, urgent = false) {
   if (typeof setTimeout === 'function') frameTimers.push(setTimeout(once, firstFrameFallbackMs));
 }
 
-/** Earth.tickStrips (the game loop's per-frame call) reports the first frame. */
 function noteFirstFrame() {
   if (firstFrameSeen) return;
   firstFrameSeen = true;
@@ -1230,28 +1099,22 @@ function retireWorker(w) {
   try { w.terminate(); } catch (_e) { /* best effort */ }
 }
 
-/** The decode worker to use right now, or null (main-thread loader). */
 function usableWorker() {
   return bitmapPathOk && workerPathOk === true && decodeWorker && !decodeWorker.dead ? decodeWorker : null;
 }
 
-/**
- * One tier of a picture: worker decode (st8) → main-thread bitmap loader → HTML
- * image (AVIF, then JPG); when all of those fail, the next smaller tier (st8 D3).
- */
+/** One tier of a picture: worker decode → main-thread bitmap loader → HTML image (AVIF, then JPG); if all fail, the next smaller tier. */
 function loadLevel(tex, seq, level) {
   const src = tierSources(tex.userData.src)[level];
   const { initialPath } = src;
-  // st9: the picture's staging hook (null for a plain loadTexture call). A SMALL picture
-  // (the base-tier file shown while the sharp one loads) only ever goes the off-thread way:
-  // decoding an extra picture on the main thread would be the stutter it exists to avoid.
+  // The picture's staging hook (null for a plain loadTexture call). A SMALL picture (the base-tier file shown while
+  // the sharp one loads) only goes the off-thread way: decoding an extra picture on the main thread is the stutter it avoids.
   const pic = tex.userData.strips || null;
   const isSmall = !!pic && pic.kind === 'small';
   if (isSmall && !bitmapPathOk) return;
   if (!bitmapPathOk) { loadViaImageLoader(tex, seq, level); return; }
   const stale = () => tex.userData.loadSeq !== seq;
 
-  // A decoded bitmap has arrived (from the worker or the main-thread loader).
   const arrive = (bmp) => {
     if (stale()) { closeBitmap(bmp); return; }
     const place = () => {
@@ -1259,11 +1122,9 @@ function loadLevel(tex, seq, level) {
         const bw = bmp.width, bh = bmp.height; // read now: the one-shot route closes the image
         const dims = `${bw}×${bh}`;
         tex.userData.loadedLevel = level;
-        // st6: on a strip-capable browser the picture is queued and reaches the
-        // GPU one strip per frame; this texture stays empty until the finished
-        // one replaces it (Earth._setPicture). Otherwise: one-shot, as before.
-        // st9: a one-shot picture of an Earth goes into a NEW texture (Earth._oneShotPicture),
-        // uploaded before it is shown, so there is always something to blend from.
+        // On a strip-capable browser the picture is queued and reaches the GPU one strip per frame; this texture stays
+        // empty until the finished one replaces it (Earth._setPicture). Otherwise one-shot: an Earth's one-shot picture
+        // goes into a NEW texture (Earth._oneShotPicture), uploaded before it is shown, so there is always something to blend from.
         const sp = tex.userData.strips;
         if (sp && sp.dropped && sp.dropped()) {
           // a small picture that arrives after the sharp one (or after a restore) is never shown
@@ -1281,14 +1142,12 @@ function loadLevel(tex, seq, level) {
         else setEarthImage(tex, bmp);
         console.log(`[Earth] Loaded: ${initialPath} (${dims})`);
         recordTexEvent('loaded', initialPath, { width: bw, height: bh });
-        // §13 boot timeline (?logBoot=1): no-op when the flag is off.
         bootMark(`Earth texture decoded: ${initialPath.split('/').pop()} (${dims})`);
       } catch (e) {
         console.error(`[Earth] Texture arrival failed: ${initialPath}`, e);
       }
     };
-    // st7: the run-time pixel check of the strip path normally finishes long
-    // before a 16k picture is decoded; if not, this picture waits for it.
+    // The run-time pixel check of the strip path normally finishes long before a 16k picture is decoded; if not, this picture waits for it.
     const feeder = tex.userData.strips && tex.userData.strips.feeder;
     if (feeder && feeder.verdict === null) {
       feeder.verify().then(() => {
@@ -1298,7 +1157,6 @@ function loadLevel(tex, seq, level) {
     } else place();
   };
 
-  // Today's path: three's ImageBitmapLoader on the main thread.
   const viaLoader = () => {
     let settled = false;
     getBitmapLoader().load(
@@ -1320,13 +1178,11 @@ function loadLevel(tex, seq, level) {
     );
   };
 
-  // st8: fetch + decode in the worker; any worker failure → the main-thread loader.
   const viaWorker = (w) => {
     w.decode(absoluteUrl(initialPath), pic && pic.decodeExtra).then(arrive, (err) => {
-      // A decode failure (not a missing file) means this browser's worker cannot decode what
-      // the 2×2 PNG self-test could not show (AVIF in a worker, a killed worker): stop using it.
-      // st9 review: a failed small picture is simply dropped; it must not retire the worker,
-      // or the sharp pictures still queued in it would fall back to main-thread decoding.
+      // A decode failure (not a missing file) means this worker cannot decode what the 2×2 self-test could not show
+      // (AVIF in a worker, a killed worker): stop using it. A failed small picture is just dropped: retiring the worker
+      // would send the sharp pictures still queued in it to main-thread decoding.
       if (isSmall) { if (!stale()) console.warn(`[Earth] small picture ${initialPath} could not be decoded in the worker; the sharp one comes alone`, err); return; }
       if (!/^HTTP \d{3}/.test(String((err && err.message) || err))) retireWorker(w);
       if (stale()) return;
@@ -1339,11 +1195,9 @@ function loadLevel(tex, seq, level) {
   const start = () => {
     if (stale()) return;
     const w = usableWorker();
-    // st8: the worker starts decoding after the game's first frame, not during
-    // start-up (measured: decoding in parallel with the boot made the menu 30-95 ms
-    // later and landed the pictures in the first game-loop frame); the old
-    // main-thread path is unchanged.
-    if (isSmall && !w) return; // st9: no worker, no small picture (the sharp one comes alone, as before)
+    // The worker starts decoding after the game's first frame, not during start-up (measured: parallel with the boot
+    // it made the menu 30–95 ms later and landed the pictures in the first game-loop frame).
+    if (isSmall && !w) return; // no worker, no small picture (the sharp one comes alone)
     if (w) afterFirstFrame(() => { if (!stale()) viaWorker(w); }, isSmall); else viaLoader();
   };
   // The worker's self-test normally ended long before the first picture is asked for.
@@ -1358,11 +1212,9 @@ function placeImage(tex, image, level) {
 }
 
 /**
- * The pre-st3 path (HTML image via THREE.TextureLoader, AVIF → JPG fallback),
- * assigning into the already-returned texture. three honours `flipY` only for
- * HTML images, so it is set to true before one is assigned.
- * st8: `level` picks the tier's file (see tierSources); when neither the AVIF nor
- * the JPG of a tier can be had, the next smaller tier is tried.
+ * HTML image path (THREE.TextureLoader, AVIF → JPG fallback), assigning into the already-returned texture. three
+ * honours `flipY` only for HTML images, so it is set true before one is assigned. `level` picks the tier's file
+ * (see tierSources); when neither the AVIF nor the JPG of a tier can be had, the next smaller tier is tried.
  */
 function loadViaImageLoader(tex, seq, level = 0) {
   const { path, useAvif, initialPath } = tierSources(tex.userData.src)[level];
@@ -1382,7 +1234,6 @@ function loadViaImageLoader(tex, seq, level = 0) {
     (err) => {
       if (stale()) return;
       if (useAvif) {
-        // AVIF file missing or decode failed at runtime — fall back to JPG.
         console.warn(`[Earth] AVIF load failed for ${initialPath}, falling back to ${path}`, err);
         recordTexEvent('avif-fail', initialPath, null);
         textureLoader.load(path, (loaded) => {
@@ -1394,7 +1245,6 @@ function loadViaImageLoader(tex, seq, level = 0) {
           recordTexEvent('fallback-loaded', path, loaded.image);
           bootMark(`Earth texture decoded (fallback): ${path.split('/').pop()} (${loaded.image?.width}×${loaded.image?.height})`);
         }, undefined, (err2) => {
-          // Both AVIF and JPG failed — the next smaller tier, else the texture will sample black forever.
           console.error(`[Earth] Fallback JPG load ALSO failed: ${path}`, err2);
           recordTexEvent('error', path, null);
           nextTier(tex, seq, level);
@@ -1409,58 +1259,41 @@ function loadViaImageLoader(tex, seq, level = 0) {
 }
 
 /**
- * Load a texture, preferring the .avif sibling when the browser supports AVIF.
- * The Texture is returned at once and its picture arrives later. Pictures are
- * decoded off the main thread (ImageBitmapLoader) when the D3 self-test passed;
- * any bitmap failure reissues the load through THREE.TextureLoader (which keeps
- * the AVIF → JPG fallback) and patches the image into the returned texture so
- * the material binding stays valid.
+ * Load a texture, preferring the .avif sibling when the browser supports AVIF. The texture is returned at once and
+ * its picture arrives later. Pictures decode off the main thread when the bitmap self-test passed; a bitmap failure
+ * reissues the load through THREE.TextureLoader (AVIF → JPG fallback) and patches the image into the returned
+ * texture so the material binding stays valid.
  *
- * @param {string} path  JPG path (e.g. 'textures/earth_day_16k.jpg'). When AVIF
- *                       is supported, the .jpg suffix is rewritten to .avif.
+ * @param {string} path  JPG path (e.g. 'textures/earth_day_16k.jpg'); rewritten to .avif when AVIF is supported
  * @param {number} [anisotropy=8]
  * @param {{feeder: EarthStripFeeder|null, priority: number, onReady: Function, kind?: string, onOneShot?: Function, dropped?: Function|null, decodeExtra?: object}|null} [strips]
- *   st6: when given, a bitmap that the feeder accepts is built into a separate
- *   texture in strips and `onReady(finishedTexture)` is called once; this
- *   (returned) texture then stays the empty "not arrived yet" one.
- *   st9: `kind` is 'sharp' or 'small' (the base-tier picture shown first); a picture the
- *   feeder does not take (no feeder, too short, a failure) goes through `onOneShot(tex,
- *   image, flipY, level)` into a NEW texture instead of into this one; `dropped()` says
- *   a small picture is no longer wanted; `decodeExtra` = createImageBitmap options for
- *   this picture only.
- * @param {EarthOfflineKeeper|null} [keeper]
- *   st8: when given, it is told which 16k files this picture needs and when the
- *   picture is complete on screen at that tier (it then stores the file for offline).
- * @returns {THREE.Texture}
+ *   When given, a bitmap the feeder accepts is built into a separate texture in strips and
+ *   `onReady(finishedTexture)` is called once; the returned texture stays the empty "not arrived yet" one.
+ *   `kind` is 'sharp' or 'small' (the base-tier picture shown first); a picture the feeder does not take (no
+ *   feeder, too short, a failure) goes through `onOneShot(tex, image, flipY, level)` into a NEW texture instead;
+ *   `dropped()` says a small picture is no longer wanted; `decodeExtra` = createImageBitmap options for this picture only.
+ * @param {EarthOfflineKeeper|null} [keeper]  told which 16k files this picture needs and when it is complete on
+ *   screen at that tier (it then stores the file for offline)
  */
 export function loadTexture(path, anisotropy = 8, strips = null, keeper = null) {
   const avifPath = path.replace(/\.jpg$/i, '.avif');
   const useAvif = avifSupported && avifPath !== path;
   const initialPath = useAvif ? avifPath : path;
 
-  // A texture with no image and version 0 is skipped silently by three until
-  // the picture arrives.
+  // A texture with no image and version 0 is skipped silently by three until the picture arrives.
   const tex = new THREE.Texture();
   tex.userData.src = { path, useAvif, initialPath };
   if (strips) tex.userData.strips = strips;
-  // st8 D4: told when this picture is complete on screen at its own tier.
   if (keeper) { tex.userData.keeper = keeper; keeper.expect(initialPath); }
-  // Bitmaps are closed after their first upload (onEarthTextureUpdate). Any later
-  // change to this texture's anisotropy / filters / wrap / format makes three
-  // re-upload, which would hit a closed bitmap and throw: change those only
-  // through a reload (loadEarthImage), never on a live texture.
+  // Bitmaps are closed after their first upload (onEarthTextureUpdate). Changing anisotropy / filters / wrap / format
+  // on a live texture makes three re-upload, which would hit a closed bitmap and throw: change those only through a
+  // reload (loadEarthImage).
   tex.onUpdate = onEarthTextureUpdate;
   tex.colorSpace = THREE.SRGBColorSpace;
-  // flipY is ignored by three for ImageBitmaps (the loader flips instead); it is
-  // set to true again if an HTML image has to be used (loadViaImageLoader).
+  // three ignores flipY for ImageBitmaps (the loader flips instead); loadViaImageLoader sets it true again for an HTML image.
   tex.flipY = !bitmapPathOk;
-  // C1 (tier-gated): anisotropy is chosen by the caller from the detected LOD
-  // tier (see the Earth constructor) — the full 16x on capable 16k GPUs, less on
-  // weaker hardware — so the extra grazing-angle sampling cost only lands where
-  // it can be absorbed. three.js clamps this to renderer.capabilities
-  // .getMaxAnisotropy() at texture upload, so any value is a safe ceiling.
-  // (Anisotropy does not multiply texture memory; the old "16k RGBA ~ 1 GB VRAM"
-  // note was stale.)
+  // Anisotropy is chosen by the caller from the LOD tier (see the Earth constructor). three clamps it to
+  // renderer.capabilities.getMaxAnisotropy() at upload, so any value is a safe ceiling. It does not multiply texture memory.
   tex.anisotropy = anisotropy;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
@@ -1472,14 +1305,11 @@ export function loadTexture(path, anisotropy = 8, strips = null, keeper = null) 
 }
 
 /**
- * st3 D4: survive a lost graphics context. Bitmaps are closed after upload, so
- * after `webglcontextrestored` (three re-uploads every texture) the closed
- * images are replaced at once by a 1×1 placeholder (uploading a closed bitmap
- * throws) and the pictures are reloaded; each arrival disposes the texture
- * first (setEarthImage) so the big picture gets fresh GL storage.
- *
- * st6: a picture finished through strips is swapped back to its empty texture
- * and built again; strips in flight are dropped and requested again.
+ * Survive a lost graphics context. Bitmaps are closed after upload, so on `webglcontextrestored` (three re-uploads
+ * every texture) the closed images are replaced at once by a 1×1 placeholder (uploading a closed bitmap throws) and
+ * the pictures are reloaded; each arrival disposes the texture first (setEarthImage) for fresh GL storage.
+ * A picture finished through strips is swapped back to its empty texture and built again; strips in flight are
+ * dropped and requested again.
  *
  * @param {{dayTexture?: THREE.Texture, nightTexture?: THREE.Texture, cloudTexture?: THREE.Texture}} earth
  * @param {{domElement?: EventTarget}} renderer
@@ -1489,12 +1319,10 @@ export function attachEarthRestore(earth, renderer) {
   const target = renderer && renderer.domElement;
   if (!target || typeof target.addEventListener !== 'function') return () => {};
   const onRestored = () => {
-    // st6: strips in flight are dropped (the new context has none of their GPU
-    // memory); each of those pictures is requested again below.
+    // Strips in flight are dropped (the new context has none of their GPU memory); each is requested again below.
     const dropped = earth._strips ? earth._strips.abandonAll() : [];
-    // st9: an Earth with the small-first pictures. Every picture on screen (small or sharp, strip
-    // result or one-shot copy) lost its GPU copy, and a one-shot one has a closed bitmap that cannot
-    // be uploaded again, so ALL of them are dropped, including one in the middle of a blend. Only the
+    // Small-first Earth: every picture on screen (small or sharp, strip result or one-shot copy) lost its GPU copy, and a
+    // one-shot one has a closed bitmap that cannot be uploaded again, so ALL are dropped, including one mid-blend. Only the
     // sharp pictures are loaded again (no small stage after a restore); they blend in from black.
     if (typeof earth._resetPicture === 'function') {
       if (typeof earth._dropSmallPictures === 'function') earth._dropSmallPictures();
@@ -1508,8 +1336,7 @@ export function attachEarthRestore(earth, renderer) {
       const tex = earth[slot];
       if (!tex || !tex.userData || !tex.userData.src) continue;
       if (tex.userData.stripBuilt) {
-        // Finished through strips: the lost context took its GPU copy. Back to
-        // the empty texture (nothing allocated for it), then build it again.
+        // Finished through strips: the lost context took its GPU copy. Back to the empty texture, then build it again.
         const pending = tex.userData.pending;
         swapEarthPicture(earth, slot, pending);
         try { tex.dispose(); } catch (_e) { /* best effort */ }
@@ -1544,22 +1371,12 @@ function makeRestorePlaceholder() {
   return { width: 1, height: 1, isPlaceholder: true };
 }
 
-// ============================================================================
-// 16K FILES STORED FOR OFFLINE (st8, 2026-10-19)
-// ============================================================================
-//
-// The service worker precaches every texture EXCEPT the _16k ones (build-precache
-// excludes them: 6 MB of AVIF would double the first download). On a first visit
-// the page is not yet controlled when it fetches the 16k files, so they never
-// reach Cache Storage, and an offline start on a desktop then had no picture at
-// all. Fix (owner 2026-10-18/19: "default to local; updating in the background is
-// ok, but must not delay or interfere with startup or game"): once BOTH 16k
-// pictures are complete on screen and the page is controlled by the service
-// worker, the page asks for each file once, one at a time, low priority, and the
-// service worker's own cache-first rule stores the response (no service-worker
-// change). The browser keeps the downloaded bytes in a Blob outside the page, so
-// the page itself does almost nothing. A file already in Cache Storage is never
-// fetched again. Nothing happens on touch devices or below the 16k tier.
+// 16K FILES STORED FOR OFFLINE. The service worker precaches every texture EXCEPT the _16k ones (6 MB of AVIF would
+// double the first download), and on a first visit the page is not yet controlled when it fetches them, so they never
+// reach Cache Storage. Once BOTH 16k pictures are complete on screen and the page is controlled, it asks for each
+// file once, one at a time, low priority, and the service worker's cache-first rule stores the response (no
+// service-worker change). A file already in Cache Storage is never fetched again. Nothing happens on touch devices
+// or below the 16k tier. DECISIONS §16: default to local; background updates must not delay or interfere with start-up or the game.
 
 /** Wait after both pictures are complete before the first file is asked for (ms). */
 export const OFFLINE_START_DELAY_MS = 2000;
@@ -1586,13 +1403,11 @@ function browserOfflineEnv() {
 }
 
 /**
- * Stores the 16k files in Cache Storage for offline use (see the section note).
- * One per Earth. `expect(path)` registers a picture (only `_16k` files count, and
- * not on touch hardware); `complete(path)` says it is on screen at that tier; when
- * every expected picture is complete the work starts, once.
+ * Stores the 16k files in Cache Storage for offline use (see the section note). One per Earth. `expect(path)`
+ * registers a picture (only `_16k` files count, not on touch hardware); `complete(path)` says it is on screen at
+ * that tier; when every expected picture is complete the work starts, once.
  */
 export class EarthOfflineKeeper {
-  /** @param {object} [env]  browser pieces (injectable for tests) */
   constructor(env = offlineEnvOverride || browserOfflineEnv()) {
     this.env = env;
     /** @type {Map<string, boolean>} absolute url → complete on screen */
@@ -1602,7 +1417,6 @@ export class EarthOfflineKeeper {
     this.done = null;
   }
 
-  /** @returns {boolean} whether this file will be stored */
   expect(initialPath) {
     if (!/_16k\.[a-z0-9]+$/i.test(String(initialPath))) return false;
     if (this.env.touch()) return false;
@@ -1610,7 +1424,6 @@ export class EarthOfflineKeeper {
     return true;
   }
 
-  /** The picture of `initialPath` is complete on screen at its own tier. */
   complete(initialPath) {
     const url = this.env.absolute(initialPath);
     if (!this.files.has(url)) return;
@@ -1682,55 +1495,39 @@ function notePictureComplete(tex) {
   try { ud.keeper.complete(ud.src.initialPath); } catch (_e) { /* never break picture loading */ }
 }
 
-// ============================================================================
-// PICTURES TO THE GPU IN STRIPS (st6, 2026-10-18)
-// ============================================================================
-//
-// The one remaining start-up freeze was the upload of the 16k day picture:
-// 2.3 s in one frame (docs/research/2026-10-startup.md, phase 4). The cost is
-// the sRGB format of the texture (SRGB8_ALPHA8 16k ≈ 1.45 s, plain RGBA8 ≈
-// 150 ms on the same GPU), so the format stays and the work is cut up instead:
-// each picture goes to the GPU as horizontal strips of about 2 M texels, ONE per
-// rendered frame (Earth.update), into a texture that is allocated once with its
-// full mip chain, and the mipmaps are generated once after the last strip. The
-// texels are identical to the one-shot upload (probe: 0/255 at 5 mip levels and
-// every strip seam). Measured on Apple M5 Max / Chrome (ANGLE Metal): longest
-// frame 1480 ms → 31 ms for 16k, 310 → 25 ms for 8k.
-//
-// Until a picture is complete the Earth shows exactly what it showed before that
-// picture arrived: the texture the shaders hold stays EMPTY, and the finished
-// one replaces it in a single step (Earth._setPicture → onReady). Source of the
-// strips is a fresh THREE.Texture around the ImageBitmap that is never bound to
-// a material (a texture three has seen would take its framebuffer-blit branch).
-//
-// Used only on Chromium-family browsers (the one measured). Safari/WebKit gives
-// the same pixels but the 16k allocation alone took 1.1 s and the strips ~180 ms
-// each on the test Mac, so it keeps the one-shot upload; so does everything
-// else (Firefox: unmeasured), the HTML-image fallback, and any failure here.
+// PICTURES TO THE GPU IN STRIPS. Uploading the 16k day picture took 2.3 s in one frame
+// (archive/research/2026-10-startup.md, phase 4), mostly the sRGB format (SRGB8_ALPHA8 16k ≈ 1.45 s, RGBA8 ≈ 150 ms on
+// the same GPU), so the format stays and the work is cut up: each picture goes to the GPU as horizontal strips of
+// about 2 M texels, ONE per rendered frame (Earth.update), into a texture allocated once with its full mip chain;
+// mipmaps are generated once after the last strip. Texels are identical to the one-shot upload (probe: 0/255 at 5 mip
+// levels and every strip seam). Measured on Apple M5 Max / Chrome (ANGLE Metal): longest frame 1480 → 31 ms for 16k,
+// 310 → 25 ms for 8k.
+// Until a picture is complete the texture the shaders hold stays EMPTY; the finished one replaces it in a single step
+// (Earth._setPicture → onReady). The strips' source is a fresh THREE.Texture around the ImageBitmap, never bound to a
+// material (a texture three has seen would take its framebuffer-blit branch).
+// Chromium-family only (the one measured). Safari/WebKit gives the same pixels but the 16k allocation alone took 1.1 s
+// and each strip ~180 ms on the test Mac, so it keeps the one-shot upload; so do Firefox (unmeasured), the HTML-image
+// fallback and any failure here.
 
-/** st7: frames before the strip pixel check starts (it must be done long before the first 16k picture lands). */
+/** Frames before the strip pixel check starts (it must be done long before the first 16k picture lands). */
 export const CHECK_AFTER_TICKS = 20;
 
 /** Texels per strip (16k: 128 rows, 8k: 256 rows). */
 export const STRIP_TEXELS = 2 * 1024 * 1024;
 
 /**
- * st9: the largest SMALL picture (texels) that may be uploaded in one go when it cannot go
- * through strips (WebKit/iPad, a strip check that failed, a feeder that gave up). Measured
- * 2026-10-19: macOS WebKit one-shot uploads cost ~23 ns/texel (16k: 2.8-3.4 s), and the
- * 2048×1024 clouds made 29-111 ms frames there; Chromium's one-shot 66-147 ms. 0.5 M texels
- * (1024×512) is ~12 ms by that rate.
+ * Largest SMALL picture (texels) uploaded in one go when it cannot use strips (WebKit/iPad, failed strip check, feeder
+ * gave up). Measured: macOS WebKit one-shot ≈ 23 ns/texel (16k: 2.8–3.4 s; the 2048×1024 clouds made 29–111 ms
+ * frames), Chromium 66–147 ms; 0.5 M texels (1024×512) ≈ 12 ms by that rate.
  */
 export const SMALL_ONE_SHOT_MAX_TEXELS = 1024 * 512;
 
 /**
- * st9: on the one-shot route the worker decodes the small pictures at this size (createImageBitmap
- * resize options), so they fit SMALL_ONE_SHOT_MAX_TEXELS. A browser that ignores the options
- * sends the full size, which is then skipped (the sharp picture comes alone).
+ * On the one-shot route the worker decodes small pictures at this size (createImageBitmap resize options) so they fit
+ * SMALL_ONE_SHOT_MAX_TEXELS. A browser that ignores the options sends the full size, which is then skipped.
  */
 export const SMALL_ONE_SHOT_DECODE = Object.freeze({ resizeWidth: 1024, resizeHeight: 512, resizeQuality: 'medium' });
 
-/** Rows per strip for a picture `width` pixels wide. */
 export function stripRows(width) {
   return Math.max(1, Math.round(STRIP_TEXELS / Math.max(1, width)));
 }
@@ -1741,7 +1538,6 @@ export function stripsSupportedByBrowser(nav = typeof navigator !== 'undefined' 
   return Array.isArray(brands) && brands.some((b) => b && /^Chromium$/i.test(b.brand));
 }
 
-/** True when pictures built for `renderer` may use strips. */
 export function stripsUsable(renderer) {
   if (!bitmapPathOk || !renderer) return false;
   if (typeof renderer.initTexture !== 'function' || typeof renderer.copyTextureToTexture !== 'function') return false;
@@ -1752,24 +1548,16 @@ const _scratchCentre = new THREE.Vector3();
 const _scratchRel = new THREE.Vector3();
 const PICTURE_SLOTS = ['dayTexture', 'nightTexture', 'cloudTexture'];
 
-// ============================================================================
-// SMALL FIRST, THEN SHARPEN (st9, 2026-10-19)
-// ============================================================================
-//
-// Owner 2026-10-19: the clouds / surface appearing was "acceptable but a little
-// jarring"; he chose "small first, then sharpen". Above the base tier each slot
-// (day, night, clouds) first loads its BASE-tier file (already on the device: the
-// service worker precaches it), then the tier's own picture. Every picture that
-// completes BLENDS in over EARTH_BLEND_MS from what was on screen (black for the
-// first one), so nothing pops. The small pictures never count as "complete": that
-// word still means the sharp picture (notePictureComplete, the offline store of the
-// 16k files, earth.dayTexture / nightTexture / cloudTexture for BlackFrameProbe).
-//
-// Each finished picture is a texture object of its own (the strip result, or for the
-// one-shot route a new texture uploaded BEFORE it is shown); the texture returned by
-// loadTexture() stays an empty "loading" handle. A slot can show up to three pictures
-// at once (a blend that is interrupted by the next picture continues from the current
-// mix, no jump); the shader gets them as *Texture / *Prev / *Prev2 with weights *W.
+// SMALL FIRST, THEN SHARPEN. owner 2026-10-19: clouds/surface appearing was "acceptable but a little jarring"; he chose
+// "small first, then sharpen". Above the base tier each slot (day, night, clouds) first loads its BASE-tier file
+// (already on the device: the service worker precaches it), then the tier's own picture. Every completed picture
+// BLENDS in over EARTH_BLEND_MS from what was on screen (black for the first), so nothing pops.
+// Small pictures never count as "complete": that word still means the sharp picture (notePictureComplete, the offline
+// store, earth.dayTexture / nightTexture / cloudTexture for BlackFrameProbe).
+// Each finished picture is a texture object of its own (the strip result, or for one-shot a new texture uploaded
+// BEFORE it is shown); the texture returned by loadTexture() stays an empty "loading" handle. A slot can show up to
+// three pictures at once (an interrupted blend continues from the current mix, no jump); the shader gets them as
+// *Texture / *Prev / *Prev2 with weights *W.
 
 /** How long a picture takes to blend in (ms). One constant for all three slots. */
 export const EARTH_BLEND_MS = 1000;
@@ -1784,7 +1572,6 @@ export function blendEase(x) {
 const EMPTY_TEXTURE = new THREE.Texture();
 const EMPTY_LAYER = Object.freeze({ tex: EMPTY_TEXTURE, real: false });
 
-/** Uniform-name stem per picture slot. */
 const PICTURE_STEM = { dayTexture: 'Day', nightTexture: 'Night', cloudTexture: 'Cloud' };
 
 /** The clock of the blend: performance.now() (never dt: the game can hold dt at 0 or run unfocused). */
@@ -1809,7 +1596,6 @@ function setWeights(u, name, w) {
   else e.value = { x: w[0], y: w[1], z: w[2] };
 }
 
-/** The per-slot picture state (see the section note above). */
 function newPictureState(pending) {
   return {
     pending,               // the empty handle loadTexture() returned for the sharp picture
@@ -1835,13 +1621,9 @@ function closeBitmap(bmp) {
 }
 
 /**
- * st7: the run-time pixel check. Builds a tiny picture (top and bottom half in
- * different colours) the way a real one is built (same bitmap options, same
- * destination, two strips), uploads the same bitmap in one go as the reference,
- * draws both into a small target and compares the bytes. True only if the strip
- * result is identical to the reference. Never throws; about a millisecond or two.
- * @param {EarthStripFeeder} feeder
- * @returns {Promise<boolean>}
+ * Run-time pixel check: builds a tiny picture (top and bottom half in different colours) the way a real one is built
+ * (same bitmap options and destination, two strips), uploads the same bitmap in one go as the reference, draws both
+ * into a small target and compares the bytes. True only if identical. Never throws; ~1–2 ms.
  */
 async function runStripCheck(feeder) {
   const renderer = feeder.renderer;
@@ -1859,7 +1641,6 @@ async function runStripCheck(feeder) {
     g.fillStyle = 'rgb(30,200,120)'; g.fillRect(0, H / 2, W, H / 2);
     bmp = await createImageBitmap(canvas, { ...BITMAP_LOADER_OPTIONS });
 
-    // The reference: one-shot upload, with the same settings as a real picture.
     ref = new THREE.Texture(bmp);
     ref.colorSpace = THREE.SRGBColorSpace;
     ref.flipY = false;
@@ -1870,7 +1651,7 @@ async function runStripCheck(feeder) {
     ref.needsUpdate = true;
     // The strips: the feeder's own allocation + copy code, two strips of H/2 rows.
     dst = feeder._buildNow(ref, bmp, H / 2);
-    // Let a frame go by between the two halves of the work (each is its own task).
+    // Let a frame go by between the two halves (each is its own task).
     await new Promise((r) => setTimeout(r, 0));
 
     rt = new THREE.WebGLRenderTarget(W, H, {
@@ -1923,13 +1704,11 @@ async function runStripCheck(feeder) {
 
 /**
  * Builds the Earth pictures on the GPU one strip per `tick()`.
- * Order (st7): the side of the Earth the camera sees first. Camera over the sunlit
- * side (or not known yet): day, clouds, night. Over the dark side: night, day,
- * clouds. Decided when a picture starts, never in the middle of one; a picture
- * that has started is finished before the next one starts (each unfinished
- * picture holds its own full-size GPU allocation).
- * Used for a picture only if `verify()` found the strip result identical to a
- * one-shot upload (once, at start-up) and the picture fits the GPU's texture size.
+ * Order: the side of the Earth the camera sees first. Over the sunlit side (or not known yet): day, clouds, night;
+ * over the dark side: night, day, clouds. Decided when a picture starts; a started picture is finished before the
+ * next (each unfinished picture holds its own full-size GPU allocation).
+ * Used for a picture only if `verify()` found the strip result identical to a one-shot upload (once, at start-up) and
+ * the picture fits the GPU's texture size.
  */
 export class EarthStripFeeder {
   /**
@@ -1948,20 +1727,16 @@ export class EarthStripFeeder {
     this.verdict = null;
     this._verdictPromise = null;
     this._ticks = 0;
-    // A test check or the test switch answers at once. The real check touches the
-    // GPU (a few ms, ~50 ms measured under load 50), so it waits until the game is
-    // drawing frames (CHECK_AFTER_TICKS), or a picture arrives, whichever is first.
+    // A test check or the test switch answers at once. The real check touches the GPU (a few ms, ~50 ms measured under
+    // load 50), so it waits for CHECK_AFTER_TICKS frames or a picture arriving, whichever is first.
     if (stripCheckHook || stripsForced !== null) this.verify();
   }
 
-  /** @returns {boolean} true while pictures are queued or being built */
   get busy() { return !!this.active || this.queue.length > 0; }
 
   /**
-   * st7: the run-time pixel check (plan D1), run once; the answer is cached in
-   * `verdict`. Never throws. Under the test switch `stripsOk` it is skipped (true)
-   * unless a test brings its own check.
-   * @returns {Promise<boolean>}
+   * The run-time pixel check, run once; cached in `verdict`. Never throws. Skipped (true) under the test switch
+   * `stripsOk` unless a test brings its own check.
    */
   verify() {
     if (this._verdictPromise) return this._verdictPromise;
@@ -1988,13 +1763,10 @@ export class EarthStripFeeder {
   }
 
   /**
-   * Does this bitmap go through strips? Needs: the pixel check passed, more than
-   * one strip of rows, a live context, and a size the GPU accepts (a bigger one is
-   * shrunk by the one-shot upload; strips would fail on it).
-   * st9: a SMALL picture one strip tall (the 2048×1024 clouds) is taken too, as a single
-   * strip: measured 2026-10-19, its one-shot upload made a 66-147 ms frame in every warm
-   * Chromium run, where a strip of the same size costs a normal frame.
-   * @param {object} bmp
+   * Does this bitmap go through strips? Needs: the pixel check passed, more than one strip of rows, a live context, and
+   * a size the GPU accepts (a bigger one is shrunk by the one-shot upload; strips would fail on it). A SMALL picture
+   * one strip tall (the 2048×1024 clouds) is taken too, as a single strip: its one-shot upload made a 66–147 ms frame in
+   * every warm Chromium run, where a strip of the same size costs a normal frame.
    * @param {string} [kind]  'small' | 'sharp'
    */
   accepts(bmp, kind) {
@@ -2004,10 +1776,9 @@ export class EarthStripFeeder {
   }
 
   /**
-   * Queue a picture; `onReady(finishedTexture)` runs once, after its last strip.
-   * st9: `meta.kind` ('small' | 'sharp') ranks the job (every small picture is built before any
-   * sharp one) and `meta.level` is the tier the picture was decoded at, recorded NOW (a later
-   * decode into the same slot must not relabel this job's result).
+   * Queue a picture; `onReady(finishedTexture)` runs once, after its last strip. `meta.kind` ('small' | 'sharp') ranks
+   * the job (every small picture is built before any sharp one); `meta.level` is the tier the picture was decoded at,
+   * recorded NOW (a later decode into the same slot must not relabel this job's result).
    * @param {{kind?: string, level?: number}} [meta]
    */
   enqueue(tex, bmp, priority, onReady, meta = {}) {
@@ -2018,16 +1789,12 @@ export class EarthStripFeeder {
     });
   }
 
-  /**
-   * One step of work: allocate the next picture, or upload its next strip.
-   * Nothing happens while the context is lost.
-   * @returns {boolean} whether a step ran
-   */
+  /** One step of work: allocate the next picture, or upload its next strip. Nothing happens while the context is lost. */
   tick() {
     if (this.verdict === null && !this._verdictPromise && ++this._ticks >= CHECK_AFTER_TICKS) this.verify();
     if (this._lost()) return false;
     if (!this.active) {
-      // st9: a queued small picture whose sharp one is already shown (or after a restore) is never built
+      // a queued small picture whose sharp one is already shown (or after a restore) is never built
       for (let i = this.queue.length - 1; i >= 0; i--) {
         const j = this.queue[i];
         const sp = j.kind === 'small' && j.tex.userData.strips;
@@ -2036,8 +1803,7 @@ export class EarthStripFeeder {
       if (this.queue.length === 0) return false;
       let sunlit = true;
       try { if (this.sunlit) sunlit = this.sunlit() !== false; } catch (_e) { sunlit = true; }
-      // priority: 0 day, 1 clouds, 2 night. Dark side in view: night, day, clouds.
-      // st9: every small picture comes before any sharp one (a whole Earth first), then by priority.
+      // priority: 0 day, 1 clouds, 2 night; dark side in view: night, day, clouds. Every small picture comes before any sharp one.
       const rank = (p) => (sunlit ? p : (p === 2 ? 0 : p + 1));
       const stage = (j) => (j.kind === 'small' ? 0 : 1);
       let best = 0;
@@ -2090,7 +1856,7 @@ export class EarthStripFeeder {
     job.height = bmp.height;
   }
 
-  /** st7: allocate and fill a whole picture at once (the pixel check uses this). */
+  /** Allocate and fill a whole picture at once (the pixel check uses this). */
   _buildNow(tex, bmp, rows) {
     const job = { tex, bmp, rows, step: 0, dst: null, src: null, count: 0 };
     this._allocate(job);
@@ -2122,8 +1888,8 @@ export class EarthStripFeeder {
     dst.userData.uploadedHeight = job.height;
     dst.userData.stripBuilt = true;
     dst.userData.pending = tex;
-    // st8/st9: the tier and the owner of this result are the ones recorded when the job was queued
-    // (never read from the slot's texture now: another decode may have changed it since).
+    // The tier and owner of this result are the ones recorded when the job was queued (never read from the slot's
+    // texture now: another decode may have changed it).
     dst.userData.loadedLevel = job.level;
     dst.userData.stage = job.kind;
     if (job.kind !== 'small') dst.userData.keeper = tex.userData.keeper; // a small picture never counts as "complete"
@@ -2135,9 +1901,9 @@ export class EarthStripFeeder {
   }
 
   /**
-   * Upload a queued picture in one go (the strips cannot be used). st9: a small picture is not
-   * worth a heavy upload and is dropped (the sharp one comes alone); a sharp one of an Earth
-   * goes through its one-shot hook (a new texture, blended in), any other into its own texture.
+   * Upload a queued picture in one go (strips cannot be used). A small picture is not worth a heavy upload and is
+   * dropped (the sharp one comes alone); a sharp one of an Earth goes through its one-shot hook (a new texture, blended
+   * in), any other into its own texture.
    */
   _oneShot(job) {
     if (job.kind === 'small') { closeBitmap(job.bmp); return; }
@@ -2173,81 +1939,50 @@ export class EarthStripFeeder {
   }
 }
 
-// ============================================================================
-// ADAPTIVE TEXTURE QUALITY
-// ============================================================================
-
 /**
- * Pure LOD selector — testable without DOM/WebGL.
- * Primary signal: maxTextureSize from renderer capabilities.
- * Secondary signal: deviceMemory + Apple-GPU heuristics (Safari fallback).
+ * Pure LOD selector, testable without DOM/WebGL. Primary signal: maxTextureSize from renderer capabilities.
+ * Secondary: deviceMemory + Apple-GPU heuristics (Safari fallback).
  *
- * @param {number} maxTextureSize - renderer.capabilities.maxTextureSize (or gl.MAX_TEXTURE_SIZE)
- * @param {number|undefined} deviceMemory - navigator.deviceMemory (undefined on Safari/Firefox)
- * @param {boolean} [isAppleGPU=false] - true when WEBGL_debug_renderer_info contains 'Apple'
+ * @param {number|undefined} deviceMemory  navigator.deviceMemory (undefined on Safari/Firefox)
+ * @param {boolean} [isAppleGPU=false]  WEBGL_debug_renderer_info contains 'Apple'
  * @returns {'16k'|'8k'|''}
  */
 export function selectLOD(maxTextureSize, deviceMemory, isAppleGPU = false) {
   // Memory: default to 8 GB when unavailable (Safari on macOS = capable HW)
   const memory = deviceMemory ?? 8;
 
-  // Primary signal: GPU maxTextureSize drives LOD tier
   if (maxTextureSize >= Constants.EARTH.LOD_16K_THRESHOLD) {
-    // Secondary guard: Apple Silicon or ≥8 GB for 16k (keeps existing safety check)
     if (memory >= 8 || isAppleGPU) return '16k';
-    // GPU claims 16k but memory is low — fall to 8k
     return '8k';
   }
   if (maxTextureSize >= Constants.EARTH.LOD_8K_THRESHOLD) {
     if (memory >= 4) return '8k';
-    return ''; // low memory + 8k GPU — use base
+    return '';
   }
-  return ''; // base resolution (4k or less)
+  return '';
 }
 
 /*
- * Picture sizes on a capable desktop: day AND night maps are 16k (owner
- * 2026-10-18: "8k looks like shit, defeats the whole purpose of this game ...
- * back to 16k", then "Night 16k too"). Do not cap either.
- *
- * History (OPEN-2, 2026-08-31, commit 31b6fd47): the night map was capped at
- * 8k on Apple GPUs because on the owner's M4 Max (Brave, ANGLE-Metal) the 16k
- * night-side city lights rendered pure BLACK in long real sessions (and under
- * DevTools the 16k day map once blanked too), while every GL-visible witness
- * stayed healthy (decoded 16384×8192, upload complete, zero gl.getError, zero
- * context losses) and headed runs on the same GPU rendered 16k fine even under
- * a 10 GB allocation. Best explanation, never proven: long-session Metal
- * residency eviction of the largest textures (512 MB + mips apiece). If the
- * lights go black again, check `?bfp=1` and BLACK_SCREEN_TRIAGE.md first;
- * the owner decides any cap. `?tex=16k|8k|base` still forces both maps.
+ * Day AND night maps are 16k on a capable desktop; do not cap either (DECISIONS §16).
+ * The night map was once capped at 8k on Apple GPUs (OPEN-2): on an M4 Max (Brave, ANGLE-Metal) the 16k night-side
+ * city lights rendered pure BLACK in long real sessions while every GL-visible witness stayed healthy (decoded,
+ * uploaded, zero gl.getError, zero context losses). Best explanation, never proven: long-session Metal residency
+ * eviction of the largest textures (512 MB + mips apiece). If the lights go black again, check `?bfp=1` and
+ * BLACK_SCREEN_TRIAGE.md first; the owner decides any cap. `?tex=16k|8k|base` still forces both maps.
  */
 
 /**
- * iPad port Phase 2 (Ipad.md §4.2 resolution discipline + §4.5 touch gate):
- * cap the WHOLE texture stack at 8k on real touch hardware.
- *
- * Why this exists — two independent reasons, both device-verified classes:
- *   1. Offline permanence: the sw.js precache is capped at the 8k tier
- *      (no *_16k.* — scripts/build-precache.mjs), so an iPad that selected
- *      16k would request a file the offline cache can never hold and boot a
- *      black Earth the first time it's launched unplugged. The clamp makes
- *      the capped precache exactly cover what glass ever requests.
- *   2. Resolution discipline on glass: an iPad reports Apple GPU +
- *      maxTextureSize 16384 and would walk into the 512 MB (+mips) 16k day
- *      map — the exact resource class that goes residency-black in long
- *      sessions on Apple GPUs (OPEN-2, see the note above) — on a device
- *      with none of a Mac's memory headroom.
- *
- * Gate: TouchControls.detect() — the ONE touch gate (Ipad.md §4.5). Desktops
- * and headless bench contexts report no touch, so desktop texture selection
- * is byte-identical by construction. The `?tex=16k` URL override in
- * getTextureQuality() bypasses this clamp (it returns before detection), so
- * the full 16k set stays one URL away for on-glass A/B.
- *
+ * Cap the WHOLE texture stack at 8k on real touch hardware (Ipad.md §4.2, §4.5). Two reasons:
+ *   1. Offline: the sw.js precache is capped at the 8k tier (no *_16k.*, scripts/build-precache.mjs), so an iPad that
+ *      selected 16k would request a file the offline cache can never hold and boot a black Earth when launched unplugged.
+ *   2. An iPad reports Apple GPU + maxTextureSize 16384 and would take the 512 MB (+mips) 16k day map, the resource
+ *      class that goes residency-black on Apple GPUs (OPEN-2, see the note above), with none of a Mac's headroom.
+ * Gate: TouchControls.detect(), the ONE touch gate. Desktops and headless bench contexts report no touch, so their
+ * selection is unchanged. The `?tex=16k` override in getTextureQuality() returns before detection and bypasses this clamp.
  * Pure + exported for the Node suite, like selectLOD.
  *
  * @param {'16k'|'8k'|''} quality  overall tier from selectLOD()
- * @param {boolean} hasTouch      real-touch detection result
+ * @param {boolean} hasTouch  real-touch detection result
  * @returns {'16k'|'8k'|''} day-map tier (== quality except 16k-on-touch → 8k)
  */
 export function clampLODForGlass(quality, hasTouch) {
@@ -2256,32 +1991,22 @@ export function clampLODForGlass(quality, hasTouch) {
 }
 
 /**
- * Detect hardware capability and return the best texture quality tier.
- * Gathers runtime inputs, delegates to selectLOD() for the actual decision.
- *
- * st2-start-quick D3: when the game's own renderer exists it is asked for the
- * maximum texture size and the Apple GPU string, so no throw-away WebGL context
- * is built just to read them (a cost of ~20 ms on a GPU, seconds on a software
- * renderer). With no renderer (tests, other callers) the old probe canvas runs,
- * and each probe context is released with WEBGL_lose_context after reading.
+ * Detect hardware capability and return the best texture quality tier; selectLOD() makes the decision.
+ * With the game's own renderer, max texture size and the Apple GPU string are read from it (a throw-away WebGL
+ * context costs ~20 ms on a GPU, seconds on a software renderer). Without one (tests, other callers) a probe canvas
+ * runs, each probe context released with WEBGL_lose_context after reading.
  *
  * @param {object} [opts]
- * @param {{capabilities?: {maxTextureSize?: number}, getContext?: Function}} [opts.renderer]
- *   the game's THREE.WebGLRenderer (or a stand-in)
- * @param {Document} [opts.doc] document used for the probe canvas (default: global)
- * @param {Navigator} [opts.nav] navigator for deviceMemory (default: global)
+ * @param {{capabilities?: {maxTextureSize?: number}, getContext?: Function}} [opts.renderer]  the game's THREE.WebGLRenderer (or a stand-in)
+ * @param {Document} [opts.doc]  document for the probe canvas (default: global)
+ * @param {Navigator} [opts.nav]  navigator for deviceMemory (default: global)
  * @returns {{quality: '16k'|'8k'|'', dayQuality: '16k'|'8k'|'', nightQuality: '16k'|'8k'|''}}
- *   `quality` = hardware tier (mesh detail, anisotropy, cloud file);
- *   `dayQuality` = `nightQuality` = `quality` (16k day and night kept, owner 2026-10-18)
+ *   `quality` = hardware tier (mesh detail, anisotropy, cloud file); `dayQuality` = `nightQuality` = `quality` (DECISIONS §16)
  */
 export function getTextureQuality({ renderer, doc, nav } = {}) {
-  // Black-flicker triage (H3) / OPEN-2 (16k night texture renders black on
-  // ANGLE-Metal): `?tex=16k|8k|base` overrides hardware LOD detection so the
-  // 1.2+ GB 16k day+night set can be A/B'd against 8k in one URL, no rebuild.
-  // Opt-in, exact-value only (DevShotGate idiom); any other value falls through
-  // to detection. Dev-only — never ship URLs with it. The override forces the
-  // NIGHT map too — that is the point:
-  // ?tex=16k must reproduce the full failing 16k set on demand.
+  // `?tex=16k|8k|base` overrides hardware LOD detection (the NIGHT map too) so the 1.2+ GB 16k set can be A/B'd against
+  // 8k in one URL (OPEN-2 triage). Opt-in, exact-value only (DevShotGate idiom); any other value falls through to
+  // detection. Dev-only: never ship URLs with it.
   try {
     if (typeof window !== 'undefined' && typeof URLSearchParams !== 'undefined') {
       const raw = (new URLSearchParams(window.location.search).get('tex') || '').toLowerCase();
@@ -2298,7 +2023,7 @@ export function getTextureQuality({ renderer, doc, nav } = {}) {
 
   // navigator.deviceMemory is Chrome/Edge only (NOT available in Safari/Firefox).
   const navigatorRef = nav || (typeof navigator !== 'undefined' ? navigator : undefined);
-  const deviceMemory = navigatorRef ? navigatorRef.deviceMemory : undefined; // may be undefined
+  const deviceMemory = navigatorRef ? navigatorRef.deviceMemory : undefined;
 
   // The Apple string is read from the debug-info extension (Safari-specific fallback).
   const readAppleGPU = (gl) => {
@@ -2319,8 +2044,7 @@ export function getTextureQuality({ renderer, doc, nav } = {}) {
   }
   if (!fromRenderer) {
     const d = doc || document;
-    // Probe path (no renderer yet). The context is released after reading so a
-    // throw-away context never lingers (a second one only when webgl2 fails).
+    // Probe path (no renderer yet): each context is released after reading so a throw-away context never lingers.
     const probes = [];
     const open = (kind) => {
       const gl = d.createElement('canvas').getContext(kind);
@@ -2346,11 +2070,10 @@ export function getTextureQuality({ renderer, doc, nav } = {}) {
     // Touch gate (Ipad.md §4.5): glass caps at 8k — see clampLODForGlass.
     TouchControls.detect()
   );
-  // Day and night pictures ride the full hardware tier (16k on a capable
-  // desktop; owner 2026-10-18 — see the note above clampLODForGlass).
+  // Day and night ride the full hardware tier (DECISIONS §16).
   const dayQuality = quality;
   const nightQuality = quality;
-  // PR 5 / P2.10: gate verbose LOD log behind DEBUG flag (?debug=1).
+  // verbose LOD log behind ?debug=1
   if (Constants && Constants.DEBUG && Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS) {
     console.log(`[Earth] LOD selected: ${quality || '4k (base)'} (pictures: day ${dayQuality || '4k (base)'}, night: ${nightQuality || '4k (base)'}). MaxTextureSize=${maxTextureSize}`);
   }
@@ -2358,35 +2081,26 @@ export function getTextureQuality({ renderer, doc, nav } = {}) {
 }
 
 /**
- * Sphere tessellation per texture-quality tier (visual-detail audit Task 3b).
- * Pure + exported for tests, mirroring {@link selectLOD}. The Earth sphere was
- * a hard-coded 256×256 (~131k tris) on EVERY device — the single biggest
- * static vertex load in the scene — while only its textures/shaders were
- * tiered. Segment counts ride the same hardware signal the textures use:
- * a GPU that only rates base/8k textures does not resolve 256² geometry either.
- * Applied at CONSTRUCTION only: live tier changes do NOT rebuild geometry
- * (a mid-session downgrade keeps the built spheres — acceptable, geometry is
- * static vertex cost, and rebuilding Earth live would hitch).
+ * Sphere tessellation per texture-quality tier. Pure + exported for tests, like selectLOD. A hard-coded 256×256
+ * (~131k tris) on every device was the biggest static vertex load in the scene; segment counts now ride the same
+ * hardware signal as the textures. Applied at CONSTRUCTION only: a live tier change does not rebuild the spheres
+ * (static vertex cost; rebuilding would hitch).
  *
  * @param {'16k'|'8k'|''} quality  from selectLOD()/getTextureQuality()
- * @returns {{surface:number, clouds:number, atmosphere:number}} widthSegments
- *   (heightSegments uses the same value; atmosphere is analytic-shaded and
- *   needs the least)
+ * @returns {{surface:number, clouds:number, atmosphere:number}} widthSegments (heightSegments uses the same value;
+ *   the analytic atmosphere needs the least)
  */
 export function selectSphereSegments(quality) {
-  if (quality === '16k') return { surface: 256, clouds: 128, atmosphere: 64 }; // unchanged top tier
+  if (quality === '16k') return { surface: 256, clouds: 128, atmosphere: 64 };
   if (quality === '8k')  return { surface: 160, clouds: 96,  atmosphere: 64 };
-  return { surface: 96, clouds: 64, atmosphere: 48 };                          // base/weak GPUs
+  return { surface: 96, clouds: 64, atmosphere: 48 };
 }
 
-// ============================================================================
-// EARTH CLASS
-// ============================================================================
 export class Earth {
   /**
    * @param {THREE.Scene} scene
-   * @param {{renderer?: THREE.WebGLRenderer}} [options] renderer: the game's own,
-   *   so the texture-tier probe needs no throw-away WebGL context (st2 D3)
+   * @param {{renderer?: THREE.WebGLRenderer}} [options] renderer: the game's own, so the texture-tier probe needs no
+   *   throw-away WebGL context
    */
   constructor(scene, options = {}) {
     this.scene = scene;
@@ -2395,51 +2109,37 @@ export class Earth {
 
     this.sunDirection = new THREE.Vector3(1, 0.3, 0.5).normalize();
 
-    // Sprint 2 / PR C — LOW_DETAIL fragment-shader branch flag.
-    // Toggled by [`Earth.setLowDetail`](js/scene/Earth.js:1), wired through
-    // [`SceneManager.applyTier()`](js/scene/SceneManager.js:275).
-    //
-    // Sprint 3 GPU profiling — `?disableEarthNoise=1` force-pins LOW_DETAIL
-    // on at construction so the 7-octave noise stack is compiled out
-    // regardless of which quality tier is active. Lets us A/B the entire
-    // procedural-terrain cost in one session.
+    // LOD-tier flag for the LOW_DETAIL fragment-shader branch, toggled by Earth.setLowDetail (SceneManager.applyTier).
+    // `?disableEarthNoise=1` force-pins it on at construction so the 7-octave noise stack is compiled out at every
+    // tier (A/B of the procedural-terrain cost).
     this._useLowDetail = profileFlags.disableEarthNoise === true;
 
-    // Adaptive quality: pick texture resolution based on hardware. `quality` is
-    // the hardware tier (mesh detail, anisotropy, cloud file); the day and night
-    // pictures follow it (16k on a capable desktop, owner 2026-10-18).
+    // Texture resolution by hardware. `quality` = hardware tier (mesh detail, anisotropy, cloud file); day and night
+    // follow it (16k on a capable desktop, DECISIONS §16).
     const { quality, dayQuality, nightQuality } = getTextureQuality({ renderer: options && options.renderer });
     const texSuffix = dayQuality ? `_${dayQuality}` : '';
     const nightSuffix = nightQuality ? `_${nightQuality}` : '';
     const cloudSuffix = quality === '16k' ? '_8k' : (quality === '8k' ? '_8k' : '');
-    // Sphere tessellation rides the same hardware signal (Task 3b) — see
-    // selectSphereSegments() for the rationale + construction-only caveat.
-    // Keyed on the DAY tier: geometry detail tracks the primary map.
+    // Sphere tessellation rides the hardware tier; construction-only (see selectSphereSegments).
     this._sphereSegments = selectSphereSegments(quality);
 
     console.log(`[Earth] Texture quality: hardware ${quality || 'base'}, pictures day "${texSuffix || 'base'}" night "${nightSuffix || 'base'}"`);
 
-    // C1 (tier-gated anisotropy): scale the grazing-angle sampling cost with the
-    // detected LOD tier so the weakest GPUs — the base tier (low maxTextureSize /
-    // low memory), the same population the LOW render tier targets — don't pay for
-    // 16x. 8k-capable hardware gets 8x; 16k-capable (Apple Silicon / >=8 GB) gets
-    // the full 16x.
+    // Anisotropy scales with the LOD tier so the weakest GPUs (base tier) don't pay for 16x: 4 / 8 / 16.
     const texAniso = quality === '16k' ? 16 : (quality === '8k' ? 8 : 4);
 
-    // Load the pictures at their tiers (aniso stays keyed on the hardware tier;
-    // three.js clamps it at upload anyway).
-    // st6: on a strip-capable browser each picture is built on the GPU one strip
-    // per frame (priority day, clouds, night) and swapped in when complete.
+    // Aniso stays keyed on the hardware tier. On a strip-capable browser each picture is built on the GPU one strip per
+    // frame (priority day, clouds, night) and swapped in when complete.
     this._camPos = new THREE.Vector3();
     this._camSeen = false;
     this._renderer = (options && options.renderer) || null;
     this._strips = options && stripsUsable(options.renderer)
       ? new EarthStripFeeder(options.renderer, { sunlit: () => this._cameraOverSunlitSide() })
       : null;
-    // st9: the picture state per slot exists before any picture is asked for (arrivals call back into it).
+    // The picture state per slot exists before any picture is asked for (arrivals call back into it).
     this._pics = {};
-    // The staging hook of one picture (st6 strips + st9 stages): where its result goes.
-    // kind 'sharp' = the tier's own picture, 'small' = the base-tier picture shown first.
+    // The staging hook of one picture: where its result goes. kind 'sharp' = the tier's own picture, 'small' = the
+    // base-tier picture shown first.
     const hook = (slot, priority, kind) => ({
       kind, slot, priority,
       feeder: this._strips,
@@ -2449,34 +2149,30 @@ export class Earth {
       // no strips on this browser: decode the small picture small enough for one frame
       decodeExtra: kind === 'small' && !this._strips ? SMALL_ONE_SHOT_DECODE : undefined,
     });
-    // st8 D4: stores the 16k files for offline once both are on screen (nothing below 16k / on touch).
-    // (The sharp pictures are asked for in this order; the small ones follow below and are
-    // DISPATCHED ahead of them once the first frame is drawn, see afterFirstFrame.)
+    // Stores the 16k files for offline once both are on screen (nothing below 16k / on touch). The sharp pictures are
+    // asked for in this order; the small ones follow below and are DISPATCHED ahead of them once the first frame is
+    // drawn (afterFirstFrame).
     this._offline = new EarthOfflineKeeper();
     this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso, hook('dayTexture', 0, 'sharp'), this._offline);
     this.nightTexture = loadTexture(`textures/earth_night${nightSuffix}.jpg`, texAniso, hook('nightTexture', 2, 'sharp'), this._offline);
-    // Clouds are low-frequency; anisotropy cost concentrates at grazing angles
-    // (the limb) where clouds are softest — 4x is indistinguishable from the tier
-    // aniso and trims bandwidth on the overdraw-heaviest (transparent) layer.
+    // Clouds are low-frequency and anisotropy cost concentrates at grazing angles (the limb), where clouds are softest:
+    // 4x is indistinguishable from the tier value and trims bandwidth on the overdraw-heaviest (transparent) layer.
     this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`, Math.min(texAniso, 4), hook('cloudTexture', 1, 'sharp'));
     this._pics.dayTexture = newPictureState(this.dayTexture);
     this._pics.nightTexture = newPictureState(this.nightTexture);
     this._pics.cloudTexture = newPictureState(this.cloudTexture);
-    // st9 D1: above the base tier each slot shows its base-tier picture first (never at the base
-    // tier or with ?tex=base: there is nothing smaller). Order = the strip order (day, clouds, night).
+    // Above the base tier each slot shows its base-tier picture first (never at the base tier or with ?tex=base: nothing
+    // is smaller). Order = the strip order (day, clouds, night).
     if (smallFirstOn) {
       if (texSuffix) this._pics.dayTexture.small = loadTexture('textures/earth_day.jpg', texAniso, hook('dayTexture', 0, 'small'));
       if (cloudSuffix && !profileFlags.disableClouds) this._pics.cloudTexture.small = loadTexture('textures/earth_clouds.jpg', Math.min(texAniso, 4), hook('cloudTexture', 1, 'small'));
       if (nightSuffix) this._pics.nightTexture.small = loadTexture('textures/earth_night.jpg', texAniso, hook('nightTexture', 2, 'small'));
     }
-    // st3 D4: bitmaps are closed after upload; reload them after a lost context.
+    // Bitmaps are closed after upload; reload them after a lost context.
     if (options && options.renderer) attachEarthRestore(this, options.renderer);
 
     this._createSurface();
-    // Sprint 3 GPU profiling — `?disableClouds=1` skips the 8K-textured
-    // 128×128 transparent cloud sphere entirely. Isolates cloud-layer
-    // fragment + bandwidth cost (transparent + depthWrite=false sphere is a
-    // known bandwidth pig at 5760×3600).
+    // `?disableClouds=1` skips the cloud sphere (transparent, depthWrite=false: a bandwidth hog at 5760×3600) to isolate its cost.
     if (!profileFlags.disableClouds) {
       this._createClouds();
     } else {
@@ -2484,7 +2180,7 @@ export class Earth {
       this.cloudMaterial = null;
       console.info('[Earth] cloud layer skipped (?disableClouds=1)');
     }
-    // Sprint 3 GPU profiling — `?disableAtmosphere=1` skips the atmosphere shell.
+    // `?disableAtmosphere=1` skips the atmosphere shell.
     if (!profileFlags.disableAtmosphere) {
       this._createAtmosphere();
     } else {
@@ -2497,14 +2193,9 @@ export class Earth {
   }
 
   /**
-   * A picture of a slot is ready (uploaded): hand it to the shaders, blended in.
-   * st6: a picture built in strips; st9: also a one-shot picture (a new texture) and the SMALL picture.
-   * A sharp one is also `earth.dayTexture` / `nightTexture` / `cloudTexture` (BlackFrameProbe reads
-   * them) at once; a small one never is. The cloud picture sits in two uniforms; the cloud shell is
-   * null under `?disableClouds=1`.
-   * @param {'dayTexture'|'nightTexture'|'cloudTexture'} slot
-   * @param {THREE.Texture} texture
-   * @param {'sharp'|'small'} [kind='sharp']
+   * A picture of a slot is ready (uploaded): hand it to the shaders, blended in. A sharp one is also
+   * `earth.dayTexture` / `nightTexture` / `cloudTexture` (BlackFrameProbe reads them) at once; a small one never is.
+   * The cloud picture sits in two uniforms; the cloud shell is null under `?disableClouds=1`.
    */
   _setPicture(slot, texture, kind = 'sharp') {
     const st = this._pics && this._pics[slot];
@@ -2531,27 +2222,22 @@ export class Earth {
     if (!small) {
       st.sharpSeen = true;
       this[slot] = texture;
-      // st8 D4: a picture finished through strips (not the empty one put back by a restore); a small one never counts.
+      // A picture finished through strips (not the empty one put back by a restore); a small one never counts.
       if (texture && texture.userData && texture.userData.stripBuilt) notePictureComplete(texture);
     }
     this._pushPicture(slot, texture);
   }
 
-  /** st9: has the small picture of this slot become useless (the sharp one was shown, or a restore happened)? */
   _smallDropped(slot) {
     const st = this._pics && this._pics[slot];
     return !!st && (st.sharpSeen === true || st.noSmall === true);
   }
 
   /**
-   * st9 D2 (one-shot route and fallbacks): the decoded picture goes into a NEW texture that is
-   * uploaded first, then shown (blended in). The loading handle `pending` is never uploaded, so the
-   * picture on screen is never disposed under the blend, and `earth.*Texture` never points at a
-   * texture that has not reached the GPU.
-   * @param {'dayTexture'|'nightTexture'|'cloudTexture'} slot
-   * @param {'sharp'|'small'} kind
+   * One-shot route and fallbacks: the decoded picture goes into a NEW texture that is uploaded first, then shown
+   * (blended in). The loading handle `pending` is never uploaded, so the picture on screen is never disposed under the
+   * blend and `earth.*Texture` never points at a texture that has not reached the GPU.
    * @param {THREE.Texture} pending  the loading handle the picture was asked for with
-   * @param {ImageBitmap|HTMLImageElement} image
    * @param {boolean} flipY  true for an HTML image (a bitmap is flipped by the decoder)
    * @param {number} level  the tier the picture was decoded at, recorded at arrival
    */
@@ -2575,7 +2261,7 @@ export class Earth {
     t.userData.picH = image.height;
     if (kind !== 'small') t.userData.keeper = pending.userData.keeper;
     t.needsUpdate = true;
-    // Upload now (the cost lands here, outside the render, exactly as the same upload did inside it before).
+    // Upload now: the cost lands here, outside the render.
     try {
       if (this._renderer && typeof this._renderer.initTexture === 'function') this._renderer.initTexture(t);
     } catch (e) {
@@ -2585,8 +2271,8 @@ export class Earth {
   }
 
   /**
-   * st9 D2: a new picture takes the newest place of its slot; the blend runs from what is on screen
-   * right now (also when another blend is still running: the weights continue, nothing jumps).
+   * A new picture takes the newest place of its slot; the blend runs from what is on screen now (weights continue if
+   * another blend runs, nothing jumps).
    */
   _pushPicture(slot, texture) {
     const st = this._pics[slot];
@@ -2619,7 +2305,6 @@ export class Earth {
     return [st.from[0] * k, st.from[1] * k, st.from[2] * k + e];
   }
 
-  /** Write a slot's layers and weights into every uniform that shows it. */
   _applyPicture(slot) {
     const st = this._pics[slot];
     const P = PICTURE_STEM[slot];
@@ -2644,7 +2329,7 @@ export class Earth {
     }
   }
 
-  /** st9: move every running blend forward to `now` (called from tickStrips, so also while unfocused). */
+  /** Move every running blend forward to `now` (called from tickStrips, so also while unfocused). */
   _advanceBlends(now) {
     if (!this._pics) return;
     for (const slot of PICTURE_SLOTS) {
@@ -2665,11 +2350,10 @@ export class Earth {
   }
 
   /**
-   * st9: a lost graphics context. Everything shown in the slot is gone (the strip results lost their
-   * GPU memory; a one-shot picture's bitmap is closed): dispose it all, show nothing (black, then
-   * the sharp picture blends in when it has been loaded again).
-   * @returns {{pending: THREE.Texture, shown: boolean}|null}  the loading handle, and whether a
-   *   sharp picture had been shown (then it must be loaded again)
+   * A lost graphics context: everything shown in the slot is gone (strip results lost their GPU memory; a one-shot
+   * picture's bitmap is closed). Disposes it all and shows nothing (black, then the sharp picture blends in when loaded again).
+   * @returns {{pending: THREE.Texture, shown: boolean}|null}  the loading handle, and whether a sharp picture had been
+   *   shown (then it must be loaded again)
    */
   _resetPicture(slot) {
     const st = this._pics && this._pics[slot];
@@ -2686,7 +2370,7 @@ export class Earth {
     return { pending: st.pending, shown };
   }
 
-  /** st9: after a restore no small picture is shown again; one still being decoded is dropped on arrival. */
+  /** After a restore no small picture is shown again; one still being decoded is dropped on arrival. */
   _dropSmallPictures() {
     for (const slot of PICTURE_SLOTS) {
       const st = this._pics && this._pics[slot];
@@ -2697,9 +2381,8 @@ export class Earth {
   }
 
   /**
-   * st7: is the camera over the sunlit half of the Earth? dot(camera position
-   * relative to the Earth's centre, sun direction) >= 0.
-   * @returns {boolean|null} null until the surface has been drawn once
+   * Is the camera over the sunlit half? dot(camera position relative to the Earth's centre, sun direction) >= 0. Null
+   * until the surface has been drawn once.
    */
   _cameraOverSunlitSide() {
     if (!this._camSeen) return null;
@@ -2710,12 +2393,11 @@ export class Earth {
 
   /** Feed at most one picture strip (once per drawn frame; main.js also calls this while the window is unfocused). */
   tickStrips() {
-    noteFirstFrame(); // st8: the decode worker starts after the first frame
+    noteFirstFrame(); // the decode worker starts after the first frame
     if (this._strips) this._strips.tick();
-    this._advanceBlends(nowMs()); // st9: the picture blends run on the real clock, with or without dt
+    this._advanceBlends(nowMs()); // blends run on the real clock, with or without dt
   }
 
-  // --- SURFACE SPHERE (tier-tessellated: 256² top tier … 96² base — Task 3b) ---
   _createSurface() {
     const segs = this._sphereSegments.surface;
     const geometry = new THREE.SphereGeometry(Constants.EARTH_RADIUS, segs, segs);
@@ -2724,7 +2406,7 @@ export class Earth {
       vertexShader: earthSurfaceVertexShader,
       fragmentShader: earthSurfaceFragmentShader,
       uniforms: {
-        // st9: newest picture, the two before it, their weights (see the shader). Start: the empty handle alone.
+        // Newest picture, the two before it, their weights (see the shader). Start: the empty handle alone.
         uDayTexture: { value: this.dayTexture },
         uDayPrev: { value: EMPTY_TEXTURE },
         uDayPrev2: { value: EMPTY_TEXTURE },
@@ -2741,12 +2423,8 @@ export class Earth {
         uCloudRotation: { value: 0 },
         uSunDirection: { value: this.sunDirection },
       },
-      // Sprint 2 / PR C — `defines` controls the LOW_DETAIL branch. Mutated
-      // at runtime by [`Earth.setLowDetail`](js/scene/Earth.js:1) when the
-      // quality tier changes. NO_CLOUD_SHADOWS compiles the surface cloud-shadow
-      // fetch out when clouds are profiling-disabled so the ?disableClouds
-      // cost-isolation A/B stays pure. setLowDetail() only touches the LOW_DETAIL
-      // key on this object, so NO_CLOUD_SHADOWS survives tier flips.
+      // `defines` controls the LOW_DETAIL branch (setLowDetail touches only that key). NO_CLOUD_SHADOWS compiles the
+      // surface cloud-shadow fetch out when clouds are profiling-disabled, so the ?disableClouds A/B stays pure; it survives tier flips.
       defines: {
         ...(this._useLowDetail ? { LOW_DETAIL: 1 } : {}),
         ...(profileFlags.disableClouds ? { NO_CLOUD_SHADOWS: 1 } : {}),
@@ -2755,7 +2433,7 @@ export class Earth {
 
     this.surfaceMesh = new THREE.Mesh(geometry, this.surfaceMaterial);
     this.surfaceMesh.name = 'EarthSurface';
-    // st7: remember where the camera is (world space), for the strip order.
+    // Remember where the camera is (world space), for the strip order.
     this.surfaceMesh.onBeforeRender = (_renderer, _scene, camera) => {
       const e = camera.matrixWorld.elements;
       this._camPos.set(e[12], e[13], e[14]);
@@ -2765,23 +2443,14 @@ export class Earth {
   }
 
   /**
-   * Sprint 2 / PR C — toggle the fragment shader's LOW_DETAIL branch.
-   * Called by [`SceneManager.applyTier()`](js/scene/SceneManager.js:275)
-   * whenever the quality tier switches. When `enabled` is true, the 7-octave
-   * noise stack in [`earthSurfaceFragmentShader`](js/scene/Earth.js:36) is
-   * compiled out — the base AVIF texture carries detail on its own.
-   *
-   * Idempotent and safe to call mid-flight: mutates `defines` + flips
-   * `needsUpdate` so the WebGL program is recompiled on the next frame.
-   *
+   * Toggle the fragment shader's LOW_DETAIL branch (SceneManager.applyTier calls it on a tier switch). When true the
+   * 7-octave noise stack in earthSurfaceFragmentShader is compiled out: the base AVIF texture carries detail on its own.
+   * Idempotent and mid-flight safe: mutates `defines` and flips `needsUpdate` so the program recompiles next frame.
    * @param {boolean} enabled
    */
   /**
-   * Toggle the cloud sphere's visibility. Used by
-   * [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1) to A/B the
-   * cloud-layer GPU cost mid-session without reloading the page. No-op when
-   * clouds were never created (i.e. `?disableClouds=1` was set at boot).
-   *
+   * Toggle the cloud sphere's visibility (AutoProfileSweep A/B of the cloud-layer GPU cost mid-session). No-op when
+   * clouds were never created (`?disableClouds=1` at boot).
    * @param {boolean} visible
    */
   setCloudsVisible(visible) {
@@ -2791,10 +2460,7 @@ export class Earth {
   }
 
   /**
-   * Toggle the atmosphere shell's visibility. Mid-session A/B counterpart
-   * to [`setCloudsVisible`](js/scene/Earth.js:1). No-op when atmosphere was
-   * never created (`?disableAtmosphere=1` at boot).
-   *
+   * Toggle the atmosphere shell's visibility. No-op when it was never created (`?disableAtmosphere=1` at boot).
    * @param {boolean} visible
    */
   setAtmosphereVisible(visible) {
@@ -2804,15 +2470,12 @@ export class Earth {
   }
 
   setLowDetail(enabled) {
-    // Sprint 3 GPU profiling — `?disableEarthNoise=1` force-pins LOW_DETAIL
-    // on regardless of the tier the caller wants. Without this guard
-    // [`SceneManager.setEarth()`](js/scene/SceneManager.js:283) and
-    // [`SceneManager.applyTier()`](js/scene/SceneManager.js:305) would call
-    // `setLowDetail(false)` at HIGH/MEDIUM tier and silently undo the flag.
+    // `?disableEarthNoise=1` force-pins LOW_DETAIL on regardless of the tier: otherwise SceneManager.setEarth /
+    // applyTier would call `setLowDetail(false)` at HIGH/MEDIUM tier and silently undo the flag.
     const want = profileFlags.disableEarthNoise ? true : !!enabled;
     if (this._useLowDetail === want) return;
     this._useLowDetail = want;
-    if (!this.surfaceMaterial) return; // surface not yet created
+    if (!this.surfaceMaterial) return;
     const defs = this.surfaceMaterial.defines || {};
     if (want) {
       defs.LOW_DETAIL = 1;
@@ -2823,7 +2486,6 @@ export class Earth {
     this.surfaceMaterial.needsUpdate = true;
   }
 
-  // --- CLOUD LAYER (tier-tessellated: 128² top tier … 64² base — Task 3b) ---
   _createClouds() {
     const segs = this._sphereSegments.clouds;
     const geometry = new THREE.SphereGeometry(Constants.CLOUD_RADIUS, segs, segs);
@@ -2841,11 +2503,9 @@ export class Earth {
       transparent: true,
       depthWrite: false,
       side: THREE.FrontSide,
-      // Polygon offset prevents Z-fighting flicker where cloud sphere
-      // nearly overlaps the surface sphere at grazing angles (Bug 4 fix).
-      // Negative values pull cloud depth TOWARD camera so clouds consistently
-      // win depth test over the surface at the limb where the 0.10-unit gap
-      // (10 km) collapses to near-zero in screen-space depth.
+      // Polygon offset prevents z-fighting where the cloud sphere nearly overlaps the surface at grazing angles. Negative
+      // values pull cloud depth TOWARD the camera so clouds win at the limb, where the 0.10-unit (10 km) gap collapses in
+      // screen-space depth.
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
@@ -2856,7 +2516,6 @@ export class Earth {
     this.group.add(this.cloudMesh);
   }
 
-  // --- ATMOSPHERE (tier-tessellated 64²…48², BackSide, additive blending) ---
   _createAtmosphere() {
     const segs = this._sphereSegments.atmosphere;
     const geometry = new THREE.SphereGeometry(Constants.ATMOSPHERE_RADIUS, segs, segs);
@@ -2881,20 +2540,15 @@ export class Earth {
 
     this.atmosphereMesh = new THREE.Mesh(geometry, this.atmosphereMaterial);
     this.atmosphereMesh.name = 'EarthAtmosphere';
-    // Atmosphere stays on default layer 0 only — no bloom layer needed
-    // Threshold bloom ensures only very bright objects (emissive > 0.85) glow
+    // Layer 0 only, no bloom layer: threshold bloom glows only very bright objects (emissive > 0.85).
     this.group.add(this.atmosphereMesh);
   }
 
-  /**
-   * Update the sun direction uniform across all Earth layers
-   * @param {THREE.Vector3} dir — normalized sun direction
-   */
+  /** @param {THREE.Vector3} dir  normalized sun direction */
   setSunDirection(dir) {
     this.sunDirection.copy(dir);
     this.surfaceMaterial.uniforms.uSunDirection.value.copy(dir);
-    // Sprint 3 GPU profiling — cloud / atmosphere may be null when the
-    // `?disableClouds=1` / `?disableAtmosphere=1` flags are active.
+    // cloud / atmosphere are null under `?disableClouds=1` / `?disableAtmosphere=1`.
     if (this.cloudMaterial) {
       this.cloudMaterial.uniforms.uSunDirection.value.copy(dir);
     }
@@ -2903,30 +2557,22 @@ export class Earth {
     }
   }
 
-  /**
-   * Per-frame update: animate clouds, sync analytic uniforms.
-   * @param {number} dt — delta time (seconds)
-   */
+  /** @param {number} dt  seconds */
   update(dt) {
-    // st6: at most one picture strip per rendered frame (no-op when none are queued).
     this.tickStrips();
-    // Sprint 3 GPU profiling — atmosphere may be null when `?disableAtmosphere=1`.
     if (this.atmosphereMaterial) {
       // Keep the analytic shader's Earth-center uniform in sync (group may move).
       this.atmosphereMesh.getWorldPosition(this.atmosphereMaterial.uniforms.uCenter.value);
     }
 
-    // Sidereal cloud rotation — visible drift over a game hour (ST-5.3).
-    // Null-safe for `?disableClouds=1`. Feed the live rotation to the surface
-    // shader so its straight-down cloud-shadow projection stays registered to
-    // the drifting cloud layer (P1, 2026-07-20).
+    // Sidereal cloud rotation (visible drift over a game hour). The live rotation is fed to the surface shader so its
+    // straight-down cloud-shadow projection stays registered to the drifting clouds.
     if (this.cloudMesh) {
       this.cloudMesh.rotation.y += Constants.EARTH.CLOUD_ROTATION_RATE * dt;
       this.surfaceMaterial.uniforms.uCloudRotation.value = this.cloudMesh.rotation.y;
     }
   }
 
-  /** @returns {THREE.Group} */
   getGroup() {
     return this.group;
   }

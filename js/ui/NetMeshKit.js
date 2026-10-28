@@ -40,6 +40,7 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { Constants } from '../core/Constants.js';
+import { clamp01, clamp, lerp } from '../core/MathUtil.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km). Matches both consumers. */
 const M = 1e-5;
@@ -177,7 +178,7 @@ export function drapeRingRadius(t, spokeAngle, mouthRadius, drape, cinch, closed
   }
   if (cinch > 0) {
     // Shrink-wrap: collapse every ring toward the closed radius fraction.
-    r = r + (mouthRadius * closed * t - r) * cinch;
+    r = lerp(r, mouthRadius * closed * t, cinch);
   }
   if (jigA > 0) {
     r += jigA * t * Math.sin(jigP + spokeAngle * 3);
@@ -212,12 +213,12 @@ export function drapeRingZ(t, coneHeight, drape) {
  */
 export function depthToRingT(axialDepth, coneHeight, drape) {
   if (!(coneHeight > 0)) return 0;
-  const u = Math.max(0, Math.min(1, axialDepth / coneHeight));
-  const k = 0.9 * Math.max(0, Math.min(1, drape ?? 0));
+  const u = clamp01(axialDepth / coneHeight);
+  const k = 0.9 * clamp01(drape ?? 0);
   if (k === 0) return u;
   const disc = (1 + k) * (1 + k) - 4 * k * u;
   const t = ((1 + k) - Math.sqrt(Math.max(0, disc))) / (2 * k);
-  return Math.max(0, Math.min(1, t));
+  return clamp01(t);
 }
 
 /**
@@ -486,7 +487,7 @@ function _edgeBoxDepth(pos, i0, i1, box, n, worst) {
   for (let i = 0; i <= n; i++) {
     const f = i / n;
     // Sample point in box space (the shared point transform).
-    const [qx, qy, qz] = _toBoxSpace(box, ax + (bx - ax) * f, ay + (by - ay) * f, az + (bz - az) * f);
+    const [qx, qy, qz] = _toBoxSpace(box, lerp(ax, bx, f), lerp(ay, by, f), lerp(az, bz, f));
     const d = Math.min(box.hx - Math.abs(qx), box.hy - Math.abs(qy), box.hz - Math.abs(qz));
     if (d > worst) worst = d;
   }
@@ -610,7 +611,7 @@ function _floorElbows(cosA, sinA, box, mouthZ) {
  */
 function _ringZGrid(out, p) {
   const { coneHeight, radialSpokes, rings, contentsBox } = p;
-  const drape = Math.max(0, Math.min(1, p.drape ?? 0));
+  const drape = clamp01(p.drape ?? 0);
   const mouthZ = -coneHeight;
   const cosA = p.cosA, sinA = p.sinA;
   const minSpan = coneHeight * _ELBOW_MIN_SPAN_FRAC;
@@ -623,7 +624,7 @@ function _ringZGrid(out, p) {
   // fabric regardless of whether rings redistributed. 0 (default) is byte-
   // identical: the R2 law (mouth ring ON the mouth plane) is untouched for
   // every existing caller; the lasso wrap opts in deliberately.
-  const gather = Math.max(0, Math.min(1, p.mouthGather ?? 0));
+  const gather = clamp01(p.mouthGather ?? 0);
   for (let s = 0; s < radialSpokes; s++) {
     const e = _floorElbows(cosA[s], sinA[s], contentsBox, mouthZ);
     const eN = e[0], eF = e[1];
@@ -638,9 +639,9 @@ function _ringZGrid(out, p) {
         else if (k === rings) zR = mouthZ;
         else if (k === 1) zR = eN;
         else if (k === rings - 1) zR = eF;
-        else zR = eN + (eF - eN) * ((k - 1) / (rings - 2));
+        else zR = lerp(eN, eF, (k - 1) / (rings - 2));
       }
-      out[k * radialSpokes + s] = zNat + (zR - zNat) * drape;
+      out[k * radialSpokes + s] = lerp(zNat, zR, drape);
     }
   }
   // Gather pass: pull the WHOLE mouth ring (every spoke — a drawstring pulls
@@ -657,9 +658,9 @@ function _ringZGrid(out, p) {
                + Math.abs(contentsBox.r22) * contentsBox.hz;
     const zFace = contentsBox.oz - zExt;             // mouth-side face plane
     if (zFace > mouthZ && zFace < 0) {
-      const zGather = mouthZ + (zFace - mouthZ) * gather;
+      const zGather = lerp(mouthZ, zFace, gather);
       const zNatM = drapeRingZ(1, coneHeight, drape);   // == mouthZ (R2)
-      const zRow = zNatM + (zGather - zNatM) * drape;
+      const zRow = lerp(zNatM, zGather, drape);
       for (let s = 0; s < radialSpokes; s++) out[rings * radialSpokes + s] = zRow;
       p.mouthPlaneOut = zRow;
     }
@@ -696,8 +697,8 @@ function _mouthFloorMax(h) {
 
 function buildWebPositionsDraped(out, p) {
   const { mouthRadius, coneHeight, radialSpokes, rings } = p;
-  const drape = Math.max(0, Math.min(1, p.drape ?? 0));
-  const cinch = Math.max(0, Math.min(1, p.cinchFrac ?? 0));
+  const drape = clamp01(p.drape ?? 0);
+  const cinch = clamp01(p.cinchFrac ?? 0);
   const jigP = p.jigglePhase ?? 0;
   const jigA = p.jiggleAmp ?? 0;
   const closed = NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED;   // SSOT (was hardcoded 0.15)
@@ -825,8 +826,8 @@ function buildMembraneIndex(radialSpokes, rings) {
  */
 function updateMembraneLattice(out, p) {
   const { mouthRadius, coneHeight, radialSpokes, rings } = p;
-  const drape = Math.max(0, Math.min(1, p.drape ?? 0));
-  const cinch = Math.max(0, Math.min(1, p.cinchFrac ?? 0));
+  const drape = clamp01(p.drape ?? 0);
+  const cinch = clamp01(p.cinchFrac ?? 0);
   const jigP = p.jigglePhase ?? 0;
   const jigA = p.jiggleAmp ?? 0;
   const closed = NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED;
@@ -1201,7 +1202,7 @@ export const NetMeshKit = {
    * @param {number} frac mouth radius fraction in [0.05, 1]
    */
   setMouthFraction(h, frac) {
-    const f = Math.max(0.05, Math.min(1, frac));
+    const f = clamp(frac, 0.05, 1);
     // Whale-in-cone phase 3 (D2): never place the rim inside the contents
     // envelope. Evaluates to 0 whenever the contents are absent or their far
     // face is short of the mouth plane — structural insurance, not a behaviour
@@ -1235,9 +1236,9 @@ export const NetMeshKit = {
    * @param {number} t cinch fraction in [0, 1] — 0 = open rim, 1 = closed rim
    */
   setRimCinch(h, t) {
-    const tc = Math.max(0, Math.min(1, t));
+    const tc = clamp01(t);
     const r = Math.max(
-      h.mouthRadius + (h.closedRadius - h.mouthRadius) * tc,
+      lerp(h.mouthRadius, h.closedRadius, tc),
       _mouthFloorMax(h),
     );
     // Round 3 (V3): beads + drawstring ride the EFFECTIVE mouth plane — the
@@ -1584,12 +1585,11 @@ export const NetMeshKit = {
       const szHi = NET_WEB.MEMBRANE_WELDED_LARGE_SIZE_M ?? 2.0;
       const szLo = NET_WEB.MEMBRANE_WELDED_SMALL_SIZE_M ?? 0.8;
       if (small != null && catchSizeM > 0 && szHi > szLo) {
-        const st = Math.max(0, Math.min(1, (szHi - catchSizeM) / (szHi - szLo)));
+        const st = clamp01((szHi - catchSizeM) / (szHi - szLo));
         welded += (small - welded) * st;
       }
-      const k = Math.max(0, Math.min(1, cinchFrac));
-      h.membraneMat.opacity = h._membraneBaseOpacity
-        + (welded - h._membraneBaseOpacity) * k;
+      const k = clamp01(cinchFrac);
+      h.membraneMat.opacity = lerp(h._membraneBaseOpacity, welded, k);
     }
     // D2: stored on the handle so the probe (main.js) and setCinchedRim read
     // the SAME values the mesh deformed to — never a re-derived copy.
@@ -1703,10 +1703,10 @@ export const NetMeshKit = {
       if (cinchFrac >= 0.85) {
         if (h._flashPeakT == null) h._flashPeakT = now;
         const settle = Math.max(0, 1 - (now - h._flashPeakT) / NET_WEB.NODE_FLASH_SETTLE_S);
-        ei = baseEI + (peakEI - baseEI) * settle;
+        ei = lerp(baseEI, peakEI, settle);
       } else if (cinchFrac >= 0.6) {
         h._flashPeakT = null;
-        ei = baseEI + (peakEI - baseEI) * ((cinchFrac - 0.6) / 0.25);
+        ei = lerp(baseEI, peakEI, (cinchFrac - 0.6) / 0.25);
       } else {
         h._flashPeakT = null;
       }
@@ -1720,7 +1720,7 @@ export const NetMeshKit = {
       if (h._contactFlashT != null) {
         const settle = Math.max(0, 1 - (now - h._contactFlashT) / NET_WEB.CONTACT_FLASH_SETTLE_S);
         if (settle <= 0) h._contactFlashT = null;
-        else ei = Math.max(ei, baseEI + (NET_WEB.CONTACT_FLASH_PEAK - baseEI) * settle);
+        else ei = Math.max(ei, lerp(baseEI, NET_WEB.CONTACT_FLASH_PEAK, settle));
       }
       for (const m of h.rimWeightMats) m.emissiveIntensity = ei;
     }

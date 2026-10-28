@@ -37,6 +37,7 @@ import { DebrisField } from './DebrisField.js';          // catch-snug: the draw
 import { DebrisWireframe } from '../ui/DebrisWireframe.js'; // catch-snug: the drawn mesh vertices
 import { netCellLayout } from './netCellLayout.js';
 import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js'; // net-cinch: where the held net's neck is drawn
+import { DEG2RAD, RAD2DEG, degToRad, radToDeg, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 /** 1 meter in scene units (1 scene unit = 100 km) — CAPTURE_NET.md §11.7 hoist
  * (2026-08-27): reads the one authoritative scale (Constants.SCENE_UNITS_PER_METER,
@@ -821,7 +822,7 @@ export function seatStandoffM(her, d, qRel, u, R) {
   const same = !!c && c.her === her && c.type === d.type && c.id === d.id && c.bag === bag && Math.abs(c.sc - sc) < 1e-9 && Math.abs(c.R - R) < 1e-12;
   if (_seatMetered && same) {
     const axisMoved = Math.hypot(c.ux - ux, c.uy - uy, c.uz - uz) >= 0.02;
-    const cosHalf = Math.cos(0.5 * (Constants.SEAT_RESOLVE_DEG ?? 5) * Math.PI / 180);
+    const cosHalf = Math.cos(degToRad(0.5 * (Constants.SEAT_RESOLVE_DEG ?? 5)));
     const turned = Math.abs(c.qx * qx0 + c.qy * qy0 + c.qz * qz0 + c.qw * qw0) < cosHalf;
     if (!axisMoved && !turned) return c.s;
     if (_seatSolvedFrame === _seatFrame) return c.s;                                  // one solve a frame, all daughters
@@ -1060,7 +1061,7 @@ export function captureSettleRipBandT(rateDegS) {
   const gate = CTS.STRAIN_GATE_DEG_S;
   const rated = CTS.STRAIN_RATE_RATED_DEG_S;
   if (!(rated > gate)) return (rateDegS || 0) > gate ? 1 : 0;
-  return Math.min(1, Math.max(0, ((rateDegS || 0) - gate) / (rated - gate)));
+  return clamp01(((rateDegS || 0) - gate) / (rated - gate));
 }
 
 export class ArmUnit {
@@ -1260,7 +1261,7 @@ export class ArmUnit {
     this._radiusRate = 0;                   // current radial velocity
     this._rMin = Constants.STATION_KEEP.MIN_STANDOFF;
     this._rMax = Constants.STATION_KEEP.MAX_STANDOFF;
-    this._phiMax = Constants.STATION_KEEP.MAX_LATITUDE * Math.PI / 180;
+    this._phiMax = degToRad(Constants.STATION_KEEP.MAX_LATITUDE);
     this._stationKeepTarget = null;         // reference to target debris
 
     // ── §11.4/§11.3 daughter net-fire recoil (FEATURE_FLAGS.DAUGHTER_NET_RECOIL) ──
@@ -1446,7 +1447,7 @@ export class ArmUnit {
         this._standoffR += data.radiusStep;
         // Immediate clamp so HUD readout reflects the bounded value
         // even if the next physics tick is delayed.
-        this._standoffR = Math.max(this._rMin, Math.min(this._rMax, this._standoffR));
+        this._standoffR = clamp(this._standoffR, this._rMin, this._rMax);
       }
     });
 
@@ -2396,7 +2397,7 @@ export class ArmUnit {
       const t = age / life;
       puff.sprite.position.copy(puff.startPos).addScaledVector(puff.dir, puff.drift * t);
       const startS = M * 0.015;
-      const s = startS + (puff.maxScale - startS) * Math.sqrt(t);
+      const s = lerp(startS, puff.maxScale, Math.sqrt(t));
       puff.sprite.scale.set(s, s, s);
       const rise = Math.min(1, t / 0.1);
       const fall = Math.pow(1 - t, 1.5);
@@ -3100,7 +3101,7 @@ export class ArmUnit {
     const IT = Constants.ION_THRUSTER;
     if (!IT) return this.config.thrust;
     const beamPower = this.type === 'weaver' ? IT.BEAM_POWER_WEAVER : IT.BEAM_POWER_SPINNER;
-    const g0 = 9.80665;
+    const g0 = Constants.G0;
     return beamPower / (this._metalIsp * g0 * IT.EFFICIENCY);
   }
 
@@ -3202,10 +3203,7 @@ export class ArmUnit {
    */
   setLaunchSpeed(speed) {
     const tier = SPRING_TIERS[this.springTier];
-    this.launchSpeed = Math.max(
-      CROSSBOW_LAUNCH_SPEED_MIN,
-      Math.min(speed, tier.maxSpeed)
-    );
+    this.launchSpeed = clamp(tier.maxSpeed, CROSSBOW_LAUNCH_SPEED_MIN, speed);
   }
 
   /**
@@ -3244,7 +3242,7 @@ export class ArmUnit {
    * @param {number} tier - Spring tier index
    */
   setSpringTier(tier) {
-    this.springTier = Math.max(0, Math.min(tier, SPRING_TIERS.length - 1));
+    this.springTier = clamp(SPRING_TIERS.length - 1, 0, tier);
     // Clamp current launch speed to new tier max
     this.launchSpeed = Math.min(this.launchSpeed, SPRING_TIERS[this.springTier].maxSpeed);
   }
@@ -3259,7 +3257,7 @@ export class ArmUnit {
    * @param {number} tier - Tether tier index
    */
   setTetherTier(tier) {
-    this.tetherTier = Math.max(0, Math.min(tier, TETHER_TIERS.length - 1));
+    this.tetherTier = clamp(TETHER_TIERS.length - 1, 0, tier);
     const t = TETHER_TIERS[this.tetherTier];
     const typeRatio = (this.type === 'weaver')
       ? 1
@@ -3309,7 +3307,7 @@ export class ArmUnit {
     }
 
     const V5 = Constants.OCTOPUS_V5;
-    const target = Math.max(V5.STRUT_SWEEP_MIN, Math.min(alpha, V5.STRUT_SWEEP_MAX));
+    const target = clamp(V5.STRUT_SWEEP_MAX, V5.STRUT_SWEEP_MIN, alpha);
 
     if (dt > 0) {
       let desired = target;
@@ -3331,7 +3329,7 @@ export class ArmUnit {
       // Slew-rate clamp: max angular change per frame
       const maxDelta = V5.STRUT_SLEW_RATE * dt;
       const delta = desired - this._aimAlpha;
-      const clampedDelta = Math.max(-maxDelta, Math.min(delta, maxDelta));
+      const clampedDelta = clamp(maxDelta, -maxDelta, delta);
       this._aimAlpha += clampedDelta;
     } else {
       // Snap (initialization or test)
@@ -3350,7 +3348,7 @@ export class ArmUnit {
    */
   aimEaseMinTime(alpha) {
     const V5 = Constants.OCTOPUS_V5;
-    const target = Math.max(V5.STRUT_SWEEP_MIN, Math.min(alpha, V5.STRUT_SWEEP_MAX));
+    const target = clamp(V5.STRUT_SWEEP_MAX, V5.STRUT_SWEEP_MIN, alpha);
     const d = Math.abs(target - this._aimAlpha);
     if (!(V5.STRUT_EASE_ACCEL > 0)) return d / V5.AIM_TURN_STRUT_PACE;
     return strutEaseProfile(d, V5.STRUT_EASE_ACCEL, V5.AIM_TURN_STRUT_PACE, 0).T;
@@ -3929,9 +3927,8 @@ export class ArmUnit {
       // eclipse "embers until dawn" story. null unless actually cooking.
       digest: (this.state === S.HOLDING_CATCH && this.heldCatches.length > 0)
         ? {
-          frac: Math.min(1, Math.max(0,
-            (this.heldCatches[0]._digestProgress || 0)
-            / Constants.FURNACE_TRANSFER.digestSpanS(this.heldCatches[0].mass))),
+          frac: clamp01((this.heldCatches[0]._digestProgress || 0)
+            / Constants.FURNACE_TRANSFER.digestSpanS(this.heldCatches[0].mass)),
           sunScale: this._digestSunScale ?? 1.0,
           queued: this.heldCatches.length - 1,
           kg: this.heldCatches[0].mass || 0,
@@ -4100,7 +4097,7 @@ export class ArmUnit {
     const desired = ispMap[phase];
     if (desired !== undefined) {
       // Clamp to metal's range
-      this._metalIsp = Math.max(metalData.ispMin, Math.min(metalData.ispMax, desired));
+      this._metalIsp = clamp(desired, metalData.ispMin, metalData.ispMax);
     }
   }
 
@@ -4355,9 +4352,7 @@ export class ArmUnit {
         if (_tPos) {
           const _dist = _tPos.distanceTo(this.position);
           const _dSz = (this.target.sizeMeter) || 1;
-          const _so = Math.max(Constants.STATION_KEEP.DEFAULT_STANDOFF,
-            Math.min(Constants.STATION_KEEP.MAX_STANDOFF,
-              _dSz * Constants.STATION_KEEP.DEFAULT_STANDOFF_MULT));
+          const _so = clamp(_dSz * Constants.STATION_KEEP.DEFAULT_STANDOFF_MULT, Constants.STATION_KEEP.DEFAULT_STANDOFF, Constants.STATION_KEEP.MAX_STANDOFF);
           const _thresh = Math.max(_so * 2, this.config.bodyDims[2] * 15) * M;
           if (_dist < _thresh) {
             this._transitionTo(S.APPROACH);
@@ -4460,10 +4455,7 @@ export class ArmUnit {
     // Close enough for fine approach — threshold must be >= standoff distance
     // so APPROACH controller has room to decelerate before reaching standoff.
     const debrisSizeT = (this.target && this.target.sizeMeter) || 1;
-    const standoffT = Math.max(
-      Constants.STATION_KEEP.DEFAULT_STANDOFF,
-      Math.min(Constants.STATION_KEEP.MAX_STANDOFF, debrisSizeT * Constants.STATION_KEEP.DEFAULT_STANDOFF_MULT)
-    );
+    const standoffT = clamp(debrisSizeT * Constants.STATION_KEEP.DEFAULT_STANDOFF_MULT, Constants.STATION_KEEP.DEFAULT_STANDOFF, Constants.STATION_KEEP.MAX_STANDOFF);
     const approachThreshold = Math.max(standoffT * 2, this.config.bodyDims[2] * 15) * M;
     if (dist < approachThreshold) {
       this._transitionTo(S.APPROACH);
@@ -4505,9 +4497,7 @@ export class ArmUnit {
         if (_tPos) {
           const _distM = _tPos.distanceTo(this.position) / M;
           const _dSz = (this.target.sizeMeter) || 1;
-          const _so = Math.max(Constants.STATION_KEEP.DEFAULT_STANDOFF,
-            Math.min(Constants.STATION_KEEP.MAX_STANDOFF,
-              _dSz * Constants.STATION_KEEP.DEFAULT_STANDOFF_MULT));
+          const _so = clamp(_dSz * Constants.STATION_KEEP.DEFAULT_STANDOFF_MULT, Constants.STATION_KEEP.DEFAULT_STANDOFF, Constants.STATION_KEEP.MAX_STANDOFF);
           const _gateDist = _so * (Constants.STATION_KEEP.ENTRY_DISTANCE_MULT || 2.0);
           if (_distM <= _gateDist) {
             this._transitionTo(S.STATION_KEEP);
@@ -4560,10 +4550,7 @@ export class ArmUnit {
 
     // Standoff distance
     const debrisSize = (this.target && this.target.sizeMeter) || 1;
-    const standoff = Math.max(
-      Constants.STATION_KEEP.DEFAULT_STANDOFF,
-      Math.min(Constants.STATION_KEEP.MAX_STANDOFF, debrisSize * Constants.STATION_KEEP.DEFAULT_STANDOFF_MULT)
-    );
+    const standoff = clamp(debrisSize * Constants.STATION_KEEP.DEFAULT_STANDOFF_MULT, Constants.STATION_KEEP.DEFAULT_STANDOFF, Constants.STATION_KEEP.MAX_STANDOFF);
     const distMetres = dist / M;
 
     // Orbital drift velocity — EMA-smoothed (shared with TRANSIT via _smoothDriftVel)
@@ -4783,7 +4770,7 @@ export class ArmUnit {
         this._orbitTheta += (0 - this._orbitTheta) * k;
         this._orbitPhi   += (0 - this._orbitPhi)   * k;
         // Dead-zone snap so we don't asymptote forever.
-        const deadRad = (SK.AUTO_RETURN_DEADZONE_DEG || 2.0) * Math.PI / 180;
+        const deadRad = degToRad(SK.AUTO_RETURN_DEADZONE_DEG || 2.0);
         if (Math.abs(this._orbitTheta) < deadRad && Math.abs(this._orbitPhi) < deadRad) {
           this._orbitTheta = 0;
           this._orbitPhi   = 0;
@@ -4795,16 +4782,16 @@ export class ArmUnit {
     // TETHER_SAFETY_MARGIN as the half-angle).  Same physical meaning as
     // before: prevents the pilot from pitching so far the daughter goes
     // behind the debris or wraps the tether vertically.
-    const phiLimit = this._phiMax - (SK.TETHER_SAFETY_MARGIN * Math.PI / 180);
-    this._orbitPhi = Math.max(-phiLimit, Math.min(phiLimit, this._orbitPhi));
+    const phiLimit = this._phiMax - (degToRad(SK.TETHER_SAFETY_MARGIN));
+    this._orbitPhi = clamp(this._orbitPhi, -phiLimit, phiLimit);
 
     // ── Clamp θ delta around entry (tether-tangle + disorientation safety) ──
     // In the frozen entry frame θ is always measured from 0, so the clamp is
     // a simple ±THETA_LIMIT_DEG.  Prevents the pilot from winding the
     // daughter all the way around the debris (tether wrap = critical failure)
     // and from rotating past the mother's peripheral view (disorientation).
-    const thetaLimitRad = (SK.THETA_LIMIT_DEG || 120) * Math.PI / 180;
-    this._orbitTheta = Math.max(-thetaLimitRad, Math.min(thetaLimitRad, this._orbitTheta));
+    const thetaLimitRad = degToRad(SK.THETA_LIMIT_DEG || 120);
+    this._orbitTheta = clamp(this._orbitTheta, -thetaLimitRad, thetaLimitRad);
 
     // Clamp radius. While settling-in from a wide SK entry the arrival distance
     // can exceed _rMax — only enforce the lower bound so the ease can bring it
@@ -4812,7 +4799,7 @@ export class ArmUnit {
     if (this._standoffSettling) {
       this._standoffR = Math.max(this._rMin, this._standoffR);
     } else {
-      this._standoffR = Math.max(this._rMin, Math.min(this._rMax, this._standoffR));
+      this._standoffR = clamp(this._standoffR, this._rMin, this._rMax);
     }
 
     // Target position in scene coordinates — use _scenePosition (orbit-propagated)
@@ -5068,7 +5055,7 @@ export class ArmUnit {
     if (!debris) return;
     const CTS = Constants.CAPTURE_TORQUE_SETTLE;
     const w0 = debris.tumbleRate || 0;                       // rad/s, live (post-lase)
-    if (w0 * 180 / Math.PI < CTS.MIN_SEED_RATE_DEG_S) return;
+    if (radToDeg(w0) < CTS.MIN_SEED_RATE_DEG_S) return;
     const L = captureAngularMomentum(debris.mass, debris.sizeMeter, w0);
     const T = captureSettleDuration(L);
     debris._carrySpin = true;          // snug-ring R3: the spin is carried to the seat (_tickHeldSpin), not deleted at the cinch
@@ -5147,7 +5134,7 @@ export class ArmUnit {
     // Strain gate — rolled only in the wrench window (GRAPPLED/REELING, the
     // same states that own the NET_STRAIN_* mass checks), only while the
     // residual REAL rate still exceeds the gate.
-    const rateDegS = Math.abs(st.rate) * 180 / Math.PI;
+    const rateDegS = radToDeg(Math.abs(st.rate));
     if ((this.state === S.GRAPPLED || this.state === S.REELING)
         && rateDegS > CTS.STRAIN_GATE_DEG_S) {
       const bandT = captureSettleRipBandT(rateDegS);
@@ -5246,7 +5233,7 @@ export class ArmUnit {
     if (!d || d._carrySpin !== true || this._seatSpin || d._capturedByArm !== this) return;
     if (!Constants.isFeatureEnabled('CAPTURE_TORQUE_SETTLE')) return;
     if (!(d.tumbleRate > 0) || !(dt > 0)) return;
-    const maxVisualRad = (Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity) * Math.PI / 180;
+    const maxVisualRad = degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity);
     d.tumbleAngle = (d.tumbleAngle || 0) + Math.min(d.tumbleRate * TimeAuthority.BASE_SCALE, maxVisualRad) * dt;
   }
 
@@ -5267,7 +5254,7 @@ export class ArmUnit {
     d._carrySpin = false;
     const CTS = Constants.CAPTURE_TORQUE_SETTLE;
     const w0 = d.tumbleRate || 0;
-    if (w0 * 180 / Math.PI < CTS.MIN_SEED_RATE_DEG_S) { d.tumbleRate = 0; return null; }
+    if (radToDeg(w0) < CTS.MIN_SEED_RATE_DEG_S) { d.tumbleRate = 0; return null; }
     const I = captureMomentOfInertia(d.mass, d.sizeMeter);
     const L = I * w0;
     const lever = CTS.SEAT_LEVER_M ?? 0.10;
@@ -5275,7 +5262,7 @@ export class ArmUnit {
     const ve = (CG.ISP_S ?? 60) * (CTS.SEAT_G0 ?? 9.80665);
     const torque = this._coldGasThrustN() * lever;                      // N*m while the jet fires
     const full = this._coldGasBottleKg();
-    const gasAvail = Math.max(0, Math.min((CTS.SEAT_CAP_BOTTLE_FRAC ?? 0.10) * full, this.coldGasKg));
+    const gasAvail = clamp(this.coldGasKg, 0, (CTS.SEAT_CAP_BOTTLE_FRAC ?? 0.10) * full);
     const Lcap = gasAvail * lever * ve;                                  // the L the gas she may spend can cancel
     const Lpaid = torque > 0 ? Math.min(L, Lcap) : 0;
     const Lleft = L - Lpaid;
@@ -5327,7 +5314,7 @@ export class ArmUnit {
     if (finished) st.w = 0;
     // the piece turns in HER frame about its spin axis (same visual convention as free tumble); its cell is re-laid for the new
     // attitude so the gap stays the net gap while it goes round
-    const dAng = Math.min(Math.max(0, st.w) * TS, (Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity) * Math.PI / 180) * dt;
+    const dAng = Math.min(Math.max(0, st.w) * TS, degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity)) * dt;
     if (dAng > 0 || (finished && d._seatMemo)) {
       if (dAng > 0) d._qLocalHer.premultiply(_seatSpinQ.setFromAxisAngle(st.axisHer, dAng));
       // F1a: the spin is paid off with the 5 degree / 0.5 s rule in `seatStandoffM`; its end is one exact solve (memo dropped)
@@ -5449,7 +5436,7 @@ export class ArmUnit {
         );
       }
       this._skEquator0.normalize();
-      this._skPitch0 = Math.asin(Math.max(-1, Math.min(1, dotP)));
+      this._skPitch0 = Math.asin(clamp(dotP, -1, 1));
     }
     // right = equator0 × polar (camera-right at entry, so +yaw → screen-right)
     this._skRightVec = new THREE.Vector3()
@@ -5736,9 +5723,9 @@ export class ArmUnit {
     target.tumbleRate = after;
 
     // Crossed below the net-safe spin → announce once (same loop as the laser).
-    const inSpecRad = ((Constants.DESPIN_LASER && Constants.DESPIN_LASER.IN_SPEC_DEG) || 10) * Math.PI / 180;
+    const inSpecRad = degToRad((Constants.DESPIN_LASER && Constants.DESPIN_LASER.IN_SPEC_DEG) || 10);
     if (before > inSpecRad && after <= inSpecRad) {
-      eventBus.emit(Events.DESPIN_IN_SPEC, { targetId: target.id ?? null, tumbleDeg: after * 180 / Math.PI });
+      eventBus.emit(Events.DESPIN_IN_SPEC, { targetId: target.id ?? null, tumbleDeg: radToDeg(after) });
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.displayName,
         text: `${this.displayName}: Tumble in spec. Net it.`,
@@ -6095,7 +6082,7 @@ export class ArmUnit {
       if (etaS == null) this._rpEtaCache.etaS = 0;
     }
     return { phase: word, distM, speedMs: this._rhReelV / BS, etaS, startM,
-      frac: Math.min(1, Math.max(0, 1 - distM / startM)), catching };
+      frac: clamp01(1 - distM / startM), catching };
   }
 
   /**
@@ -6164,8 +6151,7 @@ export class ArmUnit {
     this.target = piece;
     piece._isStationKeepTarget = true;
     this._captureToolKind = 'NET';
-    const standoff = Math.max(SKC.DEFAULT_STANDOFF,
-      Math.min(SKC.MAX_STANDOFF, (piece.sizeMeter || 1) * SKC.DEFAULT_STANDOFF_MULT));
+    const standoff = clamp((piece.sizeMeter || 1) * SKC.DEFAULT_STANDOFF_MULT, SKC.DEFAULT_STANDOFF, SKC.MAX_STANDOFF);
     const tp = piece._scenePosition;
     const nowM = tp ? this.position.distanceTo(tp) / M : standoff;
     this._standoffR = nowM;
@@ -6535,7 +6521,7 @@ export class ArmUnit {
       this._autoFailChance = 0;
 
       // High-tumble targets have a failure chance when auto-captured
-      const tumbleDeg = (this.target?.tumbleRate || 0) * (180 / Math.PI);
+      const tumbleDeg = (this.target?.tumbleRate || 0) * RAD2DEG;
       const isHighTumble = tumbleDeg > 50; // 50°/s is very fast
 
       if (isHighTumble && Math.random() < failChance) {
@@ -6640,7 +6626,7 @@ export class ArmUnit {
           const bLen = Math.sqrt(bx * bx + by * by + bz * bz) || 1;
           const dot = Math.min(1, Math.max(-1,
             (launchDir.x * bx + launchDir.y * by + launchDir.z * bz) / bLen));
-          const offAxisDeg = Math.acos(dot) * 180 / Math.PI;
+          const offAxisDeg = radToDeg(Math.acos(dot));
           const relSpeed = relVel ? Math.sqrt(relVel.x ** 2 + relVel.y ** 2 + relVel.z ** 2) : 0;
           console.info(`[LeadAim] ${this.id} fire: |relVel|=${(relSpeed / M).toFixed(3)} m/s ` +
             `offAxis=${offAxisDeg.toFixed(2)}° dist=${(bLen / M).toFixed(1)} m state=${this.state}`);
@@ -7052,7 +7038,7 @@ export class ArmUnit {
     noseDir.normalize();
 
     const cos = Math.max(-1, Math.min(1, tetherDir.dot(noseDir)));
-    const angleDeg = Math.acos(cos) * 180 / Math.PI;
+    const angleDeg = radToDeg(Math.acos(cos));
 
     // Legacy unassisted fast path: cable already rides ≥ 30° outside the
     // worst-case (wander-inclusive) cone — no steer engaged, no surcharge.
@@ -7113,7 +7099,7 @@ export class ArmUnit {
     const RF = Constants.REDOCK_FEEP || {};
     const arrestDist = RF.ARREST_DISTANCE_M ?? 8;
     const leadM = Math.max(YC.ARREST_STEER_LEAD_M ?? 6, 1e-6);
-    const w = Math.min(1, Math.max(0, ((arrestDist + leadM) - distMeters) / leadM));
+    const w = clamp01(((arrestDist + leadM) - distMeters) / leadM);
     if (w <= 0) return headingDir;
 
     // Bridle-up in world space (local +Y through the current attitude).
@@ -7126,7 +7112,7 @@ export class ArmUnit {
     axis.crossVectors(bridleUp, headingDir);
     if (axis.lengthSq() < 1e-12) return headingDir;
     axis.normalize();
-    headingDir.applyAxisAngle(axis, w * steerDeg * Math.PI / 180).normalize();
+    headingDir.applyAxisAngle(axis, degToRad(w * steerDeg)).normalize();
     return headingDir;
   }
 
@@ -7352,7 +7338,7 @@ export class ArmUnit {
       composeDockedArmQuat(sg.strutDir, sg.azRad, out);
     } else {
       const az = Number.isFinite(this._azimuthDeg)
-        ? (this._azimuthDeg * Math.PI) / 180
+        ? degToRad(this._azimuthDeg)
         : Math.atan2(this.dockOffset.y, this.dockOffset.x);
       strutLocalDirection(this._aimAlpha || 0, az, _herDirTmp);
       composeDockedArmQuat(_herDirTmp, az, out);
@@ -7504,7 +7490,7 @@ export class ArmUnit {
     const dur = Constants.ARM_HOLD_GLIDE_S ?? 0;
     const f = this.state === S.HOLDING_CATCH ? this.stateTimer / dur : 0;
     if (!g || g.arm !== this || !(dur > 0) || !(f < 1) || !d._rackLocalM) { d._holdGlide = null; return false; }
-    const s = f * f * (3 - 2 * f);
+    const s = smoothstep01(f);
     const cell = d._rackLocalM;
     // F2b: the swing ends on her +Z at the support rule's standoff `endStand`; a cell the exact seat put nearer than that (a piece up to
     // ARM_SEAT_MAX_SIZE_M) is reached by a slide in along +Z (see the end of this method), so the swing takes 70 % instead of all of it
@@ -7515,7 +7501,7 @@ export class ArmUnit {
     if (g.dir0 === null) { out.lerpVectors(g.fromM, cell, s); return true; }
     if (s < SWING) {
       const u = s / SWING;
-      const c = Math.max(-1, Math.min(1, g.dir0.z));         // cos of the angle from her +Z
+      const c = clamp(g.dir0.z, -1, 1);         // cos of the angle from her +Z
       if (c > 1 - 1e-9) _gdDir.set(0, 0, 1);
       else {
         _gdAxis.set(g.dir0.y, -g.dir0.x, 0);                  // dir0 × (0,0,1)
@@ -7538,7 +7524,7 @@ export class ArmUnit {
     // exact solve in the glide (the old per-frame solves were 48 per 1 s glide at 17-32 ms each, and the old blend of the two answers
     // along the swing cut a corner through her, measured 0 mm for a 1 m piece).
     const w = (s - SWING) / (1 - SWING);
-    out.set(cell.x * w, 0, endStand !== null ? endStand + (cell.z - endStand) * w : cell.z);
+    out.set(cell.x * w, 0, endStand !== null ? lerp(endStand, cell.z, w) : cell.z);
     return true;
   }
 
@@ -7622,7 +7608,7 @@ export class ArmUnit {
     if (!sl || sl.arm !== this || !(dur > 0) || !d._rackLocalM) { d._rackSlide = null; return false; }
     const f = ((this._rackClockS || 0) - sl.t0) / dur;
     if (!(f < 1)) { d._rackSlide = null; return false; }
-    const k = f <= 0 ? 0 : f * f * (3 - 2 * f);
+    const k = f <= 0 ? 0 : smoothstep01(f);
     out.lerpVectors(sl.fromM, d._rackLocalM, k);
     return true;
   }
@@ -7712,7 +7698,7 @@ export class ArmUnit {
   /** Seat her at the ship-relative point `start + flight · smoothstep(u)` in her docked attitude, the rack riding with her. @private */
   _carrySeat(parentPos, parentQuat, u) {
     const c = this._carry;
-    const s = u * u * (3 - 2 * u);
+    const s = smoothstep01(u);
     _carryLocal.copy(c.flight).multiplyScalar(s).add(c.start);
     if (c.q1) {                                                   // her turn (ArmDockBasis carry*): none while she leaves her strut, over at 55 % of the line
       const att = this._carryAtt || (this._carryAtt = new THREE.Quaternion());
@@ -7757,8 +7743,7 @@ export class ArmUnit {
     c.prepS += dt;
     const V = Constants.CARRY;
     const ps = this._playerSatellite;
-    const D2R = Math.PI / 180;
-    const sTol = V.STRUT_ARRIVE_DEG * D2R;
+    const sTol = V.STRUT_ARRIVE_DEG * DEG2RAD;
     // the strut: its driver clears the target within 0.57° of it; the carry keeps the target alive until the strut has landed
     // within the certified tolerance (each frame's step is exact once the remainder is under one step)
     const strutTo = (target) => {
@@ -7803,7 +7788,7 @@ export class ArmUnit {
       if (!ps || typeof ps.isPetalHolding !== 'function' || !ps.isPetalHolding(c.az)) { this.abortCarry('hold lost'); return; }
       strutTo(c.strutRad);                                 // the strut must stay on its angle while the petal swings
       const thErr = Math.abs(ps.petalThetaRad(c.az) - c.thetaRad);
-      if (thErr < V.THETA_ARRIVE_DEG * D2R && Math.abs(this.getAimAlpha() - c.strutRad) < sTol) {
+      if (thErr < V.THETA_ARRIVE_DEG * DEG2RAD && Math.abs(this.getAimAlpha() - c.strutRad) < sTol) {
         this._carryBeginOut(parentPos, parentQuat);        // (the conditions were looked at above, this frame)
       } else limit();
       return;
@@ -8139,11 +8124,11 @@ export class ArmUnit {
   _noseSeat(parentPos, parentQuat, s) {
     const c = this._carry, r = c.nose.route;
     const L = r.len;
-    s = Math.max(0, Math.min(L, s));
+    s = clamp(s, 0, L);
     c.nose.s = s;
     let k = 0;
     while (k + 1 < r.seg.length && s > r.cum[k + 1] + 1e-12) k++;
-    const f = r.seg[k] > 1e-12 ? Math.max(0, Math.min(1, (s - r.cum[k]) / r.seg[k])) : 1;
+    const f = r.seg[k] > 1e-12 ? clamp01((s - r.cum[k]) / r.seg[k]) : 1;
     c.nose.leg = k;
     _noseP.lerpVectors(r.pos[k], r.pos[k + 1], f);
     const att = this._carryAtt || (this._carryAtt = new THREE.Quaternion());
@@ -8168,8 +8153,8 @@ export class ArmUnit {
     if (!m) return true;
     const t0 = m.t;
     m.t = Math.min(m.dur, m.t + dt);
-    const u = m.t / m.dur, e = u * u * (3 - 2 * u);
-    this._noseSeat(parentPos, parentQuat, m.from + (m.to - m.from) * e);
+    const u = m.t / m.dur, e = smoothstep01(u);
+    this._noseSeat(parentPos, parentQuat, lerp(m.from, m.to, e));
     if (thread && m.t > t0) this._carryThreadStep(dt, parentPos, parentQuat);
     if (m.t >= m.dur) { n.mv = null; return true; }
     return false;
@@ -8193,7 +8178,7 @@ export class ArmUnit {
   _noseCatchShipInto(out) {
     const c = this._carry, d = c.delivered;
     const r = c.nose.route, k = c.nose.leg;
-    const s = c.nose.s, f = r.seg[k] > 1e-12 ? Math.max(0, Math.min(1, (s - r.cum[k]) / r.seg[k])) : 1;
+    const s = c.nose.s, f = r.seg[k] > 1e-12 ? clamp01((s - r.cum[k]) / r.seg[k]) : 1;
     _noseP.lerpVectors(r.pos[k], r.pos[k + 1], f);
     _noseQ.copy(r.quat[k]).slerp(r.quat[k + 1], f);
     return out.copy(d._rackLocalM).applyQuaternion(_noseQ).add(_noseP);
@@ -8567,13 +8552,13 @@ export class ArmUnit {
 
     // Wind: r goes to the cell distance at the line speed (a catch nearer than its cell pays out the same way)
     const step = (RH.NET_REEL_MPS ?? 0.5) * M * dt;
-    const dr = Math.max(-step, Math.min(step, cLen - r));
+    const dr = clamp(cLen - r, -step, step);
     const arrivedLen = Math.abs(cLen - r) <= step + 1e-12;
     let arrive = false;
     if (arrivedLen && r > 1e-12 && cLen > 1e-12 && !seatDeferred) {   // (a deferred first solve: she is not seated until the exact cell is known)
       // the line is at its length: only a catch on her axis comes in (her nose is turning to it, at the normal rate)
       const cosAng = sep.dot(cellW) / (r * cLen);
-      const tol = Math.cos((RH.ARRIVE_TOL_DEG ?? 0.5) * Math.PI / 180);
+      const tol = Math.cos(degToRad(RH.ARRIVE_TOL_DEG ?? 0.5));
       arrive = cosAng >= tol;
     }
     if (r <= 1e-12) arrive = true;
@@ -8583,7 +8568,7 @@ export class ArmUnit {
     const mCatch = Math.max(0, this._computeReelMUnit(armMass, true) - armMass);
     const herShare = mCatch / Math.max(1e-9, armMass + mCatch);
     if (arrive) {
-      const toCell = Math.max(-step, Math.min(step, cLen - r));
+      const toCell = clamp(cLen - r, -step, step);
       if (r > 1e-12) this.position.addScaledVector(_rhV2.copy(sep).multiplyScalar(1 / r), -toCell * herShare);
       sep.copy(cellW);
       const spinAxisW = d.tumbleAxis ? _seatAxisW.copy(d.tumbleAxis) : null;   // snug-ring R3: before the cell's attitude rewrites it
@@ -8668,7 +8653,7 @@ export class ArmUnit {
     const sg = this._playerSatellite && this._playerSatellite.strutGroups && this.index != null
       ? this._playerSatellite.strutGroups[this.index] : null;
     if (sg && Number.isFinite(sg.azRad)) return sg.azRad;
-    if (Number.isFinite(this._azimuthDeg)) return (this._azimuthDeg * Math.PI) / 180;
+    if (Number.isFinite(this._azimuthDeg)) return degToRad(this._azimuthDeg);
     return Math.atan2(this.dockOffset.y, this.dockOffset.x);
   }
 
@@ -8693,8 +8678,7 @@ export class ArmUnit {
   _rhTargetDirWorldInto(parentQuat, out) {
     if (!Number.isFinite(this._rhBestAlpha)) return this._rhStrutDirWorldInto(parentQuat, out);
     const RH = Constants.REEL_HOME || {};
-    const d2r = Math.PI / 180;
-    const a = Math.max((RH.STRUT_MIN_DEG ?? 34) * d2r, Math.min((RH.STRUT_MAX_DEG ?? 180) * d2r, this._rhBestAlpha));
+    const a = clamp(this._rhBestAlpha, (RH.STRUT_MIN_DEG ?? 34) * DEG2RAD, (RH.STRUT_MAX_DEG ?? 180) * DEG2RAD);
     strutLocalDirection(a, this._rhAzRad(), out);
     const ps = this._playerSatellite;
     const pq = parentQuat || (ps && ps.quaternion) || this._lastParentQuat;
@@ -8723,7 +8707,7 @@ export class ArmUnit {
     if (len < 1e-12) return false;
     rel.multiplyScalar(1 / len);
     const tSide = -rel.x * Math.sin(az) + rel.y * Math.cos(az);
-    this._rhPlaneErrRad = Math.asin(Math.max(-1, Math.min(1, tSide)));
+    this._rhPlaneErrRad = Math.asin(clamp(tSide, -1, 1));
     this._rhBestAlpha = bestStrutAlpha(rel, az);
     if (!this._rhRelShip) this._rhRelShip = new THREE.Vector3();
     this._rhRelShip.copy(rel);                 // hinge -> her, ship-local, unit (ArmManager's turn axis and angle)
@@ -8746,8 +8730,8 @@ export class ArmUnit {
     this._rhStrutDirWorldInto(parentQuat, _rhV2);                  // the strut axis (the docked +Z)
     if (dist > 1e-9) z.copy(toTip).multiplyScalar(-1 / dist); else z.copy(_rhV2);
     const distM = dist / M;
-    const w = Math.max(0, Math.min(1, (distM - 0.25) / 0.5));
-    const ws = w * w * (3 - 2 * w);
+    const w = clamp01((distM - 0.25) / 0.5);
+    const ws = smoothstep01(w);
     z.multiplyScalar(ws).addScaledVector(_rhV2, 1 - ws);
     if (z.lengthSq() < 1e-12) return false;
     z.normalize();
@@ -8826,7 +8810,7 @@ export class ArmUnit {
     if (axis.lengthSq() < 1e-12) axis.set(u.y, -u.x, 0);
     if (axis.lengthSq() < 1e-12) axis.set(1, 0, 0);
     axis.normalize();
-    const n = Math.max(1, Math.ceil(ang / (4 * Math.PI / 180)));
+    const n = Math.max(1, Math.ceil(ang / (degToRad(4))));
     const clear = RH.ALIGN_CLEAR_M ?? 0.15;
     for (let k = 1; k <= n; k++) {
       _rhQ1.setFromAxisAngle(axis, ang * k / n);
@@ -8856,7 +8840,7 @@ export class ArmUnit {
     if (len < 1e-12) { this._rhLineUp = null; return false; }
     u.multiplyScalar(1 / len);
     let ang = Math.acos(Math.max(-1, Math.min(1, u.dot(s))));
-    if (ang <= 1e-4 || ang <= 0.5 * (RH.ALIGN_TOL_DEG ?? 10) * Math.PI / 180 * 0.2) {
+    if (ang <= 1e-4 || ang <= degToRad(0.5 * (RH.ALIGN_TOL_DEG ?? 10)) * 0.2) {
       this._rhLineUp = null;                      // in line
       return false;
     }
@@ -9333,7 +9317,7 @@ export class ArmUnit {
     let vCap = this._reelCruiseCap(armMass, hasPayload);
     const lockBoost = (P.BOOST_LOCKOUT_IN_DECEL !== false) && distM <= (P.DECEL_DISTANCE_M ?? 15);
     if (boostMult > 1 && !lockBoost) vCap *= boostMult;
-    const dEff = Math.max(0, Math.min(distM, gateM));
+    const dEff = clamp(gateM, 0, distM);
     const aJet = this._coldGasThrustN() / mass * 100;                      // game-scale m/s^2 (true accel x 100)
     const aBrake = Math.min(P.ACCEL ?? 3.4, aJet / G.MARGIN);
     // reel-hold D1: the hold point, if one holds her. It starts only where she can stop at the law's own deceleration (her speed
@@ -9371,7 +9355,7 @@ export class ArmUnit {
     let vDes, aSlow, jet = false;
     if (hasGas) {
       // the highest speed whose braking to V_DOCK the bottle can still pay for: MARGIN x mass x dv_true / (Isp g0)
-      const vGas = vDock + gas * G.ISP_S * 9.80665 * BS / (G.MARGIN * mass);
+      const vGas = vDock + gas * G.ISP_S * Constants.G0 * BS / (G.MARGIN * mass);
       const vJet = Math.min(vGas, brakeTo(aBrake));
       jet = (vJet > vIon || dHold !== Infinity) && vCap > vIon;   // reel-hold: the last crawl to rest at the hold point is the jet's too (the ion thread alone would coast on)
       vDes = Math.min(vCap, Math.max(vJet, vIon));
@@ -9401,7 +9385,7 @@ export class ArmUnit {
       phase = 'brake';
       this._rhBraking = true;
       // MARGIN x the gas braking needs: mass x speed lost (true m/s) / (Isp g0)
-      const kg = Math.min(gas, G.MARGIN * mass * (-dv / BS) / (G.ISP_S * 9.80665));
+      const kg = Math.min(gas, G.MARGIN * mass * (-dv / BS) / (G.ISP_S * Constants.G0));
       this.coldGasKg = gas - kg;
     }
     this._rhReelPhase = phase;
@@ -9723,12 +9707,12 @@ export class ArmUnit {
       if (distM > 0.25 && dist > 1e-12) {
         _rhV1.set(0, 0, 1).applyQuaternion(this.group.quaternion);                  // her +Z, world
         const cosTail = -_rhV1.dot(toMother) / dist;                                // her -Z . unit(her -> tip)
-        if (cosTail < Math.cos((RH.TAIL_FIRST_TOL_DEG ?? 10) * Math.PI / 180)) rhGate = 0;
+        if (cosTail < Math.cos(degToRad(RH.TAIL_FIRST_TOL_DEG ?? 10))) rhGate = 0;
       }
       if (distM >= 0.5 && dist > 1e-12) {
         this._rhStrutDirWorldInto(parentQuat, _rhV2);
         const cosLine = -_rhV2.dot(toMother) / dist;                                // unit(tip -> her) . strut axis
-        if (cosLine < Math.cos((RH.ALIGN_TOL_DEG ?? 10) * Math.PI / 180)) {
+        if (cosLine < Math.cos(degToRad(RH.ALIGN_TOL_DEG ?? 10))) {
           const lim = Math.max(0, dist - (RH.ALIGN_DIST_M ?? 2.0) * M);
           if (lim <= 0.002 * M) rhLineHeld = true;                                    // held: within 2 mm of the line-up distance
           rhGate = Math.min(rhGate, lim);
@@ -9746,7 +9730,7 @@ export class ArmUnit {
         // only if the line is also off the axis the strut is HEADING for: a strut still slewing will catch up on its own
         this._rhTargetDirWorldInto(parentQuat, _rhV2);
         const cosTarget = -_rhV2.dot(toMother) / dist;
-        if (cosTarget < Math.cos((RH.ALIGN_TOL_DEG ?? 10) * Math.PI / 180)
+        if (cosTarget < Math.cos(degToRad(RH.ALIGN_TOL_DEG ?? 10))
             && !this._rhBeginLineUp(dockWorldPos, dist, parentPos, parentQuat)) {
           this._rhNoPath = true;                                                   // she holds for the mother, and asks again in a second
           this._rhNoPathS = 0;
@@ -9822,7 +9806,7 @@ export class ArmUnit {
           // per-degree — one constant, one plan.
           const YC = Constants.YOKE_CLEARANCE || {};
           const steerLoss = plumeVerdict.steerNeededDeg > 0
-            ? 1 / Math.cos((YC.ARREST_STEER_DEG ?? 15) * Math.PI / 180)
+            ? 1 / Math.cos(degToRad(YC.ARREST_STEER_DEG ?? 15))
             : 1;
           const debit = (RF.DEBIT_K ?? 0.0008) * mUnit * vArrest * steerLoss;
           if (plumeClear && this.fuel >= debit) {
@@ -11228,7 +11212,7 @@ export class ArmUnit {
     const P = DAUGHTER_PLUME;
     const on = intensity > 0.001;
     const lenS = P.BASE_LEN_SCALE * shimmer
-      * (P.MIN_LEN_SCALE + (1 - P.MIN_LEN_SCALE) * intensity);
+      * (lerp(P.MIN_LEN_SCALE, 1, intensity));
     for (const plume of plumes) {
       if (on) {
         plume.visible = true;
@@ -11457,7 +11441,7 @@ export class ArmUnit {
    * @param {number} count
    */
   setNetInventory(count) {
-    this._netInventory = Math.max(0, Math.min(count, this._netInventoryMax || count));
+    this._netInventory = clamp(this._netInventoryMax || count, 0, count);
     eventBus.emit(Events.NET_INVENTORY_CHANGED, {
       source: 'daughter',
       armIndex: this.index ?? null,

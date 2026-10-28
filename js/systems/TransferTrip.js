@@ -78,6 +78,7 @@ import { eventBus as defaultBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { profileAt, playSeconds, tripWaitCap } from './TripProfile.js';
+import { degToRad, radToDeg, clamp01, smoothstep01 } from '../core/MathUtil.js';
 
 /** The plain words (DECISIONS §29; owner: plain language, no phase names). */
 export const TRIP_LINES = Object.freeze({
@@ -206,7 +207,7 @@ export function ionPairLevel(u) {
     return 0;
   }
   const x = (u - I.FLICKER_S) / I.RAMP_S;
-  return x >= 1 ? 1 : x * x * (3 - 2 * x);
+  return x >= 1 ? 1 : smoothstep01(x);
 }
 
 /** The integral of `ionPairLevel` from 0 to `u`: seconds of full output so far (closed form, exact for any frame length). */
@@ -741,7 +742,7 @@ export class TransferTrip {
     this._ionS = t1;
     const litDt = ionStartupLitS(t1) - ionStartupLitS(t0);
     this._litS += litDt;
-    const share = dt > 0 ? Math.max(0, Math.min(1, litDt / dt)) : 1;
+    const share = dt > 0 ? clamp01(litDt / dt) : 1;
     const p = this._d.player;
     if (t1 >= ionStartupStageS()) {
       this._ionLit = true;
@@ -810,7 +811,7 @@ export class TransferTrip {
    */
   _aimCos(dir) {
     const c = this._noseCos();
-    return c === null ? 1 : Math.max(0, Math.min(1, dir * c));
+    return c === null ? 1 : clamp01(dir * c);
   }
 
   /**
@@ -832,7 +833,7 @@ export class TransferTrip {
   _radiatorsAboveBurnBand() {
     const p = this._d.player;
     const th = p && p._flowerThetaRad;
-    return Number.isFinite(th) && th * 180 / Math.PI > Constants.TRIP.BURN_POSE_MAX_DEG + 0.01;
+    return Number.isFinite(th) && radToDeg(th) > Constants.TRIP.BURN_POSE_MAX_DEG + 0.01;
   }
 
   /** @private Fix the plan at burn start: the profile, how long it plays, her tilt and node, and the departure of the field. */
@@ -898,7 +899,7 @@ export class TransferTrip {
     // TURN_POWER_WH: without the means to turn she waits, with no time limit, instead of burning after TURN_WAIT_MAX_S.
     const slow = this._slowTurn();
     if (ap && typeof ap.tripTurnErrorRad === 'function' && (slow || this._turnWaitS < tripWaitCap(Constants.TRIP.TURN_WAIT_MAX_S))
-        && ap.tripTurnErrorRad() > Constants.TRIP.TURN_OK_DEG * Math.PI / 180) {
+        && ap.tripTurnErrorRad() > degToRad(Constants.TRIP.TURN_OK_DEG)) {
       if (!slow) this._turnWaitS += dt;
       return true;
     }

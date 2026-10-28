@@ -34,6 +34,7 @@ import { Constants } from '../core/Constants.js';
 import { totalDeltaV, orbitToKm, orbitToSceneCartesian } from './OrbitalMechanics.js';
 import { clusterToOrbitKm } from './LaunchWindow.js';
 import { riskScore as fieldRiskAt } from './FieldRiskModel.js';
+import { clamp } from '../core/MathUtil.js';
 
 /** The three insertion zones, ordered OUTSIDE-IN (selection cycles this
  *  order). `frac` = distance from the cluster center along the approach axis,
@@ -193,7 +194,7 @@ export function waypoints(fromU, toU, n = WAYPOINT_COUNT) {
   const aLen = Math.hypot(ax, ay, az);
   if (!(aLen > 1e-9)) return lerp();
   const kx = ax / aLen, ky = ay / aLen, kz = az / aLen;
-  const dot = Math.max(-1, Math.min(1, u0.x * u1.x + u0.y * u1.y + u0.z * u1.z));
+  const dot = clamp(u0.x * u1.x + u0.y * u1.y + u0.z * u1.z, -1, 1);
   const angle = Math.acos(dot);
   for (let i = 0; i <= segs; i++) {
     const t = i / segs;

@@ -1,51 +1,42 @@
 /**
- * BlackPatchHeal.js — notice the black box on F4/F5, heal it, record what healed it.
+ * @module core/BlackPatchHeal — notice the black box on F4/F5, heal it, record what healed it. PRODUCTION module
+ * (unlike the dev-only BlackFrameProbe). Off switch: `?heal=0`.
+ * No feature flag, no Events key.
  *
- * CONTEXT (owner, 2026-10-08; BLACK_SCREEN_TRIAGE.md "Producer 4"): on F4 the
- * slightest zoom can flash a black box in the middle of the picture while the
- * left/right edges keep drawing, and ANY change of window size fixes it. The
- * owner's bfp dump (Brave 155, ANGLE-Metal) read the centre of the game's own
- * framebuffer at 0.000 with live edges for ~5 s, no GL error, no context loss.
- * It has never reproduced headless. A tier rebuild (full composer rebuild) in
- * that same dump did NOT heal it — so which step heals is unknown, and this
- * module finds out: it tries cheap steps first and records which one worked.
+ * Problem (owner 2026-10-08; BLACK_SCREEN_TRIAGE.md "Producer 4"): on F4 the slightest zoom can flash a black box in
+ * the middle of the picture while the left/right edges keep drawing, and ANY window resize fixes it. The owner's bfp
+ * dump (Brave 155, ANGLE-Metal) read the game's own framebuffer centre at 0.000 with live edges for ~5 s, no GL error,
+ * no context loss. Never reproduced headless. A full composer rebuild in that dump did NOT heal it, so which step heals
+ * is unknown: this module tries cheap steps first and records which one worked.
  *
- * This is a PRODUCTION module (unlike BlackFrameProbe, which is dev-only). It
- * reads three 4×4 patches of the default framebuffer — same positions and luma
- * as the probe — but only on F4/F5, never while a ride is in flight, and on a
- * slow cadence (every 120 frames; every 30 — BlackFrameProbe's READ_EVERY — for
- * 10 s after a zoom input; each read is a synchronous GPU drain).
+ * Reads three 4×4 patches of the default framebuffer (same positions and luma as the probe), only on F4/F5, never while
+ * a ride is in flight, every 120 frames (every 30 = BlackFrameProbe's READ_EVERY for 10 s after a zoom input); each
+ * read is a synchronous GPU drain.
  *
- * What counts as the black box (all of):
+ * The black box (all of):
  *   - centre luma < BLACK_LUMA on 2 consecutive reads;
  *   - max(left, right) ≥ EDGE_LIVE (the picture is drawing, only the middle died);
- *   - the camera's centre ray hits the Earth's day side (sun dot ≥ SUN_DOT_MIN),
- *     so the centre SHOULD be lit. Open space or night side → no action.
+ *   - the camera's centre ray hits the Earth's day side (sun dot ≥ SUN_DOT_MIN), so the centre SHOULD be lit.
+ *   Open space or night side → no action.
  *
- * What it does about it (stops at the first step after which the centre reads
- * ≥ HEALED_LUMA on the next 2 rendered frames):
+ * Steps (stops at the first after which the centre reads ≥ HEALED_LUMA on the next 2 rendered frames):
  *   S1 projection — camera.updateProjectionMatrix() (invisible)
  *   S2 canvas     — a same-size resize (reallocates the drawing buffer, renders)
  *   S3 targets    — SceneManager.reallocateRenderTargets() (composer targets)
  *   S4 composer   — SceneManager.applyTier(current tier) (full rebuild, flashes)
- * If none heals: record healedBy null and back off 60 s; at most 3 runs per
- * 5 minutes. It never touches the tier, pinTier or the adapt counters.
+ * If none heals: record healedBy null and back off 60 s; at most 3 runs per 5 minutes. It never touches the tier,
+ * pinTier or the adapt counters.
  *
- * Every detection writes ONE record (before any step): time, floor, tier,
- * camera distance, clip planes, canvas, lumas, the expectation, and the first
- * ≤ 3 meshes the centre ray hits. An unexpected object in front of the Earth
- * = a scene bug; the Earth itself first = a buffer/pipeline bug.
- *
- * Off switch: `?heal=0`. No feature flag, no Events key.
- *
- * @module core/BlackPatchHeal
+ * Every detection writes ONE record (before any step): time, floor, tier, camera distance, clip planes, canvas, lumas,
+ * the expectation, and the first ≤ 3 meshes the centre ray hits. An unexpected object in front of the Earth = a scene
+ * bug; the Earth itself first = a buffer/pipeline bug.
  */
 
 import * as THREE from 'three';
 import { Constants } from './Constants.js';
 import { StorageKeys } from './StorageKeys.js';
 
-// ── Thresholds ──────────────────────────────────────────────────────────────
+// Thresholds
 /** Sampled patch size in device pixels (same as BlackFrameProbe). */
 export const PATCH = 4;
 /** Below this mean luma a patch counts as black (8-bit noise floor). */
@@ -57,9 +48,8 @@ export const HEALED_LUMA = 0.02;
 /** Day-side test: dot(surface normal, sun direction) must be at least this. */
 export const SUN_DOT_MIN = 0.2;
 /**
- * Read cadence in frames: inside the post-zoom window / otherwise. 30 = the
- * probe's READ_EVERY (coordinator amendment of D2, 2026-10-09: 15 meant 8
- * GPU drains/s at 120 Hz right after every zoom, exactly when he is looking).
+ * Read cadence in frames: inside the post-zoom window / otherwise. 30 = the probe's READ_EVERY
+ * (15 meant 8 GPU drains/s at 120 Hz right after every zoom).
  */
 export const READ_EVERY_FAST = 30;
 export const READ_EVERY_SLOW = 120;
@@ -85,17 +75,13 @@ const WATCHED_FLOORS = [4, 5];
 /** Step names, in the order they run. */
 export const STEP_NAMES = ['projection', 'canvas', 'targets', 'composer'];
 
-// ── Pure helpers ────────────────────────────────────────────────────────────
+// Pure helpers
 
 /**
- * Is the centre patch the black box?
- *
- * @param {{c:number,l:number,r:number}} lumas - mean 0..1 luma of centre/left/right
- * @param {{hit:boolean,sunDot:number}|null} expect - from rayHitsLitEarth; only
- *   consulted when the centre is black (pass null when it is not)
- * @returns {'ok'|'black'|'skip'} ok = centre drawing; black = the box, act;
- *   skip = dark but legitimately (edges dead too, open space, night side, or
- *   the expectation is unknown)
+ * Is the centre patch the black box? `expect` (from rayHitsLitEarth) is only consulted when the centre is black
+ * (pass null otherwise).
+ * @returns {'ok'|'black'|'skip'} ok = centre drawing; black = the box, act; skip = dark but legitimately
+ * (edges dead too, open space, night side, or unknown expectation)
  */
 export function centreVerdict(lumas, expect) {
   if (!lumas || !(lumas.c < BLACK_LUMA)) return 'ok';
@@ -105,16 +91,10 @@ export function centreVerdict(lumas, expect) {
 }
 
 /**
- * Does the ray (camera centre ray) hit the Earth sphere, and how lit is the
- * point it hits? Pure math, no THREE objects needed — any {x,y,z} works.
- *
- * @param {{x:number,y:number,z:number}} camPos - ray origin
- * @param {{x:number,y:number,z:number}} camDir - ray direction (unit)
- * @param {{x:number,y:number,z:number}} earthCentre - sphere centre
- * @param {number} radius - sphere radius (scene units)
- * @param {{x:number,y:number,z:number}} sunDir - direction TO the sun, world space
- * @returns {{hit:boolean, sunDot:number, lit:boolean, t:number}} hit=false when
- *   the ray misses, the sphere is behind the camera, or the camera is inside it
+ * Does the camera centre ray hit the Earth sphere, and how lit is the point it hits? Pure math on any {x,y,z}. camDir
+ * is a unit vector; sunDir points TO the sun (world space); radius in scene units. hit=false when the ray misses, the
+ * sphere is behind the camera, or the camera is inside it.
+ * @returns {{hit:boolean, sunDot:number, lit:boolean, t:number}}
  */
 export function rayHitsLitEarth(camPos, camDir, earthCentre, radius, sunDir) {
   const miss = { hit: false, sunDot: 0, lit: false, t: -1 };
@@ -137,18 +117,13 @@ export function rayHitsLitEarth(camPos, camDir, earthCentre, radius, sunDir) {
 }
 
 /**
- * The heal-step state machine, free of GL and the DOM. `steps` is an ordered
- * array of `{ name, run }`; `run` is called synchronously the moment its step
- * begins. Feed it one centre-luma read per rendered frame via `observe`.
- *
- *  - start() runs step 1 at once; each `observe(c)` then judges the step just
- *    run: c ≥ HEALED_LUMA for HEAL_CONFIRM_FRAMES reads in a row = healed by
- *    that step; any read below it = go to the next step (run it now);
+ * The heal-step state machine, free of GL and the DOM. `steps` is an ordered array of `{ name, run }`; `run` is called
+ * synchronously the moment its step begins. Feed it one centre-luma read per rendered frame via `observe`.
+ *  - start() runs step 1 at once; each `observe(c)` then judges the step just run: c ≥ HEALED_LUMA for
+ *    HEAL_CONFIRM_FRAMES reads in a row = healed by that step; any read below it = next step (run now);
  *  - the steps running out = healedBy null + a BACKOFF_MS back-off;
  *  - abort() = healedBy 'aborted' (counts toward the run cap, no back-off);
- *  - canStart() is false inside a back-off or once RUN_CAP runs started within
- *    RUN_CAP_WINDOW_MS.
- *
+ *  - canStart() is false inside a back-off or once RUN_CAP runs started within RUN_CAP_WINDOW_MS.
  * @param {{ steps: Array<{name:string, run:function(): void}>, now?: function(): number }} opts
  */
 export function createHealLadder({ steps, now = () => performance.now() } = {}) {
@@ -214,8 +189,8 @@ export function createHealLadder({ steps, now = () => performance.now() } = {}) 
       return true;
     },
     /**
-     * @param {number} c - centre luma read this frame
-     * @returns {object|null} the finished run `{steps, healedBy, ms}`, else null
+     * @param {number} c centre luma read this frame  @returns {object|null} the finished run `{steps, healedBy, ms}`,
+     * else null
      */
     observe(c, nowMs = now()) {
       if (!running) return null;
@@ -235,7 +210,7 @@ export function createHealLadder({ steps, now = () => performance.now() } = {}) 
   };
 }
 
-// ── The log (in memory + localStorage) ──────────────────────────────────────
+// The log (in memory + localStorage)
 const ring = [];
 
 /** @returns {object[]} a copy of the last (up to LOG_MAX) heal records, oldest first */
@@ -278,12 +253,9 @@ function pushRecord(rec, storage) {
 
 const round = (v, d) => (Number.isFinite(v) ? Math.round(v * 10 ** d) / 10 ** d : v);
 
-/**
- * One raycast hit → the plain-words record fields (D4). `drawn` = the main
- * camera draws this object's layer: the raycast sees layer 1 (the near-field
- * subtree) too, so a layer-1 hit with drawn false is NOT the occluder on a
- * floor whose near-field pass is off.
- */
+/** One raycast hit → the plain-words record fields. `drawn` = the main camera draws this object's layer: the raycast
+ *  also sees layer 1 (near-field subtree), so a layer-1 hit with drawn false is NOT the occluder on a floor whose
+ *  near-field pass is off. */
 function describeHit(h, camLayers) {
   const o = h.object;
   const m = Array.isArray(o.material) ? o.material[0] : o.material;
@@ -315,25 +287,13 @@ function warnLine(rec) {
   return `${head} — ${verdict}; first hit: ${hit}`;
 }
 
-// ── The installer ───────────────────────────────────────────────────────────
-
 /**
- * Install the heal. Call once after SceneManager + Earth exist. Returns null
- * when `?heal=0` or there is no WebGL context, so the per-frame hook is a
- * single falsy check. Heavy objects are allocated here, once; `tick`
- * allocates nothing on a frame that does not read.
- *
- * @param {{
- *   sceneManager: object, earth?: object,
- *   getLadder?: function(): (object|null),
- *   steps?: Object<string, function(): void>,
- *   search?: string,
- *   now?: function(): number, isVisible?: function(): boolean,
- *   storage?: object|null, warn?: function(string): void,
- * }} deps - `getLadder` is a getter on purpose: main.js assigns its
- *   ladderController AFTER this install point (and never on a ?ladder=0 boot).
- *   `steps` overrides individual steps by name (main.js passes `canvas`).
- *   The rest are test seams with production defaults.
+ * Install the heal (once, after SceneManager + Earth exist). Returns null when `?heal=0` or there is no WebGL context,
+ * so the per-frame hook is a single falsy check. Heavy objects are allocated here, once; `tick` allocates nothing on a
+ * frame that does not read. deps: `getLadder` is a getter on purpose
+ * (main.js assigns its ladderController AFTER this install point, and never on a ?ladder=0 boot); `steps` overrides
+ * individual steps by name (main.js passes `canvas`); the rest (search, now, isVisible, storage, warn) are test seams
+ * with production defaults.
  * @returns {{ tick: function(number): void }|null}
  */
 export function installBlackPatchHeal({
@@ -357,7 +317,7 @@ export function installBlackPatchHeal({
 
   loadPersisted(storage);
 
-  // --- Heal steps (names fixed; `steps` may replace any of them) ---
+  // Heal steps (names fixed; `steps` may replace any)
   const table = {
     projection: () => {
       if (sceneManager.camera) sceneManager.camera.updateProjectionMatrix();
@@ -371,7 +331,7 @@ export function installBlackPatchHeal({
   const ladderSteps = STEP_NAMES.map((name) => ({ name, run: table[name] }));
   const healLadder = createHealLadder({ steps: ladderSteps, now });
 
-  // --- Allocated once ---
+  // Allocated once
   const pxBuf = new Uint8Array(PATCH * PATCH * 4);
   const lumas = { c: 0, l: 0, r: 0 };
   const rc = new THREE.Raycaster();
@@ -386,7 +346,7 @@ export function installBlackPatchHeal({
     o.raycast(rc, hitBuf);
   };
 
-  // --- State ---
+  // State
   let sinceRead = 0;
   let suspect = false;            // one black read seen, a second one confirms
   let lastHoldoffTrueMs = -Infinity;
@@ -435,8 +395,8 @@ export function installBlackPatchHeal({
   }
 
   /**
-   * Aim the raycaster down the camera's centre ray and test it against the
-   * Earth sphere. Leaves `rc` aimed for collectHits. Null when unknowable.
+   * Aim the raycaster down the camera's centre ray and test it against the Earth sphere; leaves `rc` aimed for
+   * collectHits. Null when unknowable.
    */
   function computeExpectation() {
     const cam = sceneManager.camera;
@@ -530,9 +490,8 @@ export function installBlackPatchHeal({
 
   return {
     /**
-     * Call once per DRAWN frame, right after the final render in the same rAF
-     * task (the buffer is read before present).
-     * @param {number} _ts - rAF timestamp (unused: the clock is `now`)
+     * Call once per DRAWN frame, right after the final render in the same rAF task (the buffer is read before present).
+     * @param {number} _ts rAF timestamp (unused: the clock is `now`)
      */
     tick(_ts) {
       const nowMs = now();
@@ -550,8 +509,7 @@ export function installBlackPatchHeal({
       sinceRead++;
       const interval = (suspect || nowMs - lastHoldoffTrueMs < POST_ZOOM_WINDOW_MS) ? READ_EVERY_FAST : READ_EVERY_SLOW;
       if (sinceRead < interval) return;
-      // Due. Cheapest gates first; each failure leaves the read due (cheap
-      // boolean checks per frame) except the ones that cost an allocation.
+      // Due. Cheapest gates first; a failure leaves the read due, except those that cost an allocation.
       if (!lad || !lad.isActive()) { suspect = false; return; }
       if (!healLadder.canStart(nowMs)) { sinceRead = 0; suspect = false; return; }
       if (lad.isRiding() || !isVisible()) { suspect = false; return; }

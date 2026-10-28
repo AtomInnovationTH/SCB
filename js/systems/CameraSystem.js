@@ -22,6 +22,7 @@ import { FloorContract } from '../core/FloorContract.js';
 import { earthTurnTarget, earthTurnDirAt, EARTH_TURN_S, EARTH_TURN_MIN_GAP_U, earthFrameTurnS, earthFrameEase } from './EarthTurn.js';
 import { testsRequestedHere } from '../ui/hud/TestsSwitch.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
+import { degToRad, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 // ============================================================================
 // VIEW MODES
@@ -205,8 +206,8 @@ export const CATCH_FOCUS = Object.freeze({
  * @returns {{aim:number, pos:number}} weights 0..1
  */
 export function catchFocusWeights(u) {
-  const t = Math.min(1, Math.max(0, u)) * CATCH_FOCUS.IN_S;
-  const ss = (x) => { const c = Math.min(1, Math.max(0, x)); return c * c * (3 - 2 * c); };
+  const t = clamp01(u) * CATCH_FOCUS.IN_S;
+  const ss = (x) => { const c = clamp01(x); return smoothstep01(c); };
   return {
     aim: ss(t / CATCH_FOCUS.AIM_S),
     pos: ss((t - CATCH_FOCUS.POS_DELAY_S) / Math.max(1e-6, CATCH_FOCUS.IN_S - CATCH_FOCUS.POS_DELAY_S)),
@@ -1390,7 +1391,7 @@ export class CameraSystem {
 
       // UX Fix B: Smooth FOV lerp piggybacked on view transition
       if (this._fovTransitionStart !== undefined && this._fovTransitionEnd !== undefined) {
-        const lerpedFov = this._fovTransitionStart + (this._fovTransitionEnd - this._fovTransitionStart) * ease;
+        const lerpedFov = lerp(this._fovTransitionStart, this._fovTransitionEnd, ease);
         this._baseFov = lerpedFov;
         this.camera.fov = lerpedFov;
         this.camera.updateProjectionMatrix();
@@ -1656,7 +1657,7 @@ export class CameraSystem {
       if (io.t <= 0) { this._endIonStartup('done'); return; }
     }
     if (!playerQuat) return;
-    const w = io.t * io.t * (3 - 2 * io.t);
+    const w = smoothstep01(io.t);
     if (!(w > 1e-4)) return;
     const cam = this.camera;
     const M = Constants.SCENE_UNITS_PER_METER;
@@ -1872,7 +1873,7 @@ export class CameraSystem {
     this.orbit.phi += _turn.phi;
 
     // Clamp phi to avoid gimbal lock
-    this.orbit.phi = Math.max(0.1, Math.min(Math.PI - 0.1, this.orbit.phi));
+    this.orbit.phi = clamp(this.orbit.phi, 0.1, Math.PI - 0.1);
 
     // Build LVLH frame: radial = "up pole", lateral = "right", forward = "ahead"
     const lateral = this._tmpVecA.crossVectors(velDir, radialDir).normalize();
@@ -1930,7 +1931,7 @@ export class CameraSystem {
     const dRadial = nx * r.x + ny * r.y + nz * r.z;
     const dLateral = nx * l.x + ny * l.y + nz * l.z;
     const dForward = nx * f.x + ny * f.y + nz * f.z;
-    const phi = Math.acos(Math.max(-1, Math.min(1, dRadial)));
+    const phi = Math.acos(clamp(dRadial, -1, 1));
     const theta = Math.atan2(dLateral, dForward);
     return { theta, phi };
   }
@@ -2066,7 +2067,7 @@ export class CameraSystem {
     cfg.phi += _turn.phi;
 
     // Clamp phi to avoid gimbal lock
-    cfg.phi = Math.max(0.1, Math.min(Math.PI - 0.1, cfg.phi));
+    cfg.phi = clamp(cfg.phi, 0.1, Math.PI - 0.1);
 
     // Build LVLH frame (same as orbit)
     const lateral = this._tmpVecA.crossVectors(velDir, radialDir).normalize();
@@ -2414,7 +2415,7 @@ export class CameraSystem {
     }
 
     const t = c.timer / DURATIONS[c.phase];
-    const ease = t * t * (3 - 2 * t); // smoothstep
+    const ease = smoothstep01(t); // smoothstep
     const arm = c.arm;
     if (!arm || !arm.position) { this.skipLaunchCeremony(); return null; }
 
@@ -3394,7 +3395,7 @@ export class CameraSystem {
       ? Math.min(beat.easeInS, beat.duration)
       : beat.duration);
     const tc = Math.min(1, t);
-    const ease = tc * tc * (3 - 2 * tc); // smoothstep, saturates at easeInS when set
+    const ease = smoothstep01(tc); // smoothstep, saturates at easeInS when set
 
     // Launcher anchor (mother-net-reel plan §11.1): arm.position for daughter,
     // the live pod muzzle for mother. Polled every frame — the pod rides the
@@ -3450,7 +3451,7 @@ export class CameraSystem {
 
     // FOV lerp between previous beat's target and current beat's target
     const prevFov = c.beatIndex > 0 ? c.beats[c.beatIndex - 1].fov : c.savedFov;
-    this._baseFov = prevFov + (beat.fov - prevFov) * ease;
+    this._baseFov = lerp(prevFov, beat.fov, ease);
     this.camera.fov = this._baseFov;
     this.camera.near = 0.000001; // ~0.1m (tight framing)
     this.camera.updateProjectionMatrix();
@@ -4166,7 +4167,7 @@ export class CameraSystem {
         this.armPilot._lookBlendTime < this.armPilot._lookBlendDuration) {
       this.armPilot._lookBlendTime += dt;
       const t = Math.min(1, this.armPilot._lookBlendTime / this.armPilot._lookBlendDuration);
-      const eased = t * t * (3 - 2 * t); // smoothstep
+      const eased = smoothstep01(t); // smoothstep
 
       forwardDir = new THREE.Vector3().lerpVectors(
         this.armPilot._prevForward,
@@ -4304,8 +4305,8 @@ export class CameraSystem {
       this.firstPerson.freeLookYaw += dx * 0.3;
       this.firstPerson.freeLookPitch += dy * 0.3;
       // Clamp free-look
-      this.firstPerson.freeLookYaw = Math.max(-90, Math.min(90, this.firstPerson.freeLookYaw));
-      this.firstPerson.freeLookPitch = Math.max(-45, Math.min(45, this.firstPerson.freeLookPitch));
+      this.firstPerson.freeLookYaw = clamp(this.firstPerson.freeLookYaw, -90, 90);
+      this.firstPerson.freeLookPitch = clamp(this.firstPerson.freeLookPitch, -45, 45);
 
       // Skills discovery: free-look event
       eventBus.emit(Events.CAMERA_FREE_LOOK);
@@ -4359,27 +4360,21 @@ export class CameraSystem {
       const step = fine ? 0.03 : 0.05;
       const zoomDelta = e.deltaY > 0 ? (1 + step) : (1 - step);
       this.orbit.distance *= zoomDelta;
-      this.orbit.distance = Math.max(
-        this.orbit.minDistance,
-        Math.min(this.orbit.maxDistance, this.orbit.distance)
-      );
+      this.orbit.distance = clamp(this.orbit.distance, this.orbit.minDistance, this.orbit.maxDistance);
       // Cross the Schmitt trigger → engage/disengage inspection optics+overlay.
       this._evaluateInspectZoom();
     } else if (this.currentView === CameraViews.INSPECTION) {
       // Inspection zoom (smooth 3% steps for fine control)
       const zoomDelta = e.deltaY > 0 ? 1.03 : 0.97;
       this.inspection.distance *= zoomDelta;
-      this.inspection.distance = Math.max(
-        this.inspection.minDistance,
-        Math.min(this.inspection.maxDistance, this.inspection.distance)
-      );
+      this.inspection.distance = clamp(this.inspection.distance, this.inspection.minDistance, this.inspection.maxDistance);
     } else if (this.currentView === CameraViews.CHASE) {
       // Adjust chase distance (smooth 5% steps, min ~10m behind)
       const zoomDelta = e.deltaY > 0 ? 1.05 : 0.95;
       this.chase.offsetBehind *= zoomDelta;
       // Min lowered to ~4m (was 10m) so FLY can zoom in closer to the ship;
       // stays outside the ~3m near-clip (CAMERA_NEAR) to avoid hull clipping.
-      this.chase.offsetBehind = Math.max(0.00004, Math.min(0.001, this.chase.offsetBehind));
+      this.chase.offsetBehind = clamp(this.chase.offsetBehind, 0.00004, 0.001);
       this.chase.offsetAbove = this.chase.offsetBehind * 0.48;
     } else if (this.currentView === CameraViews.TARGET_LOCK) {
       // Unreachable as of 2026-06-03 (TARGET_LOCK removed from VIEW_CYCLE);
@@ -4387,11 +4382,11 @@ export class CameraSystem {
       // Adjust target lock offset distance
       const zoomDelta = e.deltaY > 0 ? 1.1 : 0.9;
       this.targetLock.offsetDistance *= zoomDelta;
-      this.targetLock.offsetDistance = Math.max(0.0001, Math.min(0.005, this.targetLock.offsetDistance));
+      this.targetLock.offsetDistance = clamp(this.targetLock.offsetDistance, 0.0001, 0.005);
     } else if (this.currentView === CameraViews.FIRST_PERSON) {
       // Adjust FOV slightly for zoom effect (update _baseFov so FOV breathe offset stacks correctly)
       this._baseFov += e.deltaY > 0 ? 2 : -2;
-      this._baseFov = Math.max(30, Math.min(90, this._baseFov));
+      this._baseFov = clamp(this._baseFov, 30, 90);
       this.camera.fov = this._baseFov + this._fovBreathOffset;
       this.camera.updateProjectionMatrix();
     }
@@ -4744,8 +4739,8 @@ export class CameraSystem {
     const endsMin = Math.min(poleDist(from.x), poleDist(to.x));
     const g = { t: 0, arc: !(arcMin < Math.min(0.3, 0.9 * endsMin)), az0: 0, daz: 0, th0: 0, dth: 0 };
     if (!g.arc) {
-      g.th0 = Math.acos(Math.max(-1, Math.min(1, from.x)));
-      g.dth = Math.acos(Math.max(-1, Math.min(1, to.x))) - g.th0;
+      g.th0 = Math.acos(clamp(from.x, -1, 1));
+      g.dth = Math.acos(clamp(to.x, -1, 1)) - g.th0;
       g.az0 = Math.atan2(from.z, from.y);
       let d = Math.atan2(to.z, to.y) - g.az0;
       while (d > Math.PI) d -= 2 * Math.PI;
@@ -4767,7 +4762,7 @@ export class CameraSystem {
       this._finishLadderViewReturn();
       return;
     }
-    const s = u * u * (3 - 2 * u);
+    const s = smoothstep01(u);
     if (g.arc) {
       vr.quatS.identity().slerp(vr.quat, s);
       lc.local.copy(vr.from).applyQuaternion(vr.quatS);
@@ -5539,7 +5534,7 @@ export class CameraSystem {
     let k = 0;
     if (tip) {
       const sepM = pos.distanceTo(tip) / M;
-      k = Math.min(1, Math.max(0, (CATCH_FOCUS.REEL_WIDEN_M - sepM) / CATCH_FOCUS.REEL_WIDEN_M));
+      k = clamp01((CATCH_FOCUS.REEL_WIDEN_M - sepM) / CATCH_FOCUS.REEL_WIDEN_M);
       if (k > 0) f.tgt.lerp(tip, 0.5 * k);
     }
     // FB7: the shot stands so that the nearest point of her and her catch is clear of the near plane
@@ -5732,7 +5727,7 @@ export class CameraSystem {
       // B2: off the line, so her tail glow is side-on. Turned about the radial it is a true REEL_OFF_DEG only for a line
       // about square to the radial; for a line within ~60 deg of it the turn shrinks (measured 9 deg at 26 deg off the
       // radial, fix round 1 FB5). Then tilt away from the pole about the axis square to both instead.
-      const th = CATCH_FOCUS.REEL_OFF_DEG * Math.PI / 180;
+      const th = degToRad(CATCH_FOCUS.REEL_OFF_DEG);
       const line = f.q2a.copy(out);
       out.applyAxisAngle(R, th);
       if (line.dot(out) > Math.cos(th * 0.85)) {
@@ -5787,7 +5782,7 @@ export class CameraSystem {
     } else f.azSide = ang >= 0 ? 1 : -1;
     if (keep) { keep.ang = keep.shrink ? ang * (1 - t) : ang; keep.set = true; }
     const az = ang * t;
-    const el = sa + (sb - sa) * t;                                         // sin(elevation): between the ends, so never nearer the pole than the nearer end
+    const el = lerp(sa, sb, t);                                         // sin(elevation): between the ends, so never nearer the pole than the nearer end
     // horizontal direction turned by az about R:  h cos + (R x h) sin
     const cx = f.q2c.crossVectors(R, ha);
     out.copy(ha).multiplyScalar(Math.cos(az)).addScaledVector(cx, Math.sin(az));
@@ -5876,7 +5871,7 @@ export class CameraSystem {
         if (snap) { f.snapPending = false; f.u = 1; f.azKeepAim.set = false; f.azKeep.set = false; }   // ... at full weight: the camera is there NOW
       }
     }
-    f.u = Math.min(1, Math.max(0, f.u + (f.engaging ? 1 : -1) * dt * f.rate));
+    f.u = clamp01(f.u + (f.engaging ? 1 : -1) * dt * f.rate);
     const ww = catchFocusWeights(f.u);                                     // aim first (wa), the camera position follows (w)
     f.w = f.takenOver ? 0 : ww.pos; f.wa = ww.aim;                         // taken over: the ladder owns the position, the look-at fades
     if (!(f.w > 0)) f.azKeep.set = false;
@@ -6151,8 +6146,8 @@ export class CameraSystem {
         lc.riding = false;
       }
       ease = cubicInOut(lc.rideT); // cubic in-out
-      lc.curDistU = lc.rideFromDistU + (lc.rideToDistU - lc.rideFromDistU) * ease;
-      const fov = lc.rideFromFov + (lc.rideToFov - lc.rideFromFov) * ease;
+      lc.curDistU = lerp(lc.rideFromDistU, lc.rideToDistU, ease);
+      const fov = lerp(lc.rideFromFov, lc.rideToFov, ease);
       this._baseFov = fov;
       this.camera.fov = fov;
     } else {
@@ -6190,7 +6185,7 @@ export class CameraSystem {
           // the pole (right-hand rule); clamp the resulting polar angle to
           // ORBIT's gimbal window [0.1, π−0.1] (see _computeOrbit).
           const angle = Math.acos(Math.max(-1, Math.min(1, v.dot(up))));
-          const target = Math.max(0.1, Math.min(Math.PI - 0.1, angle + turn.phi));
+          const target = clamp(angle + turn.phi, 0.1, Math.PI - 0.1);
           if (target !== angle) v.applyAxisAngle(right, target - angle);
         }
         v.normalize();
@@ -6349,7 +6344,7 @@ export class CameraSystem {
     if (lc.paneBiasPx !== 0) {
       const viewportW = this._ladderViewportWidthPx();   // 0 when unknown → no bias, never a guess
       if (viewportW > 0) {
-        const b = Math.max(-0.9, Math.min(0.9, lc.paneBiasPx / viewportW));
+        const b = clamp(lc.paneBiasPx / viewportW, -0.9, 0.9);
         const halfW = Math.tan(THREE.MathUtils.DEG2RAD * 0.5 * this.camera.fov) * (this.camera.aspect || 1);
         // +θ about local Y pans the camera LEFT → the subject lands RIGHT of centre (a left pane).
         this.camera.rotateY(Math.atan(halfW * b));

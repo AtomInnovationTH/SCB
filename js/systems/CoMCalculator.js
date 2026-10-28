@@ -45,6 +45,7 @@ import { heldSlotAnchorInto, rackOffsetFor, catchLongAxisInto, nextFreeRackCell 
 import { composeDockedArmQuat } from '../entities/ArmDockBasis.js';
 import { DebrisField } from '../entities/DebrisField.js';           // net-duck D1: the drawn scale of a held catch
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';          // net-duck D1: the drawn mesh
+import { degToRad, clamp01, lerp } from '../core/MathUtil.js';
 
 /** 1 meter in scene units — matches ArmManager/PlayerSatellite convention */
 const M = 0.00001;
@@ -179,7 +180,7 @@ export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotInde
   const sinA = Math.sin(alpha);
   const cosA = Math.cos(alpha);
   _hcdDir.set(sinA * g.ox, sinA * g.oy, sinA * g.oz - cosA);
-  const az = Number.isFinite(dp.azimuthDeg) ? (dp.azimuthDeg * Math.PI) / 180 : Math.atan2(g.oy, g.ox);
+  const az = Number.isFinite(dp.azimuthDeg) ? degToRad(dp.azimuthDeg) : Math.atan2(g.oy, g.ox);
   composeDockedArmQuat(_hcdDir, az, _hcdQ);
 
   const cell = (held && Number.isInteger(held._rackCell)) ? held._rackCell : slotIndex;
@@ -486,7 +487,7 @@ const _radSum = { massKg: 0, mx: 0, my: 0, mz: 0 };
 /** The strut line of the petal at azimuth `azDeg` swung to `thetaRad`: hinge pin h and direction u (module scratch `_pl`). */
 function _petalLine(azDeg, thetaRad) {
   const FL = Constants.THERMAL.FLOWER;
-  const az = (azDeg * Math.PI) / 180;
+  const az = degToRad(azDeg);
   const ca = Math.cos(az), sa = Math.sin(az);
   const st = Math.sin(thetaRad), ct = Math.cos(thetaRad);
   _pl.hx = FL.HINGE_R_M * ca; _pl.hy = FL.HINGE_R_M * sa; _pl.hz = FL.HINGE_Z_M;
@@ -769,9 +770,9 @@ export function computeInertia(armManager, playerSatellite, opts) {
     ixx = Math.min(ixx + wantX, Math.max(ixx, capX));
     iyy = Math.min(iyy + wantY, Math.max(iyy, capY));
     izz = Math.min(izz + wantZ, Math.max(izz, capZ));
-    if (wantX > 0) shareX = Math.min(1, Math.max(0, (ixx - x0) / wantX));
-    if (wantY > 0) shareY = Math.min(1, Math.max(0, (iyy - y0) / wantY));
-    if (wantZ > 0) shareZ = Math.min(1, Math.max(0, (izz - z0) / wantZ));
+    if (wantX > 0) shareX = clamp01((ixx - x0) / wantX);
+    if (wantY > 0) shareY = clamp01((iyy - y0) / wantY);
+    if (wantZ > 0) shareZ = clamp01((izz - z0) / wantZ);
   }
 
   if (opts && opts.about === 'origin') return { ixx, iyy, izz };
@@ -1088,7 +1089,7 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
     const az = (totalMass * p.z + mass * book.z) / denom;
     const driftAfter = Math.sqrt(ax * ax + ay * ay + az * az);
 
-    const deployability = Math.max(0, Math.min(1, (arm.fuel ?? 0) / 100));
+    const deployability = clamp01((arm.fuel ?? 0) / 100);
     const score = W_CG * (driftBefore - driftAfter) + W_DEPLOY * (1 - deployability);
 
     // Tie-break: the least deployable daughter is the right mule.
@@ -1359,7 +1360,7 @@ function _heldCloud(type, id) {
         for (let j = 0; j <= kv; j++) {
           const v = j / kv;
           if (u + v > 1 + 1e-12) break;
-          out.push(A.x + (B.x - A.x) * u + (C.x - A.x) * v, A.y + (B.y - A.y) * u + (C.y - A.y) * v, A.z + (B.z - A.z) * u + (C.z - A.z) * v);
+          out.push(lerp(A.x, B.x, u) + (C.x - A.x) * v, lerp(A.y, B.y, u) + (C.y - A.y) * v, lerp(A.z, B.z, u) + (C.z - A.z) * v);
         }
       }
     }

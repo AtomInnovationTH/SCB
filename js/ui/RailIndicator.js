@@ -70,6 +70,7 @@ import { FloorContract } from '../core/FloorContract.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { midHeightCss, dodgeTop } from './RailGeometry.js';
 import { GestureHints } from './hud/GestureHints.js';
+import { clamp } from '../core/MathUtil.js';
 
 /** The HUD column on the WHERE rail's side — what the dodge measures (HUD.js's right stack). */
 export const SIDE_COLUMN_ID = 'hud-right-column';
@@ -204,7 +205,7 @@ export class RailIndicator {
     let pct = 0;
     if (state.chargeSide === 'up' && floorId === state.floor + 1) pct = state.charge * 100;
     if (state.chargeSide === 'down' && floorId === state.floor - 1) pct = state.charge * 100;
-    const fillPct = Math.max(0, Math.min(100, pct));
+    const fillPct = clamp(pct, 0, 100);
     if (out) { out.current = current; out.fillPct = fillPct; return out; }
     return { current, fillPct };
   }

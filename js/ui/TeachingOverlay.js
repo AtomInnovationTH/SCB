@@ -14,6 +14,7 @@ import { Events } from '../core/Events.js';
 import { decorateGlossary } from '../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import { GestureHints } from './hud/GestureHints.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 
 const _hasDOM = typeof document !== 'undefined';
 
@@ -181,7 +182,7 @@ export class TeachingOverlay {
       max-width: ${C.OVERLAY_WIDTH_PX || 400}px;
       min-width: ${C.OVERLAY_MIN_WIDTH_PX || 280}px;
       background: ${C.OVERLAY_BG || 'rgba(0, 10, 20, 0.85)'};
-      border: 1px solid ${C.OVERLAY_BORDER_COLOR || '#00ccff'};
+      border: 1px solid ${C.OVERLAY_BORDER_COLOR || VisualLaw.COLORS.INFO};
       border-radius: 6px;
       padding: 12px 16px;
       z-index: 9000;
@@ -222,7 +223,7 @@ export class TeachingOverlay {
     titleSpan.textContent = moment.title.toUpperCase();
     titleSpan.style.cssText = `
       font-weight: bold;
-      color: ${C.OVERLAY_TITLE_COLOR || '#00ccff'};
+      color: ${C.OVERLAY_TITLE_COLOR || VisualLaw.COLORS.INFO};
       font-size: 14px;
       letter-spacing: 0.05em;
     `;

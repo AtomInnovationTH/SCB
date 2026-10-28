@@ -32,12 +32,13 @@ import { STOPPED_EVENTS } from './WhereNextList.js';
 import {
   rangeMapRect, buildLayout, reachBand, ringOfRow, spiralPoints, spiralAt, callArrow, orbitCount, hitTest, textLines,
 } from '../systems/RangeMapModel.js';
+import { degToRad, clamp01 } from '../core/MathUtil.js';
 
 export const RANGE_MAP_ID = 'range-map';
 const RM = () => Constants.RANGE_MAP;
 
 const ARROW_ANGLE = Math.PI;                 // the called satellite's arrow runs along the left radial (the break label is on the right)
-const SAT_GLYPH_RAD = -40 * Math.PI / 180;
+const SAT_GLYPH_RAD = degToRad(-40);
 
 /** @private the row kinds a path is drawn to */
 const isDestination = (row) => !!row && (row.kind === 'field' || row.kind === 'satellite');
@@ -126,7 +127,7 @@ export function paintRangeMap(g, v) {
       g.fillRect(x - 10, y - 1, 5, 2);
       g.fillRect(x + 5, y - 1, 5, 2);
     } else if (ring.state === 'cleared') {                               // a tick
-      const a = 40 * Math.PI / 180;
+      const a = degToRad(40);
       const x = L.cx + ring.radius * Math.cos(a);
       const y = L.cy + ring.radius * Math.sin(a);
       g.beginPath();
@@ -477,7 +478,7 @@ export class RangeMap {
       this._plan = { profile, fromKm: home.altKm, toKm };
       this._path = spiralPoints(L, this._plan);
       if (d.phase === 'burn' && trip) {
-        const f = Math.max(0, Math.min(1, Number.isFinite(trip.progress) ? trip.progress : 0));
+        const f = clamp01(Number.isFinite(trip.progress) ? trip.progress : 0);
         this._flownTo = f;
         const at = spiralAt(L, this._plan, f);
         this._dot = { x: at.x, y: at.y, radius: at.radius };

@@ -1,8 +1,5 @@
 /**
- * EventBus.js — Pub/sub event system for decoupled communication
- * @module core/EventBus
- * 
- * Singleton pattern: import { eventBus } from './EventBus.js'
+ * @module core/EventBus — pub/sub for decoupled communication. Singleton: `import { eventBus } from './EventBus.js'`.
  */
 
 class EventBus {
@@ -11,27 +8,17 @@ class EventBus {
     this.listeners = new Map();
   }
 
-  /**
-   * Subscribe to an event
-   * @param {string} event - Event name
-   * @param {Function} callback - Handler function
-   * @returns {Function} Unsubscribe function
-   */
+  /** Subscribe to an event. @returns {Function} unsubscribe function */
   on(event, callback) {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
     this.listeners.get(event).add(callback);
 
-    // Return unsubscribe convenience function
     return () => this.off(event, callback);
   }
 
-  /**
-   * Unsubscribe from an event
-   * @param {string} event - Event name
-   * @param {Function} callback - The exact handler to remove
-   */
+  /** Unsubscribe the exact handler from an event. */
   off(event, callback) {
     const handlers = this.listeners.get(event);
     if (handlers) {
@@ -42,12 +29,7 @@ class EventBus {
     }
   }
 
-  /**
-   * Subscribe once — auto-unsubscribes after first call
-   * @param {string} event - Event name
-   * @param {Function} callback - Handler function
-   * @returns {Function} Unsubscribe function
-   */
+  /** Subscribe once: auto-unsubscribes after the first call. @returns {Function} unsubscribe function */
   once(event, callback) {
     const wrapper = (data) => {
       this.off(event, wrapper);
@@ -56,11 +38,7 @@ class EventBus {
     return this.on(event, wrapper);
   }
 
-  /**
-   * Emit an event to all subscribers
-   * @param {string} event - Event name
-   * @param {*} [data] - Optional payload
-   */
+  /** Emit an event to all subscribers (a throwing handler is logged, not propagated). */
   emit(event, data) {
     const handlers = this.listeners.get(event);
     if (handlers) {
@@ -74,10 +52,7 @@ class EventBus {
     }
   }
 
-  /**
-   * Remove all listeners for a specific event, or all events
-   * @param {string} [event] - If omitted, clears everything
-   */
+  /** Remove all listeners for an event, or for every event when omitted. */
   clear(event) {
     if (event) {
       this.listeners.delete(event);

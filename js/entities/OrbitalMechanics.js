@@ -6,6 +6,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { degToRad, radToDeg, clamp } from '../core/MathUtil.js';
 
 // ============================================================================
 // KEPLER'S EQUATION
@@ -169,19 +170,19 @@ export function cartesianToKeplerian(position, velocity, mu = Constants.MU_EARTH
   const a = -mu / (2 * energy);
 
   // Inclination
-  const i = Math.acos(Math.max(-1, Math.min(1, hz / h)));
+  const i = Math.acos(clamp(hz / h, -1, 1));
 
   // RAAN
   let raan = 0;
   if (n > 1e-10) {
-    raan = Math.acos(Math.max(-1, Math.min(1, nx / n)));
+    raan = Math.acos(clamp(nx / n, -1, 1));
     if (ny < 0) raan = 2 * Math.PI - raan;
   }
 
   // Argument of perigee (requires a defined line of nodes AND non-circular orbit)
   let argP = 0;
   if (n > 1e-10 && e > 1e-10) {
-    argP = Math.acos(Math.max(-1, Math.min(1, (nx * ex + ny * ey) / (n * e))));
+    argP = Math.acos(clamp((nx * ex + ny * ey) / (n * e), -1, 1));
     if (ez < 0) argP = 2 * Math.PI - argP;
   }
 
@@ -191,13 +192,11 @@ export function cartesianToKeplerian(position, velocity, mu = Constants.MU_EARTH
   // round-trip position-preserving for the player's default circular orbit.
   let trueAnomaly = 0;
   if (e > 1e-10) {
-    trueAnomaly = Math.acos(Math.max(-1, Math.min(1,
-      (ex * px + ey * py + ez * pz) / (e * r)
-    )));
+    trueAnomaly = Math.acos(clamp((ex * px + ey * py + ez * pz) / (e * r), -1, 1));
     if (rdotv < 0) trueAnomaly = 2 * Math.PI - trueAnomaly;
   } else if (n > 1e-10) {
     // Circular inclined orbit — use argument of latitude u = ν + ω, with ω=0.
-    trueAnomaly = Math.acos(Math.max(-1, Math.min(1, (nx * px + ny * py) / (n * r))));
+    trueAnomaly = Math.acos(clamp((nx * px + ny * py) / (n * r), -1, 1));
     if (pz < 0) trueAnomaly = 2 * Math.PI - trueAnomaly;
   }
 
@@ -257,7 +256,7 @@ export function reseatOrbitFromScene(orbit, scenePos, velocityKmS) {
       || !isFinite(newOrbit.argPerigee)
       || !isFinite(newOrbit.trueAnomaly)) return false;
   orbit.semiMajorAxis = newOrbit.semiMajorAxis * SCENE_SCALE;
-  orbit.eccentricity  = Math.max(0, Math.min(0.1, newOrbit.eccentricity));
+  orbit.eccentricity  = clamp(newOrbit.eccentricity, 0, 0.1);
   orbit.inclination   = newOrbit.inclination;
   orbit.raan          = newOrbit.raan;
   orbit.argPerigee    = newOrbit.argPerigee;
@@ -297,14 +296,14 @@ export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = 
   const TWO_PI = 2 * Math.PI;
   const norm = (a) => ((a % TWO_PI) + TWO_PI) % TWO_PI;
 
-  const lat = latDeg * Math.PI / 180;
+  const lat = degToRad(latDeg);
   const inc = inclinationRad;
   const sinInc = Math.sin(inc);
 
   // ν such that lat = asin(sinInc · sinν); clamp when the parallel is above the
   // orbit's reach (|lat| > inc).
   let ratio = Math.abs(sinInc) < 1e-9 ? 0 : Math.sin(lat) / sinInc;
-  ratio = Math.max(-1, Math.min(1, ratio));
+  ratio = clamp(ratio, -1, 1);
   let nu = Math.asin(ratio);
   if (!ascending) nu = Math.PI - nu;   // descending (southbound) branch
 
@@ -313,7 +312,7 @@ export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = 
   const uProj = Math.atan2(Math.cos(inc) * Math.sin(nu), Math.cos(nu));
 
   // ECI longitude is the mirror of geographic east-longitude (fixed Earth mesh).
-  const lonEci = -lonEastDeg * Math.PI / 180;
+  const lonEci = degToRad(-lonEastDeg);
 
   return {
     raan: norm(lonEci - uProj),
@@ -340,8 +339,8 @@ export function subSatellitePoint(pos) {
   const x = Number(pos && pos.x), y = Number(pos && pos.y), z = Number(pos && pos.z);
   const r = Math.sqrt(x * x + y * y + z * z);
   if (!(r > 0) || !Number.isFinite(r)) return { latDeg: 0, lonEastDeg: 0 };
-  const latDeg = Math.asin(Math.max(-1, Math.min(1, y / r))) * 180 / Math.PI;
-  let lonEastDeg = -Math.atan2(z, x) * 180 / Math.PI;
+  const latDeg = radToDeg(Math.asin(clamp(y / r, -1, 1)));
+  let lonEastDeg = radToDeg(-Math.atan2(z, x));
   if (lonEastDeg <= -180) lonEastDeg += 360;      // atan2 = π exactly → keep the +180 branch
   return { latDeg, lonEastDeg };
 }
@@ -469,7 +468,7 @@ export function totalDeltaV(orbit1, orbit2, mu = Constants.MU_EARTH) {
  */
 export function computeSalvageDeltaV(metalMassKg, isp, dryMassKg) {
   if (metalMassKg <= 0 || isp <= 0 || dryMassKg <= 0) return 0;
-  const g0 = 9.80665; // m/s²
+  const g0 = Constants.G0; // m/s²
   const exhaustVelocity = isp * g0;
   const massRatio = (dryMassKg + metalMassKg) / dryMassKg;
   return exhaustVelocity * Math.log(massRatio);

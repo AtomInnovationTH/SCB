@@ -318,6 +318,7 @@ export function recommendedStarter(upgrades, owned, credits, preference = STARTE
 // auto-pin: manufacturing a cheapest-item goal the player never chose produced
 // noise like "Extra Cold Gas — READY AT DEPOT" while tanks were already full.
 import { pinProgress } from './shopPin.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 export { pinProgress };
 
 /** Spring tier descriptions for shop display */
@@ -1012,7 +1013,7 @@ export class ShopScreen {
 
     // Level indicator for multi-level upgrades (consumables show no level badge).
     const levelBadge = (!upgrade.consumable && upgrade.maxLevel > 1)
-      ? `<span style="font-size:0.65rem;color:${maxed ? '#00ff88' : '#f0c040'};margin-left:6px;
+      ? `<span style="font-size:0.65rem;color:${maxed ? VisualLaw.COLORS.PLAYER : '#f0c040'};margin-left:6px;
                        padding:1px 5px;border-radius:2px;border:1px solid ${maxed ? 'rgba(0,255,136,0.3)' : 'rgba(240,192,64,0.3)'};
                        background:${maxed ? 'rgba(0,255,136,0.1)' : 'rgba(240,192,64,0.08)'};">
            LVL ${currentLevel}/${upgrade.maxLevel}</span>`
@@ -1056,7 +1057,7 @@ export class ShopScreen {
                   border:1px solid ${isRecommended ? 'rgba(240,192,64,0.45)' : borderColor};
                   opacity:${opacity};transition:all 0.3s;">
         <div style="flex:1;">
-          <div style="font-size:0.85rem;color:${maxed ? 'rgba(0,255,136,0.6)' : '#00ff88'};">
+          <div style="font-size:0.85rem;color:${maxed ? 'rgba(0,255,136,0.6)' : VisualLaw.COLORS.PLAYER};">
             ${upgrade.name}${levelBadge}${trlBadge}${starBadge}${pinBadge}
           </div>
           <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${decorateGlossary(depotWords(upgrade.desc), { once: true })}</div>
@@ -1075,7 +1076,7 @@ export class ShopScreen {
             ? `<span style="color:rgba(0,255,136,0.5);font-size:0.75rem;">✓ OWNED</span>`
             : `<div style="font-size:0.8rem;color:${costColor};${costStrike}">${price.toLocaleString()} cr</div>
                <button class="shop-buy-btn" data-id="${upgrade.id}" style="
-                 font-family:var(--font-mono); font-size:0.7rem; color:${available ? '#00ff88' : 'rgba(0,255,136,0.3)'};
+                 font-family:var(--font-mono); font-size:0.7rem; color:${available ? VisualLaw.COLORS.PLAYER : 'rgba(0,255,136,0.3)'};
                  background: ${available ? 'rgba(0,255,136,0.15)' : 'transparent'};
                  border: 1px solid ${available ? 'rgba(0,255,136,0.4)' : 'rgba(0,255,136,0.15)'};
                  padding: 3px 12px; cursor: ${available ? 'pointer' : 'default'}; border-radius: 2px;
@@ -1185,7 +1186,7 @@ export class ShopScreen {
       statusHtml = `
         <div style="font-size:0.8rem;color:${costColor};${costStrike}">${tier.cost.toLocaleString()} cr</div>
         <button class="shop-tier-buy-btn" data-tier-type="${tierType}" data-tier-index="${tierIndex}" style="
-          font-family:var(--font-mono); font-size:0.7rem; color:${available ? '#00ff88' : 'rgba(0,255,136,0.3)'};
+          font-family:var(--font-mono); font-size:0.7rem; color:${available ? VisualLaw.COLORS.PLAYER : 'rgba(0,255,136,0.3)'};
           background: ${available ? 'rgba(0,255,136,0.15)' : 'transparent'};
           border: 1px solid ${available ? 'rgba(0,255,136,0.4)' : 'rgba(0,255,136,0.15)'};
           padding: 3px 12px; cursor: ${available ? 'pointer' : 'default'}; border-radius: 2px;
@@ -1205,7 +1206,7 @@ export class ShopScreen {
                   background:${bgColor};border:1px solid ${borderColor};
                   opacity:${opacity};transition:all 0.3s;">
         <div style="flex:1;">
-          <div style="font-size:0.85rem;color:${isCurrent ? '#00ff88' : isOwned ? 'rgba(0,255,136,0.6)' : isLocked ? 'rgba(100,100,100,0.5)' : '#00ff88'};">
+          <div style="font-size:0.85rem;color:${isCurrent ? VisualLaw.COLORS.PLAYER : isOwned ? 'rgba(0,255,136,0.6)' : isLocked ? 'rgba(100,100,100,0.5)' : VisualLaw.COLORS.PLAYER};">
             <span style="font-size:0.65rem;color:${isCurrent ? '#f0c040' : 'rgba(0,255,136,0.4)'};
                          padding:1px 5px;border-radius:2px;border:1px solid ${isCurrent ? 'rgba(240,192,64,0.3)' : 'rgba(0,255,136,0.15)'};
                          background:${isCurrent ? 'rgba(240,192,64,0.08)' : 'transparent'};margin-right:6px;">${tierLabel}</span>

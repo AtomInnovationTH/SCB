@@ -13,6 +13,7 @@
 
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { clamp } from '../core/MathUtil.js';
 
 export const PowerBuses = {
   THRUST: 'thrust',
@@ -85,7 +86,7 @@ class PowerDistribution {
    */
   _adjustBus(bus, delta) {
     const current = this[bus];
-    const newVal = Math.max(MIN_ALLOC, Math.min(100, current + delta));
+    const newVal = clamp(current + delta, MIN_ALLOC, 100);
     const actualDelta = newVal - current;
 
     if (actualDelta === 0) return;

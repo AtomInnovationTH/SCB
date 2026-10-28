@@ -9,6 +9,7 @@ import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { clamp } from '../core/MathUtil.js';
 
 export class TrawlManager {
   constructor() {
@@ -385,7 +386,7 @@ export class TrawlManager {
     }
 
     // Clamp
-    this.traverseSpeed = Math.max(T.SPEED_MIN, Math.min(T.SPEED_MAX, this.traverseSpeed));
+    this.traverseSpeed = clamp(this.traverseSpeed, T.SPEED_MIN, T.SPEED_MAX);
   }
 
   /**

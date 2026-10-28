@@ -23,6 +23,7 @@
 import { Constants } from '../core/Constants.js';
 import { profileAt } from './TripProfile.js';
 import { kgText } from './WhereNextRows.js';
+import { degToRad, clamp01, clamp } from '../core/MathUtil.js';
 
 const DOT = '\u00b7';
 const R = () => Constants.RANGE_MAP;
@@ -214,7 +215,7 @@ export function buildLayout({ rows, herKm, side }) {
 
 /** @private clamp a box inside the canvas (shifts it; never shrinks it) */
 function clampBox(b, side) {
-  return { x: Math.max(0, Math.min(side - b.w, b.x)), y: Math.max(0, Math.min(side - b.h, b.y)), w: b.w, h: b.h };
+  return { x: clamp(b.x, 0, side - b.w), y: clamp(b.y, 0, side - b.h), w: b.w, h: b.h };
 }
 
 /**
@@ -241,7 +242,7 @@ function placeLabels(layout) {
     for (let d = 10; d <= 180; d += 10) tries.push(pref + d, pref - d);
     let best = null;
     for (const deg of tries) {
-      const rad = deg * Math.PI / 180;
+      const rad = degToRad(deg);
       const px = cx + ring.radius * Math.cos(rad);
       const py = cy + ring.radius * Math.sin(rad);
       const box = clampBox({ x: px - w / 2, y: py - c.LABEL_H_PX / 2, w, h: c.LABEL_H_PX }, side);
@@ -321,7 +322,7 @@ export function ringOfRow(layout, rowId, rows) {
 export function spiralAt(layout, plan, f) {
   const turns = Number.isFinite(plan.turns) ? plan.turns : R().SPIRAL_TURNS;
   const start = Number.isFinite(plan.startRad) ? plan.startRad : Math.PI;
-  const g = Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : 0;
+  const g = Number.isFinite(f) ? clamp01(f) : 0;
   const prof = plan.profile;
   const altKm = prof && Array.isArray(prof.samples) && prof.samples.length >= 2
     ? profileAt(prof, g).altKm

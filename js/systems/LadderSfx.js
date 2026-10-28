@@ -58,6 +58,8 @@
  * @module systems/LadderSfx
  */
 
+import { clamp01 } from '../core/MathUtil.js';
+
 // ── Tunables (own-module, house rule: not FloorContract/Constants) ──────────
 
 /** Hard ceiling for every recipe's envelope peak gain (the beds' low family). */
@@ -203,7 +205,7 @@ export class LadderSfx {
    */
   onCharge(charge, _side) {
     if (this._disposed || !this._enabled) return;
-    const c = Math.max(0, Math.min(1, Number(charge) || 0));
+    const c = clamp01(Number(charge) || 0);
     if (c <= 0) { this._ratchetStep = -1; return; }
     const step = Math.min(RATCHET_STEPS - 1, Math.floor(c * RATCHET_STEPS));
     if (step <= this._ratchetStep) {

@@ -21,6 +21,7 @@
 import { Constants } from '../core/Constants.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 import { parseBullets } from '../core/UpdateWatch.js';
+import { clamp } from '../core/MathUtil.js';
 
 /** The card's fixed numbers + strings (own-module export; the house rule). */
 export const WHATS_NEW_CARD = Object.freeze({
@@ -158,7 +159,7 @@ export async function loadNotes(fetchFn, version = Constants.VERSION) {
  */
 export function placeNotice(rect, viewportW) {
   const left = Math.max(WHATS_NEW_CARD.EDGE_PX, rect.left);
-  const width = Math.max(0, Math.min(WHATS_NEW_CARD.MAX_WIDTH_PX, viewportW - left - WHATS_NEW_CARD.EDGE_PX));
+  const width = clamp(viewportW - left - WHATS_NEW_CARD.EDGE_PX, 0, WHATS_NEW_CARD.MAX_WIDTH_PX);
   return { top: rect.bottom + WHATS_NEW_CARD.GAP_PX, left, width };
 }
 

@@ -50,6 +50,8 @@ import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '
 import { getSolarCellTexture } from '../scene/solarCellTexture.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { DebrisField } from './DebrisField.js';
+import { lerp } from '../core/MathUtil.js';
+import { degToRad, radToDeg, clamp01, clamp, smoothstep01 } from '../core/MathUtil.js';
 
 const M = Constants.SCENE_UNITS_PER_METER;
 const RO = Constants.RENDER_ORDER;
@@ -184,8 +186,7 @@ const IN_SWAP_LEGS = IN_FRONT_Z.map((z) => swapLegs(z));
 
 const _Z = new THREE.Vector3(0, 0, 1);
 const QY_PI = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);   // her frame -> the satellite's (+Z toward her)
-const smooth = (t) => { const c = Math.min(1, Math.max(0, t)); return c * c * (3 - 2 * c); };
-const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (t) => { const c = clamp01(t); return smoothstep01(c); };
 const _MB = new THREE.Matrix4();
 /** The satellite's attitude in HER frame when it faces her axis from the direction `phi` (an angle about her Z, from her +X): +Z toward the axis,
  *  +Y aft (her -Z: the arm folds up and away from her), +X along the wings. phi = +-PI/2: above / below her. */
@@ -1350,7 +1351,7 @@ export class ResupplySatellite {
       if (this._fold.phase === 'restoring' || this._fold.phase === 'settled') { this._fold.phase = 'cmd'; this._fold.t = 0; }     // folded again from the angle she had first
       return;
     }
-    const goal = (FL.POSE_CARGO_DEG * Math.PI) / 180;
+    const goal = degToRad(FL.POSE_CARGO_DEG);
     if (Math.abs(p._flowerThetaRad - goal) <= 0.01) return;                          // already at 90 deg: planned as she stands (above or below it she goes to 90: closed at 0 deg the racks are as walled in as at 146)
     this._fold = { prevRad: p._flowerThetaRad, goalRad: goal, phase: 'cmd', t: 0 };
   }
@@ -1378,7 +1379,7 @@ export class ResupplySatellite {
     } else if (f.phase === 'restoring') {
       if (f.back) {                                                                   // the swing back is under way: it ends where the driver lands her (a 180 deg start lands at her open angle, 146: the line says that one)
         if (p._flowerTargetTheta === undefined || Math.abs(th - f.prevRad) < 0.01 || f.t > FOLD_MAX_S) {
-          say(`Radiators back to ${Math.round((th * 180) / Math.PI)}°.`);
+          say(`Radiators back to ${Math.round(radToDeg(th))}°.`);
           this._fold = null;
         } else if (Math.abs(p._flowerTargetTheta - f.prevRad) > 1e-9 && !p.flowerCommandsLocked) p._flowerTargetTheta = f.prevRad;
         return;
@@ -1457,7 +1458,7 @@ export class ResupplySatellite {
     const d = rec.piece;
     if (rec.qRel && d.tumbleAxis) {
       const q = this._tqB.copy(this.player.quaternion).multiply(rec.qRel);
-      const w = Math.max(-1, Math.min(1, q.w));
+      const w = clamp(q.w, -1, 1);
       const s = Math.sqrt(Math.max(0, 1 - w * w));
       if (s > 1e-6) d.tumbleAxis.set(q.x / s, q.y / s, q.z / s); else d.tumbleAxis.set(0, 1, 0);
       d.tumbleAngle = 2 * Math.acos(w);
@@ -1983,7 +1984,7 @@ export class ResupplySatellite {
     const arm = [];                                                        // the links' axis lines, shoulder - elbow - wrist
     const seg = (ay, az, by, bz) => {
       const n = Math.max(1, Math.ceil(Math.hypot(by - ay, bz - az) / 0.05));
-      for (let i = 0; i <= n; i++) { const t = i / n; const w = toHer(0, ay + (by - ay) * t, az + (bz - az) * t); arm.push(w.x, w.y, w.z); }
+      for (let i = 0; i <= n; i++) { const t = i / n; const w = toHer(0, lerp(ay, by, t), lerp(az, bz, t)); arm.push(w.x, w.y, w.z); }
     };
     seg(ARM_BASE.y, ARM_BASE.z, J.ey, J.ez);
     seg(J.ey, J.ez, J.wy, J.wz);
@@ -2013,13 +2014,13 @@ export class ResupplySatellite {
       dirs.push({ d: new THREE.Vector3(0, 0, 1), deg: 0 });
       for (let a = PLAN.noseConeStepDeg; a <= PLAN.noseConeDeg + 1e-9; a += PLAN.noseConeStepDeg) {
         for (let k = 0; k < 8; k++) {
-          const ph = k * Math.PI / 4, ar = a * Math.PI / 180;
+          const ph = k * Math.PI / 4, ar = degToRad(a);
           dirs.push({ d: new THREE.Vector3(Math.sin(ar) * Math.cos(ph), Math.sin(ar) * Math.sin(ph), Math.cos(ar)), deg: a });
         }
       }
     } else {
       for (let deg = 0; deg <= PLAN.alphaMaxDeg + 1e-9; deg += PLAN.alphaStepDeg) {
-        const a = deg * Math.PI / 180;
+        const a = degToRad(deg);
         dirs.push({ d: new THREE.Vector3(0, side * Math.sin(a), -Math.cos(a)), deg });
       }
     }
@@ -2523,7 +2524,7 @@ export class ResupplySatellite {
   /** The tip on the stow / dock path at closure `s` (0 stowed .. 1 on `hold`), by path length; no allocation. */
   _pathTip(s, hold, out) {
     const l0 = STOW_TIP.distanceTo(STOW_RISE), l1 = STOW_RISE.distanceTo(RAISE), l2 = RAISE.distanceTo(hold);
-    let u = Math.min(1, Math.max(0, s)) * (l0 + l1 + l2);
+    let u = clamp01(s) * (l0 + l1 + l2);
     if (u <= l0) return out.lerpVectors(STOW_TIP, STOW_RISE, u / l0);
     u -= l0;
     if (u <= l1) return out.lerpVectors(STOW_RISE, RAISE, u / l1);

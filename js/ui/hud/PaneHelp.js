@@ -41,6 +41,7 @@
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { TouchControls } from '../TouchControls.js';
+import { clamp } from '../../core/MathUtil.js';
 
 /**
  * Tunables (module-local, house rule). Hover + tooltip reuse the 08-workbench
@@ -526,7 +527,7 @@ export class PaneHelp {
       const vh = (win && win.innerHeight) || 800;
       const w = tip.offsetWidth || 260;
       const h = tip.offsetHeight || 70;
-      let x = Math.max(8, Math.min(r.left, vw - w - 8));
+      let x = clamp(vw - w - 8, 8, r.left);
       let y = r.bottom + 6;
       if (y + h > vh - 8) y = Math.max(8, r.top - h - 6);
       tip.style.left = `${Math.round(x)}px`;

@@ -19,6 +19,7 @@
  *   armGroup.quaternion.copy(motherWorldQuat).multiply(outLocal);
  */
 import * as THREE from 'three';
+import { DEG2RAD } from '../core/MathUtil.js';
 
 /* Preallocated temps — module-private, single-threaded game loop. */
 const _armDir   = new THREE.Vector3();
@@ -144,7 +145,7 @@ export function launchKickPerNs(tip, com, dir, out = { x: 0, y: 0 }) {
  * @returns {number} α in [lo, hi]
  */
 export function chestStrutAlpha(missAt, lo = 0, hi = Math.PI) {
-  const step = Math.PI / 180;
+  const step = DEG2RAD;
   let best = lo, bv = Infinity;
   for (let a = lo; a <= hi + 1e-9; a += step) {
     const v = missAt(Math.min(a, hi));

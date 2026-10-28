@@ -36,6 +36,8 @@ import {
   coOrbitalReadout,
 } from '../entities/LaunchWindow.js';
 import { mono } from '../core/Typeface.js';
+import { degToRad, clamp, lerp } from '../core/MathUtil.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 
 const DM = Constants.DEBRIS_MAP;
 
@@ -348,7 +350,7 @@ export class DebrisMap {
     // payload-less (hand-built/legacy) clusters.
     const clusterOrbit = {
       semiMajorAxis: Constants.EARTH_RADIUS_KM + cluster.avgAltKm,
-      inclination: cluster.avgIncRad ?? (cluster.incCenter * Math.PI / 180),
+      inclination: cluster.avgIncRad ?? (degToRad(cluster.incCenter)),
       eccentricity: 0.001,
       argumentOfPeriapsis: 0,
       raan: 0,
@@ -476,7 +478,7 @@ export class DebrisMap {
   /** Draw the left column: title bar + ranked cluster list. */
   _drawLeftColumn(ctx, W, H) {
     // Title bar
-    ctx.fillStyle = '#ffaa00';
+    ctx.fillStyle = VisualLaw.COLORS.CAUTION;
     ctx.font = mono(14, 'bold');
     ctx.fillText('▸ DEBRIS MAP', 16, 22);
 
@@ -541,7 +543,7 @@ export class DebrisMap {
       ctx.fillStyle = riskColor;
       ctx.fillText(`risk ${c.conjRisk.toFixed(1)}`, 160, y + 54);
 
-      ctx.fillStyle = '#ffaa00';
+      ctx.fillStyle = VisualLaw.COLORS.CAUTION;
       ctx.font = mono(11, 'bold');
       ctx.fillText(`SCORE ${c.score.toFixed(1)}`, 260, y + 54);
 
@@ -590,7 +592,7 @@ export class DebrisMap {
     ctx.stroke();
 
     const committed = this._committedCluster && this._committedCluster.id === cluster.id;
-    ctx.fillStyle = '#ffaa00';
+    ctx.fillStyle = VisualLaw.COLORS.CAUTION;
     ctx.font = mono(11, 'bold');
     ctx.fillText('▸ TRANSFER WINDOW', 14, y + 16);
     if (committed) {
@@ -679,8 +681,8 @@ export class DebrisMap {
     const py = cy + pr * Math.sin(-Math.PI / 2);
 
     const meanAlt = (cluster.altRange.min + cluster.altRange.max) / 2;
-    const cr = altToRadius(Math.max(minAlt + 1, Math.min(maxAlt - 1, meanAlt)));
-    const ca = (cluster.incCenter * Math.PI / 180); // arc center angle (matches arc layout)
+    const cr = altToRadius(clamp(meanAlt, minAlt + 1, maxAlt - 1));
+    const ca = (degToRad(cluster.incCenter)); // arc center angle (matches arc layout)
     const tx = cx + cr * Math.cos(ca);
     const ty = cy + cr * Math.sin(ca);
 
@@ -694,7 +696,7 @@ export class DebrisMap {
     const bow = 1.25; // bow outward from Earth for a transfer-ellipse feel
     ctx.beginPath();
     ctx.moveTo(px, py);
-    ctx.quadraticCurveTo(cx + (mcx - cx) * bow, cy + (mcy - cy) * bow, tx, ty);
+    ctx.quadraticCurveTo(lerp(cx, mcx, bow), lerp(cy, mcy, bow), tx, ty);
     ctx.stroke();
     ctx.setLineDash([]);
 
@@ -713,7 +715,7 @@ export class DebrisMap {
     const maxR = Math.min(w / 2 - 20, (H - 80) / 2 - 10);
 
     // Title
-    ctx.fillStyle = '#ffaa00';
+    ctx.fillStyle = VisualLaw.COLORS.CAUTION;
     ctx.font = mono(11, 'bold');
     ctx.fillText('ORBITAL SURVEY', x + 10, 22);
 
@@ -792,7 +794,7 @@ export class DebrisMap {
       const r = altToRadius(meanAlt);
 
       // Arc angular position based on inclination (spread clusters visually)
-      const incRad = c.incCenter * Math.PI / 180;
+      const incRad = degToRad(c.incCenter);
       const startAngle = incRad - 0.4 - i * 0.15;
       const endAngle = incRad + 0.4 + i * 0.15;
 
@@ -848,7 +850,7 @@ export class DebrisMap {
         const px = cx + pr * Math.cos(pa);
         const py = cy + pr * Math.sin(pa);
 
-        ctx.fillStyle = '#00ff88';
+        ctx.fillStyle = VisualLaw.COLORS.PLAYER;
         ctx.beginPath();
         ctx.moveTo(px, py - 5);
         ctx.lineTo(px + 4, py);
@@ -857,7 +859,7 @@ export class DebrisMap {
         ctx.closePath();
         ctx.fill();
 
-        ctx.fillStyle = '#00ff88';
+        ctx.fillStyle = VisualLaw.COLORS.PLAYER;
         ctx.font = mono(10);
         ctx.textAlign = 'center';
         ctx.fillText('YOU', px, py - 8);

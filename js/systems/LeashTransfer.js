@@ -63,6 +63,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { DEG2RAD, clamp } from '../core/MathUtil.js';
 
 const K = () => Constants.LEASH;
 
@@ -94,7 +95,6 @@ function qRot(q, v) {
 /** Rotate v by the inverse of q (unit quaternion): world → ship frame. */
 const qRotInv = (q, v) => qRot({ x: -q.x, y: -q.y, z: -q.z, w: q.w }, v);
 
-const DEG = Math.PI / 180;
 
 // ─── planHandoff ───────────────────────────────────────────────────────────
 
@@ -121,7 +121,7 @@ export function leashWheelLimitS(angleRad) {
  */
 export function leashTurnLimits() {
     const k = K();
-    return { maxRate: k.TURN_MAX_RATE_DEG * DEG, accel: k.TURN_ACCEL_DEG * DEG };
+    return { maxRate: k.TURN_MAX_RATE_DEG * DEG2RAD, accel: k.TURN_ACCEL_DEG * DEG2RAD };
 }
 
 /**
@@ -207,8 +207,8 @@ export function latchCheck({ neckPos, bagVel, tipPos, lineDirIn }) {
     if (lateral > k.FUNNEL_MOUTH_R_M) return 'bounce';
     if (vc <= k.LATCH_OK_MPS) return 'latch';
     const sp = len(bagVel);
-    const mis = sp > 1e-4 ? Math.acos(Math.max(-1, Math.min(1, vc / sp))) : 0;
-    if (vc <= k.LATCH_ALIGNED_MPS && mis <= k.LATCH_ALIGN_DEG * DEG) return 'latch';
+    const mis = sp > 1e-4 ? Math.acos(clamp(vc / sp, -1, 1)) : 0;
+    if (vc <= k.LATCH_ALIGNED_MPS && mis <= k.LATCH_ALIGN_DEG * DEG2RAD) return 'latch';
     return 'bounce';
 }
 
@@ -309,7 +309,7 @@ export class LeashLine {
             if (this.mode === 'in') {
                 const want = -this.reelSpeed;
                 // accel-limited, with a smooth tail (a hard stop of the ramp makes the soft line overshoot ~3 mm/s)
-                const acc = Math.max(-k.REEL_ACCEL_MPS2, Math.min(k.REEL_ACCEL_MPS2, (want - this.Ldot) / k.RAMP_TAU_S));
+                const acc = clamp((want - this.Ldot) / k.RAMP_TAU_S, -k.REEL_ACCEL_MPS2, k.REEL_ACCEL_MPS2);
                 this.Ldot += acc * h;
                 Lnew = Lold + this.Ldot * h;
                 Lnew = Math.max(Lnew, base1, this.minLen);
@@ -400,7 +400,7 @@ export class LeashTransfer {
         this.tipIndex = o.tipIndex ?? 0;
         this.mass = o.bagMass;
         this.bagR = o.bagR;
-        this.thetaH = o.thetaHRad ?? k.HANDOFF_THETA_DEG * DEG;
+        this.thetaH = o.thetaHRad ?? k.HANDOFF_THETA_DEG * DEG2RAD;
         this.homeTheta = o.homeThetaRad;
         this.unfoldTheta = o.unfoldThetaRad;
         this.reelSpeed = o.reelSpeedMps ?? k.REEL_SPEED_MPS;
@@ -678,7 +678,7 @@ export class LeashTransfer {
             if (this._payoutDue(io)) { this._enter('RELEASE'); return true; }
             return false;
         }
-        if (Math.abs(io.radiatorThetaRad - this.thetaH) > (K().THETA_TOL_DEG * DEG)) return false;
+        if (Math.abs(io.radiatorThetaRad - this.thetaH) > (K().THETA_TOL_DEG * DEG2RAD)) return false;
         if (!this._replan(io)) return false;
         this._enter('RELEASE');
         return true;
@@ -715,7 +715,7 @@ export class LeashTransfer {
      */
     _payoutDue(io) {
         const k = K();
-        const left = Math.abs(io.radiatorThetaRad - this.thetaH) / (k.HOLD_SLEW_DEG_S * DEG);
+        const left = Math.abs(io.radiatorThetaRad - this.thetaH) / (k.HOLD_SLEW_DEG_S * DEG2RAD);
         const v = k.PAYOUT_PUSH_MPS;
         const need = Math.abs(this.plan.payoutM) / v + v / (2 * k.REEL_ACCEL_MPS2);
         return left <= need + (k.PAYOUT_FOLD_MARGIN_S ?? 0.3);
@@ -724,7 +724,7 @@ export class LeashTransfer {
     /** fb16: the radiator has reached the hand-off angle (within THETA_TOL) and has stopped moving (it lands exactly on its target). */
     _foldLanded(io) {
         const th = io.radiatorThetaRad;
-        return Math.abs(th - this.thetaH) <= (K().THETA_TOL_DEG * DEG)
+        return Math.abs(th - this.thetaH) <= (K().THETA_TOL_DEG * DEG2RAD)
             && this._prevTheta !== undefined && Math.abs(th - this._prevTheta) < 1e-7;
     }
 
@@ -987,7 +987,7 @@ export class LeashTransfer {
             this._cmd('unfoldRadiators', { thetaRad: this.unfoldTheta });
             return false;
         }
-        if (Math.abs(io.radiatorThetaRad - this.unfoldTheta) <= (K().THETA_TOL_DEG * DEG) && this.stepNo > this.enteredStep) {
+        if (Math.abs(io.radiatorThetaRad - this.unfoldTheta) <= (K().THETA_TOL_DEG * DEG2RAD) && this.stepNo > this.enteredStep) {
             this._cmd('releaseHold');
             this._enter('DONE');
         }
@@ -1086,7 +1086,7 @@ export class LeashTransfer {
                 h.waitStep = this.stepNo;
                 return false;
             }
-            if (this.stepNo > h.waitStep && Math.abs(io.radiatorThetaRad - this.homeTheta) <= (K().THETA_TOL_DEG * DEG)) {
+            if (this.stepNo > h.waitStep && Math.abs(io.radiatorThetaRad - this.homeTheta) <= (K().THETA_TOL_DEG * DEG2RAD)) {
                 this._cmd('releaseHold');
                 this._finishFailed({ reason: h.reason, part: h.part });
             }

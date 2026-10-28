@@ -1,16 +1,9 @@
 /**
- * StorageKeys.js — the single registry of every localStorage key the game uses.
- *
- * Keys were scattered across modules as loose consts (`SAVE_KEY`, `SETTINGS_KEY`,
- * `STORAGE_KEY`, …) plus a few `PERSISTENCE_KEY` fields inside Constants. That
- * made collisions and version drift easy to miss (e.g. OnboardingDirector's
- * stale `spacecowboy_onboarding_v1` fallback vs the live `_v3`). This module is
- * the SSOT: every reader/writer imports its key from here.
- *
- * IMPORTANT: changing a value orphans existing player data. Bump deliberately
- * (and add a migration) — do not rename casually.
- *
- * @module core/StorageKeys
+ * @module core/StorageKeys — the single registry (SSOT) of every localStorage key the game uses; every reader/writer
+ * imports its key from here (loose consts scattered across modules made
+ * collisions and version drift easy to miss, e.g. OnboardingDirector's stale `_v1` fallback vs the live `_v3`).
+ * IMPORTANT: changing a value orphans existing player data. Bump deliberately (and add a migration); don't rename
+ * casually.
  */
 
 import { Constants } from './Constants.js';
@@ -24,75 +17,53 @@ export const StorageKeys = {
   /** SettingsManager preferences blob. */
   SETTINGS:    'sc_settings_v1',
   /**
-   * Zoom Ladder VIEW preferences (LadderViewStore — D5 "rooms you can
-   * rearrange", Wave 5 Session G): the FloorMask per-floor room memory + the
-   * F1 workbench pane open-state. PLAYER-owned like SETTINGS — deliberately
-   * NOT in the run save, which New Game wipes; a rearranged room belongs to
-   * the player, not the run. Written only while `Constants.LADDER.ENABLED`
-   * (a ?ladder=0 boot never reads or writes it). v2 (Wave 5 Session H): the
-   * 7→5 renumber changed what every floor KEY means (old 3–7 → new 1–5), so
-   * the key bumps and v1 blobs are abandoned in place rather than migrated —
-   * rooms are cheap to re-arrange, wrong rooms silently applied are not
-   * (plan step 7). v3 (2026-09-23, plan 1789561832042 C2): existing players
-   * carry rooms remembering cargo shown on F1 (the deleted WORKBENCH_STOP
-   * force-show captured through D5), so the F1 empty-room fix is invisible
-   * to every current player without the same bump — v2 blobs abandoned in
-   * place, same rule.
+   * Zoom Ladder VIEW preferences (LadderViewStore): the FloorMask per-floor room memory + the F1 workbench pane
+   * open-state. PLAYER-owned like SETTINGS, deliberately NOT in the run save
+   * (New Game wipes that; a rearranged room belongs to the player). Written only while `Constants.LADDER.ENABLED`
+   * (a ?ladder=0 boot never reads or writes it). Bumped v1→v2 when the 7→5 floor renumber changed what every floor KEY
+   * means, and v2→v3 because existing players' rooms remembered cargo shown on F1
+   * (the deleted WORKBENCH_STOP force-show), which made the F1 empty-room fix invisible to them. Old blobs are
+   * abandoned in place, not migrated: rooms are cheap to re-arrange, wrong rooms silently applied are not.
    */
   LADDER_VIEW: 'sc_ladder_view_v3',
   /**
-   * The first-run TOUCH MAP / KEY MAP checklist (TouchMapStore — Session N
-   * onboarding, Ipad.md §5.5 / §5.8 "advance only on the witnessed real
-   * input"): which of the six rows the player has witnessed, and whether the
-   * map was skipped. PLAYER-owned like LADDER_VIEW — once per player, never
-   * in the run save (a New Game does not re-teach the gestures). Written only
-   * while `Constants.LADDER.ENABLED` (constructed inside the hub's gate; a
-   * ?ladder=0 boot never reads or writes it).
+   * The first-run TOUCH MAP / KEY MAP checklist (TouchMapStore; "advance only on the witnessed real input"): which of
+   * the six rows the player has witnessed, and whether the map was skipped. PLAYER-owned like LADDER_VIEW: once per
+   * player, never in the run save. Written only while `Constants.LADDER.ENABLED` (constructed inside the hub's gate).
    */
   TOUCH_MAP:   'sc_touch_map_v1',
   /**
-   * Daughter-arm automation (StrutAutoStore): whether this player has seen the
-   * once-only full-range show. PLAYER-owned like TOUCH_MAP — never in the run
-   * save, so a New Game does not repeat it.
+   * Daughter-arm automation (StrutAutoStore): whether this player has seen the once-only full-range show. PLAYER-owned
+   * like TOUCH_MAP; never in the run save.
    */
   STRUT_AUTO:  'sc_strut_auto_v1',
   /**
-   * The once-only "LEO means low Earth orbit" / "GEO means ..." lines (FloorWordsStore, u7 D6): which floors'
-   * lines this player has seen. PLAYER-owned like STRUT_AUTO - never in the run save.
+   * The once-only "LEO means low Earth orbit" / "GEO means ..." lines (FloorWordsStore): which floors' lines this
+   * player has seen. PLAYER-owned like STRUT_AUTO.
    */
   FLOOR_WORDS: 'sc_floor_words_v1',
   /** CityLabels visibility toggle ('0' | '1'). */
   CITY_LABELS: 'sc_city_labels_visible',
-  /**
-   * BlackPatchHeal's ring of the last 20 "centre went black on F4/F5" records
-   * (what was detected, which repair step healed it). Device-owned diagnostics,
-   * never in the run save; read back from the owner's browser to learn which
-   * step heals the black box (BLACK_SCREEN_TRIAGE.md, Producer 4).
-   */
+  /** BlackPatchHeal's ring of the last 20 "centre went black on F4/F5" records (detected, which repair step healed it).
+   *  Device-owned diagnostics, never in the run save; read back from the owner's browser
+   *  (BLACK_SCREEN_TRIAGE.md, Producer 4). */
   BLACK_HEAL:  'sc_black_heal_v1',
-  /**
-   * The menu update notice (WhatsNewCard, owner 2026-10-26, DECISIONS §43): the version whose "Updated to"
-   * card was auto-shown, and the version whose notes were opened or dismissed with GOT IT. Plain version
-   * strings, e.g. '1.02'. PLAYER-owned like SETTINGS - a New Game wipes the save only, so a wiped save
-   * does not bring the card back.
-   */
+  /** Menu update notice (WhatsNewCard, owner 2026-10-26, DECISIONS §43): the version whose "Updated to" card was
+   *  auto-shown, and the version whose notes were opened or dismissed with GOT IT (plain strings, e.g. '1.02').
+   *  PLAYER-owned like SETTINGS: a wiped save does not bring the card back. */
   WHATS_NEW_SHOWN: 'sc_whats_new_shown',
   WHATS_NEW_SEEN:  'sc_whats_new_seen',
-  // Owned by Constants (they sit beside related tuning) but mirrored here so the
-  // registry is complete and the collision/drift test can see them.
+  // Owned by Constants (beside related tuning) but mirrored here so the registry is complete and the collision/drift
+  // test sees them.
   /** OnboardingDirector cleared-state blob. */
   ONBOARDING:  Constants.ONBOARDING?.STORAGE_KEY || 'spacecowboy_onboarding_v4',
   /** TeachingSystem seen-moments set. */
   TEACHING:    Constants.TEACHING?.PERSISTENCE_KEY || 'teachingSeen',
 };
 
-/**
- * Reserved keys defined in Constants for systems that DO NOT yet persist — F8
- * found IssConjunctionBoss / StarlinkCascadeBoss / MissionCoach have a
- * PERSISTENCE_KEY constant but no localStorage reader/writer. Listed here so a
- * future feature can't silently reuse/collide with one, and so the audit trail
- * is explicit rather than dead constants hiding in Constants.
- */
+/** Reserved keys defined in Constants for systems that DO NOT yet persist
+ *  (IssConjunctionBoss / StarlinkCascadeBoss / MissionCoach have a PERSISTENCE_KEY but no reader/writer). Listed so a
+ *  future feature can't silently reuse one. */
 export const RESERVED_STORAGE_KEYS = {
   ISS_BOSS:      Constants.ISS_BOSS?.PERSISTENCE_KEY || 'spacecowboy_iss_boss_v1',
   STARLINK_BOSS: Constants.STARLINK_BOSS?.PERSISTENCE_KEY || 'spacecowboy_starlink_boss_v1',

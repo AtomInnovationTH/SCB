@@ -51,6 +51,7 @@ import { VisualLaw } from '../../core/VisualLaw.js';
 import { computeTransferWindow, isCoOrbital, clusterToOrbitKm } from '../../entities/LaunchWindow.js';
 import { propagateOrbit, keplerianToCartesian, orbitToKm } from '../../entities/OrbitalMechanics.js';
 import { TransferWindows } from '../TransferWindows.js';
+import { DEG2RAD } from '../../core/MathUtil.js';
 
 /** The root element id (FloorMask MASK_PANES.next.els = ['#hud-next-pane']). */
 export const NEXT_PANE_ID = 'hud-next-pane';
@@ -117,7 +118,6 @@ const TIER_ATTR = 'data-tier';
 const COLORS = VisualLaw.COLORS;
 const EARTH_RADIUS_KM = Constants.EARTH_RADIUS_KM;
 const MU = Constants.MU_EARTH;
-const DEG = Math.PI / 180;
 
 /** The full form's outer height: frame + header + FULL_ROWS rows. */
 export function fullPx() {
@@ -152,9 +152,9 @@ export function emptyPx() {
  * @returns {number}
  */
 export function haversineKm(lat1, lon1, lat2, lon2) {
-  const p1 = lat1 * DEG, p2 = lat2 * DEG;
-  const dp = (lat2 - lat1) * DEG;
-  const dl = (lon2 - lon1) * DEG;
+  const p1 = lat1 * DEG2RAD, p2 = lat2 * DEG2RAD;
+  const dp = (lat2 - lat1) * DEG2RAD;
+  const dl = (lon2 - lon1) * DEG2RAD;
   const h = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(h)));
 }
@@ -585,7 +585,7 @@ export class NextPane {
         target = {
           semiMajorAxis: altKm + EARTH_RADIUS_KM,
           eccentricity: 0,
-          inclination: Number.isFinite(inc) ? inc * DEG : chaser.inclination,
+          inclination: Number.isFinite(inc) ? inc * DEG2RAD : chaser.inclination,
           raan: 0, argPerigee: 0, trueAnomaly: 0,
         };
       }

@@ -35,6 +35,7 @@ import {
   pairNoneLine, pairNeedsTurnLine, pairNotReadyLine, pairDroppedLine, pairHeldLine, pairDriftLine, pairCrossLine, pairStrutLine, pairRangeLine, pairErrorLine, pairHoldLine,
 } from '../systems/PieceClaim.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac, coldGasPoolToKg } from '../systems/ResourceSystem.js';
+import { DEG2RAD, RAD2DEG, degToRad, radToDeg, clamp01, clamp } from '../core/MathUtil.js';
 
 /** 1 meter in scene units */
 const M = 0.00001;
@@ -66,9 +67,9 @@ const LIFT_POLL_S = 0.25;
 const _aimTmpWanted = new THREE.Vector3();
 const _aimTmpAxis = new THREE.Vector3();
 /** launch-aim: the aim stage counts a strut as "in place" within 1° of the best angle. */
-const AIM_TOL_RAD = Math.PI / 180;
+const AIM_TOL_RAD = DEG2RAD;
 /** launch-aim: a new best angle replaces the one she is swinging to only if it points the strut this much closer (rad, 0.5°). */
-const AIM_GAIN_RAD = 0.5 * Math.PI / 180;
+const AIM_GAIN_RAD = degToRad(0.5);
 /** launch-aim: how many times the aim stage may REVERSE its aim (follow a best angle that flipped back) before it commits. */
 const AIM_MAX_REAIMS = 4;
 /** launch-aim: catch states in which the mother holds (or is taking in) a catch whose berth corridor a strut must not enter. */
@@ -92,9 +93,8 @@ const _strutLiveAlpha = (a) =>
  * @returns {number}
  */
 function _rhFloorTheta(v, az, RH) {
-  const D2R = Math.PI / 180;
-  const lo = (RH.STRUT_MIN_DEG ?? 34) * D2R;
-  const hi = (RH.STRUT_MAX_DEG ?? 180) * D2R;
+  const lo = (RH.STRUT_MIN_DEG ?? 34) * DEG2RAD;
+  const hi = (RH.STRUT_MAX_DEG ?? 180) * DEG2RAD;
   const phi = Math.atan2(v.x * Math.cos(az) + v.y * Math.sin(az), -v.z);   // her angle in the strut's plane
   if (phi >= lo && phi <= hi) return 0;                                       // the strut can point at her
   const wrap = (x) => { while (x > Math.PI) x -= 2 * Math.PI; while (x <= -Math.PI) x += 2 * Math.PI; return x; };
@@ -176,8 +176,7 @@ function _holdPoseOf(mgr, armIndex) {
     || (Array.isArray(arm.heldCatches) && arm.heldCatches.some((h) => h && h.mass));
   if (!holds) return null;
   const V5 = Constants.OCTOPUS_V5;
-  const D2R = Math.PI / 180;
-  const lo = Math.round(V5.STRUT_REST_ALPHA / D2R);
+  const lo = Math.round(V5.STRUT_REST_ALPHA / DEG2RAD);
   const hi = V5.HOLD_POSE_MAX_DEG;
   // hold-clear D2: a pose also has to keep her catch `REEL_HOLD.CLEAR_M` off every radiator part at every wing angle outside the band
   // (HoldWingClear `rest`). No finished profile (none started, or still pending) = today's plume-only walk.
@@ -185,17 +184,17 @@ function _holdPoseOf(mgr, armIndex) {
   const done = wp.state === 2;
   let lastPlumeClear = null;
   for (let deg = lo; deg < hi; deg += V5.HOLD_POSE_STEP_DEG) {
-    if (heldCargoPlumeConflictAt(mgr, armIndex, deg * D2R)) continue;
+    if (heldCargoPlumeConflictAt(mgr, armIndex, deg * DEG2RAD)) continue;
     lastPlumeClear = deg;
-    if (!done || profileClearAt(wp, 'rest', deg)) return { rad: deg * D2R, tooBig: false, wingPending: wp.state === 1 };
+    if (!done || profileClearAt(wp, 'rest', deg)) return { rad: deg * DEG2RAD, tooBig: false, wingPending: wp.state === 1 };
   }
-  if (!heldCargoPlumeConflictAt(mgr, armIndex, hi * D2R)) {
+  if (!heldCargoPlumeConflictAt(mgr, armIndex, hi * DEG2RAD)) {
     lastPlumeClear = hi;
-    if (!done || profileClearAt(wp, 'rest', hi)) return { rad: hi * D2R, tooBig: false, wingPending: wp.state === 1 };
+    if (!done || profileClearAt(wp, 'rest', hi)) return { rad: hi * DEG2RAD, tooBig: false, wingPending: wp.state === 1 };
   }
   // some pose is plume-clear but none keeps her catch clear of the wings: she parks at the highest plume-clear one (never in a plume)
-  if (lastPlumeClear !== null) return { rad: lastPlumeClear * D2R, tooBig: false, wingBlocked: true };
-  return { rad: hi * D2R, tooBig: true };
+  if (lastPlumeClear !== null) return { rad: lastPlumeClear * DEG2RAD, tooBig: false, wingBlocked: true };
+  return { rad: hi * DEG2RAD, tooBig: true };
 }
 
 /**
@@ -257,9 +256,8 @@ function _duckPlan(mgr, i, radiusM) {
   const eff = _strutLiveAlpha(arm);
   if (!mgr._corridorFoulAt(i, eff, radiusM)) return out;
   const V5 = Constants.OCTOPUS_V5;
-  const D2R = Math.PI / 180;
-  const lo = Math.round(V5.STRUT_REST_ALPHA / D2R);
-  const dead = V5.HOLD_POSE_DEADBAND_DEG * D2R;
+  const lo = Math.round(V5.STRUT_REST_ALPHA / DEG2RAD);
+  const dead = V5.HOLD_POSE_DEADBAND_DEG * DEG2RAD;
   const wp = armProfile(arm);
   if (wp.state === 1) { out.kind = 4; return out; }
   const done = wp.state === 2;
@@ -271,17 +269,17 @@ function _duckPlan(mgr, i, radiusM) {
   const wingOk = (deg) => !done || (clearAt('rest', deg) && (!needBand || clearAt('band', deg)));
   let best = null;
   let anyNetClear = false;
-  for (let deg = lo; deg * D2R < eff - 1e-6; deg += V5.HOLD_POSE_STEP_DEG) {
+  for (let deg = lo; deg * DEG2RAD < eff - 1e-6; deg += V5.HOLD_POSE_STEP_DEG) {
     // a strut stands up to the deadband ABOVE its target (found 2026-10-23 probing R4: 54° passed, she stood at 54.5° and the net's
     // corridor gate held the reel its full 8 s): an angle counts only when the angle a deadband higher clears too
-    if (mgr._corridorFoulAt(i, deg * D2R, radiusM) || mgr._corridorFoulAt(i, deg * D2R + dead, radiusM)) continue;
+    if (mgr._corridorFoulAt(i, deg * DEG2RAD, radiusM) || mgr._corridorFoulAt(i, deg * DEG2RAD + dead, radiusM)) continue;
     anyNetClear = true;
-    if (wingOk(deg)) best = deg * D2R;
+    if (wingOk(deg)) best = deg * DEG2RAD;
   }
   if (best === null) {
     // the 34° fallback is only for a catch that clears the net at no pose at all (round 1 F4): when some pose clears the net but none is
     // wing-clear she must not drop to a 34° that is wing-clear but still fouls the corridor - D5 refuses that net (kind 2) instead
-    if (!anyNetClear && wingOk(lo)) best = lo * D2R;
+    if (!anyNetClear && wingOk(lo)) best = lo * DEG2RAD;
     else { out.kind = anyNetClear ? 2 : 3; return out; }
   }
   if (best < eff - dead) { out.rad = best; out.kind = 1; }
@@ -358,8 +356,8 @@ function _holdsCatchAtHome(arm) {
 function _pressHolders(mgr, holders, wantRad, autoOn, onlyThese) {
   if (!holders.length) return;
   const V5 = Constants.OCTOPUS_V5;
-  const dead = V5.HOLD_POSE_DEADBAND_DEG * Math.PI / 180;
-  const cap = V5.HOLD_POSE_MAX_DEG * Math.PI / 180;
+  const dead = degToRad(V5.HOLD_POSE_DEADBAND_DEG);
+  const cap = degToRad(V5.HOLD_POSE_MAX_DEG);
   let anyMoved = false;
   let stayed = null;
   for (const a of holders) {
@@ -376,7 +374,7 @@ function _pressHolders(mgr, holders, wantRad, autoOn, onlyThese) {
     let t = hp.rad;
     // hold-clear D2: an angle above the pose is taken only when it is plume-clear AND `rest`-clear (off the grid: both neighbouring poses)
     if (wantRad > hp.rad + 1e-6 && wantRad <= cap + 1e-6 && !heldCargoPlumeConflictAt(mgr, i, wantRad)
-        && _wingRestOk(a, wantRad / (Math.PI / 180))) t = wantRad;
+        && _wingRestOk(a, wantRad / DEG2RAD)) t = wantRad;
     // where she is heading (a pending latch wins, as for a docked strut): a press that asks for that again moves nothing, and a
     // press that moves nothing is not a manual override (FA4: it left `_strutManual` behind, which later said "back to automatic")
     if (Math.abs(t - _strutLiveAlpha(a)) > dead) {
@@ -389,8 +387,8 @@ function _pressHolders(mgr, holders, wantRad, autoOn, onlyThese) {
   }
   if (onlyThese && stayed && !anyMoved) {
     const n = stayed.a.index + 1;
-    const deg = Math.round(stayed.hp.rad * 180 / Math.PI);
-    mgr.lastStrutPressNote = deg <= Math.round(V5.STRUT_REST_ALPHA * 180 / Math.PI)
+    const deg = Math.round(radToDeg(stayed.hp.rad));
+    mgr.lastStrutPressNote = deg <= Math.round(radToDeg(V5.STRUT_REST_ALPHA))
       ? `Daughter ${n} is holding a catch; her strut stays at ${deg}° to keep it clear of the hull.`
       : `Daughter ${n} is holding a big catch; her strut stays at ${deg}° to keep it clear of the thrusters.`;
   }
@@ -504,7 +502,7 @@ export function generateDockPositions(tierKeyOrCount) {
 
   for (let i = 0; i < azimuths.length; i++) {
     const azDeg = azimuths[i];
-    const theta = azDeg * Math.PI / 180;
+    const theta = degToRad(azDeg);
 
     // Hinge XZ on collar perimeter (scene units); Y kept at 0 so that
     // _worldDockDirection (which normalizes dockOffset) stays purely radial.
@@ -547,7 +545,7 @@ export function generateDockPositions(tierKeyOrCount) {
       const isForward = (face === '+Z');
       const endOff = (isForward ? 1 : -1) * (V5.CORE_LENGTH / 2);
       const azDeg = isForward ? 0 : 180;
-      const theta = azDeg * Math.PI / 180;
+      const theta = degToRad(azDeg);
 
       // Stored outward carries ship-Z in its Y slot (deploy off the face).
       const outward = new THREE.Vector3(0, isForward ? 1 : -1, 0);
@@ -1444,7 +1442,7 @@ export class ArmManager {
       const want = new THREE.Vector3(dirWorld.x, dirWorld.y, dirWorld.z).normalize();
       const total = fwd.angleTo(want);
       const arc = new THREE.Quaternion().setFromUnitVectors(fwd, want);
-      const STEP = 5 * Math.PI / 180;
+      const STEP = degToRad(5);
       const n = Math.max(1, Math.ceil(total / STEP));
       const ident = new THREE.Quaternion();
       const part = new THREE.Quaternion();
@@ -1457,7 +1455,7 @@ export class ArmManager {
           v.set(L.dx, L.dy, L.dz).applyQuaternion(inv);
           const hit = lineWrapsShip({ a: L.anchor, b: [v.x / M, v.y / M, v.z / M] }, ko,
             { ignore: ['dau' + L.i, 'strut' + L.i, 'rack catch ' + L.i] });
-          if (hit.wraps) return { wraps: true, arm: L.arm, part: hit.part, atDeg: Math.round((total * k / n) * 180 / Math.PI) };
+          if (hit.wraps) return { wraps: true, arm: L.arm, part: hit.part, atDeg: Math.round(radToDeg(total * k / n)) };
         }
       }
     } catch (err) {
@@ -2297,7 +2295,7 @@ export class ArmManager {
         const far = this._pairOutOfReach(arm, target);
         if (far) return stop(pairRangeLine(arm.displayName, far.distM, far.maxRange));
       }
-      if (typeof arm.getAimAlpha === 'function' && Math.abs(arm.getAimAlpha() - alpha) > 0.5 * Math.PI / 180) return stop(pairStrutLine(arm.displayName));
+      if (typeof arm.getAimAlpha === 'function' && Math.abs(arm.getAimAlpha() - alpha) > degToRad(0.5)) return stop(pairStrutLine(arm.displayName));
     }
     // the pieces still on the two lines (the aim keeps them there while she turns; a piece that moved off is judged here)
     const ap = this._autopilot;
@@ -2563,7 +2561,7 @@ export class ArmManager {
     const holdRad = (a) => { const hp = _holdPoseOf(this, this.arms.indexOf(a)); return hp ? hp.rad : V5.STRUT_REST_ALPHA; };
     const anyOpen = docked.length
       ? docked.some((a) => _strutLiveAlpha(a) >= V5.STRUT_OPEN_THRESHOLD)
-      : holders.some((a) => _strutLiveAlpha(a) > holdRad(a) + V5.HOLD_POSE_DEADBAND_DEG * Math.PI / 180);
+      : holders.some((a) => _strutLiveAlpha(a) > holdRad(a) + degToRad(V5.HOLD_POSE_DEADBAND_DEG));
     const now = (typeof performance !== 'undefined' && performance.now)
       ? performance.now() : Date.now();
     const doubleTap = this._lastStrutTap !== undefined
@@ -3096,11 +3094,10 @@ export class ArmManager {
     const V = Constants.CARRY;
     const ps = this.playerSatellite;
     const n = arm.index + 1;
-    const R2D = 180 / Math.PI;
     const skipRT = opts.ignoreRealTime === true;
     const inRange = (deg) => V.OTHERS_RANGES_DEG.some(([lo, hi]) => deg >= lo - 1e-6 && deg <= hi + 1e-6);
-    const sharedDeg = (ps._flowerThetaRad ?? 0) * R2D;
-    const targetDeg = Number.isFinite(ps._flowerTargetTheta) ? ps._flowerTargetTheta * R2D : sharedDeg;
+    const sharedDeg = (ps._flowerThetaRad ?? 0) * RAD2DEG;
+    const targetDeg = Number.isFinite(ps._flowerTargetTheta) ? ps._flowerTargetTheta * RAD2DEG : sharedDeg;
     if (skipRT) {
       const settleDeg = this._flowerSettleDeg();
       if (!inRange(settleDeg)) {
@@ -3117,7 +3114,7 @@ export class ArmManager {
     for (const o of this.arms) {
       if (!o || o === arm || typeof o.getAimAlpha !== 'function') continue;
       if (inbound && o._netDuck) return netWait;                  // her strut is down for the net by design: off her pose until the berth
-      const oDeg = o.getAimAlpha() * R2D;
+      const oDeg = o.getAimAlpha() * RAD2DEG;
       const held = Array.isArray(o.heldCatches) ? o.heldCatches.filter((h) => h && h.mass) : [];
       // hold-clear D9: a neighbour whose catch's wing profile is still pending has no hold pose yet (it may rise when the profile lands): the
       // carry waits for it, with the existing 'neighbour-strut' reason (the one every "her strut is not where it belongs yet" wait uses)
@@ -3129,8 +3126,8 @@ export class ArmManager {
         // (the carry was measured against it, see Constants.CARRY.NEIGHBOUR_CATCH_MAX_SIZE_M). Anywhere else (a "." press, a strut on its
         // way) is out of place, as before. net-duck D4: so is the angle she was lifted to for this carry (`_netLift`).
         const hp = held.length ? this._holdPoseCached(o, this.arms.indexOf(o), 0) : null;
-        const atPose = !!hp && Math.abs(oDeg - hp.rad * R2D) <= V.NEIGHBOUR_TOL_DEG + 1e-6;
-        const atLift = !!o._netLift && Math.abs(oDeg - o._netLift.rad * R2D) <= V.NEIGHBOUR_TOL_DEG + 1e-6;
+        const atPose = !!hp && Math.abs(oDeg - hp.rad * RAD2DEG) <= V.NEIGHBOUR_TOL_DEG + 1e-6;
+        const atLift = !!o._netLift && Math.abs(oDeg - o._netLift.rad * RAD2DEG) <= V.NEIGHBOUR_TOL_DEG + 1e-6;
         if (!atPose && !atLift) {
           return { reason: 'neighbour-strut', text: `Daughter ${o.index + 1}'s strut is out of place. Daughter ${n} waits.` };
         }
@@ -3158,7 +3155,7 @@ export class ArmManager {
         return out;
       }
     }
-    const recDeg = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() * R2D : NaN;
+    const recDeg = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() * RAD2DEG : NaN;
     if (!skipRT && !(recDeg >= V.STRUT_REC_LO_DEG - 1e-6 && recDeg <= V.STRUT_REC_HI_DEG + 1e-6)) {
       return { reason: 'strut-range', text: '' };
     }
@@ -3178,7 +3175,7 @@ export class ArmManager {
     const tc = ps.tipCargo;
     const band = tc && typeof tc.maxRadiatorThetaRad === 'function' ? tc.maxRadiatorThetaRad() : Infinity;
     if (band !== Infinity && t > band + 1e-9) t = band - (Constants.THERMAL.FLOWER.SETTLE_EPS_RAD || 0);
-    return (t * 180) / Math.PI;
+    return radToDeg(t);
   }
 
   // ==========================================================================
@@ -3328,11 +3325,10 @@ export class ArmManager {
     const V = Constants.CARRY, N = V.NOSE;
     const ps = this.playerSatellite;
     const n = arm.index + 1;
-    const R2D = 180 / Math.PI;
     const skipRT = opts.ignoreRealTime === true;                          // u23: the trip's unflown hand-over (see `carryConditions`)
     const b = nose.bucket;
-    const sharedDeg = (ps._flowerThetaRad ?? 0) * R2D;
-    const targetDeg = Number.isFinite(ps._flowerTargetTheta) ? ps._flowerTargetTheta * R2D : sharedDeg;
+    const sharedDeg = (ps._flowerThetaRad ?? 0) * RAD2DEG;
+    const targetDeg = Number.isFinite(ps._flowerTargetTheta) ? ps._flowerTargetTheta * RAD2DEG : sharedDeg;
     const bagR = this._tipBagReachM();
     const settleDeg = skipRT ? this._flowerSettleDeg() : targetDeg;       // u23: judged where they settle (inside the window: they are only moving, real-time)
     if (skipRT ? !noseRadiatorsOk(b, settleDeg, bagR) : (!noseRadiatorsOk(b, sharedDeg, bagR) || !noseRadiatorsOk(b, targetDeg, bagR))) {
@@ -3351,13 +3347,13 @@ export class ArmManager {
       if (held.some((h) => this.carryReachOf(h) > N.NEIGHBOUR_CATCH_MAX_REACH_M + 1e-9)) {
         return { reason: 'neighbour-catch', never: true, text: `Daughter ${o.index + 1}'s catch is too close to Daughter ${n}'s path. Daughter ${n} keeps hers.` };
       }
-      const oDeg = o.getAimAlpha() * R2D;
+      const oDeg = o.getAimAlpha() * RAD2DEG;
       if (!skipRT && Math.abs(oDeg - N.HOLD_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
         return { reason: 'neighbour-strut', text: `Daughter ${o.index + 1}'s strut is out of place. Daughter ${n} waits.` };
       }
     }
     if (!skipRT && !arm._carry) {                                                  // the offer: her own strut stands at the hold pose the route starts from (in prep it is on its way to the seat angle)
-      const recDeg = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() * R2D : NaN;
+      const recDeg = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() * RAD2DEG : NaN;
       if (!(Math.abs(recDeg - N.HOLD_DEG) <= V.NEIGHBOUR_TOL_DEG + 1e-6)) return { reason: 'strut-range', text: '' };
     }
     return null;
@@ -3444,7 +3440,7 @@ export class ArmManager {
     // put on this rack (it could not reach a tip at once); a catch the daughter caught herself stays with her ('own-catch' is
     // not a refusal worth a line, and not a give-up: "Press C" asks without this option).
     if (motherNetOnly && !delivered._rackFromMotherNet) return no('own-catch', '', false);
-    const cell = Math.max(0, Math.min(1, cellOf(delivered, rack.indexOf(delivered))));
+    const cell = clamp01(cellOf(delivered, rack.indexOf(delivered)));
     const reach = this.carryReachOf(delivered);
     if (!tc.fits(reach)) {
       return no('fit', `Daughter ${n}'s catch is too big for a radiator tip. It stays on her rack.`, false, true);
@@ -3497,7 +3493,7 @@ export class ArmManager {
     // allows (closed: the bag passes her own strut close; open: far); a bigger catch waits for the other range - it clears by itself.
     if (!nose) {
       const V = Constants.CARRY;
-      const sharedDeg = skipRT ? this._flowerSettleDeg() : (ps._flowerThetaRad ?? 0) * 180 / Math.PI;   // (u23: the unflown check reads where they settle)
+      const sharedDeg = skipRT ? this._flowerSettleDeg() : radToDeg(ps._flowerThetaRad ?? 0);   // (u23: the unflown check reads where they settle)
       const closed = sharedDeg <= V.OTHERS_RANGES_DEG[0][1] + 1e-6;                      // [0, 1] deg = closed, [133, 146] = open (carryConditions)
       const limit = gate.swingBackReachM ? gate.swingBackReachM[closed ? 'closed' : 'open'] : 0;
       if (!(reach <= limit + 1e-9)) {
@@ -3513,8 +3509,8 @@ export class ArmManager {
         ok: true, reason: '', text: '', retry: false, giveUp: false,
         plan: {
           kind: 'nose', tipIndex: -1, cell, delivered, row, mission,
-          strutRad: Constants.CARRY.NOSE.STRUT_DEG * Math.PI / 180, thetaRad: 0, dir: null,
-          recordedStrutRad: typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : Constants.CARRY.NOSE.HOLD_DEG * Math.PI / 180,
+          strutRad: degToRad(Constants.CARRY.NOSE.STRUT_DEG), thetaRad: 0, dir: null,
+          recordedStrutRad: typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : degToRad(Constants.CARRY.NOSE.HOLD_DEG),
           nose: { bucket: nose.bucket, reachM: nose.reachM },
         },
       };
@@ -3523,8 +3519,8 @@ export class ArmManager {
       ok: true, reason: '', text: '', retry: false, giveUp: false,
       plan: {
         tipIndex, cell, delivered, row, mission,
-        strutRad: gate.strutDeg * Math.PI / 180, thetaRad: gate.thetaDeg * Math.PI / 180, dir: gate.dir,
-        recordedStrutRad: typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : gate.strutDeg * Math.PI / 180,
+        strutRad: degToRad(gate.strutDeg), thetaRad: degToRad(gate.thetaDeg), dir: gate.dir,
+        recordedStrutRad: typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : degToRad(gate.strutDeg),
       },
     };
   }
@@ -3541,7 +3537,6 @@ export class ArmManager {
   _neighbourLiftRad(o) {
     const V = Constants.CARRY;
     const V5 = Constants.OCTOPUS_V5;
-    const D2R = Math.PI / 180;
     if (!o || o.isDetached || o.state !== ARM_STATES.HOLDING_CATCH) return null;
     const idx = this.arms.indexOf(o);
     const held = Array.isArray(o.heldCatches) ? o.heldCatches.filter((h) => h && h.mass) : [];
@@ -3552,9 +3547,9 @@ export class ArmManager {
     // hold-clear D9: a lift pose also has to be `rest`-clear of the wings (`rest` is not monotone in the pose); a profile still pending = today's walk
     // (`carryConditions` refuses the carry for a neighbour with a pending profile, so the answer here is not acted on in that time)
     const wp = armProfile(o);
-    const deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / D2R), V.NEIGHBOUR_CATCH_HIGH_POSE_DEG), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
-      (d) => heldCargoPlumeConflictAt(this, idx, d * D2R) || (wp.state === 2 && !profileClearAt(wp, 'rest', d)));
-    return deg === null ? null : deg * D2R;
+    const deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / DEG2RAD), V.NEIGHBOUR_CATCH_HIGH_POSE_DEG), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
+      (d) => heldCargoPlumeConflictAt(this, idx, d * DEG2RAD) || (wp.state === 2 && !profileClearAt(wp, 'rest', d)));
+    return deg === null ? null : deg * DEG2RAD;
   }
 
   /**
@@ -3569,7 +3564,7 @@ export class ArmManager {
     const out = [];
     for (const o of this.arms) {
       if (!o || o === arm || o.isDetached || typeof o.getAimAlpha !== 'function') continue;
-      const high = o.getAimAlpha() * 180 / Math.PI >= V.NEIGHBOUR_CATCH_HIGH_POSE_DEG - V.NEIGHBOUR_TOL_DEG - 1e-6;
+      const high = radToDeg(o.getAimAlpha()) >= V.NEIGHBOUR_CATCH_HIGH_POSE_DEG - V.NEIGHBOUR_TOL_DEG - 1e-6;
       if (high) continue;
       const rad = this._neighbourLiftRad(o);
       if (rad !== null) out.push({ index: o.index, rad });
@@ -4243,7 +4238,6 @@ export class ArmManager {
   _updateReelHome(dt, parentPos, parentQuat) {
     const on = Constants.isFeatureEnabled('REEL_HOME');
     const RH = Constants.REEL_HOME || {};
-    const D2R = Math.PI / 180;
     const headless = !(this.playerSatellite && this.playerSatellite.strutGroups);
     const homers = [];
     for (const arm of this.arms) {
@@ -4262,7 +4256,7 @@ export class ArmManager {
       homers.push(arm);
       // Decision 5: the strut points at her
       if (Number.isFinite(arm._rhBestAlpha)) {
-        const a = Math.max((RH.STRUT_MIN_DEG ?? 34) * D2R, Math.min((RH.STRUT_MAX_DEG ?? 180) * D2R, arm._rhBestAlpha));
+        const a = clamp(arm._rhBestAlpha, (RH.STRUT_MIN_DEG ?? 34) * DEG2RAD, (RH.STRUT_MAX_DEG ?? 180) * DEG2RAD);
         if (!arm._aimReserved) { arm._aimReserved = true; arm._rhReserved = true; }
         arm._strutTargetAlpha = a;
         if (headless && typeof arm.setAimAlpha === 'function') {
@@ -4299,7 +4293,6 @@ export class ArmManager {
    */
   _tickReelHomeTurn(homers, parentQuat, dt = 0) {
     const RH = Constants.REEL_HOME || {};
-    const D2R = Math.PI / 180;
     // the owner: the earliest arrival still on the reels
     let owner = null;
     for (const a of homers) if (!owner || a._rhSeq < owner._rhSeq) owner = a;
@@ -4322,7 +4315,7 @@ export class ArmManager {
     const v = owner._rhRelShip;
     if (!v) return;
     const az = owner._rhAzRad();
-    const tol = (RH.PLANE_TOL_DEG ?? 5) * D2R;
+    const tol = (RH.PLANE_TOL_DEG ?? 5) * DEG2RAD;
     // Which error does the turn correct? First the one across the strut's swing plane (a turn about the strut's radial
     // direction). Once she is in the plane, the one along it (fix round F2a): the strut can only point at [STRUT_MIN,
     // STRUT_MAX], so a daughter below the floor needs the mother turned about the plane's normal until she is inside.
@@ -4350,7 +4343,7 @@ export class ArmManager {
       if (Math.abs(theta) <= tol) return;                                       // a few degrees short: the 2 m check decides
       axisL = _rhAxisR.set(-Math.sin(az), Math.cos(az), 0);                     // the plane's normal
     }
-    if (Math.abs(theta) > (RH.TURN_MAX_DEG ?? 60) * D2R || Math.abs(theta) < 1e-3) return;
+    if (Math.abs(theta) > (RH.TURN_MAX_DEG ?? 60) * DEG2RAD || Math.abs(theta) < 1e-3) return;
     const ap = this._autopilot;
     if (!ap || typeof ap.requestAttitudeTurn !== 'function') return;
     if (this._motherTurnBlock(owner)) return;                                 // limited: the line-up is hers to do
@@ -4404,11 +4397,11 @@ export class ArmManager {
     const RH = Constants.REEL_HOME || {};
     const v = arm._rhRelShip;
     if (!v || arm._rhFloorRefused === true) return false;
-    const tol = (RH.PLANE_TOL_DEG ?? 5) * Math.PI / 180;
+    const tol = degToRad(RH.PLANE_TOL_DEG ?? 5);
     if (Math.abs(arm._rhPlaneErrRad) > tol) return false;                       // the plane turn is first (the start-of-reel turn: untouched)
     const theta = _rhFloorTheta(v, arm._rhAzRad(), RH);
     if (theta === 0 || Math.abs(theta) <= tol) return false;                    // inside the range, or a few degrees short (the 2 m check decides)
-    if (Math.abs(theta) > (RH.TURN_MAX_DEG ?? 60) * Math.PI / 180) return false; // no turn is asked: the line-up fallback runs as before
+    if (Math.abs(theta) > degToRad(RH.TURN_MAX_DEG ?? 60)) return false; // no turn is asked: the line-up fallback runs as before
     const t = this._rhTurn;
     if (t && t.arm === arm && !t.tracked) return true;                           // her floor turn is running
     const ap = this._autopilot;
@@ -4421,8 +4414,8 @@ export class ArmManager {
   _radBand() {
     const R = Constants.REEL_HOLD || {};
     const out = this._radBandScratch || (this._radBandScratch = { lo: 0, hi: 0 });
-    out.lo = (R.BAND_LO_DEG ?? 55) * Math.PI / 180;
-    out.hi = (R.BAND_HI_DEG ?? 130) * Math.PI / 180;
+    out.lo = degToRad(R.BAND_LO_DEG ?? 55);
+    out.hi = degToRad(R.BAND_HI_DEG ?? 130);
     return out;
   }
 
@@ -4506,22 +4499,21 @@ export class ArmManager {
     if (hp) {
       const R = Constants.REEL_HOLD || {};
       const V5 = Constants.OCTOPUS_V5;
-      const D2R = Math.PI / 180;
       const wp = armProfile(arm);
       let deg;
       if (wp.state === 2) {
         // hold-clear D3: her catch's own profile replaces the size table - the first pose from max(hold pose, LIFT_DEG) that is plume-clear,
         // `rest`-clear and `band`-clear (`rest` is not monotone in the pose); none = 'never'
-        deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / D2R), R.LIFT_DEG ?? 69), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
-          (d) => this._plumeConflictAt(i, d * D2R) || !profileClearAt(wp, 'rest', d) || !profileClearAt(wp, 'band', d));
+        deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / DEG2RAD), R.LIFT_DEG ?? 69), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
+          (d) => this._plumeConflictAt(i, d * DEG2RAD) || !profileClearAt(wp, 'rest', d) || !profileClearAt(wp, 'band', d));
       } else {
         let size = 0;                                                          // no finished profile: the measured size table (fallback only)
         if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h && h.mass) size = Math.max(size, h.sizeMeter || 0);
         const floorDeg = _bandClearDeg(size, R);
-        deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / D2R), floorDeg), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
-          (d) => this._plumeConflictAt(i, d * D2R));                           // F4: the cap (100°) is tried last, whatever the grid
+        deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / DEG2RAD), floorDeg), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
+          (d) => this._plumeConflictAt(i, d * DEG2RAD));                           // F4: the cap (100°) is tried last, whatever the grid
       }
-      pose = { rad: deg === null ? null : deg * D2R };
+      pose = { rad: deg === null ? null : deg * DEG2RAD };
     }
     arm._radClear = { key, pose, ageS: 0 };
     return pose;
@@ -4541,7 +4533,7 @@ export class ArmManager {
     const R = Constants.REEL_HOLD || {};
     const holdM = R.HOLD_M ?? 5;
     const tolM = R.STOP_TOL_M ?? 0.25;
-    const dead = (Constants.OCTOPUS_V5.HOLD_POSE_DEADBAND_DEG ?? 1) * Math.PI / 180;
+    const dead = degToRad(Constants.OCTOPUS_V5.HOLD_POSE_DEADBAND_DEG ?? 1);
     let out = null;
     for (let i = 0; i < this.arms.length; i++) {
       const a = this.arms[i];
@@ -4626,7 +4618,7 @@ export class ArmManager {
     if (Math.abs(owner._rhPlaneErrRad) < 0.5 * tol) return null;
     const left = this._rhPlaneTurnLeft(owner, az);
     const RH = Constants.REEL_HOME || {};
-    if (left === null || Math.abs(left) > (RH.TURN_MAX_DEG ?? 60) * Math.PI / 180) return null;
+    if (left === null || Math.abs(left) > degToRad(RH.TURN_MAX_DEG ?? 60)) return null;
     return left;
   }
 
@@ -4796,9 +4788,8 @@ export class ArmManager {
   _updateCargoPlumePoses(dt) {
     const headless = !(this.playerSatellite && this.playerSatellite.strutGroups);
     const V5 = Constants.OCTOPUS_V5;
-    const D2R = Math.PI / 180;
-    const dead = V5.HOLD_POSE_DEADBAND_DEG * D2R;
-    const cap = V5.HOLD_POSE_MAX_DEG * D2R;
+    const dead = V5.HOLD_POSE_DEADBAND_DEG * DEG2RAD;
+    const cap = V5.HOLD_POSE_MAX_DEG * DEG2RAD;
     for (let i = 0; i < this.arms.length; i++) {
       const arm = this.arms[i];
       if (!arm || arm.state !== ARM_STATES.HOLDING_CATCH) continue;
@@ -4820,7 +4811,7 @@ export class ArmManager {
         if (arm._strutManual) {
           // the player's press stands while it is safe; an unsafe one (below the pose, over the cap, in a plume) is dropped
           const safe = eff >= hp.rad - dead && eff <= cap + dead && !heldCargoPlumeConflictAt(this, i, eff)
-            && _wingRestOk(arm, eff / D2R);                                    // hold-clear D2: nor a pose her catch touches a wing at
+            && _wingRestOk(arm, eff / DEG2RAD);                                    // hold-clear D2: nor a pose her catch touches a wing at
           if (safe) go = false; else delete arm._strutManual;
         }
         if (go && Math.abs(eff - hp.rad) > dead) arm._strutTargetAlpha = hp.rad;
@@ -4892,7 +4883,7 @@ export class ArmManager {
     const mz = anchor ? anchor.position.z / M_NET : (V5C.BERTH_COLLAR_Z_M ?? 1.30);
 
     const dp = this._dockPositions[armIndex];
-    const azRad = dp ? (dp.azimuthDeg * Math.PI / 180) : 0;
+    const azRad = dp ? (degToRad(dp.azimuthDeg)) : 0;
     const collarR = V5C.COLLAR_RADIUS ?? 0.40;
     const collarY = V5C.COLLAR_Y ?? 1.00;
     const strutLen = V5C.STRUT_LENGTH ?? 1.70;
@@ -4955,7 +4946,7 @@ export class ArmManager {
     const mz = anchor ? anchor.position.z / M : (V5.BERTH_COLLAR_Z_M ?? 1.30);
 
     const dp = this._dockPositions[armIndex];
-    const azRad = dp ? (dp.azimuthDeg * Math.PI / 180) : 0;
+    const azRad = dp ? (degToRad(dp.azimuthDeg)) : 0;
     return strutTipFoulsCorridor(
       alphaRad === undefined ? arm.getAimAlpha() : alphaRad,
       azRad,
@@ -5067,7 +5058,7 @@ export class ArmManager {
       // reel-hold D4: no holder starts a duck below the lift pose while the wings are inside the band (they leave it in a few
       // seconds; the net reel's own pause for the fouled corridor covers the wait). F5: nor while they are about to enter it or
       // cross it (a duck started the frame before they go in lowers her under them: the wings' own gate has not seen her move yet)
-      if (rad < (Constants.REEL_HOLD.LIFT_DEG ?? 69) * Math.PI / 180 - 1e-6 && (this._wingsInBand() || this._wingsMovingInBand())) continue;
+      if (rad < degToRad(Constants.REEL_HOLD.LIFT_DEG ?? 69) - 1e-6 && (this._wingsInBand() || this._wingsMovingInBand())) continue;
       arm._netDuck = { rad };
       arm._netDuckLow = true;                       // D3: the Hall drive waits while this stands (and while she climbs back)
       arm._netDuckThrustSaid = false;
@@ -5109,7 +5100,7 @@ export class ArmManager {
       this._releaseHolderDucks();                                                      // R3
     }
     const V5 = Constants.OCTOPUS_V5;
-    const dead = V5.HOLD_POSE_DEADBAND_DEG * Math.PI / 180;
+    const dead = degToRad(V5.HOLD_POSE_DEADBAND_DEG);
     for (let i = 0; i < this.arms.length; i++) {
       const arm = this.arms[i];
       if (!arm || !arm._netDuckLow) continue;
@@ -6424,7 +6415,7 @@ export class ArmManager {
     if (!res.blocked) return { blocked: false, fixable: true, open: [], openOwn: false, part: '', cat: '', hits: [] };
     const arm = this.arms[i];
     const openAlpha = Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
-    const tol = Math.PI / 180;
+    const tol = DEG2RAD;
     const lean = this._leanAsideArmIndices;
     const ownLive = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : openAlpha;
     // A ceremony launch fires along the strut she has just aimed: her own strut is never
@@ -6677,7 +6668,7 @@ export class ArmManager {
     const radiusM = this._heldCatchCorridorRadiusM();
     const now = arm.getAimAlpha();
     if (radiusM === null || best <= now) return best;
-    const step = Math.PI / 180;
+    const step = DEG2RAD;
     let prev = now;
     for (let a = now + step; ; a += step) {
       const at = Math.min(a, best);

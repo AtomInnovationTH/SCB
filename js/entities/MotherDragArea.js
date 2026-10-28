@@ -24,11 +24,11 @@
  * Pure: no THREE, no game state. PlayerSatellite.dragAreaM2() gathers her state and calls this.
  */
 import { Constants } from '../core/Constants.js';
+import { DEG2RAD } from '../core/MathUtil.js';
 
 /** The p of the core blend: 1 is the axis sum (too big), 2 the root of squares (too small); 1.5 is unbiased on the meshes. */
 export const CORE_BLEND_P = 1.5;
 
-const DEG = Math.PI / 180;
 
 /** One blanket's area, m2: the drawn plane is PlaneGeometry(ROSA_WIDTH, ROSA_LENGTH) at full deploy. */
 export function wingAreaM2() {
@@ -46,7 +46,7 @@ export function wingAreaM2() {
 export function coreAreaAt(thetaRad, out = [0, 0, 0]) {
   const rows = Constants.MOTHER_DRAG.CORE_AREA_M2;
   const last = rows.length - 1;
-  const deg = Number.isFinite(thetaRad) ? thetaRad / DEG : 0;
+  const deg = Number.isFinite(thetaRad) ? thetaRad / DEG2RAD : 0;
   if (deg <= rows[0][0]) { out[0] = rows[0][1]; out[1] = rows[0][2]; out[2] = rows[0][3]; return out; }
   if (deg >= rows[last][0]) { out[0] = rows[last][1]; out[1] = rows[last][2]; out[2] = rows[last][3]; return out; }
   let k = 0;
@@ -115,9 +115,9 @@ export function referenceDragAreaM2() {
   let sum = 0;
   const wings = [{ scale: 1, nx: 0, ny: 0, nz: 0 }, { scale: 1, nx: 0, ny: 0, nz: 0 }];
   for (let i = 0; i < N; i++) {
-    const n = wingNormalAt((i + 0.5) * DEG);
+    const n = wingNormalAt((i + 0.5) * DEG2RAD);
     for (const w of wings) { w.nx = n.nx; w.ny = n.ny; w.nz = n.nz; }
-    sum += motherDragAreaM2(0, 0, 1, Constants.THERMAL.FLOWER.OPEN_DEG * DEG, wings);
+    sum += motherDragAreaM2(0, 0, 1, Constants.THERMAL.FLOWER.OPEN_DEG * DEG2RAD, wings);
   }
   _reference = sum / N;
   return _reference;

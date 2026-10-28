@@ -87,6 +87,7 @@ import { orbitToKm, subSatellitePoint, nextShadowTransition, atmosphericDrag, or
 import { referenceDragAreaM2 } from '../../entities/MotherDragArea.js';
 import { TimeAuthority } from '../../systems/TimeAuthority.js';
 import { RESERVE_FRAC, usableDeltaV } from '../../entities/ReachabilityModel.js';
+import { radToDeg, clamp01 } from '../../core/MathUtil.js';
 
 /** The colour law (read-only): LABEL white for the values and the flash bloom, CAUTION amber for the reserve tick / decay arrow. */
 const COLORS = VisualLaw.COLORS;
@@ -235,7 +236,7 @@ export const ORBIT_FMT = Object.freeze({
   /** `7.67 km/s` */
   vel: (kms) => { const n = num(kms); return n == null ? PLACEHOLDER : `${n.toFixed(2)} km/s`; },
   /** `51.6°` from radians */
-  inc: (rad) => { const n = num(rad); return n == null ? PLACEHOLDER : `${(n * 180 / Math.PI).toFixed(1)}\u00b0`; },
+  inc: (rad) => { const n = num(rad); return n == null ? PLACEHOLDER : `${(radToDeg(n)).toFixed(1)}\u00b0`; },
   /** `92:34` — mm:ss, minutes uncapped, rounded to the second */
   mmss: (s) => {
     const n = num(s);
@@ -680,7 +681,7 @@ export class OrbitPane {
 
   /** @private A percentage string with one decimal. */
   _pct(frac) {
-    const f = Math.max(0, Math.min(1, Number(frac) || 0));
+    const f = clamp01(Number(frac) || 0);
     return (Math.round(f * 1000) / 10).toString();
   }
 

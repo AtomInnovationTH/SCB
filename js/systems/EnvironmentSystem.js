@@ -18,6 +18,7 @@
 import { Constants } from '../core/Constants.js';
 import { Events }    from '../core/Events.js';
 import { persistenceManager } from './PersistenceManager.js';
+import { clamp01 } from '../core/MathUtil.js';
 
 // ============================================================================
 // SEEDED RNG — same multiplicative congruential pattern as DebrisTextureAtlas
@@ -261,7 +262,7 @@ export class EnvironmentSystem {
    */
   setSubsystemHealth(subsystem, health) {
     if (subsystem in this._subsystemHealth) {
-      this._subsystemHealth[subsystem] = Math.max(0, Math.min(1, health));
+      this._subsystemHealth[subsystem] = clamp01(health);
     }
   }
 

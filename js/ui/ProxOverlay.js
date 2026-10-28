@@ -38,6 +38,7 @@
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { mono } from '../core/Typeface.js';
+import { lerp } from '../core/MathUtil.js';
 
 /** Value-marker radius band (px): radius = MIN + (MAX−MIN)·√(min(1, pts/REF)).
  *  √ so mid-value targets stay distinguishable; REF saturates the band. */
@@ -89,7 +90,7 @@ export class ProxOverlay {
    */
   static markerRadiusPx(estimatedPoints) {
     const v = clamp01((estimatedPoints || 0) / VALUE_REF_PTS);
-    return MARKER_MIN_PX + (MARKER_MAX_PX - MARKER_MIN_PX) * Math.sqrt(v);
+    return lerp(MARKER_MIN_PX, MARKER_MAX_PX, Math.sqrt(v));
   }
 
   /**
@@ -118,9 +119,9 @@ export class ProxOverlay {
    */
   static riskColor(risk01) {
     const t = clamp01(risk01 || 0);
-    const r = Math.round(INFO_RGB[0] + (THREAT_RGB[0] - INFO_RGB[0]) * t);
-    const g = Math.round(INFO_RGB[1] + (THREAT_RGB[1] - INFO_RGB[1]) * t);
-    const b = Math.round(INFO_RGB[2] + (THREAT_RGB[2] - INFO_RGB[2]) * t);
+    const r = Math.round(lerp(INFO_RGB[0], THREAT_RGB[0], t));
+    const g = Math.round(lerp(INFO_RGB[1], THREAT_RGB[1], t));
+    const b = Math.round(lerp(INFO_RGB[2], THREAT_RGB[2], t));
     return `rgb(${r}, ${g}, ${b})`;
   }
 

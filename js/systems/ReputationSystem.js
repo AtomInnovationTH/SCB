@@ -1,5 +1,6 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { clamp } from '../core/MathUtil.js';
 
 /**
  * ReputationSystem — tracks standing with 5 partner entities.
@@ -68,7 +69,7 @@ export class ReputationSystem {
     if (!partner) return;
 
     const oldTier = this._getTier(partner.rep);
-    partner.rep = Math.max(0, Math.min(100, partner.rep + amount));
+    partner.rep = clamp(partner.rep + amount, 0, 100);
     const newTier = this._getTier(partner.rep);
 
     if (newTier > oldTier) {

@@ -24,6 +24,7 @@
 import { Constants } from '../core/Constants.js';
 // F16: a leaf module (imports nothing), so it adds no cycle; every line below that names a key reads the glass flag when it is built.
 import { GestureHints } from '../ui/hud/GestureHints.js';
+import { degToRad } from '../core/MathUtil.js';
 
 const S = Constants.ARM_STATES;
 
@@ -469,7 +470,7 @@ export function linesCross(A, B, opts) {
   const m = opts && opts.marginDeg !== undefined ? opts.marginDeg : CROSS_MARGIN_DEG;
   const l0 = len(d0), l1 = len(d1);
   if (!(l0 > 1e-9) || !(l1 > 1e-9)) return dot(d0, d1) < 0;
-  return dot(d0, d1) < Math.sin(m * Math.PI / 180) * l0 * l1;
+  return dot(d0, d1) < Math.sin(degToRad(m)) * l0 * l1;
 }
 
 /**

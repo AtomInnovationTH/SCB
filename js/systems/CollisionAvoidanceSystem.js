@@ -23,6 +23,7 @@ import { classifyContact } from './collisionModel.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { audioSystem } from './AudioSystem.js';
 import { engineGasLowFrac } from './ResourceSystem.js';
+import { clamp } from '../core/MathUtil.js';
 
 // ============================================================================
 // LOCAL CONSTANTS (derived from Constants.COLLISION_AVOIDANCE)
@@ -907,7 +908,7 @@ export class CollisionAvoidanceSystem {
 
     const rpDotRv = rpx * rvx + rpy * rvy + rpz * rvz;
     let tca = -rpDotRv / rvDotRv;
-    tca = Math.max(0, Math.min(CA.LOOK_AHEAD_S, tca));
+    tca = clamp(tca, 0, CA.LOOK_AHEAD_S);
 
     // Miss vector at TCA
     const cx = rpx + rvx * tca;

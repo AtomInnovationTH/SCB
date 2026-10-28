@@ -41,6 +41,7 @@ import { Events } from '../../core/Events.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
 import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { DENSITY_MOTION_MS, DENSITY_MOTION_EASING } from '../HUD.js';
+import { clamp } from '../../core/MathUtil.js';
 
 /** The root element id (FloorMask MASK_PANES.cargo.els = ['#hud-cargo-pane']). */
 export const CARGO_PANE_ID = 'hud-cargo-pane';
@@ -613,7 +614,7 @@ export class CargoPane {
 
     const contract = this._contractKg();
     const target = this._targetKg();
-    const pct = Math.max(0, Math.min(100, (contract / target) * 100));
+    const pct = clamp((contract / target) * 100, 0, 100);
     this._setText(el.elevLabel, `ELEVATOR ${fmt1(contract)} / ${fmtCap(target)} kg`);
     this._setStyle(el.elevBar, 'width', `${Math.round(pct * 10) / 10}%`);
 

@@ -86,6 +86,7 @@ import { audioSystem } from './AudioSystem.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { devShotGate } from '../core/DevShotGate.js';
 import { wingsHint } from './WingsHint.js';
+import { degToRad, radToDeg, lerp } from '../core/MathUtil.js';
 
 /** Beat-table anchors — the ONE named constants block (Constants.js). */
 const OD = Constants.OPENING_DANCE;
@@ -129,10 +130,10 @@ const ZERO_PROGRESS = Object.freeze({
  *  through the ONE mapping (Constants.THERMAL.FLOWER.REST_DEG — the same the
  *  ship's own _flowerRestDeg reads). */
 const REST_DEG = FL.REST_DEG;
-const REST_RAD = (REST_DEG * Math.PI) / 180;
+const REST_RAD = degToRad(REST_DEG);
 /** The radiator's dance travel, LAUNCH 0° → REST at the shipped 15°/s — 0.133 s
  *  for CLOSED 0°: no travel at all (was 0.13 s to 2°, 9.73 s to the bud). */
-const FLOWER_TRAVEL_S = (REST_DEG - FL.POSE_LAUNCH_DEG) / (FL.SLEW_RATE_RAD_S * 180 / Math.PI);
+const FLOWER_TRAVEL_S = (REST_DEG - FL.POSE_LAUNCH_DEG) / (radToDeg(FL.SLEW_RATE_RAD_S));
 /** progress().flower once the radiator is at rest: θ_rest / 146°. */
 const FLOWER_REST_FRAC = REST_DEG / FL.POSE_STOW_DEG;
 /** One ROSA wing at the gameplay furl rate (the `,` key's rate) — 2.5 s. */
@@ -222,7 +223,7 @@ class OpeningDance {
         return T_HANDOVER_S + (elapsed - fadeMs) / 1000;
       }
       const u = elapsed / fadeMs;
-      return this._skipFromT + (T_HANDOVER_S - this._skipFromT) * u;
+      return lerp(this._skipFromT, T_HANDOVER_S, u);
     }
     return (now - this._t0Ms) / 1000;
   }
@@ -652,7 +653,7 @@ class OpeningDance {
       ship._flowerLaunchLock = true;
       ship._flowerOverrideFold = false;
       ship._flowerTargetTheta = undefined;
-      ship._flowerThetaRad = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
+      ship._flowerThetaRad = degToRad(FL.POSE_LAUNCH_DEG);
       if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
     }
     if (typeof ship._setRosaWingProgress === 'function') {

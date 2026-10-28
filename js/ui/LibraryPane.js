@@ -160,6 +160,7 @@
 import { VisualLaw } from '../core/VisualLaw.js';
 import { GestureHints } from './hud/GestureHints.js';
 import { trlToLabel, techLevelBadgeText } from '../core/Constants.js';
+import { clamp } from '../core/MathUtil.js';
 
 /** Dwell before an open entry is marked seen — the shipped CodexViewerUI
  *  SEEN_DWELL_MS (CodexViewerUI.js:58), mirrored so the pane and the viewer
@@ -1155,8 +1156,8 @@ export class LibraryPane {
     }
     const ch = Math.min(H, Math.max(1, Math.round(hPx)));
     const cw = Math.min(W, Math.round(ch * PHOTO_W / PHOTO_H));
-    const sx = Math.max(0, Math.min(W - cw, Math.round(cx - cw / 2)));
-    const sy = Math.max(0, Math.min(H - ch, Math.round(cy - ch / 2)));
+    const sx = clamp(Math.round(cx - cw / 2), 0, W - cw);
+    const sy = clamp(Math.round(cy - ch / 2), 0, H - ch);
     return { sx, sy, cw, ch, anchored };
   }
 

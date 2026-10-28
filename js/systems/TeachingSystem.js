@@ -14,6 +14,7 @@
 
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { RAD2DEG } from '../core/MathUtil.js';
 
 // ============================================================================
 // TEACHING MOMENT DEFINITIONS
@@ -442,7 +443,7 @@ export class TeachingSystem {
       if (!debris || typeof debris.tumbleRate !== 'number') return;
       if (Constants.isFeatureEnabled && !Constants.isFeatureEnabled('LASER_DESPIN')) return;
       const inSpecDeg = (Constants.NET_TUMBLE_PENALTY && Constants.NET_TUMBLE_PENALTY.IN_SPEC_DEG) || 10;
-      const tumbleDeg = Math.abs(debris.tumbleRate) * (180 / Math.PI);
+      const tumbleDeg = Math.abs(debris.tumbleRate) * RAD2DEG;
       if (tumbleDeg > inSpecDeg) this._trigger('first_high_tumble_target');
     });
 

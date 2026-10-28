@@ -22,6 +22,8 @@ import { calmBreathe, finitePulse } from './hudPulse.js';
 import { FONT_MONO } from '../core/Typeface.js';
 import { setDespinProbe, despinButtonUp } from './hud/DespinHint.js';   // u20-ipad F4: one "is DE-SPIN up" rule, shared with ToolOdds
 import { GestureHints } from './hud/GestureHints.js';   // u17 A-T1: the aiming-mark captions follow glass, read when drawn
+import { RAD2DEG, clamp01, clamp, lerp } from '../core/MathUtil.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -35,10 +37,10 @@ const PRE_CAPTURE_STATES = new Set(['TRANSIT', 'APPROACH']);
 
 /** Color palette (consistent with HUD green theme) */
 const C = {
-  primary:    '#00ff88',
+  primary:    VisualLaw.COLORS.PLAYER,
   primaryDim: 'rgba(0, 255, 136, 0.3)',
   primaryGlow:'rgba(0, 255, 136, 0.15)',
-  warning:    '#ffaa00',
+  warning:    VisualLaw.COLORS.CAUTION,
   warningDim: 'rgba(255, 170, 0, 0.3)',
   danger:     '#ff4444',
   dangerDim:  'rgba(255, 68, 68, 0.3)',
@@ -314,7 +316,7 @@ export class DockingReticle {
       const raw = this._closureRate;
       this._clrSmooth = this._clrSmooth == null
         ? raw
-        : this._clrSmooth + (raw - this._clrSmooth) * (1 - Math.exp(-Math.max(dt, 0.001) / 0.3));
+        : lerp(this._clrSmooth, raw, 1 - Math.exp(-Math.max(dt, 0.001) / 0.3));
       const a = Math.abs(this._clrSmooth);
       if (this._clrArrow === 0) this._clrArrow = a >= 0.15 ? Math.sign(this._clrSmooth) : 0;
       else if (a < 0.08 || Math.sign(this._clrSmooth) !== this._clrArrow) {
@@ -549,7 +551,7 @@ export class DockingReticle {
     ctx.fillRect(lbX - 6, cy - 0.5, 12, 1);
 
     // Pip position: clamp offset to [-100, 100], map to bar range
-    const vClamp = Math.max(-100, Math.min(100, this._offsetY));
+    const vClamp = clamp(this._offsetY, -100, 100);
     const vPipY = cy - (vClamp / 100) * (barLen / 2);
 
     // Pip
@@ -580,7 +582,7 @@ export class DockingReticle {
     ctx.fillRect(cx - 0.5, bbY - 6, 1, 12);
 
     // Pip
-    const hClamp = Math.max(-100, Math.min(100, this._offsetX));
+    const hClamp = clamp(this._offsetX, -100, 100);
     const hPipX = cx + (hClamp / 100) * (barLen / 2);
 
     ctx.fillStyle = Math.abs(this._offsetX) < 10 ? C.primary : C.warning;
@@ -951,7 +953,7 @@ export class DockingReticle {
       ctx.fillText('FRAG ?', left + boxW - 8, footerY);
     } else if (fragRisk >= (TO.FRAG_CHIP_MIN ?? 0.10)) {
       ctx.textAlign = 'right';
-      ctx.fillStyle = fragRisk >= 0.3 ? '#ff5555' : '#ffaa00';
+      ctx.fillStyle = fragRisk >= 0.3 ? '#ff5555' : VisualLaw.COLORS.CAUTION;
       ctx.fillText(`FRAG ${Math.round(fragRisk * 100)}%`, left + boxW - 8, footerY);
     }
     ctx.textAlign = 'left';
@@ -1056,7 +1058,7 @@ export class DockingReticle {
     // Phase 3c: live eddy-damping readout — the MAGNET's passive secondary is
     // working; show the tumble bleeding so the NET % climb reads as caused.
     if (selected === 'MAGNET' && target && target._eddyDamping) {
-      const deg = Math.abs(target.tumbleRate || 0) * (180 / Math.PI);
+      const deg = Math.abs(target.tumbleRate || 0) * RAD2DEG;
       return { text: `eddy-damping ${deg.toFixed(1)}\u00B0/s\u2193`, color: '#66ddff' };
     }
     if (bestKind) {
@@ -1181,7 +1183,7 @@ export class DockingReticle {
 
     // Tension fraction of tether break strength (SNAP at 1.0).
     const breakN = arm.tetherBreakStrength || 100;
-    const frac = Math.max(0, Math.min(1, (arm.tetherTension || 0) / breakN));
+    const frac = clamp01((arm.tetherTension || 0) / breakN);
     const warnFrac = Constants.REEL_TENSION_WARNING ?? 0.7;
     const critFrac = Constants.REEL_TENSION_CRITICAL ?? 0.9;
 
@@ -1217,20 +1219,20 @@ export class DockingReticle {
     const isNetCatch = !arm._captureToolKind || arm._captureToolKind === 'NET';
     if (isNetCatch && ratedKg > 0 && payloadKg > 0) {
       const safe = Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8;
-      const strain = Math.max(0, Math.min(1, payloadKg / ratedKg));
+      const strain = clamp01(payloadKg / ratedKg);
       ctx.fillStyle = 'rgba(0, 255, 170, 0.12)';
       ctx.fillRect(barX, strainY, barW, strainH);
-      ctx.fillStyle = strain > safe ? '#ffaa00' : 'rgba(0, 255, 170, 0.8)';
+      ctx.fillStyle = strain > safe ? VisualLaw.COLORS.CAUTION : 'rgba(0, 255, 170, 0.8)';
       ctx.fillRect(barX, strainY, barW * strain, strainH);
       // RIP tick at the safe fraction of the STRAIN axis.
-      ctx.strokeStyle = '#ffaa00';
+      ctx.strokeStyle = VisualLaw.COLORS.CAUTION;
       ctx.beginPath();
       ctx.moveTo(barX + barW * safe, strainY - 2);
       ctx.lineTo(barX + barW * safe, strainY + strainH + 2);
       ctx.stroke();
       ctx.font = `8px ${FONT}`;
       ctx.textAlign = 'center';
-      ctx.fillStyle = strain > safe ? '#ffaa00' : 'rgba(255, 170, 0, 0.55)';
+      ctx.fillStyle = strain > safe ? VisualLaw.COLORS.CAUTION : 'rgba(255, 170, 0, 0.55)';
       ctx.fillText('RIP', barX + barW * safe, strainY + strainH + 7);
     }
 
@@ -1335,7 +1337,7 @@ export class DockingReticle {
       // Phase 2: currently broadside on a body that fits end-on. Tumble makes
       // θ sweep — de-spin first to freeze the aspect, THEN orbit around.
       const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
-      const deg = Math.abs(tumbleRate || 0) * (180 / Math.PI);
+      const deg = Math.abs(tumbleRate || 0) * RAD2DEG;
       if (tumbleRate != null && deg > inSpec && !target._despinning) {
         // u17 A-T1 (D2): on glass the de-spin clause stays only while the DE-SPIN button is up; else the plain broadside advice.
         advisory = !this._glassNow() ? 'de-spin to freeze aspect [L]'
@@ -1352,7 +1354,7 @@ export class DockingReticle {
       advisory = `OFF AXIS ${Math.round(offAxisDeg)}°. Re-aim`;
       advisoryCol = '#ff7755';
     } else if (tumbleRate != null) {
-      const deg = Math.abs(tumbleRate) * (180 / Math.PI);
+      const deg = Math.abs(tumbleRate) * RAD2DEG;
       const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
       // Issue 9 (2026-06-12): live °/s readout — while holding H the player
       // sees the tumble converge toward the in-spec threshold.

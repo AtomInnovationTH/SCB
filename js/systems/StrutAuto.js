@@ -32,6 +32,7 @@
 
 import { Constants } from '../core/Constants.js';
 import { StorageKeys } from '../core/StorageKeys.js';
+import { degToRad } from '../core/MathUtil.js';
 
 /** Envelope version of the stored record. */
 export const STRUT_AUTO_VERSION = 1;
@@ -403,7 +404,7 @@ export class StrutAutoController {
       if (this._checkS >= 0.25 && typeof view.gapAt === 'function') {
         this._checkS = 0;
         for (const a of s.arms) {
-          const next = Math.min(s.top, a.getAimAlpha() + 3 * Math.PI / 180);
+          const next = Math.min(s.top, a.getAimAlpha() + degToRad(3));
           if (next < V.DEMO_CHECK_FROM_RAD) continue;           // still in the rest cradle
           const gap = view.gapAt(a, next);
           if (gap < V.DEMO_CLEAR_M) { this._turnBack(s); return; }

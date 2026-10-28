@@ -24,6 +24,7 @@
  */
 
 import * as THREE from 'three';
+import { degToRad, radToDeg, clamp01, clamp, lerp } from '../core/MathUtil.js';
 
 /** Length of the turn, seconds. */
 export const EARTH_TURN_S = 1.0;
@@ -69,7 +70,7 @@ export function earthTurnTarget(center) {
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
   const r = Math.sqrt(x * x + y * y + z * z);
   if (!(r >= EARTH_RADIUS_U)) return null;
-  const phi = Math.min(EARTH_TURN_POLAR_MAX, Math.max(EARTH_TURN_POLAR_MIN, Math.acos(Math.max(-1, Math.min(1, y / r)))));
+  const phi = Math.min(EARTH_TURN_POLAR_MAX, Math.max(EARTH_TURN_POLAR_MIN, Math.acos(clamp(y / r, -1, 1))));
   const theta = Math.atan2(x, z);
   const s = Math.sin(phi);
   return new THREE.Vector3(s * Math.sin(theta), Math.cos(phi), s * Math.cos(theta));
@@ -92,13 +93,13 @@ export function earthTurnTarget(center) {
  */
 export function earthTurnDirAt(start, target, u, ease) {
   const res = new THREE.Vector3();
-  const uu = Number.isFinite(u) ? Math.min(1, Math.max(0, u)) : 0;
+  const uu = Number.isFinite(u) ? clamp01(u) : 0;
   if (uu <= 0) return res.set(start.x, start.y, start.z);
   if (uu >= 1) return res.set(target.x, target.y, target.z);
   const e = (typeof ease === 'function' ? ease : cubicInOut)(uu);   // u10: a re-frame passes earthFrameEase
 
-  const phiS = Math.acos(Math.max(-1, Math.min(1, start.y)));
-  const phiT = Math.acos(Math.max(-1, Math.min(1, target.y)));
+  const phiS = Math.acos(clamp(start.y, -1, 1));
+  const phiT = Math.acos(clamp(target.y, -1, 1));
   const sinS = Math.sin(phiS), sinT = Math.sin(phiT);
   const startAtPole = sinS < 1e-6, targetAtPole = sinT < 1e-6;
   let thS = startAtPole ? 0 : Math.atan2(start.x, start.z);
@@ -110,7 +111,7 @@ export function earthTurnDirAt(start, target, u, ease) {
   while (dTh > Math.PI) dTh -= 2 * Math.PI;           // short way round; exactly +pi stays +pi
   while (dTh <= -Math.PI) dTh += 2 * Math.PI;         // exactly -pi becomes +pi
 
-  const phi = phiS + (phiT - phiS) * e;
+  const phi = lerp(phiS, phiT, e);
   const th = thS + dTh * e;
   const s = Math.sin(phi);
   return res.set(s * Math.sin(th), Math.cos(phi), s * Math.cos(th));
@@ -151,7 +152,7 @@ export function earthTurnTrigger({ floor, riding, focusId, prevSettled, prevFocu
 /** u10 D3: added to the larger of the ship's and the field's distance from Earth's centre (u). */
 export const EARTH_FRAME_PAD_U = 0.3;
 /** u10 D3: beyond 174° apart the ship–field bisector is ill-defined; the arc along the ship's travel is used. */
-export const EARTH_FRAME_ANTIPODE_COS = Math.cos(174 * Math.PI / 180);
+export const EARTH_FRAME_ANTIPODE_COS = Math.cos(degToRad(174));
 /**
  * u10 D3 smoothness: a re-frame's turn is stretched so its fastest moment stays at or under this
  * angular speed (deg/s) where it can (≤ 1.5 s): 2° per frame at 60 fps. Plan target: no
@@ -174,7 +175,7 @@ export const EARTH_FRAME_RAMP = 0.25;
  */
 export function earthFrameEase(u) {
   const a = EARTH_FRAME_RAMP, v = 1 / (1 - a);
-  const uu = Math.min(1, Math.max(0, u));
+  const uu = clamp01(u);
   const ramp = (x) => v * (x / 2 - (a / (2 * Math.PI)) * Math.sin((Math.PI * x) / a));
   if (uu <= a) return ramp(uu);
   if (uu >= 1 - a) return 1 - ramp(1 - uu);
@@ -201,7 +202,7 @@ export function earthFrameTurnS(start, target) {
     if (a > peak) peak = a;
     prev = d;
   }
-  const need = (peak * 180 / Math.PI) / EARTH_FRAME_MAX_DEG_S;
+  const need = (radToDeg(peak)) / EARTH_FRAME_MAX_DEG_S;
   return Math.min(EARTH_FRAME_TURN_MAX_S, Math.max(EARTH_TURN_S, Number.isFinite(need) ? need : EARTH_TURN_S));
 }
 
@@ -234,7 +235,7 @@ export function earthPairDir(ship, field, shipVel) {
       m = f.clone();                                                 // no travel direction: the field wins
     } else {
       w.normalize();
-      const half = Math.acos(Math.max(-1, Math.min(1, dot))) / 2;
+      const half = Math.acos(clamp(dot, -1, 1)) / 2;
       m = s.clone().multiplyScalar(Math.cos(half)).add(w.multiplyScalar(Math.sin(half)));
     }
   }

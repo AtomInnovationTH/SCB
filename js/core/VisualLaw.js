@@ -1,59 +1,48 @@
 /**
- * VisualLaw.js — the Zoom Ladder's visual constitution (M0 stub constants).
+ * @module core/VisualLaw — the Zoom Ladder's visual constitution. PURE DATA (no imports, no behavior): colors, icon
+ * grammar, the one easing curve, ride/fade timings, alarm caps, label budgets, rail +
+ * reduced-motion rules. Floors and mechanics live in FloorContract.js; prose in docs/ladder/00-spec.md ("Visual law").
+ * test-FloorContract.js pins the invariants (7 distinct colors, sizes 12-24 px, one curve, 450-650 ms rides, label
+ * budget 7, klaxon flash <= 3 Hz).
  *
- * PURE DATA: colors, icon grammar, the one easing curve, ride/fade timings,
- * alarm caps, label budgets, rail + reduced-motion rules. No imports, no
- * behavior. Floors and mechanics live in js/core/FloorContract.js; prose in
- * docs/ladder/00-spec.md ("Visual law"). test-FloorContract.js pins the
- * invariants (7 distinct colors, sizes 12-24 px, one curve, 450-650 ms rides,
- * label budget 7, klaxon flash <= 3 Hz).
- *
- * Law summary — the colour alphabet (Session Q, plan D15; Airbus A2 borrowed
- * as a practice, not a stencil):
- *   - THREAT red-orange = act now (ALWAYS pulses — the one pulsing colour;
- *     the RED conjunction threat's bracket / row / arrow, the strip's critical).
- *   - CAUTION amber = abnormal, steady — finish your task first (the caution
- *     word, odds 50–79, the strip's warning).
- *   - PLAYER heritage green = normal / yours / active (in-reach thick, tracked
- *     thin, odds ≥ 80, MEMO tokens, LEDs, COMMS nominal).
- *   - SELECTION blue = pilot-selected (the bracket, the arrow, the TARGETS row,
- *     the F3 / F1 / F4 focus). Blue is yours — the shipped reticle blue.
+ * The colour alphabet (Airbus A2 borrowed as a practice):
+ *   - THREAT red-orange = act now (ALWAYS pulses — the one pulsing colour; the RED conjunction threat's bracket / row /
+ *     arrow, the strip's critical).
+ *   - CAUTION amber = abnormal, steady — finish your task first
+ *     (the caution word, odds 50–79, the strip's warning; a denial, a "N catches away" hint, a near-limit readout).
+ *     Advisory, never alarm: it NEVER pulses (pulse is THREAT's channel alone) and it is the ONE amber: the HUD's
+ *     '#ffaa00' warning tier IS this colour, so a warning never reads as precious and precious never as warning
+ *     (which is why VALUE is champagne '#ffe1a8', not gold).
+ *   - PLAYER heritage green = normal / yours / active (in-reach thick, tracked thin, odds ≥ 80, MEMO tokens, LEDs,
+ *     COMMS nominal).
+ *   - SELECTION blue = pilot-selected (the bracket, the arrow, the TARGETS row, the F3 / F1 / F4 focus). Blue is yours:
+ *     the shipped reticle blue.
  *   - LABEL white = labels and titles; the lock flash. Never a state.
- *   - magenta = computer-managed — the autopilot's locked target while it
- *     flies (TargetColorLaw.MANAGED_MAGENTA: a module constant, never a key).
- *   - INFO cyan = teaching / information (ours). VALUE pale champagne =
- *     precious, steady (ours).
- *   - CAUTION (Session L, plan D-J aviation display grammar): the steady amber
- *     of a denial, a "N catches away" hint, a near-limit readout — advisory,
- *     never alarm. It NEVER pulses (pulse is THREAT's channel alone) and it is
- *     the ONE amber: the HUD's shipped '#ffaa00' warning tier IS this colour,
- *     so a warning never reads as precious and precious never reads as warning
- *     — which is why VALUE moved from gold '#ffd166' to champagne '#ffe1a8'.
- *   - Gold/champagne still never pulses.
+ *   - magenta = computer-managed: the autopilot's locked target while it flies
+ *     (TargetColorLaw.MANAGED_MAGENTA: a module constant, never a key).
+ *   - INFO cyan = teaching / information. VALUE pale champagne = precious, steady; gold/champagne never pulses.
  *   - Color is never the sole channel (shape/size/motion double-encode).
  *   - Fragments render as dust shimmer, never icons (mass-honesty rule).
  *   - ONE easing curve everywhere. Camera never rolls.
- *
- * @module core/VisualLaw
  */
 
 export const VisualLaw = {
   COLORS: {
     PLAYER: '#00ff88',     // heritage green — player/systems (COMMS nominal, LEDs)
-    VALUE: '#ffe1a8',      // pale champagne — mass/value, STEADY (never pulses; was gold #ffd166 until Session L)
+    VALUE: '#ffe1a8',      // pale champagne — mass/value, STEADY (never pulses)
     THREAT: '#ff4422',     // red-orange — threat, ALWAYS pulses
     INFO: '#00ccff',       // cyan — informational (matches TEACHING overlay family)
-    SELECTION: '#4488ff',  // blue — pilot-selected (Session Q: was white #ffffff; the reticle's shipped blue)
-    CAUTION: '#ffaa00',    // steady amber — denials, "N catches away", near-limits; NEVER pulses. The Override gag no longer pulses (rev 3) — THREAT pulse is reserved for real alarms.
-    LABEL: '#ffffff',      // white — labels, titles, the lock flash; never a state (Session Q)
+    SELECTION: '#4488ff',  // blue — pilot-selected (the reticle's shipped blue)
+    CAUTION: '#ffaa00',    // steady amber — denials, "N catches away", near-limits; NEVER pulses.
+    LABEL: '#ffffff',      // white — labels, titles, the lock flash; never a state
   },
-  /** Color is never the sole channel: every color-coded meaning must also be
-   *  encoded in shape, size, or motion. */
   COLOR_NEVER_SOLE_CHANNEL: true,
 
   ICONS: {
-    /** World-icon grammar. Gold shapes carry VALUE color; ship chevron points
-     *  along velocity; clusters render ring+count. */
+    /**
+     * World-icon grammar. Gold shapes carry VALUE color; ship chevron points along velocity; clusters render
+     * ring+count.
+     */
     SHAPES: {
       ship: 'chevron',          // points along velocity
       debris: 'diamond',
@@ -90,8 +79,6 @@ export const VisualLaw = {
     HOVER_REVEALS: true,        // hover reveals suppressed labels
   },
 
-  /** Rail indicator: right edge, 7 notches, instrument names, charge fill,
-   *  subject name, warp readout; clickable notches, draggable scrub. */
   RAIL: {
     SIDE: 'right',
     NOTCHES: 7,
@@ -100,15 +87,13 @@ export const VisualLaw = {
     DRAGGABLE: true,
   },
 
-  /** Reduced-motion setting: crossfades replace rides, no FOV squeeze,
-   *  flashes <= 3 Hz confined to the rail. */
   REDUCED_MOTION: {
     CROSSFADE_REPLACES_RIDES: true,
     NO_FOV_SQUEEZE: true,
     FLASH_HZ_MAX: 3,
   },
 
-  /** Floor-7 visual defaults — REVISIT AFTER M4 (docs/ladder/00-spec.md §3 F7). */
+  /** Floor-7 visual defaults (docs/ladder/00-spec.md §3 F7). */
   FLOOR7_DEFAULTS: {
     RAIL_SIDE: 'right',
     CHART_EARTH: 'chart-blue flat overlay sphere (overlay mesh, not a shader swap)',

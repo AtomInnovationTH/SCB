@@ -20,6 +20,8 @@ import { buildUpdateCard } from './UpdateCard.js';
 import { applyUpdate } from '../core/UpdateWatch.js';
 import { claimAutoApply } from '../core/UpdateWatch.js';   // the loop-guard claim (kept a separate line: test-UpdateCard.js pins the applyUpdate import)
 import { buildWhatsNewCard, loadNotes, readNotice, markSeen, placeNotice } from './WhatsNewCard.js';   // the "what's new" notes card (owner 2026-10-26)
+import { clamp } from '../core/MathUtil.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 
 /** up1: the one line on the menu while the game switches to the new build by itself. */
 const UPDATE_NOTICE_TEXT = 'Updating to the new version\u2026';
@@ -740,7 +742,7 @@ export class MenuScreen {
     const btn = this.element.querySelector('#menu-start-btn');
     btn.addEventListener('mouseenter', () => {
       btn.style.background = 'rgba(0,255,136,0.25)';
-      btn.style.borderColor = '#00ff88';
+      btn.style.borderColor = VisualLaw.COLORS.PLAYER;
       btn.style.boxShadow = '0 0 20px rgba(0,255,136,0.3)';
     });
     btn.addEventListener('mouseleave', () => {
@@ -757,7 +759,7 @@ export class MenuScreen {
     if (continueBtn) {
       continueBtn.addEventListener('mouseenter', () => {
         continueBtn.style.background = 'rgba(255,170,0,0.2)';
-        continueBtn.style.borderColor = '#ffaa00';
+        continueBtn.style.borderColor = VisualLaw.COLORS.CAUTION;
         continueBtn.style.boxShadow = '0 0 20px rgba(255,170,0,0.3)';
       });
       continueBtn.addEventListener('mouseleave', () => {
@@ -906,7 +908,7 @@ export class MenuScreen {
       const th = tip.offsetHeight;
       const margin = 8;
       let left2 = r.left + r.width / 2 - tw / 2;
-      left2 = Math.max(margin, Math.min(left2, window.innerWidth - tw - margin));
+      left2 = clamp(window.innerWidth - tw - margin, margin, left2);
       let top2 = r.top - th - 8;
       if (top2 < margin) top2 = r.bottom + 8;   // flip below if no room above
       tip.style.left = `${Math.round(left2)}px`;

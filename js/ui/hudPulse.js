@@ -24,6 +24,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { clamp01 } from '../core/MathUtil.js';
 
 /**
  * Detect the OS/browser reduce-motion preference (Node-safe, cached).
@@ -92,7 +93,7 @@ export function calmBreathe(time, shownFor, opts = {}) {
   const a = fadeIn * (base + amp * Math.sin(time * hz * 2 * Math.PI));
   // Clamp: an out-of-range globalAlpha is silently ignored by canvas, which
   // would leak the previous alpha instead of drawing at the intended value.
-  return Math.max(0, Math.min(1, a));
+  return clamp01(a);
 }
 
 /**
@@ -117,5 +118,5 @@ export function finitePulse(elapsed, opts = {}) {
   const depth = opts.depth ?? 0.3;
   if (!(elapsed > 0) || elapsed >= duration) return 1;
   const a = 1 - depth * Math.sin(Math.PI * elapsed / duration);
-  return Math.max(0, Math.min(1, a));
+  return clamp01(a);
 }

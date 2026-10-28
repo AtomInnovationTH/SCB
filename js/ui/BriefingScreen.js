@@ -15,6 +15,7 @@ import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
 import { decorateGlossary } from '../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 
 const SDA_PROVIDERS = [
   'LeoLabs tracking data',
@@ -350,7 +351,7 @@ export class BriefingScreen {
       });
       card.addEventListener('mouseleave', () => {
         const selected = parseInt(card.dataset.idx) === this._selectedIdx;
-        card.style.borderColor = selected ? '#00ff88' : 'rgba(0,255,136,0.2)';
+        card.style.borderColor = selected ? VisualLaw.COLORS.PLAYER : 'rgba(0,255,136,0.2)';
         card.style.background = selected ? 'rgba(0,255,136,0.1)' : 'rgba(0,20,40,0.6)';
       });
     });
@@ -371,7 +372,7 @@ export class BriefingScreen {
     const cards = this.element.querySelectorAll('.briefing-card');
     cards.forEach((card, i) => {
       const selected = i === idx;
-      card.style.borderColor = selected ? '#00ff88' : 'rgba(0,255,136,0.2)';
+      card.style.borderColor = selected ? VisualLaw.COLORS.PLAYER : 'rgba(0,255,136,0.2)';
       card.style.background = selected ? 'rgba(0,255,136,0.1)' : 'rgba(0,20,40,0.6)';
     });
 

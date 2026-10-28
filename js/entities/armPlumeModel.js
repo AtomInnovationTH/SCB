@@ -41,6 +41,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { lerp } from '../core/MathUtil.js';
 
 const S = Constants.ARM_STATES;
 
@@ -164,8 +165,7 @@ export function computeDaughterPlumeIntensity(sig) {
     // eases up toward MANEUVER_FRACTION while pilot inputs are live, then
     // decays back over MANEUVER_GLOW_S.
     const g = clamp01((sig.skManeuverGlowS || 0) / DAUGHTER_PLUME.MANEUVER_GLOW_S);
-    aft = DAUGHTER_PLUME.HOLD_FRACTION
-      + (DAUGHTER_PLUME.MANEUVER_FRACTION - DAUGHTER_PLUME.HOLD_FRACTION) * g;
+    aft = lerp(DAUGHTER_PLUME.HOLD_FRACTION, DAUGHTER_PLUME.MANEUVER_FRACTION, g);
   } else if (state === S.NETTING) {
     // Position hold while the net flies (0.3 %/s legacy rate) — same faint
     // thread as STATION_KEEP so the weave doesn't read as engine-off.

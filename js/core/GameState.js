@@ -1,7 +1,4 @@
-/**
- * GameState.js — Game state manager with finite state machine
- * @module core/GameState
- */
+/** @module core/GameState — game state manager (finite state machine). */
 
 import { eventBus } from './EventBus.js';
 import { Events } from './Events.js';
@@ -51,26 +48,21 @@ class GameState {
     /** @type {number} */
     this.missionTime = 0;
 
-    /** @type {number} Nets step 3 slice 2b: days of ship time the trips between fields have added (FIELDS_BY_HEIGHT; saved). */
+    /** @type {number} days of ship time the trips between fields have added (FIELDS_BY_HEIGHT; saved) */
     this.shipDays = 0;
   }
 
-  /**
-   * Whether `setState(newState)` would be accepted from the current state (a read: nothing changes). The drawer's MAIN MENU asks it before
-   * it emits, because `GameFlowManager.transitionToState(MENU)` aborts the trip and the berth BEFORE it finds the move refused (F1.6).
-   * @param {string} newState - Target state from GameStates enum
-   * @returns {boolean}
-   */
+  /** Whether `setState(newState)` would be accepted from the current state (a read: nothing changes). The drawer's MAIN
+   *  MENU asks before it emits, because `GameFlowManager.transitionToState(MENU)` aborts the trip and the berth BEFORE
+   *  it finds the move refused. */
   canTransitionTo(newState) {
     const allowed = VALID_TRANSITIONS[this.currentState];
     return !!allowed && allowed.includes(newState);
   }
 
   /**
-   * Transition to a new game state
-   * @param {string} newState - Target state from GameStates enum
-   * @param {object} [payload] - Optional data for the transition
-   * @returns {boolean} Whether the transition succeeded
+   * Transition to a new game state (`payload` rides on STATE_CHANGE). @returns {boolean} whether the transition
+   * succeeded
    */
   setState(newState, payload) {
     const allowed = VALID_TRANSITIONS[this.currentState];
@@ -93,36 +85,24 @@ class GameState {
     return true;
   }
 
-  /**
-   * Get the current state
-   * @returns {string}
-   */
+  /** @returns {string} the current state */
   getState() {
     return this.currentState;
   }
 
-  /**
-   * Check if the current state is an active gameplay state
-   * (ORBITAL_VIEW, APPROACH, or INTERACTION).
-   * @returns {boolean}
-   */
+  /** True in an active gameplay state (ORBITAL_VIEW, APPROACH, INTERACTION). */
   isGameplay() {
     return this.currentState === GameStates.ORBITAL_VIEW ||
            this.currentState === GameStates.APPROACH ||
            this.currentState === GameStates.INTERACTION;
   }
 
-  /**
-   * Update per-frame logic tied to game state
-   * @param {number} dt - Delta time in seconds
-   */
+  /** Per-frame logic tied to game state. @param {number} dt seconds */
   update(dt) {
     this.missionTime += dt;
 
-    // S1 Fix L2: Emit GAME_WIN so GameFlowManager can run its full
-    // transitionToState(WIN) (which shows the victory screen, saves, etc.).
-    // Previously this called setState(WIN) directly, bypassing GameFlowManager.
-    // The _winEmitted guard prevents duplicate emissions across frames.
+    // Emit GAME_WIN so GameFlowManager runs its full transitionToState(WIN) (victory screen, save…); never
+    // setState(WIN) directly. The _winEmitted guard prevents duplicates across frames.
     if (this.debrisCleared >= Constants.WIN_DEBRIS_COUNT) {
       if (!this._winEmitted &&
           this.currentState !== GameStates.WIN &&
@@ -133,25 +113,19 @@ class GameState {
     }
   }
 
-  /**
-   * Add score points
-   * @param {number} points
-   */
+  /** Add score points. */
   addScore(points) {
     this.score += points;
     eventBus.emit(Events.SCORE_UPDATE, { total: this.score, delta: points });
   }
 
-  /**
-   * Increment debris cleared count
-   */
+  /** Increment debris cleared count. */
   clearDebris() {
     this.debrisCleared += 1;
     eventBus.emit(Events.DEBRIS_CLEARED, { count: this.debrisCleared });
 
-    // Last-debris ceremony: escalating celebratory comms as the player closes
-    // out the field. `remaining` counts targets still needed to win. We guard
-    // each line so it fires at most once per game.
+    // Last-debris ceremony: escalating comms as the player closes out the field
+    // (`remaining` = targets still needed to win), each line at most once per game.
     const remaining = Constants.WIN_DEBRIS_COUNT - this.debrisCleared;
     if (remaining === 1 && !this._penultimateHailed) {
       this._penultimateHailed = true;
@@ -172,9 +146,7 @@ class GameState {
     }
   }
 
-  /**
-   * Reset to initial state for a new game
-   */
+  /** Reset to initial state for a new game. */
   reset() {
     this.currentState = GameStates.MENU;
     this.previousState = null;
@@ -182,7 +154,7 @@ class GameState {
     this.debrisCleared = 0;
     this.missionTime = 0;
     this.shipDays = 0;
-    this._winEmitted = false;  // S1 Fix L2: reset guard on new game
+    this._winEmitted = false;
     this._penultimateHailed = false; // last-debris ceremony guards
     this._finalHailed = false;
   }

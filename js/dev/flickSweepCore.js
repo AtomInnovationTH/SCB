@@ -1,42 +1,23 @@
 /**
- * flickSweepCore.js — PURE offline scoring core for the flick-tuning sweep
- * (docs/ladder/07-flick-tuning.md). The CLI wrapper is scripts/flick-sweep.mjs;
- * everything here is deterministic, DOM-free, Date-free, and exported for the
- * Node suite (test-FlickSweep.js).
+ * PURE offline scoring core for the flick-tuning sweep (docs/ladder/07-flick-tuning.md); CLI wrapper
+ * scripts/flick-sweep.mjs. Deterministic, DOM-free, Date-free; exported for test-FlickSweep.js.
  *
  * Pipeline:
- *   1. segmentBursts(events)      — recorded gesture events → intent bursts
- *      (silence-gap segmentation: one burst ≈ one continuous stream of hand
- *      activity — a flick plus its momentum tail, a sustained push, a
- *      free-scroll adjustment).
- *   2. replayTrace(events, opts)  — feed the trace through a FRESH ZoomLadder
- *      per candidate, converting recorded deltas with the SAME normalizeWheel
- *      math + source-class gating the WheelRouter applies live (recorded
- *      sourceClass wins — deltaX is consumed at capture time, not carried).
- *      Ride completions are simulated on the recorded clock (the core stays
- *      mode:'riding' until rideFinished; offline there is no camera to report
- *      it, so the harness schedules it at the decision's own duration).
- *   3. scoreReplay(...)           — per-burst crossing attribution → metrics.
- *   4. sweepGrid(traces, opts)    — cartesian candidate grid (spring
- *      overrides: the FLICK_* constants + CHARGE_THRESHOLD live on the
- *      ZoomLadder `spring` dep surface) → ranked candidates, deterministic
- *      order (score asc, candidate key asc).
+ *   1. segmentBursts(events)     - recorded gesture events -> intent bursts (silence-gap segmentation)
+ *   2. replayTrace(events, opts) - feed the trace through a FRESH ZoomLadder per candidate, with the same normalizeWheel
+ *      math + source-class gating as WheelRouter (recorded sourceClass wins: deltaX is consumed at capture time).
+ *      Ride completions are simulated on the recorded clock: offline there is no camera to report rideFinished.
+ *   3. scoreReplay(...)          - per-burst crossing attribution -> metrics
+ *   4. sweepGrid(traces, opts)   - cartesian grid of ZoomLadder `spring` overrides (FLICK_* + CHARGE_THRESHOLD),
+ *      ranked by score asc, candidate key asc
  *
- * Metrics (lower composite score = better; see 07-flick-tuning.md for how to
- * read them — they are COMPARATIVE across candidates on the same trace, not
- * absolute quality numbers):
- *   crossingsPerBurst — floor changes per gesture burst (1.0 ideal: one
- *                       intent, one crossing; free-scroll bursts drag it
- *                       below 1 by construction — same drag for every
- *                       candidate).
- *   overshoots        — extra crossings inside one burst (multi-cross: the
- *                       grammar read one intent as several floor changes).
- *   denied            — wall bounces (dock gate / ladder end refusals).
- *   undos             — reversal crossings shortly after a cross (the player
- *                       or the grammar walking back a floor change; high
- *                       values = mistaken crossings needing forgiveness).
- *   medianLatencyMs   — burst start → first crossing in that burst
- *                       (responsiveness of the flick trigger).
+ * Metrics (lower composite score = better; COMPARATIVE across candidates on one trace, not absolute):
+ *   crossingsPerBurst - floor changes per burst (1.0 ideal; free-scroll bursts pull it below 1 equally for every
+ *                       candidate)
+ *   overshoots        - extra crossings inside one burst
+ *   denied            - wall bounces (dock gate / ladder end refusals)
+ *   undos             - reversal crossings shortly after a cross
+ *   medianLatencyMs   - burst start to first crossing in that burst
  *
  * @module dev/flickSweepCore
  */
@@ -47,7 +28,6 @@ import {
 } from '../systems/WheelRouter.js';
 import { FloorContract } from '../core/FloorContract.js';
 
-/** Sweep knobs (every one overridable per call; defaults documented in 07). */
 export const SWEEP_DEFAULTS = {
   burstGapMs: 300,          // inter-event silence ≥ this starts a new burst
   reversalWindowMs: 1500,   // cross reversing the previous cross within this = an undo
@@ -60,34 +40,21 @@ export const SWEEP_DEFAULTS = {
     undo: 1.0,              // undos per burst
     latency: 0.5,           // medianLatencyMs / 1000
   },
-  // ── The pane-swipe scorer (Wave 5 Session D; 07-flick-tuning §5 closed) ──
   paneReversalMs: 1500,     // a page then a REVERSE page within this = a FALSE page (observational, fixed)
   paneMissLowPx: 90,        // an unfired gesture whose peak |sum| ∈ [this, paneSwipePx) = a MISSED page
   paneRiseFactor: 1.5,      // inside a latched tail: |dx| ≥ prev × this (and ≥ prev + paneRiseMinPx) after ≥ 2 decaying events = an EATEN second flick
   paneRiseMinPx: 8,
 };
 
-/** Default candidate grid — includes the shipped baseline values
- *  (FloorContract.HUMP_SPRING: 2.0 / 160 / 800) so the incumbent always
- *  appears in the ranking. CHARGE_THRESHOLD is sweepable via the same spring
- *  surface (CLI --CHARGE_THRESHOLD=…), left off the default grid. */
+/** Default candidate grid; includes the shipped baseline (FloorContract.HUMP_SPRING: 2.0 / 160 / 800) so the incumbent always ranks.
+ *  CHARGE_THRESHOLD is sweepable via CLI (--CHARGE_THRESHOLD=...) but off the grid. */
 export const DEFAULT_GRID = {
   FLICK_MIN_MAG: [1.4, 1.7, 2.0, 2.4, 2.8],
   FLICK_MAX_DRIVE_MS: [120, 160, 200, 240],
   FLICK_UNDO_WINDOW_MS: [500, 800, 1100],
 };
 
-// ── Burst segmentation ──────────────────────────────────────────────────────
-
-/**
- * Split recorded gesture events into bursts on silence gaps. Input order is
- * not trusted (sorted copy; the input array is never mutated). A gap of
- * EXACTLY gapMs starts a new burst (gap >= gapMs, pinned).
- *
- * @param {Array<{tMs:number}>} events
- * @param {number} [gapMs]
- * @returns {Array<{startMs:number, endMs:number, count:number}>}
- */
+/** Split events into bursts on silence gaps (sorted copy; input not mutated). A gap >= gapMs starts a new burst (pinned). */
 export function segmentBursts(events, gapMs = SWEEP_DEFAULTS.burstGapMs) {
   if (!Array.isArray(events) || events.length === 0) return [];
   const sorted = events.slice().sort((a, b) => a.tMs - b.tMs);
@@ -107,22 +74,11 @@ export function segmentBursts(events, gapMs = SWEEP_DEFAULTS.burstGapMs) {
   return bursts;
 }
 
-// ── Trace event → ladder input (the router's ladder-owns-wheel math) ────────
-
 /**
- * Convert one recorded trace event into the {tMs, dir, mag} the ladder core
- * would have received live — the WheelRouter recipe verbatim: source-class
- * feed gating (muted classes never reach the core), ctrl-pinch gain (tagged
- * synthetic pinches arrive pre-scaled: no gain), then normalizeWheel
- * (deltaMode scaling, invert, MAX_MAG cap).
- *
- * The RECORDED sourceClass wins over re-classification: 'mouse' vs 'scroll'
- * depends on deltaX, which classification consumed at capture time.
- *
- * @param {{tMs:number, kind:string, deltaY:number, deltaMode:number,
- *          ctrlKey:boolean, sourceClass?:string}} ev
- * @param {typeof WHEEL_TUNE} [tune] - the trace's recorded tune (meta.tune)
- * @param {boolean} [invert]
+ * One recorded trace event -> the {tMs, dir, mag} the ladder core got live (WheelRouter recipe): source-class feed gating, ctrl-pinch
+ * gain (tagged synthetic pinches arrive pre-scaled: no gain), then normalizeWheel. The RECORDED sourceClass wins over
+ * re-classification ('mouse' vs 'scroll' depends on deltaX, consumed at capture time).
+ * @param {typeof WHEEL_TUNE} [tune] the trace's recorded tune (meta.tune)
  * @returns {?{tMs:number, dir:'in'|'out', mag:number}} null = muted/zero
  */
 export function ladderEventFromTrace(ev, tune = WHEEL_TUNE, invert = false) {
@@ -142,23 +98,11 @@ export function ladderEventFromTrace(ev, tune = WHEEL_TUNE, invert = false) {
   return mag > 0 ? { tMs: ev.tMs, dir, mag } : null;
 }
 
-// ── Replay ──────────────────────────────────────────────────────────────────
-
 /**
- * Replay a recorded event stream through a fresh ZoomLadder built with the
- * candidate's spring overrides, honoring recorded timestamps. Ride
- * completions are simulated: a 'cross' decision finishes crossRideMs later
- * (midpoint of the locked 450–650 ms window — arming the G3 undo window on
- * the same clock the core uses live); a 'ride' decision finishes at its own
- * miniMs (flickWall/jump) or crossRideMs when null. A later ride decision
- * REPLACES the pending completion, exactly like S2's ride swap.
- *
- * @param {Array} events - recorded trace events (chronology enforced here)
- * @param {object} [opts]
- * @param {object} [opts.spring] - candidate spring overrides (FLICK_*, CHARGE_THRESHOLD…)
- * @param {object} [opts.rules]  - ZoomLadder rules overrides (e.g. devFullAccess)
- * @param {typeof WHEEL_TUNE} [opts.tune] @param {boolean} [opts.invert]
- * @param {number} [opts.crossRideMs]
+ * Replay events through a fresh ZoomLadder with the candidate's spring overrides on recorded timestamps. Ride completions are
+ * simulated: a 'cross' finishes crossRideMs later (midpoint of the locked 450-650 ms window; arms the G3 undo window on the core's
+ * clock); a 'ride' at its own miniMs (flickWall/jump) or crossRideMs when null. A later ride REPLACES the pending completion (S2 ride swap).
+ * @param {object} [opts] {spring, rules (ZoomLadder overrides), tune, invert, crossRideMs}
  * @returns {{decisions: Array<{tMs:number, d:object}>, finalState: object}}
  */
 export function replayTrace(events, opts = {}) {
@@ -194,10 +138,8 @@ export function replayTrace(events, opts = {}) {
       ladder.rideFinished({ tMs: endT });   // arms the undo window on-clock
     }
     record(t, ladder.update(t));            // settle-back etc. on the trace clock
-    // Session D: an event the live router CLAIMED for the pane carousel never
-    // reached the zoom core — replay skips it too (flick-trace-2 traces carry
-    // deltaX + the recorded claim verdict; older traces have neither and replay
-    // exactly as before).
+    // an event the live router CLAIMED for the pane carousel never reached the zoom core; replay skips it too
+    // (older traces carry neither deltaX nor the claim verdict and replay as before)
     if (isClaimedEvent(raw, tune)) continue;
     const le = ladderEventFromTrace(raw, tune, opts.invert);
     if (!le) continue;                      // muted class / zero mag: the core never saw it live either
@@ -209,20 +151,11 @@ export function replayTrace(events, opts = {}) {
   return { decisions, finalState: ladder.getState() };
 }
 
-// ── The pane-swipe monitor (Wave 5 Session D — 07-flick-tuning §5, closed) ──
-
 /**
- * Would the live router have CLAIMED this recorded event for the pane
- * carousel? Exactly `WheelRouter._claimPaneSwipe`'s gate replayed from the
- * recorded fields: the tune's `paneSwipe` on, `isHorizontalWheel` (|deltaX| >
- * |deltaY|, never a pinch — a recorded `kind:'pinch'` is the tagged synthetic
- * pinch) and the hub's verdict `wantsPaneSwipe` recorded AT CAPTURE (engaged +
- * F3 + a pane dep). A trace without `deltaX` (flick-trace-1) or without the
- * verdict (no pane probe) never claims — replay then matches the pre-Session-C
- * axis, which is what those traces recorded. Pure.
- * @param {object} ev - recorded event
- * @param {typeof WHEEL_TUNE} [tune] - the trace's recorded tune
- * @returns {boolean}
+ * Would the live router have CLAIMED this recorded event for the pane carousel? `WheelRouter._claimPaneSwipe`'s gate replayed from
+ * recorded fields: tune `paneSwipe` on, `isHorizontalWheel` (|deltaX| > |deltaY|, never a pinch), and the hub's verdict
+ * `wantsPaneSwipe` recorded AT CAPTURE. No `deltaX` or no verdict never claims. Pure.
+ * @param {typeof WHEEL_TUNE} [tune] the trace's recorded tune
  */
 export function isClaimedEvent(ev, tune = WHEEL_TUNE) {
   if (!ev || !tune.paneSwipe || ev.wantsPaneSwipe !== true) return false;
@@ -234,37 +167,22 @@ export function isClaimedEvent(ev, tune = WHEEL_TUNE) {
 }
 
 /**
- * Replay the recorded horizontal axis through the pure pane-swipe law
- * (`stepPaneSwipe` with the recorded `WHEEL_TUNE.paneSwipe*` view, the gesture
- * gap measured on the INPUT timeline `tIn` when recorded — the router's own
- * rule — else `tMs`) and score what the player's hands did against what the
- * grammar decided. Pure; the input array is never mutated.
+ * Replay the recorded horizontal axis through the pure `stepPaneSwipe` law (recorded `WHEEL_TUNE.paneSwipe*`; gesture gap measured on
+ * the INPUT timeline `tIn` when recorded, else `tMs`) and score the player's hands against the grammar's decisions. Pure.
  *
- * A GESTURE is a run of claimed horizontal events whose gaps are < the
- * recorded `paneSwipeGapMs` (the accumulator's own segmentation — not the
- * zoom sweep's --gap). Metrics (comparative; read 07-flick-tuning §3):
- *   gestures        — claimed runs
- *   pages           — verbs fired (`toward` left/right), pagesPerGesture
- *   falsePages      — a page followed by a REVERSE page within paneReversalMs
- *                     (the player walking a page back — a swipe that read wrong)
- *   missedPages     — unfired gestures whose PEAK |signed sum| reached
- *                     [paneMissLowPx, paneSwipePx): a flick that almost paged
- *   eatenFlicks     — rising edges of |deltaX| inside a LATCHED tail (after a
- *                     page fired, ≥ 2 decaying events, then |dx| ≥ prev ×
- *                     paneRiseFactor and ≥ prev + paneRiseMinPx): a second
- *                     deliberate flick the gap law swallowed — the evidence a
- *                     rising-edge re-arm would need (owner decision 4: NO until
- *                     these say so)
- *   fireLatencies   — gesture start → the firing event (ms, input timeline);
- *                     medianFireLatencyMs
- *   claimedEvents / horizontalUnclaimed (horizontal-dominant but the hub said
- *   no — off F3, disengaged, no panes) / pinchEvents (never horizontal)
- * Traces without `deltaX` report `{ available: false }` (flick-trace-1).
+ * A GESTURE is a run of claimed horizontal events with gaps < recorded `paneSwipeGapMs` (not the zoom sweep's --gap). Metrics:
+ *   gestures, pages (verbs fired; pagesPerGesture), claimedEvents, pinchEvents (never horizontal),
+ *   horizontalUnclaimed - horizontal-dominant but the hub said no (off F3, disengaged, no panes)
+ *   falsePages  - a page followed by a REVERSE page within paneReversalMs
+ *   missedPages - unfired gestures whose PEAK |signed sum| reached [paneMissLowPx, paneSwipePx)
+ *   eatenFlicks - rising edges of |deltaX| inside a LATCHED tail (after a page fired, >= 2 decaying events, then |dx| >= prev x
+ *                 paneRiseFactor and >= prev + paneRiseMinPx): a second flick the gap law swallowed (owner decision 4: no
+ *                 rising-edge re-arm until these say so)
+ *   fireLatencies / medianFireLatencyMs - gesture start to the firing event (ms, input timeline)
+ * Traces without `deltaX` report `{ available: false }`.
  *
- * @param {Array} events - recorded trace events
- * @param {typeof WHEEL_TUNE} [tune] - the trace's recorded tune (meta.tune)
+ * @param {typeof WHEEL_TUNE} [tune] the trace's recorded tune (meta.tune)
  * @param {object} [opts] {paneReversalMs, paneMissLowPx, paneRiseFactor, paneRiseMinPx}
- * @returns {object} metrics
  */
 export function scorePaneSwipe(events, tune = WHEEL_TUNE, opts = {}) {
   const T = { ...WHEEL_TUNE, ...(tune || {}) };
@@ -336,9 +254,6 @@ export function scorePaneSwipe(events, tune = WHEEL_TUNE, opts = {}) {
   return base;
 }
 
-// ── Scoring ─────────────────────────────────────────────────────────────────
-
-/** Median of a numeric array (average of the middle two when even); null on empty. */
 export function median(xs) {
   if (!Array.isArray(xs) || xs.length === 0) return null;
   const s = xs.slice().sort((a, b) => a - b);
@@ -347,19 +262,11 @@ export function median(xs) {
 }
 
 /**
- * Score one replay against the trace's observed gesture bursts.
- * Crossings/denials are attributed to the burst whose [startMs, endMs] span
- * contains their trigger event (crossings only ever fire ON wheel events, so
- * containment is exact). Undos are reversal crossings: direction opposite to
- * the previous crossing within reversalWindowMs — an OBSERVATIONAL window
- * (fixed), deliberately not the candidate's own FLICK_UNDO_WINDOW_MS.
- *
- * @param {Array} events - the recorded events the replay consumed
- * @param {Array<{tMs:number, d:object}>} decisions - replayTrace output
+ * Score one replay against the trace's gesture bursts. Crossings/denials go to the burst whose [startMs, endMs] contains their
+ * trigger event (crossings only fire ON wheel events, so containment is exact). Undos = a crossing opposite to the previous one within
+ * reversalWindowMs, an OBSERVATIONAL window (fixed), deliberately not the candidate's FLICK_UNDO_WINDOW_MS.
+ * @param {Array<{tMs:number, d:object}>} decisions replayTrace output
  * @param {object} [opts] {burstGapMs, reversalWindowMs}
- * @returns {{bursts:number, crossings:number, crossingsPerBurst:number,
- *            overshoots:number, denied:number, undos:number,
- *            latencies:number[], medianLatencyMs:?number}}
  */
 export function scoreReplay(events, decisions, opts = {}) {
   const gapMs = Number.isFinite(opts.burstGapMs) ? opts.burstGapMs : SWEEP_DEFAULTS.burstGapMs;
@@ -410,15 +317,9 @@ export function scoreReplay(events, decisions, opts = {}) {
 }
 
 /**
- * Composite score — LOWER is better. Per-burst normalization keeps traces of
- * different lengths comparable; a candidate that never crosses at all takes
- * the full |cpb−1| penalty plus the noCrossLatencyMs stand-in, so "flick
- * unreachable" candidates rank last deterministically.
- *
- * @param {object} m - metrics (scoreReplay/aggregate shape)
- * @param {object} [weights]
- * @param {number} [noCrossLatencyMs]
- * @returns {number}
+ * Composite score, LOWER is better. Per-burst normalization keeps different-length traces comparable; a candidate that never crosses
+ * takes the full |cpb-1| penalty plus the noCrossLatencyMs stand-in, so it ranks last.
+ * @param {object} m metrics (scoreReplay/aggregate shape)
  */
 export function scoreFromMetrics(m, weights = SWEEP_DEFAULTS.weights,
   noCrossLatencyMs = SWEEP_DEFAULTS.noCrossLatencyMs) {
@@ -432,12 +333,9 @@ export function scoreFromMetrics(m, weights = SWEEP_DEFAULTS.weights,
     + w.latency * (latencyMs / 1000);
 }
 
-// ── Grid sweep ──────────────────────────────────────────────────────────────
-
 /**
- * Cartesian product of a {KEY: [values]} grid → candidate spring-override
- * objects. Keys are sorted (input key order never changes the output), empty
- * axes are dropped, an empty grid yields [].
+ * Cartesian product of a {KEY: [values]} grid -> spring-override candidates. Keys sorted (input order irrelevant),
+ * empty axes dropped, empty grid -> [].
  */
 export function candidateGrid(grid) {
   const keys = Object.keys(grid || {})
@@ -455,27 +353,19 @@ export function candidateGrid(grid) {
   return out;
 }
 
-/** Stable display/tiebreak key for a candidate (sorted `K=V` pairs). */
 export function candidateKey(c) {
   return Object.keys(c).sort().map((k) => `${k}=${c[k]}`).join(' ');
 }
 
-/** True when every overridden value equals the shipped HUMP_SPRING baseline. */
 export function isBaselineCandidate(c) {
   return Object.keys(c).every((k) => FloorContract.HUMP_SPRING[k] === c[k]);
 }
 
 /**
- * Evaluate ONE candidate against one or more traces: fresh ladder per trace,
- * counts summed, latencies pooled (median over the pool).
- *
- * @param {Array<{events:Array, tune?:object}>} traces - parsed trace files
- *   ({events, tune} — pass trace.meta.tune as tune to honor the recorded
- *   WHEEL_TUNE; per-trace tunes are honored independently)
- * @param {object} candidate - spring overrides
- * @param {object} [opts] {rules, invert, tune, crossRideMs, burstGapMs,
- *   reversalWindowMs, weights, noCrossLatencyMs}
- * @returns {{candidate:object, key:string, metrics:object, score:number}}
+ * Evaluate ONE candidate against one or more traces: fresh ladder per trace, counts summed, latencies pooled.
+ * @param {Array<{events:Array, tune?:object}>} traces per-trace tunes (trace.meta.tune) are honored independently
+ * @param {object} candidate spring overrides
+ * @param {object} [opts] {rules, invert, tune, crossRideMs, burstGapMs, reversalWindowMs, weights, noCrossLatencyMs}
  */
 export function evaluateCandidate(traces, candidate, opts = {}) {
   const agg = { bursts: 0, crossings: 0, overshoots: 0, denied: 0, undos: 0, latencies: [] };
@@ -516,13 +406,8 @@ export function evaluateCandidate(traces, candidate, opts = {}) {
 }
 
 /**
- * Sweep the full candidate grid over the traces. Deterministic: candidates
- * come from the sorted cartesian product, results sort by (score asc, key
- * asc) — the same traces + grid always print the same ranking.
- *
- * @param {Array<{events:Array, tune?:object}>} traces
- * @param {object} [opts] {grid, …evaluateCandidate opts}
- * @returns {Array<{candidate, key, metrics, score, baseline:boolean}>}
+ * Sweep the full grid over the traces; deterministic (sorted product, results by score asc then key asc). @param
+ * {object} [opts] {grid, ...evaluateCandidate opts}
  */
 export function sweepGrid(traces, opts = {}) {
   const candidates = candidateGrid(opts.grid || DEFAULT_GRID);

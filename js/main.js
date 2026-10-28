@@ -190,6 +190,7 @@ import { gameState as _gameStateRefForProfile } from './core/GameState.js';
 // for the four B612 faces once at boot and the epoch tells cached textures
 // when the face question is settled. House grammar: OUTSIDE every ladder gate.
 import { loadFaces, fontEpoch } from './core/Typeface.js';
+import { degToRad, radToDeg, clamp01, clamp } from './core/MathUtil.js';
 
 
 // ============================================================================
@@ -2454,7 +2455,7 @@ async function init() {
     // angle (FL.OPEN_DEG, 146° — DECISIONS §15 "Radiator angles") than the rest
     // pose is "open", so a tap closes it.
     const _flowerCommandedOpen = (thetaRad, FL) => {
-      const deg = (thetaRad * 180) / Math.PI;
+      const deg = radToDeg(thetaRad);
       return Math.abs(deg - FL.OPEN_DEG) < Math.abs(deg - _flowerRestDeg(FL));
     };
     // The ONE radiator readout (F1 bar + REFIT chip, D4): MOVING while a slew is
@@ -2602,7 +2603,7 @@ async function init() {
           const FL = Constants.THERMAL && Constants.THERMAL.FLOWER;
           if (!FL) return null;
           if (player._flowerTargetTheta !== undefined) return 'SLEWING';
-          const mid = ((FL.POSE_LAUNCH_DEG + FL.POSE_STOW_DEG) / 2) * Math.PI / 180;
+          const mid = degToRad((FL.POSE_LAUNCH_DEG + FL.POSE_STOW_DEG) / 2);
           return (player._flowerThetaRad <= mid) ? 'FOLDED' : 'DEPLOYED';
         },
         toggle: () => {
@@ -4387,8 +4388,8 @@ async function init() {
         _ladderRefusesCamHook('__scbInspect');
         cameraSystem.setView('ORBIT');
         const o = cameraSystem.orbit;
-        o.theta = thetaDeg * Math.PI / 180;
-        o.phi = phiDeg * Math.PI / 180;
+        o.theta = degToRad(thetaDeg);
+        o.phi = degToRad(phiDeg);
         o.distance = distM * 1e-5;
         o.velocityTheta = 0;
         o.velocityPhi = 0;
@@ -4445,8 +4446,8 @@ async function init() {
         }
         let worldDir;                                        // anchor → camera unit direction (world)
         if (dir && typeof dir === 'object' && !Array.isArray(dir)) {
-          const th = (dir.thetaDeg ?? 0) * Math.PI / 180;
-          const ph = Math.min(Math.PI - 0.1, Math.max(0.1, (dir.phiDeg ?? 90) * Math.PI / 180)); // _computeOrbit's gimbal clamp
+          const th = degToRad(dir.thetaDeg ?? 0);
+          const ph = Math.min(Math.PI - 0.1, Math.max(0.1, degToRad(dir.phiDeg ?? 90))); // _computeOrbit's gimbal clamp
           worldDir = new THREE.Vector3()
             .addScaledVector(cameraSystem._lvlhRadial, Math.cos(ph))
             .addScaledVector(cameraSystem._lvlhForward, Math.sin(ph) * Math.cos(th))
@@ -4492,8 +4493,8 @@ async function init() {
           anchor: ladder ? lc.anchor : null,
           riding: ladder ? !!lc.riding : false,
           distM: camPos.distanceTo(shipPos) * 1e5,   // MEASURED, 1 u = 100 km
-          phiDeg: Math.acos(Math.max(-1, Math.min(1, off.dot(cameraSystem._lvlhRadial)))) * 180 / Math.PI,
-          thetaDeg: Math.atan2(off.dot(cameraSystem._lvlhLateral), off.dot(cameraSystem._lvlhForward)) * 180 / Math.PI,
+          phiDeg: radToDeg(Math.acos(Math.max(-1, Math.min(1, off.dot(cameraSystem._lvlhRadial))))),
+          thetaDeg: radToDeg(Math.atan2(off.dot(cameraSystem._lvlhLateral), off.dot(cameraSystem._lvlhForward))),
           fov: cam.fov,
         };
       };
@@ -4735,8 +4736,8 @@ async function init() {
           const dir = _v.clone().normalize();
           const raRad = Math.atan2(-dir.z, dir.x);
           const raH = ((raRad * 12 / Math.PI) % 24 + 24) % 24;
-          const decDeg = Math.asin(Math.max(-1, Math.min(1, dir.y))) * 180 / Math.PI;
-          const angDeg = 2 * Math.atan(radiusWorld / dist) * 180 / Math.PI;
+          const decDeg = radToDeg(Math.asin(clamp(dir.y, -1, 1)));
+          const angDeg = radToDeg(2 * Math.atan(radiusWorld / dist));
           return {
             x: (p.x * 0.5 + 0.5) * cv.width,
             y: (-p.y * 0.5 + 0.5) * cv.height,
@@ -4797,7 +4798,7 @@ async function init() {
               // the visible span is ~0.86 of the plane. Report the plane's
               // angular width; the harness measures the real span from pixels.
               planeAngularWidthDeg: isPlane
-                ? 2 * Math.atan(gp.width / 2 / p.disc.position.distanceTo(cam.position)) * 180 / Math.PI
+                ? radToDeg(2 * Math.atan(gp.width / 2 / p.disc.position.distanceTo(cam.position)))
                 : undefined,
             });
           }
@@ -4898,14 +4899,14 @@ async function init() {
       //     orients the band.
       window.__scbGalactic = (Ldeg, bdeg) => {
         const b = galacticBasis();
-        const L = Ldeg * Math.PI / 180, lat = bdeg * Math.PI / 180;
+        const L = degToRad(Ldeg), lat = degToRad(bdeg);
         const cl = Math.cos(L) * Math.cos(lat), sl = Math.sin(L) * Math.cos(lat), sb = Math.sin(lat);
         const x = b.center.x * cl + b.e2.x * sl + b.pole.x * sb;
         const y = b.center.y * cl + b.e2.y * sl + b.pole.y * sb;
         const z = b.center.z * cl + b.e2.z * sl + b.pole.z * sb;
         // Inverse of raDec2xyz: +Y north, RA 0 at +X, Z negated.
         const ra = Math.atan2(-z, x) * 12 / Math.PI;
-        const dec = Math.asin(Math.max(-1, Math.min(1, y))) * 180 / Math.PI;
+        const dec = radToDeg(Math.asin(clamp(y, -1, 1)));
         return { ra: ((ra % 24) + 24) % 24, dec };
       };
 
@@ -5484,7 +5485,7 @@ async function init() {
           try {
             const spec = _resolveScenarioTumble(opts && opts.tumble);
             if (spec) {
-              const pin = worldTumbleForKitAttitude(dir, spec.kitAxis, spec.kitDeg * Math.PI / 180);
+              const pin = worldTumbleForKitAttitude(dir, spec.kitAxis, degToRad(spec.kitDeg));
               if (pin) {
                 if (whale.tumbleAxis && typeof whale.tumbleAxis.set === 'function') {
                   whale.tumbleAxis.set(pin.axis.x, pin.axis.y, pin.axis.z);
@@ -5499,12 +5500,12 @@ async function init() {
                   kitAxis: [spec.kitAxis.x, spec.kitAxis.y, spec.kitAxis.z],
                   kitDeg: spec.kitDeg,
                   worldAxis: { x: +pin.axis.x.toFixed(6), y: +pin.axis.y.toFixed(6), z: +pin.axis.z.toFixed(6) },
-                  worldAngleDeg: +(pin.angle * 180 / Math.PI).toFixed(3),
+                  worldAngleDeg: +(radToDeg(pin.angle)).toFixed(3),
                   // The rows the box spec will carry (v_box = R·v_kit ⇒ matrix of
                   // qB2K⁻¹): what the harness compares the LIVE spec against, so a
                   // convention slip or a lost pin fails loudly instead of silently
                   // returning both gates to a lottery.
-                  boxInKitRows: boxRowsForKitAttitude(spec.kitAxis, spec.kitDeg * Math.PI / 180),
+                  boxInKitRows: boxRowsForKitAttitude(spec.kitAxis, degToRad(spec.kitDeg)),
                 };
               }
             }
@@ -5609,7 +5610,7 @@ async function init() {
         // radius at the ring's DRAPED z — here the ring AT this depth, i.e. the
         // static cone radius mouthRadius·(a/H). Identical rule, identical maths
         // (probe/mesh never drift); mouthRadius at/past the mouth plane.
-        const openCone = kh.mouthRadius * Math.min(1, Math.max(0, -lpZ / kh.coneHeight));
+        const openCone = kh.mouthRadius * clamp01(-lpZ / kh.coneHeight);
         const cB = kh._contentsBox ?? null;
         if (kh._drape > 0 && contentsBoxValid(cB)) {
           let drawnMin = Infinity, violMax = null, surfMax = 0;
@@ -6763,7 +6764,7 @@ async function init() {
           if (ms && ms.camera && ms._mother) {
             const box = new THREE.Box3().setFromObject(ms._mother);
             const r = box.getBoundingSphere(new THREE.Sphere()).radius;
-            const vfov = ms.camera.fov * Math.PI / 180;
+            const vfov = degToRad(ms.camera.fov);
             const dStart = ms._departureBaseOrbitR; // 5.5 (idle)
             const dEnd = ms._departureOrbitR;        // 8.0 (fully receded @ handoff)
             out.hero = {
@@ -6775,7 +6776,7 @@ async function init() {
           if (player && cameraSystem && cameraSystem.camera && cameraSystem.chase) {
             const box = new THREE.Box3().setFromObject(player);
             const r = box.getBoundingSphere(new THREE.Sphere()).radius;
-            const vfov = (cameraSystem._baseFov || cameraSystem.camera.fov) * Math.PI / 180;
+            const vfov = degToRad(cameraSystem._baseFov || cameraSystem.camera.fov);
             const ob = cameraSystem.chase.offsetBehind;
             const oa = cameraSystem.chase.offsetAbove;
             const chaseDist = Math.hypot(ob, oa);
@@ -6792,7 +6793,7 @@ async function init() {
             out.matchRatio = out.sim.fracCut / out.hero.fracHandoff; // want ≈1.0 (<20% off)
             // Solve the scale that makes ship apparent size == hero-at-handoff:
             // 2·atan(r/(chaseDist·s)) = fracHandoff·vfov → s = r / (chaseDist·tan(θ/2))
-            const vfov = (cameraSystem._baseFov || cameraSystem.camera.fov) * Math.PI / 180;
+            const vfov = degToRad(cameraSystem._baseFov || cameraSystem.camera.fov);
             const theta = out.hero.fracHandoff * vfov;
             const t = Math.tan(theta / 2);
             out.suggestedScale = t > 0 ? out.sim.radius / (out.sim.chaseDist * t) : null;

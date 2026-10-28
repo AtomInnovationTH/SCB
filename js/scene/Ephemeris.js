@@ -1,60 +1,41 @@
 /**
- * Ephemeris.js — Minimal real-sky ephemeris (Sun + Moon) for start-time seeding
+ * Ephemeris.js — minimal real-sky ephemeris (Sun + Moon) for start-time seeding:
+ * where the Sun and Moon are, for a real Date, in the game's Earth-fixed world
+ * frame. Sun: declination + sub-solar east longitude. Moon: declination +
+ * sub-lunar east longitude, elongation from the Sun, illuminated fraction.
  *
- * Computes, for a real wall-clock Date, where the Sun and Moon actually are in
- * the game's Earth-fixed world frame, so the sky at game start matches what is
- * outside the player's window right now:
+ * Accuracy: Sun ≈ 0.01° (Meeus low-precision), Moon ≈ 1° (largest series terms).
  *
- *   • Sun: declination + sub-solar east longitude (i.e. where it is local noon)
- *   • Moon: declination + sub-lunar east longitude, elongation from the Sun,
- *     and the illuminated fraction (today's phase)
+ * FRAME: the world is Earth-FIXED (the Earth mesh never rotates; the texture is
+ * longitude-mirrored, `mirrorLon: true` in main.js; see OrbitalMechanics.subPointToOrbit).
+ * East longitude λE maps to scene azimuth −λE, Y the polar axis, (lat 0, lon 0)
+ * on +X; latLonToUnitVec() applies exactly that.
  *
- * Accuracy: Sun ≈ 0.01° (Meeus low-precision), Moon ≈ 1° (largest series terms
- * only). Both are far below what a player can perceive against a stylized sky.
- *
- * FRAME NOTE — the game world is Earth-FIXED: the Earth mesh never rotates and
- * the equirectangular texture is longitude-mirrored (`mirrorLon: true` in
- * main.js; see also OrbitalMechanics.subPointToOrbit). Geographic east
- * longitude λE therefore maps to scene azimuth −λE, with Y the polar axis and
- * (lat 0, lon 0) on +X. latLonToUnitVec() applies exactly that convention so
- * SunLight and the ground-track code agree.
- *
- * Pure math — no THREE, no DOM — so it runs headless under the test runner.
+ * Pure math — no THREE, no DOM.
  *
  * @module scene/Ephemeris
  */
 
 const DEG = Math.PI / 180;
 
-/** Normalize degrees to [0, 360). */
 function norm360(d) {
   return ((d % 360) + 360) % 360;
 }
 
-/** Normalize degrees to (−180, +180]. */
 function norm180(d) {
   const x = norm360(d);
   return x > 180 ? x - 360 : x;
 }
 
-/**
- * Julian Day from a JS Date (UTC-based, so the user's timezone is handled
- * automatically — a player in Bangkok and one in Madrid get different local
- * solar times from the same instant, which is exactly right).
- * @param {Date} date
- * @returns {number} Julian Day
- */
+/** Julian Day from a JS Date (UTC-based, so the player's timezone is handled automatically). */
 export function julianDay(date) {
   return date.getTime() / 86400000 + 2440587.5;
 }
 
 /**
- * Greenwich Mean Sidereal Time, degrees in [0, 360). Full IAU 1982 form
- * (including the T² secular terms). Single source of truth — NavSphere's
- * ECI→geodetic conversion imports this same helper, so the seeded sky and the
- * nav readouts can never drift apart.
+ * Greenwich Mean Sidereal Time, degrees in [0, 360); IAU 1982 incl. T² terms.
+ * Single source of truth: NavSphere's ECI→geodetic conversion imports it too.
  * @param {number} d — days since J2000.0 (JD − 2451545.0)
- * @returns {number} GMST in [0, 360)
  */
 export function gmstDeg(d) {
   const T = d / 36525.0;
@@ -64,13 +45,10 @@ export function gmstDeg(d) {
 }
 
 /**
- * Low-precision solar position (Meeus / Astronomical Almanac, ≈0.01°).
- *
- * @param {Date} date
+ * Low-precision solar position (Meeus, ≈0.01°).
  * @returns {{ declDeg: number, subLonEastDeg: number, eclipticLonDeg: number }}
- *   declDeg        — sub-solar latitude (solar declination), degrees
- *   subLonEastDeg  — geographic east longitude where the sun is at zenith
- *   eclipticLonDeg — geocentric ecliptic longitude (used for moon elongation)
+ *   declDeg = solar declination; subLonEastDeg = east longitude of the sun at
+ *   zenith; eclipticLonDeg = geocentric ecliptic longitude (for moon elongation)
  */
 export function sunEphemeris(date) {
   const d = julianDay(date) - 2451545.0;
@@ -83,7 +61,6 @@ export function sunEphemeris(date) {
   const alphaDeg = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam)) / DEG;
   const declDeg = Math.asin(Math.sin(eps) * Math.sin(lam)) / DEG;
 
-  // Sub-solar point: where right ascension equals local sidereal time.
   const subLonEastDeg = norm180(alphaDeg - gmstDeg(d));
   return { declDeg, subLonEastDeg, eclipticLonDeg: lambdaDeg };
 }
@@ -91,14 +68,7 @@ export function sunEphemeris(date) {
 /**
  * Low-precision lunar position (Montenbruck & Pfleger truncation, ≈1°) plus
  * phase. Illuminated fraction uses elongation only (ignores the ~1/389
- * Sun-distance parallax term — imperceptible here).
- *
- * @param {Date} date
- * @returns {{
- *   declDeg: number, subLonEastDeg: number,
- *   eclipticLonDeg: number, eclipticLatDeg: number,
- *   elongationDeg: number, illuminatedFraction: number
- * }}
+ * Sun-distance parallax term).
  */
 export function moonEphemeris(date) {
   const d = julianDay(date) - 2451545.0;
@@ -123,8 +93,7 @@ export function moonEphemeris(date) {
 
   const subLonEastDeg = norm180(alphaDeg - gmstDeg(d));
 
-  // Elongation from the sun on the sphere; illuminated fraction (1 − cos e)/2:
-  // 0 at new moon (moon beside the sun), 1 at full moon (opposite the sun).
+  // illuminated fraction (1 − cos e)/2: 0 new, 1 full
   const sun = sunEphemeris(date);
   const cosE = Math.cos(bet) * Math.cos((eclipticLonDeg - sun.eclipticLonDeg) * DEG);
   const clamped = Math.max(-1, Math.min(1, cosE));
@@ -135,14 +104,11 @@ export function moonEphemeris(date) {
 }
 
 /**
- * Geographic (lat, east-lon) → unit direction in the game's Earth-fixed world
- * frame. AUTHORITATIVE geographic→scene entry point: the mirrored-longitude
- * convention is applied INTERNALLY here (pass real east longitude, get the
- * scene direction). By contrast, latLonToPosition (below) is a raw spherical
- * helper that does NOT mirror — its callers negate longitude themselves
- * (CityLabels `mirrorLon`, AmbientLaunchScheduler, LaunchCameo). Prefer this
- * function when converting real-world coordinates; never negate before
- * calling it.
+ * Geographic (lat, east-lon) → unit direction in the Earth-fixed world frame.
+ * AUTHORITATIVE geographic→scene entry point: the mirrored-longitude convention
+ * is applied INTERNALLY (pass real east longitude; never negate before calling).
+ * Unlike latLonToPosition, which does NOT mirror (its callers negate longitude:
+ * CityLabels `mirrorLon`, AmbientLaunchScheduler, LaunchCameo).
  *
  * Frame: Y-up polar axis, (0°, 0°) → +X, east longitude toward −Z.
  *
@@ -161,20 +127,13 @@ export function latLonToUnitVec(latDeg, lonEastDeg) {
 }
 
 /**
- * Convert latitude / longitude to a 3-D position on a sphere of the given
- * radius. Convention: Y-up (Three.js default). lat=0, lon=0 → +X axis.
- * lat=90 → +Y (north pole).
- *
- * NOTE: this is a RAW spherical helper — it does NOT apply the game's
- * mirrored-longitude convention. Callers converting real geographic east
- * longitude must negate it themselves (see `mirrorLon` in CityLabels), or use
- * latLonToUnitVec above, which applies the mirror internally and is the
- * authoritative geographic→scene entry point.
+ * Latitude / longitude → 3-D position on a sphere of `radius`. Y-up; lat=0,
+ * lon=0 → +X; lat=90 → +Y. RAW spherical helper: does NOT apply the mirrored-
+ * longitude convention; callers with real east longitude negate it themselves
+ * (see `mirrorLon` in CityLabels) or use latLonToUnitVec.
  *
  * @param {number} lat_deg - Latitude in degrees (-90…+90)
  * @param {number} lon_deg - Longitude in degrees (-180…+180)
- * @param {number} radius  - Sphere radius
- * @returns {{ x: number, y: number, z: number }}
  */
 export function latLonToPosition(lat_deg, lon_deg, radius) {
   const lat = lat_deg * Math.PI / 180;

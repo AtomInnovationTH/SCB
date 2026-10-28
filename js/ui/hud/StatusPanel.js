@@ -38,6 +38,7 @@ import { RAIL_GEOMETRY, PANE_CORNER_PX, MOTHER_PANE_WIDTH_PX, ARMS_PANE_WIDTH_PX
 import { BOX_OUTLINE, BOX_OUTLINE_OFFSET } from '../RailIndicator.js';
 import { dividedByScale, onHudScaleChange } from '../HudScale.js';
 import { TouchControls } from '../TouchControls.js';
+import { radToDeg, clamp01, clamp } from '../../core/MathUtil.js';
 
 /** The left column's max height on screen (px room below the top edge); divided by the HUD scale on a big screen. */
 const LEFT_COLUMN_MAX_HEIGHT = 'calc(100vh - 60px)';
@@ -945,7 +946,7 @@ export class StatusPanel {
     if (!r) { row.style.display = 'none'; return; }
 
     const maxAbs = Math.max(Math.abs(r.pitch), Math.abs(r.yaw), Math.abs(r.roll));
-    const capDeg = (Constants.ATTITUDE?.MAX_RATE ?? 0.6) * 180 / Math.PI; // ~34°/s
+    const capDeg = radToDeg(Constants.ATTITUDE?.MAX_RATE ?? 0.6); // ~34°/s
     const show = maxAbs > 0.05; // deg/s — hide when effectively steady
     row.style.display = show ? '' : 'none';
     if (!show) return;
@@ -975,7 +976,7 @@ export class StatusPanel {
 
     const ammo = this._lassoAmmo ?? Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
     const ammoMax = this._lassoAmmoMax ?? Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
-    const pct = ammoMax > 0 ? Math.max(0, Math.min(100, (ammo / ammoMax) * 100)) : 0;
+    const pct = ammoMax > 0 ? clamp((ammo / ammoMax) * 100, 0, 100) : 0;
     let color = motherNetsColor(ammo);
 
     // Reload state — resolve the ~2s cooldown window (auto-clear when elapsed).
@@ -1083,7 +1084,7 @@ export class StatusPanel {
       }
       seg.title = 'Catch held at the collar. It goes to a furnace on the trip to the next field if it fits one — [K] jettison';
     } else if (docked && collarCook) {
-      const pct = Math.round(Math.min(1, Math.max(0, collarCook.frac || 0)) * 100);
+      const pct = Math.round(clamp01(collarCook.frac || 0) * 100);
       if (tagOn) {
         count.textContent = `COOK ${pct}%`;
         count.style.color = 'var(--hud-caution, #ff9800)';   // the forge panel's MELT — furnace language
@@ -1151,7 +1152,7 @@ export class StatusPanel {
   _applyDigestFit(level) {
     const digest = document.getElementById('mother-digest');
     if (!digest) return;
-    const hidden = StatusPanel.DIGEST_FIT_STEPS[Math.max(0, Math.min(level, StatusPanel.DIGEST_FIT_STEPS.length - 1))];
+    const hidden = StatusPanel.DIGEST_FIT_STEPS[clamp(StatusPanel.DIGEST_FIT_STEPS.length - 1, 0, level)];
     const tokens = hidden.join(' ');
     if (typeof digest.setAttribute === 'function') digest.setAttribute('data-fit', tokens);
     else if (digest.dataset) digest.dataset.fit = tokens;
@@ -1520,7 +1521,7 @@ export class StatusPanel {
     const bar = document.getElementById('hud-bar-lithium');
     const val = document.getElementById('hud-val-lithium');
     if (bar) {
-      bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+      bar.style.width = `${clamp(pct, 0, 100)}%`;
       // Color: silver-blue at normal, amber at low, red at critical
       if (pct > 30) bar.style.backgroundColor = 'var(--hud-info, #88ccff)';
       else if (pct > 15) bar.style.backgroundColor = 'var(--hud-caution, #ffaa00)';
@@ -2147,11 +2148,11 @@ export class StatusPanel {
     // the resource pool's own — no propellant constant here.
     let frac = 1;
     if (mb && Number.isFinite(mb.gasFrac)) {
-      frac = Math.max(0, Math.min(1, mb.gasFrac));   // g1-gas-upgrades D7: by mass, the same for every gas
+      frac = clamp01(mb.gasFrac);   // g1-gas-upgrades D7: by mass, the same for every gas
     } else if (mb && mb.xenonMax > 0 && Number.isFinite(mb.xenonCurrent)) {
-      frac = Math.max(0, Math.min(1, mb.xenonCurrent / mb.xenonMax));
+      frac = clamp01(mb.xenonCurrent / mb.xenonMax);
     } else if (res.xenonMax > 0 && Number.isFinite(res.xenon)) {
-      frac = Math.max(0, Math.min(1, res.xenon / res.xenonMax));
+      frac = clamp01(res.xenon / res.xenonMax);
     }
 
     // Phase R9: Predictive ΔV — warn if matching selected target would drop below threshold.
@@ -2552,7 +2553,7 @@ export class StatusPanel {
           return { label: 'Catch held', color: 'var(--hud-caution, #ffaa00)', title: 'Held on the rack. It goes to a furnace on the trip to the next field' };
         }
         if (a.digest) {
-          const pct = Math.round(Math.min(1, Math.max(0, a.digest.frac || 0)) * 100);
+          const pct = Math.round(clamp01(a.digest.frac || 0) * 100);
           const q = (a.digest.queued || 0) > 0 ? ` +${a.digest.queued}` : '';
           const eclipsed = (a.digest.sunScale ?? 1.0) < 1;
           return {
@@ -2763,7 +2764,7 @@ export class StatusPanel {
     const m = a.wheelMomentum || 0;
     if (m < WHEEL_SHOW_FLOOR) return '';
     const th = (Constants.DAUGHTER_NET_RECOIL || {}).WHEEL_SATURATION_THRESHOLD || 3;
-    const filled = Math.max(0, Math.min(3, Math.round((m / th) * 3)));
+    const filled = clamp(Math.round((m / th) * 3), 0, 3);
     const c = m >= th * 0.7 ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-text, #e8e4d0)';
     return `<span style="color:${c};opacity:0.7;" title="Reaction-wheel momentum ${m.toFixed(1)} of ${th} — desat surcharge when saturated">↻ ${WHEEL_PIPS[filled]}</span>`;
   }
@@ -2789,7 +2790,7 @@ export class StatusPanel {
   static reelRowHtml(rp) {
     const t = rp.etaS == null ? '–' : `${Math.max(rp.etaS > 0.05 ? 1 : 0, Math.ceil(rp.etaS - 1e-9))} s`;
     const text = `${rp.phase} · ${Math.round(rp.distM)} m · ${rp.speedMs.toFixed(2)} m/s · ${t}`;
-    const pct = Math.round(Math.min(1, Math.max(0, rp.frac)) * 100);
+    const pct = Math.round(clamp01(rp.frac) * 100);
     return `<span class="reel-row" style="color:var(--hud-info, #00ffff);">${text}</span>`
       + `<div class="reel-bar" title="Reel progress ${pct}%" style="height:2px;margin-top:2px;background:rgb(var(--hud-info-rgb, 68 136 255) / 0.2);">`
       + `<div style="height:2px;width:${pct}%;background:var(--hud-info, #00ffff);"></div></div>`;

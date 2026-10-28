@@ -52,6 +52,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
+import { clamp01, clamp, lerp } from '../core/MathUtil.js';
 
 /** Stefan–Boltzmann constant, W/(m²·K⁴). */
 export const SIGMA = 5.670374419e-8;
@@ -126,7 +127,7 @@ export class ThermalSystem {
     const full = SH.LOOP_FULL_C;
     if (!Number.isFinite(tempC)) return 0;
     if (!(full > off)) return tempC >= full ? 1 : 0;
-    return Math.max(0, Math.min(1, (tempC - off) / (full - off)));
+    return clamp01((tempC - off) / (full - off));
   }
 
   /**
@@ -139,9 +140,9 @@ export class ThermalSystem {
    */
   effectiveAreaM2(openFrac, flow = 1) {
     const SH = Constants.SHIP_HEAT;
-    const f = Math.max(0, Math.min(1, openFrac || 0));
-    const q = Number.isFinite(flow) ? Math.max(0, Math.min(1, flow)) : 1;
-    return SH.HULL_AREA_M2 + SH.RAD_AREA_M2 * (SH.G_CLOSED + (1 - SH.G_CLOSED) * f) * q;
+    const f = clamp01(openFrac || 0);
+    const q = Number.isFinite(flow) ? clamp01(flow) : 1;
+    return SH.HULL_AREA_M2 + SH.RAD_AREA_M2 * (lerp(SH.G_CLOSED, 1, f)) * q;
   }
 
   /**
@@ -268,7 +269,7 @@ export class ThermalSystem {
     if (H && H.ENABLED && this.tempC < H.HOLD_C + 2) {
       const pullWPerK = SH.HEAT_CAPACITY_J_PER_K / Math.max(1e-3, H.PULL_S);
       w = this.radiatedW(this.tempC, openFrac) - otherW + pullWPerK * (H.HOLD_C - this.tempC);
-      w = Math.max(0, Math.min(H.MAX_W, w));
+      w = clamp(w, 0, H.MAX_W);
     }
     this.heaterW = w;
     if (!(w > 0)) return 0;
@@ -362,7 +363,7 @@ export class ThermalSystem {
     const p = this._player;
     const st = (p && typeof p.getFlowerStatus === 'function') ? p.getFlowerStatus() : null;
     const f = st ? st.openFrac : 0;
-    return Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : 0;
+    return Number.isFinite(f) ? clamp01(f) : 0;
   }
 
   /** @private PlayerSatellite has no public getter; _updateSolarPower caches it */

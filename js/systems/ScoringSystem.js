@@ -8,6 +8,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { gameState } from '../core/GameState.js';
 import { missionProfileFor } from '../core/missionProgress.js';
+import { radToDeg, clamp } from '../core/MathUtil.js';
 
 /** Scoring tiers */
 export const CAPTURE_TIERS = {
@@ -125,10 +126,10 @@ export class ScoringSystem {
     // catch earns nothing; despinning now RAISES payout instead of cutting it.
     // The magnitude scales with how fast it originally spun (harder despin = more).
     const inSpecDeg = (Constants.NET_TUMBLE_PENALTY && Constants.NET_TUMBLE_PENALTY.IN_SPEC_DEG) || 10;
-    const initialTumbleDeg = ((debris._initialTumbleRate != null
+    const initialTumbleDeg = (radToDeg(debris._initialTumbleRate != null
       ? debris._initialTumbleRate
-      : (debris.tumbleRate || 0)) * 180 / Math.PI);
-    const captureTumbleDeg = (debris.tumbleRate || 0) * 180 / Math.PI;
+      : (debris.tumbleRate || 0)));
+    const captureTumbleDeg = radToDeg(debris.tumbleRate || 0);
     let tumbleFactor = 1.0;
     if (initialTumbleDeg > inSpecDeg && captureTumbleDeg <= inSpecDeg) {
       // Reward proportional to the above-spec spin that was tamed, gently sloped
@@ -342,7 +343,7 @@ export class ScoringSystem {
     const taper = taperMultiplier(this.captureCreditsEarned, catalogCr, taperCfg);
     creditPoints = Math.round(creditPoints * taper);
     // Hard ceiling clamp (never overshoot; floor at 0).
-    creditPoints = Math.max(0, Math.min(creditPoints, Math.round(ceilingCr - this.captureCreditsEarned)));
+    creditPoints = clamp(Math.round(ceilingCr - this.captureCreditsEarned), 0, creditPoints);
     // One-shot flavor comms the first time the taper actually bites this run, so
     // shrinking payouts read as fiction, not a bug.
     if (!this._taperCommsFired && this.captureCreditsEarned >= startCr) {

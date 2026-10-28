@@ -20,6 +20,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { degToRad, radToDeg } from '../core/MathUtil.js';
 
 const M = 0.00001; // scene units per metre (mirrors ArmUnit)
 
@@ -124,9 +125,9 @@ export class DespinLaser {
     this._beamTarget = target;
 
     // Crossed below the net-safe spin this frame → announce once.
-    const inSpecRad = cfg.IN_SPEC_DEG * Math.PI / 180;
+    const inSpecRad = degToRad(cfg.IN_SPEC_DEG);
     if (before > inSpecRad && after <= inSpecRad) {
-      const tumbleDeg = after * 180 / Math.PI;
+      const tumbleDeg = radToDeg(after);
       eventBus.emit(Events.DESPIN_IN_SPEC, { targetId: target.id ?? null, tumbleDeg });
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'MOTHER', text: 'Tumble in spec. Net it.',

@@ -41,12 +41,13 @@ import { Events } from '../core/Events.js';
 import { gameState, GameStates } from '../core/GameState.js';
 import { settingsManager } from './SettingsManager.js';
 import { computeStartOrbit } from './startOrbitMath.js';
+import { degToRad } from '../core/MathUtil.js';
 
 const TWO_PI = 2 * Math.PI;
 /** Peak sweep rate of the dominant orbit element, rad/s (~40°/s). */
-export const MORPH_MAX_RATE = 40 * Math.PI / 180;
+export const MORPH_MAX_RATE = degToRad(40);
 /** Accel/decel limit, rad/s² (~50°/s² → 0.8 s ramps). */
-export const MORPH_ACCEL = 50 * Math.PI / 180;
+export const MORPH_ACCEL = degToRad(50);
 /** Settle threshold, rad. */
 export const MORPH_EPS = 1e-4;
 /** Ceiling on the sweep rate while racing a departure deadline, rad/s (~100°/s). */

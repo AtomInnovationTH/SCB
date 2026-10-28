@@ -1,56 +1,40 @@
 /**
- * BlackFrameProbe.js — in-page black-flicker triage instrument (dev-only).
+ * @module core/BlackFrameProbe — in-page black-flicker triage instrument (dev-only; `?bfp=N`, default OFF, ships dark).
  *
- * CONTEXT (black-flicker triage, 2026-08): on the Earth-anchored ladder floors (now F4/F5; F6/F7 at the time) a large black
- * rectangle intermittently covers most of the WebGL canvas on the user's
- * machine (Brave / ANGLE-Metal / dpr2 / 120 Hz). It flickers frame-to-frame,
- * DOM renders fine on top, and ANY window resize heals it instantly. It has
- * NEVER reproduced headless (SwiftShader renders them flawlessly), and the
- * user is done running console snippets — so this probe is fully self-serve:
- * add `?bfp=2` to the URL and play; it renders its own verdict badge.
+ * Problem: on the Earth-anchored floors (F4/F5) a large black rectangle intermittently covers most of the WebGL canvas
+ * on the owner's machine (Brave / ANGLE-Metal / dpr2 / 120 Hz): flickers frame-to-frame, DOM renders fine on top, ANY
+ * window resize heals it, never reproduced headless (SwiftShader). Fully self-serve: add `?bfp=2` and play; it renders
+ * its own verdict badge.
  *
- * THE ONE QUESTION IT ANSWERS: when the screen shows black, is the black
- * actually IN the GL drawing buffer (JS/GL-level bug: pass sequence, dead
- * targets, scissor/viewport leak, dead textures), or is the buffer CORRECT and
+ * THE ONE QUESTION: when the screen shows black, is the black actually IN the GL drawing buffer
+ * (JS/GL-level bug: pass sequence, dead targets, scissor/viewport leak, dead textures), or is the buffer CORRECT and
  * only the PRESENTED CALayer black (ANGLE-Metal partial-present family)?
  *
- * How: after the composer finishes each frame (same rAF task, before present —
- * legal regardless of preserveDrawingBuffer):
- *   1. mode 2 paints a small GREEN REFERENCE SWATCH into the bottom-left
- *      corner of the DEFAULT framebuffer via a scissored clear (three.js state
- *      APIs only, saved/restored — the renderer's cached GL state stays true);
- *   2. mode 2 reads back tiny pixel patches (center, left/right strips, the
- *      swatch) every READ_EVERY frames and shows their luminance in a DOM
- *      badge (DOM provably renders above the artifact);
- *   3. every CHECK_EVERY frames it samples GL/renderer state: context-lost,
- *      drawingBuffer-vs-canvas size, end-of-frame viewport/scissor, composer +
- *      bloom render-target GL liveness, Earth day/night/cloud texture GL
- *      liveness PLUS upload truth (image dims / texture.version vs uploaded
- *      __version / live-handle-empty-image "ghosts") and the queued
- *      gl.getError() — the OPEN-2 (16k night-lights-black) witnesses —
- *      info.memory counts, tier/near/far/floor — and console.warns
- *      one rate-limited line whenever any of it turns anomalous.
+ * How: after the composer finishes each frame (same rAF task, before present; legal regardless of
+ * preserveDrawingBuffer):
+ *   1. mode 2 paints a small GREEN REFERENCE SWATCH into the bottom-left of the DEFAULT framebuffer via a scissored
+ *      clear (three.js state APIs only, saved/restored so the renderer's cached GL state stays true);
+ *   2. mode 2 reads back tiny pixel patches (center, left/right strips, the swatch) every READ_EVERY frames and shows
+ *      their luminance in a DOM badge;
+ *   3. every CHECK_EVERY frames it samples GL/renderer state (context-lost, drawingBuffer-vs-canvas size, end-of-frame
+ *      viewport/scissor, composer + bloom render-target GL liveness, Earth day/night/cloud texture liveness plus upload
+ *      truth, queued gl.getError(), info.memory, tier/near/far/floor) and console.warns one rate-limited line whenever
+ *      any of it turns anomalous.
  *
- * Verdict table for a visible black episode (user just reads the badge):
- *   - badge `sw` high + green corner swatch NOT visible under the black
- *       → presentation path convicted (H2: ANGLE-Metal partial present).
- *   - badge `sw` high + swatch visible + `c/l/r` ≈ 0 on a lit view
- *       → composer output really is black (H1/H3/state leak) — read the
- *         alerts field for which subsystem (rt/tex/sciss/vp/nf).
- *   - badge `sw` ≈ 0 → even a direct scissored clear can't reach the buffer
- *       → drawable/context-level failure (check ctx flag + buffer sizes).
+ * Verdict for a visible black episode (read the badge):
+ *   - `sw` high + green swatch NOT visible under the black → presentation path convicted (ANGLE-Metal partial present).
+ *   - `sw` high + swatch visible + `c/l/r` ≈ 0 on a lit view → composer output really is black (state leak): the alerts
+ *     field names the subsystem (rt/tex/sciss/vp/nf).
+ *   - `sw` ≈ 0 → even a direct scissored clear can't reach the buffer → drawable/context-level failure
+ *     (check ctx flag + buffer sizes).
  *
- * Modes (`?bfp=N`, parse-once DevShotGate idiom, default OFF, ships dark):
- *   1 — state sampling + badge + transition warns only (zero readbacks: use if
- *       the mere readback perturbs the bug — that outcome itself implicates
- *       the present path, same family as the `?shot=1` discriminator).
+ * Modes (parse-once DevShotGate idiom):
+ *   1 — state sampling + badge + transition warns only (zero readbacks: use if the mere readback perturbs the bug,
+ *   which itself implicates the present path,
+ *       like the `?shot=1` discriminator).
  *   2 — mode 1 + reference swatch + pixel readbacks (the full verdict).
- *
- * Zero cost when off (installer returns null; one `if` per frame in the loop).
- * Never enable by default; never ship URLs with it. tmp/-grade tool that lives
- * in js/ only because it must be importable by main.js without a build step.
- *
- * @module core/BlackFrameProbe
+ * Zero cost when off (installer returns null; one `if` per frame). Never enable by default; never ship URLs with it.
+ * Lives in js/ only because main.js must import it without a build step.
  */
 
 import * as THREE from 'three';
@@ -68,19 +52,13 @@ const PATCH = 4;
 const BLACK_LUMA = 0.004;
 /** Min ms between console.warn lines (ctx-lost/tier/composer bypass this). */
 const WARN_MIN_MS = 500;
-/**
- * rAF gap / visible-tab starvation threshold (ms). Must sit ABOVE the §14.1-K
- * blur keepalive cadence (main.js re-presents every ~2000 ms while the window
- * is blurred) so deliberate keepalive frames are not logged as starvation;
- * anything longer than this while 'visible' is a real frame-delivery failure.
- */
+/** rAF gap / visible-tab starvation threshold (ms). Must sit ABOVE the blur keepalive cadence
+ *  (main.js re-presents every ~2000 ms while blurred) so keepalive frames aren't logged as starvation; anything longer
+ *  while 'visible' is a real frame-delivery failure. */
 const STARVE_MS = 2600;
 
-/**
- * Ladder floor render-block pairs pinned by test-FloorContract — used only to
- * flag the "matches NO contract" mixed near/far state seen once in the field.
- * (Deliberately not imported from FloorContract: dev probe, no dep creep.)
- */
+/** Ladder floor render-block pairs pinned by test-FloorContract; flags the "matches NO contract" mixed near/far state
+ *  seen once in the field. Deliberately not imported from FloorContract (dev probe, no dep creep). */
 const FLOOR_CLIP = { 4: { near: 0.05, far: 500 }, 5: { near: 0.5, far: 2000 } };
 
 /** @returns {0|1|2} parsed `?bfp=` mode (0 = off) */
@@ -96,13 +74,8 @@ function parseMode() {
   }
 }
 
-/**
- * Decoded size of a texture's picture. st3: Earth bitmaps are closed after their
- * upload (a closed ImageBitmap reads 0×0), so the size stored by Earth.js in
- * `userData.uploadedWidth/Height` is reported while the image is closed/empty.
- * @param {THREE.Texture|null|undefined} t
- * @returns {{w: number, h: number}}
- */
+/** Decoded size of a texture's picture. Earth bitmaps are closed after upload (a closed ImageBitmap reads 0×0), so the
+ *  size Earth.js stores in `userData.uploadedWidth/Height` is reported while the image is closed/empty. */
 export function textureImageSize(t) {
   const img = t && t.image;
   const w = img && img.width ? img.width : 0;
@@ -113,13 +86,9 @@ export function textureImageSize(t) {
   return { w, h };
 }
 
-/**
- * Install the probe. Call once after SceneManager (+ Earth) exist; returns
- * null when `?bfp=` is absent so the per-frame hook stays a single falsy check.
- *
- * @param {{ sceneManager: object, earth?: object }} deps
- * @returns {{ tick: function(number): void }|null}
- */
+/** Install the probe (once, after SceneManager + Earth exist); returns null when `?bfp=` is absent so the per-frame
+ * hook stays one falsy check.
+ *  @param {{ sceneManager: object, earth?: object }} deps  @returns {{ tick: function(number): void }|null} */
 export function installBlackFrameProbe({ sceneManager, earth } = {}) {
   const mode = parseMode();
   if (!mode || !sceneManager || typeof document === 'undefined' || !document.body) return null;
@@ -128,7 +97,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
   const gl = renderer.getContext();
   const canvas = renderer.domElement;
 
-  // --- Context-loss tripwires (three logs these too, but we badge + dump) ---
+  // Context-loss tripwires (badged + dumped)
   let ctxLost = false;
   let ctxEvents = 0;
   try {
@@ -136,7 +105,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     canvas.addEventListener('webglcontextrestored', () => { ctxLost = false; ctxEvents++; }, false);
   } catch (_e) { /* non-DOM canvas — badge still works off gl.isContextLost() */ }
 
-  // --- Badge (DOM renders above the artifact per the field reports) ---
+  // Badge (DOM renders above the artifact)
   const badge = document.createElement('div');
   badge.id = 'bfp-badge';
   badge.style.cssText = [
@@ -150,13 +119,13 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
   badge.textContent = `BFP mode ${mode} armed`;
   document.body.appendChild(badge);
 
-  // --- Preallocated scratch (no per-frame allocs) ---
+  // Preallocated scratch (no per-frame allocs)
   const pxBuf = new Uint8Array(PATCH * PATCH * 4);
   const savedScissor = new THREE.Vector4();
   const savedViewport = new THREE.Vector4();
   const savedClearColor = new THREE.Color();
 
-  // --- Probe state ---
+  // Probe state
   let frame = 0;
   let lastTickTs = 0;
   let fpsEst = 0;
@@ -172,39 +141,32 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
   const lumas = { c: -1, l: -1, r: -1, sw: -1 }; // -1 = not sampled yet
   /** Earth textures that have EVER been GL-live — dead-after-live detector. */
   const texWasLive = { day: false, night: false, clouds: false };
-  /**
-   * Composer/bloom RTs that have EVER been GL-live THIS composer generation.
-   * Lazily-initialized targets can be legitimately unused by a tier's pass
-   * chain (e.g. LOW = [render→rt2, output→screen] never binds renderTarget1),
-   * so only dead-AFTER-live is an anomaly. Reset on composer rebuild.
-   */
+  /** Composer/bloom RTs EVER GL-live THIS composer generation. Lazily-initialized targets can be legitimately unused by
+   *  a tier's pass chain (LOW never binds renderTarget1), so only dead-AFTER-live is an anomaly. Reset on composer
+   *  rebuild. */
   const rtWasLive = { rt1: false, rt2: false, rtB: false };
   const ring = [];
   const alertLog = [];
   /** Capped alertLog append — soak sessions run for hours. */
   const logEvent = (e) => { alertLog.push(e); if (alertLog.length > 200) alertLog.shift(); };
 
-  // --- Occlusion/visibility correlation (black-flicker trigger theory) ---
-  // The black episodes depend on WINDOW presentation state (fullscreen /
-  // DevTools toggle / resize all heal them), so record when the tab is hidden
-  // or the compositor stops driving rAF (occluded windows get throttled or
-  // paused on macOS; long gaps show as raf-gap events). If episodes always
-  // start after a visibility/occlusion window, purged-surface pressure is the
-  // trigger. `vis`/`gap` counters surface in the badge only after they fire.
+  // Occlusion/visibility correlation: the black episodes depend on WINDOW presentation state
+  // (fullscreen / DevTools toggle / resize all heal them), so record when the tab is hidden or the compositor stops
+  // driving rAF (occluded macOS windows get throttled or paused; long gaps show as raf-gap events). If episodes always
+  // start after a visibility/occlusion window, purged-surface pressure is the trigger. `vis`/`gap` counters surface in
+  // the badge only after they fire.
   let visEvents = 0;
   let gapEvents = 0;
   let lastGapMs = 0;
   let lastVisFlipTs = -1;
-  // Frame-starvation witness (the "frozen while visible" episodes): rAF stops
-  // but TIMERS keep firing, so a 1 Hz interval can log the freeze from inside —
-  // when it started, the visibility state during it, and (via starve-end in the
-  // next tick) exactly how long the compositor starved a VISIBLE tab.
+  // Frame-starvation witness ("frozen while visible"): rAF stops but TIMERS keep firing, so a 1 Hz interval can log the
+  // freeze from inside (start, visibility state, and via starve-end on the next tick how long a VISIBLE tab was
+  // starved).
   let starveEvents = 0;
   let starveLogged = false;
   let starvedSinceTs = 0;
-  // Window focus witnesses: §14.1 halts the game on window BLUR (not tab
-  // hidden), which visibilitychange cannot see. Log both so dumps correlate
-  // blur intervals with starvations/black episodes exactly.
+  // Window focus witnesses: the game halts on window BLUR (not tab hidden), which visibilitychange cannot see; log both
+  // so dumps correlate blur intervals with starvations/black episodes.
   let blurEvents = 0;
   try {
     window.addEventListener('blur', () => {
@@ -228,8 +190,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     setInterval(() => {
       if (lastTickTs <= 0 || starveLogged) return;
       const idleMs = performance.now() - lastTickTs;
-      // Hidden tabs legitimately stop rAF; a VISIBLE tab starved beyond the
-      // keepalive cadence (STARVE_MS > §14.1-K's 2 s) is the bug.
+      // Hidden tabs legitimately stop rAF; a VISIBLE tab starved beyond STARVE_MS (> the 2 s keepalive) is the bug.
       if (idleMs > STARVE_MS && document.visibilityState === 'visible') {
         starveLogged = true;
         starvedSinceTs = lastTickTs;
@@ -240,9 +201,8 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     }, 1000);
   } catch (_e) { /* noop */ }
 
-  // Click-to-dump: the user is done with console work, so the badge itself
-  // saves the evidence — one click downloads bfp-dump-<seconds>.json (ring +
-  // alertLog + environment) to ~/Downloads where the debugging agent reads it.
+  // Click-to-dump: one click on the badge downloads bfp-dump-<seconds>.json (ring + alertLog + environment) for the
+  // debugging agent.
   try {
     badge.addEventListener('click', () => {
       try {
@@ -261,21 +221,16 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
   } catch (_e) { /* noop */ }
 
   const props = renderer.properties;
-  /** @param {THREE.Texture|null|undefined} t */
   const glLive = (t) => {
     try { return !!(t && props.get(t) && props.get(t).__webglTexture); } catch (_e) { return false; }
   };
 
   /**
-   * OPEN-2 (night-side city lights black on 16k): per-texture UPLOAD truth.
-   * The `e` field's GL-handle liveness cannot distinguish "decoded + uploaded"
-   * from "handle allocated, content never/partially uploaded" — three.js sets
-   * `__version = texture.version` only after it runs texImage2D. So:
-   *   w/h  = decoded image dims (0 = decode never completed / image empty)
-   *   ver  = texture.version (bumped by needsUpdate; 1+ once an image landed)
-   *   up   = properties __version (-1 = never uploaded)
-   * ghost = handle live but image empty — the "samples black forever" state.
-   * @param {THREE.Texture|null|undefined} t
+   * Per-texture UPLOAD truth (night-side city lights black on 16k). GL-handle liveness can't tell "decoded + uploaded"
+   * from "handle allocated, content never/partially uploaded" (three.js sets `__version = texture.version` only after
+   * texImage2D). w/h = decoded image dims (0 = decode never completed / image empty); ver = texture.version
+   * (1+ once an image landed); up = properties __version (-1 = never uploaded); ghost = handle live but image empty
+   * (the "samples black forever" state).
    */
   const texDetail = (t) => {
     if (!t) return null;
@@ -297,22 +252,16 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     return `${one('d', earth.dayTexture)} ${one('n', earth.nightTexture)} ${one('c', earth.cloudTexture)}`;
   };
 
-  // GL error witness (OPEN-2): WebGL errors are sticky until READ. The game
-  // never calls gl.getError(), and three.js reads it ONLY inside its shader-
-  // link-failure diagnostic (vendor three.module.js:7122) — so outside that
-  // rare path the probe is the sole consumer, and a GL_OUT_OF_MEMORY (0x0505)
-  // raised by the 16k texImage2D/mipgen upload is still queued HERE, minutes
-  // later, on the first probe sample after it happened. (Caveat for dump
-  // readers: a session that ALSO hit a program-link failure may have had an
-  // earlier queued error swallowed by that three.js read — treat glErr:0 as
-  // near-absolute, not absolute, in such sessions.) One call per sample
-  // (~8 Hz, same sync-IPC class as the VIEWPORT/SCISSOR getParameter reads
-  // above it).
+  // GL error witness: WebGL errors are sticky until READ. The game never calls gl.getError() and three.js reads it ONLY
+  // in its shader-link-failure diagnostic, so the probe is the sole consumer: a GL_OUT_OF_MEMORY (0x0505) from the 16k
+  // texImage2D/mipgen upload is still queued here, minutes later, on the first sample.
+  // (A session that ALSO hit a program-link failure may have had an earlier error swallowed by three.js: treat glErr:0
+  // as near-absolute.) One call per sample (~8 Hz, same sync-IPC class as the VIEWPORT/SCISSOR reads).
   let glErrEvents = 0;
   let lastGlErr = 0;
 
-  // One-time capability/environment context for dumps (renderer string proves
-  // the ANGLE-Metal vs SwiftShader split when reading a user dump).
+  // One-time capability/environment context for dumps (the renderer string proves the ANGLE-Metal vs SwiftShader
+  // split).
   const caps = { maxTextureSize: -1, unmaskedRenderer: '', deviceMemory: null };
   try {
     caps.maxTextureSize = renderer.capabilities ? renderer.capabilities.maxTextureSize : -1;
@@ -321,14 +270,10 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     caps.deviceMemory = typeof navigator !== 'undefined' ? (navigator.deviceMemory ?? null) : null;
   } catch (_e) { /* noop */ }
 
-  /**
-   * Single source of truth for the diagnostic dump (badge click AND the
-   * `window.__bfpDump` harness hook return the same shape). `earthTexDetail`,
-   * `texEvents` (Earth.js loadTexture outcome ring — decode failures / JPG
-   * fallbacks), `glErr` and `caps` are the OPEN-2 additions: together they
-   * separate decode-failed (w=0) / never-uploaded (up=-1) / upload-errored
-   * (glErr 0x505) / all-healthy-yet-black (Metal residency, invisible to GL).
-   */
+  /** Single source of truth for the diagnostic dump (badge click AND `window.__bfpDump` return the same shape).
+   *  `earthTexDetail`, `texEvents` (Earth.js loadTexture outcome ring: decode failures / JPG fallbacks), `glErr` and
+   *  `caps` together separate decode-failed (w=0) / never-uploaded (up=-1) / upload-errored (glErr 0x505) /
+   *  all-healthy-yet-black (Metal residency, invisible to GL). */
   function buildDump() {
     const d = {
       mode,
@@ -372,8 +317,8 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
   }
 
   /**
-   * Paint the reference swatch into the default framebuffer via three's state
-   * APIs (raw gl.* here would desync the renderer's cached scissor/clear state).
+   * Paint the reference swatch into the default framebuffer via three's state APIs
+   * (raw gl.* would desync the renderer's cached scissor/clear state).
    */
   function paintSwatch() {
     const prevRT = renderer.getRenderTarget();
@@ -410,10 +355,9 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
       sc = gl.getParameter(gl.SCISSOR_BOX);
     } catch (_e) { /* context lost mid-sample */ }
 
-    // Composer / bloom render-target GL liveness. Dead-AFTER-live only: a
-    // fresh/rebuilt composer's targets initialize lazily on first bind, and
-    // some are unused by design per tier (see rtWasLive). L=live, x=never
-    // bound (benign), X=was live and its GL texture is now gone (anomaly).
+    // Composer / bloom render-target GL liveness, dead-AFTER-live only
+    // (rebuilt composers init targets lazily; some are unused per tier, see rtWasLive). L=live, x=never bound (benign),
+    // X=was live and its GL texture is now gone (anomaly).
     if (comp !== composerRef) {
       composerRef = comp;
       composerGen++;
@@ -433,7 +377,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     const rtStr = rtCh(rt1, rtWasLive.rt1) + rtCh(rt2, rtWasLive.rt2) +
       (rtB === null ? '-' : rtCh(rtB, rtWasLive.rtB));
 
-    // Earth texture GL liveness (OPEN-2: night-side city lights black on 16k).
+    // Earth texture GL liveness.
     const eDay = earth ? glLive(earth.dayTexture) : false;
     const eNight = earth ? glLive(earth.nightTexture) : false;
     const eClouds = earth ? glLive(earth.cloudTexture) : false;
@@ -446,7 +390,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     const eStr = earth
       ? (eCh(eDay, texWasLive.day) + eCh(eNight, texWasLive.night) + eCh(eClouds, texWasLive.clouds))
       : '---';
-    // OPEN-2: upload-completion truth + ghost detection (live handle, empty image).
+    // Upload-completion truth + ghost detection (live handle, empty image).
     const texd = texdStr();
     const ghosts = [];
     if (earth) {
@@ -457,7 +401,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
       if (gn && gn.ghost) ghosts.push('n');
       if (gc && gc.ghost) ghosts.push('c');
     }
-    // Consume any queued GL error (sticky-until-read; see witness note above).
+    // Consume any queued GL error (sticky-until-read).
     let glErrNow = 0;
     try { if (!lost) glErrNow = gl.getError() || 0; } catch (_e) { /* noop */ }
     if (glErrNow !== 0) { glErrEvents++; lastGlErr = glErrNow; }
@@ -467,7 +411,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     const floor = sm._ladderFidelity ? sm._ladderFidelity.floor : null;
     const nfOn = sm.renderPass ? !!sm.renderPass.nearFieldEnabled : null;
 
-    // --- Anomaly classification ---
+    // Anomaly classification
     const alerts = [];
     if (lost) alerts.push('ctxlost');
     if (dbw !== canvas.width || dbh !== canvas.height) alerts.push(`dbmm(${dbw}x${dbh}!=${canvas.width}x${canvas.height})`);
@@ -482,11 +426,11 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
       if (cam.near !== want.near || cam.far !== want.far) {
         alerts.push(`clip(F${floor} ${cam.near}/${cam.far})`);
       }
-      // nfOn=true here is either the T1 re-assert bug or a deliberate ?nf=1
-      // run — visible in the badge as `nf1` on F4/F5, not alert-latched.
+      // nfOn=true here is the near-field re-assert bug or a deliberate ?nf=1 run: shown as `nf1` in the badge on F4/F5,
+      // not alert-latched.
     }
-    // memdrop: transition against the PREVIOUS sample (not high-water, which
-    // would latch the alert forever after one drop); high-water kept for dumps.
+    // memdrop: transition against the PREVIOUS sample (high-water would latch the alert forever after one drop);
+    // high-water kept for dumps.
     if (lastMemTex >= 0 && memTex >= 0 && memTex < lastMemTex - 2) alerts.push(`memdrop(${lastMemTex}->${memTex})`);
     lastMemTex = memTex;
     memTexHighWater = Math.max(memTexHighWater, memTex);
@@ -529,7 +473,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     }
     lastAlerts = alertsStr;
 
-    // --- Badge ---
+    // Badge
     const lumaStr = mode === 2
       ? ` c${lumas.c < 0 ? '?' : lumas.c.toFixed(2)} l${lumas.l < 0 ? '?' : lumas.l.toFixed(2)} r${lumas.r < 0 ? '?' : lumas.r.toFixed(2)} sw${lumas.sw < 0 ? '?' : lumas.sw.toFixed(2)}`
       : '';
@@ -545,10 +489,9 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     badge.style.borderColor = bad ? 'rgba(255,120,120,0.6)' : 'rgba(140,255,140,0.35)';
   }
 
-  // Post-mortem dump for us; the user never has to touch it. `frame` and
-  // `counters` are LIVE values (ring snaps lag by up to CHECK_EVERY frames —
-  // at blur-keepalive cadence that is ~30 s, so harnesses must not read
-  // liveness from the ring).
+  // Post-mortem dump hook. `frame` and `counters` are LIVE values
+  // (ring snaps lag by up to CHECK_EVERY frames, ~30 s at blur-keepalive cadence, so harnesses must not read liveness
+  // from the ring).
   try {
     window.__bfpDump = () => buildDump();
   } catch (_e) { /* noop */ }
@@ -557,9 +500,8 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
 
   return {
     /**
-     * Call once per rendered frame, immediately after the composer/map render
-     * inside the SAME rAF task (readbacks must precede the present).
-     * @param {number} ts — rAF timestamp (ms)
+     * Call once per rendered frame, immediately after the composer/map render inside the SAME rAF task
+     * (readbacks must precede the present). @param {number} ts rAF timestamp (ms)
      */
     tick(ts) {
       frame++;
@@ -576,10 +518,9 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
         if (dtMs > STARVE_MS) {
           gapEvents++;
           lastGapMs = Math.round(dtMs);
-          // Correlate each starvation gap with the last visibility flip: gaps
-          // that BEGIN while 'visible' with no recent flip are the pathological
-          // frame-starvation; gaps right after hidden→visible are the broken
-          // occlusion-resume. sinceVisMs = gap END minus last flip.
+          // Correlate each gap with the last visibility flip: gaps that BEGIN while 'visible' with no recent flip are
+          // pathological starvation; gaps right after hidden→visible are the broken occlusion-resume. sinceVisMs = gap
+          // END minus last flip.
           logEvent({
             ts: Math.round(ts), kind: 'raf-gap', gapMs: lastGapMs,
             visState: document.visibilityState,

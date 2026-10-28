@@ -29,15 +29,15 @@ import { Constants } from '../core/Constants.js';
 import { DebrisField } from '../entities/DebrisField.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { heldCargoBookingMeters } from './CoMCalculator.js';
+import { DEG2RAD } from '../core/MathUtil.js';
 
 const M = 0.00001;
-const D2R = Math.PI / 180;
 
 // ── the pose grid (the one `_holdPoseOf` walks) ──────────────────────────────────────────────────────────────────────────────
 /** Strut angles (deg) of the hold-pose grid: 34, 39 ... 99, then 100. */
 export function holdPoseGridDeg() {
   const V5 = Constants.OCTOPUS_V5;
-  const lo = Math.round(V5.STRUT_REST_ALPHA / D2R);
+  const lo = Math.round(V5.STRUT_REST_ALPHA / DEG2RAD);
   const hi = V5.HOLD_POSE_MAX_DEG;
   const out = [];
   for (let deg = lo; deg < hi; deg += V5.HOLD_POSE_STEP_DEG) out.push(deg);
@@ -399,7 +399,7 @@ export function kitFor(ship) {
 }
 
 function poseKit(kit, thetaDeg) {
-  kit.fake._flowerThetaRad = thetaDeg * D2R;
+  kit.fake._flowerThetaRad = thetaDeg * DEG2RAD;
   kit.writePose.call(kit.fake);
   for (const g of kit.groups) g.root.updateMatrixWorld(true);
 }
@@ -686,7 +686,7 @@ export function stepProfile(mgr, piece, points) {
     const k = w.k;
     if (!w.placed) {                                         // her pose at this strut angle, once per pose (both grids read it)
       if (!pay(w, (w.prep.ball ? 0 : w.prep.n * 3) + 20, until)) break;
-      heldCargoBookingMeters(arm, dp, POSES[k] * D2R, ship, slot, piece.sizeMeter || 0, _book, null, piece, _poseQ);
+      heldCargoBookingMeters(arm, dp, POSES[k] * DEG2RAD, ship, slot, piece.sizeMeter || 0, _book, null, piece, _poseQ);
       w.cx = _book.x; w.cy = _book.y; w.cz = _book.z;
       if (!w.prep.ball) placeTris(w.prep, w.buf, w.cx, w.cy, w.cz, _poseQ);
       w.placed = true; w.stage = 0;

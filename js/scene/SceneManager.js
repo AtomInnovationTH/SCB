@@ -1,21 +1,19 @@
 /**
- * SceneManager.js — Three.js scene, renderer, camera, and post-processing
- * Single-composer threshold bloom: bright objects (emissive > threshold) bloom
- * automatically without render-layer tricks. Earth stays pixel-sharp.
- * @module scene/SceneManager
+ * Three.js scene, renderer, camera and post-processing (@module scene/SceneManager).
+ * Single-composer threshold bloom: emissive > threshold blooms without render-layer
+ * tricks; Earth stays pixel-sharp.
  */
 
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
-// Sprint 2 / PR D — FXAA fallback for MEDIUM tier (cheaper than SMAA).
+// FXAA fallback for MEDIUM tier (cheaper than SMAA).
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
-// Output stage: applies renderer.toneMapping (ACES) + sRGB encoding to the
-// composed HDR buffer. Without it the EffectComposer chain writes raw linear
-// HDR to the canvas (three only tone-maps built-in materials rendered directly
-// to screen), so ACES + the SunLight auto-exposure system were dead in flight.
+// Applies renderer.toneMapping (ACES) + sRGB to the composed HDR buffer. Without it
+// the composer chain writes raw linear HDR (three only tone-maps materials rendered
+// directly to screen), so ACES + SunLight auto-exposure would do nothing.
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Constants } from '../core/Constants.js';
@@ -24,39 +22,33 @@ import { NearFieldRenderPass, NEAR_FIELD_LAYER, NEAR_FIELD_SCALE } from './NearF
 import { nearFieldBrackets } from './nearFieldMath.js';
 import { portraitCameraFor, portraitCameraFit, boxCornersWorld, PORTRAIT_DEFAULT_FILL, PORTRAIT_FIT_FILL } from './portraitFraming.js';
 
-// Near-field depth-pass tuning (z-layer fix — see NearFieldRenderPass.js).
-// NEAR_FIELD_RADIUS is a half-extent (scene units) bracketing the player ship
-// incl. deployed ROSA wings (1×2 m, OCTOPUS_V5) + 1.6 m struts — true extent is
-// < 6 m, so 0.0001 units = 10 m is generous slack. Multiplied by NEAR_FIELD_SCALE
-// each frame to set the scaled near camera's near/far around the ship. 1 unit =
-// 100 km. (Shrunk from 40 m: the old bracket predated the ×S sub-render, where
-// the bracket lives in metre-scale space and a tight one improves conditioning.)
+// Near-field depth-pass tuning (see NearFieldRenderPass.js).
+// NEAR_FIELD_RADIUS: half-extent (scene units; 1 unit = 100 km) bracketing the player
+// ship incl. deployed ROSA wings + struts (true extent < 6 m), so 0.0001 units = 10 m
+// is generous slack. Multiplied by NEAR_FIELD_SCALE each frame to set the scaled near
+// camera's near/far; a tight bracket improves conditioning in the ×S sub-render.
 const NEAR_FIELD_RADIUS = 0.0001;
-// Scaled-space near-plane floor (5 cm). In the ×S sub-render M·S = 1 so units are
-// metres; 5 cm is well-conditioned under log depth and below any real standoff.
+// Scaled-space near-plane floor (5 cm): in the ×S sub-render M·S = 1 (units = metres);
+// well-conditioned under log depth and below any real standoff.
 const NEAR_FIELD_NEAR_FLOOR = 0.05;
 const NEAR_FIELD_FAR_DEFAULT = 0.01;   // 1 km — construction default, replaced per frame
 const _nfWorldPos = new THREE.Vector3();   // scratch for _updateNearCamera (no per-frame alloc)
 const _nfSetNearLayer = (o) => { o.layers.set(NEAR_FIELD_LAYER); };  // traverse cb (no per-frame closure alloc)
-// Session T — the SPECS pane's one-shot PART PORTRAIT (renderPartPortrait; plan
-// tmp/plans/1788863200000-specs-pane-part-imagery.md §1.6 / T2). The portrait
-// camera's vertical FOV mirrors the inspect lens (CameraSystem.inspection.fov =
-// 35 — the F1 costume the player is looking through); the default target is
-// 640×400, 2× the pane's 320×200 thumbnail (PHOTO_W × PHOTO_H) so the JPEG
-// downsample keeps its edges. Rebuilt only when a caller asks for another size.
+// SPECS pane one-shot part portrait (renderPartPortrait). Vertical FOV mirrors the
+// inspect lens (CameraSystem.inspection.fov = 35); default target 640×400 is 2× the
+// pane's 320×200 thumbnail (PHOTO_W × PHOTO_H) so the JPEG downsample keeps edges.
+// Rig rebuilt only when a caller asks for another size.
 export const PORTRAIT_FOV_DEG = 35;
 export const PORTRAIT_W = 640;
 export const PORTRAIT_H = 400;
-const _pfLook = new THREE.Vector3();       // scratch for renderPartPortrait's look direction (per click, never per frame)
-const _pfBox = new THREE.Box3();           // scratch: the world box of the sphere-law FALLBACK (a local box through its matrix)
+const _pfLook = new THREE.Vector3();       // scratch: look direction (per click, never per frame)
+const _pfBox = new THREE.Box3();           // scratch: world box of the sphere-law FALLBACK
 const _pfUp = new THREE.Vector3();         // scratch: the caller's image up, normalised
 const _pfNow = () => (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
-// Black-flicker triage (H1 discriminator): `?nf=1` forces the near-field pass
-// to stay ENABLED on ladder floors whose contract disables it (F4/F5 — NAVCOM/SDA). The
-// disabled path is the only per-floor render-sequence difference on the floors
-// that black out; if a forced-on session never blacks, the disabled path is
-// convicted. Opt-in, exact-value only, parsed once (DevShotGate idiom);
-// Node/test environments always get false so the T1 contract pins stay green.
+// Black-flicker triage: `?nf=1` keeps the near-field pass ENABLED on ladder floors
+// whose contract disables it (F4/F5 NAVCOM/SDA); the disabled path is the only
+// per-floor render-sequence difference on the floors that black out. Opt-in,
+// exact-value only, parsed once (DevShotGate idiom); Node/tests always get false.
 const _nfForceOn = (() => {
   try {
     return typeof window !== 'undefined' && typeof URLSearchParams !== 'undefined' &&
@@ -76,34 +68,25 @@ export class SceneManager {
   constructor(canvas) {
     this._canvas = canvas;
 
-    // P2.9: Cached Vector2 for bloom resolution — reused across construction,
-    // resize, and live tier swaps so we don't allocate per-event.
+    // Bloom resolution, reused across construction, resize and tier swaps (no per-event alloc).
     this._bloomRes = new THREE.Vector2();
 
-    // Sprint 3 GPU profiling: when an [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1)
-    // config opts into per-pass profiling, this latch must be flipped on so
-    // [`render()`](js/scene/SceneManager.js:1) skips the per-frame timer
-    // query — otherwise it nests with the per-pass channels and WebGL2
-    // silently rejects them (returning empty `perPass` snapshots).
+    // Set when an AutoProfileSweep config opts into per-pass profiling, so render()
+    // skips the per-frame timer query: nested with the per-pass channels, WebGL2
+    // silently rejects them (empty `perPass` snapshots).
     this._runtimeProfilePasses = false;
 
-    // --- Renderer (WebGL2, logarithmic depth buffer) ---
-    // SMAA handles anti-aliasing via post-processing; no hardware MSAA needed
+    // WebGL2, logarithmic depth buffer; SMAA does the anti-aliasing (no hardware MSAA).
     //
-    // Z-LAYER NOTE (§2-followup round 4): logarithmicDepthBuffer makes depth
-    // non-linear, so `material.polygonOffsetUnits` map to a real-world depth
-    // separation that VARIES with viewing distance — an offset tuned to stop
-    // z-fighting when zoomed in will under/over-shoot when zoomed out (and
-    // vice-versa). For coplanar layering prefer deterministic `renderOrder`
-    // (Constants.RENDER_ORDER) plus a tiny geometric Z stagger over polygonOffset.
-    // Existing polygonOffset values on the ship hull are legacy from FIX_PLAN §2;
-    // do not add more — promote to renderOrder bands instead.
-    // Dev screenshot loop (Phase 0 of the net-visual plan): `?shot=1` or
-    // `?shotauto=1` enables `preserveDrawingBuffer` via the ONE shared
+    // Z-LAYER NOTE: with logarithmicDepthBuffer, `material.polygonOffsetUnits` map to a
+    // depth separation that VARIES with viewing distance, so an offset tuned zoomed in
+    // under/over-shoots zoomed out. For coplanar layering use `renderOrder`
+    // (Constants.RENDER_ORDER) plus a tiny geometric Z stagger. Existing hull
+    // polygonOffset values are legacy; do not add more.
+    // `?shot=1` / `?shotauto=1` enables `preserveDrawingBuffer` via the ONE shared
     // predicate (js/core/DevShotGate.js) so `window.__netShot()` can read back
-    // the exact `#game-canvas` pixels via `toDataURL`. A plain (non-preserved)
-    // buffer returns black on read-back. Default OFF — this has a measurable
-    // perf cost and must never ship enabled.
+    // `#game-canvas` via `toDataURL` (a non-preserved buffer reads black). Default
+    // OFF: measurable perf cost, must never ship enabled.
     const _preserveDrawingBuffer = devShotGate.requested;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -113,42 +96,35 @@ export class SceneManager {
       preserveDrawingBuffer: _preserveDrawingBuffer,
     });
 
-    // --- PR 4 / P1.5: Detect initial quality tier from GL capabilities
-    // + optional `?tier=` URL override. Pixel ratio is set inside _applyTier()
-    // so HIGH/MEDIUM/LOW each cap retina differently.
+    // Initial quality tier from GL capabilities + optional `?tier=` override. Pixel
+    // ratio is set in _applyRendererPixelRatio() so each tier caps retina differently.
     this.currentTier = this._detectInitialTier();
     this.tierConfig = Constants.PERF.QUALITY_TIERS[this.currentTier];
 
-    // Session I (plan D-G, step 4): glass renders at pixel ratio 1.0 — main.js
-    // flips this via setGlassPixelRatioCap when TouchControls.detect() says
-    // the device is real touch. False by default: desktop is byte-identical.
+    // Glass renders at pixel ratio 1.0; main.js flips this via setGlassPixelRatioCap on
+    // real touch devices. False by default.
     this._glassPR1 = false;
 
-    // setPixelRatio is honored by the tier (see _applyRendererPixelRatio).
     this._applyRendererPixelRatio(this.tierConfig);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-    // Fat-line capture-net web (NetMeshKit) needs the DRAWING-BUFFER size (CSS px
-    // × pixelRatio) for correct screen-space thread width — same units SMAA uses.
+    // NetMeshKit fat lines need the DRAWING-BUFFER size (CSS px × pixelRatio) for
+    // screen-space thread width (same units SMAA uses).
     this._syncNetMeshResolution();
-    // V2: the net membrane's per-material orbital env (HDR sun disk + Earth
-    // hemisphere) — baked once per renderer by getOrbitalFoilEnv; returns null
-    // headless, where setEnvTexture is a no-op and scene.environment applies.
-    // This runs before any net exists, so setEnvTexture CACHES the texture for
-    // membranes built later — that cache is what makes this call do anything.
+    // Net membrane's orbital env (HDR sun disk + Earth hemisphere), baked once per
+    // renderer; null headless (setEnvTexture is then a no-op, scene.environment applies).
+    // Runs before any net exists: setEnvTexture CACHES the texture for later membranes.
     NetMeshKit.setEnvTexture(getOrbitalFoilEnv(this.renderer));
 
-    // Shadow maps disabled — no shadow-casting lights in the scene
+    // No shadow-casting lights in the scene
     this.renderer.shadowMap.enabled = false;
 
-    // --- Scene ---
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000); // Deep space black
 
-    // --- Camera ---
     this.camera = new THREE.PerspectiveCamera(
       Constants.CAMERA_FOV,
       window.innerWidth / window.innerHeight,
@@ -156,14 +132,12 @@ export class SceneManager {
       Constants.CAMERA_FAR
     );
 
-    // --- Near-field camera (z-layer fix) ---
-    // Sits at the ORIGIN each frame, mirroring the main camera's orientation +
-    // intrinsics, and renders ONLY the near-field layer (the player ship) after
-    // NearFieldRenderPass scales the ship into ×S camera-relative space. That
-    // moves the ship off the flat toe of the log-depth curve (w ~2e-4 → ~16),
-    // killing the fp32 `1.0 + w` depth-tie quantum. See NearFieldRenderPass.js
-    // for the full rationale. position/near/far are set per frame in
-    // _updateNearCamera(); these are just sane construction defaults.
+    // Near-field camera: at the ORIGIN each frame, mirrors the main camera's
+    // orientation + intrinsics, renders ONLY the near-field layer (the player ship)
+    // after NearFieldRenderPass scales it into ×S camera-relative space. That moves
+    // the ship off the flat toe of the log-depth curve (w ~2e-4 → ~16), killing the
+    // fp32 `1.0 + w` depth-tie quantum (rationale: NearFieldRenderPass.js).
+    // position/near/far are set per frame in _updateNearCamera(); these are defaults.
     this.nearCamera = new THREE.PerspectiveCamera(
       Constants.CAMERA_FOV,
       window.innerWidth / window.innerHeight,
@@ -174,17 +148,15 @@ export class SceneManager {
     /** @type {THREE.Object3D[]} roots whose subtrees render in the near pass */
     this._nearFieldRoots = [];
     /** @type {THREE.Light[]} camera/ship-follow point lights transformed into ×S
-     * space during the near render (fill/rim + launch pyro). Directional/hemi/
-     * ambient are direction- or position-independent and are NOT listed here. */
+     * space during the near render (fill/rim + launch pyro); directional/hemi/ambient
+     * are position-independent and NOT listed. */
     this._nearFieldLights = [];
 
-    // Session T — the one-shot PART PORTRAIT rig (renderPartPortrait), built
-    // LAZILY on the first photo and kept: the origin camera, the HalfFloat
-    // colour+depth target the near set is drawn into, the RGBA8 target the
-    // OutputPass (ACES + sRGB) writes for readback, its own OutputPass instance
-    // (NEVER the composer's `this.outputPass` — that one is the renderToScreen
-    // last pass with the dither injection + patched render below), the reused
-    // readback buffer, and the harness stats (`__scbPortraitCalls`).
+    // Part-portrait rig (renderPartPortrait), built LAZILY on the first photo and kept:
+    // origin camera, HalfFloat colour+depth target for the near set, RGBA8 target the
+    // OutputPass (ACES + sRGB) writes for readback, its OWN OutputPass (NEVER the
+    // composer's: that is the renderToScreen last pass with the dither injection +
+    // patched render), the readback buffer, and harness stats (`__scbPortraitCalls`).
     /** @type {THREE.PerspectiveCamera|null} */ this._portraitCam = null;
     /** @type {THREE.WebGLRenderTarget|null} */ this._portraitRT = null;
     /** @type {THREE.WebGLRenderTarget|null} */ this._portraitOut = null;
@@ -194,51 +166,38 @@ export class SceneManager {
     this._portraitStats = { count: 0, nulls: 0, calls: 0, triangles: 0, ms: 0, ok: false, error: null, width: 0, height: 0, method: null, distanceM: 0, rolled: false };
 
     /**
-     * Zoom Ladder per-floor render block (S2, T1 — docs/ladder/02-traps.md).
-     * When the ladder engages a floor, LadderController pushes its
-     * {nearField, near, far, debrisMode} here; SceneManager RE-ASSERTS it at the
-     * end of applyTier()/applyTierWithOverrides() because _setupPostProcessing()
-     * builds a fresh NearFieldRenderPass that resets nearFieldEnabled to true
-     * (NearFieldRenderPass.js:106). Null when the ladder is disengaged / the
-     * flag is off — the re-assert is then a no-op, so applyTier() stays
-     * byte-identical to the shipped path.
+     * Zoom Ladder per-floor render block (archive/ladder/02-traps.md). LadderController
+     * pushes {nearField, near, far, debrisMode} here; re-asserted at the end of
+     * applyTier()/applyTierWithOverrides() because _setupPostProcessing() builds a
+     * fresh NearFieldRenderPass that resets nearFieldEnabled to true. Null when the
+     * ladder is disengaged / flag off (re-assert is then a no-op).
      * @type {{nearField:boolean, near:?number, far:?number, debrisMode:?string, floor:?number}|null}
      */
     this._ladderFidelity = null;
 
     /**
-     * Zoom Ladder F4/F5 (NAVCOM/SDA) render-block content refs (T1 costume 'ship-to-icon').
-     * On floors whose `debrisMode` iconizes the field (F4 'clusters'), the full
-     * debris meshes are replaced by cluster icons and the world ship mesh by a
-     * chevron, so both are hidden and RE-ASSERTED across applyTier() alongside
-     * nearFieldEnabled. Registered once from main.js (setLadderContentRefs); null
-     * (headless/tests/flag-off never registers) makes the hide a guarded no-op,
-     * so applyTier() stays byte-identical to the shipped path.
+     * Zoom Ladder F4/F5 (NAVCOM/SDA) content refs ('ship-to-icon' costume). On floors
+     * whose `debrisMode` iconizes the field (F4 'clusters'), debris meshes become
+     * cluster icons and the world ship mesh a chevron, so both are hidden and
+     * RE-ASSERTED across applyTier() alongside nearFieldEnabled. Registered once from
+     * main.js (setLadderContentRefs); null (headless/tests/flag-off) = guarded no-op.
      * @type {?{getDebrisClusters?:function, setLadderDebrisMode?:function}}
      */
     this._ladderDebrisField = null;
     /** @type {?{visible:boolean}} world ship mesh hidden on ship-is-icon floors. */
     this._ladderShip = null;
     /**
-     * @type {?{setFollowCamera?:function}} star shell switched to camera-follow on
-     * the Earth-anchored floors (F4/F5 — see setLadderFloorFidelity), back to the
-     * shipped world-fixed pose on floors <= 5 and on disengage.
+     * @type {?{setFollowCamera?:function}} star shell: camera-follow on the
+     * Earth-anchored floors (F4/F5, see setLadderFloorFidelity), world-fixed on
+     * floors <= 5 and on disengage.
      */
     this._ladderStarfield = null;
 
-    // --- Clock ---
     this.clock = new THREE.Clock();
 
-    // --- PR 6 / P3.11: GPU runtime probe ---
-    // Wraps the actual render call to measure GPU frame time.
-    // Only active when the EXT_disjoint_timer_query_webgl2 extension exists.
-    //
-    // Sprint 3 GPU profiling — the probe must exist BEFORE
-    // [`_setupPostProcessing`](js/scene/SceneManager.js:178) runs so that
-    // `?profilePasses=1` can wrap each pass with timer-query channels on the
-    // very first build. (Pre-Sprint-3 ordering created the probe after the
-    // composer; that's still fine for the per-frame query but breaks per-pass
-    // instrumentation on the initial frames.)
+    // GPU runtime probe: wraps the render call to measure GPU frame time; active only
+    // with EXT_disjoint_timer_query_webgl2. MUST exist BEFORE _setupPostProcessing()
+    // so `?profilePasses=1` can wrap each pass with timer-query channels on the first build.
     /** @type {GpuProbe|null} */
     this.gpuProbe = null;
     /** @type {boolean} Whether GPU probe is actively sampling */
@@ -258,27 +217,21 @@ export class SceneManager {
       console.warn('[Perf] GPU probe init failed:', _e);
     }
 
-    // --- Post-processing (built from current tier config) ---
-    // Must run AFTER GpuProbe is created so `?profilePasses=1` can wrap
-    // each pass with a timer-query channel inside _setupPostProcessing().
+    // Must run AFTER GpuProbe is created (see above).
     this._setupPostProcessing(this.tierConfig);
 
-    // --- Lights ---
     this._setupLights();
 
-    // --- Diagnostics ---
     this._logDiagnostics();
 
     console.log(`[Perf] initial quality tier: ${this.currentTier}`, this.tierConfig);
   }
 
   /**
-   * PR 4 / P1.5: Choose initial tier from GL capabilities + URL override.
-   * @private
+   * Initial tier from GL capabilities + `?tier=LOW|MEDIUM|HIGH` override (case-insensitive).
    * @returns {'HIGH'|'MEDIUM'|'LOW'}
    */
   _detectInitialTier() {
-    // URL override: ?tier=LOW|MEDIUM|HIGH (case-insensitive). Useful for debug.
     try {
       const params = new URLSearchParams(window.location.search);
       const raw = (params.get('tier') || '').toUpperCase();
@@ -290,14 +243,13 @@ export class SceneManager {
       // Non-browser env or malformed URL — ignore.
     }
 
-    // Capability hints
     const caps = this.renderer.capabilities;
     const maxTextureSize = caps?.maxTextureSize;
     const devicePixelRatio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     const deviceMemoryGB = (typeof navigator !== 'undefined' && navigator.deviceMemory) || undefined;
 
-    // Apple GPU detection via WEBGL_debug_renderer_info. Some browsers (Safari)
-    // expose this only on cross-origin-isolated contexts; treat absence as false.
+    // Apple GPU via WEBGL_debug_renderer_info; Safari may expose it only on
+    // cross-origin-isolated contexts, so absence = false.
     let isAppleGPU = false;
     try {
       const gl = this.renderer.getContext();
@@ -320,51 +272,34 @@ export class SceneManager {
   }
 
   /**
-   * Session I (plan D-G, step 4) — glass renders at PIXEL RATIO 1.0. On an
-   * iPad the devicePixelRatio-2 render target quadruples fragment work for
-   * detail the game never leans on (aviation-display UI, bloom-heavy scene);
-   * tier caps (HIGH/MEDIUM 1.5) still burn ~2.25× the pixels of 1.0. main.js
-   * calls this once at init when TouchControls.detectGlass() is true (the
-   * NARROW gate — a coarse PRIMARY pointer + touch points; the broad detect()
-   * stays the touch-affordance gate so a hybrid laptop on a mouse keeps its
-   * hi-DPI picture); the current
-   * tier's ratio re-applies immediately. Desktop never calls it —
-   * byte-identical. The `?pixelRatio=N` profiling override and the
-   * applyTierWithOverrides sweep path still WIN over the clamp (profiling
-   * must measure what it asked for).
-   * @param {boolean} on
+   * Glass renders at PIXEL RATIO 1.0: a DPR-2 target quadruples fragment work on an
+   * iPad, and tier caps (HIGH/MEDIUM 1.5) still burn ~2.25× the pixels of 1.0.
+   * main.js calls this once at init when TouchControls.detectGlass() is true (NARROW
+   * gate: coarse PRIMARY pointer + touch points, so a hybrid laptop on a mouse keeps
+   * hi-DPI); the current tier's ratio re-applies immediately. The `?pixelRatio=N`
+   * override and the applyTierWithOverrides sweep still WIN over the clamp (a profile
+   * measures what it asked for).
    */
   setGlassPixelRatioCap(on) {
     this._glassPR1 = !!on;
     if (this.tierConfig) this._applyRendererPixelRatio(this.tierConfig);
-    // Session I follow-up (review): a ratio change must REBUILD the composer
-    // chain NOW. The ctor sizes composer/bloom/SMAA/FXAA from the PRE-clamp
-    // ratio (main.js flips this setter right after construction), and an iPad
-    // may never fire a window resize — the live probe (DPR 2, tier cap 1.5)
-    // measured the composer render target stuck at 1.5× against the 1× canvas
-    // until the first resize: the whole post chain kept burning 2.25× the
-    // fragments the clamp was landed to save, then downscaled into the 1×
-    // canvas. resize() re-sizes composer + bloom + SMAA + FXAA + the net-mesh
-    // resolution from renderer.getPixelRatio() — the one heal path that
-    // already exists.
+    // A ratio change must REBUILD the composer chain NOW: the ctor sized composer/
+    // bloom/SMAA/FXAA from the PRE-clamp ratio and an iPad may never fire a window
+    // resize, leaving the post chain at 1.5× against the 1× canvas. resize() re-sizes
+    // all of them (and the net-mesh resolution) from renderer.getPixelRatio().
     if (this.composer) this.resize();
   }
 
-  /** @private The glass clamp: tier cap → min(cap, 1) on real touch devices. */
+  /** The glass clamp: tier cap → min(cap, 1) on real touch devices. */
   _pixelRatioCapFor(cap) {
     return this._glassPR1 ? Math.min(cap, 1) : cap;
   }
 
   /**
-   * @private Sweep config merge for applyTierWithOverrides: an explicit override
-   * wins raw (a profile measures exactly what it asked for — the `?pixelRatio=N`
-   * law), but an UN-overridden pixel ratio re-asserts the glass clamp. Session I
-   * follow-up (review, (m)): the sweep's baseline restore
-   * (`applyTierWithOverrides({})`) used the raw tier cap and silently dropped
-   * the clamp on glass until the next applyTier.
+   * Sweep config merge for applyTierWithOverrides: an explicit override wins raw (a
+   * profile measures what it asked for, the `?pixelRatio=N` law); an UN-overridden
+   * pixel ratio re-asserts the glass clamp (so `applyTierWithOverrides({})` restores it).
    * @param {object} base - the live tierConfig
-   * @param {object} overrides - per-key overrides (see applyTierWithOverrides)
-   * @returns {object} merged tier config
    */
   _mergeSweepTier(base, overrides) {
     const o = overrides || {};
@@ -377,69 +312,49 @@ export class SceneManager {
     };
   }
 
-  /**
-   * Apply pixel-ratio cap from the tier config.
-   * @private
-   * @param {object} tier
-   */
   _applyRendererPixelRatio(tier) {
     const devicePR = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     let cap = (tier && Number.isFinite(tier.pixelRatioCap)) ? tier.pixelRatioCap : 2;
-    // Session I: the glass clamp applies to every TIER cap (never above 1.0
-    // on real touch) …
+    // Glass clamp applies to every TIER cap; the `?pixelRatio=N` profiling override
+    // wins over tier AND glass.
     cap = this._pixelRatioCapFor(cap);
-    // … while the Sprint 3 `?pixelRatio=N` profiling override still forces
-    // the cap regardless of tier AND glass — a profile run must measure
-    // exactly what it asked for.
     if (profileFlags.pixelRatioOverride !== null) {
       cap = profileFlags.pixelRatioOverride;
     }
     const target = Math.min(devicePR, cap);
-    // Only touch the renderer when the ratio actually changes: setPixelRatio
-    // unconditionally re-runs setSize, which reassigns canvas.width/height —
-    // and ANY canvas size assignment (even same-value) resets the drawing
-    // buffer to black per the HTML spec. HIGH↔MEDIUM share cap 1.5, so tier
-    // swaps between them used to blank the canvas for a frame every time
-    // (black-square triage).
+    // Only touch the renderer when the ratio changes: setPixelRatio re-runs setSize,
+    // and ANY canvas size assignment (even same-value) resets the drawing buffer to
+    // black per the HTML spec (HIGH↔MEDIUM share cap 1.5).
     if (this.renderer.getPixelRatio() !== target) {
       this.renderer.setPixelRatio(target);
     }
   }
 
   /**
-   * Build single-composer pipeline driven by a quality-tier config:
-   *   RenderPass → [UnrealBloomPass] → [SMAAPass | FXAA ShaderPass]
-   *
-   * The bloom + SMAA passes are toggled by `tier.enableBloom` / `tier.enableSMAA`.
-   * Sprint 2 / PR D added an FXAA fallback: when `tier.useFXAAFallback === true`
-   * (MEDIUM tier) and SMAA is disabled, an FXAA `ShaderPass` runs after bloom.
-   * MSAA sample count is `tier.msaaSamples` (clamped to 0 on WebGL1).
-   *
-   * Idempotent: disposes any existing composer/passes before rebuilding so
-   * `applyTier()` can be called live without leaking GL resources.
-   *
-   * @private
-   * @param {object} tier - tier config (msaaSamples, enableBloom, enableSMAA, useFXAAFallback)
+   * Single-composer pipeline from a quality-tier config:
+   *   NearFieldRenderPass → [UnrealBloomPass] → OutputPass → [SMAAPass | FXAA ShaderPass]
+   * Bloom/SMAA toggle on `tier.enableBloom` / `tier.enableSMAA`; with
+   * `tier.useFXAAFallback` (MEDIUM) and SMAA off, FXAA runs instead. MSAA samples =
+   * `tier.msaaSamples` (0 on WebGL1).
+   * Idempotent: disposes the old composer/passes first, so applyTier() can run live.
+   * @param {object} tier - msaaSamples, enableBloom, enableSMAA, useFXAAFallback
    */
   _setupPostProcessing(tier) {
     const cfg = tier || Constants.PERF.QUALITY_TIERS[Constants.PERF.DEFAULT_QUALITY_TIER];
 
-    // Dispose any previous composer + passes (idempotency for applyTier()).
     this._disposePostProcessing();
 
     const w = window.innerWidth;
     const h = window.innerHeight;
     const pixelRatio = this.renderer.getPixelRatio();
-    // Physical buffer dims, floored exactly like WebGLRenderer.setSize floors
-    // the drawing buffer — every pass/target below sizes from these integers.
+    // Physical buffer dims, floored like WebGLRenderer.setSize; every pass/target sizes from these.
     const pw = Math.floor(w * pixelRatio);
     const ph = Math.floor(h * pixelRatio);
 
-    // Multisampled render target — eliminates temporal aliasing ("shimmer")
-    // on rotating debris. WebGL2 only; falls back to 0 on WebGL1.
+    // Multisampled target removes shimmer on rotating debris (WebGL2 only).
     const isWebGL2 = this.renderer.capabilities.isWebGL2;
     let wantedSamples = Number.isFinite(cfg.msaaSamples) ? cfg.msaaSamples : 4;
-    // Sprint 3 GPU profiling — `?msaa=N` overrides the tier's MSAA setting.
+    // `?msaa=N` overrides the tier's MSAA.
     if (profileFlags.msaaOverride !== null) {
       wantedSamples = profileFlags.msaaOverride;
     }
@@ -453,59 +368,39 @@ export class SceneManager {
       }
     );
     this.composer = new EffectComposer(this.renderer, customRT);
-    // DIAGNOSTIC SEMANTICS (black-rectangle triage, 2026-08-30): at LOW tier
-    // the chain is [NearFieldRenderPass→renderTarget2, OutputPass→screen], and
-    // EffectComposer's swap is a pure JS reference exchange — renderTarget1 is
-    // NEVER BOUND, so it lazily has no __webglTexture; with bloom disabled
-    // there is no renderTargetBright at all. A GPU-side probe reading target
-    // liveness must use dead-AFTER-live semantics (see BlackFrameProbe.js) or
-    // it will misread this structural state as texture necrosis — that false
-    // lead consumed a chunk of the original black-flicker hunt.
-    // Size discipline (black-square triage): the composer is constructed with a
-    // PHYSICAL-size custom RT, but its _pixelRatio initializes from the renderer
-    // (e.g. 1.5), so a later composer.setSize(cssW, cssH) would compute
-    // css × 1.5 — fractional (e.g. 1888.5×1477.5) and 0.5px LARGER than the
-    // renderer's floored drawing buffer. Pin the composer to ratio 1 and feed it
-    // floored PHYSICAL sizes everywhere (resize() below): integer targets that
-    // exactly match the drawing buffer. setPixelRatio(1) re-runs setSize with
-    // the constructed physical dims — a same-size no-op for the targets.
+    // GOTCHA: at LOW tier the chain is [NearFieldRenderPass→renderTarget2,
+    // OutputPass→screen] and EffectComposer's swap is a pure JS reference exchange, so
+    // renderTarget1 is NEVER BOUND (no __webglTexture); with bloom off there is no
+    // renderTargetBright. A GPU probe of target liveness must use dead-AFTER-live
+    // semantics (BlackFrameProbe.js) or it misreads this as texture necrosis.
+    // Size discipline: the composer gets a PHYSICAL-size custom RT but its _pixelRatio
+    // initializes from the renderer (e.g. 1.5), so a later setSize(cssW, cssH) would
+    // give fractional css × 1.5 sizes, 0.5px LARGER than the floored drawing buffer.
+    // Pin it to ratio 1 and feed floored PHYSICAL sizes everywhere (resize()).
     this.composer.setPixelRatio(1);
 
-    // 1. Render the full scene. NearFieldRenderPass draws the far scene with the
-    //    main camera, then (depth cleared) the near-field layer — the player ship
-    //    — with the tight-range near camera, into the SAME buffer in one pass, so
-    //    the downstream bloom/SMAA/output chain is unchanged. (z-layer fix.)
+    // 1. NearFieldRenderPass draws the far scene with the main camera, then (depth
+    //    cleared) the near-field layer (the player ship) with the tight-range near
+    //    camera, into the SAME buffer, so downstream passes are unchanged.
     const renderPass = new NearFieldRenderPass(this.scene, this.camera, this.nearCamera);
     this.composer.addPass(renderPass);
     this.renderPass = renderPass;
-    // Inspect background-dim (NearFieldRenderPass seam vignette) ease state.
+    // Inspect background-dim ease state (NearFieldRenderPass seam vignette).
     this._inspectDimTarget = 0;
     this._inspectDimLastMs = 0;
-    // Hand the pass the LIVE shared arrays (re-pointed on every applyTier()
-    // rebuild) so it can scale the ship + its follow lights into ×S space.
+    // LIVE shared arrays (re-pointed on every applyTier() rebuild).
     renderPass.nearFieldRoots = this._nearFieldRoots;
     renderPass.nearFieldLights = this._nearFieldLights;
     renderPass.nearFieldScale = NEAR_FIELD_SCALE;
 
-    // 2. Threshold bloom at QUARTER PHYSICAL resolution (gated by tier).
-    //
-    // Sprint 3 GPU profiling — Phase C.3 (2026-05-23): lowered from half-physical
-    // (/2) to quarter-physical (/4). Post-C.1+C.2 measurement (HIGH/IN-MISSION):
-    // bloom pass cost 1.74 ms (50% of the 3.44 ms baseline) at half-physical.
-    // Bloom is a low-frequency, threshold-gated effect (only the sun disc, a few
-    // engine sprites, and rare overbright pixels exceed the threshold) — its
-    // visible silhouette is fundamentally blurry, so quartering the mip-chain
-    // base resolution is visually indistinguishable at orbital altitudes but
-    // drops the Gaussian-blur fragment count by 4× across the entire 5-mip chain.
-    // Expected save: ~0.7–1.2 ms (the largest mip dominates so cost doesn't
-    // drop 4× linearly — but it's still the biggest remaining lever after C.2).
-    //
-    // Sprint 3 GPU profiling — `?disableBloom=1` forces this pass off entirely.
+    // 2. Threshold bloom at QUARTER PHYSICAL resolution (gated by tier). Bloom is a
+    // low-frequency, threshold-gated effect (sun disc, engine sprites, rare overbright
+    // pixels), so /4 vs /2 is visually indistinguishable at orbital altitudes; measured
+    // pass cost at /2 was 1.74 ms of a 3.44 ms baseline (HIGH, in mission).
+    // `?disableBloom=1` forces this pass off.
     if (cfg.enableBloom && !profileFlags.disableBloom) {
-      // P2.9: reuse cached Vector2 — UnrealBloomPass clones the input
-      // internally, so it's safe to mutate later for resize/tier swaps.
-      // Quarter of the FLOORED physical size, so construction and resize()
-      // derive from the same integer base.
+      // Reuses the cached Vector2 (UnrealBloomPass clones its input). Quarter of the
+      // FLOORED physical size, so construction and resize() share one integer base.
       this._bloomRes.set(
         Math.floor(pw / 4),
         Math.floor(ph / 4)
@@ -514,20 +409,14 @@ export class SceneManager {
         this._bloomRes,
         0.08,  // strength — subtle bloom for sun disc + engine glow sparkle
         0.4,   // radius
-        // threshold — P2 re-aim (2026-07-20): 4.0 → 2.5. Full HDR-source audit
-        // found NOTHING reaches 4.0 (max static emissive 0.6; fireEmissive 1.5;
-        // LED flash 2.0; ROSA 0.82; plumes/laser/sun sprite LDR ≤ 0.95;
-        // atmosphere Mie limb ≈ 2.7 luma; ocean glint ≈ 2.2–2.7) — the pass
-        // produced literally ZERO output while burning its full mip chain
-        // (~1.35 ms, GPU_PROFILING_REPORT §10.3). At 2.5 the two brightest real
-        // sources (sun-facing limb, peak glint sparkle) bloom subtly — the cost
-        // buys visuals again — while staying above the hull-glint range that
-        // motivated the raise from 1.5. The number itself lives in
-        // Constants.BLOOM_THRESHOLD because the star ceiling, the planet ladder
-        // and the bloom gate are all coupled to it. `?bloomThreshold=N` still
-        // overrides. NOTE the audit above predates the planet ladder: Venus now
-        // renders at 2.74 (bodyCatalog), so a NON-sun-driven source crosses the
-        // threshold — which is why the gate below is not sun-only.
+        // threshold: Constants.BLOOM_THRESHOLD (star ceiling, planet ladder and bloom
+        // gate are coupled to it); `?bloomThreshold=N` overrides. Audit: nothing reached
+        // the old 4.0 (pass output was ZERO at ~1.35 ms): max static emissive 0.6, fire 1.5,
+        // LED flash 2.0, ROSA 0.82 all sit below the threshold. Only the two brightest real
+        // sources bloom, the sun-facing limb (Mie ≈ 2.7 luma) and glint (≈ 2.2–2.7), and
+        // the threshold stays above the hull-glint range. Venus renders at 2.74
+        // (bodyCatalog), so a NON-sun-driven source crosses it, hence the gate below is
+        // not sun-only.
         (profileFlags.bloomThresholdOverride !== null)
           ? profileFlags.bloomThresholdOverride
           : Constants.BLOOM_THRESHOLD
@@ -538,23 +427,17 @@ export class SceneManager {
       this.bloomPass = null;
     }
 
-    // 3. Output stage — ACES tone map + sRGB encode of the composed HDR buffer.
-    // MUST come before any post-AA: OutputPass converts HDR→LDR sRGB, and FXAA's
-    // luma edge detection (and SMAA's) assume sRGB/LDR input, so AA runs on the
-    // tone-mapped result. This is also what finally activates the SunLight
-    // auto-exposure (`renderer.toneMappingExposure`, SunLight._updateAutoExposure)
-    // and rolls off the bright atmosphere limb / specular highlights that used to
-    // hard-clip at 1.0 (the washed-out look). One cheap fullscreen pass, all tiers.
+    // 3. ACES tone map + sRGB encode. MUST come before any post-AA: FXAA/SMAA edge
+    // detection assumes sRGB/LDR input. Also what activates SunLight auto-exposure
+    // (`renderer.toneMappingExposure`) and rolls off limb/specular highlights. All tiers.
     const outputPass = new OutputPass();
     this.composer.addPass(outputPass);
     this.outputPass = outputPass;
 
-    // P1 (2026-07-20): dither the final 8-bit quantization. The HDR chain is
-    // HalfFloat end-to-end and the atmosphere shell already self-dithers, but
-    // the OutputPass ACES→sRGB conversion re-quantizes the whole frame — dark
-    // ocean/night gradients could re-band. three's OutputShader has no
-    // dithering hook, so inject the core chunks (<common> first: it supplies
-    // rand(); tonemapping_pars self-guards its saturate #ifndef).
+    // Dither the final 8-bit quantization: the ACES→sRGB conversion re-quantizes the
+    // whole frame and dark ocean/night gradients could re-band. OutputShader has no
+    // dithering hook, so inject the core chunks (<common> first: it supplies rand();
+    // tonemapping_pars self-guards its saturate #ifndef).
     outputPass.material.fragmentShader = outputPass.material.fragmentShader
       .replace('#include <tonemapping_pars_fragment>',
         '#include <common>\n\t\t#include <dithering_pars_fragment>\n\t\t#include <tonemapping_pars_fragment>')
@@ -562,20 +445,16 @@ export class SceneManager {
     outputPass.material.defines = outputPass.material.defines || {};
     outputPass.material.defines.DITHERING = '';
     outputPass.material.needsUpdate = true;
-    // Guard against silent no-ops: if a future three upgrade reshapes
-    // OutputShader, the string replaces above fail QUIETLY (dithering() gets
-    // defined but never called — no compile error, just no dithering).
+    // If a three upgrade reshapes OutputShader the replaces above fail QUIETLY
+    // (dithering() defined but never called).
     if (!outputPass.material.fragmentShader.includes('dithering_fragment')) {
       console.warn('[SceneManager] OutputPass dither injection failed — OutputShader changed shape (three upgrade?)');
     }
-    // ...but the construction-time define alone is NOT enough: OutputPass.render()
-    // rebuilds material.defines from scratch (`defines = {}`) whenever
-    // renderer.outputColorSpace/toneMapping differ from its cached values — which
-    // is ALWAYS true on the first frame (both cached as null) and again on any
-    // later tone-map/color-space change. That wipe silently drops DITHERING, and
-    // the text guard above can't detect it (the #include directive stays in the
-    // source string). Re-assert the define AFTER three's rebuild so the feature
-    // actually engages — one extra recompile the frame after a wipe, stable after.
+    // The construction-time define alone is NOT enough: OutputPass.render() rebuilds
+    // material.defines from `{}` whenever outputColorSpace/toneMapping differ from its
+    // cached values (ALWAYS on the first frame, again on any later change), silently
+    // dropping DITHERING; the text guard can't see it. Re-assert AFTER three's rebuild
+    // (one extra recompile the frame after a wipe).
     const _origOutputRender = outputPass.render.bind(outputPass);
     outputPass.render = (...args) => {
       _origOutputRender(...args);
@@ -585,20 +464,17 @@ export class SceneManager {
       }
     };
 
-    // 4. Anti-aliasing: SMAA (HIGH) → FXAA (MEDIUM) → none (LOW + MSAA only).
-    // Sprint 3 GPU profiling — `?disableSMAA=1` forces *both* SMAA and FXAA off
-    // (the flag is really "disable post-AA"; tier-MSAA still runs in customRT).
+    // 4. Anti-aliasing: SMAA (HIGH) → FXAA (MEDIUM) → none (LOW, MSAA only).
+    // `?disableSMAA=1` forces *both* SMAA and FXAA off (tier-MSAA still runs in customRT).
     if (cfg.enableSMAA && !profileFlags.disableSMAA) {
       const smaaPass = new SMAAPass(pw, ph);
       this.composer.addPass(smaaPass);
       this.smaaPass = smaaPass;
       this.fxaaPass = null;
     } else if (cfg.useFXAAFallback && !profileFlags.disableSMAA) {
-      // Sprint 2 / PR D — FXAA as a single ShaderPass. Cheap (~0.3 ms on Iris Xe),
-      // softer than SMAA, but visibly better than no post-AA on iGPU class GPUs.
+      // FXAA: cheap (~0.3 ms on Iris Xe), softer than SMAA, better than nothing on iGPUs.
       const fxaaPass = new ShaderPass(FXAAShader);
-      // FXAAShader expects `resolution` in *inverse pixel* units. We size the
-      // pass to the physical buffer (integer, drawing-buffer-matched).
+      // `resolution` is in *inverse pixel* units of the physical (integer) buffer.
       fxaaPass.material.uniforms['resolution'].value.set(1 / pw, 1 / ph);
       this.composer.addPass(fxaaPass);
       this.fxaaPass = fxaaPass;
@@ -608,27 +484,18 @@ export class SceneManager {
       this.fxaaPass = null;
     }
 
-    // Sprint 3 GPU profiling — when `?profilePasses=1`, monkey-patch each pass's
-    // render() to wrap it in a named timer-query channel on the shared
-    // [`GpuProbe`](js/systems/GpuProbe.js:1). Idempotent: re-wraps on every
-    // [`_setupPostProcessing`](js/scene/SceneManager.js:178) rebuild.
+    // `?profilePasses=1`: wrap each pass's render() in a named timer-query channel
+    // (re-wraps on every rebuild).
     if (profileFlags.profilePasses) {
       this._installPassProfilers();
     }
   }
 
   /**
-   * Monkey-patch every composer pass so `pass.render()` is wrapped with
-   * `gpuProbe.beginChannel(name) / endChannel(name)`. Channel names are
-   * derived from the pass constructor (`RenderPass` → `'render'`,
-   * `UnrealBloomPass` → `'bloom'`, `SMAAPass` → `'smaa'`, `ShaderPass` (used
-   * as FXAA) → `'fxaa'`, anything else → `'pass<N>'`).
-   *
-   * No-op when the [`GpuProbe`](js/systems/GpuProbe.js:1) is unavailable or
-   * when `?profilePasses=1` is not set. Sequential by design (WebGL2 forbids
-   * nested TIME_ELAPSED queries).
-   *
-   * @private
+   * Wrap every composer pass's `render()` in `gpuProbe.beginChannel/endChannel`.
+   * Channel names come from the pass constructor (render, bloom, smaa, fxaa, else
+   * `pass<N>`). No-op without a supported GpuProbe. Sequential by design (WebGL2
+   * forbids nested TIME_ELAPSED queries).
    */
   _installPassProfilers() {
     if (!this.gpuProbe || !this.gpuProbe.isSupported) return;
@@ -642,10 +509,10 @@ export class SceneManager {
       let channelName;
       switch (ctorName) {
         case 'RenderPass':       channelName = 'render'; break;
-        case 'NearFieldRenderPass': channelName = 'render'; break; // z-layer two-range beauty pass
+        case 'NearFieldRenderPass': channelName = 'render'; break;
         case 'UnrealBloomPass':  channelName = 'bloom'; break;
         case 'SMAAPass':         channelName = 'smaa'; break;
-        case 'ShaderPass':       channelName = 'fxaa'; break; // we only use ShaderPass for FXAA
+        case 'ShaderPass':       channelName = 'fxaa'; break; // ShaderPass is only used for FXAA
         default:                 channelName = `pass${fallbackIdx++}`; break;
       }
       const origRender = pass.render.bind(pass);
@@ -660,7 +527,6 @@ export class SceneManager {
       pass.__profilerWrapped = true;
       pass.__profilerChannel = channelName;
     }
-    // Echo once so the user can confirm which channels were installed.
     try {
       const labels = this.composer.passes
         .map((p) => p?.__profilerChannel || '?')
@@ -669,16 +535,10 @@ export class SceneManager {
     } catch (_e) { /* noop */ }
   }
 
-  /**
-   * Tear down composer + passes so a new pipeline can be built in place.
-   * @private
-   */
   _disposePostProcessing() {
     if (this.composer) {
-      // Dispose render targets owned by the composer
       try { this.composer.renderTarget1?.dispose?.(); } catch (_e) {}
       try { this.composer.renderTarget2?.dispose?.(); } catch (_e) {}
-      // Dispose each pass that supports it
       try {
         for (const pass of (this.composer.passes || [])) {
           if (pass && typeof pass.dispose === 'function') pass.dispose();
@@ -694,32 +554,21 @@ export class SceneManager {
   }
 
   /**
-   * Register the Earth instance so [`applyTier()`](js/scene/SceneManager.js:275)
-   * can toggle its LOW_DETAIL fragment-shader branch (Sprint 2 / PR C).
-   * Optional — if not set, Earth detail simply stays at whatever was compiled.
-   *
-   * @param {object} earth — Earth instance exposing `setLowDetail(boolean)`.
+   * Register Earth so applyTier() can toggle its LOW_DETAIL fragment-shader branch.
+   * @param {object} earth — exposes `setLowDetail(boolean)`
    */
   setEarth(earth) {
     this._earth = earth || null;
-    // Apply the current tier's setting immediately so the registration order
-    // (Earth created before SceneManager.applyTier) is harmless.
+    // Applied immediately so registration order is harmless.
     if (this._earth && typeof this._earth.setLowDetail === 'function') {
       this._earth.setLowDetail(this.currentTier === 'LOW');
     }
   }
 
   /**
-   * PR 4 / P1.5: Switch quality tier live. Rebuilds the post-processing
-   * chain with the new tier config and updates the renderer pixel-ratio cap.
-   *
-   * Sprint 2 / PR C: Also toggles the Earth fragment-shader's LOW_DETAIL
-   * branch (skips the 7-octave noise stack at LOW tier — saves 2–4 ms/frame
-   * on iGPUs).
-   *
-   * Re-uses `_setupPostProcessing(tierCfg)` which is idempotent (disposes the
-   * existing composer first). Safe to call from `runtimeAdapt` paths.
-   *
+   * Switch quality tier live: rebuilds post-processing, updates the pixel-ratio cap,
+   * and toggles Earth's LOW_DETAIL branch (skips the 7-octave noise stack at LOW,
+   * 2–4 ms/frame on iGPUs). Safe from `runtimeAdapt` paths.
    * @param {'HIGH'|'MEDIUM'|'LOW'} tierName
    */
   applyTier(tierName) {
@@ -730,39 +579,29 @@ export class SceneManager {
     }
     this.currentTier = tierName;
     this.tierConfig = cfg;
-    // Pixel-ratio cap: _applyRendererPixelRatio only touches the renderer when
-    // the ratio actually changes, and three's setPixelRatio internally re-runs
-    // setSize — so no explicit renderer.setSize is needed here at all. Any
-    // needless setSize reassigns canvas.width, which blanks the drawing buffer
-    // (guaranteed one black frame per tier swap — black-square triage).
-    // Window-size changes are resize()'s job, not applyTier's.
+    // No explicit renderer.setSize: setPixelRatio re-runs it when the ratio changes, and
+    // any needless setSize reassigns canvas.width and blanks the drawing buffer (one
+    // black frame per tier swap). Window-size changes are resize()'s job.
     this._applyRendererPixelRatio(cfg);
     this._setupPostProcessing(cfg);
-    // Sprint 2 / PR C — Earth surface shader variant.
     if (this._earth && typeof this._earth.setLowDetail === 'function') {
       this._earth.setLowDetail(tierName === 'LOW');
     }
-    // Zoom Ladder (S2, T1): the rebuilt NearFieldRenderPass reset nearFieldEnabled
-    // to true — re-assert the engaged floor's render block. No-op when disengaged.
+    // The rebuilt NearFieldRenderPass reset nearFieldEnabled to true; re-assert the ladder block.
     this._reassertLadderFidelity();
   }
 
   /**
-   * Zoom Ladder per-floor render block setter (S2, T1). LadderController calls
-   * this on floor arrival with the FloorContract fidelity + clip planes, or with
-   * `null` on disengage — which RESTORES the shipped render block (near-field on,
-   * camera.near/far back to Constants.CAMERA_NEAR/FAR) so a flag-on session that
-   * reached F4/F5 doesn't leave those at ladder values, and keeps applyTier()
-   * byte-identical to the shipped path afterwards.
+   * Zoom Ladder per-floor render block setter. LadderController calls it on floor
+   * arrival with the FloorContract fidelity + clip planes, or with `null` on
+   * disengage, which RESTORES the shipped block (near-field on, camera.near/far back
+   * to Constants.CAMERA_NEAR/FAR).
    * @param {{nearField:boolean, near:?number, far:?number, debrisMode:?string, floor:?number}|null} fid
    */
   setLadderFloorFidelity(fid) {
     if (!fid) {
-      // Disengage: restore the SHIPPED render block so a flag-on session that
-      // reached F4/F5 (far 2000, near-field OFF) doesn't leave the clip planes /
-      // near-field pass at ladder values until the next applyTier() rebuild.
-      // Guarded on a prior engaged request, so with the flag off (never engaged)
-      // this is never called and applyTier() stays byte-identical.
+      // Disengage: restore the SHIPPED block (F4/F5 leave far 2000, near-field OFF).
+      // Guarded on a prior engaged request.
       if (this._ladderFidelity) {
         if (this.renderPass) this.renderPass.nearFieldEnabled = true;
         if (this.camera) {
@@ -770,40 +609,34 @@ export class SceneManager {
           this.camera.far = Constants.CAMERA_FAR;
           this.camera.updateProjectionMatrix();
         }
-        // Restore the full debris meshes + world ship mesh the ship-is-icon
-        // floors hid (F4/F5). Guarded on a prior engaged request, so flag-off
-        // (never engaged) never runs this and applyTier() stays byte-identical.
+        // Restore the debris meshes + world ship mesh the ship-is-icon floors hid.
         if (this._ladderDebrisField && this._ladderDebrisField.setLadderDebrisMode) {
           this._ladderDebrisField.setLadderDebrisMode(null);
         }
         if (this._ladderShip) this._ladderShip.visible = true;
-        // Restore the shipped world-fixed star shell (Starfield.setFollowCamera
-        // resets the group to the Earth-centered origin pose on the way off).
+        // Back to the world-fixed star shell (setFollowCamera(false) resets the group
+        // to the Earth-centered origin pose).
         if (this._ladderStarfield?.setFollowCamera) this._ladderStarfield.setFollowCamera(false);
       }
       this._ladderFidelity = null;
       return;
     }
     this._ladderFidelity = fid;
-    // Earth-anchored floors (F4/F5 since the Session H renumber): a world-fixed
-    // 400 u shell needs far >= D_max + R, which NAVCOM breaks (BLACK-SKY);
-    // camera-follow puts every star at exactly R = 400.
+    // Earth-anchored floors (F4/F5): a world-fixed 400 u shell needs far >= D_max + R,
+    // which NAVCOM breaks (BLACK-SKY); camera-follow puts every star at exactly R = 400.
     if (this._ladderStarfield?.setFollowCamera) this._ladderStarfield.setFollowCamera(fid.floor >= 4);
     this._reassertLadderFidelity();
   }
 
   /**
-   * Re-assert the engaged ladder floor's render block over whatever the last
-   * post-processing rebuild / shipped defaults left in place (T1). Guarded: a
-   * null request (flag off / disengaged) does nothing, keeping applyTier()
-   * byte-identical.
-   * @private
+   * Re-assert the engaged floor's render block over whatever the last rebuild left.
+   * No-op for a null request (flag off / disengaged).
    */
   _reassertLadderFidelity() {
     const f = this._ladderFidelity;
     if (!f) return;
     if (this.renderPass) {
-      // `?nf=1` (black-flicker H1 discriminator) overrides the contract's OFF.
+      // `?nf=1` overrides the contract's OFF.
       this.renderPass.nearFieldEnabled = _nfForceOn ? true : f.nearField;
       if (_nfForceOn && !f.nearField && !this._nfForceLogged) {
         this._nfForceLogged = true;
@@ -814,49 +647,36 @@ export class SceneManager {
       let changed = false;
       if (f.near != null && this.camera.near !== f.near) { this.camera.near = f.near; changed = true; }
       if (f.far != null && this.camera.far !== f.far) { this.camera.far = f.far; changed = true; }
-      // Starfield: R < far is NOT sufficient for the world-fixed shell — a star
-      // directly behind Earth sits at camera distance D + R (need far >= D_max + R),
-      // which F4 (NAVCOM, D <= 255, far 500) breaks. Earth-anchored floors run the shell
-      // camera-attached instead (Starfield.setFollowCamera, wired from
-      // setLadderFloorFidelity), so every star sits at exactly R = 400 (T1).
+      // Starfield: R < far is NOT sufficient for the world-fixed shell (a star behind
+      // Earth sits at D + R); F4 (NAVCOM, D <= 255, far 500) breaks it, so
+      // Earth-anchored floors run the shell camera-attached (setLadderFloorFidelity).
       if (changed) this.camera.updateProjectionMatrix();
     }
-    // Zoom Ladder F4/F5 costume 'ship-to-icon' (T1): the full debris meshes are
-    // replaced by cluster icons and the world ship mesh by a chevron. Hang the
-    // hide off the SAME re-assert as nearFieldEnabled so it survives applyTier()
-    // rebuilds. Guarded on the registered refs (null on flag-off/headless → no-op).
+    // 'ship-to-icon' costume: hidden from the SAME re-assert as nearFieldEnabled so it
+    // survives applyTier() rebuilds. Guarded on the registered refs (null → no-op).
     if (this._ladderDebrisField && this._ladderDebrisField.setLadderDebrisMode) {
       this._ladderDebrisField.setLadderDebrisMode(f.debrisMode);
     }
     if (this._ladderShip) {
-      // Ship-is-icon predicate — keep the sibling gates in lockstep (M3 review):
-      // this ship hide, DebrisField.setLadderDebrisMode's debris hide, and
-      // LadderController._applyFloorContent's floor arms. The world ship mesh
-      // vanishes where a costume replaces it: F4 'clusters' (NAVCOM chevron)
-      // and — now that the F5 SDA chart costume has landed (Wave-2 wire) —
-      // F5 'massBands', whose full-screen chart owns the frame.
+      // Ship-is-icon predicate: keep in lockstep with DebrisField.setLadderDebrisMode's
+      // debris hide and LadderController._applyFloorContent's floor arms. The ship
+      // vanishes where a costume replaces it: F4 'clusters' (NAVCOM chevron) and F5
+      // 'massBands' (full-screen chart).
       const shipIsIcon = (f.debrisMode === 'clusters' || f.debrisMode === 'massBands');
       this._ladderShip.visible = !shipIsIcon;
     }
   }
 
   /**
-   * T1 clip-plane OWNERSHIP (2026-08-30): while a ladder floor contract is
-   * engaged, re-assert the contract's near/far EVERY FRAME, not just on
-   * engage/applyTier. Several camera subsystems restore clip planes
-   * unconditionally on their exit paths with zero ladder awareness — inspect
-   * exit, launch/net ceremony teardown (CameraSystem.js:1672/1735/1785/2763/
-   * 2820/3221) and the dynamic near-plane — which produced the field-captured
-   * `near=0.5 far=500` "matches NO contract" pair, and a `far` stomp on F5
-   * (contract 2000) would clip the 1020 u chart framing outright. Patching
-   * every present and future writer is whack-a-mole; the render loop enforcing
-   * ownership is self-healing by construction. Cost: two float compares per
-   * frame; projection rebuild + ONE rate-limited warn only when a stomp
-   * actually happened (the warn is the tripwire that names the next rogue
-   * writer's timing). No-op when disengaged (flag-off stays byte-identical).
-   * While engaged, LadderController owns all legitimate near/far transitions
-   * (contract hops through this setter), so there is nothing to fight.
-   * @private
+   * Clip-plane OWNERSHIP: while a ladder floor contract is engaged, re-assert its
+   * near/far EVERY FRAME. Several camera paths restore clip planes unconditionally
+   * with no ladder awareness (inspect exit, launch/net ceremony teardown in
+   * CameraSystem, the dynamic near-plane), which produced a `near=0.5 far=500` pair
+   * matching NO contract; a `far` stomp on F5 (2000) would clip the 1020 u chart
+   * framing. Enforcing in the render loop beats patching every writer. Cost: two
+   * float compares per frame; projection rebuild + ONE rate-limited warn (the
+   * tripwire naming the next rogue writer) only on a stomp. While engaged,
+   * LadderController owns all legitimate transitions (through the setter above).
    * @returns {boolean} true when a stomp was repaired this frame
    */
   _enforceLadderClip() {
@@ -880,12 +700,9 @@ export class SceneManager {
   }
 
   /**
-   * Zoom Ladder: register the render-block content the per-floor `debrisMode`
-   * hides on the ship-is-icon floors (F4/F5) — the full debris meshes and the
-   * world ship mesh. Called once from main.js after both exist; refs are optional
-   * so headless/tests need not provide them. Storing refs mutates nothing, and
-   * the hide is applied only from _reassertLadderFidelity (guarded on an engaged
-   * fidelity), so this call is byte-identical while the ladder is disengaged.
+   * Register the content the per-floor `debrisMode` hides on the ship-is-icon floors
+   * (F4/F5): debris meshes and the world ship mesh. Called once from main.js; refs are
+   * optional. The hide is applied only from _reassertLadderFidelity.
    * @param {{debrisField?:object, ship?:object, starfield?:object}} [refs]
    */
   setLadderContentRefs({ debrisField, ship, starfield } = {}) {
@@ -895,19 +712,11 @@ export class SceneManager {
   }
 
   /**
-   * Sprint 3 GPU profiling: rebuild the composer + renderer state with the
-   * **current** tier as a base, then layer per-key overrides on top. Used by
-   * [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1) to A/B-isolate
-   * each suspect (bloom, SMAA, MSAA, pixel ratio, Earth noise, clouds,
-   * atmosphere) in a single browser session — no reloads required.
-   *
-   * Unlike [`applyTier()`](js/scene/SceneManager.js:385), this does **not**
-   * change `currentTier` / `tierConfig`; reverting is just calling this
-   * again with `{}` (empty overrides). Bypasses the profileFlags-based
-   * checks in [`_setupPostProcessing`](js/scene/SceneManager.js:178) so the
-   * sweep doesn't fight URL flags — those flags should not be set in the
-   * same session as `?autoProfile=1` (the sweep prints a warning if they
-   * are at construction time).
+   * Rebuild composer + renderer state from the **current** tier, with per-key
+   * overrides layered on top; AutoProfileSweep uses it to A/B each suspect in one
+   * session. Unlike applyTier() it does **not** change `currentTier` / `tierConfig`;
+   * revert by calling with `{}`. URL profile flags should not be set alongside
+   * `?autoProfile=1` (the sweep warns at construction).
    *
    * @param {object} overrides
    * @param {number}  [overrides.msaaSamples]
@@ -915,33 +724,28 @@ export class SceneManager {
    * @param {boolean} [overrides.enableSMAA]
    * @param {number}  [overrides.pixelRatioCap]
    * @param {boolean} [overrides.earthLowDetail]   — force LOW_DETAIL Earth FS
-   * @param {boolean} [overrides.cloudsVisible]    — toggle clouds visibility
-   * @param {boolean} [overrides.atmosphereVisible]— toggle atmosphere visibility
+   * @param {boolean} [overrides.cloudsVisible]
+   * @param {boolean} [overrides.atmosphereVisible]
    * @param {boolean} [overrides.profilePasses]    — install per-pass timer-query channels
    */
   applyTierWithOverrides(overrides) {
     const base = this.tierConfig;
     const merged = this._mergeSweepTier(base, overrides);
 
-    // Pixel ratio (sweep paths bypass `_applyRendererPixelRatio` to ignore
-    // any `?pixelRatio=N` URL flag — sweep configs win).
+    // Bypasses `_applyRendererPixelRatio` so sweep configs win over `?pixelRatio=N`.
     const devicePR = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     this.renderer.setPixelRatio(Math.min(devicePR, merged.pixelRatioCap));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
 
-    // Rebuild composer with merged cfg. `_setupPostProcessing` reads
-    // `profileFlags.disableBloom` etc. but they are expected to be off in a
-    // sweep session — see `?autoProfile=1` wiring in [`main.js`](js/main.js:1).
+    // `_setupPostProcessing` reads `profileFlags.disableBloom` etc.; expected off in a sweep.
     this._setupPostProcessing(merged);
 
-    // Earth-side toggles.
     if (this._earth) {
       if (typeof this._earth.setLowDetail === 'function') {
         const want = overrides.earthLowDetail !== undefined
           ? !!overrides.earthLowDetail
           : (this.currentTier === 'LOW');
-        // Bypass the profileFlags.disableEarthNoise guard by calling the
-        // material defines directly — sweep should override URL flags.
+        // Sets the material defines directly to bypass the profileFlags.disableEarthNoise guard.
         if (this._earth.surfaceMaterial) {
           const defs = this._earth.surfaceMaterial.defines || {};
           if (want) defs.LOW_DETAIL = 1; else delete defs.LOW_DETAIL;
@@ -958,27 +762,17 @@ export class SceneManager {
       }
     }
 
-    // Per-pass profiling install — sweep enables this only for the
-    // dedicated `profilePasses` config so it doesn't affect other rows.
-    // The `_runtimeProfilePasses` latch flips both directions on every call
-    // so that the sweep's NEXT config (which has profilePasses=undefined)
-    // automatically falls back to per-frame timing.
+    // The latch flips both ways on every call, so the sweep's NEXT config
+    // (profilePasses undefined) falls back to per-frame timing.
     this._runtimeProfilePasses = overrides.profilePasses === true;
     if (overrides.profilePasses) {
       this._installPassProfilers();
     }
-    // Zoom Ladder (S2, T1): re-assert the engaged floor's render block after the
-    // composer rebuild reset the near-field pass. No-op when disengaged.
     this._reassertLadderFidelity();
   }
 
-  /**
-   * Log all critical rendering pipeline values for debugging.
-   * @private
-   */
   _logDiagnostics() {
-    // PR 5 / P2.10: gated behind Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS
-    // (flipped on via ?debug=1 in main.js). Off by default — cheap no-op.
+    // Gated on Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS (`?debug=1` in main.js).
     if (!Constants.DEBUG || !Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS) return;
 
     const canvas = this._canvas;
@@ -1012,8 +806,7 @@ export class SceneManager {
       'precision': caps.precision,
     });
 
-    // Warn if pixel ratio differs from devicePR for reasons OTHER than the tier cap
-    // (tier can intentionally cap below devicePR — that's not a bug).
+    // The tier may intentionally cap below devicePR; only other mismatches warn.
     const expectedPR = Math.min(window.devicePixelRatio, this.tierConfig?.pixelRatioCap ?? 2);
     if (Math.abs(pr - expectedPR) > 0.001) {
       console.warn('[SceneManager] ⚠️ Pixel ratio mismatch: expected', expectedPR, 'but renderer using', pr);
@@ -1029,32 +822,21 @@ export class SceneManager {
     }
   }
 
-  /**
-   * Set up ambient and directional lights.
-   * The main sun DirectionalLight is managed by SunLight.js;
-   * here we add a very dim ambient fill.
-   * @private
-   */
+  /** The sun DirectionalLight is managed by SunLight.js; this adds ambient + IBL fill. */
   _setupLights() {
-    // Cool, very dim ambient floor. Lifted 0.02 → 0.06 to partly restore the
-    // night-side / eclipse readability that previously leaned on the camera
-    // fill light's accidental ~35× flood (see CameraSystem fill-light fix).
-    // Kept low so the sunlit side still reads with strong directional contrast.
+    // Cool, very dim ambient floor (night-side / eclipse readability); kept low so the
+    // sunlit side keeps strong directional contrast.
     const ambient = new THREE.AmbientLight(0x112244, 0.06);
     this.scene.add(ambient);
     this.ambientLight = ambient;
 
-    // Image-based ambient fill (PMREM of a neutral studio room). Gives the
-    // metallic Mother/daughter hulls (MeshStandardMaterial, metalness ~0.7, no
-    // per-material envMap) a soft omnidirectional specular + diffuse response so
-    // faces the orbit-driven sun isn't hitting read as lit metal instead of a
-    // flat black silhouette against the bright Earth limb. This is the same IBL
-    // that makes the menu hero ship read well.
-    //
-    // EARTH-SAFE: Earth surface, clouds and atmosphere are custom ShaderMaterials
-    // (Earth.js), which ignore scene.environment entirely — so the day/night
-    // terminator and limb scattering are untouched. Only PBR materials (ship +
-    // interactive debris) pick up the fill. Kept modest so deep space stays dark.
+    // Image-based ambient fill (PMREM of a neutral studio room): gives the metallic
+    // hulls (MeshStandardMaterial, metalness ~0.7, no per-material envMap) a soft
+    // omnidirectional response so faces the sun isn't hitting read as lit metal, not a
+    // black silhouette against the Earth limb. Same IBL as the menu hero ship.
+    // EARTH-SAFE: Earth surface/clouds/atmosphere are custom ShaderMaterials (Earth.js)
+    // that ignore scene.environment, so the terminator and limb scattering are untouched.
+    // Only PBR materials (ship + interactive debris) pick it up. Kept modest.
     try {
       const pmrem = new THREE.PMREMGenerator(this.renderer);
       const roomEnv = new RoomEnvironment();
@@ -1062,8 +844,7 @@ export class SceneManager {
       this.scene.environment = this._envRT.texture;
       this.scene.environmentIntensity = 0.55;
       pmrem.dispose();
-      // Free the bake scene's geometries/materials — the PMREM texture is the
-      // only artifact we keep (in _envRT).
+      // Frees the bake scene; only the PMREM texture (_envRT) is kept.
       roomEnv.dispose?.();
     } catch (e) {
       console.warn('[SceneManager] environment IBL setup failed:', e);
@@ -1071,78 +852,50 @@ export class SceneManager {
     }
   }
 
-  /**
-   * Render one frame via EffectComposer pipeline.
-   * PR 6 / P3.11: Wraps composer.render() with GPU probe begin/end
-   * when probe is enabled and supported.
-   */
+  /** Render one frame via the composer, wrapped in the GPU probe when supported. */
   render() {
-    // T1 clip ownership — repair any off-contract near/far stomp BEFORE this
-    // frame projects anything (see _enforceLadderClip; no-op when disengaged).
+    // Repair any off-contract near/far stomp BEFORE this frame projects anything.
     this._enforceLadderClip();
-    // Sprint 3 GPU profiling: when per-pass profilers are installed they wrap
-    // each pass with their own TIME_ELAPSED query. WebGL2 forbids nesting, so
-    // we MUST skip the per-frame begin/end while the channel API is in use.
-    // The sum of per-pass channel medians then approximates the frame total.
-    //
-    // Both the boot-time URL flag (`?profilePasses=1`) and the runtime latch
-    // set by [`applyTierWithOverrides`](js/scene/SceneManager.js:1) (used by
-    // [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1)'s `profilePasses`
-    // config row) suppress the per-frame timer.
+    // Per-pass profilers wrap each pass in their own TIME_ELAPSED query and WebGL2
+    // forbids nesting, so the per-frame begin/end MUST be skipped while they are in
+    // use (`?profilePasses=1` or the runtime latch from applyTierWithOverrides).
     const passProfiling = profileFlags.profilePasses || this._runtimeProfilePasses;
     const useFrameQuery =
       this.gpuProbeEnabled && this.gpuProbe && !passProfiling;
     if (useFrameQuery) {
       this.gpuProbe.beginFrame();
     }
-    this._updateNearCamera();   // z-layer fix: sync near camera + tight depth range
-    this._updateInspectDim();   // ease the inspect background-dim vignette
+    this._updateNearCamera();
+    this._updateInspectDim();
     this.composer.render();
     if (useFrameQuery) {
       this.gpuProbe.endFrame();
     }
   }
 
-  /**
-   * No-op — retained for API compatibility with callers (e.g. SunLight.js).
-   * Threshold bloom replaces selective layer-based bloom.
-   * @param {THREE.Object3D} _object3D
-   */
+  /** No-op, kept for callers (e.g. SunLight.js); threshold bloom replaced layer-based bloom. */
   enableBloom(_object3D) {
-    // No-op: bloom is now threshold-based (emissive > 0.85 blooms automatically)
   }
 
   /**
-   * P2 (2026-07-20): enable/disable the bloom pass for this frame. Called from
-   * the game loop with SunLight.isBloomSourceVisible() — when no source above
-   * Constants.BLOOM_THRESHOLD is on screen, the whole UnrealBloom mip chain
-   * (~1.35 ms measured) is skipped via Pass.enabled.
-   *
-   * The gate input is deliberately NOT isSunVisible(). Sun-driven sources (Mie
-   * limb, ocean glint) were the only threshold-crossers until the planet ladder
-   * landed; Venus now renders at 2.74 with sun-independent visibility, so a
-   * sun-only gate disabled bloom with a blooming planet in frame.
-   *
-   * No-op when the tier has no bloom pass. Safe across applyTier() rebuilds
-   * (the new pass defaults to enabled=true and is re-gated next frame).
-   * @param {boolean} enabled
+   * Enable/disable the bloom pass for this frame; the game loop passes
+   * SunLight.isBloomSourceVisible(), so with no source above Constants.BLOOM_THRESHOLD
+   * on screen the whole mip chain (~1.35 ms) is skipped via Pass.enabled.
+   * The gate is deliberately NOT isSunVisible(): Venus renders at 2.74 with
+   * sun-independent visibility, and a sun-only gate disabled bloom with it in frame.
+   * No-op without a bloom pass; safe across applyTier() rebuilds (new pass defaults
+   * enabled, re-gated next frame).
    */
   setBloomEnabled(enabled) {
     if (this.bloomPass) this.bloomPass.enabled = enabled !== false;
   }
 
-  /**
-   * Push the renderer's drawing-buffer size (CSS px × pixelRatio) to NetMeshKit
-   * so its fat-line web threads render at the intended screen-space width.
-   */
+  /** Push the drawing-buffer size (CSS px × pixelRatio) to NetMeshKit for fat-line thread width. */
   _syncNetMeshResolution() {
     const pr = this.renderer.getPixelRatio();
     NetMeshKit.setResolution(window.innerWidth * pr, window.innerHeight * pr);
   }
 
-  /**
-   * Handle browser resize — updates composer and all passes.
-   */
   resize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -1151,8 +904,7 @@ export class SceneManager {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
 
-    // Keep the near-field camera's aspect in lockstep (pose/near/far are synced
-    // per frame in _updateNearCamera, but aspect must be right for the resize).
+    // pose/near/far sync per frame in _updateNearCamera; aspect is set here.
     if (this.nearCamera) {
       this.nearCamera.aspect = w / h;
       this.nearCamera.updateProjectionMatrix();
@@ -1160,29 +912,21 @@ export class SceneManager {
 
     this.renderer.setSize(w, h);
 
-    // Keep the fat-line net web's LineMaterial resolution in sync with the
-    // drawing buffer so threads keep their intended screen-space width.
     this._syncNetMeshResolution();
 
-    // Physical buffer size, floored exactly like WebGLRenderer.setSize floors
-    // the drawing buffer. The composer's pixel ratio is pinned to 1 (see
-    // _setupPostProcessing), so passing physical dims keeps every pass target
-    // integer-sized and byte-matched to the canvas (was: CSS dims × 1.5 →
-    // fractional 1888.5×1477.5 targets after any window resize).
+    // Physical buffer size, floored like WebGLRenderer.setSize. The composer's pixel
+    // ratio is pinned to 1 (see _setupPostProcessing), so physical dims keep every
+    // target integer-sized and matched to the canvas.
     const pw = Math.floor(w * pixelRatio);
     const ph = Math.floor(h * pixelRatio);
     this.composer.setSize(pw, ph);
 
-    // Update SMAA pass resolution
     if (this.smaaPass) {
       this.smaaPass.setSize(pw, ph);
     }
 
-    // P2.9: update bloom pass resolution by mutating its existing Vector2
-    // and cached resolution — no new allocations on resize.
-    // A3: quarter-physical (/4) to match the construction-time resolution in
-    // _setupPostProcessing (was /2 here, so a resize silently doubled the bloom
-    // RT resolution vs boot).
+    // Mutates the existing Vector2s (no allocs). Quarter-physical (/4) must match
+    // _setupPostProcessing, or a resize changes the bloom RT resolution vs boot.
     if (this.bloomPass) {
       const bw = Math.floor(pw / 4);
       const bh = Math.floor(ph / 4);
@@ -1195,21 +939,18 @@ export class SceneManager {
       }
     }
 
-    // Sprint 2 / PR D — FXAA shader resolution uniform is in inverse-pixel units.
+    // Inverse-pixel units.
     if (this.fxaaPass && this.fxaaPass.material?.uniforms?.['resolution']) {
       this.fxaaPass.material.uniforms['resolution'].value.set(1 / pw, 1 / ph);
     }
   }
 
   /**
-   * Reallocate every composer render target WITHOUT touching the canvas or
-   * rebuilding any pass (BlackPatchHeal step "targets", core/BlackPatchHeal.js).
-   * `WebGLRenderTarget.setSize` disposes only when the size CHANGES, so a
-   * same-size `composer.setSize` reallocates nothing; sizing to (pw + 2, ph)
-   * and straight back to (pw, ph) makes three dispose and rebuild each target.
-   * Same SMAA / bloom / FXAA resolution updates as `resize()`, so the passes
-   * end exactly where a normal resize would leave them. Triggers no render:
-   * the next game-loop frame draws into the fresh targets.
+   * Reallocate every composer render target WITHOUT touching the canvas or rebuilding
+   * a pass (BlackPatchHeal step "targets"). `WebGLRenderTarget.setSize` disposes only
+   * when the size CHANGES, so sizing to (pw + 2, ph) and straight back makes three
+   * dispose and rebuild each target. Same SMAA/bloom/FXAA updates as `resize()`.
+   * Triggers no render.
    */
   reallocateRenderTargets() {
     const pixelRatio = this.renderer.getPixelRatio();
@@ -1242,38 +983,27 @@ export class SceneManager {
   }
 
   /**
-   * Register an object whose subtree renders in the near-field depth pass (the
-   * z-layer fix). The subtree is moved onto NEAR_FIELD_LAYER (so the main/far
-   * camera skips it), and every light currently in the scene is ALSO enabled on
-   * that layer (so the near camera still lights the subtree). Call after the
-   * object and the scene lights are constructed. Idempotent per root.
-   *
-   * @param {THREE.Object3D} root  e.g. the player PlayerSatellite group
+   * Register an object whose subtree renders in the near-field depth pass: moved onto
+   * NEAR_FIELD_LAYER (the far camera skips it), and every scene light is ALSO enabled
+   * on that layer (so the near camera lights it). Call after the object and the scene
+   * lights exist. Idempotent per root.
+   * @param {THREE.Object3D} root  e.g. the PlayerSatellite group
    */
   registerNearFieldRoot(root) {
     if (!root || this._nearFieldRoots.includes(root)) return;
     this._nearFieldRoots.push(root);
-    // Move the whole subtree to the near-field layer ONLY (off layer 0) so the
-    // far camera (layer 0) skips it and the near camera (NEAR_FIELD_LAYER) owns
-    // it. Groups/lines/sprites included — harmless on non-render nodes.
+    // ONLY the near layer (off layer 0); harmless on non-render nodes.
     root.traverse((o) => { o.layers.set(NEAR_FIELD_LAYER); });
-    // Lights must be visible to BOTH cameras or the ship goes dark in the near
-    // pass — enable (not set) the near layer so they keep lighting layer 0 too.
+    // Lights must reach BOTH cameras or the ship goes dark in the near pass: enable, not set.
     this.scene.traverse((o) => { if (o.isLight) o.layers.enable(NEAR_FIELD_LAYER); });
   }
 
   /**
-   * Remove a previously-registered near-field root and return its subtree to
-   * layer 0 (so the FAR camera renders it again). Used for DYNAMIC membership:
-   * a daughter's hull is a near root only while it is docked/close to the mother
-   * (where it overlaps the hull and would be occluded by the depth-cleared near
-   * pass or z-fight the strut-tip collar); once it deploys away it leaves the
-   * near set and renders normally in the far pass. No-op if not registered.
-   *
-   * NOTE: only resets to the default layer 0. Scene lights keep their enabled
-   * near layer (harmless, and other roots still need them).
-   *
-   * @param {THREE.Object3D} root
+   * Remove a near-field root and return its subtree to layer 0 (the FAR camera renders
+   * it again). For DYNAMIC membership: a daughter's hull is a near root only while
+   * docked/close to the mother (where the depth-cleared near pass would occlude it or
+   * z-fight the strut-tip collar). No-op if not registered. Scene lights keep their
+   * near layer (other roots still need them).
    */
   unregisterNearFieldRoot(root) {
     const i = this._nearFieldRoots.indexOf(root);
@@ -1285,20 +1015,13 @@ export class SceneManager {
   }
 
   /**
-   * Register a camera/ship-follow POINT light so the near pass (a) renders it on
-   * NEAR_FIELD_LAYER and (b) transforms it into ×S camera-relative space during
-   * the near sub-render (position for scene-level lights, `distance` cutoff for
-   * all). Without this, camera fill/rim lights created AFTER registerNearFieldRoot
-   * never get the near layer, so the ship renders UNLIT in sim (flat vs the menu
-   * hero); and unscaled `distance` cutoffs would fall to ~1/S of the ×S ship,
-   * killing the light's reach. Idempotent per light.
-   *
-   * Only pass lights whose POSITION matters (PointLight fill/rim/pyro). Do NOT
-   * pass Directional/Hemisphere/Ambient lights — they are direction- or
-   * position-independent, so the ×S reposition is meaningless (and the generic
-   * scene-light layer enable in registerNearFieldRoot already covers them).
-   *
-   * @param {THREE.Light} light
+   * Register a camera/ship-follow POINT light so the near pass renders it on
+   * NEAR_FIELD_LAYER and transforms it into ×S camera-relative space (position for
+   * scene-level lights, `distance` cutoff for all). Without this, lights created AFTER
+   * registerNearFieldRoot never get the near layer (ship renders UNLIT), and unscaled
+   * `distance` cutoffs fall to ~1/S of the ×S ship. Idempotent per light.
+   * Only POSITION-dependent lights (PointLight fill/rim/pyro); NOT Directional/
+   * Hemisphere/Ambient (registerNearFieldRoot's scene-light enable covers them).
    */
   registerNearFieldLight(light) {
     if (!light || this._nearFieldLights.includes(light)) return;
@@ -1309,9 +1032,8 @@ export class SceneManager {
   }
 
   /**
-   * Re-tag a near-field root's subtree onto NEAR_FIELD_LAYER. Call if a root
-   * gains children AFTER registration (dynamically added meshes default to
-   * layer 0 and would otherwise leak into the far pass). Cheap; safe to skip.
+   * Re-tag near-field subtrees onto NEAR_FIELD_LAYER. Call if a root gains children
+   * AFTER registration (new meshes default to layer 0 and would leak into the far pass).
    * @param {THREE.Object3D} [root] specific root, or all registered roots
    */
   refreshNearFieldLayers(root) {
@@ -1323,17 +1045,15 @@ export class SceneManager {
   }
 
   /**
-   * Set the inspect background-dim target (peak vignette alpha). 0 fades it out.
-   * The dim is drawn in NearFieldRenderPass's far→near seam so it darkens only
-   * the surroundings, not the ship or the callout layer. Eased per frame in
-   * render() so entering/leaving inspection reads as a ~300 ms fade.
+   * Inspect background-dim target (peak vignette alpha; 0 fades out). Drawn in
+   * NearFieldRenderPass's far→near seam, so it darkens only the surroundings, not
+   * the ship or callout layer. Eased per frame (~300 ms fade).
    * @param {number} target01  peak alpha (typically Constants.INSPECTION.DIM), or 0
    */
   setInspectDim(target01) {
     this._inspectDimTarget = Math.max(0, Math.min(1, target01 || 0));
   }
 
-  /** @private Ease renderPass.vignetteOpacity toward the target (~300 ms fade). */
   _updateInspectDim() {
     if (!this.renderPass) return;
     const target = this._inspectDimTarget || 0;
@@ -1351,31 +1071,26 @@ export class SceneManager {
   }
 
   /**
-   * @private Sync the near camera to the main camera and bracket its (scaled)
-   * near/far around the near-field roots. The near camera sits at the ORIGIN;
-   * NearFieldRenderPass scales the ship into ×S camera-relative space so it lands
-   * in front of this camera. Owns near-camera STATE only (the transform swap is
-   * the pass's job). Called once per frame in render().
+   * Sync the near camera to the main camera and bracket its (scaled) near/far around
+   * the near-field roots. It sits at the ORIGIN; NearFieldRenderPass scales the ship
+   * into ×S camera-relative space in front of it. Owns near-camera STATE only (the
+   * transform swap is the pass's job). Once per frame in render().
    */
   _updateNearCamera() {
     const nc = this.nearCamera;
     const c = this.camera;
     if (!nc || !this._nearFieldRoots || this._nearFieldRoots.length === 0) return;
 
-    // Re-tag the near-field subtree(s) onto NEAR_FIELD_LAYER every frame. A
-    // one-time tag at registration is NOT enough: systems that initialise AFTER
-    // the ship (ArmManager, tether/net/lasso kits, pooled FX, launch pyro)
-    // parent extra meshes/lights into it, and those default to layer 0 — so
-    // they'd render in the FAR pass at low precision and z-fight (the exact bug
-    // this pass kills). Traversing a few hundred nodes/frame to set an int mask
-    // is sub-0.1 ms.
+    // Re-tag onto NEAR_FIELD_LAYER every frame: a one-time tag at registration is NOT
+    // enough, since systems initialised AFTER the ship (ArmManager, tether/net/lasso
+    // kits, pooled FX, launch pyro) parent meshes/lights into it at layer 0, which
+    // would render in the FAR pass and z-fight. A few hundred nodes is sub-0.1 ms.
     for (const r of this._nearFieldRoots) {
       if (r) r.traverse(_nfSetNearLayer);
     }
 
-    // The near camera renders from the ORIGIN with the main camera's orientation
-    // + intrinsics. The ship is brought to it (scaled, camera-relative) by the
-    // pass, so mirroring position would be wrong — it must stay at (0,0,0).
+    // Orientation + intrinsics mirror the main camera; position must stay (0,0,0)
+    // because the pass brings the ship to it (scaled, camera-relative).
     nc.position.set(0, 0, 0);
     nc.quaternion.copy(c.quaternion);
     nc.fov = c.fov;
@@ -1384,8 +1099,7 @@ export class SceneManager {
     nc.filmGauge = c.filmGauge;
     nc.filmOffset = c.filmOffset;
 
-    // Bracket the depth range tightly around the roots (unscaled distances; the
-    // helper multiplies by NEAR_FIELD_SCALE).
+    // Unscaled distances; the helper multiplies by NEAR_FIELD_SCALE.
     let dMin = Infinity;
     let dMax = -Infinity;
     for (const r of this._nearFieldRoots) {
@@ -1397,10 +1111,9 @@ export class SceneManager {
     }
     if (!isFinite(dMin)) return;
 
-    // CRITICAL: mirror the LIVE main-camera near (dropped to distance·0.02 during
-    // inspect by _applyDynamicNearPlane), NOT the static Constants.CAMERA_NEAR —
-    // clamping to the 3 m constant is what made close inspect clip through the
-    // hull (see plan B.1). The scaled 5 cm floor keeps it well-conditioned.
+    // CRITICAL: use the LIVE main-camera near (distance·0.02 during inspect, from
+    // _applyDynamicNearPlane), NOT the static Constants.CAMERA_NEAR: the 3 m constant
+    // made close inspect clip through the hull.
     const { near, far } = nearFieldBrackets({
       dMin,
       dMax,
@@ -1456,13 +1169,14 @@ export class SceneManager {
    * output quad resets it), the CPU-blocking ms of render + output + readback.
    *
    * @param {object} opts
-   * @param {THREE.Box3} opts.box   the part's box (scene units) — SHIP-LOCAL when `matrix` is given, else world
-   * @param {THREE.Matrix4} [opts.matrix]  the box's local → world matrix (the ship's matrixWorld); absent → the sphere fallback on a world box
+   * @param {THREE.Box3} opts.box   the part's box (scene units): SHIP-LOCAL when `matrix` is given, else world
+   * @param {THREE.Matrix4} [opts.matrix]  box local → world (the ship's matrixWorld); absent → sphere fallback on a world box
    * @param {THREE.Vector3|number[]} opts.dir   part → camera unit direction (world)
-   * @param {number} [opts.fill]   frame fill (fit: the largest projected extent's share of the limiting axis, default PORTRAIT_FIT_FILL; sphere fallback: the diameter's, default PORTRAIT_DEFAULT_FILL 0.7; small parts 0.35–0.7)
-   * @param {THREE.Vector3|number[]} [opts.up]  the image up (world; default world +Y) — the fit may roll it 90° (auto-roll)
-   * @param {number} [opts.width]  target width (default 640)
-   * @param {number} [opts.height] target height (default 400)
+   * @param {number} [opts.fill]   frame fill (fit: largest projected extent's share of the limiting axis; sphere: the
+   *    diameter's, default 0.7; small parts 0.35–0.7)
+   * @param {THREE.Vector3|number[]} [opts.up]  image up (world; default +Y); the fit may roll it 90°
+   * @param {number} [opts.width]  default 640
+   * @param {number} [opts.height] default 400
    * @returns {{ data: Uint8Array, width: number, height: number, distance: number, radius: number,
    *   method: 'fit'|'sphere', rolled: boolean }|null}  `distance` in scene units
    */
@@ -1482,8 +1196,8 @@ export class SceneManager {
       if (up && Number.isFinite(up.x) && Number.isFinite(up.y) && Number.isFinite(up.z) && (up.x || up.y || up.z)) { _pfUp.set(up.x, up.y, up.z).normalize(); upOk = true; }
       else if (Array.isArray(up) && up.length >= 3 && Number.isFinite(up[0]) && Number.isFinite(up[1]) && Number.isFinite(up[2]) && (up[0] || up[1] || up[2])) { _pfUp.set(up[0], up[1], up[2]).normalize(); upOk = true; }
       if (!upOk) _pfUp.set(0, 1, 0);
-      // far slack = the near-field bracket radius (10 m): the hull BEHIND a
-      // small part stays in frame (a 5 cm puck's 3·radius would clip the deck).
+      // far slack = the near-field bracket radius (10 m): the hull BEHIND a small part
+      // stays in frame (a 5 cm puck's 3·radius would clip the deck).
       let f = null;
       const hasMatrix = !!(opts.matrix && opts.matrix.isMatrix4);
       if (hasMatrix) {
@@ -1491,25 +1205,23 @@ export class SceneManager {
         if (corners) f = portraitCameraFit(corners, opts.dir, _pfUp, PORTRAIT_FOV_DEG, w / h, fillIn === null ? PORTRAIT_FIT_FILL : fillIn, NEAR_FIELD_RADIUS);
       }
       if (!f) {
-        // The documented FALLBACK: the bounding-sphere law on the WORLD box.
+        // FALLBACK: bounding-sphere law on the WORLD box.
         const worldBox = hasMatrix ? _pfBox.copy(opts.box).applyMatrix4(opts.matrix) : opts.box;
         f = portraitCameraFor(worldBox, opts.dir, PORTRAIT_FOV_DEG, w / h, fillIn === null ? PORTRAIT_DEFAULT_FILL : fillIn, NEAR_FIELD_RADIUS);
       }
       if (!f) return this._portraitNull(stats, 'degenerate frame');
       this._ensurePortraitRig(w, h);
 
-      // Late-parented meshes default to layer 0 — re-tag exactly as the
-      // per-frame _updateNearCamera does, and nothing else of it.
+      // Late-parented meshes default to layer 0: re-tag as the per-frame path does.
       for (const r of this._nearFieldRoots) {
         if (r) r.traverse(_nfSetNearLayer);
       }
 
       const cam = this._portraitCam;
       cam.position.set(0, 0, 0);
-      // The fit may have rolled the image up (the long axis along the wide axis).
+      // The fit may have rolled the image up.
       cam.up.copy(f.up || _pfUp);
-      // Orientation only: the look direction is scale-free, so the world
-      // (unscaled) target − position serves the origin camera directly.
+      // The look direction is scale-free: world (unscaled) target − position works.
       _pfLook.copy(f.target).sub(f.position);
       cam.lookAt(_pfLook);
       cam.fov = PORTRAIT_FOV_DEG;
@@ -1536,7 +1248,7 @@ export class SceneManager {
       stats.method = f.method;
       stats.distanceM = f.distance * NEAR_FIELD_SCALE;   // scene units → metres (M·S = 1)
       stats.rolled = !!f.rolled;
-      // The fit's projected half-extents (metres) — the witness derives the part's share of the frame.
+      // Fit's projected half-extents (m), for the witness's frame-share.
       stats.exM = Number.isFinite(f.ex) ? f.ex * NEAR_FIELD_SCALE : null;
       stats.eyM = Number.isFinite(f.ey) ? f.ey * NEAR_FIELD_SCALE : null;
       return { data: this._portraitBuf, width: w, height: h, distance: f.distance, radius: f.radius, method: f.method, rolled: !!f.rolled, ex: f.ex, ey: f.ey };
@@ -1548,7 +1260,7 @@ export class SceneManager {
     }
   }
 
-  /** @private Record a null portrait (the pane falls back to the live crop) and return null. */
+  /** Record a null portrait (the pane falls back to the live crop) and return null. */
   _portraitNull(stats, why) {
     stats.nulls++;
     stats.ok = false;
@@ -1557,12 +1269,10 @@ export class SceneManager {
   }
 
   /**
-   * @private Build the portrait rig on first use (or rebuild the targets when a
-   * caller asks for a new size): the origin camera on NEAR_FIELD_LAYER, the
-   * HalfFloat colour+depth target (no msaa — the readback source must stay
-   * single-sampled and the output quad resolves nothing), the RGBA8 readback
-   * target (readRenderTargetPixels accepts UnsignedByte RGBA only; no depth),
-   * a fresh OutputPass with renderToScreen false, and the pixel buffer.
+   * Build the portrait rig on first use (targets rebuilt on a new size): origin camera
+   * on NEAR_FIELD_LAYER, HalfFloat colour+depth target (no msaa: the readback source
+   * must stay single-sampled), RGBA8 readback target (readRenderTargetPixels accepts
+   * UnsignedByte RGBA only), a fresh OutputPass, and the pixel buffer.
    */
   _ensurePortraitRig(w, h) {
     if (!this._portraitCam) {
@@ -1593,7 +1303,7 @@ export class SceneManager {
     }
   }
 
-  /** Session T harness read: the last portrait's stats (see renderPartPortrait). */
+  /** Harness read: the last portrait's stats (see renderPartPortrait). */
   getPortraitStats() {
     return this._portraitStats;
   }

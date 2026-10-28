@@ -49,6 +49,7 @@ import { VisualLaw } from '../core/VisualLaw.js';
 import { Constants } from '../core/Constants.js';
 import { prefersReducedMotion } from '../ui/hudPulse.js';
 import { cubicInOut } from './CameraSystem.js';
+import { clamp01 } from '../core/MathUtil.js';
 
 /** Crossing-ride duration: midpoint of the locked 450–650 ms window. */
 const CROSS_RIDE_MS = 550;
@@ -718,7 +719,7 @@ export class LadderController {
       this._glide = null;
       return;
     }
-    const u = Math.min(1, Math.max(0, (t - g.t0) / g.ms));
+    const u = clamp01((t - g.t0) / g.ms);
     const z01 = g.fromZ01 + (g.toZ01 - g.fromZ01) * glideEase(u);
     this._apply(this._ladder.glide({ tMs: t, z01 }), t);
     if (u >= 1) this._glide = null;
@@ -1008,7 +1009,7 @@ export class LadderController {
     const e = dz.ease;
     const k = (tMs - e.t0) / e.ms;
     if (k >= 1) { this._dzHandBack(tMs); return; }
-    dz.z = (Math.log10(e.from + (e.to - e.from) * cubicInOut(Math.max(0, Math.min(1, k)))) - g.lo) / g.span;
+    dz.z = (Math.log10(e.from + (e.to - e.from) * cubicInOut(clamp01(k))) - g.lo) / g.span;
     this._dzApply(this._ladder.getState());
   }
 
@@ -1450,10 +1451,10 @@ export class LadderController {
     const ms = Number(rideMs);
     this._introPending = (Number.isFinite(ms) && ms > 0) ? ms : INTRO_RIDE_MS;
     if (typeof entryZ01 === 'number' && Number.isFinite(entryZ01)) {
-      this._introEntryZ01 = Math.min(1, Math.max(0, entryZ01));
+      this._introEntryZ01 = clamp01(entryZ01);
     }
     if (typeof handoverZ01 === 'number' && Number.isFinite(handoverZ01)) {
-      this._introHandoverZ01 = Math.min(1, Math.max(0, handoverZ01));
+      this._introHandoverZ01 = clamp01(handoverZ01);
     }
     const pbm = Number(pullbackMs);
     if (Number.isFinite(pbm) && pbm > 0) this._introPullbackMs = pbm;
@@ -1463,7 +1464,7 @@ export class LadderController {
         Number.isFinite(dolly.toZ01)) {
       const drm = Number(dolly.rideMs);
       this._introDolly = {
-        toZ01: Math.min(1, Math.max(0, dolly.toZ01)),
+        toZ01: clamp01(dolly.toZ01),
         rideMs: (Number.isFinite(drm) && drm > 0) ? drm : null,
       };
     }

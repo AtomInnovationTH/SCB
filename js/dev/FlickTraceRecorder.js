@@ -1,66 +1,35 @@
 /**
- * FlickTraceRecorder.js — dev-only, READ-ONLY gesture trace recorder for the
- * Zoom Ladder flick-tuning instrument (docs/ladder/07-flick-tuning.md).
- *
- * Records what the player's hands actually do (wheel + trackpad-pinch + iPad
- * glass-pinch streams) alongside 10 Hz ladder-state samples, so the offline
- * sweep harness (scripts/flick-sweep.mjs → js/dev/flickSweepCore.js) can
- * replay REAL gestures through fresh ZoomLadder cores and score flick-grammar
- * constant candidates against observed behavior. The current constants
- * (FloorContract.HUMP_SPRING FLICK_*) are starting values — retunes must come
- * from traces recorded here, never from guesswork (01-numbers.md doctrine).
+ * Dev-only, READ-ONLY gesture trace recorder for the Zoom Ladder flick-tuning instrument (docs/ladder/07-flick-tuning.md).
+ * Records wheel + trackpad-pinch + iPad glass-pinch streams alongside 10 Hz ladder-state samples so the offline sweep
+ * (scripts/flick-sweep.mjs -> js/dev/flickSweepCore.js) can replay REAL gestures. FloorContract.HUMP_SPRING FLICK_* are
+ * starting values: retunes come from traces recorded here, never guesswork (01-numbers.md doctrine).
  *
  * ZERO gameplay effect, by contract:
- *   - window-capture WHEEL listener registered {passive: true, capture: true};
- *     NEVER calls preventDefault, NEVER calls stopPropagation, mutates nothing
- *     it observes. It coexists with WheelRouter's own capture listener (which
- *     stays the one consumer/owner of wheel input).
- *   - touchstart/move/end(/cancel) listeners, also passive window-capture:
- *     two-finger distance sampling only, mirrored through the SAME
- *     pinchWheelDeltaY math TouchControls feeds the router with — the iPad
- *     glass pinch never surfaces as DOM wheel events, so the recorder derives
- *     the equivalent synthetic stream itself ({kind:'pinch'}).
- *   - an optional injected probe supplies ladder state; absent probe = events
- *     only, never a throw (dep-optional like every ladder consumer).
+ *   - window-capture WHEEL listener {passive: true, capture: true}; NEVER preventDefault/stopPropagation, mutates nothing
+ *     (WheelRouter's own capture listener stays the one consumer of wheel input).
+ *   - touchstart/move/end/cancel, also passive window-capture: two-finger distance only, through the SAME pinchWheelDeltaY math
+ *     TouchControls feeds the router. The iPad glass pinch never surfaces as DOM wheel events, so the recorder derives the
+ *     synthetic stream itself ({kind:'pinch'}).
+ *   - an optional injected probe supplies ladder state; absent probe = events only, never a throw.
  *
- * Storage is a bounded ring (TRACE_DEFAULTS.eventCap ≈ 20k events; states
- * bounded separately): the newest data always wins, overwrite counts are
- * reported honestly in meta (`droppedEvents`/`droppedStates`).
+ * Storage is a bounded ring (TRACE_DEFAULTS caps): newest wins; overwrites reported in meta (`droppedEvents`/`droppedStates`).
  *
- * Node-safe import: nothing here touches window/document at module scope —
- * ALL DOM access happens inside start()/download() behind guards, so the Node
- * test suite exercises the full recording surface via direct handler calls.
+ * Node-safe import: no window/document at module scope; ALL DOM access is inside start()/download() behind guards, so the
+ * Node suite drives the handlers directly.
  *
- * Publishing (start(), DOM contexts only):
- *   window.__FLICK_TRACE = { snapshot, download }
- * download() serializes {meta, events, states} to a JSON Blob + anchor click
- * (netshot pattern); headless / Blob-less contexts get the JSON on
- * console.log instead. Both paths return the JSON string.
+ * start() publishes `window.__FLICK_TRACE = { snapshot, download }`. download() writes {meta, events, states} as a JSON Blob +
+ * anchor click; headless / Blob-less contexts get console.log instead. Both return the JSON string.
  *
- * Event shape   {tMs, tIn, kind:'wheel'|'pinch', deltaX, deltaY, deltaMode,
- *                ctrlKey, sourceClass, wantsPaneSwipe}
+ * Event shape   {tMs, tIn, kind:'wheel'|'pinch', deltaX, deltaY, deltaMode, ctrlKey, sourceClass, wantsPaneSwipe}
  * State shape   {tMs, floor, z01, engaged, refit, library, wantsPaneSwipe}
- * Meta shape    {version, startedAt, t0Ms, tune, touchTune, spring, eventCap,
- *                stateCap, sampleHz, droppedEvents, droppedStates}
+ * Meta shape    {version, startedAt, t0Ms, tune, touchTune, spring, eventCap, stateCap, sampleHz, droppedEvents, droppedStates}
  *
- * sourceClass comes from the REAL classifier (classifyWheelSource — a pure
- * WheelRouter export) with the live __WHEEL_TUNE override view, so replay
- * never has to re-derive 'mouse' vs 'scroll' from the raw fields.
- *
- * THE SWIPE MONITOR (Wave 5 Session D — 07-flick-tuning §5, closed): since
- * Session C the live router CLAIMS horizontal-dominant wheel events on the
- * workbench floor for the pane carousel (WheelRouter._claimPaneSwipe:
- * isHorizontalWheel + stepPaneSwipe, gated on LadderController.
- * wantsPaneSwipe()). So every wheel event now also carries `deltaX` (the
- * pane axis), `tIn` (e.timeStamp — the INPUT-timeline stamp the router
- * measures the gesture gap on; null when the event carries none) and
- * `wantsPaneSwipe` (the hub's live claim verdict at capture time, read
- * through the probe's read-only `paneState()`; null without it), and the
- * 10 Hz sample carries the two panes' open state + the same verdict. The
- * sweep's pane-swipe scorer (flickSweepCore.scorePaneSwipe) replays the
- * claim from exactly these fields with the recorded WHEEL_TUNE.paneSwipe*
- * view. Traces recorded before this shape (flick-trace-1) carry no deltaX —
- * the scorer reports them honestly as unavailable.
+ * sourceClass comes from the REAL classifier (classifyWheelSource) with the live __WHEEL_TUNE view, so replay never re-derives
+ * 'mouse' vs 'scroll'. Swipe monitor: the live router CLAIMS horizontal-dominant wheel events on the workbench floor for the pane
+ * carousel (WheelRouter._claimPaneSwipe), so each wheel event also carries `deltaX`, `tIn` (e.timeStamp, the INPUT-timeline stamp the
+ * gesture gap is measured on; null if none) and `wantsPaneSwipe` (the hub's claim verdict at capture, via the probe's read-only
+ * `paneState()`; null without it); samples carry the two panes' open state. flickSweepCore.scorePaneSwipe replays the claim from
+ * these fields. Traces before flick-trace-2 carry no deltaX and score as unavailable.
  *
  * @module dev/FlickTraceRecorder
  */
@@ -69,24 +38,17 @@ import { classifyWheelSource, WHEEL_TUNE } from '../systems/WheelRouter.js';
 import { pinchWheelDeltaY, TOUCH_TUNE } from '../ui/TouchControls.js';
 import { FloorContract } from '../core/FloorContract.js';
 
-/** Trace-format version tag (bump on shape changes; the sweep validates it).
- *  'flick-trace-2' (Session D): + deltaX / tIn / wantsPaneSwipe per event,
- *  + refit / library / wantsPaneSwipe per state sample. */
+/** Trace-format version tag (bump on shape changes; the sweep validates it). */
 export const TRACE_VERSION = 'flick-trace-2';
 
-/** Bounds + cadence defaults (overridable via constructor deps, tests use tiny caps). */
 export const TRACE_DEFAULTS = {
   eventCap: 20000,   // ~20k gesture events (a long session at trackpad rates)
   stateCap: 20000,   // 10 Hz ⇒ ~33 min of ladder-state samples
   sampleHz: 10,      // ladder-state sampling cadence
 };
 
-/**
- * Fixed-capacity ring buffer: newest data wins, overwrites counted.
- * Exported for the suite (bound behavior is a pinned contract).
- */
+/** Fixed-capacity ring buffer: newest wins, overwrites counted. Exported: the bound is a pinned contract. */
 export class TraceRing {
-  /** @param {number} cap - capacity (≥ 1) */
   constructor(cap) {
     this._cap = Math.max(1, cap | 0);
     this._buf = new Array(this._cap);
@@ -105,7 +67,6 @@ export class TraceRing {
     this._i = (this._i + 1) % this._cap;
   }
 
-  /** Chronological copy (oldest → newest). */
   toArray() {
     const out = new Array(this._n);
     const start = (this._i - this._n + this._cap) % this._cap;
@@ -123,17 +84,11 @@ export class TraceRing {
 
 export class FlickTraceRecorder {
   /**
-   * @param {object} [deps] - everything optional (dev tool; Node-safe defaults)
-   * @param {object|function} [deps.probe] - ladder-state source. Accepts:
-   *   a function returning {floor, z01, engaged?} (or a getState()-shaped
-   *   object), OR a LadderController-shaped object ({ladder:{getState}},
-   *   isActive?) — production passes `ladderController` directly. Absent ⇒
-   *   events-only recording.
-   * @param {function} [deps.now] - monotonic ms clock (default performance.now)
-   * @param {Window}  [deps.win] - window-like listener target (tests inject a
-   *   fake; default = the real window, resolved inside start())
-   * @param {number} [deps.eventCap] @param {number} [deps.stateCap]
-   * @param {number} [deps.sampleHz]
+   * @param {object} [deps] all optional (Node-safe defaults)
+   * @param {object|function} [deps.probe] ladder-state source: a function returning {floor, z01, engaged?} (or a getState()-shaped
+   *   object), or a LadderController-shaped object ({ladder:{getState}}, isActive?); production passes `ladderController`.
+   * @param {function} [deps.now] monotonic ms clock (default performance.now)
+   * @param {Window} [deps.win] window-like listener target (default: real window, resolved in start())
    */
   constructor({ probe, now, win, eventCap, stateCap, sampleHz } = {}) {
     this._probe = probe || null;
@@ -150,7 +105,7 @@ export class FlickTraceRecorder {
     this._intervalId = null;
     this._pinchDist = null;    // live two-finger distance (px) or null
 
-    // Bound once so add/removeEventListener pair up.
+    // bound once so add/removeEventListener pair up
     this.handleWheel = this.handleWheel.bind(this);
     this.handleTouchStart = this.handleTouchStart.bind(this);
     this.handleTouchMove = this.handleTouchMove.bind(this);
@@ -158,14 +113,7 @@ export class FlickTraceRecorder {
     this.sampleState = this.sampleState.bind(this);
   }
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
-
-  /**
-   * Begin recording. DOM work happens HERE only: window-capture passive
-   * listeners + the 10 Hz state-sample interval + the window.__FLICK_TRACE
-   * hook. In a windowless context (Node suite) recording still arms — tests
-   * feed the public handlers directly.
-   */
+  /** Begin recording. DOM work happens HERE only. Windowless (Node): still arms for direct handler calls. */
   start() {
     if (this._started) return;
     this._started = true;
@@ -176,10 +124,7 @@ export class FlickTraceRecorder {
     const win = this._resolveWin();
     if (!win) return;   // headless: armed for direct handler calls, no DOM
 
-    // READ-ONLY listener contract: passive (never preventDefault — the UA may
-    // ignore one from a passive listener anyway, and we never call it),
-    // capture (observe before any target-phase stopPropagation can hide
-    // events), and no mutation of the events observed.
+    // passive (never preventDefault) + capture (observe before any target-phase stopPropagation hides events)
     const opts = { passive: true, capture: true };
     win.addEventListener('wheel', this.handleWheel, opts);
     win.addEventListener('touchstart', this.handleTouchStart, opts);
@@ -191,8 +136,7 @@ export class FlickTraceRecorder {
       this._intervalId = win.setInterval(this.sampleState, Math.round(1000 / this._sampleHz));
     }
 
-    // DevTools surface. Left installed by stop() on purpose: recording stops,
-    // but the captured trace stays downloadable.
+    // left installed by stop() on purpose: the captured trace stays downloadable
     win.__FLICK_TRACE = {
       snapshot: () => this.snapshot(),
       download: () => this.download(),
@@ -218,44 +162,31 @@ export class FlickTraceRecorder {
     this._pinchDist = null;
   }
 
-  /** Drop everything recorded so far (bounds/meta counters reset too). */
   clear() {
     this._events.clear();
     this._states.clear();
   }
 
-  // ── Recording handlers (public: the Node suite drives them directly) ─────
-
-  /**
-   * Observe one wheel event. Never consumes it: no preventDefault, no
-   * stopPropagation, no field mutation — shape-copies what the sweep needs.
-   * @param {WheelEvent|object} e
-   */
+  /** Observe one wheel event; shape-copies what the sweep needs, never consumes it. */
   handleWheel(e) {
     if (!this._recording || !e) return;
     const ps = this._readPaneState();
     this._events.push({
       tMs: this._stamp(),
-      // The INPUT-timeline stamp (a DOMHighResTimeStamp on the performance.now()
-      // timeline) — the clock WheelRouter measures the pane-swipe gesture gap
-      // on; null when the event carries none (synthetic stubs).
+      // INPUT-timeline stamp (performance.now() timeline), the clock WheelRouter measures the pane-swipe gap on; null for synthetic stubs
       tIn: (Number.isFinite(e.timeStamp) && e.timeStamp > 0) ? _round1(e.timeStamp) : null,
       kind: 'wheel',
       deltaX: _round3(e.deltaX || 0),
       deltaY: _round3(e.deltaY || 0),
       deltaMode: e.deltaMode | 0,
       ctrlKey: !!e.ctrlKey,
-      // The REAL classifier + the LIVE tune view, at capture time (the
-      // recorded verdict wins in replay — never re-derived).
+      // REAL classifier + LIVE tune at capture; the recorded verdict wins in replay
       sourceClass: classifyWheelSource(e, this._liveWheelTune()),
-      // The hub's live claim verdict for THIS event (LadderController.
-      // paneState().wantsPaneSwipe — engaged + F3 + a pane dep); null when
-      // the probe has no pane surface. Read, never written.
+      // hub's live claim verdict for THIS event (paneState().wantsPaneSwipe); null if the probe has no pane surface
       wantsPaneSwipe: ps ? ps.wantsPaneSwipe : null,
     });
   }
 
-  /** Two-finger distance baseline (≥ 2 touches arms the pinch sampler). */
   handleTouchStart(e) {
     if (!this._recording) return;
     const d = _twoFingerDist(e);
@@ -263,10 +194,8 @@ export class FlickTraceRecorder {
   }
 
   /**
-   * Pinch distance delta → the SAME synthetic-wheel px TouchControls would
-   * feed the router (pinchWheelDeltaY, live __TOUCH_TUNE view, pre-scaled —
-   * so replay applies NO extra gain, mirroring routeSyntheticWheel's tagged
-   * synthetics). Recorded as {kind:'pinch', sourceClass:'pinch'}.
+   * Pinch distance delta -> the SAME synthetic-wheel px TouchControls feeds the router (pinchWheelDeltaY, live __TOUCH_TUNE),
+   * pre-scaled so replay applies NO extra gain (as routeSyntheticWheel's tagged synthetics). Recorded {kind:'pinch', sourceClass:'pinch'}.
    */
   handleTouchMove(e) {
     if (!this._recording) return;
@@ -291,22 +220,17 @@ export class FlickTraceRecorder {
     this._pinchDist = d;
   }
 
-  /** Fewer than two fingers left → the pinch sampler disarms. */
   handleTouchEnd(e) {
     const n = (e && e.touches && e.touches.length) | 0;
     if (n < 2) this._pinchDist = null;
   }
 
-  /**
-   * One 10 Hz ladder-state sample (interval-driven; tests call directly).
-   * Probe absent, unresolvable, or throwing ⇒ silently no sample.
-   */
+  /** One 10 Hz ladder-state sample; probe absent, unresolvable or throwing = no sample. */
   sampleState() {
     if (!this._recording) return;
     const s = this._readProbe();
     if (!s) return;
-    // The pane state (Session D): a function probe may carry it on its own
-    // snapshot; a LadderController-shaped probe answers through paneState().
+    // a function probe may carry pane state on its snapshot; a LadderController-shaped one answers via paneState()
     const ps = this._readPaneState() || {};
     const bool = (a, b) => (typeof a === 'boolean') ? a : ((typeof b === 'boolean') ? b : null);
     this._states.push({
@@ -320,9 +244,6 @@ export class FlickTraceRecorder {
     });
   }
 
-  // ── Output ────────────────────────────────────────────────────────────────
-
-  /** Full trace snapshot — fresh arrays/objects, mutation-safe. */
   snapshot() {
     return {
       meta: {
@@ -343,13 +264,7 @@ export class FlickTraceRecorder {
     };
   }
 
-  /**
-   * Serialize the snapshot to JSON. DOM contexts: Blob + anchor click
-   * (flick-trace-<ts>.json, netshot pattern). Headless / Blob-less contexts:
-   * the JSON goes to console.log (copy-paste / pipe capture). Returns the
-   * JSON string either way.
-   * @returns {string}
-   */
+  /** Serialize the snapshot to JSON: Blob + anchor click (flick-trace-<ts>.json) in DOM contexts, else console.log. Returns the JSON. */
   download() {
     const json = JSON.stringify(this.snapshot());
     const win = this._resolveWin();
@@ -379,38 +294,26 @@ export class FlickTraceRecorder {
     return json;
   }
 
-  // ── Internals ─────────────────────────────────────────────────────────────
-
-  /** @private Injected win, else the real window, else null (Node). */
   _resolveWin() {
     if (this._win) return this._win;
     return (typeof window !== 'undefined') ? window : null;
   }
 
-  /** @private Trace timestamp: monotonic ms at 0.1 ms grain (JSON size). */
   _stamp() { return Math.round(this._now() * 10) / 10; }
 
-  /** @private WHEEL_TUNE with any live window.__WHEEL_TUNE override merged. */
   _liveWheelTune() {
     const win = this._resolveWin();
     const o = (win && win.__WHEEL_TUNE) || null;
     return o ? { ...WHEEL_TUNE, ...o } : { ...WHEEL_TUNE };
   }
 
-  /** @private TOUCH_TUNE with any live window.__TOUCH_TUNE override merged. */
   _liveTouchTune() {
     const win = this._resolveWin();
     const o = (win && win.__TOUCH_TUNE) || null;
     return o ? { ...TOUCH_TUNE, ...o } : { ...TOUCH_TUNE };
   }
 
-  /**
-   * @private The pane surface of the probe (Session D): a LadderController
-   * (or any object) exposing the read-only `paneState()` → {refit, library,
-   * wantsPaneSwipe}; a function probe carrying those keys on its snapshot is
-   * honoured by sampleState directly. Absent / throwing → null, never a
-   * throw, never a write.
-   */
+  /** Read-only `paneState()` of the probe -> {refit, library, wantsPaneSwipe}; absent/throwing -> null. */
   _readPaneState() {
     const p = this._probe;
     if (!p || typeof p.paneState !== 'function') return null;
@@ -424,11 +327,7 @@ export class FlickTraceRecorder {
     }
   }
 
-  /**
-   * @private Resolve the injected probe to {floor, z01, engaged}. Accepts a
-   * function (returning that shape or a ZoomLadder getState() snapshot) or a
-   * LadderController-shaped object. Never throws.
-   */
+  /** Resolve the probe to {floor, z01, engaged} (function, getState()-shaped, or LadderController-shaped); never throws. */
   _readProbe() {
     const p = this._probe;
     if (!p) return null;
@@ -456,7 +355,6 @@ export class FlickTraceRecorder {
   }
 }
 
-/** @private Two-finger distance in px, or null when < 2 touches. */
 function _twoFingerDist(e) {
   const t = e && e.touches;
   if (!t || t.length < 2) return null;

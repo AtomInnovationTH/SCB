@@ -7,6 +7,7 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 
 export class SweepReportUI {
   constructor() {
@@ -227,8 +228,8 @@ export class SweepReportUI {
 
     // Percentage color
     let pctColor = '#ff4444';
-    if (pct >= 75) pctColor = '#00ff88';
-    else if (pct >= 50) pctColor = '#ffaa00';
+    if (pct >= 75) pctColor = VisualLaw.COLORS.PLAYER;
+    else if (pct >= 50) pctColor = VisualLaw.COLORS.CAUTION;
     else if (pct >= 25) pctColor = '#ffcc44';
 
     return `

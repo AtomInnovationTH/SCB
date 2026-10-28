@@ -9,6 +9,7 @@ import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import timerManager from './TimerManager.js';
 import { installSoundLog } from './audio/SoundLog.js';
+import { clamp01, clamp, lerp } from '../core/MathUtil.js';
 
 // Slice 8 — codex unlock chime. The base pair is D5→A5 [587, 880]; per category
 // we transpose by a small deterministic pentatonic offset so different tracks
@@ -341,7 +342,7 @@ class AudioSystem {
 
   /** Set master volume 0..1 */
   setVolume(v) {
-    if (this.master) this.master.gain.value = Math.max(0, Math.min(1, v));
+    if (this.master) this.master.gain.value = clamp01(v);
   }
 
   /**
@@ -434,7 +435,7 @@ class AudioSystem {
     const t = 1 - (distM - netRangeM) / (startM - netRangeM);
     const minHz = RT.MIN_HZ || 0.5;
     const maxHz = RT.MAX_HZ || 3;
-    this._rangeTickerHz = minHz + (maxHz - minHz) * Math.max(0, Math.min(1, t));
+    this._rangeTickerHz = lerp(minHz, maxHz, clamp01(t));
     if (!this._rangeTickerActive) {
       this._rangeTickerActive = true;
       this._scheduleRangeTick();
@@ -2094,9 +2095,9 @@ class AudioSystem {
     const entry = this.activeSources.get('ionStartup');
     if (!this.available || !entry) return;
     const I = Constants.ION_STARTUP;
-    const l = Math.max(0, Math.min(1, Number.isFinite(lit) ? lit : 0));
+    const l = clamp01(Number.isFinite(lit) ? lit : 0);
     const now = this.ctx.currentTime;
-    const hz = I.HUM_FREQ_LOW_HZ + (I.HUM_FREQ_HIGH_HZ - I.HUM_FREQ_LOW_HZ) * l;
+    const hz = lerp(I.HUM_FREQ_LOW_HZ, I.HUM_FREQ_HIGH_HZ, l);
     entry.lit = l;
     if (!entry.muted) entry.gain.gain.setTargetAtTime(I.HUM_GAIN_PEAK * l, now, 0.08);
     entry.osc.frequency.setTargetAtTime(hz, now, 0.08);
@@ -2155,7 +2156,7 @@ class AudioSystem {
    */
   startRcsHiss(level = 1.0) {
     if (!this.available) return;
-    level = Math.max(0, Math.min(1, level));
+    level = clamp01(level);
 
     // Already playing: just retarget the gain if the level moved.
     if (this.activeSources.has('rcsHiss')) {
@@ -2489,7 +2490,7 @@ class AudioSystem {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    const t = Math.max(0, Math.min(1, tensionFraction));
+    const t = clamp01(tensionFraction);
 
     if (t < 0.5) {
       // Light: filtered noise creak (100-200Hz)
@@ -2668,7 +2669,7 @@ class AudioSystem {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    const dur = Math.max(0.4, Math.min(3, durationSec));
+    const dur = clamp(durationSec, 0.4, 3);
 
     // Low chord: root A2, fifth E3, octave A3 — a stable, open "lift" voicing.
     const freqs = [110, 164.81, 220];
@@ -3494,7 +3495,7 @@ class AudioSystem {
     const nodes = this._netWinchNodes;
     if (!nodes || !this.ctx) return;
     const seed = Math.max(1e-3, seedM || 1);
-    const t = Math.max(0, Math.min(1, remainingM / seed));   // 1 = far, 0 = at the muzzle
+    const t = clamp01(remainingM / seed);   // 1 = far, 0 = at the muzzle
     // 900 Hz far → 350 Hz at the berth. setTargetAtTime smooths the steps.
     const freq = 350 + 550 * t;
     try {
@@ -3660,7 +3661,7 @@ class AudioSystem {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    const f = Math.max(0, Math.min(1, fraction));
+    const f = clamp01(fraction);
     const freq = 900 + 500 * f;   // 900 Hz open → 1400 Hz cinched
     const dur = 0.03;
 
@@ -4261,7 +4262,7 @@ class AudioSystem {
     // first interacts. AudioCue is fire-and-forget — dropping the first chime
     // is preferable to a glitch.
     if (this.ctx.state !== 'running') return;
-    const v = Math.max(0, Math.min(1, volume));
+    const v = clamp01(volume);
     const ctx = this.ctx;
     const now = ctx.currentTime;
     const dest = this.rewardBus || this.sfxBus || this.master || ctx.destination;

@@ -1379,6 +1379,8 @@ export class DebrisField {
       reseatOne(o);
       bgSeated++;
     }
+    // Hidden dots: the fresh draws start now, so time banked before the reseat must not advance them.
+    if (this._bgHiddenDt !== undefined) this._bgHiddenDt = 0;
     console.log(`[DebrisField] field regime re-seated "${this._fieldRegimeLabel}" (was "${oldLabel}"): ` +
       `${seated} interactive + ${bgSeated} background orbits in-band (seed=${this._fieldSeed})`);
     return true;
@@ -3584,11 +3586,18 @@ export class DebrisField {
    */
   _updateBackground(gameDt, playerPos) {
     if (!this.backgroundPoints) return;
+    // Hidden dots (mission 1) are never read by anything but the renderer: skip the work and bank the game time.
+    // `.visible` is set directly in several places, so it is read here each call.
+    if (!this.backgroundPoints.visible) {
+      this._bgHiddenDt = (this._bgHiddenDt || 0) + gameDt;
+      return;
+    }
     const posAttr = this.backgroundPoints.geometry.attributes.position;
     const arr = posAttr.array;
     const vel = this._bgVel;
     const acc = this._bgDtAcc;
     const floating = !!(Constants.FLOATING_ORIGIN_ENABLED && this._floatingOrigin);
+    if (this._bgHiddenDt !== undefined) this._catchUpBackground(posAttr, vel, acc, floating);
 
     // Floating-origin movement since the previous call (0 with the flag off, or on the
     // first call — the first-frame re-basing in update() already made points relative).
@@ -3689,6 +3698,54 @@ export class DebrisField {
     }
 
     posAttr.needsUpdate = true;
+  }
+
+  /**
+   * First visible update after the dots were hidden: propagate every dot exactly by the game time since it was last
+   * propagated (its batch's `_bgDtAcc` plus the banked hidden time), re-base to the current floating origin, and reset
+   * the glide state (`_bgVel`, `_bgPrevOrigin`). Leaves `_bgBatch` alone; the normal step then runs on this frame.
+   * @private
+   */
+  _catchUpBackground(posAttr, vel, acc, floating) {
+    const hidden = this._bgHiddenDt;
+    this._bgHiddenDt = undefined;
+    const batchSize = Math.ceil(BACKGROUND_COUNT / 4);
+    const bg = this._tmpBgOrbit;
+    const cp = this._tmpCartPos;
+    const cv = this._tmpCartVel;
+    const ss = Constants.SCENE_SCALE;
+    for (let b = 0; b < 4; b++) {
+      const dt = acc[b] + hidden;
+      acc[b] = 0;
+      const end = Math.min((b + 1) * batchSize, BACKGROUND_COUNT);
+      for (let i = b * batchSize; i < end; i++) {
+        const orbit = this._backgroundOrbits[i];
+        bg.semiMajorAxis = orbit.semiMajorAxis / ss;
+        bg.eccentricity = orbit.eccentricity;
+        bg.inclination = orbit.inclination;
+        bg.raan = orbit.raan;
+        bg.argPerigee = orbit.argPerigee;
+        bg.trueAnomaly = orbit.trueAnomaly;
+        propagateOrbit(bg, dt);
+        orbit.trueAnomaly = bg.trueAnomaly;
+        orbitToSceneCartesianInto(orbit, cp, cv);
+        if (vel) {
+          vel[i * 3] = cv.x * ss;
+          vel[i * 3 + 1] = cv.y * ss;
+          vel[i * 3 + 2] = cv.z * ss;
+        }
+        if (floating) {
+          posAttr.setXYZ(i, cp.x - this._floatingOrigin.x, cp.y - this._floatingOrigin.y, cp.z - this._floatingOrigin.z);
+        } else {
+          posAttr.setXYZ(i, cp.x, cp.y, cp.z);
+        }
+      }
+    }
+    if (floating) {
+      const fo = this._floatingOrigin;
+      this._bgPrevOrigin.x = fo.x; this._bgPrevOrigin.y = fo.y; this._bgPrevOrigin.z = fo.z;
+      this._bgPrevOriginValid = true;
+    }
   }
 
   // ==========================================================================

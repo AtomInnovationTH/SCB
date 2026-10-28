@@ -24,6 +24,8 @@ import { mono } from '../core/Typeface.js';
 import { GestureHints } from './hud/GestureHints.js';   // u17: the fire prompt follows glass, read when drawn
 import { isMarked } from '../systems/ScanMarks.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg, coldGasPoolToKg } from '../systems/ResourceSystem.js';
+import { radToDeg, clamp01, clamp, lerp } from '../core/MathUtil.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -59,8 +61,8 @@ export const AP_BADGE_H_PX = 19;
 
 /** Color scheme */
 const COLORS = {
-  green:   '#00ff88',
-  yellow:  '#ffaa00',
+  green:   VisualLaw.COLORS.PLAYER,
+  yellow:  VisualLaw.COLORS.CAUTION,
   red:     '#ff4444',
   white:   '#ffffff',
   cyan:    '#4488ff',
@@ -141,8 +143,8 @@ export function offscreenLabelLayout(o) {
   let cx = o.edge.x + ux * d, cy = o.edge.y + uy * d;
   // A wide block near a corner is slid back inside the canvas, but only if that keeps it clear of the arrow.
   const m = 2;
-  const kx = Math.max(bw / 2 + m, Math.min(vw - bw / 2 - m, cx));
-  const ky = Math.max(bh / 2 + m, Math.min(vh - bh / 2 - m, cy));
+  const kx = clamp(cx, bw / 2 + m, vw - bw / 2 - m);
+  const ky = clamp(cy, bh / 2 + m, vh - bh / 2 - m);
   if ((kx !== cx || ky !== cy) && vw >= bw + 2 * m && vh >= bh + 2 * m
       && (Math.abs(kx - acx) >= hx - 1e-9 || Math.abs(ky - acy) >= hy - 1e-9)) { cx = kx; cy = ky; }
   const block = { x: cx - bw / 2, y: cy - bh / 2, w: bw, h: bh };
@@ -868,7 +870,7 @@ export class TargetReticle {
           } else {
             this._selClosureKms = this._selClosureKms == null
               ? rawKms
-              : this._selClosureKms + (rawKms - this._selClosureKms) * (1 - Math.exp(-this._dt / CLOSING_TAU_S));
+              : lerp(this._selClosureKms, rawKms, 1 - Math.exp(-this._dt / CLOSING_TAU_S));
             this._selectedClosureRate = this._selClosureKms;
           }
         }
@@ -1144,8 +1146,8 @@ export class TargetReticle {
     const angle = Math.atan2(-dy, dx); // Screen space angle
 
     return {
-      x: Math.max(pad, Math.min(this._width - pad, ex)),
-      y: Math.max(pad, Math.min(this._height - pad, ey)),
+      x: clamp(ex, pad, this._width - pad),
+      y: clamp(ey, pad, this._height - pad),
       angle,
     };
   }
@@ -1270,7 +1272,7 @@ export class TargetReticle {
       managed: cl.apTargetId != null && target.id === cl.apTargetId,
       threatTier: (cl.threatId != null && target.id === cl.threatId) ? cl.threatTier : null,
       hydrazine: !!(target.salvage && target.salvage.hydrazine),
-      tumbleDegS: target.tumbleRate * 180 / Math.PI,
+      tumbleDegS: radToDeg(target.tumbleRate),
       massKg: target.mass,
       distanceKm: distKm,
       reachKm: cl.reachKm,
@@ -1317,8 +1319,8 @@ export class TargetReticle {
     const y = proj.y;
 
     // Size scales with distance (larger when closer)
-    const distFactor = Math.max(0.2, Math.min(1.0, 5.0 / (distKm + 1)));
-    let size = RETICLE_MIN_SIZE + (RETICLE_MAX_SIZE - RETICLE_MIN_SIZE) * distFactor;
+    const distFactor = clamp(5.0 / (distKm + 1), 0.2, 1.0);
+    let size = lerp(RETICLE_MIN_SIZE, RETICLE_MAX_SIZE, distFactor);
 
     // Target lock ceremony state
     const isLockLost = !isSelected && target.id === this._lockLostTargetId && this._lockLostAnimActive;
@@ -1429,9 +1431,9 @@ export class TargetReticle {
     if (this._catchPulseActive && isSelected) {
       const pulseProgress = Math.max(0, this._catchPulseTime / 0.3);
       ctx.globalAlpha = 0.7 + 0.3 * pulseProgress;
-      ctx.strokeStyle = '#00ff88';
+      ctx.strokeStyle = VisualLaw.COLORS.PLAYER;
       ctx.lineWidth = 2.5;
-      ctx.shadowColor = '#00ff88';
+      ctx.shadowColor = VisualLaw.COLORS.PLAYER;
       ctx.shadowBlur = 12 * pulseProgress;
     }
 
@@ -1512,7 +1514,7 @@ export class TargetReticle {
       // directly at this label ("see OUT OF RANGE"), so the wording is load-bearing.
       if (outOfRange && this._outOfRangeFlashT > 0) {
         // Fade out over the last 0.5 s of the flash.
-        const a = Math.max(0, Math.min(1, this._outOfRangeFlashT / 0.5));
+        const a = clamp01(this._outOfRangeFlashT / 0.5);
         ctx.save();
         ctx.globalAlpha *= a;
         ctx.font = mono(16, 'bold');
@@ -1740,7 +1742,7 @@ export class TargetReticle {
     const x = proj.x;
     const y = proj.y;
 
-    const distFactor = Math.max(0.3, Math.min(1.0, 10.0 / (distKm + 1)));
+    const distFactor = clamp(10.0 / (distKm + 1), 0.3, 1.0);
     const size = 10 + 20 * distFactor;
 
     ctx.save();
@@ -2258,7 +2260,7 @@ export class TargetReticle {
    * @private
    */
   _getDebrisColor(target) {
-    const tumbleDeg = target.tumbleRate * 180 / Math.PI;
+    const tumbleDeg = radToDeg(target.tumbleRate);
 
     // High tumble or large rocket body = red (dangerous)
     if (tumbleDeg > 60 || (target.type === 'rocketBody' && target.mass > 3000)) {

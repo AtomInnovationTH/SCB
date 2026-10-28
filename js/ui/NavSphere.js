@@ -27,6 +27,7 @@ import { createFooterChip, leftOfSliderCss, leftOfSliderBasePx, ORB_CHIP_WIDTH_P
 import { isMarked } from '../systems/ScanMarks.js';
 import { testsRequestedHere } from './hud/TestsSwitch.js';
 import { isShortScreen } from './hud/PhoneFold.js';
+import { degToRad, radToDeg, clamp } from '../core/MathUtil.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -83,10 +84,10 @@ const C = {
   earth:    'rgba(0, 120, 255, 0.5)',
   earthDim: 'rgba(0, 80, 180, 0.25)',
   sun:      '#ffcc00',
-  prograde: '#00ff88',
-  selected: '#00ccff',
+  prograde: VisualLaw.COLORS.PLAYER,
+  selected: VisualLaw.COLORS.INFO,
   geo:      'rgba(80, 170, 255, 0.95)', // LAT/LON/ALT readout — blue, clearly tied to the NavSphere
-  green:    '#00ff88',
+  green:    VisualLaw.COLORS.PLAYER,
   yellow:   '#ffcc00',
   red:      '#ff4444',
   white:    '#ffffff',
@@ -144,7 +145,7 @@ function _eciToGeodeticWithGMST(x, y, z, gmst) {
   const sinLat = Math.sin(lat), cosLat = Math.cos(lat);
   const N = a / Math.sqrt(1 - e2 * sinLat * sinLat);
   const alt = Math.abs(cosLat) > 1e-10 ? p / cosLat - N : Math.abs(ye) - b;
-  return { lat: lat * 180 / Math.PI, lon: Math.atan2(ze, xe) * 180 / Math.PI, alt };
+  return { lat: radToDeg(lat), lon: radToDeg(Math.atan2(ze, xe)), alt };
 }
 
 /**
@@ -156,7 +157,7 @@ function _eciToGeodeticWithGMST(x, y, z, gmst) {
  */
 function _eciToGeodetic(x, y, z) {
   const jd = Date.now() / 86400000 + 2440587.5;
-  const gmst = gmstDeg(jd - 2451545.0) * Math.PI / 180;
+  const gmst = degToRad(gmstDeg(jd - 2451545.0));
   return _eciToGeodeticWithGMST(x, y, z, gmst);
 }
 
@@ -622,7 +623,7 @@ export class NavSphere {
 
     // Longitude meridians (vertical ellipses)
     for (const deg of [-60, -30, 0, 30, 60]) {
-      const phi = deg * Math.PI / 180;
+      const phi = degToRad(deg);
       const rX = Math.abs(R * Math.sin(phi));
       ctx.strokeStyle = gridCol;
       ctx.beginPath();
@@ -1129,7 +1130,7 @@ export class NavSphere {
       const sizeScale = 0.5 + Math.min(target.sizeMeter / 10, 1.0);
       finalSize = dotSz * sizeScale;
     }
-    finalSize = Math.max(NS.DOT_MIN_PX, Math.min(finalSize, NS.DOT_MAX_PX));
+    finalSize = clamp(NS.DOT_MAX_PX, NS.DOT_MIN_PX, finalSize);
 
     // Closure rate coloring (E4)
     const closureRate = this._computeClosureRate(cart, playerPos, this._playerVel);
@@ -1452,13 +1453,13 @@ export class NavSphere {
     if (distanceKm <= spinnerKm) {
       const ratio = distanceKm / spinnerKm;
       if (ratio > 0.8) return '#ffcc00';                // yellow — window closing
-      return '#00ff88';                                  // green — Spinner reach
+      return VisualLaw.COLORS.PLAYER;                                  // green — Spinner reach
     }
     if (distanceKm <= weaverKm) {
       const ratio = distanceKm / weaverKm;
       if (ratio > 0.9) return '#ff4444';                // red — about to leave
       if (ratio > 0.8) return '#ffcc00';                // yellow
-      return '#00ccff';                                  // cyan — Weaver reach
+      return VisualLaw.COLORS.INFO;                                  // cyan — Weaver reach
     }
     return 'rgba(100, 120, 140, 0.4)';                  // dim gray — out of reach
   }
@@ -1528,7 +1529,7 @@ export class NavSphere {
       }
 
       // Choose color by arm type
-      const color = arm.type === 'weaver' ? '#00ccff' : '#00ff88';
+      const color = arm.type === 'weaver' ? VisualLaw.COLORS.INFO : VisualLaw.COLORS.PLAYER;
       // Calm-HUD: steady tether line — presence + colour already encode the
       // arm; the old 0.48 Hz alpha oscillation was a standing-state pulse.
       const alphaBase = 0.6;
@@ -1655,7 +1656,7 @@ export class NavSphere {
       ctx.save();
       ctx.translate(px, py);
       ctx.rotate(Math.PI / 4);
-      ctx.fillStyle = '#ffaa00';
+      ctx.fillStyle = VisualLaw.COLORS.CAUTION;
       ctx.globalAlpha = 0.85;
       ctx.fillRect(-size / 2, -size / 2, size, size);
       ctx.strokeStyle = '#ffcc44';
@@ -1666,7 +1667,7 @@ export class NavSphere {
 
       // Arm label
       ctx.font = mono(10);
-      ctx.fillStyle = '#ffaa00';
+      ctx.fillStyle = VisualLaw.COLORS.CAUTION;
       ctx.globalAlpha = 0.7;
       const label = arm.id ? arm.id.replace(/^(.).*-/, '$1') : '';
       ctx.fillText(label, px + 7, py + 3);

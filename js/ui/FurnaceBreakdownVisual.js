@@ -54,6 +54,7 @@ import * as THREE from 'three';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { smoothstep01 } from '../core/MathUtil.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km). */
 const M = 1e-5;
@@ -488,7 +489,7 @@ export class FurnaceBreakdownVisual {
         // sink into the tip: tip(now) + R(now) · offset · (1 - ease). Monotone toward the tip, exactly on it at u = 1.
         this._tipWorld(c.tipIndex, _v3b);
         this._shipQuat(_qa);
-        const e = u * u * (3 - 2 * u);
+        const e = smoothstep01(u);
         _v3a.copy(c.off).applyQuaternion(_qa).multiplyScalar(1 - e).add(_v3b);
       } else {
         // B(u) = iu²·start + 2·iu·u·ctrl + u²·end

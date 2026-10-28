@@ -20,6 +20,7 @@ import { eventBus }  from '../core/EventBus.js';
 import { Events }    from '../core/Events.js';
 import { mono } from '../core/Typeface.js';
 import { GestureHints } from './hud/GestureHints.js';
+import { degToRad, clamp01, clamp } from '../core/MathUtil.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -32,7 +33,7 @@ const ML  = 10;                        // margin left (px)
 const MB  = 20;                        // margin bottom (px)
 const PERSP_D  = 3.0;
 const VIEW_SC  = 165;
-const TILT_X   = 15 * Math.PI / 180;
+const TILT_X   = degToRad(15);
 const WIRE_CX  = PW / 2;
 const WIRE_CY  = 76;
 const TWO_PI   = Math.PI * 2;
@@ -378,7 +379,7 @@ export class DaughterWireframe {
       this._zoneIndex = -1;
     } else {
       const n = this._shape.zones.length;
-      this._zoneIndex = Math.max(0, Math.min(n - 1, Math.round(zoneId)));
+      this._zoneIndex = clamp(Math.round(zoneId), 0, n - 1);
     }
     this._autoTimer = 0;
   }
@@ -487,7 +488,7 @@ export class DaughterWireframe {
         for (const [a, b] of edges) {
           if (a >= proj.length || b >= proj.length) continue;
           const avgZ      = (proj[a][2] + proj[b][2]) * 0.5;
-          const frontness = Math.max(0, Math.min(1, (1 - avgZ) * 0.5));
+          const frontness = clamp01((1 - avgZ) * 0.5);
           ctx.globalAlpha = 0.35 * frontness;
           ctx.beginPath();
           ctx.moveTo(proj[a][0], proj[a][1]);
@@ -502,7 +503,7 @@ export class DaughterWireframe {
       for (const [a, b] of edges) {
         if (a >= proj.length || b >= proj.length) continue;
         const avgZ  = (proj[a][2] + proj[b][2]) * 0.5;
-        const depT  = Math.max(0, Math.min(1, (avgZ + 1) * 0.5));
+        const depT  = clamp01((avgZ + 1) * 0.5);
         ctx.globalAlpha = baseAlpha * (1 - depT * 0.75);
         ctx.beginPath();
         ctx.moveTo(proj[a][0], proj[a][1]);

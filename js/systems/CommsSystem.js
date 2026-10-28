@@ -20,6 +20,7 @@ import { daughterDisplayName } from '../core/daughterNames.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { flyFirstLine } from './netRouting.js';   // hints-scan D3: the daughter's "Press N" line says her number when N is not hers
 import { depotWords } from './resupplyWords.js';   // lane 3d: the "depot" advice reads the map switch
+import { radToDeg, clamp } from '../core/MathUtil.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -949,7 +950,7 @@ export class CommsSystem {
 
     // The spin number is that piece's own spin rate (rad/s on the record); without one the line is said without a number.
     const spinDegS = (piece && Number.isFinite(piece.tumbleRate) && piece.tumbleRate > 0)
-      ? piece.tumbleRate * 180 / Math.PI : null;
+      ? radToDeg(piece.tumbleRate) : null;
     let template = tmpl.template;
     if (tmpl.needsSpin && spinDegS === null) template = tmpl.templateNoSpin;
 
@@ -1235,7 +1236,7 @@ export class CommsSystem {
    * @param {number} durationS
    */
   _tempDropToTier(tier, durationS) {
-    this._suppressionTier = Math.max(0, Math.min(3, tier | 0));
+    this._suppressionTier = clamp(tier | 0, 0, 3);
     this._tempTierActive = true;
     this._tempTierRestoreS = Math.max(0, durationS || 0);
   }

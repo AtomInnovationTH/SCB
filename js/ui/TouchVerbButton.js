@@ -45,6 +45,7 @@
 
 import { Constants } from '../core/Constants.js';
 import { FloorContract } from '../core/FloorContract.js';
+import { degToRad } from '../core/MathUtil.js';
 
 export const FLY_BTN_ID = 'touch-verb-fly';
 export const DESPIN_BTN_ID = 'touch-verb-despin';
@@ -321,7 +322,7 @@ export class TouchVerbButton {
     try { t = this._d.getDespinTarget ? this._d.getDespinTarget() : null; } catch (_e) { t = null; }
     if (!t) return null;
     const cfg = Constants.DESPIN_LASER || {};
-    const inSpec = (cfg.IN_SPEC_DEG ?? 10) * Math.PI / 180;
+    const inSpec = degToRad(cfg.IN_SPEC_DEG ?? 10);
     if (!((t.tumbleRate || 0) > inSpec)) return null;
     let dist = null;
     try { dist = this._d.getTargetDistanceM ? this._d.getTargetDistanceM(t) : null; } catch (_e) { dist = null; }

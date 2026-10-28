@@ -23,6 +23,7 @@ import { Constants } from '../core/Constants.js';
 import { DebrisField } from '../entities/DebrisField.js';
 import { pieceValues } from './BigPieceValues.js';
 import { bigBodiesOf } from './BigPieces.js';
+import { clamp01 } from '../core/MathUtil.js';
 
 /** Seconds in a day (a trip's days are ship days). */
 export const DAY_S = 86400;
@@ -145,7 +146,7 @@ export function valuesAtCatch(d, massAtCatch) {
  */
 export function meltedSoFar(d, massAtCatch, doneKg) {
   const v = valuesAtCatch(d, massAtCatch);
-  const f = massAtCatch > 0 ? Math.max(0, Math.min(1, doneKg / massAtCatch)) : 0;
+  const f = massAtCatch > 0 ? clamp01(doneKg / massAtCatch) : 0;
   const feeCr = Math.round(v.removalFeeCr * f);
   const shareCr = Math.round(v.consentShare * v.scrapKg * f * Constants.BIG_PIECES.IN_ORBIT_CR_PER_KG);
   return { feeCr, shareCr, netCr: Math.max(0, feeCr - shareCr), metalKg: v.scrapKg * f };

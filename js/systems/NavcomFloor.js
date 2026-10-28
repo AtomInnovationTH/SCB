@@ -56,6 +56,7 @@ import { computeRoutePlan, computeSweepBands } from './OrbitPlanners.js';
 import { Constants } from '../core/Constants.js';
 import { distanceFromZ01 } from '../core/ZoomLadder.js';
 import { earthFrame } from './EarthTurn.js';
+import { clamp } from '../core/MathUtil.js';
 
 /** The NAVCOM (id 4) contract row — by id, never by index (Session H). */
 const FLOOR = FloorContract.byId(4);
@@ -480,7 +481,7 @@ export class NavcomFloor {
     const nu = NavcomFloor._phase(e.ref);
     if (e.kPhase != null && Number.isFinite(nu)) {
       phi = e.kPhase * NavcomFloor._wrap(nu - e.nu1);
-      phi = Math.max(0, Math.min(phi, Math.PI / 4));
+      phi = clamp(Math.PI / 4, 0, phi);
     } else {
       const dt = Math.min(Math.max(now - e.t1, 0), LIVE_EXTRAP_MAX_MS);
       phi = (r.theta / (e.t1 - e.t0)) * dt;

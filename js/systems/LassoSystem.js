@@ -23,6 +23,7 @@ import { DebrisField } from '../entities/DebrisField.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { degToRad, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 /** 1 meter in scene units (1 unit = 100 km = 100000 m) */
 const M = 0.00001;
@@ -1282,7 +1283,7 @@ export class LassoSystem {
         const aimDir = playerVelDir
             ? playerVelDir.clone().normalize()
             : new THREE.Vector3(0, 0, 1);
-        const maxAngle = 30 * Math.PI / 180; // ±30° cone
+        const maxAngle = degToRad(30); // ±30° cone
 
         if (!bestTarget) for (const d of nearby) {
             const debrisPos = this._getDebrisScenePos(d);
@@ -1388,13 +1389,7 @@ export class LassoSystem {
         // blink. Far targets keep the fast 100 m/real-s apparent speed (capped by
         // LASSO_MAX_FLIGHT_TIME).
         const launchDistanceM = muzzleWorld.distanceTo(bestPos) / M;
-        const contactRadiusM = Math.max(
-            Constants.LASSO_CONTACT_RADIUS_FLOOR_M,
-            Math.min(
-                Constants.LASSO_CONTACT_RADIUS_M,
-                Constants.LASSO_CONTACT_RADIUS_FRACTION * launchDistanceM
-            )
-        );
+        const contactRadiusM = clamp(Constants.LASSO_CONTACT_RADIUS_FRACTION * launchDistanceM, Constants.LASSO_CONTACT_RADIUS_FLOOR_M, Constants.LASSO_CONTACT_RADIUS_M);
         this._contactRadiusScene = contactRadiusM * M;
 
         const maxApparentSpeed = Constants.LASSO_SPEED * TimeAuthority.BASE_SCALE; // 100 m/s apparent
@@ -1651,9 +1646,8 @@ export class LassoSystem {
                     // plane (_mouthZEff) so the beads ride THIS frame's
                     // gathered fabric.
                     const gatherT = (Constants.NET_WEB.WRAP_SOCK_GATHER_FRAC ?? 0)
-                        * Math.min(1, Math.max(0,
-                            (this._reelProgress - WRAP_END)
-                            / (Constants.NET_WEB.WRAP_SOCK_GATHER_RAMP ?? 0.25)));
+                        * clamp01((this._reelProgress - WRAP_END)
+                            / (Constants.NET_WEB.WRAP_SOCK_GATHER_RAMP ?? 0.25));
                     this._driveWrapDrape(cinchT, gatherT);
                     NetMeshKit.setRimCinch(this._netKit, cinchT);
                 }
@@ -1708,7 +1702,7 @@ export class LassoSystem {
                 _scratchAway2.normalize();
                 const seatTarget = this._netKit.coneHeight * (Constants.NET_WEB.WRAP_SEAT_FRAC ?? 0);
                 const cinchT = Math.min(1, this._reelProgress / WRAP_END);
-                seatScene = this._wrapSeatD0 + (seatTarget - this._wrapSeatD0) * cinchT;
+                seatScene = lerp(this._wrapSeatD0, seatTarget, cinchT);
             }
             this.projectilePos.copy(piecePos).addScaledVector(_scratchAway2, -seatScene);
 
@@ -2181,7 +2175,7 @@ export class LassoSystem {
         }
         p.settleT += dt;
         const f = Math.min(1, p.settleT / LASSO_ADOPT_SETTLE_S);
-        const ease = f * f * (3 - 2 * f);
+        const ease = smoothstep01(f);
         // 2026-08-26 round 2: the glide lands on the DELIVERY point (collar
         // seat + adoption's interior seat depth) — the exact pin adoptLassoCatch
         // writes — so the pend→adopt hand-off stays snap-free with the engulf seat.

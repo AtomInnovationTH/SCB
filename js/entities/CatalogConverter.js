@@ -16,6 +16,7 @@
 
 import { Constants } from '../core/Constants.js';
 import { deriveCaptureFlags } from './debrisFerrous.js';
+import { degToRad, radToDeg } from '../core/MathUtil.js';
 
 // ============================================================================
 // TYPE MAPPING: catalogue "type" → internal debris type key
@@ -124,7 +125,7 @@ export function catalogEntryToDebrisData(entry, id) {
   const tumbleDeg = type === 'rocketBody' ? (2 + (seed % 10))
                   : type === 'defunctSat' ? (5 + (seed % 20))
                   : (15 + (seed % 120));
-  const tumbleRate = tumbleDeg * Math.PI / 180;
+  const tumbleRate = degToRad(tumbleDeg);
 
   // Deterministic unit tumble axis from seed (avoids random())
   const th = (seed & 0xffff) / 0xffff * 2 * Math.PI;
@@ -156,10 +157,10 @@ export function catalogEntryToDebrisData(entry, id) {
   const orbit = {
     semiMajorAxis: smaScene,
     eccentricity: ecc,
-    inclination: incDeg * Math.PI / 180,
-    raan: raanDeg * Math.PI / 180,
-    argPerigee: argDeg * Math.PI / 180,
-    trueAnomaly: maDeg * Math.PI / 180,
+    inclination: degToRad(incDeg),
+    raan: degToRad(raanDeg),
+    argPerigee: degToRad(argDeg),
+    trueAnomaly: degToRad(maDeg),
     meanMotion: 0,
   };
 
@@ -381,7 +382,7 @@ export function regimeFromStartOrbit(startOrbit) {
     altMinKm: cell.min,
     altMaxKm: cell.max,
     altLabel: cell.label || `${cell.min}`,
-    incCenterDeg: startOrbit ? startOrbit.inclination * 180 / Math.PI : 51.6,
+    incCenterDeg: startOrbit ? radToDeg(startOrbit.inclination) : 51.6,
     incTolDeg: tol.INC_TOL_DEG,
     raanCenterRad: startOrbit ? startOrbit.raan : 0,
     raanTolDeg: tol.RAAN_TOL_DEG,

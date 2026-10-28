@@ -21,6 +21,7 @@
 
 import { subPointToOrbit, keplerianToCartesian } from '../entities/OrbitalMechanics.js';
 import { latLonToUnitVec } from '../scene/Ephemeris.js';
+import { degToRad, radToDeg, clamp } from '../core/MathUtil.js';
 
 /** Cross-track offset so the home city passes ~200 km abeam (starboard). */
 export const START_ABEAM_DEG = 1.8;
@@ -42,7 +43,7 @@ export function computeStartOrbit(lang) {
   if (!start || !Number.isFinite(start.lat) || !Number.isFinite(start.lon)) return null;
 
   const incDeg = Number.isFinite(lang.incDeg) ? lang.incDeg : DEFAULT_INC_DEG;
-  const inclination = incDeg * Math.PI / 180;
+  const inclination = degToRad(incDeg);
   const ascending = !(lang.descending === true);
   let { raan, trueAnomaly } = subPointToOrbit(start.lat, start.lon, inclination, ascending);
 
@@ -53,7 +54,7 @@ export function computeStartOrbit(lang) {
   // the track, a uniform ~200 km for every language. If the offset nudges the
   // aim latitude past the inclination, subPointToOrbit clamps to the highest
   // reachable parallel — still within ~1° of the intent.
-  const beta = START_ABEAM_DEG * Math.PI / 180;
+  const beta = degToRad(START_ABEAM_DEG);
   const probe = keplerianToCartesian({
     semiMajorAxis: 6771, eccentricity: 0.0001, inclination,
     raan, argPerigee: 0, trueAnomaly,
@@ -68,14 +69,14 @@ export function computeStartOrbit(lang) {
   const ax = c.x * cb + (hx / hl) * sb;
   const ay = c.y * cb + (hy / hl) * sb;
   const az = c.z * cb + (hz / hl) * sb;
-  const aimLatDeg = Math.asin(Math.max(-1, Math.min(1, ay))) * 180 / Math.PI;
-  const aimLonEastDeg = -Math.atan2(az, ax) * 180 / Math.PI; // inverse of latLonToUnitVec
+  const aimLatDeg = radToDeg(Math.asin(clamp(ay, -1, 1)));
+  const aimLonEastDeg = radToDeg(-Math.atan2(az, ax)); // inverse of latLonToUnitVec
   ({ raan, trueAnomaly } = subPointToOrbit(aimLatDeg, aimLonEastDeg, inclination, ascending));
 
   // ── Along-track lead: spawn behind the abeam point so the city appears
   // ahead first. ν decreases against the direction of motion; inc/RAAN — and
   // therefore the ground track — are untouched.
-  const lead = START_TRACK_LEAD_DEG * Math.PI / 180;
+  const lead = degToRad(START_TRACK_LEAD_DEG);
   trueAnomaly = (((trueAnomaly - lead) % TWO_PI) + TWO_PI) % TWO_PI;
 
   return { inclination, raan, trueAnomaly };

@@ -38,6 +38,7 @@ import { missFailureKind } from '../entities/CaptureNet.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km). Same as PlayerSatellite.js */
 const M = 1e-5;
@@ -238,7 +239,7 @@ export function worldTumbleForKitAttitude(launchDirection, kitAxis, kitAngleRad)
   _qKit.multiply(_qDesired);            // qTumble(world) = qKit ⊗ R_desired(kit)
 
   // Axis/angle decomposition (same shape as CaptureNet._applyCatchOrientation).
-  const w = Math.max(-1, Math.min(1, _qKit.w));
+  const w = clamp(_qKit.w, -1, 1);
   const angle = 2 * Math.acos(w);
   const s = Math.sqrt(Math.max(0, 1 - w * w));
   const axis = (s > 1e-6)
@@ -1510,7 +1511,7 @@ export class CaptureNetVisual {
           // RATE is no use here: since the yo-yo despin it starts at 3×
           // SPIN_HZ and falls to 1×, so rate/SPIN_HZ clamped at 1 all along
           // and the net appeared fully open in one frame.
-          const openFrac = Math.min(1, Math.max(0, (net.stateTimer ?? 0) / CN.SPIN_UP_TIME));
+          const openFrac = clamp01((net.stateTimer ?? 0) / CN.SPIN_UP_TIME);
           discMesh.scale.setScalar(Math.max(0.05, openFrac));
           discMesh.material.color.setHex(COL_DISC);
           discMesh.material.opacity = 0.6;
@@ -2074,12 +2075,12 @@ export class CaptureNetVisual {
         vis.collapseCinch = cinchFrac;
         if (garnish) jiggleAmp = mouthRadius * _NW.MOUTH_COLLAPSE_FLUTTER_FRAC * colFrac;
       } else if (state === STATES.ENVELOP) {
-        drape = Math.min(1, Math.max(0, net.stateTimer / CN.ENVELOP_TIME));
+        drape = clamp01(net.stateTimer / CN.ENVELOP_TIME);
         // Settle-jiggle: strongest mid-drape, decaying as the bag seats.
         if (garnish) jiggleAmp = mouthRadius * _NT.DRAPE_JIGGLE_ENVELOP_FRAC * Math.sin(Math.PI * drape);
       } else if (state === STATES.CINCH_CLOSING) {
         drape = 1;
-        cinchFrac = Math.min(1, Math.max(0, net.stateTimer / CN.CINCH_CLOSE_TIME));
+        cinchFrac = clamp01(net.stateTimer / CN.CINCH_CLOSE_TIME);
         if (garnish) jiggleAmp = mouthRadius * _NT.DRAPE_JIGGLE_CINCH_FRAC * (1 - cinchFrac);
       } else if (state === STATES.CAPTURED || state === STATES.REELING
                  || state === STATES.BERTHED || state === STATES.COLLARED
@@ -2188,7 +2189,7 @@ export class CaptureNetVisual {
         // fraction was already 1 on the first frame. The film is a separate
         // mesh, scaled the same way (uniformly, like the cone) so it keeps the
         // cone's depth. Physics and the net's position are untouched.
-        const openFrac = Math.min(1, Math.max(0, (net.stateTimer ?? 0) / CN.SPIN_UP_TIME));
+        const openFrac = clamp01((net.stateTimer ?? 0) / CN.SPIN_UP_TIME);
         const openScale = Math.max(0.05, openFrac);
         coneMesh.scale.setScalar(openScale);
         if (vis.kitHandle && vis.kitHandle.membraneMesh) {
@@ -2232,7 +2233,7 @@ export class CaptureNetVisual {
         // radius lerp at t=1), so beads and fabric pinch together.
         // collapseCinch is 0 until the physics latch, and mouthRadius + 0 × (…)
         // is bit-identical to the design placement.
-        const wrFlight = mouthRadius + (closedRadius - mouthRadius) * vis.collapseCinch;
+        const wrFlight = lerp(mouthRadius, closedRadius, vis.collapseCinch);
         for (let i = 0; i < weightCount; i++) {
           const angle = (2 * Math.PI * i / weightCount) + vis.spinAngle;
           rimWeights[i].position.set(
@@ -2306,7 +2307,7 @@ export class CaptureNetVisual {
         // the target and wrapping it inside the closing bag. Drawstring
         // strands (apex → weight) automatically lengthen, reading as
         // bag-cone fabric draping around the target.
-        const envProgress = Math.min(1, Math.max(0, net.stateTimer / CN.ENVELOP_TIME));
+        const envProgress = clamp01(net.stateTimer / CN.ENVELOP_TIME);
         vis.spinAngle += net.spinRate * Math.PI * 2 * dt;
         const envZ = -coneHeight * (1 + envProgress);
         for (let i = 0; i < weightCount; i++) {
@@ -2357,7 +2358,7 @@ export class CaptureNetVisual {
         // half-thickness of the cone mouth. Drawstring strands from apex
         // (z=0) to the ring at z=-coneHeight render as the long bag-cone
         // strands cinching closed at the debris.
-        const cinchProgress = Math.min(1, Math.max(0, net.stateTimer / CN.CINCH_CLOSE_TIME));
+        const cinchProgress = clamp01(net.stateTimer / CN.CINCH_CLOSE_TIME);
         // Item 10: the sweep closes ONTO the catch and stops — floored at the
         // mouth-plane contents floor (the kit's mouthFloorRadius), matching
         // the film's rim ring, instead of sweeping through a catch that
@@ -2366,7 +2367,7 @@ export class CaptureNetVisual {
         // draw is bit-identical; at cinchProgress 1 this equals
         // _setCinchedRim's radius exactly.
         const curR = Math.max(
-          mouthRadius + (closedRadius - mouthRadius) * cinchProgress,
+          lerp(mouthRadius, closedRadius, cinchProgress),
           NetMeshKit.mouthFloorRadius(vis.kitHandle),
         );
         vis.spinAngle += net.spinRate * Math.PI * 2 * dt;
@@ -2623,8 +2624,8 @@ export class CaptureNetVisual {
     let g = vis._bagG || 0;
     if (closing) {
       // the drawstring closing draws the bag in with it: closed bag = compact bag
-      const p = Math.min(1, Math.max(0, (net.stateTimer || 0) / CN.CINCH_CLOSE_TIME));
-      g = Math.max(g, p * p * (3 - 2 * p));
+      const p = clamp01((net.stateTimer || 0) / CN.CINCH_CLOSE_TIME);
+      g = Math.max(g, smoothstep01(p));
     } else if (held) {
       // a net born held (an adopted lasso catch) starts compact; otherwise finish any gather left
       g = vis._bagG === undefined ? 1 : Math.min(1, g + dt / BAG.GATHER_S);
@@ -2642,7 +2643,7 @@ export class CaptureNetVisual {
       return;
     }
     vis._bagG = g;
-    const ws = 1 + (BAG.WEIGHT_RADIUS_M / NET_CER.RIM_WEIGHT_RENDER_RADIUS_M - 1) * g;
+    const ws = lerp(1, BAG.WEIGHT_RADIUS_M / NET_CER.RIM_WEIGHT_RENDER_RADIUS_M, g);
     for (const w of vis.rimWeights) w.scale.setScalar(ws);
 
     const chopMul = (st === STATES.COLLARED && d._breakdownActive && net._digestPhaseT != null)
@@ -2687,8 +2688,8 @@ export class CaptureNetVisual {
     apex.y += (c.y - L.y * back - apex.y) * g;
     apex.z += (c.z - L.z * back - apex.z) * g;
     // the size: from the built cone to apex -> rim plane = back + RIM_AHEAD_FRAC radii, mouth MOUTH_FRAC radii
-    const coneH = vis.coneHeight + (back + ahead - vis.coneHeight) * g;
-    const mouth = vis.mouthRadius + (mouthR - vis.mouthRadius) * g;
+    const coneH = lerp(vis.coneHeight, back + ahead, g);
+    const mouth = lerp(vis.mouthRadius, mouthR, g);
     NetMeshKit.setBagShape(kit, coneH, mouth);
     this._aimBag(vis, net);
   }
@@ -2712,8 +2713,8 @@ export class CaptureNetVisual {
     const dist = view.tipWorld.distanceTo(d._scenePosition);
     if (!(vis._handD0 > 0)) vis._handD0 = Math.max(dist, 1e-6);
     // "arrived" = within CINCH_ARRIVED_FRAC of the starting distance (the catch is seated on the tip's bag, not at a point)
-    const x = Math.min(1, Math.max(0, (1 - dist / vis._handD0) / (1 - BAG.CINCH_ARRIVED_FRAC)));
-    const c = x * x * (3 - 2 * x);
+    const x = clamp01((1 - dist / vis._handD0) / (1 - BAG.CINCH_ARRIVED_FRAC));
+    const c = smoothstep01(x);
     vis._handCinch = Math.max(vis._handCinch || 0, c);
     return vis._handCinch;
   }
@@ -2768,7 +2769,7 @@ export class CaptureNetVisual {
     const szHi = NW.MEMBRANE_WELDED_LARGE_SIZE_M ?? 2.0;
     const szLo = NW.MEMBRANE_WELDED_SMALL_SIZE_M ?? 0.8;
     if (oSmall != null && dSize > 0 && szHi > szLo) {
-      const st = Math.max(0, Math.min(1, (szHi - dSize) / (szHi - szLo)));
+      const st = clamp01((szHi - dSize) / (szHi - szLo));
       threadO += (oSmall - threadO) * st;
     }
     return threadO;
@@ -2845,7 +2846,7 @@ export class CaptureNetVisual {
     drawstringLine.visible = true;
     const cinch = vis.failure ? vis.failure.cinch : 0;
     const r = Math.max(
-      mouthRadius + (closedRadius - mouthRadius) * cinch,
+      lerp(mouthRadius, closedRadius, cinch),
       NetMeshKit.mouthFloorRadius(vis.kitHandle),
     );
     for (let i = 0; i < weightCount; i++) {

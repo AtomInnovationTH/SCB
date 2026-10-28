@@ -1,27 +1,16 @@
 /**
- * solarCellTexture.js — Shared procedural solar-cell (photovoltaic) texture.
- *
- * Generates a tileable CanvasTexture that reads as a real spacecraft PV panel:
- * a dense grid of near-black triple-junction GaAs cells (the "black-light test"
- * look of Dawn/Juno arrays), close-packed with hair-thin silver interconnect
- * gridlines and 2–3 thin busbars per cell. Real space arrays cover ~100% of the
- * sun-facing area with dark rectangular cells — NOT a sparse blue wireframe on a
- * bright substrate — so the substrate here is dark and the cells dominate.
- *
- * Used as the `map`/`emissiveMap` of flat body-mounted PV sub-panels (mother
- * barrel + daughter) so the cell pattern lives on the panel surface itself.
+ * Shared procedural solar-cell texture: tileable near-black triple-junction GaAs cells (Dawn/Juno look) on a
+ * dark substrate with silver gridlines and busbars. Real arrays cover ~100% of the face with dark cells, so
+ * the substrate is dark, not a bright wireframe. `map`/`emissiveMap` of the flat body-mounted PV sub-panels.
  *
  * @module scene/solarCellTexture
  */
 
 import * as THREE from 'three';
 
-/** Cached textures keyed by cell-grid resolution. */
 const _cache = new Map();
 
 /**
- * Build (or return a cached) tileable solar-cell texture.
- *
  * @param {object} [opts]
  * @param {number} [opts.size=512]   — canvas pixel dimension (power of two)
  * @param {number} [opts.cols=4]     — cell columns within the tile
@@ -43,13 +32,12 @@ export function getSolarCellTexture(opts = {}) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
-  // Dark interconnect substrate (Kapton/adhesive seen in the hairline gaps).
   ctx.fillStyle = '#10131c';
   ctx.fillRect(0, 0, size, size);
 
-  const cw = size / cols;          // cell pixel width
-  const ch = size / rows;          // cell pixel height (cells are taller than wide)
-  const gap = Math.max(1, Math.round(Math.min(cw, ch) * 0.05)); // hairline interconnect gap
+  const cw = size / cols;
+  const ch = size / rows;          // cells are taller than wide
+  const gap = Math.max(1, Math.round(Math.min(cw, ch) * 0.05));
   const fingerW = Math.max(1, Math.round(cw * 0.02));
   const busW = Math.max(1, Math.round(cw * 0.05));
 
@@ -60,15 +48,14 @@ export function getSolarCellTexture(opts = {}) {
       const w = cw - gap * 2;
       const h = ch - gap * 2;
 
-      // Per-cell tone jitter (manufacturing/illumination variance). Cells are
-      // very dark blue-violet — triple-junction GaAs reads near-black.
+      // per-cell tone jitter; very dark blue-violet
       const j = Math.abs((Math.sin(cx * 12.9898 + ry * 78.233) * 43758.5453) % 1);
       const jitter = Math.floor(j * 10) - 5; // ±5
       const r = 20 + jitter;
       const g = 22 + jitter;
       const b = 46 + jitter;
 
-      // Diagonal gradient → faint glassy AR-coating sheen, still dark.
+      // faint AR-coating sheen, still dark
       const grad = ctx.createLinearGradient(x, y, x + w, y + h);
       grad.addColorStop(0.0, `rgb(${r + 14}, ${g + 16}, ${b + 34})`);
       grad.addColorStop(0.5, `rgb(${r}, ${g}, ${b})`);
@@ -76,7 +63,6 @@ export function getSolarCellTexture(opts = {}) {
       ctx.fillStyle = grad;
       ctx.fillRect(x, y, w, h);
 
-      // Hair-thin vertical finger conductors (many, faint silver).
       ctx.strokeStyle = 'rgba(150, 165, 195, 0.22)';
       ctx.lineWidth = fingerW;
       const fingers = 8;
@@ -88,7 +74,6 @@ export function getSolarCellTexture(opts = {}) {
         ctx.stroke();
       }
 
-      // Two thin vertical busbars (brighter silver) — the cell's main collectors.
       ctx.strokeStyle = 'rgba(190, 205, 235, 0.45)';
       ctx.lineWidth = busW;
       for (let bbar = 1; bbar <= 2; bbar++) {
@@ -111,27 +96,17 @@ export function getSolarCellTexture(opts = {}) {
   return tex;
 }
 
-/** Test/teardown hook — drop all cached textures. */
 export function _resetSolarCellTextureCache() {
   for (const t of _cache.values()) { if (t && t.dispose) t.dispose(); }
   _cache.clear();
 }
 
-/** Cached ROSA-backside textures keyed by opts. */
 const _rosaBackCache = new Map();
 
 /**
- * Build (or return a cached) tileable ROSA wing BACKSIDE substrate texture
- * (Task 3, F3). The deployable-ROSA blanket backside reads as a deep amber-brown
- * copper-Kapton sheet quilted by a bay-seam grid, crossed by a few lighter
- * stiffener strips along the length, with faint wiring runs and per-bay value
- * jitter — NOT the flat untextured brown cardboard it was before. Multiplies
- * under a white material tint (hue mostly from the map); pairs with the existing
- * matte, low-metalness `panelMatBack` and its never-black emissive floor.
- *
- * Follows the getSolarCellTexture convention exactly: module-level cache keyed by
- * opts, `document` guard returning null headless, CanvasTexture + SRGBColorSpace
- * + RepeatWrapping + anisotropy 8, plus a `_resetRosaBackTextureCache()` hook.
+ * Tileable ROSA wing BACKSIDE texture: amber-brown copper-Kapton with bay seams, lighter stiffener strips along
+ * the length (Y), faint wiring runs and per-bay value jitter. Multiplies under a white material tint (hue mostly
+ * from the map). Same conventions as getSolarCellTexture; also has a `_resetRosaBackTextureCache()` hook.
  *
  * @param {object} [opts]
  * @param {number} [opts.size=512]   — canvas pixel dimension (power of two)
@@ -159,14 +134,12 @@ export function getRosaBackTexture(opts = {}) {
     return s - Math.floor(s);
   };
 
-  // Deep amber-brown copper-Kapton base (#7a4f26 family).
   ctx.fillStyle = '#7a4f26';
   ctx.fillRect(0, 0, size, size);
 
-  const bw = size / baysX;   // bay pixel width
-  const bh = size / baysY;   // bay pixel height
+  const bw = size / baysX;
+  const bh = size / baysY;
 
-  // Per-bay ±4% value jitter over the base (manufacturing/illumination variance).
   for (let by = 0; by < baysY; by++) {
     for (let bx = 0; bx < baysX; bx++) {
       const j = rand(bx + 1, by + 1);
@@ -177,7 +150,6 @@ export function getRosaBackTexture(opts = {}) {
     }
   }
 
-  // Bay-seam grid — darker quilting lines dividing the blanket into bays.
   ctx.strokeStyle = 'rgba(40, 26, 12, 0.75)';
   ctx.lineWidth = Math.max(1, Math.round(size * 0.006));
   for (let bx = 1; bx < baysX; bx++) {
@@ -189,7 +161,6 @@ export function getRosaBackTexture(opts = {}) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(size, y); ctx.stroke();
   }
 
-  // 2–3 lighter stiffener strips running the full length (along Y).
   const strips = 3;
   const stripW = Math.max(2, Math.round(size * 0.018));
   ctx.fillStyle = 'rgba(168, 122, 66, 0.55)';
@@ -198,7 +169,6 @@ export function getRosaBackTexture(opts = {}) {
     ctx.fillRect(sx, 0, stripW, size);
   }
 
-  // A few faint wiring runs — thin darker curves crossing the blanket.
   ctx.strokeStyle = 'rgba(30, 20, 10, 0.45)';
   ctx.lineWidth = Math.max(1, Math.round(size * 0.004));
   const wires = 4;
@@ -222,7 +192,6 @@ export function getRosaBackTexture(opts = {}) {
   return tex;
 }
 
-/** Test/teardown hook — drop all cached ROSA-backside textures. */
 export function _resetRosaBackTextureCache() {
   for (const t of _rosaBackCache.values()) { if (t && t.dispose) t.dispose(); }
   _rosaBackCache.clear();

@@ -32,6 +32,7 @@ import { getLanguage } from '../core/Languages.js';
 // the sim ship reads after the cut, so the unmasked 'flyaround' departure
 // stays continuous across the menu→game hand-off.
 import { openingDance } from '../systems/OpeningDance.js';
+import { degToRad, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 // Lazily-created singleton flag painter (Canvas2D). Reused for every patch
 // repaint — cheap, browser-only, and independent of the debris flag atlas.
@@ -356,7 +357,7 @@ function buildAstronaut(mat, flagCode = 'USA') {
       const t = count === 1 ? 0.5 : i / (count - 1);
       const ring = new THREE.Mesh(
         new THREE.TorusGeometry(radius, M * 0.016, 6, 16), mat.suitFold);
-      ring.position.y = yTop + (yBot - yTop) * t;
+      ring.position.y = lerp(yTop, yBot, t);
       ring.rotation.x = Math.PI / 2;
       ring.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       parent.add(ring);
@@ -1137,7 +1138,7 @@ export function applyHeroPackedPose(mother) {
   mother._flowerLaunchLock = true;
   mother._flowerOverrideFold = false;
   mother._flowerTargetTheta = undefined;
-  mother._flowerThetaRad = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
+  mother._flowerThetaRad = degToRad(FL.POSE_LAUNCH_DEG);
   mother._updateFlower(0);
   mother._setRosaWingProgress(1, 0);
   mother._setRosaWingProgress(2, 0);
@@ -1160,15 +1161,15 @@ export function applyHeroPackedPose(mother) {
  */
 export function applyHeroDanceProgress(mother, p) {
   const FL = Constants.THERMAL.FLOWER;
-  const fromRad = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
-  const toRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+  const fromRad = degToRad(FL.POSE_LAUNCH_DEG);
+  const toRad = degToRad(FL.POSE_STOW_DEG);
   // Clamp defensively: a stub or driver bug must not push the pose past the
   // hardware band (the flower clamp inside _updateFlower bounds theta anyway,
   // but the wing roll-out scale has no internal bound).
   const flower = _clamp01(p.flower ?? 0);
   const wing1 = _clamp01(p.wing1 ?? 0);
   const wing2 = _clamp01(p.wing2 ?? 0);
-  mother._flowerThetaRad = fromRad + (toRad - fromRad) * flower;
+  mother._flowerThetaRad = lerp(fromRad, toRad, flower);
   mother._updateFlower(0);
   mother._setRosaWingProgress(1, wing1);
   mother._setRosaWingProgress(2, wing2);
@@ -1954,7 +1955,7 @@ export class MenuScene3D {
     this._mother._flowerLaunchLock = false;
     this._mother._flowerOverrideFold = false;
     this._mother._flowerTargetTheta = undefined;
-    this._mother._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+    this._mother._flowerThetaRad = degToRad(FL.POSE_STOW_DEG);
     this._mother._updateFlower(0);
     this._mother._setRosaWingProgress(1, 1);
     this._mother._setRosaWingProgress(2, 1);
@@ -2083,8 +2084,7 @@ export class MenuScene3D {
     // so the welding astronaut + arc stay the framed centerpiece at all times.
     // Centre angle ~0.5 rad puts the camera in the +X/+Z front-right octant.
     // During departure the orbit radius eases 5.5 → 8 so the hero recedes.
-    const orbitR = this._departureBaseOrbitR +
-      (this._departureOrbitR - this._departureBaseOrbitR) * dep;
+    const orbitR = lerp(this._departureBaseOrbitR, this._departureOrbitR, dep);
     // #5 orientation continuity — two randomly-chosen treatments (full new-game
     // exit only; continue/reduced use 'partial'). `bt` is the normalized beat
     // clock (fraction of dur); the orientation move is gated to BEAT_ORIENT_GATE
@@ -2100,9 +2100,9 @@ export class MenuScene3D {
       // on the sim chase framing (seamless). She dissolves out over the final 10%.
       // Own gate (earlier than the shared orient gate) → more time to rotate.
       const flyGate = _clamp01((bt - BEAT_FLYAROUND_GATE) / Math.max(0.001, 1 - BEAT_FLYAROUND_GATE));
-      const fa = flyGate * flyGate * (3 - 2 * flyGate);   // smoothstep
-      const angCentre  = SWAY_ANG_CENTRE  + (FLYAROUND_ANG_END  - SWAY_ANG_CENTRE)  * fa;
-      const camYCentre = SWAY_CAMY_CENTRE + (FLYAROUND_CAMY_END - SWAY_CAMY_CENTRE) * fa;
+      const fa = smoothstep01(flyGate);   // smoothstep
+      const angCentre  = lerp(SWAY_ANG_CENTRE, FLYAROUND_ANG_END, fa);
+      const camYCentre = lerp(SWAY_CAMY_CENTRE, FLYAROUND_CAMY_END, fa);
       this._positionSwayCamera(angCentre, camYCentre, orbitR, 1 - fa);
       if (this._mother) this._mother.rotation.z = MOTHER_BASE_ROLL_Z * (1 - fa);
       this._tmpLook.copy(this._lookTarget).multiplyScalar(1 - fa);   // → hull centre (no per-frame alloc)
@@ -2116,8 +2116,8 @@ export class MenuScene3D {
       // 'partial': modest end-pose bias toward the sim view + a gentle ~28°
       // de-roll (gated after push-off); the power-up flash (main.js) masks the
       // residual face-flip. Reduced motion still lands on the biased end pose.
-      const angCentre  = SWAY_ANG_CENTRE  + (EXIT_CAM_ANG_END  - SWAY_ANG_CENTRE)  * dep;
-      const camYCentre = SWAY_CAMY_CENTRE + (EXIT_CAM_CAMY_END - SWAY_CAMY_CENTRE) * dep;
+      const angCentre  = lerp(SWAY_ANG_CENTRE, EXIT_CAM_ANG_END, dep);
+      const camYCentre = lerp(SWAY_CAMY_CENTRE, EXIT_CAM_CAMY_END, dep);
       this._positionSwayCamera(angCentre, camYCentre, orbitR, this._reducedMotion ? 0 : 1 - dep * 0.85);
       this.camera.lookAt(this._lookTarget);   // work site (weld / astronaut)
       let rollEase = 0;
@@ -2292,17 +2292,17 @@ export class MenuScene3D {
         const legs = this._astroLegPose;
         const bases = this._astroLegPoseBase;
         if (legs[0]) {
-          legs[0].leg.rotation.x = bases[0].legX + (EXIT_LEG_L_X - bases[0].legX) * poseE;
-          legs[0].shank.rotation.x = bases[0].shankX + (EXIT_SHANK_L_X - bases[0].shankX) * poseE;
+          legs[0].leg.rotation.x = lerp(bases[0].legX, EXIT_LEG_L_X, poseE);
+          legs[0].shank.rotation.x = lerp(bases[0].shankX, EXIT_SHANK_L_X, poseE);
         }
         if (legs[1]) {
-          legs[1].leg.rotation.x = bases[1].legX + (EXIT_LEG_R_X - bases[1].legX) * poseE;
-          legs[1].shank.rotation.x = bases[1].shankX + (EXIT_SHANK_R_X - bases[1].shankX) * poseE;
+          legs[1].leg.rotation.x = lerp(bases[1].legX, EXIT_LEG_R_X, poseE);
+          legs[1].shank.rotation.x = lerp(bases[1].shankX, EXIT_SHANK_R_X, poseE);
         }
       }
       if (this._astroLShoulder) {
-        this._astroLShoulder.rotation.z = this._lShoulderBaseRotZ + (EXIT_ARM_Z - this._lShoulderBaseRotZ) * poseE;
-        this._astroLShoulder.rotation.x = this._lShoulderBaseRotX + (EXIT_ARM_X - this._lShoulderBaseRotX) * poseE;
+        this._astroLShoulder.rotation.z = lerp(this._lShoulderBaseRotZ, EXIT_ARM_Z, poseE);
+        this._astroLShoulder.rotation.x = lerp(this._lShoulderBaseRotX, EXIT_ARM_X, poseE);
       }
       this._astro.rotation.x = this._astroBaseRotX + EXIT_CHEST_OPEN * poseE;
     }

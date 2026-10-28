@@ -12,6 +12,8 @@
  * @module ui/shopPin
  */
 
+import { clamp01 } from '../core/MathUtil.js';
+
 /**
  * Live progress toward a pinned shop upgrade, for the "visible next goal" HUD
  * widget.
@@ -24,7 +26,7 @@ export function pinProgress(credits, upgrade) {
     return { pct: 0, remaining: 0, affordable: false };
   }
   const c = Math.max(0, credits || 0);
-  const pct = Math.max(0, Math.min(1, c / upgrade.cost));
+  const pct = clamp01(c / upgrade.cost);
   const remaining = Math.max(0, upgrade.cost - c);
   return { pct, remaining, affordable: c >= upgrade.cost };
 }

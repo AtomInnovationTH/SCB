@@ -18,6 +18,7 @@ import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { orbitToSceneCartesian, cartesianToKeplerian } from '../entities/OrbitalMechanics.js';
+import { clamp } from '../core/MathUtil.js';
 
 // ST-6.3: Graceful MOID import — back-compat if MoidCalculator unavailable (§C.6)
 let _computeMOID = null;
@@ -484,7 +485,7 @@ export class ConjunctionSystem {
 
     const rpDotRv = rpx * rvx + rpy * rvy + rpz * rvz;
     let tca = -rpDotRv / rvDotRv;
-    tca = Math.max(0, Math.min(LOOK_AHEAD_S, tca));
+    tca = clamp(tca, 0, LOOK_AHEAD_S);
 
     // Miss vector at TCA
     const cx = rpx + rvx * tca;

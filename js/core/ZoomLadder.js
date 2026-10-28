@@ -1,64 +1,46 @@
 /**
- * ZoomLadder.js — the Zoom Ladder's pure, headless gesture/decision core (S1).
+ * @module core/ZoomLadder — the Zoom Ladder's pure, headless gesture/decision core. Contract:
+ * archive/ladder/06-core-api.md.
  *
- * Implements the binding API contract in docs/ladder/06-core-api.md: the
- * (floor, z01) state machine — wall detection, spring charge (τ decay,
- * ≥3-events/400 ms gate, 1.6× firm-in, ≤20% creep, one-crossing-per-gesture
- * lock, settle-back, momentum-tail rejection, peek), crossing decisions with
- * entry z01 0.25/0.75, dock-gated hard walls, subject-fallback re-aims, and
- * the alarm knock → klaxon → auto-ride escalation.
+ * (floor, z01) state machine: wall detection, spring charge (τ decay, ≥ MIN_EVENTS (4 in the contract) within
+ * EVENT_WINDOW_MS (400 ms), 1.6× firm-in, ≤20% creep, one crossing per gesture, settle-back, momentum-tail rejection,
+ * peek), crossing decisions with entry z01 0.25/0.75, dock-gated hard walls, subject-fallback re-aims, and the alarm
+ * knock → klaxon → auto-ride escalation.
  *
- * PURE & DETERMINISTIC (docs/ladder/03-plan.md S1): no THREE, no DOM, no
- * EventBus, no Date.now, no timers. Every input carries `tMs` (the caller's
- * monotonic clock, in ms); the same call sequence always yields the same
- * decisions. Each input method synchronously returns a `Decision[]` — the
- * core never calls out; S2 (WheelRouter / ride engine / rail) translates
- * decisions into camera/UI/audio actions.
+ * PURE & DETERMINISTIC: no THREE, no DOM, no EventBus, no Date.now, no timers. Every input carries `tMs`
+ * (the caller's monotonic clock, ms); the same call sequence always yields the same decisions. Each input method
+ * synchronously returns a `Decision[]`; the core never calls out
+ * (WheelRouter / ride engine / rail translate decisions into camera/UI/audio actions). Permitted imports are Constants
+ * and FloorContract; this module needs FloorContract alone.
  *
- * The only permitted imports are Constants and FloorContract; this module
- * needs FloorContract alone (default floor table + spring/geometry numbers).
- *
- * Direction vocabulary (00-spec.md §4 "scroll up = zoom in"):
+ * Direction (scroll up = zoom in; docs/ladder/00-spec.md §4):
  *   dir 'in'  → z01 decreases → lower wall → side 'down' → toFloor = floor−1
  *   dir 'out' → z01 increases → upper wall → side 'up'   → toFloor = floor+1
- * Inbound (zoom-in, toward interiors) crossings are the FIRM direction:
- * threshold = CHARGE_THRESHOLD × destination `humps.inFirmness` (1.6×);
- * outbound crossings use the soft 1× base (firm-in / soft-out).
+ * Inbound crossings are the FIRM direction: threshold = CHARGE_THRESHOLD × destination `humps.inFirmness` (1.6×);
+ * outbound use the soft 1× base.
  *
- * Decision union (see docs/ladder/06-core-api.md for field semantics):
- *   move | charge | cross | denied | settle | ride | reaim | verb | alarm
+ * Decision union: move | charge | cross | denied | settle | ride | reaim | verb | alarm
  *
- * G3 (flick grammar, docs/ladder/01-numbers.md §hump-spring G3 rationale):
- * flicks are the PRIMARY navigation quantum; the G2 sustained push stays as
- * the additive fallback. A flick = deliberate (non-tail) mags accumulating to
- * ≥ FLICK_MIN_MAG within FLICK_MAX_DRIVE_MS, where the trigger event must
- * RISE above the accumulation run's first event (or alone meet the threshold)
- * — so equal-mag push streams (wheel notches, plateaus) and slow/sparse
- * scrolling never flick, and tail events neither accumulate nor trigger
- * (a tail resets + re-arms the detector: a flick's own momentum can never
- * read as a second flick). One flick mid-floor rides WITHIN the floor to
- * that wall edge ({type:'ride', kind:'flickWall', miniMs: FLICK_RIDE_MS}).
+ * Flicks are the PRIMARY navigation quantum; the sustained push stays as the additive fallback. A flick = deliberate
+ * (non-tail) mags accumulating to ≥ FLICK_MIN_MAG within FLICK_MAX_DRIVE_MS, where the trigger event must RISE above
+ * the run's first event (or alone meet the threshold): equal-mag streams (wheel notches, plateaus) and slow/sparse
+ * scrolling never flick; tail events neither accumulate nor trigger
+ * (a tail resets and re-arms the detector, so a flick's own momentum never reads as a second flick). One flick
+ * mid-floor rides WITHIN the floor to that wall edge ({type:'ride', kind:'flickWall', miniMs: FLICK_RIDE_MS}).
  *
- * S1-chosen defaults for contract gaps (documented in 06-core-api.md
- * "S1 implementation notes", all overridable via constructor deps):
- *   spring.CHARGE_THRESHOLD 3, rules.wheelZ01Step 0.04,
- *   rules.knockToKlaxonMs 1000, rules.initialFloor 2 / initialZ01 0.5.
+ * Defaults for contract gaps (overridable via constructor deps): spring.CHARGE_THRESHOLD 3
+ * (only a fallback: FloorContract.HUMP_SPRING.CHARGE_THRESHOLD 1.2 wins), rules.wheelZ01Step 0.04,
+ * rules.knockToKlaxonMs 1000, rules.initialFloor 2 / initialZ01 0.5.
  *
- * D5 (Wave 5 Session G): `place({tMs, floor, z01})` is the ONE placement
- * method — a settled cut with no decision, for S2's invisible moments only
- * (the depot park under the SHOP overlay; the saved-view restore before the
- * first engage). Every visible transition is still a ride (00-spec §4).
+ * `place({tMs, floor, z01})` is the ONE placement method: a settled cut with no decision, only for invisible moments
+ * (the depot park under the SHOP overlay; the saved-view restore before the first engage). Every visible transition is
+ * a ride (00-spec.md §4).
  *
- * Opening dance (2026-09-16, plan task 4): `ceremonyRide` takes an optional
- * `entryZ01` override (the intro dive lands CLOSE on the hull floor — the
- * geometry default stands when it is absent, byte-identical), and
- * `dollyTo({tMs, z01, rideMs})` is a WITHIN-FLOOR ride to an arbitrary z01 —
- * the dwell-phase camera drift, modeled on the G3 flickWall ride (same floor,
- * no crossing). Like `place`, the dolly is not an input: the settle clock is
- * untouched, so a target inside a wall band settles to the edge on the next
- * update (02-traps T6) — callers keep targets in the free zone.
- *
- * @module core/ZoomLadder
+ * `ceremonyRide` takes an optional `entryZ01` override (the intro dive lands CLOSE on the hull floor; absent → the
+ * geometry default, byte-identical). `dollyTo({tMs, z01, rideMs})` is a WITHIN-FLOOR ride to an arbitrary z01
+ * (dwell-phase camera drift, modeled on the flickWall ride). Like `place` it is not an input: the settle clock is
+ * untouched, so a target inside a wall band settles to the edge on the next update (T6, archive/ladder/02-traps.md) —
+ * callers keep targets in the free zone.
  */
 
 import { FloorContract } from './FloorContract.js';
@@ -66,14 +48,7 @@ import { FloorContract } from './FloorContract.js';
 /** Float tolerance for threshold/zero comparisons on decayed charge. */
 const EPS = 1e-9;
 
-/**
- * Normalized ladder depth from a camera distance (clamped 0..1).
- * Log10 interpolation on the floor's `camera.rangeLog10` (01-numbers.md).
- *
- * @param {object} floor - a FloorContract.FLOORS entry
- * @param {number} distU - camera→anchor distance in scene units
- * @returns {number} z01 in [0, 1]
- */
+/** z01 in [0, 1] from a camera distance (scene units): log10 interpolation on the floor's `camera.rangeLog10`. */
 export function z01FromDistance(floor, distU) {
   const [lo, hi] = floor.camera.rangeLog10;
   if (!(distU > 0)) return 0;
@@ -81,82 +56,58 @@ export function z01FromDistance(floor, distU) {
   return Math.min(1, Math.max(0, z));
 }
 
-/**
- * Inverse of z01FromDistance (z01 clamped 0..1 first).
- *
- * @param {object} floor - a FloorContract.FLOORS entry
- * @param {number} z01
- * @returns {number} camera distance in scene units
- */
+/** Inverse of z01FromDistance (z01 clamped to [0, 1] first); returns scene units. */
 export function distanceFromZ01(floor, z01) {
   const [lo, hi] = floor.camera.rangeLog10;
   const z = Math.min(1, Math.max(0, z01));
   return Math.pow(10, lo + z * (hi - lo));
 }
 
-/** S1 extension: absolute outbound charge threshold (router-normalized wheel
- *  mag units). The docs lock τ/window/ratio but no absolute value — see
- *  06-core-api.md "S1 implementation notes". Inbound = this × inFirmness.
- *  G2 (post-M3): MIN_SPAN_MS is the sustain gate — the charge-contributing
- *  events inside the window must SPAN at least this many ms for a crossing.
- *  Intent is sustained pushing, not raw power: a real trackpad flick drives
- *  for ≲150 ms (then pure momentum, which charges zero), while a deliberate
- *  push drives 250-400+ ms. 0 disables the gate (pre-G2 behavior). Both
- *  values are canonical in FloorContract.HUMP_SPRING; these remain only as
- *  fallbacks for spring-override tests that predate them. */
+/** CHARGE_THRESHOLD: absolute outbound charge threshold (router-normalized wheel mag units; inbound = this ×
+ *  inFirmness). MIN_SPAN_MS: the sustain gate — charge-contributing events inside the window must SPAN at least this
+ *  many ms for a crossing (intent is sustained pushing: a trackpad flick drives ≲150 ms then pure momentum, a
+ *  deliberate push 250-400+ ms; 0 disables). Both are canonical in FloorContract.HUMP_SPRING; these are fallbacks for
+ *  spring-override tests. */
 const DEFAULT_SPRING_EXTENSIONS = { CHARGE_THRESHOLD: 3, MIN_SPAN_MS: 0 };
 
-/** S1 defaults for behavior knobs the contract leaves to the caller. */
+/** Behavior knobs the contract leaves to the caller. */
 const DEFAULT_RULES = {
-  initialFloor: 2,        // COMMAND — the shipped gameplay floor (id 2 since the
-                          // Session H 7→5 renumber; same physical floor)
+  initialFloor: 2,        // COMMAND — the shipped gameplay floor
   initialZ01: 0.5,
   initialDocked: false,
-  devFullAccess: false,   // true bypasses entry gates — dev-phase "all floors
-                          // reachable now" (00-spec §9 roadmap note). INERT since
-                          // the Session H renumber: the F2 DEPOT dock gate it
-                          // bypassed left with that row (no shipping floor
-                          // carries entryRequiresDock; injected test tables can).
-                          // LadderController injects Constants.LADDER.DEV_FULL_ACCESS
-                          // into its DEFAULT core only. Ladder ENDS still deny.
+  devFullAccess: false,   // true bypasses entry gates. INERT: no shipping floor carries entryRequiresDock (injected test tables can).
+                          // LadderController injects Constants.LADDER.DEV_FULL_ACCESS into its DEFAULT core only.
+                          // Ladder ENDS still deny.
   wheelZ01Step: 0.04,     // free-scroll z01 per unit mag (scroll gain)
-  knockToKlaxonMs: 1000,  // knock → klaxon (escalation step 1; not doc-pinned)
+  knockToKlaxonMs: 1000,  // knock → klaxon
   autoRideDelayMs: 3000,  // klaxon → auto-ride (locked: VisualLaw 3 s)
   rideMsRange: [450, 650],// crossing-ride window (locked: VisualLaw)
   miniRideMs: 200,        // hotkey-jump mini-ride (locked: VisualLaw)
   reaimMs: 300,           // re-aim / subject-loss soft ride (locked: VisualLaw)
   crossBlock: null,       // optional (fromFloor, destFloor) => true: a zoom (wheel/flick) may not cross there.
-                          // Silent: no 'cross', no 'denied'. Owner 10-27: while the camera rides a daughter,
-                          // zooming in on floor 2 never swings to the mother's close-up (floor 1). Jumps, page
-                          // keys and Esc are explicit commands and are not asked.
+                          // Silent: no 'cross', no 'denied'. owner 2026-10-27: while the camera rides a daughter,
+                          // zooming in on floor 2 never swings to the mother's close-up (floor 1). Jumps, page keys
+                          // and Esc are explicit commands and are not asked.
 };
 
 export class ZoomLadder {
-  /**
-   * @param {object} [deps] - injectable for tests; production passes nothing
-   * @param {Array}  [deps.floors]   - FloorContract.FLOORS-shaped table
-   * @param {object} [deps.geometry] - FloorContract.LADDER_GEOMETRY overrides
-   * @param {object} [deps.spring]   - FloorContract.HUMP_SPRING (+extensions) overrides
-   * @param {object} [deps.rules]    - DEFAULT_RULES overrides
-   */
+  /** deps are injectable for tests (floors, geometry, spring, rules); production passes nothing. */
   constructor({ floors, geometry, spring, rules } = {}) {
     this._floors = floors || FloorContract.FLOORS;
     this._geo = { ...FloorContract.LADDER_GEOMETRY, ...(geometry || {}) };
-    // Spread order: S1 extension DEFAULTS are fallbacks UNDER the contract —
-    // FloorContract.HUMP_SPRING now carries CHARGE_THRESHOLD + MIN_SPAN_MS
-    // canonically (G2), so the contract must win; caller overrides win over both.
+    // Spread order: extension DEFAULTS sit UNDER the contract (FloorContract.HUMP_SPRING carries CHARGE_THRESHOLD +
+    // MIN_SPAN_MS); caller overrides win over both.
     this._spring = { ...DEFAULT_SPRING_EXTENSIONS, ...FloorContract.HUMP_SPRING, ...(spring || {}) };
     this._rules = { ...DEFAULT_RULES, ...(rules || {}) };
 
     this._byId = new Map(this._floors.map((f) => [f.id, f]));
 
-    // Ladder position — ALWAYS a valid (floor, z01); the camera never rests
-    // between floors (00-spec.md §4).
+    // Ladder position — ALWAYS a valid (floor, z01); the camera never rests between floors (00-spec.md §4).
     this._floor = this._rules.initialFloor;
     this._z01 = this._rules.initialZ01;
 
-    // Spring state. _rawCharge is in wheel-mag units and decays with τ;
-    // decisions/getState expose it normalized against the side's threshold.
+    // _rawCharge is in wheel-mag units and decays with τ; decisions/getState expose it normalized against the side's
+    // threshold.
     this._rawCharge = 0;
     this._chargeSide = null;              // 'up' | 'down' | null
     this._chargeEvents = [];              // tMs of charge-contributing events
@@ -169,17 +120,13 @@ export class ZoomLadder {
     this._lastWheelMag = 0;
     this._lastInputTMs = -Infinity;       // wheel/command/jump/aim — settle idle base
 
-    // G3 flick detector: one same-direction accumulation run of deliberate
-    // (non-tail) events inside FLICK_MAX_DRIVE_MS. `armed` false = a flick
-    // already fired from the current drive; re-armed by a tail event (the
-    // drive demonstrably ended: momentum began), by GESTURE_LOCK_SILENCE_MS
-    // of input silence, or by a direction change.
+    // Flick detector: one same-direction accumulation run of deliberate (non-tail) events inside FLICK_MAX_DRIVE_MS.
+    // `armed` false = a flick already fired from the current drive; re-armed by a tail event (momentum began),
+    // GESTURE_LOCK_SILENCE_MS of input silence, or a direction change.
     this._flick = { dir: null, events: [], armed: true };
 
-    // G3 undo window: armed when a CROSS ride completes; a reverse-direction
-    // flick inside it crosses straight back (single-flick undo). Cleared by
-    // any new player ride (the player has navigated on — the undo context is
-    // stale). Purely temporal otherwise: free scrolling does not cancel it.
+    // Undo window: armed when a CROSS ride completes; a reverse-direction flick inside it crosses straight back.
+    // Cleared by any new player ride; otherwise purely temporal (free scrolling does not cancel it).
     this._undoDir = null;                 // 'in' | 'out' — the direction that undoes
     this._undoUntilTMs = -Infinity;
 
@@ -192,11 +139,10 @@ export class ZoomLadder {
     this._alarm = null;                   // { targetFloor, stage, knockTMs, klaxonTMs }
   }
 
-  // ── Input methods (all return Decision[]) ────────────────────────────────
+  // Input methods (all return Decision[])
 
   /**
-   * One router-normalized wheel event. dir: 'in'|'out' (invert already
-   * applied by the router); mag: positive magnitude.
+   * One router-normalized wheel event. dir: 'in'|'out' (invert already applied by the router); mag: positive magnitude.
    */
   wheel({ tMs, dir, mag }) {
     if ((dir !== 'in' && dir !== 'out') || !(mag > 0)) return [];
@@ -206,32 +152,28 @@ export class ZoomLadder {
     // Any scroll input cancels a pending alarm escalation (00-spec.md §6).
     this._cancelPendingAlarm(decisions);
 
-    // Momentum-tail rejection: a same-direction continuation (< gesture-
-    // silence gap) with strictly decaying mag charges ZERO — only deliberate
-    // re-pushes (mag >= previous) count. Sequence heads charge: the flick
-    // itself is deliberate; its decaying tail is not (00-spec.md §4).
-    // Computed BEFORE _recordWheel so the flick detector and the spring share
-    // one causal view of the stream — mid-ride events included (G3).
+    // Momentum-tail rejection: a same-direction continuation (< gesture-silence gap) with strictly decaying mag charges
+    // ZERO; only deliberate re-pushes (mag >= previous) count (00-spec.md §4). Computed BEFORE _recordWheel so the
+    // flick detector and the spring share one causal view of the stream, mid-ride events included.
     const gap = tMs - this._lastWheelTMs;
     const isTail = gap < this._spring.GESTURE_LOCK_SILENCE_MS &&
       dir === this._lastWheelDir && mag < this._lastWheelMag;
     const flicked = this._flickTrack(tMs, dir, mag, isTail, gap);
 
     if (this._ride) {
-      // Scroll cancels only alarm auto-rides, not player rides (06-core-api).
+      // Scroll cancels only alarm auto-rides, not player rides.
       if (this._ride.kind === 'alarmAuto') {
         this._cancelAlarmAutoRide(decisions);
       } else if (flicked) {
-        // G3 flick effects DURING player rides (sustained charging stays
-        // ignored mid-ride; the detector above sees every event):
+        // Flick effects DURING player rides (sustained charging stays ignored mid-ride; the detector above sees every
+        // event):
         //  - flickWall + same dir  → upgrade: the second flick crosses;
         //  - flickWall + reverse   → re-target the opposite wall edge;
         //  - cross + reverse       → undo: cross straight back;
-        //  - cross + same dir      → absorbed (the floor change already
-        //    happened; excess same-direction flicks mid-flight do nothing);
-        //  - jump/page/esc/aimDown → detection-only (no flick effects).
-        // Each ride replacement swaps this._ride; S2 replaces the camera
-        // ride params + onDone (the old onDone never fires).
+        //  - cross + same dir      → absorbed (the floor change already happened);
+        //  - jump/page/esc/aimDown → detection-only.
+        // Each ride replacement swaps this._ride; the controller replaces the camera ride params + onDone
+        // (the old onDone never fires).
         if (this._ride.kind === 'flickWall') {
           if (dir === this._ride.dir) {
             this._flickCross(dir, decisions);
@@ -242,9 +184,8 @@ export class ZoomLadder {
           this._flickCross(dir, decisions);
         }
       }
-      // Wheel is otherwise ignored while riding (buffered nowhere) — but the
-      // gesture bookkeeping still sees it, so a momentum tail spanning the
-      // ride cannot masquerade as a fresh gesture at arrival.
+      // Wheel is otherwise ignored while riding, but the gesture bookkeeping still sees it so a momentum tail spanning
+      // the ride can't pass as a fresh gesture at arrival.
       this._recordWheel(tMs, dir, mag);
       return decisions;
     }
@@ -264,9 +205,8 @@ export class ZoomLadder {
       this._releaseSpring();
     }
 
-    // G3 undo: a reverse-direction flick within FLICK_UNDO_WINDOW_MS of a
-    // completed cross crosses straight back — from ANYWHERE on the floor
-    // (no wall-zone visit needed) and past the charge gesture lock.
+    // Undo: a reverse-direction flick within FLICK_UNDO_WINDOW_MS of a completed cross crosses straight back — from
+    // ANYWHERE on the floor, past the charge gesture lock.
     if (flicked && dir === this._undoDir && tMs <= this._undoUntilTMs) {
       this._clearUndoWindow();
       this._flickCross(dir, decisions);
@@ -274,10 +214,8 @@ export class ZoomLadder {
       return decisions;
     }
 
-    // G3: a flick while NOT at/in the flick-direction wall zone rides WITHIN
-    // the floor to that wall edge. The flick consumes the event — no move,
-    // no charge; free-scroll and wall-charge behavior for non-flick input is
-    // unchanged.
+    // A flick while NOT at/in the flick-direction wall zone rides WITHIN the floor to that wall edge; it consumes the
+    // event (no move, no charge).
     if (flicked && !this._atOrInWall(dir)) {
       decisions.push(this._startFlickWall(dir));
       this._recordWheel(tMs, dir, mag);
@@ -290,8 +228,7 @@ export class ZoomLadder {
     const wallward = dir === 'in' ? target < wallLo : target > wallHi;
 
     if (!wallward) {
-      // Free scroll inside the floor (movement clamps at the wall edges;
-      // only charging takes the camera INTO a wall).
+      // Free scroll inside the floor (clamps at the wall edges; only charging takes the camera INTO a wall).
       if (target !== this._z01) {
         this._z01 = target;
         decisions.push({
@@ -303,10 +240,8 @@ export class ZoomLadder {
       return decisions;
     }
 
-    // ── Wall zone: charge the spring ─────────────────────────────────────
-    // After a crossing/denial, further charging is locked until GESTURE_LOCK_
-    // SILENCE_MS of input silence (one crossing per gesture). Tail events
-    // contribute MOMENTUM_TAIL_CHARGE × mag — canonically zero.
+    // Wall zone: charge the spring. After a crossing/denial, charging is locked until GESTURE_LOCK_SILENCE_MS of input
+    // silence (one crossing per gesture). Tail events contribute MOMENTUM_TAIL_CHARGE × mag (canonically zero).
     const chargeMag = this._gestureLocked
       ? 0
       : (isTail ? this._spring.MOMENTUM_TAIL_CHARGE * mag : mag);
@@ -324,24 +259,17 @@ export class ZoomLadder {
     const threshold = this._thresholdFor(side, dest);
     const norm = Math.min(1, this._rawCharge / threshold);
 
-    // A charge decision accompanies EVERY wall-zone wheel call, so the rail
-    // never stutters (06-core-api.md emission guarantees).
+    // A charge decision accompanies EVERY wall-zone wheel call so the rail never stutters.
     decisions.push({
       type: 'charge', side, charge: norm,
       peek: norm > this._spring.PEEK_CHARGE_FRAC,
     });
 
-    // Crossing requires intent: charge past threshold AND enough deliberate
-    // events inside the window AND a sustained push (the charge events must
-    // span MIN_SPAN_MS — flicks drive ≲150 ms, deliberate pushes 250-400+ ms)
-    // AND the triggering event must itself be deliberate (chargeMag > 0) —
-    // a momentum-tail event may never COMPLETE a crossing either, even when
-    // earlier drive events left the spring past threshold (G2: the trigger
-    // hole let a violent flick cross ~150 ms into its own tail). At most one
-    // cross/denied per gesture. G3: a FLICK at/in the wall zone crosses too
-    // (reaching here with `flicked` implies _atOrInWall — the mid-floor case
-    // returned above) — it bypasses the charge gesture lock; the detector's
-    // one-flick-per-drive rule is the flick gesture boundary.
+    // Crossing requires intent: charge past threshold AND enough deliberate events in the window AND a sustained push
+    // (charge events span MIN_SPAN_MS) AND a deliberate trigger (chargeMag > 0): a momentum-tail event may never
+    // COMPLETE a crossing, even with the spring already past threshold. At most one cross/denied per gesture. A FLICK
+    // at/in the wall zone crosses too (reaching here with `flicked` implies _atOrInWall), bypassing the charge gesture
+    // lock; the detector's one-flick-per-drive rule is its gesture boundary.
     const wantsCross = flicked || (!this._gestureLocked &&
       chargeMag > 0 &&
       norm >= 1 - EPS &&
@@ -358,7 +286,7 @@ export class ZoomLadder {
         direction: side === 'down' ? 'in' : 'out',
         rideMsRange: [...this._rules.rideMsRange],
       });
-      // The spring released through the wall; S2 flies the reframe ride.
+      // The spring released through the wall; the ride engine flies the reframe ride.
       this._floor = destId;
       this._z01 = decisions[decisions.length - 1].entryZ01;
       this._ride = { kind: 'cross', toFloor: destId, dir };
@@ -369,9 +297,8 @@ export class ZoomLadder {
       return decisions;
     }
 
-    // No crossing this event: the camera creeps up to CREEP_FRAC of the
-    // remaining wall distance so the push is visible (creep tracks the live
-    // charge, so a decaying spring relaxes the camera back on its own).
+    // No crossing this event: the camera creeps up to CREEP_FRAC of the remaining wall distance
+    // (tracks the live charge, so a decaying spring relaxes it back).
     const creepFrac = this._spring.CREEP_FRAC * norm;
     const newZ01 = side === 'down'
       ? wallLo - this._geo.WALL_ZONE_FRAC * creepFrac
@@ -385,9 +312,8 @@ export class ZoomLadder {
     }
 
     if (wantsCross) {
-      // The spring met its threshold but the wall refuses: dock-gated floor
-      // (hard wall + hint, 00-spec.md §3 F2) or the end of the ladder. A
-      // crossBlock refusal is silent (no rail flash): the camera just stays.
+      // The spring met its threshold but the wall refuses: dock-gated floor (hard wall + hint, 00-spec.md §3 F2) or the
+      // end of the ladder. A crossBlock refusal is silent (no rail flash).
       if (!blocked) {
         decisions.push(dest
           ? { type: 'denied', floor: dest.id, reason: 'undocked', hint: dest.humps?.deniedHint ?? null }
@@ -400,15 +326,15 @@ export class ZoomLadder {
     return decisions;
   }
 
-  /** Discrete command: 'esc' | 'pageUp' | 'pageDown' | 'space' (00-spec §5). */
+  /** Discrete command: 'esc' | 'pageUp' | 'pageDown' | 'space' (00-spec.md §5). */
   command({ tMs, type }) {
     this._tick(tMs);
     this._lastInputTMs = tMs;
     const decisions = [];
 
     if (type === 'esc') {
-      // Esc cancels an alarm escalation (pending or in-flight auto-ride)
-      // before it means "ride one floor up". Player rides are NOT cancelled.
+      // Esc cancels an alarm escalation (pending or in-flight auto-ride) before it means "ride one floor up". Player
+      // rides are NOT cancelled.
       if (this._ride && this._ride.kind === 'alarmAuto') {
         this._cancelPendingAlarm(decisions);   // a replaced alarm's fresh knock dies too
         this._cancelAlarmAutoRide(decisions);
@@ -442,21 +368,13 @@ export class ZoomLadder {
   }
 
   /**
-   * Wave 5 Session K (plan D-E — the mission break is a ride, not a state):
-   * the CEREMONY ride. Like `jump`, but (1) at the CROSSING duration — the
-   * decision carries `miniMs: null`, so S2 flies it at its CROSS_RIDE_MS (550)
-   * instead of the 200 ms hotkey mini-ride: a ceremony is seen, never a cut —
-   * and (2) it SUPERSEDES a ride in flight: the boundary dwell landing a frame
-   * after a flick must still bring the player down (S2's ride token drops the
-   * superseded completion; `_rideTo` re-targets the core exactly as a flick
-   * upgrade does). Same floor → [] (already there — the caller opens the
-   * drawer); unknown floor → []. Counts as an input (settle clock).
-   *
-   * Opening dance (plan task 4): an optional `entryZ01` overrides the floor
-   * rule (ENTRY_Z01_FROM_BELOW / _FROM_ABOVE) — the intro dive lands CLOSE on
-   * the hull floor instead of at the geometry default. Absent / non-finite →
-   * today's value, byte-identical (pinned).
-   * @param {{ tMs: number, toFloor: number, entryZ01?: number }} arg
+   * CEREMONY ride (the mission break is a ride, not a state). Like `jump`, but (1) at the CROSSING duration
+   * (decision carries `miniMs: null`, so it flies at CROSS_RIDE_MS (550), not the 200 ms mini-ride: a ceremony is seen,
+   * never a cut) and (2) it SUPERSEDES a ride in flight (the boundary dwell landing a frame after a flick must still
+   * bring the player down; the ride token drops the superseded completion; `_rideTo` re-targets the core as a flick
+   * upgrade does). Same floor → [] (caller opens the drawer); unknown floor → []. Counts as an input (settle clock).
+   * Optional `entryZ01` overrides the floor rule (the intro dive lands CLOSE on the hull floor); absent / non-finite →
+   * the geometry default, byte-identical (pinned).
    * @returns {Array} Decision[] — one `ride` (kind 'ceremony') or []
    */
   ceremonyRide({ tMs, toFloor, entryZ01 }) {
@@ -464,11 +382,9 @@ export class ZoomLadder {
     this._lastInputTMs = tMs;
     if (toFloor === this._floor || !this._byId.has(toFloor)) return [];
     const decisions = [];
-    // An ALARM auto-ride in flight yields to the ceremony the way a scroll
-    // cancels it (K review): its stage closes as 'cancelled' — S2 hears the
-    // abort — and its revert point dies with it (the ceremony is deliberate;
-    // nothing reverts). The revert may land the core back on the target floor
-    // already: then there is nothing left to ride.
+    // An ALARM auto-ride in flight yields to the ceremony as a scroll cancels it: its stage closes 'cancelled'
+    // (the controller hears the abort) and its revert point dies (nothing reverts). The revert may land the core on the
+    // target floor already: then there is nothing left to ride.
     if (this._ride && this._ride.kind === 'alarmAuto') {
       this._cancelAlarmAutoRide(decisions);
       if (toFloor === this._floor) return decisions;
@@ -478,23 +394,13 @@ export class ZoomLadder {
   }
 
   /**
-   * Opening dance (2026-09-16, plan task 4): a WITHIN-FLOOR ride to an
-   * arbitrary z01 on the CURRENT floor — the intro dwell's silent camera
-   * drift (the dive lands close; the dolly eases out while the wings roll
-   * out). Modeled on the G3 flickWall ride (`_startFlickWall`): same floor,
-   * no crossing, state moves to the target immediately (the camera never
-   * rests between floors — same law), the spring releases, the undo window
-   * clears. The decision carries `miniMs: rideMs` (null → the controller's
-   * CROSS_RIDE_MS, the flickWall precedent).
-   *
-   * NOT an input (the `place` law): `_lastInputTMs` is untouched, so a target
-   * inside a wall band settles to the edge on the next update — a placement
-   * can never leave the camera resting in the wall (02-traps T6). Callers
-   * keep targets in the free zone (WALL_ZONE_FRAC … 1 − WALL_ZONE_FRAC).
-   * Refused — [] — while a ride is in flight (the scripted dolly must never
-   * replace a player ride; S2 fires it exactly when the dive has landed) or
-   * for a non-finite z01. Deterministic; `rideMs` absent/non-positive → null.
-   * @param {{ tMs: number, z01: number, rideMs?: number }} arg
+   * WITHIN-FLOOR ride to an arbitrary z01 on the CURRENT floor (the intro dwell's silent camera drift). Modeled on the
+   * flickWall ride (`_startFlickWall`): same floor, no crossing, state moves to the target immediately, the spring
+   * releases, the undo window clears. The decision carries `miniMs: rideMs` (null → the controller's CROSS_RIDE_MS).
+   * NOT an input (the `place` law): `_lastInputTMs` is untouched, so a target inside a wall band settles to the edge on
+   * the next update — a placement can never leave the camera resting in the wall (T6, archive/ladder/02-traps.md).
+   * Callers keep targets in the free zone (WALL_ZONE_FRAC … 1 − WALL_ZONE_FRAC). Refused ([]) while a ride is in flight
+   * (the scripted dolly must never replace a player ride) or for a non-finite z01. `rideMs` absent/non-positive → null.
    * @returns {Array} Decision[] — one `ride` (kind 'dolly') or []
    */
   dollyTo({ tMs, z01, rideMs }) {
@@ -512,17 +418,11 @@ export class ZoomLadder {
   }
 
   /**
-   * u10 D3 (owner pick "Floor 4 easier to read", 2026-10-20): one step of a
-   * live, eased zoom that S2 drives frame by frame (the floor-4 framing keeps
-   * the ship and the focused field in view). Not a ride (nothing to fly: the
-   * camera's free-scroll ease follows the move), not an input (`_lastInputTMs`
-   * untouched), and only inside the free zone: z01 is clamped to
-   * [WALL_ZONE_FRAC, 1 − WALL_ZONE_FRAC], so a glide never creeps into a wall
-   * and never triggers a settle-back. Releases the spring (no half-charged wall
-   * is left behind). Refused ([]) during a ride or for a non-finite z01.
-   * Emits one `move` tagged `glide: true` when z01 changes.
-   * @param {{ tMs: number, z01: number }} arg
-   * @returns {Array} decisions
+   * One step of a live, eased zoom the controller drives frame by frame
+   * (floor-4 framing keeps the ship and focused field in view). Not a ride, not an input (`_lastInputTMs` untouched),
+   * and only inside the free zone: z01 is clamped to [WALL_ZONE_FRAC, 1 − WALL_ZONE_FRAC], so a glide never creeps into
+   * a wall or triggers a settle-back. Releases the spring. Refused ([]) during a ride or for a non-finite z01. Emits
+   * one `move` tagged `glide: true` when z01 changes.
    */
   glide({ tMs, z01 }) {
     if (Number.isFinite(tMs)) this._tick(tMs);
@@ -538,24 +438,14 @@ export class ZoomLadder {
   }
 
   /**
-   * D5 placement (Wave 5 Session G, docs/ladder/06-core-api.md "place"): a
-   * settled CUT of the ladder position to (floor, z01) — no ride, no decision
-   * emitted, nothing for S2 to fly. The ONE exception to "never a cut"
-   * (00-spec §4 is about VISIBLE transitions): S2 calls this only where no
-   * camera ride can be seen — parking the core back on the hull under the
-   * SHOP overlay (the depot return lands at the exact z01 the player left) and
-   * restoring a saved (floor, z01) before the first engage of a continued run.
-   *
-   * Refusals (state untouched, returns false): a ride in flight (S2 must
-   * `rideFinished` first — a cut under a flying camera would desync them), an
-   * unknown floor, a non-finite z01. Otherwise z01 is clamped to [0, 1] and
-   * the spring, settle latch, alarm revert point and the G3 undo window are
-   * released — the placed position is a fresh rest, exactly as after a
-   * completed ride. It is NOT an input (`_lastInputTMs` untouched): a z01
-   * placed inside a wall band settles to the edge on the next update, so a
-   * placement can never leave the camera resting in the wall (02-traps T6).
-   *
-   * @param {{ tMs: number, floor: number, z01: number }} arg
+   * Settled CUT of the ladder position to (floor, z01): no ride, no decision. The ONE exception to "never a cut"
+   * (00-spec.md §4: about VISIBLE transitions): only where no camera ride can be seen — parking the core on the hull
+   * under the SHOP overlay (the depot return lands at the exact z01 the player left) and restoring a saved (floor, z01)
+   * before the first engage of a continued run. Refusals (state untouched, returns false): a ride in flight
+   * (`rideFinished` first — a cut under a flying camera would desync them), an unknown floor, a non-finite z01.
+   * Otherwise z01 is clamped to [0, 1] and the spring, settle latch, alarm revert point and undo window are released —
+   * a fresh rest, as after a completed ride. NOT an input (`_lastInputTMs` untouched): a z01 placed inside a wall band
+   * settles to the edge on the next update (T6, archive/ladder/02-traps.md).
    * @returns {boolean} true when placed
    */
   place({ tMs, floor, z01 }) {
@@ -586,9 +476,8 @@ export class ZoomLadder {
   }
 
   /**
-   * Subject destroyed/despawned. Fallback ladder (00-spec.md §5):
-   * debris → its cluster → ship; daughter → ship. Soft 300 ms, never a cut.
-   * The 'cluster'/'ship' tokens are resolved to real refs by S2.
+   * Subject destroyed/despawned. Fallback ladder (00-spec.md §5): debris → its cluster → ship; daughter → ship. Soft
+   * 300 ms, never a cut. The 'cluster'/'ship' tokens are resolved to real refs by the caller.
    */
   subjectLost({ tMs, kind }) {
     this._tick(tMs);
@@ -597,7 +486,7 @@ export class ZoomLadder {
     return [{ type: 'reaim', subject: token, soft: true, durationMs: this._rules.reaimMs }];
   }
 
-  /** Conjunction alarm raised/cleared by S2. Raise emits the knock. */
+  /** Conjunction alarm raised/cleared by the controller. Raise emits the knock. */
   alarm({ tMs, targetFloor, active }) {
     this._tick(tMs);
     if (!active) {
@@ -610,17 +499,16 @@ export class ZoomLadder {
     return [{ type: 'alarm', stage: 'knock', targetFloor }];
   }
 
-  /** F2 gating input: docked state of the ship (boolean). */
+  /** Docked state of the ship (boolean); gates entry to dock-required floors. */
   dockChanged({ docked }) {
     this._docked = !!docked;
     return [];
   }
 
-  /** S2 reports the crossing/mini ride (or crossfade) completed. */
+  /** The controller reports the crossing/mini ride (or crossfade) completed. */
   rideFinished({ tMs }) {
     this._tick(tMs);
-    // G3: a completed CROSS arms the undo window — a reverse flick within
-    // FLICK_UNDO_WINDOW_MS crosses straight back to the previous floor.
+    // A completed CROSS arms the undo window: a reverse flick within FLICK_UNDO_WINDOW_MS crosses straight back.
     if (this._ride && this._ride.kind === 'cross' && this._ride.dir) {
       this._undoDir = this._ride.dir === 'in' ? 'out' : 'in';
       this._undoUntilTMs = tMs + this._spring.FLICK_UNDO_WINDOW_MS;
@@ -631,19 +519,14 @@ export class ZoomLadder {
   }
 
   /**
-   * Tick: charge decay, gesture-lock release, settle-back, and the
-   * knock → klaxon → auto-ride escalation. Call every frame with the same
-   * monotonic clock the inputs use.
-   *
-   * @param {number} tMs
-   * @returns {Array} Decision[]
+   * Tick: charge decay, gesture-lock release, settle-back, knock → klaxon → auto-ride escalation. Call every frame with
+   * the inputs' monotonic clock. @returns {Array} Decision[]
    */
   update(tMs) {
     this._tick(tMs);
     const decisions = [];
 
-    // Alarm escalation (schedule anchored to the knock, so late/lumped update
-    // calls emit the stages in order within one return).
+    // Alarm escalation (anchored to the knock, so late/lumped update calls emit the stages in order within one return).
     const a = this._alarm;
     if (a && a.stage === 'knock' && tMs >= a.knockTMs + this._rules.knockToKlaxonMs) {
       a.stage = 'klaxon';
@@ -677,22 +560,17 @@ export class ZoomLadder {
     return decisions;
   }
 
-  // ── State snapshot (rail + debugging; fresh object, mutation-safe) ───────
+  // State snapshot (rail + debugging; fresh object, mutation-safe)
 
   /**
-   * Allocation-free ride probe: true while a ride is in flight (i.e. exactly
-   * when getState().mode === 'riding'). Exists for per-frame callers
-   * (LadderController.adaptHoldoff runs every gameLoop frame) so reading one
-   * bit does not materialize a full snapshot object (G4 review follow-up).
-   * @returns {boolean}
+   * Allocation-free ride probe: true exactly when getState().mode === 'riding'. For per-frame callers
+   * (LadderController.adaptHoldoff runs every gameLoop frame).
    */
   isRiding() { return !!this._ride; }
 
   /**
-   * Allocation-free floor probe: exactly getState().floor without the
-   * snapshot (Session I: the turntable gate reads it per gameLoop frame —
-   * the same G4 law as isRiding()).
-   * @returns {number}
+   * Allocation-free floor probe: exactly getState().floor, for per-frame callers
+   * (the turntable gate; same law as isRiding()).
    */
   floorId() { return this._floor; }
 
@@ -720,7 +598,7 @@ export class ZoomLadder {
     };
   }
 
-  // ── Internals ────────────────────────────────────────────────────────────
+  // Internals
 
   /** Exponential charge decay + gesture-lock release, up to tMs. */
   _tick(tMs) {
@@ -743,17 +621,12 @@ export class ZoomLadder {
   }
 
   /**
-   * G3 flick detector. Feeds one wheel event; returns true when a flick
-   * fires. A flick = accumulated deliberate (non-tail) mag within
-   * FLICK_MAX_DRIVE_MS reaching FLICK_MIN_MAG, with a RISE gate: the trigger
-   * event's mag must exceed the accumulation run's first event's (or alone
-   * meet the threshold). Deliberate events are never mag-decreasing (a
-   * decreasing one is a tail), so an equal-mag stream — a wheel-notch push,
-   * a plateau — never rises and never flicks; slow/sparse scrolling ages out
-   * of the window. Tails neither accumulate nor trigger: a tail RESETS the
-   * run (the drive ended; momentum began) and re-ARMS the detector, which is
-   * exactly what lets a deliberate re-push during the tail read as a second
-   * flick while the tail itself can never be one.
+   * Flick detector: feeds one wheel event; true when a flick fires. A flick = accumulated deliberate (non-tail) mag
+   * within FLICK_MAX_DRIVE_MS reaching FLICK_MIN_MAG, with a RISE gate: the trigger event's mag must exceed the run's
+   * first event's (or alone meet the threshold). Deliberate events never decrease (a decreasing one is a tail), so an
+   * equal-mag stream never rises and never flicks; slow/sparse scrolling ages out of the window. A tail RESETS the run
+   * and re-ARMS the detector: a deliberate re-push during the tail reads as a second flick while the tail itself never
+   * can.
    * @private
    */
   _flickTrack(tMs, dir, mag, isTail, gap) {
@@ -784,8 +657,10 @@ export class ZoomLadder {
     return true;
   }
 
-  /** True when z01 sits at or inside the wall zone the direction points at.
-   *  (The wall EDGE counts as "at" — a flick there crosses, G3.) @private */
+  /**
+   * True when z01 sits at or inside the wall zone the direction points at
+   * (the wall EDGE counts: a flick there crosses). @private
+   */
   _atOrInWall(dir) {
     return dir === 'in'
       ? this._z01 <= this._geo.WALL_ZONE_FRAC + EPS
@@ -793,11 +668,9 @@ export class ZoomLadder {
   }
 
   /**
-   * Start a G3 flickWall ride: within the CURRENT floor, to the wall edge the
-   * flick points at. State moves to the edge immediately (the camera never
-   * rests between floors — same law as crossings); the spring releases; the
-   * gesture lock is NOT touched (a flick-to-wall then sustained push-through
-   * must keep working as one composite gesture).
+   * Start a flickWall ride: within the CURRENT floor, to the wall edge the flick points at. State moves to the edge
+   * immediately; the spring releases; the gesture lock is NOT touched
+   * (flick-to-wall then sustained push-through must work as one composite gesture).
    * @private
    */
   _startFlickWall(dir) {
@@ -816,15 +689,11 @@ export class ZoomLadder {
   }
 
   /**
-   * G3: attempt a flick-crossing in `dir` from the current floor (used by the
-   * at-wall flick, the double-flick upgrade, the mid-cross undo, and the
-   * post-cross undo window). Bypasses the charge gesture lock — the flick
-   * detector's one-per-drive rule is the flick gesture boundary — but honors
-   * dock gates and ladder ends exactly like the spring path. On success the
-   * state moves to (dest, entry) and the ride REPLACES any in-flight player
-   * ride (S2 swaps the camera ride params + onDone; the old onDone never
-   * fires). Sets the charge gesture lock so the same unbroken input stream
-   * cannot also spring-cross.
+   * Attempt a flick-crossing in `dir` (at-wall flick, double-flick upgrade, mid-cross undo, post-cross undo window).
+   * Bypasses the charge gesture lock (the detector's one-per-drive rule is the boundary) but honors dock gates and
+   * ladder ends like the spring path. On success the state moves to (dest, entry) and the ride REPLACES any in-flight
+   * player ride (the controller swaps ride params + onDone; the old onDone never fires). Sets the charge gesture lock
+   * so the same input stream can't also spring-cross.
    * @private
    * @returns {boolean} true when the cross fired (false = denied)
    */
@@ -864,7 +733,7 @@ export class ZoomLadder {
     return true;
   }
 
-  /** G3: drop a pending post-cross undo window. @private */
+  /** Drop a pending post-cross undo window. @private */
   _clearUndoWindow() {
     this._undoDir = null;
     this._undoUntilTMs = -Infinity;
@@ -899,21 +768,20 @@ export class ZoomLadder {
    *  floor's end steps the same amount per notch). */
   wheelZ01Step() { return this._rules.wheelZ01Step; }
 
-  /** True when entering `dest` must be refused for lack of a dock.
-   *  rules.devFullAccess bypasses entry gates entirely (dev-phase full access —
-   *  campaign/dock gating is roadmap; ladder ENDS are not gates and still deny). */
+  /**
+   * True when entering `dest` must be refused for lack of a dock. rules.devFullAccess bypasses entry gates
+   * (ladder ENDS are not gates and still deny).
+   */
   _dockDenies(dest) {
     if (this._rules.devFullAccess) return false;
     return !!(dest?.humps?.entryRequiresDock && !this._docked);
   }
 
   /**
-   * Shared ride starter for jump/esc/page/aimDown/alarmAuto/ceremony. Applies
-   * the dock gate, moves the state to (toFloor, entryZ01) immediately (the
-   * camera never rests between floors), and marks the core riding. The
-   * optional `entryZ01` (opening dance, plan task 4) overrides the floor rule
-   * (ENTRY_Z01_FROM_BELOW upward / _FROM_ABOVE downward), clamped to [0, 1];
-   * absent / non-finite → the geometry default, byte-identical.
+   * Shared ride starter for jump/esc/page/aimDown/alarmAuto/ceremony. Applies the dock gate, moves the state to
+   * (toFloor, entryZ01) immediately, and marks the core riding. Optional `entryZ01` overrides the floor rule
+   * (ENTRY_Z01_FROM_BELOW upward / _FROM_ABOVE downward), clamped to [0, 1]; absent / non-finite → the geometry
+   * default, byte-identical.
    */
   _rideTo(toId, kind, miniMs, entryZ01) {
     const dest = this._byId.get(toId);
@@ -934,7 +802,7 @@ export class ZoomLadder {
     this._ride = { kind, toFloor: toId };
     this._settled = false;
     this._releaseSpring();
-    this._clearUndoWindow();   // navigating on — a pending flick-undo is stale (G3)
+    this._clearUndoWindow();   // navigating on — a pending flick-undo is stale
     return [{ type: 'ride', toFloor: toId, entryZ01: entry, kind, miniMs }];
   }
 
@@ -947,12 +815,8 @@ export class ZoomLadder {
     }
   }
 
-  /**
-   * Cancel an in-flight alarm auto-ride: revert to the pre-ride position and
-   * ALWAYS report the cancellation — even if S2 cleared or replaced the alarm
-   * mid-flight, the ride abort must reach the decision stream (a silent
-   * revert would desync the core from the camera S2 is still flying).
-   */
+  /** Cancel an in-flight alarm auto-ride: revert to the pre-ride position and ALWAYS report the cancellation, even if
+   *  the alarm was cleared or replaced mid-flight (a silent revert would desync the core from the camera still flying). */
   _cancelAlarmAutoRide(decisions) {
     const targetFloor = this._ride?.toFloor ?? this._alarm?.targetFloor ?? null;
     if (this._preRide) {

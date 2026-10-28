@@ -1,65 +1,44 @@
 /**
- * mliFoilTexture.js — Gold MLI (Multi-Layer Insulation) foil maps, v8 — BAKED.
+ * mliFoilTexture.js — gold MLI foil maps, BAKED: one crinkled gold-mylar sheet on the barrel (`crumpled`) and a
+ * taut-but-crinkled one on the instrument box (`flat`) (DECISIONS §22). Textures: `textures/mli_foil_v8_*.png`.
  *
- * v8 (2026-10-14, lane v9-foil-crinkle) puts back the v5/v6 "draped crumpled gold"
- * look and removes the v7 sewn blanket (panels, binding tape, stitches, tie-down
- * buttons). Owner, 2026-10-14: "prefer crinkled foil, it matchs the gold mylar foil
- * for scale model better." ONE crinkled gold-mylar sheet on the barrel (`crumpled`)
- * and a taut-but-crinkled sheet on the instrument box (`flat`). The generator below
- * is the v5/v6 height-field drape (commit 0c4d38db) ported unchanged in its maths;
- * only the output packing differs (one `rm` map instead of rough + a small-part roughness).
+ * The lemon gold is the MATERIAL colour (`MLI_FOIL_LOOK.materialColor`); the ALBEDO map is neutral grey
+ * (R = G = B), so the variation is SPECULAR (normal + roughness under the orbital env map), never tint.
  *
- * The lemon gold is the MATERIAL colour (`MLI_FOIL_LOOK.materialColor`); the ALBEDO
- * map is neutral grey (R = G = B), so the variation is SPECULAR (normal + roughness
- * under the orbital env map), never tint.
- *
- * ── MAPS (3 per variant; PNGs in `textures/mli_foil_v8_*.png`) ────────────────
+ * Maps (3 per variant):
  *   albedo : neutral grey tone (R = G = B), creases very slightly darker.
  *   normal : RGB tangent-space, from the gradient of the drape height field.
- *   rm     : RGB, G = roughness (relative; the material roughness multiplies it),
- *            B = 255 (all foil is metal). ONE texture serves both `roughnessMap`
- *            (reads G) and `metalnessMap` (reads B).
+ *   rm     : G = roughness (relative; the material roughness multiplies it), B = 255 (all foil is metal).
+ *            ONE texture serves both `roughnessMap` (reads G) and `metalnessMap` (reads B).
  *
- * ── TWO VARIANTS (see FOIL_VARIANTS) ──────────────────────────────────────────
- *   `crumpled` — barrel skin: one un-tiled [1,1] wrap of the barrel UV (u = 1 is
- *     an integer wrap, so the cylinder is seamless; the field tiles by construction).
- *   `flat`     — instrument box (IR sensor): a calm taut sheet, very low amplitudes
- *     (the whole tile lands on every face, so any per-panel variation reads as camo).
+ * Variants (FOIL_VARIANTS):
+ *   `crumpled` — barrel skin: one un-tiled [1,1] wrap of the barrel UV (u = 1 is an integer wrap, so the
+ *     cylinder is seamless; the field tiles by construction).
+ *   `flat`     — instrument box: a calm taut sheet, very low amplitudes (the whole tile lands on every face,
+ *     so any per-panel variation reads as camo).
  *
- * ── THE v5 ARCHITECTURE (why a height field) ──────────────────────────────────
- * h(u,v) is a sum of tileable components — drape sweeps, per-panel pillow and tilt
- * (power-Voronoi lattice), pair-gated open border folds, fold CHAINS/fans, gated
- * micro-crumple — and the normals are its gradient. Sheet continuity, in-panel
- * gradients and tented bright crests come for free. History: fBm value noise
- * (hammered), dense cellular facets (gold nuggets / pebbles), constant-normal
- * facets (glitter mosaic) were all rejected.
+ * Why a height field: h(u,v) is a sum of tileable components — drape sweeps, per-panel pillow and tilt
+ * (power-Voronoi lattice), pair-gated open border folds, fold CHAINS/fans, gated micro-crumple — and the
+ * normals are its gradient. fBm noise, dense cellular facets and constant-normal facets were all rejected.
  *
- * ⚠ TRAPS: (1) NO data-dependent normalisation (fixed per-UV `slopeGain`);
- * (2) NO blur; (3) RESOLUTION INDEPENDENCE — the central difference is scaled by
- * the pixel spacing (`·size`), so `gain` is per UV unit and a 64² test pins the
- * same texture as the 1024² bake (thin crests still alias at low res, so unit-test
- * bounds are measured at the test size only).
- * SIGN: canvas rows run top-down while UV v runs bottom-up, so the byte write
- * NEGATES ny. `THREE.Texture`/`ImageLoader` default `flipY = true`; do NOT touch
- * flipY or use ImageBitmapLoader.
+ * TRAPS: (1) NO data-dependent normalisation (fixed per-UV `slopeGain`); (2) NO blur; (3) RESOLUTION
+ * INDEPENDENCE — the central difference is scaled by the pixel spacing (`·size`), so `gain` is per UV unit and
+ * a 64² test pins the same texture as the 1024² bake (thin crests still alias at low res, so unit-test bounds
+ * are measured at the test size only).
+ * SIGN: canvas rows run top-down while UV v runs bottom-up, so the byte write NEGATES ny. `THREE.Texture`/
+ * `ImageLoader` default `flipY = true`; do NOT touch flipY or use ImageBitmapLoader.
  *
- * ── BAKE PIPELINE (this module is the SOURCE OF TRUTH) ────────────────────────
- * `buildFoilPixels` is deterministic (hash-based) and pure JS with NO DOM, so it
- * runs identically in Node. `node scripts/bake-foil-maps.mjs` encodes the result
- * to lossless PNGs and the RUNTIME loads those. The hash bottoms out in `Math.sin`,
- * whose last-ULP behaviour is engine-specific — bake on Node/V8 only.
+ * Bake: this module is the SOURCE OF TRUTH. `buildFoilPixels` is deterministic (hash-based), pure JS, NO DOM;
+ * `node scripts/bake-foil-maps.mjs` encodes it to lossless PNGs and the RUNTIME loads those. The hash bottoms
+ * out in `Math.sin`, whose last-ULP behaviour is engine-specific — bake on Node/V8 only.
  *
- * ⚠ DEPLOY NOTE: sw.js serves `/textures/` CACHE-FIRST, so an in-place edit never
- * reaches a returning player until CACHE_NAME bumps. A future re-bake that changes
- * the look MUST take a new file name (v9…).
+ * DEPLOY: sw.js serves `/textures/` CACHE-FIRST, so an in-place edit never reaches a returning player until
+ * CACHE_NAME bumps. A re-bake that changes the look MUST take a new file name.
  *
- * ── RUNTIME LOADER ────────────────────────────────────────────────────────────
- * `getMLIFoilMaps` clones per-map master textures that start on a same-size neutral
- * placeholder canvas and swap in the decoded PNG (r184 immutable `texStorage2D`:
- * the placeholder MUST be the PNG's size — see `FOIL_BAKE_SIZE`). Clones share the
- * master's `Source`; ones issued before the load are version-bumped on swap.
- *
- * **Returns null in headless/no-DOM environments.**
+ * Loader: `getMLIFoilMaps` clones per-map master textures that start on a same-size neutral placeholder canvas
+ * and swap in the decoded PNG (r184 immutable `texStorage2D`: the placeholder MUST be the PNG's size — see
+ * `FOIL_BAKE_SIZE`). Clones share the master's `Source`; ones issued before the load are version-bumped on swap.
+ * Returns null in headless/no-DOM environments.
  *
  * @module scene/mliFoilTexture
  */
@@ -67,14 +46,9 @@
 import * as THREE from 'three';
 
 /**
- * The foil's material look — the ONE place PlayerSatellite reads it from, so the
- * scan-flash restore can never drift from the build default (the v6 bug: restore
- * 0x4a3008 vs build 0x4a3d12).
- *
- * LEMON gold aluminised-Kapton (0xe3c24d, R:G ≈ 1.16) is the MATERIAL colour; the
- * albedo map is neutral grey. roughness 0.50 × the rm-map G (crumpled 0.30–0.70)
- * ⇒ effective 0.15–0.35: glossy enough for sharp crinkle glints. metalness 1.0 × the
- * rm-map B (255 everywhere).
+ * The foil's material look — the ONE place PlayerSatellite reads it from, so the scan-flash restore cannot
+ * drift from the build default. Lemon gold (R:G ≈ 1.16) is the MATERIAL colour. roughness 0.50 × the rm-map G
+ * (crumpled 0.30–0.70) ⇒ effective 0.15–0.35: glossy enough for sharp crinkle glints. metalness 1.0 × rm-map B (255).
  */
 export const MLI_FOIL_LOOK = Object.freeze({
   materialColor: 0xe3c24d,
@@ -85,10 +59,8 @@ export const MLI_FOIL_LOOK = Object.freeze({
 });
 
 /**
- * Deterministic 2-D hash → 0..1. Used for lattice-point jitter, per-cell weight/
- * amp/id/tilt, the symmetric pair-gate, fold-chain construction and anchor
- * placement. All callers must feed wrapped lattice coordinates so the field tiles.
- * Byte-identical to v4/v3 (do not touch — the bake determinism rests on it).
+ * Deterministic 2-D hash → 0..1 (lattice jitter, per-cell weight/amp/id/tilt, pair-gate, fold chains, anchors).
+ * Callers must feed wrapped lattice coordinates so the field tiles. Do not touch: bake determinism rests on it.
  */
 function _hash01(x, y, salt) {
   const s = Math.sin(x * 127.1 + y * 311.7 + salt * 74.7) * 43758.5453;
@@ -96,13 +68,8 @@ function _hash01(x, y, salt) {
 }
 
 /**
- * Seamless multi-octave value noise on the unit square, wrapping on both axes
- * (`period` divides evenly so the field tiles). In v5 this carries STRONG signal:
- * the drape sweeps (2 octaves) and the micro-crumple (ridged, 2 octaves).
- *
- * v5 adds an optional `salt` param (matching the prototype) so independent noise
- * layers can be decorrelated; `salt = 0` reproduces v4/v3's hash exactly, so old
- * callers are unaffected (additive change, byte-stable at the default).
+ * Seamless multi-octave value noise on the unit square, wrapping on both axes (`period` divides evenly so the
+ * field tiles). `salt` decorrelates independent layers; `salt = 0` is the base hash.
  */
 function _valueNoise(u, v, period, salt = 0) {
   const hash = (xi, yi) => {
@@ -122,50 +89,35 @@ function _valueNoise(u, v, period, salt = 0) {
 }
 
 /**
- * v5 VARIANT TABLE. Two looks share one HEIGHT-FIELD generator; each part picks a
- * variant. Every field feeds `_buildHeight` (h-field components) or the byte
- * write (rough/albedo + the crease mask). These are the VALIDATED prototype knobs
- * (six iterations against `mli_ref/mro_foil_crop.png` + an in-engine IBL harness
- * replicating the menu hero rig — see the plan for the audit trail).
+ * VARIANT TABLE: two looks share one HEIGHT-FIELD generator. Fields feed `_buildHeight` or the byte write
+ * (rough/albedo + crease mask). Validated against `mli_ref/mro_foil_crop.png` + an in-engine IBL harness.
  *
- *  - `crumpled` (barrel + aperture ring): STRONG drape sweeps + per-panel tilt +
- *    pair-gated open border folds + fold CHAINS/fans + gated micro-crumple → the
- *    MRO drape (large near-white↔amber gradient panels, long straight bright
- *    ridge crests, radiating fans, NO closed-cell read).
- *  - `flat` (instrument boxes): very low amplitudes → a calm taut sheet with a
- *    few soft folds, matching the PRIME-1 instrument-box MLI (no glitter).
+ *  - `crumpled` (barrel + aperture ring): STRONG drape sweeps + per-panel tilt + pair-gated open border folds +
+ *    fold CHAINS/fans + gated micro-crumple → the MRO drape (large near-white↔amber gradient panels, long
+ *    straight bright ridge crests, radiating fans, NO closed-cell read).
+ *  - `flat` (instrument boxes): very low amplitudes → a calm taut sheet with a few soft folds (no glitter).
  *
- * KNOB GUARDANCE (from the iteration log — read before turning any dial):
- *  - `drapeAmp` (v6: 0.9): the smooth "mirror panels" sweep. v6 LOWERED it from
- *    v5's 1.2 so the sweep no longer dominates the raised per-panel tilt.
+ * Knobs (read before turning any dial):
+ *  - `drapeAmp`: the smooth "mirror panels" sweep; keep it below the per-panel tilt.
  *  - `pillowAmp` KEEP SMALL (≤0.15): 0.5+ reads quilted/hammered, 1.0 cracked-mud.
- *  - `panelTiltAmp` (v6: 9.0, was v5 1.1): THE v6 mid-band lever. Foil is a
- *    near-mirror, so its contrast is (env radiance contrast × NORMAL variation).
- *    Once a contrasty orbital env-map is reflected (orbitalFoilEnv.js), raising
- *    this fractures the reflection into per-panel facets — the "broken foil" read.
- *    It responds sub-linearly (the border-gate `sm` × `invCells` damp it): v5→v6
- *    1.1→9 moved the 512² 20°+ tilt share 13%→31% (target 25–40%). Re-measure via
- *    tmp/foil_v6_tilt.mjs after any change; do NOT chase the raw number blindly —
- *    too high (>11) reads glittery at hero scale.
- *  - `borderGate` (0.70): fraction of borders LEFT OPEN — this breaks the closed-
- *    cell topology into an open network of straight segments. Do not lower much.
- *  - `foldCount` [anchors, raysPerAnchorMax, looseChains]: chains are polylines
- *    (2–4 straight segments) → long CONNECTED ridges (single segments read
- *    "pick-up-sticks"). HALF-WIDTHS are thin; v6 widened them ×1.7 (in _buildFolds)
- *    so fold crests survive one mip level at hero scale (bright-line sharpness ∝
- *    amp/width, so wider ⇒ softer — foldAmp held at 3.2 keeps the crest bright).
- *  - `microAmp`: still subtle; raise first if the in-engine read lacks fine
- *    wrinkle. `microPeriods` are NON-aligned (13/29) — aligned 16/32 showed a
- *    grid-plaid artifact.
+ *  - `panelTiltAmp`: THE mid-band lever. Foil is a near-mirror, so contrast = env radiance contrast × NORMAL
+ *    variation; with a contrasty orbital env-map (orbitalFoilEnv.js), raising this fractures the reflection
+ *    into per-panel facets ("broken foil"). Sub-linear (border-gate `sm` × `invCells` damp it): 1.1→9 moved the
+ *    512² 20°+ tilt share 13%→31% (target 25–40%). Re-measure via tmp/foil_v6_tilt.mjs after any change; >11
+ *    reads glittery at hero scale.
+ *  - `borderGate` (0.70): fraction of borders LEFT OPEN — breaks the closed-cell topology into an open network
+ *    of straight segments. Do not lower much.
+ *  - `foldCount` [anchors, raysPerAnchorMax, looseChains]: chains are polylines (2–4 straight segments) → long
+ *    CONNECTED ridges (single segments read "pick-up-sticks"). Half-widths are widened ×1.7 (in _buildFolds) so
+ *    crests survive one mip level at hero scale (sharpness ∝ amp/width; foldAmp 3.2 keeps the crest bright).
+ *  - `microAmp`: subtle; raise first if the in-engine read lacks fine wrinkle. `microPeriods` are NON-aligned
+ *    (13/29): aligned 16/32 showed a grid-plaid artifact.
  *  - `slopeGain` is per-UV-unit (resolution-INDEPENDENT — see `_normalsFromHeight`).
- *  - `slopeRef` is the crease-mask normalizer (~tan of the "fully rough" slope):
- *    crumpled ~tan 35°≈0.70, flat ~tan 8°≈0.14. Raise if creases read too dark.
- *  - If the flat box reads too DEAD in-engine, raise flat slopeGain 0.0234→0.03
- *    or foldAmp 0.8→1.2.
- *  - `toneSpan` / `rough.span` on the FLAT variant (v6.1: 0.008 / 0.05, slashed
- *    from 0.04 / 0.20): per-panel albedo + roughness spread. On the IR box the
- *    whole 4×4 tile lands on EVERY face, so any real span reads as gold CAMO
- *    (user-rejected). Keep these tiny — the box wants near-uniform plain gold.
+ *  - `slopeRef` is the crease-mask normalizer (~tan of the "fully rough" slope): crumpled ~tan 35°≈0.70, flat
+ *    ~tan 8°≈0.14. Raise if creases read too dark.
+ *  - If the flat box reads too DEAD in-engine, raise flat slopeGain 0.0234→0.03 or foldAmp 0.8→1.2.
+ *  - FLAT `toneSpan` / `rough.span`: per-panel albedo + roughness spread. Keep them tiny: the whole 4×4 tile
+ *    lands on EVERY box face, so any real span reads as gold CAMO (owner-rejected).
  */
 const FOIL_VARIANTS = {
   crumpled: {                       // barrel + aperture ring
@@ -184,12 +136,6 @@ const FOIL_VARIANTS = {
     creaseDarken: 0.05,
   },
   flat: {                           // IR box (taut sheet on flat faces)
-    // v6.1 CAMO FIX: the box maps the WHOLE tile onto EVERY face (BoxGeometry,
-    // repeat [1,1]), so each small face shows ALL 4×4=16 panels at once. Any
-    // per-panel variation (albedo tone OR roughness) therefore reads as gold
-    // CAMOUFLAGE (user-rejected — "even flat gold would be better"). The box
-    // must be NEAR-UNIFORM plain gold: per-panel spans are slashed to ~faint,
-    // leaving only folds/creases to carry a whisper of texture.
     cellsU: 4, cellsV: 4, weightAmp: 0.3,
     drapeAmp: 0.5, drapePeriod: 2,
     pillowAmp: 0.10, pillowK: 1.6,
@@ -199,24 +145,19 @@ const FOIL_VARIANTS = {
     microAmp: 0.0, microPeriods: [13, 29], anchorRadius: 0.07,
     slopeGain: 0.0234,
     slopeRef: 0.14,                  // crease mask: ~tan 8°
-    toneSpan: 0.008,                 // v6.1: 0.04→0.008 (albedo blotches gone)
-    rough: { base: 0.50, span: 0.05, creaseAdd: 0.06, lo: 0.50, hi: 0.80 }, // v6.1: span 0.20→0.05 (specular blotches gone; creases keep faint texture)
+    toneSpan: 0.008,
+    rough: { base: 0.50, span: 0.05, creaseAdd: 0.06, lo: 0.50, hi: 0.80 },
     creaseDarken: 0.03,
   },
 };
 
 /**
- * v5 — Precompute a wrapped jittered POWER lattice's per-cell attributes with
- * INDEPENDENT u/v cell counts. Indexed `[ly * cellsU + lx]`. This is the panel
- * lattice for the height field's pillow + per-panel-tilt components (NOT a
- * constant-normal facet table — v5 has no such thing).
+ * Wrapped jittered POWER lattice's per-cell attributes with independent u/v cell counts, indexed
+ * `[ly * cellsU + lx]`. Panel lattice for the pillow + per-panel-tilt components.
  *
- * Each cell carries: jitter (jx,jy); power weight² (w2, radius boost for panel-
- * size variety); a per-panel bulge amplitude (amp ∈ [0.35,1)); an id (0..1) for
- * per-panel roughness/albedo tone; and a per-panel PLANAR TILT — a unit direction
- * (tx,ty) and a SIGNED magnitude tm ∈ [−0.35, 0.65). The tilt gives v4's mirror-
- * mosaic panel variety but as a CONTINUOUS gradient across the panel (gated to 0
- * at the borders), not a flat fill.
+ * Each cell: jitter (jx,jy); power weight² (w2); bulge amplitude amp ∈ [0.35,1); id (0..1) for per-panel
+ * roughness/albedo tone; PLANAR TILT — unit direction (tx,ty) and SIGNED magnitude tm ∈ [−0.35, 0.65): a
+ * CONTINUOUS gradient across the panel (gated to 0 at the borders), not a flat fill.
  *
  * @param {number} cu, cv  cell counts
  * @param {number} salt    separates this lattice from the fold layer
@@ -246,20 +187,15 @@ function _buildLattice(cu, cv, salt, wa) {
 }
 
 /**
- * v5 — Wrapped POWER (Laguerre) Voronoi sample. Distance to each candidate is the
- * power metric `d = sqrt(max(0, |offset|² − w²))`.
+ * Wrapped POWER (Laguerre) Voronoi sample: distance to each candidate is `d = sqrt(max(0, |offset|² − w²))`.
  *
- * WHY THE BORDERS STAY STRAIGHT (do NOT swap this for a plain/anisotropic metric):
- * the cell boundary is where `|p−f1|² − w1² = |p−f2|² − w2²`; the `|p|²` terms
- * cancel, leaving an equation LINEAR in (x,y) → a STRAIGHT LINE (the power/Laguerre
- * property). Straight borders are what feed the straight ridge segments; curved
- * bisectors were exactly v3's rejected "too organic" read.
+ * WHY THE BORDERS STAY STRAIGHT (do NOT swap for a plain/anisotropic metric): the boundary is where
+ * `|p−f1|² − w1² = |p−f2|² − w2²`; the `|p|²` terms cancel, leaving an equation LINEAR in (x,y) → a STRAIGHT
+ * LINE. Straight borders feed the straight ridge segments; curved bisectors read "too organic".
  *
- * PAIR-GATE role: returns the winner index i1 AND runner-up i2 so `_buildHeight`
- * can hash the SYMMETRIC pair (min,max) and open only SOME borders into folds —
- * that gating is what breaks the closed-cell topology into an open network. Also
- * returns the RAW offset (dx1,dy1) to the winner feature point (the per-panel tilt
- * ramp is `dot((dx1,dy1),(tx,ty))`) and f1/f2 (the pillow/border tent profile).
+ * Returns winner i1 AND runner-up i2 (so `_buildHeight` can hash the SYMMETRIC pair and open only SOME borders
+ * into folds), the RAW offset (dx1,dy1) to the winner feature point (tilt ramp = `dot((dx1,dy1),(tx,ty))`),
+ * and f1/f2 (pillow/border tent profile).
  *
  * @returns {{f1:number, f2:number, i1:number, i2:number, dx1:number, dy1:number}}
  */
@@ -269,7 +205,7 @@ function _voronoi(u, v, t) {
   let f1 = Infinity, f2 = Infinity, i1 = 0, i2 = 0, dx1 = 0, dy1 = 0;
   for (let oy = -2; oy <= 2; oy++) {
     for (let ox = -2; ox <= 2; ox++) {
-      const wx = cx + ox, wy = cy + oy;               // (may be out of range)
+      const wx = cx + ox, wy = cy + oy;               // may be out of range
       const lx = ((wx % t.cu) + t.cu) % t.cu;         // wrapped lattice id
       const ly = ((wy % t.cv) + t.cv) % t.cv;
       const i = ly * t.cu + lx;
@@ -284,15 +220,12 @@ function _voronoi(u, v, t) {
 }
 
 /**
- * v5 — Build ONE fold chain: a polyline of `segs` STRAIGHT segments laid end-to-
- * end with a small (±25°) heading change per joint. End-to-end segments →
- * long CONNECTED drape ridges crossing the tile (the MRO chains); single segments
- * read "pick-up-sticks" (observed and rejected). Each segment records its global
- * t-span [t0,t1] along the whole chain so the taper runs over the full polyline.
+ * Build ONE fold chain: a polyline of `segs` STRAIGHT segments laid end-to-end with a ±25° heading change per
+ * joint → long CONNECTED ridges (single segments read "pick-up-sticks"). Each segment records its global t-span
+ * [t0,t1] along the chain so the taper runs over the full polyline.
  *
- * Wrap-safety: endpoints may walk outside [0,1) — fine, `_chainField` scans the 9
- * shifted torus copies. Keep total chain length < ~0.9 uv or the 9-wrap window
- * stops covering the chain (current max ≈ 0.70).
+ * Wrap-safety: endpoints may walk outside [0,1) — `_chainField` scans the 9 shifted torus copies. Keep total
+ * chain length < ~0.9 uv or that window stops covering the chain (current max ≈ 0.70).
  */
 function _buildChain(x0, y0, ang0, totalLen, segs, w, amp, fan, cSalt) {
   const segments = [];
@@ -308,17 +241,12 @@ function _buildChain(x0, y0, ang0, totalLen, segs, w, amp, fan, cSalt) {
 }
 
 /**
- * v5 — Build the fold layer: fan chains radiating from stress anchors + a few
- * loose chains. `count = [anchorCount, raysPerAnchorMax, looseCount]`.
+ * Build the fold layer: fan chains radiating from stress anchors + a few freestanding loose chains (sin(πt)
+ * tapered). `count = [anchorCount, raysPerAnchorMax, looseCount]`.
  *
- * Each anchor spawns 3–7 ray-chains fanning out; each ray STARTS OFFSET
- * (r0 ≈ 0.012–0.032) from the anchor so the rays don't all converge into a bright
- * BLOB (observed and rejected). Ray half-widths are thin (0.0045–0.012 uv) — the
- * bright-line sharpness is ∝ amp/width. Ridge:crease sign mix ≈ 60:40. Anchors
- * are returned separately for the micro-crumple gate (crumple concentrates at the
- * stress points, like MRO — not in random patches).
- *
- * Loose chains are freestanding (no anchor), sin(πt) tapered.
+ * Each anchor spawns 3–7 ray-chains; each ray STARTS OFFSET (r0 ≈ 0.012–0.032) from the anchor so rays don't
+ * converge into a bright BLOB. Ray half-widths 0.0045–0.012 uv (thin; sharpness ∝ amp/width). Ridge:crease sign
+ * mix ≈ 60:40. Anchors are returned for the micro-crumple gate (crumple concentrates at stress points, like MRO).
  */
 function _buildFolds(count, salt) {
   const A = count[0], R = count[1], L = count[2];
@@ -354,9 +282,8 @@ function _buildFolds(count, salt) {
 }
 
 /**
- * v5 — Minimum distance from (u,v) to a fold chain over the 9-wrap torus, with
- * the global t at the closest point (drives the along-chain taper). Perpendicular
- * distance to each segment, minimised over all segments × 9 shifted copies.
+ * Minimum distance from (u,v) to a fold chain over the 9-wrap torus, with the global t at the closest point
+ * (drives the along-chain taper).
  */
 function _chainField(u, v, ch) {
   let best = Infinity, tAt = 0;
@@ -376,9 +303,8 @@ function _chainField(u, v, ch) {
 }
 
 /**
- * v5 — Sum of Gaussians (radius `radius`) around the fold anchors over the 9-wrap
- * torus, clamped to 1. Gates the micro-crumple so fine wrinkle concentrates at the
- * fold-convergence stress points (like MRO), not in random patches.
+ * Sum of Gaussians (radius `radius`) around the fold anchors over the 9-wrap torus, clamped to 1. Gates the
+ * micro-crumple to the fold-convergence stress points.
  */
 function _anchorGate(u, v, anchors, radius) {
   let g = 0;
@@ -395,32 +321,21 @@ function _anchorGate(u, v, anchors, radius) {
 }
 
 /**
- * v5 — Build the continuous drape HEIGHT FIELD h(u,v) for one variant. Row-major
- * (size*size). This is the whole v5 architecture: h is a sum of 6 wrapped/tileable
- * components (all salt-hashed, deterministic); normals come from ∇h in
- * `_normalsFromHeight`. Sheet continuity, in-panel gradients and tented crests all
- * fall out of taking a gradient of a continuous field — the fix for every prior
- * "flat facet fill / no crest lines / closed cells" rejection.
+ * Build the continuous drape HEIGHT FIELD h(u,v) for one variant, row-major (size*size): a sum of 6 wrapped
+ * deterministic components; normals come from ∇h in `_normalsFromHeight`.
  *
- *  1. DRAPE (drapeAmp): 2 octaves of wrapped value noise (period p + 2p, amp 1:0.4)
- *     — the near-white↔amber panel sweeps; the dominant "mirror panels" read.
- *  2. PILLOW (pillowAmp): per-cell taut bulge, profile smoothstep'd from (f2−f1)
- *     so it is 0 at the borders (continuous). KEEP SMALL — quilted/mud otherwise.
- *  3. PER-PANEL PLANAR TILT (panelTiltAmp): each panel tilts a random direction by
- *     a signed magnitude, ramped along dot(offset, tiltDir) and gated by the same
- *     border profile (0 at borders ⇒ continuous). v4's mirror-mosaic variety, but
- *     as a smooth in-panel GRADIENT, not a flat fill.
- *  4. PAIR-GATED BORDER FOLD (borderAmp): the straightness trick. Symmetric pair
- *     hash r = hash(min(i1,i2),max(i1,i2)); only borders with r ≥ borderGate carry
- *     a tent fold (sign from r) — the rest stay smooth. Gating BREAKS the closed-
- *     cell polygon network into an OPEN network of straight segments. The
- *     i1!==i2 guard skips a cell's self-border across the seam.
- *  5. FOLD CHAINS (foldAmp): fan + loose polyline ridges/creases (see `_buildFolds`)
- *     — the long connected MRO drape ridges. Fan taper `(1−t)·min(1,12t)`; loose
- *     taper `sin(πt)`. `·0.02` unit scale.
- *  6. MICRO-CRUMPLE (microAmp): 2-octave RIDGED value noise `(1−2|vn−.5|)²`, periods
- *     NON-aligned + offset (aligned periods showed grid-plaid), gated by the anchor
- *     Gaussians so it concentrates at stress points. Subtle; raise first if needed.
+ *  1. DRAPE (drapeAmp): 2 octaves of wrapped value noise (period p + 2p, amp 1:0.4) — the dominant "mirror
+ *     panels" read.
+ *  2. PILLOW (pillowAmp): per-cell taut bulge, smoothstep'd from (f2−f1) so it is 0 at the borders.
+ *  3. PER-PANEL PLANAR TILT (panelTiltAmp): random direction, signed magnitude, ramped along dot(offset,
+ *     tiltDir) and gated by the same border profile (smooth in-panel GRADIENT, not a flat fill).
+ *  4. PAIR-GATED BORDER FOLD (borderAmp): symmetric pair hash r = hash(min(i1,i2),max(i1,i2)); only borders
+ *     with r ≥ borderGate carry a tent fold (sign from r), so the closed-cell network becomes an OPEN network of
+ *     straight segments. The i1!==i2 guard skips a cell's self-border across the seam.
+ *  5. FOLD CHAINS (foldAmp): fan + loose polyline ridges/creases (see `_buildFolds`). Fan taper
+ *     `(1−t)·min(1,12t)`; loose taper `sin(πt)`. `·0.02` unit scale.
+ *  6. MICRO-CRUMPLE (microAmp): 2-octave RIDGED value noise `(1−2|vn−.5|)²`, NON-aligned + offset periods,
+ *     gated by the anchor Gaussians.
  *
  * @param {number} size
  * @param {object} vp   variant params (FOIL_VARIANTS entry)
@@ -436,23 +351,23 @@ function _buildHeight(size, vp) {
       const u = x / size, v = y / size;
       let hh = 0;
 
-      // 1. Drape sweeps (2 octaves).
+      // 1. drape sweeps
       hh += vp.drapeAmp * (_valueNoise(u, v, vp.drapePeriod, 1) - 0.5);
       hh += vp.drapeAmp * 0.4 * (_valueNoise(u, v, vp.drapePeriod * 2, 2) - 0.5);
 
       const vo = _voronoi(u, v, lat);
-      // Border profile: 1 in the panel interior → 0 at the border (smoothstep).
+      // border profile: 1 in the panel interior → 0 at the border (smoothstep)
       const prof = Math.min(1, (vo.f2 - vo.f1) * vp.pillowK);
       const sm = prof * prof * (3 - 2 * prof);
 
-      // 2. Pillow bulge (border-gated ⇒ continuous).
+      // 2. pillow
       hh += vp.pillowAmp * lat.amp[vo.i1] * sm * invCells;
 
-      // 3. Per-panel planar tilt (ramp along the tilt direction, border-gated).
+      // 3. per-panel tilt
       const ramp = (vo.dx1 * lat.tx[vo.i1] + vo.dy1 * lat.ty[vo.i1]) * invCells;
       hh += vp.panelTiltAmp * lat.tm[vo.i1] * ramp * sm;
 
-      // 4. Pair-gated border fold (open straight-segment network).
+      // 4. pair-gated border fold
       const a = Math.min(vo.i1, vo.i2), b = Math.max(vo.i1, vo.i2);
       const r = _hash01(a, b, 77);
       if (r >= vp.borderGate && vo.i1 !== vo.i2) {
@@ -462,7 +377,7 @@ function _buildHeight(size, vp) {
         hh += vp.borderAmp * sign * mag * tent * tent * 0.02;
       }
 
-      // 5. Fold chains (fans + loose).
+      // 5. fold chains
       for (const ch of folds.F) {
         const cf = _chainField(u, v, ch);
         if (cf.d < ch.w) {
@@ -472,7 +387,7 @@ function _buildHeight(size, vp) {
         }
       }
 
-      // 6. Micro-crumple (ridged, gated to the stress anchors).
+      // 6. micro-crumple
       if (hasMicro) {
         const gate = _anchorGate(u, v, folds.anchors, vp.anchorRadius);
         if (gate > 0.02) {
@@ -494,19 +409,15 @@ function _buildHeight(size, vp) {
 }
 
 /**
- * v5 — Normals from the height gradient via wrapped central differences. Returns a
- * packed (size*size*3) Float32Array of unit normals (nx,ny,nz), rows top-down.
+ * Normals from the height gradient via wrapped central differences: packed (size*size*3) Float32Array of unit
+ * normals (nx,ny,nz), rows top-down.
  *
- * ⚠ RESOLUTION INDEPENDENCE (the third trap — see the module header): the central
- * difference MUST be scaled by the pixel spacing `·size`, so `gain` is a per-UV-
- * unit constant, NOT a per-pixel one. Without `·size`, mean tilt measured 49° at
- * 64² vs 12° at 512² and the 64² unit test would pin a different texture than the
- * 1024² bake. FIXED gain (no data-dependent normalization) + NO blur are the
- * other two v2.2 traps this must never reintroduce.
+ * RESOLUTION INDEPENDENCE: the central difference MUST be scaled by the pixel spacing `·size`, so `gain` is a
+ * per-UV-unit constant. Without it, mean tilt measured 49° at 64² vs 12° at 512². FIXED gain (no
+ * data-dependent normalization) + NO blur must also never be reintroduced.
  *
- * ny is NOT negated here — the byte write in `buildFoilPixels` negates it (canvas
- * rows top-down vs UV v bottom-up); keeping the raw sign here lets the shaded
- * preview / rough-mask reuse the gradient directly.
+ * ny is NOT negated here — the byte write in `buildFoilPixels` negates it (canvas rows top-down vs UV v
+ * bottom-up).
  */
 function _normalsFromHeight(h, size, gain) {
   const n = new Float32Array(size * size * 3);
@@ -525,17 +436,15 @@ function _normalsFromHeight(h, size, gain) {
   }
   return n;
 }
+
 /**
- * v8 — Build the MLI maps as raw RGBA pixel buffers for one VARIANT — PURE JS, NO
- * DOM. This is the BAKE SOURCE OF TRUTH: `scripts/bake-foil-maps.mjs` calls it in
- * Node and encodes the result to the static PNGs the runtime loads.
+ * Build the MLI maps as raw RGBA pixel buffers for one VARIANT — PURE JS, NO DOM. BAKE SOURCE OF TRUTH:
+ * `scripts/bake-foil-maps.mjs` calls it in Node and encodes the static PNGs the runtime loads.
  *  - `normal` : from ∇h; ny NEGATED on write (canvas-y-down vs UV-v-up), α = 255.
- *  - `rm`     : G = roughness = base + id·span + crease·creaseAdd clamped [lo,hi]
- *               (R = G); B = 255 (all foil is metal). The crease mask `c` is the
- *               local slope / slopeRef — fold FACES and crumple zones are rougher;
- *               crest PEAKS stay bright (∇h ≈ 0 at a tent apex). Do not "fix" it.
+ *  - `rm`     : G = roughness = base + id·span + crease·creaseAdd clamped [lo,hi] (R = G); B = 255. The crease
+ *               mask `c` is the local slope / slopeRef — fold FACES and crumple zones are rougher; crest PEAKS
+ *               stay bright (∇h ≈ 0 at a tent apex). Do not "fix" it.
  *  - `albedo` : neutral grey, R = G = B; faint per-panel tone, crease slightly dark.
- *               The gold hue lives in the material colour (MLI_FOIL_LOOK).
  *
  * @param {number} [size]  default = FOIL_BAKE_SIZE[variant]
  * @param {'crumpled'|'flat'} [variant='crumpled']
@@ -549,9 +458,7 @@ export function buildFoilPixels(size, variant = 'crumpled') {
 
   const height = _buildHeight(size, vp);
   const nrm = _normalsFromHeight(height, size, vp.slopeGain);
-  // The panel lattice is cheap and deterministic; rebuild it for the per-panel
-  // tone/id (same salt/params as inside _buildHeight ⇒ identical assignment).
-  const lat = _buildLattice(vp.cellsU, vp.cellsV, 10, vp.weightAmp);
+  const lat = _buildLattice(vp.cellsU, vp.cellsV, 10, vp.weightAmp);   // same salt/params as in _buildHeight ⇒ identical assignment
 
   const N = size * size;
   const normal = new Uint8ClampedArray(N * 4);
@@ -592,10 +499,10 @@ export function buildFoilPixels(size, variant = 'crumpled') {
   return { size, variant, normal, rm, albedo };
 }
 
-/** Bake size (px, square) per variant. The loader's placeholder canvases use it. */
+/** Bake size (px, square) per variant; the loader's placeholder canvases use it. */
 export const FOIL_BAKE_SIZE = Object.freeze({ crumpled: 1024, flat: 512 });
 
-/** Baked map files, relative paths (Earth.js / textures/ convention). v8 = NEW names (cache-first sw). */
+/** Baked map files, relative paths. */
 export const FOIL_FILES = Object.freeze({
   normal: 'textures/mli_foil_v8_normal.png',
   rm: 'textures/mli_foil_v8_rough_metal.png',
@@ -605,17 +512,12 @@ export const FOIL_FILES = Object.freeze({
   flatAlbedo: 'textures/mli_foil_v8_flat_albedo.png',
 });
 
-/** Which variant (⇒ bake size) each map key belongs to. */
 const FOIL_KEY_VARIANT = {
   normal: 'crumpled', rm: 'crumpled', albedo: 'crumpled',
   flatNormal: 'flat', flatRm: 'flat', flatAlbedo: 'flat',
 };
 
-/**
- * Neutral solid fill per map for the placeholder (the look before the PNG
- * decodes): normal flat-up, rm = mid roughness / full metal, albedo = the neutral
- * grey tone (the gold is the material colour).
- */
+/** Neutral solid fill per map for the placeholder shown before the PNG decodes (the gold is the material colour). */
 const FOIL_NEUTRAL = {
   normal: 'rgb(128,128,255)',
   rm: 'rgb(128,128,255)',
@@ -625,19 +527,14 @@ const FOIL_NEUTRAL = {
   flatAlbedo: 'rgb(242,242,242)',
 };
 
-/**
- * Per-map master texture records: `{ texture, loaded, clones[] }`. The texture
- * starts on a same-size neutral placeholder and swaps in the decoded PNG. Clones
- * issued before load are tracked so they can be version-bumped on swap.
- */
+/** Per-map master texture records: `{ texture, loaded, clones[] }`. Clones issued before load are version-bumped on swap. */
 const _masters = new Map();
 
-/** Build a solid-neutral placeholder canvas of the key's bake size (immutable-storage trap). */
+/** Solid-neutral placeholder canvas of the key's bake size (immutable-storage trap). */
 function _makePlaceholderCanvas(fill, px) {
   const c = document.createElement('canvas');
   c.width = c.height = px;
-  // Some test harnesses stub `document.createElement` with a bare object (no
-  // canvas API); treat that as headless — return null so the caller degrades.
+  // test harnesses may stub `document.createElement` with a bare object (no canvas API): treat as headless
   if (typeof c.getContext !== 'function') return null;
   const ctx = c.getContext('2d');
   if (!ctx || typeof ctx.fillRect !== 'function') return null;
@@ -646,11 +543,7 @@ function _makePlaceholderCanvas(fill, px) {
   return c;
 }
 
-/**
- * Get (or lazily create) the master texture for a map key. The master owns the
- * shared `Source`; `getMLIFoilMaps` returns `.clone()`s of it. The PNG loads once
- * per key and swaps into the shared Source via a same-size texSubImage2D.
- */
+/** Master texture for a map key (owns the shared `Source`); the PNG loads once and swaps in via a same-size texSubImage2D. */
 function _getMaster(key, colorSpace) {
   let rec = _masters.get(key);
   if (rec) return rec;
@@ -658,7 +551,7 @@ function _getMaster(key, colorSpace) {
   const placeholder = _makePlaceholderCanvas(FOIL_NEUTRAL[key], FOIL_BAKE_SIZE[FOIL_KEY_VARIANT[key]]);
   if (!placeholder) return null;
 
-  // Plain Texture (not CanvasTexture): this texture later carries an <img>.
+  // plain Texture (not CanvasTexture): it later carries an <img>
   const texture = new THREE.Texture(placeholder);
   texture.colorSpace = colorSpace;
   texture.wrapS = THREE.RepeatWrapping;
@@ -672,17 +565,16 @@ function _getMaster(key, colorSpace) {
   new THREE.ImageLoader().load(
     FOIL_FILES[key],
     (image) => {
-      // Same-size texSubImage2D re-upload into the pre-allocated storage.
       rec.texture.image = image;
       rec.texture.needsUpdate = true;
-      // Each clone gates on its OWN version; bump the ones issued pre-load.
+      // each clone gates on its OWN version; bump the ones issued pre-load
       for (const c of rec.clones) c.needsUpdate = true;
       rec.clones.length = 0;
       rec.loaded = true;
     },
     undefined,
     () => {
-      // Offline first visit: keep the neutral placeholder, warn once, no crash.
+      // offline first visit: keep the neutral placeholder
       console.warn(`[mliFoilTexture] failed to load ${FOIL_FILES[key]}; using neutral placeholder`);
     }
   );
@@ -690,15 +582,11 @@ function _getMaster(key, colorSpace) {
 }
 
 /**
- * Get the MLI foil maps (albedo + normal + rough/metal), backed by the baked
- * PNGs in `textures/`.
- *  - default → `crumpled` (barrel skin).
- *  - `variant: 'flat'` → instrument-box single-panel variant.
+ * Get the MLI foil maps (albedo + normal + rough/metal), backed by the baked PNGs. Default `crumpled` (barrel
+ * skin); `variant: 'flat'` → instrument box.
  *
- * Returns freshly-cloned Texture objects on every call (sharing the cached master
- * Source) so each material part can set its own `repeat`. `roughnessMap` and
- * `metalnessMap` are the SAME texture object (G / B channels of one PNG). Returns
- * `null` in headless/no-DOM environments.
+ * Returns freshly-cloned Textures on every call (sharing the cached master Source) so each part can set its own
+ * `repeat`. `roughnessMap` and `metalnessMap` are the SAME texture object (G / B of one PNG). Null headless.
  *
  * @param {object} [opts]
  * @param {number|[number,number]} [opts.repeat=1]   UV repeat (scalar or [u,v])
@@ -716,8 +604,7 @@ export function getMLIFoilMaps(opts = {}) {
     if (!rec) return null;
     const t = rec.texture.clone();      // shares Source; copy() forces version 1
     t.repeat.set(ru, rv);
-    // Only pre-load clones need the registry: post-load the Source is already
-    // uploaded and copy()'s version bump uploads them on first bind.
+    // only pre-load clones need the registry: post-load, copy()'s version bump uploads them on first bind
     if (!rec.loaded) rec.clones.push(t);
     return t;
   };

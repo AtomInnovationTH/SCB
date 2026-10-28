@@ -102,10 +102,11 @@ import { RAIL_GEOMETRY } from './RailGeometry.js';
 import { GestureHints } from './hud/GestureHints.js';   // u15b D7: the hint's words follow glass, read when drawn
 import { TAP_SLOP_PX, TAP_SLOP_MS } from '../systems/TapPick.js';
 import { engineGasKg } from '../systems/ResourceSystem.js';
+import { DEG2RAD, degToRad, clamp01, clamp } from '../core/MathUtil.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 
 // 1 metre in scene units (mirrors PlayerSatellite's M = 0.00001).
 const M = 0.00001;
-const DEG2RAD = Math.PI / 180;
 
 const CFG = Constants.CALLOUTS;
 const HUES = CFG.SYSTEM_HUES;
@@ -467,7 +468,7 @@ const SYSTEMS = [
         pick: ['TTC_Omni_1'],
         // §13 r4 roll-up: the aft whip's base.
         pickPrefixes: ['TTC_Omni_1'],
-        anchor: [ 0.40 * Math.cos(78 * Math.PI / 180) * M, 0.40 * Math.sin(78 * Math.PI / 180) * M, -0.92 * M ] },   // v10-look-r5: aft omni at az 78
+        anchor: [ 0.40 * Math.cos(degToRad(78)) * M, 0.40 * Math.sin(degToRad(78)) * M, -0.92 * M ] },   // v10-look-r5: aft omni at az 78
     ],
   },
   {
@@ -513,8 +514,8 @@ const SYSTEMS = [
         // DERIVED: first strut azimuth, hinge radius 0.44 m, hinge plane z =
         // COLLAR_Y (moved onto the front ring 2026-09-23). A literal here would
         // point 10 cm aft of the real hinge, as 0.22/0.381/0.90 once did.
-        anchor: [ 0.44 * Math.cos(Constants.ARM_LADDER.Y0_QUAD.azimuths[0] * Math.PI / 180) * M,
-                  0.44 * Math.sin(Constants.ARM_LADDER.Y0_QUAD.azimuths[0] * Math.PI / 180) * M,
+        anchor: [ 0.44 * Math.cos(degToRad(Constants.ARM_LADDER.Y0_QUAD.azimuths[0])) * M,
+                  0.44 * Math.sin(degToRad(Constants.ARM_LADDER.Y0_QUAD.azimuths[0])) * M,
                   Constants.OCTOPUS_V5.COLLAR_Y * M ] },
       { id: 'cradle_spring', name: 'CROSSBOW SPRING', risk: 'YELLOW', tier: 'detail', codexId: 'spring_energy',
         massKg: 1, priority: 2, specs: ['Spring ejector — launches daughters'],
@@ -2092,7 +2093,7 @@ export class MotherCallouts {
         if (trl != null) rows.push({ text: `Readiness: L${trl}`, dim: true });
       } else if (codex === 'locked' && codexTitle) {
         // Locked cards still name where the ▸ leads (amber, matches the hint).
-        rows.push({ text: `▸ ${codexTitle}`, dim: true, color: '#ffaa00' });
+        rows.push({ text: `▸ ${codexTitle}`, dim: true, color: VisualLaw.COLORS.CAUTION });
       } else if (codex === null) {
         // Structural part with no briefing — explain the dead click (round 6).
         rows.push({ text: 'structure — no briefing', dim: true });
@@ -2102,7 +2103,7 @@ export class MotherCallouts {
 
       // Hint lines appended last, amber (R8).
       for (const line of hintLines) {
-        rows.push({ text: line, dim: false, color: '#ffaa00' });
+        rows.push({ text: line, dim: false, color: VisualLaw.COLORS.CAUTION });
       }
     }
     const title = rec.isSystem ? def.label : def.name;
@@ -3293,7 +3294,7 @@ export class MotherCallouts {
     this._vFace.normalize();
     const d = this._vFace.dot(this._vCamDir);
     // Softened ramp: a part 90° off still reads ~0.42 instead of ~0.22 (T8).
-    return Math.max(0, Math.min(1, (d + 0.25) / 0.6));
+    return clamp01((d + 0.25) / 0.6);
   }
 
   // --------------------------------------------------------------------------
@@ -3691,7 +3692,7 @@ export class MotherCallouts {
     // Clamp Y: card is centred vertically on ty, a small nudge below the
     // pointer so it reads "beside", never "under".
     let ty = py - HOVER_DOSSIER_OFFSET_NDC * 0.5;
-    ty = Math.max(-1 + margin + cardH / 2, Math.min(1 - margin - cardH / 2, ty));
+    ty = clamp(ty, -1 + margin + cardH / 2, 1 - margin - cardH / 2);
 
     if (!this._dossierPrimed) { this._dossierSX = tx; this._dossierSY = ty; this._dossierPrimed = true; }
     else {

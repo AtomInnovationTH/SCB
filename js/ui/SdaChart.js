@@ -65,6 +65,7 @@ import { Constants } from '../core/Constants.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { mono, fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
+import { clamp01 } from '../core/MathUtil.js';
 
 /** The SDA DOWNLINK (id 5) contract row (chart framing + labelBudget + lenses) — by id (Session H). */
 const FLOOR = FloorContract.byId(5);
@@ -291,7 +292,7 @@ export function projectDensity(opts = {}) {
   const coeff = (opts.coeffPerYear != null)
     ? opts.coeffPerYear
     : 0.75 / (BAU_QUADRUPLE_YEAR - baseYear);
-  const risk = Math.max(0, Math.min(1, opts.riskBoost || 0));
+  const risk = clamp01(opts.riskBoost || 0);
   const cEff = coeff * (1 + risk);
   const ceil = baseCount * CASCADE_CEIL_FACTOR;
 
@@ -754,7 +755,7 @@ export class SdaChart {
   _rgba(hex, a) {
     const n = parseInt(hex.slice(1), 16);
     const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-    return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, a))})`;
+    return `rgba(${r}, ${g}, ${b}, ${clamp01(a)})`;
   }
 
   /** Remove the whole layer. */

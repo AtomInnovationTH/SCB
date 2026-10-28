@@ -1,30 +1,19 @@
 /**
- * labelTexture.js — Shared canvas → CanvasTexture helper for in-world text labels.
+ * Shared canvas -> CanvasTexture helper for in-world text labels (SunLight planet/
+ * constellation labels, MotherCallouts cards) (@module scene/labelTexture).
  *
- * Extracted so the planet/constellation labels (SunLight.js) and the mothership
- * inspection callouts (ui/MotherCallouts.js) share one crisp-text recipe instead
- * of duplicating the canvas/mipmap/colour-space setup.
- *
- * Crispness recipe (see SunLight history): 1024×256 canvas, 700-weight Helvetica,
- * NO shadow blur (it bled into glyph edges at pixelRatio 1.5 with SMAA off),
- * linear-mipmap filtering + anisotropy + sRGB. Renders crisp from establishing
- * range down to close inspection.
- *
- * @module scene/labelTexture
+ * Crispness recipe: 1024×256 canvas, 700-weight Helvetica, NO shadow blur (it bled
+ * into glyph edges at pixelRatio 1.5 with SMAA off), linear-mipmap + anisotropy + sRGB.
  */
 
 import * as THREE from 'three';
 import { mono, ui, MONO_ADVANCE_EM } from '../core/Typeface.js';
 
 /**
- * Build a billboard text-label texture.
- * @param {string} text  Label text (drawn centred, single line).
+ * Billboard text-label texture; `text` is drawn centred, single line.
  * @param {object} [opts]
- * @param {string} [opts.color='#ffffff']  CSS fill colour for the glyphs.
- * @param {number} [opts.fontPx=112]       Font size in canvas px (height is 256).
- * @param {boolean} [opts.pill=false]      Draw a dark rounded "chip" behind the
- *   text for contrast against bright hull / Earth. Stroked in `color`.
- * @returns {THREE.CanvasTexture}
+ * @param {number} [opts.fontPx=112]   canvas px (canvas height is 256)
+ * @param {boolean} [opts.pill=false]  dark rounded chip behind the text, stroked in `color`
  */
 export function createLabelTexture(text, { color = '#ffffff', fontPx = 112, pill = false } = {}) {
   const c = document.createElement('canvas');
@@ -36,8 +25,6 @@ export function createLabelTexture(text, { color = '#ffffff', fontPx = 112, pill
   ctx.textBaseline = 'middle';
 
   if (pill) {
-    // Measure the glyph run and draw a rounded dark chip behind it so labels
-    // stay legible over the sunlit hull or Earth's limb.
     const tw = Math.min(ctx.measureText(text).width, c.width - 40);
     const padX = 36, padY = 30;
     const w = tw + padX * 2;
@@ -61,8 +48,7 @@ export function createLabelTexture(text, { color = '#ffffff', fontPx = 112, pill
     ctx.globalAlpha = 1.0;
   }
 
-  // Subtle dark halo around the glyphs so text stays legible against bright
-  // hull / Earth even when the pill is absent or semi-transparent.
+  // Dark halo keeps text legible when the pill is absent or semi-transparent.
   ctx.lineJoin = 'round';
   ctx.lineWidth = Math.max(3, fontPx * 0.06);
   ctx.strokeStyle = 'rgba(2, 6, 12, 0.85)';
@@ -81,52 +67,36 @@ export function createLabelTexture(text, { color = '#ffffff', fontPx = 112, pill
   return tex;
 }
 
-// ---------------------------------------------------------------------------
-// MULTI-LINE INSPECTION CARD
-// ---------------------------------------------------------------------------
-
-// Round 4: blueprint / engineering-HUD type. ONE face for BOTH drawing and
-// measurement so the wrap budget can never drift from the draw. Session R
-// (plan D17 / §14.2): the cards ride the house mono token through
-// Typeface.mono() (B612 Mono 700 / 400 — the family ships those two weights;
-// the former IBM Plex Mono stack was never @font-face'd and rendered Menlo on
-// the iPad). The HUD breadcrumb reads the CSS token; nothing imports a family
-// from here any more. The codex glyph rides the UI token (the ▸ falls through
-// to the next family if B612 lacks it, as before).
+// Multi-line inspection card. ONE face for BOTH drawing and measurement so the wrap
+// budget can never drift from the draw. Cards use the house mono token via
+// Typeface.mono() (B612 Mono 700/400); the codex glyph uses the UI token (the ▸ falls
+// through to the next family if B612 lacks it).
 const CARD_TITLE_FONT = mono(36, 700);
 const CARD_ROW_FONT   = mono(28);
 const CARD_GLYPH_FONT = ui(40, 700);
 
-const CARD_W = 640;          // logical canvas width (px, pre-DPR) — widened from
-                             // 512 (+25%) so plain-English titles (~22 chars) fit
-                             // at the same on-screen text size (round-3 T4)
+const CARD_W = 640;          // logical canvas width (px, pre-DPR); fits ~22-char titles
 const CARD_PAD_TOP = 22;
 const CARD_PAD_BOTTOM = 22;
 const CARD_TITLE_H = 62;     // title-row block height
 const CARD_ROW_H = 44;       // each data-row block height
-const CARD_TAB_W = 2;        // round 4: 2 px accent line (was 12 px rounded tab)
+const CARD_TAB_W = 2;        // px accent line
 const CARD_PAD_L = 24;       // content left pad (after tab)
 const CARD_PAD_R = 18;       // content right pad
 
-// Logical height of a 0-row card (title block only). Total card height = this × heightFactor.
+// Logical height of a 0-row card (title block only); total height = this × heightFactor.
 const CARD_TITLE_BLOCK_H = CARD_PAD_TOP + CARD_TITLE_H + CARD_PAD_BOTTOM; // 106
 // aspect × heightFactor is invariant (= 640/106 ≈ 6.04) for every card, so the
-// caller can size/clamp from _sizeFrac alone without reading rec.card. Exported
-// for MotherCallouts (R15).
+// caller can size/clamp from _sizeFrac alone without reading rec.card.
 export const CARD_W_OVER_TITLE_H = CARD_W / CARD_TITLE_BLOCK_H;
 
 /**
- * Word-wrap a hint string to the card content width using the shared measure
- * context. Emits up to `maxLines` lines; if text remains, an ellipsis is
- * appended to the last emitted line so truncation is never silent (R8/review).
- * This is the SINGLE wrap implementation — MotherCallouts pre-wraps hints with
- * it to compute its row budget, and the card renderer draws the returned lines
- * verbatim, so budget and draw can never disagree.
- * Degrades to a character-width estimate when no canvas 2d context is available
- * (e.g. headless Node test imports), so it never throws off-DOM.
- * @param {string} text
- * @param {number} [maxLines=2]
- * @returns {string[]} 1..maxLines wrapped lines
+ * Word-wrap a hint to the card content width; up to `maxLines` lines, with an
+ * ellipsis on the last line when text remains (truncation is never silent).
+ * The SINGLE wrap implementation: MotherCallouts pre-wraps with it for its row
+ * budget and the card draws the lines verbatim, so budget and draw can't disagree.
+ * Falls back to a character-width estimate with no 2d context (headless Node).
+ * @returns {string[]} 1..maxLines lines
  */
 export function wrapHint(text, maxLines = 2) {
   const words = String(text || '').split(/\s+/).filter(Boolean);
@@ -135,9 +105,7 @@ export function wrapHint(text, maxLines = 2) {
   const maxW = _contentWidth();
 
   if (!probe) {
-    // Fallback (no 2D context — headless): the face's advance, B612 Mono
-    // MONO_ADVANCE_EM at the 28 px row size (~18.2 px/char; Session R — the
-    // old 17 assumed a 0.6 em advance).
+    // No 2D context: B612 Mono MONO_ADVANCE_EM at the 28 px row size (~18.2 px/char).
     const perLine = Math.max(1, Math.floor(maxW / (28 * MONO_ADVANCE_EM)));
     const out = [];
     let cur = '';
@@ -166,7 +134,6 @@ export function wrapHint(text, maxLines = 2) {
     if (lineW + spaceW + w <= maxW) {
       out[out.length - 1] += ' ' + word; lineW += spaceW + w;
     } else {
-      // Start a new line, or give up and ellipsize the last allowed line.
       if (out.length >= maxLines) {
         let last = out[out.length - 1];
         while (last.length > 1 && probe.measureText(last + '\u2026').width > maxW) {
@@ -181,12 +148,9 @@ export function wrapHint(text, maxLines = 2) {
   return out;
 }
 
-// Shared 2d context for text measurement only (no canvas retained per call).
-// Session R: the font is (re)set on EVERY call, not once at creation — a 2D
-// context resolves its face when `.font` is assigned, so a probe created before
-// the B612 faces settled would keep measuring the fallback for the session and
-// the wrap budget would drift from the draw. wrapHint runs per card build, not
-// per frame, so the assignment costs nothing that matters.
+// Shared 2d context for text measurement only. The font is set on EVERY call, not at
+// creation: a 2D context resolves its face when `.font` is assigned, so a probe made
+// before the B612 faces settled would keep measuring the fallback.
 let _probe = null;
 function _measureCtx() {
   if (!_probe) {
@@ -214,38 +178,28 @@ function _roundRect(ctx, x, y, w, h, r) {
 }
 
 /**
- * Build a multi-line inspection "card" texture for a part callout.
+ * Multi-line inspection card texture for a part callout: dark chip, system-hue
+ * accent line, title row (risk dot + title, codex glyph right-aligned when linked),
+ * up to 6 dimmer data rows. Canvas height varies with row count.
  *
- * Layout: dark rounded chip, a system-hue tab on the left edge, a title row
- * (risk dot + title, with a codex affordance glyph right-aligned when linked),
- * and up to 6 dimmer data rows beneath. Canvas height varies with row count so
- * the sprite can be scaled by the returned aspect ratio to stay proportional.
- *
- * Hover is NOT baked into the texture (round-2 R14): it is a material-level
- * effect on the sprite, which keeps label texture memory at ~37 MB instead of
- * doubling it with a per-rec hover variant.
+ * Hover is NOT baked into the texture: it is a material-level effect on the
+ * sprite, which keeps label texture memory at ~37 MB instead of doubling it.
  *
  * @param {object} spec
- * @param {string} spec.title
- * @param {string} [spec.titleColor='#dfeef5']  title glyph colour (system hue tint)
  * @param {Array<{text:string,dim?:boolean,color?:string}>} [spec.rows]
- *   up to 6 data rows, pre-wrapped by the caller (see wrapHint). `color`
- *   overrides the fill (e.g. the amber unlock-hint).
- * @param {string} [spec.riskColor]     risk badge dot colour (omit → no dot)
- * @param {string} [spec.systemColor='#7fd4e8']  left tab + accents
- * @param {string} [spec.inkColor='#dfeef5']  default row text colour (dim=false)
- * @param {string} [spec.inkDimColor='#9fb8c4']  dim row text colour (dim=true)
- * @param {'linked'|'locked'|null} [spec.codex=null]  codex affordance state
+ *   up to 6 rows, pre-wrapped by the caller (see wrapHint); `color` overrides the fill
+ * @param {string} [spec.riskColor]  risk dot colour (omit -> no dot)
+ * @param {string} [spec.systemColor='#7fd4e8']  left accent line + accents
+ * @param {string} [spec.inkColor='#dfeef5']  row text colour (dim=false)
+ * @param {string} [spec.inkDimColor='#9fb8c4']  row text colour (dim=true)
+ * @param {'linked'|'locked'|null} [spec.codex=null]
  * @returns {{ texture: THREE.CanvasTexture, heightFactor: number }}
- *   `heightFactor` = logicalH / 106 (106 = 0-row height) so the caller
- *   can scale sprite height proportionally; width derives from the exported
- *   CARD_W_OVER_TITLE_H invariant (aspect × heightFactor), so no aspect field
- *   is returned.
+ *   `heightFactor` = logicalH / 106 (106 = 0-row height); width follows from the
+ *   exported CARD_W_OVER_TITLE_H invariant, so no aspect is returned.
  */
 export function createCardTexture(spec = {}) {
-  // Defaults mirror Constants.CALLOUTS.INK / INK_DIM / ACCENT — this module
-  // stays a leaf render helper with no Constants import, so the caller
-  // (MotherCallouts) is the source of truth and passes explicit values.
+  // Defaults mirror Constants.CALLOUTS.INK / INK_DIM / ACCENT; no Constants import
+  // (leaf helper), so MotherCallouts is the source of truth and passes explicit values.
   const {
     title = '',
     titleColor = '#dfeef5',
@@ -257,8 +211,7 @@ export function createCardTexture(spec = {}) {
     codex = null,
   } = spec;
 
-  // Rows arrive pre-wrapped by the caller (wrapHint) — the generator draws them
-  // verbatim so the caller's row budget and the draw can never disagree (review).
+  // Rows arrive pre-wrapped (wrapHint) and are drawn verbatim.
   const nRows = Math.min(rows.length, 6);
   const logicalW = CARD_W;
   const logicalH = CARD_PAD_TOP + CARD_TITLE_H + nRows * CARD_ROW_H + CARD_PAD_BOTTOM;
@@ -273,9 +226,7 @@ export function createCardTexture(spec = {}) {
   const ctx = c.getContext('2d');
   ctx.scale(dpr, dpr);
 
-  // --- Chip background (round 4: blueprint — sharp rect, transparent) ---
-  // Round 5: fill 0.60 → 0.75 — screenshots showed cards washing out over the
-  // bright solar wing and the white radar dome (LARGE DAUGHTER, "Mass" row).
+  // Chip background: alpha 0.75 so cards don't wash out over the bright solar wing / radar dome.
   const inset = 3;
   ctx.fillStyle = 'rgba(4, 12, 20, 0.75)';
   ctx.fillRect(inset, inset, logicalW - inset * 2, logicalH - inset * 2);
@@ -285,7 +236,7 @@ export function createCardTexture(spec = {}) {
   ctx.strokeRect(inset, inset, logicalW - inset * 2, logicalH - inset * 2);
   ctx.globalAlpha = 1.0;
 
-  // --- Corner ticks (the blueprint signature) ---
+  // Corner ticks
   const tick = 10;
   ctx.lineWidth = 2;
   ctx.strokeStyle = systemColor;
@@ -299,18 +250,15 @@ export function createCardTexture(spec = {}) {
   // bottom-right
   ctx.beginPath(); ctx.moveTo(logicalW - inset - tick, logicalH - inset); ctx.lineTo(logicalW - inset, logicalH - inset); ctx.lineTo(logicalW - inset, logicalH - inset - tick); ctx.stroke();
 
-  // --- System-hue accent line on the left edge (round 4: 2 px, was 12 px tab) ---
   ctx.fillStyle = systemColor;
   ctx.fillRect(inset, inset, CARD_TAB_W, logicalH - inset * 2);
 
   const contentL = inset + CARD_TAB_W + CARD_PAD_L;
   const contentR = logicalW - CARD_PAD_R;
 
-  // --- Title row ---
   const titleCY = CARD_PAD_TOP + CARD_TITLE_H / 2;
   let textL = contentL;
 
-  // Risk badge dot before the title.
   if (riskColor) {
     const r = 9;
     ctx.beginPath();
@@ -323,11 +271,9 @@ export function createCardTexture(spec = {}) {
     textL = contentL + r * 2 + 14;
   }
 
-  // Codex affordance glyph, right-aligned.
-  // Locked state renders as ▸ followed by a smaller muted vector padlock (reads
-  // "details locked", not "part unavailable"), matching CodexViewerUI's
-  // convention. The padlock is drawn as primitives, not the 🔒 emoji, because
-  // colour-emoji fonts ignore fillStyle and would render full-colour gold (R7).
+  // Codex glyph, right-aligned. Locked = ▸ plus a muted vector padlock (reads "details
+  // locked", matching CodexViewerUI). Drawn as primitives, not 🔒: colour-emoji fonts
+  // ignore fillStyle and render full-colour gold.
   let glyphL = contentR;
   if (codex) {
     const isLocked = codex === 'locked';
@@ -336,7 +282,6 @@ export function createCardTexture(spec = {}) {
     ctx.textBaseline = 'middle';
 
     if (isLocked) {
-      // ▸ in system colour, then a small muted padlock to its right.
       ctx.font = CARD_GLYPH_FONT;
       ctx.fillStyle = systemColor;
       ctx.globalAlpha = 0.9;
@@ -348,7 +293,6 @@ export function createCardTexture(spec = {}) {
       _drawPadlock(ctx, lockCx, titleCY, '#667');
       glyphL = linkR - linkW - 12;
     } else {
-      // Unlocked: just ▸ in system colour.
       ctx.font = CARD_GLYPH_FONT;
       ctx.fillStyle = systemColor;
       ctx.globalAlpha = 0.9;
@@ -359,8 +303,7 @@ export function createCardTexture(spec = {}) {
     }
   }
 
-  // Title text (clipped to available width before the glyph).
-  // Round 4: mono 36px. Letter-spacing affects measureText, so set it BEFORE
+  // Title, clipped before the glyph. Letter-spacing affects measureText: set it BEFORE
   // the truncation loop and reset to '0px' before drawing rows.
   ctx.font = CARD_TITLE_FONT;
   ctx.textAlign = 'left';
@@ -380,7 +323,6 @@ export function createCardTexture(spec = {}) {
   ctx.fillText(titleTxt, textL, titleCY);
   if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
 
-  // --- Data rows ---
   ctx.font = CARD_ROW_FONT;
   for (let i = 0; i < nRows; i++) {
     const row = rows[i];
@@ -394,7 +336,7 @@ export function createCardTexture(spec = {}) {
     ctx.lineWidth = 3;
     ctx.strokeStyle = 'rgba(2, 6, 12, 0.8)';
     ctx.strokeText(rowTxt, contentL, cy);
-    // Custom color takes precedence, then dim flag, then default bright.
+    // Precedence: custom color, then dim flag, then default bright.
     if (row.color) {
       ctx.fillStyle = row.color;
     } else {
@@ -413,22 +355,15 @@ export function createCardTexture(spec = {}) {
   return { texture: tex, heightFactor };
 }
 
-/**
- * Draw a small muted padlock (body + shackle) centred on (cx, cy), used for the
- * "details locked" affordance. Vector so `fillStyle`/`strokeStyle` actually
- * apply (colour-emoji glyphs would ignore them).
- * @private
- */
+/** Small vector padlock (body + shackle) centred on (cx, cy); see the codex glyph note. */
 function _drawPadlock(ctx, cx, cy, color) {
   const w = 12, h = 9, r = 2;
   const x = cx - w / 2, y = cy - h / 2 + 2;
-  // Shackle (arc above the body).
   ctx.beginPath();
   ctx.arc(cx, y, w * 0.32, Math.PI, 0);
   ctx.lineWidth = 2;
   ctx.strokeStyle = color;
   ctx.stroke();
-  // Body.
   _roundRect(ctx, x, y, w, h, r);
   ctx.fillStyle = color;
   ctx.fill();

@@ -31,9 +31,9 @@
 import { Constants } from '../core/Constants.js';
 import { atmosphericDrag } from '../entities/OrbitalMechanics.js';
 import { motherDragAreaM2, referenceDragAreaM2, wingNormalAt } from '../entities/MotherDragArea.js';
+import { DEG2RAD, clamp01, clamp } from '../core/MathUtil.js';
 
 const SECONDS_PER_DAY = 86400;
-const DEG = Math.PI / 180;
 /** `tripDragAreaM2` answers by radiator angle (radians, exact): a handful of angles are asked for, again and again. */
 const _areaByTheta = new Map();
 /** The most samples a profile keeps (the integrator may take 70 000 steps for a long climb). */
@@ -59,15 +59,15 @@ export function realThrustN(fuel) {
  * @returns {number} m2
  */
 export function tripDragAreaM2(thetaRad) {
-  const cap = Constants.TRIP.BURN_POSE_MAX_DEG * DEG;
-  const th = Number.isFinite(thetaRad) ? Math.max(0, Math.min(cap, thetaRad)) : cap;
+  const cap = Constants.TRIP.BURN_POSE_MAX_DEG * DEG2RAD;
+  const th = Number.isFinite(thetaRad) ? clamp(thetaRad, 0, cap) : cap;
   const hit = _areaByTheta.get(th);
   if (hit !== undefined) return hit;
   const N = 180;                                       // midpoints of 1-degree bins over the wing's turn 0..180 deg
   const wings = [{ scale: 1, nx: 0, ny: 0, nz: 0 }, { scale: 1, nx: 0, ny: 0, nz: 0 }];
   let sum = 0;
   for (let i = 0; i < N; i++) {
-    const n = wingNormalAt((i + 0.5) * DEG);
+    const n = wingNormalAt((i + 0.5) * DEG2RAD);
     for (const w of wings) { w.nx = n.nx; w.ny = n.ny; w.nz = n.nz; }
     sum += motherDragAreaM2(0, 0, 1, th, wings);
   }
@@ -97,7 +97,7 @@ export function playSeconds(days) {
   const T = Constants.TRIP;
   if (T.SKIP_S > 0) return T.SKIP_S;                // dev `?skipTrip=1`: the trip plays in a few seconds (days, gas and credits follow the share played)
   const d = Number.isFinite(days) && days > 0 ? days : 0;
-  return Math.max(T.PLAY_MIN_S, Math.min(T.PLAY_MAX_S, T.PLAY_BASE_S + T.PLAY_PER_DAY_S * d));
+  return clamp(T.PLAY_BASE_S + T.PLAY_PER_DAY_S * d, T.PLAY_MIN_S, T.PLAY_MAX_S);
 }
 
 /**
@@ -157,7 +157,7 @@ export function tripProfile(p) {
     const s = [{ t: 0, a: RE + fromKm, m: m0 }];
     return { ok: true, reason: null, dir: 0, fromKm, toKm, days: 0, tEndS: 0, m0, m1: m0, gasKg: 0, dvMps: 0, samples: s };
   }
-  const cos = Math.max(0, Math.min(1, cosIn));
+  const cos = clamp01(cosIn);
   if (!(cos > 1e-9)) return bad('push');
 
   const ve = isp * C.G0;                          // exhaust speed, m/s
@@ -191,7 +191,7 @@ export function tripProfile(p) {
     const m1 = m - stepS * mdot;
     const done = dir > 0 ? a1 >= aTarget : a1 <= aTarget;
     if (done) {
-      const frac = Math.max(0, Math.min(1, (aTarget - a) / (a1 - a)));
+      const frac = clamp01((aTarget - a) / (a1 - a));
       t += frac * stepS;
       m -= frac * stepS * mdot;
       a = aTarget;
@@ -234,7 +234,7 @@ export function tripProfile(p) {
 export function profileAt(profile, fraction) {
   const RE = Constants.EARTH_RADIUS_KM;
   const s = profile && profile.samples;
-  const f = Number.isFinite(fraction) ? Math.max(0, Math.min(1, fraction)) : 0;
+  const f = Number.isFinite(fraction) ? clamp01(fraction) : 0;
   if (!s || s.length === 0) {
     return { t: 0, a: RE + (profile ? profile.fromKm : 0), altKm: profile ? profile.fromKm : 0, m: profile ? profile.m0 : 0, fraction: f };
   }
@@ -247,7 +247,7 @@ export function profileAt(profile, fraction) {
   }
   const A = s[lo];
   const B = s[hi];
-  const w = B.t > A.t ? Math.max(0, Math.min(1, (t - A.t) / (B.t - A.t))) : 0;
+  const w = B.t > A.t ? clamp01((t - A.t) / (B.t - A.t)) : 0;
   const a = A.a + w * (B.a - A.a);
   return { t, a, altKm: a - RE, m: A.m + w * (B.m - A.m), fraction: f };
 }

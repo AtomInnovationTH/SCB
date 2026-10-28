@@ -1,19 +1,14 @@
 /**
- * starCatalog.js — the 49 named bright stars that sit at the constellation
- * vertices, plus the stick-figure table that joins them.
+ * starCatalog.js — the 49 named bright stars at the constellation vertices,
+ * the stick-figure table, and the pure-math sky helpers (magnitude curve,
+ * galactic frame).
  *
- * Pure data, no `three` import — this module is the single source of truth for
- * both the star positions (Starfield writes them into the main Points) and the
- * constellation lines (Starfield reads the same coordinates), so a line can
- * never miss its star. Keeping it `three`-free lets the data-integrity test
- * run as a plain node test.
+ * No `three` import: one source of truth for star positions and constellation
+ * lines (a line can never miss its star), and plain-node testable.
  *
- * RA/Dec are the existing approximate pattern-forming positions (lifted
- * verbatim from Starfield.js so the figures do not change shape); absolute
- * astrometric accuracy is deferred to Stage 7. Magnitudes / spectral classes
- * are the spec's Stage 1a table with three corrections applied (see notes
- * below). The variables and doubles are called out in comments so nobody
- * "corrects" them back to a single canonical value later.
+ * RA/Dec are approximate pattern-forming positions, not astrometric. Magnitudes and spectral classes are the
+ * spec's Stage 1a table with three deliberate corrections (Rigel, Gamma Cas, Antares), noted at each star.
+ * Variables and doubles are annotated so nobody "corrects" them to one value.
  *
  * @module scene/starCatalog
  */
@@ -27,7 +22,7 @@ export const BRIGHT_STARS = {
   Alnilam:      { ra: 5.60,  dec: -1.20,  mag: 1.69, spec: 'B0' },
   Alnitak:      { ra: 5.68,  dec: -1.94,  mag: 1.74, spec: 'O9' }, // multiple; mag is the combined light
   Saiph:        { ra: 5.80,  dec: -9.67,  mag: 2.07, spec: 'B0' },
-  Rigel:        { ra: 5.24,  dec: -8.20,  mag: 0.13, spec: 'B8' }, // corrected 0.18 → 0.13
+  Rigel:        { ra: 5.24,  dec: -8.20,  mag: 0.13, spec: 'B8' }, // differs from the spec table (corrected)
 
   // ── URSA MAJOR (7) ───────────────────────────────────────────────────────
   Alkaid:       { ra: 13.79, dec: 49.31,  mag: 1.86, spec: 'B3' },
@@ -41,14 +36,14 @@ export const BRIGHT_STARS = {
   // ── CASSIOPEIA (5) ───────────────────────────────────────────────────────
   Caph:         { ra: 0.15,  dec: 59.15,  mag: 2.27, spec: 'F2' },
   Schedar:      { ra: 0.68,  dec: 56.54,  mag: 2.24, spec: 'K0' },
-  'Gamma Cas':  { ra: 0.95,  dec: 60.72,  mag: 2.47, spec: 'B0.5' }, // corrected 2.15 → 2.47; variable 1.6–3.0 (B0.5IVe)
+  'Gamma Cas':  { ra: 0.95,  dec: 60.72,  mag: 2.47, spec: 'B0.5' }, // differs from the spec table (corrected); variable 1.6–3.0 (B0.5IVe)
   Ruchbah:      { ra: 1.43,  dec: 60.24,  mag: 2.68, spec: 'A5' },
   Segin:        { ra: 1.91,  dec: 63.67,  mag: 3.35, spec: 'B3' },
 
   // ── SCORPIUS (7) ─────────────────────────────────────────────────────────
   Graffias:     { ra: 16.09, dec: -19.81, mag: 2.62, spec: 'B1' },
   Dschubba:     { ra: 16.01, dec: -22.62, mag: 2.32, spec: 'B0' },
-  Antares:      { ra: 16.49, dec: -26.43, mag: 1.09, spec: 'M1' }, // corrected 1.06 → 1.09; variable 0.6–1.6
+  Antares:      { ra: 16.49, dec: -26.43, mag: 1.09, spec: 'M1' }, // differs from the spec table (corrected); variable 0.6–1.6
   'Epsilon Sco':{ ra: 16.84, dec: -34.29, mag: 2.29, spec: 'K2' },
   'Mu1 Sco':    { ra: 16.86, dec: -38.05, mag: 3.00, spec: 'B1' },
   Shaula:       { ra: 17.56, dec: -37.10, mag: 1.62, spec: 'B2' },
@@ -87,12 +82,9 @@ export const BRIGHT_STARS = {
 };
 
 /**
- * The 8 stick figures. `stars` are keys into BRIGHT_STARS (quoted for the
- * two-word names); `lines` are index pairs into that figure's own `stars`
- * array. Named CONSTELLATION_FIGURES, not CONSTELLATIONS — the bare name is
- * already taken in this codebase by satellite constellations
- * (data/constellations.json, CatalogLoader.js), and two unrelated meanings
- * under one grep is a comprehension trap.
+ * The 8 stick figures. `stars` are keys into BRIGHT_STARS; `lines` are index
+ * pairs into that figure's own `stars` array. Not named CONSTELLATIONS: that
+ * name means satellite constellations (data/constellations.json, CatalogLoader.js).
  */
 export const CONSTELLATION_FIGURES = [  { // Orion — distinctive hourglass with belt
     name: 'ORION',
@@ -136,20 +128,12 @@ export const CONSTELLATION_FIGURES = [  { // Orion — distinctive hourglass wit
   },
 ];
 
-// ============================================================================
-// Faint-field magnitude model (Stage 2) — pure math, kept three-free so the
-// data-integrity test can exercise it as a plain node test. Starfield._create
-// uses these to build the random field; keeping them here means the field and
-// its test share one source of truth.
-// ============================================================================
+// Faint-field magnitude model: Starfield._create and its test share these.
 
 /**
  * Inverse-CDF sample of the field magnitude distribution. Counts rise toward
- * the faint end (log N ∝ 0.6·m, the real sky's roughly exponential star-count
- * law), so most field stars are near-invisible.
+ * the faint end (log N ∝ 0.6·m, the real star-count law).
  * @param {number} u — uniform random in [0,1)
- * @param {number} mMin — brightest field magnitude
- * @param {number} mMax — faintest field magnitude
  * @returns {number} magnitude in [mMin, mMax]
  */
 export function sampleFieldMagnitude(u, mMin, mMax) {
@@ -159,28 +143,19 @@ export function sampleFieldMagnitude(u, mMin, mMax) {
 
 /**
  * Catalogue-star brightness: the visual-magnitude curve with a soft knee at
- * the floor. Exported so Starfield and the test share one source of truth —
- * the field brightness constant (Constants.STAR_FIELD_BRIGHT) must stay
- * strictly below the faintest catalogue star's peak, and the test can only
- * assert that if it can evaluate the same formula Starfield uses.
+ * the floor. Shared with the test: Constants.STAR_FIELD_BRIGHT must stay
+ * strictly below the faintest catalogue star's peak.
  *
  * Above the knee (`min`) the raw exponential is used verbatim (Rigel 2.0,
- * Deneb 0.79, …). Below it a hard clamp would flatten every star fainter than
- * mag ~1.87 — 32 of the 49 — to identical brightness, and "brightness carries
- * the truth" would hold for only a third of the catalogue. Instead the soft
- * knee maps raw ∈ (0, min) onto [min·soft, min): continuous at the knee,
- * strictly monotone everywhere (ordering is never lost), and asymptotic to
- * min·soft = 0.3825, which stays strictly above the field's 0.32 with margin.
+ * Deneb 0.79, …). A hard clamp below it would flatten 32 of the 49 stars
+ * (fainter than mag ~1.87) to one brightness, so the soft knee maps
+ * raw ∈ (0, min) onto [min·soft, min): continuous at the knee, strictly
+ * monotone, asymptotic to min·soft = 0.3825 (above the field's 0.32).
  *
  * ⚠ INTERNAL HALF OF THE CURVE — DO NOT CALL FROM RENDERING CODE.
- * The name says what it is: this is the below-ceiling half, and its ceiling is a
- * HARD clamp. That clamp is correct here and catastrophic anywhere else — it is
- * exactly what flattened the planets to a single brightness (F5). Rendering code
- * must call `skyBrightness`, which wraps this with the soft ceiling so the whole
- * sky stays on one strictly-monotone curve. A guard test
- * (test-sky-one-curve.js) fails the build if any non-test module outside this
- * file calls this function, because "reach for the shorter name" is precisely how
- * F5 would come back.
+ * Its ceiling is a HARD clamp, which flattens bright bodies (it flattened the
+ * planets, F5). Rendering code must call `skyBrightness`. test-sky-one-curve.js
+ * fails if any non-test module outside this file calls this function.
  *
  * @param {number} mag — visual magnitude
  * @param {number} min — knee (Constants.STAR_MAG_BRIGHT_MIN)
@@ -194,54 +169,39 @@ export function magnitudeBrightnessBelowCeiling(mag, min, max, soft) {
   return min * (soft + (1 - soft) * (raw / min));
 }
 
-// ============================================================================
 // THE ONE BRIGHTNESS CURVE FOR THE WHOLE SKY (stars AND bodies)
-// ============================================================================
 //
-// magnitudeBrightnessBelowCeiling owns the bottom half: raw 10^(−0.4(m−1)), a soft knee
-// below `min`, and a ceiling at `max`. That ceiling was a HARD clamp — fine
-// while only stars used it (the brightest star, Rigel, sits at raw 2.23, barely
-// past the 2.0 ceiling), but the planets live far above it: Venus raw 145,
-// Jupiter 19, Mars 10, Mercury 3.6. A hard clamp flattens all five to 2.0 —
-// the exact "flatten a population with a hard clamp" defect class the doctrine
-// forbids (F5).
-//
-// The soft ceiling is the mirror image of the soft knee: above `max`, grow
-// logarithmically so ordering survives without letting anything run away:
+// The hard ceiling of magnitudeBrightnessBelowCeiling flattens the planets
+// (raw Venus 145, Jupiter 19, Mars 10, Mercury 3.6) to 2.0 (F5). Soft ceiling:
+// above `max`, grow logarithmically so ordering survives:
 //
 //     B(m) = max · (1 + hardness · log10(raw / max))      for raw > max
 //
-// With hardness = 0.20 the whole sky lands on one strictly-monotone curve:
+// With hardness = 0.20 (values from the curve):
 //
 //     Venus −4.4 → 2.74 (blooms — the ONLY planet allowed to, D3)
 //     Jupiter −2.2 → 2.39
 //     Mars −1.5 → 2.28
 //     Mercury −0.4 → 2.10
-//     Rigel +0.13 → 2.019 (was hard-clamped to exactly 2.0)
+//     Rigel +0.13 → 2.019
 //     Saturn +0.5 → 1.58
 //     Eta Leo +3.49 → 0.398
 //     field 4.4–7.0 → 0.32 constant
 //
 // Bloom coupling: the threshold is 2.5 (SceneManager). Only the Sun and Venus
-// may cross it — Venus lands at 2.74, everything else stays under. Rigel's
-// 2.019 × uOpacity 0.95 = 1.92, still safely below.
+// may cross it. Rigel's 2.019 × uOpacity 0.95 = 1.92, safely below.
 //
-/** Soft-ceiling hardness: how fast brightness grows past `max` (log10 slope). */
+/** Soft-ceiling hardness: log10 slope of growth past `max`. */
 export const SKY_BRIGHT_CEILING_HARDNESS = 0.20;
 
 /**
  * The whole-sky brightness function — THE ONE RENDERING CODE MUST USE.
- * magnitudeBrightnessBelowCeiling plus the soft ceiling: identical to it below
- * `max`, logarithmic above it — so stars
- * and bodies can never diverge onto two curves. Starfield uses this for the
- * catalogue stars (Rigel 2.019, not a hard 2.0); the body ladder uses it for
- * the planets (Venus 2.74 blooms, Jupiter 2.39 does not).
+ * Identical to magnitudeBrightnessBelowCeiling below `max`, logarithmic above,
+ * so stars and bodies (Starfield, the body ladder) share one curve.
  *
- * @param {number} mag — visual magnitude
  * @param {number} min — soft-knee floor (Constants.STAR_MAG_BRIGHT_MIN)
  * @param {number} max — soft ceiling (Constants.STAR_MAG_BRIGHT_MAX, bloom-coupled)
  * @param {number} soft — sub-knee asymptote ratio (Constants.STAR_MAG_BRIGHT_FLOOR_SOFT)
- * @param {number} [hardness] — ceiling slope (SKY_BRIGHT_CEILING_HARDNESS)
  * @returns {number} brightness multiplier in (min·soft, ∞), strictly monotone in mag
  */
 export function skyBrightness(mag, min, max, soft, hardness = SKY_BRIGHT_CEILING_HARDNESS) {
@@ -251,11 +211,9 @@ export function skyBrightness(mag, min, max, soft, hardness = SKY_BRIGHT_CEILING
 }
 
 /**
- * Map a magnitude to a size attribute and alpha on the shared magnitude curve.
- * Size follows `base − slope·mag` but never drops below `floor`; once pinned at
- * the floor, alpha carries the remaining faintness (linear from 1.0 at the
- * floor crossing to `alphaMin` at `mMax`).
- * @returns {{ size: number, alpha: number }}
+ * Size follows `base − slope·mag` but never below `floor`; once pinned, alpha
+ * carries the faintness (linear from 1.0 at the floor crossing to `alphaMin`
+ * at `mMax`).
  */
 export function fieldSizeAlpha(mag, mMax, { base, slope, floor, alphaMin }) {
   const curveSize = base - slope * mag;
@@ -265,17 +223,11 @@ export function fieldSizeAlpha(mag, mMax, { base, slope, floor, alphaMin }) {
   return { size: floor, alpha: 1.0 + (alphaMin - 1.0) * t };
 }
 
-// ============================================================================
-// GALACTIC FRAME (Stage 6) — pure {x,y,z} math, no `three` import, so the
-// Milky Way band's orientation and structure are testable as a plain node
-// module (the same contract that keeps the catalogue testable). The band is
-// built on the REAL galactic basis, not an invented tilt, so it runs through
-// the galactic center (Sagittarius), Cygnus and Cassiopeia as it really does.
-// ============================================================================
+// GALACTIC FRAME — pure {x,y,z} math on the REAL galactic basis, so the band
+// runs through the galactic center (Sagittarius), Cygnus and Cassiopeia.
 
-/** Minimal {x,y,z} helpers — plain objects so this module stays `three`-free. */
+// Same convention as Starfield.raDec2xyz: +Y celestial north, RA 0 at +X, Z negated.
 function raDecToUnit(raHours, decDeg) {
-  // Same convention as Starfield.raDec2xyz: +Y celestial north, RA 0 at +X, Z negated.
   const ra = raHours * (Math.PI / 12);
   const dec = decDeg * (Math.PI / 180);
   return {
@@ -284,8 +236,6 @@ function raDecToUnit(raHours, decDeg) {
     z: -Math.cos(dec) * Math.sin(ra),
   };
 }
-// Exported so the galactic-frame test can verify directions without duplicating
-// the convention (the three-free counterpart of Starfield's raDec2xyz).
 export { raDecToUnit };
 const vdot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
 const vcross = (a, b) => ({
@@ -303,12 +253,10 @@ export const GALACTIC_CENTER = { ra: 17.76, dec: -28.9 };
 
 /**
  * The galactic frame: three orthonormal unit vectors as plain {x,y,z}.
- *   pole   — galactic north pole (+b direction)
+ *   pole   — galactic north pole (+b)
  *   center — galactic center direction (l = 0)
- *   e2     — increasing-longitude direction (l = 90°, toward Cygnus), so the
- *            band circles center → Cygnus → anticenter → Cassiopeia → center.
+ *   e2     — l = 90°, toward Cygnus (band: center → Cygnus → anticenter → Cassiopeia)
  * Right-handed: center × e2 = pole.
- * @returns {{ pole: object, center: object, e2: object }}
  */
 export function galacticBasis() {
   const pole = vnorm(raDecToUnit(GALACTIC_NORTH_POLE.ra, GALACTIC_NORTH_POLE.dec));
@@ -318,34 +266,23 @@ export function galacticBasis() {
 }
 
 /**
- * Galactic longitude of a direction (unit {x,y,z}), measured from the galactic
- * center toward e2 (Cygnus). Returns radians in (−π, π].
- * @param {object} dir — unit {x,y,z}
- * @param {object} [basis] — from galacticBasis() (recomputed if omitted)
- * @returns {number} longitude in radians
+ * Galactic longitude of a unit {x,y,z} direction, from the galactic center
+ * toward e2 (Cygnus). Radians in (−π, π].
  */
 export function galacticLongitude(dir, basis = galacticBasis()) {
   return Math.atan2(vdot(dir, basis.e2), vdot(dir, basis.center));
 }
 
-/**
- * Galactic latitude of a direction (unit {x,y,z}) — the angle off the plane.
- * @param {object} dir — unit {x,y,z}
- * @param {object} [basis]
- * @returns {number} latitude in radians (−π/2..π/2)
- */
+/** Galactic latitude of a unit {x,y,z} direction, radians (−π/2..π/2). */
 export function galacticLatitude(dir, basis = galacticBasis()) {
   return Math.asin(Math.max(-1, Math.min(1, vdot(dir, basis.pole))));
 }
 
-// --- Band structure (licensed contrast, documented per constant) ---
-
 /**
- * Longitudinal density/brightness profile: peaks at the galactic center (L=0)
- * and fades toward the anticenter (L=π, Gemini). profile(0) = contrast,
- * profile(π) = 1, so center:anticenter = contrast. The real contrast is larger;
- * `contrast` (~2) is the LICENSED exaggeration that lets the structure read at
- * a glance without making the anticenter vanish.
+ * Longitudinal density profile: peaks at the galactic center (L=0), fades to
+ * the anticenter (L=π, Gemini). profile(0) = contrast, profile(π) = 1. The real
+ * contrast is larger; `contrast` (~2) is a LICENSED exaggeration so the
+ * structure reads at a glance without the anticenter vanishing.
  * @param {number} L — galactic longitude (radians)
  * @param {number} contrast — center:anticenter ratio (≥1)
  * @returns {number} profile value in [1, contrast]
@@ -355,12 +292,10 @@ export function mwCenterProfile(L, contrast) {
 }
 
 /**
- * Great Rift density mask: a dark lane carved along the band from Cygnus to
- * Sagittarius. Negative space reads better than painting black, so points are
- * SKIPPED inside the lane. Returns a density multiplier in [0,1]: 1 outside the
- * lane, ramping to ~0 at the lane's centre. The lane sits at `offset` radians
- * off the plane (slightly below the centreline, as the real rift hugs the
- * plane) and spans `longMin..longMax` in longitude.
+ * Great Rift density mask: a dark lane along the band from Cygnus to
+ * Sagittarius; points are SKIPPED inside it (negative space beats painted
+ * black). 1 outside the lane, ramping to p.depth at its centre. The lane sits
+ * `offset` radians off the plane and spans `longMin..longMax`.
  * @param {number} L — galactic longitude (radians, in [−π,π])
  * @param {number} latOff — latitude offset of the point off the plane (radians)
  * @param {{ longMin: number, longMax: number, offset: number, width: number, edge: number }} p
@@ -368,26 +303,21 @@ export function mwCenterProfile(L, contrast) {
  */
 export function mwGreatRiftMask(L, latOff, p) {
   if (L < p.longMin || L > p.longMax) return 1;
-  // The rift BROADENS toward Ophiuchus/Sagittarius. Published description: it
-  // starts as the compact Northern Coalsack in Cygnus, runs through the
-  // Serpens-Aquila Rift, "broadens out" at Ophiuchus, and obscures the Galactic
-  // Centre in Sagittarius. So the lane is narrow at the Cygnus end and widest
-  // near l ≈ 15°, which a single fixed width cannot express.
+  // The rift broadens from the compact Northern Coalsack (Cygnus) to widest
+  // near l ≈ 15° (Ophiuchus/Sagittarius); a fixed width can't express that.
   const g = (L - p.broadenLong) / Math.max(1e-6, p.broadenWidth);
   const width = p.width * (1 + (p.broaden - 1) * Math.exp(-g * g));
   const d = Math.abs(latOff - p.offset) / width;
   if (d >= 1) return 1;
-  // Smooth ramp from the lane centre outward. `depth` is the residual density in
-  // the core — the rift is dust obscuration, not a hole, so a few stars remain.
+  // `depth` is the residual core density: dust obscuration, not a hole.
   const t = Math.min(1, d / Math.max(1e-6, p.edge));
   const ramp = t * t * (3 - 2 * t);   // smoothstep
   return p.depth + (1 - p.depth) * ramp;
 }
 
 /**
- * Cygnus star-cloud enhancement: a density boost around the Cygnus longitude.
+ * Cygnus star-cloud density boost around the Cygnus longitude.
  * @param {number} L — galactic longitude (radians)
- * @param {{ long: number, width: number, boost: number }} p
  * @returns {number} density multiplier ≥ 1
  */
 export function mwCygnusBoost(L, p) {
@@ -396,27 +326,18 @@ export function mwCygnusBoost(L, p) {
 }
 
 /**
- * The band's COMPOSED longitudinal density — the profile and the Cygnus boost
- * together, normalized so the galactic centre sits at exactly 1.0 and the value
- * can be used directly as a rejection-sampling acceptance probability.
+ * The band's COMPOSED longitudinal density (profile × Cygnus boost),
+ * normalized so the galactic centre is exactly 1.0 and the value is directly a
+ * rejection-sampling acceptance probability. The builder and test-milkyway
+ * both use this one function, so the test checks the composed density, not one
+ * factor of it.
  *
- * WHY THIS FUNCTION EXISTS
- * Starfield used to compose these two terms inline while test-milkyway asserted
- * "density falls monotonically centre → anticenter" against `mwCenterProfile`
- * ALONE. The composed density did not have that property: with a 1.7× Cygnus
- * boost, l=80° reached 0.79 while the centre sat at 0.59, so the band was 1.35×
- * DENSER at Cygnus than at Sagittarius — the opposite of the documented
- * structure, and invisible to a test that only checked one factor of the product.
- * One function, used by both the builder and the test, is the fix.
- *
- * The normalization is what makes it safe as an acceptance probability: it is
- * ≤ 1 everywhere IF AND ONLY IF the centre is the maximum, so the invariant
- * "Sagittarius is the brightest part of the band" and the sampler's correctness
- * are the same condition. That also pins the constants: because the profile has
- * already fallen to ~0.79 by the Cygnus longitude, a boost above
- * 1 / 0.79 ≈ 1.26 necessarily out-densifies the centre. Raising
- * MW_CENTER_CONTRAST cannot buy headroom — that term asymptotes near 0.585 at
- * that longitude, so it would need a contrast above 130 to help.
+ * It is ≤ 1 everywhere IFF the centre is the maximum, so "Sagittarius is the
+ * brightest part of the band" and the sampler's correctness are one condition.
+ * That pins the constants: the profile has already fallen to ~0.79 at the
+ * Cygnus longitude, so a boost above 1/0.79 ≈ 1.26 out-densifies the centre.
+ * Raising MW_CENTER_CONTRAST can't help (that term asymptotes near 0.585
+ * there; it would need contrast above 130).
  *
  * @param {number} L — galactic longitude (radians, in [−π, π])
  * @param {number} contrast — Constants.MW_CENTER_CONTRAST

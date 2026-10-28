@@ -80,6 +80,7 @@
 
 import { VisualLaw } from '../../core/VisualLaw.js';
 import { Constants } from '../../core/Constants.js';
+import { clamp } from '../../core/MathUtil.js';
 
 /** The root element id (FloorMask MASK_PANES.vitals.els = ['#hud-vitals']). */
 export const VITALS_ID = 'hud-vitals';
@@ -345,7 +346,7 @@ export function fmtCapacity(wh) {
 /** `312/600 Wh` — level / capacity in whole Wh; 10 kWh and over read in kWh (`3.1/10.0 kWh`). */
 export function fmtBattery(level, max) {
   if (!Number.isFinite(level) || !Number.isFinite(max) || max <= 0) return DASH;
-  const lv = Math.max(0, Math.min(level, max));
+  const lv = clamp(max, 0, level);
   return max >= 10000
     ? `${(lv / 1000).toFixed(1)}/${(max / 1000).toFixed(1)} kWh`
     : `${Math.round(lv)}/${Math.round(max)} Wh`;

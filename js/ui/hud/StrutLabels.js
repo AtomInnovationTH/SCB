@@ -20,6 +20,7 @@
 
 import { eventBus } from '../../core/EventBus.js';
 import { Events }   from '../../core/Events.js';
+import { RAD2DEG } from '../../core/MathUtil.js';
 
 const LABEL_STYLE = {
   position:        'fixed',
@@ -58,7 +59,7 @@ function _hingeAngle(sg) {
   // Legacy fallback — axis-magnitude proxy; not strictly the sweep angle but
   // remains monotonic with strut stow/deploy progress.
   const r = pivotGroup.rotation;
-  const deg = Math.sqrt(r.x * r.x + r.y * r.y + r.z * r.z) * (180 / Math.PI);
+  const deg = Math.sqrt(r.x * r.x + r.y * r.y + r.z * r.z) * RAD2DEG;
   return Math.round(deg);
 }
 

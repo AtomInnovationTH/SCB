@@ -33,8 +33,8 @@ import { attitudeTurnProfile, turnGasShort } from './AutopilotSystem.js';
 import { bandDegForRadius } from './TipCargo.js';
 import { reseatOrbitFromScene } from '../entities/OrbitalMechanics.js';
 import { DebrisField } from '../entities/DebrisField.js';
+import { DEG2RAD } from '../core/MathUtil.js';
 
-const DEG = Math.PI / 180;
 const ATTITUDE_HOLD_S = 300;   // s — safety cap for the autopilot's attitude hold (the hand-off is ~45 s; releaseHold ends it)
 const HOLD_OWNER = 'leash';    // l5c-reach E7: the autopilot's lasso / net listeners leave a hold with this owner alone
 const FLOOR_EASE_S = 1.0;      // s — l5c-reach E3: the drawn size eases from the net-held floor to the real size
@@ -42,7 +42,7 @@ const OWN_TIP_RADIUS_M = 0.20; // m — l5c-reach E4: the hand-off's own tip har
 
 /** fb16: the leash's own hinge rate (the held petal's fold, unfold and way home): `LEASH.HOLD_SLEW_DEG_S`, read at call time. */
 const _slew = { rateRadS: 0 };
-const leashSlew = () => { _slew.rateRadS = Constants.LEASH.HOLD_SLEW_DEG_S * DEG; return _slew; };
+const leashSlew = () => { _slew.rateRadS = Constants.LEASH.HOLD_SLEW_DEG_S * DEG2RAD; return _slew; };
 
 /**
  * fb16 fix round 1: the speed of the nose pull-in (the catch seated deeper than the line reaches is winched in to the nose before the
@@ -115,7 +115,7 @@ export function handoffThetaDeg(arrivingR, heldR = 0) {
 /** Ship-frame ring anchor (metres) for tip i: the capture ring rim on the tip's side. */
 export function leashAnchorShip(tipIndex) {
   const K = Constants.LEASH;
-  const az = Constants.THERMAL.FLOWER.AZIMUTHS_DEG[tipIndex] * DEG;
+  const az = Constants.THERMAL.FLOWER.AZIMUTHS_DEG[tipIndex] * DEG2RAD;
   const z = (Constants.OCTOPUS_V5 && Constants.OCTOPUS_V5.BERTH_COLLAR_Z_M) ?? 1.30;
   return { x: K.ANCHOR_AZ_R_M * Math.cos(az), y: K.ANCHOR_AZ_R_M * Math.sin(az), z };
 }
@@ -269,10 +269,10 @@ export class LeashDriver {
     const radiusM = DebrisField.trueReachM(debris, 2);      // tip-fit: the catch as drawn (true size), not half its nominal size
     let heldR = 0;
     for (const sp of tc.spheres()) if (sp.r > heldR) heldR = sp.r;      // the largest bag already held: the table's column
-    const thetaHRad = handoffThetaDeg(radiusM, heldR) * DEG;
-    const homeThetaRad = Math.min(p._flowerThetaRad, FL.POSE_STOW_DEG * DEG);
+    const thetaHRad = handoffThetaDeg(radiusM, heldR) * DEG2RAD;
+    const homeThetaRad = Math.min(p._flowerThetaRad, FL.POSE_STOW_DEG * DEG2RAD);
     const bandDeg = bandDegForRadius(radiusM);
-    const bandRad = Math.min(tc.maxRadiatorThetaRad(), (bandDeg === null ? 0 : bandDeg) * DEG);
+    const bandRad = Math.min(tc.maxRadiatorThetaRad(), (bandDeg === null ? 0 : bandDeg) * DEG2RAD);
     // the radiators stop a hair under a band (the ship's own rule), so aim for where they really stop
     const unfoldThetaRad = homeThetaRad > bandRad + 1e-9 ? bandRad - FL.SETTLE_EPS_RAD : homeThetaRad;
     return { radiusM, thetaHRad, homeThetaRad, unfoldThetaRad };
@@ -1134,7 +1134,7 @@ export class LeashDriver {
     // fb16 (T4): the one closing line of a hand-off that ran to the end: the radiator's number and the angle it comes to rest at
     // (what `releasePetalHandoff` said: the shared angle, or just under the bag band; at DONE the radiator is within 1° of it)
     if (res && res.phase === 'DONE' && h.latched && h.machine) {
-      const n = h.tipIndex + 1, deg = Math.round(Number.isFinite(h.restDeg) ? h.restDeg : h.machine.unfoldTheta / DEG);
+      const n = h.tipIndex + 1, deg = Math.round(Number.isFinite(h.restDeg) ? h.restDeg : h.machine.unfoldTheta / DEG2RAD);
       this._say(this._tc && this._tc.has(h.tipIndex) ? `Catch on radiator ${n}'s tip, radiator back at ${deg}°.` : `Radiator ${n} is back at ${deg}°.`);
     }
     if (typeof p.isPetalHolding === 'function' && p.isPetalHolding(this._petalAz(h.tipIndex)) && typeof p.releasePetalHandoff === 'function') {

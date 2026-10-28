@@ -84,6 +84,7 @@
 
 import { NOTCH_PX } from '../systems/WheelRouter.js';
 import { FloorContract } from '../core/FloorContract.js';
+import { clamp01, clamp } from '../core/MathUtil.js';
 
 /** Number of Zoom-Ladder floors (SSOT: FloorContract). */
 const FLOOR_COUNT = FloorContract.FLOORS.length;
@@ -161,7 +162,7 @@ export function pinchWheelDeltaY(prevDist, curDist, tune = TOUCH_TUNE) {
   const raw = (prevDist - curDist) * tune.pinchGain;
   if (Math.abs(raw) < tune.pinchMinStepPx) return 0;
   const cap = Math.abs(tune.pinchMaxStepPx) || NOTCH_PX;
-  return Math.max(-cap, Math.min(cap, raw));
+  return clamp(raw, -cap, cap);
 }
 
 /**
@@ -180,7 +181,7 @@ export function pinchWheelDeltaY(prevDist, curDist, tune = TOUCH_TUNE) {
 export function railFloorForY(clientY, topY, bottomY, count = FLOOR_COUNT) {
   if (!Number.isFinite(clientY) || !(bottomY > topY) || !(count >= 1)) return 1;
   const fromBottom = (bottomY - clientY) / (bottomY - topY); // 0 at bottom, 1 at top
-  const idx = Math.round(Math.max(0, Math.min(1, fromBottom)) * (count - 1));
+  const idx = Math.round(clamp01(fromBottom) * (count - 1));
   return idx + 1;
 }
 

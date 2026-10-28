@@ -13,6 +13,7 @@ import {
   propagateOrbit,
   orbitToSceneCartesian,
 } from './OrbitalMechanics.js';
+import { degToRad } from '../core/MathUtil.js';
 
 // ============================================================================
 // CONSTELLATION DEFINITIONS
@@ -137,7 +138,7 @@ export class ActiveSatellites {
     const orbit = {
       semiMajorAxis: sma,
       eccentricity: 0.0005 + Math.random() * 0.001,
-      inclination: (template.inc + (Math.random() - 0.5) * 0.5) * Math.PI / 180,
+      inclination: degToRad(template.inc + (Math.random() - 0.5) * 0.5),
       raan: raanSpread,
       argPerigee: Math.random() * 2 * Math.PI,
       trueAnomaly: taSpread,

@@ -58,6 +58,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { clamp01, lerp } from '../core/MathUtil.js';
 
 /** Light-named meshes that are real hardware, not glow (PlayerSatellite._buildNavLights). */
 const SOLID_LIGHT = /^NavLight_(Port|Starboard)$/;
@@ -113,7 +114,7 @@ function ptTri2(px, py, pz, T, o) {
             const va = d3 * d6 - d5 * d4;
             if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
               const w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-              qx = bx + (cx - bx) * w; qy = by + (cy - by) * w; qz = bz + (cz - bz) * w;
+              qx = lerp(bx, cx, w); qy = lerp(by, cy, w); qz = lerp(bz, cz, w);
             } else {
               const s = va + vb + vc;
               if (!(Math.abs(s) > 1e-300)) {
@@ -145,16 +146,16 @@ function segSeg2(p1x, p1y, p1z, q1x, q1y, q1z, p2x, p2y, p2z, q2x, q2y, q2z) {
   const EPS = 1e-12;
   let s, t;
   if (a <= EPS && e <= EPS) { s = 0; t = 0; }
-  else if (a <= EPS) { s = 0; t = Math.min(1, Math.max(0, f / e)); }
+  else if (a <= EPS) { s = 0; t = clamp01(f / e); }
   else {
     const c = d1x * rx + d1y * ry + d1z * rz;
-    if (e <= EPS) { t = 0; s = Math.min(1, Math.max(0, -c / a)); }
+    if (e <= EPS) { t = 0; s = clamp01(-c / a); }
     else {
       const b = d1x * d2x + d1y * d2y + d1z * d2z, den = a * e - b * b;
-      s = den > EPS ? Math.min(1, Math.max(0, (b * f - c * e) / den)) : 0;
+      s = den > EPS ? clamp01((b * f - c * e) / den) : 0;
       t = (b * s + f) / e;
-      if (t < 0) { t = 0; s = Math.min(1, Math.max(0, -c / a)); }
-      else if (t > 1) { t = 1; s = Math.min(1, Math.max(0, (b - c) / a)); }
+      if (t < 0) { t = 0; s = clamp01(-c / a); }
+      else if (t > 1) { t = 1; s = clamp01((b - c) / a); }
     }
   }
   const dx = (p1x + d1x * s) - (p2x + d2x * t), dy = (p1y + d1y * s) - (p2y + d2y * t), dz = (p1z + d1z * s) - (p2z + d2z * t);
@@ -193,7 +194,7 @@ function ptSeg2(cx, cy, cz, ax, ay, az, bx, by, bz) {
   const abx = bx - ax, aby = by - ay, abz = bz - az;
   const l2 = abx * abx + aby * aby + abz * abz;
   let t = l2 > 1e-30 ? ((cx - ax) * abx + (cy - ay) * aby + (cz - az) * abz) / l2 : 0;
-  t = Math.min(1, Math.max(0, t));
+  t = clamp01(t);
   const dx = cx - (ax + abx * t), dy = cy - (ay + aby * t), dz = cz - (az + abz * t);
   return dx * dx + dy * dy + dz * dz;
 }

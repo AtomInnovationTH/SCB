@@ -14,6 +14,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { ThermalSystem } from './ThermalSystem.js';
+import { clamp01 } from '../core/MathUtil.js';
 
 /**
  * h3-argon-engine D2: kilograms of ENGINE gas aboard — the ONE conversion from the
@@ -133,7 +134,7 @@ export function startEnginePool(tankGasId, xenonMax) {
   const def = fuels[Constants.DEFAULT_FUEL];
   const fuel = fuels[tankGasId] || def;
   const frac = Constants.PROPELLANT_START_FRACTION;
-  const f = Number.isFinite(frac) ? Math.max(0, Math.min(1, frac)) : 1;
+  const f = Number.isFinite(frac) ? clamp01(frac) : 1;
   const pool = f * 100 * (def.kgFull / fuel.kgFull);   // START_GAS_KG / kgFull × 100, exact for the default gas
   return Math.min(pool, Number.isFinite(xenonMax) ? xenonMax : Constants.XENON_FUEL_MAX);
 }
@@ -172,7 +173,7 @@ export function engineGasLowFrac(res) {
   const def = (Constants.FUELS || {})[Constants.DEFAULT_FUEL];
   const max = res && Number.isFinite(res.xenonMax) ? res.xenonMax : Constants.XENON_FUEL_MAX;
   const ref = def.kgFull * max / Constants.XENON_FUEL_MAX;
-  return ref > 0 ? Math.max(0, Math.min(1, engineGasKg(res) / ref)) : 0;
+  return ref > 0 ? clamp01(engineGasKg(res) / ref) : 0;
 }
 
 /**
@@ -321,7 +322,7 @@ export class ResourceSystem {
    */
   static startCharge(max) {
     const f = Constants.BATTERY_START_FRACTION;
-    const frac = Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : 1;
+    const frac = Number.isFinite(f) ? clamp01(f) : 1;
     return max * frac;
   }
 
@@ -333,7 +334,7 @@ export class ResourceSystem {
    */
   static startPropellant(max) {
     const f = Constants.PROPELLANT_START_FRACTION;
-    const frac = Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : 1;
+    const frac = Number.isFinite(f) ? clamp01(f) : 1;
     return max * frac;
   }
 

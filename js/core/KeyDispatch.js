@@ -1,27 +1,16 @@
 /**
- * KeyDispatch.js — the ONE way a UI button acts: it presses the key.
- *
- * Session J (iPad grammar, D-I): touch / click affordances never call game
- * systems directly. They synthesise the SAME keydown → keyup pair the physical
- * keyboard produces and dispatch it on `window`, where InputManager binds its
- * listeners (InputManager.start(): window.addEventListener('keydown'|'keyup'))
- * and never filters `isTrusted`. One key path per verb: the FLEET pane's
- * DEPLOY button and the D key are indistinguishable downstream — the same
- * refusal comms, the same tutorial events, the same audio click, the same
- * toggle-off semantics (`_handleArmKey`). Nothing to keep in sync.
- *
- * Node-safe: without a KeyboardEvent constructor or a target (test runner,
- * headless), `pressKey` returns false and dispatches nothing.
- *
- * @module core/KeyDispatch
+ * @module core/KeyDispatch — the ONE way a UI button acts: it presses the key. Touch / click affordances never call
+ * game systems directly (iPad grammar): they synthesise the SAME keydown → keyup pair
+ * the physical keyboard produces and dispatch it on `window`, where InputManager binds its listeners
+ * (and never filters `isTrusted`). One key path per verb: the FLEET pane's DEPLOY button and the D key are
+ * indistinguishable downstream (same refusal comms, tutorial events, audio click, toggle-off semantics via
+ * `_handleArmKey`). Nothing to keep in sync. Node-safe: without a KeyboardEvent constructor or a target
+ * (test runner, headless) `pressKey` returns false and dispatches nothing.
  */
 
 /**
- * Derive the `key` value InputManager-adjacent listeners may read from a
- * `code`: 'KeyD' → 'd', 'Digit1' → '1', anything else → the code itself
+ * The `key` value for a `code`: 'KeyD' → 'd', 'Digit1' → '1', anything else → the code itself
  * (InputManager switches on `e.code`, so `key` is a courtesy, not a contract).
- * @param {string} code - KeyboardEvent.code ('KeyD', 'Digit1', 'Space', …)
- * @returns {string}
  */
 export function keyForCode(code) {
   const c = String(code ?? '');
@@ -30,13 +19,9 @@ export function keyForCode(code) {
   return c;
 }
 
-/**
- * Split a press string into the KeyboardEvent `code` and its modifier. A ticker step chip (and any other caller that
- * passes one string) can say 'Shift+KeyS' for a wide scan: u15a A-T2, the lesson's WIDE SCAN button presses Shift+S
- * exactly as the keyboard does. A plain code ('KeyS') comes back unchanged.
- * @param {string} press - 'KeyS' or 'Shift+KeyS'
- * @returns {{ code: string, shiftKey: boolean }}
- */
+/** Split a press string into the KeyboardEvent `code` and its modifier: 'Shift+KeyS'
+ *  (e.g. the lesson's WIDE SCAN button presses Shift+S exactly as the keyboard does); a plain code ('KeyS') comes back
+ *  unchanged. @returns {{ code: string, shiftKey: boolean }} */
 export function parseKeyPress(press) {
   const s = String(press ?? '');
   const i = s.lastIndexOf('+');
@@ -56,16 +41,13 @@ function _target(target) {
 }
 
 /**
- * Press one key: dispatch a synthetic `keydown` then the matching `keyup` on
- * `target` (default `window`). Both events bubble and are cancelable so the
- * receiving handlers' `preventDefault()` calls behave as they do for real
- * keystrokes.
- *
- * @param {string} code - KeyboardEvent.code, e.g. 'KeyD', 'KeyR', 'Digit1'. 'Shift+KeyS' presses S with Shift held
- *   (u15a: the WIDE SCAN button); an explicit `opts.shiftKey: true` does the same for a plain code.
+ * Press one key: dispatch a synthetic `keydown` then the matching `keyup` on `target` (default `window`). Both bubble
+ * and are cancelable so receiving handlers' `preventDefault()` behaves as for real keystrokes.
+ * @param {string} code KeyboardEvent.code, e.g. 'KeyD', 'Digit1'; 'Shift+KeyS' presses S with Shift held
+ * (an explicit `opts.shiftKey: true` does the same for a plain code)
  * @param {{ shiftKey?: boolean, target?: EventTarget }} [opts]
- * @returns {boolean} true when both events were dispatched; false when there
- *   is no target or no KeyboardEvent constructor (Node / headless).
+ * @returns {boolean} true when both events were dispatched; false with no target or no KeyboardEvent constructor
+ * (Node / headless)
  */
 export function pressKey(code, { shiftKey = false, target } = {}) {
   if (!code) return false;
@@ -80,12 +62,10 @@ export function pressKey(code, { shiftKey = false, target } = {}) {
 }
 
 /**
- * Hold a key down: dispatch ONLY the `keydown`. InputManager sets `keys[code] = true` on it and keeps it set until the
- * matching `keyup` (`releaseKey`), so a held-key reader (the de-spin laser reads `keys['KeyL']` every frame) sees the key
- * down for the whole hold. u15a A-T3: the DE-SPIN button holds KeyL for as long as a finger is down. The caller owns
- * the release: every path that ends the hold must call `releaseKey` with the same code.
- * @param {string} code - KeyboardEvent.code
- * @param {{ shiftKey?: boolean, target?: EventTarget }} [opts]
+ * Hold a key down: dispatch ONLY the `keydown`. InputManager sets `keys[code] = true` and keeps it until the matching
+ * `keyup` (`releaseKey`), so a held-key reader (the de-spin laser reads `keys['KeyL']` every frame) sees it down for
+ * the whole hold (the DE-SPIN button holds KeyL while a finger is down). The caller owns the release: every path that
+ * ends the hold must call `releaseKey` with the same code.
  * @returns {boolean} true when the keydown was dispatched
  */
 export function holdKey(code, { shiftKey = false, target } = {}) {
@@ -97,11 +77,8 @@ export function holdKey(code, { shiftKey = false, target } = {}) {
 }
 
 /**
- * Let a held key go: dispatch the `keyup` that matches `holdKey`. Safe to call when the key is not down (InputManager
- * just sets `keys[code] = false` again).
- * @param {string} code - KeyboardEvent.code
- * @param {{ shiftKey?: boolean, target?: EventTarget }} [opts]
- * @returns {boolean} true when the keyup was dispatched
+ * Let a held key go: dispatch the `keyup` matching `holdKey`. Safe when the key is not down. @returns {boolean} true
+ * when the keyup was dispatched
  */
 export function releaseKey(code, { shiftKey = false, target } = {}) {
   if (!code) return false;

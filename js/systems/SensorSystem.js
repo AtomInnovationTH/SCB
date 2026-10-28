@@ -15,6 +15,7 @@ import { Events } from '../core/Events.js';
 import { powerDistribution } from './PowerDistribution.js';
 import { Constants } from '../core/Constants.js';
 import { wingsHint } from './WingsHint.js';
+import { clamp01 } from '../core/MathUtil.js';
 
 // ============================================================================
 // SENSOR TIER DEFINITIONS
@@ -297,7 +298,7 @@ export class SensorSystem {
       total = Math.max(total, (S.COLD_SEARCH_WH || 0) * mult);
       analysisS = Math.max(analysisS, (S.WIDE && S.WIDE.ANALYSIS_S) || 0);
     }
-    const share = Number.isFinite(S.SWEEP_SHARE) ? Math.max(0, Math.min(1, S.SWEEP_SHARE)) : 1 / 3;
+    const share = Number.isFinite(S.SWEEP_SHARE) ? clamp01(S.SWEEP_SHARE) : 1 / 3;
     const sweep = total * share;
     const analysis = total - sweep;
     const wPerUnitS = (Constants.SHIP_HEAT && Constants.SHIP_HEAT.W_PER_UNIT_S) || 1000;

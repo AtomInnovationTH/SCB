@@ -47,6 +47,7 @@ import {
   fitsMouth,
   strainBandT,
 } from '../entities/CaptureNet.js';
+import { RAD2DEG, clamp01, clamp } from '../core/MathUtil.js';
 
 /** Preference order for ▶ tie-breaks (matches ToolRecommender). */
 export const TOOL_PREF_ORDER = ['NET', 'MAGNET', 'GRIPPER', 'PAD'];
@@ -282,7 +283,7 @@ function refreshTumbleFactor(cache, tumbleRate) {
   cache.tumbleRateAtCompute = tumbleRate;
   cache.fTumble = computeTumbleModifier(tumbleRate);
   cache.tumbleDeg = (typeof tumbleRate === 'number')
-    ? Math.abs(tumbleRate) * (180 / Math.PI) : 0;
+    ? Math.abs(tumbleRate) * RAD2DEG : 0;
   cache.tumbleComputes++;
 }
 
@@ -365,11 +366,11 @@ function computeNetOdds(opts) {
       });
     }
   }
-  const fDistance = Math.max(0.85, Math.min(1.1, 1.1 - 0.003 * range));
+  const fDistance = clamp(1.1 - 0.003 * range, 0.85, 1.1);
   if (fDistance < 1.0) {
     losses.push({ loss: 1 - fDistance, blocker: 'RANGE', hint: 'edge of envelope. Close in' });
   }
-  const fSpin = Math.max(0.5, Math.min(1.2, spinFraction));
+  const fSpin = clamp(spinFraction, 0.5, 1.2);
   if (fSpin < 1.0) {
     losses.push({ loss: 1 - fSpin, blocker: 'SPIN', hint: 'long flight bleeds net spin. Close in' });
   }
@@ -377,7 +378,7 @@ function computeNetOdds(opts) {
   const top = losses[0] || null;
 
   return {
-    p: Math.max(0, Math.min(1, p)),
+    p: clamp01(p),
     blocker: top ? top.blocker : null,
     hint: top ? top.hint : 'good shot',
   };

@@ -41,6 +41,7 @@ import {
   orbitalVelocity,
   atmosphericDrag,
 } from './OrbitalMechanics.js';
+import { DEG2RAD, RAD2DEG, degToRad, radToDeg, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 // ============================================================================
 // h3-argon-engine D4/D5 — engine-gas flow follows thrust and Isp.
@@ -232,7 +233,7 @@ function billMotorW(ship, watts, dt) {
 
 /** w4-power D5: a hinge / tilt drive turning at least this fast is moving (rad/s). */
 function motorMoveMinRadS() {
-  return ((Constants.MOTOR_DRAW_W?.MOVE_MIN_DEG_S ?? 0.1) * Math.PI) / 180;
+  return degToRad(Constants.MOTOR_DRAW_W?.MOVE_MIN_DEG_S ?? 0.1);
 }
 
 /**
@@ -270,7 +271,7 @@ function radiatorSweepBlocked(ship) {
     let clearDeg = rows[rows.length - 1][1];
     for (const [maxSize, alphaDeg] of rows) { if (size <= maxSize) { clearDeg = alphaDeg; break; } }
     const alpha = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : 0;
-    if ((alpha * 180) / Math.PI < clearDeg - 1e-9) return true;   // (1e-9: a strut parked exactly on the row angle is clear)
+    if (radToDeg(alpha) < clearDeg - 1e-9) return true;   // (1e-9: a strut parked exactly on the row angle is clear)
   }
   return false;
 }
@@ -294,7 +295,7 @@ function commandFlowerHome(ship) {
   // petal-single: the shared angle does not change while a petal is held for a catch (settle and auto-open wait for it)
   if (ship.flowerHandoffHeld === true || ship.flowerCommandsLocked === true) return false;
   const FL = Constants.THERMAL.FLOWER;
-  const openRad = (FL.OPEN_DEG * Math.PI) / 180;
+  const openRad = degToRad(FL.OPEN_DEG);
   if (ship._flowerThetaRad <= openRad + 1e-9) return false;
   const tgt = ship._flowerTargetTheta;
   // Already heading into the band (the player folding it, or a swing in
@@ -317,7 +318,7 @@ function settleFlowerToOpen(ship) {
   if (ship._flowerLaunchLock || ship._flowerOverrideFold) return;
   const FL = Constants.THERMAL.FLOWER;
   if (!(FL.RETURN_TO_OPEN_S > 0)) return;
-  if (ship._flowerThetaRad <= ((FL.OPEN_DEG + 1) * Math.PI) / 180) return;
+  if (ship._flowerThetaRad <= degToRad(FL.OPEN_DEG + 1)) return;
   if ((ship._flowerClockS || 0) - (ship._flowerCmdClockS || 0) < FL.RETURN_TO_OPEN_S) return;
   // An active launch driver holds it: the opening dance drives the ship
   // through the `_launchSequence` slot (`_danceDrivesMe()` is
@@ -353,8 +354,8 @@ function bandGate(ship, th0, th1, dt) {
   if (!am || typeof am.radiatorBandBlocked !== 'function') return th1;
   const tgt = ship._flowerTargetTheta;
   const R = Constants.REEL_HOLD;
-  const lo = (R.BAND_LO_DEG * Math.PI) / 180;
-  const hi = (R.BAND_HI_DEG * Math.PI) / 180;
+  const lo = degToRad(R.BAND_LO_DEG);
+  const hi = degToRad(R.BAND_HI_DEG);
   const eps = 1e-9;
   let edge = NaN;                                                 // the band edge this move enters through (the cut parks them AT it)
   if (th0 <= lo + eps && tgt > lo + eps) edge = lo;
@@ -399,7 +400,7 @@ export class PlayerSatellite extends THREE.Group {
     this.orbit = {
       semiMajorAxis: Constants.EARTH_RADIUS + Constants.START_ALTITUDE,
       eccentricity: 0.0001,
-      inclination: 51.6 * Math.PI / 180,
+      inclination: degToRad(51.6),
       raan: 0,
       argPerigee: 0,
       trueAnomaly: 0,
@@ -607,7 +608,7 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerGroups = [];
     // Boot at the orbit REST pose — CLOSED (θ 0°, folded flat along the body — 2° until
     // 2026-10-16) since DECISIONS §15 row 4; it was the 146° bud before.
-    this._flowerThetaRad = (this._flowerRestDeg() * Math.PI) / 180;
+    this._flowerThetaRad = degToRad(this._flowerRestDeg());
     /** Slew latch — the daughter `_strutTargetAlpha` contract mirrored:
      *  player intent wins mid-swing (a new toggle overwrites an in-flight
      *  target), bounded rate, never a snap, cleared on arrival. */
@@ -1302,7 +1303,7 @@ export class PlayerSatellite extends THREE.Group {
     // configuration. (End-face Octo arms dock on the ±Z caps, not the barrel
     // side, so they need no side pocket — only the ring azimuths are carved.)
     const azimuths = (this._activeArmTierConfig().azimuths ?? [64, 116, 244, 296])
-      .map(d => d * Math.PI / 180);
+      .map(d => degToRad(d));
 
     // Daughter body specs [x, y, z] in metres. The pocket cradles the body
     // cross-section (x≈y); z is the body length. Source: Constants.WEAVER_BODY /
@@ -1318,8 +1319,8 @@ export class PlayerSatellite extends THREE.Group {
     const pos = geo.attributes.position;
     const v = new THREE.Vector3();
     const smooth = (t) => { // smoothstep 0..1
-      t = Math.max(0, Math.min(1, t));
-      return t * t * (3 - 2 * t);
+      t = clamp01(t);
+      return smoothstep01(t);
     };
     const angDist = (a, b) => {
       let d = Math.abs(a - b) % (Math.PI * 2);
@@ -1506,11 +1507,11 @@ export class PlayerSatellite extends THREE.Group {
     // pocket or a stowed daughter, and all end rows were pulled inward + shortened
     // (endZ/endH above) so they clear the collar (+Z) and thruster/dock (−Z)
     // hardware near the barrel ends.
-    const strutAz = Constants.ARM_LADDER.Y0_QUAD.azimuths.map(d => d * Math.PI / 180);
+    const strutAz = Constants.ARM_LADDER.Y0_QUAD.azimuths.map(d => degToRad(d));
     const rosaAz = [0, Math.PI];
-    const strutKeep    = 18 * Math.PI / 180;  // ±18° clear of each strut (side/central/fore rows)
-    const strutKeepAft = 30 * Math.PI / 180;  // ±30° clear of each strut for the AFT row (pocket/daughter)
-    const rosaKeep  = 8 * Math.PI / 180;   // ±8° clear of each ROSA root
+    const strutKeep    = degToRad(18);  // ±18° clear of each strut (side/central/fore rows)
+    const strutKeepAft = degToRad(30);  // ±30° clear of each strut for the AFT row (pocket/daughter)
+    const rosaKeep  = degToRad(8);   // ±8° clear of each ROSA root
     const angDist = (a, b) => { let d = Math.abs(a - b) % (Math.PI * 2); return d > Math.PI ? Math.PI * 2 - d : d; };
 
     let _panelN = 0;
@@ -1586,7 +1587,7 @@ export class PlayerSatellite extends THREE.Group {
     this._cellSkinMats.push(gapMat);
     const gapCellW = facetWidth * 0.75;   // half-angle ≈ 8.5° → ~3.5° margin to each pocket edge
     for (const gapAzDeg of [94.65, 274.65]) {
-      const gapAz = gapAzDeg * Math.PI / 180;
+      const gapAz = degToRad(gapAzDeg);
       const radial = new THREE.Vector3(Math.cos(gapAz), Math.sin(gapAz), 0);
       const up = new THREE.Vector3(0, 0, 1);
       const right = new THREE.Vector3().crossVectors(up, radial).normalize();
@@ -1717,10 +1718,10 @@ export class PlayerSatellite extends THREE.Group {
       this._stowGrooveHalfWidths(body[0], barrelR_m_pin).chanHa;
     const chanHaWeaver  = chanHaFor(Constants.WEAVER_BODY  ?? [0.2, 0.2, 0.3]);
     const chanHaSpinner = chanHaFor(Constants.SPINNER_BODY ?? [0.1, 0.1, 0.15]);
-    const pinEps = 2 * Math.PI / 180;   // small margin past the lip onto uncarved hull
+    const pinEps = degToRad(2);   // small margin past the lip onto uncarved hull
 
     channelTier.azimuths.forEach((azDeg, aIdx) => {
-      const azRad = azDeg * Math.PI / 180;
+      const azRad = degToRad(azDeg);
       // Even index = weaver, odd = spinner (matches _carveStowGrooves / ArmManager).
       const chanHa = (aIdx % 2 === 0) ? chanHaWeaver : chanHaSpinner;
 
@@ -1869,7 +1870,7 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x8888a0, metalness: 0.75, roughness: 0.28,   // 7075-T6 (matches hinge metal)
     });
     tier.azimuths.forEach((azDeg, i) => {
-      const azRad  = azDeg * Math.PI / 180;
+      const azRad  = degToRad(azDeg);
       const radial = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
       const tangent = new THREE.Vector3(-Math.sin(azRad), Math.cos(azRad), 0);
       const padR = collarR - M * PAD_BURY + M * (PAD_T / 2);  // base 4 mm under hull
@@ -1902,7 +1903,7 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x8888a0, metalness: 0.75, roughness: 0.28,   // matches HingePad's 7075-T6
     });
     tier.azimuths.forEach((azDeg, i) => {
-      const azRad  = azDeg * Math.PI / 180;
+      const azRad  = degToRad(azDeg);
       const radial = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
       const tangent = new THREE.Vector3(-Math.sin(azRad), Math.cos(azRad), 0);
       const restR = collarR - M * REST_BURY + M * (REST_T / 2);
@@ -1983,7 +1984,7 @@ export class PlayerSatellite extends THREE.Group {
     this.hingeLEDs   = [];
 
     for (const azDeg of tier.azimuths) {
-      const azRad   = azDeg * Math.PI / 180;
+      const azRad   = degToRad(azDeg);
       const cx      = Math.cos(azRad) * collarR;
       const cy      = Math.sin(azRad) * collarR;
       const radial  = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
@@ -2273,7 +2274,7 @@ export class PlayerSatellite extends THREE.Group {
     this.strutGroups = [];
 
     tier.azimuths.forEach((azDeg, i) => {
-      const azRad = azDeg * Math.PI / 180;
+      const azRad = degToRad(azDeg);
 
       // ── Pivot group at hinge point on collar ──
       const pivotGroup = new THREE.Group();
@@ -2662,7 +2663,7 @@ export class PlayerSatellite extends THREE.Group {
     const RCS_POD_H    = 0.055;   // m — radial height
     const RCS_BURY     = 0.010;   // m — housing base buried below hull (no under-gap, no plinth)
     const RCS_BELL_LEN = 0.06;    // m — nozzle bell length (throat 0.015 → exit 0.025), ~25% smaller
-    const RCS_TANG_CANT = 18 * Math.PI / 180;  // rad — tangential bell outward cant (ROSA plume clearance)
+    const RCS_TANG_CANT = degToRad(18);  // rad — tangential bell outward cant (ROSA plume clearance)
 
     // Liner inset: the RCS exit is now 0.025 m, so 0.88 would leave only 3.0 mm
     // (< 4 mm log-depth minimum). 0.82 gives 0.025·0.18 = 4.5 mm — deterministic
@@ -2873,7 +2874,7 @@ export class PlayerSatellite extends THREE.Group {
 
     let podIdx = 0;
     for (let col = 0; col < RCS_POD_AZ_DEG.length; col++) {
-      const az = RCS_POD_AZ_DEG[col] * Math.PI / 180;
+      const az = degToRad(RCS_POD_AZ_DEG[col]);
       const azSign = col === 0 ? 1 : -1;   // +Y column (0) / −Y column (1)
       const radial = new THREE.Vector3(Math.cos(az), Math.sin(az), 0);
       const podBasis = new THREE.Matrix4().makeBasis(
@@ -3488,7 +3489,7 @@ export class PlayerSatellite extends THREE.Group {
     // the blanket. CylinderGeometry vertex at angle t is (r sin t, ., r cos t); the boom's rotation.z = 90 degrees
     // maps cylinder x -> wrapper y (the blanket length), so the slit centre sits at t = 270 degrees (towards -y)
     // for the +y boom (A) and 90 degrees (towards +y) for the -y boom (B).
-    const BOOM_ARC = (300 * Math.PI) / 180;
+    const BOOM_ARC = degToRad(300);
     const slitW = Math.PI * 2 - BOOM_ARC;
     const boomShellMat = new THREE.MeshStandardMaterial({
       color: 0x1c1c20, metalness: 0.2, roughness: 0.6, side: THREE.DoubleSide,
@@ -3853,7 +3854,7 @@ export class PlayerSatellite extends THREE.Group {
       // Settle condition: both wing tilts within WING_CLAMP_RELATCH_TILT_DEG
       // of 0. Read inline (not via a helper method) so the lightweight furl
       // stubs in test-RosaFurl.js keep working; a missing pivot reads as 0.
-      const tol = ((Constants.OCTOPUS_V5.WING_CLAMP_RELATCH_TILT_DEG ?? 0.5) * Math.PI) / 180;
+      const tol = degToRad(Constants.OCTOPUS_V5.WING_CLAMP_RELATCH_TILT_DEG ?? 0.5);
       const settled = [this.panelRightPivot, this.panelLeftPivot]
         .every((pivot) => !pivot || Math.abs(pivot.rotation.x) <= tol);
       if (target === 0 && this._rosaFurlProgress === 0 && settled) {
@@ -3928,7 +3929,7 @@ export class PlayerSatellite extends THREE.Group {
    */
   setRosaFurl(target) {
     this._rosaManualControl = true;
-    this._rosaFurlTarget = Math.max(0, Math.min(1, target));
+    this._rosaFurlTarget = clamp01(target);
     return this._rosaFurlTarget;
   }
 
@@ -3976,7 +3977,7 @@ export class PlayerSatellite extends THREE.Group {
    * @returns {number} the clamped feather target
    */
   setRosaFeather(target) {
-    this._rosaFeatherTarget = Math.max(0, Math.min(1, target));
+    this._rosaFeatherTarget = clamp01(target);
     return this._rosaFeatherTarget;
   }
 
@@ -4104,7 +4105,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!this._wheelKit || !Array.isArray(state) || state.length !== 3 || !state.every(Number.isFinite)) return;
     const H = Constants.WHEELS.MOMENTUM_NMS;
     this._wheelH.set(
-      Math.max(-H, Math.min(H, state[0])), Math.max(-H, Math.min(H, state[1])), Math.max(-H, Math.min(H, state[2])));
+      clamp(state[0], -H, H), clamp(state[1], -H, H), clamp(state[2], -H, H));
   }
 
   /** New game: the kit goes with the run's purchases (the replay of a continued save puts it back), the wheels stand empty. */
@@ -4258,7 +4259,7 @@ export class PlayerSatellite extends THREE.Group {
   wheelLit(axis, sign, seconds) {
     if (!this._wheelKit || !(seconds > 0)) return;
     const H = Constants.WHEELS.MOMENTUM_NMS;
-    this._wheelH[axis] = Math.max(-H, Math.min(H, this._wheelH[axis] - sign * Constants.WHEELS.TORQUE_NM * seconds));
+    this._wheelH[axis] = clamp(this._wheelH[axis] - sign * Constants.WHEELS.TORQUE_NM * seconds, -H, H);
     this._wheelUse[axis] += seconds;
   }
 
@@ -4304,7 +4305,7 @@ export class PlayerSatellite extends THREE.Group {
   _wheelKickFit(lx, ly) {
     const W = Constants.WHEELS, H = W.MOMENTUM_NMS, h = this._wheelH;
     const fit = (axis, L) => (Math.abs(L) > 0 && Number.isFinite(L))
-      ? Math.max(-H, Math.min(H, h[axis] + L)) - h[axis]                   // what fits, signed (a push against the spin: it all fits)
+      ? clamp(h[axis] + L, -H, H) - h[axis]                   // what fits, signed (a push against the spin: it all fits)
       : 0;
     const fx = fit('x', lx), fy = fit('y', ly);
     const total = Math.abs(fx) + Math.abs(fy);
@@ -4354,7 +4355,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!(Ia > 0) || !(WK.TORQUE_NM > 0)) return;
     m.top = true;
     const sec = Math.max(1, Math.round(Ia * w / WK.TORQUE_NM));
-    const deg = Math.max(1, Math.round((Ia * w * w / (2 * WK.TORQUE_NM)) * 180 / Math.PI));
+    const deg = Math.max(1, Math.round(radToDeg(Ia * w * w / (2 * WK.TORQUE_NM))));
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'SPACECRAFT',
       text: `Reaction wheels at top speed: she needs about ${sec} s and ${deg}\u00b0 to stop after you let go.`,
@@ -4451,10 +4452,10 @@ export class PlayerSatellite extends THREE.Group {
     const pairCount = this.getFlowerPairCount();
     if (pairCount === 0) return null;
     const FL = Constants.THERMAL.FLOWER;
-    const thetaDeg = (this._flowerThetaRad * 180) / Math.PI;
+    const thetaDeg = radToDeg(this._flowerThetaRad);
     const restDeg = this._flowerRestDeg();
     const span = FL.POSE_CARGO_DEG - restDeg;
-    const fracOf = (deg) => (span === 0 ? 1 : Math.max(0, Math.min(1, (deg - restDeg) / span)));
+    const fracOf = (deg) => (span === 0 ? 1 : clamp01((deg - restDeg) / span));
     // petal-single: `thetaDeg` / `pose` are the shared angle (the player's); `openFrac` is the MEAN of the fitted petals'
     // open fractions (one petal held at 44° among three at 146° radiates less than four at 146°)
     let openFrac = fracOf(thetaDeg);
@@ -4463,7 +4464,7 @@ export class PlayerSatellite extends THREE.Group {
       let sum = 0;
       let n = 0;
       for (const fg of this._flowerGroups) {
-        sum += fracOf((this.petalThetaRad(fg.azDeg) * 180) / Math.PI);
+        sum += fracOf(radToDeg(this.petalThetaRad(fg.azDeg)));
         n++;
       }
       if (n > 0) openFrac = sum / n;
@@ -4540,9 +4541,9 @@ export class PlayerSatellite extends THREE.Group {
     if (this.flowerCommandsLocked) return this._refuseFlowerWhileHeld();
     const FL = Constants.THERMAL.FLOWER;
     const restDeg = this._flowerRestDeg();
-    const restRad = (restDeg * Math.PI) / 180;
+    const restRad = degToRad(restDeg);
     const openDeg = FL.OPEN_DEG;
-    const openRad = (openDeg * Math.PI) / 180;
+    const openRad = degToRad(openDeg);
     // The "." law: the pending target wins, the live pose is the fallback.
     const ref = this._flowerTargetTheta !== undefined ? this._flowerTargetTheta : this._flowerThetaRad;
     const deploying = Math.abs(ref - restRad) <= Math.abs(ref - openRad);
@@ -4610,7 +4611,7 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerPushedThrough = true;
     this._flowerCmdClockS = this._flowerClockS || 0;   // a player command — restarts the 180° → 146° settle clock
     this._flowerVentArmed = true;
-    this._flowerTargetTheta = (FL.POSE_VENT_DEG * Math.PI) / 180;
+    this._flowerTargetTheta = degToRad(FL.POSE_VENT_DEG);
     this._warnFlowerVent();
     return true;
   }
@@ -4721,7 +4722,7 @@ export class PlayerSatellite extends THREE.Group {
     if (this.flowerCommandsLocked) return this._refuseFlowerWhileHeld();
     if (this._flowerGroups.length === 0) return null;
     const FL = Constants.THERMAL.FLOWER;
-    const midRad = ((FL.POSE_LAUNCH_DEG + FL.POSE_STOW_DEG) / 2) * Math.PI / 180;
+    const midRad = degToRad((FL.POSE_LAUNCH_DEG + FL.POSE_STOW_DEG) / 2);
     const ref = this._flowerTargetTheta !== undefined ? this._flowerTargetTheta : this._flowerThetaRad;
     const deploying = ref <= midRad;
     this._flowerCmdClockS = this._flowerClockS || 0;   // a player command — restarts the 180° → 146° settle clock
@@ -4810,14 +4811,14 @@ export class PlayerSatellite extends THREE.Group {
       // with no visible change. The wing dodge above still engages; the driver drops it on the next
       // command that leaves the fold.
       if (!override || launchActive || forced) this._flowerLaunchLock = true;
-      this._flowerTargetTheta = ((FL.POSE_LAUNCH_DEG - 0.5) * Math.PI) / 180;
+      this._flowerTargetTheta = degToRad(FL.POSE_LAUNCH_DEG - 0.5);
       return FL.POSE_LAUNCH_DEG;
     }
     const map = { CLOSED: FL.POSE_CLOSED_DEG, STOW: FL.POSE_STOW_DEG, PARK: FL.POSE_PARK_DEG, CARGO: FL.POSE_CARGO_DEG };
     const deg = map[pose];
     if (!Number.isFinite(deg)) return null;
-    const clamped = Math.max(FL.POSE_FLOOR_DEG, Math.min(FL.POSE_STOW_DEG, deg));
-    this._flowerTargetTheta = (clamped * Math.PI) / 180;
+    const clamped = clamp(deg, FL.POSE_FLOOR_DEG, FL.POSE_STOW_DEG);
+    this._flowerTargetTheta = degToRad(clamped);
     return clamped;
   }
 
@@ -4962,9 +4963,9 @@ export class PlayerSatellite extends THREE.Group {
   /** @private Clamp a finite θ (rad) to [POSE_FLOOR_DEG, POSE_STOW_DEG]. */
   _flowerClampRad(thetaRad) {
     const FL = Constants.THERMAL.FLOWER;
-    const lo = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
-    const hi = (FL.POSE_STOW_DEG * Math.PI) / 180;
-    return Math.max(lo, Math.min(hi, thetaRad));
+    const lo = degToRad(FL.POSE_FLOOR_DEG);
+    const hi = degToRad(FL.POSE_STOW_DEG);
+    return clamp(thetaRad, lo, hi);
   }
 
   /**
@@ -4974,9 +4975,9 @@ export class PlayerSatellite extends THREE.Group {
   _flowerCappedDeg(thetaRad) {
     const band = this.tipCargo?.maxRadiatorThetaRad?.() ?? Infinity;
     if (thetaRad > band + 1e-9) {
-      return ((band - Constants.THERMAL.FLOWER.SETTLE_EPS_RAD) * 180) / Math.PI;
+      return radToDeg(band - Constants.THERMAL.FLOWER.SETTLE_EPS_RAD);
     }
-    return (thetaRad * 180) / Math.PI;
+    return radToDeg(thetaRad);
   }
 
   /** @private A radiator command while held: one comms line per hold, then null. A take's lock (no hand-off, no carry) says so: the hand-off line wins when both hold. */
@@ -5018,7 +5019,7 @@ export class PlayerSatellite extends THREE.Group {
     this._bandWaitS = 0;                    // reel-hold D8: no radiator wait or drop mark outlives a reset
     this._flowerBandDropped = false;
     this._bandSaid = false;
-    this._flowerThetaRad = (restDeg * Math.PI) / 180;
+    this._flowerThetaRad = degToRad(restDeg);
     this._updateFlower(0);
     // Opening dance: the release event is suppressed while the dance drives
     // this ship (wordless unfold — task 8's known emitter #2).
@@ -5072,7 +5073,7 @@ export class PlayerSatellite extends THREE.Group {
   _buildFlowerCradle(i, azDeg, hinge, FL, mergeGeos) {
     const V5 = Constants.OCTOPUS_V5;
     const skinR = V5.COLLAR_RADIUS;                      // m — the same skin radius the StrutRest saddles use
-    const thL = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
+    const thL = degToRad(FL.POSE_LAUNCH_DEG);
     const zc = 0.47;                                     // m — cradle station (ship z): the middle of the 20 mm seam between the two PV cell rows (z 0.46 / 0.48)
     const CRADLE_LEN = 0.016;                            // m — axial length of pad and cheeks: 2 mm of bare skin each side of it in the seam, so no part of the cradle is over a solar cell
     const sB = (zc - FL.HINGE_Z_M) / Math.cos(thL);      // m — distance along the boom from the hinge to the station
@@ -5094,7 +5095,7 @@ export class PlayerSatellite extends THREE.Group {
       return g;
     };
     const pad = new THREE.BoxGeometry(0.050 * M, CRADLE_LEN * M, 0.008 * M);   // 50 mm across, CRADLE_LEN along the hull; spans h -4 .. +4 mm
-    const azRad = (azDeg * Math.PI) / 180;
+    const azRad = degToRad(azDeg);
     const radial = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
     const tangent = new THREE.Vector3(-Math.sin(azRad), Math.cos(azRad), 0);
     const basis = new THREE.Matrix4().makeBasis(tangent, new THREE.Vector3(0, 0, 1), radial);
@@ -5533,7 +5534,7 @@ export class PlayerSatellite extends THREE.Group {
 
     for (const azDeg of azList) {
       const i = FL.AZIMUTHS_DEG.indexOf(azDeg);
-      const azRad = (azDeg * Math.PI) / 180;
+      const azRad = degToRad(azDeg);
 
       // Pivot at the hinge point on the rim ring; local +X = radial out,
       // +Y = tangential, +Z = ship +Z.
@@ -5850,8 +5851,8 @@ export class PlayerSatellite extends THREE.Group {
     if (!groups || groups.length === 0) return;
     const FL = Constants.THERMAL.FLOWER;
     const th = Number.isFinite(thetaRad) ? thetaRad : this._flowerThetaRad;
-    const floor = (FL.STALK_FROM_DEG * Math.PI) / 180;     // its own constant: the radiator floor is 0° now (the stalks keep 2°..3°)
-    const openAt = (t) => Math.max(0, Math.min(1, (t - floor) / (Math.PI / 180)));     // 0 at 2° .. 1 at 3°
+    const floor = degToRad(FL.STALK_FROM_DEG);     // its own constant: the radiator floor is 0° now (the stalks keep 2°..3°)
+    const openAt = (t) => clamp01((t - floor) / DEG2RAD);     // 0 at 2° .. 1 at 3°
     const open = openAt(th);
     const holds = this._petalHolds || EMPTY_HOLDS;
     const tc = this.tipCargo;
@@ -5870,9 +5871,9 @@ export class PlayerSatellite extends THREE.Group {
       // (TipCargo: pad origin -0.0275 + 0.15). In: both tubes inside the boom behind the pad (every end face >= 2 mm
       // off the pad's and boom's), the cone sunk so its mouth sits 1 mm below the pad's outer face (0.005) — launch
       // tip z stays 1.305 (2.30 m boom) and no faces are coplanar.
-      hw.stalk.position.x = (-0.042 + (0.030 - -0.042) * u) * M;
-      hw.stalkIn.position.x = (-0.0395 + (0.0645 - -0.0395) * u) * M;
-      hw.conePivot.position.x = (-0.026 + (0.0925 - -0.026) * u) * M;
+      hw.stalk.position.x = (lerp(-0.042, 0.030, u)) * M;
+      hw.stalkIn.position.x = (lerp(-0.0395, 0.0645, u)) * M;
+      hw.conePivot.position.x = (lerp(-0.026, 0.0925, u)) * M;
     }
   }
 
@@ -5889,10 +5890,9 @@ export class PlayerSatellite extends THREE.Group {
    */
   _flowerWingFoldAngle(thetaRad) {
     const FL = Constants.THERMAL.FLOWER;
-    const thetaDeg = (thetaRad * 180) / Math.PI;
-    const open = Math.max(0, Math.min(1,
-      (thetaDeg - FL.WING_OPEN_START_DEG) / (FL.WING_OPEN_END_DEG - FL.WING_OPEN_START_DEG)));
-    const openTilt = ((180 - FL.WING_OPEN_DEG) / 2) * Math.PI / 180;
+    const thetaDeg = radToDeg(thetaRad);
+    const open = clamp01((thetaDeg - FL.WING_OPEN_START_DEG) / (FL.WING_OPEN_END_DEG - FL.WING_OPEN_START_DEG));
+    const openTilt = degToRad((180 - FL.WING_OPEN_DEG) / 2);
     return -(Math.PI * (1 - open) + openTilt * open);
   }
 
@@ -5957,7 +5957,7 @@ export class PlayerSatellite extends THREE.Group {
           this._flowerBandWarned = true;
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: 'THERMAL',
-            text: `Radiators stop at ${Math.floor((tipBand * 180) / Math.PI + 1e-6)}° — a catch on a radiator tip would sit in the engine plume.`,
+            text: `Radiators stop at ${Math.floor(radToDeg(tipBand) + 1e-6)}° — a catch on a radiator tip would sit in the engine plume.`,
             priority: 'info',
           });
         }
@@ -5975,7 +5975,7 @@ export class PlayerSatellite extends THREE.Group {
     if (stepping) {
       const maxDelta = FL.SLEW_RATE_RAD_S * dt;
       const delta = target - this._flowerThetaRad;
-      this._flowerThetaRad += Math.max(-maxDelta, Math.min(delta, maxDelta));
+      this._flowerThetaRad += clamp(maxDelta, -maxDelta, delta);
       this._flowerThetaRad = bandGate(this, theta0, this._flowerThetaRad, dt);   // reel-hold D3: the wings wait before the band while a catch is in the way
     }
 
@@ -5983,15 +5983,15 @@ export class PlayerSatellite extends THREE.Group {
     // DECISIONS §10/§11: neither the wings nor the struts gate this floor —
     // both dodge/fold clear on their own — so an OVERRIDE fold drops below
     // POSE_FLOOR_DEG at once, same as the sequence / dev-force armings.
-    const orbitFloorRad = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
+    const orbitFloorRad = degToRad(FL.POSE_FLOOR_DEG);
     // A bag held on a tip refuses the launch fold: the floor stays at POSE_FLOOR_DEG.
     const foldFloorOpen = this._flowerLaunchLock && !holdsTipBag;
-    const floorRad = foldFloorOpen ? (FL.POSE_LAUNCH_DEG * Math.PI) / 180 : orbitFloorRad;
+    const floorRad = foldFloorOpen ? degToRad(FL.POSE_LAUNCH_DEG) : orbitFloorRad;
     // Vent push-through (owner ask): the ladder ceiling lifts from the bud to
     // POSE_VENT_DEG only while the player has explicitly double-commanded it.
-    const ceilRad = ((this._flowerVentArmed ? FL.POSE_VENT_DEG : FL.POSE_STOW_DEG) * Math.PI) / 180;
+    const ceilRad = degToRad(this._flowerVentArmed ? FL.POSE_VENT_DEG : FL.POSE_STOW_DEG);
 
-    this._flowerThetaRad = Math.max(floorRad, Math.min(ceilRad, this._flowerThetaRad));
+    this._flowerThetaRad = clamp(this._flowerThetaRad, floorRad, ceilRad);
 
     // w4-power D5: the radiator hinge drives (one per strut, swinging in
     // unison) bill on the frames θ actually moves — a ceiling/floor clamp
@@ -6010,7 +6010,7 @@ export class PlayerSatellite extends THREE.Group {
     // back inside the band lets the normal rate-limited swing do the work, and
     // the ceiling then closes behind it.
     if (this._flowerVentArmed) {
-      const stowRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+      const stowRad = degToRad(FL.POSE_STOW_DEG);
       const tgt = this._flowerTargetTheta;
       if (this._flowerThetaRad <= stowRad + 1e-9 && (tgt === undefined || tgt <= stowRad + 1e-9)) {
         this._flowerVentArmed = false;
@@ -6043,7 +6043,7 @@ export class PlayerSatellite extends THREE.Group {
       // Opening dance: the release at the floor stays quiet while the dance
       // drives this ship (wordless unfold — task 8's known emitter #2).
       if (!this._danceDrivesMe()) {
-        eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: (this._flowerThetaRad * 180) / Math.PI });
+        eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: radToDeg(this._flowerThetaRad) });
       }
     }
 
@@ -6055,7 +6055,7 @@ export class PlayerSatellite extends THREE.Group {
       // 0.0065 — the D4 contract the heat lane reads. Other poses keep the
       // daughter-contract residual.
       if (!this._flowerLaunchLock && target <= orbitFloorRad + 1e-9) this._flowerThetaRad = orbitFloorRad;
-      const thetaDeg = (this._flowerThetaRad * 180) / Math.PI;
+      const thetaDeg = radToDeg(this._flowerThetaRad);
       const near = (deg) => Math.abs(thetaDeg - deg) < 1.0;
       const pose = near(FL.POSE_STOW_DEG) ? 'STOW'
         : near(FL.POSE_PARK_DEG) ? 'PARK'
@@ -6085,11 +6085,11 @@ export class PlayerSatellite extends THREE.Group {
       const h = holds[i];
       let tgt = h.releasing ? this._flowerThetaRad : h.targetRad;
       if (!h.releasing && tgt > tipBand + 1e-9) tgt = bandTarget;
-      tgt = Math.max(floorRad, Math.min(ceilRad, tgt));
+      tgt = clamp(tgt, floorRad, ceilRad);
       const before = h.thetaRad;
       const maxDelta = dt > 0 ? (h.rateRadS > 0 ? h.rateRadS : FL.SLEW_RATE_RAD_S) * dt : 0;
-      if (maxDelta > 0) h.thetaRad += Math.max(-maxDelta, Math.min(tgt - h.thetaRad, maxDelta));
-      h.thetaRad = Math.max(floorRad, Math.min(ceilRad, h.thetaRad));
+      if (maxDelta > 0) h.thetaRad += clamp(maxDelta, -maxDelta, tgt - h.thetaRad);
+      h.thetaRad = clamp(h.thetaRad, floorRad, ceilRad);
       if (maxDelta > 0 && Math.abs(h.thetaRad - before) >= motorMoveMinRadS() * dt) billMotorW(this, hingeW, dt);
       if (h.releasing && Math.abs(h.thetaRad - this._flowerThetaRad) < 1e-9) holds.splice(i, 1);
     }
@@ -6177,8 +6177,8 @@ export class PlayerSatellite extends THREE.Group {
     // Ring azimuths (deg) for EO / TELESCOPE / IR / LIDAR — a symmetric quad.
     const RING_AZ = { eo: 45, tele: 135, ir: 225, lidar: 315 };
     const ringXY = (azDeg) => new THREE.Vector2(
-      Math.cos(azDeg * Math.PI / 180) * RING_R,
-      Math.sin(azDeg * Math.PI / 180) * RING_R,
+      Math.cos(degToRad(azDeg)) * RING_R,
+      Math.sin(degToRad(azDeg)) * RING_R,
     );
 
     // Shared gunmetal — same recipe as the LIDAR dome; used by the EO barrel and
@@ -6260,7 +6260,7 @@ export class PlayerSatellite extends THREE.Group {
     // bore edge — the Design 6 ring tube is 35+ mm above it in z, the tunnel
     // that used to run there is gone), outer face at 0.36, corners at 0.368 on
     // the widened deck. IR_Aperture is a child → rides along.
-    irSensor.rotation.z = RING_AZ.ir * Math.PI / 180;
+    irSensor.rotation.z = degToRad(RING_AZ.ir);
     irSensor.name = 'IR_Sensor';
     irSensor.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.sensorGimbal.add(irSensor);
@@ -6321,7 +6321,7 @@ export class PlayerSatellite extends THREE.Group {
     // elevation toward dome-local +Z (= world −Y, the belly side the fore-q-bot
     // pose sees), at radius+1 mm — the lens circle (r 0.045) stays clear of the
     // apex and of the equator, i.e. above the drum's top face.
-    const lensEl = 65 * Math.PI / 180;
+    const lensEl = degToRad(65);
     lidarLens.position.set(0, Math.sin(lensEl) * M * 0.101, Math.cos(lensEl) * M * 0.101);
     lidarLens.lookAt(lidarLens.position.clone().multiplyScalar(2)); // face outward along the radial (before add: dome-local frame)
     lidarLens.name = 'LIDAR_Lens';
@@ -6872,7 +6872,7 @@ export class PlayerSatellite extends THREE.Group {
     const strutDir = new THREE.Vector2(headR - footR, headZ - footZ).normalize();
     const strutOutN = new THREE.Vector2(strutDir.y, -strutDir.x);
     [0, 90, 180, 270].forEach((azDeg, i) => {
-      const a = azDeg * Math.PI / 180, cx = Math.cos(a), cy = Math.sin(a);
+      const a = degToRad(azDeg), cx = Math.cos(a), cy = Math.sin(a);
       const A = new THREE.Vector3(footR * cx, footR * cy, footZ).multiplyScalar(M);
       const B = new THREE.Vector3(headR * cx, headR * cy, headZ).multiplyScalar(M);
       const strut = new THREE.Mesh(
@@ -7068,7 +7068,7 @@ export class PlayerSatellite extends THREE.Group {
     // rosaFurledCoilRadiusM() ≈ 0.0546 about rosaSpoolAxisM() = 0.49 — so this
     // site has far more room than it was built for; test-MotherZFix computes
     // the gate from those accessors rather than the retired literals.
-    const navR = 0.412 * M, navAz = 24 * Math.PI / 180, navZ = 0.76 * M;
+    const navR = 0.412 * M, navAz = degToRad(24), navZ = 0.76 * M;
     const navX = navR * Math.cos(navAz), navY = -navR * Math.sin(navAz);   // (0.376, −0.168)
 
     // Port (left) — Red (repositioned for Config G barrel)
@@ -7121,13 +7121,12 @@ export class PlayerSatellite extends THREE.Group {
   _buildAvionics() {
     const barrelR = M * 0.40;
     const barrelHZ = M * 1.0;   // fore cap plane (half of the 2.0M barrel)
-    const deg = Math.PI / 180;
     const gunmetal = new THREE.MeshStandardMaterial({ ...AVIONICS_GUNMETAL });
     const darkOptic = new THREE.MeshStandardMaterial({ ...AVIONICS_DARK_OPTIC });
     const thermalWhite = new THREE.MeshStandardMaterial({ ...AVIONICS_THERMAL_WHITE });
     const yUp = new THREE.Vector3(0, 1, 0);
     const zFwd = new THREE.Vector3(0, 0, 1);
-    const radialAt = (azDeg) => new THREE.Vector3(Math.cos(azDeg * deg), Math.sin(azDeg * deg), 0);
+    const radialAt = (azDeg) => new THREE.Vector3(Math.cos(azDeg * DEG2RAD), Math.sin(azDeg * DEG2RAD), 0);
 
     // ── Star trackers ×2 — open baffle tubes; a dark optic is recessed ~1 cm
     // behind the mouth, spanning the bore. Fore shoulder band az 82°/98°,
@@ -7147,8 +7146,8 @@ export class PlayerSatellite extends THREE.Group {
     const stGunmetal = new THREE.MeshStandardMaterial({ ...AVIONICS_GUNMETAL, side: THREE.DoubleSide });
     [82, 98].forEach((azDeg, i) => {
       const radial = radialAt(azDeg);
-      const boresight = zFwd.clone().multiplyScalar(Math.cos(30 * deg))
-        .addScaledVector(radial, Math.sin(30 * deg)).normalize();
+      const boresight = zFwd.clone().multiplyScalar(Math.cos(30 * DEG2RAD))
+        .addScaledVector(radial, Math.sin(30 * DEG2RAD)).normalize();
       const base = radial.clone().multiplyScalar(barrelR).setZ(barrelHZ * 0.90);
       const tubeGeo = new THREE.CylinderGeometry(stR, stR, stLen, 48, 1, true);   // open baffle; tube = back cap = optic = 48 (was 12, w1-ship-polish D2/D3)
       const tube = new THREE.Mesh(tubeGeo, stGunmetal);
@@ -7207,8 +7206,8 @@ export class PlayerSatellite extends THREE.Group {
       // hull parent.
       const STM_Z_AFT = 0.876, STM_Z_FORE = 0.920, STM_R_BOT = 0.390, STM_HALF_W = 0.029;
       const STM_S_TOP = 0.038;   // tube coordinate (along the outward-aft normal) of the top face
-      const stmTopAt = (z) => 0.40 + Math.cos(30 * deg) * STM_S_TOP
-        + 0.5 * ((z - (0.90 - 0.5 * STM_S_TOP)) / Math.cos(30 * deg));   // the s = STM_S_TOP line in (z, r)
+      const stmTopAt = (z) => 0.40 + Math.cos(30 * DEG2RAD) * STM_S_TOP
+        + 0.5 * ((z - (0.90 - 0.5 * STM_S_TOP)) / Math.cos(30 * DEG2RAD));   // the s = STM_S_TOP line in (z, r)
       const stmZc = (STM_Z_AFT + STM_Z_FORE) / 2, stmRc = (STM_R_BOT + stmTopAt(STM_Z_FORE)) / 2;
       const prof = new THREE.Shape();   // shape x = axial (z), shape y = radial, about the centroid
       prof.moveTo(M * (STM_Z_AFT - stmZc), M * (STM_R_BOT - stmRc));
@@ -7546,7 +7545,7 @@ export class PlayerSatellite extends THREE.Group {
   setIonStartGlow(levels) {
     if (!levels) { this._ionStartGlow = null; return; }
     if (!this._ionStartGlow) this._ionStartGlow = [0, 0, 0, 0];
-    for (let i = 0; i < 4; i++) this._ionStartGlow[i] = Math.max(0, Math.min(1, levels[i] || 0));
+    for (let i = 0; i < 4; i++) this._ionStartGlow[i] = clamp01(levels[i] || 0);
   }
 
   // ==========================================================================
@@ -7910,7 +7909,7 @@ export class PlayerSatellite extends THREE.Group {
     // sweep goal of plans/1784853499179-rosa-panel-start-jitter.md — the sweep
     // now runs across the 2.5 s furl stroke, not as a post-deploy twitch.
     const furl = this._rosaFurlProgress ?? 1;
-    const blend = Math.min(1, Math.max(0, (furl - 0.15) / 0.5)); // 0 furled → 1 by ~65%
+    const blend = clamp01((furl - 0.15) / 0.5); // 0 furled → 1 by ~65%
     const target = desired * blend; // stow tilt = 0
 
     // First-frame seed for the spawn-already-deployed case (jitter plan): assign
@@ -7945,12 +7944,12 @@ export class PlayerSatellite extends THREE.Group {
     const driveW = Constants.MOTOR_DRAW_W?.WING_DRIVE ?? 0;
     if (this.panelRightPivot) {
       const cur = this.panelRightPivot.rotation.x;
-      this.panelRightPivot.rotation.x = cur + (target - cur) * alpha;
+      this.panelRightPivot.rotation.x = lerp(cur, target, alpha);
       if (Math.abs(this.panelRightPivot.rotation.x - cur) >= moveMin) billMotorW(this, driveW, dt);
     }
     if (this.panelLeftPivot) {
       const cur = this.panelLeftPivot.rotation.x;
-      this.panelLeftPivot.rotation.x = cur + (target - cur) * alpha;
+      this.panelLeftPivot.rotation.x = lerp(cur, target, alpha);
       if (Math.abs(this.panelLeftPivot.rotation.x - cur) >= moveMin) billMotorW(this, driveW, dt);
     }
   }
@@ -7987,15 +7986,15 @@ export class PlayerSatellite extends THREE.Group {
     let desired;
     if (feather > 0) {
       const edgeOn = targetTilt + Math.PI / 2;             // 90° off sun = edge-on
-      const tracked = Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
-      desired = tracked + (edgeOn - tracked) * feather;    // blend track → edge-on
+      const tracked = clamp(targetTilt, -maxTilt, maxTilt);
+      desired = lerp(tracked, edgeOn, feather);    // blend track → edge-on
     } else {
-      desired = Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
+      desired = clamp(targetTilt, -maxTilt, maxTilt);
     }
 
     // DECISIONS §10 — the dodge wins over sun-track AND feather.
     const dodge = this._rosaDodgeLimitRad();
-    if (dodge !== Infinity) desired = Math.max(-dodge, Math.min(dodge, desired));
+    if (dodge !== Infinity) desired = clamp(desired, -dodge, dodge);
     return desired;
   }
 
@@ -8031,7 +8030,6 @@ export class PlayerSatellite extends THREE.Group {
   _rosaDodgeLimitRad() {
     if (!this.panelRightPivot && !this.panelLeftPivot) return Infinity;
     const FL = Constants.THERMAL.FLOWER;
-    const rad180 = 180 / Math.PI;
     let limitDeg = Infinity;
     if (this._flowerOverrideFold) {
       limitDeg = FL.WING_DODGE_LOW_LIMIT_DEG;              // fold in flight — dodge early
@@ -8039,14 +8037,14 @@ export class PlayerSatellite extends THREE.Group {
       // petal-single: the dodge is about the ring - the MOST RESTRICTIVE petal (the smallest angle any petal is on its way
       // to) decides, so a petal held low for a catch keeps the wings dodging as four petals at that angle did
       const r = this._petalRangeInto(this._petalRange || (this._petalRange = { min: 0, max: 0, minTarget: 0 }));
-      const thDeg = Math.min((this._flowerThetaRad ?? Math.PI / 2) * rad180, r.min * rad180, r.minTarget * rad180);
+      const thDeg = Math.min((this._flowerThetaRad ?? Math.PI / 2) * RAD2DEG, r.min * RAD2DEG, r.minTarget * RAD2DEG);
       if (thDeg < FL.WING_DODGE_LOW_THETA_DEG) limitDeg = FL.WING_DODGE_LOW_LIMIT_DEG;
       else if (thDeg < FL.WING_DODGE_MID_THETA_DEG) limitDeg = FL.WING_DODGE_MID_LIMIT_DEG;
     }
     if (this._strutsInWingDodgeBand()) {
       limitDeg = Math.min(limitDeg, FL.WING_DODGE_ALPHA_LIMIT_DEG);
     }
-    return limitDeg === Infinity ? Infinity : (limitDeg * Math.PI) / 180;
+    return limitDeg === Infinity ? Infinity : degToRad(limitDeg);
   }
 
   /**
@@ -8058,8 +8056,8 @@ export class PlayerSatellite extends THREE.Group {
    */
   _strutsInWingDodgeBand() {
     const FL = Constants.THERMAL.FLOWER;
-    const lo = (FL.WING_DODGE_ALPHA_LO_DEG * Math.PI) / 180;
-    const hi = (FL.WING_DODGE_ALPHA_HI_DEG * Math.PI) / 180;
+    const lo = degToRad(FL.WING_DODGE_ALPHA_LO_DEG);
+    const hi = degToRad(FL.WING_DODGE_ALPHA_HI_DEG);
     const arms = this.armManager && this.armManager.arms;
     if (!arms || arms.length === 0) return false;
     for (const arm of arms) {
@@ -8109,7 +8107,7 @@ export class PlayerSatellite extends THREE.Group {
 
     // If a strut sits within ~30° of the plane, tighten; otherwise stay loose.
     const deg = minGapDeg <= 30 + 1e-6 ? tightDeg : looseDeg;
-    return deg * Math.PI / 180;
+    return degToRad(deg);
   }
 
   /**
@@ -8133,7 +8131,7 @@ export class PlayerSatellite extends THREE.Group {
                  Constants.SOLAR_PANEL_EFFICIENCY;
     const rate = this.resources?.solarRate ?? 0;
     let frac = peak > 0 ? rate / peak : 0;
-    frac = Math.max(this._rosaGlowIdleFloor || 0, Math.min(1, frac));
+    frac = clamp(frac, this._rosaGlowIdleFloor || 0, 1);
 
     // Dim royal blue (0.12) → bright, vivid royal blue (0.78), plus a subtle
     // breathing ripple so even a steady array shimmers.
@@ -8810,7 +8808,7 @@ export class PlayerSatellite extends THREE.Group {
   _reelPushHoldBurn(dvWorld) {
     const RP = Constants.REEL_PUSH || {};
     const mass = (this.mass > 0) ? this.mass : 130;
-    let kg = mass * dvWorld.length() / ((RP.HOLD_ISP_S ?? 60) * (Constants.G0 ?? 9.81));
+    let kg = mass * dvWorld.length() / ((RP.HOLD_ISP_S ?? 60) * Constants.G0);
     const tank = Number(this.resources && this.resources.coldGas);
     if (Number.isFinite(tank)) kg = Math.min(kg, coldGasPoolToKg(Math.max(0, tank)));   // ap-gas D4: the tank is POOL units, the burn is kg
     // ap-gas D5: a cold-gas turn that is spinning keeps the gas to stop; the burn takes what is left above it and no more (the
@@ -8971,7 +8969,7 @@ export class PlayerSatellite extends THREE.Group {
     const isp = Constants.REEL_PUSH?.HOLD_ISP_S ?? 60;
     const perNms = (axis) => {
       const tau = this._coupleTauMag(axis);
-      return twoF / ((tau > 1e-3 ? tau : fallbackTau) * isp * (Constants.G0 ?? 9.80665));   // kg per N·m·s
+      return twoF / ((tau > 1e-3 ? tau : fallbackTau) * isp * Constants.G0);   // kg per N·m·s
     };
     const lp = Math.abs(lPitchNms), ly = Math.abs(lYawNms);
     return (lp > 0 ? lp * perNms('x') : 0) + (ly > 0 ? ly * perNms('y') : 0);
@@ -9001,7 +8999,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!(reserve > 0)) return wantPool;
     const tank = Number(this.resources && this.resources.coldGas);
     if (!Number.isFinite(tank)) return wantPool;
-    return Math.max(0, Math.min(wantPool, tank - reserve));
+    return clamp(tank - reserve, 0, wantPool);
   }
 
   /**
@@ -9277,7 +9275,7 @@ export class PlayerSatellite extends THREE.Group {
     const FL = Constants.THERMAL.FLOWER;
     // petal-single: the band is about the whole ring - the most restrictive petal (any petal outside it refuses thrust)
     const r = this._petalRangeInto(this._petalRange || (this._petalRange = { min: 0, max: 0, minTarget: 0 }));
-    return (r.min * 180) / Math.PI < FL.POSE_FLOOR_DEG - 1e-6 || (r.max * 180) / Math.PI > FL.POSE_THRUST_MAX_DEG + 1e-6;
+    return radToDeg(r.min) < FL.POSE_FLOOR_DEG - 1e-6 || radToDeg(r.max) > FL.POSE_THRUST_MAX_DEG + 1e-6;
   }
 
   /** net-duck D3: the one line a refused Hall burn says while a daughter's catch is lowered for the net (once per duck). @private */
@@ -9318,7 +9316,7 @@ export class PlayerSatellite extends THREE.Group {
     // band (the guard re-reads θ every frame). The lock owns the radiator
     // otherwise (below). `swinging` is true only for the call that starts the swing.
     const aboveBand = !this._flowerLaunchLock
-      && (this._flowerThetaRad * 180) / Math.PI > FL.POSE_THRUST_MAX_DEG + 1e-6;
+      && radToDeg(this._flowerThetaRad) > FL.POSE_THRUST_MAX_DEG + 1e-6;
     const swinging = aboveBand && commandFlowerHome(this);
     if (swinging && !this._danceDrivesMe()) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -9335,7 +9333,7 @@ export class PlayerSatellite extends THREE.Group {
     const now = performance.now();
     if (now - this._lastFlowerInhibitWarning < 3000) return;
     this._lastFlowerInhibitWarning = now;
-    const thetaDeg = Math.round((this._flowerThetaRad * 180) / Math.PI);
+    const thetaDeg = Math.round(radToDeg(this._flowerThetaRad));
     // The swing line above already said why and what happens next — only a
     // refusal while the radiator is ALREADY on its way in needs its own line.
     if (!swinging) {
@@ -9684,7 +9682,7 @@ export class PlayerSatellite extends THREE.Group {
    * @param {number} level — desired throttle level
    */
   setThrottleLevel(level) {
-    this.throttleLevel = Math.max(0, Math.min(1, level));
+    this.throttleLevel = clamp01(level);
     eventBus.emit(Events.THROTTLE_CHANGE, { level: this.throttleLevel });
   }
 
@@ -9714,8 +9712,8 @@ export class PlayerSatellite extends THREE.Group {
    * @param {number} dt seconds
    */
   commandAttitude(pitchCmd, yawCmd, dt) {
-    const p = Math.max(-1, Math.min(1, pitchCmd || 0));
-    const y = Math.max(-1, Math.min(1, yawCmd || 0));
+    const p = clamp(pitchCmd || 0, -1, 1);
+    const y = clamp(yawCmd || 0, -1, 1);
     // Latch the RAW demand — the integrator re-applies the rate-cap gate itself
     // (it must, since ω changes across substeps within the frame).
     this._attitudeCmd = (p !== 0 || y !== 0) ? { pitch: p, yaw: y } : null;
@@ -9913,7 +9911,7 @@ export class PlayerSatellite extends THREE.Group {
    * @returns {number} pool units
    */
   slothGasFloorPool() {
-    const w1 = Constants.SLOTH.MIN_SPIN_DEG_S * Math.PI / 180;
+    const w1 = degToRad(Constants.SLOTH.MIN_SPIN_DEG_S);
     const per = (axis) => this._coldGasPerRadS(axis, 'up') + this._coldGasPerRadS(axis, 'stop');   // spin up + stop
     return w1 * Math.max(per('x'), per('y'));
   }
@@ -9961,7 +9959,7 @@ export class PlayerSatellite extends THREE.Group {
     // F1.6: a remainder under `slothGasDustPool()` (1% of G_min, ~0.1 g of nitrogen) is empty: the cold servo's frame bill is capped at
     // half the tank (`gasFrac`), so a grain would fade the torque away for ~18 s while the boxes could be braking her.
     if (ask && ask.spinUp === false && (this.resources.coldGas || 0) > this.slothGasDustPool()
-        && (this._gasSpin === true || ask.rate > Constants.SLOTH.GAS_ARREST_ABOVE_DEG_S * Math.PI / 180)) return 'coldGas';
+        && (this._gasSpin === true || ask.rate > degToRad(Constants.SLOTH.GAS_ARREST_ABOVE_DEG_S))) return 'coldGas';
     return 'tailBoxes';
   }
 
@@ -10241,8 +10239,8 @@ export class PlayerSatellite extends THREE.Group {
     this._wheelSpin = false;
     if (!this._wheelKit || !this._rcsOmega) return;
     const I = this.getAttitudeInertia(), H = Constants.WHEELS.MOMENTUM_NMS, w = this._rcsOmega, h = this._wheelH;
-    h.x = Math.max(-H, Math.min(H, h.x + I.ixx * w.x));
-    h.y = Math.max(-H, Math.min(H, h.y + I.iyy * w.y));
+    h.x = clamp(h.x + I.ixx * w.x, -H, H);
+    h.y = clamp(h.y + I.iyy * w.y, -H, H);
   }
 
   /**
@@ -10738,8 +10736,7 @@ export class PlayerSatellite extends THREE.Group {
   /** @returns {{pitch:number, yaw:number, roll:number}} live body angular rate (deg/s). */
   getAngularRate() {
     const w = this._rcsOmega || _v3AttA.set(0, 0, 0);
-    const R = 180 / Math.PI;
-    return { pitch: w.x * R, yaw: w.y * R, roll: w.z * R };
+    return { pitch: w.x * RAD2DEG, yaw: w.y * RAD2DEG, roll: w.z * RAD2DEG };
   }
 
   /**
@@ -10903,7 +10900,7 @@ export class PlayerSatellite extends THREE.Group {
       const got = have > 0 && cs && typeof cs.removeMetal === 'function' ? Math.min(have, cs.removeMetal(fuel.cargoMetalId, have)) : 0;
       const frac = Math.min(1, got / amount);
       const paid = this._drawBurnResource('xenon', ionGasUnits(this, dvMps * (1 - frac), rs.getCurrentFuel()));
-      return frac + (1 - frac) * paid;
+      return lerp(frac, 1, paid);
     }
     return this._drawBurnResource('xenon', amount);
   }
@@ -11282,7 +11279,7 @@ export class PlayerSatellite extends THREE.Group {
       puff.sprite.position.copy(puff.startPos).addScaledVector(puff.dir, puff.drift * t);
       // Rapid free-expansion (fast early, ∝√t) from a small mouth size.
       const startS = M * 0.04;
-      const s = startS + (puff.maxScale - startS) * Math.sqrt(t);
+      const s = lerp(startS, puff.maxScale, Math.sqrt(t));
       puff.sprite.scale.set(s, s, s);
       // §3 slow tumble (cloned mats → per-puff safe).
       puff.sprite.material.rotation = puff.rot + puff.spin * age;
@@ -11640,7 +11637,7 @@ export class PlayerSatellite extends THREE.Group {
 
     // --- Write back Keplerian elements ---
     this.orbit.semiMajorAxis = newSmaScene;
-    this.orbit.eccentricity = Math.max(0, Math.min(0.1, newOrbit.eccentricity));
+    this.orbit.eccentricity = clamp(newOrbit.eccentricity, 0, 0.1);
     this.orbit.inclination = newOrbit.inclination;
     this.orbit.raan = newOrbit.raan;
     this.orbit.argPerigee = newOrbit.argPerigee;
@@ -11746,7 +11743,7 @@ export class PlayerSatellite extends THREE.Group {
 
     if (Math.abs(ti.x) > 1e-14) {
       this.orbit.eccentricity += ti.x / (2 * v);
-      this.orbit.eccentricity = Math.max(0, Math.min(0.1, this.orbit.eccentricity));
+      this.orbit.eccentricity = clamp(this.orbit.eccentricity, 0, 0.1);
     }
 
     // C-9: CoM-offset induced torque coupling (COM_TRACKING flag-gated).
@@ -11772,14 +11769,14 @@ export class PlayerSatellite extends THREE.Group {
         }
         if (Math.abs(leakX) > 1e-16) {
           this.orbit.eccentricity += leakX / (2 * v);
-          this.orbit.eccentricity = Math.max(0, Math.min(0.1, this.orbit.eccentricity));
+          this.orbit.eccentricity = clamp(this.orbit.eccentricity, 0, 0.1);
         }
       }
     }
 
     const minAlt = Constants.VLEO_MIN + Constants.EARTH_RADIUS;
     const maxAlt = Constants.LEO_MAX + Constants.EARTH_RADIUS;
-    this.orbit.semiMajorAxis = Math.max(minAlt, Math.min(maxAlt, this.orbit.semiMajorAxis));
+    this.orbit.semiMajorAxis = clamp(this.orbit.semiMajorAxis, minAlt, maxAlt);
 
     ti.x = ti.y = ti.z = 0;
   }
@@ -11937,7 +11934,7 @@ export class PlayerSatellite extends THREE.Group {
       // blanket, not the wrapper's scale — scale.x keeps a 5 % visual stub
       // when rolled up (_setRosaWingProgress), which used to make 82 W from
       // cells that are wound on the drum. A rolled-up wing makes nothing.
-      const furl = Math.max(0, Math.min(1, (wrapper.scale.x - 0.05) / 0.95));
+      const furl = clamp01((wrapper.scale.x - 0.05) / 0.95);
       wingPowerW += Constants.SOLAR_FLUX * efficiency * wingAreaEachM2 * incidence * furl;
     }
     wingPowerW *= wingHealth;
@@ -12295,7 +12292,6 @@ export class PlayerSatellite extends THREE.Group {
     // so labels can render the real strut sweep angle instead of the legacy
     // Euler-magnitude proxy.  Falls back to 0° when an arm slot is empty.
     const arms = this.armManager?.arms || [];
-    const RAD2DEG = 180 / Math.PI;
     const sgPayload = (this.strutGroups || []).map((sg, i) => {
       const arm = arms[i];
       const alphaRad = (arm && typeof arm.getAimAlpha === 'function')

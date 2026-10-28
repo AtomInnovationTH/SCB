@@ -17,6 +17,7 @@
 
 import { Constants } from '../core/Constants.js';
 import { hohmannDeltaV, totalDeltaV, orbitToKm, kmToScene } from './OrbitalMechanics.js';
+import { degToRad } from '../core/MathUtil.js';
 
 const TAU = Math.PI * 2;
 
@@ -179,7 +180,7 @@ export function clusterToOrbitKm(cluster) {
   return {
     semiMajorAxis: Constants.EARTH_RADIUS_KM + (cluster?.avgAltKm || 0),
     eccentricity: 0.001,
-    inclination: ((cluster?.incCenter || 0) * Math.PI) / 180,
+    inclination: degToRad(cluster?.incCenter || 0),
     raan: 0,
     argPerigee: 0,
     trueAnomaly: 0,

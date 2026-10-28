@@ -20,13 +20,13 @@
  */
 import * as THREE from 'three';
 import { carryFinalQuatInto } from './ArmDockBasis.js';
+import { DEG2RAD, lerp } from '../core/MathUtil.js';
 
-const DEG = Math.PI / 180;
 const _rh = new THREE.Vector3(), _th = new THREE.Vector3(), _c = new THREE.Vector3();
 
 /** Unit direction from the catch towards her centre at the seat: up the axis, tilted `trailDeg` towards the tangent (side) of her azimuth. */
 export function noseTrailDirInto(azDeg, trailDeg, out) {
-  const az = azDeg * DEG, t = trailDeg * DEG;
+  const az = azDeg * DEG2RAD, t = trailDeg * DEG2RAD;
   _th.set(-Math.sin(az), Math.cos(az), 0);
   return out.set(0, 0, Math.cos(t)).addScaledVector(_th, Math.sin(t));
 }
@@ -87,7 +87,7 @@ export function buildNoseRoute(p) {
  */
 export function virtualCentreInto(cReal, h, reachM, bucketReachM, out) {
   const k = reachM > 0 ? bucketReachM / reachM : 1;
-  return out.set(cReal.x, cReal.y, h + (cReal.z - h) * k);
+  return out.set(cReal.x, cReal.y, lerp(h, cReal.z, k));
 }
 
 /**

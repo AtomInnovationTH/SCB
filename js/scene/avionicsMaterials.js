@@ -1,13 +1,10 @@
 /**
- * avionicsMaterials.js — SSOT material *recipes* for the mothership fore-end
- * avionics palette and the daughter-arm mini net launcher.
+ * avionicsMaterials.js — SSOT material *recipes* (`{ color, metalness, roughness }`)
+ * for the mothership fore-end avionics and the daughter-arm mini net launcher.
  *
- * These are plain `{ color, metalness, roughness }` recipes, NOT shared
- * THREE.Material instances: the mother keeps its materials for the session while
- * daughter arms dispose theirs in ArmUnit.dispose(), so each site constructs its
- * own `new THREE.MeshStandardMaterial({ ...recipe })`. Sharing the recipe (not
- * the instance) keeps the mother and daughters visually in lockstep without a
- * cross-entity dispose hazard. (2026-07-23, fore-end-hardware-labels-rework.)
+ * Recipes, NOT shared THREE.Material instances: the mother keeps its materials
+ * for the session while daughter arms dispose theirs in ArmUnit.dispose(), so
+ * each site builds its own `new THREE.MeshStandardMaterial({ ...recipe })`.
  *
  * @module scene/avionicsMaterials
  */

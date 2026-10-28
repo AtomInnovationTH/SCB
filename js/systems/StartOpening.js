@@ -60,6 +60,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
+import { radToDeg } from '../core/MathUtil.js';
 
 /**
  * The parts the first action opens, in the order the line names them. ONE
@@ -138,7 +139,7 @@ function flowerCommandedOpen(p) {
   const FL = Constants.THERMAL.FLOWER;
   const rad = p._flowerTargetTheta !== undefined ? p._flowerTargetTheta : p._flowerThetaRad;
   if (!Number.isFinite(rad)) return false;
-  const deg = (rad * 180) / Math.PI;
+  const deg = radToDeg(rad);
   return Math.abs(deg - FL.OPEN_DEG) < Math.abs(deg - FL.REST_DEG);
 }
 

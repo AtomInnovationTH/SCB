@@ -41,6 +41,7 @@
 
 import { FloorContract } from '../core/FloorContract.js';
 import { SdaChart, aggregateBands, buildTimeline, LENSES } from '../ui/SdaChart.js';
+import { clamp01 } from '../core/MathUtil.js';
 
 /** The SDA DOWNLINK (id 5) contract row — by id, never by index (Session H). */
 const FLOOR = FloorContract.byId(5);
@@ -145,11 +146,11 @@ export class SdaFloor {
     if (!k) return 0;
     if (typeof k.getCascadeRisk === 'function') {
       const r = k.getCascadeRisk();
-      return Number.isFinite(r) ? Math.max(0, Math.min(1, r)) : 0;
+      return Number.isFinite(r) ? clamp01(r) : 0;
     }
     if (typeof k.getStatus === 'function') {
       const st = k.getStatus() || {};
-      return Number.isFinite(st.cascadeRisk) ? Math.max(0, Math.min(1, st.cascadeRisk)) : 0;
+      return Number.isFinite(st.cascadeRisk) ? clamp01(st.cascadeRisk) : 0;
     }
     return 0;
   }
