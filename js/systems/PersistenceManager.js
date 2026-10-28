@@ -18,6 +18,22 @@ const SAVE_VERSION = 1;
 class PersistenceManager {
   constructor() {
     this._storageAvailable = this._checkStorage();
+    /** Set by lockForReset(): a New player reset (IdleReset.js) has wiped the keys and the page is about to reload. */
+    this._resetLocked = false;
+  }
+
+  /**
+   * Shared-iPad reset guard (IdleReset.js, owner 2026-10-28): from now on this page writes no save and no backup, so a
+   * save fired by a late timer cannot put the previous player's run back between the wipe and the reload. In memory
+   * only: the reloaded page starts unlocked.
+   */
+  lockForReset() {
+    this._resetLocked = true;
+  }
+
+  /** @returns {boolean} true once lockForReset() ran on this page. */
+  isResetLocked() {
+    return this._resetLocked === true;
   }
 
   /**
@@ -50,7 +66,7 @@ class PersistenceManager {
    * @returns {boolean} Whether save succeeded
    */
   save(data) {
-    if (!this._storageAvailable) return false;
+    if (!this._storageAvailable || this._resetLocked) return false;
 
     try {
       const saveData = {
@@ -323,7 +339,7 @@ class PersistenceManager {
    * @returns {boolean} Whether a backup was written.
    */
   backupSave() {
-    if (!this._storageAvailable) return false;
+    if (!this._storageAvailable || this._resetLocked) return false;
 
     try {
       const raw = localStorage.getItem(SAVE_KEY);

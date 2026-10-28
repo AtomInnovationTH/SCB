@@ -53,6 +53,16 @@ export const StorageKeys = {
    *  PLAYER-owned like SETTINGS: a wiped save does not bring the card back. */
   WHATS_NEW_SHOWN: 'sc_whats_new_shown',
   WHATS_NEW_SEEN:  'sc_whats_new_seen',
+  /** Show mode (ShowMode.js, owner 2026-10-28, DECISIONS "shared iPad"): '1' while this device is a shared show iPad
+   *  (the idle clock and the "Still playing?" card run), absent/'0' otherwise. DEVICE-owned: a New player reset keeps it. */
+  SHOW_MODE: 'sc_show_mode_v1',
+  /** The Comms pane's remembered size step (CommsPanel.js still names the literal). PLAYER-owned, like TOUCH_MAP. */
+  COMMS_STEP: 'spacecowboy_comms_pane_step_v2',
+  /** sessionStorage, not localStorage: set by a New player reset just before the page reloads, so the next boot wipes the
+   *  per-player keys once more (a late writer can put one back before the reload) and removes it (IdleReset.js). */
+  RESET_PENDING: 'sc_reset_pending',
+  /** sessionStorage (UpdateWatch.js names the literal): the build an auto-apply was already tried for (the loop guard). */
+  AUTO_UPDATE: 'sc_auto_update_v1',
   // Owned by Constants (beside related tuning) but mirrored here so the registry is complete and the collision/drift
   // test sees them.
   /** OnboardingDirector cleared-state blob. */

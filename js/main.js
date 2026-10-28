@@ -6,6 +6,10 @@
 
 import * as THREE from 'three';
 
+// Shared-iPad show mode (owner 2026-10-28). FIRST import on purpose: its module body finishes a cut-short New player
+// reset and applies ?show= before any store below reads storage (SettingsManager builds at import).
+import './systems/ShowMode.js';
+
 // [DBG-KEY-CAPTURE] window-level keydown sniffer removed (noise on every keystroke).
 // Re-enable only when diagnosing ASR / accessibility / focus key-injection issues.
 
@@ -113,6 +117,9 @@ import { OnboardingDirector } from './systems/OnboardingDirector.js';
 import { GuidanceDirector } from './systems/GuidanceDirector.js';
 import { settingsManager } from './systems/SettingsManager.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
+import { showMode } from './systems/ShowMode.js';   // shared-iPad show mode (the side-effect import at the top ran its boot work)
+import { isHeldByAutoPlay, resetForNewPlayer, idleOverrideS } from './systems/IdleReset.js';
+import { wireStillPlaying, wireIdleTimers } from './ui/StillPlayingCard.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController, INTRO_RIDE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
@@ -545,6 +552,14 @@ const _turnSaved = { up: false, down: false, left: false, right: false };
 function _noteSchedInput() {
   _schedLastInputMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
 }
+/** One real input (pointer, touch, wheel, key): the frame schedule boost AND the shared-iPad idle clock. Used by the capture-phase
+ *  listener set below only: `_noteSchedInput` is also called for programmatic edges (a pane sliding by itself), which are not input. */
+function _noteRealInput() {
+  _noteSchedInput();
+  if (_idleKit) _idleKit.noteInput();
+}
+/** Shared-iPad show mode (owner 2026-10-28): the idle clock + "Still playing?" card, built once at boot (see `wireStillPlaying`). */
+let _idleKit = null;
 
 // Lane A (F1 six-fixes plan, 2026-09-16, step 1/4) — mechLive: is any mother
 // actuator (flower / ROSA furl / ROSA feather / ROSA wing tilt / struts)
@@ -4165,9 +4180,32 @@ async function init() {
   // _syncWorkbenchPanes, UPGRADE_PURCHASED here — a card click is already a
   // pointerdown, the event covers keyboard/queued purchases).
   for (const ev of ['pointerdown', 'pointermove', 'wheel', 'keydown', 'touchstart']) {
-    window.addEventListener(ev, _noteSchedInput, { capture: true, passive: true });
+    window.addEventListener(ev, _noteRealInput, { capture: true, passive: true });
   }
   eventBus.on(Events.UPGRADE_PURCHASED, _noteSchedInput);
+
+  // Shared-iPad show mode (owner 2026-10-28; DECISIONS "shared iPad"): after 60 s without a touch, "Still playing?" -> New player
+  // wipes the per-player keys and reloads. The clock only runs while show mode is on. It is fed by the capture-phase
+  // listener above (`_noteRealInput`), ticks on its own timer (a paused loop schedules no frames), and holds while a trip,
+  // a daughter's reel or flight plays itself out (`isHeldByAutoPlay`).
+  _idleKit = wireStillPlaying({
+    doc: document,
+    getLanguage: () => settingsManager.getLanguage(),
+    enabled: () => showMode.isOn(),
+    onMenu: () => gameState.currentState === GameStates.MENU,
+    holds: () => isHeldByAutoPlay({
+      trip: gameFlowManager.trip, cameraSystem, autopilot: autopilotSystem, arms: armManager ? armManager.arms : null,
+    }),
+    reset: () => resetForNewPlayer({ lockSaves: () => persistenceManager.lockForReset() }),
+    pause: {
+      isGameplay: () => gameState.isGameplay(),
+      isPaused: () => gameFlowManager.paused === true,
+      toggle: () => (inputManager ? inputManager.togglePause() : null),
+    },
+    idleS: idleOverrideS(typeof location !== 'undefined' ? location.search : '', showMode.isOn()) || undefined,   // ?idleS= (look checks), show mode only
+  });
+  // The 250 ms timer and the come-back tick exist only while show mode is on (off = no timer, no listener).
+  wireIdleTimers({ showMode, kit: _idleKit, doc: document });
   // The intro launch ceremony is a camera ride: native while it flies (the
   // same TeachingSystem blocker signal pair — plan Session I step 2).
   if (Events.LAUNCH_CEREMONY_START) eventBus.on(Events.LAUNCH_CEREMONY_START, () => { _launchCeremonyLive = true; });

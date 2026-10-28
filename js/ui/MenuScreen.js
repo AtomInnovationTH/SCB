@@ -11,6 +11,7 @@ import { Constants } from '../core/Constants.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { settingsManager } from '../systems/SettingsManager.js';
+import { showMode } from '../systems/ShowMode.js';   // shared-iPad show mode (owner 2026-10-28): the menu toggle
 import { LANGUAGES } from '../core/Languages.js';
 import { FlagDecalSystem } from './FlagDecalSystem.js';
 import { MenuScene3D } from './MenuScene3D.js';
@@ -398,6 +399,24 @@ export class MenuScreen {
           #menu-lang { right: 18px; }
           #menu-help-btn { top: calc(100% + 8px); left: auto; right: 0; transform: none; }
         }
+        /* Show mode (shared iPad, owner 2026-10-28; one control, coordinator 2026-10-28 F1.2): a single button under the "?" row
+         * that reads "Show mode: on" / "Show mode: off". Lit green when on, dim when off; the lit button IS the mark. 44 px tall
+         * (touch target). Right edge = the "?" edge. */
+        #menu-show-btn {
+          position: absolute; top: calc(100% + 56px); right: -52px; z-index: 1;   /* below the version label's "What's new" (measured 2026-10-28: at +8 px it sat on it at 1366 wide) */
+          min-height: 44px; box-sizing: border-box; padding: 0 14px; cursor: pointer; font: inherit; font-size: 0.8rem;
+          letter-spacing: 0.02em; white-space: nowrap;
+          background: rgba(4,12,30,0.5); color: rgba(212,238,255,0.5);
+          border: 1px solid rgba(212,238,255,0.2); border-radius: 6px;
+          backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+        }
+        #menu-show-btn[aria-pressed="true"] {
+          color: #00ff88; background: rgba(0,255,136,0.14); border-color: rgba(0,255,136,0.7);
+          box-shadow: 0 0 12px rgba(0,255,136,0.28);
+        }
+        @media (max-width: 1339px) {
+          #menu-show-btn { right: 0; top: calc(100% + 60px); }
+        }
         #menu-lang-btn {
           display: flex; align-items: center; gap: 8px;
           background: rgba(4,12,30,0.62); color: rgba(0,255,136,0.92);
@@ -509,6 +528,7 @@ export class MenuScreen {
             <span class="menu-lang-caret">▾</span>
           </button>
           <ul id="menu-lang-menu" role="listbox" aria-label="Language"></ul>
+          <button id="menu-show-btn" type="button" aria-pressed="false" title="For a shared iPad: after 60 s without a touch, offers a fresh game">Show mode: off</button>
         </div>
 
         <!-- ══ HEADER (full-width, centered) ══ -->
@@ -778,6 +798,9 @@ export class MenuScreen {
 
     // Help "?" beside it (D3) — inert and hidden until setHelpOpener().
     this._wireHelpButton();
+
+    // Show mode toggle + mark (owner 2026-10-28).
+    this._wireShowMode();
 
     // The version button opens the notes card; the notes themselves load once, here (show() waits on them).
     this._wireVersionButton();
@@ -1098,6 +1121,30 @@ export class MenuScreen {
       if (e && e.currentTarget && typeof e.currentTarget.blur === 'function') e.currentTarget.blur();
       this._helpOpener();
     });
+  }
+
+  /**
+   * @private Show mode (shared iPad, owner 2026-10-28): ONE button under the language picker. It reads "Show mode: on" or
+   * "Show mode: off", is lit while on, and flips ShowMode when tapped. `sm` is injectable for tests (default: the page's showMode).
+   * @param {object} [sm] ShowModeState-like { isOn(), set(on), onChange(fn) }
+   */
+  _wireShowMode(sm = showMode) {
+    const btn = this.element && this.element.querySelector('#menu-show-btn');
+    if (!btn) return;
+    const paint = () => {
+      const on = sm.isOn();
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.textContent = on ? 'Show mode: on' : 'Show mode: off';
+    };
+    btn.addEventListener('click', (e) => {
+      this._closeLangMenu();
+      audioSystem.playClick?.();
+      if (e && e.currentTarget && typeof e.currentTarget.blur === 'function') e.currentTarget.blur();   // a later Enter starts the mission
+      sm.set(!sm.isOn());
+      paint();
+    });
+    if (typeof sm.onChange === 'function') sm.onChange(paint);
+    paint();
   }
 
   /** @private Handle keyboard when menu is visible */
