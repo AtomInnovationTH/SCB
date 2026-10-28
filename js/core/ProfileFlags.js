@@ -28,6 +28,7 @@
  *   (default `Constants.BLOOM_THRESHOLD`, 2.5, read in `SceneManager.js`; range [0.5..8]; lower = more of the
  *                            frame blooms).
  */
+import { devSearch } from './DevHost.js';
 
 /** `?key=value` integer in [min..max], or `null` when absent / blank / out of range (`msaa`). */
 function readIntInRange(params, key, min, max) {
@@ -128,7 +129,7 @@ function parseFromLocation() {
 
   let flags;
   try {
-    flags = parse(window.location.search);
+    flags = parse(devSearch(window.location));
   } catch (_e) {
     return DEFAULTS;
   }

@@ -1,12 +1,7 @@
 /**
- * DebrisWireframe.js — FS2-heritage debris wireframe analysis panel
- * Canvas2D overlay rendering a rotating wireframe of the selected debris target
- * with color-coded structural zones and approach recommendations.
+ * DebrisWireframe.js — Canvas2D wireframe panel for the selected debris target: zone colours and approach
+ * recommendations. Simple perspective projection, no Three.js renderer.
  *
- * Pure Canvas2D — no Three.js renderer. Uses simple perspective projection
- * for 3D wireframe visualization on a fixed-position overlay panel.
- *
- * @module ui/DebrisWireframe
  */
 
 import * as THREE from 'three';
@@ -23,18 +18,13 @@ import { audioSystem } from '../systems/AudioSystem.js';
 import { mono } from '../core/Typeface.js';
 import { currentHudScale } from './HudScale.js';
 import { GestureHints } from './hud/GestureHints.js';
-
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
+import { RAD2DEG, degToRad, clamp01, clamp } from '../core/MathUtil.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 
 const PANEL_WIDTH = 280;              // px — match right column & NavSphere width
 const PANEL_HEIGHT = 200;             // px — tight: wireframe + essential info text only
 const PANEL_MARGIN_RIGHT = 10;        // px from right edge (align with targets panel)
-// Fallback anchor: top-right, below the NavSphere (446px = 160 margin + 280
-// NavSphere diameter + 6 gap), mirroring the container-mounted slot. Previously
-// this floated bottom-right at 140px, which could overlap the bottom-anchored
-// warnings strip / comms panel when DebrisWireframe was used standalone.
+// Fallback anchor (no container): top-right below the NavSphere (446px = 160 margin + 280 NavSphere diameter + 6 gap).
 const PANEL_MARGIN_TOP = 446;         // px from top edge (fallback when no container)
 const BG_COLOR = `rgba(0, 10, 25, ${Constants.WIREFRAME_BG_ALPHA})`;
 const BORDER_COLOR = 'rgba(0, 255, 136, 0.3)';
@@ -42,36 +32,26 @@ const Z_INDEX = 12;
 
 const PERSPECTIVE_D = 3.0;            // perspective distance parameter
 const VIEW_SCALE = 280;               // maps 3D units → canvas pixels (fills 280px width better)
-const TILT_X = 15 * Math.PI / 180;   // fixed 15° X-axis tilt
+const TILT_X = degToRad(15);   // fixed 15° X-axis tilt
 const WIRE_CX = PANEL_WIDTH / 2;      // wireframe center X (140)
 const WIRE_CY = 72;                   // wireframe center Y (tight for 200px panel)
 
 const MIN_TUMBLE_RATE = 0.1;          // rad/s minimum visual rotation
 
-const DEG = 180 / Math.PI;
 const TWO_PI = Math.PI * 2;
 const SEGMENTS = 8;                   // vertices per ring/circle
 
-// ============================================================================
-// COLORS
-// ============================================================================
-
-/** Zone risk colors (CSS hex) */
 const ZONE_COLORS = {
-  GREEN:  '#00ff88',
+  GREEN:  VisualLaw.COLORS.PLAYER,
   YELLOW: '#ffcc00',
   RED:    '#ff4444',
 };
 
 const HEADER_COLOR = 'rgba(0, 255, 136, 0.7)';
-const TYPE_COLOR = '#00ccff';
-const INFO_COLOR = '#00ff88';
+const TYPE_COLOR = VisualLaw.COLORS.INFO;
+const INFO_COLOR = VisualLaw.COLORS.PLAYER;
 const DIM_COLOR = 'rgba(0, 255, 136, 0.5)';
 const SEPARATOR_COLOR = 'rgba(0, 255, 136, 0.3)';
-
-// ============================================================================
-// TYPE DISPLAY LABELS
-// ============================================================================
 
 const TYPE_LABELS = {
   rocketBody:    'ROCKET BODY',
@@ -81,9 +61,7 @@ const TYPE_LABELS = {
   cubesat:       'CUBESAT',
 };
 
-// Human-readable material names + a representative swatch colour for the
-// inspection readout, so the panel reflects the field's material variety
-// (silver hulls / dark composite / gold MLI / blue solar cells) at a glance.
+// Material names + swatch colours for the inspection readout.
 const MATERIAL_LABELS = {
   aluminum:   'Aluminium',
   titanium:   'Titanium',
@@ -99,16 +77,9 @@ const MATERIAL_SWATCH = {
   solar_cell: '#3a52b0',
 };
 
-// ============================================================================
-// WIREFRAME SHAPE DATA — built once at module load (except fragment)
-// ============================================================================
+// Wireframe shapes: built once at module load (fragment is built per target).
 
-/**
- * Generate a ring of vertices at given Y-height and radius.
- * @param {number} y - Y coordinate for all ring vertices
- * @param {number} r - ring radius
- * @returns {number[][]} array of [x, y, z] vertices
- */
+/** Ring of SEGMENTS vertices at height y, radius r → [x, y, z][]. */
 function makeRing(y, r) {
   const verts = [];
   for (let i = 0; i < SEGMENTS; i++) {
@@ -118,12 +89,10 @@ function makeRing(y, r) {
   return verts;
 }
 
-// ---------------------------------------------------------------------------
 // Rocket Body: cylinder + nosecone + nozzle
 // Total height normalized ~1.0. Diameter = 0.3 (radius 0.15).
 // Y range: -0.65 (nozzle tip) to +0.5 (nosecone tip)
 // Zones: Nosecone top 15%, Fuel Tank middle 60%, Engine bottom 25%
-// ---------------------------------------------------------------------------
 function buildRocketBody() {
   const R = 0.30;
   const tip = [[0, 0.5, 0]];                  // 0: nosecone tip
@@ -137,30 +106,27 @@ function buildRocketBody() {
     ...tip, ...ringTop, ...ringMid, ...ringBot, ...nozzleRing, ...nozzleTip,
   ];
 
-  // Zone: Nosecone — tip lines + top ring
   const noseconeEdges = [];
   for (let i = 0; i < SEGMENTS; i++) {
-    noseconeEdges.push([0, 1 + i]);                              // tip → ring
-    noseconeEdges.push([1 + i, 1 + ((i + 1) % SEGMENTS)]);      // ring loop
+    noseconeEdges.push([0, 1 + i]);
+    noseconeEdges.push([1 + i, 1 + ((i + 1) % SEGMENTS)]);
   }
 
-  // Zone: Fuel Tank — verticals + bottom ring
   const fuelTankEdges = [];
   for (let i = 0; i < SEGMENTS; i++) {
-    fuelTankEdges.push([1 + i, 9 + i]);                          // verticals
-    fuelTankEdges.push([9 + i, 9 + ((i + 1) % SEGMENTS)]);      // bottom ring
+    fuelTankEdges.push([1 + i, 9 + i]);
+    fuelTankEdges.push([9 + i, 9 + ((i + 1) % SEGMENTS)]);
   }
 
-  // Zone: Engine — verticals + bottom ring + nozzle bell + converging lines
   const engineEdges = [];
   for (let i = 0; i < SEGMENTS; i++) {
-    engineEdges.push([9 + i, 17 + i]);                            // verticals
-    engineEdges.push([17 + i, 17 + ((i + 1) % SEGMENTS)]);       // engine-bottom ring
-    engineEdges.push([17 + i, 25 + i]);                            // to nozzle ring
-    engineEdges.push([25 + i, 25 + ((i + 1) % SEGMENTS)]);       // nozzle ring
+    engineEdges.push([9 + i, 17 + i]);
+    engineEdges.push([17 + i, 17 + ((i + 1) % SEGMENTS)]);
+    engineEdges.push([17 + i, 25 + i]);
+    engineEdges.push([25 + i, 25 + ((i + 1) % SEGMENTS)]);
   }
   for (let i = 0; i < SEGMENTS; i += 2) {
-    engineEdges.push([25 + i, 33]);                                // converging to nozzle tip
+    engineEdges.push([25 + i, 33]);
   }
 
   return {
@@ -173,21 +139,18 @@ function buildRocketBody() {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Defunct Satellite: box bus + 2 solar-panel wings + antenna dish
-// ---------------------------------------------------------------------------
 function buildDefunctSat() {
   const bx = 0.20, by = 0.15, bz = 0.15;
 
   // Bus box vertices (0–7)
   const busVerts = [
-    [-bx, -by, -bz], [ bx, -by, -bz], [ bx,  by, -bz], [-bx,  by, -bz], // front
-    [-bx, -by,  bz], [ bx, -by,  bz], [ bx,  by,  bz], [-bx,  by,  bz], // back
+    [-bx, -by, -bz], [ bx, -by, -bz], [ bx,  by, -bz], [-bx,  by, -bz],
+    [-bx, -by,  bz], [ bx, -by,  bz], [ bx,  by,  bz], [-bx,  by,  bz],
   ];
   const busEdges = [
-    [0, 1], [1, 2], [2, 3], [3, 0],   // front face
-    [4, 5], [5, 6], [6, 7], [7, 4],   // back face
-    [0, 4], [1, 5], [2, 6], [3, 7],   // connectors
+    [0, 1], [1, 2], [2, 3], [3, 0],
+    [4, 5], [5, 6], [6, 7], [7, 4],
+    [0, 4], [1, 5], [2, 6], [3, 7],
   ];
 
   // Solar Panel L — extends left (8–11)
@@ -197,8 +160,8 @@ function buildDefunctSat() {
     [-0.60,    py, 0], [-bx,    py, 0],
   ];
   const panelLEdges = [
-    [8, 9], [9, 10], [10, 11], [11, 8],   // outline
-    [8, 10], [9, 11],                       // cross-hatched solar cells
+    [8, 9], [9, 10], [10, 11], [11, 8],
+    [8, 10], [9, 11],
   ];
 
   // Solar Panel R — extends right (12–15)
@@ -223,8 +186,8 @@ function buildDefunctSat() {
   // indices 17–22
   const antennaEdges = [];
   for (let i = 0; i < 6; i++) {
-    antennaEdges.push([17 + i, 17 + ((i + 1) % 6)]); // dish ring
-    antennaEdges.push([16, 17 + i]);                    // spokes from mast
+    antennaEdges.push([17 + i, 17 + ((i + 1) % 6)]);
+    antennaEdges.push([16, 17 + i]);
   }
 
   const vertices = [...busVerts, ...panelLVerts, ...panelRVerts, ...antMast, ...antRing];
@@ -240,9 +203,6 @@ function buildDefunctSat() {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Mission Debris: irregular hexagonal prism + attachment ring
-// ---------------------------------------------------------------------------
 function buildMissionDebris() {
   const N = 6;
   const R = 0.28;
@@ -263,9 +223,9 @@ function buildMissionDebris() {
 
   const primaryEdges = [];
   for (let i = 0; i < N; i++) {
-    primaryEdges.push([i, (i + 1) % N]);                 // top ring
-    primaryEdges.push([N + i, N + ((i + 1) % N)]);       // bottom ring
-    primaryEdges.push([i, N + i]);                         // verticals
+    primaryEdges.push([i, (i + 1) % N]);
+    primaryEdges.push([N + i, N + ((i + 1) % N)]);
+    primaryEdges.push([i, N + i]);
   }
 
   // Attachment ring: slightly larger, at midplane (12–17)
@@ -273,14 +233,14 @@ function buildMissionDebris() {
   const ringR = 0.34;
   const ringVerts = [];
   for (let i = 0; i < N; i++) {
-    const a = (i / N) * TWO_PI + 0.12;                    // slight angular offset
+    const a = (i / N) * TWO_PI + 0.12;
     ringVerts.push([ringR * Math.cos(a), ringY, ringR * Math.sin(a)]);
   }
 
   const attachEdges = [];
   for (let i = 0; i < N; i++) {
-    attachEdges.push([12 + i, 12 + ((i + 1) % N)]);      // ring loop
-    attachEdges.push([12 + i, i]);                         // tie to top vertices
+    attachEdges.push([12 + i, 12 + ((i + 1) % N)]);
+    attachEdges.push([12 + i, i]);
   }
 
   const vertices = [...topVerts, ...botVerts, ...ringVerts];
@@ -294,15 +254,7 @@ function buildMissionDebris() {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Fragment: irregular polygon seeded by debris ID (built per-target)
-// ---------------------------------------------------------------------------
-
-/**
- * Build a fragment wireframe shape using the debris ID as a deterministic seed.
- * @param {number} id - debris ID for pseudo-random seed
- * @returns {{ vertices: number[][], zones: { name: string, edges: number[][], massPercent: number }[] }}
- */
+/** Fragment wireframe, deterministic from the debris ID (built per target). */
 function buildFragment(id) {
   // Knuth multiplicative hash for deterministic pseudo-random
   const seed = ((id || 1) >>> 0) * 2654435761;
@@ -324,7 +276,6 @@ function buildFragment(id) {
   for (let i = 0; i < count; i++) {
     edges.push([i, (i + 1) % count]);
   }
-  // Cross-edges for 3D depth
   if (count > 4) {
     edges.push([0, Math.floor(count / 2)]);
     edges.push([1, Math.floor(count / 2) + 1]);
@@ -338,10 +289,7 @@ function buildFragment(id) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// ADR Satellite (V3 Octopus): octagonal bus + solar wings + 6 dock cavities
-// + ion drive nozzle + laser aperture. Shown as default when no target.
-// ---------------------------------------------------------------------------
+// ADR satellite (octopus): octagonal bus, solar wings, 6 dock cavities, ion nozzle, laser aperture; default when no target.
 function buildADRSatellite() {
   // Octagonal prism bus — 8 vertices top, 8 vertices bottom (0–15)
   const R = 0.22;
@@ -357,9 +305,9 @@ function buildADRSatellite() {
 
   const busEdges = [];
   for (let i = 0; i < 8; i++) {
-    busEdges.push([i, (i + 1) % 8]);             // top ring
-    busEdges.push([8 + i, 8 + ((i + 1) % 8)]);   // bottom ring
-    busEdges.push([i, 8 + i]);                     // verticals
+    busEdges.push([i, (i + 1) % 8]);
+    busEdges.push([8 + i, 8 + ((i + 1) % 8)]);
+    busEdges.push([i, 8 + i]);
   }
 
   // Solar panel wings — left and right (16–23)
@@ -369,7 +317,7 @@ function buildADRSatellite() {
   ];
   const panelLEdges = [
     [16, 17], [17, 18], [18, 19], [19, 16],
-    [16, 18], [17, 19],   // cross-hatch solar cells
+    [16, 18], [17, 19],
   ];
   const panelRVerts = [
     [R, -py, 0], [0.55, -py, 0], [0.55, py, 0], [R, py, 0],       // 20–23
@@ -389,9 +337,9 @@ function buildADRSatellite() {
     const cx = dockR * Math.cos(a);
     const cz = dockR * Math.sin(a);
     const base = 24 + i * 2;
-    dockVerts.push([cx + ds, busH + 0.01, cz]);      // right of diamond
-    dockVerts.push([cx - ds, busH + 0.01, cz]);      // left of diamond
-    dockEdges.push([base, base + 1]);                  // horizontal bar
+    dockVerts.push([cx + ds, busH + 0.01, cz]);
+    dockVerts.push([cx - ds, busH + 0.01, cz]);
+    dockEdges.push([base, base + 1]);
   }
 
   // Ion drive nozzle — small ring + converging lines at bottom (36–43, 44)
@@ -406,11 +354,11 @@ function buildADRSatellite() {
   const nozzleTip = [[0, nozzleY - 0.06, 0]];
   const nozzleEdges = [];
   for (let i = 0; i < 8; i++) {
-    nozzleEdges.push([36 + i, 36 + ((i + 1) % 8)]); // ring
-    nozzleEdges.push([8 + i, 36 + i]);                // connect to bus bottom
+    nozzleEdges.push([36 + i, 36 + ((i + 1) % 8)]);
+    nozzleEdges.push([8 + i, 36 + i]);
   }
   for (let i = 0; i < 8; i += 2) {
-    nozzleEdges.push([36 + i, 44]);                    // converge to tip
+    nozzleEdges.push([36 + i, 44]);
   }
 
   // Laser aperture ring — on forward top face (45–50)
@@ -434,7 +382,6 @@ function buildADRSatellite() {
     ...laserVerts,                           // 45–50
   ];
 
-  // Scale up ADR satellite wireframe by 1.5× for better visualization
   for (const v of vertices) {
     v[0] *= 1.5;
     v[1] *= 1.5;
@@ -453,21 +400,18 @@ function buildADRSatellite() {
   };
 }
 
-// ---------------------------------------------------------------------------
-// CubeSat: small box bus + 2 short deployed panels (wireframe data)
-// ---------------------------------------------------------------------------
 function buildCubesat() {
   const bx = 0.17, by = 0.17, bz = 0.23;
 
   // Bus box vertices (0–7)
   const busVerts = [
-    [-bx, -by, -bz], [ bx, -by, -bz], [ bx,  by, -bz], [-bx,  by, -bz], // front
-    [-bx, -by,  bz], [ bx, -by,  bz], [ bx,  by,  bz], [-bx,  by,  bz], // back
+    [-bx, -by, -bz], [ bx, -by, -bz], [ bx,  by, -bz], [-bx,  by, -bz],
+    [-bx, -by,  bz], [ bx, -by,  bz], [ bx,  by,  bz], [-bx,  by,  bz],
   ];
   const busEdges = [
-    [0, 1], [1, 2], [2, 3], [3, 0],   // front face
-    [4, 5], [5, 6], [6, 7], [7, 4],   // back face
-    [0, 4], [1, 5], [2, 6], [3, 7],   // connectors
+    [0, 1], [1, 2], [2, 3], [3, 0],
+    [4, 5], [5, 6], [6, 7], [7, 4],
+    [0, 4], [1, 5], [2, 6], [3, 7],
   ];
 
   // Deployed panel L (8–11) and R (12–15), thin quads off ±X near back.
@@ -496,7 +440,6 @@ function buildCubesat() {
   };
 }
 
-// Pre-build static shapes at module load (fragment is per-target)
 const SHAPES = {
   rocketBody:    buildRocketBody(),
   defunctSat:    buildDefunctSat(),
@@ -504,10 +447,6 @@ const SHAPES = {
   adrSatellite:  buildADRSatellite(),
   cubesat:       buildCubesat(),
 };
-
-// ============================================================================
-// 3-D GEOMETRY GENERATION (ST-2.3) — wireframe-derived BufferGeometries
-// ============================================================================
 
 /** @type {Map<string, THREE.BufferGeometry>} Cached geometries keyed by type (or fragment variant) */
 const _geoCache = new Map();
@@ -526,12 +465,7 @@ const _geoHalfExtentCache = new Map();
  *  on the origin (cubesat y is −0.322/+0.476), and symmetrising would inflate the wrap. */
 const _geoBBoxCache = new Map();
 
-/**
- * Merge an array of THREE.BufferGeometry into a single BufferGeometry.
- * Supports indexed and non-indexed geometries (position + normal only).
- * @param {THREE.BufferGeometry[]} geos
- * @returns {THREE.BufferGeometry}
- */
+/** Merge BufferGeometries (position, normal, uv; indexed or not) into one. */
 function _mergeGeometries(geos) {
   const positions = [];
   const normals = [];
@@ -548,7 +482,6 @@ function _mergeGeometries(geos) {
     for (let i = 0; i < pos.count; i++) {
       positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
       if (norm) normals.push(norm.getX(i), norm.getY(i), norm.getZ(i));
-      // ST-6.2: Merge UVs for texture atlas support
       if (uv) {
         uvs.push(uv.getX(i), uv.getY(i));
       } else {
@@ -561,7 +494,6 @@ function _mergeGeometries(geos) {
         indices.push(idx.array[i] + vertexOffset);
       }
     } else {
-      // Non-indexed: generate sequential indices
       for (let i = 0; i < pos.count; i++) {
         indices.push(vertexOffset + i);
       }
@@ -583,41 +515,33 @@ function _mergeGeometries(geos) {
 }
 
 /**
- * Build a THREE.BufferGeometry for a rocket body type.
- *
- * Improved: a spent upper stage — tapered nose, ribbed cylindrical tank, a
- * staging seam ring, and a deep open engine bell with an internal throat cone
- * so the nozzle reads as hollow and machined when you fly in close.
- * @returns {THREE.BufferGeometry}
+ * Spent upper stage: tapered nose, ribbed tank, staging seam ring, deep open engine bell with an internal throat cone
+ * (reads hollow up close).
  */
 function _buildRocketBodyGeo() {
   const parts = [];
 
-  // Outer hull profile (Lathe): nosecone → tank → flared nozzle lip
   const profile = [
     new THREE.Vector2(0.001, 0.52),
-    new THREE.Vector2(0.16,  0.42),   // nose shoulder
-    new THREE.Vector2(0.30,  0.30),   // nosecone base
-    new THREE.Vector2(0.30, -0.22),   // tank wall
-    new THREE.Vector2(0.27, -0.30),   // tank-to-skirt step
-    new THREE.Vector2(0.30, -0.40),   // engine skirt
-    new THREE.Vector2(0.44, -0.52),   // nozzle bell lip (flared, open)
+    new THREE.Vector2(0.16,  0.42),
+    new THREE.Vector2(0.30,  0.30),
+    new THREE.Vector2(0.30, -0.22),
+    new THREE.Vector2(0.27, -0.30),
+    new THREE.Vector2(0.30, -0.40),
+    new THREE.Vector2(0.44, -0.52),
   ];
   const hull = new THREE.LatheGeometry(profile, 16);
   parts.push(hull);
 
-  // Internal nozzle throat cone (so the open bell looks hollow up close)
   const throat = new THREE.ConeGeometry(0.10, 0.18, 14, 1, true);
   throat.translate(0, -0.40, 0);
   parts.push(throat);
 
-  // Staging seam ring around the midsection
   const seam = new THREE.TorusGeometry(0.305, 0.018, 6, 18);
   seam.rotateX(Math.PI / 2);
   seam.translate(0, -0.06, 0);
   parts.push(seam);
 
-  // Two raised structural bands (ribs) on the tank
   for (const yb of [0.12, -0.16]) {
     const band = new THREE.TorusGeometry(0.305, 0.010, 5, 16);
     band.rotateX(Math.PI / 2);
@@ -626,36 +550,26 @@ function _buildRocketBodyGeo() {
   }
 
   const geo = _mergeGeometries(parts);
-  // Raw build size (was scaled x1.5 to a "scene-size convention"). getGeometry sizes every mesh the same way:
-  // longest bounding-box side = 1 mesh unit (lane true-size, 2026-10-18).
+  // Raw build size; getGeometry normalises every mesh: longest bounding-box side = 1 mesh unit.
   return geo;
 }
 
 /**
- * Build a THREE.BufferGeometry for a defunct satellite type.
- *
- * Improved: a recognisable spacecraft silhouette — a multi-panel box bus with
- * a beveled top, two segmented solar-array wings on booms, a parabolic dish on
- * a gimbal, an antenna whip and a thruster nozzle. Reads clearly as a derelict
- * satellite from a distance and rewards a close inspection with real structure.
- * @returns {THREE.BufferGeometry}
+ * Derelict satellite: multi-panel box bus with a beveled top, two segmented solar wings on booms, gimbaled dish,
+ * whip antenna, thruster nozzle.
  */
 function _buildDefunctSatGeo() {
   const parts = [];
 
-  // --- Main bus (slightly tapered box via Lathe-free stacked boxes) ---
   const body = new THREE.BoxGeometry(0.40, 0.34, 0.32);
   parts.push(body);
-  // Beveled equipment deck on top
   const deck = new THREE.BoxGeometry(0.30, 0.06, 0.24);
   deck.translate(0, 0.20, 0);
   parts.push(deck);
-  // MLI blanket lip / lower adapter ring
   const adapter = new THREE.CylinderGeometry(0.10, 0.13, 0.08, 8);
   adapter.translate(0, -0.21, 0);
   parts.push(adapter);
 
-  // --- Solar wings: boom + 3 segmented panel cells each side ---
   for (const side of [-1, 1]) {
     const boom = new THREE.CylinderGeometry(0.012, 0.012, 0.22, 6);
     boom.rotateZ(Math.PI / 2);
@@ -669,11 +583,9 @@ function _buildDefunctSatGeo() {
     }
   }
 
-  // --- Parabolic-ish high-gain dish on a short gimbal ---
   const gimbal = new THREE.CylinderGeometry(0.02, 0.02, 0.10, 6);
   gimbal.translate(0.10, 0.27, 0.10);
   parts.push(gimbal);
-  // Open dish (cone, thin) facing up-and-out
   const dish = new THREE.ConeGeometry(0.13, 0.10, 14, 1, true);
   dish.rotateX(Math.PI);          // open face up
   dish.translate(0.10, 0.36, 0.10);
@@ -682,37 +594,28 @@ function _buildDefunctSatGeo() {
   feed.translate(0.10, 0.30, 0.10);
   parts.push(feed);
 
-  // --- Antenna whip ---
   const whip = new THREE.CylinderGeometry(0.006, 0.006, 0.22, 4);
   whip.translate(-0.13, 0.30, -0.10);
   parts.push(whip);
 
-  // --- Thruster nozzle on the underside ---
   const nozzle = new THREE.ConeGeometry(0.05, 0.08, 8, 1, true);
   nozzle.translate(-0.10, -0.24, -0.06);
   parts.push(nozzle);
 
   const geo = _mergeGeometries(parts);
-  // Raw build size (was scaled x1.35). getGeometry sizes every mesh: longest bounding-box side = 1 mesh unit.
   return geo;
 }
 
 /**
- * Build a THREE.BufferGeometry for mission debris type.
- *
- * Improved: a discarded payload-adapter / equipment module — an octagonal
- * canister with a recessed top hatch, a clamp-band ring, mounting lugs around
- * the rim and a stub connector. More machined and man-made than a bare prism.
- * @returns {THREE.BufferGeometry}
+ * Discarded payload-adapter module: octagonal canister, recessed top hatch, clamp-band ring, mounting lugs,
+ * stub connector.
  */
 function _buildMissionDebrisGeo() {
   const parts = [];
 
-  // Main octagonal canister
   const can = new THREE.CylinderGeometry(0.28, 0.30, 0.42, 8);
   parts.push(can);
 
-  // Recessed top hatch (smaller disc) + raised rim
   const hatch = new THREE.CylinderGeometry(0.18, 0.18, 0.05, 8);
   hatch.translate(0, 0.225, 0);
   parts.push(hatch);
@@ -721,13 +624,11 @@ function _buildMissionDebrisGeo() {
   rim.translate(0, 0.21, 0);
   parts.push(rim);
 
-  // Clamp-band ring around the waist
   const band = new THREE.TorusGeometry(0.31, 0.035, 6, 8);
   band.rotateX(Math.PI / 2);
   band.translate(0, -0.04, 0);
   parts.push(band);
 
-  // Four mounting lugs around the lower rim
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + Math.PI / 8;
     const lug = new THREE.BoxGeometry(0.06, 0.08, 0.04);
@@ -736,80 +637,58 @@ function _buildMissionDebrisGeo() {
     parts.push(lug);
   }
 
-  // Stub connector poking out the side
   const stub = new THREE.CylinderGeometry(0.04, 0.04, 0.12, 6);
   stub.rotateZ(Math.PI / 2);
   stub.translate(0.32, 0.05, 0);
   parts.push(stub);
 
   const geo = _mergeGeometries(parts);
-  // Raw build size (was scaled x1.85). getGeometry sizes every mesh: longest bounding-box side = 1 mesh unit.
   return geo;
 }
 
 /**
- * Build a THREE.BufferGeometry for a cubesat (small whole microsat).
- *
- * A panelled rectangular bus (slightly long along Z, ~3U feel), body-mounted
- * solar-cell faces, a small deployed panel wing on each side, a stub antenna
- * whip and a separation-ring adapter underneath — reads as a tiny INTACT
- * satellite (distinct from an irregular fragment chunk), the M1 graduation
- * catch. Normalised to the scene-size convention used by the other types.
- * @returns {THREE.BufferGeometry}
+ * Cubesat (small intact microsat): panelled bus (~3U, long along Z), body-mounted solar faces, a deployed panel
+ * wing each side, whip antenna, separation-ring adapter. Reads as INTACT, distinct from an irregular fragment.
  */
 function _buildCubesatGeo() {
   const parts = [];
 
-  // Main bus — a short stacked box, slightly long along Z.
   const body = new THREE.BoxGeometry(0.34, 0.34, 0.46);
   parts.push(body);
 
-  // Body-mounted solar-cell panels (thin slabs proud of the ±X faces).
   for (const side of [-1, 1]) {
     const cell = new THREE.BoxGeometry(0.015, 0.30, 0.42);
     cell.translate(side * 0.18, 0, 0);
     parts.push(cell);
   }
 
-  // A small deployed panel wing on each side (the "it's a satellite" cue).
   for (const side of [-1, 1]) {
     const wing = new THREE.BoxGeometry(0.26, 0.22, 0.012);
     wing.translate(side * 0.33, 0, 0.24);
     parts.push(wing);
   }
 
-  // Stub antenna whip off the top.
   const whip = new THREE.CylinderGeometry(0.006, 0.006, 0.20, 4);
   whip.translate(0.08, 0.24, -0.12);
   parts.push(whip);
 
-  // Separation-ring adapter underneath.
   const adapter = new THREE.CylinderGeometry(0.09, 0.11, 0.06, 8);
   adapter.translate(0, -0.20, 0);
   parts.push(adapter);
 
   const geo = _mergeGeometries(parts);
-  // Raw build size (was scaled x1.4). getGeometry sizes every mesh: longest bounding-box side = 1 mesh unit.
   return geo;
 }
 
-/**
- * Deterministic hash → [0,1) for a given integer seed.
- * @param {number} n
- * @returns {number}
- */
+/** Deterministic hash → [0,1) for an integer seed. */
 function _hash01(n) {
   const h = Math.sin(n * 127.1 + 311.7) * 43758.5453;
   return h - Math.floor(h);
 }
 
 /**
- * Build a flat-shaded BufferGeometry from a triangle list.
- * Each triangle gets its own 3 vertices so faces read as sharp facets
- * (no smoothed/averaged normals across edges).
- * @param {number[][]} verts  - array of [x,y,z]
- * @param {number[][]} faces  - array of [i,j,k] index triples
- * @returns {THREE.BufferGeometry}
+ * Flat-shaded BufferGeometry from a triangle list: each triangle gets its own 3 vertices (sharp facets, no averaged
+ * normals). verts: [x,y,z][], faces: [i,j,k][].
  */
 function _buildFlatGeometry(verts, faces) {
   const positions = [];
@@ -820,25 +699,19 @@ function _buildFlatGeometry(verts, faces) {
     // Planar-ish UV from spherical coords so the type atlas reads as surface grime
     for (const v of [va, vb, vc]) {
       const u = 0.5 + Math.atan2(v[2], v[0]) / (2 * Math.PI);
-      const w = 0.5 + Math.asin(Math.max(-1, Math.min(1, v[1] /
-        (Math.hypot(v[0], v[1], v[2]) || 1)))) / Math.PI;
+      const w = 0.5 + Math.asin(clamp(v[1] /
+        (Math.hypot(v[0], v[1], v[2]) || 1), -1, 1)) / Math.PI;
       uvs.push(u, w);
     }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geo.computeVertexNormals(); // per-triangle (vertices not shared) → flat facets
+  geo.computeVertexNormals();
   return geo;
 }
 
-/**
- * Build the convex hull (triangle faces) of a small deterministic point cloud.
- * Incremental hull: robust enough for the ~14-point clouds we feed it and
- * avoids any addon/CDN dependency. Returns face index triples into `points`.
- * @param {number[][]} points
- * @returns {number[][]}
- */
+/** Convex hull (triangle faces, index triples into `points`) of a small point cloud; no addon/CDN dependency. */
 function _convexHullFaces(points) {
   const n = points.length;
   const faces = [];
@@ -858,7 +731,7 @@ function _convexHullFaces(points) {
       for (let k = j + 1; k < n; k++) {
         const normal = cross(sub(points[j], points[i]), sub(points[k], points[i]));
         const nlen = Math.hypot(normal[0], normal[1], normal[2]);
-        if (nlen < EPS) continue; // degenerate / collinear
+        if (nlen < EPS) continue;
         let pos = 0, neg = 0;
         for (let m = 0; m < n; m++) {
           if (m === i || m === j || m === k) continue;
@@ -867,7 +740,7 @@ function _convexHullFaces(points) {
           else if (d < -EPS) neg++;
           if (pos && neg) break;
         }
-        if (pos && neg) continue; // not a hull face
+        if (pos && neg) continue;
         // Orient outward: normal should point away from centroid (origin-ish)
         const centerDot = dot(normal, points[i]);
         if (centerDot < 0) faces.push([i, k, j]);
@@ -879,17 +752,9 @@ function _convexHullFaces(points) {
 }
 
 /**
- * Build a THREE.BufferGeometry for a fragment type with per-ID variation.
- *
- * Improved: instead of a smooth subdivided "ball of triangles", each fragment
- * is a sharp, irregular faceted chunk — the convex hull of a deterministic
- * point cloud distorted along its principal axes. This reads as torn rocket
- * shrapnel / cracked panel shards rather than a lumpy sphere. Flat-shaded so
- * every facet catches the sun differently and gives strong specular pops as it
- * tumbles — encouraging the player to move in for a close look.
- *
- * @param {number} variantIndex - Variant index (0..DEBRIS_FRAGMENT_VARIANTS-1)
- * @returns {THREE.BufferGeometry}
+ * Fragment: sharp irregular faceted chunk, the convex hull of a deterministic point cloud distorted along its principal
+ * axes; flat-shaded so facets catch the sun as it tumbles.
+ * @param {number} variantIndex - 0..DEBRIS_FRAGMENT_VARIANTS-1
  */
 function _buildFragmentGeo(variantIndex) {
   const seed = ((variantIndex + 1) >>> 0) * 2654435761 >>> 0;
@@ -898,26 +763,21 @@ function _buildFragmentGeo(variantIndex) {
   const sx = 0.55 + _hash01(seed + 11) * 0.95;       // 0.55 .. 1.50
   const sy = 0.45 + _hash01(seed + 23) * 0.70;       // 0.45 .. 1.15
   const sz = 0.55 + _hash01(seed + 37) * 0.95;
-  // A few variants are flat plate-like shards (panel fragments). The plate
-  // decision is owned by DebrisWireframe.isPlateVariant (single source of
-  // truth) so the welcome-field candidate selector and this geometry build
-  // can never drift. variantIndex is already reduced (% N) by the only caller,
-  // and isPlateVariant reduces again idempotently, so the seed matches exactly.
+  // Some variants are flat plate-like shards (panel fragments). DebrisWireframe.isPlateVariant is the single source of
+  // truth (the welcome-field selector shares it); variantIndex is already reduced (% N) and isPlateVariant reduces
+  // idempotently, so the seed matches.
   const plate = DebrisWireframe.isPlateVariant(variantIndex);
   const flat = plate ? 0.32 + _hash01(seed + 43) * 0.18 : 1.0;
 
-  // Scatter a small irregular point cloud on a distorted sphere
   const NPTS = 14;
   const pts = [];
   for (let i = 0; i < NPTS; i++) {
-    // Fibonacci-ish sphere direction, jittered deterministically
     const t = (i + 0.5) / NPTS;
     const phi = Math.acos(1 - 2 * t);
     const theta = Math.PI * (1 + Math.sqrt(5)) * i + _hash01(seed + i * 7) * 1.3;
     let dx = Math.sin(phi) * Math.cos(theta);
     let dy = Math.cos(phi);
     let dz = Math.sin(phi) * Math.sin(theta);
-    // Radius jitter so the hull has uneven, snapped-off vertices
     const r = 0.62 + _hash01(seed + i * 53 + 5) * 0.42;
     pts.push([dx * sx * r, dy * sy * flat * r, dz * sz * r]);
   }
@@ -928,18 +788,13 @@ function _buildFragmentGeo(variantIndex) {
     return new THREE.IcosahedronGeometry(0.9, 1);
   }
 
-  // Raw hull, any size: `DebrisWireframe.getGeometry` is the one place that sizes it (longest bounding-box side =
-  // 1 mesh unit). It used to normalise the bounding RADIUS to 0.95 here and ×1.3 there, which drew fragments
-  // 2.4 – 2.9 × their listed size; a second normaliser here would only fight the real one.
+  // Raw hull: `DebrisWireframe.getGeometry` is the one place that sizes it; a second normaliser here would fight it.
   return _buildFlatGeometry(pts, faces);
 }
 
 /**
- * Scale a freshly built geometry IN PLACE so its bounding box's longest side is exactly 1 mesh unit (uniform: the
- * shape is unchanged). The one size rule of `DebrisWireframe.getGeometry`. Call it only on a geometry nobody else
- * holds yet (see the note there).
- * @param {THREE.BufferGeometry} geo
- * @returns {THREE.BufferGeometry} the same geometry
+ * Scale a freshly built geometry IN PLACE (uniformly) so its bounding box's longest side is exactly 1 mesh unit: the
+ * one size rule of `DebrisWireframe.getGeometry`. Call it only on a geometry nobody else holds yet.
  */
 function _normaliseLongestSideToOne(geo) {
   geo.computeBoundingBox();
@@ -950,8 +805,7 @@ function _normaliseLongestSideToOne(geo) {
 }
 
 /**
- * Get wireframe shape data for a debris type (pure data, no THREE dependency).
- * Useful for testing and for the Canvas2D wireframe panel.
+ * Wireframe shape data for a debris type (pure data, no THREE dependency).
  * @param {string} type - 'rocketBody' | 'defunctSat' | 'missionDebris' | 'fragment'
  * @param {number} [id=0] - Debris ID (used for fragment variation)
  * @returns {{ vertices: number[][], zones: Array<{ name: string, edges: number[][], massPercent: number }> }}
@@ -961,29 +815,15 @@ export function getWireframeData(type, id = 0) {
   return SHAPES[type] || SHAPES.missionDebris;
 }
 
-// ============================================================================
-// ZONE RISK ASSESSMENT
-// ============================================================================
-
-/**
- * Compute effective brittleness with material modifiers applied.
- * @param {object} target - debris target
- * @returns {number} clamped [0, 1]
- */
+/** Brittleness with material modifiers applied, clamped to [0, 1]. */
 function effectiveBrittleness(target) {
   let b = target.brittleness || 0;
   if (target.material === 'composite') b += 0.1;
   if (target.material === 'titanium')  b -= 0.1;
-  return Math.max(0, Math.min(1, b));
+  return clamp01(b);
 }
 
-/**
- * Determine zone risk level and color based on zone type, target brittleness
- * and material.
- * @param {string} zoneName
- * @param {object} target
- * @returns {{ risk: string, color: string }}
- */
+/** Zone risk level and colour from zone type, effective brittleness and material. */
 function assessZone(zoneName, target) {
   const b = effectiveBrittleness(target);
   const nameLower = zoneName.toLowerCase();
@@ -993,97 +833,61 @@ function assessZone(zoneName, target) {
     return { risk: 'HIGH', color: ZONE_COLORS.RED };
   }
 
-  // Solar panels
   if (nameLower.includes('solar panel')) {
     if (b > 0.7) return { risk: 'HIGH', color: ZONE_COLORS.RED };
     if (b > 0.3) return { risk: 'MED',  color: ZONE_COLORS.YELLOW };
     return { risk: 'LOW', color: ZONE_COLORS.GREEN };
   }
 
-  // Fragments
   if (target.type === 'fragment') {
     if (b > 0.5) return { risk: 'MED',  color: ZONE_COLORS.YELLOW };
     return { risk: 'LOW', color: ZONE_COLORS.GREEN };
   }
 
-  // Main body / bus / general structure
   if (b >= 0.7) return { risk: 'HIGH', color: ZONE_COLORS.RED };
   if (b >= 0.4) return { risk: 'MED',  color: ZONE_COLORS.YELLOW };
   return { risk: 'LOW', color: ZONE_COLORS.GREEN };
 }
 
-// ============================================================================
-// APPROACH RECOMMENDATION TEXT
-// ============================================================================
-
-/**
- * Generate approach recommendation string for a zone + target combination.
- * @param {string} zoneName
- * @param {object} target
- * @returns {string}
- */
 function getRecommendation(zoneName, target) {
-  const tumbleDeg = (target.tumbleRate || 0) * DEG;
+  const tumbleDeg = (target.tumbleRate || 0) * RAD2DEG;
   const nameLower = zoneName.toLowerCase();
 
   // Tumble-rate warnings take priority
   if (tumbleDeg > 60) return 'WARN HIGH TUMBLE \u2014 Manual pilot recommended';
   if (tumbleDeg > 20) return '\u25D0 Moderate tumble \u2014 Time net deployment';
 
-  // Zone-specific recommendations
   if (nameLower.includes('engine'))      return 'WARN Avoid engine \u2014 approach from opposite end';
   if (nameLower.includes('solar panel')) return '\u25B3 Fragile \u2014 net may cause fragmentation';
   if (target.type === 'fragment')        return '\u2713 Small target \u2014 Small daughter auto-capture viable';
 
-  // Fall back to risk-based
   const { risk } = assessZone(zoneName, target);
   if (risk === 'LOW')  return '\u2713 Safe for auto-capture';
   if (risk === 'MED')  return '\u25D0 Caution \u2014 moderate structural risk';
   return 'WARN Hazardous zone \u2014 avoid if possible';
 }
 
-// ============================================================================
-// REUSABLE ROTATION MATH — single object, zero per-frame allocations
-// ============================================================================
-
-/** Pre-allocated 3-element array for transform output */
+// Reusable rotation math: zero per-frame allocations (output goes to module-level `_rot`).
 const _rot = [0, 0, 0];
 const _cosTilt = Math.cos(TILT_X);
 const _sinTilt = Math.sin(TILT_X);
 
-/**
- * Apply Y-axis rotation then fixed X-axis tilt in-place.
- * Result is written to module-level `_rot` — no allocation.
- * @param {number} x
- * @param {number} y
- * @param {number} z
- * @param {number} cosY - precomputed cos(angle)
- * @param {number} sinY - precomputed sin(angle)
- */
+/** Y-axis rotation by (cosY, sinY) then the fixed X-axis tilt, written to module-level `_rot`. */
 function rotateAndTilt(x, y, z, cosY, sinY) {
-  // Y-axis rotation
   const rx = x * cosY + z * sinY;
   const ry = y;
   const rz = -x * sinY + z * cosY;
 
-  // X-axis tilt (fixed 15°)
   _rot[0] = rx;
   _rot[1] = ry * _cosTilt - rz * _sinTilt;
   _rot[2] = ry * _sinTilt + rz * _cosTilt;
 }
 
-// ============================================================================
-// DEBRIS WIREFRAME CLASS
-// ============================================================================
-
 export class DebrisWireframe {
   /**
-   * Return a THREE.BufferGeometry suitable for instanced-mesh use.
-   * Geometries are derived from the wireframe silhouettes and cached per type.
-   * For fragments, `id % DEBRIS_FRAGMENT_VARIANTS` selects a variant.
-   *
+   * BufferGeometry for instanced-mesh use, cached per type; for fragments `id % DEBRIS_FRAGMENT_VARIANTS` picks a variant.
    * @param {string} type - 'rocketBody' | 'defunctSat' | 'missionDebris' | 'fragment'
-   * @param {number} [id=0] - Debris ID (only used for fragment variant selection)
+   * @param {number} [id=0]
    * @returns {THREE.BufferGeometry}
    */
   static getGeometry(type, id = 0) {
@@ -1112,19 +916,14 @@ export class DebrisWireframe {
         break;
     }
 
-    // ONE size rule (lane true-size, Decision 1): the freshly built mesh is scaled uniformly so its bounding box's
-    // LONGEST side is exactly 1.0 mesh unit. DebrisField draws an instance at scale `sizeMeter × 1e-5`, so the drawn
-    // longest side is then `sizeMeter` metres: a piece listed as 0.30 m is drawn 0.30 m. This replaces the per-type
-    // legacy scales that used to sit in each builder (rocket ×1.5, defunct ×1.35, mission ×1.85, cubesat ×1.4, fragment
-    // radius 0.95 × 1.3: they drew the meshes 1.5 – 3.6 × bigger than their label; the builders now return raw size). It runs on the NEW geometry, BEFORE any cache below is filled
-    // and before the geometry is handed out: ArmUnit keeps per-geometry vertex caches (a WeakMap keyed by the
-    // BufferGeometry), so a geometry that is cached or handed out must never be rescaled afterwards. The origin is
-    // not moved (no re-centring): the per-type origin offset stays what the builder made it.
+    // ONE size rule: scale the new mesh uniformly so its bounding box's LONGEST side is exactly 1.0 mesh unit.
+    // DebrisField draws an instance at scale `sizeMeter × 1e-5`, so the drawn longest side is `sizeMeter` metres.
+    // Runs on the NEW geometry, BEFORE any cache below is filled and before it is handed out: ArmUnit keeps
+    // per-geometry vertex caches (a WeakMap keyed by the BufferGeometry), so a cached or handed-out geometry must
+    // never be rescaled. The origin is not moved (no re-centring).
     _normaliseLongestSideToOne(geo);
 
-    // Cache the local bounding radius so flag decals can be mounted exactly on
-    // the surface. Keyed by cacheKey (includes the fragment variant) so each
-    // variant resolves its own radius even if variant sizes ever diverge.
+    // Local bounding radius per cacheKey (includes the fragment variant), for mounting flag decals on the surface.
     geo.computeBoundingSphere();
     const br = geo.boundingSphere ? geo.boundingSphere.radius : 1;
     _geoRadiusCache.set(cacheKey, br);
@@ -1135,10 +934,8 @@ export class DebrisWireframe {
     if (pos) for (let i = 0; i < pos.count; i++) reach = Math.max(reach, Math.hypot(pos.getX(i), pos.getY(i), pos.getZ(i)));
     _geoOriginRadiusCache.set(cacheKey, reach || br);
 
-    // Cache bounding-box half-extents too. The bounding *sphere* is dominated by
-    // far-reaching parts (e.g. solar wings), so using it to place a flag decal
-    // along an arbitrary direction would float the flag in empty space. The box
-    // half-extents let us land the decal on the actual hull face per direction.
+    // Bounding-box half-extents too: the bounding *sphere* is dominated by far-reaching parts (solar wings) and
+    // would float a flag decal in empty space; the box lands it on the hull face per direction.
     geo.computeBoundingBox();
     const bb = geo.boundingBox;
     _geoHalfExtentCache.set(cacheKey, bb
@@ -1159,10 +956,7 @@ export class DebrisWireframe {
   }
 
   /**
-   * Local-space bounding radius for a debris geometry (cached after first
-   * getGeometry call). Used to place flag decals on the surface.
-   * @param {string} type
-   * @param {number} [id=0] - Debris ID (selects the fragment variant)
+   * Local-space bounding radius (cached after the first getGeometry call), for placing flag decals on the surface.
    * @returns {number}
    */
   static getBoundingRadius(type, id = 0) {
@@ -1175,8 +969,6 @@ export class DebrisWireframe {
    * Farthest vertex of the mesh from its origin (the instance origin the catch is pinned and bagged at), in mesh
    * units: multiply by the render scale for the drawn reach. >= `getBoundingRadius` only when the bounding sphere
    * is centred off the origin. Primes the cache itself (no uncached-returns-1 trap).
-   * @param {string} type
-   * @param {number} [id=0]
    * @returns {number}
    */
   static getOriginRadius(type, id = 0) {
@@ -1187,37 +979,27 @@ export class DebrisWireframe {
   }
 
   /**
-   * Instance scale (scene units) that renders this mesh at a given RADIUS in
-   * metres: `radiusM × 1e-5 / br` (rendered radius = scale × br, so the
-   * bounding radius must be divided OUT — whale-in-cone follow-up item 8:
-   * `MOTHER_CATCH_MIN_RENDER_M` was stored as a raw scale, making the real
-   * floor `minM × br` metres — mesh-dependent, 1.52 m for a cubesat instead
-   * of the documented 2.0 m). Primes the geometry cache first, so the
-   * `getBoundingRadius` uncached-returns-1 trap cannot silently keep the old
-   * behaviour. A missing/unknown mesh falls back to br = 1, which is exactly
-   * the pre-fix behaviour for legacy objects.
+   * Instance scale (scene units) that renders this mesh at a given RADIUS in metres: `radiusM × 1e-5 / br`. Rendered
+   * radius = scale × br, so the bounding radius must be divided OUT (else the real floor of
+   * `MOTHER_CATCH_MIN_RENDER_M` would be `minM × br` metres, mesh-dependent). Primes the geometry cache first (the
+   * `getBoundingRadius` uncached-returns-1 trap). A missing/unknown mesh falls back to br = 1.
    * @param {number} radiusM - desired rendered radius in metres
    * @param {string} [type] - debris type (mesh key)
-   * @param {number} [id=0] - debris ID (selects the fragment variant)
    * @returns {number} instance scale in scene units
    */
   static scaleForRenderRadiusM(radiusM, type, id = 0) {
     let br = 1;
     if (type != null) {
-      this.getGeometry(type, id);   // prime the br cache (uncached ⇒ 1 trap)
+      this.getGeometry(type, id);
       br = this.getBoundingRadius(type, id) || 1;
     }
     return (radiusM * 0.00001) / br;
   }
 
   /**
-   * Local-space bounding-box centre + half-extents, keyed like getBoundingRadius
-   * (balloon→fabric box floor). Calls getGeometry internally, so the cache is
-   * always populated (no uncached trap — unlike getBoundingRadius, which
-   * returns 1 for an uncached key). The returned object is SHARED (cached) —
-   * do not mutate. Scale it by the instance's render scale before use.
-   * @param {string} type
-   * @param {number} [id=0] - Debris ID (selects the fragment variant)
+   * Local-space bounding-box centre + half-extents, keyed like getBoundingRadius (balloon→fabric box floor). Primes
+   * the cache via getGeometry (no uncached trap). The returned object is SHARED (cached): do not mutate; scale it by
+   * the instance's render scale before use.
    * @returns {{cx:number,cy:number,cz:number,hx:number,hy:number,hz:number}}
    */
   static getBoundingBoxExtents(type, id = 0) {
@@ -1228,13 +1010,9 @@ export class DebrisWireframe {
   }
 
   /**
-   * Whether a fragment variant index renders as a flat plate-like shard
-   * (a panel/foil fragment) rather than a blocky chunk. This is the SINGLE
-   * SOURCE OF TRUTH for the plate decision: `_buildFragmentGeo` calls it to
-   * decide whether to flatten the shard, and the welcome-field candidate
-   * selector calls it to deterministically target flat panel-shard variants —
-   * so the rendered shape and the selector can never drift. Pure (no THREE /
-   * geometry build).
+   * Whether a fragment variant renders as a flat plate-like shard (panel/foil fragment). SINGLE SOURCE OF TRUTH:
+   * `_buildFragmentGeo` and the welcome-field candidate selector both call it, so shape and selector never drift.
+   * Pure (no THREE / geometry build).
    * @param {number} variantId - fragment variant index (id % DEBRIS_FRAGMENT_VARIANTS)
    * @returns {boolean}
    */
@@ -1245,14 +1023,11 @@ export class DebrisWireframe {
   }
 
   /**
-   * Distance from the local origin to the bounding-box surface along a
-   * (local-space) unit direction. Used to mount flag decals flush on the hull
-   * face the decal points at, rather than at the (often much larger) bounding
-   * sphere radius. O(1); falls back to the bounding radius if uncached.
-   * @param {string} type
-   * @param {number} id
+   * Distance from the local origin to the bounding-box surface along a local-space unit direction (flag decals sit
+   * flush on the hull face, not at the larger bounding-sphere radius). O(1); falls back to the bounding radius if
+   * uncached.
    * @param {number} dx @param {number} dy @param {number} dz - unit direction
-   * @returns {number} distance to the box surface along the direction
+   * @returns {number} distance along the direction
    */
   static getSurfaceDistance(type, id, dx, dy, dz) {
     const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
@@ -1270,18 +1045,15 @@ export class DebrisWireframe {
   }
 
   /**
-   * Creates canvas overlay, initialises internal state.
-   * When no target is selected, shows the player's ADR satellite wireframe.
-   * @param {HTMLElement} [container] - Optional DOM container; if provided, canvas
-   *   is appended to it with relative positioning. Otherwise uses fixed positioning.
+   * Creates the canvas overlay; with no target selected it shows the player's ADR satellite wireframe.
+   * @param {HTMLElement} [container] - appended with relative positioning; otherwise fixed positioning.
    */
   constructor(container) {
     /** @type {HTMLCanvasElement} */
     this._canvas = document.createElement('canvas');
 
-    // HiDPI / Retina scaling — buffer at native resolution, CSS at logical size
-    // u9-big-text: the pane is drawn HUD_SCALE x bigger (CSS scale on its column), so the buffer is HUD_SCALE x denser
-    // to stay as sharp as before (1 off a big screen: unchanged).
+    // HiDPI buffer at native resolution, CSS at logical size. The pane is drawn HUD_SCALE x bigger (CSS scale on its
+    // column), so the buffer is HUD_SCALE x denser to stay sharp.
     const dpr = (window.devicePixelRatio || 1) * currentHudScale();
     /** @type {number} Device pixel ratio for HiDPI canvas scaling */
     this.dpr = dpr;
@@ -1295,7 +1067,6 @@ export class DebrisWireframe {
     this._minimized = false;
 
     if (container) {
-      // Container-relative positioning (integrated above target list)
       Object.assign(this._canvas.style, {
         width: `${PANEL_WIDTH}px`,
         height: `${PANEL_HEIGHT}px`,
@@ -1307,16 +1078,14 @@ export class DebrisWireframe {
       });
       container.appendChild(this._canvas);
 
-      // Minimized one-line summary (hotkey revamp 2026-06-14 — the 9 key).
-      // When minimized we hide the canvas and show this single line of the key
-      // capture-planning facts NOT in the target list: identity · size · mass ·
-      // tumble (with WARN when high) · material. Lives in the same flex container,
-      // so the right column collapses up around it.
+      // Minimized one-line summary (the 9 key): hides the canvas and shows identity · size · mass · tumble (WARN when
+      // high) · material, the capture-planning facts not in the target list. Same flex container, so the right column
+      // collapses around it.
       this._minLine = document.createElement('div');
       this._minLine.id = 'hud-debris-min-summary';
       Object.assign(this._minLine.style, {
         display: 'none',
-        font: '11px var(--font-mono)',   // Session L review: the DOM line rides the house token (the canvas fonts above stay literal by design)
+        font: '11px var(--font-mono)',   // the DOM line rides the house token (the canvas fonts above stay literal by design)
         color: 'rgba(0,255,136,0.8)',
         padding: '4px 6px',
         border: `1px solid ${BORDER_COLOR}`,
@@ -1331,13 +1100,12 @@ export class DebrisWireframe {
       // Keep a container ref so the 9 key can clear a density-ladder hide.
       this._container = container;
 
-      // u4-phone-fold D5: no visible [9] badge. The 9 key still shows / hides the pane (Help page, hover tip);
-      // the container stays position:relative for the pane's own absolutely placed children.
+      // No visible [9] badge; the 9 key still shows / hides the pane (Help page, hover tip). The container stays
+      // position:relative for the pane's own absolutely placed children.
       container.style.position = container.style.position || 'relative';
     } else {
-      // Legacy fixed positioning (fallback) — top-right below NavSphere so it
-      // never collides with bottom-anchored panels (DaughterWireframe bottom-
-      // left, warnings strip bottom-center, comms panel).
+      // Fallback fixed positioning: top-right below NavSphere, clear of bottom-anchored panels (DaughterWireframe,
+      // warnings strip, comms panel).
       Object.assign(this._canvas.style, {
         position: 'fixed',
         top: `${PANEL_MARGIN_TOP}px`,
@@ -1356,19 +1124,16 @@ export class DebrisWireframe {
     /** @type {CanvasRenderingContext2D} */
     this._ctx = this._canvas.getContext('2d');
 
-    // Scale context so all drawing uses logical (CSS) pixels
     this._ctx.scale(dpr, dpr);
     this._ctx.imageSmoothingEnabled = true;
     this._ctx.imageSmoothingQuality = 'high';
 
-    // --- Cached background gradient (never changes) ---
     const grad = this._ctx.createRadialGradient(WIRE_CX, WIRE_CY, 0, WIRE_CX, WIRE_CY, PANEL_WIDTH * 0.55);
     grad.addColorStop(0, 'rgba(0, 20, 40, 0.9)');
     grad.addColorStop(1, BG_COLOR);
     /** @type {CanvasGradient} */
     this._bgGradient = grad;
 
-    // --- State ---
     /** @type {object|null} Current debris target */
     this._target = null;
     /** @type {object|null} Current wireframe shape definition */
@@ -1387,7 +1152,7 @@ export class DebrisWireframe {
     this._frameSkip = -1;
     /** @type {boolean} True when showing ADR satellite self-view */
     this._showingADR = false;
-    /** @type {boolean} u5 D1: the simple level (set by HUD.setSimple via isSimpleTargets) */
+    /** @type {boolean} The simple level (set by HUD.setSimple via isSimpleTargets) */
     this._simple = false;
     /** @type {boolean} True when in daughter-piloted expanded inspection mode */
     this._expandedMode = false;
@@ -1398,15 +1163,13 @@ export class DebrisWireframe {
     /** @type {boolean} Whether salvage scanner upgrade is active */
     this._hasSalvageScanner = false;
 
-    // --- Pre-allocated projection buffer (resized per target) ---
     /** @type {number[][]} Projected [sx, sy] for each vertex */
     this._projected = [];
 
-    // --- Cached zone assessments (refreshed in setTarget) ---
     /** @type {{ risk: string, color: string }[]} */
     this._zoneAssessments = [];
 
-    // ── Dossier reveal state (capture-feedback overhaul Phase 1.5) ──
+    // Dossier reveal state
     /** @type {number} ms timestamp when the silhouette draw-on began */
     this._traceStart = 0;
     /** @type {number|null} ms timestamp when Full Profile typewriter began */
@@ -1414,8 +1177,7 @@ export class DebrisWireframe {
     /** @type {number} rows already revealed (chime once per new row) */
     this._lastRowsShown = 0;
 
-    // Full Profile unlocked while this target is on screen → start the
-    // line-by-line typewriter reveal ("the chest opens").
+    // Full Profile unlocked while this target is on screen → line-by-line typewriter reveal.
     eventBus.on(Events.DEBRIS_PROFILED, ({ debrisId }) => {
       if (this._target && this._target.id === debrisId) {
         this._profileRevealStart = performance.now();
@@ -1423,7 +1185,6 @@ export class DebrisWireframe {
       }
     });
 
-    // Start with ADR satellite self-view if container-mounted
     if (this._hasContainer) {
       this._showADRSatellite();
     }
@@ -1434,7 +1195,6 @@ export class DebrisWireframe {
       if (!gameplay) this.setVisible(false);
     });
 
-    // Self-manage target via EventBus (Batch 3 decoupling)
     eventBus.on(Events.TARGET_SELECTED, ({ debris }) => {
       if (debris) this.setTarget(debris);
     });
@@ -1445,20 +1205,14 @@ export class DebrisWireframe {
       this.setTarget(null);
     });
     eventBus.on(Events.DEBRIS_REMOVED, () => {
-      // If our current target was removed, clear it
       if (this._target && !this._target.alive) {
         this.setTarget(null);
       }
     });
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
-
   /**
-   * Set the debris target to display, or `null` to show ADR satellite self-view
-   * (when container-mounted) or hide the panel (when floating).
+   * Set the target to display; `null` shows the ADR self-view (container-mounted) or hides the panel (floating).
    * Resets zone selection and assessment state.
    * @param {object|null} target - debris object from DebrisField
    */
@@ -1483,14 +1237,12 @@ export class DebrisWireframe {
 
       if (this._shape) {
         this._allocateProjectionBuffer(this._shape.vertices.length);
-        // Cache zone risk assessments (avoids per-frame object creation)
         this._zoneAssessments = this._shape.zones.map(
           (zone) => assessZone(zone.name, target)
         );
       }
       this.setVisible(true);
     } else if (this._hasContainer) {
-      // Container-mounted: show ADR satellite self-view instead of hiding
       this._showADRSatellite();
     } else {
       this._shape = null;
@@ -1498,27 +1250,19 @@ export class DebrisWireframe {
       this.setVisible(false);
     }
 
-    // Keep the minimized one-liner current if the pane is collapsed (9).
     if (this._minimized) this._renderMinLine();
   }
 
-  /**
-   * Set whether the salvage scanner upgrade is active.
-   * @param {boolean} active
-   */
   setSalvageScanner(active) {
     this._hasSalvageScanner = !!active;
   }
 
   /**
-   * Cycle the zone highlight forward (+1) or backward (-1).
-   * Tracks which zones have been visited for {@link hasAssessedTarget}.
-   * Works on both debris targets and ADR satellite self-view.
-   * @param {number} direction - +1 for next, -1 for previous
+   * Cycle the zone highlight (+1 next, -1 previous); tracks visited zones for {@link hasAssessedTarget}. Works on
+   * debris targets and the ADR self-view.
    */
   cycleZone(direction) {
     if (!this._shape) return;
-    // Allow zone cycling even when showing ADR (no target needed)
     if (!this._target && !this._showingADR) return;
     const count = this._shape.zones.length;
     if (count === 0) return;
@@ -1538,48 +1282,31 @@ export class DebrisWireframe {
     }
   }
 
-  /**
-   * Returns true if the player has cycled through all zones on the current target.
-   * Used by the scoring system for bonus multiplier.
-   * @returns {boolean}
-   */
+  /** True once the player has cycled through all zones on the current target (scoring bonus multiplier). */
   hasAssessedTarget() {
     return this._assessed;
   }
 
-  /**
-   * Per-frame update: advances rotation animation and redraws the panel.
-   * Should be called from the main game loop.
-   * @param {number} dt - frame delta in seconds
-   */
+  /** Per-frame update from the main loop: advances rotation and redraws. @param {number} dt - seconds */
   update(dt) {
     if (!this._visible || !this._shape) return;
-    // Need either a target OR ADR self-view OR expanded-mode placeholder
     if (!this._target && !this._showingADR && !this._expandedMode) return;
 
-    // Rotation: use debris tumble rate, or slow spin for ADR satellite
     if (this._showingADR) {
-      this._angle += 0.15 * dt; // slow gentle spin
+      this._angle += 0.15 * dt;
     } else {
-      // Same structure as DebrisField.js (tumbleRate × TIME_SCALE capped) but with a
-      // lower ceiling tuned for Canvas2D perceptual comfort.
+      // Same structure as DebrisField.js (tumbleRate × TIME_SCALE capped) with a lower ceiling tuned for Canvas2D comfort.
       const tumble = this._target.tumbleRate || 0;
-      const maxWireRad = Constants.WIREFRAME_MAX_TUMBLE_DEG_S * Math.PI / 180;
+      const maxWireRad = degToRad(Constants.WIREFRAME_MAX_TUMBLE_DEG_S);
       const rate = Math.max(MIN_TUMBLE_RATE, Math.min(tumble * TimeAuthority.BASE_SCALE, maxWireRad));
       this._angle += rate * dt;
     }
 
-    // FIX (Sprint 2 v2): Removed 30Hz frame throttle — was the root cause of
-    // perceived "jitter/vibration" on rotating wireframes. Canvas2D render at
-    // 60fps matches DOM compositor, eliminates stutter. Back-edge depth
-    // dimming (below in _render) addresses the Necker-cube oscillation.
+    // No frame throttle: a 30 Hz one caused perceived jitter; 60 fps matches the DOM compositor. Back-edge depth
+    // dimming (in _render) addresses the Necker-cube oscillation.
     this._render();
   }
 
-  /**
-   * Show or hide the panel.
-   * @param {boolean} visible
-   */
   setVisible(visible) {
     this._visible = visible;
     this._frameSkip = -1; // Reset throttle so next update draws immediately
@@ -1593,18 +1320,14 @@ export class DebrisWireframe {
   }
 
   /**
-   * Minimize-to-one-line toggle for the "Debris pane" key (9, hotkey revamp
-   * 2026-06-14) — mirrors the comms/target minimize. When minimized we hide the
-   * wireframe canvas and show a single line of the capture-planning facts the
-   * target list doesn't carry (identity · size · mass · tumble · material); the
-   * right column collapses up around the shorter line. Press again to restore.
+   * Minimize-to-one-line toggle for the Debris pane key (9), mirroring the comms/target minimize: hides the canvas and
+   * shows one line of capture-planning facts (identity · size · mass · tumble · material); press again to restore.
    * Falls back to a plain canvas hide when floating (no container / no min line).
    */
   toggleMinimized() {
-    // w7-panes review (2026-10-13): held back until the first scan (HUD's scan
-    // gate) — say when it comes, fold nothing.
+    // Held back until the first scan (HUD's scan gate): say when it comes, fold nothing.
     if (this._container && this._container.hasAttribute('data-scan-wait')) {
-      // h4-simple-first D7: after the scan in mission 1 (F1/F2) it waits for the player's analyse (Z).
+      // In mission 1, after the scan it waits for the player's analyse (Z).
       const analyse = typeof this._container.getAttribute === 'function' && this._container.getAttribute('data-scan-wait') === 'analyse';
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: analyse ? 'Target info opens when you analyse a target (Z)' : 'Target info appears after your first scan (S)',
@@ -1615,8 +1338,7 @@ export class DebrisWireframe {
     if (!this._hasContainer || !this._minLine) {
       this.setVisible(!this._visible);
       this._emitPaneToggle(this._visible);
-      // Wave 5 Session H (Job A): the floating fallback flips the pane's
-      // visibility bit itself — the room-memory write trigger (after the flip).
+      // The floating fallback flips the pane's visibility bit itself: the room-memory write trigger (after the flip).
       eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'debris', shown: this._visible });
       return;
     }
@@ -1629,8 +1351,7 @@ export class DebrisWireframe {
       this._canvas.style.display = 'block';
       this._frameSkip = -1;
       this._emitPaneToggle(true);
-      // Wave 5 Session H (Job A): the attribute-clear path flipped the ONE
-      // density bit (the intent FloorMask captures) — after the flip.
+      // The attribute-clear path flipped the ONE density bit (the intent FloorMask captures): emit after the flip.
       eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'debris', shown: true });
       return;
     }
@@ -1642,7 +1363,7 @@ export class DebrisWireframe {
     } else {
       this._minLine.style.display = 'none';
       this._canvas.style.display = 'block';
-      this._frameSkip = -1; // redraw the wireframe immediately on restore
+      this._frameSkip = -1;
     }
     // No HUD_PANE_VISIBILITY here: the minimize fold is NOT the visibility bit
     // (the container stays on screen; the intent FloorMask reads is unchanged).
@@ -1658,7 +1379,6 @@ export class DebrisWireframe {
     });
   }
 
-  /** @private Populate the minimized one-liner from the current target. */
   _renderMinLine() {
     if (!this._minLine) return;
     const t = this._target;
@@ -1672,16 +1392,13 @@ export class DebrisWireframe {
     if (t.mass != null) {
       massStr = t.mass >= 1000 ? `${(t.mass / 1000).toFixed(1)}t` : `${t.mass.toFixed(0)}kg`;
     }
-    const tumbleDeg = (t.tumbleRate || 0) * DEG;
+    const tumbleDeg = (t.tumbleRate || 0) * RAD2DEG;
     const warn = tumbleDeg > 60 ? ' WARN' : '';
     const tumbleStr = `\u27F3${tumbleDeg.toFixed(0)}\u00B0/s${warn}`;
     const matStr = MATERIAL_LABELS[t.material] || t.material || '?';
     this._minLine.textContent = `${ident} \u00B7 ${sizeStr} \u00B7 ${massStr} \u00B7 ${tumbleStr} \u00B7 ${matStr}`;
   }
 
-  /**
-   * Remove the canvas from the DOM and release references.
-   */
   dispose() {
     if (this._canvas.parentNode) {
       this._canvas.parentNode.removeChild(this._canvas);
@@ -1692,13 +1409,10 @@ export class DebrisWireframe {
   }
 
   /**
-   * Enter expanded inspection mode.
-   * Scales the canvas and (for the daughter context) shows an origin badge.
-   * @param {number|null} armIndex     0-based daughter arm index, or null when
-   *                                    inspecting from the mothership.
-   * @param {object|null} [debrisTarget] The arm's current debris target. When
-   *   omitted, the already-selected target is kept (mothership V-cycle INSPECT);
-   *   only falls back to the ADR self-view if nothing is selected.
+   * Enter expanded inspection mode: scales the canvas; for the daughter context shows an origin badge.
+   * @param {number|null} armIndex - 0-based daughter arm index, or null when inspecting from the mothership.
+   * @param {object|null} [debrisTarget] - the arm's debris target. When omitted, the already-selected target is kept
+   *   (mothership V-cycle INSPECT); falls back to the ADR self-view only if nothing is selected.
    */
   setExpandedMode(armIndex, debrisTarget = null) {
     this._expandedMode   = true;
@@ -1711,18 +1425,13 @@ export class DebrisWireframe {
     if (debrisTarget) {
       this.setTarget(debrisTarget);
     } else if (this._target) {
-      // Keep the already-tracked selected target (mothership inspection).
       this.setVisible(true);
     } else {
-      // Show ADR self-view as placeholder when nothing is selected.
       this._showADRSatellite();
       this.setVisible(true);
     }
   }
 
-  /**
-   * Exit expanded mode; restore normal 280×200 panel size.
-   */
   clearExpandedMode() {
     this._expandedMode   = false;
     this._fromArmIndex   = null;
@@ -1730,22 +1439,15 @@ export class DebrisWireframe {
     this._canvas.style.height = `${PANEL_HEIGHT}px`;
   }
 
-  // ==========================================================================
-  // RENDERING — Private
-  // ==========================================================================
-
-  /** @private Full redraw of the panel. */
   _render() {
     const ctx = this._ctx;
     const W = PANEL_WIDTH;
     const H = PANEL_HEIGHT;
 
-    // --- Background (cached gradient) ---
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = this._bgGradient;
     ctx.fillRect(0, 0, W, H);
 
-    // --- Header ---
     ctx.font = mono(13, 'bold');
     ctx.textAlign = 'center';
     ctx.fillStyle = HEADER_COLOR;
@@ -1756,7 +1458,7 @@ export class DebrisWireframe {
       ctx.fillStyle = TYPE_COLOR;
       ctx.fillText('V3 OCTOPUS ADR', WIRE_CX, 27);
     } else {
-      // Dossier tier (Phase 1.5): UNSCANNED → static noise, no data.
+      // UNSCANNED → static noise, no data.
       const tier = dossierSystem.getTier(this._target);
       if (tier === DOSSIER_TIERS.UNSCANNED) {
         ctx.fillText('TARGET INFO', WIRE_CX, 15);
@@ -1764,12 +1466,12 @@ export class DebrisWireframe {
         ctx.font = mono(11, 'bold');
         ctx.fillStyle = DIM_COLOR;
         ctx.textAlign = 'center';
-        // u16b fix 1: glass has no S key; an empty tap is the scan there (floors 2-3). Read at draw time.
+        // Glass has no S key: an empty tap is the scan there (floors 2-3). Read at draw time.
         ctx.fillText(GestureHints.isGlass() ? 'UNRESOLVED \u2014 tap empty space to scan' : 'UNRESOLVED \u2014 scan [S]', WIRE_CX, 150);
         return;
       }
       ctx.fillText('TARGET INFO', WIRE_CX, 15);
-      // u5 D1: the simple level draws no lone type label (the name is in the one info line below).
+      // The simple level draws no lone type label (the name is in the one info line below).
       if (!this._simple) {
         const typeLabel = TYPE_LABELS[this._target.type] || this._target.type;
         ctx.font = mono(12);
@@ -1778,7 +1480,6 @@ export class DebrisWireframe {
       }
     }
 
-    // Daughter-origin badge (expanded mode from an arm pilot only)
     if (this._expandedMode && this._fromArmIndex != null) {
       ctx.textAlign = 'right';
       ctx.font = mono(10);
@@ -1790,7 +1491,7 @@ export class DebrisWireframe {
       );
     }
 
-    // --- Project all vertices (also store rotated Z for depth-based alpha) ---
+    // Project all vertices; rotated Z is kept for the depth-based alpha
     const cosY = Math.cos(this._angle);
     const sinY = Math.sin(this._angle);
     const verts = this._shape.vertices;
@@ -1802,20 +1503,16 @@ export class DebrisWireframe {
       const pz = _rot[2] + PERSPECTIVE_D;
       proj[i][0] = WIRE_CX + (_rot[0] / pz) * VIEW_SCALE;
       proj[i][1] = WIRE_CY - (_rot[1] / pz) * VIEW_SCALE;
-      // Rotated Z: positive = far side (behind), negative = near side (camera).
-      // Used below to dim back-facing edges — kills Necker-cube oscillation.
+      // Rotated Z: positive = far side, negative = near side (camera); dims back-facing edges (kills Necker-cube
+      // oscillation).
       proj[i][2] = _rot[2];
     }
 
-    // --- Draw each zone — SMOOTH per-edge depth-interpolated alpha ---
-    // Sprint 2 v2b: Previous two-pass hard-threshold (back/front classify by
-    // avgZ > 0) caused FLICKER on edges near the rotation equator, which
-    // swapped classification as they rotated. Single-pass with smooth linear
-    // alpha mapping eliminates the flicker entirely.
+    // Single pass with smooth per-edge depth-interpolated alpha: a two-pass hard threshold (avgZ > 0) flickered on
+    // edges near the rotation equator.
     const zones = this._shape.zones;
     const assessments = this._zoneAssessments;
-    // Dossier draw-on (Phase 1.5): after a scan the silhouette MATERIALIZES —
-    // edges trace in over WIREFRAME_TRACE_S instead of popping fully formed.
+    // Draw-on: after a scan the silhouette MATERIALIZES, edges tracing in over WIREFRAME_TRACE_S.
     let edgeBudget = Infinity;
     if (!this._showingADR && this._target && this._traceStart) {
       const traceS = (Constants.DOSSIER && Constants.DOSSIER.WIREFRAME_TRACE_S) || 1.0;
@@ -1834,7 +1531,6 @@ export class DebrisWireframe {
       const highlighted = zi === this._zoneIndex;
       const edges = zone.edges;
 
-      // Highlighted glow — front-weighted (but still smooth, not hard cut)
       if (highlighted) {
         ctx.strokeStyle = color;
         ctx.lineWidth = 4;
@@ -1843,8 +1539,7 @@ export class DebrisWireframe {
           const b = edges[e][1];
           if (a >= proj.length || b >= proj.length) continue;
           const avgZ = (proj[a][2] + proj[b][2]) * 0.5;
-          // Glow alpha: 0.35 front → 0 back (smooth)
-          const frontness = Math.max(0, Math.min(1, (1 - avgZ) * 0.5));
+          const frontness = clamp01((1 - avgZ) * 0.5);
           ctx.globalAlpha = 0.35 * frontness;
           ctx.beginPath();
           ctx.moveTo(proj[a][0], proj[a][1]);
@@ -1853,7 +1548,6 @@ export class DebrisWireframe {
         }
       }
 
-      // Main pass — per-edge smooth depth-alpha
       ctx.strokeStyle = color;
       ctx.lineWidth = highlighted ? 2 : 1;
       const baseAlpha = highlighted ? 0.9 : 0.55;
@@ -1864,10 +1558,9 @@ export class DebrisWireframe {
         const b = edges[e][1];
         if (a >= proj.length || b >= proj.length) continue;
         const avgZ = (proj[a][2] + proj[b][2]) * 0.5;
-        // avgZ ~∈ [-1, 1] for unit-radius shapes. Map → depthT ∈ [0, 1].
-        // depthT=0 at camera-side (front), depthT=1 at far side (back).
-        const depthT = Math.max(0, Math.min(1, (avgZ + 1) * 0.5));
-        // Smooth fade: front=1.0, back=0.25. No hard threshold → no flicker.
+        // avgZ ~∈ [-1, 1] for unit-radius shapes; depthT 0 = front (camera side), 1 = back. Fade front=1.0 → back=0.25,
+        // no hard threshold (no flicker).
+        const depthT = clamp01((avgZ + 1) * 0.5);
         const depthFade = 1 - depthT * 0.75;
         ctx.globalAlpha = baseAlpha * depthFade;
         ctx.beginPath();
@@ -1879,20 +1572,14 @@ export class DebrisWireframe {
     ctx.globalAlpha = 1;
     ctx.restore();
 
-    // --- Info readout ---
     this._renderInfoText(ctx);
   }
 
-  /**
-   * Draw zone info (if selected) or general target/ADR info below the wireframe.
-   * @private
-   * @param {CanvasRenderingContext2D} ctx
-   */
+  /** Zone info (if selected) or general target/ADR info below the wireframe. */
   _renderInfoText(ctx) {
     const infoY = 140;
     ctx.textAlign = 'center';
 
-    // --- ADR Satellite self-view info ---
     if (this._showingADR) {
       if (this._zoneIndex >= 0 && this._shape) {
         const zone = this._shape.zones[this._zoneIndex];
@@ -1904,7 +1591,6 @@ export class DebrisWireframe {
         ctx.fillStyle = DIM_COLOR;
         ctx.fillText(`${zone.massPercent}% of satellite`, WIRE_CX, infoY + 12);
       } else {
-        // Show arm status summary
         ctx.font = mono(10);
         ctx.fillStyle = DIM_COLOR;
         const arms = this._armStatuses;
@@ -1915,32 +1601,30 @@ export class DebrisWireframe {
             const idx = a.id.split('-')[1] || '?';
             const stateChar = a.state === 'DOCKED' ? '\u25CF' :
                               a.state === 'EXPENDED' ? '\u00D7' : '\u25D0';
-            const stateColor = a.state === 'DOCKED' ? '#00ff88' :
-                               a.state === 'EXPENDED' ? '#ff4444' : '#ffaa00';
+            const stateColor = a.state === 'DOCKED' ? VisualLaw.COLORS.PLAYER :
+                               a.state === 'EXPENDED' ? '#ff4444' : VisualLaw.COLORS.CAUTION;
             armStr += `<${stateColor}>${prefix}${idx}${stateChar} `;
           }
-          // Draw arm status as colored indicators
           let armX = 30;
           for (const a of arms) {
             const prefix = a.type === 'weaver' ? 'L' : 'S';
             const idx = a.id.split('-')[1] || '?';
             const icon = a.state === 'DOCKED' ? '\u25CF' :
                          a.state === 'EXPENDED' ? '\u00D7' : '\u25D0';
-            ctx.fillStyle = a.state === 'DOCKED' ? '#00ff88' :
-                            a.state === 'EXPENDED' ? '#ff4444' : '#ffaa00';
+            ctx.fillStyle = a.state === 'DOCKED' ? VisualLaw.COLORS.PLAYER :
+                            a.state === 'EXPENDED' ? '#ff4444' : VisualLaw.COLORS.CAUTION;
             ctx.fillText(`${prefix}${idx}${icon}`, armX, infoY);
             armX += 40;
           }
         }
         ctx.fillStyle = DIM_COLOR;
         ctx.textAlign = 'center';
-        // u16b fix 1: no touch control cycles the zones, so glass leaves the label out (draw-time read).
+        // No touch control cycles the zones, so glass leaves the label out (draw-time read).
         if (!GestureHints.isGlass()) ctx.fillText('[Z] Cycle zones', WIRE_CX, infoY + 16);
       }
       return;
     }
 
-    // --- Debris target info — dossier-tier gated (Phase 1.5) ---
     const tier = dossierSystem.getTier(this._target);
     if (this._simple) {
       this._renderSimpleInfo(ctx, infoY, tier);
@@ -1965,14 +1649,11 @@ export class DebrisWireframe {
       ctx.fillStyle = color;
       ctx.fillText(`Risk: ${risk}  Mass: ${zone.massPercent}%`, WIRE_CX, infoY + 12);
 
-      // Recommendation (compact)
       ctx.fillStyle = INFO_COLOR;
       this._wrapText(ctx, rec, WIRE_CX, infoY + 24, PANEL_WIDTH - 20, 10);
 
-      // Salvage info below recommendation
       this._renderSalvageInfo(ctx, infoY + 46);
     } else {
-      // General target info (compact)
       const t = this._target;
       ctx.font = mono(10);
       ctx.fillStyle = DIM_COLOR;
@@ -1980,21 +1661,18 @@ export class DebrisWireframe {
       const label = TYPE_LABELS[t.type] || t.type;
       const massStr = t.mass != null ? `${t.mass.toFixed(1)}kg` : '?';
       const sizeStr = t.sizeMeter != null ? `${t.sizeMeter.toFixed(1)}m` : '?';
-      // A piece she does not catch reads the spin as drawn, the same rate its spin step measures (B2: one clock)
-      const tumbleDeg = ((dossierSystem.inspectPay(t) ? DossierSystem.drawnSpinRadS(t) : (t.tumbleRate || 0)) * DEG).toFixed(1);
+      // A piece she does not catch reads the spin as drawn: the same rate its spin step measures (one clock).
+      const tumbleDeg = ((dossierSystem.inspectPay(t) ? DossierSystem.drawnSpinRadS(t) : (t.tumbleRate || 0)) * RAD2DEG).toFixed(1);
 
       ctx.fillText(`${label}  ${massStr}  ${sizeStr}`, WIRE_CX, infoY);
 
-      // Material readout with a friendly name + colour swatch so the panel
-      // communicates the field's new material variety at a glance.
       const matKey = t.material;
       const matName = MATERIAL_LABELS[matKey] || matKey || '?';
       const tumbleLine = `Tumble: ${tumbleDeg}\u00B0/s   Mat: ${matName}`;
       ctx.fillText(tumbleLine, WIRE_CX, infoY + 12);
       const swatchColor = MATERIAL_SWATCH[matKey];
       if (swatchColor && typeof ctx.measureText === 'function') {
-        // Place a small swatch just left of the material name. Measure so it
-        // sits next to "Mat: " regardless of the tumble value width.
+        // Swatch just left of the material name, measured so it sits next to "Mat: " whatever the tumble width.
         ctx.save();
         const prevAlign = ctx.textAlign;
         const fullW = ctx.measureText(tumbleLine).width;
@@ -2010,44 +1688,39 @@ export class DebrisWireframe {
         ctx.fillStyle = DIM_COLOR;
       }
 
-      // Stacked info rows — track y so HIGH TUMBLE, brittleness and the
-      // manifest never overdraw each other (M4).
+      // Stacked rows: track y so HIGH TUMBLE, brittleness and the manifest never overdraw each other.
       let rowY = infoY + 24;
 
-      // High-tumble warning
-      if ((t.tumbleRate || 0) * DEG > 60) {
+      if ((t.tumbleRate || 0) * RAD2DEG > 60) {
         ctx.fillStyle = ZONE_COLORS.RED;
         ctx.font = mono(10, 'bold');
         ctx.fillText('WARN HIGH TUMBLE', WIRE_CX, rowY);
         rowY += 12;
       }
 
-      // big-rules T3: a piece over her catch limit: its characterising steps (and no salvage manifest: she cannot catch it)
+      // A piece over her catch limit shows its characterising steps and no salvage manifest (she cannot catch it).
       const stepsY = this._renderInspectLines(ctx, rowY);
       const stepsShown = stepsY !== rowY;
       rowY = stepsY;
 
-      // Brittleness — the FRAG-chip driver. Show the RAW brittleness the
-      // fragmentation roll uses (resolveFragSeverity / effectiveFragility),
-      // NOT the material-adjusted effectiveBrittleness (zone-risk only), so
-      // the displayed number can't drift from what's actually rolled.
+      // Brittleness is the FRAG-chip driver: show the RAW brittleness the fragmentation roll uses (resolveFragSeverity /
+      // effectiveFragility), NOT the material-adjusted effectiveBrittleness (zone risk only), so the displayed number
+      // can't drift from what is rolled.
       if (t.brittleness != null && !stepsShown) {   // (a piece she does not catch: the four step lines take the room)
-        const b = Math.max(0, Math.min(1, t.brittleness));
+        const b = clamp01(t.brittleness);
         ctx.font = mono(10);
         ctx.fillStyle = b >= 0.7 ? ZONE_COLORS.RED : b >= 0.4 ? ZONE_COLORS.YELLOW : ZONE_COLORS.GREEN;
         ctx.fillText(`Brittleness: ${b.toFixed(2)}`, WIRE_CX, rowY);
         rowY += 12;
       }
 
-      // Decrypted salvage manifest with credit values (typewriter reveal).
       if (!stepsShown) this._renderProfiledManifest(ctx, Math.max(rowY, infoY + 36));
     }
   }
 
   /**
-   * u5-info-ap-hold D1: the simple level (mission 1, same gate as the Targets list) — exactly two
-   * text lines under the title, in the zone form, the SCANNED tier and the PROFILED tier alike:
-   * `<NAME> · <mass> kg · <size> m`, then the survey progress or the salvage worth.
+   * The simple level (mission 1, same gate as the Targets list): exactly two text lines under the title, for the
+   * SCANNED and PROFILED tiers alike: `<NAME> · <mass> kg · <size> m`, then the survey progress or the salvage worth.
    * @private
    */
   _renderSimpleInfo(ctx, infoY, tier) {
@@ -2098,10 +1771,9 @@ export class DebrisWireframe {
   }
 
   /**
-   * big-rules T3/B3: the four step lines of a piece she does not catch, each with its credits ("Too big to catch · found 386 cr done" /
-   * "orbit 771 cr · within 200 m" / "fly-around 1543 cr · 40 %" / "spin 1157 cr · within 50 m"; DossierSystem.inspectStepLines, each at
-   * most 38 characters so the 280 px panel keeps its padding). Draws nothing for any other piece. Lines are 11 px apart, so four fit
-   * between `y` and the 200 px panel's foot when `y` is at most 164.
+   * The four step lines of a piece she does not catch, each with its credits (DossierSystem.inspectStepLines, e.g.
+   * "orbit 771 cr · within 200 m"; each at most 38 characters so the 280 px panel keeps its padding). Draws nothing for
+   * any other piece. Lines are 11 px apart, so four fit between `y` and the 200 px panel's foot when `y` is at most 164.
    * @private
    * @returns {number} the y for what follows (y + 44 after the four lines, y unchanged when there are none)
    */
@@ -2118,8 +1790,7 @@ export class DebrisWireframe {
   }
 
   /**
-   * u5-info-ap-hold D1: HUD tells the wireframe whether the simple level is on (the same answer as
-   * the Targets list: HUD.isSimpleTargets). Drawn at the next frame.
+   * HUD tells the wireframe whether the simple level is on (same answer as HUD.isSimpleTargets); drawn next frame.
    * @param {boolean} on
    */
   setSimple(on) {
@@ -2129,9 +1800,7 @@ export class DebrisWireframe {
     this._frameSkip = -1;
   }
 
-  /**
-   * @private UNSCANNED — static noise in the wireframe area (no data leaks).
-   */
+  /** @private UNSCANNED: static noise in the wireframe area (no data leaks). */
   _renderStaticNoise(ctx) {
     const seed = Math.floor((typeof performance !== 'undefined' ? performance.now() : 0) / 90);
     const rand = (i) => {
@@ -2155,9 +1824,8 @@ export class DebrisWireframe {
   }
 
   /**
-   * @private SCANNED — silhouette + type/size/est-mass; salvage manifest shows
-   * REDACTED rows (you can see THAT there's treasure, not WHAT). The survey
-   * ring fills while a platform holds within DETAIL_SCAN_RANGE_M.
+   * @private SCANNED: silhouette + type/size/est-mass; the salvage manifest shows REDACTED rows (THAT there is
+   * treasure, not WHAT). The survey ring fills while a platform holds within DETAIL_SCAN_RANGE_M.
    */
   _renderScannedInfo(ctx, infoY) {
     const t = this._target;
@@ -2174,7 +1842,7 @@ export class DebrisWireframe {
     // use to her, its spin is what its spin step measures, and the 200 px panel has no room for more): no tumble line, no survey prompt.
     const stepsShown = this._renderInspectLines(ctx, infoY + 12) !== infoY + 12;
     if (!stepsShown) {
-      const tumbleDeg = ((t.tumbleRate || 0) * DEG).toFixed(1);
+      const tumbleDeg = ((t.tumbleRate || 0) * RAD2DEG).toFixed(1);
       ctx.fillText(`Tumble: ${tumbleDeg}\u00B0/s   Mat: \u2588\u2588\u2588\u2588`, WIRE_CX, infoY + 12);
     }
 
@@ -2182,7 +1850,7 @@ export class DebrisWireframe {
     let y = infoY + 24;
     if (!stepsShown && t.hasSalvage && t.salvage) {
       const { rows } = appraiseSalvage(t.salvage);
-      const n = Math.max(1, Math.min(3, rows.length || 1));
+      const n = clamp(rows.length || 1, 1, 3);
       ctx.fillStyle = '#ffcc00';
       ctx.font = mono(10, 'bold');
       ctx.fillText('METALS \u2014 UNKNOWN', WIRE_CX, y);
@@ -2221,10 +1889,7 @@ export class DebrisWireframe {
     }
   }
 
-  /**
-   * @private PROFILED — the decrypted salvage manifest with credit values,
-   * revealed line-by-line (typewriter) right after the survey completes.
-   */
+  /** @private PROFILED: the decrypted salvage manifest with credit values, revealed line by line after the survey. */
   _renderProfiledManifest(ctx, y) {
     const t = this._target;
     if (!t.hasSalvage || !t.salvage) return;
@@ -2232,17 +1897,15 @@ export class DebrisWireframe {
     const { rows, total } = appraiseSalvage(t.salvage);
     if (rows.length === 0) return;
 
-    // Typewriter: rows appear one per PROFILE_ROW_INTERVAL_S after the survey;
-    // targets profiled earlier (re-selected) show everything at once.
+    // Typewriter: one row per PROFILE_ROW_INTERVAL_S after the survey; targets profiled earlier (re-selected) show
+    // everything at once.
     let rowsShown = rows.length + 1;
     if (this._profileRevealStart != null && typeof performance !== 'undefined') {
       const interval = (D.PROFILE_ROW_INTERVAL_S || 0.35) * 1000;
       rowsShown = Math.floor((performance.now() - this._profileRevealStart) / interval);
-      // Plan 1.5: soft chime per newly-revealed row (typewriter only — a
-      // re-selected, already-profiled target shows everything silently).
+      // Soft chime per newly revealed row (typewriter only; a re-selected, already-profiled target is silent).
       if (rowsShown > this._lastRowsShown && this._lastRowsShown < rows.length + 1) {
-        // P5 (#4): pitch-step each row so the manifest reads as one rising
-        // "data loading" gesture instead of repeated identical clicks.
+        // Pitch-step each row so the manifest reads as one rising "data loading" gesture, not identical clicks.
         audioSystem.playTerminalBlip(Math.max(0, rowsShown - 1));
       }
     }
@@ -2256,7 +1919,7 @@ export class DebrisWireframe {
     ctx.font = mono(10);
     const maxRows = Math.min(3, rows.length);
     for (let i = 0; i < maxRows && i < rowsShown; i++) {
-      ctx.fillStyle = '#00ccff';
+      ctx.fillStyle = VisualLaw.COLORS.INFO;
       ctx.fillText(`${rows[i].label}  \u00B7${rows[i].value} cr`, WIRE_CX, y);
       y += 11;
     }
@@ -2268,25 +1931,17 @@ export class DebrisWireframe {
     }
   }
 
-  /**
-   * Render salvage indicators below the zone/target info.
-   * Shows SALVAGE DETECTED with resource types when applicable.
-   * @private
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} y - starting Y position
-   */
+  /** @private Salvage indicators below the zone/target info (SALVAGE DETECTED with resource types). */
   _renderSalvageInfo(ctx, y) {
     if (!this._target || !this._target.hasSalvage) return;
     const salvage = this._target.salvage;
     if (!salvage) return;
 
-    // Determine what to show based on scanner upgrade
     const hasScanner = this._hasSalvageScanner;
 
     ctx.font = mono(10, 'bold');
     ctx.textAlign = 'center';
 
-    // Separator line
     ctx.fillStyle = SEPARATOR_COLOR;
     ctx.fillText('\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500', WIRE_CX, y);
 
@@ -2297,9 +1952,8 @@ export class DebrisWireframe {
     let infoY = y + 24;
 
     if (hasScanner) {
-      // Exact amounts shown with scanner upgrade
       if (salvage.xenon > 0) {
-        ctx.fillStyle = '#00ccff';
+        ctx.fillStyle = VisualLaw.COLORS.INFO;
         ctx.fillText(`Gas: ~${salvageGasKg(salvage.xenon).toFixed(1)} kg`, WIRE_CX, infoY);
         infoY += 11;
       }
@@ -2309,7 +1963,7 @@ export class DebrisWireframe {
         infoY += 11;
       }
       if (salvage.gaAs > 0) {
-        ctx.fillStyle = '#ffaa00';
+        ctx.fillStyle = VisualLaw.COLORS.CAUTION;
         ctx.fillText(`GaAs: ${(salvage.gaAs * 100).toFixed(1)}% panel repair`, WIRE_CX, infoY);
         infoY += 11;
       }
@@ -2328,7 +1982,6 @@ export class DebrisWireframe {
         ctx.fillText(`Li: ~${salvage.lithium.toFixed(1)} units (MPD fuel)`, WIRE_CX, infoY);
       }
     } else {
-      // Without scanner: show type hints only
       const hints = [];
       if (salvage.xenon > 0) hints.push('Gas');
       if (salvage.indium > 0) hints.push('In');
@@ -2341,14 +1994,6 @@ export class DebrisWireframe {
     }
   }
 
-  // ==========================================================================
-  // PRIVATE HELPERS
-  // ==========================================================================
-
-  /**
-   * Switch to ADR satellite self-view mode.
-   * @private
-   */
   _showADRSatellite() {
     this._showingADR = true;
     this._target = null;
@@ -2360,22 +2005,16 @@ export class DebrisWireframe {
 
     if (this._shape) {
       this._allocateProjectionBuffer(this._shape.vertices.length);
-      // ADR satellite zones: all green by default
       this._zoneAssessments = this._shape.zones.map((zone) => {
-        if (zone.name === 'Daughter Cavities') return { risk: 'DYNAMIC', color: '#00ff88' };
-        if (zone.name === 'Ion Drive') return { risk: 'LOW', color: '#00ccff' };
-        if (zone.name === 'Laser') return { risk: 'LOW', color: '#00ccff' };
+        if (zone.name === 'Daughter Cavities') return { risk: 'DYNAMIC', color: VisualLaw.COLORS.PLAYER };
+        if (zone.name === 'Ion Drive') return { risk: 'LOW', color: VisualLaw.COLORS.INFO };
+        if (zone.name === 'Laser') return { risk: 'LOW', color: VisualLaw.COLORS.INFO };
         return { risk: 'LOW', color: ZONE_COLORS.GREEN };
       });
     }
     this.setVisible(true);
   }
 
-  /**
-   * Pre-allocate or resize the projection buffer.
-   * @private
-   * @param {number} len - number of vertices
-   */
   _allocateProjectionBuffer(len) {
     if (this._projected.length !== len) {
       this._projected = new Array(len);
@@ -2384,16 +2023,7 @@ export class DebrisWireframe {
     }
   }
 
-  /**
-   * Draw word-wrapped centered text.
-   * @private
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {string} text
-   * @param {number} cx - center X
-   * @param {number} y  - starting Y
-   * @param {number} maxW - maximum pixel width
-   * @param {number} lineH - line height in px
-   */
+  /** @private Word-wrapped centred text; maxW and lineH in px. */
   _wrapText(ctx, text, cx, y, maxW, lineH) {
     const words = text.split(' ');
     let line = '';
@@ -2413,10 +2043,6 @@ export class DebrisWireframe {
   }
 }
 
-// ============================================================================
-// STATIC ATLAS MANAGEMENT (ST-6.2)
-// ============================================================================
-
 /** @type {DebrisTextureAtlas|null} Shared type atlas instance */
 let _typeAtlas = null;
 /** @type {FlagDecalSystem|null} Shared flag atlas instance */
@@ -2425,17 +2051,11 @@ let _flagSystem = null;
 let _visualMode = (Constants.DEBRIS_VISUAL && Constants.DEBRIS_VISUAL.DEFAULT_MODE) || 'textured';
 
 /**
- * Pick atlas dimensions for the current device.
- *
- * The DEBRIS_VISUAL constants are the HIGH-end target (2048 type / 1024 flag).
- * On low-end GPUs/RAM a 2048² RGBA atlas (~16 MB) + flag atlas is wasteful and
- * can fail to allocate, so clamp against two signals:
- *   • GPU MAX_TEXTURE_SIZE — a hard limit; never request a larger atlas.
+ * Atlas dimensions for the current device. The DEBRIS_VISUAL constants are the HIGH-end target (2048 type / 1024
+ * flag); on low-end GPUs/RAM a 2048² RGBA atlas (~16 MB) can fail to allocate, so clamp against:
+ *   • GPU MAX_TEXTURE_SIZE — a hard limit;
  *   • navigator.deviceMemory — Chrome/Edge only; ≤4 GB → halve the atlases.
- * Both signals are optional; when unknown we keep the configured (HIGH) sizes,
- * matching the conservative "unknown = capable desktop" stance used elsewhere
- * (see scene/Earth.js selectLOD).
- *
+ * Both are optional; when unknown keep the configured sizes ("unknown = capable desktop", as scene/Earth.js selectLOD).
  * @param {object} C - Constants.DEBRIS_VISUAL
  * @returns {{ atlasSize: number, flagSize: number }}
  * @private
@@ -2462,13 +2082,10 @@ function _pickAtlasSizes(C) {
   return { atlasSize, flagSize };
 }
 
-/**
- * Initialise the type and flag texture atlases. Called once at boot by DebrisField.
- * No-op if already initialised or if DOM is unavailable (Node tests).
- */
+/** Initialise the type and flag atlases (once, at boot, by DebrisField). No-op if already initialised or no DOM. */
 export function initAtlases() {
   if (typeof document === 'undefined') return;
-  if (_typeAtlas) return; // already initialised
+  if (_typeAtlas) return;
   const C = Constants.DEBRIS_VISUAL || {};
   const { atlasSize, flagSize } = _pickAtlasSizes(C);
   _typeAtlas = new DebrisTextureAtlas(atlasSize);
@@ -2486,12 +2103,10 @@ export function getFlagAtlasTexture() { return _flagSystem ? _flagSystem.texture
 /** @returns {string} 'textured' or 'wireframe' */
 export function getVisualMode() { return _visualMode; }
 
-// Re-export atlas pure-logic helpers for convenience
 export { getUVOffsetForType, getBaseColorForType, getEmissiveForMOID };
 export { getUVOffsetForCountry, hasFlag };
 
 // Export builder functions for testing (pure data, no THREE dependency)
 export { buildRocketBody, buildDefunctSat, buildMissionDebris, buildFragment };
 
-// Named + default export (matches NavSphere / OrbitMFD pattern)
 export default DebrisWireframe;

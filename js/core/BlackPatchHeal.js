@@ -36,6 +36,7 @@ import * as THREE from 'three';
 import { Constants } from './Constants.js';
 import { StorageKeys } from './StorageKeys.js';
 import { clamp } from './MathUtil.js';
+import { devSearch } from './DevHost.js';
 
 // Thresholds
 /** Sampled patch size in device pixels (same as BlackFrameProbe). */
@@ -306,7 +307,7 @@ export function installBlackPatchHeal({
 } = {}) {
   let q = search;
   if (q === undefined) {
-    q = (typeof window !== 'undefined' && window.location) ? window.location.search : '';
+    q = (typeof window !== 'undefined' && window.location) ? devSearch(window.location) : '';
   }
   try {
     if (new URLSearchParams(q || '').get('heal') === '0') return null;

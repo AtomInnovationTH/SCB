@@ -1,14 +1,7 @@
 /**
- * TargetReticle.js — Canvas 2D overlay for HUD reticle tracking
- * Inspired by Independence War (iWar) and MechWarrior 2 target tracking.
- * Projects 3D debris positions to 2D screen space and draws:
- *  - On-screen reticles (brackets/diamonds) with distance labels
- *  - Off-screen directional arrows along screen edges
- *  - Velocity vectors for selected target
- *
- * Session Q (plan D15/D15c): `colorLaw` is a dep
- * (`{ reachKm, threatId, threatTier, apTargetId }` or null). Null =
- * shipped colours (`?ladder=0` byte-identity).
+ * Canvas 2D overlay: projects 3D debris positions to screen space and draws on-screen reticles (brackets/diamonds)
+ * with distance labels, and off-screen arrows along the screen edges.
+ * `colorLaw` is a dep (`{ reachKm, threatId, threatTier, apTargetId }` or null); null = shipped colours (`?ladder=0`).
  * @module ui/TargetReticle
  */
 
@@ -21,24 +14,17 @@ import { orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { calmBreathe, finitePulse, prefersReducedMotion } from './hudPulse.js';
 import { classify } from './hud/TargetColorLaw.js';
 import { mono } from '../core/Typeface.js';
-import { GestureHints } from './hud/GestureHints.js';   // u17: the fire prompt follows glass, read when drawn
+import { GestureHints } from './hud/GestureHints.js';   // the fire prompt follows glass, read when drawn
 import { isMarked } from '../systems/ScanMarks.js';
-import { engineGasKg, engineDeltaV, engineTankDryKg, coldGasPoolToKg } from '../systems/ResourceSystem.js';
 import { radToDeg, clamp01, clamp, lerp } from '../core/MathUtil.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
 const MAX_RETICLE_RANGE = 1.0;        // 100km in scene units
-// Closing-rate readout (owner 10-27, "the closing 1 m/s flashes"). Measured with the real daughter approach: her last
-// approach is commanded at exactly 0.5 m/s, the old line showed at |rate| >= 0.5 and rounded 0.5 up to "1", so the raw
-// per-frame rate sat on the edge and the line flipped on rounding noise (137 flips in 3 s at 60 Hz). Now: an
-// exponential average (about 0.3 s), shown from 0.3 m/s and hidden below 0.2 m/s (her 0.5 m/s approach reads steadily,
-// to one decimal below 1 m/s). The average starts over when the measuring point jumps (the reticle measures from her only
-// while she is flown, so a switch of view moves the point), see _relJump, and as a backstop when one frame's rate is more
-// than CLOSING_BACKSTOP_MS away from the average.
+// Closing-rate readout (DECISIONS §48 row 6): an exponential average (about 0.3 s) of the per-frame rate, shown from
+// 0.3 m/s and hidden below 0.2 m/s. Her last approach is commanded at exactly 0.5 m/s, so the raw rate sits on the
+// rounding edge and flips; the average starts over when the measuring point jumps (the reticle measures from her only
+// while she is flown, so a switch of view moves the point; see _relJump), and as a backstop when one frame's rate is
+// more than CLOSING_BACKSTOP_MS away from the average.
 const CLOSING_TAU_S = 0.3;
 const CLOSING_SHOW_MS = 0.3;
 const CLOSING_HIDE_MS = 0.2;
@@ -49,9 +35,8 @@ const EDGE_PADDING = 40;              // px from screen edge for arrows
 const RETICLE_MIN_SIZE = 12;          // px minimum bracket size
 const RETICLE_MAX_SIZE = 60;          // px maximum bracket size
 const SELECTED_RETICLE_SCALE = 1.6;   // Selected target is bigger
-/** Session O (plan D16 (b), owner 2026-09-07): the score strip's exclusion band
- *  expansion (px on every side) — an unselected bracket whose BOX (arms + dist
- *  label) touches the band + this pad is skipped whole (never a half-drawn reticle). */
+/** owner 2026-09-07: an unselected bracket whose BOX (arms + dist label) touches the score strip's exclusion band
+ *  grown by this pad (px, every side) is skipped whole, never half-drawn. */
 const SCORE_STRIP_PAD_PX = 8;
 /** Fixed y of the autopilot-engaged chip, and its height (px). `Constants.TEACHING.OVERLAY_AP_BADGE_BOTTOM_PX` must equal
  *  their sum (test-TeachingOverlay.js); `_drawApBadge` draws with both, so the drawing and the constant cannot drift. */
@@ -69,9 +54,7 @@ const COLORS = {
   magenta: '#ff44ff',
 };
 
-// ============================================================================
-// OFF-SCREEN MARKER LABEL PLACEMENT (u13-polish D3) — pure, so it is testable without a canvas
-// ============================================================================
+// Off-screen marker label placement: pure, so it is testable without a canvas
 
 /** Clear space kept between an edge arrow and its label block (px). */
 export const OFFSCREEN_LABEL_GAP_PX = 4;
@@ -85,7 +68,7 @@ export const OFFSCREEN_LABEL_GAP_PX = 4;
  */
 export function arrowShapeBox(x, y, angle, size, lineWidth = 2.5) {
   // `angle` is a CANVAS angle (clockwise from +x, y down): `_getEdgePosition` returns atan2(screen dy, dx), so the tip
-  // (size, 0) lands on the bearing of the target. (u14: this used to be `-angle`, which pointed top / bottom arrows inward.)
+  // (size, 0) lands on the bearing of the target. Negating it would point top / bottom arrows inward.
   const th = angle;
   const c = Math.cos(th), sn = Math.sin(th);
   const pts = [[size, 0], [-size * 0.5, -size * 0.6], [-size * 0.2, 0], [-size * 0.5, size * 0.6]];
@@ -102,10 +85,9 @@ export function arrowShapeBox(x, y, angle, size, lineWidth = 2.5) {
 
 /**
  * Where an off-screen marker's text goes: a centred block of lines, on the screen-centre side of its edge arrow, far
- * enough from the arrow's box that the two never touch (owner 2026-10-21: "FR▶MENT", the arrow drawn over the
- * letters). The old rule put the text centre a fixed 20 px behind the arrow, which on a side edge is inside half the
- * word's width. The block moves along the line from the arrow towards the screen centre until it clears the arrow box
- * by `gap`, so a long word sits further out than a short one.
+ * enough from the arrow's box that the two never touch. The block moves along the line from the arrow towards the
+ * screen centre until it clears the arrow box by `gap`, so a long word sits further out than a short one.
+ * owner 2026-10-21: the arrow was drawn over the letters ("FR▶MENT"); the text must never touch the arrow.
  *
  * @param {object} o
  * @param {{x:number,y:number,angle:number}} o.edge   the arrow anchor (`_getEdgePosition`)
@@ -152,18 +134,16 @@ export function offscreenLabelLayout(o) {
   return { arrow, block, lines };
 }
 
-// ============================================================================
-// KEEPING MARKERS OFF THE HUD PANES (u14a) — pure helpers, testable without a canvas or a DOM
-// ============================================================================
+// Keeping markers off the HUD panes: pure helpers, testable without a canvas or a DOM
 
-/** Ids of the HUD blocks a target marker must not cover (u14a A4). Rects are read from the DOM while shown. */
+/** Ids of the HUD blocks a target marker must not cover. Rects are read from the DOM while shown. */
 export const HUD_OBSTACLE_IDS = [
   'hud-score-panel', 'hud-left-column', 'hud-right-column', 'hud-targets-panel',
   'hud-comms-panel', 'hud-conjunction-panel',
 ];
 /** The obstacle rects are re-read at most this often (seconds of reticle time) and on resize. */
 export const OBSTACLE_REFRESH_S = 0.25;
-/** Below this canvas width (phones, frozen by DECISIONS §32) there are no obstacles: today's drawing. */
+/** Below this canvas width there are no obstacles (phones are frozen: DECISIONS §32). */
 export const OBSTACLE_MIN_VIEW_W = 920;
 /** Clear space an edge marker keeps from an obstacle (px). */
 export const OBSTACLE_GAP_PX = 4;
@@ -235,11 +215,11 @@ export function boxObstacleOverlap(box, ob, gap = OBSTACLE_GAP_PX) {
 }
 
 /**
- * Edge arrow clear of the HUD panes (u14a A3). If the arrow's box or its label block (from `layoutFn`) touches an
+ * Edge arrow clear of the HUD panes. If the arrow's box or its label block (from `layoutFn`) touches an
  * obstacle (+ gap), the anchor slides inward along the line from the anchor to the screen centre, so the arrow keeps
  * its bearing and still points at the target, and the label layout is recomputed at every step, until both boxes clear
  * every obstacle. It stops at `OBSTACLE_SLIDE_MAX` of the way; if nothing clears, the position with the least overlap wins.
- * Cost (u14a fix round 1): the walk is coarse (`opts.step`, 32 px), then the last blocked/clear pair is bisected to
+ * Cost: the walk is coarse (`opts.step`, 32 px), then the last blocked/clear pair is bisected to
  * `opts.fine` (1 px), so a slide of 150 px takes about 11 layout calls, not 75.
  *
  * @param {{x:number,y:number,angle:number}} edge   the anchor from `_getEdgePosition`
@@ -295,21 +275,17 @@ export function clearOfObstacles(edge, centre, obstacles, layoutFn, opts = {}) {
 
 const NO_OBSTACLES = Object.freeze([]);
 
-// ============================================================================
-// TARGET RETICLE SYSTEM
-// ============================================================================
-
 export class TargetReticle {
   /**
    * @param {THREE.PerspectiveCamera} camera - The scene camera
    * @param {object} [opts]
    * @param {() => Array<{left:number,top:number,right:number,bottom:number}>} [opts.obstacleReader] — the HUD rects markers
-   *   keep clear of (u14a A4); default: the visible HUD blocks read from the DOM (`readHudObstacles`).
+   *   keep clear of; default: the visible HUD blocks read from the DOM (`readHudObstacles`).
    */
   constructor(camera, opts = {}) {
     this.camera = camera;
 
-    // u14a: HUD rects target markers stay off (cached, re-read every OBSTACLE_REFRESH_S and on resize)
+    // HUD rects target markers stay off (cached, re-read every OBSTACLE_REFRESH_S and on resize)
     this._obstacleReader = (opts && typeof opts.obstacleReader === 'function') ? opts.obstacleReader : null;
     this._obstacleCache = null;
     this._obstacleDisjoint = null;
@@ -330,77 +306,48 @@ export class TargetReticle {
     this._height = 0;
     this._halfW = 0;
     this._halfH = 0;
-    // Perf (2026-09-02): mirrors the canvas display state so update() can skip
-    // the whole paint while hidden — setVisible() used to flip CSS only, and a
-    // display:none canvas was still cleared + fully drawn every frame (menus,
-    // the shop, the F6/F7 icon floors). The canvas starts visible (no display
-    // rule in _createCanvas); main.js hides it at boot via setVisible(false).
+    // Mirrors the canvas display state so update() skips the whole paint while hidden (a display:none canvas is
+    // otherwise still cleared and drawn every frame). Starts visible (no display rule in _createCanvas); main.js hides
+    // it at boot via setVisible(false).
     this._visible = true;
 
-    // Reusable math objects
     this._tempVec3 = new THREE.Vector3();
     this._tempVec4 = new THREE.Vector4();
     this._projMatrix = new THREE.Matrix4();
 
-    // Sprint 2 / PR A — scratch outputs for [`orbitToSceneCartesianInto`](js/entities/OrbitalMechanics.js:1).
-    // Hot path: per visible target per frame (5–15 calls/frame typical).
+    // Scratch outputs for `orbitToSceneCartesianInto`; hot path, per visible target per frame.
     this._tmpCartPos = { x: 0, y: 0, z: 0 };
     this._tmpCartVel = { x: 0, y: 0, z: 0 };
 
-    // Cached target data
     this._selectedTargetId = null;
-    this._capturedIds = new Set();  // UX Fix E+: Skip rendering captured debris
+    this._capturedIds = new Set();  // captured debris is not drawn
     this._debrisTargets = [];
     this._activeSatTargets = [];
     this._time = 0;
 
-    // Closure rate tracking
     this.previousDistances = new Map();
     this._closing = new Map();      // target id -> { rate (m/s, smoothed), shown, t (reticle clock) }
     this._dt = 0;
 
-    // First-encounter callout tracking
-    this._progradeCalloutTimer = 0;
-    this._retroCalloutTimer = 0;
-
-    // Phase 1: Telemetry tracking
     this._thrustDirection = null;
 
-    // Phase R6: Closure rate / ETA for selected target (prograde marker)
-    this._selectedTargetDistKm = 0;
-    this._prevSelectedTargetDist = null;
-    this._prevClosureTargetId = null;   // reset tracking on target switch
-    this._selRel = null;                // measuring-point tracker for the prograde line (see _relJump)
-    this._selClosureKms = null;         // smoothed km/s behind _selectedClosureRate
-    this._selClosureShown = false;      // hysteresis state of the prograde marker's "Closing: N m/s" line
-    this._selectedClosureRate = 0;      // km/s, positive = closing
-
-    // Phase R6: Cached player ΔV from PLAYER_TELEMETRY event
-    this._cachedPlayerDeltaV = 0;
-
-    // Phase R6: Periapsis proximity flag for Oberth hint
-    this._nearPeriapsis = false;
-
-    // Phase 5: Target Lock Ceremony animation state
+    // Target lock ceremony animation state
     this._lockAnimT = 1;              // 0→1 over 300ms (1 = complete/idle)
     this._lockAnimActive = false;
     this._lockLostAnimT = 1;          // 0→1 over 200ms (1 = complete/idle)
     this._lockLostAnimActive = false;
     this._lockLostTargetId = null;    // ID of target being animated out
 
-    // Phase 7: Autopilot visual indicator state
     this._apEngaged = false;
     this._apMode = '';
     this._apTargetName = '';
-    this._apEngagedSince = null;      // Calm-HUD: drives the one-shot engage dip
+    this._apEngagedSince = null;      // drives the one-shot engage dip
     this._selectedScreenPos = null;   // { x, y } screen coords of selected target
     this._pairPiece = null;           // pair-shot: the pair's second piece (marked while a pair is offered), or null
     this._pairMarkScreen = null;      // pair-shot: where its mark was drawn this frame ({x, y}), null when it was not drawn
 
-    // Listen for target events to trigger lock ceremonies.
-    // Calm-HUD: under prefers-reduced-motion the ceremonies are skipped (the
-    // CSS media block can't reach canvas draws) — selection still works, just
-    // without the 300 ms size pop.
+    // Under prefers-reduced-motion the ceremonies are skipped (the CSS media block can't reach canvas draws);
+    // selection still works, just without the 300 ms size pop.
     eventBus.on(Events.TARGET_SELECTED, () => {
       this._lockAnimT = 0;
       this._lockAnimActive = !prefersReducedMotion();
@@ -416,11 +363,9 @@ export class TargetReticle {
       this._outOfRangeFlashT = 0;    // clear any lingering OUT OF RANGE callout
     });
 
-    // Reward-first spine: track whether the selected target is inside net-lock
-    // range. Drives the yellow reticle color (out) vs cyan (in). The big
-    // "OUT OF RANGE" TEXT, however, is BRIEF feedback: it only shows for
-    // `_outOfRangeFlashT` seconds after the out-of-range crossing, then fades —
-    // and never while in range. AutoLockController emits these on the crossing.
+    // Whether the selected target is inside net-lock range: yellow reticle (out) vs cyan (in). The big "OUT OF RANGE"
+    // text is brief: it shows for `_outOfRangeFlashT` seconds after the out-of-range crossing, then fades, and never
+    // while in range. AutoLockController emits these on the crossing.
     this._selectedInRange = true;
     this._outOfRangeFlashT = 0;            // >0 = show the brief OUT OF RANGE text
     this._outOfRangeFlashDur = 1.6;        // seconds the callout stays up
@@ -429,12 +374,11 @@ export class TargetReticle {
       this._outOfRangeFlashT = 0;          // hide immediately once in range
     });
     eventBus.on(Events.TARGET_OUT_OF_RANGE, () => {
-      // Flash the text only on the in→out transition (not every frame it stays out).
+      // Flash only on the in→out transition, not every frame it stays out.
       if (this._selectedInRange !== false) this._outOfRangeFlashT = this._outOfRangeFlashDur;
       this._selectedInRange = false;
     });
 
-    // Phase 6: Lasso feedback state
     this._lassoInFlight = false;        // true while lasso projectile is active
     this._lassoCooldownTimer = 0;       // >0 after capture/cancel, counts down
     this._lassoCooldownMax = 2;         // matches LassoSystem cooldown (2s)
@@ -444,16 +388,13 @@ export class TargetReticle {
     this._lassoContactFlashTimer = 0;   // >0 = flash target bracket white
     this._lassoContactTargetId = null;  // ID of target hit by lasso
 
-    // S9-B: Catch pulse state — bracket expand + green flash on capture
     this._catchPulseActive = false;
     this._catchPulseTime = 0;           // countdown from 0.3 → 0
 
     // Fading "▸ N" training wheel: a tiny fire-prompt under an in-range lock.
-    // Deliberately UNHURRIED — it waits a grace period after the first in-range
-    // lock (give the player time to look around) and only nudges across the
-    // first two pieces, persisting on each until that piece is captured. It does
-    // NOT vanish the instant the net is first fired (that left the 2nd piece with
-    // no prompt and felt like it disappeared too fast). Helpful, not pushy.
+    // Deliberately UNHURRIED: it waits a grace period after the first in-range lock (time to look around) and only
+    // nudges across the first two pieces, persisting on each until that piece is captured. It does NOT vanish the
+    // instant the net is first fired (the 2nd piece would have no prompt).
     this._firstInRangeLockTime = null;  // _time (s) when an in-range lock first appeared
     this._debrisCleared = 0;            // captures seen — prompt caps out after 2
 
@@ -468,25 +409,20 @@ export class TargetReticle {
       this._lassoInFlight = false;
       this._lassoCooldownTimer = this._lassoCooldownMax; // Start actual cooldown
       this._lassoFlightTimeout = 0;
-      this.showCatchPulse(); // S9-B: bracket pulse on lasso catch
-      // UX Fix E+: Hide captured debris reticle immediately
+      this.showCatchPulse();
       if (data && data.debrisId) this._capturedIds.add(data.debrisId);
     });
 
-    // S9-B: Bracket pulse on arm capture
     eventBus.on(Events.ARM_CAPTURED, (data) => {
-      // Count each cleared piece ONCE here for the "▸ N" cap. A Mother-net catch
-      // emits BOTH LASSO_CAPTURED and ARM_CAPTURED (LassoSystem fires ARM_CAPTURED
-      // "for catch juice"), so counting in both handlers double-counted and tripped
-      // the 2-piece cap after a single catch. ARM_CAPTURED fires for net AND
-      // daughter captures, so it's the single canonical place to tally.
+      // Tally each cleared piece ONCE, here, for the "▸ N" cap. A Mother-net catch emits BOTH LASSO_CAPTURED and
+      // ARM_CAPTURED (LassoSystem fires ARM_CAPTURED "for catch juice"), and ARM_CAPTURED also fires for daughter
+      // captures, so counting in both handlers would double-count.
       this._debrisCleared++;
       this.showCatchPulse();
-      // UX Fix E+: Hide captured debris reticle immediately
       if (data && data.targetId) this._capturedIds.add(data.targetId);
     });
 
-    // UX Fix E+: Cleanup captured ID when debris is fully removed from field
+    // Forget the captured id once the debris is fully removed from the field
     eventBus.on(Events.DEBRIS_REMOVED, (data) => {
       if (data && data.id) this._capturedIds.delete(data.id);
     });
@@ -500,13 +436,11 @@ export class TargetReticle {
       this._lassoContactTargetId = data.targetId;
     });
 
-    // Phase 7: Autopilot indicator events
     eventBus.on(Events.AUTOPILOT_ENGAGE, (data) => {
       this._apEngaged = true;
       this._apMode = data.mode || '';
       this._apTargetName = data.targetName || data.mode || '';
-      // Calm-HUD: engagement is an EVENT — timestamp it so the badge gets one
-      // finite acknowledgement dip, then reads steady.
+      // Engagement is an EVENT: the badge gets one finite acknowledgement dip, then reads steady.
       this._apEngagedSince = null;
     });
     eventBus.on(Events.AUTOPILOT_DISENGAGE, () => {
@@ -519,10 +453,8 @@ export class TargetReticle {
       showClosureRate: true,
     };
 
-    // Session O (plan D16 (b), owner 2026-09-07): the score-strip exclusion band,
-    // copied per frame from `data.exclusionRect` (the hub's cached hud.scoreStripRect())
-    // into ONE reused instance rect (zero per-frame allocation; a later frame with
-    // null data clears it — no lingering band).
+    // The score-strip exclusion band, copied per frame from `data.exclusionRect` (the hub's cached
+    // hud.scoreStripRect()) into ONE reused rect (no per-frame allocation); a later frame with null data clears it.
     this._exclusionRect = null;
     this._colorLaw = null;
 
@@ -541,41 +473,7 @@ export class TargetReticle {
     eventBus.on(Events.HUD_TARGET_CLICK, (data) => {
       this.setSelectedTarget(data.id);
     });
-
-    // Phase R6: Listen for telemetry to cache player ΔV for post-burn readout
-    eventBus.on(Events.PLAYER_TELEMETRY, (t) => {
-      this._cacheDeltaV(t);
-    });
   }
-
-  /**
-   * Cache the player's remaining ΔV for the post-burn readout. h3-argon-engine D4: the payload carries
-   * `deltaV` straight from ArmManager.getMassBudget() (struts, cargo, tank, honest engine gas) — the
-   * one source. Only a payload without it (bare tests, menu hero) falls back to the SAME shared
-   * formula (ResourceSystem.engineDeltaV) over the resources mirror and the core + tank mass, with
-   * getMassBudget()'s own Isp and c (h3b-argon-push D4): the ACTIVE fuel's Isp (the payload's
-   * `currentFuelId`; the tank gas's when the payload names none — a cargo fuel only while it burns),
-   * and the consumption multiplier the player puts in the payload (`consumptionMultiplier`).
-   * @param {object} t - PLAYER_TELEMETRY payload
-   * @private
-   */
-  _cacheDeltaV(t) {
-    if (Number.isFinite(t.deltaV)) { this._cachedPlayerDeltaV = t.deltaV; return; }
-    if (!t.resources) return;
-    const res = t.resources;
-    const fuel = Constants.FUELS[t.currentFuelId] || Constants.FUELS[res.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
-    this._cachedPlayerDeltaV = engineDeltaV({
-      dryKg: Constants.OCTOPUS_V5.CORE_DRY_MASS + engineTankDryKg(res),
-      coldGasKg: coldGasPoolToKg(res.coldGas || 0),
-      gasKg: engineGasKg(res),
-      isp: fuel.isp,
-      c: t.consumptionMultiplier > 0 ? t.consumptionMultiplier : 1,
-    });
-  }
-
-  // ==========================================================================
-  // CANVAS SETUP
-  // ==========================================================================
 
   /** @private Create the 2D canvas overlay */
   _createCanvas() {
@@ -599,7 +497,7 @@ export class TargetReticle {
     this._height = window.innerHeight;
     this._halfW = this._width / 2;
     this._halfH = this._height / 2;
-    this._obstacleCache = null;   // u14a: the HUD moves with the window
+    this._obstacleCache = null;   // the HUD moves with the window
     this.canvas.width = this._width * dpr;
     this.canvas.height = this._height * dpr;
     this.canvas.style.width = this._width + 'px';
@@ -609,21 +507,15 @@ export class TargetReticle {
     this.ctx.imageSmoothingQuality = 'high';
   }
 
-  // ==========================================================================
-  // PUBLIC API
-  // ==========================================================================
+  // Public API
 
-  /**
-   * Set the currently selected target ID.
-   * @param {number|null} id
-   */
+  /** @param {number|null} id */
   setSelectedTarget(id) {
     this._selectedTargetId = id;
   }
 
   /**
-   * Replace the function that returns the HUD rects markers keep clear of (tests; or a host with its own layout).
-   * `null` = the default DOM reader. The cache is dropped.
+   * Replace the HUD-rect reader (tests; hosts with their own layout). `null` = the default DOM reader.
    * @param {(() => Array<{left:number,top:number,right:number,bottom:number}>)|null} fn
    */
   setObstacleReader(fn) {
@@ -632,8 +524,8 @@ export class TargetReticle {
   }
 
   /**
-   * The visible HUD rects (u14a A4), cached for OBSTACLE_REFRESH_S of reticle time and dropped on resize. Empty below
-   * OBSTACLE_MIN_VIEW_W (phones: today's drawing) and without a DOM.
+   * The visible HUD rects, cached for OBSTACLE_REFRESH_S of reticle time and dropped on resize. Empty below
+   * OBSTACLE_MIN_VIEW_W (phones) and without a DOM.
    * @returns {Array<{left:number,top:number,right:number,bottom:number}>}
    */
   _getObstacles() {
@@ -649,7 +541,7 @@ export class TargetReticle {
     return this._obstacleCache;
   }
 
-  /** Obstacles for an edge arrow: the HUD blocks plus the AP chip while it is drawn (u14a A3 / A4). */
+  /** Obstacles for an edge arrow: the HUD blocks plus the AP chip while it is drawn. */
   _getEdgeObstacles() {
     const obs = this._getObstacles();
     if (obs === NO_OBSTACLES || !this._apEngaged || !this._apBadgeRect) return obs;
@@ -662,10 +554,9 @@ export class TargetReticle {
   }
 
   /**
-   * Cut the HUD blocks out of everything drawn from here to the caller's `ctx.restore()` (u14a A2): an even-odd clip of
-   * the whole canvas minus each obstacle rect. In SCREEN coordinates — the lasso shake translates the canvas, so the
-   * rects are shifted back by it. No obstacles = no clip call at all (today's call sequence).
-   * @private
+   * Cut the HUD blocks out of everything drawn from here to the caller's `ctx.restore()`: an even-odd clip of the whole
+   * canvas minus each obstacle rect. In SCREEN coordinates — the lasso shake translates the canvas, so the rects are
+   * shifted back by it. No obstacles = no clip call at all.
    */
   _clipToObstacles() {
     const obs = this._getObstacles();
@@ -684,7 +575,7 @@ export class TargetReticle {
   }
 
   /**
-   * Set view-level rendering config (from CameraSystem info levels).
+   * View-level rendering config (from CameraSystem info levels).
    * @param {object} config
    */
   setViewConfig(config) {
@@ -693,22 +584,20 @@ export class TargetReticle {
   }
 
   /**
-   * Main update — called each frame from the game loop.
-   * @param {number} dt - Delta time
-   * @param {object} data - Game data
+   * Called each frame from the game loop.
+   * @param {number} dt - seconds
+   * @param {object} data
    * @param {object} data.debrisField - DebrisField instance
    * @param {object} data.activeSatellites - ActiveSatellites instance
-   * @param {THREE.Vector3} data.playerPos - Player position
-   * @param {object} data.targetSelector - TargetSelector for selected target
-   * @param {object} [data.playerVel] - Player velocity { x, y, z }
+   * @param {THREE.Vector3} data.playerPos - scene units
+   * @param {object} data.targetSelector - TargetSelector for the selected target
+   * @param {object} [data.playerVel] - { x, y, z }
    */
   update(dt, data) {
     this._time += dt;
     this._dt = dt;
 
-    // Session O (plan D16 (b)): copy the score-strip exclusion band from data into
-    // the ONE reused instance rect (zero per-frame allocation; `exclusionRect` is
-    // null off the ladder → cleared — byte-identical shipped path).
+    // Copy the score-strip exclusion band into the ONE reused rect (no per-frame allocation); null clears it.
     if (data && data.exclusionRect) {
       if (!this._exclusionRect) this._exclusionRect = {};
       this._exclusionRect.left = data.exclusionRect.left;
@@ -720,21 +609,18 @@ export class TargetReticle {
     }
     this._colorLaw = (data && data.colorLaw) ? data.colorLaw : null;
 
-    // Decrement first-encounter callout timers
-    if (this._progradeCalloutTimer > 0) this._progradeCalloutTimer -= dt;
-    if (this._retroCalloutTimer > 0) this._retroCalloutTimer -= dt;
     if (this._outOfRangeFlashT > 0) this._outOfRangeFlashT -= dt;
 
-    // Advance lock ceremony timers
+    // Lock ceremony timers
     if (this._lockAnimActive) {
-      this._lockAnimT += dt / 0.3; // 300ms duration
+      this._lockAnimT += dt / 0.3; // 0.3 s
       if (this._lockAnimT >= 1) {
         this._lockAnimT = 1;
         this._lockAnimActive = false;
       }
     }
     if (this._lockLostAnimActive) {
-      this._lockLostAnimT += dt / 0.2; // 200ms duration
+      this._lockLostAnimT += dt / 0.2; // 0.2 s
       if (this._lockLostAnimT >= 1) {
         this._lockLostAnimT = 1;
         this._lockLostAnimActive = false;
@@ -742,7 +628,7 @@ export class TargetReticle {
       }
     }
 
-    // Phase 6: Advance lasso feedback timers
+    // Lasso feedback timers
     if (this._lassoCooldownTimer > 0) this._lassoCooldownTimer -= dt;
     if (this._lassoDeniedTimer > 0) this._lassoDeniedTimer -= dt;
     if (this._lassoShakeTimer > 0) this._lassoShakeTimer -= dt;
@@ -750,12 +636,12 @@ export class TargetReticle {
     if (this._lassoFlightTimeout > 0) {
       this._lassoFlightTimeout -= dt;
       if (this._lassoFlightTimeout <= 0) {
-        this._lassoInFlight = false; // Safety: clear stale in-flight state
-        this._lassoCooldownTimer = 1; // Show brief cooldown arc for cancel case
+        this._lassoInFlight = false; // clear stale in-flight state
+        this._lassoCooldownTimer = 1; // brief cooldown arc for the cancel case
       }
     }
 
-    // S9-B: Advance catch pulse timer
+    // Catch pulse timer
     if (this._catchPulseActive) {
       this._catchPulseTime -= dt;
       if (this._catchPulseTime <= 0) {
@@ -764,13 +650,10 @@ export class TargetReticle {
       }
     }
 
-    // Perf (2026-09-02): hidden canvas → no paint. Everything above (timers,
-    // ceremony/lasso/catch bookkeeping) has run so state stays correct across
-    // a hide; the closure-rate derivative resets so the first visible frame
-    // cannot spike off a stale distance. Nothing below is read by another
-    // system — every cross-system input to the reticle arrives via events.
+    // Hidden canvas: no paint. Timers and ceremony/lasso/catch bookkeeping above still ran, so state stays correct
+    // across a hide; the per-target closing-rate memory is cleared so the first visible frame cannot spike off a stale distance.
+    // Nothing below is read by another system — every cross-system input to the reticle arrives via events.
     if (!this._visible) {
-      this._prevSelectedTargetDist = null; this._selClosureKms = null; this._selRel = null;
       if (this.previousDistances) this.previousDistances.clear();
       if (this._closing) this._closing.clear();
       return;
@@ -778,7 +661,7 @@ export class TargetReticle {
 
     this.ctx.clearRect(0, 0, this._width, this._height);
 
-    // Phase 6: Screen micro-shake on lasso fire (2px, 100ms)
+    // Screen micro-shake on lasso fire (2 px, 100 ms)
     const doShake = this._lassoShakeTimer > 0;
     if (doShake) {
       this.ctx.save();
@@ -789,93 +672,26 @@ export class TargetReticle {
 
     if (!data || !data.playerPos) {
       if (doShake) { this.ctx.restore(); this._shakeX = this._shakeY = 0; }
-      // 2026-05-15 polish task 4: also gate the early-return arc on SK,
-      // matching the main-path gate below at line ~544. Without this the
-      // green "Ready" ring would still render on the first frame after
-      // SK entry while data is briefly absent.
+      // Gated on SK like the main path below: else the green "Ready" ring renders on the first SK frame while data
+      // is briefly absent.
       if (!data || data.skTargetId == null) {
         this._drawLassoCooldownArc();
       }
       return;
     }
 
-    // Capture Phase 1 telemetry
     if (data.telemetry) {
       this._thrustDirection = data.telemetry.thrustDirection || null;
     }
 
     const { debrisField, activeSatellites, playerPos, targetSelector } = data;
 
-    // Phase R6: Track selected target distance for prograde closure rate + ETA
-    this._selectedTargetDistKm = 0;
-    this._selectedClosureRate = 0;
-    if (targetSelector && data.playerPos) {
-      const selTarget = targetSelector.getActiveTarget();
-      const selTargetId = selTarget ? selTarget.id : null;
-      // Reset previous distance when target changes to avoid closure rate spikes
-      if (selTargetId !== this._prevClosureTargetId) {
-        this._prevSelectedTargetDist = null; this._selClosureKms = null; this._selRel = null;
-        this._prevClosureTargetId = selTargetId;
-      }
-      if (selTarget && (selTarget._scenePosition || selTarget.orbit)) {
-        // Prefer the rendered _scenePosition so PINNED pieces (#1/#2) report
-        // their true range instead of a stale frozen-orbit distance.
-        let tx, ty, tz;
-        if (selTarget._scenePosition) {
-          tx = selTarget._scenePosition.x;
-          ty = selTarget._scenePosition.y;
-          tz = selTarget._scenePosition.z;
-        } else {
-          // Sprint 2 / PR A — scratch-output variant.
-          orbitToSceneCartesianInto(selTarget.orbit, this._tmpCartPos, this._tmpCartVel);
-          tx = this._tmpCartPos.x;
-          ty = this._tmpCartPos.y;
-          tz = this._tmpCartPos.z;
-        }
-        const dx = tx - data.playerPos.x;
-        const dy = ty - data.playerPos.y;
-        const dz = tz - data.playerPos.z;
-        const distKm = Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_SCALE;
-        this._selectedTargetDistKm = distKm;
-        if (!this._selRel) this._selRel = { has: false };
-        const selJumped = this._relJump(this._selRel, dx, dy, dz, this._dt);
-        if (selJumped) { this._prevSelectedTargetDist = null; this._selClosureKms = null; }   // measuring point moved: start over
-        if (this._dt > 0 && this._prevSelectedTargetDist !== null) {
-          // km/s; smoothed like the target's own line (same time constant), so the 1 m/s edge below cannot flicker
-          const rawKms = (this._prevSelectedTargetDist - distKm) / this._dt;
-          if (this._selClosureKms != null && Math.abs(rawKms - this._selClosureKms) * 1000 > CLOSING_BACKSTOP_MS) {
-            this._selClosureKms = null;   // backstop: not a speed, start over (the next frame seeds the average)
-          } else {
-            this._selClosureKms = this._selClosureKms == null
-              ? rawKms
-              : lerp(this._selClosureKms, rawKms, 1 - Math.exp(-this._dt / CLOSING_TAU_S));
-            this._selectedClosureRate = this._selClosureKms;
-          }
-        }
-        this._prevSelectedTargetDist = distKm;
-      } else {
-        this._prevSelectedTargetDist = null; this._selClosureKms = null;
-      }
-    }
-
-    // Phase R6: Periapsis detection for Oberth efficiency hint
-    this._nearPeriapsis = false;
-    if (data.playerOrbit) {
-      const ecc = data.playerOrbit.eccentricity || 0;
-      const ta = data.playerOrbit.trueAnomaly || 0;
-      if (ecc > 0.01) {
-        this._nearPeriapsis = (ta < Math.PI / 6) || (ta > (2 * Math.PI - Math.PI / 6));
-      }
-    }
-
-    // Update projection matrix
     this.camera.updateMatrixWorld();
     this._projMatrix.multiplyMatrices(
       this.camera.projectionMatrix,
       this.camera.matrixWorldInverse
     );
 
-    // Get selected target ID from target selector
     if (targetSelector) {
       const activeTarget = targetSelector.getActiveTarget();
       if (activeTarget) {
@@ -883,30 +699,24 @@ export class TargetReticle {
       }
     }
 
-    // --- Gather debris targets within range ---
     if (debrisField) {
       this._debrisTargets = debrisField.getDebrisNear(playerPos, MAX_RETICLE_RANGE);
     }
 
-    // --- Gather active satellite targets ---
     if (activeSatellites) {
       this._activeSatTargets = activeSatellites.getSatelliteList(playerPos);
     }
 
-    // Phase 7: Reset selected target screen pos each frame (avoid stale heading line)
     this._selectedScreenPos = null;
     this._pairMarkScreen = null;
 
-    // During STATION_KEEP we want to silence all on-screen target chrome
-    // EXCEPT a faint outline on the actual target debris.  The arm pilot is
-    // focused on a single piece of debris ~8 m away — surrounding contacts'
-    // brackets, labels, ETAs, and arrows are visual noise that pull the eye
-    // away from the work.  We render the SK target with reduced globalAlpha
-    // (no labels) so the pilot still has a positional confirmation.
+    // During STATION_KEEP all on-screen target chrome is silenced EXCEPT a faint outline (no labels) on the SK target
+    // debris: the arm pilot works on one piece ~8 m away, and neighbouring brackets, labels, ETAs and arrows only pull
+    // the eye away.
     const skTargetId = data.skTargetId;
     if (skTargetId != null) {
       this.ctx.save();
-      this.ctx.globalAlpha = 0.2;   // very faint outline only
+      this.ctx.globalAlpha = 0.2;
       for (const target of this._debrisTargets) {
         if (target.id !== skTargetId) continue;
         if (!target.alive || target._captured || this._capturedIds.has(target.id)) continue;
@@ -914,9 +724,8 @@ export class TargetReticle {
         this._drawDebrisReticle(target, playerPos);
       }
       this.ctx.restore();
-      // Skip neighbouring debris + active sats entirely while station-keeping.
+      // neighbouring debris and active sats are skipped entirely
     } else {
-      // --- Draw reticles for debris ---
       // Scan-first (DECISIONS §15 row 1): an undiscovered piece gets no bracket
       // and no off-screen arrow until a scan (S) reveals it. The list stays
       // unfiltered — getDebrisNear's result is a frame-shared cache the scan
@@ -927,18 +736,16 @@ export class TargetReticle {
         this._drawDebrisReticle(target, playerPos);
       }
 
-      // --- Draw reticles for active satellites ---
       for (const sat of this._activeSatTargets) {
-        if (sat.distance / Constants.SCENE_SCALE > 100) continue; // Skip if > 100km
+        if (sat.distance / Constants.SCENE_SCALE > 100) continue; // skip beyond 100 km
         this._drawActiveSatReticle(sat, playerPos);
       }
 
-      // --- The pair's second piece (pair-shot, owner 2026-10-25 "2 a"): marked only while a pair is offered ---
+      // The pair's second piece: marked only while a pair is offered
       this._pairPiece = data.pairPiece || null;
       if (this._pairPiece && this._pairPiece.alive !== false) this._drawPairMarker(this._pairPiece);
     }
 
-    // Clean up stale closure rate entries
     const activeIds = new Set(this._debrisTargets.map(t => t.id));
     for (const id of this.previousDistances.keys()) {
       if (!activeIds.has(id)) this.previousDistances.delete(id);
@@ -949,29 +756,21 @@ export class TargetReticle {
       }
     }
 
-    // Phase 6: Restore shake transform
     if (doShake) { this.ctx.restore(); this._shakeX = this._shakeY = 0; }
 
-    // Calm-HUD: autopilot-engaged badge — drawn from the top level, AFTER the
-    // shake restore (a mode readout should not shake).
+    // Autopilot badge: top level, AFTER the shake restore (a mode readout should not shake).
     if (this._apEngaged) this._drawApBadge(); else this._apBadgeRect = null;
 
-    // Phase 6: Draw lasso cooldown arc (on top, no shake).
-    // 2026-05-15 polish task 4: the cooldown arc's "Ready" state is a
-    // green ring (#00ff88 @ α0.35, radius 22) drawn at screen-centre —
-    // exactly the mid-screen green circle the user reported as still
-    // visible during SK. The pilot isn't going to fire a lasso while
-    // parked on a target (Space is bound to capture in SK at line 777),
-    // so the arc has no purpose there and is purely visual noise inside
-    // the SK target bracket. Skip when in SK.
+    // Lasso cooldown arc: on top, no shake. Skipped in SK: its "Ready" state is a green ring (#00ff88 @ α0.35, radius
+    // 22) at screen centre, which would be visual noise inside the SK target bracket (Space is capture in SK, not lasso).
     if (data.skTargetId == null) {
       this._drawLassoCooldownArc();
     }
   }
 
   /**
-   * Show/hide the canvas. Also gates the per-frame paint in update() (perf):
-   * a hidden reticle keeps its timers ticking but draws nothing.
+   * Show/hide the canvas. Also gates the per-frame paint in update(): a hidden reticle keeps its timers ticking but
+   * draws nothing.
    * @param {boolean} visible
    */
   setVisible(visible) {
@@ -982,25 +781,16 @@ export class TargetReticle {
   /** @returns {boolean} whether the reticle canvas is shown (and painted). */
   isVisible() { return this._visible; }
 
-  /**
-   * Sim mode: catch pulse is disabled — no bracket flash, no green glow.
-   * Previously expanded brackets +30% and flashed #00ff88 over 300ms, which
-   * read as arcade sparks on capture. Removed per user feedback.
-   */
+  /** Sim mode: no catch pulse (no bracket flash or green glow; it read as arcade sparks). Kept for external callers. */
   showCatchPulse() {
-    // no-op — keep method signature for external call sites.
   }
 
-  // ==========================================================================
-  // PROJECTION
-  // ==========================================================================
+  // Projection
 
   /**
-   * pair-shot: the mark on the pair's SECOND piece (the first, the selected one, keeps its own reticle): an amber double diamond with
-   * "PAIR" under it, unlike the selected piece's bracket; off screen, an amber chevron at the edge toward it. Drawn only while a pair is
-   * offered (main.js passes `pairPiece` = the second piece, else nothing).
+   * The mark on the pair's SECOND piece (the selected one keeps its own reticle): an amber double diamond with "PAIR"
+   * under it; off screen, an amber chevron at the edge toward it. main.js passes `pairPiece` only while a pair is offered.
    * @param {{_scenePosition: {x:number,y:number,z:number}}} piece
-   * @private
    */
   _drawPairMarker(piece) {
     const sp = piece && piece._scenePosition;
@@ -1037,7 +827,7 @@ export class TargetReticle {
   }
 
   /**
-   * Project a 3D world position to 2D screen coordinates.
+   * Project a world position to screen pixels (`ndcX`/`ndcY` returned for the edge arrows).
    * @param {THREE.Vector3} worldPos
    * @returns {{ x: number, y: number, z: number, visible: boolean }}
    */
@@ -1054,14 +844,11 @@ export class TargetReticle {
     const ndcY = this._tempVec4.y / w;
     const ndcZ = this._tempVec4.z / w;
 
-    // Behind camera check
     const behind = w < 0;
 
-    // Convert NDC to screen pixels
     const screenX = (ndcX + 1) * this._halfW;
     const screenY = (1 - ndcY) * this._halfH;
 
-    // Check if within viewport (with small margin)
     const margin = 50;
     const visible = !behind &&
       ndcX >= -1 && ndcX <= 1 &&
@@ -1072,14 +859,14 @@ export class TargetReticle {
   }
 
   /**
-   * Calculate edge-of-screen position for off-screen arrow.
+   * Edge-of-screen position for an off-screen arrow.
    * @param {number} ndcX - NDC x (-1 to 1, or beyond)
    * @param {number} ndcY - NDC y (-1 to 1, or beyond)
    * @param {boolean} behind - Whether target is behind camera
-   * @returns {{ x: number, y: number, angle: number }}
+   * @returns {{ x: number, y: number, angle: number }} angle: screen-space radians toward the target
    */
   _getEdgePosition(ndcX, ndcY, behind) {
-    // If behind camera, flip direction
+    // Behind the camera the direction flips
     let dx = ndcX;
     let dy = ndcY;
     if (behind) {
@@ -1087,16 +874,14 @@ export class TargetReticle {
       dy = -dy;
     }
 
-    // Normalize to unit direction
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len < 0.001) {
-      dx = 0; dy = -1; // Default: point up
+      dx = 0; dy = -1; // default: point up
     } else {
       dx /= len;
       dy /= len;
     }
 
-    // Find intersection with screen edges
     const pad = EDGE_PADDING;
     const edgeW = this._width - pad * 2;
     const edgeH = this._height - pad * 2;
@@ -1110,10 +895,9 @@ export class TargetReticle {
     }
 
     const ex = this._halfW + dx * scale;
-    const ey = this._halfH - dy * scale; // Flip Y for screen coords
+    const ey = this._halfH - dy * scale; // flip Y for screen coords
 
-    // Angle for the arrow (points toward target)
-    const angle = Math.atan2(-dy, dx); // Screen space angle
+    const angle = Math.atan2(-dy, dx);
 
     return {
       x: clamp(ex, pad, this._width - pad),
@@ -1123,7 +907,7 @@ export class TargetReticle {
   }
 
   /**
-   * @private Did the measuring point jump this frame? `st` keeps the last relative position (target minus observer, scene
+   * Did the measuring point jump this frame? `st` keeps the last relative position (target minus observer, scene
    * units) and last relative velocity; a jump is a frame whose relative velocity differs from the last frame's by more
    * than CLOSING_JUMP_M metres over the frame (a real approach or fly-by moves steadily, a switch of observer does not).
    * After a jump the velocity memory is dropped, so the frame after it is not compared against the jump itself.
@@ -1145,7 +929,7 @@ export class TargetReticle {
   }
 
   /**
-   * @private Smoothed closing rate for the selected target (m/s, positive = closing). `raw` is this frame's finite
+   * Smoothed closing rate for the selected target (m/s, positive = closing). `raw` is this frame's finite
    * difference. Exponential average (CLOSING_TAU_S), per target id; the readout shows from CLOSING_SHOW_MS and hides
    * below CLOSING_HIDE_MS, so a rate sitting on an edge cannot flip it frame to frame. A target not seen for
    * CLOSING_STALE_S starts over, and the sample that ends the gap is dropped (its previous distance is old).
@@ -1161,8 +945,8 @@ export class TargetReticle {
       return null;
     }
     e.t = this._time;
-    // The measuring point jumped (observer or reference changed), or this frame's rate is far from the average: the
-    // frame's difference is not a speed. Start over; the next frame seeds the average.
+    // A jump (observer or reference changed) or a rate far from the average: this frame's difference is not a speed.
+    // Start over; the next frame seeds the average.
     const jumped = rel ? this._relJump(e.rel, rel.x, rel.y, rel.z, this._dt) : false;
     if (jumped || (e.rate !== null && Math.abs(raw - e.rate) > CLOSING_BACKSTOP_MS)) {
       e.rate = null; e.shown = false;
@@ -1182,22 +966,12 @@ export class TargetReticle {
     return e;
   }
 
-  // ==========================================================================
-  // DEBRIS RETICLE DRAWING
-  // ==========================================================================
+  // Debris reticle drawing
 
-  /**
-   * Draw reticle for a debris target (on-screen or off-screen arrow).
-   * @private
-   */
   _drawDebrisReticle(target, playerPos) {
-    // World position + velocity. Compute orbit velocity into _tmpCartVel (used
-    // by the velocity-vector / lead rendering below), but PREFER the
-    // authoritative rendered _scenePosition for the bracket position: onboarding
-    // PINNED pieces (#1/#2) skip orbit propagation each frame, so their orbit is
-    // stale and orbitToSceneCartesian would draw the bracket far from where the
-    // debris actually renders (the reported "reticle won't focus on #1/#2" bug).
-    // getDebrisNear carries _scenePosition as a clone on the snapshot.
+    // Orbit velocity goes into _tmpCartVel, but PREFER the rendered _scenePosition (carried as a clone on the
+    // getDebrisNear snapshot) for the bracket: onboarding PINNED pieces (#1/#2) skip orbit propagation, so
+    // their orbit is stale and would put the bracket far from where the debris renders.
     orbitToSceneCartesianInto(target.orbit, this._tmpCartPos, this._tmpCartVel);
     if (target._scenePosition) {
       this._tempVec3.set(target._scenePosition.x, target._scenePosition.y, target._scenePosition.z);
@@ -1206,11 +980,9 @@ export class TargetReticle {
     }
     const worldPos = this._tempVec3;
 
-    // Project to screen
     const proj = this._project(worldPos);
     const distKm = target.distanceKm;
 
-    // Track closure rate (distance delta over time)
     target._closureRate = null;
     target._closureShown = false;
     target._closureDec = false;
@@ -1231,7 +1003,7 @@ export class TargetReticle {
 
     const isSelected = target.id === this._selectedTargetId;
 
-    // Phase 7: Capture selected target screen position for AP heading line
+    // Selected target's screen position feeds the AP heading line.
     if (isSelected && proj.visible) {
       this._selectedScreenPos = { x: proj.x, y: proj.y };
     }
@@ -1250,19 +1022,9 @@ export class TargetReticle {
     const color = law ? law.color : this._getDebrisColor(target);
 
     if (proj.visible) {
-      // === ON-SCREEN RETICLE ===
-      // Sprint 2 / PR A fix — pass the velocity scratch directly. The old
-      // `cart` binding (a `{position, velocity}` literal from the allocating
-      // `orbitToSceneCartesian`) was removed when this site migrated to the
-      // scratch-output variant at line 677, but the downstream argument and
-      // four `cart.velocity.*` reads inside `_drawOnScreenReticle` were left
-      // dangling — causing `ReferenceError: cart is not defined` every frame
-      // in ORBITAL_VIEW. `_tmpCartVel` is the velocity object written by
-      // `orbitToSceneCartesianInto` above; it carries `.x/.y/.z` km/s directly
-      // (no nested `.velocity`).
+      // `_tmpCartVel` is the velocity scratch written by `orbitToSceneCartesianInto`: `.x/.y/.z` km/s, no nested `.velocity`.
       this._drawOnScreenReticle(proj, target, color, isSelected, distKm, worldPos, playerPos, this._tmpCartVel, law);
     } else {
-      // === OFF-SCREEN ARROW ===
       const showArrow = law ? law.arrow : (isSelected || distKm < 50 || (target.type === 'rocketBody' && distKm < 30));
       if (showArrow) {
         this._drawOffScreenArrow(proj, target, color, isSelected, distKm, law);
@@ -1270,79 +1032,58 @@ export class TargetReticle {
     }
   }
 
-  /** @private u17: glass is read when a caption is drawn, never cached; no GestureHints (headless) means desktop. */
+  /** @private Glass is read when a caption is drawn, never cached; no GestureHints (headless) means desktop. */
   _glassNow() {
     return !!(GestureHints && typeof GestureHints.isGlass === 'function' && GestureHints.isGlass());
   }
 
   /**
-   * Draw on-screen bracket reticle for debris.
    * @private
-   * @param {{x:number,y:number,z:number}|null} vel — km/s velocity scratch from
-   *   [`orbitToSceneCartesianInto`](js/entities/OrbitalMechanics.js:593). The
-   *   parameter shape changed in Sprint 2 / PR A: callers now pass the velocity
-   *   scratch object directly instead of a `{position, velocity}` wrapper.
+   * @param {{x:number,y:number,z:number}|null} vel — km/s velocity scratch from `orbitToSceneCartesianInto`
    */
   _drawOnScreenReticle(proj, target, color, isSelected, distKm, worldPos, playerPos, vel, law = null) {
     const ctx = this.ctx;
     const x = proj.x;
     const y = proj.y;
 
-    // Size scales with distance (larger when closer)
+    // Larger when closer.
     const distFactor = clamp(5.0 / (distKm + 1), 0.2, 1.0);
     let size = lerp(RETICLE_MIN_SIZE, RETICLE_MAX_SIZE, distFactor);
 
-    // Target lock ceremony state
     const isLockLost = !isSelected && target.id === this._lockLostTargetId && this._lockLostAnimActive;
 
     if (isSelected) {
       size *= SELECTED_RETICLE_SCALE;
-      // Lock-on ceremony: brackets shrink from 2.5× → 1× over 300ms
+      // Lock-on ceremony: brackets shrink from 2.5× → 1× over 300ms; steady after (no standing breathe).
       if (this._lockAnimActive) {
         size *= 1 + 1.5 * (1 - this._easeOutCubic(this._lockAnimT));
       }
-      // Calm-HUD: no standing size breathe on the selected reticle — the lock
-      // ceremony above covers the selection event; steady brackets after that.
     } else if (isLockLost) {
-      // Lock-lost ceremony: start at selected scale, expand to 2×
+      // Starts at selected scale, expands to 2×.
       size *= SELECTED_RETICLE_SCALE * (1 + this._lockLostAnimT);
     }
 
-    // S9-B: Catch pulse — expand brackets outward during pulse
     if (this._catchPulseActive && isSelected) {
       const pulseProgress = Math.max(0, this._catchPulseTime / 0.3);
       size *= 1 + 0.3 * pulseProgress; // 1.3× at start, 1.0× at end
     }
 
     const half = size / 2;
-    const corner = size * 0.3; // Corner bracket length
+    const corner = size * 0.3;
 
-    // Reward-first spine: a selected-but-OUT-OF-RANGE target renders YELLOW
-    // (no lock glow) — the silent "too far for the net" state that teaches
-    // Autopilot. In range → cyan lock. Derived once here and reused by both the
-    // bracket and label sub-sections below to avoid drift within this method.
+    // A selected-but-OUT-OF-RANGE target renders YELLOW (no lock glow): the silent "too far for the net" state that
+    // teaches Autopilot. In range → cyan lock. Derived once, shared by the bracket and label code below.
     const outOfRange = this._selectedInRange === false;
     const selColor = law ? law.color : (outOfRange ? COLORS.yellow : COLORS.cyan);
 
-    // Session O (plan D16 (b), owner 2026-09-07): the score-strip exclusion
-    // band — an UNSELECTED debris bracket whose BOX (the arms, `x ± half` /
-    // `y ± half`, down to its dist label at `y + half + 22`) would touch the
-    // strip's rect + the 8 px pad is skipped WHOLE — never a half reticle
-    // under the strip, never a bracket+label pair the strip's opaque panel
-    // sits over (chrome-over-chrome, the owner's D16 (b) screenshot). The
-    // review of the gate pictures tightened the rule from the label anchor
-    // to the box: a large near bracket's top arm still crossed the strip while
-    // its label cleared it. The SELECTED target is exempt — its bracket is the
-    // player's lock (the teaching overlay points at it); the strip is small
-    // and a lock under it is brief. Off-screen arrows are drawn by a
-    // different path and are unaffected. Zero per-frame allocation: reads
-    // only (the reused instance rect + this method's existing x/y/half
-    // numbers). Null (flag-off) → byte-identical shipped path.
+    // owner 2026-09-07: score-strip exclusion band. An UNSELECTED bracket whose BOX (arms `x ± half` / `y ± half`, down
+    // to its dist label at `y + half + 22`) would touch the strip rect + 8 px pad is skipped WHOLE: never a half
+    // reticle under the strip, never a bracket+label under its opaque panel. The SELECTED target is exempt (it is the
+    // player's lock). Off-screen arrows take a different path. Allocation-free; null rect (flag off) → no skip.
     const ex = this._exclusionRect;
     if (ex != null && !isSelected) {
-      // Session Q: the caution word rides ABOVE the box (baseline y - half - 6,
-      // ~11 px glyphs, up to ~80 px wide) — it is part of the box for this test,
-      // so an amber TUMBLING never lands on the strip. Null law → the O box.
+      // The caution word rides ABOVE the box (baseline y - half - 6, ~11 px glyphs, up to ~80 px wide) and counts as
+      // part of the box, so an amber TUMBLING never lands on the strip. Null law → no word.
       const wordUp = (law && law.word) ? 17 : 0;
       const reach = Math.max(half > 30 ? half : 30, wordUp ? 40 : 0);   // the dist label is centred at x, ~60 px wide at most
       if (x + reach >= ex.left - SCORE_STRIP_PAD_PX && x - reach <= ex.right + SCORE_STRIP_PAD_PX &&
@@ -1355,24 +1096,20 @@ export class TargetReticle {
     this._clipToObstacles();
 
     if (isSelected) {
-      // Steady alpha for selected target (Issue #5 — removed pulse)
       ctx.globalAlpha = 0.85;
       ctx.strokeStyle = selColor;
       ctx.lineWidth = Constants.RETICLE_BRACKET_WIDTH_SELECTED || 3.0;
 
-      // White corner flash at start of lock-on animation (~60ms window) — only
-      // for an in-range lock (the flash is the "locked, act now" cue).
+      // White corner flash at lock-on start (~60ms), in-range locks only: the "locked, act now" cue.
       if (!outOfRange && this._lockAnimActive && this._lockAnimT < 0.20) {
         ctx.strokeStyle = COLORS.white;
         ctx.shadowColor = COLORS.white;
         ctx.shadowBlur = 16;
       } else {
-        // Outer glow
         ctx.shadowColor = selColor;
         ctx.shadowBlur = 0;
       }
     } else if (isLockLost) {
-      // Lock-lost: cyan brackets fading out
       ctx.globalAlpha = 1 - this._lockLostAnimT;
       ctx.strokeStyle = COLORS.cyan;
       ctx.lineWidth = Constants.RETICLE_BRACKET_WIDTH_SELECTED || 3.0;
@@ -1388,7 +1125,7 @@ export class TargetReticle {
       ctx.lineWidth = Constants.RETICLE_BRACKET_WIDTH || 2.0;
     }
 
-    // Phase 6: Lasso contact flash — temporarily override bracket to white
+    // Lasso contact flash: bracket goes white
     if (this._lassoContactFlashTimer > 0 && target.id === this._lassoContactTargetId) {
       ctx.globalAlpha = 1;
       ctx.strokeStyle = COLORS.white;
@@ -1397,7 +1134,7 @@ export class TargetReticle {
       ctx.shadowBlur = 16;
     }
 
-    // S9-B: Catch pulse — green-cyan flash on selected target brackets
+    // Catch pulse: green-cyan flash on the selected bracket
     if (this._catchPulseActive && isSelected) {
       const pulseProgress = Math.max(0, this._catchPulseTime / 0.3);
       ctx.globalAlpha = 0.7 + 0.3 * pulseProgress;
@@ -1407,41 +1144,30 @@ export class TargetReticle {
       ctx.shadowBlur = 12 * pulseProgress;
     }
 
-    // Draw corner brackets [ ]
     ctx.beginPath();
-    // Top-left corner
     ctx.moveTo(x - half, y - half + corner);
     ctx.lineTo(x - half, y - half);
     ctx.lineTo(x - half + corner, y - half);
-    // Top-right corner
     ctx.moveTo(x + half - corner, y - half);
     ctx.lineTo(x + half, y - half);
     ctx.lineTo(x + half, y - half + corner);
-    // Bottom-right corner
     ctx.moveTo(x + half, y + half - corner);
     ctx.lineTo(x + half, y + half);
     ctx.lineTo(x + half - corner, y + half);
-    // Bottom-left corner
     ctx.moveTo(x - half + corner, y + half);
     ctx.lineTo(x - half, y + half);
     ctx.lineTo(x - half, y + half - corner);
     ctx.stroke();
 
-    // Reset shadow
     ctx.shadowBlur = 0;
 
-    // Lock-lost ceremony: only draw fading brackets, skip all labels
+    // Lock-lost: fading brackets only, no labels
     if (isLockLost) {
       ctx.restore();
       return;
     }
 
-    // --- Distance text below reticle ---
-    // 2026-05-28 (Item 7 readability pass): font sizes doubled (10/11/9 → 20/22/18)
-    // and vertical offsets re-spaced to clear the larger glyph height. The
-    // sequence below reticle is: distance (20 px) → closure rate (18 px) →
-    // metal preview (18 px). Baselines need ~22 px spacing per row to avoid
-    // overlap; previously they were at +14/+26/+38 (12 px spacing).
+    // Label rows below the reticle: distance (20 px) → closure rate (18 px) → baselines ~22 px apart.
     ctx.font = mono(20);
     ctx.fillStyle = law ? law.color : color;
     ctx.textAlign = 'center';
@@ -1454,9 +1180,7 @@ export class TargetReticle {
     const distText = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
     ctx.fillText(distText, x, y + half + 22);
 
-    // --- Closure rate below distance (selected target only) ---
-    // Plain words ("Closing"/"Opening") instead of ▲/▼ jargon for newcomers,
-    // and nothing at all when the rate is negligible (no dead "0 m/s" line).
+    // Closure rate below distance (selected only). Plain words, not ▲/▼, and nothing when negligible (no "0 m/s").
     if (isSelected && target._closureRate != null && target._closureShown && this._viewConfig.showClosureRate) {
       const rate = target._closureRate;           // smoothed (see _smoothClosing)
       const absRate = Math.abs(rate);
@@ -1473,17 +1197,11 @@ export class TargetReticle {
       ctx.fillText(law.word, x, y - half - 6);
     }
 
-    // Phase R6: Metal loot preview — removed 2026-06-14 (declutter). The
-    // refined-metal breakdown lives in the target dossier / shop; the floating
-    // "Al:..kg" metal line next to every selected target was noise.
-
-    // --- Selected target: extra info ---
     if (isSelected) {
-      // Reward-first spine: brief "OUT OF RANGE" callout below the distance when
-      // the selected target is beyond net-lock range. The onboarding comms point
-      // directly at this label ("see OUT OF RANGE"), so the wording is load-bearing.
+      // Brief "OUT OF RANGE" callout when beyond net-lock range. The onboarding comms point at this label
+      // ("see OUT OF RANGE"), so the wording is load-bearing.
       if (outOfRange && this._outOfRangeFlashT > 0) {
-        // Fade out over the last 0.5 s of the flash.
+        // Fades over the last 0.5 s.
         const a = clamp01(this._outOfRangeFlashT / 0.5);
         ctx.save();
         ctx.globalAlpha *= a;
@@ -1493,38 +1211,30 @@ export class TargetReticle {
         ctx.restore();
       }
 
-      // CP-2: DE-SPIN feedback — shown ONLY while the mother laser is actively
-      // firing (actionable "the de-spin is working" cue). The idle tumble°/s and
-      // size numerics were removed: the bracket color already encodes danger, and
-      // the raw figures live in the target dossier (TargetPanel) for those who
-      // want them. A newcomer can't act on "34.2°/s 1.5m".
+      // DE-SPIN feedback only while the mother laser is firing (the "it's working" cue). The idle tumble°/s and size
+      // numbers are deliberately not drawn: bracket color encodes danger; raw figures live in TargetPanel.
       if (target._despinning) {
         ctx.font = mono(11, 'bold');
         ctx.fillStyle = selColor;
         ctx.fillText('\u25BC DE-SPIN', x, y - half - 6);
       }
 
-      // Fading "▸ N" fire prompt — co-locates the comms lesson ("fire the Mother
-      // net with N") on the bracket the eye is already on. Deliberately gentle:
+      // Fading "▸ N" fire prompt: puts the comms lesson ("fire the Mother net with N") on the bracket the eye is on.
+      // Deliberately gentle:
       //   • only on an IN-RANGE lock,
-      //   • only across the first two pieces (capped by captures, NOT by the
-      //     first fire — so it returns for the 2nd piece), persisting on each
-      //     until that piece is captured, and
-      //   • only after a ~4 s grace from the first in-range lock — the player
-      //     gets to look around first (the grace is global, so by the 2nd piece
-      //     it shows promptly). Fades in over 0.8 s, then soft-pulses.
+      //   • only across the first two pieces (capped by captures, NOT by the first fire), persisting on each until
+      //     that piece is captured, and
+      //   • only after a ~4 s grace from the first in-range lock (global, so the 2nd piece shows promptly).
+      //     Fades in over 0.8 s, then soft-pulses.
       const NUDGE_DELAY_S = 4;
       if (!outOfRange && this._debrisCleared < 2) {
         if (this._firstInRangeLockTime == null) this._firstInRangeLockTime = this._time;
         const sinceLock = this._time - this._firstInRangeLockTime;
-        // u17 browser-check fix (owner u15 D5): on a touch screen the N key is never shown, and this prompt has no touch control to
-        // name instead (the LAUNCH NET chip and the comms lesson teach the net there), so it is left out. Read at draw time.
+        // owner 2026-10-23: on a touch screen the N key is never shown and there is no touch control to name instead (the
+        // LAUNCH NET chip and comms lesson teach the net there), so the prompt is left out. Read at draw time.
         if (sinceLock >= NUDGE_DELAY_S && !this._glassNow()) {
-          // Stays visible until the net is fired, but the pulse is intentionally
-          // calm: a slow breath (~0.29 Hz) whose amplitude eases from ±0.16 down
-          // to ±0.05 over the first ~6 s, so it greets the eye then settles into
-          // a soft steady glow rather than nagging. (This is the reference shape
-          // calmBreathe() encodes — keep the explicit opts so it stays exact.)
+          // Slow breath (~0.29 Hz), amplitude easing ±0.16 → ±0.05 over ~6 s, then a soft steady glow. This is the
+          // shape calmBreathe() encodes; keep the explicit opts so it stays exact.
           const shownFor = sinceLock - NUDGE_DELAY_S;
           ctx.save();
           ctx.globalAlpha = calmBreathe(this._time, shownFor, { base: 0.8 });
@@ -1545,9 +1255,8 @@ export class TargetReticle {
    * A mode as consequential as "the autopilot is flying my ship" is drawn unconditionally,
    * never inside another overlay's visibility check.
    *
-   * Calm-HUD: salience comes from WEIGHT, not motion — a bordered, amber-tinted
-   * chip with a static glow, at a stable position so it is learnable. The only
-   * motion is a single finite dip when AP engages (an event); then dead steady.
+   * Salience comes from WEIGHT, not motion: a bordered amber chip with a static glow at a stable position; the only
+   * motion is one finite dip when AP engages.
    * @private
    */
   _drawApBadge() {
@@ -1560,8 +1269,7 @@ export class TargetReticle {
     ctx.font = mono(12, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    // measureText is absent from the headless canvas mock — fall back to a
-    // fixed-pitch advance estimate so draw code stays test-safe.
+    // measureText is absent from the headless canvas mock: fall back to a fixed-pitch estimate.
     const textW = typeof ctx.measureText === 'function'
       ? ctx.measureText(label).width
       : label.length * 7.2;
@@ -1588,10 +1296,6 @@ export class TargetReticle {
     ctx.restore();
   }
 
-  /**
-   * Draw off-screen directional arrow.
-   * @private
-   */
   _drawOffScreenArrow(proj, target, color, isSelected, distKm, law = null) {
     const ctx = this.ctx;
     const edge = this._getEdgePosition(proj.ndcX, proj.ndcY, proj.behind);
@@ -1611,9 +1315,6 @@ export class TargetReticle {
       ctx.lineWidth = 2.5;
       ctx.shadowColor = COLORS.cyan;
       ctx.shadowBlur = 6;
-      // Calm-HUD: steady cyan — the 300 ms lock ceremony covers the selection
-      // event; the old 3 Hz standing pulse was the fastest blink on a
-      // centre-of-attention element.
       ctx.globalAlpha = 1;
     } else {
       ctx.strokeStyle = color;
@@ -1622,7 +1323,6 @@ export class TargetReticle {
       ctx.globalAlpha = Math.max(0.3, 1.0 - distKm / 50);
     }
 
-    // Draw arrow
     const arrowSize = (law || isSelected) ? 12 : 8;
     // Distance text (+ the type name above it for the selected target), in a block beside the arrow, never on it
     const fontPx = isSelected ? 11 : 10;
@@ -1639,7 +1339,7 @@ export class TargetReticle {
       ls.push({ t: distText, w: this._textWidth(distText, fontPx), h: fontPx + 1 });
       return ls;
     };
-    // u14a A3: a marker that would sit on a HUD pane slides inward along its bearing until it clears every pane
+    // A marker that would sit on a HUD pane slides inward along its bearing until it clears every pane
     let lines = null, lay = null, at = edge;
     const obs = this._getEdgeObstacles();
     if (obs.length) {
@@ -1679,14 +1379,8 @@ export class TargetReticle {
     return text.length * fontPx * 0.62;
   }
 
-  // ==========================================================================
-  // ACTIVE SATELLITE RETICLE
-  // ==========================================================================
+  // Active satellite reticle
 
-  /**
-   * Draw reticle/arrow for an active satellite.
-   * @private
-   */
   _drawActiveSatReticle(sat, playerPos) {
     const worldPos = sat.position;
     const proj = this._project(worldPos);
@@ -1695,15 +1389,10 @@ export class TargetReticle {
     if (proj.visible) {
       this._drawDiamondReticle(proj, sat, distKm);
     } else if (distKm < 20) {
-      // Off-screen warning arrow for nearby active sats
       this._drawActiveSatArrow(proj, sat, distKm);
     }
   }
 
-  /**
-   * Draw white diamond reticle for active satellite (on-screen).
-   * @private
-   */
   _drawDiamondReticle(proj, sat, distKm) {
     const ctx = this.ctx;
     const x = proj.x;
@@ -1718,7 +1407,7 @@ export class TargetReticle {
     ctx.lineWidth = 1.5;
     ctx.globalAlpha = 0.9;
 
-    // Diamond shape ◇
+    // Diamond ◇
     ctx.beginPath();
     ctx.moveTo(x, y - size);
     ctx.lineTo(x + size, y);
@@ -1727,7 +1416,6 @@ export class TargetReticle {
     ctx.closePath();
     ctx.stroke();
 
-    // Name and distance
     ctx.font = mono(10);
     ctx.fillStyle = COLORS.white;
     ctx.textAlign = 'center';
@@ -1735,10 +1423,8 @@ export class TargetReticle {
     const distText = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
     ctx.fillText(distText, x, y + size + 12);
 
-    // Warning if close
     if (distKm < 5) {
-      // Calm-HUD: steady red — this is a standing hazard, not an event; the
-      // WARN word + red already encode severity. (Was a hard on/off square wave.)
+      // Steady red: a standing hazard, not an event; the WARN word + red already encode severity.
       ctx.globalAlpha = 0.9;
       ctx.fillStyle = COLORS.red;
       ctx.font = mono(11, 'bold');
@@ -1748,10 +1434,6 @@ export class TargetReticle {
     ctx.restore();
   }
 
-  /**
-   * Draw off-screen arrow for active satellite with warning.
-   * @private
-   */
   _drawActiveSatArrow(proj, sat, distKm) {
     const ctx = this.ctx;
     const edge = this._getEdgePosition(proj.ndcX, proj.ndcY, proj.behind);
@@ -1759,9 +1441,7 @@ export class TargetReticle {
     ctx.save();
 
     const urgent = distKm < 5;
-    // Calm-HUD: steady red when urgent — standing hazard, not an event; the
-    // old hard square wave (0.5↔1.0 @ ~1.27 Hz) was the harshest pattern in
-    // the codebase. Audio (proximity warning) is event-driven elsewhere.
+    // Steady red when urgent: a standing hazard, not an event. Audio (proximity warning) is event-driven elsewhere.
     const alpha = urgent ? 1.0 : 0.8;
 
     ctx.strokeStyle = urgent ? COLORS.red : COLORS.white;
@@ -1778,8 +1458,8 @@ export class TargetReticle {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
     };
-    // u13 D3: the label sits beside the arrow, never under it (same placement as the debris marker);
-    // u14a A3: and both stay off the HUD panes (slid inward along the bearing)
+    // The label sits beside the arrow, never under it (same placement as the debris marker), and both stay off the
+    // HUD panes (slid inward along the bearing).
     const layoutAt = (e) => offscreenLabelLayout({
       edge: e, size: arrowSize, lineWidth: ctx.lineWidth, lines: [{ w: this._textWidth(label, fontPx), h: fontPx + 1 }],
       viewW: this._width, viewH: this._height,
@@ -1800,14 +1480,8 @@ export class TargetReticle {
     ctx.restore();
   }
 
-  // ==========================================================================
-  // DRAWING PRIMITIVES
-  // ==========================================================================
+  // Drawing primitives
 
-  /**
-   * Draw a filled arrow shape at a position.
-   * @private
-   */
   _drawArrowShape(x, y, angle, size) {
     const ctx = this.ctx;
     ctx.save();
@@ -1826,22 +1500,14 @@ export class TargetReticle {
     ctx.restore();
   }
 
-  // ==========================================================================
-  // EASING HELPERS
-  // ==========================================================================
-
   /**
-   * Cubic ease-out: decelerating to zero velocity.
-   * @param {number} t - Progress 0-1
-   * @returns {number} Eased value 0-1
+   * Cubic ease-out.
+   * @param {number} t - progress 0-1
+   * @returns {number} eased value 0-1
    */
   _easeOutCubic(t) {
     return 1 - Math.pow(1 - t, 3);
   }
-
-  // ==========================================================================
-  // PHASE 6: LASSO COOLDOWN ARC
-  // ==========================================================================
 
   /**
    * Draw lasso cooldown arc around crosshair center.
@@ -1869,8 +1535,7 @@ export class TargetReticle {
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.stroke();
     } else if (this._lassoInFlight) {
-      // In flight: steady dim gray ring (lasso active, can't fire).
-      // Calm-HUD: was a 2 Hz alpha wobble; the gray already reads "inactive".
+      // Steady dim gray: lasso active, can't fire.
       ctx.globalAlpha = 0.25;
       ctx.strokeStyle = '#888888';
       ctx.beginPath();
@@ -1894,47 +1559,27 @@ export class TargetReticle {
       ctx.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * progress));
       ctx.stroke();
     }
-    // 2026-05-15 polish task 4 (urgent revision): the original "Ready"
-    // branch drew a faint green ring at canvas centre (radius 22, α 0.35,
-    // #00ff88) any time the lasso was charged. User reported it as a
-    // mid-screen green circle that persisted regardless of game state
-    // (not just SK). Removed entirely — readiness is already conveyed by
-    // the absence of the cooldown / in-flight / denied indicators, plus
-    // the dedicated lasso HUD elements in TargetPanel. Keeping cooldown
-    // (gray), in-flight (gray pulse), and denied (red flash) since those
-    // communicate active state changes; only the static "you are ready"
-    // ring is gone.
+    // No "ready" ring: readiness is the absence of the cooldown / in-flight / denied indicators (plus the lasso HUD
+    // in TargetPanel).
 
     ctx.restore();
   }
 
-  // ==========================================================================
-  // COLOR & TYPE HELPERS
-  // ==========================================================================
+  // Color & type helpers
 
-  /**
-   * Get color for debris based on type and tumble rate.
-   * @private
-   */
   _getDebrisColor(target) {
     const tumbleDeg = radToDeg(target.tumbleRate);
 
-    // High tumble or large rocket body = red (dangerous)
+    // red = dangerous, yellow = medium, green = easy
     if (tumbleDeg > 60 || (target.type === 'rocketBody' && target.mass > 3000)) {
       return COLORS.red;
     }
-    // Medium tumble or defunct sats = yellow
     if (tumbleDeg > 20 || target.type === 'defunctSat') {
       return COLORS.yellow;
     }
-    // Low tumble fragments = green (easy)
     return COLORS.green;
   }
 
-  /**
-   * Get human-readable type name.
-   * @private
-   */
   _getTypeName(type) {
     switch (type) {
       case 'rocketBody': return 'ROCKET BODY';

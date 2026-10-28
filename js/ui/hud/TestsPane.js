@@ -11,6 +11,7 @@
 
 import { PANE_CORNER_PX } from '../RailGeometry.js';
 import { testsRequested } from './TestsSwitch.js';
+import { devSearch } from '../../core/DevHost.js';
 import { SoundLogPane } from './SoundLogPane.js';
 
 export const TESTS_PANE_ID = 'hud-tests-pane';
@@ -30,7 +31,7 @@ export class TestsPane {
     this.soundLog = null;
     this.open = false;
     // Read at construction, never at import, so tests can set it.
-    const search = opts.search ?? (typeof location !== 'undefined' ? location.search : '');
+    const search = opts.search ?? devSearch();
     this.requested = testsRequested(search);
     const doc = opts.doc || (typeof document !== 'undefined' ? document : null);
     if (!parent || !doc || !this.requested) return;

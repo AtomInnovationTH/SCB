@@ -10,7 +10,9 @@
  * SceneManager `preserveDrawingBuffer` read consume `requested`, the auto-capture default consumes `shotautoRequested`.
  * Also the explicit opt-in seam gating the `__lasso*` hooks (the guard lives in LassoSystem.js, not here). Safe
  * off-browser (Node test runner): returns the all-defaults struct when `window` / `URLSearchParams` is unavailable.
+ * Off a dev host (core/DevHost) the live read gives the defaults; `_parseForTest` stays pure.
  */
+import { devSearch } from './DevHost.js';
 
 /**
  * @typedef {object} DevShotGate
@@ -43,7 +45,7 @@ function parseFromLocation() {
     return DEFAULTS;
   }
   try {
-    return parse(window.location.search);
+    return parse(devSearch(window.location));
   } catch (_e) {
     return DEFAULTS;
   }

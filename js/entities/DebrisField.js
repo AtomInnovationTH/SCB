@@ -34,56 +34,43 @@ import { bagSize } from './scoopRule.js';
 import { DragSailSet } from './DragSailMesh.js';
 import { degToRad, radToDeg, clamp01, clamp, smoothstep01 } from '../core/MathUtil.js';
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
-// Runtime overrides honour Constants.DEBRIS.INTERACTIVE_COUNT/BACKGROUND_COUNT
-// (ST-6.1: moved from module-scope constants so hybrid-mode tests can inject).
+// Honour Constants.DEBRIS.INTERACTIVE_COUNT/BACKGROUND_COUNT so hybrid-mode tests can inject.
 const INTERACTIVE_COUNT = (Constants.DEBRIS && Constants.DEBRIS.INTERACTIVE_COUNT) || 800;
 const BACKGROUND_COUNT  = (Constants.DEBRIS && Constants.DEBRIS.BACKGROUND_COUNT)  || 5000;
 
-/** Debris type definitions */
-// Phase 2 (ASPECT_CAPTURE): `aspect` = length:width ratio (1.0 = symmetric).
-// lengthM/widthM are derived per piece in _createDebrisData and RE-DERIVED on
-// every resize by setDebrisSize (register item 7); keep these in sync with
-// Constants.ASPECT_CAPTURE.ASPECT_BY_TYPE (drift-guarded in
-// test-DebrisField-SizeSSOT.js).
+// `aspect` = length:width ratio (1.0 = symmetric). lengthM/widthM are derived per piece in _createDebrisData and
+// re-derived on every resize by setDebrisSize. Keep in sync with Constants.ASPECT_CAPTURE.ASPECT_BY_TYPE
+// (drift-guarded in test-DebrisField-SizeSSOT.js).
 const DEBRIS_TYPES = {
   fragment:     { weight: 0.60, sizeMin: 0.1, sizeMax: 1.0, massMin: 0.01, massMax: 5, tumbleMin: 10, tumbleMax: 180, shape: 'icosahedron', aspect: 1.0 },
   rocketBody:   { weight: 0.12, sizeMin: 5, sizeMax: 11, massMin: 500, massMax: 5000, tumbleMin: 1, tumbleMax: 20, shape: 'cylinder', aspect: 3.5 },
   defunctSat:   { weight: 0.16, sizeMin: 1, sizeMax: 8, massMin: 50, massMax: 2000, tumbleMin: 2, tumbleMax: 30, shape: 'box', aspect: 1.6 },
   missionDebris: { weight: 0.12, sizeMin: 0.05, sizeMax: 0.5, massMin: 0.001, massMax: 2, tumbleMin: 5, tumbleMax: 120, shape: 'sphere', aspect: 1.0 },
-  // cubesat — small WHOLE microsat (panelled box), 0.1–0.5 m, 1–12 kg, the
-  // heaviest whole thing a Mother net can take. Low tumble (intact body),
-  // net-catchable, the M1 graduation catch (welcome #7) and sprinkled rarely
-  // into the field. Registered so every type-keyed map resolves it.
+  // cubesat: small whole microsat (panelled box), the heaviest whole thing a Mother net can take. Low tumble;
+  // the M1 graduation catch (welcome #7), sprinkled rarely into the field.
   cubesat:      { weight: 0.02, sizeMin: 0.1, sizeMax: 0.5, massMin: 1, massMax: 10, tumbleMin: 1, tumbleMax: 15, shape: 'box', aspect: 1.1 },
 };
 
-/** 1 metre expressed in scene units (1 km = SCENE_SCALE scene units). */
-const METRE_SCENE = Constants.SCENE_SCALE / 1000;
+const METRE_SCENE = Constants.SCENE_SCALE / 1000;  // 1 m in scene units (1 km = SCENE_SCALE)
 
 /**
- * catch-near-pass (Decision 1): a piece the ship HOLDS (on the lasso/net line, at the nose, flying to or parked on a
- * rack, in a tip bag, in a daughter's hand — i.e. `_armPinned`) is drawn in the near-field pass while it is near the
- * ship, so the hull cannot paint over it from the depth-cleared near pass. The rule is the net tether's exactly
- * (CaptureNetVisual TETHER_NEAR_ON_M / TETHER_NEAR_OFF_M): in at 8.5 m from the ship, out beyond 9.5 m (the gap stops a
- * piece on the limit hopping between the two passes). The near pass brackets +-10 m (SceneManager NEAR_FIELD_RADIUS).
+ * A piece the ship HOLDS (`_armPinned`: on the lasso/net line, at the nose, on a rack, in a tip bag, in a daughter's
+ * hand) is drawn in the near-field pass while within HELD_NEAR_ON_M of the ship, so the hull cannot paint over it.
+ * Same rule as the net tether (CaptureNetVisual TETHER_NEAR_ON_M / TETHER_NEAR_OFF_M); the 8.5/9.5 m gap stops a piece
+ * on the limit hopping between passes. The near pass brackets +-10 m (SceneManager NEAR_FIELD_RADIUS).
  */
 export const HELD_NEAR_ON_M = 8.5;
 export const HELD_NEAR_OFF_M = 9.5;
 /**
- * The near camera's depth bracket half-extent in metres: SceneManager's NEAR_FIELD_RADIUS (0.0001 scene units = 10 m; a
- * module-private constant there). test-CatchNearPass reads SceneManager.js and fails if the two drift apart.
+ * Near camera depth-bracket half-extent, m: SceneManager's NEAR_FIELD_RADIUS (0.0001 scene units; module-private
+ * there). test-CatchNearPass reads SceneManager.js and fails if the two drift apart.
  */
 export const NEAR_BRACKET_M = 10;
 /**
- * A proxy is itself a near-field root, and the near camera's depth bracket reaches only NEAR_BRACKET_M beyond a root's
- * centre, so a piece whose far edge sits further than that out would be clipped. Pieces up to this longest side
- * (half of it, 7 m from the centre along the longest side, stays inside the bracket with slack for the cross-section:
- * every rocket body is <= 11 m, satellites <= 8 m) are drawn near pass; anything bigger (a whale-class hulk) stays far
- * pass exactly as before. Derived from the bracket, so a change there moves this with it (the test asserts the relation).
+ * A proxy is itself a near-field root and the bracket reaches only NEAR_BRACKET_M beyond its centre, so a piece
+ * whose far edge is further out would be clipped. Pieces up to this longest side (half of it, 7 m, leaves slack
+ * for the cross-section; rocket bodies <= 11 m, satellites <= 8 m) draw in the near pass; bigger ones stay far pass.
+ * Derived from the bracket (the test asserts the relation).
  */
 export const HELD_NEAR_MAX_SIZE_M = NEAR_BRACKET_M * 1.4;
 const HELD_PROXY_PREFIX = 'HeldCatchProxy_';
@@ -93,44 +80,23 @@ const _heldIdentity = new THREE.Matrix4();   // a held proxy's one instance sits
 /** Material types for debris */
 const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell', 'steel'];
 
-// ---------------------------------------------------------------------------
-// Per-type material distribution (physical plausibility + visual variety)
-// ---------------------------------------------------------------------------
-// Previously every piece picked uniformly from all 5 materials, so 20% of the
-// ENTIRE field was gold MLI foil and 20% blue solar cells — the field read as
-// "almost all gold/blue" instead of a realistic mostly-metal debris cloud.
-//
-// Real orbital debris is dominated by bare/charred structural metal and dark
-// composite. Gold multi-layer insulation (MLI) and blue photovoltaic cells
-// only appear on (or shed from) satellites, and even then as a minority of the
-// surface. We therefore weight material choice BY debris type:
-//   • fragment      — explosion shards: mostly bare aluminium, titanium,
-//                     charred composite. A SMALL minority (~6% each) are shed
-//                     gold-MLI / blue-solar-cell shards: a shed PV/foil scrap
-//                     reads as junk, not an intact panel. Kept small so the
-//                     field is not "gold/blue soup". These slots also let the
-//                     welcome spawn SELECT a gold/blue plate candidate (it
-//                     reuses a debris' existing mesh-slot and cannot rebind).
-//   • rocketBody    — large aluminium/titanium stages, some composite skirts.
-//   • defunctSat    — the "variety" piece: aluminium bus + a real chance of
-//                     gold MLI and blue solar arrays + composite panels.
-//   • missionDebris — small operational debris (clamps, lens caps, MLI scraps,
-//                     cell offcuts): a broad mix incl. occasional gold/blue.
-// Weights are relative (need not sum to 1); picked via weightedMaterial().
+// Material weights BY debris type, so the field is mostly bare/charred metal and dark composite, not "gold/blue soup".
+// Gold MLI and blue PV cells only appear on (or shed from) satellites, and then as a minority. Relative weights
+// (need not sum to 1); picked via weightedMaterial().
+//   fragment: ~6% each gold-MLI / blue-cell shards. These slots also let the welcome spawn SELECT a gold/blue plate
+//             candidate (it reuses a debris' existing mesh slot and cannot rebind).
+//   defunctSat: the "variety" piece (real chance of gold MLI and blue arrays).
 const MATERIAL_WEIGHTS_BY_TYPE = {
   fragment:      { aluminum: 0.36, titanium: 0.21, composite: 0.31, steel: 0.05, mli_mylar: 0.06, solar_cell: 0.06 },
   rocketBody:    { aluminum: 0.45, titanium: 0.25, composite: 0.12, steel: 0.18 },
   defunctSat:    { aluminum: 0.30, titanium: 0.12, composite: 0.18, mli_mylar: 0.16, solar_cell: 0.14, steel: 0.10 },
   missionDebris: { aluminum: 0.30, titanium: 0.16, composite: 0.30, mli_mylar: 0.14, solar_cell: 0.10 },
-  // cubesat — a small intact satellite: aluminium bus dominant, real chance of
-  // blue solar cells + a little gold MLI (it has functioning panels/insulation).
+  // cubesat: aluminium bus dominant, real chance of blue cells + a little gold MLI (working panels/insulation).
   cubesat:       { aluminum: 0.42, composite: 0.18, titanium: 0.08, solar_cell: 0.20, mli_mylar: 0.12 },
 };
 
 /**
- * Pick a material tag for a debris piece, weighted by its type so the field
- * reads as physically-plausible (mostly metal/composite, gold & blue rare).
- * Falls back to a uniform pick if the type is unknown.
+ * Pick a material tag for a debris piece, weighted by its type; uniform pick if the type is unknown.
  * @param {string} type — procedural debris type
  * @returns {string} material tag from MATERIALS
  */
@@ -147,38 +113,19 @@ function weightedMaterial(type) {
   return 'aluminum';
 }
 
-// ---------------------------------------------------------------------------
-// Per-instance colour variation (anti-monotone)
-// ---------------------------------------------------------------------------
-// A whole field of debris sharing one flat tint reads as a "grey soup". To make
-// the field feel like real, individually-weathered hardware we nudge each
-// piece's base colour deterministically by its id: small hue shifts (sun-faded
-// paint / oxidation), and brightness variation (light vs. shadow-darkened
-// surfaces, scorching). Deterministic so a piece always looks the same.
+// Per-instance colour variation: each piece's base colour is nudged deterministically by its id (hue shift, brightness
+// variation) so the field doesn't read as one flat tint.
 //
-// NOTE: Three.js colour management is enabled by default (r152+), so a
-// THREE.Color built from an sRGB hex stores LINEAR values and the no-arg
-// getHSL/setHSL operate in linear space. We must read/write HSL in *sRGB*
-// space so the perceptual lightness varies as intended (otherwise the field
-// gets darker and barely varies — the opposite of the goal). Fall back to the
-// no-arg form when the constant is unavailable (older THREE / test stubs).
+// GOTCHA: Three.js colour management (r152+) stores sRGB hex as LINEAR values and the no-arg getHSL/setHSL work in
+// linear space. Read/write HSL in *sRGB* space so perceptual lightness varies as intended (else the field goes darker
+// and barely varies). Falls back to the no-arg form when the constant is unavailable (older THREE / test stubs).
 const _instanceHSL = { h: 0, s: 0, l: 0 };
 const _SRGB = (typeof THREE !== 'undefined' && THREE.SRGBColorSpace) || undefined;
 
-// ---------------------------------------------------------------------------
-// Instance-tint base colour (3D mesh) — a near-WHITE weathering modulator.
-// ---------------------------------------------------------------------------
-// The instanceColor multiplies color × map in the shader. Earlier it was set
-// to getBaseColorForType() — DARK type colours (#666, #333, #333366). Those
-// crushed the (now bright, texture-carried) hull colour toward black and made
-// the field read as a dim, low-contrast "grey soup".
-//
-// The type's characteristic colour already lives in the atlas texture, so the
-// instanceColor's job here is ONLY weathering modulation: a bright base near
-// white with a faint type-appropriate hue bias, onto which
-// applyInstanceColorVariation() layers per-piece brightness/oxidation jitter.
-// Real hardware tints: bare metal reads neutral-cool, charred fragments lean
-// warm/sooty, solar/sat surfaces lean faintly blue.
+// Instance-tint base colour (3D mesh): a near-WHITE weathering modulator. instanceColor multiplies color × map in the
+// shader, so dark type colours (getBaseColorForType #666/#333) crush the texture-carried hull colour toward black.
+// The type's colour lives in the atlas; this only adds a faint type-appropriate hue bias (bare metal neutral-cool,
+// charred fragments warm/sooty, sat surfaces faintly blue) for applyInstanceColorVariation() to jitter.
 const _INSTANCE_TINT_BASE = {
   debris:      '#cfcfcf',  // grey structural metal
   fragment:    '#b9b4ac',  // charred, slightly warm bare metal
@@ -189,9 +136,8 @@ const _INSTANCE_TINT_BASE = {
 };
 
 /**
- * Base colour for the 3D instanceColor weathering modulator (near-white).
- * Distinct from getBaseColorForType() (used for atlas/strategic-map dots),
- * which stays dark/type-coded for those purposes.
+ * Base colour for the 3D instanceColor weathering modulator (near-white). Not getBaseColorForType(), which stays
+ * dark/type-coded for atlas/strategic-map dots.
  * @param {string} catalogType
  * @returns {string} hex tint
  */
@@ -213,7 +159,6 @@ function applyInstanceColorVariation(out, id, catalogType) {
   const r1 = h1 - Math.floor(h1);
   const r2 = h2 - Math.floor(h2);
 
-  // Read perceptual (sRGB) HSL so the maths matches what the eye sees.
   if (_SRGB) out.getHSL(_instanceHSL, _SRGB);
   else out.getHSL(_instanceHSL);
 
@@ -221,12 +166,9 @@ function applyInstanceColorVariation(out, id, catalogType) {
   const isFrag = catalogType === 'fragment' || catalogType === 'debris';
   const hueRange = isFrag ? 0.05 : 0.03;
   _instanceHSL.h = (_instanceHSL.h + (r1 - 0.5) * hueRange + 1) % 1;
-  // Slight saturation jitter so some pieces look more oxidised/coloured
   _instanceHSL.s = clamp01(_instanceHSL.s * (0.75 + r2 * 0.6));
-  // Brightness variation is the big anti-monotone win. Centre the multiplier
-  // on ~1.0 (range ~0.62–1.18) so on a bright base some pieces read sun-lit
-  // and others shadow/scorch-darkened, without dragging the whole field dark.
-  // Floor keeps near-black fragments from collapsing to a flat silhouette.
+  // Brightness is the big anti-monotone win: multiplier centred ~1.0 (0.62–1.18) so some pieces read sun-lit and
+  // others shadow-darkened without dragging the field dark. The floor keeps near-black fragments from going flat.
   _instanceHSL.l = clamp(_instanceHSL.l * (0.62 + r1 * 0.56), 0.10, 0.97);
 
   if (_SRGB) out.setHSL(_instanceHSL.h, _instanceHSL.s, _instanceHSL.l, _SRGB);
@@ -234,7 +176,7 @@ function applyInstanceColorVariation(out, id, catalogType) {
   return out;
 }
 
-/** ST-6.2: Map procedural game-type → catalogType for atlas visuals */
+/** Procedural game-type → catalogType for atlas visuals */
 const PROC_TYPE_TO_CATALOG = {
   fragment:      'debris',
   rocketBody:    'rocket_body',
@@ -252,83 +194,50 @@ const TRACKING_PROB = {
   cubesat: 0.70,       // Small but a tracked whole satellite
 };
 
-/** Welcome field debris — spawned near player on first ORBITAL_VIEW for immediate gameplay.
+/** Welcome field debris — spawned near the player on first ORBITAL_VIEW for immediate gameplay.
  *
- *  LAYOUT — the M1 CONE FAN (owner decision 2026-09-09): all 7 pieces sit
- *  AHEAD of the mother, fanned out over an ≈8–10° cone about the prograde
- *  boresight (alternating left/right and up/down), so the forward view reads
- *  as a fan around the range-wall piece #3 at centre. Rows author their
- *  offsets in METRES in the mother's local orbital frame at spawn:
- *    fwd   = along-track / prograde (the ship's rest attitude — PlayerSatellite
- *            composes quaternion = prograde · _manualRotation),
- *    right = cross-track = fwd × radial (the SAME axis the #2 pin's latM uses,
- *            see the _motherRight basis in update()),
+ *  LAYOUT — the M1 CONE FAN (owner 2026-09-09): all 7 pieces sit AHEAD of the mother, fanned over an ≈8–10° cone about
+ *  the prograde boresight (alternating left/right and up/down) around the range-wall piece #3. Rows author offsets in
+ *  METRES in the mother's local orbital frame at spawn:
+ *    fwd   = along-track / prograde (PlayerSatellite composes quaternion = prograde · _manualRotation),
+ *    right = cross-track = fwd × radial (the same axis the #2 pin's latM uses; see _motherRight in update()),
  *    up    = radial, away from Earth.
- *  _placeWelcomePiece converts metres → radians with METRE_SCENE / a (the
- *  pin-branch idiom). The whole cluster stays ≤ ~1.5 km so the pilot sees all
- *  7 contacts from one vantage, while #4–#7 still need the autopilot or a
- *  daughter (all inside TETHER_LENGTH_DEFAULT 2000 m and the 5 km AutoLock
- *  search; only #1/#2 sit inside NET_LOCK_RANGE_M).
+ *  _placeWelcomePiece converts metres → radians with METRE_SCENE / a. The cluster stays ≤ ~1.5 km; #4–#7 need the
+ *  autopilot or a daughter (all inside TETHER_LENGTH_DEFAULT 2000 m and the 5 km AutoLock search; only #1/#2 sit
+ *  inside NET_LOCK_RANGE_M).
  *
- *  WHY THE FAN BREATHES BUT NEVER DRIFTS: every free piece keeps the mother's
- *  SEMI-MAJOR AXIS (same period). The cross-track offset is a plane tilt
- *  (Δi, ΔΩ) and the radial offset an eccentricity-VECTOR delta at the same a,
- *  both period-preserving, so there is NO secular separation. Over one orbit
- *  (≈ 9.2 real minutes at 10× time) right/up reverse sign every ≈ 4.6 real
- *  minutes and the radial offset sloshes along-track by ≤ 2·radM (≤ 130 m for
- *  #7); the fan is exact at spawn and stays a bounded cone-shaped cloud with
- *  its along-track order preserved. Do NOT "fix" that float by touching
- *  semiMajorAxis: an SMA step is a period change and separates for good
+ *  WHY THE FAN BREATHES BUT NEVER DRIFTS: every free piece keeps the mother's SEMI-MAJOR AXIS (same period). The
+ *  cross-track offset is a plane tilt (Δi, ΔΩ) and the radial offset an eccentricity-VECTOR delta at the same a, both
+ *  period-preserving, so there is NO secular separation. Over one orbit (≈ 9.2 real minutes at 10× time) right/up
+ *  reverse sign every ≈ 4.6 real minutes and the radial offset sloshes along-track by ≤ 2·radM (≤ 130 m for #7).
+ *  Do NOT "fix" that float by touching semiMajorAxis: an SMA step is a period change and separates for good
  *  (test-WelcomeField pins the bounded motion and the SMA-drift control case). */
 const WELCOME_FIELD = [
-  // Reward-first onboarding spine (.kilo/plans/new-player-onboarding-flow.md
-  // Phase 2). Mission 1 is NET-ONLY (every guided beat captures with the Mother
-  // net; there is no Daughter beat), and the Mother net rejects anything over
-  // LASSO_MAX_CAPTURE_MASS (10 kg). So EVERY welcome piece is authored ≤ 10 kg.
+  // Mission 1 is NET-ONLY and the Mother net rejects anything over LASSO_MAX_CAPTURE_MASS (10 kg), so EVERY welcome
+  // piece is authored ≤ 10 kg.
   //
-  // APPEARANCE: all pieces are `fragment` (irregular icosahedron) so they read
-  // as LOW-VALUE space debris, not intact (high-value) satellites. Candidate
-  // selection also prefers fragment-shaped debris because the spawn reuses a
-  // debris' existing instanced-mesh slot (the rendered shape is the candidate's,
-  // not the spec's). `sizeM` scales them up so junk chunks are still visible.
+  // APPEARANCE: all `fragment` (irregular icosahedron) so they read as LOW-VALUE junk, not intact satellites.
+  // Candidate selection also prefers fragment-shaped debris because the spawn reuses a debris' instanced-mesh slot
+  // (the rendered shape is the candidate's, not the spec's). `sizeM` = drawn longest side, so NONE renders larger
+  // than the ~2 m mother; cubesat #7 is the small, dense, valuable "graduation" catch. Reward climbs 1→7 via mass +
+  // lowValue (only #1–#2): progression by value, not strictly by size.
   //
-  // PLACEMENT (mother-local frame, metres): #1 dead-centre ahead, #2 off to
-  // the right, both PINNED (local-frame, single source of truth =
-  // _scenePosition) and in net range so the two guided net catches are
-  // guaranteed. #3 is the RANGE WALL — dead ahead but beyond NET_LOCK_RANGE_M
-  // (90 m) at 1.15–1.40× that SSOT (tracks the constant, never a literal) so
-  // the reticle flips OUT OF RANGE and teaches Autopilot (A); it is a FREE
-  // co-orbital orbit (the approach target), not pinned. #4–#7 are FREE orbits
-  // fanned left/right and up/down at 220–1400 m for the autopilot / a daughter.
-  // Row fields: `pin:true` rows use fwdM/latM (fixed); free rows use
-  // fwdMinM/fwdMaxM (fwd is randomised inside the band per spawn) plus a fixed
-  // latM (right, +) and radM (up, +). Only _placeWelcomePiece reads them.
-  // M1 cluster (.kilo/plans/onboarding-tease-2-lateral-tune.md). Physical
-  // hierarchy: every fragment renders sub-metre (sizeM = its drawn longest side
-  // since lane true-size, 2026-10-18; it used to read as a radius, drawn ≈ 1.9×)
-  // so NONE renders larger than the ~2 m mother; the cubesat #7 is the small,
-  // dense, valuable "graduation" catch. Reward climbs 1→7 via mass + lowValue
-  // (kept only on #1–#2) so early catches are cheap and later ones pay more —
-  // progression by value, not strictly by size. All ≤10 kg (net-only on M1).
+  // PLACEMENT (mother-local frame, metres): #1 dead ahead and #2 to the right are PINNED (local-frame, SSOT =
+  // _scenePosition) and in net range, so the two guided net catches are guaranteed. #3 is the RANGE WALL: dead ahead
+  // at 1.15–1.40× NET_LOCK_RANGE_M (tracks the constant, never a literal) so the reticle flips OUT OF RANGE and
+  // teaches Autopilot (A); a FREE co-orbital orbit, not pinned. #4–#7 are FREE orbits at 220–1400 m.
+  // Row fields: `pin:true` rows use fwdM/latM (fixed); free rows use fwdMinM/fwdMaxM (fwd randomised inside the band
+  // per spawn) plus a fixed latM (right, +) and radM (up, +). Only _placeWelcomePiece reads them.
   //
-  // appear/* hints drive Phase-2 candidate selection (which mesh-slot to reuse,
-  // since spawn cannot rebind shape/material): plate = flat panel-shard variant,
-  // material = the rendered colour (gold mli_mylar foil, blue solar_cell cell).
+  // appear* hints drive candidate selection (which mesh slot to reuse; spawn cannot rebind shape/material):
+  // plate = flat panel-shard variant, material = the rendered colour (gold mli_mylar foil, blue solar_cell cell).
   //
-  // tumbleDegS / tumbleAxis (optional, m1-staging) author the OPENING TUMBLE
-  // deterministically. Without them a welcome piece keeps its creation-time
-  // class roll (DEBRIS_TYPES fragment band 10–180 °/s), which made the
-  // player's first-ever object a coin flip: a 180 °/s blender read as chaos,
-  // and anything above NET_TUMBLE_PENALTY.IN_SPEC_DEG (10 °/s) queued the
-  // `first_high_tumble_target` de-spin teach (TeachingSystem) on the very
-  // first lock — an out-of-context lesson, since the M1 lasso ignores tumble.
-  // #1 is authored stately-below-spec (7 °/s < IN_SPEC_DEG, fixed axis so the
-  // opening reads identically every session); #2 a touch livelier (15 °/s);
-  // #3+ deliberately stay on the class roll (variety once the player has
-  // context). Honoured ONLY by the welcome spawn path (_spawnWelcomeField) —
-  // non-welcome spawns are untouched. Guarded by test-WelcomeField
-  // 'authored opening tumble' (threshold referenced from Constants, not a
-  // magic number).
+  // tumbleDegS / tumbleAxis (optional) author the OPENING TUMBLE. Without them a piece keeps its creation-time class
+  // roll (fragment band 10–180 °/s): a 180 °/s blender read as chaos, and anything above
+  // NET_TUMBLE_PENALTY.IN_SPEC_DEG (10 °/s) queued the `first_high_tumble_target` de-spin teach (TeachingSystem) on
+  // the first lock, out of context since the M1 lasso ignores tumble. #1 is 7 °/s on a fixed axis (identical opening
+  // every session); #2 15 °/s; #3+ deliberately stay on the class roll. Honoured ONLY by _spawnWelcomeField.
+  // Guarded by test-WelcomeField 'authored opening tumble' (threshold from Constants, not a magic number).
   { types: ['fragment'], sizeM: 0.60, lowValue: true, appearMaterial: 'aluminum', appearPlate: true,
     massMin: 3, massMax: 3,  pin: true, fwdM: 22, latM: 0,
     tumbleDegS: 7, tumbleAxis: { x: 0.25, y: 1.0, z: 0.15 } },  // #1 aluminium panel shard (flat) — dead centre, ~22 m, render ~1.15 m; stately authored tumble (< IN_SPEC_DEG)
@@ -339,8 +248,7 @@ const WELCOME_FIELD = [
     massMin: 5, massMax: 5,
     fwdMinM: Constants.NET_LOCK_RANGE_M * 1.15, fwdMaxM: Constants.NET_LOCK_RANGE_M * 1.40,
     latM: 0, radM: 0 },                                         // #3 RANGE WALL — solar-cell shard, dead ahead ~104–126 m (just outside the 90 m net lock)
-  // Medium/far tier — still net-only on M1, so ≤10 kg; free orbits fanned
-  // left/right and up/down (≈8–10° half-angle) for the autopilot / a daughter.
+  // Medium/far tier: free orbits fanned left/right and up/down (≈8–10° half-angle).
   { types: ['fragment'], sizeM: 0.55, appearMaterial: 'aluminum', appearPlate: false,
     massMin: 6, massMax: 6,  fwdMinM: 220,  fwdMaxM: 320,  latM: -40,  radM: 20 },  // #4 aluminium fragment ~220–320 m, left + up
   { types: ['fragment'], sizeM: 0.95, appearMaterial: 'solar_cell', appearPlate: true,
@@ -351,10 +259,8 @@ const WELCOME_FIELD = [
     massMin: 10, massMax: 10, fwdMinM: 1100, fwdMaxM: 1400, latM: 170,  radM: -65 }, // #7 cubesat (small whole microsat) ~1100–1400 m, right + down
 ];
 
-/** Re-seat safety net (M1 guidance T6): how often the per-piece distance sweep
- *  in _reseatDriftedWelcome runs, in REAL seconds. Player-experience timer, not
- *  game time; with a 10 s dwell (Constants.MISSIONS.RESEAT.DWELL_S) a 2 s
- *  cadence resolves the dwell in 5 steps at a fraction of the per-frame cost. */
+/** How often the per-piece distance sweep in _reseatDriftedWelcome runs, in REAL seconds (player-experience timer,
+ *  not game time): with a 10 s dwell (Constants.MISSIONS.RESEAT.DWELL_S) 2 s resolves the dwell in 5 steps. */
 const RESEAT_SCAN_PERIOD_S = 2;
 /** A welcome piece this close to the ship is never re-seated (holds even if RESEAT.DIST_M is retuned below it). */
 const RESEAT_NEVER_WITHIN_M = 100;
@@ -370,15 +276,12 @@ function netHoldsPiece(src, debris) {
   return false;
 }
 
-/** The HOUSTON line posted once per re-seat scan that moved a single piece
- *  (plain ASCII; muted at suppression tier 0 by design — there the reticle
- *  re-lock is the cue). A scan that moved several posts ONE line naming the
- *  count instead (c2-fifth-catch D3). */
+/** HOUSTON line posted once per re-seat scan that moved a single piece (plain ASCII; muted at suppression tier 0 by
+ *  design: there the reticle re-lock is the cue). A scan that moved several posts ONE line naming the count. */
 const RESEAT_COMMS_TEXT = 'Re-acquired a drifted piece ahead of you. Check the reticle.';
 
-/** Altitude bands (km above surface) with percentage weights.
- *  ST-6.1: 7-band layout (added VLEO + MEO) lives in Constants.DEBRIS.ALT_BANDS.
- *  Fallback (5-band legacy shape) used only if Constants.DEBRIS is absent. */
+/** Altitude bands (km above surface) with percentage weights, from Constants.DEBRIS.ALT_BANDS (7 bands). The
+ *  5-band fallback is used only if Constants.DEBRIS is absent. */
 const ALT_BANDS = (Constants.DEBRIS && Array.isArray(Constants.DEBRIS.ALT_BANDS))
   ? Constants.DEBRIS.ALT_BANDS
   : [
@@ -389,15 +292,8 @@ const ALT_BANDS = (Constants.DEBRIS && Array.isArray(Constants.DEBRIS.ALT_BANDS)
       { min: 1200, max: 2000, weight: 0.15 },
     ];
 
-// S11(b) removed INC_CLUSTERS (28.5°–97.5° weighted inclination lottery):
-// its only consumer was the old all-sky _generateBackground scatter; the
-// field (foreground + hazard + background) is one orbital regime now.
-
-/**
- * Named inclination clusters used for human-readable field/cluster IDs.
- * Shared by getDebrisClusters() and classifyClusterId() so the "field" a scan
- * surveys is identified identically everywhere. (id = `${incName}-${altMin}`.)
- */
+// Named inclination clusters for human-readable field/cluster IDs, shared by getDebrisClusters() and
+// classifyClusterId() so a scanned "field" is identified identically everywhere. (id = `${incName}-${altMin}`.)
 const INC_NAMES = [
   { center: 28.5, spread: 2.0,  name: 'canaveral',  label: 'Cape Canaveral' },
   { center: 51.6, spread: 1.5,  name: 'iss',        label: 'ISS Band' },
@@ -409,11 +305,11 @@ const INC_NAMES = [
 ];
 
 /**
- * Classify an (altitudeKm, inclinationDeg) pair into a stable field/cluster id.
+ * Classify an (altitudeKm, inclinationDeg) pair into a stable field/cluster id, e.g. 'iss-400'.
  * Returns null if the altitude is outside all tracked bands.
  * @param {number} altKm
  * @param {number} incDeg
- * @returns {string|null} e.g. 'iss-400' or null
+ * @returns {string|null}
  */
 function classifyClusterId(altKm, incDeg) {
   let matchedAlt = null;
@@ -445,19 +341,17 @@ function weightedRandom(items) {
   return items[items.length - 1];
 }
 
-/** Gaussian random (Box-Muller) on an explicit stream (S11(a) seeded assembly). */
+/** Gaussian random (Box-Muller) on an explicit stream (seeded assembly). */
 function gaussRandomRng(rng, mean = 0, stddev = 1) {
   const u1 = rng();
   const u2 = rng();
   return mean + stddev * Math.sqrt(-2 * Math.log(u1 || 1e-10)) * Math.cos(2 * Math.PI * u2);
 }
 
-/** Random float in [min, max] */
 function randRange(min, max) {
   return min + Math.random() * (max - min);
 }
 
-/** Random unit vector */
 function randomUnitVector() {
   const theta = Math.random() * 2 * Math.PI;
   const phi = Math.acos(2 * Math.random() - 1);
@@ -468,9 +362,7 @@ function randomUnitVector() {
   );
 }
 
-// ============================================================================
-// PRE-ALLOCATED ORBIT TEMPORARIES (avoids ~800 spread allocations per frame)
-// ============================================================================
+// Pre-allocated orbit temporaries (avoids ~800 spread allocations per frame)
 const _tmpKmOrbit = {
   semiMajorAxis: 0, eccentricity: 0, inclination: 0,
   raan: 0, argPerigee: 0, trueAnomaly: 0, meanMotion: 0,
@@ -480,18 +372,12 @@ const _tmpKmOrbit2 = {
   raan: 0, argPerigee: 0, trueAnomaly: 0, meanMotion: 0,
 };
 
-// ============================================================================
-// DEBRIS FIELD
-// ============================================================================
-
 export class DebrisField {
   /**
    * @param {THREE.Scene} scene
    * @param {object} [opts] - Options.
-   * @param {object} [opts.catalogLoader] - Optional ST-6.1 catalogue source.
-   *        If provided AND `.isReady()` is true, real entries populate first,
-   *        with procedural entries topping up INTERACTIVE_COUNT. Null/undefined
-   *        keeps pure-procedural behaviour for back-compat + unit tests.
+   * @param {object} [opts.catalogLoader] - Optional catalogue source. If provided AND `.isReady()`, real entries
+   *        populate first, with procedural entries topping up INTERACTIVE_COUNT. Null keeps pure-procedural behaviour.
    * @param {number} [opts.interactiveCount] - Override INTERACTIVE_COUNT (rare).
    */
   constructor(scene, opts = {}) {
@@ -500,20 +386,15 @@ export class DebrisField {
     this._motherDragSource = null;      // setMotherDragSource: the player whose last drag step the welcome pieces share
     this._interactiveCount = opts.interactiveCount || INTERACTIVE_COUNT;
 
-    // S11(a): the field is ONE orbital regime (register item 38) — assembled
-    // inside the band derived from the player's start orbit (main.js passes
-    // the boot language's computeStartOrbit through regimeFromStartOrbit).
-    // Register item 50: a mid-menu language switch re-derives the regime on
-    // the start path — GameFlowManager._applyStartLocation calls
-    // reseatFieldRegime(), which re-seats every orbit in-band (orbits only;
-    // an unchanged regime is a value-compared no-op).
-    // Absent opts, the ISS-band default keeps legacy constructions/tests
-    // deterministic in shape. The seed drives the catalogue pick + the
-    // procedural orbit draws; it is logged so a reported field is reproducible.
+    // The field is ONE orbital regime (register item 38), assembled inside the band derived from the player's start
+    // orbit (main.js passes computeStartOrbit through regimeFromStartOrbit). A mid-menu language switch (register item
+    // 50) re-derives it: GameFlowManager._applyStartLocation calls reseatFieldRegime(), which re-seats every orbit
+    // in-band (orbits only; an unchanged regime is a no-op). Absent opts, the ISS-band default keeps legacy
+    // constructions/tests deterministic. The seed drives the catalogue pick + procedural orbit draws; it is logged so a
+    // reported field is reproducible.
     this._fieldSeed = (opts.seed != null ? opts.seed >>> 0 : (Date.now() >>> 0));
     this._fieldRegime = opts.fieldRegime || regimeFromStartOrbit(null);
-    // Human/cluster-vocabulary identity for the regime (e.g. 'iss-180') — the
-    // "fields gain identity" half of S11(a); same SSOT as getDebrisClusters.
+    // Cluster-vocabulary identity for the regime (e.g. 'iss-180'); same SSOT as getDebrisClusters.
     this._fieldRegimeLabel = this._regimeLabelFrom(this._fieldRegime);
 
     /** @type {number} How many debris ended up sourced from the real catalogue. */
@@ -534,18 +415,15 @@ export class DebrisField {
     /** Maps debris ID → { meshKey, instanceIndex } */
     this._instanceLookup = new Map();
 
-    /** Reusable matrix for instance updates */
     this._tempMatrix = new THREE.Matrix4();
     this._tempQuat = new THREE.Quaternion();
     this._tempScale = new THREE.Vector3();
     this._tempPos = new THREE.Vector3();
 
-    // Sprint 2 / PR A — scratch outputs for [`orbitToSceneCartesianInto`](js/entities/OrbitalMechanics.js:1).
-    // Reused across every alive debris + every background-point batch each frame.
+    // Scratch outputs for orbitToSceneCartesianInto, reused across every alive debris + background batch each frame.
     this._tmpCartPos = { x: 0, y: 0, z: 0 };
     this._tmpCartVel = { x: 0, y: 0, z: 0 };
-    // Background-orbit scratch: avoids the `{...orbit, semiMajorAxis: …}` spread
-    // copy at [`DebrisField._updateBackground()`](js/entities/DebrisField.js:1322).
+    // Background-orbit scratch: avoids the `{...orbit, semiMajorAxis: …}` spread copy in _updateBackground.
     this._tmpBgOrbit = {
       semiMajorAxis: 0,
       eccentricity: 0,
@@ -555,14 +433,12 @@ export class DebrisField {
       trueAnomaly: 0,
     };
 
-    /** UX-4: Floating origin reference position (camera-relative rendering) */
+    /** Floating origin reference position (camera-relative rendering) */
     this._floatingOrigin = new THREE.Vector3();
     this._floatingOriginInitialized = false;
 
-    // Background-dot glide state (see _updateBackground). Only 1/4 of the dots are
-    // propagated exactly each frame; the other 3/4 are extrapolated with their stored
-    // scene-unit velocity and re-based for the floating-origin move, so they glide
-    // every frame instead of stepping at 1/4 rate.
+    // Background-dot glide state (see _updateBackground). Only 1/4 of the dots are propagated exactly each frame; the
+    // other 3/4 are extrapolated with their stored scene-unit velocity and re-based for the floating-origin move.
     /** @type {Float32Array|null} 3 per dot, scene units per second of game time */
     this._bgVel = null;
     /** Game seconds elapsed since each of the 4 batches was last propagated */
@@ -571,10 +447,10 @@ export class DebrisField {
     this._bgPrevOrigin = { x: 0, y: 0, z: 0 };
     this._bgPrevOriginValid = false;
 
-    // catch-near-pass (Decision 1): the near-field host (main.js attachNearField) and the live held-piece proxies,
-    // keyed by debris id. A proxy is a 1-instance InstancedMesh sharing the piece's geometry + material; it IS the
-    // near-field root (registered with the scene manager; its own world pose is the piece's), so no parent has to be
-    // parked on the ship and a stale frame can never leave a root behind to stretch the near pass's depth bracket.
+    // Near-field host (main.js attachNearField) and the live held-piece proxies, keyed by debris id. A proxy is a
+    // 1-instance InstancedMesh sharing the piece's geometry + material; it IS the near-field root (its own world pose
+    // is the piece's), so no parent is parked on the ship and a stale frame can never leave a root behind to stretch
+    // the near pass's depth bracket.
     /** @type {object|null} */ this._nearSm = null;
     /** @type {THREE.Object3D|null} */ this._nearPlayer = null;
     /** @type {Map<number, {proxy: THREE.InstancedMesh, canonical: object, ref: object|null}>} */
@@ -583,25 +459,20 @@ export class DebrisField {
     this._heldHiddenApplied = 0;
     this._heldColor = new THREE.Color();
 
-    /** Pre-allocated colors for web shot tinting (Sprint D1) */
     this._webTintColor = new THREE.Color(0.85, 0.92, 1.0);
     this._defaultDebrisColor = new THREE.Color(1, 1, 1);
-    /** Per-instance brightness boost for the pinned welcome pieces (#1/#2) so
-     *  they catch the eye even on the shadow side without touching the shared
-     *  (deliberately dim) material emissive. Kept modest (1.25×) so the foil /
-     *  solar-cell material hue still reads as man-made debris rather than being
-     *  washed to a neutral-grey "rock". See m1-debris-1-2-visibility plan. */
+    /** Per-instance brightness boost for the pinned welcome pieces (#1/#2) so they catch the eye on the shadow side
+     *  without touching the shared (deliberately dim) material emissive. Modest (1.25×) so the foil / solar-cell hue
+     *  still reads as man-made debris, not a neutral-grey "rock". */
     this._welcomeBoostColor = new THREE.Color(1.25, 1.25, 1.25);
 
-    /** ST-6.2: Pre-allocated temporaries for MOID colour tinting */
     this._moidTmpColor = new THREE.Color();
     this._moidTmpEmissive = new THREE.Color();
 
-    /** ST-6.2: Flag overlay InstancedMeshes keyed by country code */
+    /** Flag overlay InstancedMeshes keyed by country code */
     this.flagMeshes = {};
     /** @type {Map<number, { country: string, instanceIndex: number }>} */
     this._flagLookup = new Map();
-    /** Pre-allocated temporaries for surface-mounted flag placement */
     this._flagDirWorld = new THREE.Vector3();
     this._flagPos = new THREE.Vector3();
     this._flagPos2 = new THREE.Vector3();
@@ -623,7 +494,7 @@ export class DebrisField {
 
     this._nextId = 0;
 
-    // --- Spatial query cache (Task 1B: avoid triple scan per frame) ---
+    // Spatial query cache (avoids a triple scan per frame)
     /** @type {Array<object>} Cached nearby debris results */
     this._cachedNearby = [];
     /** @type {number} Frame ID when cache was last computed */
@@ -637,8 +508,8 @@ export class DebrisField {
 
     /** @type {boolean} Welcome field already spawned this game */
     this._welcomeFieldSpawned = false;
-    /** Nets step 3 slice 2b (FEATURE_FLAGS.FIELDS_BY_HEIGHT): the FieldRegistry that says which field's pieces the
-     *  mission-start spawn lays out (null = today's welcome field), and the pieces of the fields she has left. */
+    /** FEATURE_FLAGS.FIELDS_BY_HEIGHT: the FieldRegistry that says which field's pieces the mission-start spawn lays
+     *  out (null = today's welcome field), and the pieces of the fields she has left. */
     this._fieldSource = null;
     /** @type {Map<string, object>} `${fieldId}|${row}` -> a piece taken out of play when she left its field */
     this._fieldStored = new Map();
@@ -646,20 +517,16 @@ export class DebrisField {
      *  the mother (orbit re-synced each frame) until each is caught. */
     this._onboardingPinIds = new Set();
 
-    /** @type {Map<id,{fwd:{x,y,z}, right:{x,y,z}}>} Per-debris frozen pin-basis
-     *  overrides. When set for a specific pinned id, that piece uses the fixed
-     *  world-space basis instead of the live per-frame prograde/right basis, so
-     *  the ceremony whale does not ride the slewing prograde. Scoped per id so
-     *  any OTHER onboarding-pinned pieces keep their live ship-relative basis.
-     *  Latched/cleared by the ceremony scenario only. */
+    /** @type {Map<id,{fwd:{x,y,z}, right:{x,y,z}}>} Per-debris frozen pin-basis overrides: a pinned id with one uses
+     *  the fixed world-space basis instead of the live per-frame prograde/right basis, so the ceremony whale does not
+     *  ride the slewing prograde. Per id: other pinned pieces keep the live ship-relative basis. Latched/cleared by
+     *  the ceremony scenario only. */
     this._onboardingPinBasisOverrides = new Map();
 
-    // M1 guidance T6 — the welcome-cluster re-seat safety net's state
-    // (_reseatDriftedWelcome). The "busy" set: ids something is flying to
-    // (AUTOPILOT_TARGET_LOCK from the mother AP and from every daughter closing
-    // on a target — a Set, not one id, because they overlap), the optional
-    // "daughter en route" guard main.js wires (setReseatGuard), and the scan
-    // cadence accumulator (real seconds).
+    // Re-seat safety-net state (_reseatDriftedWelcome). The "busy" set: ids something is flying to
+    // (AUTOPILOT_TARGET_LOCK from the mother AP and from every daughter closing on a target; a Set because they
+    // overlap), the optional "daughter en route" guard main.js wires (setReseatGuard), and the scan cadence
+    // accumulator (real seconds).
     /** @type {Set<number|string>} debris ids under an AUTOPILOT_TARGET_LOCK */
     this._lockedDebrisIds = new Set();
     /** @type {((id:number|string) => boolean)|null} "is a daughter flying to this id?" */
@@ -674,49 +541,43 @@ export class DebrisField {
      *  (CaptureNetSystem) — see setReseatNetSource */
     this._reseatNetSource = null;
 
-    // ST-4.C: Mission profile state
     /** @type {object|null} Current mission profile from Constants.MISSIONS.PROFILES */
     this._currentMissionProfile = null;
     /** @type {number} Current mission number */
     this._currentMissionNumber = 1;
-    /** u20-debris: true once the background shards run on the later size law (mission 2 on; `_applyShardLaw`). */
+    /** true once the background shards run on the later size law (mission 2 on; `_applyShardLaw`). */
     this._shardsLater = false;
 
-    // Build everything
-    // §13 boot timeline (?logBoot=1) — finer-grain marks so we can attribute
-    // DebrisField cost to procedural orbit generation vs. InstancedMesh build
-    // vs. flag overlays vs. background Points. `window.__bootMark` is only
-    // attached when `?logBoot=1` is set, and is optional-chained → zero
-    // overhead by default and safe in Node test runner (no window global).
+    // Boot-timeline marks (?logBoot=1) to attribute cost to orbit generation vs. InstancedMesh build vs. flags vs.
+    // background Points. `window.__bootMark` exists only with `?logBoot=1` and is optional-chained: zero overhead by
+    // default and safe in the Node test runner (no window global).
     const _bm = (typeof window !== 'undefined') ? window.__bootMark : null;
     this._generateDebris();
     _bm?.('DebrisField._generateDebris (procedural orbit gen) complete');
-    initAtlases();                // ST-6.2: generate type + flag atlas textures
+    initAtlases();                // generate type + flag atlas textures
     _bm?.('DebrisField initAtlases (type + flag atlas textures) complete');
     this._buildInstancedMeshes();
     _bm?.('DebrisField._buildInstancedMeshes complete');
-    this._buildFlagOverlays();    // ST-6.2: country flag decal overlay layer
+    this._buildFlagOverlays();    // country flag decal overlay layer
     _bm?.('DebrisField._buildFlagOverlays complete');
     this._generateBackground();
     _bm?.('DebrisField._generateBackground (5000 Points) complete');
 
-    // ST-6.1: hybrid-mode boot log
     if (this._catalogLoader && this._catalogLoader.isReady && this._catalogLoader.isReady()) {
       const proc = this.debrisList.length - this.realEntryCount - (this._heavySpareCount || 0);
       console.log(`[DebrisField] HYBRID mode. ${this.realEntryCount} real catalogue + ${proc} procedural filler`);
     }
 
-    // Phase 6: Listen for EDT attract events to nudge small debris toward player
+    // EDT attract events nudge small debris toward the player
     eventBus.on(Events.EDT_ATTRACT, (data) => this._onEdtAttract(data));
 
-    // Sprint D1: Listen for GSL web shot hits to apply drag multiplier
+    // GSL web shot hits apply a drag multiplier
     eventBus.on(Events.WEB_SHOT_HIT, (data) => this._onWebShotHit(data));
 
-    // Phase 3b (capture-feedback overhaul): tool-induced fragmentation — shed
-    // fragments at the impact point; breakup/shatter also destroys the body.
+    // Tool-induced fragmentation sheds fragments at the impact point; breakup/shatter also destroys the body.
     eventBus.on(Events.INTERACTION_FRAGMENTATION, (data) => this._onInteractionFragmentation(data));
 
-    // ST-4.C: Listen for MISSION_START to update profile and allow re-spawn
+    // MISSION_START: update profile and allow re-spawn
     eventBus.on(Events.MISSION_START, (data) => {
       this._currentMissionProfile = data.profile;
       this._currentMissionNumber = data.missionNumber;
@@ -724,14 +585,10 @@ export class DebrisField {
       this._welcomeFieldSpawned = false;
       // Drop any stale onboarding tease pin from a prior mission/run.
       this._clearOnboardingPin();
-      // 2026-05-15 polish (urgent): also reset the mission-1 hide flag so
-      // the per-frame enforcement runs again if we somehow re-enter
-      // mission 1 (e.g. retry / replay path).
+      // Also reset the mission-1 hide flag so per-frame enforcement runs again on re-entry (retry / replay path).
       this._mission1HideApplied = false;
-      // Restore any catalog debris that were hidden for mission 1 (only
-      // applies when advancing to mission 2+).  Their orbital elements are
-      // untouched; we just flip `alive`/`tracked` back on and let
-      // _updateInstanceTransform repopulate the instance matrix next tick.
+      // Mission 2+: restore catalog debris hidden for mission 1. Orbital elements are untouched; flip
+      // `alive`/`tracked` back on and let _updateInstanceTransform repopulate the instance matrix next tick.
       if ((data.missionNumber || 1) > 1) {
         this._leaveMission1(data.missionNumber);
       } else {
@@ -745,46 +602,36 @@ export class DebrisField {
     // Welcome field: reset flag on game reset
     eventBus.on(Events.GAME_RESET, () => {
       this._welcomeFieldSpawned = false;
-      this._currentMissionProfile = null;   // ST-4.C
-      this._currentMissionNumber = 1;       // ST-4.C
-      this._applyShardLaw(1);               // u20-debris: a new game is mission 1 again: the shards go back to the first law
-      // F4 (fix round 1): a previous game's group pieces are ordinary debris now: the map-off "is a group still out?" test (`has('group')`
-      // in `_spawnWelcomeField`) reads `_extraKind`, and a stale tag would make the next game skip its group. (The satellite's body is parked
-      // below, which drops the tag with every other flag.)
+      this._currentMissionProfile = null;
+      this._currentMissionNumber = 1;
+      this._applyShardLaw(1);               // a new game is mission 1 again: the shards go back to the first law
+      // A previous game's group pieces are ordinary debris now: the map-off "is a group still out?" test
+      // (`has('group')` in `_spawnWelcomeField`) reads `_extraKind`, and a stale tag would make the next game skip its
+      // group. (The satellite's body is parked below, which drops the tag with every other flag.)
       for (const d of this.debrisList) { d.welcomeSpawn = false; if (d._extraKind) d._extraKind = null; }
       this._clearOnboardingPin();
-      this._reviveStoredFieldPieces();      // slice 2b: the pieces of the fields she left go back to the pool
+      this._reviveStoredFieldPieces();      // the pieces of the fields she left go back to the pool
     });
-    // slice 2b: a game-over CONTINUE is a fresh attempt at the start field (the registry resets itself): the same clean-up
+    // A game-over CONTINUE is a fresh attempt at the start field (the registry resets itself): the same clean-up
     eventBus.on(Events.GAMEOVER_CONTINUE, () => this._reviveStoredFieldPieces());
 
-    // M1 guidance T6: the re-seat safety net's "busy" set follows the
-    // AUTOPILOT_TARGET_LOCK / UNLOCK pair (mother AP + every daughter) and is
-    // cleared on GAME_RESET. Factored so the subscription can be exercised
-    // without building a field (test-WelcomeField).
+    // The re-seat safety net's "busy" set follows the AUTOPILOT_TARGET_LOCK / UNLOCK pair (mother AP + every
+    // daughter) and is cleared on GAME_RESET. Factored out so the subscription is testable without a field.
     this._wireReseatLockEvents();
 
-    // Onboarding tease pin release: hand a curated piece back to normal
-    // co-orbital propagation once it leaves play. Each pinned piece (#1, #2) is
-    // released independently by id, so catching #1 doesn't unpin #2. Released on:
-    //  • LASSO_CONTACT — the Mother net's reel-in begins. This MUST release the
-    //    pin at contact (not completion): otherwise the highest-priority pin
-    //    branch in _updateInstanceTransform keeps re-pinning the piece to its
-    //    fixed mother-local offset every reel frame, so the net package reels in
-    //    but the debris stays frozen in place, then vanishes when removeDebris
-    //    zeroes its scale. The LassoSystem reel then drives the piece to the
-    //    mother via the authoritative _armPinned/_armPinPos direct-copy pin.
+    // Onboarding tease pin release: hand a curated piece back to normal co-orbital propagation once it leaves play.
+    // Each pinned piece (#1, #2) is released independently by id. Released on:
+    //  • LASSO_CONTACT — the reel-in begins. MUST release at contact (not completion): otherwise the highest-priority
+    //    pin branch in _updateInstanceTransform keeps re-pinning the piece to its fixed mother-local offset every reel
+    //    frame (net reels in, debris stays frozen, then vanishes). The LassoSystem reel then drives the piece via the
+    //    authoritative _armPinned/_armPinPos direct-copy pin.
     //  • ARM_CAPTURED — daughter-arm catch path (payload uses targetId/debrisId).
-    //  • NET_CATCH_SUCCESS — the NetProjectile mother path (fireMotherNet, the
-    //    current production mother path) never emits LASSO_CONTACT: without
-    //    this, a tease-pinned whale caught by a mother NET stayed pinned
-    //    through the whole reel — the pin branch beats _armPinned in
-    //    _updateInstanceTransform, so the whale rendered glued at the tease
-    //    offset while the net reeled in empty. NET_CATCH_SUCCESS fires before
-    //    the auto-reel starts, so the handoff to the reel pin is race-free
-    //    (and the orbit re-sync in _clearOnboardingPin makes it seamless).
-    //  • DEBRIS_REMOVED — the reliable "tease consumed" backstop (fragmentation,
-    //    web de-orbit, or any catch that ends in removeDebris).
+    //  • NET_CATCH_SUCCESS — the NetProjectile mother path (fireMotherNet, the production path) never emits
+    //    LASSO_CONTACT; without this a pinned piece caught by a mother NET stayed glued at the tease offset (the pin
+    //    branch beats _armPinned). It fires before the auto-reel starts, so the handoff is race-free (and the orbit
+    //    re-sync in _clearOnboardingPin makes it seamless).
+    //  • DEBRIS_REMOVED — the reliable "tease consumed" backstop (fragmentation, web de-orbit, any catch that ends in
+    //    removeDebris).
     //  • ONBOARDING_COMPLETE — veteran skip / all-done start (clear all); not at the tutorial's
     //    real end ({ atTutorialEnd: true }: uncaught pieces stay held until caught).
     const _releaseIfMatch = (d) => {
@@ -797,9 +644,8 @@ export class DebrisField {
     if (Events.DEBRIS_REMOVED) eventBus.on(Events.DEBRIS_REMOVED, _releaseIfMatch);
     if (Events.ONBOARDING_COMPLETE) {
       eventBus.on(Events.ONBOARDING_COMPLETE, (d) => {
-        // tutorial-end-switch D4: the tutorial's real end leaves uncaught welcome pieces held (they
-        // release when caught, as on a first run before this change): releasing piece #2 would move it
-        // ~18 m in one step. A veteran's / a skipped tutorial's COMPLETE ({} payload) still releases all.
+        // The tutorial's real end leaves uncaught welcome pieces held (they release when caught): releasing piece #2
+        // would move it ~18 m in one step. A veteran's / skipped tutorial's COMPLETE ({} payload) still releases all.
         if (d?.atTutorialEnd) return;
         this._clearOnboardingPin();
       });
@@ -808,25 +654,16 @@ export class DebrisField {
     console.log(`[DebrisField] ${this.debrisList.length} interactive + ${BACKGROUND_COUNT} background debris`);
   }
 
-  // ==========================================================================
-  // GENERATION
-  // ==========================================================================
-
   /** @private Generate all interactive debris data.
-   *  ST-6.1: hybrid mode — real catalogue entries populate first, then
-   *  procedural entries top up INTERACTIVE_COUNT.
-   *  S11(a): regime-first — the catalogue half is ADMITTED by the field regime
-   *  (TLE alt+inc in band) and picked by a seeded weighted sampler, replacing
-   *  the file-order slice that landed Envisat in the fourth slot of every game
-   *  (register item 38); the procedural half is drawn in-band by
-   *  `_createDebrisData(id, rng)` on the same seeded stream.
-   *  S11(b): TWO POPULATIONS (register items 38/39; owner: "the whale as act
-   *  three, not as 24 % of the furniture") — the first DEBRIS.FOREGROUND_CAST.length
-   *  slots are the authored foreground cast (three-act shape, exactly
-   *  MISSIONS.DEBRIS_PER_MISSION pieces; a real in-band whale substitutes the
-   *  finale when one exists — at the start regime the in-band yield is zero,
-   *  register item 51, so the cast is honestly all-procedural); every other
-   *  slot is an uncapturable HAZARD shard from the power-law cloud. */
+   *  Hybrid mode: real catalogue entries populate first, then procedural entries top up INTERACTIVE_COUNT.
+   *  Regime-first: the catalogue half is ADMITTED by the field regime (TLE alt+inc in band) and picked by a seeded
+   *  weighted sampler (register item 38); the procedural half is drawn in-band by `_createDebrisData(id, rng)` on the
+   *  same seeded stream.
+   *  TWO POPULATIONS (register items 38/39; owner: "the whale as act three, not as 24 % of the furniture"): the first
+   *  DEBRIS.FOREGROUND_CAST.length slots are the authored foreground cast (three-act shape, exactly
+   *  MISSIONS.DEBRIS_PER_MISSION pieces; a real in-band whale substitutes the finale when one exists; at the start
+   *  regime the in-band yield is zero, register item 51, so the cast is all-procedural); every other slot is an
+   *  uncapturable HAZARD shard from the power-law cloud. */
   _generateDebris() {
     const total = this._interactiveCount;
     const cast = (Constants.DEBRIS && Array.isArray(Constants.DEBRIS.FOREGROUND_CAST))
@@ -834,10 +671,8 @@ export class DebrisField {
     const finaleMassKg = (Constants.TOOL_RECOMMENDATION
       && Constants.TOOL_RECOMMENDATION.MOTHER_MIN_MASS) || 500;
 
-    // S11(c): intact bodies are launch history, not a power law (register
-    // item 39) — the procedural intact draw samples the REAL catalogue's
-    // masses. Built once here; empty pools (no loader / tests) fall back to
-    // the legacy uniform in-type draw inside _createDebrisData.
+    // Intact bodies are launch history, not a power law (register item 39): the procedural intact draw samples the
+    // REAL catalogue's masses. Empty pools (no loader / tests) fall back to the uniform in-type draw in _createDebrisData.
     this._intactMassPools = buildIntactMassPools(
       (this._catalogLoader && this._catalogLoader.isReady && this._catalogLoader.isReady())
         ? this._catalogLoader.getAllDebris() : []);
@@ -868,7 +703,7 @@ export class DebrisField {
       this.debrisMap.set(debris.id, debris);
       this.debrisList.push(debris);
     }
-    // Lane 4a H2a: the parked heavy spares take the ids after the live pool; `_nextId` is set after them, so no id repeats.
+    // The parked heavy spares take the ids after the live pool; `_nextId` is set after them, so no id repeats.
     this._addHeavySpares();
     this._nextId = this.debrisList.length;
 
@@ -878,22 +713,22 @@ export class DebrisField {
       `${debug.eligibleCount} in-band) + ${debug.hazardCount} hazard, ` +
       `alt ${r.altMinKm}–${r.altMaxKm} km, inc ${r.incCenterDeg.toFixed(1)}±${r.incTolDeg}°`);
 
-    // UX-3 #9: All debris starts hidden — auto-discover runs after welcome-field spawn in update()
+    // All debris starts hidden; auto-discover runs after welcome-field spawn in update()
   }
 
   /**
-   * Lane 4a H2a (Nets step 3 slice 4): the PARKED HEAVY SPARES - one for every row of every `high` field in `Constants.FIELDS.LIST`
-   * (4 fields x the 7 `Constants.HIGH_FIELD` rows = 28), of that row's type and material. A high field lays its rows out through the
-   * ordinary field spawn path (`_spawnWelcomeField`), and a rocket stage or a dead satellite cannot be made from a fragment: an
-   * instanced mesh is sized and shaped once, at the build (`_buildInstancedMeshes`), and a retyped fragment still draws as a
-   * fragment. So the heavy bodies exist from the start, parked out of play, and a high field CLAIMS one per row.
+   * The PARKED HEAVY SPARES: one for every row of every `high` field in `Constants.FIELDS.LIST` (4 fields x the 7
+   * `Constants.HIGH_FIELD` rows = 28), of that row's type and material. A high field lays its rows out through the
+   * ordinary field spawn path (`_spawnWelcomeField`), but an instanced mesh is sized and shaped once at the build
+   * (`_buildInstancedMeshes`) and a retyped fragment still draws as a fragment. So the heavy bodies exist from the
+   * start, parked out of play, and a high field CLAIMS one per row.
    *
-   * Parked = not alive, not tracked, not discovered, not a hazard, its instance scaled to nothing (`_buildInstancedMeshes`), and
-   * flag-ineligible (built at `HEAVY_SPARES.PARK_SIZE_M`, under the flag size). Every reader of the pool filters on `alive`, so a
-   * spare is in no total, no mission, no scan, no lock and no hazard list until it is claimed. They are NOT in FOREGROUND_CAST
-   * (that stays pinned to DEBRIS_PER_MISSION) and take ids after the live pool. Their orbits come from their own seeded stream
-   * (`_fieldSeed ^ HEAVY_SPARES.SEED_XOR`), disjoint from the assembly's and the background's, so neither moves; they are
-   * never re-seated by `reseatFieldRegime` and never revived as live debris (`_reviveStoredFieldPieces` parks them again).
+   * Parked = not alive, not tracked, not discovered, not a hazard, instance scaled to nothing, and flag-ineligible
+   * (built at `HEAVY_SPARES.PARK_SIZE_M`, under the flag size). Every reader of the pool filters on `alive`, so a spare
+   * is in no total, mission, scan, lock or hazard list until claimed. They are NOT in FOREGROUND_CAST (pinned to
+   * DEBRIS_PER_MISSION) and take ids after the live pool. Their orbits come from their own seeded stream
+   * (`_fieldSeed ^ HEAVY_SPARES.SEED_XOR`), disjoint from the assembly's and the background's; they are never re-seated
+   * by `reseatFieldRegime` and never revived as live debris (`_reviveStoredFieldPieces` parks them again).
    * @private
    */
   _addHeavySpares() {
@@ -916,8 +751,8 @@ export class DebrisField {
         count++;
       }
     }
-    // u20-debris v2: the mission-satellite pool, after the 28 (their ids and draws are the same as before). A `_missionSpare` is
-    // claimed by a mission satellite only (`_claimHeavySpare` pool 'mission'), a high field never takes one.
+    // The mission-satellite pool, after the 28. A `_missionSpare` is claimed by a mission satellite only
+    // (`_claimHeavySpare` pool 'mission'); a high field never takes one.
     const missionMats = typeof Constants.missionPoolMaterials === 'function' ? Constants.missionPoolMaterials() : [];
     for (const material of missionMats) {
       const data = this._createDebrisData(this.debrisList.length, rng, DebrisField._spareSpec('defunctSat', material, Constants.MISSION_SAT.MASS_MIN_KG));
@@ -934,16 +769,16 @@ export class DebrisField {
     this._heavySpareCount = count;
   }
 
-  /** @private The spec a spare is BUILT from: the row's type and material at the parked size (under the flag size), tracked = false. */
+  /** @private The spec a spare is BUILT from: the row's type and material at the parked size, tracked = false. */
   static _spareSpec(type, material, massKg) {
     const hs = Constants.HEAVY_SPARES || {};
     return { type, material, massKg, sizeM: Number.isFinite(hs.PARK_SIZE_M) ? hs.PARK_SIZE_M : 0.5, tracked: false };
   }
 
   /**
-   * A high-field row claims a parked spare of its type and material (the row's own look: the instanced mesh is the spare's). The
-   * first free one by id; with none of that material, the first free one of the type; null when the pool has none (a high field
-   * then lays out fewer pieces: it never invents one). A claimed spare stays claimed until `_parkHeavySpare` (a new run).
+   * A high-field row claims a parked spare of its type and material (the instanced mesh is the spare's). The first
+   * free one by id; with none of that material, the first free one of the type; null when the pool has none (a high
+   * field then lays out fewer pieces: it never invents one). A claimed spare stays claimed until `_parkHeavySpare`.
    * @private
    * @param {string} type @param {string} [material] @returns {object|null}
    */
@@ -953,8 +788,8 @@ export class DebrisField {
     for (const d of this.debrisList) {
       if (!d._heavySpare || d.type !== type || !!d._missionSpare !== mission) continue;
       if (d._spareClaimed) {
-        // u20-debris v2: a MISSION body whose piece has been cleared comes back to the pool; a high field's claim stays for good
-        // (slice 4). Re-parked from the body's own stream: no global draw.
+        // A MISSION body whose piece has been cleared comes back to the pool; a high field's claim stays for good.
+        // Re-parked from the body's own stream: no global draw.
         if (!mission || !this._missionBodyCleared(d)) continue;
         this._parkHeavySpare(d, mulberry32(((this._fieldSeed >>> 0) ^ (Constants.HEAVY_SPARES.SEED_XOR | 0) ^ Math.imul(d.id + 1, 0x9E3779B1)) >>> 0));
       }
@@ -966,12 +801,13 @@ export class DebrisField {
   }
 
   /**
-   * Nets step 3 slice 5 (lane 5b, P5): a saved BIG piece that was still aboard comes back as a real field body. It claims a parked heavy
-   * spare of its type and material exactly as a high-field row does (`_claimHeavySpare`: a reload re-parks every spare, so one is free;
-   * none left = null, the caller counts it lost) and takes the saved name, mass, size, owner and tumbling area. It is credited (the catch
-   * counted and paid nothing; no later CATCH_PROCESSED for it pays or counts), tagged with the field row it was caught from (the registry's
-   * `markCaught` finds the row already gone), alive and discovered, and NOT laid out as a field piece (`welcomeSpawn` false: no re-seat,
-   * no store). Not yet held: the caller seats it on a holder (the collar or a daughter's rack), whose pin then owns its position.
+   * A saved BIG piece that was still aboard comes back as a real field body. It claims a parked heavy spare of its
+   * type and material exactly as a high-field row does (`_claimHeavySpare`: a reload re-parks every spare, so one is
+   * free; none left = null, the caller counts it lost) and takes the saved name, mass, size, owner and tumbling area.
+   * It is credited (the catch counted and paid nothing; no later CATCH_PROCESSED for it pays or counts), tagged with
+   * the field row it was caught from (the registry's `markCaught` finds the row already gone), alive and discovered,
+   * and NOT laid out as a field piece (`welcomeSpawn` false: no re-seat, no store). Not yet held: the caller seats it
+   * on a holder (the collar or a daughter's rack), whose pin then owns its position.
    * @param {{type: string, name?: string, material?: string, mass: number, size?: number, owner: object, areaM2?: number, fieldId?: string, fieldRow?: number, massAtCatch?: number}} spec
    *   (`mass` is what is left of a piece being melted; `massAtCatch` what it weighed when caught, so the drawn piece is shortened to the share left)
    * @param {{orbit?: object}} [opts] `orbit`: an orbit to start the body on (the mother's), so its propagation is sane until a holder pins it
@@ -987,7 +823,7 @@ export class DebrisField {
     if (spec.name) d.name = spec.name;
     d.owner = spec.owner ? { ...spec.owner } : null;
     if (Number.isFinite(spec.areaM2)) d.areaM2 = spec.areaM2;
-    // slice 5 (5e, E7): a partly melted piece comes back as its remainder (`mass`), drawn shortened to its share of the mass it was caught at
+    // A partly melted piece comes back as its remainder (`mass`), drawn shortened to its share of the mass it was caught at
     if (spec.massAtCatch > 0 && spec.mass < spec.massAtCatch) d._meltK = spec.mass / spec.massAtCatch; else delete d._meltK;
     Object.assign(d, deriveCaptureFlags(d.material, d.type, d.mass));
     if (opts.orbit) d.orbit = { ...opts.orbit };
@@ -1003,12 +839,12 @@ export class DebrisField {
   }
 
   /**
-   * u20-debris v2 fix round 1 (F1, F2): is a claimed MISSION body's piece gone for good? Cleared = it was laid out (`welcomeSpawn`), is
-   * no longer alive, is not parked in a field's store (`_fieldStored`: it comes back on a return visit) and is not inside a scoop bag
-   * that is still in play. It does NOT read the capture flags (`_captured`, `_armPinned`, `_capturedByArm`...): a daughter's catch and
-   * a tip catch leave `_captured` true when the piece is credited and removed, so a flag test never saw them cleared. A bag member
-   * keeps `_inBag` after the bag is credited and removed (`mergeIntoBag` sets alive false, `_captured` false), so the bag itself is
-   * looked up: only a bag still alive holds it (a split bag clears `_inBag` itself).
+   * Is a claimed MISSION body's piece gone for good? Cleared = it was laid out (`welcomeSpawn`), is no longer alive,
+   * is not parked in a field's store (`_fieldStored`: it comes back on a return visit) and is not inside a scoop bag
+   * still in play. It does NOT read the capture flags (`_captured`, `_armPinned`, `_capturedByArm`...): a daughter's
+   * catch and a tip catch leave `_captured` true when the piece is credited and removed, so a flag test never saw
+   * them cleared. A bag member keeps `_inBag` after the bag is credited and removed (`mergeIntoBag` sets alive false,
+   * `_captured` false), so the bag itself is looked up: only a bag still alive holds it (a split bag clears `_inBag`).
    * @private
    * @param {object} d a claimed `_missionSpare` body @returns {boolean}
    */
@@ -1022,8 +858,8 @@ export class DebrisField {
   }
 
   /**
-   * u20-debris v2 fix round 1 (F3): is a mission-satellite body free to claim (never claimed, or claimed and cleared)? FieldRegistry asks
-   * before it adds the satellite row to a field, so a row never exists without a body behind it (no phantom row 300).
+   * Is a mission-satellite body free to claim (never claimed, or claimed and cleared)? FieldRegistry asks before it
+   * adds the satellite row to a field, so a row never exists without a body behind it.
    * @returns {boolean}
    */
   hasFreeMissionBody() {
@@ -1035,9 +871,9 @@ export class DebrisField {
   }
 
   /**
-   * Park a spare again (a new run, a game-over continue): the body is reset to a fresh parked one of the same id, type and material
-   * (every lifecycle flag a piece accrues - credited, caught, pinned, netted, tagged to a field - goes with it, and the object keeps
-   * its identity), taken out of play and drawn at no size. The mesh slot (`_meshKey`, instance) is the spare's own and is kept.
+   * Park a spare again (a new run, a game-over continue): the body is reset to a fresh parked one of the same id, type
+   * and material (every lifecycle flag a piece accrues goes with it, and the object keeps its identity), taken out of
+   * play and drawn at no size. The mesh slot (`_meshKey`, instance) is the spare's own and is kept.
    * @private
    * @param {object} d a `_heavySpare` piece
    */
@@ -1066,22 +902,15 @@ export class DebrisField {
   }
 
   /**
-   * S11(b) — build the per-piece spec for a HAZARD shard: a fragment whose
-   * SIZE follows the NASA Standard Breakup Model cumulative count law
-   * N(≥Lc) ∝ Lc^−λ (Constants.DEBRIS.HAZARD_CLOUD) drawn on the seeded
-   * stream, so the cloud is reproducible from the logged boot seed and its
-   * measured exponent is test-pinned.
-   * S11(c) — MASS follows the real SBM area→mass chain (register item 39;
-   * Constants.DEBRIS.MASS_LAW): A = 0.556945·Lc^2.0047, then mass = A/(A/M)
-   * with the area-to-mass ratio log-normal (collision fragments, χ =
-   * log10(A/M) ~ N(−0.9, 0.45)) — replacing the (b) placeholder, which
-   * inverted the fragment mass↔size envelope. The measured cumulative mass
-   * exponent lands ≈0.6 (SBM band 0.6–0.85). Two more uniforms are consumed
-   * per shard (Box–Muller), same fixed order every call, so the seeded
-   * stream stays deterministic. The result is clamped to the fragment
-   * envelope — the cloud stays shard-class furniture (uncapturable by mass
-   * as well as size; ~2–3 % of draws pile at the edges).
-   * The shard is flagged uncapturable furniture (`hazard: true`, untracked).
+   * Per-piece spec for a HAZARD shard: a fragment whose SIZE follows the NASA Standard Breakup Model cumulative count
+   * law N(≥Lc) ∝ Lc^−λ (Constants.DEBRIS.HAZARD_CLOUD) drawn on the seeded stream, so the cloud is reproducible from
+   * the logged boot seed and its measured exponent is test-pinned.
+   * MASS follows the SBM area→mass chain (register item 39; Constants.DEBRIS.MASS_LAW): A = 0.556945·Lc^2.0047, then
+   * mass = A/(A/M) with the area-to-mass ratio log-normal (collision fragments, χ = log10(A/M) ~ N(−0.9, 0.45)). The
+   * measured cumulative mass exponent lands ≈0.6 (SBM band 0.6–0.85). Two more uniforms are consumed per shard
+   * (Box–Muller), in the same fixed order every call, so the seeded stream stays deterministic. The result is clamped
+   * to the fragment envelope: the cloud stays shard-class furniture (uncapturable by mass as well as size; ~2–3 % of
+   * draws pile at the edges). The shard is flagged uncapturable furniture (`hazard: true`, untracked).
    * @private
    * @param {() => number} rng — the assembly's seeded stream
    * @returns {object} a _createDebrisData spec
@@ -1092,10 +921,10 @@ export class DebrisField {
     const ML = (Constants.DEBRIS && Constants.DEBRIS.MASS_LAW)
       || { AREA_COEF: 0.556945, AREA_EXP: 2.0047, AM_LOG10_MEAN: -0.9, AM_LOG10_SIGMA: 0.45 };
     const td = DEBRIS_TYPES.fragment;
-    // u20-debris: ONE seeded draw (u, g1, g2: the same three the stream always gave a shard) feeds TWO laws. `sizeM`/`massKg`
-    // are mission 1's (the edge it always had, FIRST_SIZE_MIN_M, so mission 1's field is byte-identical: DECISIONS §38 rows 1
-    // and 4); `later` is the law from mission HC.LATER_FROM_MISSION on (2-50 cm, mass floor MASS_MIN_KG instead of the
-    // fragment row's 0.01 kg, which the mission targets share). `_applyShardLaw` swaps them at each mission start.
+    // ONE seeded draw (u, g1, g2: the same three the stream always gave a shard) feeds TWO laws. `sizeM`/`massKg` are
+    // mission 1's (edge FIRST_SIZE_MIN_M, so mission 1's field is byte-identical: DECISIONS §38 rows 1 and 4); `later`
+    // is the law from mission HC.LATER_FROM_MISSION on (2-50 cm, mass floor MASS_MIN_KG instead of the fragment row's
+    // 0.01 kg, which the mission targets share). `_applyShardLaw` swaps them at each mission start.
     const firstMin = Number.isFinite(HC.FIRST_SIZE_MIN_M) ? HC.FIRST_SIZE_MIN_M : HC.SIZE_MIN_M;
     const u = rng(), g1 = rng(), g2 = rng();
     const sizeMeter = samplePowerLawSize(u, firstMin, HC.SIZE_MAX_M, HC.LAMBDA);
@@ -1115,22 +944,21 @@ export class DebrisField {
   }
 
   /**
-   * Mission 2+ undoes what mission 1 did to the field: the shards take the later size law, every piece hidden for mission 1 comes back,
-   * and the background dots are shown again. One body for MISSION_START and for `setMissionNumber` (a map-off load of a later-mission save,
-   * after a mission 1 was played this session: u23 BF1).
+   * Mission 2+ undoes what mission 1 did to the field: the shards take the later size law, every piece hidden for
+   * mission 1 comes back, and the background dots are shown again. One body for MISSION_START and for
+   * `setMissionNumber` (a map-off load of a later-mission save, after a mission 1 was played this session).
    * @param {number} missionNumber
    */
   _leaveMission1(missionNumber) {
     let restored = 0;
-    // u20-debris: the shards take the later size law BEFORE they come back, so the tracked rule below reads their new size.
+    // The shards take the later size law BEFORE they come back, so the tracked rule below reads their new size.
     this._applyShardLaw(missionNumber);
     for (const d of this.debrisList) {
       if (d._hiddenForMission1) {
         d._hiddenForMission1 = false;
         d.alive = true;
-        // S11(b): a hazard shard is not a target — restoring it must not catalogue it like one (the pre-S11(b)
-        // blanket `tracked = true` predates the two populations). u20-debris: `_trackedFor` is the one rule: 10 cm or
-        // bigger shards are known to radar (tracked, still scenery: hazard keeps them out of every target list).
+        // A hazard shard is not a target: restoring it must not catalogue it like one. `_trackedFor` is the one rule:
+        // 10 cm or bigger shards are known to radar (tracked, still scenery: hazard keeps them out of every target list).
         d.tracked = this._trackedFor(d);
         restored++;
       }
@@ -1138,39 +966,37 @@ export class DebrisField {
     if (restored > 0) {
       console.log(`[DebrisField] Mission ${missionNumber}: restored ${restored} previously hidden debris`);
     }
-    // 2026-05-15 polish (urgent): restore the background-points cloud
-    // when advancing past mission 1 — it's hidden during M1 so the
-    // pilot sees a clean ≤2 km welcome cluster instead of decorative
-    // dots at multi-km range that look like real debris.
+    // Restore the background-points cloud past mission 1: it is hidden during M1 so the pilot sees a clean ≤2 km
+    // welcome cluster, not decorative dots at multi-km range that look like real debris.
     if (this.backgroundPoints) {
       this.backgroundPoints.visible = true;
     }
   }
 
   /**
-   * u23 B3: set the mission the field lays out for, where no MISSION_START will say it (a LOAD with the map off: `GAME_RESET` left
-   * 1, so the saved game would run the mission-1 shard law, no extras, the mission-1 hide and the 2 km cull). The map-on load
-   * gets the number through `FieldRegistry.restore` -> the field plan (`_currentMissionNumber`, `_spawnWelcomeField`). Applies the
-   * shard law for it now (idempotent, no random draw). A bad number is ignored.
+   * Set the mission the field lays out for, where no MISSION_START will say it (a LOAD with the map off: `GAME_RESET`
+   * left 1, so the saved game would run the mission-1 shard law, no extras, the mission-1 hide and the 2 km cull). The
+   * map-on load gets the number through `FieldRegistry.restore` -> the field plan (`_currentMissionNumber`,
+   * `_spawnWelcomeField`). Applies the shard law for it now (idempotent, no random draw). A bad number is ignored.
    * @param {number} missionNumber the scorer's uncapped mission number (1 = the first)
    * @returns {boolean} true when it was taken
    */
   setMissionNumber(missionNumber) {
     if (!Number.isInteger(missionNumber) || missionNumber < 1) return false;
     this._currentMissionNumber = missionNumber;
-    // u23 BF1: a later mission also undoes mission 1's hiding (the same body MISSION_START runs): a mission 1 played this session, then
-    // quit to the menu and CONTINUE of a mission-3 save, must not leave pieces hidden or the background dots off.
+    // A later mission also undoes mission 1's hiding (the same body MISSION_START runs): a mission 1 played this
+    // session, then quit to the menu and CONTINUE of a mission-3 save, must not leave pieces hidden or the dots off.
     if (missionNumber > 1) this._leaveMission1(missionNumber);
     else this._applyShardLaw(missionNumber);
     return true;
   }
 
   /**
-   * u20-debris: the background shards' size law for the mission now running (DECISIONS §38 row 1). Mission 1: the first law
-   * every shard was built with (0.10-0.50 m, untracked). From `HAZARD_CLOUD.LATER_FROM_MISSION`: the shard's `later` size and
-   * mass (2-50 cm), and `tracked` follows the one rule (`_trackedFor`: 10 cm or bigger is known to radar). Touches only pieces
-   * that are still hazard shards (a shard the welcome spawn promoted into a target keeps what the spawn gave it) and is
-   * idempotent, so it may run at every mission start and every welcome spawn. No random draw. Returns the number rewritten.
+   * The background shards' size law for the mission now running (DECISIONS §38 row 1). Mission 1: the first law every
+   * shard was built with (0.10-0.50 m, untracked). From `HAZARD_CLOUD.LATER_FROM_MISSION`: the shard's `later` size and
+   * mass (2-50 cm), and `tracked` follows `_trackedFor`. Touches only pieces still hazard shards (a shard the welcome
+   * spawn promoted into a target keeps what the spawn gave it); idempotent, so it may run at every mission start and
+   * every welcome spawn. No random draw. Returns the number rewritten.
    * @param {number} [missionNumber]
    * @returns {number}
    */
@@ -1191,9 +1017,9 @@ export class DebrisField {
   }
 
   /**
-   * u20-debris: the ONE rule for a piece's `tracked` flag when something puts it back in play (a mission-start restore, a field
-   * revive). Everything but a background shard is tracked (as before). A background shard is tracked only under the later law
-   * (`_applyShardLaw`) and only at `HAZARD_CLOUD.TRACKED_MIN_M` (10 cm) or bigger: real radars follow pieces from about 10 cm.
+   * The ONE rule for a piece's `tracked` flag when something puts it back in play (a mission-start restore, a field
+   * revive). Everything but a background shard is tracked. A background shard is tracked only under the later law
+   * (`_applyShardLaw`) and only at `HAZARD_CLOUD.TRACKED_MIN_M` (10 cm) or bigger: real radars follow pieces from ~10 cm.
    * @param {object} d
    * @returns {boolean}
    */
@@ -1204,37 +1030,31 @@ export class DebrisField {
     return this._shardsLater === true && d.sizeMeter >= min;
   }
 
-  /** @private Convert CatalogConverter's Node-safe seed into THREE.js runtime form.
-   *  Specifically: tumbleAxis plain {x,y,z} → THREE.Vector3, generate salvage.
-   *  Does NOT mutate the catalogue entry — only the debris-data object passed in. */
+  /** @private Convert CatalogConverter's Node-safe seed into THREE.js runtime form: tumbleAxis plain {x,y,z} →
+   *  THREE.Vector3, generate salvage. Does NOT mutate the catalogue entry, only the debris-data object passed in. */
   _finaliseRealDebris(data) {
-    // Upgrade tumbleAxis to Vector3 (CatalogConverter returns plain obj)
     if (!data.tumbleAxis || !data.tumbleAxis.isVector3) {
       const a = data.tumbleAxis || { x: 0, y: 1, z: 0 };
       data.tumbleAxis = new THREE.Vector3(a.x || 0, a.y || 0, a.z || 0).normalize();
     }
-    // Generate salvage using existing procedural heuristics (mass + material keyed)
     const sal = this._generateSalvage(data.type, data.mass, data.material);
     data.salvage = sal;
     data.hasSalvage = sal.xenon > 0 || sal.indium > 0 || sal.gaAs > 0 ||
                        sal.battery > 0 || sal.hydrazine > 0 || sal.lithium > 0 ||
                        (sal.metals && sal.metals.length > 0);
     data.metalMassKg = (sal.metals || []).reduce((s, m) => s + m.amount, 0);
-    // ST-6.2: ensure moidBadge is initialised (ConjunctionSystem stamps later)
+    // ConjunctionSystem stamps moidBadge later
     if (data.moidBadge === undefined) data.moidBadge = null;
-    // UX-3 #9: Hidden until scanned
+    // Hidden until scanned
     if (data.discovered === undefined) data.discovered = false;
-    // Onboarding tease pin fields — keep the same hidden class as procedural
-    // debris so the per-frame update read stays monomorphic.
+    // Onboarding tease pin fields: same hidden class as procedural debris so the per-frame read stays monomorphic.
     if (data._onboardingPinned === undefined) data._onboardingPinned = false;
     if (data._onboardingPinFwd === undefined) data._onboardingPinFwd = 0;
     if (data._onboardingPinLat === undefined) data._onboardingPinLat = 0;
   }
 
-  /** @private The regime's human/cluster-vocabulary identity (e.g. 'iss-180')
-   *  — ONE computation shared by the constructor and reseatFieldRegime so the
-   *  label can never drift from the live regime (same classifyClusterId SSOT
-   *  as getDebrisClusters). */
+  /** @private The regime's cluster-vocabulary identity (e.g. 'iss-180'): ONE computation shared by the constructor
+   *  and reseatFieldRegime so the label can never drift from the live regime (same classifyClusterId SSOT). */
   _regimeLabelFrom(regime) {
     return classifyClusterId(
       (regime.altMinKm + regime.altMaxKm) / 2,
@@ -1242,22 +1062,14 @@ export class DebrisField {
     ) || 'off-band';
   }
 
-  /** @private Draw one orbit INSIDE the field regime on the seeded stream.
-   *  S11(a) — the whole field is one orbital plane family centred on the
-   *  player's start orbit (register item 38: "objects in different planes are
-   *  not in the same field"). Altitude spans the containing ALT_BANDS cell
-   *  (the benign axis: along-track drift, no plane crossings); inclination/
-   *  RAAN are gaussian about the regime centre, clamped to ±tol, so the
-   *  worst-case pairwise plane difference is ≤ 2·tol (~1° ≈ 135 m/s at VLEO)
-   *  — neighbours, not km/s strangers. The old code drew a weighted
-   *  ALT_BANDS cell and an INC_CLUSTERS centre per piece, scattering the
-   *  field over every plane.
-   *  Extracted from _createDebrisData for S11(b): the foreground cast, the
-   *  hazard shards AND the 5000-point background cloud all draw the SAME
-   *  in-plane geometry from the same seeded discipline (one computation).
-   *  Consumes the rng in a fixed order (alt gauss ×2, inc ×2, raan ×2, then
-   *  ecc/argP/trueAnomaly singles) — the S11(a) reproducibility pin depends
-   *  on that order never changing. */
+  /** @private Draw one orbit INSIDE the field regime on the seeded stream. The whole field is one orbital plane
+   *  family centred on the player's start orbit (register item 38: "objects in different planes are not in the same
+   *  field"). Altitude spans the containing ALT_BANDS cell (the benign axis: along-track drift, no plane crossings);
+   *  inclination/RAAN are gaussian about the regime centre, clamped to ±tol, so the worst-case pairwise plane
+   *  difference is ≤ 2·tol (~1° ≈ 135 m/s at VLEO): neighbours, not km/s strangers.
+   *  The foreground cast, hazard shards AND the 5000-point background cloud all draw the SAME in-plane geometry here.
+   *  ORDER: consumes the rng in a fixed order (alt gauss ×2, inc ×2, raan ×2, then ecc/argP/trueAnomaly singles);
+   *  the reproducibility pin depends on that order never changing. */
   _drawRegimeOrbit(rng = Math.random) {
     const regime = this._fieldRegime || regimeFromStartOrbit(null);
     const altMidKm = (regime.altMinKm + regime.altMaxKm) / 2;
@@ -1287,57 +1099,35 @@ export class DebrisField {
   }
 
   /**
-   * Register item 50 — re-seat the assembled field onto a NEW orbital regime
-   * (a mid-menu language switch re-aims the player's start orbit via
-   * GameFlowManager._applyStartLocation; the field must share that plane or
-   * from mission 2 the player flies a plane the field doesn't share).
+   * Re-seat the assembled field onto a NEW orbital regime (register item 50: a mid-menu language switch re-aims the
+   * player's start orbit via GameFlowManager._applyStartLocation; the field must share that plane or from mission 2
+   * the player flies a plane the field doesn't share).
    *
-   * ORBITS ONLY — the cast/mesh slots are construction-bound: each piece keeps
-   * its identity (type/mass/size/material/mesh slot/flags) and its
-   * semiMajorAxis + eccentricity BYTE-EXACT. The altitude cell is shared by
-   * every language (computeStartOrbit returns no altitude; regimeFromStartOrbit
-   * maps the language-independent START_ALTITUDE_KM into the same ALT_BANDS
-   * cell), so preserving sma is distribution-identical to re-drawing in-cell —
-   * and the authored altKm overrides (e.g. the gate-critical 250 km cubesat,
-   * S11(b)) are recorded nowhere else, so re-drawing altitude would destroy
-   * them. Only the plane/phase fields (inclination, raan, argPerigee,
-   * trueAnomaly) are re-drawn, through the ONE _drawRegimeOrbit computation
-   * (its fixed rng consumption order is preserved — the drawn sma/ecc are
-   * consumed and discarded).
+   * ORBITS ONLY: each piece keeps its identity (type/mass/size/material/mesh slot/flags) and its semiMajorAxis +
+   * eccentricity BYTE-EXACT. The altitude cell is shared by every language (regimeFromStartOrbit maps the
+   * language-independent START_ALTITUDE_KM into the same ALT_BANDS cell), so preserving sma is distribution-identical
+   * to re-drawing in-cell, and authored altKm overrides (e.g. the gate-critical 250 km cubesat) are recorded nowhere
+   * else. Only inclination, raan, argPerigee, trueAnomaly are re-drawn, through the ONE _drawRegimeOrbit (its fixed
+   * rng consumption order is preserved; the drawn sma/ecc are consumed and discarded).
    *
-   * The background cloud re-seats too — the sky is one field (S11(b)).
-   * Positions follow within a frame (interactive) / a 4-batch cycle
-   * (_updateBackground); the _clusterIdOf memo auto-invalidates on the inc
-   * change, so getDebrisClusters/getFieldIdNear/CLUSTER_CLEARED follow.
+   * The background cloud re-seats too (the sky is one field). Positions follow within a frame (interactive) / a
+   * 4-batch cycle (_updateBackground); the _clusterIdOf memo auto-invalidates on the inc change.
    *
-   * Deterministic: the draws run on a fresh mulberry32 stream keyed off the
-   * boot seed XOR a dedicated constant (disjoint from both the assembly
-   * stream and the background stream, so neither reproducibility pin can
-   * move), consuming the interactive list in index order, then the
-   * background orbits in index order. Pieces without an orbit (none exist
-   * by construction) skip WITHOUT consuming the stream.
+   * Deterministic: draws run on a fresh mulberry32 stream keyed off the boot seed XOR a dedicated constant (disjoint
+   * from the assembly and background streams, so neither reproducibility pin can move), over the interactive list in
+   * index order, then the background orbits in index order. Pieces without an orbit skip WITHOUT consuming the stream.
    *
-   * An unchanged regime is a VALUE-compared no-op (computeStartOrbit is pure,
-   * so an unchanged language yields byte-identical regime fields — exact
-   * equality, no epsilon): returns false with zero draws and zero writes.
+   * An unchanged regime is a VALUE-compared no-op (computeStartOrbit is pure: exact equality, no epsilon): returns
+   * false with zero draws and zero writes.
    *
-   * isReal pieces re-seat uniformly (unreachable at the start regime — the
-   * in-band catalogue yield is zero, register item 51): an admitted real
-   * entry keeps its identity and its (in-cell) sma and takes an in-band
-   * plane — the field is one regime; gameplay already bends TLE-honesty
-   * elsewhere (EDT attract, deorbit).
+   * isReal pieces re-seat uniformly (unreachable at the start regime: in-band catalogue yield is zero, register item
+   * 51): an admitted real entry keeps its identity and (in-cell) sma and takes an in-band plane.
    *
-   * EXEMPTION: welcome-spawned / onboarding-tease-pinned pieces are NEVER
-   * re-seated — their positions are pinned to the PLAYER's orbit (the
-   * _spawnWelcomeField frame-copy / the tease pin), so re-seating them would
-   * teleport an already-placed, player-co-orbital cluster off its pins.
-   * Unreachable today (every start path that can carry a CHANGED regime —
-   * MENU_START / FAST_START / CONTINUE / retry — runs resetGame() first,
-   * which clears welcomeSpawn and _welcomeFieldSpawned, so the cluster is
-   * re-spawned lazily AFTER this re-seat) — the guard is the invariant
-   * living in the method, not in the call-site wiring. Skipped pieces do
-   * NOT consume the rng stream (stream position stays a function of the
-   * seated set only).
+   * EXEMPTION: welcome-spawned / onboarding-tease-pinned pieces are NEVER re-seated: their positions are pinned to the
+   * PLAYER's orbit, so re-seating would teleport an already-placed co-orbital cluster off its pins. Unreachable today
+   * (every start path that can carry a CHANGED regime runs resetGame() first, which clears welcomeSpawn and
+   * _welcomeFieldSpawned, so the cluster is re-spawned lazily AFTER this re-seat); the guard keeps the invariant in
+   * the method, not the call-site wiring. Skipped pieces do NOT consume the rng stream.
    *
    * @param {object|null} regime — a regimeFromStartOrbit() shape.
    * @returns {boolean} true when the field was re-seated.
@@ -1366,10 +1156,9 @@ export class DebrisField {
     let seated = 0;
     for (const d of this.debrisList) {
       if (!d || !d.orbit) continue;             // defensive: consumes nothing
-      // Never re-seat a player-pinned piece (the welcome cluster / the
-      // onboarding tease) — its position is pinned to the PLAYER's orbit.
+      // Never re-seat a player-pinned piece (the welcome cluster / the onboarding tease).
       if (d.welcomeSpawn || d._onboardingPinned) continue;
-      if (d._heavySpare) continue;              // lane 4a: a parked spare takes no draw (the stream stays a function of the live pool)
+      if (d._heavySpare) continue;              // a parked spare takes no draw (the stream stays a function of the live pool)
       reseatOne(d.orbit);
       seated++;
     }
@@ -1386,21 +1175,14 @@ export class DebrisField {
     return true;
   }
 
-  /** @private Create a single debris data object.
-   *  S11(a): takes the assembly id and the seeded rng from
-   *  `buildRegimeDebrisSeeds`; legacy callers (Kessler `createFragments`)
-   *  omit both and get the old non-deterministic behaviour. Only the ORBIT
-   *  draws are seeded — type/mass/material stay on Math.random (S11(c)
-   *  shipped the mass law on that same unseeded discipline: power-law
-   *  fragments/missionDebris, catalogue-pool intacts — the DISTRIBUTION
-   *  changed, not the seeding).
-   *  S11(b): an optional authored `spec` ({ type, massKg, sizeM, tumbleDeg?,
-   *  material?, altKm?, tracked?, hazard?, act? }) replaces the random
-   *  type/mass/size/tumble/material draws with AUTHORED values — the two
-   *  populations (foreground cast + hazard shards) are built this way.
-   *  Everything not named in the spec keeps today's draws; the orbit stays
-   *  the seeded in-regime draw (`spec.altKm` only overrides the altitude,
-   *  consumed identically so the stream never shifts). */
+  /** @private Create a single debris data object. Takes the assembly id and the seeded rng from
+   *  `buildRegimeDebrisSeeds`; legacy callers (Kessler `createFragments`) omit both and get non-deterministic
+   *  behaviour. Only the ORBIT draws are seeded: type/mass/material stay on Math.random (the mass law changed the
+   *  DISTRIBUTION, not the seeding).
+   *  An optional authored `spec` ({ type, massKg, sizeM, tumbleDeg?, material?, altKm?, tracked?, hazard?, act? })
+   *  replaces the random type/mass/size/tumble/material draws with AUTHORED values (the foreground cast + hazard
+   *  shards are built this way). Everything not named keeps the random draws; the orbit stays the seeded in-regime
+   *  draw (`spec.altKm` only overrides the altitude, consumed identically so the stream never shifts). */
   _createDebrisData(id = this._nextId++, rng = Math.random, spec = null) {
     const specActive = !!spec;
 
@@ -1410,29 +1192,15 @@ export class DebrisField {
     const type = specActive ? spec.type : typeItem.key;
     const typeDef = DEBRIS_TYPES[type] || DEBRIS_TYPES.fragment;
 
-    // Size & mass — debug session 2026-05-15 polish task 6:
-    // sizeMeter and mass were previously **independent** uniform rolls
-    // inside each type's [sizeMin..sizeMax] and [massMin..massMax]
-    // ranges. The visible result was a 5 kg fragment that rendered the
-    // same size as a 200 kg defunctSat, breaking the player's
-    // "big-looking debris should yield big salvage" expectation
-    // (salvage IS roughly linear in mass; the mismatch was upstream).
-    //
-    // Formula: mass is the primary random; sizeMeter follows the
-    // type's mass→size envelope with a ±15 % jitter so visually-
-    // similar masses still look distinct. Matches the regen path
-    // already used at line ~1389 (catalog conversion to procedural).
-    // S11(b): a spec carries AUTHORED mass+size (the three-act cast /
-    // the power-law hazard shards) — the random envelope is skipped.
-    // S11(c) — THE MASS LAW (register item 39; Constants.DEBRIS.MASS_LAW):
-    // the uniform in-type draw is gone. Fragments and mission debris are
-    // breakup/operational-junk populations → inverse-CDF power-law mass
-    // (cumulative N(≥m) ∝ m^−MASS_CUM_EXP, the SBM collision asymptote
-    // λ/2.0047 ≈ 0.853; the measured exponent pins in band). Intact bodies
-    // (rocketBody/defunctSat/cubesat) are launch history, not a law →
-    // sampled from the REAL catalogue's per-type mass pools (built in
-    // _generateDebris; the legacy uniform draw remains only as the
-    // no-catalogue fallback for tests/legacy constructions).
+    // Size & mass: mass is the primary random; sizeMeter follows the type's mass→size envelope with ±15 % jitter.
+    // (Independent size and mass rolls once rendered a 5 kg fragment the same size as a 200 kg defunctSat, breaking
+    // "big-looking debris yields big salvage": salvage is roughly linear in mass.) A spec carries AUTHORED mass+size,
+    // so the envelope is skipped.
+    // THE MASS LAW (register item 39; Constants.DEBRIS.MASS_LAW): fragments and mission debris are breakup/junk
+    // populations → inverse-CDF power-law mass (cumulative N(≥m) ∝ m^−MASS_CUM_EXP, the SBM collision asymptote
+    // λ/2.0047 ≈ 0.853; the measured exponent pins in band). Intact bodies (rocketBody/defunctSat/cubesat) are launch
+    // history → sampled from the REAL catalogue's per-type mass pools (built in _generateDebris; the uniform draw is
+    // only the no-catalogue fallback for tests/legacy constructions).
     let mass, sizeMeter;
     if (specActive) {
       mass = spec.massKg;
@@ -1463,25 +1231,20 @@ export class DebrisField {
     const tumbleRate = degToRad(tumbleRateDeg); // rad/s
     const tumbleAxis = randomUnitVector();
 
-    // Material — weighted by type so gold MLI / blue solar cells stay rare and
-    // concentrated on satellites (real debris is mostly metal/composite).
+    // Material: weighted by type so gold MLI / blue solar cells stay rare and concentrated on satellites.
     // A spec authors it directly (the cast's look is deliberate).
     const material = (specActive && spec.material) ? spec.material : weightedMaterial(type);
 
-    // Brittleness
     const brittleness = Math.random();
 
-    // Tracked — probability based on debris type (real-world catalog
-    // coverage). The cast is catalogued (tracked); hazard shards are the
-    // untrackable population by construction.
+    // Tracked: probability by debris type (real-world catalog coverage). The cast is catalogued (tracked); hazard
+    // shards are the untrackable population by construction.
     const tracked = specActive
       ? (spec.tracked !== false)
       : Math.random() < (TRACKING_PROB[type] || 0.5);
 
-    // Orbit: the seeded in-regime draw (see _drawRegimeOrbit); an authored
-    // spec may pin the altitude (the cubesat's gate-critical far slot) —
-    // the altitude draw is consumed identically either way, so the seeded
-    // stream's position never depends on which spec row is being built.
+    // Orbit: the seeded in-regime draw (_drawRegimeOrbit); a spec may pin the altitude (the cubesat's gate-critical far
+    // slot). The altitude draw is consumed identically either way, so the stream position never depends on the spec row.
     const orbit = this._drawRegimeOrbit(rng);
     if (specActive && Number.isFinite(spec.altKm)) {
       orbit.semiMajorAxis = Constants.EARTH_RADIUS + spec.altKm * Constants.SCENE_SCALE;
@@ -1490,26 +1253,24 @@ export class DebrisField {
     // Scene-scale size (meters → scene units: 1m = 0.00001 scene units)
     const sceneSize = sizeMeter * 0.00001;
 
-    // --- Salvage generation (Session 10) ---
     const salvage = this._generateSalvage(type, mass, material);
     const hasSalvage = salvage.xenon > 0 || salvage.indium > 0 ||
                        salvage.gaAs > 0 || salvage.battery > 0 || salvage.hydrazine > 0 ||
                        salvage.lithium > 0 ||
                        (salvage.metals && salvage.metals.length > 0);
 
-    // Total metal mass for ΔV calculations (Phase 2)
+    // Total metal mass for ΔV calculations
     const metalMassKg = (salvage.metals || [])
       .reduce((sum, m) => sum + m.amount, 0);
 
-    // ST-6.2: Derive catalogType for procedural debris (real entries set this in CatalogConverter)
+    // catalogType for procedural debris (real entries set this in CatalogConverter)
     const catalogType = (type === 'fragment' && mass < 1)
       ? 'fragment'
       : (PROC_TYPE_TO_CATALOG[type] || 'debris');
 
-    // S11(b): population marks from the driving spec (defaults keep one
-    // hidden class — see the return literal).
+    // Population marks from the driving spec (defaults keep one hidden class; see the return literal).
     const hazard = specActive && spec.hazard === true;
-    // u20-debris: a hazard shard keeps both of its size/mass laws (first = mission 1's, later = from mission 2); null for every
+    // A hazard shard keeps both of its size/mass laws (first = mission 1's, later = from mission 2); null for every
     // other piece, so all debris share one hidden class.
     const shardLaw = (hazard && spec.later)
       ? { first: { sizeM: sizeMeter, massKg: mass }, later: { sizeM: spec.later.sizeM, massKg: spec.later.massKg } }
@@ -1524,17 +1285,13 @@ export class DebrisField {
       sizeMeter,
       sceneSize,
       mass,
-      // Phase 2 (ASPECT_CAPTURE): aspect-derived extents. sizeMeter remains
-      // the max extent (long axis); widthM is the end-on cross-section the
+      // Aspect-derived extents. sizeMeter remains the max extent (long axis); widthM is the end-on cross-section the
       // net actually has to swallow.
       lengthM: sizeMeter,
       widthM: sizeMeter / (typeDef.aspect || 1.0),
       tumbleRate,
-      // E1 despin doctrine: the tumble the piece SPAWNED with. The capture tumble
-      // bonus is paid only when this was above-spec AND tumble at capture is
-      // in-spec — i.e. the player despun it. Reading live tumbleRate at award time
-      // (as before) perversely rewarded catching a still-spinning target and
-      // penalised despinning it. Frozen at spawn so despin can't erase it.
+      // Despin doctrine: the tumble the piece SPAWNED with. The capture tumble bonus is paid only when this was
+      // above-spec AND tumble at capture is in-spec (the player despun it). Frozen at spawn so despin can't erase it.
       _initialTumbleRate: tumbleRate,
       tumbleAxis,
       tumbleAngle: Math.random() * 2 * Math.PI, // Current rotation
@@ -1546,34 +1303,26 @@ export class DebrisField {
       salvage,
       hasSalvage,
       metalMassKg,
-      // DAUGHTER_MULTITOOL_SPEC §6 — capture recommender inputs (graceful).
-      // ferromagnetic / hasFerrousFasteners (P2), hasGrappleFixture (P3),
-      // surfaceRoughness (P4 pad-mode resolver). Shared SSOT: debrisFerrous.js.
+      // Capture-recommender inputs (ferromagnetic / hasFerrousFasteners, hasGrappleFixture, surfaceRoughness).
+      // SSOT: debrisFerrous.js.
       ...deriveCaptureFlags(material, type, mass),
-      // ST-6.2: Visual data for atlas system
+      // Visual data for atlas system
       isReal: false,
       country: null,
       catalogType,
       moidBadge: null,
-      // S11(b) population marks — initialised on every piece so all debris
-      // share one hidden class. `hazard`: uncapturable power-law shard
-      // furniture (excluded from targeting/scan-reveal/trawl; feeds
-      // ConjunctionSystem). `foreground`/`act`: a member of the authored
-      // three-act cast (Constants.DEBRIS.FOREGROUND_CAST).
+      // Population marks, initialised on every piece so all debris share one hidden class. `hazard`: uncapturable
+      // power-law shard furniture (excluded from targeting/scan-reveal/trawl; feeds ConjunctionSystem).
+      // `foreground`/`act`: a member of the authored three-act cast (Constants.DEBRIS.FOREGROUND_CAST).
       hazard,
       _shardLaw: shardLaw,
       foreground,
       act,
-      // UX-3 #9: Hidden until scanned — staggered reveal.
-      // S11(b): the authored cast is the field's KNOWN, catalogued population
-      // — pre-discovered. Five pieces spread around a ~42 000 km ring can
-      // never be scan-found (REVEAL_BASE_RANGE 500 km); the tracked big-body
-      // population of a real field is exactly the stuff the network already
-      // knows. Hazard shards stay undiscovered forever (scan-reveal skips
-      // them; they are furniture, not contacts).
+      // Hidden until scanned (staggered reveal), except the authored cast: the field's KNOWN, catalogued population.
+      // Five pieces spread around a ~42 000 km ring can never be scan-found (REVEAL_BASE_RANGE 500 km). Hazard shards
+      // stay undiscovered forever (scan-reveal skips them; furniture, not contacts).
       discovered: foreground,
-      // Onboarding tease pin (init on every piece so all debris share one
-      // hidden class). Only the curated M1 tease piece ever flips these on.
+      // Onboarding tease pin (init on every piece for one hidden class). Only the curated M1 tease piece flips these on.
       _onboardingPinned: false,
       _onboardingPinFwd: 0,
       _onboardingPinLat: 0,
@@ -1612,7 +1361,7 @@ export class DebrisField {
           salvage.battery = C.SALVAGE_BATTERY_MIN +
             Math.random() * (C.SALVAGE_BATTERY_MAX - C.SALVAGE_BATTERY_MIN);
         }
-        // F16: Lithium from defunct satellite Li-ion batteries / propulsion systems
+        // Lithium from Li-ion batteries / propulsion systems
         if (Math.random() < (C.SALVAGE_PROB_DEFUNCT_SAT_LITHIUM || 0.25)) {
           salvage.lithium = (C.SALVAGE_LITHIUM_MIN || 5) +
             Math.random() * ((C.SALVAGE_LITHIUM_MAX || 15) - (C.SALVAGE_LITHIUM_MIN || 5));
@@ -1646,16 +1395,10 @@ export class DebrisField {
         break;
       }
       case 'fragment': {
-        // NOTE: no fragment-sourced GaAs. A shard CAN draw the `solar_cell`
-        // material tag — the fragment row gives it 0.06 (shed PV scraps read
-        // as junk, not intact panels — see MATERIAL_WEIGHTS_BY_TYPE's
-        // docblock) — but GaAs salvage stays reserved for defunctSat
-        // (type-based, above): a loose scrap has no recoverable cell. The
-        // orphaned SALVAGE_PROB_FRAGMENT_GAAS constant is left in
-        // Constants.js for any future re-introduction. (This note's premise
-        // previously read "Fragments are now never the `solar_cell`
-        // material" — true only of the bbf54bb-era fragment row; c4d1f0b
-        // restored the 0.06 slot for the M1 welcome plates. Register item 91.)
+        // NOTE: no fragment-sourced GaAs. A shard CAN draw the `solar_cell` material tag (the fragment row gives it
+        // 0.06, see MATERIAL_WEIGHTS_BY_TYPE), but GaAs salvage stays reserved for defunctSat: a loose scrap has no
+        // recoverable cell. The orphaned SALVAGE_PROB_FRAGMENT_GAAS constant is left in Constants.js for any future
+        // re-introduction (register item 91).
         // Trace Indium in titanium alloys
         if (material === 'titanium' && Math.random() < C.SALVAGE_PROB_FRAGMENT_INDIUM) {
           salvage.indium = C.SALVAGE_INDIUM_MIN +
@@ -1665,7 +1408,6 @@ export class DebrisField {
       }
     }
 
-    // --- Metal salvage generation (Phase 2) ---
     const metalProfile = C.DEBRIS_METAL_PROFILES[type] || C.DEBRIS_METAL_PROFILES.fragment;
     const recoverableFraction = 0.3 + Math.random() * 0.4; // 30-70% of mass is recoverable
     const recoverableMass = mass * recoverableFraction;
@@ -1677,7 +1419,7 @@ export class DebrisField {
       const metalMass = recoverableMass * fraction;
       if (metalMass < 0.1) continue; // skip trace amounts
 
-      // Add some randomness (±30%)
+      // ±30 % randomness
       const finalMass = metalMass * (0.7 + Math.random() * 0.6);
 
       salvage.metals.push({
@@ -1695,18 +1437,11 @@ export class DebrisField {
     return salvage;
   }
 
-  // ==========================================================================
-  // INSTANCED MESH CONSTRUCTION
-  // ==========================================================================
+  // TODO: InstancedMesh merge opportunity — currently one mesh per (type, material, variant) key (~20-30 draw calls).
+  // Profile with ?profile=1 first. Potential merge: one atlas-textured MeshStandardMaterial and one InstancedMesh for
+  // all fragments. Non-trivial: UV remapping, per-instance colour attributes, flag overlay rewrite. Deferred.
 
-  // TODO(PR-6/P3.15): InstancedMesh merge opportunity — currently one mesh per
-  // (type, material, variant) key. Profiling with ?profile=1 will reveal if the
-  // ~20-30 draw calls from debris meshes are a bottleneck. Potential merge:
-  // unify materials into a single atlas-textured MeshStandardMaterial and batch
-  // all fragments into one InstancedMesh. Non-trivial: requires UV remapping,
-  // per-instance colour attributes, and flag overlay rewrite. Deferred.
-
-  /** @private Build InstancedMesh per (type, material) with wireframe-derived geometry (ST-2.3) */
+  /** @private Build InstancedMesh per (type, material) with wireframe-derived geometry */
   _buildInstancedMeshes() {
     const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
 
@@ -1724,7 +1459,6 @@ export class DebrisField {
       indexMap[key] = 0;
     }
 
-    // Create InstancedMesh for each compound key
     for (const [key, count] of Object.entries(counts)) {
       if (count === 0) continue;
       const parts = key.split(':');
@@ -1732,34 +1466,23 @@ export class DebrisField {
       const material = parts[1];
       const variantId = parts.length > 2 ? parseInt(parts[2], 10) : 0;
 
-      // Wireframe-derived geometry per type (fragments get per-variant geometry)
+      // Fragments get per-variant geometry
       const geo = DebrisWireframe.getGeometry(type, variantId);
 
-      // Material properties from Constants.DEBRIS_MATERIALS
       const matDef = Constants.DEBRIS_MATERIALS[material] || Constants.DEBRIS_MATERIALS.aluminum;
 
-      // ST-6.2: Determine visual mode — textured with atlas or wireframe
       const isTextured = getVisualMode() === 'textured';
       const catalogType = PROC_TYPE_TO_CATALOG[type] || 'debris';
 
       let mat;
       if (isTextured) {
-        // Self-illumination (emissive) keeps debris faintly visible on the
-        // night side without a sun. Previously this was the FULL material
-        // colour at 0.15 — an additive glow that painted every piece its
-        // material hue (gold MLI especially) and washed the whole field toward
-        // a flat, uniform look, defeating the per-instance colour variation.
-        //
-        // Real debris is only lit by sun + earthshine, so we use a very dim,
-        // heavily-desaturated tint of the material colour (a cool ash glow)
-        // rather than the saturated hue. This preserves "visible in shadow"
-        // while letting the texture, instance tint, and material albedo —
-        // not a constant coloured wash — drive the perceived colour.
+        // Emissive = dim, desaturated tint (S×0.25, L≤0.30): debris is visible in shadow (sun + earthshine only)
+        // without a coloured wash that defeats the per-instance colour variation.
         const emissiveColor = new THREE.Color(matDef.color);
         const _emHSL = { h: 0, s: 0, l: 0 };
         if (_SRGB) emissiveColor.getHSL(_emHSL, _SRGB); else emissiveColor.getHSL(_emHSL);
-        _emHSL.s *= 0.25;                       // strip most of the hue
-        _emHSL.l = Math.min(_emHSL.l, 0.30);    // keep it dim
+        _emHSL.s *= 0.25;
+        _emHSL.l = Math.min(_emHSL.l, 0.30);
         if (_SRGB) emissiveColor.setHSL(_emHSL.h, _emHSL.s, _emHSL.l, _SRGB);
         else emissiveColor.setHSL(_emHSL.h, _emHSL.s, _emHSL.l);
 
@@ -1770,7 +1493,6 @@ export class DebrisField {
           emissive: emissiveColor,
           emissiveIntensity: 0.06,
         });
-        // ST-6.2: Apply type atlas texture if available
         const typeAtlasTex = getTypeAtlasTexture();
         if (typeAtlasTex) {
           const uvs = getUVOffsetForType(catalogType);
@@ -1780,14 +1502,9 @@ export class DebrisField {
           mat.map = clonedTex;
           mat.needsUpdate = true;
 
-          // The atlas texture ALREADY carries type-characteristic colour
-          // (silver hull, blue solar cells, gold MLI patches, charred metal).
-          // The final fragment colour is color × map × instanceColor — three
-          // colour sources multiplied. If `color` stays the full saturated
-          // material hue (e.g. gold 0xFFD700) it double-tints the already-
-          // coloured atlas and muddies everything. Soften `color` toward a
-          // light neutral tint so the texture reads truthfully and the
-          // material identity is carried by metalness/roughness instead.
+          // The atlas already carries the type colour and the fragment colour is color × map × instanceColor, so a
+          // full saturated `color` (gold 0xFFD700) double-tints and muddies. Soften `color` toward a light neutral
+          // tint; material identity is carried by metalness/roughness.
           const tint = new THREE.Color(matDef.color);
           const _tHSL = { h: 0, s: 0, l: 0 };
           if (_SRGB) tint.getHSL(_tHSL, _SRGB); else tint.getHSL(_tHSL);
@@ -1811,7 +1528,7 @@ export class DebrisField {
       mesh.name = `Debris_${type}_${material}${parts.length > 2 ? '_v' + parts[2] : ''}`;
       mesh.frustumCulled = false; // We'll handle LOD manually
 
-      // Sprint D1: Initialize instanceColor with white defaults for web shot tinting
+      // White default instanceColor for web shot tinting
       const defaultColor = new THREE.Color(1, 1, 1);
       for (let i = 0; i < count; i++) {
         mesh.setColorAt(i, defaultColor);
@@ -1822,17 +1539,14 @@ export class DebrisField {
       this.instancedMeshes[key] = mesh;
     }
 
-    // Assign each debris to an instance index
-    // ST-6.2: set instanceColor per debris using catalogType base colour
+    // Assign each debris to an instance index and set its instanceColor
     const _tmpTypeColor = new THREE.Color();
     for (const d of this.debrisList) {
       const idx = indexMap[d._meshKey]++;
       this._instanceLookup.set(d.id, { meshKey: d._meshKey, instanceIndex: idx });
 
-      // Tint instance with a near-white weathering modulator (NOT the dark
-      // type colour — that lives in the atlas) plus deterministic per-instance
-      // variation, so the field reads as individually-weathered hardware
-      // instead of a flat dim mass.
+      // Near-white weathering modulator (NOT the dark type colour, which lives in the atlas) plus deterministic
+      // per-instance variation.
       const baseHex = getInstanceTintBase(d.catalogType || 'unknown');
       _tmpTypeColor.set(baseHex);
       applyInstanceColorVariation(_tmpTypeColor, d.id, d.catalogType);
@@ -1841,7 +1555,7 @@ export class DebrisField {
         mesh.setColorAt(idx, _tmpTypeColor);
       }
 
-      // Set initial transform (a parked heavy spare is drawn at no size until a high field claims it)
+      // Initial transform (a parked heavy spare is drawn at no size until a high field claims it)
       if (d._heavySpare) {
         this._tempMatrix.makeScale(0, 0, 0);
         if (mesh) mesh.setMatrixAt(idx, this._tempMatrix);
@@ -1850,26 +1564,16 @@ export class DebrisField {
       }
     }
 
-    // Mark instanceColor as updated
     for (const mesh of Object.values(this.instancedMeshes)) {
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
   }
 
-  // ==========================================================================
-  // FLAG OVERLAYS (ST-6.2: Option B — second InstancedMesh layer per country)
-  // ==========================================================================
-
   /**
-   * Build flag decal overlay InstancedMeshes grouped by country code.
-   * Each country gets a small PlaneGeometry with the flag atlas UV-mapped
-   * to that country's slot.
-   *
-   * Item 12 (2026-06-12): eligibility is now CLASS-gated — only rocket bodies
-   * and defunct sats ≥ FLAG_MIN_SIZE_M get a flag (fragments never). Eligible
-   * PROCEDURAL pieces get a deterministic weighted country at build time
-   * (real catalog rows keep their own), so flags appear in early missions,
-   * not just on catalog debris.
+   * Build flag decal overlay InstancedMeshes grouped by country code, each with a small PlaneGeometry carrying the
+   * flag atlas UV-mapped to that country's slot. Eligibility is CLASS-gated: only rocket bodies and defunct sats
+   * ≥ FLAG_MIN_SIZE_M get a flag (fragments never). Eligible PROCEDURAL pieces get a deterministic weighted country
+   * at build time (real catalog rows keep their own).
    * @private
    */
   _buildFlagOverlays() {
@@ -1883,7 +1587,6 @@ export class DebrisField {
       }
     }
 
-    // Group eligible debris by country
     const countryGroups = {};
     for (const d of this.debrisList) {
       if (!d.country || d.country === '---' || !isFlagEligible(d)) continue;
@@ -1894,10 +1597,8 @@ export class DebrisField {
 
     if (Object.keys(countryGroups).length === 0) return;
 
-    // Flag decal patch (aspect ~3:2). Sized in debris-local units so it reads
-    // as a sticker painted ON the hull (NASA/ESA style), not a floating banner.
-    // Local debris geometry has bounding radius ~1, so a ~0.7-wide patch covers
-    // a believable area of the surface.
+    // Flag decal patch (aspect ~3:2) in debris-local units (bounding radius ~1): ~0.7 wide reads as a sticker painted
+    // ON the hull (NASA/ESA style), not a floating banner.
     const flagGeo = new THREE.PlaneGeometry(0.7, 0.47);
 
     const indexCounters = {};
@@ -1924,7 +1625,7 @@ export class DebrisField {
       mesh.name = `Flag_${cc}`;
       mesh.frustumCulled = false;
 
-      // Initialise all flag instances at origin (will be placed in update)
+      // All flag instances start at origin (placed in update)
       const zeroMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
       for (let i = 0; i < count; i++) {
         mesh.setMatrixAt(i, zeroMatrix);
@@ -1943,10 +1644,8 @@ export class DebrisField {
       const idx = indexCounters[cc]++;
       this._flagLookup.set(d.id, { country: cc, instanceIndex: idx });
 
-      // Deterministic surface-mount direction (which face of the hull the decal
-      // sits on). Derived from the id so a piece always wears its flag the same
-      // way. Bias toward the "side" of the object (low |y|) so the flag faces
-      // out from a body panel rather than off the nose/engine.
+      // Deterministic surface-mount direction (which hull face the decal sits on), derived from the id. Biased toward
+      // the "side" (low |y|) so the flag faces out from a body panel, not off the nose/engine.
       if (!d._flagDir) {
         const a = (Math.sin(d.id * 12.9898) * 43758.5453);
         const b = (Math.sin(d.id * 4.1414 + 0.7) * 13218.114);
@@ -1960,10 +1659,6 @@ export class DebrisField {
     }
   }
 
-  // ==========================================================================
-  // BACKGROUND DEBRIS (Points)
-  // ==========================================================================
-
   /** @private */
   _generateBackground() {
     const positions = new Float32Array(BACKGROUND_COUNT * 3);
@@ -1973,25 +1668,20 @@ export class DebrisField {
     this._backgroundOrbits = [];
     this._bgVel = new Float32Array(BACKGROUND_COUNT * 3);
 
-    // S11(b): the background is the SAME field the interactive population
-    // lives in — one orbital regime (register item 38), not the old
-    // all-altitude / all-inclination scatter that mixed planes kilometres
-    // per second apart. Orbits draw from the identical in-regime helper as
-    // the interactive pieces, on a seeded stream derived from the boot seed
-    // (XOR-folded so the sky's draws never shift the cast's). Sizes follow
-    // the hazard cloud's NASA-SBM power law (many tiny shards, few big) —
-    // the cloud is the far-field view of the same fragment population.
+    // The background is the SAME field the interactive population lives in: one orbital regime (register item 38).
+    // Orbits draw from the identical in-regime helper, on a seeded stream derived from the boot seed (XOR-folded so
+    // the sky's draws never shift the cast's). Sizes follow the hazard cloud's NASA-SBM power law (many tiny shards,
+    // few big): the far-field view of the same fragment population.
     const rng = mulberry32((this._fieldSeed ^ 0x9E3779B9) >>> 0);
     const HC = (Constants.DEBRIS && Constants.DEBRIS.HAZARD_CLOUD)
       || { LAMBDA: 1.71, SIZE_MIN_M: 0.1, SIZE_MAX_M: 0.5 };
-    // u20-debris: the sky dots keep today's size mapping (the sky looks the same), whatever the shards' lower edge is.
+    // The sky dots keep their own size mapping, whatever the shards' lower edge is.
     const dotMin = Number.isFinite(HC.DOT_SIZE_MIN_M) ? HC.DOT_SIZE_MIN_M : HC.SIZE_MIN_M;
 
     for (let i = 0; i < BACKGROUND_COUNT; i++) {
       const orbit = this._drawRegimeOrbit(rng);
       this._backgroundOrbits.push(orbit);
 
-      // Initial position
       const cart = orbitToSceneCartesian(orbit);
       positions[i * 3] = cart.position.x;
       positions[i * 3 + 1] = cart.position.y;
@@ -2006,9 +1696,8 @@ export class DebrisField {
       colors[i * 3 + 1] = 0.55 + rng() * 0.25;
       colors[i * 3 + 2] = 0.5 + rng() * 0.2;
 
-      // Size: power-law shard size, linearly mapped onto the historical
-      // 1–3 dot-size band (the render attribute is decorative; the LAW it
-      // inherits is the measured one).
+      // Size: power-law shard size, linearly mapped onto the 1–3 dot-size band (the render attribute is decorative;
+      // the law it inherits is the measured one).
       const lc = samplePowerLawSize(rng(), dotMin, HC.SIZE_MAX_M, HC.LAMBDA);
       sizes[i] = 1.0 + 2.0 * ((lc - dotMin) / ((HC.SIZE_MAX_M - dotMin) || 1));
     }
@@ -2033,17 +1722,12 @@ export class DebrisField {
   }
 
   /**
-   * Boost the background debris cloud for the MENU backdrop reveal, or restore it.
+   * Boost the background debris cloud for the MENU backdrop reveal, or restore it. The transparent menu hero canvas
+   * composites over the live game scene, where the faint dust (size 0.0002 / opacity 0.6) reads too subtle.
    *
-   * The transparent menu hero canvas composites over the live game scene, and the
-   * faint background dust (size 0.0002 / opacity 0.6) can read too subtle behind
-   * the menu UI. This makes it visibly denser while the menu is showing.
-   *
-   * Mission 1 hides `backgroundPoints` (see the _mission1HideApplied path). This
-   * method stores/restores the exact prior `.visible`/`size`/`opacity`, so exiting
-   * the boost automatically re-applies whatever hidden state was active on entry
-   * (if `visible:false` was stored, that's what gets restored) — no need to
-   * consult the mission number or _mission1HideApplied here.
+   * Mission 1 hides `backgroundPoints` (_mission1HideApplied path). This stores/restores the exact prior
+   * `.visible`/`size`/`opacity`, so exiting the boost re-applies whatever hidden state was active on entry: no need
+   * to consult the mission number or _mission1HideApplied here.
    *
    * @param {boolean} on  true to boost, false to restore.
    */
@@ -2070,20 +1754,12 @@ export class DebrisField {
     }
   }
 
-  // ==========================================================================
-  // UPDATE
-  // ==========================================================================
-
   /**
-   * Advance a debris's visual tumble angle for this frame, clamped to
-   * DEBRIS_MAX_VISUAL_TUMBLE_DEG_S (ST-2.3).
+   * Advance a debris's visual tumble angle for this frame, clamped to DEBRIS_MAX_VISUAL_TUMBLE_DEG_S.
    *
-   * A CAPTURED debris is cinched in the net (held by, or pinned to, a daughter),
-   * which arrests its tumble — so its orientation is frozen while held: it does
-   * not rotate while reeling in or while parked at the strut tip. The angle
-   * resumes advancing from where it stopped if the catch is ever released (the
-   * `_capturedByArm` / `_armPinned` flags clear), so a dropped catch tumbles
-   * again naturally.
+   * A CAPTURED debris is cinched in the net, which arrests its tumble, so its orientation is frozen while held (reeling
+   * in or parked at the strut tip). The angle resumes from where it stopped if the catch is released (the
+   * `_capturedByArm` / `_armPinned` flags clear).
    *
    * @param {object} debris        canonical debris record (mutated in place)
    * @param {number} dt            real-frame delta seconds
@@ -2096,17 +1772,12 @@ export class DebrisField {
   }
 
   /**
-   * SSOT for the sizeMeter ↔ sceneSize pair (1 m = 1e-5 scene units) — and,
-   * post-item-7, for the aspect pair lengthM/widthM that feeds the capture
-   * verdicts (assessNetFit / presentedWidthForApproach / oversize_aspect).
-   * Whale-in-cone phase 3 (Task 3): the renderer scales instances by `sceneSize`
-   * (`_updateInstanceTransform`), and the rendered extent is
-   * `renderScale × DebrisWireframe.getBoundingRadius`. Lane true-size (2026-10-18): every mesh is built with its
-   * longest bounding-box side = 1 mesh unit, so the drawn longest side IS `sizeMeter` (it used to be 1.5-3.6 x
-   * bigger: `sizeMeter` was NOT the rendered size).
-   * Every size mutation must go through here so the fields can never desync
-   * (the ceremony scenario wrote `sizeMeter = 7` without `sceneSize` and
-   * cinched an 8 m net around a 0.23 m pebble while every gate believed 7 m).
+   * SSOT for the sizeMeter ↔ sceneSize pair (1 m = 1e-5 scene units) and for the aspect pair lengthM/widthM that feeds
+   * the capture verdicts (assessNetFit / presentedWidthForApproach / oversize_aspect). The renderer scales instances
+   * by `sceneSize` (`_updateInstanceTransform`); every mesh is built with its longest bounding-box side = 1 mesh unit,
+   * so the drawn longest side IS `sizeMeter`.
+   * Every size mutation must go through here so the fields can never desync (a ceremony scenario once wrote
+   * `sizeMeter = 7` without `sceneSize` and cinched an 8 m net around a 0.23 m pebble while every gate believed 7 m).
    * @param {object} debris
    * @param {number} sizeMeter
    * @returns {object} debris
@@ -2114,15 +1785,9 @@ export class DebrisField {
   static setDebrisSize(debris, sizeMeter) {
     debris.sizeMeter = sizeMeter;
     debris.sceneSize = sizeMeter * 0.00001;
-    // Register item 7 (2026-08-10; plan 1786279689728): the aspect pair tracks
-    // the resize — same derivation as _createDebrisData (`:828-832`), keyed on
-    // `debris.type` AT CALL TIME so the retype-then-resize sites (`:2401→:2409`,
-    // `:2729→:2734`, `:3304→:3308`) pick up the NEW type's aspect. Was: left at
-    // spawn values, so a Kessler shard kept the blank body's verdict fields
-    // (measured: 26.4% of shards mis-verdicted the SMALL net, 23.6% bounced it
-    // at every attitude). Verdict RULES untouched — only the inputs track.
-    // aspect source is THIS module's table (creation's own); a drift guard in
-    // test-DebrisField-SizeSSOT.js pins it equal to ASPECT_BY_TYPE.
+    // The aspect pair tracks the resize (same derivation as _createDebrisData), keyed on `debris.type` AT CALL TIME so
+    // retype-then-resize sites pick up the NEW type's aspect. Verdict RULES are untouched; only the inputs track.
+    // The aspect source is THIS module's table; test-DebrisField-SizeSSOT.js pins it equal to ASPECT_BY_TYPE.
     const aspect = (debris && DEBRIS_TYPES[debris.type]
       && DEBRIS_TYPES[debris.type].aspect) || 1.0;
     debris.lengthM = sizeMeter;
@@ -2131,17 +1796,11 @@ export class DebrisField {
   }
 
   /**
-   * The physical (UNfloored) uniform instance scale — the ONE base expression
-   * every render-scale computation shares: `sceneSize`, else
-   * `sizeMeter × METRE_SCENE`, else 0. Register item 19 (2026-08-18):
-   * extracted so BOTH the clamp-aware reader (`effectiveRenderScale`, below)
-   * and the item-15 ramp's base (`CaptureNet._catchFloorScale`) compute it
-   * through this static — the ramp previously carried a byte-copy of the
-   * expression (hard-coded 1e-5 included), so a base that ever gained a term
-   * here would silently restart item 15's one-frame pop, and the item-8
-   * property freeze makes every gate blind to the written value by
-   * construction. Read-only companion to `setDebrisSize` (which keeps
-   * sceneSize in sync, so this normally just reads it back).
+   * The physical (UNfloored) uniform instance scale, the ONE base expression every render-scale computation shares:
+   * `sceneSize`, else `sizeMeter × METRE_SCENE`, else 0. Both the clamp-aware reader (`effectiveRenderScale`) and the
+   * catch ramp's base (`CaptureNet._catchFloorScale`) compute it through this static: a byte-copy of the expression
+   * would silently restart the ramp's one-frame pop if the base ever gained a term. Read-only companion to
+   * `setDebrisSize`.
    * @param {object} debris
    * @returns {number} base uniform instance scale (scene units)
    */
@@ -2150,18 +1809,13 @@ export class DebrisField {
   }
 
   /**
-   * The net-held readability floor (`_catchRenderMin`) as ONE computation,
-   * applied to ANY pre-floor uniform scale (register item 21b). Pre-item-21
-   * the predicate had two homes that merely agreed: `effectiveRenderScale`
-   * (the SSOT reader, below) and `_updateInstanceTransform`'s inline
-   * re-implementation — writer A, which must compose with the LOD multipliers
-   * and the reveal smoothstep IN PLACE (and is the ONLY matrix writer for a
-   * lasso-held catch, which never reaches `pinCapturedDebris`). Now both route
-   * here: the SSOT passes `baseRenderScale` and the field-only pinned default;
-   * writer A passes its per-frame scale and its OWN pinned local — deliberately
-   * stricter (`_armPinned && _armPinPos`), because that local also gates the
-   * pin-POSITION read, so the half-cleared state must not floor here either.
-   * Never shrinks: the floor wins only when it exceeds the caller's scale.
+   * The net-held readability floor (`_catchRenderMin`) as ONE computation, applied to ANY pre-floor uniform scale.
+   * Both `effectiveRenderScale` (the SSOT reader) and `_updateInstanceTransform` (writer A, which must compose with
+   * the LOD multipliers and the reveal smoothstep IN PLACE, and is the ONLY matrix writer for a lasso-held catch,
+   * which never reaches `pinCapturedDebris`) route here: the SSOT passes `baseRenderScale` and the field-only pinned
+   * default; writer A passes its per-frame scale and its OWN pinned local, deliberately stricter
+   * (`_armPinned && _armPinPos`) because that local also gates the pin-POSITION read, so the half-cleared state must
+   * not floor here either. Never shrinks: the floor wins only when it exceeds the caller's scale.
    * @param {object} debris
    * @param {number} preFloorScale — the caller's pre-floor uniform scale
    *   (a base, or writer A's per-frame LOD-slot scale)
@@ -2175,9 +1829,9 @@ export class DebrisField {
   }
 
   /**
-   * Nets step 3 slice 5 (lane 5e): the local axis along which a piece being melted is drawn shortened (no magic shrinking, §28: the piece
-   * visibly loses the length it has cut). The stage's lathe has its long axis along local Y; any other mesh (the satellite) shortens along its
-   * longest bounding-box side. A scoop bag is a ball and shrinks evenly (see `setDrawScale`).
+   * The local axis along which a piece being melted is drawn shortened (no magic shrinking, §28: the piece visibly
+   * loses the length it has cut). The stage's lathe has its long axis along local Y; any other mesh (the satellite)
+   * shortens along its longest bounding-box side. A scoop bag is a ball and shrinks evenly (see `setDrawScale`).
    * @param {{type?: string, id?: number}} debris @returns {'x'|'y'|'z'}
    */
   static meltAxis(debris) {
@@ -2188,10 +1842,12 @@ export class DebrisField {
   }
 
   /**
-   * Write the draw scale `s` into `out` (a Vector3; static so the writers can run on a bare receiver, as the pin tests do): uniform, except a piece being melted (`debris._meltK`, 0..1 = the share of its
-   * mass still there, written by GameFlowManager's melt work and restored from `massAtCatch`) is drawn shortened to that share along its long
-   * axis (`meltAxis`); a bag shrinks evenly by the cube root. Never to nothing (a 2 % sliver floor: a singular matrix has no normals). Called
-   * by all three matrix writers (the pin, the unpinned writer and the near-pass proxy), so they cannot disagree.
+   * Write the draw scale `s` into `out` (a Vector3; static so the writers can run on a bare receiver, as the pin tests
+   * do): uniform, except a piece being melted (`debris._meltK`, 0..1 = the share of its mass still there, written by
+   * GameFlowManager's melt work and restored from `massAtCatch`) is drawn shortened to that share along its long axis
+   * (`meltAxis`); a bag shrinks evenly by the cube root. Never to nothing (a 2 % sliver floor: a singular matrix has
+   * no normals). Called by all three matrix writers (the pin, the unpinned writer and the near-pass proxy), so they
+   * cannot disagree.
    * @param {THREE.Vector3} out @param {number} s @param {object} debris
    */
   static setDrawScale(out, s, debris) {
@@ -2204,15 +1860,11 @@ export class DebrisField {
   }
 
   /**
-   * The scale the renderer will actually use, including the net-held
-   * readability floor (`_catchRenderMin`, applied only while `_armPinned` —
-   * DebrisField.js `_updateInstanceTransform`). Read-only companion to
-   * setDebrisSize so the probe / visual drivers cannot drift from the
-   * renderer. Register item 9: `pinCapturedDebris` (whale-in-cone W4's second
-   * write path) now reads its scale through THIS helper too — one clamp-aware
-   * computation for the probe, the bag's contents floor, and both matrix
-   * writers. Register item 21b: the floor itself is `catchRenderFloorScale`
-   * (above) — the ONE computation this reader and writer A both route through.
+   * The scale the renderer will actually use, including the net-held readability floor (`_catchRenderMin`, applied
+   * only while `_armPinned`; see `_updateInstanceTransform`). Read-only companion to setDebrisSize so the probe /
+   * visual drivers cannot drift from the renderer. `pinCapturedDebris` reads its scale through THIS helper too: one
+   * clamp-aware computation for the probe, the bag's contents floor, and both matrix writers. The floor itself is
+   * `catchRenderFloorScale`.
    * @param {object} debris
    * @returns {number} effective uniform instance scale (scene units)
    */
@@ -2221,13 +1873,12 @@ export class DebrisField {
   }
 
   /**
-   * Lane tip-fit (2026-10-17) — the ONE radius (m) a radiator tip must clear for this catch: the farthest point the
-   * catch is DRAWN at, from the point it is pinned and bagged at, at TRUE size with no readability floor
-   * (`sizeMeter × DebrisWireframe.getOriginRadius`). `sizeMeter / 2` is not that, but since lane true-size (2026-10-18) every
-   * mesh is drawn with its longest side = sizeMeter, so it is close: reach / (sizeMeter / 2) is fragment 1.07-1.26,
-   * rocketBody 1.31, defunctSat 1.00, missionDebris 1.13, cubesat 1.16 (it was 2.4-2.9, 2.0, 3.6, 1.5, 1.5; probe
-   * 2026-10-17 / tmp/ts-probe.mjs). Every tip
-   * check (CaptureNet._tryLeash, LeashDriver, TipCargo.stow) reads this, so the physics sphere encloses the drawn mesh.
+   * The ONE radius (m) a radiator tip must clear for this catch: the farthest point the catch is DRAWN at, from the
+   * point it is pinned and bagged at, at TRUE size with no readability floor (`sizeMeter × DebrisWireframe.getOriginRadius`).
+   * `sizeMeter / 2` is not that, but is close since every mesh is drawn with its longest side = sizeMeter:
+   * reach / (sizeMeter / 2) is fragment 1.07-1.26, rocketBody 1.31, defunctSat 1.00, missionDebris 1.13, cubesat 1.16
+   * (measured by probe). Every tip check (CaptureNet._tryLeash, LeashDriver, TipCargo.stow) reads this, so the
+   * physics sphere encloses the drawn mesh.
    * @param {{sizeMeter?: number, type?: string, id?: number}} debris
    * @param {number} [defaultSizeM=0] — size used when `sizeMeter` is missing / 0 / not a number (as the old `||` did)
    * @returns {number} metres
@@ -2235,8 +1886,8 @@ export class DebrisField {
   static trueReachM(debris, defaultSizeM = 0) {
     const s = debris ? debris.sizeMeter : undefined;
     const sizeM = (Number.isFinite(s) && s !== 0) ? s : defaultSizeM;
-    // A scoop net's bag (u20-nets, 2026-10-23) is a ball by construction: `sizeMeter / 2`, checked BEFORE the type lookup (its
-    // `type` is the heaviest member's, whose mesh is not the bag's shape).
+    // A scoop net's bag is a ball by construction: `sizeMeter / 2`, checked BEFORE the type lookup (its `type` is the
+    // heaviest member's, whose mesh is not the bag's shape).
     if (debris && debris.isBag === true) return sizeM / 2;
     // no `type` = a test rig that never drew a mesh: the legacy sphere
     if (!debris || !debris.type) return sizeM / 2;
@@ -2244,31 +1895,21 @@ export class DebrisField {
   }
 
   /**
-   * Atmospheric-drag deceleration (km/s²) for one debris piece — the ONE place
-   * the drag ballistic coefficient (area / mass) is chosen, factored out of
-   * update()'s propagation loop so it is unit-testable (test-WelcomeDrag.js).
-   * Same return as the `atmosphericDrag(...)` call it wraps.
+   * Atmospheric-drag deceleration (km/s²) for one debris piece: the ONE place the drag ballistic coefficient
+   * (area / mass) is chosen, factored out of update()'s propagation loop so it is unit-testable (test-WelcomeDrag.js).
    *
-   * `welcomeSpawn` pieces use the MOTHER's coefficient instead of their own
-   * sizeMeter² / mass: the area and mass her drag block USED this frame
-   * (PlayerSatellite.lastDragAreaM2 / lastDragMassKg, read through `source`, the
-   * player handed in by setMotherDragSource). With no source, or no value yet
-   * (before her first drag step, or above the air), they use her REFERENCE
-   * coefficient: MotherDragArea.referenceDragAreaM2() over Constants.MOTHER_DRAG.MASS_KG.
-   * Why (M1 welcome-drift fix, 2026-09-09; the live area and mass since Nets step 3
-   * slice 2a, 2026-10-22): the cluster is spawned co-orbital with the mother at
-   * 350 km, where drag lowers the SMA ≈ 0.5 m per game-second. The authored rows'
-   * own A/m (0.009–0.15) differs from the mother's (the old 20/130 = 0.154; now
-   * about 0.02 and changing as she burns gas, turns and moves her wings), so they
-   * decay at another rate, stay HIGHER or lower, and — lower orbit = faster — the
-   * mother pulls ahead or falls behind quadratically (along-track ≈ 0.026–0.040·t²
-   * m; > 2 km within ~3.5–5 real minutes with no key pressed — the "welcome
-   * cluster drifts away / vanishes" report). Same coefficient ⇒ same per-frame
-   * decay factor ⇒ lock-step decay. The pieces stay REAL orbits (not
-   * mother-pinned), so RCS / thrust still separate the player from them as
-   * before. Scope: welcomeSpawn only — the M2+ authored cast keeps physical
-   * drag. Every other piece keeps cross-section ≈ sizeMeter², mass from its
-   * spec (floor 1 kg — a 0 / missing mass must not divide to Infinity).
+   * `welcomeSpawn` pieces use the MOTHER's coefficient instead of their own sizeMeter² / mass: the area and mass her
+   * drag block USED this frame (PlayerSatellite.lastDragAreaM2 / lastDragMassKg, read through `source`, the player
+   * handed in by setMotherDragSource). With no source, or no value yet (before her first drag step, or above the
+   * air), they use her REFERENCE coefficient: MotherDragArea.referenceDragAreaM2() over Constants.MOTHER_DRAG.MASS_KG.
+   * Why: the cluster is spawned co-orbital with the mother at 350 km, where drag lowers the SMA ≈ 0.5 m per
+   * game-second. The authored rows' own A/m (0.009–0.15) differs from the mother's (about 0.02, changing as she burns
+   * gas, turns and moves her wings), so they decay at another rate and the mother pulls ahead or falls behind
+   * quadratically (along-track ≈ 0.026–0.040·t² m; > 2 km within ~3.5–5 real minutes with no key pressed: the
+   * "welcome cluster drifts away / vanishes" report). Same coefficient ⇒ same per-frame decay factor ⇒ lock-step
+   * decay. The pieces stay REAL orbits (not mother-pinned), so RCS / thrust still separate the player from them.
+   * Scope: welcomeSpawn only; the M2+ authored cast keeps physical drag. Every other piece keeps cross-section ≈
+   * sizeMeter², mass from its spec (floor 1 kg: a 0 / missing mass must not divide to Infinity).
    *
    * @param {object} debris - reads welcomeSpawn, sizeMeter, mass
    * @param {number} altKm - altitude above the surface (km)
@@ -2293,23 +1934,20 @@ export class DebrisField {
    * @param {number} dt - Real-time (dtReal) delta seconds — LOD, visual tumble, cosmetics.
    * @param {THREE.Vector3} [playerPos] - Player position for LOD
    * @param {object} [playerOrbit] - Player orbital elements (for tutorial debris spawning)
-   * @param {number} [dtWorld] - World-simulation delta (game seconds) for orbit + drag.
-   *   Threaded from the TimeAuthority choke point; defaults to the shipped base
-   *   rate for headless/test callers (byte-identical to dt × 10).
+   * @param {number} [dtWorld] - World-simulation delta (game seconds) for orbit + drag, threaded from the
+   *   TimeAuthority choke point; defaults to the shipped base rate for headless/test callers (= dt × 10).
    */
   update(dt, playerPos, playerOrbit, dtWorld = TimeAuthority.baseGameDt(dt)) {
     const gameDt = dtWorld;
 
-    // catch-near-pass: a piece that is no longer held leaves the near pass before the instance loop draws it again.
+    // A piece that is no longer held leaves the near pass before the instance loop draws it again.
     if (this._heldProxies && this._heldProxies.size > 0) this._sweepHeldProxies();
 
-    // Cache the latest player orbit so event-driven paths with no update()
-    // scope (notably _clearOnboardingPin, fired from LASSO_CONTACT etc.) can
-    // re-sync a released pin's fallback orbit to the CURRENT phase. Reference
-    // assignment only — no allocation.
+    // Cache the latest player orbit so event-driven paths with no update() scope (notably _clearOnboardingPin, fired
+    // from LASSO_CONTACT etc.) can re-sync a released pin's fallback orbit to the CURRENT phase. Reference assignment only.
     if (playerOrbit) this._lastPlayerOrbit = playerOrbit;
 
-    // UX-4: Update floating origin to player position (camera-relative rendering)
+    // Floating origin: camera-relative rendering
     if (Constants.FLOATING_ORIGIN_ENABLED && playerPos) {
       // On first frame: adjust all existing background point positions
       if (!this._floatingOriginInitialized && this.backgroundPoints) {
@@ -2331,60 +1969,39 @@ export class DebrisField {
       }
       this._floatingOrigin.copy(playerPos);
       this.group.position.copy(playerPos);
-      // ── Belt-and-suspenders: force the group's world matrix to refresh now
-      // rather than relying on the renderer's deferred scene.updateMatrixWorld()
-      // traversal at draw time. With Three.js defaults (matrixAutoUpdate=true),
-      // the renderer will recompute group.matrixWorld on the next render call
-      // anyway, so this call is *technically redundant* — but it guarantees
-      // that any consumer reading group.matrixWorld between now and the render
-      // (raycaster, project() in a diagnostic, lookAt math, screen-space metric,
-      // post-process passes, etc.) sees up-to-date coordinates instead of last
-      // frame's. Cheap (one matrix multiply) and prevents a class of latent
-      // staleness bugs whenever a group is moved AFTER the renderer's natural
-      // traversal point. See debug session 2026-05-15 (SK center-of-rotation).
+      // Force the group's world matrix to refresh now rather than wait for the renderer's deferred traversal: any
+      // consumer reading group.matrixWorld before render (raycaster, project(), lookAt math, post-process) then sees
+      // current coordinates, not last frame's. Cheap (one matrix multiply).
       this.group.updateMatrixWorld(true);
     }
 
     // Welcome field: spawn nearby debris on first frame with valid player orbit
     if (!this._welcomeFieldSpawned && playerPos && playerOrbit) {
-      // Stash gameDt so _spawnWelcomeField can pre-compensate the one-frame
-      // propagation that's about to happen below (otherwise debris ends up
-      // ~n*gameDt rad ahead of the player and gets culled by the M1 filter).
+      // Stash gameDt so _spawnWelcomeField can pre-compensate the one-frame propagation about to happen below
+      // (otherwise debris ends up ~n*gameDt rad ahead of the player and gets culled by the M1 filter).
       this._lastSpawnGameDt = gameDt;
       this._spawnWelcomeField(playerOrbit);
       this._welcomeFieldSpawned = true;
-      // Mark mission-1 hide as not-yet-applied so the enforcement below runs
-      // once to disable any catalog debris the welcome field did NOT touch
-      // (the welcome field overwrites only ~7 debris; the other ~793 still
-      // exist at random orbits and need to be culled for mission 1).
+      // Mission-1 hide is not yet applied: the enforcement below runs once to disable catalog debris the welcome field
+      // did NOT touch (it overwrites only ~7 debris; the other ~793 still exist at random orbits).
       this._mission1HideApplied = false;
-      // 2026-05-17 fix: REMOVED `_autoDiscoverNearest()` call. It was the
-      // source of the "only 1 target visible" bug — it used a *static*
-      // startSma proxy and would sometimes pick a catalog debris that the
-      // M1 enforcement (just below) immediately killed, leaving zero
-      // discovered welcome debris. `_spawnWelcomeField` starts all seven pieces
-      // undiscovered (see its own comment); the S-scan reveals them.
-      // 2026-08-15 (register item 52): the dead definition deleted — grep- AND
-      // git-proven (zero reads repo-wide; no call in tracked history). The live
-      // discovery channels are SensorSystem's scan reveal and the authored
-      // cast's tracked/pre-discovered flags.
+      // Deliberately NO `_autoDiscoverNearest()` here: it used a *static* startSma proxy and could pick a catalog
+      // debris the M1 enforcement below immediately killed, leaving zero discovered welcome debris (the "only 1
+      // target visible" bug). `_spawnWelcomeField` starts all seven pieces undiscovered; the S-scan reveals them. The
+      // live discovery channels are SensorSystem's scan reveal and the authored cast's tracked/pre-discovered flags.
     }
 
-    // ── Mission-1 cluster enforcement (runs AFTER welcome field is placed) ──
-    // We must run this AFTER _spawnWelcomeField so the welcome-field marker
-    // flags (`welcomeSpawn = true`) are already set on the 7 chosen debris.
-    // Otherwise we would hide everything including the welcome-field
-    // candidates and leave the pilot with zero targets.
-    // Idempotent: flips `_mission1HideApplied` once done so the per-frame
-    // cost is just one flag check.  Also handles save-restore paths where
-    // _spawnWelcomeField is skipped because _welcomeFieldSpawned was true.
+    // Mission-1 cluster enforcement. MUST run AFTER _spawnWelcomeField so the welcome-field marker flags
+    // (`welcomeSpawn = true`) are set on the 7 chosen debris; otherwise we would hide everything including the
+    // welcome candidates. Idempotent: `_mission1HideApplied` flips once done, so per-frame cost is one flag check.
+    // Also handles save-restore paths where _spawnWelcomeField is skipped because _welcomeFieldSpawned was true.
     if ((this._currentMissionNumber || 1) === 1
         && this._welcomeFieldSpawned
         && !this._mission1HideApplied) {
       let hidden = 0;
       for (const d of this.debrisList) {
         if (d.welcomeSpawn) continue;
-        if (d._heavySpare) continue;            // lane 4a: a parked spare is not "hidden for mission 1": MISSION_START would revive it
+        if (d._heavySpare) continue;            // a parked spare is not "hidden for mission 1": MISSION_START would revive it
         if (d._hiddenForMission1) continue;
         d._hiddenForMission1 = true;
         d.alive = false;
@@ -2400,14 +2017,9 @@ export class DebrisField {
         }
         hidden++;
       }
-      // 2026-05-15 polish (urgent): hide the 5000-point background cloud
-      // on Mission 1. Without this, the THREE.Points particles at
-      // 200–2000 km altitude render as faint coloured dots inside the
-      // player's frustum that *look like* multi-km debris (the user
-      // reported seeing "7 km debris" — those were background points,
-      // not targetable). Background-points are scene dressing; on M1 we
-      // want the pilot's view limited to the tight welcome cluster.
-      // Restored when mission advances (MISSION_START handler above).
+      // Hide the 5000-point background cloud on Mission 1: those Points at 200–2000 km altitude render as faint dots
+      // inside the frustum that *look like* multi-km debris (seen as "7 km debris"; not targetable). On M1 the pilot's
+      // view is limited to the tight welcome cluster. Restored by the MISSION_START handler.
       if (this.backgroundPoints) {
         this.backgroundPoints.visible = false;
       }
@@ -2418,12 +2030,9 @@ export class DebrisField {
       this._mission1HideApplied = true;
     }
 
-    // 2026-05-15 polish (urgent): per-frame hard distance cutoff on M1.
-    // Belt-and-suspenders for any debris that escapes the initial hide
-    // (e.g. catalog-loaded debris injected post-_welcomeFieldSpawned,
-    // restored-from-save debris with stale alive flag, future regressions
-    // that forget the _hiddenForMission1 marker). Any non-welcome alive
-    // debris beyond 2 km from the player gets zeroed out this frame.
+    // Per-frame hard distance cutoff on M1: belt-and-suspenders for any debris that escapes the initial hide
+    // (catalog debris injected after _welcomeFieldSpawned, save-restored debris with a stale alive flag, future
+    // regressions that forget _hiddenForMission1). Any non-welcome alive debris beyond 2 km from the player is zeroed.
     if ((this._currentMissionNumber || 1) === 1 && playerPos) {
       const MAX_M1_DIST_M = 2000;
       const MAX_M1_DIST_SCENE = MAX_M1_DIST_M * 0.00001;  // metres → scene
@@ -2454,25 +2063,18 @@ export class DebrisField {
       }
     }
 
-    // M1 guidance T6: the welcome-cluster re-seat safety net (guided chapters
-    // only; only welcomeSpawn pieces are ever touched — the very pieces the M1
-    // cull above exempts, so it sits after that block and measures the same
-    // _scenePosition the cull left alone). It runs BEFORE the propagation loop
-    // below, so a re-seated piece is stepped once more this frame exactly like
-    // a fresh spawn; that is why it receives this frame's gameDt for the same
-    // one-step pre-compensation _spawnWelcomeField applies.
+    // Welcome-cluster re-seat safety net (guided chapters only; only welcomeSpawn pieces are touched, the very pieces
+    // the M1 cull above exempts, so it sits after that block and measures the same _scenePosition). It runs BEFORE
+    // the propagation loop below, so a re-seated piece is stepped once more this frame like a fresh spawn; hence it
+    // receives this frame's gameDt for the same one-step pre-compensation _spawnWelcomeField applies.
     this._reseatDriftedWelcome(playerPos, playerOrbit, dt, gameDt);
 
-    // --- Update interactive debris ---
     const maxVisualRad = degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S);
 
-    // Mother local-frame basis for the onboarding tease pin (forward = prograde,
-    // right = cross-track / horizontal). Computed once per frame; consumed by
-    // _updateInstanceTransform to place pinned pieces (#1 dead-centre, #2 off to
-    // one side). Cleared when no player orbit so the pin branch falls back safely.
-    // Whale-in-cone plan: a frozen basis override may be latched by the ceremony
-    // scenario so the pinned whale does not ride the live slewing prograde and
-    // walk out of the frozen capture cone during the (10× world-time) flight.
+    // Mother local-frame basis for the onboarding tease pin (forward = prograde, right = cross-track / horizontal),
+    // computed once per frame and consumed by _updateInstanceTransform to place pinned pieces. Cleared when no player
+    // orbit so the pin branch falls back safely. A frozen basis override may be latched by the ceremony scenario so
+    // the pinned whale does not ride the live slewing prograde out of the frozen capture cone (10× world-time flight).
     this._motherFwd = null;
     this._motherRight = null;
     if (playerPos && playerOrbit && this._onboardingPinIds.size > 0) {
@@ -2494,12 +2096,12 @@ export class DebrisField {
     for (const debris of this.debrisList) {
       if (!debris.alive) continue;
 
-      // Sprint D1: Apply web shot drag decay (dragMultiplier > 1 = webbed debris)
+      // Web shot drag decay (dragMultiplier > 1 = webbed debris)
       if (debris.dragMultiplier && debris.dragMultiplier > 1.0) {
         const decayRate = Constants.WEB_SHOT_DECAY_RATE * debris.dragMultiplier;
         debris.orbit.semiMajorAxis -= decayRate * gameDt;
 
-        // Check if debris has de-orbited (altitude < burn-up threshold)
+        // De-orbited (altitude < burn-up threshold)?
         const altKm = (debris.orbit.semiMajorAxis / Constants.SCENE_SCALE) - Constants.EARTH_RADIUS_KM;
         if (altKm < Constants.WEB_SHOT_DEORBIT_ALT_KM) {
           // Debris burns up — remove and award points
@@ -2533,39 +2135,25 @@ export class DebrisField {
       // Propagate orbit (re-use pre-allocated temp instead of spread)
       const o = debris.orbit;
       if (debris._onboardingPinned || debris._motherParked) {
-        // ── Onboarding tease pin ────────────────────────────────────────────
-        // No Kepler step, no drag: this piece rides the mother at a fixed
-        // offset in her LOCAL frame (forward + lateral), written to
-        // _scenePosition in _updateInstanceTransform below from the per-frame
-        // mother basis. _scenePosition is what selection, range, net, reticle
-        // and rendering read — but it is NOT the only thing read. The orbit is
-        // read too: AutopilotSystem (goal pose + HOLD element copy),
-        // NavRecoveryAdvisor, getDebrisClusters (the Shift+A field centre),
-        // NavSphere, InsertionPlanner, FieldRiskModel, ConjunctionSystem and
-        // CollisionAvoidance all derive a position from `debris.orbit`. The
-        // pre-T4 code left the orbit FROZEN at its spawn-era phase while pinned
-        // ("a co-orbital fallback only"), so every one of those readers saw the
-        // piece where the mother WAS: ~77 km per REAL second along-track
-        // (7.7 km/s orbital × the 10× game clock), i.e. ~770 km behind after
-        // 10 s. Pressing A on a pinned #1/#2 (the default AutoLock target)
-        // burned retrograde toward that ghost. Fix: re-sync the orbit to the
-        // mother's elements EVERY frame (same math as the release re-sync,
-        // factored into _syncPinnedOrbitToMother), so the orbit-derived
-        // position lands within the pin's lateral offset (≤ 18 m, #2) of the
-        // mesh. No playerOrbit (headless/menu update) ⇒ the orbit simply keeps
-        // its last synced value.
+        // Onboarding tease pin: no Kepler step, no drag. This piece rides the mother at a fixed offset in her LOCAL
+        // frame (forward + lateral), written to _scenePosition in _updateInstanceTransform from the per-frame mother
+        // basis. _scenePosition is what selection, range, net, reticle and rendering read, but the ORBIT is read too:
+        // AutopilotSystem (goal pose + HOLD element copy), NavRecoveryAdvisor, getDebrisClusters (the Shift+A field
+        // centre), NavSphere, InsertionPlanner, FieldRiskModel, ConjunctionSystem and CollisionAvoidance all derive a
+        // position from `debris.orbit`. A frozen orbit would show those readers the piece where the mother WAS
+        // (~77 km per REAL second along-track: 7.7 km/s × the 10× game clock) and pressing A on a pinned #1/#2 (the
+        // default AutoLock target) burned retrograde toward that ghost. So re-sync the orbit to the mother's
+        // elements EVERY frame (_syncPinnedOrbitToMother, same math as the release re-sync): the orbit-derived
+        // position lands within the pin's lateral offset (≤ 18 m, #2) of the mesh. No playerOrbit (headless/menu
+        // update) ⇒ the orbit keeps its last synced value.
         if (debris._onboardingPinned && playerOrbit) {
           DebrisField._syncPinnedOrbitToMother(debris, playerOrbit);
         }
-        // ── Mother berth/park hold (cargo-continuity S3) ───────────────────
-        // _motherParked: a plain skip — the orbit stays frozen. A berthed/parked
-        // catch is pinned at the nose every frame (updateBerthHold →
-        // pinCapturedDebris); if its own orbit kept propagating through an
-        // indefinite park, a later jettison would snap it to wherever the orbit
-        // drifted (the released catch was measured 15.4 km away —
-        // tmp/rv-disappear.log). _reseatOrbitOnRelease rebuilds the orbit from
-        // the pin at [K], so a parked catch's frozen orbit is never the release
-        // authority.
+        // Mother berth/park hold: _motherParked is a plain skip, the orbit stays frozen. A berthed/parked catch is
+        // pinned at the nose every frame (updateBerthHold → pinCapturedDebris); if its own orbit kept propagating
+        // through an indefinite park, a later jettison would snap it to wherever the orbit drifted (measured 15.4 km
+        // away). _reseatOrbitOnRelease rebuilds the orbit from the pin at [K], so a parked catch's frozen orbit is
+        // never the release authority.
       } else {
         _tmpKmOrbit.semiMajorAxis = o.semiMajorAxis / Constants.SCENE_SCALE;
         _tmpKmOrbit.eccentricity = o.eccentricity;
@@ -2578,22 +2166,15 @@ export class DebrisField {
         o.trueAnomaly = _tmpKmOrbit.trueAnomaly;
         o.meanMotion = _tmpKmOrbit.meanMotion;
 
-        // Atmospheric drag — the same formula, sub-stepping and gameDt as
-        // PlayerSatellite.update (dtWorld is threaded to both from main.js),
-        // and for welcomeSpawn pieces the same BALLISTIC COEFFICIENT too
-        // (dragDecelFor → the area and mass her drag block used this frame). Matching the formula alone
-        // was not enough: with their own sizeMeter²/mass the welcome pieces
-        // decayed 3–17× slower than the mother and drifted km away — the
-        // pre-2026-09-09 comment here claimed "co-orbiting objects stay on the
-        // same trajectory", which held only for the pinned #1/#2 (they skip
-        // this branch and ride the mother).
-        // Residual: the spawn frame applies one drag step to the new pieces
-        // AFTER the mother already took hers (player.update runs first, and
-        // _spawnWelcomeField copies her already-decayed SMA), so the welcome
-        // SMA sits ONE step (~0.1 m at 60 fps) below the mother's forever.
-        // Along-track drift from that ≈ 1.4 mm/s real → < 1 m over 10 min.
-        // Accepted; deliberately NOT compensated — a one-off SMA nudge would be
-        // more machinery than the effect it hides.
+        // Atmospheric drag: the same formula, sub-stepping and gameDt as PlayerSatellite.update (dtWorld is threaded
+        // to both from main.js), and for welcomeSpawn pieces the same BALLISTIC COEFFICIENT too (dragDecelFor).
+        // Matching the formula alone was not enough: with their own sizeMeter²/mass the welcome pieces decayed 3–17×
+        // slower than the mother and drifted km away. ("Co-orbiting objects stay on the same trajectory" held only
+        // for the pinned #1/#2, which skip this branch and ride the mother.)
+        // Residual: the spawn frame applies one drag step to the new pieces AFTER the mother took hers (player.update
+        // runs first, and _spawnWelcomeField copies her already-decayed SMA), so the welcome SMA sits ONE step
+        // (~0.1 m at 60 fps) below the mother's forever: along-track drift ≈ 1.4 mm/s real, < 1 m over 10 min.
+        // Accepted; deliberately NOT compensated (a one-off SMA nudge is more machinery than the effect it hides).
         const debrisAltKm = _tmpKmOrbit.semiMajorAxis - Constants.EARTH_RADIUS_KM;
         if (debrisAltKm < Constants.DRAG_CEILING_KM) {
           const debrisVel = orbitalVelocity(
@@ -2601,9 +2182,8 @@ export class DebrisField {
           );
           const dragDecel = DebrisField.dragDecelFor(debris, debrisAltKm, debrisVel, this._motherDragSource);
           if (debrisVel > 0) {
-            // T2 drag chunking (see PlayerSatellite): ≤ DRAG_CHUNK_GAME_S
-            // game-second Euler sub-steps so the decay factor can't flip
-            // negative at high warp. Single, byte-identical step below ~60 game-s.
+            // Drag chunking (see PlayerSatellite): ≤ DRAG_CHUNK_GAME_S game-second Euler sub-steps so the decay
+            // factor can't flip negative at high warp. Single, byte-identical step below ~60 game-s.
             const nSub = TimeAuthority.dragSubSteps(gameDt);
             const subDt = gameDt / nSub;
             const factor = 1 - 2 * (dragDecel * subDt) / debrisVel;
@@ -2612,16 +2192,14 @@ export class DebrisField {
         }
       }
 
-      // Update tumble (frozen while the debris is captured — see _advanceTumble).
+      // Tumble (frozen while the debris is captured — see _advanceTumble).
       DebrisField._advanceTumble(debris, dt, maxVisualRad);
 
-      // Update instance transform
       const lookup = this._instanceLookup.get(debris.id);
       if (lookup) {
         this._updateInstanceTransform(debris, lookup.instanceIndex, playerPos);
 
-        // ST-6.2: MOID badge colour tinting (approximated via instanceColor)
-        // Track badge changes to avoid per-frame work for unbadged debris
+        // MOID badge colour tinting (approximated via instanceColor); track badge changes to avoid per-frame work
         const currentBadge = debris.moidBadge || null;
         const renderedBadge = debris._renderedMoidBadge || null;
         if (currentBadge !== renderedBadge) {
@@ -2646,8 +2224,8 @@ export class DebrisField {
           }
         }
 
-        // ST-6.2: Update flag overlay transform — mount the decal ON the hull
-        // surface (NASA/ESA style), facing outward and tumbling with the piece.
+        // Flag overlay transform: the decal is mounted ON the hull surface (NASA/ESA style), facing outward and
+        // tumbling with the piece.
         const flagInfo = this._flagLookup.get(debris.id);
         if (flagInfo && debris._scenePosition && debris._lodScale > 0 && !DebrisField.heldHidden(this, debris)) {
           const flagMesh = this.flagMeshes[flagInfo.country];
@@ -2655,19 +2233,15 @@ export class DebrisField {
             const sp = debris._scenePosition;
             const dir = debris._flagDir || this._flagPlaneNormal;
 
-            // Tumble quaternion (same rotation the debris mesh uses)
+            // Same rotation the debris mesh uses
             this._flagQuat.setFromAxisAngle(debris.tumbleAxis, debris.tumbleAngle);
 
-            // Rotate the local mount direction into world space → the outward
-            // surface normal where the decal sits.
+            // Local mount direction → world space: the outward surface normal where the decal sits.
             this._flagDirWorld.copy(dir).applyQuaternion(this._flagQuat);
 
-            // Distance to the hull surface along the (LOCAL) mount direction.
-            // Using the bounding-box face distance (not the bounding-sphere
-            // radius) keeps the decal flush against the body even for shapes
-            // dominated by far-reaching parts like solar wings. _lodScale maps
-            // local units → world; 1.01 sits the decal just proud to avoid
-            // z-fighting.
+            // Distance to the hull surface along the (LOCAL) mount direction. The bounding-box face distance (not the
+            // bounding-sphere radius) keeps the decal flush even for shapes dominated by far-reaching parts like
+            // solar wings. _lodScale maps local units → world; 1.01 sits the decal just proud to avoid z-fighting.
             const localD = DebrisWireframe.getSurfaceDistance(
               debris.type, debris.id, dir.x, dir.y, dir.z
             ) || 1;
@@ -2694,18 +2268,14 @@ export class DebrisField {
             const flagRp = debris._revealProgress;
             const flagReveal = (flagRp !== undefined && flagRp < 1)
               ? smoothstep01(flagRp) : 1;
-            // Item 12 (2026-06-12): decal sized in PHYSICAL metres —
-            // clamp(sizeMeter × FACTOR, MIN..MAX) — instead of a fixed
-            // 0.7-local-unit footprint (read tiny on an 8 m rocket body).
-            // The LOD shrink ratio is preserved so distant flags fade with
-            // their debris.
+            // Decal sized in PHYSICAL metres, clamp(sizeMeter × FACTOR, MIN..MAX) (a fixed 0.7-local-unit footprint
+            // read tiny on an 8 m rocket body). The LOD shrink ratio is preserved so distant flags fade with their debris.
             const dv = Constants.DEBRIS_VISUAL || {};
             const widthM = Math.min(dv.FLAG_DECAL_MAX_M ?? 1.6,
               Math.max(dv.FLAG_DECAL_MIN_M ?? 0.4,
                 (debris.sizeMeter || 1) * (dv.FLAG_SIZE_FACTOR ?? 0.12)));
             const lodRatio = debris.sceneSize > 0 ? debris._lodScale / debris.sceneSize : 1;
-            // Plane geometry is 0.7 local units wide → scale to widthM metres
-            // (1 m = 0.00001 scene units).
+            // Plane geometry is 0.7 local units wide → scale to widthM metres (1 m = 0.00001 scene units).
             this._flagScale.setScalar((widthM * 0.00001 / 0.7) * lodRatio * flagReveal);
             this._flagMatrix.compose(this._flagPos, this._flagQuat, this._flagScale);
             flagMesh.setMatrixAt(flagInfo.instanceIndex, this._flagMatrix);
@@ -2720,22 +2290,21 @@ export class DebrisField {
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
 
-    // slice 5 (5d, D5): the drag sails follow their pieces (the draw hook: only while one exists)
+    // The drag sails follow their pieces (the draw hook: only while one exists)
     if (this._sails && this._sails.size > 0) this._sails.sync(Constants.FLOATING_ORIGIN_ENABLED ? this._floatingOrigin : null, this._heldHiddenFn || (this._heldHiddenFn = (d) => DebrisField.heldHidden(this, d)));
 
-    // ST-6.2: Mark flag overlay meshes for update
     for (const mesh of Object.values(this.flagMeshes)) {
       mesh.instanceMatrix.needsUpdate = true;
     }
 
-    // --- Update background debris (propagate in batches for performance) ---
+    // Background debris propagates in batches for performance
     this._updateBackground(gameDt, playerPos);
   }
 
   /**
-   * catch-near-pass (Decision 1): hand over the near-field host. `sceneManager` registers/unregisters the proxies as
-   * near-field roots; `player` (the ship, a THREE.Group whose `.position` is its scene position) is what "near" is
-   * measured from. Without both, nothing is drawn by a proxy (headless / menu / old tests): every piece stays far pass.
+   * Hand over the near-field host. `sceneManager` registers/unregisters the proxies as near-field roots; `player` (the
+   * ship, a THREE.Group whose `.position` is its scene position) is what "near" is measured from. Without both,
+   * nothing is drawn by a proxy (headless / menu / old tests): every piece stays far pass.
    * @param {object|null} sceneManager
    * @param {THREE.Object3D|null} player
    */
@@ -2756,10 +2325,10 @@ export class DebrisField {
   }
 
   /**
-   * catch-near-pass (Decision 1): draw a HELD piece in the near-field pass while it is near the ship. Called with the
-   * piece's pinned pose by every pin (`pinCapturedDebris`, and the pinned branch of `_updateInstanceTransform`). Makes the
-   * proxy when the piece comes within HELD_NEAR_ON_M of the ship, keeps it up to HELD_NEAR_OFF_M, and drops it beyond.
-   * Sets/clears `_nearProxy` on the canonical object AND the pinning reference. Allocation-free once the proxy exists.
+   * Draw a HELD piece in the near-field pass while it is near the ship. Called with the piece's pinned pose by every
+   * pin (`pinCapturedDebris`, and the pinned branch of `_updateInstanceTransform`). Makes the proxy when the piece
+   * comes within HELD_NEAR_ON_M of the ship, keeps it up to HELD_NEAR_OFF_M, and drops it beyond. Sets/clears
+   * `_nearProxy` on the canonical object AND the pinning reference. Allocation-free once the proxy exists.
    *
    * @param {object} canonical  the field's object for the piece
    * @param {object|null} ref   the reference the pinning system holds (may differ from `canonical`)
@@ -2812,7 +2381,7 @@ export class DebrisField {
     const proxy = rec.proxy;
     proxy.position.set(pos.x, pos.y, pos.z);
     proxy.quaternion.copy(quat);
-    DebrisField.setDrawScale(proxy.scale, scale, canonical);   // slice 5 (5e): a piece being melted is drawn shortened along its long axis
+    DebrisField.setDrawScale(proxy.scale, scale, canonical);   // a piece being melted is drawn shortened along its long axis
     // The per-instance colour (weathering tint, MOID badge) lives on the far instance; keep the proxy in step.
     src.getColorAt(lookup.instanceIndex, this._heldColor);
     proxy.setColorAt(0, this._heldColor);
@@ -2820,7 +2389,7 @@ export class DebrisField {
     return true;
   }
 
-  /** catch-near-pass: take a piece's proxy out of the near pass and clear its flags (the far instance returns next write). @private */
+  /** Take a piece's proxy out of the near pass and clear its flags (the far instance returns next write). @private */
   _dropHeldProxy(id) {
     const rec = this._heldProxies.get(id);
     if (!rec) return;
@@ -2839,8 +2408,8 @@ export class DebrisField {
   }
 
   /**
-   * catch-near-pass: once a frame, before the instance loop, drop every proxy whose piece is no longer held (released,
-   * processed, removed, field rebuilt) so the same frame's `_updateInstanceTransform` draws it far pass again.
+   * Once a frame, before the instance loop, drop every proxy whose piece is no longer held (released, processed,
+   * removed, field rebuilt) so the same frame's `_updateInstanceTransform` draws it far pass again.
    * @private
    */
   _sweepHeldProxies() {
@@ -2857,22 +2426,18 @@ export class DebrisField {
   }
 
   /**
-   * Authoritative catch pin (called by ArmManager AFTER arms move, and after
-   * this.update() ran earlier in the frame). Forces a captured debris — both
-   * the object reference the arm/net/camera hold AND the CANONICAL field object
-   * looked up by id — and its rendered instance onto the arm's scene position.
+   * Authoritative catch pin (called by ArmManager AFTER arms move, and after this.update() ran earlier in the frame).
+   * Forces a captured debris — both the object reference the arm/net/camera hold AND the CANONICAL field object looked
+   * up by id — and its rendered instance onto the arm's scene position.
    *
-   * This is the definitive fix for the reel-in "net + debris drift ~600 m away
-   * and vanish" bug: the object the arm pinned was not the same object this
-   * field rendered, so position flags never reached the rendered instance.
-   * Pinning by id (the canonical key used by _instanceLookup / removeDebris)
-   * can't suffer that mismatch.
+   * Fixes the reel-in "net + debris drift ~600 m away and vanish" bug: the object the arm pinned was not the same
+   * object this field rendered, so position flags never reached the rendered instance. Pinning by id (the canonical
+   * key used by _instanceLookup / removeDebris) can't suffer that mismatch.
    *
    * @param {object} debrisRef - the arm's captured debris object (net/camera ref)
    * @param {THREE.Vector3} armScenePos - arm position in scene units
-   * @param {number} [scaleMul=1] - multiplier on rendered size (dock stow-shrink);
-   *   applied AFTER the `_catchRenderMin` readability floor (register item 9), so
-   *   the furnace chop can still shrink a held catch below the floor.
+   * @param {number} [scaleMul=1] - multiplier on rendered size (dock stow-shrink); applied AFTER the
+   *   `_catchRenderMin` readability floor, so the furnace chop can still shrink a held catch below the floor.
    */
   pinCapturedDebris(debrisRef, armScenePos, scaleMul = 1) {
     if (!debrisRef || !armScenePos) return;
@@ -2885,8 +2450,8 @@ export class DebrisField {
     debrisRef._armPinned = true;
 
     debrisRef._pinScaleMul = scaleMul > 0 ? scaleMul : 1;   // the edge redraw (syncHeldWithMother) reuses it, so a shrinking catch never pops
-    // 2) Update the CANONICAL field object by id (may be a different reference)
-    //    so the orbit-driven renderer doesn't fight us next frame.
+    // 2) Update the CANONICAL field object by id (may be a different reference) so the orbit-driven renderer doesn't
+    //    fight us next frame.
     const canonical = (id != null && this.debrisMap.get(id)) || debrisRef;
     if (canonical !== debrisRef) {
       canonical._pinScaleMul = debrisRef._pinScaleMul;
@@ -2896,8 +2461,7 @@ export class DebrisField {
       canonical._armPinned = true;
     }
 
-    // 3) Force the rendered instance (by id slot) to the arm position THIS frame,
-    //    overriding whatever this.update() computed earlier (orbit branch).
+    // 3) Force the rendered instance (by id slot) to the arm position THIS frame, overriding the orbit branch.
     if (id == null) return;
     DebrisField.prototype._drawPinned.call(this, canonical, debrisRef, armScenePos, scaleMul);
   }
@@ -2915,10 +2479,10 @@ export class DebrisField {
 
   /**
    * Is the carrier of this held piece hidden? The piece follows whoever carries it: an explicit carrier object
-   * (`_carrierObj`, e.g. the resupply craft once it has gripped a piece) by that object's own visibility; a daughter's catch
-   * follows HER drawing (her group is hidden when she is attached while the mother is hidden, or by the Ships step; a daughter
-   * flying on her own stays drawn, and so does her catch); every other held piece (tip, rack, nose, net, leash, bag) follows
-   * the mother. Static + null-safe: the held-piece writers are also run on bare receivers by tests.
+   * (`_carrierObj`, e.g. the resupply craft once it has gripped a piece) by that object's own visibility; a daughter's
+   * catch follows HER drawing (her group is hidden when she is attached while the mother is hidden, or by the Ships
+   * step; a daughter flying on her own stays drawn, and so does her catch); every other held piece (tip, rack, nose,
+   * net, leash, bag) follows the mother. Static + null-safe: tests also run the held-piece writers on bare receivers.
    * @param {object} field  the DebrisField (reads `_nearPlayer` only)
    * @param {object} d      the held piece
    * @returns {boolean}
@@ -2934,8 +2498,8 @@ export class DebrisField {
   }
 
   /**
-   * Is `d` a held piece (pinned, parked at the nose, or following a daughter) whose carrier is hidden? Gates everything that
-   * hangs off a held piece's drawing (instance, proxy, flag decal, drag sail). A free field piece is never "held hidden".
+   * Is `d` a held piece (pinned, parked at the nose, or following a daughter) whose carrier is hidden? Gates everything
+   * that hangs off a held piece's drawing (instance, proxy, flag decal, drag sail). A free field piece is never "held hidden".
    * @param {object} field
    * @param {object} d
    * @returns {boolean}
@@ -2975,19 +2539,17 @@ export class DebrisField {
       this._tempQuat.identity();
     }
     const baseSize = DebrisField.effectiveRenderScale(canonical) || 0.00001;
-    // Register item 9: the pin honours the same net-held readability floor as
-    // _updateInstanceTransform, via the ONE clamp-aware SSOT read (W4/W5 unified
-    // — probe, bag contents floor and BOTH matrix writers now compute one value).
-    // Floor FIRST, scaleMul AFTER: the furnace stow-shrink must still take a held
-    // catch below the floor (the deliberate chunk-mesh swap, ArmManager).
+    // The pin honours the same net-held readability floor as _updateInstanceTransform, via the ONE clamp-aware SSOT
+    // read. Floor FIRST, scaleMul AFTER: the furnace stow-shrink must still take a held catch below the floor (the
+    // deliberate chunk-mesh swap, ArmManager).
     const drawSize = baseSize * (scaleMul > 0 ? scaleMul : 1);
-    // catch-near-pass (Decision 1): a held piece near the ship is drawn by its near-pass proxy; the far-pass instance
-    // is then written at scale 0 (every pin, every frame, so it never flickers back). (`_nearSm` is null until
-    // main.js hands the near-field host over; the test stubs that call this on a bare receiver never have one.)
-    // Mother hidden: no proxy either (drop it), and the far instance is written at scale 0.
+    // A held piece near the ship is drawn by its near-pass proxy; the far-pass instance is then written at scale 0
+    // (every pin, every frame, so it never flickers back). `_nearSm` is null until main.js hands the near-field host
+    // over; test stubs calling this on a bare receiver never have one. Mother hidden: no proxy either (drop it), and
+    // the far instance is written at scale 0.
     if (hidden && this._heldProxies && this._heldProxies.has(id)) this._dropHeldProxy(id);
     const nearDrawn = !hidden && this._nearSm ? this._syncHeldProxy(canonical, debrisRef, armScenePos, this._tempQuat, drawSize) : false;
-    DebrisField.setDrawScale(this._tempScale, nearDrawn || hidden ? 0 : drawSize, canonical);   // slice 5 (5e): shortened while it is melted
+    DebrisField.setDrawScale(this._tempScale, nearDrawn || hidden ? 0 : drawSize, canonical);   // shortened while it is melted
     this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
     mesh.setMatrixAt(lookup.instanceIndex, this._tempMatrix);
     mesh.instanceMatrix.needsUpdate = true;
@@ -3011,7 +2573,7 @@ export class DebrisField {
       const d = list[i];
       if (d && d._armPinned === true && d._armPinPos && d.alive !== false) {
         this._drawPinned(d, d, d._armPinPos, d._pinScaleMul > 0 ? d._pinScaleMul : 1);
-        // the flag decal on a piece that just went hidden goes now too (a shown one is redrawn by the next field update)
+        // The flag decal on a piece that just went hidden goes now too (a shown one is redrawn by the next field update)
         const fi = this._flagLookup && this._flagLookup.get(d.id);
         if (fi && DebrisField.heldHidden(this, d)) {
           const fm = this.flagMeshes[fi.country];
@@ -3024,24 +2586,18 @@ export class DebrisField {
   }
 
   /**
-   * Debris cutting step 5 (CUT_AT_NOSE, plan L7) — spawn ONE cut piece of a
-   * captured boss as a real, DRAWN debris object.
+   * CUT_AT_NOSE: spawn ONE cut piece of a captured boss as a real, DRAWN debris object.
    *
-   * `createFragments` (the Kessler spawner, `:4027`'s own admission) sets
-   * `_meshKey = null` — its pieces render nothing. A cut piece is cargo the
-   * player watches fly nose → strut tip, so it gets a TRUE InstancedMesh slot:
-   * the existing (type:material) mesh is grown by one instance (matrices and
-   * colours carried over; geometry and material are shared, never disposed
-   * here — the geometry belongs to the wireframe cache), or the mesh is
-   * created on first use with the same recipe as `_buildInstancedMeshes` (one
-   * convention, no second key scheme).
+   * `createFragments` (the Kessler spawner) sets `_meshKey = null`, so its pieces render nothing. A cut piece is cargo
+   * the player watches fly nose → strut tip, so it gets a TRUE InstancedMesh slot: the existing (type:material) mesh is
+   * grown by one instance (matrices and colours carried over; geometry and material are shared, never disposed here,
+   * since the geometry belongs to the wireframe cache), or the mesh is created on first use with the same recipe as
+   * `_buildInstancedMeshes` (one convention, no second key scheme).
    *
-   * The piece carries its planned mass and salvage, the parent's material /
-   * isReal / country / catalogType, and `_credited: true` — the mate already
-   * paid the whole body, so no later CATCH_PROCESSED may pay or recover
-   * salvage for a piece (register item 37's law). It is born held:
-   * `_captured`/`_armPinned`/`_motherParked` set, orbit frozen at the
-   * parent's (the collar pin owns it from the first frame).
+   * The piece carries its planned mass and salvage, the parent's material / isReal / country / catalogType, and
+   * `_credited: true`: the mate already paid the whole body, so no later CATCH_PROCESSED may pay or recover salvage
+   * for a piece (register item 37's law). It is born held: `_captured`/`_armPinned`/`_motherParked` set, orbit frozen
+   * at the parent's (the collar pin owns it from the first frame).
    *
    * Deterministic by construction: no rng, ids sequence from `_nextId`.
    *
@@ -3060,9 +2616,8 @@ export class DebrisField {
     const sv = pieceSpec.salvage || null;
     const piece = {
       id: this._nextId++,
-      // A piece of the parent: same type (same wireframe family) and the same
-      // provenance fields. Zone-accurate piece SHAPES are a later order; the
-      // drawn size below is the volume-honest scaling of the parent's.
+      // A piece of the parent: same type (same wireframe family) and provenance fields. Zone-accurate piece SHAPES
+      // are a later order; the drawn size below is the volume-honest scaling of the parent's.
       type: parent.type,
       material: parent.material,
       mass: pieceSpec.massKg,
@@ -3082,12 +2637,12 @@ export class DebrisField {
       isReal: parent.isReal,
       country: parent.country,
       catalogType: parent.catalogType,
-      // Cut provenance — what the CARGO_TRANSFER_START `cut` payload reports.
+      // Cut provenance: what the CARGO_TRANSFER_START `cut` payload reports.
       cutParentId: parent.id,
       cutIndex: pieceSpec.index,
       cutOf: plan && Array.isArray(plan.pieces) ? plan.pieces.length : 0,
       cutZoneName: (pieceSpec.zones && pieceSpec.zones[0] && pieceSpec.zones[0].zoneName) || null,
-      // L8: born paid — the mate credited the whole body already.
+      // Born paid: the mate credited the whole body already.
       _credited: true,
       // Born held at the nose: cargo from the first frame.
       _captured: true,
@@ -3096,10 +2651,8 @@ export class DebrisField {
     };
     if (parent.orbit) piece.orbit = { ...parent.orbit };
 
-    // Volume-honest size: the piece keeps the parent's density, so its drawn
-    // extent scales with the cube root of its share of the ORIGINAL body.
-    // (The boss's own drawn shape does not shrink as pieces come off — a
-    // known limit, noted in the cutting plan.)
+    // Volume-honest size: the piece keeps the parent's density, so its drawn extent scales with the cube root of its
+    // share of the ORIGINAL body. (The boss's own drawn shape does not shrink as pieces come off: a known limit.)
     const refMass = (originalMassKg && originalMassKg > 0)
       ? originalMassKg : (parent.mass || pieceSpec.massKg);
     const frac = Math.min(1, pieceSpec.massKg / refMass);
@@ -3109,7 +2662,7 @@ export class DebrisField {
     this.debrisMap.set(piece.id, piece);
     this.debrisList.push(piece);
 
-    // ── The instance slot: this is what makes the piece DRAWN ──
+    // The instance slot is what makes the piece DRAWN
     const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
     const key = piece.type === 'fragment'
       ? `${piece.type}:${piece.material}:${piece.id % N}`
@@ -3134,8 +2687,7 @@ export class DebrisField {
       mesh = next;
       idx = next.count - 1;
     } else {
-      // First piece of this (type:material): build the mesh exactly the way
-      // `_buildInstancedMeshes` does — same geometry, same material recipe.
+      // First piece of this (type:material): build the mesh the way `_buildInstancedMeshes` does (same recipe).
       const geo = DebrisWireframe.getGeometry(piece.type, 0);
       const matDef = Constants.DEBRIS_MATERIALS[piece.material]
         || Constants.DEBRIS_MATERIALS.aluminum;
@@ -3186,7 +2738,7 @@ export class DebrisField {
       mesh = fresh;
       idx = 0;
     }
-    // The same weathering tint pass every other instance gets.
+    // Same weathering tint every other instance gets.
     const _cutTint = new THREE.Color(getInstanceTintBase(piece.catalogType || 'unknown'));
     applyInstanceColorVariation(_cutTint, piece.id, piece.catalogType);
     mesh.setColorAt(idx, _cutTint);
@@ -3199,29 +2751,30 @@ export class DebrisField {
   }
 
   /**
-   * The scoop net's bag (u20-nets, 2026-10-23; owner: "daughters may need ways to combine many small pieces in one net"):
-   * the reverse of `spawnCutPiece`. A daughter's net that closed on its target calls this with the pieces inside its mouth
-   * (the target first, the rest picked by `scoopRule.pickScoopMembers`). It makes ONE new piece, the bag, and takes the members
-   * out of play; every downstream rule (one catch per daughter, tip fit by `trueReachM`, the carry gate by `sizeMeter`, the
-   * leash, trip melting by mass) then sees one piece. Fewer than two live members: nothing is made (the caller keeps today's
-   * path, the same piece held).
+   * The scoop net's bag (owner 2026-10-23: "daughters may need ways to combine many small pieces in one net"): the
+   * reverse of `spawnCutPiece`. A daughter's net that closed on its target calls this with the pieces inside its mouth
+   * (the target first, the rest picked by `scoopRule.pickScoopMembers`). It makes ONE new piece, the bag, and takes the
+   * members out of play; every downstream rule (one catch per daughter, tip fit by `trueReachM`, the carry gate by
+   * `sizeMeter`, the leash, trip melting by mass) then sees one piece. Fewer than two live members: nothing is made
+   * (the caller keeps the same piece held).
    *
    * The bag: `isBag: true`; `type`/`material` the heaviest member's (for code that reads a type; `trueReachM` answers
    * `sizeMeter / 2` for a bag BEFORE any type lookup, and `heldBagShape` draws its wrap round that ball); a new id;
-   * `mass` the sum; `sizeMeter = 2r` by `scoopRule.bagSize`; position the mass centre; the target's orbit and tumble axis;
-   * the tumble RATE mass-weighted [estimate]. `bagMembers[i]` = `{ id, type, massKg, sizeMeter, fieldId, fieldRow, piece }`:
-   * the plain fields are what a save or a log needs, `piece` is the member's own body, kept whole so the credit pays each
-   * one exactly as if it had been caught alone (score, salvage, `markCaught`).
+   * `mass` the sum; `sizeMeter = 2r` by `scoopRule.bagSize`; position the mass centre; the target's orbit and tumble
+   * axis; the tumble RATE mass-weighted [estimate]. `bagMembers[i]` = `{ id, type, massKg, sizeMeter, fieldId,
+   * fieldRow, piece }`: the plain fields are what a save or a log needs, `piece` is the member's own body, kept whole
+   * so the credit pays each one exactly as if it had been caught alone (score, salvage, `markCaught`).
    *
-   * The members: `alive = false` and hidden through `removeDebris` (so the selector, wireframe, reticle and auto-advance hear
-   * the one removal event every other leaving piece sends), tagged `_inBag` / `_bagId`. `FieldRegistry._onRemoved` marks a
-   * removed piece's row caught, which would pay a row for a piece nobody has been paid for (a bag that is lost would then
-   * lose its members' rows for good). A solo catch's row leaves only at its credit, so the members' field tag is PARKED
-   * (`_bagFieldId` / `_bagFieldRow`, the live `fieldId` nulled) for the removal and the credit restores nothing: it marks the
-   * `bagMembers` snapshots caught. A bag let go (K), cut, lost or melted is one piece of its total mass and size, like a solo.
+   * The members: `alive = false` and hidden through `removeDebris` (so the selector, wireframe, reticle and
+   * auto-advance hear the one removal event every other leaving piece sends), tagged `_inBag` / `_bagId`.
+   * `FieldRegistry._onRemoved` marks a removed piece's row caught, which would pay a row for a piece nobody has been
+   * paid for (a lost bag would then lose its members' rows for good). A solo catch's row leaves only at its credit,
+   * so the members' field tag is PARKED (`_bagFieldId` / `_bagFieldRow`, the live `fieldId` nulled) for the removal
+   * and the credit restores nothing: it marks the `bagMembers` snapshots caught. A bag let go (K), cut, lost or melted
+   * is one piece of its total mass and size, like a solo.
    *
-   * Drawn: ONE instance of a mesh merged from the members' own meshes at true size, each at its offset from the mass centre
-   * (pulled inside the bag's ball when it pokes out) and its own attitude, sharing the heaviest member's material.
+   * Drawn: ONE instance of a mesh merged from the members' own meshes at true size, each at its offset from the mass
+   * centre (pulled inside the bag's ball when it pokes out) and its own attitude, sharing the heaviest member's material.
    *
    * @param {object[]} members the target first, then the others (already vetted by the caller)
    * @param {{netClass?: object, armIndex?: number}|null} [net] the closing net (its class caps the bag at mouth / 4)
@@ -3296,7 +2849,7 @@ export class DebrisField {
     bag.bagRadiusM = sz.radiusM;
     if (cm) bag._scenePosition = cm.clone();
 
-    // ── the members leave play (see the docblock for the field-tag parking) ──
+    // The members leave play (see the docblock for the field-tag parking)
     for (const m of live) {
       m._inBag = true;
       m._bagId = bag.id;
@@ -3316,10 +2869,11 @@ export class DebrisField {
   }
 
   /**
-   * Give a bag its one drawn instance: a mesh merged from the members' meshes (true size, at their offsets from the mass
-   * centre, pulled inside the ball of radius `radiusM` when they poke out, each at its own attitude). Unit of the merged
-   * geometry: one bag `sizeMeter`, like every other mesh here (drawn at `sceneSize` = `sizeMeter` x 1e-5). Shares the heaviest
-   * member's material. Nothing is drawn (the bag is still a piece) when no member has a mesh or the field has no scene group.
+   * Give a bag its one drawn instance: a mesh merged from the members' meshes (true size, at their offsets from the
+   * mass centre, pulled inside the ball of radius `radiusM` when they poke out, each at its own attitude). Unit of the
+   * merged geometry: one bag `sizeMeter`, like every other mesh here (drawn at `sceneSize` = `sizeMeter` x 1e-5).
+   * Shares the heaviest member's material. Nothing is drawn (the bag is still a piece) when no member has a mesh or
+   * the field has no scene group.
    * @private
    */
   _attachBagMesh(bag, live, cm, radiusM) {
@@ -3392,38 +2946,30 @@ export class DebrisField {
    * @private
    */
   _updateInstanceTransform(debris, instanceIndex, playerPos) {
-    // POLISH FIX (issue #2: "daughter abandoned debris"): once an arm has
-    // captured this debris AND moved past the GRAPPLED stabilization (i.e., it
-    // is reeling/hauling/docking back to the mother), the debris visual must
-    // FOLLOW the arm rather than continue along its independent orbit.
-    // During GRAPPLED itself we let the orbit-driven path run so the rigid
-    // arm+debris pair continues to co-orbit naturally (arm.position.copy(tPos)
-    // in _updateGrappled keeps the arm shadowed onto the debris).
+    // Once an arm has captured this debris AND moved past GRAPPLED stabilization (reeling/hauling/docking back to the
+    // mother), the visual must FOLLOW the arm rather than its independent orbit. During GRAPPLED itself the
+    // orbit-driven path runs so the rigid arm+debris pair co-orbits naturally (arm.position.copy(tPos) in
+    // _updateGrappled keeps the arm shadowed onto the debris).
     let px, py, pz;
-    // AUTHORITATIVE arm pin (set by ArmUnit while it owns the catch during
-    // REELING/DOCKING and for a tether-snapped drift). This is a direct
-    // position copy with NO state/ref checks, so it can't be defeated by the
-    // SK/welcome-debris edge cases that left the older `_capturedByArm` pin
-    // reading the orbit branch — the catch was drifting 600 m+ away mid-haul.
+    // AUTHORITATIVE arm pin (set by ArmUnit while it owns the catch during REELING/DOCKING and for a tether-snapped
+    // drift): a direct position copy with NO state/ref checks, so SK/welcome-debris edge cases can't defeat it (the
+    // older `_capturedByArm` pin read the orbit branch and the catch drifted 600 m+ away mid-haul).
     const _armPinned = !!(debris._armPinned && debris._armPinPos);
     const _captor = debris._capturedByArm;
     const _captorState = _captor && _captor.state;
     const _pinToArm = !_armPinned && _captor && _captor.position &&
       _captorState && _captorState !== 'GRAPPLED' && _captorState !== 'NETTING';
-    // Onboarding tease pin (local frame): place the piece at a fixed
-    // forward + lateral offset from the mother so it reads dead-centre (#1) or
-    // off-to-one-side (#2) and is selectable/in-range. This _scenePosition is
-    // authoritative (TargetSelector/AutoLock/Lasso/reticle all read it). An arm
-    // capture (ARM_CAPTURED) releases the pin first, so _armPinned wins after.
-    // Register item 23: _onboardingPinBasisOverrides is production-unreachable
-    // — its only writer is the dev scenario (main.js:2180 set / :2225 delete) —
-    // but it is LOAD-BEARING for the visual gates: record, do NOT delete.
+    // Onboarding tease pin (local frame): the piece sits at a fixed forward + lateral offset from the mother so it
+    // reads dead-centre (#1) or off to one side (#2) and is selectable/in-range. This _scenePosition is authoritative
+    // (TargetSelector/AutoLock/Lasso/reticle all read it). An arm capture (ARM_CAPTURED) releases the pin first, so
+    // _armPinned wins after.
+    // Register item 23: _onboardingPinBasisOverrides is production-unreachable (its only writer is the dev scenario in
+    // main.js) but LOAD-BEARING for the visual gates: record, do NOT delete.
     const _pinBasisOv = this._onboardingPinBasisOverrides?.get(debris.id);
     const _onboardPinned = !!(debris._onboardingPinned && playerPos &&
       (_pinBasisOv || (this._motherFwd && this._motherRight)));
     if (_onboardPinned) {
-      // Per-id frozen basis wins for this piece; every other pinned piece falls
-      // back to the live per-frame ship-relative basis.
+      // Per-id frozen basis wins for this piece; every other pinned piece uses the live ship-relative basis.
       const f = _pinBasisOv ? _pinBasisOv.fwd : this._motherFwd;
       const r = _pinBasisOv ? _pinBasisOv.right : this._motherRight;
       const fwd = debris._onboardingPinFwd || 0;
@@ -3440,32 +2986,26 @@ export class DebrisField {
       py = _captor.position.y;
       pz = _captor.position.z;
     } else {
-      // Sprint 2 / PR A — scratch-output variant; no per-debris allocation.
+      // Scratch-output variant; no per-debris allocation.
       orbitToSceneCartesianInto(debris.orbit, this._tmpCartPos, this._tmpCartVel);
       px = this._tmpCartPos.x;
       py = this._tmpCartPos.y;
       pz = this._tmpCartPos.z;
     }
 
-    // Store scene position for arm autopilot and external queries
+    // Scene position for arm autopilot and external queries
     if (!debris._scenePosition) {
       debris._scenePosition = new THREE.Vector3(px, py, pz);
     } else {
       debris._scenePosition.set(px, py, pz);
     }
 
-    // LOD: determine scale based on distance to player
-    // ST-6.2: stored on debris for flag overlay LOD
+    // LOD: scale by distance to player (stored on debris as _lodScale for the flag overlay)
     let scale = debris.sceneSize;
     if (playerPos) {
-      // Skip LOD downscaling for debris that an arm is actively station-keeping on,
-      // OR that an arm has captured (pinned to the arm during REELING/HAULING/
-      // DOCKING).  LOD uses playerPos (mother ship), but the ARM_PILOT camera is
-      // near the debris.  When the mother orbits far away the LOD would zero
-      // the scale.  For SK targets this hid the inspection debris.  For
-      // captured debris (Item 3 fix, 2026-05-28) it hid the "package" being
-      // reeled in — the user saw only the daughter, with the debris
-      // invisible inside the net during the entire reel-in.
+      // Skip LOD downscaling for debris an arm is station-keeping on, or has captured (pinned to the arm during
+      // REELING/HAULING/DOCKING). LOD uses playerPos (mother ship) but the ARM_PILOT camera is near the debris, so
+      // with the mother far away LOD would zero the scale and hide the inspection debris / the "package" being reeled in.
       if (!debris._isStationKeepTarget && !debris._capturedByArm && !debris._armPinned) {
         const dx = px - playerPos.x;
         const dy = py - playerPos.y;
@@ -3489,33 +3029,23 @@ export class DebrisField {
       }
     }
 
-    // Net-held catch readability: a lasso-held catch (LassoSystem, 1.5 m) or a
-    // mother-net-held catch (CaptureNet's reel/berth ticks, 2.0 m) sets
-    // `_catchRenderMin` (scene units, converted from a rendered RADIUS in metres
-    // by DebrisWireframe.scaleForRenderRadiusM — item 8). A physically tiny catch
-    // (e.g. a 0.6 m M1 fragment) renders sub-pixel and "disappears" inside the net
-    // / at the nose; clamp its apparent size up to that floor while held so it
-    // reads as a real catch. Opt-in per debris AND gated on _armPinned (actively
-    // held) so a stale override can never inflate a released piece, and the
-    // Daughter pipeline (which never sets it) is unaffected. Register item 9:
-    // `pinCapturedDebris` — which overwrites this matrix later in the same frame
-    // for a pinned catch — applies the IDENTICAL floor through
-    // `effectiveRenderScale`, so the two writers cannot disagree on the drawn size.
-    // Register item 21b: the floor predicate itself now has ONE home —
-    // `catchRenderFloorScale`. This writer passes its OWN pinned local (the
-    // stricter `_armPinned && _armPinPos` — it also gates the pin-position read
-    // above); the SSOT reader uses the field-only default. Round 3 (2026-08-26):
-    // LassoSystem now routes its per-frame reel/pending pins through
-    // `pinCapturedDebris` (the register-9 same-frame force-write) because THIS
-    // site runs before lassoSystem.update in the frame — a bare `_armPinPos`
-    // write drew one ship-step behind the net (7.7 km under the SwiftShader dt
-    // clamp; tmp/lasso11-rec). This site still composes with the LOD
-    // multipliers above and the reveal smoothstep below IN PLACE — deliberately
-    // not a call to `effectiveRenderScale`, which reads the base, not this
-    // frame's LOD slot.
+    // Net-held catch readability: a lasso-held catch (LassoSystem, 1.5 m) or a mother-net-held catch (CaptureNet's
+    // reel/berth ticks, 2.0 m) sets `_catchRenderMin` (scene units, from a rendered RADIUS in metres by
+    // DebrisWireframe.scaleForRenderRadiusM). A physically tiny catch (a 0.6 m M1 fragment) renders sub-pixel and
+    // "disappears" inside the net / at the nose, so clamp its apparent size up to that floor while held. Opt-in per
+    // debris AND gated on _armPinned (actively held) so a stale override can never inflate a released piece, and the
+    // Daughter pipeline (which never sets it) is unaffected. `pinCapturedDebris` overwrites this matrix later in the
+    // same frame for a pinned catch and applies the IDENTICAL floor through `effectiveRenderScale`, so the two
+    // writers cannot disagree on drawn size.
+    // The floor predicate has ONE home, `catchRenderFloorScale`. This writer passes its OWN pinned local (the stricter
+    // `_armPinned && _armPinPos`, which also gates the pin-position read above); the SSOT reader uses the field-only
+    // default. LassoSystem routes its per-frame reel/pending pins through `pinCapturedDebris` (same-frame
+    // force-write) because THIS site runs before lassoSystem.update in the frame: a bare `_armPinPos` write drew one
+    // ship-step behind the net (7.7 km under the SwiftShader dt clamp). This site composes with the LOD multipliers
+    // above and the reveal smoothstep below IN PLACE, deliberately not via `effectiveRenderScale`, which reads the
+    // base, not this frame's LOD slot.
     scale = DebrisField.catchRenderFloorScale(debris, scale, _armPinned);
 
-    // ST-6.2: Store LOD scale for flag overlay sync
     debris._lodScale = scale;
 
     // Smooth reveal: scale up from 0→1 over 300ms using smoothstep
@@ -3524,10 +3054,10 @@ export class DebrisField {
       ? smoothstep01(rp) // smoothstep easing
       : 1;
 
-    // catch-near-pass (Decision 1): a held piece near the ship is drawn by its near-pass proxy, so the far-pass
-    // instance stays at scale 0 (`_lodScale` above is left as the real scale for the flag overlay). The authoritative
-    // pin (`pinCapturedDebris`) re-syncs the proxy later in the frame with the same pose; this one covers a frame in
-    // which no pin is called. `_nearProxy` without a pin is a stale flag: drop it. (Only a pinned piece pays for the
+    // A held piece near the ship is drawn by its near-pass proxy, so the far-pass instance stays at scale 0
+    // (`_lodScale` above is left as the real scale for the flag overlay). The authoritative pin
+    // (`pinCapturedDebris`) re-syncs the proxy later in the frame with the same pose; this one covers a frame in which
+    // no pin is called. `_nearProxy` without a pin is a stale flag: drop it. (Only a pinned piece pays for the
     // attitude here; every other piece keeps the cheap scale-0 early-out below.)
     let drawScale = scale;
     if ((_armPinned || _pinToArm || debris._motherParked) && DebrisField.carrierHidden(this, debris)) {
@@ -3543,14 +3073,13 @@ export class DebrisField {
       this._dropHeldProxy(debris.id);
     }
 
-    // Perf: skip compose + setMatrixAt when debris is still invisible (scale 0)
-    // from last frame — the instance buffer already holds a zero-scale matrix.
+    // Perf: skip compose + setMatrixAt when debris is still invisible (scale 0) from last frame (the instance
+    // buffer already holds a zero-scale matrix).
     const wasZero = debris._wasZeroScale;
     debris._wasZeroScale = (drawScale === 0);
     if (drawScale === 0 && wasZero) return;
 
-    // Build transform matrix
-    // UX-4: Instance positions relative to floating origin (eliminates float32 jitter)
+    // Instance positions relative to floating origin (eliminates float32 jitter)
     if (Constants.FLOATING_ORIGIN_ENABLED) {
       this._tempPos.set(
         px - this._floatingOrigin.x,
@@ -3561,10 +3090,9 @@ export class DebrisField {
       this._tempPos.set(px, py, pz);
     }
     this._tempQuat.setFromAxisAngle(debris.tumbleAxis, debris.tumbleAngle);
-    DebrisField.setDrawScale(this._tempScale, drawScale * revealScale, debris);   // slice 5 (5e): shortened while it is melted
+    DebrisField.setDrawScale(this._tempScale, drawScale * revealScale, debris);   // shortened while it is melted
     this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
 
-    // Apply to instanced mesh
     const mesh = this.instancedMeshes[debris._meshKey];
     if (mesh) {
       mesh.setMatrixAt(instanceIndex, this._tempMatrix);
@@ -3574,12 +3102,10 @@ export class DebrisField {
   /**
    * @private Update background points positions.
    *
-   * Cost control: only one quarter of the dots (rotating `_bgBatch`) is propagated
-   * exactly each frame, using the real game time elapsed since THAT batch was last
-   * propagated (`_bgDtAcc`, so a varying / zero / hitching dt stays exact). The other
-   * three quarters are carried forward every frame with their stored velocity and
-   * re-based for the floating-origin move, so on screen every dot glides each frame
-   * rather than freezing for 3 frames and jumping. Allocation-free.
+   * Cost control: only one quarter of the dots (rotating `_bgBatch`) is propagated exactly each frame, using the real
+   * game time elapsed since THAT batch was last propagated (`_bgDtAcc`, so a varying / zero / hitching dt stays
+   * exact). The other three quarters are carried forward every frame with their stored velocity and re-based for the
+   * floating-origin move, so every dot glides each frame rather than freezing for 3 frames and jumping. Allocation-free.
    */
   _updateBackground(gameDt, playerPos) {
     if (!this.backgroundPoints) return;
@@ -3596,8 +3122,8 @@ export class DebrisField {
     const floating = !!(Constants.FLOATING_ORIGIN_ENABLED && this._floatingOrigin);
     if (this._bgHiddenDt !== undefined) this._catchUpBackground(posAttr, vel, acc, floating);
 
-    // Floating-origin movement since the previous call (0 with the flag off, or on the
-    // first call — the first-frame re-basing in update() already made points relative).
+    // Floating-origin movement since the previous call (0 with the flag off, or on the first call: the first-frame
+    // re-basing in update() already made points relative).
     let ox = 0, oy = 0, oz = 0;
     let pox = 0, poy = 0, poz = 0;   // origin the stored local positions are currently relative to
     if (floating) {
@@ -3656,8 +3182,7 @@ export class DebrisField {
       }
     }
 
-    // Sprint 2 / PR A — mutate the pre-allocated `_tmpBgOrbit` scratch instead
-    // of `{...orbit, semiMajorAxis: …}` spread (one alloc per batched debris).
+    // Mutate the pre-allocated `_tmpBgOrbit` scratch instead of a `{...orbit, semiMajorAxis: …}` spread (one alloc per batched debris).
     const bg = this._tmpBgOrbit;
     const cp = this._tmpCartPos;
     const cv = this._tmpCartVel;
@@ -3682,7 +3207,7 @@ export class DebrisField {
         vel[i * 3 + 1] = cv.y * ss;
         vel[i * 3 + 2] = cv.z * ss;
       }
-      // UX-4: Background positions relative to floating origin
+      // Background positions relative to floating origin
       if (floating) {
         posAttr.setXYZ(i,
           cp.x - this._floatingOrigin.x,
@@ -3698,10 +3223,9 @@ export class DebrisField {
   }
 
   /**
-   * First visible update after the dots were hidden: propagate every dot exactly by the game time since it was last
-   * propagated (its batch's `_bgDtAcc` plus the banked hidden time), re-base to the current floating origin, and reset
-   * the glide state (`_bgVel`, `_bgPrevOrigin`). Leaves `_bgBatch` alone; the normal step then runs on this frame.
-   * @private
+   * First visible update after the dots were hidden: propagate every dot by the game time since it was last
+   * propagated (batch `_bgDtAcc` + banked hidden time), re-base to the floating origin, reset the glide state.
+   * Leaves `_bgBatch` alone.
    */
   _catchUpBackground(posAttr, vel, acc, floating) {
     const hidden = this._bgHiddenDt;
@@ -3745,23 +3269,13 @@ export class DebrisField {
     }
   }
 
-  // ==========================================================================
-  // WEB SHOT HIT — Apply drag multiplier from GSL web shot (Sprint D1)
-  // ==========================================================================
-
-  /**
-   * Handle WEB_SHOT_HIT event — set dragMultiplier on the targeted debris.
-   * @private
-   * @param {{ debrisId: number, dragMultiplier: number }} data
-   */
   _onWebShotHit({ debrisId, dragMultiplier }) {
     const debris = this.debrisMap.get(debrisId);
     if (!debris || !debris.alive) return;
 
-    // Apply drag multiplier (default is 1.0; web shot sets to 5.0)
     debris.dragMultiplier = dragMultiplier || Constants.WEB_SHOT_DRAG_MULT;
 
-    // Visual: tint webbed debris (applied once, not per-frame)
+    // tint once, not per frame
     const lookup = this._instanceLookup.get(debrisId);
     if (lookup) {
       const mesh = this.instancedMeshes[lookup.meshKey];
@@ -3778,15 +3292,9 @@ export class DebrisField {
     });
   }
 
-  // ==========================================================================
-  // EDT ATTRACT — Electrodynamic Tether debris attraction (Phase 6)
-  // ==========================================================================
-
   /**
-   * Handle EDT_ATTRACT event — nudge small debris toward the attract point.
-   * Applies gentle orbital perturbations (trueAnomaly + semiMajorAxis) so
-   * debris drifts toward the player without teleporting.
-   * @private
+   * EDT_ATTRACT: nudge small debris toward the attract point via small orbital perturbations
+   * (trueAnomaly + semiMajorAxis), so it drifts rather than teleports.
    * @param {object} data
    * @param {THREE.Vector3|{x:number,y:number,z:number}} data.position — attract centre (scene coords)
    * @param {number} data.radius — attract radius in km (Constants.EDT.ATTRACTION_RADIUS_KM)
@@ -3796,11 +3304,10 @@ export class DebrisField {
   _onEdtAttract({ position, radius, force, maxMass }) {
     if (!position) return;
 
-    // Convert radius from km → scene units
+    // km → scene units
     const radiusScene = (radius || Constants.EDT.ATTRACTION_RADIUS_KM) * Constants.SCENE_SCALE;
     const radiusSq = radiusScene * radiusScene;
 
-    // Force magnitude in scene-unit acceleration
     const baseForce = (force || Constants.EDT.ATTRACTION_FORCE) * Constants.SCENE_SCALE;
     const massLimit = maxMass || Constants.EDT.MAX_ATTRACT_MASS;
 
@@ -3810,7 +3317,6 @@ export class DebrisField {
       const dPos = debris._scenePosition;
       if (!dPos) continue;
 
-      // Vector from debris → attract point
       const dx = position.x - dPos.x;
       const dy = position.y - dPos.y;
       const dz = position.z - dPos.z;
@@ -3820,10 +3326,9 @@ export class DebrisField {
 
       const dist = Math.sqrt(distSq);
 
-      // Strength: inversely proportional to distance (linear fall-off to zero at boundary)
+      // linear fall-off to zero at the boundary
       const strength = baseForce * (1.0 - dist / radiusScene);
 
-      // Orbital velocity direction from current elements
       const cart = orbitToSceneCartesian(debris.orbit);
       const vx = cart.velocity.x;
       const vy = cart.velocity.y;
@@ -3831,13 +3336,11 @@ export class DebrisField {
       const vLen = Math.sqrt(vx * vx + vy * vy + vz * vz);
       if (vLen < 1e-10) continue;
 
-      // Tangential component: project attract direction onto velocity direction
+      // tangential: attract direction · velocity direction, nudges trueAnomaly
       const tangDot = (dx * vx + dy * vy + dz * vz) / (dist * vLen);
-
-      // Nudge trueAnomaly — advances/retards debris along its orbit toward attract point
       debris.orbit.trueAnomaly += strength * tangDot / debris.orbit.semiMajorAxis;
 
-      // Radial component: gently drift semiMajorAxis toward attract-point altitude
+      // radial: drift semiMajorAxis toward the attract-point altitude
       const debrisR = Math.sqrt(dPos.x * dPos.x + dPos.y * dPos.y + dPos.z * dPos.z);
       const attractR = Math.sqrt(
         position.x * position.x + position.y * position.y + position.z * position.z
@@ -3848,29 +3351,19 @@ export class DebrisField {
 
 
   /**
-   * Write a pinned piece's orbit as "the mother's orbit, phased forward by the
-   * pin's along-track offset" — the ONE co-orbital expression of the tease pin.
+   * Write a pinned piece's orbit as "the mother's orbit, phased forward by the pin's along-track offset" — the ONE
+   * co-orbital expression of the tease pin. Callers: update() every frame while `_onboardingPinned`, and
+   * _clearOnboardingPin once (seamless hand-back to free propagation).
+   * trueAnomaly = mother ν + fwd / a (`_onboardingPinFwd` is already scene units, so arc / radius is radians).
+   * Only the along-track offset is expressible in co-orbital elements; the lateral pin component (`latM: 18`) lives in
+   * `_scenePosition` only, so an orbit-derived position sits ≤ 18 m from the mesh.
    *
-   * Two callers, one computation: the propagation loop (update(), every frame
-   * while `_onboardingPinned`, so the orbit never goes stale — T4) and the
-   * release path (_clearOnboardingPin, once, so hand-back to free propagation
-   * is seamless). Copies a/e/i/RAAN/argP/meanMotion verbatim and sets
-   * trueAnomaly = mother ν + fwd / a: `_onboardingPinFwd` is already scene
-   * units (spec.fwdM × METRE_SCENE at spawn), so arc / radius is radians — the
-   * same math _updateInstanceTransform applies along the mother's prograde
-   * basis (chord vs arc differs by nanometres at 22–45 m on a ~6700 km radius).
-   * Only the along-track offset is expressible in co-orbital elements; the
-   * lateral pin component (#2, `latM: 18`) lives in `_scenePosition` only, so an
-   * orbit-derived position sits ≤ 18 m from the mesh, never hundreds of km.
-   *
-   * Static (like _advanceTumble) so the many test receivers that borrow
-   * `_clearOnboardingPin` off the prototype onto a plain-object mock keep
-   * working without also wiring this helper.
+   * Static so test receivers that borrow `_clearOnboardingPin` onto a plain-object mock work without wiring this too.
    *
    * @param {object} debris        canonical debris record (orbit mutated in place)
    * @param {object} playerOrbit   mother's elements (scene-unit semiMajorAxis)
-   * @returns {boolean} true when the orbit was written; false on a missing
-   *   orbit / player orbit / non-positive semi-major axis (orbit left untouched)
+   * @returns {boolean} true when the orbit was written; false on a missing orbit / player orbit / non-positive
+   *   semi-major axis (orbit left untouched)
    */
   static _syncPinnedOrbitToMother(debris, playerOrbit) {
     const o = debris && debris.orbit;
@@ -3887,52 +3380,26 @@ export class DebrisField {
   }
 
   /**
-   * Release onboarding tease pins, handing the curated piece(s) back to normal
-   * co-orbital propagation. Idempotent. The orbit is re-synced to the current
-   * player orbit + the pin's along-track offset before clearing, so release is
-   * seamless (no snap).
+   * Release onboarding tease pins, handing the curated piece(s) back to normal co-orbital propagation. Idempotent.
+   * The orbit is re-synced to the current player orbit + the pin's along-track offset before clearing (no snap).
    *
-   * History (why the release re-sync exists): before T4 the orbit was FROZEN
-   * at its spawn-era phase while `_onboardingPinned` (propagation skipped in
-   * the update loop), so releasing without a re-sync teleported the piece to
-   * the stale phase — measured ~1.07e6 m off the ship after a ~95 s pin
-   * (2026-08-02, mother-net scenario probe). A mother-net catch releases the
-   * pin at LASSO_CONTACT; the very next `_enterMotherReel` then seeded
-   * `_remainingM`/`_lateral` from the teleported `_scenePosition`,
-   * `pinCapturedDebris` re-pinned the catch to that garbage every reel frame,
-   * and the ceremony camera anchors (netPos/debrisPos) flung the camera across
-   * hundreds of km — the black captured/reel/secured frames.
-   *
-   * Since T4 the update loop performs this SAME re-sync every frame
-   * (_syncPinnedOrbitToMother), so by release time the orbit is already the
-   * mother's as of the last update(). The release call stays: it is the same
-   * idempotent helper, it covers a release fired before update() has ever seen
-   * a player orbit (headless/test receivers, save-restore paths), and it is
-   * the only site that must read the offset BEFORE the pin fields are zeroed.
-   * Only the along-track offset is expressible in co-orbital elements, so a
-   * lateral pin component (#2, `latM: 18`) is DROPPED rather than converted —
-   * for a catch that is invisible (the reel pin takes over the same frame), but
-   * an `ONBOARDING_COMPLETE` release of a still-live tease piece snaps it onto
-   * the boresight in one frame. That trade is deliberate: an 18 m lateral snap
-   * is the residue of fixing a ~1e6 m teleport, and faking a cross-track term
-   * by nudging inclination/RAAN would be guesswork.
+   * update() already runs the same re-sync every frame (_syncPinnedOrbitToMother); this call still matters because it
+   * covers a release before update() has seen a player orbit (headless/test receivers, save-restore), and it is the
+   * only site that must read the offset BEFORE the pin fields are zeroed.
+   * The lateral pin component (`latM: 18`) is DROPPED rather than converted: a catch release is invisible (the reel
+   * pin takes over the same frame), but an `ONBOARDING_COMPLETE` release of a live tease piece snaps it onto the
+   * boresight in one frame. Deliberate: faking a cross-track term via inclination/RAAN would be guesswork.
    * @param {number|string} [id] - release just this piece; omit to release all.
    * @private
    */
   _clearOnboardingPin(id = null) {
     const unpin = (pid) => {
       const d = this.debrisMap.get(pid);
-      // Idempotent: a second release must not re-run the orbit re-sync with
-      // _onboardingPinFwd already zeroed — that seeds trueAnomaly = the ship's
-      // exact phase and TELEPORTS the piece onto the ship (measured 2026-08-05:
-      // a double NET_CATCH_SUCCESS release put the whale at spRelShip = 0,
-      // collapsing the mother reel's seed distance to the standoff). This guard
-      // is what keeps the per-frame sync + the release sync from ever running
-      // against a zeroed offset.
+      // Idempotent: a second release with `_onboardingPinFwd` already zeroed would seed trueAnomaly = the ship's
+      // exact phase and TELEPORT the piece onto the ship.
       if (!d || !d._onboardingPinned) return;
-      // _lastPlayerOrbit: cached by update() so event-driven releases (no
-      // update() scope) still see the CURRENT phase. The helper no-ops on a
-      // missing/degenerate orbit and leaves the elements as they were.
+      // `_lastPlayerOrbit` is cached by update() so event-driven releases still see the CURRENT phase; the helper
+      // no-ops on a missing/degenerate orbit.
       DebrisField._syncPinnedOrbitToMother(d, this._lastPlayerOrbit);
       d._onboardingPinned = false; d._onboardingPinFwd = 0; d._onboardingPinLat = 0;
     };
@@ -3946,55 +3413,39 @@ export class DebrisField {
   }
 
   /**
-   * Seat ONE welcome piece on its cone-fan slot relative to the mother: the
-   * WELCOME_FIELD row's metres (mother-local frame) become orbital elements.
-   * Shared by the spawn (_spawnWelcomeField) and the re-seat safety net
-   * (_reseatDriftedWelcome, T6). It reads nothing from the piece's current
-   * orbit (only its own sticky fwd roll, below), so it is safe to call again
-   * on an already-placed piece with the CURRENT player orbit — that re-seats
-   * the piece onto its slot.
+   * Seat ONE welcome piece on its cone-fan slot relative to the mother: the WELCOME_FIELD row's metres (mother-local
+   * frame) become orbital elements. Shared by _spawnWelcomeField and the re-seat net (_reseatDriftedWelcome). Reads
+   * nothing from the piece's current orbit (only its sticky fwd roll), so it is safe to call again with the CURRENT
+   * player orbit to re-seat.
    *
-   * Frame (the same basis the pin uses in update()): fwd = along-track /
-   * prograde, right = fwd × radial, up = radial (away from Earth). Metres →
-   * radians of arc via METRE_SCENE / a (scene units), the pin-branch idiom.
-   * Sign conventions are pinned by the projection test in test-WelcomeField
-   * (right = +latM, up = +radM in the mother's frame at spawn), not assumed.
+   * Frame (same basis as the pin in update()): fwd = along-track / prograde, right = fwd × radial, up = radial (away
+   * from Earth). Metres → radians of arc via METRE_SCENE / a. Signs are pinned by the projection test in
+   * test-WelcomeField (right = +latM, up = +radM at spawn).
    *
-   * PINNED rows (spec.pin): the orbit is only the co-orbital FALLBACK — the
-   * authoritative position is the local-frame _scenePosition pin — so the
-   * mother's elements are copied and fwdM laid along-track, no frame comp.
+   * PINNED rows (spec.pin): the orbit is only the co-orbital FALLBACK (the authoritative position is the local-frame
+   * _scenePosition pin): mother's elements copied, fwdM laid along-track, no frame comp.
    *
-   * FREE rows keep the mother's SEMI-MAJOR AXIS (same period) and build all
-   * three offsets period-preserving, so the fan breathes but never drifts:
-   *   fwd   — Δν = fwd·METRE_SCENE/a, fwd rolled once inside [fwdMinM, fwdMaxM]
-   *           and remembered on the piece (_welcomeFwdM) so a re-seat snaps it
-   *           back to ITS slot rather than a new one (a stale roll outside the
-   *           row band re-rolls); minus frameCompRad (the spawn's one-frame
-   *           pre-compensation); minus ΔΩ·cos i — a node rotation moves the
-   *           piece along-track as well as cross-track, and without this term
-   *           the 5° (Brazil) start put #7 ≈ 1.9 km off its band.
-   *   right — plane tilt about the mother's current argument of latitude
-   *           u0 = ω + ν: Δi = L·sin u0, ΔΩ = −L·cos u0 / sin i, with
-   *           L = latM·METRE_SCENE/a, giving cross-track w(u) = L·cos(u − u0):
-   *           exact at spawn, reversing sign every half orbit, never growing.
-   *           |sin i| < 0.01 → ΔΩ = 0 (a guard only — starts run 5°–97.5°).
-   *   up    — eccentricity-VECTOR delta at the same a: with û = (cos u, sin u)
-   *           in the in-plane node frame and ê_m = e_m·(cos ω_m, sin ω_m),
-   *           ê_p = ê_m − (Δr/a)·û, so r_p − r_m = Δr·cos(u − u_p). Adding to
-   *           the mother's vector (not replacing it) keeps her own ±672 m
-   *           radial oscillation (e = 0.0001) common-mode; the offset sloshes
+   * FREE rows keep the mother's SEMI-MAJOR AXIS (same period) and build all three offsets period-preserving, so the
+   * fan breathes but never drifts:
+   *   fwd   — Δν = fwd·METRE_SCENE/a, fwd rolled once inside [fwdMinM, fwdMaxM] and remembered on the piece
+   *           (_welcomeFwdM) so a re-seat snaps it back to ITS slot (a stale roll outside the band re-rolls);
+   *           minus frameCompRad (the spawn's one-frame pre-compensation); minus ΔΩ·cos i — a node rotation moves
+   *           the piece along-track too (without this the 5° start put #7 ≈ 1.9 km off its band).
+   *   right — plane tilt about the mother's argument of latitude u0 = ω + ν: Δi = L·sin u0, ΔΩ = −L·cos u0 / sin i,
+   *           L = latM·METRE_SCENE/a, giving cross-track w(u) = L·cos(u − u0): exact at spawn, reversing sign every
+   *           half orbit, never growing. |sin i| < 0.01 → ΔΩ = 0 (guard only; starts run 5°–97.5°).
+   *   up    — eccentricity-VECTOR delta at the same a: with û = (cos u, sin u) in the in-plane node frame and
+   *           ê_m = e_m·(cos ω_m, sin ω_m), ê_p = ê_m − (Δr/a)·û, so r_p − r_m = Δr·cos(u − u_p). Adding to the
+   *           mother's vector keeps her own ±672 m radial oscillation (e = 0.0001) common-mode; the offset sloshes
    *           along-track by ≤ 2·Δr over the orbit (≤ 130 m for #7).
    *
    * @param {object} debris        the piece — its `orbit` is overwritten
    * @param {object} spec          the WELCOME_FIELD row
    * @param {object} playerOrbit   mother's elements (semiMajorAxis in scene units)
-   * @param {number} [frameCompRad=0] along-track pre-compensation (rad): n×gameDt
-   *                               for the frame in which the propagation loop will
-   *                               step the piece once more — passed by BOTH the
-   *                               spawn (_spawnWelcomeField) and the re-seat
-   *                               (_reseatDriftedWelcome), so the two land alike
-   * @returns {{ fwdM: number, latM: number, radM: number }} the realised
-   *          local-frame offsets in metres (fwdM is the roll actually used)
+   * @param {number} [frameCompRad=0] along-track pre-compensation (rad): n×gameDt for the frame in which the
+   *                               propagation loop steps the piece once more; spawn and re-seat both pass it
+   * @returns {{ fwdM: number, latM: number, radM: number }} the realised local-frame offsets in metres
+   *          (fwdM is the roll actually used)
    * @private
    */
   _placeWelcomePiece(debris, spec, playerOrbit, frameCompRad = 0) {
@@ -4002,9 +3453,7 @@ export class DebrisField {
     const aScene = playerOrbit.semiMajorAxis || 1;
     const radPerM = METRE_SCENE / aScene; // radians of arc per metre at radius a
 
-    // Co-orbital baseline: same semi-major axis (same period — never touched
-    // below), and the mother's plane and shape unless a free row tilts /
-    // reshapes them.
+    // Co-orbital baseline: same semi-major axis (same period; never touched below), mother's plane and shape.
     o.semiMajorAxis = playerOrbit.semiMajorAxis;
     o.eccentricity = playerOrbit.eccentricity;
     o.inclination = playerOrbit.inclination;
@@ -4018,7 +3467,7 @@ export class DebrisField {
       return { fwdM, latM: spec.latM || 0, radM: 0 };
     }
 
-    // fwd: one roll inside the row band, sticky per piece (see the header).
+    // fwd: one roll inside the row band, sticky per piece.
     const fMin = Number.isFinite(spec.fwdMinM) ? spec.fwdMinM : 0;
     const fMax = Number.isFinite(spec.fwdMaxM) ? spec.fwdMaxM : fMin;
     let fwdM = debris._welcomeFwdM;
@@ -4039,12 +3488,11 @@ export class DebrisField {
     o.inclination = incM + dInc;
     o.raan = playerOrbit.raan + dRaan;
 
-    // Along-track: the fwd arc, the spawn's one-frame pre-compensation, and
-    // the node rotation's along-track side effect (ΔΩ·cos i) taken back out.
+    // Along-track: fwd arc, the spawn's one-frame pre-compensation, and the node rotation's along-track side effect
+    // (ΔΩ·cos i) taken back out.
     const uP = u0 + fwdM * radPerM - frameCompRad - dRaan * Math.cos(incM);
 
-    // up: eccentricity-vector delta at the same a (ν is measured from the
-    // piece's OWN perigee, so ν_p = u_p − ω_p).
+    // up: eccentricity-vector delta at the same a (ν is measured from the piece's OWN perigee: ν_p = u_p − ω_p).
     const eM = playerOrbit.eccentricity || 0;
     const wM = playerOrbit.argPerigee;
     if (radM === 0) {
@@ -4054,9 +3502,8 @@ export class DebrisField {
       const ex = eM * Math.cos(wM) - dr * Math.cos(uP);
       const ey = eM * Math.sin(wM) - dr * Math.sin(uP);
       const eP = Math.hypot(ex, ey);
-      // ω_p stays on the mother's branch of the circle (ω_m + the signed,
-      // wrapped delta) so a vanishing delta returns exactly ω_m; a circular
-      // result keeps ω_m as its (arbitrary) reference direction.
+      // ω_p stays on the mother's branch (ω_m + signed, wrapped delta) so a vanishing delta returns exactly ω_m; a
+      // circular result keeps ω_m as its reference direction.
       let wP = wM;
       if (eP > 1e-12) {
         const dW = Math.atan2(ey, ex) - wM;
@@ -4069,21 +3516,10 @@ export class DebrisField {
     return { fwdM, latM, radM };
   }
 
-  // ==========================================================================
-  // FIELDS BY HEIGHT (Nets step 3 slice 2b, FEATURE_FLAGS.FIELDS_BY_HEIGHT; js/systems/FieldRegistry.js)
-  // ==========================================================================
-
-  /**
-   * Give the field its registry: the mission-start spawn (and the spawn after a load) asks it which field she is at and which
-   * of that field's pieces are left. Null = today's welcome field. @param {object|null} source
-   */
+  /** Give the field its registry: the mission-start spawn asks it which field she is at and which pieces are left. Null = welcome field. */
   setFieldSource(source) { this._fieldSource = source || null; }
 
-  /**
-   * A seeded roll in [0, 1) for a field's row: the same field always lays its free rows out the same way. (mulberry32 on a
-   * mix of the seed and the row.)
-   * @param {number} seed @param {number} row @returns {number}
-   */
+  /** Seeded roll in [0, 1) for a field's row (mulberry32 on a mix of seed and row): the same field lays free rows out the same way. */
   static fieldRoll(seed, row) {
     let t = (Math.imul((seed | 0) ^ 0x9e3779b9, 0x85ebca6b) + Math.imul((row | 0) + 1, 0xc2b2ae35)) >>> 0;
     t = (t + 0x6d2b79f5) >>> 0;
@@ -4093,11 +3529,10 @@ export class DebrisField {
   }
 
   /**
-   * Lane 4a H1/H2 (Nets step 3 slice 4): the resolved spec of one row of a HIGH field - a `Constants.HIGH_FIELD` row with this
-   * field's rolls applied, in the shape of a WELCOME_FIELD row so the spawn path and the re-seat read it alike. ONE roll
-   * (`fieldRoll(seed, row + 100)`, independent of the along-track roll `fieldRoll(seed, row)`) picks mass and size inside the row's
-   * ranges, so a heavier piece is a bigger one and the four high fields differ; the same seed always gives the same piece.
-   * `high: true` is what keeps the 10 kg ceiling of the mission-1 cluster off it.
+   * Resolved spec of one row of a HIGH field: a `Constants.HIGH_FIELD` row with this field's rolls applied, in the shape of a
+   * WELCOME_FIELD row. ONE roll (`fieldRoll(seed, row + 100)`, independent of the along-track roll `fieldRoll(seed, row)`)
+   * picks mass and size inside the row's ranges, so a heavier piece is a bigger one. `high: true` keeps the 10 kg ceiling of
+   * the mission-1 cluster off it.
    * @param {number} seed the field's seed @param {number} row the row index
    * @returns {object|null} null for a row the table does not have
    */
@@ -4110,16 +3545,15 @@ export class DebrisField {
     return {
       high: true, name: r.name, types: r.types, material: r.material, sizeM, massMin: massKg, massMax: massKg,
       tumbleDegS: r.tumbleDegS, fwdMinM: r.fwdMinM, fwdMaxM: r.fwdMaxM, latM: r.latM || 0, radM: r.radM || 0,
-      // slice 5 (5a, V2/V3): who owns the piece and its tumbling area (a copy, so no piece shares the table's object); only a HIGH_FIELD row has them
+      // who owns the piece and its tumbling area (a copy, so no piece shares the table's object); only a HIGH_FIELD row has them
       owner: r.owner ? { ...r.owner } : null, areaM2: r.areaM2,
     };
   }
 
   /**
-   * u20-debris v2: one of a field's own seeded streams for the small-piece group and the mission satellite: `seed` (the field's),
-   * `variant` (0 = a low field's own group, 1 = the group a mission adds, 2 = the satellite) and `k` (which piece, or which use)
-   * mixed into a mulberry32 seed. A FRESH generator every call, so a piece resolves to the same spec however often, and in
-   * whatever order, the field is laid out; none of it touches the global Math.random.
+   * One of a field's own seeded streams for the small-piece group and mission satellite: `seed` (the field's), `variant`
+   * (0 = a low field's own group, 1 = the group a mission adds, 2 = the satellite), `k` (which piece/use) mixed into a
+   * mulberry32 seed. A FRESH generator every call, so a piece resolves to the same spec in any order; never touches Math.random.
    * @param {number} seed @param {number} variant @param {number} k @returns {() => number}
    */
   static _groupStream(seed, variant, k) {
@@ -4127,7 +3561,7 @@ export class DebrisField {
     return mulberry32((Math.imul(x, 0x9E3779B1) + Math.imul((variant | 0) + 1, 0x85EBCA6B) + Math.imul((k | 0) + 1, 0xC2B2AE35)) >>> 0);
   }
 
-  /** @private The group's centre: along-track and cross-track metres ahead of her (one roll per field and variant). */
+  /** The group's centre: along-track and cross-track metres ahead of her (one roll per field and variant). */
   static _groupCentre(seed, variant) {
     const G = Constants.SMALL_GROUP;
     const r = DebrisField._groupStream(seed, variant, 9999);
@@ -4138,14 +3572,12 @@ export class DebrisField {
   }
 
   /**
-   * u20-debris v2 (DECISIONS §38 rows 3 and 4): the resolved spec of piece `i` of a field's small-piece group, in the shape of a
-   * WELCOME_FIELD row so the field spawn path and the re-seat read it alike. `variant` 0 is a low field's own group, 1 the group
-   * a mission adds. The piece sits in a flat disc (SMALL_GROUP.SPREAD_R_M) around the group's centre: along-track and cross-track
-   * offsets, radM 0, so every pair is at most 2 x SPREAD_R_M apart at spawn and stays so (the pieces share her semi-major axis
-   * and the welcome field's drag rule; an along-track or cross-track offset is a bounded oscillation, a radial one would slosh
-   * along-track by twice its size). Size is uniform in SIZE_MIN_M..SIZE_MAX_M, mass the real breakup-model chain, the tumble a
-   * slow one (a net takes it), all from the piece's own stream. `rng` is that piece's own stream for the SPAWN (mass roll,
-   * salvage): `_spawnWelcomeField` runs the piece on it instead of the global Math.random.
+   * DECISIONS §38 rows 3 and 4: the resolved spec of piece `i` of a field's small-piece group, in the shape of a WELCOME_FIELD
+   * row. `variant` 0 is a low field's own group, 1 the group a mission adds. The piece sits in a flat disc
+   * (SMALL_GROUP.SPREAD_R_M) around the group's centre: along-track and cross-track offsets, radM 0, so every pair stays
+   * within 2 x SPREAD_R_M (a radial offset would slosh along-track by twice its size). Size uniform in SIZE_MIN_M..SIZE_MAX_M,
+   * mass the real breakup-model chain, a slow tumble, all from the piece's own stream. `rng` is that stream for the SPAWN
+   * (mass roll, salvage): `_spawnWelcomeField` uses it instead of Math.random.
    * @param {number} seed the field's seed @param {number} variant 0 or 1 @param {number} i the piece, 0-based
    * @returns {object|null} null past the group's count (`Constants.smallGroupCount`)
    */
@@ -4170,10 +3602,9 @@ export class DebrisField {
   }
 
   /**
-   * u20-debris v2 (DECISIONS §38 row 4): the resolved spec of a field's mission satellite: a dead satellite (the cast's type, from
-   * the mission pool of parked bodies) of 1.0-4.5 m and 50-500 kg, ONE roll for both so a heavier one is a bigger one, FWD_AFTER_GROUP_*
-   * beyond the group's centre and LAT_BESIDE_M to the other side of her track (about 70 m from the group). `variant` says which
-   * group it sits by (0 = a low field's own group, 1 = the one a mission adds).
+   * DECISIONS §38 row 4: the resolved spec of a field's mission satellite: a dead satellite (the mission pool's type) of
+   * 1.0-4.5 m and 50-500 kg, ONE roll for both so a heavier one is a bigger one, FWD_AFTER_GROUP_* beyond the group's centre
+   * and LAT_BESIDE_M to the other side of her track (about 70 m from the group). `variant`: which group it sits by.
    * @param {number} seed the field's seed @param {number} variant 0 or 1 @returns {object}
    */
   static missionSatSpec(seed, variant) {
@@ -4193,30 +3624,30 @@ export class DebrisField {
     };
   }
 
-  /** @private One of a pair's own seeded streams (PAIR_FIELDS.SEED_XOR): `p` the pair, `m` 0/1 the member, 9 the pair's shared rolls. A fresh generator every call. */
+  /** One of a pair's own seeded streams (PAIR_FIELDS.SEED_XOR): `p` the pair, `m` 0/1 the member, 9 the pair's shared
+   *  rolls. Fresh generator each call. */
   static _pairStream(seed, p, m) {
     const x = (Constants.PAIR_FIELDS.SEED_XOR | 0) ^ (seed | 0);
     return mulberry32((Math.imul(x, 0x9E3779B1) + Math.imul((p | 0) + 1, 0x85EBCA6B) + Math.imul((m | 0) + 1, 0xC2B2AE35)) >>> 0);
   }
 
-  /** @returns {number} how many rows the pairs of a field take (PAIR_FIELDS.PAIRS x 2): rows ROW0 .. ROW0 + this - 1 */
+  /** Rows the pairs of a field take (PAIR_FIELDS.PAIRS x 2): rows ROW0 .. ROW0 + this - 1. @returns {number} */
   static pairRowCount() { return Constants.PAIR_FIELDS.PAIRS * 2; }
 
-  /** @param {number} row @returns {boolean} the row is one of a field's paired pieces (PAIR_FIELDS) */
+  /** @param {number} row @returns {boolean} the row is one of a field's paired pieces */
   static isPairRow(row) {
     const P = Constants.PAIR_FIELDS;
     return Number.isInteger(row) && row >= P.ROW0 && row < P.ROW0 + DebrisField.pairRowCount();
   }
 
   /**
-   * Owner 2026-10-25 (DECISIONS §38 row 7, `Constants.PAIR_FIELDS`): the resolved spec of paired piece `k` of a field (k = row - ROW0,
-   * pair `k >> 1`, member `k & 1`), in the shape of a WELCOME_FIELD row. Pair p is built for the opposite struts of `KINDS[p]` at ONE
-   * strut angle alpha (the pair's roll): the piece sits on its strut's launch line from the strut's tip, `range` m out, in the frame
-   * of her arrival (ship x = left = -latM, y = up = radM, z = ahead = fwdM), so from there both lines hit with no turn. Own seeded
-   * stream; size from the kind's band, mass the group's chain (<= 5 kg), a slow tumble. Null for a k outside the pairs.
-   * PF1.1 (review 10-25): `attitude` is her attitude relative to the prograde frame (prograde^-1 * quaternion, `attitudeOf`): the
-   * launch point in HER frame is turned into the prograde frame before it becomes fwd / lat / rad, so the pair fits with no turn
-   * however she arrives (nose backwards after a downhill trip, rolled, yawed). Null = nose forward, upright (the rig's arrival).
+   * DECISIONS §38 row 7 (`Constants.PAIR_FIELDS`): the resolved spec of paired piece `k` of a field (k = row - ROW0, pair
+   * `k >> 1`, member `k & 1`), in the shape of a WELCOME_FIELD row. Pair p is built for the opposite struts of `KINDS[p]` at
+   * ONE strut angle alpha (the pair's roll): the piece sits on its strut's launch line from the strut's tip, `range` m out, in
+   * the frame of her arrival (ship x = left = -latM, y = up = radM, z = ahead = fwdM), so both lines hit with no turn. Own
+   * seeded stream; size from the kind's band, mass the group's chain (<= 5 kg), a slow tumble. Null for a k outside the pairs.
+   * `attitude` is her attitude relative to the prograde frame (`attitudeOf`): the launch point in HER frame is turned into the
+   * prograde frame before it becomes fwd / lat / rad, so the pair fits however she arrives. Null = nose forward, upright.
    * @param {number} seed the field's seed @param {number} k the piece, 0-based
    * @param {{x: number, y: number, z: number, w: number}|null} [attitude] @returns {object|null}
    */
@@ -4249,9 +3680,9 @@ export class DebrisField {
   }
 
   /**
-   * PF1.1: her attitude relative to the prograde frame (prograde^-1 * quaternion; the `_manualRotation` PlayerSatellite recomposes
-   * every frame, but read from the live quaternion: it is stale while the autopilot or an aim holds the nose). Null for no ship, or a
-   * mock without a quaternion (the pairs are then laid out nose forward, upright).
+   * Her attitude relative to the prograde frame (prograde^-1 * quaternion). Read from the live quaternion, not `_manualRotation`
+   * (stale while the autopilot or an aim holds the nose). Null for no ship, or a mock without a quaternion (pairs then lay out
+   * nose forward, upright).
    * @param {object|null} player the PlayerSatellite @returns {THREE.Quaternion|null}
    */
   static attitudeOf(player) {
@@ -4261,7 +3692,7 @@ export class DebrisField {
     return player._manualRotation ? player._manualRotation.clone() : null;
   }
 
-  /** @private The ship the attitude is read from: the drag source and the near-field player are main.js's wiring of her, the field registry's player is the rigs'. */
+  /** The ship the attitude is read from: drag source and near-field player are main.js's wiring of her, the registry's player is the rigs'. */
   _attitudeSource() {
     const has = (p) => p && p.quaternion;
     if (has(this._motherDragSource)) return this._motherDragSource;
@@ -4271,9 +3702,10 @@ export class DebrisField {
   }
 
   /**
-   * The point `rangeM` m out along the launch line of strut `strut` at strut angle `alphaDeg`, from the strut's tip, in the ship frame
-   * (x left, y up, z ahead; metres). Tip = ((hingeR + L sin a) cos az, (hingeR + L sin a) sin az, hingeZ - L cos a), direction =
-   * (sin a cos az, sin a sin az, -cos a): the same two lines as `strutTipMeters` and `strutLocalDirection` (test-PairFields pins it).
+   * The point `rangeM` m out along the launch line of strut `strut` at strut angle `alphaDeg`, from the strut's tip, in the ship
+   * frame (x left, y up, z ahead; metres). Tip = ((hingeR + L sin a) cos az, (hingeR + L sin a) sin az, hingeZ - L cos a),
+   * direction = (sin a cos az, sin a sin az, -cos a): the same lines as `strutTipMeters` and `strutLocalDirection`
+   * (test-PairFields pins it).
    * @param {number} strut 0-3 @param {number} alphaDeg @param {number} rangeM @returns {{x: number, y: number, z: number}}
    */
   static pairLaunchPoint(strut, alphaDeg, rangeM) {
@@ -4290,14 +3722,14 @@ export class DebrisField {
   }
 
   /**
-   * u20-debris v2: the spec of row `row` of a field laid out as `layout`: 'welcome' (WELCOME_FIELD, the start field), 'high'
-   * (HIGH_FIELD, rolled with the field's seed) or 'group' (a low field's own small-piece group); a row of EXTRA_ROW0 or more
-   * is a mission extra on any layout: EXTRA_ROW0 + i the i-th piece of the extra group, SAT_ROW the extra satellite. Null for
-   * a row the field does not have.
-   * F5 (fix round 1): on a 'group' layout the satellite sits by the group that is THERE NOW. `rows` (the field's rows in play, optional)
-   * says which: the field's own group while any of its rows is left, else the extra group a mission added (rows 200+). Without `rows`
-   * (or with no group row at all) it is the own group's spot, as before.
-   * `attitude` (PF1.1) is her attitude relative to the prograde frame at the spawn, read by the pair rows only (`pairSpec`).
+   * The spec of row `row` of a field laid out as `layout`: 'welcome' (WELCOME_FIELD, the start field), 'high' (HIGH_FIELD,
+   * rolled with the field's seed) or 'group' (a low field's own small-piece group); a row of EXTRA_ROW0 or more is a mission
+   * extra on any layout: EXTRA_ROW0 + i the i-th piece of the extra group, SAT_ROW the extra satellite. Null for a row the
+   * field does not have.
+   * On a 'group' layout the satellite sits by the group that is THERE NOW. `rows` (the field's rows in play, optional) says
+   * which: the field's own group while any of its rows is left, else the extra group a mission added (rows 200+). Without
+   * `rows` it is the own group's spot.
+   * `attitude` is her attitude relative to the prograde frame at the spawn, read by the pair rows only (`pairSpec`).
    * @param {string} layout @param {number} seed @param {number} row @param {number[]} [rows] @param {object|null} [attitude] @returns {object|null}
    */
   static fieldRowSpec(layout, seed, row, rows = null, attitude = null) {
@@ -4316,9 +3748,9 @@ export class DebrisField {
   }
 
   /**
-   * Nets step 3 slice 5 (lane 5d, D5): draw a drag sail on a piece that was just let go (`GameFlowManager._letGoBig`). The sail is its own
-   * set of three.js groups (`DragSailMesh`), kept in this field's group so it shares the floating origin, and follows the piece through
-   * `update` (the draw hook, one line below). The piece carries `_sail`; a removed or dead piece takes it away.
+   * Draw a drag sail on a piece that was just let go (`GameFlowManager._letGoBig`). The sail is its own set of three.js groups
+   * (`DragSailMesh`) in this field's group, so it shares the floating origin, and follows the piece through `update`. The piece
+   * carries `_sail`; a removed or dead piece takes it away.
    * @param {object} d the piece (any reference: the field's own body is looked up by id) @returns {boolean} a sail was added
    */
   attachSail(d) {
@@ -4330,10 +3762,10 @@ export class DebrisField {
   }
 
   /**
-   * Nets step 3 slice 5 (lane 5d, D4): remove every piece that was disposed of and still floats (`_disposed`: a let-go big piece, with or
-   * without a drag sail, or one that broke loose from its rack). Called at her departure (`storeFieldPieces`: a trip, or a Stay that lays the
-   * field out again). A new game and a continue after a game over reach it the same way (their re-layout stores the field), so no let-go piece
-   * floats on into the next game (PD4c pins it). @returns {number} how many left
+   * Remove every disposed piece that still floats (`_disposed`: a let-go big piece, with or without a drag sail, or one that
+   * broke loose from its rack). Called at her departure (`storeFieldPieces`); a new game or continue after game over reaches it
+   * the same way (their re-layout stores the field), so no let-go piece floats into the next game (PD4c pins it).
+   * @returns {number} how many left
    */
   _removeDisposedPieces() {
     let n = 0;
@@ -4344,23 +3776,19 @@ export class DebrisField {
   }
 
   /**
-   * She is leaving a field (or laying it out again on a Stay): every piece of a field that is still free is taken out of play
-   * - not alive, not tracked, its instance scaled to nothing - and kept by (field, row) so the next visit puts the SAME piece
-   * back. They are stored, not simulated. A piece somebody holds (a catch on her nose, a rack, a tip, a net, a daughter's hand)
-   * is not free: it rides with her and is credited later, still tagged with its field. No event is emitted: nothing was
-   * caught, so the registry keeps the row.
+   * She is leaving a field (or laying it out again on a Stay): every still-free piece is taken out of play (not alive, not
+   * tracked, instance scaled to nothing) and kept by (field, row) so the next visit puts the SAME piece back. Stored, not
+   * simulated. A held piece (a catch on her nose, a rack, a tip, a net, a daughter's hand) is not free: it rides with her and is
+   * credited later, still tagged with its field. No event is emitted: nothing was caught, so the registry keeps the row.
    * @returns {number} how many pieces were stored
    */
   storeFieldPieces() {
     let stored = 0;
-    // Nets step 3 slice 5 (5d, D4): a piece that was disposed of (let go by a push-down or a drag sail, or broke loose) stayed in the sky
-    // as a collision object; her departure (a trip, or a Stay that lays the field out again) is where it leaves. Before the bag split
-    // below, so a free bag that was disposed of is removed whole, never split back into members.
+    // Disposed pieces leave at departure. Before the bag split below, so a disposed free bag is removed whole.
     this._removeDisposedPieces();
-    // u20-nets fix round 1: a bag nobody holds any more (let go with K, a strain slip, a snapped tether) has no field tag of its
-    // own - its members' rows are still open (they leave at a credit), so a return visit would lay those rows out again while
-    // the free bag still floated and paid the same members a second time. Split it back first: its members come out tagged and
-    // alive and fall into the loop below like any other free piece; the bag is gone.
+    // A bag nobody holds any more (let go, strain slip, snapped tether) has no field tag of its own; its members' rows are
+    // still open, so a return visit would lay them out again while the bag floated and paid them twice. Split it back first:
+    // members come out tagged and alive and fall into the loop below; the bag is gone.
     for (const d of this.debrisList.slice()) {
       if (d.isBag !== true || !d.alive) continue;
       if (d._captured || d._armPinned || d._capturedByArm || d._motherParked || d._netted || d._committedNetArmId != null) continue;
@@ -4390,9 +3818,9 @@ export class DebrisField {
   }
 
   /**
-   * @private Undo `mergeIntoBag` for a bag nobody holds: every member not yet credited is alive again, in its field row
-   * (the tag parked at the merge is restored), at its old offset round the bag's centre on the bag's orbit; the bag leaves
-   * play (its own mesh freed by `removeDebris`) and keeps no members, so nothing can pay them through it.
+   * Undo `mergeIntoBag` for a bag nobody holds: every member not yet credited is alive again in its field row (the tag parked
+   * at the merge is restored) at its old offset round the bag's centre on the bag's orbit; the bag leaves play (mesh freed by
+   * `removeDebris`) and keeps no members, so nothing can pay them through it.
    * @param {object} bag @returns {number} how many members were restored
    */
   _splitFreeBag(bag) {
@@ -4419,7 +3847,7 @@ export class DebrisField {
     return members.length;
   }
 
-  /** @private The piece stored for (field, row), taken out of the store; null when there is none (or it is back in play). */
+  /** The piece stored for (field, row), taken out of the store; null when there is none (or it is back in play). */
   _takeStoredFieldPiece(fieldId, row) {
     const key = `${fieldId}|${row}`;
     const d = this._fieldStored.get(key);
@@ -4428,13 +3856,11 @@ export class DebrisField {
     return d.alive ? null : d;
   }
 
-  /**
-   * @private A new run: the stored pieces go back to the pool (alive, as the ordinary debris they were) and no piece keeps a
-   * field tag - the next game's registry starts fresh, and a stale tag would take a row out of a field it never belonged to.
-   */
+  /** A new run: stored pieces go back to the pool (alive, ordinary debris) and no piece keeps a field tag (a stale tag
+   *  would take a row out of a field it never belonged to). */
   _reviveStoredFieldPieces() {
     for (const d of this._fieldStored.values()) {
-      if (d._heavySpare) continue;              // lane 4a: a heavy spare is never ordinary debris - it is parked again below
+      if (d._heavySpare) continue;              // a heavy spare is never ordinary debris: parked again below
       d.alive = true;
       d.tracked = this._trackedFor(d);
       d._fieldStored = false;
@@ -4447,36 +3873,27 @@ export class DebrisField {
   }
 
   /**
-   * Spawn welcome field debris near the player for immediate first-game engagement.
-   * Repositions far-away debris to nearby co-orbital positions.
-   * ST-4.C: Now respects current mission profile for cluster count, hydrazine,
-   * and untracked debris.
+   * Spawn welcome field debris near the player: repositions far-away debris to nearby co-orbital positions.
    * @param {object} playerOrbit - Player orbital elements
    * @private
    */
   _spawnWelcomeField(playerOrbit) {
-    // ST-4.C: Determine mission profile
     const profile = this._currentMissionProfile || Constants.MISSIONS.PROFILES[0];
 
-    // Bugfix: WELCOME_FIELD is the player's *local* learning cluster — a fixed
-    // set of 7 hand-crafted specs that teach scanning/targeting/approach/capture.
-    // It always spawns in full. `profile.clusters` controls how many *broader*
-    // orbital cluster regions populate globally (handled elsewhere), NOT the
-    // local welcome group. Slicing this by profile.clusters was a regression
-    // introduced in ST-4.C that reduced M1 to a single debris item.
-    // Nets step 3 slice 2b (FEATURE_FLAGS.FIELDS_BY_HEIGHT): with the flag on the registry names the field she is at and
-    // the rows of it nobody has caught; THOSE rows are laid out (same rows, same placement, same tags), the pieces of the
-    // field she left are stored, and a row's piece comes back from the store when she has been here before. Flag off (or no
-    // registry, or a test mock that never had one): `fieldPlan` is null and this is today's seven.
+    // WELCOME_FIELD is the player's *local* learning cluster: a fixed set of 7 hand-crafted specs, always spawned in full.
+    // `profile.clusters` only controls the broader orbital cluster regions (handled elsewhere), NOT this group.
+    // FIELDS_BY_HEIGHT: with the flag on, the registry names the field she is at and its uncaught rows; THOSE rows are laid
+    // out (same placement, same tags), the field she left is stored, and a row's piece comes back from the store on a
+    // revisit. Flag off (or no registry / test mock): `fieldPlan` is null and this is the plain seven.
     const fieldPlan = this._fieldSource && typeof this._fieldSource.spawnPlan === 'function' ? this._fieldSource.spawnPlan() : null;
-    // Lane 4a (slice 4): a HIGH field (`fieldPlan.kind === 'high'`) indexes the HIGH_FIELD rows instead, resolved with the field's
-    // seed (`highFieldSpec`); its pieces are parked heavy spares claimed below. Everything else about the path is the same.
+    // A HIGH field (`fieldPlan.kind === 'high'`) indexes the HIGH_FIELD rows, resolved with the field's seed
+    // (`highFieldSpec`); its pieces are parked heavy spares claimed below.
     const isHigh = !!fieldPlan && fieldPlan.kind === 'high';
-    // u20-debris v2: which table the rows index: 'welcome' (WELCOME_FIELD), 'high' (HIGH_FIELD) or 'group' (a low non-start field's own
-    // small-piece group); a plan with no `layout` (a test's stub) is read from its kind. A row from SMALL_GROUP.EXTRA_ROW0 up is a
-    // mission extra (the group or the satellite a mission from 4 on adds), resolved by `DebrisField.fieldRowSpec` on any layout.
+    // Which table the rows index: 'welcome', 'high' or 'group' (a low non-start field's own small-piece group); a plan with
+    // no `layout` (a test stub) is read from its kind. Rows from SMALL_GROUP.EXTRA_ROW0 up are mission extras, resolved by
+    // `DebrisField.fieldRowSpec` on any layout.
     const layout = fieldPlan ? (fieldPlan.layout || (isHigh ? 'high' : 'welcome')) : 'welcome';
-    const attitude = DebrisField.attitudeOf((this._attitudeSource || DebrisField.prototype._attitudeSource).call(this));   // PF1.1: the pairs fit her attitude now
+    const attitude = DebrisField.attitudeOf((this._attitudeSource || DebrisField.prototype._attitudeSource).call(this));   // the pairs fit her attitude
     const specOfRow = (r) => DebrisField.fieldRowSpec(layout, fieldPlan.seed, r, fieldPlan.rows, attitude);
     let fieldRows = null;                       // the WELCOME_FIELD (or HIGH_FIELD) row index of each piece to lay out (null = all, in order)
     if (fieldPlan) {
@@ -4484,11 +3901,11 @@ export class DebrisField {
       fieldRows = fieldPlan.rows.filter((r) => Number.isInteger(r) && specOfRow(r));
       if (Number.isInteger(fieldPlan.missionNumber) && fieldPlan.missionNumber > 0) this._currentMissionNumber = fieldPlan.missionNumber;
     }
-    // u20-debris: the shards run on the size law of the mission being laid out (mission 1: today's; mission 2 on: 2-50 cm).
-    // Tolerant of mock receivers (tests bind only _spawnWelcomeField onto a plain object): their pieces carry no shard law.
+    // Shards run on the size law of the mission being laid out (mission 1: today's; mission 2 on: 2-50 cm).
+    // Tolerant of mock receivers (tests bind only _spawnWelcomeField onto a plain object).
     (this._applyShardLaw || DebrisField.prototype._applyShardLaw).call(this, this._currentMissionNumber || 1);
-    // Map off (no registry): from mission SMALL_GROUP.FROM_MISSION on the seven welcome rows are followed by the mission extras: a group
-    // unless an uncaught one is still out, a satellite likewise (the map-on path keeps the same rule in FieldRegistry's rows).
+    // Map off (no registry): from mission SMALL_GROUP.FROM_MISSION on, the seven welcome rows are followed by the mission
+    // extras: a group unless an uncaught one is still out, a satellite likewise (map-on keeps the same rule in FieldRegistry).
     let offRows = null;
     const missionNo = this._currentMissionNumber || 1;
     if (!fieldPlan && missionNo >= Math.min(Constants.SMALL_GROUP.FROM_MISSION, Constants.PAIR_FIELDS.FROM_MISSION)) {
@@ -4513,32 +3930,20 @@ export class DebrisField {
       : offRows ? offRows.map((r) => DebrisField.fieldRowSpec('welcome', this._fieldSeed, r, null, attitude)) : WELCOME_FIELD;
     const rowOf = (i) => (fieldRows ? fieldRows[i] : offRows ? offRows[i] : i);   // the row spec i of `fieldToSpawn` came from
 
-    // Collect candidates: alive debris not already special-tagged. Prefer debris
-    // in different orbit bands (farThreshold ≈ 3km altitude diff) so we don't
-    // disrupt coincidentally-nearby objects. The welcome spawn reuses a debris'
-    // existing instanced-mesh slot (it does NOT rebind geometry), so the RENDERED
-    // shape AND material/colour come from WHICH candidate is selected
-    // (_meshKey = type:material[:id%N]). That's why selection drives appearance:
-    //   - APPEARANCE BY SELECTION: a row wanting gold MLI foil (#2) or a blue
-    //     solar-cell panel shard (#3/#5) must match a candidate already in that
-    //     material slot + flat plate variant (spec.appearMaterial/appearPlate).
-    //   - SHAPE BY SELECTION: row #7 (cubesat) must match a `cubesat`-type
-    //     candidate so it renders as a small whole microsat, not a junk chunk.
-    // See the bucketing + scoring just below.
+    // Candidates: alive debris not already special-tagged, preferring other orbit bands (farThreshold ≈ 3 km altitude diff)
+    // so coincidentally-nearby objects aren't disrupted. The spawn reuses a debris' existing instanced-mesh slot (it does
+    // NOT rebind geometry), so the RENDERED shape AND material/colour come from WHICH candidate is selected
+    // (_meshKey = type:material[:id%N]):
+    //   - a row wanting gold MLI foil (#2) or a blue solar-cell panel shard (#3/#5) must match a candidate already in that
+    //     material slot + flat plate variant (spec.appearMaterial/appearPlate);
+    //   - row #7 (cubesat) must match a `cubesat`-type candidate so it renders as a small whole microsat.
     const farThreshold = 0.03; // ~3km in scene units
     const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
-    // Far-band candidate buckets by visual class. `fragment` = irregular junk
-    // chunk (the dominant cluster look). `cubesat` = small whole microsat box
-    // (row #7's graduation catch). `farOther` (defunctSat/rocketBody/…) read as
-    // intact high-value bodies — wrong for a junk cluster, so they're only a
-    // last-resort fallback. Near-band debris is the final fallback.
-    //
-    // Phase-2 fix: NO early-break. We scan the whole alive list once (≤800,
-    // one-time at spawn — negligible) so gold-MLI / blue-solar-cell plate
-    // fragments and cubesats that sit LATER in debrisList are still reachable.
-    // The old `farFragments.length >= 7` break grabbed the first 7 far fragments
-    // (≈12% chance of containing a gold plate), starving the matcher and making
-    // #2/#3/#5 fall back to generic grey chunks.
+    // Far-band buckets by visual class: `fragment` = irregular junk chunk (the dominant look), `cubesat` = small whole
+    // microsat (row #7), `farOther` (defunctSat/rocketBody/…) reads as an intact high-value body, wrong for a junk
+    // cluster, so last-resort only. Near-band debris is the final fallback.
+    // NO early-break: scan the whole alive list once (≤800, one-time) so gold-MLI / solar-cell plate fragments and
+    // cubesats LATER in debrisList stay reachable (a first-7 cut gave ≈12% chance of a gold plate and starved the matcher).
     const farFragments = [];
     const farCubesats = [];
     const farOther = [];
@@ -4557,32 +3962,24 @@ export class DebrisField {
       }
     }
 
-    // Per-row candidate assignment. The welcome spawn reuses a candidate's
-    // existing instanced-mesh slot (it can't rebind), so the RENDERED shape +
-    // material/colour come from WHICH candidate we pick. Score the still-unused
-    // far candidates per spec:
-    //   +4  type match (spec's desired type — shape is the dominant visual, so
-    //       it outranks material; keeps fragment rows off cubesats and #7 off
-    //       fragments whenever a cubesat exists)
+    // Score the still-unused far candidates per spec (best wins; ties keep placed order). Fragments + cubesats are scanned
+    // together so a desired-type match can win across buckets; then fall back far fragment → far cubesat → far other →
+    // near, so the spawn never under-fills:
+    //   +4  type match (shape dominates, so fragment rows stay off cubesats and #7 off fragments when a cubesat exists)
     //   +2  material match (spec.appearMaterial → rendered colour)
     //   +1  plate-variant match (spec.appearPlate → flat panel-shard look)
-    // Best score wins; ties keep placed-order (stable). We scan fragments +
-    // cubesats together so a desired-type match can win across buckets, then
-    // fall back to any far fragment → far cubesat → far other → near so the row
-    // still spawns (spawn must never under-fill).
     const usedIds = new Set();
     const fragVariant = (d) => (typeof d.id === 'number' ? (d.id >>> 0) % N : 0);
     const isPlate = (d) => DebrisWireframe.isPlateVariant(fragVariant(d));
-    // The desired type for a spec is the first entry of spec.types (fragment for
-    // #1–#6, cubesat for #7).
+    // Desired type = first entry of spec.types (fragment for #1–#6, cubesat for #7).
     const desiredType = (spec) => (Array.isArray(spec.types) && spec.types.length ? spec.types[0] : null);
     const scorePool = [...farFragments, ...farCubesats];
     const pickFar = (spec) => {
       const wantType = desiredType(spec);
       let best = null;
       let bestScore = -1;
-      // PF1.3 (review 10-25): a paired piece takes its body from the FAR END of the pool (the rows before it take the front, as they
-      // always did), so the bodies a mission's welcome rows get - and the ids the next mission's rows get - do not move
+      // A paired piece takes its body from the FAR END of the pool (earlier rows take the front), so the bodies a
+      // mission's welcome rows get, and the ids the next mission's rows get, do not move.
       const rev = Number.isInteger(spec.pair);
       for (let k = 0; k < scorePool.length; k++) {
         const d = scorePool[rev ? scorePool.length - 1 - k : k];
@@ -4590,7 +3987,7 @@ export class DebrisField {
         let score = 0;
         if (wantType && d.type === wantType) score += 4;
         if (spec.appearMaterial && d.material === spec.appearMaterial) score += 2;
-        // Plate test only meaningful for fragment variants.
+        // plate test only meaningful for fragment variants
         if (typeof spec.appearPlate === 'boolean' && d.type === 'fragment' &&
             isPlate(d) === spec.appearPlate) score += 1;
         if (score > bestScore) { bestScore = score; best = d; }
@@ -4608,12 +4005,11 @@ export class DebrisField {
     const assigned = new Array(fieldToSpawn.length).fill(null);
     for (let i = 0; i < fieldToSpawn.length; i++) {
       const spec = fieldToSpawn[i];
-      // pickFar already scans the combined fragment+cubesat scorePool and returns
-      // any unused candidate (score ≥ 0), so it only returns null when that pool
-      // is exhausted/empty — fall straight through to far-other then near.
-      // slice 2b: a row she has been to before gets ITS piece back (taken out of play when she left); else a fresh candidate.
-      // lane 4a: a high row takes its stored piece back, else CLAIMS a parked heavy spare of its type and material - never a
-      // fragment, never a new body (`_claimHeavySpare`); none left means the field lays out fewer pieces.
+      // pickFar scans the combined scorePool and returns any unused candidate, so null means it is exhausted: fall
+      // through to far-other, then near.
+      // A row she has been to before gets ITS piece back from store; else a fresh candidate. A high row takes its stored
+      // piece back, else CLAIMS a parked heavy spare of its type and material (`_claimHeavySpare`), never a fragment or
+      // new body; none left means the field lays out fewer pieces.
       const claim = this._claimHeavySpare || DebrisField.prototype._claimHeavySpare;
       let chosen = (fieldPlan && this._takeStoredFieldPiece(fieldPlan.fieldId, rowOf(i)))
         || (spec.high ? claim.call(this, desiredType(spec), spec.material, spec.missionSat ? 'mission' : 'high')
@@ -4624,12 +4020,12 @@ export class DebrisField {
     }
 
     let placed = 0;
-    let untrackedCount = 0;  // ST-4.C: track how many debris set as untracked
-    // u20-debris v2: the "far end" the profile leaves untracked is the far end of the welcome / high rows, never a small-piece group
-    // or a mission satellite (those are 10 cm or bigger: known to radar).
+    let untrackedCount = 0;
+    // The "far end" the profile leaves untracked is the far end of the welcome / high rows, never a small-piece group or a
+    // mission satellite (10 cm or bigger: known to radar).
     const baseRowCount = fieldToSpawn.filter((sp) => !(sp && sp.own)).length;
-    // u20-debris v2: a group piece and the mission satellite run on their OWN seeded stream (`spec.rng`): every Math.random below
-    // (the mass roll, the type pick, salvage) reads it for that piece, so no other piece's draws move. Restored at the end.
+    // A group piece and the mission satellite run on their OWN seeded stream (`spec.rng`): every Math.random below (mass
+    // roll, type pick, salvage) reads it, so no other piece's draws move. Restored at the end.
     const outerRandom = Math.random;
     try {
     for (let i = 0; i < fieldToSpawn.length && placed < fieldToSpawn.length; i++) {
@@ -4638,60 +4034,47 @@ export class DebrisField {
       if (!debris) break;
       Math.random = spec.rng || outerRandom;
 
-      // Seat the piece on its cone-fan slot — ALL 7 sit AHEAD of the mother
-      // (the WELCOME_FIELD header has the layout and the no-drift argument).
-      // PINNED pieces (#1, #2) are positioned in the mother's LOCAL frame each
-      // frame (see the pin branch in update()/_updateInstanceTransform) — their
-      // orbit is only a sane fallback. Free pieces (#3–#7) get real co-orbital
-      // orbits: same semi-major axis, period-preserving right/up offsets, so
-      // the range_wall "press A" beat still flies to #3 and AutoLock's forward
-      // arc (ARC_DOT 0.5) sees every one of them.
+      // Seat the piece on its cone-fan slot: ALL 7 sit AHEAD of the mother (WELCOME_FIELD header has the layout and the
+      // no-drift argument). PINNED pieces (#1, #2) are positioned in the mother's LOCAL frame each frame (pin branch in
+      // update()/_updateInstanceTransform); their orbit is only a fallback. Free pieces (#3–#7) get real co-orbital orbits
+      // (same semi-major axis, period-preserving right/up offsets) so the range_wall "press A" beat still flies to #3 and
+      // AutoLock's forward arc (ARC_DOT 0.5) sees every one.
       const isPin = !!spec.pin;
-      // 2026-05-17 off-by-one-frame fix: the debris is spawned mid-frame after
-      // player.update propagated the player by n×gameDt, and the loop below will
-      // advance this debris once more this frame. Pre-subtract one step so the
-      // post-propagation along-track offset lands at playerOrbit + fwd (the
-      // helper ignores it for pinned rows — their authoritative position is the
-      // local-frame pin).
+      // The debris is spawned mid-frame after player.update propagated the player by n×gameDt, and the loop below advances
+      // this debris once more: pre-subtract one step so the along-track offset lands at playerOrbit + fwd (ignored for
+      // pinned rows).
       const _nApprox = playerOrbit.meanMotion ||
         Math.sqrt(Constants.MU_EARTH / Math.pow(playerOrbit.semiMajorAxis / Constants.SCENE_SCALE, 3));
       const _frameComp = _nApprox * (this._lastSpawnGameDt || 0);
-      // Tolerant of mock receivers (tests bind only _spawnWelcomeField onto a
-      // plain object): fall back to the prototype's helper.
+      // Tolerant of mock receivers: fall back to the prototype's helper.
       const _place = this._placeWelcomePiece || DebrisField.prototype._placeWelcomePiece;
-      // slice 2b: a field's free rows take their along-track roll from the field's seed (the same field always looks the
-      // same); the placement keeps a roll that lies inside the row band, so this decides it. Pinned rows have no roll.
+      // A field's free rows take their along-track roll from the field's seed (same field, same look); the placement keeps
+      // a roll inside the row band, so this decides it. Pinned rows have no roll.
       if (fieldPlan && !spec.pin) {
         const fMin = Number.isFinite(spec.fwdMinM) ? spec.fwdMinM : 0;
         const fMax = Number.isFinite(spec.fwdMaxM) ? spec.fwdMaxM : fMin;
         debris._welcomeFwdM = fMin + DebrisField.fieldRoll(fieldPlan.seed, rowOf(i)) * (fMax - fMin);
       }
-      if (spec.own) debris._welcomeFwdM = spec.fwdMinM;   // a group piece or satellite sits at its own along-track offset: no roll
+      // a group piece or satellite sits at its own along-track offset: no roll
+      if (spec.own) debris._welcomeFwdM = spec.fwdMinM;
       _place.call(this, debris, spec, playerOrbit, _frameComp);
 
-      // Adjust mass to spec
       debris.mass = spec.massMin + Math.random() * (spec.massMax - spec.massMin);
 
-      // Mission-1 onboarding is NET-ONLY: every guided beat captures with the
-      // Mother net (tease_lock→N, second_catch→N, range_wall→A-then-net,
-      // free_clear→"net the rest of the cluster"); there is no Daughter beat.
-      // The Mother net rejects anything over LASSO_MAX_CAPTURE_MASS, so clamp
-      // the whole welcome cluster to that ceiling — otherwise the curated first
-      // target (and most of the cluster) trips "Target too massive for Mother
-      // net. Try deploying a Daughter [D]", contradicting the onboarding script.
-      // (Lane 4a: a high-field row is heavy by design - its rows are the pieces that need the mother net or a daughter, and
-      // every one is held under the net's own cap by `Constants.HIGH_FIELD` - so the ceiling is for the low rows only.)
+      // Mission-1 onboarding is NET-ONLY (every guided beat captures with the Mother net; no Daughter beat), and the net
+      // rejects anything over LASSO_MAX_CAPTURE_MASS: clamp the welcome cluster to that ceiling, else the first target trips
+      // "Target too massive for Mother net. Try deploying a Daughter [D]". A high-field row is heavy by design (every one is
+      // held under the net's cap by `Constants.HIGH_FIELD`), so the ceiling is for low rows only.
       const netCeil = Constants.LASSO_MAX_CAPTURE_MASS;
       if (!spec.high && Number.isFinite(netCeil) && debris.mass > netCeil) {
         debris.mass = netCeil;
       }
 
-      // Update type if needed
       if (!spec.types.includes(debris.type)) {
         debris.type = spec.types[Math.floor(Math.random() * spec.types.length)];
       }
 
-      // Update sizeMeter/sceneSize to match new type+mass
+      // size follows the new type + mass
       const typeDef = DEBRIS_TYPES[debris.type];
       if (typeDef) {
         const massFrac = clamp01((debris.mass - typeDef.massMin) / (typeDef.massMax - typeDef.massMin || 1));
@@ -4699,22 +4082,15 @@ export class DebrisField {
           typeDef.sizeMin + massFrac * (typeDef.sizeMax - typeDef.sizeMin));
       }
 
-      // Reward-first spine: deterministic visible size for curated welcome
-      // pieces. `sizeM` is a DELIBERATE override (a 0.1–1 m fragment is a ~10 px
-      // speck), so it intentionally bypasses the per-type sizeMax cap — a 3 m
-      // fragment renders as a clearly-visible irregular junk chunk.
+      // `sizeM` is a DELIBERATE override (a 0.1–1 m fragment is a ~10 px speck), so it intentionally bypasses the per-type
+      // sizeMax cap: a 3 m fragment renders as a clearly-visible junk chunk.
       if (Number.isFinite(spec.sizeM)) {
         DebrisField.setDebrisSize(debris, spec.sizeM);
       }
 
-      // Deterministic opening tumble (m1-staging): honour the authored
-      // per-piece rate/axis — the WELCOME_FIELD analogue of the cast spec's
-      // `tumbleDeg` in _createDebrisData. Pieces without tumbleDegS keep
-      // their creation-time class-band roll untouched, and non-welcome
-      // spawns never pass through here. _initialTumbleRate mirrors the rate
-      // (same idiom as the Kessler-shard tumble override in
-      // createFragments) so the E1 despin doctrine can't mistake
-      // authoring for a player de-spin.
+      // Authored opening tumble (rate/axis). Pieces without tumbleDegS keep their class-band roll. _initialTumbleRate
+      // mirrors the rate (as the Kessler-shard override does) so the E1 despin doctrine can't mistake authoring for a
+      // player de-spin.
       if (Number.isFinite(spec.tumbleDegS)) {
         debris.tumbleRate = degToRad(spec.tumbleDegS);
         debris._initialTumbleRate = debris.tumbleRate;
@@ -4730,33 +4106,26 @@ export class DebrisField {
           debris.tumbleAxis = { x: ax / al, y: ay / al, z: az / al }; // mock receivers
         }
       }
-      // Keep salvage/flags consistent with the intended appearance. The
-      // RENDERED colour comes from the candidate's existing mesh slot (selected
-      // above to match appearMaterial); `debris.material` only feeds salvage and
-      // capture flags. Honour spec.material, else the appearance hint.
+      // The RENDERED colour comes from the candidate's mesh slot (selected above to match appearMaterial);
+      // `debris.material` only feeds salvage and capture flags.
       if (spec.material) {
         debris.material = spec.material;
       } else if (spec.appearMaterial) {
         debris.material = spec.appearMaterial;
       }
 
-      // Reset web-shot drag if previously webbed
       if (debris.dragMultiplier) {
-        debris.dragMultiplier = undefined;
+        debris.dragMultiplier = undefined;   // clear a previous web shot
       }
 
-      // Regenerate salvage for updated type/mass
       debris.salvage = this._generateSalvage(debris.type, debris.mass, debris.material);
 
-      // ST-4.C: Suppress hydrazine based on mission profile
       if (!profile.hydrazine) {
         debris.salvage.hydrazine = 0;
       }
 
-      // Reward-first spine: the tease piece is a deliberately LOW-VALUE quick
-      // win (a glinting but cheap solar panel). Strip the premium materials and
-      // thin the metals so the first catch pays a little, leaving the richer
-      // pieces for later — this is what `spec.lowValue` means.
+      // `spec.lowValue`: the tease piece is a deliberately LOW-VALUE quick win (a glinting but cheap solar panel): strip
+      // premium materials and thin the metals so the first catch pays a little.
       if (spec.lowValue && debris.salvage) {
         debris.salvage.gaAs = 0;
         debris.salvage.indium = 0;
@@ -4775,49 +4144,38 @@ export class DebrisField {
       debris.metalMassKg = (debris.salvage.metals || [])
         .reduce((sum, m) => sum + m.amount, 0);
 
-      // Lane 4a: a claimed spare was built at a parked mass; its capture flags (grapple fixture by mass) follow the real mass,
-      // and the row's name rides on the piece (informational, as a catalogue piece's).
+      // A claimed spare was built at a parked mass: its capture flags (grapple fixture by mass) follow the real mass; the
+      // row's name rides on the piece (informational).
       if (spec.high) Object.assign(debris, deriveCaptureFlags(debris.material, debris.type, debris.mass));
       if (spec.name) debris.name = spec.name;
-      // slice 5 (5a, V3): a HIGH_FIELD piece has an owner (who pays for its removal) and a tumbling area (its orbit life); no other piece does (C1)
+      // Only a HIGH_FIELD piece has an owner (who pays for its removal) and a tumbling area (its orbit life)
       if (spec.owner) { debris.owner = { ...spec.owner }; debris.areaM2 = spec.areaM2; }
-      else if (debris.owner) { delete debris.owner; delete debris.areaM2; }   // a reused body from an earlier high field never carries a stale owner
-      // H2b: the piece keeps ITS OWN row spec (a high row is not a WELCOME_FIELD row); re-seat reads it, never the table by index.
+      else if (debris.owner) { delete debris.owner; delete debris.areaM2; }   // a reused body never carries a stale owner
+      // The piece keeps ITS OWN row spec (a high row is not a WELCOME_FIELD row); re-seat reads it, never the table by index.
       debris._fieldSpec = spec;
 
-      // Mark as welcome spawn, ensure visible
       debris.welcomeSpawn = true;
-      // c2-fifth-catch D1: the chapter this piece was placed for. Collision
-      // avoidance exempts a welcome piece only in its own chapter (so a new
-      // chapter's piece 22 m ahead never costs a burn); a leftover from an
-      // older chapter that nothing re-seated stays a live candidate.
+      // The chapter this piece was placed for: collision avoidance exempts a welcome piece only in its own chapter (a new
+      // chapter's piece 22 m ahead never costs a burn); a leftover from an older chapter stays a live candidate.
       debris.welcomeChapter = this._currentMissionNumber || 1;
       debris.alive = true;
-      // S11(b): a reused candidate may have been a hazard shard — promotion
-      // into the curated cluster clears the uncapturable-furniture flag (the
-      // spec re-masses/re-sizes it into a real catch target; the dev net
-      // scenario stages its whale on row #7, so this door is gate-critical).
+      // A reused candidate may have been a hazard shard: promotion into the curated cluster clears the
+      // uncapturable-furniture flag (the dev net scenario stages its whale on row #7, so this is gate-critical).
       debris.hazard = false;
-      // Which curated WELCOME_FIELD spec row realised this piece (0-based).
-      // Score-based candidate matching means debrisList order != spec order, so
-      // this lets consumers/tests recover the intended progression position.
+      // Which spec row realised this piece (0-based): candidate matching is score-based, so debrisList order != spec order.
       debris._welcomeSpecIndex = rowOf(i);
-      // u20-debris v2: a mission extra (row from EXTRA_ROW0 up) is tagged by kind: the map-off "is one still out" rule reads it
+      // a mission extra (row from EXTRA_ROW0 up) is tagged by kind: the map-off "is one still out" rule reads it
       if (rowOf(i) >= Constants.SMALL_GROUP.EXTRA_ROW0) debris._extraKind = DebrisField.isPairRow(rowOf(i)) ? 'pair' : rowOf(i) === Constants.SMALL_GROUP.SAT_ROW ? 'sat' : 'group';
-      if (fieldPlan) {   // slice 2b: which field and which of its rows this piece is (FieldRegistry reads them when it is removed)
+      if (fieldPlan) {   // which field and row this piece is (FieldRegistry reads them when it is removed)
         debris.fieldId = fieldPlan.fieldId;
         debris.fieldRow = rowOf(i);
         debris._fieldStored = false;
       }
 
-      // Flag safety guard. Welcome pieces are reused from far candidates that
-      // may have been flag-eligible (≥2 m sat/rocket) at build time — and the
-      // per-frame flag path only REPOSITIONS, never re-checks eligibility — so a
-      // reused piece would keep a stale flag. The cluster sizes already drop
-      // below the 2 m flag threshold, but strip any existing flag explicitly:
-      // zero its instance, drop the lookup, and clear the country so no welcome
-      // piece ever wears a flag (a sub-2 m flag would be an invisible smear).
-      // Tolerant of mock receivers (tests) that lack the flag/instance state.
+      // Flag safety guard: welcome pieces are reused from far candidates that may have been flag-eligible (≥2 m sat/rocket),
+      // and the per-frame flag path only REPOSITIONS, never re-checks eligibility, so strip any existing flag: zero its
+      // instance, drop the lookup, clear the country (a sub-2 m flag would be an invisible smear).
+      // Tolerant of mock receivers lacking flag/instance state.
       const _flagInfo = this._flagLookup && this._flagLookup.get(debris.id);
       if (_flagInfo) {
         const _flagMesh = this.flagMeshes && this.flagMeshes[_flagInfo.country];
@@ -4830,33 +4188,18 @@ export class DebrisField {
       }
       debris.country = null;
 
-      // Scan-first (owner 2026-10-08, DECISIONS §15 row 1): a new player sees no
-      // target bracket, arrow or radar dot until they press S, so ALL seven
-      // pieces start `discovered=false` — including the pinned #1 (~22 m ahead)
-      // and #2 (~48 m). Until 2026-10-08 these two were pre-discovered (2026-06-21,
-      // so the second guided catch was listable); that leaked two brackets from
-      // the first frame and made the scan lesson optional. A quick scan
-      // (SensorSystem._revealNearbyDebris() → getDebrisNear(), welcomeSpawn-gated
-      // on M1; the caller's radius is honoured — the old M1 2 km clamp went with
-      // welcome-drift fix T3, so a piece that has separated still scans in)
-      // reveals at most MAX_REVEALS=5 nearest, so #1–#5 on the first S and
-      // #6/#7 on a second. The onboarding `tease_lock` beat holds on "Press S to
-      // scan" until the first reveal (OnboardingDirector `requiresContacts`).
-      // The pin itself (`_onboardingPinned`, below) is unchanged: pinned pieces
-      // still ride the mother-local offset; they are just not marked yet.
-      // Replaces the old buggy `_autoDiscoverNearest()` which used a static
-      // startSma proxy and would sometimes pick a catalog debris that got
-      // killed by the M1 enforcement, leaving zero discovered debris.
+      // Scan-first (owner 2026-10-08, DECISIONS §15 row 1): a new player sees no target bracket, arrow or radar dot until
+      // they press S, so ALL seven pieces start `discovered=false`, including pinned #1 (~22 m ahead) and #2 (~48 m). A quick
+      // scan (SensorSystem._revealNearbyDebris() → getDebrisNear(), welcomeSpawn-gated on M1; the caller's radius is
+      // honoured) reveals at most MAX_REVEALS=5 nearest, so #1–#5 on the first S and #6/#7 on a second. The `tease_lock`
+      // beat holds on "Press S to scan" until the first reveal (OnboardingDirector `requiresContacts`).
       debris.discovered = false;
 
-      // Onboarding tease pin: hold the curated STATION-catch pieces (those with
-      // spec.pin — #1 dead-centre, #2 off to one side) at a fixed offset in the
-      // MOTHER'S LOCAL FRAME (forward + lateral) until each is caught. Enforced
-      // per-frame in update()/_updateInstanceTransform by writing _scenePosition
-      // (the single source of truth that selection, range, net, reticle, and
-      // rendering all read — TargetSelector prefers it). Local-frame is the only
-      // way to hold a STABLE sideways offset: co-orbital cross-track oscillates
-      // to zero. #3 (range wall) is NOT pinned — it's the free orbit the mother
+      // Onboarding tease pin: hold the STATION-catch pieces (spec.pin: #1 dead-centre, #2 off to one side) at a fixed
+      // offset in the MOTHER'S LOCAL FRAME (forward + lateral) until each is caught. Enforced per-frame in
+      // update()/_updateInstanceTransform by writing _scenePosition (the single source of truth that selection, range, net,
+      // reticle and rendering read; TargetSelector prefers it). Local-frame is the only way to hold a STABLE sideways
+      // offset: co-orbital cross-track oscillates to zero. #3 (range wall) is NOT pinned: it's the free orbit the mother
       // autopilots to. Released per-id on capture / removal / complete / reset.
       if (isPin) {
         debris._onboardingPinned = true;
@@ -4864,11 +4207,8 @@ export class DebrisField {
         debris._onboardingPinLat = (spec.latM || 0) * METRE_SCENE;
         this._onboardingPinIds.add(debris.id);
 
-        // Per-instance brightness boost (lever 3, m1-debris-1-2-visibility):
-        // brighten ONLY the pinned welcome pieces (#1/#2) via the existing
-        // instanceColor channel so they read clearly even on the shadow side.
-        // Isolated to these instances — no shared-material/emissive change.
-        // Tolerant of mock receivers (tests) lacking instanced meshes.
+        // Per-instance brightness boost for ONLY the pinned pieces (#1/#2) via instanceColor, so they read on the shadow
+        // side; no shared-material change. Tolerant of mock receivers lacking instanced meshes.
         const _boostLookup = this._instanceLookup && this._instanceLookup.get(debris.id);
         if (_boostLookup) {
           const _boostMesh = this.instancedMeshes && this.instancedMeshes[_boostLookup.meshKey];
@@ -4879,7 +4219,7 @@ export class DebrisField {
         }
       }
 
-      // ST-4.C: Track/untrack based on profile (untracked count from far end)
+      // profile.untracked: the far end of the rows is left untracked
       const maxUntracked = profile.untracked ?? 0;
       if (!spec.own && maxUntracked > 0 && untrackedCount < maxUntracked && i >= baseRowCount - maxUntracked) {
         debris.tracked = false;
@@ -4898,12 +4238,8 @@ export class DebrisField {
       console.log(`[DebrisField] Welcome field: repositioned ${placed} debris near player (mission ${this._currentMissionNumber}, profile: ${profile.label})`);
     }
 
-    // ── Mission 1 only: hide all non-welcome interactive debris so the
-    // pilot sees a tight ≤1.5 km cluster instead of catalog debris that
-    // happens to drift through their orbit at multi-km range.  This is the
-    // "all debris within 2 km on first mission" UX request (debug session
-    // 2026-05-15).  Hidden debris are marked _hiddenForMission1=true so
-    // _onMissionStart() can restore them when the mission counter advances.
+    // Mission 1 only: hide all non-welcome interactive debris so the pilot sees a tight ≤1.5 km cluster, not catalog debris
+    // drifting through at multi-km range. Marked _hiddenForMission1 so _onMissionStart() can restore them.
     if ((this._currentMissionNumber || 1) === 1) {
       let hiddenCount = 0;
       for (const d of this.debrisList) {
@@ -4912,7 +4248,7 @@ export class DebrisField {
         d._hiddenForMission1 = true;
         d.alive = false;
         d.tracked = false;
-        // Zero the instance scale immediately so it disappears this frame
+        // zero the instance scale so it disappears this frame
         const lookup = this._instanceLookup.get(d.id);
         if (lookup) {
           const mesh = this.instancedMeshes[lookup.meshKey];
@@ -4929,15 +4265,10 @@ export class DebrisField {
   }
 
   /**
-   * Public welcome-field API — Delegation 2 (2026-05-31).
-   *
-   * Returns a deterministic *plan* (pure data, Node-safe) describing the 7–8
-   * fragment cluster the OnboardingDirector wants spawned in the player's
-   * own orbit at 150–1500 m offsets, then (if a live debrisList is present)
-   * mutates the field to realise that plan by delegating to the existing
-   * private spawner.  Each spawned debris is additionally tagged with
-   * `welcomeField:true` so callers can disambiguate from `welcomeSpawn`
-   * (which is M1-only and applies the harsher M1-only hide logic).
+   * Public welcome-field API: returns a deterministic *plan* (pure data, Node-safe) of the 7–8 fragment cluster the
+   * OnboardingDirector wants in the player's orbit at 150–1500 m offsets, then (if a live debrisList is present) realises
+   * it via the private spawner. Spawned debris is also tagged `welcomeField:true` to disambiguate from `welcomeSpawn`
+   * (M1-only, with the harsher M1 hide logic).
    *
    * @param {object} playerOrbit — orbital element snapshot (a, e, i, RAAN, argP, trueAnomaly, meanMotion)
    * @param {object} [options]
@@ -4955,9 +4286,7 @@ export class DebrisField {
     const minMassKg = options.minMassKg ?? 5;
     const maxMassKg = options.maxMassKg ?? 50;
 
-    // Distribute fragments evenly across the offset range. Every fragment is
-    // AHEAD of the mother — the plan mirrors the cone-fan placement (all 7
-    // WELCOME_FIELD rows sit in AutoLock's forward arc; nothing spawns behind).
+    // Evenly across the offset range; every fragment AHEAD of the mother (mirrors the cone-fan: nothing spawns behind).
     const fragments = [];
     for (let i = 0; i < count; i++) {
       const frac = count === 1 ? 0.5 : (i / (count - 1));
@@ -4972,9 +4301,7 @@ export class DebrisField {
       });
     }
 
-    // If a live debris list is available, also stage the existing spawn path
-    // so the actual game state is updated.  Tag matching debris with
-    // welcomeField:true post-hoc.
+    // With a live debris list, also stage the real spawn path and tag matching debris welcomeField:true.
     if (Array.isArray(this.debrisList) && this.debrisList.length > 0 && playerOrbit) {
       try {
         if (!this._welcomeFieldSpawned) {
@@ -4993,8 +4320,7 @@ export class DebrisField {
   }
 
   /**
-   * CH5 ISS conjunction boss (MISSION_ARC §6) — spawn `count` threat fragments
-   * in the ISS forward track, tagged `iss_threat:true`.
+   * CH5 ISS conjunction boss (MISSION_ARC §6): spawn `count` threat fragments in the ISS forward track, tagged `iss_threat:true`.
    * @param {object} [options] @param {number} [options.count]
    * @returns {{ ids: number[] }}
    */
@@ -5006,8 +4332,7 @@ export class DebrisField {
   }
 
   /**
-   * CH9 Starlink fragmentation boss (MISSION_ARC §6) — burst-spawn `count`
-   * fragments in the Starlink shell, tagged `starlink_threat:true`.
+   * CH9 Starlink fragmentation boss (MISSION_ARC §6): burst-spawn `count` fragments in the Starlink shell, tagged `starlink_threat:true`.
    * @param {object} [options] @param {number} [options.count]
    * @returns {{ ids: number[] }}
    */
@@ -5019,11 +4344,9 @@ export class DebrisField {
   }
 
   /**
-   * Shared boss-frag spawner. Repurposes existing alive, non-special, NOT-mid-
-   * capture debris into the given orbit `cfg` (mirrors `_spawnWelcomeField`):
-   * overwrites orbital elements, spreads them ahead in true-anomaly, refreshes
-   * mass/type/salvage, tags `debris[tag]=true`, and marks them tracked +
-   * discovered. Returns the spawned ids (fewer than `count` if candidates run out).
+   * Shared boss-frag spawner. Repurposes alive, non-special, NOT-mid-capture debris into the orbit `cfg` (as
+   * `_spawnWelcomeField`): overwrites elements, spreads them ahead in true-anomaly, refreshes mass/type/salvage, sets
+   * `debris[tag]=true`, marks them tracked + discovered. Returns the spawned ids (fewer than `count` if candidates run out).
    *
    * @private
    * @param {object} cfg — orbit config (altKm, incDeg, raanDeg, argPerigeeDeg, eccentricity, fragMassKg, trackSpreadDeg)
@@ -5032,7 +4355,6 @@ export class DebrisField {
    * @returns {{ ids: number[] }}
    */
   _spawnThreatField(cfg, count, tag) {
-    // Orbit in scene units.
     const altKm = cfg.altKm ?? 408;
     const sma = Constants.EARTH_RADIUS + altKm * Constants.SCENE_SCALE;
     const meanMotion = Math.sqrt(Constants.MU_EARTH / Math.pow(sma / Constants.SCENE_SCALE, 3));
@@ -5040,10 +4362,8 @@ export class DebrisField {
     const spreadRad = degToRad(cfg.trackSpreadDeg ?? 8);
     const frameComp = meanMotion * (this._lastSpawnGameDt || 0); // mid-frame propagation pre-compensation
 
-    // Candidates: alive, not already special-tagged, and NOT mid-capture.
-    // Unlike the welcome field (mission-1 init, nothing grappled), this runs on
-    // SHOP_DEPLOY into a later mission, when a daughter may be hauling or parking
-    // a catch (_capturedByArm/_armPinned keep that debris pinned to the arm) — so
+    // Candidates: alive, not special-tagged, NOT mid-capture. Unlike the welcome field (mission-1 init, nothing grappled),
+    // this runs on SHOP_DEPLOY into a later mission, when a daughter may be hauling a catch (_capturedByArm/_armPinned);
     // repurposing it would teleport an in-flight catch onto the threat track.
     const candidates = [];
     for (const debris of this.debrisList) {
@@ -5058,7 +4378,7 @@ export class DebrisField {
     for (let i = 0; i < count && i < candidates.length; i++) {
       const debris = candidates[i];
 
-      // Place ahead in track (forward conjunction): evenly spread leads.
+      // Evenly spread leads ahead in track (forward conjunction).
       const lead = ((i + 1) / count) * spreadRad;
       debris.orbit.semiMajorAxis = sma;
       debris.orbit.eccentricity = cfg.eccentricity ?? 0.0003;
@@ -5068,7 +4388,6 @@ export class DebrisField {
       debris.orbit.trueAnomaly = baseNu + lead - frameComp;
       debris.orbit.meanMotion = meanMotion;
 
-      // Fragment profile.
       debris.mass = cfg.fragMassKg ?? 45;
       debris.type = 'fragment';
       const typeDef = DEBRIS_TYPES[debris.type];
@@ -5090,8 +4409,7 @@ export class DebrisField {
       debris.alive = true;
       debris.tracked = true;
       debris.discovered = true;
-      // S11(b): a repurposed shard leaves the hazard cloud — boss fragments
-      // are deliberate targets (tracked + discovered), not furniture.
+      // a repurposed shard leaves the hazard cloud: boss fragments are deliberate targets, not furniture
       debris.hazard = false;
 
       ids.push(debris.id);
@@ -5115,26 +4433,12 @@ export class DebrisField {
    * @returns {Array<object>}
    */
   getDebrisNear(position, radius) {
-    // The caller's radius is honoured on EVERY mission (M1 welcome-drift fix
-    // T3, 2026-09-09). Mission 1 used to hard-clamp it to 2 km (2026-05-15
-    // polish — the "tight ≤ 2 km cluster" UX contract, so TargetReticle /
-    // NavSphere would not bracket drifted welcome debris at multi-km range).
-    // That clamp turned the T2 drag drift into a "sudden disappearance": the
-    // moment a welcome piece crossed 2 km, TargetReticle brackets/arrows
-    // (100 km), NavSphere, AutoLock's 5 km search, the scan reveal
-    // (SensorSystem._revealNearbyDebris, 500 km) and the post-catch
-    // auto-select (GameFlowManager, 500 m) ALL went blind to it at once —
-    // "scan finds nothing" with the piece alive a few km ahead. The clamp
-    // protected nothing else: every NON-welcome piece is already alive=false
-    // on M1 (the spawn-time hide + the per-frame 2 km cull in update()), so
-    // the radius clamp only ever hid WELCOME pieces. With the drift itself
-    // fixed (dragDecelFor), any residual or RCS-induced separation now reads
-    // as a growing distance, not a vanishing target. What stays is the
-    // `welcomeSpawn` gate in the loop — the M1 "only the cluster exists"
-    // contract (same guard as getEnhancedTargetList).
+    // The caller's radius is honoured on EVERY mission: a hard M1 clamp (2 km) made a drifting welcome piece "suddenly
+    // disappear" for TargetReticle, NavSphere, AutoLock, the scan reveal and post-catch auto-select at once. What stays is
+    // the `welcomeSpawn` gate in the loop, the M1 "only the cluster exists" contract (same guard as getEnhancedTargetList).
     const isMission1 = (this._currentMissionNumber || 1) === 1;
 
-    // --- Frame-level cache: if same frame + same/smaller radius, reuse ---
+    // Frame-level cache: same frame + same/smaller radius reuses the result
     if (this._frameId === this._cacheFrame &&
         radius <= this._cacheRadius &&
         position.distanceToSquared(this._cachePos) < 1e-12) {
@@ -5146,11 +4450,9 @@ export class DebrisField {
 
     for (const debris of this.debrisList) {
       if (!debris.alive || debris._captured) continue;
-      // M1: only welcome cluster debris can appear (same guard as getEnhancedTargetList).
-      // This gate — not a radius — is the M1 contract; see the head comment.
+      // M1: only welcome cluster debris can appear (the M1 contract; see the head comment).
       if (isMission1 && !debris.welcomeSpawn) continue;
-      // Perf: reuse _scenePosition (populated this frame by _updateInstanceTransform);
-      // fall back to orbitToSceneCartesian only if _scenePosition is missing (first frame).
+      // Perf: reuse _scenePosition (set this frame by _updateInstanceTransform); orbitToSceneCartesian only on the first frame.
       const sp = debris._scenePosition;
       let px, py, pz, cart;
       if (sp) {
@@ -5168,10 +4470,8 @@ export class DebrisField {
         const dist = Math.sqrt(distSq);
         results.push({
           ...debris,
-          // HARDENING: the spread above would otherwise share the canonical's
-          // mutable refs (_scenePosition Vector3, orbit object). Hand out
-          // read-only SNAPSHOTS so a caller mutating a result can't corrupt the
-          // real debris. To mutate/hold a debris, resolve it via getDebrisById(id).
+          // read-only SNAPSHOTS: the spread would otherwise share the canonical's mutable refs. To mutate/hold a debris,
+          // resolve it via getDebrisById(id).
           _scenePosition: debris._scenePosition ? debris._scenePosition.clone() : undefined,
           orbit: debris.orbit ? { ...debris.orbit } : undefined,
           distance: dist,
@@ -5183,7 +4483,6 @@ export class DebrisField {
 
     results.sort((a, b) => a.distance - b.distance);
 
-    // Store in cache
     this._cachedNearby = results;
     this._cacheFrame = this._frameId;
     this._cachePos.copy(position);
@@ -5193,8 +4492,7 @@ export class DebrisField {
   }
 
   /**
-   * Set the current frame ID for spatial query caching.
-   * Must be called once per frame from the game loop before any getDebrisNear calls.
+   * Set the current frame ID for spatial query caching; call once per frame from the game loop before any getDebrisNear.
    * @param {number} frameId
    */
   setFrameId(frameId) {
@@ -5202,8 +4500,7 @@ export class DebrisField {
   }
 
   /**
-   * Get small untracked debris within sensor range.
-   * Returns objects under 10cm that are sensor-detectable.
+   * Small untracked debris (under 10 cm, sensor-detectable) within sensor range.
    * @param {THREE.Vector3} position - Player position
    * @param {number} sensorRange - Sensor range in scene units (default: 0.1 = 10km)
    * @returns {Array<object>} Detected small objects with collision risk
@@ -5214,11 +4511,9 @@ export class DebrisField {
 
     for (const debris of this.debrisList) {
       if (!debris.alive) continue;
-      // S11(b): hazard shards are not trawl fodder / sensor contacts — they
-      // exist as collision hazards (ConjunctionSystem), not pickups.
+      // hazard shards are collision hazards (ConjunctionSystem), not trawl fodder or sensor contacts
       if (debris.hazard) continue;
-      if (debris._disposed) continue;           // slice 5 (5d, D4): never trawl fodder or a contact once disposed of
-      // Only sub-10cm untracked objects
+      if (debris._disposed) continue;           // never trawl fodder or a contact once disposed of
       if (debris.tracked || debris.sizeMeter > 0.1) continue;
 
       const cart = orbitToSceneCartesian(debris.orbit);
@@ -5231,7 +4526,6 @@ export class DebrisField {
         const dist = Math.sqrt(distSq);
         const distKm = dist / Constants.SCENE_SCALE;
 
-        // Calculate collision risk based on distance, relative velocity, and trajectory
         const collisionRisk = this._calculateCollisionRisk(debris, cart, position, distKm);
 
         results.push({
@@ -5250,8 +4544,7 @@ export class DebrisField {
   }
 
   /**
-   * Calculate collision risk for a debris object relative to the player.
-   * Based on distance, approach rate, and trajectory alignment.
+   * Collision risk of a debris object relative to the player, from distance, approach rate and trajectory alignment.
    * @param {object} debris - Debris data object
    * @param {object} cart - Cartesian state { position, velocity }
    * @param {THREE.Vector3} playerPos - Player position
@@ -5260,32 +4553,27 @@ export class DebrisField {
    * @private
    */
   _calculateCollisionRisk(debris, cart, playerPos, distKm) {
-    // Distance factor — closer = higher risk (exponential)
     const distFactor = Math.exp(-distKm / 2);
 
-    // Approach vector — is it heading toward us?
+    // Approach vector: is it heading toward us?
     const dx = playerPos.x - cart.position.x;
     const dy = playerPos.y - cart.position.y;
     const dz = playerPos.z - cart.position.z;
     const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (len < 1e-10) return 1.0;
 
-    // Normalize direction to player
     const dirX = dx / len;
     const dirY = dy / len;
     const dirZ = dz / len;
 
-    // Velocity dot direction to player (approach rate)
     const vLen = Math.sqrt(cart.velocity.x ** 2 + cart.velocity.y ** 2 + cart.velocity.z ** 2);
     if (vLen < 1e-10) return distFactor * 0.1;
 
     const dot = (cart.velocity.x * dirX + cart.velocity.y * dirY + cart.velocity.z * dirZ) / vLen;
     const approachFactor = Math.max(0, dot); // 0 = receding, 1 = direct approach
 
-    // Size factor — larger objects easier to hit
     const sizeFactor = Math.min(1, debris.sizeMeter / 0.1);
 
-    // Combined risk
     return Math.min(1.0, distFactor * 0.5 + approachFactor * 0.35 + sizeFactor * 0.15);
   }
 
@@ -5299,12 +4587,12 @@ export class DebrisField {
 
     for (const debris of this.debrisList) {
       if (!debris.alive) continue;
-      // S11(b): hazard shards are not targets (the trawl path reads this list).
+      // hazard shards are not targets (the trawl path reads this list)
       if (debris.hazard) continue;
-      // slice 5 (5d, D4): a piece that was disposed of is no target: it stays in the sky as a collision object only
+      // a disposed piece is no target: it stays in the sky as a collision object only
       if (debris._disposed) continue;
 
-      // Use pre-allocated orbit temps instead of spread
+      // pre-allocated orbit temps instead of spread
       _tmpKmOrbit.semiMajorAxis = playerOrbit.semiMajorAxis / Constants.SCENE_SCALE;
       _tmpKmOrbit.eccentricity = playerOrbit.eccentricity;
       _tmpKmOrbit.inclination = playerOrbit.inclination;
@@ -5349,64 +4637,37 @@ export class DebrisField {
    */
   getEnhancedTargetList(playerPos, playerOrbit) {
     const results = [];
-    // Search radius: 1000 km (10 scene units) on EVERY mission. Mission 1 used
-    // to clamp this to 2 km (2026-05-15 polish: catalog debris that never
-    // entered the instance pool — so the per-frame 2 km cull in update() never
-    // marked them dead — leaked into TRACKED TARGETS at 7 km). That leak is
-    // closed by the `welcomeSpawn` gate below, which is what actually enforces
-    // the M1 "only the cluster exists" contract; the radius clamp stacked on
-    // top only ever hid WELCOME pieces — and with the T2 drag mismatch it did
-    // so within minutes: a drifted piece dropped out of the HUD list and the
-    // Tab cycle at 2 km while alive a few km ahead ("cluster vanishes"). The
-    // drift is fixed (dragDecelFor) and the clamp is gone (M1 welcome-drift fix
-    // T3, 2026-09-09), so any residual or RCS-induced separation reads as a
-    // growing distance in the list, not a disappearance. This filter is still
-    // the single source of truth for the HUD list, so the gate stays here.
+    // Search radius: 1000 km (10 scene units) on EVERY mission. A 2 km M1 clamp made a drifted welcome piece drop out of
+    // the HUD list and Tab cycle while alive a few km ahead ("cluster vanishes"). The `welcomeSpawn` gate below is what
+    // enforces the M1 "only the cluster exists" contract; this filter is the single source of truth for the HUD list.
     const isMission1 = (this._currentMissionNumber || 1) === 1;
     const searchRadius = 10.0;            // 1000 km in scene units, all missions
     const rSq = searchRadius * searchRadius;
 
-    // 2026-05-17 fix (TRACKED TARGETS empty bug, RCS-offset edition):
-    // On M1, the welcome cluster is placed by *orbital elements* relative
-    // to playerOrbit. But PlayerSatellite.position can be offset from its
-    // orbital position by `_rcsVelocity * dt` integrated over many frames
-    // (PlayerSatellite.js:1572). Diagnostic showed welcome debris correctly
-    // placed 30 m – 1.2 km from `orbitToSceneCartesian(playerOrbit)`, but
-    // `player.getPosition()` was ~7.7 km offset due to accumulated RCS
-    // impulses from launch / collision-avoidance dodges. Using the orbital
-    // reference position for the M1 distance check is the right
-    // apples-to-apples comparison: it's the frame the welcome cluster
-    // lives in. Non-M1 missions stay on rendered playerPos.
+    // On M1 the welcome cluster is placed by *orbital elements* relative to playerOrbit, but PlayerSatellite.position can
+    // be offset from its orbital position by accumulated `_rcsVelocity * dt` (PlayerSatellite `_rcsVelocity`; measured
+    // ~7.7 km after launch / collision-avoidance dodges, vs 30 m – 1.2 km for the cluster). So the M1 distance check uses
+    // the orbital reference position: the frame the cluster lives in. Non-M1 missions use the rendered playerPos.
     const refPos = isMission1
       ? orbitToSceneCartesian(playerOrbit).position
       : playerPos;
 
     for (const debris of this.debrisList) {
       if (!debris.alive || debris._captured) continue;
-      // S11(b): hazard shards are uncapturable furniture — they feed
-      // ConjunctionSystem and the sky, never the HUD target list.
+      // hazard shards are uncapturable furniture: they feed ConjunctionSystem and the sky, never the HUD list
       if (debris.hazard) continue;
-      // slice 5 (5d, D4): nor is a piece that was disposed of (it stays in the sky as a collision object only)
+      // nor does a disposed piece (a collision object only)
       if (debris._disposed) continue;
-      // UX-3 #9: Only return discovered debris (scanned or auto-discovered)
+      // only discovered debris (scanned)
       if (!debris.discovered) continue;
       // M1 hard contract: ONLY the welcome cluster appears in the HUD list.
-      // Any non-welcome debris is invisible to the pilot on the first mission.
       if (isMission1 && !debris.welcomeSpawn) continue;
 
-      // Prefer the live rendered _scenePosition (the single source of truth all
-      // consumers read, and the same basis getDebrisNear uses) measured against
-      // the rendered playerPos. Onboarding-PINNED pieces skip Kepler/drag
-      // propagation (their orbit is re-synced to the mother's each frame by
-      // _syncPinnedOrbitToMother since T4, but #2's 18 m lateral lives only in
-      // _scenePosition), so the orbital comparison below is the weaker basis
-      // for them — before T4 the orbit was frozen outright and misplaced them
-      // within ~0.3 s, which under the former M1 2 km search clamp (removed by
-      // welcome-drift fix T3) silently dropped #1/#2 from the HUD list / T-Tab
-      // / scan reveal.
-      // Comparing scene-vs-rendered is self-consistent and cancels the RCS
-      // offset too. Pieces without a scene position (e.g. catalog debris that
-      // never entered the instance pool) fall back to the orbital comparison.
+      // Prefer the live rendered _scenePosition (single source of truth; same basis as getDebrisNear) against the rendered
+      // playerPos. Onboarding-PINNED pieces skip Kepler/drag propagation (orbit re-synced to the mother's each frame by
+      // _syncPinnedOrbitToMother, but #2's 18 m lateral lives only in _scenePosition), so the orbital comparison is the
+      // weaker basis for them. Scene-vs-rendered also cancels the RCS offset. Pieces without a scene position (catalog
+      // debris never in the instance pool) fall back to the orbital comparison.
       let dx, dy, dz;
       const sp = debris._scenePosition;
       if (sp && playerPos) {
@@ -5426,7 +4687,7 @@ export class DebrisField {
         const distKm = dist / Constants.SCENE_SCALE;
         const altKm = (debris.orbit.semiMajorAxis / Constants.SCENE_SCALE) - Constants.EARTH_RADIUS_KM;
 
-        // Delta-V estimate (re-use pre-allocated orbit temps)
+        // Delta-V estimate (pre-allocated orbit temps)
         _tmpKmOrbit.semiMajorAxis = playerOrbit.semiMajorAxis / Constants.SCENE_SCALE;
         _tmpKmOrbit.eccentricity = playerOrbit.eccentricity;
         _tmpKmOrbit.inclination = playerOrbit.inclination;
@@ -5445,7 +4706,7 @@ export class DebrisField {
 
         const dv = totalDeltaV(_tmpKmOrbit, _tmpKmOrbit2);
 
-        // Risk level based on tumble + size
+        // Risk level from tumble + size
         const tumbleDeg = radToDeg(debris.tumbleRate);
         let risk = 'Low';
         let riskStars = 1;
@@ -5456,39 +4717,29 @@ export class DebrisField {
           risk = 'Med';
           riskStars = 2;
         }
-        // Register item 102 (2026-08-22): the Extreme/5-star row for a rocketBody
-        // over 4 000 kg is DELETED — dead since S11(b) (`df24e3b`'s two
-        // populations), the same kill as DEBRIS_TIER_BASE_WEIGHT's tier-4 row
-        // (register item 99): no production spawn path emits a rocketBody over
-        // 4 000 kg (authored cast max 1 600 kg; the catalogue-finale
-        // substitution's in-band yield is zero at every language start regime;
-        // hazard shards / boss frags / Kessler shards are fragments; the
-        // welcome cluster is clamped ≤ 10 kg; the spec-less draw is
-        // config-absence only). Do not harmonise the row back in — a future
-        // pass re-adds it at a measured threshold deliberately.
+        // No Extreme/5-star row for a rocketBody over 4 000 kg, and no 2 000-point arm: no production spawn path emits one
+        // (authored cast max 1 600 kg; hazard shards / boss frags / Kessler shards are fragments; the welcome cluster is
+        // clamped ≤ 10 kg). Do not harmonise the rows back in; re-add at a measured threshold deliberately. The flat 500
+        // row is the live rocketBody pay.
 
         // Point estimate (simplified scoring)
-        // Register item 102: the 2 000-point arm for a rocketBody over 4 000 kg
-        // is deleted with its risk-twin above (dead since S11(b) — no reachable
-        // mass; the flat 500 row is the live rocketBody pay).
         let basePoints;
         if (debris.type === 'rocketBody') basePoints = 500;
         else if (debris.type === 'defunctSat') basePoints = debris.mass > 500 ? 500 : 300;
         else if (debris.type === 'missionDebris') basePoints = debris.mass > 5 ? 200 : 100;
         else basePoints = 100;
 
-        // Size/tumble multiplier
         const sizeMult = 1.0 + Math.log10(Math.max(debris.mass, 1)) / 4;
         const tumbleMult = 1.0 + tumbleDeg / 90.0;
         const estimatedPoints = Math.floor(basePoints * sizeMult * tumbleMult);
 
-        // FIX_PLAN §4: Compute Target Priority Index (TPI) — composite ranking score
-        // Lower TPI = higher priority. Factors normalized to 0..1 then weighted.
+        // Target Priority Index (TPI, FIX_PLAN §4): composite ranking score, lower = higher priority; factors normalized
+        // to 0..1 then weighted.
         const TR = Constants.TARGET_RANKING;
         const distScore = Math.min(distKm / TR.DIST_REF_KM, 1.0);
         const dvScore = Math.min(dv / TR.DV_REF_MS, 1.0);
         const threatMap = TR.MOID_THREAT_MAP;
-        // Use bracket lookup; null key requires `threatMap[null]` (string 'null' key in JS objects)
+        // bracket lookup: a null badge needs `threatMap[null]` (the string 'null' key)
         const badgeKey = debris.moidBadge != null ? debris.moidBadge : null;
         const threatScore = threatMap[badgeKey] !== undefined ? threatMap[badgeKey] : 1.0;
         const valueScore = 1.0 - Math.min(estimatedPoints / TR.VALUE_REF_PTS, 1.0);
@@ -5514,21 +4765,17 @@ export class DebrisField {
           hasSalvage: debris.hasSalvage || false,
           salvage: debris.salvage || null,
           metalMassKg: debris.metalMassKg || 0,
-          // FIX_PLAN §4: MOID propagation + composite priority index
+          // MOID propagation + composite priority index (FIX_PLAN §4)
           moidBadge: debris.moidBadge || null,
           moid_m: debris.moid_m || null,
-          tpi,  // Target Priority Index — lower = higher priority
+          tpi,  // lower = higher priority
         });
       }
     }
 
-    // Mission 1 is a guided cluster authored near→far == catch order == reward
-    // ramp (#1→#7 climb in both distance and value), so for a new player we sort
-    // purely by distance: the list reads top-to-bottom in catch/reward order and
-    // Tab cycles nearest-first. Later missions keep the composite Target Priority
-    // Index (distance + ΔV + threat + value, lower = higher priority). The per-
-    // result `tpi` is still computed on M1 (cheap, harmless) so the result shape
-    // other consumers rely on is unchanged.
+    // Mission 1 is a guided cluster authored near→far == catch order == reward ramp, so a new player gets a pure distance
+    // sort (list reads in catch/reward order; Tab cycles nearest-first). Later missions use the composite TPI. `tpi` is
+    // still computed on M1 so the result shape other consumers rely on is unchanged.
     return results.sort((a, b) =>
       isMission1 ? (a.distance - b.distance) : (a.tpi - b.tpi));
   }
@@ -5542,17 +4789,16 @@ export class DebrisField {
     const debris = this.debrisMap.get(id);
     if (!debris || !debris.alive) return false;
 
-    // Capture the cluster bucket BEFORE marking dead so we can check whether
-    // this removal emptied the bucket (defer-trawl: anchors CLUSTER_CLEARED on
-    // active captures/deorbits instead of trawl sweeps).
+    // Capture the cluster bucket BEFORE marking dead, to check whether this removal emptied it (anchors CLUSTER_CLEARED on
+    // active captures/deorbits, not trawl sweeps).
     const clusterId = this._clusterIdOf(debris);
 
     debris.alive = false;
 
-    // catch-near-pass: a removed piece takes its near-pass proxy with it, this frame.
+    // a removed piece takes its near-pass proxy with it, this frame
     if (this._heldProxies && this._heldProxies.has(id)) this._dropHeldProxy(id);
 
-    // Set instance scale to 0 (hide)
+    // hide: instance scale 0
     const lookup = this._instanceLookup.get(id);
     if (lookup) {
       this._tempMatrix.makeScale(0, 0, 0);
@@ -5563,8 +4809,8 @@ export class DebrisField {
       }
     }
 
-    // A scoop bag owns its merged mesh (`mergeIntoBag`): free it with the bag (geometry and instance buffers; the material is
-    // the heaviest member's shared one and stays). Nothing reads a removed piece's slot, every reader guards a missing mesh.
+    // A scoop bag owns its merged mesh (`mergeIntoBag`): free it with the bag (geometry and instance buffers; the material
+    // is the heaviest member's shared one and stays). Every reader of a removed piece's slot guards a missing mesh.
     if (debris._ownsMesh && debris._meshKey && this.instancedMeshes[debris._meshKey]) {
       const own = this.instancedMeshes[debris._meshKey];
       if (this.group) this.group.remove(own);
@@ -5577,9 +4823,8 @@ export class DebrisField {
 
     eventBus.emit(Events.DEBRIS_REMOVED, { id, type: debris.type, sizeMeter: debris.sizeMeter });
 
-    // CLUSTER_CLEARED: if this piece was the last alive member of its bucket,
-    // fire the cluster-cleared ceremony. Guard against double-emit when several
-    // removal paths (CATCH_PROCESSED, ARM_DEORBIT, lasso) race the last member.
+    // CLUSTER_CLEARED when this was the last alive member of its bucket. Guards against double-emit when several removal
+    // paths (CATCH_PROCESSED, ARM_DEORBIT, lasso) race the last member.
     if (clusterId) {
       this._maybeEmitClusterCleared(clusterId);
     }
@@ -5588,15 +4833,9 @@ export class DebrisField {
   }
 
   /**
-   * Resolve the (altitude band × inclination cluster) bucket id for a debris
-   * object — the single classification entry point shared by getDebrisClusters,
-   * getFieldIdNear, and the CLUSTER_CLEARED accounting (so all three stay in
-   * lockstep). Transparently memoized on the orbital determinants (sma + inc):
-   * the result is identical to a live recompute, but stable debris (the vast
-   * majority on any given frame) skip the arithmetic + two linear searches, so
-   * the per-removal membership scan in _maybeEmitClusterCleared stays cheap.
-   * The cache auto-invalidates whenever sma/inc change (drift, deorbit, EDT
-   * attract, station-keep snap, fragment respawn).
+   * Resolve the (altitude band × inclination cluster) bucket id for a debris object: the single classification entry
+   * shared by getDebrisClusters, getFieldIdNear and the CLUSTER_CLEARED accounting. Memoized on sma + inc (identical to a
+   * live recompute; auto-invalidates when either changes: drift, deorbit, EDT attract, station-keep snap, fragment respawn).
    * @private
    * @param {object} debris
    * @returns {string|null} cluster id, or null if out of tracked bands
@@ -5619,18 +4858,14 @@ export class DebrisField {
   }
 
   /**
-   * Emit CLUSTER_CLEARED once for a bucket whose last alive member was just
-   * removed. Always called immediately AFTER a live member was marked dead, so
-   * the bucket was non-empty an instant ago. The alive-count check below is the
-   * sole de-dup mechanism: a bucket reaches `aliveInBucket === 0` exactly once
-   * per emptying (removeDebris early-returns on already-dead ids), and a later
-   * Kessler re-population that re-empties the same band naturally re-fires.
+   * Emit CLUSTER_CLEARED once for a bucket whose last alive member was just removed (called right AFTER a live member was
+   * marked dead). The alive-count check is the sole de-dup: a bucket reaches `aliveInBucket === 0` once per emptying, and
+   * a later Kessler re-population that re-empties the band re-fires.
    * @private
    * @param {string} clusterId
    */
   _maybeEmitClusterCleared(clusterId) {
-    // Count alive members + total in a single pass. Per-item cost is a cached
-    // id lookup + string compare (see _clusterIdOf memoization).
+    // alive + total in a single pass (cheap thanks to _clusterIdOf memoization)
     let aliveInBucket = 0;
     let totalInBucket = 0;
     let setAside = 0;
@@ -5642,10 +4877,10 @@ export class DebrisField {
     }
 
     if (aliveInBucket > 0) return; // bucket not empty yet
-    // A piece set aside when she left its field was never caught: a bucket holding one is not cleared, whatever melts last.
+    // A piece set aside when she left its field was never caught: a bucket holding one is not cleared.
     if (setAside > 0) return;
 
-    // Build a readable name from the id (`${incName}-${altMin}`).
+    // readable name from the id (`${incName}-${altMin}`)
     const dash = clusterId.lastIndexOf('-');
     const incName = dash >= 0 ? clusterId.slice(0, dash) : clusterId;
     const altMin = dash >= 0 ? clusterId.slice(dash + 1) : '';
@@ -5660,10 +4895,8 @@ export class DebrisField {
   }
 
   /**
-   * Phase 3b (capture-feedback overhaul): apply a tool-induced fragmentation
-   * to the field. Crack sheds a few small fragments and the body survives;
-   * breakup/shatter replaces the body with its fragments. KesslerSystem counts
-   * the same event independently.
+   * Tool-induced fragmentation: crack sheds a few small fragments and the body survives; breakup/shatter replaces the
+   * body with its fragments. KesslerSystem counts the same event independently.
    * @param {{debrisId:*, fragments?:number, severity?:string, destroyTarget?:boolean, mass?:number}} data
    * @private
    */
@@ -5676,11 +4909,11 @@ export class DebrisField {
     const count = Math.max(1, data.fragments || 1);
     const FS = Constants.FRAG_SEVERITY || {};
     if (data.destroyTarget) {
-      // Breakup / shatter: fragments carry the body's mass; original removed.
+      // fragments carry the body's mass; original removed
       this.createFragments({ x: pos.x, y: pos.y, z: pos.z }, debris.mass || data.mass || 1, count);
       this.removeDebris(debris.id);
     } else {
-      // Crack: shed a small mass fraction; the catch target survives.
+      // crack: shed a small mass fraction; the target survives
       const shedMass = Math.max(0.1, (debris.mass || 1) * (FS.CRACK_MASS_FRACTION ?? 0.05));
       this.createFragments({ x: pos.x, y: pos.y, z: pos.z }, shedMass, count);
     }
@@ -5694,40 +4927,29 @@ export class DebrisField {
    * @returns {Array<number>} IDs of new fragments
    */
   createFragments(position, mass, count) {
-    // Limit fragment creation to prevent runaway
+    // cap to prevent runaway
     const actualCount = Math.min(count, Constants.KESSLER_FRAGMENT_LIMIT);
     const ids = [];
 
     for (let i = 0; i < actualCount; i++) {
       const debris = this._createDebrisData();
-      // Override to fragment type at current position's approximate orbit
       debris.type = 'fragment';
       debris.shape = 'icosahedron';
-      debris._meshKey = null; // No instanced mesh slot for Kessler fragments
+      debris._meshKey = null; // no instanced mesh slot for Kessler fragments
       debris.tracked = Math.random() < TRACKING_PROB.fragment;
       DebrisField.setDebrisSize(debris, randRange(0.01, 0.5));
       debris.mass = mass / actualCount;
-      // Register item 90: the discarded draw rode into the shipped shard beyond
-      // the item-55 triplet — `material` stayed weighted by the discarded
-      // type's MATERIAL_WEIGHTS_BY_TYPE row (a shard drawn AS a rocketBody
-      // carried that row's odds — measured 45/23/22 aluminium/titanium/steel,
-      // never mli_mylar or solar_cell — where the fragment row intends
-      // 34/20/29.5 with ~6 % each MLI/PV), and the deriveCaptureFlags
-      // quadruple in _createDebrisData's return literal kept the discarded
-      // (material, type, mass) — measured 27 % of shipped fragments carrying
-      // hasFerrousFasteners + hasGrappleFixture, both intact-only lists.
-      // Redraw the material from the fragment row BEFORE the item-55 regen
-      // reads it, and re-derive the flags from the shipped triple. Brittleness
-      // is a type-blind uniform roll (:926) — re-rolled for provenance (no
-      // discarded-draw field ships), identical in distribution today, honest
-      // if :926 ever gains a type term.
+      // `_createDebrisData` drew the material from the DISCARDED type's MATERIAL_WEIGHTS_BY_TYPE row (a shard drawn AS a
+      // rocketBody carried 45/23/22 aluminium/titanium/steel, never mli_mylar or solar_cell; the fragment row intends
+      // 34/20/29.5 with ~6 % each MLI/PV) and its capture flags (measured: 27 % of shards had hasFerrousFasteners +
+      // hasGrappleFixture, both intact-only). Redraw the material from the fragment row BEFORE the salvage regen reads
+      // it, and re-derive the flags from the shipped triple. Brittleness is a type-blind uniform roll in
+      // _createDebrisData; re-rolled here for provenance.
       debris.material = weightedMaterial(debris.type);
       Object.assign(debris, deriveCaptureFlags(debris.material, debris.type, debris.mass));
       debris.brittleness = Math.random();
-      // Register item 55: _createDebrisData generated the salvage triplet from
-      // the DISCARDED draw (weighted type, power-law/pool mass) — regenerate it
-      // for the fragment this ships (the post-hoc regen idiom _spawnWelcomeField
-      // and _spawnThreatField use after their retags).
+      // _createDebrisData built the salvage from the discarded draw: regenerate it for the shipped fragment (same
+      // post-hoc idiom as _spawnWelcomeField / _spawnThreatField).
       debris.salvage = this._generateSalvage(debris.type, debris.mass, debris.material);
       debris.hasSalvage = debris.salvage.xenon > 0 || debris.salvage.indium > 0 ||
         debris.salvage.gaAs > 0 || debris.salvage.battery > 0 || debris.salvage.hydrazine > 0 ||
@@ -5735,9 +4957,9 @@ export class DebrisField {
         (debris.salvage.metals && debris.salvage.metals.length > 0);
       debris.metalMassKg = (debris.salvage.metals || []).reduce((sum, m) => sum + m.amount, 0);
       debris.tumbleRate = degToRad(randRange(30, 180));
-      debris._initialTumbleRate = debris.tumbleRate; // E1: keep spawn-tumble in sync with the override
+      debris._initialTumbleRate = debris.tumbleRate; // keep spawn-tumble in sync with the override (E1)
 
-      // Place near the collision point — approximate orbit from position
+      // approximate orbit from the collision position
       const r = Math.sqrt(position.x ** 2 + position.y ** 2 + position.z ** 2);
       debris.orbit.semiMajorAxis = r + (Math.random() - 0.5) * 0.001;
 
@@ -5746,9 +4968,7 @@ export class DebrisField {
       ids.push(debris.id);
     }
 
-    // Note: new fragments won't have instanced mesh slots yet
-    // For a full implementation, we'd need to rebuild or grow the instanced meshes
-    // For now, emit event for tracking
+    // New fragments have no instanced mesh slots yet (growing the meshes is not implemented); emit the event for tracking only.
     eventBus.emit(Events.DEBRIS_KESSLER, { count: actualCount, position });
 
     return ids;
@@ -5763,22 +4983,12 @@ export class DebrisField {
     return this.debrisMap.get(id) || null;
   }
 
-  // ==========================================================================
-  // CLUSTER ANALYSIS (Phase 2 — Trawl System)
-  // ==========================================================================
-
   /**
-   * Zoom Ladder F6/F7 render-block seam (T1, docs/ladder/01-numbers.md per-floor
-   * fidelity). On F6 (NAVCOM) the floor's `debrisMode` is 'clusters': the full
-   * debris meshes are replaced by NAVCOM cluster ring+count icons. On F7 (SDA
-   * DOWNLINK, M4) it is 'massBands': the field reads as chart altitude bands
-   * (SdaChart), so the meshes hide the same way. Any other mode
-   * ('full'/'tactical'/'hidden'/null) restores the group. `getDebrisClusters()`
-   * reads the debris DATA, not the meshes, so the chart's band aggregation keeps
-   * working while the meshes are hidden. SceneManager re-asserts this after
-   * applyTier() (the same lifecycle as nearFieldEnabled), and restores it on
-   * disengage. Non-hub; a no-op path for every non-iconizing mode keeps
-   * flag-off byte-identical.
+   * Zoom Ladder F6/F7 render-block seam (docs/ladder/01-numbers.md per-floor fidelity). F6 (NAVCOM) `debrisMode` is
+   * 'clusters' (meshes replaced by NAVCOM cluster icons); F7 (SDA DOWNLINK, M4) is 'massBands' (chart altitude bands,
+   * SdaChart): both hide the meshes. Any other mode ('full'/'tactical'/'hidden'/null) restores the group.
+   * `getDebrisClusters()` reads debris DATA, not meshes, so the chart keeps working. SceneManager re-asserts this after
+   * applyTier() (same lifecycle as nearFieldEnabled) and restores it on disengage.
    * @param {?string} mode - the arrival floor's fidelity.debrisMode (or null)
    */
   setLadderDebrisMode(mode) {
@@ -5787,26 +4997,16 @@ export class DebrisField {
   }
 
   /**
-   * Is the field currently in a GUIDED chapter (missions 1–3, the
-   * FORCED_DEPOT_CHAPTERS boundary)? Reads the live mission profile's
-   * `guidedCluster` flag (Constants.MISSIONS.PROFILES — the ONE place the
-   * boundary is authored), with the same null fallback `_spawnWelcomeField`
-   * uses: before any MISSION_START has arrived the field is in M1 mode and
-   * PROFILES[0] ('Orientation', guided) answers. Strict `=== true`, so a
-   * profile without the flag reads as NOT guided.
+   * Is the field in a GUIDED chapter (missions 1–3, the FORCED_DEPOT_CHAPTERS boundary)? Reads the live mission profile's
+   * `guidedCluster` (Constants.MISSIONS.PROFILES, the ONE place the boundary is authored), with `_spawnWelcomeField`'s
+   * null fallback: before any MISSION_START the field is in M1 mode and PROFILES[0] answers. Strict `=== true`.
    *
-   * Consumers: AutoLockController's nearest-any fallback when the forward arc
-   * is empty (T5); the re-seat safety net in update() (T6,
-   * _reseatDriftedWelcome below) reads the same predicate — both keep the
-   * welcome cluster findable in the chapters where losing it costs a player.
+   * Consumers: AutoLockController's nearest-any fallback when the forward arc is empty, and the re-seat safety net
+   * (_reseatDriftedWelcome): both keep the welcome cluster findable where losing it costs a player.
    *
-   * Known limit (inherited from `_currentMissionProfile`): on a bare Continue
-   * no MISSION_START fires (ScoringSystem.checkMissionTransition is not called
-   * by the restore path), so a mission-5 save resumes with this reading M1
-   * until the first credited catch re-asserts the mission. GameFlowManager's
-   * per-catch line avoids that by using the pure
-   * `isGuidedChapterNumber(getMissionProgress(debrisCleared).missionNum)`
-   * instead, which IS correct on Continue.
+   * Known limit (inherited from `_currentMissionProfile`): on a bare Continue no MISSION_START fires, so a mission-5 save
+   * reads M1 here until the first credited catch re-asserts the mission. GameFlowManager's per-catch line uses the pure
+   * `isGuidedChapterNumber(getMissionProgress(debrisCleared).missionNum)`, which IS correct on Continue.
    *
    * @returns {boolean}
    */
@@ -5815,18 +5015,11 @@ export class DebrisField {
     return !!profile && profile.guidedCluster === true;
   }
 
-  // ==========================================================================
-  // M1 GUIDANCE T6 — the welcome-cluster re-seat safety net (guided chapters)
-  // ==========================================================================
-
   /**
-   * Subscribe the re-seat "busy" set to the AUTOPILOT_TARGET_LOCK / UNLOCK
-   * pair and clear it on GAME_RESET. The mother autopilot (AutopilotSystem)
-   * and EVERY daughter (ArmUnit, when its tool closes on a target) emit the
-   * pair with `{ debrisId }` — hence a Set, not one id. The cluster-approach
-   * variant carries `targetId` only and is ignored: a cluster is not a piece.
-   * Called once by the constructor; returns the unsubscribe closure so the
-   * subscription can be exercised on a bare receiver (test-WelcomeField).
+   * Subscribe the re-seat "busy" set to the AUTOPILOT_TARGET_LOCK / UNLOCK pair and clear it on GAME_RESET. The mother
+   * autopilot and EVERY daughter (ArmUnit, when its tool closes on a target) emit the pair with `{ debrisId }`, hence a
+   * Set. The cluster-approach variant carries `targetId` only and is ignored. Called once by the constructor; returns the
+   * unsubscribe closure (so test-WelcomeField can exercise it on a bare receiver).
    * @returns {() => void}
    * @private
    */
@@ -5844,14 +5037,11 @@ export class DebrisField {
   }
 
   /**
-   * Install the "is a daughter flying to this id?" guard for the re-seat
-   * safety net. main.js wires it ONCE where debrisField and armManager both
-   * exist, as the same test CollisionAvoidanceSystem._isArmTarget makes (a
-   * daughter whose `arm.target.id === id`) — mirrored there, not imported, so
-   * DebrisField never holds an ArmManager reference. It closes the window the
-   * lock set leaves open: a daughter EN ROUTE has not yet emitted
-   * AUTOPILOT_TARGET_LOCK (that fires when its tool closes). An absent guard
-   * reads as "not busy" (headless / tests).
+   * Install the "is a daughter flying to this id?" guard for the re-seat net. main.js wires it ONCE where debrisField and
+   * armManager both exist, as the same test CollisionAvoidanceSystem._isArmTarget makes (`arm.target.id === id`), mirrored
+   * not imported so DebrisField never holds an ArmManager reference. It closes the window the lock set leaves open: a
+   * daughter EN ROUTE has not yet emitted AUTOPILOT_TARGET_LOCK (that fires when its tool closes). Absent guard = "not
+   * busy" (headless / tests).
    * @param {((id: number|string) => boolean)|null} fn
    */
   setReseatGuard(fn) {
@@ -5860,9 +5050,9 @@ export class DebrisField {
 
   /**
    * Hand the field the mother, so the welcome pieces share her ballistic coefficient each frame: dragDecelFor reads
-   * `source.lastDragAreaM2` / `lastDragMassKg`, the area and mass her drag block used (Nets step 3 slice 2a). main.js calls
-   * it once, after both exist, so every update() call (the game loop and the menu/shop one) uses it. Absent = her reference
-   * coefficient (MotherDragArea.referenceDragAreaM2() over MOTHER_DRAG.MASS_KG).
+   * `source.lastDragAreaM2` / `lastDragMassKg`, the area and mass her drag block used. main.js calls it once, after both
+   * exist, so every update() call (game loop and menu/shop one) uses it. Absent = her reference coefficient
+   * (MotherDragArea.referenceDragAreaM2() over MOTHER_DRAG.MASS_KG).
    * @param {{lastDragAreaM2?: (number|null), lastDragMassKg?: (number|null)}|null} source the PlayerSatellite
    */
   setMotherDragSource(source) {
@@ -5870,10 +5060,9 @@ export class DebrisField {
   }
 
   /**
-   * Install the mother-net registry (an object with an `activeNets` array, i.e.
-   * the CaptureNetSystem) so the re-seat safety net never moves a piece any
-   * live net is flying at or holding (net.targetDebris). DebrisField cannot
-   * import CaptureNet (cycle), so it is handed in. Absent = "no net busy".
+   * Install the mother-net registry (an object with an `activeNets` array, i.e. CaptureNetSystem) so the re-seat net never
+   * moves a piece any live net is flying at or holding (net.targetDebris). Handed in because DebrisField cannot import
+   * CaptureNet (cycle). Absent = "no net busy".
    * @param {{activeNets?: object[]}|null} src
    */
   setReseatNetSource(src) {
@@ -5881,64 +5070,43 @@ export class DebrisField {
   }
 
   /**
-   * Re-seat a LOST welcome piece onto its cone-fan slot ahead of the mother.
+   * Re-seat a LOST welcome piece onto its cone-fan slot ahead of the mother. This is a TELEPORT, gated hard: every clause
+   * must hold:
+   *   • a GUIDED chapter (isGuidedChapter(): missions 1–3): later missions accept drifting pieces;
+   *   • the piece is `welcomeSpawn` with a numeric `_welcomeSpecIndex`: catalog debris are NEVER re-seated;
+   *   • alive and free: not `_captured`, `_onboardingPinned` (#1/#2 ride the mother), `_armPinned`, `_capturedByArm` or
+   *     `_motherParked`;
+   *   • FAR: `_scenePosition` more than Constants.MISSIONS.RESEAT.DIST_M from the mother at every scan spanning
+   *     RESEAT.DWELL_S of REAL time (`_reseatFarS`, reset the moment it is seen back within range);
+   *   • NOT BEING APPROACHED: not under an AUTOPILOT_TARGET_LOCK (_lockedDebrisIds: mother AP or a daughter closing on
+   *     it) and not a daughter's en-route target (the setReseatGuard callback).
+   * Why (owner 2026-09-09): a player who cannot finish an early mission may quit and never return, so the guided cluster
+   * must stay reachable if something unforeseen moves the ship (e.g. a manual applyCartesianImpulse). "Far AND not being
+   * approached" is the point: a piece the autopilot or a daughter is flying to is never moved, however far.
    *
-   * This is a TELEPORT, and it is gated hard — every clause must hold:
-   *   • a GUIDED chapter (isGuidedChapter(): missions 1–3, the profiles'
-   *     guidedCluster flag) — later missions accept drifting pieces;
-   *   • the piece is `welcomeSpawn` with a numeric `_welcomeSpecIndex` (its
-   *     WELCOME_FIELD row) — catalog debris are NEVER re-seated, whatever
-   *     their distance;
-   *   • alive and free: not `_captured`, `_onboardingPinned` (#1/#2 ride the
-   *     mother), `_armPinned`, `_capturedByArm` or `_motherParked`;
-   *   • FAR: `_scenePosition` more than Constants.MISSIONS.RESEAT.DIST_M from
-   *     the mother at every scan spanning RESEAT.DWELL_S of REAL time
-   *     (`_reseatFarS`, reset the moment it is seen back within range);
-   *   • NOT BEING APPROACHED: not under an AUTOPILOT_TARGET_LOCK
-   *     (_lockedDebrisIds — mother AP or a daughter closing on it) and not a
-   *     daughter's en-route target (the setReseatGuard callback).
-   * Why it exists (owner, 2026-09-09): a player who cannot finish an early
-   * mission may quit and never return. The root causes of a vanishing cluster
-   * are fixed (T1 fan, T2 drag match, T4 pinned-orbit sync); this guarantees
-   * the guided cluster stays reachable if something unforeseen moves the ship
-   * (e.g. a manual applyCartesianImpulse). "Far AND not being approached" is
-   * the whole point: a piece the autopilot or a daughter is flying to is never
-   * moved, however far.
+   * The seat is _placeWelcomePiece (the spawn's own helper): same SMA, inside its row's fwd band (remembered roll), with
+   * its cone right/up offsets. `discovered` is kept; a SELECTED piece keeps its selection (no target-change event).
+   * `_scenePosition` is refreshed from the new orbit at once for every reader before the propagation loop. Each re-seat
+   * logs the id and old distance; the scan posts ONE HOUSTON line in total (RESEAT_COMMS_TEXT for one piece, "Re-acquired
+   * N drifted pieces ahead of you." for several; `_postOnboarding`, muted at tier 0 by design) and re-tags each moved
+   * piece `welcomeChapter` to the current chapter.
    *
-   * The seat is _placeWelcomePiece — the spawn's own helper, so a re-seated
-   * piece lands on the same SMA, inside its row's fwd band (its remembered
-   * roll), with its cone right/up offsets. `discovered` is kept as it was; a
-   * SELECTED piece keeps its selection (the reticle arrow swings to the front,
-   * AutoLock's _trackRange re-evaluates next frame) and no target-change event
-   * is emitted. `_scenePosition` is refreshed from the new orbit at once so
-   * every reader between here and the propagation loop sees the new place.
-   * Each re-seat logs the id and the old distance; the scan posts ONE HOUSTON
-   * line in total (RESEAT_COMMS_TEXT for one piece, "Re-acquired N drifted
-   * pieces ahead of you." for several; `_postOnboarding` — muted at tier 0 by
-   * design) and re-tags each moved piece `welcomeChapter` to the current chapter.
-   *
-   * Timers are wall-clock: the scan cadence (RESEAT_SCAN_PERIOD_S) and the
-   * dwell are player-experience timers — "lost for ten seconds" is what the
-   * player feels regardless of the game clock's warp.
+   * Timers are wall-clock: the scan cadence (RESEAT_SCAN_PERIOD_S) and the dwell are player-experience timers ("lost for
+   * ten seconds" is what the player feels regardless of game-clock warp).
    *
    * @param {THREE.Vector3|{x,y,z}} playerPos  mother position (scene units)
    * @param {object} playerOrbit               mother elements (scene-unit SMA)
    * @param {number} dt                        REAL seconds since the last frame
-   * @param {number} [gameDt]                  this frame's world step — the
-   *        propagation loop advances the re-seated piece by it right after, so
-   *        the spawn's one-step pre-compensation (n × gameDt) is applied here
-   *        too: spawn and re-seat are identical by construction
+   * @param {number} [gameDt]                  this frame's world step: the propagation loop advances the re-seated piece
+   *        by it right after, so the spawn's one-step pre-compensation (n × gameDt) is applied here too
    * @returns {number} how many pieces were re-seated this call
    * @private
    */
   _reseatDriftedWelcome(playerPos, playerOrbit, dt, gameDt = TimeAuthority.baseGameDt(dt)) {
     if (!playerPos || !playerOrbit) return 0;
-    // Consistent frame: pieces' _scenePosition was written by the PREVIOUS
-    // update's propagation loop, i.e. at the previous step's time — the ship
-    // position handed to that call. Measure against it, not this frame's
-    // post-step playerPos (one 0.1 s x10 frame moves the ship ~7.7 km, so a
-    // piece 9 m away read as "far"). Cached on every call, before any early
-    // return, so it is always exactly one update old.
+    // Consistent frame: pieces' _scenePosition was written by the PREVIOUS update's propagation loop, i.e. against the ship
+    // position handed to that call. Measure against it, not this frame's post-step playerPos (one 0.1 s x10 frame moves
+    // the ship ~7.7 km, so a piece 9 m away read as "far"). Cached on every call, before any early return.
     const prev = this._reseatPrevShip || (this._reseatPrevShip = { x: 0, y: 0, z: 0 });
     const hadPrev = this._reseatHasPrev === true;
     const refX = hadPrev ? prev.x : playerPos.x;
@@ -5950,8 +5118,7 @@ export class DebrisField {
     const cfg = Constants.MISSIONS.RESEAT;
     if (!cfg) return 0;
 
-    // Scan cadence (real time). The dwell below accumulates the same elapsed
-    // real seconds, so it resolves in RESEAT_SCAN_PERIOD_S steps.
+    // Scan cadence (real time); the dwell below accumulates the same elapsed seconds.
     this._reseatScanS = (this._reseatScanS || 0) + (dt > 0 ? dt : 0);
     if (this._reseatScanS < RESEAT_SCAN_PERIOD_S) return 0;
     const elapsedS = this._reseatScanS;
@@ -5962,14 +5129,14 @@ export class DebrisField {
     const nearScene = RESEAT_NEVER_WITHIN_M * METRE_SCENE;
     const nearSq = nearScene * nearScene;
     let reseated = 0;
-    let frameCompRad = null; // computed lazily — most scans move nothing
+    let frameCompRad = null; // lazy: most scans move nothing
 
     for (const debris of this.debrisList) {
       if (!debris.alive || !debris.welcomeSpawn) continue;
-      if (debris._disposed) continue;       // slice 5 (5d, D4): a piece that was let go stays where it was let go (never put back on its slot ahead)
+      if (debris._disposed) continue;       // a let-go piece stays where it was let go
       if (!Number.isInteger(debris._welcomeSpecIndex)) continue;
-      // H2b (lane 4a): the piece's own row spec (a high field's piece is not a WELCOME_FIELD row); a piece placed before
-      // `_fieldSpec` existed (a test rig that sets only the index) falls back to the low table.
+      // The piece's own row spec (a high field's piece is not a WELCOME_FIELD row); a test rig that sets only the index
+      // falls back to the low table.
       const spec = debris._fieldSpec || WELCOME_FIELD[debris._welcomeSpecIndex];
       if (!spec) continue;
       if (debris._captured || debris._onboardingPinned || debris._armPinned ||
@@ -5977,26 +5144,24 @@ export class DebrisField {
         debris._reseatFarS = 0;
         continue;
       }
-      // Any net (mother registry, or a daughter committed/drifting in its net)
-      // targeting or holding the piece: never ours to move.
+      // Any net (mother registry, or a daughter's) targeting or holding the piece: never ours to move.
       if (debris._netted || debris._committedNetArmId != null || netHoldsPiece(this._reseatNetSource, debris)) {
         debris._reseatFarS = 0;
         continue;
       }
       const sp = debris._scenePosition;
-      if (!sp) continue; // never positioned yet — nothing to measure
+      if (!sp) continue; // never positioned yet
       const dx = sp.x - refX, dy = sp.y - refY, dz = sp.z - refZ;
       const distSq = dx * dx + dy * dy + dz * dz;
-      // Never re-seat a piece within RESEAT_NEVER_WITHIN_M of the ship.
+      // never re-seat a piece within RESEAT_NEVER_WITHIN_M of the ship
       if (distSq <= nearSq || distSq <= farSq) {
         debris._reseatFarS = 0;
         continue;
       }
       debris._reseatFarS = (debris._reseatFarS || 0) + elapsedS;
-      // The dwell resolves at scan cadence: the piece has been seen far at
-      // every scan spanning DWELL_S of real time (10–12 s at a 2 s cadence).
+      // dwell resolves at scan cadence (10–12 s at a 2 s cadence)
       if (debris._reseatFarS < cfg.DWELL_S) continue;
-      // Far for long enough — but never move a piece something is flying to.
+      // never move a piece something is flying to
       if (this._lockedDebrisIds && this._lockedDebrisIds.has(debris.id)) continue;
       if (this._reseatGuard && this._reseatGuard(debris.id)) continue;
 
@@ -6010,10 +5175,9 @@ export class DebrisField {
       this._placeWelcomePiece(debris, spec, playerOrbit, frameCompRad);
       debris.discovered = wasDiscovered;
       debris._reseatFarS = 0;
-      // c2-fifth-catch D1: the game put this piece back in the player's path in
-      // THIS chapter — it counts as this chapter's welcome piece again.
+      // put back in the player's path in THIS chapter: counts as this chapter's welcome piece again
       debris.welcomeChapter = this._currentMissionNumber || 1;
-      // Refresh the read position now (the loop re-derives it after the step).
+      // refresh the read position now (the loop re-derives it after the step)
       const np = orbitToSceneCartesian(debris.orbit).position;
       if (sp.set) sp.set(np.x, np.y, np.z);
       else { sp.x = np.x; sp.y = np.y; sp.z = np.z; }
@@ -6023,8 +5187,7 @@ export class DebrisField {
         `was ${Math.round(oldDistM)} m from the mother for ${cfg.DWELL_S}+ s with nothing flying to it ` +
         `- put back on its slot ahead`);
     }
-    // c2-fifth-catch D3: ONE line per scan, however many pieces moved (was one
-    // per piece — the measured run posted six in one millisecond).
+    // ONE line per scan, however many pieces moved
     if (reseated > 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
@@ -6037,35 +5200,24 @@ export class DebrisField {
   }
 
   /**
-   * Group debris into orbital clusters for mission selection.
-   * A cluster = debris sharing similar altitude band + inclination center.
-   * Includes center position (THREE.Vector3) for autopilot heading and
-   * targets array for TrawlManager consumption.
+   * Group debris into orbital clusters for mission selection: a cluster = debris sharing an altitude band + inclination
+   * center. Includes center position (THREE.Vector3) for autopilot heading and a targets array for TrawlManager.
    *
-   * S11(a) note (register item 51): the field is assembled inside ONE orbital
-   * regime, so every alive piece classifies into ONE (band × inclination)
-   * cell and this returns a single non-empty cluster — TRUE, not a defect
-   * ("the field really is one regime now"; the multi-cluster ranking premise
-   * returns with fields-as-destinations). Item 50's reseatFieldRegime moves
-   * that cell on a language switch and the _clusterIdOf memo follows (sma/ecc
-   * byte-exact). Register item 97 (CLOSED): the DebrisMap SCORE priced the
-   * transfer against this cell's incCenter label, not the regime's plane —
-   * honest only where a language's incDeg sits exactly on its cell centre
-   * (en/th/es/hi), inflated for ja, filtered to the map's empty state
-   * ("No debris clusters detected") for ta/pt. Fixed at the payload: each
-   * cluster now also carries avgIncRad — the alive members' mean live
-   * inclination (radians), accumulated in the same pass as avgAltKm — and
-   * scoreCluster reads it (the label remains the payload-less fallback).
+   * The field is assembled inside ONE orbital regime, so every alive piece classifies into ONE (band × inclination) cell
+   * and this returns a single non-empty cluster: TRUE, not a defect (the multi-cluster ranking premise returns with
+   * fields-as-destinations). reseatFieldRegime moves that cell on a language switch and the _clusterIdOf memo follows.
+   * Each cluster carries avgIncRad (alive members' mean live inclination, radians, accumulated with avgAltKm) and
+   * scoreCluster reads it, not the cell's incCenter label (the label remains the payload-less fallback): the DebrisMap
+   * SCORE priced the transfer against the label, which is wrong where a language's incDeg is off the cell centre.
    * @returns {Array<{id: string, name: string, altRange: {min:number,max:number},
    *           incCenter: number, avgIncRad: number, count: number,
    *           avgAltKm: number, totalMassKg: number, types: object,
    *           targets: Array, center: {x:number,y:number,z:number}}>}
    */
   getDebrisClusters() {
-    // Inclination cluster names for human-readable IDs (shared module constant).
     const INC_NAMES_LOCAL = INC_NAMES;
 
-    // Build cluster buckets: one per (altBand × incCluster)
+    // one bucket per (altBand × incCluster)
     const clusters = new Map();
 
     for (const alt of ALT_BANDS) {
@@ -6081,36 +5233,33 @@ export class DebrisField {
           avgAltKm: 0,
           totalMassKg: 0,
           types: {},
-          targets: [],       // S7-B: debris objects in this cluster
+          targets: [],       // debris objects in this cluster
           _altSum: 0,         // running sum for avg computation
-          _incSum: 0,         // running sum (radians) for the members' mean plane (item 97)
+          _incSum: 0,         // running sum (radians) for the members' mean plane
           _centerSum: { x: 0, y: 0, z: 0 }, // running sum for center computation
         });
       }
     }
 
-    // Classify each alive debris into its cluster
     for (const debris of this.debrisList) {
       if (!debris.alive) continue;
 
-      // Shared classifier (memoized) — keeps cluster membership identical to
-      // the CLUSTER_CLEARED accounting in _maybeEmitClusterCleared.
+      // shared memoized classifier: membership identical to the CLUSTER_CLEARED accounting
       const clusterId = this._clusterIdOf(debris);
       if (!clusterId) continue; // out of range
       const cluster = clusters.get(clusterId);
       if (!cluster) continue;
 
-      // Altitude (km) still needed for the running average.
       const altKm = (debris.orbit.semiMajorAxis - Constants.EARTH_RADIUS) / Constants.SCENE_SCALE;
 
       cluster.count++;
       cluster._altSum += altKm;
-      cluster._incSum += debris.orbit.inclination; // radians — the members' mean plane (item 97)
+      cluster._incSum += debris.orbit.inclination; // radians
       cluster.totalMassKg += debris.mass;
       cluster.types[debris.type] = (cluster.types[debris.type] || 0) + 1;
       cluster.targets.push(debris);
 
-      // S7-B: Accumulate cartesian position for center-of-mass computation
+      // cartesian position for the center computation
       const cart = orbitToSceneCartesian(debris.orbit);
       if (cart && cart.position) {
         cluster._centerSum.x += cart.position.x;
@@ -6119,14 +5268,14 @@ export class DebrisField {
       }
     }
 
-    // Finalize: compute averages, filter empty clusters, sort
+    // Finalize: averages, drop empty clusters, sort
     const result = [];
     for (const cluster of clusters.values()) {
       if (cluster.count === 0) continue;
       cluster.avgAltKm = cluster._altSum / cluster.count;
       cluster.avgIncRad = cluster._incSum / cluster.count;
 
-      // S7-B: Compute cluster center (average cartesian position of members)
+      // center = average cartesian position of members
       cluster.center = {
         x: cluster._centerSum.x / cluster.count,
         y: cluster._centerSum.y / cluster.count,
@@ -6165,23 +5314,17 @@ export class DebrisField {
   }
 
   /**
-   * Mission-1 welcome-field diagnostics — per-piece SIZE, POSITION, and
-   * VISIBILITY feedback for the curated learning cluster (WELCOME_FIELD #1–#7).
-   *
-   * Built for tuning the first mission: it reports the *live* state of each
-   * curated piece (not the authored spec) so layout drift, LOD culling, or
-   * a piece that never becomes discoverable can be spotted on screen via the
-   * Ctrl+D debug overlay.
+   * Mission-1 welcome-field diagnostics: per-piece SIZE, POSITION and VISIBILITY of the curated cluster (WELCOME_FIELD
+   * #1–#7), from the *live* state (not the authored spec), for the Ctrl+D debug overlay.
    *
    * Each entry contains:
-   *  - `label`      1-based piece number (= spec index + 1 → "debris 1..7")
+   *  - `label`      1-based piece number (= spec index + 1)
    *  - `type`       rendered debris type (fragment / cubesat)
    *  - `sizeM`      live size in metres (`sizeMeter`)
-   *  - `renderM`    on-screen size (the longest side of the drawn mesh = sizeMeter since lane true-size, 2026-10-18)
+   *  - `renderM`    on-screen size (the longest side of the drawn mesh = sizeMeter)
    *  - `rangeM`     straight-line distance from the player (m) or null
-   *  - `fwdM`/`latM` along-track / cross-track offset in the mother's local
-   *                 frame (m) — fwd>0 ahead, lat>0 to the right; null if frame
-   *                 not yet established
+   *  - `fwdM`/`latM` along-track / cross-track offset in the mother's local frame (m): fwd>0 ahead, lat>0 to the right;
+   *                 null if frame not yet established
    *  - `inNetRange` true when within Constants.NET_LOCK_RANGE_M
    *  - `discovered` / `tracked`  HUD/targeting visibility flags
    *  - `pinned`     held in the mother's local frame (#1/#2 onboarding pins)
@@ -6196,7 +5339,7 @@ export class DebrisField {
     const out = [];
     if (!Array.isArray(this.debrisList)) return out;
 
-    // METRE_SCENE scene-units-per-metre → invert for scene→metres readout.
+    // scene units per metre, inverted for the scene→metres readout
     const sceneToM = (METRE_SCENE > 0) ? (1 / METRE_SCENE) : 100000;
     const fwd = this._motherFwd;
     const right = this._motherRight;
@@ -6221,8 +5364,8 @@ export class DebrisField {
         }
       }
 
-      // _lodScale is the post-LOD instance scale written each frame in
-      // _updateInstanceTransform (0 = culled, sceneSize = full, ½ = far tier).
+      // _lodScale: post-LOD instance scale written each frame in _updateInstanceTransform (0 = culled, sceneSize = full,
+      // ½ = far tier).
       const lod = (typeof d._lodScale === 'number') ? d._lodScale : (d.sceneSize || 0);
       let lodState = 'full';
       if (lod === 0) lodState = 'CULLED';
@@ -6234,8 +5377,7 @@ export class DebrisField {
         label: d._welcomeSpecIndex + 1,
         type: d.type || '?',
         sizeM,
-        // lane true-size (2026-10-18): a piece is DRAWN at its listed size (longest bounding-box side = sizeMeter), so the
-        // on-screen size IS sizeM. This was `sizeM * 1.9`, the old fragment mesh (bounding radius 0.95 -> diameter 1.9).
+        // a piece is DRAWN at its listed size (longest bounding-box side = sizeMeter), so on-screen size IS sizeM
         renderM: sizeM,
         rangeM,
         fwdM,
@@ -6256,8 +5398,7 @@ export class DebrisField {
 
   /**
    * Count alive debris that have been discovered (revealed via scan/selection).
-   * @param {boolean} [trackedOnly=false] - if true, only count tracked debris
-   *   (those that Tab cycling can select without an IR scanner).
+   * @param {boolean} [trackedOnly=false] - if true, only count tracked debris (Tab cycling can select without an IR scanner).
    * @returns {number}
    */
   getDiscoveredCount(trackedOnly = false) {
@@ -6271,13 +5412,9 @@ export class DebrisField {
   }
 
   /**
-   * Identify the debris "field" (orbital cluster) the player is currently in,
-   * based on the dominant cluster among alive debris within `radius` of a
-   * position. Used by the scan-reward economy so ground stations pay once per
-   * distinct field surveyed (re-scanning the same field yields no new data).
-   *
-   * Returns null when there is no meaningful field nearby (empty space) — a
-   * scan there produces no valuable survey data and earns nothing.
+   * Identify the debris "field" (orbital cluster) the player is in: the dominant cluster among alive debris within
+   * `radius` of a position. The scan-reward economy pays once per distinct field surveyed. Null when no meaningful field
+   * is nearby (empty space): a scan there earns nothing.
    *
    * @param {THREE.Vector3} position - player scene position
    * @param {number} radius - scene units (defaults to scan reveal range)
@@ -6286,8 +5423,7 @@ export class DebrisField {
   getFieldIdNear(position, radius) {
     if (!position) return null;
     const r = radius || ((Constants.SCAN && Constants.SCAN.REVEAL_BASE_RANGE) || 5.0);
-    // Tally cluster ids among alive debris within range (discovered or not —
-    // the field exists regardless of whether the player has revealed it yet).
+    // tally cluster ids among alive debris within range (discovered or not: the field exists regardless)
     const tally = new Map();
     const rSq = r * r;
     for (const debris of this.debrisList) {
@@ -6301,7 +5437,6 @@ export class DebrisField {
       tally.set(id, (tally.get(id) || 0) + 1);
     }
     if (tally.size === 0) return null;
-    // Return the most populous field id.
     let bestId = null, bestN = -1;
     for (const [id, n] of tally) {
       if (n > bestN) { bestN = n; bestId = id; }

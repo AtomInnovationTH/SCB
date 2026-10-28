@@ -1,18 +1,15 @@
 /**
  * VitalsPane.js — the one MOTHER pane: title, heat, battery, nitrogen and the
  * engine fuel, always on screen at the top of the left column (DECISIONS §15
- * rows 5 + 8, owner 2026-10-08: "standard stuff like a health bar, with modern
- * cockpit HUD style"; heat "a lot like MechWarrior 2"; "the temp gauge should
- * be obvious top left"). h1-mother-pane (owner 2026-10-14: "integrate mother
- * pane and pane for heat/battery/gas/ion. Label the gas"): this box now ALSO
- * carries the MOTHER section (nets row + hover detail, built by StatusPanel
+ * rows 5 + 8). owner 2026-10-08: "standard stuff like a health bar, with modern cockpit HUD style"; heat "a lot like
+ * MechWarrior 2"; "the temp gauge should be obvious top left".
+ * The box also carries the MOTHER section (nets row + hover detail, built by StatusPanel
  * and mounted here through `mountSection`), as wide as comms (480 px,
  * `--hud-side-w`; both narrow together on smaller screens — §23 row 1).
  *
  * Rows, top to bottom (an Airbus-style readout: green normal, amber caution,
  * red warning, white labels, flat strokes, a dark halo and no glow; the DOM
- * font rides `.hud-panel`'s `var(--font-mono)`, B612 Mono). h4-simple-first
- * (owner 2026-10-15, DECISIONS §23 row 1, "4 rows"): MOTHER is four rows —
+ * font rides `.hud-panel`'s `var(--font-mono)`, B612 Mono). MOTHER is four rows (DECISIONS §23 row 1, "4 rows"):
  * HEAT, BATTERY, PROPULSION and the nets row StatusPanel mounts under them.
  *
  *   TITLE    `MOTHER` and, on the right, the memo chip slot (`.vp-title-slot`;
@@ -24,10 +21,9 @@
  *   BATTERY  ONE row: fill = level; number = `312/600 Wh`; the trend arrow ▲/▼
  *            and the time left (`empty in 5 min` / `full in 2 min`; real minutes
  *            on the battery clock, `W_PER_UNIT_S`) on the same row. Both come from the MEDIAN of the last 30 one-second
- *            means of the net power (`NetPowerMedian`), so a scan burst (measured
- *            2026-10-15: ~10.5-12 kW for ~7 s, ~86 Wh) never reads "empty in
- *            1 min"; both stay blank until 30 such means exist (the first 30 s). amber < 25 %, red < 10 %; the
- *            COST FLASH: when the level drops by >= 1 % of the capacity inside
+ *            means of the net power (`NetPowerMedian`), so a scan burst (measured: ~10.5-12 kW for ~7 s, ~86 Wh)
+ *            never reads "empty in 1 min"; both stay blank until 30 such means exist (the first 30 s). amber < 25 %,
+ *            red < 10 %; the COST FLASH: when the level drops by >= 1 % of the capacity inside
  *            0.5 s, the dropped chunk lights up at the end of the fill and
  *            fades over 0.8 s. The in / out watts line is not drawn here: it
  *            lives in the MOTHER hover detail (`flowText()` feeds it).
@@ -42,10 +38,11 @@
  *            ship's ΔV in m/s (`getMassBudget().deltaV`; `—` before the
  *            budget is ready); amber < 15 %, red only when empty. No physics
  *            constant is read here: every kg and m/s comes from the budget.
- *   WHEELS   (the reaction-wheel kit, DECISIONS §2 row 9 / WD7; only while the kit is aboard) a third half on the PROPULSION row (built the first time the kit is aboard; on a pane under 430 px, the iPad held sideways, without the bar),
+ *   WHEELS   (the reaction-wheel kit, DECISIONS §2 row 9; only while the kit is aboard) a third half on the PROPULSION
+ *            row (built the first time the kit is aboard; on a pane under 430 px, the iPad held sideways, without the bar),
  *            `│ WHEELS ▮▯▯▯ 42%`: the fullest of the three wheels, |h| / 4 N·m·s. Full is the BAD end (the opposite of the
  *            tanks): green < 75 %, amber from 75 %, red from 90 % (a wheel that full cannot take more spin that way; the gas
- *            or the tail boxes take over until the coils slow it). Not in the pane without the kit: its DOM is what it was.
+ *            or the tail boxes take over until the coils slow it). Not in the pane without the kit: its DOM is unchanged.
  *
  * Contract with the ResourceSystem (both OPTIONAL — every method is probed
  * with `?.` and a missing one falls back, never throws):
@@ -57,9 +54,7 @@
  * the two tick marks and the displayed number can never disagree; the number
  * is truncated, not rounded, so `60` is amber and `59` is green.
  *
- * Colours (h1-mother-pane D6): every colour is written as
- * `var(--hud-<role>, <today's hex>)` so a later look only has to define the
- * variables; undefined -> today's look exactly. Nothing here defines them.
+ * Colours: every colour is a `var(--hud-<role>, <default hex>)`; nothing here defines the variables.
  *
  * Rate limit + cost: `update(player)` self-throttles to MIN_INTERVAL_MS (10 Hz)
  * on top of the HUD's own 10 Hz resource tick; every DOM write is
@@ -83,7 +78,6 @@ import { clamp } from '../../core/MathUtil.js';
 /** The root element id (FloorMask MASK_PANES.vitals.els = ['#hud-vitals']). */
 export const VITALS_ID = 'hud-vitals';
 
-/** The injected stylesheet's id (one <style> per document). */
 export const VITALS_STYLE_ID = 'vitals-pane-style';
 
 /** The rows of this box, top to bottom (the nets row is the fourth MOTHER row; StatusPanel mounts it). */
@@ -92,20 +86,19 @@ export const VITALS_ROWS = Object.freeze(['heat', 'battery', 'propulsion']);
 /** The two halves of the PROPULSION row: nitrogen, then the engine gas. */
 export const VITALS_HALVES = Object.freeze(['gas', 'ion']);
 
-/** The reaction-wheel half: a third half of the PROPULSION row, built when the kit is first aboard and shown only while it is (WD7). */
+/** The reaction-wheel half: a third half of the PROPULSION row, built when the kit is first aboard and shown only while it is. */
 export const VITALS_WHEELS_HALF = 'wheels';
 
 /** Row / half labels. The engine half's label follows the loaded fuel's name. */
 export const VITALS_LABELS = Object.freeze({
   heat: 'HEAT', battery: 'BATTERY', propulsion: 'PROPULSION', gas: 'N\u2082', wheels: 'WHEELS',
-  // q3 D4: until the loaded fuel is known the engine half carries the DEFAULT fuel's name (argon), not 'XENON'.
+  // Until the loaded fuel is known the engine half carries the DEFAULT fuel's name (argon), not 'XENON'.
   ion: String((Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL] && Constants.FUELS[Constants.DEFAULT_FUEL].name) || 'Argon').toUpperCase(),
 });
 
 /**
- * VITALS_GEOMETRY — the pane's numbers (CSS px). The pane is 480 wide (=
- * the comms pane, h1b; index.html's `--hud-side-w` narrows both together, down
- * to 300) with 18 px rows and a 16 px title row: 2 border + 2 x 5 padding + 16
+ * VITALS_GEOMETRY — the pane's numbers (CSS px). The pane is 480 wide (= the comms pane; index.html's `--hud-side-w`
+ * narrows both together, down to 300) with 18 px rows and a 16 px title row: 2 border + 2 x 5 padding + 16
  * title + 3 x 18 rows + 3 x 3 gaps = 91 px. The label column holds
  * "PROPULSION"; the BATTERY value column holds "312/600 Wh". `FLOW_PX` is the
  * retired power line's height (kept for the pins that import it).
@@ -124,10 +117,10 @@ export const VITALS_GEOMETRY = Object.freeze({
 });
 
 /**
- * q3-mother-pane D3: MOTHER's collapsed height, the ONE number the comms pane's default ('line') step reads, so the
+ * MOTHER's collapsed height, the ONE number the comms pane's default ('line') step reads, so the
  * two panes end at the same height. = 2 border + 2 x PAD_Y + TITLE + 3 meter rows + 3 gaps (the net line rides the
- * title row; the empty MOTHER section's flex gap is cancelled by a -GAP_PX margin in index.html). A browser test
- * (tmp/q3 notes in the plan log) measured the rendered pane at this height.
+ * title row; the empty MOTHER section's flex gap is cancelled by a -GAP_PX margin in index.html). Measured in a
+ * browser at this height.
  */
 export const VITALS_COLLAPSED_HEIGHT_PX = 2 + 2 * VITALS_GEOMETRY.PAD_Y_PX + VITALS_GEOMETRY.TITLE_PX
   + VITALS_ROWS.length * VITALS_GEOMETRY.ROW_PX + VITALS_ROWS.length * VITALS_GEOMETRY.GAP_PX;
@@ -138,16 +131,15 @@ export const VITALS_COLLAPSED_HEIGHT_PX = 2 + 2 * VITALS_GEOMETRY.PAD_Y_PX + VIT
  */
 export const VITALS_LAW = Object.freeze({
   HEAT_SCALE_C: 100,        // the HEAT bar's full scale
-  // The bands are the ship's (w2-heat's Constants.SHIP_HEAT); 60 / 85 is the
-  // DECISIONS §2 row 5 ruling, used until that block exists.
+  // The bands are the ship's (Constants.SHIP_HEAT); 60 / 85 is the DECISIONS §2 row 5 ruling, used until that block exists.
   HEAT_YELLOW_C: Constants.SHIP_HEAT?.YELLOW_C ?? 60,   // amber from here (economic pain starts)
   HEAT_RED_C: Constants.SHIP_HEAT?.RED_C ?? 85,         // red from here (tools refuse)
   BATT_AMBER: 0.25,
   BATT_RED: 0.10,
-  GAS_AMBER: Constants.COLD_GAS_LOW_FRAC,   // gas-low-fail-fast D4: the same fraction the "steering gas low" comms line fires at
+  GAS_AMBER: Constants.COLD_GAS_LOW_FRAC,   // the same fraction the "steering gas low" comms line fires at
   GAS_RED: 0.10,
   ION_AMBER: 0.15,
-  WHEELS_AMBER: 0.75,       // WD7: the fullest wheel, |h| / capacity; FULL is bad, so amber from here ...
+  WHEELS_AMBER: 0.75,       // the fullest wheel, |h| / capacity; FULL is bad, so amber from here ...
   WHEELS_RED: 0.90,         // ... and red from here
   WHEELS_BAR_MIN_PX: 430,   // a pane narrower than this (CSS px; the iPad held sideways is 384) drops the WHEELS bar and keeps `WHEELS nn%`: the three halves do not fit with it
   WHEELS_FIT_MS: 1000,      // how often the pane's width is looked at (a layout read)
@@ -158,11 +150,10 @@ export const VITALS_LAW = Object.freeze({
   FLASH_WINDOW_MS: 500,     // a drop inside this window is one action
   FLASH_FADE_MS: 800,
   FLASH_BATT_FRAC: 0.01,    // >= 1 % of capacity
-  // The gas flash in TANK terms (h1-mother-pane D5: 0.05 kg of the 20 kg pool = 0.25 %).
-  FLASH_GAS_FRAC: 0.0025,
+  FLASH_GAS_FRAC: 0.0025,   // gas flash in TANK terms: 0.05 kg of the 20 kg pool
   // While a flash still fades, a further drain at least this fast extends it
   // (low end follows the level, fade restarts): a scan's slow analysis draw
-  // (w2-heat: quick 2 % at once + 4 % over 3.5 s = 1.1 %/s) shows as ONE 6 %
+  // (quick 2 % at once + 4 % over 3.5 s = 1.1 %/s) shows as ONE 6 %
   // chunk. The base load (~0.1 %/s) never extends a flash.
   FLASH_EXTEND_BATT_FRAC_PER_S: 0.005,
   FLASH_EXTEND_GAS_FRAC_PER_S: 0.005,   // 0.1 kg/s of the 20 kg pool
@@ -179,12 +170,7 @@ const MINUS = '\u2212';       // − (Math Operators)
 const DASH = '\u2014';        // —
 const DEG = '\u00b0';         // °
 
-/**
- * The heat band for a temperature: green < 60, yellow 60 to < 85, red >= 85.
- * Non-finite -> 'none'.
- * @param {number} tempC
- * @returns {'green'|'yellow'|'red'|'none'}
- */
+/** The heat band for a temperature: green < 60, yellow 60 to < 85, red >= 85; non-finite -> 'none'. */
 export function heatBand(tempC) {
   if (!Number.isFinite(tempC)) return 'none';
   if (tempC >= VITALS_LAW.HEAT_RED_C) return 'red';
@@ -251,7 +237,7 @@ export function fmtTrend(netW) {
 
 /**
  * NetPowerMedian — the median of the last `size` one-second means of the net
- * battery power (h4-simple-first D4). `push(t, w)` folds a sample into the
+ * battery power. `push(t, w)` folds a sample into the
  * current one-second bucket; when a bucket closes its mean joins the ring.
  * `value()` is the median of the closed buckets (fewer than `size` -> the
  * median of what exists); before the first bucket closes it is the open
@@ -318,7 +304,7 @@ export class NetPowerMedian {
 }
 
 /**
- * w4-power D4: the BATTERY power line — `in 1725 W · out 500 W`, whole watts,
+ * The BATTERY power line — `in 1725 W · out 500 W`, whole watts,
  * both always shown (a negative or non-finite reading reads 0).
  * @param {number} inW
  * @param {number} outW
@@ -381,7 +367,7 @@ export function fmtTimeLeft(level, max, netW) {
 }
 
 /**
- * The real minutes behind `fmtTimeLeft` (u3-payoff-calm D3): the same guards, so it is NaN exactly
+ * The real minutes behind `fmtTimeLeft`: the same guards, so it is NaN exactly
  * when `fmtTimeLeft` would be ''.
  * @param {number} level  Wh
  * @param {number} max    Wh
@@ -401,7 +387,7 @@ export function timeLeftMinutes(level, max, netW) {
   return min;
 }
 
-/** u3-payoff-calm D3: the shown time left changes at most once a minute... */
+/** The shown time left changes at most once a minute... */
 export const TIME_LEFT_HOLD_MS = 60000;
 /** ...unless it is this far off the truth (a fraction of the true minutes)... */
 export const TIME_LEFT_VALVE_FRAC = 0.5;
@@ -414,7 +400,7 @@ export function newTimeHold() {
 }
 
 /**
- * u3-payoff-calm D3: what the BATTERY time-left shows, given what is true now. The shown text changes
+ * What the BATTERY time-left shows, given what is true now. The shown text changes
  * only when it appears or hides, when the direction flips (empty <-> full), when 60 s have passed since
  * the last shown change and the new text differs, or when the shown minutes were >= 50 % off the true
  * minutes for 15 s in a row (then the true text shows and the 60 s start again). Pure: returns the next
@@ -534,15 +520,15 @@ export class VitalsPane {
     this._titleSlot = null;      // the memo chip's home (right of MOTHER)
     this._timeEl = null;         // the battery time-left text
     this._timeText = '';
-    this._timeHold = newTimeHold();   // u3-payoff-calm D3: the calm time-left state
+    this._timeHold = newTimeHold();   // the calm time-left state
     this._trueTimeText = '';          // the unfiltered text now (read-only; the harness and tests)
     this._fuelLabel = VITALS_LABELS.ion;
-    this._median = new NetPowerMedian();   // D4: the trend / time-left use the median net power
-    // D4: the arrow and the time left wait until this many one-second means exist (a full window by
+    this._median = new NetPowerMedian();   // the trend / time-left use the median net power
+    // The arrow and the time left wait until this many one-second means exist (a full window by
     // default) — a first scan 12 s into the game must not be the median of a 12-sample history.
     this._warmup = Number.isFinite(deps.medianWarmup) ? Math.max(0, deps.medianWarmup) : VITALS_LAW.MEDIAN_SAMPLES;
     this._row = {};              // key -> { el, fill, flash, value, rate, tag, st }; 'gas' / 'ion' / 'wheels' are the PROPULSION halves
-    this._wheelsOn = false;      // WD7: the WHEELS half is shown (the kit is aboard)
+    this._wheelsOn = false;      // the WHEELS half is shown (the kit is aboard)
     this._wheelsEls = [];        // its separator and the half
     /** the in / out watts text (`in … W · out … W`): not drawn here, StatusPanel's hover detail shows it */
     this._flowText = '';
@@ -557,16 +543,12 @@ export class VitalsPane {
     this._build(deps.parent || null);
   }
 
-  /**
-   * h4b D5: a new game forgets the last game's power samples; the warm-up (30 one-second means)
-   * starts again, so the arrow and the time left stay blank until a full window exists.
-   */
+  /** A new game forgets the last game's power samples; the warm-up (30 one-second means) starts again. */
   resetMedian() { this._median.reset(); this._timeHold = newTimeHold(); this._trueTimeText = ''; this._writeTime(''); }
 
   /** The root element, or null headless. */
   get root() { return this._root; }
 
-  /** The title row's right-hand slot (the memo chip's home), or null headless. */
   get titleSlot() { return this._titleSlot; }
 
   /**
@@ -581,12 +563,9 @@ export class VitalsPane {
     return true;
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
   /**
    * Refresh the four rows from the player (HUD calls it inside its 10 Hz
-   * resource block). Self-throttled to MIN_INTERVAL_MS; every write is
-   * write-on-change; never throws on a half-wired player.
+   * resource block). Self-throttled to MIN_INTERVAL_MS; never throws on a half-wired player.
    * @param {object} player  needs `.resources` and (optionally) `._resourceSystem`
    * @param {number} [nowMs] ms clock override (tests); default `deps.now()`
    * @returns {boolean} true when this call sampled (false = throttled / headless)
@@ -641,12 +620,10 @@ export class VitalsPane {
   /** The unfiltered time-left text now (read-only; the calm `timeText()` lags it by up to a minute). */
   trueTimeText() { return this._trueTimeText || ''; }
 
-  /** The engine half's label (the loaded fuel's name in capitals). */
   fuelLabel() { return this._fuelLabel; }
 
   /**
-   * h1-mother-pane D3: the MPD-armed tint on the BATTERY bar fill (it was a write to the
-   * deleted `hud-bar-battery`). '' = none, 'armed' = purple, 'amber' = the low-charge blink phase.
+   * The MPD-armed tint on the BATTERY bar fill. '' = none, 'armed' = purple, 'amber' = the low-charge blink phase.
    * @param {''|'armed'|'amber'} mode
    */
   setMpdTint(mode) {
@@ -658,19 +635,14 @@ export class VitalsPane {
     if (m) r.el.setAttribute('data-mpd', m); else r.el.removeAttribute('data-mpd');
   }
 
-  /** The BATTERY row's MPD tint mode ('' | 'armed' | 'amber'). */
   mpdTint() { const r = this._row.battery; return (r && r.mpd) || ''; }
 
-  /** The row's current band ('green' | 'yellow' | 'red' | 'none'). */
   band(key) { const r = this._row[key]; return r ? r.st.band : 'none'; }
 
-  /** The row's fill as a CSS width string (`47%`). */
   fill(key) { const r = this._row[key]; return r ? r.st.fill : ''; }
 
   /** The cost-flash state of 'battery' | 'gas': { count, lo, hi } as fractions of the pool, plus `until` (ms). */
   flashInfo(key) { return this._flash[key] || null; }
-
-  // ── Readers ────────────────────────────────────────────────────────────────
 
   /** @private A snapshot method's result, or null (missing method, thrown error, non-object). */
   static _snap(rs, method) {
@@ -682,8 +654,6 @@ export class VitalsPane {
       return null;
     }
   }
-
-  // ── Painters ───────────────────────────────────────────────────────────────
 
   /** @private HEAT: the thermal snapshot, or `—` in grey. */
   _paintHeat(thermal) {
@@ -713,7 +683,7 @@ export class VitalsPane {
       level = res.battery; max = res.batteryMax;
     }
     this._writeFlow(power);
-    // D4: the net power goes through the median-of-30-seconds filter; the arrow and the time left read the median.
+    // The net power goes through the median-of-30-seconds filter; the arrow and the time left read the median.
     if (power && Number.isFinite(Number(power.netW))) this._median.push(t, Number(power.netW));
     else this._median.reset();
     if (!(max > 0)) {
@@ -736,13 +706,11 @@ export class VitalsPane {
   }
 
   /**
-   * @private w4-power D4 (owner 2026-10-12: "rotating mother should show
-   * immediate drop in power-in"): the in / out watts text — `in` is this
-   * frame's generation, unsmoothed (getPowerSnapshot().genW, the rate
+   * @private owner 2026-10-12: "rotating mother should show immediate drop in power-in". The in / out watts text:
+   * `in` is this frame's generation, unsmoothed (getPowerSnapshot().genW, the rate
    * PlayerSatellite._updateSolarPower writes), `out` is the ledger's draw
-   * (smoothed over POWER_TAU_S 0.5 s). Whole watts, both always shown. Since
-   * h4-simple-first D3 the text is not drawn in this pane: StatusPanel's MOTHER
-   * hover detail reads `flowText()`.
+   * (smoothed over POWER_TAU_S 0.5 s). Whole watts, both always shown. The text is not drawn in this pane:
+   * StatusPanel's MOTHER hover detail reads `flowText()`.
    */
   _writeFlow(power) {
     let text = '';
@@ -756,7 +724,7 @@ export class VitalsPane {
     this._flowText = text;
   }
 
-  /** @private D3: feed the true text through the calm hold, then draw what it says. */
+  /** @private Feed the true text through the calm hold, then draw what it says. */
   _holdTime(trueText, trueMin, t) {
     this._trueTimeText = trueText;
     this._timeHold = nextShown(this._timeHold, trueText, trueMin, t);
@@ -797,7 +765,7 @@ export class VitalsPane {
   }
 
   /**
-   * @private WD7, the WHEELS half: shown only while the kit is aboard; the bar and the number are the fullest of the three wheels
+   * @private The WHEELS half: shown only while the kit is aboard; the bar and the number are the fullest of the three wheels
    * (|h| / capacity), the band the 75 % / 90 % law. A player that cannot say (a stub) or has no kit: hidden, nothing drawn.
    */
   _paintWheels(player, t) {
@@ -820,7 +788,7 @@ export class VitalsPane {
   }
 
   /**
-   * @private WD7: on a narrow pane (the iPad held sideways: 384 CSS px, measured) the three halves overflow into each other, so the
+   * @private On a narrow pane (the iPad held sideways: 384 CSS px, measured) the three halves overflow into each other, so the
    * WHEELS half drops its bar and keeps `WHEELS nn%` (colour and number). Looked at once a second, and only with the kit aboard.
    * A pane that cannot say its width (headless, a stub) counts as wide.
    */
@@ -836,8 +804,8 @@ export class VitalsPane {
   }
 
   /**
-   * @private WD7: build the WHEELS half (a separator and a half, the same parts as the tanks') the first time the kit is aboard, at the
-   * end of the PROPULSION row. Without the kit the pane's DOM is exactly what it was. @returns {boolean} built
+   * @private Build the WHEELS half (a separator and a half, the same parts as the tanks') the first time the kit is aboard, at the
+   * end of the PROPULSION row. Without the kit the pane's DOM is unchanged. @returns {boolean} built
    */
   _buildWheelsHalf() {
     const doc = this._doc, row = this._row.propulsion;
@@ -913,7 +881,7 @@ export class VitalsPane {
       this._write(r, { band: 'none', fill: '0%', value: DASH });
       return;
     }
-    // g1-gas-upgrades D7: the bar is the tank by MASS, the same for every gas (the budget's `gasFrac`).
+    // The bar is the tank by MASS, the same for every gas (the budget's `gasFrac`).
     const frac = mb && Number.isFinite(mb.gasFrac) ? clamp01(mb.gasFrac) : clamp01(v / max);
     this._write(r, {
       band: frac <= 0 ? 'red' : levelBand(frac, VITALS_LAW.ION_AMBER, null),
@@ -937,8 +905,6 @@ export class VitalsPane {
     const r = this._row.ion;
     if (r && r.label) r.label.textContent = label;
   }
-
-  // ── DOM writes (all write-on-change) ───────────────────────────────────────
 
   /** @private Apply a partial state to a row; only the parts that differ touch the DOM. */
   _write(r, s) {
@@ -991,8 +957,6 @@ export class VitalsPane {
     f.phase ^= 1;
     r.flash.setAttribute('data-phase', f.phase ? 'a' : 'b');   // alternating keyframes restart the fade
   }
-
-  // ── Build ──────────────────────────────────────────────────────────────────
 
   /** @private Inject the style once, build title + rows, make the pane the parent's FIRST child. */
   _build(parent) {
@@ -1080,8 +1044,8 @@ export class VitalsPane {
       el.appendChild(t.track);
       el.appendChild(rec.value);
       if (key === 'battery') {
-        // h4-simple-first D3: the trend arrow and the time left ride the BATTERY row itself
-        // (the in / out watts line moved into the MOTHER hover detail). The E-Tether tag keeps its id.
+        // The trend arrow and the time left ride the BATTERY row itself
+        // (the in / out watts line is in the MOTHER hover detail). The E-Tether tag keeps its id.
         const edt = mk('span', 'vp-edt', 'E-Tether');
         edt.id = 'edt-indicator';
         edt.setAttribute('title', 'Electrodynamic Tether');
@@ -1109,7 +1073,7 @@ export class VitalsPane {
     const L = VITALS_LAW;
     const P = VisualLaw.COLORS;
     const HALO = '0 0 2px var(--hud-ink, #000), 0 0 2px var(--hud-ink, #000), 0 1px 1px var(--hud-ink, #000)';
-    // D6: every colour is a role variable with today's hex as its fallback.
+    // Every colour is a role variable with its default hex as the fallback.
     const LABEL = `var(--hud-label, ${P.LABEL})`;
     const TITLE = 'var(--hud-label, #00ff88)';
     const TEXT = `var(--hud-text, ${P.LABEL})`;

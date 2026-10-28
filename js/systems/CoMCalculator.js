@@ -1,38 +1,24 @@
 /**
- * CoMCalculator.js — Center-of-Mass, inertia and thruster plume-cone checks
- * ST-9.12 (C-9) — Config G Gaps #5 + #8
+ * CoMCalculator.js — Center-of-Mass, inertia and thruster plume-cone checks.
  *
- * Computes spacecraft CoM offset from barrel center considering:
- * - Core bus mass at origin (barrel center)
- * - Strut masses at alpha-dependent midpoint positions (cantilever CoM)
- * - Daughter masses at strut tip positions
+ * CoM: core bus at origin, struts at their alpha-dependent midpoints, daughters at the strut tips.
+ * Plume: a thruster is blocked (binary, per thruster) when any strut tip falls inside its nozzle cone.
  *
- * Plume interference checks:
- * - Thruster nozzle cones vs strut tip positions
- * - Binary block per-thruster when any strut tip falls inside cone
+ * All positions are in **mother-local body coordinates** (meters, origin at barrel center) — in the RENDERED ship's
+ * frame: barrel long axis = ship Z, stowed struts aft at −Z, roll about Z (ArmDockBasis.strutLocalDirection: α=0 → −Z).
+ * Scene-unit conversion uses M = 0.00001 (1 m in scene units).
  *
- * All positions are in **mother-local body coordinates** (meters, origin at
- * barrel center) — in the RENDERED ship's frame: barrel long axis = ship Z,
- * stowed struts aft at −Z, roll about Z (ArmDockBasis.strutLocalDirection:
- * α=0 → −Z). Scene-unit conversion uses M = 0.00001 (1 m in scene units).
+ * FRAME CONTRACT: the dock ring is STORED in generateDockPositions' Y-barrel convention (hinge ring in the XZ plane,
+ * COLLAR_Y in the y slot, stow direction −ŷ) — CameraSystem's aim bridge reads `arm._dockOutward` in that convention,
+ * so the stored fields cannot move. The mass model converts at the ONE boundary — strutTipMeters /
+ * strutMidpointMeters — via the Y/Z swap (x, y, z)_ship = (x, z, y)_stored, a rigid remapping: every magnitude
+ * (|CoM position|, the drift scalar, totalMass) is byte-comparable across it, and every downstream consumer (CoM,
+ * inertia, drift, both scorers, the plume cone test) computes in ONE frame.
  *
- * FRAME CONTRACT (cargo-continuity S13(a), register item 57): the dock ring is
- * STORED in generateDockPositions' Y-barrel convention (hinge ring in the XZ
- * plane, COLLAR_Y in the y slot, stow direction −ŷ) — CameraSystem's
- * aim bridge reads `arm._dockOutward` in that convention, so the
- * stored fields cannot move. The mass model converts at the ONE boundary —
- * strutTipMeters / strutMidpointMeters — via the Y/Z swap
- * (x, y, z)_ship = (x, z, y)_stored, a rigid remapping: every magnitude
- * (|CoM position|, the drift scalar, totalMass) is byte-comparable across it,
- * and every downstream consumer (CoM, inertia, drift, both scorers, the plume
- * cone test) computes in ONE frame.
- *
- * BOOKING CONTRACT (S13(b), register item 58; rack-snug 2026-10-18): held rack cargo is booked where
- * the pin actually holds it — the strut tip PLUS the rack cell's offset on the daughter
- * (her +Z support + the catch's drawn extent + the net gap, beside her end), turned by her attitude, via ONE
- * computation (heldCargoBookingMeters → ArmUnit.heldSlotAnchorInto). Pre-S13(b) the model
- * booked rack cargo AT the tip, understating the CoM lever ~10× (measured at
- * S12's M1: 1600 kg finale 0.68 m modelled vs 6.80 m at the pin).
+ * BOOKING CONTRACT: held rack cargo is booked where the pin actually holds it — the strut tip PLUS the rack cell's
+ * offset on the daughter (her +Z support + the catch's drawn extent + the net gap, beside her end), turned by her
+ * attitude, via ONE computation (heldCargoBookingMeters → ArmUnit.heldSlotAnchorInto). Booking rack cargo AT the tip
+ * understated the CoM lever ~10×.
  *
  * @module systems/CoMCalculator
  */
@@ -41,30 +27,17 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { heldSlotAnchorInto, rackOffsetFor, catchLongAxisInto, nextFreeRackCell } from '../entities/ArmUnit.js';
 import { composeDockedArmQuat } from '../entities/ArmDockBasis.js';
-import { DebrisField } from '../entities/DebrisField.js';           // net-duck D1: the drawn scale of a held catch
-import { DebrisWireframe } from '../ui/DebrisWireframe.js';          // net-duck D1: the drawn mesh
+import { DebrisField } from '../entities/DebrisField.js';
+import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { degToRad, clamp01, lerp } from '../core/MathUtil.js';
 
-/** 1 meter in scene units — matches ArmManager/PlayerSatellite convention */
+// 1 m in scene units (ArmManager/PlayerSatellite convention)
 const M = 0.00001;
 
 const V5 = Constants.OCTOPUS_V5;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// §1  CoM Computation
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Convert a stored dock position to the rendered ship frame, in meters.
- * Stored (generateDockPositions, Y-barrel): hinge ring in the XZ plane, collar
- * height in the y slot, stow direction −ŷ. Ship (Z-barrel, the rendered frame):
- * hinge ring in the XY plane, collar height in z, stow direction −ẑ.
- * The map is (x, y, z)_ship = (x, z, y)_stored — the Y/Z swap of register
- * item 57. S13(a): this is the ONLY place dock geometry enters the mass model.
- *
- * @param {{hingePosition:{x:number,y:number,z:number}, dockOutward:{x:number,y:number,z:number}}} dockPos
- * @returns {{hx:number, hy:number, hz:number, ox:number, oy:number, oz:number}}
- */
+// Stored dock position → ship frame, meters: (x, y, z)_ship = (x, z, y)_stored. The ONLY place dock geometry enters
+// the mass model.
 function _dockToShipFrame(dockPos) {
   const hp = dockPos.hingePosition;
   const ow = dockPos.dockOutward;
@@ -75,15 +48,9 @@ function _dockToShipFrame(dockPos) {
 }
 
 /**
- * Compute strut tip position in body-local meters, ship frame (see the module
- * FRAME CONTRACT). Matches ArmManager.getStrutTipPosition() (C-2) — ONE
- * computation, the twin delegates here.
- *
+ * Strut tip, meters, ship frame (FRAME CONTRACT). ArmManager.getStrutTipPosition() delegates here.
  * tip = hinge + L × (sin(α)·dockOutward − cos(α)·ẑ)     (stowed = aft at −Z)
- *
- * @param {{hingePosition:{x:number,y:number,z:number}, dockOutward:{x:number,y:number,z:number}}} dockPos
  * @param {number} alpha — strut sweep angle (rad), 0=stowed, π/2=equatorial, π=zenith
- * @returns {{x:number, y:number, z:number}} position in meters, ship frame
  */
 export function strutTipMeters(dockPos, alpha) {
   const L = V5.STRUT_LENGTH; // 1.70 m
@@ -97,15 +64,7 @@ export function strutTipMeters(dockPos, alpha) {
   };
 }
 
-/**
- * Compute strut midpoint position (approximate strut CoM for a uniform rod).
- * Used for the strut structural mass contribution to overall CoM.
- * Same frame contract as strutTipMeters.
- *
- * @param {{hingePosition:{x:number,y:number,z:number}, dockOutward:{x:number,y:number,z:number}}} dockPos
- * @param {number} alpha — strut sweep angle (rad)
- * @returns {{x:number, y:number, z:number}} midpoint position in meters, ship frame
- */
+// Strut midpoint (uniform-rod CoM), meters, same frame as strutTipMeters; alpha in rad.
 export function strutMidpointMeters(dockPos, alpha) {
   const halfL = V5.STRUT_LENGTH / 2;
   const { hx, hy, hz, ox, oy, oz } = _dockToShipFrame(dockPos);
@@ -118,62 +77,44 @@ export function strutMidpointMeters(dockPos, alpha) {
   };
 }
 
-// ── S13(b) / rack-snug: rack-cargo booking (register item 58) ───────────────
-// Module temps — the repo hot-path idiom (computeCoM runs per frame; none of
-// these may be retained across calls).
+// Module temps (hot path: computeCoM runs per frame; none may be retained across calls).
 const _hcdAnchor = new THREE.Vector3();
 const _hcdDir = new THREE.Vector3();
 const _hcdOut = new THREE.Vector3();
 const _hcdOff = new THREE.Vector3();
 const _hcdLong = new THREE.Vector3();
 const _hcdQ = new THREE.Quaternion();
-const _ihAnchor = new THREE.Vector3();   // in-hand booking temps (base behaviour)
+const _ihAnchor = new THREE.Vector3();   // in-hand booking temps
 const _ihDir = new THREE.Vector3();
 const _ihUp = new THREE.Vector3();
 const _ihLat = new THREE.Vector3();
 const _ihQInv = new THREE.Quaternion();
-/** Reused plain-object target for heldCargoBookingMeters on the hot paths. */
 const _slotPoint = { x: 0, y: 0, z: 0 };
 
 /**
- * Where a held rack piece actually IS, booked in the honest ship frame, in
- * meters. The anchor is the strut tip from strutTipMeters (the ONE S13(a)
- * conversion lives inside it — read it, never re-derive it).
+ * Where a held rack piece actually IS, ship frame, meters: strut tip (strutTipMeters; never re-derive the frame
+ * conversion) PLUS the rack cell's offset on HER, turned by her attitude at this strut angle —
+ * `heldSlotAnchorInto(tip, herQuat, offset)`, the ONE computation shared with `ArmUnit.heldSlotWorldInto`.
+ * Offset = the piece's stored `_rackLocalM`; a piece without one (prediction by size, old save, mock) takes the
+ * typeless form for `slotIndex` (`ArmUnit.rackOffsetFor`). Her attitude is the docked basis
+ * `composeDockedArmQuat(strutDir(α), azimuth)`: no world direction, hold axis or ship attitude enters
+ * (`playerSatellite` is in the signature for the callers only).
+ * The arithmetic runs on the pin's scene-unit tree (tip × M in, ÷ M out) so under an identity ship the booking equals
+ * `heldSlotWorldInto` to float equality (same operands, same order).
  *
- * rack-snug (Decision 4): a rack cell is a place on HER, so the booking is the tip PLUS the cell's offset on her,
- * turned by her attitude in the ship's body frame at this strut angle — `heldSlotAnchorInto(tip, herQuat, offset)`,
- * the ONE computation shared with `ArmUnit.heldSlotWorldInto` (register item 58). The offset is the piece's stored
- * `_rackLocalM`; a piece without one (a prediction by size, an old save, a mock) takes the typeless form for `slotIndex`
- * (`ArmUnit.rackOffsetFor`). Her attitude is the docked basis `composeDockedArmQuat(strutDir(α), azimuth)` — the same
- * one the pin composes with the ship's quaternion — so no world direction, hold axis or ship attitude enters:
- * `playerSatellite` is kept in the signature for the callers only.
- *
- * `axisOut` receives the unit body-frame LONG axis of the piece as it sits — the piece's longest mesh axis turned by
- * its attitude in her frame — for the plume volume model (S9); a piece with no stored attitude (or no mesh) reports her
- * +Z (the strut's outboard direction).
- *
- * Internally the arithmetic runs on the pin's scene-unit tree (tip × M in,
- * ÷ M out) so that under an identity ship fixture the booking equals
- * `heldSlotWorldInto`'s output to float equality — same operands, same order.
- *
- * @param {object} arm — ArmUnit instance or mock (reads herSupportZM / config for the typeless form only)
  * @param {object} dp — dock position (stored convention; see the FRAME CONTRACT)
  * @param {number} alpha — strut sweep angle (rad)
- * @param {object|null} playerSatellite — unused (see above)
  * @param {number} slotIndex — the cell (0-based) when `held` carries none
- * @param {number} sizeMeter — the piece's size, for a prediction
  * @param {{x:number,y:number,z:number}} out — receives the booking point, meters
- * @param {{x:number,y:number,z:null}} [axisOut] — receives the unit body-frame long axis (see above)
- * @param {object|null} [held] — the piece (its stored cell, offset and attitude)
- * @param {THREE.Quaternion|null} [quatOut] — net-duck D1: receives the piece's DRAWN attitude in the ship frame (her attitude at this
- *   strut angle × the attitude frozen in her frame, `held._qLocalHer`; her attitude alone for a piece without one)
- * @returns {{x:number,y:number,z:number}} out
+ * @param {{x:number,y:number,z:null}} [axisOut] — receives the piece's unit body-frame LONG axis (plume volume model);
+ *   a piece with no stored attitude (or no mesh) reports her +Z (the strut's outboard direction)
+ * @param {THREE.Quaternion|null} [quatOut] — receives the piece's DRAWN attitude in the ship frame (her attitude at this
+ *   strut angle × `held._qLocalHer`, the attitude frozen in her frame; her attitude alone for a piece without one)
  */
 export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter, out, axisOut, held = null, quatOut = null) {
   const tip = strutTipMeters(dp, alpha);
   _hcdAnchor.set(tip.x * M, tip.y * M, tip.z * M);
 
-  // Her attitude in the ship's body frame at this α: the docked basis (identity mother).
   const g = _dockToShipFrame(dp);
   const sinA = Math.sin(alpha);
   const cosA = Math.cos(alpha);
@@ -204,21 +145,12 @@ export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotInde
 }
 
 /**
- * Where a catch held IN HAND (`arm.capturedDebris`: pulled in, reeling, docking) is booked, in meters, ship frame.
- * rack-snug did NOT change this (the plan covers the rack only): it is the base behaviour, kept byte for byte —
- * the slot-0 geometry along the hold axis: anchor (strut tip) + holdDir·(size/2 + ARM_HOLD_CLEARANCE_M) + the
- * lateral bias along (holdDir × world up). The hold axis follows the pin's sources in the pin's order: 1. the fired
- * net's launch direction (world → body by the inverse attitude); 2. else the strut-outboard direction (the tip
- * direction); 3. else zero (books AT the tip). `axisOut` receives the resolved unit hold axis (zero when none).
- *
- * @param {object} arm — ArmUnit instance or mock (reads arm._firedNet only)
- * @param {object} dp — dock position (stored convention)
- * @param {number} alpha — strut sweep angle (rad)
+ * Where a catch held IN HAND (`arm.capturedDebris`: pulled in, reeling, docking) is booked, meters, ship frame.
+ * Slot-0 geometry: anchor (strut tip) + holdDir·(size/2 + ARM_HOLD_CLEARANCE_M) + the lateral bias along
+ * (holdDir × world up). Hold axis, in the pin's order: 1. the fired net's launch direction (world → body by the
+ * inverse attitude); 2. else the strut-outboard direction; 3. else zero (books AT the tip).
  * @param {object|null} playerSatellite — source of the attitude quaternion
- * @param {number} sizeMeter — the piece's size, for the standoff radius
- * @param {{x:number,y:number,z:number}} out — receives the booking point, meters
- * @param {{x:number,y:number,z:number}} [axisOut] — receives the resolved body-frame hold axis
- * @returns {{x:number,y:number,z:number}} out
+ * @param {{x:number,y:number,z:number}} [axisOut] — receives the resolved unit body-frame hold axis (zero when none)
  */
 export function heldInHandBookingMeters(arm, dp, alpha, playerSatellite, sizeMeter, out, axisOut) {
   const tip = strutTipMeters(dp, alpha);
@@ -265,16 +197,9 @@ export function heldInHandBookingMeters(arm, dp, alpha, playerSatellite, sizeMet
   return out;
 }
 
-/**
- * Visit every mass point a docked/home arm contributes: the daughter herself at
- * the strut tip, then each held piece at its pinned slot (the in-hand scalar at
- * the slot-0 geometry — its home pin at dock completion; S6/S7's byte-identity
- * contract). The masses are exactly getDaughterMass's sum — only the BOOKING
- * moved off the tip (S13(b)). Detached/expended arms contribute nothing
- * (getDaughterMass's exclusion, the S10 ledger's meaning of "aboard").
- *
- * @param {(mass: number, point: {x:number,y:number,z:number}) => void} cb
- */
+// Visit every mass point a docked/home arm contributes: the daughter at the strut tip, each held piece at its pinned
+// slot (in-hand at the slot-0 geometry). Masses equal getDaughterMass's sum; only the BOOKING is off the tip.
+// Detached/expended arms contribute nothing ("aboard" in the ledger sense). cb(mass kg, point m).
 function _forEachArmMassPoint(arm, dp, alpha, playerSatellite, cb) {
   if (arm.isDetached || arm.state === Constants.ARM_STATES.EXPENDED) return;
   const armMass = arm.config.type === 'weaver'
@@ -297,35 +222,16 @@ function _forEachArmMassPoint(arm, dp, alpha, playerSatellite, cb) {
   }
 }
 
-/**
- * Get the arm (daughter) mass for a given arm.
- * Returns 0 if the arm is detached or expended (mass no longer on spacecraft).
- *
- * Mass sum only — the S13(b) positions live in _forEachArmMassPoint (the
- * structure at the tip, held cargo at its pinned slot).
- *
- * @param {object} arm — ArmUnit instance (or mock with .config.type, .isDetached, .state)
- * @returns {number} daughter mass in kg
- */
+// Daughter mass in kg incl. held cargo; 0 if detached or expended. Mass only; positions: _forEachArmMassPoint.
 function getDaughterMass(arm) {
-  // Detached or expended daughters are no longer attached to the spacecraft
   if (arm.isDetached) return 0;
   const state = arm.state;
   if (state === Constants.ARM_STATES.EXPENDED) return 0;
-  // Active states where the daughter is physically away from the strut tip
-  // (TRANSIT, APPROACH, etc.) — the daughter is still tethered but for CoM
-  // purposes it's at the strut tip or slightly beyond. Simplify: mass at tip.
   const armMass = arm.config.type === 'weaver'
     ? Constants.V5_WEAVER_MASS
     : Constants.V5_SPINNER_MASS;
-  // Cargo-continuity S2 (bug B2): a daughter parked in HOLDING_CATCH is holding
-  // a captured body — that mass is cargo and must move CoM / inertia. Add it at
-  // the strut tip (same point as the daughter). Guarded so a detached/expended
-  // holder (already returned 0 above) and an empty/null catch contribute nothing.
-  // For CoM this full mass applies directly; computeInertia splits the cargo
-  // contribution out and clamps it with the berthed mass (INERTIA_MAX_FACTOR).
-  // S6: the parked hold is a rack — sum every held piece plus any in-hand
-  // catch (guarded: plain-object mocks may lack the field).
+  // Held cargo is real mass: moves CoM / inertia (computeInertia splits it out and clamps it with the berthed mass,
+  // INERTIA_MAX_FACTOR). Mocks may lack heldCatches.
   let cargoMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
   if (Array.isArray(arm.heldCatches)) {
     for (const held of arm.heldCatches) cargoMass += (held && held.mass) || 0;
@@ -334,18 +240,16 @@ function getDaughterMass(arm) {
 }
 
 /**
- * DECISIONS §33 row 4 (2026-10-20): the mother's nets aboard are real mass, held in the launcher at the nose — the same
+ * DECISIONS §33 row 4: the mother's nets aboard are real mass, held in the launcher at the nose — the same
  * `getMotherNetCount() x CAPTURE_NET.LARGE.MASS` ArmManager.getMassBudget adds to the carried dry mass, booked here
- * on the launcher axis so the two ledgers agree. They ride in the balanced reference too (a permanent, on-axis fitting,
+ * on the launcher axis so the two ledgers agree. They ride in the balanced reference too (permanent, on-axis fitting,
  * not a player-correctable asymmetry), so the CoM DRIFT is unchanged by them.
- * @param {object} [playerSatellite] — for `_captureNetSystem.getMotherNetCount()` (guarded: mocks may lack it)
  * @returns {{ massKg: number, z: number }} massKg 0 when none aboard; z = the cartridge, mid-launcher (m, ship frame)
  */
 export function motherNetBooking(playerSatellite) {
   const cns = playerSatellite && playerSatellite._captureNetSystem;
   const n = (cns && typeof cns.getMotherNetCount === 'function') ? cns.getMotherNetCount() : 0;
-  // 2026-10-21 (nets-step2): the current line-fibre tier's packed-net mass (getMotherNetMassKg); mocks without it keep
-  // the start-tier mass.
+  // Current line-fibre tier's packed-net mass; mocks without getMotherNetMassKg keep the start-tier mass.
   const massKg = n > 0
     ? ((typeof cns.getMotherNetMassKg === 'function') ? cns.getMotherNetMassKg() : n * Constants.CAPTURE_NET.LARGE.MASS)
     : 0;
@@ -353,29 +257,21 @@ export function motherNetBooking(playerSatellite) {
 }
 
 /**
- * Compute composite center-of-mass of the entire spacecraft in body-local coordinates.
+ * Composite center of mass of the spacecraft, body-local (ship frame, meters).
+ * Core bus at origin; strut (STRUT_MASS) at its α-dependent midpoint; daughter at the strut tip; radiators (owner
+ * 2026-10-24, "count them"): every owned petal at its live angle, mass centre where the inertia puts it
+ * (`radiatorCentroid`; a caller with no radiator info books none).
  *
- * Model:
- *   - Core bus:  mass = CORE_DRY_MASS, position = origin (0,0,0)
- *   - Per strut: mass = STRUT_MASS (4.5 kg), position = strut midpoint (α-dependent)
- *   - Per daughter: mass = WEAVER/SPINNER, position = strut tip (α-dependent)
- *
- *   - Radiators (2026-10-24, owner: "count them"): every owned petal at its live angle, its mass centre at the same
- *       place the inertia puts it (`radiatorCentroid`). A caller with no radiator info books none.
- *
- * @param {object} armManager — ArmManager instance with .arms[], ._dockPositions[]
  * @param {object} [playerSatellite] — radiatorBookings(), tipCargo, _captureNetSystem (all guarded: mocks may lack them)
- * @param {{ radiators?: boolean, excludeArm?: object }} [opts] — `radiators: false` leaves the petals out (the stow suggestion's
- *   direction); `excludeArm`: leaves that ONE daughter (and her cargo) out, her strut stays (the launch kick: she is leaving)
+ * @param {{ radiators?: boolean, excludeArm?: object }} [opts] — `radiators: false` leaves the petals out (the stow
+ *   suggestion's direction); `excludeArm`: leaves that ONE daughter (and her cargo) out, her strut stays (launch kick)
  * @returns {{ position: {x:number,y:number,z:number}, totalMass: number,
  *             breakdown: { core: number, struts: number[], arms: number[], motherNets: number, radiators: number } }}
  */
 export function computeCoM(armManager, playerSatellite, opts) {
   const coreMass = V5.CORE_DRY_MASS; // 161.0 kg at origin
   let totalMass = coreMass;
-  let cx = 0, cy = 0, cz = 0; // weighted sum: Σ(m·r)
-
-  // Core at origin → contributes (0,0,0) × coreMass — no change to cx/cy/cz
+  let cx = 0, cy = 0, cz = 0; // weighted sum: Σ(m·r); the core sits at the origin: no moment
 
   const strutMasses = [];
   const armMasses = [];
@@ -394,7 +290,6 @@ export function computeCoM(armManager, playerSatellite, opts) {
 
     const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
 
-    // Strut structural mass at midpoint
     const strutMass = V5.STRUT_MASS; // 4.5 kg
     const mid = strutMidpointMeters(dp, alpha);
     cx += strutMass * mid.x;
@@ -403,9 +298,7 @@ export function computeCoM(armManager, playerSatellite, opts) {
     totalMass += strutMass;
     strutMasses.push(strutMass);
 
-    // Daughter mass: structure at the tip, held cargo at its pinned slot
-    // (S13(b), register item 58 — the honest lever, ONE computation with the pin).
-    // `opts.excludeArm` (launch-kick): this daughter is leaving: her strut stays, she and what she carries do not.
+    // `opts.excludeArm` (launch kick): this daughter is leaving: her strut stays, she and what she carries do not.
     let dMass = 0;
     if (!opts || opts.excludeArm !== arm) {
       _forEachArmMassPoint(arm, dp, alpha, playerSatellite, (m, p) => {
@@ -420,8 +313,7 @@ export function computeCoM(armManager, playerSatellite, opts) {
     armMasses.push(dMass);
   }
 
-  // Bags latched on the radiator tips (TipCargo): real mass at the bag centre,
-  // ship frame in metres — the same frame as the arm points above.
+  // Bags latched on the radiator tips (TipCargo): mass at the bag centre, ship frame, m.
   const tipBags = playerSatellite && playerSatellite.tipCargo
     && typeof playerSatellite.tipCargo.massBookings === 'function'
     ? playerSatellite.tipCargo.massBookings() : null;
@@ -436,14 +328,14 @@ export function computeCoM(armManager, playerSatellite, opts) {
     }
   }
 
-  // The mother's nets in the launcher (on the axis: x = y = 0).
+  // Mother's nets in the launcher (on the axis: x = y = 0).
   const nets = motherNetBooking(playerSatellite);
   if (nets.massKg > 0) {
     cz += nets.massKg * nets.z;
     totalMass += nets.massKg;
   }
 
-  // The radiators: structure aboard, every owned petal at its live angle (a held petal at its own).
+  // Radiators: every owned petal at its live angle (a held petal at its own).
   let radMass = 0;
   if (!opts || opts.radiators !== false) {
     const petals = _radiatorPetals(playerSatellite);
@@ -473,16 +365,15 @@ export function computeCoM(armManager, playerSatellite, opts) {
   };
 }
 
-// ── Radiator petals: ONE geometry for the mass centre and the inertia ───────────────────────────────────────────────
+// ── Radiator petals: ONE geometry for the mass centre and the inertia ──
 // A petal's mass is spread uniformly over its plate span (PLATE_START_M..PLATE_END_M along the strut line), the line
 // leaving the hinge pin (HINGE_R_M out at the petal's azimuth, HINGE_Z_M) in the direction u = (sinθ·r̂, cosθ·ẑ). The
-// plate's width is symmetric about that line (centre panel on it, a wing each side), so the petal's mass centre is on
-// the line at the mean span: h + s̄·u. `radiatorCentroid` (the CoM) and `radiatorInertia` (the inertia) both read the
-// line through `_petalLine`, so the two can never put the same petal in two places (2026-10-24, fu-com).
+// plate is symmetric about that line, so the petal's mass centre is on it at the mean span: h + s̄·u.
+// `radiatorCentroid` and `radiatorInertia` both read the line through `_petalLine`: one petal, one place.
 const _pl = { hx: 0, hy: 0, hz: 0, ux: 0, uy: 0, uz: 0, ca: 1, sa: 0 };
 const _radSum = { massKg: 0, mx: 0, my: 0, mz: 0 };
 
-/** The strut line of the petal at azimuth `azDeg` swung to `thetaRad`: hinge pin h and direction u (module scratch `_pl`). */
+// Strut line of the petal at azimuth `azDeg` swung to `thetaRad`: hinge pin h and direction u (module scratch `_pl`).
 function _petalLine(azDeg, thetaRad) {
   const FL = Constants.THERMAL.FLOWER;
   const az = degToRad(azDeg);
@@ -496,10 +387,9 @@ function _petalLine(azDeg, thetaRad) {
 
 /**
  * Mass and first moment of the radiator petals about the barrel origin, ship frame: Σ m and Σ m·(mass centre), the
- * petal's centre being h + s̄·u (see `_petalLine`). Allocation-free: the result is written into `out` (default: a module
- * scratch, valid until the next call, so read it at once).
+ * petal's centre being h + s̄·u (see `_petalLine`). Writes into `out` (default: a module scratch, valid until the next
+ * call: read it at once).
  * @param {Array<{massKg:number, azDeg:number, thetaRad:number}>} petals
- * @param {{massKg:number, mx:number, my:number, mz:number}} [out]
  * @param {number} [allAtThetaRad] when finite, every petal is taken at THIS angle instead of its own (the balanced
  *   reference of the CoM drift: all petals at the shared radiator angle)
  * @returns {{ massKg:number, mx:number, my:number, mz:number }} kg and kg·m
@@ -523,7 +413,7 @@ export function radiatorCentroid(petals, out = _radSum, allAtThetaRad) {
   return out;
 }
 
-/** The player's radiator petals as bookings, or null for a caller with no radiator info (a mock, a tool). */
+// The player's radiator petals as bookings, or null for a caller with no radiator info (a mock, a tool).
 function _radiatorPetals(playerSatellite) {
   return playerSatellite && typeof playerSatellite.radiatorBookings === 'function'
     ? playerSatellite.radiatorBookings() : null;
@@ -531,9 +421,7 @@ function _radiatorPetals(playerSatellite) {
 
 /**
  * Inertia of the radiator petals about the barrel origin, ship frame (kg·m²; diagonal terms, like every other part).
- * Each petal's mass is spread uniformly over its plate span (PLATE_START_M..PLATE_END_M along the strut, the
- * method of the reaction-wheels appendix), the strut line leaving the hinge pin (HINGE_R_M out at the petal's azimuth,
- * HINGE_Z_M) in the direction (sinθ·r̂, cosθ·ẑ). Second moments of the line about the origin are exact:
+ * Mass uniform over the plate span (see the petal block above). Second moments of the line about the origin are exact:
  * <p pᵀ> = h hᵀ + s̄ (h uᵀ + u hᵀ) + <s²> u uᵀ with s uniform on [s0, s1].
  * The plate's own width adds m·σ²·(I − t tᵀ) with t the tangential direction and σ² the tangential variance of the
  * plate's mass: centre panel 50 %, each wing 25 % hinged on the centre panel's edge, the wing centroid at
@@ -573,28 +461,23 @@ export function radiatorInertia(petals) {
 }
 
 /**
- * Compute the rigid-body moment of inertia about the ship's true centre of mass, in body axes (kg·m²): ixx pitch
- * (about +X), iyy yaw (about +Y), izz roll (about +Z, the barrel long axis). This is the attitude-dynamics SSOT — it
- * mirrors computeCoM's mass tree (same strut midpoint / daughter tip helpers, same detached/expended exclusions, same
- * radiator centroid) so inertia and CoM never diverge.
- * S13(a): the arm terms now arrive in the SAME ship frame as the bus-shell
- * term (roll mR² on izz) — pre-S13(a) they came out Y-barrel, which booked
- * the cargo's z-lever into roll and over-fired the izz clamp (register 57).
+ * Rigid-body moment of inertia about the ship's true centre of mass, body axes (kg·m²): ixx pitch (about +X), iyy
+ * yaw (about +Y), izz roll (about +Z, the barrel long axis). The attitude-dynamics SSOT: mirrors computeCoM's mass
+ * tree (same strut midpoint / daughter tip helpers, same detached/expended exclusions, same radiator centroid) so
+ * inertia and CoM never diverge. The arm terms arrive in the SAME ship frame as the bus-shell term (roll mR² on izz);
+ * in the stored Y-barrel frame the cargo's z-lever would book into roll and over-fire the izz clamp.
  *
  * Model (summed about the barrel origin first, then moved to the centre of mass: see "About the CoM"):
- *   - Core bus: thin cylindrical shell, mass = CORE_DRY_MASS, at the origin.
+ *   - Core bus: thin cylindrical shell at the origin.
  *       transverse (x,y) = m·(R²/2 + L²/12);  roll (z) = m·R².
  *       (R = COLLAR_RADIUS, L = CORE_LENGTH. CORE_DRY_MASS 176 kg: stowed transverse ≈ 72.75 kg·m², roll ≈ 28.16.)
- *   - Radiators (2026-10-23, owner: "count them"): every owned petal is structure (unclamped), its mass spread
- *       uniformly over the plate span at the petal's live angle — see radiatorInertia.
- *   - Struts: point mass STRUT_MASS at the α-dependent midpoint (parallel axis).
- *   - Daughters: point mass WEAVER/SPINNER at the α-dependent tip (parallel axis).
- *   - Berthed catch mass (D6): included as a fore point mass but the ADDED
- *     transverse/roll contribution is clamped so the total never exceeds
- *     INERTIA_MAX_FACTOR × the stowed bus inertia. 23 t unclamped would freeze
- *     rotation; the clamp mirrors the translation MASS_EFFECT_MAX soft-lock.
+ *   - Radiators (owner 2026-10-23, "count them"): structure (unclamped), see radiatorInertia.
+ *   - Struts, daughters: point masses at the α-dependent midpoint / tip (parallel axis).
+ *   - Berthed catch mass: a fore point mass, but the ADDED transverse/roll contribution is clamped so the total never
+ *     exceeds INERTIA_MAX_FACTOR × the stowed bus inertia. 23 t unclamped would freeze rotation; the clamp mirrors the
+ *     translation MASS_EFFECT_MAX soft-lock.
  *
- * About the CoM (2026-10-24, owner: "physically real wins"): a free body turns about its centre of mass, and with the
+ * About the CoM (owner 2026-10-24, "physically real wins"): a free body turns about its centre of mass, and with the
  * radiators counted that centre sits up to 0.5 m from the barrel origin (146°: 0.44 m aft), which the origin-frame
  * sum overstated by 13 % (pitch/yaw). Per axis k, I_k = I_origin,k − M_k·d⊥,k², with M_k and d_k the total mass and mass
  * centre of exactly what the origin sum counted on that axis: structure at full mass, cargo (in hand, rack, tip bags) and
@@ -603,15 +486,14 @@ export function radiatorInertia(petals) {
  * same place, so each axis is the inertia of a real mass layout about its own centre: > 0, never above the origin
  * value. The berthed mass sits on the axis at z = +L/2 (the clamp's own model, below). computeCoM has no berthed mass,
  * so while a catch is berthed the inertia's centre differs from computeCoM's by that mass (accepted). Diagonal terms only
- * (no products of inertia), as before. Both this sum and computeCoM leave out 25.6 kg the ship's mass budget carries
- * (ArmManager.getMassBudget): the engine tank's dry mass 9.5 kg (:4561), the cold gas 3.6 kg (:4577) and the engine gas
- * 12.5 kg (:4575): none of them has a place in the mass tree. The tree's 268.7 kg of the ship's 294.28 is what the
+ * (no products of inertia). Both this sum and computeCoM leave out 25.6 kg the ship's mass budget carries
+ * (ArmManager.getMassBudget): the engine tank's dry mass 9.5 kg, the cold gas 3.6 kg and the engine gas
+ * 12.5 kg: none of them has a place in the mass tree. The tree's 268.7 kg of the ship's 294.28 is what the
  * centre of mass is taken on.
  *
  * @param {object} armManager — ArmManager (may be null/empty → bus-only inertia)
- * @param {object} [playerSatellite] — for getBerthedMassKg() via _captureNetSystem, radiatorBookings(), tipCargo
- * @param {{ about?: 'origin'|'com' }} [opts] — `about: 'origin'` returns the sum about the barrel origin (what this
- *   function returned before 2026-10-24: tests show the shift with it; the game always takes the CoM frame)
+ * @param {{ about?: 'origin'|'com' }} [opts] — `about: 'origin'` returns the sum about the barrel origin (tests show the
+ *   shift with it; the game always takes the CoM frame)
  * @returns {{ ixx:number, iyy:number, izz:number }} kg·m² about the centre of mass (or the origin, see opts)
  */
 export function computeInertia(armManager, playerSatellite, opts) {
@@ -619,7 +501,7 @@ export function computeInertia(armManager, playerSatellite, opts) {
   const L = V5.CORE_LENGTH;     // 2.0 m
   const coreMass = V5.CORE_DRY_MASS; // 176.0 kg
 
-  // Bare-bus thin-shell inertia (also the stowed reference for the D6 clamp).
+  // Bare-bus thin-shell inertia (also the stowed reference for the clamp).
   const busTransverse = coreMass * (R * R / 2 + L * L / 12); // ≈ 72.75
   const busRoll = coreMass * R * R;                          // ≈ 28.16
 
@@ -632,8 +514,7 @@ export function computeInertia(armManager, playerSatellite, opts) {
   let sM = coreMass, sMx = 0, sMy = 0, sMz = 0;
   let cM = 0, cMx = 0, cMy = 0, cMz = 0;
 
-  // Point-mass contribution via parallel axis: for mass m at (x,y,z),
-  //   Ixx += m(y²+z²), Iyy += m(x²+z²), Izz += m(x²+y²).
+  // Parallel axis: Ixx += m(y²+z²), Iyy += m(x²+z²), Izz += m(x²+y²).
   const addPoint = (m, p) => {
     if (m <= 0) return;
     ixx += m * (p.y * p.y + p.z * p.z);
@@ -645,11 +526,8 @@ export function computeInertia(armManager, playerSatellite, opts) {
   const arms = (armManager && armManager.arms) || [];
   const docks = (armManager && armManager._dockPositions) || [];
 
-  // Cargo-continuity S2 (bug B2): held-catch cargo contributes inertia, but —
-  // like the D6 berthed mass below — a multi-tonne catch at a strut tip would
-  // otherwise freeze rotation. Accumulate the daughter CARGO contribution
-  // separately and clamp it with the berthed mass under INERTIA_MAX_FACTOR, so
-  // the clamp reins in cargo/berth but never the structural config.
+  // Held-catch cargo is accumulated apart and clamped with the berthed mass under INERTIA_MAX_FACTOR (a multi-tonne
+  // catch at a strut tip would otherwise freeze rotation); the clamp never reins in the structural config.
   let cargoIxx = 0, cargoIyy = 0, cargoIzz = 0;
   const addCargo = (m, p) => {
     cargoIxx += m * (p.y * p.y + p.z * p.z);
@@ -665,21 +543,16 @@ export function computeInertia(armManager, playerSatellite, opts) {
 
     const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
 
-    // Strut structural mass at midpoint (matches computeCoM).
     addPoint(V5.STRUT_MASS, strutMidpointMeters(dp, alpha));
 
-    // Daughter mass at tip (0 when detached/expended — same exclusion).
-    // Split into structural (unclamped) and held-cargo (clamped below).
+    // Daughter at the tip (0 when detached/expended, as in computeCoM): structure unclamped, held cargo clamped below.
     if (!arm.isDetached && arm.state !== Constants.ARM_STATES.EXPENDED) {
       const armMass = arm.config.type === 'weaver'
         ? Constants.V5_WEAVER_MASS
         : Constants.V5_SPINNER_MASS;
       const tip = strutTipMeters(dp, alpha);
       addPoint(armMass, tip);
-      // S6: cargo = the in-hand catch plus every piece on the parked rack
-      // (guarded — mocks may lack heldCatches). Same clamp discipline as S2.
-      // S13(b): each piece books at its PINNED slot (register item 58), not at
-      // the tip — ONE computation with the rack pin (heldCargoBookingMeters).
+      // Cargo = in-hand catch + every piece on the parked rack; each books at its PINNED slot, not at the tip.
       const handMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
       if (handMass > 0) {
         const p = heldInHandBookingMeters(arm, dp, alpha, playerSatellite,
@@ -700,18 +573,16 @@ export function computeInertia(armManager, playerSatellite, opts) {
 
   }
 
-  // The mother's nets in the launcher: structure aboard (unclamped), on the axis — the same booking computeCoM makes.
+  // Mother's nets in the launcher: structure (unclamped), on the axis — the same booking computeCoM makes.
   const netsAboard = motherNetBooking(playerSatellite);
   addPoint(netsAboard.massKg, { x: 0, y: 0, z: netsAboard.z });
 
-  // The reaction-wheel kit: structure aboard (unclamped), one point on the axis (the on-axis term only: izz does not move).
-  // A caller with no kit info (a mock, a tool) books none. computeCoM leaves it out (its z shift, about -1.2 cm, is the
-  // inertia's own centre-of-mass step here).
+  // Reaction-wheel kit: structure (unclamped), one on-axis point (izz does not move). A caller with no kit info books
+  // none. computeCoM leaves it out (its z shift, about -1.2 cm, is the inertia's own centre-of-mass step here).
   const kit = playerSatellite && typeof playerSatellite.wheelKitBooking === 'function' ? playerSatellite.wheelKitBooking() : null;
   if (kit && kit.massKg > 0) addPoint(kit.massKg, { x: 0, y: 0, z: kit.z });
 
-  // The radiators: structure aboard (unclamped), at each petal's live angle. A caller with no radiator info
-  // (a mock, a tool) books none.
+  // Radiators: structure (unclamped), at each petal's live angle.
   let radIxx = 0, radIyy = 0, radIzz = 0;   // the radiators' share, also part of the clamp's reference below
   const petals = _radiatorPetals(playerSatellite);
   if (petals) {
@@ -737,13 +608,9 @@ export function computeInertia(armManager, playerSatellite, opts) {
     }
   }
 
-  // D6 + S2: berthed catch mass AND held daughter cargo, included but clamped.
-  // Berthed mass is modelled as a fore point mass one barrel half-length ahead;
-  // daughter cargo was accumulated at its strut tip above. Bound the ADDED
-  // inertia so the total per axis never exceeds INERTIA_MAX_FACTOR × the stowed
-  // bus inertia. The max() guard ensures a legitimately heavy *deployed*
-  // configuration is never pulled BELOW its real inertia by the clamp (the clamp
-  // only reins in berthed/cargo mass).
+  // Berthed catch mass AND held daughter cargo, clamped: berthed mass is a fore point mass one barrel half-length ahead;
+  // the ADDED inertia is bounded so the per-axis total never exceeds INERTIA_MAX_FACTOR × the stowed bus inertia. The
+  // max() guard keeps a heavy *deployed* configuration from being pulled BELOW its real inertia.
   const cns = playerSatellite && playerSatellite._captureNetSystem;
   const berthed = (cns && typeof cns.getBerthedMassKg === 'function')
     ? cns.getBerthedMassKg() : 0;
@@ -753,11 +620,9 @@ export function computeInertia(armManager, playerSatellite, opts) {
     const factor = Constants.ATTITUDE?.INERTIA_MAX_FACTOR ?? 3.0;
     const leverT2 = (L / 2) * (L / 2); // transverse lever² (fore capture point)
     const leverR2 = (R / 2) * (R / 2); // small roll radius²
-    // The cap is INERTIA_MAX_FACTOR × the bus, plus the radiators once at their live angles (2026-10-23): the radiators
-    // are structure, not cargo, so they are neither multiplied nor allowed to eat the cargo's room. With the bus alone as
-    // the reference, open radiators (300+ kg·m²) would sit above 3 × the bus and swallow every kilogram of cargo; scaling
-    // them by the factor too would give a catch more room the further the radiators are open. This way the room left for
-    // cargo does not depend on the radiator angle. No radiators: factor × bus, as before.
+    // The cap is INERTIA_MAX_FACTOR × the bus, plus the radiators once at their live angles: they are structure, not
+    // cargo, so neither multiplied nor allowed to eat the cargo's room (open radiators, 300+ kg·m², would sit above
+    // 3 × the bus and swallow all cargo; scaling them too would give a catch more room the further they open).
     const capX = factor * busTransverse + radIxx;
     const capY = factor * busTransverse + radIyy;
     const capZ = factor * busRoll + radIzz;
@@ -790,15 +655,13 @@ export function computeInertia(armManager, playerSatellite, opts) {
 
 /**
  * The balanced reference the drift is measured from: the CoM with all arms at the mean alpha (bus, struts, daughters
- * with their held cargo, the nets in the launcher) and, 2026-10-24, every owned radiator petal at the ONE shared
- * radiator angle `playerSatellite._flowerThetaRad` (NOT `foldRad`, the wing fold). The actual CoM counts each petal at
- * its own live angle, so a symmetric fold or opening moves actual and reference together (no drift), while a petal
- * held at a different angle (a leash hand-off, a daughter's carry) reads its real offset. A caller with no shared angle
- * (a mock) books its petals at their own angles: no radiator drift. Written into `out` (no allocation).
- * @returns {{x:number,y:number,z:number}} out
+ * with their held cargo, the nets in the launcher) and every owned radiator petal at the ONE shared radiator angle
+ * `playerSatellite._flowerThetaRad` (NOT `foldRad`, the wing fold). The actual CoM counts each petal at its own live
+ * angle, so a symmetric fold or opening moves actual and reference together (no drift), while a petal held at a
+ * different angle (a leash hand-off, a daughter's carry) reads its real offset. A caller with no shared angle (a mock)
+ * books its petals at their own angles: no radiator drift. Written into `out`.
  */
 function _balancedReference(armManager, playerSatellite, out) {
-  // Compute mean alpha across all active arms
   const arms = armManager.arms || [];
   const docks = armManager._dockPositions || [];
   let sumAlpha = 0, count = 0;
@@ -810,7 +673,6 @@ function _balancedReference(armManager, playerSatellite, out) {
   }
   const meanAlpha = count > 0 ? sumAlpha / count : 0;
 
-  // Compute balanced reference CoM with all arms at meanAlpha
   let bcx = 0, bcy = 0, bcz = 0;
   let bTotal = V5.CORE_DRY_MASS; // core at origin contributes (0,0,0)
 
@@ -834,11 +696,11 @@ function _balancedReference(armManager, playerSatellite, out) {
     });
   }
 
-  // The nets are in the actual CoM, so they are in the balanced reference too (permanent, on-axis).
+  // The nets and radiators are in the actual CoM, so they are in the reference too (nets: permanent, on-axis;
+  // radiators: all at the shared angle).
   const netsB = motherNetBooking(playerSatellite);
   if (netsB.massKg > 0) { bcz += netsB.massKg * netsB.z; bTotal += netsB.massKg; }
 
-  // The radiators are in the actual CoM, so they are in the reference too, all at the shared angle.
   const petals = _radiatorPetals(playerSatellite);
   if (petals) {
     const rc = radiatorCentroid(petals, _radSum, playerSatellite._flowerThetaRad);
@@ -853,22 +715,15 @@ function _balancedReference(armManager, playerSatellite, out) {
 const _balRef = { x: 0, y: 0, z: 0 };
 
 /**
- * Compute scalar CoM drift — the *asymmetric* displacement of CoM from the
- * "balanced" reference position (all arms at mean alpha, all radiator petals at the shared angle). This isolates
- * the player-correctable asymmetry from the permanent collar-height offset.
- *
- * When all arms are at the same alpha, drift = 0 (within floating-point tolerance).
- * When one arm is stowed while others are deployed, drift > 0.
- *
- * @param {object} armManager
- * @param {object} [playerSatellite]
- * @returns {number} drift distance in meters
+ * Scalar CoM drift (meters): the *asymmetric* displacement of CoM from the "balanced" reference (all arms at mean
+ * alpha, all radiator petals at the shared angle), isolating the player-correctable asymmetry from the permanent
+ * collar-height offset. Zero when all arms share an alpha (within float tolerance); > 0 when one is stowed while
+ * others are deployed.
  */
 export function computeCoMDrift(armManager, playerSatellite) {
   const actual = computeCoM(armManager, playerSatellite);
   const ref = _balancedReference(armManager, playerSatellite, _balRef);
 
-  // Drift = |actualCoM − balancedCoM|
   const dx = actual.position.x - ref.x;
   const dy = actual.position.y - ref.y;
   const dz = actual.position.z - ref.z;
@@ -876,13 +731,8 @@ export function computeCoMDrift(armManager, playerSatellite) {
 }
 
 /**
- * Compute the CoM drift as a 3D vector (actual − balanced reference).
- * This vector represents the player-correctable asymmetry offset.
- * Used by torque-coupling code in _applyThrust (PlayerSatellite).
- *
- * @param {object} armManager
- * @param {object} [playerSatellite]
- * @returns {{x:number, y:number, z:number}} drift vector in meters
+ * CoM drift as a 3D vector in meters (actual − balanced reference). Used by torque-coupling code in _applyThrust
+ * (PlayerSatellite).
  */
 export function computeCoMDriftVector(armManager, playerSatellite) {
   const actual = computeCoM(armManager, playerSatellite);
@@ -895,19 +745,10 @@ export function computeCoMDriftVector(armManager, playerSatellite) {
 }
 
 /**
- * Compute perpendicular offset of CoM from a thrust line.
- * This offset × thrust force = unwanted torque (τ = r × F).
- *
- * The thrust line passes through the origin along `thrustVector`.
- * The perpendicular distance from CoM to this line is:
- *   d = |comPos × thrustDir| / |thrustDir|
- *
- * @param {{x:number,y:number,z:number}} comPos — CoM position in meters
- * @param {{x:number,y:number,z:number}} thrustVector — thrust direction vector (not necessarily unit)
- * @returns {number} perpendicular offset in meters
+ * Perpendicular offset (m) of CoM from a thrust line through the origin along `thrustVector` (not necessarily unit):
+ * d = |comPos × thrustDir| / |thrustDir|. Offset × thrust force = unwanted torque (τ = r × F).
  */
 export function computeCoMOffsetFromThrustVector(comPos, thrustVector) {
-  // Cross product: comPos × thrustVector
   const cx = comPos.y * thrustVector.z - comPos.z * thrustVector.y;
   const cy = comPos.z * thrustVector.x - comPos.x * thrustVector.z;
   const cz = comPos.x * thrustVector.y - comPos.y * thrustVector.x;
@@ -921,17 +762,12 @@ export function computeCoMOffsetFromThrustVector(comPos, thrustVector) {
 }
 
 /**
- * Identify which arm contributes most to CoM drift (best candidate to stow).
- * "Most displaced" = arm whose mass-weighted position has the largest projection
- * onto the current CoM direction (stowing it reduces drift the most).
- *
- * @param {object} armManager
- * @param {object} [playerSatellite]
- * @returns {number|null} arm index of suggested stow, or null if no arms deployed
+ * The arm that contributes most to CoM drift (best candidate to stow): the one whose mass-weighted tip has the
+ * largest projection onto the current CoM direction. Returns its index, or null if no arms are deployed.
  */
 export function suggestStowArm(armManager, playerSatellite) {
-  // The direction is read WITHOUT the radiators (2026-10-24): they are counted in the CoM now, but they are no arm. At 146°
-  // they sit the CoM 0.4 m aft, which would swamp the asymmetry this suggestion is about and pick an arm by the radiators.
+  // Without the radiators: they are no arm. At 146° they sit the CoM 0.4 m aft, which would swamp the asymmetry
+  // this suggestion is about and pick an arm by the radiators.
   const com = computeCoM(armManager, playerSatellite, { radiators: false });
   const p = com.position;
   const driftSq = p.x * p.x + p.y * p.y + p.z * p.z;
@@ -948,17 +784,15 @@ export function suggestStowArm(armManager, playerSatellite) {
     const dp = docks[i];
     if (!dp) continue;
 
-    // Only suggest stow for arms that are not detached/expended
     if (arm.isDetached || arm.state === Constants.ARM_STATES.EXPENDED) continue;
 
     const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
     const tip = strutTipMeters(dp, alpha);
 
-    // Total mass contribution of this arm (strut + daughter)
     const dMass = getDaughterMass(arm);
     const totalArmMass = V5.STRUT_MASS + dMass;
 
-    // Weighted contribution direction · CoM direction (projection)
+    // Mass-weighted projection of the tip onto the CoM direction
     const dot = (tip.x * p.x + tip.y * p.y + tip.z * p.z) * totalArmMass;
     if (dot > bestDot) {
       bestDot = dot;
@@ -970,54 +804,42 @@ export function suggestStowArm(armManager, playerSatellite) {
 }
 
 /**
- * Cargo-continuity S7 — pick the daughter that should receive a parked mother
- * catch, or `null` when no daughter may take it.
- *
- * This is the INVERSE question to `suggestStowArm`, which answers "which arm
- * contributes most to CoM drift" (its score is the mass-weighted tip projection
- * ONTO the CoM offset). A carrier
- * must instead be HOME with a free cargo cell, and loading it should make trim
- * BETTER — so this scores the anti-projection: the measured drop in CoM drift
- * from adding the cargo at that rack slot (S13(b): the pinned point, not the
- * bare strut tip — register item 58).
+ * Pick the daughter that should receive a parked mother catch, or `null` when no daughter may take it.
+ * The INVERSE of `suggestStowArm`: a carrier must be HOME with a free cargo cell, and loading it should make trim
+ * BETTER, so this scores the measured drop in CoM drift from adding the cargo at that rack slot (the pinned point,
+ * not the bare strut tip).
  *
  *   score = W_CG · (driftBefore − driftAfter) + W_DEPLOY · (1 − deployability)
  *
- * where deployability is the propellant fraction — there is no per-arm panel
- * health in the tree (only the mother has `solarPanelHealth`). The second term is
- * the owner's "a daughter that cannot usefully deploy is the right mule".
+ * deployability = the propellant fraction (no per-arm panel health exists; only the mother has `solarPanelHealth`).
+ * The second term is the owner's "a daughter that cannot usefully deploy is the right mule".
  *
- * This function is also the single gatekeeper for "may this piece go to a
- * daughter at all", so there is exactly one place that decides:
- *   • the MASS GATE — above `CARGO_TRANSFER.MAX_KG` the body stays on the tether
- *     at the nose (at 44–114× the mother's mass the system CoM sits inside the
- *     cargo, so moving it off the thrust axis is the physically wrong move);
- *   • the ONE-CATCH rule (owner 2026-10-22 13:01Z: "daughter can only hold one debris") — only a daughter
- *     holding NOTHING takes a mother catch (`heldCatches` empty); one that holds a catch, her own or a racked
- *     one, is never a carrier;
- *   • the HOME rule — DOCKED only, never detached/expended (a daughter away from her strut has nothing to
- *     pin the cargo to; HOLDING_CATCH means she already holds a catch);
- *   • the BOOKED rule (fix round 1) — a daughter a catch is already flying to is not empty any more: she is
- *     no carrier and no longer counts as capture-capable, so two catches are never sent to the same daughter
- *     (the second would snap back on arrival) and two flights can never use up the last free daughter;
- *   • the LAST-DAUGHTER guard — never consume the last capture-capable daughter,
- *     so an automatic hand-off can never strand the fleet with zero usable arms.
+ * The single gatekeeper for "may this piece go to a daughter at all":
+ *   • the MASS GATE — above `CARGO_TRANSFER.MAX_KG` the body stays on the tether at the nose (at 44–114× the mother's
+ *     mass the system CoM sits inside the cargo, so moving it off the thrust axis is the physically wrong move);
+ *   • the ONE-CATCH rule (owner 2026-10-22 13:01Z: "daughter can only hold one debris") — only a daughter holding
+ *     NOTHING takes a mother catch (`heldCatches` empty); one holding a catch, her own or a racked one, is never a carrier;
+ *   • the HOME rule — DOCKED only, never detached/expended (away from her strut she has nothing to pin the cargo to);
+ *   • the BOOKED rule — a daughter a catch is already flying to is not empty any more: no carrier, and no longer
+ *     capture-capable, so two catches are never sent to one daughter (the second would snap back on arrival) and two
+ *     flights can never use up the last free daughter;
+ *   • the LAST-DAUGHTER guard — never consume the last capture-capable daughter, so an automatic hand-off can never
+ *     strand the fleet with zero usable arms.
  *
- * @param {object} armManager — ArmManager (or mock) with .arms[], ._dockPositions[]
  * @param {object} [playerSatellite] — passed through to computeCoM
  * @param {number} cargoMassKg — mass of the piece being handed over
- * @param {number} [sizeMeter=0] — the piece's size, for the slot standoff
- *   radius (the S7 caller is mass-only; 0 books the bare clearance standoff).
+ * @param {number} [sizeMeter=0] — the piece's size, for the slot standoff radius (0 books the bare clearance standoff)
  * @param {Iterable<number>|null} [bookedArms=null] — arm indices that already have a cargo flight on the way
  *   (the capture system reads them off its transferring nets); each counts as holding a catch.
- * @param {number} [reachM=0] — hold-clear D7: the piece's drawn reach (`DebrisField.trueReachM`); above `HOLD_CLEAR.MAX_HOLD_REACH_M` no daughter is
- *   offered it (measured: none of them could hold it clear of the radiator wings), so it waits at the nose. 0 = not asked. NOT the booking size.
+ * @param {number} [reachM=0] — the piece's drawn reach (`DebrisField.trueReachM`); above `HOLD_CLEAR.MAX_HOLD_REACH_M`
+ *   no daughter is offered it (measured: none could hold it clear of the radiator wings), so it waits at the
+ *   nose. 0 = not asked. NOT the booking size.
  * @returns {number|null} arm index, or null when nothing may carry it
  */
 export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMeter = 0, bookedArms = null, reachM = 0) {
   const mass = Number(cargoMassKg) || 0;
   if (mass <= 0) return null;
-  if (reachM > (Constants.HOLD_CLEAR ? Constants.HOLD_CLEAR.MAX_HOLD_REACH_M : Infinity)) return null;   // hold-clear D7
+  if (reachM > (Constants.HOLD_CLEAR ? Constants.HOLD_CLEAR.MAX_HOLD_REACH_M : Infinity)) return null;
 
   const CT = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.CARGO_TRANSFER) || {};
   const maxKg = CT.MAX_KG ?? 2000;
@@ -1030,11 +852,9 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
   const S = Constants.ARM_STATES;
   const reserve = Constants.ARM_RESERVE_FUEL ?? 0;
 
-  // A daughter that could still take a capture: home, charged, fuelled. Loading
-  // one of these costs the fleet a working arm, so the last one is never loaded
-  // (a HOLDING_CATCH arm is not a candidate at all: she already holds a catch).
-  // R2 (fix round 1): a daughter with a cargo flight on the way is booked. She is still DOCKED with an empty rack until the
-  // piece lands, so `heldCatches` alone cannot tell; count her as holding a catch (no carrier, not capture-capable).
+  // A daughter that could still take a capture: home, charged, fuelled. The last one is never loaded. A daughter with a
+  // cargo flight on the way is booked: still DOCKED with an empty rack until the piece lands, so `heldCatches` alone
+  // cannot tell; count her as holding a catch.
   const booked = bookedSet(bookedArms);
   const captureCapable = (arm, i) => !!arm && !arm.isDetached
     && arm.state === S.DOCKED
@@ -1043,8 +863,7 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
     && (arm.fuel ?? 0) > reserve;
   const capableCount = arms.reduce((n, a, i) => n + (captureCapable(a, i) ? 1 : 0), 0);
 
-  // Without the radiators (2026-10-24), as suggestStowArm: they are no arm, and at 146° their common 0.44 m axial shift
-  // would dilute the lateral balance this choice is about.
+  // Without the radiators, as suggestStowArm: their common 0.44 m axial shift at 146° would dilute the lateral balance.
   const com = computeCoM(armManager, playerSatellite, { radiators: false });
   const p = com.position;
   const totalMass = com.totalMass || 0;
@@ -1062,8 +881,7 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
     const dp = docks[i];
     if (!arm || !dp) continue;
 
-    // Home, holding nothing, and still part of the ship. A HOLDING_CATCH daughter holds her own catch or one
-    // already racked on her: one catch per daughter (owner 2026-10-22), so she is never a carrier.
+    // Home, holding nothing, still part of the ship (one catch per daughter, owner 2026-10-22).
     if (arm.isDetached || arm.state === S.EXPENDED) continue;
     if (arm.state !== S.DOCKED) continue;
     if (Array.isArray(arm.heldCatches) && arm.heldCatches.length > 0) continue;
@@ -1073,9 +891,8 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
     if (captureCapable(arm, i) && capableCount <= 1) continue;
 
     const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
-    // S13(b) / rack-snug: the hypothetical add books where the piece would actually be
-    // PINNED — this arm's next FREE cell, on her (register item 58; ONE computation
-    // with the rack pin). A prediction has no mesh yet, so it is the typeless form.
+    // The hypothetical add books where the piece would be PINNED: this arm's next FREE cell. A prediction has no mesh
+    // yet, so it is the typeless form.
     const book = heldCargoBookingMeters(arm, dp, alpha, playerSatellite,
       nextFreeRackCell(arm.heldCatches), sizeMeter, _slotPoint);
 
@@ -1102,7 +919,7 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
   return bestIdx;
 }
 
-/** R2: a Set of arm indices from whatever the caller passed (null, an array, a Set). */
+// A Set of arm indices from whatever the caller passed (null, an array, a Set).
 const _noBooked = new Set();
 function bookedSet(bookedArms) {
   if (!bookedArms) return _noBooked;
@@ -1110,13 +927,10 @@ function bookedSet(bookedArms) {
 }
 
 /**
- * one-catch: how many daughters are home (DOCKED) holding nothing. Pure read, for the words only: when
- * `suggestCargoArm` finds no carrier for a piece under the mass gate, a count above 0 means the refusal is the
- * last-daughter guard (one free daughter, kept ready for the next capture), 0 means nobody is free (each is out,
- * holds a catch, or has one on the way).
- * @param {object} armManager — ArmManager (or mock) with .arms[]
+ * How many daughters are home (DOCKED) holding nothing. Pure read, for the words only: when `suggestCargoArm` finds no
+ * carrier under the mass gate, a count above 0 means the refusal is the last-daughter guard (one free daughter, kept
+ * ready for the next capture), 0 means nobody is free (each is out, holds a catch, or has one on the way).
  * @param {Iterable<number>|null} [bookedArms=null] — arm indices with a cargo flight on the way (not empty any more)
- * @returns {number}
  */
 export function countEmptyDockedDaughters(armManager, bookedArms = null) {
   const S = Constants.ARM_STATES;
@@ -1132,30 +946,16 @@ export function countEmptyDockedDaughters(armManager, bookedArms = null) {
   return n;
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════════
-// §2  Plume Interference (Gap #8)
-// ═══════════════════════════════════════════════════════════════════════════
-
-// ── S9: the held-cargo VOLUME model (register item 32) ──────────────────────
-// The box: dims from the item-7 SSOT (DebrisField.setDebrisSize keeps
-// lengthM/widthM tracking sizeMeter per type), oriented as the piece sits
-// (rack-snug: its longest mesh axis turned by its attitude in the daughter's
-// frame — `heldCargoBookingMeters`' axisOut; her +Z for a piece with no stored
-// attitude), square widthM × widthM
-// cross-section. The check encloses that box EXACTLY by a chain of
-// PLUME_CARGO_CHAIN_K balls riding the long axis: each slab's half-extents are
-// (L/2K, W/2, W/2), so radius √((L/2K)² + W²/2) covers its slab and the union
-// of the K balls contains the whole box. Box ⊆ chain, therefore a chain CLEAR
-// is decisive for the box and a chain HIT may overstate — the conservative
-// direction the work order mandates ("never shrink below the honest hull").
-// Degenerate dims (missing / non-finite / not elongated) fall back to the
-// legacy single sphere of radius sizeMeter/2 at the booking.
-// Measured basis: tmp/i32s9-box-probe.log — the item-32 sweep re-run under
-// this exact model BEFORE any production edit. The sphere's old "clear at
-// α ≥ 71°" band is dead under the box (a fat 12.4 m hull bites to α ≈ 106°);
-// the re-pose destination floors that answer it live in
-// Constants.PLUME_CARGO_ALPHA_LADDER (measured from the same probe).
+// ── Held-cargo VOLUME model (plume) ──
+// The box: dims from the SSOT (DebrisField.setDebrisSize keeps lengthM/widthM tracking sizeMeter per type), oriented
+// as the piece sits (its longest mesh axis turned by its attitude in the daughter's frame — `heldCargoBookingMeters`'
+// axisOut; her +Z for a piece with no stored attitude), square widthM × widthM cross-section. The check encloses that
+// box EXACTLY by a chain of PLUME_CARGO_CHAIN_K balls riding the long axis: each slab's half-extents are
+// (L/2K, W/2, W/2), so radius √((L/2K)² + W²/2) covers its slab. Box ⊆ chain, so a chain CLEAR is decisive for the
+// box and a chain HIT may overstate — the conservative direction ("never shrink below the honest hull"). Degenerate
+// dims (missing / non-finite / not elongated) fall back to a single sphere of radius sizeMeter/2 at the booking.
+// Measured: a fat 12.4 m hull bites to α ≈ 106°; the re-pose destination floors are
+// Constants.PLUME_CARGO_ALPHA_LADDER (measured from the same sweep).
 const PLUME_CARGO_CHAIN_K = 4;
 const _plumeChainBall = [];            // module scratch — K reused plain objects
 for (let _i = 0; _i < PLUME_CARGO_CHAIN_K; _i++) _plumeChainBall.push({ x: 0, y: 0, z: 0, r: 0 });
@@ -1163,26 +963,19 @@ const _plumeBookingTmp = { x: 0, y: 0, z: 0 };
 const _plumeAxisTmp = { x: 0, y: 0, z: 0 };
 
 /**
- * Build the ball-chain enclosure of ONE held piece's SSOT box at its live
- * booking. REUSES heldCargoBookingMeters — booking point AND hold axis come
- * from the ONE call (never a duplicate resolution; S13(b)'s rule).
+ * Ball-chain enclosure of ONE held piece's SSOT box at its live booking (point AND hold axis from the ONE
+ * heldCargoBookingMeters call, never a duplicate resolution).
  *
- * @param {object} arm — ArmUnit instance or mock (reads arm._firedNet only)
- * @param {object} dp — dock position (stored convention)
- * @param {number} alpha — strut sweep angle (rad)
- * @param {object|null} playerSatellite — source of the attitude quaternion
  * @param {number} slotIndex — rack slot (0-based)
  * @param {object|null} debris — the held piece (sizeMeter + lengthM/widthM)
- * @param {Array<{x:number,y:number,z:number,r:number}>} out — preallocated
- *   scratch with >= PLUME_CARGO_CHAIN_K entries (module temps on hot paths)
+ * @param {Array<{x:number,y:number,z:number,r:number}>} out — preallocated scratch with >= PLUME_CARGO_CHAIN_K entries
  * @param {boolean} [inHand=false] — true for `arm.capturedDebris` (a catch in hand): booked by
- *   `heldInHandBookingMeters` (base behaviour), `slotIndex` unused
+ *   `heldInHandBookingMeters`, `slotIndex` unused
  * @returns {number} balls written (1 = sphere fallback, else CHAIN_K)
  */
 export function heldCargoPlumeChainInto(arm, dp, alpha, playerSatellite, slotIndex, debris, out, inHand = false) {
   const sizeMeter = (debris && debris.sizeMeter) || 0;
   if (inHand) {
-    // a catch held in hand keeps its base booking and hold-axis box (rack-snug changed the rack only)
     heldInHandBookingMeters(arm, dp, alpha, playerSatellite, sizeMeter, _plumeBookingTmp, _plumeAxisTmp);
   } else {
     heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter,
@@ -1213,11 +1006,8 @@ export function heldCargoPlumeChainInto(arm, dp, alpha, playerSatellite, slotInd
 }
 
 /**
- * Exact ball-vs-infinite-plume-cone test — the i32/S12 instrument's validated
- * branches (apex-engulf HIT; entirely-upstream CLEAR; else the angular limb
- * φ − (halfAngle + asin(r/dist)) decides). A CLEAR is decisive for the ball,
- * hence for anything the ball contains.
- * @private
+ * Exact ball-vs-infinite-plume-cone test (apex-engulf HIT; entirely-upstream CLEAR; else the angular limb
+ * φ − (halfAngle + asin(r/dist)) decides). A CLEAR is decisive for the ball, hence for anything it contains.
  */
 function _ballInPlumeCone(bx, by, bz, r, n, dx, dy, dz, halfAngle) {
   const vx = bx - n.x, vy = by - n.y, vz = bz - n.z;
@@ -1233,11 +1023,9 @@ function _ballInPlumeCone(bx, by, bz, r, n, dx, dy, dz, halfAngle) {
 }
 
 /**
- * Does ANY piece this arm holds sit — box-chain model, live booking — inside
- * THIS thruster's cone? Mirrors _forEachArmMassPoint's guards exactly: the
- * in-hand scalar books at slot 0, then every rack piece at its own slot, each
- * gated on a truthy mass. An EMPTY arm costs two field reads.
- * @private
+ * Does ANY piece this arm holds sit — box-chain model, live booking — inside THIS thruster's cone? Same guards as
+ * _forEachArmMassPoint: the in-hand scalar books at slot 0, then every rack piece at its own slot, each gated on a
+ * truthy mass.
  */
 function _armHoldsCargoInCone(arm, dp, alpha, playerSatellite, n, dx, dy, dz, halfAngle) {
   const hand = arm.capturedDebris;
@@ -1264,16 +1052,12 @@ function _armHoldsCargoInCone(arm, dp, alpha, playerSatellite, n, dx, dy, dz, ha
 }
 
 /**
- * S9 driver-facing read (ArmManager's re-pose tick + the tests): does the arm
- * at `armIndex` hold cargo whose box-chain sits in ANY thruster's cone at its
- * live booking? Applies the SAME skip filter as checkPlumeInterference
- * (detached/expended arms and missing dock positions are skipped). READ-ONLY —
- * what thrust refuses is not decided here.
+ * Driver-facing read (ArmManager's re-pose tick + the tests): does the arm at `armIndex` hold cargo whose box-chain
+ * sits in ANY thruster's cone at its live booking? Same skip filter as checkPlumeInterference (detached/expended arms,
+ * missing dock positions). READ-ONLY: what thrust refuses is not decided here.
  *
- * @param {object} armManager — with .arms[], ._dockPositions[]
- * @param {number} armIndex
- * @param {number} [alphaRad] — hold-catch (owner 2026-10-22): read the arm's cargo at THIS strut angle instead of
- *   her live one ("would her catch be clear of the plumes if the strut stood at 34°?"). Omitted: the live angle.
+ * @param {number} [alphaRad] — read the arm's cargo at THIS strut angle instead of her live one ("would her catch be
+ *   clear of the plumes if the strut stood at 34°?"). Omitted: the live angle.
  * @returns {{ armIndex: number, thrusterId: string }|null} first conflict
  */
 export function heldCargoPlumeConflictAt(armManager, armIndex, alphaRad) {
@@ -1303,31 +1087,31 @@ export function heldCargoPlumeConflictAt(armManager, armIndex, alphaRad) {
   return null;
 }
 
-// ── net-duck D1: the held catch's DRAWN mesh against the mother net's berth corridor ──────────────────────────────────
-// The plume check's box chain (`heldCargoPlumeChainInto`) is NOT used here. Measured 2026-10-23 (tmp/plans/net-duck.md Log, T0a):
-// the SSOT box (`lengthM` x `widthM`) is a sphere for a fragment and a 5 x 3.1 box for a defunctSat (both far fatter than the drawn
-// body), and 1.4 m wide for a 5 m rocketBody that is drawn 4.2 m across; against the drawn mesh it over-counted 5 m catches by
-// 17-85 points at 54 deg, left 34 deg "not clear" for 47 % of 5 m defunctSats, and MISSED 8-34 of 120 rocketBodies. The corridor test
-// therefore reads the mesh the player sees: a cached cloud of its surface (spacing CLOUD_STEP_FRAC of the longest side, each point a
-// ball of ONE spacing (R6, 2026-10-23: the gap between a surface point and its nearest sample was measured up to 0.82 x the spacing,
-// so a ball of half of it could let a hit through), moved to her pose at the asked strut angle. 0.02 (was 0.04 with half-spacing balls)
-// keeps the SAME ball (0.1 m on a 5 m body) now that it is a whole spacing: 34 deg and 39 deg stay clear for every size and type, and
-// a 5 m rocketBody reads 0 0 10 25 77 87 100 % at 34/39/44/54/64/69/89 deg, vs 0 0 7 20 68 83 100 % for the drawn mesh itself.
+// ── The held catch's DRAWN mesh against the mother net's berth corridor ──
+// The plume check's box chain (`heldCargoPlumeChainInto`) is NOT used here. The SSOT box (`lengthM` x `widthM`) is a
+// sphere for a fragment and a 5 x 3.1 box for a defunctSat (both far fatter than the drawn body), and 1.4 m wide for a
+// 5 m rocketBody that is drawn 4.2 m across; against the drawn mesh it over-counted 5 m catches by 17-85 points at
+// 54 deg, left 34 deg "not clear" for 47 % of 5 m defunctSats, and MISSED 8-34 of 120 rocketBodies. The corridor test
+// therefore reads the mesh the player sees: a cached cloud of its surface (spacing CLOUD_STEP_FRAC of the longest side,
+// each point a ball of ONE spacing: the gap between a surface point and its nearest sample was measured up to 0.82 x
+// the spacing, so a ball of half of it could let a hit through), moved to her pose at the asked strut angle. 0.02
+// keeps a 0.1 m ball on a 5 m body: 34 deg and 39 deg stay clear for every size and type, and a 5 m rocketBody reads
+// 0 0 10 25 77 87 100 % at 34/39/44/54/64/69/89 deg, vs 0 0 7 20 68 83 100 % for the drawn mesh itself.
 const CLOUD_STEP_FRAC = 0.02;
 const _cloudCache = new Map();
 const _cdQ = new THREE.Quaternion();
 const _cdBook = { x: 0, y: 0, z: 0 };
 
-/** Cache key of a piece's drawn mesh (the same one `DebrisWireframe.getGeometry` uses). @private */
+// Cache key of a piece's drawn mesh (the same one `DebrisWireframe.getGeometry` uses).
 function _cloudKey(type, id) {
   return type === 'fragment' ? `fragment_${(id >>> 0) % (Constants.DEBRIS_FRAGMENT_VARIANTS || 7)}` : type;
 }
 
 /**
- * The surface of a debris mesh as a point cloud in MESH units (origin = the pin point), spacing `stepU`. Built once per mesh.
- * Triangles are sampled as `forEachSurfacePoint` (js/test/_flowerFold.js) does: from the vertex opposite the longest edge.
+ * The surface of a debris mesh as a point cloud in MESH units (origin = the pin point), spacing `stepU`. Built once
+ * per mesh. Triangles are sampled as `forEachSurfacePoint` (js/test/_flowerFold.js) does: from the vertex opposite
+ * the longest edge.
  * @returns {{pts: Float32Array, stepU: number}|null} null for a type with no mesh
- * @private
  */
 function _heldCloud(type, id) {
   const key = _cloudKey(type, id);
@@ -1368,21 +1152,17 @@ function _heldCloud(type, id) {
   return c;
 }
 
-/**
- * Does a ball (centre `cx, cy, cz`, radius `r`, ship frame, metres) overlap the corridor cylinder: z + r above the anchor plane and
- * its centre's distance from the axis, less r, under `radiusM`? @private
- */
+// Does a ball (centre `cx, cy, cz`, radius `r`, ship frame, m) overlap the corridor cylinder: z + r above the anchor
+// plane, and its centre's distance from the axis, less r, under `radiusM`?
 function _ballFoulsCorridor(cx, cy, cz, r, anchor, radiusM) {
   if (cz - anchor.z + r <= 0) return false;
   const rx = cx - anchor.x, ry = cy - anchor.y;
   return Math.sqrt(rx * rx + ry * ry) - r < radiusM;
 }
 
-/**
- * One held piece, centred `(cx, cy, cz)` in the ship frame with drawn attitude `q`: does any part of its drawn mesh sit in the
- * corridor? A piece with no mesh (no `type`: a mock, a prediction) is the sphere of its `trueReachM`. Allocation-free after the
- * mesh's first use. @private
- */
+// One held piece, centred `(cx, cy, cz)` in the ship frame with drawn attitude `q`: does any part of its drawn mesh sit
+// in the corridor? A piece with no mesh (no `type`: a mock, a prediction) is the sphere of its `trueReachM`.
+// Allocation-free after the mesh's first use.
 function _pieceFoulsCorridor(d, cx, cy, cz, q, anchor, radiusM) {
   const sizeM = d.sizeMeter;
   if (!(sizeM > 0)) return false;
@@ -1391,7 +1171,7 @@ function _pieceFoulsCorridor(d, cx, cy, cz, q, anchor, radiusM) {
   if (!cloud) return _ballFoulsCorridor(cx, cy, cz, reach, anchor, radiusM);
   const sc = DebrisField.effectiveRenderScale(d) / M;               // the scale it is DRAWN at (metres per mesh unit)
   if (!(sc > 0)) return false;
-  const margin = cloud.stepU * sc;                                   // each sample is a ball of one spacing (R6)
+  const margin = cloud.stepU * sc;                                   // each sample is a ball of one spacing
   if (!_ballFoulsCorridor(cx, cy, cz, Math.max(reach, DebrisWireframe.getOriginRadius(d.type, d.id) * sc) + margin, anchor, radiusM)) return false;
   // rotation matrix of q (row-major), scaled
   const x = q.x, y = q.y, z = q.z, w = q.w;
@@ -1412,20 +1192,19 @@ function _pieceFoulsCorridor(d, cx, cy, cz, q, anchor, radiusM) {
 }
 
 /**
- * net-duck D1 (owner 2026-10-22: "out of the way of mother net"): does anything this arm holds at home sit, with her strut at
- * `alphaRad`, inside the mother net's berth corridor? The corridor is the cylinder `CaptureNet._corridorClear` tests the strut tips
- * against: axis ship-local +Z through `anchor` (x, y), fore of the anchor plane (z > anchor.z), radius `radiusM`. A rack piece is its
- * drawn mesh (see the note above `CLOUD_STEP_FRAC`) at her pose at that angle; the in-hand catch (cleared when she parks, so only a
- * DOCKED / CARRY_PREP daughter that still has one) is the sphere of its `trueReachM` at its in-hand booking. Only a daughter at home
- * counts (HOLDING_CATCH, DOCKED, CARRY_PREP: her rack is at her strut); one out on a line, detached or expended does not. A mock arm
- * manager with no dock positions, or a held piece with no `mass`, is skipped (nothing to measure). READ-ONLY, no allocation.
+ * owner 2026-10-22 "out of the way of mother net": does anything this arm holds at home sit, with her strut at
+ * `alphaRad`, inside the mother net's berth corridor? The corridor is the cylinder `CaptureNet._corridorClear` tests the
+ * strut tips against: axis ship-local +Z through `anchor` (x, y), fore of the anchor plane (z > anchor.z), radius
+ * `radiusM`. A rack piece is its drawn mesh (see the note above `CLOUD_STEP_FRAC`) at her pose at that angle; the
+ * in-hand catch (cleared when she parks, so only a DOCKED / CARRY_PREP daughter that still has one) is the sphere of
+ * its `trueReachM` at its in-hand booking. Only a daughter at home counts (HOLDING_CATCH, DOCKED, CARRY_PREP: her rack
+ * is at her strut); one out on a line, detached or expended does not. A mock arm manager with no dock positions, or a
+ * held piece with no `mass`, is skipped. READ-ONLY, no allocation.
  *
  * @param {object} armManager — with .arms[], ._dockPositions[], .playerSatellite
- * @param {number} armIndex
  * @param {number} alphaRad — strut sweep angle to read her cargo at (the live angle when not finite)
  * @param {{x:number,y:number,z:number}} anchor — the berth anchor in the ship frame, metres (the collar)
  * @param {number} radiusM — the corridor radius (inbound size / 2 + CAPTURE_NET.BERTH_CLEARANCE_M)
- * @returns {boolean} true when a held piece overlaps the corridor
  */
 export function heldCargoFoulsCorridorAt(armManager, armIndex, alphaRad, anchor, radiusM) {
   const arm = (armManager.arms || [])[armIndex];
@@ -1453,22 +1232,13 @@ export function heldCargoFoulsCorridorAt(armManager, armIndex, alphaRad, anchor,
 }
 
 /**
- * Check whether any strut tip — or any cargo a strut HOLDS (S9, register
- * item 32) — is inside the plume cone of a specific thruster.
+ * Whether any strut tip — or any cargo a strut HOLDS — is inside the plume cone of a specific thruster.
+ * A point P is in the cone of nozzle N firing along unit D with half-angle θ if (P − N)·D > 0 (downstream) and
+ * perpDist / axial < tan(θ).
+ * Cargo term: for each arm passing the skip filter, every HELD piece is tested at its live booking through the
+ * box-chain model (heldCargoPlumeChainInto → _ballInPlumeCone). This changes what the check SEES, never what thrust
+ * REFUSES.
  *
- * Cone test: A point P is inside the plume cone of thruster at nozzle N
- * firing along direction D (unit) with half-angle θ if:
- *   1. axial = (P − N) · D > 0            (downstream of nozzle)
- *   2. perpDist / axial < tan(θ)           (within cone angle)
- *
- * S9 cargo term: for each arm passing the skip filter below, every HELD piece
- * is tested at its live booking through the box-chain volume model
- * (heldCargoPlumeChainInto → _ballInPlumeCone). An arm conflicts if its TIP
- * is in the cone OR any held piece's chain touches it. EMPTY arms take
- * exactly the pre-S9 path (byte-identical results). S9 changes what this
- * check SEES, never what thrust REFUSES.
- *
- * @param {object} armManager — with .arms[], ._dockPositions[]
  * @param {string} thrusterId — one of Constants.THRUSTERS[].id
  * @returns {{ blocked: boolean, conflictingArms: number[], reason: string }}
  */
@@ -1482,7 +1252,6 @@ export function checkPlumeInterference(armManager, thrusterId) {
   const tanHalf = Math.tan(Constants.PLUME_HALF_ANGLE);
   const n = thruster.nozzlePos;
   const d = thruster.thrustDir;
-  // Normalize thrust direction
   const dMag = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
   const dx = d.x / dMag, dy = d.y / dMag, dz = d.z / dMag;
 
@@ -1496,35 +1265,27 @@ export function checkPlumeInterference(armManager, thrusterId) {
     const dp = docks[i];
     if (!dp) continue;
 
-    // Skip arms that are detached or expended (not in the plume path)
     if (arm.isDetached || arm.state === Constants.ARM_STATES.EXPENDED) continue;
 
     const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
     const tip = strutTipMeters(dp, alpha);
 
-    // Vector from nozzle to tip
     const vx = tip.x - n.x;
     const vy = tip.y - n.y;
     const vz = tip.z - n.z;
 
-    // Axial projection: (tip − nozzle) · thrustDir
     const axial = vx * dx + vy * dy + vz * dz;
     let conflict = false;
     if (axial > 0) {
-      // Perpendicular distance from cone axis
-      // perpSq = |v|² − axial²
       const vLenSq = vx * vx + vy * vy + vz * vz;
       const perpSq = vLenSq - axial * axial;
       const perp = perpSq > 0 ? Math.sqrt(perpSq) : 0;
 
-      // Cone test: perp / axial < tan(halfAngle)
       if (perp < axial * tanHalf) conflict = true;
     }
 
-    // S9: when the tip tests clear, the check still sees what the pin DRAWS —
-    // every held piece at its live booking through the box-chain model. The
-    // i32 measurement proved the tip NEVER fouls while cargo did, so this
-    // term is where the entire measured bite population becomes visible.
+    // When the tip tests clear, still check what the pin DRAWS: every held piece at its live booking through the
+    // box-chain model (the tip NEVER fouled while cargo did).
     if (!conflict) {
       conflict = _armHoldsCargoInCone(arm, dp, alpha, playerSatellite,
         n, dx, dy, dz, Constants.PLUME_HALF_ANGLE);

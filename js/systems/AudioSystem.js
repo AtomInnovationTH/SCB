@@ -6,6 +6,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { devSearch } from '../core/DevHost.js';
 import timerManager from './TimerManager.js';
 import { installSoundLog } from './audio/SoundLog.js';
 import { clamp01, clamp, lerp } from '../core/MathUtil.js';
@@ -157,7 +158,7 @@ class AudioSystem {
     // at sim-start). Parsed lazily so the headless test runner (no window) is unaffected.
     try {
       if (typeof window !== 'undefined' &&
-          new URLSearchParams(window.location.search).get('noAudio') === '1') {
+          new URLSearchParams(devSearch(window.location)).get('noAudio') === '1') {
         console.info('[AudioSystem] ?noAudio=1. Skipping AudioContext creation. All audio is disabled for this session.');
         this.available = false;
         this._initialized = true; // prevent retry storms from event handlers
@@ -392,7 +393,7 @@ class AudioSystem {
   _isAmbientLoopEnabled() {
     try {
       if (typeof window === 'undefined') return false;
-      const qs = new URLSearchParams(window.location.search);
+      const qs = new URLSearchParams(devSearch(window.location));
       if (qs.get('ambient') === '1') return true;
       if (qs.get('noAmbient') === '1') return false;
     } catch (_e) { /* swallow — non-browser env */ }
@@ -3756,7 +3757,7 @@ export function warmAudioService({ win, pointerChecked = false } = {}) {
   if (!win) return null;
   try {
     if (!pointerChecked && (typeof win.matchMedia !== 'function' || win.matchMedia('(pointer: coarse)')?.matches)) return null;
-    if (new URLSearchParams(win.location?.search || '').get('noAudio') === '1') return null;
+    if (new URLSearchParams(devSearch(win.location)).get('noAudio') === '1') return null;
     const md = win.navigator && win.navigator.mediaDevices;
     if (!md || typeof md.enumerateDevices !== 'function') return null;
     const p = md.enumerateDevices();

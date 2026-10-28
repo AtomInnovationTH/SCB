@@ -1,18 +1,13 @@
 /**
- * ToolRecommender.js — pure per-arm capture-tool recommender (CP-1 / P2).
+ * ToolRecommender.js — pure per-arm capture-tool recommender: scores the verbs in a daughter's toolset
+ * (NET / MAGNET / GRIPPER / PAD) against the active target so the STATION_KEEP tool-selection HUD can show a ▶
+ * recommendation and star scores (archive/DAUGHTER_MULTITOOL_SPEC.md §7).
  *
- * Scores the verbs in a daughter's toolset (NET / MAGNET / GRIPPER / PAD)
- * against the active target so the STATION_KEEP tool-selection HUD can show a
- * ▶ recommendation and star scores, per DAUGHTER_MULTITOOL_SPEC §7.
- *
- * Design notes:
- *   • PURE + Node-safe — no THREE, no DOM, no eventBus. Fully unit-testable.
- *   • GRACEFUL DEGRADATION — when `ferromagnetic` / `hasFerrousFasteners` are
- *     absent (catalog rows pre-§6 migration), the magnet fork is simply skipped
- *     and the engine falls through to the net-first recommendation. No catalog
- *     migration is required to ship P2.
- *   • PHASE-GATED — GRIPPER (P3) and PAD (P4) are only scored when their
- *     FEATURE_FLAGS are ON, so P2 never recommends an unbuilt verb.
+ *   • PURE + Node-safe: no THREE, no DOM, no eventBus.
+ *   • Graceful degradation: when `ferromagnetic` / `hasFerrousFasteners` are absent the magnet fork is skipped and the
+ *     net-first recommendation stands.
+ *   • Phase-gated: GRIPPER and PAD are only scored when their FEATURE_FLAGS are ON, so an unbuilt verb is never
+ *     recommended.
  *
  * @module ToolRecommender
  */
@@ -34,7 +29,7 @@ import { computeToolOdds, computeBestTool } from './ToolOdds.js';
  * @param {Object} opts
  * @param {'weaver'|'spinner'} opts.armType            - daughter class (drives toolset + net cap)
  * @param {number}  [opts.mass=0]                      - target mass (kg)
- * @param {number}  [opts.sizeMeter=0]                 - target max width (m) — Item 4 width fork
+ * @param {number}  [opts.sizeMeter=0]                 - target max width (m)
  * @param {string}  [opts.debrisType]                  - 'rocketBody'|'defunctSat'|'fragment'|...
  * @param {boolean} [opts.ferromagnetic=false]         - pure-steel hull (direct EPM grip)
  * @param {boolean} [opts.hasFerrousFasteners=false]   - steel bolts/brackets (bolt-latch)
@@ -62,9 +57,8 @@ export function recommendArmTool(opts = {}) {
     ? (CN.MEDIUM && CN.MEDIUM.MAX_CAPTURE_MASS) || 500
     : (CN.SMALL && CN.SMALL.MAX_CAPTURE_MASS) || 50;
   const netOversize = mass > netCapKg;
-  // Item 4 (2026-06-12): WIDTH fork — debris wider than the net mouth is a
-  // deterministic reel-time failure (_checkNetIntegrityOnReel), so warn the
-  // player BEFORE they commit: NET scores 0 and GRIPPER takes the ▶.
+  // WIDTH fork: debris wider than the net mouth is a deterministic reel-time failure (_checkNetIntegrityOnReel), so
+  // warn BEFORE the player commits: NET scores 0 and GRIPPER takes the ▶.
   const netDiaM = (netClass && netClass.DIAMETER) || 0;
   const netTooWide = netDiaM > 0 && sizeM > netDiaM;
 
@@ -80,20 +74,18 @@ export function recommendArmTool(opts = {}) {
   /** @type {Object<string,string>} */ const hints  = {};
   for (const k of toolset) { scores[k] = 0; hints[k] = ''; }
 
-  // ── NET fork ──────────────────────────────────────────────────────────
   if ('NET' in scores) {
     if (netGone) {
       scores.NET = 0; hints.NET = 'magazine empty';
     } else if (netTooWide) {
       scores.NET = 0; hints.NET = 'too wide for net mouth';
     } else if (netOversize) {
-      // Net ladder: distinguish "wrong daughter for this catch" from a true
-      // whale. Above the Large Daughter ceiling (WEAVER cap, 500 kg) only the
-      // Mother's Large Net holds it; between this arm's cap and 500 kg a bigger
-      // Daughter can. The hint routes the player to the right platform.
+      // Net ladder: separate "wrong daughter for this catch" from a true whale. Above the Large Daughter ceiling (WEAVER
+      // cap, 500 kg) only the Mother's Large Net holds it; between this arm's cap and 500 kg a bigger Daughter can. The
+      // hint routes the player to the right platform.
       const whaleCap = (CN.MEDIUM && CN.MEDIUM.MAX_CAPTURE_MASS) || 500;
       scores.NET = 1;
-      // big-rules R5: over the mother's own catch limit nothing catches it: inspect it (within 10 m)
+      // Over the mother's own catch limit nothing catches it: inspect it (within 10 m)
       const limit = (CN.LARGE && CN.LARGE.CATCH_LIMIT_KG) || 0;
       hints.NET = limit > 0 && mass > limit
         ? 'Too big to catch: inspect it (within 10 m)'
@@ -101,21 +93,20 @@ export function recommendArmTool(opts = {}) {
         ? 'whale — Mother\'s Large Net only'
         : (armType === 'spinner' ? 'too big — send a Large Daughter' : 'oversize for this net');
     } else {
-      // A pure ferrous HULL is better grabbed directly by the EPM, so the net
-      // self-demotes to "viable but not preferred" (magnet wins the ▶). For
-      // fastener-only / non-ferrous targets the net stays primary.
+      // A pure ferrous HULL is better grabbed directly by the EPM, so the net self-demotes to "viable but not
+      // preferred" (magnet wins the ▶); fastener-only / non-ferrous targets keep the net primary.
       scores.NET = ferro ? 2 : 3;
       hints.NET = armType === 'weaver' ? 'Large LD-NET' : 'Small SD-NET';
     }
   }
 
-  // ── MAGNET fork (§13 Q2 + Q4) — both classes, fastener-driven ──────────
+  // MAGNET fork (§13 Q2 + Q4): both classes, fastener-driven
   if ('MAGNET' in scores && (ferro || fasten) && !tooHeavyForMagnet) {
     scores.MAGNET = ferro ? 3 : 2;
     hints.MAGNET  = ferro ? 'ferrous hull. Direct grip' : 'ferrous fasteners. Bolt-latch';
   }
 
-  // ── GRIPPER fork (P3, §13 Q1, flag-gated) — oversize / too-wide / awkward / fixture ──
+  // GRIPPER fork (§13 Q1, flag-gated): oversize / too-wide / awkward / fixture
   if ('GRIPPER' in scores && gripperOn) {
     const awkwardShape = dType === 'rocketBody' || (fixture && mass >= 50);
     if (!tooHeavyForGripper && (netOversize || netTooWide || awkwardShape)) {
@@ -127,16 +118,14 @@ export function recommendArmTool(opts = {}) {
     }
   }
 
-  // ── PAD fork (P4, flag-gated) — tiny fragments ─────────────────────────
+  // PAD fork (flag-gated): tiny fragments
   if ('PAD' in scores && padOn && mass <= 10 && dType === 'fragment') {
     scores.PAD = 3; hints.PAD = 'pad auto-resolves adhesion';
   }
 
-  // ── Rank (capture-feedback overhaul Phase 1a): the ▶ is now a thin wrapper
-  // over the unified ToolOdds model — argmax p with the preference-margin
-  // stabiliser — so the star HUD, the odds strip, and the resolve rolls can never
-  // disagree about which tool is the best bet. Star scores above stay as the
-  // coarse display tier; the recommendation itself comes from honest numbers.
+  // Rank: the ▶ is a thin wrapper over the unified ToolOdds model (argmax p with the preference-margin
+  // stabiliser), so the star HUD, the odds strip and the resolve rolls can never disagree about the best bet. Star
+  // scores above stay the coarse display tier.
   const odds = computeToolOdds({
     armType,
     toolset,
@@ -157,10 +146,10 @@ export function recommendArmTool(opts = {}) {
   });
   let recommended = computeBestTool(odds, toolset);
 
-  // ── DECISIONS §33 row 7 (2026-10-20): the small daughter picks her pad by herself when it suits the piece ────
-  // PAD is in her toolset, the pad is on, the piece is within her rating (SPINNER_MAX_CAPTURE_MASS) and the surface
-  // gives gecko or hooks adhesion (the pure ToolOdds mirror of ArmUnit._resolvePadMode — odds.PAD.mode, no third copy).
-  // Otherwise the net, as before. The tool cycle (backtick) still lets the player change it.
+  // DECISIONS §33 row 7: the small daughter picks her pad by herself when it suits the piece: PAD is in her toolset,
+  // the pad is on, the piece is within her rating (SPINNER_MAX_CAPTURE_MASS) and the surface gives gecko or hooks
+  // adhesion (odds.PAD.mode, the pure ToolOdds mirror of ArmUnit._resolvePadMode: no third copy). Otherwise the net.
+  // The tool cycle (backtick) still lets the player change it.
   const padMode = odds.PAD ? odds.PAD.mode : null;
   if ('PAD' in scores && padOn && mass <= (Constants.SPINNER_MAX_CAPTURE_MASS ?? 50)
       && (padMode === 'gecko' || padMode === 'hooks')) {

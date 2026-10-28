@@ -52,7 +52,7 @@ const _pfNow = () => (typeof performance !== 'undefined' && typeof performance.n
 const _nfForceOn = (() => {
   try {
     return typeof window !== 'undefined' && typeof URLSearchParams !== 'undefined' &&
-      new URLSearchParams(window.location.search).get('nf') === '1';
+      new URLSearchParams(devSearch(window.location)).get('nf') === '1';
   } catch (_e) { return false; }
 })();
 import { profileFlags } from '../core/ProfileFlags.js';
@@ -61,6 +61,7 @@ import { GpuProbe } from '../systems/GpuProbe.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { getOrbitalFoilEnv } from './orbitalFoilEnv.js';
 import { clamp01 } from '../core/MathUtil.js';
+import { devSearch } from '../core/DevHost.js';
 
 export class SceneManager {
   /**
@@ -234,7 +235,7 @@ export class SceneManager {
    */
   _detectInitialTier() {
     try {
-      const params = new URLSearchParams(window.location.search);
+      const params = new URLSearchParams(devSearch(window.location));
       const raw = (params.get('tier') || '').toUpperCase();
       if (raw === 'HIGH' || raw === 'MEDIUM' || raw === 'LOW') {
         console.log(`[Perf] tier URL override → ${raw}`);

@@ -40,6 +40,7 @@
 import * as THREE from 'three';
 import { getHealLog } from './BlackPatchHeal.js';
 import { clamp } from './MathUtil.js';
+import { devSearch } from './DevHost.js';
 
 /** State-sample cadence in frames (~8 Hz at 120 Hz). */
 const CHECK_EVERY = 15;
@@ -66,7 +67,7 @@ const FLOOR_CLIP = { 4: { near: 0.05, far: 500 }, 5: { near: 0.5, far: 2000 } };
 function parseMode() {
   try {
     if (typeof window === 'undefined' || typeof URLSearchParams === 'undefined') return 0;
-    const raw = new URLSearchParams(window.location.search).get('bfp');
+    const raw = new URLSearchParams(devSearch(window.location)).get('bfp');
     if (raw === '1') return 1;
     if (raw === '2') return 2;
     return 0;

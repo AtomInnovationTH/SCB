@@ -13,6 +13,7 @@
 import { soundLog, plainName } from '../../systems/audio/SoundLog.js';
 import { PANE_CORNER_PX } from '../RailGeometry.js';
 import { testsRequested } from './TestsSwitch.js';
+import { devSearch } from '../../core/DevHost.js';
 
 export const SOUND_LOG_PANE_ID = 'hud-sound-log';
 export const SOUND_LOG_REFRESH_MS = 250;
@@ -33,7 +34,7 @@ export class SoundLogPane {
     this.el = null;
     this._hosted = false;
     this._timer = null;
-    const search = opts.search ?? (typeof location !== 'undefined' ? location.search : '');
+    const search = opts.search ?? devSearch();
     const doc = opts.doc || (typeof document !== 'undefined' ? document : null);
     if (!parent || !doc || !soundsRequested(search)) return;
     if (opts.into) {   // lines go into the Tests body; the host owns position and look

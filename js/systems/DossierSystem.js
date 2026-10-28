@@ -1,25 +1,17 @@
 /**
- * DossierSystem.js — progressive debris-data reveal + close-range survey
- * (capture-feedback overhaul Phase 1.5).
+ * DossierSystem.js — progressive debris-data reveal + close-range survey.
  *
- * Principle: the reticle is for ACTING, the dossier pane is for KNOWING.
- * This system owns the per-debris knowledge state behind both:
+ * The reticle is for ACTING, the dossier pane is for KNOWING; this system owns the per-debris knowledge state behind both:
  *
  *   UNSCANNED — radar blip only (debris.discovered === false).
  *   SCANNED   — wide/quick scan revealed the silhouette + type/size/est-mass;
- *               salvage manifest shows redacted rows (you know THAT there's
- *               treasure, not WHAT).
- *   PROFILED  — "the chest opens": a platform (mother or daughter) held within
- *               DETAIL_SCAN_RANGE_M for SURVEY_TIME_S → automatic close-range
- *               survey → Full Profile (exact mass, material, brittleness,
- *               decrypted salvage manifest with credit values). Emits
- *               DEBRIS_PROFILED and pays a one-time-per-debris survey bounty
- *               (reuses the once-per-field scan-economy pattern,
- *               SensorSystem._rewardedFields).
+ *               salvage manifest shows redacted rows.
+ *   PROFILED  — a platform (mother or daughter) held within DETAIL_SCAN_RANGE_M for SURVEY_TIME_S → automatic
+ *               close-range survey → Full Profile (exact mass, material, brittleness, decrypted salvage manifest
+ *               with credit values). Emits DEBRIS_PROFILED and pays a one-time-per-debris survey bounty
+ *               (the once-per-field scan-economy pattern, SensorSystem._rewardedFields).
  *
- * Knowledge gates the odds strip: before Full Profile the FRAG chip shows
- * `FRAG ?` and NET % renders with `~` (DockingReticle reads isProfiled()).
- * Survey first = informed shot; shoot blind = gamble — both valid, both legible.
+ * Before Full Profile the FRAG chip shows `FRAG ?` and NET % renders with `~` (DockingReticle reads isProfiled()).
  *
  * Node-safe core: no THREE, no DOM. Positions are read as plain {x,y,z}.
  *
@@ -32,11 +24,11 @@ import { Events } from '../core/Events.js';
 import { salvageGasKg } from './ResourceSystem.js';
 import { pieceValues } from './BigPieceValues.js';
 import { TimeAuthority } from './TimeAuthority.js';
+import { RAD2DEG, degToRad, clamp } from '../core/MathUtil.js';
 
 /** 1 metre in scene units (matches ArmUnit / DockingReticle M). */
 const M = 0.00001;
 
-/** Reveal tiers. */
 export const DOSSIER_TIERS = {
   UNSCANNED: 'UNSCANNED',
   SCANNED: 'SCANNED',
@@ -44,10 +36,8 @@ export const DOSSIER_TIERS = {
 };
 
 /**
- * Appraise a debris salvage manifest into line items + total credits.
- * Pure — used by the dossier pane for the decrypted manifest and by tests.
- * @param {object|null} salvage — debris.salvage ({xenon, indium, gaAs, battery,
- *   hydrazine, lithium, metals[]})
+ * Appraise a debris salvage manifest into line items + total credits. Pure.
+ * @param {object|null} salvage — debris.salvage ({xenon, indium, gaAs, battery, hydrazine, lithium, metals[]})
  * @returns {{ rows: Array<{label:string, value:number}>, total: number }}
  */
 export function appraiseSalvage(salvage) {
@@ -75,8 +65,8 @@ export function appraiseSalvage(salvage) {
 }
 
 /**
- * The TARGET INFO panel's step lines for a piece she does not catch (INSPECT, DECISIONS §49 row 3), in plain words, with each step's
- * credits on its own line (B3 2026-10-28) and short enough for the 280 px panel with its padding kept (at most 38 characters at 10 px mono, about 6.6 px each: 250 px of 280). Pure.
+ * The TARGET INFO panel's step lines for a piece she does not catch (INSPECT, DECISIONS §49 row 3), in plain words, each
+ * step's credits on its own line, at most 38 characters (10 px mono, about 6.6 px each: 250 px of the 280 px panel). Pure.
  *   1: `Too big to catch · found 386 cr done`
  *   2: `orbit 771 cr · within 200 m`  (`orbit 771 cr · 35 %`, `orbit 771 cr done`)
  *   3: `fly-around 1543 cr · within 10 m`  (`· 40 %`, `done`)
@@ -88,7 +78,7 @@ export function inspectStepLines(st) {
   if (!st) return null;
   const I = Constants.INSPECT;
   const pay = st.pay || {};
-  const pct = (p) => `${Math.max(1, Math.min(99, Math.round(p * 100)))} %`;
+  const pct = (p) => `${clamp(Math.round(p * 100), 1, 99)} %`;
   const MID = ' \u00B7 ';
   const tail = (step, range) => (step.done ? ' done' : step.pct > 0 ? `${MID}${pct(step.pct)}` : `${MID}within ${range} m`);
   const spin = st.spin.done
@@ -104,33 +94,24 @@ export function inspectStepLines(st) {
 
 export class DossierSystem {
   constructor() {
-    /** @type {Set<*>} debris ids with Full Profile unlocked (session). */
     this._profiled = new Set();
-    /** @type {Set<*>} debris ids whose survey bounty was paid (once each). */
     this._bountyPaid = new Set();
-    /** @type {{id:*, elapsed:number}|null} survey in progress on the active target. */
     this._survey = null;
     /** @type {Map<string, Set<string>>} `${fieldId}|${fieldRow}` -> the characterising steps already paid (INSPECT; persisted). */
     this._inspectPaid = new Map();
     /** @type {Map<string, object>} the same key -> progress of the steps in flight (session only: a reload starts them over). */
     this._inspectProg = new Map();
 
-    // First-credit legibility (Workstream 1): during onboarding, defer the
-    // survey-bounty payout so the player's first salient credit gain is the net
-    // catch they were just taught — not an unexplained +75 ~3 s into the sim.
-    /** @type {boolean} true between ONBOARDING_STARTED and ONBOARDING_COMPLETE. */
+    // During onboarding the survey bounty is deferred so the player's first salient credit gain is the net catch
+    // they were just taught.
     this._onboardingActive = false;
-    /** @type {boolean} true once the first capture released the deferred queue. */
     this._firstCaptureDone = false;
-    /** @type {Map<*, number>} debrisId → deferred bounty amount (released later). */
+    /** @type {Map<*, number>} debrisId → deferred bounty amount. */
     this._deferredBounties = new Map();
     /** @type {Map<string, {key:string, step:string}>} INSPECT steps earned during onboarding: their credits sit in `_deferredBounties` under the same
-     *  `${key}|${step}` and the step counts as paid (saved) only when they are released, so a reload in between loses nothing (big-rules R6). */
+     *  `${key}|${step}` and the step counts as paid (saved) only when they are released, so a reload in between loses nothing. */
     this._deferredInspect = new Map();
 
-    // Store unsubscribe handles so instances (e.g. in tests) can detach from the
-    // shared eventBus and avoid accumulating handlers / cross-instance bleed.
-    /** @type {Array<Function>} */
     this._unsubs = [];
     this._unsubs.push(eventBus.on(Events.GAME_RESET, () => this.reset()));
     // INSPECT: the paid steps ride the save (PersistenceManager's whitelist key `inspectPaid`); GameFlowManager restores them on Continue.
@@ -139,27 +120,24 @@ export class DossierSystem {
       if (saveData && list.length) saveData.inspectPaid = list;
     }));
 
-    // Gate deferral on ONBOARDING_STARTED actually firing (veteran-skip emits
-    // ONBOARDING_COMPLETE without STARTED → never defers; pays immediately).
+    // Deferral needs ONBOARDING_STARTED to fire (veteran-skip emits ONBOARDING_COMPLETE without STARTED → never
+    // defers; pays immediately).
     this._unsubs.push(eventBus.on(Events.ONBOARDING_STARTED, () => {
       this._onboardingActive = true;
       this._firstCaptureDone = false;
     }));
-    // Flush any still-deferred bounty so a player who finishes onboarding
-    // without capturing is never stranded.
+    // Flush any still-deferred bounty so a player who finishes onboarding without capturing is never stranded.
     this._unsubs.push(eventBus.on(Events.ONBOARDING_COMPLETE, () => {
       this._onboardingActive = false;
-      this._flushDeferredBounties();   // no catch is released here: no withCatch (u3-payoff-calm)
+      this._flushDeferredBounties();   // no catch is released here: no withCatch
     }));
-    // First capture while onboarding is active releases the deferred queue so
-    // the survey data lands in the same HUD credit flash as the catch reward.
-    // tutorial-end-switch D3a: the mother's net / lasso catch counts too (only the daughter arm's dock
-    // emitted DEBRIS_CAPTURED, so a mother-only first run never paid it). Paid when the net closes: the
-    // survey data was earned by the scan itself. `_firstCaptureDone` keeps it to once per catch run.
+    // The first capture while onboarding is active releases the deferred queue, so the survey data lands in the same
+    // HUD credit flash as the catch reward. The mother's net / lasso catch counts too (only the daughter arm's dock
+    // emits DEBRIS_CAPTURED), paid when the net closes. `_firstCaptureDone` keeps it to once per catch run.
     const onFirstCatch = () => {
       if (this._onboardingActive && !this._firstCaptureDone) {
         this._firstCaptureDone = true;
-        this._flushDeferredBounties({ withCatch: true });   // u3-payoff-calm: released WITH the first catch
+        this._flushDeferredBounties({ withCatch: true });   // released WITH the first catch
       }
     };
     this._unsubs.push(eventBus.on(Events.DEBRIS_CAPTURED, onFirstCatch));
@@ -167,11 +145,7 @@ export class DossierSystem {
     if (Events.LASSO_CAPTURED) this._unsubs.push(eventBus.on(Events.LASSO_CAPTURED, onFirstCatch));
   }
 
-  /**
-   * Detach all eventBus subscriptions. The production singleton lives for the
-   * page lifetime and never needs this, but short-lived instances (tests) call
-   * it to avoid leaking handlers onto the shared bus.
-   */
+  /** Detach all eventBus subscriptions (the production singleton never needs this; tests do). */
   destroy() {
     if (this._unsubs) {
       for (const off of this._unsubs) { if (typeof off === 'function') off(); }
@@ -179,7 +153,6 @@ export class DossierSystem {
     }
   }
 
-  /** Clear all knowledge state (new session). */
   reset() {
     this._profiled.clear();
     this._bountyPaid.clear();
@@ -195,7 +168,6 @@ export class DossierSystem {
   /**
    * Release every deferred survey bounty as a single combined SCORING_AWARD +
    * one `_onboarding`-tagged comms line that bypasses tier-0 suppression.
-   * No-op (and silent) when nothing is queued.
    * @param {{withCatch?: boolean}} [opts]  withCatch: the first capture releases it (the payoff line adds it to the catch);
    *   the ONBOARDING_COMPLETE flush releases no catch and leaves it off.
    * @private
@@ -205,7 +177,7 @@ export class DossierSystem {
     let total = 0;
     for (const amount of this._deferredBounties.values()) total += amount;
     this._deferredBounties.clear();
-    // the deferred characterising steps are paid now: they join the saved ones (R6)
+    // the deferred characterising steps are paid now: they join the saved ones
     for (const { key, step } of this._deferredInspect.values()) {
       let set = this._inspectPaid.get(key);
       if (!set) { set = new Set(); this._inspectPaid.set(key, set); }
@@ -219,12 +191,10 @@ export class DossierSystem {
       reason: 'Close-range survey data',
       ...(withCatch ? { withCatch: true } : {}),
     });
-    // Combined narration — the capture's own SCORING_AWARD lands on the same
-    // DEBRIS_CAPTURED event, so the wallet shows one combined jump.
+    // The capture's own SCORING_AWARD lands on the same DEBRIS_CAPTURED event, so the wallet shows one combined jump.
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      // tutorial-end-switch D3b: a flush released by a catch adds to that catch's line; a flush with no
-      // catch (the tutorial's end) must not claim one.
+      // a flush released by a catch adds to that catch's line; a flush with no catch (the tutorial's end) must not claim one
       text: withCatch
         ? `Survey data: ${total} credits earned.`
         : `Survey data sent to ground station. ${total} credits earned.`,
@@ -233,16 +203,11 @@ export class DossierSystem {
     });
   }
 
-  /** Whether a debris has its Full Profile unlocked. */
   isProfiled(id) {
     return this._profiled.has(id);
   }
 
-  /**
-   * Reveal tier for a debris object.
-   * @param {object|null} debris
-   * @returns {string} DOSSIER_TIERS value
-   */
+  /** @returns {string} DOSSIER_TIERS value */
   getTier(debris) {
     if (!debris) return DOSSIER_TIERS.UNSCANNED;
     if (this._profiled.has(debris.id)) return DOSSIER_TIERS.PROFILED;
@@ -250,11 +215,7 @@ export class DossierSystem {
     return DOSSIER_TIERS.SCANNED;
   }
 
-  /**
-   * Survey progress for the dossier ring.
-   * @param {*} id
-   * @returns {number} 0..1 (0 when no survey is running on this debris)
-   */
+  /** @returns {number} dossier-ring progress 0..1 (0 when no survey is running on this debris) */
   getSurveyProgress(id) {
     const D = Constants.DOSSIER || {};
     if (!this._survey || this._survey.id !== id) return 0;
@@ -262,24 +223,19 @@ export class DossierSystem {
   }
 
   /**
-   * Per-frame update: drive the automatic close-range survey on the active
-   * target. A survey runs while ANY platform (mother or a deployed daughter)
-   * holds within DETAIL_SCAN_RANGE_M of the target.
+   * Per-frame update: drive the automatic close-range survey on the active target. A survey runs while ANY platform
+   * (mother or a deployed daughter) holds within DETAIL_SCAN_RANGE_M of the target.
    *
-   * NOTE (intentional scope): only the SELECTED target is ever surveyed — a
-   * daughter station-keeping a non-selected debris does not open its dossier.
-   * The dossier pane shows one target at a time, so surveying off-screen
-   * debris would pay bounties for reveals the player never sees. Deliberate
-   * narrowing of the plan's "any platform near any target".
+   * Only the SELECTED target is ever surveyed (deliberately): the dossier pane shows one target at a time, so
+   * surveying off-screen debris would pay bounties for reveals the player never sees.
    *
    * @param {number} dt — seconds
    * @param {object} ctx
    * @param {{x,y,z}|null} ctx.playerPos — mother position (scene units)
    * @param {object|null} ctx.armManager — for daughter positions
-   * @param {object|null} ctx.target — active/selected debris
    * @param {boolean} [ctx.worldHeld] — the world clock is stopped (a workbench drawer is open): the INSPECT clocks wait
-   * @param {number} [ctx.gameDt] — the game-time step for the INSPECT clocks (default: the time authority's base step, `TimeAuthority.baseGameDt(dt)`, the step
-   *   the piece's tumble animation turns by; the survey keeps real seconds)
+   * @param {number} [ctx.gameDt] — the game-time step for the INSPECT clocks (default: the time authority's base step,
+   *   `TimeAuthority.baseGameDt(dt)`, the step the piece's tumble animation turns by; the survey keeps real seconds)
    */
   update(dt, { playerPos = null, armManager = null, target = null, worldHeld = false, gameDt = undefined } = {}) {
     const D = Constants.DOSSIER || {};
@@ -309,7 +265,7 @@ export class DossierSystem {
 
     // The characterising steps run BEFORE the profiled early return: a piece over her catch limit is profiled after 3 s, and
     // its close inspection and spin measurement go on afterwards.
-    // One clock (R3): the timers run on the game-time step the tumble animation uses, and wait while the world is held still.
+    // One clock: the timers run on the game-time step the tumble animation uses, and wait while the world is held still.
     const gdt = worldHeld ? 0 : (Number.isFinite(gameDt) ? gameDt : TimeAuthority.baseGameDt(dt));
     this._updateInspect(gdt, target, tPos, bestM, bestPos);
 
@@ -327,14 +283,12 @@ export class DossierSystem {
         this._completeProfile(target);
       }
     } else {
-      // Out of range — the ring drains; re-enter range to restart.
+      // Out of range: the ring drains; re-enter range to restart.
       this._survey = null;
     }
   }
 
-  // ==========================================================================
-  // CHARACTERISING A PIECE SHE DOES NOT CATCH (INSPECT, DECISIONS §49 row 3)
-  // ==========================================================================
+  // INSPECT (DECISIONS §49 row 3): characterising a piece she does not catch
 
   /** The key a piece's paid steps are saved under: piece ids do not survive a reload, a field and its row do. */
   static inspectKey(target) {
@@ -344,7 +298,6 @@ export class DossierSystem {
   /**
    * What this piece pays for being characterised: the total in credits, or 0 when it is not such a piece (she can catch it, it has no
    * owner to pay, or its owner has abandoned it). Whole credits: the fourth step takes the rounding rest.
-   * @param {object|null} target
    * @returns {{total:number, pay:{find:number, orbit:number, inspect:number, spin:number}}|null} null = not an inspect piece
    */
   inspectPay(target) {
@@ -364,7 +317,6 @@ export class DossierSystem {
   /**
    * The panel's view of a piece's characterising steps, or null when it is not such a piece.
    * `pct` is 0-1 progress of a step in flight; a paid step is done.
-   * @param {object|null} target
    * @returns {{total:number, pay:{find:number, orbit:number, inspect:number, spin:number}, find:{done:boolean}, orbit:{done:boolean, pct:number}, inspect:{done:boolean, pct:number},
    *   spin:{done:boolean, pct:number, degS:number}}|null}
    */
@@ -384,19 +336,19 @@ export class DossierSystem {
       find: { done: paid.has('find') },
       orbit: { done: paid.has('orbit'), pct: paid.has('orbit') ? 1 : clamp01((pr.orbitS || 0) / I.ORBIT_TIME_S) },
       inspect: { done: paid.has('inspect'), pct: paid.has('inspect') ? 1 : clamp01((pr.spreadDeg || 0) / I.COVER_DEG) },
-      spin: { done: paid.has('spin'), pct: paid.has('spin') ? 1 : clamp01((pr.spinS || 0) / turnS), degS: DossierSystem.drawnSpinRadS(target) * (180 / Math.PI) },
+      spin: { done: paid.has('spin'), pct: paid.has('spin') ? 1 : clamp01((pr.spinS || 0) / turnS), degS: DossierSystem.drawnSpinRadS(target) * RAD2DEG },
     };
   }
 
   /**
-   * The spin AS DRAWN, in radians per game second at the shipped base rate (B2 2026-10-28). The 3D draw turns a piece by
+   * The spin AS DRAWN, in radians per game second at the shipped base rate. The 3D draw turns a piece by
    * `min(|tumbleRate| x BASE_SCALE, DEBRIS_MAX_VISUAL_TUMBLE_DEG_S)` per real second (DebrisField._advanceTumble: a cap chosen for smooth
    * motion, "jagged object rotating fast"), so the Meteor 2's 1.5 deg/s true spin is drawn at 1.0 deg per game second. The step's turn
    * and the plain-words rate both use this, so the label, the drawn turn and the step are one clock.
    */
   static drawnSpinRadS(target) {
     const base = TimeAuthority.BASE_SCALE;
-    const cap = ((Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity) * Math.PI) / 180;
+    const cap = degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity);
     return Math.min(Math.abs(target.tumbleRate || 0) * base, cap) / base;
   }
 
@@ -462,7 +414,7 @@ export class DossierSystem {
       const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (len > 1e-12) {
         const dir = { x: dx / len, y: dy / len, z: dz / len };
-        const angleTo = (o) => Math.acos(Math.max(-1, Math.min(1, dir.x * o.x + dir.y * o.y + dir.z * o.z))) * (180 / Math.PI);
+        const angleTo = (o) => Math.acos(clamp(dir.x * o.x + dir.y * o.y + dir.z * o.z, -1, 1)) * RAD2DEG;
         let widest = 0, fresh = true;
         for (const o of pr.dirs) {
           const a = angleTo(o);
@@ -502,7 +454,7 @@ export class DossierSystem {
       spin: 'Spin measured',
     }[stepName];
     if (this._onboardingActive && !this._firstCaptureDone) {
-      // held back for the first catch: NOT paid yet, so not saved as paid either (R6)
+      // held back for the first catch: NOT paid yet, so not saved as paid either
       this._deferredBounties.set(dkey, credits);
       this._deferredInspect.set(dkey, { key, step: stepName });
       return;
@@ -510,7 +462,7 @@ export class DossierSystem {
     paid.add(stepName);
     eventBus.emit(Events.SCORING_AWARD, { points: credits, reason: words });
     const rate = stepName === 'spin'
-      ? ` ${(DossierSystem.drawnSpinRadS(target) * (180 / Math.PI)).toFixed(1)}\u00B0 a second,` : '';
+      ? ` ${(DossierSystem.drawnSpinRadS(target) * RAD2DEG).toFixed(1)}\u00B0 a second,` : '';
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
       text: `${words}:${rate} ${credits} credits.`,
@@ -519,9 +471,7 @@ export class DossierSystem {
   }
 
   /**
-   * Unlock the Full Profile: emit DEBRIS_PROFILED, pay the one-time survey
-   * bounty (data IS income; capturing the appraised debris is the jackpot).
-   * @param {object} target
+   * Unlock the Full Profile: emit DEBRIS_PROFILED, pay the one-time survey bounty.
    * @private
    */
   _completeProfile(target) {
@@ -536,9 +486,7 @@ export class DossierSystem {
     if (!characterised && !this._bountyPaid.has(target.id) && (D.SURVEY_BOUNTY || 0) > 0) {
       this._bountyPaid.add(target.id);
       if (this._onboardingActive && !this._firstCaptureDone) {
-        // Defer the payout: keep the visual profile reveal ("chest opens"), but
-        // release the credits together with the first net-catch reward so the
-        // player's first salient credit gain is legibly the catch they learned.
+        // Defer the payout (the profile reveal still happens); it is released with the first net-catch reward.
         bountyDeferred = true;
         this._deferredBounties.set(target.id, D.SURVEY_BOUNTY);
       } else {
@@ -556,11 +504,9 @@ export class DossierSystem {
       bountyPaid,
     });
 
-    // The full salvage appraisal lives in the dossier pane; the comms line
-    // just announces the data is in and names the credits earned for it.
-    // nets-1b (DECISIONS §33, one line per fact): while the bounty is held back for the catch's release, this
-    // line is NOT said: the release says "Survey data: N credits earned." when the catch lands (or, at the
-    // tutorial's end, "Survey data sent to ground station. N credits earned."). Said now otherwise, one line.
+    // The comms line announces the data is in and names the credits earned. DECISIONS §33 (one line per fact): while the
+    // bounty is held back for the catch's release, this line is NOT said: the release says "Survey data: N credits
+    // earned." when the catch lands (or, at the tutorial's end, "Survey data sent to ground station. N credits earned.").
     if (!bountyDeferred) {
       const bountyClause = bountyPaid ? ` ${D.SURVEY_BOUNTY} credits earned.` : '';
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -572,7 +518,6 @@ export class DossierSystem {
   }
 }
 
-/** Singleton (matches SensorSystem/KesslerSystem wiring pattern). */
 export const dossierSystem = new DossierSystem();
 
 export default DossierSystem;

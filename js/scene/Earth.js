@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { profileFlags } from '../core/ProfileFlags.js';
+import { isDevHost, devSearch } from '../core/DevHost.js';
 import { TouchControls } from '../ui/TouchControls.js';
 import { smoothstep01 } from '../core/MathUtil.js';
 
@@ -971,16 +972,17 @@ export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapO
  */
 function recordTexEvent(kind, file, image) {
   try {
-    if (typeof window === 'undefined') return;
-    const log = (window.__earthTexEvents = window.__earthTexEvents || []);
-    log.push({
-      t: Math.round((typeof performance !== 'undefined' ? performance.now() : 0)),
-      kind,
-      file: String(file).split('/').pop(),
-      w: image && image.width ? image.width : 0,
-      h: image && image.height ? image.height : 0,
-    });
-    if (log.length > 40) log.shift();
+    if (typeof window !== 'undefined' && isDevHost()) {
+      const log = (window.__earthTexEvents = window.__earthTexEvents || []);
+      log.push({
+        t: Math.round((typeof performance !== 'undefined' ? performance.now() : 0)),
+        kind,
+        file: String(file).split('/').pop(),
+        w: image && image.width ? image.width : 0,
+        h: image && image.height ? image.height : 0,
+      });
+      if (log.length > 40) log.shift();
+    }
   } catch (_e) { /* diagnostics must never break texture loading */ }
 }
 
@@ -2011,7 +2013,7 @@ export function getTextureQuality({ renderer, doc, nav } = {}) {
   // detection. Dev-only: never ship URLs with it.
   try {
     if (typeof window !== 'undefined' && typeof URLSearchParams !== 'undefined') {
-      const raw = (new URLSearchParams(window.location.search).get('tex') || '').toLowerCase();
+      const raw = (new URLSearchParams(devSearch(window.location)).get('tex') || '').toLowerCase();
       if (raw === '16k' || raw === '8k') {
         console.info(`[Earth] texture LOD URL override → ${raw}`);
         return { quality: raw, dayQuality: raw, nightQuality: raw };

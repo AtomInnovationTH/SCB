@@ -57,6 +57,7 @@
 import { NOTCH_PX } from '../systems/WheelRouter.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { clamp01, clamp } from '../core/MathUtil.js';
+import { isDevHost } from '../core/DevHost.js';
 
 const FLOOR_COUNT = FloorContract.FLOORS.length;
 /** The four keys the turn pad may write — never any other. */
@@ -320,7 +321,7 @@ export class TouchControls {
 
     // Machine-observable input state (Ipad.md §5.3). Created only here: desktop/headless contexts never see the global.
     const stats = { pinch: 0, rail: 0, nav: 0, tap: 0, hold: 0, drag: 0, turn: 0, edge: 0, radial: 0, edgeTouch: 0 };
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isDevHost()) {
       window.__TOUCH = this._stats = stats;
     } else {
       this._stats = stats;

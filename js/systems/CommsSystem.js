@@ -1,10 +1,7 @@
 /**
  * CommsSystem.js — Ground station communications system
- * Delivers immersive, procedurally-generated messages during gameplay.
- * Message types: Space Weather, Kessler Events, Launch Alerts,
- * Mission Updates, Player Status.
- *
- * ST-5.1: 6-channel classification + coalescing layer.
+ * Procedurally-generated messages: Space Weather, Kessler Events, Launch Alerts, Mission Updates, Player Status,
+ * plus a 6-channel classification + coalescing layer.
  * @module systems/CommsSystem
  */
 
@@ -18,50 +15,34 @@ import { messagePassesSuppression, rampSuppressionTier, postOnboardingStartTier 
 import { missReasonToText } from '../entities/CaptureNet.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
-import { flyFirstLine } from './netRouting.js';   // hints-scan D3: the daughter's "Press N" line says her number when N is not hers
-import { depotWords } from './resupplyWords.js';   // lane 3d: the "depot" advice reads the map switch
+import { flyFirstLine } from './netRouting.js';   // the daughter's "Press N" line says her number when N is not hers
+import { depotWords } from './resupplyWords.js';   // the "depot" advice reads the map switch
 import { radToDeg, clamp } from '../core/MathUtil.js';
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
-/** Maximum messages retained in log */
 const MAX_MESSAGES = 20;
-/** u5 D3: a shut start-up gate opens itself after this many seconds of updates (the safety). */
+/** A shut start-up gate opens itself after this many seconds of updates (the safety). */
 const HOLD_SAFETY_S = 20;
 
-/** Message priorities */
 export const CommsPriority = {
   INFO: 'INFO',
   WARNING: 'WARNING',
   CRITICAL: 'CRITICAL',
 };
 
-/** Flavor message interval range (seconds of game time) */
+/** Flavor message interval range (s of game time) */
 const FLAVOR_MIN_INTERVAL = 30;
 const FLAVOR_MAX_INTERVAL = 120;
 
-/** Event-based message cooldowns (seconds) */
+/** Event-based message cooldown (s) */
 const EVENT_COOLDOWN = 15;
-
-// ============================================================================
-// ST-5.1: CHANNEL CLASSIFICATION — Pure helpers (CJS-exportable for tests)
-// ============================================================================
 
 const COMMS = Constants.COMMS || {};
 const VALID_CHANNELS = new Set(COMMS.CHANNELS || ['CMD', 'ALERT', 'HOUSTON', 'SCI', 'FLAVOR', 'MISSION']);
 const DEFAULT_CHANNEL = COMMS.DEFAULT_CHANNEL || 'FLAVOR';
 
 /**
- * nets-1b (2026-10-20): the sender is shown once. Emitters write `source: 'Small 1'` AND start the text with
- * `Small 1: `, so the log read "SMALL 1: Small 1: Pad adhered". Strips a leading `<source>: ` from the text,
- * case-insensitively ("Houston: " under source HOUSTON too). Nothing else is touched; a text that is only the
- * prefix is returned whole.
- *
- * @param {string} source
- * @param {string} text
- * @returns {string}
+ * The sender is shown once: emitters write `source: 'Small 1'` AND start the text with `Small 1: `. Strips a leading
+ * `<source>: ` from the text, case-insensitively. Nothing else is touched; a text that is only the prefix is returned whole.
  */
 export function stripSenderPrefix(source, text) {
   if (typeof source !== 'string' || typeof text !== 'string' || !source) return text;
@@ -74,11 +55,10 @@ export function stripSenderPrefix(source, text) {
 }
 
 /**
- * nets-1b R6: a source-less emit whose text starts with a daughter's own name ("Small 1: Pad adhered") read
- * "SYSTEM: Small 1: Pad adhered". The name IS the sender: returns it as the source with the rest as the text, or null.
- * The name format is `daughterDisplayName`'s: "Small N" / "Large N" (N = the arm's number).
+ * A source-less emit whose text starts with a daughter's own name ("Small 1: Pad adhered"): the name IS the sender;
+ * returns it as the source with the rest as the text, or null. The name format is `daughterDisplayName`'s:
+ * "Small N" / "Large N" (N = the arm's number).
  *
- * @param {string} text
  * @returns {{source: string, text: string}|null}
  */
 export function splitDaughterPrefix(text) {
@@ -92,49 +72,39 @@ export function splitDaughterPrefix(text) {
  * Classify a message into one of the 6 channels.
  * Priority: explicit channel → source heuristic → text heuristic → FLAVOR.
  *
- * @param {string} [source] — message source field (e.g. 'HOUSTON', 'SDA')
- * @param {object} [payload] — full message payload (may contain `channel`, `text`)
  * @returns {string} One of Constants.COMMS.CHANNELS
  */
 function sourceToChannel(source, payload) {
   const p = payload || {};
 
-  // 1. Explicit channel field — validate against known channels
   if (p.channel) {
     const ch = String(p.channel).toUpperCase();
     return VALID_CHANNELS.has(ch) ? ch : DEFAULT_CHANNEL;
   }
 
-  // 2. Source-based heuristics
   const src = (source || '').toUpperCase();
   if (src === 'HOUSTON') return 'HOUSTON';
   if (src === 'MISSION' || src === 'MISSION_EVENT') return 'MISSION';
   if (src === 'BANGALORE' || src === 'HASSAN') return 'HOUSTON';
   if (src === 'NEWS') return 'MISSION';
 
-  // 3. Conservative text-based heuristics (well-commented, secondary to explicit channel)
+  // Text heuristics, secondary to the explicit channel.
   const text = (p.text || '').toUpperCase();
-  // ALERT: messages starting with warning-like prefixes. Plan D-J (no emoji):
-  // the former leading warning glyph became the words CAUTION: / WARNING:
-  // (CRITICAL: where the sentence already carried it), so those words classify.
-  // The escaped U+26A0 branch is the do-not-edit COMPATIBILITY branch (Session
-  // L review): GameFlowManager's two sourceless Hazmat lines still lead with
-  // the glyph (a lift to request — 03-plan Session L review), and without it
-  // they silently fell from ALERT to FLAVOR. Nothing renders the glyph here;
-  // drop the branch when the last unpurged emitter is lifted.
+  // ALERT: warning-like prefixes (no emoji: the words CAUTION: / WARNING: / CRITICAL: classify).
+  // The escaped U+26A0 branch is a do-not-edit COMPATIBILITY branch: GameFlowManager's two sourceless Hazmat lines
+  // still lead with the glyph, and without it they fall from ALERT to FLAVOR. Nothing renders the glyph here;
+  // drop the branch when the last such emitter is lifted.
   if (/^(ALERT:|WARNING:|CAUTION:|CRITICAL:|CONJUNCTION|\u26A0)/.test(text)) return 'ALERT';
   // SCI: discovery/codex/identification
   if (/^(DISCOVERY|CODEX|IDENTIFIED)/.test(text)) return 'SCI';
   // CMD: arm deploy/reel/detach confirmations
   if (/^(DEPLOY|REEL|DETACH|COMMS: DEPLOY|COMMS: FISH|COMMS: RECALL)/.test(text)) return 'CMD';
 
-  // 4. Default
   return DEFAULT_CHANNEL;
 }
 
 /**
- * Coalescing predicate: given recent message timestamps + channels,
- * determine if the new message should be coalesced.
+ * Coalescing predicate: should the new message be coalesced, given recent timestamps + channels.
  *
  * @param {Array<{channel: string, timestamp: number}>} recentWindow — messages in the coalesce window
  * @param {string} newChannel — channel of the incoming message
@@ -144,7 +114,7 @@ function sourceToChannel(source, payload) {
 function shouldCoalesce(recentWindow, newChannel, thresholdCount) {
   const threshold = thresholdCount || COMMS.COALESCE_THRESHOLD_COUNT || 3;
   const sameChannel = recentWindow.filter(m => m.channel === newChannel);
-  // Count includes the new message being added
+  // includes the new message
   const count = sameChannel.length + 1;
   return {
     shouldCoalesce: count >= threshold,
@@ -152,11 +122,6 @@ function shouldCoalesce(recentWindow, newChannel, thresholdCount) {
   };
 }
 
-// ============================================================================
-// MESSAGE TEMPLATES
-// ============================================================================
-
-/** Space weather messages (procedural) */
 const SPACE_WEATHER_TEMPLATES = [
   {
     priority: CommsPriority.CRITICAL,
@@ -184,7 +149,6 @@ const SPACE_WEATHER_TEMPLATES = [
   },
 ];
 
-/** Kessler event messages */
 const KESSLER_TEMPLATES = [
   {
     priority: CommsPriority.CRITICAL,
@@ -203,7 +167,6 @@ const KESSLER_TEMPLATES = [
   },
 ];
 
-/** Launch notification templates */
 const LAUNCH_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
@@ -228,10 +191,9 @@ const LAUNCH_TEMPLATES = [
 ];
 
 /**
- * Mission update templates.
- * nets-1b (2026-10-20, Ruling 0: plain words): `{target}` is the name of a live piece from the field (see
+ * Mission update templates (Ruling 0: plain words). `{target}` is the name of a live piece from the field (see
  * `_sendMissionUpdate`), so a template that uses it is not sent when no piece is alive. The spin line carries the piece's
- * own spin rate when it has one (`templateNoSpin` otherwise), says "slow its spin" (not "detumble") and spells out the unit.
+ * own spin rate when it has one (`templateNoSpin` otherwise).
  */
 const MISSION_TEMPLATES = [
   {
@@ -247,7 +209,7 @@ const MISSION_TEMPLATES = [
     source: 'LeoLabs',
     needsTarget: true,
     template: 'Got your scan data on {target}, thanks. Bonus +50 points.',
-    quiet: true,   // comms-after-tutorial D4: random timer line, no scan behind it
+    quiet: true,   // random timer line, no scan behind it
   },
   {
     priority: CommsPriority.WARNING,
@@ -258,7 +220,7 @@ const MISSION_TEMPLATES = [
     priority: CommsPriority.INFO,
     source: 'GROUND STN',
     template: 'Telemetry looks good. All systems green. Carry on, Cowboy.',
-    quiet: true,   // comms-after-tutorial D4: pure chatter
+    quiet: true,   // pure chatter
   },
   {
     priority: CommsPriority.INFO,
@@ -268,7 +230,7 @@ const MISSION_TEMPLATES = [
   },
 ];
 
-/** nets-1b: a live piece's plain name for a mission update (its catalogue name if it has one, else by type). */
+/** A live piece's plain name for a mission update (its catalogue name if it has one, else by type). */
 const MISSION_TYPE_NAMES = {
   rocketBody: 'SL-16 R/B',
   defunctSat: 'Cosmos Fragment',
@@ -281,7 +243,6 @@ function missionTargetName(d) {
   return MISSION_TYPE_NAMES[d.type] || 'Debris Fragment';
 }
 
-/** Player status templates (triggered by events) */
 const PLAYER_STATUS_TEMPLATES = {
   lowXenon: {
     priority: CommsPriority.WARNING,
@@ -305,7 +266,6 @@ const PLAYER_STATUS_TEMPLATES = {
   },
 };
 
-/** Generic flavor messages */
 const FLAVOR_MESSAGES = [
   { source: 'HOUSTON', text: 'Orbital environment looking good. Keep up the great work, Cowboy.' },
   { source: 'MISSION CTRL', text: 'Sun transit in 12 minutes. Optimal solar charging window approaching.' },
@@ -325,13 +285,9 @@ const FLAVOR_MESSAGES = [
 ];
 
 /**
- * Validate a COMMS_MESSAGE `link` (FURNACE gag v2 amendment, plan
- * 1788957399035 §7.26): the per-message deep link CommsPanel wraps around the
- * first whole-word `term`. Accepted only as an object carrying BOTH `term` and
- * `entryId` as non-empty strings; the whole object is passed through (it may
- * carry `anchor`). Anything else — absent, null, a string, a partial — is
- * `null`, so a malformed emit can never reach the renderer. Pure.
- * @param {*} link
+ * Validate a COMMS_MESSAGE `link`: the per-message deep link CommsPanel wraps around the first whole-word `term`.
+ * Accepted only as an object carrying BOTH `term` and `entryId` as non-empty strings; the whole object is passed
+ * through (it may carry `anchor`). Anything else is `null`, so a malformed emit never reaches the renderer. Pure.
  * @returns {{ term: string, entryId: string, anchor?: string }|null}
  */
 export function sanitizeCommsLink(link) {
@@ -341,51 +297,40 @@ export function sanitizeCommsLink(link) {
   return link;
 }
 
-// ============================================================================
-// COMMS SYSTEM
-// ============================================================================
-
 export class CommsSystem {
   constructor() {
     /** @type {Array<{ timestamp: number, source: string, text: string, priority: string, channel: string, id: number }>} */
     this.messages = [];
 
-    /** @type {number} Next message ID */
     this._nextId = 0;
 
     /** @type {string|null} the loaded fuel's name, from the last FUEL_CHANGED (null = the default fuel) */
     this._fuel = null;
 
-    /** @type {Array<{channel: string, timestamp: number}>} ST-5.1: sliding window for coalescing */
+    /** @type {Array<{channel: string, timestamp: number}>} sliding window for coalescing */
     this._coalesceWindow = [];
 
-    /** @type {number} Game time elapsed */
     this._gameTime = 0;
 
-    /** @type {number} Time until next flavor message */
+    // time until the next flavor / launch / weather / mission message
     this._nextFlavorTime = this._randomFlavorInterval();
 
-    /** @type {number} Time until next launch alert */
     this._nextLaunchTime = 180 + Math.random() * 300; // 3-8 min
 
-    /** @type {number} Time until next weather event */
     this._nextWeatherTime = 120 + Math.random() * 240; // 2-6 min
 
-    /** @type {number} Time until next mission update */
     this._nextMissionTime = 60 + Math.random() * 120;
 
-    /** @type {Map<string, number>} Cooldown timers for event-based messages */
+    /** @type {Map<string, number>} cooldown timers for event-based messages */
     this._cooldowns = new Map();
 
     /** @type {Function|null} Callback for new messages (used by HUD) */
     this.onMessage = null;
 
-    /** @type {boolean} Active gameplay flag */
     this._active = false;
 
-    this._isroHandoffDone = false;  // ST-8.4: tracks whether ISRO handoff dialogue has played
+    this._isroHandoffDone = false;  // whether the ISRO handoff dialogue has played
 
-    // Active effects
     this.activeEffects = {
       solarStorm: false,
       geoStorm: false,
@@ -394,52 +339,44 @@ export class CommsSystem {
     };
 
     /**
-     * CP-4 guidance arbiter (GUIDANCE_ARBITER_SPEC §2) — graduated suppression
-     * tier (0–3) replacing the old binary `_onboardingActive`:
+     * Guidance arbiter suppression tier (archive/GUIDANCE_ARBITER_SPEC.md §2), 0–3:
      *   0 = OnboardingDirector running (only tag-bypassed lines pass)
      *   1 = 0–30 s after ONBOARDING_COMPLETE (+ HOUSTON, MISSION)
      *   2 = 30–60 s after (+ ALERT, CMD)
      *   3 = steady state / DEFAULT for non-onboarding play (all channels)
-     * Escalation is driven off the game clock in `_advanceSuppression(dt)` (so it
-     * respects pause for free); see `commsSuppression.js` for the pure gate.
+     * Escalation runs off the game clock in `_advanceSuppression(dt)` (respects pause); the pure gate is in
+     * `commsSuppression.js`.
      * @type {number}
      */
     this._suppressionTier = 3;
     this._postOnboardingElapsed = 0; // seconds since ONBOARDING_COMPLETE (ramp 1→3)
     this._tempTierActive = false;    // a MissionCoach beat is holding a protected tier
     this._tempTierRestoreS = 0;      // remaining hold (s) before the ramp resumes
-    // Guidance cleanup (Phase 1): only run the post-onboarding wake ramp if the
-    // Director pipeline ACTUALLY ran this session. A returning veteran is
-    // veteran-skipped — the Director emits ONBOARDING_COMPLETE WITHOUT a prior
-    // ONBOARDING_STARTED — and must NOT be dropped to tier 1 (muted atmosphere)
-    // for ~60 s. Without onboarding, steady-state tier 3 is correct.
+    // The post-onboarding wake ramp runs only if the Director pipeline ACTUALLY ran this session: a veteran-skip emits
+    // ONBOARDING_COMPLETE WITHOUT a prior ONBOARDING_STARTED and must NOT be dropped to tier 1 for ~60 s.
     this._onboardingWasRun = false;
     /**
-     * comms-after-tutorial D1: ONBOARDING_MASTERED arrived this run (tier is 3). Makes a COMPLETE
-     * that follows it (the all-skipped path emits both) a no-op instead of starting the wake ramp.
+     * ONBOARDING_MASTERED arrived this run (tier is 3). Makes a COMPLETE that follows it (the all-skipped path emits
+     * both) a no-op instead of starting the wake ramp.
      */
     this._tutorialMastered = false;
 
-    // u5-info-ap-hold D3: the start's lines are HELD until comms can be seen. The gate is open by
-    // default (tests, ladder-off boots and every later moment are unchanged); OpeningDance shuts it
-    // with COMMS_HOLD and opens it with COMMS_RELEASE just before the hand-over. Only the start:
-    // later floor-1 visits behave as before (comms keeps its buffer and shows it on return).
+    // The start's lines are HELD until comms can be seen. The gate is open by default; OpeningDance shuts it with
+    // COMMS_HOLD and opens it with COMMS_RELEASE just before the hand-over. Only the start: later floor-1 visits
+    // keep the buffer and show it on return.
     this._gateOpen = true;
     this._held = [];                 // msg objects waiting behind a shut gate (never in `messages`)
     this._holdElapsedS = 0;          // real seconds the gate has been shut (the safety)
 
     this._setupEventListeners();
 
-    // Self-reset via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_RESET, () => this.reset());
 
-    // u5 D3: the start-up hold. GAME_RESET / reset() leave a shut gate shut and keep the held list
-    // (GAME_RESET can arrive after the hold began).
+    // GAME_RESET / reset() leave a shut gate shut and keep the held list (GAME_RESET can arrive after the hold began).
     if (Events.COMMS_HOLD) eventBus.on(Events.COMMS_HOLD, () => this._shutGate());
     if (Events.COMMS_RELEASE) eventBus.on(Events.COMMS_RELEASE, () => this._openGate());
 
-    // CP-4 suppression tiers — onboarding drops to tier 0; completion begins the
-    // graduated wake ramp. (Non-onboarding play stays at the default tier 3.)
+    // Onboarding drops to tier 0; completion begins the graduated wake ramp.
     if (Events.ONBOARDING_STARTED) {
       eventBus.on(Events.ONBOARDING_STARTED, () => {
         this._suppressionTier = 0;
@@ -450,16 +387,13 @@ export class CommsSystem {
     if (Events.ONBOARDING_COMPLETE) {
       eventBus.on(Events.ONBOARDING_COMPLETE, () => this._beginPostOnboardingRamp());
     }
-    // comms-after-tutorial D1/D2: the tutorial's beat list finished. The tutorial's end now emits
-    // MASTERED first and then ONBOARDING_COMPLETE (owner 2026-10-19, tutorial-end-switch D1), so
-    // this is what takes the panel out of tier 0 - straight to tier 3, no 30-60 s wake ramp; the
+    // The tutorial's beat list finished. owner 2026-10-19: the tutorial's end emits MASTERED first, then
+    // ONBOARDING_COMPLETE. So this takes the panel out of tier 0 straight to tier 3, no 30-60 s wake ramp; the
     // COMPLETE that follows is a no-op here (_tutorialMastered).
     if (Events.ONBOARDING_MASTERED) {
       eventBus.on(Events.ONBOARDING_MASTERED, () => this._endTutorialSilence());
     }
 
-    // Self-manage lifecycle via GAME_STATE_CHANGE
-    // (decoupled from GameFlowManager.transitionToState start/stop/reset calls)
     const ACTIVE_STATES = new Set(['ORBITAL_VIEW', 'APPROACH', 'INTERACTION']);
     eventBus.on(Events.GAME_STATE_CHANGE, ({ from, to }) => {
       if (ACTIVE_STATES.has(to) && !this._active) {
@@ -474,8 +408,6 @@ export class CommsSystem {
       }
     });
 
-    // Self-manage: forward COMMS_SEND events to addMessage
-    // (decoupled from GameFlowManager COMMS_SEND handler)
     eventBus.on(Events.COMMS_SEND, (data) => {
       if (data && data.source && data.text) {
         const pri = data.priority === 'WARNING' ? 'WARNING'
@@ -484,39 +416,34 @@ export class CommsSystem {
       }
     });
 
-    // S9-B: Self-listener to persist externally-emitted COMMS_MESSAGE events
-    // (from ScoringSystem, RewardSystem, GameFlowManager, TrawlManager, etc.)
-    // Stores directly without calling addMessage() to avoid double audio/emit.
+    // Persists externally-emitted COMMS_MESSAGE events. Stores directly, without addMessage(), to avoid double audio/emit.
     eventBus.on(Events.COMMS_MESSAGE, (data) => {
       if (!data || data._internal) return;
-      // External emitters use 'source', 'sender', or 'speaker' — normalize
-      // §0.1 fix: default missing source to 'SYSTEM' so capture-loop comms render
+      // External emitters use 'source', 'sender', or 'speaker'; a missing source defaults to 'SYSTEM' so capture-loop comms render
       let rawSrc = data.source || data.sender || data.speaker;
       let body = data.text;
       if (!rawSrc && body) {
-        // nets-1b R6: no source, but the text names a daughter ("Small 1: ..."): she is the sender, said once.
+        // no source, but the text names a daughter ("Small 1: ..."): she is the sender, said once
         const named = splitDaughterPrefix(body);
         if (named) { rawSrc = named.source; body = named.text; }
       }
       if (!rawSrc) console.debug('[CommsSystem] sourceless emit defaulted to SYSTEM:', data.text);
       const src = rawSrc || 'SYSTEM';
       if (!body) return;
-      const rawText = stripSenderPrefix(src, body);   // nets-1b: the sender is shown once
-      // u11 D4: on glass the line names the button (LAUNCH NET ...), not the key; desktop text is untouched.
-      // Runs AFTER the nets-1b strip/split helpers.
+      const rawText = stripSenderPrefix(src, body);   // the sender is shown once
+      // On glass the line names the button (LAUNCH NET ...), not the key; desktop text is untouched.
+      // Runs AFTER the strip/split helpers.
       const text = GestureHints.chipPhrase(rawText);
 
-      // ST-5.1: Classify channel
       const channel = sourceToChannel(src, data);
 
-      // CP-4 guidance arbiter — graduated tier gate (replaces the binary
-      // onboarding gate). Tag bypasses (_critical/_onboarding/_postOnboarding/
-      // _lassoFeedback) + CRITICAL priority are honoured in the pure helper.
+      // Tier gate. Tag bypasses (_critical/_onboarding/_postOnboarding/_lassoFeedback) + CRITICAL priority are
+      // honoured in the pure helper.
       if (!messagePassesSuppression(this._suppressionTier, channel, data, data.priority)) {
         return;
       }
 
-      // u5 D3: behind a shut gate the line waits (no log, no callback, no sound, no summary).
+      // Behind a shut gate the line waits (no log, no callback, no sound, no summary).
       if (!this._gateOpen) {
         this._hold({
           id: this._nextId++,
@@ -526,7 +453,7 @@ export class CommsSystem {
           priority: data.priority || CommsPriority.INFO,
           channel,
           age: 0,
-          // As on the normal post path below: the beat id and the SPECS link ride with the line.
+          // as on the normal post path below
           onboardingBeatId: data._onboardingBeatId,
           link: sanitizeCommsLink(data.link),
         }, data._critical === true || data._reactive === true);
@@ -537,21 +464,19 @@ export class CommsSystem {
       const tsStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
       const nowMs = Date.now();
 
-      // ST-5.1: Coalescing — check recent window for same-channel flood
       const windowMs = COMMS.COALESCE_WINDOW_MS || 2000;
       this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
-      // D8: a _critical / _reactive line is "kept": never summarised away, and it
-      // does not count toward tipping plain lines into a burst.
-      // comms-after-tutorial D6: a `_keep` status line (mission progress, where a catch went,
-      // the next step) is kept the same way - it never bypasses the suppression tier, only coalescing.
+      // A _critical / _reactive line is "kept": never summarised away, and it does not count toward tipping plain lines
+      // into a burst. A `_keep` status line (mission progress, where a catch went, the next step) is kept the same way:
+      // it never bypasses the suppression tier, only coalescing.
       const kept = data._critical === true || data._reactive === true || data._keep === true;
       const coal = kept ? { shouldCoalesce: false, count: 0 }
         : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
       if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
 
       if (coal.shouldCoalesce) {
-        // u7 D4: a burst keeps only its newest line. The older non-kept same-channel lines of the
-        // burst go; the current line is posted below as a normal message. No "× n ... queued" line.
+        // A burst keeps only its newest line: the older non-kept same-channel lines go; the current line is posted
+        // below as a normal message. No "× n ... queued" line.
         let removed = 0;
         for (let i = this.messages.length - 1; i >= 0 && removed < coal.count - 1; i--) {
           if (this.messages[i].channel === channel && !this.messages[i].keep) {
@@ -569,34 +494,27 @@ export class CommsSystem {
         priority: data.priority || CommsPriority.INFO,
         channel,
         age: 0,
-        // Carry the onboarding beat id (if any) so the comms panel can drop the
-        // "demanding attention" highlight the moment the player follows it.
+        // lets the comms panel drop the "demanding attention" highlight the moment the player follows the beat
         onboardingBeatId: data._onboardingBeatId,
-        // Per-message deep link (gag v2 §7.26): `{ term, entryId, anchor? }` or
-        // null. CommsPanel wraps the term as a SPECS link; nothing else reads it.
+        // `{ term, entryId, anchor? }` or null; CommsPanel wraps the term as a SPECS link, nothing else reads it
         link: sanitizeCommsLink(data.link),
       };
       if (kept) msg.keep = true;
 
       this.messages.push(msg);
-      GestureHints.noteChipLine(rawText);   // u11 R3: glass - a line that names an action key brings that chip up
+      GestureHints.noteChipLine(rawText);   // glass: a line that names an action key brings that chip up
       while (this.messages.length > MAX_MESSAGES) {
         this.messages.shift();
       }
-      // Notify HUD (no sound replay, no re-emit)
+      // HUD (no sound replay, no re-emit)
       if (this.onMessage) {
         this.onMessage(msg);
       }
     });
   }
 
-  // ==========================================================================
-  // EVENT LISTENERS
-  // ==========================================================================
-
   /** @private */
   _setupEventListeners() {
-    // Kessler events
     eventBus.on(Events.DEBRIS_KESSLER, (data) => {
       if (!this._canSend('kessler')) return;
       const tmpl = KESSLER_TEMPLATES[0];
@@ -612,7 +530,6 @@ export class CommsSystem {
       );
     });
 
-    // Player low fuel
     eventBus.on(Events.FUEL_CHANGED, (data) => {
       if (data && typeof data.name === 'string' && data.name) this._fuel = data.name;
     });
@@ -621,8 +538,8 @@ export class CommsSystem {
       if (!this._canSend('lowXenon')) return;
       const tmpl = PLAYER_STATUS_TEMPLATES.lowXenon;
       const pct = data && Number.isFinite(data.level) ? Math.round(data.level / Constants.XENON_FUEL_MAX * 100) : 10;
-      // CP-4: survival warning — must reach the player even during the wake ramp.
-      // h4-simple-first D10: the text names the fuel actually loaded (last FUEL_CHANGED, else the default fuel's).
+      // Survival warning: must reach the player even during the wake ramp. The text names the fuel actually loaded
+      // (last FUEL_CHANGED, else the default fuel's).
       this.addMessage(tmpl.priority, tmpl.source, depotWords(tmpl.template).replace('{fuel}', this._fuelName().toLowerCase()).replace('{pct}', pct), { _critical: true });
     });
 
@@ -634,7 +551,6 @@ export class CommsSystem {
       this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{pct}', pct), { _critical: true });
     });
 
-    // Debris cleared
     eventBus.on(Events.DEBRIS_CLEARED, (data) => {
       if (!this._canSend('debrisCleared')) return;
       const tmpl = PLAYER_STATUS_TEMPLATES.debrisCleared;
@@ -645,12 +561,11 @@ export class CommsSystem {
         tmpl.template
           .replace('{count}', data.count)
           .replace('{stability}', stability),
-        // comms-after-tutorial D4: Houston praise ("Nice. N cleared!") stays hidden; the progress line says it.
+        // Houston praise ("Nice. N cleared!") stays hidden; the progress line says it.
         { _quiet: true }
       );
     });
 
-    // Active satellite proximity
     eventBus.on(Events.ACTIVE_SAT_PROXIMITY, (data) => {
       if (!this._canSend('evasion')) return;
       const tmpl = PLAYER_STATUS_TEMPLATES.evasionPerformed;
@@ -663,10 +578,9 @@ export class CommsSystem {
       );
     });
 
-    // Collision evasion
     eventBus.on(Events.COLLISION_EVASION, (data) => {
       if (!this._canSend('evasionManeuver')) return;
-      // D2 (ROADMAP §4 P2): payload is { debrisId, distanceM, direction }.
+      // payload: { debrisId, distanceM, direction }
       this.addMessage(
         CommsPriority.CRITICAL,
         'SPACECRAFT',
@@ -674,7 +588,6 @@ export class CommsSystem {
       );
     });
 
-    // Score updates for milestone messages
     eventBus.on(Events.SCORE_UPDATE, (data) => {
       if (data.debrisCleared && data.debrisCleared % 10 === 0 && data.debrisCleared > 0) {
         if (!this._canSend('milestone')) return;
@@ -682,12 +595,11 @@ export class CommsSystem {
           CommsPriority.INFO,
           'HOUSTON',
           `Milestone reached: ${data.debrisCleared} debris objects cleared. Score: ${data.total.toLocaleString()}. Outstanding work.`,
-          { _quiet: true }   // comms-after-tutorial D4: praise, hidden
+          { _quiet: true }   // praise, hidden
         );
       }
     });
 
-    // Capture/deorbit success
     eventBus.on(Events.INTERACTION_CAPTURE, (data) => {
       if (!this._canSend('captureSuccess')) return;
       this.addMessage(
@@ -706,7 +618,6 @@ export class CommsSystem {
       );
     });
 
-    // ST-8.3.6: FEEP metal switch announcement
     eventBus.on(Events.FEEP_METAL_CHANGED, (data) => {
       const metalData = Constants.ION_THRUSTER_METALS ? Constants.ION_THRUSTER_METALS[data.metal] : null;
       if (!metalData) return;
@@ -720,13 +631,13 @@ export class CommsSystem {
       );
     });
 
-    // ST-8.4: News event ticker — route to MISSION channel
+    // News ticker: routes to the MISSION channel.
     eventBus.on(Events.NEWS_EVENT_TRIGGERED, (data) => {
       const dateStr = data.date || '????-??-??';
       const headline = data.headline || data.name || 'Unknown event';
       this.addMessage('WARNING', 'NEWS', `[${dateStr} NEWS] ${headline}`);
 
-      // Delayed bounty announcement (2 seconds later)
+      // the bounty announcement follows 2 s later
       const bountyStr = (data.bounty || 0).toLocaleString();
       const debrisName = data.debrisName || 'unknown';
       timerManager.setTimeout(() => {
@@ -734,20 +645,17 @@ export class CommsSystem {
       }, 2000, { owner: this });
     });
 
-    // ST-8.4: ISRO handoff dialogue — Houston→Bangalore on first BANGALORE comms
+    // ISRO handoff dialogue (Houston→Bangalore), triggered by the first BANGALORE-sourced COMMS_MESSAGE.
     this._isroHandoffDone = false;
 
-    // ISRO handoff: triggered when first BANGALORE-sourced message comes through
-    // We detect this by listening for COMMS_MESSAGE with BANGALORE source
     eventBus.on(Events.COMMS_MESSAGE, (data) => {
       if (this._isroHandoffDone) return;
       if (data._internal) return; // skip self-emitted
       const src = (data.source || '').toUpperCase();
       if (src === 'BANGALORE' || src === 'HASSAN') {
         this._isroHandoffDone = true;
-        // Queue handoff dialogue
         timerManager.setTimeout(() => {
-          // comms-after-tutorial D4: scripted radio hand-off chatter, hidden (the Bangalore coach lines are separate).
+          // scripted radio hand-off chatter, hidden (the Bangalore coach lines are separate)
           this.addMessage('INFO', 'HOUSTON', 'Houston: handing off to Bangalore ISTRAC. Good hunting.', { _quiet: true });
         }, 500, { owner: this });
         timerManager.setTimeout(() => {
@@ -756,24 +664,20 @@ export class CommsSystem {
       }
     });
 
-    // === Phase 1: Capture-flow UX comms (§4 items 2-5) ===
+    // Capture-flow comms.
 
-    // §4 item 2: TETHER_SNAP → CRITICAL comms + ALERT channel (BUG-C fix)
     eventBus.on(Events.TETHER_SNAP, (data) => {
       this.addMessage('CRITICAL', daughterDisplayName(data?.armId) || 'SYSTEM', 'TETHER SEVERED. Daughter and catch cut loose and drifting. Reload not possible; send another daughter to chase it down.', { channel: 'ALERT' });
     });
 
-    // Net-integrity failure (recoverable): the net lost its grip on a heavy
-    // catch. The daughter is fine; the debris is loose. Where she goes next (reeled home / held for a retry)
-    // is her own line's job (ArmUnit._finishFailedCatch, fail-reel).
+    // Net-integrity failure (recoverable): the net lost its grip on a heavy catch; the daughter is fine, the debris is
+    // loose. Where she goes next (reeled home / held for a retry) is her own line's job (ArmUnit._finishFailedCatch).
     eventBus.on(Events.NET_FAILED, (data) => {
       this.addMessage('WARNING', daughterDisplayName(data?.armId) || 'SYSTEM', 'NET FAILED. Debris slipped the net and is drifting.', { channel: 'ALERT' });
     });
 
-    // UX-11 #1: net MISS reasons → actionable plain text. A miss is fully
-    // recoverable (the net reels back and inventory is restored), so the line
-    // must say WHY it missed and what to do next, not just "missed".
-    // 'forced' (test/scripted resolves) stays silent.
+    // Net MISS reasons → actionable plain text: a miss is fully recoverable (the net reels back, inventory restored),
+    // so the line must say WHY it missed and what to do next. 'forced' (test/scripted resolves) stays silent.
     eventBus.on(Events.NET_CATCH_MISS, (data) => {
       const text = missReasonToText(data?.reason);
       if (!text) return;
@@ -782,26 +686,24 @@ export class CommsSystem {
       this.addMessage('WARNING', source, text, { channel: 'ALERT' });
     });
 
-    // §4 item 3: ARM_RETURNED (captured) → Docking comms
     eventBus.on(Events.ARM_RETURNED, (data) => {
       if (data?.captured === true) {
         this.addMessage('INFO', daughterDisplayName(data.armId) || 'SYSTEM', 'Docking. 3 s.', { channel: 'CMD' });
       }
     });
 
-    // §4 item 3: CROSSBOW_RELOAD_COMPLETE → Spring re-charged comms
     eventBus.on(Events.CROSSBOW_RELOAD_COMPLETE, (data) => {
       this.addMessage('INFO', daughterDisplayName(data?.armId) || 'SYSTEM', 'Spring re-charged. Ready for next deploy.', { channel: 'CMD' });
     });
 
-    // §4 item 4: STATION_KEEP_ENTERED → ONE line, one action (DECISIONS §33 row 8, owner 2026-10-20). The daughter
-    // holds station; N works her recommended tool (InputManager KeyN reaches a holding daughter without pilot mode).
-    // The pad is named when the recommended tool is the pad; u18c D5: the gripper and the magnet say their own word too
-    // (the net's line is every other tool's). Plain words, no symbols (Ruling 0); the number keys that pilot her are in the
-    // help page, not here. On glass `chipPhrase` turns each "Press N to ..." into its button (STICK PAD / CLOSE GRIPPER / USE MAGNET).
-    // hints-scan D3 (owner 2026-10-26): when N goes to the mother's net or to another daughter, the line names her number key.
+    // STATION_KEEP_ENTERED → ONE line, one action (DECISIONS §33 row 8). The daughter holds station; N works her
+    // recommended tool (InputManager KeyN reaches a holding daughter without pilot mode). The pad, the gripper and the
+    // magnet each say their own word (the net's line is every other tool's). Plain words, no symbols (Ruling 0); the
+    // number keys that pilot her are in the help page, not here. On glass `chipPhrase` turns each "Press N to ..." into
+    // its button (STICK PAD / CLOSE GRIPPER / USE MAGNET). When N goes to the mother's net or to another daughter, the
+    // line names her number key.
     const inPositionLine = (tool, armId, inspect = false) => inspect === true
-      // big-rules S1: over the catch limit she only inspects it: no "Press N", so no net chip on glass either
+      // over the catch limit she only inspects it: no "Press N", so no net chip on glass either
       ? 'Daughter in position, inspecting it. No net.'
       : flyFirstLine(armId, (tool === 'PAD' ? 'Daughter in position. Press N to stick the pad on.'
         : tool === 'GRIPPER' ? 'Daughter in position. Press N to grip it.'
@@ -811,25 +713,21 @@ export class CommsSystem {
       const armId = daughterDisplayName(data?.armId) || 'SYSTEM';
       this.addMessage('INFO', armId, inPositionLine(data?.tool, data?.armId, data?.inspect), { channel: 'CMD' });
     });
-    // u18c D5: the PLAYER changed her tool (backquote or CHANGE TOOL): say the new tool's line once. The recommendation
-    // ArmUnit makes on station-keep entry emits TOOL_SELECTED too, without `byPlayer`: the entry line above covers it.
+    // The PLAYER changed her tool (backquote or CHANGE TOOL): say the new tool's line once. The recommendation ArmUnit
+    // makes on station-keep entry emits TOOL_SELECTED too, without `byPlayer`: the entry line above covers it.
     eventBus.on(Events.TOOL_SELECTED, (data) => {
       if (!data || data.byPlayer !== true) return;
       this.addMessage('INFO', daughterDisplayName(data.armId) || 'SYSTEM', inPositionLine(data.tool, data.armId, data.inspect), { channel: 'CMD' });
     });
   }
 
-  // ==========================================================================
-  // UPDATE
-  // ==========================================================================
-
   /**
    * Per-frame update — generates timed messages.
-   * @param {number} dt - Real-time delta (seconds)
-   * @param {object} [gameData] - Optional game state reference
+   * @param {number} dt - real-time delta (s)
+   * @param {object} [gameData] - game state reference
    */
   update(dt, gameData) {
-    // u5 D3: the safety - a gate left shut (a start that never reached its hand-over) opens itself.
+    // the safety: a gate left shut (a start that never reached its hand-over) opens itself
     if (!this._gateOpen) {
       this._holdElapsedS += dt;
       if (this._holdElapsedS >= HOLD_SAFETY_S) this._openGate();
@@ -839,16 +737,14 @@ export class CommsSystem {
     const gameDt = dt * TimeAuthority.BASE_SCALE;
     this._gameTime += gameDt;
 
-    // CP-4 — advance the post-onboarding suppression ramp (real dt; pause-safe).
+    // post-onboarding suppression ramp (real dt; pause-safe)
     this._advanceSuppression(dt);
 
-    // Update cooldowns
     for (const [key, time] of this._cooldowns) {
       this._cooldowns.set(key, time - dt);
       if (time - dt <= 0) this._cooldowns.delete(key);
     }
 
-    // Update active effects
     if (this.activeEffects.solarStorm) {
       this.activeEffects.solarStormTimer -= dt;
       if (this.activeEffects.solarStormTimer <= 0) {
@@ -864,28 +760,24 @@ export class CommsSystem {
       }
     }
 
-    // --- Flavor messages ---
     this._nextFlavorTime -= dt;
     if (this._nextFlavorTime <= 0) {
       this._nextFlavorTime = this._randomFlavorInterval();
       this._sendFlavorMessage();
     }
 
-    // --- Launch alerts ---
     this._nextLaunchTime -= dt;
     if (this._nextLaunchTime <= 0) {
       this._nextLaunchTime = 180 + Math.random() * 420; // 3-10 min
       this._sendLaunchAlert();
     }
 
-    // --- Space weather events ---
     this._nextWeatherTime -= dt;
     if (this._nextWeatherTime <= 0) {
       this._nextWeatherTime = 180 + Math.random() * 360;
       this._sendWeatherEvent();
     }
 
-    // --- Mission updates ---
     this._nextMissionTime -= dt;
     if (this._nextMissionTime <= 0) {
       this._nextMissionTime = 90 + Math.random() * 180;
@@ -893,14 +785,10 @@ export class CommsSystem {
     }
   }
 
-  // ==========================================================================
-  // MESSAGE GENERATION
-  // ==========================================================================
-
   /** @private */
   _sendFlavorMessage() {
     const msg = FLAVOR_MESSAGES[Math.floor(Math.random() * FLAVOR_MESSAGES.length)];
-    // comms-after-tutorial D4: radio chatter on a timer, no player action behind it - hidden at every tier.
+    // radio chatter on a timer, no player action behind it: hidden at every tier
     this.addMessage(CommsPriority.INFO, msg.source, msg.text, { _quiet: true });
   }
 
@@ -926,7 +814,6 @@ export class CommsSystem {
 
     this.addMessage(tmpl.priority, tmpl.source, text);
 
-    // Apply effects
     if (tmpl.effect === 'solarStorm') {
       this.activeEffects.solarStorm = true;
       this.activeEffects.solarStormTimer = 30 + Math.random() * 30; // 30-60 real seconds
@@ -940,18 +827,18 @@ export class CommsSystem {
 
   /** @private */
   _sendMissionUpdate(gameData) {
-    // nets-1b: `{target}` is a LIVE piece from the field, never a made-up "Object-NNN". With no live piece the
-    // templates that need one are not sent (the others still are).
+    // `{target}` is a LIVE piece from the field, never a made-up "Object-NNN". With no live piece the templates that
+    // need one are not sent (the others still are).
     const list = (gameData && gameData.debrisField && Array.isArray(gameData.debrisField.debrisList))
       ? gameData.debrisField.debrisList : [];
-    // R7: a piece that is already caught (`_captured`) is not named either: it is no longer there to be scanned or slowed.
+    // a piece already caught (`_captured`) is not named either: it is no longer there to be scanned or slowed
     const live = list.filter((d) => d && d.alive !== false && d._captured !== true);
     const piece = live.length > 0 ? live[Math.floor(Math.random() * live.length)] : null;
     const eligible = MISSION_TEMPLATES.filter((t) => !t.needsTarget || piece);
     if (eligible.length === 0) return;
     const tmpl = eligible[Math.floor(Math.random() * eligible.length)];
 
-    // The spin number is that piece's own spin rate (rad/s on the record); without one the line is said without a number.
+    // the piece's own spin rate (rad/s on the record); without one the line is said without a number
     const spinDegS = (piece && Number.isFinite(piece.tumbleRate) && piece.tumbleRate > 0)
       ? radToDeg(piece.tumbleRate) : null;
     let template = tmpl.template;
@@ -966,22 +853,16 @@ export class CommsSystem {
     this.addMessage(tmpl.priority, tmpl.source, text, tmpl.quiet ? { _quiet: true } : undefined);
   }
 
-  // ==========================================================================
-  // MESSAGE MANAGEMENT
-  // ==========================================================================
-
   /**
-   * Add a new message to the comms log.
-   * ST-5.1: Now classifies channel and applies coalescing.
+   * Add a new message to the comms log (classifies the channel, applies coalescing).
    * @param {string} priority - CommsPriority enum
-   * @param {string} source - Message source (e.g., 'HOUSTON')
-   * @param {string} text - Message content
-   * @param {object} [extra] - Optional extra fields (channel, etc.)
+   * @param {string} source - e.g. 'HOUSTON'
+   * @param {object} [extra] - extra fields (channel, `_critical`, `_quiet`, ...)
    */
   addMessage(priority, source, text, extra) {
-    // §0.1 fix: default missing source to 'SYSTEM'; bail only on missing text
+    // a missing source defaults to 'SYSTEM'; bail only on missing text
     if (!source) {
-      const named = splitDaughterPrefix(text);   // nets-1b R6: "Small 1: ..." with no source: she is the sender
+      const named = splitDaughterPrefix(text);   // "Small 1: ..." with no source: she is the sender
       if (named) { source = named.source; text = named.text; }
       else {
         console.debug('[CommsSystem] addMessage() sourceless call defaulted to SYSTEM:', text);
@@ -989,21 +870,19 @@ export class CommsSystem {
       }
     }
     if (!text) return;
-    text = stripSenderPrefix(source, text);   // nets-1b: the sender is shown once (COMMS_SEND lands here too)
+    text = stripSenderPrefix(source, text);   // the sender is shown once (COMMS_SEND lands here too)
     const rawText = text;
-    text = GestureHints.chipPhrase(text);   // u11 D4: glass names the button, not the key (desktop: same string)
-    // ST-5.1: Classify channel
+    text = GestureHints.chipPhrase(text);   // glass names the button, not the key (desktop: same string)
     const channel = sourceToChannel(source, { text, ...(extra || {}) });
 
-    // CP-4 guidance arbiter — graduated tier gate. addMessage() is the internal
-    // path for flavour templates, Kessler, weather, MMOD, etc.; at the default
-    // tier 3 this is a no-op, so non-onboarding play is unaffected.
+    // Tier gate. addMessage() is the internal path for flavour templates, Kessler, weather, MMOD, etc.; at the
+    // default tier 3 it is a no-op.
     if (!messagePassesSuppression(this._suppressionTier, channel, extra, priority)) {
       return;
     }
 
-    // u5 D3: behind a shut gate the line waits (no log, no callback, no sound, no summary). The
-    // internal event still fires as today (other systems read it).
+    // Behind a shut gate the line waits (no log, no callback, no sound, no summary). The internal event still fires
+    // (other systems read it).
     if (!this._gateOpen) {
       const held = {
         id: this._nextId++, timestamp: this._clockStamp(), source, text, priority, channel, age: 0,
@@ -1017,17 +896,16 @@ export class CommsSystem {
     const timestamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
     const nowMs = Date.now();
 
-    // ST-5.1: Coalescing — check recent window for same-channel flood
     const windowMs = COMMS.COALESCE_WINDOW_MS || 2000;
     this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
-    // D8: a _critical / _reactive line is "kept" (see the COMMS_MESSAGE listener); so is a D6 `_keep` line.
+    // "kept" lines: see the COMMS_MESSAGE listener
     const kept = !!extra && (extra._critical === true || extra._reactive === true || extra._keep === true);
     const coal = kept ? { shouldCoalesce: false, count: 0 }
       : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
     if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
 
     if (coal.shouldCoalesce) {
-      // u7 D4: as in the COMMS_MESSAGE listener - drop the burst's older lines, post this one normally.
+      // as in the COMMS_MESSAGE listener: drop the burst's older lines, post this one normally
       let removed = 0;
       for (let i = this.messages.length - 1; i >= 0 && removed < coal.count - 1; i--) {
         if (this.messages[i].channel === channel && !this.messages[i].keep) {
@@ -1049,28 +927,23 @@ export class CommsSystem {
     if (kept) msg.keep = true;
 
     this.messages.push(msg);
-    GestureHints.noteChipLine(rawText);   // u11 R3 (the text as passed in, before chipPhrase)
+    GestureHints.noteChipLine(rawText);   // the text as passed in, before chipPhrase
 
-    // Trim old messages
     while (this.messages.length > MAX_MESSAGES) {
       this.messages.shift();
     }
 
-    // Audio feedback
     this._playMessageSound(priority);
 
-    // Notify HUD
     if (this.onMessage) {
       this.onMessage(msg);
     }
 
-    // Emit for other systems (tagged _internal to prevent self-listen loop)
+    // tagged _internal to prevent a self-listen loop
     eventBus.emit(Events.COMMS_MESSAGE, { ...msg, _internal: true });
   }
 
-  // ==========================================================================
-  // u5-info-ap-hold D3 - the start-up hold
-  // ==========================================================================
+  // the start-up hold
 
   /** @private HH:MM:SS of now (the log's stamp). */
   _clockStamp() {
@@ -1115,17 +988,11 @@ export class CommsSystem {
   /** @returns {number} lines waiting behind the gate. */
   heldCount() { return this._held.length; }
 
-  /**
-   * Get all messages (newest last).
-   * @returns {Array}
-   */
+  /** @returns {Array} all messages, newest last. */
   getMessages() {
     return this.messages;
   }
 
-  /**
-   * Start the comms system (gameplay active).
-   */
   start() {
     this._active = true;
     this.addMessage(
@@ -1135,21 +1002,15 @@ export class CommsSystem {
     );
   }
 
-  /**
-   * Stop the comms system.
-   */
   stop() {
     this._active = false;
   }
 
-  /**
-   * Reset everything.
-   */
   reset() {
     this.messages = [];
     this._nextId = 0;
-    // u5 D3: a shut gate stays shut and keeps its held lines (GAME_RESET can arrive after the hold
-    // began); renumber them so they cannot collide with ids handed out after the reset.
+    // a shut gate stays shut and keeps its held lines (GAME_RESET can arrive after the hold began); renumber them so
+    // they cannot collide with ids handed out after the reset
     for (const m of this._held) m.id = this._nextId++;
     this._gameTime = 0;
     this._nextFlavorTime = this._randomFlavorInterval();
@@ -1164,7 +1025,7 @@ export class CommsSystem {
     };
     this._active = false;
     this._isroHandoffDone = false;
-    // CP-4 — back to steady-state default; onboarding (if it re-runs) drops to 0.
+    // back to the steady-state default; onboarding (if it re-runs) drops to 0
     this._suppressionTier = 3;
     this._postOnboardingElapsed = 0;
     this._tempTierActive = false;
@@ -1173,18 +1034,13 @@ export class CommsSystem {
     this._tutorialMastered = false;
   }
 
-  // ==========================================================================
-  // CP-4 GUIDANCE ARBITER — suppression tier (GUIDANCE_ARBITER_SPEC §2)
-  // ==========================================================================
-
   /** @returns {number} current suppression tier (0–3). */
   getSuppressionTier() { return this._suppressionTier; }
 
   /**
-   * comms-after-tutorial D6b: would a raw COMMS_MESSAGE payload be shown right now? The HUD asks this
-   * before redrawing the panel, so a hidden line (tier gate or `_quiet`) does not reset the PageUp
-   * scroll. Same classification and gate as the COMMS_MESSAGE listener; lines this system already
-   * stored (`_internal`) were gated when they were added.
+   * Would a raw COMMS_MESSAGE payload be shown right now? The HUD asks this before redrawing the panel, so a hidden
+   * line (tier gate or `_quiet`) does not reset the PageUp scroll. Same classification and gate as the COMMS_MESSAGE
+   * listener; lines this system already stored (`_internal`) were gated when they were added.
    * @param {object} data — the COMMS_MESSAGE payload
    * @returns {boolean}
    */
@@ -1198,12 +1054,10 @@ export class CommsSystem {
 
   /** @private Begin the graduated post-onboarding wake ramp (tier 1 → 2 → 3). */
   _beginPostOnboardingRamp() {
-    // comms-after-tutorial D2: the tutorial already ended (ONBOARDING_MASTERED came first) -
-    // stay at tier 3; a late COMPLETE must not mute the panel again.
+    // the tutorial already ended (ONBOARDING_MASTERED came first): stay at tier 3; a late COMPLETE must not mute the panel again
     if (this._tutorialMastered) return;
-    // Veteran-skip path: ONBOARDING_COMPLETE fired WITHOUT ONBOARDING_STARTED
-    // (the Director skipped the whole pipeline). There is no atmosphere to wake
-    // from — stay at the steady-state default tier 3 instead of muting for 60 s.
+    // Veteran-skip path: ONBOARDING_COMPLETE fired WITHOUT ONBOARDING_STARTED, so there is nothing to wake from:
+    // stay at tier 3 instead of muting for 60 s.
     const startTier = postOnboardingStartTier(this._onboardingWasRun);
     if (startTier >= 3) {
       this._suppressionTier = 3;
@@ -1219,9 +1073,8 @@ export class CommsSystem {
   }
 
   /**
-   * comms-after-tutorial D1/D2: the tutorial's beat list is done (ONBOARDING_MASTERED).
-   * Leave tier 0 for tier 3 at once: the useful lines (progress, where each catch went,
-   * autopilot, failures) show within a frame; `_quiet` lines stay hidden at every tier.
+   * The tutorial's beat list is done (ONBOARDING_MASTERED). Leave tier 0 for tier 3 at once: the useful lines
+   * (progress, where each catch went, autopilot, failures) show within a frame; `_quiet` lines stay hidden at every tier.
    * @private
    */
   _endTutorialSilence() {
@@ -1233,10 +1086,8 @@ export class CommsSystem {
   }
 
   /**
-   * Temporarily drop to a protected tier for a high-cognitive-load MissionCoach
-   * beat (spec §2); the ramp auto-restores after `durationS` seconds of play.
-   * @param {number} tier
-   * @param {number} durationS
+   * Temporarily drop to a protected tier for a high-cognitive-load MissionCoach beat; the ramp auto-restores after
+   * `durationS` seconds of play.
    */
   _tempDropToTier(tier, durationS) {
     this._suppressionTier = clamp(tier | 0, 0, 3);
@@ -1245,26 +1096,20 @@ export class CommsSystem {
   }
 
   /**
-   * Advance the suppression ramp by `dt` seconds of (unpaused) play. Driven off
-   * the game loop so it respects pause without a wall-clock timer.
-   * @param {number} dt
+   * Advance the suppression ramp by `dt` seconds of (unpaused) play (driven off the game loop, so it respects pause).
    */
   _advanceSuppression(dt) {
-    // A MissionCoach beat is holding a protected tier — count it down first.
+    // a MissionCoach beat is holding a protected tier: count it down first
     if (this._tempTierActive) {
       this._tempTierRestoreS -= dt;
       if (this._tempTierRestoreS > 0) return; // keep holding the protected tier
       this._tempTierActive = false;           // released → resume the ramp below
     }
-    // Tier 0 (onboarding) and tier 3 (steady state) are terminal for the ramp.
+    // tier 0 (onboarding) and tier 3 (steady state) are terminal for the ramp
     if (this._suppressionTier <= 0 || this._suppressionTier >= 3) return;
     this._postOnboardingElapsed += dt;
     this._suppressionTier = rampSuppressionTier(this._postOnboardingElapsed);
   }
-
-  // ==========================================================================
-  // HELPERS
-  // ==========================================================================
 
   /** @private The loaded fuel's display name: the last FUEL_CHANGED, else the default fuel's own name. */
   _fuelName() {
@@ -1273,19 +1118,17 @@ export class CommsSystem {
     return (f && f.name) || 'engine';
   }
 
-  /** @private Check cooldown before sending an event-based message */
+  /** @private Cooldown gate for event-based messages. */
   _canSend(eventKey) {
     if (this._cooldowns.has(eventKey)) return false;
     this._cooldowns.set(eventKey, EVENT_COOLDOWN);
     return true;
   }
 
-  /** @private Random flavor interval */
   _randomFlavorInterval() {
     return FLAVOR_MIN_INTERVAL + Math.random() * (FLAVOR_MAX_INTERVAL - FLAVOR_MIN_INTERVAL);
   }
 
-  /** @private Play audio for message priority */
   _playMessageSound(priority) {
     if (!audioSystem.available) {
       audioSystem.init();
@@ -1300,7 +1143,7 @@ export class CommsSystem {
         audioSystem.playRadioNotice('WARNING');
         break;
       case CommsPriority.INFO:
-        // Removed: INFO blip audio not needed per UX decision
+        // INFO blip audio deliberately omitted (UX decision)
         break;
     }
   }
@@ -1308,7 +1151,7 @@ export class CommsSystem {
 
 export default CommsSystem;
 
-// ST-5.1: CJS guard — expose pure helpers for Node.js tests
+// CJS guard: pure helpers for Node.js tests
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { sourceToChannel, shouldCoalesce };
 }

@@ -187,6 +187,7 @@ import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
 import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
 import { devShotGate } from './core/DevShotGate.js';
+import { isDevHost, devSearch } from './core/DevHost.js';
 import { stageHoldScenario, holdStatus, netBlockFor } from './dev/holdScenario.js';
 import { installBlackFrameProbe } from './core/BlackFrameProbe.js';
 import { installBlackPatchHeal } from './core/BlackPatchHeal.js';
@@ -228,7 +229,7 @@ let lastTime = 0;
 // "paused" but the GPU is still busy.
 const _logPauseEnabled = (() => {
   try {
-    return new URLSearchParams(window.location.search).get('logPause') === '1';
+    return new URLSearchParams(devSearch(window.location)).get('logPause') === '1';
   } catch (_e) { return false; }
 })();
 let _logPauseLastEmit = 0;
@@ -253,7 +254,7 @@ if (_logPauseEnabled) {
 // zero overhead when flag is off; we only attach the global when enabled).
 const _logBootEnabled = (() => {
   try {
-    return new URLSearchParams(window.location.search).get('logBoot') === '1';
+    return new URLSearchParams(devSearch(window.location)).get('logBoot') === '1';
   } catch (_e) { return false; }
 })();
 const _bootT0 = (typeof performance !== 'undefined') ? performance.now() : 0;
@@ -557,7 +558,7 @@ let _launchCeremonyLive = false;    // intro ride (LAUNCH_CEREMONY_* events)
 // headless gate asserts POLICY — mode + n — never fps: SwiftShader runs
 // ~4 fps and its measured period clamps N to 1 by design).
 const _frameSched = { mode: 'rest', n: 1 };
-if (typeof window !== 'undefined') window.__frameSched = _frameSched;
+if (typeof window !== 'undefined' && isDevHost()) window.__frameSched = _frameSched;
 // Session I turntable (D-F): scratch for the arrow-blanking shim around
 // inputManager.processInput (one object, reused — G1).
 const _turnSaved = { up: false, down: false, left: false, right: false };
@@ -1364,7 +1365,7 @@ async function init() {
   // only handle `?debug=1` here so the diagnostics gate flips on for the
   // very first _logDiagnostics() / Earth LOD log call this session.
   try {
-    const urlParams = new URLSearchParams(window.location.search);
+    const urlParams = new URLSearchParams(devSearch(window.location));
     if (urlParams.get('debug') === '1') {
       Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS = true;
       Constants.DEBUG.DEBUG_OVERLAY_HOTKEY = true;
@@ -1537,7 +1538,7 @@ async function init() {
   //   ?flower or ?flower=2 → both pairs   ?flower=1 → pair A only
   //   ?flower=bloom        → both pairs + slews open to the 90° cargo bloom
   {
-    const fp = new URLSearchParams(window.location.search).get('flower');
+    const fp = new URLSearchParams(devSearch(window.location)).get('flower');
     const pre = Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED;
     if (pre || fp !== null) {
       player.applyUpgrade({ effect: 'flowerPairA', value: 1 });
@@ -1548,7 +1549,7 @@ async function init() {
   // Nets step 3 slice 2b: `?fields` turns on fields by height for this boot (FEATURE_FLAGS.FIELDS_BY_HEIGHT, on by default):
   // the mission boundary flies her to another debris field with her real thruster instead of burning in place.
   // `?fields=0` / `off` / `false` mean OFF (lane 3d: any value used to turn it on).
-  { const fieldsParam = fieldsFromSearch(window.location.search); if (fieldsParam !== null) Constants.FEATURE_FLAGS.FIELDS_BY_HEIGHT = fieldsParam; }
+  { const fieldsParam = fieldsFromSearch(devSearch(window.location)); if (fieldsParam !== null) Constants.FEATURE_FLAGS.FIELDS_BY_HEIGHT = fieldsParam; }
   // MLI foil v6: per-material orbital envMap on the gold MLI (near-mirror foil
   // needs a contrasty environment to reflect, not the near-uniform RoomEnvironment
   // that leaves it a smooth brass pipe). scene.environment is unchanged for the
@@ -4258,7 +4259,7 @@ async function init() {
       isPaused: () => gameFlowManager.paused === true,
       toggle: () => (inputManager ? inputManager.togglePause() : null),
     },
-    idleS: idleOverrideS(typeof location !== 'undefined' ? location.search : '', showMode.isOn()) || undefined,   // ?idleS= (look checks), show mode only
+    idleS: idleOverrideS(devSearch(), showMode.isOn()) || undefined,   // ?idleS= (look checks), show mode only
   });
   // The 250 ms timer and the come-back tick exist only while show mode is on (off = no timer, no listener).
   wireIdleTimers({ showMode, kit: _idleKit, doc: document });
@@ -4317,7 +4318,7 @@ async function init() {
         avifSupported: isAvifSupported(),
         initialTierReason: (() => {
           try {
-            const p = new URLSearchParams(window.location.search);
+            const p = new URLSearchParams(devSearch(window.location));
             return p.get('tier') ? 'url-override' : 'capability-detect';
           } catch (_e) { return 'capability-detect'; }
         })(),
@@ -4357,7 +4358,7 @@ async function init() {
   }
 
   // ── Flick-trace recorder (?trace=1): read-only gesture instrument, docs/ladder/07-flick-tuning.md ──
-  if (new URLSearchParams(window.location.search).get('trace') === '1') {
+  if (new URLSearchParams(devSearch(window.location)).get('trace') === '1') {
     import('./dev/FlickTraceRecorder.js')
       .then(({ FlickTraceRecorder }) => { new FlickTraceRecorder({ probe: ladderController }).start(); })   // publishes window.__FLICK_TRACE
       .catch((e) => console.warn('[FlickTrace] init failed:', e));

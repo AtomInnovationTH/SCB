@@ -1,12 +1,7 @@
 /**
- * TargetPanel.js — Target list sidebar with tracked targets,
- * untracked sensor contacts, and active satellites.
- * S6-A: CSS grid layout, collapsed/expanded rows, reduced caps.
- *
- * Session Q (plan D15): `{ colorLaw }` ctor option (HUD passes the ladder
- * gate), `data.targetLaw` per update (null → shipped rows), `reachKm()` (the
- * tether reach TargetPanel always computed, now shared through
- * TargetColorLaw.reachKmFrom).
+ * TargetPanel.js — target list sidebar: tracked targets, untracked sensor contacts, active satellites.
+ * CSS grid layout, collapsed/expanded rows. `{ colorLaw }` ctor option (HUD passes the ladder gate); `data.targetLaw`
+ * per update (null → shipped rows); `reachKm()` shares the tether reach through TargetColorLaw.reachKmFrom.
  * @module ui/hud/TargetPanel
  */
 
@@ -31,13 +26,9 @@ import {
   shortScreenNow, watchShortScreen, foldedTargetRow, foldedMoreCount, targetsFoldText,
   FOLD_TOGGLE_TOUCH_PX,
 } from './PhoneFold.js';
+import { radToDeg, clamp } from '../../core/MathUtil.js';
 
-/**
- * The Targets row's short word for a debris type. Shared with the payoff line
- * under the score strip (StatusPanel), which lower-cases it. Default 'Debris'.
- * @param {string} type
- * @returns {string}
- */
+/** The Targets row's short word for a debris type (also the payoff line under the score strip, which lower-cases it). */
 export function shortTypeName(type) {
   switch (type) {
     case 'rocketBody': return 'Rocket Body';
@@ -48,68 +39,53 @@ export function shortTypeName(type) {
   }
 }
 
-/** Desktop target-row min-height (shipped). */
 export const TARGET_ROW_PX = 20;
-/** Glass hit-box (Apple HIG; RAIL_GEOMETRY.TOUCH_PITCH_PX). Plan Task 13. */
+/** Glass hit-box (Apple HIG; RAIL_GEOMETRY.TOUCH_PITCH_PX). */
 export const TARGET_ROW_GLASS_PX = 44;
-/** Header line + margin that sits above the rows. */
 export const TARGET_HEADER_PX = 24;
 /**
- * The pane's own vertical chrome: `.hud-panel` 2 × 6 px padding + 2 × 1 px
- * border (index.html), which `* { box-sizing: border-box }` counts INSIDE a
- * written `height`. Folded into the height law 2026-09-09 (owner amendment to
- * plan §1.18b — "fixed 5-row list" must actually show 5 rows): without it a
- * 124 px `height` left 110 px of content for a 24 + 5 × 20 = 124 px list — four
- * rows and a 6 px sliver (glass: 230 for 244 — four rows and 30 px).
+ * The pane's own vertical chrome: `.hud-panel` 2 × 6 px padding + 2 × 1 px border (index.html), which
+ * `* { box-sizing: border-box }` counts INSIDE a written `height`; without it a list shows fewer rows than its step.
+ * owner 2026-09-09: a fixed 5-row list must actually show 5 rows.
  */
 export const TARGET_PANE_CHROME_PX = 14;
 /**
- * Rows that fit each PaneChrome step (height = chrome + header + k rows).
- * Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.18b):
- * `normal` 4 → 5 and the pane writes a FIXED `height` (not `maxHeight`), so the
- * box no longer breathes with the list — "nothing should move" (owner). w1-hud-calm
- * 2026-10-05 (owner notes 2026-09-30: show more tracked targets): desktop
- * `normal` 5 → 7 and `max` 7 → 9 — desktop 178 / 218 at 'normal' / 'max'
- * (14 + 24 + 7 / 9 rows of 20). A longer list scrolls (overflowY auto); the 0
- * key's 'min' (58 / 82) is the player's remedy for an empty sector.
+ * Rows that fit each PaneChrome step (height = chrome + header + k rows). The pane writes a FIXED `height` (not
+ * `maxHeight`) so the box doesn't breathe with the list: "nothing should move" (owner). owner 2026-09-30: show more
+ * tracked targets, so desktop `normal` is 7 and `max` 9 (178 / 218 = 14 + 24 + 7 / 9 rows of 20). A longer list scrolls
+ * (overflowY auto); the 0 key's 'min' (58 / 82) is the player's remedy for an empty sector.
  */
 export const TARGET_STEP_ROWS = Object.freeze({ min: 1, normal: 7, max: 9 });
 /**
- * Desktop `normal` falls back to 5 rows (138) on a viewport shorter than
- * TARGET_TALL_VIEWPORT_PX: at 1024×768 / 1366×768 the 7-row stack (Targets 178
- * + Debris 202 + Next 110 + gaps = 510) overflows the 479 px column and scrolls
- * the Next pane out of view (w1-hud-calm review, 2026-10-05). The two extra rows
- * show wherever they fit; `max` stays 9 everywhere. Headless (no window) = 7.
+ * Desktop `normal` falls back to 5 rows (138) on a viewport shorter than this: at 1024×768 / 1366×768 the 7-row stack
+ * (Targets 178 + Debris 202 + Next 110 + gaps = 510) overflows the 479 px column and scrolls the Next pane out of
+ * view. `max` stays 9 everywhere. Headless (no window) = 7.
  */
 export const TARGET_TALL_VIEWPORT_PX = 800;
 export const TARGET_NORMAL_ROWS_SHORT = 5;
 /**
- * Glass rows per step. `normal` stays 5 (258): the right column (Targets +
- * Debris 202 + Next 110 + two 10 px gaps) already overflows 1024×768 landscape
- * at 5 glass rows, and 7 × 44 would push it a further 88 px (measured, see the
- * w1-hud-calm plan Log); `max` takes the 9 rows (434) — the player's remedy.
+ * Glass rows per step. `normal` stays 5 (258): the right column (Targets + Debris 202 + Next 110 + two 10 px gaps)
+ * already overflows 1024×768 landscape at 5 glass rows, and 7 × 44 would add 88 px (measured); `max` takes the 9 rows
+ * (434), the player's remedy.
  */
 export const TARGET_STEP_ROWS_GLASS = Object.freeze({ min: 1, normal: 5, max: 9 });
 /**
- * z1-calm-scan D3/D4 (owner 2026-10-18): the mission-1 simple list is the 3 nearest targets plus one
- * `+ n more` line - a FIXED 4 lines whatever the count ("nothing should move"; it changes only when the
- * level changes). The `min` step still collapses the pane (the 0 key's remedy), see `targetHeightPx`.
+ * Mission-1 simple list: the 3 nearest targets plus one `+ n more` line, a FIXED 4 lines whatever the count ("nothing
+ * should move"; owner 2026-10-18). The `min` step still collapses the pane (the 0 key's remedy), see `targetHeightPx`.
  */
 export const TARGET_SIMPLE_NEAREST = 3;
 export const TARGET_SIMPLE_LINES = TARGET_SIMPLE_NEAREST + 1;
 
 /**
- * Target pane height for a chrome step: the pane's own chrome + the header +
- * k rows, so exactly k rows of CONTENT show under border-box. Glass recomputes
- * from the 44 px row so N rows still fit. Plan Task 13 / 14; a fixed `height`
- * since 2026-09-09. Desktop / glass: min 58 / 82, normal 178 / 258 (desktop 138
- * under an 800 px viewport), max 218 / 434.
+ * Pane height for a chrome step: the pane's own chrome + the header + k rows, so exactly k rows of CONTENT show under
+ * border-box. Glass recomputes from the 44 px row. Desktop / glass: min 58 / 82, normal 178 / 258 (desktop 138 under
+ * an 800 px viewport), max 218 / 434.
  * @param {string} step  'min' | 'normal' | 'max'
  * @param {boolean} [glass]
- * @param {number} [viewportH]  window.innerHeight, read once per layout pass by
- *   the caller; absent / non-finite = a tall viewport (desktop normal 7)
- * @param {boolean} [simple]  mission-1 simple level: 4 lines (3 rows + the more line) at normal / max,
- *   whatever the count; `min` still collapses. Absent = the detail table above.
+ * @param {number} [viewportH]  window.innerHeight, read once per layout pass by the caller; absent / non-finite = a
+ *   tall viewport (desktop normal 7)
+ * @param {boolean} [simple]  mission-1 simple level: 4 lines (3 rows + the more line) at normal / max, whatever the
+ *   count; `min` still collapses.
  * @returns {number}
  */
 export function targetHeightPx(step, glass, viewportH, simple) {
@@ -125,37 +101,33 @@ export function targetHeightPx(step, glass, viewportH, simple) {
 }
 
 /**
- * u4-phone-fold D3: on a SHORT screen (window.innerHeight < 500) the Targets header is a 44 px fold line on
- * touch (24 px otherwise) and the pane's height is built from the rows it really renders, never a step table.
+ * On a SHORT screen (window.innerHeight < 500) the Targets header is a 44 px fold line on touch (24 px otherwise) and
+ * the pane's height is built from the rows it really renders, never a step table.
  */
 export const TARGET_FOLD_HEADER_PX = 24;
-/** Where the Targets pane top sits when the live rect is unknown (comms bottom + 10 on a phone; measured 145, 2026-10-19). */
+/** Where the Targets pane top sits when the live rect is unknown (comms bottom + 10 on a phone; measured 145). */
 export const TARGET_SHORT_TOP_FALLBACK_PX = 145;
 /** Breathing room kept under the pane on a short screen. */
 export const TARGET_SHORT_BOTTOM_PX = 8;
 /**
- * Extra height the SELECTED detail row (non-simple level) takes over a plain row: the econ line, the optional
- * MOID line and the hint line. MEASURED 2026-10-19 in the browser (iPhone landscape 844 x 390, glass, full
- * level, one target selected; tmp/u4/data/iphoneL-m5.json): the selected `.target-row` is 73 px tall
- * (`.target-expanded` 54 px of it) against 44 px for a plain glass row, so 73 - 44 = 29 px. A wrapped econ
- * line or a MOID line would add more; `_applyTargetHeight` therefore also takes the live list height.
+ * Extra height the SELECTED detail row (non-simple level) takes over a plain row: the econ line, the optional MOID
+ * line and the hint line. MEASURED in the browser (iPhone landscape 844 x 390, glass, full level, one target
+ * selected): the selected `.target-row` is 73 px tall (`.target-expanded` 54 px of it) against 44 px for a plain
+ * glass row, so 29 px. A wrapped econ line or a MOID line adds more; `_applyTargetHeight` therefore also takes the
+ * live list height.
  */
 export const TARGET_EXPANDED_EXTRA_PX = 29;
 /**
- * UNTRACKED / ACTIVE SATS sections on a short screen (review fix 3): each costs a fixed overhead (separator
- * margin + border + padding + its header line) plus one row per entry. MEASURED 2026-10-19 (iphoneL, three sample
- * rows each): section 79 px = 25 px of border box overhead + 3 x 18 px rows, + the 4 px top margin = 29 px overhead.
+ * UNTRACKED / ACTIVE SATS sections on a short screen: each costs a fixed overhead (separator margin + border +
+ * padding + its header line) plus one row per entry. MEASURED (iphoneL, three sample rows each): section 79 px =
+ * 25 px of border box overhead + 3 x 18 px rows, + the 4 px top margin = 29 px overhead.
  */
 export const TARGET_SECTION_OVERHEAD_PX = 29;
 export const TARGET_SECTION_ROW_PX = 18;
 
 /**
- * Pane height on a short screen: chrome + header + the rows really rendered (each at its real row height) +
- * the selected row's expansion (non-simple level) when it is among them. `min` = chrome + header + one summary line.
- * @param {string} step 'min' | 'normal' | 'max'
- * @param {boolean} glass
- * @param {number} rows rendered rows
- * @param {boolean} expandedSelected the selected detail row (non-simple) is rendered
+ * Pane height on a short screen: chrome + header + the rows really rendered (each at its real row height) + the
+ * selected row's expansion (non-simple level) when it is among them. `min` = chrome + header + one summary line.
  * @param {number} [sectionsPx] px taken by the UNTRACKED / ACTIVE SATS sections that are rendered (0 = none)
  * @returns {number}
  */
@@ -172,11 +144,7 @@ function viewportHeight() {
   return (typeof window !== 'undefined' && window && Number.isFinite(window.innerHeight)) ? window.innerHeight : undefined;
 }
 
-/**
- * Glass: ctor `glass` wins; else GestureHints.isGlass(); else detectGlass().
- * @param {boolean|null|undefined} explicit
- * @returns {boolean}
- */
+/** Glass: ctor `glass` wins; else GestureHints.isGlass(); else detectGlass(). */
 function resolveGlass(explicit) {
   if (explicit === true) return true;
   if (explicit === false) return false;
@@ -191,10 +159,10 @@ function hexToRgb(hex) {
 }
 
 /**
- * hints-scan D5: every scan press shows the Targets pane. Listens for SCAN_QUICK and SCAN_WIDE (the S key, Shift+S, the touch SCAN
- * and WIDE SCAN buttons, a tap on empty canvas all emit them) and calls `TargetPanel.show()` - even when the scanner refuses
- * (cooldown): he asked to see the targets. Only on the flying floor: `getFloor()` returns the applied floor number (null = no
- * ladder, treated as the flying floor); floors 1, 3, 4, 5 keep Targets away by design (FloorMask rooms), so nothing changes there.
+ * Every scan press shows the Targets pane: listens for SCAN_QUICK and SCAN_WIDE (S key, Shift+S, the touch SCAN and
+ * WIDE SCAN buttons, a tap on empty canvas) and calls `TargetPanel.show()`, even when the scanner refuses (cooldown).
+ * Only on the flying floor: `getFloor()` returns the applied floor number (null = no ladder, treated as the flying
+ * floor); floors 1, 3, 4, 5 keep Targets away by design (FloorMask rooms), so nothing changes there.
  * @param {{ bus?: object, getPanel: () => (TargetPanel|null|undefined), getFloor?: () => (number|null) }} deps
  * @returns {() => void} the remover
  */
@@ -213,24 +181,24 @@ export function wireScanShowsTargets({ bus = eventBus, getPanel, getFloor = null
 export class TargetPanel {
   constructor(container, { colorLaw = false, glass = null } = {}) {
     this._container = container;
-    this._sortMode = 'tpi';  // FIX_PLAN §4: Default to composite TPI sort
+    this._sortMode = 'tpi';  // default: composite TPI sort
     this._armManager = null;
     this._colorLaw = !!colorLaw;
     this._glassArg = glass;
     this._glass = resolveGlass(glass);
     this._targetLaw = null;
     this._reachKm = 0;
-    /** h4-simple-first D6: mission 1 on F1/F2 — rows show name, distance and the in-reach dot only (HUD passes it on every update). */
+    /** Mission 1 on F1/F2: rows show name, distance and the in-reach dot only (HUD passes it on every update). */
     this._simple = false;
     this._simpleBtn = null;          // last written display of the TPI sort button (write-on-change)
-    /** h4b D3: the selected simple row carries the one "analyse" chip until target info was opened once (HUD passes it). */
+    /** The selected simple row carries the one "analyse" chip until target info was opened once (HUD passes it). */
     this._analyseChip = false;
-    /** h4b D2: called when the player taps the already-selected row (= analyse; HUD wires noteAnalyse). */
+    /** Called when the player taps the already-selected row (= analyse; HUD wires noteAnalyse). */
     this.onAnalyse = null;
     this._downId = null;             // row id at pointerdown (the list is rebuilt at 2 Hz: ids survive, nodes do not)
     this._skipClick = null;          // pointerup handled the tap: { id, t } of the row; ONLY its own click must not count again
 
-    // u4-phone-fold D3: the short-screen fold (see PhoneFold.js). Folded = header line + ONE row.
+    // Short-screen fold (see PhoneFold.js). Folded = header line + ONE row.
     this._short = false;             // window.innerHeight < 500, live
     this._folded = false;            // folded while short (in memory only)
     this._foldToggleEl = null;       // the header line (built with createElement in _build)
@@ -238,41 +206,38 @@ export class TargetPanel {
     this._sortBtnEl = null;
     this._lastData = null;           // the last update() payload, so a fold tap repaints at once
     this._listed = 0;                // targets the open pane lists (rows + "more"), for "+ n more"
-    this._shownRows = 0;             // rows rendered in the last paint
+    this._shownRows = 0;
     this._shownExpanded = false;     // the selected detail row (non-simple) is among them
     this._shownMore = 0;             // targets left out of the open list on a short screen
     this._shownListPx = 0;           // the rendered list's live offsetHeight (0 = unknown, e.g. a stub DOM)
     this._shownSectionsPx = 0;       // px of the UNTRACKED / ACTIVE SATS sections rendered on a short screen
     this._shortKey = '';             // last painted inputs of _applyShortChrome (write-on-change)
     this._shortWrites = 0;           // count of real paints (tests)
-    this._unwatchShort = null;       // the resize unwatch (dispose)
+    this._unwatchShort = null;
 
     /** Currently-selected target ID (public for coordinator read-access) */
     this.selectedTargetId = null;
 
-    /** slice 5 (5c): id -> the field's debris body (main.js sets it); a big piece adds its "pays when disposed of" line to the selected row */
+    /** id -> the field's debris body (main.js sets it); a big piece adds its "pays when disposed of" line to the selected row */
     this._pieceLookup = null;
 
     /** @type {Object<string, HTMLElement>} DOM panels for show/hide */
     this.panels = {};
 
-    /** @type {Set<number>} UX-3 #9: IDs of targets newly discovered (pending animation) */
+    /** @type {Set<number>} IDs of targets newly discovered (pending animation) */
     this._newlyDiscovered = new Set();
 
-    // UX-3 #9: Track newly discovered targets for entry animation
     eventBus.on(Events.TARGET_DISCOVERED, (data) => {
       if (data && data.target && data.target.id !== undefined) {
         this._newlyDiscovered.add(data.target.id);
       }
     });
 
-    // UX Fix F: Clear selected target when debris is removed/captured
     eventBus.on(Events.TARGET_CLEARED, () => {
       this.selectedTargetId = null;
     });
 
-    // FIX: Self-healing listener — TargetPanel stays in sync with TargetSelector
-    // even if external setSelectedTarget() calls fail (exception, missing ref, etc.)
+    // Self-healing: stay in sync with TargetSelector even if external setSelectedTarget() calls fail.
     eventBus.on(Events.TARGET_SELECTED, (data) => {
       if (data && data.id != null) {
         this.selectedTargetId = data.id;
@@ -282,11 +247,6 @@ export class TargetPanel {
     this._build();
   }
 
-  // ==========================================================================
-  // STYLES
-  // ==========================================================================
-
-  /** @private Inject CSS classes for target panel layout (once only) */
   _injectStyles() {
     if (document.getElementById('target-panel-styles')) return;
     const sel = this._colorLaw ? VisualLaw.COLORS.SELECTION : '#00ccff';
@@ -488,11 +448,6 @@ export class TargetPanel {
     document.head.appendChild(style);
   }
 
-  // ==========================================================================
-  // BUILD DOM
-  // ==========================================================================
-
-  /** @private Create a styled HUD panel */
   _createPanel(id, styles) {
     const div = document.createElement('div');
     div.id = id;
@@ -503,29 +458,21 @@ export class TargetPanel {
   }
 
   /**
-   * Show/hide the target pane (hotkey revamp 2026-06-14 — the 0 key,
-   * "Target pane" toggle). Emits a reactive comms line naming the undo key.
-   * Pressing 0 ALWAYS re-reveals the pane, even when the pane-density ladder
-   * (−) hid it.
+   * Show/hide the target pane (the 0 key); emits a reactive comms line naming the undo key. 0 ALWAYS re-reveals the
+   * pane, even when the pane-density ladder (−) hid it.
    *
-   * Wave 5 Session H (owner lift 2026-09-05 — 03-plan Session H FINDINGS (i)):
-   * the HIDE direction drives the pane's ONE visibility bit — the density
-   * ladder's `data-density-hidden` attribute (CSS `display:none !important`,
-   * HUD._injectStyles) — never an inline `display:none`. That attribute is the
-   * bit FloorMask's room memory reads (intent, never presence — Session G), the
-   * bit the density `+` restores, and the bit view-switch / skill-reveal
-   * re-shows cannot resurrect (the HUD's own rule for the attribute). Before
-   * this, a 0-key hide wrote inline display and the room captured "shown": the
-   * hide never survived a reload, and `+` on it was a dead press. An inline
-   * `display:none` (HUD._applyViewConfig's view hide, or a pre-fix state) still
-   * reads as hidden here and is cleared on the re-reveal, so 0 never goes dead.
+   * The HIDE direction drives the pane's ONE visibility bit — the density ladder's `data-density-hidden` attribute
+   * (CSS `display:none !important`, HUD._injectStyles) — never an inline `display:none`. That attribute is the bit
+   * FloorMask's room memory reads (intent, never presence), the bit the density `+` restores, and the bit view-switch /
+   * skill-reveal re-shows cannot resurrect. An inline hide would be captured by the room as "shown": the hide would not
+   * survive a reload and `+` on it would be a dead press. An inline `display:none` (HUD._applyViewConfig's view hide)
+   * still reads as hidden here and is cleared on the re-reveal, so 0 never goes dead.
    */
   toggleVisible() {
     const panel = this.panels && this.panels.targets;
     if (!panel) return;
-    // w7-panes review (2026-10-13): before the first scan the pane is held back
-    // by HUD's scan gate, not the density bit — a press here must not save a
-    // hide the player never saw. Say when it comes, write nothing.
+    // Before the first scan the pane is held back by HUD's scan gate, not the density bit: a press here must not save
+    // a hide the player never saw. Say when it comes, write nothing.
     if (panel.hasAttribute('data-scan-wait')) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Targets appear after your first scan (S)', priority: 'info', _reactive: true,
@@ -534,13 +481,12 @@ export class TargetPanel {
     }
     let nowVisible;
     if (panel.hasAttribute('data-density-hidden')) {
-      // Hidden by the ONE bit (the density ladder, this key, a floor's room) —
-      // this press reveals it regardless of inline state.
+      // Hidden by the ONE bit (the density ladder, this key, a floor's room): this press reveals it regardless of
+      // inline state.
       panel.removeAttribute('data-density-hidden');
       panel.style.display = '';
       nowVisible = true;
     } else if (panel.style.display === 'none') {
-      // Inline-hidden (view config / legacy) — reveal.
       panel.style.display = '';
       nowVisible = true;
     } else {
@@ -553,19 +499,19 @@ export class TargetPanel {
       priority: 'info',
       _reactive: true,
     });
-    // Wave 5 Session H (Job A): the 0 key just flipped the pane's ONE
-    // visibility bit — the room-memory write trigger (emitted AFTER the flip;
-    // the consumer is gated in main.js, so this is ladder-agnostic HUD).
+    // The 0 key just flipped the pane's ONE visibility bit: the room-memory write trigger (emitted AFTER the flip; the
+    // consumer is gated in main.js, so this is ladder-agnostic HUD).
     eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'targets', shown: nowVisible });
   }
 
   /**
-   * Reveal the target pane, never hide it (hints-scan D5, owner 2026-10-26: "pressing S scan should probably make Targets pane
-   * appear, if it was hidden"). The reveal branch of `toggleVisible`: clears the ONE visibility bit (`data-density-hidden`) and
-   * any inline hide, then emits `HUD_PANE_VISIBILITY { pane:'targets', shown:true }` (the room-memory write trigger) and the
-   * line "Targets pane shown (0 to hide)" — only when it actually changed something, so a pane that is already shown stays quiet.
-   * Before the first scan the pane waits behind HUD's scan gate (`data-scan-wait`): the hide bit is cleared (and the room
-   * remembers "shown") but the gate stays on until SCAN_COMPLETE, and no line is said (nothing is on screen yet).
+   * Reveal the target pane, never hide it (owner 2026-10-26: "pressing S scan should probably make Targets pane
+   * appear, if it was hidden"). The reveal branch of `toggleVisible`: clears the ONE visibility bit
+   * (`data-density-hidden`) and any inline hide, then emits `HUD_PANE_VISIBILITY { pane:'targets', shown:true }` (the
+   * room-memory write trigger) and the line "Targets pane shown (0 to hide)", only when it changed something (an
+   * already-shown pane stays quiet). Before the first scan the pane waits behind HUD's scan gate (`data-scan-wait`):
+   * the hide bit is cleared (the room remembers "shown") but the gate stays on until SCAN_COMPLETE, and no line is
+   * said (nothing is on screen yet).
    * @returns {boolean} true if a hide bit was cleared
    */
   show() {
@@ -583,13 +529,11 @@ export class TargetPanel {
     return true;
   }
 
-  /** @private */
   _build() {
     this._injectStyles();
 
-    // Follow-up 2026-09-09 (§1.15 / §1.18b): the right arm's first pane is
-    // 350 wide (TARGETS_PANE_WIDTH_PX — the arm's width; Debris / Next keep
-    // the 280 base and hug the right edge) and a FIXED height per step.
+    // The right arm's first pane is 350 wide (TARGETS_PANE_WIDTH_PX, the arm's width; Debris / Next keep the 280 base
+    // and hug the right edge) with a FIXED height per step.
     this.panels.targets = this._createPanel('hud-targets-panel', {
       position: 'relative',
       width: `${TARGETS_PANE_WIDTH_PX}px`,
@@ -619,8 +563,8 @@ export class TargetPanel {
       </div>
     `;
 
-    // The header line (title, sort button, fold text) is built with createElement (u4-phone-fold D3: stub-DOM
-    // tests tap it) and put first. No key badge: the keys are in the Help page and the hover tip (D5).
+    // The header line (title, sort button, fold text) is built with createElement (stub-DOM tests tap it) and put
+    // first. No key badge: the keys are in the Help page and the hover tip.
     const head = document.createElement('div');
     head.className = 'target-fold-head';
     head.style.marginBottom = '4px';
@@ -648,7 +592,7 @@ export class TargetPanel {
     this._foldRightEl = foldRight;
     this._sortBtnEl = sortBtn;
 
-    // Sort button handler — FIX_PLAN §4: 4-way cycle tpi → deltaV → distance → points → tpi
+    // Sort button: 4-way cycle tpi → deltaV → distance → points → tpi
     if (sortBtn) {
       const SORT_CYCLE = ['tpi', 'deltaV', 'distance', 'points'];
       const SORT_LABELS = {
@@ -666,18 +610,17 @@ export class TargetPanel {
       });
     }
 
-    // Event delegation for target row clicks
     const listEl = this.panels.targets.querySelector('#hud-target-list');
     if (listEl) {
-      // h4b D2: the list is rebuilt with innerHTML every 2 Hz tick, so a tap can lose its row between
-      // pointerdown and click (no click is fired then). The tap is decided on pointerup by row id;
-      // a plain click (mouse without pointer events, keyboard, tests) is the fallback.
+      // The list is rebuilt with innerHTML every 2 Hz tick, so a tap can lose its row between pointerdown and click
+      // (no click is fired then). The tap is decided on pointerup by row id; a plain click (mouse without pointer
+      // events, keyboard, tests) is the fallback.
       const rowId = (e) => {
         const row = e && e.target && e.target.closest ? e.target.closest('.target-row') : null;
         const id = row ? parseInt(row.dataset.id) : NaN;
         return isNaN(id) ? null : id;
       };
-      // p1-newgame-panes D3: only the primary button taps (a missing `button` counts as 0).
+      // Only the primary button taps (a missing `button` counts as 0).
       const primary = (e) => !(e && typeof e.button === 'number' && e.button !== 0);
       listEl.addEventListener('pointerdown', (e) => {
         if (!primary(e)) return;
@@ -689,8 +632,8 @@ export class TargetPanel {
         const down = this._downId;
         this._downId = null;
         if (id == null || down !== id) return;     // dragged off the row / scroll: not a tap
-        // p1-newgame-panes D4: remember WHICH click to swallow (this row, soon after); a pointerup that
-        // no click follows (rebuilt row, cancelled touch) must not eat a later keyboard / programmatic click.
+        // Remember WHICH click to swallow (this row, soon after); a pointerup that no click follows (rebuilt row,
+        // cancelled touch) must not eat a later keyboard / programmatic click.
         this._skipClick = { id, t: (typeof e.timeStamp === 'number') ? e.timeStamp : null };
         this._rowTap(id);
       });
@@ -704,9 +647,8 @@ export class TargetPanel {
       });
     }
 
-    // --- Resize chrome (3-step: min / normal / max) ---
-    // min: header + one-line count only. normal: standard list. max: taller list.
-    // u4-phone-fold D5: no visible [0] badge - the 0 key still shows / hides the pane (Help page, hover tip).
+    // Resize chrome (3-step: min = header + one-line count only; normal = standard list; max = taller list).
+    // No visible [0] badge: the 0 key still shows / hides the pane (Help page, hover tip).
     this._chrome = new PaneChrome({
       pane: this.panels.targets,
       keyLabel: '0',
@@ -716,13 +658,12 @@ export class TargetPanel {
       color: 'var(--hud-normal, #00ff88)',
       title: 'Targets pane — 0 shows / hides',
       onStep: (step) => {
-        // Step table = header + k rows (recomputed from the live row height).
         this._applyTargetHeight(step);
         this._updateMinSummary();
       },
     });
 
-    // u4-phone-fold D1/D3: fold when the screen is (or becomes) short.
+    // Fold when the screen is (or becomes) short.
     const win = (typeof window !== 'undefined') ? window : null;
     this._short = shortScreenNow(win);
     this._folded = this._short;
@@ -740,7 +681,6 @@ export class TargetPanel {
     if (this._unwatchShort) { this._unwatchShort(); this._unwatchShort = null; }
   }
 
-  /** True while the Targets pane is folded to its header line + one row (short screens only). */
   isFolded() { return !!(this._short && this._folded); }
 
   /** Fold / unfold the pane (the header's tap; a no-op on a tall screen). Key 0 and the fold state are independent. */
@@ -789,19 +729,16 @@ export class TargetPanel {
   }
 
   /**
-   * @private height = header + k rows — a FIXED box (follow-up 2026-09-09
-   * §1.18b): the chrome step alone sizes it; an empty list no longer collapses
-   * to 'min' (a box that breathed with the list moved everything under it —
-   * owner: "nothing should move"). overflowY:auto scrolls a longer list.
-   * Plan Task 13 / 14 — glass rows are 44 px so the same k still fits.
-   * Write-on-change.
+   * @private height = header + k rows: a FIXED box. The chrome step alone sizes it; an empty list does not collapse to
+   * 'min' (a box that breathed with the list moved everything under it; owner: "nothing should move"). overflowY:auto
+   * scrolls a longer list. Glass rows are 44 px so the same k still fits. Write-on-change.
    * @param {string} [step]
    */
   _applyTargetHeight(step) {
     const pane = this.panels && this.panels.targets;
     if (!pane || !pane.style) return;
     const name = step || (this._chrome && this._chrome.step) || 'normal';
-    // u4-phone-fold D3: a short screen sizes the box from the rows it really rendered (no clipped row).
+    // A short screen sizes the box from the rows it really rendered (no clipped row).
     let shortPx = 0;
     if (this._short) {
       shortPx = shortTargetHeightPx(name, this._glass, this._shownRows, this._shownExpanded, this._shownSectionsPx);
@@ -861,10 +798,9 @@ export class TargetPanel {
   _sectionFit(entries, px) {
     if (!(entries > 0)) return 0;
     if (!Number.isFinite(px)) return entries;
-    return Math.max(0, Math.min(entries, Math.floor((px - TARGET_SECTION_OVERHEAD_PX) / TARGET_SECTION_ROW_PX)));
+    return clamp(Math.floor((px - TARGET_SECTION_OVERHEAD_PX) / TARGET_SECTION_ROW_PX), 0, entries);
   }
 
-  /** @private Populate the minimized one-line target summary. */
   _updateMinSummary() {
     const el = this.panels.targets && this.panels.targets.querySelector('#hud-targets-min-summary');
     if (!el) return;
@@ -872,11 +808,7 @@ export class TargetPanel {
     el.textContent = n > 0 ? `${n} target${n === 1 ? '' : 's'}` : 'No targets';
   }
 
-  // ==========================================================================
-  // PUBLIC
-  // ==========================================================================
-
-  /** slice 5 (5c): how the panel finds the field body of a listed target (the owner and the value ride on it, not on the list row). */
+  /** How the panel finds the field body of a listed target (the owner and the value ride on it, not on the list row). */
   setPieceLookup(fn) { this._pieceLookup = typeof fn === 'function' ? fn : null; }
 
   /** @private the selected row's big-piece line ("Pays when disposed of: up to 61,040 · Russia owns it"), or ''. */
@@ -887,18 +819,11 @@ export class TargetPanel {
     return line ? `\n        <div class="big-pay" style="color:var(--hud-caution, ${VisualLaw.COLORS.CAUTION});font-size:11px">${line}</div>` : '';
   }
 
-  /**
-   * Set the selected target ID (called from coordinator or external source).
-   * @param {number} id
-   */
   setSelectedTarget(id) {
     this.selectedTargetId = id;
   }
 
-  /**
-   * Set the ArmManager reference for arm-range display.
-   * @param {import('../../entities/ArmManager.js').ArmManager} armManager
-   */
+  /** @param {import('../../entities/ArmManager.js').ArmManager} armManager  (for the arm-range display) */
   setArmManager(armManager) {
     this._armManager = armManager;
   }
@@ -907,9 +832,8 @@ export class TargetPanel {
   reachKm() { return this._reachKm || 0; }
 
   /**
-   * @private Phase 0.1 (capture-feedback overhaul): the daughter whose net
-   * class judges the capture-fit badge — the player-selected arm when one is
-   * selected, else the next-available (docked, charged, fuelled) daughter.
+   * @private The daughter whose net class judges the capture-fit badge: the player-selected arm, else the
+   * next-available (docked, charged, fuelled) one.
    * @returns {object|null} ArmUnit or null when no arm context exists
    */
   _getFitBadgeArm() {
@@ -921,9 +845,8 @@ export class TargetPanel {
   }
 
   /**
-   * @private Phase 1c (capture-feedback overhaul): best-tool + odds badge for
-   * one target judged by one arm — `NET 92%` / `GRAB\u25B6 95%` / `TOO WIDE`.
-   * Uses the same ToolOdds model as the reticle odds strip (SSOT).
+   * @private Best-tool + odds badge for one target judged by one arm — `NET 92%` / `GRAB\u25B6 95%` / `TOO WIDE`.
+   * Same ToolOdds model as the reticle odds strip (SSOT).
    * @returns {string} HTML span
    */
   _renderBestToolBadge(arm, t) {
@@ -931,11 +854,10 @@ export class TargetPanel {
       || (Constants.DAUGHTER_TOOLSETS && Constants.DAUGHTER_TOOLSETS[arm.type])
       || ['NET'];
     const netCount = (typeof arm.getNetInventory === 'function') ? arm.getNetInventory() : undefined;
-    // Range: when the arm is already station-keeping THIS target, use its live
-    // standoff so the badge matches the reticle odds strip exactly (SSOT).
-    // Otherwise omit it — computeToolOdds assumes the 50 m nominal standoff,
-    // which is the honest planning number for a not-yet-dispatched arm (the
-    // mother→target distance is the wrong axis: capture happens at standoff).
+    // Range: when the arm is already station-keeping THIS target, use its live standoff so the badge matches the
+    // reticle odds strip exactly (SSOT). Otherwise omit it: computeToolOdds assumes the 50 m nominal standoff, the
+    // honest planning number for a not-yet-dispatched arm (mother→target distance is the wrong axis: capture happens
+    // at standoff).
     let range;
     if (arm._stationKeepTarget && arm._stationKeepTarget === t
         && typeof arm._standoffR === 'number' && arm._standoffR > 0) {
@@ -955,10 +877,8 @@ export class TargetPanel {
     if (o && o.p != null && o.p > 0) {
       const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
       const pct = Math.round(Math.min(o.p, cap) * 100);
-      // Register item 17: a GREEN NET badge (pct ≥ 80) whose DRAWN span
-      // outspans the bag drops to amber + a span note — the cue only ever
-      // qualifies a confident green, never lifts a red (the odds stay the
-      // primary signal; the verdict is untouched, item 7b).
+      // A GREEN NET badge (pct ≥ 80) whose DRAWN span outspans the bag drops to amber + a span note: the cue only
+      // qualifies a confident green, never lifts a red (the odds stay the primary signal; the verdict is untouched).
       const nc = best === 'NET' ? getNetClassForType(arm.type) : null;
       const overflow = nc && pct >= 80 && renderedSpanOverflows(t, nc);
       const col = this._targetLaw ? lookColor(oddsColor(pct, overflow)) : overflow ? 'var(--hud-caution, #ffd166)' : pct >= 80 ? 'var(--hud-normal, #00ffaa)' : pct >= 50 ? 'var(--hud-caution, #ffd166)' : 'var(--hud-warning, #ff7755)';
@@ -973,25 +893,20 @@ export class TargetPanel {
   }
 
   /**
-   * @private Mother-net-reel plan §12: whale-class odds row. The model was
-   * built and unused — computeToolOdds({armType:'mother'}) defaults netCount
-   * from captureNetSystem.getMotherNetCount() and accepts netClass +
-   * presentedWidthM; no caller ever passed 'mother', so the panel showed
-   * daughter odds (or a lying L badge) for the one target class only the
-   * mother can take.
+   * @private Whale-class odds row: computeToolOdds({armType:'mother'}) defaults netCount from
+   * captureNetSystem.getMotherNetCount() and accepts netClass + presentedWidthM. Without this row the panel showed
+   * daughter odds (or a lying L badge) for the one target class only the mother can take.
    * @returns {string} HTML span
    */
   _renderMotherOddsBadge(t) {
     const CN = Constants.CAPTURE_NET;
     // §49 row 1: a piece over her 1,500 kg catch limit is not caught, it is characterised (the step line shows how): no odds
     const tooBig = overCatchLimit(t.mass || 0, CN && CN.LARGE);
-    // Wave-4 QA #3: the mother pod's pre-fire odds surface. One persistent
-    // lock cache for the whale badge — lock-stable cling factors compute once
-    // per locked whale instead of per 2 Hz re-render; the input-keyed contract
-    // (ToolOdds.makeNetOddsLockCache) recomputes on target change, so several
-    // whale rows simply alternate recomputes (== fresh path, still exact).
-    // The per-row daughter planning badges above keep the fresh path: they
-    // sweep MANY targets per render, where a single-slot cache buys nothing.
+    // The mother pod's pre-fire odds: one persistent lock cache for the whale badge, so lock-stable cling factors
+    // compute once per locked whale, not per 2 Hz re-render. Input-keyed (ToolOdds.makeNetOddsLockCache): a target
+    // change recomputes and several whale rows just alternate recomputes (== fresh path, still exact). The per-row
+    // daughter planning badges keep the fresh path: they sweep MANY targets per render, where a single-slot cache
+    // buys nothing.
     if (!this._motherOddsLockCache) this._motherOddsLockCache = makeNetOddsLockCache();
     const odds = tooBig ? null : computeToolOdds({
       armType: 'mother',
@@ -1004,12 +919,11 @@ export class TargetPanel {
     if (o && o.p != null && o.p > 0) {
       const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
       const pct = Math.round(Math.min(o.p, cap) * 100);
-      // Register item 17: same overflow qualifier as the daughter badge —
-      // only ever downgrades a GREEN (pct ≥ 80) to amber, never lifts a red.
+      // Same overflow qualifier as the daughter badge: only downgrades a GREEN (pct ≥ 80) to amber, never lifts a red.
       const overflow = pct >= 80 && renderedSpanOverflows(t, CN && CN.LARGE);
       const col = this._targetLaw ? lookColor(oddsColor(pct, overflow)) : overflow ? 'var(--hud-caution, #ffd166)' : pct >= 80 ? 'var(--hud-normal, #00ffaa)' : pct >= 50 ? 'var(--hud-caution, #ffd166)' : 'var(--hud-warning, #ff7755)';
       const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${CN.LARGE.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
-      return `<span style="color:${col};font-size:10px;font-weight:bold;" title="Mother Large Net odds${tip}">${pct}%${this._glassNow() ? '' : ' [N]'}</span>`;   // u15b: no key letter on glass
+      return `<span style="color:${col};font-size:10px;font-weight:bold;" title="Mother Large Net odds${tip}">${pct}%${this._glassNow() ? '' : ' [N]'}</span>`;   // no key letter on glass
     }
     const blocker = tooBig ? 'BIG' : (o && o.blocker) || 'NO NET';
     const word = blocker === 'BIG' ? 'Too big to catch'
@@ -1019,13 +933,7 @@ export class TargetPanel {
     return `<span style="color:${this._targetLaw ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})` : 'var(--hud-warning, #ff7755)'};font-size:10px;font-weight:bold;" title="${tooBig ? `Over the mother's ${CN.LARGE.CATCH_LIMIT_KG} kg catch limit: inspect it instead` : 'Mother Large Net'}">${word}</span>`;
   }
 
-  /**
-   * Update the target list display. Called at 2 Hz from the coordinator.
-   * @param {object} data
-   * @param {Array}  data.cachedTargets
-   * @param {Array}  data.cachedUntracked
-   * @param {Array}  data.cachedActiveSats
-   */
+  /** Update the target list display; called at 2 Hz from the coordinator. @param {object} data - { cachedTargets, cachedUntracked, cachedActiveSats } */
   update(data) {
     this._targetLaw = (this._colorLaw && data && data.targetLaw) ? data.targetLaw : null;
     this._playerOrbit = data.playerOrbit || null;
@@ -1036,10 +944,7 @@ export class TargetPanel {
     this._updateTargetList(data.cachedTargets, data.cachedUntracked, data.cachedActiveSats);
   }
 
-  /**
-   * @private A tap / click on target row `id`: select it; tapping the row that was ALREADY selected is
-   * the analyse action (h4b D2 — touch has no Z key).
-   */
+  /** @private A tap / click on row `id`: select it; tapping the ALREADY selected row is the analyse action (touch has no Z key). */
   _rowTap(id) {
     const was = this.selectedTargetId;
     this.selectedTargetId = id;
@@ -1047,10 +952,8 @@ export class TargetPanel {
     if (was === id && typeof this.onAnalyse === 'function') this.onAnalyse(id);
   }
 
-  /** True while the list is in simple-first form (mission 1, F1/F2; HUD decides). */
   isSimple() { return this._simple; }
 
-  /** @private The TPI sort toggle hides in simple mode (write-on-change). */
   _applySimpleChrome() {
     const btn = this._sortBtnEl || (this.panels.targets && this.panels.targets.querySelector('#hud-sort-btn'));
     if (!btn || !btn.style) return;
@@ -1060,33 +963,25 @@ export class TargetPanel {
     btn.style.display = want;
   }
 
-  // ==========================================================================
-  // PRIVATE — TARGET LIST
-  // ==========================================================================
-
-  /** @private Update enhanced 3-section target list */
   _updateTargetList(cachedTargets, cachedUntracked, cachedActiveSats) {
-    // Track count for the minimized one-line summary.
     this._lastTrackedCount = Array.isArray(cachedTargets) ? cachedTargets.length : 0;
     if (this._chrome && this._chrome.isMinimized) this._updateMinSummary();
 
-    // The two side sections' entries. On a short screen (review fix 3) they are hidden while folded and, when
-    // open, take what is left under the target rows; whatever does not fit is not rendered (never clipped).
+    // The two side sections' entries. On a short screen they are hidden while folded and, when open, take what is left
+    // under the target rows; whatever does not fit is not rendered (never clipped).
     const untrackedAll = cachedUntracked.slice(0, 3);
     const satsAll = cachedActiveSats.filter(s => s.distance / Constants.SCENE_SCALE < 50).slice(0, 3);
     let untrackedShow = untrackedAll.length;
     let satsShow = satsAll.length;
     this._shownSectionsPx = 0;
 
-    // --- TARGETS (the tracked list) ---
     const listEl = document.getElementById('hud-target-list');
     if (listEl) {
       const maxArmRangeKm = this._reachKm = reachKmFrom(this._armManager ? this._armManager.getAllStatus() : null, { weaver: Constants.WEAVER_TETHER_LENGTH / 1000, spinner: Constants.SPINNER_TETHER_LENGTH / 1000 });
 
       let targets = [...cachedTargets];
 
-      // FIX_PLAN §4: Sort modes — 'tpi' is already sorted upstream by
-      // getEnhancedTargetList; other modes re-sort the cached list here.
+      // Sort modes: 'tpi' is already sorted upstream by getEnhancedTargetList; other modes re-sort the cached list here.
       if (this._sortMode === 'distance') {
         targets.sort((a, b) => a.distanceKm - b.distanceKm);
       } else if (this._sortMode === 'points') {
@@ -1094,11 +989,9 @@ export class TargetPanel {
       } else if (this._sortMode === 'deltaV') {
         targets.sort((a, b) => a.deltaV - b.deltaV);
       }
-      // 'tpi' mode: already sorted upstream
 
-      // z1-calm-scan D3: the simple level shows the 3 NEAREST by distance (whatever the sort mode), plus
-      // (when the selected target is further out: the 2 nearest + the selected one, still 3 rows), then
-      // one "+ n more" line. Always 4 lines.
+      // The simple level shows the 3 NEAREST by distance (whatever the sort mode); when the selected target is further
+      // out: the 2 nearest + the selected one (still 3 rows), then one "+ n more" line. Always 4 lines.
       let moreCount = 0;
       const totalKnown = targets.length;
       if (this._simple) {
@@ -1111,17 +1004,17 @@ export class TargetPanel {
       } else {
         targets = targets.slice(0, TARGET_STEP_ROWS.max);   // as many rows as the tallest step shows (9)
       }
-      // u4-phone-fold D3: on a short screen the open pane lists what the level lists (rows + its "+ m more"),
-      // and shows only the rows that fit at their real height; the rest are counted in the header. Folded =
-      // the selected row, else the nearest (the first row the open pane would show), nothing else.
+      // On a short screen the open pane lists what the level lists (rows + its "+ m more") but shows only the rows that
+      // fit at their real height; the rest are counted in the header. Folded = the selected row, else the nearest (the
+      // first row the open pane would show), nothing else.
       this._listed = this._simple ? totalKnown : targets.length;
       if (this._short) {
         const base = targets;
         const availPx = this._shortAvailPx();
         let usedPx = 0;
         if (this.isFolded()) {
-          // The folded row is the selected target, else the NEAREST by distance (D3) - not the head of the
-          // current sort (TPI first at the full level) - so pick from a distance-sorted copy of every target.
+          // The folded row is the selected target, else the NEAREST by distance (not the head of the current sort: TPI
+          // first at the full level), so pick from a distance-sorted copy of every target.
           const byDistance = [...cachedTargets].sort((a, b) => a.distanceKm - b.distanceKm);
           const one = foldedTargetRow(byDistance, this.selectedTargetId);
           targets = one ? [one] : [];
@@ -1176,7 +1069,7 @@ export class TargetPanel {
             managed: L.apTargetId != null && t.id === L.apTargetId,
             threatTier: (L.threatId != null && t.id === L.threatId) ? L.threatTier : null,
             hydrazine: !!(t.salvage && t.salvage.hydrazine),
-            tumbleDegS: (t.tumbleRate || 0) * 180 / Math.PI,
+            tumbleDegS: radToDeg(t.tumbleRate || 0),
             massKg: t.mass,
             distanceKm: t.distanceKm,
             reachKm: maxArmRangeKm,
@@ -1188,16 +1081,13 @@ export class TargetPanel {
           // the row colour tier already reads salvage).
           const salvageIcon = t.hasSalvage ? ' <span title="Salvage aboard">*</span>' : '';
 
-          // Progressive data reveal
           const dataLevel = this._getDataLevel(t.distanceKm);
           const dvClass = dataLevel === 'FAR' ? 'target-dv data-unknown' :
                           dataLevel === 'MEDIUM' ? 'target-dv data-estimated' : 'target-dv';
 
-          // Distance + ΔV formatting
           const dist = this._formatDist(t.distanceKm);
           const deltaV = this._formatDeltaV(t.deltaV, dataLevel);
 
-          // Range indicator
           let range;
           if (law) {
             const inReach = maxArmRangeKm > 0 && t.distanceKm <= maxArmRangeKm;
@@ -1217,14 +1107,14 @@ export class TargetPanel {
             : '';
 
           if (this._simple) {
-            // z1-calm-scan D2: name · distance · "in reach" / "too far" against the MOTHER NET's reach
-            // (Constants.NET_LOCK_RANGE_M, read live). No icon, `*`, hazard glyph, ΔV, MOID or dot - those
-            // come one pane level up and from mission 2 (DECISIONS §23 r5).
+            // name · distance · "in reach" / "too far" against the MOTHER NET's reach (Constants.NET_LOCK_RANGE_M, read
+            // live). No icon, `*`, hazard glyph, ΔV, MOID or dot: those come one pane level up and from mission 2
+            // (DECISIONS §23 r5).
             const name = selected ? this._getFullTypeName(t.type) : typeName;
             const nameStyle = selected
               ? (law ? ` style="color:${lookColor(law.color)}"` : '')
               : ` style="color:${tierColor}${law ? `;opacity:${law.alpha}` : ''}"`;
-            // h4b D3: ONE prompt for the selected row until target info was opened once (touch has no Z).
+            // ONE prompt for the selected row until target info was opened once (touch has no Z).
             const chip = (selected && this._analyseChip)
               ? `<span class="analyse-chip">${this._glassNow() ? 'Tap again to analyse' : 'Z analyse'}</span>`
               : '';
@@ -1238,8 +1128,7 @@ export class TargetPanel {
           }
 
           if (selected) {
-            // --- Net ΔV computation ---
-            // UX-3 #1: Use frozen ΔV from selection time if available, else live
+            // Frozen ΔV from selection time if available, else live
             const useDv = (t.selectedDeltaV !== undefined && t.selectedDeltaV !== null)
               ? t.selectedDeltaV : t.deltaV;
             const frozenTag = (t.selectedDeltaV !== undefined && t.selectedDeltaV !== null)
@@ -1256,19 +1145,14 @@ export class TargetPanel {
               ? '---'
               : (netDV >= 0 ? `+${netDV.toFixed(0)}` : `${netDV.toFixed(0)}`);
 
-            // ST-6.3: MOID badge for selected target
             const moidBadge = this._renderMoidBadge(t);
             const moidStat = this._renderMoidStat(t);
 
-            // Phase 1c (capture-feedback overhaul): best-tool + live odds for
-            // the arm that would take the shot — same ToolOdds model as the
-            // reticle strip, so the panel and the strip can never disagree.
-            // No arm context → dual W/S fit badge (Phase 0.1 fallback).
-            // Mother-net-reel plan §12: a WHALE (>500 kg) short-circuits to
-            // the mother row — the daughter badge was showing "L✗ TOO HEAVY"
-            // (judged against the weaver's 500 kg MEDIUM net) exactly when
-            // the mother's LARGE net is the right tool, and `_getFitBadgeArm`
-            // would show daughter odds for a target no daughter can take.
+            // Best-tool + live odds for the arm that would take the shot (same ToolOdds model as the reticle strip, so panel
+            // and strip can never disagree); no arm context → dual W/S fit badge. A WHALE (>500 kg) short-circuits to the
+            // mother row: the daughter badge showed "L✗ TOO HEAVY" (judged against the weaver's 500 kg MEDIUM net)
+            // exactly when the mother's LARGE net is the right tool, and `_getFitBadgeArm` would show daughter odds for
+            // a target no daughter can take.
             let fitBadge;
             const isWhale = classifyNetTarget(t.mass || 0).band === 'whale';
             if (isWhale) {
@@ -1280,9 +1164,8 @@ export class TargetPanel {
             } else {
               const wFit = assessNetFit(t, Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM);
               const sFit = assessNetFit(t, Constants.CAPTURE_NET && Constants.CAPTURE_NET.SMALL);
-              // Register item 17: an OK whose DRAWN span outspans that class's
-              // bag renders as an amber ✓ with a span note — the verdict stays
-              // logical (item 7b); this is the advisory-only cue.
+              // An OK whose DRAWN span outspans that class's bag renders as an amber ✓ with a span note; the verdict stays
+              // logical, this is the advisory-only cue.
               const seg = (tag, f, nc) => {
                 const ok = f.fit === 'OK';
                 const overflow = ok && renderedSpanOverflows(t, nc);
@@ -1294,8 +1177,7 @@ export class TargetPanel {
             }
             }
 
-            // Phase 1.5: appraised value — only once the close-range survey
-            // decrypted the manifest (value-if-profiled; dossier is the SSOT).
+            // Appraised value, only once the close-range survey decrypted the manifest (value-if-profiled; dossier is the SSOT).
             let valueBadge = '';
             if (dossierSystem.isProfiled(t.id)) {
               const { total } = appraiseSalvage(t.salvage);
@@ -1304,7 +1186,6 @@ export class TargetPanel {
               }
             }
 
-            // ── EXPANDED ROW (selected target) ──
             const fullType = this._getFullTypeName(t.type);
             return `<div class="target-row selected" data-id="${t.id}">
     <span class="${iconClass}">${typeIcon}</span>
@@ -1321,15 +1202,13 @@ export class TargetPanel {
             ${fitBadge}${valueBadge ? `\n            ${valueBadge}` : ''}
         </div>${moidStat}${this._bigPayRow(t)}
         ${this._glassNow()
-          ? '<div class="hint-line">Hold: DAUGHTER or AUTOPILOT · tap again: analyse</div>'   // u15b B-T7: the radial + the tap-again analyse (48 ch: fits the glass column on one line)
+          ? '<div class="hint-line">Hold: DAUGHTER or AUTOPILOT · tap again: analyse</div>'   // the radial + the tap-again analyse (48 ch: fits the glass column on one line)
           : '<div class="hint-line">[D] Deploy · [A] Auto · [Z] Analyze</div>'}
     </div>
 </div>`;
           } else {
-            // ST-6.3: MOID badge for collapsed row
             const moidBadge = this._renderMoidBadge(t);
 
-            // ── COLLAPSED ROW (non-selected) ──
             return `<div class="target-row" data-id="${t.id}">
     <span class="${iconClass}">${typeIcon}</span>
     <span class="target-name" style="color:${tierColor}${law ? `;opacity:${law.alpha}` : ''}">${typeName}${salvageIcon}${moidBadge}</span>
@@ -1342,7 +1221,6 @@ export class TargetPanel {
         }).join('') + (this._simple && moreCount > 0 ? `<div class="target-more">+ ${moreCount} more</div>` : '');
         this._shownListPx = (this._short && Number.isFinite(listEl.offsetHeight)) ? listEl.offsetHeight : 0;
 
-        // UX-3 #9: Apply discovery animation to newly discovered rows
         if (this._newlyDiscovered.size > 0) {
           requestAnimationFrame(() => {
             for (const id of this._newlyDiscovered) {
@@ -1356,7 +1234,6 @@ export class TargetPanel {
       }
     }
 
-    // --- UNTRACKED (SENSOR) ---
     const untrackedEl = document.getElementById('hud-untracked-list');
     const untrackedSection = document.getElementById('hud-untracked-section');
     if (untrackedEl && untrackedSection) {
@@ -1377,7 +1254,6 @@ export class TargetPanel {
       }
     }
 
-    // --- ACTIVE SATS ---
     const activeSatEl = document.getElementById('hud-activesat-list');
     const activeSatSection = document.getElementById('hud-activesat-section');
     if (activeSatEl && activeSatSection) {
@@ -1398,17 +1274,11 @@ export class TargetPanel {
     }
   }
 
-  // ==========================================================================
-  // PRIVATE — FORMATTING HELPERS
-  // ==========================================================================
-
-  /** @private Format distance value for display */
   _formatDist(distKm) {
     if (distKm === undefined || distKm === null) return '---';
-    return hudDistText(distKm);   // net-range: the one writer, shared with the net refusal lines (netRouting.js)
+    return hudDistText(distKm);   // the one writer, shared with the net refusal lines (netRouting.js)
   }
 
-  /** @private Format ΔV value for display, precision based on data level */
   _formatDeltaV(dv, dataLevel) {
     if (dv === undefined || dv === null || dv < 0) return '---';
 
@@ -1426,7 +1296,6 @@ export class TargetPanel {
     }
   }
 
-  /** @private Get range indicator dot and color */
   _getRangeIndicator(distKm, maxArmRangeKm) {
     if (!maxArmRangeKm || maxArmRangeKm <= 0) return { dot: '○', color: 'var(--hud-warning, #ff4444)' };
     if (distKm <= maxArmRangeKm) return { dot: '●', color: 'var(--hud-normal, #00ff88)' };
@@ -1434,12 +1303,7 @@ export class TargetPanel {
     return { dot: '○', color: 'var(--hud-warning, #ff4444)' };
   }
 
-  // ==========================================================================
-  // PRIVATE — HELPERS
-  // ==========================================================================
-
-  /** @private Get target color — VisualLaw tokens only (ladder reorder rev 3,
-   *  locked #12: legacy value-colours removed). */
+  /** @private Target colour: VisualLaw tokens only (legacy value-colours removed). */
   _getTargetColor(target) {
     if (target.risk === 'Extreme' || (target.salvage && target.salvage.hydrazine)) {
       return `var(--hud-warning, ${VisualLaw.COLORS.THREAT})`;
@@ -1456,12 +1320,10 @@ export class TargetPanel {
     return `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;
   }
 
-  /** @private Get short type name */
   _getShortTypeName(type) {
     return shortTypeName(type);
   }
 
-  /** @private Get full type name for expanded rows */
   _getFullTypeName(type) {
     switch (type) {
       case 'rocketBody': return 'Rocket Body';
@@ -1472,7 +1334,7 @@ export class TargetPanel {
     }
   }
 
-  /** @private Get type-appropriate Unicode icon for debris (matches NavSphere S5 shapes) */
+  /** @private Type-appropriate Unicode icon for debris (matches NavSphere shapes) */
   _getTypeIcon(type) {
     switch (type) {
       case 'fragment':       return '\u25B3';     // △
@@ -1484,7 +1346,7 @@ export class TargetPanel {
   }
 
   /**
-   * Determine data precision level based on distance.
+    * Data precision level by distance:
    * FAR (>25km): minimal data
    * MEDIUM (10-25km): estimated data
    * NEAR (2-10km): good data
@@ -1499,21 +1361,15 @@ export class TargetPanel {
     return 'FAR';
   }
 
-  /** @private Get color for net ΔV display */
   _getNetDvColor(netDv) {
-    if (netDv > 0.001) return 'var(--hud-normal, #00ff88)';   // Net positive — green
-    if (netDv < -0.001) return 'var(--hud-warning, #ff4444)';  // Net negative — red
-    return 'var(--hud-label, #aaaaaa)';                       // Neutral — grey
+    if (netDv > 0.001) return 'var(--hud-normal, #00ff88)';
+    if (netDv < -0.001) return 'var(--hud-warning, #ff4444)';
+    return 'var(--hud-label, #aaaaaa)';
   }
 
-  // ==========================================================================
-  // ST-6.3: MOID BADGE RENDERING
-  // ==========================================================================
-
   /**
-   * u15b D7: glass is read when text is drawn. The hub flips GestureHints AFTER this panel is built, so the constructor's
-   * `_glass` is false on a real iPad; an explicit ctor `glass: false` still wins.
-   * @private
+   * @private Glass is read when text is drawn: the hub flips GestureHints AFTER this panel is built, so the
+   * constructor's `_glass` is false on a real iPad; an explicit ctor `glass: false` still wins.
    * @returns {boolean}
    */
   _glassNow() {
@@ -1522,11 +1378,8 @@ export class TargetPanel {
   }
 
   /**
-   * Render a small coloured MOID badge next to target name.
-   * Returns empty string if no badge applicable.
-   * @private
-   * @param {object} target — cached target with optional moidBadge
-   * @returns {string} HTML snippet
+   * @private Small coloured MOID badge next to the target name.
+   * @returns {string} HTML snippet ('' if no badge applies)
    */
   _renderMoidBadge(target) {
     const badge = target.moidBadge;
@@ -1538,9 +1391,7 @@ export class TargetPanel {
   }
 
   /**
-   * Render MOID stat line for expanded (selected) target row.
-   * @private
-   * @param {object} target
+   * @private MOID stat line for the expanded (selected) row.
    * @returns {string} HTML snippet (empty if no MOID data)
    */
   _renderMoidStat(target) {
@@ -1551,7 +1402,6 @@ export class TargetPanel {
     const color = badge === 'HI' ? C.BADGE_COLOR_HI
       : badge === 'MD' ? C.BADGE_COLOR_MD
       : badge === 'LO' ? C.BADGE_COLOR_LO : 'var(--hud-dim, #888888)';
-    // Format: km with 1 decimal when ≥1 km; metres when <1 km
     const str = moid >= 1000 ? `${(moid / 1000).toFixed(1)} km` : `${moid.toFixed(0)} m`;
     return `\n        <div class="econ-line"><span style="color:${color}">MOID: ${str}</span></div>`;
   }

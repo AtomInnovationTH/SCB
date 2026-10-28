@@ -9,9 +9,7 @@ import { Events } from '../core/Events.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 
 const SAVE_KEY = StorageKeys.SAVE;
-// F1 save-guard: a New Game copies the existing save here before deleting it,
-// so an accidental Enter-on-menu (which maps to START) is recoverable instead
-// of an instant, silent data loss.
+// a New Game copies the existing save here before deleting it: an accidental Enter-on-menu maps to START
 const SAVE_BACKUP_KEY = StorageKeys.SAVE_BACKUP;
 const SAVE_VERSION = 1;
 
@@ -36,11 +34,7 @@ class PersistenceManager {
     return this._resetLocked === true;
   }
 
-  /**
-   * Check if localStorage is available (some browsers block it).
-   * @private
-   * @returns {boolean}
-   */
+  /** localStorage can be blocked by the browser. */
   _checkStorage() {
     try {
       const test = '__sc_storage_test__';
@@ -56,13 +50,8 @@ class PersistenceManager {
   /**
    * Save game data to localStorage.
    * @param {object} data - Game state to persist
-   * @param {number}  data.credits
-   * @param {number}  data.totalScore
-   * @param {number}  data.missionNumber
-   * @param {number}  data.debrisCleared
-   * @param {string[]} data.upgrades        - Array of purchased upgrade IDs
+   * @param {string[]} data.upgrades        - purchased upgrade IDs
    * @param {object}  data.resourceMaxes    - { xenonMax, coldGasMax, batteryMax, currentFuelId, tankGasId, … } (ResourceSystem.serialize())
-   * @param {object}  data.stats            - Aggregate statistics
    * @returns {boolean} Whether save succeeded
    */
   save(data) {
@@ -76,8 +65,8 @@ class PersistenceManager {
         totalScore: data.totalScore ?? 0,
         missionNumber: data.missionNumber ?? 1,
         debrisCleared: data.debrisCleared ?? 0,
-        // Capture-credit taper total (ScoringSystem.captureCreditsEarned): without it a reload + CONTINUE re-opened full-price capture income.
-        // Written only when above 0; an old save lacks it and loads as 0.
+        // Capture-credit taper total (ScoringSystem.captureCreditsEarned): without it a reload + CONTINUE re-opens full-price
+        // capture income. Written only when above 0; an old save loads as 0.
         ...(Number.isFinite(data.captureCreditsEarned) && data.captureCreditsEarned > 0 ? { captureCreditsEarned: data.captureCreditsEarned } : {}),
         upgrades: data.upgrades ?? [],
         resourceMaxes: data.resourceMaxes ?? {},
@@ -90,119 +79,80 @@ class PersistenceManager {
           debrisByTier: data.stats?.debrisByTier ?? { data: 0, deorbit: 0, capture: 0 },
         },
         subsystemEvents: data.subsystemEvents || null,
-        // Codex unlock/seen state — contributed via PERSISTENCE_GATHER by
-        // CodexSystem. Purely additive (no SAVE_VERSION bump): old saves lack
-        // this key and CodexSystem's load guard handles its absence.
+        // save() is a WHITELIST: a key that a read-modify-write setter writes (setCeremonyFlag) but that is missing here
+        // is silently dropped on the next write. Keys marked "gather" arrive via PERSISTENCE_GATHER. Every key is additive
+        // (no SAVE_VERSION bump): an old save lacks it and the restorer guards its absence.
+        // Codex unlock/seen state (gather: CodexSystem).
         codex: data.codex ?? null,
-        // Mission-coach chapter completion — contributed via PERSISTENCE_GATHER by
-        // MissionCoach (save.missionCoach = {version, completedByMission}). This
-        // whitelist previously dropped it, so coached chapters re-fired on every
-        // reload+CONTINUE despite MissionCoach's "coached once" contract. Additive
-        // (no SAVE_VERSION bump): MissionCoach._restore guards its own absence.
-        // (Bosses' issBoss/starlinkBoss are intentionally NOT persisted — per-run.)
+        // Mission-coach chapter completion {version, completedByMission} (gather: MissionCoach): "coached once" holds across
+        // reload+CONTINUE only if listed here. (Bosses' issBoss/starlinkBoss are intentionally NOT persisted — per-run.)
         missionCoach: data.missionCoach ?? null,
-        // Glossary first-use seen-state — contributed via PERSISTENCE_GATHER by
-        // GlossaryState (§11.8). Additive (no SAVE_VERSION bump): old saves lack
-        // this key and GlossaryState's restore guard handles its absence.
+        // Glossary first-use seen-state (gather: GlossaryState).
         glossary: data.glossary ?? null,
-        // Zoom Ladder view (D5, Wave 5 Session G): the floor + z01 the player
-        // left, `{ floor, z01 }` — contributed via PERSISTENCE_GATHER by
-        // main.js (LadderController.viewState) ONLY while Constants.LADDER.
-        // ENABLED, restored on PERSISTENCE_LOADED before the first engage of a
-        // continued run. Additive (no SAVE_VERSION bump): old saves lack it
-        // and the restore validates + defaults. Unlike the other contributors
-        // it is OMITTED when absent (not `null`): with the ladder off nothing
-        // gathers it, and the flag-off save blob must stay byte-identical.
+        // Zoom Ladder view `{ floor, z01 }` the player left (gather: main.js, LadderController.viewState, ONLY while
+        // Constants.LADDER.ENABLED); restored on PERSISTENCE_LOADED before the first engage of a continued run. Unlike the
+        // others it is OMITTED when absent (not `null`): the flag-off save blob must stay byte-identical.
         ...(data.ladder != null ? { ladder: data.ladder } : {}),
-        // Skill mastery/XP — contributed via PERSISTENCE_GATHER by SkillsSystem
-        // (saveData.skills = _serialize()). Additive (no SAVE_VERSION bump):
-        // SkillsSystem's restore guards `save.skills` absence on old saves.
+        // Skill mastery/XP (gather: SkillsSystem).
         skills: data.skills ?? null,
-        // Power-bus allocations — handed in directly by GameFlowManager.saveGame
-        // (powerDistribution.serialize()) and restored by powerDistribution
-        // .restore(save.power). Additive; restore takes `|| null`.
+        // Power-bus allocations (handed in by GameFlowManager.saveGame, powerDistribution.serialize()).
         power: data.power ?? null,
-        // Fleet launch-speed dial (Item 100) — handed in by saveGame, restored
-        // AFTER the upgrade replay so the equipped spring tier clamps it.
-        // Additive; the restore is `typeof save.launchSpeed === 'number'`-guarded.
+        // Fleet launch-speed dial (saveGame): restored AFTER the upgrade replay so the equipped spring tier clamps it.
         launchSpeed: data.launchSpeed ?? null,
-        // Elevator-contract mass accumulated toward the WIN condition (Phase 5)
-        // — handed in by saveGame (shopScreen.getContractMass()). Dropping this
-        // reset a win-condition track to 0 on every reload+CONTINUE. `?? 0`
-        // matches the restore's truthy guard and the getContractMass() default.
+        // Elevator-contract mass accumulated toward the WIN condition (saveGame, shopScreen.getContractMass()).
+        // `?? 0` matches the restore's truthy guard and the getContractMass() default.
         contractMassKg: data.contractMassKg ?? 0,
-        // Subsystem health + battery depth-of-discharge state (ST-6.7) —
-        // contributed via PERSISTENCE_GATHER by EnvironmentSystem. Additive:
-        // its restore returns early on `!save.environment`.
+        // Subsystem health + battery depth-of-discharge state (gather: EnvironmentSystem).
         environment: data.environment ?? null,
-        // Seeded space-weather replay cursor + fired-event set (ST-6.1) —
-        // contributed via PERSISTENCE_GATHER by SpaceWeatherSystem. Additive:
-        // legacy saves without it simply start the replay from hour 0.
+        // Seeded space-weather replay cursor + fired-event set (gather: SpaceWeatherSystem); without it the replay
+        // starts from hour 0.
         spaceWeatherReplay: data.spaceWeatherReplay ?? null,
-        // ST-9.2: Active arm tier (Y0_QUAD / Y1_HEX / Y3_OCTO)
+        // Active arm tier (Y0_QUAD / Y1_HEX / Y3_OCTO)
         armTier: data.armTier ?? 'Y0_QUAD',
-        // Q2 Net-Launch Ceremony first-time flags (CEREMONY_REDESIGN.md §5.6)
+        // Net-launch ceremony first-time flags (archive/CEREMONY_REDESIGN.md §5.6)
         ceremonyFlags: {
           FIRST_NET_DEPLOY: data.ceremonyFlags?.FIRST_NET_DEPLOY ?? false,
-          // First-depot settlement + framing (first-credit legibility plan):
-          // gates the one-time affordability floor and the investment-framing
-          // shop header. Profile-permanent — survives GAMEOVER_CONTINUE.
+          // Gates the one-time affordability floor and the investment-framing shop header. Profile-permanent: survives
+          // GAMEOVER_CONTINUE.
           FIRST_DEPOT_VISITED: data.ceremonyFlags?.FIRST_DEPOT_VISITED ?? false,
-          // Mother whale-net first deploy (mother-net-reel plan §11.3): gates
-          // the full 7-beat first-ever cinematic vs the trimmed highlights cut.
-          // MUST be listed here — this block is a WHITELIST, so any flag that
-          // setCeremonyFlag() writes but that is missing from this list is
-          // silently dropped on the next save() (setCeremonyFlag still returns
-          // true), and getCeremonyFlag() then reads false forever.
+          // Mother whale-net first deploy: gates the full 7-beat first-ever cinematic vs the trimmed highlights cut.
+          // MUST be listed here: a flag setCeremonyFlag() writes that is missing from this list is silently dropped on
+          // the next save() (setCeremonyFlag still returns true) and getCeremonyFlag() reads false forever.
           FIRST_MOTHER_NET_DEPLOY: data.ceremonyFlags?.FIRST_MOTHER_NET_DEPLOY ?? false,
         },
-        // t1-stranded D4: true ONLY on the save written when the run enters GAME_OVER
-        // (GameFlowManager.saveGame({ gameOver: true })). MENU_CONTINUE reads it and
-        // applies the game-over screen's CONTINUE rule (half the credits, fresh mission).
-        // Additive (no SAVE_VERSION bump): old saves lack it and load as a normal save.
+        // true ONLY on the save written when the run enters GAME_OVER (GameFlowManager.saveGame({ gameOver: true })).
+        // MENU_CONTINUE reads it and applies the game-over screen's CONTINUE rule (half the credits, fresh mission).
         gameOver: data.gameOver === true,
-        // u1-resupply-stop F2: true when the save is written AT the resupply stop that has no boundary count to
-        // re-derive it from (the game-over shop: 0 cleared). MENU_CONTINUE reopens the stop on it; a save without
-        // the key falls back to the mission-boundary count. Additive (no SAVE_VERSION bump).
+        // true when the save is written AT the resupply stop that has no boundary count to re-derive it from (the
+        // game-over shop: 0 cleared). MENU_CONTINUE reopens the stop on it; without the key it uses the mission-boundary count.
         resupplyStop: data.resupplyStop === true,
-        // Nets step 3 slice 2b (FEATURE_FLAGS.FIELDS_BY_HEIGHT): the field she is at, which pieces of each field are left,
-        // and the days of ship time the trips have added. Written only when the caller has them (the flag is on), so a flag-off
-        // save is byte-for-byte what it was. Additive (no SAVE_VERSION bump): an old save loads as "fresh, at the start field".
+        // FEATURE_FLAGS.FIELDS_BY_HEIGHT: the field she is at, which pieces of each field are left, and the days of ship
+        // time the trips have added. Written only when the caller has them (flag on), so a flag-off save is byte-identical.
+        // An old save loads as "fresh, at the start field".
         ...(data.fields != null ? { fields: data.fields } : {}),
         ...(Number.isFinite(data.shipDays) && data.shipDays > 0 ? { shipDays: data.shipDays } : {}),
-        // Nets step 3 lane 3f (DECISIONS §34 row 10): each daughter's ion fuel (%) and cold gas (kg), [{ id, fuel, coldGasKg }]. Handed in
-        // by saveGame (armManager.getSupplyState()); a game-over save passes none, so CONTINUE starts every tank full. Written only
-        // when given: an old save, and a game-over save, load with full tanks as before. Additive (no SAVE_VERSION bump).
+        // DECISIONS §34 row 10: each daughter's ion fuel (%) and cold gas (kg), [{ id, fuel, coldGasKg }] (saveGame,
+        // armManager.getSupplyState()). A game-over save passes none, so CONTINUE starts every tank full; written only when given.
         ...(Array.isArray(data.daughters) ? { daughters: data.daughters } : {}),
-        // Reaction-wheel kit: the wheels' stored spin [x, y, z] in N·m·s, written only when the kit is aboard (saveGame). An old
-        // save and a no-kit save carry none and the wheels stay empty. Additive (no SAVE_VERSION bump).
+        // Reaction-wheel kit: the wheels' stored spin [x, y, z] in N·m·s, written only when the kit is aboard (saveGame);
+        // without it the wheels stay empty.
         ...(Array.isArray(data.wheelH) ? { wheelH: data.wheelH } : {}),
-        // Nets step 3 slice 5 (lane 5b, P5): the big pieces still aboard (counted at the catch, paid when disposed of): [{type, name, material,
-        // mass, size, owner, areaM2, fieldId, fieldRow, fate, holder, caughtAtMs, members?}]. Handed in by saveGame (BigPieces ledger); written
-        // only when there are some, so a save with none (every old one, and a game-over save) is byte-for-byte what it was. Additive.
+        // The big pieces still aboard (counted at the catch, paid when disposed of): [{type, name, material, mass, size,
+        // owner, areaM2, fieldId, fieldRow, fate, holder, caughtAtMs, members?}] (saveGame, BigPieces ledger); written only
+        // when there are some, so a save with none (every old one, and a game-over save) is byte-identical.
         ...(Array.isArray(data.bigPieces) && data.bigPieces.length ? { bigPieces: data.bigPieces } : {}),
-        // big-rules (DECISIONS §49 row 3): the characterising steps already paid for pieces over her catch limit, `[{k: 'fieldId|fieldRow',
-        // s: ['find','orbit',...]}]` - contributed via PERSISTENCE_GATHER by DossierSystem (piece ids do not survive a reload, a field and
-        // its row do), restored by GameFlowManager on Continue so a reload never pays a step twice. Written only when something was paid. Additive.
+        // DECISIONS §49 row 3: the characterising steps already paid for pieces over her catch limit, `[{k: 'fieldId|fieldRow',
+        // s: ['find','orbit',...]}]` (gather: DossierSystem; piece ids do not survive a reload, a field and its row do),
+        // restored by GameFlowManager on Continue so a reload never pays a step twice. Written only when something was paid.
         ...(Array.isArray(data.inspectPaid) && data.inspectPaid.length ? { inspectPaid: data.inspectPaid } : {}),
-        // Nets step 3 slice 5 (lane 5e, E7): the cargo hold's stacks `{entries: [{metalId, name, massKg, color, ispAsThrust, marketValue}]}`
-        // (CargoSystem.serialize): the orbit metal the tip furnaces make, and every other metal the hold carries. Written only when the hold holds
-        // something. Additive (no SAVE_VERSION bump).
+        // The cargo hold's stacks `{entries: [{metalId, name, massKg, color, ispAsThrust, marketValue}]}` (CargoSystem.serialize):
+        // the orbit metal the tip furnaces make, and every other metal the hold carries. Written only when the hold holds something.
         ...(data.cargoHold && Array.isArray(data.cargoHold.entries) && data.cargoHold.entries.length ? { cargoHold: data.cargoHold } : {}),
-        // save() is a WHITELIST: a key that a read-modify-write setter writes
-        // (as setCeremonyFlag does with ceremonyFlags above) but that is
-        // missing from this list is silently dropped on the next write. (The
-        // launch-phase, deploy-state, tether-reel, bridle-ring and capture-net
-        // inventory slices were removed 2026-10-16/17; an old save that still
-        // carries their keys loads fine and they are dropped on the next
-        // write.) Additive (no SAVE_VERSION bump).
       };
 
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
-      // (Events.PERSISTENCE_SAVED is intentionally not emitted: it has no
-      // subscribers. The save lifecycle is covered by PERSISTENCE_GATHER, and
-      // self-managing systems restore via PERSISTENCE_LOADED. The event name is
-      // kept in Events.js as a reserved hook for future external consumers.)
+      // Events.PERSISTENCE_SAVED is deliberately not emitted: no subscribers (the lifecycle is PERSISTENCE_GATHER /
+      // PERSISTENCE_LOADED); the name is kept in Events.js as a reserved hook.
       return true;
     } catch (e) {
       console.error('[PersistenceManager] Save failed:', e.message);
@@ -211,7 +161,7 @@ class PersistenceManager {
   }
 
   /**
-   * Read and parse save data from localStorage.
+   * Read and parse save data from localStorage; emits PERSISTENCE_LOADED.
    * @returns {object|null} Parsed save data, or null if no valid save exists
    */
   load() {
@@ -223,7 +173,6 @@ class PersistenceManager {
 
       const data = JSON.parse(raw);
 
-      // Version compatibility check
       if (!data || data.version !== SAVE_VERSION) {
         console.warn('[PersistenceManager] Incompatible save version, ignoring');
         return null;
@@ -238,9 +187,7 @@ class PersistenceManager {
   }
 
   /**
-   * Read save data without emitting events.
-   * For use by self-managing systems in PERSISTENCE_LOADED handlers
-   * (avoids infinite recursion since load() emits PERSISTENCE_LOADED).
+   * Read save data without emitting events: for PERSISTENCE_LOADED handlers (load() emits it, so it would recurse).
    * @returns {object|null} Parsed save data, or null if no valid save exists
    */
   peek() {
@@ -263,22 +210,15 @@ class PersistenceManager {
   }
 
   /**
-   * Get the persisted arm tier key (ST-9.2).
-   * Falls back to 'Y0_QUAD' on missing/legacy saves (backward-compat).
-   * @returns {string} One of 'Y0_QUAD', 'Y1_HEX', 'Y3_OCTO'
+   * @returns {string} One of 'Y0_QUAD' (default on a missing/legacy save), 'Y1_HEX', 'Y3_OCTO'
    */
   getArmTier() {
     const data = this.peek();
     return data?.armTier ?? 'Y0_QUAD';
   }
 
-  // =========================================================================
-  // Q2 NET-LAUNCH CEREMONY FIRST-TIME FLAGS — CEREMONY_REDESIGN.md §5.6
-  // =========================================================================
-
   /**
-   * Read a ceremony first-time flag (Q2 net-launch ceremony).
-   * Returns false for missing/legacy saves (backward-compat).
+   * Read a ceremony first-time flag; false for missing/legacy saves.
    * @param {string} name — flag name (e.g., 'FIRST_NET_DEPLOY')
    * @returns {boolean}
    */
@@ -288,10 +228,8 @@ class PersistenceManager {
   }
 
   /**
-   * Persist a ceremony first-time flag (Q2 net-launch ceremony).
-   * Read-modify-write: loads existing save, patches ceremonyFlags[name], writes back.
+   * Persist a ceremony first-time flag. Read-modify-write: patches ceremonyFlags[name] in the existing save.
    * @param {string} name — flag name (e.g., 'FIRST_NET_DEPLOY')
-   * @param {boolean} value
    * @returns {boolean} Whether save succeeded
    */
   setCeremonyFlag(name, value) {
@@ -301,10 +239,6 @@ class PersistenceManager {
     return this.save(data);
   }
 
-  /**
-   * Quick check whether a valid save exists.
-   * @returns {boolean}
-   */
   hasSave() {
     if (!this._storageAvailable) return false;
 
@@ -318,9 +252,6 @@ class PersistenceManager {
     }
   }
 
-  /**
-   * Delete all save data from localStorage.
-   */
   deleteSave() {
     if (!this._storageAvailable) return;
 
@@ -332,10 +263,8 @@ class PersistenceManager {
   }
 
   /**
-   * F1 save-guard: copy the current save to a backup slot before it is deleted
-   * by a New Game. Enter on the menu maps to START, which calls deleteSave();
-   * backing up first makes that accidental loss recoverable. No-op (returns
-   * false) when storage is unavailable or there is no save to back up.
+   * Copy the current save to the backup slot before a New Game deletes it (Enter on the menu maps to START, which
+   * calls deleteSave()). False when storage is unavailable or there is no save.
    * @returns {boolean} Whether a backup was written.
    */
   backupSave() {
@@ -353,8 +282,7 @@ class PersistenceManager {
   }
 
   /**
-   * Read the raw backup slot written by backupSave(). Returns the parsed save
-   * object, or null when absent/invalid. Version-checked like peek().
+   * Parsed backup slot written by backupSave(), or null when absent/invalid. Version-checked like peek().
    * @returns {object|null}
    */
   peekBackup() {
@@ -371,23 +299,14 @@ class PersistenceManager {
     }
   }
 
-  /**
-   * Whether a recoverable backup save exists (written by backupSave()).
-   * @returns {boolean}
-   */
   hasBackup() {
     return this.peekBackup() !== null;
   }
 
-  /**
-   * Return the current save format version.
-   * @returns {number}
-   */
   getVersion() {
     return SAVE_VERSION;
   }
 }
 
-/** Singleton instance */
 export const persistenceManager = new PersistenceManager();
 export default persistenceManager;
