@@ -4263,8 +4263,8 @@ async function init() {
   });
   // The 250 ms timer and the come-back tick exist only while show mode is on (off = no timer, no listener).
   wireIdleTimers({ showMode, kit: _idleKit, doc: document });
-  // Show mode: the untouched start screen freezes after 2 min (`?idleS=N` scales it to 2 x N, show mode only).
-  _menuFreezeS = menuFreezeS(idleOverrideS(typeof location !== 'undefined' ? location.search : '', showMode.isOn()));
+  // Show mode: the untouched start screen freezes after 2 min (`?idleS=N` scales it to 2 x N, show mode and dev host only, §47 row 8).
+  _menuFreezeS = menuFreezeS(idleOverrideS(devSearch(), showMode.isOn()));
   _menuUntouchedSince = performance.now();
   // The intro launch ceremony is a camera ride: native while it flies (the
   // same TeachingSystem blocker signal pair — plan Session I step 2).
