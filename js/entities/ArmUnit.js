@@ -4707,7 +4707,10 @@ export class ArmUnit {
     // TETHER_SAFETY_MARGIN as the half-angle).  Same physical meaning as
     // before: prevents the pilot from pitching so far the daughter goes
     // behind the debris or wraps the tether vertically.
-    const phiLimit = this._phiMax - (degToRad(SK.TETHER_SAFETY_MARGIN));
+    // C1: an inspecting daughter may level a full 90 degrees (a pole arrival, straight along the mother's line, otherwise stops 20 degrees short
+    // of the equator, a cap of 70 degrees round the pole where no two directions are 160 apart); her tether is kept clear by the arc's own limit.
+    let phiLimit = this._phiMax - (degToRad(SK.TETHER_SAFETY_MARGIN));
+    if (inspecting) phiLimit = Math.max(phiLimit, degToRad(90));
     this._orbitPhi = clamp(this._orbitPhi, -phiLimit, phiLimit);
 
     // ── Clamp θ delta around entry (tether-tangle + disorientation safety) ──
@@ -5384,12 +5387,31 @@ export class ArmUnit {
     if (this._standoffTargetR > hold) this._standoffTargetR = hold;
     if (!this._standoffSettling && this._standoffR > hold) this._standoffR = hold;
     if (this._standoffSettling) { this._thetaRate = 0; return false; }       // arrive first
-    const sw = this._inspectSweep || (this._inspectSweep = { dir: 1, hit: 0, armed: true, prevClr: Infinity });
+    const sw = this._inspectSweep || (this._inspectSweep = { dir: 1, hit: 0, armed: true, prevClr: Infinity, edges: 0 });
     const lim = (SK.THETA_LIMIT_DEG || 120) * Math.PI / 180;
+    // C1/C2: the dossier stamps what is still open on her piece (fly-around, spin). Fresh stamp -> she goes by it; none or stale -> by her arc.
+    const I = Constants.INSPECT;
+    const needs = target._inspectNeeds;
+    let fresh = false;
+    if (needs && Number.isFinite(needs.age)) { needs.age += dt; fresh = needs.age <= I.STALE_S; }
+    if (fresh && !needs.inspect) {
+      // the fly-around is paid: she stays at her hold (within the spin range) until the spin is measured, then goes home
+      if (!needs.spin) {
+        this._inspectSweep = null;
+        eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.displayName}: Inspection done, coming home.`, priority: 'info' });
+        this.recallFromStationKeep();
+        return true;
+      }
+      this._thetaRate = 0;
+      this._phiRate = 0;
+      this._radiusRate = 0;
+      return false;
+    }
     // B1: the tether is a straight line mother -> her, and the piece (a sphere of radius sizeMeter / 2) must stay clear of it. Behind the
     // piece (seen from the mother) the line runs through it, so the arc turns round before: at the first frame the line is within
     // (radius + TETHER_CLEAR_M + TETHER_TURN_M) of the centre and still closing. It re-arms once the line has opened out again.
-    const I = Constants.INSPECT;
+    // C1: once both ends of her arc are seen and the fly-around is still open, the turn margin drops to 0 (she widens the sweep to the clearance limit).
+    const turn = fresh && sw.hit === 3 ? 0 : I.TETHER_TURN_M;
     const need = (target.sizeMeter || 0) / 2 + I.TETHER_CLEAR_M;
     const clr = this._inspectTetherClearM(target);
     let edge = 0;                                   // +1: the limit of the +direction was reached, -1: of the - direction
@@ -5397,14 +5419,21 @@ export class ArmUnit {
     else if (this._orbitTheta <= -lim + 1e-6 && sw.dir < 0) edge = -1;
     if (clr != null) {
       if (!sw.armed && clr > need + 2 * I.TETHER_TURN_M) sw.armed = true;
-      if (sw.armed && !edge && clr < need + I.TETHER_TURN_M && clr <= sw.prevClr) { edge = sw.dir; sw.armed = false; }
+      if (sw.armed && !edge && clr < need + turn && clr <= sw.prevClr) { edge = sw.dir; sw.armed = false; }
       sw.prevClr = clr;
     }
     if (edge) {
       sw.hit |= edge > 0 ? 1 : 2;
-      if (sw.hit === 3) {                           // both ends of her arc seen: that is the inspection
+      sw.edges++;
+      if (sw.hit === 3 && !fresh) {                 // no dossier stamp: both ends of her arc seen is the inspection
         this._inspectSweep = null;
         eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.displayName}: Inspection done, coming home.`, priority: 'info' });
+        this.recallFromStationKeep();
+        return true;
+      }
+      if (sw.hit === 3 && sw.edges >= I.GIVE_UP_EDGES) {   // she has swept as wide as the line allows and the fly-around is still open
+        this._inspectSweep = null;
+        eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.displayName}: Can't see it from all sides from here, the line is in the way. Coming home.`, priority: 'info' });
         this.recallFromStationKeep();
         return true;
       }

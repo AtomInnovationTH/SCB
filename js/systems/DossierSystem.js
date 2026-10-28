@@ -482,6 +482,11 @@ export class DossierSystem {
       pr.spinS += step;
       if (pr.spinS >= DossierSystem._spinTurnS(target)) this._payInspect(target, key, 'spin', ip.pay.spin);
     }
+
+    // Round 5 (C1/C2): tell the daughter on this piece which of the two steps she can earn at her hold are still open. She goes home when
+    // both are done, not when her arc ends (ArmUnit._driveInspectSweep). `age` counts the arm's seconds since this stamp; a stamp that is not
+    // renewed (the piece was deselected) goes stale and she falls back to her arc.
+    target._inspectNeeds = { inspect: !paid.has('inspect'), spin: !paid.has('spin'), age: 0 };
   }
 
   /** @private Pay one step once: a SCORING_AWARD and one plain Houston line (held back during onboarding, like the survey bounty). */

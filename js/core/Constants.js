@@ -1390,6 +1390,8 @@ export const Constants = {
     SAMPLE_DEG:     5,       // a new direction is kept only after it moved this far from every one kept (estimate)
     TETHER_CLEAR_M: 1,       // an inspecting daughter keeps the whole mother-to-daughter line at least sizeMeter/2 + this from the piece's centre (the piece is taken as a sphere; B1 2026-10-28: the line crossed it)
     TETHER_TURN_M:  0.5,     // ...and turns her arc round this much before that (her position lags her goal by a few frames)
+    GIVE_UP_EDGES:  8,       // C1: she keeps sweeping (the turn margin dropped to 0 after the first full arc) until the fly-around is paid; after this many turn-rounds without it she says why and goes home (estimate)
+    STALE_S:        2,       // C1/C2: the dossier's "still open" stamp on her piece counts for this many of her seconds; older (piece deselected) she goes by her arc
     SPIN_RANGE_M:   50,      // measure the spin: within this (estimate)...
     SPIN_MIN_S:     30,      // ...for one full turn of the piece AS DRAWN (DossierSystem.drawnSpinRadS: the draw's own cap, DEBRIS_MAX_VISUAL_TUMBLE_DEG_S, applies), game seconds, accumulated; this long only for a piece that does not spin
   },
