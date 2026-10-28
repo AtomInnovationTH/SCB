@@ -15,6 +15,7 @@ import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { strutTipMeters, heldCargoPlumeConflictAt, heldCargoFoulsCorridorAt, suggestCargoArm } from '../systems/CoMCalculator.js';
+import { seatHullClear, seatHullPrime } from '../systems/SeatHullClear.js';
 import { armProfile, profileClearAt, profileValid, startProfile, stepProfile, kitFor, kitStep } from '../systems/HoldWingClear.js';
 // Nets step 3 slice 5 (lane 5b): a pending BIG piece leaves the ledger when its rack drops it (reset), and is never 'paid' for the unload.
 import { bigPieces } from '../systems/BigPieces.js';
@@ -231,7 +232,7 @@ function _inboundMotherNetRadiusM(mgr) {
 }
 
 const _duckAnchor = { x: 0, y: 0, z: 0 };
-const _duckPlanOut = { rad: null, kind: 0 };
+const _duckPlanOut = { rad: null, kind: 0, foul: false };
 
 /**
  * net-duck D2 + hold-clear D4/D5: the ONE decision of where a holder goes for an inbound net of corridor radius `radiusM`, read by the duck
@@ -250,7 +251,7 @@ const _duckPlanOut = { rad: null, kind: 0 };
  */
 function _duckPlan(mgr, i, radiusM) {
   const out = _duckPlanOut;
-  out.rad = null; out.kind = 0;
+  out.rad = null; out.kind = 0; out.foul = false;
   const arm = mgr.arms[i];
   berthAnchorLocalInto(mgr.playerSatellite, 0, _duckAnchor);
   const eff = _strutLiveAlpha(arm);
@@ -280,8 +281,11 @@ function _duckPlan(mgr, i, radiusM) {
     // the 34° fallback is only for a catch that clears the net at no pose at all (round 1 F4): when some pose clears the net but none is
     // wing-clear she must not drop to a 34° that is wing-clear but still fouls the corridor - D5 refuses that net (kind 2) instead
     if (!anyNetClear && wingOk(lo)) best = lo * DEG2RAD;
-    else { out.kind = anyNetClear ? 2 : 3; return out; }
+    else { out.kind = anyNetClear ? 2 : 3; if (!anyNetClear) out.foul = true; return out; }
   }
+  // big-seat F1c (review 10-28): no pose clears the net's corridor at all, so wherever she stands (the 34 deg fallback, or already there) her catch
+  // still pokes into it. The mother net must refuse (`motherNetHolderBlock`, reason 'corridor') rather than fire and wait on the corridor gate for its full reel.
+  if (!anyNetClear) out.foul = true;
   if (best < eff - dead) { out.rad = best; out.kind = 1; }
   return out;
 }
@@ -726,6 +730,8 @@ export class ArmManager {
       // invalidation reaches the cache through this handle (same injection
       // idiom as _beaconSpeedScale / _digestSunScale).
       arm._playerSatellite = this.playerSatellite;
+      arm._dockPos = dp;                                  // big-seat F2a: where SeatHullClear measures from
+      arm._seatHullGate = seatHullClear;                  // ... and the check a seated big piece must pass (ArmUnit.rackCellOffsetInto)
       // Config G geometry (ST-9.2): hinge, swing axis, azimuth — used by C-3 strut tip math
       arm._hingePosition = dp.hingePosition.clone();
       arm._dockOutward = dp.dockOutward.clone();
@@ -735,6 +741,7 @@ export class ArmManager {
       arm.initNetInventory(); // ST-9.4 C-6: fill net magazine (CAPTURE_NET flag gated)
       this.arms.push(arm);
     }
+    seatHullPrime(this.playerSatellite, this.arms);       // F3b: the obstacle set for the hull check is built now, not at the first big catch
   }
 
   /** @private Wire up eventBus listeners */
@@ -4012,7 +4019,8 @@ export class ArmManager {
    * angle and for whom some grid pose clears the net but none of those is wing-clear (`_duckPlan` kind 2: the same decision the duck makes);
    * -1 when none, or the target has no size. A catch whose wing profile is pending is finished now if the work left is small, else the answer is
    * that daughter with `_netBlockKind` 'pending' (the press says she is still stowing); 'wing' otherwise. A holder for whom no pose clears the net at all
-   * is today's case (34° + the corridor gate), not refused. Pure read apart from finishing a pending profile and `_netBlockKind`.
+   * (her catch stays in its corridor at the 34° fallback too, `_duckPlan` `foul`) is refused with `_netBlockKind` 'corridor' (big-seat F1c: it used to fire
+   * and wait on the corridor gate). Pure read apart from finishing a pending profile and `_netBlockKind`.
    * @param {{sizeMeter?:number}} target
    * @returns {number}
    */
@@ -4030,6 +4038,7 @@ export class ArmManager {
         plan = _duckPlan(this, i, radiusM);
       }
       if (plan.kind === 2) { this._netBlockKind = 'wing'; return i; }
+      if (plan.foul) { this._netBlockKind = 'corridor'; return i; }          // F1c: no pose clears the net, her catch stays in its way
     }
     return -1;
   }
@@ -4045,6 +4054,7 @@ export class ArmManager {
     if (this._netBlockKind === 'pending') return `Daughter ${n} is still stowing her catch; try again in a moment.`;
     if (arm) arm._netBlock = true;
     const c = arm && this.canMoveCatchToRadiator(index) ? ' C moves it to a radiator.' : '';
+    if (this._netBlockKind === 'corridor') return `Mother net held: Daughter ${n}'s catch is too big to get out of its way at any angle she can lower it to. K lets her catch go.${c}`;
     return `Mother net held: Daughter ${n}'s catch can't get out of its way without touching a radiator. K lets her catch go.${c}`;
   }
 

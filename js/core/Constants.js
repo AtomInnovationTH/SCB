@@ -1667,9 +1667,20 @@ export const Constants = {
     // +0.229 m over it; catches over 1.5 m at 69° and up: 216, none below, +0.154 m; over 1.5 m below 69°: 2721, 4 below (down to -0.121 m) - those the rule
     // below already refuses and lifts, so no pass exists for a pose that was not measured. The lift poses of a neighbour are unchanged in all 1103.
     // A neighbour holding a catch that passes neither test blocks the carry ('neighbour-catch'; it clears when that catch goes).
-    NEIGHBOUR_CATCH_MAX_SIZE_M: 1.5,
+    // big-seat 2026-10-28: every piece now sits at its exact 0.027 m seat (ARM_SEAT_MAX_SIZE_M = Infinity), 0.1-1.5 m nearer her than before for pieces
+    // over 1 m, so the table above was measured AGAIN with its generator (js/test/_carryNeighbour.js, carrier 0 beside daughter 2, 11 shapes x 30
+    // attitudes, at her real hold pose; tmp/nbgrid.mjs, notes tmp/notes/neighbour.md), line 0.158 m, margin asked for 0.05 m over it:
+    //   - up to 1.5 m at 34°: 0.3 m 0.600, 1 m 0.440, 1.25 m 0.300 (rocket body, att 25), 1.5 m 0.171 (same piece: 0.013 m over the line; it was 0.218);
+    //     1.75 m 0.061, 2 m -0.025 (touch). Raised poses of 1-1.5 m catches (39-64°, 1320 reads; 44 raised 1-1.25 m catches at their wing-rule pose): >= 0.270 m.
+    //   - 69° and up, lifted or held (all 30 attitudes at 69°, a third at 79 / 89 / 100°, 1.75-5 m): 1.75 and 2 m clear (0.600), 2.8 m 0.252 m (rocket
+    //     body, att 25, at 69°), 3 m 0.162 m (4 mm over the line), 4 m 23 of 660 below (touch), 5 m 62 of 598 below (down to -0.035 m, a cubesat's swing back).
+    //     Daughters 2-4 as carrier (1.25 m at 34°, 2.8 m at 69°, every other attitude): >= 0.311 and >= 0.228 m. Real wing-rule poses >= 69° of
+    //     1.5-2.8 m catches (98 reads): >= 0.441 m.
+    // So the size limit under 69° falls from 1.5 to 1.25 m, and the size limit from 69° up from 5 to 2.8 m: a catch over 2.8 m on a neighbour blocks a carry
+    // ('neighbour-catch') and cannot be lifted out of the way (`_neighbourLiftRad` answers null) until it goes.
+    NEIGHBOUR_CATCH_MAX_SIZE_M: 1.25,
     NEIGHBOUR_CATCH_HIGH_POSE_DEG: 69,     // a neighbour standing at/above this angle (measured clear with margin) ...
-    NEIGHBOUR_CATCH_HIGH_MAX_SIZE_M: 5,    // ... may hold any catch up to this size (the biggest measured)
+    NEIGHBOUR_CATCH_HIGH_MAX_SIZE_M: 2.8,  // ... may hold any catch up to this size (the biggest measured with 0.05 m to spare; it was 5)
     STRUT_REC_LO_DEG:   34,
     STRUT_REC_HI_DEG:   180,
     THETA_MAX_DEG:      133,   // no gate entry holds her petal higher: the tip band (>= 133.4°) would push it down mid-carry
@@ -1849,12 +1860,34 @@ export const Constants = {
   // then backing off so the true surface-to-surface gap is ARM_HOLD_NET_GAP_M minus this margin (the sweep sees vertices, not
   // every edge crossing, so it aims a little inside the 3 cm window: 2.7 cm). est.
   ARM_SEAT_GAP_MARGIN_M: 0.003,        // metres
-  // snug-ring: the seat sweep is for pieces up to this size (a bag, a ball, always). Bigger racked catches keep the support-plane rule:
-  // the hold-pose tables, the neighbour sweeps and the resupply satellite's haul planners were measured against that layout (est: 1.0 m)
-  ARM_SEAT_MAX_SIZE_M: 1.0,            // metres
+  // snug-ring: the seat sweep is for pieces up to this size (a bag, a ball, always). It was 1.0 m on 10-27 (bigger racked catches kept the
+  // support-plane rule: the hold poses, neighbour sweeps and satellite haul planners were measured against that layout); big-seat 10-28
+  // removed the limit (Infinity): every piece a daughter holds, up to the 5.5 m longest side in any field (CATCH_MAX_SIDE_M), seats with a
+  // true gap of 0.027 m, and the tables that read the layout were re-derived with their generators (see the Log of tmp/plans/owed-1028.md).
+  ARM_SEAT_MAX_SIZE_M: Infinity,       // metres
   // snug-ring F1a: the exact seat solve is 10-21 ms for a cubesat / 0.5 m / 1 m piece (measured), so while a piece turns on her
   // (the carried spin, the spin payoff) the last answer stands until it has turned more than SEAT_RESOLVE_DEG in her frame, and a
   // re-solve is at most one per SEAT_RESOLVE_MIN_S per catch (and one per frame across all daughters). est: 5 degrees, 0.5 s.
+  // big-seat F1a (review 10-28): over this size (m) a piece is not held at the last answer while it turns: where a big piece first touches
+  // her is not smooth in the turn (a flat side swings round: measured 0.2-4.7 times the lever, tmp/f1/ratio.mjs), so while it turns it
+  // takes the support rule (cannot overlap) and is solved once it is still. It is the old 1 m cap, kept for this one rule: up to 1 m the
+  // 5 degree / 0.5 s rule above was measured clear (test-DaughterSeatRing.js F2a).
+  SEAT_TURN_GUARD_OVER_M: 1.0,         // metres
+  SEAT_TURN_FREE_M: 0.002,             // metres: the piece's farthest point has moved less than this since the solve: the answer stands (est: under the 3 mm margin)
+  SEAT_TURN_FAST_M: 0.001,             // metres per frame (F2b: per frame, not per call): a farthest point moving faster than this (60 mm/s at 60 fps) is "turning" (est)
+  SEAT_TURN_SLOW_MAX_M: 0.04,          // metres: a creeping piece whose solve is held back by the budget stands out by what it has moved, up to this (est)
+  // big-seat F2a (re-review 10-28): a piece over this size (m) that is seated is also measured against the mother (hull, nose ring, solar wings, the
+  // other struts) at every hold-pose grid angle (SeatHullClear.js); within CLEAR_M + SAMPLE_MARGIN_M anywhere, it keeps the old support-rule distance
+  // for as long as its attitude on her stands. The old layout was 666 mm clear at the least (measured 10-28), so the old distance is the safe one.
+  SEAT_HULL: {
+    OVER_M: 1.0,                       // metres: up to this the seat was measured clear of the mother in the 10-27 lane (estimate: the 3-5.5 m pieces are the ones that reach)
+    CLEAR_M: 0.02,                     // metres: the line the owner's "never touches" is held to (the seat's own window is 0.02-0.032)
+    SAMPLE_MARGIN_M: 0.01,             // metres on top: the strut poses and wing tilts are samples (est: the radiator check uses the same 0.01)
+    STRUT_POSES_DEG: [34, 67, 100],    // degrees: the other three struts' angles measured (their rest angle, the middle, the hold cap)
+    WING_TILT_SAMPLES: [-1, -0.5, 0, 0.5, 1], // x the ship's largest sun-tracking tilt (30 degrees at Y0): the wings' tilts measured
+    CELL_M: 0.25,                      // metres: the triangle grid's cell
+    MAX_QUERIES: 40000,                // distance queries one pose may spend on one grid before the rest counts as blocked (never a false clear)
+  },
   SEAT_RESOLVE_DEG: 5,                 // degrees
   SEAT_RESOLVE_MIN_S: 0.5,             // seconds
   // snug-ring F2a: a re-solve moves the seat by up to 2-3 cm (measured, 1 m piece); the piece eases to each answer, at most this much
@@ -1938,13 +1971,20 @@ export const Constants = {
   // Read by ArmManager's re-pose driver and the S9 tests; the plume CHECK
   // itself is band-free (it tests geometry, not policy).
   // 2026-10-23 roll-90 (hinge roll): these two rows re-measure at 120° / 130°; the floors 125° / 134° still clear, by 5° / 4°.
+  // big-seat 2026-10-28 (the 1 m seat limit is gone: every rack piece sits at its true 0.027 m gap, nearer her, so the larger pieces reach further into
+  // the plumes): re-measured with the same generator (scripts/probes/rack-snug-gen.mjs plume, js/test/_rackSnugPlume.js; `CAP=1` reproduces the rows
+  // above 15 / 31 / 55 / 89 and the roll-90 120 / 130 exactly, the check that the generator is the old one). maxBiteADeg: 15, 31 as before; 2.8 m
+  // 55 -> 60; 5 m 89 -> 136 (a 5 m dead satellite, attitude 16); the two rows above 5 m bite at EVERY strut angle (180°; floors 190° = never clear).
+  // By shape (worst of the 30 attitudes, old -> new): rocket body 5 m 61 -> 64, fragment 5 m 64 -> 65, mission debris 54 -> 54, dead satellite
+  // 4 m 75 -> 94, 4.5 m 82 -> 113, 5 m 89 -> 136, 5.5 m 95 -> 180 (tmp/bite-sizes.mjs). Nothing reads rows above 5 m at run time (the hold pose
+  // is the exact check at the real angle, ArmManager.holdPoseAlpha, never the ladder; a daughter's net takes at most 5.5 m, 500 kg).
   PLUME_CARGO_ALPHA_LADDER: [
     { maxSizM: 0.5,  maxBiteADeg: 15,  safeAlphaMinRad: 25 * Math.PI / 180 },
     { maxSizM: 1.5,  maxBiteADeg: 31,  safeAlphaMinRad: 41 * Math.PI / 180 },
-    { maxSizM: 2.8,  maxBiteADeg: 55,  safeAlphaMinRad: 65 * Math.PI / 180 },
-    { maxSizM: 5.0,  maxBiteADeg: 89,  safeAlphaMinRad: 99 * Math.PI / 180 },
-    { maxSizM: 8.0,  maxBiteADeg: 115, safeAlphaMinRad: 125 * Math.PI / 180 },
-    { maxSizM: Infinity, maxBiteADeg: 124, safeAlphaMinRad: 134 * Math.PI / 180 },
+    { maxSizM: 2.8,  maxBiteADeg: 60,  safeAlphaMinRad: 70 * Math.PI / 180 },
+    { maxSizM: 5.0,  maxBiteADeg: 136, safeAlphaMinRad: 146 * Math.PI / 180 },
+    { maxSizM: 8.0,  maxBiteADeg: 180, safeAlphaMinRad: 190 * Math.PI / 180 },
+    { maxSizM: Infinity, maxBiteADeg: 180, safeAlphaMinRad: 190 * Math.PI / 180 },
   ],
   // The ONE band read (the digestSpanS in-table-method precedent): the piece's
   // re-pose floor for its size class — ceil to the NEXT row (intermediate
@@ -2604,7 +2644,12 @@ export const Constants = {
       // numbers → now): 80 → 50 (1.5–2.8 m: rocketBody 2.8 m 50, 2.8 defunctSat 40, 2.2 defunctSat 35), 80 → 75 (2.8–5 m:
       // rocketBody 5 m 75, defunctSat 5 m 65, rocketBody 3 m 55, defunctSat 3 m 45), beyond 80 (unchanged: defunctSat 8 /
       // 9.2 m, rocketBody 8 / 11 / 12.65 m). Every row now sits below the plume floor of its class (25/41/65/99/125/134°).
-      CARGO_CLEAR_ALPHA_ROWS: [[0.5, 20], [1, 30], [1.5, 35], [2.8, 50], [5, 75], [Infinity, 80]],
+      // big-seat 2026-10-28 (every rack piece now seats at its true 0.027 m gap, nearer her): re-measured with the same generator
+      // (scripts/probes/rack-snug-gen.mjs radiator, js/test/_rackSnugRadiator.js, 61 cases of the fixture, strut angles 5° grid from 90°, the sweep of
+      // the pieces above 5 m run up to 180°): 2.8 m row 50 -> 55 (rocket body 2.8 m), 5 m row 75 -> 80 (rocket body 5 m; dead sat 5 m 65 -> 70), the
+      // open row 80 -> 145 (dead sat 8 / 9.2 m 145; rocket body 8 / 11 / 12.65 m 105-110): no daughter's net takes a piece that big (<= 5.5 m), so the
+      // open row only protects a piece handed to her rack some other way; the rows at and below 1.5 m are unchanged (the 1 m seat limit never reached them).
+      CARGO_CLEAR_ALPHA_ROWS: [[0.5, 20], [1, 30], [1.5, 35], [2.8, 55], [5, 80], [Infinity, 145]],
       POSE_STOW_DEG: 146,          // band-edge bud: θ→180° camps the Y3 axial
                                    // reserve (r ≤ 0.45, ANY R — probe §2
                                    // discovery) and is plume-illegal for

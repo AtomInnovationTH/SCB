@@ -114,7 +114,7 @@ function ptTri2(px, py, pz, T, o) {
   return dx * dx + dy * dy + dz * dz;
 }
 
-function gridNew(tris, n, cell) {
+export function gridNew(tris, n, cell) {
   return {
     tris, n, c: cell, phase: 0, cur: 0, done: false,
     ox: 0, oy: 0, oz: 0, nx: 1, ny: 1, nz: 1,
@@ -124,7 +124,7 @@ function gridNew(tris, n, cell) {
 }
 
 /** Runs the grid build for about `budget` triangles' worth of work; returns the budget left (<= 0 when spent). */
-function gridStep(g, budget) {
+export function gridStep(g, budget) {
   const T = g.tris, box = g.box;
   while (budget > 0 && !g.done) {
     if (g.phase === 0) {                                   // bounds + per-triangle boxes
@@ -200,7 +200,7 @@ let _stampId = 0;
  * nearer. Only cells whose box is nearer than the best so far are read; a triangle spanning several cells is looked
  * at once per query; a triangle whose own box is too far is not measured.
  */
-function gridMinD2(g, x, y, z, bound2, cap = Infinity) {
+export function gridMinD2(g, x, y, z, bound2, cap = Infinity) {
   const B = Math.sqrt(bound2);
   if (x + B < g.bx0 || x - B > g.bx1 || y + B < g.by0 || y - B > g.by1 || z + B < g.bz0 || z - B > g.bz1) return bound2;
   const c = g.c, nx = g.nx, ny = g.ny, nz = g.nz;
@@ -247,7 +247,7 @@ function gridMinD2(g, x, y, z, bound2, cap = Infinity) {
 }
 
 /** Same test as js/test/_flowerFold.js `isFx`: parts that are effects, not hardware. */
-function isFxLike(o) {
+export function isFxLike(o) {
   return /Plume|Glow|Halo|Sprite|Light|Puff|Beam|Cable|Laser(Beam)?$|Outline|Fairing/.test(o.name || '')
     || (o.material && (o.material.blending === THREE.AdditiveBlending || (o.material.transparent === true && o.material.opacity < 0.2)));
 }
@@ -515,7 +515,7 @@ function pay(w, cost, until) {
 }
 
 /** What a piece is, for the clearance test: a ball (scoop bag, typeless catch) or its drawn triangles in the piece's own frame (m). */
-function prepPiece(piece, splitM) {
+export function prepPiece(piece, splitM) {
   const sizeM = piece.sizeMeter || 0;
   const reach = DebrisField.trueReachM(piece, sizeM);
   if (piece.isBag === true || !piece.type) return { ball: true, reach, tris: null, n: 0, src: 0 };
@@ -543,7 +543,7 @@ function prepPiece(piece, splitM) {
  * (`t`, `sp`, `q`, the stack `S`). Returns 1 = every triangle is `clearM` or more off the grid, 0 = one is not (or
  * cannot be shown to be), -1 = out of budget, resume. Never a false 1 (triangle inequality).
  */
-function trisRun(grid, T, n, st, clearM, leafM, maxQ, until) {
+export function trisRun(grid, T, n, st, clearM, leafM, maxQ, until) {
   const S = st.S;
   for (;;) {
     if (st.sp === 0) {
@@ -580,7 +580,7 @@ function trisRun(grid, T, n, st, clearM, leafM, maxQ, until) {
 const _book = { x: 0, y: 0, z: 0 };
 const _poseQ = new THREE.Quaternion();
 
-function placeTris(prep, D, cx, cy, cz, q) {
+export function placeTris(prep, D, cx, cy, cz, q) {
   const n = prep.n;
   const x = q.x, y = q.y, z = q.z, w = q.w;
   const r00 = 1 - 2 * (y * y + z * z), r01 = 2 * (x * y - z * w), r02 = 2 * (x * z + y * w);
@@ -706,6 +706,8 @@ export function stepProfile(mgr, piece, points) {
 
 /** Work points spent so far by every kit build and profile step (the deterministic counter the per-frame budget uses). Test helper. */
 export function workDone() { return _work; }
+/** Set the counter back to `v` (SeatHullClear: its own distance queries are counted in its own stats, not in the profile's per-frame budget). */
+export function workReset(v) { _work = v; }
 
 const _prof = { state: 0, rest: new Uint8Array(NP), band: new Uint8Array(NP) };
 /**

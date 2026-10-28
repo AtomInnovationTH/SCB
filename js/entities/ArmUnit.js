@@ -358,9 +358,25 @@ export function rackCellOffsetInto(out, sHerM, d, cell, qLocalHer, sizeMeter = 0
   // rule above stays as the upper bound (a plane touching the far corner can only be farther out than the real surfaces).
   if (seat && d && (d.isBag === true || (d.type && qLocalHer))) {
     const zs = seatStandoffM(seat, d, qLocalHer, _rcZp, gap - (Constants.ARM_SEAT_GAP_MARGIN_M ?? 0));
-    if (zs !== null && zs > 0 && (d.isBag === true || zs < z0)) z0 = zs;
+    // big-seat F2a: a piece over 1 m is also measured against the mother at every hold angle (SeatHullClear, set up by ArmManager); where it would
+    // touch, it keeps the support rule above. One verdict per solve, kept on the seat memo.
+    if (zs !== null && zs > 0 && (d.isBag === true || zs < z0) && !_seatFoulsMother(seat, d)) z0 = zs;
   }
   return out.set(0, 0, z0);
+}
+
+/**
+ * big-seat F2a: does the seat of `d` (the memo the last solve left) touch the mother at some hold angle? The verdict is made once per solve and
+ * kept on the memo (`c.hull`: 1 clear, 0 touches). False (clear) for a bag, a piece up to `SEAT_HULL.OVER_M`, and an arm the manager did not set up.
+ */
+function _seatFoulsMother(seat, d) {
+  const arm = seat && seat.owner;
+  const gate = arm && arm._seatHullGate;
+  if (!gate || d.isBag === true || !(d.sizeMeter > (Constants.SEAT_HULL?.OVER_M ?? 1.0))) return false;
+  const c = d._seatMemo;
+  if (!c || c.her !== seat) return false;
+  if (c.hull === undefined) c.hull = gate(arm, d, { x: c.qx, y: c.qy, z: c.qz, w: c.qw }, c.s) ? 1 : 0;
+  return c.hull === 0;
 }
 
 /**
@@ -617,7 +633,9 @@ function _pieceMesh(geo) {
     const k = idx ? idx.getX(i) : i;
     tris[i * 3] = pos.getX(k); tris[i * 3 + 1] = pos.getY(k); tris[i * 3 + 2] = pos.getZ(k);
   }
-  pm = { tris, nTri: n / 3, verts: _holdVertices(geo) };
+  let rad2 = 0;                                   // the mesh's farthest point from its own origin (the piece turns about that origin)
+  for (let i = 0; i < n; i++) rad2 = Math.max(rad2, tris[i * 3] ** 2 + tris[i * 3 + 1] ** 2 + tris[i * 3 + 2] ** 2);
+  pm = { tris, nTri: n / 3, verts: _holdVertices(geo), rad: Math.sqrt(rad2) };
   _pieceMeshCache.set(geo, pm);
   return pm;
 }
@@ -702,7 +720,9 @@ function _sweepPointVsTris(px, py, pz, wx, wy, wz, R, T, nTri, cen, rad, best) {
 
 // A 2-D bucket grid of triangles in the plane perpendicular to the sweep axis (cell 1 cm), each triangle in every cell its
 // bounding box grown by R touches: a point on the axis line then needs only the one cell it stands in.
-function _buildPerpGrid(T, nTri, ux, uy, uz, R) {
+// `clip` (a grid built for the same axis): cover only its cells. The piece's grid is only ever asked for HER vertices, which all lie inside her
+// own grid, so a 5 m piece needs the few thousand cells under her end, not a quarter of a million (snug-ring T1: the build was the second cost).
+function _buildPerpGrid(T, nTri, ux, uy, uz, R, clip = null) {
   // perpendicular basis
   let ax = 1, ay = 0, az = 0;
   if (Math.abs(ux) > 0.8) { ax = 0; ay = 1; }
@@ -712,15 +732,15 @@ function _buildPerpGrid(T, nTri, ux, uy, uz, R) {
   const cell = 0.01;
   let amin = Infinity, amax = -Infinity, bmin = Infinity, bmax = -Infinity;
   const n3 = nTri * 3;
-  const A = new Float64Array(n3), B = new Float64Array(n3);
+  const A = new Float64Array(n3), B = new Float64Array(n3), H = new Float64Array(n3);
   for (let i = 0; i < n3; i++) {
     const x = T[i * 3], y = T[i * 3 + 1], z = T[i * 3 + 2];
     const a = x * e1x + y * e1y + z * e1z, b = x * e2x + y * e2y + z * e2z;
-    A[i] = a; B[i] = b;
+    A[i] = a; B[i] = b; H[i] = x * ux + y * uy + z * uz;
     if (a < amin) amin = a; if (a > amax) amax = a; if (b < bmin) bmin = b; if (b > bmax) bmax = b;
   }
-  const a0 = amin - R - 1e-6, b0 = bmin - R - 1e-6;
-  const nA = Math.max(1, Math.ceil((amax + R + 1e-6 - a0) / cell)), nB = Math.max(1, Math.ceil((bmax + R + 1e-6 - b0) / cell));
+  const a0 = clip ? clip.a0 : amin - R - 1e-6, b0 = clip ? clip.b0 : bmin - R - 1e-6;
+  const nA = clip ? clip.nA : Math.max(1, Math.ceil((amax + R + 1e-6 - a0) / cell)), nB = clip ? clip.nB : Math.max(1, Math.ceil((bmax + R + 1e-6 - b0) / cell));
   const counts = new Int32Array(nA * nB + 1);
   const lo = new Int32Array(nTri * 4);
   for (let t = 0; t < nTri; t++) {
@@ -744,7 +764,7 @@ function _buildPerpGrid(T, nTri, ux, uy, uz, R) {
     for (let k = 0; k < 3; k++) h = Math.max(h, T[(t * 3 + k) * 3] * ux + T[(t * 3 + k) * 3 + 1] * uy + T[(t * 3 + k) * 3 + 2] * uz);
     hmax[t] = h;
   }
-  return { e1x, e1y, e1z, e2x, e2y, e2z, a0, b0, cell, nA, nB, start: counts, list, ux, uy, uz, R, A, B, hmax, stamp: new Int32Array(nTri), stampN: 0 };
+  return { e1x, e1y, e1z, e2x, e2y, e2z, a0, b0, cell, nA, nB, start: counts, list, ux, uy, uz, R, A, B, H, hmax, stamp: new Int32Array(nTri), stampN: 0 };
 }
 
 // Largest s for the point P moving along w (= +-u of `g`) against the triangles in P's cell of grid `g`.
@@ -771,18 +791,21 @@ const _seatSeen = new Set();
 export const seatSolveStats = { solves: 0, worstMs: 0, frameRepeat: 0, deferred: 0 };
 // F2c: a caller that asks again every frame (the net reel) sets this so a catch's FIRST solve waits for a frame with no other solve in it
 let _seatDeferFirst = false;
+/** Marks one daughter's update frame for the budget (`ArmUnit.update` does it itself); exported for tests that pin a piece without a whole update. */
+export function seatFrameBegin(arm, dt) { _seatFrameBegin(arm, dt); }
 function _seatFrameBegin(arm, dt) {
   if (_seatSeen.has(arm)) { _seatSeen.clear(); _seatFrame++; _seatClockS += dt > 0 ? dt : 0; }
   _seatSeen.add(arm);
   _seatMetered = true;
 }
 const _seatPar = new Float64Array(9);
-let _sv = { cap: 0, pv: null, hp: null, ord: null, pt: null, pcen: null, prad: null };
+let _sv = { cap: 0, pv: null, hp: null, ord: null, pt: null, pcen: null, prad: null, pA: null, pB: null, pH: null };
 function _seatScratch(nVert, nTri) {
   if (_sv.cap < nVert || !_sv.pt || _sv.pt.length < nTri * 9) {
     const cv = Math.max(nVert, _sv.cap, 64), ct = Math.max(nTri, 64, _sv.pt ? _sv.pt.length / 9 : 0);
     _sv = { cap: cv, pv: new Float64Array(cv * 3), hp: new Float64Array(cv), ord: new Uint32Array(cv),
-      pt: new Float64Array(ct * 9), pcen: new Float64Array(ct * 3), prad: new Float64Array(ct) };
+      pt: new Float64Array(ct * 9), pcen: new Float64Array(ct * 3), prad: new Float64Array(ct),
+      pA: new Float64Array(ct * 3), pB: new Float64Array(ct * 3), pH: new Float64Array(ct * 3) };
   }
   return _sv;
 }
@@ -802,8 +825,7 @@ export function seatStandoffM(her, d, qRel, u, R) {
   const ux = u.x, uy = u.y, uz = u.z;
   const bag = d.isBag === true && d.sizeMeter > 0;
   if (!bag && (!d.type || !qRel)) return null;
-  // a piece bigger than ARM_SEAT_MAX_SIZE_M keeps the support rule: the keep-out tables for big racked catches (hold poses, neighbour
-  // sweeps, the satellite's haul planners) were measured against that layout, and a 3-5 m piece is the nose route's, not the net's seat
+  // a piece bigger than ARM_SEAT_MAX_SIZE_M keeps the support rule (the cap is Infinity since big-seat 10-28: every piece seats)
   if (!bag && d.sizeMeter > (Constants.ARM_SEAT_MAX_SIZE_M ?? Infinity)) return null;
   // the same inputs again (a piece at rest on her) answer from the last solve: a solve is a few ms, the pin asks every frame
   const sc = bag ? d.sizeMeter / 2 : DebrisField.effectiveRenderScale(d) / M;
@@ -820,7 +842,18 @@ export function seatStandoffM(her, d, qRel, u, R) {
   // catch, and a changed axis (the glide swings it) are not held back by the 0.5 s, only by the frame cap. Outside an update
   // (tests, tools) only an identical question is answered from memory.
   const same = !!c && c.her === her && c.type === d.type && c.id === d.id && c.bag === bag && Math.abs(c.sc - sc) < 1e-9 && Math.abs(c.R - R) < 1e-12;
-  if (_seatMetered && same) {
+  if (_seatMetered && same && !bag && d.sizeMeter > (Constants.SEAT_TURN_GUARD_OVER_M ?? 1.0)) {
+    // F1a (review 10-28): a piece over 1 m turned 5 degrees about a lever of 2-2.5 m has moved 20 cm, and where it first touches her is
+    // not a smooth function of the turn (a flat side swings round: measured 0.2-4.7 times the lever), so for these the last answer is
+    // not held through a turn. The piece is answered `null` (the callers' support rule, which cannot overlap) while it is turning,
+    // and is solved exactly once it is still again (the spin payoff's end drops the memo: that is its solve).
+    const g = _seatTurnGuard(c, ux, uy, uz, qx0, qy0, qz0, qw0);
+    if (g.lever <= (Constants.SEAT_TURN_FREE_M ?? 0.002)) return c.s;
+    const slow = g.step <= (Constants.SEAT_TURN_FAST_M ?? 0.001);
+    if (!slow) return null;                                                          // turning: the support rule, no solve
+    const blocked = _seatSolvedFrame === _seatFrame || _seatClockS - c.t < (Constants.SEAT_RESOLVE_MIN_S ?? 0.5);
+    if (blocked) return g.lever <= (Constants.SEAT_TURN_SLOW_MAX_M ?? 0.04) ? c.s + g.lever : null;   // creeping: out by what it has moved
+  } else if (_seatMetered && same) {
     const axisMoved = Math.hypot(c.ux - ux, c.uy - uy, c.uz - uz) >= 0.02;
     const cosHalf = Math.cos(degToRad(0.5 * (Constants.SEAT_RESOLVE_DEG ?? 5)));
     const turned = Math.abs(c.qx * qx0 + c.qy * qy0 + c.qz * qz0 + c.qw * qw0) < cosHalf;
@@ -832,13 +865,38 @@ export function seatStandoffM(her, d, qRel, u, R) {
   if (_seatMetered && _seatDeferFirst && !same && _seatSolvedFrame === _seatFrame) { seatSolveStats.deferred++; return null; }
   const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
   const s = _seatSolve(her, d, bag, qRel, ux, uy, uz, R, sc);
-  d._seatMemo = { her, type: d.type, id: d.id, bag, sc, R, ux, uy, uz, qx: qx0, qy: qy0, qz: qz0, qw: qw0, s, t: _seatClockS };
+  const rad = bag ? 0 : sc * (_pieceMesh(DebrisWireframe.getGeometry(d.type, d.id)).rad || 0);
+  d._seatMemo = { her, type: d.type, id: d.id, bag, sc, R, ux, uy, uz, qx: qx0, qy: qy0, qz: qz0, qw: qw0, s, t: _seatClockS, rad,
+    lqx: qx0, lqy: qy0, lqz: qz0, lqw: qw0, lux: ux, luy: uy, luz: uz,
+    mqx: qx0, mqy: qy0, mqz: qz0, mqw: qw0, mux: ux, muy: uy, muz: uz, lf: _seatFrame };
   const ms = (typeof performance !== 'undefined' ? performance.now() : 0) - t0;
   seatSolveStats.solves++;
   if (_seatSolvedFrame === _seatFrame) seatSolveStats.frameRepeat++;   // a second solve in one frame (the glide's two asks, tests)
   _seatSolvedFrame = _seatFrame;
   if (ms > seatSolveStats.worstMs) seatSolveStats.worstMs = ms;
   return s;
+}
+
+const _seatGuardOut = { lever: 0, step: 0 };
+/**
+ * F1a: how far a piece's points can have moved since the last solve (`lever`) and in the last frame (`step`), metres: its radius times
+ * the chord of the turn, plus the axis swing times the distance. F2b (review 10-28): `step` is per FRAME, not per call: the reference
+ * (`lq*`, `lu*`) is the attitude the piece had when the previous frame ended, and stays put while the frame lasts, so a second ask in the
+ * same frame (the glide's two asks, a pin that runs twice) measures the same frame's movement again and cannot read as "creeping".
+ * The newest attitude is kept in `mq*`, `mu*` and becomes the reference when the frame counter moves on.
+ */
+function _seatTurnGuard(c, ux, uy, uz, qx, qy, qz, qw) {
+  const chordOf = (dot) => 2 * Math.sqrt(Math.max(0, 1 - Math.min(1, dot) ** 2));
+  if (c.lf !== _seatFrame) {                 // a new frame: where the piece stood at the end of the last one is the reference
+    c.lqx = c.mqx; c.lqy = c.mqy; c.lqz = c.mqz; c.lqw = c.mqw; c.lux = c.mux; c.luy = c.muy; c.luz = c.muz;
+    c.lf = _seatFrame;
+  }
+  const far = Math.abs(c.s);
+  const lever = c.rad * chordOf(Math.abs(c.qx * qx + c.qy * qy + c.qz * qz + c.qw * qw)) + far * Math.hypot(c.ux - ux, c.uy - uy, c.uz - uz);
+  const step = c.rad * chordOf(Math.abs(c.lqx * qx + c.lqy * qy + c.lqz * qz + c.lqw * qw)) + far * Math.hypot(c.lux - ux, c.luy - uy, c.luz - uz);
+  c.mqx = qx; c.mqy = qy; c.mqz = qz; c.mqw = qw; c.mux = ux; c.muy = uy; c.muz = uz;
+  _seatGuardOut.lever = lever; _seatGuardOut.step = step;
+  return _seatGuardOut;
 }
 
 function _seatSolve(her, d, bag, qRel, ux, uy, uz, R, sc) {
@@ -903,14 +961,14 @@ function _seatSolve(her, d, bag, qRel, ux, uy, uz, R, sc) {
   for (let i = 0; i < her.nVert; i++) {
     const hx = hv[i * 3], hy = hv[i * 3 + 1], hz = hv[i * 3 + 2];
     if (hx * ux + hy * uy + hz * uz - pmin + R <= best) continue;
-    if (!pg) pg = _buildPerpGrid(pt, nT, ux, uy, uz, R);
+    if (!pg) pg = _buildPerpGrid(pt, nT, ux, uy, uz, R, hg);
     best = _sweepPointGrid(pg, hx, hy, hz, -ux, -uy, -uz, R, pt, best);
   }
   // (c) edge against edge: two segments, one sliding along the axis, first come within R. The set of offsets between a point of one
   // edge and a point of the other is a parallelogram; the sliding edge pair touches when the axis point (the origin, moving along u)
   // first comes within R of it, which is two triangles through the same routine. Only the pairs of triangles that overlap when seen
   // along the axis AND could still reach farther than `best` are tried (hers are bucketed in `hg`).
-  const g = hg, par = _seatPar;
+  const g = hg, par = _seatPar, pA = S.pA, pB = S.pB, pH = S.pH, hA = g.A, hB = g.B, hH = g.H;       // pA/pB, hA/hB: each vertex's place in the grid's plane
   for (let t = 0; t < nT; t++) {
     const o = t * 9;
     let hmin = Infinity, a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
@@ -918,6 +976,7 @@ function _seatSolve(her, d, bag, qRel, ux, uy, uz, R, sc) {
       const x = pt[o + k * 3], y = pt[o + k * 3 + 1], z = pt[o + k * 3 + 2];
       const h = x * ux + y * uy + z * uz; if (h < hmin) hmin = h;
       const a = x * g.e1x + y * g.e1y + z * g.e1z, b = x * g.e2x + y * g.e2y + z * g.e2z;
+      pA[t * 3 + k] = a; pB[t * 3 + k] = b; pH[t * 3 + k] = h;
       if (a < a0) a0 = a; if (a > a1) a1 = a; if (b < b0) b0 = b; if (b > b1) b1 = b;
     }
     if (htop + R - hmin <= best) continue;
@@ -936,8 +995,23 @@ function _seatSolve(her, d, bag, qRel, ux, uy, uz, R, sc) {
           const i2 = (i + 1) % 3;
           const hax = her.tris[ho + i * 3], hay = her.tris[ho + i * 3 + 1], haz = her.tris[ho + i * 3 + 2];
           const ehx = her.tris[ho + i2 * 3] - hax, ehy = her.tris[ho + i2 * 3 + 1] - hay, ehz = her.tris[ho + i2 * 3 + 2] - haz;
+          // snug-ring T1 (big pieces): the pair's parallelogram can only touch the axis line if its shadow along the axis comes within R of
+          // the origin, so two cheap tests on the shadow's box (her edge's and the piece edge's ends in the grid's plane) drop most of the 9
+          // edge pairs of a triangle pair before any sweep; same answer, a fraction of the sweeps (measured, tmp/seat-time.mjs)
+          const ha1 = hA[ht * 3 + i], hb1 = hB[ht * 3 + i], ha2 = hA[ht * 3 + i2], hb2 = hB[ht * 3 + i2];
+          const hhTop = Math.max(hH[ht * 3 + i], hH[ht * 3 + i2]) + R;             // her edge's highest point: no pair of this edge reaches past (top - the piece edge's lowest)
+          if (hhTop - hmin <= best) continue;
           for (let j = 0; j < 3; j++) {
             const j2 = (j + 1) % 3;
+            if (hhTop - Math.min(pH[t * 3 + j], pH[t * 3 + j2]) <= best) continue;
+            {
+              const pa1 = pA[t * 3 + j], pb1 = pB[t * 3 + j], pa2 = pA[t * 3 + j2], pb2 = pB[t * 3 + j2];
+              // offsets her end - piece end: the box of the four corners, per axis
+              const d1 = ha1 - pa1, d2 = ha1 - pa2, d3 = ha2 - pa1, d4 = ha2 - pa2;
+              if (Math.min(d1, d2, d3, d4) > R || Math.max(d1, d2, d3, d4) < -R) continue;
+              const f1 = hb1 - pb1, f2 = hb1 - pb2, f3 = hb2 - pb1, f4 = hb2 - pb2;
+              if (Math.min(f1, f2, f3, f4) > R || Math.max(f1, f2, f3, f4) < -R) continue;
+            }
             const pax = pt[o + j * 3], pay = pt[o + j * 3 + 1], paz = pt[o + j * 3 + 2];
             const epx = pt[o + j2 * 3] - pax, epy = pt[o + j2 * 3 + 1] - pay, epz = pt[o + j2 * 3 + 2] - paz;
             const Ax = hax - pax, Ay = hay - pay, Az = haz - paz;          // parallelogram: A, A+eh, A+eh-ep, A-ep
@@ -1290,6 +1364,8 @@ export class ArmUnit {
     // snug-ring R3: the live spin-down at the seat (null when none) - see _seatSpinBegin / _tickSeatSpin.
     this._seatSpin = null;
     this._seatEaseD = null;                  // F2a: the piece whose cell is easing toward a fresh seat answer
+    this._seatHullGate = null;               // big-seat F2a: set by ArmManager (SeatHullClear.seatHullClear): is a big piece's seat clear of the mother?
+    this._dockPos = null;                    // ... and the dock position it measures from (ArmManager._initArms)
     // Test hook mirroring _boostRipRollOverride: when non-null, replaces
     // Math.random() in the strain-gate rip roll for determinism.
     this._settleRipRollOverride = null;
@@ -7262,7 +7338,14 @@ export class ArmUnit {
         // until she is parked: the net reel's cell, the stow and the glide then seat it exactly.
         (this.state === S.DOCKING || this.state === S.RELOADING || this.state === S.REELING) ? null : this._seatGeo())
       : null;
-    if (snugM !== null) d._holdStandoffM = snugM;
+    if (snugM !== null) {
+      // F1a: a piece over 1 m is answered with the support rule while it turns (`seatStandoffM`), and with the exact seat once it is still;
+      // that second step is up to a metre nearer her, so it is eased in (inward only: farther out is always clear, and any new turn
+      // answers outward at once)
+      const prev = d._holdStandoffM;
+      const step = Constants.SEAT_EASE_STEP_M ?? 0.0045;
+      d._holdStandoffM = (d.sizeMeter > (Constants.SEAT_TURN_GUARD_OVER_M ?? 1.0) && Number.isFinite(prev) && snugM < prev - step) ? prev - step : snugM;
+    }
     else if (d._holdStandoffM !== undefined) d._holdStandoffM = undefined;
     const standoffM = Number.isFinite(d._holdStandoffM)
       ? d._holdStandoffM
@@ -7507,7 +7590,10 @@ export class ArmUnit {
    * @private
    */
   _seatGeo() {
-    return this.mesh ? buildSeatGeo(this.mesh) : null;
+    const g = this.mesh ? buildSeatGeo(this.mesh) : null;
+    // F2a: the seat's mother check needs the arm (her ship, dock and index); not enumerable, so a piece that holds the seat in its memo still serialises
+    if (g && g.owner !== this) Object.defineProperty(g, 'owner', { value: this, writable: true, configurable: true, enumerable: false });
+    return g;
   }
 
   /** snug-ring R1: the seat ring's mass (aluminium, from its volume), kg. Logged only: NOT part of her live mass (`V5_WEAVER_MASS`). */
@@ -7542,8 +7628,8 @@ export class ArmUnit {
     if (!g || g.arm !== this || !(dur > 0) || !(f < 1) || !d._rackLocalM) { d._holdGlide = null; return false; }
     const s = smoothstep01(f);
     const cell = d._rackLocalM;
-    // F2b: the swing ends on her +Z at the support rule's standoff `endStand`; a cell the exact seat put nearer than that (a piece up to
-    // ARM_SEAT_MAX_SIZE_M) is reached by a slide in along +Z (see the end of this method), so the swing takes 70 % instead of all of it
+    // F2b: the swing ends on her +Z at the support rule's standoff `endStand`; a cell the exact seat put nearer than that (every piece
+    // since big-seat 10-28) is reached by a slide in along +Z (see the end of this method), so the swing takes 70 % instead of all of it
     const endStand = catchHoldStandoffM(herQ, this.config.bodyDims, d, _gdEnd.set(0, 0, 1).applyQuaternion(herQ),
       Constants.ARM_HOLD_NET_GAP_M ?? 0.03, this._solidPointsM(), null);
     const onAxis = Math.abs(cell.x) < 1e-9 && Math.abs(cell.y) < 1e-9;
