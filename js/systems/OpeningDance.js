@@ -490,8 +490,8 @@ class OpeningDance {
     });
     // m1-finish: the comms line scrolls away, the battery keeps falling — keep ONE
     // ticker row up until the wings are out (WingsHint; removed by the game loop's
-    // update once the ship's wing value passes WINGS_OUT_PROGRESS). The START's
-    // row reads "Open up (any key)": any first action opens the ship.
+    // update once the ship's wing value passes WINGS_OUT_PROGRESS). The START arms
+    // the hint WITHOUT a row (owner 2026-10-28): any first action opens the ship.
     wingsHint.post({ start: true });
   }
 

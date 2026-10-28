@@ -242,10 +242,8 @@ const GLASS_LINES = Object.freeze([
   ['Esc slides the pane away and leaves you exactly where you were', 'CLOSE × slides the pane away and leaves you exactly where you were'],
   // u16b D6 (the glass-words sweep, test-NoKeysOnGlass "every player line in js/"): appended rows. Each `to` names only a
   // control that exists on glass in that moment, or leaves the key out.
-  // the start of the game: the ticker's fallback body when no OPEN UP / OPEN THE WINGS step button is up (on glass the row IS the
-  // button whenever the ticker has its step sink, main.js). What really opens the wings then: at a START any tap (StartOpening
-  // takes the first pointerdown on the page as the first action); later the WINGS button of the floor 1 bar (OverridePane).
-  ['Open up (any key)', 'Open up: tap anywhere'],
+  // the ticker's fallback body when no OPEN THE WINGS step button is up (on glass the row IS the button whenever the ticker has
+  // its step sink, main.js). What really opens the wings then: the WINGS button of the floor 1 bar (OverridePane).
   ['Open the wings (comma key)', 'Open the wings: tap WINGS on floor 1'],
   // daughter refusals (ticker hints and comms)
   ['Wait for charge, or deploy another daughter [1-4]', 'Wait for charge, or use another daughter'],

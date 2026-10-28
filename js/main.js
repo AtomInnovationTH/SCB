@@ -3570,9 +3570,10 @@ async function init() {
     // u2-one-voice D8: on touch the step chip IS the button - a tap presses the SAME key
     // (KeyDispatch -> window), so the wings / scan / net / autopilot paths are the keyboard's.
     if (hud && hud.hintTicker && hud.hintTicker.setStepTap) {
-      // Owner 2026-10-20: a tap on the wings chip is the first action - its pointerdown is already
+      // Owner 2026-10-20: a tap on a wings chip is the first action - its pointerdown is already
       // waiting in StartOpening, which sets the wings out after this click. The chip's own comma press
       // is a toggle, so hold it back while that tap waits (it could only roll the wings back up).
+      // (No chip is up at a start since 2026-10-28; this only guards a tap that races the first action.)
       hud.hintTicker.setStepTap((code) => {
         if (startOpening && startOpening.ownsStepTap(code)) return;
         dispatchKeyPress(code);
