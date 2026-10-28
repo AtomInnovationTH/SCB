@@ -1,49 +1,120 @@
 /**
  * DragSailMesh - the look of a drag sail on a big piece that was let go (Nets step 3 slice 5, lane 5d; plan D5; DECISIONS §33 row 16).
  *
- * A flat square of thin silver film, 5 m a side (`Constants.BIG_PIECES.SAIL.areaM2` = 25 m2: HPS ADEO-L class), held out on four booms
- * that run from the piece to the sail's corners. It is built in METRES and scaled to the scene by `DebrisField`'s own LOD ratio, so it
- * shrinks and goes with the piece it hangs on (`_lodScale`: 0 when the piece is too far to draw). It turns with the piece (the same
- * tumble quaternion) and is hidden or removed with it: a removed or dead piece takes its sail away on the next `sync`.
+ * A real drag sail, as the owner ruled 2026-10-27 ("like real ones": a thin shiny film held flat by four stiff poles): a small deployer
+ * box bolted to the piece's -Y face (the stage's engine end), four thin carbon poles running from the box out to the corners of a square,
+ * and a thin aluminised film in four triangles between the poles (25 m2 = `Constants.BIG_PIECES.SAIL.areaM2`, HPS ADEO-L class; drawn area =
+ * the physics area). The film plane is perpendicular to the piece's Y axis, just beyond the box; nothing joins it to the stage's centre.
+ * It is built in METRES and scaled to the scene by `DebrisField`'s own LOD ratio, so it shrinks and goes with the piece it hangs on
+ * (`_lodScale`: 0 when the piece is too far to draw). It turns with the piece (the same tumble quaternion) and is hidden or removed with it:
+ * a removed or dead piece takes its sail away on the next `sync`.
  *
  * `DebrisField.attachSail(d)` makes one (lazily creates the set) and `DebrisField.update` calls `sync` (the draw hook: ONE line). Nothing here
  * touches game state; with no document / WebGL nothing is drawn but the objects still build (three.js scene graph only).
  *
- * UNPROVEN until looked at (owner's eyes): the standoff, the film's opacity and the boom colour are estimates.
+ * MEASURED (2026-10-27, node probe over `DebrisWireframe.getGeometry('rocketBody')` vertices, x `sizeMeter`): the SL-14 stage's furthest -Y point
+ * is the engine bell's rim at -0.5 x sizeMeter (r 0.423); the throat cone inside the bell ends 0.029 x sizeMeter short of it, so a box that
+ * touches the rim and a film beyond the box clear every vertex (pinned by test-DragSail.js T1 and T4, with mutations). ESTIMATES (owner's eyes
+ * still to judge): the box size (0.6 x 0.35 x 0.6 m, ADEO-L class), the pole diameter (5 cm), the 3 cm sag, the film's gloss and the pole
+ * colour. `d._meltK` shortens a piece along Y and is ignored here (a known limit: the box then floats a little).
  * @module entities/DragSailMesh
  */
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 
 const METRE_SCENE = Constants.SCENE_SCALE / 1000;      // 1 m in scene units (DebrisField's own METRE_SCENE)
+
+/** Deployer box, metres (ESTIMATE, ADEO-L class): width/depth (X, Z) and height (Y, the way the sail unrolls). */
+export const SAIL_BOX_M = Object.freeze({ w: 0.6, h: 0.35, d: 0.6 });
+/** Pole diameter, metres (ESTIMATE; ADEO-class booms are a few cm, 5 cm reads at 9 m). */
+export const SAIL_POLE_DIAM_M = 0.05;
+/** How far the middle of each film edge sags toward the piece, metres (ESTIMATE; a look, adds under 0.01 % area). */
+export const SAIL_SAG_M = 0.03;
 
 /** @returns {number} the sail's side in metres (the square root of its area). */
 export function sailSideM() { return Math.sqrt(Constants.BIG_PIECES.SAIL.areaM2); }
 
+const _minYCache = new WeakMap();
+/** The lowest vertex y of a piece's mesh, in mesh units (cached per geometry). @param {THREE.BufferGeometry} geo @returns {number} */
+function meshMinY(geo) {
+  let v = _minYCache.get(geo);
+  if (v === undefined) {
+    const p = geo.attributes && geo.attributes.position;
+    v = Infinity;
+    if (p) for (let i = 0; i < p.count; i++) v = Math.min(v, p.getY(i));
+    if (!Number.isFinite(v)) v = -0.5;
+    _minYCache.set(geo, v);
+  }
+  return v;
+}
+
 /**
- * One sail, in metres, centred on the piece: the film sits `standoffM` out along +Z; four booms run from the piece to its corners.
- * @param {number} [sideM] film side @param {number} [standoffM] how far out the film is held
+ * Where a piece's furthest point along -Y is, in metres from its centre along local Y (negative): the lowest vertex of its real mesh x its
+ * size (for the SL-14 stage that is the engine bell's rim, which is also the bounding-box end). A piece with no known type falls back to
+ * half its size.
+ * @param {{type?: string, id?: number, sizeMeter?: number}} d @returns {number}
+ */
+export function sailMountYM(d) {
+  const size = (d && d.sizeMeter > 0) ? d.sizeMeter : 5;
+  if (!d || !d.type || d.isBag === true) return -0.5 * size;   // a scoop bag is a ball: half its diameter (as DebrisField.trueReachM), whatever type its heaviest member has
+  const geo = DebrisWireframe.getGeometry(d.type, d.id);
+  const y = meshMinY(geo);
+  return (Number.isFinite(y) ? y : -0.5) * size;
+}
+
+/**
+ * One sail, in metres, in the piece's frame: the deployer box sits against the piece's -Y face at y = `endYM`, the film plane is just beyond
+ * the box, four poles run along the film's diagonals from the box to the corners, and four film triangles fill between the poles.
+ * @param {number} [sideM] film side (the film's area is sideM^2)
+ * @param {number} [endYM] y of the piece's -Y face in metres (negative; default -2.5 = half of a 5 m piece)
  * @returns {THREE.Group}
  */
-export function buildSailMesh(sideM = sailSideM(), standoffM = 2) {
+export function buildSailMesh(sideM = sailSideM(), endYM = -2.5) {
   const g = new THREE.Group();
   g.name = 'DragSail';
   const h = sideM / 2;
+  const yPlane = endYM - SAIL_BOX_M.h;                  // the film plane: beyond the box, on the far side from the piece
+  const box = new THREE.Mesh(
+    new THREE.BoxGeometry(SAIL_BOX_M.w, SAIL_BOX_M.h, SAIL_BOX_M.d),
+    new THREE.MeshStandardMaterial({ color: 0x3a3f46, metalness: 0.6, roughness: 0.5 }),
+  );
+  box.name = 'DragSailBox';
+  box.position.set(0, endYM - SAIL_BOX_M.h / 2, 0);
+  g.add(box);
+
+  // the four corners, on the diagonals (a square seen face-on); each pole is half the film diagonal long
+  const corners = [[h, h], [-h, h], [-h, -h], [h, -h]].map(([x, z]) => new THREE.Vector3(x, yPlane, z));
+  const up = new THREE.Vector3(0, 1, 0);
+  const centre = new THREE.Vector3(0, yPlane, 0);
+  corners.forEach((c, i) => {
+    const len = c.distanceTo(centre);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(SAIL_POLE_DIAM_M / 2, SAIL_POLE_DIAM_M / 2, len, 8), new THREE.MeshStandardMaterial({ color: 0x2b2e33, metalness: 0.3, roughness: 0.6 }));
+    pole.name = 'DragSailBoom';
+    pole.position.copy(centre).add(c).multiplyScalar(0.5);
+    pole.quaternion.setFromUnitVectors(up, c.clone().sub(centre).normalize());
+    pole.userData.lengthM = len;
+    g.add(pole);
+  });
+
+  // the film: per quarter, centre -> corner A -> edge middle (sagged toward the piece, +Y) -> corner B: two triangles
+  const v = [];
+  const tri = (a, b, c) => v.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  for (let i = 0; i < 4; i++) {
+    const a = corners[i], b = corners[(i + 1) % 4];
+    const m = a.clone().add(b).multiplyScalar(0.5); m.y += SAIL_SAG_M;
+    tri(centre, a, m); tri(centre, m, b);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  geo.computeVertexNormals();
   const film = new THREE.Mesh(
-    new THREE.PlaneGeometry(sideM, sideM),
-    new THREE.MeshStandardMaterial({ color: 0xdfe5ec, metalness: 0.85, roughness: 0.3, emissive: 0x1c2228, side: THREE.DoubleSide, transparent: true, opacity: 0.92 }),
+    geo,
+    new THREE.MeshStandardMaterial({ color: 0xdfe5ec, metalness: 0.95, roughness: 0.15, emissive: 0x1c2228, side: THREE.DoubleSide }),
   );
   film.name = 'DragSailFilm';
-  film.position.z = standoffM;
   g.add(film);
-  const pts = [];
-  for (const [sx, sy] of [[1, 1], [-1, 1], [-1, -1], [1, -1]]) pts.push(0, 0, 0, sx * h, sy * h, standoffM);
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  const booms = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xa3adb8 }));
-  booms.name = 'DragSailBooms';
-  g.add(booms);
-  g.userData = { sideM, areaM2: sideM * sideM, standoffM };
+  g.userData = { sideM, areaM2: sideM * sideM, endYM, yPlane };
   return g;
 }
 
@@ -66,8 +137,7 @@ export class DragSailSet {
   /** @param {object} d the field's own body @returns {boolean} false when it already has one (or has no id) */
   add(d) {
     if (!d || d.id == null || this._rec.has(d.id)) return false;
-    const standoff = Math.max(2, (d.sizeMeter || 0) / 2 + 1);
-    const group = buildSailMesh(sailSideM(), standoff);
+    const group = buildSailMesh(sailSideM(), sailMountYM(d));
     group.visible = false;                             // shown by the first sync that has a position
     if (this._parent && typeof this._parent.add === 'function') this._parent.add(group);
     this._rec.set(d.id, { d, group });
