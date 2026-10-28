@@ -156,6 +156,50 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
+    // A short FAQ (owner 2026-10-28, DECISIONS row "Help", owner 2026-10-28): one closed section like Stuck?; each question is its own
+    // <details>, several can stay open. No key rows (`rows` stays empty so the row tests never see it); the
+    // questions live in `items` and every answer was checked against the code (tmp/plans/faq-help-1028.md Log).
+    // Answers are at most two sentences of at most 20 words, plain words. `link` = a data/codex.json entry id
+    // (opened in the Tech library); translations are keyed by item id in helpText.js (`faq.items`).
+    id: 'faq',
+    title: 'Questions',
+    collapsed: true,
+    keyWidth: '90px',
+    rows: [],
+    items: [
+      { id: 'faq_what', q: 'What is Space Cowboy?',
+        a: 'A game where you fly a satellite that clears space junk before it hits other satellites.',
+        link: 'kessler_syndrome' },
+      { id: 'faq_real', q: 'Is the satellite real?',
+        a: 'Not yet. The game tests a satellite design before anyone builds it, using real physics.' },
+      { id: 'faq_win', q: 'How do I win?',
+        a: 'Catch 60 pieces of junk: 12 missions of 5 catches each.' },
+      { id: 'faq_daughters', q: 'What are the daughters?',
+        a: 'Four helper ships on long lines. They go after smaller or farther junk, which saves the big ship\'s gas.',
+        link: 'robotic_arm' },
+      { id: 'faq_fuel', q: 'Why does fuel matter so much?',
+        a: 'Engine gas does not refill by itself, so short trips save it. You can buy more when you resupply.',
+        link: 'delta_v_doctrine' },
+      { id: 'faq_after', q: 'What happens to junk I catch?',
+        a: 'It is held on a radiator tip or a daughter. On the trip to the next field, small furnaces melt it down.' },
+      { id: 'faq_hot', q: 'Why does my ship get hot?',
+        a: 'Sunlight, engines and motors all make heat, and space has no air to cool you. The radiators open to let it out.',
+        link: 'vacuum_of_space' },
+      { id: 'faq_crash', q: 'Can I crash?',
+        a: 'Yes, once training ends. The ship dodges most junk by itself, but not the piece you are chasing.' },
+      { id: 'faq_credits', q: 'What do I spend credits on?',
+        a: 'Upgrades, more nets and engine gas. You buy them when you resupply after a mission.' },
+      { id: 'faq_free', q: 'Is it free?',
+        a: 'Yes. Credits are game money, and nothing in the game costs real money.' },
+      { id: 'faq_beta', q: 'Is it finished?',
+        a: 'Not yet. Space Cowboy is an early test version (a beta), and it is not open to the public yet.' },
+      { id: 'faq_save', q: 'Does the game save?',
+        a: 'Yes, in your browser on this device. Credits, upgrades and mission progress stay until you start a new game.' },
+      { id: 'faq_devices', q: 'What can I play on?',
+        a: 'A computer with a keyboard, or an iPad held sideways. After your first visit it works without internet.' },
+    ],
+  },
+  {
     // Rare keys, dev keys and unbuilt features: closed until opened, so the
     // page stays short. Sorted like the cards above: start keys, then daughter
     // keys, then ship / view keys.
@@ -216,6 +260,11 @@ export const HOTKEY_GROUPS = [
   },
 ];
 
+/** True on a touch screen (coarse pointer): FAQ rows are then 44 px tall instead of 24 px. No window (Node) → false. */
+function faqIsTouch() {
+  return typeof window !== 'undefined' && !!(window.matchMedia && window.matchMedia('(pointer: coarse)') && window.matchMedia('(pointer: coarse)').matches);
+}
+
 export class HotkeyOverlay {
   constructor() {
     this._visible = false;
@@ -246,7 +295,7 @@ export class HotkeyOverlay {
   hide() {
     this._visible = false;
     this._overlay.style.opacity = '0';
-    setTimeout(() => { if (!this._visible) this._overlay.style.display = 'none'; }, 200);
+    setTimeout(() => { if (!this._visible && this._overlay) this._overlay.style.display = 'none'; }, 200);
   }
 
   isVisible() { return this._visible; }
@@ -450,7 +499,7 @@ export class HotkeyOverlay {
     Object.assign(title.style, titleStyle);
     // Text only: a group's title is its name (no glyph — Session L, plan D-J).
     const T = this._text();
-    const rowCount = group.rows.filter(r => Array.isArray(r)).length;
+    const rowCount = Array.isArray(group.items) ? group.items.length : group.rows.filter(r => Array.isArray(r)).length;
     const groupTitle = T.groups[group.id] || group.title;
     if (UNSPACED_LANGUAGES.has(this._langCode)) Object.assign(title.style, { letterSpacing: 'normal', textTransform: 'none' });
     title.textContent = collapsed ? `${groupTitle} (${rowCount})` : groupTitle;
@@ -481,6 +530,13 @@ export class HotkeyOverlay {
       });
     }
 
+    if (Array.isArray(group.items)) {
+      // The FAQ: each question its own native <details> (several may be open at once).
+      host.style.alignItems = 'start';
+      for (const item of group.items) host.appendChild(this._makeFaqItem(item));
+      return card;
+    }
+
     let target = host;
     if (columns) { target = document.createElement('div'); host.appendChild(target); }
     for (const row of group.rows) {
@@ -504,6 +560,59 @@ export class HotkeyOverlay {
       target.appendChild(this._makeRow(...this._rowInLanguage(keys, desc, opts), group.keyWidth));
     }
     return card;
+  }
+
+  /**
+   * @private One FAQ question in the page's language: a <details> whose summary is the question and whose body is the
+   * answer and, when the item has a `link`, one button that closes help and opens that Tech library entry.
+   * A missing or empty translation falls back to the English words.
+   */
+  _makeFaqItem(item) {
+    const T = this._text();
+    const tr = (T.faq && T.faq.items && T.faq.items[item.id]) || {};
+    const has = (v) => typeof v === 'string' && v.trim().length > 0;
+    const touch = faqIsTouch();
+    const det = document.createElement('details');
+    det.setAttribute('data-faq', item.id);
+    Object.assign(det.style, { borderBottom: '1px solid rgba(0,212,255,0.10)', padding: '1px 0' });
+
+    // The whole row is the click target; the browser's own open / closed marker stays (no display:flex, which hides it).
+    const sum = document.createElement('summary');
+    sum.textContent = has(tr.q) ? tr.q : item.q;
+    Object.assign(sum.style, {
+      cursor: 'pointer', fontSize: '13px', lineHeight: '1.35', color: '#cfcfcf', boxSizing: 'border-box',
+      minHeight: touch ? '44px' : '24px', padding: touch ? '12px 0' : '3px 0',
+    });
+    det.appendChild(sum);
+
+    const body = document.createElement('div');
+    Object.assign(body.style, { padding: '2px 0 10px 18px' });
+    const ans = document.createElement('div');
+    ans.textContent = has(tr.a) ? tr.a : item.a;
+    Object.assign(ans.style, { fontSize: '12px', lineHeight: '1.5', color: '#9db0c2' });
+    body.appendChild(ans);
+    if (item.link) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('type', 'button');
+      btn.setAttribute('data-faq-link', item.link);
+      btn.textContent = has(T.faq && T.faq.link) ? T.faq.link : helpTextFor('en').faq.link;
+      Object.assign(btn.style, {
+        background: 'none', border: 'none', color: '#7fe3ff', textDecoration: 'underline', cursor: 'pointer',
+        fontFamily: 'var(--font-mono)', fontSize: '12px', padding: touch ? '12px 0' : '4px 0',
+        minHeight: touch ? '44px' : '24px', boxSizing: 'border-box', display: 'block',
+      });
+      btn.addEventListener('click', () => this._openLibrary(item.link));
+      body.appendChild(btn);
+    }
+    det.appendChild(body);
+    return det;
+  }
+
+  /** @private A FAQ link was clicked: close help first, then ask the Tech library to open that entry (existing route). */
+  _openLibrary(id) {
+    this.hide();
+    eventBus.emit(Events.CODEX_OPEN_ENTRY, { id });
   }
 
   /**
@@ -660,9 +769,26 @@ export class HotkeyOverlay {
     if (e.code === 'Slash') return;
 
     e.stopImmediatePropagation();
+    // Enter and Space on a FAQ question or its library link do their normal job (the browser toggles the <details> /
+    // clicks the button), so their default stays; the key is still hidden from every other listener (MenuScreen and
+    // BriefingScreen act on Enter). Every other key, and these two on any other target, stays swallowed.
+    if ((e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'Space') && this._isFaqControl(e.target)) return;
     e.preventDefault();
 
     if (e.code === 'Escape') this.hide();
+  }
+
+  /** @private True when `t` is a fold title (<summary>: FAQ questions, Stuck?, Advanced) or a FAQ library link
+   *  (<button data-faq-link>) inside this page; Enter/Space then toggle or click it instead of being swallowed. */
+  _isFaqControl(t) {
+    if (!t || typeof t !== 'object') return false;
+    const tag = String(t.tagName || '').toUpperCase();
+    const isQuestion = tag === 'SUMMARY';
+    const isLink = tag === 'BUTTON' && typeof t.getAttribute === 'function' && t.getAttribute('data-faq-link') !== null;
+    if (!isQuestion && !isLink) return false;
+    const o = this._overlay;
+    if (o && typeof o.contains === 'function') return o.contains(t);
+    return true;
   }
 }
 
