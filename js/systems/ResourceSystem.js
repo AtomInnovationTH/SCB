@@ -239,6 +239,8 @@ export class ResourceSystem {
     // charging and are excluded.
     this._ledgerOutUnits = 0;
     this._ledgerInUnits = 0;
+    // Part of OUT: battery units drawn by an ion engine (drawUpTo opts.beam), a share of which leaves the ship in the beam.
+    this._ledgerBeamUnits = 0;
     /** @private units since the last update(), turned into watts there */
     this._frameOutUnits = 0;
     this._frameInUnits = 0;
@@ -361,14 +363,15 @@ export class ResourceSystem {
    * Draw up to `amount` from a named resource ('xenon' | 'coldGas' | 'battery' | 'lithium'), clamped at what the pool
    * holds. consume()'s all-or-nothing refusal silently rejected an electric burn's draw once the battery parked below one
    * frame's need, so thrust was applied for free. Like drainBattery() this never fails; it returns the amount actually
-   * drawn (0 .. amount) so the caller can scale honestly.
+   * drawn (0 .. amount) so the caller can scale honestly. `opts.beam === true` tags a battery draw as an ion engine's
+   * (it still counts in the ledger's OUT total; getEnergyBeamUnits() counts the tagged part).
    */
-  drawUpTo(resource, amount) {
+  drawUpTo(resource, amount, opts = null) {
     if (!this._isValid(resource) || !(amount > 0)) return 0;
     const drawn = Math.min(amount, Math.max(0, this[resource]));
     if (drawn <= 0) return 0;
     this[resource] -= drawn;
-    if (resource === 'battery') this._recordDraw(drawn);
+    if (resource === 'battery') this._recordDraw(drawn, opts !== null && opts !== undefined && opts.beam === true);
     else if (resource === 'xenon') this._countXenonDraw(drawn);
     this._syncToPlayer();
     eventBus.emit(Events.RESOURCE_CHANGED, {
@@ -545,6 +548,9 @@ export class ResourceSystem {
   /** Cumulative battery units drawn since this instance was built (monotonic): ThermalSystem's heat input, it takes the delta each tick. */
   getEnergyDrawnUnits() { return this._ledgerOutUnits; }
 
+  /** Cumulative part of getEnergyDrawnUnits() that an ion engine drew (tagged `beam`; monotonic like the total). */
+  getEnergyBeamUnits() { return this._ledgerBeamUnits; }
+
   getEnergyChargedUnits() { return this._ledgerInUnits; }
 
   /** Register the heat source the meters read (ThermalSystem calls this on itself). reset()/restore() reset it too: heat restarts with the battery. */
@@ -566,9 +572,10 @@ export class ResourceSystem {
     return new ThermalSystem({ resourceSystem: this, player });
   }
 
-  _recordDraw(units) {
+  _recordDraw(units, beam = false) {
     if (!(units > 0)) return;
     this._ledgerOutUnits += units;
+    if (beam) this._ledgerBeamUnits += units;
     this._frameOutUnits += units;
   }
 

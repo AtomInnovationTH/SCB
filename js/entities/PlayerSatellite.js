@@ -8548,7 +8548,7 @@ export class PlayerSatellite extends THREE.Group {
     if (this._slothSayPending === true && sum - unloadS > 1e-9) { this._slothSayPending = false; this._slothSay(); }
     if (this._offPlayFrame !== true) {
       const S = Constants.SLOTH;
-      this._drawBurnResource('battery', (S.BOX_POWER_W / Constants.SHIP_HEAT.W_PER_UNIT_S) * sum);
+      this._drawBurnResource('battery', (S.BOX_POWER_W / Constants.SHIP_HEAT.W_PER_UNIT_S) * sum, { beam: true });
       const t = this._slothBoxTable();
       let n = 0;
       for (let i = 0; i < lit.length; i++) n += t.F * lit[i];            // N·s
@@ -9076,13 +9076,14 @@ export class PlayerSatellite extends THREE.Group {
    * caller scales thrust by the fraction. Without a ResourceSystem (menu hero, headless tests) it draws the local mirror.
    * @param {'battery'|'xenon'|'lithium'} resource
    * @param {number} amount - desired draw (> 0)
+   * @param {{beam?: boolean}} [opts] - `beam: true` tags a battery draw as an ion engine's (part of it leaves in the beam, not as heat)
    * @returns {number} fraction drawn (0..1; 1 when nothing was needed)
    */
-  _drawBurnResource(resource, amount) {
+  _drawBurnResource(resource, amount, opts) {
     if (!(amount > 0)) return 1;
     const rs = this._resourceSystem;
     if (rs && typeof rs.drawUpTo === 'function') {
-      return rs.drawUpTo(resource, amount) / amount;
+      return rs.drawUpTo(resource, amount, opts) / amount;
     }
     const have = Math.max(0, this.resources[resource] || 0);
     const drawn = Math.min(amount, have);
@@ -9749,7 +9750,7 @@ export class PlayerSatellite extends THREE.Group {
     // for the thrust that actually happened. Skipped for a no-bill passive impulse (mother-net tug). dt = 0 physics
     // responses (recoil compensations) draw no power (powerNeed 0) but DO pay for their gas.
     if (!noBill) {
-      if (powerNeed > 0) this._drawBurnResource('battery', powerNeed);
+      if (powerNeed > 0) this._drawBurnResource('battery', powerNeed, { beam: true });
       const fuel = this._resourceSystem
         ? this._resourceSystem.getCurrentFuel()
         : (Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL]) || null;

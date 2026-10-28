@@ -8,7 +8,7 @@
  * One lump, on the battery's own clock (Constants.SHIP_HEAT carries every constant's physical reading):
  *
  *   C dT/dt = P_in − P_out
- *   P_in  = drawn battery energy (ResourceSystem ledger) + SUN_HULL_W in daylight
+ *   P_in  = drawn battery energy (ResourceSystem ledger; 75 % of the ion engines' draw leaves in the beam) + SUN_HULL_W in daylight
  *   P_out = σ ε A_eff (T⁴ − T_sink⁴),
  *   A_eff = A_hull + A_rad × (G_closed + (1 − G_closed) × openFrac) × flow
  *
@@ -42,6 +42,13 @@ import { Events } from '../core/Events.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { clamp01, clamp, lerp } from '../core/MathUtil.js';
 
+/**
+ * Share of an ion engine's electrical draw that stays in the ship as heat; the rest leaves in the beam (DECISIONS §53
+ * row 1). Estimate, range 0.12-0.40: FEEP beam power is about 56-78 % of input (Krejci et al., J. Small Satellites
+ * 8(2) 2019; Enpulsion IFM datasheets); gridded ion, NASA NEXT is about 12 % heat (NASA/TM-2008-215029 Table 5).
+ */
+export const ENGINE_HEAT_SHARE = 0.25;
+
 /** Stefan–Boltzmann constant, W/(m²·K⁴). */
 export const SIGMA = 5.670374419e-8;
 const K0 = 273.15;
@@ -59,6 +66,8 @@ export class ThermalSystem {
     this._clockS = 0;
     // last seen ledger total (units)
     this._lastDrawnUnits = 0;
+    // last seen ledger total of ion-engine (beam-tagged) units
+    this._lastBeamUnits = 0;
     // smoothed dT/dt, °C per real second
     this._rateCps = 0;
     this._yellowArmed = true;
@@ -156,7 +165,8 @@ export class ThermalSystem {
     this._clockS += dt;
     const before = this.tempC;
 
-    // Heat in: every battery unit drawn since the last tick (drawn watts end as heat) plus the sun on the hull in
+    // Heat in: every battery unit drawn since the last tick (drawn watts end as heat, except 75 % of the ion engines'
+    // draw, which leaves in the beam) plus the sun on the hull in
     // daylight. The heater's own draw (billed at the end of the last tick) is in `d` too, since its heat warms the
     // ship, but it is NOT "other heat in" for its controller.
     let qInJ = 0;
@@ -166,9 +176,13 @@ export class ThermalSystem {
       const total = rs.getEnergyDrawnUnits();
       const d = total - this._lastDrawnUnits;
       this._lastDrawnUnits = total;
+      const beamTotal = typeof rs.getEnergyBeamUnits === 'function' ? rs.getEnergyBeamUnits() : this._lastBeamUnits;
+      const db = clamp(beamTotal - this._lastBeamUnits, 0, Math.max(d, 0));
+      this._lastBeamUnits = beamTotal;
       if (d > 0) {
-        qInJ += d * SH.UNIT_J;
-        otherJ += Math.max(0, d - this._heaterUnits) * SH.UNIT_J;
+        const h = d - (1 - ENGINE_HEAT_SHARE) * db;
+        qInJ += h * SH.UNIT_J;
+        otherJ += Math.max(0, h - this._heaterUnits) * SH.UNIT_J;
       }
     }
     this._heaterUnits = 0;
@@ -242,6 +256,7 @@ export class ThermalSystem {
     const rs = this._rs;
     if (rs && typeof rs.getEnergyDrawnUnits === 'function') {
       this._lastDrawnUnits = rs.getEnergyDrawnUnits();
+      this._lastBeamUnits = typeof rs.getEnergyBeamUnits === 'function' ? rs.getEnergyBeamUnits() : 0;
     }
   }
 
@@ -278,6 +293,7 @@ export class ThermalSystem {
     const rs = this._rs;
     this._lastDrawnUnits = (rs && typeof rs.getEnergyDrawnUnits === 'function')
       ? rs.getEnergyDrawnUnits() : 0;
+    this._lastBeamUnits = (rs && typeof rs.getEnergyBeamUnits === 'function') ? rs.getEnergyBeamUnits() : 0;
   }
 
   dispose() {
