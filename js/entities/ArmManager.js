@@ -334,6 +334,27 @@ function _clearNetDuckMarks(arm) {
   arm._duckWingSaid = null;
 }
 
+/**
+ * let-go-bag: a piece carries salvage when it has any resource to recover or any metal (the test the credit handler's salvage loop
+ * makes: `hasSalvage` and a non-empty `salvage`). A bag carries salvage when any member does; a bag that lists no members cannot be
+ * judged, so it counts as carrying some (it is kept, never thrown away on a guess).
+ * @param {object|null} d a piece or a scoop bag @returns {boolean}
+ */
+export function bagHasSalvage(d) {
+  if (!d) return false;
+  const one = (p) => {
+    const s = p && p.hasSalvage && p.salvage;
+    if (!s) return false;
+    return (s.xenon || 0) + (s.indium || 0) + (s.gaAs || 0) + (s.battery || 0) + (s.hydrazine || 0) + (s.lithium || 0) > 0
+      || (Array.isArray(s.metals) && s.metals.length > 0);
+  };
+  if (d.isBag === true) {
+    const members = Array.isArray(d.bagMembers) ? d.bagMembers.map((m) => (m && m.piece) || m).filter(Boolean) : [];
+    return members.length === 0 || members.some(one);
+  }
+  return one(d);
+}
+
 /** net-duck R1: does this arm still HOLD a catch at home (the only daughter a holder duck belongs to)? @param {object} arm */
 function _holdsCatchAtHome(arm) {
   return !!arm && !arm.isDetached && arm.state === ARM_STATES.HOLDING_CATCH
@@ -5967,6 +5988,31 @@ export class ArmManager {
       return d;
     }
     return null;
+  }
+
+  /**
+   * let-go-bag (T1/T3): the scoop bag a daughter could let go. Candidates are the small bags parked on a rack (HOLDING_CATCH, not being
+   * carried anywhere; a bag with a big member is in the ledger and pays when disposed of, so it is never a candidate). The selected
+   * daughter's bag wins; a selected daughter who holds none is `notSelected` (the others' bags are not touched); with none selected the
+   * ONLY daughter holding one. Two holders and no selection is `ambiguous`. A bag is worth keeping (`salvage: true`) when any member
+   * carries salvage; one with none is "not worth salvaging".
+   * @returns {{arm: object, bag: object, salvage: boolean}|{ambiguous: true}|{notSelected: true}|null} null when no daughter holds such a bag
+   */
+  rackBagOffer() {
+    const S = ARM_STATES;
+    const holders = [];
+    for (const arm of this.arms) {
+      if (!arm || arm.state !== S.HOLDING_CATCH || arm._carry || !Array.isArray(arm.heldCatches)) continue;
+      const bag = arm.heldCatches.find((h) => h && h.isBag === true && h.alive !== false && !bigPieces.isPending(h));
+      if (bag) holders.push({ arm, bag });
+    }
+    if (holders.length === 0) return null;
+    const sel = this.selectedArmIndex >= 0 ? this.arms[this.selectedArmIndex] : null;
+    // R5: a selected daughter is the one K speaks to: if she holds no such bag, the others' bags are not touched (never a guess)
+    if (sel && !holders.some((h) => h.arm === sel)) return { notSelected: true };
+    const pick = holders.find((h) => h.arm === sel) || (holders.length === 1 ? holders[0] : null);
+    if (!pick) return { ambiguous: true };
+    return { arm: pick.arm, bag: pick.bag, salvage: bagHasSalvage(pick.bag) };
   }
 
   /**

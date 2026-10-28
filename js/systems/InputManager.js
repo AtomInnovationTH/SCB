@@ -1499,7 +1499,14 @@ export class InputManager {
       case 'KeyK':
         if (isGameplay && !e.repeat && d.captureNetSystem
             && typeof d.captureNetSystem.releaseDockedCatch === 'function') {
-          if (d.captureNetSystem.releaseDockedCatch()) {
+          // let-go-bag (owner 2026-10-28): K falls through to the bag on a daughter's rack ONLY when the mother's collar holds nothing;
+          // a refused mother let-go (a big piece, a hand-off in flight) is an answer, never a reason to let go of something else.
+          const collar = typeof d.captureNetSystem.getDockedCatch === 'function' ? d.captureNetSystem.getDockedCatch() : null;
+          if (collar || typeof d.letGoRackBag !== 'function') {
+            if (d.captureNetSystem.releaseDockedCatch()) {
+              d.audioSystem?.playClick?.();
+            }
+          } else if (d.letGoRackBag()) {
             d.audioSystem?.playClick?.();
           }
           e.preventDefault();

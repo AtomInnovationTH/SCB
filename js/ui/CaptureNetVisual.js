@@ -517,7 +517,8 @@ export class CaptureNetVisual {
   _endRackCarries(armIndex, flags) {
     if (armIndex == null || armIndex < 0) return;
     for (const [key, vis] of this._activeVisuals) {
-      if (vis.carry && vis.carry.rack && vis.carry.armIndex === armIndex) this._endCarry(key, vis, flags);
+      if (vis.carry && vis.carry.rack && vis.carry.armIndex === armIndex
+          && !(vis.carry.debris && vis.carry.debris._letGoDrift)) this._endCarry(key, vis, flags);   // let-go-bag R3: a let-go bag's net rides to its end
     }
   }
 
@@ -559,7 +560,7 @@ export class CaptureNetVisual {
     if (d) {
       // The rack let go without an event this visual hears (reset drop, a salvage path): ArmUnit/ArmManager write
       // `_armPinned = false` on every release, and `alive = false` when the piece is gone.
-      if (d.alive === false || d._armPinned === false) {
+      if (d.alive === false || (d._armPinned === false && !d._letGoDrift)) {
         this._endCarry(key, vis, { docked: true, left: true });
         return;
       }
@@ -785,7 +786,7 @@ export class CaptureNetVisual {
         if (payload.debrisId != null) {
           const rkey = `rack_${ai}_${payload.debrisId}`;
           const rvis = this._activeVisuals.get(rkey);
-          if (rvis && rvis.carry) this._endCarry(rkey, rvis, { left: true });
+          if (rvis && rvis.carry && !(rvis.carry.debris && rvis.carry.debris._letGoDrift)) this._endCarry(rkey, rvis, { left: true });
         }
       }
       return;

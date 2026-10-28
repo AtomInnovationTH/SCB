@@ -32,7 +32,7 @@ import { DebrisField } from '../entities/DebrisField.js';
 import { activeResupplySatellite } from '../entities/ResupplySatellite.js';
 import { trawlManager } from './TrawlManager.js';
 import { openingDance } from './OpeningDance.js';
-import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { orbitToSceneCartesian, reseatOrbitFromScene } from '../entities/OrbitalMechanics.js';
 import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
@@ -79,6 +79,19 @@ function yearsWords(y) {
 
 /** The boot trickle's last line ("Sensor array calibrating...") is at 2600 ms; a non-dance new game says its start lines after it. */
 const START_LINES_AFTER_TRICKLE_MS = 2700;
+
+/** @private let-go-bag: "5 weeks" / "10 days" for a life in years (days under two weeks, never under a day). */
+function lifeWords(years) {
+  const days = Math.max(1, Math.round(years * 365.25));
+  if (days < 14) return `${days} ${days === 1 ? 'day' : 'days'}`;
+  const weeks = Math.round(days / 7);
+  if (weeks <= 52) return `${weeks} weeks`;
+  return yearsWords(years);
+}
+
+/** @private let-go-bag: a bag let go drifts away from her at this speed (km/s: 0.5 m/s, an estimate) and is gone this many seconds later. */
+const BAG_DRIFT_KMS = 0.0005;
+const BAG_GONE_S = 8;
 
 export class GameFlowManager {
   constructor() {
@@ -905,6 +918,7 @@ export class GameFlowManager {
       bigPieces.clear();
       this._unplacedBig = [];
       this._meltFinals = [];                // lane 5e: no melted piece waits to be let go, no save is owed
+      this._goneBags = [];                  // let-go-bag: no let-go bag is left to take off the field
       this._meltSaveOwed = false;
 
       // Reset game counters but keep gameState.currentState at GAME_OVER for valid → SHOP transition
@@ -2096,6 +2110,7 @@ export class GameFlowManager {
     bigPieces.clear();
     this._unplacedBig = [];
     this._meltFinals = [];                  // lane 5e: no melted piece waits to be let go, no save is owed
+    this._goneBags = [];                    // let-go-bag: no let-go bag is left to take off the field
     this._meltSaveOwed = false;
 
     // Notify self-resetting systems (CommsSystem, KesslerSystem,
@@ -3516,6 +3531,86 @@ export class GameFlowManager {
     this._openWhereNext(start, { said });
   }
 
+  // ======================================================================
+  // let-go-bag (owner 2026-10-28, "Add 'let the bag go'"): a parked bag of small pieces nobody wants is let go where she is
+  // ======================================================================
+
+  /**
+   * K with nothing at the mother's collar: the bag a daughter holds on her rack is let go, when none of its pieces carries salvage ("not
+   * worth salvaging"). Nothing parking added needs reversing: the pieces paid at parking (`_credited`, they stay credited: that credit is the
+   * removal) and a bag without salvage never took the salvage bonus or resources. A bag with salvage is worth keeping: one line, no change.
+   * The daughter's rack gives the bag up (`detachHeldCatch`: her net is used up, NET_CONSUMED, she reloads and can be sent again; null
+   * while she carries it), then the bag is disposed of as `_letGoBig` does (re-seated on its own orbit, field row cleared, `_disposed`),
+   * and given a small push away from her so it visibly drifts off; `_goneBagsFrame` takes it off the field a few seconds later.
+   * @returns {boolean} the bag was let go
+   */
+  letGoRackBag() {
+    const am = this._refs && this._refs.armManager;
+    const offer = am && typeof am.rackBagOffer === 'function' ? am.rackBagOffer() : null;
+    if (!offer) return false;
+    const say = (text) => eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority: 'info', _keep: true });
+    if (offer.notSelected) { say('The selected daughter holds no bag: select the one that does.'); return false; }
+    if (offer.ambiguous) { say('Two daughters hold bags: select the one to let go.'); return false; }
+    if (offer.salvage) { say('This bag has salvage: bring it in.'); return false; }
+    const bag = offer.bag;
+    const reg = this._refs && this._refs.fieldRegistry;
+    const df = this._refs && this._refs.debrisField;
+    const player = this._refs && this._refs.player;
+    const altKm = reg && typeof reg.altitudeKm === 'function' && Number.isFinite(reg.altitudeKm()) ? reg.altitudeKm()
+      : (player && typeof player.getAltitudeKm === 'function' ? player.getAltitudeKm() : NaN);
+    const years = lifetimeYears(altKm, bag.mass, dragAreaM2(bag));
+    // where she holds it NOW: the pin is the authority while it is held (the drawn position can be a frame old), and the rack gives the pin up below
+    const pin = bag._armPinPos && Number.isFinite(bag._armPinPos.x) ? { x: bag._armPinPos.x, y: bag._armPinPos.y, z: bag._armPinPos.z } : null;
+    // R3: the net art stays drawn around the drifting bag until it is gone (CaptureNetVisual reads the mark; the release below would end it)
+    bag._letGoDrift = true;
+    if (!am.detachHeldCatch(bag.id)) { bag._letGoDrift = false; say('The bag is not free to let go yet.'); return false; }
+    const canon = df && typeof df.getDebrisById === 'function' ? df.getDebrisById(bag.id) : null;
+    // R4: the rack's entry may be a snapshot of the field's body: its pins go too (as `detachHeldPiece` does)
+    for (const b of [bag, canon]) {
+      if (!b) continue;
+      if (captureNetSystem && typeof captureNetSystem._clearCatchPins === 'function') captureNetSystem._clearCatchPins(b);
+      b._capturedByArm = null;
+      b._rackFromMotherNet = false;
+    }
+    const bodies = [bag];
+    if (canon && canon !== bag) { canon._letGoDrift = true; bodies.push(canon); }
+    // the same ONE computation K's release uses, plus a push away from her so it drifts off (the piece shares her velocity otherwise)
+    const v = player && typeof player.getVelocity === 'function' ? player.getVelocity() : null;
+    const pp = player && typeof player.getPosition === 'function' ? player.getPosition() : null;
+    for (const b of bodies) {
+      let reseated = false;
+      if (pin && b._scenePosition && typeof b._scenePosition.set === 'function') b._scenePosition.set(pin.x, pin.y, pin.z);
+      if (v && pp && b._scenePosition && b.orbit) {
+        const dx = b._scenePosition.x - pp.x, dy = b._scenePosition.y - pp.y, dz = b._scenePosition.z - pp.z;
+        const len = Math.hypot(dx, dy, dz) || 0;
+        const u = len > 0 ? { x: dx / len, y: dy / len, z: dz / len } : { x: 0, y: 0, z: 1 };
+        reseated = reseatOrbitFromScene(b.orbit, b._scenePosition,
+          { x: v.x + u.x * BAG_DRIFT_KMS, y: v.y + u.y * BAG_DRIFT_KMS, z: v.z + u.z * BAG_DRIFT_KMS });
+      }
+      if (!reseated && captureNetSystem && typeof captureNetSystem.reseatBodyOrbit === 'function') captureNetSystem.reseatBodyOrbit(b);
+      b.fieldId = null;                                                    // the departure removal, not the field store, decides its end
+      b.fieldRow = null;
+      b._disposed = true;
+    }
+    if (!this._goneBags) this._goneBags = [];
+    this._goneBags.push({ id: bag.id, t: 0 });
+    say(Number.isFinite(years) ? `Bag let go. It burns up in about ${lifeWords(years)}.` : 'Bag let go. It stays up.');
+    this.saveGame();
+    return true;
+  }
+
+  /** @private let-go-bag: a bag let go BAG_GONE_S seconds ago drifts out of sight: it is taken off the field (the departure removal is the fallback). */
+  _goneBagsFrame(dt) {
+    const df = this._refs && this._refs.debrisField;
+    const keep = [];
+    for (const g of this._goneBags) {
+      g.t += dt > 0 ? dt : 0;
+      if (g.t < BAG_GONE_S) { keep.push(g); continue; }
+      if (df && typeof df.removeDebris === 'function') df.removeDebris(g.id);
+    }
+    this._goneBags = keep;
+  }
+
   /**
    * @private D2/D5 shared: let a held big piece go where she is, and pay it. `detachHeldPiece` takes it off its holder (null: not held, in
    * transit or being cut: nothing happens, said, and the piece stays pending); then the 5b review trap: the body is put on its OWN orbit in
@@ -3766,6 +3861,7 @@ export class GameFlowManager {
     this._updateStranded(dt);
     this._resumeOwedTrip(dt);
     if (this._unplacedBig && this._unplacedBig.length) this._placeUnplacedBig();   // slice 5 (5b): a restored piece no holder could take yet
+    if (this._goneBags && this._goneBags.length) this._goneBagsFrame(dt);                  // let-go-bag: a bag that drifted off is taken off the field
     if ((this._meltFinals && this._meltFinals.length) || this._meltSaveOwed) this._meltFrame();   // slice 5 (5e): a melted piece to let go of, a save owed
     // trip-melt D2/D6: the burn between missions (waits for the daughters, then burns; `dt` is 0 while the world is held)
     this._trip.update(dt);

@@ -2148,6 +2148,8 @@ async function init() {
     getLadderController: () => ladderController,
     // slice 5 (5c): U opens / closes the fate list of a big catch (late-binding closure: the list is built right after this init).
     getFateList: () => fateList,
+    // let-go-bag: K with nothing at the collar lets go of a no-salvage bag on a daughter's rack (late-binding closure, as above).
+    letGoRackBag: () => gameFlowManager.letGoRackBag(),
     // SAFETY OVERRIDE radiator sweep (owner 2026-09-09): while the OVERRIDE
     // panel is engaged (grid up) the O key runs PlayerSatellite.toggleFlowerOverride
     // — the full FOLDED ↔ DEPLOYED travel — instead of the STOW ↔ CARGO toggle.
@@ -3630,6 +3632,8 @@ async function init() {
         // slice 5 (5c, F1): the CHOOSE button (U) stands whenever any big piece is aboard (picked or not: a pick can be changed)
         // and the fate list is closed, as a state chip; the catch line only adds it first, for 30 s.
         getChoosePending: () => !!(fateList && !fateList.isOpen() && pendingAboard().length > 0),
+        // let-go-bag: a daughter holds a bag with no salvage on her rack (K lets it go)
+        getRackBag: () => { if (captureNetSystem.getDockedCatch()) return false; const o = armManager && armManager.rackBagOffer ? armManager.rackBagOffer() : null; return !!(o && o.bag && !o.salvage); },
         // u15a A-T4: the manual-capture lesson's LAUNCH NET waits for a piloted daughter in flight (N then nets by hand).
         getPilotState: () => {
           if (!inputManager || !inputManager.armPilotMode || !cameraSystem || !cameraSystem.getPilotedArm) return null;

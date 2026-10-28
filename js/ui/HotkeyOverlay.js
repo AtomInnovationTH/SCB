@@ -220,7 +220,7 @@ export const HOTKEY_GROUPS = [
       [['Shift S'], 'Wide scan', { id: 'wide_scan' }],
       [['Z'], 'Next debris part', { id: 'next_part' }],
       [['L'], 'Hold: laser slows spin', { id: 'laser' }],
-      [['K'], 'Drop nose catch', { id: 'nose_catch' }],
+      [['K'], 'Drop nose catch / daughter bag', { id: 'nose_catch' }],
       'gap',
       [['Shift − +'], 'Throttle down / up', { id: 'throttle' }],
       [['Shift 1–3'], 'Pick power line', { id: 'power_line' }],

@@ -72,6 +72,9 @@ const CHIPS = Object.freeze({
   reel: Object.freeze({ text: 'Reel her home', glyph: 'R', keys: Object.freeze(['KeyR']), press: 'KeyR', button: 'REEL' }),
   // u14b B1: K lets the catch at the collar go (CaptureNet.releaseDockedCatch, refusals included).
   letgo: Object.freeze({ text: 'Let the catch go', glyph: 'K', keys: Object.freeze(['KeyK']), press: 'KeyK', button: 'LET GO' }),
+  // let-go-bag (owner 2026-10-28): K lets go of a no-salvage bag a daughter holds on her rack (GameFlowManager.letGoRackBag). Its own kind so it
+  // never takes the slot from a teaching step chip the way the collar's LET GO does.
+  letgobag: Object.freeze({ text: 'Let the bag go', glyph: 'K', keys: Object.freeze(['KeyK']), press: 'KeyK', button: 'LET GO' }),
   // slice 5 (5c): U opens the fate list of a big catch (ui/FateList.js): the catch line "press U to choose" brings it; floors 2-4.
   choose: Object.freeze({ text: 'Choose what to do with it', glyph: 'U', keys: Object.freeze(['KeyU']), press: 'KeyU', button: 'CHOOSE' }),
   // u14b B2: I opens the full-screen library; the SPECS tab opens a different (side) view, so it needs its own button.
@@ -97,7 +100,7 @@ export const BEAT_CHIPS = Object.freeze({
 });
 
 /** The key each chip kind presses (a physical or tapped press of it ends a line chip). */
-const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', grip: 'KeyN', magnet: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', choose: 'KeyU', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
+const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', grip: 'KeyN', magnet: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', letgobag: 'KeyK', choose: 'KeyU', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
 
 /** u18c D5: the chip kinds that are KeyN (a tool word); a daughter holding the piece decides which one is true now. */
 const N_KINDS = Object.freeze(['net', 'pad', 'grip', 'magnet']);
@@ -147,6 +150,8 @@ export class TouchActionChip {
    * @param {() => boolean} [deps.getChoosePending]  slice 5 (5c): a big piece is aboard and the fate list is closed. While it is true the
    *        CHOOSE button (KeyU) stands as a state chip on floors 2-4 (lowest priority; F1), and the catch line's CHOOSE line chip
    *        may come first; omitted = the line chip only, on events and the 30 s timer (tests).
+   * @param {() => boolean} [deps.getRackBag]  let-go-bag: a daughter holds a bag on her rack that K would let go (no salvage in it). While true,
+   *        LET GO (KeyK) stands as a state chip on floors 2-3, below every other chip; omitted = never (tests of other chips).
    * @param {() => (string|null)} [deps.getPilotState]  u15a A-T4: the state ('TRANSIT'|'APPROACH'|'STATION_KEEP'|...) of the daughter
    *        the player is piloting, or null when not piloting. Gates the ch2_manual_capture beat chip; omitted = never shown.
    * @param {() => number} [deps.now]  ms clock (tests)
@@ -155,7 +160,7 @@ export class TouchActionChip {
    * @param {boolean} [deps.poll=true]   false -> no timer (tests drive `evaluate()`)
    */
   constructor({ eventBus, ticker = null, getFloor = null, getMotherNets = null, hasDaughter = null, getHolding = null,
-    getFarState = null, getReelable = null, getPilotState = null, getChoosePending = null, getCollarCatch = () => captureNetSystem.getDockedCatch(), now = null, schedule = null, glass = true, poll = true } = {}) {
+    getFarState = null, getReelable = null, getPilotState = null, getChoosePending = null, getRackBag = null, getCollarCatch = () => captureNetSystem.getDockedCatch(), now = null, schedule = null, glass = true, poll = true } = {}) {
     this._eb = eventBus;
     this._ticker = ticker;
     this._getFloor = getFloor;
@@ -165,6 +170,7 @@ export class TouchActionChip {
     this._getReelable = getReelable;
     this._getPilotState = getPilotState;
     this._getChoosePending = typeof getChoosePending === 'function' ? getChoosePending : null;
+    this._getRackBag = typeof getRackBag === 'function' ? getRackBag : null;
     this._getCollarCatch = typeof getCollarCatch === 'function' ? getCollarCatch : null;
     this._now = now || (() => Date.now());
     this._schedule = schedule || ((fn) => { if (typeof setTimeout === 'function') setTimeout(fn, 0); else fn(); });
@@ -235,6 +241,7 @@ export class TouchActionChip {
       else if (d.digested) this._catchLeft(d.debrisId);
     }));
     on(Events.NET_RELEASED, re((d) => { this._catchLeft(d && d.debrisId); }));
+    on(Events.NET_CONSUMED, re(() => {}));       // let-go-bag: a rack gave her bag up: look again at once (LET GO leaves)
     on(Events.CARGO_TRANSFER_START, re((d) => { if (d && d.from && d.from.kind === 'collar') this._catchLeft(d.debrisId); }));
     on(Events.CARGO_TRANSFER_COMPLETE, re((d) => { this._catchLeft(d && d.debrisId); }));
     on(Events.ARM_DEPLOYED, re(() => { this._denied = false; this._daughterOut = true; }));
@@ -480,12 +487,20 @@ export class TouchActionChip {
   }
 
   /**
-   * @returns {'net'|'pad'|'grip'|'magnet'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'choose'|'read'|'widescan'|'throttle'|null} the chip the current state asks for (ignoring other chips on screen).
+   * @returns {'net'|'pad'|'grip'|'magnet'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'letgobag'|'choose'|'read'|'widescan'|'throttle'|null} the chip the current state asks for (ignoring other chips on screen).
    * CHOOSE is the lowest-priority state chip (F1): every other chip, line or beat outranks it, and it fills the gap when none is wanted.
    */
   wanted() {
     if (!this._glass) return null;
-    return this._wantedFirst() || (this._chooseStanding() ? 'choose' : null);
+    return this._wantedFirst() || (this._rackBagStanding() ? 'letgobag' : null) || (this._chooseStanding() ? 'choose' : null);
+  }
+
+  /** @private let-go-bag: a daughter holds a bag K would let go (the game says so) and the floor is one where the chips live (2-3) */
+  _rackBagStanding() {
+    if (!this._getRackBag || !this._floorOk()) return false;
+    // R1: K belongs to the mother's nose collar first: while it holds a catch the key lets THAT go, so no bag chip (it would press K)
+    try { if (this._getCollarCatch && this._getCollarCatch()) return false; } catch (_e) { /* no reading: the bag reader decides */ }
+    try { return !!this._getRackBag(); } catch (_e) { return false; }
   }
 
   /** @private every chip except the CHOOSE state chip (the CHOOSE line chip is among them) */
