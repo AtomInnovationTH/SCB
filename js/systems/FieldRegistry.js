@@ -178,6 +178,16 @@ export class FieldRegistry {
     return this.fieldById(this._state.currentId) || this._startField();
   }
 
+  /**
+   * Where she is, for the start lines' "Arrived ..." wording (OpeningDance.setFieldProvider): `{ start, altKm, free, berthed }`,
+   * or null when the field map is off (then the field is unknown).
+   */
+  startLineField() {
+    if (!this.isOn()) return null;
+    const f = this.currentField();
+    return { start: f.start === true, altKm: f.altKm, free: f.free === true, berthed: this.isBerthed() };
+  }
+
   /** She is at the free place a push-down trip ended at (no field is hers, none is laid out). */
   isFree() { return this._state.freeKm != null; }
 

@@ -4,8 +4,8 @@
  * Every start leaves the ship as its row says: battery at half and falling, wings rolled up, radiators closed (0°),
  * daughter struts shut (0°). That holds until the player's FIRST ACTION; then, at once and never waiting for each
  * other (DECISIONS §10/§11): the wings roll out, the radiators open to 146°, the daughter struts go to their 34° rest.
- * Same on Mac and iPad. Why the radiators: open, they give the wings room to follow the Sun (closed, the wings tilt
- * only 5°); the one line posted here says so in positive words (owner 2026-10-20: "written in the negative. Do better.").
+ * Same on Mac and iPad. The one line posted here is "Solar panels open. Power coming in." (owner 2026-10-28; the
+ * radiator explanation is gone), or just "Solar panels open." when the ship is in Earth's shadow.
  *
  * What counts as the first action: the first of these that arrives while the opening is ARMED, the game is in a
  * gameplay state and the start ride (the intro fly-by) is not in flight:
@@ -52,8 +52,12 @@ import { radToDeg } from '../core/MathUtil.js';
  */
 export const OPENING_PARTS = Object.freeze(['wings', 'radiators', 'struts']);
 
-/** The opening line starts with this (the onboarding Director leaves it on screen, see OnboardingDirector). */
-export const OPENING_LINE_START = 'Opening up:';
+/** The opening line (owner 2026-10-28; the onboarding Director leaves it on screen, see OnboardingDirector). */
+export const OPENING_LINE = 'Solar panels open. Power coming in.';
+/** The same line in Earth's shadow: no power is coming in, so it says only what happened. */
+export const OPENING_LINE_SHADOW = 'Solar panels open.';
+/** @returns {boolean} `text` is one of the two opening lines */
+export function isOpeningLine(text) { return text === OPENING_LINE || text === OPENING_LINE_SHADOW; }
 
 /** How long after a pointer lets go a `click` may still follow (the F1 bar and the step chip run on it). */
 export const CLICK_WAIT_MS = 350;
@@ -82,24 +86,11 @@ export function keyCounts(e) {
   return true;
 }
 
-// The one comms line: names what opened and why the radiators open (a fact about the wings' tilt, never a claim
-// that the battery gains). '' when nothing opened.
+// The one comms line, posted on the first action (owner 2026-10-28). Only when the wings opened (it says solar panels
+// open); '' otherwise. `opts.inShadow`: no power comes in, so only the first sentence.
 export function openingLine(opened, opts = {}) {
-  const FL = Constants.THERMAL.FLOWER;
-  const parts = opts.parts || OPENING_PARTS;
-  const openDeg = Number.isFinite(opts.openDeg) ? opts.openDeg : FL.OPEN_DEG;
-  const bits = [];
-  if (opened.includes('wings')) bits.push('wings out');
-  if (opened.includes('radiators')) bits.push(`radiators to ${openDeg}\u00b0`);
-  if (opened.includes('struts')) bits.push('struts to rest');
-  if (!bits.length) return '';
-  let line = `${OPENING_LINE_START} ${bits.join(', ')}.`;
-  if (opened.includes('radiators')) {
-    line += ' The radiators give the wings room to follow the Sun.';
-  } else if (!parts.includes('radiators')) {
-    line += ' The radiators open when she runs warm and give the wings room to follow the Sun.';
-  }
-  return line;
+  if (!Array.isArray(opened) || !opened.includes('wings')) return '';
+  return opts.inShadow === true ? OPENING_LINE_SHADOW : OPENING_LINE;
 }
 
 // Whether the radiator's COMMANDED angle is nearer the open pose than the rest pose (the "." law).
@@ -171,6 +162,8 @@ export function shipOpeningActuators({ getPlayer, getArmManager, bus = eventBus 
  * @property {() => object} [commanded] - which parts are already commanded open
  * @property {(text: string) => void} [say] - the sink of the one comms line
  * @property {readonly string[]} [parts] - defaults to OPENING_PARTS
+ * @property {() => void} [beforeLine] - posts the start lines still waiting, called before the opening line
+ * @property {() => boolean} [inShadow] - the ship is in Earth's shadow now (the line then omits "Power coming in.")
  * @property {object} [timers] - { setTimeout(fn, ms), clear(id) }
  */
 
@@ -181,6 +174,11 @@ export class StartOpening {
     this._actuators = deps.actuators || {};
     this._commanded = deps.commanded || (() => ({}));
     this._say = deps.say || StartOpening.defaultSay;
+    // Earth's shadow at the moment of the first action (main.js: the ship's cached flag); unknown = sunlit
+    // Called right before the opening line goes out: posts the start lines still waiting (a new game without the
+    // dance), so "Arrived", "Systems" always come first
+    this._beforeLine = typeof deps.beforeLine === 'function' ? deps.beforeLine : () => {};
+    this._inShadow = typeof deps.inShadow === 'function' ? deps.inShadow : () => false;
     this._parts = Array.isArray(deps.parts) ? deps.parts : OPENING_PARTS;
     this._timers = deps.timers || {
       setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -213,6 +211,8 @@ export class StartOpening {
       text: GestureHints.speak(text),
       priority: 'info',
       _onboarding: true,
+      // never folded away by the 2 s burst rule (a fast first action must not drop "Arrived" / "Systems")
+      _keep: true,
     });
   }
 
@@ -425,6 +425,7 @@ export class StartOpening {
       this._endGrace();
       this._grace = this._timers.setTimeout(() => { this._grace = null; }, STEP_TAP_GRACE_MS);
     }
+    try { this._beforeLine(); } catch (e) { console.error('[StartOpening] beforeLine:', e); }
     const opened = [];
     for (const part of this._parts) {
       const act = this._actuators[part];
@@ -434,7 +435,9 @@ export class StartOpening {
       if (ok) opened.push(part);
     }
     this._fires++;
-    const line = openingLine(opened, { parts: this._parts });
+    let inShadow = false;
+    try { inShadow = this._inShadow() === true; } catch (_e) { inShadow = false; }
+    const line = openingLine(opened, { inShadow });
     this._lastLine = line;
     if (line) {
       try { this._say(line); } catch (e) { console.error('[StartOpening] say:', e); }

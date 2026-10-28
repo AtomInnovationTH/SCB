@@ -26,7 +26,7 @@ import { StorageKeys } from '../core/StorageKeys.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { gameState } from '../core/GameState.js';
 import { wingsHint, WINGS_HINT_ID } from './WingsHint.js';
-import { OPENING_LINE_START } from './StartOpening.js';
+import { isOpeningLine } from './StartOpening.js';
 import { OUT_OF_MOTHER_NETS_LINE, motherNWorks, motherNHeldBack, motherNLine } from './netRouting.js';
 
 /**
@@ -50,7 +50,9 @@ export const ONBOARDING_BEATS = [
   // talking scales (guidanceLevel + behavior tuner). Camera/attitude keys are taught just-in-time, not here.
   {
     id: 'boot',
-    commsSource: 'HOUSTON', commsText: 'Powering up. Telemetry online, Cowboy.',
+    // Silent (owner 2026-10-28): the start lines ("Arrived at first debris field." "Systems... nominal.") come from
+    // OpeningDance._postStartLine. The beat stays (same id and timing) so the stored progress keeps its meaning.
+    commsSource: 'HOUSTON', commsText: null,
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     autoAdvanceAfter: 3000,
@@ -60,7 +62,7 @@ export const ONBOARDING_BEATS = [
     // No key names (the chip carries the how), ONE step at a time: the line (and the scan after it) waits until the
     // wings are commanded out. The opening (StartOpening) commands them on the player's first action, or the
     // player's own `,` does; either way WingsHint.needsOpening() reads the commanded target, so this passes.
-    commsSource: 'HOUSTON', commsText: 'Power coming in. Nothing is marked until you scan.',
+    commsSource: 'HOUSTON', commsText: 'Scan to identify targets.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     requiresWingsCommanded: true,
@@ -240,11 +242,10 @@ const RELEVANT_SKILLS = new Set(
 const OPTIONAL_DEFAULT_SKIP_MS = 25000;
 
 /**
- * The ship's opening line ("Opening up: wings out, radiators to 146°, ... The radiators give the wings room to
- * follow the Sun.") is the one place the player is told WHY the radiators open. The comms panel shows only the newest
- * line, and the handshake beat's "Power coming in ..." is released the same frame the wings are commanded (measured
+ * The ship's opening line ("Solar panels open. Power coming in.") is posted on the player's first action. The
+ * comms panel shows only the newest line, and the handshake beat's "Scan to identify targets." is released the same frame the wings are commanded (measured
  * headless: 1.0 s Mac, 0.07 s touch), which would replace it at once. So the handshake beat waits this long after
- * the opening line (a two-line message, read at a calm pace).
+ * the opening line (read at a calm pace).
  */
 export const OPENING_LINE_READ_MS = 5000;
 
@@ -616,7 +617,7 @@ export class OnboardingDirector {
     // OPENING_LINE_READ_MS (see _beatGateMet).
     if (Events.COMMS_MESSAGE) {
       on(Events.COMMS_MESSAGE, (m) => {
-        if (m && typeof m.text === 'string' && m.text.startsWith(OPENING_LINE_START)) this._openingLineAtMs = Date.now();
+        if (m && typeof m.text === 'string' && isOpeningLine(m.text)) this._openingLineAtMs = Date.now();
       });
     }
 

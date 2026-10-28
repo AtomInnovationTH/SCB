@@ -77,6 +77,9 @@ function yearsWords(y) {
   return `${n} ${n === 1 ? 'year' : 'years'}`;
 }
 
+/** The boot trickle's last line ("Sensor array calibrating...") is at 2600 ms; a non-dance new game says its start lines after it. */
+const START_LINES_AFTER_TRICKLE_MS = 2700;
+
 export class GameFlowManager {
   constructor() {
     /** @type {boolean} */
@@ -442,7 +445,7 @@ export class GameFlowManager {
           // change (these are first-run intro callbacks).
           // T6: "EVA crew clear." lands first (handoff+~0.3s) — the acknowledgment
           // that the astronaut cleared the hull, which is what UNLOCKS the power-up
-          // (the existing "Powering up..." boot line then reads as the result).
+          // (the start lines "Arrived ..." and "Systems... nominal." then read as the result).
           // Tagged _onboarding so it passes the tier-0 suppression gate during the
           // OnboardingDirector intro (raw HOUSTON lines are muted at tier 0).
           timerManager.setTimeout(() => {
@@ -563,7 +566,13 @@ export class GameFlowManager {
       // motion or ?shot boot no dance is running, and resetGame is the ONLY
       // production endState call — passing true there booted the daughters
       // stowed at α 0 instead of the one open pose.
-      this.resetGame({ keepOpeningDance: openingDance.isActive() });
+      // Without the dance (reduced motion, flag off, ?shot) the start lines wait for the boot trickle below (EVA crew clear,
+      // Comms are up ...) so they are the last lines before the first action; with it, comms is held until the hand-over.
+      const danceRuns = openingDance.isActive();
+      this.resetGame({ keepOpeningDance: danceRuns, newGame: true, deferStartLine: !danceRuns, armNow: true });
+      if (!danceRuns) {
+        timerManager.setTimeout(() => { openingDance.postStartLine(); }, START_LINES_AFTER_TRICKLE_MS, { owner: this });
+      }
       // deep-polish-4: if the player SKIPPED the menu departure, suppress the
       // sim intro zoom too (respect the skip). Set AFTER resetGame(), which
       // clears the flag. Read once by the ORBITAL_VIEW enter below.
@@ -594,7 +603,7 @@ export class GameFlowManager {
     eventBus.on(Events.MENU_FAST_START, () => {
       // NOT keepOpeningDance: unlike MENU_START this reserved hook never binds
       // the sim ship to the dance, so it must land on the finished pose.
-      this.resetGame();
+      this.resetGame({ newGame: true });
       this._applyStartLocation();   // place ground track over the player's home region
       this._stageOpeningLight();    // fresh M1 spawn opens sunlit (new-game paths only)
       gameState.currentState = GameStates.MENU;
@@ -614,8 +623,8 @@ export class GameFlowManager {
       audioSystem.init();
       audioSystem.resume();
 
-      // Clean slate first, then restore saved progression
-      this.resetGame();
+      // Clean slate first, then restore saved progression (the start lines wait for the saved field)
+      this.resetGame({ deferStartLine: true });
       this._applyStartLocation();   // place ground track over the player's home region
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
 
@@ -756,6 +765,10 @@ export class GameFlowManager {
         return;
       }
 
+      // The start lines, now that the saved field is known: "Arrived ...", "Systems... nominal.", the silent wings arm and
+      // the StartOpening arm, once (a game-over save returned above: GAMEOVER_CONTINUE -> endState posts its own).
+      openingDance.postStartLine();
+
       // u1-resupply-stop D1: a save made at a mission boundary (a multiple of DEBRIS_PER_MISSION cleared, no catch
       // since) reloads AT the stop — closing the game must not close the shop. Any other count reloads mid-mission.
       // (resetGame above closed it; the gameOver save returned earlier and GAMEOVER_CONTINUE opens its own stop.)
@@ -872,7 +885,9 @@ export class GameFlowManager {
     // Game over → Retry
     eventBus.on(Events.GAMEOVER_RETRY, () => {
       persistenceManager.deleteSave(); // clear stale save on retry
-      this.resetGame();
+      // The start lines wait for the way back into the field (GAME_OVER -> BRIEFING wipes the comms log): see the
+      // GAME_STATE_CHANGE listener below.
+      this.resetGame({ deferStartLine: true, atStart: true });
       this._applyStartLocation();   // place ground track over the player's home region
       this.transitionToState(GameStates.BRIEFING);
     });
@@ -927,7 +942,11 @@ export class GameFlowManager {
       // without this the dance would keep running (and its wall clock keep
       // advancing) through the SHOP, then fire its hand-over — pose snap and
       // Houston line — on the first tick after the player redeploys.
-      if (player) openingDance.endState(player);
+      // A retry restarts at the start field (FieldRegistry's own GAMEOVER_CONTINUE listener resets it too): said as
+      // `atStart`, so the "Arrived" wording never depends on which listener ran first.
+      // The lines wait for the way back into the field: GAME_OVER -> SHOP wipes the comms log (CommsSystem.reset), so
+      // they are posted when the shop is left (GAME_STATE_CHANGE listener below).
+      if (player) openingDance.endState(player, { atStart: true, deferStartLine: true });
 
       this.approachTarget = null;
       this.approachComplete = false;
@@ -1754,7 +1773,12 @@ export class GameFlowManager {
     // First ORBITAL_VIEW: opening comms guidance. deep-polish-4: the 4 s VLEO
     // hold is gone; guidance now trickles in AFTER the boot comms + settle, and
     // the two lines are split into separate timers so they never land together.
-    eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
+    eventBus.on(Events.GAME_STATE_CHANGE, ({ from, to }) => {
+      // A retry / game-over CONTINUE held its start lines (the game-over exit wipes the comms log): the player is back
+      // in the field when the shop or the briefing is left for flight. Once; nothing pending = nothing happens.
+      if ((from === 'SHOP' || from === 'BRIEFING') && (to === 'ORBITAL_VIEW' || to === 'APPROACH')) {
+        openingDance.postStartLine();
+      }
       // Any ORBITAL_VIEW entry WITHOUT the opening beats (Continue, or
       // returning from a screen): no scripted cameo is coming, so the ambient
       // scheduler's defer window is pointless — open it immediately. Without
@@ -2053,6 +2077,12 @@ export class GameFlowManager {
    */
   resetGame(opts) {
     const keepOpeningDance = !!(opts && opts.keepOpeningDance);
+    // Start lines (owner 2026-10-28): a new game says "first debris field" even when the field map is off; CONTINUE
+    // posts them itself after the load (the saved field is known only then).
+    const newGame = !!(opts && opts.newGame);
+    const deferStartLine = !!(opts && opts.deferStartLine);
+    const armNow = !!(opts && opts.armNow);
+    const atStart = !!(opts && opts.atStart);
     const {
       player, armManager,
       cameraSystem, resourceSystem,
@@ -2110,7 +2140,7 @@ export class GameFlowManager {
     // says so explicitly (`keepOpeningDance`) and binds the sim ship to the
     // live progress in the same tick.
     if (player && !keepOpeningDance) {
-      openingDance.endState(player);
+      openingDance.endState(player, { newGame, deferStartLine, armNow, atStart });
     }
 
     this.approachTarget = null;

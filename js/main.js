@@ -1571,6 +1571,8 @@ async function init() {
   // Nets step 3 slice 2b: the fields by height. Inert with FIELDS_BY_HEIGHT off (the field then lays out today's welcome field).
   fieldRegistry = new FieldRegistry();
   fieldRegistry.init({ debrisField, player });
+  // The start lines' "Arrived ..." wording follows the field she is at (null with the field map off: new game only).
+  openingDance.setFieldProvider(() => (fieldRegistry ? fieldRegistry.startLineField() : null));
   debrisField.setFieldSource(fieldRegistry);
   // Nets step 3 slice 3 lane 3b: the resupply satellite's look (RESUPPLY_BERTH events). Its own group in the scene, NOT one of the
   // ActiveSatellites below (those end the run on contact); near-field membership is its own (within 8.5 m of her). Hidden on floors
@@ -3507,6 +3509,8 @@ async function init() {
   const _openingShip = shipOpeningActuators({ getPlayer: () => player, getArmManager: () => armManager });
   startOpening = new StartOpening({
     isGameplay: () => gameState.isGameplay(),
+    beforeLine: () => openingDance.postStartLine(),   // a start line still waiting goes out before the opening line
+    inShadow: () => !!(player && player._inShadow),   // the ship's own cached flag (the MotherCallouts precedent)
     introInFlight: () => !!(ladderController && typeof ladderController.introInFlight === 'function'
       && ladderController.introInFlight()),
     actuators: _openingShip.actuators,
@@ -3520,6 +3524,7 @@ async function init() {
   openingDance.setOnStartApplied(() => startOpening.arm());
   // A menu visit ends the run: no poll, no armed state until the next start applies it.
   eventBus.on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
+    if (to === GameStates.MENU) openingDance.cancelPendingStart();   // a deferred start never fires after a return to the menu
     if (to === GameStates.MENU && startOpening) startOpening.disarm();
   });
 

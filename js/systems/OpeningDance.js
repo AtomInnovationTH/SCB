@@ -51,6 +51,7 @@ import { audioSystem } from './AudioSystem.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { devShotGate } from '../core/DevShotGate.js';
 import { wingsHint } from './WingsHint.js';
+import { fieldArrivedLine, freeArrivedLine, SATELLITE_ARRIVED_LINE } from './TransferTrip.js';
 import { degToRad, radToDeg, lerp } from '../core/MathUtil.js';
 
 /** Beat-table anchors (Constants.OPENING_DANCE). */
@@ -60,10 +61,11 @@ const FL = Constants.THERMAL.FLOWER;
 /** What getRosaProgress() reports to the bound ship — rolled up. */
 const SHIP_WINGS_ROLLED_UP = Object.freeze({ wing1: 0, wing2: 0 });
 
-/** The start line — true to the start (battery at half and draining, wings rolled up), key-free, and says when she
- *  opens: on the player's first action, which StartOpening carries out (DECISIONS "Opening at the start"). */
-export const HANDOVER_LINE = 'Battery at half and falling, Cowboy. Press or tap anything and she opens up. '
-  + 'She is yours.';
+/** The two start lines (owner 2026-10-28), both HOUSTON, posted at every start (the hand-over and the non-dance
+ *  starts). The first is true only at the start field; elsewhere `_arrivedLine` says the field she is at. The wings
+ *  open on the player's first action (StartOpening, "Solar panels open. Power coming in.", DECISIONS "Opening at the start"). */
+export const START_ARRIVED_FIRST_LINE = 'Arrived at first debris field.';
+export const START_SYSTEMS_LINE = 'Systems... nominal.';
 
 /** Zero progress — what every consumer sees before t = 0 and after unbind. Frozen: the idle object is shared. */
 const ZERO_PROGRESS = Object.freeze({
@@ -123,6 +125,8 @@ class OpeningDance {
     this._skipFromT = 0;
     /** @private skip() ignores input until this wall-clock ms (see SKIP_DEAF_MS) */
     this._skipDeafUntilMs = null;
+    this._startPending = null;    // endState({deferStartLine}) waits here for postStartLine (CONTINUE: after the load)
+    this._fieldProvider = null;   // setFieldProvider: where she is, for the "Arrived" line
     /** @private beat-edge latch — each edge fires exactly once per arming */
     this._fired = null;
     /** @private StartOpening's arm(): called once the start state is applied (see setOnStartApplied) */
@@ -226,6 +230,7 @@ class OpeningDance {
     this._skipFromT = 0;
     this._skipDeafUntilMs = null;
     this._fired = null;
+    this._startPending = null;
   }
 
   /**
@@ -365,32 +370,88 @@ class OpeningDance {
       this._ship = null;
     }
     this._skipStartMs = null;   // the fade is over (if any)
-    // ORDER: comms opens FIRST (held boot lines enter the log in order), then the hand-over listeners post
-    // "Powering up ..." and the battery line, which stay the last two. Never rely on listener order.
+    // ORDER: comms opens FIRST (held boot lines enter the log in order), then the hand-over listeners and the
+    // start lines go out in order. Never rely on listener order.
     eventBus.emit(Events.COMMS_RELEASE, {});
     eventBus.emit(Events.OPENING_DANCE_HANDOVER, { t: T_HANDOVER_S });
-    // ONE short Houston line, normal priority, distinct from the onboarding boot beat that fires on the event.
-    this._postStartLine(wingsOpening);
+    // The two start lines (a new game), normal priority; also when the wings are already asked for.
+    this._postStartLine(wingsOpening, true);
     // Arm the opening (a player who already asked for a part during the dance has acted: StartOpening opens the
     // rest when the ride ends).
     this._notifyStartApplied();
   }
 
   /**
-   * @private The ONE start line, shared by the dance hand-over and the non-dance starts (endState).
-   * @param {boolean} wingsOpening - the player already asked for the wings: the opening fires itself at the end of
-   *   the ride and posts its own line, so there is no start line
+   * Late wiring (main.js): where she is. `() => ({ start, altKm, free, berthed }) | null` (null: the field map is off or
+   * not built, the field is unknown). Read at the moment the start lines are posted.
    */
-  _postStartLine(wingsOpening) {
+  setFieldProvider(fn) { this._fieldProvider = typeof fn === 'function' ? fn : null; }
+
+  /**
+   * @private The "Arrived ..." line, true to where she is. The start field (or a new game whose field is unknown) says
+   * "Arrived at first debris field."; any other place she is says its own words (TransferTrip); an unknown field on a
+   * start that is not a new game says nothing.
+   * @returns {string|null}
+   */
+  _arrivedLine(newGame, atStart = false) {
+    // A retry always restarts at the start field: said without asking the registry, so it never depends on whether the
+    // registry's own GAMEOVER_CONTINUE listener has run yet.
+    if (atStart) return START_ARRIVED_FIRST_LINE;
+    let f = null;
+    try { f = this._fieldProvider ? this._fieldProvider() : null; } catch (_e) { f = null; }
+    if (!f) return newGame ? START_ARRIVED_FIRST_LINE : null;
+    if (f.berthed) return SATELLITE_ARRIVED_LINE;
+    if (f.free) return freeArrivedLine(f.altKm);
+    if (f.start) return START_ARRIVED_FIRST_LINE;
+    return fieldArrivedLine(f.altKm);
+  }
+
+  /**
+   * The start that `endState(ship, { deferStartLine: true })` held back: the two lines, the silent wings-hint arm and the
+   * StartOpening arm go out now (CONTINUE: the saved field is known only after the load). Exactly once: a second call,
+   * or a call with nothing pending (a failed load, a return to the menu, a later start), does nothing.
+   * @returns {boolean} the start went out
+   */
+  postStartLine() {
+    const p = this._startPending;
+    if (!p) return false;
+    this._startPending = null;
+    // `armed`: the wings hint and the opening were armed at the start already (a new game without the dance); only the lines wait
+    if (!devShotGate.requested) this._postStartLine(p.armed === true, p.newGame === true, p.atStart === true);
+    if (!p.armed) this._notifyStartApplied();
+    return true;
+  }
+
+  /** A deferred start that must not happen any more (the run went back to the menu, the load failed). */
+  cancelPendingStart() { this._startPending = null; }
+
+  /** @returns {boolean} a deferred start is waiting for `postStartLine` */
+  hasPendingStart() { return this._startPending !== null; }
+
+  /**
+   * @private The start lines, shared by the dance hand-over and the non-dance starts (endState): "Arrived ..." and
+   * "Systems... nominal." as two HOUSTON messages. They come for every start, also when the player already asked for the
+   * wings (the opening line follows them then).
+   * @param {boolean} wingsOpening - the player already asked for the wings: the opening fires itself at the end of
+   *   the ride, so the wings hint is not armed
+   * @param {boolean} [newGame=true] - a new game (decides the "Arrived" words when the field is unknown)
+   */
+  _postStartLine(wingsOpening, newGame = true, atStart = false) {
+    const arrived = this._arrivedLine(newGame, atStart);
+    for (const line of [arrived, START_SYSTEMS_LINE]) {
+      if (!line) continue;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'HOUSTON',
+        text: GestureHints.speak(line),
+        priority: 'info',
+        // The hand-over starts the Director first (OPENING_DANCE_HANDOVER -> ONBOARDING_STARTED), which drops comms
+        // to tier 0; an untagged line was muted there (test-WingsHint A1). _onboarding is the tier-0 pass.
+        _onboarding: true,
+        // never folded away by CommsSystem's burst rule: a fast first action must not drop "Arrived" / "Systems"
+        _keep: true,
+      });
+    }
     if (wingsOpening) return;
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: 'HOUSTON',
-      text: GestureHints.speak(HANDOVER_LINE),
-      priority: 'info',
-      // The hand-over starts the Director first (OPENING_DANCE_HANDOVER -> ONBOARDING_STARTED), which drops comms
-      // to tier 0; an untagged line was muted there (test-WingsHint A1). _onboarding is the tier-0 pass.
-      _onboarding: true,
-    });
     // m1-finish: the comms line scrolls away, the battery keeps falling — keep ONE
     // ticker row up until the wings are out (WingsHint; removed by the game loop's
     // update once the ship's wing value passes WINGS_OUT_PROGRESS). The START arms
@@ -467,7 +528,7 @@ class OpeningDance {
    * GAMEOVER retry, reduced motion, flag off, the ?shot harness. NOT flag-gated.
    * @param {object} ship - a PlayerSatellite
    */
-  endState(ship) {
+  endState(ship, opts = {}) {
     // endState MEANS "the dance is over". A dance left running would fire its hand-over later on a path that never
     // wanted one (e.g. a GAMEOVER retry landing mid-unfold). Unconditional and idempotent; callers that mean to KEEP
     // the dance must not call this (GameFlowManager.resetGame's `keepOpeningDance`).
@@ -497,8 +558,18 @@ class OpeningDance {
       ship._rosaManualControl = true;
     }
     // A start that skipped the dance begins at half battery, draining, wings rolled up — say so once, the same
-    // line the hand-over posts. Not in ?shot runs. A bare test-harness endState(stub) posts too (no marker on ship).
-    if (!devShotGate.requested && !(ship._rosaFurlTarget >= 0.5)) this._postStartLine(false);
+    // lines the hand-over posts. Not in ?shot runs. A bare test-harness endState(stub) posts too (no marker on ship).
+    // `deferStartLine`: the caller posts them itself later (postStartLine) once the saved field is known.
+    // (the pending start also holds back the StartOpening arm, see postStartLine).
+    // `armNow` (with deferStartLine): only the LINES wait; the wings hint and the opening arm at once, and StartOpening
+    // flushes the lines before its own line (a first action before they are due keeps the order).
+    if (opts.deferStartLine) {
+      const armed = opts.armNow === true;
+      this._startPending = { newGame: opts.newGame === true, atStart: opts.atStart === true, armed };
+      if (armed && !devShotGate.requested) wingsHint.post({ start: true });
+    } else if (!devShotGate.requested && !(ship._rosaFurlTarget >= 0.5)) {
+      this._postStartLine(false, opts.newGame === true, opts.atStart === true);
+    }
     // Daughters: shut at α 0 (DECISIONS §15 row 4; §4 the daughter docks at the full closed strut position).
     // Production callers just ran armManager.reset(); this drops any stale slew latch (ArmUnit.reset does not clear
     // it) and snaps a docked strut still open back to 0. A stub without setAimAlpha gets a latch to 0.
@@ -512,8 +583,8 @@ class OpeningDance {
       if (typeof arm.setAimAlpha === 'function') arm.setAimAlpha(0, 0);
       else arm._strutTargetAlpha = 0;
     }
-    // Every start path ends here, so the opening is armed here.
-    this._notifyStartApplied();
+    // Every start path ends here, so the opening is armed here (a deferred start arms in postStartLine).
+    if (!opts.deferStartLine || opts.armNow === true) this._notifyStartApplied();
   }
 
   /**
