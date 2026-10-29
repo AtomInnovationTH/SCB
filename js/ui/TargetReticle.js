@@ -141,6 +141,8 @@ export const HUD_OBSTACLE_IDS = [
   'hud-score-panel', 'hud-left-column', 'hud-right-column', 'hud-targets-panel',
   'hud-comms-panel', 'hud-conjunction-panel',
 ];
+/** The two transparent column wrappers in `HUD_OBSTACLE_IDS`: their visible children are the obstacles, not the wrapper box. */
+const HUD_COLUMN_IDS = ['hud-left-column', 'hud-right-column'];
 /** The obstacle rects are re-read at most this often (seconds of reticle time) and on resize. */
 export const OBSTACLE_REFRESH_S = 0.25;
 /** Below this canvas width there are no obstacles (phones are frozen: DECISIONS §32). */
@@ -154,23 +156,38 @@ const OBSTACLE_SLIDE_FINE_PX = 1;
 
 /**
  * The visible HUD blocks, as `{left, top, right, bottom}` client rects: width and height > 0, not `display:none` /
- * `visibility:hidden`. No DOM (tests, the menu backdrop) = an empty list.
+ * `visibility:hidden`. For the two column wrappers, each visible child pane (cut to the column's rect). No DOM (tests, the menu backdrop) = an empty list.
  * @param {Document} [doc] @param {Window} [win]
  * @returns {Array<{left:number, top:number, right:number, bottom:number}>}
  */
 export function readHudObstacles(doc = (typeof document !== 'undefined' ? document : null), win = (typeof window !== 'undefined' ? window : null)) {
   const out = [];
   if (!doc || typeof doc.getElementById !== 'function') return out;
+  const shown = (el, b) => {
+    if (!b || !(b.width > 0) || !(b.height > 0)) return false;
+    try {
+      const cs = win && typeof win.getComputedStyle === 'function' ? win.getComputedStyle(el) : null;
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return false;
+    } catch (_) { /* no computed style: the rect alone decides */ }
+    return true;
+  };
   for (const id of HUD_OBSTACLE_IDS) {
     let el = null;
     try { el = doc.getElementById(id); } catch (_) { el = null; }
     if (!el || typeof el.getBoundingClientRect !== 'function') continue;
     const b = el.getBoundingClientRect();
-    if (!b || !(b.width > 0) || !(b.height > 0)) continue;
-    try {
-      const cs = win && typeof win.getComputedStyle === 'function' ? win.getComputedStyle(el) : null;
-      if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) continue;
-    } catch (_) { /* no computed style: the rect alone decides */ }
+    if (!shown(el, b)) continue;
+    if (HUD_COLUMN_IDS.includes(id) && el.children && typeof el.children.length === 'number') {
+      // A column wrapper is transparent: only the panes inside it are seen, so only they are obstacles (cut to the column, which scrolls).
+      for (const ch of Array.from(el.children)) {
+        if (!ch || typeof ch.getBoundingClientRect !== 'function') continue;
+        const c = ch.getBoundingClientRect();
+        if (!shown(ch, c)) continue;
+        const r = { left: Math.max(c.left, b.left), top: Math.max(c.top, b.top), right: Math.min(c.right, b.right), bottom: Math.min(c.bottom, b.bottom) };
+        if (r.right > r.left && r.bottom > r.top) out.push(r);
+      }
+      continue;
+    }
     out.push({ left: b.left, top: b.top, right: b.right, bottom: b.bottom });
   }
   return out;
