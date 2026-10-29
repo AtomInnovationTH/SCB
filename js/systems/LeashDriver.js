@@ -13,7 +13,7 @@
  * Nose reel-in (phase NOSE_REEL): a catch seated deep in the bag sits 4-7 m from the ship centre, beyond the line's
  * reach. The net's winch first pulls it in to the nose (the berth seat shrinks at `noseReelSpeed`: from LEASH.NOSE_REEL_MPS
  * up to NOSE_REEL_FAST_MPS and back to NOSE_REEL_MPS over the last NOSE_REEL_ZONE_M, the catch held by the net the whole
- * time); at seat 0 the machine starts as before.
+ * time); at the home seat the machine starts as before.
  *
  * One hand-off at a time (one collar). The call sites are:
  *   - CaptureNetSystem._tryCargoTransfer  -> refusal(net) / canReach / start(net, debris, tipIndex, {noseReel})
@@ -269,7 +269,7 @@ export class LeashDriver {
 
   /**
    * Can the leash reach this catch from tip `tipIndex` once the radiators stand at the hand-off angle? A catch seated
-   * deep in the bag (a lasso catch rides 2.856 m past the berth standoff, so it sits ~5.4 m out; a mother-net catch
+   * deep in the bag (a lasso catch rides 0.42 (NET_WEB.WRAP_SEAT_FRAC) of the cone height, about 2.1 m, inside it; a mother-net catch
    * 5.9-7.5 m) is beyond the line's reach (LEASH.D_MAX_M): the hand-off would fold the radiators for nothing. The planner
    * answers, on the tip's real position at that angle.
    * @param {THREE.Vector3} [bagScene] where the bag would be (scene units); default: where it is now
@@ -298,7 +298,7 @@ export class LeashDriver {
   }
 
   /**
-   * Where the bag would sit once the net's winch had pulled it in to the nose (seat 0), predicted from the bag position
+   * Where the bag would sit once the net's winch had pulled it in to the nose (home seat), predicted from the bag position
    * the berth hold gives there: where it is now, back along the bag axis by its seat. Null = nothing to reel (already
    * home) or no bag. A module scratch vector (valid until the next call).
    */
@@ -314,7 +314,7 @@ export class LeashDriver {
     return _vReach.set(sp.x - ld.x * back * M, sp.y - ld.y * back * M, sp.z - ld.z * back * M);
   }
 
-  /** Could the line reach this catch once the net's winch had pulled it in to the nose (seat 0)? See _noseBagScene. */
+  /** Could the line reach this catch once the net's winch had pulled it in to the nose (home seat)? See _noseBagScene. */
   canReachAtNose(net, debris, tipIndex) {
     const sp = this._noseBagScene(net, debris);
     return sp ? this.canReach(debris, tipIndex, sp) : false;
@@ -548,7 +548,7 @@ export class LeashDriver {
     if (why) { this._declineNoseReel(h, why); return; }
 
     if (h.reelDone) {
-      // the catch has sat at seat 0 for a frame (the hold pinned it there): start the line if the line can reach
+      // the catch has sat at the home seat for a frame (the hold pinned it there): start the line if the line can reach
       if (!this.canReach(d, h.tipIndex)) { this._rackNoseReel(h); return; }
       const tcRef = this._tc;
       if (!tcRef.fits(h.radiusM) || tcRef.has(h.tipIndex)) { this._declineNoseReel(h, { key: 'tip', text: 'No radiator tip is free for the catch. It stays at the nose.' }); return; }

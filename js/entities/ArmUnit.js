@@ -3041,7 +3041,7 @@ export class ArmUnit {
    * @param {number} alpha — target angle in radians [0, π]
    * @param {number} [dt=0] — frame deltaTime for slew-rate clamping; 0 snaps immediately (initialization).
    * @param {{durationS?:number}|null} [ease=null] — ease the move (see above)
-   * @returns {boolean} true if alpha was changed
+   * @returns {boolean} always true
    */
   setAimAlpha(alpha, dt = 0, ease = null) {
     const V5 = Constants.OCTOPUS_V5;
@@ -4520,19 +4520,18 @@ export class ArmUnit {
    * _updateRecoilKick law with one angular DOF:
    *   B = θ̇ + λθ;  θ' = (θ + B·dt)·e^(−λ·dt);  θ̇' = (θ̇ − λ·B·dt)·e^(−λ·dt)
    * Seeded with θ=0, θ̇=ω₀ this is θ(t) = ω₀·t·e^(−λt): the catch wrenches
-   * forward to ω₀/(λe) at t = 1/λ, then the tether hauls it back — rendered
-   * through debris.tumbleAngle with the same ×TIME_SCALE_GAMEPLAY convention
-   * DebrisField._advanceTumble uses for free tumble (visual rate is
-   * continuous at the cinch instant). _advanceTumble itself early-returns on
-   * _capturedByArm, so this is the sole tumbleAngle writer while held.
+   * forward to ω₀/(λe) at t = 1/λ, then the tether hauls it back — the strain
+   * model only (it feeds the rip roll, it does not draw the catch).
+   * _advanceTumble early-returns on _capturedByArm, so _tickHeldSpin advances
+   * tumbleAngle while held.
    *
    * Ends one of three ways:
-   *  - SETTLED (t ≥ T and rendered residue below both snap eps): pose snaps
-   *    exactly back to seedAngle and tumbleRate = 0 — L was fully
-   *    transferred and dissipated; a later drop stays de-spun (honest).
+   *  - SETTLED (t ≥ T and rendered residue below both snap eps): the strain
+   *    model stands down; the catch is not de-spun, its spin goes on until
+   *    the seat (_seatSpinBegin).
    *  - RIPPED (strain gate): see _ripNetFromTorque.
    *  - EXTERNAL RELEASE (mass slip, boost rip, manual drop, handoff, snap):
-   *    the un-transferred remainder resumes as real tumble.
+   *    the settle stands down; the catch keeps its real spin.
    */
   _tickCaptureSettle(dt) {
     const st = this._settle;
@@ -4546,9 +4545,9 @@ export class ArmUnit {
       return;
     }
     const debris = st.debris;
-    // External release mid-settle: the tether stopped damping, so hand the un-transferred remainder back as real tumble
-    // and stand down (covers _releaseCapturedDebris in all callers; on a tether snap the catch keeps _capturedByArm while
-    // capturedDebris clears, so the remainder is written now and _advanceTumble resumes it when the delayed EXPENDED
+    // External release mid-settle: the tether stopped damping, so stand the settle down; the catch keeps its real spin
+    // (covers _releaseCapturedDebris in all callers; on a tether snap the catch keeps _capturedByArm while
+    // capturedDebris clears, so the settle stands down now and _advanceTumble resumes the real spin when the delayed EXPENDED
     // release clears the pin).
     if (this.capturedDebris !== debris || !debris._capturedByArm) {
       this._resumeTumbleFromRemainder(st);
@@ -4594,7 +4593,7 @@ export class ArmUnit {
 
   /**
    * @private The wrench rips the net (strain gate): recoverable (the _ripNetDuringBoost idiom). Debris drifts free and
-   * re-capturable with its tumble RESUMED from the un-transferred remainder; the daughter keeps her tether and returns to
+   * re-capturable with the real spin it has; the daughter keeps her tether and returns to
    * reload. This is what makes the despin laser necessary: lasing below STRAIN_GATE_DEG_S before netting removes the roll.
    * @param {object} st — live settle state
    * @param {number} rateDegS — residual wrench rate at the rip (°/s, real)
@@ -4604,7 +4603,7 @@ export class ArmUnit {
     const debris = this.capturedDebris;
     if (!debris) return;
     const CTS = Constants.CAPTURE_TORQUE_SETTLE;
-    // Remainder first (writes tumbleRate/axis), then release (clears pins so
+    // Stand the settle down first (ends the spin carry), then release (clears pins so
     // DebrisField._advanceTumble resumes advancing it next frame).
     this._resumeTumbleFromRemainder(st);
     this._releaseCapturedDebris({ keepPinned: false });
@@ -4618,7 +4617,7 @@ export class ArmUnit {
       armId: this.id, armIndex: this.index,
       debrisId: debris.id, strain: bandT,
     });
-    // the cause stays; REEL_HOME winds her home (or holds her near the piece beyond 500 m), else RETURNING
+    // the cause stays; REEL_HOME winds her home (or holds her near the piece beyond FAIL_REEL.AUTO_REEL_MAX_M), else RETURNING
     this._finishFailedCatch({
       cause: `Net RIPPED: catch still tumbling at ${rateDegS.toFixed(0)}°/s and the wrench tore the weave. `
         + `Debris drifting free, spin resumed. Lase it below ${CTS.STRAIN_GATE_DEG_S.toFixed(0)}°/s before the next net.`,
@@ -4634,12 +4633,10 @@ export class ArmUnit {
   }
 
   /**
-   * @private Hand the un-transferred remainder of the settle back to the
-   * debris as real tumble and stand the transient down. θ̇ < 0 means the rip
-   * happened mid counter-swing (the tether was hauling the catch back), so
-   * the resumed tumble spins the other way: flip the axis, keep the rate
-   * magnitude. tumbleAngle stays at the displaced pose — the body rips free
-   * mid-wrench, continuously. _initialTumbleRate is deliberately untouched
+   * @private Stand the settle transient down on a release. The catch keeps the
+   * real spin it has (carried to the seat), so nothing is rewritten: it only
+   * ends the carry (_carrySpin = false) and clears the settle. tumbleRate, the
+   * axis and tumbleAngle are left as they are. _initialTumbleRate is deliberately untouched
    * (E1 despin doctrine: spawn history is frozen).
    * @param {object} st — live settle state
    */
@@ -9882,7 +9879,7 @@ export class ArmUnit {
    * @param {number} [dt] — frame delta (seconds) for REELING dash-flow animation
    */
   _updateTether(parentPos, parentQuat, dt) {
-    // Remember the mother's orientation of the last frame she was out (the 500 m rule measures to the live strut tip,
+    // Remember the mother's orientation of the last frame she was out (the FAIL_REEL.AUTO_REEL_MAX_M rule measures to the live strut tip,
     // `_strutTipDistM`); one persistent quaternion, no allocation after the first frame.
     if (parentQuat) {
       (this._frameParentQuat || (this._frameParentQuat = new THREE.Quaternion())).copy(parentQuat);

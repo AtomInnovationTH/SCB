@@ -2,7 +2,7 @@
  * startOrbitMath.js — pure per-language starting orbit; the one source for where the opening orbit sits, shared by
  * GameFlowManager._applyStartLocation() and MenuOrbitPreview so the two cannot drift. Node-safe: no DOM, no THREE.
  *
- * Three tweaks (documented in GameFlowManager): inclination from the language's launch latitude (incDeg);
+ * Three tweaks (the last two are documented in GameFlowManager): inclination from the language's launch latitude (incDeg);
  * ABEAM (START_ABEAM_DEG) re-aims the track so the home city slides ~200 km off starboard; LEAD
  * (START_TRACK_LEAD_DEG) backs the spawn off along-track so the city first appears ahead.
  *
@@ -22,7 +22,10 @@ export const DEFAULT_INC_DEG = 51.6;
 
 const TWO_PI = 2 * Math.PI;
 
-/** Starting orbit for a language entry; null when it has no usable start anchor. */
+/**
+ * Starting orbit for a language entry; null when it has no usable start anchor.
+ * Inclination: the language's incDeg (Languages.js START-ORBIT MODEL), DEFAULT_INC_DEG when omitted.
+ */
 export function computeStartOrbit(lang) {
   const start = lang && lang.start;
   if (!start || !Number.isFinite(start.lat) || !Number.isFinite(start.lon)) return null;

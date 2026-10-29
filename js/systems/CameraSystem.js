@@ -58,7 +58,7 @@ const VIEW_LABELS = {
 // untouched; these shape only what the camera does with the up-vector.
 
 /**
- * UP-rides (ship→Earth, F5→F6): the source (ship-radial) up is HELD for the whole flight; the horizon then levels to
+ * UP-rides (ship→Earth, F3→F4): the source (ship-radial) up is HELD for the whole flight; the horizon then levels to
  * Earth-north in a separate post-ride phase of this length (cubic in-out). On-floor exactness resumes when it ends.
  */
 export const LADDER_LEVEL_MS = 600;
@@ -628,8 +628,8 @@ export class CameraSystem {
 
     // ZOOM LADDER camera (ride engine, archive/ladder/06-core-api.md): a separate override slot (parallel to the
     // launch/net ceremonies) driven by LadderController. It dollies the camera along a direction from the floor's
-    // anchor (ship for F3–F5, Earth CENTRE for F6–F7 → Earth-fixed framing, which setView() offset lerps cannot do) at
-    // the (floor, z01) distance, cubic-in-out for crossing rides. The direction is HEADING-RELATIVE on ship anchors
+    // anchor (ship/subject for F1–F3, Earth CENTRE for F4–F5 → Earth-fixed framing, which setView() offset lerps cannot
+    // do) at the (floor, z01) distance, cubic-in-out for crossing rides. The direction is HEADING-RELATIVE on ship anchors
     // (see `local` below) and inertial on Earth anchors. Active only while the ladder is engaged
     // (Constants.LADDER.ENABLED + gameplay); untouched when the flag is off, so shipped views stay byte-identical.
     this._ladderUpdateSeq = 0;   // drawn-frame counter (ladderDragNudge coalescing)
@@ -653,15 +653,15 @@ export class CameraSystem {
       rideAnchorFrom: 'ship',
       onDone: null,
       _tmp: new THREE.Vector3(),
-      // Cross-anchor up-frame interpolation temps (F5↔F6; down-rides roll early in the ride, up-rides level AFTER it;
+      // Cross-anchor up-frame interpolation temps (F3↔F4; down-rides roll early in the ride, up-rides level AFTER it;
       // see _updateLadderCamera / _ladderSlerpUp).
       _upTo: new THREE.Vector3(),
       _upQuat: new THREE.Quaternion(),
       _upQuatE: new THREE.Quaternion(),
       // Drag-to-rotate: mouse drag rotates the dolly direction (the LOCAL orbital-frame pose on ship anchors, the
       // inertial world dir on Earth anchors) around the floor's up-frame with ORBIT's velocity+damping feel (constants
-      // mirror this.orbit). Two gates: `enabled` is the MOUSE rule: floors 2/3/4 always, floor 1 (the workbench) only
-      // WHILE a drawer is open (the TURNTABLE; arrows orbit the CAMERA, never the ship). `touchEnabled` is the TOUCH
+      // mirror this.orbit). Two gates: `enabled` is the MOUSE rule: floors 1-4 always (like the finger). Held arrows on floor 1
+      // still turn the view only with a drawer open (arrows orbit the CAMERA, never the ship). `touchEnabled` is the TOUCH
       // rule: a finger turns the view on floors 1–4 with or without a drawer. The floor-5 chart stays locked for both;
       // closing the drawer on floor 2 forgets the dragged pose (setLadderPaneOpen). Every consumer is also gated on
       // lc.active, so mouse handling is byte-identical while the ladder is off.
@@ -691,7 +691,7 @@ export class CameraSystem {
       // backwards" fix): R = radial, T = velocity (Gram-Schmidt against R; identical for circular orbits), N = R × T, as
       // unit local coefficients `local = (r, t, n)`. The world `dir` is rebuilt from the LIVE frame every frame, as CHASE
       // does with velDir/radialDir, so the camera follows the heading instead of drifting behind → beside → ahead over
-      // half an orbit. Earth anchors keep the inertial world `dir` (that makes Earth's spin visible on F6/F7).
+      // half an orbit. Earth anchors keep the inertial world `dir` (that makes Earth's spin visible on F4/F5).
       // Cross-anchor rides: ship→Earth freezes the current world dir (continuity, then inertial); Earth→ship slerps the
       // world dir from the frozen inertial start toward the ARRIVAL local pose (the player's per-floor drag memory, else
       // the canonical chase-behind pose), recomputed each frame from the live frame, on the ride's ease.
@@ -1596,7 +1596,7 @@ export class CameraSystem {
    * @private
    */
   _evaluateInspectZoom() {
-    // ZOOM LADDER: while engaged the shipped 12/18 m Schmitt is BYPASSED: the F3/F4 wall/entry pair owns the inspect
+    // ZOOM LADDER: while engaged the shipped 12/18 m Schmitt is BYPASSED: the floor 1/2 wall/entry pair owns the inspect
     // optics (_ladderApplyInspectFx keys them on the engaged floor id).
     if (this._ladderCam.active) return;
     if (this.currentView !== CameraViews.ORBIT) return;
@@ -1929,8 +1929,7 @@ export class CameraSystem {
       }
 
       if (c.phase > 3) {
-        // Ceremony complete → return to CHASE view.
-        // ARM_PILOT is ONLY entered when the user presses the P hotkey.
+        // Ceremony complete → ARM_PILOT is entered automatically below (the camera stays on the daughter).
         // Restore near-plane pushed during Phase 2-3
         this.camera.near = Constants.CAMERA_NEAR;
         this.camera.updateProjectionMatrix();
@@ -2531,7 +2530,7 @@ export class CameraSystem {
         //     translates >100 km/s, so any stale absolute anchor goes out of frame in <1 s.
         // (2) The camera MUST have a non-zero `fwd` component: a `side × 1.25 × D_M`-only offset sits in the apex plane
         //     (perpendicular to launchDir), and the ENVELOP rim weights (translating along the cone axis from z=−coneH,
-        //     the mouth plane, to z=0, the apex plane) start atan(0.55D/1.25D) = 23.7° off the camera→apex axis: OUTSIDE
+        //     the mouth plane, to z=0, the apex plane) start atan(0.85D/1.25D) = 34.2° off the camera→apex axis: OUTSIDE
         //     the half-FOV-V of 19° at beat-5 FOV=38°, so they "pop in". Offset (side 1.5, fwd 0.6, up 0.5) × D_M is a 3/4
         //     elevated side view: distance/mouthR = √(2.25+0.36+0.25)/0.5 = 3.38× (well outside the cone surface), and
         //     the fwd component takes the camera off the apex plane so the weight sweep is seen obliquely.
@@ -3436,7 +3435,7 @@ export class CameraSystem {
       if (this._lassoCut.active) this.abortLassoCut();
       const d = this._ladderCam.drag;
       // Left or right click starts a rotate drag on the drag-enabled floors
-      // (F5/F6). Rides own the camera — drags are ignored while riding.
+      // (floors 1-4). Rides own the camera — drags are ignored while riding.
       if (d.enabled && !this._ladderCam.riding && (e.button === 0 || e.button === 2)) {
         d.isDragging = true;
         d.lastMouseX = e.clientX;
@@ -3556,7 +3555,7 @@ export class CameraSystem {
       this.inspection.distance *= zoomDelta;
       this.inspection.distance = clamp(this.inspection.distance, this.inspection.minDistance, this.inspection.maxDistance);
     } else if (this.currentView === CameraViews.CHASE) {
-      // Adjust chase distance (smooth 5% steps, min ~10m behind)
+      // Adjust chase distance (smooth 5% steps, min ~4 m behind)
       const zoomDelta = e.deltaY > 0 ? 1.05 : 0.95;
       this.chase.offsetBehind *= zoomDelta;
       // Min ~4 m: stays outside the ~3 m near-clip (CAMERA_NEAR) to avoid hull clipping.
@@ -3624,7 +3623,7 @@ export class CameraSystem {
     // The look-at bias starts settled at 0 on every engage (the pane is enabled by the controller only AFTER engage);
     // the request itself (paneInsetPx) stays the caller's: main.js owns it through the setter.
     this._ladderResetPaneBias();
-    // F3 inspect absorption: engaging directly on F3 applies the arrival effects (a re-engage mid-session restores the
+    // Floor 1 inspect absorption: engaging directly on floor 1 applies the arrival effects (a re-engage mid-session restores the
     // floor's costume).
     this._ladderApplyInspectFx(frame.floor);
   }
@@ -3650,7 +3649,7 @@ export class CameraSystem {
     this._dragStop(lc.drag);
     this._resetLadderViewReturn();
     this._ladderResetPaneBias();
-    // F3 inspect absorption: a disengage while on F3 reverts the arrival effects (dim off, overlays off): the shipped
+    // Floor 1 inspect absorption: a disengage while on floor 1 reverts the arrival effects (dim off, overlays off): the shipped
     // views resume clean.
     this._ladderApplyInspectFx(null);
   }
@@ -4007,7 +4006,7 @@ export class CameraSystem {
     lc.floor = (opts.floor != null) ? opts.floor : null;
     // The up at ride start is what an UP-ride holds and a DOWN-ride rolls away from (so a ride that interrupts a level
     // phase or reverses a half-rolled ride starts from the CURRENT horizon, never a snap). A cross-anchor ride owns the
-    // up from here, cancelling any level phase; a same-anchor ride (F6→F7 flicked during leveling) does not touch the
+    // up from here, cancelling any level phase; a same-anchor ride (F4→F5 flicked during leveling) does not touch the
     // up state, so a running level phase completes on its own clock.
     if (lc.rideAnchorFrom !== opts.anchor) {
       lc._upStart.copy(this.camera.up).normalize();
@@ -4021,8 +4020,8 @@ export class CameraSystem {
     this._ladderSetDragGates(opts.floor);
     lc.drag.isDragging = false;
     this._dragStop(lc.drag);
-    // F3 inspect absorption: the 3/4 down-hump ride applies the ARRIVAL effects at ride start (destination floor 3, the
-    // same moment the render block swaps, LadderController._startRide); the up-hump ride's destination floor 4 applies
+    // Floor 1 inspect absorption: the 2/1 down-hump ride applies the ARRIVAL effects at ride start (destination floor 1, the
+    // same moment the render block swaps, LadderController._startRide); the up-hump ride's destination floor 2 applies
     // the DEPARTURE inverses.
     this._ladderApplyInspectFx(opts.floor);
   }
@@ -5145,23 +5144,23 @@ export class CameraSystem {
   }
 
   /**
-   * F3 (HULL CAM) inspect side-effect absorption (T6). The five side-effects
+   * F1 (HULL CAM) inspect side-effect absorption (T6). The five side-effects
    * of the OVERVIEW zoom Schmitt's _setInspectZoom(true) become
-   * the 3/4 down-hump's ARRIVAL effects and their inverses the up-hump's
+   * the 2/1 down-hump's ARRIVAL effects and their inverses the up-hump's
    * DEPARTURE effects, keyed on the engaged ladder frame's floor id:
-   *   1. FOV narrow — no code here: the ride engine already lerps to F3's
-   *      contract fov 35 and restores F4's 55 on the up-hump.
+   *   1. FOV narrow — no code here: the ride engine already lerps to floor 1's
+   *      contract fov 35 and restores floor 2's 55 on the up-hump.
    *   2. Dynamic near-plane — no code here: SceneManager's per-floor render
-   *      block applies/restores F3's camera.near via setLadderFloorFidelity.
+   *      block applies/restores floor 1's camera.near via setLadderFloorFidelity.
    *   3. Background dim — the _applyInspectDim path, both directions.
    *   4. Hull overlays — INSPECTION_TOGGLE + INSPECT_HULL_OUTLINE events, so
    *      MotherCallouts and the hull outline keep working UNMODIFIED.
-   *   5. Onboarding — MOTHER_INSPECTION_ENGAGED on each F3 arrival (mirrors
+   *   5. Onboarding — MOTHER_INSPECTION_ENGAGED on each floor 1 arrival (mirrors
    *      _setInspectZoom, which fires it on every engage, never exit) + the
    *      one-shot SHOW_NOTIFICATION learning beat (the shared
    *      orbit.inspectTaught flag, so zoom-path and ladder-path teach once).
    * Idempotent per state flip. While the ladder is engaged the shipped
-   * 12/18 m Schmitt is bypassed (_evaluateInspectZoom), so the F3/F4
+   * 12/18 m Schmitt is bypassed (_evaluateInspectZoom), so the floor 1/2
    * wall/entry pair fully replaces it. Flag-off: the ladder never engages →
    * never called → shipped behavior byte-identical.
    * @param {number|null|undefined} floor - engaged floor id (null = disengage)
@@ -5329,7 +5328,7 @@ export class CameraSystem {
     }
 
     // Anchor position. During a ride the anchor is LERPED from the source frame's anchor to the destination's using the
-    // same cubic ease, so a cross-anchor crossing (ship→Earth, F5↔F6) flies smoothly instead of snapping the world
+    // same cubic ease, so a cross-anchor crossing (ship→Earth, F3↔F4) flies smoothly instead of snapping the world
     // origin at ride start. Same-anchor rides (F4↔F5) are unaffected.
     let anchorPos;
     if (lc.riding && lc.rideAnchorFrom !== lc.anchor) {

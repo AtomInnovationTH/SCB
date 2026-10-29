@@ -398,12 +398,6 @@ export class OnboardingDirector {
    * Space itself, dispatch a synthetic press of the primary key via InputManager helpers and return true. Otherwise
    * return false so the original Space handler (lasso fire) runs.
    *
-   * NOTE: InputManager only consults this helper from the ORBITAL_VIEW Space handler, NOT from the ARM_PILOT Space
-   * handler (dedicated to manual net deploy). Players who enter ARM_PILOT mid-onboarding and then press Space while
-   * the `inspect` beat is active will deploy a net rather than toggle inspection. This is acceptable
-   * because `inspect` is `optional:true` with a 25 s auto-skip; the player
-   * can still press `I` directly without consequence.
-   *
    * @param {object} inputManager — exposes fireScan, cycleTarget, engageAutopilot, fireLasso, deployDaughter (any
    *   subset).
    * @returns {boolean} true if a synthetic action was dispatched.

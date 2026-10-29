@@ -31,7 +31,7 @@ import { captureNetSystem } from '../entities/CaptureNet.js';
 
 export const TOUCH_ACTION_CHIP_ID = 'touch_action_chip';
 
-/** The two chips, same wording as the teaching beats' chips (OnboardingDirector IN_REACH_NUDGE / MOTHER_EMPTY_CHIP). */
+/** The chips. `net` and `daughter` use the same wording as the teaching beats' chips (OnboardingDirector IN_REACH_NUDGE / MOTHER_EMPTY_CHIP). */
 const CHIPS = Object.freeze({
   net: Object.freeze({ text: 'Launch the net', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'LAUNCH NET' }),
   pad: Object.freeze({ text: 'Stick the pad on', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'STICK PAD' }),

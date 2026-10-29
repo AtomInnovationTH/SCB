@@ -430,9 +430,9 @@ const SYSTEMS = [
 //            (getFlowerStatus: CLOSED, STOW, or SLEW with openFrac < 0.5; an aft-on look hits AftThrusterDeck). The family
 //            frames only while a flower pair exists.
 //   fill     the fraction of the frame's limiting axis the part's LARGEST projected extent spans (portraitCameraFit,
-//            default 0.8; the sphere fallback reads it as its diameter fill). The puck-class parts (sun sensors, nav
-//            lights, the patch antennas) frame LOOSE at 0.35 so the hull context stays (owner 2026-09-08 (Q3): small
-//            parts framed loose); the MLI skin IS the hull, 0.5.
+//            default 0.8; the sphere fallback reads it as its diameter fill). The pucks (sun sensors 0.35, nav lights 0.5) and the
+//            patch antennas (MGA 0.6, GPS 0.5) frame LOOSE so the hull context stays (owner 2026-09-08 (Q3):
+//            small parts framed loose); the MLI skin IS the hull, 0.85.
 //   single   a SPREAD multi-instance part (pods / pucks / reels / A-frames) frames ONE instance: the pick target
 //            nearest the player's camera (ties → the lowest index; no camera → the first). The union of the whole ring
 //            framed the whole ship.

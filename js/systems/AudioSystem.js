@@ -1449,7 +1449,7 @@ class AudioSystem {
 
   /**
    * Softer single-note "ding" for trawl auto-captures (C5).
-   * Distinct from manual capture's ascending triad.
+   * Distinct from manual capture's single A5 beep.
    */
   playTrawlCapture() {
     if (!this.available) return;
@@ -2274,9 +2274,9 @@ class AudioSystem {
   }
 
   /**
-   * Comms crackle: a short radio-squelch burst + a two-blip "online"
-   * confirm, played as the HUD powers on. Signals the comms link coming live
-   * alongside the visual power-on stagger. ~0.35 s total, subtle.
+   * Comms crackle: a short radio-squelch burst (no confirm blips),
+   * played as the HUD powers on. Signals the comms link coming live
+   * alongside the visual power-on stagger. ~0.16 s total, subtle.
    */
   playCommsCrackle() {
     if (!this.available) return;
@@ -2474,7 +2474,7 @@ class AudioSystem {
   }
 
   /**
-   * Codex unlock — gentle two-note ascending chime (D5→A5 base, transposed by
+   * Codex unlock — gentle three-note ascending chime (D5→A5→D6 base, transposed by
    * a deterministic per-category pentatonic offset via {@link codexChimeNotes}).
    * Light and informative, not disruptive.
    */
@@ -3651,7 +3651,7 @@ class AudioSystem {
 
   /**
    * Soft "hint posted" notification cue: a gentle, longer, lower triangle
-   * swell (~520→660 Hz, ~350 ms, soft attack) so it reads as a "gentle
+   * swell (~392→494 Hz, ~350 ms, soft attack) so it reads as a "gentle
    * notification" rather than another UI click in the startup blip family.
    * Quiet enough to fade into the ambient mix; peak gain capped at ~0.15.
    * @param {number} [volume=0.4] caller-side scale; clamped to [0, 1].

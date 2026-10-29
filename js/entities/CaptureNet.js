@@ -444,7 +444,7 @@ export function homeShapeKey(player) {
   const tgt = player._flowerTargetTheta;
   if ((typeof tgt === 'number' && Math.abs(tgt - player._flowerThetaRad) > 1e-4) || player.flowerPetalsBusy === true) return null;
   const tc = player.tipCargo;
-  // a bag turning onto its boom (10 deg/s, up to ~9 s) moves every frame, so its centre would change the key every frame
+  // a bag turning onto its boom (SWING_RATE_DEG_S = 20 deg/s, at most 9 s) moves every frame, so its centre would change the key every frame
   // (780 recomputes of ~25 ms in 13 s of one swing). Same rule as a radiator swing: reuse the cache, recompute once it ends.
   if (tc && typeof tc.isSwinging === 'function') for (let i = 0; i < 4; i++) if (tc.isSwinging(i)) return null;
   let key = String(Math.round(player._flowerThetaRad * RAD2DEG * 1000));
@@ -1802,7 +1802,7 @@ export class NetProjectile {
   /**
    * @private Mother REELING entry: strain/oversize roll, then seed the
    * ship-relative reel state from the debris's LIVE _scenePosition (one frame
-   * only — LassoSystem.js:1401-1409 documents why the seed must start from
+   * only — LassoSystem._canonicalDebris documents why the seed must start from
    * where the debris actually is, not where the flight model left it).
    * @returns {boolean} false when the entry itself failed (strain slip → miss)
    */
@@ -2678,7 +2678,8 @@ export class NetProjectile {
 
   /**
    * Line-taut tug (mother path only, Phase B §9.8–9.10). At CAPTURED the whale's residual momentum relative to the
-   * Mother transfers through the net (up to 177:1 mass ratio, 23 t vs 130 kg, so the NET_TUG_MAX_DV_MS cap does nearly all the work):
+   * Mother transfers through the net (about 5:1 mass ratio at her start mass: her 1,500 kg catch limit vs 294 kg;
+   * NET_TUG_MAX_DV_MS caps it):
    *   1. Feel: spread over NET_TUG_WINDOW_S into _rcsVelocity by the windowed delivery in CaptureNetSystem.update
    *      (Σ(step/window) === 1 at any frame rate). Never mutates the orbit. NET_TUG_FEEL_MULT scales it; the ~2×
    *      transient (the same magnitude drives orbit + _rcsVelocity) is deliberate. RCS_DAMPING decay is shared with
@@ -3147,7 +3148,7 @@ export class CaptureNetSystem {
             const step = Math.min(dt, windowS - net._tugElapsed);
             net._tugElapsed += step;
             player._rcsVelocity.addScaledVector(net._tugFeelScene, step / windowS);
-            // mirror the manual-RCS clamp (PlayerSatellite): the tug must not stack past RCS_MAX_SPEED on drift
+            // mirror LassoSystem._applyReelPhysics: the tug must not stack past RCS_MAX_SPEED on drift
             const maxV = Constants.RCS_MAX_SPEED;
             if (maxV > 0 && player._rcsVelocity.length() > maxV) {
               player._rcsVelocity.normalize().multiplyScalar(maxV);
@@ -4285,7 +4286,7 @@ export class CaptureNetSystem {
    * orbit propagation only for _onboardingPinned / _motherParked, NOT _armPinned, so a pinned catch's trueAnomaly
    * kept advancing and a jettisoned whale would snap to wherever its own orbit went. The rebuild is the ONE shared
    * computation (reseatOrbitFromScene), also read by the ArmManager.reset() cargo release. The arm path deliberately
-   * accepts the snap (ArmUnit) — do not copy that 2 m in front of the camera.
+   * accepts the snap (ArmUnit._releaseCapturedDebris resumes the propagated orbit) — do not copy that.
    * @param {NetProjectile} net
    * @private
    */

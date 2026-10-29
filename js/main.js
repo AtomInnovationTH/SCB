@@ -3070,7 +3070,7 @@ async function init() {
       // owner 2026-09-07: no STORE tap chip with the ladder on: on glass the route is pinch to F1, tap REFIT, with no
       // one-tap shop in the thumb rest. `?ladder=0` (flag off) keeps the shipped full-screen shop. (The chip is
       // built by TouchControls only when this dep is a function; null → no dock, no element — pinned in
-      // test-TouchControls.) The SPECS tab (F1) and the right-edge swipe open the pane.
+      // test-TouchControls.) The SPECS tab (F1) and the left-edge swipe open the pane.
       openShop: (Constants.LADDER && Constants.LADDER.ENABLED) ? null : () => {
         if (gameState.getState() === GameStates.ORBITAL_VIEW) {
           gameFlowManager.transitionToState(GameStates.SHOP);

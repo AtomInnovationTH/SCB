@@ -27,7 +27,7 @@ const ANGLE_BIAS = {
   'lateral-left': 0,             // ship moves left → scenery streams right
   'lateral-right': Math.PI,      // ship moves right → scenery streams left
 };
-const ANGLE_SPREAD = Math.PI * 0.6; // ±54° spread around bias direction
+const ANGLE_SPREAD = Math.PI * 0.6; // ±108° spread around bias direction (angle = bias + (rand - 0.5) * ANGLE_SPREAD * 2)
 
 const STREAK_MIN_LENGTH = 15;   // px at minimum thrust
 const STREAK_MAX_LENGTH = 90;   // px at full thrust

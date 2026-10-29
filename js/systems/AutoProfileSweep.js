@@ -18,7 +18,7 @@
  *   5. Read median, draw counts, per-pass medians (if `profilePasses` config), record snapshot.
  *
  * Total wall-clock per session at 120 fps:
- *   ~9 configs × (30 settle + 60 sample) / 120 = **~7 s of measurement**,
+ *   13 configs × (30 settle + 60 sample) / 120 = **~10 s of measurement**,
  *   plus ~2 s of initial settle + JSON dump. Well under a minute.
  *
  * Pure orchestrator: depends only on the public APIs of `SceneManager`, `Earth`, and `GpuProbe`; no THREE imports, no
@@ -483,8 +483,8 @@ export class AutoProfileSweep {
   }
 
   /**
-   * Δ-vs-baseline table: every non-baseline config's `frameMs` minus the
-   * baseline's. Positive Δ = savings. Returns null entries when either side
+   * Δ-vs-baseline table: the baseline's `frameMs` minus every non-baseline
+   * config's. Positive Δ = savings. Returns null entries when either side
    * is null (e.g. timeout).
    */
   _computeDeltas() {

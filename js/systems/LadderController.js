@@ -409,7 +409,7 @@ export class LadderController {
     // render twice). This controller owns only the activate/deactivate lifecycle (_applyFloorContent / _disengage).
     //
     // Reticle re-assert: TargetReticle self-SHOWS on any gameplay-entering GAME_STATE_CHANGE (its listener in the
-    // TargetReticle.js constructor), so a gameplay↔gameplay transition (e.g. ORBITAL_VIEW→APPROACH) mid-F6 would
+    // TargetReticle.js constructor), so a gameplay↔gameplay transition (e.g. ORBITAL_VIEW→APPROACH) on F4/F5 would
     // resurrect it. This class has no EventBus
     // dep, so re-assert the hide per frame (setVisible(false) is one style assignment). DockingReticle needs none: its
     // listener only HIDES, and its per-frame owner (main.js ARM PILOT) honours reticlesSuppressed().

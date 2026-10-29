@@ -66,8 +66,8 @@ const VIEW_INFO_LEVELS = {
   },
   // INSPECTION is not a V-cycle view: used by the bare-I shortcut and the ARM_PILOT / debris-locked wireframe path.
   // (The OVERVIEW zoom-driven mothership inspection keeps the view as ORBIT and uses the ORBIT config.)
-  // The debris subject expands the right-column wireframe; the mother subject hides the right column
-  // via the INSPECTION_TOGGLE handler.
+  // The debris subject expands the right-column wireframe; the mother subject is drawn by the in-world 3D
+  // callouts (ui/MotherCallouts.js), not by the HUD (INSPECTION_TOGGLE handler).
   INSPECTION: {
     showTargetList: false, showResources: true, showNavSphere: false,
     showComms: false, showArms: true, showProgress: false, showWarnings: true,

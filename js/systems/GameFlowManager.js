@@ -228,10 +228,10 @@ export class GameFlowManager {
    * Initialize with references to required game systems and entities.
    * Must be called after all systems are created in init().
    *
-   * Remaining _refs (6):
+   * Remaining _refs (11):
    *   Core:     player, debrisField, armManager, cameraSystem
    *   Screens:  shopScreen (_hasUpgrade, saveGame)
-   *   Systems:  resourceSystem
+   *   Systems:  resourceSystem, cargoSystem, lassoSystem, autopilotSystem, fieldRegistry, sunLight
    *
    * targetSelector, kesslerSystem and trawlManager are imported singletons (not in _refs).
    *
@@ -524,7 +524,7 @@ export class GameFlowManager {
     // The KeyF "fast start" shortcut was removed from MenuScreen — no emitter
     // remains for MENU_FAST_START. This handler is kept as a reserved hook
     // (matching the codebase convention of retaining unused Events constants,
-    // e.g. PERSISTENCE_SAVED) and is byte-identical to MENU_START above.
+    // e.g. PERSISTENCE_SAVED) and is MENU_START above without its opening-dance, start-line and intro-zoom handling.
     eventBus.on(Events.MENU_FAST_START, () => {
       // NOT keepOpeningDance: unlike MENU_START this reserved hook never binds
       // the sim ship to the dance, so it must land on the finished pose.
@@ -1561,14 +1561,6 @@ export class GameFlowManager {
     eventBus.on(Events.LASSO_CAPTURED, onFirstCapture);
   }
 
-  /**
-   * Place the player's starting orbit so its ground track passes over the home region of the selected menu language
-   * (e.g. Japanese → over Japan). Inclination comes from the language's `incDeg` (the nation's real launch latitude;
-   * default 51.6° ISS band), then RAAN + true anomaly are aimed at the anchor sub-point via subPointToOrbit(). The anchor
-   * latitude is ≤ incDeg by design (see Languages.js) so the pass is not clamped. Setting inclination before MISSION_START
-   * means the welcome debris field (spawned in the player's own orbit) inherits the chosen tilt. Called on New Game after
-   * resetGame() (which zeroes trueAnomaly).
-   */
   /**
    * @private OS "reduce motion" preference (false without window/matchMedia, i.e. in Node tests). Skips the intro zoom.
    * @returns {boolean}

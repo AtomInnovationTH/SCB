@@ -2,7 +2,7 @@
  * LadderAudioBeds.js — the Zoom Ladder's per-floor ambient audio beds
  * (FloorContract `audioBed`: hull-detail, command-deck, prox-tactical, navcom-drone, downlink-static).
  *
- * One module owns all seven beds. Each bed is a procedural WebAudio loop (AudioSystem.js startAmbientLoop /
+ * One module owns all five beds. Each bed is a procedural WebAudio loop (AudioSystem.js startAmbientLoop /
  * startThrusterHum idiom): looped-noise-buffer + biquad-filter layers and low oscillator drones, each layer shaped
  * by an optional slow LFO, all at VERY low gain: beds sit UNDER gameplay sfx, mood not melody. Bed character is
  * data-driven (BED_RECIPES): retuning a bed is a constants edit.

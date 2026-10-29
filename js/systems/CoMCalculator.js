@@ -269,7 +269,7 @@ export function motherNetBooking(playerSatellite) {
  *             breakdown: { core: number, struts: number[], arms: number[], motherNets: number, radiators: number } }}
  */
 export function computeCoM(armManager, playerSatellite, opts) {
-  const coreMass = V5.CORE_DRY_MASS; // 161.0 kg at origin
+  const coreMass = V5.CORE_DRY_MASS; // 176.0 kg at origin
   let totalMass = coreMass;
   let cx = 0, cy = 0, cz = 0; // weighted sum: Σ(m·r); the core sits at the origin: no moment
 

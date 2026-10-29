@@ -276,7 +276,7 @@ export class ProxOverlay {
           x: p.x, y: p.y, visible: !!p.visible,
           selected,
           risk01,
-          // Selection is WHITE (the only use of white); unselected points read
+          // Selection is SELECTION blue (VisualLaw.COLORS.SELECTION); unselected points read
           // the risk gradient. Selection double-encodes via the heavier ring.
           color: selected ? VisualLaw.COLORS.SELECTION : ProxOverlay.riskColor(risk01),
           label: `${(c.zone || '').toUpperCase()} \u00b7 risk ${riskPct}% \u00b7 ~${rate}/min \u00b7 \u0394V ${dv}`,

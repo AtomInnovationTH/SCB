@@ -1,8 +1,8 @@
 /**
- * BlueprintOverlay.js — the Zoom Ladder F3 (HULL CAM) blueprint callout layer (FloorContract.FLOORS[2]).
+ * BlueprintOverlay.js — the Zoom Ladder floor 1 (HULL CAM) blueprint callout layer (FloorContract.byId(1)).
  *
- * STATUS (owner, playtest 2026-09-02): NO LONGER THE F3 COSTUME. The F3 costume is MotherCallouts + the cyan hull
- * outline (FloorContract F3 costume.arrive ['MotherCallouts', 'HullOutline']; docs/ladder/08-workbench.md §2). This
+ * STATUS (owner, playtest 2026-09-02): NO LONGER THE FLOOR-1 COSTUME. The floor-1 costume is MotherCallouts + the cyan hull
+ * outline (FloorContract floor 1 costume.arrive ['MotherCallouts', 'HullOutline']; docs/ladder/08-workbench.md §2). This
  * module is SHELVED as the refit-index renderer: main.js still constructs HullCamFloor (which constructs this) but
  * does not inject it into the ladder, so nothing shows it.
  *
@@ -13,7 +13,7 @@
  * VISUAL LAW (js/core/VisualLaw.js):
  *   - callouts read INFO cyan; the focused subsystem reads SELECTION blue and is double-encoded (thicker leader +
  *     heavier card border — never color-alone);
- *   - at most `labelBudget` (F3 = 7) callouts render, priority-ranked via the static rank() law (highest first,
+ *   - at most `labelBudget` (floor 1 = 7) callouts render, priority-ranked via the static rank() law (highest first,
  *     stable ties by id).
  *
  * HOVER (08-workbench §2 Motion): 120 ms delay → the card outline brightens, the card lifts 4 % and the leader
@@ -233,7 +233,7 @@ export class BlueprintOverlay {
    * @param {(pos:{x,y,z}) => {x:number, y:number, visible:boolean}} project
    *                 - ship-local scene units → screen px
    * @param {object} [opts]
-   * @param {number} [opts.budget]  - max callouts (default F3 labelBudget = 7)
+   * @param {number} [opts.budget]  - max callouts (default floor 1 labelBudget = 7)
    * @param {string} [opts.lens]    - 'detail' | 'overview' (card variant key)
    * @param {number} [opts.centerX] - screen x of the subject center (rail side
    *                 split); default = mean of the visible anchor x

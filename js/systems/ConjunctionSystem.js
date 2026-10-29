@@ -114,7 +114,7 @@ export class ConjunctionSystem {
   /**
    * Per-frame update; call during active gameplay.
    * @param {number}  dt          — Real-time delta (seconds)
-   * @param {{x:number,y:number,z:number}} playerVel — Player velocity (scene units/s)
+   * @param {{x:number,y:number,z:number}} playerVel — Player velocity (km/s)
    * @param {number}  [dtWorld]   — World-simulation delta (game seconds); TimeAuthority-owned.
    * @param {boolean} [moidScreening] — True above ~10× warp: instantaneous proximity
    *   positions are meaningless when objects teleport per frame, so detection
@@ -369,7 +369,7 @@ export class ConjunctionSystem {
    *
    * @private
    * @param {{x,y,z}} dPos  — debris position  (scene units)
-   * @param {{x,y,z}} dVel  — debris velocity   (scene units / s)
+   * @param {{x,y,z}} dVel  — debris velocity   (km/s)
    * @returns {{ tca:number, minDist:number, threatDir:{x,y,z} } | null}
    */
   _predictClosestApproach(dPos, dVel, pPos, pVel) {

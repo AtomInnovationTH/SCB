@@ -62,7 +62,7 @@ export const APPEAR_DIST_M = 9;
 /** Seconds the arm takes to close on the collar (the satellite glides in over the first two thirds). */
 export const CLOSE_S = 3;
 const GLIDE_S = 2;
-/** Drift after 'left': release (arm retracts) for 1 s, then a steady push. Hidden beyond HIDE_DIST_M. */
+/** Drift after 'left': the arm retracts for RELEASE_S (2.5 s); a steady push starts at DRIFT_START_S (1.5 s). Hidden beyond HIDE_DIST_M. */
 const RELEASE_S = 2.5;  // the arm stows along a raised path (about 6 m of travel): slower than a straight pull
 const DRIFT_START_S = 1.5;
 const DRIFT_ACCEL = 0.8;                       // m/s^2
@@ -2487,7 +2487,7 @@ export class ResupplySatellite {
     return out.copy(SWAP_HOLD);
   }
 
-  /** Whether the swap has the cartridge in the grip at time t (grabbed at 1.0 s, inserted at 3.2 s). */
+  /** Whether the swap has the cartridge in the grip at time t (grabbed at 0.9 s, inserted at 3.2 s). */
   _carrying(t) { return t >= 0.9 && t < 3.2; }
 
   _pathTip(s, hold, out) {

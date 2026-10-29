@@ -3541,7 +3541,7 @@ export class AutopilotSystem {
     };
     const best = choose((c) => c.cost);
     // "also empties the wheels" only when that is why it was picked (the credit changed the winner) and the fullest
-    // axis really ends at least WHEELS_SAY_NMS lower
+    // axis really ends at least EMPTIES_SAY_NMS lower
     const plain = choose((c) => (sloth ? c.timeS : c.gasKg));
     const empties = best !== plain && best.dropNms >= CS.EMPTIES_SAY_NMS;
     const named = cands.filter((c) => c !== best && (c.kind === 'today' || c.kind === 'chest'));

@@ -14,7 +14,7 @@
  *   • The B row has two ids, `upgrades` (the stop after a mission) and `upgrades_map` (the satellite, when the range
  *     map is on), chosen by the same condition `wordsFor()` uses for English.
  *
- *   • The FAQ ("Questions", DECISIONS row "Help", owner 2026-10-28): the group title is `groups.faq`; the link label and
+ *   • The FAQ ("Questions", DECISIONS §51, owner 2026-10-28): the group title is `groups.faq`; the link label and
  *     every question and answer is `faq` ({ link, items: { <id>: { q, a } } }). Both sit in the FAQ section further down
  *     and are merged into each block by `withFaq`. English questions and answers live in HOTKEY_GROUPS (the `faq`
  *     group's `items`).
@@ -497,7 +497,7 @@ const TA = {
   },
 };
 
-// The FAQ (owner 2026-10-28, DECISIONS row "Help"). English lives in HOTKEY_GROUPS (the `faq` group's `items`); only
+// The FAQ (owner 2026-10-28, DECISIONS §51). English lives in HOTKEY_GROUPS (the `faq` group's `items`); only
 // the link label is here. Every other language holds the group title, the link label and a question and an answer for
 // each item id. They sit in this one section (not inside the language blocks above) and are merged into the blocks by
 // `withFaq` below, so a reviewer editing a block's rows never touches them. Model-made like the rest (REVIEW STATUS

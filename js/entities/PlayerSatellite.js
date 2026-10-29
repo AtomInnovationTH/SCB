@@ -426,7 +426,7 @@ export class PlayerSatellite extends THREE.Group {
     this._recoilOffset = new THREE.Vector3();
 
     // Thrust direction tracking & cumulative ΔV
-    this._deltaVSpent = 0;         // cumulative ΔV spent this mission (km/s game units)
+    this._deltaVSpent = 0;         // cumulative ΔV spent this mission (impulse paths add m/s)
     this._thrustDirection = null;   // 'prograde' | 'retrograde' | 'lateral' | null
     this._lastThrustType = null;    // 'ion' | 'coldgas' | null
 
@@ -519,7 +519,8 @@ export class PlayerSatellite extends THREE.Group {
     this._activeThrustDir = { x: 0, y: 0, z: 0 };
 
     // AFT FLOWER (thermal). Purchase-gated: pairs land via the shop (flower_pair_a/b) → applyUpgrade.
-    // ONE pose for all four struts (deploy/stow in unison). θ from +Z, α_aft = 180° − θ.
+    // ONE shared pose for the four struts (deploy/stow in unison), except a petal held for a catch (`_petalHolds`, below).
+    // θ from +Z, α_aft = 180° − θ.
     this._flowerPairs = { A: false, B: false };
     /** @type {Array<{hinge: THREE.Group, azDeg: number, pair: string, wings: THREE.Group[]}>} */
     this._flowerGroups = [];
@@ -1030,7 +1031,8 @@ export class PlayerSatellite extends THREE.Group {
    *   geometry azimuth  φ = -θ          (atan2(geomZ, geomX))
    *   geometry axial    y ∈ [z0, z1]    (geom-Y == world-Z after the rotation)
    *
-   * Each groove uses smooth cosine falloff across its angular width and a smooth ramp at its axial ends, so the dip is
+   * Each groove has a flat floor over the inner 60% of its angular width with smoothstep walls outside it, and a smooth
+   * ramp at its axial ends, so the dip is
    * a rounded depression rather than a hard-edged trench. Vertices are pushed inward up to `depth`; the normals are
    * recomputed so lighting reads the groove correctly.
    * @param {THREE.BufferGeometry} geo  the body CylinderGeometry (Y-axis)
@@ -1520,8 +1522,8 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     // Shared hinge geometries (two-ear clevis, stepped pin). Owner 2026-10-13: "Hinges should be more realistic for
-    // space, for 3d print can use m4 bolts for hinges." Every size below is Decision H (docs/DECISIONS.md): ears 9 mm,
-    // clevis 65 mm wide (inner faces ±23.5, outer ±32.5), stepped pin Ø18, duplex-bearing bosses Ø32, ONE motor +
+    // space, for 3d print can use m4 bolts for hinges." Every size below is Decision H (test-StrutHinge,
+    // test-MotherZFix): ears 9 mm, clevis 65 mm wide (inner faces ±23.5, outer ±32.5), stepped pin Ø18, duplex-bearing bosses Ø32, ONE motor +
     // harmonic-gear cylinder Ø45 × 28 coaxial on one pin end, a small encoder cap on the other. All measured in mm from
     // the pivot, tangent = along the pin, radial = out from the skin.
     const aframeGeo = new THREE.ExtrudeGeometry(this._aframeShape(), {
@@ -2184,8 +2186,7 @@ export class PlayerSatellite extends THREE.Group {
     // Azimuth columns: centred in the stow-pocket gap: weaver pocket edge 82.61° (az 64 + 18.62° half-width), spinner
     // edge 106.69° (az 116 − 9.31°), centre 94.65°/274.65°. Worst clearance 2.91° (boot edge vs BOTH pockets), measured
     // from the built footprints with the guard's own math, above the ≥2° gate at the strut clock 64/116/244/296. The PV
-    // gap cells at 90/270 are z-clear of the pods (cell band 0.48–0.72 vs pod |z| ≥ 0.737). The SSOT half-widths are
-    // still read below only for the clearance context.
+    // gap cells at 90/270 are z-clear of the pods (cell band 0.48–0.72 vs pod |z| ≥ 0.737).
     const barrelR_m = Constants.OCTOPUS_V5?.COLLAR_RADIUS ?? 0.40;
     const RCS_POD_AZ_DEG = [94.65, 274.65];
 
@@ -2633,7 +2634,7 @@ export class PlayerSatellite extends THREE.Group {
     this.panelRightPivot.add(this._rosaPanelWrapper1);
 
     const panel1Front = new THREE.Mesh(panelGeo, panelMatFront);
-    panel1Front.position.set(rosaW / 2 + ROSA_INBOARD_GAP, 0, ROSA_HALF_THICK); // +2 mm proud (Z1), +5 mm inboard gap (Z2)
+    panel1Front.position.set(rosaW / 2 + ROSA_INBOARD_GAP, 0, ROSA_HALF_THICK); // +2 mm proud (Z1), +51 mm inboard gap (Z2)
     panel1Front.name = 'ROSA_Panel_Front_0deg';
     panel1Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper1.add(panel1Front);
@@ -2660,7 +2661,7 @@ export class PlayerSatellite extends THREE.Group {
     this.panelLeftPivot.add(this._rosaPanelWrapper2);
 
     const panel2Front = new THREE.Mesh(panelGeo, panelMatFront);
-    panel2Front.position.set(-(rosaW / 2 + ROSA_INBOARD_GAP), 0, ROSA_HALF_THICK); // mirrored; +2 mm proud, +5 mm gap
+    panel2Front.position.set(-(rosaW / 2 + ROSA_INBOARD_GAP), 0, ROSA_HALF_THICK); // mirrored; +2 mm proud, +51 mm gap
     panel2Front.name = 'ROSA_Panel_Front_180deg';
     panel2Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper2.add(panel2Front);
@@ -2763,7 +2764,7 @@ export class PlayerSatellite extends THREE.Group {
     // Why a pancake and not a real SADA-sized Ø110 x 200 mm drive: between the hull skin and the nearest face of the
     // spool there are only ROOM metres (derived below), so the drive is Ø110 and ROOM - 10 mm long: 5 mm clear of the
     // hull skin and 5 mm clear of the furled coil at each end. WING_MOTOR_BOX_* / WING_MOTOR_PAD_H in
-    // Constants are no longer read by the mesh (kept: test-Constants pins them).
+    // Constants are no longer read by the mesh (kept: test-WingsLook pins them; MotherCallouts reads them).
     // ROOM = spool axis - furled coil radius (the coil is nearer the hull than the drum, 35.4 mm vs 40.1 mm) minus
     // the hull skin at its nearest point (the barrel is a 64-gon with a vertex on the x axis: r 0.400 there).
     const roomM = PlayerSatellite.rosaSpoolAxisM() - PlayerSatellite.rosaFurledCoilRadiusM() - V5.COLLAR_RADIUS;
@@ -4307,7 +4308,7 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * @private Build the two struts of one pair. Names use the P1-reserved
    * `FlowerStrut_*` LOD prefix (PascalCase_${i} convention); station index i
-   * is fixed by azimuth order (0:41°, 1:139°, 2:221°, 3:319°) regardless of
+   * is fixed by azimuth order (0:40°, 1:140°, 2:220°, 3:320°) regardless of
    * purchase order. Bolts take the `MountBolt_` prefix so the DETAIL-LOD
    * inert-hardware family culls them by naming convention alone — no floating
    * boxes: every piece hangs off the bracket/boom/plate stack.
@@ -10187,7 +10188,7 @@ export class PlayerSatellite extends THREE.Group {
     return (this.orbit.semiMajorAxis / Constants.SCENE_SCALE) - Constants.EARTH_RADIUS_KM;
   }
 
-  /** @returns {number} Cumulative ΔV spent in km/s game units */
+  /** @returns {number} Cumulative ΔV spent (impulse paths add m/s) */
   getDeltaVSpent() {
     return this._deltaVSpent;
   }

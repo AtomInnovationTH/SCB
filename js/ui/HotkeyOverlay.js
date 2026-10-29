@@ -125,7 +125,7 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
-    // A short FAQ (owner 2026-10-28, DECISIONS row "Help"): one closed section like Stuck?; each question is its own
+    // A short FAQ (owner 2026-10-28, DECISIONS §51): one closed section like Stuck?; each question is its own
     // <details>, several can stay open. No key rows (`rows` stays empty so the row tests never see it); the
     // questions live in `items`. Answers are at most two sentences of at most 20 words, plain words. `link` = a
     // data/codex.json entry id (opened in the Tech library); translations are keyed by item id in helpText.js

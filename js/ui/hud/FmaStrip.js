@@ -16,8 +16,8 @@
  * `[data-density-hidden]{display:none !important}`; the injected style carries the id-scoped belt). Never emits
  * HUD_PANE_VISIBILITY.
  *
- * HOME: the LAST child of `#hud-left-column` (deps.parent default), inheriting the column's 260 px width;
- * `position: relative` inline like the column's other panes (the .hud-panel class says absolute). Display-only: NO tap
+ * HOME: a child of `#hud-overlay` (FMA_PARENT_ID, deps.parent default), `position: absolute` inline at the left column's
+ * edge, HUD_COLUMN_WIDTH_PX wide (_build). Display-only: NO tap
  * action, so no 44 pt rule; `user-select: none`; pointer-events none.
  *
  * Laws: DOM fonts through var(--font-mono) only; tabular numerals; no pictographic glyph (· — − are Latin-1 / General

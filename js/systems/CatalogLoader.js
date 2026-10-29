@@ -195,7 +195,7 @@ export class CatalogLoader {
         break;
 
       default:
-        // Unknown file — store raw on meta for future readers.
+        // Unknown file — ignored.
         break;
     }
   }

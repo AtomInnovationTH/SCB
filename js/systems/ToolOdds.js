@@ -65,7 +65,7 @@ export function computeStrainFailProbability(payloadMass, ratedMass) {
  * Pre-fire estimate of the net's spin fraction at contact. Mirrors the flight model: spin settles at SPIN_HZ when FLIGHT
  * begins, then decays at SPIN_HZ × decay per second of flight (CaptureNet._updateFlight); time-of-flight = range /
  * LAUNCH_SPEED. The decay honours the per-class override like the flight code (netClass.SPIN_DECAY_PER_S ??
- * CN.SPIN_DECAY_PER_S — §11.2 LARGE resolution: the whale net bleeds at 0.04/s, daughters at the shared 0.08/s).
+ * CN.SPIN_DECAY_PER_S — CAPTURE_NET.md §11.2 LARGE resolution: the whale net bleeds at 0.04/s, daughters at the shared 0.08/s).
  * @param {number} range metres to target
  * @param {object} netClass CN.LARGE / MEDIUM / SMALL
  * @returns {number} estimated spinFraction at contact ∈ [0, 1]

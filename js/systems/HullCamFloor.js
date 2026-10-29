@@ -144,7 +144,7 @@ export class HullCamFloor {
    * inspection carousel:
    *   overview → detail(sub₁) → detail(sub₂) → … → detail(subₙ) → overview →…
    * so it toggles the lens (00-spec §3) AND switches the focused subsystem within the detail lens. The override this
-   * sets is cleared whenever the camera crosses the 5 m split (the distance re-picks the default).
+   * sets is cleared whenever the camera crosses the 4 m split (the distance re-picks the default).
    * @returns {{lens:string, focusId:*}} the post-toggle state
    */
   lensToggle() {
@@ -204,7 +204,7 @@ export class HullCamFloor {
   }
 
   /**
-   * Track the distance-picked lens default. Crossing the 5 m split flips the default AND clears any toggle override
+   * Track the distance-picked lens default. Crossing the 4 m split flips the default AND clears any toggle override
    * ("the camera distance picks which one is the default", 00-spec §3). Non-finite samples (no camera yet) leave
    * the state untouched.
    */

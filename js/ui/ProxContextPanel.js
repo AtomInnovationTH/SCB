@@ -239,7 +239,7 @@ export class ProxContextPanel {
     for (const r of m.rows) {
       const rColor = (r.risk01 != null) ? ProxOverlay.riskColor(r.risk01) : VisualLaw.COLORS.INFO;
       if (r.selected) {
-        // Selection is WHITE (the only use of white) + the ▸ shape channel.
+        // Selection is SELECTION blue (VisualLaw.COLORS.SELECTION) + the ▸ shape channel.
         rows.push(`<div style="color:${VisualLaw.COLORS.SELECTION}">\u25b8 ${r.zone}</div>`);
         rows.push(`<div style="color:${rColor};padding-left:12px">${r.riskText} \u00b7 ${r.rateText}</div>`);
         rows.push(`<div style="padding-left:12px">${r.dvText}</div>`);

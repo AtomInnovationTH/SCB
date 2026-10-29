@@ -587,8 +587,8 @@ export const Constants = {
                                 // per-point peak rule (see MW_OPACITY) holds because alpha only reduces a contribution.
   MW_OPACITY: 0.75,             // uOpacity for the band material. COUPLING to STAR_FIELD_BRIGHT (0.32): every band
                                 // point's peak = vColor × uOpacity × vAlpha must stay BELOW 0.32 so the band never
-                                // out-points an actual star. With MW_BRIGHT_MAX 0.42 and vAlpha ≤ 1 the peak is
-                                // 0.42 × 0.75 = 0.315 < 0.32.
+                                // out-points an actual star. With MW_BRIGHT_MAX 0.26 and vAlpha ≤ 1 the peak is
+                                // 0.26 × 0.75 = 0.195 < 0.32.
   // Band GRAIN brightness. The Milky Way is UNRESOLVED: its individual stars are below naked-eye separation, so they
   // must be the faintest thing in the sky, not rivals to real stars; the haze layer carries the band's presence.
   MW_BRIGHT_MAX: 0.26,          // brightest band point's color multiplier (pre-opacity).
@@ -1202,7 +1202,7 @@ export const Constants = {
     BOOST_LOCKOUT_IN_DECEL: true, // disable REEL_BOOST inside DECEL_DISTANCE_M
     // Under REEL_HOME the reel PULLS HER UP to speed at this rate
     // (no jump from 0 to peak), then cruises, then brakes on her cold-gas jet (DAUGHTER_COLD_GAS) at min(ACCEL, jet / MARGIN)
-    // (DECISIONS §REEL-IN PHYSICS).
+    // (DECISIONS §34 row 2: "The reel is three phases").
     // Game-scale m/s per REAL s (true accel = /100: 10 -> 0.1 m/s^2; a 27 kg catch then pulls ~2.7 N, far under the 100 N line).
     // The legacy path (REEL_HOME off, detached arms) never reads it. (est)
     PULL_ACCEL:          10,
@@ -1645,7 +1645,6 @@ export const Constants = {
   // above 5 m at run time (the hold
   // pose is the exact check at the real angle, ArmManager.holdPoseAlpha, never the ladder; a daughter's net takes at most
   // 5.5 m, 500 kg).
-  // 2026-10-23 roll-90 (hinge roll): these two rows re-measure at 120° / 130°; the floors 125° / 134° still clear, by 5° / 4°.
   // Read by ArmManager's re-pose driver and the plume tests; the plume CHECK
   // itself is band-free (it tests geometry, not policy).
   PLUME_CARGO_ALPHA_LADDER: [
@@ -3085,7 +3084,7 @@ export const Constants = {
   // A captured M1 welcome FRAGMENT is physically tiny (~0.6 m), so at the gameplay camera distance it rendered
   // sub-pixel and was invisible inside the net. While a catch is HELD by the Mother net (reel → cargo/furnace),
   // clamp its apparent render size up to this floor. Scoped to lasso-held catches only (via debris._catchRenderMin)
-  // so the Daughter's small nets are unaffected. Stays well under the 7 m net mouth / ~1.75 m cinched mouth.
+  // so the Daughter's small nets are unaffected. Stays well under the 6 m net mouth (CAPTURE_NET.LARGE.DIAMETER).
   // A RENDERED RADIUS in metres: the write sites divide by the mesh's bounding radius via
   // DebrisWireframe.scaleForRenderRadiusM.
   // NAME COLLISION: CAPTURE_NET.MOTHER_CATCH_MIN_RENDER_M (2.0) is a DIFFERENT floor with the same name — THIS
@@ -3283,10 +3282,10 @@ export const Constants = {
     //          latches `mouthCollapsed` in flight and contact resolves as a distinct 'mouth_collapsed' MISS.
     //   MEDIUM F₀ ≈ 79.0 N → t* ≈ 8.05 s — beyond its 8 s MAX_FLIGHT_TIME by only ~51 ms: unreachable,
     //          enforcement provably inert.
-    //   LARGE  F₀ ≈ 47.4 N → t* ≈ 13.51 s ≈ 135 m at its per-class SPIN_DECAY_PER_S 0.04 override (see the LARGE
-    //          block): OUTSIDE every reachable contact (tether pay-out 10 s, MAX_FLIGHT_TIME 11 s) by ≥ 2.5 s, so
+    //   LARGE  F₀ ≈ 35.53 N → t* ≈ 11.74 s ≈ 117 m at its per-class SPIN_DECAY_PER_S 0.04 override (see the LARGE
+    //          block): OUTSIDE every reachable contact (tether pay-out 10 s, MAX_FLIGHT_TIME 11 s) by ≥ 0.74 s, so
     //          enforcement is live for the class yet provably inert and the 100 m whale envelope stays honest
-    //          (worst reachable arrival ≈ 17.1 N ≥ floor).
+    //          (worst reachable arrival ≈ 12.8 N ≥ floor).
     MOUTH_TENSION_FLOOR_N: 10,    // N per rim weight — mouth-open floor (§11.1/§11.2)
     MAX_FLIGHT_TIME:      8,      // max tether pay-out (§2.4 phase 3)
     SLAM_CONTACT_TIME:    0.5,    // slam-wrap wrap duration (§2.4 phase 5a, min)
@@ -3454,8 +3453,8 @@ export const Constants = {
 
     // --- Line-taut tug ---
     // When the net cinches onto a whale with residual relative velocity, the tether goes taut and the catch yanks
-    // the Mother. The honest momentum ratio is up to 177:1 (23 t vs 130 kg), so the cap below does nearly all the
-    // work — the difference between "visibly yanked" and "flung off-station". Applied two ways:
+    // the Mother. The momentum ratio is about 5:1 at her start mass (her 1,500 kg catch limit vs 294 kg), so the cap
+    // below does nearly all the work — the difference between "visibly yanked" and "flung off-station". Applied two ways:
     //   1. a 0.5–0.8 s critically damped spring window into _rcsVelocity (the shock absorber — feel-only, decays), and
     //   2. a REAL orbit impulse via applyCartesianImpulse with billing SKIPPED (passive momentum transfer costs no
     //      propellant) — the kept Δv is a genuine ΔV-economy event, comms'd and cancellable with RCS.
@@ -3807,7 +3806,7 @@ export const Constants = {
       CONE_OPEN_RADIUS_FRAC:         1.0,    // mouth radius / (D_mesh × 0.5)
       // The cinch ring contracts at local z = -coneHeight (mouth plane).
       // With CONE_OPEN_RADIUS_FRAC=1.0, target sits at z ≈ -mouthRadius = -0.5 × D. At 0.85: coneH = 0.85 × D →
-      // gap = 0.35 × D = 2.8 m (D=8) / 1.75 m (MEDIUM, former 5 m) / 0.525 m (SMALL), so the ring closes around
+      // gap = 0.35 × D = 2.1 m (D=6) / 1.05 m (MEDIUM, D=3) / 0.525 m (SMALL, D=1.5), so the ring closes around
       // the debris's forward leading edge rather than its midpoint (0.55 cinched through the middle of the debris).
       // Camera CINCH / BRAKE_ENVELOP lookAt offsets in CameraSystem._netCeremonyBeatLook
       // are kept in sync (they reference 0.85 / 0.425 = coneH/2 directly).
@@ -4327,10 +4326,10 @@ export const Constants = {
     // --- In-reach rotate-only thresholds ---
     // When the debris is ALREADY within the active tool's capture reach, the mother only ROTATES to point at the
     // target and holds position (no fly-in to the tight trailing point). The per-tool reach is NOT duplicated here:
-    // AutopilotSystem._getToolReach() derives it from the canonical tool constants (weaver WEAVER_TETHER_LENGTH 2000 m,
+    // it comes from the canonical tool constants (weaver WEAVER_TETHER_LENGTH 2000 m,
     // spinner SPINNER_TETHER_LENGTH 500 m, lasso LASSO_RANGE = NET_LOCK_RANGE_M 90 m, trawl D_TRAIL_TRAWL 150 m: ≥ trail
     // so rotate-only can engage rather than overfly). Only the AP-owned policy values live here:
-    REACH_DEFAULT:   200,  // m — conservative fallback when no tool recommendation. NOTE: nothing reads this today (the AutopilotSystem._getToolReach() named above does not exist); the per-tool reach is the tool's own constant (lasso = LASSO_RANGE = 90 m)
+    REACH_DEFAULT:   200,  // m — conservative fallback when no tool recommendation. NOTE: nothing reads this today; the per-tool reach is the tool's own constant (lasso = LASSO_RANGE = 90 m)
 
     // Hysteresis band around the reach boundary: once inside REACH the autopilot enters rotate-only mode and only
     // resumes translating if the target drifts beyond REACH·(1 + REACH_HYSTERESIS) (prevents oscillation at the boundary).

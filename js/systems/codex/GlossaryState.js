@@ -1,5 +1,5 @@
 /**
- * GlossaryState.js — first-use seen-state for the inline glossary (§11.8).
+ * GlossaryState.js — first-use seen-state for the inline glossary.
  *
  * The pure decorator (glossary.js) decides WHAT to wrap; this controller decides whether a term still deserves its first-use
  * attention cue: a term is "seen" once rendered, after which the brighter `glossary-term--new` cue drops (the hover `title`

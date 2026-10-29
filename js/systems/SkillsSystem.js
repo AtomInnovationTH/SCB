@@ -1,6 +1,6 @@
 /**
  * SkillsSystem.js — free-order skill discovery engine (replaced the linear TutorialSystem).
- * 35 skills defined in Constants.SKILLS.CATALOG are tracked through four states:
+ * 43 skills defined in Constants.SKILLS.CATALOG are tracked through four states:
  *   undiscovered → discovered → practiced → mastered
  *
  * Event-driven: each skill's triggerEvent maps to an Events.js constant; when it fires, the use count increments and

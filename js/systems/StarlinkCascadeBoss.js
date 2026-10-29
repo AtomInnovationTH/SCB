@@ -1,11 +1,11 @@
 /**
- * StarlinkCascadeBoss.js — CH9 "race-the-cascade" boss (MISSION_ARC §6).
+ * StarlinkCascadeBoss.js — CH9 "race-the-cascade" boss (archive/MISSION_ARC_IMPLEMENTATION.md §6).
  *
  * At the MISSION BOUNDARY into mission `Constants.STARLINK_BOSS.MISSION` (the 40th credited catch → `MISSION_START
  * { missionNumber: 9 }`; not `SHOP_DEPLOY`, which the chapter-4+ depot INVITATION made optional), ARM; on the first gameplay
  * frame with no depot stop pending (`_bossLifecycle.MissionOnset`, never under the depot overlay), burst-spawn FRAG_COUNT
  * Starlink fragments and start a WINDOW_MIN game-time timer. The Kessler-cascade tension is escalating comms; this boss does
- * NOT force a KesslerSystem game-over (failure is never a hard punishment, §9). Outcome is emergent from play:
+ * NOT force a KesslerSystem game-over (failure is never a hard punishment, MISSION_ARC_IMPLEMENTATION.md §9). Outcome is emergent from play:
  *
  *   • CONTAINED — clear ALL frags before the window → +CONTAIN_BONUS_KG toward the elevator contract,
  *     +CONTAIN_BONUS_CREDITS, and the "contained" codex.

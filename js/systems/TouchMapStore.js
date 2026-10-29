@@ -3,8 +3,8 @@
  * advance ONLY on the witnessed real input — never on a timer").
  *
  * ONE localStorage key, `sc_touch_map_v1` (StorageKeys.TOUCH_MAP), holding which of the map's SIX rows the player
- * has witnessed and whether the map was skipped: the envelope `{ v: 1, done: string[], skipped: boolean }`. The pane
- * (js/ui/hud/TouchMapPane.js) shows on every floor until the record says done
+ * has witnessed and whether the map was skipped: the envelope `{ v: 1, done: string[], skipped: boolean }`. The splash
+ * (js/ui/GestureSplash.js) shows until the record says done
  * or skipped — ONCE per player, so the key is deliberately separate from the
  * run save (`spacecowboy_save_v1`, wiped by every New Game): a player who has
  * already found the gestures is not re-taught them after a reset.

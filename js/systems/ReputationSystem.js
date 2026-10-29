@@ -32,7 +32,7 @@ export class ReputationSystem {
   _setupListeners() {
     // News event captures — the NEWS_EVENT_TRIGGERED carries partner info
     // The actual rep boost happens when the player COMPLETES the news mission (captures the target).
-    // We listen for INTERACTION_CAPTURE with a newsPartner field set by MissionEventSystem.
+    // INTERACTION_CAPTURE carries no news partner here: every capture gives a flat +1 to India (below).
     // For now, we also listen for NEWS_EVENT_TRIGGERED to award a small "mission accepted" bonus.
     this._unsubs.push(eventBus.on(Events.NEWS_EVENT_TRIGGERED, (data) => {
       if (data.partner) {

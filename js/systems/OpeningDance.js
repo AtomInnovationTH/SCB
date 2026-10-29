@@ -1,7 +1,7 @@
 /**
  * @module systems/OpeningDance — the boot cinematic: the ship unpacks itself. It STARTS IN THE MENU as the EVA
  * astronaut jets off the hull, the menu hero's solar wings roll out at the SHIPPED hardware rate, and the player gets
- * the wheel 4.0 s after the menu cuts away. No rocket, no fairing, no persistence writes, no arm launch lock.
+ * the wheel 6.0 s after the menu cuts away. No rocket, no fairing, no persistence writes, no arm launch lock.
  *
  * DECISIONS §15 row 4 (owner 2026-10-08): the ship STARTS CLOSED — radiator folded flat at its 0° launch latch
  * (= POSE_CLOSED_DEG; owner 2026-10-16: no slightly-open step after the clamp release), daughter struts shut at α 0.

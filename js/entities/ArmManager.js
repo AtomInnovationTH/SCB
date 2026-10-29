@@ -3347,7 +3347,7 @@ export class ArmManager {
    *                    from the mother's store (`ArmUnit._updateIndiumSwap`), so only an empty store keeps it for good
    *   nose-gas         the mother's steering gas cannot pay the swing          -> STAYS (a yes/no gate; nothing is billed)
    *   radiators-angle  they settle outside the certified window                -> STAYS (radiators are never moved for a carry:
-   *                    DECISIONS line 37, §38 row 4)
+   *                    DECISIONS §38 row 4)
    *   swing-back       the swing back needs the other radiator range           -> STAYS (same reason)
    *   neighbour-catch  a neighbour's catch can never leave (no lift)           -> STAYS; with a lift -> GOES
    *   carry-busy, leash-busy, mission-*  another carry, the leash or a petal   -> GOES (real time)
@@ -4675,8 +4675,8 @@ export class ArmManager {
     const V5 = Constants.OCTOPUS_V5;
     const strutMassTotal = V5.STRUT_MASS * this.arms.length;
     // Purchased flower pairs are permanent structure too: the ONE hardware-mass carrier is this coreDry term. The legacy
-    // top-level OCTOPUS_CORE_DRY_MASS twin (170) is deliberately NOT grown: its one reader is TargetReticle's local ΔV
-    // mirror (a known +626.7 m/s optimism at tier 0, tmp/flower-mass-budget.mjs §3; the flower widens it by the untold pair tax).
+    // top-level OCTOPUS_CORE_DRY_MASS twin (170) is deliberately NOT grown: no runtime code reads it now (the reticle's
+    // local ΔV mirror is gone; test-FlowerBudgetHud pins the 170).
     const flowerMass = (this.playerSatellite
         && typeof this.playerSatellite.getFlowerDryMassKg === 'function')
       ? this.playerSatellite.getFlowerDryMassKg() : 0;

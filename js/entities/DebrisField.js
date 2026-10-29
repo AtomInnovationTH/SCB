@@ -240,10 +240,10 @@ const WELCOME_FIELD = [
   // Guarded by test-WelcomeField 'authored opening tumble' (threshold from Constants, not a magic number).
   { types: ['fragment'], sizeM: 0.60, lowValue: true, appearMaterial: 'aluminum', appearPlate: true,
     massMin: 3, massMax: 3,  pin: true, fwdM: 22, latM: 0,
-    tumbleDegS: 7, tumbleAxis: { x: 0.25, y: 1.0, z: 0.15 } },  // #1 aluminium panel shard (flat) — dead centre, ~22 m, render ~1.15 m; stately authored tumble (< IN_SPEC_DEG)
+    tumbleDegS: 7, tumbleAxis: { x: 0.25, y: 1.0, z: 0.15 } },  // #1 aluminium panel shard (flat) — dead centre, ~22 m, drawn at its true size (sizeM); stately authored tumble (< IN_SPEC_DEG)
   { types: ['fragment'], sizeM: 0.70, lowValue: true, appearMaterial: 'mli_mylar', appearPlate: true,
     massMin: 4, massMax: 4,  pin: true, fwdM: 45, latM: 18,
-    tumbleDegS: 15 },                                           // #2 MLI-foil scrap (gold flat) — right, in range (≈48 m), render ~1.33 m; a touch livelier
+    tumbleDegS: 15 },                                           // #2 MLI-foil scrap (gold flat) — right, in range (≈48 m), drawn at its true size (sizeM); a touch livelier
   { types: ['fragment'], sizeM: 0.45, appearMaterial: 'solar_cell', appearPlate: true,
     massMin: 5, massMax: 5,
     fwdMinM: Constants.NET_LOCK_RANGE_M * 1.15, fwdMaxM: Constants.NET_LOCK_RANGE_M * 1.40,

@@ -714,8 +714,8 @@ export class InputManager {
     }
 
     // ST-5.1: Comms menu intercept removed — center popup deleted.
-    // UX-11 #9: the C-hold RadialMenu was also removed. Bare C is now unbound
-    // (2026-06-16 cleanup); comms expand lives on the 7 key.
+    // UX-11 #9: the C-hold RadialMenu was also removed. Bare C is now "Move a catch to a radiator" (case 'KeyC' below);
+    // comms expand lives on the 7 key.
 
     switch (e.code) {
       // Confirm / Enter action (gameplay only — menu/briefing handle their own Enter)
@@ -1005,8 +1005,8 @@ export class InputManager {
       // and Shift+P arm-cycle were retired: daughters are now managed directly
       // with the number row (1-4 = select/pilot), and re-pressing the active
       // digit returns to the mother. armPilotMode is now entered only by
-      // digit-selecting a DEPLOYED arm and by LAUNCH_CEREMONY_COMPLETE. P is
-      // left unbound.
+      // digit-selecting a DEPLOYED arm and by LAUNCH_CEREMONY_COMPLETE. P was
+      // left unbound then; it is pause / resume now (case 'KeyP' above).
 
       // G key — Shift+G = Trawl sweep (toggle). Bare G is unbound.
       case 'KeyG':
@@ -1196,8 +1196,8 @@ export class InputManager {
 
       // C key — FREED (hotkey cleanup 2026-06-16). Bare C used to duplicate the
       // 7 key's comms expand (both emitted COMMS_FOCUS + COMMS_OPENED), so the
-      // redundant binding was removed: 7 is the single comms key now. C is left
-      // unbound/available (joining the already-free W, Y, O). Note: ',' is NOT
+      // redundant binding was removed: 7 is the single comms key now. C was later rebound (see case 'KeyC').
+      // Note: ',' is NOT
       // free — Comma is the ROSA furl/unfurl toggle (see the 'Comma' case).
       // Shift+C city-labels moved to 5 in the 2026-06-14 revamp and is also free.
 
@@ -1245,7 +1245,7 @@ export class InputManager {
           break;
         }
         // (0) A daughter already HOLDING the active target (station-keeping on it): N works her tool with no pilot
-        // mode — the daughter-in-position line promises "Press N" (DECISIONS §33 row 6, 2026-10-20). This branch never
+        // mode — the daughter-in-position line promises "Press N" (DECISIONS §33 row 9, 2026-10-20). This branch never
         // fires the mother's nets; while piloting a daughter the pilot-mode branch below owns N.
         if (!(this.armPilotMode && d.cameraSystem)) {
           const holder = this.findHoldingDaughter();
@@ -1645,7 +1645,7 @@ export class InputManager {
       // --- Backtick: in ARM_PILOT STATION_KEEP it cycles the piloted arm's
       //     tool. The Debris-Map toggle was retired 2026-10-09 (H1); otherwise
       //     the key does nothing. The old Shift+` mother-side tool cycle was
-      //     removed (hotkey cleanup 2026-06-13b) — that verb now lives on T. ---
+      //     removed (hotkey cleanup 2026-06-13b). ---
       case 'Backquote':
         if (isGameplay && !e.repeat) {
           // Plain backtick in STATION_KEEP cycles the piloted arm's tool (NET → … → MAGNET).
@@ -2740,7 +2740,7 @@ export class InputManager {
       });
       d.audioSystem?.playDeny?.();
     };
-    // relVelScratch is filled by the lead provider's EMA on every provider
+    // lead.relVel is filled by the lead provider's EMA on every provider
     // tick; the pre-slew check seeds it with one synchronous sample below.
     const checkRefusals = (relVelScenePerS) => {
       if (!target || target.alive === false) {
@@ -3085,7 +3085,7 @@ export class InputManager {
   _withinNetReach(piece) { return withinNetReach(this._deps, piece); }
 
   /**
-   * The daughter, if any, that is HOLDING the active target — N works her tool without pilot mode (DECISIONS §33 row 6).
+   * The daughter, if any, that is HOLDING the active target — N works her tool without pilot mode (DECISIONS §33 row 9).
    * Order: the selected daughter (`armManager.selectedArmIndex`) if she is in STATION_KEEP on the active target, else
    * the first of `armManager.arms` in STATION_KEEP whose `_stationKeepTarget || target` is the active target.
    * With no holder of the active target: a daughter in STATION_KEEP (selected first, else the first in `arms` order)

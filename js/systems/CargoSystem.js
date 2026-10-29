@@ -191,7 +191,7 @@ export class CargoSystem {
    * The `cargoCapacity` effect carries the ABSOLUTE target hold size in `data.value` (e.g. 1500, 3000), so the handler
    * is a plain assignment and is therefore IDEMPOTENT — safe to re-run on the save-restore path (which routes through
    * EFFECT_ROUTES → CARGO_SYSTEM just like purchase). We never shrink the hold below what a bigger tier already
-   * granted (upgrades don't stack down), and we never drop the hold below the current stored mass.
+   * granted (upgrades don't stack down).
    *
    * Why: the elevator win needs cargo THROUGHPUT; with a constant 500 kg hold (CARGO_CAPACITY_KG), 12 depots × 500 kg
    * = 6,000 kg < the 10,000 kg contract.

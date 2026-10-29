@@ -90,7 +90,7 @@ function makeRing(y, r) {
 }
 
 // Rocket Body: cylinder + nosecone + nozzle
-// Total height normalized ~1.0. Diameter = 0.3 (radius 0.15).
+// Total height normalized ~1.0. Body ring radius R = 0.30 (diameter 0.60).
 // Y range: -0.65 (nozzle tip) to +0.5 (nosecone tip)
 // Zones: Nosecone top 15%, Fuel Tank middle 60%, Engine bottom 25%
 function buildRocketBody() {

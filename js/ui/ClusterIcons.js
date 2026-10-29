@@ -250,7 +250,7 @@ export class ClusterIcons {
    * @param {Array} clusters - from DebrisField.getDebrisClusters() (id, name, count, center{x,y,z})
    * @param {(pos:{x,y,z}) => {x:number, y:number, visible:boolean}} project - world→screen
    * @param {object} [opts]
-   * @param {number} [opts.budget] - max labelled icons (default F6 labelBudget = 7)
+   * @param {number} [opts.budget] - max labelled icons (default floor 4 labelBudget = 7)
    * @param {*} [opts.focusId] - the currently-focused cluster id (SELECTION blue)
    * @param {Map|object} [opts.assessments] - clusterId → ReachabilityModel.assess() result. Absent → no verdicts.
    * @param {boolean} [opts.coOrbital] - the focused cluster is at the ship's own height; at the simple level it

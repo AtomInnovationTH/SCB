@@ -41,13 +41,13 @@ const M = Constants.SCENE_UNITS_PER_METER ?? 0.00001;
 export const TIP_STALK_M = 0.15;
 /**
  * Largest bag radius a tip takes (m): every radius up to it has a measured hand-off angle with and without bags held
- * on the other tips (Constants.LEASH.HANDOFF_THETA_TABLE, tmp/v12bb/summ.txt).
+ * on the other tips (Constants.LEASH.HANDOFF_THETA_TABLE; archive/research/2026-10-leash.md, "Bigger bags on the 2.30 m radiators").
  */
 export const MAX_BAG_R_M = 0.75;
 /**
  * Bag radius (m) → max radiator angle (deg) with that bag on a tip, 0.15 m floor to every engine plume cone (the same
  * for all four tips), floored to a whole degree. Measured with the 0.15 m latch at the 2.30 m radiators
- * (tmp/probes/arm-length/band.mjs, tmp/v12bb/band-s0.2.txt). A bag takes the row for the next radius at or above its own.
+ * (tmp/probes/arm-length/band.mjs; archive/research/2026-10-leash.md, same section). A bag takes the row for the next radius at or above its own.
  */
 export const TIP_BAND = [[0.10, 146], [0.15, 145], [0.22, 143], [0.30, 142], [0.40, 140], [0.50, 138], [0.60, 136], [0.75, 134]];
 /** How fast a bag turns from the line it arrived on to the boom axis (deg/s). ESTIMATE, not measured. */

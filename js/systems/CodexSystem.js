@@ -164,8 +164,8 @@ export class CodexSystem {
       trlRationale: hasTrl ? (i.trlRationale || 'Established science (default)') : null,
       // `startUnlocked` entries are readable immediately: PLAYBOOK quick-start + WORLD_INDUSTRY exposition, plus one
       // per-category "cornerstone" briefing. The START fact is carried onto the runtime entry as its own field — the
-      // SPECS badge (`LibraryPane.unreadCount`) must tell the 74 startUnlocked entries apart from unlocks earned IN PLAY (the
-      // runtime `unlocked` can be true for both; only the badge excludes the 74).
+      // SPECS badge (`LibraryPane.unreadCount`) must tell the startUnlocked entries apart from unlocks earned IN PLAY (the
+      // runtime `unlocked` can be true for both; only the badge excludes the startUnlocked ones).
       startUnlocked: e.startUnlocked === true,
       unlocked: e.startUnlocked === true,
       seen: false,
