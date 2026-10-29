@@ -421,6 +421,15 @@ export class CaptureNetVisual {
     // a slip/rip, but the staged failure must play out, not be cut short by the success hand-off fade. Checked
     // BEFORE the payload's mass: a failure stow zeroes capturedMass, so the guard cannot depend on the mass branch.
     if (vis && vis.failure) return;  // failure beat in flight — it owns the fade
+    // DECISIONS §49 row 8, let the bag go: her net stows (the rack gave the bag up and cleared her catch, so the stow
+    // reports it as released mass) but the closed net stays drawn round the piece while it drifts off, until the bag is
+    // removed. Hand the bag to the catch exactly as her cargo release does (`rack_<arm>_<id>`, seated from the piece each
+    // frame; her line is hidden there), never the 0.8 s stow fade — that made it vanish 0.5-0.8 s after the let-go with
+    // the bag a few metres out. The key is freed, so her fresh net is unaffected. A piece the field no longer knows
+    // (or no kit) falls through to the fade below.
+    const lgd = vis && !vis.carry && vis._catchDebris && this._fieldPiece(vis._catchDebris);
+    if (lgd && lgd._letGoDrift && lgd.alive !== false
+        && this._carryOnRack(key, vis, armIndex, lgd.id, -1)) return;
     // delivered → the bag stays with the catch.
     if (vis && payload && payload.capturedMass > 0) {
       if (vis.carry) return;                   // duplicate event — already carrying
