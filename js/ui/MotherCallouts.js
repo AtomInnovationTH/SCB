@@ -27,7 +27,8 @@
  * REFIT ghosts: setGhostOutline(partIds) / getPartsBySystem(); the optional onPartClick hook routes a resolved
  * part/card click to the REFIT card instead of the Library emit.
  *
- * PART PORTRAIT: getPartFrame(partId) and withHiddenForPortrait(fn) serve the SPECS pane's one-shot portrait render.
+ * PART PORTRAIT: getPartFrame(partId), withHiddenForPortrait(fn) and withPartTinted(partId, fn) serve the SPECS pane's
+ * one-shot portrait render (the last tints the part's own meshes teal for the shot).
  *
  * Gating mirrors the hull outline: active while the INSPECTION view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom
  * sub-state (INSPECT_HULL_OUTLINE) reports inspection on.
@@ -47,7 +48,7 @@ import { Constants } from '../core/Constants.js';
 import { PlayerSatellite } from '../entities/PlayerSatellite.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { createCardTexture, CARD_W_OVER_TITLE_H, wrapHint } from '../scene/labelTexture.js';
+import { createCardTexture, CARD_W_OVER_TITLE_H } from '../scene/labelTexture.js';
 import { fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 import { orderRail } from '../scene/railOrder.js';
 import { RAIL_GEOMETRY } from './RailGeometry.js';
@@ -55,7 +56,6 @@ import { GestureHints } from './hud/GestureHints.js';
 import { TAP_SLOP_PX, TAP_SLOP_MS } from '../systems/TapPick.js';
 import { engineGasKg } from '../systems/ResourceSystem.js';
 import { DEG2RAD, degToRad, clamp01, clamp } from '../core/MathUtil.js';
-import { VisualLaw } from '../core/VisualLaw.js';
 
 // 1 metre in scene units (mirrors PlayerSatellite's M = 0.00001).
 const M = 0.00001;
@@ -65,8 +65,8 @@ const HUES = CFG.SYSTEM_HUES;
 const RISK = CFG.RISK_COLORS;
 
 // Flower struts' card row. Desktop names the O key; glass has no such key, so its row names no control (chosen in `specRow`).
-const FLOWER_ROW = 'They open LIKE A FLOWER \u2014 O opens to 146\u00B0 / folds flat';
-const FLOWER_ROW_GLASS = 'They open LIKE A FLOWER \u2014 146\u00B0 open / folds flat';
+const FLOWER_ROW = 'O opens to 146\u00B0, folds flat';
+const FLOWER_ROW_GLASS = 'Opens to 146\u00B0, folds flat';
 const specRow = (row) => (row === FLOWER_ROW && GestureHints.isGlass() ? FLOWER_ROW_GLASS : row);
 
 // Anchors are LOCAL model coordinates (parented to the PlayerSatellite group), in metres × M, from the real model
@@ -90,25 +90,39 @@ const specRow = (row) => (row === FLOWER_ROW && GestureHints.isGlass() ? FLOWER_
 //            under `player` whose name STARTS WITH one joins this part's pick targets, so small pieces (bolts, clips,
 //            mounts, booms, panels) highlight their part and block the pointer for the part behind. Same traverse-all
 //            rule as `pick`, so prefixes must stay disjoint across parts; the pick-table test pins both.
+//   wheelGated  the part shows only while `player.hasWheelKit()` (the reaction-wheel kit is aboard): read where `flowerGated` is read,
+//            hidden (opacity 0, no anchor, not pickable) without the kit.
 //   flowerGated  the part's mesh exists only after the aft radiator flower is bought: until then the mesh lookup is
 //            skipped (no warn, static `anchor` used) and re-armed on the gone→present edge (_resolveAnchor).
+// The wing tilt drive's stator ring (PlayerSatellite `_buildMidRing`): outer radius (typed there, not exported) and the length
+// that fills the room between the hull skin and the furled coil. Anchor of the WING MOTOR BOX row.
+// Battery cell-class specific energy used for the BATTERY PACK card's mass (an estimate: the game has no battery mass).
+const BATTERY_WH_PER_KG = 150;
+const WING_STATOR_R_M = 0.055;
+const WING_STATOR_LEN_M = PlayerSatellite.rosaSpoolAxisM() - PlayerSatellite.rosaFurledCoilRadiusM()
+  - Constants.OCTOPUS_V5.COLLAR_RADIUS - 0.010;
 const SYSTEMS = [
   {
     id: 'POWER', label: 'POWER',
-    anchor: [ 1.0 * M, 0, 0 ],
+    // The wing drum's top (+Y) at mid-length: the one piece of POWER hardware that is always there, furled or open. The old
+    // point (1.0, 0, 0) floated 45.5 cm off every surface with the wings furled (callouts doc C8). The drum's origin sits on
+    // the spool axis, so the offset is its derived radius (never typed); the static tuple is the same point.
+    mesh: 'ROSA_Spool_0deg',
+    meshOffset: [ 0, Constants.OCTOPUS_V5.ROSA_DRUM_R * M, 0 ],
+    anchor: [ PlayerSatellite.rosaSpoolAxisM() * M, Constants.OCTOPUS_V5.ROSA_DRUM_R * M, 0 ],
     role: 'solar wings + hull cells',
     parts: [
       { id: 'rosa_wings', name: 'ROLL-OUT SOLAR WINGS', risk: 'GREEN', tier: 'major', codexId: 'rosa_solar_array',
         massKg: 22, priority: 9, live: 'rosa',
         // Peak figures measured with the real ship builder and settle loop (`test-MotherPower.js` method).
-        specs: ['2× 1×2 m roll-out arrays', 'Wings-only peak ~1.63 kW, ~1.83 kW with body cells'],
+        specs: ['2× 1×2 m roll-out arrays', 'Peak ~1.6 kW in full sun'],
         pick: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'],
         pickPrefixes: ['ROSA_Boom', 'ROSA_Bracket', 'ROSA_Spreader', 'ROSA_SpoolCurl'],
         // Leader follows the +X blanket centre through sun-tracking tilt and furl; static anchor stands in until the mesh binds.
         mesh: 'ROSA_Panel_Front_0deg', dynamic: true,
         anchor: [ 1.1 * M, 0, 0 ] },
       { id: 'body_cells', name: 'HULL SOLAR CELLS', risk: 'GREEN', tier: 'detail', codexId: 'gallium_arsenide',
-        massKg: 3, priority: 2, specs: ['Body-mounted gallium-arsenide cells'],
+        massKg: 3, priority: 2, specs: ['Gallium-arsenide cells on hull'],
         // az 33.75° facet centre, central PV row (face radius barrelR×1.014); az 0° sits in the ROSA-root keep-out
         // (40 facet cells + 4 end-band gap cells; keep-out clearances measured in `PlayerSatellite` `_buildMainBus`).
         pick: [
@@ -124,12 +138,23 @@ const SYSTEMS = [
         // §13 r4 roll-up: wing clamp bodies are spool hardware (the motor boxes/pads belong to WING MOTOR BOX).
         pickPrefixes: ['WingClamp'],
         anchor: [ PlayerSatellite.rosaSpoolAxisM() * M, 0, 0 ] },
-      // One motor box per wing (DECISIONS §10). DERIVED anchor: COLLAR_RADIUS + WING_MOTOR_PAD_H + WING_MOTOR_BOX_DEEP/2.
+      // One motor box per wing (DECISIONS §10). The box is a HOLLOW stator ring (`_buildMidRing`: r 0.055 m outside, bore
+      // 0.0375 m, `WING_MOTOR_*` in Constants are no longer read by the mesh), so the old centre-line point floated 3.7 cm
+      // inside its bore (callouts doc C14). Bind the +X stator and offset onto its outer wall at mid-length: the mesh origin
+      // is its inboard face on the axis (x = hull + 5 mm), its length is the room between hull skin and furled coil
+      // (`rosaSpoolAxisM` - `rosaFurledCoilRadiusM` - COLLAR_RADIUS - 10 mm). The static tuple is the same point.
       { id: 'wing_motor_box', name: 'WING MOTOR BOX', risk: 'GREEN', tier: 'detail', codexId: 'solar_power',
         massKg: 3, priority: 2, specs: ['Turns the wing', 'Bolted to the mid-body ring'],
         pick: ['WingMotorBox_0deg', 'WingMotorBox_180deg', 'WingMotorPad_0deg', 'WingMotorPad_180deg'],
-        anchor: [ (Constants.OCTOPUS_V5.COLLAR_RADIUS + Constants.OCTOPUS_V5.WING_MOTOR_PAD_H
-                   + Constants.OCTOPUS_V5.WING_MOTOR_BOX_DEEP / 2) * M, 0, 0 ] },
+        mesh: 'WingMotorBox_0deg',
+        meshOffset: [ WING_STATOR_LEN_M * M / 2, WING_STATOR_R_M * M, 0 ],
+        anchor: [ (Constants.OCTOPUS_V5.COLLAR_RADIUS + 0.005 + WING_STATOR_LEN_M / 2) * M, WING_STATOR_R_M * M, 0 ] },
+      // INSIDE parts (callouts doc C16, owner ruling 3): simulated, never drawn. Card-only (no mesh, pick or outline), pointed at the
+      // hull skin above the nominal bay like `mli`. The mass is an ESTIMATE (no Constants entry): the pack's Wh over a 150 Wh/kg cell class.
+      { id: 'battery', name: 'BATTERY PACK', risk: 'GREEN', tier: 'detail', codexId: 'battery_chemistry',
+        massKg: Constants.BATTERY_MAX / BATTERY_WH_PER_KG, priority: 2,
+        specs: [`${Constants.BATTERY_MAX} Wh lithium-ion pack`, 'Inside the hull'],
+        anchor: [ 0, -0.404 * M, 0.40 * M ] },
     ],
   },
   {
@@ -144,19 +169,29 @@ const SYSTEMS = [
         pick: ['MainFEEP_0', 'MainFEEP_1', 'MainFEEP_2', 'MainFEEP_3'],
         anchor: [ 0, -0.20 * M, -1.05 * M ] },
       { id: 'rcs', name: 'COLD-GAS STEERING', risk: 'GREEN', tier: 'major', codexId: 'cold_gas_rcs',
-        massKg: 3, priority: 5, specs: ['Nitrogen thruster ring'],
+        massKg: 3, priority: 5, specs: ['4 pods, 12 nitrogen jets'],
         pick: ['RCSPod_0', 'RCSPod_1', 'RCSPod_2', 'RCSPod_3'],
         // §13 r4 roll-up: pod boots, bolts, thruster bells, liners and throats ('RCSPod' also carries boots and bolts; 60 meshes).
         pickPrefixes: ['RCSPod', 'RCSThruster', 'RCSLiner', 'RCSThroat'],
         anchor: [ -0.03 * M, 0.42 * M, -0.795 * M ] },
-      { id: 'mli', name: 'THERMAL BLANKET (MLI)', risk: 'GREEN', tier: 'detail', codexId: 'mli_insulation',
-        massKg: 2, priority: 2, specs: ['Multi-layer insulation'],
+      { id: 'mli', name: 'HEAT BLANKET', risk: 'GREEN', tier: 'detail', codexId: 'mli_insulation',
+        massKg: 2, priority: 2, specs: ['Gold foil keeps the hull warm'],
         // Bare-MLI shoulder band above the fore cell row (cells end at z=0.72).
         anchor: [ 0.404 * M, 0, 0.78 * M ] },
       { id: 'aft_deck', name: 'AFT THRUSTER DECK', risk: 'GREEN', tier: 'detail', codexId: 'aft_thruster_deck',
         massKg: 4, priority: 1, specs: ['Aft plate — 0.6 m deck'],
         mesh: 'AftThrusterDeck',
         anchor: [ 0, 0.20 * M, -1.008 * M ] },
+      // INSIDE parts (C16): card-only, hull-skin anchors like `mli`. ENGINE_TANK_DRY_MASS_KG is the engine tank itself.
+      { id: 'tanks', name: 'PROPELLANT TANKS', risk: 'GREEN', tier: 'detail', codexId: 'argon_propellant',
+        massKg: Constants.ENGINE_TANK_DRY_MASS_KG, priority: 2,
+        specs: [`${Constants.ENGINE_TANK_VOLUME_L} L engine tank (argon)`, 'Plus the steering-gas tank'],
+        anchor: [ 0, 0.404 * M, -0.60 * M ] },
+      // Shown only while the kit is aboard (`wheelGated`, read like `flowerGated`).
+      { id: 'wheels', name: 'REACTION WHEELS', risk: 'GREEN', tier: 'detail', codexId: 'reaction_wheels',
+        massKg: Constants.WHEELS.MASS_KG, priority: 2, wheelGated: true,
+        specs: [`${Constants.WHEELS.COUNT} wheels, one per axis`, `${Constants.WHEELS.TORQUE_NM} N·m each, no gas`],
+        anchor: [ 0, 0.404 * M, Constants.WHEELS.Z_M * M ] },
     ],
   },
   {
@@ -167,14 +202,14 @@ const SYSTEMS = [
     parts: [
       { id: 'despin', name: 'SPIN-BRAKE LASER', risk: 'RED', tier: 'major', codexId: 'detumble',
         massKg: 9, priority: 9, live: 'despin',
-        specs: ['Photon-pressure despin', '~5 W fibre laser'],
+        specs: ['Laser slows a spinning target'],
         // Gimbal child — dynamic so the anchor tracks the turret. LaserMuzzle is the ANCHOR mesh but a geometry-less
         // Object3D, so it can't outline: the two real gimbal meshes (telescope, baffle) carry the hover.
         mesh: 'LaserMuzzle', dynamic: true,
         pick: ['LaserTelescope', 'LaserBaffle'],
         anchor: [ -0.184 * M, 0.184 * M, 1.20 * M ] },
       { id: 'net_launcher', name: 'LARGE NET LAUNCHER', risk: 'GREEN', tier: 'major', codexId: 'miura_ori_net',
-        massKg: 5, priority: 7, specs: ['Miura-ori net, ~5 m span'],
+        massKg: 5, priority: 7, specs: [`${Constants.CAPTURE_NET.LARGE.DIAMETER.toFixed(1)} m wide net, ${Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE} loaded`],
         // ONE launcher, centred inside the collar bore: bind the HOUSING; the static fallback is its top surface. The
         // cells are children of the housing, so the exact-name pick outlines the whole assembly.
         mesh: 'NetLauncher',
@@ -190,7 +225,7 @@ const SYSTEMS = [
         // test-SensorClearance).
         specs: [
           `Nose collar \u00b7 ${(2 * (Constants.OCTOPUS_V5?.BERTH_COLLAR_INNER_R_M ?? 0.16)).toFixed(2)} m bore`,
-          `Seat plane z ${(Constants.OCTOPUS_V5?.BERTH_COLLAR_Z_M ?? 1.30).toFixed(2)} m \u00b7 cargo mates on-axis`,
+          `Cargo mates on-axis, z ${(Constants.OCTOPUS_V5?.BERTH_COLLAR_Z_M ?? 1.30).toFixed(2)} m`,
           'Open capture ring on 4 struts',
         ],
         mesh: 'BerthCollarRing',
@@ -209,10 +244,10 @@ const SYSTEMS = [
     id: 'SENSORS', label: 'SENSORS',
     // The deck lip (r 0.34–0.38, z 1.03).
     anchor: [ 0, 0.37 * M, 1.03 * M ],
-    role: 'tracking turret + cameras',
+    role: 'turret + cameras',
     parts: [
       { id: 'gimbal', name: 'SENSOR TURRET', risk: 'GREEN', tier: 'major', codexId: 'docking_precision',
-        massKg: 5, priority: 6, specs: ['2-axis pointing platform'],
+        massKg: 5, priority: 6, specs: ['Turret that carries the cameras'],
         // SensorGimbal itself is a geometry-less Group; pick the turntable body (SensorHubRing). Anchor on its top face
         // at az 105: 50 mm clear of the az-90 collar strut's foot pad rim, 55 mm outside the telescope barrel
         // (az 135, r 0.10) and clear of the ring / puck. Mode B: SensorHubRing, gap 0.
@@ -223,11 +258,11 @@ const SYSTEMS = [
         pick: ['EO_Camera'],
         anchor: [ 0.184 * M, 0.184 * M, 1.11 * M ] },
       { id: 'ir_cam', name: 'HEAT (INFRARED) CAM', risk: 'GREEN', tier: 'major', codexId: 'trackable_vs_dark',
-        massKg: 2, priority: 4, specs: ['Long-wave infrared — spots dark debris'],
+        massKg: 2, priority: 4, specs: ['Infrared \u2014 sees warm debris'],
         pick: ['IR_Sensor'],
         anchor: [ -0.1715 * M, -0.1715 * M, 1.145 * M ] },   // IR box on the turret (centre r 0.2425, mid-height 1.145)
       { id: 'lidar', name: 'LASER RANGEFINDER', risk: 'GREEN', tier: 'major', codexId: 'lidar_ranging',
-        massKg: 3, priority: 5, specs: ['Flash LIDAR — range + pose'],
+        massKg: 3, priority: 5, specs: ['Laser flash measures distance'],
         pick: ['LIDAR_Dome'],
         pickPrefixes: ['LIDAR_Drum'],
         anchor: [ 0.184 * M, -0.184 * M, 1.10 * M ] },
@@ -236,13 +271,15 @@ const SYSTEMS = [
         pick: ['StarTracker_0', 'StarTracker_1'],
         pickPrefixes: ['StarTracker_'],
         anchor: [ 0.042 * M, 0.398 * M, 0.90 * M ] },
-      { id: 'fore_bulkhead', name: 'FORE BULKHEAD', risk: 'GREEN', tier: 'major', codexId: 'fore_bulkhead',
-        massKg: 6, priority: 3, specs: ['Fore end cap — 0.8 m plate', 'Carries the sensor deck'],
+      { id: 'fore_bulkhead', name: 'FRONT PLATE', risk: 'GREEN', tier: 'major', codexId: 'fore_bulkhead',
+        massKg: 6, priority: 3, specs: ['Holds the sensor deck', 'Front end cap, 0.8 m wide'],
         mesh: 'FrontCap_ConfigG',
         anchor: [ 0.30 * M, -0.28 * M, 1.005 * M ] },
       { id: 'sensor_deck', name: 'SENSOR DECK', risk: 'GREEN', tier: 'detail', codexId: 'sensor_deck',
         massKg: 2, priority: 2, specs: ['Instrument mounting annulus'],
         mesh: 'SensorDeck',
+        // The thin fixed skirt ring between the cap face and the deck's aft face is the deck's own edge (C17, task 16b).
+        pickPrefixes: ['SensorDeckSkirt'],
         // SensorDeck's origin is the bore centre, inside the collar bore: point at the deck lip, 1 mm proud of the plate
         // (the static stays; its ≥ 4 cm envelope is measured). Lip az 65: az 90 sits between the star trackers (az
         // 82/98) and the leader landed on StarTracker_0; az 65–69 is the stable window over the 12 audit poses.
@@ -268,17 +305,17 @@ const SYSTEMS = [
   {
     id: 'COMMS', label: 'COMMS',
     anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ],
-    role: 'radio omnis + antennas',
+    role: 'radio antennas',
     parts: [
-      { id: 'ttc', name: 'S-BAND RADIO OMNIS', risk: 'GREEN', tier: 'major', codexId: 'frequency_bands',
-        massKg: 2, priority: 5, live: 'ttc', specs: ['Pair — command + telemetry'],
+      { id: 'ttc', name: 'RADIO ANTENNA (FRONT)', risk: 'GREEN', tier: 'major', codexId: 'frequency_bands',
+        massKg: 2, priority: 5, live: 'ttc', specs: ['Talks to the ground'],
         pick: ['TTC_Omni_0'],
         // §13 r4 roll-up: the fore omni's base. The _1 names stay with the
         // AFT whip below — one prefix per end, never both.
         pickPrefixes: ['TTC_Omni_0'],
         anchor: [ 0, -0.40 * M, 0.92 * M ] },
-      { id: 'mga', name: 'MEDIUM-GAIN ANTENNA', risk: 'GREEN', tier: 'detail', codexId: 'bandwidth_limits',
-        massKg: 1, priority: 2, specs: ['Tangent patch, higher rate'],
+      { id: 'mga', name: 'DATA ANTENNA', risk: 'GREEN', tier: 'detail', codexId: 'bandwidth_limits',
+        massKg: 1, priority: 2, specs: ['Faster link, must point at Earth'],
         pick: ['MGA_Patch'],
         pickPrefixes: ['MGA_Bezel'],
         anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ] },
@@ -289,8 +326,8 @@ const SYSTEMS = [
         anchor: [ 0.376 * M, -0.137 * M, 0.87 * M ] },
       // codexId (owner 2026-09-03): the aft whip is the second half of the omni PAIR — one S-band radio system, one briefing
       // (`frequency_bands`). `comms_blackout` stays reachable by its own unlock and the frequency_bands related chip.
-      { id: 'ttc_aft', name: 'S-BAND OMNI (AFT)', risk: 'GREEN', tier: 'detail', codexId: 'frequency_bands',
-        massKg: 1, priority: 1, specs: ['Aft whip of the omni pair'],
+      { id: 'ttc_aft', name: 'RADIO ANTENNA (REAR)', risk: 'GREEN', tier: 'detail', codexId: 'frequency_bands',
+        massKg: 1, priority: 1, specs: ['Rear whip of the antenna pair'],
         pick: ['TTC_Omni_1'],
         pickPrefixes: ['TTC_Omni_1'],
         anchor: [ 0.40 * Math.cos(degToRad(78)) * M, 0.40 * Math.sin(degToRad(78)) * M, -0.92 * M ] },
@@ -298,8 +335,10 @@ const SYSTEMS = [
   },
   {
     id: 'CAPTURE', label: 'CAPTURE',
-    // Berth groove, centreline — next to the docked daughters, the only capture hardware the player can SEE.
-    anchor: [ 0, 0.35 * M, -0.75 * M ],
+    // Berth groove, centreline — next to the docked daughters, the only capture hardware the player can SEE. On the hull skin
+    // between the az 64 and 116 pockets (barrel r 0.40, a 64-gon: 0.3995 at az 90); the old r 0.35 point floated 5 cm under it,
+    // 15.6 cm from every CAPTURE part (callouts doc C14, generic anchor test).
+    anchor: [ 0, 0.3995 * M, -0.75 * M ],
     role: '4× daughter craft + berths',
     parts: [
       { id: 'berths', name: 'DAUGHTER BERTHS', risk: 'GREEN', tier: 'major', codexId: 'docking_berthing',
@@ -308,7 +347,7 @@ const SYSTEMS = [
         // docked daughter's own callout (anchor: craft body mid-pocket, z=-0.70).
         anchor: [ 0.0512 * M, 0.3967 * M, -0.85 * M ] },
       { id: 'tether_reels', name: 'TETHER WINCHES', risk: 'GREEN', tier: 'major', codexId: 'reel_mechanics',
-        massKg: 4, priority: 6, specs: ['4× Dyneema fiber reels'],
+        massKg: 4, priority: 6, specs: ['4× tether reels'],
         // Reel cartridges ride the struts (stowed z≈−0.46, deployed ≈1.5 m out). ReelCartridge_0 stays the ANCHOR mesh
         // (reel #0 only); pick all 4 reel housings. Stand-in at az 64 (r 0.40, the trial strut azimuth).
         mesh: 'ReelCartridge_0', dynamic: true,
@@ -321,14 +360,18 @@ const SYSTEMS = [
         massKg: 2, priority: 2, specs: ['Double-A clevis, 4×'],
         pick: ['AFrame_64_L', 'AFrame_64_R', 'AFrame_116_L', 'AFrame_116_R',
           'AFrame_244_L', 'AFrame_244_R', 'AFrame_296_L', 'AFrame_296_R'],
-        pickPrefixes: ['HingePad', 'HingePin', 'HingeLED', 'AFrame_'],   // AFrame_ also takes encoder, stops, latch, harness (AFrame_<az>_<part>)
+        // AFrame_ also takes encoder, stops, latch, harness (AFrame_<az>_<part>). MountBolt_<az>_ are the clevis pad bolts (2 per ear, 16 in all,
+        // `_buildHinges`): anything pointed at answers as its parent part (the §13 r4 roll-up rule; callouts doc C17, wave 2 task 16b).
+        pickPrefixes: ['HingePad', 'HingePin', 'HingeLED', 'AFrame_', ...Constants.ARM_LADDER.Y0_QUAD.azimuths.map((az) => `MountBolt_${az}_`)],
         // DERIVED: first strut azimuth, hinge radius 0.44 m, hinge plane z = COLLAR_Y (the front ring). A literal would
         // point 10 cm aft of the real hinge.
+        // The az 64 hinge pin is bound (fixed on the hull, so no `dynamic`): the derived point sat 2.0 cm off the pin's surface.
+        mesh: 'HingePin_64',
         anchor: [ 0.44 * Math.cos(degToRad(Constants.ARM_LADDER.Y0_QUAD.azimuths[0])) * M,
                   0.44 * Math.sin(degToRad(Constants.ARM_LADDER.Y0_QUAD.azimuths[0])) * M,
                   Constants.OCTOPUS_V5.COLLAR_Y * M ] },
       { id: 'cradle_spring', name: 'CROSSBOW SPRING', risk: 'YELLOW', tier: 'detail', codexId: 'spring_energy',
-        massKg: 1, priority: 2, specs: ['Spring ejector — launches daughters'],
+        massKg: 1, priority: 2, specs: ['Spring that launches daughters'],
         // Spring group rides the strut (stowed z≈−0.62, deployed ≈1.7 m out). CrossbowSpring_0 stays the ANCHOR mesh
         // (reel #0 only); pick all 4 spring housings. Stand-in at az 64 (r 0.40, the trial strut azimuth).
         mesh: 'CrossbowSpring_0', dynamic: true,
@@ -339,7 +382,7 @@ const SYSTEMS = [
       // STRUT_LENGTH 1.70 m, STRUT_TUBE_OD 0.050 m, CFRP T800/M21); no documented set mass, so a labelled ESTIMATE.
       { id: 'daughter_struts', name: 'DAUGHTER STRUTS', risk: 'GREEN', tier: 'detail', codexId: 'docking_berthing',
         massKg: 7, priority: 2,
-        specs: ['4× 1.70 m CFRP tubes, 50 mm OD', 'Sweep drive + brake at each hinge', 'Set mass ≈ 7 kg (estimate)'],
+        specs: ['4× 1.7 m tubes, 50 mm wide', 'Sweep motor + brake per hinge'],
         // The anchor rides strut 0's mid-point (its mesh origin; the cylinder is centred) through every sweep pose; the
         // static fallback is the measured stowed mid-strut (0.548, 1.123, 1.00).
         mesh: 'Strut_0', dynamic: true,
@@ -359,12 +402,12 @@ const SYSTEMS = [
     // so the family total follows the 51.6 kg budget pin (37 + 10 + 2 + 2.6).
     id: 'THERMAL', label: 'THERMAL',
     anchor: [ 0.3639 * M, 0.3053 * M, -1.02 * M ],
-    role: 'aft flower — struts open LIKE A FLOWER',
+    role: 'radiators open LIKE A FLOWER',   // the owner's grammar, verbatim (test-FlowerShopCallouts); 28 characters
     flowerGated: true,
     parts: [
       { id: 'flower_plates', name: 'RADIATOR PLATES', risk: 'GREEN', tier: 'major', codexId: 'space_radiator',
         massKg: 37, priority: 6, flowerGated: true,
-        specs: ['4× 1.50×0.60 m tri-panel radiators, fold flat for launch', 'Reject heat as infrared — numbers come with the loop refit'],
+        specs: ['4× 1.5×0.6 m tri-fold panels', 'Dump heat as infrared'],
         // Leader follows plate 0 (pair A, az 40); the flowerGated one-shot binds the frame after purchase. The static
         // stand-in sits on pair A's other station side (az 225, not a hardware pin), clear of the STRUTS card at az 40.
         mesh: 'FlowerStrutPlate_0', dynamic: true,
@@ -373,25 +416,37 @@ const SYSTEMS = [
         anchor: [ -0.30 * M, -0.30 * M, -1.15 * M ] },
       { id: 'flower_struts', name: 'AFT FLOWER STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
         massKg: 10, priority: 6, flowerGated: true,
-        specs: ['4× aft-pivot booms, 2.30 m — fold fore along the bus for launch', FLOWER_ROW],
+        specs: ['4× 2.3 m booms, fold fore', FLOWER_ROW],
         // §13 r4 roll-up: the 4 booms and their seams (the wing hinge lugs stay with the hinge brackets).
         pickPrefixes: ['FlowerStrut_', 'FlowerStrutSeam'],
+        // Boom 0's mid-length (the cylinder is centred on its mesh origin) through every pose; the static stand-in sat 10 cm aft
+        // of the closed boom's root (callouts doc C14). Gated one-shot binds it after purchase.
+        mesh: 'FlowerStrut_0', dynamic: true,
         anchor: [ 0.3639 * M, 0.3053 * M, -1.10 * M ] },
-      { id: 'flower_tips', name: 'TIP HARDPOINTS', risk: 'GREEN', tier: 'detail', codexId: 'tip_hardpoints',
+      { id: 'flower_tips', name: 'RADIATOR TIP MOUNTS', risk: 'GREEN', tier: 'detail', codexId: 'tip_hardpoints',
         massKg: 2, priority: 2, flowerGated: true,
-        specs: ['Inert cargo bosses at the strut tips', 'Cold-cell refit will bolt on here'],
+        specs: ['Catch-bag mounts at strut tips'],
         // Leader rides tip boss 0 (az 40) through the pose (static stands in pre-purchase, then the gated one-shot binds).
         mesh: 'FlowerStrutTipPad_0', dynamic: true,
         // §13 r4 roll-up: all four tip pads (pad 0 already answers via the mesh default).
         pickPrefixes: ['FlowerStrutTipPad', 'FlowerStrutTipStalk', 'FlowerStrutTipCone'],   // stalk tubes and cone roll up with their pad
         anchor: [ -0.283 * M, -0.283 * M, -1.12 * M ] },
-      { id: 'flower_hinges', name: 'FLOWER HINGE BRACKETS', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
+      { id: 'flower_hinges', name: 'RADIATOR HINGES', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
         massKg: 2.6, priority: 2, flowerGated: true,
-        specs: ['Rim-band clevises r 0.475, molybdenum-disulfide-filmed pins; wing piano hinges + one-shot latches', 'Hinges are the honest jam risk'],
+        specs: ['Rim clevises, r 0.475 m, 4×'],
         // §13 r4 roll-up: brackets, pins, rim mount bolts, the wing piano-hinge LUGS (hinge leaves between boom and
         // panel), and the launch hold-down (hull cradles + pin, boom latch lugs).
         pickPrefixes: ['FlowerStrutBracket', 'FlowerStrutPin', 'MountBolt_Flower', 'FlowerStrutHingeLug', 'FlowerStrutCradle', 'FlowerStrutLatch'],
+        // The az 320 clevis bracket (it never moves; `dynamic` only because test-FlowerShopCallouts pins every flower mesh row to
+        // it): the stand-in was 3.1 cm off every clevis part.
+        mesh: 'FlowerStrutBracket_3', dynamic: true,
         anchor: [ 0.3639 * M, -0.3053 * M, -0.94 * M ] },
+      // INSIDE part (C16): not flower-gated (the heaters exist without radiators; they show with their system), card-only, hull-skin anchor.
+      // The mass is an ESTIMATE (film heaters; no Constants entry).
+      { id: 'heaters', name: 'BATTERY HEATERS', risk: 'GREEN', tier: 'detail', codexId: 'thermal_management',
+        massKg: 0.5, priority: 2,
+        specs: [`Hold the cells above ${Constants.HEATER.HOLD_C} °C`, `Up to ${Constants.HEATER.MAX_W} W`],
+        anchor: [ 0, -0.404 * M, 0.10 * M ] },
     ],
   },
   {
@@ -406,7 +461,7 @@ const SYSTEMS = [
         specs: ['Weaver — medium net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
       { id: 'daughter_1', name: 'SMALL DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'spinner_pad',
-        massKg: 3.7, priority: 7, live: 'daughter', armIndex: 1,
+        massKg: Constants.V5_SPINNER_MASS, priority: 7, live: 'daughter', armIndex: 1,
         specs: ['Spinner — small net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
       { id: 'daughter_2', name: 'LARGE DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'weaver_gripper',
@@ -414,7 +469,7 @@ const SYSTEMS = [
         specs: ['Weaver — medium net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
       { id: 'daughter_3', name: 'SMALL DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'spinner_pad',
-        massKg: 3.7, priority: 7, live: 'daughter', armIndex: 3,
+        massKg: Constants.V5_SPINNER_MASS, priority: 7, live: 'daughter', armIndex: 3,
         specs: ['Spinner — small net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
     ],
@@ -453,22 +508,35 @@ const PORTRAIT_OVERRIDES = {
   rosa_wings:    { dir: [0.15, 1.0, 0.1], single: true, radial: [0, 1.2, 0.1], frame: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'] },   // ONE blanket face-on from above its own radial (the pair + barrel read as a whole-ship shot)
   body_cells:    { dir: [0.6, -0.8, 0.4] },             // from below-stbd — the cell wrap with both wings edge-on and far
   array_roll:    { dir: [1.0, 0.35, 0.2], single: true, radial: [0, 0.6, 0.8], frame: ['ROSA_Spool_0deg', 'ROSA_Spool_180deg'] },   // ONE spool from its fore-up radial (the blanket hides it from abeam)
+  // ONE stator ring with its plinth, from its own side, well above and a little fore (0.70 seen; level 0.41; with no row it framed both motor boxes at once: an 86 cm box, the whole mid-body).
+  wing_motor_box: { radial: [0, 1.5, 0.3], single: true, frame: [['WingMotorBox_0deg', 'WingMotorPad_0deg'], ['WingMotorBox_180deg', 'WingMotorPad_180deg']] },
   // PROPULSION — aft-end hardware; the aft-q-d3.2 pose is clear
   feep:          { dir: [0.6, 0.4, -1.0] },
   rcs:           { dir: [0.6, 0.4, -1.0], fill: 0.7, single: true, radial: [0, 0, 0.15], frame: ['RCSPod_0', 'RCSPod_1', 'RCSPod_2', 'RCSPod_3'] },   // ONE pod, bells face-on; fill 0.7 so the doghouse reads as a unit
-  aft_deck:      { dir: [0.6, 0.4, -1.0] },
+  aft_deck:      { dir: [-0.6, 0.4, -1.0] },            // port-aft-up: the mirror of the thrusters' pose, so the two pictures differ (library doc L10; 0.77 of the plate seen vs 0.81 stbd)
+  // The four inside parts (C16) show the hull they sit in, like the blanket: card-only, so the picture is the barrel.
+  battery:       { dir: [1.0, 0.35, 0.2], fill: 0.85, frame: ['Barrel_ConfigG'] },
+  heaters:       { dir: [1.0, 0.35, 0.2], fill: 0.85, frame: ['Barrel_ConfigG'] },
+  tanks:         { dir: [1.0, 0.35, 0.2], fill: 0.85, frame: ['Barrel_ConfigG'] },
+  wheels:        { dir: [1.0, 0.35, 0.2], fill: 0.85, frame: ['Barrel_ConfigG'] },
   mli:           { dir: [1.0, 0.35, 0.2], fill: 0.85, frame: ['Barrel_ConfigG'] },   // the skin IS the hull: the barrel fills the frame (portrait-only; hover stays card-only)
   // PAYLOAD — own mesh from fore-q-stbd / side / hinge; BerthFace gap 0.009 from the fore quarters
   despin:        { dir: [-0.9, 0.3, 0.8], fill: 0.7 },  // port-fore, tighter — the telescope tube through the open ring
   net_launcher:  { dir: [0.3, 0.3, 1.0] },              // ONE centred housing inside the collar
   berth_collar:  { dir: [0.4, 0.25, 1.0] },             // dead-ahead ([0.15, 0.15, 1]) let the whole sensor farm steal the frame
   // SENSORS — the turret cluster; instrument sides (+X EO / −X IR / −Y LIDAR dome / +Y canted trackers / the FrontCap)
-  gimbal:        { dir: [0.5, 0.9, 0.5] },              // above-fore: from dead-ahead the turret hid behind the ring
+  // Callouts wave 2 task 14 (library doc L3): five pictures failed. Measured with tmp-style area-weighted rays from the portrait camera
+  // against every drawn mesh (test-PortraitFraming `visibleFraction`), the share of the part's own surface the camera sees:
+  // gimbal 0.20 → 0.40 from dead ahead (the old above-fore pose looked through the instrument tubes), lidar 0.72 → 0.99,
+  // fore plate 0.03 → 0.07 (its face is under the turntable and deck: only the rim shows, from any side).
+  // The turret's pick list stays the turntable: the ship has no turret ring, rod or arms (SensorGimbal carries only the
+  // turntable and the four instruments, which are their own parts).
+  gimbal:        { dir: [0.0, 0.0, 1.0] },              // dead ahead: the turntable between the four instrument tubes (0.40 of its surface seen vs 0.20 from above-fore)
   eo_cam:        { dir: [0.8, 0.4, 1.0], fill: 0.85 },  // stbd-fore-up — the aperture faces fore
   ir_cam:        { dir: [-0.8, 0.4, 1.0], fill: 0.85 }, // port-fore-up — the aperture side (mirror of eo_cam)
-  lidar:         { dir: [0.2, -1.0, 0.3] },             // from below — the dome without the collar in front
+  lidar:         { dir: [0.1, -0.5, 0.9] },             // fore-low: the dome with nothing in front of it (0.99 seen; from straight below 0.72)
   star_trackers: { dir: [0.3, 1.0, 1.0], fill: 0.7 },   // fore-up 45° — the two canted tubes read as tubes with openings
-  fore_bulkhead: { dir: [1.0, 0.7, 0.3] },              // abeam-up — the plate's rim (the collar sits in front of its face)
+  fore_bulkhead: { dir: [0.0, -0.45, 0.89] },           // fore-low: the plate's rim ring (the best of 84 directions, 0.07 seen; the face is covered by the turntable and deck)
   sensor_deck:   { dir: [0.6, 1.0, 0.4] },              // from above-fore
   sun_sensors:   { dir: [0.3, 0.8, 1.0], fill: 0.35, single: true, radial: [0, 0, 0.3] },   // ONE 5 cm puck, loose; the side radial reads the puck ON the ring-face rim where a fore-heavy radial read the hub
   nav_lights:    { dir: [0.8, -0.4, 0.6], fill: 0.5, radial: [0, 0, 0.3] },   // 3 cm core — loose (0.7 blew the core out), from its own radial
@@ -485,13 +553,19 @@ const PORTRAIT_OVERRIDES = {
   berths:        { dir: [0.5, 0.87, 0.35], frame: [{ arm: 0 }, 'SpringHousing_0', 'ReelHousing_0'] },   // the seated daughter + its ejector / reel (the fore hinge line made it a whole-ship shot)
   tether_reels:  { dir: [0.2, 1.0, -0.3], single: true, radial: [0, 0, 0.2], frame: ['ReelHousing_0', 'ReelHousing_1', 'ReelHousing_2', 'ReelHousing_3'] },   // ONE reel can
   hinges:        { dir: [0.2, 1.0, -0.3], single: true, radial: [0, 0, 0.4], frame: ['AFrame_64_L', 'AFrame_64_R', 'AFrame_116_L', 'AFrame_116_R', 'AFrame_244_L', 'AFrame_244_R', 'AFrame_296_L', 'AFrame_296_R'] },   // ONE A-frame clevis
-  cradle_spring: { dir: [0.2, 1.0, -0.3], fill: 0.5, single: true, radial: [0, 0, 0.3], tangent: 0.9, frame: ['SpringHousing_0', 'SpringHousing_1', 'SpringHousing_2', 'SpringHousing_3'] },   // ONE housing from the SIDE (tangent) — radially outboard sits its docked daughter
+  // The frame is the whole spring unit (housing, coil, two guide rails): the housing alone was a 6 cm box and a cylinder with no spring in it.
+  cradle_spring: { dir: [0.2, 1.0, -0.3], fill: 0.5, single: true, radial: [0, 0, 0.3], tangent: 0.9,
+                   frame: [0, 1, 2, 3].map((i) => [`SpringHousing_${i}`, `SpringCoil_${i}`, `GuideRail_${i}_L`, `GuideRail_${i}_R`]) },   // ONE housing from the SIDE (tangent) — radially outboard sits its docked daughter
   // §13 r4: the new struts card frames ONE boom from its own radial.
   daughter_struts: { dir: [0.5, 0.5, 0.4], single: true, radial: [0, 0, 0.2], frame: ['Strut_0', 'Strut_1', 'Strut_2', 'Strut_3'] },
   // THERMAL — CARGO / PARK plates face-on from aft; STOW from aft-on hits AftThrusterDeck
   flower_plates: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], frame: ['FlowerStrutPlate_0'] },   // stowDir abeam-aft-up: folded plates in profile along the barrel (aft-on read as a whole-ship 3/4); §13 r4 pin: the pick grew 12 panels + wings, the portrait keeps the one plate
+  // stowDir is ignored while a `radial` rule is present (getPartFrame): the closed boom is framed from its radial-aft. Measured (wave 2 task 16): the closed boom is under the
+  // folded panels from every outside direction, 0.33 seen at best, which is what this radial gives; no row beats it.
   flower_struts: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], single: true, radial: [0, 0, -0.8], frame: ['FlowerStrut_0', 'FlowerStrut_1', 'FlowerStrut_2', 'FlowerStrut_3'] },   // the booms (portrait-only); ONE boom from its radial-aft
-  flower_tips:   { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], frame: ['FlowerStrutTipPad_0'] },   // stowDir abeam (the aft hub hid the stowed pad); §13 r4 pin: the pick grew 4 pads, the portrait keeps pad 0
+  // stowDir (wave 2 task 16): the CLOSED radiator folds its booms FORE, so the tip pads sit at the nose (z 1.23-1.31), in front of the folded stack; from aft or abeam
+  // they hide behind it (0.33 of the pad unit seen), from fore-up they stand clear (0.96). §13 r4 pin: the pick grew 4 pads, the portrait keeps pad 0.
+  flower_tips:   { dir: [0.6, 0.6, -0.8], stowDir: [0.5, 0.4, 0.8], frame: ['FlowerStrutTipPad_0'] },
   // One hinge = its clevis bracket + pin (one group = one instance); `single` frames the one nearest the camera.
   flower_hinges: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], single: true, radial: [0, 0, -0.4], tangent: 0.8,   // from the side — the swung-out boom covered the clevis from its radial
                    frame: [['FlowerStrutBracket_0', 'FlowerStrutPin_0'], ['FlowerStrutBracket_1', 'FlowerStrutPin_1'], ['FlowerStrutBracket_2', 'FlowerStrutPin_2'], ['FlowerStrutBracket_3', 'FlowerStrutPin_3']] },
@@ -536,6 +610,14 @@ const _recBoundsScratch = new THREE.Vector3();
 // getPartFrame scratch (per click): the ship's world → local inverse and a centre / instance-distance vector.
 const _frameInv = new THREE.Matrix4();
 const _frameV = new THREE.Vector3();
+// Chip pick margin (CSS px): the pointer lands a part chip within this distance of its drawn box (owner-visible: hover hit the
+// intended chip 6 of 11 tries, 2026-10-28). The glass margin is larger (a fingertip). The chips themselves never move.
+const CHIP_PICK_MARGIN_PX = 8;
+const CHIP_PICK_MARGIN_GLASS_PX = 12;
+// withPartTinted: the portrait tint (research prototype, library doc L4): colour 50 % toward the house teal, emissive 0.22.
+const PART_TINT_TEAL = new THREE.Color(0x00d4ff);
+const PART_TINT_MIX = 0.5;
+const PART_TINT_EMISSIVE = 0.22;
 const LINE_OP_SCALE = 0.8;  // line opacity = labelOp × this
 const LINE_HALF_WIDTH_FRAC = 0.0012; // leader ribbon half-width / camera-ship dist
 
@@ -591,6 +673,37 @@ function staggerOutlineLayers(self, out) {
     const shell = shells[i];                                      // built pairwise with lines[i]
     if (shell) shell.position.copy(self._vStag);
   }
+}
+
+/**
+ * The part chip nearest a pointer that missed every card exactly: a chip whose drawn box, grown by the pick margin on every
+ * side, holds the pointer (nearest box wins; a tie goes to the card drawn on top). The box is the sprite's own: centre = its
+ * eased rail slot `sx`/`sy`, size = `scale` at the ship-centre depth plane (NDC = scale / half-extent), anchored by `center`.
+ * The rail and the sprites are not touched. A module function, not a method, so prototype-borrowing test rigs that lift
+ * `_pickBestRec` onto plain objects keep working. Null without a canvas rect, a slot, or a chip within the margin.
+ * @param {MotherCallouts|object} self
+ * @param {{x:number,y:number}} ndc  pointer in NDC
+ * @returns {object|null}
+ */
+function chipWithinMargin(self, ndc) {
+  const rect = self.canvas?.getBoundingClientRect?.();
+  if (!rect || !(rect.width > 0) || !(rect.height > 0) || !(self._halfW > 0) || !(self._halfH > 0)) return null;
+  const marginPx = GestureHints.isGlass() ? CHIP_PICK_MARGIN_GLASS_PX : CHIP_PICK_MARGIN_PX;
+  const pxPerNdcX = rect.width / 2, pxPerNdcY = rect.height / 2;
+  let best = null, bestD = Infinity;
+  for (const p of self._partLabels) {
+    if (!p.sprite || !p.sprite.visible || !Number.isFinite(p.sx) || !Number.isFinite(p.sy)) continue;
+    if (!self._recPickable(p)) continue;
+    const w = p.sprite.scale.x / self._halfW, h = p.sprite.scale.y / self._halfH;
+    const cx = p.sprite.center ? p.sprite.center.x : 0.5, cy = p.sprite.center ? p.sprite.center.y : 0.5;
+    const x0 = p.sx - cx * w, x1 = x0 + w, y0 = p.sy - cy * h, y1 = y0 + h;
+    const dx = Math.max(x0 - ndc.x, 0, ndc.x - x1) * pxPerNdcX;
+    const dy = Math.max(y0 - ndc.y, 0, ndc.y - y1) * pxPerNdcY;
+    if (dx > marginPx || dy > marginPx) continue;
+    const d = Math.hypot(dx, dy);
+    if (d < bestD || (d === bestD && best && p.sprite.renderOrder > best.sprite.renderOrder)) { bestD = d; best = p; }
+  }
+  return best;
 }
 
 /**
@@ -1241,6 +1354,56 @@ export class MotherCallouts {
     }
   }
 
+  /**
+   * Run `fn` with the part's own hull meshes TINTED teal, so the SPECS pane's one-shot portrait shows which piece the
+   * entry is about (the part picture is a close-up; the tint answers "which bit is it?"). The tint is the pick targets
+   * `_pickTargets(rec)` returns (the very meshes the hover outlines): each distinct material is CLONED once per call
+   * (originals are shared with the rest of the ship and are never edited), its colour moved 50 % toward the house teal
+   * `#00d4ff` and its emissive set to teal at 0.22, then the originals go back in a `finally`. Passthrough, no tint, for
+   * an unknown id, a card-only part (no pick targets: mli, berths, the inside parts), an away daughter, or a gone flower.
+   * Outline layers (`userData.partId`) are never tinted. Per click, never per frame.
+   * @template T @param {string} partId @param {() => T} fn @returns {T}
+   */
+  withPartTinted(partId, fn) {
+    const rec = (this._partLabels || []).find((p) => p && p.def && p.def.id === partId) || null;
+    const targets = rec ? this._pickTargets(rec) : [];
+    const swaps = [];                       // [mesh, original material(s)]
+    const clones = new Map();               // original material → tinted clone (one per call)
+    const TEAL = PART_TINT_TEAL;
+    const tint = (m) => {
+      if (!m || typeof m.clone !== 'function') return m;
+      let c = clones.get(m);
+      if (!c) {
+        c = m.clone();
+        if (c.color && typeof c.color.lerp === 'function') c.color.lerp(TEAL, PART_TINT_MIX);
+        if (c.emissive && typeof c.emissive.copy === 'function') {
+          c.emissive.copy(TEAL).multiplyScalar(PART_TINT_EMISSIVE);
+          if ('emissiveIntensity' in c) c.emissiveIntensity = 1;
+          if ('emissiveMap' in c) c.emissiveMap = null;
+        }
+        c.needsUpdate = true;
+        clones.set(m, c);
+      }
+      return c;
+    };
+    const seen = new Set();
+    for (const t of targets) {
+      if (!t || typeof t.traverse !== 'function') continue;
+      t.traverse((o) => {
+        if (!o.isMesh || !o.material || (o.userData && o.userData.partId) || seen.has(o)) return;
+        seen.add(o);
+        swaps.push([o, o.material]);
+        o.material = Array.isArray(o.material) ? o.material.map(tint) : tint(o.material);
+      });
+    }
+    try {
+      return fn();
+    } finally {
+      for (const [o, original] of swaps) o.material = original;
+      for (const c of clones.values()) if (typeof c.dispose === 'function') c.dispose();
+    }
+  }
+
   /** @private Restore a ghost rec's outline materials to their build-time base opacities (tolerates hand-built
    *  outlines without base fields). */
   _restoreGhostBase(rec) {
@@ -1429,6 +1592,11 @@ export class MotherCallouts {
    */
   _resolveAnchor(rec) {
     const def = rec.def;
+    // The reaction-wheel row hides without the kit (the same idiom): no anchor is resolved while it is gone.
+    if (def.wheelGated) {
+      rec._wheelGone = !(typeof this.player?.hasWheelKit === 'function' && this.player.hasWheelKit());
+      if (rec._wheelGone) return;
+    }
     // The THERMAL family hides until a flower pair is purchased (the daughter `_armGone` idiom).
     if (def.flowerGated) {
       const gone = !this._flowerOn();
@@ -1478,7 +1646,11 @@ export class MotherCallouts {
     }
   }
 
-  /** Codex link state for a part: 'linked' | 'locked' | null. @private */
+  /**
+   * Codex link state for a part: 'linked' | null. A part fitted on the ship always opens its full entry (owner
+   * 2026-10-28, ruling 1: the library unlocks it on the click), so a card never shows a locked state or an unlock hint.
+   * @private
+   */
   _codexState(def) {
     if (!def.codexId) return null;
     const cs = this._liveCtx?.codexSystem;
@@ -1494,7 +1666,7 @@ export class MotherCallouts {
       }
       return null;
     }
-    return entry.unlocked ? 'linked' : 'locked';
+    return 'linked';
   }
 
   _codexTitle(def) {
@@ -1526,22 +1698,11 @@ export class MotherCallouts {
     // System cards get a single dim role line (a title-only chip left the player guessing what the system IS).
     if (rec.isSystem && def.role) rows.push({ text: def.role });
     if (full && !rec.isSystem) {
-      // Deterministic row budget: 6 slots total.
-      // Locked: reserve hint lines (1-2), fill [mass, ...specs, ...live(≤2)], append hint last. TRL dropped.
-      // Unlocked: [mass, ...specs(≤2), ...live(≤2), TRL], capped at 6.
-      const isLocked = codex === 'locked';
+      // Deterministic row budget: 6 slots total: [mass, ...specs(≤2), ...live(≤2), link, TRL].
       // Only the first two live rows survive the budget.
       const live = this._liveRows(def).slice(0, 2);
 
-      // Pre-wrap the unlock hint with the single shared wrap implementation; its line count IS the budget reservation,
-      // so budget and draw agree.
-      let hintLines = [];
-      if (isLocked) {
-        const hintText = this._liveCtx?.codexSystem?.getUnlockHint?.(def.codexId) || null;
-        if (hintText) hintLines = wrapHint(hintText, 2);
-      }
-
-      const budget = 6 - hintLines.length;
+      const budget = 6;
       if (typeof def.massKg === 'number') rows.push({ text: `Mass: ${def.massKg} kg` });
       if (Array.isArray(def.specs)) {
         for (const s of def.specs.slice(0, 2)) rows.push({ text: specRow(s) });
@@ -1555,20 +1716,12 @@ export class MotherCallouts {
         rows.push({ text: `▸ ${codexTitle || 'open SPECS'}`, dim: true, color: rec.hue });
         const trl = this._partTRL(def);
         if (trl != null) rows.push({ text: `Readiness: L${trl}`, dim: true });
-      } else if (codex === 'locked' && codexTitle) {
-        // Locked cards still name where the ▸ leads (amber, matches the hint).
-        rows.push({ text: `▸ ${codexTitle}`, dim: true, color: VisualLaw.COLORS.CAUTION });
       } else if (codex === null) {
         // Structural part with no briefing — explain the dead click.
         rows.push({ text: 'structure — no briefing', dim: true });
       }
 
       rows = rows.slice(0, budget);
-
-      // Hint lines appended last, amber.
-      for (const line of hintLines) {
-        rows.push({ text: line, dim: false, color: VisualLaw.COLORS.CAUTION });
-      }
     }
     const title = rec.isSystem ? def.label : def.name;
     const variant = full ? 'hover' : 'compact';
@@ -1789,7 +1942,7 @@ export class MotherCallouts {
       return true;
     }
     if (this._band === 'SYSTEM') return false;
-    if (p._neverShow || p._armGone || p._flowerGone) return false;
+    if (p._neverShow || p._armGone || p._flowerGone || p._wheelGone) return false;
     return true;
   }
 
@@ -1970,7 +2123,7 @@ export class MotherCallouts {
    * barrel block, the rear cap). Single source for the pick so hover and click can never drift apart.
    * @private
    */
-  _pickBestRec() {
+  _pickBestRec(ndc = null) {
     let best = null, bestDist = Infinity;
     for (const p of this._partLabels) {
       if (!this._recPickable(p)) continue;
@@ -1981,6 +2134,9 @@ export class MotherCallouts {
       }
     }
     if (best) return best;
+    // A chip the pointer just misses still answers (CHIP_PICK_MARGIN_PX); cards draw on top of the hull, like an exact hit.
+    const near = ndc ? chipWithinMargin(this, ndc) : null;
+    if (near) return near;
     // §13 r4: the blocker raycast — first chain-visible hit decides.
     if (typeof this._raycaster.intersectObject !== 'function' || !this._partLabels) return null;
     this._ensurePickIndex();
@@ -2010,7 +2166,7 @@ export class MotherCallouts {
   _pickLabel(e) {
     if (!this.camera) return null;
     this._raycaster.setFromCamera(this._pointerNDC(e), this.camera);
-    return this._pickBestRec();
+    return this._pickBestRec(this._ndc);
   }
 
   /**
@@ -2235,7 +2391,7 @@ export class MotherCallouts {
     this._raycaster.setFromCamera(this._pointerNDC(e), this.camera);
     this._sysLabelHover = (typeof this._pickSystemLabelRay === 'function') ? this._pickSystemLabelRay() : null;
     if (this._sysLabelHover) { this._setHoverRec(null); return; }
-    this._setHoverRec(this._pickBestRec());
+    this._setHoverRec(this._pickBestRec(this._ndc));
   }
 
   /**
@@ -2287,7 +2443,7 @@ export class MotherCallouts {
       this._setHoverRec(null);
       return;
     }
-    const hit = this._pickBestRec();
+    const hit = this._pickBestRec(this._ndc);
     if (hit) { this._setHoverRec(hit); return; }          // rules 1 + 2 (same rec → no-op + reset)
     const held = this._hoverRec;
     if (!held) return;                                      // rule 4
@@ -2728,6 +2884,7 @@ export class MotherCallouts {
     if (rec._neverShow) return 0; // DAUGHTERS pseudo-group has no system label
     if (rec._armGone) return 0;   // daughter away from its berth
     if (rec._flowerGone) return 0; // THERMAL family pre-purchase
+    if (rec._wheelGone) return 0;  // reaction wheels without the kit
     // Hard facing gate: a card whose anchor faces away is hidden outright
     // (the dot/leader carry the on-hull fade; the card does not).
     const face = (facing != null) ? facing : this._anchorVisible(rec.anchor, rec);

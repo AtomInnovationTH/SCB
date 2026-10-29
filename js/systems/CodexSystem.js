@@ -71,6 +71,23 @@ export function entryMatchesQuery(entry, query) {
     || (entry.category || '').toLowerCase().replace(/_/g, ' ').includes(q);
 }
 
+/**
+ * Interpolate an `i18n.partNotes` object against live Constants.
+ * @param {*} raw data object { partId: string } (or anything else)
+ * @returns {Object<string,string>|null} { partId: interpolated string } or null when there is no usable note
+ */
+function _buildPartNotes(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  let n = 0;
+  for (const k of Object.keys(raw)) {
+    if (typeof raw[k] !== 'string' || !raw[k]) continue;
+    out[k] = interpolate(raw[k], Constants);
+    n++;
+  }
+  return n ? out : null;
+}
+
 export class CodexSystem {
   /** @param {object|null} codexData parsed data/codex.json; null/omitted constructs an empty system (graceful), like CatalogLoader. */
   constructor(codexData = null) {
@@ -152,6 +169,10 @@ export class CodexSystem {
       // entries only (data-authored beside hardwareNames; the TECH LIBRARY pane renders it under its header).
       hardwareNote: (typeof i.hardwareNote === 'string' && i.hardwareNote)
         ? interpolate(i.hardwareNote, Constants) : null,
+      // Per-part lines for an entry shared by several callout parts (data: `i18n.partNotes` { partId: string }): the
+      // TECH LIBRARY pane shows `partNotes[clicked part]` first, `hardwareNote` otherwise. Flattened to
+      // { partId: interpolated } or null when the entry has none (floor 1 wave 2, contract 3.1).
+      partNotes: _buildPartNotes(i.partNotes),
       // The manual's warning line: an authored red-box notice both readers print at the foot of an UNLOCKED entry (the
       // I-key viewer's page column, the F1 SPECS drawer). Data-authored under i18n beside hardwareNote; exactly one
       // entry carries it today (welcome_cowboy — "page one of the manual"). Absent → null, never a stub.
@@ -210,7 +231,10 @@ export class CodexSystem {
     eventBus.on(Events.CODEX_UNLOCK_REQUEST, (data) => {
       if (data && data.id) {
         const entry = this._byId.get(data.id);
-        if (entry && !entry.unlocked) this._queueUnlock(entry);
+        if (entry && !entry.unlocked) {
+          if (data.immediate === true) this._unlockNow(entry);
+          else this._queueUnlock(entry);
+        }
       }
     });
 
@@ -263,6 +287,20 @@ export class CodexSystem {
   }
 
   /**
+   * @private A part the player clicked on their own ship opens its full entry NOW (owner 2026-10-28, ruling 1): pull the
+   * entry out of the unlock queue and unlock it this tick: inside the startup grace and during the cooldown too, with no
+   * ticker chip, and without restarting the cooldown (the pacing belongs to unlocks the player did not ask for).
+   * Same path as any unlock otherwise: CODEX_UNLOCKED, TECH_UNLOCKED, unlockContext.
+   * @param {object} entry a locked runtime entry
+   */
+  _unlockNow(entry) {
+    if (entry.unlocked) return;
+    const at = this._unlockQueue.findIndex(e => e.id === entry.id);
+    if (at >= 0) this._unlockQueue.splice(at, 1);
+    this._performUnlock(entry, { keepCooldown: true });
+  }
+
+  /**
    * @private Post the "+ SPECS: <title>" acknowledgment chip (HINT_POSTED, CODEX_ACK_CHIP_MS). Glyph is the Info key —
    * the ticker's chip is a KEY chip by convention (see OnboardingDirector's codex reminder); the text is the title
    * alone (the entry's data icon is never rendered). `codexId` makes HintTicker render the row as tappable and hand
@@ -282,9 +320,13 @@ export class CodexSystem {
     });
   }
 
-  _performUnlock(entry) {
+  /**
+   * @param {object} entry runtime entry to unlock
+   * @param {{keepCooldown?: boolean}} [opts] keepCooldown: leave `_cooldownTimer` alone (an immediate, player-asked unlock)
+   */
+  _performUnlock(entry, opts) {
     entry.unlocked = true;
-    this._cooldownTimer = Constants.CODEX.UNLOCK_COOLDOWN;
+    if (!(opts && opts.keepCooldown)) this._cooldownTimer = Constants.CODEX.UNLOCK_COOLDOWN;
 
     // Anchor the unlock in mission time + place. altKm may be null (no telemetry yet, e.g. a headless test).
     entry.unlockContext = {

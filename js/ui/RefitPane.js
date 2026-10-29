@@ -782,7 +782,8 @@ export class RefitPane {
           `<div class="refit-alt" data-alt="${a.id}" style="display:flex;gap:6px;${rowAlign};padding:3px 0;border-top:1px solid rgba(0,204,255,0.12)">` +
           `<span style="flex:1">${a.name}${a.level > 0 ? ` <span style="opacity:0.6">lvl ${a.level}/${a.maxLevel}</span>` : ''}</span>` +
           `<span style="opacity:0.85">${a.num}${a.arrow ? ` <span style="color:${C.VALUE}">${a.arrow}</span>` : ''}</span>` +
-          `<span style="color:${C.VALUE}">${a.cost} cr</span>` +
+          // The price prints once: a 'cost' chip IS the price ("400 cr"), so the cost column steps aside for it.
+          (a.chip.kind === 'cost' ? '' : `<span style="color:${C.VALUE}">${a.cost} cr</span>`) +
           (buy
             ? `<button class="refit-chip" data-buy="${a.id}" style="cursor:pointer;background:rgba(0,255,136,0.15);border:1px solid ${C.PLAYER};color:${C.PLAYER};font:inherit;padding:0 6px;border-radius:3px;${buyBox}">${a.chip.text}</button>`
             : `<span class="refit-chip" style="color:${chipColor};opacity:0.9">${a.chip.text}</span>`) +

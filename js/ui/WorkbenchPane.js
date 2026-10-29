@@ -361,13 +361,15 @@ export class WorkbenchPane {
    * The F1 click verb: a hull part / callout-card click shows the part's dossier. The REFIT engine focuses its
    * subsystem, the SPECS engine opens the part's entry with `via` = the clicked callout name and the click anchor
    * (portrait: `part.screen` + `part.bounds` + `partId`; an off-screen part still carries `{ partId }`), the shell
-   * opens if closed, and the unlock request rides `library.scanPart(part)`. A part without an entry lands the
+   * opens if closed. The unlock request (`library.scanPart(part)`, immediate) goes FIRST, so the first paint of the
+   * entry is already the unlocked page (owner 2026-10-28: a fitted part always opens its full entry). A part without an entry lands the
    * dossier on the subject (`library.open()`). Null part → no-op.
    * @param {{ id?:string, name?:string, codexId?:string|null, screen?:{x:number,y:number}|null, bounds?:object|null }|null} part
    */
   showPart(part) {
     if (!part) return;
     this._call(this._refit, 'focusPart', part);
+    this._call(this._library, 'scanPart', part);
     if (part.codexId) {
       const anchor = part.screen
         ? { x: part.screen.x, y: part.screen.y, bounds: part.bounds, partId: part.id }
@@ -380,7 +382,6 @@ export class WorkbenchPane {
       if (this._refitOn()) this._call(this._refit, 'open');
       this._settle();
     }
-    this._call(this._library, 'scanPart', part);
   }
 
   /** The shell's own open edge: `_open` flips, slide in, wake, tab, ONE onOpenChange(true). */

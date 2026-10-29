@@ -116,6 +116,8 @@ export class CodexViewerUI {
    *   `portraitFor`: the reader's ONE optional collaborator, a LAZY callback (never a captured reference) turning a
    *   codex entry into its rendered part portrait. Injected so this module imports NO MotherCallouts / main.js and
    *   holds no live singleton (headless-testable). Absent (or a `?ladder=0` boot) → the reader stays text-only.
+   *   `onClose`: (lastEntryId) => void, called once when the open viewer closes, with the entry it was showing, so the
+   *   drawer can follow the reader to the entry they jumped to (floor 1 wave 2, L8). Absent → nothing.
    */
   constructor(codexSystem, deps = {}) {
     this._codex = codexSystem;
@@ -124,6 +126,12 @@ export class CodexViewerUI {
     /** @type {?{id:string, result:({dataUrl:string, massKg?:number, specs?:string[]}|null)}}
      * One cached render per entry id, never per frame: a re-render of the SAME entry reuses the cached data URL. */
     this._portraitCache = null;
+    /** @type {?((lastEntryId:string) => void)} */
+    this._onClose = (deps && typeof deps.onClose === 'function') ? deps.onClose : null;
+    /** @type {?string} the part name the reader came from (MAXIMIZE on a clicked part), shown as "from: <name>" */
+    this._via = null;
+    /** @type {?string} pending `via` for the next show()'s auto-select (consumed with `_pendingOpenId`) */
+    this._pendingVia = null;
     this._visible = false;
     this._selectedCategory = null; // set to the first category on first show()
     this._selectedEntry = null;
@@ -193,6 +201,8 @@ export class CodexViewerUI {
   }
 
   hide() {
+    const wasVisible = this._visible;
+    const lastId = this._selectedEntry ? this._selectedEntry.id : null;
     this._visible = false;
     this._mapMode = false;
     // A seen-dwell firing after close would mark an entry the player never read.
@@ -200,6 +210,8 @@ export class CodexViewerUI {
     this._clearLanded();
     this._overlay.style.opacity = '0';
     setTimeout(() => { if (!this._visible) this._overlay.style.display = 'none'; }, 200);
+    // The reader's last page goes back to the drawer (it decides whether to follow).
+    if (wasVisible && lastId && this._onClose) { try { this._onClose(lastId); } catch (_e) { /* dep */ } }
   }
 
   isVisible() { return this._visible; }
@@ -211,8 +223,11 @@ export class CodexViewerUI {
    * `opts.anchor === 'warning'`: once the entry has rendered, its `.codex-warning` (the LAST block of the page) is
    * scrolled into view and wears WARNING_LANDED_CLASS for WARNING_LANDED_MS. No warning on the page: a plain open.
    * Any other anchor is ignored.
+   *
+   * `opts.via`: the callout name of the part the reader clicked before pressing MAXIMIZE; the page shows one line
+   * "from: <via>" above the title until the reader moves to another entry.
    * @param {string} id  codex entry id (possibly a retired alias)
-   * @param {{ anchor?: string }} [opts]
+   * @param {{ anchor?: string, via?: string }} [opts]
    * @returns {boolean} true if an entry was opened
    */
   openEntry(id, opts = {}) {
@@ -230,9 +245,11 @@ export class CodexViewerUI {
     this._selectedCategory = entry.category;
     this._pendingOpenId = resolvedId;
     this._pendingAnchor = (opts && typeof opts.anchor === 'string') ? opts.anchor : null;
+    this._pendingVia = (opts && typeof opts.via === 'string' && opts.via) ? opts.via : null;
     this.show();
     this._pendingOpenId = null;
     this._pendingAnchor = null;
+    this._pendingVia = null;
     return true;
   }
 
@@ -833,6 +850,8 @@ export class CodexViewerUI {
     // Any fresh selection exits map mode.
     this._mapMode = false;
     this._selectedEntry = entry;
+    // "from: <part>" belongs to the page the deep link opened; any other selection (a chip, the list) drops it.
+    this._via = (this._pendingVia && this._pendingOpenId === entry.id) ? this._pendingVia : null;
     const { entries } = this._currentListEntries();
     const idx = entries.findIndex(e => e.id === entry.id);
     // Entry not in the current list (a RELATED chip to one the filter hides): -1, so no stale row lights.
@@ -1043,9 +1062,13 @@ export class CodexViewerUI {
           transition:background 0.15s;">← Back to list</div>`
       : '';
 
+    const fromHtml = this._via
+      ? `<div class="codex-from" style="font-size:12px;color:#889;margin-bottom:6px;">from: ${this._via}</div>`
+      : '';
     const titleHtml = `
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;">
         <div style="flex:1;min-width:0;">
+          ${fromHtml}
           <div style="font-family:var(--font-ui);font-size:22px;font-weight:700;color:${isLocked ? '#9ab' : '#eee'};">${entry.title}</div>
           <div class="codex-cat" style="display:flex;align-items:center;gap:6px;font-size:12px;color:${accent};opacity:0.85;">${categoryLabelHtml(catMeta.label, catMeta.swatch)}</div>
         </div>
@@ -1219,7 +1242,7 @@ export class CodexViewerUI {
         ${formulaHtml}
         ${relatedHtml}
         ${entry.unlocked ? this._loggedLineHtml(entry) : ''}
-        ${entry.unlocked ? this._curiousNextHtml(entry, { accent, accentBg }) : ''}
+        ${entry.unlocked ? this._curiousNextHtml(entry, { accent, accentBg }, new Set(related.map(r => r.id))) : ''}
         ${prevNextHtml}
         ${warningHtml}
       </div>
@@ -1345,17 +1368,20 @@ export class CodexViewerUI {
   /** @private "Curious next?" chips at the pane foot: up to 2 from `entry.related` in array order, locked first
    * (from the unlock hint), then unlocked-but-unseen. Reuses `.codex-related-chip` so click delegation works.
    * Callers gate on `entry.unlocked`.
+   * Picks already shown as RELATED chips on the same page are dropped (they were the same chips twice, L16); none left
+   * → no strip.
    * @param {{accent:string, accentBg:(a:number)=>string}} theme
+   * @param {Set<string>} [shownIds] ids of the RELATED chips on the page
    */
-  _curiousNextHtml(entry, { accent, accentBg }) {
+  _curiousNextHtml(entry, { accent, accentBg }, shownIds = new Set()) {
     if (!entry || !entry.unlocked) return '';
     const related = (typeof this._codex.getRelated === 'function')
       ? (this._codex.getRelated(entry.id) || [])
       : [];
     if (!related.length) return '';
 
-    const locked = related.filter(r => r && !r.unlocked);
-    const unseen = related.filter(r => r && r.unlocked && !r.seen);
+    const locked = related.filter(r => r && !r.unlocked && !shownIds.has(r.id));
+    const unseen = related.filter(r => r && r.unlocked && !r.seen && !shownIds.has(r.id));
     const picks = [];
     for (const r of locked) { if (picks.length >= 2) break; picks.push({ r, kind: 'locked' }); }
     for (const r of unseen) { if (picks.length >= 2) break; picks.push({ r, kind: 'unseen' }); }

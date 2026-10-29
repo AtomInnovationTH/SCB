@@ -88,9 +88,13 @@ export const PHOTO_CROP_H_FRAC_PART = 0.26;
 export const PHOTO_BOUNDS_PAD = 1.15;
 /** The one-shot banner flash when a photo lands (ms); none under reduced motion. */
 export const PHOTO_FLASH_MS = 600;
-/** Photo output size (device px). */
-export const PHOTO_W = 320;
-export const PHOTO_H = 200;
+/** Photo output size (device px): the framed part portrait renders 640x400 and the <img> is width:100%, so a 320x200 copy was a blur (floor 1 wave 2, L14). */
+export const PHOTO_W = 640;
+export const PHOTO_H = 400;
+/** How many earlier entries the Back row remembers (L7). */
+const BACK_STACK_MAX = 5;
+/** The "Real:" line is cut when its first sentence is longer than this (characters); it is then left out (W11). */
+const REAL_LINE_MAX = 140;
 /** Frames the photo read is retried when the buffer reads blank (a skipped frame) before the text header stands alone. */
 export const PHOTO_TRIES = 3;
 /** Blank test: a sampled pixel "lights" when r+g+b exceeds this (the crop-probe threshold). */
@@ -128,8 +132,10 @@ export class LibraryPane {
    * @param {Document} [deps.doc] - document for the photo thumbnail canvas (default: global)
    * @param {function} [deps.now] - monotonic ms clock (tests)
    * @param {object} [deps.codex] - the CodexSystem (getEntry / getRelated / getCategoryMeta / entries), read-only
-   * @param {function} [deps.onMaximize] - (id) => void (main.js: the CODEX_OPEN_ENTRY emit → full-screen viewer)
-   * @param {function} [deps.requestUnlock] - (id) => void (main.js: CODEX_UNLOCK_REQUEST → CodexSystem's queue)
+   * @param {function} [deps.onMaximize] - (id, { via, partId }) => void (main.js: the CODEX_OPEN_ENTRY emit → full-screen
+   *   viewer; `via` is the clicked part's name so the viewer can say where you came from)
+   * @param {function} [deps.requestUnlock] - (id, { immediate? }) => void (main.js: CODEX_UNLOCK_REQUEST → CodexSystem;
+   *   a clicked part sends `{ immediate: true }`: the entry opens unlocked now, not through the queue)
    * @param {function} [deps.onViewed] - (id) => void (main.js: CODEX_VIEWED → CodexSystem.markSeen)
    * @param {function} [deps.subject] - () => codexId|null: what the player is looking at (focused hull part's
    *   codexId, then the REFIT card's manifest deep link). Consulted ONLY on an entry-less open; null / unknown /
@@ -167,6 +173,8 @@ export class LibraryPane {
     this._open = false;
     this._entryId = null;         // the entry the pane is showing (null = prompt)
     this._via = null;             // the clicked part's callout name behind the entry (header lead), else null
+    this._partId = null;          // the clicked part's record id (anchor.partId): picks its own partNotes line, else null
+    this._back = [];              // the last BACK_STACK_MAX states a RELATED chip left: { id, via, partId }
     // Mount state: the two shell containers, the shell's repaint hook, and the ONE bound delegated-click handler
     // shared by both (kept so dispose can remove it).
     this._head = null;
@@ -243,6 +251,42 @@ export class LibraryPane {
     if (typeof n !== 'string') return null;
     const t = n.trim();
     return t.length ? t : null;
+  }
+
+  /**
+   * The line under the header for a clicked part: the entry's `partNotes[partId]` when the entry shares one page among
+   * several parts and has a line for this one, else the entry's `hardwareNote`. A chip arrival (no part id) gets the
+   * `hardwareNote`. Pure.
+   * @param {object|null} entry
+   * @param {string|null} partId the clicked part's record id
+   * @returns {string|null}
+   */
+  static noteFor(entry, partId) {
+    if (!LibraryPane.isHardware(entry)) return null;
+    const pn = entry.partNotes;
+    if (partId && pn && typeof pn === 'object' && typeof pn[partId] === 'string') {
+      const t = pn[partId].trim();
+      if (t.length) return t;
+    }
+    return LibraryPane.hardwareNote(entry);
+  }
+
+  /**
+   * The dim "Real: ..." line of an unlocked hardware entry: the first sentence of `realWorld` (cut at the first "; " or
+   * ". ", trailing full stop dropped). Null when there is no realWorld or that sentence is longer than REAL_LINE_MAX
+   * (a cut sentence would read as a fact it is not). Pure.
+   * @param {object|null} entry
+   * @returns {string|null}
+   */
+  static realLine(entry) {
+    if (!LibraryPane.isHardware(entry) || !entry.unlocked) return null;
+    const rw = (typeof entry.realWorld === 'string') ? entry.realWorld.trim() : '';
+    if (!rw) return null;
+    const cuts = [rw.indexOf('; '), rw.indexOf('. ')].filter((i) => i >= 0);
+    let first = cuts.length ? rw.slice(0, Math.min(...cuts)) : rw;
+    first = first.replace(/\.\s*$/, '').trim();
+    if (!first || first.length > REAL_LINE_MAX) return null;
+    return first;
   }
 
   /**
@@ -372,6 +416,8 @@ export class LibraryPane {
     if (this._open || this._entryId == null) return false;
     this._entryId = null;
     this._via = null;
+    this._partId = null;
+    this._back.length = 0;
     this._photoAnchor = null;
     this._clearSeenTimer();
     return true;
@@ -393,8 +439,23 @@ export class LibraryPane {
    * @returns {boolean} true when the entry resolved
    */
   openEntry(id, opts = {}) {
+    // A click from outside the pane (hull part, REFIT title, ticker chip) starts a new trail: Back only walks the
+    // RELATED chips the reader pressed in here.
+    if (this._entry(id)) this._back.length = 0;
+    return this._enter(id, opts);
+  }
+
+  /**
+   * @private The body of openEntry, also used by the RELATED chip and the Back row (which manage the Back stack
+   * themselves). Same contract as openEntry.
+   */
+  _enter(id, opts = {}) {
     const entry = this._entry(id);
     let changed = false;
+    // The anchor rides THIS edge only (the newest edge owns the photo): a finite point is kept with its bounds,
+    // else the ship. `partId` rides it with or without a point; a malformed anchor carrying no id is null.
+    const a = opts && opts.anchor;
+    const partId = (a && typeof a.partId === 'string' && a.partId) ? a.partId : null;
     if (entry) {
       const via = (opts && typeof opts.via === 'string') ? opts.via : null;
       if (entry.id !== this._entryId) {
@@ -403,11 +464,9 @@ export class LibraryPane {
         changed = true;
       }
       if (via !== this._via) { this._via = via; changed = true; }   // a sibling part of the same entry: new lead, new photo
+      // The clicked part picks its own line under the header (partNotes[partId]); a chip arrival has no part.
+      if (partId !== this._partId) { this._partId = partId; changed = true; }
     }
-    // The anchor rides THIS edge only (the newest edge owns the photo): a finite point is kept with its bounds,
-    // else the ship. `partId` rides it with or without a point; a malformed anchor carrying no id is null.
-    const a = opts && opts.anchor;
-    const partId = (a && typeof a.partId === 'string' && a.partId) ? a.partId : null;
     this._photoAnchor = (a && Number.isFinite(a.x) && Number.isFinite(a.y))
       ? { x: a.x, y: a.y, bounds: LibraryPane._finiteBounds(a.bounds), partId }
       : (partId ? { partId } : null);
@@ -423,9 +482,42 @@ export class LibraryPane {
   }
 
   /**
+   * RELATED chip: remember the state being left (entry, clicked part name, part id), then show the chip's entry. The
+   * stack keeps the last BACK_STACK_MAX; opening the entry that is already shown pushes nothing.
+   * @private
+   * @param {string} id chip's entry id
+   */
+  _openRelated(id) {
+    const cur = this._entry(this._entryId);
+    const next = this._entry(id);
+    if (cur && next && next.id !== cur.id) {
+      this._back.push({ id: cur.id, via: this._via, partId: this._partId });
+      while (this._back.length > BACK_STACK_MAX) this._back.shift();
+    }
+    this._enter(id);
+  }
+
+  /**
+   * Back row: pop the last state and show it again (entry, header lead, part id), asking for the part picture afresh
+   * (the anchor carries the part id; the old screen point is stale). Entries that no longer resolve are skipped.
+   * @private
+   * @returns {boolean} true when a state was restored
+   */
+  _goBack() {
+    while (this._back.length) {
+      const prev = this._back.pop();
+      if (!this._entry(prev.id)) continue;
+      this._enter(prev.id, { via: prev.via || undefined, anchor: prev.partId ? { partId: prev.partId } : null });
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * The Subnautica rule (08-workbench §2: clicking a locked part's card unlocks its entry), called by the shell's
-   * showPart on a HULL part/card click. A resolved, LOCKED entry fires the injected requestUnlock (the ONE unlock
-   * path: CodexSystem's queue). Unlocked / unknown / briefing-less parts are safe no-ops. Never opens the pane.
+   * showPart on a HULL part/card click. A resolved, LOCKED entry fires the injected requestUnlock with
+   * `{ immediate: true }`: a part fitted on your own ship always opens its full entry, now (owner 2026-10-28, ruling 1),
+   * not after the unlock queue's cooldown; RELATED chips keep the locked stub. Unlocked / unknown / briefing-less parts are safe no-ops. Never opens the pane.
    * @param {{ codexId?: string|null }|null} part - MotherCallouts record shape
    * @returns {boolean} true when an unlock was requested
    */
@@ -435,7 +527,7 @@ export class LibraryPane {
     const entry = this._entry(id);
     if (!entry || entry.unlocked) return false;
     if (!this._requestUnlock) return false;
-    try { this._requestUnlock(entry.id); } catch (_e) { /* dep */ }
+    try { this._requestUnlock(entry.id, { immediate: true }); } catch (_e) { /* dep */ }
     return true;
   }
 
@@ -483,6 +575,7 @@ export class LibraryPane {
     this._photo = null;
     this._photoCanvas = null;
     this._open = false;
+    this._back.length = 0;
     for (const el of [this._head, this._tail]) {
       if (el && 'innerHTML' in el) el.innerHTML = '';
     }
@@ -529,6 +622,7 @@ export class LibraryPane {
     if (!entry) return false;
     this._entryId = entry.id;
     this._via = null;               // adopted, not clicked: the header leads with every name the entry documents
+    this._partId = null;
     this._clearSeenTimer();
     return true;
   }
@@ -556,7 +650,17 @@ export class LibraryPane {
       id: r.id, title: r.title, unlocked: !!r.unlocked,
     })) : [];
     const specs = (entry && entry.unlocked) ? LibraryPane.specsFor(entry) : [];
-    const note = LibraryPane.hardwareNote(entry);
+    const note = LibraryPane.noteFor(entry, this._partId);
+    const real = LibraryPane.realLine(entry);
+    // Back row: names the entry the last RELATED chip left (its header lead, as it read there).
+    let back = null;
+    while (this._back.length && !back) {
+      const prev = this._back[this._back.length - 1];
+      const pe = this._entry(prev.id);
+      if (pe) back = { label: LibraryPane.headerLead(pe, prev.via, this._categoryLabel(pe.category)).lead };
+      else this._back.pop();
+    }
+    if (!entry) back = null;
     // The manual's warning: read straight off the entry by _htmlTail; rides the struct key so a re-authored line repaints at once.
     const warning = (entry && typeof entry.warning === 'string') ? entry.warning : '';
     // The photo shows only for the entry it was taken for (never a stale frame under a newer entry).
@@ -570,8 +674,11 @@ export class LibraryPane {
       entry ? (entry.unlocked ? 1 : 0) : 0,
       photo ? 1 : 0,
       this._via || '',
+      this._partId || '',
       unread,
       note || '',
+      real || '',
+      back ? back.label : '',
       warning,
       specs.map((s) => `${s.k}:${s.v}`).join('|'),
       related.map((r) => `${r.id}:${r.unlocked ? 1 : 0}`).join('|'),
@@ -583,6 +690,8 @@ export class LibraryPane {
       related,
       photo,
       note,
+      real,
+      back,
       unread,
       structKey,
     };
@@ -613,6 +722,13 @@ export class LibraryPane {
     }
     const e = m.entry;
     const locked = !e.unlocked;
+    // Back row (L7): at the top of the head, under the pane name; one press returns to the entry (and part) a RELATED
+    // chip left.
+    if (m.back) {
+      parts.push(
+        `<div class="library-back" data-back="1" style="cursor:pointer;color:${C.INFO};margin:-2px 0 8px 0;padding:2px 0${this._glass ? `;min-height:${RELATED_CHIP_GLASS_MIN_H_PX}px;display:flex;align-items:center;touch-action:manipulation` : ''}">\u2190 ${m.back.label}</div>`,
+      );
+    }
     // The photo banner (only when the deferred read succeeded; else the text header stands alone). It keeps the
     // photo's own 16:10 through `aspect-ratio`, not a fixed height: a framed part portrait is composed for that
     // frame and must not be cropped by the pane's width (01-numbers.md "Workbench panes").
@@ -643,6 +759,10 @@ export class LibraryPane {
     parts.push(
       `<div class="library-short" style="color:#aaddff;line-height:1.5;padding:6px 8px;background:rgba(0,204,255,0.06);border-left:2px solid rgba(0,204,255,0.5);margin-bottom:8px">${GestureHints.glassWords(e.shortText || '')}</div>`,
     );
+    // W11: what the real part is, one dim line (first sentence of realWorld), unlocked hardware entries only.
+    if (m.real) {
+      parts.push(`<div class="library-real" style="opacity:0.6;line-height:1.4;margin:-2px 0 8px 0">Real: ${m.real}</div>`);
+    }
     if (locked) {
       // The honest locked stub: how to unlock, nothing invented.
       parts.push(
@@ -715,13 +835,18 @@ export class LibraryPane {
     const max = this._closest(e && e.target, '[data-max]');
     if (max) {
       const id = max.getAttribute('data-max');
-      if (id && this._onMaximize) { try { this._onMaximize(id); } catch (_e) { /* dep */ } }
+      // The viewer is told which part you came from (its "from:" line) and the pane's own part id.
+      if (id && this._onMaximize) {
+        try { this._onMaximize(id, { via: this._via, partId: this._partId }); } catch (_e) { /* dep */ }
+      }
       return;
     }
+    const back = this._closest(e && e.target, '[data-back]');
+    if (back) { this._goBack(); return; }
     const rel = this._closest(e && e.target, '[data-rel]');
     if (rel) {
       const id = rel.getAttribute('data-rel');
-      if (id) this.openEntry(id);
+      if (id) this._openRelated(id);
     }
   }
 

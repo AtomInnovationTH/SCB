@@ -57,8 +57,8 @@ export const PART_TO_SUBSYSTEM = Object.freeze({
  * @type {Readonly<Object<string, ReadonlyArray<string>>>}
  */
 export const PARTS_BY_SYSTEM = Object.freeze({
-  POWER: Object.freeze(['rosa_wings', 'body_cells', 'array_roll', 'wing_motor_box']),
-  PROPULSION: Object.freeze(['feep', 'rcs', 'mli', 'aft_deck']),
+  POWER: Object.freeze(['rosa_wings', 'body_cells', 'array_roll', 'wing_motor_box', 'battery']),
+  PROPULSION: Object.freeze(['feep', 'rcs', 'mli', 'aft_deck', 'tanks', 'wheels']),
   PAYLOAD: Object.freeze(['despin', 'net_launcher', 'berth_collar']),
   SENSORS: Object.freeze([
     'gimbal', 'eo_cam', 'ir_cam', 'lidar', 'star_trackers',
@@ -66,7 +66,7 @@ export const PARTS_BY_SYSTEM = Object.freeze({
   ]),
   COMMS: Object.freeze(['ttc', 'mga', 'gps', 'ttc_aft']),
   CAPTURE: Object.freeze(['berths', 'tether_reels', 'hinges', 'cradle_spring', 'daughter_struts']),
-  THERMAL: Object.freeze(['flower_plates', 'flower_struts', 'flower_tips', 'flower_hinges']),
+  THERMAL: Object.freeze(['flower_plates', 'flower_struts', 'flower_tips', 'flower_hinges', 'heaters']),
   DAUGHTERS: Object.freeze(['daughter_0', 'daughter_1', 'daughter_2', 'daughter_3']),
 });
 

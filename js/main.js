@@ -1125,11 +1125,16 @@ function _portraitFor(partId) {
   const dir = portraitDirFor(camPos, centre, frame.dir ? _shipDirToWorld(frame.dir) : null);
   const up = portraitUpFor(dir, _shipDirToWorld([0, 1, 0], _portraitUp), _shipDirToWorld([0, 0, 1], _portraitFore));
   const req = { box: frame.box, matrix: frame.matrix || undefined, dir, fill: frame.fill || undefined, up };
-  const shot = motherCallouts.withHiddenForPortrait(() => (
-    (player && typeof player.withHullOutlineHidden === 'function')
-      ? player.withHullOutlineHidden(() => sceneManager.renderPartPortrait(req))
-      : sceneManager.renderPartPortrait(req)
-  ));
+  // The part itself is tinted teal while it is drawn (L4), so the picture shows which part the words are about. The
+  // tint method belongs to the callouts lane: guarded so this works before and after it lands.
+  const shot = motherCallouts.withHiddenForPortrait(() => {
+    const draw = () => (
+      (player && typeof player.withHullOutlineHidden === 'function')
+        ? player.withHullOutlineHidden(() => sceneManager.renderPartPortrait(req))
+        : sceneManager.renderPartPortrait(req)
+    );
+    return (typeof motherCallouts.withPartTinted === 'function') ? motherCallouts.withPartTinted(partId, draw) : draw();
+  });
   if (!shot || !shot.data || !(shot.width > 0) || !(shot.height > 0)) return null;
   _lastPortraitFrame = {
     id: frame.id, instance: frame.instance || null, local: !!frame.local, dir: frame.dir ? frame.dir.slice() : null,
@@ -1458,6 +1463,13 @@ async function init() {
         return { canvas: copy, massKg: part.massKg, specs: part.specs };
       } catch (_e) { return null; }
     },
+    // The reader closed on `lastEntryId` (maybe after a chip jump): an open SPECS drawer follows it, so close returns
+    // you to the page you were reading (L8). Same entry or a closed drawer: nothing to do. `libraryPane` is read
+    // lazily (it is built after the viewer).
+    onClose: (lastEntryId) => {
+      if (!lastEntryId || !libraryPane || typeof libraryPane.isOpen !== 'function' || !libraryPane.isOpen()) return;
+      if (libraryPane.currentEntryId() !== lastEntryId) libraryPane.openEntry(lastEntryId);
+    },
   } : undefined);
 
   // Inline glossary first-use seen-state (§11.8): the first-use cue stops nagging veterans.
@@ -1698,7 +1710,7 @@ async function init() {
   // Glossary deep-link (§11.8): a clicked inline term opens the viewer on its entry.
   // `anchor` rides through: Houston's "manual" lands on page one's WARNING box.
   eventBus.on(Events.CODEX_OPEN_ENTRY, (data) => {
-    if (codexViewerUI && data && data.id) codexViewerUI.openEntry(data.id, { anchor: data.anchor });
+    if (codexViewerUI && data && data.id) codexViewerUI.openEntry(data.id, { anchor: data.anchor, via: data.via });
   });
 
   gameOverScreen.setShopScreen(shopScreen);
@@ -2316,11 +2328,16 @@ async function init() {
     if (codexSystem && codexSystem.setAckChips) codexSystem.setAckChips(false);
     libraryPane = new LibraryPane({
       codex: codexSystem,
-      onMaximize: (id) => {
-        if (id) eventBus.emit(Events.CODEX_OPEN_ENTRY, { id });
+      // MAXIMIZE carries the clicked part's name as `via`, so the viewer can say where you came from (L8).
+      onMaximize: (id, ctx) => {
+        if (!id) return;
+        const via = (ctx && typeof ctx.via === 'string' && ctx.via) ? ctx.via : undefined;
+        eventBus.emit(Events.CODEX_OPEN_ENTRY, via ? { id, via } : { id });
       },
-      requestUnlock: (id) => {
-        if (id) eventBus.emit(Events.CODEX_UNLOCK_REQUEST, { id });
+      // `opts.immediate` (a part clicked on your own ship) unlocks the entry this tick, not through the queue (3.2).
+      requestUnlock: (id, opts) => {
+        if (!id) return;
+        eventBus.emit(Events.CODEX_UNLOCK_REQUEST, (opts && opts.immediate === true) ? { id, immediate: true } : { id });
       },
       onViewed: (id) => {
         if (id) eventBus.emit(Events.CODEX_VIEWED, { id });
@@ -2370,8 +2387,8 @@ async function init() {
       // No `onOpenChange` / `footerBottomPx`: the WorkbenchPane shell below owns both.
     });
     // The ONE workbench pane: the shell that hosts the two engines above (library → HEAD + TAIL, refit → the floor-1
-    // slot between them) and owns the root (#ladder-workbench, RIGHT, width clamp(380px, 28vw, 440px), body
-    // shrink-wrapped to content), the footer-band SPECS tab (RIGHT slot: bottom = the band's bottom − the root's 96
+    // slot between them) and owns the root (#ladder-workbench, LEFT, width clamp(380px, 28vw, 440px), body
+    // shrink-wrapped to content), the footer-band SPECS tab (LEFT slot: bottom = the band's bottom − the root's 96
     // = 36 px, the ONE band table; the count is the F1 GOLD affordable-refit count when > 0, else the unread count),
     // the slide, the idle fade, the edge-chrome tab phase (written per frame below), the reduced-motion + RTL laws,
     // the DEPOT_INVITATION glow, ONE open state and ONE onOpenChange edge → _syncWorkbenchPanes (calm cap, camera
