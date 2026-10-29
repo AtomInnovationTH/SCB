@@ -380,8 +380,8 @@ export class MenuScreen {
           #menu-lang { right: 18px; }
           #menu-help-btn { top: calc(100% + 8px); left: auto; right: 0; transform: none; }
         }
-        /* Show mode (shared iPad, owner 2026-10-28; one control, coordinator 2026-10-28 F1.2): a single button under the "?" row
-         * that reads "Show mode: on" / "Show mode: off". Lit green when on, dim when off; the lit button IS the mark. 44 px tall
+        /* Demo mode (was "show mode"; shared iPad, owner 2026-10-28; one control, coordinator 2026-10-28 F1.2): a single button under the "?" row
+         * that reads "Demo mode: on" / "Demo mode: off" (owner 2026-10-29: "show mode is confusing"). Lit green when on, dim when off; the lit button IS the mark. 44 px tall
          * (touch target). Right edge = the "?" edge. */
         #menu-show-btn {
           position: absolute; top: calc(100% + 56px); right: -52px; z-index: 1;   /* below the version label's "What's new" (measured 2026-10-28: at +8 px it sat on it at 1366 wide) */
@@ -509,7 +509,7 @@ export class MenuScreen {
             <span class="menu-lang-caret">▾</span>
           </button>
           <ul id="menu-lang-menu" role="listbox" aria-label="Language"></ul>
-          <button id="menu-show-btn" type="button" aria-pressed="false" title="For a shared iPad: after 60 s without a touch, offers a fresh game">Show mode: off</button>
+          <button id="menu-show-btn" type="button" aria-pressed="false" title="For a demo iPad: a fresh game after 60 s without a touch, and the game ends after the first mission">Demo mode: off</button>
         </div>
 
         <!-- ══ HEADER (full-width, centered) ══ -->
@@ -776,7 +776,7 @@ export class MenuScreen {
     // Help "?": inert and hidden until setHelpOpener().
     this._wireHelpButton();
 
-    // Show mode toggle + mark (owner 2026-10-28).
+    // Demo mode toggle + mark (owner 2026-10-28).
     this._wireShowMode();
 
     // The version button opens the notes card; the notes themselves load once, here (show() waits on them).
@@ -1072,8 +1072,8 @@ export class MenuScreen {
   }
 
   /**
-   * @private Show mode (shared iPad, owner 2026-10-28): ONE button under the language picker. It reads "Show mode: on" or
-   * "Show mode: off", is lit while on, and flips ShowMode when tapped. `sm` is injectable for tests (default: the page's showMode).
+   * @private Demo mode (shared iPad, owner 2026-10-28): ONE button under the language picker. It reads "Demo mode: on" or
+   * "Demo mode: off", is lit while on, and flips ShowMode when tapped. `sm` is injectable for tests (default: the page's showMode).
    * @param {object} [sm] ShowModeState-like { isOn(), set(on), onChange(fn) }
    */
   _wireShowMode(sm = showMode) {
@@ -1082,7 +1082,7 @@ export class MenuScreen {
     const paint = () => {
       const on = sm.isOn();
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-      btn.textContent = on ? 'Show mode: on' : 'Show mode: off';
+      btn.textContent = on ? 'Demo mode: on' : 'Demo mode: off';
     };
     btn.addEventListener('click', (e) => {
       this._closeLangMenu();

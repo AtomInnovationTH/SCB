@@ -116,6 +116,8 @@ import { persistenceManager } from './systems/PersistenceManager.js';
 import { showMode } from './systems/ShowMode.js';   // shared-iPad show mode (the side-effect import at the top ran its boot work)
 import { isHeldByAutoPlay, resetForNewPlayer, idleOverrideS, shouldFreezeMenu, menuFreezeS, MENU_FREEZE_S } from './systems/IdleReset.js';
 import { wireStillPlaying, wireIdleTimers } from './ui/StillPlayingCard.js';
+import { shouldEndDemo, wireDemoEnd } from './systems/DemoEnd.js';   // demo mode: the game ends after mission 1, on the engines (owner 2026-10-29)
+import { DemoEndCard } from './ui/DemoEndCard.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController, INTRO_RIDE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
@@ -517,6 +519,8 @@ function _wakeMenuFreeze() {
 }
 /** Shared-iPad show mode: the idle clock + "Still playing?" card, built once at boot (see `wireStillPlaying`). */
 let _idleKit = null;
+/** Demo mode's end after mission 1 (DemoEnd.js): its card and walk-away clock, built once at boot. */
+let _demoEndKit = null;
 
 // mechLive: is any mother actuator (flower / ROSA furl / ROSA feather / ROSA wing tilt / struts) ACTUALLY MOVING
 // right now? Detected from motion, never from intent/target latches or armManager.strutsDeployed(): both can read
@@ -3510,7 +3514,7 @@ async function init() {
   _idleKit = wireStillPlaying({
     doc: document,
     getLanguage: () => settingsManager.getLanguage(),
-    enabled: () => showMode.isOn(),
+    enabled: () => showMode.isOn() && !(_demoEndKit && _demoEndKit.isActive()),   // the end card has its own walk-away clock
     onMenu: () => gameState.currentState === GameStates.MENU,
     holds: () => isHeldByAutoPlay({
       trip: gameFlowManager.trip, cameraSystem, autopilot: autopilotSystem, arms: armManager ? armManager.arms : null,
@@ -3525,6 +3529,35 @@ async function init() {
   });
   // The 250 ms timer and the come-back tick exist only while show mode is on (off = no timer, no listener).
   wireIdleTimers({ showMode, kit: _idleKit, doc: document });
+  // Demo mode: after mission 1 the game ends on a card (DemoEnd.js, ui/DemoEndCard.js). GameFlowManager arms the end at the
+  // mission's last catch and emits DEMO_END when the first burn's engine swing is over; the card opens 4 s later (a CONTINUE of a
+  // save already past it, or a pick that starts no burn: at once), pauses the game behind it, and
+  // "Play again" is the same New player reset as above. `?idleS=N` (dev host, demo mode) scales its walk-away clock (N s, then N/3 s).
+  {
+    const idleOv = idleOverrideS(devSearch(), showMode.isOn());
+    let demoEnd = null;
+    const demoCard = new DemoEndCard({
+      doc: document,
+      getLanguage: () => settingsManager.getLanguage(),
+      onPlayAgain: () => demoEnd.playAgain(),
+      onTouch: () => demoEnd.touch(),
+    });
+    demoEnd = wireDemoEnd({
+      bus: eventBus,
+      card: demoCard,
+      reset: () => resetForNewPlayer({ lockSaves: () => persistenceManager.lockForReset() }),
+      getCaught: () => scoringSystem.getStats().debrisCleared,
+      pause: {
+        isGameplay: () => gameState.isGameplay(),
+        isPaused: () => gameFlowManager.paused === true,
+        toggle: () => (inputManager ? inputManager.togglePause() : null),
+      },
+      idleS: idleOv || undefined,
+      countdownS: idleOv ? Math.max(1, idleOv / 3) : undefined,
+    });
+    _demoEndKit = demoEnd;
+    gameFlowManager.setDemoEndCheck((missionsCompleted) => shouldEndDemo({ demoOn: showMode.isOn(), missionsCompleted }));
+  }
   // Show mode: the untouched start screen freezes after 2 min (`?idleS=N` scales it to 2 x N, show mode and dev host only, §47 row 8).
   _menuFreezeS = menuFreezeS(idleOverrideS(devSearch(), showMode.isOn()));
   _menuUntouchedSince = performance.now();

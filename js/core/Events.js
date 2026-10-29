@@ -101,6 +101,11 @@ export const Events = {
    *  AVAILABLE" comms line; never on the forced-card path. Not a stop: no world hold.
    *  Payload: { mission: number (missionsCompleted: 1 at the 5th catch), debrisCleared: number } */
   MISSION_COMPLETE:   'mission:complete',
+  /** Demo mode only (systems/DemoEnd.js): the demo is over (after mission 1, on the engines). Emitted once per run when the
+   *  first burn's camera swing ends (ui/DemoEndCard opens 4 s later), or `immediate` (a CONTINUE of a save past it, a pick that
+   *  starts no burn): the card opens at once. The next mission never starts.
+   *  Payload: { mission: number, debrisCleared: number, immediate?: boolean } */
+  DEMO_END:           'demo:end',
 
   // MISSION MID-FLIGHT
   /** Scanned debris revealed as hydrazine hazard. Payload: { debrisId, type, hazardType } */

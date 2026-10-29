@@ -21,10 +21,11 @@ const LISTEN = { capture: true, passive: false };
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Fn', 'OS']);
 
 /**
- * Cards that own input while open (show mode's "Still playing?", DECISIONS §52). Under one, this card never shows and
- * never swallows: on an iPad wake both can be up, and the first tap must reach that card's 20 s countdown buttons.
+ * Cards that own input while open (demo mode's "Still playing?" and its end card, DECISIONS §52). Under one, this card never
+ * shows and never swallows: on an iPad wake both can be up, and the first tap must reach that card's buttons (a tap that
+ * un-paused the game behind the end card would be wrong).
  */
-const YIELD_TO_IDS = ['still-playing-card'];
+const YIELD_TO_IDS = ['still-playing-card', 'demo-end-card'];
 
 /** @type {Partial<CSSStyleDeclaration>} full-window layer: z-index 9000 sits above the HUD pause overlay (150). */
 const LAYER_STYLE = {

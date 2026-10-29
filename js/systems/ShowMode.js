@@ -1,12 +1,15 @@
 /**
- * @module systems/ShowMode — "show mode": this device is a shared iPad (DECISIONS §52). While on, IdleReset's clock runs
- * and asks "Still playing?" after 60 s without a touch; off (the default) there is no clock and no card.
+ * @module systems/ShowMode — "demo mode" (the player-facing name since 2026-10-29; the code keeps ShowMode / SHOW_MODE so
+ * the stored switch on existing iPads stays on): this device is a shared demo iPad (DECISIONS §52). While on, IdleReset's
+ * clock runs and asks "Still playing?" after 60 s without a touch, and the game ends after the first mission, on the engines (DemoEnd.js); off
+ * (the default) there is no clock, no card and no end.
  *
- * On: `?show=1` once (remembered on that device, StorageKeys.SHOW_MODE) or the menu toggle (a Home Screen web app keeps
- * its own storage and always opens `./`, so the toggle is the way in there). Off: `?show=0` or the same toggle.
+ * On: `?demo=1` (or the older `?show=1`) once, remembered on that device (StorageKeys.SHOW_MODE), or the menu toggle (a Home
+ * Screen web app keeps its own storage and always opens `./`, so the toggle is the way in there). Off: `?demo=0` / `?show=0`
+ * or the same toggle. With both in one URL, `demo=` wins.
  *
  * THIS MODULE'S BODY RUNS AT IMPORT, and main.js imports it FIRST: (1) finish a New player reset that was cut short
- * (`bootWipeIfPending`), before SettingsManager, OnboardingDirector and the rest read storage; (2) apply `?show=`.
+ * (`bootWipeIfPending`), before SettingsManager, OnboardingDirector and the rest read storage; (2) apply `?demo=` / `?show=`.
  * Everything else here is a pure function with injectable storage.
  */
 
@@ -19,16 +22,19 @@ function defaultLocal() {
 }
 
 /**
- * `?show=1` → true, `?show=0` → false, anything else → null.
+ * `?demo=1` / `?show=1` → true, `?demo=0` / `?show=0` → false, anything else → null. `demo=` is read first: a valid
+ * `demo=` wins over `show=` (an invalid `demo=` value falls through to `show=`).
  * @param {string} search  location.search
  * @returns {boolean|null}
  */
 export function parseShowParam(search) {
   if (typeof search !== 'string') return null;
-  const m = /[?&]show=([^&#]*)/.exec(search);
-  if (!m) return null;
-  if (m[1] === '1') return true;
-  if (m[1] === '0') return false;
+  for (const name of ['demo', 'show']) {
+    const m = new RegExp(`[?&]${name}=([^&#]*)`).exec(search);
+    if (!m) continue;
+    if (m[1] === '1') return true;
+    if (m[1] === '0') return false;
+  }
   return null;
 }
 
@@ -61,7 +67,7 @@ export function applyShowParam(search, storage) {
   return v;
 }
 
-/** Live state for this page (the menu toggle, the "Show mode" mark and the idle clock read it). */
+/** Live state for this page (the menu toggle, the "Demo mode" button and the idle clock read it). */
 export class ShowModeState {
   /** @param {object} [storage] localStorage-like; omitted = the page's */
   constructor(storage) {

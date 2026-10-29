@@ -143,6 +143,16 @@ export class GameFlowManager {
     /** The boundary count a credit reached during a trip, run after the trip's mission start, or null. */
     this._deferredBoundary = null;
     /**
+     * Demo mode (owner 2026-10-29; systems/DemoEnd.js): `(missionsCompleted) => boolean`, set by main.js through
+     * `setDemoEndCheck` (this file does not import ShowMode). Null = never ends. The demo ends on the engines after mission 1:
+     * `_demoArmed` is set by the credit that completes the mission (everything leads on as ever: the "where next" list, the
+     * pick, the trip), and from then on no route starts the next mission; `_demoEnded` is the latch of Events.DEMO_END (once
+     * the camera's engine swing of the first burn is over, or at once when no burn will come). `resetGame` clears both.
+     */
+    this._demoEndCheck = null;
+    this._demoArmed = false;
+    this._demoEnded = false;
+    /**
      * FEATURE_FLAGS.FIELDS_BY_HEIGHT: floor 4 exists and hosts the "where next" list (main.js sets it once the list is
      * built, inside the ladder block). With the flag on and this set, a mission boundary opens the choice instead of
      * flying to `defaultNext()`; with `?ladder=0` (no floor 4) or in a rig that never wired it, `defaultNext()`.
@@ -300,6 +310,81 @@ export class GameFlowManager {
     const shop = this._refs && this._refs.shopScreen;
     if (shop && typeof shop.setResupplyStop === 'function') shop.setResupplyStop(this._atResupplyStop);
     this._pushTradeWording();
+  }
+
+  /** Demo mode: main.js hands in the end test (`(missionsCompleted) => boolean`; DemoEnd.shouldEndDemo with the live switch). */
+  setDemoEndCheck(fn) { this._demoEndCheck = typeof fn === 'function' ? fn : null; }
+
+  /** @returns {boolean} true once the demo has ended in this run (the latch) */
+  isDemoEnded() { return this._demoEnded === true; }
+
+  /**
+   * @private Has this save already ended the demo? (CONTINUE only.) Latches and emits Events.DEMO_END once, `immediate`: the
+   * card opens at once; true on every later call until `resetGame`.
+   * @param {number} debrisCount gameState.debrisCleared
+   * @returns {boolean}
+   */
+  _demoEndReached(debrisCount) {
+    if (this._demoEnded) return true;
+    if (!this._demoCheck(debrisCount)) return false;
+    this._demoFire(debrisCount, true);
+    return true;
+  }
+
+  /** @private Does the demo-end check say this count is the end? (false with no check wired, or when it throws) */
+  _demoCheck(debrisCount) {
+    if (!this._demoEndCheck) return false;
+    const { missionsCompleted } = getMissionProgress(debrisCount);
+    try { return !!this._demoEndCheck(missionsCompleted); } catch (_) { return false; }
+  }
+
+  /**
+   * @private The credit that completes the demo's last mission arms the end: from now no route starts the next mission
+   * (`_demoStart`), and the first burn's engine swing opens the card (`_demoWatchBurn`).
+   * @param {number} debrisCount gameState.debrisCleared at the boundary
+   */
+  _demoArm(debrisCount) {
+    if (this._demoArmed) return;
+    if (this._demoCheck(debrisCount)) this._demoArmed = true;
+  }
+
+  /**
+   * @private Emit Events.DEMO_END once. Clears every held start (nothing leads on from here).
+   * @param {number} [debrisCount]
+   * @param {boolean} [immediate] the card opens at once (a CONTINUE, or no burn will come)
+   */
+  _demoFire(debrisCount, immediate) {
+    if (this._demoEnded) return;
+    this._demoArmed = true;
+    this._demoEnded = true;
+    this._pendingMissionStart = null;
+    this._deferredBoundary = null;
+    const dc = Number.isFinite(debrisCount) ? debrisCount : gameState.debrisCleared;
+    eventBus.emit(Events.DEMO_END, { mission: getMissionProgress(dc).missionsCompleted, debrisCleared: dc, immediate: immediate === true });
+  }
+
+  /**
+   * @private Once armed, the mission start every route holds (the pick, the trip's arrival, a Stay, a pick that cannot go) is
+   * replaced by the end: the card opens at once. Unarmed it hands `start` back unchanged.
+   * @param {() => void} start
+   * @returns {() => void}
+   */
+  _demoStart(start) {
+    if (!this._demoArmed) return start;
+    return () => { this._demoFire(undefined, true); };
+  }
+
+  /**
+   * @private Armed, the first burn ends the demo: the first frame the engines are lit and the camera's swing behind her is
+   * over (the moment the range map shows again, RangeMap._decide); the card follows after Events.DEMO_END's delay.
+   */
+  _demoWatchBurn() {
+    if (!this._demoArmed || this._demoEnded) return;
+    const t = this._trip;
+    if (!t.isBurning() || t.lighting()) return;
+    const cam = this._refs && this._refs.cameraSystem;
+    if (cam && typeof cam.isIonStartupActive === 'function' && cam.isIonStartupActive()) return;
+    this._demoFire(undefined, false);
   }
 
   /**
@@ -704,6 +789,9 @@ export class GameFlowManager {
       // new-player intro zoom / boot trickle / score-group timer. MENU → ORBITAL_VIEW is a valid transition
       // (GameState.js VALID_TRANSITIONS).
       this.transitionToState(GameStates.ORBITAL_VIEW);
+
+      // Demo mode (DemoEnd.js): a save already at or past the end of the demo opens the end card at once; no welcome-back line.
+      if (this._demoEndReached(gameState.debrisCleared)) { this._setResupplyStop(false); return; }
 
       // Welcome-back comms: mission # and objective arrive as a short HOUSTON trickle AFTER the handoff, emitted after the
       // transition so CommsSystem has self-started on GAME_STATE_CHANGE → ORBITAL_VIEW (CommsSystem.js constructor).
@@ -1666,6 +1754,8 @@ export class GameFlowManager {
 
     // No big piece is pending any more. Cleared BEFORE GAME_RESET and the arms' reset, so a rack that drops its
     // piece says nothing and the restored-piece retry list is forgotten.
+    this._demoArmed = false;                // demo mode: a new run (a new game, a CONTINUE) starts un-armed, un-ended (DemoEnd.js)
+    this._demoEnded = false;
     bigPieces.clear();
     this._job = null;                       // the jobs board starts again (a CONTINUE brings the saved posting back after this)
     this._jobDoneOn = false;
@@ -1970,11 +2060,16 @@ export class GameFlowManager {
     // A catch credited while the trip waits for its daughters or burns starts nothing: the burn's end runs the
     // scorer (`start` of the trip), which starts whichever mission is then due.
     if (this._trip.isActive()) return;
-    this._pendingMissionStart = null;
     const M = Constants.MISSIONS;
     const debrisCount = gameState.debrisCleared;
     const { missionsCompleted, perMission, debrisUntilShop } = getMissionProgress(debrisCount);
     const atBoundary = debrisCount > 0 && debrisUntilShop === perMission;
+    // Demo mode (DemoEnd.js): the credit that completes the demo's last mission arms the end; the mission after it never starts.
+    // Once armed, a later non-boundary credit (a daughter's catch while the 5th waits at the nose) must neither start the
+    // mission nor drop the held start: the hold stays and its release goes through `_demoStart` (the card opens).
+    if (this._demoArmed && !atBoundary) return;
+    this._pendingMissionStart = null;
+    if (atBoundary) this._demoArm(debrisCount);
     // At a boundary the next mission starts when the burn to it ends, not now. `go` is also the continuation a held
     // start releases into (every release path ends in `p.start()`): hold until the catch is off the nose, burn, start.
     const go = atBoundary ? () => this._beginTripThen(start) : start;
@@ -1997,6 +2092,8 @@ export class GameFlowManager {
    * @private
    */
   _beginTripThen(start) {
+    if (this._demoEnded) return;   // demo mode: nothing leads on once the end is out (DemoEnd.js)
+    start = this._demoStart(start);
     const r = this._refs;
     if (!Constants.isFeatureEnabled('TRANSFER_TRIP') || !r || !r.player || !gameState.isGameplay()) { start(); return; }
     this._syncTripDeps();
@@ -2934,6 +3031,8 @@ export class GameFlowManager {
    * @param {{said?: boolean}} [opts] `said`: the line was just said (the berth arrival says its own)
    */
   _openWhereNext(start, opts) {
+    if (this._demoEnded) return;   // demo mode: no "where next" list once the end is out (DemoEnd.js)
+    start = this._demoStart(start);
     const reg = this._refs.fieldRegistry;
     this._postJobIfDue();                                                  // the list's first opening after mission 1 already carries the job
     const berthed = typeof reg.isBerthed === 'function' && reg.isBerthed();
@@ -3388,6 +3487,7 @@ export class GameFlowManager {
     if ((this._meltFinals && this._meltFinals.length) || this._meltSaveOwed) this._meltFrame();   // a melted piece to let go of, a save owed
     // the burn between missions (waits for the daughters, then burns; `dt` is 0 while the world is held)
     this._trip.update(dt);
+    this._demoWatchBurn();                                        // demo mode: the first burn's engine swing ends the demo (DemoEnd.js)
     const p = this._pendingMissionStart;
     if (!p) return;
     if (!(dt > 0) || !gameState.isGameplay()) return;
