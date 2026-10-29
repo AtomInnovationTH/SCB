@@ -2956,55 +2956,6 @@ export class ArmUnit {
   }
 
   /**
-   * One-way deorbit sacrifice: the arm burns all remaining FEEP fuel retrograde, lowering the captured debris'
-   * perigee; both are removed when fuel is exhausted. Valid only with captured debris (GRAPPLED, HAULING, REELING
-   * or RETURNING).
-   * @returns {{ success: boolean, fuelAtStart: number, totalMass: number }}
-   */
-  startDeorbit() {
-    // A deorbit burn needs real propellant: an ADRIFT / reserve-only daughter can't fund it, so it is disabled at
-    // the reserve floor; guide the player to reel her home instead (design decision).
-    if (this.state === S.ADRIFT || this.fuel <= (Constants.ARM_RESERVE_FUEL ?? 0)) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'HOUSTON', channel: 'CMD',
-        text: `${this.displayName}: Insufficient FEEP for a deorbit burn. Reel her in (R) instead.`,
-        priority: 'warning',
-      });
-      return { success: false, fuelAtStart: this.fuel, totalMass: 0 };
-    }
-    if (this.state !== S.GRAPPLED && this.state !== S.HAULING &&
-        this.state !== S.REELING && this.state !== S.RETURNING) {
-      return { success: false, fuelAtStart: 0, totalMass: 0 };
-    }
-    if (!this.capturedDebris && !this.target) {
-      return { success: false, fuelAtStart: 0, totalMass: 0 };
-    }
-
-    const fuelAtStart = this.fuel;
-    const debrisMass = this.capturedDebris
-      ? (this.capturedDebris.mass || 1)
-      : (this.target ? this.target.mass || 1 : 1);
-    const totalMass = this.config.mass + debrisMass;
-
-    this._manualMode = false;
-    this._transitionTo(S.DEORBITING);
-
-    eventBus.emit(Events.ARM_DEORBIT, {
-      armId: this.id,
-      fuelAtStart,
-      totalMass,
-      debrisId: this.capturedDebris?.id || this.target?.id,
-    });
-
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.displayName}: DEORBIT BURN. All fuel committed retrograde`,
-      priority: 'warning',
-    });
-
-    return { success: true, fuelAtStart, totalMass };
-  }
-
-  /**
    * Launch speed for the next crossbow fire, clamped to the spring tier's max.
    * @param {number} speed - Desired launch speed in m/s
    */
@@ -9524,7 +9475,7 @@ export class ArmUnit {
       if (fuelFrac <= Constants.DETACH_FUEL_WARNING_10 && !this._detachFuelWarning10) {
         this._detachFuelWarning10 = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `CRITICAL: ${this.displayName} fuel at 10%. Recommend immediate deorbit.`,
+          text: `CRITICAL: ${this.displayName} fuel at 10%.`,
           priority: 'critical',
         });
       } else if (fuelFrac <= Constants.DETACH_FUEL_WARNING_25 && !this._detachFuelWarning25) {
@@ -9859,7 +9810,7 @@ export class ArmUnit {
       if (fuelFrac <= Constants.DETACH_FUEL_WARNING_10 && !this._detachFuelWarning10) {
         this._detachFuelWarning10 = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `CRITICAL: ${this.displayName} fuel at 10%. Recommend immediate deorbit.`,
+          text: `CRITICAL: ${this.displayName} fuel at 10%.`,
           priority: 'critical',
         });
       }

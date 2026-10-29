@@ -1414,56 +1414,6 @@ class AudioSystem {
     osc.stop(now + dur + 0.02);
   }
 
-  /** Retrograde deorbit burn: descending rumble + alert tone; the arm sacrificing all remaining fuel. */
-  playDeorbitBurn(dur = 2.5) {
-    if (!this.available) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
-
-    const bufferSize = ctx.sampleRate * dur;
-    const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const data = noiseBuffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = Math.random() * 2 - 1;
-    }
-    const noise = ctx.createBufferSource();
-    noise.buffer = noiseBuffer;
-
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(800, now);
-    filter.frequency.linearRampToValueAtTime(100, now + dur);
-    filter.Q.value = 3;
-
-    const noiseGain = ctx.createGain();
-    noiseGain.gain.setValueAtTime(0, now);
-    noiseGain.gain.linearRampToValueAtTime(0.2, now + 0.15);
-    noiseGain.gain.setValueAtTime(0.2, now + dur * 0.7);
-    noiseGain.gain.linearRampToValueAtTime(0, now + dur);
-
-    noise.connect(filter);
-    filter.connect(noiseGain);
-    noiseGain.connect(this.physicalBus);
-    noise.start(now);
-    noise.stop(now + dur);
-
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(400, now);
-    osc.frequency.linearRampToValueAtTime(80, now + dur);
-
-    const oscGain = ctx.createGain();
-    oscGain.gain.setValueAtTime(0, now);
-    oscGain.gain.linearRampToValueAtTime(0.08, now + 0.1);
-    oscGain.gain.setValueAtTime(0.08, now + dur * 0.6);
-    oscGain.gain.linearRampToValueAtTime(0, now + dur);
-
-    osc.connect(oscGain);
-    oscGain.connect(this.physicalBus);
-    osc.start(now);
-    osc.stop(now + dur);
-  }
-
   /** Ascending step tone for T-key fuel cycling; each fuel type one step higher. */
   playFuelCycle(stepIndex = 0) {
     if (!this.available) return;

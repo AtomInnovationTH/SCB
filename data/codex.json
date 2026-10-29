@@ -3206,9 +3206,9 @@
         "tech_level"
       ],
       "i18n": {
-        "title": "When to Sacrifice an Arm",
-        "shortText": "Bring a daughter home to reuse it, or ride it down with the junk for a bigger payout.",
-        "fullText": "Most captures mean tethering the target and reeling it in. But for stubborn or massive debris you can send a daughter down with it on a deorbit burn, sacrificing the arm for a bonus worth up to ×2.5 the score.\n\nIt is a genuine trade: lose hardware now for a bigger clear, or keep your fleet and play the long game. Early on, keep your arms. Once you can spare one, the deorbit bonus adds up fast.",
+        "title": "Cutting a Daughter Loose",
+        "shortText": "A daughter cut loose with a catch cannot come home. Keep the tether on unless you mean it.",
+        "fullText": "Most captures mean tethering the target and reeling it in. If you cut the tether while a daughter holds a catch, she has no line to reel on: she burns all her fuel and is lost, and nothing is paid for her.\n\nThere is no key that sends a daughter down with a catch for a bonus. A small piece can be let go; a big one has four ways out (a resupply satellite, melting it, the mother pushing it lower, or keeping it).\nKeep the tether on unless you mean to lose her.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",

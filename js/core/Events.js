@@ -17,9 +17,7 @@ export const Events = {
   // No ARM_DEPLOY / ARM_FISH (RadialMenu deleted); preferType deploy rides ARM_DEPLOY_TO. The fishing / cast-all verb
   // (`deployFishing`, the FISHING state) was deleted on purpose: bringing it back is a fresh design, not a restore.
   ARM_MANUAL_THRUST:  'arm:manualThrust',
-  ARM_DEORBIT:        'arm:deorbit',      // One-way sacrifice command
   ARM_REFUELED:       'arm:refueled',     // Daughter ion fuel swapped in from her indium store (docked swap)
-  ARM_DEORBIT_CMD:    'arm:deorbitCmd',   // Comms menu / D key deorbit command
   ARM_SELECT:         'arm:select',       // Player selected arm by number key 1-6
   ARM_DESELECT:       'arm:deselect',     // Player deselected arm — back to mothership (key 7)
   LAUNCH_SPEED_CHANGED: 'arm:launchSpeedChanged', // { speed } — clamped fleet launch speed after a dial move

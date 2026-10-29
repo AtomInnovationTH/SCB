@@ -206,7 +206,6 @@ export const HOTKEY_GROUPS = [
       [['Shift'], 'Hold: reel faster', { id: 'reel_fast' }],
       'gap',
       [['X'], 'Cut tether', { id: 'cut' }],
-      [['Ctrl Shift D'], 'Burn up catch', { id: 'burn' }],
       'col',
       // More for Ship & views: inspect → panels (the two the game teaches first) → unbuilt → the dev key, set apart.
       [['Point · click'], 'Inspect / upgrade a part', { pointer: true, id: 'inspect' }],

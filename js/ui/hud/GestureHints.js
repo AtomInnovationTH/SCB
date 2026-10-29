@@ -227,7 +227,6 @@ const GLASS_LINES = Object.freeze([
   ['Deploy another [1-4] or refuel', 'Use another daughter or refuel'],
   ['Pick a lighter one [T]', 'Pick a lighter one'],
   ['Press [A] to autopilot closer first', 'Hold the target for AUTOPILOT to get closer first'],
-  ['Reel her in (R) instead.', 'Reel her in instead.'],
   ['Pilot her in manually (1-4) for a better grip.', 'Pilot her in manually (tap her row in DAUGHTERS) for a better grip.'],
   ['Pilot daughters with 1-4 for 2× score bonus.', 'Pilot daughters by tapping their rows in DAUGHTERS for 2× score bonus.'],
   ['de-spin the target (hold L), then re-fire.', 'de-spin the target, then re-fire.'],

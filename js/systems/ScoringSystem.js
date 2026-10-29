@@ -216,32 +216,11 @@ export class ScoringSystem {
       });
     }
 
-    if (data.deorbitSacrifice) {
-      const deorbitMult = data.deorbitMultiplier || Constants.DEORBIT_MULTIPLIER_BASE;
-      situationalMult *= deorbitMult;
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'HOUSTON',
-        text: 'She went down with the target. Worth it.',
-        priority: 1,
-        _quiet: true,
-      });
-    }
-
     if (data.detachedCapture) {
       situationalMult *= Constants.DETACH_SCORE_MULT;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'COWBOY! Free-flying capture! Textbook maneuver.',
-        priority: 1,
-        _quiet: true,
-      });
-    }
-
-    if (data.detachedSacrifice) {
-      situationalMult *= Constants.DETACH_SACRIFICE_MULT;
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'HOUSTON',
-        text: 'Godspeed. She took the debris with her. Sacrifice noted.',
         priority: 1,
         _quiet: true,
       });
@@ -307,7 +286,7 @@ export class ScoringSystem {
       totalMassKg: this.totalMassRecovered,
       // tells the payoff line a credited catch from other credit changes
       debrisType: data.debris?.type ?? null,
-      kind: data.deorbitSacrifice ? 'deorbit' : 'catch',
+      kind: 'catch',
       // a scoop bag pays one award per member; each event carries its bag so the payoff line shows ONE line (members summed).
       // Absent for a solo catch.
       ...(data.bag ? { bagId: data.bag.id, bagCount: data.bag.count, bagMassKg: data.bag.massKg } : null),
@@ -464,7 +443,7 @@ export class ScoringSystem {
 
   /**
    * The ONE public mission-boundary check. GameFlowManager calls it right AFTER `gameState.clearDebris()` on every credited
-   * clear (CATCH_PROCESSED and ARM_DEORBIT paths), so MISSION_START { missionNumber, profile } fires ON the boundary catch
+   * clear (the CATCH_PROCESSED path), so MISSION_START { missionNumber, profile } fires ON the boundary catch
    * (the 5th starts mission 2). Dedupes on `_lastMissionNumber` (reset() → 1). NOT called on restore: MENU_CONTINUE sets
    * `gameState.debrisCleared` directly and emits no start; the first credited clear after a continue re-asserts the
    * mission (HUD.js documents this).

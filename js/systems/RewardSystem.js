@@ -55,7 +55,6 @@ export class RewardSystem {
 
     this._totalDetaches = 0;
     this._detachedCaptures = 0;
-    this._detachedDeorbits = 0;
 
     this._setupListeners();
 
@@ -116,13 +115,6 @@ export class RewardSystem {
     });
 
     // A detached capture is ARM_CAPTURED with `data.detached` (see _checkMilestones).
-    eventBus.on(Events.ARM_DEORBIT, (data) => {
-      // Detached deorbit is inferred: detaches outnumber detached deorbits
-      if (this._totalDetaches > this._detachedDeorbits) {
-        this._detachedDeorbits++;
-        this._checkDetachMilestones('deorbit', data);
-      }
-    });
   }
 
   /** @private @param {object} data — ARM_CAPTURED payload @param {string} method — 'arm' | 'lasso' | other */
@@ -205,16 +197,11 @@ export class RewardSystem {
     }
   }
 
-  /** @private @param {string} eventType — 'detach' | 'capture' | 'deorbit' */
+  /** @private @param {string} eventType — 'detach' | 'capture' */
   _checkDetachMilestones(eventType, data) {
     if (eventType === 'detach' && !this.milestones.has('firstDetach')) {
       this.milestones.set('firstDetach', true);
       this._sendComms('Houston: Tether severed. Bold move, Cowboy. That arm is on its own now.', false);
-    }
-
-    if (eventType === 'deorbit' && !this.milestones.has('firstDetachedDeorbit')) {
-      this.milestones.set('firstDetachedDeorbit', true);
-      this._sendComms('Houston: Detached daughter completed deorbit. Sacrificial play. Debris eliminated.', false);
     }
   }
 

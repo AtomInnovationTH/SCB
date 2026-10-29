@@ -717,10 +717,6 @@ export class ArmManager {
       }
     });
 
-    eventBus.on(Events.ARM_DEORBIT_CMD, () => {
-      this.deorbitCapturingArm();
-    });
-
     // ARM_SELECT / ARM_DESELECT are EMITTED by selectArm/deselectArm (InputManager calls those directly); no listener here.
 
     eventBus.on(Events.ARM_MANUAL_THRUST, (data) => {
@@ -1636,59 +1632,6 @@ export class ArmManager {
    */
   setSceneManager(sceneManager) {
     this._sceneManager = sceneManager || null;
-  }
-
-  /**
-   * Issue deorbit sacrifice command to the first arm that has captured debris.
-   * The arm burns all remaining FEEP fuel retrograde and is lost.
-   * @returns {{ success: boolean, armId?: string, fuelAtStart?: number, totalMass?: number, debrisId?: number }}
-   */
-  deorbitCapturingArm() {
-    // Prefer the selected arm if it is eligible. Only fuel-capable states are eligible for the auto-pick path (a deorbit burn
-    // needs real propellant): ADRIFT (reserve-only) is deliberately NOT eligible here, so an out-of-fuel daughter can't intercept
-    // and consume a healthy daughter's deorbit via the find() fallback below.
-    const isEligible = (a) =>
-      (a.state === ARM_STATES.GRAPPLED ||
-       a.state === ARM_STATES.HAULING ||
-       a.state === ARM_STATES.RETURNING) &&
-      (a.capturedDebris || a.target);
-
-    let eligible = null;
-    if (this.selectedArmIndex >= 0 && this.selectedArmIndex < this.arms.length) {
-      const selected = this.arms[this.selectedArmIndex];
-      if (isEligible(selected)) {
-        eligible = selected;
-      } else if (selected && selected.state === ARM_STATES.ADRIFT &&
-                 (selected.capturedDebris || selected.target)) {
-        // the player explicitly targeted an adrift daughter: let startDeorbit emit the "reel her in instead" hint for THAT
-        // daughter (scoped to the selection so it can't shadow another's deorbit)
-        selected.startDeorbit();
-        return { success: false };
-      }
-    }
-    if (!eligible) {
-      eligible = this.arms.find(isEligible);
-    }
-
-    if (!eligible) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'No daughter with captured debris available for deorbit sacrifice',
-        priority: 'warning',
-      });
-      return { success: false };
-    }
-
-    const result = eligible.startDeorbit();
-    if (result.success) {
-      return {
-        success: true,
-        armId: eligible.id,
-        fuelAtStart: result.fuelAtStart,
-        totalMass: result.totalMass,
-        debrisId: eligible.capturedDebris?.id || eligible.target?.id,
-      };
-    }
-    return { success: false };
   }
 
   /**

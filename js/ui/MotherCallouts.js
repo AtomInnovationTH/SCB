@@ -521,6 +521,10 @@ const HINT_TEXT = 'Point at a part to see what it does. Click to upgrade it.';
 const HINT_TEXT_GLASS = 'Tap a part to see what it does and upgrade it.';
 const hintText = () => (GestureHints.isGlass() ? HINT_TEXT_GLASS : HINT_TEXT);
 
+// The caption in the hint strip (showCaption): wraps inside the pane-free strip between these widths (CSS px).
+const CAPTION_MIN_PX = 200;
+const CAPTION_MAX_PX = 640;
+
 const FADE_RATE = 6.0;      // opacity ease rate for band crossfades
 
 // Typeface-epoch redraw budget per frame: compact cards rasterised before the B612 faces settled are re-rasterised at
@@ -1707,6 +1711,7 @@ export class MotherCallouts {
       this._lingerSys = null;
       this._openSys = null;
       this._sysLabelHover = null;   // the hovered-name cache does not survive leaving inspection
+      this._capText = '';           // a caption does not outlive inspection
       if (this._hintEl) this._hintEl.style.display = 'none';
       // The guided tour is a one-shot: mark it done on the first exit so a quick dip in/out of inspection can't replay it.
       this._guidedDone = true;
@@ -3091,20 +3096,29 @@ export class MotherCallouts {
 
   /**
    * @private The hint's per-frame drive (from update()): show while ACTIVE and not yet dismissed (`_hintDone` is never
-   * reset — once per page load), else hide. Placement (the pane-free strip's centre X in CSS px) is re-derived at most
-   * once per VW_READ_MS and on every pane/rail-edge change; a canvas rect read is layout-affected, never per frame.
+   * reset — once per page load), else hide. A caption (showCaption) takes the same element for its `ms`, dismissed or
+   * not, then the strip returns to its normal state. Placement (the pane-free strip's centre X in CSS px) is re-derived
+   * at most once per VW_READ_MS and on every pane/rail-edge change; a canvas rect read is layout-affected, never per frame.
    */
   _updateHint() {
     const el = this._hintEl;
     if (!el) return;
+    const now = this._nowMs || 0;
+    if (this._capText && now >= this._capUntil) this._capText = '';        // the caption's time is up
+    const capOn = !!this._capText && this._active;
     // The hint waits for the ship ("point at a part"): it shows only while the ship's centre is on screen and in front
     // of the camera (checked only while the hint is still to be shown). Words unchanged (§13 r3).
-    const show = this._active && !this._hintDone && shipOnScreen(this._shipNDC);
+    const show = capOn || (this._active && !this._hintDone && shipOnScreen(this._shipNDC));
     const want = show ? 'flex' : 'none';
-    if (show) { const t = hintText(); if (el.textContent !== t) el.textContent = t; }   // draw-time glass read
+    if (show) { const t = capOn ? this._capText : hintText(); if (el.textContent !== t) el.textContent = t; }   // draw-time glass read
     if (el.style.display !== want) el.style.display = want;
-    if (!show) return;
-    const now = this._nowMs || 0;
+    if (!show) {
+      if (this._hintMode === 'cap') { this._styleHint(el, false); this._hintMode = 'hint'; }   // the hint's own style, restored once the caption is gone
+      return;
+    }
+    const mode = capOn ? 'cap' : 'hint';
+    if ((this._hintMode || 'hint') !== mode) { this._styleHint(el, capOn); this._hintReadAt = null; }
+    this._hintMode = mode;
     if (this._hintEdgeL === this._edgeL && this._hintEdgeR === this._edgeR
       && this._hintReadAt != null && (now - this._hintReadAt) < VW_READ_MS) return;
     this._hintEdgeL = this._edgeL;
@@ -3114,6 +3128,63 @@ export class MotherCallouts {
       ? this.canvas.getBoundingClientRect() : null;
     if (!rect || !Number.isFinite(rect.left) || !Number.isFinite(rect.width)) return;
     el.style.left = `${Math.round((this._stripCX * 0.5 + 0.5) * rect.width + rect.left)}px`;
+    if (capOn) {
+      // A caption wraps inside the pane-free strip (never wider than CAPTION_MAX_PX), so it cannot run under a pane.
+      const strip = (this._edgeR - this._edgeL) * 0.5 * rect.width;
+      const w = Number.isFinite(strip) ? Math.max(CAPTION_MIN_PX, Math.min(CAPTION_MAX_PX, Math.round(strip - 24))) : CAPTION_MAX_PX;
+      el.style.maxWidth = `${w}px`;
+    }
+  }
+
+  /**
+   * @private The hint element's two looks. Hint: one nowrap row of the band's height (as built). Caption: wraps, grows
+   * upward from the same bottom edge (height auto), shrink-wrapped to its text (`width: max-content`, capped by
+   * maxWidth, set by _updateHint from the pane-free strip). The hint's own style is restored afterwards.
+   */
+  _styleHint(el, caption) {
+    const T = Constants.ONBOARDING?.TICKER || {};
+    const row = `${T.ROW_HEIGHT_PX ?? 36}px`;
+    const s = el.style;
+    if (caption) {
+      s.whiteSpace = 'normal';
+      s.height = 'auto';
+      s.minHeight = row;
+      s.width = 'max-content';
+      s.padding = '6px 14px';
+      s.textAlign = 'center';
+      s.lineHeight = '1.35';
+      s.boxSizing = 'border-box';
+    } else {
+      s.whiteSpace = 'nowrap';
+      s.height = row;
+      s.minHeight = '';
+      s.width = '';
+      s.maxWidth = '';
+      s.padding = '0 14px';
+      s.textAlign = '';
+      s.lineHeight = '';
+      s.boxSizing = '';
+    }
+  }
+
+  /**
+   * A short caption in the F1 hint strip (FloorMask hides the comms panel on floor 1, so the furnace test's lines come
+   * here). Shown for `ms` (a new caption replaces the old) whether or not the "Point at a part" hint was dismissed,
+   * only while F1 inspection is active; then the strip returns to its normal state. Empty text (or ms <= 0) clears it now.
+   * @param {string} text
+   * @param {number} ms
+   */
+  showCaption(text, ms) {
+    if (typeof text !== 'string' || !text || !(ms > 0)) {
+      this._capText = '';
+      this._updateHint?.();
+      return;
+    }
+    if (!this._active) return;
+    if (!this._nowMs) this._nowMs = (typeof performance !== 'undefined' ? performance.now() : Date.now());   // before the first frame
+    this._capText = text;
+    this._capUntil = this._nowMs + ms;
+    this._updateHint?.();
   }
 
   /** @private Drop the hint element (the dispose path). */

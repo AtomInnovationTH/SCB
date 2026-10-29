@@ -23,7 +23,6 @@ export const soundVocabulary = {
   playDockClick:       { family: 'PHYSICAL', meaning: 'arm docked to mother',      trigger: 'arm dock' },
   playArmDeploy:       { family: 'PHYSICAL', meaning: 'arm deployed',              trigger: 'arm deploy' },
   playTetherSnap:      { family: 'PHYSICAL', meaning: 'tether snap',               trigger: 'tether snap' },
-  playDeorbitBurn:     { family: 'PHYSICAL', meaning: 'deorbit burn',              trigger: 'arm deorbit sacrifice' },
   playCargoStored:     { family: 'PHYSICAL', meaning: 'cargo stored',              trigger: 'cargo stored' },
   playEvaPuff:         { family: 'PHYSICAL', meaning: 'EVA thruster puff',         trigger: 'astronaut departure jets' },
   playTetherTension:   { family: 'PHYSICAL', meaning: 'tether tension creak',      trigger: 'TETHER_TENSION' },

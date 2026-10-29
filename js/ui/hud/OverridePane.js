@@ -144,6 +144,7 @@ export const F1_BAR_GEOMETRY = Object.freeze({
 export const FURNACE_GAG = Object.freeze({
   PRESSES_TO_ARM: 3,       // press 1 TEST1 (one bag), press 2 TEST2 (two bags, amber flash), press 3 OVERHEAT → COUNTDOWN
   KLAXON_S: 2,             // press 3 only; AudioSystem's klaxon is single-instance (a call while one sounds is ignored)
+  CAPTION_MS: 5000,        // each line's caption in the F1 hint strip (the comms panel is hidden on floor 1)
   TEST_PULSE_MS: 1500,     // TEST2: the steady amber edge flash (CAUTION never pulses; never the red THREAT)
   DEMO_TYPE: 'rocketBody', // the demo bag's piece type (the one a real melt of a rocket body draws); only its reach matters
   DEMO_SIZE_M: 0.7,        // the demo bag's packed-part diameter (m): reach 0.46 m for this type (measured 2026-10-28), inside a tip's limit; it never sets a radiator band
@@ -236,8 +237,16 @@ const PAD_PX = 8;
 const Z_VIGNETTE = 9990;
 const Z_COUNTDOWN = 9995;
 const Z_VEIL = 100000;               // above everything incl. the pause overlay
-/** The demo bags' tip order: TipCargo.pickTip's (azimuth 40 -> 220 -> 140 -> 320), so two bags sit on opposite sides of the ship. */
-const DEMO_TIP_ORDER = Object.freeze([0, 2, 1, 3]);
+/**
+ * The demo bags' tip order: the two tips the F1 camera sees first. MEASURED 2026-10-28 (a one-off browser probe through a
+ * `window.__dbg` patch of main.js; the script was not kept): full-size bag, radiators closed, F1 camera after the
+ * wheel-in, a 9x9 grid over the bag's disc, share in frame and nearest to the camera (nothing of the hull in front):
+ * tips 0 / 1 (the upper pair on screen) 53 / 57 % (1728x1117, daughters closed), 41 / 49 % (1728x1117, moving),
+ * 45 / 49 % (1366x1024, open), 45 / 53 % (1366x1024, moving); tips 2 and 3 (the lower pair) 0 % in every case
+ * (a strut plate or the barrel is in front). The earlier order [0, 2, 1, 3] put the second bag on a hidden tip. No tip
+ * reaches the 90 % bar the plan asked for with the camera left alone ("Leave the camera", owner); the order of 2 and 3 is free.
+ */
+export const DEMO_TIP_ORDER = Object.freeze([0, 1, 2, 3]);
 const NOT_FITTED = 'NOT FITTED';     // RefitPane.ACTUATOR_NOT_FITTED, the flower's present-but-unowned word
 
 const COLOR_PLAYER = `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;     // heritage green — the HUD
@@ -337,6 +346,9 @@ export class OverridePane {
    * @param {function} [deps.drawerOpen] zero-arg bool: the workbench drawer is open (the bar tick shifts the bar clear of it)
    * @param {function} [deps.tipCargo] zero-arg getter of the ship's TipCargo (`showPartBag` / `clearPartBags`); the
    *   furnace test draws its demo bags there. Absent / null ⇒ the test keeps its lines and tones, no drawing
+   * @param {function} [deps.caption] `(text, ms) => void`: the F1 hint strip's caption (MotherCallouts.showCaption). The
+   *   comms panel is hidden on floor 1, so every FURNACE line (and Houston's) is also captioned there while the F1 bar
+   *   is shown; `('', 0)` clears it (the black-out)
    * @param {boolean}  [deps.webdriver] true ⇒ the gag never builds the black veil (so no POST, no reboot)
    * @param {boolean|function} [deps.reducedMotion] override for the matchMedia probe
    * @param {function} [deps.setTimeout] injected timer (default: the global)
@@ -364,6 +376,7 @@ export class OverridePane {
     this._now = typeof deps.now === 'function' ? deps.now : _nowMs;
     this._barTickOn = deps.barTick === true;   // opt-in: the hub passes true (a default timer would show in every pane test)
     this._tipCargoFn = typeof deps.tipCargo === 'function' ? deps.tipCargo : null;
+    this._captionFn = typeof deps.caption === 'function' ? deps.caption : null;
     this._demoTips = [];             // tips wearing a furnace-test demo bag (drawings only; cleared on every exit path)
     this._tapDebounceMs = Number.isFinite(deps.tapDebounceMs) ? deps.tapDebounceMs : F1_BAR_GEOMETRY.TAP_DEBOUNCE_MS;
     this._holdMs = Number.isFinite(deps.holdMs) ? deps.holdMs : F1_BAR_GEOMETRY.HOLD_VENT_MS;
@@ -1656,6 +1669,7 @@ export class OverridePane {
   _enterBlackout() {
     this._gagState = 'BLACKOUT';
     this._clearDemoBags();                                // the bags clear at the black-out
+    this._caption('', 0);                                 // a caption never runs into the black-out (ARMED / CANCEL are 5 s)
     this._removeCountdown();
     this._thud();
     this._vibrate(300);
@@ -1777,6 +1791,7 @@ export class OverridePane {
     this._removeCountdown();
     this._removeVignette();
     this._clearDemoBags();
+    this._caption('', 0);
     this._unshake();
     try { if (this._audio && typeof this._audio.stopKlaxon === 'function') this._audio.stopKlaxon(); } catch (_e) { /* audio */ }
     this._gagState = 'IDLE';
@@ -1961,6 +1976,17 @@ export class OverridePane {
   }
 
   /**
+   * Caption a line in the F1 hint strip (FloorMask hides the comms panel on floor 1). Text is shown only while the F1
+   * bar is shown (`!_barGone()`; false when there is no bar); an empty text always goes through (it clears the strip).
+   * Never throws.
+   */
+  _caption(text, ms) {
+    if (!this._captionFn) return;
+    if (text && this._barGone()) return;
+    try { this._captionFn(text, ms); } catch (_e) { /* dep */ }
+  }
+
+  /**
    * The FURNACE's comms line. `_reactive: true` is the CommsSystem guidance arbiter's bypass for feedback to a key
    * the player JUST pressed; without it the onboarding tiers (commsSuppression tier 0–2) mute the gag and the button
    * reads as dead instead of broken. The gag's warnings lead with WARNING:/CAUTION:/CRITICAL: on purpose (the ALERT-channel
@@ -1968,6 +1994,7 @@ export class OverridePane {
    * which has no prefix) sends it explicitly instead.
    */
   _comm(line) {
+    if (line) this._caption(line.text, FURNACE_GAG.CAPTION_MS);
     const bus = this._bus;
     const E = this._events;
     if (!bus || typeof bus.emit !== 'function' || !E || !E.COMMS_MESSAGE || !line) return;
@@ -1984,6 +2011,7 @@ export class OverridePane {
    * "manual" as the SPECS deep link.
    */
   _commHouston(text) {
+    if (text) this._caption(text, FURNACE_GAG.CAPTION_MS);
     const bus = this._bus;
     const E = this._events;
     if (!bus || typeof bus.emit !== 'function' || !E || !E.COMMS_MESSAGE || !text) return;

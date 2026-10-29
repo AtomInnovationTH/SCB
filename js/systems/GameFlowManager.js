@@ -1325,116 +1325,6 @@ export class GameFlowManager {
     });
     this._wireBigPieceFates();   // BIG_PIECE_FATE reaches the fate executors
 
-    // --- Arm deorbit sacrifice: score + remove debris ---
-
-    eventBus.on(Events.ARM_DEORBIT, (data) => {
-      const { armId, fuelAtStart, totalMass, debrisId } = data;
-
-      const debris = debrisField && debrisId != null
-        ? debrisField.getDebrisById(debrisId) : null;
-
-      // Approximate ΔV: remaining impulse / total mass
-      const arm = armManager ? armManager.arms.find(a => a.id === armId) : null;
-      const totalImpulse = arm
-        ? (arm.type === 'weaver' ? Constants.WEAVER_TOTAL_IMPULSE : Constants.SPINNER_TOTAL_IMPULSE)
-        : 5500;
-      const remainingImpulse = totalImpulse * (fuelAtStart / 100);
-      const deorbitDV = remainingImpulse / totalMass; // m/s
-
-      let deorbitMult = Constants.DEORBIT_MULTIPLIER_BASE;
-      if (fuelAtStart < 5) {
-        deorbitMult = Constants.DEORBIT_MULTIPLIER_EMERGENCY;
-      } else if (deorbitDV > Constants.DEORBIT_HIGH_DV_THRESHOLD) {
-        deorbitMult = Constants.DEORBIT_MULTIPLIER_HIGH_DV;
-      }
-      // Approximate perigee lowering
-      const vCircular = 7450; // m/s at ~800 km
-      const perigeeDropKm = (2 * 7171 * deorbitDV) / vCircular;
-      const estimatedPerigee = 800 - perigeeDropKm; // rough approximation
-      if (estimatedPerigee < Constants.DEORBIT_REENTRY_PERIGEE) {
-        deorbitMult = Constants.DEORBIT_MULTIPLIER_REENTRY;
-      }
-
-      if (debrisField && debrisId != null) {
-        debrisField.removeDebris(debrisId);
-      }
-
-      // A daughter's sacrifice carrying a PENDING big piece (counted at the catch, not yet paid) re-enters it at once, so it
-      // pays the removal fee (`fatePay(d, 'push')`, through `disposeBigPiece`) and does NOT count again: no `clearDebris`, no
-      // mission boundary, no `awardPoints`.
-      if (debris && bigPieces.isPending(debris)) {
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `\u0394V burn: ${deorbitDV.toFixed(1)} m/s. Perigee lowered ~${perigeeDropKm.toFixed(0)} km`,
-          priority: 'info',
-        });
-        const pay = fatePay(debris, 'push');
-        this.disposeBigPiece(debris.id, {
-          fate: 'push', totalCr: pay.totalCr,
-          line: `The daughter burned up with the ${pieceName(debris)}: ${payLine(debris, pay)}`,
-        });
-        if (audioSystem) audioSystem.playDeorbitBurn();
-        return;
-      }
-
-      const assessed = this._wireframeAssessed;
-      // A scoop bag burns up as its members: each is paid as if it had been sacrificed alone and leaves its field row (the
-      // bag has none of its own); the sacrifice is still ONE clear (`clearDebris()` below).
-      const deorbitBodies = this._creditBodies(debris);
-      if (debris && debris.isBag === true && this._refs && this._refs.fieldRegistry) {
-        for (const m of (debris.bagMembers || [])) this._refs.fieldRegistry.markCaught(m);
-      }
-      // A big piece sacrificed before it was ever counted still counts as this one clear, but pays its removal fee (below,
-      // through the ledger) instead of a catch credit.
-      const bigSacrificed = this._bigPiecesOn() ? deorbitBodies.filter((b) => isBigPiece(b, true)) : [];
-      for (const body of deorbitBodies) {
-        if (bigSacrificed.includes(body)) { if (body && body !== debris) body._credited = true; continue; }
-        scoringSystem.awardPoints({
-          debris: body || { type: 'fragment', mass: 100, tumbleRate: 0, brittleness: 0 },
-          method: 'arm',
-          captureTier: 3,
-          tacticalAssessment: assessed,
-          manualCapture: false,
-          fuelEfficient: false,
-          salvageRecovered: false,
-          deorbitSacrifice: true,
-          deorbitMultiplier: deorbitMult,
-          detachedSacrifice: arm?.isDetached || false,
-        });
-        if (body && body !== debris) body._credited = true;
-      }
-      if (debris && debris.isBag === true) debris._credited = true;
-      if (debris && bigSacrificed.length && bigPieces.register(debris)) {
-        const pay = fatePay(debris, 'push');
-        this.disposeBigPiece(debris.id, {
-          fate: 'push', totalCr: pay.totalCr,
-          line: `The daughter burned up with the ${pieceName(debris)}: ${payLine(debris, pay)}`,
-        });
-      }
-
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `\u0394V burn: ${deorbitDV.toFixed(1)} m/s. Perigee lowered ~${perigeeDropKm.toFixed(0)} km`,
-        priority: 'info',
-      });
-
-      gameState.clearDebris();
-      const atBoundary = this._isMissionBoundaryCount(gameState.debrisCleared);
-      // A sacrifice that lands while the trip waits or burns neither closes the stop nor starts a mission.
-      const tripOn = this._trip.isActive();
-      // A sacrifice that completes a mission opens the stop; any other closes it. With the satellite as the stop it opens nothing here.
-      if (!tripOn) this._setResupplyStop(atBoundary && !this._satelliteIsTheStop());
-      // The second credited-clear path (Ctrl+Shift+D → ARM_DEORBIT_CMD → ArmUnit.startDeorbit): the mission boundary check
-      // follows its increment too, so a sacrifice that lands the 5th clear starts mission 2 on time. This path has never
-      // carried the depot decision. At a boundary the trip begins instead, and the mission starts when it ends.
-      if (atBoundary) this._beginTripThen(() => scoringSystem.checkMissionTransition());
-      else if (!tripOn) scoringSystem.checkMissionTransition();
-      // The per-catch progress line rides this credited clear too; its own boundary guard keeps a sacrifice that lands the
-      // 5th clear quiet (there is no ceremony here to speak for it).
-      this._postMissionProgressLine();
-      this.saveGame();
-
-      if (audioSystem) audioSystem.playDeorbitBurn();
-    });
-
     eventBus.on(Events.ARM_LOST, (data) => {
       const penalty = Constants.DETACH_FAIL_PENALTY;
       scoringSystem.totalScore += penalty;
@@ -3894,7 +3784,7 @@ export class GameFlowManager {
    *     restore; DebrisField's profile-based isGuidedChapter() would read M1 there).
    *   • The boundary catch is skipped (debrisUntilShop === perMission ⇔ the count just landed on a multiple):
    *     `_onMissionBoundary` already shows the invitation there. Callers: the CATCH_PROCESSED non-boundary branch (the guard
-   *     is belt-and-braces) and the ARM_DEORBIT sacrifice path (no boundary handling of its own: the guard keeps the 5th clear quiet).
+   *     is belt-and-braces) (the only credited-clear path).
    *   • Suppression: `_postOnboarding` passes from tier 1 on; at tier 0, while the Director's first beats run, it is muted BY
    *     DESIGN: `first_catch` / `second_catch` narrate those catches.
    * @private

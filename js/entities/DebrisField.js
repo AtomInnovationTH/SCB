@@ -4824,7 +4824,7 @@ export class DebrisField {
     eventBus.emit(Events.DEBRIS_REMOVED, { id, type: debris.type, sizeMeter: debris.sizeMeter });
 
     // CLUSTER_CLEARED when this was the last alive member of its bucket. Guards against double-emit when several removal
-    // paths (CATCH_PROCESSED, ARM_DEORBIT, lasso) race the last member.
+    // paths (CATCH_PROCESSED, lasso) race the last member.
     if (clusterId) {
       this._maybeEmitClusterCleared(clusterId);
     }

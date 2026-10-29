@@ -2697,15 +2697,6 @@ export const Constants = {
   // late-game money loop shifts from raw captures to refine-and-contribute.
   CAPTURE_CREDITS_TAPER: { START_X: 1.5, CEILING_X: 2.5 },
 
-  // DEORBIT SACRIFICE SYSTEM — One-way arm missions
-
-  DEORBIT_MULTIPLIER_BASE: 1.5,       // Standard sacrifice bonus
-  DEORBIT_MULTIPLIER_HIGH_DV: 1.8,    // >20 m/s retrograde burn achieved
-  DEORBIT_MULTIPLIER_REENTRY: 2.5,    // Perigee < 200 km (actual reentry)
-  DEORBIT_MULTIPLIER_EMERGENCY: 1.2,  // < 5% fuel at sacrifice
-  DEORBIT_HIGH_DV_THRESHOLD: 20,      // m/s — threshold for high-ΔV bonus
-  DEORBIT_REENTRY_PERIGEE: 200,       // km — perigee for reentry bonus
-
   // METAL SALVAGE ECONOMY — Recoverable metals from debris
 
   METALS: {
@@ -3997,7 +3988,6 @@ export const Constants = {
 
   // --- Tether Detach (risk-reward redline mechanic) ---
   DETACH_SCORE_MULT: 2.0,              // untethered catch multiplier
-  DETACH_SACRIFICE_MULT: 2.5,          // deorbit sacrifice multiplier
   DETACH_FAIL_PENALTY: -500,           // score penalty for lost arm
   DETACH_FUEL_WARNING_25: 0.25,        // fraction triggers warning comms
   DETACH_FUEL_WARNING_10: 0.10,        // fraction triggers critical comms

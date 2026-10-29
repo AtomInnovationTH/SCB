@@ -93,6 +93,15 @@ const PART_BAG_HALO_R = 0.25;             // halo radius, in bag radii
 const PART_BAG_GLOW_WINDOW = 0.36;        // the glow texture covers dir.y, dir.z in -0.36..0.36 (a cap about 21 deg across), black outside; the far side is pushed out of range
 export const PART_BAG_WEAVE_SIZE = 64;
 export const PART_BAG_GLOW_SIZE = 64;
+// A furnace-TEST (demo) bag only: a dull-red warmth over the WHOLE bag, because the focus glow sits on the +X cap and
+// faces away from the F1 camera. The bag holds metal at 660 C, above the ~525 C at which hot solids start to glow dull
+// red (ESTIMATE: Draper point, ~525 C; the colour, strength and 1.015 skin offset below are looks, not measurements).
+// It rises with the open fraction. A real melt bag gets none of this (the owner approved its look: "Looks right").
+const PART_BAG_WARM_COLOR = 0xa01804;
+const PART_BAG_WARM_MAX = 0.8;            // opacity at frac 1
+const PART_BAG_WARM_SCALE = 1.015;        // just outside the cloth so the two skins never z-fight
+/** The demo bag's whole-bag warmth (0..PART_BAG_WARM_MAX) for an open fraction: rises with it. */
+export function demoBagWarmth(frac) { return PART_BAG_WARM_MAX * clamp01(Number.isFinite(frac) ? frac : 1); }
 
 function seededRng(seed) {                 // mulberry32
   let a = (Math.imul(seed | 0, 2654435761) + 0x9e3779b9) >>> 0;
@@ -643,12 +652,39 @@ export class TipCargo {
     const mesh = b.mesh;
     if (mesh.parent !== rec.hinge) rec.hinge.add(mesh);          // pinned to the radiator: it turns with the petal and the ship
     mesh.layers.mask = rec.hinge.layers.mask;                    // the ship's near-field pass
+    this._syncWarmth(b);
     mesh.name = `PartBag_${i}`;
     this._latchHingeInto(rec, _v1);
     mesh.position.copy(_v1).addScaledVector(_X, radiusM * M);    // the bag's centre: latch + reach along the boom, as a real bag sits
     mesh.scale.setScalar((spec.sizeM / 2) * Math.cbrt(Math.max(b.frac, 0.02)) * M);
     mesh.visible = true;
     return true;
+  }
+
+  /**
+   * A demo bag wears the dull-red warmth skin (a child mesh over the same geometry), a real bag never does: add it,
+   * update its strength to the open fraction, or take it off when a real melt took the bag over.
+   */
+  _syncWarmth(b) {
+    const mesh = b.mesh;
+    if (!mesh) return;
+    if (!b.demo) {
+      if (b.warm) { mesh.remove(b.warm); b.warm.material.dispose(); b.warm = null; }
+      return;
+    }
+    if (!b.warm) {
+      const w = new THREE.Mesh(mesh.geometry, new THREE.MeshBasicMaterial({
+        color: PART_BAG_WARM_COLOR, transparent: true, depthWrite: false, toneMapped: false,
+      }));
+      w.name = `PartBagWarm_${b.i}`;
+      w.scale.setScalar(PART_BAG_WARM_SCALE);
+      w.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;   // see-through skin (CONVENTIONS §9 rule 6)
+      mesh.add(w);
+      b.warm = w;
+    }
+    b.warm.geometry = mesh.geometry;                              // the cloth's skin is rebuilt as it opens: follow it
+    b.warm.layers.mask = mesh.layers.mask;
+    b.warm.material.opacity = demoBagWarmth(b.frac);
   }
 
   /** Is tip i's radiator open past the band row for `radiusM` (where a real bag would cap it)? Unknown angle reads as not past. */
@@ -665,8 +701,8 @@ export class TipCargo {
   /** Is a part bag shown on tip i (or on any tip)? */
   hasPartBag(i) { return i === undefined ? this._partBags.some(Boolean) : !!this._partBags[i]; }
 
-  /** The part bag on tip i, as `{type, sizeM, radiusM, frac, builds}` (a copy; `builds` = how many skins have been built for it so far), or null. */
-  partBagAt(i) { const b = this._partBags[i]; return b ? { type: b.type, sizeM: b.sizeM, radiusM: b.radiusM, frac: b.frac, builds: b.builds, demo: b.demo === true } : null; }
+  /** The part bag on tip i, as `{type, sizeM, radiusM, frac, builds, demo, warmth}` (a copy; `builds` = how many skins have been built for it so far; `warmth` = the demo bag's whole-bag red, 0 for a real bag), or null. */
+  partBagAt(i) { const b = this._partBags[i]; return b ? { type: b.type, sizeM: b.sizeM, radiusM: b.radiusM, frac: b.frac, builds: b.builds, demo: b.demo === true, warmth: b.warm ? b.warm.material.opacity : 0 } : null; }
 
   /** Take the part bag off tip `i` (all four when `i` is omitted): the drawing goes and the radiator ceiling it set is lifted. `demoOnly` leaves a real melt's bag alone. */
   clearPartBags(i, demoOnly = false) {
@@ -678,6 +714,7 @@ export class TipCargo {
       if (b.mesh) {
         if (b.mesh.parent) b.mesh.parent.remove(b.mesh);
         b.mesh.visible = false;
+        if (b.warm) { b.warm.material.dispose(); b.warm = null; }   // its geometry is the cloth's, disposed below
         b.mesh.geometry.dispose();
         b.mesh.material.dispose();                 // per bag; the shared glow and weave textures stay
       }

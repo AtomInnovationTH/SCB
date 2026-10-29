@@ -2699,6 +2699,8 @@ async function init() {
       drawerOpen: () => !!(workbenchPane && workbenchPane.isOpen()),
       // FURNACE test: its demo melt bags are drawn on the tips through TipCargo (read live: the ship is built before the pane).
       tipCargo: () => (player && player.tipCargo) || null,
+      // The comms panel is hidden on floor 1: the gag's lines are also captioned in the F1 hint strip.
+      caption: (text, ms) => { if (motherCallouts && typeof motherCallouts.showCaption === 'function') motherCallouts.showCaption(text, ms); },
     });
     hotkeyOverlay.mountF1Button(document.getElementById('hud-overlay'));   // H1: floor-1 "?" (FloorMask f1bar pane)
     if (hud && hud.paneDensity) {

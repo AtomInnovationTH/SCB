@@ -551,9 +551,9 @@ export class InputManager {
     }
 
     // Cmd/Ctrl combos belong to the browser (reload, save, find, select all). Only the combos
-    // HotkeyOverlay lists get through: Ctrl+Shift+D, and Ctrl+D while the dev overlay flag is on.
+    // HotkeyOverlay lists get through: only Ctrl+D while the dev overlay flag is on (Ctrl+Shift+D is nothing).
     if (e.metaKey || e.ctrlKey) {
-      const listed = e.code === 'KeyD' && e.ctrlKey && !e.metaKey && (e.shiftKey || Constants.DEBUG?.DEBUG_OVERLAY_HOTKEY);
+      const listed = e.code === 'KeyD' && e.ctrlKey && !e.metaKey && !e.shiftKey && Constants.DEBUG?.DEBUG_OVERLAY_HOTKEY;
       if (!listed) { this.keys[e.code] = false; return; }
     }
 
@@ -1056,12 +1056,8 @@ export class InputManager {
       //   D / Shift+D work the same whether or not a daughter is being piloted.
       //   Ctrl+D       → debug overlay, DEV ONLY (Constants.DEBUG.DEBUG_OVERLAY_HOTKEY, flipped by ?debug=1). Off in
       //     production so Ctrl+D stays the browser's bookmark shortcut.
-      //   Ctrl+Shift+D → deorbit sacrifice
       case 'KeyD':
-        if (e.ctrlKey && e.shiftKey && isGameplay) {
-          e.preventDefault();
-          eventBus.emit(Events.ARM_DEORBIT_CMD);
-        } else if (e.ctrlKey) {
+        if (e.ctrlKey) {
           // Dev-only: when the flag is off we do NOTHING (no preventDefault, so the browser's Ctrl+D works). The
           // branch still CLAIMS the combo either way, so Ctrl+D can never fall through to the bare-D deploy path below.
           if (Constants.DEBUG.DEBUG_OVERLAY_HOTKEY) {
