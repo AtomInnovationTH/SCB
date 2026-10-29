@@ -84,7 +84,7 @@ export const ACTUATOR_CHIPS = Object.freeze({
   rosaFurl:    Object.freeze({ sub: 'POWER',   name: 'ARRAYS',  on: 'FURLED',    words: Object.freeze({ FURLED: 'FURLED', DEPLOYED: 'DEPLOYED' }) }),
   rosaFeather: Object.freeze({ sub: 'POWER',   name: 'FEATHER', on: 'FEATHERED', words: Object.freeze({ FEATHERED: 'ON', FLAT: 'FLAT' }) }),
   struts:      Object.freeze({ sub: 'BERTHS',  name: 'STRUTS',  on: 'DEPLOYED',  words: Object.freeze({ DEPLOYED: 'DEPLOYED', STOWED: 'STOWED' }) }),
-  flower:      Object.freeze({ sub: 'THERMAL', name: 'FLOWER',  on: 'OPEN',      words: Object.freeze({ OPEN: 'OPEN', CLOSED: 'CLOSED', MOVING: 'MOVING', FOLDED: 'FOLDED' }) }),
+  flower:      Object.freeze({ sub: 'THERMAL', name: 'RADIATORS', on: 'OPEN',      words: Object.freeze({ OPEN: 'OPEN', CLOSED: 'CLOSED', MOVING: 'MOVING', FOLDED: 'FOLDED' }) }),
 });
 export const ACTUATOR_NOT_FITTED = 'NOT FITTED';
 /** Chip minimum height (px): desktop row, and the 44 pt HIG box on glass (`deps.glass`; owner 2026-09-06: a new

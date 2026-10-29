@@ -1157,7 +1157,7 @@ export class CodexViewerUI {
           ${sectionHeader('BRIEFING')}
           <div style="font-family:var(--font-ui);font-size:15px;color:#ccc;line-height:1.8;white-space:pre-wrap;">${decorateGlossary(GestureHints.glassWords(entry.fullText), { once: true })}</div>
           ${this._verifiedStampHtml(entry)}
-        </div>`;
+        </div>${this._photoPairsHtml(entry)}`;
     }
 
     let realWorldHtml = '';
@@ -1285,6 +1285,47 @@ export class CodexViewerUI {
       el.addEventListener('mouseleave', () => { el.style.background = ''; });
       el.addEventListener('click', () => jumpTo(el.dataset.id));
     });
+  }
+
+  /**
+   * The entry's photo pairs (owner 2026-10-29, DECISIONS §55 row 6): one row per pair, its pictures side by side (stacked
+   * in the narrow layout), the caption and a credit line under each picture. Every string is escaped; a `src` must be a
+   * relative bundled path and a link must be https, so a bad data row prints text, never markup or a foreign script.
+   * Pure. Returns '' for an entry without pairs.
+   * @param {{photoPairs?: Array<{caption?: string, images?: Array<object>}>}} entry
+   * @returns {string}
+   */
+  _photoPairsHtml(entry) {
+    const pairs = entry && Array.isArray(entry.photoPairs) ? entry.photoPairs : [];
+    if (!pairs.length) return '';
+    const safeSrc = (s) => (typeof s === 'string' && /^[\w][\w./-]*$/.test(s) && !s.includes('..')) ? escapeHtml(s) : '';
+    const safeUrl = (u) => (typeof u === 'string' && /^https:\/\//.test(u)) ? escapeHtml(u) : '';
+    const link = (label, url) => {
+      const href = safeUrl(url);
+      return href
+        ? `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#7fc8e8;">${escapeHtml(label)}</a>`
+        : escapeHtml(label);
+    };
+    const flow = this._narrow ? 'flex-direction:column;' : 'flex-direction:row;';
+    const rows = pairs.map((pair) => {
+      const figs = (Array.isArray(pair.images) ? pair.images : []).map((im) => {
+        const src = safeSrc(im && im.src);
+        if (!src) return '';
+        const parts = [escapeHtml(im.credit || '')];
+        if (im.licence) parts.push(link(im.licence, im.licenceUrl));
+        if (im.sourceUrl) parts.push(link('Wikimedia Commons', im.sourceUrl), 'resized');
+        return `<figure class="codex-photo" style="flex:1 1 0;min-width:0;margin:0;">
+          <img src="${src}" alt="${escapeHtml(im.alt || '')}" loading="lazy"
+            style="display:block;width:100%;height:auto;border:1px solid rgba(255,255,255,0.12);border-radius:4px;">
+          <figcaption style="font-size:10px;line-height:1.5;color:#889;margin-top:4px;overflow-wrap:anywhere;">${parts.filter(Boolean).join(' · ')}</figcaption>
+        </figure>`;
+      }).join('');
+      return `<div class="codex-photo-pair" style="margin-bottom:18px;">
+        <div style="display:flex;${flow}gap:12px;">${figs}</div>
+        <div style="font-family:var(--font-ui);font-size:14px;color:#cde;line-height:1.6;margin-top:8px;">${escapeHtml(pair.caption || '')}</div>
+      </div>`;
+    }).join('');
+    return `<div class="codex-photo-pairs" style="margin-bottom:22px;">${rows}</div>`;
   }
 
   _verifiedStampHtml(entry) {

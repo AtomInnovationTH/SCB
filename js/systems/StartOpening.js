@@ -111,6 +111,10 @@ function flowerFitted(p) {
  * The real SET actuators and the "already commanded open" reader over the player ship and the arm manager (getters:
  * both are made after boot).
  *
+ * Softer opening (owner 2026-10-29, DECISIONS §55 row 4): the wings, the radiators and the struts each speed up and slow
+ * down over OPENING_EASE_S (1 s) at their own unchanged top speed, all three starting on the same first action; any other
+ * command to a part drops its ease at once (`setRosaFurl` / `setFlowerPose` take `{ ease: true }`, `restStruts` marks the arms).
+ *
  * Radiators go through the ship's `setFlowerPose(OPEN_POSE)` (146°), then emit THERMAL_FLOWER_INPUT
  * { deploying: true } — exactly what the O key and the F1 bar emit — so ThermalSystem sees a player opening (its
  * auto-open lets go, the 30 s player-wins window starts, the codex trigger fires). No click and no THERMAL comms
@@ -123,7 +127,7 @@ export function shipOpeningActuators({ getPlayer, getArmManager, bus = eventBus 
     wings() {
       const p = getPlayer();
       if (!p || typeof p.setRosaFurl !== 'function') return false;
-      if (!(p._rosaFurlTarget >= 0.5)) p.setRosaFurl(1.0);
+      if (!(p._rosaFurlTarget >= 0.5)) p.setRosaFurl(1.0, { ease: true });
       return true;
     },
     radiators() {
@@ -132,7 +136,7 @@ export function shipOpeningActuators({ getPlayer, getArmManager, bus = eventBus 
       if (flowerCommandedOpen(p)) return true;               // the player already opened it (their own O): leave it
       if (p.flowerHandoffHeld === true || p.flowerCommandsLocked === true) return false;       // held for a catch hand-off or a daughter's carry: the ship says so itself
       const FL = Constants.THERMAL.FLOWER;
-      if (p.setFlowerPose(FL.OPEN_POSE) === null) return false;
+      if (p.setFlowerPose(FL.OPEN_POSE, { ease: true }) === null) return false;
       bus.emit(Events.THERMAL_FLOWER_INPUT, { deploying: true });
       return true;
     },

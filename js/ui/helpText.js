@@ -522,6 +522,7 @@ const FAQ_TEXT = {
       faq_beta: { q: 'เกมเสร็จแล้วหรือยัง?', a: 'ยังไม่เสร็จ Space Cowboy เป็นเวอร์ชันทดสอบช่วงแรก (เบตา) และยังไม่เปิดให้คนทั่วไปเล่น' },
       faq_save: { q: 'เกมบันทึกไหม?', a: 'บันทึก ในเบราว์เซอร์บนอุปกรณ์เครื่องนี้ เครดิต อัปเกรด และความคืบหน้าของภารกิจจะอยู่จนกว่าคุณจะเริ่มเกมใหม่' },
       faq_devices: { q: 'เล่นบนอะไรได้บ้าง?', a: 'คอมพิวเตอร์ที่มีคีย์บอร์ด หรือ iPad ที่ถือแนวนอน หลังเข้าเว็บครั้งแรกแล้วเล่นได้โดยไม่ต้องใช้อินเทอร์เน็ต' },
+      faq_flower: { q: 'ทำไมยานถึงหน้าตาเหมือนดอกไม้?', a: 'แผงระบายความร้อนทั้ง 4 แผงของยานพับแบนตอนปล่อยยาน แล้วเปิดออกที่ 146° เพื่อระบายความร้อนสู่อวกาศ มองจากด้านหลัง แผงที่เปิดทั้งสี่ดูเหมือนกลีบดอกไม้' },
     },
   },
   ja: {
@@ -541,6 +542,7 @@ const FAQ_TEXT = {
       faq_beta: { q: '完成していますか?', a: 'まだです。Space Cowboy は初期のテスト版 (ベータ) で、まだ一般には公開されていません。' },
       faq_save: { q: 'セーブされますか?', a: 'はい、この端末のブラウザに保存されます。クレジット、アップグレード、ミッションの進み具合は、新しいゲームを始めるまで残ります。' },
       faq_devices: { q: '何で遊べますか?', a: 'キーボード付きのコンピューターか、横向きにした iPad です。最初に開いた後は、インターネットなしで動きます。' },
+      faq_flower: { q: 'なぜ船は花のように見えるのですか?', a: '船の 4 枚のラジエーターは、打ち上げのときは平らにたたまれ、146° まで開いて熱を宇宙へ逃がします。後ろから見ると、開いた 4 枚の板が花びらのように見えます。' },
     },
   },
   es: {
@@ -560,6 +562,7 @@ const FAQ_TEXT = {
       faq_beta: { q: '¿Está terminado?', a: 'Todavía no. Space Cowboy es una versión de prueba temprana (una beta) y aún no está abierta al público.' },
       faq_save: { q: '¿Se guarda la partida?', a: 'Sí, en el navegador de este dispositivo. Los créditos, las mejoras y el avance de misiones se quedan hasta que empieces una partida nueva.' },
       faq_devices: { q: '¿En qué puedo jugar?', a: 'En un ordenador con teclado o en un iPad en horizontal. Tras tu primera visita funciona sin internet.' },
+      faq_flower: { q: '¿Por qué la nave parece una flor?', a: 'Los cuatro radiadores de la nave se pliegan planos para el lanzamiento y luego se abren a 146° para soltar calor al espacio. Vistas desde atrás, las cuatro placas abiertas parecen pétalos de flor.' },
     },
   },
   pt: {
@@ -579,6 +582,7 @@ const FAQ_TEXT = {
       faq_beta: { q: 'Está pronto?', a: 'Ainda não. Space Cowboy é uma versão de teste inicial (beta) e ainda não está aberta ao público.' },
       faq_save: { q: 'O jogo salva?', a: 'Sim, no seu navegador, neste dispositivo. Créditos, melhorias e progresso das missões ficam salvos até você começar um jogo novo.' },
       faq_devices: { q: 'Em que posso jogar?', a: 'Num computador com teclado ou num iPad na horizontal. Depois da primeira visita, funciona sem internet.' },
+      faq_flower: { q: 'Por que a nave parece uma flor?', a: 'Os quatro radiadores da nave se dobram planos para o lançamento e depois se abrem a 146° para soltar calor no espaço. Vistas por trás, as quatro placas abertas parecem pétalas de flor.' },
     },
   },
   hi: {
@@ -598,6 +602,7 @@ const FAQ_TEXT = {
       faq_beta: { q: 'क्या यह पूरा हो चुका है?', a: 'अभी नहीं। Space Cowboy एक शुरुआती परीक्षण संस्करण (बीटा) है, और अभी आम जनता के लिए खुला नहीं है।' },
       faq_save: { q: 'क्या खेल सेव होता है?', a: 'हाँ, इस डिवाइस पर आपके ब्राउज़र में सेव होता है। क्रेडिट, अपग्रेड और मिशन की प्रगति नया खेल शुरू करने तक बनी रहती है।' },
       faq_devices: { q: 'यह किस पर खेला जा सकता है?', a: 'कीबोर्ड वाले कंप्यूटर पर, या iPad पर (आड़ा पकड़कर)। पहली बार खोलने के बाद यह बिना इंटरनेट चलता है।' },
+      faq_flower: { q: 'यान फूल जैसा क्यों दिखता है?', a: 'यान के चार रेडिएटर प्रक्षेपण के लिए सपाट मुड़े रहते हैं, फिर 146° तक खुलकर गरमी को अंतरिक्ष में छोड़ते हैं। पीछे से देखने पर खुली हुई चारों पट्टियाँ फूल की पंखुड़ियों जैसी दिखती हैं।' },
     },
   },
   ta: {
@@ -617,6 +622,7 @@ const FAQ_TEXT = {
       faq_beta: { q: 'இது முழுமையாகத் தயாரா?', a: 'இன்னும் இல்லை. Space Cowboy ஒரு ஆரம்பச் சோதனைப் பதிப்பு (பீட்டா); பொதுமக்களுக்கு இன்னும் திறக்கப்படவில்லை.' },
       faq_save: { q: 'விளையாட்டு சேமிக்கப்படுமா?', a: 'ஆம், இந்தச் சாதனத்தில் உங்கள் உலாவியில் சேமிக்கப்படும். கிரெடிட், மேம்பாடுகள், பணி முன்னேற்றம் நீங்கள் புதிய விளையாட்டைத் தொடங்கும் வரை இருக்கும்.' },
       faq_devices: { q: 'எதில் விளையாடலாம்?', a: 'விசைப்பலகை உள்ள கணினியில், அல்லது பக்கவாட்டில் திருப்பிப் பிடித்த iPad-இல். முதல் வருகைக்குப் பிறகு இணையம் இல்லாமலும் இயங்கும்.' },
+      faq_flower: { q: 'கலம் ஏன் பூ போலத் தெரிகிறது?', a: 'கலத்தின் நான்கு ரேடியேட்டர்கள் ஏவுதலுக்காகத் தட்டையாக மடிந்திருக்கும்; பின்னர் 146° வரை திறந்து வெப்பத்தை விண்வெளியில் விடுகின்றன. பின்னால் இருந்து பார்த்தால், திறந்த நான்கு தகடுகள் பூவிதழ்கள் போலத் தெரிகின்றன.' },
     },
   },
 };

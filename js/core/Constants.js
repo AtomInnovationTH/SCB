@@ -307,7 +307,7 @@ export const Constants = {
     SINK_K: 205,                // tuned (est): Earth IR alone on a plate seeing ~⅓ Earth (237 W/m²)
                                 // gives ≈ 193 K; daylight albedo and the warm hull in view raise it
     HULL_AREA_M2: 0.3,          // tuned (est): MLI hull leak as ε 0.85-equivalent area (~6 m² × ε* 0.03 / 0.85 + body cells' share)
-    RAD_AREA_M2: 7.20,          // 4 plates × 1.50 × 0.60 m (3.60 m² rectangle; the built meshes give 3.582 — the wings end 15 mm short) × 2 faces at full bloom (test-RadiatorShort pins it to the geometry)
+    RAD_AREA_M2: 7.17,          // 4 × (1.50 × 0.60 − 2 × (1 − π/4) × 0.10²) × 2 = 7.1657 m²: 4 plates × 1.50 × 0.60 m, less the two outer tip corners of each plate (radius 0.10 m, DECISIONS §55 row 3), × 2 faces at full bloom (the built meshes give 3.582 per face less the corners — the wings end 15 mm short); test-RadiatorShort pins it to the geometry
     G_CLOSED: 0.20,             // folded flat (§15 row 4) each pack shows one 0.32 m face outward (~¼ of
                                 // the two-sided area), partly hidden by the barrel and wings → ~0.2
     SUN_HULL_W: 110,            // tuned (est): daylight sun reaching the bay — body cells' waste heat share + MLI leak (0 in shadow)
@@ -350,12 +350,12 @@ export const Constants = {
   HEATER: {
     ENABLED: true,              // the one-line veto
     HOLD_C: 0,                  // °C — lithium-ion charge floor (cells must stay above freezing)
-    // Measured from the model (SHIP_HEAT constants): radiator at 180° (openFrac 1, A_eff 7.50 m²), eclipse (no
-    // SUN_HULL_W), base load 500 W: σ·ε·A_eff·(273.15⁴ − 205⁴) − 500 W = 873.9 W → rounded up to 880 W.
+    // Measured from the model (SHIP_HEAT constants): radiator at 180° (openFrac 1, A_eff 7.47 m²), eclipse (no
+    // SUN_HULL_W), base load 500 W: σ·ε·A_eff·(273.15⁴ − 205⁴) − 500 W = 868.4 W at RAD_AREA_M2 7.17 (873.9 at the square-cornered 7.20) → rounded up to 870 W.
     // test-PowerCosts recomputes it. Sized with the coolant forced to flow 1 (worst case, valve stuck open) — in
     // normal running the coolant is off at 0 °C and the heaters need only the hull leak (≈ 55 W at 0 °C), so the cap
     // is far above any real need.
-    MAX_W: 880,
+    MAX_W: 870,
     PULL_S: 20,                 // battery-clock s — how hard the hold pulls back to HOLD_C
     LINE_AFTER_S: 10,           // game s of heater running before the comms line
     LINE_EVERY_S: 300,          // at most one heater line per 5 min of game time
@@ -1889,6 +1889,11 @@ export const Constants = {
     // PlayerSatellite.rosaSpoolAxisM() is the single source the runtime AND the coil-clearance pins all read.
     ROSA_ROOT_DRUM_FRAC: 0.4,     // — spool-axis standoff, in drum radii
     ROSA_FURL_RATE: 0.40,          // 1/s — progress change per second when furling/unfurling (~2.5 s full cycle)
+    // OPENING_EASE_S (owner 2026-10-29, DECISIONS §55 row 4, "Softer opening"): the time (s) each part takes to reach its top speed
+    // and to slow down again in the opening's OWN moves only (StartOpening's wings, radiators and struts, and the first-ever strut
+    // show). The top speeds do not change (wings ROSA_FURL_RATE, radiators 15°/s, struts STRUT_SLEW_RATE), a part still never
+    // waits for another, and any other command to the part drops the ease the same frame.
+    OPENING_EASE_S: 1.0,           // s — ramp time at each end of an opening move
     // Feather (Shift+",") — park the wings edge-on to a hazard. Snappier than a full furl (it only swings the tilt
     // pivot, no roll-out), so retract is fast and most power is retained until the edge turns away from the sun.
     ROSA_FEATHER_RATE: 0.60,       // 1/s — feather progress change per second
@@ -1991,7 +1996,8 @@ export const Constants = {
   },
 
   // THERMAL: aft flower hardware — 4 rigid aft-pivot struts with radiator plates and inert tip hardpoints. The
-  // struts "open LIKE A FLOWER" (owner grammar — keep verbatim).
+  // struts open out round the aft end like the plates of a flower; player-visible text calls them plain radiator
+  // struts (DECISIONS §55 row 6: flower words only in the FAQ question and the library entry).
   // Every number below is pinned by tmp/flower-pose-band.mjs (margin = 0.21199·R + 0.20021, conservative ceiling
   // 147.35° at R=4, straight-aft limit R=1.714 m, cargo pose 1.9 m bag +0.780 m) and tmp/flower-mass-budget.mjs.
   // The aft-rim allocation table is BINDING: stations at az 45/135/225/315 ± 11.25° (the hinges at 40/140/220/320

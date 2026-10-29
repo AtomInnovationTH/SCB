@@ -884,7 +884,7 @@ export class InputManager {
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'THERMAL',
                 text: deploying
-                  ? 'Radiator opening to 146° — the struts open LIKE A FLOWER.'
+                  ? 'Radiator opening to 146° — the struts swing out.'
                   : 'Radiator closing — folding flat along the hull. Engines still work.',
                 priority: 'info',
                 _reactive: true,

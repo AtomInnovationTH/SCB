@@ -181,6 +181,10 @@ export class CodexSystem {
       fullText: interpolate(i.fullText || '', Constants),
       realWorld: i.realWorld ? interpolate(i.realWorld, Constants) : null,
       formula: i.formula || null,
+      // Photo pairs (owner 2026-10-29, DECISIONS §55 row 6): `[{caption, images: [{src, alt, credit, licence, licenceUrl,
+      // sourceUrl}]}]`, English only, bundled under data/library/. The reading pane prints them under the briefing;
+      // absent → []. Copied as data (not interpolated: captions carry no live-value placeholders).
+      photoPairs: Array.isArray(e.photoPairs) ? e.photoPairs : [],
       unlockHint: i.unlockHint || 'Discover through gameplay.',
       trlRationale: hasTrl ? (i.trlRationale || 'Established science (default)') : null,
       // `startUnlocked` entries are readable immediately: PLAYBOOK quick-start + WORLD_INDUSTRY exposition, plus one

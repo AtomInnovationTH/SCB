@@ -166,6 +166,11 @@ export const HOTKEY_GROUPS = [
         a: 'Yes, in your browser on this device. Credits, upgrades and mission progress stay until you start a new game.' },
       { id: 'faq_devices', q: 'What can I play on?',
         a: 'A computer with a keyboard, or an iPad held sideways. After your first visit it works without internet.' },
+      // The one flower question (owner 2026-10-29, DECISIONS §55 row 6): the FAQ and the Tech library are the only
+      // places the flower look is named; the answer states the engineering reason first.
+      { id: 'faq_flower', q: 'Why does the ship look like a flower?',
+        a: 'The ship\'s four radiators fold flat for launch, then open to 146° to shed heat into space. Seen from behind, the four open plates look like flower petals.',
+        link: 'folded_to_fly' },
     ],
   },
   {

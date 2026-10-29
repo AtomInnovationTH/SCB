@@ -1157,7 +1157,8 @@
         "kevlar_mli",
         "space_radiator",
         "loop_heat_pipe",
-        "selective_surfaces"
+        "selective_surfaces",
+        "folded_to_fly"
       ],
       "i18n": {
         "title": "Thermal Management",
@@ -1621,7 +1622,8 @@
         "bolas_weapon",
         "tether_materials",
         "net_neck_winch",
-        "fore_bulkhead"
+        "fore_bulkhead",
+        "folded_to_fly"
       ],
       "i18n": {
         "title": "Miura-Ori Net Folding",
@@ -1676,8 +1678,8 @@
       ],
       "i18n": {
         "title": "Net Spin & the Yo-Yo Despin",
-        "shortText": "The net launcher spins the canister; radius growth, not torque, is what slows the blossom.",
-        "fullText": "A capture net leaves its launcher spinning fast: the spin table torques the canister, and the daughter's reaction wheel soaks up the equal-and-opposite kick. Once it is flying free, no external torque acts on the net, so its angular momentum L = Iω is conserved.\n\nAs the rim weights fly outward and the mouth blossoms open, the moment of inertia grows with radius squared, so the spin rate must fall to keep L fixed. This is the moment-of-inertia half of the yo-yo despin, a technique invented at JPL and long used on sounding rockets (which also cuts its weights loose to carry the spin away), with no fuel and no brakes. The settled spin ({{CAPTURE_NET.LARGE.SPIN_HZ*60}}/{{CAPTURE_NET.MEDIUM.SPIN_HZ*60}}/{{CAPTURE_NET.SMALL.SPIN_HZ*60}} RPM by net class) keeps centripetal tension on each rim weight high enough to hold the mouth open in zero gravity until the cinch fires.",
+        "shortText": "The net launcher spins the canister; radius growth, not torque, is what slows the spin.",
+        "fullText": "A capture net leaves its launcher spinning fast: the spin table torques the canister, and the daughter's reaction wheel soaks up the equal-and-opposite kick. Once it is flying free, no external torque acts on the net, so its angular momentum L = Iω is conserved.\n\nAs the rim weights fly outward and the mouth opens out, the moment of inertia grows with radius squared, so the spin rate must fall to keep L fixed. This is the moment-of-inertia half of the yo-yo despin, a technique invented at JPL and long used on sounding rockets (which also cuts its weights loose to carry the spin away), with no fuel and no brakes. The settled spin ({{CAPTURE_NET.LARGE.SPIN_HZ*60}}/{{CAPTURE_NET.MEDIUM.SPIN_HZ*60}}/{{CAPTURE_NET.SMALL.SPIN_HZ*60}} RPM by net class) keeps centripetal tension on each rim weight high enough to hold the mouth open in zero gravity until the cinch fires.",
         "realWorld": "RemoveDEBRIS net demo (2018); yo-yo despin invented at JPL, common on sounding rockets.",
         "formula": "L = I·ω = const;  I ∝ r²   (spin rate falls as the net opens)",
         "trlRationale": "RemoveDEBRIS net demo (2018); yo-yo despin invented at JPL, common on sounding rockets.",
@@ -2754,7 +2756,8 @@
       "related": [
         "heritage_hubble_servicing",
         "space_elevator",
-        "what_10000kg_buys"
+        "what_10000kg_buys",
+        "folded_to_fly"
       ],
       "i18n": {
         "title": "JWST: The Next Horizon",
@@ -2764,6 +2767,123 @@
         "trlRationale": "Operational flagship observatory (since 2022).",
         "unlockHint": "Win the mission via the space elevator."
       }
+    },
+    {
+      "id": "folded_to_fly",
+      "category": "HERITAGE",
+      "trl": 9,
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "rosa_solar_array",
+        "jwst_horizon",
+        "miura_ori_net",
+        "space_radiator",
+        "thermal_management"
+      ],
+      "i18n": {
+        "title": "Folded to fly, opened to work",
+        "shortText": "Rockets are small and spacecraft are big, so many missions fold for launch and open in orbit. The ship's radiators do the same.",
+        "fullText": "Rockets are small and spacecraft are big, so many missions fold. Four examples:\n\nJWST: the mirror's two side wings fold back for launch, and the sunshield and mirror open in a long sequence of more than 50 major deployments.\n\nNASA's starshade design: its petals unfurl from a stowed launch package. NASA calls it flower-shaped. It has not flown.\n\nJapan's Space Flyer Unit (1995) carried a Miura-fold array, which opens in one motion and needs fewer motors.\n\nRoll-out solar arrays: NASA's ROSA wings on the DART spacecraft (2021) are lighter, more compact and stiffer than traditional solar arrays, and slowly unfurl. The ISS's iROSA arrays are a larger version.\n\nThe ship's four radiators fold along the hull at 0° and open to 146° in orbit. Folded, the ship is compact in the rocket. Open, the radiators face cold space and shed heat. Seen from behind, the four open plates look like petals. The pictures below set a few plants beside the parts of the ship that echo them.",
+        "realWorld": "JWST launched 25 December 2021 (over 50 major deployments, 178 release mechanisms; NASA). Space Flyer Unit launched 18 March 1995 and was retrieved by STS-72 in January 1996 (ISAS). iROSA arrays first launched 3 June 2021 (NASA). The starshade has only been built as ground prototypes (NASA/JPL).",
+        "trlRationale": "Folding mirrors, roll-out arrays and folded arrays have flown (JWST, ROSA, Space Flyer Unit); the starshade has not.",
+        "unlockHint": "Begin flying the mission."
+      },
+      "lastVerified": "2026-10",
+      "photoPairs": [
+        {
+          "caption": "Ixora (เข็ม): four even petals round a centre. The ship's four radiators open to 146° to shed heat into cold space; seen from behind, the open plates make the same shape.",
+          "images": [
+            {
+              "src": "data/library/flower/ixora.jpg",
+              "alt": "Ixora flowers, four even petals round a centre",
+              "credit": "Peterkwashie",
+              "licence": "CC BY-SA 4.0",
+              "licenceUrl": "https://creativecommons.org/licenses/by-sa/4.0/deed.en",
+              "sourceUrl": "https://commons.wikimedia.org/wiki/File:A_cute_Jungle_geranium_flower.jpg"
+            },
+            {
+              "src": "data/library/flower/ship-p1-radiators.jpg",
+              "alt": "The ship seen from behind, four radiators open to 146 degrees",
+              "credit": "Space Cowboy",
+              "licence": "Game render",
+              "licenceUrl": null,
+              "sourceUrl": null
+            }
+          ]
+        },
+        {
+          "caption": "Many fuchsias: sepals swept back, stamens reaching past the petals. The ship's radiators sweep back to shed heat into cold space, and a launching strut swings out to aim the daughter.",
+          "images": [
+            {
+              "src": "data/library/flower/fuchsia.jpg",
+              "alt": "A fuchsia flower with swept-back sepals and long stamens",
+              "credit": "Krzysztof Ziarnek, Kenraiz",
+              "licence": "CC BY 4.0",
+              "licenceUrl": "https://creativecommons.org/licenses/by/4.0/deed.en",
+              "sourceUrl": "https://commons.wikimedia.org/wiki/File:Fuchsia_magellanica_kz01.jpg"
+            },
+            {
+              "src": "data/library/flower/ship-p2-fuchsia.jpg",
+              "alt": "The ship with struts forward and radiators swept back",
+              "credit": "Space Cowboy",
+              "licence": "Game render",
+              "licenceUrl": null,
+              "sourceUrl": null
+            }
+          ]
+        },
+        {
+          "caption": "Sensitive plant (ไมยราบ), open and then folded out of the way. The ship's struts and radiators fold flat for launch, and docked struts duck out of the way of an incoming catch.",
+          "images": [
+            {
+              "src": "data/library/flower/mimosa-open.jpg",
+              "alt": "Sensitive plant leaves open",
+              "credit": "Sten Porse",
+              "licence": "CC BY-SA 3.0",
+              "licenceUrl": "https://creativecommons.org/licenses/by-sa/3.0/deed.en",
+              "sourceUrl": "https://commons.wikimedia.org/wiki/File:Mimosa-pudica-ante.jpg"
+            },
+            {
+              "src": "data/library/flower/mimosa-folded.jpg",
+              "alt": "The same sensitive plant with its leaves folded",
+              "credit": "Sten Porse",
+              "licence": "CC BY-SA 3.0",
+              "licenceUrl": "https://creativecommons.org/licenses/by-sa/3.0/deed.en",
+              "sourceUrl": "https://commons.wikimedia.org/wiki/File:Mimosa-pudica-post.jpg"
+            },
+            {
+              "src": "data/library/flower/ship-p3-folding.jpg",
+              "alt": "The ship with struts and radiators folded closed",
+              "credit": "Space Cowboy",
+              "licence": "Game render",
+              "licenceUrl": null,
+              "sourceUrl": null
+            }
+          ]
+        },
+        {
+          "caption": "A young banana leaf unrolling. The ship's solar wings stay rolled up small, then unroll to make power.",
+          "images": [
+            {
+              "src": "data/library/flower/banana-leaf.jpg",
+              "alt": "A young banana leaf partly unrolled",
+              "credit": "User:Mattes",
+              "licence": "CC BY-SA 3.0",
+              "licenceUrl": "https://creativecommons.org/licenses/by-sa/3.0/deed.en",
+              "sourceUrl": "https://commons.wikimedia.org/wiki/File:Baby_banana_tree_developing_the_first_leaf.JPG"
+            },
+            {
+              "src": "data/library/flower/ship-p4-wings.jpg",
+              "alt": "The ship seen side-on with its roll-out solar wings out",
+              "credit": "Space Cowboy",
+              "licence": "Game render",
+              "licenceUrl": null,
+              "sourceUrl": null
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "isro_kulasekarapattinam",
@@ -4133,7 +4253,8 @@
         "uv_degradation",
         "atomic_oxygen",
         "hbn_coating",
-        "thermal_cycling"
+        "thermal_cycling",
+        "folded_to_fly"
       ],
       "i18n": {
         "title": "Roll-Out Solar Array (ROSA)",
@@ -4510,13 +4631,14 @@
         "pcm_bank",
         "selective_surfaces",
         "vacuum_mechanisms",
-        "tip_hardpoints"
+        "tip_hardpoints",
+        "folded_to_fly"
       ],
       "i18n": {
         "title": "Space Radiators",
         "shortText": "In space the only way to shed heat is to glow. Flat plates do it, and a hotter plate sheds far more.",
         "hardwareNote": "The four radiator plates, each 1.5 × 0.6 m, shed the ship’s heat as infrared from the open struts; folded shut they keep only a fifth of their area.",
-        "fullText": "In vacuum there is no air to blow across a hot part, so every watt a spacecraft makes must eventually leave as infrared light. The only dials that matter are radiator area, surface emissivity, and temperature — and temperature enters as T to the fourth power, so a slightly hotter panel sheds dramatically more heat. The ISS carries hundreds of square metres of white radiator wing for exactly this reason.\n\nYour aft flower is this hardware: four rigid struts carrying flat plates that swing out aft of the rim. Each plate folds in two (a GEO-comsat pattern: one hinge line, one lanyard) and lies flat along the bus inside the fairing, then unfolds to its full radiating area on orbit. Open to {{ THERMAL.FLOWER.POSE_STOW_DEG }}° the plates shed heat; folded shut they keep only a fifth of their area.\n\nThey shed heat only while coolant flows, which starts above {{ SHIP_HEAT.LOOP_OFF_C }} °C. The ship warns you at {{ SHIP_HEAT.YELLOW_C }} °C, opens the plates itself at {{ SHIP_HEAT.AUTO_OPEN_C }} °C, and at {{ SHIP_HEAT.RED_C }} °C your tools refuse to run. You can open or fold the plates yourself.",
+        "fullText": "In vacuum there is no air to blow across a hot part, so every watt a spacecraft makes must eventually leave as infrared light. The only dials that matter are radiator area, surface emissivity, and temperature — and temperature enters as T to the fourth power, so a slightly hotter panel sheds dramatically more heat. The ISS carries hundreds of square metres of white radiator wing for exactly this reason.\n\nYour aft radiators are this hardware: four rigid struts carrying flat plates that swing out aft of the rim. Each plate folds in two (a GEO-comsat pattern: one hinge line, one lanyard) and lies flat along the bus inside the fairing, then unfolds to its full radiating area on orbit. Open to {{ THERMAL.FLOWER.POSE_STOW_DEG }}° the plates shed heat; folded shut they keep only a fifth of their area.\n\nThey shed heat only while coolant flows, which starts above {{ SHIP_HEAT.LOOP_OFF_C }} °C. The ship warns you at {{ SHIP_HEAT.YELLOW_C }} °C, opens the plates itself at {{ SHIP_HEAT.AUTO_OPEN_C }} °C, and at {{ SHIP_HEAT.RED_C }} °C your tools refuse to run. You can open or fold the plates yourself.",
         "realWorld": "ISS EATCS rejects ~70 kW through deployable ammonia radiators; every spacecraft big or small budgets heat by A·ε·σT⁴.",
         "trlRationale": "Deployable rigid radiators flown for decades (ISS HRS/EATCS class).",
         "unlockHint": "Clear 18 pieces of debris."
@@ -4535,10 +4657,10 @@
       "i18n": {
         "title": "Loop Heat Pipes",
         "shortText": "A fluid loop hauls heat from hot gear out to the radiators. Welded metal bellows survive vacuum where rubber seals age and die.",
-        "fullText": "A loop heat pipe is a small two-phase plumbing circuit: a working fluid evaporates at the hot end, the vapour races to the radiator, condenses, and a porous wick pumps the liquid home with no moving parts. It moves large amounts of heat through tubing thinner than a finger, passively, for years on end.\n\nThe vacuum detail is the seals. Rubber O-rings outgas, harden, and leak; flight loops are all-welded metal with bellows accumulators, because a thermal loop that loses its fluid is a dead cooling system with no repair verb. When the flower's plates get plumbed, this is the plumbing.",
+        "fullText": "A loop heat pipe is a small two-phase plumbing circuit: a working fluid evaporates at the hot end, the vapour races to the radiator, condenses, and a porous wick pumps the liquid home with no moving parts. It moves large amounts of heat through tubing thinner than a finger, passively, for years on end.\n\nThe vacuum detail is the seals. Rubber O-rings outgas, harden, and leak; flight loops are all-welded metal with bellows accumulators, because a thermal loop that loses its fluid is a dead cooling system with no repair verb. When the radiator plates get plumbed, this is the plumbing.",
         "realWorld": "LHPs have flown since 1989 (Granat, Obzor, Boeing 702, ICESat); all-welded loops are standard practice.",
         "trlRationale": "Loop heat pipes have been flight hardware since 1989.",
-        "unlockHint": "Deploy the aft flower and think about how the heat gets to it."
+        "unlockHint": "Deploy the aft radiators and think about how the heat gets to it."
       }
     },
     {
@@ -4682,7 +4804,7 @@
     {
       "id": "vacuum_mechanisms",
       "hardwareNames": [
-        "AFT FLOWER STRUTS",
+        "RADIATOR STRUTS",
         "RADIATOR HINGES",
         "STRUT HINGES"
       ],
@@ -5023,7 +5145,7 @@
         "title": "Hardpoints & Servicing Interfaces",
         "shortText": "A hardpoint is a ready-made bolt spot for future hardware. Standard fittings are what make refits in orbit possible.",
         "hardwareNote": "The radiator tip mounts are the standard-interface bosses at the ends of the radiator struts, where a catch bag is carried.",
-        "fullText": "A hardpoint is structure built for a load that is not there yet: a machined boss with a known bolt pattern, an alignment feature and a power or data pass-through, placed where a future unit will go. On the ground it is cheap insurance. In orbit it is the only way a spacecraft ever gains hardware it did not launch with.\n\nYour flower struts end in exactly that: four bosses, each carrying the same interface. Today each tip holds a catch bag: a daughter parks her catch there, and it is melted down during the long burn to the next field. The interface was decided before the hardware was, which is the whole point.",
+        "fullText": "A hardpoint is structure built for a load that is not there yet: a machined boss with a known bolt pattern, an alignment feature and a power or data pass-through, placed where a future unit will go. On the ground it is cheap insurance. In orbit it is the only way a spacecraft ever gains hardware it did not launch with.\n\nYour radiator struts end in exactly that: four bosses, each carrying the same interface. Today each tip holds a catch bag: a daughter parks her catch there, and it is melted down during the long burn to the next field. The interface was decided before the hardware was, which is the whole point.",
         "realWorld": "Standard mechanical interfaces let hardware be added in orbit: ISS FRAM plates and orbital replacement units, servicer docking plates (Astroscale ELSA-d), Northrop Grumman’s Mission Extension Pods, launched in July 2026 to be installed on client satellites.",
         "trlRationale": "Standardised attachment interfaces are flight heritage on the ISS and on commercial servicing missions.",
         "unlockHint": "Zoom in to the hull and click a radiator strut tip."

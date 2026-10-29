@@ -19,7 +19,7 @@ import { armProfile, profileClearAt, profileValid, startProfile, stepProfile, ki
 import { bigPieces } from '../systems/BigPieces.js';
 import { strutTipFoulsCorridor, strutLocalDirection, bestStrutAlpha } from './ArmDockBasis.js';
 import { createShipKeepOut } from '../systems/ShipKeepOut.js';
-import { StrutAutoController } from '../systems/StrutAuto.js';
+import { StrutAutoController, openingStrutEase } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit, planeTurnLeftRad } from './ArmUnit.js';
 import { DebrisField } from './DebrisField.js';
@@ -2388,6 +2388,9 @@ export class ArmManager {
     for (const arm of docked) {
       if (_strutLiveAlpha(arm) >= V5.STRUT_OPEN_THRESHOLD) continue;
       arm._strutTargetAlpha = V5.STRUT_REST_ALPHA;
+      // Softer opening (DECISIONS §55 row 4): this move starts and ends gently at the strut's own top speed. The mark is
+      // read, and dropped on any other command, by PlayerSatellite._updateStruts.
+      arm._strutEase = openingStrutEase(V5.STRUT_REST_ALPHA);
     }
     return true;
   }

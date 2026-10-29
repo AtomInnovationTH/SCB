@@ -402,7 +402,7 @@ const SYSTEMS = [
     // so the family total follows the 51.6 kg budget pin (37 + 10 + 2 + 2.6).
     id: 'THERMAL', label: 'THERMAL',
     anchor: [ 0.3639 * M, 0.3053 * M, -1.02 * M ],
-    role: 'radiators open LIKE A FLOWER',   // the owner's grammar, verbatim (test-FlowerShopCallouts); 28 characters
+    role: 'radiators open to 146°',   // was "open LIKE A FLOWER" (owner grammar) until DECISIONS §55 row 6, 2026-10-29: no flower words in play
     flowerGated: true,
     parts: [
       { id: 'flower_plates', name: 'RADIATOR PLATES', risk: 'GREEN', tier: 'major', codexId: 'space_radiator',
@@ -414,7 +414,7 @@ const SYSTEMS = [
         // §13 r4 roll-up: ALL twelve radiator panels (4 plates, 8 wings, seams, knuckles) answer as the plates (44 meshes).
         pickPrefixes: ['FlowerStrutPlate_', 'FlowerStrutWing_', 'FlowerStrutWingSeam', 'FlowerStrutWingKnuckle'],
         anchor: [ -0.30 * M, -0.30 * M, -1.15 * M ] },
-      { id: 'flower_struts', name: 'AFT FLOWER STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
+      { id: 'flower_struts', name: 'RADIATOR STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
         massKg: 10, priority: 6, flowerGated: true,
         specs: ['4× 2.3 m booms, fold fore', FLOWER_ROW],
         // §13 r4 roll-up: the 4 booms and their seams (the wing hinge lugs stay with the hinge brackets).

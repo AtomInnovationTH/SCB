@@ -25,6 +25,7 @@ import { getLanguage } from '../core/Languages.js';
 // the unmasked 'flyaround' departure stays continuous across the menu→game hand-off.
 import { openingDance } from '../systems/OpeningDance.js';
 import { degToRad, lerp, smoothstep01 } from '../core/MathUtil.js';
+import { composeDockedArmQuat, strutLocalDirection } from '../entities/ArmDockBasis.js';
 
 // Lazy singleton Canvas2D flag painter, independent of the debris flag atlas.
 let _flagPainter = null;
@@ -84,10 +85,9 @@ const EXIT_DOWN_BIAS_PARTIAL  = 0.85;
 // Continue/reduced always use 'partial' framing (no roll change).
 const MOTHER_BASE_ROLL_Z = -Math.PI / 2;   // the menu build roll (wings vertical)
 const EXIT_DEROLL       = Math.PI / 6.4;    // 'partial': ~28° de-roll toward horizontal
-const EXIT_CAM_ANG_END  = 1.05;             // 'partial': sway-centre azimuth at the cut
+const EXIT_CAM_ANG_SHIFT = 0.55;            // 'partial': the sway centre moves this far (rad) by the cut (it was 0.5 → 1.05)
 const EXIT_CAM_CAMY_END = 0.45;             // 'partial': sway-centre elevation at the cut
-const FLYAROUND_ANG_END  = -1.157;          // 'flyaround': camera azimuth arc end; sweep from SWAY_ANG_CENTRE (0.5)
-                                            // is 20% under -PI/2 so the camera rotates ~20% slower
+const FLYAROUND_ANG_END  = -1.157;          // 'flyaround': camera azimuth arc end (the sim's behind-and-above chase)
 const FLYAROUND_CAMY_END = 2.0;             // 'flyaround': slightly above (sim radial-above chase)
 // Exit free-flyer pose (CPU-only rotation deltas): after jet-off legs trail + deep knee bend + left arm opens +
 // slight chest-open arch. Times are SECONDS after jet-off; poseE (eased 0→1 over EXIT_POSE_DUR) scales the deltas.
@@ -100,10 +100,68 @@ const EXIT_ARM_Z      = -0.85; // free left arm swings outward, away from the wo
 const EXIT_ARM_X      = -0.55; // ...and opens up from the tool-hold raise
 const EXIT_CHEST_OPEN = -0.18; // chest opens skyward (astro pitch relaxing back)
 // Camera sway, shared by BOTH orientation branches in _tick and by _applyReducedMotionPose.
-const SWAY_ANG_CENTRE  = 0.5;   // idle azimuth centre (front-right octant)
-const SWAY_CAMY_CENTRE = 0.85;  // idle elevation centre
-const SWAY_ANG_FREQ  = 0.16, SWAY_ANG_AMP  = 0.62;   // azimuth bob
-const SWAY_CAMY_FREQ = 0.12, SWAY_CAMY_AMP = 0.42;   // elevation bob
+// Flower theme phase 2 (DECISIONS §55 row 2, "menu seen from behind"): the camera position is (cos a·R, camY, sin a·R)
+// around the ship, the ship's nose is +Z, so the TAIL side is a = -PI/2 (dead behind). The sway runs between a 3/4 view
+// from the astronaut's side and dead behind, and back: a = SWAY_ANG_CENTRE ± SWAY_ANG_AMP covers -0.80 to -1.57 (dead
+// behind). Measured with `menuCameraPosition` over three periods: 3° (closest) to 45° (widest) off the tail axis, 2°-7°
+// up (at R 8.6). It stops at dead behind rather than swinging on to the far side, where the hull and plates would hide the astronaut.
+const SWAY_ANG_CENTRE  = -1.185;  // idle azimuth centre, midway between the 3/4 end and dead behind
+const SWAY_CAMY_CENTRE = 0.7;     // idle elevation centre (a little above: about 5° at R 8.6; higher hid the astronaut's head behind a plate from dead behind)
+const SWAY_ANG_FREQ  = 0.16, SWAY_ANG_AMP  = 0.385;   // azimuth bob
+const SWAY_CAMY_FREQ = 0.12, SWAY_CAMY_AMP = 0.40;    // elevation bob (camY 0.3-1.1)
+// Reduced motion holds the 3/4 end of the sway (the astronaut's side), not the middle.
+const REDUCED_ANG = SWAY_ANG_CENTRE + SWAY_ANG_AMP;
+// Idle orbit radius (m). It was 5.5 for the closed-up old pose; with the radiators open to 146° the plates reach toward the
+// camera from behind and crop at the screen edges at 5.5 (frame check, 1728x1117), so the idle ship sits further back (7.0 and 7.6 still cropped the lower plates at the bottom edge).
+const SWAY_ORBIT_R = 8.6;
+// The radius above is framed for the 16" Mac (1728x1117, aspect 1.55). A narrower window sees less sideways (the vertical
+// field of view is fixed), so the iPad held sideways (1366x1024, aspect 1.33) cropped the open plates at the right edge in
+// the 3/4 view: the idle radius grows by the aspect ratio, up to 1.25 times.
+const FIT_ASPECT = 1728 / 1117;
+const FIT_MAX = 1.25;
+/**
+ * Idle orbit radius scale for a camera aspect ratio: 1 at 1.55 and wider, larger below it (never above 1.25).
+ * @param {number} aspect - width / height
+ * @returns {number}
+ */
+export function menuFitScale(aspect) {
+  return aspect > 0 && aspect < FIT_ASPECT ? Math.min(FIT_MAX, FIT_ASPECT / aspect) : 1;
+}
+const TAIL_LIGHT_INTENSITY = 2.0;   // warm key from behind (see init); tuned with scripts/probes/menu-frames.mjs
+
+/** The sway's centre elevation (m) and orbit radius (m), for tests and the frame probe. */
+export const MENU_SWAY_CENTRE = { camY: SWAY_CAMY_CENTRE, orbitR: SWAY_ORBIT_R };
+
+/** One full azimuth sway period in seconds. Exported for the frame probe and tests. */
+export const MENU_SWAY_PERIOD_S = (2 * Math.PI) / SWAY_ANG_FREQ;
+/** Sway times (s on the scene's orbit clock) at which the camera is at the 3/4 end and at dead behind. */
+export const MENU_SWAY_POINTS = {
+  threeQuarterS: (0.5 * Math.PI) / SWAY_ANG_FREQ,   // sin = +1: a = CENTRE + AMP
+  behindS: (1.5 * Math.PI) / SWAY_ANG_FREQ,         // sin = -1: a = CENTRE - AMP
+};
+
+/**
+ * The menu camera position at orbit-clock time `orbitT`: the single source of the sway math (the live camera, reduced
+ * motion and the tests all use it).
+ * @param {number} orbitT - orbit clock, seconds
+ * @param {{centreAng?: number, centreCamY?: number, orbitR?: number, damp?: number}} [o] - sway centre azimuth and
+ *   elevation, orbit radius (m), sway scale (0 = frozen on the centre, 1 = full)
+ * @param {THREE.Vector3} [out]
+ * @returns {THREE.Vector3} camera position, ship frame (m)
+ */
+export function menuCameraPosition(orbitT, o = {}, out = new THREE.Vector3()) {
+  const centreAng = o.centreAng ?? SWAY_ANG_CENTRE;
+  const centreCamY = o.centreCamY ?? SWAY_CAMY_CENTRE;
+  const orbitR = o.orbitR ?? SWAY_ORBIT_R;
+  const damp = o.damp ?? 1;
+  const ang  = centreAng  + Math.sin(orbitT * SWAY_ANG_FREQ)  * SWAY_ANG_AMP  * damp;
+  const camY = centreCamY + Math.sin(orbitT * SWAY_CAMY_FREQ) * SWAY_CAMY_AMP * damp;
+  return out.set(Math.cos(ang) * orbitR, camY, Math.sin(ang) * orbitR);
+}
+
+// The hero's menu pose (DECISIONS §55 rows 1-2): struts straight forward (180°, "the same pivot math as the game ship"),
+// radiators at the 146° stow angle, wings rolled up.
+const HERO_STRUT_RAD = Math.PI;
 
 // The menu hero is a SINGLE ship on an empty scene, without the main scene's fragment-bound cost, so it must not
 // inherit SceneManager's lowered HIGH pixelRatioCap (1.5, Constants.js C.1 note) or the silhouette aliases against the
@@ -940,19 +998,60 @@ export function installHeroFlowerPairs(mother) {
 }
 
 /**
- * Snap the hero to the PACKED pose: radiator folded fore along the barrel (theta = POSE_LAUNCH_DEG, launch lock
- * armed so the sub-floor sweep the dance drives stays legal), ROSA wings furled. This is
- * OpeningDance.applyPacked(ship) minus the isActive() gate (the dance arms on MENU_DEPARTURE_START, after hero
- * build). Idempotent; emits nothing.
+ * Point the hero's four struts at sweep angle `alphaRad` the way the game ship does (`PlayerSatellite._updateStruts`:
+ * `strutLocalDirection` → `setFromUnitVectors(-Y, dir)` on the pivot), and turn each docked daughter the way the game
+ * turns it (`composeDockedArmQuat`, which `postArmUpdate` applies in the ship frame; here the daughter is a child of
+ * the strut tip, so the pivot's turn is divided out). Pure transform writes; emits nothing.
  * @param {PlayerSatellite} mother - phantom, display-only satellite instance
+ * @param {ArmUnit[]} daughters - the docked daughters, index i on strut i (may be empty)
+ * @param {number} alphaRad - strut sweep angle: 0 aft along the barrel, PI/2 radially out, PI straight forward
  */
-export function applyHeroPackedPose(mother) {
-  const FL = Constants.THERMAL.FLOWER;
+export function poseHeroStruts(mother, daughters, alphaRad) {
+  const groups = mother.strutGroups || [];
+  for (let i = 0; i < groups.length; i++) {
+    const sg = groups[i];
+    if (!sg || !sg.pivotGroup) continue;
+    strutLocalDirection(alphaRad, sg.azRad, _heroDir);
+    _heroPivotQ.setFromUnitVectors(_HERO_NEG_Y, _heroDir);
+    sg.pivotGroup.setRotationFromQuaternion(_heroPivotQ);
+    if (sg.strutDir) sg.strutDir.copy(_heroDir);
+    const arm = daughters && daughters[i];
+    if (arm && arm.group) {
+      composeDockedArmQuat(_heroDir, sg.azRad, _heroDockQ);
+      arm.group.quaternion.copy(_heroPivotQ).invert().multiply(_heroDockQ);
+    }
+  }
+}
+const _HERO_NEG_Y = new THREE.Vector3(0, -1, 0);
+const _heroDir = new THREE.Vector3();
+const _heroPivotQ = new THREE.Quaternion();
+const _heroDockQ = new THREE.Quaternion();
+
+/**
+ * Write the radiator angle on the hero (theta in radians). The launch lock stays armed so an angle below the orbit
+ * floor, which the departure fold passes through on its way to closed, is legal. Emits nothing.
+ * @param {PlayerSatellite} mother
+ * @param {number} thetaRad
+ */
+function setHeroRadiators(mother, thetaRad) {
   mother._flowerLaunchLock = true;
   mother._flowerOverrideFold = false;
   mother._flowerTargetTheta = undefined;
-  mother._flowerThetaRad = degToRad(FL.POSE_LAUNCH_DEG);
+  mother._flowerThetaRad = thetaRad;
   mother._updateFlower(0);
+}
+
+/**
+ * Snap the hero to the MENU pose (DECISIONS §55 rows 1-2): struts straight forward (180°), radiators open at the 146°
+ * stow angle, wings rolled up. The launch lock is armed so the departure fold below the orbit floor stays legal.
+ * Idempotent; emits nothing (the hero must never talk on the bus).
+ * @param {PlayerSatellite} mother - phantom, display-only satellite instance
+ * @param {ArmUnit[]} [daughters] - the docked daughters, turned with their struts
+ */
+export function applyHeroMenuPose(mother, daughters = []) {
+  const FL = Constants.THERMAL.FLOWER;
+  poseHeroStruts(mother, daughters, HERO_STRUT_RAD);
+  setHeroRadiators(mother, degToRad(FL.POSE_STOW_DEG));
   mother._setRosaWingProgress(1, 0);
   mother._setRosaWingProgress(2, 0);
   // The hero never runs update()/_updateRosaPanels, so the furl state _animateSolarTracking's blend reads is written
@@ -961,23 +1060,47 @@ export function applyHeroPackedPose(mother) {
 }
 
 /**
- * Drive the hero from the opening-dance clock for one frame; MenuScene3D._tick calls it with
- * openingDance.progress() (the phantom's update() never runs). Pure mesh writes, emits nothing. The daughter strut
- * beat (p.struts) is deliberately ignored: the hero has no armManager and that beat begins after the cut.
+ * The hero's departure fold: from the first frame of the menu departure ("she folds to fly") the struts swing from 180°
+ * toward 0° at the real strut rate and the radiators from 146° toward 0° at the real radiator rate, so nothing moves
+ * faster than the hardware (DECISIONS §0). The menu cuts to the game's closed ship before the fold ends, as it already
+ * skipped the struts' 90° → 0° swing.
+ * @param {number} depT - seconds since the departure began (the scene's own `_departure.t`)
+ * @returns {{ strutRad: number, radiatorRad: number }}
+ */
+export function heroDepartureFold(depT) {
+  const t = Math.max(0, depT);
+  const FL = Constants.THERMAL.FLOWER;
+  return {
+    strutRad: Math.max(0, HERO_STRUT_RAD - Constants.OCTOPUS_V5.STRUT_SLEW_RATE * t),
+    radiatorRad: Math.max(0, degToRad(FL.POSE_STOW_DEG) - FL.SLEW_RATE_RAD_S * t),
+  };
+}
+
+/**
+ * Apply `heroDepartureFold(depT)` to the hero: struts, their daughters and radiators. Wings are not touched (they stay
+ * rolled until the cut; see applyHeroDanceProgress). Emits nothing.
+ * @param {PlayerSatellite} mother
+ * @param {ArmUnit[]} daughters
+ * @param {number} depT - seconds since the departure began
+ */
+export function applyHeroDepartureFold(mother, daughters, depT) {
+  const f = heroDepartureFold(depT);
+  poseHeroStruts(mother, daughters, f.strutRad);
+  setHeroRadiators(mother, f.radiatorRad);
+}
+
+/**
+ * Drive the hero's WINGS from the opening-dance clock for one frame; MenuScene3D._tick calls it with
+ * openingDance.progress() (the phantom's update() never runs). Pure mesh writes, emits nothing. Radiators and struts
+ * are NOT driven from the dance clock: its `flower` is 0 until after the cut (it would snap the open radiators shut on
+ * the first departure frame), so applyHeroDepartureFold drives them from the departure's own clock.
  * @param {PlayerSatellite} mother - phantom, display-only satellite instance
- * @param {{ flower?: number, wing1?: number, wing2?: number }} p - dance progress
+ * @param {{ wing1?: number, wing2?: number }} p - dance progress
  */
 export function applyHeroDanceProgress(mother, p) {
-  const FL = Constants.THERMAL.FLOWER;
-  const fromRad = degToRad(FL.POSE_LAUNCH_DEG);
-  const toRad = degToRad(FL.POSE_STOW_DEG);
-  // Clamp: a driver bug must not push the pose past the hardware band (_updateFlower bounds theta, but the wing
-  // roll-out scale has no internal bound).
-  const flower = _clamp01(p.flower ?? 0);
+  // Clamp: a driver bug must not push the pose past the hardware band (the wing roll-out scale has no internal bound).
   const wing1 = _clamp01(p.wing1 ?? 0);
   const wing2 = _clamp01(p.wing2 ?? 0);
-  mother._flowerThetaRad = lerp(fromRad, toRad, flower);
-  mother._updateFlower(0);
   mother._setRosaWingProgress(1, wing1);
   mother._setRosaWingProgress(2, wing2);
   // Mirrors _updateRosaPanels' dance branch: the AVERAGE, not the min. It must stay identical to it or the tracking
@@ -1027,10 +1150,10 @@ export class MenuScene3D {
     this._motionHandler = null;
 
     // START: beginDeparture() ramps this 0→1 over _departureDur seconds: the weld arc/glow/sparks fade out and the
-    // camera eases its orbit radius back (5.5 → 8) so the hero recedes as the live scene behind takes over. null = idle.
+    // camera eases its orbit radius back (8.6 → 8) so the hero recedes as the live scene behind takes over. null = idle.
     this._departure = null;         // { t, dur } while animating, else null
     this._departureDur = 1.6;       // seconds (skippable)
-    this._departureBaseOrbitR = 5.5;
+    this._departureBaseOrbitR = SWAY_ORBIT_R;
     this._departureOrbitR = 8.0;
 
     // True while the hero sits in the packed pose (set at build and by the menu-return reset). Gates the dance
@@ -1127,6 +1250,13 @@ export class MenuScene3D {
     rim.position.set(-4, 2.5, -5);
     this.scene.add(rim);
 
+    // Tail light: the menu now sways to dead behind the ship, where the sun, fill and rim above lit the tail side far
+    // dimmer than the old front-right views (ship-pixel mean luminance 116 vs 130-162 for the old menu, probe frames).
+    // A warm second key from behind-right-above lifts the tail side to 144 (2.4 and up pushes the plates into the bloom).
+    this._tailLight = new THREE.DirectionalLight(0xfff0dc, TAIL_LIGHT_INTENSITY);
+    this._tailLight.position.set(2.5, 2.2, -6);
+    this.scene.add(this._tailLight);
+
     this.scene.add(new THREE.AmbientLight(0x223055, 0.35));
 
     // Wide enough range to reach the gold visor
@@ -1161,15 +1291,13 @@ export class MenuScene3D {
     mother._rosaGlowIdleFloor = 0.55;
     this._mother = mother;
 
-    // Opening dance: the hero mirrors the sim ship's FLOWER_PREINSTALLED hardware and STARTS PACKED (radiator folded
-    // fore, wings furled) so the unfold begins the instant she jets off, with no pop at the cut. Applied BEFORE the
-    // weld-site snap below reads strutGroups. Reduced motion and a flag-off build stay deployed (a ship is never
-    // seen packed outside a running dance).
+    // Menu pose (DECISIONS §55 rows 1-2): the hero mirrors the sim ship's FLOWER_PREINSTALLED hardware and sits with
+    // struts at 180°, radiators at 146° and wings rolled. Applied BEFORE the weld-site snap below reads strutGroups
+    // (the daughters, which turn with their struts, are mounted after; the pose is applied again then). Every motion
+    // setting shows the same pose; only a motion-allowed hero with the dance flag on may fold when she departs.
     installHeroFlowerPairs(mother);
-    if (!this._reducedMotion && Constants.FEATURE_FLAGS.OPENING_DANCE) {
-      applyHeroPackedPose(mother);
-      this._heroPacked = true;
-    }
+    applyHeroMenuPose(mother);
+    this._heroPacked = !this._reducedMotion && !!Constants.FEATURE_FLAGS.OPENING_DANCE;
 
     // Only the gold MLI materials get a synthetic orbital env map (sun + void + Earth) so the near-mirror foil reads
     // as broken white/dark patchwork, not a smooth brass pipe; scene.environment stays RoomEnvironment for the
@@ -1198,13 +1326,10 @@ export class MenuScene3D {
       if (arm.tetherLine) arm.tetherLine.visible = false;   // no stray dock tether
       tip.add(arm.group);                    // inherits the tip's deployed pose + scale
       arm.group.position.set(0, 0, 0);
-      // Daughter forward (+Z) → strut-outward (tip-local −Y)
-      arm.group.quaternion.setFromUnitVectors(
-        new THREE.Vector3(0, 0, 1),
-        new THREE.Vector3(0, -1, 0),
-      );
       this._daughters.push(arm);
     }
+    // Daughter forward (+Z) → strut direction, the game's own docked-arm basis (applyHeroMenuPose → poseHeroStruts).
+    applyHeroMenuPose(mother, this._daughters);
 
     // Human-scale EVA reference servicing a strut hinge; faces −X (chest toward the barrel). Final placement is
     // SNAPPED below so the tool tip lands exactly on an aluminium strut hinge.
@@ -1426,15 +1551,10 @@ export class MenuScene3D {
       this._motionHandler = (e) => {
         this._reducedMotion = !!e.matches;
         if (this._reducedMotion) this._applyReducedMotionPose();
-        // Reduced motion never shows the packed pose, and a toggle back must re-pack so the next departure starts
-        // packed (a deployed hero would snap to theta 0 in one frame). Skipped while a departure runs.
+        // Same pose in every motion setting; a toggle only decides whether the next departure may fold the hero.
+        // Skipped while a departure runs.
         if (!this._mother || this._departure) return;
-        if (this._reducedMotion) {
-          this._deployHero();
-        } else if (Constants.FEATURE_FLAGS.OPENING_DANCE) {
-          applyHeroPackedPose(this._mother);
-          this._heroPacked = true;
-        }
+        this._restoreHeroMenuPose();
       };
       // addListener is the deprecated fallback.
       if (typeof this._motionMedia.addEventListener === 'function') {
@@ -1449,18 +1569,21 @@ export class MenuScene3D {
 
   _applyReducedMotionPose() {
     if (!this.camera) return;
-    this._positionSwayCamera(SWAY_ANG_CENTRE, SWAY_CAMY_CENTRE, 5.5, 0); // damp 0 = frozen centre
+    this._positionSwayCamera(REDUCED_ANG, SWAY_CAMY_CENTRE, SWAY_ORBIT_R * menuFitScale(this.camera.aspect), 0); // damp 0 = frozen on the 3/4 view
     this.camera.lookAt(this._lookTarget);
   }
 
   /**
    * @private Orbit camera at a swaying pose around `centreAng` / `centreCamY` at radius `orbitR`, sway scaled by
-   * `damp` (0 = frozen on the centre). Single source of the sway math for both orientation branches + reduced motion.
+   * `damp` (0 = frozen on the centre). Both orientation branches + reduced motion go through `menuCameraPosition`.
    */
   _positionSwayCamera(centreAng, centreCamY, orbitR, damp) {
-    const ang  = centreAng  + Math.sin(this._orbitAngle * SWAY_ANG_FREQ)  * SWAY_ANG_AMP  * damp;
-    const camY = centreCamY + Math.sin(this._orbitAngle * SWAY_CAMY_FREQ) * SWAY_CAMY_AMP * damp;
-    this.camera.position.set(Math.cos(ang) * orbitR, camY, Math.sin(ang) * orbitR);
+    menuCameraPosition(this._orbitAngle, { centreAng, centreCamY, orbitR, damp }, this.camera.position);
+  }
+
+  /** @private Where the sway centre sits now: the sway's middle, or the held 3/4 view under reduced motion. */
+  _swayCentreAng() {
+    return this._reducedMotion ? REDUCED_ANG : SWAY_ANG_CENTRE;
   }
 
   start() {
@@ -1516,7 +1639,7 @@ export class MenuScene3D {
   }
 
   /**
-   * Begin the menu→sim departure: weld arc / glow / sparks ramp to nothing and the camera orbit eases back (5.5 → 8).
+   * Begin the menu→sim departure: weld arc / glow / sparks ramp to nothing and the camera orbit eases back (8.6 → 8).
    * Idempotent, so a fast double-click can't restart the ramp. Under reduced motion the ramp still runs (it only
    * fades), but callers should keep the handoff short.
    * @param {number} [durationSec] — override the default ramp duration
@@ -1591,36 +1714,14 @@ export class MenuScene3D {
   }
 
   /**
-   * @private Restore the hero's menu pose (start()'s menu-return reset): packed for the next departure, or deployed
-   * under reduced motion / a flag-off build, undoing what the previous dance left on the flower + wings.
+   * @private Restore the hero's menu pose (start()'s menu-return reset): struts 180°, radiators 146°, wings rolled,
+   * undoing what the previous departure's fold left. `_heroPacked` says whether the next departure may fold her (a
+   * reduced-motion or flag-off hero shows the same pose but never folds).
    */
   _restoreHeroMenuPose() {
     if (!this._mother) return;
-    if (this._reducedMotion || !Constants.FEATURE_FLAGS.OPENING_DANCE) {
-      this._deployHero();
-    } else {
-      applyHeroPackedPose(this._mother);
-      this._heroPacked = true;
-    }
-  }
-
-  /**
-   * @private DEPLOYED pose: radiator at the stow angle, wings fully rolled out. By hand, not snapFlowerToStow():
-   * it emits THERMAL_FLOWER_RELEASED on the global bus when the launch lock was armed, and a phantom must never
-   * talk on the bus (as with installHeroFlowerPairs). Emits nothing; idempotent.
-   */
-  _deployHero() {
-    if (!this._mother) return;
-    const FL = Constants.THERMAL.FLOWER;
-    this._mother._flowerLaunchLock = false;
-    this._mother._flowerOverrideFold = false;
-    this._mother._flowerTargetTheta = undefined;
-    this._mother._flowerThetaRad = degToRad(FL.POSE_STOW_DEG);
-    this._mother._updateFlower(0);
-    this._mother._setRosaWingProgress(1, 1);
-    this._mother._setRosaWingProgress(2, 1);
-    this._mother._rosaFurlProgress = 1;
-    this._heroPacked = false;
+    applyHeroMenuPose(this._mother, this._daughters);
+    this._heroPacked = !this._reducedMotion && !!Constants.FEATURE_FLAGS.OPENING_DANCE;
   }
 
   /**
@@ -1727,9 +1828,10 @@ export class MenuScene3D {
     }
     const depFade = 1 - dep;
 
-    // A slow SWAY across the work side (not a 360° spin) keeps the astronaut + arc framed. Centre angle ~0.5 rad is
-    // the +X/+Z front-right octant. During departure the orbit radius eases 5.5 → 8.
-    const orbitR = lerp(this._departureBaseOrbitR, this._departureOrbitR, dep);
+    // A slow SWAY between a 3/4 view from the work side and dead behind (not a 360° spin) keeps the astronaut + arc
+    // framed (see SWAY_ANG_CENTRE). During departure the orbit radius eases 8.6 → 8.
+    const orbitR = lerp(this._departureBaseOrbitR * menuFitScale(this.camera.aspect), this._departureOrbitR, dep);
+    const swayCentre = this._swayCentreAng();
     // `bt` is the beat clock (fraction of dur); the orientation move is gated to BEAT_ORIENT_GATE (after the push-off)
     // so the hull never rotates while she's still anchored.
     const bt = this._departure ? this._departure.t / this._departureDur : 0;
@@ -1742,7 +1844,7 @@ export class MenuScene3D {
       // last menu frame lands on the sim chase framing (seamless). Own gate, earlier than the shared one.
       const flyGate = _clamp01((bt - BEAT_FLYAROUND_GATE) / Math.max(0.001, 1 - BEAT_FLYAROUND_GATE));
       const fa = smoothstep01(flyGate);
-      const angCentre  = lerp(SWAY_ANG_CENTRE, FLYAROUND_ANG_END, fa);
+      const angCentre  = lerp(swayCentre, FLYAROUND_ANG_END, fa);
       const camYCentre = lerp(SWAY_CAMY_CENTRE, FLYAROUND_CAMY_END, fa);
       this._positionSwayCamera(angCentre, camYCentre, orbitR, 1 - fa);
       if (this._mother) this._mother.rotation.z = MOTHER_BASE_ROLL_Z * (1 - fa);
@@ -1752,9 +1854,10 @@ export class MenuScene3D {
       const k = fa > 0.86 ? 1 - Math.min(1, (fa - 0.86) / 0.14) : 1;
       this._setAstroOpacity(k);
     } else {
-      // Modest end-pose bias toward the sim view + a ~28° de-roll (gated after push-off); the power-up flash (main.js)
-      // masks the residual face-flip. Reduced motion still lands on the biased end pose.
-      const angCentre  = lerp(SWAY_ANG_CENTRE, EXIT_CAM_ANG_END, dep);
+      // End pose: the sway centre shifted by EXIT_CAM_ANG_SHIFT + a ~28° de-roll (gated after push-off). Since the sway
+      // centres behind the ship (DECISIONS §55 row 2, 2026-10-29) the shift turns toward the side, away from the chase
+      // angle, not toward the sim view; the power-up flash (main.js) masks the cut. Reduced motion lands on it too.
+      const angCentre  = lerp(swayCentre, swayCentre + EXIT_CAM_ANG_SHIFT, dep);
       const camYCentre = lerp(SWAY_CAMY_CENTRE, EXIT_CAM_CAMY_END, dep);
       this._positionSwayCamera(angCentre, camYCentre, orbitR, this._reducedMotion ? 0 : 1 - dep * 0.85);
       this.camera.lookAt(this._lookTarget);   // work site (weld / astronaut)
@@ -1766,12 +1869,8 @@ export class MenuScene3D {
       this._setAstroOpacity(1);   // 'partial' never dissolves
     }
 
-    // Drive the hero from the SAME wall-clock progress() the sim ship reads after the cut, so the cut is continuous
-    // in the UNMASKED 'flyaround' departure (no power-up flash hides a pop there). _heroPacked gates it. The
-    // daughter strut beat is not applied (no armManager; it begins after the cut).
-    if (this._mother && this._heroPacked && openingDance.isActive()) {
-      applyHeroDanceProgress(this._mother, openingDance.progress());
-    }
+    // The departure fold and the wings (see _driveHeroFromDeparture).
+    this._driveHeroFromDeparture();
 
     // The Mother's OWN animators (nav lights, LIDAR pulse, solar tracking): they only mutate materials/transforms and
     // emit nothing, so they are safe without update(). Guarded individually in case a refactor renames them.
@@ -1845,6 +1944,21 @@ export class MenuScene3D {
 
     if (this._composer) this._composer.render();
     else this.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * @private Drive the hero for one frame of a NEW-GAME departure ("she folds to fly"): the struts and radiators fold
+   * from the menu pose toward closed at the real hardware rates, from the departure's own clock `_departure.t`
+   * (`heroDepartureFold`), and the wings follow the opening-dance wall clock, the SAME progress() the sim ship reads
+   * after the cut, so the unmasked 'flyaround' cut stays continuous (they are still rolled up before it). The dance
+   * clock cannot drive the fold: its `flower` is 0 until after the cut. Same gate as the dance: a full exit, motion
+   * allowed, the dance armed (CONTINUE never arms it) and the hero in the menu pose (`_heroPacked`).
+   */
+  _driveHeroFromDeparture() {
+    if (!this._mother || !this._heroPacked || !this._departure) return;
+    if (!this._exit || !this._exit.fullExit || this._reducedMotion || !openingDance.isActive()) return;
+    applyHeroDanceProgress(this._mother, openingDance.progress());
+    applyHeroDepartureFold(this._mother, this._daughters, this._departure.t);
   }
 
   /**

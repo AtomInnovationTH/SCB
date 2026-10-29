@@ -31,6 +31,7 @@ import {
   computeInertia,
 } from '../systems/CoMCalculator.js';
 import { composeDockedArmQuat, strutLocalDirection } from './ArmDockBasis.js';
+import { strutEaseFor, strutArrived } from '../systems/StrutAuto.js';
 import { netCellLayout } from './netCellLayout.js';
 import { motherDragAreaM2 } from './MotherDragArea.js';
 import {
@@ -202,6 +203,31 @@ function billMotorW(ship, watts, dt, src) {
   const rs = ship._resourceSystem;
   if (!rs || typeof rs.billWatts !== 'function') return 0;
   return rs.billWatts(watts, dt, src);
+}
+
+/**
+ * One frame of the opening's soft move (DECISIONS §55 row 4): from rest the part speeds up at `vMax / easeS`, coasts at its
+ * own unchanged top speed `vMax`, slows down at the same rate and stops exactly on `target`; a move too short to reach
+ * `vMax` is a triangle. Stateless in the position, so a caller that gives the part any other command simply stops calling
+ * this and moves it at its plain constant rate from wherever it is. `state.v` (speed, units/s) is the only memory;
+ * `state.landed` turns true on the frame the part reaches `target`. A module function so the duck-typed stubs that call
+ * `P.method.call(stub)` still run.
+ * @param {{v:number, landed?:boolean}} state the move's own record, mutated
+ * @param {number} pos where the part is
+ * @param {number} target where it was told to go
+ * @param {number} dt seconds this frame (> 0)
+ * @param {number} vMax top speed, units/s (> 0)
+ * @param {number} easeS seconds to reach top speed from rest (> 0)
+ * @returns {number} the new position
+ */
+export function easedRateStep(state, pos, target, dt, vMax, easeS) {
+  const dist = Math.abs(target - pos);
+  if (!(dist > 0)) { state.v = 0; state.landed = true; return target; }
+  const a = vMax / easeS;
+  state.v = Math.min(vMax, Math.sqrt(2 * a * dist), (state.v || 0) + a * dt);
+  const step = state.v * dt;
+  if (step >= dist) { state.landed = true; return target; }
+  return pos + Math.sign(target - pos) * step;
 }
 
 /** A hinge / tilt drive turning at least this fast is moving (rad/s). */
@@ -3137,9 +3163,18 @@ export class PlayerSatellite extends THREE.Group {
     if (this._rosaStowLatched) {
       if (target > 0) this._rosaStowLatched = false;
     } else {
-      const rate = (Constants.OCTOPUS_V5.ROSA_FURL_RATE || 0.4) * dt;
+      const furlRate = Constants.OCTOPUS_V5.ROSA_FURL_RATE || 0.4;
+      const rate = furlRate * dt;
       const p0 = this._rosaFurlProgress;
-      if (this._rosaFurlProgress < target) {
+      // The opening's own roll-out eases in and out at the same top speed; a target that is no longer the one it started
+      // with (any other command) drops the ease and the wings go on at the plain rate from where they are.
+      const fe = this._rosaFurlEase;
+      if (fe && fe.target !== target) this._rosaFurlEase = null;
+      if (fe && fe === this._rosaFurlEase && dt > 0) {
+        this._rosaFurlProgress = easedRateStep(fe, this._rosaFurlProgress, target, dt, furlRate,
+          Constants.OCTOPUS_V5.OPENING_EASE_S || 1);
+        if (fe.landed) this._rosaFurlEase = null;
+      } else if (this._rosaFurlProgress < target) {
         this._rosaFurlProgress = Math.min(target, this._rosaFurlProgress + rate);
       } else if (this._rosaFurlProgress > target) {
         this._rosaFurlProgress = Math.max(target, this._rosaFurlProgress - rate);
@@ -3198,14 +3233,23 @@ export class PlayerSatellite extends THREE.Group {
    */
   toggleRosaFurl() {
     this._rosaManualControl = true;
+    this._rosaFurlEase = null;   // a player's press is the plain rate (DECISIONS §55 row 4)
     this._rosaFurlTarget = this._rosaFurlTarget >= 0.5 ? 0.0 : 1.0;
     return this._rosaFurlTarget;
   }
 
-  /** Set the ROSA furl target, 0 (furled) → 1 (unfurled) (tests / scripted events). */
-  setRosaFurl(target) {
+  /**
+   * Set the ROSA furl target, 0 (furled) → 1 (unfurled) (tests / scripted events).
+   * @param {number} target 0..1
+   * @param {{ease?: boolean}} [opts] `ease`: the roll-out speeds up and slows down over OPENING_EASE_S at the same top
+   *   speed (the opening's own move, DECISIONS §55 row 4); without it, the plain constant rate. Any later command to the
+   *   wings ends the ease at once.
+   * @returns {number} the new furl target
+   */
+  setRosaFurl(target, opts = undefined) {
     this._rosaManualControl = true;
     this._rosaFurlTarget = clamp01(target);
+    this._rosaFurlEase = (opts && opts.ease === true) ? { target: this._rosaFurlTarget, v: 0 } : null;
     return this._rosaFurlTarget;
   }
 
@@ -3218,6 +3262,7 @@ export class PlayerSatellite extends THREE.Group {
     this._rosaManualControl = true;
     this._rosaFurlTarget = 0.0;
     this._rosaFurlProgress = 0.0;
+    this._rosaFurlEase = null;
     if (typeof this._setRosaWingProgress === 'function') {
       this._setRosaWingProgress(1, 0);
       this._setRosaWingProgress(2, 0);
@@ -3271,7 +3316,8 @@ export class PlayerSatellite extends THREE.Group {
 
   // AFT FLOWER: 4 rigid aft-pivot struts with radiator plates and inert tip hardpoints at the FLOWER-NE/NW/SW/SE stations
   // (az 40/140/220/320, inside the 45k° ± 11.25° grants; clevis pin r 0.475 at the z=−1.0 rim, brackets in the
-  // z −1.000..−0.886 / r 0.34..0.51 band). The struts "open LIKE A FLOWER" — the owner's grammar, kept verbatim. Each plate
+  // z −1.000..−0.886 / r 0.34..0.51 band). The struts open out round the aft end like the plates of a flower
+  // (player-visible text says radiator struts, DECISIONS §55 row 6). Each plate
   // folds in two along the boom line and the whole flower folds FORE along the barrel for launch (θ 0, GEO-comsat
   // pattern) — see _buildFlowerPair.
   //
@@ -3951,8 +3997,10 @@ export class PlayerSatellite extends THREE.Group {
    * fold-corridor limit from the moment of arming, so the wings are clear before the petals arrive; nothing is held and
    * nothing waits for them). (a) and (b) do not engage it (their own procedures furl ROSA, which parks the pivots at 0).
    * @param {'CLOSED'|'STOW'|'PARK'|'CARGO'|'LAUNCH'} pose
-   * @param {{ force?: boolean, override?: boolean }} [opts] honoured for 'LAUNCH'
-   *   only — `force` the dev hook, `override` the SAFETY OVERRIDE sweep
+   * @param {{ force?: boolean, override?: boolean, ease?: boolean }} [opts] `force` the dev hook and `override` the SAFETY
+   *   OVERRIDE sweep are honoured for 'LAUNCH' only; `ease` (the other poses only) is the opening's own soft move
+   *   (DECISIONS §55 row 4): the swing speeds up and slows down over OPENING_EASE_S at the same 15°/s top speed, and any
+   *   other command to the radiators ends the ease the same frame
    * @returns {number|null} the accepted target θ in degrees (0 for LAUNCH), or null
    */
   setFlowerPose(pose, opts = undefined) {
@@ -3960,6 +4008,7 @@ export class PlayerSatellite extends THREE.Group {
     const FL = Constants.THERMAL.FLOWER;
     if (this._flowerGroups.length === 0) return null;
     this._flowerCmdClockS = this._flowerClockS || 0;   // restarts the 180° → 146° settle clock (non-player callers never run above 146°)
+    this._flowerEase = null;   // every command starts at the plain rate; the opening asks for the ease again below
     if (pose === 'LAUNCH') {
       const ls = this._launchSequence;
       const launchActive = !!(ls && typeof ls.isActive === 'function' && ls.isActive());
@@ -3998,6 +4047,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!Number.isFinite(deg)) return null;
     const clamped = clamp(deg, FL.POSE_FLOOR_DEG, FL.POSE_STOW_DEG);
     this._flowerTargetTheta = degToRad(clamped);
+    if (opts && opts.ease === true) this._flowerEase = { target: this._flowerTargetTheta, v: 0 };
     return clamped;
   }
 
@@ -4219,8 +4269,8 @@ export class PlayerSatellite extends THREE.Group {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'THERMAL',
         text: pairKey === 'A'
-          ? 'Aft flower pair A installed — radiator struts at az 40/220. They open LIKE A FLOWER: press O.'
-          : `Aft flower pair B installed — full four-strut flower at az 40/140/220/320. O opens them to ${Constants.THERMAL.FLOWER.OPEN_DEG}° and folds them flat.`,
+          ? 'Aft radiator pair A installed — radiator struts at az 40/220. They open to 146°: press O.'
+          : `Aft radiator pair B installed — all four radiator struts at az 40/140/220/320. O opens them to ${Constants.THERMAL.FLOWER.OPEN_DEG}° and folds them flat.`,
         priority: 'info',
       });
     }
@@ -4358,7 +4408,79 @@ export class PlayerSatellite extends THREE.Group {
     // would otherwise hold them); the root ends stay flush with the centre panel's.
     const wingInset = FL.WING_TIP_INSET_M * M;
     const wingLen = plateLen - wingInset;
-    const wingGeo = new THREE.BoxGeometry(wingLen, wingW * M, FL.PLATE_THICK_M * M);
+    // Rounded outer tip corner (DECISIONS §55 row 3, owner 2026-10-29): only the free-end corner of each side wing is
+    // rounded, radius WING_CORNER_R_M, through the full thickness. The wing is a BoxGeometry-compatible solid built by hand:
+    // 6 draw groups in Box face order (+X, −X, +Y, −Y, +Z, −Z) so the 6-entry material array, its painted-face textures
+    // (UVs = the Box face's) and the callout/keep-out/print readers work unchanged; the arc wall shares the tip-end group.
+    // Heat: RAD_AREA_M2 (Constants.SHIP_HEAT) follows this outline, 2 × (1 − π/4) × r² less per plate face.
+    // One geometry serves both wings: the tip is at wing-local +x, and the LEFT wing's meshes (wing, rails, ridges) are mirrored
+    // with `scale.x = −1` (their group is already turned π about Z, which puts the left tip at −x). Never build a second
+    // geometry for the other side: every BufferGeometry draws four `Math.random` numbers for its uuid, and the seeded
+    // satellite-haul tests (test-SatHaul*, test-SatHandover*) draw their layouts from the same stream after the ship is built.
+    const WING_CORNER_R_M = 0.10;
+    const WING_CORNER_SEGS = 12;                    // facet sagitta 0.2 mm on the 0.10 m radius
+    const wingCornerX = (y) => {                    // x (m, wing-mesh-local, measured toward the tip) of the outline at wing y (m, from the fold axis)
+      const cy = wingW - WING_CORNER_R_M;
+      if (y <= cy) return wingLen / M / 2;
+      return wingLen / M / 2 - WING_CORNER_R_M + Math.sqrt(Math.max(0, WING_CORNER_R_M ** 2 - (y - cy) ** 2));
+    };
+    const buildRoundedWingGeo = () => {
+      const hx = wingLen / 2, hy = (wingW * M) / 2, hz = (FL.PLATE_THICK_M * M) / 2, r = WING_CORNER_R_M * M;
+      // Outline, counter-clockwise seen from +Z (tip at +x, outer edge at +y).
+      // Edge i runs pts[i] → pts[i + 1 (mod n)]: bottom (−Y), tip end (+X), the arc (+X group), top (+Y), root end (−X).
+      const S = WING_CORNER_SEGS;
+      const pts = [[-hx, -hy], [hx, -hy], [hx, hy - r]];
+      for (let k = 1; k <= S; k++) {
+        const a = (k / S) * (Math.PI / 2);
+        pts.push([hx - r + r * Math.cos(a), hy - r + r * Math.sin(a)]);
+      }
+      pts.push([-hx, hy]);
+      const egs = [3, 0, ...new Array(S).fill(0), 2, 1];
+      const n = pts.length;
+      const pos = [], nor = [], uv = [], idx = [], perGroup = [[], [], [], [], [], []];
+      const addVert = (x, y, z, nx, ny, nz, u, v) => { pos.push(x, y, z); nor.push(nx, ny, nz); uv.push(u, v); return pos.length / 3 - 1; };
+      // caps: the outline is convex, so a fan from vertex 0 triangulates it. +Z: Box UV (u from −x, v from −y); −Z: u mirrored.
+      const front = [], back = [];
+      for (let i = 0; i < n; i++) {
+        const [x, y] = pts[i];
+        const u = (x + hx) / (2 * hx), v = (y + hy) / (2 * hy);
+        front.push(addVert(x, y, hz, 0, 0, 1, u, v));
+        back.push(addVert(x, y, -hz, 0, 0, -1, 1 - u, v));
+      }
+      for (let i = 1; i < n - 1; i++) {
+        perGroup[4].push(front[0], front[i], front[i + 1]);
+        perGroup[5].push(back[0], back[i + 1], back[i]);
+      }
+      // side wall: one quad per outline edge; straight edges flat-shaded, arc edges smooth (radial normals)
+      const arcCentre = [hx - r, hy - r];
+      const isArcVert = (x, y) => x > hx - r - 1e-9 && y > hy - r - 1e-9 && (x - (hx - r)) ** 2 + (y - (hy - r)) ** 2 > (r * 0.999) ** 2;
+      for (let i = 0; i < n; i++) {
+        const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % n];
+        const ex = x1 - x0, ey = y1 - y0, len = Math.hypot(ex, ey);
+        const flat = [ey / len, -ex / len];            // outward normal of a counter-clockwise outline
+        const nrm = (x, y) => {
+          if (!isArcVert(x, y)) return flat;
+          const dx = x - arcCentre[0], dy = y - arcCentre[1], l = Math.hypot(dx, dy);
+          return [dx / l, dy / l];
+        };
+        const [n0x, n0y] = nrm(x0, y0), [n1x, n1y] = nrm(x1, y1);
+        const a = addVert(x0, y0, hz, n0x, n0y, 0, 0, 1), b = addVert(x1, y1, hz, n1x, n1y, 0, 1, 1);
+        const c = addVert(x1, y1, -hz, n1x, n1y, 0, 1, 0), d = addVert(x0, y0, -hz, n0x, n0y, 0, 0, 0);
+        perGroup[egs[i]].push(a, d, b, b, d, c);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      perGroup.forEach((g, k) => { geo.addGroup(idx.length, g.length, k); idx.push(...g); });
+      geo.setIndex(idx);
+      geo.computeBoundingBox();
+      geo.computeBoundingSphere();
+      // not a BoxGeometry: print/dims.mjs `box()` reads parameters.width and falls back to the local bounding box
+      geo.parameters = { type: 'RoundedTipWing', cornerRadiusM: WING_CORNER_R_M };
+      return geo;
+    };
+    const wingGeo = buildRoundedWingGeo();
     // Hinge-seam strip: a dark 2 cm band on the centre panel's edge, set back 2 mm from the hinge-line plane (so no side face
     // shares the wing's edge plane) and standing 1 mm proud of both plate faces (log-depth rule: ≥ 1 mm proud, never
     // coplanar). A true cut groove would need the panel split; the dark band is what reads at 3 m.
@@ -4491,12 +4613,18 @@ export class PlayerSatellite extends THREE.Group {
     // not coplanar with the wing's) and a stiffener at y 0.033..0.047.
     const RAIL_W = 0.014, RAIL_H = FL.PLATE_THICK_M + 0.002, RIDGE_W = 0.010, RIDGE_UP = 0.0015;
     const railLen = plateLen / M - 2 * FL.SEAM_END_INSET_M;
-    const wingRailLen = wingLen / M - 2 * FL.SEAM_END_INSET_M;
     const frameCentreGeo = mergeGeos([
       boxAt(railLen, RAIL_W, RAIL_H, 0, 0.120, 0), boxAt(railLen, RAIL_W, RAIL_H, 0, -0.120, 0)]);
     // wing-local y is measured from the fold axis (the wing mesh's own centre is at y wingW / 2)
+    // The outer rail follows the rounded tip corner (§55 row 3): its tip end stops SEAM_END_INSET_M inside the outline at the
+    // rail's outermost edge, so the box stays inside the wing's outline (tip at wing-local +x; the left wing's mesh is mirrored).
+    const wingRootX = wingLen / M / 2 - FL.SEAM_END_INSET_M;     // |x| of the root-end limit (the root end is square)
+    const spanBox = (tipEnd, w, h, cy, cz) =>                 // box from the root limit to `tipEnd` (both measured toward the tip, +x)
+      boxAt(tipEnd + wingRootX, w, h, (tipEnd - wingRootX) / 2, cy, cz);
+    const wingTipLimit = (yTop) => Math.min(wingLen / M / 2 - FL.SEAM_END_INSET_M, wingCornerX(yTop) - FL.SEAM_END_INSET_M);
     const frameWingGeo = mergeGeos([
-      boxAt(wingRailLen, RAIL_W, RAIL_H, 0, 0.142, 0), boxAt(wingRailLen, RAIL_W, RAIL_H, 0, 0.040, 0)]);
+      spanBox(wingTipLimit(0.142 + RAIL_W / 2), RAIL_W, RAIL_H, 0.142, 0),
+      spanBox(wingTipLimit(0.040 + RAIL_W / 2), RAIL_W, RAIL_H, 0.040, 0)]);
     // §11.17: the rails are PAINTED on the faces as a mipmapped texture, not drawn as geometry: a 0.7-2 px box shimmers as the
     // view turns. The rail meshes stay in the scene (names, sizes and clearances are pinned by tests) but are not drawn:
     // `paintedAway` is a material that three skips (material.visible false), so mesh.visible and raycasts are unchanged.
@@ -4506,10 +4634,12 @@ export class PlayerSatellite extends THREE.Group {
     const paintedAway = new THREE.MeshBasicMaterial();
     paintedAway.visible = false;
     paintedAway.userData.keepOutSolid = true;
-    const railFace = (lengthM, widthM, bands) => [frontMat, backMat].map((base, k) => {
+    // `tipCorner` (wings only): the painted rail follows the rounded outline too, 10 mm inside it like the hidden boxes above
+    // (arc 0.09 m about the geometry's corner centre).
+    const railFace = (lengthM, widthM, bands, tipCorner = null) => [frontMat, backMat].map((base, k) => {
       const mat = base.clone();
       mat.map = getRadiatorRailTexture({
-        lengthM, widthM, endInsetM: FL.SEAM_END_INSET_M, faceHex: 0xE8E6E0,
+        lengthM, widthM, endInsetM: FL.SEAM_END_INSET_M, faceHex: 0xE8E6E0, tipCorner,
         rails: bands.map(([c, w, kind]) => [c, w, kind === 'seam' ? 0x1c1e26 : 0x55585c]),
       });
       mat.color.set(0xffffff);                      // the face colour lives in the texture now
@@ -4519,12 +4649,14 @@ export class PlayerSatellite extends THREE.Group {
       [cHalf - 0.120, RAIL_W, 'rail'], [cHalf + 0.120, RAIL_W, 'rail'],
       [cHalf - seamY / M, FL.WING_SEAM_M, 'seam'], [cHalf + seamY / M, FL.WING_SEAM_M, 'seam']])];
     const plateMatWing = [metalMat, metalMat, metalMat, metalMat, ...railFace(wingLen / M, wingW, [
-      [0.142, RAIL_W, 'rail'], [0.040, RAIL_W, 'rail'], [WING_DETAIL_Y_M, 0.01, 'seam']])];
+      [0.142, RAIL_W, 'rail'], [0.040, RAIL_W, 'rail'], [WING_DETAIL_Y_M, 0.01, 'seam']],
+      { radiusM: WING_CORNER_R_M, insetM: FL.SEAM_END_INSET_M })];
     // Coolant channels: 11 ridges (5 centre, 3 per wing), 10 mm wide, 1.5 mm proud, +Z face only. The middle centre ridge runs
     // under the Ø60 boom spine (the boom stands 15 mm proud of the face): it is there, not seen.
     const ridge = (len, cy) => boxAt(len, RIDGE_W, RIDGE_UP + 0.001, 0, cy, FL.PLATE_THICK_M / 2 + RIDGE_UP / 2 - 0.0005);
     const pipesCentreGeo = mergeGeos([-0.085, -0.045, 0, 0.045, 0.085].map((y) => ridge(railLen, y)));
-    const pipesWingGeo = mergeGeos([0.06, 0.09, 0.12].map((y) => ridge(wingRailLen, y)));
+    const ridgeTo = (cy) => spanBox(wingTipLimit(cy + RIDGE_W / 2), RIDGE_W, RIDGE_UP + 0.001, cy, FL.PLATE_THICK_M / 2 + RIDGE_UP / 2 - 0.0005);
+    const pipesWingGeo = mergeGeos([0.06, 0.09, 0.12].map((y) => ridgeTo(y)));
 
     // The root clevis (two-ear clevis on a pad; stepped pin; ears; bearing bosses; a motor + harmonic-gear cylinder on one
     // pin end, a small encoder cap on the other; two hard stops; a U harness loop) scaled x1.2 for the Ø60 boom. The pad is the
@@ -4785,12 +4917,14 @@ export class PlayerSatellite extends THREE.Group {
         const wing = new THREE.Mesh(wingGeo, plateMatWing);
         wing.position.set(wingShiftX, (wingW / 2) * M, knuckleK * M);
         wing.name = `FlowerStrutWing_${i}_${side}`;
+        if (sgn < 0) wing.scale.x = -1;           // the rounded tip corner is at +x in the geometry: the left wing's tip is at wh −x
         wing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         wh.add(wing);
         // the wing's own rails and channels ride its fold transform (children of `wh`)
         const wingFrame = new THREE.Mesh(frameWingGeo, metalMat);
         wingFrame.position.set(wingShiftX, 0, knuckleK * M);
         wingFrame.name = `FlowerStrutWing_${i}_${side}_Frame`;
+        if (sgn < 0) wingFrame.scale.x = -1;
         wingFrame.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         wingFrame.userData.noSolarShade = true;
         wingFrame.material = paintedAway;         // §11.17
@@ -4798,6 +4932,7 @@ export class PlayerSatellite extends THREE.Group {
         const wingPipes = new THREE.Mesh(pipesWingGeo, frontMat);
         wingPipes.position.set(wingShiftX, 0, knuckleK * M);
         wingPipes.name = `FlowerStrutWing_${i}_${side}_Pipes`;
+        if (sgn < 0) wingPipes.scale.x = -1;
         wingPipes.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         wingPipes.userData.noSolarShade = true;
         wh.add(wingPipes);
@@ -5022,10 +5157,19 @@ export class PlayerSatellite extends THREE.Group {
     const stepping = target !== undefined && dt > 0;
     const theta0 = this._flowerThetaRad;
 
+    // The opening's own radiator swing (setFlowerPose with `ease`) is soft; any other target (another command, a tip-bag
+    // retarget) ends it and the swing goes on at the plain rate from where it is, this frame.
+    let fe = this._flowerEase || null;
+    if (fe && fe.target !== target) fe = this._flowerEase = null;
     if (stepping) {
-      const maxDelta = FL.SLEW_RATE_RAD_S * dt;
-      const delta = target - this._flowerThetaRad;
-      this._flowerThetaRad += clamp(maxDelta, -maxDelta, delta);
+      if (fe) {
+        this._flowerThetaRad = easedRateStep(fe, this._flowerThetaRad, target, dt, FL.SLEW_RATE_RAD_S,
+          Constants.OCTOPUS_V5.OPENING_EASE_S || 1);
+      } else {
+        const maxDelta = FL.SLEW_RATE_RAD_S * dt;
+        const delta = target - this._flowerThetaRad;
+        this._flowerThetaRad += clamp(maxDelta, -maxDelta, delta);
+      }
       this._flowerThetaRad = bandGate(this, theta0, this._flowerThetaRad, dt);   // wings wait before the band while a catch is in the way
     }
 
@@ -5082,8 +5226,12 @@ export class PlayerSatellite extends THREE.Group {
       }
     }
 
+    // An eased swing is not called arrived until it has run out its ramp (it lands exactly on the target), so the slow end
+    // is not cut short by the 0.57° settle band.
     if (stepping && Math.abs(this._flowerThetaRad - target) < FL.SETTLE_EPS_RAD
+        && !(fe && !fe.landed)
         && !(this._flowerLaunchLock && releasing)) {
+      this._flowerEase = null;
       // Land EXACTLY on the CLOSED rest (final step < SETTLE_EPS_RAD) so a closed radiator reads θ 0° / openFrac 0, not
       // up to 0.57° / 0.0065: the D4 contract the heat lane reads. Other poses keep the daughter-contract residual.
       if (!this._flowerLaunchLock && target <= orbitFloorRad + 1e-9) this._flowerThetaRad = orbitFloorRad;
@@ -9462,11 +9610,18 @@ export class PlayerSatellite extends THREE.Group {
       // Gradual strut slew toward a target alpha (the Period key's latch in InputManager, or ArmManager's salvage /
       // recall drivers).
       if (arm._strutTargetAlpha !== undefined && arm.setAimAlpha) {
-        arm.setAimAlpha(arm._strutTargetAlpha, dt);
-        // Clear target when reached (0.01 rad ≈ 0.6°)
-        if (Math.abs(arm.getAimAlpha() - arm._strutTargetAlpha) < 0.01) {
+        // The opening's own moves carry a mark (ArmManager.restStruts, StrutAuto's first show): that move eases in and
+        // out at the strut's own top speed. Any other write to the latch drops the mark here and the strut goes on at the
+        // plain constant rate from where it is, this same frame (DECISIONS §55 row 4).
+        const ease = strutEaseFor(arm);
+        arm.setAimAlpha(arm._strutTargetAlpha, dt, ease);
+        // Clear target when reached (0.01 rad ≈ 0.6°; an eased move also waits for the end of its ramp)
+        if (strutArrived(arm, arm._strutTargetAlpha, ease)) {
           arm._strutTargetAlpha = undefined;
+          arm._strutEase = null;
         }
+      } else if (arm._strutEase) {
+        arm._strutEase = null;
       }
 
       // Current sweep angle from the arm FSM (default π/2 = radially out)

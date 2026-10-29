@@ -200,7 +200,7 @@ const GLASS_LINES = Object.freeze([
   // The THROTTLE UP beat chip (Shift+=) is up for the whole ch5_burn lesson, the only place these two lines show.
   [' Trim your closing rate on the throttle (+/-) to nail the intercept window.', ' Tap THROTTLE UP to trim your closing rate and nail the intercept window.'],
   ['Use + / - to throttle and time your intercept burn on the ISS threat frags.', 'Tap THROTTLE UP and time your intercept burn on the ISS threat frags.'],
-  ['They open LIKE A FLOWER: press O.', 'They open LIKE A FLOWER: tap RADIATORS on floor 1.'],
+  ['They open to 146°: press O.', 'They open to 146°: tap RADIATORS on floor 1.'],
   [' O opens them to ', ' RADIATORS on floor 1 opens them to '],
   ['Nav orb shown (8 to hide)', 'Nav orb shown (tap ORB to fold it)'],
   ['Nav orb hidden (8 to show)', 'Nav orb folded (tap ORB to show it)'],

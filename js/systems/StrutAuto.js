@@ -40,6 +40,48 @@ export function autoPoseFor(open) {
   return open ? Constants.OCTOPUS_V5.STRUT_REST_ALPHA : 0;
 }
 
+/**
+ * The mark an opening move puts on an arm (`arm._strutEase`) next to its `_strutTargetAlpha` write (DECISIONS §55 row 4,
+ * "Softer opening"): that one move speeds up and slows down over OPENING_EASE_S at the strut's own top speed
+ * (STRUT_SLEW_RATE; the speed itself does not change). PlayerSatellite._updateStruts (and `_slewHeadless` here) pass it to
+ * `ArmUnit.setAimAlpha` while the latch still holds `target`; a latch rewritten to anything else drops the mark that frame
+ * and the strut goes on at the plain constant rate from where it is. The object is the ease key, so keep it for the move.
+ * @param {number} target radians: the latch value this mark belongs to
+ * @returns {{target:number, durationS:number, topRadS:number, accelRadS2:number}}
+ */
+export function openingStrutEase(target) {
+  const V5 = Constants.OCTOPUS_V5;
+  return { target, durationS: 0, topRadS: V5.STRUT_SLEW_RATE, accelRadS2: V5.STRUT_SLEW_RATE / V5.OPENING_EASE_S };
+}
+
+/**
+ * Has the strut arrived at its latch `target`? Plain: within 0.01 rad (0.6°), as ever. Eased: the ease has run out its time
+ * and the strut is within that 0.01 rad, so the slow end of the ease is not cut short.
+ * @param {{getAimAlpha:Function, _aimEase?:{t:number, T:number}|null}} arm
+ * @param {number} target radians
+ * @param {object|null} ease the ease `strutEaseFor` gave this frame
+ * @returns {boolean}
+ */
+export function strutArrived(arm, target, ease) {
+  if (!(Math.abs(arm.getAimAlpha() - target) < 0.01)) return false;
+  if (!ease) return true;
+  const e = arm._aimEase;
+  return !e || e.t >= e.T;
+}
+
+/**
+ * The ease to hand `setAimAlpha` for an arm's pending latch: its mark while the latch still holds the marked target, else
+ * null (and the stale mark is dropped: any other command, or no latch, means the plain constant rate).
+ * @param {{_strutEase?:object|null, _strutTargetAlpha?:number}} arm
+ * @returns {object|null}
+ */
+export function strutEaseFor(arm) {
+  const m = arm._strutEase;
+  if (!m) return null;
+  if (arm._strutTargetAlpha === undefined || arm._strutTargetAlpha !== m.target) { arm._strutEase = null; return null; }
+  return m;
+}
+
 function _defaultStorage() {
   try {
     return (typeof localStorage !== 'undefined') ? localStorage : null;
@@ -318,7 +360,10 @@ export class StrutAutoController {
     }
     this._show = { phase: 'out', backs, press: view.pressCount(), arms, top: V.DEMO_TOP_RAD };
     this._checkS = 0;
-    for (const a of arms) { a._strutTargetAlpha = V.DEMO_TOP_RAD; this._st(a).mine = V.DEMO_TOP_RAD; }
+    for (const a of arms) {
+      a._strutTargetAlpha = V.DEMO_TOP_RAD; this._st(a).mine = V.DEMO_TOP_RAD;
+      a._strutEase = openingStrutEase(V.DEMO_TOP_RAD);   // §55 row 4: the show's out leg starts gently
+    }
   }
 
   /**
@@ -387,8 +432,12 @@ export class StrutAutoController {
     s.phase = 'back';
     for (const a of s.arms) {
       const back = s.backs.get(a);
-      if (Math.abs(a.getAimAlpha() - back) > 1e-6) { a._strutTargetAlpha = back; this._st(a).mine = back; }
-      else a._strutTargetAlpha = undefined;
+      if (Math.abs(a.getAimAlpha() - back) > 1e-6) {
+        a._strutTargetAlpha = back; this._st(a).mine = back;
+        // Gentle only from the top, where the out leg has ended. A turn-back in mid-swing (a clearance check) goes at the
+        // plain rate at once: nothing waits.
+        a._strutEase = Math.abs(a.getAimAlpha() - s.top) < 1e-3 ? openingStrutEase(back) : null;
+      } else a._strutTargetAlpha = undefined;
     }
   }
 
@@ -399,8 +448,9 @@ export class StrutAutoController {
       const t = arm._strutTargetAlpha;
       if (t === undefined || typeof arm.setAimAlpha !== 'function') continue;
       if (t !== this._st(arm).mine && !arm._strutManual) continue;
-      arm.setAimAlpha(t, dt);
-      if (Math.abs(arm.getAimAlpha() - t) < 0.01) arm._strutTargetAlpha = undefined;
+      const ease = strutEaseFor(arm);
+      arm.setAimAlpha(t, dt, ease);
+      if (strutArrived(arm, t, ease)) arm._strutTargetAlpha = undefined;
     }
   }
 }

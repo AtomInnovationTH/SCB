@@ -3054,7 +3054,9 @@ export class ArmUnit {
    *
    * @param {number} alpha — target angle in radians [0, π]
    * @param {number} [dt=0] — frame deltaTime for slew-rate clamping; 0 snaps immediately (initialization).
-   * @param {{durationS?:number}|null} [ease=null] — ease the move (see above)
+   * `ease.topRadS` / `ease.accelRadS2` (both optional) replace that peak and ramp: the opening eases its strut move at the
+   * strut's own top speed (STRUT_SLEW_RATE) over OPENING_EASE_S. The clamp to STRUT_SLEW_RATE below still applies.
+   * @param {{durationS?:number, topRadS?:number, accelRadS2?:number}|null} [ease=null] — ease the move (see above)
    * @returns {boolean} always true
    */
   setAimAlpha(alpha, dt = 0, ease = null) {
@@ -3063,14 +3065,17 @@ export class ArmUnit {
 
     if (dt > 0) {
       let desired = target;
-      if (ease && V5.STRUT_EASE_ACCEL > 0) {
+      // The opening's own moves pass their own top speed and ramp (`topRadS`, `accelRadS2`); no one else does.
+      const accel = (ease && ease.accelRadS2 > 0) ? ease.accelRadS2 : V5.STRUT_EASE_ACCEL;
+      if (ease && accel > 0) {
         let e = this._aimEase;
         if (!e || e.src !== ease || e.to !== target) {
           const d = Math.abs(target - this._aimAlpha);
-          const prof = strutEaseProfile(d, V5.STRUT_EASE_ACCEL, V5.AIM_TURN_STRUT_PACE, ease.durationS || 0);
+          const top = (ease.topRadS > 0) ? ease.topRadS : V5.AIM_TURN_STRUT_PACE;
+          const prof = strutEaseProfile(d, accel, top, ease.durationS || 0);
           e = this._aimEase = {
             src: ease, from: this._aimAlpha, to: target, sign: target >= this._aimAlpha ? 1 : -1,
-            d, a: V5.STRUT_EASE_ACCEL, v: prof.v, T: prof.T, t: 0,
+            d, a: accel, v: prof.v, T: prof.T, t: 0,
           };
         }
         e.t += dt;
