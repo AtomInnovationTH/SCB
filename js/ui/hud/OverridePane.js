@@ -236,7 +236,7 @@ const TICK_MS = 1000;                // the 1 Hz label refresh while expanded
 const PAD_PX = 8;
 const Z_VIGNETTE = 9990;
 const Z_COUNTDOWN = 9995;
-const Z_VEIL = 100000;               // above everything incl. the pause overlay
+const Z_VEIL = 100000;               // above everything incl. the pause card (FocusPauseCard, 9000)
 /**
  * The demo bags' tip order: the two tips the F1 camera sees first. MEASURED 2026-10-28 (a one-off browser probe through a
  * `window.__dbg` patch of main.js; the script was not kept): full-size bag, radiators closed, F1 camera after the
@@ -1926,7 +1926,7 @@ export class OverridePane {
     this._cancelBtn = null;
   }
 
-  /** The black veil: above the pause overlay, swallows POINTER events only (no key trap, so Esc still pauses). */
+  /** The black veil: above the pause card, swallows POINTER events only (no key trap, so P / Esc still pause). */
   _showVeil() {
     if (!this._canBody()) return;
     this._removeVeil();

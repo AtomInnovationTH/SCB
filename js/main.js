@@ -306,7 +306,8 @@ let _lastLoopTs = -1;
 // `document.hasFocus()` cross-check in the blur handler filters false positives (DevTools, iframe, child popup).
 // See archive/GPU_PROFILING_REPORT.md §14.1.
 let _windowBlurred = false;
-// Pause card on focus loss: the freeze stays; the first click/tap/key resumes (restore code in the focus handler).
+// Pause card on focus loss and on a key pause (P / Esc): the freeze stays; the first click/tap/key resumes (restore code in
+// the focus handler). A key-pause lift also unpauses through InputManager.togglePause (the one body; it emits PAUSE_RESUME).
 const focusPauseCard = new FocusPauseCard({
   isRunning: () => gameState.isGameplay(),
   isPaused: () => !!(gameFlowManager && gameFlowManager.paused),
@@ -318,6 +319,7 @@ const focusPauseCard = new FocusPauseCard({
     _syncAudioCtxState();
     _flushScheduledFrame();
   },
+  unpause: () => { if (gameFlowManager && gameFlowManager.paused && inputManager) inputManager.togglePause(); },
 });
 // Last keepalive present timestamp while blurred (see the gameLoop blurred branch).
 let _blurKeepalivePresentTs = 0;
@@ -429,8 +431,8 @@ function _syncAudioCtxState() {
 
 /**
  * Hide the whole HUD overlay during pause (silences CSS animations / composite work on `.hud-panel`). Uses
- * `visibility: hidden`, not `display: none`, to avoid layout churn on every toggle. The pause overlay sits OUTSIDE
- * `#hud-overlay`, so it stays visible.
+ * `visibility: hidden`, not `display: none`, to avoid layout churn on every toggle. The pause card (FocusPauseCard) lives
+ * outside `#hud-overlay` (on `document.body`), so it stays visible.
  * @param {boolean} hide
  */
 function _setHudHidden(hide) {
@@ -1804,6 +1806,8 @@ async function init() {
     deployArm: () => gameFlowManager.deployArm(),
     applyUpgrades: () => gameFlowManager.applyUpgrades(),
     setPaused: (val) => { gameFlowManager.paused = val; },
+    // P / Esc just paused: show the pause card (its lift unpauses). Never from togglePause itself (show mode's cards pause first).
+    onKeyPause: () => focusPauseCard.onKeyPause(),
     getPaused: () => gameFlowManager.paused,
     setLastTime: (t) => { lastTime = t; },
     setApproachTarget: (t) => { gameFlowManager.approachTarget = t; },
@@ -2936,6 +2940,9 @@ async function init() {
   // taps, floor 5 has no tap verb; the ladder disengaged → nothing. Allocation at tap rate only.
   // The resolver is hoisted out of the touch gate so the desktop canvas click (below) resolves through it too.
   const _touchTap = ({ x, y }, opts) => {
+    // Paused: a tap never acts on the frozen world (on c07bd10f a canvas tap under the old invisible pause screen ran a
+    // quick scan, about 55 Wh, spent on resume). Every pause now has a full-window card; this is the backstop.
+    if (gameFlowManager && gameFlowManager.paused) return null;
     if (!ladderController || !ladderController.isActive()) return null;
     const floor = ladderController.currentFloor();
     if (floor === 3 && proxNetFloor && proxNetFloor.lastInsertionPoints) {
@@ -3263,19 +3270,21 @@ async function init() {
     }
   });
 
-  // --- Pause overlay: reset lastTime to avoid time-jump on unpause ---
+  // --- Unpause: reset lastTime to avoid time-jump on unpause ---
   // Also wake the rAF loop AND restore HUD visibility: gameLoop is hard-throttled to ~5 Hz while paused (see
   // `_scheduleNextFrame()` design note) and the HUD is hidden via `_setHudHidden()`. PAUSE_RESUME and PAUSE_MENU are
   // the unpause channels; both must restore the HUD + wake the loop.
   // §12.12 Unified unpause path. _syncAudioCtxState() handles ctx.resume (only if policy says we need audio).
   // _flushScheduledFrame cancels the 5 Hz pause throttle so the next frame runs at once, not after the 200 ms timeout.
   eventBus.on(Events.PAUSE_RESUME, () => {
+    focusPauseCard.onUnpaused();
     lastTime = performance.now();
     _setHudHidden(false);
     _syncAudioCtxState();
     _flushScheduledFrame();
   });
   eventBus.on(Events.PAUSE_MENU, () => {
+    focusPauseCard.onUnpaused();
     lastTime = performance.now();
     _setHudHidden(false);
     _syncAudioCtxState();
@@ -3301,6 +3310,7 @@ async function init() {
       if (typeof audioSystem.stopThrusterHum === 'function') audioSystem.stopThrusterHum();
       if (typeof audioSystem.stopDeltaVAlarm === 'function') audioSystem.stopDeltaVAlarm();
     }
+    if (wasGameplay && !nowGameplay) focusPauseCard.onUnpaused();   // left gameplay: a key-pause card has nothing to resume
     _syncAudioCtxState();
     if (to === GameStates.MENU) _menuUntouchedSince = performance.now();   // the menu freeze counts from entering MENU
     if (_menuFrozen) _wakeMenuFreeze();   // a state change without input still wakes both loops
@@ -3696,10 +3706,7 @@ async function init() {
       window.__netPause = (val) => {
         const next = (val === undefined) ? !gameFlowManager.paused : !!val;
         gameFlowManager.paused = next;
-        if (next) {
-          if (hud) hud.showPause();
-        } else {
-          if (hud) hud.hidePause();
+        if (!next) {   // resume only: pausing shows no card (dev hook for net screenshots)
           lastTime = performance.now();
           eventBus.emit(Events.PAUSE_RESUME);
         }

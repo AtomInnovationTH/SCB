@@ -1,8 +1,11 @@
 /**
  * @module ui/FocusPauseCard
- * Pause card shown while the window is unfocused or the page was hidden during live play (DECISIONS §47 row 7).
+ * Pause card shown while the window is unfocused or the page was hidden during live play (DECISIONS §47 row 7), and
+ * after a key pause (P; Esc with the zoom ladder off; DECISIONS §47 row 14).
  * main.js keeps the freeze; this owns only the card and the first-input rule: the world resumes on the first click,
  * tap or key (not on focus alone), and that input never reaches the game.
+ * A key-pause card is shown already armed and its lift also calls `unpause` (InputManager.togglePause, the one body
+ * that resumes the sim); a blur card never does. Held keys (`repeat`) are swallowed while a card is up and never lift it.
  */
 
 const STATE = Object.freeze({ HIDDEN: 'hidden', BLURRED: 'blurred', ARMED: 'armed' });
@@ -23,11 +26,12 @@ const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'F
 /**
  * Cards that own input while open (demo mode's "Still playing?" and its end card, DECISIONS §52). Under one, this card never
  * shows and never swallows: on an iPad wake both can be up, and the first tap must reach that card's buttons (a tap that
- * un-paused the game behind the end card would be wrong).
+ * un-paused the game behind the end card would be wrong), except a key-pause card's lift, which also unpauses (§47 row 14;
+ * DemoEnd re-pauses on every walk-away tick).
  */
 const YIELD_TO_IDS = ['still-playing-card', 'demo-end-card'];
 
-/** @type {Partial<CSSStyleDeclaration>} full-window layer: z-index 9000 sits above the HUD pause overlay (150). */
+/** @type {Partial<CSSStyleDeclaration>} full-window layer: z-index 9000 sits above the HUD (`#hud-overlay` 10, index.html). */
 const LAYER_STYLE = {
   position: 'fixed', top: '0', left: '0', width: '100%', height: '100%',
   display: 'none', alignItems: 'center', justifyContent: 'center',
@@ -57,18 +61,21 @@ export class FocusPauseCard {
   /**
    * @param {object} o
    * @param {() => boolean} o.isRunning world is running (gameplay state)
-   * @param {() => boolean} o.isPaused the Esc pause menu is open
+   * @param {() => boolean} o.isPaused the game is paused by something other than this card (show mode's cards)
    * @param {() => void} o.resume called once per card, when the player's input lifts it
+   * @param {() => void} [o.unpause] called once after `resume`, only when a key-pause card is lifted by input
    * @param {() => boolean} [o.touch] touch device: "Tap to resume"
    * @param {Document} [o.document]
    * @param {Window} [o.window]
    * @param {() => number} [o.now] ms clock
    * @param {() => boolean} [o.yieldTo] another input-owning card is open (default: an element in YIELD_TO_IDS exists)
    */
-  constructor({ isRunning, isPaused, resume, touch = () => false, document: doc, window: win, now, yieldTo } = {}) {
+  constructor({ isRunning, isPaused, resume, unpause = () => {}, touch = () => false, document: doc, window: win, now, yieldTo } = {}) {
     this._isRunning = isRunning;
     this._isPaused = isPaused;
     this._resume = resume;
+    this._unpause = unpause;
+    this._keyPause = false;
     this._touch = touch;
     this._doc = doc || (typeof document !== 'undefined' ? document : null);
     this._win = win || (typeof window !== 'undefined' ? window : null);
@@ -100,6 +107,24 @@ export class FocusPauseCard {
     return true;
   }
 
+  /**
+   * A key pause just paused the game: show the card already armed, so the first input lifts it and unpauses.
+   * @returns {boolean} card is up (false: not running, or a YIELD_TO card owns input: show nothing)
+   */
+  onKeyPause() {
+    if (this._state !== STATE.HIDDEN) return true;
+    if (!this._isRunning() || this._yieldTo()) return false;
+    this._show();
+    this._state = STATE.ARMED;
+    this._keyPause = true;
+    return true;
+  }
+
+  /** The game was unpaused or left by another path: drops a key-pause card (no resume, no unpause; a blur card stays). */
+  onUnpaused() {
+    if (this._state !== STATE.HIDDEN && this._keyPause) this._hide();
+  }
+
   /** Focus is back: the card stays until the player's input. @returns {boolean} card is up (caller keeps the freeze) */
   onFocus() {
     if (this._state === STATE.BLURRED) this._state = STATE.ARMED;
@@ -111,6 +136,7 @@ export class FocusPauseCard {
 
   _show() {
     this._state = STATE.BLURRED;
+    this._keyPause = false;
     this._tail = null;
     if (this._doc && this._win) {
       const el = this._ensureEl();
@@ -148,20 +174,28 @@ export class FocusPauseCard {
 
   _input(e) {
     if (e.type === 'keydown' && MODIFIER_KEYS.has(e.key)) return;   // Cmd-Tab back: a bare modifier can't steer
+    if (e.type === 'keydown' && e.repeat) {   // a held P (it paused on its first keydown) must not lift the card it made
+      this._swallow(e);
+      return;
+    }
+    const keyPause = this._keyPause;
     if (this._yieldTo()) {   // that card opened over this one: lift and resume, but the input (and its tail) is its own
       this._hide();
       this._tail = null;
       this._resume();
+      if (keyPause) this._unpause();
       return;
     }
     this._swallow(e);
     this._hide();
     this._startTail(e);
     this._resume();
+    if (keyPause) this._unpause();
   }
 
   _hide() {
     this._state = STATE.HIDDEN;
+    this._keyPause = false;
     if (this._el) this._el.style.display = 'none';
   }
 

@@ -378,42 +378,6 @@ export class HUD {
     `;
     this.container.appendChild(this._conjunctionPanel);
 
-    this._pauseOverlay = document.createElement('div');
-    this._pauseOverlay.id = 'hud-pause-overlay';
-    Object.assign(this._pauseOverlay.style, {
-      position: 'absolute',
-      top: '0', left: '0', width: '100%', height: '100%',
-      display: 'none',
-      background: 'rgb(var(--hud-ink-rgb, 0 10 20) / 0.7)',
-      zIndex: '150',
-      pointerEvents: 'auto',
-      fontFamily: 'var(--font-mono)',
-    });
-    this._pauseOverlay.innerHTML = `
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;">
-        <div style="font-size:2rem;color:var(--hud-normal, #00ff88);letter-spacing:0.3em;margin-bottom:2rem;
-                    text-shadow:0 0 20px rgb(var(--hud-normal-rgb, 0 255 136) / 0.5);">PAUSED</div>
-        <div id="pause-resume-btn" style="font-size:1rem;color:var(--hud-normal, #00ff88);cursor:pointer;padding:10px 30px;
-            border:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.5);border-radius:4px;margin:8px;
-            background:rgb(var(--hud-normal-rgb, 0 255 136) / 0.1);letter-spacing:0.15em;">
-            RESUME [P / ESC]
-        </div>
-        <div id="pause-menu-btn" style="font-size:1rem;color:var(--hud-caution, #ffaa00);cursor:pointer;padding:10px 30px;
-            border:1px solid rgb(var(--hud-caution-rgb, 255 170 0) / 0.4);border-radius:4px;margin:8px;
-            background:rgb(var(--hud-caution-rgb, 255 170 0) / 0.08);letter-spacing:0.15em;">
-            MAIN MENU
-        </div>
-      </div>
-    `;
-    this.container.appendChild(this._pauseOverlay);
-
-    this._pauseOverlay.querySelector('#pause-resume-btn').addEventListener('click', () => {
-      eventBus.emit(Events.PAUSE_RESUME);
-    });
-    this._pauseOverlay.querySelector('#pause-menu-btn').addEventListener('click', () => {
-      eventBus.emit(Events.PAUSE_MENU);
-    });
-
     Object.assign(this.panels, this.statusPanel.panels);
     Object.assign(this.panels, this.targetPanel.panels);
     Object.assign(this.panels, this.commsPanel.panels);
@@ -1474,13 +1438,6 @@ export class HUD {
       this.setSelectedTarget(data.id);
     });
 
-    eventBus.on(Events.PAUSE_RESUME, () => {
-      this.hidePause();
-    });
-    eventBus.on(Events.PAUSE_MENU, () => {
-      this.hidePause();
-    });
-
     // Skill-based progressive revelation
     eventBus.on(Events.SKILL_DISCOVERED, (data) => {
       if (!this._skillRevealActive) return;
@@ -2140,18 +2097,9 @@ export class HUD {
     Object.values(this.panels).forEach(p => p.style.display = 'none');
     if (this._rightColumn) this._rightColumn.style.display = 'none';
     if (this.debrisWireframe) this.debrisWireframe.setVisible(false);
-    this.hidePause();
     // The ARM PILOT strip lives on document.body, not the HUD container
     this._hideArmPilotStrip();
     if (this.container) this.container.style.opacity = '1';
-  }
-
-  showPause() {
-    if (this._pauseOverlay) this._pauseOverlay.style.display = 'block';
-  }
-
-  hidePause() {
-    if (this._pauseOverlay) this._pauseOverlay.style.display = 'none';
   }
 
   /** @param {object} config — one of the VIEW_INFO_LEVELS entries */

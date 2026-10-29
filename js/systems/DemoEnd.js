@@ -132,7 +132,7 @@ export function wireDemoEnd(d) {
     d.reset();
   };
   // Pause the game behind the card; never un-pauses. Also run on every walk-away tick: the "Paused" card (FocusPauseCard) may
-  // have been up when this card opened, and its next tap resumes the game behind us (FocusPauseCard.js:151-155).
+  // have been up when this card opened, and its next tap resumes the game behind us (FocusPauseCard.js:182-188).
   const holdPause = () => {
     const p = d.pause;
     if (p && p.isGameplay() && !p.isPaused()) p.toggle();

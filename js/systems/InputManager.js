@@ -519,9 +519,10 @@ export class InputManager {
   }
 
   /**
-   * Pause or resume the game — the ONE body behind Esc. Gameplay only.
-   * Pausing shows the pause overlay; resuming hides it, resets the frame timer and emits PAUSE_RESUME (the main.js
-   * loop's wake hook: without it the screen froze after resuming).
+   * Pause or resume the game — the ONE body behind P and Esc (and the pause card's lift). Gameplay only.
+   * Pausing only sets the flag (the pause card is shown by the P / Esc key paths via `onKeyPause`, never here: show
+   * mode's cards pause through this before their own card exists); resuming resets the frame timer and emits
+   * PAUSE_RESUME (the main.js loop's wake hook: without it the screen froze after resuming).
    * @returns {boolean|null} true when now paused, false when now running, null when not in gameplay (nothing done)
    */
   togglePause() {
@@ -529,11 +530,7 @@ export class InputManager {
     if (!d || !d.gameState || !d.gameState.isGameplay()) return null;
     const wasPaused = d.getPaused();
     d.setPaused(!wasPaused);
-    if (!wasPaused) {
-      if (d.hud) d.hud.showPause();
-      return true;
-    }
-    if (d.hud) d.hud.hidePause();
+    if (!wasPaused) return true;
     d.setLastTime(performance.now());
     // PAUSE_RESUME wakes the rAF loop in main.js (`_scheduleNextFrame()` hook); without it the screen froze after ESC-unpause.
     eventBus.emit(Events.PAUSE_RESUME);
@@ -756,7 +753,7 @@ export class InputManager {
         // 08-workbench §2 (the hosted-codex rule): "Esc closes the topmost pane first, then rides up". ONE controller
         // call decides; the pane order lives in LadderController.closeTopPane(). true → a pane was closed: consume the
         // key, the ride-up is the NEXT Esc. false (no pane / closed / no such method) → the ride-up.
-        // Paused: Esc resumes FIRST (the overlay says "RESUME [ESC]"), before any ride-up. Pausing itself is Esc with the ladder off.
+        // Paused: Esc resumes FIRST (a pause that has no card, show mode's), before any ride-up. Pausing itself is Esc with the ladder off.
         if (isGameplay && d.getPaused()) {
           this.togglePause();
           e.preventDefault();
@@ -804,8 +801,8 @@ export class InputManager {
             }
             this._exitArmPilotCamera();
             if (d.armManager) d.armManager.deselectArm();
-          } else {
-            this.togglePause();
+          } else if (this.togglePause()) {
+            d.onKeyPause?.();   // Esc with the ladder off pauses: show the pause card
           }
         }
         break;
@@ -816,7 +813,7 @@ export class InputManager {
       // No guard above returns early while paused, so the same key resumes. A held key does not flicker it.
       case 'KeyP':
         if (isGameplay && !e.ctrlKey && !e.metaKey && !e.altKey) {
-          if (!e.repeat) this.togglePause();
+          if (!e.repeat && this.togglePause()) d.onKeyPause?.();   // paused now: show the pause card (its lift resumes)
           e.preventDefault();
         }
         break;
