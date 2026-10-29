@@ -131,6 +131,7 @@ export const VITALS_COLLAPSED_HEIGHT_PX = 2 + 2 * VITALS_GEOMETRY.PAD_Y_PX + VIT
  */
 export const VITALS_LAW = Object.freeze({
   HEAT_SCALE_C: 100,        // the HEAT bar's full scale
+  MOTOR_TAG_HOLD_MS: 1000,  // the BATTERY row's motor-watts pill stays this long after the last motor stops
   // The bands are the ship's (Constants.SHIP_HEAT); 60 / 85 is the DECISIONS §2 row 5 ruling, used until that block exists.
   HEAT_YELLOW_C: Constants.SHIP_HEAT?.YELLOW_C ?? 60,   // amber from here (economic pain starts)
   HEAT_RED_C: Constants.SHIP_HEAT?.RED_C ?? 85,         // red from here (tools refuse)
@@ -494,6 +495,17 @@ function defaultNow() {
     ? performance.now() : Date.now();
 }
 
+/** The on-screen names of the motor sources (ResourceSystem.billWatts' `src`), English only. */
+export const MOTOR_NAMES = Object.freeze({
+  strut: 'Strut', radiator: 'Radiators', wingDrum: 'Wing drums', wingTilt: 'Wing tilt',
+  strutReel: 'Reel', netReel: 'Net reel', lassoReel: 'Lasso reel', reload: 'Reload',
+});
+
+/** Whole watts, thousands with a comma: 2500 -> "2,500". */
+function fmtWatts(w) {
+  return String(Math.round(w)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
 function clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
 
 /** A fill width as a write-stable string: 0.1 % steps. */
@@ -527,6 +539,8 @@ export class VitalsPane {
     // The arrow and the time left wait until this many one-second means exist (a full window by
     // default) — a first scan 12 s into the game must not be the median of a 12-sample history.
     this._warmup = Number.isFinite(deps.medianWarmup) ? Math.max(0, deps.medianWarmup) : VITALS_LAW.MEDIAN_SAMPLES;
+    this._motorTag = '';          // the BATTERY row's motor-watts pill text, held MOTOR_TAG_HOLD_MS past the last motor
+    this._motorTagUntil = -Infinity;
     this._row = {};              // key -> { el, fill, flash, value, rate, tag, st }; 'gas' / 'ion' / 'wheels' are the PROPULSION halves
     this._wheelsOn = false;      // the WHEELS half is shown (the kit is aboard)
     this._wheelsEls = [];        // its separator and the half
@@ -544,7 +558,7 @@ export class VitalsPane {
   }
 
   /** A new game forgets the last game's power samples; the warm-up (30 one-second means) starts again. */
-  resetMedian() { this._median.reset(); this._timeHold = newTimeHold(); this._trueTimeText = ''; this._writeTime(''); }
+  resetMedian() { this._median.reset(); this._timeHold = newTimeHold(); this._trueTimeText = ''; this._writeTime(''); this._motorTag = ''; this._motorTagUntil = -Infinity; }
 
   /** The root element, or null headless. */
   get root() { return this._root; }
@@ -590,7 +604,7 @@ export class VitalsPane {
     }
 
     this._paintHeat(thermal);
-    this._paintBattery(res, power, t);
+    this._paintBattery(res, power, t, this._motorTagText(rs, t));
     this._paintGas(res, mb, t);
     this._paintIon(res, rs, mb);
     this._paintWheels(player, t);
@@ -672,8 +686,31 @@ export class VitalsPane {
     });
   }
 
+  /**
+   * @private DECISIONS §53 row 2 ("motors show their real watts on the battery meter while they run"): the text of the
+   * BATTERY row's pill. One source running reads `<Name> <W> W` ("Strut 15 W"), two or more `Motors <sum> W`. It stays
+   * MOTOR_TAG_HOLD_MS after the last motor stops (no flicker), then clears. '' with no ledger or no motor.
+   * @param {object|null} rs  the ResourceSystem (needs getMotorLoads)
+   * @param {number} t        ms clock of this paint
+   */
+  _motorTagText(rs, t) {
+    let loads = null;
+    if (rs && typeof rs.getMotorLoads === 'function') {
+      try { loads = rs.getMotorLoads(); } catch (_e) { loads = null; }
+    }
+    if (Array.isArray(loads) && loads.length > 0) {
+      const sum = loads.reduce((a, l) => a + (Number(l.w) > 0 ? Number(l.w) : 0), 0);
+      const name = loads.length === 1 ? (MOTOR_NAMES[loads[0].src] || 'Motor') : 'Motors';
+      this._motorTag = `${name} ${fmtWatts(sum)} W`;
+      this._motorTagUntil = t + VITALS_LAW.MOTOR_TAG_HOLD_MS;
+    } else if (!(t <= this._motorTagUntil)) {
+      this._motorTag = '';
+    }
+    return this._motorTag;
+  }
+
   /** @private BATTERY: level + capacity + trend arrow + time left (median net power) + the cost flash. */
-  _paintBattery(res, power, t) {
+  _paintBattery(res, power, t, motorTag = '') {
     const r = this._row.battery;
     let level = NaN;
     let max = NaN;
@@ -687,7 +724,7 @@ export class VitalsPane {
     if (power && Number.isFinite(Number(power.netW))) this._median.push(t, Number(power.netW));
     else this._median.reset();
     if (!(max > 0)) {
-      this._write(r, { band: 'none', fill: '0%', value: DASH, rate: '', rateDir: '' });
+      this._write(r, { band: 'none', fill: '0%', value: DASH, rate: '', rateDir: '', tag: '' });
       this._holdTime('', NaN, t);
       return;
     }
@@ -700,6 +737,7 @@ export class VitalsPane {
       value: fmtBattery(level, max),
       rate: trend.text,
       rateDir: trend.dir,
+      tag: motorTag,
     });
     this._holdTime(fmtTimeLeft(level, max, net), timeLeftMinutes(level, max, net), t);
     this._cost('battery', t, level, max, VITALS_LAW.FLASH_BATT_FRAC * max, VITALS_LAW.FLASH_EXTEND_BATT_FRAC_PER_S * max);
@@ -1036,6 +1074,9 @@ export class VitalsPane {
           m.style.left = `${(c / VITALS_LAW.HEAT_SCALE_C) * 100}%`;
           t.track.appendChild(m);
         }
+      }
+      if (key === 'heat' || key === 'battery') {
+        // HEAT: the RADIATOR AUTO pill. BATTERY: the motor-watts pill ("Strut 15 W"), same cell, same look.
         rec.tag = mk('span', 'vp-tag');
         rec.tag.setAttribute('data-empty', '');
         t.track.appendChild(rec.tag);
@@ -1234,6 +1275,12 @@ export class VitalsPane {
         padding: 0 3px;
         border-radius: 2px;
         text-shadow: none;
+        /* a long pill ("Net reel 2,500 W") is clipped inside its bar, never wraps or pushes the row */
+        max-width: calc(100% - 6px);
+        box-sizing: border-box;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
       }
       #${VITALS_ID} .vp-rate[data-dir="up"]   { color: ${NORMAL}; }
       #${VITALS_ID} .vp-rate[data-dir="down"] { color: ${CAUTION}; }

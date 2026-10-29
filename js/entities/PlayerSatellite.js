@@ -197,11 +197,11 @@ const {
  * @param {number} dt - real seconds
  * @returns {number} battery units drawn
  */
-function billMotorW(ship, watts, dt) {
+function billMotorW(ship, watts, dt, src) {
   if (!ship || ship._motorBillHeld === true || !(watts > 0) || !(dt > 0)) return 0;
   const rs = ship._resourceSystem;
   if (!rs || typeof rs.billWatts !== 'function') return 0;
-  return rs.billWatts(watts, dt);
+  return rs.billWatts(watts, dt, src);
 }
 
 /** A hinge / tilt drive turning at least this fast is moving (rad/s). */
@@ -3146,7 +3146,7 @@ export class PlayerSatellite extends THREE.Group {
       }
       // Both roll-out drums turn together: bill them while they move.
       if (this._rosaFurlProgress !== p0) {
-        billMotorW(this, 2 * (Constants.MOTOR_DRAW_W?.WING_DRUM ?? 0), dt);
+        billMotorW(this, 2 * (Constants.MOTOR_DRAW_W?.WING_DRUM ?? 0), dt, 'wingDrum');
       }
       this._setRosaWingProgress(1, this._rosaFurlProgress);
       this._setRosaWingProgress(2, this._rosaFurlProgress);
@@ -5044,7 +5044,7 @@ export class PlayerSatellite extends THREE.Group {
     // slew, or dt 0, bills nothing). A held petal bills for itself (`_stepPetalHolds`).
     const holdsNow = this._petalHolds || EMPTY_HOLDS;
     if (stepping && Math.abs(this._flowerThetaRad - theta0) >= motorMoveMinRadS() * dt) {
-      billMotorW(this, (Constants.MOTOR_DRAW_W?.RADIATOR_HINGE ?? 0) * Math.max(0, this._flowerGroups.length - holdsNow.length), dt);
+      billMotorW(this, (Constants.MOTOR_DRAW_W?.RADIATOR_HINGE ?? 0) * Math.max(0, this._flowerGroups.length - holdsNow.length), dt, 'radiator');
     }
     if (holdsNow.length > 0) this._stepPetalHolds(dt, floorRad, ceilRad, holdsTipBag ? tipBand : Infinity);
 
@@ -5121,7 +5121,7 @@ export class PlayerSatellite extends THREE.Group {
       const maxDelta = dt > 0 ? (h.rateRadS > 0 ? h.rateRadS : FL.SLEW_RATE_RAD_S) * dt : 0;
       if (maxDelta > 0) h.thetaRad += clamp(maxDelta, -maxDelta, tgt - h.thetaRad);
       h.thetaRad = clamp(h.thetaRad, floorRad, ceilRad);
-      if (maxDelta > 0 && Math.abs(h.thetaRad - before) >= motorMoveMinRadS() * dt) billMotorW(this, hingeW, dt);
+      if (maxDelta > 0 && Math.abs(h.thetaRad - before) >= motorMoveMinRadS() * dt) billMotorW(this, hingeW, dt, 'radiator');
       if (h.releasing && Math.abs(h.thetaRad - this._flowerThetaRad) < 1e-9) holds.splice(i, 1);
     }
   }
@@ -6599,12 +6599,12 @@ export class PlayerSatellite extends THREE.Group {
     if (this.panelRightPivot) {
       const cur = this.panelRightPivot.rotation.x;
       this.panelRightPivot.rotation.x = lerp(cur, target, alpha);
-      if (Math.abs(this.panelRightPivot.rotation.x - cur) >= moveMin) billMotorW(this, driveW, dt);
+      if (Math.abs(this.panelRightPivot.rotation.x - cur) >= moveMin) billMotorW(this, driveW, dt, 'wingTilt');
     }
     if (this.panelLeftPivot) {
       const cur = this.panelLeftPivot.rotation.x;
       this.panelLeftPivot.rotation.x = lerp(cur, target, alpha);
-      if (Math.abs(this.panelLeftPivot.rotation.x - cur) >= moveMin) billMotorW(this, driveW, dt);
+      if (Math.abs(this.panelLeftPivot.rotation.x - cur) >= moveMin) billMotorW(this, driveW, dt, 'wingTilt');
     }
   }
 
@@ -9477,7 +9477,7 @@ export class PlayerSatellite extends THREE.Group {
       // one frame later).
       if (dt > 0 && sg._billAlpha !== undefined
           && Math.abs(alpha - sg._billAlpha) >= motorMoveMinRadS() * dt) {
-        billMotorW(this, Constants.MOTOR_DRAW_W?.STRUT_HINGE ?? 0, dt);
+        billMotorW(this, Constants.MOTOR_DRAW_W?.STRUT_HINGE ?? 0, dt, 'strut');
       }
       sg._billAlpha = alpha;
 

@@ -37,6 +37,7 @@ import { daysWithTurnWait } from './TripProfile.js';
 import { pieceName } from './BigPieces.js';
 import { fatePay } from './BigPieceValues.js';
 import { pushTargetKm, lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
+import { jobLine } from './JobsBoard.js';
 
 export const STAY_ID = 'stay';
 
@@ -116,7 +117,9 @@ export function pctText(gasKg, aboardKg) {
  * `motherNets` the mother's nets aboard now (an unknown count never pre-focuses the satellite); `credits` her wallet (no number
  * = no call row); `gasCredits` one gas buy's price (the call needs it on top of its own price); `startOwed` false = a mission is
  * going on (a field cannot be picked: "finish this mission first"; Stay is always there), default true; `turnWaitS` {up, down}.
- * @returns {{rows: WhereNextRow[], focusId: (string|null), selectable: string[], line: (string|null)}}
+ * `job` the posted job to show (js/systems/JobsBoard.js; none = no board line): the result's `job` is its line, and the posting's
+ * field row ends " \u00b7 Wanted".
+ * @returns {{rows: WhereNextRow[], focusId: (string|null), selectable: string[], line: (string|null), job: ({text: string, fieldId: string, done: boolean, missed: boolean}|null)}}
  */
 export function buildWhereNextRows(reg, opts = {}) {
   const berth = typeof reg.berthedSatellite === 'function' ? reg.berthedSatellite() : null;
@@ -215,7 +218,23 @@ export function buildWhereNextRows(reg, opts = {}) {
   const line = selectable.length
     ? (berth && !anyPieces && onlySatellites ? ALL_CLEARED_LINE : null)
     : (berth ? (anyPieces ? BERTH_NO_REACH_LINE : ALL_CLEARED_LINE) : NO_REACH_LINE);
-  return { rows, focusId, selectable, line };
+  return { rows, focusId, selectable, line, job: jobOf(rows, opts && opts.job) };
+}
+
+/**
+ * @private The jobs board's line for the list, and the " \u00b7 Wanted" tag on the posting's field row while it is open. The posting's field has
+ * no row when it is the field she is at (the line then says "Wanted here"). Null with nothing to show.
+ */
+function jobOf(rows, posting) {
+  if (!posting || !posting.posted) return null;
+  const closed = !!(posting.done || posting.missed);
+  const row = closed ? null : rows.find((r) => r.kind === 'field' && r.id === posting.fieldId) || null;
+  const text = jobLine(posting, row, { kgText, daysText });
+  if (!closed && row && row.state !== 'cleared') {
+    row.text += ` ${DOT} Wanted`;
+    if (row.shortText) row.shortText += ` ${DOT} Wanted`;
+  }
+  return text ? { text, fieldId: posting.fieldId, done: !!posting.done, missed: !!posting.missed } : null;
 }
 
 /** The panel draws at most this many destination rows (fields, satellites, the call and push-down rows; not "Stay here"). */
@@ -230,6 +249,7 @@ const moreFields = (n) => `${n} more ${n === 1 ? 'field' : 'fields'}`;
  *   - the rest: rows she can pick now, cheapest gas first, a tie by fewer days (the call, which costs credits not gas, after the gas ones).
  *     At most TOP_N destinations in all. Rows she cannot pick (cleared, short of gas, a mission going on) are not drawn.
  *   - `focusId` on a reachable row outside the five: drawn as one extra line while it has the focus (a chip tap on the map).
+ *   - the field of an open job (`model.job`, not done, not missed) she can pick is always drawn: one extra line after the five when it is not among them.
  *   - Stay is its own line at the bottom, outside the five.
  *   - the call, when she can pick it, is always among the five (it has no chip on the height scale).
  *   - `outLines`: at most two short lines saying why rows are not drawn ("3 more fields out of reach: need more gas"); none when there
@@ -252,7 +272,11 @@ export function whereNextView(model, focusId = null) {
   const callRow = reach.find((r) => r.kind === CALL_KIND);
   if (callRow && !top.includes(callRow)) { if (top.length >= TOP_N) top[TOP_N - 1] = callRow; else top.push(callRow); }
   const drawn = top.slice();
-  const extra = focusId != null && !top.some((r) => r.id === focusId) ? reach.find((r) => r.id === focusId) : null;
+  // an open job's field is always on the list (the Wanted line tells her to go there): one extra row after the five when it is not among them
+  const job = model && model.job;
+  const jobRow = job && job.fieldId && !job.done && !job.missed ? reach.find((r) => r.kind === 'field' && r.id === job.fieldId) : null;
+  if (jobRow && !top.includes(jobRow)) drawn.push(jobRow);
+  const extra = focusId != null && !drawn.some((r) => r.id === focusId) ? reach.find((r) => r.id === focusId) : null;
   if (extra) drawn.push(extra);
   const stay = all.find((r) => r.kind === 'stay');
   if (stay) drawn.push(stay);

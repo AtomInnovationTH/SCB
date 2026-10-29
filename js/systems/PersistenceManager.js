@@ -141,6 +141,9 @@ class PersistenceManager {
         // owner, areaM2, fieldId, fieldRow, fate, holder, caughtAtMs, members?}] (saveGame, BigPieces ledger); written only
         // when there are some, so a save with none (every old one, and a game-over save) is byte-identical.
         ...(Array.isArray(data.bigPieces) && data.bigPieces.length ? { bigPieces: data.bigPieces } : {}),
+        // The jobs board's one posting `{v, fieldId, row, posted, done, doneShown}` (js/systems/JobsBoard.js, DECISIONS §42 row 5);
+        // written only once it is posted, so every old save and a game-over save stay byte-identical. A missing or malformed key loads as "not posted yet".
+        ...(data.jobs != null && typeof data.jobs === 'object' ? { jobs: data.jobs } : {}),
         // DECISIONS §49 row 3: the characterising steps already paid for pieces over her catch limit, `[{k: 'fieldId|fieldRow',
         // s: ['find','orbit',...]}]` (gather: DossierSystem; piece ids do not survive a reload, a field and its row do),
         // restored by GameFlowManager on Continue so a reload never pays a step twice. Written only when something was paid.

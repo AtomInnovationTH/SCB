@@ -2215,7 +2215,7 @@ export class NetProjectile {
       if (rs && typeof rs.billWatts === 'function') {
         const MD = Constants.MOTOR_DRAW_W || {};
         const mechW = Math.max(0, this.tensionN) * (reelTravelM / dt) / (MD.REEL_EFFICIENCY || 0.5);
-        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.MOTHER_REEL_MIN ?? 15, mechW)), dt);
+        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.MOTHER_REEL_MIN ?? 15, mechW)), dt, 'netReel');
       }
     }
 

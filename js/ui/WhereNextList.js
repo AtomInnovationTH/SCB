@@ -65,7 +65,7 @@ export class WhereNextList {
   /**
    * @param {object} deps
    * @param {Document|null} [deps.doc]      null = headless
-   * @param {function} deps.getRows         () => buildWhereNextRows(...) result: { rows, focusId, selectable, line }
+   * @param {function} deps.getRows         () => buildWhereNextRows(...) result: { rows, focusId, selectable, line, job }
    * @param {function} deps.onPick          (id) => boolean: the pick (GameFlowManager.pickWhereNext)
    * @param {function} [deps.glass]         () => true on a touch screen (44 px rows, tap wording)
    * @param {function} [deps.isInputBlocked] () => true when the game would swallow a Space (paused, not gameplay, codex / help / old
@@ -294,7 +294,8 @@ export class WhereNextList {
     const glass = !!this._glass();
     const rowPx = glass ? ROW_PX_GLASS : ROW_PX_DESKTOP;
     const view = this._view();
-    const key = JSON.stringify([glass, this._focusId, view.bestId, view.outLines, this._model.line, view.rows.map((r) => [r.id, r.shortText || r.text, r.selectable])]);
+    const job = this._model.job && this._model.job.text ? this._model.job : null;
+    const key = JSON.stringify([glass, this._focusId, view.bestId, view.outLines, this._model.line, job, view.rows.map((r) => [r.id, r.shortText || r.text, r.selectable])]);
     if (key === this._paintKey) return;
     this._paintKey = key;
     for (const el of this._rowEls) this._root.removeChild(el);
@@ -304,6 +305,13 @@ export class WhereNextList {
     title.textContent = TITLE_TEXT;
     Object.assign(title.style, { color: VisualLaw.COLORS.INFO, marginBottom: '4px', opacity: '0.85' });
     add(title);
+    if (job) {      // the jobs board (js/systems/JobsBoard.js): one line under the opening line, not a row (it cannot be picked)
+      const wanted = doc.createElement('div');
+      wanted.textContent = job.text;
+      wanted.setAttribute('data-job', job.done ? 'done' : job.missed ? 'missed' : 'wanted');
+      Object.assign(wanted.style, { color: VisualLaw.COLORS.INFO, marginBottom: '4px', fontSize: '0.75rem', opacity: job.done || job.missed ? '0.7' : '1' });      // may wrap: the gas and days at its end must stay readable
+      add(wanted);
+    }
     for (const r of view.rows) {
       const focused = r.id === this._focusId;
       const row = doc.createElement('div');

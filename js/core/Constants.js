@@ -388,6 +388,35 @@ export const Constants = {
                                 // (a tracker's sub-0.1°/s creep after it has caught the sun bills nothing)
   },
 
+  // The daughters' own battery, loads, solar, charging and heat (owner 2026-10-28 23:20Z, DECISIONS §53 row 3: "Daughters
+  // get a battery and heat"; js/systems/DaughterPower.js, one per daughter). Same clock and units as the mother's
+  // ledger: Wh = W × dt ÷ SHIP_HEAT.W_PER_UNIT_S (dt in real seconds; a watt moves 3.6 J per real second). Every pair
+  // below is { weaver, spinner }. Her engine's own watts are ION_THRUSTER.BEAM_POWER_* (40 / 25 W, §50: not copied here).
+  // Sources: published hardware (NASA Small Spacecraft SoA 2026, power and GNC chapters; GomSpace NanoPower BPX;
+  // Enpulsion Nano R³ datasheet via satsearch); "estimate" marks what no datasheet gave.
+  DAUGHTER_POWER: {
+    PACK_WH: { weaver: 25, spinner: 10 },      // measured pick (lane p33-daughter-power T1: worst scripted sortie 43 % / 15 % of the pack, shadow, no solar). Li-ion 150-270 Wh/kg → 125 g / 50 g
+    ENGINE_STANDBY_W: { weaver: 3.5, spinner: 2.2 }, // engine hot standby while undocked: Enpulsion Nano R³ 3.5 W; the spinner × 25/40 (estimate)
+    AVIONICS_W: { weaver: 3, spinner: 1.5 },   // computer, radio, star tracker, wheels' idle while undocked (estimate from the NASA GNC figures: wheels 0.85-9 W peak, star tracker 0.27-1.4 W)
+    AIM_W: { weaver: 5, spinner: 1 },          // extra while she turns faster than AIM_MIN_DEG_S (estimate: reaction-wheel peak)
+    AIM_MIN_DEG_S: 1,                          // °/s: slower is holding, not aiming (estimate)
+    VALVE_W: { weaver: 2, spinner: 1 },        // cold-gas valves while any gas flows (estimate: no datasheet found)
+    LAUNCHER_W: 5,                             // net release device (estimate), both types …
+    LAUNCHER_S: 0.5,                           // … for this long per shot: 2.5 J, 0.0007 Wh on her clock
+    SOLAR_W: { weaver: 13, spinner: 3 },       // one long body face in sun: 0.06 m² / 0.015 m² at ≈ 212 W/m² (body panels measured 17.6-19.5 W on 0.23 × 0.37 m, NASA SST SoA); 0 in Earth's shadow
+    CHARGE_W: { weaver: 50, spinner: 20 },     // from the mother while docked (estimate: about 1 C or less of her pack)
+    CHARGE_EFF: 0.9,                           // charger and cell efficiency (estimate): the mother pays W, the pack gains 0.9 W
+    FLAT_RELEASE_FRAC: 0.02,                   // once flat she stays flat until the pack holds this much again (so sunlight against her standby load does not flicker her thrusters)
+    HEAT: {
+      SPECIFIC_J_PER_KG_K: 900,                // aluminium structure (estimate): C = mass × this
+      SUN_ABSORPTIVITY: 0.6,                   // sunlight absorbed by the lit face (estimate)
+      SOLAR_FLUX_W_M2: 1361,                   // solar constant
+      EARTH_IR_W_M2: 237,                      // Earth's infrared at her altitude, on one quarter of her area
+      EMISSIVITY: 0.8,                         // radiating and Earth-IR absorbing (estimate)
+      START_C: 20,                             // a new game
+    },
+  },
+
   SOLAR_PANEL_EFFICIENCY: 0.30,   // 30% efficient cells
   // Mother-wings step 4 (DECISIONS §10, "power follows the panels, realistic
   // wins"): was a generic, unrelated 20 m² placeholder (the ship never had 20

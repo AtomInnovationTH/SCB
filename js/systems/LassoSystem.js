@@ -1695,7 +1695,7 @@ export class LassoSystem {
         const mass = this.target ? (this.target.mass || 0) : 0;
         const tensionN = Constants.LASSO_TENSION_BASE_N + mass * Constants.LASSO_TENSION_PER_KG;
         const mechW = tensionN * lineSpeed / (MD.REEL_EFFICIENCY || 0.5);
-        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.MOTHER_REEL_MIN ?? 15, mechW)), dt);
+        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.MOTHER_REEL_MIN ?? 15, mechW)), dt, 'lassoReel');
     }
 
     /** Reel physics (LASSO_REEL_PHYSICS, gated): mass-driven tension + a subtle centre-of-mass pull toward the catch +

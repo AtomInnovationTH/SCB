@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from '../systems/TimeAuthority.js';
+import { DaughterPower, batteryFlatLine } from '../systems/DaughterPower.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture } from '../scene/solarCellTexture.js';
@@ -1138,6 +1139,8 @@ export class ArmUnit {
     // --- Runtime state ---
     this.fuel = 100;                        // 0–100 percentage
     this.coldGasKg = this._coldGasBottleKg(); // her cold-gas bottle, kg (starts full; refilled from the mother's coldGas while docked)
+    this.power = new DaughterPower({ type });   // her battery and heat (DECISIONS §53 row 3); billed by markEngine()/markGas()/shot() + _updateDaughterPower
+    this._adriftCause = null;                 // why she is ADRIFT: 'fuel' (spent ion fuel, today's) or 'battery' (flat pack)
     this._indiumSwapT = -1;                   // game seconds into a docked ion-fuel cartridge swap; < 0 = none running
     this.tetherLength = 0;                  // current deployed length in meters
     this.target = null;
@@ -2655,6 +2658,14 @@ export class ArmUnit {
     if (this.state !== S.DOCKED) return false;
     if (!target || target.id === undefined || target.id === null) return false;
 
+    if (this.power && this.power.flat) {            // her engine runs the shot: nothing to fire it with (same line as a launch)
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `Daughter ${(this.index ?? 0) + 1}: Battery flat: charging`,
+        priority: 'warning',
+      });
+      return false;
+    }
+
     if (this._webShotCooldown > 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${this.displayName}: Web shot cooldown. ${Math.ceil(this._webShotCooldown)}s remaining`,
@@ -2672,6 +2683,7 @@ export class ArmUnit {
     }
 
     this.fuel -= Constants.WEB_SHOT_FUEL_COST;
+    this.power.markEngine();            // an ion debit: her engine bills its rating this frame (DaughterPower)
 
     this._webShotPrevState = this.state;
     this._webShotTarget = target;
@@ -2837,6 +2849,7 @@ export class ArmUnit {
     if (!this._manualMode) return;
     // No usable propellant → thrusters offline: protect the emergency reserve (held for a safe reel-home).
     if (this.state === S.ADRIFT || this.fuel <= (Constants.ARM_RESERVE_FUEL ?? 0)) return;
+    if (this._powerOff()) return;   // flat battery: the thrusters are off (a tethered daughter is ADRIFT before this)
 
     // No gamified multiplier: the crossbow gives the initial velocity, FEEP only corrects.
     const thrustMag = this._computeMetalThrust();
@@ -2861,6 +2874,7 @@ export class ArmUnit {
     this.velocity.addScaledVector(right, direction.x * dv);
     this.velocity.addScaledVector(up, direction.y * dv);
     this.velocity.addScaledVector(forward, direction.z * dv);
+    this.power.markEngine();   // thrusting: her engine bills its rating this frame
   }
 
   /**
@@ -3153,6 +3167,8 @@ export class ArmUnit {
     this.state = S.DOCKED;
     this.fuel = 100;
     this.coldGasKg = this._coldGasBottleKg();   // the bottle resets wherever the FEEP fuel does
+    this.power.reset();                         // the pack too: full, 20 °C
+    this._adriftCause = null;
     this._indiumSwapT = -1;                     // no swap survives a reset
     this.tetherLength = 0;
     this.target = null;
@@ -3340,6 +3356,10 @@ export class ArmUnit {
         !this._carry) {              // the carry bills its own push, once (beginCarry's fuel check, _carryBeginOut)
       this._consumeFuel(dt);
     }
+
+    // Her battery and heat, AFTER every ion and gas debit of this frame (the state machine, `_consumeFuel`) so the engine bills
+    // the frame it fired in: loads, solar, the mother's charge while docked, flat → ADRIFT (DECISIONS §53 row 3).
+    this._updateDaughterPower(dt);
 
     // max-distance kill so detached arms don't drift forever
     if (this.isDetached && this.state !== S.EXPENDED && parentPos) {
@@ -3974,11 +3994,13 @@ export class ArmUnit {
     const dvMagT = dvCmdT.length();
     if (dvMagT > maxDvT && dvMagT > 1e-18) dvCmdT.multiplyScalar(maxDvT / dvMagT);
 
-    // Apply thrust impulse (NOT lerp — direct impulse like mother autopilot)
-    this.velocity.add(dvCmdT);
+    // Apply thrust impulse (NOT lerp — direct impulse like mother autopilot). A flat pack gives no impulse: she coasts.
+    if (!this._powerOff()) {
+      this.velocity.add(dvCmdT);
+      // meter the APPLIED (post-clamp) impulse for impulse-priced fuel
+      this._impulseDvAccum += Math.min(dvMagT, maxDvT) / M;
+    }
     this.position.addScaledVector(this.velocity, dt);
-    // meter the APPLIED (post-clamp) impulse for impulse-priced fuel
-    this._impulseDvAccum += Math.min(dvMagT, maxDvT) / M;
 
     // Fine-approach threshold must be >= standoff so APPROACH has room to decelerate.
     const debrisSizeT = (this.target && this.target.sizeMeter) || 1;
@@ -4113,9 +4135,11 @@ export class ArmUnit {
     const _brakingA = dvMagA > 1e-15 && dvCmdA.dot(this.velocity) < 0;
     this._approachBrake01 += ((_brakingA ? 1 : 0) - this._approachBrake01) * Math.min(1, dt * 8);
 
-    this.velocity.add(dvCmdA);
+    if (!this._powerOff()) {   // a flat pack gives no impulse: she coasts
+      this.velocity.add(dvCmdA);
+      this._impulseDvAccum += Math.min(dvMagA, maxDvA) / M;
+    }
     this.position.addScaledVector(this.velocity, dt);
-    this._impulseDvAccum += Math.min(dvMagA, maxDvA) / M;
 
     // STATION_KEEP entry check, before netting
     if (this.target && !this._manualMode) {
@@ -4315,6 +4339,16 @@ export class ArmUnit {
       goalZ += this._recoilOffsetM.z * M;
     }
 
+    // A flat pack holds nothing: no thrusters, so no hold, no fuel and no engine billed. She coasts on her velocity (a tethered
+    // daughter is ADRIFT by the end of the frame; a detached one just drifts).
+    if (this._powerOff()) {
+      this.position.addScaledVector(this.velocity, dt);
+      this._thetaRate = 0;
+      this._phiRate = 0;
+      this._radiusRate = 0;
+      return;
+    }
+
     // Lerp world position to goal (group.position synced from this.position in update())
     const lerp = SK.STATIONKEEP_LERP_RATE;
     this.position.x += (goalX - this.position.x) * lerp;
@@ -4326,6 +4360,7 @@ export class ArmUnit {
                        Math.abs(this._radiusRate) > 0.01;
     const fuelRate = isManeuver ? SK.FUEL_RATE_MANEUVER : SK.FUEL_RATE_STATIONKEEP;
     this.fuel -= fuelRate * dt;
+    this.power.markEngine();
 
     // Visual-only: latch the plume brightening window off the SAME isManeuver read that selects FUEL_RATE_MANEUVER.
     // Latched here because the rates are reset at the end of this method, BEFORE _updatePlumes runs.
@@ -4378,8 +4413,9 @@ export class ArmUnit {
 
     // §11.3 wheel: firing on a saturated wheel forces a paid RCS desat burn (dump first, then take the new increment).
     const REC = Constants.DAUGHTER_NET_RECOIL;
-    if (this._wheelMomentum >= REC.WHEEL_SATURATION_THRESHOLD) {
+    if (this._wheelMomentum >= REC.WHEEL_SATURATION_THRESHOLD && !this._powerOff()) {   // a flat pack cannot fire the desat burn
       this.fuel = Math.max(0, this.fuel - REC.WHEEL_DESAT_FUEL_COST);
+      this.power.markEngine();      // the desat burn is ion fuel
       this._wheelMomentum = Math.max(0, this._wheelMomentum - REC.WHEEL_DESAT_DUMP);
     }
     this._wheelMomentum += REC.WHEEL_INCREMENT_PER_FIRE;
@@ -4409,6 +4445,7 @@ export class ArmUnit {
    */
   _updateRecoilKick(dt) {
     if (!this._recoilActive) return false;
+    if (this._powerOff()) { this._clearRecoilKick(); return false; }   // no power: no RCS to null the kick, so no surcharge and no hold goal
     // Flag flipped OFF mid-transient (dev toggle / REALITY_MODE): drop the kick at once (zero displacement and billing).
     // Checked after the fast path so the common inactive frame pays nothing.
     if (!Constants.isFeatureEnabled('DAUGHTER_NET_RECOIL')) {
@@ -4429,6 +4466,7 @@ export class ArmUnit {
 
     const surcharge = Constants.STATION_KEEP.FUEL_RATE_MANEUVER * dt;
     this.fuel = Math.max(0, this.fuel - surcharge);
+    this.power.markEngine();
     this._recoilFuelBilled += surcharge;
 
     // Settled: snap exactly to zero so billing stops and the hold goal returns to the pure hold-sphere math.
@@ -4724,6 +4762,7 @@ export class ArmUnit {
       st.w = Math.max(0, st.w - dL / I);
       const kg = st.gasS > 0 ? st.gasKg * step / st.gasS : 0;
       this.coldGasKg = Math.max(0, this.coldGasKg - kg);
+      if (kg > 0) this.power.markGas();   // the valves open while the jet fires (DaughterPower bills them once per frame)
       st.gasBilled += kg;
       st.t += step; left -= step;
       if (st.t >= st.gasS - 1e-12) { st.t = st.gasS; this.coldGasKg = Math.max(0, this.coldGasKg - Math.max(0, st.gasKg - st.gasBilled)); st.gasBilled = st.gasKg; }
@@ -6040,7 +6079,8 @@ export class ArmUnit {
         }
       }
 
-     activeNet = captureNetSystem.fireDaughterNet(
+     // A flat pack: the launcher's release device has no power (a started shot finishes its frame; this is the next one).
+     activeNet = this._powerOff() ? null : captureNetSystem.fireDaughterNet(
        this, this.index, launchPos, launchDir, this.target
      );
 
@@ -6052,9 +6092,11 @@ export class ArmUnit {
            ? this.getNetInventory() : (this._netInventory || 0);
          const cdS = (typeof captureNetSystem.getCooldown === 'function')
            ? captureNetSystem.getCooldown('arm', this.index) : 0;
-         const reason = cdS > 0
-           ? `Net launcher cooling down. Ready in ${Math.ceil(cdS)}s.`
-           : 'Net launcher unavailable. Holding station.';
+         const reason = this._powerOff()
+           ? `${batteryFlatLine()} Net launcher off. Holding station.`
+           : cdS > 0
+             ? `Net launcher cooling down. Ready in ${Math.ceil(cdS)}s.`
+             : 'Net launcher unavailable. Holding station.';
          eventBus.emit(Events.COMMS_MESSAGE, {
            source: this.displayName,
            // Out of nets: the ONE line, exact (nets refill only at the resupply stop; nothing reloads on docking).
@@ -6067,6 +6109,7 @@ export class ArmUnit {
        return;
      }
      this._firedNet = activeNet;
+     this.power.shot(this._powerDocked());       // the release device: LAUNCHER_W for LAUNCHER_S (2.5 J), her pack's out, the mother's docked
 
      // §11.4: the launch is real now: kick the launcher with the FIRED net's class and exact direction (one fire site: once per launch).
      this.applyNetFireRecoil(activeNet.netClass, launchDir);
@@ -7130,12 +7173,18 @@ export class ArmUnit {
     c.flightM = c.flight.length() / M;
     c.durationS = Math.max(0.5, c.flightM / (V.PAYOUT_MPS || 0.2));
     const pct = this.carryFuelPct();
+    if (this.power.flat) {   // no power, no push: the thrusters that carry her are off
+      this._carrySay(`Daughter ${this.index + 1}: ${batteryFlatLine()} Charging; her catch stays on her rack.`, 'warning');
+      this.abortCarry('battery');
+      return;
+    }
     if (!(this.fuel >= pct)) {
       this._carrySay(`Daughter ${this.index + 1} has too little fuel to carry her catch; it stays on her rack.`, 'warning');
       this.abortCarry('fuel');
       return;
     }
     this.fuel -= pct;
+    this.power.markEngine();
     c.fuelPct = pct;
     c.phase = 'clamp';
     c.clampS = 0;
@@ -7279,7 +7328,7 @@ export class ArmUnit {
         const speed = (c.flightM / c.durationS) * 6 * c.u * (1 - c.u) + 1e-6;   // m/s, smoothstep derivative
         const tension = this.carryMassKg() * speed * (Constants.REEL_TENSION_COEFF ?? 0.04);
         const mechW = tension * speed / (MD.REEL_EFFICIENCY || 0.5);
-        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt);
+        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt, 'strutReel');
       }
     }
     if (c.u <= 0) this._carryBeginUnprep('home');
@@ -7350,12 +7399,18 @@ export class ArmUnit {
     });
     c.flightM = n.route.len;
     const pct = this.noseFuelPct();
+    if (this.power.flat) {   // no power, no push
+      this._carrySay(`Daughter ${this.index + 1}: ${batteryFlatLine()} Charging; her catch stays on her rack.`, 'warning');
+      this.abortCarry('battery');
+      return;
+    }
     if (!(this.fuel >= pct)) {
       this._carrySay(`Daughter ${this.index + 1} has too little fuel to carry her catch to the nose; it stays on her rack.`, 'warning');
       this.abortCarry('fuel');
       return;
     }
     this.fuel -= pct;
+    this.power.markEngine();
     c.fuelPct = pct;
     c.phase = 'clamp';
     c.clampS = 0;
@@ -7415,7 +7470,7 @@ export class ArmUnit {
     const speed = (Math.abs(m.to - m.from) / m.dur) * 6 * u * (1 - u) + 1e-6;
     const tension = this.carryMassKg() * speed * (Constants.REEL_TENSION_COEFF ?? 0.04);
     const mechW = tension * speed / (MD.REEL_EFFICIENCY || 0.5);
-    rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt);
+    rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt, 'strutReel');
   }
 
   /** the delivered catch's centre in the SHIP frame (metres), from her pose now: her centre + the rack centre turned by her attitude. */
@@ -7980,7 +8035,7 @@ export class ArmUnit {
     const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
     const massScale = Math.max(1, this._computeReelMUnit(armMass, !!this.capturedDebris) / armMass);
     const dvPct = (2 * v / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV)) * 100 * massScale;
-    if (!(this.fuel >= dvPct) || !this._rhArcClear(dockW, dist, parentPos, parentQuat)) {
+    if (!(this.fuel >= dvPct) || this._powerOff() || !this._rhArcClear(dockW, dist, parentPos, parentQuat)) {
       if (!this._rhWaitSaid) {
         this._rhWaitSaid = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
@@ -7992,6 +8047,7 @@ export class ArmUnit {
       return false;
     }
     this.fuel -= dvPct;
+    this.power.markEngine();
     this._rhLineUp = { R: dist };
     if (!this._rhLineUpSaid) {
       this._rhLineUpSaid = true;
@@ -8353,11 +8409,12 @@ export class ArmUnit {
    * not free. dt 0 (a held world) bills nothing.
    */
   _billIonThread(dt, massKg) {
-    if (!(dt > 0) || !(this.fuel > 0)) return;
+    if (!(dt > 0) || !(this.fuel > 0) || this._powerOff()) return;   // a flat pack: no thread, the winch alone pulls her
     const aTrue = this._ionThrustN() / Math.max(massKg, 1e-6);                       // m/s^2
     const dvTrue = aTrue * dt * TimeAuthority.BASE_SCALE;                             // m/s per game time of this frame
     const pct = dvTrue / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV) * 100;
     this.fuel = Math.max(0, this.fuel - pct);
+    this.power.markEngine();
   }
 
   /**
@@ -8443,10 +8500,10 @@ export class ArmUnit {
     const mass = this._computeReelMUnit(armMass + gas, hasPayload);       // her dry mass + the gas in the bottle + net + catch
     this._rhReelMassKg = mass;
     if (!(dt > 0)) return v0;                                              // a held world: speed, gas and bottle stay put
-    const hasGas = gas > G.EMPTY_KG;
+    const hasGas = gas > G.EMPTY_KG && !this._powerOff();   // a flat pack: the valves have no power, so the ion limit alone brakes her
     if (!this._rhGasChecked) {
       this._rhGasChecked = true;
-      if (!hasGas) {
+      if (!(gas > G.EMPTY_KG)) {
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `Daughter ${this.index + 1} has no gas to brake; the reel brings her in slowly.`, priority: 'warning',
         });
@@ -8532,6 +8589,7 @@ export class ArmUnit {
       // MARGIN x the gas braking needs: mass x speed lost (true m/s) / (Isp g0)
       const kg = Math.min(gas, G.MARGIN * mass * (-dv / BS) / (G.ISP_S * Constants.G0));
       this.coldGasKg = gas - kg;
+      if (kg > 0) this.power.markGas();
     }
     this._rhReelPhase = phase;
     // the line readout (true N): pull-up = mass x pull accel; cruise = the ion thread; braking = the (MARGIN - 1) the reel holds
@@ -8919,8 +8977,9 @@ export class ArmUnit {
             ? 1 / Math.cos(degToRad(YC.ARREST_STEER_DEG ?? 15))
             : 1;
           const debit = (RF.DEBIT_K ?? 0.0008) * mUnit * vArrest * steerLoss;
-          if (plumeClear && this.fuel >= debit) {
+          if (plumeClear && this.fuel >= debit && !this._powerOff()) {
             this.fuel -= debit;
+            this.power.markEngine();
             this._redockDebitApplied = true;
           } else if (RF.FUEL_FALLBACK_SLOW !== false) {
             // Can't fund the burn OR the tether crosses the FEEP plume cone: finish on the reel motor alone (slower,
@@ -8932,7 +8991,9 @@ export class ArmUnit {
               });
               eventBus.emit(Events.COMMS_MESSAGE, {
                 source: this.displayName,
-                text: plumeClear
+                text: this._powerOff()
+                  ? `${this.displayName}: ${batteryFlatLine()} Easing in on the winch.`
+                  : plumeClear
                   ? `${this.displayName}: Low FEEP for arrest. Easing in on the winch.`
                   : `${this.displayName}: Tether fouls the FEEP plume. Easing in on the winch.`,
                 channel: 'CMD', priority: 'warning',
@@ -9012,7 +9073,7 @@ export class ArmUnit {
         // / TimeAuthority.BASE_SCALE). The legacy path keeps its game-scale pairing (old coefficient).
         const lineSpeed = (rh && profileV2) ? reelSpeed / TimeAuthority.BASE_SCALE : reelSpeed;
         const mechW = Math.max(0, this.tetherTension) * lineSpeed / (MD.REEL_EFFICIENCY || 0.5);
-        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt);
+        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt, 'strutReel');
       }
     }
 
@@ -9424,7 +9485,7 @@ export class ArmUnit {
     if (dt > 0) {
       const rs = this._playerSatellite && this._playerSatellite._resourceSystem;
       if (rs && typeof rs.billWatts === 'function') {
-        rs.billWatts(Constants.MOTOR_DRAW_W?.CROSSBOW_RELOAD ?? CROSSBOW_RELOAD_POWER, dt);
+        rs.billWatts(Constants.MOTOR_DRAW_W?.CROSSBOW_RELOAD ?? CROSSBOW_RELOAD_POWER, dt, 'reload');
       }
     }
 
@@ -9463,8 +9524,13 @@ export class ArmUnit {
       return;
     }
 
+    if (this._powerOff()) {   // a flat pack: no sweep thrust, no fuel; she coasts (a tethered trawler is ADRIFT by the frame's end)
+      this.position.addScaledVector(this.velocity, dt);
+      return;
+    }
     const fuelRate = (Constants.TRAWLING && Constants.TRAWLING.FUEL_RATE_TRAWL) || 0.002;
     this.fuel -= fuelRate * dt;
+    this.power.markEngine();
 
     // Detached trawling arms: fuel warnings (same thresholds as _consumeFuel)
     if (this.isDetached) {
@@ -9575,8 +9641,15 @@ export class ArmUnit {
   }
 
   _updateDeorbiting(dt) {
+    if (this._powerOff()) {   // a burn already under way loses power: the thruster stops, no fuel is spent, she coasts
+      this.position.addScaledVector(this.velocity, dt);
+      this.mesh.visible = true;
+      this.tetherLine.visible = false;
+      return;
+    }
     const burnRate = 5.0; // %/sec
     this.fuel -= burnRate * dt;
+    this.power.markEngine();
 
     // Retrograde from the LIVE velocity vector, not `position × ŷ` (that assumed an equatorial orbit and was wrong for
     // inclined tracks, e.g. 51.6°). normalize() of a zero vector returns zero in THREE, so no NaN risk.
@@ -9707,17 +9780,80 @@ export class ArmUnit {
    * @private Transition a tethered daughter into ADRIFT (out of usable propellant but recoverable). Plain-language comms
    * say WHAT happened and WHAT the player can do, never the bare "expended"; fires once per adrift episode.
    */
-  _enterAdrift() {
+  _enterAdrift(cause = 'fuel') {
     if (this.state === S.ADRIFT || this.state === S.EXPENDED || this.isDetached) return;
     this._manualMode = false;
     this._trawlingMode = false;
+    this._adriftCause = cause;      // 'fuel' (today's) or 'battery' (flat pack: DECISIONS §53 row 3); InputManager's adrift line reads it
     this._transitionTo(S.ADRIFT);
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON',
       channel: 'CMD',
-      text: `${this.displayName}: FEEP propellant spent. Thrusters offline, but she's still on the tether and powered. Press R to reel her home (winch, no fuel needed) or disconnect. Not lost.`,
+      text: cause === 'battery'
+        ? `${this.displayName}: ${batteryFlatLine()} Thrusters offline, but she's still on the tether. Press R to reel her home (winch, no fuel needed) or disconnect. Not lost.`
+        : `${this.displayName}: FEEP propellant spent. Thrusters offline, but she's still on the tether and powered. Press R to reel her home (winch, no fuel needed) or disconnect. Not lost.`,
       priority: 'warning',
     });
+  }
+
+  /** @returns {boolean} her pack is flat and she is out (not docked): thrusters, valves and the net launcher are off. */
+  _powerOff() {
+    return this.power.flat && !this._powerDocked();
+  }
+
+  /**
+   * @returns {boolean} she sits on her strut: the mother pays her loads and charges her pack. DOCKED, HOLDING_CATCH, RELOADING
+   * (where the cold-gas refill runs) and CARRY_PREP (docked while the strut and radiators move).
+   */
+  _powerDocked() {
+    const st = this.state;
+    return st === S.DOCKED || st === S.HOLDING_CATCH || st === S.RELOADING || st === S.CARRY_PREP;
+  }
+
+  /**
+   * @private Her battery and heat for this frame (DaughterPower; DECISIONS §53 row 3). Docked (DOCKED, HOLDING_CATCH,
+   * RELOADING: where the cold-gas refill runs) the mother pays her loads and charges her pack through
+   * `billWatts` (untagged: not a motor), the pack gaining CHARGE_EFF of what the mother gave. Out, the pack pays: the
+   * marks the debit sites made this frame (`markEngine`, `markGas`) plus standby, avionics and aiming; sunlight fills it
+   * (the mother's `_inShadow`). A flat pack takes a tethered daughter to ADRIFT; a detached one just has her thrusters,
+   * valves and launcher off (`_powerOff`), she is already beyond the tether's help.
+   */
+  _updateDaughterPower(dt) {
+    if (!(dt > 0)) return;
+    const st = this.state;
+    const q = this.group.quaternion;
+    if (!this._pwQuat) this._pwQuat = q.clone();
+    const dot = Math.min(1, Math.abs(q.x * this._pwQuat.x + q.y * this._pwQuat.y + q.z * this._pwQuat.z + q.w * this._pwQuat.w));
+    const turnDegS = 2 * Math.acos(dot) * RAD2DEG / dt;
+    this._pwQuat.copy(q);
+    if (st === S.EXPENDED) { this.power.update(dt, { docked: true }); return; }
+    const docked = this._powerDocked();
+    const ps = this._playerSatellite;
+    const rs = ps && ps._resourceSystem;
+    const canBill = !!rs && typeof rs.billWatts === 'function';
+    if (docked && canBill) {
+      const askW = this.power.chargeRequestW(dt);
+      if (askW > 0) this.power.store(rs.billWatts(askW, dt));
+    }
+    // docked, her attitude changes are the strut's and the mother's, not her wheels: no aiming load
+    this.power.update(dt, { inSun: !(ps && ps._inShadow), docked, turnDegS: docked ? 0 : turnDegS });
+    // docked, every mark of this frame (engine, valves, aiming, launcher) is the mother's to pay, untagged (not a motor)
+    if (docked && canBill && this.power.motherLoadW > 0) rs.billWatts(this.power.motherLoadW, dt);
+    if (docked || !this.power.flat || this.isDetached) return;
+    // Flat while out. Not while the winch is already bringing her in or she is on her strut's last approach, nor mid-carry:
+    // those run on the reels. A daughter flying home on her thrusters hands over to the winch (as an empty tank does).
+    if (st === S.ADRIFT || st === S.DOCKING || st === S.REELING || st === S.LAUNCHING || this._carry != null) return;
+    if (st === S.RETURNING) {
+      this._transitionTo(S.REELING);
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON', channel: 'CMD',
+        text: `${this.displayName}: ${batteryFlatLine()} Finishing the return on the winch.`,
+        priority: 'warning',
+      });
+      eventBus.emit(Events.ARM_RECALLED, { armId: this.id });
+      return;
+    }
+    this._enterAdrift('battery');
   }
 
   _updateExpended(dt) {
@@ -9784,13 +9920,18 @@ export class ArmUnit {
     // @10 m/s) and billed a slow shot MORE than a fast one over the same ground. Coasting is free; the arrival kill is
     // the bill. Manual-pilot TRANSIT/APPROACH keeps the time-based rate (its thrust path meters no impulse: a recorded
     // split, not an oversight).
-    if ((this.state === S.TRANSIT || this.state === S.APPROACH) && !this._manualMode) {
+    if (this._powerOff()) {
+      // a flat pack: no push, so no fuel spent and no engine billed (DECISIONS §53 row 3: no power, no thrust)
+      this._impulseDvAccum = 0;
+    } else if ((this.state === S.TRANSIT || this.state === S.APPROACH) && !this._manualMode) {
       const dvMps = this._impulseDvAccum;
       this._impulseDvAccum = 0;
       this.fuel -= (dvMps / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV)) * 100;
+      if (dvMps > 0) this.power.markEngine();   // impulse-priced: a frame with a commanded impulse bills her engine's rating
     } else {
       this._impulseDvAccum = 0;
       this.fuel -= rate * dt;
+      if (rate > 0) this.power.markEngine();
     }
 
     // Detached arm fuel warnings (no refuel possible)

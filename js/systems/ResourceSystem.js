@@ -163,6 +163,11 @@ export function engineDeltaV({ dryKg, coldGasKg = 0, gasKg, isp, c = 1 }) {
 }
 
 export class ResourceSystem {
+  /** getMotorLoads(): a motor source counts as running while its last bill is this young (own-clock seconds)... */
+  static MOTOR_LOAD_LIVE_S = 0.2;
+  /** ...and its watts are averaged over its bills in this window. */
+  static MOTOR_LOAD_WINDOW_S = 0.5;
+
   constructor() {
     // `xenon` / `xenonMax` are POOL names kept for compatibility: the pool holds whichever gas is in the tank
     // (`tankGasId`), as a fill percentage (100 = one full 60 L base tank).
@@ -247,6 +252,9 @@ export class ResourceSystem {
     /** @private smoothed watts (HUD scale, same as the `SUN n W` readout) */
     this._inW = 0;
     this._outW = 0;
+    /** @private motor bills by source for getMotorLoads(); never saved (see _clearMotorLoads) */
+    this._motorClock = 0;
+    this._motorBills = new Map();
     /** ThermalSystem (or any { getSnapshot, reset }), set by setThermalSource() */
     this._thermalSource = null;
 
@@ -539,10 +547,61 @@ export class ResourceSystem {
    * (units = W ÷ SHIP_HEAT.W_PER_UNIT_S × dt, PlayerSatellite._updateResources), so a 15 W motor shows as +15 W in
    * `outW`; drawn through drawUpTo (never fails, clamps at empty), so it lands in the ledger and its heat follows
    * (ThermalSystem). Returns the battery units actually drawn.
+   * `src` (optional string key, e.g. 'strut') also records the energy under that source for getMotorLoads(); the battery
+   * drain, ledger and heat are identical with or without it. Untagged bills (the radiator heater) never show there.
    */
-  billWatts(watts, dt) {
+  billWatts(watts, dt, src) {
     if (!(watts > 0) || !(dt > 0)) return 0;
+    if (typeof src === 'string' && src) this._noteMotorBill(src, watts, dt);
     return this.drawUpTo('battery', (watts / Constants.SHIP_HEAT.W_PER_UNIT_S) * dt);
+  }
+
+  /**
+   * What the motors are drawing right now, for the battery meter: `[{ src, w }]`, biggest first, for every tagged source
+   * (billWatts' `src`) that billed within the last MOTOR_LOAD_LIVE_S (0.2 s) of this ledger's own clock (real seconds, the
+   * sum of the update() dts). `w` = energy ÷ billed time over that source's bills in the last MOTOR_LOAD_WINDOW_S (0.5 s),
+   * so a steady 15 W motor reads 15 W from its first frame, two struts in one frame read 30 W, a reel reads its real
+   * varying draw. Bills run before update() in a frame, so each is stamped with the clock as it stood before this frame's
+   * update; bills with the same stamp and source merge (energy summed, time counted once). Never saved.
+   * @returns {Array<{src:string, w:number}>}
+   */
+  getMotorLoads() {
+    const now = this._motorClock;
+    const out = [];
+    for (const [src, list] of this._motorBills) {
+      const last = list[list.length - 1];
+      if (!last || now - (last.t + last.dt) > ResourceSystem.MOTOR_LOAD_LIVE_S) continue;
+      let e = 0;
+      let t = 0;
+      for (const b of list) {
+        if (now - (b.t + b.dt) > ResourceSystem.MOTOR_LOAD_WINDOW_S) continue;
+        e += b.e;
+        t += b.dt;
+      }
+      if (t > 0 && e > 0) out.push({ src, w: e / t });
+    }
+    out.sort((a, b) => b.w - a.w);
+    return out;
+  }
+
+  /** @private record a tagged bill (energy in W·s) under its source, merged per frame stamp, older than the window dropped */
+  _noteMotorBill(src, watts, dt) {
+    let list = this._motorBills.get(src);
+    if (!list) { list = []; this._motorBills.set(src, list); }
+    const last = list[list.length - 1];
+    if (last && last.t === this._motorClock) {
+      last.e += watts * dt;
+      if (dt > last.dt) last.dt = dt;
+    } else {
+      list.push({ t: this._motorClock, dt, e: watts * dt });
+    }
+    while (list.length > 1 && this._motorClock - (list[0].t + list[0].dt) > ResourceSystem.MOTOR_LOAD_WINDOW_S) list.shift();
+  }
+
+  /** @private forget every motor bill and restart the motor clock (reset()/restore()) */
+  _clearMotorLoads() {
+    this._motorClock = 0;
+    this._motorBills.clear();
   }
 
   /** Cumulative battery units drawn since this instance was built (monotonic): ThermalSystem's heat input, it takes the delta each tick. */
@@ -599,9 +658,11 @@ export class ResourceSystem {
     this._outW += (this._frameOutUnits * k - this._outW) * a;
     this._frameInUnits = 0;
     this._frameOutUnits = 0;
+    this._motorClock += dt;
   }
 
   _resetLedgerRates() {
+    this._clearMotorLoads();
     this._frameInUnits = 0;
     this._frameOutUnits = 0;
     this._inW = 0;

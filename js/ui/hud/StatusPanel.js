@@ -26,6 +26,7 @@ import {
   FOLD_TOGGLE_TOUCH_PX, FOLD_CLOSED_GLYPH, FOLD_OPEN_GLYPH,
 } from './PhoneFold.js';
 import { GestureHints } from './GestureHints.js';
+import { VITALS_LAW, levelBand } from './VitalsPane.js';
 import { pressKey } from '../../core/KeyDispatch.js';
 import { RAIL_GEOMETRY, PANE_CORNER_PX, MOTHER_PANE_WIDTH_PX, ARMS_PANE_WIDTH_PX, LEFT_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { BOX_OUTLINE, BOX_OUTLINE_OFFSET } from '../RailIndicator.js';
@@ -2307,6 +2308,33 @@ export class StatusPanel {
   }
 
   /**
+   * A daughter's battery as a thin bar (2 px) under her row's status word (DECISIONS §53 row 3): width = her charge %, coloured by
+   * the mother's battery bands (VITALS_LAW.BATT_AMBER / BATT_RED). It sits in the grid's second row under the status column, so the
+   * row's columns stay as they were. `snap` is `ArmUnit.power.snapshot()`; no snapshot -> nothing.
+   * @param {{frac:number, wh:number, maxWh:number}|null} snap
+   * @returns {string} HTML
+   */
+  static batteryBarHtml(snap) {
+    if (!snap) return '';
+    const frac = clamp01(snap.frac);
+    const band = levelBand(frac, VITALS_LAW.BATT_AMBER, VITALS_LAW.BATT_RED);
+    const color = band === 'red' ? 'var(--hud-warning, #ff4444)' : band === 'yellow' ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-text, #aaffdd)';
+    const pct = Math.round(frac * 100);
+    return `<div class="fleet-batt" title="Battery ${pct}%" style="grid-column:2;grid-row:2;height:2px;background:rgb(var(--hud-info-rgb, 68 136 255) / 0.2);">`
+      + `<div style="height:2px;width:${pct}%;background:${color};"></div></div>`;
+  }
+
+  /**
+   * The selected daughter's battery line, whole numbers: `Battery 25 of 25 Wh · 46 W · 20 °C` (energy left, her pack,
+   * watts out now, her temperature).
+   * @param {{wh:number, maxWh:number, outW:number, tempC:number}} snap
+   * @returns {string}
+   */
+  static batteryLineText(snap) {
+    return `Battery ${Math.round(snap.wh)} of ${Math.round(snap.maxWh)} Wh${MEMO_SEP}${Math.round(snap.outW)} W${MEMO_SEP}${Math.round(snap.tempC)} \u00b0C`;
+  }
+
+  /**
    * @private The launched-daughter telemetry line: mothership range + drift + tether, swapped for target range +
    * closing rate when a target exists. Returns '' for docked/reloading/expended daughters (no telemetry line),
    * except that live wheel momentum still shows (it survives docking).
@@ -2450,6 +2478,10 @@ export class StatusPanel {
     const dv = Math.round((fuelPct / 100) * dvMax);
     const dvColor = this._dvColorTier(fuelPct, 'var(--hud-text, #aaffdd)').color;
     const dvHtml = `<span style="color:${dvColor};white-space:nowrap;text-align:right;" title="Maneuver budget (ΔV)">ΔV ${dv}</span>`;
+    // Battery: her own pack as a 2 px bar under the status word (grid row 2, column 2), no column of its own: the row's columns
+    // and the status word's width are as they were.
+    const powerSnap = armObj && armObj.power && typeof armObj.power.snapshot === 'function' ? armObj.power.snapshot() : null;
+    const battHtml = StatusPanel.batteryBarHtml(powerSnap);
 
     const numHtml = isSel
       ? `<span style="color:var(--hud-info, ${VisualLaw.COLORS.SELECTION});font-weight:bold;">▸${label}</span>`
@@ -2462,10 +2494,14 @@ export class StatusPanel {
       + `<span style="text-align:right;">${numHtml}</span>`
       + `<span style="color:${statusColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"${statusTitle ? ` title="${statusTitle}"` : ''}>${status}${catchFlag}</span>`
       + netHtml
-      + (this._simple ? '' : dvHtml)
+      + (this._simple ? '' : dvHtml + battHtml)
       + `</div>`;
 
     const telemetryLine = this._renderDaughterTelemetry(a, armObj, idx);
+    // The selected daughter's own battery line (energy, watts out, temperature) under her telemetry; not in the simple level.
+    const battLine = isSel && powerSnap && !this._simple
+      ? `<div class="fleet-batt-line" style="padding-left:28px;font-size:10px;margin-top:1px;white-space:nowrap;opacity:0.8;">${StatusPanel.batteryLineText(powerSnap)}</div>`
+      : '';
 
     // Every row names its arm (data-arm-idx = the ORIGINAL index, not the size-sorted position) so the
     // #hud-arms-status click delegate can press Digit(idx+1). Rows a tap can select (1-4) read as tappable
@@ -2495,6 +2531,7 @@ export class StatusPanel {
     return `<div ${rowAttrs}style="padding:2px 4px;background:rgb(var(--hud-info-rgb, 68 136 255) / 0.08);border-left:2px solid var(--hud-info, ${VisualLaw.COLORS.SELECTION});${rowCursor}">`
       + detailLine
       + telemetryLine
+      + battLine
       + keysLine
       + `</div>`;
   }

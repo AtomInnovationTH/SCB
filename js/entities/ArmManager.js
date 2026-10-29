@@ -827,6 +827,7 @@ export class ArmManager {
    * @private
    */
   _deployWithCeremony(arm, target, opts) {
+    if (this._flatPackRefusal(arm)) return false;   // before the mother turns for a launch that will not go
     const ap = this._autopilot;
     const player = this.playerSatellite;
     const canCeremony = ap && typeof ap.requestAimRotation === 'function'
@@ -1036,6 +1037,29 @@ export class ArmManager {
     if (isFree(claim)) return null;
     const text = launchRefusalLine(claim);
     return text ? { kind: claim.kind, claim, text } : null;
+  }
+
+  /**
+   * A flat pack (below FLAT_RELEASE_FRAC of her pack, DECISIONS §53 row 3) launches nothing: her thrusters, valves and net launcher
+   * have no power. One line, and the refusal; she is charging on the strut.
+   * @param {ArmUnit|undefined} arm
+   * @returns {boolean} true when refused (the line is said)
+   */
+  _flatPackRefusal(arm) {
+    if (!arm || !arm.power || !arm.power.flat) return false;
+    this._sayWarn(`Daughter ${(arm.index ?? this.arms.indexOf(arm)) + 1}: Battery flat: charging`);
+    return true;
+  }
+
+  /**
+   * The pair is fired together: when either daughter's pack is flat neither leaves, and each flat one gets her line.
+   * @param {ArmUnit[]} arms
+   * @returns {boolean} true when refused
+   */
+  _flatPairRefusal(arms) {
+    let refused = false;
+    for (const arm of arms) if (this._flatPackRefusal(arm)) refused = true;
+    return refused;
   }
 
   _sayWarn(text) {
@@ -1574,6 +1598,8 @@ export class ArmManager {
 
     if (this.selectedArmIndex >= 0 && this.selectedArmIndex < this.arms.length) {
       const selected = this.arms[this.selectedArmIndex];
+      // a flat pack fires nothing (her engine runs the shot): the picked daughter says so, the shot does not move to another
+      if (selected.state === ARM_STATES.DOCKED && this._flatPackRefusal(selected)) return false;
       if (selected.state === ARM_STATES.DOCKED &&
           selected._webShotCooldown <= 0 && selected.fuel > Constants.WEB_SHOT_FUEL_COST) {
         if (selected.fireWebShot(target)) return true;
@@ -1582,6 +1608,7 @@ export class ArmManager {
 
     const eligible = (a) =>
       a.state === ARM_STATES.DOCKED &&
+      !(a.power && a.power.flat) &&
       a._webShotCooldown <= 0;
 
     let arm = preferType
@@ -1591,6 +1618,8 @@ export class ArmManager {
       arm = this.arms.find(a => eligible(a) && a.fuel > Constants.WEB_SHOT_FUEL_COST);
     }
     if (!arm) {
+      const flat = this.arms.find(a => a.state === ARM_STATES.DOCKED && a.power && a.power.flat && a._webShotCooldown <= 0);
+      if (flat && this._flatPackRefusal(flat)) return false;
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'No daughters available for web shot (cooldown or insufficient fuel)',
         priority: 'warning',
@@ -1949,6 +1978,10 @@ export class ArmManager {
     const arm2 = this.arms[armIndex2];
 
     if (!arm1 || !arm2) return false;
+    if (this._flatPairRefusal([arm1, arm2])) {      // the pair goes together: a flat one holds both (every path below)
+      arm1._claimTarget = null; arm2._claimTarget = null;
+      return false;
+    }
 
     // a pair at ONE fixed strut angle (the pair ceremony's: `firePair`) is the barrier path below, never the per-target gate.
     if (opts && Number.isFinite(opts.alpha)) return this._dualFireFixed(arm1, arm2, target1, target2, opts);
@@ -2014,6 +2047,7 @@ export class ArmManager {
     if (powerDistribution.armMultiplier <= 0) return say('CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy');
     if (tripRefuses('daughter')) return false;
     const pairs = [[offer.armA, offer.tA], [offer.armB, offer.tB]];
+    if (this._flatPairRefusal([offer.armA, offer.armB])) return false;   // the pair goes together: a flat one holds both
     for (const [arm, target] of pairs) {
       if (!target || target._disposed === true || target.alive === false) return say(pairNotReadyLine(arm.displayName));
       if (arm.state !== ARM_STATES.DOCKED || !arm.springCharged || !(arm.fuel > 5) || arm._aimReserved) return say(pairNotReadyLine(arm.displayName));
@@ -2084,6 +2118,7 @@ export class ArmManager {
     if (player && player.safeMode) return stop('Daughters locked. Safe mode active. Repair subsystems first.');
     if (powerDistribution.armMultiplier <= 0) return stop('CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy');
     if (tripRefuses('daughter')) return stop(pairNotReadyLine(arm1.displayName));
+    if (this._flatPairRefusal([arm1, arm2])) { arm1._claimTarget = null; arm2._claimTarget = null; return false; }
     for (const [arm, target] of pairs) {
       if (arm.state !== ARM_STATES.DOCKED || !arm.springCharged || !(arm.fuel > 5)) return stop(pairNotReadyLine(arm.displayName));
       if (target) {
@@ -2420,18 +2455,18 @@ export class ArmManager {
 
   /**
    * What a save must keep per daughter (DECISIONS §34 row 10): ion fuel (%) and cold-gas bottle (kg), keyed by arm id (a changed arm
-   * tier cannot shift the values onto another daughter).
-   * @returns {Array<{id: string, fuel: number, coldGasKg: number}>}
+   * tier cannot shift the values onto another daughter); plus her battery (Wh) and temperature (°C), DECISIONS §53 row 3.
+   * @returns {Array<{id: string, fuel: number, coldGasKg: number, wh: number, tempC: number}>}
    */
   getSupplyState() {
-    return this.arms.map((a) => ({ id: a.id, fuel: a.fuel, coldGasKg: a.coldGasKg }));
+    return this.arms.map((a) => ({ id: a.id, fuel: a.fuel, coldGasKg: a.coldGasKg, ...a.power.save() }));
   }
 
   /**
    * Put saved ion fuel and cold gas back (matched by id; unknown ids skipped, a non-finite value leaves that tank). Fuel clamps to
    * [0, SUPPLY_FUEL_MAX_PCT] (the Daughter Fuel Reserve lifts a full tank to 150 %), the bottle to [0, its size]. Call AFTER `reset()`
    * and the upgrade replay (`ArmUnit.reset()` fills the tanks; the replay can raise a tank's max).
-   * @param {Array<{id: string, fuel?: number, coldGasKg?: number}>|null} list
+   * @param {Array<{id: string, fuel?: number, coldGasKg?: number, wh?: number, tempC?: number}>|null} list
    * @returns {number} how many daughters were restored
    */
   restoreSupplyState(list) {
@@ -2442,6 +2477,7 @@ export class ArmManager {
       if (!a) continue;
       if (Number.isFinite(e.fuel)) a.fuel = Math.min(SUPPLY_FUEL_MAX_PCT, Math.max(0, e.fuel));
       if (Number.isFinite(e.coldGasKg)) a.coldGasKg = Math.min(a._coldGasBottleKg(), Math.max(0, e.coldGasKg));
+      a.power.restore(e);                // her pack and temperature (DECISIONS §53 row 3): missing or malformed → full and 20 °C
       n++;
     }
     return n;
@@ -3385,9 +3421,10 @@ export class ArmManager {
       const tip = nose ? tc.pickTip() : plan.tipIndex;
       if (tip == null || tc.debrisAt(tip) || (typeof tc.isReserved === 'function' && tc.isReserved(tip))) continue;   // every tip busy: waits for a melt
       const pct = nose ? arm.noseFuelPct() : (typeof arm.carryFuelPct === 'function' ? arm.carryFuelPct() : 0);
-      if (!(arm.fuel >= pct)) continue;
+      if (!(arm.fuel >= pct) || arm.power.flat) continue;                              // no fuel, or a flat pack (no power, no push): she waits
       if (!arm.stowUnflown(plan.delivered, tip)) continue;
       arm.fuel -= pct;                                                                 // her thrusters would start and stop her: billed as a flown carry bills it
+      arm.power.markEngine();                                                          // an ion debit: her engine bills its rating this frame
       return { arm, tipIndex: tip, nose };
     }
     return null;
@@ -5142,6 +5179,8 @@ export class ArmManager {
       arm._pairTogether = false; arm._pairSaid = false; arm._pairCatchFailed = false;
       arm.fuel = 100;
       arm.coldGasKg = arm._coldGasBottleKg();   // the bottle is reset wherever the FEEP fuel is
+      arm.power.reset();                        // the pack too: full, 20 °C
+      arm._adriftCause = null;
       // An SK target's LOD-protection flag must not survive the reset: clear it on `_stationKeepTarget` (the SK session's
       // own reference) before dropping the target, else the piece skips LOD downscaling forever (`DebrisField._updateInstanceTransform`), rendering
       // at full detail past the 50 km cull.
@@ -5834,6 +5873,7 @@ export class ArmManager {
   requestClearLaunch(armIndex, getDirShip, fire, mode, opts) {
     if (tripRefuses('daughter')) return false;      // no launch while the ship burns to the next field
     const arm = this.arms[armIndex];
+    if (this._flatPackRefusal(arm)) return false;
     if (!arm || !this.getKeepOut()) return !!fire();
     const pend = this._pendingLaunches || (this._pendingLaunches = new Map());
     if (pend.has(armIndex)) return true;

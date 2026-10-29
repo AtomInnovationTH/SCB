@@ -2120,7 +2120,9 @@ export class InputManager {
   _postAdriftLine(arm) {
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON', channel: 'CMD',
-      text: `${arm.displayName} is adrift. Thrusters dry, avionics live. Press R to reel her home.`,
+      text: arm._adriftCause === 'battery'
+        ? `${arm.displayName} is adrift. Battery flat, thrusters off. Press R to reel her home.`   // DECISIONS §53 row 3: a flat pack, not a dry tank
+        : `${arm.displayName} is adrift. Thrusters dry, avionics live. Press R to reel her home.`,
       priority: 'info',
     });
   }

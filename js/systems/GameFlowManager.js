@@ -36,6 +36,7 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
+import { postFirstJob, isJobPiece, bountyPayLine, toSave as jobToSave, fromSave as jobFromSave, JOBS } from './JobsBoard.js';
 import { buildWhereNextRows, STAY_ID, CALL_ID, PUSH_KIND, PUSH_PREFIX, OPEN_LINE, BERTH_LINE, BERTH_MISSION_LINE, STUCK_CALL_LINE } from './WhereNextRows.js';
 import { salvageGasKg, coldGasKgToPool, coldGasPoolToKg } from './ResourceSystem.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
@@ -147,6 +148,12 @@ export class GameFlowManager {
      * flying to `defaultNext()`; with `?ladder=0` (no floor 4) or in a rig that never wired it, `defaultNext()`.
      */
     this._whereNextOn = false;
+    /**
+     * The jobs board's one posting (js/systems/JobsBoard.js), or null before it is posted. Posted when the "where next" list opens after
+     * mission 1; saved (`jobs`). `_jobDoneOn`: the "Done" line is on the list that is open now (shown once, then never again).
+     */
+    this._job = null;
+    this._jobDoneOn = false;
 
     /**
      * The first INVITATION pays the first-depot floor and persists FIRST_DEPOT_VISITED, but the player has not come
@@ -650,6 +657,9 @@ export class GameFlowManager {
       // The big pieces she was still holding come back on their holders (nothing pays at load). AFTER the arms' reset and
       // the registry's restore; a game-over save carries none.
       if (save.gameOver !== true && Array.isArray(save.bigPieces)) this._restoreBigPieces(save.bigPieces);
+      // The jobs board's posting comes back as it was (a save without the key, or a malformed one, is "not posted yet").
+      this._job = save.gameOver !== true ? jobFromSave(save.jobs) : null;
+      this._jobDoneOn = false;
       // big-rules (§49 row 3): the characterising steps already paid for pieces over her catch limit come back (nothing pays at load).
       if (save.gameOver !== true) dossierSystem.restoreInspect(save.inspectPaid);
       // The hold comes back (entries only: the capacity is the upgrades' replay above). An old save has none: the hold stays.
@@ -784,6 +794,8 @@ export class GameFlowManager {
       const carriedCredits = Math.floor(scoringSystem.credits * 0.5);
       // A fresh attempt: nothing is pending (cleared BEFORE the arms reset, so a rack that drops its piece says nothing)
       bigPieces.clear();
+      this._job = null;                     // a fresh attempt: the board is posted again
+      this._jobDoneOn = false;
       this._unplacedBig = [];
       this._meltFinals = [];                // no melted piece waits to be let go, no save is owed
       this._goneBags = [];                  // no let-go bag is left to take off the field
@@ -1655,6 +1667,8 @@ export class GameFlowManager {
     // No big piece is pending any more. Cleared BEFORE GAME_RESET and the arms' reset, so a rack that drops its
     // piece says nothing and the restored-piece retry list is forgotten.
     bigPieces.clear();
+    this._job = null;                       // the jobs board starts again (a CONTINUE brings the saved posting back after this)
+    this._jobDoneOn = false;
     this._unplacedBig = [];
     this._meltFinals = [];                  // no melted piece waits to be let go, no save is owed
     this._goneBags = [];                    // no let-go bag is left to take off the field
@@ -1897,6 +1911,8 @@ export class GameFlowManager {
     if (gameState.currentState !== GameStates.GAME_OVER) {
       const pending = bigPieces.serialize();
       if (pending.length) saveData.bigPieces = pending;
+      const jobs = jobToSave(this._job);                         // the jobs board's posting (none: no key; a game-over save carries none)
+      if (jobs) saveData.jobs = jobs;
       // The hold (orbit metal the furnaces made, and the small catches' metal). Written only when it holds something.
       const cs = this._refs.cargoSystem;
       const hold = cs && typeof cs.serialize === 'function' ? cs.serialize() : null;
@@ -2369,11 +2385,22 @@ export class GameFlowManager {
    * A pending big piece is disposed of and paid. Adds `totalCr` to the wallet and the score total, says `line` (written by the caller:
    * its action words + `payLine`), emits BIG_PIECE_DISPOSED, clears the pending pay and saves. Pays once: false when nothing is pending
    * under `id` (a second call, an unknown piece, a piece that broke loose).
-   * @param {number|string} id @param {{fate?: string, totalCr?: number, line?: string}} [o] @returns {boolean}
+   * `bounty: false`: this disposal pays no removal fee because the piece stays up over the 25-year rule (a sail let go with a life over
+   * `BIG_PIECES.RULE_YEARS`): the jobs board pays no bonus then and closes the posting as missed.
+   * @param {number|string} id @param {{fate?: string, totalCr?: number, line?: string, bounty?: boolean}} [o] @returns {boolean}
    */
-  disposeBigPiece(id, { fate = null, totalCr = 0, line = '' } = {}) {
+  disposeBigPiece(id, { fate = null, totalCr = 0, line = '', bounty = true } = {}) {
+    const isJob = fate !== 'keep' && isJobPiece(this._job, bigPieces.get(id));      // asked before the ledger lets go of its note
     const d = bigPieces.remove(id);
     if (!d) return false;
+    // The jobs board: the posted piece (its field AND its row) pays the client's bonus on top of this disposal (keep is no disposal)
+    if (isJob && !bounty) {
+      this._job.missed = true;                                       // let go but still up over 25 years: not removed, no bonus, closed
+    } else if (isJob) {
+      totalCr = Math.max(0, Number(totalCr) || 0) + JOBS.BONUS_CR;
+      line = `${line ? `${line} ` : ''}${bountyPayLine(this._job)}`;
+      this._job.done = true;
+    }
     const paid = scoringSystem.awardDisposal(totalCr);
     if (line) {
       eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: line, priority: paid > 0 ? 'good' : 'info', _keep: true });
@@ -2823,8 +2850,32 @@ export class GameFlowManager {
       motherNets: this._motherNetsAboard(), credits: scoringSystem.credits, gasCredits: this._gasBuyPrice(), startOwed: this.missionStartOwed(),
       turnWaitS: this._turnWaitsS(),
       bigPieces: this._bigPiecesOn() ? bigPieces.pendingAboard() : [],      // the push rows and the satellite rows' hand-over words
+      job: this._jobForRows(),                                              // the jobs board's line and the tag on its field's row
     };
   }
+
+  /**
+   * @private Post the jobs board's one job once a mission is complete and the piece is still out at its field (idempotent: nothing
+   * happens while one is posted, or without a field registry). Once posted it stays until the piece is disposed of: no deadline.
+   */
+  _postJobIfDue() {
+    if (this._job) return;
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!reg || typeof reg.isOn !== 'function' || !reg.isOn()) return;
+    if (getMissionProgress(gameState.debrisCleared).missionsCompleted < 1) return;
+    this._job = postFirstJob(reg);
+  }
+
+  /** @private The posting the list shows now: an open one, or a finished one only on the list that is open since it was done (shown once). */
+  _jobForRows() {
+    this._postJobIfDue();
+    const j = this._job;
+    if (!j || ((j.done || j.missed) && !(this._jobDoneOn && this._trip && this._trip.isChoosing()))) return null;
+    return j;
+  }
+
+  /** The jobs board's posting (a copy), or null. */
+  jobPosting() { return this._job ? { ...this._job } : null; }
 
   /**
    * @private Real seconds a trip begun now would wait for her nose, up and down (the list's days include it: the trip counts
@@ -2884,6 +2935,7 @@ export class GameFlowManager {
    */
   _openWhereNext(start, opts) {
     const reg = this._refs.fieldRegistry;
+    this._postJobIfDue();                                                  // the list's first opening after mission 1 already carries the job
     const berthed = typeof reg.isBerthed === 'function' && reg.isBerthed();
     // the free height of a push-down is no field to start a mission at (nothing is laid out): she stays, as at a berth
     const freeHere = !berthed && typeof reg.isFree === 'function' && reg.isFree();
@@ -2895,6 +2947,9 @@ export class GameFlowManager {
     }
     this._syncTripDeps();
     if (!(opts && opts.said)) eventBus.emit(Events.COMMS_MESSAGE, { text: berthed ? this._berthLine() : OPEN_LINE, priority: 'info', _keep: true });
+    // A job done since the last list is told on this one, once: the list reads `_jobDoneOn` while it is open, then it is gone for good
+    this._jobDoneOn = !!(this._job && (this._job.done || this._job.missed) && !this._job.doneShown);
+    if (this._jobDoneOn) this._job.doneShown = true;
     this._trip.choose({ start });
   }
 
@@ -3117,7 +3172,7 @@ export class GameFlowManager {
       b.fieldRow = null;
       b._disposed = true;
     }
-    let line; let pay;
+    let line; let pay; let stays = false;                                  // `stays`: a sail whose life is over the 25-year rule (no fee, no bounty)
     if (o.sail) {
       if (rs) { rs.dragSails = Math.max(0, Math.floor(rs.dragSails || 0) - 1); if (typeof rs._syncToPlayer === 'function') rs._syncToPlayer(); }
       const years = sailLifeYears(d, altKm);
@@ -3127,6 +3182,7 @@ export class GameFlowManager {
       if (df && typeof df.attachSail === 'function') df.attachSail(canon || d);
       const lead = `Drag sail out, let go: it ${Number.isFinite(years) ? `re-enters in about ${yearsWords(years)}` : 'would stay up'}.`;
       const over = !(Number.isFinite(years) && years <= Constants.BIG_PIECES.RULE_YEARS);
+      stays = over;
       const v = pieceValues(d);
       const who = !v.holder.name || v.holder.status === 'abandoned' ? 'nobody' : v.holder.name;
       line = !over ? `${lead} ${payLine(d, pay)}`
@@ -3136,7 +3192,7 @@ export class GameFlowManager {
       pay = fatePay(d, 'push', { lifeYears: years });
       line = `Let go at ${Number.isFinite(altKm) ? Math.round(altKm) : '?'} km: it ${Number.isFinite(years) ? `re-enters in about ${yearsWords(years)}` : 'stays up'}. ${payLine(d, pay)}`;
     }
-    return this.disposeBigPiece(id, { fate, totalCr: pay.totalCr, line });
+    return this.disposeBigPiece(id, { fate, totalCr: pay.totalCr, line, bounty: !stays });
   }
 
   /**
