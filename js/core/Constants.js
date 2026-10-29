@@ -849,8 +849,6 @@ export const Constants = {
 
   // --- Weaver (Large Arm) — 3 units in hexagonal config ---
   WEAVER_MASS: 11.0,                    // kg per unit
-  WEAVER_DELTA_V: 500,                  // m/s total FEEP budget
-  WEAVER_TOTAL_IMPULSE: 5500,           // Ns (Enpulsion NANO R3)
   WEAVER_THRUST: 0.00035,              // N (0.35 mN FEEP)
   WEAVER_TETHER_LENGTH: 2000,           // m (2 km)
   WEAVER_NET_SIZE: 3.0,                 // m (3×3 deployed Dyneema SK78, DECISIONS §38 row 5; = CAPTURE_NET.MEDIUM.DIAMETER)
@@ -860,8 +858,6 @@ export const Constants = {
 
   // --- Spinner (Small Arm) — 3 units in hexagonal config ---
   SPINNER_MASS: 3.7,                    // kg per unit
-  SPINNER_DELTA_V: 297,                 // m/s total FEEP budget
-  SPINNER_TOTAL_IMPULSE: 1100,          // Ns (Enpulsion IFM Nano SE)
   SPINNER_THRUST: 0.0005,             // N (0.5 mN FEEP)
   SPINNER_TETHER_LENGTH: 500,           // m (0.5 km)
   SPINNER_NET_SIZE: 1.5,                // m (1.5×1.5 deployed)

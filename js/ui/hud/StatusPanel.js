@@ -2440,11 +2440,13 @@ export class StatusPanel {
         : `<span style="color:${netColor};white-space:nowrap;" title="Nets remaining">NET ${nets}/${maxNets}${reachHtml}</span>`;
     }
 
-    // ΔV — same label/colour ladder as the MOTHER pane. Daughter ΔV is its fuel % × type budget
-    // (getStatus.remainingDeltaV is unreliable, so derive it). Right-aligned to the pane's right edge.
+    // ΔV — same label/colour ladder as the MOTHER pane. Daughter ΔV is her fuel % × her own full-tank budget
+    // (`config.totalDeltaV`, = Constants.ARM_TOTAL_DELTAV, 50 m/s), the figure every drain path bills a velocity change
+    // against (autopilot, ArmUnit.js ~:9793). In the game `a.remainingDeltaV` (ArmUnit.js ~:3508) is the same number;
+    // the arm object is read because test harnesses pass `a` as {type, fuel} only. Right-aligned to the pane's right edge.
     const fuelPct = Math.round(a.fuel ?? 0);
-    const dvMax = a.type === 'weaver' ? (Constants.WEAVER_DELTA_V || 500)
-      : (Constants.SPINNER_DELTA_V || 297);
+    const armDv = armObj && armObj.config && armObj.config.totalDeltaV;
+    const dvMax = (Number.isFinite(armDv) && armDv > 0) ? armDv : Constants.ARM_TOTAL_DELTAV;
     const dv = Math.round((fuelPct / 100) * dvMax);
     const dvColor = this._dvColorTier(fuelPct, 'var(--hud-text, #aaffdd)').color;
     const dvHtml = `<span style="color:${dvColor};white-space:nowrap;text-align:right;" title="Maneuver budget (ΔV)">ΔV ${dv}</span>`;

@@ -1134,6 +1134,16 @@ export class CaptureNetVisual {
    * @private
    */
   _seatUnderCarrier(vis) {
+    // DECISIONS §49 row 8: a let-go bag drifts free of everyone (its daughter stays attached, the mother may be hidden),
+    // so its net stays on the real scene. armIndex is left alone (-1 still means the mother's root). It is ordinary field
+    // debris now, so the net shows exactly when the field does (floors 4/5 hide the whole field: `DebrisField.group`). The
+    // field's group moves with the floating origin, so the net is not parented under it: only its visibility follows.
+    if (this._freeScene && vis.carry && vis.carry.debris && vis.carry.debris._letGoDrift) {
+      if (vis.group.parent !== this._freeScene) this._freeScene.add(vis.group);
+      const fg = this._captureNetSystem && this._captureNetSystem._debrisField && this._captureNetSystem._debrisField.group;
+      vis.group.visible = !(fg && fg.visible === false);
+      return;
+    }
     const idx = vis.carry && vis.carry.rack ? vis.carry.armIndex : vis.armIndex;
     let want = this._scene;
     if (idx >= 0) {
