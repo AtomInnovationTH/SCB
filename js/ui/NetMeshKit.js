@@ -13,7 +13,7 @@
  * daughter's camera-style `lookAt` convention in CaptureNetVisual, so its envelop/cinch math is untouched. The Mother
  * orients its group via its own quaternion path.
  *
- * The web is an orb-weaver spoke + ring pattern (radial spokes apex→rim + concentric "spiral thread" rings) in a
+ * The web is an orb-weaver spoke + ring pattern (radial spokes apex→rim, each a meridian polyline through the ring vertices + concentric "spiral thread" rings) in a
  * single fat-line `LineSegments2` with optional additive shimmer. Cone envelope: apex at origin, mouth ring at local
  * −Z (`mouthRadius` / `coneHeight`). The handle exposes the web as `coneMesh` (alias `webLines`).
  *
@@ -67,15 +67,26 @@ const DEFAULT_NODE_ADDITIVE = NET_WEB.NODE_ADDITIVE;
 
 /**
  * Orb-weaver spoke+ring web vertex positions (one line-segments buffer). Apex at local origin; mouth ring at
- * z = −coneHeight, radius = mouthRadius. Linear cone (at axial fraction t: z = −coneHeight·t, radius = mouthRadius·t),
- * so spokes are straight apex→rim threads and each ring is a polygon at t. Construction only.
+ * z = −coneHeight, radius = mouthRadius. Linear cone (at axial fraction t: z = −coneHeight·t, radius = mouthRadius·t).
+ * Each radial thread is a POLYLINE along its meridian, apex → ring 1 → … → ring `rings` vertex (`rings` segments), so
+ * once the bag drapes it follows the net's own skin instead of cutting a straight chord through the catch; in flight
+ * the vertices are collinear (still the straight apex→rim line). Layout (6 floats per segment): spoke segments first,
+ * index k·radialSpokes + s for k = 0…rings−1 (spoke s, ring k → ring k+1; ring 0 is the apex), then `rings` rings of
+ * radialSpokes rim-neighbour segments, index rings·radialSpokes + (k−1)·radialSpokes + s for ring k = 1…rings.
+ * Construction only.
  * @returns {Float32Array}
  */
 function buildWebPositions(mouthRadius, coneHeight, radialSpokes, rings) {
   const positions = [];
-  for (let s = 0; s < radialSpokes; s++) {
-    const a = (2 * Math.PI * s) / radialSpokes;
-    positions.push(0, 0, 0, Math.cos(a) * mouthRadius, Math.sin(a) * mouthRadius, -coneHeight);
+  for (let k = 0; k < rings; k++) {
+    const t0 = k / rings, t1 = (k + 1) / rings;
+    for (let s = 0; s < radialSpokes; s++) {
+      const a = (2 * Math.PI * s) / radialSpokes;
+      positions.push(
+        Math.cos(a) * mouthRadius * t0, Math.sin(a) * mouthRadius * t0, -coneHeight * t0,
+        Math.cos(a) * mouthRadius * t1, Math.sin(a) * mouthRadius * t1, -coneHeight * t1,
+      );
+    }
   }
   // Concentric "spiral thread" rings at axial fractions t = 1/rings … 1.
   for (let k = 1; k <= rings; k++) {
@@ -560,32 +571,15 @@ function buildWebPositionsDraped(out, p) {
   const cosA = (p.cosA && p.cosA.length === radialSpokes) ? p.cosA : null;
   const sinA = (p.sinA && p.sinA.length === radialSpokes) ? p.sinA : null;
   const angA = (p.angA && p.angA.length === radialSpokes) ? p.angA : null;
-  let idx = 0;
-
-  // Radial spokes: apex → rim (t = 1; the drape z-term vanishes at the mouth).
-  const zRim = drapeRingZ(1, coneHeight, drape);
+  // Layout (see buildWebPositions): `rings × radialSpokes` spoke segments first, then the ring segments. The ring
+  // vertices are written first (from `ringBase`), and the spoke polylines are then copied from them, so every spoke
+  // piece starts and ends EXACTLY on its ring-thread vertices (same ringZ, floor and clamp; the apex for ring 0).
+  const ringBase = rings * radialSpokes * 6;
+  let idx = ringBase;
   const ringZ = p.ringZ ?? null;   // redistributed per-(ring,spoke) z (box floor on)
-  // V3 sock gather: when the mouth ring gathered (ringZ carries the rosette plane on ring `rings`), the spoke TIPS ride
-  // the same plane so the threads end on the rosette.
+  // V3 sock gather: when the mouth ring gathered (ringZ carries the rosette plane on ring `rings`), its vertices ride
+  // that plane, and the spoke polylines end on them (the threads end on the rosette).
   const gatherRim = !!p.gatherRim && !!ringZ;
-  // The floor at the RIM's z (not a ring z): 0 whenever the contents' far face is short of the mouth plane, so the
-  // drawstring still closes. Per-spoke (the box floor varies with angle). The open-cone clamp lives in
-  // contentsFloorClamped (at the rim it clamps to mouthRadius: an oversized catch can never inflate the bag past its
-  // own mouth, R2).
-  for (let s = 0; s < radialSpokes; s++) {
-    const a  = angA ? angA[s] : (2 * Math.PI * s) / radialSpokes;
-    const ca = cosA ? cosA[s] : Math.cos(a);
-    const sa = sinA ? sinA[s] : Math.sin(a);
-    const zTip = gatherRim ? ringZ[rings * radialSpokes + s] : zRim;
-    const rimFloor = floorOn
-      ? contentsFloorClamped(zTip, ca, sa, mouthRadius, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight)
-      : 0;
-    const r = Math.max(
-      drapeRingRadius(1, a, mouthRadius, drape, cinch, closed, jigA, jigP),
-      rimFloor);
-    out[idx++] = 0; out[idx++] = 0; out[idx++] = 0;
-    out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = zTip;
-  }
   for (let k = 1; k <= rings; k++) {
     const t = k / rings;
     const z = drapeRingZ(t, coneHeight, drape);
@@ -620,6 +614,20 @@ function buildWebPositionsDraped(out, p) {
       const r1 = Math.max(drapeRingRadius(t1, a1, mouthRadius, drape, cinch, closed, jigA, jigP), f1);
       out[idx++] = c0 * r0; out[idx++] = n0 * r0; out[idx++] = z0;
       out[idx++] = c1 * r1; out[idx++] = n1 * r1; out[idx++] = z1;
+    }
+  }
+  // Spoke polylines along the meridian: vertex (k, s) is the START of ring segment (k−1)·radialSpokes + s.
+  for (let k = 0; k < rings; k++) {
+    for (let s = 0; s < radialSpokes; s++) {
+      let o = (k * radialSpokes + s) * 6;
+      if (k === 0) {
+        out[o++] = 0; out[o++] = 0; out[o++] = 0;
+      } else {
+        const v0 = ringBase + ((k - 1) * radialSpokes + s) * 6;
+        out[o++] = out[v0]; out[o++] = out[v0 + 1]; out[o++] = out[v0 + 2];
+      }
+      const v1 = ringBase + (k * radialSpokes + s) * 6;
+      out[o++] = out[v1]; out[o++] = out[v1 + 1]; out[o++] = out[v1 + 2];
     }
   }
   return out;
@@ -922,7 +930,7 @@ export const NetMeshKit = {
       group,
       coneMesh,
       webLines: coneMesh,   // alias — the cone IS the fat-line spoke+ring web
-      webPositions,         // raw Float32Array of web segment endpoints (apex→rim + rings)
+      webPositions,         // raw Float32Array of web segment endpoints (rings × radialSpokes meridian spoke pieces, then the rings)
       webBuffer,            // InstancedInterleavedBuffer whose .array === webPositions
       webColorBuffer,       // vertex-colour buffer (V4 depth shading), same layout
       lineMaterial: coneMat, // the web's LineMaterial (resolution-synced)
@@ -1435,8 +1443,8 @@ export const NetMeshKit = {
    * segments AND their ring segments across [spokeStart, +spokeCount), so those threads render black (invisible against
    * the sky): a hole the released catch drifts out of. One in-place write on the buffer the depth pass would otherwise
    * rewrite per frame; safe because a torn bag is DETACHED (CaptureNetVisual) and never re-runs updateWebDrape.
-   * Segment layout (buildWebPositions): radialSpokes apex→rim segments first (6 floats each), then `rings` rings of
-   * radialSpokes rim-neighbour segments. The membrane (one mesh, no per-face colour) is not torn.
+   * Segment layout (buildWebPositions, 6 floats each): `rings` pieces per spoke first (piece k·radialSpokes + s), then
+   * `rings` rings of radialSpokes rim-neighbour segments. The membrane (one mesh, no per-face colour) is not torn.
    * @param {number} spokeStart first torn spoke index
    * @param {number} spokeCount wedge width (spokes)
    */
@@ -1446,9 +1454,10 @@ export const NetMeshKit = {
     const spokes = h.radialSpokes, rings = h.rings;
     for (let w = 0; w < spokeCount; w++) {
       const s = (((spokeStart + w) % spokes) + spokes) % spokes;
-      col.fill(0, 6 * s, 6 * s + 6);                       // radial spoke segment
       for (let k = 0; k < rings; k++) {
-        const seg = spokes + k * spokes + s;               // ring k, spoke s→s+1
+        const spokePiece = k * spokes + s;                 // spoke s, ring k → k+1
+        col.fill(0, 6 * spokePiece, 6 * spokePiece + 6);
+        const seg = rings * spokes + k * spokes + s;       // ring k, spoke s→s+1
         col.fill(0, 6 * seg, 6 * seg + 6);
       }
     }
