@@ -12,7 +12,8 @@ import { settingsManager } from '../systems/SettingsManager.js';
 import { showMode } from '../systems/ShowMode.js';   // shared-iPad show mode (owner 2026-10-28): the menu toggle
 import { LANGUAGES } from '../core/Languages.js';
 import { FlagDecalSystem } from './FlagDecalSystem.js';
-import { MenuScene3D } from './MenuScene3D.js';
+import { MenuScene3D, getMenuPoseStyle } from './MenuScene3D.js';
+import { isDevHost } from '../core/DevHost.js';   // the dev-only pose tick box (see _wirePoseToggle)
 import { GestureHints } from './hud/GestureHints.js';
 import { resolvePrimaryMenuAction, startRequiresConfirm, NEW_GAME_CONFIRM_MESSAGE } from './menuActions.js';
 import { buildUpdateCard } from './UpdateCard.js';
@@ -398,6 +399,23 @@ export class MenuScreen {
         @media (max-width: 1339px) {
           #menu-show-btn { right: 0; top: calc(100% + 60px); }
         }
+        /* Dev tick box (dev hosts only; built by _wirePoseToggle, absent on the public site): bottom-right corner, "Old menu
+         * pose" switches the hero between the new menu and the old one for side-by-side comparison. Same dim look as the demo
+         * button; 44 px tall (touch target). The left panel and the hero's tips are on the other side; nothing else lives here. */
+        #menu-pose-toggle {
+          position: absolute; right: calc(18px + env(safe-area-inset-right, 0px)); bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+          z-index: 4; display: flex; align-items: center; gap: 8px;
+          min-height: 44px; box-sizing: border-box; padding: 0 14px; cursor: pointer; font: inherit; font-size: 0.8rem;
+          letter-spacing: 0.02em; white-space: nowrap; user-select: none; -webkit-user-select: none;
+          background: rgba(4,12,30,0.5); color: rgba(212,238,255,0.5);
+          border: 1px solid rgba(212,238,255,0.2); border-radius: 6px;
+          backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+        }
+        #menu-pose-toggle input { width: 18px; height: 18px; margin: 0; cursor: pointer; accent-color: #00ff88; }
+        #menu-pose-toggle:has(input:checked) {
+          color: #00ff88; background: rgba(0,255,136,0.14); border-color: rgba(0,255,136,0.7);
+          box-shadow: 0 0 12px rgba(0,255,136,0.28);
+        }
         #menu-lang-btn {
           display: flex; align-items: center; gap: 8px;
           background: rgba(4,12,30,0.62); color: rgba(0,255,136,0.92);
@@ -449,6 +467,7 @@ export class MenuScreen {
         #menu-content.menu-departing #menu-left,
         #menu-content.menu-departing #menu-header,
         #menu-content.menu-departing #menu-lang,
+        #menu-content.menu-departing #menu-pose-toggle,
         #menu-content.menu-departing #menu-tip {
           opacity: 0;
           transform: translateX(-24px);
@@ -459,11 +478,13 @@ export class MenuScreen {
         #menu-content.menu-departing #menu-left   { transition-delay: 0s; }
         #menu-content.menu-departing #menu-header { transition-delay: 0.09s; }
         #menu-content.menu-departing #menu-lang   { transition-delay: 0.15s; }
+        #menu-content.menu-departing #menu-pose-toggle { transition-delay: 0.15s; }
         #menu-content.menu-departing #menu-tip    { transition-delay: 0.12s; }
         @media (prefers-reduced-motion: reduce) {
           #menu-content.menu-departing #menu-left,
           #menu-content.menu-departing #menu-header,
           #menu-content.menu-departing #menu-lang,
+          #menu-content.menu-departing #menu-pose-toggle,
           #menu-content.menu-departing #menu-tip {
             transition: opacity 0.2s ease;
             transform: none;
@@ -779,6 +800,9 @@ export class MenuScreen {
     // Demo mode toggle + mark (owner 2026-10-28).
     this._wireShowMode();
 
+    // Dev-only "Old menu pose" tick box, bottom-right (owner 2026-10-29); not built on the public site.
+    this._wirePoseToggle();
+
     // The version button opens the notes card; the notes themselves load once, here (show() waits on them).
     this._wireVersionButton();
 
@@ -1093,6 +1117,42 @@ export class MenuScreen {
     });
     if (typeof sm.onChange === 'function') sm.onChange(paint);
     paint();
+  }
+
+  /**
+   * @private Dev tick box (owner 2026-10-29: "a tick box bottom right to change poses for easy comparison"): a real
+   * checkbox and label, "Old menu pose", at the bottom-right of the menu. Ticked = the hero and camera as the menu was
+   * before the flower theme (`MenuScene3D.setPoseStyle('old')`, the default since DECISIONS §55 row 9, so the box starts
+   * ticked); unticked = the flower-phase-2 menu. Built only on a dev host
+   * (`isDevHost`: localhost, *.local, private IPs, so the iPad over `start.sh --lan` too); on the public site nothing is
+   * created. It starts in the style the page remembers. It never takes Enter (the window handler starts the mission
+   * whatever has focus) and drops focus after a change, like the other menu controls.
+   * @param {{protocol?:string, hostname?:string}} [loc] injectable for tests (default: the page's location)
+   * @param {Document} [doc] injectable for tests
+   * @returns {HTMLElement|null} the label element, or null when not built
+   */
+  _wirePoseToggle(loc = globalThis.location, doc = globalThis.document) {
+    if (!isDevHost(loc) || !this.element || !doc) return null;
+    const host = this.element.querySelector('#menu-content');
+    if (!host) return null;
+    const label = doc.createElement('label');
+    label.id = 'menu-pose-toggle';
+    label.title = 'Dev tool: compare the title screen with the one before the redesign';
+    const box = doc.createElement('input');
+    box.type = 'checkbox';
+    box.id = 'menu-pose-old';
+    box.checked = getMenuPoseStyle() === 'old';
+    const text = doc.createElement('span');
+    text.textContent = 'Old menu pose';
+    label.appendChild(box);
+    label.appendChild(text);
+    host.appendChild(label);
+    box.addEventListener('change', () => {
+      const scene = this._menuScene3D;
+      if (scene && typeof scene.setPoseStyle === 'function') scene.setPoseStyle(box.checked ? 'old' : 'new');
+      if (typeof box.blur === 'function') box.blur();   // a later Enter starts the mission (the window handler takes it anyway)
+    });
+    return label;
   }
 
   /** @private Handle keyboard when menu is visible */
