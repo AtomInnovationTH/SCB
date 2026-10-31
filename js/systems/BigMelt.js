@@ -4,10 +4,13 @@
  * A delivery takes minutes of ship time, a melt takes hours: the days of a trip burn and the room in the hold set the
  * pace, not the delivery.
  *
- * Parts are cut one at a time and delivered one at a time (DELIVERY_S each) to the next free furnace; a furnace melts
- * one part at a time at FURNACE_S_PER_KG ship-seconds per kg, in sunlight only (TRIP_SUN of the ship's time). A part
- * starts only if it can finish before the burn ends (no part is ever left half melted), and only if the hold can take
- * its metal.
+ * Each furnace is a fixed 0.6 m foil-insulated receiver inside a sun-oven ball (P34): a part must fit it
+ * (REACH_LIMIT_M 0.30 m: 5 kg stage / 11 kg satellite parts), and the empty receiver warms once per burn before its
+ * first part (RECEIVER_WARM_S sunlit seconds, so a tip is free from RECEIVER_WARM_S / TRIP_SUN, not from 0).
+ * Parts are cut one at a time and delivered one at a time (DELIVERY_S each, overlapping the warm-up) to the next free
+ * furnace; a furnace melts one part at a time at FURNACE_S_PER_KG sunlit seconds per kg (TRIP_SUN of the ship's time).
+ * A part starts only if it can finish before the burn ends (no part is ever left half melted), and only if the hold
+ * can take its metal.
  */
 
 import { Constants } from '../core/Constants.js';
@@ -90,7 +93,8 @@ export function planBurn({ burnShipS, pieces, tips, roomKg }, cfg = Constants.BI
   const list = (pieces || []).filter((x) => x && x.kg > 1e-9 && x.partKg > 0);
   if (!list.length) return out;
   if (!tips || !tips.length) { out.stop = 'furnaces'; return out; }
-  const free = tips.map(() => 0);                          // when each furnace is free again
+  const warmS = (cfg.RECEIVER_WARM_S || 0) / cfg.TRIP_SUN;   // each receiver warms once before its first part
+  const free = tips.map(() => warmS);                      // when each furnace is free again
   let chain = 0;                                           // when the delivery chain is free again
   let room = Number.isFinite(roomKg) ? roomKg : Infinity;
   const burn = Number.isFinite(burnShipS) ? burnShipS : 0;

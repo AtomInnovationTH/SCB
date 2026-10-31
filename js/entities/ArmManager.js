@@ -120,6 +120,26 @@ function _rackKey(arm) {
   return key;
 }
 
+/** What a holder holds, by piece ids only (P34 L3-fix3: the burn lift's frozen pose belongs to these pieces; a wing profile finishing or a piece melting short does not change it). */
+function _burnKey(arm) {
+  let key = '';
+  if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h && h.mass) key += `${h.id};`;
+  return key;
+}
+
+/** The ids of the pieces a holder holds that still have mass (the set `_burnKey` joins). */
+function _burnIds(arm) {
+  const ids = [];
+  if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h && h.mass) ids.push(h.id);
+  return ids;
+}
+
+/** P34 L3-fix4: does the holder hold only pieces of the frozen set `ids`? (a piece that left her rack or melted away leaves a subset; a piece she gained does not) */
+function _burnWithin(arm, ids) {
+  if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h && h.mass && ids.indexOf(h.id) < 0) return false;
+  return true;
+}
+
 /** Is her catch `rest`-clear of the radiator wings with her strut at `deg`? True when she has no finished profile (none started, or pending). */
 function _wingRestOk(arm, deg) {
   const p = armProfile(arm);
@@ -593,6 +613,13 @@ export class ArmManager {
 
     /** @type {ArmUnit[]} */
     this.arms = [];
+
+    /** P34 L3-fix2: a trip burn with parts to melt keeps every holder at her radiator-lift pose (`setBurnLift`), so the sun-oven balls open beside a raised piece. */
+    this._burnLift = false;
+    /** P34 L3-fix3: per holder `{key, rad}` while the burn lift is on: the lift pose the sun-oven fit was checked at (`setBurnLift`), `rad` null = none. */
+    this._burnLiftFrozen = null;
+    /** P34 L3-fix4: gains of a piece by a holder during a burn lift, not yet read by the trip (`takeBurnLiftRefits`). */
+    this._burnLiftRefits = 0;
 
     // Last state sent to PlayerSatellite.setTetherState per strut index (edge-triggered: only transitions emit a call).
     this._drumStatesSent = [];
@@ -4136,19 +4163,149 @@ export class ArmManager {
   }
 
   /**
+   * P34 L3-fix2 (owner 2026-10-29, "Hold the piece higher"): while a trip's melt has parts, every holder keeps her radiator-lift pose
+   * (`_radClearPose`: the lowest of 69-100 deg that is band-, `rest`- and plume-clear) instead of dropping to her hold pose once the
+   * wings are above the band, so the four sun-oven balls open beside the raised piece. A holder whose lift pose is refused by the
+   * game's own checks (wing, plume, band: `_radClearPose` null) keeps today's pose. GameFlowManager sets it at `_meltBegin` and
+   * clears it once the balls are stowed after `_meltEnd` (a piece dropping to its hold pose would sweep through a folding ball).
+   * L3-fix3: switching it on freezes each holder's lift pose (the one the fit was checked at); `releaseUnsettledBurnLift` gives one up.
+   * @param {boolean} on
+   */
+  setBurnLift(on) {
+    this._burnLift = on === true;
+    if (!this._burnLift) { this._burnLiftFrozen = null; this._burnLiftRefits = 0; return; }
+    // P34 L3-fix3: the pose the sun-oven fit was checked at is frozen now, one entry per holder, for as long as the lift is on. A holder that
+    // already has a valid entry (a second burn begun while the first one's balls fold) keeps it, which is the pose that burn's plan read
+    const fr = this._burnLiftFrozen || (this._burnLiftFrozen = []);
+    for (let i = 0; i < this.arms.length; i++) {
+      const a = this.arms[i];
+      if (!fr[i] || (a && !_burnWithin(a, fr[i].ids))) fr[i] = this._burnEntry(i);
+    }
+  }
+
+  /** @private P34 L3-fix4: the frozen entry for holder `i` as she stands now: the pieces she holds (`ids`, `key`) and her live lift pose (`rad`, null = none) */
+  _burnEntry(i) {
+    const a = this.arms[i];
+    return { key: a ? _burnKey(a) : '', ids: a ? _burnIds(a) : [], rad: this._burnLiftLive(i) };
+  }
+
+  /** @returns {boolean} the burn lift is on (`setBurnLift`) */
+  burnLiftOn() { return this._burnLift === true; }
+
+  /** @private daughter `i`'s lift pose read from the game's own checks now (`_radClearPose`), null when she holds no catch or none is allowed (see `burnLiftPoseOf`) */
+  _burnLiftLive(i) {
+    const a = this.arms[i];
+    if (!a || a.isDetached || a.state !== ARM_STATES.HOLDING_CATCH || !this._holdsAnyCatch(a)) return null;
+    if (armProfile(a).state === 1) return null;                          // her wing profile is not done: no pose is known to be clear yet
+    const cp = this._radClearPose(a, i, 0);
+    return cp && cp.rad !== null && Number.isFinite(cp.rad) ? cp.rad : null;
+  }
+
+  /** @private holder `i`'s frozen entry `{key, ids, rad}` while the burn lift is on and she holds only pieces of the set it was frozen with; else undefined */
+  _burnFrozen(i) {
+    const fr = this._burnLift && this._burnLiftFrozen;
+    const a = this.arms[i];
+    if (!fr || !fr[i] || !a || a.isDetached || a.state !== ARM_STATES.HOLDING_CATCH || !this._holdsAnyCatch(a)) return undefined;
+    // P34 L3-fix4: a piece that left her rack or melted away keeps the freeze (the fit placed every slot at that angle); only a piece she gained ends it
+    return _burnWithin(a, fr[i].ids) ? fr[i] : undefined;
+  }
+
+  /**
+   * P34 L3-fix4: a holder that gained a piece the freeze does not hold (a daughter that was out on her line at the 60 s cap docks with a catch
+   * during the burn; the player's own launches and nets are refused while it burns, `tripRefuses`) is frozen again at her live lift pose, and the
+   * gain is counted for `takeBurnLiftRefits`: the trip checks every open ball against the new rack. While her wing profile is pending no pose is
+   * known, so she is read live until it is done and the gain is counted a second time then.
+   */
+  _burnRefreeze() {
+    const fr = this._burnLift && this._burnLiftFrozen;
+    if (!fr) return;
+    for (let i = 0; i < this.arms.length; i++) {
+      const a = this.arms[i], e = fr[i];
+      if (!e || !a || a.isDetached || a.state !== ARM_STATES.HOLDING_CATCH || !this._holdsAnyCatch(a) || _burnWithin(a, e.ids)) continue;
+      let counted = false;
+      if (!e.gained) { e.gained = true; this._burnLiftRefits++; counted = true; }
+      if (armProfile(a).state === 1) continue;
+      fr[i] = this._burnEntry(i);
+      if (!counted) this._burnLiftRefits++;
+    }
+  }
+
+  /** @returns {number} how many times a holder gained a piece (and was frozen again) since the last call; the trip checks its open balls when it is above 0 */
+  takeBurnLiftRefits() {
+    const n = this._burnLiftRefits;
+    this._burnLiftRefits = 0;
+    return n;
+  }
+
+  /**
+   * The strut angle (rad) daughter `i` keeps through a burn lift: her `_radClearPose`, when she is HOLDING_CATCH with a catch and the
+   * game's checks allow a pose; null otherwise (then she keeps her hold pose, as today). While the burn lift is on this is the pose read when
+   * it was switched on (P34 L3-fix3: the fit of the ball was checked at it, so a later change of the rack's pose cannot move a piece through an
+   * open ball), as long as she holds only pieces she held then (L3-fix4: fewer is fine); else the live one. Pure read apart from the pose cache.
+   * @param {number} i arm index
+   * @returns {number|null}
+   */
+  burnLiftPoseOf(i) {
+    const fz = this._burnFrozen(i);
+    return fz ? fz.rad : this._burnLiftLive(i);
+  }
+
+  /**
+   * P34 L3-fix3: every holder that has a burn-lift pose and does not stand at it (inside the strut's deadband) gives it up for this burn: she keeps
+   * today's pose (the hold pose; the wings' own lift when they need one), `burnLiftPoseOf` says null for her, and the sun-oven fit places her over every
+   * angle she can have. Called by the trip when a holder has not settled in her lift time + 2 s (lift refused, a carry lift above it, a stalled strut).
+   * @returns {number} how many holders gave it up
+   */
+  releaseUnsettledBurnLift() {
+    if (!this._burnLift || !this._burnLiftFrozen) return 0;
+    const dead = degToRad(Constants.OCTOPUS_V5.HOLD_POSE_DEADBAND_DEG ?? 1) + 1e-6;
+    let n = 0;
+    for (let i = 0; i < this.arms.length; i++) {
+      const rad = this.burnLiftPoseOf(i);
+      if (rad === null) continue;
+      const a = this.arms[i];
+      if (Math.abs((typeof a.getAimAlpha === 'function' ? a.getAimAlpha() : rad) - rad) <= dead) continue;
+      this._burnLiftFrozen[i] = { key: _burnKey(a), ids: _burnIds(a), rad: null };
+      if (a._radLift) a._radLift = null;
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * Has every holder that has a burn-lift pose reached it (inside the strut's deadband)? A ball opens only when her piece is at rest.
+   * @returns {boolean} true with no holder (nothing to wait for)
+   */
+  burnLiftSettled() {
+    if (!this._burnLift) return true;
+    const dead = degToRad(Constants.OCTOPUS_V5.HOLD_POSE_DEADBAND_DEG ?? 1) + 1e-6;
+    for (let i = 0; i < this.arms.length; i++) {
+      const rad = this.burnLiftPoseOf(i);
+      if (rad === null) continue;
+      const a = this.arms[i];
+      if (Math.abs((typeof a.getAimAlpha === 'function' ? a.getAimAlpha() : rad) - rad) > dead) return false;
+    }
+    return true;
+  }
+
+  /**
    * Per frame: while the wings move through the band (or stand in it) every holder is lifted to her band-clear pose
    * (`_radLift`; the writer is `_updateCargoPlumePoses`, below the net duck and a neighbour's carry lift in priority), and
    * goes back to her hold pose when the wings are settled outside it. A holder with no clear pose is not lifted (the
    * wings do not move: 'never'). Marks of arms that no longer hold a catch at home are dropped.
    */
   _tickRadLifts(dt) {
-    const need = this._wingsMovingInBand() || this._wingsInBand();
+    const wings = this._wingsMovingInBand() || this._wingsInBand();
+    this._burnRefreeze();                                                // P34 L3-fix4: a piece gained mid-burn: frozen again at the live pose, counted for the trip's refit
     for (let i = 0; i < this.arms.length; i++) {
       const a = this.arms[i];
       if (!a) continue;
-      if (!need || a.isDetached || a.state !== ARM_STATES.HOLDING_CATCH || !this._holdsAnyCatch(a)) { if (a._radLift) a._radLift = null; continue; }
-      const cp = this._radClearPose(a, i, dt);
-      if (cp && cp.rad !== null) { if (!a._radLift || a._radLift.rad !== cp.rad) a._radLift = { rad: cp.rad }; }
+      const fz = this._burnFrozen(i);                                    // P34 L3-fix3: the pose the burn's fit was checked at, never read again
+      const need = wings || (this._burnLift && !fz);                     // (a holder with no valid freeze is read live, as before the freeze)
+      if ((!need && !(fz && fz.rad !== null)) || a.isDetached || a.state !== ARM_STATES.HOLDING_CATCH || !this._holdsAnyCatch(a)) { if (a._radLift) a._radLift = null; continue; }
+      let rad = fz && fz.rad !== null ? fz.rad : null;
+      if (rad === null) { const cp = this._radClearPose(a, i, dt); if (cp && cp.rad !== null) rad = cp.rad; }
+      if (rad !== null) { if (!a._radLift || a._radLift.rad !== rad) a._radLift = { rad }; }
       else if (a._radLift) a._radLift = null;
     }
   }

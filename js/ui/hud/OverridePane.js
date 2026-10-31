@@ -54,11 +54,21 @@
  * Reveal = slide-up in SLIDE_MS; `prefers-reduced-motion` → no transition, no shake, no pulse (the FURNACE TEST
  * button is a steady amber button either way).
  *
- * The FURNACE test (owner 2026-10-28; the gag itself 2026-09-09, v2) touches NO game state: IDLE → TEST1 → TEST2 → OVERHEAT → COUNTDOWN →
- * BLACKOUT → RECOVER → IDLE, every timer through the injected setTimeout/clearTimeout so the FSM runs in Node on fake time. THREE
+ * The FURNACE test (owner 2026-10-28; the gag itself 2026-09-09, v2): IDLE → TEST1 → TEST2 → OVERHEAT → COUNTDOWN →
+ * BLACKOUT → RECOVER → IDLE, every timer through the injected setTimeout/clearTimeout so the FSM runs in Node on fake time. P34
+ * (2026-10-29): on a ship with sun-oven balls (`deps.tipCargo().player.sunOvenBalls`) press 1 and 2 raise a real ball on the
+ * first free tip each: the radiators are asked open to 90° if they sit below the ball's 88° (a refused pose, the ship holding a
+ * petal, says so and raises nothing), the ball is requested up (it latches and inflates in the band, billing 0.47 g of
+ * nitrogen from the steering tank), and the aperture glows once it is up. F1 moves radiators and bills nitrogen there, and
+ * folds and darkens only the balls it raised itself (`_demoBalls`), never a tip that is busy (bag, reserved, part bag, a
+ * ball not stowed) and never a ball a real melt has since taken over (`SunOvenBalls.ownerOf`: asked up by the trip after F1
+ * did); a tip a daughter merely reserved is still F1's to fold. A ball a held piece would hit at the radiators' rest angle (90°
+ * when they are asked open, else where they stand) is passed over BEFORE anything moves (`SunOvenBalls.fits`); when no ball can open, or the
+ * steering tank cannot pay one, the radiators stay and one line says why (`FURNACE_OVEN_LINES.NOROOM` / `NOGAS`); a real melt's ball is never touched. Without balls (a stub ship) the test touches NO game state, as
+ * before: THREE
  * presses arm the joke (`PRESSES_TO_ARM`): press 1 = a calm click, one tip's melt bag opens out and glows (a `TipCargo.showPartBag`
  * drawing with `demo: true`, via `deps.tipCargo`; never a tip holding a real bag, a part bag or reserved; no radiator limit; no
- * mass or credits) + "Furnace 1 test: mirror on, bag at 660 °C."; press 2 = a second bag, the short warning tone, a steady AMBER edge
+ * mass or credits) + "Furnace 1 test: mirror on, bag at 660 °C." (with balls: "... oven at 660 °C."); press 2 = a second bag, the short warning tone, a steady AMBER edge
  * flash (1.5 s) + "Furnaces 1 and 2 on: both mirrors need the Sun, the ship is straining to hold it. Stop the test."; press 3 = the
  * klaxon + THREAT pulse + shake + "Furnace overheating. Containment failing." and, OVERHEAT_MS later, the countdown (SELF DESTRUCT
  * INITIATED, 5 … 1; every numeral change ticks the injected click; the CANCEL button is broken by design). The demo bags clear at the
@@ -168,6 +178,17 @@ export const FURNACE_GAG = Object.freeze({
   CANCEL_RATE_MS: 400,
 });
 
+/**
+ * P34 (sun-oven balls): the lowest radiator angle a ball can be up at, deg. A COPY of `Constants.SUN_OVEN_BALL.MIN_DEG` (this pane
+ * imports no Constants: test-OverridePane pins it); test-SunOvenTrip.js pins the two equal.
+ */
+export const OVEN_MIN_DEG = 88;
+/** The radiator angle F1's first press asks for when they sit below the ball's band (the CARGO pose; a copy: this pane imports no Constants, test-SunOvenTrip pins it equal). */
+export const OVEN_CARGO_DEG = 90;
+/** P34: how often the F1 test looks for its ball to be up (to light the aperture), ms, and how many times (60 s: the radiators rise at 15 deg/s, the inflate takes 4 s; an empty tank never gets there). */
+export const DEMO_POLL_MS = 250;
+export const DEMO_POLL_MAX = 240;
+
 export const FURNACE_SENDER = 'FURNACE';
 export const HOUSTON_SOURCE = 'HOUSTON';
 
@@ -178,6 +199,18 @@ export const FURNACE_LINES = Object.freeze({
   OVERHEAT: Object.freeze({ text: 'WARNING: Furnace overheating. Containment failing.', priority: 'warning' }),
   ARMED:    Object.freeze({ text: 'CRITICAL: Self-destruct sequence initiated.', priority: 'critical' }),
   CANCEL:   Object.freeze({ text: 'CAUTION: Cancel circuit not responding.', priority: 'caution' }),
+});
+
+/**
+ * P34: the two lines of the F1 test on a ship with sun-oven balls (kept apart from FURNACE_LINES, whose six-line set is the gag's
+ * pinned vocabulary). `TEST1` is press 1's line with the oven named (aluminium melts at 660 C; the oven is the ball, not a bag);
+ * `REFUSED` replaces a press's line when the ship holds a radiator petal (a catch hand-off, a carry) and the oven cannot open.
+ */
+export const FURNACE_OVEN_LINES = Object.freeze({
+  TEST1:   Object.freeze({ text: 'Furnace 1 test: mirror on, oven at 660 \u00b0C.', priority: 'info' }),
+  REFUSED: Object.freeze({ text: 'Furnace test: the radiators are held, the oven cannot open now.', priority: 'info' }),
+  NOROOM:  Object.freeze({ text: 'Furnace test: a catch on the rack is in the way, the oven cannot open now.', priority: 'info' }),
+  NOGAS:   Object.freeze({ text: 'Furnace test: the steering tank is empty, the oven cannot open.', priority: 'info' }),
 });
 
 /**
@@ -346,6 +379,8 @@ export class OverridePane {
    * @param {function} [deps.drawerOpen] zero-arg bool: the workbench drawer is open (the bar tick shifts the bar clear of it)
    * @param {function} [deps.tipCargo] zero-arg getter of the ship's TipCargo (`showPartBag` / `clearPartBags`); the
    *   furnace test draws its demo bags there. Absent / null ⇒ the test keeps its lines and tones, no drawing
+   * @param {function} [deps.oven] zero-arg getter of `{ p: ship, b: sunOvenBalls }` or null (P34): default reads
+   *   `deps.tipCargo().player.sunOvenBalls`; a test passes `() => null` to pin the demo-bag path of a ship without balls
    * @param {function} [deps.caption] `(text, ms) => void`: the F1 hint strip's caption (MotherCallouts.showCaption). The
    *   comms panel is hidden on floor 1, so every FURNACE line (and Houston's) is also captioned there while the F1 bar
    *   is shown; `('', 0)` clears it (the black-out)
@@ -376,8 +411,11 @@ export class OverridePane {
     this._now = typeof deps.now === 'function' ? deps.now : _nowMs;
     this._barTickOn = deps.barTick === true;   // opt-in: the hub passes true (a default timer would show in every pane test)
     this._tipCargoFn = typeof deps.tipCargo === 'function' ? deps.tipCargo : null;
+    this._ovenFn = typeof deps.oven === 'function' ? deps.oven : null;   // a test's stand-in for the ship + its balls (`{p, b}` or null); default: `tipCargo().player.sunOvenBalls`
     this._captionFn = typeof deps.caption === 'function' ? deps.caption : null;
     this._demoTips = [];             // tips wearing a furnace-test demo bag (drawings only; cleared on every exit path)
+    this._demoBalls = [];            // tips whose sun-oven ball THIS test raised (P34): the only balls it folds or darkens
+    this._ovenSays = null;           // why the last press raised no oven: 'REFUSED' (a held petal), 'NOROOM' (a piece on the rack), 'NOGAS' (empty tank); null = nothing to say
     this._tapDebounceMs = Number.isFinite(deps.tapDebounceMs) ? deps.tapDebounceMs : F1_BAR_GEOMETRY.TAP_DEBOUNCE_MS;
     this._holdMs = Number.isFinite(deps.holdMs) ? deps.holdMs : F1_BAR_GEOMETRY.HOLD_VENT_MS;
 
@@ -1406,9 +1444,36 @@ export class OverridePane {
    */
   _resetBarFurnaceWarn() {
     if (!this._testRunning() || this._furnacePresses !== this._barFurnacePressNo) return;
+    // A slow device (about 6 fps or less) is still swinging the radiators up when 30 s of wall time pass: a ball still stowed with its
+    // request latched would only have the request cancelled, and never open. Look again in another window; the radiators' target clears on
+    // arrival (or the ball is refused/folded), so an empty tank cannot loop for ever.
+    if (this._demoBallsStillSwinging()) {
+      this._barFurnaceResetId = this._schedule(() => { this._barFurnaceResetId = null; this._resetBarFurnaceWarn(); }, F1_BAR_GEOMETRY.FURNACE_RESET_MS);
+      return;
+    }
     this._clearDemoBags();
     this._gagState = 'IDLE';
     this._pressCount = 0;
+  }
+
+  /**
+   * True while a ball this test asked up (F1's request still latched) has not had its chance yet: stowed with its radiator still swinging
+   * (the shared target stands), or inflating (it ends 'up' or folds itself, so this cannot wait for ever). A ball stowed at rest (an empty
+   * tank, a refused fit) is not waited for.
+   */
+  _demoBallsStillSwinging() {
+    return this._demoBalls.some((i) => this._demoBallPending(i));
+  }
+
+  /** @returns {boolean} F1's request for ball i is latched and the ball is inflating, or stowed with its radiator still swinging (see `_demoBallsStillSwinging`) */
+  _demoBallPending(i) {
+    const o = this._oven();
+    if (!o || !o.p) return false;
+    try {
+      if (o.b.ownerOf(i) !== 'f1') return false;
+      const st = o.b.stateOf(i);
+      return st === 'inflating' || (st === 'stowed' && o.p._flowerTargetTheta !== undefined);
+    } catch (_e) { return false; }
   }
 
   /** `.f1b-drawer` on the bar while the workbench drawer is open (write-on-change; a cheap bool read). */
@@ -1530,7 +1595,7 @@ export class OverridePane {
     this._gagState = 'TEST1';
     this._click();
     this._openDemoBag();
-    this._comm(FURNACE_LINES.TEST1);
+    this._comm(this._ovenSays ? FURNACE_OVEN_LINES[this._ovenSays] : this._oven() ? FURNACE_OVEN_LINES.TEST1 : FURNACE_LINES.TEST1);
   }
 
   /** Press 2: a second bag, the short warning tone, a steady AMBER edge flash for 1.5 s (CAUTION never pulses; never the red THREAT), the strain line. */
@@ -1540,7 +1605,7 @@ export class OverridePane {
     this._vibrate(80);
     this._showVignette(false, FURNACE_GAG.TEST_PULSE_MS, COLOR_CAUTION);
     this._openDemoBag();
-    this._comm(FURNACE_LINES.TEST2);
+    this._comm(this._ovenSays ? FURNACE_OVEN_LINES[this._ovenSays] : FURNACE_LINES.TEST2);
   }
 
   /** The injected short warning earcon (AudioSystem.playWarning); never the klaxon. */
@@ -1564,6 +1629,84 @@ export class OverridePane {
     return false;
   }
 
+  /**
+   * The ship and its sun-oven balls when the ship has them (`TipCargo.player.sunOvenBalls`, P34), else null: a stub ship or a
+   * TipCargo stand-in keeps the demo bag.
+   * @returns {{p: object, b: object}|null}
+   */
+  _oven() {
+    if (this._ovenFn) { try { return this._ovenFn() || null; } catch (_e) { return null; } }
+    const tc = this._tipCargo();
+    const p = tc && tc.player;
+    const b = p && p.sunOvenBalls;
+    return b && typeof b.requestUp === 'function' && typeof b.stateOf === 'function' ? { p, b } : null;
+  }
+
+  /**
+   * Raise a real ball on the first free tip (DEMO_TIP_ORDER): the radiators go to 90° if the tip's radiator is below the ball's
+   * 88° (refused while the ship holds a petal: nothing else is done), the ball is requested up and latches, and the aperture
+   * glows once it is up (`_pollDemoBall`). Never a busy tip (bag, reserved, part bag) nor one whose ball is not stowed.
+   * @returns {boolean} a ball was requested
+   */
+  _openDemoBall() {
+    const o = this._oven();
+    const tc = this._tipCargo();
+    if (!o || !tc) return false;
+    const minRad = OVEN_MIN_DEG * Math.PI / 180;
+    const th = o.p._flowerThetaRad;                  // the shared angle: a petal off it is held, and a held petal refuses the command below anyway
+    const moves = Number.isFinite(th) && th < minRad - 1e-6 && typeof o.p.setFlowerPose === 'function';
+    let inWay = false;
+    for (const i of DEMO_TIP_ORDER) {
+      if (this._demoBalls.includes(i) || this._tipBusy(tc, i) || o.b.stateOf(i) !== 'stowed') continue;
+      if (typeof o.b.receiverNode === 'function' && !o.b.receiverNode(i)) continue;      // no such tip on this ship
+      // where this ball's radiator will stand when it opens, as `requestUp` reads it: 90 degrees when the radiators are asked there, else the angle
+      // the radiator is heading for (its own held petal's, or the shared target; where it stands when nothing moves it)
+      const restRad = moves ? OVEN_CARGO_DEG * Math.PI / 180 : (typeof o.b.restAngleOf === 'function' ? o.b.restAngleOf(i) : th);
+      // a ball that cannot open (a held piece would be inside it) is passed over BEFORE anything moves: no radiator goes for an oven that stays shut
+      if (typeof o.b.fits === 'function' && Number.isFinite(restRad) && !o.b.fits(i, restRad)) { inWay = true; continue; }
+      if (typeof o.b.inflatesAffordable === 'function' && o.b.inflatesAffordable() < 1) { this._ovenSays = 'NOGAS'; return false; }
+      if (moves && o.p.setFlowerPose('CARGO') === null) {
+        this._ovenSays = 'REFUSED';                  // the ship said why (a held petal); nothing else happens
+        return false;
+      }
+      if (o.b.requestUp(i, 'f1') === false) continue;   // latched: it inflates once the radiator is at rest in the band; false = a held piece is in its way
+      this._demoBalls.push(i);
+      this._pollDemoBall(i, 0);
+      return true;
+    }
+    if (inWay) this._ovenSays = 'NOROOM';            // no oven can open: the radiators did not move, one line says why
+    return false;
+  }
+
+  /** Light tip i's aperture once its ball is up; looks again every DEMO_POLL_MS for DEMO_POLL_MAX tries (an empty tank never gets there). */
+  _pollDemoBall(i, n) {
+    this._schedule(() => {
+      if (!this._demoBalls.includes(i)) return;
+      const o = this._oven();
+      if (!o) return;
+      if (o.b.stateOf(i) === 'up') { if (typeof o.b.setReceiverGlow === 'function') o.b.setReceiverGlow(i, 1); return; }
+      if (n + 1 < DEMO_POLL_MAX || this._demoBallPending(i)) this._pollDemoBall(i, n + 1);   // a slow device is still swinging/inflating past the tries: keep looking
+    }, DEMO_POLL_MS);
+  }
+
+  /** Fold and darken the balls THIS test raised and no other (a tip a real melt has reserved since is left alone). Idempotent; never throws. */
+  _clearDemoBalls() {
+    const tips = this._demoBalls;
+    this._demoBalls = [];
+    if (!tips.length) return;
+    const o = this._oven();
+    if (!o) return;
+    for (const i of tips) {
+      try {
+        // A real melt's now only when the trip asked for the ball after this test did (the ball set's `ownerOf`): a tip a daughter has merely
+        // reserved is still ours to fold, else the request would stay latched and the ball would open at the next chance.
+        if (typeof o.b.ownerOf === 'function' && o.b.ownerOf(i) !== null && o.b.ownerOf(i) !== 'f1') continue;
+        o.b.requestDown(i, 'f1');
+        if (typeof o.b.setReceiverGlow === 'function') o.b.setReceiverGlow(i, 0);
+      } catch (_e) { /* dep */ }
+    }
+  }
+
   /** The demo bag's `showPartBag` call: `demo: true` keeps it off the radiators and below any real bag. */
   _showDemoBag(tc, i, frac) {
     try {
@@ -1578,6 +1721,8 @@ export class OverridePane {
    * @returns {boolean} a bag was opened
    */
   _openDemoBag() {
+    this._ovenSays = null;
+    if (this._oven()) return this._openDemoBall();
     const tc = this._tipCargo();
     if (!tc || typeof tc.showPartBag !== 'function') return false;
     const F = FURNACE_GAG;
@@ -1612,6 +1757,7 @@ export class OverridePane {
 
   /** Take every demo bag off its tip (a real melt's bag on a tip is never cleared: `demoOnly`). Idempotent; never throws. */
   _clearDemoBags() {
+    this._clearDemoBalls();
     const tips = this._demoTips;
     this._demoTips = [];
     if (!tips.length) return;

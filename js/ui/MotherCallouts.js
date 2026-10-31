@@ -429,7 +429,7 @@ const SYSTEMS = [
         // Leader rides tip boss 0 (az 40) through the pose (static stands in pre-purchase, then the gated one-shot binds).
         mesh: 'FlowerStrutTipPad_0', dynamic: true,
         // §13 r4 roll-up: all four tip pads (pad 0 already answers via the mesh default).
-        pickPrefixes: ['FlowerStrutTipPad', 'FlowerStrutTipStalk', 'FlowerStrutTipCone'],   // stalk tubes and cone roll up with their pad
+        pickPrefixes: ['FlowerStrutTipPad', 'FlowerStrutTipStalk', 'FlowerStrutTipCone', 'FlowerStrutSunOvenHead', 'FlowerStrutSunOvenCanister'],   // stalk tubes and cone roll up with their pad; P34: the sun-oven gimbal head and gas canister sit on the tip
         anchor: [ -0.283 * M, -0.283 * M, -1.12 * M ] },
       { id: 'flower_hinges', name: 'RADIATOR HINGES', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
         massKg: 2.6, priority: 2, flowerGated: true,

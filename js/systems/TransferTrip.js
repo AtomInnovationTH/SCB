@@ -169,6 +169,12 @@ const SA = Constants.ARM_STATES;
 const HOME_STATES = new Set([SA.DOCKED, SA.RELOADING, SA.HOLDING_CATCH]);
 /** Will never dock by herself (lost, sacrificed, or waiting for the player's reel). */
 const NOT_WAITED_STATES = new Set([SA.EXPENDED, SA.DEORBITING, SA.ADRIFT]);
+/**
+ * A mother net in any of these states is OUT (P34 L3-fix3, Ruling 0: no ion burn with a net deployed): flying, closing, reeling a catch home or
+ * coming back empty. A net that has berthed, is collared, is transferring to a tip, or is stowed is not.
+ */
+const NS = Constants.CAPTURE_NET.STATES;
+const NET_OUT_STATES = new Set([NS.LAUNCHING, NS.SPINNING_UP, NS.FLIGHT, NS.CONTACT, NS.BRAKE, NS.ENVELOP, NS.CINCH_CLOSING, NS.SECURE_CHECK, NS.CAPTURED, NS.MISSED, NS.REELING]);
 
 const PLUME_ON = Object.freeze({ x: 0, y: 0, z: 1 });
 const PLUME_OFF = Object.freeze({ x: 0, y: 0, z: 0 });
@@ -556,7 +562,10 @@ export class TransferTrip {
     if (this._phase === 'wait') {
       this._waitS += dt;
       const home = this.daughtersHome();
-      if (home || this._waitS >= tripWaitCap(Constants.TRIP.WAIT_DOCK_MAX_S)) this._startBurn(home);
+      // a mother net that is out is waited for too (it ends: a miss reels home, a catch berths): a net's reel ducks every holder's strut
+      // (`ArmManager._netDuck`), which would move a held piece through an open sun-oven ball mid-burn; the cap bounds this wait as well
+      // (the cap case with the daughters home but a net still out burns as the ship points too: no prograde turn with a net on its line, Ruling 0)
+      if ((home && !this.motherNetOut()) || this._waitS >= tripWaitCap(Constants.TRIP.WAIT_DOCK_MAX_S)) this._startBurn(home && !this.motherNetOut());
       return;
     }
     this._tickBurn(dt);
@@ -594,6 +603,19 @@ export class TransferTrip {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Is a mother net out (flying, closing, reeling a catch home or coming back empty)? Read from the arm manager's claim world, the same
+   * list the daughters' duck reads. False without an arm manager or a net list (a headless stub).
+   * @returns {boolean}
+   */
+  motherNetOut() {
+    const am = this._d.armManager;
+    const world = am && typeof am.claimWorld === 'function' ? am.claimWorld() : null;
+    const nets = world && Array.isArray(world.nets) ? world.nets : [];
+    for (const n of nets) if (n && n._isMother && n.isActive !== false && NET_OUT_STATES.has(n.state)) return true;
+    return false;
   }
 
   /** See `tripRefuses`. */

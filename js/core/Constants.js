@@ -92,13 +92,16 @@ export const Constants = {
   MOTHER_DRAG: {
     MASS_KG: 294.28,
     CORE_AREA_M2: [
-      [0, 2.22, 2.59, 1.11],
+      // 2026-10-29 (P34 L1): the four tip canisters and gimbal heads are always drawn: only the two nose-first cells that moved
+      // more than the test's 5 % (0 and 180 deg across Z, +0.07 and +0.11 m2) are re-measured; every other cell is still within it,
+      // so the reference area at 146 deg stays 5.79 m2 (TripProfile, DragReal and OrbitPane pin it).
+      [0, 2.22, 2.59, 1.18],
       [30, 2.86, 3.14, 2.17],
       [60, 2.62, 2.94, 2.89],
       [90, 2.23, 2.57, 4.86],
       [120, 2.88, 3.14, 4.38],
       [146, 3.34, 3.53, 3.24],
-      [180, 3.55, 3.73, 1.11],
+      [180, 3.55, 3.73, 1.22],
     ],
   },
 
@@ -1023,6 +1026,48 @@ export const Constants = {
     },
     P_GRIP_NO_MODE:  0.05,        // contact happened but no mode resolved
     MODE_GLYPHS: { gecko: 'g', hooks: 'h', electrostatic: 'e', magnet: 'm', uv_cure: 'u' },
+  },
+
+  // P34 sun-oven balls (plan p34-ball-furnace, 2026-10-29; owner 2026-10-29 "2 m ball"; DECISIONS "Furnaces" row): one
+  // inflated 2 m ball with a mirrored cap at the outer tip of each radiator strut, riding with its radiator. Numbers tagged
+  // [m] are measured (probe files named), [est] are estimates, [d] are plan decisions.
+  SUN_OVEN_BALL: {
+    DIAMETER_M: 2.0,                // [d] D1: film sphere, clear on the sun side
+    CAP_HALF_ANGLE_DEG: 45,         // [m] tmp/probe-sun-oven-ball/optics-theta45.json: 45-90 deg give the same power; 90 makes 16-41-sun hot spots
+    // Mount (resolved 2026-10-29, tmp/probe-p34/fitA-RESULT.md): ball centre = pad + u*s + (ef*cos phi + tt*sin phi)*h, u along
+    // the radiator boom outward, ef the in-plane perpendicular (nose-ward at radiator 90 deg), tt tangential. In tip-group
+    // local axes (x boom, y tangential, z = ef) that is (pad.x + s, h sin phi, h cos phi).
+    MOUNT_S_M: 0.5,                 // [m] fitA: a 2.000 m sphere clears everything by 34 mm at radiator 86-176 deg
+    MOUNT_H_M: 0.95,                // [m] same
+    MOUNT_PHI_DEG: 0,               // [m] same
+    PAD_X_M: -0.0275,               // tip-local x of the pad mesh centre (PlayerSatellite `FlowerStrutTipPad_i`)
+    MIN_DEG: 88,                    // [d] D8: a ball is up only at or above this radiator angle (owner 2026-10-29: "Pause at 88")
+    TOP_DEG: 176,                   // [m] fitA: balls 0 and 3 hit each other at 178 and 180 (-44, -168 mm); 176 clears by 34 mm
+    APERTURE_FROM_CENTRE_M: 0.59,   // [m] optics-theta45.json: z_m -0.59 for a 10 cm aperture, toward the mirror
+    RECEIVER_D_M: 0.6,              // [m] thermal-fixed.json: the one fixed 0.6 m foil receiver (at most 1.0 m)
+    APERTURE_D_M: 0.1,              // [m] optics-theta45.json
+    N2_KG_PER_INFLATE: 0.00047,     // [m] RESULT-thermal.md Nitrogen: 0.470 g fills a 2 m ball to 10 Pa (pressure [est])
+    INFLATE_S: 4,                   // [m] fill through a 1 mm valve from 1 bar takes 2.6-4.4 s (RESULT-thermal.md)
+    FOLD_S: 4,                      // [est] vent through the open 0.6 m sleeve, film reeled into the canister
+    // Gimbal ring: a thin inflated half-ring that holds the ball at two poles; outer radius at most 1.012 m (fitA: a 2.024 m
+    // sphere still clears by 22 mm at radiator 88-176 deg, a 2.040 m one by only 14 mm).
+    RING_TUBE_R_M: 0.006,           // [d]
+    RING_CENTRE_R_M: 1.004,         // [d] centre line of the tube; outer radius = centre + tube = 1.010
+    RING_MAX_OUTER_R_M: 1.012,      // [m] fitA: the largest outer radius that keeps 22 mm
+    HEAD_R_M: 0.02,                 // [d] gimbal head: a post on the pad's ball-facing side, up to the ring's midpoint
+    HEAD_X_M: -0.016,               // [d] tip-local x of its axis: x_max 0.004, 1 mm under the pad end face (no coplanar tie) (the launch fold pins the folded tip at z 1.305)
+    HEAD_BASE_Z_M: 0.046,           // [d] on the pad (surface z 0.050 at y 0, 0.0458 at |y| 0.02); 16 mm above the boom's cylinder surface (r 0.030)
+    // Stowed film + ring canister (about 0.2 m across, holds 0.8 L of film [est]).
+    CANISTER_D_M: 0.2,              // [d]
+    CANISTER_H_M: 0.03,             // [d]
+    // [m] tmp/p34-canprobe2.mjs scan (2026-10-29: launch + orbit hulls, radiator 0..180, daughter struts 0..180): the disc stands flat,
+    // its axis along the boom, x_max 0.005 (the launch fold pins the folded tip at z 1.305, test-FlowerLaunchFold (ii)), x_min -0.025
+    // (25 mm off the plate's end face at -0.05). The daughter strut of a petal swings through |y| 0.12..0.2 on ONE tangential side,
+    // so the canister sits on the OTHER side (CANISTER_SIDE: struts lie +5 / -5 deg off the radiators 40, 140, 220, 320).
+    CANISTER_POS_M: [-0.01, 0.16, 0.08],  // [m] tip-local centre magnitude (x boom, y tangential, z ef)
+    CANISTER_SIDE: [-1, 1, -1, 1],        // [m] sign of y per tip
+    MAST_R_M: 0.02,                 // [d] receiver mast
+    SLEEVE_R_M: 0.3,                // [d] 0.6 m loading sleeve at the cap vertex
   },
 
   // Daughter→furnace transfer (park-the-catch delivery; ARCHITECTURE.md, Captured-debris lifecycle). A parked
@@ -4712,15 +4757,17 @@ export const Constants = {
     get IN_ORBIT_CR_PER_KG() { return Constants.LAUNCH_USD_PER_KG / Constants.USD_PER_CREDIT; },          // 70
     get ANCHOR_PREMIUM_CR_PER_KG() { return Constants.ELEVATOR_CONTRACT.BONUS_CREDITS_PER_KG; },           // 5: the anchor's bonus per kg
   },
-  // BIG_MELT — melting a big piece for metal in the four radiator-tip furnaces, on the SHIP'S clock during trip burns
-  // (DECISIONS §33 rows 16-17: "4 furnaces, one on each radiator strut", "many hours or days of realtime to melt debris"; BigMelt.js).
-  // The trip's days and the hold set the pace, not the delivery. Every number is an ESTIMATE to tune except where it says measured.
+  // BIG_MELT — melting a big piece for metal in the four sun-oven balls at the radiator tips, on the SHIP'S clock during trip
+  // burns (DECISIONS §33 rows 16-17: "4 furnaces, one on each radiator strut", "many hours or days of realtime to melt debris";
+  // BigMelt.js). The trip's days and the hold set the pace, not the delivery. P34 (2026-10-29): each furnace is a fixed 0.6 m
+  // foil-insulated receiver inside a 2 m inflated ball (owner: "2 m ball"); its size sets the part size and the melt pace.
+  // Numbers are measured by the thermal probe except where they say est.
   BIG_MELT: {
     PACKED_KG_M3: 100,          // a cut part is folded wall sections packed to this density; sets the part size (BigMelt.PART_KG) and the bag's size
-    REACH_LIMIT_M: 0.70,        // m: a part's drawn reach limit - a margin under the tip's 0.75 m fit (TipCargo MAX_BAG_R_M); its band row is 134 deg
-    FURNACE_S_PER_KG: 1000,     // ship-seconds of furnace time per kg: about 1 kW at the focus (1.2 m2 mirror, 60 %) into an insulated crucible, about
-                                //   1.0 MJ/kg to heat aluminium or steel from cold and melt it; a 63 kg part is about 18 h of furnace time. The dish size is
-                                //   the owner's to set: this one constant
+    REACH_LIMIT_M: 0.30,        // m: a part's drawn reach limit = the 0.6 m receiver's radius (P34 D4); its band row is 142 deg (was 0.70 m / 134 deg); parts 5 kg stage, 11 kg satellite
+    FURNACE_S_PER_KG: 2257,     // sunlit ship-seconds per kg [m: tmp/probe-p34/RESULT-thermal.md "Fixed receiver", 2026-10-29]: the fixed 0.6 m receiver, 20 layers of 25 um
+                                //   foil (emissivity 0.1, est.), 761.6 W absorbed, aluminium at 100 kg/m3; exactly linear in mass; 5 kg = 11,290 s, 11 kg = 24,830 s
+    RECEIVER_WARM_S: 2415,      // sunlit seconds to warm the empty receiver from 300 K to 933 K, once per burn per furnace before its first part [m: same file; upper bound, whole foil stack at wall temperature]
     DELIVERY_S: 1070,           // ship-seconds to take one part rack -> nose -> leash -> tip (measured: 59 + 48 real s at trip rate 1 = about 1,070 s at 10 ship-s per real s); one at a time
     TRIP_SUN: 0.6,              // share of the ship's time a furnace sits in sunlight (orbit average)
     METAL_ID: 'refined_orbit',  // the hold's id for melted metal: the 'refined_' prefix is what the elevator contract takes (ShopScreen)

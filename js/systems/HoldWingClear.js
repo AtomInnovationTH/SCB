@@ -284,6 +284,7 @@ function shadowOf(o, map, out, inHinge, hinge, depth) {
   const moving = inHinge || o === hinge;
   if (o.isMesh && o.geometry && o.geometry.getAttribute('position') && !isFxLike(o)) out.push({ node: n, local: localTrisOf(o.geometry), moving, name: o.name });
   for (let i = 0; i < o.children.length; i++) {
+    if (/^FlowerStrutSunOvenBall_\d+$/.test(o.children[i].name || '')) continue;      // P34: a sun-oven ball is not a radiator part (hidden while stowed, up only on a trip, fit-measured clear at 88-176 deg): no shadow node, never an obstacle. Walking it built one Object3D per ball per kit, which moved the seeded random stream (three draws a uuid per object) and re-rolled test-SatHaulRetry K7
     const c = shadowOf(o.children[i], map, out, moving, hinge, depth + 1);
     n.add(c);
   }

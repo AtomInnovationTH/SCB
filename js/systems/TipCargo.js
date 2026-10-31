@@ -87,7 +87,7 @@ const PART_BAG_WEAVE_SWING = 0.07;        // luminance swing of the weave, 7 % (
 const PART_BAG_WEAVE_TINT = [255, 249, 232];   // warm cream tint of the weave texture: R >= G > B
 const PART_BAG_GLOW_EMISSIVE = 1.0;       // the dazzling core is emissive 1.0; the halo's own colour is dimmed in the texture
 const PART_BAG_CORE_COLOR = [255, 240, 190];   // white-yellow focus spot: ESTIMATE
-const PART_BAG_HALO_PEAK = [178, 38, 6];       // cherry red at the halo's inner edge, red 0.7 of full (cloth next to a ~1 kW focus runs far hotter than the 660 C melt): ESTIMATE
+const PART_BAG_HALO_PEAK = [178, 38, 6];       // cherry red at the halo's inner edge, red 0.7 of full (cloth next to the focus (about 762 W into the 0.6 m receiver, measured: tmp/probe-p34/RESULT-thermal.md) runs far hotter than the 660 C melt): ESTIMATE
 const PART_BAG_CORE_R = 0.09;             // core radius, in bag radii (angular, on the +X side): 8-10 % per the owner round
 const PART_BAG_HALO_R = 0.25;             // halo radius, in bag radii
 const PART_BAG_GLOW_WINDOW = 0.36;        // the glow texture covers dir.y, dir.z in -0.36..0.36 (a cap about 21 deg across), black outside; the far side is pushed out of range
@@ -611,6 +611,10 @@ export class TipCargo {
   }
 
   // part bags: a big piece melting in a tip furnace
+  //
+  // P34 (2026-10-29): on a ship with sun-oven balls (`player.sunOvenBalls`) a melting part sits inside the ball's opaque
+  // 0.6 m receiver, so GameFlowManager draws NO bag at its tip (it lights the receiver's aperture instead) and the ceiling
+  // below is never lowered for it. These bags are what a ship without balls (a stub) still draws, and the F1 test's demo bag.
 
   /**
    * Show (or update) the bag of the PART of a big piece being melted in tip i's furnace: a woven ceramic-cloth bag (one

@@ -43,6 +43,7 @@ import {
   atmosphericDrag,
 } from './OrbitalMechanics.js';
 import { DEG2RAD, RAD2DEG, degToRad, radToDeg, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
+import { SunOvenBalls } from './SunOvenBall.js';
 
 // Engine-gas flow follows thrust and Isp. Module-level (not methods) so the borrowed-prototype / mock ships the tests use
 // (`PlayerSatellite.prototype.applyCartesianImpulse.call(mock, ...)`) bill the same way.
@@ -550,6 +551,8 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerPairs = { A: false, B: false };
     /** @type {Array<{hinge: THREE.Group, azDeg: number, pair: string, wings: THREE.Group[]}>} */
     this._flowerGroups = [];
+    /** P34: the four sun-oven balls at the radiator tips (SunOvenBall.js); stations are added by `_buildFlowerPair`. */
+    this.sunOvenBalls = new SunOvenBalls(this);
     // Boot at the orbit REST pose: CLOSED (θ 0°, folded flat along the body), DECISIONS §15 row 4.
     this._flowerThetaRad = degToRad(this._flowerRestDeg());
     /** Slew latch (mirrors the daughter `_strutTargetAlpha` contract): player intent wins mid-swing (a new toggle
@@ -4246,6 +4249,7 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerBandDropped = false;
     this._bandSaid = false;
     this._flowerThetaRad = degToRad(restDeg);
+    if (this.sunOvenBalls) this.sunOvenBalls.stowAll();   // P34 D8: a hard reset never leaves a radiator held at 88° by a ball
     this._updateFlower(0);
     // Suppressed while the opening dance drives this ship (wordless unfold).
     if (wasLocked && !this._danceDrivesMe()) {
@@ -5043,6 +5047,7 @@ export class PlayerSatellite extends THREE.Group {
       pad.name = `FlowerStrutTipPad_${i}`;
       pad.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       tip.add(pad);
+      if (this.sunOvenBalls) this.sunOvenBalls.addStation(i, tip, pad, hinge);   // P34: gimbal head + canister (+ the ball, hidden while stowed)
 
       // Leash tip hardware — two nested tubes and a slotted cone on a pivot at its narrow end. _updateTipStalks owns their
       // POSITIONS (retracted into the pad for the launch fold, out at the latch point); LeashVisual owns the cone pivot's
@@ -5129,6 +5134,19 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * One frame of the radiators and the sun-oven balls, in the order the ovens need (P34): the ball states first (the 88 deg gate
+   * in `_updateFlower` reads them), then the radiator driver, then the ball pointing (it reads the rotations the driver just set,
+   * so the mirror axis is exact this frame, not one frame behind a slewing radiator).
+   * @param {number} dt real seconds
+   */
+  _stepFlowerAndOvens(dt) {
+    const balls = this.sunOvenBalls;
+    if (balls) balls.update(dt);
+    this._updateFlower(dt);
+    if (balls) balls.aim();
+  }
+
+  /**
    * @private Per-frame flower slew driver (mirrors the daughter `_updateStruts` / `_strutTargetAlpha` latch contract):
    * bounded rate, never a snap; player intent wins mid-swing (toggle/setPose overwrite the latch); latch cleared on
    * arrival.
@@ -5209,7 +5227,9 @@ export class PlayerSatellite extends THREE.Group {
     // Vent push-through: the ceiling lifts from the bud to POSE_VENT_DEG only while the player has double-commanded it.
     const ceilRad = degToRad(this._flowerVentArmed ? FL.POSE_VENT_DEG : FL.POSE_STOW_DEG);
 
-    this._flowerThetaRad = clamp(this._flowerThetaRad, floorRad, ceilRad);
+    // P34 D8: a ball that is not stowed holds its radiator in [88°, 176°] (the radiator waits for the fold); held petals are gated in `_stepPetalHolds`.
+    const ovenGate = this.sunOvenBalls ? this.sunOvenBalls.sharedGate(this._petalHolds || EMPTY_HOLDS) : null;
+    this._flowerThetaRad = clamp(this._flowerThetaRad, ovenGate ? Math.max(floorRad, ovenGate.floorRad) : floorRad, ovenGate ? Math.min(ceilRad, ovenGate.ceilRad) : ceilRad);
 
     // The radiator hinge drives (one per strut, in unison) bill on frames where θ actually moves (a clamp with no
     // slew, or dt 0, bills nothing). A held petal bills for itself (`_stepPetalHolds`).
@@ -5291,11 +5311,13 @@ export class PlayerSatellite extends THREE.Group {
       const h = holds[i];
       let tgt = h.releasing ? this._flowerThetaRad : h.targetRad;
       if (!h.releasing && tgt > tipBand + 1e-9) tgt = bandTarget;
-      tgt = clamp(tgt, floorRad, ceilRad);
+      const og = this.sunOvenBalls ? this.sunOvenBalls.limitsFor(h.az) : null;   // P34 D8: this petal's own ball
+      const flr = og ? Math.max(floorRad, og.floorRad) : floorRad, cl = og ? Math.min(ceilRad, og.ceilRad) : ceilRad;
+      tgt = clamp(tgt, flr, cl);
       const before = h.thetaRad;
       const maxDelta = dt > 0 ? (h.rateRadS > 0 ? h.rateRadS : FL.SLEW_RATE_RAD_S) * dt : 0;
       if (maxDelta > 0) h.thetaRad += clamp(maxDelta, -maxDelta, tgt - h.thetaRad);
-      h.thetaRad = clamp(h.thetaRad, floorRad, ceilRad);
+      h.thetaRad = clamp(h.thetaRad, flr, cl);
       if (maxDelta > 0 && Math.abs(h.thetaRad - before) >= motorMoveMinRadS() * dt) billMotorW(this, hingeW, dt, 'radiator');
       if (h.releasing && Math.abs(h.thetaRad - this._flowerThetaRad) < 1e-9) holds.splice(i, 1);
     }
@@ -6630,7 +6652,7 @@ export class PlayerSatellite extends THREE.Group {
     this._animateScanFlash(dt);
     this._updateRcsPuffs(dt);
     this._updateStruts(dt);
-    this._updateFlower(dt);
+    this._stepFlowerAndOvens(dt);
 
     if (this._edtDeployed && !this._edtActive) {
       const deployTime = (Constants.EDT && Constants.EDT.DEPLOY_TIME) || 5;
@@ -7254,8 +7276,8 @@ export class PlayerSatellite extends THREE.Group {
    * (the scene velocity turned by her inverse attitude; +Z, nose-first, when not moving), the radiator angle
    * `_flowerThetaRad` (the shared angle: single-petal holds are not followed) and the two ROSA wings, each with its
    * deploy scale (wrapper scale.x) and blanket normal in the body frame, taken from the pivots' real transforms
-   * (wrapper -> pivot -> array pivot rotations, never re-derived from an angle). A rig without the wings
-   * (Object.create(prototype)) gets the core alone. Allocation-free; the drag block calls it once per frame.
+   * (wrapper -> pivot -> array pivot rotations, never re-derived from an angle), plus the sun-oven balls that are not stowed
+   * (`sunOvenBalls.dragAreaM2()`). A rig without the wings (Object.create(prototype)) gets the core alone. Allocation-free; the drag block calls it once per frame.
    * @returns {number} m2
    */
   dragAreaM2() {
@@ -7280,7 +7302,8 @@ export class PlayerSatellite extends THREE.Group {
       rec.scale = wrapper.scale.x;
       rec.nx = _dragNrm.x; rec.ny = _dragNrm.y; rec.nz = _dragNrm.z;
     }
-    return motherDragAreaM2(_dragDir.x, _dragDir.y, _dragDir.z, this._flowerThetaRad, _dragWings, nW);
+    const ovens = this.sunOvenBalls ? this.sunOvenBalls.dragAreaM2() : 0;   // P34: the inflated sun-oven balls are real area (pi r^2 each, from any direction)
+    return motherDragAreaM2(_dragDir.x, _dragDir.y, _dragDir.z, this._flowerThetaRad, _dragWings, nW) + ovens;
   }
 
   /**

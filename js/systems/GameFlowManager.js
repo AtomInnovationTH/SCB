@@ -92,6 +92,8 @@ function lifeWords(years) {
 /** @private A bag let go drifts away from her at this speed (km/s: 0.5 m/s, an estimate) and is gone this many seconds later. */
 const BAG_DRIFT_KMS = 0.0005;
 const BAG_GONE_S = 8;
+/** @private P34 L3-fix3: a holder that has not reached her burn-lift pose this many real seconds after the time she needs to get there is given up on (`_meltLiftTimeout`). */
+const LIFT_SETTLE_EXTRA_S = 2;
 
 export class GameFlowManager {
   constructor() {
@@ -886,6 +888,7 @@ export class GameFlowManager {
       this._jobDoneOn = false;
       this._unplacedBig = [];
       this._meltFinals = [];                // no melted piece waits to be let go, no save is owed
+      this._meltBallsReset();               // no tip waits for its sun oven to fold, no receiver glows
       this._goneBags = [];                  // no let-go bag is left to take off the field
       this._meltSaveOwed = false;
 
@@ -1761,6 +1764,7 @@ export class GameFlowManager {
     this._jobDoneOn = false;
     this._unplacedBig = [];
     this._meltFinals = [];                  // no melted piece waits to be let go, no save is owed
+    this._meltBallsReset();                 // no tip waits for its sun oven to fold, no receiver glows
     this._goneBags = [];                    // no let-go bag is left to take off the field
     this._meltSaveOwed = false;
 
@@ -2619,17 +2623,226 @@ export class GameFlowManager {
     return this._burnWork;
   }
 
-  /** @private The tips whose furnace is free now: the tip exists, holds no catch and is not reserved for a carry. */
+  /**
+   * @private The ship's sun-oven balls (P34, `SunOvenBall.js`), or null on a ship without them (a stub): every tip then counts
+   * as working and the melt keeps its old drawing (a part bag at the tip).
+   */
+  _balls() {
+    const b = this._refs && this._refs.player && this._refs.player.sunOvenBalls;
+    return b && typeof b.stateOf === 'function' ? b : null;
+  }
+
+  /** @private The balls object when tip `i` has a ball (a station that was not built has none), else null. */
+  _ballAt(i) {
+    const b = this._balls();
+    if (!b) return null;
+    if (typeof b.receiverNode === 'function' && !b.receiverNode(i)) return null;
+    return b;
+  }
+
+  /** @private Tip `i`'s receiver glow (0..1); a no-op when the tip has no ball. */
+  _meltGlow(i, k) {
+    const b = this._ballAt(i);
+    if (b && typeof b.setReceiverGlow === 'function') b.setReceiverGlow(i, k);
+  }
+
+  /**
+   * @private Take a tip's drawing down: its part bag (a ship without balls) and its receiver glow. A real melt's ball stays
+   * up and stowed or not as the work decides: only the glow goes out.
+   */
+  _meltClearTip(i) {
+    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
+    if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags(i);
+    this._meltGlow(i, 0);
+  }
+
+  /** @private Radiator angle of tip `i`'s petal, rad (NaN when the ship does not say). */
+  _tipThetaRad(i) {
+    const p = this._refs && this._refs.player;
+    if (!p) return NaN;
+    const az = Constants.THERMAL.FLOWER.AZIMUTHS_DEG[i];
+    return typeof p.petalThetaRad === 'function' ? p.petalThetaRad(az) : p._flowerThetaRad;
+  }
+
+  /**
+   * @private D10 (extended, plan P34 L3-fix2): the burn's radiators are asked to 146 degrees, once, unless they already stand there (a
+   * ball opens only with its radiator at rest, and the fit was planned at 146): any used tip's radiator off 146 (or about to be), asked
+   * only while the ship takes pose commands (a held petal or a carry refuses them: asked again the next tick).
+   * (A move the radiator band guard drops, a daughter's catch in the way, is NOT asked again: each drop says its line, so a retry
+   * would say it every frame; the schedule pauses until the radiators open, which is the ball's own rule.)
+   */
+  _meltPose(m) {
+    if (m.poseAsked || !m.ballTips.length) return;
+    const p = this._refs && this._refs.player;
+    if (!p || typeof p.setFlowerPose !== 'function') return;
+    const top = Constants.THERMAL.FLOWER.POSE_STOW_DEG * Math.PI / 180;
+    const eps = Constants.THERMAL.FLOWER.SETTLE_EPS_RAD + 1e-9;           // an arrival lands within the drive's settle band of its target
+    const target = p._flowerTargetTheta;
+    const away = m.ballTips.some((i) => { const th = this._tipThetaRad(i); return Number.isFinite(th) && Math.abs(th - top) > eps; })
+      || (Number.isFinite(target) && Math.abs(target - top) > eps);
+    if (!away) return;
+    if (p.flowerCommandsLocked === true) return;
+    if (p.setFlowerPose('STOW') !== null) m.poseAsked = true;     // 146 degrees, the burn's top angle (TransferTrip._askBurnPose)
+  }
+
+  /** @private Has a used tip with an unfinished part (cut, delivered or melting) a ball that is not working? Then there is no melt. */
+  _meltBallsIdle(m) {
+    for (const i of m.ballTips) {
+      const b = this._ballAt(i);
+      if (!b || typeof b.isWorking !== 'function' || b.isWorking(i)) continue;
+      if (m.parts.some((x) => x.tip === i && (x.st === 1 || x.st === 2))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * @private A tip's work is over (its last part, or the burn): its ball folds and the tip stays reserved until the ball is
+   * stowed (`_meltFrame` drains the list); without a ball the tip is free at once.
+   */
+  _meltLetGo(i) {
+    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
+    const b = this._ballAt(i);
+    if (!b) { if (tc && typeof tc.unreserve === 'function') tc.unreserve(i); return; }
+    b.requestDown(i);
+    this._meltGlow(i, 0);
+    if (b.stateOf(i) === 'stowed') { if (tc && typeof tc.unreserve === 'function') tc.unreserve(i); return; }   // it never came up (or is already folded)
+    if (!this._meltUnreserve) this._meltUnreserve = [];
+    if (!this._meltUnreserve.includes(i)) this._meltUnreserve.push(i);
+  }
+
+  /** @private Reserved tips whose ball has folded are free for a small catch again. */
+  _meltDrainTips() {
+    const list = this._meltUnreserve;
+    if (!list || !list.length) return;
+    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
+    const rest = [];
+    for (const i of list) {
+      const b = this._ballAt(i);
+      if (b && b.stateOf(i) !== 'stowed') { rest.push(i); continue; }
+      if (tc && typeof tc.unreserve === 'function') tc.unreserve(i);
+    }
+    this._meltUnreserve = rest;
+  }
+
+  /** @private A new run or a reset: no tip waits for its oven to fold, no holder is kept lifted and no receiver glows (`stowAll` leaves the glow set). */
+  _meltBallsReset() {
+    this._meltUnreserve = [];
+    this._meltLiftSet(false);
+    const b = this._balls();
+    if (b && typeof b.setReceiverGlow === 'function') for (let i = 0; i < 4; i++) b.setReceiverGlow(i, 0);
+  }
+
+  /** @private The ship's arm manager (the daughters), or null on a stub. */
+  _arms() {
+    const r = this._refs || {};
+    return r.armManager || (r.player && r.player.armManager) || null;
+  }
+
+  /**
+   * @private P34 L3-fix2 (owner: "Hold the piece higher"): while a melt with ovens runs, every daughter holding a rack piece keeps her
+   * radiator-lift pose (`ArmManager.setBurnLift`), so the four balls open beside the raised piece instead of inside it.
+   */
+  _meltLiftSet(on) {
+    const am = this._arms();
+    if (am && typeof am.setBurnLift === 'function') am.setBurnLift(on);
+    this._meltLiftOn = on === true;
+    if (!on) this._meltLiftTips = [];
+  }
+
+  /**
+   * @private After a burn the holders go back to their hold pose only once the balls are stowed (the piece would sweep through a folding
+   * ball); a new burn that has ovens of its own keeps the lift.
+   */
+  _meltLiftDrain() {
+    if (!this._meltLiftOn) return;
+    if (this._melt && this._melt.ballTips && this._melt.ballTips.length) return;
+    const b = this._balls();
+    if (b && (this._meltLiftTips || []).some((i) => b.stateOf(i) !== 'stowed')) return;
+    this._meltLiftSet(false);
+  }
+
+  /** @private The tips whose furnace is free now: the tip exists, holds no catch, is not reserved for a carry and its sun oven is stowed. */
   _freeTips() {
     const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
     if (!tc || typeof tc.has !== 'function') return [];
+    const balls = this._balls();
     const tips = [];
     for (let i = 0; i < 4; i++) {
       if (tc.has(i) || (typeof tc.isReserved === 'function' && tc.isReserved(i))) continue;
+      if (balls && balls.stateOf(i) !== 'stowed') continue;       // a ball still folding from the last trip: not a free tip
       if (typeof tc.latchWorldInto === 'function' && tc.latchWorldInto(i, new THREE.Vector3()) === null) continue;   // no such tip on this ship
       tips.push(i);
     }
     return tips;
+  }
+
+  /**
+   * @private P34 L3-fix rule 2, L3-fix2: of the free tips, the ones whose sun oven can work this trip. A tip with a ball is usable only if
+   * (a) when its radiator is not at 146 deg (or its target is not) the 146 deg request would be taken: the ship takes pose commands
+   * (`flowerCommandsLocked` false) and, from below the band, the radiator band guard is not 'never' (its own check,
+   * `armManager.radiatorBandBlocked`; a 'wait' clears and the ball's pause covers it); when no tip is left for that reason the line says
+   * "cannot open where they stand" if a radiator stands in the band on a ship that takes no command, else "past 88°" (L3-fix3); (b) the ball opens only with its radiator at
+   * rest, so its envelope must clear every held piece at that rest angle (146 deg when the radiators are asked there, else where
+   * they stand), the daughter's piece placed at her lift pose, where the burn keeps her (`SunOvenBalls.blockerAcross`, lifted);
+   * (c) the steering tank pays its inflate (`inflatesAffordable`, first tips first). A tip without a ball (a station not built) and a
+   * ship without balls keep the old rules: every free tip is a furnace.
+   * @param {number[]} tipsFree
+   * @returns {{tips: number[], say: (string|null), inWay: (object|null), fitRejected: number}} `say`: why none can work (only when `tips` has no oven tip); `inWay`/`fitRejected`: a held piece kept this many ovens shut
+   */
+  _meltOvens(tipsFree) {
+    const balls = this._balls();
+    const cand = tipsFree.filter((i) => this._ballAt(i));
+    const p = this._refs && this._refs.player;
+    if (!balls || !cand.length || !p) return { tips: tipsFree, say: null, inWay: null, fitRejected: 0 };
+    const DEG = Math.PI / 180;
+    const minRad = Constants.SUN_OVEN_BALL.MIN_DEG * DEG;
+    const maxRad = Constants.SUN_OVEN_BALL.TOP_DEG * DEG;
+    const topRad = Constants.THERMAL.FLOWER.POSE_STOW_DEG * DEG;
+    const eps = Constants.THERMAL.FLOWER.SETTLE_EPS_RAD + 1e-9;
+    const bandLo = Constants.REEL_HOLD.BAND_LO_DEG * DEG;
+    const am = p.armManager;
+    const target = p._flowerTargetTheta;
+    const locked = p.flowerCommandsLocked === true;
+    if (am && typeof am._forceWingProfiles === 'function' && Array.isArray(am.arms)) {
+      // a rack piece whose wing profile is still pending has no known lift pose and reads 'wait' on the band guard: finish the pending ones
+      // now (the mother-net press does the same; a bounded few ms of work), so the answers are the ones the burn will get
+      for (const a of am.arms) if (a && !a.isDetached && Array.isArray(a.heldCatches)) am._forceWingProfiles(a);
+    }
+    let never = null;
+    const bandNever = () => {
+      if (never === null) never = !!(am && typeof am.radiatorBandBlocked === 'function' && am.radiatorBandBlocked() === 'never');
+      return never;
+    };
+    let inWay = null;
+    let fitRejected = 0;
+    let stuckInBand = false;           // a radiator stands in the band and cannot be asked to 146 (the ship takes no pose command)
+    const ok = [];
+    for (const i of cand) {
+      const th = this._tipThetaRad(i);
+      const moves = !Number.isFinite(th) || Math.abs(th - topRad) > eps || (Number.isFinite(target) && Math.abs(target - topRad) > eps);
+      let rest = th;                                                // the angle the radiator will come to rest at
+      if (moves) {
+        if (locked) { if (Number.isFinite(th) && th >= minRad - 1e-6) stuckInBand = true; continue; }   // the pose request would be refused: this tip's radiator stays where it is
+        if (Number.isFinite(th) && th <= bandLo + 1e-9 && bandNever()) continue;   // the band guard would drop the move
+        rest = topRad;
+      }
+      if (!Number.isFinite(rest) || rest < minRad - 1e-6 || rest > maxRad + 1e-6) continue;   // no ball opens there
+      const w = typeof balls.blockerAcross === 'function' ? balls.blockerAcross(i, rest, rest, true, true) : null;
+      if (w) { inWay = inWay || w; fitRejected++; continue; }
+      ok.push(i);
+    }
+    const afford = typeof balls.inflatesAffordable === 'function' ? balls.inflatesAffordable() : Infinity;
+    const usable = new Set(ok.slice(0, afford));
+    const tips = tipsFree.filter((i) => !this._ballAt(i) || usable.has(i));
+    if (!tips.length) {
+      const head = 'The sun ovens cannot open this trip: ';
+      const say = ok.length ? `${head}the steering tank is empty.`
+        : inWay ? `${head}the ${pieceName(inWay)} on the rack is in the way.`
+          : stuckInBand ? `${head}the radiators cannot open where they stand.`
+            : `${head}the radiators cannot open past ${Constants.SUN_OVEN_BALL.MIN_DEG}\u00b0.`;
+      return { tips, say, inWay, fitRejected };
+    }
+    return { tips, say: null, inWay, fitRejected };
   }
 
   /** @private Room in the hold for orbit metal, kg: free kilograms, 0 when the 20 stacks are full and orbit metal has none. */
@@ -2704,7 +2917,9 @@ export class GameFlowManager {
       return { id: d.id, kg: d.mass, partKg: partKgFor(pieceType(d)), metalPerKg: at > 0 ? v.scrapKg / at : 0, d };
     });
     const burnShipS = days * DAY_S;
-    const plan = planBurn({ burnShipS, pieces: specs, tips: tipsFree, roomKg: this._holdRoomKg() });
+    const ovens = this._meltOvens(tipsFree);
+    if (!ovens.tips.length && ovens.say) { this._meltSay(ovens.say, 'info'); return; }     // no oven can work this trip: nothing is planned, the pieces stay
+    const plan = planBurn({ burnShipS, pieces: specs, tips: ovens.tips, roomKg: this._holdRoomKg() });
     if (!plan.parts.length) {
       const name = pieceName(specs[0].d);
       if (plan.stop === 'furnaces') this._meltSay(noFurnaceLine(name), 'info');
@@ -2720,30 +2935,155 @@ export class GameFlowManager {
     for (const d of byId.values()) if (plan.parts.some((x) => x.pieceId === d.id)) d._meltBusy = true;
     this._melt = {
       burnShipS, plan, tips: used,
+      partsBefore: new Map(specs.map((x) => [x.id, x.partKg > 0 ? Math.round(((x.d._disposal && x.d._disposal.meltDoneKg) || 0) / x.partKg) : 0])),   // parts of each piece finished on earlier trips (the numbering of a part across trips)
       parts: plan.parts.map((x) => ({ ...x, st: 0, d: byId.get(x.pieceId) })),   // st: 0 waiting, 1 cut (being delivered), 2 melting, 3 over
       inFlight: new Map(),                                                       // piece id -> kg cut and not yet melted
       totals: new Map(),                                                         // piece id -> this trip's totals, for the line
       said: new Set(),
       released: new Set(),                                                       // tips let go before the burn ended (their last part is over)
       holdFull: false,                                                           // a part's metal did not fit when it melted: the work stopped
+      // sun ovens (P34 D8-D10): the balls move in real seconds, the ship's clock runs at trip speed
+      ballTips: used.filter((i) => this._ballAt(i)),                             // used tips that have a ball
+      graceT: 0, graceS: 0,                                                      // real seconds since the burn began / the start-up window
+      lastFrac: 0, pausedS: 0,                                                   // the fraction last played; ship seconds the burn played with a used ball not working
+      poseAsked: false,                                                          // the radiators were asked up to 146 degrees
+      liftS: 0, liftChecked: true,                                               // her lift time (s) and whether the holders' settle check still has to run (P34 L3-fix3)
     };
+    const balls = this._balls();
+    const m = this._melt;
+    if (ovens.inWay && ovens.fitRejected > 0 && m.ballTips.length) {
+      // some ovens stay shut because of a piece on the rack: the count is the ovens THIS plan uses (not every one that could open)
+      this._meltSay(`${m.ballTips.length} of 4 sun ovens open this trip: the ${pieceName(ovens.inWay)} on the rack is in the way of the others.`, 'info');
+    }
+    if (balls && m.ballTips.length) {
+      // start-up window (real seconds): the radiators moving to 146 degrees, the holders lifting to their lift pose (the radiators wait for it
+      // when they must cross the band), the inflate, and a second to spare; a burn that starts with everything in place has no pause until
+      // INFLATE_S + 1 s have gone by
+      const topRad = Constants.THERMAL.FLOWER.POSE_STOW_DEG * Math.PI / 180;
+      let rise = 0;
+      for (const i of m.ballTips) {
+        const th = this._tipThetaRad(i);
+        if (Number.isFinite(th)) rise = Math.max(rise, Math.abs(topRad - th) / Constants.THERMAL.FLOWER.SLEW_RATE_RAD_S);
+      }
+      this._meltLiftSet(true);                                                   // the holders keep their lift pose through the burn
+      this._meltLiftTips = m.ballTips.slice();
+      const am = this._arms();
+      let lift = 0;
+      if (am && typeof am.burnLiftPoseOf === 'function' && Array.isArray(am.arms)) {
+        for (let a = 0; a < am.arms.length; a++) {
+          const rad = am.burnLiftPoseOf(a);
+          const arm = am.arms[a];
+          if (rad !== null && arm && typeof arm.getAimAlpha === 'function') lift = Math.max(lift, Math.abs(rad - arm.getAimAlpha()) / Constants.OCTOPUS_V5.STRUT_SLEW_RATE);
+        }
+      }
+      m.graceS = rise + lift + Constants.SUN_OVEN_BALL.INFLATE_S + 1;
+      m.liftS = lift;
+      m.liftChecked = false;                                                     // `_meltTick` checks that every holder has arrived at lift time + LIFT_SETTLE_EXTRA_S
+      this._meltPose(m);                                                         // radiators to 146 first: the ball's rest angle is its target
+      for (const i of m.ballTips) balls.requestUp(i);                            // latched: the ball inflates once its radiator is at rest in the band and her piece is lifted
+    }
   }
 
-  /** @private Tick: play everything due at `frac` of the burn. */
+  /** @private Tick: play everything due at `frac` of the burn (less the ship seconds a used oven was not working). */
   _meltTick({ frac }) {
     const m = this._melt;
     if (!m) return;
-    this._meltAdvance(m, clamp01(frac) * m.burnShipS);
+    const f = clamp01(frac);
+    const df = Math.max(0, f - m.lastFrac);
+    m.lastFrac = f;
+    this._meltPose(m);
+    if (!m.liftChecked) {
+      // P34 L3-fix5: the hold ends the frame every holder has settled (no line), or at the timeout check (lift time + LIFT_SETTLE_EXTRA_S)
+      const am = this._arms();
+      if (m.graceT >= m.liftS + LIFT_SETTLE_EXTRA_S) { m.liftChecked = true; this._meltLiftTimeout(m); }
+      else if (m.liftS > 0 && am && typeof am.burnLiftSettled === 'function' && am.burnLiftSettled()) m.liftChecked = true;
+    }
+    this._meltRefit(m);                                                          // a holder gained a piece: the open balls are checked against the new rack
+    if (!m.liftChecked && m.liftS > 0) {
+      // P34 L3-fix5 (Ruling 0: no oven works before the piece is lifted clear): the schedule holds while a holder's lift is in play and the settle
+      // check has not run. The held fraction is paused (a held schedule never catches up) and nothing is cut, delivered or finished.
+      if (df > 0) m.pausedS += df * m.burnShipS;
+      return;
+    }
+    if (df > 0 && m.graceT >= m.graceS && this._meltBallsIdle(m)) m.pausedS += df * m.burnShipS;
+    this._meltAdvance(m, Math.max(0, f * m.burnShipS - m.pausedS));
   }
 
-  /** @private A tip whose last scheduled part is over is free for a small catch again, not only when the burn ends. */
+  /**
+   * @private P34 L3-fix3 (item 5): a holder that has not arrived at her lift pose by her lift time + LIFT_SETTLE_EXTRA_S (the lift was refused, a
+   * carry's lift stands above it, her strut stalled) gives it up for this burn (`ArmManager.releaseUnsettledBurnLift`): she keeps the pose
+   * she really holds, today's. The ovens are checked again with her piece placed over every angle she can have; those that still fit open, the
+   * others are dropped from the plan (their parts stay on the piece, their tips are let go) and one line says so. Without this the ball
+   * would wait for a lift that never comes and the schedule would stand still past the start-up window with nothing said.
+   */
+  _meltLiftTimeout(m) {
+    const am = this._arms();
+    const balls = this._balls();
+    if (!am || !balls || typeof am.burnLiftSettled !== 'function' || typeof am.releaseUnsettledBurnLift !== 'function' || am.burnLiftSettled()) return;
+    if (am.releaseUnsettledBurnLift() === 0) return;
+    const open = [];
+    let inWay = null;
+    for (const i of m.ballTips) {
+      // the angle THIS radiator comes to rest at (a held petal's own target, else the shared one, else where it stands: P34 L3-fix4 item 3)
+      const ra = typeof balls.restAngleOf === 'function' ? balls.restAngleOf(i) : NaN;
+      const rest = Number.isFinite(ra) ? ra : this._tipThetaRad(i);
+      const w = Number.isFinite(rest) && typeof balls.blockerAcross === 'function' ? balls.blockerAcross(i, rest, rest, true, false) : null;
+      if (w) { inWay = inWay || w; this._meltDropTip(m, i); } else open.push(i);
+    }
+    if (open.length === m.ballTips.length) return;                              // every oven still fits: nothing changes
+    m.ballTips = open;
+    const name = inWay ? pieceName(inWay) : 'piece';
+    this._meltSay(open.length
+      ? `${open.length} of 4 sun ovens open this trip: a daughter could not lift her ${name} clear, so it is in the way of the others.`
+      : `The sun ovens cannot open this trip: a daughter could not lift her ${name} clear, so it is in the way.`, 'info');
+  }
+
+  /**
+   * @private P34 L3-fix4 (item 1): a holder gained a piece during the burn (`ArmManager.takeBurnLiftRefits`; a daughter that was out on her line
+   * at the 60 s cap docks with a catch, the player's own launches being refused while the trip burns). She took the live lift pose again and
+   * the fit of every ball that is not stowed is checked against the new rack at its rest angle: a ball that no longer fits is folded (its
+   * parts stay on their pieces, its tip is let go) and one line says so.
+   */
+  _meltRefit(m) {
+    const am = this._arms();
+    const balls = this._balls();
+    if (!am || !balls || typeof am.takeBurnLiftRefits !== 'function' || am.takeBurnLiftRefits() === 0) return;
+    let shut = 0;
+    for (let i = 0; i < 4; i++) {
+      const s = this._ballAt(i) ? balls.stateOf(i) : 'stowed';
+      if (s === 'stowed' || s === 'folding') continue;                       // a ball that is inflating or up, not one that is already going down
+      const ra = typeof balls.restAngleOf === 'function' ? balls.restAngleOf(i) : NaN;
+      const rest = Number.isFinite(ra) ? ra : this._tipThetaRad(i);
+      if (!Number.isFinite(rest) || balls.fits(i, rest)) continue;
+      shut++;
+      if (m.ballTips.includes(i)) { m.ballTips = m.ballTips.filter((t) => t !== i); this._meltDropTip(m, i); } else balls.requestDown(i);
+    }
+    if (shut > 0) this._meltSay(`${shut} of 4 sun ovens closed: a daughter took a new piece on her rack.`, 'info');
+  }
+
+  /** @private A tip's oven is dropped from the plan: the parts still to do there stay on their pieces (cuts drawn whole again), its ball goes down and the tip is let go. */
+  _meltDropTip(m, i) {
+    const b = this._ballAt(i);
+    if (b) b.requestDown(i);
+    const touched = new Set();
+    for (const p of m.parts) {
+      if (p.tip !== i || p.st === 3) continue;
+      p.st = 3;
+      if (p.cut) {
+        m.inFlight.set(p.d.id, Math.max(0, (m.inFlight.get(p.d.id) || 0) - p.kg));
+        touched.add(p.d);
+      }
+    }
+    for (const d of touched) this._meltReshape(d, m.inFlight.get(d.id) || 0);
+    this._meltClearTip(i);
+  }
+
+  /** @private A tip whose last scheduled part is over is free for a small catch again, not only when the burn ends (once its oven has folded). */
   _meltReleaseTips(m) {
-    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
-    if (!tc || typeof tc.unreserve !== 'function') return;
     for (const i of m.tips) {
       if (m.released.has(i) || m.parts.some((x) => x.tip === i && x.st !== 3)) continue;
       m.released.add(i);
-      tc.unreserve(i);
+      this._meltLetGo(i);
     }
   }
 
@@ -2755,7 +3095,7 @@ export class GameFlowManager {
       const d = p.d;
       if (!this._meltAlive(d)) {                       // it broke loose, was taken another way, had its fate changed, or was removed: the part is dropped
         p.st = 3;
-        if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags(p.tip);
+        this._meltClearTip(p.tip);
         const fl = m.inFlight.get(d.id) || 0;
         if (p.cut) {
           m.inFlight.set(d.id, Math.max(0, fl - p.kg));
@@ -2767,7 +3107,12 @@ export class GameFlowManager {
       if (p.st === 1 && p.startS <= t) p.st = 2;
       if (p.st === 2) {
         if (p.endS <= t) this._meltFinishPart(m, p);
-        else if (tc && typeof tc.showPartBag === 'function') {
+        else if (this._ballAt(p.tip)) {
+          // the part is inside the opaque receiver: what shows is its aperture glowing (D3); no bag at the tip, so the
+          // tip-bag ceiling never lowers the radiators for it
+          const b = this._balls();
+          this._meltGlow(p.tip, typeof b.isWorking !== 'function' || b.isWorking(p.tip) ? 1 : 0);
+        } else if (tc && typeof tc.showPartBag === 'function') {
           tc.showPartBag(p.tip, { type: pieceType(d), sizeM: packedSizeM(p.kg), frac: 1 - (t - p.startS) / Math.max(1, p.endS - p.startS) });
         }
       }
@@ -2793,13 +3138,12 @@ export class GameFlowManager {
    * once, at its end.
    */
   _meltStopWork(m) {
-    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
     m.holdFull = true;
     const touched = new Set();
     for (const p of m.parts) {
       if (p.st === 3) continue;
       p.st = 3;
-      if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags(p.tip);
+      this._meltClearTip(p.tip);
       if (p.cut) {
         m.inFlight.set(p.d.id, Math.max(0, (m.inFlight.get(p.d.id) || 0) - p.kg));
         touched.add(p.d);
@@ -2812,7 +3156,6 @@ export class GameFlowManager {
   _meltFinishPart(m, p) {
     const d = p.d;
     const L = d._disposal;
-    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
     const before = L.meltDoneKg || 0;
     const kg = Math.min(p.kg, d.mass);
     const isLast = kg >= d.mass - 1e-9;
@@ -2822,7 +3165,7 @@ export class GameFlowManager {
       this._meltStopWork(m);
       return;
     }
-    if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags(p.tip);
+    this._meltClearTip(p.tip);
     p.st = 3;
     L.meltDoneKg = after;
     m.inFlight.set(d.id, Math.max(0, (m.inFlight.get(d.id) || 0) - p.kg));
@@ -2877,11 +3220,23 @@ export class GameFlowManager {
     const m = this._melt;
     this._melt = null;
     if (!m) return;
-    if (completed) this._meltAdvance(m, m.burnShipS + 1);
+    if (completed) this._meltAdvance(m, Math.max(0, m.burnShipS - m.pausedS) + 1e-6);   // `planBurn` accepts endS <= burn + 1e-9: a part past the paused schedule is unfinished
     const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
     if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags();
-    if (tc && typeof tc.unreserve === 'function') for (const i of m.tips) if (!m.released.has(i)) tc.unreserve(i);   // a released tip may be a carry's by now
+    for (const i of m.tips) this._meltGlow(i, 0);
+    // a released tip is already waiting for its oven (`requestDown` at its release); the rest are let go now: the oven folds and
+    // the tip stays reserved until it is stowed (free at once without ovens or when the ball never came up). A released tip may be a carry's by now
+    for (const i of m.tips) if (!m.released.has(i)) this._meltLetGo(i);
+    this._meltLiftDrain();     // holders keep their lift pose until every oven of this burn is stowed (a ball that never came up: now)
     const pieces = new Set(m.parts.map((x) => x.d));
+    if (completed) {
+      // a part that was cut and not melted by the paused schedule's end stays on its piece: no pay, one line (a part never cut is just a part left)
+      for (const p of m.parts) {
+        if (p.st === 3 || !p.cut || m.holdFull || !bigPieces.has(p.d.id)) continue;
+        const n = (m.partsBefore.get(p.d.id) || 0) + m.parts.filter((x) => x.d === p.d).indexOf(p) + 1;   // across trips: the parts melted before this trip come first
+        this._meltSay(`Part ${n} of ${pieceName(p.d)} was not finished before the burn ended: it stays for the next trip.`, 'info');
+      }
+    }
     for (const d of pieces) {
       d._meltBusy = false;
       if (m.said.has(d.id) || !bigPieces.has(d.id)) continue;      // a piece that is gone (finished, or the run was reset) says nothing more
@@ -2897,6 +3252,8 @@ export class GameFlowManager {
   /** @private Frame hook: retry pieces whose last part is melted, and save once the burn is over. */
   _meltFrame() {
     if (this._meltFinals && this._meltFinals.length) this._meltSettleFinals();
+    this._meltDrainTips();
+    this._meltLiftDrain();
     if (this._meltSaveOwed && !this._trip.isBurning()) {
       this._meltSaveOwed = false;
       this.saveGame();
@@ -3484,7 +3841,8 @@ export class GameFlowManager {
     this._resumeOwedTrip(dt);
     if (this._unplacedBig && this._unplacedBig.length) this._placeUnplacedBig();   // a restored piece no holder could take yet
     if (this._goneBags && this._goneBags.length) this._goneBagsFrame(dt);                  // a bag that drifted off is taken off the field
-    if ((this._meltFinals && this._meltFinals.length) || this._meltSaveOwed) this._meltFrame();   // a melted piece to let go of, a save owed
+    if (this._melt) this._melt.graceT += dt > 0 ? dt : 0;                                   // real seconds since the burn began (the sun ovens' start-up window)
+    if ((this._meltFinals && this._meltFinals.length) || this._meltSaveOwed || (this._meltUnreserve && this._meltUnreserve.length) || this._meltLiftOn) this._meltFrame();   // a melted piece to let go of, a save owed, a tip waiting for its oven to fold, the holders still lifted for the ovens
     // the burn between missions (waits for the daughters, then burns; `dt` is 0 while the world is held)
     this._trip.update(dt);
     this._demoWatchBurn();                                        // demo mode: the first burn's engine swing ends the demo (DemoEnd.js)

@@ -20,6 +20,10 @@
  * in it: the radiators hiding part of a wing seen nose-first (the model reads up to +22 % there), a held catch's area, launched daughters
  * leaving the core, single-petal holds (the shared radiator angle is used), air that turns with the Earth.
  *
+ * Also in her drag (not in this file's model): the four sun-oven balls (P34). They are spheres, so each adds pi r^2 from every direction (4 pi = 12.57 m2
+ * with all four full size, r growing and shrinking with the inflate and the fold); `PlayerSatellite.dragAreaM2` adds `SunOvenBalls.dragAreaM2()` to the
+ * result below, and a stowed ball adds nothing. `referenceDragAreaM2` (how she flies with no ovens up) does not include them.
+ *
  * Pure: no THREE, no game state. PlayerSatellite.dragAreaM2() gathers her state and calls this.
  */
 import { Constants } from '../core/Constants.js';
