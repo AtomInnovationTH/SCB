@@ -381,11 +381,12 @@ export class MenuScreen {
           #menu-lang { right: 18px; }
           #menu-help-btn { top: calc(100% + 8px); left: auto; right: 0; transform: none; }
         }
-        /* Demo mode (was "show mode"; shared iPad, owner 2026-10-28; one control, coordinator 2026-10-28 F1.2): a single button under the "?" row
+        /* Demo mode (was "show mode"; shared iPad, owner 2026-10-28; one control, coordinator 2026-10-28 F1.2): a single button
          * that reads "Demo mode: on" / "Demo mode: off" (owner 2026-10-29: "show mode is confusing"). Lit green when on, dim when off; the lit button IS the mark. 44 px tall
-         * (touch target). Right edge = the "?" edge. */
+         * (touch target). Bottom-right corner (owner 2026-10-31: "Move Demo mode down to bottom right just above 'old menu pose'"):
+         * on a dev host it sits one row above the "Old menu pose" tick box; on the public site (no tick box) it takes the corner. */
         #menu-show-btn {
-          position: absolute; top: calc(100% + 56px); right: -52px; z-index: 1;   /* below the version label's "What's new" (measured 2026-10-28: at +8 px it sat on it at 1366 wide) */
+          position: absolute; right: calc(18px + env(safe-area-inset-right, 0px)); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); z-index: 4;
           min-height: 44px; box-sizing: border-box; padding: 0 14px; cursor: pointer; font: inherit; font-size: 0.8rem;
           letter-spacing: 0.02em; white-space: nowrap;
           background: rgba(4,12,30,0.5); color: rgba(212,238,255,0.5);
@@ -396,9 +397,8 @@ export class MenuScreen {
           color: #00ff88; background: rgba(0,255,136,0.14); border-color: rgba(0,255,136,0.7);
           box-shadow: 0 0 12px rgba(0,255,136,0.28);
         }
-        @media (max-width: 1339px) {
-          #menu-show-btn { right: 0; top: calc(100% + 60px); }
-        }
+        /* With the dev tick box below it (44 px tall + an 8 px gap). */
+        #menu-content:has(#menu-pose-toggle) #menu-show-btn { bottom: calc(70px + env(safe-area-inset-bottom, 0px)); }
         /* Dev tick box (dev hosts only; built by _wirePoseToggle, absent on the public site): bottom-right corner, "Old menu
          * pose" switches the hero between the new menu and the old one for side-by-side comparison. Same dim look as the demo
          * button; 44 px tall (touch target). The left panel and the hero's tips are on the other side; nothing else lives here. */
@@ -468,6 +468,7 @@ export class MenuScreen {
         #menu-content.menu-departing #menu-header,
         #menu-content.menu-departing #menu-lang,
         #menu-content.menu-departing #menu-pose-toggle,
+        #menu-content.menu-departing #menu-show-btn,
         #menu-content.menu-departing #menu-tip {
           opacity: 0;
           transform: translateX(-24px);
@@ -479,12 +480,14 @@ export class MenuScreen {
         #menu-content.menu-departing #menu-header { transition-delay: 0.09s; }
         #menu-content.menu-departing #menu-lang   { transition-delay: 0.15s; }
         #menu-content.menu-departing #menu-pose-toggle { transition-delay: 0.15s; }
+        #menu-content.menu-departing #menu-show-btn { transition-delay: 0.15s; }
         #menu-content.menu-departing #menu-tip    { transition-delay: 0.12s; }
         @media (prefers-reduced-motion: reduce) {
           #menu-content.menu-departing #menu-left,
           #menu-content.menu-departing #menu-header,
           #menu-content.menu-departing #menu-lang,
           #menu-content.menu-departing #menu-pose-toggle,
+          #menu-content.menu-departing #menu-show-btn,
           #menu-content.menu-departing #menu-tip {
             transition: opacity 0.2s ease;
             transform: none;
@@ -530,8 +533,8 @@ export class MenuScreen {
             <span class="menu-lang-caret">▾</span>
           </button>
           <ul id="menu-lang-menu" role="listbox" aria-label="Language"></ul>
-          <button id="menu-show-btn" type="button" aria-pressed="false" title="For a demo iPad: a fresh game after 60 s without a touch, and the game ends after the first mission">Demo mode: off</button>
         </div>
+        <button id="menu-show-btn" type="button" aria-pressed="false" title="For a shared iPad: restarts when left idle, ends after mission 1">Demo mode: off</button>
 
         <!-- ══ HEADER (full-width, centered) ══ -->
         <div id="menu-header">
@@ -1096,7 +1099,7 @@ export class MenuScreen {
   }
 
   /**
-   * @private Demo mode (shared iPad, owner 2026-10-28): ONE button under the language picker. It reads "Demo mode: on" or
+   * @private Demo mode (shared iPad, owner 2026-10-28): ONE button, bottom right (owner 2026-10-31). It reads "Demo mode: on" or
    * "Demo mode: off", is lit while on, and flips ShowMode when tapped. `sm` is injectable for tests (default: the page's showMode).
    * @param {object} [sm] ShowModeState-like { isOn(), set(on), onChange(fn) }
    */

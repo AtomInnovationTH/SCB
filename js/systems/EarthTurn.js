@@ -135,6 +135,13 @@ export function earthTurnTrigger({ floor, riding, focusId, prevSettled, prevFocu
 
 /** Added to the larger of the ship's and the field's distance from Earth's centre (u). */
 export const EARTH_FRAME_PAD_U = 0.3;
+/**
+ * How far above the ship's orbit plane (toward Earth-north) floor 4's default view sits, degrees. Owner, 2026-10-31:
+ * "take a look at floor 4, the default camera view should be higher so the blue ring around earth can be noticed as a
+ * disc, not just a blue line." The reach band is two Earth-centred circles in the ship's orbit plane, so a view in
+ * that plane (measured -0.7° on the day) shows it edge-on; at 30° it reads as a disc (minor/major about 0.5).
+ */
+export const EARTH_FRAME_LIFT_DEG = 30;
 /** Beyond 174° apart the ship–field bisector is ill-defined; the arc along the ship's travel is used. */
 export const EARTH_FRAME_ANTIPODE_COS = Math.cos(degToRad(174));
 /**
@@ -189,15 +196,88 @@ export function earthFrameTurnS(start, target) {
 
 const _len = (v) => (v ? Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) : NaN);
 
+/** The lift steps tried in order (deg): the first whose view shows both the ship and the field, 0 = the plain midpoint. */
+const LIFT_STEPS_DEG = [EARTH_FRAME_LIFT_DEG, 20, 10, 0];
+/** A direction this close to her plane (|m . n| <= this) counts as in the plane: it has no side of its own. */
+const IN_PLANE_EPS = 1e-3;
+/** An orbit normal this level (|n . north| < this) is near-polar: "the north side" is no longer a stable choice. */
+const NEAR_POLAR_N_Y = 0.1;
+
 /**
- * Where floor 4's camera looks from to frame the ship and the field: the midpoint of the shorter arc between them as
- * seen from Earth's centre; for a pair more than 174° apart, the midpoint of the arc that leaves the ship along its
- * velocity. Polar angle clamped to the drag window (as earthTurnTarget).
- * @param {{x,y,z}} ship   scene units, Earth at origin
- * @param {{x,y,z}} [shipVel] any units (direction only)
- * @returns {THREE.Vector3|null} a new unit vector, or null when ship or field is unusable
+ * Is `p` hidden behind Earth for a camera at `cam`? Exact: the segment camera -> p passes through the sphere of
+ * EARTH_RADIUS_U (the radius earthShellDistance and the polar window are built on). Earth at the origin.
+ * @param {{x,y,z}} cam
+ * @param {{x,y,z}} p
+ * @returns {boolean}
  */
-export function earthPairDir(ship, field, shipVel) {
+export function earthHides(cam, p) {
+  const dx = p.x - cam.x, dy = p.y - cam.y, dz = p.z - cam.z;
+  const dd = dx * dx + dy * dy + dz * dz;
+  if (!(dd > 0)) return false;
+  const t = clamp01(-(cam.x * dx + cam.y * dy + cam.z * dz) / dd);
+  const qx = cam.x + dx * t, qy = cam.y + dy * t, qz = cam.z + dz * t;
+  return qx * qx + qy * qy + qz * qz < EARTH_RADIUS_U * EARTH_RADIUS_U;
+}
+
+/**
+ * Put a view direction exactly `liftDeg` above the ship's orbit plane: dir = normalize(flat cos L + n sin L), flat = dir
+ * projected into the plane, n = the unit plane normal (pos x vel) on the side `dir` already sits on (sign of dir . n),
+ * so the lift never carries the view across the plane to the far side from the field. A direction in the plane
+ * (|dir . n| <= IN_PLANE_EPS) takes the north side (n . +Y >= 0). For a near-polar orbit (|n . +Y| < NEAR_POLAR_N_Y) the
+ * north side is rounding noise, so the in-plane tie-break there is the sign of n . +Z (then n . +X when that is ~0): a
+ * fixed horizontal axis, so 89.9, 90 and 90.1 deg inclinations give the same side. No velocity (missing, non-finite,
+ * or along the radius), or a direction along the normal: `dir` unchanged.
+ * @param {THREE.Vector3} dir  unit vector (not mutated)
+ * @param {{x,y,z}} ship  scene units, Earth at origin
+ * @param {{x,y,z}} [shipVel]  any units (direction only)
+ * @param {number} [liftDeg]  default EARTH_FRAME_LIFT_DEG
+ * @returns {THREE.Vector3} a new unit vector
+ */
+export function earthLiftDir(dir, ship, shipVel, liftDeg = EARTH_FRAME_LIFT_DEG) {
+  const out = new THREE.Vector3(dir.x, dir.y, dir.z);
+  const ls = _len(ship);
+  if (!(liftDeg > 0) || !(ls > 0) || !Number.isFinite(ls) || !shipVel || !Number.isFinite(_len(shipVel))) return out;
+  const n = new THREE.Vector3(ship.x, ship.y, ship.z).cross(new THREE.Vector3(shipVel.x, shipVel.y, shipVel.z));
+  if (!(n.length() > 1e-9 * ls * _len(shipVel))) return out;
+  n.normalize();
+  const side = n.dot(out);
+  if (Math.abs(side) > IN_PLANE_EPS) {
+    if (side < 0) n.negate();                                 // the side the view already sits on
+  } else if (Math.abs(n.y) >= NEAR_POLAR_N_Y) {
+    if (n.y < 0) n.negate();                                  // the north side
+  } else {
+    const k = Math.abs(n.z) > 1e-6 ? n.z : n.x;               // near-polar: a fixed horizontal axis, not noise
+    if (k < 0) n.negate();
+  }
+  // The view's own direction made level with the plane first (a field off her plane would otherwise leave the lift
+  // short or long of the angle), then tilted up by exactly L: the elevation above the plane is L.
+  const flat = out.clone().sub(n.clone().multiplyScalar(n.dot(out)));
+  if (flat.lengthSq() < 1e-12) return out;                    // looking along the normal: nothing to lift
+  const L = degToRad(liftDeg);
+  return flat.normalize().multiplyScalar(Math.cos(L)).add(n.multiplyScalar(Math.sin(L))).normalize();
+}
+
+/**
+ * The lifted view for the unit direction `m`: the largest of LIFT_STEPS_DEG (30, 20, 10, 0) whose camera, at `distU`
+ * from Earth's centre, sees every point of `pts` (none behind Earth: earthHides). Polar angle clamped to the drag
+ * window (earthTurnTarget), and the check runs on the clamped direction. With no usable `distU` the full lift is used
+ * unchecked.
+ * @returns {THREE.Vector3|null}
+ */
+function _liftedView(m, ship, shipVel, pts, distU) {
+  const check = Number.isFinite(distU) && distU > 0;
+  let d = null;
+  for (const L of LIFT_STEPS_DEG) {
+    d = earthTurnTarget(earthLiftDir(m, ship, shipVel, L).multiplyScalar(2 * EARTH_RADIUS_U));
+    if (!d || !check) return d;
+    const cam = { x: d.x * distU, y: d.y * distU, z: d.z * distU };
+    if (!pts.some((p) => earthHides(cam, p))) return d;
+  }
+  return d;
+}
+
+/** The unit direction the framing starts from, before any lift (see earthPairDir). Null when ship or field is unusable. */
+function _pairMid(ship, field, shipVel) {
   const ls = _len(ship), lf = _len(field);
   if (!(ls > 0) || !(lf > 0) || !Number.isFinite(ls) || !Number.isFinite(lf)) return null;
   const s = new THREE.Vector3(ship.x / ls, ship.y / ls, ship.z / ls);
@@ -218,8 +298,23 @@ export function earthPairDir(ship, field, shipVel) {
       m = s.clone().multiplyScalar(Math.cos(half)).add(w.multiplyScalar(Math.sin(half)));
     }
   }
-  m.normalize().multiplyScalar(2 * EARTH_RADIUS_U);
-  return earthTurnTarget(m);
+  return m.normalize();
+}
+
+/**
+ * Where floor 4's camera looks from to frame the ship and the field: the midpoint of the shorter arc between them as
+ * seen from Earth's centre; for a pair more than 174° apart, the midpoint of the arc that leaves the ship along its
+ * velocity; then lifted up to EARTH_FRAME_LIFT_DEG above the ship's orbit plane when `shipVel` is known (earthLiftDir),
+ * on the field's side of the plane, in steps of 30/20/10/0° until neither the ship nor the field is behind Earth for a
+ * camera `distU` out (skipped when `distU` is omitted). Polar angle clamped to the drag window (as earthTurnTarget).
+ * @param {{x,y,z}} ship   scene units, Earth at origin
+ * @param {{x,y,z}} [shipVel] any units (direction only)
+ * @param {number} [distU]  the camera distance the view will have (u from Earth's centre); farther only helps
+ * @returns {THREE.Vector3|null} a new unit vector, or null when ship or field is unusable
+ */
+export function earthPairDir(ship, field, shipVel, distU) {
+  const m = _pairMid(ship, field, shipVel);
+  return m ? _liftedView(m, ship, shipVel, [ship, field], distU) : null;
 }
 
 /**
@@ -302,12 +397,13 @@ export function earthFrame({ ship, field, shipVel, fovDeg, viewW, viewH, centerP
   const rmax = Math.max(ls, lf) + EARTH_FRAME_PAD_U;
   const rhoPx = earthSafeRadiusPx({ centerPx, viewW, viewH, rects, foot });
   const dShell = earthShellDistance({ rmax, fovDeg, viewH, rhoPx });
-  const mid = earthPairDir(ship, field, shipVel);
+  const m = _pairMid(ship, field, shipVel);
+  const mid = m && _liftedView(m, ship, shipVel, [ship, field], Math.min(dShell, maxDistU));
   if (mid && dShell <= maxDistU) return { mode: 'both', dir: mid, distU: dShell, dShell, rhoPx };
-  if (mid && earthPointsFit({ points: [ship, field], dir: mid, distU: maxDistU, fovDeg, viewW, viewH, centerPx, rects, foot })) {
-    return { mode: 'both', dir: mid, distU: maxDistU, dShell, rhoPx };
-  }
-  const k = (2 * EARTH_RADIUS_U) / lf;
-  const fd = earthTurnTarget({ x: field.x * k, y: field.y * k, z: field.z * k });
+  const fitAt = (dir) => earthPointsFit({ points: [ship, field], dir, distU: maxDistU, fovDeg, viewW, viewH, centerPx, rects, foot });
+  if (mid && fitAt(mid)) return { mode: 'both', dir: mid, distU: maxDistU, dShell, rhoPx };
+  const flatMid = m && earthTurnTarget({ x: m.x * 2 * EARTH_RADIUS_U, y: m.y * 2 * EARTH_RADIUS_U, z: m.z * 2 * EARTH_RADIUS_U });
+  if (flatMid && fitAt(flatMid)) return { mode: 'both', dir: flatMid, distU: maxDistU, dShell, rhoPx };   // the lift does not fit: the plain midpoint
+  const fd = _liftedView(new THREE.Vector3(field.x / lf, field.y / lf, field.z / lf), ship, shipVel, [field], maxDistU);   // the ship may be off screen here (its edge arrow): only the field must be seen
   return fd ? { mode: 'field', dir: fd, distU: maxDistU, dShell, rhoPx } : null;
 }

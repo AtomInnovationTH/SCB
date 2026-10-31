@@ -1,9 +1,9 @@
 {
   "bullets": [
-    "Solar furnace, inflated balloons on radiators",
-    "Rounded radiators, longer, uncut",
-    "Improved cargo storage"
+    "Orbit view improved",
+    "Demo mode improved",
+    "Demo button moved to bottom right"
   ],
   "release": "2026-10-31",
-  "version": "1.04"
+  "version": "1.05"
 }
