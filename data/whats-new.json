@@ -1,9 +1,9 @@
 {
   "bullets": [
-    "Hand-off from the docking collar to the radiator is twice as fast (about 25 s)",
-    "Drag the view anywhere: it glides back home 4 s after you let go",
-    "Menu: Thailand, India and Japan up front, plus upcoming space events"
+    "Radiator wing tips are rounded, and the opening now eases in and out gently",
+    "Click a part of the ship to open its page in the Tech library",
+    "Net threads now follow the curve of the net"
   ],
-  "release": "2026-10-26",
-  "version": "1.02"
+  "release": "2026-10-31",
+  "version": "1.03"
 }
