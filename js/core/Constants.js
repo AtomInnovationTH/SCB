@@ -15,8 +15,8 @@ export const Constants = {
   // --- VERSION ---
   // VERSION is the raw value; VERSION_LABEL is the exact string the UI renders. NON-module consumers (e.g. sw.js
   // cache name) must be updated by hand — keep them in sync here.
-  VERSION: '1.05',
-  VERSION_LABEL: 'V1.05',
+  VERSION: '1.06',
+  VERSION_LABEL: 'V1.06',
 
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as ?v=<DATA_VERSION>). Deliberately SEPARATE
   // from VERSION: a curated-content edit must invalidate cached JSON without moving the release number. Bump it on

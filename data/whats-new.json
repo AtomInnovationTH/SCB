@@ -1,9 +1,9 @@
 {
   "bullets": [
-    "Orbit view improved",
-    "Demo mode improved",
-    "Demo button moved to bottom right"
+    "Orbit view: reach ring now shows as a disc",
+    "Trackpad scrolling no longer flattens the orbit view",
+    "Mission 1 is now Training mission 1"
   ],
   "release": "2026-10-31",
-  "version": "1.05"
+  "version": "1.06"
 }
