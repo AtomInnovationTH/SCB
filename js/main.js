@@ -6954,7 +6954,7 @@ function updateCamera(dt, timestamp) {
     // and each time the focus changes while there (Tab, a click on an icon).
     // It turns to where your ship AND the field are both in view, and glides out until the whole
     // low-orbit shell they move in fits clear of the panels (EarthTurn.earthFrame); the field wins when
-    // both cannot. A drag or the wheel/pinch stops it until the next arrival or focus change.
+    // both cannot. A drag stops it (the 4 s view return then restores it); the wheel/pinch only ends the zoom glide.
     const f4Focus = navcomFloor.getFocusedCluster();
     const f4 = earthTurnTrigger({
       floor: ladderController.currentFloor(), riding: ladderController.isRiding(),

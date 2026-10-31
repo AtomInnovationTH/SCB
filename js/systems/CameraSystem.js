@@ -4081,11 +4081,17 @@ export class CameraSystem {
   /**
    * Stop the turn to the focused field where it is (the view stays on the way); no-op when none runs. Every call (a
    * mouse drag, a touch drag, a ride, a disengage, an anchor change) also counts once in `ladderEarthFrameCancels()`,
-   * which ends LadderController's framing glide.
-   * @param {string} [cause] for the reader of a call site only (nothing is printed)
+   * which ends LadderController's framing glide. The wheel no longer calls it (a trackpad tail after arrival cancelled the
+   * turn to the lifted default view, owner 2026-10-31); should a USER-input cause ('wheel', 'mouse drag', 'touch drag') stop
+   * a running turn on floor 4, the view is marked off default (`viewReturn.dirty`) so the 4 s return restores it.
+   * @param {string} [cause] which call site; the three user-input causes above also owe the view return
    */
   ladderCancelEarthTurn(cause = 'camera input') {
-    this._ladderCam.earthTurn = null;
+    const lc = this._ladderCam;
+    if (lc.earthTurn && lc.active && lc.floor === 4 && (cause === 'wheel' || cause === 'mouse drag' || cause === 'touch drag')) {
+      lc.viewReturn.dirty = true;
+    }
+    lc.earthTurn = null;
     this._earthFrameCancels = (this._earthFrameCancels || 0) + 1;
   }
 

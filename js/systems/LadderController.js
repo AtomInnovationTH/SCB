@@ -37,6 +37,11 @@ import { clamp01 } from '../core/MathUtil.js';
 
 /** Crossing-ride duration: midpoint of the locked 450–650 ms window. */
 const CROSS_RIDE_MS = 550;
+/**
+ * After a ride lands on floor 4, wheel events that follow the previous wheel event by less than this are the tail of the
+ * gesture that started the ride (a trackpad's momentum): ignored entirely, see `wheel()` (owner 2026-10-31).
+ */
+export const RIDE_TAIL_SWALLOW_MS = 200;
 
 /** The fastest the camera may fly out from a daughter's limit when the follow ends, metres per second (peak). */
 const DZ_RETURN_PEAK_MPS = 20;
@@ -251,6 +256,10 @@ export class LadderController {
     // ladder.rideFinished (it would clear the NEW ride and could wrongly arm the flick-undo window). CameraSystem already
     // swaps onDone; the token also covers a camera/stub that fires a superseded one.
     this._rideSeq = 0;
+    /** Time of the last wheel event wheel() saw (ms, the events' own clock): the tail filter's gap. */
+    this._lastWheelMs = -Infinity;
+    /** True from a camera ride's landing on floor 4 until the first wheel event after a quiet gap (RIDE_TAIL_SWALLOW_MS). */
+    this._rideTailArmed = false;
     /** The floor whose content is on screen (set by _applyFloorContent at engage and every ride START): the ORIGIN of the next ride. */
     this._floorApplied = null;
     /**
@@ -582,18 +591,27 @@ export class LadderController {
   wheel({ tMs, dir, mag }) {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
+    // The tail of the gesture that brought her to floor 4 (owner 2026-10-31): a ride has just landed there and the wheel has
+    // not been quiet for RIDE_TAIL_SWALLOW_MS since its last event, so this is the same push's momentum, not a new request. It does
+    // nothing (no zoom, no glide or turn cancel, no input stamp) and keeps the tail going; the first event after a longer
+    // gap disarms the filter and is handled normally. The core's own tail logic only covers the wall-zone spring.
+    const tailGap = t - this._lastWheelMs;
+    this._lastWheelMs = t;
+    if (this._rideTailArmed) {
+      if (tailGap < RIDE_TAIL_SWALLOW_MS) return [];
+      this._rideTailArmed = false;
+    }
     this._lastInputMs = t;
     // Daughter focus (wait view / her haul / her reel view; owner 2026-10-27): a zoom moves in or out on her and keeps the
     // view; only a zoom out past floor 3's edge ends it (after the ladder is put on that distance).
     const fz = this._focusZoomWheel(dir, mag, t);
     if (fz === true) { this._refreshRail(); return []; }
     this._endCatchFocus();
-    // The wheel AND the pinch (TouchControls → WheelRouter.routeSyntheticWheel) end the floor-4 re-frame: the glide, and on
-    // floor 4 the camera's turn (like a drag).
+    // The wheel AND the pinch (TouchControls → WheelRouter.routeSyntheticWheel) end the floor-4 re-frame's zoom glide, and
+    // only that. They do NOT stop the camera's turn to the lifted default view (owner 2026-10-31: a trackpad's coasting tail
+    // after the ride into floor 4 cancelled it, nothing asked again and she saw the ring edge-on). Leaving floor 4 is a ride,
+    // and ladderStartRide cancels the turn; a drag still stops it (CameraSystem).
     this._glide = null;
-    if (this.currentFloor() === 4 && this._cameraSystem && typeof this._cameraSystem.ladderCancelEarthTurn === 'function') {
-      this._cameraSystem.ladderCancelEarthTurn('wheel');
-    }
     if (this._daughterZoomWheel(dir, mag, t)) {
       this._refreshRail();
       return [];
@@ -1539,10 +1557,14 @@ export class LadderController {
     this._applyFloorContent(toFloor);
     const frame = this._frame(toFloor, entryZ01);
     const seq = ++this._rideSeq;
-    const done = () => {
+    const done = (viaCamera = true) => {
       if (seq !== this._rideSeq) return;   // superseded — the new ride owns completion
       const t = this._now();
       this._ladder.rideFinished({ tMs: t });
+      // A landing on floor 4 (the framing turn and zoom glide start there): the gesture that started the ride may still be
+      // coasting (see wheel()). Floor 4 only: on the ship floors a steady push legitimately goes on across a crossing
+      // (test-DaughterZoomFloor: a piloted daughter's zoom from floor 3 down to her limit) and would stall until a 200 ms pause.
+      if (viaCamera && toFloor === 4) this._rideTailArmed = true;
       // A completed CROSS arms the 800 ms FLICK_UNDO_WINDOW ("↶" undo chime). Superseded rides never arm (seq guard above).
       if (isCross && this._sfx && this._sfx.onUndoWindow) this._sfx.onUndoWindow(true);
       this._refreshRail();
@@ -1551,7 +1573,7 @@ export class LadderController {
       this._cameraSystem.ladderStartRide({ ...frame, rideMs, onDone: done });
     } else {
       // No camera (headless without a ride engine): complete synchronously so the core never wedges in `riding`.
-      done();
+      done(false);
     }
   }
 
