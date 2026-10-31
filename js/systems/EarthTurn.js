@@ -139,9 +139,11 @@ export const EARTH_FRAME_PAD_U = 0.3;
  * How far above the ship's orbit plane (toward Earth-north) floor 4's default view sits, degrees. Owner, 2026-10-31:
  * "take a look at floor 4, the default camera view should be higher so the blue ring around earth can be noticed as a
  * disc, not just a blue line." The reach band is two Earth-centred circles in the ship's orbit plane, so a view in
- * that plane (measured -0.7° on the day) shows it edge-on; at 30° it reads as a disc (minor/major about 0.5).
+ * that plane (measured -0.7° on the day) shows it edge-on. V1.05 used 30°; after seeing it on his Mac the owner said
+ * (2026-10-31 ~14:15Z) "too high, where is it 30? try 20 degrees". At 20° the ring is an ellipse about a third as tall
+ * as wide (sin 20° = 0.34, estimate: ignores perspective).
  */
-export const EARTH_FRAME_LIFT_DEG = 30;
+export const EARTH_FRAME_LIFT_DEG = 20;
 /** Beyond 174° apart the ship–field bisector is ill-defined; the arc along the ship's travel is used. */
 export const EARTH_FRAME_ANTIPODE_COS = Math.cos(degToRad(174));
 /**
@@ -197,7 +199,7 @@ export function earthFrameTurnS(start, target) {
 const _len = (v) => (v ? Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) : NaN);
 
 /** The lift steps tried in order (deg): the first whose view shows both the ship and the field, 0 = the plain midpoint. */
-const LIFT_STEPS_DEG = [EARTH_FRAME_LIFT_DEG, 20, 10, 0];
+const LIFT_STEPS_DEG = [EARTH_FRAME_LIFT_DEG, 10, 0];
 /** A direction this close to her plane (|m . n| <= this) counts as in the plane: it has no side of its own. */
 const IN_PLANE_EPS = 1e-3;
 /** An orbit normal this level (|n . north| < this) is near-polar: "the north side" is no longer a stable choice. */
@@ -258,7 +260,7 @@ export function earthLiftDir(dir, ship, shipVel, liftDeg = EARTH_FRAME_LIFT_DEG)
 }
 
 /**
- * The lifted view for the unit direction `m`: the largest of LIFT_STEPS_DEG (30, 20, 10, 0) whose camera, at `distU`
+ * The lifted view for the unit direction `m`: the largest of LIFT_STEPS_DEG (20, 10, 0) whose camera, at `distU`
  * from Earth's centre, sees every point of `pts` (none behind Earth: earthHides). Polar angle clamped to the drag
  * window (earthTurnTarget), and the check runs on the clamped direction. With no usable `distU` the full lift is used
  * unchecked.
