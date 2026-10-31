@@ -4417,50 +4417,66 @@ export class PlayerSatellite extends THREE.Group {
     // with `scale.x = −1` (their group is already turned π about Z, which puts the left tip at −x). Never build a second
     // geometry for the other side: every BufferGeometry draws four `Math.random` numbers for its uuid, and the seeded
     // satellite-haul tests (test-SatHaul*, test-SatHandover*) draw their layouts from the same stream after the ship is built.
+    // The OUTER corner at the hinge (root) end is rounded too (DECISIONS §55 row 10, owner 2026-10-31 "Round them, 5 cm"):
+    // WING_ROOT_CORNER_R_M, the same wing geometry, arc at the root end (wing-local −x), outer edge +y. The inner corners and the
+    // centre panel stay square. Back-face u is NOT mirrored: texture U = 0 is the root on both faces (one shared rail texture).
     const WING_CORNER_R_M = 0.10;
+    const WING_ROOT_CORNER_R_M = 0.05;
     const WING_CORNER_SEGS = 12;                    // facet sagitta 0.2 mm on the 0.10 m radius
     const wingCornerX = (y) => {                    // x (m, wing-mesh-local, measured toward the tip) of the outline at wing y (m, from the fold axis)
       const cy = wingW - WING_CORNER_R_M;
       if (y <= cy) return wingLen / M / 2;
       return wingLen / M / 2 - WING_CORNER_R_M + Math.sqrt(Math.max(0, WING_CORNER_R_M ** 2 - (y - cy) ** 2));
     };
+    const wingRootCornerX = (y) => {                // |x| (m, measured toward the root) of the outline at wing y (m, from the fold axis)
+      const cy = wingW - WING_ROOT_CORNER_R_M;
+      if (y <= cy) return wingLen / M / 2;
+      return wingLen / M / 2 - WING_ROOT_CORNER_R_M + Math.sqrt(Math.max(0, WING_ROOT_CORNER_R_M ** 2 - (y - cy) ** 2));
+    };
     const buildRoundedWingGeo = () => {
-      const hx = wingLen / 2, hy = (wingW * M) / 2, hz = (FL.PLATE_THICK_M * M) / 2, r = WING_CORNER_R_M * M;
+      const hx = wingLen / 2, hy = (wingW * M) / 2, hz = (FL.PLATE_THICK_M * M) / 2, r = WING_CORNER_R_M * M, rr = WING_ROOT_CORNER_R_M * M;
       // Outline, counter-clockwise seen from +Z (tip at +x, outer edge at +y).
-      // Edge i runs pts[i] → pts[i + 1 (mod n)]: bottom (−Y), tip end (+X), the arc (+X group), top (+Y), root end (−X).
+      // Edge i runs pts[i] → pts[i + 1 (mod n)]: bottom (−Y), tip end (+X), the tip arc (+X group), top (+Y), the root arc
+      // (−X group), root end (−X).
       const S = WING_CORNER_SEGS;
       const pts = [[-hx, -hy], [hx, -hy], [hx, hy - r]];
       for (let k = 1; k <= S; k++) {
         const a = (k / S) * (Math.PI / 2);
         pts.push([hx - r + r * Math.cos(a), hy - r + r * Math.sin(a)]);
       }
-      pts.push([-hx, hy]);
-      const egs = [3, 0, ...new Array(S).fill(0), 2, 1];
+      pts.push([-hx + rr, hy]);
+      for (let k = 1; k <= S; k++) {
+        const a = Math.PI / 2 + (k / S) * (Math.PI / 2);
+        pts.push([-hx + rr + rr * Math.cos(a), hy - rr + rr * Math.sin(a)]);
+      }
+      const egs = [3, 0, ...new Array(S).fill(0), 2, ...new Array(S).fill(1), 1];
       const n = pts.length;
       const pos = [], nor = [], uv = [], idx = [], perGroup = [[], [], [], [], [], []];
       const addVert = (x, y, z, nx, ny, nz, u, v) => { pos.push(x, y, z); nor.push(nx, ny, nz); uv.push(u, v); return pos.length / 3 - 1; };
-      // caps: the outline is convex, so a fan from vertex 0 triangulates it. +Z: Box UV (u from −x, v from −y); −Z: u mirrored.
+      // caps: the outline is convex, so a fan from vertex 0 triangulates it. +Z and −Z: u from −x (the root), v from −y (the −Z face is NOT mirrored: one rail texture serves both faces).
       const front = [], back = [];
       for (let i = 0; i < n; i++) {
         const [x, y] = pts[i];
         const u = (x + hx) / (2 * hx), v = (y + hy) / (2 * hy);
         front.push(addVert(x, y, hz, 0, 0, 1, u, v));
-        back.push(addVert(x, y, -hz, 0, 0, -1, 1 - u, v));
+        back.push(addVert(x, y, -hz, 0, 0, -1, u, v));
       }
       for (let i = 1; i < n - 1; i++) {
         perGroup[4].push(front[0], front[i], front[i + 1]);
         perGroup[5].push(back[0], back[i + 1], back[i]);
       }
       // side wall: one quad per outline edge; straight edges flat-shaded, arc edges smooth (radial normals)
-      const arcCentre = [hx - r, hy - r];
-      const isArcVert = (x, y) => x > hx - r - 1e-9 && y > hy - r - 1e-9 && (x - (hx - r)) ** 2 + (y - (hy - r)) ** 2 > (r * 0.999) ** 2;
+      const arcCentre = [hx - r, hy - r], rootCentre = [-hx + rr, hy - rr];
+      const isTipArc = (x, y) => x > hx - r - 1e-9 && y > hy - r - 1e-9 && (x - arcCentre[0]) ** 2 + (y - arcCentre[1]) ** 2 > (r * 0.999) ** 2;
+      const isRootArc = (x, y) => x < -hx + rr + 1e-9 && y > hy - rr - 1e-9 && (x - rootCentre[0]) ** 2 + (y - rootCentre[1]) ** 2 > (rr * 0.999) ** 2;
       for (let i = 0; i < n; i++) {
         const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % n];
         const ex = x1 - x0, ey = y1 - y0, len = Math.hypot(ex, ey);
         const flat = [ey / len, -ex / len];            // outward normal of a counter-clockwise outline
         const nrm = (x, y) => {
-          if (!isArcVert(x, y)) return flat;
-          const dx = x - arcCentre[0], dy = y - arcCentre[1], l = Math.hypot(dx, dy);
+          const c = isTipArc(x, y) ? arcCentre : isRootArc(x, y) ? rootCentre : null;
+          if (!c) return flat;
+          const dx = x - c[0], dy = y - c[1], l = Math.hypot(dx, dy);
           return [dx / l, dy / l];
         };
         const [n0x, n0y] = nrm(x0, y0), [n1x, n1y] = nrm(x1, y1);
@@ -4477,7 +4493,7 @@ export class PlayerSatellite extends THREE.Group {
       geo.computeBoundingBox();
       geo.computeBoundingSphere();
       // not a BoxGeometry: print/dims.mjs `box()` reads parameters.width and falls back to the local bounding box
-      geo.parameters = { type: 'RoundedTipWing', cornerRadiusM: WING_CORNER_R_M };
+      geo.parameters = { type: 'RoundedTipWing', cornerRadiusM: WING_CORNER_R_M, rootCornerRadiusM: WING_ROOT_CORNER_R_M };
       return geo;
     };
     const wingGeo = buildRoundedWingGeo();
@@ -4618,9 +4634,12 @@ export class PlayerSatellite extends THREE.Group {
     // wing-local y is measured from the fold axis (the wing mesh's own centre is at y wingW / 2)
     // The outer rail follows the rounded tip corner (§55 row 3): its tip end stops SEAM_END_INSET_M inside the outline at the
     // rail's outermost edge, so the box stays inside the wing's outline (tip at wing-local +x; the left wing's mesh is mirrored).
-    const wingRootX = wingLen / M / 2 - FL.SEAM_END_INSET_M;     // |x| of the root-end limit (the root end is square)
-    const spanBox = (tipEnd, w, h, cy, cz) =>                 // box from the root limit to `tipEnd` (both measured toward the tip, +x)
-      boxAt(tipEnd + wingRootX, w, h, (tipEnd - wingRootX) / 2, cy, cz);
+    // The root end follows the rounded root corner (DECISIONS §55 row 10) the same way: mirror of wingTipLimit.
+    const wingRootX = (yTop) => Math.min(wingLen / M / 2 - FL.SEAM_END_INSET_M, wingRootCornerX(yTop) - FL.SEAM_END_INSET_M);   // |x| of the root-end limit at the box's outer edge yTop
+    const spanBox = (tipEnd, w, h, cy, cz) => {               // box from the root limit to `tipEnd` (both measured toward the tip, +x)
+      const rootEnd = wingRootX(cy + w / 2);
+      return boxAt(tipEnd + rootEnd, w, h, (tipEnd - rootEnd) / 2, cy, cz);
+    };
     const wingTipLimit = (yTop) => Math.min(wingLen / M / 2 - FL.SEAM_END_INSET_M, wingCornerX(yTop) - FL.SEAM_END_INSET_M);
     const frameWingGeo = mergeGeos([
       spanBox(wingTipLimit(0.142 + RAIL_W / 2), RAIL_W, RAIL_H, 0.142, 0),
@@ -4636,10 +4655,11 @@ export class PlayerSatellite extends THREE.Group {
     paintedAway.userData.keepOutSolid = true;
     // `tipCorner` (wings only): the painted rail follows the rounded outline too, 10 mm inside it like the hidden boxes above
     // (arc 0.09 m about the geometry's corner centre).
-    const railFace = (lengthM, widthM, bands, tipCorner = null) => [frontMat, backMat].map((base, k) => {
+    // `rootCorner` the same at U = 0 (the root end, both faces: the back face's u is not mirrored; arc 0.04 m about its centre).
+    const railFace = (lengthM, widthM, bands, tipCorner = null, rootCorner = null) => [frontMat, backMat].map((base, k) => {
       const mat = base.clone();
       mat.map = getRadiatorRailTexture({
-        lengthM, widthM, endInsetM: FL.SEAM_END_INSET_M, faceHex: 0xE8E6E0, tipCorner,
+        lengthM, widthM, endInsetM: FL.SEAM_END_INSET_M, faceHex: 0xE8E6E0, tipCorner, rootCorner,
         rails: bands.map(([c, w, kind]) => [c, w, kind === 'seam' ? 0x1c1e26 : 0x55585c]),
       });
       mat.color.set(0xffffff);                      // the face colour lives in the texture now
@@ -4650,7 +4670,8 @@ export class PlayerSatellite extends THREE.Group {
       [cHalf - seamY / M, FL.WING_SEAM_M, 'seam'], [cHalf + seamY / M, FL.WING_SEAM_M, 'seam']])];
     const plateMatWing = [metalMat, metalMat, metalMat, metalMat, ...railFace(wingLen / M, wingW, [
       [0.142, RAIL_W, 'rail'], [0.040, RAIL_W, 'rail'], [WING_DETAIL_Y_M, 0.01, 'seam']],
-      { radiusM: WING_CORNER_R_M, insetM: FL.SEAM_END_INSET_M })];
+      { radiusM: WING_CORNER_R_M, insetM: FL.SEAM_END_INSET_M },
+      { radiusM: WING_ROOT_CORNER_R_M, insetM: FL.SEAM_END_INSET_M })];
     // Coolant channels: 11 ridges (5 centre, 3 per wing), 10 mm wide, 1.5 mm proud, +Z face only. The middle centre ridge runs
     // under the Ø60 boom spine (the boom stands 15 mm proud of the face): it is there, not seen.
     const ridge = (len, cy) => boxAt(len, RIDGE_W, RIDGE_UP + 0.001, 0, cy, FL.PLATE_THICK_M / 2 + RIDGE_UP / 2 - 0.0005);
@@ -4739,8 +4760,14 @@ export class PlayerSatellite extends THREE.Group {
     // caps never share a plane with the panel's edge faces.
     const HEADER_R = 0.013, HEADER_OUT = 0.012;
     const headerCentreGeo = new THREE.CylinderGeometry(HEADER_R * M, HEADER_R * M, (2 * cHalf - 0.02) * M, 24);
-    const headerWingGeo = new THREE.CylinderGeometry(HEADER_R * M, HEADER_R * M, (wingW - 0.02) * M, 24);
     const headerAxisX = (HEADER_R - HEADER_OUT) * M;        // offset of the tube axis inboard of the root end face
+    // The wing's header stops SEAM_END_INSET_M inside the rounded root corner (DECISIONS §55 row 10) at the tube's plate-side
+    // face (axis offset + HEADER_R = 14 mm in from the root end face, the side that lies over the plate). Its outboard HEADER_OUT
+    // (12 mm) lies beyond the root edge whatever the length. Inner end stays 10 mm from the fold axis (wing y 0.01).
+    const headerPlateSideD = HEADER_R + (HEADER_R - HEADER_OUT);
+    const HEADER_WING_Y0 = 0.01;
+    const HEADER_WING_Y1 = wingW - WING_ROOT_CORNER_R_M + Math.sqrt(Math.max(0, WING_ROOT_CORNER_R_M ** 2 - (WING_ROOT_CORNER_R_M - headerPlateSideD) ** 2)) - FL.SEAM_END_INSET_M;
+    const headerWingGeo = new THREE.CylinderGeometry(HEADER_R * M, HEADER_R * M, (HEADER_WING_Y1 - HEADER_WING_Y0) * M, 24);
 
     // Fold-line flex hose: a corrugated Ø14 core with Ø17 end rings ON the fold axis, between the two hinge stations (they end
     // 0.555 m either side of the panel centre). Round about the axis, so it looks the same at every fold angle, and a child of
@@ -4938,7 +4965,7 @@ export class PlayerSatellite extends THREE.Group {
         wh.add(wingPipes);
         // The wing's root end is ship -X side for R and (after the L group's turn) wh +X for L.
         const wingHeader = new THREE.Mesh(headerWingGeo, metalMat);
-        wingHeader.position.set(-sgn * (plateLen / 2 - headerAxisX), (wingW / 2) * M, knuckleK * M);
+        wingHeader.position.set(-sgn * (plateLen / 2 - headerAxisX), ((HEADER_WING_Y0 + HEADER_WING_Y1) / 2) * M, knuckleK * M);
         wingHeader.name = `FlowerStrutWing_${i}_${side}_Header`;
         wingHeader.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         wingHeader.userData.noSolarShade = true;

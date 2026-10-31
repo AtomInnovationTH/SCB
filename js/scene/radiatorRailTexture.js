@@ -23,10 +23,12 @@ const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, 
  * @param {{radiusM: number, insetM: number}|null} [o.tipCorner]  the panel's rounded corner at its far U end and far V edge
  *   (corner arc radius, as the geometry's): the paint stays `insetM` inside that outline, i.e. within radiusM - insetM of the
  *   arc centre (lengthM - radiusM, widthM - radiusM). Null/absent = square, as before.
+ * @param {{radiusM: number, insetM: number}|null} [o.rootCorner]  the same at the panel's U = 0 end and far V edge (arc centre
+ *   (radiusM, widthM - radiusM)). Both wing faces map U = 0 to the root end. Null/absent = square.
  * @returns {THREE.DataTexture} cached per parameter set; shared, never dispose per ship
  */
-export function getRadiatorRailTexture({ lengthM, widthM, rails, endInsetM, faceHex, tipCorner = null }) {
-  const key = JSON.stringify([lengthM, widthM, rails, endInsetM, faceHex, tipCorner]);
+export function getRadiatorRailTexture({ lengthM, widthM, rails, endInsetM, faceHex, tipCorner = null, rootCorner = null }) {
+  const key = JSON.stringify([lengthM, widthM, rails, endInsetM, faceHex, tipCorner, rootCorner]);
   const hit = _cache.get(key);
   if (hit) return hit;
   const W = 1024, H = 256;                       // powers of two: a full mip chain on WebGL2 and WebGL1
@@ -48,6 +50,9 @@ export function getRadiatorRailTexture({ lengthM, widthM, rails, endInsetM, face
   const SS = 8;
   const cornerU = tipCorner ? lengthM - tipCorner.radiusM : Infinity, cornerV = tipCorner ? widthM - tipCorner.radiusM : Infinity;
   const rIn = tipCorner ? tipCorner.radiusM - tipCorner.insetM : 0;
+  // Root corner: the same at U = 0 (arc centre (rootU, rootV)).
+  const rootU = rootCorner ? rootCorner.radiusM : -Infinity, rootV = rootCorner ? widthM - rootCorner.radiusM : Infinity;
+  const rootRIn = rootCorner ? rootCorner.radiusM - rootCorner.insetM : 0;
   const cornerBands = (u0, v0, rails) => rails.map(([c, w, hex]) => {
     let n = 0;
     for (let j = 0; j < SS; j++) {
@@ -57,6 +62,7 @@ export function getRadiatorRailTexture({ lengthM, widthM, rails, endInsetM, face
         const su = u0 + (i + 0.5) * du / SS;
         if (su < endInsetM || su > lengthM - endInsetM) continue;
         if (su > cornerU && sv > cornerV && Math.hypot(su - cornerU, sv - cornerV) > rIn) continue;
+        if (su < rootU && sv > rootV && Math.hypot(su - rootU, sv - rootV) > rootRIn) continue;
         n++;
       }
     }
@@ -67,19 +73,21 @@ export function getRadiatorRailTexture({ lengthM, widthM, rails, endInsetM, face
     const v0 = y * dv, v1 = v0 + dv;
     const bands = rails.map(([c, w, hex]) => [overlap(v0, v1, c - w / 2, c + w / 2) / dv, hex]);
     const row = y * W;
-    const zoneRow = v1 > cornerV;                                // this row reaches the corner's v range
+    const zoneRow = v1 > cornerV;                                // this row reaches the tip corner's v range
+    const rootRow = v1 > rootV;                                  // ... the root corner's
     const xFull1r = zoneRow ? Math.max(xFull0, Math.min(xFull1, Math.floor(cornerU / du + 1e-9))) : xFull1;
+    const xFull0r = rootRow ? Math.min(xFull1r, Math.max(xFull0, Math.ceil(rootU / du - 1e-9))) : xFull0;
     const full = paint(bands, 1);
     const r0 = Math.round(full[0]), g0 = Math.round(full[1]), b0 = Math.round(full[2]);
-    if (xFull1r > xFull0) {                                      // one texel, doubled via copyWithin
-      const o0 = (row + xFull0) * 4, n = xFull1r - xFull0;
+    if (xFull1r > xFull0r) {                                     // one texel, doubled via copyWithin
+      const o0 = (row + xFull0r) * 4, n = xFull1r - xFull0r;
       data[o0] = r0; data[o0 + 1] = g0; data[o0 + 2] = b0; data[o0 + 3] = 255;
       for (let have = 1; have < n; have *= 2) data.copyWithin(o0 + have * 4, o0, o0 + Math.min(have, n - have) * 4);
     }
     for (let x = 0; x < W; x++) {
-      if (x >= xFull0 && x < xFull1r) { x = xFull1r - 1; continue; }
+      if (x >= xFull0r && x < xFull1r) { x = xFull1r - 1; continue; }
       const u0 = x * du, u1 = u0 + du;
-      const rgb = zoneRow && u1 > cornerU ? paint(cornerBands(u0, v0, rails), 1)
+      const rgb = (zoneRow && u1 > cornerU) || (rootRow && u0 < rootU) ? paint(cornerBands(u0, v0, rails), 1)
         : paint(bands, overlap(u0, u1, endInsetM, lengthM - endInsetM) / du), o = (row + x) * 4;
       for (let p = 0; p < 3; p++) data[o + p] = Math.round(rgb[p]);
       data[o + 3] = 255;

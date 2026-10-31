@@ -307,7 +307,7 @@ export const Constants = {
     SINK_K: 205,                // tuned (est): Earth IR alone on a plate seeing ~⅓ Earth (237 W/m²)
                                 // gives ≈ 193 K; daylight albedo and the warm hull in view raise it
     HULL_AREA_M2: 0.3,          // tuned (est): MLI hull leak as ε 0.85-equivalent area (~6 m² × ε* 0.03 / 0.85 + body cells' share)
-    RAD_AREA_M2: 7.17,          // 4 × (1.50 × 0.60 − 2 × (1 − π/4) × 0.10²) × 2 = 7.1657 m²: 4 plates × 1.50 × 0.60 m, less the two outer tip corners of each plate (radius 0.10 m, DECISIONS §55 row 3), × 2 faces at full bloom (the built meshes give 3.582 per face less the corners — the wings end 15 mm short); test-RadiatorShort pins it to the geometry
+    RAD_AREA_M2: 7.16,          // 4 × (1.50 × 0.60 − 2 × (1 − π/4) × 0.10² − 2 × (1 − π/4) × 0.05²) × 2 = 7.1571 m²: 4 plates × 1.50 × 0.60 m, less the two outer tip corners of each plate (radius 0.10 m, DECISIONS §55 row 3) and the two outer root corners (radius 0.05 m, §55 row 10), × 2 faces at full bloom (the built meshes give 3.582 per face less the corners — the wings end 15 mm short); test-RadiatorShort pins it to the geometry
     G_CLOSED: 0.20,             // folded flat (§15 row 4) each pack shows one 0.32 m face outward (~¼ of
                                 // the two-sided area), partly hidden by the barrel and wings → ~0.2
     SUN_HULL_W: 110,            // tuned (est): daylight sun reaching the bay — body cells' waste heat share + MLI leak (0 in shadow)
@@ -350,8 +350,8 @@ export const Constants = {
   HEATER: {
     ENABLED: true,              // the one-line veto
     HOLD_C: 0,                  // °C — lithium-ion charge floor (cells must stay above freezing)
-    // Measured from the model (SHIP_HEAT constants): radiator at 180° (openFrac 1, A_eff 7.47 m²), eclipse (no
-    // SUN_HULL_W), base load 500 W: σ·ε·A_eff·(273.15⁴ − 205⁴) − 500 W = 868.4 W at RAD_AREA_M2 7.17 (873.9 at the square-cornered 7.20) → rounded up to 870 W.
+    // Measured from the model (SHIP_HEAT constants): radiator at 180° (openFrac 1, A_eff 7.46 m²), eclipse (no
+    // SUN_HULL_W), base load 500 W: σ·ε·A_eff·(273.15⁴ − 205⁴) − 500 W = 866.6 W at RAD_AREA_M2 7.16 (868.4 at 7.17 with only the tip corners rounded, 873.9 at the square-cornered 7.20) → rounded up to 870 W.
     // test-PowerCosts recomputes it. Sized with the coolant forced to flow 1 (worst case, valve stuck open) — in
     // normal running the coolant is off at 0 °C and the heaters need only the hull leak (≈ 55 W at 0 °C), so the cap
     // is far above any real need.
