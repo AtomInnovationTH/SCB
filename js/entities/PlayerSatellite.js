@@ -4395,7 +4395,7 @@ export class PlayerSatellite extends THREE.Group {
     const plateX = ((FL.PLATE_START_M + FL.PLATE_END_M) / 2) * M;
     // Plate = a 0.30 m CENTRE panel on the boom plus two FULL 0.15 m WINGS hinged along the boom line (GEO-comsat
     // intercostal-hinge pattern: it has to fold to fit the rocket). Open: butt-jointed, width 0.60, area 4 × 0.90 = 3.60 m²
-    // (3.582 built: the wings end 15 mm short). Folded (launch, θ 0): both wings land side by side on ONE layer over the
+    // (3.60 less the rounded corners built: the wings run full length at the tip, WING_TIP_INSET_M 0 since 2026-10-31, was 15 mm short). Folded (launch, θ 0): both wings land side by side on ONE layer over the
     // centre panel's −Z_hinge face (= radially OUTBOARD when the strut lies fore along the barrel) and meet at the boom line
     // edge-to-edge under the boom — a 0.32 × 0.117 × 1.50 m pack with its hinges (r_max 0.560 on the built model).
     // Measured: test-FlowerLaunchFold (ii).
@@ -4404,8 +4404,8 @@ export class PlayerSatellite extends THREE.Group {
     const layer = FL.WING_GAP_M + FL.PLATE_THICK_M;               // 0.050 folded layer pitch
     const knuckleK = layer / 2;                                   // 0.025 fold-axis standoff below the mid-plane
     const plateGeo = new THREE.BoxGeometry(plateLen, 2 * cHalf * M, FL.PLATE_THICK_M * M);
-    // Wings stop WING_TIP_INSET_M short of the plate's tip end (folded, they lie under the centre panel, where the tip boss
-    // would otherwise hold them); the root ends stay flush with the centre panel's.
+    // Wings stop WING_TIP_INSET_M short of the plate's tip end (0 since 2026-10-31: folded, they lie under the centre panel
+    // and the rounded tip corner clears the tip boss by 9.7 mm; a square corner would not); the root ends stay flush with the centre panel's.
     const wingInset = FL.WING_TIP_INSET_M * M;
     const wingLen = plateLen - wingInset;
     // Rounded outer tip corner (DECISIONS §55 row 3, owner 2026-10-29): only the free-end corner of each side wing is
@@ -4938,8 +4938,8 @@ export class PlayerSatellite extends THREE.Group {
         wh.position.set(plateX, sgn * cHalf * M, -knuckleK * M);
         if (sgn < 0) { wh.rotation.order = 'ZXY'; wh.rotation.z = Math.PI; }
         hinge.add(wh);
-        // local +X is ship −X on the L side (the π turn), so the tip-end
-        // shortening shifts the wing by −sgn·inset/2 to keep its root flush.
+        // local +X is ship −X on the L side (the π turn), so a tip-end
+        // shortening (WING_TIP_INSET_M, 0 today) shifts the wing by −sgn·inset/2 to keep its root flush.
         const wingShiftX = -sgn * wingInset / 2;
         const wing = new THREE.Mesh(wingGeo, plateMatWing);
         wing.position.set(wingShiftX, (wingW / 2) * M, knuckleK * M);

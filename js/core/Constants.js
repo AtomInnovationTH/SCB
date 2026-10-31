@@ -307,7 +307,7 @@ export const Constants = {
     SINK_K: 205,                // tuned (est): Earth IR alone on a plate seeing ~⅓ Earth (237 W/m²)
                                 // gives ≈ 193 K; daylight albedo and the warm hull in view raise it
     HULL_AREA_M2: 0.3,          // tuned (est): MLI hull leak as ε 0.85-equivalent area (~6 m² × ε* 0.03 / 0.85 + body cells' share)
-    RAD_AREA_M2: 7.16,          // 4 × (1.50 × 0.60 − 2 × (1 − π/4) × 0.10² − 2 × (1 − π/4) × 0.05²) × 2 = 7.1571 m²: 4 plates × 1.50 × 0.60 m, less the two outer tip corners of each plate (radius 0.10 m, DECISIONS §55 row 3) and the two outer root corners (radius 0.05 m, §55 row 10), × 2 faces at full bloom (the built meshes give 3.582 per face less the corners — the wings end 15 mm short); test-RadiatorShort pins it to the geometry
+    RAD_AREA_M2: 7.16,          // 4 × (1.50 × 0.60 − 2 × (1 − π/4) × 0.10² − 2 × (1 − π/4) × 0.05²) × 2 = 7.1571 m²: 4 plates × 1.50 × 0.60 m, less the two outer tip corners of each plate (radius 0.10 m, DECISIONS §55 row 3) and the two outer root corners (radius 0.05 m, §55 row 10), × 2 faces at full bloom (the built meshes give 3.60 per face less the corners — the wings run full length, WING_TIP_INSET_M 0); test-RadiatorShort pins it to the geometry
     G_CLOSED: 0.20,             // folded flat (§15 row 4) each pack shows one 0.32 m face outward (~¼ of
                                 // the two-sided area), partly hidden by the barrel and wings → ~0.2
     SUN_HULL_W: 110,            // tuned (est): daylight sun reaching the bay — body cells' waste heat share + MLI leak (0 in shadow)
@@ -2042,17 +2042,21 @@ export const Constants = {
 
       // --- Two-layer folding plate (GEO-comsat pattern) ---
       // Each 1.50 × 0.60 plate is a 0.30 m CENTRE panel on the boom plus two FULL 0.15 m wings hinged along the boom
-      // line on 2.5 cm offset hinges (butt-jointed when open — width 0.60, area 3.582 m² built: 3.60 less the
-      // wings' 15 mm tip inset; test-FlowerPose). For launch the wings fold onto the centre side by side and the
+      // line on 2.5 cm offset hinges (butt-jointed when open — width 0.60, area 3.60 m² built, full length at
+      // the tip since 2026-10-31 (WING_TIP_INSET_M 0), less the rounded corners; test-FlowerPose). For launch the wings fold onto the centre side by side and the
       // strut swings to θ 0: four 0.32 × 0.117 × 1.50 m packs (hinges included) along the barrel. Wing angle is a
       // pure function of θ (lanyard law, T4) — no persisted state; orbit always shows them open.
       PLATE_CENTRE_HALF_WIDTH_M: 0.15,   // centre panel ±0.15 (wings 0.15..0.30)
       // Folded layer gap: the Ø60 mm boom stands 15 mm proud of the centre panel's faces. 0.015 exactly touches it;
       // 0.020 clears it by 5 mm (tmp/radiator-fold-fix.mjs). Hinge-axis standoff = (gap + thick) / 2 = 0.025.
       WING_GAP_M: 0.020,
-      // The wings stop this far short of the plate's tip end: folded, they move under the centre panel, where the
-      // Ø100 mm tip boss (boom x about 2.24…2.305; not re-probed) would otherwise hold their last 10 mm.
-      WING_TIP_INSET_M: 0.015,
+      // The wings stop this far short of the plate's tip end. It was 0.015 because, folded, they move under the centre
+      // panel, where a SQUARE tip corner would hit the Ø100 mm tip boss (boom x 2.240…2.305). Since 2026-10-29 the outer
+      // tip corner is rounded (r 0.10 m, DECISIONS §55 row 3), and measured 2026-10-31 (exact point-to-triangle over the
+      // fold swing 0…180° in 3° steps, tmp/tipboss-probe.mjs) the closest wing-to-boss distance with the inset at 0 is
+      // 9.7 mm (21.5 mm with 0.015). So 0: the wings run full length (the 3D print is unaffected: its plate is one piece ending at the tip pad, print/parts/radiator.py).
+      // test-RadiatorFold pins ≥ 5 mm; a square corner (WING_CORNER_R_M 0) fails it.
+      WING_TIP_INSET_M: 0,
       // Real hinge hardware on each fold line: two hinges per line, each a panel-side lug and a wing-side lug on one
       // axis (barrel radius 10 mm, touching the centre panel's lower edge AND the wing's inner edge in every pose),
       // with a 2 mm leaf bolted along the face it belongs to.
@@ -2222,9 +2226,15 @@ export const Constants = {
       SLEW_RATE_RAD_S: degToRad(15),   // 15°/s — full O swing 146°→90° in 3.73 s
       SETTLE_EPS_RAD: 0.01,        // latch clears within 0.01 rad (daughter contract)
 
-      // --- Mass (plate 1.02 m² × 9 kg/m² sandwich + 2.5 m boom ≈ 1.0 kg/m + bracket/bosses/tip 0.82 kg = 12.5 kg per
-      //    strut; +0.4 kg/strut for the two wing hinge lines (piano hinges, torsion springs, two latches, the taller
-      //    clevis — an engineering estimate, not a probe number) → 12.9 / 25.8. Budget taxes at full tanks
+      // --- Mass. 12.9 kg per strut / 25.8 per pair is the note's original sum, KEPT UNCHANGED (owner 2026-10-31: notes
+      //    only, nothing in play changes). It was made at older sizes: plate 1.02 m² × 9 kg/m² sandwich + 2.5 m boom
+      //    ≈ 1.0 kg/m + bracket/bosses/tip 0.82 kg = 12.5 kg; +0.4 kg for the two wing hinge lines (piano hinges, torsion
+      //    springs, two latches, the taller clevis — an engineering estimate, not a probe number) → 12.9.
+      //    Today's sizes, with the same unit masses: plate 1.50 × 0.60 m = 0.90 m² (the rounded corners take about
+      //    0.005 m² per plate, 0.05 kg, ignored) × 9 kg/m² = 8.1 kg; boom 2.30 m × 1.0 kg/m = 2.3 kg; bracket/bosses/tip
+      //    0.82 kg; hinge lines 0.4 kg → 11.6 kg, about 1.3 kg under the kept 12.9. The kept figure is read as covering
+      //    hardware this sum doesn't itemise: the rotation-joint motor and gear, the header tubes, the flexible hoses and
+      //    the coolant (an estimate, not measured). Budget taxes at full tanks
       //    (tmp/flower-mass-budget.mjs): pair A −288.7 m/s (2896 → 2607), pair B −236.3 m/s (2607 → 2371)
       //    (the shop rows SAY this out loud — §8.1 doctrine). ---
       STRUT_DRY_MASS_KG: 12.9,
