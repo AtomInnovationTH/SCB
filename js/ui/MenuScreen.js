@@ -534,7 +534,7 @@ export class MenuScreen {
           </button>
           <ul id="menu-lang-menu" role="listbox" aria-label="Language"></ul>
         </div>
-        <button id="menu-show-btn" type="button" aria-pressed="false" title="For a shared iPad: restarts when left idle, ends after mission 1">Demo mode: off</button>
+        <button id="menu-show-btn" type="button" aria-pressed="false" title="For a shared iPad: restarts when left idle, ends after training mission 1">Demo mode: off</button>
 
         <!-- ══ HEADER (full-width, centered) ══ -->
         <div id="menu-header">

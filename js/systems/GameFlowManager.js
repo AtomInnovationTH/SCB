@@ -9,7 +9,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { gameState, GameStates } from '../core/GameState.js';
-import { getMissionProgress, isGuidedChapterNumber } from '../core/missionProgress.js';
+import { getMissionProgress, isGuidedChapterNumber, missionName } from '../core/missionProgress.js';
 import timerManager from './TimerManager.js';
 import { CameraViews } from './CameraSystem.js';
 import { scoringSystem, computeSaleValue } from './ScoringSystem.js';
@@ -812,7 +812,7 @@ export class GameFlowManager {
       timerManager.setTimeout(() => {
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'HOUSTON', channel: 'HOUSTON', priority: 'info',
-          text: `Welcome back, Cowboy. Resuming Mission ${missionNum}.`, _onboarding: true,
+          text: `Welcome back, Cowboy. Resuming ${missionName(missionNum, 'mid')}.`, _onboarding: true,
         });
       }, 900, { owner: this });
       timerManager.setTimeout(() => {
@@ -4223,7 +4223,7 @@ export class GameFlowManager {
       const fadeMs = (Constants.TEACHING && Constants.TEACHING.FADE_OUT_MS) || 500;
       eventBus.emit(Events.TEACHING_MOMENT_FORCE, {
         id: `mission_complete_${missionsCompleted}`,
-        title: `MISSION ${missionsCompleted} COMPLETE`,
+        title: `${missionName(missionsCompleted, 'upper')} COMPLETE`,
         body: `${debrisCount} debris cleared. Opening the depot for resupply.`,
         duration: Math.max(0, dwellMs - fadeMs),
         icon: '\u25C6',
@@ -4302,7 +4302,7 @@ export class GameFlowManager {
     const cleared = perMission - debrisUntilShop;
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON', channel: 'HOUSTON', priority: 'info',
-      text: `Mission ${missionNum}: ${cleared}/${perMission} cleared. Clear ${debrisUntilShop} more for ${stopWords(this)}.`,
+      text: `${missionName(missionNum)}: ${cleared}/${perMission} cleared. Clear ${debrisUntilShop} more for ${stopWords(this)}.`,
       _postOnboarding: true,
       _keep: true,   // mission progress: never folded into "x N queued"
     });

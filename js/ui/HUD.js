@@ -26,6 +26,7 @@ import { approachLive } from './hud/TargetColorLaw.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { pinReadyLabel, pinReadyLine } from '../systems/resupplyWords.js';
 import { pinProgress } from './shopPin.js';
+import { missionName } from '../core/missionProgress.js';
 import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX, RIGHT_COLUMN_WIDTH_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
 import { dividedByScale, onHudScaleChange, currentHudScale } from './HudScale.js';
  import { DebrisWireframe }   from './DebrisWireframe.js';
@@ -2610,7 +2611,7 @@ export class HUD {
       pointer-events: none;
     `;
     el.innerHTML = `
-      <div style="font-size:22px; letter-spacing:4px; color:var(--hud-label, #fff);">MISSION ${mission} COMPLETE</div>
+      <div style="font-size:22px; letter-spacing:4px; color:var(--hud-label, #fff);">${missionName(mission, 'upper')} COMPLETE</div>
       <div style="font-size:13px; letter-spacing:2px; margin-top:6px; color:var(--hud-caution, #ffcc66);">${pieces} of ${pieces} pieces caught</div>
     `;
     document.body.appendChild(el);

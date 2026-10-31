@@ -8,7 +8,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { GestureHints } from './hud/GestureHints.js';
-import { getMissionProgress } from '../core/missionProgress.js';
+import { getMissionProgress, missionName } from '../core/missionProgress.js';
 import { briefingObjective, briefingObjectiveMore } from '../systems/resupplyWords.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
@@ -261,7 +261,7 @@ export class BriefingScreen {
     const { perMission, missionNum, debrisUntilShop } = getMissionProgress(stats.debrisCleared);
 
     const titleEl = this.element.querySelector('#briefing-mission-title');
-    if (titleEl) titleEl.textContent = `MISSION ${missionNum} BRIEFING`;
+    if (titleEl) titleEl.textContent = `${missionName(missionNum, 'upper')} BRIEFING`;
 
     const objectiveEl = this.element.querySelector('#briefing-objective');
     if (objectiveEl) {

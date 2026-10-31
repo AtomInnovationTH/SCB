@@ -7,7 +7,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { GameStates } from '../core/GameState.js';
-import { getMissionProgress } from '../core/missionProgress.js';
+import { getMissionProgress, missionName } from '../core/missionProgress.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
 
@@ -190,7 +190,7 @@ export class GameOverScreen {
     const { missionNum } = getMissionProgress(stats.debrisCleared);
     const upgradeCount = this._getUpgradeCount();
     statsEl.innerHTML = `
-      <div class="go-heading" style="color:var(--hud-label, #00ff88);font-size:0.95rem;margin-bottom:6px;">Mission ${missionNum} Summary</div>
+      <div class="go-heading" style="color:var(--hud-label, #00ff88);font-size:0.95rem;margin-bottom:6px;">${missionName(missionNum)} Summary</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;">
         <div>Score: <b style="color:var(--hud-caution, #ffaa00);">${stats.totalScore.toLocaleString()}</b></div>
         <div>Credits: <b style="color:var(--hud-caution, #f0c040);">${credits.toLocaleString()} cr</b></div>

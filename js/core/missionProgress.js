@@ -29,6 +29,24 @@ export function getMissionProgress(debrisCleared) {
 }
 
 /**
+ * A mission's name as the player reads it. Mission 1 is the training mission (owner 2026-10-31: "Change mission 1 to
+ * training mission 1."), so it reads "Training mission 1"; missions 2 on keep "Mission N" (not renumbered). Forms:
+ * 'start' (a line or heading starts with it), 'mid' (inside a sentence: "Resuming training mission 1.") and 'upper'
+ * (the cards: "TRAINING MISSION 1 BRIEFING", "MISSION 2 COMPLETE"). Every place that shows a mission number by name
+ * goes through here: BriefingScreen, the HUD complete card, GameFlowManager's card and comms, GameOverScreen.
+ * @param {number} n mission number (1-based)
+ * @param {'start'|'mid'|'upper'} [form='start']
+ * @returns {string}
+ */
+export function missionName(n, form = 'start') {
+  const training = Number(n) === 1;
+  const name = training ? 'Training mission 1' : `Mission ${n}`;
+  if (form === 'upper') return name.toUpperCase();
+  if (form === 'mid' && training) return 'training mission 1';
+  return name;
+}
+
+/**
  * The spawn-difficulty profile for a mission number: the highest `Constants.MISSIONS.PROFILES` entry whose `minMission`
  * is <= n. PROFILES is authored in ascending `minMission` order (pinned in test-MissionProfiles), so the last hit is
  * the best. Anything below the first entry's `minMission` (0, NaN, undefined) falls back to PROFILES[0], like
