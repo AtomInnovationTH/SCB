@@ -140,10 +140,10 @@ export const EARTH_FRAME_PAD_U = 0.3;
  * "take a look at floor 4, the default camera view should be higher so the blue ring around earth can be noticed as a
  * disc, not just a blue line." The reach band is two Earth-centred circles in the ship's orbit plane, so a view in
  * that plane (measured -0.7° on the day) shows it edge-on. V1.05 used 30°; after seeing it on his Mac the owner said
- * (2026-10-31 ~14:15Z) "too high, where is it 30? try 20 degrees". At 20° the ring is an ellipse about a third as tall
- * as wide (sin 20° = 0.34, estimate: ignores perspective).
+ * (2026-10-31 ~14:15Z) "too high, where is it 30? try 20 degrees", and after 20° on his Mac (~14:49Z) "16 please".
+ * At 16° the ring is an ellipse about a quarter as tall as wide (sin 16° = 0.28, estimate: ignores perspective).
  */
-export const EARTH_FRAME_LIFT_DEG = 20;
+export const EARTH_FRAME_LIFT_DEG = 16;
 /** Beyond 174° apart the ship–field bisector is ill-defined; the arc along the ship's travel is used. */
 export const EARTH_FRAME_ANTIPODE_COS = Math.cos(degToRad(174));
 /**
@@ -260,7 +260,7 @@ export function earthLiftDir(dir, ship, shipVel, liftDeg = EARTH_FRAME_LIFT_DEG)
 }
 
 /**
- * The lifted view for the unit direction `m`: the largest of LIFT_STEPS_DEG (20, 10, 0) whose camera, at `distU`
+ * The lifted view for the unit direction `m`: the largest of LIFT_STEPS_DEG (16, 10, 0) whose camera, at `distU`
  * from Earth's centre, sees every point of `pts` (none behind Earth: earthHides). Polar angle clamped to the drag
  * window (earthTurnTarget), and the check runs on the clamped direction. With no usable `distU` the full lift is used
  * unchecked.
