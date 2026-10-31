@@ -1,9 +1,9 @@
 {
   "bullets": [
-    "Radiator wing tips are rounded, and the opening now eases in and out gently",
-    "Click a part of the ship to open its page in the Tech library",
-    "Net threads now follow the curve of the net"
+    "Solar furnace, inflated balloons on radiators",
+    "Rounded radiators, longer, uncut",
+    "Improved cargo storage"
   ],
   "release": "2026-10-31",
-  "version": "1.03"
+  "version": "1.04"
 }
