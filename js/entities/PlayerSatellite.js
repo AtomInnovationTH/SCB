@@ -3334,7 +3334,7 @@ export class PlayerSatellite extends THREE.Group {
     return (this._flowerPairs.A ? 1 : 0) + (this._flowerPairs.B ? 1 : 0);
   }
 
-  /** Purchased flower dry mass (kg): the mass-budget term read by ArmManager.getMassBudget() (pair taxes −280.7 / −231.0 m/s ΔV at full tanks). */
+  /** Purchased flower dry mass (kg): the mass-budget term read by ArmManager.getMassBudget() (pair taxes about −119 / −98 m/s ΔV at full tanks, measured 2026-10-31, tmp/fuelfix/probe.mjs). */
   getFlowerDryMassKg() {
     return this.getFlowerPairCount() * Constants.THERMAL.FLOWER.PAIR_DRY_MASS_KG;
   }

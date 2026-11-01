@@ -2279,8 +2279,12 @@ export const Constants = {
       //    0.005 m² per plate, 0.05 kg, ignored) × 9 kg/m² = 8.1 kg; boom 2.30 m × 1.0 kg/m = 2.3 kg; bracket/bosses/tip
       //    0.82 kg; hinge lines 0.4 kg → 11.6 kg, about 1.3 kg under the kept 12.9. The kept figure is read as covering
       //    hardware this sum doesn't itemise: the rotation-joint motor and gear, the header tubes, the flexible hoses and
-      //    the coolant (an estimate, not measured). Budget taxes at full tanks
-      //    (tmp/flower-mass-budget.mjs): pair A −288.7 m/s (2896 → 2607), pair B −236.3 m/s (2607 → 2371)
+      //    the coolant (an estimate, not measured). Budget taxes, measured 2026-10-31 on the live
+      //    ArmManager.getMassBudget() (tmp/fuelfix/probe.mjs; argon, Isp 1700 s, 40 % thrust power split, four
+      //    nets): full tank 20.8 kg: 1225.8 m/s → pair A 1107.0 (−118.8) → pairs A+B 1009.1 (pair B −97.8);
+      //    start fill (60 %, 12.5 kg): 748.1 → 674.5 (−73.6) → 614.1 (−60.4). The old −288.7 / −236.3
+      //    (2896 → 2607 → 2371) came from tmp/flower-mass-budget.mjs, which re-types an old model (40 kg xenon,
+      //    Isp 1500 s, 170 kg core, no tank mass) instead of calling the game
       //    (the shop rows SAY this out loud — §8.1 doctrine). ---
       STRUT_DRY_MASS_KG: 12.9,
       PAIR_DRY_MASS_KG: 25.8,

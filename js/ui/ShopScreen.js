@@ -228,13 +228,13 @@ export const UPGRADES = [
   // Thermal & Services (2) — category #9. Purchase IS the gate (no feature flag; the FEATURE_FLAGS pin stays 42).
   // Authored hardware = ALL 4 stations; the shop stages trim-neutral diagonal PAIRS (⟂-CoM 0.0000). Observe-only: draws and
   // slews, throttles nothing. Prices are economy placeholders; the ΔV/mass line SAYS the tax out loud (25.8 kg/pair:
-  // −288.7 / −236.3 m/s, stations 40/220 · 140/320; the plates fold in two for launch).
+  // about −120 / −100 m/s at full tanks (measured 2026-10-31, tmp/fuelfix/probe.mjs), stations 40/220 · 140/320; the plates fold in two for launch).
   { id: 'flower_pair_a', cat: 'Thermal & Services', name: 'Aft Radiators — Pair A', cost: 1200,
-    desc: 'Two aft-pivot radiator struts at az 40/220 (trim-neutral diagonal): 2.30 m booms, 1.50×0.60 m tri-panel plates that fold in two and lie along the bus for launch, inert tip hardpoints. O opens them to 146°, and folds them flat to 2°. Mass tax said out loud: +26 kg dry, ΔV 2896 → 2607 m/s at full tanks (−289). Observe-only: radiates nothing yet — the loop refit prices heat later.',
+    desc: 'Two aft-pivot radiator struts at az 40/220 (trim-neutral diagonal): 2.30 m booms, 1.50×0.60 m tri-panel plates that fold in two and lie along the bus for launch, inert tip hardpoints. O opens them to 146°, and folds them flat to 2°. Mass tax said out loud: +26 kg dry, about −120 m/s of ΔV at full tanks. Observe-only: radiates nothing yet — the loop refit prices heat later.',
     effect: 'flowerPairA', value: 1, maxLevel: 1,
     trl: 8, trlRationale: 'Rigid deployable radiators flown (ISS HRS/EATCS class); aft-pivot cargo-tip config is this program\'s own' },
   { id: 'flower_pair_b', cat: 'Thermal & Services', name: 'Aft Radiators — Pair B', cost: 1000,
-    desc: 'Completes the four radiator struts with the az 140/320 diagonal. All four struts open to 146° and fold flat together on O. Mass tax said out loud: +26 kg dry, ΔV 2607 → 2371 m/s at full tanks (−236). Radiator AREA doubles when the thermal loop arrives.',
+    desc: 'Completes the four radiator struts with the az 140/320 diagonal. All four struts open to 146° and fold flat together on O. Mass tax said out loud: +26 kg dry, about −100 m/s of ΔV at full tanks. Radiator AREA doubles when the thermal loop arrives.',
     effect: 'flowerPairB', value: 1, maxLevel: 1,
     requiresAll: ['flower_pair_a'],
     trl: 8, trlRationale: 'Same rigid-radiator heritage as Pair A; staging is operational, not technological' },
