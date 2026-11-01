@@ -3227,12 +3227,54 @@ export class InputManager {
   }
 
   /**
+   * A daughter's NET follows the same reach rule as the mother's (owner 2026-11-01: "Yes, same rule"): refuse, spend nothing,
+   * when the piece she holds station on is past HER net's reach now, or will be at contact. Her net class is the one
+   * `fireDaughterNet` launches (weaver MEDIUM, else SMALL: 80 m by `netMaxReachM`, the number the docking reticle reads); the
+   * delay is CAST_WINDUP + SPIN_UP_TIME, the speed LAUNCH_SPEED, the contact radius half her net's DIAMETER; the velocity is
+   * the piece's relative to her (`_leadTargetVel`, ~0 in a settled station-keep, so this is a guard for a drifted one: she
+   * holds 4-12 m off, STATION_KEEP.MIN/MAX_STANDOFF). Only her net (selectedTool NET, or multi-tool off); the gripper and
+   * pad are not judged. The refusal lines are the mother's (§45 texts kept). Missing data (no position, no `config.type`)
+   * means fire, as `withinNetReach` does for headless mocks.
+   * @param {object} arm - an ArmUnit in STATION_KEEP
+   * @returns {boolean} true when refused
+   */
+  _refuseDaughterNetOutOfReach(arm) {
+    const d = this._deps;
+    if (!arm || !d) return false;
+    const multi = Constants.isFeatureEnabled('DAUGHTER_MULTITOOL') && typeof arm.dispatchSelectedTool === 'function';
+    if (multi && arm.selectedTool && arm.selectedTool !== 'NET') return false;   // gripper / pad / magnet: not a net
+    const piece = arm._stationKeepTarget || arm.target;                         // HER piece, not the selected one
+    const type = arm.config && arm.config.type;
+    const armPos = arm.position;
+    const piecePos = piece && piece._scenePosition;
+    if (!type || !armPos || !piecePos) return false;
+    const CN = Constants.CAPTURE_NET;
+    const netClass = type === 'weaver' ? CN.MEDIUM : CN.SMALL;                  // fireDaughterNet's own rule
+    const reachM = netMaxReachM(netClass);
+    if (!(reachM > 0)) return false;
+    const deny = (text, reason) => {
+      if (reason) eventBus.emit(Events.LASSO_DENIED, { reason });
+      eventBus.emit(Events.COMMS_MESSAGE, { text, source: 'SYSTEM', channel: 'CMD', priority: 'warning' });
+      d.audioSystem?.playDeny?.();
+      return true;
+    };
+    const nowM = targetRangeM(armPos, piecePos);
+    if (nowM > reachM) return deny(netRangeLine(nowM, reachM, 'net'));
+    const rv = arm._leadTargetVelValid ? arm._leadTargetVel : null;
+    const arriveM = netArrivalRangeM(armPos, armPos, piecePos, rv, netClass.LAUNCH_SPEED || 10,
+      (CN.CAST_WINDUP || 0) + (CN.SPIN_UP_TIME || 0), (netClass.DIAMETER || 0) / 2);
+    if (arriveM > reachM) return deny(driftOutOfReachLine(arriveM), 'drift_out_of_reach');
+    return false;
+  }
+
+  /**
    * Work a station-keeping daughter's selected tool (multi-tool dispatch when DAUGHTER_MULTITOOL is on, else the
    * plain net); shared by captureWithPilotedArm and the no-pilot-mode KeyN branch.
    * @param {object} arm — an ArmUnit in STATION_KEEP
    */
   captureWithDaughter(arm) {
     const d = this._deps;
+    if (this._refuseDaughterNetOutOfReach(arm)) return;
     if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
         && typeof arm.dispatchSelectedTool === 'function') {
       arm.dispatchSelectedTool();
