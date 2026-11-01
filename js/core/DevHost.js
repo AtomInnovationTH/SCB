@@ -49,7 +49,7 @@ export function devStartMission(loc = globalThis.location) {
 
 /**
  * Make a NEW game start at training mission `mission` (the `?mission=N` look; training-3-movers plan T5). Once, after the next new game
- * has finished resetting and entered the orbit view, it gives the game the catches a finished mission N-1 leaves (`debrisCleared`) and
+ * has finished resetting, entered the orbit view and posted its start lines (the opening dance's hand-over, else 10 s later), it gives the game the catches a finished mission N-1 leaves (`debrisCleared`) and
  * lets the scoring system fire the boundary `MISSION_START { missionNumber: N, profile }`: the coach arms chapter N, the field registry and
  * the debris field lay out the mission's extra rows at the start field. The tutorial is skipped (the director's dev flag: a
  * veteran start, no chapter-1 beats), for that new game only: the director's flag is set at its MENU_START and cleared at a MENU_CONTINUE. A saved game continuing (MENU_CONTINUE) never arms it; credits and tools stay as a new game's.
@@ -62,23 +62,52 @@ export function devStartMission(loc = globalThis.location) {
  * @param {{setDevSkip?:Function}|null} deps.onboardingDirector
  * @param {number} deps.mission 2 or 3 @param {number} deps.debrisPerMission `Constants.MISSIONS.DEBRIS_PER_MISSION`
  * @param {string} [deps.orbitalView] the state name that ends a new game's start (default 'ORBITAL_VIEW')
- * @returns {() => void} undo (removes the listeners)
+ * @param {{set:(fn:Function, ms:number)=>*, clear:(h:*)=>void}|null} [deps.timers] real-time timers (default setTimeout/clearTimeout; tests pass fakes)
+ * @returns {() => void} undo (removes the listeners, cancels a pending jump)
  */
-export function installDevStart({ eventBus, Events, gameState, scoringSystem, onboardingDirector = null, mission, debrisPerMission, orbitalView = 'ORBITAL_VIEW' }) {
+export function installDevStart({ eventBus, Events, gameState, scoringSystem, onboardingDirector = null, mission, debrisPerMission, orbitalView = 'ORBITAL_VIEW', timers = null }) {
   const skip = (on) => { if (onboardingDirector && typeof onboardingDirector.setDevSkip === 'function') onboardingDirector.setDevSkip(on); };
+  const setT = timers?.set ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearT = timers?.clear ?? ((h) => clearTimeout(h));
   let armed = false;
+  let waiting = false;   // entered the orbit view, the mission jump not yet made
+  let fallback = null, afterStart = null;
+  const cancel = () => {
+    waiting = false;
+    if (fallback !== null) clearT(fallback);
+    if (afterStart !== null) clearT(afterStart);
+    fallback = afterStart = null;
+  };
+  const jump = () => {
+    if (!waiting) return;
+    cancel();
+    gameState.debrisCleared = (mission - 1) * debrisPerMission;
+    scoringSystem.checkMissionTransition();
+  };
   // The dev skip belongs to the dev-start NEW game only: it is set when that game begins (MENU_START, before the director's own
   // orbit-view start) and cleared when a saved game continues, so a Continue in the same session plays the tutorial as saved.
-  const offStart = eventBus.on(Events.MENU_START, () => { armed = true; skip(true); });
-  const offContinue = Events.MENU_CONTINUE ? eventBus.on(Events.MENU_CONTINUE, () => { armed = false; skip(false); }) : null;
+  const offStart = eventBus.on(Events.MENU_START, () => { cancel(); armed = true; skip(true); });
+  const offContinue = Events.MENU_CONTINUE ? eventBus.on(Events.MENU_CONTINUE, () => { cancel(); armed = false; skip(false); }) : null;
+  // The jump waits for the start burst: the comms panel keeps 4 waiting lines and skips the oldest plain one, so a chapter intro posted
+  // in the middle of the boot lines is never drawn. The burst ends at the opening dance's hand-over (it posts "Arrived" / "Systems...
+  // nominal." in that tick); the jump runs one timer tick later, so the intro is the newest line. No dance (flag off, reduced motion,
+  // ?shot) means no hand-over: a real-time fallback fires START_JUMP_FALLBACK_MS after the orbit-view entry.
   const offState = eventBus.on(Events.GAME_STATE_CHANGE, (d) => {
     if (!armed || !d || d.to !== orbitalView) return;
     armed = false;
-    gameState.debrisCleared = (mission - 1) * debrisPerMission;
-    scoringSystem.checkMissionTransition();
+    waiting = true;
+    fallback = setT(jump, START_JUMP_FALLBACK_MS);
   });
+  const offHandover = Events.OPENING_DANCE_HANDOVER ? eventBus.on(Events.OPENING_DANCE_HANDOVER, () => {
+    if (!waiting || afterStart !== null) return;
+    afterStart = setT(jump, 0);
+  }) : null;
   return () => {
-    for (const off of [offStart, offContinue, offState]) if (typeof off === 'function') off();
+    cancel();
+    for (const off of [offStart, offContinue, offState, offHandover]) if (typeof off === 'function') off();
     skip(false);
   };
 }
+
+/** Real-time ceiling (ms) from the orbit-view entry to the dev start's mission jump when no opening-dance hand-over comes (measured: the start burst ends ~6 s after the entry). */
+export const START_JUMP_FALLBACK_MS = 10000;
