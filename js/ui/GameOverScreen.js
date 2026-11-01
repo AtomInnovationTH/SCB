@@ -7,7 +7,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { GameStates } from '../core/GameState.js';
-import { getMissionProgress, missionName } from '../core/missionProgress.js';
+import { getMissionProgress, missionName, realMissionsDone } from '../core/missionProgress.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
 
@@ -293,8 +293,10 @@ export class GameOverScreen {
     reasonEl.textContent = 'The orbital environment has been stabilized. Outstanding work, Cowboy.';
 
     const stats = scoringSystem.getStats();
-    // Clamped via getMissionProgress (shared with Briefing card and death summary) so the count can't drift.
-    const { missionsCompleted: missionCount } = getMissionProgress(stats.debrisCleared);
+    // Clamped via getMissionProgress (shared with Briefing card and death summary) so the count can't drift. The line
+    // counts real missions only: the training missions are not among them (realMissionsDone, DECISIONS §38 row 9).
+    const { missionsCompleted } = getMissionProgress(stats.debrisCleared);
+    const missionCount = realMissionsDone(missionsCompleted);
     const upgradeCount = this._getUpgradeCount();
     statsEl.innerHTML = `
       <div class="go-heading" style="color:var(--hud-label, #00ff88);font-size:1rem;margin-bottom:8px;">Final Report</div>

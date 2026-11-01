@@ -29,21 +29,39 @@ export function getMissionProgress(debrisCleared) {
 }
 
 /**
- * A mission's name as the player reads it. Mission 1 is the training mission (owner 2026-10-31: "Change mission 1 to
- * training mission 1."), so it reads "Training mission 1"; missions 2 on keep "Mission N" (not renumbered). Forms:
- * 'start' (a line or heading starts with it), 'mid' (inside a sentence: "Resuming training mission 1.") and 'upper'
- * (the cards: "TRAINING MISSION 1 BRIEFING", "MISSION 2 COMPLETE"). Every place that shows a mission number by name
- * goes through here: BriefingScreen, the HUD complete card, GameFlowManager's card and comms, GameOverScreen.
- * @param {number} n mission number (1-based)
+ * How many of the first missions are training (owner 2026-10-31: "there will be several training missions" and
+ * "focus on training mission 1 2 3 for now"; DECISIONS §38 row 9). They are the guided chapters (`guidedCluster`,
+ * FORCED_DEPOT_CHAPTERS), but this count only names them: the game's internal mission numbers do not change.
+ */
+export const TRAINING_MISSIONS = 3;
+
+/**
+ * A mission's name as the player reads it, from the internal mission number. Missions 1..TRAINING_MISSIONS are
+ * "Training mission 1".."Training mission 3"; the real missions after them count from 1 again (internal 4 is
+ * "Mission 1", internal 12 "Mission 9"). Forms: 'start' (a line or heading starts with it), 'mid' (inside a
+ * sentence: "Resuming training mission 2.") and 'upper' (the cards: "TRAINING MISSION 1 BRIEFING", "MISSION 1
+ * COMPLETE"). Every place that shows a mission number by name goes through here: BriefingScreen, the HUD complete
+ * card, GameFlowManager's card and comms, GameOverScreen.
+ * @param {number} n internal mission number (1-based)
  * @param {'start'|'mid'|'upper'} [form='start']
  * @returns {string}
  */
 export function missionName(n, form = 'start') {
-  const training = Number(n) === 1;
-  const name = training ? 'Training mission 1' : `Mission ${n}`;
+  const k = Number(n);
+  const training = k <= TRAINING_MISSIONS;
+  const name = training ? `Training mission ${k}` : `Mission ${k - TRAINING_MISSIONS}`;
   if (form === 'upper') return name.toUpperCase();
-  if (form === 'mid' && training) return 'training mission 1';
+  if (form === 'mid' && training) return `training mission ${k}`;
   return name;
+}
+
+/**
+ * How many real (not training) missions a count of completed missions holds: the victory screen's "Missions" line.
+ * @param {number} missionsCompleted completed missions, training included (`getMissionProgress().missionsCompleted`)
+ * @returns {number}
+ */
+export function realMissionsDone(missionsCompleted) {
+  return Math.max(0, (Number(missionsCompleted) || 0) - TRAINING_MISSIONS);
 }
 
 /**

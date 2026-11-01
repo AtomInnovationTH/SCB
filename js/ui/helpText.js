@@ -511,7 +511,7 @@ const FAQ_TEXT = {
     items: {
       faq_what: { q: 'Space Cowboy คืออะไร?', a: 'เกมที่คุณบังคับดาวเทียมไปเก็บขยะอวกาศ ก่อนที่มันจะชนดาวเทียมดวงอื่น' },
       faq_real: { q: 'ดาวเทียมนี้มีจริงไหม?', a: 'ยังไม่มี เกมนี้ใช้ฟิสิกส์จริงทดสอบการออกแบบดาวเทียม ก่อนที่จะมีใครสร้างขึ้นมา' },
-      faq_win: { q: 'ชนะได้อย่างไร?', a: 'จับขยะให้ได้ 60 ชิ้น: 12 ภารกิจ ภารกิจละ 5 ชิ้น' },
+      faq_win: { q: 'ชนะได้อย่างไร?', a: 'จับขยะให้ได้ 60 ชิ้น: ภารกิจฝึก 3 ภารกิจ แล้วภารกิจจริง 9 ภารกิจ ภารกิจละ 5 ชิ้น' },
       faq_daughters: { q: 'ยานลูกคืออะไร?', a: 'ยานผู้ช่วย 4 ลำที่ผูกสายยาว ไปจับขยะชิ้นที่เล็กกว่าหรืออยู่ไกลกว่า ช่วยประหยัดแก๊สของยานใหญ่' },
       faq_fuel: { q: 'ทำไมเชื้อเพลิงถึงสำคัญมาก?', a: 'แก๊สเครื่องยนต์ไม่เติมเอง การบินระยะสั้นจึงช่วยประหยัดแก๊ส ซื้อเพิ่มได้ตอนเติมเสบียง' },
       faq_after: { q: 'ขยะที่จับได้ไปไหนต่อ?', a: 'ถูกเก็บไว้ที่ปลายแผงระบายความร้อนหรือบนยานลูก แล้วเตาหลอมเล็ก ๆ จะหลอมมันระหว่างเดินทางไปยังกลุ่มขยะถัดไป' },
@@ -531,7 +531,7 @@ const FAQ_TEXT = {
     items: {
       faq_what: { q: 'Space Cowboy とは何ですか?', a: '衛星を操縦して、宇宙ゴミが他の衛星にぶつかる前に片付けるゲームです。' },
       faq_real: { q: '衛星は実在しますか?', a: 'まだありません。このゲームは、誰かが作る前に、本物の物理法則で衛星の設計を試します。' },
-      faq_win: { q: 'どうすれば勝てますか?', a: 'ゴミを 60 個捕まえます。5 個ずつの 12 ミッションです。' },
+      faq_win: { q: 'どうすれば勝てますか?', a: 'ゴミを 60 個捕まえます。訓練ミッション 3 回のあと、ミッション 9 回。どれも 5 個ずつです。' },
       faq_daughters: { q: '子機とは何ですか?', a: '長い線につながった 4 機の助っ人です。小さいゴミや遠いゴミを担当し、大きな船のガスを節約します。' },
       faq_fuel: { q: 'なぜ燃料はそんなに大事なのですか?', a: 'エンジンのガスは自然には増えないので、短い移動で節約できます。補給のときに買い足せます。' },
       faq_after: { q: '捕まえたゴミはどうなりますか?', a: 'ラジエーターの先か子機に載せておきます。次の宙域へ向かう間に、小さな炉が溶かします。' },
@@ -551,7 +551,7 @@ const FAQ_TEXT = {
     items: {
       faq_what: { q: '¿Qué es Space Cowboy?', a: 'Un juego en el que pilotas un satélite que limpia basura espacial antes de que choque con otros satélites.' },
       faq_real: { q: '¿Es real el satélite?', a: 'Todavía no. El juego prueba con física real un diseño de satélite antes de que alguien lo construya.' },
-      faq_win: { q: '¿Cómo se gana?', a: 'Captura 60 piezas de basura: 12 misiones de 5 capturas cada una.' },
+      faq_win: { q: '¿Cómo se gana?', a: 'Captura 60 piezas de basura: 3 misiones de entrenamiento y luego 9 misiones, de 5 capturas cada una.' },
       faq_daughters: { q: '¿Qué son las hijas?', a: 'Cuatro naves auxiliares unidas por cables largos. Van tras la basura más pequeña o lejana y ahorran el gas de la nave grande.' },
       faq_fuel: { q: '¿Por qué importa tanto el combustible?', a: 'El gas del propulsor no se rellena solo, así que los viajes cortos lo ahorran. Puedes comprar más al reabastecerte.' },
       faq_after: { q: '¿Qué pasa con la basura que capturo?', a: 'Se guarda en la punta de un radiador o en una hija. En el viaje al siguiente campo, unos hornos pequeños la funden.' },
@@ -571,7 +571,7 @@ const FAQ_TEXT = {
     items: {
       faq_what: { q: 'O que é Space Cowboy?', a: 'Um jogo em que você pilota um satélite que limpa lixo espacial antes que ele atinja outros satélites.' },
       faq_real: { q: 'O satélite é real?', a: 'Ainda não. O jogo testa com física real um projeto de satélite antes de alguém construí-lo.' },
-      faq_win: { q: 'Como eu ganho?', a: 'Capture 60 peças de lixo: 12 missões de 5 capturas cada.' },
+      faq_win: { q: 'Como eu ganho?', a: 'Capture 60 peças de lixo: 3 missões de treino e depois 9 missões, de 5 capturas cada.' },
       faq_daughters: { q: 'O que são as filhas?', a: 'Quatro naves auxiliares presas por cabos longos. Elas vão atrás do lixo menor ou mais distante e poupam o gás da nave grande.' },
       faq_fuel: { q: 'Por que o combustível importa tanto?', a: 'O gás do propulsor não se recarrega sozinho, então viagens curtas o poupam. Você pode comprar mais ao reabastecer.' },
       faq_after: { q: 'O que acontece com o lixo que capturo?', a: 'Ele fica na ponta de um radiador ou numa filha. Na viagem ao próximo campo, pequenos fornos o derretem.' },
@@ -591,7 +591,7 @@ const FAQ_TEXT = {
     items: {
       faq_what: { q: 'Space Cowboy क्या है?', a: 'एक खेल जिसमें आप ऐसा उपग्रह उड़ाते हैं जो अंतरिक्ष मलबे को दूसरे उपग्रहों से टकराने से पहले साफ़ करता है।' },
       faq_real: { q: 'क्या यह उपग्रह असली है?', a: 'अभी नहीं। किसी के उपग्रह बनाने से पहले, यह खेल असली भौतिकी से उसके डिज़ाइन को परखता है।' },
-      faq_win: { q: 'मैं कैसे जीतूँ?', a: 'मलबे के 60 टुकड़े पकड़ें: 12 मिशन, हर मिशन में 5 पकड़।' },
+      faq_win: { q: 'मैं कैसे जीतूँ?', a: 'मलबे के 60 टुकड़े पकड़ें: 3 प्रशिक्षण मिशन, फिर 9 मिशन, हर मिशन में 5 पकड़।' },
       faq_daughters: { q: 'बेटी यान क्या हैं?', a: 'लंबी रस्सियों वाले चार सहायक यान। वे ज़्यादा छोटे या ज़्यादा दूर के मलबे के पीछे जाते हैं, जिससे बड़े यान की गैस बचती है।' },
       faq_fuel: { q: 'ईंधन इतना ज़रूरी क्यों है?', a: 'इंजन की गैस अपने आप नहीं भरती, इसलिए छोटे सफ़र उसे बचाते हैं। आपूर्ति पड़ाव पर आप और गैस खरीद सकते हैं।' },
       faq_after: { q: 'पकड़े गए मलबे का क्या होता है?', a: 'वह रेडिएटर की नोक पर या बेटी यान पर रहता है। अगले क्षेत्र तक के सफ़र में छोटी भट्ठियाँ उसे पिघला देती हैं।' },
@@ -611,7 +611,7 @@ const FAQ_TEXT = {
     items: {
       faq_what: { q: 'Space Cowboy என்றால் என்ன?', a: 'செயற்கைக்கோளை இயக்கி, விண்வெளிக் குப்பை மற்ற செயற்கைக்கோள்களில் மோதும் முன் அகற்றும் விளையாட்டு.' },
       faq_real: { q: 'இந்தச் செயற்கைக்கோள் உண்மையானதா?', a: 'இன்னும் இல்லை. யாராவது கட்டுவதற்கு முன், உண்மையான இயற்பியலுடன் செயற்கைக்கோள் வடிவமைப்பை இந்த விளையாட்டு சோதிக்கிறது.' },
-      faq_win: { q: 'எப்படி வெல்வது?', a: '60 குப்பைத் துண்டுகளைப் பிடியுங்கள்: 12 பணிகள், ஒவ்வொன்றிலும் 5 பிடிப்புகள்.' },
+      faq_win: { q: 'எப்படி வெல்வது?', a: '60 குப்பைத் துண்டுகளைப் பிடியுங்கள்: 3 பயிற்சிப் பணிகள், பிறகு 9 பணிகள், ஒவ்வொன்றிலும் 5 பிடிப்புகள்.' },
       faq_daughters: { q: 'மகள் கலங்கள் என்றால் என்ன?', a: 'நீண்ட கயிறுகளில் உள்ள நான்கு உதவிக் கலங்கள். இன்னும் சிறிய அல்லது இன்னும் தொலைவில் உள்ள குப்பையைத் தேடிப் போய், பெரிய கலத்தின் எரிவாயுவைச் சேமிக்கின்றன.' },
       faq_fuel: { q: 'எரிபொருள் ஏன் இவ்வளவு முக்கியம்?', a: 'இயந்திர எரிவாயு தானாக நிரம்பாது, அதனால் குறுகிய பயணங்கள் அதைச் சேமிக்கும். விநியோக நிறுத்தத்தில் மேலும் வாங்கலாம்.' },
       faq_after: { q: 'நான் பிடிக்கும் குப்பைக்கு என்ன ஆகும்?', a: 'அது ரேடியேட்டர் முனையிலோ மகள் கலத்திலோ இருக்கும். அடுத்த களத்துக்கான பயணத்தில் சிறிய உலைகள் அதை உருக்கும்.' },

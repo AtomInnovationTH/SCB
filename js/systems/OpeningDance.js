@@ -65,6 +65,10 @@ const SHIP_WINGS_ROLLED_UP = Object.freeze({ wing1: 0, wing2: 0 });
  *  starts). The first is true only at the start field; elsewhere `_arrivedLine` says the field she is at. The wings
  *  open on the player's first action (StartOpening, "Solar panels open. Power coming in.", DECISIONS "Opening at the start"). */
 export const START_ARRIVED_FIRST_LINE = 'Arrived at first debris field.';
+/** A new game or a retry (training mission 1 at the start field) says this instead of START_ARRIVED_FIRST_LINE: the
+ *  first pieces are held in place (owner 2026-10-31: "Debris is fixed in place, like a shooting gallery"; DECISIONS §38
+ *  row 9). A continue at the start field keeps the plain line. */
+export const START_TRAINING_LINE = 'Arrived at the training range. The pieces are held in place for practice.';
 export const START_SYSTEMS_LINE = 'Systems... nominal.';
 
 /** Zero progress — what every consumer sees before t = 0 and after unbind. Frozen: the idle object is shared. */
@@ -396,13 +400,13 @@ class OpeningDance {
   _arrivedLine(newGame, atStart = false) {
     // A retry always restarts at the start field: said without asking the registry, so it never depends on whether the
     // registry's own GAMEOVER_CONTINUE listener has run yet.
-    if (atStart) return START_ARRIVED_FIRST_LINE;
+    if (atStart) return START_TRAINING_LINE;
     let f = null;
     try { f = this._fieldProvider ? this._fieldProvider() : null; } catch (_e) { f = null; }
-    if (!f) return newGame ? START_ARRIVED_FIRST_LINE : null;
+    if (!f) return newGame ? START_TRAINING_LINE : null;
     if (f.berthed) return SATELLITE_ARRIVED_LINE;
     if (f.free) return freeArrivedLine(f.altKm);
-    if (f.start) return START_ARRIVED_FIRST_LINE;
+    if (f.start) return newGame ? START_TRAINING_LINE : START_ARRIVED_FIRST_LINE;
     return fieldArrivedLine(f.altKm);
   }
 

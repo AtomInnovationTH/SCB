@@ -142,7 +142,7 @@ export const HOTKEY_GROUPS = [
       { id: 'faq_real', q: 'Is the satellite real?',
         a: 'Not yet. The game tests a satellite design before anyone builds it, using real physics.' },
       { id: 'faq_win', q: 'How do I win?',
-        a: 'Catch 60 pieces of junk: 12 missions of 5 catches each.' },
+        a: 'Catch 60 pieces of junk: 3 training missions, then 9 missions, 5 catches each.' },
       { id: 'faq_daughters', q: 'What are the daughters?',
         a: 'Four helper ships on long lines. They go after smaller or farther junk, which saves the big ship\'s gas.',
         link: 'robotic_arm' },
