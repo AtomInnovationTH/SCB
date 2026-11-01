@@ -24,6 +24,8 @@ import { isFree, samePiece, netRefusalLine, wrapRefusalLine, SCAN_FIRST_LINE, DA
 import { openingDance } from './OpeningDance.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { radToDeg } from '../core/MathUtil.js';
+import { orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
+import { TimeAuthority } from './TimeAuthority.js';
 
 /**
  * The line posted when a daughter's pilot view opens. Arrow keys (the turn pad on glass) steer her only while she holds
@@ -35,6 +37,38 @@ export function pilotLine(name) {
   return GestureHints.isGlass()
     ? `Piloting ${name}. The turn pad steers her once she holds station · tap her row in DAUGHTERS again: back to the mother.`
     : `Piloting ${name}. Arrow keys steer her once she holds station · Esc, V or her number again: back to the mother.`;
+}
+
+/**
+ * Where the piece will be, as a distance from the SHIP CENTRE (the HUD's and the in-flight check's basis), when a mother
+ * net launched now makes contact. The real net, measured (test-NetReachGate.js): it sits on the ship for CAST_WINDUP +
+ * SPIN_UP_TIME (`delayS`), then flies at `speedMps` from the muzzle and makes contact when its front is one mouth radius
+ * (`catchRadiusM`) from the piece. The piece moves in a straight line at `relVel` (the aim's linear lead) for the whole
+ * time. Pure; scene units and scene units per real second in, metres out. Matched the real NetProjectile to 0.01 m.
+ * @param {{x,y,z}} shipPos - ship centre (scene units)
+ * @param {{x,y,z}} muzzle - the pod's muzzle (scene units)
+ * @param {{x,y,z}} piecePos - piece position now (scene units)
+ * @param {{x,y,z}|null} relVel - the piece's velocity relative to the ship (scene units per real s); null reads as still
+ * @param {number} speedMps - net launch speed (m/s)
+ * @param {number} delayS - seconds between the press and the start of the flight
+ * @param {number} catchRadiusM - mouth radius (m)
+ * @returns {number} metres; Infinity when a position is missing or the piece outruns the net
+ */
+export function netArrivalRangeM(shipPos, muzzle, piecePos, relVel, speedMps, delayS, catchRadiusM) {
+  if (!shipPos || !muzzle || !piecePos) return Infinity;
+  const M = Constants.SCENE_UNITS_PER_METER;
+  const px = (piecePos.x - muzzle.x) / M, py = (piecePos.y - muzzle.y) / M, pz = (piecePos.z - muzzle.z) / M;
+  const r0 = Math.sqrt(px * px + py * py + pz * pz);
+  const cx = (piecePos.x - shipPos.x) / M, cy = (piecePos.y - shipPos.y) / M, cz = (piecePos.z - shipPos.z) / M;
+  if (!relVel || !(speedMps > 0)) return Math.sqrt(cx * cx + cy * cy + cz * cz);   // no velocity: the range now is all there is
+  const vx = relVel.x / M, vy = relVel.y / M, vz = relVel.z / M;
+  const vr = r0 > 0 ? (vx * px + vy * py + vz * pz) / r0 : 0;   // m/s along the muzzle -> piece line
+  if (vr >= speedMps) return Infinity;
+  // net front at speed * (t - delay) = piece range - mouth radius, the piece's range growing at vr
+  const path = Math.max(0, r0 - catchRadiusM) + speedMps * delayS;
+  const t = Math.max(delayS, path / (speedMps - vr));
+  const ax = cx + vx * t, ay = cy + vy * t, az = cz + vz * t;
+  return Math.sqrt(ax * ax + ay * ay + az * az);
 }
 
 /** The reason text `AutopilotSystem._rejectAim` sends when the player's own steering ended the turn (AutopilotSystem `onManualRotate`). */
@@ -2613,6 +2647,38 @@ export class InputManager {
   }
 
   /**
+   * The piece's velocity relative to the ship from the two orbits (scene units / real s), for the first press after a pick,
+   * before `_sampleReach` has 4 frames. Both are inertial km/s (debris `orbitToSceneCartesianInto`, ship `getVelocity`); one
+   * real second is `TimeAuthority.BASE_SCALE` game seconds (the unit `netFlightSpeedMps` uses; a warp rate on top is not
+   * read, and the tracker takes over after 4 frames). Null for a piece that does not follow its orbit (an onboarding or arm
+   * pin, a captured piece, a position that is not on its orbit), no orbit, or a ship with no velocity. Matched to a finite difference of two propagated orbits in
+   * test-NetReachGate.js.
+   * @param {object} piece
+   * @returns {{x:number,y:number,z:number}|null}
+   */
+  _orbitRelVel(piece) {
+    const d = this._deps;
+    const pl = d && d.player;
+    if (!piece || !piece.orbit || piece._onboardingPinned || piece._armPinned || piece._capturedByArm || piece._captured) return null;
+    if (!pl || typeof pl.getVelocity !== 'function') return null;
+    const sv = pl.getVelocity();
+    if (!sv || !Number.isFinite(sv.x + sv.y + sv.z)) return null;
+    const pos = this._orbPos || (this._orbPos = { x: 0, y: 0, z: 0 });
+    const vel = this._orbVel || (this._orbVel = { x: 0, y: 0, z: 0 });
+    orbitToSceneCartesianInto(piece.orbit, pos, vel);
+    if (!Number.isFinite(vel.x + vel.y + vel.z)) return null;
+    // Only a piece that sits where its orbit says (DebrisField draws it there): a pin, a scenario override or a stand-in
+    // is off its orbit by far more than this.
+    const sp = piece._scenePosition;
+    const tol = 2 * Constants.SCENE_UNITS_PER_METER;
+    if (!sp || Math.abs(sp.x - pos.x) > tol || Math.abs(sp.y - pos.y) > tol || Math.abs(sp.z - pos.z) > tol) return null;
+    const k = Constants.SCENE_SCALE * TimeAuthority.BASE_SCALE;   // km/s of game time -> scene units per real second
+    const out = this._orbRel || (this._orbRel = { x: 0, y: 0, z: 0 });
+    out.x = (vel.x - sv.x) * k; out.y = (vel.y - sv.y) * k; out.z = (vel.z - sv.z) * k;
+    return out;
+  }
+
+  /**
    * N (small net) at a piece inside reach now that will have drifted past it by the time the net arrives: one plain
    * line, LASSO_DENIED, nothing spent or started. The large net runs the same test in fireMotherNet's refusals.
    * @param {object} piece
@@ -2767,7 +2833,14 @@ export class InputManager {
         ? d.player.getNetPodPositionInto(podIndex, muzzleScratch)
         : (typeof d.player.getNetPodPosition === 'function')
           ? d.player.getNetPodPosition(podIndex) : d.player.getPosition();
-      const tp = getTargetPos();
+      // The selector's position; the piece's own when the selector has none (the aim provider keeps reading the selector only,
+      // so a piece the selector lost mid-slew still aborts the turn).
+      const tp = getTargetPos() || (target && target._scenePosition) || null;
+      if (!tp && maxReachM > 0) {
+        // No position, no judgement: never launch unjudged (the range and the arrival test both need it).
+        refuse(`Out of net envelope (${Math.round(maxReachM)}m): can't see where the piece is. Pick it again.`);
+        return true;
+      }
       if (tp && maxReachM > 0) {
         // The SAME distance the HUD shows (ship centre → piece, targetRangeM), not muzzle → piece.
         const rangeM = targetRangeM(d.player.getPosition(), tp);
@@ -2775,11 +2848,15 @@ export class InputManager {
           refuse(netRangeLine(rangeM, maxReachM, 'net'));
           return true;
         }
-        // Inside reach NOW is not enough: the net takes ~10 s to arrive. Predict the piece's range then (the aim's own
-        // linear lead: flight time = range / net speed, piece moves by its velocity relative to the ship). Past reach:
+        // Inside reach NOW is not enough: the net sits on the ship for the launch delay (CAST_WINDUP + SPIN_UP_TIME), then
+        // takes ~10 s to arrive. Predict the piece's range at contact (netArrivalRangeM: delay, flight from the muzzle to
+        // one mouth radius short of the piece, straight-line drift). Velocity: the tracked one, else the lead provider's,
+        // else the two orbits' (a fresh pick has no samples yet); none at all: the range now is all there is. Past reach:
         // refuse, no net spent.
-        const arriveM = predictedRangeAtArrivalM(d.player.getPosition(), tp,
-          this._reachRelVel(target) || relVelScenePerS, (netClass && netClass.LAUNCH_SPEED) || 10);
+        const rv = this._reachRelVel(target) || relVelScenePerS || this._orbitRelVel(target);
+        const arriveM = netArrivalRangeM(d.player.getPosition(), muzzle, tp, rv,
+          (netClass && netClass.LAUNCH_SPEED) || 10, (Constants.CAPTURE_NET.CAST_WINDUP || 0) + (Constants.CAPTURE_NET.SPIN_UP_TIME || 0),
+          ((netClass && netClass.DIAMETER) || 0) / 2);
         if (arriveM > maxReachM) {
           eventBus.emit(Events.LASSO_DENIED, { reason: 'drift_out_of_reach' });
           refuse(driftOutOfReachLine(arriveM));

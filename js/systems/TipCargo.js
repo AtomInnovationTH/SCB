@@ -452,6 +452,23 @@ export class TipCargo {
     return wanted;
   }
 
+  /**
+   * Every free, unreserved tip that exists, in `pickTip`'s order: tips whose daughter holds no catch first (in az order
+   * 40 → 220 → 140 → 320), then the ones a loaded daughter is waiting for. `pickTip()` is this list's first entry.
+   * `CaptureNet._tryLeash` walks it so a catch that cannot reach (or cannot afford the swing to) the first tip still goes
+   * to the next free one before the rack is considered.
+   * @returns {number[]} tip indices (a new array; empty when no tip is free)
+   */
+  freeTipsInOrder() {
+    const first = [];
+    const loaded = [];
+    for (const i of PICK_ORDER) {
+      if (this._slots[i] || this._reserved[i] || !this._tipRec(i)) continue;
+      (this._daughterLoaded(i) ? loaded : first).push(i);
+    }
+    return first.concat(loaded);
+  }
+
   /** @private Tip i's daughter (the one on her line: arm index = tip index) holds a catch on her rack. */
   _daughterLoaded(i) {
     const arms = this.armManager && this.armManager.arms;

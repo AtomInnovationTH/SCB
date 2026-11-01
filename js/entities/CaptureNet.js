@@ -3526,22 +3526,38 @@ export class CaptureNetSystem {
     if (!drv || !tc || typeof drv.start !== 'function') return 'rack';
     const radiusM = DebrisField.trueReachM(d, 2);       // tip-fit: the catch as drawn, not half its nominal size
     if (!tc.fits(radiusM)) return 'rack';
-    const tip = tc.pickTip();
-    if (tip == null) return 'rack';
-    // Out of the line's reach at the berth seat (a mother-net catch rides 3.3-5.0 m deep in the bag, 5.9-7.5 m from the
-    // ship centre, measured): the net's winch first pulls it in to the nose if the line can reach it from there;
-    // if not even then, the rack path takes it (folding the radiators would be for nothing).
+    // Every free, unreserved tip in the preferred order (a catch that cannot reach, or cannot pay the swing to, the first
+    // one goes to the next; owner 2026-10-31 "on 2nd capture sometimes debris is not transferred to radiators strut").
+    // A mock tip store without the list falls back to the single pick.
+    let tips;
+    if (typeof tc.freeTipsInOrder === 'function') tips = tc.freeTipsInOrder();
+    else { const one = tc.pickTip(); tips = one == null ? [] : [one]; }
+    let tip = null;
     let noseReel = false;
-    if (typeof drv.canReach === 'function' && !drv.canReach(d, tip)) {
-      if (typeof drv.canReachAtNose !== 'function' || !drv.canReachAtNose(net, d, tip)) return 'rack';
-      noseReel = true;
+    let gasShort = false;
+    const cook = Constants.isFeatureEnabled('FURNACE_COOK');
+    for (const t of tips) {
+      // Out of the line's reach at the berth seat (a mother-net catch rides 3.3-5.0 m deep in the bag, 5.9-7.5 m from the
+      // ship centre, measured): the net's winch first pulls it in to the nose if the line can reach it from there;
+      // if not even then, this tip is out (folding the radiators would be for nothing).
+      let reel = false;
+      if (typeof drv.canReach === 'function' && !drv.canReach(d, t)) {
+        if (typeof drv.canReachAtNose !== 'function' || !drv.canReachAtNose(net, d, t)) continue;
+        reel = true;
+      }
+      // A hand-off pays for one steering-gas turn. If the tank cannot pay, this tip is out: take the rack path instead of
+      // folding the radiators for nothing; `_tryCargoTransfer` says why (once) when it knows whether a cell is free. With
+      // the furnace on, the nose furnace takes a failed catch, so this check is skipped.
+      if (!cook && typeof drv.gasShort === 'function' && drv.gasShort(net, d, t, { noseReel: reel })) {
+        gasShort = true;
+        continue;
+      }
+      tip = t;
+      noseReel = reel;
+      break;
     }
-    // A hand-off pays for one steering-gas turn. If the tank cannot pay, take the rack path now instead of folding the
-    // radiators for nothing; `_tryCargoTransfer` says why (once) when it knows whether a cell is free. With the
-    // furnace on, the nose furnace takes a failed catch, so this check is skipped.
-    if (!Constants.isFeatureEnabled('FURNACE_COOK') && typeof drv.gasShort === 'function'
-        && drv.gasShort(net, d, tip, { noseReel })) {
-      net._gasShort = true;
+    if (tip == null) {
+      net._gasShort = gasShort;
       return 'rack';
     }
     // A profile trip shows ONE flown pass: once begun, the leash starts for no other catch (the trip hands this one to
