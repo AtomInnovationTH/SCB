@@ -27,7 +27,7 @@ import { recommendArmTool } from '../systems/ToolRecommender.js';
 import { daughterOutOfNetsLine, pressNToLine } from '../systems/netRouting.js';
 import { coldGasKgToPool, coldGasPoolToKg } from '../systems/ResourceSystem.js';   // the mother's tank is pool units, the bottle is kg
 import { placeName } from '../systems/resupplyWords.js';   // "resupply satellite" with the map on, "resupply stop" without
-import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
+import { computeToolOdds, makeNetOddsLockCache, padSpinTooFast } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 import { pieceLostLine } from '../systems/PieceClaim.js';
@@ -4680,7 +4680,8 @@ export class ArmUnit {
    * real spin it has (carried to the seat), so nothing is rewritten: it only
    * ends the carry (_carrySpin = false) and clears the settle. tumbleRate, the
    * axis and tumbleAngle are left as they are. _initialTumbleRate is deliberately untouched
-   * (E1 despin doctrine: spawn history is frozen).
+   * (E1 despin doctrine: spawn history is frozen). The one exception is the pad stop (_padStopSpin), which caps it at
+   * IN_SPEC_DEG so the de-spin bonus stays what it was without the stop.
    * @param {object} st — live settle state
    */
   _resumeTumbleFromRemainder(st) {
@@ -5150,6 +5151,8 @@ export class ArmUnit {
       // roughness must reach the recommender.
       material: target ? target.material : undefined,
       surfaceRoughness: target ? target.surfaceRoughness : undefined,
+      // The pad refuses a piece spinning past PAD_CONTACT.SPIN_MAX_DEG (ToolOdds.padSpinTooFast), so the auto-pad pick must see the spin.
+      tumbleRate: target ? target.tumbleRate : undefined,
     });
     this.selectedTool = rec.recommended;
     // SK entry is the lock/re-acquire seam: force the odds lock cache to rebuild even if a (pool-recycled) target
@@ -5933,6 +5936,9 @@ export class ArmUnit {
   _resolvePadGrip(target) {
     const P = Constants.PAD_CONTACT;
     const mode = this._padResolvedMode;
+    // Spin gate (owner 2026-11-01): past PAD_CONTACT.SPIN_MAX_DEG the pad slips, no roll. Same rule as the shown odds
+    // (ToolOdds.computePadOdds calls the same padSpinTooFast), so the % on the HUD is the % rolled.
+    if (padSpinTooFast(target)) { this._failPadContact('spin'); return; }
     const p = mode ? (P.P_GRIP_BY_MODE[mode] ?? P.P_GRIP_NO_MODE) : P.P_GRIP_NO_MODE;
     // Test seam: `_padRollOverride` (0..1) forces a deterministic roll.
     const roll = (this._padRollOverride != null) ? this._padRollOverride : Math.random();
@@ -5947,6 +5953,25 @@ export class ArmUnit {
     eventBus.emit(Events.PAD_ADHERED, { armId: this.id, targetId: target.id, mode });
     this._secureToolCatch(target, 'PAD',
       `${this.displayName}: Pad adhered (${mode || 'no-mode'}). Holding. Reeling in.`);
+    this._padStopSpin(target);
+  }
+
+  /**
+   * @private The pad has the piece: its spin stops (the daughter takes it), so the catch reels home still. Scoring reads the
+   * piece's rate when the catch is PROCESSED (`ScoringSystem.calculateScore`, after the reel), not at the grip, so zeroing the
+   * rate here would pay the de-spin bonus (spawned above IN_SPEC_DEG, in spec at capture) for a spin the player never tamed.
+   * To keep the bonus exactly as it was (paid only when the spin was tamed BEFORE the catch), a piece that was still above
+   * IN_SPEC_DEG at the grip has its spawn-spin memory (`_initialTumbleRate`) capped at IN_SPEC_DEG: no bonus, as before.
+   * A piece already in spec at the grip keeps its history untouched (a laser-tamed piece still earns its bonus).
+   */
+  _padStopSpin(target) {
+    const w = target.tumbleRate;
+    if (typeof w !== 'number' || !(Math.abs(w) > 0)) return;
+    const inSpecRad = degToRad((Constants.NET_TUMBLE_PENALTY && Constants.NET_TUMBLE_PENALTY.IN_SPEC_DEG) || 10);
+    if (Math.abs(w) > inSpecRad && typeof target._initialTumbleRate === 'number') {
+      target._initialTumbleRate = Math.min(target._initialTumbleRate, inSpecRad);
+    }
+    target.tumbleRate = 0;
   }
 
   _failPadContact(reason) {
@@ -5959,6 +5984,8 @@ export class ArmUnit {
     }
     const cause = reason === 'too_fast'
       ? 'Pad bounced: contact too fast.'
+      : reason === 'spin'
+        ? 'Pad slipped: the piece is spinning too fast for the pad.'
       : reason === 'timeout'
         ? 'Pad could not reach it.'
         : reason === 'no_mode'
@@ -5966,6 +5993,8 @@ export class ArmUnit {
           : 'Pad failed to adhere.';
     const msg = reason === 'too_fast'
       ? `${this.displayName}: Pad bounced: contact too fast. Returning.`
+      : reason === 'spin'
+        ? `${this.displayName}: Pad slipped: the piece is spinning too fast for the pad. Returning.`
       : reason === 'timeout'
         ? `${this.displayName}: Pad could not reach it. Returning.`
       : reason === 'no_mode'

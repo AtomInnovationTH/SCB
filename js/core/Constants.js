@@ -1005,6 +1005,10 @@ export const Constants = {
     APPROACH_V_MIN_M_S:  0.03,    // m/s — the slowest she creeps in (this is her touch speed)
     APPROACH_V_MAX_M_S:  0.5,     // m/s — the fastest she closes from far
     CONTACT_HOLD_S:      1.0,     // dwell before the P_GRIP roll
+    // The pad holds a piece spinning up to this rate with the odds below; faster and it slips (odds 0, blocker SPIN).
+    // Owner 2026-11-01 ("Pad holds up to 30°/s", plan route-1101 Q1). Source: SPIDEE's pads arrested 30°/s test articles,
+    // docs/research/2026-10-adr-capture.md:79,109. Read by ToolOdds.padSpinTooFast (shown odds) and ArmUnit._resolvePadGrip (roll).
+    SPIN_MAX_DEG:        30,      // °/s
     ENERGIZE_PULSE_S:    0.3,
     RELEASE_PULSE_S:     0.2,
     GECKO_TEMP_MIN_C:    -40,

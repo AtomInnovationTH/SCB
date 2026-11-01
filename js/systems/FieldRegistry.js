@@ -53,28 +53,9 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { engineGasKg } from './ResourceSystem.js';
-import { tripProfile, realThrustN, playSeconds, tripDragAreaM2 } from './TripProfile.js';
-
-/**
- * `tripProfile` is pure but costs up to ~10 ms for a 40-day trip and builds ~1200 sample objects; the where-next list
- * plans every field (and `defaultNext` plans them all again), and the four high fields are 25-46 day trips. So the
- * profile is remembered per full input set (every number the function reads, the constants included); callers only
- * read it. Her mass and gas change as she burns, so a changed state is a different key, never a stale answer.
- */
-const PROFILE_CACHE_MAX = 64;
-const _profileCache = new Map();
-function cachedTripProfile(args) {
-  const C = Constants;
-  const key = [args.fromKm, args.toKm, args.massKg, args.thrustN, args.ispS, args.areaM2, args.cos,
-    C.TRIP.PROFILE_STEP_S, C.TRIP.PROFILE_MAX_DAYS, C.EARTH_RADIUS_KM, C.MU_EARTH, C.G0].join('|');
-  let hit = _profileCache.get(key);
-  if (hit === undefined) {
-    hit = tripProfile(args);
-    if (_profileCache.size >= PROFILE_CACHE_MAX) _profileCache.delete(_profileCache.keys().next().value);
-    _profileCache.set(key, hit);
-  }
-  return hit;
-}
+import { realThrustN, playSeconds, tripDragAreaM2 } from './TripProfile.js';
+// The trip profile and its cache live in RouteCost (route-1101 R1): one cost model prices every leg, and `planTo` is its transfer leg.
+import { transferLeg } from './RouteCost.js';
 
 const SAVE_VERSION = 1;
 
@@ -291,10 +272,10 @@ export class FieldRegistry {
     const ispS = fuel.isp / (c > 0 ? c : 1);
     // Her drag area is the one at her radiator angle (capped at 146 deg), nose-first, wings sun-tracking.
     const areaM2 = tripDragAreaM2(Number.isFinite(opts.thetaRad) ? opts.thetaRad : p._flowerThetaRad);
-    const profile = cachedTripProfile({
+    const profile = transferLeg({
       fromKm, toKm: field.altKm, massKg: Number.isFinite(opts.lessKg) && opts.lessKg > 0 ? Math.max(1, p.mass - opts.lessKg) : p.mass, thrustN: realThrustN(fuel), ispS, areaM2,
       cos: opts.cos === undefined ? 1 : opts.cos,
-    });
+    }).profile;
     const gasAboardKg = engineGasKg(p.resources);
     const enough = profile.ok && profile.gasKg <= gasAboardKg + 1e-9;
     return { field, fromKm, profile, ispS, areaM2, gasAboardKg, enough, playS: playSeconds(profile.days) };

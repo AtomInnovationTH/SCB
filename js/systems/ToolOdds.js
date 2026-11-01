@@ -7,7 +7,7 @@
  *   NET     → computeClingProbability (CaptureNet.js) × strain survival (mirrors ArmUnit._checkNetIntegrityOnReel) × width gate
  *   MAGNET  → MAGNETIC_GRAPPLE P_GRIP_* forks (mirrors ArmUnit._resolveMagnetGrip)
  *   GRIPPER → GRIPPER_GRAPPLE P_GRIP_FIXTURED/UNFIXTURED (ArmUnit._resolveGripperLatch)
- *   PAD     → PAD_CONTACT mode resolution + P_GRIP_BY_MODE (ArmUnit._resolvePadGrip)
+ *   PAD     → PAD_CONTACT mode resolution + P_GRIP_BY_MODE + the spin gate (ArmUnit._resolvePadGrip; padSpinTooFast)
  *
  * "Honest numbers" contract: any % shown on the HUD is the % rolled at resolve time, given the same state. Where the resolve
  * depends on state that only exists after firing (in-flight spin decay), the pre-fire estimate mirrors the flight model
@@ -349,6 +349,18 @@ function computeGripperOdds(target) {
   };
 }
 
+/**
+ * True when the piece spins faster than the pad can hold (`PAD_CONTACT.SPIN_MAX_DEG`, 30°/s; owner 2026-11-01). The ONE rule:
+ * `computePadOdds` shows 0 for it and `ArmUnit._resolvePadGrip` refuses the roll with it, so the shown odds equal the roll.
+ * @param {{tumbleRate?: number}|null} target tumbleRate in rad/s (absent or non-finite = not spinning)
+ * @returns {boolean}
+ */
+export function padSpinTooFast(target) {
+  const maxDeg = (Constants.PAD_CONTACT && Constants.PAD_CONTACT.SPIN_MAX_DEG);
+  if (!(maxDeg >= 0) || !target || typeof target.tumbleRate !== 'number' || !Number.isFinite(target.tumbleRate)) return false;
+  return Math.abs(target.tumbleRate) * RAD2DEG > maxDeg + 1e-9;   // 30°/s exactly still holds
+}
+
 /** PAD odds — mirrors ArmUnit._resolvePadMode/_resolvePadGrip. @private */
 function computePadOdds(target, opts) {
   if (Constants.isFeatureEnabled && !Constants.isFeatureEnabled('SPINNER_PAD')) {
@@ -358,6 +370,10 @@ function computePadOdds(target, opts) {
   // Contact-velocity gate: faster than the soft-contact regime → deterministic bounce.
   if (typeof opts.contactVel === 'number' && opts.contactVel > (P.CONTACT_VEL_MAX_M_S ?? 0.2)) {
     return { p: 0, blocker: 'FAST', hint: 'contact too fast. Ease the approach', mode: null };
+  }
+  // Spin gate: past SPIN_MAX_DEG the pad slips, so the odds are 0 (mode null: ToolRecommender's auto-pad pick needs a mode, and gets the spin through the tumbleRate ArmUnit passes it).
+  if (padSpinTooFast(target)) {
+    return { p: 0, blocker: 'SPIN', hint: 'spinning too fast for the pad', mode: null };
   }
   const uvDoses = (typeof opts.padUvDoses === 'number') ? opts.padUvDoses : (P.UV_CURE_DOSES_Y0 || 0);
   const mode = resolvePadModeForOdds(target, uvDoses);
@@ -469,4 +485,4 @@ export function computeBestTool(odds, toolset) {
   return (toolset && toolset[0]) || 'NET';
 }
 
-export default { computeToolOdds, computeBestTool, computeStrainFailProbability, estimateSpinFractionAtContact, resolveCaptureModeForOdds, resolvePadModeForOdds, toolShortLabel, makeNetOddsLockCache, TOOL_PREF_ORDER };
+export default { computeToolOdds, computeBestTool, computeStrainFailProbability, estimateSpinFractionAtContact, resolveCaptureModeForOdds, resolvePadModeForOdds, padSpinTooFast, toolShortLabel, makeNetOddsLockCache, TOOL_PREF_ORDER };
