@@ -3131,6 +3131,9 @@ export class InputManager {
       const captureTarget = arm.target
         || this._findNearestDebrisToArm(arm, d.debrisField);
       if (captureTarget) {
+        // Her manual net is a net like any other (owner 2026-11-01 "Yes, same rule"): refuse, spend nothing, when the piece it is
+        // aimed at is past her reach. Judged before `arm.target` is set, so a refusal leaves her exactly as she was.
+        if (this._refuseDaughterNetOutOfReach(arm, captureTarget)) return true;
         if (!arm.target) arm.target = captureTarget;
         if (!arm.manualNetDeploy()) {
           d.audioSystem?.playClick();
@@ -3235,15 +3238,19 @@ export class InputManager {
    * holds 4-12 m off, STATION_KEEP.MIN/MAX_STANDOFF). Only her net (selectedTool NET, or multi-tool off); the gripper and
    * pad are not judged. The refusal lines are the mother's (§45 texts kept). Missing data (no position, no `config.type`)
    * means fire, as `withinNetReach` does for headless mocks.
-   * @param {object} arm - an ArmUnit in STATION_KEEP
+   * A PILOTED daughter still flying in (TRANSIT / APPROACH) fires her net with `manualNetDeploy` (aimed at `arm.target`, else the
+   * nearest piece, both set by captureWithPilotedArm); that path passes the piece it will use as `aimedPiece`, which is always a
+   * net, so the tool check is skipped.
+   * @param {object} arm - an ArmUnit in STATION_KEEP, or flying in with `aimedPiece`
+   * @param {object|null} [aimedPiece] - the piece a manual net deploy is aimed at (flying-in path only)
    * @returns {boolean} true when refused
    */
-  _refuseDaughterNetOutOfReach(arm) {
+  _refuseDaughterNetOutOfReach(arm, aimedPiece = null) {
     const d = this._deps;
     if (!arm || !d) return false;
     const multi = Constants.isFeatureEnabled('DAUGHTER_MULTITOOL') && typeof arm.dispatchSelectedTool === 'function';
-    if (multi && arm.selectedTool && arm.selectedTool !== 'NET') return false;   // gripper / pad / magnet: not a net
-    const piece = arm._stationKeepTarget || arm.target;                         // HER piece, not the selected one
+    if (!aimedPiece && multi && arm.selectedTool && arm.selectedTool !== 'NET') return false;   // gripper / pad / magnet: not a net
+    const piece = aimedPiece || arm._stationKeepTarget || arm.target;           // HER piece, not the selected one
     const type = arm.config && arm.config.type;
     const armPos = arm.position;
     const piecePos = piece && piece._scenePosition;
@@ -3260,8 +3267,8 @@ export class InputManager {
     };
     const nowM = targetRangeM(armPos, piecePos);
     if (nowM > reachM) return deny(netRangeLine(nowM, reachM, 'net'));
-    const rv = arm._leadTargetVelValid ? arm._leadTargetVel : null;
-    const arriveM = netArrivalRangeM(armPos, armPos, piecePos, rv, netClass.LAUNCH_SPEED || 10,
+    const rv = arm._leadTargetVelValid && (!aimedPiece || aimedPiece === arm.target) ? arm._leadTargetVel : null;
+    const arriveM = netArrivalRangeM(armPos, armPos, piecePos, rv, netClass.LAUNCH_SPEED,
       (CN.CAST_WINDUP || 0) + (CN.SPIN_UP_TIME || 0), (netClass.DIAMETER || 0) / 2);
     if (arriveM > reachM) return deny(driftOutOfReachLine(arriveM), 'drift_out_of_reach');
     return false;
