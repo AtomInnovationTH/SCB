@@ -51,6 +51,12 @@ export function drawnCatchRadiusM(d) {
 export function wireBagRadiusM(d) {
   return Math.max(0.02, drawnCatchRadiusM(d)) + BAG_MARGIN_M;
 }
+/**
+ * How far behind the latch point (toward the strut) a tip's drawn ball may reach (m): the PLANE rule of the tight pull-in,
+ * `TipCargo.TIGHT.BACK_M` (mirrored, not imported; test-TipTightBag pins the two equal). The ball is cut flat there, and the
+ * neck washer sits AT the latch point (the neck is clamped there), however far the catch was reeled in.
+ */
+export const BAG_BEHIND_LATCH_MAX_M = 0.10;
 const BAG_FADE_S = 0.5;
 const BAG_OPACITY = 0.55;
 const CONE_EASE_PER_S = 8;           // 1/s
@@ -123,7 +129,8 @@ export class LeashVisual {
       const wireMat = new THREE.MeshBasicMaterial({
         color: Constants.NET_WEB.WEB_COLOR, wireframe: true, transparent: true, opacity: 0, depthWrite: false,
       });
-      const wire = new THREE.Mesh(this.wireGeo, wireMat);
+      const geo = this.wireGeo.clone();                             // its own copy: the ball is cut flat behind a tip's latch point
+      const wire = new THREE.Mesh(geo, wireMat);
       wire.name = `${group.name}_Wire`;
       wire.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
       wire.frustumCulled = false;
@@ -134,7 +141,8 @@ export class LeashVisual {
       group.add(wire);
       group.add(washer);
       this.root.add(group);
-      this.bags.push({ group, wire, wireMat, washer, alpha: 0, sa: 0 });   // sa: the sphere's own fade (0..1), <= alpha in effect
+      // sa: the sphere's own fade (0..1), <= alpha in effect; cut: the flat cut now in `geo` ('' = a whole ball)
+      this.bags.push({ group, wire, wireMat, washer, geo, alpha: 0, sa: 0, cut: '' });
     }
 
     // Like the ship: drawn in the depth-cleared near pass, so the hull cannot paint over the line or bags.
@@ -248,9 +256,10 @@ export class LeashVisual {
       const pos = d && d._scenePosition;
       const bag = this.bags[i];
       if (d && pos && !(handShown && hd === d)) {
-        if (tc.latchWorldInto && tc.latchWorldInto(i, _a)) _b.copy(_a).sub(pos); else _b.set(1, 0, 0);
+        const latched = !!(tc.latchWorldInto && tc.latchWorldInto(i, _a));
+        if (latched) _b.copy(_a).sub(pos); else _b.set(1, 0, 0);
         if (prevHandD === d && hand.alpha > 0) { bag.alpha = Math.max(bag.alpha, hand.alpha); bag.sa = Math.max(bag.sa, hand.sa); this._hideNow(hand); }
-        this._showBag(bag, pos, _b, this._radiusM(d), dt, true, true);       // a tip shows the ball for every catch, netted or not
+        this._showBag(bag, pos, _b, this._radiusM(d), dt, true, true, latched);   // a tip shows the ball for every catch, netted or not
       } else {
         if (handShown && hd && hd === d && bag.alpha > 0) { hand.alpha = Math.max(hand.alpha, bag.alpha); hand.sa = Math.max(hand.sa, bag.sa); this._hideNow(bag); }
         this._showBag(bag, null, null, 0, dt, false);
@@ -264,7 +273,7 @@ export class LeashVisual {
       // the latch) the ball fades in round it as on every tip catch.
       let onTip = false;
       if (tc && typeof tc.debrisAt === 'function') for (let i = 0; i < 4 && !onTip; i++) onTip = tc.debrisAt(i) === hd;
-      this._showBag(hand, _vB, _b, this._radiusM(hd), dt, true, onTip || !this._netted(hd));
+      this._showBag(hand, _vB, _b, this._radiusM(hd), dt, true, onTip || !this._netted(hd), onTip && !!view.tipEngaged && !!view.tipWorld);
       this._handDebris = hd;
     } else {
       this._showBag(hand, null, null, 0, dt, false);
@@ -289,8 +298,14 @@ export class LeashVisual {
     return wireBagRadiusM(d) - BAG_MARGIN_M;
   }
 
-  /** Place one bag (or fade it out). `neck` = direction from the bag centre to its neck (any length). */
-  _showBag(bag, pos, neck, radiusM, dt, show, wire = true) {
+  /**
+   * Place one bag (or fade it out). `neck` = direction from the bag centre to its neck (any length).
+   * `seated`: the neck IS the latch point, so its length is the centre's distance to the latch (a catch seated on a tip, which
+   * the tight pull-in may have reeled in closer than the ball's radius): the washer then sits AT the latch point (the neck is
+   * clamped there; never behind it), and the ball is cut flat `BAG_BEHIND_LATCH_MAX_M` behind it, as far as the catch itself
+   * may reach (the plane rule). A bag in flight (`seated` false) keeps the washer on the ball's surface and a whole ball.
+   */
+  _showBag(bag, pos, neck, radiusM, dt, show, wire = true, seated = false) {
     const step = dt > 0 ? dt / BAG_FADE_S : 1;                                // a held world (dt 0) jumps to the end
     if (show) {
       bag.alpha = Math.min(1, bag.alpha + step);
@@ -300,11 +315,15 @@ export class LeashVisual {
       // The ball has its own fade: in when allowed (same 0.5 s), gone at once when not (a netted catch in flight);
       // a fade-out of the bag takes the ball down with it, never up.
       bag.sa = wire ? Math.min(1, bag.sa + step) : 0;
+      let cut = Infinity;
       if (neck.lengthSq() > 1e-30) {
+        const toLatch = neck.length();                               // scene units
         neck.normalize();
-        bag.washer.position.copy(neck).multiplyScalar(R * M);
+        bag.washer.position.copy(neck).multiplyScalar(seated ? Math.min(R * M, toLatch) : R * M);
         bag.washer.quaternion.setFromUnitVectors(_Z, neck);
+        if (seated) cut = (toLatch + BAG_BEHIND_LATCH_MAX_M * M) / (R * M);   // in the unit ball's own scale
       }
+      this._cutBall(bag, neck, cut);
     } else {
       bag.alpha = Math.max(0, bag.alpha - step);
       bag.sa = Math.max(0, bag.sa - step);
@@ -312,6 +331,29 @@ export class LeashVisual {
     bag.wire.visible = bag.sa > 0;
     bag.wireMat.opacity = BAG_OPACITY * Math.min(bag.alpha, bag.sa);
     bag.group.visible = bag.alpha > 0;
+  }
+
+  /**
+   * Cut the unit ball flat at `uMax` (unit-ball scale) along `dir`: every vertex further than that along `dir` is moved back
+   * onto the plane. `uMax` >= 1 leaves a whole ball. Redone only when the cut changes (0.1 mm of a 1 m ball, 0.001 of direction).
+   */
+  _cutBall(bag, dir, uMax) {
+    const whole = !(uMax < 1) || !dir;
+    const key = whole ? '' : `${Math.round(uMax * 1e4)}|${Math.round(dir.x * 1e3)},${Math.round(dir.y * 1e3)},${Math.round(dir.z * 1e3)}`;
+    if (key === bag.cut) return;
+    bag.cut = key;
+    const src = this.wireGeo.attributes.position.array;
+    const dst = bag.geo.attributes.position.array;
+    if (whole) dst.set(src);
+    else {
+      const nx = dir.x, ny = dir.y, nz = dir.z;
+      for (let k = 0; k < src.length; k += 3) {
+        const over = src[k] * nx + src[k + 1] * ny + src[k + 2] * nz - uMax;
+        if (over > 0) { dst[k] = src[k] - over * nx; dst[k + 1] = src[k + 1] - over * ny; dst[k + 2] = src[k + 2] - over * nz; }
+        else { dst[k] = src[k]; dst[k + 1] = src[k + 1]; dst[k + 2] = src[k + 2]; }
+      }
+    }
+    bag.geo.attributes.position.needsUpdate = true;
   }
 
   _updateCones(view, dt) {
@@ -344,6 +386,7 @@ export class LeashVisual {
     for (const b of this.bags) {
       this.root.remove(b.group);
       b.wireMat.dispose();
+      b.geo.dispose();
     }
     this.root.remove(this.line);
     if (this.sceneManager && typeof this.sceneManager.unregisterNearFieldRoot === 'function') this.sceneManager.unregisterNearFieldRoot(this.root);

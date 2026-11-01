@@ -3297,6 +3297,13 @@ export const Constants = {
     // (1 = ON the face); RAMP = reel-progress span after WRAP_END over which the gather eases in.
     WRAP_SOCK_GATHER_FRAC: 0.75,
     WRAP_SOCK_GATHER_RAMP: 0.25,
+    // The corner weights are sewn to the net's edge. On contact the fabric and the catch's friction stop the hem's spin,
+    // and a bag that is no longer round cannot spin round a fixed shape: through ENVELOP the weights' spin advance fades
+    // linearly to 0 over this many seconds, and CINCH_CLOSING does not advance it at all (the angle then freezes into the
+    // cinched states). Without it the weights orbited at the net's spin (0.4-0.8 rad per frame), sampling a different
+    // radius of the dented, jiggling edge every frame: the white balls opened and closed several times a second
+    // (owner 2026-10-31, measured: radius steps up to 0.30 m per 1/30 s frame, ~33-41 direction flips in 1.5-2 s).
+    RIM_SPIN_FADE_S: 0.3,
   },
 
   // CAPTURE NET SYSTEM (CAPTURE_NET.md §2–§6 canonical spec; gated by FEATURE_FLAGS.CAPTURE_NET)

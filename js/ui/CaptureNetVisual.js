@@ -62,6 +62,8 @@ const _v3a = new THREE.Vector3();
 const _v3b = new THREE.Vector3();
 const _v3c = new THREE.Vector3();
 const _v3d = new THREE.Vector3();
+// Scratch for a corner weight's point on the net's drawn mouth edge (NetMeshKit.mouthRingPoint).
+const _edgePt = { x: 0, y: 0, z: 0 };
 // Scratch rotation state and spec for the per-frame contents-BOX spec; the kit COPIES the numbers into a per-handle
 // object, so one scratch serves every live net.
 const _qA = new THREE.Quaternion();
@@ -96,7 +98,7 @@ const _NW = Constants.NET_WEB;
 // The held bag + the tether in the near pass. A mother net that closes on a catch is drawn as a compact bag around
 // it from the moment the cinch is closed until the hand-off ends. The kit is built as the 6.8 m flight cone (apex at
 // the tether end, rim ring at its mouth plane); the reel drew the piece home while that cone stayed full size, so the
-// rim ring and strands ran metres past the piece. Sizes are in catch radii (the DRAWN radius: readability floor and
+// rim ring and drawstring ran metres past the piece. Sizes are in catch radii (the DRAWN radius: readability floor and
 // digestion chop deflation included), so the bag always wraps what is drawn: the apex ball touches the rear of the
 // catch, the rim ring sits RIM_AHEAD_FRAC radii past its centre, the open-mouth radius is MOUTH_FRAC radii (the kit
 // closes it to DRAWSTRING_RADIUS_FRAC_CLOSED of that, floored onto the catch by its contents floor). The flight cone
@@ -113,11 +115,13 @@ const BAG = {
   // (estimate: near true size, still a visible bead)
   WEIGHT_RADIUS_M: 0.02,
   // During the leash hand-off the net cinches tight round the catch, so that at the latch the net bag is the size of
-  // the wire bag that takes over (LeashVisual: catch radius + its margin): every part of the bag lies on a sphere of
-  // that radius round the catch (apex at the rear, rim ring at CINCH_RIM_AHEAD_OF_SPHERE of the radius ahead of the
-  // centre, the weights' own radius inside it). The bag eases from the reel's shape to that one as the catch nears
-  // the latch point (see _handOffCinch).
-  CINCH_RIM_AHEAD_OF_SPHERE: 0.5,
+  // the wire bag that takes over (LeashVisual: catch radius + its margin): every part of the bag lies inside a sphere of
+  // that radius round the catch (apex at the rear touching it, the closed loop of the mouth ring on it at the front, the
+  // weights' own radius inside it). The bag eases from the reel's shape to that one as the catch nears the latch point
+  // (see _handOffCinch). The open mouth narrows to CINCH_MOUTH_OF_SPHERE sphere radii and the kit closes the loop to its
+  // fraction of that (0.15 x 2 = a loop radius of 0.3 sphere radii: 0.20 m on a 1 m catch, where the closing used to turn
+  // round and open again). The loop only tightens; its plane is wherever the sphere is exactly that wide (W3, see _shapeHeldBag).
+  CINCH_MOUTH_OF_SPHERE: 2.0,
   CINCH_ARRIVED_FRAC: 0.1,             // the cinch is complete when the catch is this close (of its starting distance) to the latch point
   HUB_RADIUS_M: 0.05,                   // the apex hub's drawn radius (measured 0.048 m)
 };
@@ -601,6 +605,11 @@ export class CaptureNetVisual {
         contentsZ: cs.z,
         contentsBox: cs.box,
         catchSizeM: cs.sizeM,
+        // The two spheres the leash hand-off left on this bag (`_shapeHeldBag`; it no longer runs once the bag is carried, so
+        // they stay as the last hand-off frame had them; 0 for a bag that never took the hand-off, a daughter's). Without
+        // them the mouth ring would go back to the catch's tilted box and the film out to its corners at the latch: a pop.
+        rimSphereR: vis._rimSphereR || 0,
+        bagSphereR: vis._bagSphereR || 0,
         localCamPos: this._sceneManager?.camera
           ? vis.kitHandle.group.worldToLocal(_v3c.copy(this._sceneManager.camera.position))
           : undefined,
@@ -996,7 +1005,7 @@ export class CaptureNetVisual {
     group.add(canisterMesh);
 
     // Cone mesh + rim weights + drawstring + apex hub come from the shared NetMeshKit, which reproduces the
-    // daughter's ceremony web 1:1 (cone rotateX/translate, closedRadius, spoke pattern). _updateCeremonyState keeps
+    // daughter's ceremony web 1:1 (cone rotateX/translate, closedRadius, drawstring loop). _updateCeremonyState keeps
     // positioning the kit-owned `rimWeights` with its own tested math. Defaults match the old inline build (16×4 cone,
     // opacity 0.55, COL_DISC, 0.08 m nodes, 0.05 m apex hub).
     const diameter = netProjectile.netClass.DIAMETER || 8;
@@ -1018,6 +1027,9 @@ export class CaptureNetVisual {
       apexTransparent: true,
       apexOpacity: 1.0,
     });
+    // The orange cord lies along the net's drawn mouth edge through the corner weights (opt-in; the lasso's own kit keeps
+    // its chord loop). The only build site: mother and daughter capture nets.
+    NetMeshKit.setCordFollowsRim(kitHandle, true);
     const coneMesh = kitHandle.coneMesh;
     const rimWeights = kitHandle.rimWeights;
     const rimWeightMats = kitHandle.rimWeightMats;
@@ -1257,7 +1269,7 @@ export class CaptureNetVisual {
             });
             beat.cinch = open;
             // The furniture must open WITH the fabric: the state switch never runs for a detached bag, so drive the
-            // rim ring/strands here or the weights stay bunched around a bag that has already let go.
+            // rim ring/drawstring here or the weights stay bunched around a bag that has already let go.
             this._stageFailureFurniture(vis);
           }
           if (f >= 1) this._endFailureBeat(key, vis);
@@ -1823,7 +1835,9 @@ export class CaptureNetVisual {
       } else if (state === STATES.CINCH_CLOSING) {
         drape = 1;
         cinchFrac = clamp01(net.stateTimer / CN.CINCH_CLOSE_TIME);
-        if (garnish) jiggleAmp = mouthRadius * _NT.DRAPE_JIGGLE_CINCH_FRAC * (1 - cinchFrac);
+        // Fade the jiggle in over the first 15 % of the cinch: ENVELOP ends at 0, so a full-amplitude start hops the
+        // weights and cord (owner 2026-10-22). The phase keeps accumulating, so motion stays continuous.
+        if (garnish) jiggleAmp = mouthRadius * _NT.DRAPE_JIGGLE_CINCH_FRAC * (1 - cinchFrac) * smoothstep01(clamp01(cinchFrac / 0.15));
       } else if (state === STATES.CAPTURED || state === STATES.REELING
                  || state === STATES.BERTHED || state === STATES.COLLARED
                  || state === STATES.TRANSFERRING
@@ -1870,6 +1884,8 @@ export class CaptureNetVisual {
           contentsZ,
           contentsBox,
           catchSizeM,
+          rimSphereR: vis._rimSphereR || 0,   // > 0 only while the leash hand-off cinches (see _shapeHeldBag)
+          bagSphereR: vis._bagSphereR || 0,
           // camera in the kit's LOCAL frame for per-thread depth shading (the kit stays pure-local-space;
           // worldToLocal writes in place).
           localCamPos: this._sceneManager?.camera
@@ -2009,21 +2025,27 @@ export class CaptureNetVisual {
         coneMesh.material.opacity = 0.55;
         // Cone scale UNCHANGED — no shrink
 
-        // Weights sweep -coneHeight → -2 × coneHeight, i.e. PAST the mouth plane: the target sits at z ≈ -mouthR
-        // (= -0.5 × D local, ~0.4 m SHORT of the mouth plane at -0.55 × D), so for the bag to engulf it the weights
-        // must OVERSHOOT the mouth (Newton's first law during deceleration) and wrap it inside the closing bag;
-        // retracting toward the daughter would pull them away from the target. Drawstring strands (apex → weight)
-        // lengthen automatically, reading as bag-cone fabric draping around the target.
+        // The corner weights are sewn to the net's edge, so they ride the drawn mouth edge (the film's last ring) and the
+        // cord with them: as the bag drapes round the catch (drape = progress here) the weights and the cord go wherever
+        // that edge goes, never off beside the net. `mouthRingPoint` reads the edge the film drew this frame
+        // (updateWebDrape ran above). Fallback for a kit-less / membrane-less visual: the old circle at the mouth plane
+        // swept to twice the cone height.
+        // The spin fades out over the first RIM_SPIN_FADE_S (contact friction stops the hem; a non-round bag can't spin
+        // round a fixed shape), so the weights stop sampling a different radius of the dented edge every frame.
         const envProgress = clamp01(net.stateTimer / CN.ENVELOP_TIME);
-        vis.spinAngle += net.spinRate * Math.PI * 2 * dt;
+        vis.spinAngle += net.spinRate * Math.PI * 2 * dt * Math.max(0, 1 - net.stateTimer / _NW.RIM_SPIN_FADE_S);
         const envZ = -coneHeight * (1 + envProgress);
         for (let i = 0; i < weightCount; i++) {
           const angle = (2 * Math.PI * i / weightCount) + vis.spinAngle;
-          rimWeights[i].position.set(
-            mouthRadius * Math.cos(angle),
-            mouthRadius * Math.sin(angle),
-            envZ,
-          );
+          if (vis.kitHandle && NetMeshKit.mouthRingPoint(vis.kitHandle, angle, _edgePt)) {
+            rimWeights[i].position.set(_edgePt.x, _edgePt.y, _edgePt.z);
+          } else {
+            rimWeights[i].position.set(
+              mouthRadius * Math.cos(angle),
+              mouthRadius * Math.sin(angle),
+              envZ,
+            );
+          }
           rimWeights[i].visible = true;
         }
 
@@ -2047,31 +2069,31 @@ export class CaptureNetVisual {
 
         // Driven by stateTimer / CINCH_CLOSE_TIME, NOT `net.tangleQuality` (0 throughout this state, only set at
         // CAPTURED: the ring stayed at mouthRadius for the whole cinch, then snapped closed in a SINGLE FRAME), so it
-        // contracts smoothly from mouthRadius to closedRadius across the camera's CINCH beat. The ring contracts at
-        // z=-coneHeight (the mouth plane, 0.4 m past the target along the launch direction), centred on the debris
-        // within the cone mouth's half-thickness; a ring at z=0 (apex plane) would close ~coneHeight (4.4 m for LARGE
-        // D=8) BEHIND the target, on the daughter side. Drawstring strands from apex (z=0) to the ring render as the
-        // long bag-cone strands cinching closed at the debris.
+        // contracts smoothly across the camera's CINCH beat. The corner weights are sewn to the net's edge: each rides
+        // the drawn mouth edge (the film's last ring, which updateWebDrape drew this frame with drape 1 and cinch =
+        // progress, floored on the catch), and the cord lies along that edge through them, so the weights and the cord
+        // close together with the bag round the debris. Fallback for a kit-less / membrane-less visual: a circle
+        // (radius lerp mouthRadius → closedRadius, on the mouth plane at z = -coneHeight).
         const cinchProgress = clamp01(net.stateTimer / CN.CINCH_CLOSE_TIME);
-        // The sweep closes ONTO the catch and stops: floored at the mouth-plane contents floor (the kit's
-        // mouthFloorRadius), matching the film's rim ring, instead of sweeping through a catch that reaches the mouth
-        // plane. The floor is 0 whenever the contents stop short of the mouth (the mother scenario included), so the
-        // gated draw is bit-identical; at cinchProgress 1 this equals _setCinchedRim's radius exactly.
+        // Fallback radius, floored at the mouth-plane contents floor (the kit's mouthFloorRadius) like the film's rim ring;
+        // at cinchProgress 1 this equals _setCinchedRim's radius exactly.
         const curR = Math.max(
           lerp(mouthRadius, closedRadius, cinchProgress),
           NetMeshKit.mouthFloorRadius(vis.kitHandle),
         );
-        vis.spinAngle += net.spinRate * Math.PI * 2 * dt;
+        // No spin advance: the weights are held by the bag now (see ENVELOP). The frozen vis.spinAngle carries into the
+        // cinched states, so CINCH_CLOSING → CAPTURED has no angular hop either.
         for (let i = 0; i < weightCount; i++) {
           const angle = (2 * Math.PI * i / weightCount) + vis.spinAngle;
-          rimWeights[i].position.set(
-            curR * Math.cos(angle),
-            curR * Math.sin(angle),
-            // Starts where ENVELOP ended (-2·coneHeight) and settles onto the mouth plane (-coneHeight) at the end of
-            // the cinch (a flat -coneHeight jumped a cone height in one frame). Target sits at z ≈ -mouthRadius,
-            // ~0.4 m short of the mouth plane.
-            -coneHeight * (2 - cinchProgress),
-          );
+          if (vis.kitHandle && NetMeshKit.mouthRingPoint(vis.kitHandle, angle, _edgePt)) {
+            rimWeights[i].position.set(_edgePt.x, _edgePt.y, _edgePt.z);
+          } else {
+            rimWeights[i].position.set(
+              curR * Math.cos(angle),
+              curR * Math.sin(angle),
+              -coneHeight * (2 - cinchProgress),
+            );
+          }
           rimWeights[i].visible = true;
         }
 
@@ -2101,7 +2123,8 @@ export class CaptureNetVisual {
         vis.tetherLine.visible = true;
         coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;   // steady — no pulse once captured (#3)
-        // Static cinched bag — rim ring frozen at the closed radius on the mouth plane, spinAngle NOT advanced: a
+        // Static cinched bag — weights and cord frozen on the film's drawn mouth edge (closed radius on the mouth plane
+        // only as the fallback when there is no film), spinAngle NOT advanced: a
         // captured bag must read as a welded, settled catch, not a live animation.
         this._setCinchedRim(vis);
         break;
@@ -2113,11 +2136,11 @@ export class CaptureNetVisual {
         coneMesh.material.color.setHex(COL_DISC);
         if (vis.failure) {
           // The beat owns the furniture — the cinch ring follows the beat's cinchFrac (opening on a slip, springing
-          // off on a bounce) and the strands stay on for the release read.
+          // off on a bounce) and the drawstring loop stays on for the release read.
           this._stageFailureFurniture(vis);
         } else {
           // Opacity handled by fade timer; hide the cinch furniture so no
-          // weights/strands linger at full opacity through the fade.
+          // weights/drawstring linger at full opacity through the fade.
           for (const w of rimWeights) w.visible = false;
           drawstringLine.visible = false;
         }
@@ -2135,7 +2158,8 @@ export class CaptureNetVisual {
         if (net.catchResult === 'success') {
           coneMesh.material.color.setHex(COL_DISC);
           // The haul/park can last many seconds (REELING is held through HOLDING_CATCH for daughter catches) — render
-          // a steady, fully-cinched bag: fixed opacity, frozen spin, rim ring pinned at the closed radius, no pulse.
+          // a steady, fully-cinched bag: fixed opacity, frozen spin, weights and cord pinned to the film's mouth edge
+          // (closed radius only as the no-film fallback), no pulse.
           // Same size-aware rest as the berthed bag, so a small catch reads through the threads while hauled in.
           coneMesh.material.opacity = this._heldThreadOpacity(net);
           this._setCinchedRim(vis);
@@ -2262,6 +2286,8 @@ export class CaptureNetVisual {
     const kit = vis.kitHandle;
     const d = net.targetDebris;
     const st = net.state;
+    vis._rimSphereR = 0;                 // set again below while the hand-off cinch runs (read by the drape driver)
+    vis._bagSphereR = 0;
     // A DAUGHTER's net is shaped the same way (DECISIONS §28 row 6: the net is wrapped round the catch all the way
     // home): its ring is her net-launcher muzzle, not the mother's berth collar
     const muzzleArm = this._daughterMuzzleArm(net);
@@ -2326,18 +2352,37 @@ export class CaptureNetVisual {
     let mouthR = BAG.MOUTH_FRAC * rS;
     if (cinch > 0) {
       const rho = Math.max(0.01, wireBagRadiusM(d) - BAG.WEIGHT_RADIUS_M) * M;
-      const f = BAG.CINCH_RIM_AHEAD_OF_SPHERE;
+      // The mouth ring (the white balls and the cord) rides the sphere the bag is being drawn onto, not the catch's
+      // tumbling box: a ring that can't pass the catch rests on its widest girth, and a sphere's girth is the same
+      // whichever way the catch turns. The box floor jumped to a whole face the moment the ring plane met one (0.256 m
+      // in one frame in the browser) and then followed the box round, so the balls opened and closed through the whole
+      // hand-off (owner 2026-10-31). The body of the film keeps the box floor. Read by the drape driver below.
+      vis._rimSphereR = rho;
+      // The film keeps the box floor but may not be wider than the sphere (the tilted box's corners and front face reach
+      // 0.1-0.2 m past the wire bag, which replaces the net at the latch). The clip sphere starts as wide as the open
+      // mouth, so it bites nothing at first, and closes onto the wire bag with the cinch.
+      vis._bagSphereR = rho + Math.max(0, BAG.MOUTH_FRAC * rS - rho) * (1 - cinch);
       // the apex hub is the bag's farthest point from the catch (the closed rim and weights sit inside it), so its far
       // edge lands ON the wire bag's surface: the swap at the latch changes nothing
       back += (Math.max(0, wireBagRadiusM(d) * M - BAG.HUB_RADIUS_M * M) - back) * cinch;
-      ahead += (f * rho - ahead) * cinch;
-      mouthR += (Math.sqrt(1 - f * f) * rho - mouthR) * cinch;
+      // The mouth only closes ("keep it closed", owner 2026-10-31): a locked drawstring can't slide back over the
+      // catch's widest girth, so the loop only tightens and the neck stays where it first closed. The kit draws the
+      // closed loop at closedFrac x the mouth; mouthR never grows, so that radius never does.
+      mouthR += (Math.min(mouthR, BAG.CINCH_MOUTH_OF_SPHERE * rho) - mouthR) * cinch;
+      const ringR = (kit.mouthRadius > 0 ? kit.closedRadius / kit.mouthRadius : NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED)
+        * lerp(vis.mouthRadius, mouthR, g);
+      // ... and the loop sits on the sphere, where the sphere is exactly that wide: as the loop tightens its plane
+      // moves out along the catch's small front cap (it used to be pulled in to half a radius past the centre, where
+      // the sphere is 0.87 radii wide, so the loop was forced open again: 0.20 -> 0.57 m on a 1 m catch).
+      const aheadOnSphere = Math.sqrt(Math.max(0, rho * rho - ringR * ringR));
+      ahead += (aheadOnSphere - ahead) * cinch;
     }
     const apex = vis.group.position;
     apex.x += (c.x - L.x * back - apex.x) * g;
     apex.y += (c.y - L.y * back - apex.y) * g;
     apex.z += (c.z - L.z * back - apex.z) * g;
-    // the size: from the built cone to apex -> rim plane = back + RIM_AHEAD_FRAC radii, mouth MOUTH_FRAC radii
+    // the size: from the built cone to apex -> rim plane = back + `ahead`, mouth `mouthR` (RIM_AHEAD_FRAC / MOUTH_FRAC
+    // radii as the reel left it; while the hand-off cinch runs, see above: the loop's plane on the sphere and the narrowed mouth)
     const coneH = lerp(vis.coneHeight, back + ahead, g);
     const mouth = lerp(vis.mouthRadius, mouthR, g);
     NetMeshKit.setBagShape(kit, coneH, mouth);
@@ -2417,8 +2462,11 @@ export class CaptureNetVisual {
   }
 
   /**
-   * Render the rim weights + drawstring as a STATIC fully-cinched ring at the closed radius on the mouth plane. Uses
-   * the frozen spinAngle (not advanced) so consecutive frames are identical — no pulse, no spin.
+   * Render the rim weights + drawstring as a STATIC fully-cinched ring: each weight on the net's drawn mouth edge (the
+   * film's last ring, `NetMeshKit.mouthRingPoint`), which at the cinch is the closed radius on the mouth plane, floored on
+   * the catch. Uses the frozen spinAngle (not advanced) so consecutive frames are identical — no pulse, no spin.
+   * Fallback for a kit-less / membrane-less visual: the circle at the closed radius. (net-rim-on-edge lane 2026-10-31: the
+   * circle alone sat up to 5.3 cm off the film's edge on the 8 m kit, where the film's contact dent pulls the edge in.)
    * @private
    */
   _setCinchedRim(vis) {
@@ -2429,30 +2477,36 @@ export class CaptureNetVisual {
     const coneHeight = vis.kitHandle.coneHeight;
     apexHub.visible = true;
     drawstringLine.visible = true;
-    // The rim furniture honours the same mouth-plane contents floor the film draws (the kit's mouthFloorRadius — ONE
+    // The fallback circle (no film) honours the same mouth-plane contents floor the film draws (the kit's mouthFloorRadius — ONE
     // home, clamped to mouthRadius). A catch whose silhouette reaches the mouth plane holds the film's rim ring open;
-    // the weights/drawstring ride that radius instead of closing to closedRadius THROUGH the catch. 0 whenever the
-    // contents stop short of the mouth — the mother scenario included — so the gated draw is bit-identical. Angles
+    // the fallback radius r follows it instead of closing to closedRadius THROUGH the catch. 0 whenever the
+    // contents stop short of the mouth — the mother scenario included. With a film the weights ride its drawn edge
+    // and r is only the fallback. Angles
     // keep the visual's frozen vis.spinAngle basis (never the kit's _rimAngles/_spinAngle — that swap would rotate the
     // mother drawstring and move the fabric baseline).
     const r = Math.max(closedRadius, NetMeshKit.mouthFloorRadius(vis.kitHandle));
     for (let i = 0; i < weightCount; i++) {
       const angle = (2 * Math.PI * i / weightCount) + vis.spinAngle;
-      rimWeights[i].position.set(
-        r * Math.cos(angle),
-        r * Math.sin(angle),
-        -coneHeight,
-      );
+      if (NetMeshKit.mouthRingPoint(vis.kitHandle, angle, _edgePt)) {
+        rimWeights[i].position.set(_edgePt.x, _edgePt.y, _edgePt.z);
+      } else {
+        rimWeights[i].position.set(
+          r * Math.cos(angle),
+          r * Math.sin(angle),
+          -coneHeight,
+        );
+      }
       rimWeights[i].visible = true;
     }
     this._updateDrawstring(vis);
   }
 
   /**
-   * Update drawstring line vertex positions from current rim weight positions (spoke pattern
-   * apex→w0→apex→w1→…→apex→wN-1→apex→w0). Delegates to the shared NetMeshKit so Mother + Daughter render the same web
-   * topology (single source of truth); the kit handle's rimWeights / drawstringPositions / drawstringLine are
-   * reference-identical to the vis entry's. No allocations.
+   * Update the drawstring line from the current rim weight positions: a closed cord round the mouth through every weight
+   * (no segment to the apex hub). The capture nets opt in to the rim-following shape, so the cord runs along the net's
+   * drawn mouth edge with every weight inserted in angular order (`NetMeshKit.updateDrawstring`). Delegates to the shared
+   * NetMeshKit so Mother + Daughter render the same web topology (single source of truth); the kit handle's rimWeights /
+   * drawstringPositions / drawstringLine are reference-identical to the vis entry's. No allocations.
    * @private
    */
   _updateDrawstring(vis) {
@@ -2460,9 +2514,9 @@ export class CaptureNetVisual {
   }
 
   /**
-   * Failure staging: drive the cinch furniture from the beat's cinchFrac (vis.failure.cinch, freshly written by the
-   * drape driver this frame) — the ring opens toward the mouth on a slip and springs off on a bounce, floored at the
-   * same mouth-plane contents floor CINCH_CLOSING honours so the ring never sweeps through the catch it is releasing.
+   * Failure staging: drive the cinch furniture from the beat's drape (the film's drawn edge, freshly written by the
+   * drape driver this frame) — the weights ride that edge, which opens toward the mouth on a slip and springs off on a
+   * bounce, floored on the catch like CINCH_CLOSING so the ring never sweeps through the catch it is releasing.
    * Weights ride the frozen spinAngle basis (same as _setCinchedRim — never the kit's).
    * @private
    */
@@ -2480,11 +2534,18 @@ export class CaptureNetVisual {
     );
     for (let i = 0; i < weightCount; i++) {
       const angle = (2 * Math.PI * i / weightCount) + vis.spinAngle;
-      rimWeights[i].position.set(
-        r * Math.cos(angle),
-        r * Math.sin(angle),
-        -coneHeight,
-      );
+      // On the net's drawn mouth edge (the film the beat's drape driver wrote this frame); the circle at `r` is the
+      // fallback for a kit-less / membrane-less visual. (net-rim-on-edge lane: the circle alone sat 8-24 cm off the edge
+      // mid-beat on the 8 m kit.)
+      if (vis.kitHandle && NetMeshKit.mouthRingPoint(vis.kitHandle, angle, _edgePt)) {
+        rimWeights[i].position.set(_edgePt.x, _edgePt.y, _edgePt.z);
+      } else {
+        rimWeights[i].position.set(
+          r * Math.cos(angle),
+          r * Math.sin(angle),
+          -coneHeight,
+        );
+      }
       rimWeights[i].visible = true;
     }
     this._updateDrawstring(vis);

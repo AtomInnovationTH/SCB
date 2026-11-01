@@ -7,8 +7,14 @@
  *
  * Mirrors the daughter rack (ArmUnit._pinHeldCatches / _updateHoldingCatch):
  *   - PIN: every frame ("a gap reads as a release"). The bag centre is the latch point + radius · dir, where `dir`
- *     lives in the radiator HINGE frame so the bag turns with the radiator and the ship. After `swingToBoom(i)` the
- *     dir slews to the boom axis at SWING_RATE_DEG_S.
+ *     lives in the radiator HINGE frame, and the catch's attitude is held in that same frame (`d._qLocalTip`): the
+ *     whole piece, position and attitude, is clamped at the neck and turns with the strut and the ship (owner
+ *     2026-11-01, "lock it snug"). After `swingToBoom(i)` any dir still off the boom axis slews onto it at
+ *     SWING_RATE_DEG_S, and the attitude turns with it (the piece pivots about the latch point, its gap unchanged).
+ *   - REEL-IN (S3, owner 2026-11-01, "tight, if it stays clear"): once the bag is on the boom axis it is planned once
+ *     (`planTightStandoff`, from the piece's mesh in its locked attitude) and drawn in along the boom at the tow's speed
+ *     and ramp, as far as the neck, plane and cap rules in `TIGHT` allow; where they allow nothing it keeps today's
+ *     spacing (`radiusM`). `radiusM` stays the enclosing radius: the radiator band, `spheres()` and the books read it.
  *   - COOK: the same clock (`dt · BASE_SCALE · sunScale`), span (`FURNACE_TRANSFER.digestSpanS(mass)`), phases
  *     (hold / chop / feed), chop scale and `_breakdownActive` as the rack, each tip on its own clock.
  *     Ends with CATCH_PROCESSED { digested: true, source: 'tip', tipIndex }.
@@ -28,11 +34,12 @@ import { Events } from '../core/Events.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { tripMelting } from './TransferTrip.js';
 import {
-  seedShipRelativeAttitude,
-  applyShipRelativeAttitude,
+  catchQuaternionInto,
+  writeCatchAttitude,
   clearShipRelativeAttitude,
 } from '../entities/CaptureNet.js';
 import { DebrisField } from '../entities/DebrisField.js';
+import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { degToRad, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 const M = Constants.SCENE_UNITS_PER_METER ?? 0.00001;
@@ -61,7 +68,225 @@ const _q2 = new THREE.Quaternion();
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
+const _qFrame = new THREE.Quaternion();
+const _qDelta = new THREE.Quaternion();
+const _qPose = new THREE.Quaternion();
 const _X = new THREE.Vector3(1, 0, 0);
+
+// ── S3: the tight pull-in (owner 2026-11-01, "Tight, if it stays clear") ─────────────────────────────────────────────────
+/**
+ * Once a bag has swung onto the boom axis it is pulled in along that axis until only the net's neck is between the piece and
+ * the tip hardware. All lengths metres, all in the radiator hinge frame (the piece is rigid in it, so every number below is the
+ * same at every radiator angle). The hardware at the tip, measured 2026-11-01 from the built meshes (own part, behind the
+ * latch plane, axial position x < 0): the cone's mouth ring (radius 0.040 at x = 0), the stalk (radius <= 0.035, x -0.03..-0.12),
+ * the pad's front face at x = -0.117 (lateral reach 0.28 m), then the strut, plates and wings (lateral reach up to 1.7 m).
+ *   ENABLED       off = today's spacing (the enclosing sphere's radius).
+ *   NECK_M        the neck allowance: no point of the piece comes within this of the latch point, nor of the stalk's axis behind
+ *                 it. It is the ball the swivel cone sits in (`Constants.LEASH.CONE_IGNORE_R_M`, 0.05 m): it leaves 10 mm to the
+ *                 cone's mouth ring and 15 mm to the stalk. Never taken from the drawn bag, which lane W is changing.
+ *   BACK_M        nothing of the piece goes behind the plane this far behind the latch point (0.10 m = `TIP_STALK_M` less the
+ *                 pad's front face's 0.03 m and a margin: 17 mm of air before the pad), so the piece can never wrap round the
+ *                 tip and never reaches the pad, strut, plates or wings.
+ *   CAP_R_M, SLACK_M  the moving obstacles (engine plume cones, hull, other struts, the sun-oven ball) are handled by containment,
+ *                 not measured at run time: the radiator band `TIP_BAND` and the hull test are measured against today's
+ *                 enclosing sphere (centre `radiusM` along the boom, radius `radiusM`), which holds the whole piece at today's
+ *                 spacing. A point of the pulled-in piece may lie outside that sphere by at most SLACK_M, or else within
+ *                 CAP_R_M of the latch point. Why those two numbers (measured 2026-11-01): the sphere clears the hull and every
+ *                 other radiator part by >= 0.02 m (test-TipCargo (i)); SLACK_M 0.010 plus the 7 mm the sample lattice can miss
+ *                 (half a cell's diagonal) is 0.017 m outside it at most, which leaves 3 mm, over today's worst 1 mm; the latch
+ *                 point itself is >= 0.268 m from the hull, >= 0.458 m from every other radiator part and
+ *                 >= 0.772 m from a plume cone at every angle 2..134° on all four tips, so a cap of 0.15 m leaves >= 0.118 m.
+ *                 CAP_R_M = Infinity turns the rule off.
+ *   SAMPLE_M      surface sample spacing for that rule.
+ *   SPEED / ACCEL the pull's speed and ramp: the tow's own (`Constants.LEASH.REEL_SPEED_MPS`, `REEL_ACCEL_MPS2`).
+ */
+export const TIGHT = {
+  ENABLED: true,
+  NECK_M: Constants.LEASH?.CONE_IGNORE_R_M ?? 0.05,
+  BACK_M: 0.10,
+  CAP_R_M: 0.15,
+  SLACK_M: 0.010,
+  SAMPLE_M: 0.010,
+  SPEED_MPS: Constants.LEASH?.REEL_SPEED_MPS ?? 0.05,
+  ACCEL_MPS2: Constants.LEASH?.REEL_ACCEL_MPS2 ?? 0.05,
+};
+
+const _tri = new THREE.Triangle();
+const _cp = new THREE.Vector3();
+const _pp = new THREE.Vector3();
+const _meshTrisCache = new Map();
+
+/** Triangles of the drawn mesh for (type, id) in mesh units: Float64Array, 9 numbers per triangle. Null without a mesh. */
+function meshTris(type, id) {
+  const key = type === 'fragment' ? `fragment_${(id >>> 0) % (Constants.DEBRIS_FRAGMENT_VARIANTS || 7)}` : type;
+  if (_meshTrisCache.has(key)) return _meshTrisCache.get(key);
+  let out = null;
+  try {
+    const geo = DebrisWireframe.getGeometry(type, id);
+    const pos = geo && geo.getAttribute && geo.getAttribute('position');
+    if (pos) {
+      const idx = geo.index ? geo.index.array : null;
+      const n = Math.floor((idx ? idx.length : pos.count) / 3);
+      out = new Float64Array(n * 9);
+      for (let t = 0; t < n; t++) for (let k = 0; k < 3; k++) {
+        const vi = idx ? idx[3 * t + k] : 3 * t + k;
+        out[9 * t + 3 * k] = pos.getX(vi); out[9 * t + 3 * k + 1] = pos.getY(vi); out[9 * t + 3 * k + 2] = pos.getZ(vi);
+      }
+    }
+  } catch { out = null; }
+  _meshTrisCache.set(key, out);
+  return out;
+}
+
+/** Distance from the point (x, 0, 0) to triangle `t` of `V` (9 numbers per triangle). */
+function distPointX(V, t, x) {
+  const o = 9 * t;
+  _tri.a.set(V[o], V[o + 1], V[o + 2]); _tri.b.set(V[o + 3], V[o + 4], V[o + 5]); _tri.c.set(V[o + 6], V[o + 7], V[o + 8]);
+  _tri.closestPointToPoint(_pp.set(x, 0, 0), _cp);
+  return _cp.distanceTo(_pp);
+}
+
+/**
+ * Where to hold a piece on the boom axis: the smallest centre distance `sM` (metres from the latch point, along +X of the hinge
+ * frame) at which the piece's mesh in its locked attitude (a) has no point within `neckM` of the latch point or of the stalk's
+ * axis behind it (a capsule of radius `neckM` from the latch point back to `backM`), and (b) has no point behind the plane
+ * `backM` behind the latch point. Never more than `radiusM` (today's spacing: the enclosing sphere's radius).
+ *
+ * Exact for (a): a triangle shifted by s along X is within `neckM` of the capsule's axis for an interval of s (the distance
+ * between two convex sets, one translating along a line, is convex in s), so the answer is the largest upper end over the
+ * triangles that can reach the axis. (b) is a vertex rule.
+ *
+ * @param {{type?: string, id?: number, sizeMeter?: number, rot: {x:number,y:number,z:number,w:number}, radiusM: number,
+ *   neckM?: number, backM?: number}} o — `rot`: the piece's attitude in the hinge frame
+ * @returns {{sM: number, sCapsuleM: number, sPlaneM: number, reason: string|null, gapBeforeM: number, gapAfterM: number}}
+ *   `reason`: why `sM` is `radiusM` (off, no mesh, the radius is not this mesh's own reach), else null; `gap*`: the nearest
+ *   point of the piece to the latch point at today's spacing / at `sM`.
+ */
+export function planTightStandoff(o) {
+  const radiusM = o.radiusM;
+  const neckM = o.neckM ?? TIGHT.NECK_M;
+  const backM = o.backM ?? TIGHT.BACK_M;
+  const keep = (reason) => ({ sM: radiusM, sCapsuleM: radiusM, sPlaneM: radiusM, reason, gapBeforeM: NaN, gapAfterM: NaN });
+  if (!TIGHT.ENABLED) return keep('off');
+  if (!o.type || !(o.sizeMeter > 0) || !Number.isFinite(radiusM) || !(radiusM > 0)) return keep('no mesh');
+  const tris = meshTris(o.type, o.id ?? 0);
+  if (!tris || tris.length < 9) return keep('no mesh');
+  const nTri = tris.length / 9;
+  // the mesh in the hinge frame, metres, relative to the piece centre
+  const V = new Float64Array(tris.length);
+  const q = o.rot;
+  let maxR = 0;
+  for (let k = 0; k < tris.length; k += 3) {
+    _pp.set(tris[k], tris[k + 1], tris[k + 2]).multiplyScalar(o.sizeMeter).applyQuaternion(q);
+    V[k] = _pp.x; V[k + 1] = _pp.y; V[k + 2] = _pp.z;
+    maxR = Math.max(maxR, _pp.length());
+  }
+  // `radiusM` must be this mesh's own enclosing radius (the drawn reach): else it is a hook radius and the mesh says nothing about it
+  if (Math.abs(maxR - radiusM) > 1e-3) return keep('radius is not the mesh reach');
+  const gapAt = (s) => { let m = Infinity; for (let t = 0; t < nTri; t++) { const d = distPointX(V, t, -s); if (d < m) m = d; } return m; };
+  // (b) the plane rule: every point of the piece at x >= -backM  →  s >= -backM - (smallest x of any vertex)
+  let minX = Infinity;
+  for (let k = 0; k < V.length; k += 3) if (V[k] < minX) minX = V[k];
+  const sPlane = -backM - minX;
+  // (a) the capsule rule: the segment from the latch point (x = 0) back to x = -backM, samples every 5 mm (an error of 2.5 mm
+  // against the 10 mm to the cone's ring), and the distance from each sample to triangle t shifted by s is distPointX(V, t, x - s)
+  const nSeg = Math.max(1, Math.ceil(backM / 0.005));
+  const dCaps = (t, s) => { let m = Infinity; for (let k = 0; k <= nSeg; k++) { const d = distPointX(V, t, -backM * (k / nSeg) - s); if (d < m) m = d; } return m; };
+  const hi = radiusM + neckM + backM + 1;
+  let sCaps = -Infinity;
+  for (let t = 0; t < nTri; t++) {
+    // can this triangle ever come within neckM of the X axis? its y-z box must reach the disc of radius neckM about the origin
+    const o9 = 9 * t;
+    let y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let k = 0; k < 3; k++) { const y = V[o9 + 3 * k + 1], z = V[o9 + 3 * k + 2]; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+    const dy = Math.max(y0, 0, -y1), dz = Math.max(z0, 0, -z1);
+    if (Math.hypot(dy, dz) >= neckM) continue;
+    let lo = -hi, up = hi;                                  // minimise the convex dCaps(t, ·)
+    for (let it = 0; it < 40; it++) {
+      const m1 = lo + (up - lo) / 3, m2 = up - (up - lo) / 3;
+      if (dCaps(t, m1) < dCaps(t, m2)) up = m2; else lo = m1;
+    }
+    const sm = 0.5 * (lo + up);
+    if (dCaps(t, sm) >= neckM) continue;                    // this triangle never comes within the neck allowance of the capsule's axis
+    let a = sm, b = hi;                                     // dCaps(a) < neckM <= dCaps(b)
+    for (let it = 0; it < 40; it++) { const m = 0.5 * (a + b); if (dCaps(t, m) < neckM) a = m; else b = m; }
+    if (b > sCaps) sCaps = b;
+  }
+  if (!Number.isFinite(sCaps)) sCaps = 0;
+  // (c) the cap rule: the radiator band (`TIP_BAND`) was measured against today's enclosing sphere (centre `radiusM` along +X,
+  // radius `radiusM`), which also holds every piece point at today's spacing. Every point of the piece outside that sphere
+  // (the cap toward the tip) must lie within `capRM` of the latch point, i.e. next to the cone, away from the plume cones, the
+  // hull and the other struts. Reeled in from today's spacing, the piece stops at the first position that breaks it.
+  // Exact per sample (no scan): a sample at piece-frame position p, with u = p.x and w = |p|², stands outside the sphere by
+  // more than the slack for s below sa = radiusM - u - sqrt(u² + R² - w) (R = radiusM + slack: the quadratic in s has its
+  // upper root above radiusM), and beyond the cap for s outside the roots of s² + 2us + w - cap² (or always, with none).
+  // The largest s at which this sample breaks the rule is therefore closed-form; the piece stops above the largest of them.
+  const capRM = o.capRM ?? TIGHT.CAP_R_M;
+  let sCap = 0;
+  if (Number.isFinite(capRM)) {
+    const S = surfaceSamples(V, nTri, TIGHT.SAMPLE_M);
+    const R2 = (radiusM + (o.slackM ?? TIGHT.SLACK_M)) ** 2, cap2 = capRM * capRM;
+    for (let k = 0; k < S.length; k += 3) {
+      const u = S[k], w = u * u + S[k + 1] * S[k + 1] + S[k + 2] * S[k + 2];
+      const sa = radiusM - u - Math.sqrt(Math.max(0, u * u + R2 - w));
+      if (!(sa > sCap)) continue;                           // this sample breaks nothing above what is already needed
+      const sHi = Math.min(radiusM, sa);
+      const disc = u * u + cap2 - w;
+      let sup = sHi;                                        // beyond the cap at sHi: the rule is broken from there down
+      if (disc >= 0) {
+        const e = Math.sqrt(disc), c1 = -u - e, c2 = -u + e;
+        if (sHi >= c1 && sHi <= c2) sup = c1;               // within the cap at sHi: broken only below the cap's lower root
+      }
+      if (sup > sCap) sCap = sup;
+    }
+  }
+  const sM = Math.max(0, Math.min(radiusM, Math.max(sPlane, sCaps, sCap)));
+  return {
+    sM, sCapsuleM: Math.max(0, Math.min(radiusM, sCaps)), sPlaneM: Math.max(0, Math.min(radiusM, sPlane)), sCapM: sCap,
+    reason: null, gapBeforeM: gapAt(radiusM), gapAfterM: gapAt(sM),
+  };
+}
+
+/** Points on the mesh `V` (9 numbers per triangle): a barycentric lattice per triangle, spacing about `stepM`. Flat xyz array. */
+function surfaceSamples(V, nTri, stepM) {
+  const out = [];
+  for (let t = 0; t < nTri; t++) {
+    const o = 9 * t;
+    const ab = Math.hypot(V[o + 3] - V[o], V[o + 4] - V[o + 1], V[o + 5] - V[o + 2]);
+    const bc = Math.hypot(V[o + 6] - V[o + 3], V[o + 7] - V[o + 4], V[o + 8] - V[o + 5]);
+    const ca = Math.hypot(V[o] - V[o + 6], V[o + 1] - V[o + 7], V[o + 2] - V[o + 8]);
+    const n = Math.max(1, Math.ceil(Math.max(ab, bc, ca) / stepM));
+    for (let u = 0; u <= n; u++) for (let v = 0; v <= n - u; v++) {
+      const a = u / n, b = v / n, c = 1 - a - b;
+      out.push(V[o] * c + V[o + 3] * a + V[o + 6] * b, V[o + 1] * c + V[o + 4] * a + V[o + 7] * b, V[o + 2] * c + V[o + 5] * a + V[o + 8] * b);
+    }
+  }
+  return out;
+}
+
+/**
+ * Record the catch's CURRENT attitude in the strut tip's frame: `d._qLocalTip = tipQuat⁻¹ × catchQuat`, where `tipQuat` is the
+ * tip's WORLD attitude (ship quaternion × hinge frame). A bag on a radiator tip is clamped at the neck, so it turns with the
+ * strut (owner 2026-11-01, "lock it snug"), not with the ship. Reads the drawn (canonical) object's attitude when the catch
+ * is a snapshot, as `CaptureNet.seedShipRelativeAttitude` does. Lives here, not in CaptureNet.js: nothing else uses it.
+ * @returns {boolean} true when seeded
+ */
+function seedTipFrameAttitude(d, tipQuat, debrisField) {
+  if (!d || !tipQuat || !d.tumbleAxis) return false;
+  const c = debrisField && typeof debrisField.getDebrisById === 'function' && d.id != null ? debrisField.getDebrisById(d.id) : null;
+  catchQuaternionInto((c && c !== d && c.tumbleAxis) ? c : d, _qPose);
+  const q = d._qLocalTip || (d._qLocalTip = new THREE.Quaternion());
+  q.copy(tipQuat).invert().multiply(_qPose);
+  return true;
+}
+
+/** Turn the catch with the strut: write `tipQuat × d._qLocalTip` into its tumbleAxis/tumbleAngle (mirrored onto the drawn object). */
+function applyTipFrameAttitude(d, tipQuat, debrisField) {
+  if (!d || !tipQuat || !d._qLocalTip || !d.tumbleAxis) return false;
+  _qPose.copy(tipQuat).multiply(d._qLocalTip);
+  writeCatchAttitude(d, _qPose, debrisField);
+  return true;
+}
 
 // Melt bag look (owner 2026-10-27, "a bunch of grey triangles in a sphere shape ... research more"): a woven ceramic-fibre
 // cloth bag stretched taut over the cut parts: ONE closed, smooth skin (a detail-6 icosphere, corners merged by position
@@ -388,6 +613,12 @@ export class TipCargo {
     return out;
   }
 
+  /** Quaternion hinge frame → WORLD (ship quaternion × hinge-to-ship), into `out`: the tip's attitude a locked bag turns with. */
+  _tipFrameQuat(rec, out) {
+    this._hingeQuatShip(rec, out);
+    return out.premultiply(this.player.quaternion);
+  }
+
   /** The latch point in the HINGE frame (scene units): pad origin + 0.15 m along local +X. */
   _latchHingeInto(rec, out) {
     out.copy(rec.tip.position);
@@ -575,6 +806,8 @@ export class TipCargo {
 
     const slot = {
       i, debris, massKg, radiusM, dirLocal, swinging: false,
+      standoffM: radiusM,                  // latch point → centre along dirLocal; radiusM until the tight pull-in (S3) moves it
+      pullTargetM: radiusM, pullPlanned: false, pullV: 0, tight: null,
       pos: new THREE.Vector3(),
       posShip: { massKg, posShip: { x: 0, y: 0, z: 0 } },
       breakdownStarted: false, chunksFired: 0, phaseT: 0,
@@ -590,8 +823,8 @@ export class TipCargo {
     debris._breakdownActive = false;
     if (!debris._armPinPos) debris._armPinPos = new THREE.Vector3();
     debris._armPinPos.copy(slot.pos);
-    // Take the catch's current attitude into the ship's frame; it turns with the ship from here on.
-    seedShipRelativeAttitude(debris, this.player.quaternion, this.debrisField);
+    // Take the catch's current attitude into the strut tip's frame; it turns with the strut (and the ship) from here on.
+    seedTipFrameAttitude(debris, this._tipFrameQuat(rec, _qFrame), this.debrisField);
     this._invalidateInertia();
     return true;
   }
@@ -747,13 +980,19 @@ export class TipCargo {
   _place(slot, rec) {
     // latch + r·dir in the hinge frame, then to ship / world
     this._latchHingeInto(rec, _v1);
-    _v3.copy(slot.dirLocal).multiplyScalar(slot.radiusM * M).add(_v1);
+    _v3.copy(slot.dirLocal).multiplyScalar(slot.standoffM * M).add(_v1);
     this._hingeToShip(rec, _v3, _v2);               // ship-local, scene units
     const ps = slot.posShip.posShip;
     ps.x = _v2.x / M; ps.y = _v2.y / M; ps.z = _v2.z / M;
     slot.pos.copy(_v2).applyQuaternion(this.player.quaternion).add(this._shipPos(_v3));
   }
 
+  /**
+   * Turn the bag's direction toward the boom axis by one step. The WHOLE piece pivots about the latch point: the catch's
+   * attitude in the tip frame takes the same turn, so what is between the neck and the surface (the gap) never changes
+   * while it slews. The leash tow arrives on the boom axis already (nothing to slew); this finishes what the unflown
+   * hand-over and a daughter's carry leave (a few degrees at most).
+   */
   _advanceSwing(slot, dt) {
     if (!slot.swinging || !(dt > 0)) return;
     const d = slot.dirLocal;
@@ -761,11 +1000,54 @@ export class TipCargo {
     const angle = Math.acos(cos);
     if (angle < 1e-9) { d.copy(_X); slot.swinging = false; return; }
     const step = (degToRad(SWING_RATE_DEG_S)) * dt;
-    if (step >= angle) { d.copy(_X); slot.swinging = false; return; }
+    const done = step >= angle;
     _v1.crossVectors(d, _X);
     if (_v1.lengthSq() < 1e-12) _v1.set(0, 0, 1);   // exactly opposite: any perpendicular will do
     _v1.normalize();
+    const turn = done ? angle : step;
+    const q = slot.debris._qLocalTip;
+    if (q) q.premultiply(_qDelta.setFromAxisAngle(_v1, turn));
+    if (done) { d.copy(_X); slot.swinging = false; return; }
     d.applyAxisAngle(_v1, step).normalize();
+  }
+
+  /**
+   * S3, the tight pull-in. Once the bag is on the boom axis (nothing left to slew) the pose is planned once from the piece's
+   * mesh in its locked attitude (`planTightStandoff`), then the centre is drawn in along the boom at the tow's speed and ramp
+   * until only the neck allowance is between the piece and the latch point. The pose stays rigid in the strut-tip frame, so
+   * the numbers hold at every radiator angle. A piece with no mesh, a hook radius, or no room to come in keeps today's spacing.
+   */
+  _advancePull(slot, dt) {
+    if (!slot.pullPlanned) {
+      if (slot.swinging || slot.dirLocal.dot(_X) < 1 - 1e-9) return;    // not yet on the boom axis (a swing is pending or running)
+      slot.pullPlanned = true;
+      const d = slot.debris;
+      const plan = d._qLocalTip
+        ? planTightStandoff({ type: d.isBag === true ? undefined : d.type, id: d.id, sizeMeter: d.sizeMeter, rot: d._qLocalTip, radiusM: slot.radiusM })
+        : { sM: slot.radiusM, reason: 'no attitude', gapBeforeM: NaN, gapAfterM: NaN };
+      slot.tight = plan;
+      slot.pullTargetM = plan.sM;
+    }
+    if (!(dt > 0) || !(slot.standoffM > slot.pullTargetM + 1e-9)) return;
+    const remaining = slot.standoffM - slot.pullTargetM;
+    const a = TIGHT.ACCEL_MPS2;
+    const v = Math.min(TIGHT.SPEED_MPS, slot.pullV + a * dt, Math.sqrt(2 * a * remaining));
+    slot.pullV = v;
+    slot.standoffM = Math.max(slot.pullTargetM, slot.standoffM - v * dt);
+    if (slot.standoffM <= slot.pullTargetM + 1e-9) { slot.standoffM = slot.pullTargetM; slot.pullV = 0; }
+    this._invalidateInertia();
+  }
+
+  /** Tip i's tight pull-in: `{standoffM, targetM, radiusM, pulling, planned, gapBeforeM, gapAfterM, reason}` (a copy), or null. */
+  tightInfo(i) {
+    const s = this._slots[i];
+    if (!s) return null;
+    const t = s.tight || {};
+    return {
+      standoffM: s.standoffM, targetM: s.pullTargetM, radiusM: s.radiusM, planned: s.pullPlanned,
+      pulling: s.pullPlanned && s.standoffM > s.pullTargetM + 1e-9,
+      gapBeforeM: t.gapBeforeM ?? NaN, gapAfterM: t.gapAfterM ?? NaN, reason: t.reason ?? null,
+    };
   }
 
   /**
@@ -783,6 +1065,7 @@ export class TipCargo {
       const rec = this._tipRec(i);
       if (!rec) continue;   // hardware gone: leave the bag where it was pinned
       this._advanceSwing(slot, dt);
+      this._advancePull(slot, dt);
       this._place(slot, rec);
       this._cook(slot, dt);
     }
@@ -836,7 +1119,7 @@ export class TipCargo {
     // A melt the trip left unfinished keeps its stage (and its size) until the next trip: the clock is off, the bag is not reset.
     const t = slot.phaseT || 0;
 
-    // Pin every frame (a gap reads as a release); position + ship-relative attitude.
+    // Pin every frame (a gap reads as a release); position + tip-frame attitude.
     d._armPinned = true;
     d._captured = true;
     let scaleMul = 1;
@@ -849,13 +1132,16 @@ export class TipCargo {
       });
     }
     if (d._breakdownActive) scaleMul = FT.chopScaleMul(t);
+    // The attitude turns with the strut tip (and the ship; `_qLocalTip` was seeded at the stow). Written BEFORE the pin so the
+    // drawn instance gets this frame's attitude with this frame's position (the pin draws it at once).
+    const rec = this._tipRec(slot.i);
+    if (rec) applyTipFrameAttitude(d, this._tipFrameQuat(rec, _qFrame), this.debrisField);
     if (this.debrisField && typeof this.debrisField.pinCapturedDebris === 'function') {
       this.debrisField.pinCapturedDebris(d, slot.pos, scaleMul);
     } else {
       if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
       d._armPinPos.copy(slot.pos);
     }
-    applyShipRelativeAttitude(d, this.player.quaternion, this.debrisField);
 
     if (!cook || t < FT.HOLD_S) return;
 

@@ -198,16 +198,16 @@ export function applyShipRelativeAttitude(d, shipQuat, debrisField = null) {
   return true;
 }
 
-/** Forget the ship-relative attitude (release / jettison / digestion). */
+/** Forget the ship-relative attitude, and the radiator-tip one (`TipCargo`'s `_qLocalTip`) with it (release / jettison / digestion). */
 export function clearShipRelativeAttitude(d) {
-  if (d) d._qLocalShip = null;
+  if (d) { d._qLocalShip = null; d._qLocalTip = null; }
 }
 
 // A rack cell is a place on HER body. A catch parked on a daughter's cargo rack is rigid in HER body frame from the moment
 // its cell is assigned: `d._rackCell` (0|1), `d._rackLocalM` (centre, her frame, metres), `d._qLocalHer` (her⁻¹ × the
 // catch's attitude) and `d._rackArm` (the daughter who owns the cell; a cargo flight assigns at its start, the stow keeps
-// it). Turning the ship or swinging her strut carries the catch with her; world up plays no part. The tip bags and every
-// other user of `applyShipRelativeAttitude` keep the ship-relative form above.
+// it). Turning the ship or swinging her strut carries the catch with her; world up plays no part. A bag on a radiator tip is
+// rigid in the TIP's frame instead (`TipCargo`, `d._qLocalTip`); the nose hold keeps the ship-relative form above.
 
 /**
  * Record the catch's CURRENT drawn attitude relative to the daughter: `d._qLocalHer = herQuat⁻¹ × catchQuat`
@@ -431,7 +431,7 @@ export const TIP_HOME_MAX_REACH_M = 0.75;
  * What, besides a catch's radius and the collar's z, sets its home: the radiators' angle and the bags on the tips
  * (`ArmManager.getKeepOut` reads both; a bag moves with its radiator). A string that changes when either does (angle to
  * 0.001 deg, each bag's index, radius and centre to 1 mm), `''` for a ship with no radiators or a mock, and `null` while the
- * radiators are SWINGING or ANY tip bag is turning onto its boom (`tipCargo.isSwinging(i)`): a home read then is not
+ * radiators are SWINGING or ANY tip bag is turning onto its boom or being reeled in tight (`tipCargo.isSwinging(i)`, `tightInfo(i).pulling`): a home read then is not
  * trusted once the swing ends (`catchHomeDistM` recomputes on the first read after), and a read during the swing reuses
  * what is cached rather than paying a recompute (25-115 ms: 47-62 keep-out queries, measured) every frame the HUD polls.
  * The daughters' strut poses are left out on purpose: the nose route is flown, and certified, against the seat of the
@@ -444,9 +444,9 @@ export function homeShapeKey(player) {
   const tgt = player._flowerTargetTheta;
   if ((typeof tgt === 'number' && Math.abs(tgt - player._flowerThetaRad) > 1e-4) || player.flowerPetalsBusy === true) return null;
   const tc = player.tipCargo;
-  // a bag turning onto its boom (SWING_RATE_DEG_S = 20 deg/s, at most 9 s) moves every frame, so its centre would change the key every frame
+  // a bag turning onto its boom (SWING_RATE_DEG_S = 20 deg/s, at most 9 s) or being reeled in (0.05 m/s) moves every frame: its centre changes the key every frame
   // (780 recomputes of ~25 ms in 13 s of one swing). Same rule as a radiator swing: reuse the cache, recompute once it ends.
-  if (tc && typeof tc.isSwinging === 'function') for (let i = 0; i < 4; i++) if (tc.isSwinging(i)) return null;
+  if (tc && typeof tc.isSwinging === 'function') for (let i = 0; i < 4; i++) if (tc.isSwinging(i) || (typeof tc.tightInfo === 'function' && tc.tightInfo(i)?.pulling)) return null;
   let key = String(Math.round(player._flowerThetaRad * RAD2DEG * 1000));
   if (tc && typeof tc.count === 'function' && typeof tc.spheres === 'function' && tc.count() > 0) {
     for (const sp of tc.spheres()) key += `|${sp.name}:${Math.round(sp.r * 1000)}:${Math.round(sp.c.x * 1000)},${Math.round(sp.c.y * 1000)},${Math.round(sp.c.z * 1000)}`;

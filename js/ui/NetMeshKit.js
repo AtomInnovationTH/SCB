@@ -33,6 +33,22 @@ const M = 1e-5;
 const NET_CER = Constants.CAPTURE_NET.NET_CEREMONY;
 const NET_WEB = Constants.NET_WEB;
 
+// Scratch for mouthRingPoint / the rim-following cord (allocation-free per frame).
+const _mouthPt = new THREE.Vector3();
+// A weight closer to the axis than this (1 µm squared, scene units) has no azimuth; the cord uses its index angle.
+const _AXIS_EPS2 = (M * 1e-6) * (M * 1e-6);
+
+/**
+ * Carry a membrane-local point into the weights' frame (the kit group): the membrane mesh's own scale, rotation and
+ * position, skipped when they are the identity (the usual case). In place.
+ */
+function _applyMembraneFrame(mesh, v) {
+  const s = mesh.scale, q = mesh.quaternion, p = mesh.position;
+  if (s.x !== 1 || s.y !== 1 || s.z !== 1) v.multiply(s);
+  if (q.x !== 0 || q.y !== 0 || q.z !== 0) v.applyQuaternion(q);
+  if (p.x !== 0 || p.y !== 0 || p.z !== 0) v.add(p);
+}
+
 // LineMaterial computes screen-space width from `resolution` (the DRAWING-BUFFER size in px = CSS px × pixelRatio).
 // Every live web LineMaterial is registered here; SceneManager drives `NetMeshKit.setResolution(w, h)` with the
 // renderer's real buffer size on init + resize (Retina threads must not render at half width). The window value is
@@ -123,7 +139,7 @@ function buildWebPositions(mouthRadius, coneHeight, radialSpokes, rings) {
  */
 // Drape deformation math: module scope, defined once so the per-frame path allocates nothing. Pure.
 // Profile: at drape d a ring at axial fraction t is pulled inward by d·(0.45+0.55·(1−t)) and pushed forward past the
-// mouth by d·coneHeight·(1−t)·0.9 (the bag engulfs the catch; matches the rim-weight envZ sweep in CaptureNetVisual).
+// mouth by d·coneHeight·(1−t)·0.9 (the bag engulfs the catch; the film's mouth ring stays on the mouth plane at t = 1, and the capture nets' rim weights ride it).
 // The settle-jiggle is a radial ripple, strongest at the mouth. drapeRingRadius / drapeRingZ are EXPORTED so the probe,
 // harness gates and unit tests compute the SAME drawn-bag geometry, never a re-derived copy.
 export function drapeRingRadius(t, spokeAngle, mouthRadius, drape, cinch, closed, jigA, jigP) {
@@ -330,6 +346,42 @@ export function contentsFloorClamped(z, cosA, sinA, openConeRadius, contentsZ, c
 }
 
 /**
+ * The floor the MOUTH RING (the drawn edge the weights and the cord ride) is drawn at when its driver pinned the ring to
+ * a SPHERE round the contents (`rimSphereR`: the drawn catch's farthest vertex from its origin plus the clearance the
+ * driver wants, so no extra margin here): the sphere's section at the ring's own z, clamped to the open radius there
+ * like every floor. A sphere has the same section at the mouth plane however the catch turns, where the box floor jumps
+ * to a whole face when the plane first meets one and then follows the box as it tumbles (the weights opened and closed
+ * through the leash hand-off, owner 2026-10-31). The body rings keep the box floor: only the last ring is pinned.
+ * Pure; scene units; no allocations.
+ * @param {number} z — the ring's axial position in kit space (negative = ahead of the apex)
+ * @param {number} contentsZ — the sphere's centre (the catch's origin) in the same frame
+ * @param {number} rimSphereR — the sphere's radius, scene units (> 0)
+ * @param {number} openRadius — the open-cone radius at z (the clamp)
+ * @returns {number} floor radius (scene units), ≥ 0
+ */
+export function rimSphereFloor(z, contentsZ, rimSphereR, openRadius) {
+  const f = contentsFloorRadius(z, contentsZ, rimSphereR, 1);
+  return f > 0 ? Math.min(f, openRadius) : 0;
+}
+
+/**
+ * A body ring's contents floor held inside the bag SPHERE when the driver set one (`bagSphereR` > 0): never wider than
+ * the sphere's section at the ring's z (0 past the sphere's ends). The oriented box the film wraps has corners (and,
+ * tilted, a front face) that reach past the sphere holding the drawn catch, so a ring next to the mouth plane was drawn
+ * 0.1-0.2 m outside the wire bag that replaces the net at the latch. Only ever LOWERS a floor, and the sphere holds the
+ * drawn catch, so it never moves the film into a new part of the catch. `bagSphereR` 0: the floor unchanged. Pure.
+ * @param {number} f — the box floor at this ring/spoke (scene units)
+ * @param {number} z — the ring's axial position in kit space
+ * @param {number} contentsZ — the sphere's centre in the same frame
+ * @param {number} bagSphereR — the sphere's radius, scene units (0 = off)
+ * @param {number} openRadius — the open-cone radius at z (the clamp)
+ * @returns {number} the floor, scene units
+ */
+export function floorInBagSphere(f, z, contentsZ, bagSphereR, openRadius) {
+  return bagSphereR > 0 ? Math.min(f, rimSphereFloor(z, contentsZ, bagSphereR, openRadius)) : f;
+}
+
+/**
  * Whether a contents-BOX spec is usable (all half extents positive). THE one home of the box-validity predicate: kit
  * builders, contentsFloorClamped and the main.js probe all decide box-vs-sphere through it.
  */
@@ -533,7 +585,9 @@ function _ringZGrid(out, p) {
 /**
  * The single mouth-plane ring radius the contents floor demands: a box floor varies with angle, so the MAX over the
  * spoke directions (the angles the film's vertices sit at). Sphere-floor / no-contents → 0 whenever the contents'
- * far face is short of the mouth plane. Module-scope, allocation-free; reads the handle's stored contents fields.
+ * far face is short of the mouth plane. While the ring is pinned to a sphere (`h._rimSphereR` > 0, the leash hand-off
+ * cinch) it is round: `rimSphereFloor` on that sphere, not the box. Module-scope, allocation-free; reads the handle's
+ * stored contents fields.
  */
 function _mouthFloorMax(h) {
   const cR = h._contentsR ?? 0;
@@ -544,6 +598,8 @@ function _mouthFloorMax(h) {
   // (the ring must clear the contents at ITS OWN z, or the gathered beads would sit inside the catch). `_mouthZEff` is
   // h._mouthZ whenever the gather is off.
   const zEff = h._mouthZEff ?? h._mouthZ;
+  // a ring pinned to a sphere (updateWebDrape's rimSphereR) is round: one value for every spoke
+  if ((h._rimSphereR ?? 0) > 0) return rimSphereFloor(zEff, cZ, h._rimSphereR, h.mouthRadius);
   let f = 0;
   for (let s = 0; s < h.radialSpokes; s++) {
     const v = contentsFloorClamped(zEff, h._cosA[s], h._sinA[s], h.mouthRadius, cZ, cR, cB, NET_CER.CONTENTS_FLOOR_MARGIN, h._mouthZ);
@@ -566,6 +622,8 @@ function buildWebPositionsDraped(out, p) {
   const contentsZ = p.contentsZ ?? 0;
   const contentsBox = p.contentsBox ?? null;
   const floorOn = drape > 0 && (contentsR > 0 || contentsBoxValid(contentsBox));
+  const rimSphereR = p.rimSphereR ?? 0;   // > 0: the mouth ring floors on this sphere, not the box (rimSphereFloor)
+  const bagSphereR = p.bagSphereR ?? 0;   // > 0: no body ring's floor is wider than this sphere's section (floorInBagSphere)
   // Per-spoke cos/sin/angle are fixed for the handle's life, so the consumer passes cached tables; absent (a test
   // calling this directly) → compute them.
   const cosA = (p.cosA && p.cosA.length === radialSpokes) ? p.cosA : null;
@@ -608,8 +666,11 @@ function buildWebPositionsDraped(out, p) {
       const t1 = ringZ && !gRim ? depthToRingT(-z1, coneHeight, drape) : t;
       const open0 = ringZ ? mouthRadius * (-z0 / coneHeight) : openCone;
       const open1 = ringZ ? mouthRadius * (-z1 / coneHeight) : openCone;
-      const f0 = floorOn ? contentsFloorClamped(z0, c0, n0, open0, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight) : 0;
-      const f1 = floorOn ? contentsFloorClamped(z1, c1, n1, open1, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight) : 0;
+      const pinRim = rimSphereR > 0 && k === rings;       // the mouth ring only: round, on the sphere (rimSphereFloor)
+      const f0 = !floorOn ? 0 : pinRim ? rimSphereFloor(z0, contentsZ, rimSphereR, open0)
+        : floorInBagSphere(contentsFloorClamped(z0, c0, n0, open0, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight), z0, contentsZ, bagSphereR, open0);
+      const f1 = !floorOn ? 0 : pinRim ? rimSphereFloor(z1, contentsZ, rimSphereR, open1)
+        : floorInBagSphere(contentsFloorClamped(z1, c1, n1, open1, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight), z1, contentsZ, bagSphereR, open1);
       const r0 = Math.max(drapeRingRadius(t0, a0, mouthRadius, drape, cinch, closed, jigA, jigP), f0);
       const r1 = Math.max(drapeRingRadius(t1, a1, mouthRadius, drape, cinch, closed, jigA, jigP), f1);
       out[idx++] = c0 * r0; out[idx++] = n0 * r0; out[idx++] = z0;
@@ -673,6 +734,8 @@ function updateMembraneLattice(out, p) {
   const contentsZ = p.contentsZ ?? 0;
   const contentsBox = p.contentsBox ?? null;
   const floorOn = drape > 0 && (contentsR > 0 || contentsBoxValid(contentsBox));
+  const rimSphereR = p.rimSphereR ?? 0;
+  const bagSphereR = p.bagSphereR ?? 0;
   const cosA = (p.cosA && p.cosA.length === radialSpokes) ? p.cosA : null;
   const sinA = (p.sinA && p.sinA.length === radialSpokes) ? p.sinA : null;
   const angA = (p.angA && p.angA.length === radialSpokes) ? p.angA : null;
@@ -701,7 +764,11 @@ function updateMembraneLattice(out, p) {
         const g = (tK - contactT) / 0.18;
         r = Math.max(0, r - drape * compressM * Math.exp(-g * g));
       }
-      if (floorOn) r = Math.max(r, contentsFloorClamped(z, ca, sa, openK, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight));
+      if (floorOn) {
+        r = Math.max(r, (rimSphereR > 0 && k === rings)
+          ? rimSphereFloor(z, contentsZ, rimSphereR, openK)
+          : floorInBagSphere(contentsFloorClamped(z, ca, sa, openK, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight), z, contentsZ, bagSphereR, openK));
+      }
       out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = z;
     }
   }
@@ -881,8 +948,12 @@ export const NetMeshKit = {
       group.add(w);
     }
 
-    // Drawstring spoke pattern: apex→w0→apex→w1→…→apex→wN-1→apex→w0
-    const dsVertexCount = weightCount * 2 + 2;
+    // Drawstring: a closed loop round the mouth through every weight, never a segment to the apex hub (a real drawstring
+    // is a cord round the mouth, not spokes to the hub). Default shape: straight chords w0→w1→…→wN-1→w0 (N + 1
+    // vertices). With `setCordFollowsRim` it runs along the film's drawn mouth edge with the weights inserted
+    // (radialSpokes + N + 1 vertices). The buffer is sized for the larger shape; `updateDrawstring` sets the draw range
+    // and fills every unused tail vertex with the closing (= first) vertex.
+    const dsVertexCount = Math.max(weightCount + 1, radialSpokes + weightCount + 1);
     const drawstringPositions = new Float32Array(dsVertexCount * 3);
     const drawstringGeo = new THREE.BufferGeometry();
     drawstringGeo.setAttribute('position', new THREE.BufferAttribute(drawstringPositions, 3));
@@ -895,6 +966,9 @@ export const NetMeshKit = {
     drawstringLine.name = 'drawstring';
     drawstringLine.visible = childrenVisible;
     drawstringLine.frustumCulled = false;
+    // Cord OVER the threads (renderOrder 1): along the mouth edge it lies exactly on the pale ring thread, which drew over
+    // it and hid it (2026-10-31 re-shoot, `tmp/net6-look/edge/` frames 270-340).
+    drawstringLine.renderOrder = 2;
     group.add(drawstringLine);
 
     const apexGeo = new THREE.SphereGeometry(M * apexHubRadiusM, 8, 8);
@@ -966,6 +1040,7 @@ export const NetMeshKit = {
       _cinchFrac: 0,
       _jigglePhase: 0,
       _jiggleAmp: 0,
+      _rimSphereR: 0,      // > 0: the mouth ring floors on a sphere of this radius (updateWebDrape's rimSphereR)
       _flashPeakT: null,   // wall-clock when cinchFrac first reached 0.85
       _contactFlashT: null, // wall-clock of the drape's rising edge (first touch)
       _drapePrev: 0,       // previous frame's drape (rising-edge detect)
@@ -973,6 +1048,11 @@ export const NetMeshKit = {
       _cosA,
       _sinA,
       _angA,
+      // Rim-following cord (off by default; `setCordFollowsRim`) + its allocate-once ordering scratch.
+      _cordFollowsRim: false,
+      _cordKey: new Float64Array(weightCount),
+      _cordSeg: new Int32Array(weightCount),
+      _cordOrd: new Int32Array(weightCount),
       // Per-(ring,spoke) ring-z scratch for the elbow redistribution: allocated once, refilled per updateWebDrape, read by
       // BOTH builders (the membrane/thread weld).
       _ringZ: new Float32Array((rings + 1) * radialSpokes),
@@ -1008,9 +1088,10 @@ export const NetMeshKit = {
    * Sweep the RIM WEIGHTS (+ drawstring) from the open mouth toward the kit's closed radius WITHOUT touching the
    * cone/membrane meshes: the rim-only counterpart of setMouthFraction for consumers whose web vertices are owned by
    * updateWebDrape (lasso wrap-as-cloth). Under the drape driver the threads/film bunch onto the contents, so the mesh
-   * scale must stay (1,1,1) while the weights still cinch. Same sweep curve as CaptureNetVisual's CINCH_CLOSING
-   * (mouthRadius → closedRadius, floored at the mouth-plane contents floor), same weight plane (h._mouthZ) as
-   * setMouthFraction.
+   * scale must stay (1,1,1) while the weights still cinch. A circle sweep (mouthRadius → closedRadius, floored at the
+   * mouth-plane contents floor; the same fallback circle CaptureNetVisual's CINCH_CLOSING uses when it has no film —
+   * the capture nets themselves place weights on the film's drawn edge, `mouthRingPoint`), same weight plane
+   * (h._mouthZ) as setMouthFraction.
    * @param {number} t cinch fraction in [0, 1] — 0 = open rim, 1 = closed rim
    */
   setRimCinch(h, t) {
@@ -1140,7 +1221,8 @@ export const NetMeshKit = {
 
   /**
    * The radius the contents floor demands at the MOUTH plane: max over the spokes of the clamped floor at `h._mouthZ`
-   * (0 when no contents reach it). The SAME value the kit's own `setCinchedRim` / `setMouthFraction` floor at, exposed
+   * (0 when no contents reach it), or the round sphere floor while the ring is pinned (`rimSphereR`). The SAME value
+   * the kit's own `setCinchedRim` / `setMouthFraction` floor at, exposed
    * so CaptureNetVisual's cinch furniture (`_setCinchedRim`, the CINCH_CLOSING sweep) can ride it instead of closing
    * THROUGH a catch whose silhouette reaches the mouth plane. Reads the handle's stored contents spec, never a
    * re-derived floor. Pure; no allocations. Null-safe (a handle-less consumer reads 0).
@@ -1156,7 +1238,7 @@ export const NetMeshKit = {
   setCinchedRim(h) {
     // Floor the cinched ring at the contents envelope on the mouth plane (0 when the far face stops short of the mouth, so
     // the ring still closes to closedRadius). Clamped to mouthRadius (inside contentsFloorClamped); max over the spoke
-    // angles (box floor).
+    // angles (box floor), or the round sphere floor while the ring is pinned (`_rimSphereR`, see _mouthFloorMax).
     const r = Math.max(h.closedRadius, _mouthFloorMax(h));
     for (let i = 0; i < h.weightCount; i++) {
       const a = h._rimAngles[i] + h._spinAngle;
@@ -1169,25 +1251,120 @@ export const NetMeshKit = {
     if (h.weightCount > 0) this.updateDrawstring(h);
   },
 
-  /** Rebuild drawstring vertices from the rim-node positions (apex→w0→apex→w1→…→apex→wN-1→apex→w0). No allocations. */
+  /**
+   * The point on the net's DRAWN mouth edge at kit-local azimuth `angle`: the film's last ring (ring index `rings` of
+   * `membranePositions`, a closed polygon of `radialSpokes` vertices) interpolated linearly between the two vertices
+   * whose spoke azimuths (`_angA`, spoke s at 2πs/radialSpokes, no offset) bracket the angle, so the point lies ON the
+   * drawn polygon. The spoke table is used, never an `atan2` of a vertex (a ring pinched to the axis has no azimuth).
+   * Any angle works (negative, above 2π). The result is in the weights' frame: the membrane mesh's own
+   * position/scale/quaternion is applied when it is not the identity (a scale ramp while unfolding, `setMouthFraction`).
+   * No allocations.
+   * @param {object} h kit handle
+   * @param {number} angle kit-local azimuth (rad)
+   * @param {{x:number,y:number,z:number}} out receives the point (only written when this returns true)
+   * @returns {boolean} false (nothing written) when the handle has no membrane
+   */
+  mouthRingPoint(h, angle, out) {
+    const pos = h.membranePositions;
+    if (!pos || !h.membraneMesh) return false;
+    const S = h.radialSpokes;
+    // Spoke units: u = angle / (2π/S), wrapped into [0, S).
+    let u = angle * S / (2 * Math.PI);
+    u -= Math.floor(u / S) * S;
+    let s = Math.floor(u);
+    if (s >= S) s = S - 1;   // u rounded up to S by the wrap
+    if (s < 0) s = 0;
+    const f = u - s;
+    const s1 = s + 1 === S ? 0 : s + 1;
+    const base = h.rings * S * 3;
+    const i0 = base + s * 3, i1 = base + s1 * 3;
+    _mouthPt.set(
+      pos[i0] + (pos[i1] - pos[i0]) * f,
+      pos[i0 + 1] + (pos[i1 + 1] - pos[i0 + 1]) * f,
+      pos[i0 + 2] + (pos[i1 + 2] - pos[i0 + 2]) * f,
+    );
+    _applyMembraneFrame(h.membraneMesh, _mouthPt);
+    out.x = _mouthPt.x; out.y = _mouthPt.y; out.z = _mouthPt.z;
+    return true;
+  },
+
+  /**
+   * Opt this handle's cord into following the net's drawn mouth edge (see `updateDrawstring`). Off by default so a kit
+   * whose cord is a plain chord loop (the lasso's own net) is untouched. Rebuilds the cord.
+   * @param {object} h kit handle
+   * @param {boolean} on
+   */
+  setCordFollowsRim(h, on) {
+    h._cordFollowsRim = !!on;
+    if (h.weightCount > 0) this.updateDrawstring(h);
+  },
+
+  /**
+   * Rebuild the drawstring from the rim-node positions. Two shapes, both closed (last vertex = first), nothing runs to
+   * the apex hub:
+   *  - default: straight chords through every weight in order (w0→w1→…→wN-1→w0, N + 1 vertices).
+   *  - cord-follows-rim (`setCordFollowsRim(h, true)`, needs a membrane): the polygon of the net's drawn mouth edge
+   *    (ring `rings`), with every weight inserted in angular order between the two ring vertices that bracket it
+   *    (`radialSpokes + N + 1` vertices), so the cord lies along the edge and still passes through every weight even
+   *    when a weight is off the edge. A weight's angle is `atan2(y, x)` of its position (a weight on the axis uses its
+   *    index angle 2πi/N).
+   * The buffer is sized for the larger shape; the draw range covers the used vertices and every unused tail vertex
+   * repeats the closing (= first) vertex, so a reader of the whole buffer sees only zero-length segments there.
+   * No allocations.
+   */
   updateDrawstring(h) {
-    const { rimWeights, drawstringPositions, drawstringLine, weightCount } = h;
+    const { rimWeights, drawstringPositions: dp, drawstringLine, weightCount } = h;
     if (weightCount <= 0) return;
     let idx = 0;
-    for (let i = 0; i < weightCount; i++) {
-      drawstringPositions[idx++] = 0;
-      drawstringPositions[idx++] = 0;
-      drawstringPositions[idx++] = 0;
-      drawstringPositions[idx++] = rimWeights[i].position.x;
-      drawstringPositions[idx++] = rimWeights[i].position.y;
-      drawstringPositions[idx++] = rimWeights[i].position.z;
+    let count;
+    if (h._cordFollowsRim && h.membraneMesh && h.membranePositions) {
+      const S = h.radialSpokes;
+      const step = 2 * Math.PI / S;
+      const key = h._cordKey, seg = h._cordSeg, ord = h._cordOrd;
+      for (let i = 0; i < weightCount; i++) {
+        const p = rimWeights[i].position;
+        let a = (p.x * p.x + p.y * p.y < _AXIS_EPS2)
+          ? (2 * Math.PI * i) / weightCount
+          : Math.atan2(p.y, p.x);
+        if (a < 0) a += 2 * Math.PI;
+        if (a >= 2 * Math.PI) a -= 2 * Math.PI;
+        key[i] = a;
+        let sg = Math.floor(a / step);
+        if (sg >= S) sg = S - 1;
+        seg[i] = sg;
+        // Insertion sort by angle (weightCount is tiny).
+        let j = i;
+        while (j > 0 && key[ord[j - 1]] > a) { ord[j] = ord[j - 1]; j--; }
+        ord[j] = i;
+      }
+      const base = h.rings * S * 3;
+      const pos = h.membranePositions;
+      let w = 0;
+      for (let s = 0; s < S; s++) {
+        _mouthPt.set(pos[base + s * 3], pos[base + s * 3 + 1], pos[base + s * 3 + 2]);
+        _applyMembraneFrame(h.membraneMesh, _mouthPt);
+        dp[idx++] = _mouthPt.x; dp[idx++] = _mouthPt.y; dp[idx++] = _mouthPt.z;
+        while (w < weightCount && seg[ord[w]] === s) {
+          const p = rimWeights[ord[w]].position;
+          dp[idx++] = p.x; dp[idx++] = p.y; dp[idx++] = p.z;
+          w++;
+        }
+      }
+      // Closing vertex = ring vertex 0.
+      dp[idx++] = dp[0]; dp[idx++] = dp[1]; dp[idx++] = dp[2];
+      count = S + weightCount + 1;
+    } else {
+      for (let i = 0; i <= weightCount; i++) {
+        const p = rimWeights[i === weightCount ? 0 : i].position;
+        dp[idx++] = p.x; dp[idx++] = p.y; dp[idx++] = p.z;
+      }
+      count = weightCount + 1;
     }
-    drawstringPositions[idx++] = 0;
-    drawstringPositions[idx++] = 0;
-    drawstringPositions[idx++] = 0;
-    drawstringPositions[idx++] = rimWeights[0].position.x;
-    drawstringPositions[idx++] = rimWeights[0].position.y;
-    drawstringPositions[idx++] = rimWeights[0].position.z;
+    const total = (dp.length / 3) | 0;
+    for (let v = count; v < total; v++) {
+      dp[idx++] = dp[0]; dp[idx++] = dp[1]; dp[idx++] = dp[2];
+    }
+    drawstringLine.geometry.setDrawRange(0, Math.min(count, total));
     drawstringLine.geometry.attributes.position.needsUpdate = true;
   },
 
@@ -1250,6 +1427,12 @@ export const NetMeshKit = {
    *   scene units; see contentsFloorRadiusBox). Takes precedence over the sphere floor when valid: the film wraps the
    *   catch's REAL extents. The kit COPIES the 15 numbers into a per-handle spec (allocated once per handle), so the
    *   consumer may reuse a scratch object across visuals/frames.
+   * @param {number} [drapeState.rimSphereR] > 0: floor the MOUTH RING (the drawn edge the weights and cord ride) on a
+   *   sphere of this radius (scene units, centred on `contentsZ`) instead of the box, so the ring is round and does not
+   *   follow a tumbling catch (see `rimSphereFloor`). 0 / absent (the default) is byte-identical to the box floor.
+   * @param {number} [drapeState.bagSphereR] > 0: no BODY ring's box floor is wider than this sphere's section (centred on
+   *   `contentsZ`; see `floorInBagSphere`), so the film stays inside the wire bag that takes over at the latch. 0 / absent
+   *   (the default) is byte-identical to the box floor.
    * @param {THREE.Vector3} [drapeState.localCamPos] camera position in the kit's LOCAL frame (the consumer transforms
    *   world→local and passes it in as data, preserving the pure-local-space rule). When present, depth shading
    *   rewrites the vertex colours: the far side of the bag recedes.
@@ -1259,13 +1442,14 @@ export const NetMeshKit = {
    */
   updateWebDrape(h, { drape = 0, cinchFrac = 0, jigglePhase = 0, jiggleAmp = 0,
                       contentsRadius = 0, contentsZ = 0, contentsBox = null, localCamPos,
-                      catchSizeM = 0, mouthGather = 0 } = {}) {
+                      catchSizeM = 0, mouthGather = 0, rimSphereR = 0, bagSphereR = 0 } = {}) {
     if (!h || !h.webPositions || !h.coneMesh) return;
     h._drape = drape;
     h._cinchFrac = cinchFrac;
     h._jigglePhase = jigglePhase;
     h._jiggleAmp = jiggleAmp;
     h._catchSizeM = catchSizeM;
+    h._rimSphereR = rimSphereR;   // read by _mouthFloorMax; bagSphereR is only a per-call parameter (nothing reads it later)
     // 0 (default) is byte-identical everywhere; the LASSO wrap ramps it after the cinch so the mouth-side fabric gathers
     // toward the piece (drawstring-rosette language) instead of trailing as an empty sock. Ring-z lever only.
     h._mouthGather = mouthGather;
@@ -1340,6 +1524,8 @@ export const NetMeshKit = {
       contentsRadius,
       contentsZ,
       contentsBox: h._contentsBox,
+      rimSphereR,
+      bagSphereR,
       cosA: h._cosA,
       sinA: h._sinA,
       angA: h._angA,
@@ -1364,6 +1550,8 @@ export const NetMeshKit = {
         contentsRadius,
         contentsZ,
         contentsBox: h._contentsBox,
+        rimSphereR,
+        bagSphereR,
         // Aim the contact dent at the ACTUAL seat (ring index of the contents' depth) instead of the fixed 0.75, which
         // peaked the dent ~1.4 m ahead of the catch. depthToRingT clamps to [0,1].
         contactT: contentsRadius > 0
