@@ -167,7 +167,8 @@
         "vleo_survival",
         "band_180_400",
         "band_400_600",
-        "band_600_900"
+        "band_600_900",
+        "drag_sail_deorbit"
       ],
       "i18n": {
         "title": "Atmospheric Drag",
@@ -192,7 +193,8 @@
         "rendezvous",
         "atmospheric_drag",
         "keplerian_orbit",
-        "specific_impulse"
+        "specific_impulse",
+        "lambert_problem"
       ],
       "i18n": {
         "title": "Delta-V Budget",
@@ -224,7 +226,8 @@
         "cluster_russian72",
         "cluster_russian_sso",
         "cluster_sso",
-        "cluster_scattered"
+        "cluster_scattered",
+        "lambert_problem"
       ],
       "i18n": {
         "title": "Hohmann Transfer",
@@ -248,7 +251,8 @@
         "orbital_inclination",
         "keplerian_orbit",
         "cluster_russian65",
-        "cluster_sso"
+        "cluster_sso",
+        "j2_drift_hop"
       ],
       "i18n": {
         "title": "J2 Oblateness",
@@ -272,7 +276,8 @@
         "orbital_inclination",
         "j2_perturbation",
         "delta_v",
-        "raan_precession"
+        "raan_precession",
+        "lambert_problem"
       ],
       "i18n": {
         "title": "Keplerian Orbits",
@@ -301,7 +306,8 @@
         "cluster_russian72",
         "cluster_russian_sso",
         "cluster_sso",
-        "cluster_scattered"
+        "cluster_scattered",
+        "j2_drift_hop"
       ],
       "i18n": {
         "title": "Orbital Inclination",
@@ -354,7 +360,8 @@
         "j2_perturbation",
         "orbital_inclination",
         "keplerian_orbit",
-        "cluster_sso"
+        "cluster_sso",
+        "j2_drift_hop"
       ],
       "i18n": {
         "title": "RAAN Precession",
@@ -376,7 +383,9 @@
         "rendezvous",
         "prograde_paradox",
         "orbital_period_altitude",
-        "cluster_scattered"
+        "cluster_scattered",
+        "safety_ellipse",
+        "real_debris_spacing"
       ],
       "i18n": {
         "title": "Relative Velocity in LEO",
@@ -422,7 +431,8 @@
         "mpd_burst",
         "delta_v",
         "cold_gas_thruster",
-        "feep_indium"
+        "feep_indium",
+        "two_beam_plasma_pusher"
       ],
       "i18n": {
         "title": "Specific Impulse",
@@ -694,7 +704,8 @@
       "icon": "💨",
       "related": [
         "xenon_propellant",
-        "krypton_propellant"
+        "krypton_propellant",
+        "two_beam_plasma_pusher"
       ],
       "i18n": {
         "title": "Argon Propellant",
@@ -763,7 +774,9 @@
       "related": [
         "cold_gas_rcs",
         "spring_energy",
-        "rcs_attitude_control"
+        "rcs_attitude_control",
+        "two_beam_plasma_pusher",
+        "ion_beam_shepherd"
       ],
       "i18n": {
         "title": "Recoil Cancellation",
@@ -1258,7 +1271,9 @@
         "news_starlink_breakup",
         "band_600_900",
         "band_900_1200",
-        "band_1200_2000"
+        "band_1200_2000",
+        "ion_beam_shepherd",
+        "laser_debris_nudge"
       ],
       "i18n": {
         "title": "Kessler Syndrome",
@@ -1403,7 +1418,8 @@
         "carbon_composites",
         "solar_furnace",
         "aft_thruster_deck",
-        "fore_bulkhead"
+        "fore_bulkhead",
+        "debris_upcycling"
       ],
       "i18n": {
         "title": "Aluminum in Space",
@@ -1623,7 +1639,9 @@
         "tether_materials",
         "net_neck_winch",
         "fore_bulkhead",
-        "folded_to_fly"
+        "folded_to_fly",
+        "net_membrane_wrap",
+        "spring_net_ejector"
       ],
       "i18n": {
         "title": "Miura-Ori Net Folding",
@@ -1674,7 +1692,9 @@
         "bolas_weapon",
         "reel_mechanics",
         "spin_stabilization",
-        "spinner_pad"
+        "spinner_pad",
+        "spring_net_ejector",
+        "tumble_sync"
       ],
       "i18n": {
         "title": "Net Spin & the Yo-Yo Despin",
@@ -1813,16 +1833,26 @@
         "world_who_removes",
         "catalog_sl16",
         "news_aeolus_reentry",
-        "org_orbital_lasers"
+        "org_orbital_lasers",
+        "two_beam_plasma_pusher",
+        "ion_beam_shepherd",
+        "laser_debris_nudge",
+        "iss_capture_trials",
+        "drag_sail_deorbit",
+        "debris_priority_index",
+        "multi_target_tour",
+        "mother_and_daughters",
+        "real_debris_spacing"
       ],
       "i18n": {
         "title": "Active Debris Removal IRL",
         "shortText": "After decades on paper, active debris removal is finally flying: nets, harpoons, magnetic docking, and robotic rendezvous.",
-        "fullText": "Active debris removal (ADR) means sending something up to catch a dead object and drag it down, and after decades of study the first real missions are flying. Britain's RemoveDEBRIS fired a net at a mock target in 2018 and a harpoon in 2019; Astroscale's ELSA-d tested magnetic docking in 2021; and in 2024 its ADRAS-J closed to about 15 metres from a spent Japanese H-2A rocket stage, the closest a commercial spacecraft has come to a piece of space debris.\n\nEurope's ClearSpace-1 is being built to grab and deorbit a defunct satellite, having switched its target to the agency's own PROBA-1 satellite after the original target was itself struck by debris. Every approach shares your problem: a dead, drifting, non-cooperative target. Your cradle is the next step, reusable and multi-target where these one-shot demonstrators were not.",
-        "realWorld": "RemoveDEBRIS net 2018 / harpoon 2019; Astroscale ELSA-d 2021; ADRAS-J ~15 m rendezvous 2024; ClearSpace-1 (PROBA-1 target) in development.",
+        "fullText": "Active debris removal (ADR) means sending something up to catch a dead object and drag it down, and after decades of study the first real missions are flying. Britain's RemoveDEBRIS fired a net at a mock target in 2018 and a harpoon in 2019; Astroscale's ELSA-d tested magnetic docking in 2021; and in 2024 its ADRAS-J closed to about 15 metres from a spent Japanese H-2A rocket stage, the closest a commercial spacecraft has come to a piece of space debris.\n\nEurope's ClearSpace-1 is being built to grab and deorbit a defunct satellite, having switched its target to the agency's own PROBA-1 satellite after the original target was itself struck by debris. Since then the picture has moved: ADRAS-J ended its operations on 25 March 2026, its follow-up ADRAS-J2, to capture and deorbit a rocket stage, is planned to launch in Japanese fiscal 2027, Starfish Space launched Otter Pup 2 in June 2025, and ClearSpace-1 is planned for 2028 or 2029, depending on the source. Every approach shares your problem: a dead, drifting, non-cooperative target. Your cradle is the next step, reusable and multi-target where these one-shot demonstrators were not.",
+        "realWorld": "RemoveDEBRIS net 2018 / harpoon 2019; Astroscale ELSA-d 2021; ADRAS-J ~15 m rendezvous 2024; ClearSpace-1 (PROBA-1 target) in development. ADRAS-J operations ended 25 Mar 2026; ADRAS-J2 launch planned Japanese fiscal 2027; Starfish Otter Pup 2 launched Jun 2025; ClearSpace-1 launch 2028 or 2029 (sources differ).",
         "trlRationale": "Demonstrated in orbit: RemoveDEBRIS (2018-19), ELSA-d (2021), ADRAS-J (2024).",
-        "unlockHint": "Clear 60 pieces of debris."
+        "unlockHint": "Clear 50 pieces of debris."
       },
+      "lastVerified": "2026-10",
       "track": "the_debris_crisis",
       "trackOrder": 11
     },
@@ -1839,7 +1869,8 @@
         "adr_methods_real",
         "starlink_contained",
         "starlink_cascade",
-        "news_starlink_breakup"
+        "news_starlink_breakup",
+        "real_debris_spacing"
       ],
       "i18n": {
         "title": "Breakup Events",
@@ -1912,7 +1943,9 @@
         "debris_tracking",
         "trackable_vs_dark",
         "hypervelocity",
-        "catalog_envisat"
+        "catalog_envisat",
+        "laser_debris_nudge",
+        "debris_priority_index"
       ],
       "i18n": {
         "title": "Debris Size Classification",
@@ -2305,7 +2338,8 @@
         "lidar_sensing",
         "pose_estimation",
         "docking_precision",
-        "sensor_deck"
+        "sensor_deck",
+        "ai_capture_vision"
       ],
       "i18n": {
         "title": "LIDAR Ranging",
@@ -2332,7 +2366,8 @@
         "docking_berthing",
         "pulse_scan_radar",
         "news_mev1_servicing",
-        "nav_lights"
+        "nav_lights",
+        "safety_ellipse"
       ],
       "i18n": {
         "title": "Proximity Navigation",
@@ -2385,17 +2420,20 @@
         "docking_berthing",
         "control_moment_gyroscope",
         "rcs_attitude_control",
-        "spin_stabilization"
+        "spin_stabilization",
+        "ai_capture_vision",
+        "tumble_sync"
       ],
       "i18n": {
         "title": "Detumbling Captured Debris",
         "shortText": "A spinning wreck is hard to grab. Slow its spin first and the catch gets much easier.",
         "hardwareNote": "The spin-brake laser on the sensor turret slows a tumbling catch a little each second; a real laser does it by ablation recoil, a gentle push.",
-        "fullText": "Dead satellites and debris tumble unpredictably, sometimes at several degrees per second, and you cannot safely haul a spinning target. Before it comes home it has to be de-spun, which means applying a counter-torque through the grapple point using thrusters or reaction wheels.\n\nThe difficulty is that real objects are not simple. An asymmetric body tumbles about all three axes at once, so the spin does not lie on a single clean axis, and knowing its moment of inertia is what tells you how much effort the job will take. A fast, awkward tumble can defeat a grab outright, which is why reading the target's motion comes before committing a net or an arm.",
-        "realWorld": "Envisat tumbles at ~3°/s, too fast for classical robotic capture; de-spin via grapple-point torque is a core removal problem.",
+        "fullText": "Dead satellites and debris tumble unpredictably, sometimes at several degrees per second, and you cannot safely haul a spinning target. Before it comes home it has to be de-spun, which means applying a counter-torque through the grapple point using thrusters or reaction wheels.\n\nThe difficulty is that real objects are not simple. An asymmetric body tumbles about all three axes at once, so the spin does not lie on a single clean axis, and knowing its moment of inertia is what tells you how much effort the job will take. A fast, awkward tumble can defeat a grab outright, which is why reading the target's motion comes before committing a net or an arm. Touching is not the only way to slow a spin. A 2026 simulation by DLR found a laser could fully despin a rocket body within mission-relevant timescales, a rotating magnet detumbled a test object on a low-friction rig in a 2024 lab test, and a 2024 simulation used a thruster's exhaust as a gentle torque on a satellite; none has been tried on debris in orbit.",
+        "realWorld": "Envisat tumbles at ~3°/s, too fast for classical robotic capture; de-spin via grapple-point torque is a core removal problem. Laser, magnet and exhaust de-spin are simulation or laboratory work only, 2024 to 2026.",
         "trlRationale": "Detumble control demonstrated; non-cooperative capture still maturing.",
         "unlockHint": "Fly until the mothership reports a target's tumble rate."
       },
+      "lastVerified": "2026-10",
       "track": "how_we_catch",
       "trackOrder": 2
     },
@@ -3088,7 +3126,11 @@
         "docking_berthing",
         "delta_v",
         "docking_precision",
-        "rcs_attitude_control"
+        "rcs_attitude_control",
+        "safety_ellipse",
+        "tumble_sync",
+        "mother_and_daughters",
+        "real_debris_spacing"
       ],
       "i18n": {
         "title": "Orbit Matching & Rendezvous",
@@ -3373,7 +3415,9 @@
         "core_loop",
         "solar_furnace",
         "pane_refit",
-        "capture_collar"
+        "capture_collar",
+        "adr_business_case",
+        "debris_upcycling"
       ],
       "i18n": {
         "title": "The Salvage Economy",
@@ -3410,7 +3454,8 @@
       "related": [
         "tool_choice",
         "core_loop",
-        "weaver_gripper"
+        "weaver_gripper",
+        "electroadhesive_grip"
       ],
       "i18n": {
         "title": "Capture Quality Pays",
@@ -3438,7 +3483,8 @@
         "org_orbital_lasers",
         "org_skyperfect_jsat",
         "org_esa_debris",
-        "org_uk_space_agency"
+        "org_uk_space_agency",
+        "adr_business_case"
       ],
       "i18n": {
         "title": "Who Actually Cleans Orbit",
@@ -3626,7 +3672,10 @@
         "kessler_syndrome",
         "world_who_removes",
         "cluster_russian72",
-        "band_600_900"
+        "band_600_900",
+        "ion_beam_shepherd",
+        "debris_priority_index",
+        "multi_target_tour"
       ],
       "i18n": {
         "title": "SL-16 Rocket Bodies: The Heavy Hazards",
@@ -4038,7 +4087,8 @@
       "related": [
         "world_the_rules",
         "world_adr_mandate",
-        "news_iss_pallet"
+        "news_iss_pallet",
+        "adr_business_case"
       ],
       "i18n": {
         "title": "Who Pays When It Falls",
@@ -4225,7 +4275,8 @@
         "star_tracker",
         "lidar_sensing",
         "sensor_deck",
-        "nav_lights"
+        "nav_lights",
+        "ai_capture_vision"
       ],
       "i18n": {
         "title": "Visual Pose Estimation",
@@ -4321,17 +4372,18 @@
         "heritage_solar_max",
         "docking_berthing",
         "tech_level",
-        "tool_choice"
+        "tool_choice",
+        "iss_capture_trials"
       ],
       "i18n": {
         "title": "Robotic Arm",
         "shortText": "The daughter arm is a jointed robot that reaches out, grapples a target, and holds it steady for capture or salvage.",
-        "fullText": "A robotic arm is a chain of powered joints that positions a hand, or end effector, exactly where the work is. Your daughter units are small robotic arms: they reach out to a target, grapple it, hold it steady, and help berth or salvage it. More joints and more reach mean a wider range of captures, which is why the arm comes in tiers.\n\nThe lineage is real. Canada built the Shuttle's Canadarm, flown from 1981, then the larger Canadarm2 for the International Space Station in 2001, and Europe added its own European Robotic Arm in 2021. These arms berth visiting vehicles, move cargo, and support spacewalks. Your arm tiers unlock at higher Tech Levels, earned by clearing debris.",
-        "realWorld": "Canadarm (Shuttle, 1981), Canadarm2 (ISS, 2001), European Robotic Arm (2021).",
+        "fullText": "A robotic arm is a chain of powered joints that positions a hand, or end effector, exactly where the work is. Your daughter units are small robotic arms: they reach out to a target, grapple it, hold it steady, and help berth or salvage it. More joints and more reach mean a wider range of captures, which is why the arm comes in tiers.\n\nThe lineage is real. Canada built the Shuttle's Canadarm, flown from 1981, then the larger Canadarm2 for the International Space Station in 2001, and Europe added its own European Robotic Arm in 2021. These arms berth visiting vehicles, move cargo, and support spacewalks. Research is adding two ideas. A 2025 conference paper by Jinglong Liu proposes joining one arm with a capture net, aimed at fast-spinning debris; its abstract gives no design numbers. And in a 2024 air-floating lab test, an arm that touched a 2.35 kg piece in repeated soft touches under impedance control cut its peak force from 4.4 N to 0.48 N. Your arm tiers unlock at higher Tech Levels, earned by clearing debris.",
+        "realWorld": "Canadarm (Shuttle, 1981), Canadarm2 (ISS, 2001), European Robotic Arm (2021). Liu, Applied and Computational Engineering volume 125 (Mar 2025): an arm joined with a net, a concept; arm touch test, 2024: peak force 4.4 N down to 0.48 N.",
         "trlRationale": "Flight-proven on the Shuttle and ISS for decades.",
         "unlockHint": "Launch a daughter arm."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-10"
     },
     {
       "id": "epm_grapple",
@@ -4341,7 +4393,8 @@
       "startUnlocked": true,
       "related": [
         "magnetorquers",
-        "tool_choice"
+        "tool_choice",
+        "electroadhesive_grip"
       ],
       "i18n": {
         "title": "Electropermanent Magnet Grapple",
@@ -4364,7 +4417,8 @@
       "startUnlocked": true,
       "related": [
         "tool_choice",
-        "capture_quality"
+        "capture_quality",
+        "electroadhesive_grip"
       ],
       "i18n": {
         "title": "Mechanical Gripper",
@@ -4374,12 +4428,12 @@
           "daughter_0": "Large daughter ({{ V5_WEAVER_MASS }} kg): a medium net and gripper jaws. The jaws hold a handle {{ GRIPPER_GRAPPLE.P_GRIP_FIXTURED * 10 }} times in 10, but a bare hull only {{ GRIPPER_GRAPPLE.P_GRIP_UNFIXTURED * 10 }} in 10.",
           "daughter_2": "Large daughter ({{ V5_WEAVER_MASS }} kg): a medium net and gripper jaws. The jaws hold a handle {{ GRIPPER_GRAPPLE.P_GRIP_FIXTURED * 10 }} times in 10, but a bare hull only {{ GRIPPER_GRAPPLE.P_GRIP_UNFIXTURED * 10 }} in 10."
         },
-        "fullText": "A gripper captures by grasping rather than wrapping. Some designs close mechanical jaws around a rail or fitting; others use gecko-inspired adhesive pads that stick to a smooth surface without needing anything to hook onto. Either way the result is a firm, precise, reusable hold on a specific feature of the target.\n\nResearch hardware points the way. NASA JPL's LEMUR robot climbed with spine-fingered grippers, and Astroscale's ELSA-d demonstrated a magnetic capture mechanism for grabbing satellites. A gripper beats a net when the target has a solid rail or fitting to grab and you want a clean hold you can release and reuse, instead of wrapping the whole object in mesh.",
-        "realWorld": "Mechanical grippers (JPL LEMUR); Astroscale ELSA-d magnetic capture; gecko adhesion is research-stage; firm reusable grasp.",
+        "fullText": "A gripper captures by grasping rather than wrapping. The Weaver's gripper closes mechanical jaws around a rail or fitting. A different family, gecko-inspired adhesive pads, sticks to a smooth surface without needing anything to hook onto; the Weaver's gripper uses jaws only. Jaws give a firm, precise, reusable hold on a specific feature of the target.\n\nResearch hardware points the way. NASA JPL's LEMUR robot climbed with spine-fingered grippers, and Astroscale's ELSA-d demonstrated a magnetic capture mechanism for grabbing satellites. A gripper beats a net when the target has a solid rail or fitting to grab and you want a clean hold you can release and reuse, instead of wrapping the whole object in mesh.",
+        "realWorld": "Mechanical grippers (JPL LEMUR); Astroscale ELSA-d magnetic capture; a gecko-pad gripper ran on an Astrobee in the ISS in 2021; firm reusable grasp.",
         "trlRationale": "Demonstrated on research robots; capture grippers still maturing.",
         "unlockHint": "Capture a target with the gripper tool."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-10"
     },
     {
       "id": "spinner_pad",
@@ -4392,7 +4446,8 @@
       "startUnlocked": true,
       "related": [
         "net_yo_yo_despin",
-        "tool_choice"
+        "tool_choice",
+        "electroadhesive_grip"
       ],
       "i18n": {
         "title": "Contact Pad",
@@ -4730,7 +4785,8 @@
         "edt_physics",
         "etpack_tape",
         "space_tether",
-        "vleo_survival"
+        "vleo_survival",
+        "drag_sail_deorbit"
       ],
       "i18n": {
         "title": "Electrodynamic Deorbit",
@@ -4770,7 +4826,8 @@
         "soyuz6_vulkan",
         "astroforge_status",
         "solar_furnace",
-        "vacuum_mechanisms"
+        "vacuum_mechanisms",
+        "debris_upcycling"
       ],
       "i18n": {
         "title": "In-Space Metallurgy",
@@ -4938,7 +4995,10 @@
         "entanglement_hazard",
         "lee_snare",
         "miura_ori_net",
-        "capture_collar"
+        "capture_collar",
+        "net_membrane_wrap",
+        "spring_net_ejector",
+        "iss_capture_trials"
       ],
       "i18n": {
         "title": "The Only Net Capture",
@@ -4957,7 +5017,8 @@
       "related": [
         "net_neck_winch",
         "docking_lineage",
-        "tether_materials"
+        "tether_materials",
+        "net_membrane_wrap"
       ],
       "i18n": {
         "title": "Entanglement",
@@ -5549,13 +5610,14 @@
       "startUnlocked": true,
       "related": [
         "world_who_removes",
-        "adr_methods_real"
+        "adr_methods_real",
+        "laser_debris_nudge"
       ],
       "i18n": {
         "title": "Orbital Lasers",
         "shortText": "A Tokyo company building space lasers to stop a tumbling satellite.",
-        "fullText": "Orbital Lasers is a Tokyo company founded in January 2024 as a spin-out of SKY Perfect JSAT. It builds compact space lasers: one use is detumbling, stopping the spin of a dead satellite so a servicer can grab it; later, debris removal. It closed a 3.02 billion yen Series A on 19 March 2026 and signed a study agreement with Infinite Orbits on 7 April 2026.\n\nA tumbling target is the hardest part of a catch, so slowing it from a distance is worth real money.",
-        "realWorld": "Sources (read 2026-10-27): Orbital Lasers business page: https://www.orbitallasers.com/en/business/; press release 19 Mar 2026 (founded Jan 2024 as a carve-out from SKY Perfect JSAT; Series A 3.02 billion yen): https://www.orbitallasers.com/2026/03/19/; press release 7 Apr 2026 (collaboration-study MoU with Infinite Orbits): https://www.orbitallasers.com/2026/04/07/. No launch date for its own hardware.",
+        "fullText": "Orbital Lasers is a Tokyo company founded in January 2024 as a spin-out of SKY Perfect JSAT. It builds compact space lasers: one use is detumbling, stopping the spin of a dead satellite so a servicer can grab it; later, debris removal. Its business page lists laser detumbling and ablation thrust, and has a Demonstration Experiment heading with no date. It closed a 3.02 billion yen Series A on 19 March 2026 and signed a study agreement with Infinite Orbits on 7 April 2026.\n\nA tumbling target is the hardest part of a catch, so slowing it from a distance is worth real money.",
+        "realWorld": "Sources (read 2026-10-27): Orbital Lasers company site, business page (read again 31 Oct 2026); press release 19 Mar 2026 (founded Jan 2024 as a carve-out from SKY Perfect JSAT; Series A 3.02 billion yen); press release 7 Apr 2026 (collaboration-study MoU with Infinite Orbits). No launch date for its own hardware.",
         "unlockHint": "Reach orbit."
       },
       "lastVerified": "2026-10"
@@ -5610,8 +5672,8 @@
       "i18n": {
         "title": "ESA Space Debris Office and Clean Space",
         "shortText": "Europe's debris research team and its cleanup programme.",
-        "fullText": "ESA's Space Debris Office coordinates European debris research and runs operational services, mainly from ESOC in Darmstadt, Germany, with a team at ESTEC in the Netherlands. The Clean Space initiative covers designing missions that leave no debris, plus in-orbit servicing and active removal. Each year ESA also publishes a Space Environment Report.\n\nEurope's removal mission ClearSpace-1 belongs to this effort.",
-        "realWorld": "Sources (read 2026-10-25): ESA Space Debris Office: https://www.esa.int/Space_Safety/Space_Debris/ESA_Space_Debris_Office; ESA Clean Space: https://www.esa.int/Space_Safety/Clean_Space (latest story 8 Oct 2026); ESA Space Environment Report 2025: https://www.esa.int/Space_Safety/Space_Debris/ESA_Space_Environment_Report_2025. Flyeye and TIRA, named earlier on the menu, could not be confirmed and were dropped.",
+        "fullText": "ESA's Space Debris Office coordinates European debris research and runs operational services, mainly from ESOC in Darmstadt, Germany, with a team at ESTEC in the Netherlands. The Clean Space initiative covers designing missions that leave no debris, plus in-orbit servicing and active removal. Each year ESA also publishes a Space Environment Report. The report carries a Space Environment Health Index that scores each object's size and shape, lifetime, avoidance, passivation and fragmentation risk, sums it over a 200-year projection and divides by a 2014 reference; its value was about 4 in 2025, and the 2026 report gives about 50 on a 100-year horizon.\n\nEurope's removal mission ClearSpace-1 belongs to this effort.",
+        "realWorld": "Sources (read 2026-10-25): ESA Space Debris Office site; ESA Clean Space page (latest story 8 Oct 2026); ESA Space Environment Report 2025. Health index figures: ESA Space Environment Report 2025 and 2026 reports, read October 2026. Flyeye and TIRA, named earlier on the menu, could not be confirmed and were dropped.",
         "unlockHint": "Reach orbit."
       },
       "lastVerified": "2026-10"
@@ -5801,6 +5863,398 @@
       "lastVerified": "2026-10",
       "track": "world_stage",
       "trackOrder": 11
+    },
+    {
+      "id": "two_beam_plasma_pusher",
+      "category": "PROPULSION",
+      "trl": 3,
+      "icon": "⚡",
+      "related": [
+        "argon_propellant",
+        "recoil_cancellation",
+        "specific_impulse",
+        "adr_methods_real",
+        "ion_beam_shepherd"
+      ],
+      "i18n": {
+        "title": "Two-Way Plasma Thruster",
+        "shortText": "One engine fires a plasma beam at a dead satellite and an equal one the other way, so the pusher itself stays put.",
+        "fullText": "Pushing debris without touching it has a catch: a beam that shoves the target shoves the servicer back just as hard. In 2025 Kazunori Takahashi of Tohoku University built one plasma source with two open ends. It fires a beam at the target and an equal one the other way, so the net push on the thruster stays near zero. A cusp field, made by two opposed coils whose field lines meet at the antenna and turn outward, raised the force on a 45 cm plate from 14.3 to 17.1 mN at 3 kW, and the force reached about 25 mN at 5 kW.\n\nOnly a 45 cm plate 30 cm away was measured, in a vacuum chamber. Pushing a 1 m, 1 t object for about 100 days needs about 30 mN, and the paper calls 25 mN approaching that. Nothing like it has flown. On all her spare power a two-way thruster would give about 2.5 mN, or 8.3 mN with permanent magnets in place of the coils, and both figures hold only at the lab's 0.3 m from the target; her own argon engine gives 17.94 mN on 600 W. It is not in the game today.",
+        "realWorld": "Takahashi, Scientific Reports 15 (20 Aug 2025): 25 mN on a 45 cm target at 0.3 m with 5 kW, laboratory only; the 2018 two-exit design gave about 8 mN at 1 kW.",
+        "trlRationale": "Working in a laboratory chamber in 2025, at 0.3 m range only; never flown.",
+        "unlockHint": "Choose to push a big piece lower with her engine."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "ion_beam_shepherd",
+      "category": "DEBRIS",
+      "trl": 3,
+      "icon": "🐑",
+      "related": [
+        "adr_methods_real",
+        "kessler_syndrome",
+        "catalog_sl16",
+        "recoil_cancellation",
+        "two_beam_plasma_pusher"
+      ],
+      "i18n": {
+        "title": "Ion Beam Shepherd",
+        "shortText": "A servicer flying beside a dead stage aims a beam of fast ions at it and slowly pushes it down, with no contact at all.",
+        "fullText": "An ion beam shepherd is a servicer that flies a few target widths off a dead stage and aims a beam of fast ions at it. The ions push the stage and slowly lower its orbit, with no contact at all. The shepherd needs a second thruster firing the other way, or its own beam would push it away. A 2011 design study had a 100 mN beam take a 5 t stage from 1000 to 300 km in about 7 months, with a shepherd under 300 kg.\n\nEurope's LEOSWEEP study, with a final report in 2017, counted on about 30 mN on the target, tested a thruster beam at 7 m, and looked at lowering a Cyclone-3 stage from 639 to 300 km. A sibling idea, the electrostatic tractor, uses an electron beam to charge the debris so the servicer can pull it from within about 20 m; so far that is simulation. No ion or electron beam has pushed debris in orbit. The game has no beam pusher: a piece she holds can be pushed lower with her own engine, and a piece over 1,500 kg is not caught.",
+        "realWorld": "Bombardelli and Pelaez, Journal of Guidance, Control, and Dynamics volume 34 (2011): 5 t from 1000 to 300 km in about 7 months, a design study; LEOSWEEP final report (2017); no in-orbit test found.",
+        "trlRationale": "Studied since 2011 and tested only on the ground; never flown.",
+        "unlockHint": "Choose to push a big piece lower with her engine."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "laser_debris_nudge",
+      "category": "DEBRIS",
+      "trl": 3,
+      "icon": "🔦",
+      "related": [
+        "adr_methods_real",
+        "kessler_syndrome",
+        "debris_classification",
+        "org_orbital_lasers"
+      ],
+      "i18n": {
+        "title": "Nudging Small Debris With a Laser",
+        "shortText": "A laser pulse boils a thin skin off a metal piece, and the vapour kicks it the other way, like a tiny rocket.",
+        "fullText": "A laser pulse on a metal surface boils off a thin skin, and the vapour kicks the piece the other way. Aimed from the ground, a stream of pulses can nudge a small fragment until its orbit dips into the air. Lab tests measured at most 30 micronewton-seconds per joule on aluminium, and a 2020 study found an optimum near 65 for pieces of 1 to 10 cm. A 2025 review by Bulgakova asks whether pulses shaped in time and space could push harder, which is argued, not measured.\n\nThe sums are modest: a 400 J pulse from the ground can reach about 5 J per square centimetre at 800 km. On a 10 cm aluminium piece that is about 8 mm/s per pulse, so a pass of 100 pulses gives 0.83 m/s, and at least 16 passes lower the piece's lowest point by 50 km (estimates). It suits pieces of 1 to 10 cm, not a rocket stage: pushing an 8,900 kg SL-16 by 1 m/s would take about 297 MJ. No laser has pushed debris in orbit. Her spin-brake laser takes 17.2 degrees per second off a tumble each second; it changes a piece's spin, not its orbit.",
+        "realWorld": "Bulgakova, Aerospace volume 12, issue 9 (8 Sep 2025), an overview with no new experiment; Phipps and colleagues, Journal of Applied Physics volume 122 (2017), laboratory coupling; no laser has pushed debris in orbit.",
+        "trlRationale": "Impulse measured on a laboratory bench; nothing flown or tried on debris in orbit.",
+        "unlockHint": "Fire the spin-brake laser at a target."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "net_membrane_wrap",
+      "category": "TETHERS",
+      "trl": 2,
+      "icon": "🪂",
+      "related": [
+        "miura_ori_net",
+        "net_neck_winch",
+        "entanglement_hazard",
+        "spring_net_ejector"
+      ],
+      "i18n": {
+        "title": "A Net That Is a Film",
+        "shortText": "Four tethered weights pull a thin film open and wrap it round a target. Simulated only, so far.",
+        "fullText": "A net has holes; a membrane wraps. A 2026 design in Space: Science & Technology fires four small weights, tethered to the corners of a thin film (reported to be about 10 micrometres of polyimide), which pull it open and fold it round the target in four steps: shoot, deploy, contact, wrap. In simulation about 30 degrees was the best ejection angle; at 15 degrees the film failed to deploy and at 75 degrees it reached less far.\n\nAt 25 m/s the peak contact force was 3,374 N at a capture distance of 2 m. A spin of 0.1 rad/s, 5.7 degrees per second, was stopped in 0.52 s by friction. It is simulation only: no ground, microgravity or orbit test was found. The mother's net has eight weights and the daughters' nets four, and a film net is not in the game today.",
+        "realWorld": "Yu, Liu and Zhao, Space: Science & Technology volume 6 (first online 4 Nov 2025): simulation only; best angle about 30 degrees, 25 m/s, 3,374 N at 2 m.",
+        "trlRationale": "Numerical simulation only (2026); no ground, microgravity or orbit test found.",
+        "unlockHint": "Catch a piece with a net."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "spring_net_ejector",
+      "category": "TETHERS",
+      "trl": 4,
+      "icon": "🏹",
+      "related": [
+        "miura_ori_net",
+        "net_yo_yo_despin",
+        "net_neck_winch",
+        "net_membrane_wrap"
+      ],
+      "i18n": {
+        "title": "Spring-Launched Nets, No Explosives",
+        "shortText": "A net that leaves by a spring's push, held back until release, with no explosive charge to fire.",
+        "fullText": "Kim and colleagues (Advances in Space Research, 2025) study a net launcher with no explosives: the net leaves by the restoring force of a spring, held back by a hold-down and release mechanism. They sized the spring to the key requirements, checked it by structural analysis, built a downscaled shooter and fired it on the ground.\n\nThe abstract gives no speed or net size. A later topology-optimised shooter from the same group is about 48 percent lighter than the baseline. Nothing has flown. In the game, after a short wind-up the mother's 6 m net leaves at 10 m/s.",
+        "realWorld": "Kim, Song, Kim, Cho and Park, Advances in Space Research volume 76, issue 10 (2025): structural analysis plus a ground test of a downscaled shooter; no flight.",
+        "trlRationale": "Ground demonstration of a downscaled model in 2025; never flown.",
+        "unlockHint": "Fire a capture net."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "electroadhesive_grip",
+      "category": "TETHERS",
+      "trl": 4,
+      "icon": "🎈",
+      "related": [
+        "weaver_gripper",
+        "spinner_pad",
+        "epm_grapple",
+        "capture_quality"
+      ],
+      "i18n": {
+        "title": "Pads That Stick Without a Handle",
+        "shortText": "Static charge makes a pad cling to a bare surface, like a balloon on a wall. No handle or rail is needed.",
+        "fullText": "Electroadhesion makes a pad cling by static charge, the way a balloon sticks to a wall. It needs no handle, no rail and no plate on the target, which suits dead debris nobody prepared for. In a 2026 conference abstract, pads from the SPIDEE project arrested test articles spinning at 30 degrees per second, where mechanical grapples manage 2 to 3, and kept working over 100 attach cycles.\n\nAn ESA flat-floor test pulled a platform of 200 kg or more with two credit-card pads in 2026, using about 1 W for 10 ms to attach and 10 mW to hold. In orbit, Starfish Space launched its electrostatic pad on Otter Pup 2 in June 2025, and whether it docked is unconfirmed. In the game the spinner daughter has a round sticky pad of 8 cm radius, and a touch faster than 0.2 m/s bounces off.",
+        "realWorld": "SPIDEE pads (Cambrian Works), SmallSat conference 2026; ESA flat-floor test of two pads, 2026; Starfish Otter Pup 2 launched June 2025, docking unconfirmed.",
+        "trlRationale": "Laboratory and flat-floor tests in 2026; one flight launched in 2025, docking unconfirmed.",
+        "unlockHint": "Capture a piece with a sticky pad."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "ai_capture_vision",
+      "category": "SENSORS",
+      "trl": 3,
+      "icon": "👁️",
+      "related": [
+        "pose_estimation",
+        "lidar_ranging",
+        "detumble"
+      ],
+      "i18n": {
+        "title": "Teaching the Hand to Catch",
+        "shortText": "A camera network spots the target, two cameras give its depth and a learned model predicts the arm's moves. Simulated so far.",
+        "fullText": "A 2025 paper in Robotics (MDPI) chains four steps for an arm catching tumbling debris. A YOLOv8 network spots the target in the camera image, two calibrated cameras and a physics model give the debris's motion, a search that tries many candidate paths finds the quickest interception, and a Transformer predicts the arm's next movements to correct the plan. Each part was tested separately in simulation; the abstract names no grasp step and gives no success rate.\n\nLearning is not limited to the hand: a 2026 preprint, not yet peer reviewed, trains one policy to close in, capture and detumble, and reports 99.5 percent success in 1000 randomised simulated trials. A thesis from York University reports over 90 percent grasp success in simulation. No free debris capture in orbit has been found since 2024, learned or not. In the game she aims a net throw by plain geometry, with no sensor noise and no learned step.",
+        "realWorld": "Zhang, Zhang and Honarvar Shakibaei Asli, Robotics (MDPI) volume 14, issue 9 (Aug 2025): simulation only; York University thesis: over 90 percent grasp success in simulation.",
+        "trlRationale": "Simulation only in 2025; no hardware or orbit test is mentioned.",
+        "unlockHint": "Catch a piece with a daughter's net."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "iss_capture_trials",
+      "category": "HERITAGE",
+      "trl": 6,
+      "icon": "🤖",
+      "related": [
+        "net_neck_winch",
+        "adr_methods_real",
+        "robotic_arm"
+      ],
+      "i18n": {
+        "title": "Grabbers Tested on the Space Station",
+        "shortText": "Grabbers can be tried on the station first: a four-arm grabber made 172 capture cycles there. No free debris yet.",
+        "fullText": "Before anything grabs real debris in free orbit, it can be tried inside a space station. Kall Morris's REACCH four-arm grabber rode an Astrobee free-flying robot in the ISS and made 172 capture cycles of a dummy cube between 4 November 2024 and 25 May 2025.\n\nA 1 m inflatable bag from TransAstra went through an airlock test on the station that finished on 2 October 2025, reported second-hand. A gecko-pad gripper ran on an Astrobee there in 2021. None of these caught free debris: no free debris capture in orbit has been found since 2024, and ADRAS-J only came to 15 m. In the game her daughters catch pieces in free space, which no flown mission has yet done with real, unprepared debris.",
+        "realWorld": "REACCH grabber on an Astrobee in the ISS, 4 Nov 2024 to 25 May 2025 (172 cycles); TransAstra Capture Bag, ISS airlock, 2 Oct 2025; gecko-pad gripper on an Astrobee, 2021.",
+        "trlRationale": "Tested inside the station in 2024 and 2025, not in free orbit.",
+        "unlockHint": "Capture a piece with the gripper tool."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "safety_ellipse",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 4,
+      "icon": "⭕",
+      "related": [
+        "rendezvous",
+        "relative_velocity",
+        "docking_precision"
+      ],
+      "i18n": {
+        "title": "The Safety Ellipse: An Approach That Cannot Hit",
+        "shortText": "Real approaches circle the target on a path planned so that even a dead chaser cannot hit it.",
+        "fullText": "The Clohessy-Wiltshire, or Hill, equations are a simple model of how a chaser moves relative to a target on a near-circular orbit, and real guidance plans with them. A safety ellipse is a relative orbit around the target that cannot hit it even if the chaser's engines die; a keep-out sphere is a ball around the target that the chaser enters only after a go decision.\n\nOne 2024 simulation study formed an ellipse about 14 km by 27 km by 8 km around a tiny CubeSat satellite, not debris, in 41 days, spending 44 percent of the total delta-v. ADRAS-J flew around a real rocket stage on 15 and 16 July 2024, held about 50 m away, and aborted automatically at about 120 degrees of the circuit after an unexpected reading of the stage's orientation. The game has no safety ellipse; the spinner daughter's pad approach slows with the gap, from 0.5 m/s down to 0.03 m/s, the slow end of real docking touch speeds.",
+        "realWorld": "ADRAS-J fly-around, 15 and 16 July 2024; ellipse study, 2024 (simulation); reviews: Arshad, Bazzocchi and Hussain, Acta Astronautica volume 228 (2025); Bigdeli, Srivastava and Scaraggi, Aerospace volume 12, issue 4 (2025).",
+        "trlRationale": "Ellipses planned in simulation; the fly-around itself was flown in 2024.",
+        "unlockHint": "Fly an autopilot approach to a piece."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "drag_sail_deorbit",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 7,
+      "icon": "⛵",
+      "related": [
+        "atmospheric_drag",
+        "edt_deorbit",
+        "adr_methods_real"
+      ],
+      "i18n": {
+        "title": "Drag Sails: Leaving by Air",
+        "shortText": "A big light sheet unfolds at the end of a satellite's life and catches thin air, so its orbit decays sooner. No fuel, no steering.",
+        "fullText": "A drag sail is a big, light sheet that unfolds at the end of a satellite's life and catches more of the thin air, so its orbit decays sooner. It needs no fuel and no steering. A European Space Agency study called ADEO puts a 25 square metre sail on a 300 kg satellite at 600 km and cuts its remaining life from 140 years to 5.\n\nIn orbit, InflateSail unfolded a 10 square metre sail and came down in 72 days in 2017, while the RemoveDEBRIS sail did not deploy in March 2019. Sails have flown only on their own host satellites, never on debris. The game keeps the full drag sail for later missions.",
+        "realWorld": "ESA ADEO study (2024): 25 square metres on 300 kg from 600 km, 140 years down to 5; InflateSail 2017: 10 square metres, down in 72 days; RemoveDEBRIS sail did not deploy, March 2019.",
+        "trlRationale": "Flown on host satellites in 2017, never on debris.",
+        "unlockHint": "Clear 47 pieces of debris."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "tumble_sync",
+      "category": "ATTITUDE",
+      "trl": 4,
+      "icon": "🔄",
+      "related": [
+        "detumble",
+        "rendezvous",
+        "net_yo_yo_despin"
+      ],
+      "i18n": {
+        "title": "Matching a Tumbling Target",
+        "shortText": "A catch is easier if the chaser arrives at the grab point moving with the target, so the spin does not matter at touch.",
+        "fullText": "Synchronising means flying a path that arrives at a grab point with almost no speed relative to the target, so its spin matters little at touch. Envisat, the big dead European satellite, spun at 3 degrees per second in 2013 and 1.7 in 2021. Fuel-optimal paths of this kind have been tested in simulation up to 10 degrees per second, in 2024.\n\nA 2026 simulation of a net on Envisat succeeded in 88.5 to 93.5 percent of 200 starts with an ordinary feedback controller and 99.5 to 100 percent with a sliding-mode one, but success fell above 2 degrees per second for the first and from about 1 for the second, and it failed with the spin axis near 90 degrees to the approach. ClearSpace-1's guidance is designed for up to 3 degrees per second. In the game, pieces turn 1.5 to 8 degrees per second and her net loses no grip until 10.",
+        "realWorld": "Envisat spin 3 degrees per second in 2013 and 1.7 in 2021; simulated net capture of Envisat, 2026; ClearSpace-1 guidance designed for up to 3 degrees per second, in development.",
+        "trlRationale": "Simulation and design work only (2026); no flown capture of a tumbling piece.",
+        "unlockHint": "De-spin a target until the mother says it is in spec."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "debris_priority_index",
+      "category": "DEBRIS",
+      "trl": 3,
+      "icon": "📊",
+      "related": [
+        "adr_methods_real",
+        "debris_classification",
+        "catalog_sl16"
+      ],
+      "i18n": {
+        "title": "Which Piece First? Debris Priority Indexes",
+        "shortText": "Real teams rank debris by harm and by how hard it is to reach. The game's where-next list ranks fields, not pieces.",
+        "fullText": "Real teams rank debris on how much harm it could do and how hard it is to reach. A 2016 ranking by Anselmo and Pardini multiplies three ratios: how busy the object's height is with other debris, how long it will stay up, and its mass raised to the power 1.75, against a reference stage of 934 kg at 800 km. By that form, the 22 heaviest rocket stages equal several hundred average objects over 200 years.\n\nIn 2021 McKnight and colleagues merged lists from several organisations into one list of the 50 statistically most concerning derelict objects. A 2025 index by Borelli and Colombo scores each piece for how feasible it is to remove and how much harm it does, and feeds a mission planner, in simulation; its exact formula is not given here. In the game the where-next list picks a place, nearest height first, not a piece, and removal pays a flat 10 credits per kg.",
+        "realWorld": "Anselmo and Pardini, Acta Astronautica volume 122 (2016); McKnight and colleagues, Acta Astronautica volume 181 (2021); Borelli and Colombo, Advances in Space Research volume 77, issue 4 (online Dec 2025).",
+        "trlRationale": "Studied in simulation only (2025); whether any operator uses an index to buy removal is unconfirmed.",
+        "unlockHint": "Clear 48 pieces of debris."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "multi_target_tour",
+      "category": "DEBRIS",
+      "trl": 3,
+      "icon": "🗺️",
+      "related": [
+        "adr_methods_real",
+        "catalog_sl16",
+        "mother_and_daughters",
+        "lambert_problem"
+      ],
+      "i18n": {
+        "title": "Planning a Tour of Many Targets",
+        "shortText": "Visiting many pieces is a sequencing puzzle. Real contests and papers solve it by search; none has flown.",
+        "fullText": "Visiting many targets is a sequencing puzzle: which piece next, and when to leave. GTOC9, a 2017 contest, asked teams for the cheapest tour of 123 debris with a 30 kg de-orbit package left at each; the best cost was 731.28 million euros. The leading teams used branch and bound with ant colony search, genetic search, particle swarm and beam search.\n\nFor fleets, a 2024 paper in Space: Science & Technology groups 282 large objects by the speed change between them and gives each group to a ship; in simulation it removed up to 83.33 percent, which is 235 objects. A search over 8 SL-16 stages, run as a research probe for this game, takes 8.2 ms, so computing time is no obstacle. The game's where-next list shows one row per field, nearest height first, and plans no tour today.",
+        "realWorld": "GTOC9 (2017): 123 debris, best cost 731.28 million euros (JPL); methods paper 2026; Yang and colleagues, Space: Science & Technology volume 4 (2024): 282 large objects, up to 83.33 percent removed in simulation.",
+        "trlRationale": "Contest simulations and papers; none flown.",
+        "unlockHint": "Reach the point where you choose the next field."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "adr_business_case",
+      "category": "WORLD_INDUSTRY",
+      "icon": "💰",
+      "startUnlocked": true,
+      "related": [
+        "world_who_removes",
+        "world_liability",
+        "salvage_economy"
+      ],
+      "i18n": {
+        "title": "Who Pays for Removal",
+        "shortText": "A simulated study finds a removal firm breaks even after 20 to 34 pieces. Real contracts so far buy one object at a time.",
+        "fullText": "Who pays to clean up? A 2025 study by Abdul-Hamid, Pearl, Lee and Chen in the Journal of Spacecraft and Rockets (online October 2025, January 2026 issue) modelled a servicer removing the 50 most concerning big derelicts, with a fee shared between the satellite owner and the remover by Nash bargaining, a way to split a deal's gain so both sides prefer it to no deal. The firm breaks even at 20 pieces by uncontrolled reentry, 21 by controlled reentry and 32 to 34 by recycling, which costs more than twice as much.\n\nReal contracts are single objects so far: Japan's phase II contract with Astroscale is about 13.2 billion yen for one rocket stage, awarded in 2024, and ClearSpace-1 was contracted at 86 million euros in 2020. The study is one simulated scenario, not a set of real contracts. In the game a credit is worth 100 USD and removal pays 10 credits per kg, about 1,000 USD per kg.",
+        "realWorld": "Abdul-Hamid, Pearl, Lee and Chen, Journal of Spacecraft and Rockets volume 63, issue 1 (online 5 Oct 2025); Astroscale and JAXA phase II contract (2024); ClearSpace-1 contract (2020).",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "debris_upcycling",
+      "category": "MATERIALS",
+      "trl": 3,
+      "icon": "♻️",
+      "related": [
+        "in_space_metallurgy",
+        "aluminum_space",
+        "salvage_economy"
+      ],
+      "i18n": {
+        "title": "New Parts From Old Debris",
+        "shortText": "Upcycling turns dead hardware into new parts. Lab work on aluminium debris is promising; the sums for recycling in orbit are not.",
+        "fullText": "Upcycling means turning dead hardware into new parts instead of dropping it into the air. A 2025 lab study in npj Advanced Manufacturing cast and printed an aluminium debris simulant, printing two layers of 1 mm each, and measured its porosity, the share of tiny holes, between 0.63 and 0.016 percent. Whether recycling pays depends on what it saves in launch cost.\n\nThe 2025 study of Abdul-Hamid, Pearl, Lee and Chen counts 65 percent of a 5,338 kg target as recyclable and finds recycling costs more than twice as much as sending the object down; at 35 percent recyclable it never pays. In the game she can melt a big piece for metal; burning that metal as slow fuel is a planned later upgrade.",
+        "realWorld": "Baker and colleagues, npj Advanced Manufacturing (2025): lab study of an aluminium debris simulant; Abdul-Hamid, Pearl, Lee and Chen (2025): recycling scenario.",
+        "trlRationale": "Ground laboratory work only (2025); nothing done in orbit.",
+        "unlockHint": "Melt a big piece for metal."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "lambert_problem",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 9,
+      "icon": "🧮",
+      "related": [
+        "hohmann_transfer",
+        "keplerian_orbit",
+        "delta_v",
+        "j2_drift_hop",
+        "multi_target_tour"
+      ],
+      "i18n": {
+        "title": "Lambert's Problem: Two Points, One Orbit",
+        "shortText": "Give a solver two positions and a flight time and it returns the one orbit between them, and so both burns.",
+        "fullText": "Lambert's problem: given two positions and the time to fly between them, find the orbit that joins them, and so the two burns. Solvers are fast: Izzo's 2015 method needs 2.1 iterations for a direct trip and 3.3 with extra laps, and Gooding's 1990 method was the classic before it. A solver written as a research probe for this game landed within 1.9 mm on 63 test round trips.\n\nBetween SL-16 rocket stages at 71 degrees the best direct hop costs 1126 m/s, only 1.4 percent above the 1110 m/s it costs to turn the orbit plane by thrust, so the solver saves nothing there; waiting for Earth's bulge to turn the plane costs 90 m/s in 100 days. In the game a trip is priced as the half ellipse between two heights plus air drag, and it ignores any gap between orbit planes.",
+        "realWorld": "Izzo, 2015 (2.1 iterations for a direct trip); Gooding, 1990 (the classic); a research probe for this game solved 63 test round trips to within 1.9 mm.",
+        "trlRationale": "Standard mission-design method: Izzo's solver (2015), Gooding's classic (1990).",
+        "unlockHint": "Reach the point where you choose the next field."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "j2_drift_hop",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 9,
+      "icon": "⏳",
+      "related": [
+        "j2_perturbation",
+        "raan_precession",
+        "orbital_inclination",
+        "lambert_problem"
+      ],
+      "i18n": {
+        "title": "Waiting for the Bulge: Drift Hops",
+        "shortText": "Earth's bulge turns orbit planes for free. Waiting at another height can change the angle between two orbits.",
+        "fullText": "Earth's bulge turns every orbit's plane by a few degrees a day, and the rate depends on height. So two orbits at slightly different heights slowly change the angle between their planes for free. A drift hop uses that: change height a little, wait, and come back when the planes line up. Between two SL-16 stages 9.1 degrees apart, turning the plane by thrust costs 1110 m/s, while waiting 100 days costs 90 m/s, and 34 m/s in 400 days.\n\nIt has flown: FORMOSAT-3/COSMIC launched 6 satellites together at about 500 km and 72 degrees, and Earth's bulge spread their planes 24 degrees apart while they were raised to 700 to 800 km. A 2026 tug study found drift cut one 30 day leg from 1365 m/s to 136 m/s, on an assumed rate model. No debris tour has used it yet. The game has no node drift today: every field shares her orbit plane.",
+        "realWorld": "FORMOSAT-3/COSMIC, 2006 to 2008: 6 satellites, planes spread 24 degrees by Earth's bulge; 2026 tug study: 1365 down to 136 m/s on a 30 day leg; SL-16 figures computed for this game.",
+        "trlRationale": "Flown for a constellation, FORMOSAT-3/COSMIC (2006 to 2008); no debris tour has used it yet.",
+        "unlockHint": "Reach the point where you choose the next field."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "mother_and_daughters",
+      "category": "DEBRIS",
+      "trl": 2,
+      "icon": "🪺",
+      "related": [
+        "adr_methods_real",
+        "rendezvous",
+        "multi_target_tour"
+      ],
+      "i18n": {
+        "title": "Mother Ship with Daughters",
+        "shortText": "A mother can drop helpers at far targets so she flies fewer legs herself; an estimate cuts her cost by 62 to 69 percent.",
+        "fullText": "A mother ship does not have to fly every leg herself. DLR's ADReS-A study of 2016 pictured a chaser carrying at least 5 de-orbit kits, one for each SL-8-type rocket body it meets. The same idea works with daughters: at a stop the mother launches one at a nearby target, and it flies its own short hop and stays there.\n\nIn a research probe for this game, using estimates, 2 daughters of 30 kg and 177 m/s each cut the mother's cost for 6 targets from 742 m/s to 233 m/s in 1200 days, and for 8 targets from 1081 to 415 m/s, while the daughters spend 98 and 113 m/s of their own. Part of that gain is built in, since a daughter is an extra ship, and the estimate leaves out the daughters' build and launch mass. Closing 1,600 m, a weaver's reach, costs a daughter 0.18 m/s in 1.7 hours. Her daughters carry about 50 m/s of fuel today, and a 177 m/s green-fuel tank is planned.",
+        "realWorld": "DLR ADReS-A concept (AMOS 2016): chaser with at least 5 de-orbit kits; mother-and-daughters figures are estimates from a research probe for this game.",
+        "trlRationale": "Concept studies (2016) and estimates; nothing flown.",
+        "unlockHint": "Catch a piece with a daughter."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "real_debris_spacing",
+      "category": "DEBRIS",
+      "trl": 9,
+      "icon": "📏",
+      "related": [
+        "breakup_events",
+        "relative_velocity",
+        "adr_methods_real",
+        "rendezvous"
+      ],
+      "i18n": {
+        "title": "Real Spacing: No Garbage Truck",
+        "shortText": "Real debris sits 112 to 138 km apart and crosses a ship's path at about 10 km/s. The game packs it far closer, on purpose.",
+        "fullText": "In orbit, speed and height are one thing: a lower orbit is faster and a higher one slower, so no garbage truck can drive past a piece at another speed and stay on its road. A piece on a road 10 km higher drifts past a ship at 15.6 m/s and never comes closer than 10 km, while a piece on another orbit crosses her road at about 10 km/s, up to 15 km/s. A net, arm or dock takes centimetres to a few metres per second.\n\nSo every real catch starts by matching one target's orbit, and that takes months: ADRAS-J needed 286 days from launch to 15 m, and MEV-1 139 days to dock. The nearest neighbour of a tracked object is about 112 to 138 km away (computed from an estimated density). In the game her pieces sit 127 to 334 m apart, 336 to 1090 times closer, on purpose: a field is a destination.",
+        "realWorld": "ADRAS-J (2024): 286 days from launch to 15 m; MEV-1 (2020): 139 days to dock; nearest neighbour of a tracked object 112 to 138 km (computed estimate).",
+        "trlRationale": "Computed from catalogue counts and orbital speeds; documented.",
+        "unlockHint": "Reach the point where you choose the next field."
+      },
+      "lastVerified": "2026-10"
     }
   ]
 }

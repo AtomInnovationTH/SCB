@@ -290,6 +290,30 @@ export const CODEX_TRIGGERS = {
                            { event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 38 }],
   niti_superelastic:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 43 }],
   crush_cartridge:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 46 }],
+
+  // ===== ADR TECH-LIBRARY BATCH (round adr-tech-1031) =====
+  // Event-keyed only. Each id rides an event the game really emits, with the payload field the match reads
+  // (emitters named in test-CodexAdr2026.js). `adr_business_case` is `startUnlocked` (its trigger stays inert, like the
+  // other cornerstones above). Debris-clear thresholds start above 46, the last one used.
+  two_beam_plasma_pusher: [{ event: E.BIG_PIECE_FATE, match: (p) => p?.fate === 'push' }],
+  ion_beam_shepherd:      [{ event: E.BIG_PIECE_FATE, match: (p) => p?.fate === 'push' }],
+  laser_debris_nudge:     [{ event: E.ABLATION_START, match: always }],
+  net_membrane_wrap:      [{ event: E.NET_CATCH_SUCCESS, match: always }],
+  spring_net_ejector:     [{ event: E.NET_FIRED, match: always }],
+  electroadhesive_grip:   [{ event: E.ARM_CAPTURED, match: (p) => p?.tool === 'PAD' }],
+  ai_capture_vision:      [{ event: E.NET_CATCH_SUCCESS, match: (p) => p?.armIndex >= 0 }],
+  iss_capture_trials:     [{ event: E.ARM_CAPTURED, match: (p) => p?.tool === 'GRIPPER' }],
+  safety_ellipse:         [{ event: E.AUTOPILOT_ARRIVED, match: always }],
+  drag_sail_deorbit:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 47 }],
+  tumble_sync:            [{ event: E.DESPIN_IN_SPEC, match: always }],
+  debris_priority_index:  [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 48 }],
+  multi_target_tour:      [{ event: E.WHERE_NEXT, match: (p) => p?.open === true }],
+  adr_business_case:      [{ event: E.BIG_PIECE_DISPOSED, match: always }],
+  debris_upcycling:       [{ event: E.BIG_PIECE_FATE, match: (p) => p?.fate === 'melt' }],
+  lambert_problem:        [{ event: E.WHERE_NEXT, match: (p) => p?.open === true }],
+  j2_drift_hop:           [{ event: E.WHERE_NEXT, match: (p) => p?.open === true }],
+  mother_and_daughters:   [{ event: E.ARM_CAPTURED, match: (p) => p?.detached === true }],
+  real_debris_spacing:    [{ event: E.WHERE_NEXT, match: (p) => p?.open === true }],
 };
 
 export default CODEX_TRIGGERS;
