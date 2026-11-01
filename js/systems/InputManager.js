@@ -16,7 +16,7 @@ import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 import {
   classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, targetRangeM, netRangeLine,
-  netReachForMassM, netFlightSpeedMps, predictedRangeAtArrivalM, driftOutOfReachLine,
+  netReachForMassM, driftOutOfReachLine,
 } from './netRouting.js';
 import { computeLeadAim, netMaxReachM, overCatchLimit, catchLimitLine } from '../entities/CaptureNet.js';
 import { tripRefuses } from './TransferTrip.js';
@@ -26,6 +26,7 @@ import { GestureHints } from '../ui/hud/GestureHints.js';
 import { radToDeg } from '../core/MathUtil.js';
 import { orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { TimeAuthority } from './TimeAuthority.js';
+import { lassoFlightParams, lassoNoFixLine } from './LassoSystem.js';
 
 /**
  * The line posted when a daughter's pilot view opens. Arrow keys (the turn pad on glass) steer her only while she holds
@@ -52,9 +53,11 @@ export function pilotLine(name) {
  * @param {number} speedMps - net launch speed (m/s)
  * @param {number} delayS - seconds between the press and the start of the flight
  * @param {number} catchRadiusM - mouth radius (m)
+ * @param {number} [minFlightS] - the flight cannot end before this many seconds after it starts (the lasso's
+ *   LASSO_MIN_FLIGHT_TIME; the large net has none)
  * @returns {number} metres; Infinity when a position is missing or the piece outruns the net
  */
-export function netArrivalRangeM(shipPos, muzzle, piecePos, relVel, speedMps, delayS, catchRadiusM) {
+export function netArrivalRangeM(shipPos, muzzle, piecePos, relVel, speedMps, delayS, catchRadiusM, minFlightS = 0) {
   if (!shipPos || !muzzle || !piecePos) return Infinity;
   const M = Constants.SCENE_UNITS_PER_METER;
   const px = (piecePos.x - muzzle.x) / M, py = (piecePos.y - muzzle.y) / M, pz = (piecePos.z - muzzle.z) / M;
@@ -66,7 +69,7 @@ export function netArrivalRangeM(shipPos, muzzle, piecePos, relVel, speedMps, de
   if (vr >= speedMps) return Infinity;
   // net front at speed * (t - delay) = piece range - mouth radius, the piece's range growing at vr
   const path = Math.max(0, r0 - catchRadiusM) + speedMps * delayS;
-  const t = Math.max(delayS, path / (speedMps - vr));
+  const t = Math.max(delayS + minFlightS, path / (speedMps - vr));
   const ax = cx + vx * t, ay = cy + vy * t, az = cz + vz * t;
   return Math.sqrt(ax * ax + ay * ay + az * az);
 }
@@ -2679,28 +2682,47 @@ export class InputManager {
   }
 
   /**
-   * N (small net) at a piece inside reach now that will have drifted past it by the time the net arrives: one plain
-   * line, LASSO_DENIED, nothing spent or started. The large net runs the same test in fireMotherNet's refusals.
-   * @param {object} piece
+   * The small-net (lasso) fire gate for the player's own pick: one plain line, LASSO_DENIED, nothing spent or started
+   * (no windup, no attitude hold), and N never re-aims at another piece (owner 2026-11-01: "N still launches mother net even
+   * if debris is out of range"). Refuses a piece that (1) has no position, (2) is beyond the lasso's reach now, or (3) will
+   * be beyond it when the net makes contact. (3) is the mother-net helper `netArrivalRangeM`: the launch delay, the lasso's
+   * REAL flight (`lassoFlightParams`: eased speed, contact radius, LASSO_MIN_FLIGHT_TIME, the same numbers `fire()` uses), and
+   * the piece's velocity relative to the ship: the tracked one, else the two orbits' on a fresh pick (`_orbitRelVel`). With
+   * neither (a ship-relative pin rides the mother) the range now is right. The large net runs the same test in
+   * fireMotherNet's refusals.
+   * @param {object} piece - the active target
+   * @param {number} [delayS] - seconds from now to the start of the flight: the cast windup at the press; 0 once it has run
    * @returns {boolean} true when refused
    */
-  _refuseDriftOutOfReach(piece) {
+  _refuseDriftOutOfReach(piece, delayS = Constants.LASSO_CAST_WINDUP || 0) {
     const d = this._deps;
     if (!piece || !d || !d.player || typeof d.player.getPosition !== 'function') return false;
     if (classifyNetTarget(piece.mass || 0).band !== 'lasso') return false;   // the large net's own gate handles those
-    const sp = piece._scenePosition;
-    const rv = this._reachRelVel(piece);
-    if (!sp || !rv) return false;                                            // no velocity yet: nothing to predict from
+    const deny = (reason, text) => {
+      eventBus.emit(Events.LASSO_DENIED, { reason });
+      eventBus.emit(Events.COMMS_MESSAGE, { text, source: 'SYSTEM', channel: 'CMD', priority: 'warning', _lassoFeedback: true });
+      d.audioSystem?.playDeny?.();
+      return true;
+    };
+    const ts = d.targetSelector;
+    const sp = (ts && typeof ts.getActiveTargetPosition === 'function' ? ts.getActiveTargetPosition() : null)
+      || piece._scenePosition || null;
+    if (!sp) return deny('no_target', lassoNoFixLine());                    // no position, no judgement: never cast unjudged
     const reachM = netReachForMassM(piece.mass || 0);
-    const arriveM = predictedRangeAtArrivalM(d.player.getPosition(), sp, rv, netFlightSpeedMps(piece.mass || 0));
-    // Only a piece that is inside reach NOW is judged here: beyond it, the existing range refusal speaks.
-    if (!(arriveM > reachM) || targetRangeM(d.player.getPosition(), sp) > reachM) return false;
-    eventBus.emit(Events.LASSO_DENIED, { reason: 'drift_out_of_reach' });
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: driftOutOfReachLine(arriveM), source: 'SYSTEM', channel: 'CMD', priority: 'warning', _lassoFeedback: true,
-    });
-    d.audioSystem?.playDeny?.();
-    return true;
+    const ship = d.player.getPosition();
+    const nowM = targetRangeM(ship, sp);
+    if (nowM > reachM) return deny('no_target', netRangeLine(nowM, reachM, 'lasso'));
+    const rv = this._reachRelVel(piece) || this._orbitRelVel(piece);
+    if (!rv) return false;                                                   // nothing to predict from: the range now is all there is
+    // The muzzle sits LASSO_MUZZLE_OFFSET_M ahead of the hull, toward the piece once the ship has turned to it.
+    const M = Constants.SCENE_UNITS_PER_METER;
+    const k = nowM > 0 ? Constants.LASSO_MUZZLE_OFFSET_M / nowM : 0;
+    const muzzle = { x: ship.x + (sp.x - ship.x) * k, y: ship.y + (sp.y - ship.y) * k, z: ship.z + (sp.z - ship.z) * k };
+    const launchM = Math.hypot(sp.x - muzzle.x, sp.y - muzzle.y, sp.z - muzzle.z) / M;
+    const { contactRadiusM, speedMps } = lassoFlightParams(launchM);
+    const arriveM = netArrivalRangeM(ship, muzzle, sp, rv, speedMps, delayS, contactRadiusM, Constants.LASSO_MIN_FLIGHT_TIME);
+    if (!(arriveM > reachM)) return false;
+    return deny('drift_out_of_reach', driftOutOfReachLine(arriveM));
   }
 
   /**
@@ -2747,7 +2769,7 @@ export class InputManager {
         this.fireMotherNet(target);
         return;
       }
-      if (target && this._refuseDriftOutOfReach(target)) {
+      if (target && this._refuseDriftOutOfReach(target, 0)) {   // the windup has run: no launch delay left
         d.autopilotSystem?.releaseAttitudeHold?.();
         if (afterAim) d.player.holdHeadingAfterRefusal?.();
         return;

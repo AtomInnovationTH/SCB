@@ -64,6 +64,30 @@ const _wrapBoxScratch = { ox: 0, oy: 0, oz: 0,
     r00: 1, r01: 0, r02: 0, r10: 0, r11: 1, r12: 0, r20: 0, r21: 0, r22: 1,
     hx: 0, hy: 0, hz: 0 };
 
+/**
+ * The lasso's real flight, from the muzzle-to-piece distance at the cast: the contact radius (scaled down for near pieces)
+ * and the EASED apparent speed (so even a point-blank throw reads as a ~LASSO_MIN_FLIGHT_TIME arc; far pieces keep the fast
+ * 100 m/s). One function for `fire()` and for the N fire gate (InputManager `_refuseDriftOutOfReach`): the gate predicts
+ * with the numbers the cast then flies with.
+ * @param {number} launchDistanceM - muzzle -> piece (m) at the cast
+ * @returns {{contactRadiusM: number, speedMps: number}}
+ */
+export function lassoFlightParams(launchDistanceM) {
+    const contactRadiusM = clamp(Constants.LASSO_CONTACT_RADIUS_FRACTION * launchDistanceM, Constants.LASSO_CONTACT_RADIUS_FLOOR_M, Constants.LASSO_CONTACT_RADIUS_M);
+    const maxApparentSpeed = Constants.LASSO_SPEED * TimeAuthority.BASE_SCALE; // 100 m/s apparent
+    const desiredTravelM = Math.max(contactRadiusM, launchDistanceM - contactRadiusM);
+    const speedMps = Math.max(
+        3, // tiny floor so it always visibly moves; near throws glide for the full LASSO_MIN_FLIGHT_TIME
+        Math.min(maxApparentSpeed, desiredTravelM / Constants.LASSO_MIN_FLIGHT_TIME)
+    );
+    return { contactRadiusM, speedMps };
+}
+
+/** The refusal line for a Tab-selected piece whose position the lasso cannot read (never cast unjudged). */
+export function lassoNoFixLine() {
+    return `Out of lasso range (${Constants.LASSO_RANGE}m): can't see where the piece is. Pick it again.`;
+}
+
 export class LassoSystem {
     constructor(scene) {
         this.scene = scene;
@@ -922,7 +946,25 @@ export class LassoSystem {
                     bestTarget = selectedTarget;
                     bestPos = selectedPos;
                     bestDist = dist;
+                } else {
+                    // The player's own pick is beyond reach: refuse it, never cast at some other piece instead (owner
+                    // 2026-11-01). Auto-aim is for "nothing selected" only. InputManager.fireLasso refuses first; this is the
+                    // release-time and direct-caller backstop.
+                    const selRangeM = dist / M;
+                    eventBus.emit(Events.LASSO_DENIED, { reason: 'no_target' });
+                    eventBus.emit(Events.COMMS_MESSAGE, {
+                        text: netRangeLine(selRangeM, Constants.LASSO_RANGE, 'lasso'),
+                        source: 'SYSTEM', channel: 'CMD', priority: 'info', _lassoFeedback: true,
+                    });
+                    return false;
                 }
+            } else {
+                // A pick with no position: never judged, never replaced by another piece.
+                eventBus.emit(Events.LASSO_DENIED, { reason: 'no_target' });
+                eventBus.emit(Events.COMMS_MESSAGE, {
+                    text: lassoNoFixLine(), source: 'SYSTEM', channel: 'CMD', priority: 'info', _lassoFeedback: true,
+                });
+                return false;
             }
         }
 
@@ -1025,15 +1067,8 @@ export class LassoSystem {
         // is EASED so even a point-blank catch reads as a ~LASSO_MIN_FLIGHT_TIME arc, not a 0.02 s blink. Far targets keep the
         // fast 100 m/real-s apparent speed (capped by LASSO_MAX_FLIGHT_TIME).
         const launchDistanceM = muzzleWorld.distanceTo(bestPos) / M;
-        const contactRadiusM = clamp(Constants.LASSO_CONTACT_RADIUS_FRACTION * launchDistanceM, Constants.LASSO_CONTACT_RADIUS_FLOOR_M, Constants.LASSO_CONTACT_RADIUS_M);
+        const { contactRadiusM, speedMps: easedApparentSpeed } = lassoFlightParams(launchDistanceM);
         this._contactRadiusScene = contactRadiusM * M;
-
-        const maxApparentSpeed = Constants.LASSO_SPEED * TimeAuthority.BASE_SCALE; // 100 m/s apparent
-        const desiredTravelM = Math.max(contactRadiusM, launchDistanceM - contactRadiusM);
-        const easedApparentSpeed = Math.max(
-            3, // tiny floor so it always visibly moves; near throws glide for the full LASSO_MIN_FLIGHT_TIME
-            Math.min(maxApparentSpeed, desiredTravelM / Constants.LASSO_MIN_FLIGHT_TIME)
-        );
         this._flightSpeedScene = easedApparentSpeed * M; // scene units / real second (TIME_SCALE already folded in)
 
         this.flightTimer = 0;
