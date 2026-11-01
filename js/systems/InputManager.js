@@ -3250,6 +3250,9 @@ export class InputManager {
     if (!arm || !d) return false;
     const multi = Constants.isFeatureEnabled('DAUGHTER_MULTITOOL') && typeof arm.dispatchSelectedTool === 'function';
     if (!aimedPiece && multi && arm.selectedTool && arm.selectedTool !== 'NET') return false;   // gripper / pad / magnet: not a net
+    // No nets left: ArmUnit's own inventory gate (captureFromStationKeep / manualNetDeploy, the same test) speaks its out-of-nets
+    // line; the reach line would hide it.
+    if (Constants.isFeatureEnabled('CAPTURE_NET') && arm._netInventory <= 0) return false;
     const piece = aimedPiece || arm._stationKeepTarget || arm.target;           // HER piece, not the selected one
     const type = arm.config && arm.config.type;
     const armPos = arm.position;

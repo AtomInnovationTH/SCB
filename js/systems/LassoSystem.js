@@ -962,7 +962,7 @@ export class LassoSystem {
                 // A pick with no position: never judged, never replaced by another piece.
                 eventBus.emit(Events.LASSO_DENIED, { reason: 'no_target' });
                 eventBus.emit(Events.COMMS_MESSAGE, {
-                    text: lassoNoFixLine(), source: 'SYSTEM', channel: 'CMD', priority: 'info', _lassoFeedback: true,
+                    text: lassoNoFixLine(), source: 'SYSTEM', channel: 'CMD', priority: 'warning', _lassoFeedback: true,
                 });
                 return false;
             }
