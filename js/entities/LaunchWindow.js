@@ -154,7 +154,8 @@ export function pickRepresentative(cluster) {
 
 /**
  * Km-unit target orbit for a cluster: the representative member's live orbit when available, else a synthetic circular orbit at the
- * cluster's mean altitude/inclination (no phase information: zero longitude).
+ * cluster's mean altitude/inclination (no phase information: zero longitude). The synthetic orbit carries NO `raan`, so the plane change
+ * is priced on the tilt alone (OrbitalMechanics.totalDeltaV); `trueLongitude` reads a missing node as 0 for the phasing only.
  * @param {object} cluster
  * @returns {object} orbit with semiMajorAxis in km
  */
@@ -167,7 +168,6 @@ export function clusterToOrbitKm(cluster) {
     semiMajorAxis: Constants.EARTH_RADIUS_KM + (cluster?.avgAltKm || 0),
     eccentricity: 0.001,
     inclination: degToRad(cluster?.incCenter || 0),
-    raan: 0,
     argPerigee: 0,
     trueAnomaly: 0,
   };

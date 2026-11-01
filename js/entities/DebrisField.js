@@ -4413,7 +4413,8 @@ export class DebrisField {
    * `debris[tag]=true`, marks them tracked + discovered. Returns the spawned ids (fewer than `count` if candidates run out).
    *
    * @private
-   * @param {object} cfg — orbit config (altKm, incDeg, raanDeg, argPerigeeDeg, eccentricity, fragMassKg, trackSpreadDeg)
+   * @param {object} cfg — orbit config (altKm, argPerigeeDeg, eccentricity, fragMassKg, trackSpreadDeg place the pieces; incDeg/raanDeg
+   *        are the real object's plane, used only when no player orbit is cached). The plane is the mother's (DECISIONS §60 row 5).
    * @param {number} count
    * @param {string} tag — per-debris flag identifying the threat set
    * @returns {{ ids: number[] }}
@@ -4439,6 +4440,12 @@ export class DebrisField {
     }
 
     const ids = [];
+    // DECISIONS §60 row 5: the boss pieces move into HER plane, keeping their names and heights. Her inclination and node at spawn
+    // time (the cached player orbit); the config's real inclination/node (`cfg.incDeg`/`cfg.raanDeg`, the real object's plane) are
+    // used only when no player orbit has been seen yet (a bare test field), never for placement otherwise.
+    const mother = this._lastPlayerOrbit;
+    const planeInc = Number.isFinite(mother?.inclination) ? mother.inclination : degToRad(cfg.incDeg ?? 51.6);
+    const planeRaan = Number.isFinite(mother?.raan) ? mother.raan : degToRad(cfg.raanDeg ?? 123.4);
     for (let i = 0; i < count && i < candidates.length; i++) {
       const debris = candidates[i];
 
@@ -4446,8 +4453,8 @@ export class DebrisField {
       const lead = ((i + 1) / count) * spreadRad;
       debris.orbit.semiMajorAxis = sma;
       debris.orbit.eccentricity = cfg.eccentricity ?? 0.0003;
-      debris.orbit.inclination = degToRad(cfg.incDeg ?? 51.6);
-      debris.orbit.raan = degToRad(cfg.raanDeg ?? 123.4);
+      debris.orbit.inclination = planeInc;
+      debris.orbit.raan = planeRaan;
       debris.orbit.argPerigee = degToRad(cfg.argPerigeeDeg ?? 45);
       debris.orbit.trueAnomaly = baseNu + lead - frameComp;
       debris.orbit.meanMotion = meanMotion;
@@ -4481,7 +4488,7 @@ export class DebrisField {
     }
 
     if (ids.length > 0) {
-      console.log(`[DebrisField] boss spawn: ${ids.length} ${tag} frags at ${altKm} km / ${cfg.incDeg ?? 51.6}°`);
+      console.log(`[DebrisField] boss spawn: ${ids.length} ${tag} frags at ${altKm} km / ${radToDeg(planeInc).toFixed(1)}° (her plane)`);
     }
     return { ids };
   }

@@ -101,8 +101,10 @@ export function candidatePoints({ center, radiusU, playerPos, zones = INSERTION_
 }
 
 /**
- * ΔV estimate (m/s) from the player orbit to a circular orbit at the arrival point's geocentric radius, in the CLUSTER's plane
- * (clusterToOrbitKm carries the representative inclination/raan, so the plane change is priced). `args`: { playerOrbit (scene-unit
+ * ΔV estimate (m/s) from the player orbit to a circular orbit at the arrival point's geocentric radius, in the CLUSTER's plane. The plane
+ * change is priced through the full angle between the planes, tilt and node together (OrbitalMechanics.totalDeltaV), when the cluster has
+ * live members (clusterToOrbitKm then carries the representative's inclination and raan); an empty cluster's synthetic orbit has no node,
+ * so it is priced on the tilt alone. `args`: { playerOrbit (scene-unit
  * elements), pointU (scene units), cluster }. Returns null without a player orbit.
  */
 export function dvEstimate({ playerOrbit, pointU, cluster } = {}) {

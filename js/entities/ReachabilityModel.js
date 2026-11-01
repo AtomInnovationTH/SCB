@@ -12,8 +12,8 @@
  *     "do not reuse existing tables"): reachability must track the live tanks, not a constant.
  *   - Fuel for a burn comes from the INVERSE rocket equation fuelKg = wet · (1 − e^(−ΔV / (Isp·g0))), which round-trips exactly against the
  *     budget's forward Tsiolkovsky ΔV = Isp·g0·ln(wet/dry).
- *   - The ENVELOPE uses coplanar Hohmann cost ONLY (no plane change): a plane change cost depends on the TARGET's inclination offset, a
- *     per-cluster property, not a property of an altitude shell; folding an arbitrary inclination into the orb would make the band dishonest
+ *   - The ENVELOPE uses coplanar Hohmann cost ONLY (no plane change): a plane change cost depends on the angle between the two planes (tilt
+ *     and node together, DECISIONS §60 row 2), a per-cluster property, not a property of an altitude shell; folding an arbitrary plane angle into the orb would make the band dishonest
  *     for every other plane. Per-cluster assessments DO include the plane change (win.dvTotal comes from OrbitalMechanics.totalDeltaV), so
  *     the orb is an upper bound for coplanar targets, hence the caption's "≈".
  *   - The envelope bisection is valid because Hohmann total ΔV is monotonic in the target radius on BOTH sides of r0 within the clamped LEO

@@ -478,7 +478,7 @@ export class NextPane {
     return Number.isFinite(h) && h > 0 ? h : NaN;
   }
 
-  /** @private The player's km orbit (angles rad; missing fields 0) or null. */
+  /** @private The player's km orbit (angles rad; missing fields 0, except `raan`, which stays undefined when missing) or null. */
   _orbitKm() {
     const o = call(this._orbit);
     if (!o || typeof o !== 'object') return null;
@@ -489,7 +489,7 @@ export class NextPane {
       semiMajorAxis: a,
       eccentricity: num(km.eccentricity) || 0,
       inclination: num(km.inclination) || 0,
-      raan: num(km.raan) || 0,
+      raan: Number.isFinite(num(km.raan)) ? num(km.raan) : undefined, // missing stays missing: a made-up 0 would be priced as a real node
       argPerigee: num(km.argPerigee) || 0,
       trueAnomaly: num(km.trueAnomaly) || 0,
     };
@@ -513,7 +513,7 @@ export class NextPane {
       semiMajorAxis: r1,
       eccentricity: orbitKm ? orbitKm.eccentricity : 0,
       inclination: orbitKm ? orbitKm.inclination : 0,
-      raan: orbitKm ? orbitKm.raan : 0,
+      raan: orbitKm ? orbitKm.raan : undefined,
       argPerigee: orbitKm ? orbitKm.argPerigee : 0,
       trueAnomaly: orbitKm ? orbitKm.trueAnomaly : 0,
     };
@@ -536,7 +536,7 @@ export class NextPane {
           semiMajorAxis: altKm + EARTH_RADIUS_KM,
           eccentricity: 0,
           inclination: Number.isFinite(inc) ? inc * DEG2RAD : chaser.inclination,
-          raan: 0, argPerigee: 0, trueAnomaly: 0,
+          argPerigee: 0, trueAnomaly: 0, // no raan: no real node, so the cost is the tilt alone
         };
       }
       if (!(num(target.semiMajorAxis) > 0)) continue;

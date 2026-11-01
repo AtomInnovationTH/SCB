@@ -282,13 +282,13 @@ export class DebrisMap {
   static scoreCluster(cluster, playerOrbitKm, conjAlerts) {
     // Synthetic circular orbit at the cluster's mean altitude. The plane is the members' mean live inclination
     // (avgIncRad), NOT the bucket label's centre (incCenter), which mispriced off-centre languages. The label stays
-    // the fallback for hand-built clusters.
+    // the fallback for hand-built clusters. No `raan`: a cluster has no single node, and a made-up 0 would be priced against
+    // her real node (DECISIONS §60 row 2), so totalDeltaV falls back to the tilt alone for this orbit.
     const clusterOrbit = {
       semiMajorAxis: Constants.EARTH_RADIUS_KM + cluster.avgAltKm,
       inclination: cluster.avgIncRad ?? (degToRad(cluster.incCenter)),
       eccentricity: 0.001,
       argumentOfPeriapsis: 0,
-      raan: 0,
     };
 
     // totalDeltaV returns km/s

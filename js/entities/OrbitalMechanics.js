@@ -314,7 +314,29 @@ export function planeChangeDeltaV(velocity, deltaInclination) {
   return 2 * velocity * Math.sin(Math.abs(deltaInclination) / 2);
 }
 
-/** Estimated total Δv (km/s) between two Keplerian orbits (km): Hohmann altitude change + simple plane change. */
+/**
+ * Angle (rad) between two orbit planes from tilt and node together (DECISIONS §60 row 2): cos θ = cos i1 cos i2 + sin i1 sin i2 cos ΔΩ,
+ * computed in the half-angle form sin²(θ/2) = sin²(Δi/2) + sin i1 sin i2 sin²(ΔΩ/2), which stays exact for tiny angles. Tilt-only
+ * (|Δi|) when either side lacks a finite `raan` (a synthetic orbit with no real node).
+ * @param {{inclination:number, raan?:number}} orbit1 - rad
+ * @param {{inclination:number, raan?:number}} orbit2 - rad
+ * @returns {number} rad, in [0, π]
+ */
+export function planeAngle(orbit1, orbit2) {
+  const i1 = orbit1.inclination;
+  const i2 = orbit2.inclination;
+  const sinHalfDi = Math.sin((i2 - i1) / 2);
+  if (!Number.isFinite(orbit1.raan) || !Number.isFinite(orbit2.raan)) return Math.abs(i2 - i1);
+  const sinHalfDn = Math.sin((orbit2.raan - orbit1.raan) / 2);
+  const s2 = sinHalfDi * sinHalfDi + Math.sin(i1) * Math.sin(i2) * sinHalfDn * sinHalfDn;
+  return 2 * Math.asin(Math.min(1, Math.sqrt(Math.max(0, s2))));
+}
+
+/**
+ * Estimated total Δv (km/s) between two Keplerian orbits (km): Hohmann altitude change + a single-burn plane change through the full angle
+ * between the two planes, tilt and node together (`planeAngle`). When either orbit has no finite `raan` the plane change falls back to the
+ * inclination difference alone. Waiting for the node is not modelled (callers phase along-track separately), so nothing is counted twice.
+ */
 export function totalDeltaV(orbit1, orbit2, mu = Constants.MU_EARTH) {
   const r1 = orbit1.semiMajorAxis;
   const r2 = orbit2.semiMajorAxis;
@@ -322,8 +344,7 @@ export function totalDeltaV(orbit1, orbit2, mu = Constants.MU_EARTH) {
   const hohmann = hohmannDeltaV(r1, r2, mu);
 
   const v2 = Math.sqrt(mu / r2);
-  const deltaI = Math.abs(orbit2.inclination - orbit1.inclination);
-  const planeChange = planeChangeDeltaV(v2, deltaI);
+  const planeChange = planeChangeDeltaV(v2, planeAngle(orbit1, orbit2));
 
   return hohmann.total + planeChange;
 }

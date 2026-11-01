@@ -5162,7 +5162,8 @@ export const Constants = {
     INTERCEPT_BONUS_CREDITS: 500,     // credits awarded on a full intercept
     PERSISTENCE_KEY: 'spacecowboy_iss_boss_v1',
     CODEX: { SAVER: 'iss_saver', PDAM: 'iss_pdam', HYDRAZINE: 'iss_hydrazine_burn' },
-    // ISS forward-track orbit the threat frags are spawned into (NORAD 25544 ≈).
+    // ISS height (408 km) the threat frags are spawned at (NORAD 25544 ≈). The pieces are placed in HER plane, not the ISS's
+    // (DECISIONS §60 row 5): incDeg/raanDeg are the real station's plane, NOT used for placement (only a bare-field fallback).
     ORBIT: {
       altKm: 408,
       incDeg: 51.6,
@@ -5192,7 +5193,8 @@ export const Constants = {
     PARTIAL_FRACTION: 0.6,            // ≥60% cleared by the window = partial (else cascade)
     PERSISTENCE_KEY: 'spacecowboy_starlink_boss_v1',
     CODEX: { CONTAINED: 'starlink_contained', CASCADE: 'starlink_cascade' },
-    // Starlink shell orbit the fragments are spawned into (~550 km / 53°).
+    // Starlink shell height (550 km) the fragments are spawned at. Placed in HER plane (DECISIONS §60 row 5); incDeg/raanDeg are
+    // the real shell's plane (~53°), NOT used for placement (only a bare-field fallback).
     ORBIT: {
       altKm: 550,
       incDeg: 53,
@@ -5619,7 +5621,7 @@ export const Constants = {
           id: 'ch5_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'Cowboy, we have a situation. A Cosmos-1408 fragment cloud is converging on the ISS. 51.6° inclination, closest approach in 38 hours. There are people aboard that station. You can clear the threat, or we let CSA dodge it on the station\'s own thrusters. Your call.',
+          text: 'Cowboy, we have a situation. A Cosmos-1408 fragment cloud is converging on the ISS, which flies at 51.6°. Closest approach in 38 hours. There are people aboard that station. You can clear the threat, or we let CSA dodge it on the station\'s own thrusters. Your call.',
         },
         {
           id: 'ch5_burn',
