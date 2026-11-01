@@ -115,10 +115,16 @@ export function isPairRow(row) {
   return Number.isInteger(row) && row >= P.ROW0 && row < P.ROW0 + P.PAIRS * 2;
 }
 
-/** A mission extra row (the extra group's pieces, the extra satellite or a paired piece), valid on any field. */
+/** A mover row (`Constants.MOVER_FIELDS`: the drifting, tumbling pieces training mission 3 adds), valid on any field. */
+export function isMoverRow(row) {
+  const M = Constants.MOVER_FIELDS;
+  return Number.isInteger(row) && row >= M.ROW0 && row < M.ROW0 + M.PIECES.length;
+}
+
+/** A mission extra row (the extra group's pieces, the extra satellite, a paired piece or a mover), valid on any field. */
 export function isExtraRow(row) {
   const G = Constants.SMALL_GROUP;
-  return Number.isInteger(row) && ((row >= G.EXTRA_ROW0 && row < G.EXTRA_ROW0 + G.COUNT_MAX) || row === G.SAT_ROW || isPairRow(row));
+  return Number.isInteger(row) && ((row >= G.EXTRA_ROW0 && row < G.EXTRA_ROW0 + G.COUNT_MAX) || row === G.SAT_ROW || isPairRow(row) || isMoverRow(row));
 }
 
 /** A row that is a piece of a small-piece group on this field (its own group, or the extra one). */
@@ -460,6 +466,21 @@ export class FieldRegistry {
     this._resume = false;
     if (Number.isInteger(n) && n >= Constants.SMALL_GROUP.FROM_MISSION && this.isOn() && !this.isBerthed() && !this.isFree()) this._addMissionExtras(this.currentField());
     if (Number.isInteger(n) && n >= Constants.PAIR_FIELDS.FROM_MISSION && this.isOn() && !this.isBerthed() && !this.isFree()) this._addPairRows(this.currentField());
+    if (n === Constants.MOVER_FIELDS.MISSION && this.isOn() && !this.isBerthed() && !this.isFree()) this._addMoverRows(this.currentField());
+  }
+
+  /**
+   * Training mission 3's moving targets (`Constants.MOVER_FIELDS`, plan D1): the mission that starts at MOVER_FIELDS.MISSION, and
+   * only that one, adds its mover rows (ROW0 ..) to the field it starts at, unless the field still holds an uncaught one. Saved
+   * with the field's rows, laid out by the next spawn, like the pairs above. Never while berthed or away from a field.
+   * @private
+   */
+  _addMoverRows(f) {
+    const M = Constants.MOVER_FIELDS;
+    const rows = this._state.remaining[f.id] || (this._state.remaining[f.id] = []);
+    if (rows.some((r) => isMoverRow(r))) return;
+    for (let i = 0; i < M.PIECES.length; i++) rows.push(M.ROW0 + i);
+    rows.sort((a, b) => a - b);
   }
 
   /**

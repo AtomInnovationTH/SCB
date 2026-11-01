@@ -608,7 +608,9 @@ export class DebrisField {
       // A previous game's group pieces are ordinary debris now: the map-off "is a group still out?" test
       // (`has('group')` in `_spawnWelcomeField`) reads `_extraKind`, and a stale tag would make the next game skip its
       // group. (The satellite's body is parked below, which drops the tag with every other flag.)
-      for (const d of this.debrisList) { d.welcomeSpawn = false; if (d._extraKind) d._extraKind = null; }
+      for (const d of this.debrisList) { d.welcomeSpawn = false; if (d._extraKind) d._extraKind = null; if (d._mover) d._mover = false; }
+      if (this._moverBodies) this._moverBodies.clear();
+      this._moversLeft = 0;
       this._clearOnboardingPin();
       this._reviveStoredFieldPieces();      // the pieces of the fields she left go back to the pool
     });
@@ -2068,6 +2070,7 @@ export class DebrisField {
     // the propagation loop below, so a re-seated piece is stepped once more this frame like a fresh spawn; hence it
     // receives this frame's gameDt for the same one-step pre-compensation _spawnWelcomeField applies.
     this._reseatDriftedWelcome(playerPos, playerOrbit, dt, gameDt);
+    this._syncMoversLeft();
 
     const maxVisualRad = degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S);
 
@@ -3413,6 +3416,24 @@ export class DebrisField {
   }
 
   /**
+   * Training mission 3 (plan D9): tell the coach how many uncaught drifting pieces are in the field now. Emits MOVERS_CHANGED
+   * `{ left }` when the count changes (a mover laid out, caught, or gone from the field: removed, stored on a departure). A
+   * piece a net has pinned still counts (the catch may fail); one parked aboard or let go does not. Cheap: it walks only the few mover bodies.
+   * @private
+   */
+  _syncMoversLeft() {
+    const set = this._moverBodies;
+    if (!set || (set.size === 0 && !this._moversLeft)) return;
+    let left = 0;
+    for (const d of set) {
+      if (d._mover && d.alive && !(d._capturedByArm || d._motherParked || d._disposed)) left++;
+    }
+    if (left === (this._moversLeft || 0)) return;
+    this._moversLeft = left;
+    eventBus.emit(Events.MOVERS_CHANGED, { left });
+  }
+
+  /**
    * Seat ONE welcome piece on its cone-fan slot relative to the mother: the WELCOME_FIELD row's metres (mother-local
    * frame) become orbital elements. Shared by _spawnWelcomeField and the re-seat net (_reseatDriftedWelcome). Reads
    * nothing from the piece's current orbit (only its sticky fwd roll), so it is safe to call again with the CURRENT
@@ -3460,7 +3481,10 @@ export class DebrisField {
     o.raan = playerOrbit.raan;
     o.argPerigee = playerOrbit.argPerigee;
     o.meanMotion = playerOrbit.meanMotion;
-
+    // A drifting piece (training mission 3, `spec.daM` metres): a real orbit difference. A higher orbit has a longer period, so
+    // the piece falls behind her; a lower one moves ahead (1.5 x n x daM of along-track speed). Applied here, after the mother's
+    // a is copied, so a re-seat (which runs this helper from the piece's own spec) keeps it.
+    if (Number.isFinite(spec.daM) && spec.daM !== 0) o.semiMajorAxis += spec.daM * METRE_SCENE;
     if (spec.pin) {
       const fwdM = spec.fwdM || 0;
       o.trueAnomaly = playerOrbit.trueAnomaly + fwdM * radPerM;
@@ -3722,6 +3746,35 @@ export class DebrisField {
   }
 
   /**
+   * Training mission 3's moving targets (`Constants.MOVER_FIELDS`, plan D1/D2): the resolved spec of mover `k` of a field
+   * (k = row - ROW0), in the shape of a WELCOME_FIELD row. A large, visible piece (over 10 kg: the mother's N picks the large
+   * net) that tumbles fast and drifts: `daM` is the semi-major axis it has over hers (`_placeWelcomePiece` applies it, so a
+   * re-seat does too). Placed in the arrival frame, no radial offset. Own seeded stream. Null for a k outside the movers.
+   * @param {number} seed the field's seed @param {number} k the mover, 0-based @returns {object|null}
+   */
+  static moverSpec(seed, k) {
+    const M = Constants.MOVER_FIELDS;
+    if (!Number.isInteger(k) || k < 0 || k >= M.PIECES.length) return null;
+    const p = M.PIECES[k];
+    const x = (M.SEED_XOR | 0) ^ (seed | 0);
+    const r = mulberry32((Math.imul(x, 0x9E3779B1) + Math.imul(k + 1, 0x85EBCA6B)) >>> 0);
+    const massKg = M.MASS_MIN_KG + r() * (M.MASS_MAX_KG - M.MASS_MIN_KG);
+    const sizeM = M.SIZE_MIN_M + r() * (M.SIZE_MAX_M - M.SIZE_MIN_M);
+    const tumbleDegS = M.TUMBLE_MIN_DEG_S + r() * (M.TUMBLE_MAX_DEG_S - M.TUMBLE_MIN_DEG_S);
+    return {
+      types: ['fragment'], sizeM, massMin: massKg, massMax: massKg, tumbleDegS, own: true, mover: true, daM: p.daM,
+      fwdMinM: p.fwdM, fwdMaxM: p.fwdM, latM: p.latM, radM: 0, name: 'Drifting piece',
+      rng: mulberry32((Math.imul(x, 0x9E3779B1) + Math.imul(k + 1, 0xC2B2AE35) + 5000) >>> 0),
+    };
+  }
+
+  /** @param {number} row @returns {boolean} the row is one of a field's movers (training mission 3) */
+  static isMoverRow(row) {
+    const M = Constants.MOVER_FIELDS;
+    return Number.isInteger(row) && row >= M.ROW0 && row < M.ROW0 + M.PIECES.length;
+  }
+
+  /**
    * The spec of row `row` of a field laid out as `layout`: 'welcome' (WELCOME_FIELD, the start field), 'high' (HIGH_FIELD,
    * rolled with the field's seed) or 'group' (a low field's own small-piece group); a row of EXTRA_ROW0 or more is a mission
    * extra on any layout: EXTRA_ROW0 + i the i-th piece of the extra group, SAT_ROW the extra satellite. Null for a row the
@@ -3736,6 +3789,7 @@ export class DebrisField {
     const G = Constants.SMALL_GROUP;
     if (!Number.isInteger(row) || row < 0) return null;
     if (DebrisField.isPairRow(row)) return DebrisField.pairSpec(seed, row - Constants.PAIR_FIELDS.ROW0, attitude);
+    if (DebrisField.isMoverRow(row)) return DebrisField.moverSpec(seed, row - Constants.MOVER_FIELDS.ROW0);
     if (row === G.SAT_ROW) {
       let variant = layout === 'group' ? 0 : 1;
       if (layout === 'group' && Array.isArray(rows) && !rows.some((r) => r < G.EXTRA_ROW0) && rows.some((r) => r >= G.EXTRA_ROW0 && r < G.SAT_ROW)) variant = 1;
@@ -3923,6 +3977,10 @@ export class DebrisField {
       if (missionNo >= Constants.PAIR_FIELDS.FROM_MISSION && !has('pair')) {
         for (let i = 0, n = DebrisField.pairRowCount(); i < n; i++) rows.push(Constants.PAIR_FIELDS.ROW0 + i);
       }
+      // training mission 3 only (MOVER_FIELDS): the drifting, tumbling pieces, unless an uncaught one is still out
+      if (missionNo === Constants.MOVER_FIELDS.MISSION && !has('mover')) {
+        for (let i = 0, n = Constants.MOVER_FIELDS.PIECES.length; i < n; i++) rows.push(Constants.MOVER_FIELDS.ROW0 + i);
+      }
       if (rows.length > WELCOME_FIELD.length) offRows = rows;
     }
     const fieldToSpawn = fieldRows
@@ -4066,7 +4124,8 @@ export class DebrisField {
       // "Target too massive for Mother net. Try deploying a Daughter [D]". A high-field row is heavy by design (every one is
       // held under the net's cap by `Constants.HIGH_FIELD`), so the ceiling is for low rows only.
       const netCeil = Constants.LASSO_MAX_CAPTURE_MASS;
-      if (!spec.high && Number.isFinite(netCeil) && debris.mass > netCeil) {
+      // A mover (training mission 3) is over the ceiling by design: the mother's N then picks the large net.
+      if (!spec.high && !spec.mover && Number.isFinite(netCeil) && debris.mass > netCeil) {
         debris.mass = netCeil;
       }
 
@@ -4165,7 +4224,10 @@ export class DebrisField {
       // Which spec row realised this piece (0-based): candidate matching is score-based, so debrisList order != spec order.
       debris._welcomeSpecIndex = rowOf(i);
       // a mission extra (row from EXTRA_ROW0 up) is tagged by kind: the map-off "is one still out" rule reads it
-      if (rowOf(i) >= Constants.SMALL_GROUP.EXTRA_ROW0) debris._extraKind = DebrisField.isPairRow(rowOf(i)) ? 'pair' : rowOf(i) === Constants.SMALL_GROUP.SAT_ROW ? 'sat' : 'group';
+      if (rowOf(i) >= Constants.SMALL_GROUP.EXTRA_ROW0) debris._extraKind = DebrisField.isMoverRow(rowOf(i)) ? 'mover' : DebrisField.isPairRow(rowOf(i)) ? 'pair' : rowOf(i) === Constants.SMALL_GROUP.SAT_ROW ? 'sat' : 'group';
+      debris._mover = !!spec.mover;           // training mission 3's drifting piece: the coach's lesson beats read it
+      if (!this._moverBodies) this._moverBodies = new Set();
+      if (spec.mover) this._moverBodies.add(debris); else this._moverBodies.delete(debris);
       if (fieldPlan) {   // which field and row this piece is (FieldRegistry reads them when it is removed)
         debris.fieldId = fieldPlan.fieldId;
         debris.fieldRow = rowOf(i);
@@ -4194,7 +4256,8 @@ export class DebrisField {
       // honoured) reveals at most MAX_REVEALS=5 nearest, so #1–#5 on the first S and #6/#7 on a second. The `tease_lock`
       // beat holds on "Press S to scan" until the first reveal (OnboardingDirector `requiresContacts`).
       debris.discovered = false;
-
+      // A mover is a lesson piece: seen from the start (the lesson would stall on a scan that reveals only the nearest five).
+      if (spec.mover) debris.discovered = true;
       // Onboarding tease pin: hold the STATION-catch pieces (spec.pin: #1 dead-centre, #2 off to one side) at a fixed
       // offset in the MOTHER'S LOCAL FRAME (forward + lateral) until each is caught. Enforced per-frame in
       // update()/_updateInstanceTransform by writing _scenePosition (the single source of truth that selection, range, net,
@@ -4237,6 +4300,7 @@ export class DebrisField {
     if (placed > 0) {
       console.log(`[DebrisField] Welcome field: repositioned ${placed} debris near player (mission ${this._currentMissionNumber}, profile: ${profile.label})`);
     }
+    (this._syncMoversLeft || DebrisField.prototype._syncMoversLeft).call(this);   // tell the coach what movers this layout holds
 
     // Mission 1 only: hide all non-welcome interactive debris so the pilot sees a tight ≤1.5 km cluster, not catalog debris
     // drifting through at multi-km range. Marked _hiddenForMission1 so _onMissionStart() can restore them.

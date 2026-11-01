@@ -624,6 +624,7 @@ export const Events = {
   DUAL_FIRE:                'crossbow:dualFire',         // { armIndex1, armIndex2 }
   DUAL_FIRE_RECOIL:         'crossbow:dualFireRecoil',   // { cancelled, residualDv }
   PAIR_LESSON_SKIP:         'mission:pairLessonSkip',    // { reason } the Mission 2 double-shot lesson cannot be set up: MissionCoach ends the beat
+  MOVERS_CHANGED:           'mission:moversChanged',     // { left } training mission 3: how many uncaught drifting pieces are still in the field now (a mover spawned, caught or gone)
 
   // Pulse scan
   PULSE_SCAN_START:         'pulseScan:start',           // { armCount }

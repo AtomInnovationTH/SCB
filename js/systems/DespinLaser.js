@@ -117,7 +117,7 @@ export class DespinLaser {
     const inSpecRad = degToRad(cfg.IN_SPEC_DEG);
     if (before > inSpecRad && after <= inSpecRad) {
       const tumbleDeg = radToDeg(after);
-      eventBus.emit(Events.DESPIN_IN_SPEC, { targetId: target.id ?? null, tumbleDeg });
+      eventBus.emit(Events.DESPIN_IN_SPEC, { targetId: target.id ?? null, tumbleDeg, mover: target._mover === true });
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'MOTHER', text: 'Tumble in spec. Net it.',
         channel: 'CMD', priority: 'success',

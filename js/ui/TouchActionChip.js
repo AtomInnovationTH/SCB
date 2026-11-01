@@ -63,6 +63,8 @@ const CHIPS = Object.freeze({
  */
 export const BEAT_CHIPS = Object.freeze({
   ch2_manual_capture: Object.freeze({ kind: 'net', needs: 'pilot' }),
+  ch3_close: Object.freeze({ kind: 'autopilot', needs: null }),
+  ch3_net: Object.freeze({ kind: 'net', needs: null }),
   ch3_wide_scan: Object.freeze({ kind: 'widescan', needs: null }),
   ch3_codex: Object.freeze({ kind: 'read', needs: null }),
   ch5_burn: Object.freeze({ kind: 'throttle', needs: null }),

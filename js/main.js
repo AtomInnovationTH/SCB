@@ -185,7 +185,7 @@ import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
 import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
 import { devShotGate } from './core/DevShotGate.js';
-import { isDevHost, devSearch } from './core/DevHost.js';
+import { isDevHost, devSearch, devStartMission, installDevStart } from './core/DevHost.js';
 import { stageHoldScenario, holdStatus, netBlockFor } from './dev/holdScenario.js';
 import { installBlackFrameProbe } from './core/BlackFrameProbe.js';
 import { installBlackPatchHeal } from './core/BlackPatchHeal.js';
@@ -3248,6 +3248,15 @@ async function init() {
   });
 
   // --- Event listeners for game flow (delegated to GameFlowManager) ---
+  // Dev only: ?mission=2|3 starts a NEW game at that training mission (DevHost.devStartMission is null on a public host). Installed
+  // BEFORE the game flow manager's MENU_START handler so it is armed before that handler enters the orbit view.
+  {
+    const devMission = devStartMission(window.location);
+    if (devMission) {
+      installDevStart({ eventBus, Events, gameState, scoringSystem, onboardingDirector, mission: devMission, debrisPerMission: Constants.MISSIONS.DEBRIS_PER_MISSION, orbitalView: GameStates.ORBITAL_VIEW });
+      console.info(`[Dev] new games start at training mission ${devMission} via ?mission=${devMission}`);
+    }
+  }
   gameFlowManager.setupEventHandlers();
 
   // Sim mode: NO slo-mo on capture (real capture is unremarkable momentum transfer). The detach slo-mo below stays

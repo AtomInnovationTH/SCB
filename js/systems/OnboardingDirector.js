@@ -381,6 +381,9 @@ export class OnboardingDirector {
 
   isMastered() { return this._mastered; }
 
+  /** Dev start (`?mission=N`, dev host only): every `start()` takes the veteran path, so no chapter-1 tutorial runs. Survives `reset()`. */
+  setDevSkip(on) { this._devSkip = !!on; }
+
   getActiveBeatId() { return this._active ? this._active.beat.id : null; }
 
   getState() {
@@ -1541,6 +1544,7 @@ export class OnboardingDirector {
   }
 
   _checkVeteranSkip() {
+    if (this._devSkip) return true;   // the `?mission=N` dev start: no chapter-1 tutorial (core/DevHost installDevStart)
     if (!this._mastered) return false;
     if (!this._skills || typeof this._skills.getState !== 'function') {
       return true; // mastered + no skills system to verify — trust the flag.

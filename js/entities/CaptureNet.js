@@ -2845,6 +2845,8 @@ export class NetProjectile {
       tangleQuality: this.tangleQuality,
       capturedMass:  this.capturedMass,
       mode:          this.captureMode,
+      // training 3: the coach's mover beats read it (the net holds a snapshot of the piece; the field's own body is the fallback)
+      mover:         this.targetDebris?._mover === true || canonicalOf(this.targetDebris, this._ctx && this._ctx.debrisField)?._mover === true,
     });
 
     if (FEATURE_FLAGS.NET_CEREMONY && !this._ceremonyCompleteEmitted) {

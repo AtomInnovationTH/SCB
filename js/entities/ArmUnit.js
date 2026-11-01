@@ -5458,6 +5458,7 @@ export class ArmUnit {
       detached: this.isDetached, mass: target.mass || 0,
       debrisType: target.type || 'unknown', tool: toolKind,
       manual: this._manualCapture, rangeM: this._captureRangeM(),
+      mover: target._mover === true,   // training 3: the coach reads a tool catch of a drifting piece as a mover catch (no net event follows)
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: this.displayName, text: successMsg, channel: 'CMD', priority: 'success',
@@ -9632,6 +9633,7 @@ export class ArmUnit {
             detached: this.isDetached,
             mass: debris.mass || 0, debrisType: debris.type || 'unknown',
             manual: false, rangeM: this._captureRangeM(),
+            mover: debris._mover === true,
           });
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: this.displayName,

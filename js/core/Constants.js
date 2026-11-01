@@ -4559,6 +4559,12 @@ export const Constants = {
       // Daughter piloting (payload-discriminated via triggerFilter)
       { id: 'arm_pilot',         label: 'Daughter Piloting', key: '1-4', say: 'Press 1 to 4 to pick a daughter to fly.', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
       { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'N', say: 'Press N to use the daughter\'s tool.', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
+      // Training mission 3's moving-target lesson (MISSION_COACH.BEATS_BY_MISSION[3]): each beat's goal, discovered the way the coach reads it
+      // (the mover flag on the payload). noReminder: the coach teaches them once, in the chapter; no stale-skill reminder names them.
+      { id: 'mover_pick',   label: 'Pick a Moving Piece', key: null, tier: 3, category: 'collect', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true, triggerEvent: 'TARGET_SELECTED',    triggerFilter: (d) => !!(d && d.debris && d.debris._mover === true) },
+      { id: 'mover_close',  label: 'Fly In to a Mover',   key: null, tier: 3, category: 'collect', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true, triggerEvent: 'AUTOPILOT_ARRIVED',  triggerFilter: (d) => !!(d && d.mover === true) },
+      { id: 'mover_despin', label: 'Slow a Mover\'s Spin', key: null, tier: 3, category: 'collect', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true, triggerEvent: 'DESPIN_IN_SPEC',     triggerFilter: (d) => !!(d && d.mover === true) },
+      { id: 'mover_net',    label: 'Net a Mover',         key: null, tier: 3, category: 'collect', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true, triggerEvent: 'NET_CATCH_SUCCESS',  triggerFilter: (d) => !!(d && d.mover === true) },
       // No key opens strategic_map: plan-transfer / approach emit DEBRIS_MAP_CLUSTER_SELECTED through LadderBridge.
       { id: 'strategic_map',     label: 'Transfer Map',      key: null, tier: 3, category: 'nav',     hudGroup: null,    prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED' },
       // confirm_before_fire: discovered when the player trips the active-sat treaty guard
@@ -4855,6 +4861,35 @@ export const Constants = {
     KINDS: [
       { name: 'weaver',  struts: [0, 2], alphaMin: 152, alphaMax: 162, rangeMin: 420, rangeMax: 620, sizeMin: 0.30, sizeMax: 0.50 },
       { name: 'spinner', struts: [1, 3], alphaMin: 160, alphaMax: 168, rangeMin: 135, rangeMax: 200, sizeMin: 0.10, sizeMax: 0.30 },
+    ],
+  },
+
+  // MOVER_FIELDS — training mission 3 "moving targets" (owner 2026-10-31, DECISIONS §38 row 9: "3 moving targets (drift,
+  // tumble)"; plan tmp/plans/training-3-movers.md D1-D3). At MISSION_START of internal mission MISSION (and no other) the field
+  // she starts at gets the PIECES below (rows ROW0 ..), unless it still holds an uncaught one. Each piece is large and visible
+  // (over 10 kg, so the mother's N picks the large net and the tumble counts against its odds), tumbles fast (the TUMBLING word
+  // shows above 20 deg/s) and DRIFTS on a real orbit difference: its semi-major axis is the mother's plus `daM` (a piece on a
+  // higher orbit falls behind her, a lower one moves ahead: 1.5 x n x da of along-track speed, about 5 cm/s per game second for
+  // 30 m, MEASURED tmp/tm3/p6.mjs). Placed in the ship frame at arrival (fwdM ahead, latM to the right, no radial offset: a
+  // radial offset sloshes the piece along-track). The 30 m of height is inside the 100 m avoidance radius, so the lateral
+  // offset carries the margin. The cross-track offset swings through zero twice an orbit (every 4.6 real min, while a +30 m piece
+  // slides 143 m along-track), so a piece that falls behind her always has a zero within 72 m of its pass: the best a pass can do
+  // is sqrt(72^2 + 30^2) = 77 m. `fwdM` 566 and 562 put the peak of the swing on the pass and the two nearest zeros either side of
+  // it, MEASURED (tmp/tm3/mv2.mjs, 60 real min, no input): closest pass 76 m and 74 m; the 3 km re-seat distance
+  // (MISSIONS.RESEAT) is not reached before minute 30. Plan D3 asked for 120 m: not reachable at 30 m of drift. The avoidance
+  // system exempts a welcome piece in its own chapter (`_isThreatExempt`), so no dodge burn follows. All numbers are
+  // ESTIMATES to tune except the drift. Own seeded stream (SEED_XOR), never the global Math.random.
+  MOVER_FIELDS: {
+    MISSION: 3,
+    ROW0: 500,
+    SEED_XOR: 0x4D07E55,
+    MASS_MIN_KG: 12, MASS_MAX_KG: 20,
+    SIZE_MIN_M: 0.8, SIZE_MAX_M: 1.2,
+    TUMBLE_MIN_DEG_S: 25, TUMBLE_MAX_DEG_S: 30,
+    PIECES: [
+      { daM: 30,  fwdM: 566, latM: 250 },
+      { daM: -30, fwdM: 600, latM: -200 },
+      { daM: 30,  fwdM: 562, latM: -250 },
     ],
   },
   // The mission satellite: a dead satellite of the cast's own type (FOREGROUND_CAST: 120 kg / 2.2 m and 480 kg / 4.5 m), ONE roll
@@ -5430,6 +5465,20 @@ export const Constants = {
           text: 'ISRO Bangalore here. Good to have a second set of eyes. Your daughter craft can do the close work. Take manual control and you\'ll capture heavier debris than autopilot ever could.',
           mapText: 'ISRO Bangalore here. You\'re at the {km} km field. Your daughter craft can do the close work: take manual control and you\'ll capture heavier debris than autopilot ever could. Low on nets or gas? Fly to the resupply satellite.',
         },
+        // Mission 2 double-shot lesson (owner 2026-10-26; docs/DECISIONS.md): AutopilotSystem sets it up on MISSION_BEAT_STARTED
+        // (waits for both daughters, marks the pair, selects her); the Q key (touch: PAIR) fires it (DUAL_FIRE).
+        // Right after the intro since 2026-11-01 (training 3 plan D6): the pair geometry is measured when the lesson
+        // starts, so it goes before the pilot and manual-capture beats, which wait with no cap.
+        {
+          id: 'ch2_pair_shot',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Next, a double shot. Once both daughters are home and charged, I\'ll mark two pieces that line up for them at once. Fired together, their kicks cancel, so the launch costs almost no gas. Press Q to fire the pair.',
+          skillId: 'collect_dual_fire',
+          triggerEvent: 'DUAL_FIRE',
+          title: 'DOUBLE SHOT',
+          body: 'Press Q when two pieces are marked to launch both daughters together.',
+        },
         {
           id: 'ch2_pilot',
           type: 'interactive',
@@ -5452,28 +5501,74 @@ export const Constants = {
           title: 'MANUAL CAPTURE',
           body: 'Close on a target under manual pilot and press N to net it for 2× score.',
         },
-        // Mission 2 double-shot lesson (owner 2026-10-26; docs/DECISIONS.md): AutopilotSystem sets it up on MISSION_BEAT_STARTED
-        // (waits for both daughters, marks the pair, selects her); the Q key (touch: PAIR) fires it (DUAL_FIRE).
-        {
-          id: 'ch2_pair_shot',
-          type: 'interactive',
-          source: 'HOUSTON',
-          text: 'Next, a double shot. Once both daughters are home and charged, I\'ll mark two pieces that line up for them at once. Fired together, their kicks cancel, so the launch costs almost no gas. Press Q to fire the pair.',
-          skillId: 'collect_dual_fire',
-          triggerEvent: 'DUAL_FIRE',
-          title: 'DOUBLE SHOT',
-          body: 'Press Q when two pieces are marked to launch both daughters together.',
-        },
       ],
 
-      // ── Chapter 3 — Sensor Trade: Wide Scan + the Codex (any field with the map on; LEO-Low 400 km without) ──
+      // ── Chapter 3 — Training mission 3, moving targets: pick a drifting piece, fly in, slow its spin, net it; then the Wide Scan + the Codex ──
+      // The four mover beats (`mover: true`) read the mover flag the payloads carry (TARGET_SELECTED's `debris`, AUTOPILOT_ARRIVED,
+      // DESPIN_IN_SPEC and NET_CATCH_SUCCESS: `mover`). `doneIf(latch)`: a beat whose goal is already met when it comes up is passed over
+      // without a line (MissionCoach's latch; plan D5). No mover left in the field: the open mover beat ends with one plain line, the rest are
+      // passed over (plan D9). Static words: a beat line has no live numbers (the coach reads only `text` / `mapText`).
       3: [
         {
           id: 'ch3_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'You\'re climbing into the LEO-Low traffic lanes. And the ISS tracks through here on 51.6°. Quick pings won\'t reach the far contacts. Trade dwell time for range with a wide scan.',
-          mapText: 'You\'re at the {km} km field. Quick pings won\'t reach the far contacts. Trade dwell time for range with a wide scan. Every trip costs gas and days: the LEO map shows both.',
+          text: 'Training mission 3: moving targets. Real pieces drift and spin. Three pieces out here drift slowly and tumble.',
+          mapText: 'Training mission 3: moving targets, at the {km} km field. Real pieces drift and spin. Three pieces out here drift slowly and tumble. Every trip costs gas and days: the LEO map shows both.',
+        },
+        {
+          id: 'ch3_pick',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Select a drifting piece. Its range changes on its own, and it spins.',
+          skillId: 'mover_pick',
+          triggerEvent: 'TARGET_SELECTED',
+          triggerFilter: (d) => !!(d && d.debris && d.debris._mover === true),
+          doneIf: (latch) => !!(latch.selected && latch.selected._mover === true) || latch.caught,
+          mover: true,
+          title: 'PICK A MOVING PIECE',
+          body: 'Select one of the drifting pieces. Its range changes on its own.',
+        },
+        {
+          id: 'ch3_close',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Too far for a net. Press A: the autopilot flies in, matches its drift and holds.',
+          skillId: 'mover_close',
+          triggerEvent: 'AUTOPILOT_ARRIVED',
+          triggerFilter: (d) => !!(d && d.mover === true),
+          doneIf: (latch) => !!(latch.arrived && latch.arrived.debrisId != null) || latch.caught,
+          mover: true,
+          title: 'FLY IN',
+          body: 'Press A to let the autopilot fly in and hold beside the piece.',
+        },
+        {
+          id: 'ch3_despin',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'It spins fast, so a net often slips off. Hold L to slow it under 10°/s.',
+          skillId: 'mover_despin',
+          triggerEvent: 'DESPIN_IN_SPEC',
+          triggerFilter: (d) => !!(d && d.mover === true),
+          doneIf: (latch) => latch.caught
+            || !!(latch.selected && latch.selected._mover === true && Number.isFinite(latch.selected.tumbleRate)
+              && latch.selected.tumbleRate * 180 / Math.PI <= Constants.DESPIN_LASER.IN_SPEC_DEG),
+          mover: true,
+          title: 'SLOW THE SPIN',
+          body: 'Hold L to bleed the piece\'s spin under 10°/s before you net it.',
+        },
+        {
+          id: 'ch3_net',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Now net it: N, or D for a daughter.',
+          skillId: 'mover_net',
+          triggerEvent: 'NET_CATCH_SUCCESS',
+          triggerFilter: (d) => !!(d && d.mover === true),
+          doneIf: (latch) => latch.caught,
+          mover: true,
+          title: 'NET IT',
+          body: 'Press N to fire the mother net, or D to send a daughter.',
         },
         {
           id: 'ch3_wide_scan',

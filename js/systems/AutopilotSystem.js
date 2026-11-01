@@ -1551,6 +1551,7 @@ export class AutopilotSystem {
       mode: this._headingMode,
       targetName: this._getTargetLabel(),
       phase: this._phase,
+      ...this._lessonFacts(),
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: autopilotOnText(this._headingMode),
@@ -1609,6 +1610,8 @@ export class AutopilotSystem {
       clusterId: cluster.id,
       targetName: cluster.name || cluster.id,
       phase: this._phase,
+      debrisId: null,
+      gasKg: this._gasKgNow(),
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
       // the map's own cluster name when it has one (never the raw id)
@@ -1616,6 +1619,33 @@ export class AutopilotSystem {
       priority: 'info',
       _keep: true,
     });
+  }
+
+  /**
+   * Engine gas aboard now, kg (what the training-3 approach-cost line subtracts), or null with no ship.
+   * @private
+   */
+  _gasKgNow() {
+    return this._player ? engineGasKg(this._player.resources) : null;
+  }
+
+  /**
+   * Facts the mission coach's training-3 lesson reads off AUTOPILOT_ENGAGE / AUTOPILOT_ARRIVED (additive payload fields):
+   * the piece the autopilot is locked on (`debrisId`, null with no piece), whether it is a mover (`mover`), the engine gas
+   * aboard (`gasKg`) and which gas it is (`gasId`).
+   * @private
+   * @returns {{debrisId: (number|string|null), mover: boolean, gasKg: (number|null), gasId: (string|null)}}
+   */
+  _lessonFacts() {
+    const ref = this._lockedTargetRef
+      || (this._headingMode === 'DEBRIS' && this._cachedDebrisResult ? this._cachedDebrisResult.debris : null);
+    const res = this._player && this._player.resources;
+    return {
+      debrisId: ref && ref.id != null ? ref.id : null,
+      mover: !!(ref && ref._mover === true),
+      gasKg: this._gasKgNow(),
+      gasId: (res && res.tankGasId) || null,
+    };
   }
 
   /** @param {string} reason — 'MANUAL'|'DELTAV'|'ARRIVED'|'COLLISION'|'ARROW_INPUT'|'TRAWL'|'TARGET_LOST'|'TARGET_CAUGHT'|'BATTERY' */
@@ -2044,6 +2074,7 @@ export class AutopilotSystem {
         mode: this._headingMode,
         targetName: this._getTargetLabel(),
         phase: this._phase,
+        ...this._lessonFacts(),
       });
       // the lock may have changed: refresh the CA exemption
       this._refreshTargetLock();
@@ -2187,7 +2218,7 @@ export class AutopilotSystem {
             }
           }
 
-          eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
+          eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode, ...this._lessonFacts() });
           // (DECISIONS §33, one line per fact) Said once per lock, never for a piece already caught or gone. A HOLD excursion (4*POS_TOL)
           // drops to TRAIL_ALIGN and re-arrives on the same lock: it must not repeat the line. With no mother nets the D line waits until
           // a daughter can really launch (_tickDaughterLinePending); if none ever can, it names why instead; a daughter already out

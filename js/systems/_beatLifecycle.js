@@ -36,7 +36,7 @@ export function beatMatches(beat, data) {
  * interactive/reactive beat waits for `satisfy()` and escalates once after a
  * timeout. Drive it with `update(dt)`; observe via hooks.
  *
- * hooks: { onPost(beat), onSatisfy(beat), onEscalate(beat), onComplete() }
+ * hooks: { onPost(beat), onSatisfy(beat), onEscalate(beat), onComplete(), shouldSkip?(beat) }
  * timing: { narrativeHoldMs, escalateMs }
  */
 export class BeatSequencer {
@@ -98,17 +98,22 @@ export class BeatSequencer {
   }
 
   _advance() {
-    this.index++;
-    this._timer = 0;
-    this._escalated = false;
-    if (this.index >= this.beats.length) {
-      this.running = false;
-      this._awaitingSatisfy = false;
-      if (typeof this.hooks.onComplete === 'function') this.hooks.onComplete();
+    // A beat the owner says is already done (`hooks.shouldSkip(beat)`, optional) is passed over: no line, no trigger armed, no events.
+    for (;;) {
+      this.index++;
+      this._timer = 0;
+      this._escalated = false;
+      if (this.index >= this.beats.length) {
+        this.running = false;
+        this._awaitingSatisfy = false;
+        if (typeof this.hooks.onComplete === 'function') this.hooks.onComplete();
+        return;
+      }
+      const beat = this.beats[this.index];
+      if (typeof this.hooks.shouldSkip === 'function' && this.hooks.shouldSkip(beat)) continue;
+      this._awaitingSatisfy = (beat.type === 'interactive' || beat.type === 'reactive');
+      if (typeof this.hooks.onPost === 'function') this.hooks.onPost(beat);
       return;
     }
-    const beat = this.beats[this.index];
-    this._awaitingSatisfy = (beat.type === 'interactive' || beat.type === 'reactive');
-    if (typeof this.hooks.onPost === 'function') this.hooks.onPost(beat);
   }
 }

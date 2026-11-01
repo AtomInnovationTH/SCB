@@ -22,6 +22,26 @@ import { BeatSequencer, buildBeatComms, beatMatches } from './_beatLifecycle.js'
 import { MissionOnset } from './_bossLifecycle.js';
 import { satelliteIsTheStop, wordsFor } from './resupplyWords.js';
 
+/** Training chapters: one still running when the next mission starts ends quietly (plan D7). */
+const TRAINING_CHAPTERS = [2, 3];
+
+/** The mover beats a caught mover ends (the lesson's goal is reached); `ch3_net` ends on the net catch itself (NET_CATCH_SUCCESS). */
+const ENDS_ON_MOVER_CATCH = ['ch3_pick', 'ch3_close', 'ch3_despin'];
+/** A daughter's tool catch (magnet, gripper, pad) reaches the goal with no net event, so it ends `ch3_net` too (plan fix F4). */
+const ENDS_ON_TOOL_CATCH = [...ENDS_ON_MOVER_CATCH, 'ch3_net'];
+
+/** The one line when no mover is left in the field while a mover beat is open (plan D9). */
+export const NO_MOVERS_LINE = 'No moving pieces left here.';
+
+/**
+ * The gas an approach used, as the cost line says it: grams below 1 kg, else kg with one decimal.
+ * @param {number} kg @returns {string}
+ */
+export function formatGasUsed(kg) {
+  const g = Math.max(1, Math.round(kg * 1000));
+  return g < 1000 ? `${g} g` : `${(kg).toFixed(1)} kg`;
+}
+
 export class MissionCoach {
   /**
    * @param {object} deps
@@ -51,6 +71,12 @@ export class MissionCoach {
     this._beatUnsub = null;
     /** @type {MissionOnset} the armed (not yet started) chapter — the shared onset rule. */
     this._onset = new MissionOnset();
+    /**
+     * What the coach has seen of the training-3 lesson, from events (it holds no selector, autopilot or field): the selected piece (the
+     * live debris, so a spin is read live), the last mover arrival, whether a mover was caught since the chapter began, how many uncaught
+     * movers the field holds (null = not told), and the engine gas at the first engage per piece (the approach-cost line, plan D10).
+     */
+    this._latch = this._freshLatch();
 
     this._unsubs = [];
     this._disposed = false;
@@ -70,6 +96,22 @@ export class MissionCoach {
     // The autopilot could not set the double shot up in time (it has said why): end the beat so the chapter, and the
     // next one behind it, does not wait for ever.
     on(Events.PAIR_LESSON_SKIP, () => this.satisfyBeat('ch2_pair_shot'));
+    // The training-3 latch (plan D5, D9, D10). Registered here, before any beat arms its own trigger, so on one event the latch is
+    // updated first and a beat's own handler (or the cost line) reads it.
+    on(Events.TARGET_SELECTED, (d) => { this._latch.selected = d ? (d.debris || { id: d.id }) : null; });
+    on(Events.TARGET_CLEARED, () => { this._latch.selected = null; });
+    on(Events.AUTOPILOT_ENGAGE, (d) => {
+      this._latch.arrived = null;
+      if (d && d.debrisId != null && Number.isFinite(d.gasKg) && !this._latch.engageGas.has(d.debrisId)) this._latch.engageGas.set(d.debrisId, d.gasKg);
+    });
+    on(Events.AUTOPILOT_ARRIVED, (d) => {
+      if (d && d.mover === true) this._latch.arrived = { debrisId: d.debrisId ?? null, gasKg: d.gasKg, gasId: d.gasId };
+    });
+    // A disengage (an arrow key, then A again) keeps the first engage's gas: the approach is counted from the first engage on that piece.
+    on(Events.AUTOPILOT_DISENGAGE, () => { this._latch.arrived = null; });
+    on(Events.NET_CATCH_SUCCESS, (d) => this._onMoverCaught(d));
+    on(Events.ARM_CAPTURED, (d) => this._onMoverCaught(d, ENDS_ON_TOOL_CATCH));   // a daughter's tool catch carries `mover` (net catches do not: they came as NET_CATCH_SUCCESS)
+    on(Events.MOVERS_CHANGED, (d) => this._onMoversChanged(d));
     on(Events.GAME_RESET, () => this.reset());
     on(Events.PERSISTENCE_GATHER, (save) => { if (save) save.missionCoach = this._serialize(); });
     on(Events.PERSISTENCE_LOADED, () => {
@@ -121,6 +163,7 @@ export class MissionCoach {
     this._onset.cancel();
     this._completedByMission = {};
     this._activeMission = null;
+    this._latch = this._freshLatch();
   }
 
   dispose() {
@@ -138,7 +181,77 @@ export class MissionCoach {
       : (this._scoring && typeof this._scoring.getMissionNumber === 'function'
         ? this._scoring.getMissionNumber() : 1);
     if (!this._hasChapter(mission)) return;
+    // A training chapter never holds the next mission's lesson (training 3 plan D7): the boundary catch that opens
+    // chapter N+1 ends a still-running chapter N (N = 2 or 3) quietly, so "never overlap" still holds.
+    if (this.isRunning() && this._activeMission != null && TRAINING_CHAPTERS.includes(this._activeMission)
+      && mission === this._activeMission + 1) this._endChapterQuietly();
     this._onset.arm(mission);
+  }
+
+  /**
+   * @private End the running chapter with no line: the open interactive beat (if any) is announced as satisfied (so the
+   * autopilot's pair lesson ends), the run stops, and the chapter counts as coached, as after a normal finish.
+   */
+  _endChapterQuietly() {
+    const cur = this._seq ? this._seq.current() : null;
+    if (cur && (cur.type === 'interactive' || cur.type === 'reactive')) this._satisfyBeat(cur);
+    this._clearActive();
+    this._complete();
+  }
+
+  /** @private */
+  _freshLatch() {
+    return { selected: null, arrived: null, caught: false, left: null, engageGas: new Map() };
+  }
+
+  /**
+   * @private A mover was netted (NET_CATCH_SUCCESS with `mover`): the lesson's goal is reached. An open pick, close or de-spin beat
+   * ends here (the rest are passed over by `doneIf`); the net beat ends on the same event through its own trigger.
+   */
+  _onMoverCaught(d, endsBeats = ENDS_ON_MOVER_CATCH) {
+    if (!d || d.mover !== true) return;
+    this._latch.caught = true;
+    const cur = this._seq ? this._seq.current() : null;
+    if (cur && endsBeats.includes(cur.id)) this._seq.satisfy();
+  }
+
+  /**
+   * @private DebrisField told us how many uncaught movers the field holds (plan D9). None left while a mover beat is open and
+   * nothing was caught: one plain line, the beat ends, and `shouldSkip` passes over the other mover beats.
+   */
+  _onMoversChanged(d) {
+    if (!d || !Number.isFinite(d.left)) return;
+    this._latch.left = d.left;
+    if (d.left !== 0 || this._latch.caught || !this._seq) return;
+    const cur = this._seq.current();
+    if (!cur || cur.mover !== true) return;
+    this._eventBus.emit(Events.COMMS_MESSAGE, buildBeatComms({ source: 'HOUSTON', text: NO_MOVERS_LINE }));
+    this._seq.satisfy();
+  }
+
+  /** @private The sequencer's skip rule (plan D5, D9): no mover left, or the beat's own `doneIf(latch)` says its goal is met. */
+  _shouldSkip(beat) {
+    if (beat.mover === true && this._latch.left === 0) return true;
+    if (typeof beat.doneIf !== 'function') return false;
+    try { return !!beat.doneIf(this._latch); } catch (_) { return false; }
+  }
+
+  /**
+   * @private The approach-cost line (plan D10), said once when `ch3_close` is met by an arrival: the engine gas aboard at the first
+   * engage on that piece minus the gas at the arrival.
+   */
+  _postCostLine() {
+    const a = this._latch.arrived;
+    if (!a) return;
+    const first = this._latch.engageGas.get(a.debrisId);
+    this._latch.engageGas.delete(a.debrisId);
+    if (!Number.isFinite(first) || !Number.isFinite(a.gasKg)) return;
+    const usedKg = first - a.gasKg;
+    if (!(usedKg > 0)) return;
+    this._eventBus.emit(Events.COMMS_MESSAGE, buildBeatComms({
+      source: 'HOUSTON',
+      text: `That approach used ${formatGasUsed(usedKg)} of ${a.gasId || 'xenon'}.`,
+    }));
   }
 
   /** @private A coachable, not-yet-coached mission with a beat table. */
@@ -157,6 +270,8 @@ export class MissionCoach {
     const table = Constants.MISSION_COACH.BEATS_BY_MISSION[mission];
 
     this._activeMission = mission;
+    this._latch.caught = false;          // "caught since the chapter began"
+    if (mission === 3) this._latch.engageGas.clear();   // gas from before the chapter is not the lesson's (a disengage keeps it: plan fix F3)
     const MC = Constants.MISSION_COACH;
     this._seq = new BeatSequencer({
       beats: table,
@@ -166,6 +281,7 @@ export class MissionCoach {
         onSatisfy: (beat) => this._satisfyBeat(beat),
         onEscalate: (beat) => this._escalateBeat(beat),
         onComplete: () => this._complete(),
+        shouldSkip: (beat) => this._shouldSkip(beat),
       },
     });
     this._seq.start();
@@ -215,6 +331,7 @@ export class MissionCoach {
       mission: this._activeMission,
     });
     this._disarmBeat();
+    if (beat.id === 'ch3_close') this._postCostLine();
   }
 
   /** @private Unsatisfied interactive beat → re-prompt via the teaching overlay. */
