@@ -58,6 +58,7 @@ import { trawlManager } from './systems/TrawlManager.js';
 import { AutopilotSystem } from './systems/AutopilotSystem.js';
 import { SkillsSystem } from './systems/SkillsSystem.js';
 import { MissionCoach } from './systems/MissionCoach.js';
+import { ApproachCostLine } from './systems/ApproachCostLine.js';
 import { IssConjunctionBoss } from './systems/IssConjunctionBoss.js';
 import { StarlinkCascadeBoss } from './systems/StarlinkCascadeBoss.js';
 import { LassoSystem } from './systems/LassoSystem.js';
@@ -749,6 +750,7 @@ function _touchFarState() {
 }
 let _onboardingTargetInRange = false;   // the selected target is within net reach (the range wall's net nudge)
 let missionCoach;
+let approachCostLine;
 let issConjunctionBoss;
 let starlinkCascadeBoss;
 let resourceSystem;
@@ -1588,6 +1590,9 @@ async function init() {
   const depotStopPending = () => gameFlowManager.isDepotStopPending();
   missionCoach = new MissionCoach({ eventBus, scoringSystem, persistenceManager, commsSystem, depotStopPending, fieldRegistry });
   missionCoach.init();
+  // After every autopilot approach, in every mission (training 1-3 and the real ones), the coach says the gas it used (DECISIONS §38 row 10).
+  approachCostLine = new ApproachCostLine({ eventBus });
+  approachCostLine.init();
 
   // Late-bind live-data + codex context into the inspection callouts (not in the constructor: motherCallouts is
   // built before commsSystem); every reference is optional and cards degrade to static rows if missing.

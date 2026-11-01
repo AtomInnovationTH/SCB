@@ -1622,7 +1622,7 @@ export class AutopilotSystem {
   }
 
   /**
-   * Engine gas aboard now, kg (what the training-3 approach-cost line subtracts), or null with no ship.
+   * Engine gas aboard now, kg (what ApproachCostLine subtracts for the "That approach used ..." line), or null with no ship.
    * @private
    */
   _gasKgNow() {
@@ -1630,11 +1630,11 @@ export class AutopilotSystem {
   }
 
   /**
-   * Facts the mission coach's training-3 lesson reads off AUTOPILOT_ENGAGE / AUTOPILOT_ARRIVED (additive payload fields):
+   * Facts the mission coach's training-3 lesson and ApproachCostLine (every mission) read off AUTOPILOT_ENGAGE / AUTOPILOT_ARRIVED (additive payload fields):
    * the piece the autopilot is locked on (`debrisId`, null with no piece), whether it is a mover (`mover`), the engine gas
    * aboard (`gasKg`) and which gas it is (`gasId`).
    * @private
-   * @returns {{debrisId: (number|string|null), mover: boolean, gasKg: (number|null), gasId: (string|null)}}
+   * @returns {{debrisId: (number|string|null), clusterId: (number|string|null), mover: boolean, gasKg: (number|null), gasId: (string|null)}}
    */
   _lessonFacts() {
     const ref = this._lockedTargetRef
@@ -1642,6 +1642,7 @@ export class AutopilotSystem {
     const res = this._player && this._player.resources;
     return {
       debrisId: ref && ref.id != null ? ref.id : null,
+      clusterId: this._headingMode === 'CLUSTER' && this._debrisMapCluster && this._debrisMapCluster.id != null ? this._debrisMapCluster.id : null,
       mover: !!(ref && ref._mover === true),
       gasKg: this._gasKgNow(),
       gasId: (res && res.tankGasId) || null,

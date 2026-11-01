@@ -33,15 +33,6 @@ const ENDS_ON_TOOL_CATCH = [...ENDS_ON_MOVER_CATCH, 'ch3_net'];
 /** The one line when no mover is left in the field while a mover beat is open (plan D9). */
 export const NO_MOVERS_LINE = 'No moving pieces left here.';
 
-/**
- * The gas an approach used, as the cost line says it: grams below 1 kg, else kg with one decimal.
- * @param {number} kg @returns {string}
- */
-export function formatGasUsed(kg) {
-  const g = Math.max(1, Math.round(kg * 1000));
-  return g < 1000 ? `${g} g` : `${(kg).toFixed(1)} kg`;
-}
-
 export class MissionCoach {
   /**
    * @param {object} deps
@@ -74,7 +65,7 @@ export class MissionCoach {
     /**
      * What the coach has seen of the training-3 lesson, from events (it holds no selector, autopilot or field): the selected piece (the
      * live debris, so a spin is read live), the last mover arrival, whether a mover was caught since the chapter began, how many uncaught
-     * movers the field holds (null = not told), and the engine gas at the first engage per piece (the approach-cost line, plan D10).
+     * movers the field holds (null = not told). (The approach-cost line is not here: ApproachCostLine says it after every approach.)
      */
     this._latch = this._freshLatch();
 
@@ -96,18 +87,14 @@ export class MissionCoach {
     // The autopilot could not set the double shot up in time (it has said why): end the beat so the chapter, and the
     // next one behind it, does not wait for ever.
     on(Events.PAIR_LESSON_SKIP, () => this.satisfyBeat('ch2_pair_shot'));
-    // The training-3 latch (plan D5, D9, D10). Registered here, before any beat arms its own trigger, so on one event the latch is
-    // updated first and a beat's own handler (or the cost line) reads it.
+    // The training-3 latch (plan D5, D9). Registered here, before any beat arms its own trigger, so on one event the latch is
+    // updated first and a beat's own handler reads it.
     on(Events.TARGET_SELECTED, (d) => { this._latch.selected = d ? (d.debris || { id: d.id }) : null; });
     on(Events.TARGET_CLEARED, () => { this._latch.selected = null; });
-    on(Events.AUTOPILOT_ENGAGE, (d) => {
-      this._latch.arrived = null;
-      if (d && d.debrisId != null && Number.isFinite(d.gasKg) && !this._latch.engageGas.has(d.debrisId)) this._latch.engageGas.set(d.debrisId, d.gasKg);
-    });
+    on(Events.AUTOPILOT_ENGAGE, () => { this._latch.arrived = null; });
     on(Events.AUTOPILOT_ARRIVED, (d) => {
-      if (d && d.mover === true) this._latch.arrived = { debrisId: d.debrisId ?? null, gasKg: d.gasKg, gasId: d.gasId };
+      if (d && d.mover === true) this._latch.arrived = { debrisId: d.debrisId ?? null };
     });
-    // A disengage (an arrow key, then A again) keeps the first engage's gas: the approach is counted from the first engage on that piece.
     on(Events.AUTOPILOT_DISENGAGE, () => { this._latch.arrived = null; });
     on(Events.NET_CATCH_SUCCESS, (d) => this._onMoverCaught(d));
     on(Events.ARM_CAPTURED, (d) => this._onMoverCaught(d, ENDS_ON_TOOL_CATCH));   // a daughter's tool catch carries `mover` (net catches do not: they came as NET_CATCH_SUCCESS)
@@ -201,7 +188,7 @@ export class MissionCoach {
 
   /** @private */
   _freshLatch() {
-    return { selected: null, arrived: null, caught: false, left: null, engageGas: new Map() };
+    return { selected: null, arrived: null, caught: false, left: null };
   }
 
   /**
@@ -236,24 +223,6 @@ export class MissionCoach {
     try { return !!beat.doneIf(this._latch); } catch (_) { return false; }
   }
 
-  /**
-   * @private The approach-cost line (plan D10), said once when `ch3_close` is met by an arrival: the engine gas aboard at the first
-   * engage on that piece minus the gas at the arrival.
-   */
-  _postCostLine() {
-    const a = this._latch.arrived;
-    if (!a) return;
-    const first = this._latch.engageGas.get(a.debrisId);
-    this._latch.engageGas.delete(a.debrisId);
-    if (!Number.isFinite(first) || !Number.isFinite(a.gasKg)) return;
-    const usedKg = first - a.gasKg;
-    if (!(usedKg > 0)) return;
-    this._eventBus.emit(Events.COMMS_MESSAGE, buildBeatComms({
-      source: 'HOUSTON',
-      text: `That approach used ${formatGasUsed(usedKg)} of ${a.gasId || 'xenon'}.`,
-    }));
-  }
-
   /** @private A coachable, not-yet-coached mission with a beat table. */
   _hasChapter(mission) {
     if (this._completedByMission[mission]) return false;
@@ -271,7 +240,6 @@ export class MissionCoach {
 
     this._activeMission = mission;
     this._latch.caught = false;          // "caught since the chapter began"
-    if (mission === 3) this._latch.engageGas.clear();   // gas from before the chapter is not the lesson's (a disengage keeps it: plan fix F3)
     const MC = Constants.MISSION_COACH;
     this._seq = new BeatSequencer({
       beats: table,
@@ -331,7 +299,6 @@ export class MissionCoach {
       mission: this._activeMission,
     });
     this._disarmBeat();
-    if (beat.id === 'ch3_close') this._postCostLine();
   }
 
   /** @private Unsatisfied interactive beat → re-prompt via the teaching overlay. */
