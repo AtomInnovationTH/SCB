@@ -456,7 +456,7 @@ export class CommsSystem {
           // as on the normal post path below
           onboardingBeatId: data._onboardingBeatId,
           link: sanitizeCommsLink(data.link),
-        }, data._critical === true || data._reactive === true);
+        }, data._critical === true || data._reactive === true || data._keep === true);
         return;
       }
 
@@ -887,7 +887,7 @@ export class CommsSystem {
       const held = {
         id: this._nextId++, timestamp: this._clockStamp(), source, text, priority, channel, age: 0,
       };
-      this._hold(held, !!extra && (extra._critical === true || extra._reactive === true));
+      this._hold(held, !!extra && (extra._critical === true || extra._reactive === true || extra._keep === true));
       eventBus.emit(Events.COMMS_MESSAGE, { ...held, _internal: true });
       return;
     }

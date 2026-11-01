@@ -160,7 +160,8 @@ export const ONBOARDING_BEATS = [
     // (A) here and ONLY here.
     id: 'range_wall',
     commsSource: 'BANGALORE', commsText: 'That one\'s too far for the net. See OUT OF RANGE. The autopilot can take us in.',
-    commsAck: 'On station. Net it now.',
+    // Posted when A is pressed (AUTOPILOT_ENGAGE), before the ship arrives: it must not claim arrival.
+    commsAck: 'Autopilot engaged. Taking us in.',
     text: 'Autopilot in',
     glyph: 'A',
     keys: ['KeyA'],
@@ -920,6 +921,7 @@ export class OnboardingDirector {
       channel: 'HOUSTON',
       text: OUT_OF_MOTHER_NETS_LINE,
       priority: 'info',
+      _keep: true,
       _onboardingBeatId: beat.id,
     });
     this._emit(Events.HINT_POSTED, {
@@ -970,6 +972,7 @@ export class OnboardingDirector {
         channel: 'HOUSTON',
         text: beat.netEmptyComms,
         priority: 'info',
+        _keep: true,
       });
     }
     this._skippedBeats.add(beat.id);
@@ -1109,6 +1112,7 @@ export class OnboardingDirector {
           channel: 'HOUSTON',
           text: this._renderCommsText(beat.commsText),
           priority: 'info',
+          _keep: true,   // a beat prompt is never folded away by burst coalescing
           // Tag actionable instructions with their beat id so the comms panel can drop the attention highlight the
           // instant the player follows it (HINT_SATISFIED), not at an ack.
           _onboardingBeatId: beat.triggerEvent ? beat.id : undefined,
@@ -1415,6 +1419,7 @@ export class OnboardingDirector {
         channel: 'HOUSTON',
         text: beat.commsAck,
         priority: 'info',
+        _keep: true,   // a tutorial ack is never folded away by burst coalescing (the catch burst dropped it unseen)
       });
     }
 

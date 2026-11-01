@@ -5471,8 +5471,8 @@ export const Constants = {
           id: 'ch2_intro',
           type: 'narrative',
           source: 'BANGALORE',
-          text: 'ISRO Bangalore here. Good to have a second set of eyes. Your daughter craft can do the close work. Take manual control and you\'ll capture heavier debris than autopilot ever could.',
-          mapText: 'ISRO Bangalore here. You\'re at the {km} km field. Your daughter craft can do the close work: take manual control and you\'ll capture heavier debris than autopilot ever could. Low on nets or gas? Fly to the resupply satellite.',
+          text: 'ISRO Bangalore here. Training mission 2: double shots. Launching one daughter usually costs cold gas; two opposite daughters fired together cost almost none.',
+          mapText: 'ISRO Bangalore here. Training mission 2: double shots, at the {km} km field. Launching one daughter usually costs cold gas; two opposite daughters fired together cost almost none. Low on nets or gas? Fly to the resupply satellite.',
         },
         // Mission 2 double-shot lesson (owner 2026-10-26; docs/DECISIONS.md): AutopilotSystem sets it up on MISSION_BEAT_STARTED
         // (waits for both daughters, marks the pair, selects her); the Q key (touch: PAIR) fires it (DUAL_FIRE).

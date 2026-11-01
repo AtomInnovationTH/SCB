@@ -56,7 +56,7 @@ export function devStartMission(loc = globalThis.location) {
  * Registered BEFORE the game flow manager's own MENU_START handler, so it is armed before that handler enters the orbit view.
  * @param {object} deps
  * @param {{on:Function}} deps.eventBus
- * @param {{MENU_START:string, MENU_CONTINUE?:string, GAME_STATE_CHANGE:string}} deps.Events
+ * @param {{MENU_START:string, MENU_CONTINUE?:string, MENU_FAST_START?:string, GAME_STATE_CHANGE:string}} deps.Events
  * @param {{debrisCleared:number}} deps.gameState
  * @param {{checkMissionTransition:Function}} deps.scoringSystem
  * @param {{setDevSkip?:Function}|null} deps.onboardingDirector
@@ -88,6 +88,11 @@ export function installDevStart({ eventBus, Events, gameState, scoringSystem, on
   // orbit-view start) and cleared when a saved game continues, so a Continue in the same session plays the tutorial as saved.
   const offStart = eventBus.on(Events.MENU_START, () => { cancel(); armed = true; skip(true); });
   const offContinue = Events.MENU_CONTINUE ? eventBus.on(Events.MENU_CONTINUE, () => { cancel(); armed = false; skip(false); }) : null;
+  // MENU_FAST_START (a reserved new-game hook, no emitter today) is a game start that is not MENU_START: it clears the skip like a Continue,
+  // so a stale skip from an earlier dev-start new game never carries into it. MENU_DEPARTURE_START begins no game (MENU_START or MENU_CONTINUE follows it).
+  // (The key is read by destructuring, not `Events.MENU_FAST_START ?`: test-events-graph counts a bare `Events.X` reference as an emit path, and this guard is not one.)
+  const { MENU_FAST_START: fastKey } = Events;
+  const offFast = fastKey ? eventBus.on(fastKey, () => { cancel(); armed = false; skip(false); }) : null;
   // The jump waits for the start burst: the comms panel keeps 4 waiting lines and skips the oldest plain one, so a chapter intro posted
   // in the middle of the boot lines is never drawn. The burst ends at the opening dance's hand-over (it posts "Arrived" / "Systems...
   // nominal." in that tick); the jump runs one timer tick later, so the intro is the newest line. No dance (flag off, reduced motion,
@@ -104,7 +109,7 @@ export function installDevStart({ eventBus, Events, gameState, scoringSystem, on
   }) : null;
   return () => {
     cancel();
-    for (const off of [offStart, offContinue, offState, offHandover]) if (typeof off === 'function') off();
+    for (const off of [offStart, offContinue, offFast, offState, offHandover]) if (typeof off === 'function') off();
     skip(false);
   };
 }
