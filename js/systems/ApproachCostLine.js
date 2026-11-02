@@ -88,6 +88,8 @@ export class ApproachCostLine {
       channel: 'MISSION',
       priority: 'info',
       _onboarding: true,
+      _keep: true,
+      _coach: true,                                            // 2026-11-02: a lesson line; the panel's queue cap dropped it in 8 of 8 training-3 arrivals
     });
   }
 

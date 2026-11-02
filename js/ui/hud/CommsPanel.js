@@ -469,15 +469,22 @@ export class CommsPanel {
   }
 
   /**
-   * @private At most COMMS.PANE_QUEUE_MAX lines wait. Past that the oldest waiting non-warning line is skipped
-   * (never drawn; it stays in CommsSystem's log). Run AFTER the release step, so a batch (COMMS_RELEASE) still starts
-   * with its oldest line and only then loses the surplus from the front of the queue.
+   * @private At most COMMS.PANE_QUEUE_MAX lines wait. Past that the oldest waiting line that is neither a warning nor a
+   * coach line (`coach`, a lesson line) is skipped (never drawn; it stays in CommsSystem's log). A line that is only
+   * `keep` (a key-press reply, a status line) gets no such shelter. 2026-11-02: if every non-warning waiting line is a
+   * coach line, they may wait beyond the cap, up to COMMS.PANE_QUEUE_MAX_COACH; past that the oldest non-warning line is
+   * skipped even if it is a coach line. Run AFTER the release step, so a batch (COMMS_RELEASE) still starts with its
+   * oldest line and only then loses the surplus from the front of the queue.
    */
   _capQueue() {
     const cap = COMMS.PANE_QUEUE_MAX;
     while (this._waiting.length > cap) {
-      const k = this._waiting.findIndex((m) => !isWarningOrWorse(m.priority));
-      if (k < 0) break;
+      let k = this._waiting.findIndex((m) => !isWarningOrWorse(m.priority) && !m.coach);
+      if (k < 0) {
+        if (this._waiting.length <= COMMS.PANE_QUEUE_MAX_COACH) break;
+        k = this._waiting.findIndex((m) => !isWarningOrWorse(m.priority));
+        if (k < 0) break;
+      }
       this._waiting.splice(k, 1);
     }
   }

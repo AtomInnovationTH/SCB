@@ -922,6 +922,7 @@ export class OnboardingDirector {
       text: OUT_OF_MOTHER_NETS_LINE,
       priority: 'info',
       _keep: true,
+      _coach: true,
       _onboardingBeatId: beat.id,
     });
     this._emit(Events.HINT_POSTED, {
@@ -973,6 +974,7 @@ export class OnboardingDirector {
         text: beat.netEmptyComms,
         priority: 'info',
         _keep: true,
+        _coach: true,
       });
     }
     this._skippedBeats.add(beat.id);
@@ -1113,6 +1115,7 @@ export class OnboardingDirector {
           text: this._renderCommsText(beat.commsText),
           priority: 'info',
           _keep: true,   // a beat prompt is never folded away by burst coalescing
+          _coach: true,  // and the comms panel's queue cap spares it (2026-11-02)
           // Tag actionable instructions with their beat id so the comms panel can drop the attention highlight the
           // instant the player follows it (HINT_SATISFIED), not at an ack.
           _onboardingBeatId: beat.triggerEvent ? beat.id : undefined,
@@ -1420,6 +1423,7 @@ export class OnboardingDirector {
         text: beat.commsAck,
         priority: 'info',
         _keep: true,   // a tutorial ack is never folded away by burst coalescing (the catch burst dropped it unseen)
+        _coach: true,  // and the comms panel's queue cap spares it (2026-11-02)
       });
     }
 

@@ -10,7 +10,12 @@
  *     protect?, title?, body? }
  */
 
-/** COMMS_MESSAGE payload for a beat (always `_postOnboarding` so it passes the suppression ramp at tiers ≥ 1). Pure. */
+/**
+ * COMMS_MESSAGE payload for a beat (always `_postOnboarding` so it passes the suppression ramp at tiers ≥ 1). Pure.
+ * `_keep` + `_coach` (2026-11-02): a coach line is a lesson. `_keep` stops burst coalescing from folding it away (training 2's
+ * pilot line was coalesced away in 4 of 4 browser runs); `_coach` is what the comms panel's queue cap spares (a coach line is
+ * never the one skipped, and may wait up to COMMS.PANE_QUEUE_MAX_COACH lines). `_keep` alone is not spared by the cap.
+ */
 export function buildBeatComms(beat) {
   return {
     source: beat.source || 'HOUSTON',
@@ -18,6 +23,8 @@ export function buildBeatComms(beat) {
     channel: beat.channel || 'MISSION',
     priority: beat.priority || 'info',
     _postOnboarding: true,
+    _keep: true,
+    _coach: true,
   };
 }
 

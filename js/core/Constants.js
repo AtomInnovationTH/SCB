@@ -5283,9 +5283,13 @@ export const Constants = {
     PANE_EXPAND_HOLD_MS: 3000,
     // owner 2026-10-20 ("Each stays 3 seconds", docs/DECISIONS.md §18 row 7): the pane shows messages one at a time - a new one
     // replaces the newest row only after the last one has been on screen PANE_MIN_SHOW_S seconds; warnings jump the
-    // queue. At most PANE_QUEUE_MAX messages wait; past that the oldest waiting one is skipped (it stays in the log).
+    // queue. At most PANE_QUEUE_MAX messages wait; past that the oldest waiting one that is not a warning and not a coach
+    // (lesson) line is skipped (it stays in the log). 2026-11-02: a line that is only `_keep` gets no shelter; a coach line
+    // (`_coach`) is never the one skipped, so if every waiting non-warning line is a coach line they may wait up to
+    // PANE_QUEUE_MAX_COACH; past that the oldest non-warning line is skipped even if it is a coach line.
     PANE_MIN_SHOW_S: 3,
     PANE_QUEUE_MAX: 4,
+    PANE_QUEUE_MAX_COACH: 8,
     STRIPE_WIDTH_PX: 3,
   },
 
@@ -5532,7 +5536,7 @@ export const Constants = {
           id: 'ch2_pilot',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Deploy a daughter (D), then press 1-4 to pilot her directly. On station you\'ll see the live capture odds strip. Every tool, every %.',
+          text: 'Press 1-4 to pilot a daughter directly; D launches one if none is out. On station you\'ll see the live capture odds strip. Every tool, every %.',
           skillId: 'arm_pilot',
           triggerEvent: 'CONTROL_MODE_CHANGE',
           triggerFilter: (d) => d && d.mode === 'ARM_PILOT',

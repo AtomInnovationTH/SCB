@@ -3902,7 +3902,7 @@ export class AutopilotSystem {
     if (next && this._pairSaid !== next.key) {
       this._pairSaid = next.key;
       const deg = Math.max(1, Math.round(Math.max(next.missA, next.missB)));
-      eventBus.emit(Events.COMMS_MESSAGE, { text: pairReadyLine(deg), priority: 'info', source: 'HOUSTON' });
+      eventBus.emit(Events.COMMS_MESSAGE, { text: pairReadyLine(deg), priority: 'info', source: 'HOUSTON', _keep: true, _coach: true });
     }
     if (!next) this._pairSaid = null;
     const W = Constants.WHEEL_PRETURN;
@@ -4100,9 +4100,10 @@ export class AutopilotSystem {
     if (mine) text = saved ? pairSavedLine(sv.x, sv.y) : (lesson ? pairSameLine(sv.x) : null);
     if (lesson) text = (text ? text + ' ' : '') + PAIR_PARK_LINE;
     if (!text) return;
+    // `_keep` + `_coach` (2026-11-02): these are the pair-shot lesson's words; the pilot beat's line followed within 2 s and coalesced them
     eventBus.emit(Events.COMMS_MESSAGE, lesson
-      ? { text: text.trim(), priority: 'info', source: 'HOUSTON', channel: 'MISSION', _postOnboarding: true }
-      : { text, priority: 'info', source: 'HOUSTON' });
+      ? { text: text.trim(), priority: 'info', source: 'HOUSTON', channel: 'MISSION', _postOnboarding: true, _keep: true, _coach: true }
+      : { text, priority: 'info', source: 'HOUSTON', _keep: true, _coach: true });
   }
 
   /**

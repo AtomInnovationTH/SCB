@@ -165,7 +165,7 @@ const GLASS_LINES = Object.freeze([
   ['when the timing does not matter. Press Space to fly there.', 'when the timing does not matter. Tap FLY THERE.'],
   ['or says LAUNCH ANYTIME. Press Space to fly there.', 'or says LAUNCH ANYTIME. Tap FLY THERE.'],
   // daughters: a tap on her row in DAUGHTERS sends her number
-  ['Deploy a daughter (D), then press 1-4 to pilot her directly.', 'Hold the target for DAUGHTER, then tap her row in DAUGHTERS to pilot her directly.'],
+  ['Press 1-4 to pilot a daughter directly; D launches one if none is out.', "Tap a daughter's row in DAUGHTERS to pilot her directly; hold the target for DAUGHTER if none is out."],
   ['Press 1-4 while a daughter is deployed to fly her yourself.', 'Tap her row in DAUGHTERS while she is deployed to fly her yourself.'],
   ['Press 1-4 to take manual control. A piloted capture scores 2×.', 'Tap her row in DAUGHTERS to take manual control. A piloted capture scores 2×.'],
   ['Press N to launch the net (or 1-4 to pilot her).', 'Tap LAUNCH NET to launch the net (or tap her row in DAUGHTERS to pilot her).'],

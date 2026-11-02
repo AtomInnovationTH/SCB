@@ -456,7 +456,8 @@ export class CommsSystem {
           // as on the normal post path below
           onboardingBeatId: data._onboardingBeatId,
           link: sanitizeCommsLink(data.link),
-        }, data._critical === true || data._reactive === true || data._keep === true);
+        }, data._critical === true || data._reactive === true || data._keep === true || data._coach === true,
+        data._coach === true);
         return;
       }
 
@@ -468,8 +469,10 @@ export class CommsSystem {
       this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
       // A _critical / _reactive line is "kept": never summarised away, and it does not count toward tipping plain lines
       // into a burst. A `_keep` status line (mission progress, where a catch went, the next step) is kept the same way:
-      // it never bypasses the suppression tier, only coalescing.
-      const kept = data._critical === true || data._reactive === true || data._keep === true;
+      // it never bypasses the suppression tier, only coalescing. A `_coach` line (a lesson line, 2026-11-02) counts as
+      // kept here too, and is stored with `coach` so the comms panel's queue cap spares it (`keep` alone does not).
+      const coach = data._coach === true;
+      const kept = data._critical === true || data._reactive === true || data._keep === true || coach;
       const coal = kept ? { shouldCoalesce: false, count: 0 }
         : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
       if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
@@ -500,6 +503,7 @@ export class CommsSystem {
         link: sanitizeCommsLink(data.link),
       };
       if (kept) msg.keep = true;
+      if (coach) msg.coach = true;
 
       this.messages.push(msg);
       GestureHints.noteChipLine(rawText);   // glass: a line that names an action key brings that chip up
@@ -887,7 +891,8 @@ export class CommsSystem {
       const held = {
         id: this._nextId++, timestamp: this._clockStamp(), source, text, priority, channel, age: 0,
       };
-      this._hold(held, !!extra && (extra._critical === true || extra._reactive === true || extra._keep === true));
+      this._hold(held, !!extra && (extra._critical === true || extra._reactive === true || extra._keep === true || extra._coach === true),
+        !!extra && extra._coach === true);
       eventBus.emit(Events.COMMS_MESSAGE, { ...held, _internal: true });
       return;
     }
@@ -899,7 +904,8 @@ export class CommsSystem {
     const windowMs = COMMS.COALESCE_WINDOW_MS || 2000;
     this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
     // "kept" lines: see the COMMS_MESSAGE listener
-    const kept = !!extra && (extra._critical === true || extra._reactive === true || extra._keep === true);
+    const coach = !!extra && extra._coach === true;
+    const kept = !!extra && (extra._critical === true || extra._reactive === true || extra._keep === true || coach);
     const coal = kept ? { shouldCoalesce: false, count: 0 }
       : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
     if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
@@ -925,6 +931,7 @@ export class CommsSystem {
       age: 0,
     };
     if (kept) msg.keep = true;
+    if (coach) msg.coach = true;
 
     this.messages.push(msg);
     GestureHints.noteChipLine(rawText);   // the text as passed in, before chipPhrase
@@ -952,8 +959,9 @@ export class CommsSystem {
   }
 
   /** @private Park a built message behind the shut gate (bounded: the oldest falls off). */
-  _hold(msg, keep) {
+  _hold(msg, keep, coach = false) {
     if (keep) msg.keep = true;
+    if (coach) msg.coach = true;
     this._held.push(msg);
     while (this._held.length > MAX_MESSAGES) this._held.shift();
   }
