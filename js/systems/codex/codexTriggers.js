@@ -298,6 +298,8 @@ export const CODEX_TRIGGERS = {
   two_beam_plasma_pusher: [{ event: E.BIG_PIECE_FATE, match: (p) => p?.fate === 'push' }],
   ion_beam_shepherd:      [{ event: E.BIG_PIECE_FATE, match: (p) => p?.fate === 'push' }],
   laser_debris_nudge:     [{ event: E.ABLATION_START, match: always }],
+  // The mother's own laser: DespinLaser emits ABLATION_START with armIndex -1 (a daughter's ablation laser sends its arm index).
+  despin_laser:           [{ event: E.ABLATION_START, match: (p) => p?.armIndex === -1 }],
   net_membrane_wrap:      [{ event: E.NET_CATCH_SUCCESS, match: always }],
   spring_net_ejector:     [{ event: E.NET_FIRED, match: always }],
   electroadhesive_grip:   [{ event: E.ARM_CAPTURED, match: (p) => p?.tool === 'PAD' }],

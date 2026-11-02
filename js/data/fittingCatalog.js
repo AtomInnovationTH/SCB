@@ -240,6 +240,13 @@ const FITTING_SPECS = {
     display: () => ({ param: 'salvageScan', base: false, unit: 'flag', op: 'ON' }),
     current: (deps) => deps.sensorSystem && !!deps.sensorSystem.canScanSalvage,
   },
+  // BORDERLINE (shop cat "Sensors"): a second laser on the telescope deck (the standard laser's telescope shares the sensor gimbal),
+  // bought for reach, not for sensing. Tagged SENSORS because that is where it is mounted; shown as a flag read from the player.
+  long_despin_laser: {
+    subsystem: 'SENSORS', reads: 'player',
+    display: () => ({ param: 'longDespinLaser', base: false, unit: 'flag', op: 'ON' }),
+    current: (deps) => !!(deps.player && typeof deps.player.hasLongLaser === 'function' && deps.player.hasLongLaser()),
+  },
   kessler_warning: {
     // BORDERLINE (shop cat "Automation"): warnings land in comms, but the player buys situational AWARENESS (onboard cascade
     // analysis), a sensing capability. Q3 expects COMMS empty.

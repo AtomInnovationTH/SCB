@@ -85,13 +85,17 @@ export class DespinLaser {
     this._beamTarget = null;    // debris currently lit
     this._overrideTarget = null; // piloted-arm SK target (see setOverrideTarget)
     this._activeTier = null;    // the tier that acted this frame (null when not firing)
+    this._rs = null;            // ResourceSystem: the battery the beam bills (null = unbilled, headless tests)
+    this._emptyTold = false;    // the "battery empty" line was said for this press
   }
 
-  /** @param {{scene?, player?, targetSelector?}} deps */
-  init({ scene = null, player = null, targetSelector = null } = {}) {
+  /** @param {{scene?, player?, targetSelector?, resourceSystem?}} deps */
+  init({ scene = null, player = null, targetSelector = null, resourceSystem = null } = {}) {
     this._scene = scene;
     this._player = player;
     this._targetSelector = targetSelector;
+    this._rs = resourceSystem;
+    this._emptyTold = false;
   }
 
   /** Set fire intent (called each frame by InputManager from the held key). */
@@ -162,7 +166,7 @@ export class DespinLaser {
   }
 
   /**
-   * @param {number} dt real frame seconds (the battery clock; billing lives here from lane L2 on)
+   * @param {number} dt real frame seconds (the battery clock: the beam bills `drawW(tier)` for this long)
    * @param {number} [gameDt] game seconds this frame, the step the sky and the tumble animation turn by (`dtWorld`: ×10 base,
    *   times any warp, 0 while the world is held). The spin-down runs on it. Omitted = `dt`.
    */
@@ -177,6 +181,27 @@ export class DespinLaser {
       if (tier) alpha = despinAlpha(tier, target.mass, target.lengthM);
       if (!(alpha > 0)) tier = null;
     }
+
+    // The beam is paid for in real battery seconds (D7): draw/EFFICIENCY watts, tagged 'laser', the part that leaves as
+    // light (EFFICIENCY) kept out of the heat. Nothing is billed while the world is held (gameDt 0). A battery that cannot
+    // cover the frame scales the despin by what it could pay, and an empty one stops it (one line per press).
+    let paid = 1;
+    if (tier && this._rs && dt > 0 && gameDt > 0) {
+      const w = drawW(tier);
+      const want = (w / Constants.SHIP_HEAT.W_PER_UNIT_S) * dt;
+      const got = this._rs.billWatts(w, dt, 'laser', tier.EFFICIENCY);
+      paid = want > 0 ? Math.min(1, got / want) : 1;
+      if (paid < 1 - 1e-9 && !this._emptyTold) {
+        this._emptyTold = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'MOTHER', text: 'De-spin laser short of power: battery empty.',
+          channel: 'CMD', priority: 'warning',
+        });
+      }
+      if (!(paid > 0)) tier = null;
+      else if (paid >= 1 - 1e-9) this._emptyTold = false;
+    }
+    if (!this._firing) this._emptyTold = false;
     const active = !!tier;
     this._activeTier = tier;
 
@@ -201,7 +226,7 @@ export class DespinLaser {
     }
 
     const before = target.tumbleRate || 0;
-    const after = applyDespin(before, alpha, gameDt);
+    const after = applyDespin(before, alpha, gameDt * paid);
     target.tumbleRate = after;
     if (this._beamTarget && this._beamTarget !== target) this._beamTarget._despinning = false;
     target._despinning = true;          // HUD hint (TargetReticle)

@@ -135,6 +135,11 @@ function ionGasUnits(ship, dvMps, fuel) {
 /** 1 meter in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
 
+/** Sensor gimbal origin on the ship's long axis (m): the turntable's underside. The telescope sits `LASER_TELE_CENTER_Z_M` above it. */
+const SENSOR_GIMBAL_Z_M = 1.0;
+/** Gimbal-local z (m) of the despin-laser telescope's centre: the mount the long-range laser's mass is booked at. */
+const LASER_TELE_CENTER_Z_M = 0.10;
+
 /** `_petalHolds` of a test stub that borrows `_updateFlower` (never written). */
 const EMPTY_HOLDS = Object.freeze([]);
 
@@ -493,6 +498,9 @@ export class PlayerSatellite extends THREE.Group {
     // Reaction-wheel kit (Constants.WHEELS, DECISIONS §2 row 9). `_wheelH` = the wheels' stored spin, ship frame, N·m·s: what the
     // ship's own turns borrowed from the wheels and kicks / the coils changed; a rest-to-rest wheel turn leaves it where it was.
     this._wheelKit = false;          // the kit is aboard (bought; the save-restore replay re-applies it)
+    // Long-range de-spin laser (Constants.DESPIN_LASER.LONG; plan laser-1101 D2/D6): bought at the resupply stop, replayed by a
+    // continued save, cleared with the run (`resetWheelState`). DespinLaser asks `hasLongLaser()`; it stores no ownership.
+    this._longLaser = false;
     this._wheelH = new THREE.Vector3();
     this._wheelSpin = false;         // the current spin was made by the wheels, so the wheels stop it (the gas twin is `_gasSpin`)
     this._wheelUse = { x: 0, y: 0, z: 0 };   // this frame's full-torque seconds per axis (the power bill, `_wheelFrameEnd`)
@@ -504,6 +512,7 @@ export class PlayerSatellite extends THREE.Group {
     this._unloadLitS = 0;            // this frame's box seconds lit by the wheel unload (they are not a turn: no sloth line, `_slothFrameEnd`)
     this._slothSayPending = false;   // the kit is aboard: the "steering gas empty" line waits until the boxes really are the source
     this._inertiaKit = false;        // the kit flag the cached inertia was computed with (the cache follows the kit)
+    this._inertiaLaser = false;      // the same for the long-range de-spin laser
     // A refused mother-net shot / lasso cast leaves the ship pointed where the aim turned it: no
     // recenter toward prograde until the next deliberate attitude change. See holdHeadingAfterRefusal.
     this._recenterPaused = false;
@@ -3370,6 +3379,36 @@ export class PlayerSatellite extends THREE.Group {
     return { massKg: Constants.WHEELS.MASS_KG, z: Constants.WHEELS.Z_M };
   }
 
+  // LONG-RANGE DE-SPIN LASER (Constants.DESPIN_LASER.LONG; DECISIONS §60 row 7). A second laser on the telescope deck, carried in
+  // addition to the standard one. Ownership lives here; DespinLaser reads `hasLongLaser()` (never stores it), so a new run
+  // cannot inherit it.
+
+  /** @returns {boolean} the long-range de-spin laser is aboard */
+  hasLongLaser() { return this._longLaser === true; }
+
+  /** @private Install it (idempotent). It is structure: mass and inertia change, so the cached inertia goes. */
+  _installLongLaser() {
+    if (this._longLaser) return;
+    this._longLaser = true;
+    this._attitudeInertia = null;
+  }
+
+  /** The long laser's dry mass (kg): the mass-budget carrier term `ArmManager.getMassBudget` adds; 0 without it. */
+  getLongLaserMassKg() {
+    return this._longLaser ? Constants.DESPIN_LASER.LONG.MASS_KG : 0;
+  }
+
+  /**
+   * The long laser as one point mass on the axis (x = y = 0) at the telescope's mount height, for `computeInertia`. null without
+   * it. Same approximation as the wheel kit: the telescope's 0.26 m offset from the axis is left out (an estimate: a few cm of
+   * centre of mass, not measured; the booking is on the axis so izz does not move).
+   * @returns {{massKg:number, z:number}|null}
+   */
+  longLaserBooking() {
+    if (!this._longLaser) return null;
+    return { massKg: Constants.DESPIN_LASER.LONG.MASS_KG, z: SENSOR_GIMBAL_Z_M + LASER_TELE_CENTER_Z_M };
+  }
+
   /** @returns {{x:number,y:number,z:number}} the wheels' stored spin, ship frame, N·m·s (a copy) */
   getWheelMomentum() {
     const h = this._wheelH;
@@ -3402,9 +3441,12 @@ export class PlayerSatellite extends THREE.Group {
       clamp(state[0], -H, H), clamp(state[1], -H, H), clamp(state[2], -H, H));
   }
 
-  /** New game: the kit goes with the run's purchases (the replay of a continued save puts it back), the wheels stand empty. */
+  /** New game: the kit goes with the run's purchases (the replay of a continued save puts it back), the wheels stand empty.
+   *  Also clears the long-range de-spin laser (same two callers, GameFlowManager :919 and :1794): a new run or a retry starts
+   *  with the close laser only. */
   resetWheelState() {
     // (tolerant of a ship stub built without the constructor: a test double the reset handlers are handed)
+    if (this._longLaser) { this._longLaser = false; this._attitudeInertia = null; }
     if (this._wheelH) this._wheelH.set(0, 0, 0);
     this._wheelSpin = false;
     if (this._wheelUnload) { this._wheelUnload.x = false; this._wheelUnload.y = false; }
@@ -5380,7 +5422,7 @@ export class PlayerSatellite extends THREE.Group {
     this._sensorRingR = RING_R;
     // Gimbal platform group: pivot on the CoM axis, at the fore cap (z = 1.0M).
     this.sensorGimbal = new THREE.Group();
-    this.sensorGimbal.position.set(0, 0, M * 1.0);
+    this.sensorGimbal.position.set(0, 0, M * SENSOR_GIMBAL_Z_M);
     this.sensorGimbal.name = 'SensorGimbal';
     this.add(this.sensorGimbal);
     // Ring azimuths (deg) for EO / TELESCOPE / IR / LIDAR — a symmetric quad.
@@ -5563,7 +5605,7 @@ export class PlayerSatellite extends THREE.Group {
     const teleXY = ringXY(RING_AZ.tele);
     const teleR = M * 0.09;
     const teleLen = M * 0.20;
-    const teleCenter = new THREE.Vector3(teleXY.x, teleXY.y, M * 0.10);
+    const teleCenter = new THREE.Vector3(teleXY.x, teleXY.y, M * LASER_TELE_CENTER_Z_M);
     const teleGeo = new THREE.CylinderGeometry(teleR, teleR, teleLen, 64);
     const telescope = new THREE.Mesh(teleGeo, gunmetalMat);
     telescope.rotation.x = Math.PI / 2;   // cylinder +Y → +Z
@@ -5637,7 +5679,7 @@ export class PlayerSatellite extends THREE.Group {
 
     // Muzzle anchor: gimbal-local at the telescope mouth; the DespinLaser beam origin via getLaserAperturePosition().
     this._laserMuzzle = new THREE.Object3D();
-    this._laserMuzzle.position.set(teleXY.x, teleXY.y, M * 0.10 + teleLen * 0.5);
+    this._laserMuzzle.position.set(teleXY.x, teleXY.y, M * LASER_TELE_CENTER_Z_M + teleLen * 0.5);
     this._laserMuzzle.name = 'LaserMuzzle';
     this.sensorGimbal.add(this._laserMuzzle);
   }
@@ -8033,11 +8075,13 @@ export class PlayerSatellite extends THREE.Group {
     }
     // The wheel kit is structure too: installing it drops the cache itself; this catches a flag set from outside.
     if (this._attitudeInertia && this._inertiaKit !== this._wheelKit) this._attitudeInertia = null;
+    if (this._attitudeInertia && this._inertiaLaser !== this._longLaser) this._attitudeInertia = null;   // the long laser is structure too
     if (!this._attitudeInertia) {
       this._attitudeInertia = computeInertia(this.armManager, this);
       this._storeRadiatorKey();
       this._storeStrutKey();
       this._inertiaKit = this._wheelKit;
+      this._inertiaLaser = this._longLaser;
     }
     return this._attitudeInertia;
   }
@@ -8223,6 +8267,11 @@ export class PlayerSatellite extends THREE.Group {
         // Reaction-wheel kit: a flag + dry mass + inertia (the cached inertia drops with it). Idempotent: the save-restore
         // replay re-applies it. The wheels start with no stored spin (`restoreWheelState` puts a saved one back).
         this._installWheelKit();
+        break;
+      case 'longLaser':
+        // Long-range de-spin laser: a flag + dry mass + inertia (the cached inertia drops with it). Idempotent: the save-restore
+        // replay re-applies it. DespinLaser reads hasLongLaser(); the card's reach and draw come from DESPIN_LASER.LONG.
+        this._installLongLaser();
         break;
     }
   }

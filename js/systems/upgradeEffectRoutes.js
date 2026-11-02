@@ -87,6 +87,10 @@ export const EFFECT_ROUTES = {
   // stored spin is saved apart: `wheelH` in the save, restored after the replay) ──
   wheelKit: [PLAYER],
 
+  // ── Long-range de-spin laser → PlayerSatellite (hardware flag, idempotent: the save-restore replay re-applies it; DespinLaser
+  // reads ownership from the player each frame, so nothing else stores it) ──
+  longLaser: [PLAYER],
+
   // ── Sensors → SENSOR_UPGRADE event (SensorSystem self-manages) ──
   sensorRange: [SENSOR_EVENT],
   detectUntracked: [SENSOR_EVENT],

@@ -1210,7 +1210,8 @@ export const Constants = {
     // shop-pacing guardrail test, which asserts this equals the computed sum so
     // it can never silently drift when the catalog changes (the test computes Σ UPGRADES live; re-derive this with it).
     // Consumables are excluded (gas resupply, mother_net_restock).
-    CATALOG_TOTAL_CR: 47930,
+    // Re-derived 2026-11-02 (laser-1101 L4): +2000 for long_despin_laser (47930 -> 49930). The taper thresholds move with it.
+    CATALOG_TOTAL_CR: 49930,
     // Ordered recommendation preference for the starter highlight. The shop
     // marks the first item here that is un-owned and currently affordable.
     RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],
@@ -2715,9 +2716,10 @@ export const Constants = {
     FLOOR:       0.4,    // minimum multiplier (never makes a catch strictly impossible)
     // Tumble-factor cache invalidation epsilon for the pre-fire odds lock cache (ToolOdds.makeNetOddsLockCache;
     // CAPTURE_NET.md §10 concern 3). |Δ tumbleRate| beyond this recomputes f_tumble. tumbleRate only changes via
-    // discrete writes (despin laser 0.30 rad/s², eddy damp 0.10 rad/s², torque settle → 0, remainder resume), so the
-    // smallest real per-frame step is ~0.10 × dt ≈ 4e-4 rad/s even at 240 fps — 5 orders above this epsilon. Every
-    // real write therefore recomputes (the displayed odds stay numerically identical to a fresh computation), while
+    // discrete writes (despin laser, a physical rate per piece: 5e-4 rad/s² for a 5 kg, 0.3 m fragment down to 5e-8 for a 1,500 kg,
+    // 10 m stage, computed from DESPIN_LASER.CLOSE; eddy damp 0.10 rad/s², torque settle → 0, remainder resume). The check compares
+    // against the rate at the last compute, so a step under the epsilon adds up and recomputes within a few frames; any real
+    // write recomputes (the displayed odds stay numerically identical to a fresh computation), while
     // bit-stable re-reads skip the work.
     RATE_EPS_RAD_S: 1e-9,
   },
@@ -4910,8 +4912,10 @@ export const Constants = {
   // MOVER_FIELDS — training mission 3 "moving targets" (owner 2026-10-31, DECISIONS §38 row 9: "3 moving targets (drift,
   // tumble)"; plan tmp/plans/training-3-movers.md D1-D3). At MISSION_START of internal mission MISSION (and no other) the field
   // she starts at gets the PIECES below (rows ROW0 ..), unless it still holds an uncaught one. Each piece is large and visible
-  // (over 10 kg, so the mother's N picks the large net and the tumble counts against its odds), tumbles fast (the TUMBLING word
-  // shows above 20 deg/s) and DRIFTS on a real orbit difference: its semi-major axis is the mother's plus `daM` (a piece on a
+  // (over 10 kg, so the mother's N picks the large net and the tumble counts against its odds), tumbles just past the 10 deg/s
+  // spec (11-12 deg/s: the de-spin lesson still has work, and the real laser, `DESPIN_LASER.CLOSE`, brings the heaviest corner
+  // piece, 15 kg / 1.0 m / 12 deg/s, to spec in about 67 s on screen; the old 12-20 kg, 25-30 deg/s pieces took 5-18 min,
+  // laser-1101 D10; the TUMBLING word, above 20 deg/s, no longer shows on them) and DRIFTS on a real orbit difference: its semi-major axis is the mother's plus `daM` (a piece on a
   // higher orbit falls behind her, a lower one moves ahead: 1.5 x n x da of along-track speed, about 5 cm/s per game second for
   // 30 m, MEASURED tmp/tm3/p6.mjs). Placed in the ship frame at arrival (fwdM ahead, latM to the right, no radial offset: a
   // radial offset sloshes the piece along-track). The 30 m of height is inside the 100 m avoidance radius, so the lateral
@@ -4926,9 +4930,9 @@ export const Constants = {
     MISSION: 3,
     ROW0: 500,
     SEED_XOR: 0x4D07E55,
-    MASS_MIN_KG: 12, MASS_MAX_KG: 20,
-    SIZE_MIN_M: 0.8, SIZE_MAX_M: 1.2,
-    TUMBLE_MIN_DEG_S: 25, TUMBLE_MAX_DEG_S: 30,
+    MASS_MIN_KG: 12, MASS_MAX_KG: 15,
+    SIZE_MIN_M: 0.8, SIZE_MAX_M: 1.0,
+    TUMBLE_MIN_DEG_S: 11, TUMBLE_MAX_DEG_S: 12,
     PIECES: [
       { daM: 30,  fwdM: 566, latM: 250 },
       { daM: -30, fwdM: 600, latM: -200 },
@@ -5591,7 +5595,7 @@ export const Constants = {
           id: 'ch3_despin',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'It spins fast, so a net often slips off. Hold L to slow it under 10°/s.',
+          text: 'It spins faster than a net likes. Hold L to slow it under 10°/s.',
           skillId: 'mover_despin',
           triggerEvent: 'DESPIN_IN_SPEC',
           triggerFilter: (d) => !!(d && d.mover === true),

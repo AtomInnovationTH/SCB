@@ -16,9 +16,10 @@ import { DAUGHTER_NET_EFFECT_TYPE } from '../systems/upgradeEffectRoutes.js';
 import { depotWords, shopTitle } from '../systems/resupplyWords.js';   // lane 3d: the depot words read the map switch
 import { upgradePrereqsMet, upgradeCostNow, engineTankFull, consumableFull as noRoomFor } from './shopGating.js';
 import { gasPriceCr, coldGasPriceCr, coldGasPoolToKg, indiumCartridgePriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
+import { despinReachM, drawW } from '../systems/DespinLaser.js';   // the long-laser card reads reach and draw from the optics
 
 /**
- * Upgrade definitions — 42 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 43 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins this header to them).
  * Each carries a `trl` (NASA TRL 1-9) and optional `trlRationale` for the badge. TRL is display-only — NEVER used in gating.
  * Exported for the Node test harness (test-TRL.js).
@@ -116,7 +117,7 @@ export const UPGRADES = [
     requiresAll: ['multi_junction_solar'],
     trl: 5, trlRationale: 'JAXA (2015) demonstrated 1.8 kW over 55 m ground-to-ground; no orbital link yet' },
 
-  // Sensors (4)
+  // Sensors (5)
   { id: 'enhanced_eo', cat: 'Sensors', name: 'Enhanced EO', cost: 500,
     desc: '+50% detection range', effect: 'sensorRange', value: 1.5, maxLevel: 1,
     trl: 9, trlRationale: 'Electro-optical telescopes flown on every imaging sat' },
@@ -129,6 +130,13 @@ export const UPGRADES = [
   { id: 'salvage_scanner', cat: 'Sensors', name: 'Salvage Scanner', cost: 700,
     desc: 'Reveal salvage contents at range', effect: 'salvageScan', value: true, maxLevel: 1,
     trl: 4, trlRationale: 'Remote spectral composition analysis demonstrated on lab targets; no ADR heritage' },
+  // Long-range de-spin laser (DECISIONS §60 row 7; plan laser-1101 D2, D6). The numbers are Constants.DESPIN_LASER.LONG: the card
+  // reads them (reach and draw are computed by DespinLaser, never typed here). The standard infrared laser stays; with both aboard
+  // the close one fires inside its own reach (it pushes harder there) and this one beyond it.
+  { id: 'long_despin_laser', cat: 'Sensors', name: 'Long-range de-spin laser', cost: Constants.DESPIN_LASER.LONG.PRICE_CR,
+    desc: `A second laser on the telescope deck: ultraviolet, ${Math.round(Constants.DESPIN_LASER.LONG.APERTURE_M * 100)} cm mirror, so it slows a tumbling piece from about ${(despinReachM(Constants.DESPIN_LASER.LONG) / 1000).toFixed(1)} km away (the standard infrared laser reaches about ${Math.round(despinReachM(Constants.DESPIN_LASER.CLOSE) / 10) * 10} m). Adds ${Constants.DESPIN_LASER.LONG.MASS_KG} kg and draws about ${Math.round(drawW(Constants.DESPIN_LASER.LONG))} W from the battery while firing. It pushes more gently than the close laser, so a big piece still takes a long time.`,
+    effect: 'longLaser', value: true, maxLevel: 1,
+    trl: 4, trlRationale: 'No picosecond space laser of this pulse energy has flown; Aeolus (2018-2023) flew a nanosecond 355 nm laser of 53-90 mJ' },
 
   // Arms (5)
   // owner 2026-08-21: `long_tether` (600 cr, effect 'tetherRange' ×2) retired from the catalog — it wrote the same live

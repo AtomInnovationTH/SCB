@@ -17,7 +17,7 @@ import { dossierSystem } from '../systems/DossierSystem.js';
 import { toolShortLabel } from '../systems/ToolOdds.js';
 import { calmBreathe, finitePulse } from './hudPulse.js';
 import { FONT_MONO } from '../core/Typeface.js';
-import { setDespinProbe, despinButtonUp } from './hud/DespinHint.js';   // one "is DE-SPIN up" rule, shared with ToolOdds
+import { setDespinProbe, despinButtonUp, despinTimeSuffix, keysDespinWords } from './hud/DespinHint.js';   // one "is DE-SPIN up" rule, shared with ToolOdds
 import { GestureHints } from './hud/GestureHints.js';   // the aiming-mark captions follow glass, read when drawn
 import { RAD2DEG, clamp01, clamp, lerp } from '../core/MathUtil.js';
 import { VisualLaw } from '../core/VisualLaw.js';
@@ -1177,8 +1177,8 @@ export class DockingReticle {
       const deg = Math.abs(tumbleRate || 0) * RAD2DEG;
       if (tumbleRate != null && deg > inSpec && !target._despinning) {
         // On glass the de-spin clause stays only while the DE-SPIN button is up; else the plain broadside advice.
-        advisory = !this._glassNow() ? 'de-spin to freeze aspect [L]'
-          : this._glassDespinUp() ? 'de-spin to freeze aspect: hold DE-SPIN'
+        advisory = !this._glassNow() ? keysDespinWords(target, 'de-spin to freeze aspect [L]')
+          : this._glassDespinUp() ? `de-spin to freeze aspect: hold DE-SPIN${despinTimeSuffix(target)}`
             : this._aspectBroadside();
         advisoryCol = '#ffd166';
       } else {
@@ -1193,13 +1193,15 @@ export class DockingReticle {
     } else if (tumbleRate != null) {
       const deg = Math.abs(tumbleRate) * RAD2DEG;
       const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
-      // Live °/s readout: while holding the de-spin key the tumble converges toward the in-spec threshold.
+      // Live °/s readout: while holding the de-spin key the tumble converges toward the in-spec threshold; the time to it
+      // (screen clock, D8) is told wherever the laser has a mass and length to work with, and counts down while it fires.
       if (target._despinning) {
-        advisory = `de-spinning ${deg.toFixed(1)}\u00B0/s \u2192 ${inSpec}\u00B0/s`;
+        advisory = `de-spinning ${deg.toFixed(1)}\u00B0/s \u2192 ${inSpec}\u00B0/s${despinTimeSuffix(target)}`;
         advisoryCol = '#66ddff';
       } else if (deg > inSpec) {
         advisory = `tumbling ${Math.round(deg)}\u00B0/s`
-          + (!this._glassNow() ? ' \u2014 de-spin [L]' : this._glassDespinUp() ? ' \u2014 hold DE-SPIN' : '');
+          + (!this._glassNow() ? ` \u2014 ${keysDespinWords(target)}`
+            : this._glassDespinUp() ? ` \u2014 hold DE-SPIN${despinTimeSuffix(target)}` : '');
       }
     }
     // A NET ✓ whose DRAWN span outspans the bag gets an amber qualifier instead of silence (the verdict stays

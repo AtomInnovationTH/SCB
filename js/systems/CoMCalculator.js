@@ -582,6 +582,11 @@ export function computeInertia(armManager, playerSatellite, opts) {
   const kit = playerSatellite && typeof playerSatellite.wheelKitBooking === 'function' ? playerSatellite.wheelKitBooking() : null;
   if (kit && kit.massKg > 0) addPoint(kit.massKg, { x: 0, y: 0, z: kit.z });
 
+  // Long-range de-spin laser: structure (unclamped), one on-axis point at the telescope mount height (izz does not move). Same
+  // rule as the wheel kit: a caller with no laser info books none; computeCoM leaves it out.
+  const longLaser = playerSatellite && typeof playerSatellite.longLaserBooking === 'function' ? playerSatellite.longLaserBooking() : null;
+  if (longLaser && longLaser.massKg > 0) addPoint(longLaser.massKg, { x: 0, y: 0, z: longLaser.z });
+
   // Radiators: structure (unclamped), at each petal's live angle.
   let radIxx = 0, radIyy = 0, radIzz = 0;   // the radiators' share, also part of the clamp's reference below
   const petals = _radiatorPetals(playerSatellite);

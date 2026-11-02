@@ -68,6 +68,8 @@ export class ThermalSystem {
     this._lastDrawnUnits = 0;
     // last seen ledger total of ion-engine (beam-tagged) units
     this._lastBeamUnits = 0;
+    // last seen ledger total of units that left as light (the despin laser's beam)
+    this._lastLightUnits = 0;
     // smoothed dT/dt, °C per real second
     this._rateCps = 0;
     this._yellowArmed = true;
@@ -166,7 +168,7 @@ export class ThermalSystem {
     const before = this.tempC;
 
     // Heat in: every battery unit drawn since the last tick (drawn watts end as heat, except 75 % of the ion engines'
-    // draw, which leaves in the beam) plus the sun on the hull in
+    // draw, which leaves in the beam, and the despin laser's beam, which leaves as light) plus the sun on the hull in
     // daylight. The heater's own draw (billed at the end of the last tick) is in `d` too, since its heat warms the
     // ship, but it is NOT "other heat in" for its controller.
     let qInJ = 0;
@@ -179,8 +181,12 @@ export class ThermalSystem {
       const beamTotal = typeof rs.getEnergyBeamUnits === 'function' ? rs.getEnergyBeamUnits() : this._lastBeamUnits;
       const db = clamp(beamTotal - this._lastBeamUnits, 0, Math.max(d, 0));
       this._lastBeamUnits = beamTotal;
+      // The despin laser's beam leaves as light (billWatts' lightShare): its units are no heat at all.
+      const lightTotal = typeof rs.getEnergyLightUnits === 'function' ? rs.getEnergyLightUnits() : this._lastLightUnits;
+      const dl = clamp(lightTotal - this._lastLightUnits, 0, Math.max(d - db, 0));
+      this._lastLightUnits = lightTotal;
       if (d > 0) {
-        const h = d - (1 - ENGINE_HEAT_SHARE) * db;
+        const h = d - (1 - ENGINE_HEAT_SHARE) * db - dl;
         qInJ += h * SH.UNIT_J;
         otherJ += Math.max(0, h - this._heaterUnits) * SH.UNIT_J;
       }
@@ -257,6 +263,7 @@ export class ThermalSystem {
     if (rs && typeof rs.getEnergyDrawnUnits === 'function') {
       this._lastDrawnUnits = rs.getEnergyDrawnUnits();
       this._lastBeamUnits = typeof rs.getEnergyBeamUnits === 'function' ? rs.getEnergyBeamUnits() : 0;
+      this._lastLightUnits = typeof rs.getEnergyLightUnits === 'function' ? rs.getEnergyLightUnits() : 0;
     }
   }
 
@@ -294,6 +301,7 @@ export class ThermalSystem {
     this._lastDrawnUnits = (rs && typeof rs.getEnergyDrawnUnits === 'function')
       ? rs.getEnergyDrawnUnits() : 0;
     this._lastBeamUnits = (rs && typeof rs.getEnergyBeamUnits === 'function') ? rs.getEnergyBeamUnits() : 0;
+    this._lastLightUnits = (rs && typeof rs.getEnergyLightUnits === 'function') ? rs.getEnergyLightUnits() : 0;
   }
 
   dispose() {

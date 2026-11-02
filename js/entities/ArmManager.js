@@ -4881,13 +4881,17 @@ export class ArmManager {
     const wheelMass = (this.playerSatellite
         && typeof this.playerSatellite.getWheelKitMassKg === 'function')
       ? this.playerSatellite.getWheelKitMassKg() : 0;
+    // Long-range de-spin laser (DECISIONS §60 row 7; Constants.DESPIN_LASER.LONG.MASS_KG, 29 kg) rides the same carrier term.
+    const longLaserMass = (this.playerSatellite
+        && typeof this.playerSatellite.getLongLaserMassKg === 'function')
+      ? this.playerSatellite.getLongLaserMassKg() : 0;
     // The 60 L engine tank is structure too (9.5 kg, research §2.2), ADDED to CORE_DRY_MASS (176 = bus + ROSA + body-mount + collar; no
     // tank); its dry mass follows its size (the Bigger Engine Tank carries more tank).
     const resources = this.playerSatellite.resources || {};
     const rsStatus = this._resourceSystem ? this._resourceSystem.getStatus() : null;
     const xenonPoolMax = rsStatus ? rsStatus.xenonMax : Constants.XENON_FUEL_MAX;
     const tankDry = engineTankDryKg({ xenonMax: xenonPoolMax });
-    const coreDry = V5.CORE_DRY_MASS + tankDry + strutMassTotal + flowerMass + wheelMass;
+    const coreDry = V5.CORE_DRY_MASS + tankDry + strutMassTotal + flowerMass + wheelMass + longLaserMass;
 
     // The tank is POOL units (20 = the 6 kg tank; Extra Cold Gas raises the max), so kg = coldGasPoolToKg, not 6 kg x fraction.
     const coldGasPoolMax = rsStatus ? rsStatus.coldGasMax : Constants.COLD_GAS_MAX;

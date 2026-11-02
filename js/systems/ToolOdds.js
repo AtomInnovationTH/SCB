@@ -24,7 +24,7 @@
 
 import { Constants } from '../core/Constants.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
-import { glassDespinWords } from '../ui/hud/DespinHint.js';
+import { glassDespinWords, keysDespinWords } from '../ui/hud/DespinHint.js';
 import {
   computeClingLockFactors,
   finishClingProbability,
@@ -126,12 +126,15 @@ export function resolvePadModeForOdds(target, uvDosesRemaining) {
  *  • target.mass / netClass.MAX_CAPTURE_MASS: strain survival inputs (same rationale; the netClass echo pins the pair).
  *  • target.hasSolarPanels / target.vRel changed, NET_CEREMONY flipped: capture-mode inputs; mode picks pBase (§3.4).
  *  • LASER_DESPIN flipped (tumbleOn): governs whether tumble is read at all.
- *  • |target.tumbleRate − rate-at-compute| > NET_TUMBLE_PENALTY.RATE_EPS_RAD_S: the despin laser (0.30 rad/s²) and MAGNET eddy
+ *  • |target.tumbleRate − rate-at-compute| > NET_TUMBLE_PENALTY.RATE_EPS_RAD_S: the despin laser (a physical rate per piece,
+ *    DespinLaser.despinAlpha: mass and length decide it, not a flat figure) and MAGNET eddy
  *    damp (0.10 rad/s²) move tumble continuously MID-LOCK, so an at-lock snapshot would freeze the odds-climb loop the despin
  *    laser exists for. Only f_tumble recomputes on this trigger (tumbleComputes), not the lock bundle. A value-delta check,
  *    not DESPIN_* event wiring, because tumbleRate has non-despin writers too (capture-torque settle → 0, tumble-remainder
- *    resume). The epsilon sits orders below the smallest real per-frame despin step, so every real write recomputes (the
- *    cache-equality contract stays exact) while bit-stable reads skip the work.
+ *    resume). The epsilon is measured against the rate at the LAST compute, so a step under it still counts: the 1,500 kg, 10 m
+ *    stage's per-frame steps (9e-9 rad/s close, 2e-9 long, computed, at 60 fps) sit above the 1e-9 epsilon, and a smaller step
+ *    (a higher frame rate) accumulates against the rate at the last compute, so the cached odds lag the true
+ *    rate by at most 1e-9 rad/s: the cache-equality contract stays exact while bit-stable reads skip the work.
  *
  * Callers that pass no cache (TargetPanel per-row badges at 2 Hz, ToolRecommender one-shots, tests) get the fresh path: both
  * phases recompute into a module scratch, same functions and order, so cached and fresh results are IDENTICAL by construction.
@@ -286,8 +289,10 @@ function computeNetOdds(opts) {
         loss: 1 - fTumble,
         blocker: 'TUMBLE',
         // On glass the DE-SPIN button (floors 2-3, a target tumbling past the same 10 deg/s) replaces the L key; read at draw
-        // time, and only while that button is really up; else the plain words for what is missing (past 5 km: get closer).
-        hint: `tumbling ${Math.round(tumbleDeg)}\u00B0/s \u2014 ${GestureHints.isGlass() ? glassDespinWords(target) : 'de-spin [L]'}`,
+        // time, and only while that button is really up; else the plain words for what is missing (past the laser's reach: get
+        // closer). Where the laser would fire the line also says how long, on screen, to 10 deg/s (D8; none when the piece has no mass/length);
+        // on keys, past every owned reach it says "get within N m to stop its spin" too, since L does nothing there.
+        hint: `tumbling ${Math.round(tumbleDeg)}\u00B0/s \u2014 ${GestureHints.isGlass() ? glassDespinWords(target) : `${keysDespinWords(target)}`}`,
       });
     }
   }

@@ -246,6 +246,8 @@ export class ResourceSystem {
     this._ledgerInUnits = 0;
     // Part of OUT: battery units drawn by an ion engine (drawUpTo opts.beam), a share of which leaves the ship in the beam.
     this._ledgerBeamUnits = 0;
+    // Part of OUT: battery units that left the ship as light (the despin laser's beam, billWatts' `lightShare`); never heat.
+    this._ledgerLightUnits = 0;
     /** @private units since the last update(), turned into watts there */
     this._frameOutUnits = 0;
     this._frameInUnits = 0;
@@ -549,11 +551,15 @@ export class ResourceSystem {
    * (ThermalSystem). Returns the battery units actually drawn.
    * `src` (optional string key, e.g. 'strut') also records the energy under that source for getMotorLoads(); the battery
    * drain, ledger and heat are identical with or without it. Untagged bills (the radiator heater) never show there.
+   * `lightShare` (0..1, default 0) is the part of the bill that leaves the ship as light, not heat (the despin laser's beam,
+   * its wall-plug efficiency): it is counted in getEnergyLightUnits() and ThermalSystem leaves it out of the heat in.
    */
-  billWatts(watts, dt, src) {
+  billWatts(watts, dt, src, lightShare = 0) {
     if (!(watts > 0) || !(dt > 0)) return 0;
     if (typeof src === 'string' && src) this._noteMotorBill(src, watts, dt);
-    return this.drawUpTo('battery', (watts / Constants.SHIP_HEAT.W_PER_UNIT_S) * dt);
+    const drawn = this.drawUpTo('battery', (watts / Constants.SHIP_HEAT.W_PER_UNIT_S) * dt);
+    if (drawn > 0 && lightShare > 0) this._ledgerLightUnits += drawn * Math.min(1, lightShare);
+    return drawn;
   }
 
   /**
@@ -609,6 +615,9 @@ export class ResourceSystem {
 
   /** Cumulative part of getEnergyDrawnUnits() that an ion engine drew (tagged `beam`; monotonic like the total). */
   getEnergyBeamUnits() { return this._ledgerBeamUnits; }
+
+  /** Cumulative part of getEnergyDrawnUnits() that left the ship as light (the despin laser's beam, billWatts' `lightShare`; monotonic). */
+  getEnergyLightUnits() { return this._ledgerLightUnits; }
 
   getEnergyChargedUnits() { return this._ledgerInUnits; }
 

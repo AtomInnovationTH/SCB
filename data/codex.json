@@ -1122,13 +1122,14 @@
       "icon": "🌀",
       "related": [
         "detumble",
-        "net_yo_yo_despin"
+        "net_yo_yo_despin",
+        "despin_laser"
       ],
       "i18n": {
         "title": "Spin Stabilization",
         "shortText": "A spinning body holds its heading like a thrown football: cheap stability, but a catch must be de-spun first.",
-        "fullText": "Spin a body up and its angular momentum resists any change in orientation, so it holds a steady heading without active control. Early satellites used this, Explorer 1 spinning at 750 revolutions per minute, instead of carrying reaction wheels, simple and reliable at the cost of only pointing along the spin axis.\n\nDebris inherits the trick by accident: a dead satellite left tumbling is spin-stabilised whether it meant to be or not, and you cannot safely grab a spinning target. Your ablation laser de-spins one gently, vaporising a whisper of material off one side to make a tiny counter-torque, like stopping a merry-go-round with a garden hose, until the tumble is slow enough to catch.",
-        "realWorld": "Spin stabilisation flown since Explorer 1 (1958, 750 rpm); laser/ablation de-spin is an emerging debris-handling technique.",
+        "fullText": "Spin a body up and its angular momentum resists any change in orientation, so it holds a steady heading without active control. Early satellites used this, Explorer 1 spinning at 750 revolutions per minute, instead of carrying reaction wheels, simple and reliable at the cost of only pointing along the spin axis.\n\nDebris inherits the trick by accident: a dead satellite left tumbling is spin-stabilised whether it meant to be or not, and you cannot safely grab a spinning target. Your ablation laser de-spins one gently, vaporising a whisper of material off one side to make a tiny counter-torque, like stopping a merry-go-round with a garden hose. It is slow: a small piece takes minutes, a big dead satellite days of laser time (hours on the game's fast clock), until the tumble is slow enough to catch.",
+        "realWorld": "Spin stabilisation flown since Explorer 1 (1958, 750 rpm). Laser de-spin has not flown: Orbital Lasers' business page (read 2026-11-01) lists laser detumbling as in development, and Nikkei xTECH (14 Feb 2024) reported a plan then for an on-orbit demonstration in FY2027.",
         "formula": "L = I·ω   (angular momentum conserved; a spinning body resists reorientation)",
         "trlRationale": "Flown since Explorer 1 (1958).",
         "unlockHint": "De-spin a target with the ablation laser."
@@ -5611,16 +5612,17 @@
       "related": [
         "world_who_removes",
         "adr_methods_real",
-        "laser_debris_nudge"
+        "laser_debris_nudge",
+        "despin_laser"
       ],
       "i18n": {
         "title": "Orbital Lasers",
         "shortText": "A Tokyo company building space lasers to stop a tumbling satellite.",
-        "fullText": "Orbital Lasers is a Tokyo company founded in January 2024 as a spin-out of SKY Perfect JSAT. It builds compact space lasers: one use is detumbling, stopping the spin of a dead satellite so a servicer can grab it; later, debris removal. Its business page lists laser detumbling and ablation thrust, and has a Demonstration Experiment heading with no date. It closed a 3.02 billion yen Series A on 19 March 2026 and signed a study agreement with Infinite Orbits on 7 April 2026.\n\nA tumbling target is the hardest part of a catch, so slowing it from a distance is worth real money.",
-        "realWorld": "Sources (read 2026-10-27): Orbital Lasers company site, business page (read again 31 Oct 2026); press release 19 Mar 2026 (founded Jan 2024 as a carve-out from SKY Perfect JSAT; Series A 3.02 billion yen); press release 7 Apr 2026 (collaboration-study MoU with Infinite Orbits). No launch date for its own hardware.",
+        "fullText": "Orbital Lasers is a Tokyo company founded in January 2024 as a spin-out of SKY Perfect JSAT. It builds compact space lasers: one use is detumbling, stopping the spin of a dead satellite so a servicer can grab it; later, debris removal. Its business page lists laser detumbling and ablation thrust, and has a Demonstration Experiment heading with no date. A Nikkei xTECH report of February 2024 gave the plan then: an on-orbit demonstration in fiscal 2027 (FY2027) and its own removal service from FY2029, firing from about 100 m away. An earlier study by SKY Perfect JSAT and RIKEN, a Japanese research institute, described a laser satellite with under 50 W of output, about 150 kg of satellite and about 200 W of payload power. The company closed a 3.02 billion yen Series A on 19 March 2026 and signed a study agreement with Infinite Orbits on 7 April 2026.\n\nA tumbling target is the hardest part of a catch, so slowing it from a distance is worth real money. Your own spin-brake laser does this job in the game; see De-Spinning With a Laser.",
+        "realWorld": "Sources (read 2026-11-01): Orbital Lasers company site, business page (detumbling listed as in development, ablation thrust described as a technique; the Demonstration Experiment heading carries no date; re-read 2026-11-02); Nikkei xTECH, 14 Feb 2024 (on-orbit demonstration planned FY2027, own removal service FY2029, irradiation from about 100 m; the second page is paywalled, and these are plans that may have moved); Fukushima and colleagues, SKY Perfect JSAT and RIKEN, 8th European Conference on Space Debris, 2021 (abstract: output under 50 W, satellite about 150 kg, payload about 200 W; its own dates, demonstration 2024 and service 2026, are older than the Nikkei plan); press release 19 Mar 2026 (founded Jan 2024 as a carve-out from SKY Perfect JSAT; Series A 3.02 billion yen); press release 7 Apr 2026 (collaboration-study MoU with Infinite Orbits). Earlier read 2026-10-27. No flown hardware.",
         "unlockHint": "Reach orbit."
       },
-      "lastVerified": "2026-10"
+      "lastVerified": "2026-11"
     },
     {
       "id": "org_skyperfect_jsat",
@@ -5917,17 +5919,38 @@
         "adr_methods_real",
         "kessler_syndrome",
         "debris_classification",
-        "org_orbital_lasers"
+        "org_orbital_lasers",
+        "despin_laser"
       ],
       "i18n": {
         "title": "Nudging Small Debris With a Laser",
         "shortText": "A laser pulse boils a thin skin off a metal piece, and the vapour kicks it the other way, like a tiny rocket.",
-        "fullText": "A laser pulse on a metal surface boils off a thin skin, and the vapour kicks the piece the other way. Aimed from the ground, a stream of pulses can nudge a small fragment until its orbit dips into the air. Lab tests measured at most 30 micronewton-seconds per joule on aluminium, and a 2020 study found an optimum near 65 for pieces of 1 to 10 cm. A 2025 review by Bulgakova asks whether pulses shaped in time and space could push harder, which is argued, not measured.\n\nThe sums are modest: a 400 J pulse from the ground can reach about 5 J per square centimetre at 800 km. On a 10 cm aluminium piece that is about 8 mm/s per pulse, so a pass of 100 pulses gives 0.83 m/s, and at least 16 passes lower the piece's lowest point by 50 km (estimates). It suits pieces of 1 to 10 cm, not a rocket stage: pushing an 8,900 kg SL-16 by 1 m/s would take about 297 MJ. No laser has pushed debris in orbit. Her spin-brake laser takes 17.2 degrees per second off a tumble each second; it changes a piece's spin, not its orbit.",
+        "fullText": "A laser pulse on a metal surface boils off a thin skin, and the vapour kicks the piece the other way. Aimed from the ground, a stream of pulses can nudge a small fragment until its orbit dips into the air. Lab tests measured at most 30 micronewton-seconds per joule on aluminium, and a 2020 study found an optimum near 65 for pieces of 1 to 10 cm. A 2025 review by Bulgakova asks whether pulses shaped in time and space could push harder, which is argued, not measured.\n\nThe sums are modest: a 400 J pulse from the ground can reach about 5 J per square centimetre at 800 km. On a 10 cm aluminium piece that is about 8 mm/s per pulse, so a pass of 100 pulses gives 0.83 m/s, and at least 16 passes lower the piece's lowest point by 50 km (estimates). It suits pieces of 1 to 10 cm, not a rocket stage: pushing an 8,900 kg SL-16 by 1 m/s would take about 297 MJ. No laser has pushed debris in orbit. In the game, her spin-brake laser changes a piece's spin, not its orbit, and it is slow: minutes for a small piece.",
         "realWorld": "Bulgakova, Aerospace volume 12, issue 9 (8 Sep 2025), an overview with no new experiment; Phipps and colleagues, Journal of Applied Physics volume 122 (2017), laboratory coupling; no laser has pushed debris in orbit.",
         "trlRationale": "Impulse measured on a laboratory bench; nothing flown or tried on debris in orbit.",
         "unlockHint": "Fire the spin-brake laser at a target."
       },
       "lastVerified": "2026-10"
+    },
+    {
+      "id": "despin_laser",
+      "category": "DEBRIS",
+      "trl": 3,
+      "icon": "🔦",
+      "related": [
+        "org_orbital_lasers",
+        "laser_debris_nudge",
+        "spin_stabilization"
+      ],
+      "i18n": {
+        "title": "De-Spinning With a Laser",
+        "shortText": "Pulses boil a thin skin off a tumbling piece and the vapour pushes it. Aimed off-centre, the push becomes a torque that slows the spin.",
+        "fullText": "A short, strong laser pulse on a metal piece boils off a thin skin, and the vapour kicks the piece the other way. Hit it off-centre and that kick is a torque, so a stream of pulses can slow a tumble from a distance, with no contact. On aluminium the push is about 20 micronewtons per watt of laser power, measured in a vacuum chamber by a RIKEN team with SKY Perfect JSAT; Phipps and colleagues measured at most 30 at 80 picoseconds. How far the beam can work is set by the mirror width, the colour of the light, the pulse energy, the beam quality and the energy per square centimetre the surface needs to boil, not by watts. Pulse length counts only through that energy per square centimetre. Watts only set the speed. With a lightweight space mirror, about 7.8 kg per square metre, a 30 cm mirror alone weighs about 0.55 kg; the laser box behind it is more like 9 to 21 kg (estimate). No laser has de-spun a piece in orbit; a February 2024 report gave FY2027 for Orbital Lasers' first demonstration.\n\nYour ship's own laser is infrared with a 30 cm mirror. It reaches about 120 m and puts out 30 W of beam while drawing about 120 W from the battery, most of which ends up as heat in the ship. The long-range laser is bought at the resupply satellite: ultraviolet, a 50 cm mirror, about 1.4 km of reach, 15 W of beam, about 167 W drawn, and 29 kg added to the ship. Inside 120 m the close laser fires, beyond it the long one. A small piece slows in minutes, while a 120 kg dead satellite spinning at 45° a second takes about 57 hours with the close laser (about 6 hours on the game's screen clock).",
+        "realWorld": "Sources (read 2026-11-01): Tsuno and colleagues, Optics Express volume 28, issue 18 (31 Aug 2020), abstract: about 20 micronewton-seconds per joule on 7075 aluminium in vacuum at 1064 nm, 10 to 20 ns pulses, 5 to 50 J per square centimetre; Phipps and colleagues, Journal of Applied Physics volume 122 (2017), abstract: at most 30 N per megawatt on aluminium at 80 ps, 1057 nm; NASA technical report NTRS 20100035687 (JWST mirror technology, 2010) for lightweight mirror weight, where the 7.8 kg per square metre figure could not be re-checked on 1 or 2 Nov because the page would not open (kept, not contradicted); Orbital Lasers business page (laser detumbling listed as in development, demonstration heading with no date, re-read 2026-11-02); Nikkei xTECH, 14 Feb 2024 (a plan then: on-orbit demonstration FY2027, own removal service FY2029; re-read 2026-11-02). The Tsuno paper's authors include RIKEN and SKY Perfect JSAT researchers. The 9 to 21 kg laser box and the game's lever and inertia figures are estimates.",
+        "trlRationale": "Impulse measured on laboratory benches; no pulsed laser has de-spun anything in orbit, and a February 2024 report gave FY2027 for a first demonstration.",
+        "unlockHint": "Fire your spin-brake laser at a target."
+      },
+      "lastVerified": "2026-11"
     },
     {
       "id": "net_membrane_wrap",

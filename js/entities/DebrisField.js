@@ -3748,7 +3748,7 @@ export class DebrisField {
   /**
    * Training mission 3's moving targets (`Constants.MOVER_FIELDS`, plan D1/D2): the resolved spec of mover `k` of a field
    * (k = row - ROW0), in the shape of a WELCOME_FIELD row. A large, visible piece (over 10 kg: the mother's N picks the large
-   * net) that tumbles fast and drifts: `daM` is the semi-major axis it has over hers (`_placeWelcomePiece` applies it, so a
+   * net) that tumbles just over the net's 10 deg/s and drifts: `daM` is the semi-major axis it has over hers (`_placeWelcomePiece` applies it, so a
    * re-seat does too). Placed in the arrival frame, no radial offset. Own seeded stream. Null for a k outside the movers.
    * @param {number} seed the field's seed @param {number} k the mover, 0-based @returns {object|null}
    */
