@@ -6,6 +6,9 @@
  * Ruling in one breath: release the nose magnet → pay the bag out on its own leash → turn the whole ship under it →
  * reel in at a radiator tip → the tip magnet latches the steel washer at the net's neck. The bag is never
  * free-flying. Tension is a few newtons, so a spike can only mean a snag.
+ * STRAIGHT ARRIVAL (owner 2026-11-01 23:50Z): the line runs over the tip like a pulley, so once it has caught the tip a second,
+ * shorter ship turn (TURN2) lays the bag-side line along the strut, and REEL pulls the bag in along the boom axis: the piece
+ * latches on the axis and nothing swings it onto the tip afterwards.
  *
  * FRAME: non-rotating, centred on the ship origin (player.position; player.quaternion pivots there), metres. The
  * ship's attitude arrives each step as a quaternion; ship translation is ignored over a transfer (orbital drift
@@ -46,7 +49,7 @@
  * is applied only on a substep where the clutch paid line out (Ldot > 0); a bag at rest on a line that is not paying
  * out feels no pull, so a long wait cannot drag it toward the anchor.
  *
- * Exports: planHandoff, latchCheck, lineImpulse, LeashLine, LeashTransfer.
+ * Exports: planHandoff, planStraight, latchCheck, lineImpulse, LeashLine, LeashTransfer.
  * @module systems/LeashTransfer
  */
 
@@ -81,6 +84,22 @@ function qRot(q, v) {
 }
 /** Rotate v by the inverse of q (unit quaternion): world → ship frame. */
 const qRotInv = (q, v) => qRot({ x: -q.x, y: -q.y, z: -q.z, w: q.w }, v);
+/** The rotation of `angle` radians about the unit `axis`. */
+function qAxis(axis, angle) {
+    const s = Math.sin(angle / 2);
+    return { x: axis.x * s, y: axis.y * s, z: axis.z * s, w: Math.cos(angle / 2) };
+}
+/** a·b: b first, then a (the same order as THREE.Quaternion.multiply). */
+function qMul(a, b) {
+    return {
+        x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    };
+}
+/** The angle in degrees between two vectors. */
+const angleDeg = (a, b) => Math.acos(clamp(dot(unit(a), unit(b)), -1, 1)) / DEG2RAD;
 
 
 
@@ -92,10 +111,19 @@ const qRotInv = (q, v) => qRot({ x: -q.x, y: -q.y, z: -q.z, w: q.w }, v);
  * @returns {number} s
  */
 export function leashWheelLimitS(angleRad) {
+    return K().WHEEL_TURN_X * leashTurnSeconds(angleRad);
+}
+
+/**
+ * How long a hand-off turn of `angleRad` takes at the limits `leashTurnLimits` (a trapezoid: ramp up, cruise, ramp down;
+ * measured 2026-11-02: 62.3° in 13.70 s and 23.7° in 5.998 s against 13.70 s / 6.00 s from this formula).
+ * @param {number} angleRad
+ * @returns {number} s
+ */
+export function leashTurnSeconds(angleRad) {
     const lim = leashTurnLimits();
     const A = Math.abs(angleRad);
-    const t = A * lim.accel >= lim.maxRate * lim.maxRate ? A / lim.maxRate + lim.maxRate / lim.accel : 2 * Math.sqrt(A / lim.accel);
-    return K().WHEEL_TURN_X * t;
+    return A * lim.accel >= lim.maxRate * lim.maxRate ? A / lim.maxRate + lim.maxRate / lim.accel : 2 * Math.sqrt(A / lim.accel);
 }
 
 /**
@@ -123,6 +151,16 @@ export function minHandoffD(bagR) {
 }
 
 /**
+ * The distance on the boom ray the plan aims for: `minHandoffD` plus `LEASH.D2_MARGIN_M` (the bag creeps toward the ship by
+ * 3 to 8 cm over the two turns, and REEL entry must still be at least `minHandoffD` from the tip).
+ * @param {number} bagR — metres
+ * @returns {number} metres
+ */
+export function minBoomD(bagR) {
+    return minHandoffD(bagR) + (K().D2_MARGIN_M ?? 0);
+}
+
+/**
  * Where must the bag sit, and how must the ship turn, for the line from the
  * ring anchor to pass through the latch point with the bag beyond it?
  * All points in the SHIP (body) frame.
@@ -134,23 +172,49 @@ export function minHandoffD(bagR) {
  * d up to dMax, there is no reel-in-first). The turn rotates the ship so
  * the body direction of the target comes to the bag's current direction.
  *
+ * STRAIGHT ARRIVAL (`boomBody` given, a unit vector along the strut tip's boom axis, SHIP frame): the same plan also lays
+ * out the SECOND turn that comes after CATCH. A turn about the ship centre keeps the bag's radius `r`, so ONE radius has to
+ * suit both rays: the u-ray (tip + d·u, the first turn) and the boom ray (tip + d2·boom, the second turn). The payout raises
+ * `r` to the larger of what each ray needs (`dMin` on the u-ray, `dMinBoom` (default `dMin`) on the boom ray); no root or
+ * a ray under its minimum at the bag's own radius → pay out. Either ray over `dMax` at that radius → 'too far'. The answer
+ * then carries `straight: {d2, bagTargetBody2, axisBody2, psiRad2}`: where the bag would sit on the boom ray and the turn from
+ * the planned first position to it (a PREDICTION, for the gas check; the machine plans the real turn when it starts it).
+ *
  * @returns {{ok:boolean, reason:string, d:number, bagTargetBody:object,
- *            axisBody:object, psiRad:number, payoutM:number}}
+ *            axisBody:object, psiRad:number, payoutM:number, straight?:object}}
  */
-export function planHandoff({ anchorBody, tipBody, bagBodyNow, dMin, dMax }) {
+export function planHandoff({ anchorBody, tipBody, bagBodyNow, dMin, dMax, boomBody = null, dMinBoom }) {
     const u = unit(sub(tipBody, anchorBody));
     const r = len(bagBodyNow);
-    const b = dot(tipBody, u);
-    const c = dot(tipBody, tipBody) - r * r;
-    const disc = b * b - c;
-    const radiusAt = (d) => len(add(tipBody, mul(u, d)));
+    // the larger root of |tip + d·dir| = radius, NaN when the sphere does not reach that ray
+    const rootAt = (dir, radius) => {
+        const bb = dot(tipBody, dir);
+        const disc = bb * bb - (dot(tipBody, tipBody) - radius * radius);
+        return disc >= 0 ? -bb + Math.sqrt(disc) : NaN;
+    };
+    const radiusAt = (dir, d) => len(add(tipBody, mul(dir, d)));
+    const boom = boomBody ? unit(boomBody) : null;
+    const dMinB = dMinBoom ?? dMin;
 
-    let d = disc >= 0 ? -b + Math.sqrt(disc) : NaN;
+    let d = rootAt(u, r);
     let payoutM = 0;
     let dUsed = d;
-    if (!(d >= dMin - 1e-9)) {
+    let rUse = r;
+    if (boom) {
+        const dB = rootAt(boom, r);
+        if (!(d >= dMin - 1e-9) || !(dB >= dMinB - 1e-9)) {
+            rUse = Math.max(r, radiusAt(u, dMin), radiusAt(boom, dMinB));
+            payoutM = rUse - r;
+            d = dUsed = rootAt(u, rUse);
+        }
+        const d2 = rootAt(boom, rUse);
+        if (!(d2 >= 0)) return { ok: false, reason: 'no boom ray', d, bagTargetBody: V(), axisBody: V(), psiRad: 0, payoutM: 0 };
+        if (d > dMax + 1e-9 || d2 > dMax + 1e-9) {
+            return { ok: false, reason: 'too far', d: Math.max(d, d2), bagTargetBody: add(tipBody, mul(u, d)), axisBody: V(), psiRad: 0, payoutM: 0 };
+        }
+    } else if (!(d >= dMin - 1e-9)) {
         dUsed = dMin;
-        payoutM = radiusAt(dMin) - r;
+        payoutM = radiusAt(u, dMin) - r;
     } else if (d > dMax + 1e-9) {
         // no reel-in-first (a line cannot stop a bag moving toward the anchor)
         return { ok: false, reason: 'too far', d, bagTargetBody: add(tipBody, mul(u, d)), axisBody: V(), psiRad: 0, payoutM: 0 };
@@ -165,7 +229,39 @@ export function planHandoff({ anchorBody, tipBody, bagBodyNow, dMin, dMax }) {
         return { ok: false, reason: 'opposite', d: dUsed, bagTargetBody, axisBody: V(), psiRad, payoutM };
     }
     const axisBody = psiRad < 1e-4 ? V() : mul(x, 1 / sinPsi);
-    return { ok: true, reason: '', d: dUsed, bagTargetBody, axisBody, psiRad, payoutM };
+    const plan = { ok: true, reason: '', d: dUsed, bagTargetBody, axisBody, psiRad, payoutM };
+    if (boom) {
+        const s = planStraight({ tipBody, boomBody: boom, bagBodyNow: bagTargetBody, dMin: dMinB, dMax });
+        plan.straight = s.ok ? s : null;
+        if (!s.ok) return { ...plan, ok: false, reason: s.reason };
+    }
+    return plan;
+}
+
+/**
+ * The SECOND turn of a straight arrival: the bag (in the ship frame, `bagBodyNow`, after the first turn and the catch) is to
+ * lie on the boom ray through the tip, tip + d2·boom, at the SAME radius from the ship centre (a turn keeps it). Returns where,
+ * and the turn that brings the ship round to it, exactly as `planHandoff`'s first turn (the body direction of the target comes
+ * to the bag's current direction): axis in the SHIP frame, angle in radians.
+ * @returns {{ok:boolean, reason:string, d2:number, bagTargetBody2:object, axisBody2:object, psiRad2:number}}
+ *   fields also under the names `axisBody` / `psiRad` / `bagTargetBody` / `d` so the machine reads one shape
+ */
+export function planStraight({ tipBody, boomBody, bagBodyNow, dMin, dMax }) {
+    const boom = unit(boomBody);
+    const r = len(bagBodyNow);
+    const bb = dot(tipBody, boom);
+    const disc = bb * bb - (dot(tipBody, tipBody) - r * r);
+    const d2 = disc >= 0 ? -bb + Math.sqrt(disc) : NaN;
+    const fail = (reason) => ({ ok: false, reason, d2, d: d2, bagTargetBody2: V(), bagTargetBody: V(), axisBody2: V(), axisBody: V(), psiRad2: 0, psiRad: 0 });
+    if (!(d2 >= dMin - 1e-9)) return fail('too close');
+    if (d2 > dMax + 1e-9) return fail('too far');
+    const target = add(tipBody, mul(boom, d2));
+    const x = cross(target, bagBodyNow);
+    const sinPsi = len(x);
+    const psiRad = Math.atan2(sinPsi, dot(target, bagBodyNow));
+    if (psiRad > Math.PI - 1e-3) return fail('opposite');
+    const axisBody = psiRad < 1e-4 ? V() : mul(x, 1 / sinPsi);
+    return { ok: true, reason: '', d2, d: d2, bagTargetBody2: target, bagTargetBody: target, axisBody2: axisBody, axisBody, psiRad2: psiRad, psiRad };
 }
 
 /**
@@ -242,6 +338,14 @@ export class LeashLine {
         this.fixed = false;      // an obstacle holds the bag (position frozen)
         this.minLen = 0;  // 'in' mode never reels the free length shorter than this
         this.lastC = 0;
+    }
+
+    /** A copy with its own position and velocity (the forecast flies it without touching the real line). */
+    fork() {
+        const l = new LeashLine({ mass: this.mass, pos: this.pos, vel: this.vel, reelLen: this.L, engaged: this.engaged });
+        l.Ldot = this.Ldot; l.mode = this.mode; l.reelSpeed = this.reelSpeed; l.target = this.target; l.takeup = this.takeup;
+        l.fixed = this.fixed; l.minLen = this.minLen; l.lastC = this.lastC;
+        return l;
     }
 
     /** Back-tension in newtons for this bag. */
@@ -344,7 +448,7 @@ export class LeashLine {
     }
 }
 
-const ACTIVE_LINE_PHASES = new Set(['RELEASE', 'PAYOUT', 'TURN', 'CATCH', 'REEL', 'REEL_HOME']);
+const ACTIVE_LINE_PHASES = new Set(['RELEASE', 'PAYOUT', 'TURN', 'CATCH', 'TURN2', 'REEL', 'REEL_HOME']);
 const LATCHED_PHASES = new Set(['LATCHED', 'CUT', 'SWING', 'UNFOLD']);
 const BERTH_NAMES = ['BerthCollar', 'BerthFace'];
 
@@ -380,6 +484,7 @@ export class LeashTransfer {
         this.homeTheta = o.homeThetaRad;
         this.unfoldTheta = o.unfoldThetaRad;
         this.reelSpeed = o.reelSpeedMps ?? k.REEL_SPEED_MPS;
+        this._reelStraight = o.reelSpeedMps === undefined;      // a test hook that sets the reel speed keeps it for the straight REEL too
         this.retryFactor = o.retrySpeedFactor ?? 0.5;
         this.bag = { pos: clone(o.bagPos), vel: clone(o.bagVel ?? V()) };
         this.line = null;
@@ -390,7 +495,9 @@ export class LeashTransfer {
         this.entered = false;
         this.enteredStep = 0;
         this.plan = null;
-        this.turn = null;
+        this.turn = null;           // the FIRST turn's record (kept for readers); every turn is in `turns`
+        this.turns = [];            // {axisWorld, angle, issuedStep, completed} per turn issued, in order: REEL_HOME undoes them last first
+        this.turn2Tries = 0;
         this.bounces = 0;
         this.payoutTries = 0;
         this.slackT = 0;
@@ -514,7 +621,7 @@ export class LeashTransfer {
         const k = K();
         const ph = this.phase;
         const startPhase = ph;
-        if ((ph === 'TURN' || ph === 'REEL') && this.line) {
+        if ((ph === 'TURN' || ph === 'TURN2' || ph === 'REEL') && this.line) {
             if (this.line.lastC < -k.SLACK_MIN_M) this.slackT += dt; else this.slackT = 0;
             if (this.slackT > k.SLACK_S && !this.slackFired) {
                 this.slackFired = true;
@@ -614,7 +721,8 @@ export class LeashTransfer {
             this.home.stage = 'unfold';
             return;
         }
-        this.home.stage = engaged ? 'lift' : 'unturn';
+        // over the tip with the straight arrival's turns made: undo those first, still engaged ('unturn2', see REEL_HOME), then lift
+        this.home.stage = engaged ? (this.turns.length > 1 ? 'unturn2' : 'lift') : 'unturn';
         this.win = [];
     }
 
@@ -655,6 +763,25 @@ export class LeashTransfer {
     }
 
     /**
+     * `planHandoff` on the ship-frame points of this step. With `boomWorld` (the strut tip's boom axis, world axes) and the
+     * straight arrival on (`LEASH.STRAIGHT_ARRIVAL`) the plan also covers the second turn (see `planHandoff`).
+     */
+    _planFor(io, tipWorld, boomWorld) {
+        const k = K();
+        const q = io.shipQuat;
+        const straight = k.STRAIGHT_ARRIVAL !== false && !!boomWorld;
+        return planHandoff({
+            anchorBody: qRotInv(q, io.anchorWorld),
+            tipBody: qRotInv(q, tipWorld),
+            bagBodyNow: qRotInv(q, this.bag.pos),
+            dMin: minHandoffD(this.bagR),
+            dMax: k.D_MAX_M,
+            boomBody: straight ? qRotInv(q, boomWorld) : null,
+            dMinBoom: straight ? minBoomD(this.bagR) : undefined,
+        });
+    }
+
+    /**
      * The plan for the radiator's FINAL position, made at the start of the fold. True = the bag needs a payout and the fold
      * can run under it (`foldWait` is set; PAYOUT waits for the radiator before it re-plans). False = wait for the fold
      * (no early position given, the switch is off, no payout needed, or the plan is not ok: the normal re-plan at the end
@@ -663,14 +790,7 @@ export class LeashTransfer {
     _planAhead(io) {
         this._aheadTried = true;
         if (K().PAYOUT_DURING_FOLD === false || !io.tipFinalWorld) return false;
-        const q = io.shipQuat;
-        const plan = planHandoff({
-            anchorBody: qRotInv(q, io.anchorWorld),
-            tipBody: qRotInv(q, io.tipFinalWorld),
-            bagBodyNow: qRotInv(q, this.bag.pos),
-            dMin: minHandoffD(this.bagR),
-            dMax: K().D_MAX_M,
-        });
+        const plan = this._planFor(io, io.tipFinalWorld, io.boomFinalWorld);
         if (!plan.ok || !(Math.abs(plan.payoutM) > K().PAYOUT_ACCEPT_M)) return false;
         this.plan = plan;
         this.foldWait = true;
@@ -700,15 +820,7 @@ export class LeashTransfer {
 
     /** planHandoff from the current io; faults on 'opposite'. Returns true when a plan is stored. */
     _replan(io) {
-        const k = K();
-        const q = io.shipQuat;
-        const plan = planHandoff({
-            anchorBody: qRotInv(q, io.anchorWorld),
-            tipBody: qRotInv(q, io.tipWorld),
-            bagBodyNow: qRotInv(q, this.bag.pos),
-            dMin: minHandoffD(this.bagR),
-            dMax: k.D_MAX_M,
-        });
+        const plan = this._planFor(io, io.tipWorld, io.boomWorld);
         if (!plan.ok) {
             this._failWith('plan: ' + plan.reason);
             return false;
@@ -804,6 +916,7 @@ export class LeashTransfer {
             const axisWorld = qRot(io.shipQuat, this.plan.axisBody);
             this._turnCmd(io, axisWorld, this.plan.psiRad);
             this.turn = { axisWorld, angle: this.plan.psiRad, issuedStep: this.stepNo, completed: false };
+            this.turns.push(this.turn);
             this.line.mode = 'clutch';
         }
         this._sim(dt, g);
@@ -831,10 +944,158 @@ export class LeashTransfer {
             const line = this.line;
             line.L += len(sub(A, T)) + len(sub(T, B)) - len(ab);
             line.engaged = true;
-            line.mode = 'in';
-            line.reelSpeed = this.reelSpeed;
             this._event('catch', { offsetM: off });
-            this._enter('REEL');
+            if (this.plan.straight && io.boomWorld) { line.mode = 'clutch'; this._enter('TURN2'); return true; }
+            this._toReel();
+            return true;
+        }
+        return false;
+    }
+
+    /** The line goes to reel mode and the phase to REEL (shared by CATCH, when there is no second turn, and TURN2). */
+    _toReel() {
+        const line = this.line;
+        line.mode = 'in';
+        if (this.plan2) this.reelSpeed = this._straightReelMps();
+        line.reelSpeed = this.reelSpeed;
+        this._enter('REEL');
+    }
+
+    /**
+     * The reel speed of the straight arrival's REEL (`LEASH.REEL_STRAIGHT_MPS`, 0.085 m/s). The bag keeps the sideways speed it
+     * drifted up (4 to 9 mm/s; a line pulls along itself only), and the latch accepts 3 cm/s head-on or up to 10 cm/s within
+     * `LATCH_ALIGN_DEG` of the line: at 0.05 m/s that sideways speed is 4.3° to 4.9° (measured 2026-11-02, 4 of 5 cases at the edge
+     * of 5°, 2 of 5 bounced), at 0.08 m/s it is 2.7° to 4.7° (16 cases, no bounce). A test hook's own reel speed is kept.
+     */
+    _straightReelMps() {
+        return this._reelStraight ? K().REEL_STRAIGHT_MPS : this.reelSpeed;
+    }
+
+    /**
+     * Fly the line forward from a ship at rest with the anchor at `anchorW` and the tip at `tipW` (world axes), the bag at `pos`
+     * with velocity `vel`, the line just taut, and REEL pulling: returns the direction (unit, world axes) from the tip to the bag
+     * at the moment it latches, and the distance on the way in. The bag keeps what sideways speed it has (a line pulls along
+     * itself only), and as the reel shortens the line the same sideways speed turns the bag round the tip faster: a few mm/s
+     * is a degree or two by the latch. The forecast is that arc, flown with the real line model (`LeashLine.advance`).
+     * @returns {{dir:object, dEntry:number, verdict:string}}
+     */
+    _forecastReel(anchorW, tipW, pos, vel) {
+        const k = K();
+        const line = this.line.fork();
+        line.pos = clone(pos);
+        line.vel = clone(vel);
+        line.L = len(sub(anchorW, tipW)) + len(sub(pos, tipW));        // taut at REEL entry
+        line.Ldot = 0;
+        line.mode = 'in';
+        line.reelSpeed = this._straightReelMps();
+        line.fixed = false;
+        const g = { a0: anchorW, a1: anchorW, t0: tipW, t1: tipW };
+        const dEntry = len(sub(pos, tipW));
+        let verdict = 'none';
+        const h = 1 / 30;
+        for (let i = 0; i < 40 / h && verdict === 'none'; i++) {
+            line.advance(h, g, {
+                stopWhen: (l) => {
+                    const dir = unit(sub(tipW, l.pos));
+                    verdict = latchCheck({ neckPos: add(l.pos, mul(dir, this.bagR)), bagVel: l.vel, tipPos: tipW, lineDirIn: dir });
+                    return verdict !== 'none';
+                },
+            });
+        }
+        return { dir: unit(sub(line.pos, tipW)), dEntry, verdict };
+    }
+
+    /**
+     * The second turn, aimed. The bag coasts while the ship turns (the line is slack) and keeps its sideways speed during the
+     * reel, so the straight line from the tip to the bag at REEL entry is not where the bag will arrive. This finds the turn
+     * (axis, angle) after which the forecast arrival (`_forecastReel`) lies on the boom axis: the aim direction `a` starts as
+     * the boom axis and is moved against the forecast error until it is under 0.1° (at most 6 rounds); each round the turn
+     * is planned (`planStraight`, on the bag's coast position at the end of that turn, a turn takes `leashTurnSeconds`).
+     * @returns {object} `planStraight`'s answer plus `errDeg` (the forecast arrival error, ° off the boom axis) and `aimBody`
+     */
+    _aimStraight(io) {
+        const k = K();
+        const q = io.shipQuat;
+        const tipB = qRotInv(q, io.tipWorld);
+        const boomB = unit(qRotInv(q, io.boomWorld));
+        const v = this.bag.vel;
+        const dMin = minHandoffD(this.bagR);
+        let aim = boomB;
+        let psi = 0;
+        let s = null;
+        let errDeg = Infinity;
+        for (let it = 0; it < 6; it++) {
+            const P1 = add(this.bag.pos, mul(v, leashTurnSeconds(psi)));          // where the bag has coasted to when the turn ends
+            s = planStraight({ tipBody: tipB, boomBody: aim, bagBodyNow: qRotInv(q, P1), dMin, dMax: k.D_MAX_M });
+            if (!s.ok) return s;
+            psi = s.psiRad;
+            const rot = qAxis(qRot(q, s.axisBody), psi);
+            const fc = this._forecastReel(qRot(rot, io.anchorWorld), qRot(rot, io.tipWorld), P1, v);
+            const arrB = qRotInv(qMul(rot, q), fc.dir);                            // arrival direction in the ship's frame after the turn
+            errDeg = angleDeg(arrB, boomB);
+            if (errDeg < 0.1) break;
+            aim = unit(sub(aim, sub(arrB, boomB)));
+        }
+        return { ...s, errDeg, aimBody: aim };
+    }
+
+    /** The forecast arrival error (°) off the boom axis from the bag and the ship as they are now (the ship at rest). */
+    _straightErrDeg(io) {
+        const fc = this._forecastReel(io.anchorWorld, io.tipWorld, this.bag.pos, this.bag.vel);
+        return angleDeg(fc.dir, io.boomWorld);
+    }
+
+    /**
+     * TURN2 — the second ship turn (straight arrival). The line now runs collar → tip → bag with the tip a pulley; turning the
+     * ship lays the bag-side line along the strut (the bag stays where it is, the tip comes round under it), so REEL then
+     * pulls the bag in along the boom axis and the piece latches on it. Same `startTurn`, rates and billing as TURN. The turn
+     * is aimed on where the bag will be (`_aimStraight`: its coast during the turn, its sideways drift during the reel); when
+     * the turn ends with the forecast arrival more than STRAIGHT_TOL_DEG off the axis one more turn corrects it, at most
+     * STRAIGHT_MAX_TRIES turns in all. Slack the shorter distance leaves is taken up (never pulling) while the ship turns.
+     */
+    _ph_TURN2(dt, io, g) {
+        const k = K();
+        if (!this.entered) {
+            this.entered = true;
+            this.line.mode = 'clutch';
+            this.line.takeup = true;
+            const s = this._aimStraight(io);
+            if (!s.ok) {
+                // the first turn must be planned (no plan: recover as for any plan fault); a CORRECTING turn is a nicety, so a
+                // correction that cannot be planned (the bag crept within `minHandoffD` of the tip meanwhile) goes on to REEL as it is
+                if (this.turn2Tries === 0) { this._failWith('plan: ' + s.reason); return false; }
+                this._event('straight', { skipped: s.reason });
+                this._toReel();
+                return true;
+            }
+            this.plan2 = s;
+            if (s.psiRad < 1e-4) { this._toReel(); return true; }
+            this.turn2Tries++;
+            const axisWorld = qRot(io.shipQuat, s.axisBody);
+            this._turnCmd(io, axisWorld, s.psiRad);
+            this.turns.push({ axisWorld, angle: s.psiRad, issuedStep: this.stepNo, completed: false });
+        }
+        this._sim(dt, g);
+        const cur = this.turns[this.turns.length - 1];
+        const st = io.turn && io.turn.state;
+        if (st === 'rejected') {
+            if (this.turn2Tries > 1) {
+                // a CORRECTING turn the tank cannot pay: the ship did not move, so drop its record and reel in as it is
+                this.turns.pop();
+                this._event('straight', { skipped: 'turn rejected' });
+                this._toReel();
+                return true;
+            }
+            this._failWith('turn rejected' + (io.turn.reason ? ': ' + io.turn.reason : ''));
+            return false;
+        }
+        if (st === 'done' && this.stepNo > cur.issuedStep) {
+            cur.completed = true;
+            if (this.turn2Tries < k.STRAIGHT_MAX_TRIES && this._straightErrDeg(io) > k.STRAIGHT_TOL_DEG) {
+                this.entered = false;           // a correcting turn, aimed on where the bag is now
+                return true;
+            }
+            this._toReel();
             return true;
         }
         return false;
@@ -876,7 +1137,10 @@ export class LeashTransfer {
                     this._failWith('bounce');
                     return false;
                 }
+                // a retry at half speed; after a straight arrival's (faster) reel the retry goes under LATCH_OK_MPS, where the latch
+                // takes any angle
                 this.reelSpeed *= this.retryFactor;
+                if (this.plan2 && this._reelStraight) this.reelSpeed = Math.min(this.reelSpeed, 0.9 * K().LATCH_OK_MPS);
                 line.reelSpeed = this.reelSpeed;
                 continue;
             }
@@ -989,10 +1253,22 @@ export class LeashTransfer {
             }
             return false;
         }
-        if (h.stage === 'unturn') {
-            if (!this.turn) { h.stage = 'reelin'; return true; }
+        if (h.stage === 'unturn' || h.stage === 'unturn2') {
+            // The ship goes back the way it came: every turn made (TURN, then TURN2 and its corrections) is undone, the last
+            // first. Turns are rotations about world axes, so R1⁻¹ · R2⁻¹ · R2 · R1 = 1 and the ship ends at its start attitude;
+            // the bag retraces the path it was carried over.
+            // STRAIGHT ARRIVAL: with the line over the tip ('engaged') the second turn and its corrections (every turn after the
+            // first) are undone FIRST, still engaged ('unturn2'): that is the path they were swept along and found clear, back to
+            // where CATCH engaged (collar, tip and bag in line). Only then is the line lifted off the tip (so it never cuts the
+            // corner from the collar to a bag beside the strut) and the first turn undone ('unturn'). Measured 2026-11-02 on the
+            // real rig: lifting first swept the line over the strut's sun-oven head during the un-turn (a second snag: cut free).
+            const straightOnly = h.stage === 'unturn2';
+            const floor = straightOnly ? 1 : 0;
+            const turns = this.turns;
+            if (turns.length <= floor) { h.stage = straightOnly ? 'lift' : 'reelin'; h.started = false; h.turnIssued = undefined; return true; }
             if (!h.started) {
                 h.started = true;
+                h.undoI = turns.length - 1;
                 line.mode = 'clutch';
                 if (io.turn && io.turn.state === 'turning') {
                     this._cmd('cancelTurn');
@@ -1003,19 +1279,32 @@ export class LeashTransfer {
             }
             if (h.turnIssued === undefined) {
                 if (h.waitStep !== undefined && this.stepNo === h.waitStep) { this._sim(dt, g); return false; }
-                const prog = (this.turn.completed ? this.turn.angle : (io.turn && io.turn.progressRad)) || 0;
-                if (Math.abs(prog) > 1e-4) {
-                    this._turnCmd(io, this.turn.axisWorld, -prog);
-                    h.turnIssued = this.stepNo;
-                } else {
-                    h.stage = 'reelin';
+                // only the LAST turn can be part done: its progress is what the driver last saw (a finished one turned its full angle)
+                while (h.undoI >= floor) {
+                    const tr = turns[h.undoI];
+                    const prog = tr.undone ? 0 : (tr.completed ? tr.angle : (h.undoI === turns.length - 1 && io.turn && io.turn.progressRad)) || 0;
+                    if (Math.abs(prog) > 1e-4) {
+                        this._turnCmd(io, tr.axisWorld, -prog);
+                        h.turnIssued = this.stepNo;
+                        break;
+                    }
+                    h.undoI--;
+                }
+                if (h.undoI < floor) {
+                    h.stage = straightOnly ? 'lift' : 'reelin';
+                    h.started = false;
                     return true;
                 }
             }
             this._sim(dt, g);
-            if (io.turn && io.turn.state === 'rejected') { this._cutFree('turn rejected'); return false; }
+            // a refusal counts only from the step AFTER the command (this step's `io.turn` is still the last turn's: a TURN2 the
+            // autopilot refused leaves 'rejected' there, and the un-turn that undoes TURN would be read as refused and cut free)
+            if (io.turn && io.turn.state === 'rejected' && this.stepNo > h.turnIssued) { this._cutFree('turn rejected'); return false; }
             if (io.turn && io.turn.state === 'done' && this.stepNo > h.turnIssued) {
-                h.stage = 'reelin';
+                turns[h.undoI].undone = true;
+                h.turnIssued = undefined;
+                h.undoI--;
+                if (h.undoI < floor) { h.stage = straightOnly ? 'lift' : 'reelin'; h.started = false; }
                 return true;
             }
             return false;

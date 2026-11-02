@@ -4016,6 +4016,16 @@ export const Constants = {
     D_MIN_M:             0.3,    // m — bag-to-tip range on the line, probe d range
     D_MIN_PER_R:         1.2,    // radii — a bag of radius r starts its line at least this many radii from the tip (r 0.50: 0.6 m; at 0.3 m it snagged the tip's own strut); r <= 0.25 m stays at D_MIN_M
     D_MAX_M:             2.0,    // m — estimate; d up to 2.0 is used as is (REEL covers the extra length); beyond → 'too far'
+    // Straight arrival (owner 2026-11-01 23:50Z: "the catch comes in straight, with no 3-second swing onto the tip"). After CATCH the
+    // line runs over the tip like a pulley; a SECOND ship turn (phase TURN2) lays the bag-side line along the strut, and REEL then
+    // pulls the bag in along the boom axis. A turn turns the bag about the ship centre, so its radius is the same after it: the
+    // payout (planHandoff) picks that radius so the bag sits at >= minHandoffD + D2_MARGIN_M from the tip on BOTH the u-ray (the
+    // first turn) and the boom ray (the second).
+    STRAIGHT_ARRIVAL:    true,   // false = the old tow: arrives ~72° off the boom axis and TipCargo swings it on (3.6 s)
+    D2_MARGIN_M:         0.10,   // m — the boom-ray distance the plan aims at above minHandoffD: the bag creeps toward the ship while the ship turns (back-tension of the paying-out clutch, ~0.5 mm/s² while it pays out; measured 2026-11-02 over TURN and TURN2: 0.03 m for a 38° first turn, 0.08 m for a 62° one), and REEL entry must still be >= minHandoffD
+    STRAIGHT_TOL_DEG:    0.8,    // ° — TURN2 ends when the forecast arrival (LeashTransfer._forecastReel) is this close to the boom axis; a correcting turn follows otherwise (the latch requirement is 1.0°; the tip's own slew would take a rest at 20°/s)
+    STRAIGHT_MAX_TRIES:  3,      // turns TURN2 may make (the first and up to two corrections)
+    REEL_STRAIGHT_MPS:   0.085,  // m/s — REEL speed after a straight arrival's second turn (the old tow: REEL_SPEED_MPS 0.05). The bag's sideways drift (4-9 mm/s, a line pulls along itself only) must stay within LATCH_ALIGN_DEG of the line at contact: 4.3-4.9° at 0.05 m/s (the edge of 5°, 2 of 5 cases bounced), 2.7-4.7° at 0.08 m/s, 2.7-4.4° at 0.085 m/s (16 cases, none bounced), and still 15 % under LATCH_ALIGNED_MPS 0.10. A bounce retries under LATCH_OK_MPS.
     HANDOFF_THETA_DEG:   3,      // radiator angle when LeashTransfer is built without one (tests); the game asks handoffThetaDeg(), whose no-bag-held answer is HANDOFF_THETA_TABLE.noneDeg (3° up to a 0.60 m catch, 18° for 0.75 m) — measured tmp/probes/leash/lat15b/ at 2.5 m, re-measured at 2.30 m below
     // Waits and tolerances
     THETA_TOL_DEG:       1.0,    // ° — FOLD/UNFOLD wait; the radiator arrival latch stops 0.5° short of a 146°→3° target at every frame step 1/120–1/20 s
@@ -4068,7 +4078,7 @@ export const Constants = {
     SUBSTEP_MAX_MOVE_M:  0.05,   // m — a substep moves the bag at most this far
     CUT_DWELL_S:         0.3,    // s after the cutter fires; fb16 2026-10-25: was 1.0 (a still second after the latch)
     PHASE_TIMEOUT_S: {           // s — estimates; a stall in any phase starts the recovery
-      FOLD: 60, RELEASE: 5, PAYOUT: 60, TURN: 90, CATCH: 10,
+      FOLD: 60, RELEASE: 5, PAYOUT: 60, TURN: 90, CATCH: 10, TURN2: 90,
       REEL: 90, CUT: 5, SWING: 30, UNFOLD: 60, REEL_HOME: 120,
     },
   },

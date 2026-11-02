@@ -990,8 +990,10 @@ export class TipCargo {
   /**
    * Turn the bag's direction toward the boom axis by one step. The WHOLE piece pivots about the latch point: the catch's
    * attitude in the tip frame takes the same turn, so what is between the neck and the surface (the gap) never changes
-   * while it slews. The leash tow arrives on the boom axis already (nothing to slew); this finishes what the unflown
-   * hand-over and a daughter's carry leave (a few degrees at most).
+   * while it slews. The leash tow's catch arrives within about 1° of the boom axis (the straight arrival, `LEASH.STRAIGHT_ARRIVAL`:
+   * a second ship turn lays the line along the strut; measured 2026-11-02, at most 0.30° over 16 tows, and a daughter's carry
+   * 0.07°), so this takes a frame or two (0.1 s at most). It is the safety net for that last degree, and for the unflown
+   * hand-over; with `STRAIGHT_ARRIVAL` off the tow arrives about 72° off the axis and this is the 3.6 s swing again.
    */
   _advanceSwing(slot, dt) {
     if (!slot.swinging || !(dt > 0)) return;

@@ -28,7 +28,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus as defaultBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { LeashTransfer, planHandoff, minHandoffD, leashTurnLimits, leashWheelLimitS } from './LeashTransfer.js';
+import { LeashTransfer, planHandoff, minHandoffD, minBoomD, leashTurnLimits, leashWheelLimitS } from './LeashTransfer.js';
 import { attitudeTurnProfile, turnGasShort } from './AutopilotSystem.js';
 import { bandDegForRadius } from './TipCargo.js';
 import { reseatOrbitFromScene } from '../entities/OrbitalMechanics.js';
@@ -66,6 +66,8 @@ export function noseReelSpeed(remM, vNow, dt, K = Constants.LEASH) {
 }
 
 const _v = new THREE.Vector3();
+const _bq = new THREE.Quaternion();   // scratch for _boomBodyAt
+const _bv = new THREE.Vector3();
 const _off = { x: 0, y: 0, z: 0 };   // module scratch (the per-frame path allocates nothing)
 const _vReach = new THREE.Vector3();
 
@@ -268,6 +270,22 @@ export class LeashDriver {
   }
 
   /**
+   * Tip `tipIndex`'s boom axis (unit, ship frame) with its petal at `thetaRad`: the direction the straight arrival lays the
+   * bag-side line along. Null when there is no tip record (or a mock tip store that cannot say).
+   */
+  _boomBodyAt(tipIndex, thetaRad) {
+    const tc = this._tc;
+    const rec = typeof tc._tipRec === 'function' ? tc._tipRec(tipIndex) : null;
+    if (!rec || typeof tc._hingeQuatShip !== 'function') return null;
+    const saved = rec.hinge.rotation.y;
+    rec.hinge.rotation.y = thetaRad - Math.PI / 2;
+    tc._hingeQuatShip(rec, _bq);
+    rec.hinge.rotation.y = saved;
+    _bv.set(1, 0, 0).applyQuaternion(_bq).normalize();
+    return { x: _bv.x, y: _bv.y, z: _bv.z };
+  }
+
+  /**
    * Can the leash reach this catch from tip `tipIndex` once the radiators stand at the hand-off angle? A catch seated
    * deep in the bag (a lasso catch rides 0.42 (NET_WEB.WRAP_SEAT_FRAC) of the cone height, about 2.1 m, inside it; a mother-net catch
    * 5.9-7.5 m) is beyond the line's reach (LEASH.D_MAX_M): the hand-off would fold the radiators for nothing. The planner
@@ -294,7 +312,12 @@ export class LeashDriver {
     const tipBody = this._tipBodyAt(tipIndex, prm.thetaHRad);
     if (!tipBody) return null;
     const bagBodyNow = qInvRot(this._quat(), this._toMachine(sp));
-    return planHandoff({ anchorBody: leashAnchorShip(tipIndex), tipBody, bagBodyNow, dMin: minHandoffD(prm.radiusM), dMax: K.D_MAX_M });
+    // the straight arrival: the same call the machine makes (`LeashTransfer._planFor`), with the boom axis at the hand-off angle
+    const boomBody = K.STRAIGHT_ARRIVAL !== false ? this._boomBodyAt(tipIndex, prm.thetaHRad) : null;
+    return planHandoff({
+      anchorBody: leashAnchorShip(tipIndex), tipBody, bagBodyNow, dMin: minHandoffD(prm.radiusM), dMax: K.D_MAX_M,
+      boomBody, dMinBoom: boomBody ? minBoomD(prm.radiusM) : undefined,
+    });
   }
 
   /**
@@ -321,11 +344,12 @@ export class LeashDriver {
   }
 
   /**
-   * Can the tank NOT pay for the ONE steering-gas turn this hand-off makes? True = it cannot, so the hand-off must not
+   * Can the tank NOT pay for the steering-gas turns this hand-off makes (the turn under the line, and with the straight
+   * arrival the second, shorter one)? True = it cannot, so the hand-off must not
    * start (the catch goes to the daughter rack at once, instead of a ~41 s fold-and-turn ending in the same refusal).
-   * Prices the turn with the autopilot's own helper (`attitudeTurnProfile`, the one `requestAttitudeTurn` runs at TURN)
+   * Prices each turn with the autopilot's own helper (`attitudeTurnProfile`, the one `requestAttitudeTurn` runs at TURN / TURN2)
    * from the plan the hand-off would run (the nose-reel plan when the catch must be pulled in first), with the limits TURN
-   * sends. Inertia is the one she will have AT THE TURN, not the current one: the FOLD phase swings only the receiving
+   * sends, and asks the tank for the SUM. Inertia is the one she will have AT THE TURN, not the current one: the FOLD phase swings only the receiving
    * tip's petal (`holdPetalForHandoff`, the hand-off angle, `_command` 'foldRadiators') before the turn, so the turn runs
    * with that petal at `thetaHRad` (capped as the ship caps it) and the other petals at their current angles;
    * `attitudeInertiaAt` prices exactly that, so the early price equals the price TURN computes. The line pays out 0.2 m
@@ -350,13 +374,14 @@ export class LeashDriver {
       if (!sp) return false;
     }
     const plan = this._handoffPlan(debris, tipIndex, sp);
-    if (!plan || !plan.ok || !(plan.psiRad >= 1e-4)) return false;       // < 1e-4: TURN skips the turn, which costs nothing
-    // Reaction wheels: a turn the wheels take costs no steering gas, so a low tank is no reason to refuse it. The same
-    // question `requestAttitudeTurn` asks when the turn starts (the wheels' limit is `leashWheelLimitS`, about the gas
-    // plan's time); `quiet`: this is a look, it says nothing.
-    if (typeof p.attitudeTorqueSource === 'function'
-        && p.attitudeTorqueSource({ spinUp: true, angleRad: plan.psiRad, nx: plan.axisBody.x, ny: plan.axisBody.y, limitS: leashWheelLimitS(plan.psiRad), quiet: true }) === 'wheels') return false;
-    // the inertia at the turn: the receiving petal folded to the hand-off angle, the rest as they are (see above)
+    if (!plan || !plan.ok) return false;
+    // The turns the hand-off makes: TURN, and (straight arrival) TURN2. < 1e-4 rad: the machine skips that turn, which costs nothing.
+    const turns = [];
+    if (plan.psiRad >= 1e-4) turns.push({ axis: plan.axisBody, psi: plan.psiRad });
+    const s2 = plan.straight;
+    if (s2 && s2.psiRad2 >= 1e-4) turns.push({ axis: s2.axisBody2, psi: s2.psiRad2 });
+    if (!turns.length) return false;
+    // the inertia at the turns: the receiving petal folded to the hand-off angle, the rest as they are (see above)
     let priced = p;
     if (typeof p.attitudeInertiaAt === 'function') {
       const prm = this._params(debris, tipIndex);
@@ -367,8 +392,18 @@ export class LeashDriver {
         priced.getAttitudeInertia = () => It;
       }
     }
-    const prof = attitudeTurnProfile(priced, plan.axisBody, plan.psiRad, leashTurnLimits());
-    return prof.ok && turnGasShort(p, prof.gasEstimate);
+    // Both turns are paid from the same tank, so the tank must hold the SUM (a hand-off short of gas for the second turn is
+    // refused up front, never half way). Reaction wheels: a turn the wheels take costs no steering gas, so a low tank is no
+    // reason to refuse it. The same question `requestAttitudeTurn` asks when the turn starts (the wheels' limit is
+    // `leashWheelLimitS`, about the gas plan's time); `quiet`: this is a look, it says nothing.
+    let gas = 0;
+    for (const t of turns) {
+      if (typeof p.attitudeTorqueSource === 'function'
+          && p.attitudeTorqueSource({ spinUp: true, angleRad: t.psi, nx: t.axis.x, ny: t.axis.y, limitS: leashWheelLimitS(t.psi), quiet: true }) === 'wheels') continue;
+      const prof = attitudeTurnProfile(priced, t.axis, t.psi, leashTurnLimits());
+      if (prof.ok) gas += prof.gasEstimate;
+    }
+    return turnGasShort(p, gas);
   }
 
   /**
@@ -406,6 +441,7 @@ export class LeashDriver {
       io: null, koIgnore: [], koOpts: {}, koOwn: null, keepOut: null, tipShip: { x: 0, y: 0, z: 0 },
       bagW: { x: 0, y: 0, z: 0 }, bagKnown: false, bagOff: { x: 0, y: 0, z: 0 },
       tipFinalBody: null, tipFinalW: { x: 0, y: 0, z: 0 },
+      boomFinalBody: null, boomFinalW: { x: 0, y: 0, z: 0 },
     };
     net._leashTipIndex = tipIndex;
     net._cargoS = 0;
@@ -446,6 +482,7 @@ export class LeashDriver {
     // the machine waits for the fold.
     const thFinal = typeof this.player._flowerClampRad === 'function' ? this.player._flowerClampRad(prm.thetaHRad) : prm.thetaHRad;
     h.tipFinalBody = this._tipBodyAt(h.tipIndex, thFinal);
+    h.boomFinalBody = this._boomBodyAt(h.tipIndex, thFinal);   // the boom axis there, for the straight arrival's plan
     h.phase = 'FOLD';
     h.elapsed = 0;
     h.io = this._newIo(h);
@@ -645,6 +682,8 @@ export class LeashDriver {
       keepOut: undefined,
       bagWorld: undefined,
       tipFinalWorld: undefined,
+      boomWorld: undefined,
+      boomFinalWorld: undefined,
     };
   }
 
@@ -664,6 +703,12 @@ export class LeashDriver {
     io.noseReleased = h.noseReleased;
     // the final tip position, offered only while the machine is still in FOLD (it plans the payout on it once)
     io.tipFinalWorld = (h.tipFinalBody && h.phase === 'FOLD') ? qRotInto(q, h.tipFinalBody, h.tipFinalW) : undefined;
+    // the boom axis (unit, world axes): now, and at the final angle while in FOLD. The straight arrival's second turn lays the line along it.
+    if (typeof tc.axisWorldInto === 'function' && tc.axisWorldInto(h.tipIndex, _v)) {
+      const b = io.boomWorld || (io.boomWorld = { x: 0, y: 0, z: 0 });
+      b.x = _v.x; b.y = _v.y; b.z = _v.z;
+    } else io.boomWorld = undefined;
+    io.boomFinalWorld = (h.boomFinalBody && h.phase === 'FOLD') ? qRotInto(q, h.boomFinalBody, h.boomFinalW) : undefined;
     if (h.latched) {
       const name = `tipBag_${h.tipIndex}`;
       const sph = tc.spheres();
@@ -986,7 +1031,16 @@ export class LeashDriver {
   _releaseHold(h) {
     if (!h.tookHold) return;
     h.tookHold = false;
-    if (this.autopilot && typeof this.autopilot.releaseAttitudeHold === 'function') this.autopilot.releaseAttitudeHold();
+    // a turn still running when the hold is let go (a snag during the un-turn cuts the line free): stop it first, or the autopilot
+    // re-asserts its attitude hold when the turn ends and the hold outlives the hand-off (2026-11-02, straight arrival: two turns to undo)
+    const ap = this.autopilot;
+    try {
+      if (h.turn && h.turn.state === 'turning' && ap && typeof ap.isTurning === 'function' && ap.isTurning()) {
+        h.turn.cancelled = true;
+        ap.cancelAttitudeTurn('leash hand-off ended');
+      }
+    } catch (e) { /* the turn is already over */ }
+    if (ap && typeof ap.releaseAttitudeHold === 'function') ap.releaseAttitudeHold();
   }
 
   _applyState(h, st, dt, restKg) {
@@ -1068,6 +1122,9 @@ export class LeashDriver {
     if (typeof p.isPetalHolding === 'function' && p.isPetalHolding(this._petalAz(h.tipIndex)) && typeof p.releasePetalHandoff === 'function') {
       p.releasePetalHandoff(this._petalAz(h.tipIndex), leashSlew());
     }
+    // 2026-11-02 (straight arrival): a hand-off that ends cut free from REEL_HOME while a turn back is still running (a snag during
+    // the second un-turn) must stop that turn first, or the autopilot re-asserts its attitude hold when the turn ends and the hold
+    // outlives the hand-off (`_releaseHold` does it, as `_abort` does before it releases)
     this._releaseHold(h);
     if (!h.latched && !h.freed) this._relatch(h);
     h.net._leash = false;
