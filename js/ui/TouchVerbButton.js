@@ -12,7 +12,7 @@
  *   DE-SPIN    (floors 2-3)     Press and HOLD to fire the mother's de-spin laser (the L key, held). It shows only while the
  *                               laser could fire at the selected target and the target still tumbles above the net-safe
  *                               spin (DESPIN_LASER.IN_SPEC_DEG): feature on, gameplay, no overlay, the piloted-daughter
- *                               rule, target within RANGE_M. The key goes down with the finger and up on EVERY way the
+ *                               rule, target within despinLaser.reachM(). The key goes down with the finger and up on EVERY way the
  *                               hold can end: pointerup, pointercancel, lost pointer capture, pointer leaving, touchend /
  *                               touchcancel, the window seeing the finger lift, the page hiding or losing focus, the
  *                               button hiding (target gone, floor change, laser in spec), dispose. The laser can never stay
@@ -44,6 +44,7 @@
 import { Constants } from '../core/Constants.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { degToRad } from '../core/MathUtil.js';
+import { despinLaser } from '../systems/DespinLaser.js';
 
 export const FLY_BTN_ID = 'touch-verb-fly';
 export const DESPIN_BTN_ID = 'touch-verb-despin';
@@ -290,7 +291,7 @@ export class TouchVerbButton {
   /**
    * The debris the laser would fire at right now through this button, or null: floors 2-3, the feature on, input not
    * blocked (gameplay / overlays: the KeyL path's own checks), a target that still tumbles above the net-safe spin, in
-   * the mother optic's range.
+   * the laser's reach (`despinLaser.reachM()`: 120 m, 1.4 km with the long-range laser).
    */
   despinTarget() {
     if (!this._glass || this._disposed) return null;
@@ -310,7 +311,7 @@ export class TouchVerbButton {
     if (!((t.tumbleRate || 0) > inSpec)) return null;
     let dist = null;
     try { dist = this._d.getTargetDistanceM ? this._d.getTargetDistanceM(t) : null; } catch (_e) { dist = null; }
-    if (Number.isFinite(dist) && dist > (cfg.RANGE_M ?? 5000)) return null;
+    if (Number.isFinite(dist) && dist > despinLaser.reachM()) return null;
     return t;
   }
 

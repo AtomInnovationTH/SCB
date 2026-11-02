@@ -1584,7 +1584,7 @@ export const Constants = {
   // mother's laser (slower, shorter-ranged; no new key).
   EDDY_DAMP: {
     RANGE_M:             30,     // must hold standoff at/inside this
-    DESPIN_RATE_RAD_S2:  0.10,   // ~⅓ of DESPIN_LASER.DESPIN_RATE_RAD_S2 (0.30)
+    DESPIN_RATE_RAD_S2:  0.10,   // its own rate (was ~⅓ of the mother laser's flat 0.30 rad/s², deleted 2026-11-01; DESPIN_LASER is now physical)
     CONDUCTIVE_MATERIALS: ['aluminum', 'steel', 'titanium'],
   },
 
@@ -2668,9 +2668,41 @@ export const Constants = {
 
   // Mother-mounted de-spin laser (archive/BIG_PICTURE.md §16; GAME_DESIGN "10W laser de-spin").
   // Hold-to-fire assist that bleeds a tumbling target's spin down until a net can cling.
+  //
+  // DECISIONS §60 row 7 (2026-11-01): a real despin laser, close range standard, long range an upgrade. Nothing here is a
+  // "range" or a "rate": reach comes from the optics (DespinLaser.despinReachM: D × sqrt(4E / (π F 1e4)) / (2.44 λ M²)) and the
+  // spin-down from the push the vapour gives (DespinLaser.despinAlpha). Research: docs/research/2026-11-laser-options.md
+  // ("Analysis", "Numbers"), docs/research/2026-11-despin-laser.md. Each number is tagged: computed / estimate / sourced.
   DESPIN_LASER: {
-    RANGE_M:            5000,     // mother optic reach (scene-wide; >> the 50 m daughter ablation)
-    DESPIN_RATE_RAD_S2: 0.30,     // angular deceleration applied while firing
+    // Close tier, standard on the ship: infrared nanosecond pulses on aluminium (research option "M").
+    CLOSE: {
+      APERTURE_M:         0.30,     // telescope mirror width (§60 row 7: 30 cm)
+      WAVELENGTH_M:       1.064e-6, // infrared Nd:YAG line (sourced: research "Numbers")
+      PULSE_J:            0.100,    // energy per pulse (estimate, research option "M")
+      REP_HZ:             300,      // pulses per second; beam = PULSE_J × REP_HZ = 30 W (computed)
+      M2:                 1.5,      // beam quality (estimate, research "Analysis")
+      FLUENCE_J_CM2:      5,        // J/cm² the surface needs for the vapour push (nanosecond, aluminium; Tsuno, research)
+      COUPLING_UN_PER_W:  20,       // push per beam watt, µN/W (nanosecond, aluminium; Tsuno, research). Fluence and push are one pulse regime
+      EFFICIENCY:         0.25,     // beam W per drawn W (estimate, research). Draw 120 W, heat 90 W (computed)
+      // Reach 122.9 m, push 600 µN (computed from the above; test-DespinLaser pins both)
+    },
+    // Long tier, the upgrade bought at the resupply stop: ultraviolet picosecond pulses (research option "Lp").
+    LONG: {
+      APERTURE_M:         0.50,     // §60 row 7: 50 cm
+      WAVELENGTH_M:       355e-9,   // frequency-tripled Nd:YAG, ultraviolet (sourced: research "Numbers")
+      PULSE_J:            0.100,
+      REP_HZ:             150,      // beam = 15 W (§60 row 7; computed)
+      M2:                 1.5,
+      FLUENCE_J_CM2:      1,        // picosecond pulses need less fluence (Phipps, research)
+      COUPLING_UN_PER_W:  10,       // µN/W, picosecond (Phipps measured at most 30 at 80 ps; research takes a third-ish, estimate)
+      EFFICIENCY:         0.09,     // UV conversion costs more: draw 167 W, heat 152 W (estimate, research)
+      MASS_KG:            29,       // carried in addition: the middle of row 7's 20-38 kg (estimate)
+      PRICE_CR:           2000,     // game-economy estimate between the wheel kit (800) and the MPD drive (3000)
+      // Reach 1,373 m, push 150 µN (computed)
+    },
+    // Spin-down (DespinLaser.despinAlpha): the push acts off-centre as a torque. Both numbers are estimates (research "Analysis").
+    LEVER_FRAC:         0.3,      // lever arm as a fraction of half the piece's length
+    INERTIA_K:          0.115,    // moment of inertia = INERTIA_K × m × L²
     IN_SPEC_DEG:        10,       // tumble at/below this is net-safe → "tumble in spec, net it"
     BEAM_COLOR:         0x66ddff, // cyan glow (archive/BIG_PICTURE.md §16.4)
     BEAM_OPACITY:       0.7,

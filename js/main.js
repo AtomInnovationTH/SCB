@@ -6437,8 +6437,9 @@ function gameLoop(timestamp) {
     if (leashVisual) { try { leashVisual.update(dt); } catch (e) { console.error('[GameLoop] leashVisual:', e); } }
     try { furnaceBreakdownVisual.update(dt); } catch (e) { console.error('[GameLoop] furnaceBreakdownVisual:', e); }
 
-    // De-spin laser (flag-gated internally)
-    try { despinLaser.update(dt); } catch (e) { console.error('[GameLoop] despinLaser:', e); }
+    // De-spin laser (flag-gated internally). Second argument: the game-clock step (0 while the world is held), the one the
+    // tumble animation turns by; the first is the real frame time.
+    try { despinLaser.update(dt, dtWorld); } catch (e) { console.error('[GameLoop] despinLaser:', e); }
 
     // Drain deferred teaching overlays (≤1 per QUEUE_DRAIN_INTERVAL_S). Held world: zero time stalls the
     // _drainTimer countdown, so a QUEUED tip normally waits for the drawer to close; a tip already due when the
