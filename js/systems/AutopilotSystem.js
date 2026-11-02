@@ -289,6 +289,17 @@ const AIM_TRACK_DWELL_S = 2.0;
 /** A wheel aim inside the tolerance is at rest below this rate (rad/s; 0.0006°/s, under any bearing drift it could follow). */
 const AIM_REST_EPS = 1e-5;
 
+/**
+ * Once a gas (or tail-box) aim has arrived (inside `stopErr` with the strut there) the direction she holds is the target's
+ * low-passed line, not each frame's reading (`_tickAimEased`): first-order, this time constant (s). A lead provider re-derives
+ * its direction every frame from a velocity estimate, and a reading that wobbles by a few tenths of a degree (the tolerance is
+ * 0.5°) is sensor noise, not a target that moved: chasing it fires the couples on every frame, spin-up and stop over and over,
+ * a real I x |dw| bill for a ship that gains no pointing (measured: ±0.7° of noise on an 8.5° turn billed 0.34 kg against 0.10 kg
+ * for the turn, 3 s instead of 1.1). At 0.25 s the noise drops about five-fold and a target drifting at 1°/s is followed 0.25°
+ * late, inside the tolerance.
+ */
+const AIM_SETTLED_TAU_S = 0.25;
+
 /** The strut's eased move (ArmUnit `strutEaseProfile`: speed up at `a`, coast at a peak, slow down at `a`) carried on
  * from a strut already moving at `v0` (rad/s) toward a target `dRem` rad away: the rest-start profile entered `v0 / a`
  * seconds in (it began `s0 = v0² / 2a` rad back): `d` = dRem + s0, `t0` = v0 / a. `durationS` is the time wanted from
@@ -785,6 +796,7 @@ export class AutopilotSystem {
     this._slewDq = new THREE.Quaternion();    // scratch: this step's body-frame rotation
     this._slewQ0 = new THREE.Quaternion();    // snapshot of the slewed quaternion before the step (the slerps are in place)
     this._slewSteppedThisFrame = false;
+    this._slewTrackDt = 0;                    // the world slew's real dt of the last frame if it was a pure track (alpha 1), else 0 (`_rotateTowardWorld`)
     /** What the engaged autopilot / the trip hold has already said about its slow turn (one engagement). */
     this._slow = { said: false, kind: null, mode: null, ref: null, noPowerSaid: false };
     this._aimBm = new THREE.Vector3();     // the mother's boresight with the strut at its target angle
@@ -2636,18 +2648,25 @@ export class AutopilotSystem {
    * and the stop each bill; steady tracking bills only its rate changes. The stop is billed by `_slewStopTick` (a frame with no
    * step). Mocks without the player's bill or inertia pay nothing.
    * @param {object} p player @param {THREE.Quaternion} qBefore snapshot @param {THREE.Quaternion} qAfter the live quaternion
+   * @param {number} dt this frame's real seconds
+   * @param {number} [dtRate] the real seconds the step's motion took, when that is not `dt`: a pure track (`_rotateTowardWorld`)
+   *   covers what the target moved last frame (the autopilot runs before the propagation), so its rate is step / last dt.
+   *   A bill that passes none (the trip hold's ease, the warp ease) is not a track: it clears `_slewTrackDt`, so a value left by
+   *   an earlier track frame cannot divide a later world-slew step by a dt that was never its own.
    */
-  _billSlewStep(p, qBefore, qAfter, dt) {
+  _billSlewStep(p, qBefore, qAfter, dt, dtRate) {
+    if (dtRate === undefined) { this._slewTrackDt = 0; dtRate = dt; }
     if (qBefore.equals(qAfter)) return;                       // nothing moved (deadzone): the stop bill covers the end
     this._slewSteppedThisFrame = true;
     if (!(dt > 0)) return;
+    if (!(dtRate > 0)) dtRate = dt;
     if (typeof p._billTurnNullN2 !== 'function' || typeof p.getAttitudeInertia !== 'function') return;
     const dq = this._slewDq.copy(qBefore).invert().multiply(qAfter);
     const sinHalf = Math.hypot(dq.x, dq.y, dq.z);
     const w = this._slewW;
     if (sinHalf > 1e-12) {
       const ang = 2 * Math.atan2(sinHalf, Math.abs(dq.w));   // the short way round
-      w.set(dq.x, dq.y, dq.z).multiplyScalar((dq.w < 0 ? -1 : 1) * ang / (sinHalf * dt));
+      w.set(dq.x, dq.y, dq.z).multiplyScalar((dq.w < 0 ? -1 : 1) * ang / (sinHalf * dtRate));
     } else {
       w.set(0, 0, 0);
     }
@@ -2666,7 +2685,7 @@ export class AutopilotSystem {
     if (dtWorld <= 0) return;
     const stepped = this._slewSteppedThisFrame;
     this._slewSteppedThisFrame = false;
-    if (!stepped) this._slewLatch = null;       // no slew step = the slew's stop: the next one chooses afresh
+    if (!stepped) { this._slewLatch = null; this._slewTrackDt = 0; }   // no slew step = the slew's stop: the next one chooses afresh
     const w0 = this._slewOmega;
     if (stepped || w0.lengthSq() === 0) return;
     const bill = this._slowGeneric(p) === null
@@ -2920,6 +2939,7 @@ export class AutopilotSystem {
       src = this._slewSource(this._player, wg.err, wg.nx, wg.ny);
     }
     if (src) {
+      this._slewTrackDt = 0;
       if (!(dtWorld <= 0) && !this._turn) this._slothSteerWorld(this._player, worldDir, dt, src);   // (a scripted turn owns the nose)
       return;
     }
@@ -2938,7 +2958,15 @@ export class AutopilotSystem {
     const alpha = Math.min(maxAngle / angle, 1.0);
     this._slewQ0.copy(this._player.quaternion);                        // the world slew is billed (`_billSlewStep`)
     this._player.quaternion.slerp(targetQuat, alpha);
-    this._billSlewStep(this._player, this._slewQ0, this._player.quaternion, dt);
+    // A pure track (the whole error closed, alpha 1) follows what the target moved since the last call. The autopilot runs BEFORE
+    // `player.update` (main.js), so that is last frame's propagation: the step is target rate x last frame's dt. Dividing it by
+    // THIS frame's dt made the "rate" wobble with frame time (+-17 % jitter: +-6.5 %, its change flipping sign on 3 frames in 4,
+    // billed as ~3 kg/min of gas against a ship that was tracking exactly). The body rate is step / the dt it took, so the bill
+    // sees the steady rate it is: one spin-up and one stop. Only after a track frame; a swing's frames (alpha < 1: the step is
+    // AP_ROT_RATE x this dt) and the frame that ends one (the step is the remainder, not target motion) use this frame's dt.
+    const track = alpha >= 1;
+    this._billSlewStep(this._player, this._slewQ0, this._player.quaternion, dt, track && this._slewTrackDt > 0 ? this._slewTrackDt : dt);
+    this._slewTrackDt = track ? dt : 0;
   }
 
   /**
@@ -4822,6 +4850,20 @@ export class AutopilotSystem {
     const pairB = (daughter && c.pair && c.pair.armB && typeof c.pair.armB.setAimAlpha === 'function') ? c.pair.armB : null;
     const az = daughter ? this._aimAzimuth(c) : 0;
 
+    // The held direction of an arrived aim is the target's low-passed line (`AIM_SETTLED_TAU_S`); until she arrives it is the
+    // reading itself, so a turn on its way, and a still target, run exactly as before. The wheels follow the bearing's own rate
+    // with their feed-forward (`wFf`), so they keep the raw reading.
+    const lowPass = c.src !== 'wheels';
+    if (lowPass) {
+      if (!c.tf) c.tf = T.clone();
+      if (c.settled) {
+        c.tf.lerp(T, Math.min(1, dt / AIM_SETTLED_TAU_S)).normalize();
+        T.copy(c.tf);
+      } else {
+        c.tf.copy(T);
+      }
+    }
+
     let alphaT = 0;
     if (daughter && c.pair) {
       alphaT = c.alphaF;
@@ -4900,6 +4942,10 @@ export class AutopilotSystem {
         }
       }
     }
+
+    // Arrived (the strut there, inside `stopErr`): from the next frame the held line is low-passed. A target that really moves is
+    // still chased: the low-passed line follows it, 0.25 s late, and the error it leaves her opens the same spin-up as before.
+    if (lowPass && !c.settled && strutDone && errM <= c.stopErr) c.settled = true;
 
     // Her rate: the largest ω she can still stop from inside the angle left (stopping at c.stopErr from the target),
     // limited to ±α·dt per frame and to the peak. Frames of a stop run ω−δ, ω−2δ, … (δ = α·dt), so the angle one

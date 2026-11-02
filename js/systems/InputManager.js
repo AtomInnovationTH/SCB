@@ -12,11 +12,13 @@ import { Constants } from '../core/Constants.js';
 import { powerDistribution, PowerBuses } from './PowerDistribution.js';
 import { settingsManager } from './SettingsManager.js';
 import timerManager from './TimerManager.js';
+import { persistenceManager } from './PersistenceManager.js';
+import { CeremonyTimeScale } from './CeremonyTimeScale.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 import {
   classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, targetRangeM, netRangeLine,
-  netReachForMassM, driftOutOfReachLine,
+  netReachForMassM, driftOutOfReachLine, netFlightClockScale,
 } from './netRouting.js';
 import { computeLeadAim, netMaxReachM, overCatchLimit, catchLimitLine } from '../entities/CaptureNet.js';
 import { tripRefuses } from './TransferTrip.js';
@@ -2248,6 +2250,7 @@ export class InputManager {
    */
   processInput(dt) {
     const d = this._deps;
+    if (dt > 0) this._frameClockS = (this._frameClockS || 0) + dt;   // the lead provider's frame clock (capped real seconds)
     this._tickNetWait(dt);       // the Shift+A daughters' wait for the net's turn runs on game time
     this._sampleReach(dt);       // the piece's velocity relative to the ship, for the reach-at-arrival check
 
@@ -2682,6 +2685,34 @@ export class InputManager {
   }
 
   /**
+   * The speed and launch delay of a large net (a mother's, or a daughter's) in WALL seconds, the unit the piece's drift is
+   * measured in: its own LAUNCH_SPEED and (CAST_WINDUP + SPIN_UP_TIME) on its own clock, divided / multiplied by what the
+   * net ceremony will do to that clock (`netFlightClockScale`, with the conditions the camera starts a ceremony under read
+   * from the camera system). A daughter's net runs on the same ceremony clock (CaptureNet.update scales every net's dt),
+   * but a ceremony only starts for her while the camera is piloting a daughter.
+   * @param {boolean} isMother - a mother net (else a daughter's)
+   * @param {number} nominalSpeedMps - the net class's LAUNCH_SPEED
+   * @param {number} rangeM - launcher to piece now (the net's own seconds to contact depend on it)
+   * @returns {{speedMps:number, delayS:number, scale:number}}
+   */
+  _netFlightClock(isMother, nominalSpeedMps, rangeM) {
+    const CN = Constants.CAPTURE_NET;
+    const rawDelayS = (CN.CAST_WINDUP || 0) + (CN.SPIN_UP_TIME || 0);
+    const cam = this._deps && this._deps.cameraSystem;
+    const piloted = cam && typeof cam.getPilotedArm === 'function' ? cam.getPilotedArm() : null;
+    const scale = netFlightClockScale(
+      !persistenceManager.getCeremonyFlag(isMother ? 'FIRST_MOTHER_NET_DEPLOY' : 'FIRST_NET_DEPLOY'),
+      {
+        launchCeremonyActive: !!(cam && cam._launchCeremony && cam._launchCeremony.active),
+        noLauncher: !isMother && !(piloted && piloted.position),
+        runningScale: cam && cam._netCeremony && cam._netCeremony.active ? CeremonyTimeScale.get() : null,
+        ladder: !!(cam && typeof cam.isLadderActive === 'function' && cam.isLadderActive()),
+        internalS: rawDelayS + (nominalSpeedMps > 0 && rangeM > 0 ? rangeM / nominalSpeedMps : 0),
+      });
+    return { speedMps: nominalSpeedMps * scale, delayS: rawDelayS / scale, scale };
+  }
+
+  /**
    * The small-net (lasso) fire gate for the player's own pick: one plain line, LASSO_DENIED, nothing spent or started
    * (no windup, no attitude hold), and N never re-aims at another piece (owner 2026-11-01: "N still launches mother net even
    * if debris is out of range"). Refuses a piece that (1) has no position, (2) is beyond the lasso's reach now, or (3) will
@@ -2815,8 +2846,11 @@ export class InputManager {
     const M = 0.00001; // 1 metre in scene units
     const netClass = (typeof cns.getMotherNetClass === 'function')
       ? cns.getMotherNetClass(podIndex) : null;
-    const launchSpeedScene = ((netClass && netClass.LAUNCH_SPEED) || 10.0) * M;
-
+    // The net flies on its own slowed clock (netFlightClockScale), the piece drifts on the world clock: the lead, the launch
+    // delay and the reach-at-contact check all use the net's speed and delay in WALL seconds, the unit the drift is in.
+    // The scale depends on the range (a ceremony's later beats run at other scales), so each user asks for its own range.
+    const nominalSpeedMps = (netClass && netClass.LAUNCH_SPEED) || 10.0;
+    const flightClock = (rangeM) => this._netFlightClock(true, nominalSpeedMps, rangeM);
     // ── Pre-flight refusals: scene-unit endpoint math lives HERE; CaptureNetSystem keeps only frame-free gates (unit
     // tests use metre positions). Run pre-slew and again in fireNow() (the shot may leave the envelope during the slew).
     const maxReachM = netClass ? netMaxReachM(netClass) : 0;
@@ -2876,9 +2910,9 @@ export class InputManager {
         // else the two orbits' (a fresh pick has no samples yet); none at all: the range now is all there is. Past reach:
         // refuse, no net spent.
         const rv = this._reachRelVel(target) || relVelScenePerS || this._orbitRelVel(target);
+        const fc = flightClock(rangeM);
         const arriveM = netArrivalRangeM(d.player.getPosition(), muzzle, tp, rv,
-          (netClass && netClass.LAUNCH_SPEED) || 10, (Constants.CAPTURE_NET.CAST_WINDUP || 0) + (Constants.CAPTURE_NET.SPIN_UP_TIME || 0),
-          ((netClass && netClass.DIAMETER) || 0) / 2);
+          fc.speedMps, fc.delayS, ((netClass && netClass.DIAMETER) || 0) / 2);
         if (arriveM > maxReachM) {
           eventBus.emit(Events.LASSO_DENIED, { reason: 'drift_out_of_reach' });
           refuse(driftOutOfReachLine(arriveM));
@@ -2929,7 +2963,7 @@ export class InputManager {
     const muzzleScratch = new THREE.Vector3();
     const targetScratch = new THREE.Vector3();
     const lead = {
-      prevT: { x: 0, y: 0, z: 0 }, prevM: { x: 0, y: 0, z: 0 }, prevTime: null,
+      prevT: { x: 0, y: 0, z: 0 }, prevM: { x: 0, y: 0, z: 0 }, prevTime: null, advanced: { x: 0, y: 0, z: 0 },
       relVel: null, relVelBuf: { x: 0, y: 0, z: 0 },
       leadOut: { dir: { x: 0, y: 0, z: 0 }, offAxisDeg: 0 },
     };
@@ -2948,26 +2982,63 @@ export class InputManager {
           ? d.player.getNetPodPosition(podIndex) : d.player.getPosition();
       const tPos = getTargetPos();
       if (!tPos) return null;
-      const now = performance.now() * 0.001;
-      if (lead.prevTime != null) {
-        const dtp = Math.max(1e-3, now - lead.prevTime);
-        const rvx = (tPos.x - lead.prevT.x) / dtp - (muzzle.x - lead.prevM.x) / dtp;
-        const rvy = (tPos.y - lead.prevT.y) / dtp - (muzzle.y - lead.prevM.y) / dtp;
-        const rvz = (tPos.z - lead.prevT.z) / dtp - (muzzle.z - lead.prevM.z) / dtp;
-        if (!lead.relVel) {
-          lead.relVel = lead.relVelBuf;
-          lead.relVel.x = rvx; lead.relVel.y = rvy; lead.relVel.z = rvz;
-        } else {
+      // The velocity is measured against the ship CENTRE, as the reach tracker does: the muzzle sits off the axis, so its
+      // own motion while the ship slews is not a drift of the piece, and over the net's slow flight it would lead the aim
+      // by metres (a still piece cost 30-65 % more cold gas to line up).
+      const ctr = d.player.position || d.player.getPosition();
+      // Time in FRAMES, not wall time: `_frameClockS` is the sum of the dt processInput was given (capped at 0.1 s, the
+      // unit the reach tracker and the world run on). A second call in the same frame (pre-slew gate, then aimDir) sees
+      // no new frame whatever the CPU did between the calls, and a slow frame reads its capped dt, not the wall gap.
+      const clock = this._frameClockS || 0;
+      // The reach tracker is this velocity already, on that clock: use it whenever it has frames (4 after a pick).
+      const trk = this._reachRelVel(target);
+      if (trk && Number.isFinite(trk.x + trk.y + trk.z)) {
+        lead.relVel = lead.relVelBuf;
+        lead.relVel.x = trk.x; lead.relVel.y = trk.y; lead.relVel.z = trk.z;
+      } else {
+        if (lead.prevTime == null && !lead.relVel) {
+          // First call, no tracker yet: seed from the two orbits' velocity (scene units per real second, the unit of the
+          // EMA below). Without it the first aim has no lead and a ship already on the bore sight fires at once.
+          const sv = this._orbitRelVel(target);
+          if (sv && Number.isFinite(sv.x + sv.y + sv.z)) {
+            lead.relVel = lead.relVelBuf;
+            lead.relVel.x = sv.x; lead.relVel.y = sv.y; lead.relVel.z = sv.z;
+          }
+        }
+        // No tracker: a smoothed delta per frame, only once a frame has passed since the last sample.
+        if (lead.prevTime != null && clock > lead.prevTime) {
+          const dtp = clock - lead.prevTime;
+          const rvx = (tPos.x - lead.prevT.x) / dtp - (ctr.x - lead.prevM.x) / dtp;
+          const rvy = (tPos.y - lead.prevT.y) / dtp - (ctr.y - lead.prevM.y) / dtp;
+          const rvz = (tPos.z - lead.prevT.z) / dtp - (ctr.z - lead.prevM.z) / dtp;
+          if (!lead.relVel) {
+            // No seed (nothing to read the piece's velocity from): the EMA starts from rest, so a still piece's turn
+            // settles exactly as before.
+            lead.relVel = lead.relVelBuf;
+            lead.relVel.x = 0; lead.relVel.y = 0; lead.relVel.z = 0;
+          }
           const a = 0.2; // EMA smoothing
           lead.relVel.x += a * (rvx - lead.relVel.x);
           lead.relVel.y += a * (rvy - lead.relVel.y);
           lead.relVel.z += a * (rvz - lead.relVel.z);
         }
       }
-      lead.prevT.x = tPos.x; lead.prevT.y = tPos.y; lead.prevT.z = tPos.z;
-      lead.prevM.x = muzzle.x; lead.prevM.y = muzzle.y; lead.prevM.z = muzzle.z;
-      lead.prevTime = now;
-      const { dir } = computeLeadAim(muzzle, tPos, lead.relVel, launchSpeedScene, lead.leadOut);
+      if (lead.prevTime == null || clock > lead.prevTime) {
+        lead.prevT.x = tPos.x; lead.prevT.y = tPos.y; lead.prevT.z = tPos.z;
+        lead.prevM.x = ctr.x; lead.prevM.y = ctr.y; lead.prevM.z = ctr.z;
+        lead.prevTime = clock;
+      }
+      // The net sits on the ship for the launch delay (wall seconds, on its slowed clock) while the piece drifts on: aim at
+      // where the piece is when the net STARTS, then lead it over the flight.
+      const fc = flightClock(Math.hypot(tPos.x - muzzle.x, tPos.y - muzzle.y, tPos.z - muzzle.z) / M);
+      let aimAt = tPos;
+      if (lead.relVel) {
+        aimAt = lead.advanced;
+        aimAt.x = tPos.x + lead.relVel.x * fc.delayS;
+        aimAt.y = tPos.y + lead.relVel.y * fc.delayS;
+        aimAt.z = tPos.z + lead.relVel.z * fc.delayS;
+      }
+      const { dir } = computeLeadAim(muzzle, aimAt, lead.relVel, fc.speedMps * M, lead.leadOut);
       return dir;
     };
 
@@ -3271,8 +3342,10 @@ export class InputManager {
     const nowM = targetRangeM(armPos, piecePos);
     if (nowM > reachM) return deny(netRangeLine(nowM, reachM, 'net'));
     const rv = arm._leadTargetVelValid && (!aimedPiece || aimedPiece === arm.target) ? arm._leadTargetVel : null;
-    const arriveM = netArrivalRangeM(armPos, armPos, piecePos, rv, netClass.LAUNCH_SPEED,
-      (CN.CAST_WINDUP || 0) + (CN.SPIN_UP_TIME || 0), (netClass.DIAMETER || 0) / 2);
+    // A daughter's net flies on the same ceremony clock as the mother's (CaptureNet.update scales every net's dt), when a
+    // ceremony starts for her: the same speed and delay in wall seconds, the unit her piece's drift is measured in.
+    const fc = this._netFlightClock(false, netClass.LAUNCH_SPEED, nowM);
+    const arriveM = netArrivalRangeM(armPos, armPos, piecePos, rv, fc.speedMps, fc.delayS, (netClass.DIAMETER || 0) / 2);
     if (arriveM > reachM) return deny(driftOutOfReachLine(arriveM), 'drift_out_of_reach');
     return false;
   }

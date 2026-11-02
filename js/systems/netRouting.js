@@ -115,12 +115,90 @@ export function netReachForMassM(mass) {
     : netMaxReachM(Constants.CAPTURE_NET.LARGE);
 }
 
-/** Net flight speed in apparent m/s (per real second) for the net N fires at this mass: the lasso flies LASSO_SPEED x the
- *  game-time scale (100 m/s), the large net LAUNCH_SPEED (10 m/s; CaptureNet.update runs on real dt). */
+/** Net flight speed in apparent m/s on the NET'S OWN clock for the net N fires at this mass: the lasso flies LASSO_SPEED x
+ *  the game-time scale (100 m/s), the large net LAUNCH_SPEED (10 m/s). The large net (and a daughter's) does not run on
+ *  the wall clock while a net ceremony slows it: per WALL second multiply by `netFlightClockScale()` (the lasso is never
+ *  slowed: no ceremony starts for it). */
 export function netFlightSpeedMps(mass) {
   return classifyNetTarget(mass || 0).band === 'lasso'
     ? Constants.LASSO_SPEED * TimeAuthority.BASE_SCALE
     : (Constants.CAPTURE_NET.LARGE.LAUNCH_SPEED || 10);
+}
+
+/** The cap CameraSystem gives the APPROACH_DOLLY beat (wall seconds); it ends early when the net makes contact. Keep in step with `_onNetCeremonyStart`. */
+const APPROACH_BEAT_CAP_S = 8.0;
+
+/** @param {number} s @returns {number} s when a usable time scale, else 1 */
+const goodScale = (s) => (typeof s === 'number' && Number.isFinite(s) && s > 0 ? s : 1);
+
+/**
+ * The ceremony's beats as the camera builds them (`_onNetCeremonyStart`): wall seconds and the net's clock scale for each.
+ * The full sequence for a first-ever shot, the highlights cut after it.
+ * @param {boolean} isFirstEver
+ * @returns {{wallS:number, scale:number}[]}
+ */
+function netCeremonyBeats(isFirstEver) {
+  const NC = Constants.CAPTURE_NET.NET_CEREMONY;
+  const BD = NC.BEAT_DURATIONS_S;
+  const scaleOf = {
+    POD_MUZZLE_PREFIRE: NC.TIME_SCALE_PRE_FLIGHT, MUZZLE_EXIT_SPINUP: NC.TIME_SCALE_PRE_FLIGHT,
+    GLAMOUR_SHOT: NC.TIME_SCALE_GLAMOUR, APPROACH_DOLLY: NC.TIME_SCALE_APPROACH,
+    BRAKE_ENVELOP: NC.TIME_SCALE_BRAKE, CINCH: NC.TIME_SCALE_CINCH, SECURED_SETTLE: 1,
+  };
+  const keys = isFirstEver
+    ? ['POD_MUZZLE_PREFIRE', 'MUZZLE_EXIT_SPINUP', 'GLAMOUR_SHOT', 'APPROACH_DOLLY', 'BRAKE_ENVELOP', 'CINCH', 'SECURED_SETTLE']
+    : (NC.HIGHLIGHTS_CUT_BEATS || []);
+  const f = isFirstEver ? 1 : goodScale(NC.HIGHLIGHTS_TIME_SCALE);
+  return keys.map((k) => ({ wallS: (k === 'APPROACH_DOLLY' ? APPROACH_BEAT_CAP_S : (BD[k] || 0)) * f, scale: goodScale(scaleOf[k]) }));
+}
+
+/**
+ * Wall seconds a net needs to run `internalS` seconds of its OWN clock through the ceremony's beats (the net advances
+ * beat.wallS x beat.scale of its own time in each beat; past the last beat it runs at 1). Pure.
+ * @param {number} internalS - the net's own seconds (launch delay + flight)
+ * @param {boolean} [isFirstEver] - true: the full sequence; false: the highlights cut
+ * @returns {number} wall seconds
+ */
+export function netCeremonyWallS(internalS, isFirstEver = true) {
+  let left = Math.max(0, internalS || 0);
+  let wall = 0;
+  for (const b of netCeremonyBeats(isFirstEver)) {
+    const own = b.wallS * b.scale;
+    if (left <= own) return wall + left / b.scale;
+    left -= own;
+    wall += b.wallS;
+  }
+  return wall + left;
+}
+
+/**
+ * The "flight clock scale" of a net launched now (a mother's, or a piloted daughter's): its own seconds per wall second.
+ * CaptureNet.update scales its dt by CeremonyTimeScale, so the launch delay (CAST_WINDUP + SPIN_UP_TIME run on the net's
+ * own timer) and the flight take 1/scale times as many WALL seconds, while the piece keeps drifting on the world clock
+ * (the unit its velocity is measured in). At press time no ceremony has started, so this mirrors what the start will do:
+ *   - NET_CEREMONY off, a launch ceremony live, or a daughter with no piloted arm (no launcher): none starts, scale 1.
+ *   - a net ceremony already running: it keeps its published scale (`st.runningScale`, the current beat's; an estimate,
+ *     the later beats of that ceremony run at other scales).
+ *   - under the zoom ladder (`st.ladder`) the ceremony is quiet and holds its FIRST beat's scale for the whole flight:
+ *     the full sequence opens on 0.4, the highlights cut (first mother net already deployed) on 0.5.
+ *   - otherwise the beats advance and the net runs 0.4 / 0.5 / 0.6 / 0.5 in turn: with `st.internalS` (the net's own
+ *     seconds to contact) it is the flight's time-weighted scale, own seconds / wall seconds through the beat table.
+ *     Without `internalS` it is the first beat's scale, which over-leads (about 1 m at 35 m, 3 m at 90 m on a first shot).
+ * Not mirrored: the player skipping the ceremony (Esc) mid-flight, which returns the net to 1 at once.
+ * @param {boolean} [isFirstEver] - true: the full ceremony (default); false: the highlights cut
+ * @param {{launchCeremonyActive?:boolean, noLauncher?:boolean, runningScale?:number|null, ladder?:boolean, internalS?:number}} [st]
+ * @returns {number} multiplier in (0, 1]
+ */
+export function netFlightClockScale(isFirstEver = true, st = {}) {
+  if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return 1;
+  if (st.launchCeremonyActive || st.noLauncher) return 1;
+  if (typeof st.runningScale === 'number' && st.runningScale > 0) return goodScale(st.runningScale);
+  const NC = Constants.CAPTURE_NET.NET_CEREMONY;
+  const first = goodScale(isFirstEver ? NC.TIME_SCALE_PRE_FLIGHT : NC.TIME_SCALE_GLAMOUR);
+  if (st.ladder || !(st.internalS > 0)) return first;
+  const wall = netCeremonyWallS(st.internalS, isFirstEver);
+  const s = wall > 0 ? st.internalS / wall : first;
+  return Math.min(1, Math.max(0.05, s));
 }
 
 /**
