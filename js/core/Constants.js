@@ -15,13 +15,13 @@ export const Constants = {
   // --- VERSION ---
   // VERSION is the raw value; VERSION_LABEL is the exact string the UI renders. NON-module consumers (e.g. sw.js
   // cache name) must be updated by hand — keep them in sync here.
-  VERSION: '1.06',
-  VERSION_LABEL: 'V1.06',
+  VERSION: '1.07',
+  VERSION_LABEL: 'V1.07',
 
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as ?v=<DATA_VERSION>). Deliberately SEPARATE
   // from VERSION: a curated-content edit must invalidate cached JSON without moving the release number. Bump it on
   // every ./data/ content change; leave VERSION for actual releases.
-  DATA_VERSION: '1101',
+  DATA_VERSION: '1102',
   // owner 2026-09-08: the T1 nose-collar card is the DOCKING COLLAR card (docking_berthing.hardwareNames). The DAUGHTER
   // STRUTS card (daughter cradle struts callout) was appended to that list later, no entries added: DECISIONS §13 r4.
 

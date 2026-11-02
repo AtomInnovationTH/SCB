@@ -1,9 +1,7 @@
 {
   "bullets": [
-    "Orbit view: disc shows range",
-    "Orbit view: stable for trackpad",
-    "Training mission 1 updated"
+    "Training missions 2 and 3 updated"
   ],
-  "release": "2026-10-31",
-  "version": "1.06"
+  "release": "2026-11-02",
+  "version": "1.07"
 }
