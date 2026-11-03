@@ -2171,7 +2171,7 @@ export class CameraSystem {
       MUZZLE_EXIT_SPINUP: NC.TIME_SCALE_PRE_FLIGHT, // 0.4
       GLAMOUR_SHOT:       NC.TIME_SCALE_GLAMOUR,    // 0.5 — beat 3
       APPROACH_DOLLY:     NC.TIME_SCALE_APPROACH,   // 0.6 — beat 4
-      BRAKE_ENVELOP:      NC.TIME_SCALE_BRAKE,      // 0.3 — beat 5 (heavy slowmo)
+      BRAKE_ENVELOP:      NC.TIME_SCALE_BRAKE,      // 0.5 — beat 5
       CINCH:              NC.TIME_SCALE_CINCH,      // 0.4 — beat 6
       SECURED_SETTLE:     1.0,                      // beat 7 — full speed
     };
@@ -2182,10 +2182,10 @@ export class CameraSystem {
         { key: 'POD_MUZZLE_PREFIRE', duration: BD.POD_MUZZLE_PREFIRE, fov: 35, timeScale: BEAT_TIME_SCALE.POD_MUZZLE_PREFIRE },
         { key: 'MUZZLE_EXIT_SPINUP', duration: BD.MUZZLE_EXIT_SPINUP, fov: 40, timeScale: BEAT_TIME_SCALE.MUZZLE_EXIT_SPINUP },
         { key: 'GLAMOUR_SHOT',       duration: BD.GLAMOUR_SHOT,       fov: 50, timeScale: BEAT_TIME_SCALE.GLAMOUR_SHOT },
-        // APPROACH_DOLLY 8.0 s: so the FLIGHT phase completes inside this beat for typical 30–80 m engagements
+        // APPROACH_DOLLY (NC.APPROACH_BEAT_CAP_S, 8.0 s): so the FLIGHT phase completes inside this beat for typical 30–80 m engagements
         // (10 m/s × scale 0.6 = 6 m/s wall, so 8 s wall ≈ 48 m of flight). NET_BRAKE_FIRED force-advances out of this
         // beat on contact, so the long cap is only a safety bound; it does not extend the ceremony.
-        { key: 'APPROACH_DOLLY',     duration: 8.0,                   fov: 45, timeScale: BEAT_TIME_SCALE.APPROACH_DOLLY },
+        { key: 'APPROACH_DOLLY',     duration: NC.APPROACH_BEAT_CAP_S, fov: 45, timeScale: BEAT_TIME_SCALE.APPROACH_DOLLY },
         { key: 'BRAKE_ENVELOP',      duration: BD.BRAKE_ENVELOP,      fov: 38, timeScale: BEAT_TIME_SCALE.BRAKE_ENVELOP },
         { key: 'CINCH',              duration: BD.CINCH,              fov: 42, timeScale: BEAT_TIME_SCALE.CINCH },
         { key: 'SECURED_SETTLE',     duration: BD.SECURED_SETTLE,     fov: 45, timeScale: BEAT_TIME_SCALE.SECURED_SETTLE },
@@ -2193,11 +2193,11 @@ export class CameraSystem {
     } else {
       // Highlights cut: only HIGHLIGHTS_CUT_BEATS, with the beat DURATION multiplied by HIGHLIGHTS_TIME_SCALE (the
       // per-beat physics time-scale is the SAME as the full sequence). APPROACH_DOLLY has no single BEAT_DURATIONS_S
-      // entry (only _MIN/_MAX), so it uses the same 8.0 s safety cap as the full sequence (force-advanced on
+      // entry (only _MIN/_MAX), so it uses the same cap as the full sequence (NC.APPROACH_BEAT_CAP_S, force-advanced on
       // NET_BRAKE_FIRED), giving the FSM time to contact the target inside the ceremony.
       beats = HCB.map(key => {
         const duration = key === 'APPROACH_DOLLY'
-          ? 8.0 * HTS
+          ? NC.APPROACH_BEAT_CAP_S * HTS
           : BD[key] * HTS;
         return {
           key,

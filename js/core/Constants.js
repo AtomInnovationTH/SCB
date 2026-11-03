@@ -3872,6 +3872,11 @@ export const Constants = {
         CINCH:              4.0,    // 4.0 × 0.5 = 2.0 g → full CINCH_CLOSING(2.0)
         SECURED_SETTLE:     1.0,    // 1.0 × 1.0 = 1.0 g → SECURE_CHECK + held "captured" beat
       },
+      // The APPROACH_DOLLY beat's wall-clock cap (s): the beat has no single BEAT_DURATIONS_S entry (only _MIN/_MAX, which the
+      // camera does not read). It ends early on NET_BRAKE_FIRED (contact), so the cap is only a safety bound: 8 s at 0.6 is about
+      // 48 m of flight at 10 m/s. CameraSystem._onNetCeremonyStart builds the beat from it and netRouting's `netCeremonyBeats`
+      // (the flight-clock lead) reads it too: one number, so the lead cannot drift from the camera.
+      APPROACH_BEAT_CAP_S: 8.0,
 
       // --- Subsequent-deploy highlights cut — §4 + §5.1 ---
       // The FSM needs ~3.95 g (LAUNCHING 0.15 + SPINNING_UP 0.5 + FLIGHT 3.3 for a 33 m target) just to CONTACT the

@@ -125,19 +125,18 @@ export function netFlightSpeedMps(mass) {
     : (Constants.CAPTURE_NET.LARGE.LAUNCH_SPEED || 10);
 }
 
-/** The cap CameraSystem gives the APPROACH_DOLLY beat (wall seconds); it ends early when the net makes contact. Keep in step with `_onNetCeremonyStart`. */
-const APPROACH_BEAT_CAP_S = 8.0;
-
 /** @param {number} s @returns {number} s when a usable time scale, else 1 */
 const goodScale = (s) => (typeof s === 'number' && Number.isFinite(s) && s > 0 ? s : 1);
 
 /**
  * The ceremony's beats as the camera builds them (`_onNetCeremonyStart`): wall seconds and the net's clock scale for each.
- * The full sequence for a first-ever shot, the highlights cut after it.
+ * The full sequence for a first-ever shot, the highlights cut after it. The APPROACH_DOLLY beat's cap (it ends early when the
+ * net makes contact) is `NET_CEREMONY.APPROACH_BEAT_CAP_S`, the number the camera reads; the camera's own `c.beats` are
+ * compared with this table in test-NetCeremonyBeatsMirror.js.
  * @param {boolean} isFirstEver
- * @returns {{wallS:number, scale:number}[]}
+ * @returns {{key:string, wallS:number, scale:number}[]}
  */
-function netCeremonyBeats(isFirstEver) {
+export function netCeremonyBeats(isFirstEver) {
   const NC = Constants.CAPTURE_NET.NET_CEREMONY;
   const BD = NC.BEAT_DURATIONS_S;
   const scaleOf = {
@@ -149,7 +148,7 @@ function netCeremonyBeats(isFirstEver) {
     ? ['POD_MUZZLE_PREFIRE', 'MUZZLE_EXIT_SPINUP', 'GLAMOUR_SHOT', 'APPROACH_DOLLY', 'BRAKE_ENVELOP', 'CINCH', 'SECURED_SETTLE']
     : (NC.HIGHLIGHTS_CUT_BEATS || []);
   const f = isFirstEver ? 1 : goodScale(NC.HIGHLIGHTS_TIME_SCALE);
-  return keys.map((k) => ({ wallS: (k === 'APPROACH_DOLLY' ? APPROACH_BEAT_CAP_S : (BD[k] || 0)) * f, scale: goodScale(scaleOf[k]) }));
+  return keys.map((k) => ({ key: k, wallS: (k === 'APPROACH_DOLLY' ? NC.APPROACH_BEAT_CAP_S : (BD[k] || 0)) * f, scale: goodScale(scaleOf[k]) }));
 }
 
 /**
@@ -184,7 +183,10 @@ export function netCeremonyWallS(internalS, isFirstEver = true) {
  *   - otherwise the beats advance and the net runs 0.4 / 0.5 / 0.6 / 0.5 in turn: with `st.internalS` (the net's own
  *     seconds to contact) it is the flight's time-weighted scale, own seconds / wall seconds through the beat table.
  *     Without `internalS` it is the first beat's scale, which over-leads (about 1 m at 35 m, 3 m at 90 m on a first shot).
- * Not mirrored: the player skipping the ceremony (Esc) mid-flight, which returns the net to 1 at once.
+ * Not mirrored: the player skipping the ceremony (Esc) mid-flight, which returns the net to 1 at once; and the brake beat:
+ * the camera moves to BRAKE_ENVELOP (scale `NET_CEREMONY.TIME_SCALE_BRAKE`, 0.5) on NET_BRAKE_FIRED, at the end of the flight
+ * (`_onNetBrakeFired` sets the beat timer to its duration, so the next camera tick advances), where this table keeps the
+ * approach beat's 0.6 until contact.
  * @param {boolean} [isFirstEver] - true: the full ceremony (default); false: the highlights cut
  * @param {{launchCeremonyActive?:boolean, noLauncher?:boolean, runningScale?:number|null, ladder?:boolean, internalS?:number}} [st]
  * @returns {number} multiplier in (0, 1]

@@ -295,8 +295,12 @@ const AIM_REST_EPS = 1e-5;
  * its direction every frame from a velocity estimate, and a reading that wobbles by a few tenths of a degree (the tolerance is
  * 0.5°) is sensor noise, not a target that moved: chasing it fires the couples on every frame, spin-up and stop over and over,
  * a real I x |dw| bill for a ship that gains no pointing (measured: ±0.7° of noise on an 8.5° turn billed 0.34 kg against 0.10 kg
- * for the turn, 3 s instead of 1.1). At 0.25 s the noise drops about five-fold and a target drifting at 1°/s is followed 0.25°
- * late, inside the tolerance.
+ * for the turn, 3 s instead of 1.1). At 0.25 s the noise drops about five-fold.
+ * What it does NOT guarantee: "on target" is judged against the SMOOTHED line, so the shot can land past the 0.5° tolerance of the
+ * true one. A smooth moving target (0.5-3°/s) never reaches "settled", so the filter does nothing there. With ±0.7° of wobble
+ * the aim finished this far off the true line (review probe 2026-11-02, T2 rig): 0.39-0.48° at 1°/s, 0.56-0.61° at 2°/s,
+ * 0.87-1.01° at 3°/s. With the filter off: 0.45-0.73°, but the 3°/s runs took 22-30 s (30 s is the time-out) and used 2.8-3.8 kg.
+ * So the filter is a net gain on gas and time, not a pointing guarantee (test-AimTurnBill T2 pins the 0.5°/s miss).
  */
 const AIM_SETTLED_TAU_S = 0.25;
 
@@ -796,6 +800,9 @@ export class AutopilotSystem {
     this._slewDq = new THREE.Quaternion();    // scratch: this step's body-frame rotation
     this._slewQ0 = new THREE.Quaternion();    // snapshot of the slewed quaternion before the step (the slerps are in place)
     this._slewSteppedThisFrame = false;
+    // The aim arrived on THIS frame (`_resolveAim`); its launch fires before the next frame, so the nose stays on the aim line
+    // until the launch's own hold takes over. Cleared at the top of every `update`.
+    this._aimJustResolved = false;
     this._slewTrackDt = 0;                    // the world slew's real dt of the last frame if it was a pure track (alpha 1), else 0 (`_rotateTowardWorld`)
     /** What the engaged autopilot / the trip hold has already said about its slow turn (one engagement). */
     this._slow = { said: false, kind: null, mode: null, ref: null, noPowerSaid: false };
@@ -2007,6 +2014,8 @@ export class AutopilotSystem {
     // commanded attitude; PlayerSatellite puts this frame's shake back after composing the attitude. Idempotent; no-op without a shake.
     const apPlayer = this._player;
     if (apPlayer && typeof apPlayer.undoRecoilOverlay === 'function') apPlayer.undoRecoilOverlay();
+    // One frame only: set again by `_resolveAim` below if an aim arrives on this frame (before any reader of it).
+    this._aimJustResolved = false;
     if (apPlayer) this._slewStopTick(apPlayer, dtWorld);
     // order: a pre-turn whose conditions are gone ends before anything below moves the nose
     if (this._preturn) this._preturnGuard(dt);
@@ -2400,8 +2409,11 @@ export class AutopilotSystem {
     }
 
     // Aim-before-launch mutual exclusion: an aim coroutine or a reel-in attitude hold owns the quaternion; the HOLD-phase
-    // prograde steer must not fight it.
-    if (!this._aimCoroutine && !this._attitudeHold) {
+    // prograde steer must not fight it. The frame an aim arrives is covered too: the net's hold starts on NET_FIRED, the lasso's
+    // in `_castLasso`, both inside the aim promise's `.then`, after this update returns, so without `_aimJustResolved` this slew turned the nose 0.19 deg (0.2 rad/s x one
+    // frame) off the aim line just before the shot and billed it as a spin-up and a stop: 0.336 kg of steering gas per N press
+    // (browser 2026-11-03, tmp/tm6/a/trace-r2.json, frames 6200-6203).
+    if (!this._aimCoroutine && !this._attitudeHold && !this._aimJustResolved) {
       this._rotateTowardWorld(vHat, dt, dtWorld);
     }
   }
@@ -2527,7 +2539,7 @@ export class AutopilotSystem {
     if (dir.lengthSq() > 1e-20) {
       dir.normalize();
       // Aim-before-launch mutual exclusion (as on the main control path): the aim coroutine / reel-in freeze owns the quaternion.
-      if (this._aimCoroutine || this._attitudeHold) { this._dropFrameHold(); return; }
+      if (this._aimCoroutine || this._attitudeHold || this._aimJustResolved) { this._dropFrameHold(); return; }   // (`_aimJustResolved`: see the main path)
       if (!this._turn && this._holdFrameForWarp(dt, dtWorld)) return;   // (a scripted turn owns the nose: no hold)
       this._dropFrameHold();
       this._rotateTowardWorld(dir, dt, dtWorld);
@@ -4363,6 +4375,9 @@ export class AutopilotSystem {
     const c = this._aimCoroutine;
     if (!c) return;
     this._aimCoroutine = null;
+    // Always called from `_tickAimCoroutine` inside `update` (the only callers are its two ticks), so the flag is read by the
+    // guards later in this same update and cleared at the top of the next. A launch that never follows loses it one frame on.
+    this._aimJustResolved = true;
     // A daughter launch keeps the mother still from here to the spring. Set BEFORE _cleanup so aimHold never drops
     // (cleanup keeps aimHold = _attitudeHold).
     if (c.mode === 'daughter' && c.arm) this._beginLaunchHold(c.arm);
