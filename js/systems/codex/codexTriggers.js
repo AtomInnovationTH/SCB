@@ -260,6 +260,8 @@ export const CODEX_TRIGGERS = {
   news_mev1_servicing:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 16 }],
   news_yunhai_collision:  [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 20 }],
   news_swift_rescue:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 14 }],
+  news_hubble_call:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 20 }],
+  reentry_metals:         [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 24 }],
 
   // ===== THERMAL-ARC BATCH =====
   // Event-keyed only (no comms-substring couplings, so the test-CodexReachability corpus is untouched). Flower-adjacent

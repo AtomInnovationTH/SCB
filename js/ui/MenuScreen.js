@@ -675,7 +675,7 @@ export class MenuScreen {
               <li><span class="adr-name" title="A battery pallet jettisoned from the ISS survived reentry in 2024 and punched clean through the roof of a Florida home. It was supposed to burn up entirely.">A piece of the Station hits a house</span> <span class="adr-sub">Florida · 2024</span></li>
               <li><span class="adr-name" title="Kosmos 482 was a Soviet Venus lander stranded in Earth orbit by a 1972 launch failure. Built to survive Venus, it fell back to Earth intact 53 years later, in 2025.">The Venus lander that stayed</span> <span class="adr-sub">1972 → 2025</span></li>
               <li><span class="adr-name" title="Darren McKnight's 2025 paper: removing the 50 most dangerous objects in low orbit would halve their debris-making potential. 34 are Russian or Soviet, 10 Chinese; 88% are rocket bodies. The biggest old ones are the most valuable removals.">The 50 most dangerous objects</span> <span class="adr-sub">2025 · 88% rocket bodies</span></li>
-              <li><span class="adr-name" title="A 22-year-old NASA telescope, Swift, sank too low in its orbit. A commercial spacecraft sent to grab it and boost it had control problems, Swift made its last observation on 20 October 2026. Re-entry is expected within weeks.">Swift rescue fails</span> <span class="adr-sub">USA · 2026</span></li>
+              <li><span class="adr-name" title="NASA's Swift telescope sank as solar activity raised drag. The rescue craft LINK lost the use of two of its three reaction wheels and spun, so no capture was tried. Swift's last observation was on 20 October 2026; re-entry is due 4 November.">Swift rescue fails</span> <span class="adr-sub">USA · 2026</span></li>
               <li><span class="adr-name" title="The US Space Surveillance Network watches for close passes; the ISS fires its thrusters to dodge when collision odds exceed 1 in 10,000. About once a year on average (NASA). If a threat is spotted too late, the crew shelters in their return capsules.">ISS dodges debris</span> <span class="adr-sub">~1× / year</span></li>
               </ul>
             </details>
@@ -732,13 +732,15 @@ export class MenuScreen {
 
             <!-- Upcoming events — each <li> carries data-end (YYYY-MM-DD, last day);
                  MenuScreen._pruneEvents() hides the ones already over and sets
-                 the badge, so this list never shows a past event. Last checked 2026-10-25. -->
+                 the badge, so this list never shows a past event. Last checked 2026-11-03. -->
             <details class="adr-group" data-group="events">
-              <summary>Upcoming events<span class="adr-count">5</span></summary>
+              <summary>Upcoming events<span class="adr-count">7</span></summary>
               <ul class="adr-list">
               <li data-end="2026-10-31"><span class="adr-name" title="Run by GISTDA, Thailand's space agency, at ICONSIAM with free entry: satellites, rockets and the region's space start-ups. Shares its week with the Asia-Pacific agency forum APRSAF-32.">Thailand Space Expo</span> <span class="adr-sub">Bangkok · 28-31 Oct</span></li>
+              <li data-end="2026-11-05"><span class="adr-name" title="NASA ended the mission of its 1,470 kg Swift telescope on 20 October, and it is now falling. Forecast: about 4 November, give or take 11 hours. NASA puts the chance of anyone being hurt at about 1 in 2,100. Rescue craft LINK failed.">Swift falls to Earth</span> <span class="adr-sub">Re-entry · 4 Nov</span></li>
               <li data-end="2026-11-05"><span class="adr-name" title="Secure World Foundation's flagship policy event on keeping orbit usable, with the Brazilian Space Agency. The 8th edition, and the first in Latin America.">Summit for Space Sustainability</span> <span class="adr-sub">Brasília · 4-5 Nov</span></li>
               <li data-end="2026-11-19"><span class="adr-name" title="Europe's trade show for the space supply chain. This is its last year in Bremen; from 2027 it moves to Frankfurt.">Space Tech Expo Europe</span> <span class="adr-sub">Bremen · 17-19 Nov</span></li>
+              <li data-end="2026-11-30"><span class="adr-name" title="NASA asks companies how to save Hubble: boost it to at least 600 km, service it, or steer it down. If nothing is done it may fall in 2033-34. NASA says a mission would need to take place by 2032.">NASA's call to save Hubble</span> <span class="adr-sub">Replies due 30 Nov</span></li>
               <li data-end="2027-02-26"><span class="adr-name" title="Singapore's space conference and exhibition for agencies, industry, investors and policymakers. Its second year; the first ran alongside the 2026 Singapore Airshow.">Singapore Space Summit</span> <span class="adr-sub">Singapore · 25-26 Feb 2027</span></li>
               <li data-end="2027-03-11"><span class="adr-name" title="The biggest satellite-industry show (SATELLITE, with GovMilSpace), including a space-domain-awareness track. Conference 8-11 March, exhibition 9-11 March.">SATShow Week</span> <span class="adr-sub">Washington · 8-11 Mar 2027</span></li>
               </ul>

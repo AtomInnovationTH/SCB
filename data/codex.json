@@ -168,7 +168,8 @@
         "band_180_400",
         "band_400_600",
         "band_600_900",
-        "drag_sail_deorbit"
+        "drag_sail_deorbit",
+        "reentry_metals"
       ],
       "i18n": {
         "title": "Atmospheric Drag",
@@ -1420,7 +1421,8 @@
         "solar_furnace",
         "aft_thruster_deck",
         "fore_bulkhead",
-        "debris_upcycling"
+        "debris_upcycling",
+        "reentry_metals"
       ],
       "i18n": {
         "title": "Aluminum in Space",
@@ -2034,7 +2036,8 @@
       "related": [
         "heritage_hubble_servicing",
         "ssa_network",
-        "conjunction_assessment"
+        "conjunction_assessment",
+        "news_hubble_call"
       ],
       "i18n": {
         "title": "Hubble Watch",
@@ -3788,7 +3791,8 @@
         "adr_methods_real",
         "world_adr_mandate",
         "atmospheric_drag",
-        "news_swift_rescue"
+        "news_swift_rescue",
+        "reentry_metals"
       ],
       "i18n": {
         "title": "Aeolus: A Tidy Way Down",
@@ -4141,7 +4145,8 @@
         "org_manastu",
         "org_skyperfect_jsat",
         "org_mu_space",
-        "news_swift_rescue"
+        "news_swift_rescue",
+        "news_hubble_call"
       ],
       "i18n": {
         "title": "The Servicing Economy",
@@ -4226,7 +4231,8 @@
         "world_servicing",
         "jwst_horizon",
         "hubble_watch",
-        "news_swift_rescue"
+        "news_swift_rescue",
+        "news_hubble_call"
       ],
       "i18n": {
         "title": "Hubble: Saved Five Times",
@@ -5853,18 +5859,58 @@
         "mev_stinger",
         "world_servicing",
         "org_nasa_odpo",
-        "news_aeolus_reentry"
+        "news_aeolus_reentry",
+        "news_hubble_call",
+        "reentry_metals"
       ],
       "i18n": {
         "title": "Swift: A Rescue Never Attempted",
-        "shortText": "NASA's 22-year-old Swift telescope sank too low; the spacecraft sent to boost it had control problems. Re-entry is due within weeks.",
-        "fullText": "NASA's Swift telescope, launched in November 2004 for a two-year mission, spent almost 22 years studying gamma-ray bursts. It started near 600 km, but heavier solar activity pulled its orbit down. NASA hired Katalyst Space (about $30 million, a figure from Space.com) to catch it and push it higher. Katalyst's spacecraft, LINK, launched on 3 July 2026 but had communication losses and attitude-control problems, and the boost effort ended in August without an attempt. Swift made its last observation on 20 October, and NASA ended the mission with its orbit below about 275 km. It is expected to re-enter within weeks. Most of its 613 kg should burn up; some parts may survive.\n\nSwift was never built to be caught: it has no grapple fixture and was never meant to be rendezvoused with. Grabbing a target that was not designed to be grabbed is the hard part of removing debris, and the same problem the nets in your game are made to solve.",
-        "realWorld": "Sources (read 2026-10-28): NASA, Swift mission ends (final observation 20 Oct 2026; re-entry expected in the next few weeks): https://science.nasa.gov/missions/swift/nasas-swift-mission-ends/ ; NASA Swift blog, 23 Oct 2026: https://science.nasa.gov/blogs/swift/2026/10/23/nasas-swift-mission-ends-ahead-of-re-entry/ ; NASA, lessons learned from the Swift boost mission (LINK launch 3 Jul 2026, communication and attitude-control problems; LINK re-entry 25 Sep): https://science.nasa.gov/missions/swift/nasa-highlights-lessons-learned-from-swift-boost-mission/ ; NASA, Swift boost mission: https://science.nasa.gov/mission/swift/swift-boost-mission/ ; Space.com, 26 Oct 2026: https://www.space.com/space-exploration/missions/nasa-ends-swift-space-telescope-mission-after-failed-rescue-attempt . The $30 million figure and the 613 kg dry mass rest on Space.com (https://www.space.com/space-exploration/missions/after-failure-of-private-rescue-mission-nasas-swift-space-telescope-will-crash-back-to-earth-but-when-and-where); NASA gives no price. No casualty-risk number found.",
+        "shortText": "Swift falls about 4 November; its rescue craft failed. Its gamma-ray camera's lead-tile mask holds an estimated 15 kg of lead.",
+        "fullText": "NASA's Swift telescope (5.6 m tall, 1,470 kg) launched in November 2004 and studied gamma-ray bursts for almost 22 years. It started near 600 km, but the 2024 peak of solar activity swelled the thin upper air and raised drag. NASA cut the drag by turning Swift to face the way that slows it least. Its last observation was on 20 October 2026, and NASA ended the mission with the orbit below about 275 km.\n\nThe rescue failed. Katalyst Space's craft LINK (about $30 million) launched on 3 July 2026, about nine months after its contract. Katalyst says a power fault left two of its three reaction wheels, the spinning wheels that steer a craft, unusable and sent it spinning. Steering with thrusters burned its fuel, and the capture was called off on 19 August; LINK never came closer than 12 to 15 km. Accounts of the exact order of failures differ, and Ars Technica reports that tests were cut to make the date.\n\nSwift is forecast to re-enter at about 08:30 UTC on 4 November 2026, give or take 11 hours. NASA puts the risk of harm to anyone at about 1 in 2,100, about five times the US guideline of 1 in 10,000 (computed). Most of it burns up; Swift's reaction wheels and some mirror parts may survive. Its Burst Alert Telescope has a mask of about 52,000 lead tiles, 5 × 5 × 1 mm each: about 15 kg of lead (computed from tile size and count).\n\nSwift was never built to be caught: it has no grapple fixture. Grabbing a target that was not designed to be grabbed is the hard part of removing debris, and the same problem the nets in your game are made to solve.",
+        "realWorld": "Sources (read 2026-11-03): NASA Swift boost mission pages (cast page, 13 Aug 2026; timeline; lessons learned, 28 Sep 2026): launch 20 Nov 2004, 1,470 kg, start near 600 km, the drag-cutting pointings, closest approach 12-15 km, LINK re-entry 25 Sep 2026; NASA, Swift mission ends and Swift blog, 23 Oct and 2 Nov 2026: last observation 20 Oct, orbit below about 275 km, re-entry forecast of the US Space Force (about 08:30 UTC on 4 Nov, give or take 11 hours), risk about 1 in 2,100; Katalyst Space mission page (contract about $30 million, launch 3 Jul 2026, closing statement 25 Sep 2026: power fault, two of three reaction wheels, thruster fuel); Ars Technica, 19 Jun, 6 Jul, 1 Aug and 1 Oct 2026 (about nine months to launch; tests cut; differing accounts of the failure order); CNN, 7 Aug 2026 (spin about 9° a second); The Space Review, 29 Jun and 31 Aug 2026 (capture called off 19 Aug); US Government Orbital Debris Mitigation Standard Practices, Nov 2019 (casualty risk below 1 in 10,000); Space.com, 1 Nov 2026, and AP via the Los Angeles Times, 31 Oct 2026 (parts likely to survive; NASA's Brad Cenko names dense tungsten and mirror parts); NASA Swift spacecraft page and Barthelmy et al. 2005 (about 52,000 lead tiles, 5 × 5 × 1 mm; a 2012 NASA page says about 54,000). Computed here: 1 in 2,100 is about 5 times 1 in 10,000; 52,000 tiles × 0.025 cm³ × 11.34 g/cm³ = 14.7 kg of lead (54,000 tiles give 15.3 kg). No source says whether the lead vaporises or falls as droplets, or whether the risk was waived. The old 613 kg figure from Space.com (27 Aug 2026) is dropped: it has no source and conflicts with NASA's 1,470 kg.",
         "unlockHint": "Clear 14 pieces of debris."
       },
-      "lastVerified": "2026-10",
+      "lastVerified": "2026-11",
       "track": "world_stage",
       "trackOrder": 11
+    },
+    {
+      "id": "news_hubble_call",
+      "category": "NEWS",
+      "icon": "🔭",
+      "related": [
+        "hubble_watch",
+        "heritage_hubble_servicing",
+        "news_swift_rescue",
+        "world_servicing"
+      ],
+      "i18n": {
+        "title": "Hubble: NASA Asks for a Rescue",
+        "shortText": "NASA asks industry how to boost, service or steer down Hubble. Unlike Swift, Hubble has a ring fitted in 2009 to be caught.",
+        "fullText": "On 29 October 2026 NASA posted a notice asking companies about Hubble servicing, and on 30 October it said it is exploring commercial options. It names three: a vehicle that captures Hubble and boosts it to at least 600 km, a servicing mission, or a controlled re-entry. NASA pays nothing for replies and states no budget. Replies are due by 3 p.m. US Eastern on Monday 30 November 2026, and NASA anticipates that a mission would need to take place by 2032.\n\nHubble launched on 24 April 1990. It is 13.3 m long, 4.2 m wide and about 12,200 kg, in an orbit tilted 28.5°, and it now flies near 470 km (an estimate from public orbit data of 2 November 2026). If nothing is done, NASA says it re-enters in 2033 to 2034. A July 2026 analysis cited in the notice gives a 10% chance by September 2032 and 50% by December 2033.\n\nThis is unlike Swift. In May 2009, on the last shuttle servicing mission, astronauts fitted Hubble with a Soft Capture Mechanism: a ring on its rear bulkhead so that a future crewed or robotic vehicle can capture it for safe disposal. In 2022 NASA and SpaceX signed an unfunded six-month study of a boost by a SpaceX Crew Dragon; in June 2024 NASA said it would not pursue one for now, citing risks such as losing science early if Hubble were damaged.\n\nA NASA safety study, as reported, puts the risk from an uncontrolled re-entry at about 1 in 330 averaged over its path, 30 times the 1 in 10,000 guideline, or about 1 in 31,000 over the remote South Pacific. The debris would fall in a strip 350 to 800 km long, and over a city as dense as Macao the study, as reported, estimates two to four casualties. Hubble's 2.4 m mirror weighs 828 kg; whether it would survive re-entry has not been confirmed.",
+        "realWorld": "Sources (read 2026-11-03): NASA, notice 'Hubble Space Telescope (HST) Servicing', ID 80GSFC27RFIHSTS, posted on SAM.gov 29 Oct 2026 (read through a public mirror; options, 600 km, July 2026 analysis); NASA, 'NASA Explores Potential Commercial Servicing for Hubble Telescope', 30 Oct 2026 (replies due 3 p.m. US Eastern, 30 Nov 2026; mission by 2032; re-entry 2033 to 2034); NASA, Hubble by the numbers and Hubble facts pages (launch 24 Apr 1990; 13.3 m by 4.2 m; about 12,200 kg; 28.5°); NASA, About Hubble (mirror 2.4 m, 828 kg, ultra-low-expansion glass); ESA/Hubble, Soft Capture Mechanism page, reproducing NASA's fact sheet (ring fitted May 2009); NASA, Sep 2022 (unfunded six-month SpaceX study of a reboost); NPR, 4 Jun 2024 (NASA: not pursuing a reboost right now); IFLScience, 12 Jan 2026, reporting a NASA Engineering and Safety Center study of Nov 2025 (NTRS 20250010561: 1 in 330, 1 in 31,000, 350 to 800 km strip, Macao). The 470 km altitude is an estimate computed from CelesTrak orbit data of 2 Nov 2026. The safety-study numbers are as reported by IFLScience, not read in the study. No source says whether the mirror survives re-entry.",
+        "unlockHint": "Clear 20 pieces of debris."
+      },
+      "lastVerified": "2026-11"
+    },
+    {
+      "id": "reentry_metals",
+      "category": "NEWS",
+      "icon": "🌫️",
+      "related": [
+        "news_swift_rescue",
+        "news_aeolus_reentry",
+        "atmospheric_drag",
+        "aluminum_space"
+      ],
+      "i18n": {
+        "title": "What Burning Satellites Leave Behind",
+        "shortText": "Satellites that burn up leave metals in the air: aluminum, lithium, lead. Steering them over the ocean does not stop that.",
+        "fullText": "A satellite that re-enters does not vanish. It burns, and its metal ends up as particles in the upper air. In 2023 NOAA scientists flew NASA high-altitude research planes (WB-57) from Alaska, up to 19 km, and found that about 10% of the sulfuric-acid particles wider than about a ten-thousandth of a millimetre held metals from re-entering spacecraft and rocket stages: more than 20 elements in the proportions of spacecraft alloys, including lithium, aluminum, copper, lead, niobium, hafnium and silver. Re-entry already supplies more lithium, aluminum, copper and lead than natural space dust does. For aluminum, it is about 210 t a year from spacecraft against about 20 t from meteoroids. The authors project that up to about half of such particles could hold satellite metals as satellites multiply; the effects are unknown.\n\nA 2024 computer model from the University of Southern California, not a measurement, estimates about 17 t of aluminum oxide in 2022, eight times 2016, and about 360 t a year once planned large satellite fleets are complete. The particles may take up to 30 years to drift down to the ozone layer, where, the model says, they would speed up chlorine's ozone loss without being used up. In February 2026 researchers made the first direct link from one re-entry to a plume: after a Falcon 9 upper stage re-entered uncontrolled on 19 February 2025, laser sensing (lidar) saw lithium about 100 km up rise about tenfold.\n\nFor scale, natural space dust adds about 28 t a day (modelled, uncertain), while spacecraft and rocket mass re-entering was about 1,600 t over all of 2024 and an estimated 2,350 t in 2025, more than double 2020 (a preprint, not yet peer-reviewed). No rule limits this yet; scientists call for research and for regulators to count it.\n\nSteering a satellite down over the ocean, as ESA did with Aeolus, keeps pieces away from people, but the metal still burns in the air. Keeping material in orbit, for example by re-using it, keeps it out. Swift's Burst Alert Telescope mask is one example: about 15 kg of lead (computed from tile size and count), and no source says where it ends up.",
+        "realWorld": "Sources (read 2026-11-03): Murphy et al., PNAS, Oct 2023 (NOAA; NASA WB-57 flights from Alaska, Feb-Mar 2023; metals in about 10% of large sulfuric-acid particles; 210 t a year of aluminum from spacecraft against about 20 t from meteoroids; the half-of-particles figure is the authors' projection); Ferreira et al., Geophysical Research Letters, Jun 2024, and the American Geophysical Union release (a model: 17 t of aluminum oxide in 2022, about 360 t a year later, up to 30 years of drift); Communications Earth & Environment, 19 Feb 2026 (lithium plume after the Falcon 9 stage re-entry of 19 Feb 2025); Icarus, 2020 (natural dust about 28 t a day, modelled); Schulz et al., arXiv preprint, Oct 2025 (about 1.6 thousand tonnes re-entering in 2024, an estimated 2.35 thousand in 2025; not yet peer-reviewed); BBC, Feb 2026, and American Astronomical Society statement, Sep 2024 (calls for research and for regulators to count it). The 15 kg of lead in Swift's mask is computed (see the Swift card); where it ends up is not known.",
+        "unlockHint": "Clear 24 pieces of debris."
+      },
+      "lastVerified": "2026-11"
     },
     {
       "id": "two_beam_plasma_pusher",
