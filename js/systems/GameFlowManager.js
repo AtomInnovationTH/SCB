@@ -36,9 +36,15 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
+import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg } from './NodeDrift.js';     // route-1101 lane S2: the station node gap
+import { WAIT_ID } from './WhereNextRows.js';
 import { postFirstJob, isJobPiece, bountyPayLine, toSave as jobToSave, fromSave as jobFromSave, JOBS } from './JobsBoard.js';
 import { buildWhereNextRows, STAY_ID, CALL_ID, PUSH_KIND, PUSH_PREFIX, OPEN_LINE, BERTH_LINE, BERTH_MISSION_LINE, STUCK_CALL_LINE } from './WhereNextRows.js';
-import { salvageGasKg, coldGasKgToPool, coldGasPoolToKg } from './ResourceSystem.js';
+import { salvageGasKg, coldGasKgToPool, coldGasPoolToKg, engineGasKg } from './ResourceSystem.js';
+import { realThrustN } from './TripProfile.js';
+import { shipFramePos } from './RoutePlanner.js';
+import { suggestCargoArm } from './CoMCalculator.js';
+import { shipWear } from './ShipWear.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 import { upgradePrereqsMet, upgradeCostNow } from '../ui/shopGating.js';
 import { cityLabels } from '../scene/CityLabels.js';
@@ -736,11 +742,22 @@ export class GameFlowManager {
       // back at ITS height with ITS remaining pieces (DebrisField lays them out on its next update: a load fires no
       // MISSION_START). A game-over save restarts at the start field (the CONTINUE rule below).
       gameState.shipDays = Number.isFinite(save.shipDays) && save.shipDays > 0 ? save.shipDays : 0;
+      // Ship wear (ShipWear.js): the worn parts come back; a save without it wears nothing on its first frame (wearShipDays =
+      // shipDays). ResourceSystem.restore (above) set the wings to 1: they start at their age.
+      shipWear.restore(save.shipWear, gameState.shipDays);
+      // CONTINUE after a game over is a fresh attempt: all three parts new, day 0 (a spent engine could end the run again at
+      // once). The game-over save below hands off to the same GAMEOVER_CONTINUE listener the in-session continue runs
+      // (shipWear.reset() there, resourceSystem.reset() for the battery and wings); this is the same, so the two paths match.
+      if (save.gameOver === true) shipWear.reset();
+      shipWear.applyToResources(resourceSystem);
       if (save.gameOver !== true && this._refs.fieldRegistry && this._refs.fieldRegistry.isOn()) {
         // The scorer's own UNCAPPED mission number (the one MISSION_START carries and the registry's `at` follows); the arc's
         // `missionNum` stops at 12, so past 60 catches a boundary save would never look owed.
         this._refs.fieldRegistry.restore(save.fields, { missionNumber: scoringSystem.getMissionNumber() });
       }
+      // route-1101 lane S2: the station node gap as saved; a save from before it gets it from her node (NodeDrift.initialGapDeg)
+      gameState.stationNodeGapDeg = Number.isFinite(save.stationNodeGapDeg) ? wrapDeg(save.stationNodeGapDeg) : null;
+      if (gameState.stationNodeGapDeg == null) gameState.stationNodeGapDeg = this.stationGapDeg();
       // The big pieces she was still holding come back on their holders (nothing pays at load). AFTER the arms' reset and
       // the registry's restore; a game-over save carries none.
       if (save.gameOver !== true && Array.isArray(save.bigPieces)) this._restoreBigPieces(save.bigPieces);
@@ -897,6 +914,7 @@ export class GameFlowManager {
       gameState.debrisCleared = 0;
       gameState.missionTime = 0;
       gameState.shipDays = 0;   // the FieldRegistry resets itself on this event
+      shipWear.reset();         // every part new (resourceSystem.reset() below restores the battery and the wings)
 
       scoringSystem.reset();
       scoringSystem.credits = carriedCredits;
@@ -905,6 +923,7 @@ export class GameFlowManager {
 
       player.orbit.semiMajorAxis = Constants.EARTH_RADIUS + Constants.START_ALTITUDE;
       player.orbit.trueAnomaly = 0;
+      gameState.stationNodeGapDeg = null;   // route-1101 lane S2: set again from her start node by _applyStartLocation just below
       this._applyStartLocation();
 
       // Reset target selection (emits TARGET_CLEARED → DebrisWireframe self-clears); silent: not a real target loss, so
@@ -1710,6 +1729,9 @@ export class GameFlowManager {
     // on restart, so a thrusted session would mis-aim the anchor pass.
     player.orbit.eccentricity = 0.0001;
     player.orbit.argPerigee = 0;
+    // route-1101 lane S2: a new game's node gap to the station, from her start city's node (English: -169.6 deg). A load sets it
+    // again from the save right after this (or from her node, for a save from before it).
+    gameState.stationNodeGapDeg = initialGapDeg(orbit.raan * 180 / Math.PI);
 
     // The field shares the player's plane from the SAME orbit computation. The typeof guard keeps legacy mocks
     // (no reseatFieldRegime) working.
@@ -1999,6 +2021,11 @@ export class GameFlowManager {
       saveData.fields = fieldsSave;
       if (gameState.shipDays > 0) saveData.shipDays = gameState.shipDays;
     }
+    // route-1101 lane S2: the station node gap, with the fields block (after it, not beside `shipDays`: lane W2 adds its line there)
+    if (fieldsSave && Number.isFinite(gameState.stationNodeGapDeg)) saveData.stationNodeGapDeg = gameState.stationNodeGapDeg;
+    // The worn parts (ShipWear.serialize: null while nothing is worn, so a fresh save is byte-identical).
+    const wearSave = shipWear.serialize();
+    if (wearSave) saveData.shipWear = wearSave;
 
     // The big pieces still aboard (counted at the catch, paid when disposed of), each with its fate and holder, so a
     // reload puts them back on her. A game-over save carries none.
@@ -2147,11 +2174,14 @@ export class GameFlowManager {
       const leg = this._trip.lastLeg;
       this._trip.lastLeg = null;
       if (leg) gameState.shipDays += leg.days;
+      if (leg) this._advanceStationGap(leg);                    // route-1101 lane S2: the node gap moves with the leg's days
       // A trip to the satellite that arrived berths her (no mission starts: the same start waits for the field she
       // picks from there). One that could not go (`_stay`: no gas once planned with her real mass, her nose could not
       // be pointed) is a refused pick, from the berth too: she is where she was and the list is back.
       if (toSat && leg) { this._arriveAtSatellite(field, start); return; }
       if (!leg && (toSat || fromBerth || fromFree)) { this._tripCouldNotGo(start, fromBerth); return; }
+      // route-1101 lane S2: she is at a new field (the ISS boss arms here when she is at the station field, lined up)
+      if (leg) eventBus.emit(Events.FIELD_ARRIVED, { fieldId: field.id, altKm: field.altKm, stationNodeGapDeg: gameState.stationNodeGapDeg });
       start();
       this._runDeferredBoundary();
       if (leg) this.saveGame();
@@ -3305,6 +3335,7 @@ export class GameFlowManager {
       turnWaitS: this._turnWaitsS(),
       bigPieces: this._bigPiecesOn() ? bigPieces.pendingAboard() : [],      // the push rows and the satellite rows' hand-over words
       job: this._jobForRows(),                                              // the jobs board's line and the tag on its field's row
+      station: this._stationRowsOpts(),                                     // route-1101 lane S2: the wait row and the station field's note
     };
   }
 
@@ -3429,6 +3460,7 @@ export class GameFlowManager {
     const atSat = !!berth && !(typeof reg.berthedHere === 'function' && reg.berthedHere());
     const owed = this.missionStartOwed();
     if (id === CALL_ID) return this._callSatellite(choice, start);
+    if (id === WAIT_ID) return this._pickWait(choice, start);           // route-1101 lane S2
     if (typeof id === 'string' && id.startsWith(PUSH_PREFIX)) return this._pickPush(id, choice, start, berth);
     if (id === STAY_ID) {
       if (atSat) return false;
@@ -3504,6 +3536,7 @@ export class GameFlowManager {
     this._trip.lastLeg = null;
     if (!leg) { this._tripCouldNotGo(start, fromBerth); return; }
     gameState.shipDays += leg.days;
+    this._advanceStationGap(leg);                               // route-1101 lane S2
     const reg = this._refs && this._refs.fieldRegistry;
     const here = reg && typeof reg.altitudeKm === 'function' && Number.isFinite(reg.altitudeKm()) ? reg.altitudeKm() : field.altKm;
     // the fate list can change the piece's fate during the trip: it lets go only if "push" still stands; otherwise she keeps it
@@ -3700,10 +3733,94 @@ export class GameFlowManager {
       const leg = trip.lastLeg;
       trip.lastLeg = null;
       if (leg) gameState.shipDays += leg.days;
+      if (leg) this._advanceStationGap(leg);                    // route-1101 lane S2 (she held at her height)
       this._arriveAtSatellite(reg.berthedSatellite() || sat, start);
     }, { sat, days: row.days });
     if (began) return true;
     scoringSystem.addCredits(price);
+    trip.choose(choice, { again: true });
+    return false;
+  }
+
+  // ---- route-1101 lane S2: the station node gap, the wait, the ISS boss's "lined up" (DECISIONS §62 row 2) ----
+
+  /** main.js wires the ISS boss here: the wait row shows only while it is still to come (not armed, running or done). */
+  setIssBoss(boss) { this._issBoss = boss || null; }
+
+  /** @private Her tilt now (deg), or null without a ship. */
+  _herIncDeg() {
+    const o = this._refs && this._refs.player && this._refs.player.orbit;
+    return o && Number.isFinite(o.inclination) ? o.inclination * 180 / Math.PI : null;
+  }
+
+  /**
+   * The station's node minus hers (deg, (-180, 180]): the saved, moving gap (`gameState.stationNodeGapDeg`); before a game has set
+   * it, from her node now (js/systems/NodeDrift.js). Null without either.
+   * @returns {number|null}
+   */
+  stationGapDeg() {
+    if (Number.isFinite(gameState.stationNodeGapDeg)) return gameState.stationNodeGapDeg;
+    const o = this._refs && this._refs.player && this._refs.player.orbit;
+    return o && Number.isFinite(o.raan) ? initialGapDeg(o.raan * 180 / Math.PI) : null;
+  }
+
+  /** @private A leg's days have gone on the ship's clock: the gap moves by the station's rate minus hers over them (NodeDrift.gapChangeOverLeg). */
+  _advanceStationGap(leg) {
+    const g = this.stationGapDeg();
+    const inc = this._herIncDeg();
+    if (!leg || !Number.isFinite(g) || !Number.isFinite(inc)) return;
+    gameState.stationNodeGapDeg = wrapDeg(g + gapChangeOverLeg(leg, inc));
+  }
+
+  /**
+   * The ISS boss's dependency (main.js): she is at the station field (`NodeDrift.stationFieldId`; not berthed, not at the free place)
+   * with the gap within `ISS_BOSS.LINED_UP_DEG`. With the field map off there are no fields and no wait: true (the old game, the boss
+   * arms at its mission as before).
+   * @returns {boolean}
+   */
+  stationLinedUp() {
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!reg || typeof reg.isOn !== 'function' || !reg.isOn()) return true;
+    if ((typeof reg.isBerthed === 'function' && reg.isBerthed()) || (typeof reg.isFree === 'function' && reg.isFree())) return false;
+    const id = stationFieldId(reg);
+    return !!id && reg.currentId() === id && isLinedUp(this.stationGapDeg());
+  }
+
+  /** @private The "where next" rows' `station` option: the boss still to come (mission 5 on, a boss wired and not armed, running or done), the gap, her tilt. */
+  _stationRowsOpts() {
+    const cfg = Constants.ISS_BOSS;
+    const boss = this._issBoss;
+    const pending = !!(cfg && boss && scoringSystem.getMissionNumber() >= cfg.MISSION
+      && !(boss.isArmed() || boss.isActive() || boss.hasCompleted()));
+    return { pending, gapDeg: this.stationGapDeg(), incDeg: this._herIncDeg() };
+  }
+
+  /**
+   * @private The wait row was picked (it must be on the list and selectable). She waits where she is (TransferTrip phase `hold`, no gas);
+   * on its end the days go on the ship's clock, the gap moves, the game saves, and the list opens again with the SAME start kept (the
+   * station field's trip now lines her up). A wait that cannot begin puts the list back.
+   * @param {object} choice the open choice @param {() => void} start the mission transition kept for the pick
+   * @returns {boolean} true = the wait began
+   */
+  _pickWait(choice, start) {
+    const trip = this._trip;
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!reg || !this.missionStartOwed()) return false;
+    const row = buildWhereNextRows(reg, this.whereNextRowsOpts()).rows.find((r) => r.id === WAIT_ID);
+    if (!row || !row.selectable) return false;
+    this._syncTripDeps();
+    trip.leaveChoice();
+    const began = trip.beginWait(() => {
+      const leg = trip.lastLeg;
+      trip.lastLeg = null;
+      if (leg) { gameState.shipDays += leg.days; this._advanceStationGap(leg); }
+      const f = reg.fieldById(row.stationFieldId);
+      const atStation = !!f && reg.currentId() === f.id;      // she waited at the station field itself: nothing to fly
+      if (f) eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: atStation ? `The station's orbit is lined up.` : `The station's orbit lines up from here. Fly to the ${Math.round(f.altKm)} km field.`, priority: 'info', _keep: true });
+      this.saveGame();
+      this._openWhereNext(start, { said: !!f });
+    }, { days: row.days, altKm: row.altKm });
+    if (began) return true;
     trip.choose(choice, { again: true });
     return false;
   }
@@ -4406,6 +4523,93 @@ export class GameFlowManager {
         priority: 'warning',
       });
     }
+  }
+
+  /**
+   * What the Routes section of the "where next" list needs from the live game (plan route-1101, lane R2; RoutePlanner.plan reads it).
+   * Plain data, no game objects but the pieces' own bodies (for `pieceValue`). Null when the field map is off or she has no height.
+   *   dryMassKg, gasKg, carriedKg   her mass without the engine gas and without what she carries; the engine gas; what she carries
+   *                                 (ArmManager.getCargoMassKg, ArmManager.js:4432)
+   *   altKm, fieldId                her height; the field she is in (null berthed at the satellite she flew to, or at the free place)
+   *   thrustN, ispS, areaM2         the thruster and the Isp and drag area the list prices a trip with (FieldRegistry.planTo)
+   *   catchesLeft                   catches that finish the mission she is in: 0 when the list is open for a pick (a mission start is
+   *                                 owed), else the quota less the catches of this block (`debrisCleared` mod `DEBRIS_PER_MISSION`)
+   *   pieces                        the live pieces of her field her scanner has found (`discovered`), with their place in her frame, metres
+   *   fields, satellites            every field with its rows left; the resupply satellites
+   *   held                          the big pieces aboard (BigPieces.pendingAboard), each with `fate`; `melting`/`meltLeftKg` when marked for the furnaces
+   *   holdSlots, holdRoomKg         big pieces she can hold in all (those aboard + the places the game's `suggestCargoArm` would still give, + the
+   *                                 collar when free; tips not counted), room for orbit metal
+   *   furnaces                      free radiator tips (`_freeTips`)
+   *   jobPostings                   the jobs board's open and just-closed postings (`jobPostings()`, J2's getter; none until it exists)
+   * @returns {object|null}
+   */
+  routePanelState() {
+    const r = this._refs || {};
+    const reg = r.fieldRegistry;
+    const p = r.player;
+    const df = r.debrisField;
+    if (!reg || !p || !df || typeof reg.isOn !== 'function' || !reg.isOn()) return null;
+    const herKm = typeof reg.altitudeKm === 'function' ? reg.altitudeKm() : null;
+    if (!Number.isFinite(herKm)) return null;
+    const probe = reg.planTo({ id: 'free', altKm: herKm + 1 });                     // her thruster as the list prices a trip: Isp over the gas multiplier, drag area
+    if (!probe || typeof reg._loadedGas !== 'function') return null;
+    const quota = Constants.MISSIONS.DEBRIS_PER_MISSION;
+    const owed = this.missionStartOwed();
+    const caught = gameState.debrisCleared % quota;
+    const gasKg = engineGasKg(p.resources);
+    const carriedKg = r.armManager && typeof r.armManager.getCargoMassKg === 'function' ? r.armManager.getCargoMassKg() : 0;
+    const out = !!(reg.atSatellite && reg.atSatellite()) || !!(reg.isFree && reg.isFree());   // no field is hers
+    const fieldId = out ? null : reg.currentId();
+    const pieces = [];
+    if (!out) {
+      const pos = p.getPosition();
+      const vel = orbitToSceneCartesian(p.orbit).velocity;
+      for (const d of df.debrisList) {
+        if (!d.alive || d.hazard || d.discovered !== true || !(d.mass > 0) || d._captured || d._capturedByArm || !d._scenePosition) continue;
+        if (!(d.welcomeSpawn || d.fieldId != null) || bigPieces.has(d.id)) continue;
+        pieces.push({
+          id: d.fieldRow != null ? `${fieldId}#${d.fieldRow}` : `${fieldId}:${d.id}`, debrisId: d.id, fieldId: d.fieldId ?? fieldId, fieldRow: d.fieldRow ?? null,
+          discovered: true, hazard: false, captured: false, piece: d,
+          posM: shipFramePos(pos, vel, d._scenePosition, Constants.SCENE_UNITS_PER_METER),
+        });
+      }
+    }
+    const aboard = (this._bigPiecesOn() ? bigPieces.pendingAboard() : []).filter((e) => e && e.debris);
+    const held = aboard.map((e) => {
+      const x = e.debris._disposal || {};
+      const melting = e.fate === 'melt';                                            // marked for the furnaces: the route starts with it melting (GameFlowManager :2900 _meltAlive)
+      const done = Number.isFinite(x.meltDoneKg) ? x.meltDoneKg : 0;                // `debris.mass` is what is left of a piece being melted (BigPieces.js header)
+      return {
+        id: `held:${e.debris.id}`, debrisId: e.debris.id, piece: e.debris, fieldId: e.debris.fieldId ?? null, fieldRow: e.debris.fieldRow ?? null, fate: e.fate,
+        melting, meltLeftKg: melting ? Math.max(0, e.debris.mass) : null, meltDoneKg: done, massAtCatchKg: Number.isFinite(x.massAtCatch) ? x.massAtCatch : null,
+      };
+    });
+    // Places for the NEXT big catch, by the game's own rule: `suggestCargoArm` (CoMCalculator.js:839; one catch per daughter, home, not booked, the last
+    // daughter that can still catch is never loaded; a small catch on a rack counts). Ask it again with each pick booked until it says no. The collar
+    // is one more place while no piece sits there (a piece at the collar goes to a daughter if one is free, so the same count holds).
+    const booked = new Set();
+    if (r.armManager && r.armManager.arms && r.armManager.arms.length) {
+      for (let i = 0; i < r.armManager.arms.length; i++) {
+        const idx = suggestCargoArm(r.armManager, p, 1, 0, booked);
+        if (idx === null || idx === undefined) break;
+        booked.add(idx);
+      }
+    }
+    const collarFree = !aboard.some((e) => e.holder === 'collar');
+    return {
+      dryMassKg: p.mass - gasKg - carriedKg, gasKg, carriedKg, altKm: herKm, fieldId,
+      thrustN: realThrustN(reg._loadedGas()), ispS: probe.ispS, areaM2: probe.areaM2,
+      owed, catchesLeft: owed ? 0 : quota - caught,
+      pieces,
+      fields: reg.fields().map((f) => ({ id: f.id, altKm: f.altKm, kind: f.kind === 'high' ? 'high' : 'low', remaining: reg.remainingRows(f.id) })),
+      satellites: reg.satellites().map((s) => ({ id: s.id, altKm: s.altKm, name: s.name })),
+      held,
+      holdSlots: held.length + booked.size + (collarFree ? 1 : 0),
+      furnaces: this._freeTips().length,                                            // the free radiator tips (the game's `_freeTips`), not a fixed 4
+      holdRoomKg: this._holdRoomKg(),
+      captureCreditsEarned: scoringSystem.captureCreditsEarned,
+      jobPostings: this.jobPostings?.() ?? [],
+    };
   }
 }
 

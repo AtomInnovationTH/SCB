@@ -128,6 +128,13 @@ const FITTING_SPECS = {
       op: `=${Constants.FUELS[row.value].thrustScale}` }),
     current: (deps) => Constants.FUELS[deps.resourceSystem?.tankGasId]?.thrustScale,
   },
+  // a new engine from the resupply satellite resets its wear (route-1101 W2, ShipWear); ENGINEERING: it is the thruster block
+  replace_engine: {
+    subsystem: 'ENGINEERING', reads: 'resourceSystem',
+    // shown as the share of the engine's rated push used: new = 0 %, so the op is the absolute set `=0`
+    display: () => ({ param: 'engineWearPct', base: 0, unit: '%', op: '=0' }),
+    current: (deps) => { const w = deps.resourceSystem?.getWear?.(); return w ? w.engine * 100 : undefined; },
+  },
   // range is bought by the kilo; shown as engine gas aboard (kg)
   gas_resupply: {
     subsystem: 'ENGINEERING', reads: 'resourceSystem',
@@ -216,6 +223,18 @@ const FITTING_SPECS = {
     // handler assigns the degradation multiplier absolutely (0.5); with base 1 and maxLevel 1 that IS ×0.5
     display: (row) => ({ param: 'panelDegradationMult', base: 1, unit: '×', op: `×${row.value}` }),
     current: (deps) => deps.resourceSystem?.panelDegradationMultiplier,
+  },
+  // a new part from the resupply satellite resets that part's wear (route-1101 W2, ShipWear): shown as the share of its life used,
+  // new = 0 %, so the op is the absolute set `=0` (the row's own value, 1, is only "one part")
+  replace_battery: {
+    subsystem: 'POWER', reads: 'resourceSystem',
+    display: () => ({ param: 'batteryWearPct', base: 0, unit: '%', op: '=0' }),
+    current: (deps) => { const w = deps.resourceSystem?.getWear?.(); return w ? w.battery * 100 : undefined; },
+  },
+  replace_wings: {
+    subsystem: 'POWER', reads: 'resourceSystem',
+    display: () => ({ param: 'wingsWearPct', base: 0, unit: '%', op: '=0' }),
+    current: (deps) => { const w = deps.resourceSystem?.getWear?.(); return w ? w.wings * 100 : undefined; },
   },
 
   // SENSORS: the SensorDeck (5)

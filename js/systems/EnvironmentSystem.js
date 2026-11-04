@@ -288,24 +288,19 @@ export class EnvironmentSystem {
       this._aoTimer -= interval;
 
       let armDeg   = E.AO_ARM_DEGRADATION   || 0.002;
-      let panelDeg = E.AO_PANEL_DEGRADATION  || 0.001;
 
       if (this._skills && typeof this._skills.isDiscovered === 'function' &&
           this._skills.isDiscovered('manage_power')) {
         const mit = E.AO_SKILL_MITIGATION || 0.5;
         armDeg   *= mit;
-        panelDeg *= mit;
       }
 
       this._subsystemHealth.arms = Math.max(0, this._subsystemHealth.arms - armDeg);
 
-      // Mother-wings (DECISIONS §10, "power follows the panels"): AO erosion hits the WING (ROSA) health only (the
-      // large, thin, exposed blanket is what atomic oxygen erodes first). The body-mount cells' `bodyPanelHealth`
-      // (backup power) is deliberately left alone, so it keeps working when the wings are worn down.
-      if (this._resource && typeof this._resource.solarPanelHealth === 'number') {
-        this._resource.solarPanelHealth = Math.max(0, this._resource.solarPanelHealth - panelDeg);
-      }
-
+      // Mother-wings (DECISIONS §10, "power follows the panels"): atomic oxygen erodes the WING (ROSA) health by SHIP DAYS now,
+      // not by play seconds (DECISIONS §57 row 3, ShipWear.js: faster below 600 km, `Constants.SHIP_WEAR`), so there is no
+      // wing hit on this tick (`ENVIRONMENT.AO_PANEL_DEGRADATION` is no longer read). The arms' erosion above is still per tick:
+      // arms are not one of the three worn parts (engine, battery, wings). `bodyPanelHealth` (backup power) was never touched.
       this._emit(Events.ENVIRONMENT_EFFECT, {
         type: 'atomic_oxygen',
         severity: armDeg,

@@ -5235,6 +5235,12 @@ export const Constants = {
       fragMassKg: 45,                 // per-fragment mass
       trackSpreadDeg: 8,              // true-anomaly spread ahead of the lead frag
     },
+    // DECISIONS §62 row 2 (route-1101 lane S2): the boss waits until she is lined up with the station. Her node gap to the station
+    // (ORBIT.raanDeg minus hers, js/systems/NodeDrift.js) must be within LINED_UP_DEG, at the station field, from mission MISSION on.
+    // 0.346 deg = a finish of at most 57 m/s (docs/research/2026-11-station-drift.md §2, computed).
+    LINED_UP_DEG: 0.346,
+    // The station field: the first of these (nearest to the station's 408 km first) that still holds FRAG_COUNT rows (NodeDrift.stationFieldId)
+    STATION_FIELDS: ['f400', 'f425', 'f375', 'f450'],
   },
 
   // CH9 STARLINK FRAGMENTATION BOSS (MISSION_ARC §6)
@@ -5681,7 +5687,9 @@ export const Constants = {
       ],
 
       // ── Chapter 5 is the ISS conjunction boss (IssConjunctionBoss.js / Constants.ISS_BOSS); these beats teach the
-      //    manual burn timing the intercept needs. The boss system owns the spawn, TCA countdown, choice resolution + codex/awards. ──
+      //    manual burn timing the intercept needs. The boss system owns the spawn, TCA countdown, choice resolution + codex/awards.
+      //    Armed when the boss starts (Events.ISS_BOSS_STARTED, MissionCoach), not at mission 5's start: the boss waits until she is
+      //    lined up with the station (DECISIONS §62 row 2), so the beats come with it. ──
       5: [
         {
           id: 'ch5_intro',
@@ -5940,7 +5948,7 @@ export const Constants = {
     AO_THRESHOLD_KM: 600,
     AO_TICK_INTERVAL_S: 10,
     AO_ARM_DEGRADATION: 0.002,         // 0.2% per tick
-    AO_PANEL_DEGRADATION: 0.001,       // 0.1% per tick
+    AO_PANEL_DEGRADATION: 0.001,       // no longer read: wings wear by ship days now (SHIP_WEAR, ShipWear.js)
     AO_SKILL_MITIGATION: 0.5,          // halved with manage_power
 
     // ── MMOD (Micro-Meteoroid / Orbital Debris) ──
@@ -5971,6 +5979,45 @@ export const Constants = {
     DOD_CYCLE_PENALTY_INTERVAL: 10,
     DOD_CAPACITY_LOSS: 0.02,           // 2% per penalty interval
     DOD_SKILL_MITIGATION: 0.5,         // halved with manage_power
+  },
+
+  // SHIP_WEAR — parts age by SHIP DAYS, not play seconds (DECISIONS §57 row 3, route-1101 lane W2; js/systems/ShipWear.js).
+  // `gameState.shipDays` grows only when a trip lands (a 57-day climb ages her 57 days); the engine wears by the push it gives.
+  // Every figure is read from docs/research/2026-10-scav-wear.md ("wear doc"); a figure with no row there is tagged ESTIMATE.
+  SHIP_WEAR: {
+    // Engine (wear doc §1 row 1 and answer line 1): one BHT-600 ran 7,198 h at 39 mN = 1.01 MNs at NASA Glenn (vendor claim;
+    // demonstrated, not an end of life). She is worn out at 100 % of it: about 11 climbs from 350 to 900 km (§2 table).
+    ENGINE_RATED_NS: 1.0e6,
+    // Battery (wear doc §3): half her energy leaves it every orbit (50 % depth, one cycle an orbit), so cycles a day =
+    // 86,400 s / the orbit's period (15.75 at 350 km, 14.0 at 900 km: §3 table). Rated life at that depth: the doc's CENTRAL
+    // 15,000 cycles (an estimate inside its 5,000-30,000 band; 952 days at 350 km, about 1,071 days at 900 km).
+    BATTERY_RATED_CYCLES: 15000,
+    // ESTIMATE (no wear-doc row): a cell is "worn out" at 80 % of its new capacity, the usual end-of-life convention; the fade is
+    // linear in life used and stops at BATTERY_FADE_FLOOR of new capacity (a cell past its life still holds something).
+    BATTERY_FADE_AT_LIFE: 0.2,
+    BATTERY_FADE_FLOOR: 0.5,
+    // Wings (wear doc §1 row 7): triple-junction GaAs fades about 1.5 % a year. The doc cites "Ferguson 2016, a search snippet";
+    // checked 2026-11-04 and UNCONFIRMED: the one 2016 Ferguson paper found (J. Spacecraft & Rockets 53(3), doi 10.2514/1.a33438)
+    // is about GPS arrays degrading faster than radiation predicts (arcing), its abstract gives no yearly figure. So 1.5 % is the
+    // low end of the doc's own 1.5-2.7 % range (ISS arrays, sourced: 0.2-0.5 %), an estimate. Compound, per year of ship days.
+    WING_FADE_PER_YEAR: 0.015,
+    // ESTIMATE (the wear doc has atomic oxygen only for films, row 13, "higher at 350 km than at 900 km"): below
+    // ENVIRONMENT.AO_THRESHOLD_KM atomic oxygen adds this much a year at WING_AO_FULL_KM and less above it (linear, none at the
+    // threshold). 1.5 + 3.0 = 4.5 % a year at 350 km, inside the 2.7-10 % band the doc's section 3 array-margin paragraph quotes.
+    WING_AO_FADE_PER_YEAR: 0.03,
+    WING_AO_FULL_KM: 350,
+    // The old play-second floor (ResourceSystem's wing block kept `solarPanelHealth` at 0.3 at worst): wear never takes the
+    // wings below it.
+    WING_FLOOR: 0.3,
+    // Replacement parts at the resupply satellite: price = mass x the launch price per kg (LAUNCH_USD_PER_KG / USD_PER_CREDIT,
+    // the rule gas is priced by, DECISIONS §2b). The game has NO per-part mass line (docs/research/2026-10-lighter-engine.md §4b
+    // and §5 say so), so these are that doc's own figures, all estimates: engine kit 15.3 kg = head 3.00 + PPU 11.60 + flow
+    // control 0.70 (its "Today, heavy end" row, line 200, Aurora-class, tank excluded); battery 4.0 kg = 600 Wh at 150 Wh/kg
+    // (line 189); wings 16.3 kg = 1,630 W at 100 W/kg (line 187). DEVIATION from a lighter pick: the doc's owner question 1
+    // (line 224) offers 4.3 kg (Halo-class head + PPU + flow, the "light end": a fit to the maker's line, not flown) or 15.3 kg;
+    // it never says 4.3 kg is HER engine, and the heavy-end row is the one it calls "today", so 15.3 kg (about 1,070 cr, not
+    // about 300 cr) stands until the owner answers that question.
+    PART_KG: { engine: 15.3, battery: 4.0, wings: 16.3 },
   },
 
   // ION_THRUSTER — FEEP engine parameters

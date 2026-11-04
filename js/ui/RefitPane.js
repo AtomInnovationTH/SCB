@@ -231,7 +231,7 @@ export class RefitPane {
       return { kind: 'needs', text: `replaced by ${String(by).replace(/ Engine Gas$/, '')}` };
     }
     if (consumableFull(shop, ctx.res)) {
-      return { kind: 'needs', text: shop.effect === 'indiumCartridge' ? 'store full' : 'tank full' };
+      return { kind: 'needs', text: shop.effect === 'indiumCartridge' ? 'store full' : (/^replace/.test(shop.effect) ? 'as new' : 'tank full') };
     }
     if (ctx.prereqsMet && !ctx.prereqsMet(shop)) {
       const ids = [];

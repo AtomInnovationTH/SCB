@@ -115,6 +115,11 @@ export function calledStartLine(days) {
   const d = Math.max(1, Math.round(days));
   return `Resupply satellite called. It is about ${d} ${d === 1 ? 'day' : 'days'} out.`;
 }
+/** The one line when she starts waiting for the station's orbit to line up (`beginWait`). @param {number} days */
+export function waitStartLine(days) {
+  const d = Math.max(1, Math.round(days));
+  return `Waiting here for the station's orbit to line up: about ${d} ${d === 1 ? 'day' : 'days'}.`;
+}
 // The free place's words: a push-down trip ends at a height that is no field and no satellite
 /** @param {{id?: string}|null} target @returns {boolean} the trip's target is the free place of a push-down (FieldRegistry's `FREE_ID`) */
 export function isFreeTarget(target) { return !!target && target.id === 'free'; }
@@ -306,7 +311,7 @@ export class TransferTrip {
   constructor(deps = {}) {
     this._d = {};
     this._bus = deps.bus || defaultBus;
-    this._phase = 'idle';           // 'idle' | 'choose' (player picking the next field) | 'wait' | 'burn' | 'call' (a called satellite on its way)
+    this._phase = 'idle';           // 'idle' | 'choose' (player picking the next field) | 'wait' | 'burn' | 'call' (a called satellite on its way) | 'lineup' (waiting for the station's orbit to line up)
     this._onArrive = null;
     this._choice = null;            // what the flow manager keeps while the player chooses (opaque here)
     this._waitS = 0;
@@ -357,6 +362,11 @@ export class TransferTrip {
     this._callDays = 0;
     this._callPlayS = 0;            // real s the wait plays in
     this._callS = 0;                // real s played so far
+    // phase 'lineup': she waits for the station's orbit to line up (`beginWait`)
+    this._lineupDays = 0;
+    this._lineupKm = null;
+    this._lineupPlayS = 0;          // real s the wait plays in
+    this._lineupS = 0;              // real s played so far
     /** The last leg flown ({fieldId, altKm, days, gasKg}), set when a field trip arrives; GameFlowManager reads it in `onArrive`. */
     this.lastLeg = null;
     /** Owner of work that rides a profile burn on the ship's clock (see `setBurnWork`), and whether it is running */
@@ -555,10 +565,46 @@ export class TransferTrip {
     return true;
   }
 
+  /**
+   * Route-1101 lane S2 (DECISIONS §62 row 2): she waits where she is for the station's orbit to line up (Earth's bulge turns her node
+   * and the station's at different rates: js/systems/NodeDrift.js). No burn, no gas, no turn, no clock warp: phase `lineup` plays
+   * `playSeconds(days)` real seconds, as a called satellite does, then `lastLeg` carries the days (`{wait: true, altKm, days, gasKg: 0}`:
+   * GameFlowManager adds them to the ship's clock and moves the node gap) and `onArrive` runs. `isActive()` is true meanwhile (no
+   * mission starts, every credit guard holds). Only from idle (after `leaveChoice()`).
+   * @param {function} onArrive @param {{days: number, altKm?: number}} opts the days to wait and her height (the leg's)
+   * @returns {boolean} true = the wait began
+   */
+  beginWait(onArrive, opts) {
+    const days = opts && opts.days;
+    if (this._phase !== 'idle' || !(days > 0) || !Number.isFinite(days)) return false;
+    this._phase = 'lineup';
+    this._lineupDays = days;
+    this._lineupKm = opts && Number.isFinite(opts.altKm) ? opts.altKm : this._fromKm();
+    this._lineupPlayS = playSeconds(days);
+    this._lineupS = 0;
+    this._onArrive = typeof onArrive === 'function' ? onArrive : null;
+    this.lastLeg = null;
+    this._say(waitStartLine(days), { _keep: true });
+    return true;
+  }
+
+  /** She is waiting for the station's orbit to line up (phase `lineup`, `beginWait`). */
+  isLiningUp() { return this._phase === 'lineup'; }
+
+  /** @private The wait is over: the leg (days only, no gas) is kept, `onArrive` runs. */
+  _endLineup() {
+    this.lastLeg = { fieldId: null, altKm: this._lineupKm, days: this._lineupDays, gasKg: 0, wait: true };
+    const cb = this._onArrive;
+    this._onArrive = null;
+    this._finish();
+    if (cb) cb();
+  }
+
   /** One frame; `dt` real seconds (0 while the world is held). */
   update(dt) {
     if (this._phase === 'idle' || this._phase === 'choose' || !(dt > 0)) return;     // choosing: nothing runs
     if (this._phase === 'call') { this._tickCall(dt); return; }
+    if (this._phase === 'lineup') { this._lineupS += dt; if (this._lineupS >= this._lineupPlayS) this._endLineup(); return; }
     if (this._phase === 'wait') {
       this._waitS += dt;
       const home = this.daughtersHome();
@@ -579,6 +625,7 @@ export class TransferTrip {
     if (this._phase === 'idle') return;
     if (this._phase === 'choose') { this.leaveChoice(); return; }      // nothing set up yet: drop the choice (and close the list)
     if (this._phase === 'call') { this._onArrive = null; this._finish(); return; }
+    if (this._phase === 'lineup') { this._onArrive = null; this._finish(); return; }   // a wait stopped: no days, nothing moves
     // A game over / reset / load mid-carry: she snaps docked, her catches stay on her rack, the strut and the radiators go
     // back, the tip reservation is cleared (ArmUnit.abortCarry)
     const am = this._d.armManager;
@@ -1315,7 +1362,9 @@ export class TransferTrip {
       // start, not here), the leg is kept for the caller: the days of the whole burn, pauses included, and the gas billed for the
       // time the engine pushed (not the profile's, when her nose was off).
       this._applyProfile(1);
-      this.lastLeg = { fieldId: this._field.id, altKm: this._field.altKm, days: this._flownDays(), gasKg: this._billedKg };
+      this.lastLeg = { fieldId: this._field.id, altKm: this._field.altKm, days: this._flownDays(), gasKg: this._billedKg,
+        // route-1101 lane S2: where she left from and the profile's height samples, for the station node gap's advance (NodeDrift.gapChangeOverLeg)
+        fromKm: this._profile.fromKm, samples: this._profile.samples };
       if (this._d.fields) {
         if (isFreeTarget(this._field)) this._d.fields.arrive(this._field.id, { altKm: this._field.altKm });      // the free place needs its height
         else this._d.fields.arrive(this._field.id);

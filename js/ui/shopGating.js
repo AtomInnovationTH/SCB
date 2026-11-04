@@ -79,14 +79,24 @@ export function indiumStoreFull(res, cartridgeKg = Constants.DAUGHTER_SUPPLY.IND
 }
 
 /**
- * "This consumable has nowhere to go": engine tank full (gas resupply), cold-gas tank full (nitrogen buy), or the
- * indium store cannot take a cartridge. False for every other row.
+ * "This consumable has nowhere to go": engine tank full (gas resupply), cold-gas tank full (nitrogen buy), the indium store
+ * cannot take a cartridge, or a new part with nothing to replace (under 1 % of its life used: ShipWear, via
+ * `res.getWear()`; a `res` without it, like a bare test stub, counts as "as new"). False for every other row.
  */
 export function consumableFull(upgrade, res) {
   switch (upgrade && upgrade.effect) {
     case 'engineGasResupply': return engineTankFull(res);
     case 'coldGasResupply': return coldGasTankFull(res);
     case 'indiumCartridge': return indiumStoreFull(res, upgrade.value);
+    case 'replaceEngine': return partAsNew(res, 'engine');
+    case 'replaceBattery': return partAsNew(res, 'battery');
+    case 'replaceWings': return partAsNew(res, 'wings');
     default: return false;
   }
+}
+
+/** True when a part has used under 1 % of its life (a new one would replace nothing); with no wear to read (no ResourceSystem) it is "as new". */
+function partAsNew(res, part) {
+  const w = res && typeof res.getWear === 'function' ? res.getWear() : null;
+  return !w || w[part] < 0.01;
 }

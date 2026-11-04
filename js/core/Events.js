@@ -73,6 +73,11 @@ export const Events = {
    *  `{ open: false }` when it closes (pick, Stay, game over, new run). main.js turns `open: true` into the jump to
    *  floor 4 and shows ui/WhereNextList.js. Never emitted with the flag off, with `?ladder=0`, or by the old flat trip. */
   WHERE_NEXT:         'trip:whereNext',
+  /** A trip between fields has arrived at a field (FEATURE_FLAGS.FIELDS_BY_HEIGHT; route-1101 lane S2). Emitted by
+   *  GameFlowManager once the leg's days and the station node gap have been taken, before the mission it carried starts:
+   *  `{ fieldId, altKm, stationNodeGapDeg }`. IssConjunctionBoss listens: it arms here when she is at the station field
+   *  lined up with the station (DECISIONS §62 row 2). Not emitted for a satellite, the free place or a wait. */
+  FIELD_ARRIVED:      'trip:fieldArrived',
   /** Ion start-up (DECISIONS §37 row 7): the four tail engines of a burning trip light pair by pair. Emitted by
    *  TransferTrip: BEGIN the frame the burn starts (`{}`; CameraSystem swings behind her, AudioSystem starts the hum),
    *  HUM every lighting frame (`{ lit: 0..1 }`: hum gain and pitch follow it), LIT once when all four burn

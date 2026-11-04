@@ -53,6 +53,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { engineGasKg } from './ResourceSystem.js';
+import { shipWear } from './ShipWear.js';
 import { realThrustN, playSeconds, tripDragAreaM2 } from './TripProfile.js';
 // The trip profile and its cache live in RouteCost (route-1101 R1): one cost model prices every leg, and `planTo` is its transfer leg.
 import { transferLeg } from './RouteCost.js';
@@ -272,10 +273,13 @@ export class FieldRegistry {
     const ispS = fuel.isp / (c > 0 ? c : 1);
     // Her drag area is the one at her radiator angle (capped at 146 deg), nose-first, wings sun-tracking.
     const areaM2 = tripDragAreaM2(Number.isFinite(opts.thetaRad) ? opts.thetaRad : p._flowerThetaRad);
-    const profile = transferLeg({
+    const flown = transferLeg({
       fromKm, toKm: field.altKm, massKg: Number.isFinite(opts.lessKg) && opts.lessKg > 0 ? Math.max(1, p.mass - opts.lessKg) : p.mass, thrustN: realThrustN(fuel), ispS, areaM2,
       cos: opts.cos === undefined ? 1 : opts.cos,
     }).profile;
+    // A worn-out engine (ShipWear: 100 % of its rated push given) flies no trip: `ok: false` is what every reader already
+    // words as "the thruster cannot take her there" (WhereNextRows, RangeMap, FateRows). `flown` may be RouteCost's cached object: copy it.
+    const profile = shipWear.isEngineWornOut() ? { ...flown, ok: false, wornOut: true } : flown;
     const gasAboardKg = engineGasKg(p.resources);
     const enough = profile.ok && profile.gasKg <= gasAboardKg + 1e-9;
     return { field, fromKm, profile, ispS, areaM2, gasAboardKg, enough, playS: playSeconds(profile.days) };

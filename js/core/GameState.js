@@ -50,6 +50,28 @@ class GameState {
 
     /** @type {number} days of ship time the trips between fields have added (FIELDS_BY_HEIGHT; saved) */
     this.shipDays = 0;
+
+    /** @type {number|null} the station's node minus hers, deg in (-180, 180] (js/systems/NodeDrift.js; moves with ship days; saved).
+     *  Null until a game sets it (GameFlowManager._applyStartLocation, a load). */
+    this.stationNodeGapDeg = null;
+
+    // Ship wear (js/systems/ShipWear.js, DECISIONS §57 row 3). The parts age by `shipDays`: `wearShipDays` is the ship day the
+    // wear has been applied up to (ShipWear.poll applies the difference once a frame). Saved: wearShipDays, wearEngineNs,
+    // wearBatteryCycles, wearWingAge. NOT saved (re-anchored at a load, a reset or the first frame): wearAltKm, wearGasKg, wearGasId.
+    /** @type {number} the ship day the wear is applied up to (saved) */
+    this.wearShipDays = 0;
+    /** @type {number} newton-seconds of push the engine has given (saved) */
+    this.wearEngineNs = 0;
+    /** @type {number} half-depth battery cycles the ship days have used (saved) */
+    this.wearBatteryCycles = 0;
+    /** @type {number} the wings' age factor, 1 = new (saved; the impact-damaged health is `solarPanelHealth`, not saved) */
+    this.wearWingAge = 1;
+    /** @type {number|null} her height (km) at the last ship-day step: the start of the next trip's mean height (not saved) */
+    this.wearAltKm = null;
+    /** @type {number|null} kg of engine gas at the last poll (not saved; a refill is a rise, never wear) */
+    this.wearGasKg = null;
+    /** @type {string|null} the gas in the tank at that poll (not saved; a gas switch re-anchors) */
+    this.wearGasId = null;
   }
 
   /** Whether `setState(newState)` would be accepted from the current state (a read: nothing changes). The drawer's MAIN
@@ -154,9 +176,17 @@ class GameState {
     this.debrisCleared = 0;
     this.missionTime = 0;
     this.shipDays = 0;
+    this.wearShipDays = 0;
+    this.wearEngineNs = 0;
+    this.wearBatteryCycles = 0;
+    this.wearWingAge = 1;
+    this.wearAltKm = null;
+    this.wearGasKg = null;
+    this.wearGasId = null;
     this._winEmitted = false;
     this._penultimateHailed = false; // last-debris ceremony guards
     this._finalHailed = false;
+    this.stationNodeGapDeg = null;   // route-1101 lane S2: set again by the next game's start or load
   }
 }
 

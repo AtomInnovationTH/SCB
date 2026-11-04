@@ -17,6 +17,7 @@ import { Events } from '../../core/Events.js';
 import { GameStates } from '../../core/GameState.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
 import { powerDistribution } from '../../systems/PowerDistribution.js';
+import { shipWear } from '../../systems/ShipWear.js';
 import { captureNetSystem, netMaxReachM } from '../../entities/CaptureNet.js';
 import timerManager from '../../systems/TimerManager.js';
 import { shortTypeName } from './TargetPanel.js';
@@ -357,6 +358,7 @@ export class StatusPanel {
           <span class="md-reach-group" id="mother-digest-mnet-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-mnet-reach" title="Large net reach">${StatusPanel.reachText(netMaxReachM(Constants.CAPTURE_NET.LARGE))}</span></span>
         </span>
       </div>
+      <div id="ship-wear-alert" role="status" style="display:none;font-size:11px;margin-top:3px;white-space:nowrap;color:var(--hud-warning, #ff4444);"></div>
       <div class="mother-detail">
         <div id="mother-power-flow" class="mother-flow" style="font-size:10px;margin-top:6px;opacity:0.85;white-space:nowrap;font-variant-numeric:tabular-nums;" title="Power in and out"></div>
         <div class="mother-block mother-block-propulsion" data-hud-group="fuel-group" data-activate-key="A">
@@ -387,6 +389,7 @@ export class StatusPanel {
         <div id="fuel-type-indicator" style="font-size:10px;color:var(--hud-info, #4fc3f7);margin-top:2px;margin-bottom:2px">
           —
         </div>
+        <div id="ship-wear-line" title="Ship days, and how much of each part's life is used (engine: push given; battery: cycles; wings: health)" style="font-size:10px;color:var(--hud-dim, #888);margin-top:1px;margin-bottom:2px;white-space:nowrap;font-variant-numeric:tabular-nums;"></div>
         <div id="throttle-gauge" style="display:none;align-items:center;gap:4px;font-size:10px;margin-bottom:4px;">
           <span style="color:var(--hud-normal, #00ff88);opacity:0.7;">Throttle</span>
           <div style="flex:1;height:8px;background:rgb(var(--hud-ink-rgb, 0 0 0) / 0.5);border:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.3);border-radius:2px;overflow:hidden;position:relative;">
@@ -1162,6 +1165,27 @@ export class StatusPanel {
     if (el.textContent !== text) el.textContent = text;
   }
 
+  /**
+   * @private The wear line under the fuel line: "Day N · engine x% · battery y% · wings z%" (ShipWear.summaryLine; shares worn),
+   * or the engine's reason when it is spent. Write-on-change; red when the engine is worn out.
+   */
+  _paintWearLine() {
+    const alert = document.getElementById('ship-wear-alert');
+    if (alert) {
+      // The always-visible part of the pane (the line below hides in the hover-opened detail; an iPad has no hover).
+      const warn = shipWear.wornOutWarning();
+      if (alert.textContent !== warn) alert.textContent = warn;
+      const show = warn ? 'block' : 'none';
+      if (alert.style && alert.style.display !== show) alert.style.display = show;
+    }
+    const el = document.getElementById('ship-wear-line');
+    if (!el) return;
+    const text = shipWear.summaryLine();
+    if (el.textContent !== text) el.textContent = text;
+    const out = shipWear.isEngineWornOut();
+    if (el.style) el.style.color = out ? 'var(--hud-warning, #ff4444)' : 'var(--hud-dim, #888)';
+  }
+
   _paintPowerFlow() {
     const el = document.getElementById('mother-power-flow');
     if (!el) return;
@@ -1671,6 +1695,7 @@ export class StatusPanel {
   }
 
   _renderMassBudget() {
+    this._paintWearLine();
     const el = document.getElementById('hud-mass-budget');
     if (!el || !this._armManager) return;
 

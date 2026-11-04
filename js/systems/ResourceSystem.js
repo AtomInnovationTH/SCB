@@ -12,6 +12,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { ThermalSystem } from './ThermalSystem.js';
+import { shipWear, REPLACE_EFFECT_PART } from './ShipWear.js';
 import { clamp01 } from '../core/MathUtil.js';
 
 /**
@@ -508,6 +509,11 @@ export class ResourceSystem {
     };
   }
 
+  /** Share of each part's life used, 0-1 (ShipWear): the Refit pane reads it for the replacement rows. @returns {{engine:number, battery:number, wings:number}} */
+  getWear() {
+    return { engine: shipWear.engineWear(), battery: shipWear.batteryWear(), wings: shipWear.wingsWear(this) };
+  }
+
   /**
    * The battery meter's numbers. Watts are on the HUD's `SUN n W` scale (battery units per real second ×
    * SHIP_HEAT.W_PER_UNIT_S), smoothed over ~POWER_TAU_S (0.5 s). `inW` = charging actually stored (solar + RTG + beaming;
@@ -698,6 +704,9 @@ export class ResourceSystem {
       indiumStoreKg: this.indiumStoreKg,   // saved like coldGas (an old save has none and loads as 0)
       dragSails: this.dragSails,           // the sail stock (an old save has none and loads as 0)
       batteryMax: this.batteryMax,
+      // The base this `batteryMax` was written against. A worn battery (ShipWear, the deep-cycle fade) can sit below the new
+      // base, which `restore` would otherwise read as a legacy 100 Wh save and rebase upward. Only a save WITHOUT this key is rebased.
+      batteryBase: Constants.BATTERY_MAX,
       currentFuelId: this._currentFuelId,
       tankGasId: this.tankGasId,   // the gas in the tank survives reloads
       lithium: this.lithium,
@@ -722,7 +731,7 @@ export class ResourceSystem {
       // rebasing onto the new base; saves >= the new base pass through. Upgrade effects do not re-apply on load
       // (RESOURCE_RESTORED_EFFECTS), so this saved absolute is the only source.
       const BASE_OLD = 100, BASE_NEW = Constants.BATTERY_MAX;
-      this.batteryMax = (data.batteryMax < BASE_NEW)
+      this.batteryMax = (data.batteryMax < BASE_NEW && !Number.isFinite(data.batteryBase))
         ? BASE_NEW + (data.batteryMax - BASE_OLD)
         : data.batteryMax;
     }
@@ -815,16 +824,12 @@ export class ResourceSystem {
     }
     this._smoothLedger(dt);
 
-    // Gradual panel degradation from radiation/micrometeorite damage. This is the WING (ROSA) health: the large, thin,
-    // exposed blanket wears down first. `bodyPanelHealth` (compact, recessed body-mount cells, backup power) is
-    // deliberately NOT degraded here or anywhere else. Base rate ~5 % loss per 10 min of gameplay (600 game-s at TIME_SCALE_GAMEPLAY=10).
-    const baseDegradRate = 0.00008;
-    const degradMultiplier = this.panelDegradationMultiplier || 1.0;
-    const actualDegradRate = baseDegradRate * degradMultiplier;
-    if (this.solarPanelHealth > 0.3) {
-      this.solarPanelHealth = Math.max(0.3, this.solarPanelHealth - actualDegradRate * dt);
-      this._syncToPlayer();
-    }
+    // Gradual wear of the parts is by SHIP DAYS, not play seconds (DECISIONS §57 row 3, js/systems/ShipWear.js): one poll a frame
+    // ages the battery and this WING (ROSA) health by the days a trip has added, and the engine by the push it has given.
+    // `bodyPanelHealth` (compact, recessed body-mount cells, backup power) is deliberately NOT degraded here or anywhere else.
+    // (The old play-second wing wear, ~5 % per 10 min of play, is gone: 600 s with no trip ages nothing.)
+    const player = this._player;
+    shipWear.poll(this, player && typeof player.getAltitudeKm === 'function' ? player.getAltitudeKm() : null);
 
     if (
       this.xenon <= 0 &&
@@ -1002,6 +1007,12 @@ export class ResourceSystem {
       case 'panelDegradation':
         // multiplier used in update() for the degradation rate (0.5 = half speed)
         this.panelDegradationMultiplier = data.value;
+        break;
+      case 'replaceEngine':
+      case 'replaceBattery':
+      case 'replaceWings':
+        // A new part from the resupply satellite (ShopScreen replace_*): that part's wear starts again (ShipWear.replace).
+        if (!shipWear.replace(REPLACE_EFFECT_PART[data.effect], this)) return false;
         break;
       default:
         return false; // not a resource upgrade

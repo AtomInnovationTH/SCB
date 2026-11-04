@@ -131,6 +131,9 @@ class PersistenceManager {
         // An old save loads as "fresh, at the start field".
         ...(data.fields != null ? { fields: data.fields } : {}),
         ...(Number.isFinite(data.shipDays) && data.shipDays > 0 ? { shipDays: data.shipDays } : {}),
+        // Ship wear (ShipWear.serialize, DECISIONS §57 row 3): `{d: ship day the wear is applied up to, e: engine N·s, b: battery
+        // cycles, w: wing age}`; written only once something is worn (a fresh save is byte-identical); an old save loads as "nothing worn".
+        ...(data.shipWear != null && typeof data.shipWear === 'object' ? { shipWear: data.shipWear } : {}),
         // DECISIONS §34 row 10: each daughter's ion fuel (%) and cold gas (kg), [{ id, fuel, coldGasKg }] (saveGame,
         // armManager.getSupplyState()). A game-over save passes none, so CONTINUE starts every tank full; written only when given.
         ...(Array.isArray(data.daughters) ? { daughters: data.daughters } : {}),
@@ -151,6 +154,9 @@ class PersistenceManager {
         // The cargo hold's stacks `{entries: [{metalId, name, massKg, color, ispAsThrust, marketValue}]}` (CargoSystem.serialize):
         // the orbit metal the tip furnaces make, and every other metal the hold carries. Written only when the hold holds something.
         ...(data.cargoHold && Array.isArray(data.cargoHold.entries) && data.cargoHold.entries.length ? { cargoHold: data.cargoHold } : {}),
+        // Route-1101 lane S2: the station's node minus hers (deg, js/systems/NodeDrift.js), written with the fields block (flag on). An
+        // old save without it gets it from her node at load (GameFlowManager).
+        ...(Number.isFinite(data.stationNodeGapDeg) ? { stationNodeGapDeg: data.stationNodeGapDeg } : {}),
       };
 
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));

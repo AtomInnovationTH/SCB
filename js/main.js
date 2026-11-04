@@ -172,6 +172,7 @@ import { TouchVerbButton } from './ui/TouchVerbButton.js';
 import { WhereNextList } from './ui/WhereNextList.js';
 import { HeightScale } from './ui/HeightScale.js';
 import { buildWhereNextRows } from './systems/WhereNextRows.js';
+import { plan as planRoutes } from './systems/RoutePlanner.js';
 import { FateList } from './ui/FateList.js';
 import { buildFateRows, fateContext } from './systems/FateRows.js';
 import { pendingAboard } from './systems/BigPieces.js';
@@ -1729,8 +1730,13 @@ async function init() {
   // mission 5 + the same depotStopPending hold.
   issConjunctionBoss = new IssConjunctionBoss({
     eventBus, scoringSystem, debrisField, shopScreen, persistenceManager, depotStopPending,
+    // DECISIONS §62 row 2: it arms only at the station field, lined up with the station (route-1101 lane S2)
+    stationLinedUp: () => gameFlowManager.stationLinedUp(),
+    // never two bosses at once: not while the Starlink boss (mission 9, built just below) is armed or running
+    otherBossBusy: () => !!starlinkCascadeBoss && (starlinkCascadeBoss.isArmed() || starlinkCascadeBoss.isActive()),
   });
   issConjunctionBoss.init();
+  gameFlowManager.setIssBoss(issConjunctionBoss);    // the "where next" list's wait row shows while the boss is still to come
 
   // CH9 Starlink fragmentation boss (race-the-cascade).
   starlinkCascadeBoss = new StarlinkCascadeBoss({
@@ -1984,6 +1990,8 @@ async function init() {
       // With no mother nets aboard (mission 1 used all four) the resupply satellite is the pre-focused row. The wallet
       // (the call row) and whether a mission start is owed (a mission going on keeps trips for later) come from the flow manager.
       getRows: () => buildWhereNextRows(fieldRegistry, gameFlowManager.whereNextRowsOpts()),
+      // The Routes section: the best three routes at her live mass and gas (RoutePlanner, cached on its inputs; asked when the rows rebuild)
+      getRoutes: (sortBy) => { const s = gameFlowManager.routePanelState(); return s ? planRoutes(s, { sortBy }) : null; },
       onPick: (id) => { if (rangeMap) rangeMap.notePick(id); return gameFlowManager.pickWhereNext(id); },   // the map keeps the rows she picked from
       glass: () => GestureHints.isGlass(),
       isInputBlocked: () => whereNextInputBlocked(),

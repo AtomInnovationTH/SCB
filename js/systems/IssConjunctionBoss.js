@@ -2,7 +2,9 @@
  * @module systems/IssConjunctionBoss — CH5 "protect-the-asset" boss.
  *
  * At the MISSION BOUNDARY into mission `Constants.ISS_BOSS.MISSION` (the 20th credited catch → `MISSION_START
- * { missionNumber: 5 }`; not `SHOP_DEPLOY`, which the chapter-4+ depot INVITATION made optional), ARM; on the first
+ * { missionNumber: 5 }`; not `SHOP_DEPLOY`, which the chapter-4+ depot INVITATION made optional) or later, once she is at the
+ * station field lined up with the station (DECISIONS §62 row 2: her node gap within `LINED_UP_DEG`, asked at a mission start and
+ * on `FIELD_ARRIVED`; `stationLinedUp` dep), ARM; on the first
  * gameplay frame with no depot stop pending (`_bossLifecycle.MissionOnset` — never under the depot overlay; at once
  * behind an invitation, after DEPLOY when a forced stop intervened), spawn FRAG_COUNT Cosmos-1408 threat fragments in
  * the ISS forward track and start a TCA_HOURS game-time countdown. The player's choice is emergent from play (no modal):
@@ -35,14 +37,21 @@ export class IssConjunctionBoss {
    * @param {object} [deps.persistenceManager] — peek() for restore
    * @param {Function} [deps.depotStopPending] — () => boolean (GameFlowManager.isDepotStopPending(), wired by main.js);
    *   the armed onset holds while it returns true. Default: never.
+   * @param {Function} [deps.stationLinedUp] — () => boolean (GameFlowManager.stationLinedUp(), wired by main.js): she is at the
+   *   station field with her node gap to the station within `ISS_BOSS.LINED_UP_DEG`. The boss arms only while it returns true.
+   *   Default (not given: headless rigs, the old tests): always lined up, i.e. it arms at the boss mission's start as before.
+   * @param {Function} [deps.otherBossBusy] — () => boolean (main.js: the Starlink boss is armed or running). The boss does not arm
+   *   while it returns true (it can arm after that boss resolves, if she is lined up then) and an armed onset holds. Default: never.
    */
-  constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null, depotStopPending = null } = {}) {
+  constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null, depotStopPending = null, stationLinedUp = null, otherBossBusy = null } = {}) {
     this._eventBus = eventBus;
     this._scoring = scoringSystem;
     this._debrisField = debrisField;
     this._shop = shopScreen;
     this._pm = persistenceManager;
     this._depotStopPending = typeof depotStopPending === 'function' ? depotStopPending : () => false;
+    this._stationLinedUp = typeof stationLinedUp === 'function' ? stationLinedUp : () => true;
+    this._otherBossBusy = typeof otherBossBusy === 'function' ? otherBossBusy : () => false;
 
     /** @type {boolean} boss already run+resolved this game. */
     this._completed = false;
@@ -69,6 +78,7 @@ export class IssConjunctionBoss {
     const on = (evt, h) => { if (evt) this._unsubs.push(this._eventBus.on(evt, h)); };
 
     on(Events.MISSION_START, (d) => this._onMissionStart(d));
+    on(Events.FIELD_ARRIVED, () => this._onFieldArrived());
     // A terminal state before the armed onset fires cancels it.
     on(Events.GAME_STATE_CHANGE, (d) => {
       if (d && (d.to === GameStates.GAME_OVER || d.to === GameStates.WIN)) this._onset.cancel();
@@ -84,7 +94,7 @@ export class IssConjunctionBoss {
   /** Per-frame tick (gameplay frames only): fires an armed onset, then advances the game-time TCA countdown. */
   update(dt) {
     if (this._disposed) return;
-    if (this._onset.armed && this._onset.poll(this._depotStopPending()) != null) this._fire();
+    if (this._onset.armed && this._onset.poll(this._depotStopPending() || this._otherBossBusy()) != null) this._fire();
     if (!this._active) return;
     this._tcaRemainingS -= dt * (TimeAuthority.BASE_SCALE || 1);
 
@@ -138,18 +148,34 @@ export class IssConjunctionBoss {
   }
 
 
-  /** @private ARM at the boundary into the boss mission (the `_active || _completed` guard: once per game). */
+  /** @private ARM from the boss mission on, once she is lined up with the station (the `_active || _completed` guard: once per game). */
   _onMissionStart(data) {
-    if (this._active || this._completed) return;
-    const cfg = Constants.ISS_BOSS;
-    if (!cfg) return;
-
     const mission = (data && typeof data.missionNumber === 'number')
       ? data.missionNumber
       : (this._scoring && typeof this._scoring.getMissionNumber === 'function'
         ? this._scoring.getMissionNumber() : 1);
-    if (mission !== cfg.MISSION) return;
+    this._tryArm(mission);
+  }
 
+  /** @private A trip arrived at a field (Events.FIELD_ARRIVED): arm there when she is lined up (the mission is the scorer's). */
+  _onFieldArrived() {
+    const mission = this._scoring && typeof this._scoring.getMissionNumber === 'function' ? this._scoring.getMissionNumber() : null;
+    if (Number.isFinite(mission)) this._tryArm(mission);
+  }
+
+  /**
+   * @private DECISIONS §62 row 2 (route-1101 lane S2): arm when the mission is the boss mission or later AND she is at the station field
+   * with the node gap within `ISS_BOSS.LINED_UP_DEG` (`stationLinedUp`, GameFlowManager.stationLinedUp, wired by main.js); never at
+   * mission 5 otherwise. Asked on arrival at a field and at a mission start there. The finish burn that closes the last <= 0.346 deg
+   * (at most 57 m/s, station-drift doc §2) is NOT billed in this step: it comes with the station at its own node (route-1101 wave 3).
+   * @param {number} mission
+   */
+  _tryArm(mission) {
+    if (this._active || this._completed) return;
+    const cfg = Constants.ISS_BOSS;
+    if (!cfg || !(mission >= cfg.MISSION)) return;
+    if (!this._stationLinedUp()) return;
+    if (this._otherBossBusy()) return;          // never two bosses at once: the Starlink boss (mission 9) arms with no such check
     this._onset.arm(mission);
   }
 

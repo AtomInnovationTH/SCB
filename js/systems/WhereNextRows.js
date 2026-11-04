@@ -38,6 +38,7 @@ import { pieceName } from './BigPieces.js';
 import { fatePay } from './BigPieceValues.js';
 import { pushTargetKm, lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
 import { jobLine } from './JobsBoard.js';
+import { stationFieldId, gapChangeOverLeg, waitDaysToLineUp, isLinedUp } from './NodeDrift.js';
 
 export const STAY_ID = 'stay';
 
@@ -70,6 +71,17 @@ export const SATELLITE_ROW_KIND = 'satellite';
 export const PUSH_KIND = 'push';
 export const PUSH_PREFIX = 'push:';
 
+/** Route-1101 lane S2: the wait row (she waits here for the station's orbit to line up, then flies to the station field). */
+export const WAIT_ID = 'wait';
+export const WAIT_KIND = 'wait';
+/** The station field's note when a wait from a high field lines the station up sooner (doc §3: 750-900 km gain 0.79-1.08 deg a day). */
+export const STATION_FASTER_NOTE = (() => {
+  const highs = Constants.FIELDS.LIST.filter((f) => f.kind === 'high').map((f) => f.altKm);
+  return highs.length ? `faster from ${Math.min(...highs)}-${Math.max(...highs)} km` : 'faster from higher up';
+})();
+/** The station field's note when the trip there arrives lined up with the station. */
+export const STATION_LINED_NOTE = 'station lined up on arrival';
+
 const DOT = '\u00b7';
 
 export function creditsText(n) {
@@ -98,7 +110,7 @@ export function pctText(gasKg, aboardKg) {
 
 /**
  * @typedef {object} WhereNextRow
- * @property {'field'|'stay'|'satellite'|'call'|'push'} kind
+ * @property {'field'|'stay'|'satellite'|'call'|'push'|'wait'} kind   'wait': route-1101 lane S2, wait here for the station to line up
  * @property {number} altKm       the field's height (Stay and the call: her own field's; the satellite's)
  * @property {'ok'|'cleared'|'short'|'cannot'|'stay'|'mission'|'poor'|'here'} state   'mission': a mission is going on, trips wait
  *   for its end; 'poor': the call, short of credits; 'here': a push row with no trip (she is at or below the piece's 25-year height)
@@ -119,6 +131,8 @@ export function pctText(gasKg, aboardKg) {
  * going on (a field cannot be picked: "finish this mission first"; Stay is always there), default true; `turnWaitS` {up, down}.
  * `job` the posted job to show (js/systems/JobsBoard.js; none = no board line): the result's `job` is its line, and the posting's
  * field row ends " \u00b7 Wanted".
+ * `station` (route-1101 lane S2) `{pending, gapDeg, incDeg}`: while `pending` (the ISS boss still to come), a wait row (kind `wait`, id
+ * WAIT_ID) and the station field's note (`stationWait`). None berthed, or with a mission going on.
  * @returns {{rows: WhereNextRow[], focusId: (string|null), selectable: string[], line: (string|null), job: ({text: string, fieldId: string, done: boolean, missed: boolean}|null)}}
  */
 export function buildWhereNextRows(reg, opts = {}) {
@@ -189,6 +203,14 @@ export function buildWhereNextRows(reg, opts = {}) {
     });
   }
   const hereN = reg.remainingCount(here.id);
+  // route-1101 lane S2: the wait row and the station field's note, while the ISS boss is still to come
+  const wait = owed && !berth ? stationWait(reg, opts && opts.station, here, herKm, turn) : null;
+  if (wait) {
+    if (wait.row) rows.push(wait.row);
+    // the note goes on the station field's row whatever its state (short of gas too: she should still read how the station stands)
+    const sf = rows.find((r) => r.kind === 'field' && r.id === wait.fieldId);
+    if (sf && wait.note) { sf.text += ` ${DOT} ${wait.note}`; if (sf.shortText) sf.shortText += ` ${DOT} ${wait.note}`; }
+  }
   // Stay: she goes on where she is. With a mission going on it is the only way on (a cleared field included: background pieces remain),
   // so it is always there then; flown to the satellite there is none.
   if (!atSat && (hereN > 0 || !owed)) {
@@ -271,6 +293,13 @@ export function whereNextView(model, focusId = null) {
   // drawn: it takes the last of the five when the five are full
   const callRow = reach.find((r) => r.kind === CALL_KIND);
   if (callRow && !top.includes(callRow)) { if (top.length >= TOP_N) top[TOP_N - 1] = callRow; else top.push(callRow); }
+  // the wait row (route-1101 lane S2) has no chip on the height scale either: always drawn, as the call (it takes the place before
+  // the call's when both must be forced in)
+  const waitRow = reach.find((r) => r.kind === WAIT_KIND);
+  if (waitRow && !top.includes(waitRow)) {
+    if (top.length < TOP_N) top.push(waitRow);
+    else top[callRow && top[TOP_N - 1] === callRow ? TOP_N - 2 : TOP_N - 1] = waitRow;
+  }
   const drawn = top.slice();
   // an open job's field is always on the list (the Wanted line tells her to go there): one extra row after the five when it is not among them
   const job = model && model.job;
@@ -308,6 +337,54 @@ function outOfReachLines(all) {
   const one = [gas && `${gas} out of reach: need more gas`, engine && `${engine} too far for the engine`].filter(Boolean).join('; ');
   const two = [wait && `${wait}: finish this mission first`, poor && 'calling the satellite needs more credits'].filter(Boolean).join('; ');
   return [one, two].filter(Boolean);
+}
+
+/**
+ * @private Route-1101 lane S2 (DECISIONS §62 row 2; docs/research/2026-11-station-drift.md §5): while the ISS boss is still to come
+ * (`station.pending`: GameFlowManager says so from mission 5 on until the boss arms), the wait that lines her up with the station.
+ * The trip from here to the station field (`NodeDrift.stationFieldId`) moves the node gap too (its height samples); N is the wait here
+ * after which that trip arrives with the gap at 0. A wait row is offered when 0 < N <= `TRIP.PROFILE_MAX_DAYS` (the longest a trip
+ * may take; at the low fields the station's own rate is near hers and N runs to years). The station field's row gets a note (plan S2
+ * task 5): STATION_LINED_NOTE when the direct trip lines her up, "station not lined up: wait N days here" with a wait row, else the days
+ * here and, below the high fields (the lowest, 750 km), STATION_FASTER_NOTE.
+ * @param {object} reg @param {{pending?: boolean, gapDeg?: number, incDeg?: number}|undefined} st @param {object} here her field
+ * @param {number} herKm her height now
+ * @param {{up: number, down: number}|null} [turn] the caller's seconds her push waits for her nose (`opts.turnWaitS`; null = not known).
+ *   The real trip flies that turn as flown days (TransferTrip `_flownDays`: "a pause or a wait for the turn included"), and the node
+ *   keeps turning meanwhile, so the trip's gap change is worked out over `tripDays(profile, turn)`, the days the field rows show too.
+ * @returns {{fieldId: string, row: (WhereNextRow|null), note: (string|null), days: number}|null} null when the boss is not pending
+ */
+function stationWait(reg, st, here, herKm, turn = null) {
+  if (!st || st.pending !== true || !Number.isFinite(st.gapDeg) || !Number.isFinite(st.incDeg)) return null;
+  const fieldId = stationFieldId(reg);
+  const field = fieldId ? reg.fieldById(fieldId) : null;
+  if (!field) return null;
+  const plan = field.id === here.id ? null : reg.planTo(field);
+  if (field.id !== here.id && (!plan || !plan.profile || !plan.profile.ok)) return { fieldId, row: null, note: null, days: Infinity };
+  const prof = plan ? plan.profile : null;
+  const tripChangeDeg = prof ? gapChangeOverLeg({ days: tripDays(prof, turn), fromKm: prof.fromKm, altKm: field.altKm, samples: prof.samples }, st.incDeg) : 0;
+  const lined = isLinedUp(st.gapDeg + tripChangeDeg);
+  const days = waitDaysToLineUp({ gapDeg: st.gapDeg, waitKm: herKm, incDeg: st.incDeg, tripChangeDeg });
+  const maxDays = (Constants.TRIP && Constants.TRIP.PROFILE_MAX_DAYS) || 400;
+  const km = Math.round(field.altKm);
+  const gapText = `${Math.abs(st.gapDeg).toFixed(1)}\u00b0`;
+  const words = `Wait here until lined up with the station: ${daysText(days)} (gap ${gapText})`;
+  const row = !lined && days > 0 && days <= maxDays ? {
+    id: WAIT_ID, kind: WAIT_KIND, altKm: herKm, pieces: 0, state: 'ok', selectable: true, gasKg: 0, gasPct: 0, days, stationFieldId: fieldId,
+    text: field.id === here.id ? words : `${words}, then fly to the ${km} km field`,
+    shortText: words,
+  } : null;
+  const highs = reg.fields().filter((f) => f.kind === 'high').map((f) => f.altKm);
+  const highKm = highs.length ? Math.min(...highs) : 750;           // the lowest high field (750 km)
+  // the station field's row (plan S2 task 5): lined up on arrival; else the wait here; else (too long to offer) the days and, below the
+  // high fields, where it is faster
+  const daysHere = Number.isFinite(days) ? `${daysText(days)} here` : '';
+  let note;
+  if (lined) note = STATION_LINED_NOTE;
+  else if (row) note = `station not lined up: wait ${daysText(days)} here`;
+  else if (herKm < highKm) note = `station not lined up: ${daysHere ? `${daysHere}, ` : ''}${STATION_FASTER_NOTE}`;
+  else note = daysHere ? `station not lined up: ${daysHere}` : 'station not lined up';
+  return { fieldId, row, note, days };
 }
 
 /**

@@ -17,9 +17,10 @@ import { depotWords, shopTitle } from '../systems/resupplyWords.js';   // lane 3
 import { upgradePrereqsMet, upgradeCostNow, engineTankFull, consumableFull as noRoomFor } from './shopGating.js';
 import { gasPriceCr, coldGasPriceCr, coldGasPoolToKg, indiumCartridgePriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
 import { despinReachM, drawW } from '../systems/DespinLaser.js';   // the long-laser card reads reach and draw from the optics
+import { shipWear, partPriceCr, REPLACE_EFFECT_PART } from '../systems/ShipWear.js';
 
 /**
- * Upgrade definitions — 43 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 46 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins this header to them).
  * Each carries a `trl` (NASA TRL 1-9) and optional `trlRationale` for the badge. TRL is display-only — NEVER used in gating.
  * Exported for the Node test harness (test-TRL.js).
@@ -78,8 +79,15 @@ export const UPGRADES = [
     effect: 'mpdCathodeLife', value: 1200, maxLevel: 1,
     requiresAll: ['mpd_thruster'],
     trl: 5, trlRationale: 'Tungsten-rhenium cathodes tested in vacuum chambers; on-orbit erosion unverified' },
+  // Replacement parts (DECISIONS §57 row 3, js/systems/ShipWear.js): her parts wear by ship days (the engine by the push it has
+  // given), and a new one is flown up from the ground: price = the part's mass x the launch price per kg (partPriceCr). A part
+  // under 1 % worn is refused (_purchaseUpgrade). Not listed in the Propulsion count above: it is the consumable tail.
+  { id: 'replace_engine', cat: 'Propulsion', name: 'New Engine', cost: partPriceCr('engine'),
+    desc: `A new Hall engine kit (${Constants.SHIP_WEAR.PART_KG.engine} kg: head, power unit, flow control), flown up from the ground. The old one is rated for about 1 million newton-seconds of push, about 11 long climbs; a worn-out engine cannot fly any trip.`,
+    effect: 'replaceEngine', value: 1, maxLevel: Infinity, consumable: true,
+    trl: 5, trlRationale: 'The ISS swaps external parts with its robot arms and spacewalks (Canadarm2, Dextre); no small-satellite part swap has flown (OSAM-1 cancelled 2024)' },
 
-  // Power (8)
+  // Power (10: eight upgrades and the two wear parts, New Battery and New Wings)
   { id: 'efficient_panels', cat: 'Power', name: 'Efficient Panels', cost: 500,
     desc: '+30% solar efficiency', effect: 'solarEfficiency', value: 1.3, maxLevel: 1,
     trl: 9, trlRationale: 'Triple-junction GaAs standard on every modern satellite' },
@@ -116,6 +124,14 @@ export const UPGRADES = [
     effect: 'powerBeaming', value: 5.0, maxLevel: 1,
     requiresAll: ['multi_junction_solar'],
     trl: 5, trlRationale: 'JAXA (2015) demonstrated 1.8 kW over 55 m ground-to-ground; no orbital link yet' },
+  { id: 'replace_battery', cat: 'Power', name: 'New Battery', cost: partPriceCr('battery'),
+    desc: `A new battery pack (${Constants.SHIP_WEAR.PART_KG.battery} kg). Half of the charge leaves it every orbit, so the old one wears by the day and loses capacity.`,
+    effect: 'replaceBattery', value: 1, maxLevel: Infinity, consumable: true,
+    trl: 5, trlRationale: 'The ISS batteries were swapped in 2017-2021 by spacewalks with robot-arm help (nickel-hydrogen to lithium-ion); no small-satellite battery swap has flown (OSAM-1 cancelled 2024)' },
+  { id: 'replace_wings', cat: 'Power', name: 'New Wings', cost: partPriceCr('wings'),
+    desc: `New solar wings (${Constants.SHIP_WEAR.PART_KG.wings} kg). Radiation and atomic oxygen wear the old ones by the day, faster below 600 km, and less power comes in.`,
+    effect: 'replaceWings', value: 1, maxLevel: Infinity, consumable: true,
+    trl: 5, trlRationale: 'ISS arrays were added and replaced by spacewalk (iROSA); no small-satellite array swap has flown' },
 
   // Sensors (5)
   { id: 'enhanced_eo', cat: 'Sensors', name: 'Enhanced EO', cost: 500,
@@ -951,6 +967,7 @@ export class ShopScreen {
           ${consumableFull && upgrade.effect === 'engineGasResupply' ? `<div style="font-size:0.65rem;color:#ff6644;">Engine tank full</div>` : ''}
           ${consumableFull && upgrade.effect === 'coldGasResupply' ? `<div style="font-size:0.65rem;color:#ff6644;">Cold-gas tank full</div>` : ''}
           ${consumableFull && upgrade.effect === 'indiumCartridge' ? `<div style="font-size:0.65rem;color:#ff6644;">Indium store full</div>` : ''}
+          ${REPLACE_EFFECT_PART[upgrade.effect] ? `<div style="font-size:0.65rem;color:${consumableFull ? '#ff6644' : '#ffcc44'};">${Math.round(shipWear.wornFraction(REPLACE_EFFECT_PART[upgrade.effect], this._resourceSystem) * 100)}% worn${consumableFull ? ': nothing to replace' : ''}</div>` : ''}
           ${consumableFull && daughterNetType ? `<div style="font-size:0.65rem;color:#ff6644;">No docked daughter has room</div>` : ''}
           ${upgrade.requiresAll && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${upgrade.requiresAll.map(id => UPGRADES.find(u => u.id === id)?.name || id).join(' + ')}</div>` : ''}
           ${!canAfford && !maxed ? `<div style="font-size:0.6rem;color:rgba(255,68,68,0.5);margin-top:2px;">Need ${(price - scoringSystem.credits).toLocaleString()} more cr</div>` : ''}
@@ -1127,6 +1144,12 @@ export class ShopScreen {
             _reactive: true,   // feedback to the click the player just made
           });
         }
+        return;
+      }
+      // Nor for a new part that has nothing to replace (under 1 % worn: ShipWear).
+      const wearPart = REPLACE_EFFECT_PART[upgrade.effect];
+      if (wearPart && shipWear.wornFraction(wearPart, this._resourceSystem) < 0.01) {
+        audioSystem.playDeny();
         return;
       }
       if (!scoringSystem.spendCredits(upgradeCostNow(upgrade, this._resourceSystem))) {

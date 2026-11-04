@@ -13,6 +13,8 @@
  *     overlays) and resolve on their trigger event (+ optional payload filter) → `MISSION_BEAT_SATISFIED`;
  *   • an unsatisfied interactive beat re-prompts via `TEACHING_MOMENT_FORCE`.
  * Completion is persisted so a mission is coached only once. Node-safe (no THREE / DOM).
+ * Chapter 5 (the ISS boss's) is the one exception to the boundary arming: it is armed when the boss starts
+ * (`Events.ISS_BOSS_STARTED`, `issBossChapter`), because the boss waits until she is lined up with the station.
  */
 
 import { Events } from '../core/Events.js';
@@ -29,6 +31,16 @@ const TRAINING_CHAPTERS = [2, 3];
 const ENDS_ON_MOVER_CATCH = ['ch3_pick', 'ch3_close', 'ch3_despin'];
 /** A daughter's tool catch (magnet, gripper, pad) reaches the goal with no net event, so it ends `ch3_net` too (plan fix F4). */
 const ENDS_ON_TOOL_CATCH = [...ENDS_ON_MOVER_CATCH, 'ch3_net'];
+
+/**
+ * The ISS boss's chapter (`Constants.ISS_BOSS.MISSION`, 5): armed when the boss starts (`Events.ISS_BOSS_STARTED`), never at its mission's
+ * start (DECISIONS §62 row 2: the boss waits until she is lined up with the station). Null without the boss config.
+ * @returns {number|null}
+ */
+function issBossChapter() {
+  const m = Constants.ISS_BOSS && Constants.ISS_BOSS.MISSION;
+  return Number.isInteger(m) ? m : null;
+}
 
 /** The one line when no mover is left in the field while a mover beat is open (plan D9). */
 export const NO_MOVERS_LINE = 'No moving pieces left here.';
@@ -79,6 +91,9 @@ export class MissionCoach {
     const on = (evt, h) => { if (evt) this._unsubs.push(this._eventBus.on(evt, h)); };
 
     on(Events.MISSION_START, (d) => this._onMissionStart(d));
+    // Chapter 5's beats (the ISS boss) come when the boss starts, not at mission 5's start: the boss waits until she is lined up with
+    // the station (DECISIONS §62 row 2, route-1101 lane S2). The boss itself starts only with no depot stop pending.
+    on(Events.ISS_BOSS_STARTED, () => this._onIssBossStarted());
     // A terminal state before the armed chapter fires cancels it (a GAME_OVER
     // continue restarts the counter at 0; a new game resets everything).
     on(Events.GAME_STATE_CHANGE, (d) => {
@@ -168,11 +183,19 @@ export class MissionCoach {
       : (this._scoring && typeof this._scoring.getMissionNumber === 'function'
         ? this._scoring.getMissionNumber() : 1);
     if (!this._hasChapter(mission)) return;
+    if (mission === issBossChapter()) return;       // armed by the boss's start instead (`_onIssBossStarted`)
     // A training chapter never holds the next mission's lesson (training 3 plan D7): the boundary catch that opens
     // chapter N+1 ends a still-running chapter N (N = 2 or 3) quietly, so "never overlap" still holds.
     if (this.isRunning() && this._activeMission != null && TRAINING_CHAPTERS.includes(this._activeMission)
       && mission === this._activeMission + 1) this._endChapterQuietly();
     this._onset.arm(mission);
+  }
+
+  /** @private The ISS boss started (Events.ISS_BOSS_STARTED): ARM its chapter (the onset rule then holds it behind a running one). */
+  _onIssBossStarted() {
+    const ch = issBossChapter();
+    if (ch == null || !this._hasChapter(ch)) return;
+    this._onset.arm(ch);
   }
 
   /**

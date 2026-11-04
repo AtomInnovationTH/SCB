@@ -59,6 +59,16 @@ export const FOCUS_COLOR = VisualLaw.COLORS.SELECTION;
 
 const MARK = '\u25b8';
 const PUSH_PREFIX = 'push:';        // WhereNextRows' `PUSH_PREFIX` (not imported: the list stays free of the rows module)
+/**
+ * The Routes section's sorts, in the chip's order (RouteCost.SORTS; a test pins that they agree). The planner behind `getRoutes` takes the
+ * chosen one; this file never imports it.
+ */
+export const ROUTE_SORTS = ['credits', 'crPerKg', 'days'];
+export const ROUTE_SORT_LABELS = { credits: 'most credits', crPerKg: 'credits per kg gas', days: 'fewest days' };
+export const ROUTES_TITLE = 'Routes';
+export const ROUTES_EMPTY = 'No priced route from here yet';
+export const ROUTES_APPROX = 'approximate';
+export const ROUTES_IN_MISSION = 'Routes can be picked when the mission is over';
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 export class WhereNextList {
@@ -72,6 +82,9 @@ export class WhereNextList {
    *                                        map open, a ceremony): taps do nothing then, as the FLY THERE chip and Space do
    * @param {function} [deps.onFocus]       (id) => void: the focus moved to row `id` (null = none); the map's height scale
    *                                        (ui/HeightScale.js) keeps its highlighted chip in step with it
+   * @param {function} [deps.getRoutes]     (sortBy) => {routes: [{text, numbers, line, firstRowId}], approximate, sortBy, owed}|null: the
+   *                                        Routes section (js/systems/RoutePlanner.js `plan`, over GameFlowManager.routePanelState()); it is
+   *                                        asked when the rows are rebuilt and when the sort changes. Absent or null = no section.
    * @param {object|null} [deps.bus]        event bus (default the game's; null = listen to nothing). A "push" fate pick
    *                                        (the big-piece fate event) while the list is open focuses that piece's push row
    */
@@ -84,6 +97,9 @@ export class WhereNextList {
     this._now = typeof deps.now === 'function' ? deps.now : _nowMs;
     this._blockedFn = typeof deps.isInputBlocked === 'function' ? deps.isInputBlocked : null;
     this._onFocus = typeof deps.onFocus === 'function' ? deps.onFocus : null;
+    this._getRoutes = typeof deps.getRoutes === 'function' ? deps.getRoutes : null;
+    this._sortBy = ROUTE_SORTS[0];
+    this._routes = null;            // the Routes section as last built: {routes, approximate, sortBy, owed} (null = no section)
     this._pending = false;
     this._floorShown = false;       // floor 4 is the floor she is on
     this._model = { rows: [], focusId: null, selectable: [], line: null };
@@ -95,6 +111,12 @@ export class WhereNextList {
     this._disposed = false;
     const bus = deps.bus !== undefined ? deps.bus : eventBus;
     this._offFate = bus && typeof bus.on === 'function' ? bus.on(Events.BIG_PIECE_FATE, (e) => this._onFate(e)) : null;
+    // The Routes section is computed when the list opens, when the sort changes, and when something that changes a route happens: a catch, a hand-over or
+    // disposal, a fate marked, a piece found. Never on the 1 s refresh (pieces drift every second; the search costs 6-100 ms warm, 0.4-1.1 s the first time).
+    this._routesDirty = true;
+    this._routeAsks = 0;
+    const routeEvents = [Events.DEBRIS_CAPTURED, Events.ARM_CAPTURED, Events.BIG_PIECE_FATE, Events.BIG_PIECE_DISPOSED, Events.SCAN_DISCOVERY, Events.TARGET_DISCOVERED];
+    this._offRoutes = bus && typeof bus.on === 'function' ? routeEvents.map((ev) => bus.on(ev, () => { this._routesDirty = true; })) : [];
   }
 
   /**
@@ -104,6 +126,7 @@ export class WhereNextList {
    */
   _onFate(e) {
     if (!e || e.fate !== 'push' || !this.isOpen()) return;
+    this._routesDirty = true;
     this._rebuild(false);
     this.focus(`${PUSH_PREFIX}${e.debrisId}`);
   }
@@ -113,6 +136,7 @@ export class WhereNextList {
     if (this._disposed) return;
     const was = this.isOpen();
     this._pending = !!on;
+    this._routesDirty = true;        // a pick is (again) pending: she has arrived somewhere or a refused pick put the list back
     this._sync(was);
   }
 
@@ -124,6 +148,7 @@ export class WhereNextList {
     if (this._disposed) return;
     const was = this.isOpen();
     this._floorShown = !!on;
+    this._routesDirty = true;
     this._sync(was);
   }
 
@@ -156,11 +181,12 @@ export class WhereNextList {
   focusedId() { return this._focusId; }
   focusedRow() { return this._model.rows.find((r) => r.id === this._focusId) || null; }
   /** What the FLY THERE chip should say while a pick can be made: 'STAY' on the Stay row, 'CALL' on the call row, 'PUSH' on a
-   *  push-down row, 'FLY THERE' on a field row, else null. */
+   *  push-down row, 'WAIT' on the wait row (route-1101 lane S2: wait for the station to line up), 'FLY THERE' on a field row, else null. */
   chipLabel() {
     if (!this.isOpen()) return null;
     const r = this.focusedRow();
     if (!r || !r.selectable) return null;
+    if (r.kind === 'wait') return 'WAIT';
     return r.kind === 'stay' ? 'STAY' : (r.kind === 'call' ? 'CALL' : (r.kind === 'push' ? 'PUSH' : 'FLY THERE'));
   }
 
@@ -171,6 +197,7 @@ export class WhereNextList {
     if (!model || !Array.isArray(model.rows)) model = { rows: [], focusId: null, selectable: [], line: null };
     this._model = model;
     this._lastBuildMs = this._now();
+    if (this._routesDirty) this._routes = this._askRoutes();         // not on the 1 s refresh: only when the list opened, the sort changed or a route-changing event came
     const keep = !preFocus && this._focusId != null && model.selectable.includes(this._focusId);
     const was = this._focusId;
     this._focusId = keep ? this._focusId : (model.focusId != null ? model.focusId : null);
@@ -238,6 +265,65 @@ export class WhereNextList {
 
   setOnFocus(fn) { this._onFocus = typeof fn === 'function' ? fn : null; }
 
+  /** @private The Routes section for the current sort (a throwing planner leaves the section out; it never breaks the rows). Counts the asks. */
+  _askRoutes() {
+    this._routesDirty = false;
+    if (!this._getRoutes) return null;
+    this._routeAsks++;
+    let r = null;
+    try { r = this._getRoutes(this._sortBy); } catch (_e) { r = null; }
+    return r && Array.isArray(r.routes) ? r : null;
+  }
+
+  /** How many times the Routes section was computed (asked of `getRoutes`); the 1 s refresh never adds to it. */
+  routeAsks() { return this._routeAsks; }
+
+  /** The sort the Routes section is on now (`ROUTE_SORTS`). */
+  sortBy() { return this._sortBy; }
+
+  /** The sort chip: the next sort, the section asked again. @returns {string} the sort now */
+  cycleSort() {
+    const i = ROUTE_SORTS.indexOf(this._sortBy);
+    this._sortBy = ROUTE_SORTS[(i + 1) % ROUTE_SORTS.length];
+    if (this.isOpen()) {
+      this._routes = this._askRoutes();
+      this._paint();
+    }
+    return this._sortBy;
+  }
+
+  /**
+   * The Routes section as drawn: [{ i, text, numbers, firstRowId, pickable }] and the chip's words. A route can be picked when the choice
+   * is open for a pick (not mid-mission) and the row it begins with can be picked now.
+   * @returns {{sortBy: string, sortText: string, approximate: boolean, owed: boolean, routes: Array<object>}|null} null = no section
+   */
+  routesView() {
+    const r = this._routes;
+    if (!r) return null;
+    const owed = r.owed !== false;
+    return {
+      sortBy: this._sortBy, sortText: ROUTE_SORT_LABELS[this._sortBy] || this._sortBy, approximate: !!r.approximate, owed,
+      routes: r.routes.slice(0, 3).map((x, i) => ({
+        i, text: x.text, numbers: x.numbers, firstRowId: x.firstRowId ?? null,
+        pickable: owed && x.firstRowId != null && this._model.selectable.includes(x.firstRowId),
+      })),
+    };
+  }
+
+  /**
+   * A tap / click on route `i`: the pick of the where-next row it begins with (GameFlowManager.pickWhereNext), the same pick a tap on
+   * that row's second tap makes. Nothing happens mid-mission (the list is open only because she is out of gas: field rows cannot be
+   * picked then), when that row cannot be picked, or while the game would swallow the key.
+   * @returns {boolean} the pick went through
+   */
+  tapRoute(i) {
+    if (!this.isOpen() || this._blocked()) return false;
+    const v = this.routesView();
+    const r = v && v.routes[i];
+    if (!r || !r.pickable) return false;
+    return this._pick(r.firstRowId);
+  }
+
   _focused() {
     if (!this._onFocus) return;
     try { this._onFocus(this._focusId); } catch (_e) { /* a listener never breaks the list */ }
@@ -295,7 +381,7 @@ export class WhereNextList {
     const rowPx = glass ? ROW_PX_GLASS : ROW_PX_DESKTOP;
     const view = this._view();
     const job = this._model.job && this._model.job.text ? this._model.job : null;
-    const key = JSON.stringify([glass, this._focusId, view.bestId, view.outLines, this._model.line, job, view.rows.map((r) => [r.id, r.shortText || r.text, r.selectable])]);
+    const key = JSON.stringify([glass, this._focusId, view.bestId, view.outLines, this._model.line, job, view.rows.map((r) => [r.id, r.shortText || r.text, r.selectable]), this._routesKey()]);
     if (key === this._paintKey) return;
     this._paintKey = key;
     for (const el of this._rowEls) this._root.removeChild(el);
@@ -360,10 +446,90 @@ export class WhereNextList {
       Object.assign(note.style, { marginTop: '4px', color: VisualLaw.COLORS.CAUTION });
       add(note);
     }
+    this._paintRoutes(add, doc, glass, rowPx);
     const hint = doc.createElement('div');
     hint.textContent = glass ? HINT_GLASS : HINT_DESKTOP;
     Object.assign(hint.style, { marginTop: '6px', opacity: '0.7', fontSize: '0.7rem' });
     add(hint);
+  }
+
+  /** @private what the Routes section draws, for the paint key. */
+  _routesKey() {
+    const v = this.routesView();
+    return v ? [v.sortBy, v.approximate, v.owed, v.routes.map((r) => [r.text, r.numbers, r.pickable])] : null;
+  }
+
+  /**
+   * @private The Routes section, under the rows: a header (the title, the sort chip, "approximate" when the search was cut short) and
+   * up to three routes, each two lines: the stops (wrapping if long), then credits, gas left and days. A route is a plain div like
+   * the rows (no button, no tabindex); a tap picks the row it begins with. Mid-mission the routes show and cannot be picked.
+   */
+  _paintRoutes(add, doc, glass, rowPx) {
+    const v = this.routesView();
+    if (!v) return;
+    const head = doc.createElement('div');
+    head.setAttribute('data-routes', 'head');
+    Object.assign(head.style, { display: 'flex', alignItems: 'center', marginTop: '8px', color: VisualLaw.COLORS.INFO });
+    const title = doc.createElement('span');
+    title.textContent = ROUTES_TITLE;
+    Object.assign(title.style, { opacity: '0.85', flex: '1 1 auto' });
+    head.appendChild(title);
+    if (v.approximate) {
+      const approx = doc.createElement('span');
+      approx.textContent = ROUTES_APPROX;
+      approx.setAttribute('data-routes', 'approximate');
+      Object.assign(approx.style, { fontSize: '0.7rem', opacity: '0.7', marginRight: '8px' });
+      head.appendChild(approx);
+    }
+    const chip = doc.createElement('div');
+    chip.textContent = `${v.sortText} \u25be`;
+    chip.setAttribute('data-routes', 'sort');
+    chip.setAttribute('role', 'option');
+    Object.assign(chip.style, {
+      flex: '0 0 auto', boxSizing: 'border-box', minHeight: `${rowPx}px`, display: 'flex', alignItems: 'center', padding: '2px 8px', cursor: 'pointer',
+      border: `1px solid ${VisualLaw.COLORS.SELECTION}`, borderRadius: '3px', fontSize: '0.75rem', color: VisualLaw.COLORS.SELECTION,
+    });
+    chip.addEventListener('click', (e) => { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); this.cycleSort(); });
+    head.appendChild(chip);
+    add(head);
+    if (!v.routes.length) {
+      const none = doc.createElement('div');
+      none.textContent = ROUTES_EMPTY;
+      none.setAttribute('data-routes', 'none');
+      Object.assign(none.style, { marginTop: '2px', opacity: '0.7', fontSize: '0.75rem' });
+      add(none);
+      return;
+    }
+    for (const r of v.routes) {
+      const row = doc.createElement('div');
+      row.setAttribute('role', 'option');
+      row.setAttribute('data-route', String(r.i));
+      row.setAttribute('aria-disabled', r.pickable ? 'false' : 'true');
+      Object.assign(row.style, {
+        display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box', minHeight: `${rowPx}px`, padding: '2px 6px', marginTop: '2px', borderRadius: '3px',
+        cursor: r.pickable ? 'pointer' : 'default', border: '1px solid transparent', color: VisualLaw.COLORS.INFO, fontSize: '0.75rem',
+        opacity: r.pickable ? '1' : '0.7', overflow: 'hidden',
+      });
+      // two lines: the stops (they may wrap onto a second line; the whole text is the title), then the numbers
+      const text = doc.createElement('span');
+      text.textContent = r.text;
+      text.setAttribute('title', r.text);
+      Object.assign(text.style, { minWidth: '0', whiteSpace: 'normal', overflow: 'hidden', overflowWrap: 'anywhere' });
+      const nums = doc.createElement('span');
+      nums.textContent = r.numbers;
+      Object.assign(nums.style, { color: VisualLaw.COLORS.SELECTION, whiteSpace: 'nowrap' });
+      row.appendChild(text);
+      row.appendChild(nums);
+      row.addEventListener('click', (e) => { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); this.tapRoute(r.i); });
+      add(row);
+    }
+    if (!v.owed) {
+      const note = doc.createElement('div');
+      note.textContent = ROUTES_IN_MISSION;
+      note.setAttribute('data-routes', 'mission');
+      Object.assign(note.style, { marginTop: '2px', opacity: '0.7', fontSize: '0.7rem' });
+      add(note);
+    }
   }
 
   /** The text of the DOM as painted, one string per element (tests). */
@@ -381,6 +547,8 @@ export class WhereNextList {
     if (this._disposed) return;
     this._disposed = true;
     if (this._offFate) { try { this._offFate(); } catch (_e) { /* gone */ } this._offFate = null; }
+    for (const off of this._offRoutes) { try { if (typeof off === 'function') off(); } catch (_e) { /* gone */ } }
+    this._offRoutes = [];
     if (this._root) {
       if (typeof this._root.remove === 'function') this._root.remove();
       else if (this._parentEl && typeof this._parentEl.removeChild === 'function') this._parentEl.removeChild(this._root);
