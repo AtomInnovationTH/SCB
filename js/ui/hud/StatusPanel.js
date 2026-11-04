@@ -2117,8 +2117,6 @@ export class StatusPanel {
         return { label: 'Trawling', color: 'var(--hud-normal, #00ff88)' };
       case 'SCANNING':
         return { label: 'Scanning', color: 'var(--hud-info, #4488ff)' };
-      case 'ABLATING':
-        return { label: 'De-spinning', color: 'var(--hud-info, #00ffff)' };
       case 'DEORBITING':
         return { label: 'Deorbiting', color: 'var(--hud-warning, #ff4444)' };
       case 'ADRIFT':

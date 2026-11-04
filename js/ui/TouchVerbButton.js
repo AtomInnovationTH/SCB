@@ -12,7 +12,8 @@
  *   DE-SPIN    (floors 2-3)     Press and HOLD to fire the mother's de-spin laser (the L key, held). It shows only while the
  *                               laser could fire at the selected target and the target still tumbles above the net-safe
  *                               spin (DESPIN_LASER.IN_SPEC_DEG): feature on, gameplay, no overlay, the piloted-daughter
- *                               rule, target within despinLaser.reachM(). The key goes down with the finger and up on EVERY way the
+ *                               rule, a beam that can fire at it (within despinLaser.reachM(), or relayed by a daughter's mirror:
+ *                               `previewBeams`). The key goes down with the finger and up on EVERY way the
  *                               hold can end: pointerup, pointercancel, lost pointer capture, pointer leaving, touchend /
  *                               touchcancel, the window seeing the finger lift, the page hiding or losing focus, the
  *                               button hiding (target gone, floor change, laser in spec), dispose. The laser can never stay
@@ -290,8 +291,9 @@ export class TouchVerbButton {
 
   /**
    * The debris the laser would fire at right now through this button, or null: floors 2-3, the feature on, input not
-   * blocked (gameplay / overlays: the KeyL path's own checks), a target that still tumbles above the net-safe spin, in
-   * the laser's reach (`despinLaser.reachM()`: 120 m, 1.4 km with the long-range laser).
+   * blocked (gameplay / overlays: the KeyL path's own checks), a target that still tumbles above the net-safe spin, and a beam
+   * that can fire at it: in the mother laser's reach (`despinLaser.reachM()`: 120 m, 1.4 km with the long-range laser) or relayed
+   * by a daughter's mirror (laser round 2, E11). With the distance unknown, as before: any target tumbling past the net-safe spin.
    */
   despinTarget() {
     if (!this._glass || this._disposed) return null;
@@ -306,12 +308,19 @@ export class TouchVerbButton {
     let t = null;
     try { t = this._d.getDespinTarget ? this._d.getDespinTarget() : null; } catch (_e) { t = null; }
     if (!t) return null;
+    let dist = null;
+    try { dist = this._d.getTargetDistanceM ? this._d.getTargetDistanceM(t) : null; } catch (_e) { dist = null; }
+    if (Number.isFinite(dist)) {
+      // Distance known: up when a beam can fire at the piece (the mother's own, or a daughter's relay; `previewBeams`) and there
+      // is spin to take off it. `timeS` is 0 for a piece already in spec, which `beams.length` alone would call a beam.
+      let p = null;
+      try { p = despinLaser.previewBeams(t, { motherDistanceM: dist }); } catch (_e) { p = null; }
+      return p && Number.isFinite(p.timeS) && p.timeS > 0 ? t : null;
+    }
+    // Distance unknown: the laser treats it as in range; the spin test is the piece's own.
     const cfg = Constants.DESPIN_LASER || {};
     const inSpec = degToRad(cfg.IN_SPEC_DEG ?? 10);
     if (!((t.tumbleRate || 0) > inSpec)) return null;
-    let dist = null;
-    try { dist = this._d.getTargetDistanceM ? this._d.getTargetDistanceM(t) : null; } catch (_e) { dist = null; }
-    if (Number.isFinite(dist) && dist > despinLaser.reachM()) return null;
     return t;
   }
 

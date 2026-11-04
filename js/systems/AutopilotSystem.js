@@ -24,6 +24,7 @@ import { tripRefuses } from './TransferTrip.js';
 import { outOfMotherNetsLine } from './resupplyWords.js';
 import { wrapRefusalLine, linesCross, pairReadyLine, pairLessonWaitLine, pairLessonSkipLine, pairSavedLine, pairSameLine, PAIR_PARK_LINE } from './PieceClaim.js';
 import { checkActiveSatArming } from './ActiveSatGuard.js';
+import { daughterMassKg } from './daughterFittings.js';   // her launch mass includes the relay mirror / laser the player bought
 import { DEG2RAD, degToRad, clamp01, clamp } from '../core/MathUtil.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
@@ -34,6 +35,21 @@ const ENGAGE_DV_MIN = 50;
 
 /** ΔV (m/s) threshold for automatic disengage */
 const DISENGAGE_DV_MIN = 30;
+
+/**
+ * What leaves with a daughter when she is launched, kg: her LIVE mass (base + the relay mirror / laser the player bought, via
+ * `daughterFittings`) plus the piece in her hand and every piece on her rack. The ONE read both shot planners use for the kick
+ * `m·v` (a type that is neither weaver nor spinner keeps its own `config.mass`).
+ * @param {object} arm
+ * @returns {number} kg
+ */
+export function daughterLaunchMassKg(arm) {
+  const type = arm.config && arm.config.type;
+  let massKg = (type === 'weaver' || type === 'spinner') ? daughterMassKg(arm) : (arm.config && arm.config.mass);
+  massKg += (arm.capturedDebris && arm.capturedDebris.mass) || 0;
+  if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) massKg += (h && h.mass) || 0;
+  return massKg;
+}
 
 /** Autopilot comms lines in plain words (Ruling 0); the "Autopilot ..." openers stay clear of the copilot phrases (test-CopilotVoice.js). */
 export const AUTOPILOT_ON_TEXT = Object.freeze({
@@ -3554,10 +3570,7 @@ export class AutopilotSystem {
     // what leaves with her, and how fast (ArmUnit `_applyLaunchImpulse`): the kick is m·v along her line
     const tier = Constants.SPRING_TIERS && Constants.SPRING_TIERS[arm.springTier];
     const speed = Math.min(Number.isFinite(arm.launchSpeed) ? arm.launchSpeed : Infinity, tier ? tier.maxSpeed : Infinity);
-    const type = arm.config && arm.config.type;
-    let massKg = type === 'weaver' ? Constants.V5_WEAVER_MASS : (type === 'spinner' ? Constants.V5_SPINNER_MASS : (arm.config && arm.config.mass));
-    massKg += (arm.capturedDebris && arm.capturedDebris.mass) || 0;
-    if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) massKg += (h && h.mass) || 0;
+    const massKg = daughterLaunchMassKg(arm);   // her live mass (fittings included) and what she carries
     const mv = (massKg > 0 && speed > 0 && Number.isFinite(speed)) ? massKg * speed : 0;
 
     const sloth = typeof p.isSlothMode === 'function' && p.isSlothMode();
@@ -4256,10 +4269,7 @@ export class AutopilotSystem {
       launchKickPerNs(strutTipMeters(dp, alpha), com.position, dir, per);
       const tier = Constants.SPRING_TIERS && Constants.SPRING_TIERS[arm.springTier];
       const speed = Math.min(Number.isFinite(arm.launchSpeed) ? arm.launchSpeed : Infinity, tier ? tier.maxSpeed : Infinity);
-      const type = arm.config && arm.config.type;
-      let massKg = type === 'weaver' ? Constants.V5_WEAVER_MASS : (type === 'spinner' ? Constants.V5_SPINNER_MASS : (arm.config && arm.config.mass));
-      massKg += (arm.capturedDebris && arm.capturedDebris.mass) || 0;
-      if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) massKg += (h && h.mass) || 0;
+      const massKg = daughterLaunchMassKg(arm);
       const mv = (massKg > 0 && speed > 0 && Number.isFinite(speed)) ? massKg * speed : 0;
       lx += per.x * mv; ly += per.y * mv;
     }

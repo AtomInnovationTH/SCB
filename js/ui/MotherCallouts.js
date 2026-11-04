@@ -457,7 +457,7 @@ const SYSTEMS = [
     daughters: true,
     parts: [
       { id: 'daughter_0', name: 'LARGE DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'weaver_gripper',
-        massKg: 6.6, priority: 7, live: 'daughter', armIndex: 0,
+        massKg: Constants.V5_WEAVER_MASS, priority: 7, live: 'daughter', armIndex: 0,
         specs: ['Weaver — medium net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
       { id: 'daughter_1', name: 'SMALL DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'spinner_pad',
@@ -465,7 +465,7 @@ const SYSTEMS = [
         specs: ['Spinner — small net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
       { id: 'daughter_2', name: 'LARGE DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'weaver_gripper',
-        massKg: 6.6, priority: 7, live: 'daughter', armIndex: 2,
+        massKg: Constants.V5_WEAVER_MASS, priority: 7, live: 'daughter', armIndex: 2,
         specs: ['Weaver — medium net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
       { id: 'daughter_3', name: 'SMALL DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'spinner_pad',
@@ -594,6 +594,25 @@ const HINT_TEXT = 'Point at a part to see what it does. Click to upgrade it.';
 // Read when the hint is DRAWN: the hub flips glass after this is built.
 const HINT_TEXT_GLASS = 'Tap a part to see what it does and upgrade it.';
 const hintText = () => (GestureHints.isGlass() ? HINT_TEXT_GLASS : HINT_TEXT);
+
+/**
+ * The mass a detail card shows, kg: the authored `massKg`, except a docked daughter, who shows her LIVE mass (her own mass plus
+ * the relay mirror / laser the player bought: `ArmUnit._massKg()`) when her unit is in reach (`ctx.armManager.arms`). 2 decimals
+ * at most. A module function, not a method: the card tests borrow `_applyCard` onto bare objects.
+ * @param {object} def the part definition
+ * @param {object|null} ctx the late-bound live context (`_liveCtx`)
+ * @returns {number} kg
+ */
+function cardMassKg(def, ctx) {
+  if (def.live === 'daughter') {
+    try {
+      const arm = ctx?.armManager?.arms?.[def.armIndex];
+      const kg = arm && typeof arm._massKg === 'function' ? arm._massKg() : NaN;
+      if (Number.isFinite(kg) && kg > 0) return Number(kg.toFixed(2));
+    } catch (_e) { /* fall back to the authored base mass */ }
+  }
+  return def.massKg;
+}
 
 // The caption in the hint strip (showCaption): wraps inside the pane-free strip between these widths (CSS px).
 const CAPTION_MIN_PX = 200;
@@ -1703,7 +1722,7 @@ export class MotherCallouts {
       const live = this._liveRows(def).slice(0, 2);
 
       const budget = 6;
-      if (typeof def.massKg === 'number') rows.push({ text: `Mass: ${def.massKg} kg` });
+      if (typeof def.massKg === 'number') rows.push({ text: `Mass: ${cardMassKg(def, this._liveCtx)} kg` });
       if (Array.isArray(def.specs)) {
         for (const s of def.specs.slice(0, 2)) rows.push({ text: specRow(s) });
       }

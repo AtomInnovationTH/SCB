@@ -122,7 +122,7 @@ export function computeDaughterPlumeIntensity(sig) {
     // Position hold while the net flies (0.3 %/s): the same faint thread as STATION_KEEP, so the weave doesn't read as engine-off.
     aft = DAUGHTER_PLUME.HOLD_FRACTION;
   }
-  // All other states (DOCKED/DOCKING/RELOADING/LAUNCHING/GRAPPLED/HOLDING_CATCH/CARRY_PREP/CARRY_HANDOFF/TRAWLING/ABLATING/SCANNING/
+  // All other states (DOCKED/DOCKING/RELOADING/LAUNCHING/GRAPPLED/HOLDING_CATCH/CARRY_PREP/CARRY_HANDOFF/TRAWLING/SCANNING/
   // ADRIFT/EXPENDED/tool-closing) stay dark: no FEEP burn there (TRAWLING's 0.002 %/s drag-sail trickle is below read threshold).
 
   // Recoil counter-burn overlay: a decaying fore flash in whatever state the kick lands (WEB_SHOT/NETTING/SK); a no-op while the

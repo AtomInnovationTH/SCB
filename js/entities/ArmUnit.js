@@ -2,7 +2,7 @@
  * ArmUnit.js — autonomous arm unit (V5 Crossbow ADR satellite): Weaver (large, 6.6 kg) and Spinner (small, 2.1 kg),
  * reels on the mothership.
  * States: DOCKED → LAUNCHING → TRANSIT → APPROACH → NETTING → GRAPPLED → REELING → DOCKING → RELOADING →
- *   TRAWLING → ABLATING → SCANNING → EXPENDED
+ *   TRAWLING → SCANNING → EXPENDED
  * Legacy states (UNDOCKING, HAULING, RETURNING) kept for backward compat.
  * @module entities/ArmUnit
  */
@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { DaughterPower, batteryFlatLine } from '../systems/DaughterPower.js';
+import { daughterBaseMassKg, daughterExtraMassKg } from '../systems/daughterFittings.js';   // her mass = base + what was bought (relay mirror, weaver laser)
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture } from '../scene/solarCellTexture.js';
@@ -112,7 +113,6 @@ const {
   CROSSBOW_RELOAD_POWER, CROSSBOW_WORM_GEAR_EFFICIENCY,
   REEL_IN_SPEED_EMPTY, REEL_IN_SPEED_LOADED,
   REEL_BRAKE_FORCE_MAX, REEL_TENSION_WARNING, REEL_TENSION_CRITICAL,
-  ABLATION_LASER_POWER, ABLATION_RANGE_MAX, ABLATION_DURATION_MAX, ABLATION_DESPIN_RATE,
   PULSE_SCAN_DURATION, PULSE_SCAN_RANGE_MULT,
   V5_WEAVER_MASS, V5_SPINNER_MASS,
   SPRING_TIERS, TETHER_TIERS,
@@ -1251,10 +1251,6 @@ export class ArmUnit {
     this._padOffset = null;   // scene units — her offset from the piece while the pad closes (rides with it)
     // Per-arm UV-cure magazine (finite; runtime-only, not persisted).
     this._padUvCureDosesRemaining = (Constants.PAD_CONTACT && Constants.PAD_CONTACT.UV_CURE_DOSES_Y0) || 10;
-
-    // V5 Ablation state
-    this.ablationTarget = null;
-    this.ablationTimer = 0;
 
     // FEEP dual-metal system
     this._currentMetal = 'indium';
@@ -2851,7 +2847,7 @@ export class ArmUnit {
     // No gamified multiplier: the crossbow gives the initial velocity, FEEP only corrects.
     const thrustMag = this._computeMetalThrust();
     const thrust = fine ? thrustMag * 0.25 : thrustMag;
-    const accel = thrust / this.config.mass;
+    const accel = thrust / this._massKg();
     const dv = accel * dt;
 
     // arm-local → world; forward = toward target, else current velocity direction
@@ -2910,6 +2906,26 @@ export class ArmUnit {
     if (!metals[metalId]) return false;
     this._alternateMetal = metalId;
     return true;
+  }
+
+  /**
+   * Her live mass, kg: `V5_WEAVER_MASS` / `V5_SPINNER_MASS` plus what the player bought for her (relay mirror on every daughter,
+   * the laser on weavers; `daughterFittings.daughterExtraMassKg`). Excludes held cargo and gas (callers add those). The one read
+   * for thrust, recoil, reel, the CoM and the mass budget; `config.mass` stays her base mass.
+   * @returns {number} kg
+   */
+  _massKg() {
+    const type = this.config.type;
+    return daughterBaseMassKg(type) + daughterExtraMassKg(type, this._playerSatellite);
+  }
+
+  /**
+   * Her live mass over her base mass (1 with nothing bought, > 1 fitted). The tank's Δv (`ARM_TOTAL_DELTAV`) is quoted at her
+   * base mass, so a Δv she achieved is billed × this ratio: the same thrust burns the same propellant at any mass.
+   * @returns {number}
+   */
+  _fitMassRatio() {
+    return this._massKg() / daughterBaseMassKg(this.config.type);
   }
 
   /** @returns {object} the active metal's ION_THRUSTER_METALS entry (indium fallback) */
@@ -2973,23 +2989,6 @@ export class ArmUnit {
   setLaunchSpeed(speed) {
     const tier = SPRING_TIERS[this.springTier];
     this.launchSpeed = clamp(tier.maxSpeed, CROSSBOW_LAUNCH_SPEED_MIN, speed);
-  }
-
-  /**
-   * Laser ablation (de-spin/nudge); only in TRANSIT or APPROACH.
-   * @param {object} target - Target object with mesh and optional angularVelocity
-   * @returns {boolean}
-   */
-  startAblation(target) {
-    if (this.state !== S.TRANSIT && this.state !== S.APPROACH) return false;
-    this.ablationTarget = target;
-    this.ablationTimer = 0;
-    this._transitionTo(S.ABLATING);
-    eventBus.emit(Events.ABLATION_START, {
-      armIndex: this.index,
-      targetId: target.id || null,
-    });
-    return true;
   }
 
   /**
@@ -3208,8 +3207,6 @@ export class ArmUnit {
     this.tetherTension = 0;
     this.tetherLength = 0;
     this._tetherCreakCooldown = 0;   // re-arm the daughter creak rate-limit on reset
-    this.ablationTarget = null;
-    this.ablationTimer = 0;
     this.reeling = false;
     this.launchDirection = null;
 
@@ -3287,7 +3284,6 @@ export class ArmUnit {
      case S.TRAWLING:   this._updateTrawling(dt, parentPos); break;
      case S.DEORBITING: this._updateDeorbiting(dt); break;
      case S.WEB_SHOT:   this._updateWebShot(dt, parentPos); break;
-     case S.ABLATING:   this._updateAblating(dt); break;
       case S.SCANNING:   this._updateScanning(dt); break;
       case S.STATION_KEEP: this._updateStationKeep(dt); break;
      case S.MAGNETIC_GRAPPLE: this._updateMagneticGrapple(dt); break;
@@ -3348,12 +3344,12 @@ export class ArmUnit {
     }
 
     // Legacy fuel burn. Exempt: DEORBITING (_updateDeorbiting) and TRAWLING (_updateTrawling) burn their own rates,
-    // WEB_SHOT is paid upfront in fireWebShot(), plus REELING, RELOADING, LAUNCHING, ABLATING, SCANNING.
+    // WEB_SHOT is paid upfront in fireWebShot(), plus REELING, RELOADING, LAUNCHING, SCANNING.
     if (this.state !== S.DOCKED && this.state !== S.EXPENDED &&
         this.state !== S.DEORBITING && this.state !== S.TRAWLING &&
         this.state !== S.WEB_SHOT && this.state !== S.REELING &&
         this.state !== S.RELOADING && this.state !== S.LAUNCHING &&
-        this.state !== S.ABLATING && this.state !== S.SCANNING &&
+        this.state !== S.SCANNING &&
         this.state !== S.ADRIFT &&
         !this._carry) {              // the carry bills its own push, once (beginCarry's fuel check, _carryBeginOut)
       this._consumeFuel(dt);
@@ -3704,7 +3700,7 @@ export class ArmUnit {
   _applyLaunchImpulse() {
     const tier = SPRING_TIERS[this.springTier];
     const isWeaver = this.config.type === 'weaver';
-    const armMass = isWeaver ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    const armMass = this._massKg();
     const springK = isWeaver ? CROSSBOW_SPRING_K_WEAVER : CROSSBOW_SPRING_K_SPINNER;
 
     const speed = Math.min(this.launchSpeed, tier.maxSpeed);
@@ -3982,7 +3978,8 @@ export class ArmUnit {
     // V_CAP = actual launch speed so the arm COASTS, never accelerates beyond spring speed
     const posErrM = dist / M;
     const effectiveVCap = this._launchSpeedMps || DAP_T.V_CAP;
-    const aBrakeT = DAP_T.MAX_ACCEL * DAP_T.BRAKE_FRACTION;
+    const aMaxT = DAP_T.MAX_ACCEL / this._fitMassRatio();   // game-feel cap at her base mass; the same thrust on a fitted (heavier) daughter gives less
+    const aBrakeT = aMaxT * DAP_T.BRAKE_FRACTION;
     const vStarMT = Math.min(effectiveVCap, Math.sqrt(2 * aBrakeT * posErrM));
     const vStarT = vStarMT * M; // scene units/s
 
@@ -3992,7 +3989,7 @@ export class ArmUnit {
     // Commanded impulse = KP × velCtrlErr, clamped by MAX_ACCEL × gameDt
     const dvCmdT = velCtrlErrT.multiplyScalar(DAP_T.KP_VEL);
     const gameDtT = dt * TimeAuthority.BASE_SCALE;
-    const maxDvT = DAP_T.MAX_ACCEL * M * gameDtT;
+    const maxDvT = aMaxT * M * gameDtT;
     const dvMagT = dvCmdT.length();
     if (dvMagT > maxDvT && dvMagT > 1e-18) dvCmdT.multiplyScalar(maxDvT / dvMagT);
 
@@ -4117,7 +4114,8 @@ export class ArmUnit {
     // Signed excess distance: + outside standoff, − inside (a restoring spring pushes her back OUT)
     const signedExcess = distMetres - standoff;
     const absExcess = Math.abs(signedExcess);
-    const aBrakeA = DAP_A.MAX_ACCEL * DAP_A.BRAKE_FRACTION;
+    const aMaxA = DAP_A.MAX_ACCEL / this._fitMassRatio();   // as in TRANSIT: the same thrust on a heavier daughter gives less
+    const aBrakeA = aMaxA * DAP_A.BRAKE_FRACTION;
     const vStarMA = Math.min(DAP_A.V_CAP * 0.3, Math.sqrt(2 * aBrakeA * absExcess));
     const vStarA = vStarMA * M;
 
@@ -4127,7 +4125,7 @@ export class ArmUnit {
     const velCtrlErrA = posCmd.add(relVA);
     const dvCmdA = velCtrlErrA.multiplyScalar(DAP_A.KP_VEL);
     const gameDtA = dt * TimeAuthority.BASE_SCALE;
-    const maxDvA = DAP_A.MAX_ACCEL * M * gameDtA;
+    const maxDvA = aMaxA * M * gameDtA;
     const dvMagA = dvCmdA.length();
     if (dvMagA > maxDvA && dvMagA > 1e-18) dvCmdA.multiplyScalar(maxDvA / dvMagA);
 
@@ -4383,7 +4381,7 @@ export class ArmUnit {
    * ONE production fire site, right after fireDaughterNet succeeds (the mother pod path,
    * PlayerSatellite._applyMotherNetRecoil, is untouched).
    *
-   * Δv = m_net · LAUNCH_SPEED / m_daughter, derived LIVE from the fired net's class object and this arm's config.mass
+   * Δv = m_net · LAUNCH_SPEED / m_daughter, derived LIVE from the fired net's class object and this arm's `_massKg()`
    * (§11.4: ≈1.03 m/s MEDIUM/Weaver, ≈0.57 m/s SMALL/Spinner), never hardcoded. The impulse seeds the critically-damped
    * transient integrated by _updateRecoilKick; the net's own flight/capture math is untouched.
    *
@@ -4395,7 +4393,7 @@ export class ArmUnit {
     if (!Constants.isFeatureEnabled('DAUGHTER_NET_RECOIL')) return 0;
     const mNet = netClass && netClass.MASS;
     const vNet = netClass && netClass.LAUNCH_SPEED;
-    const mArm = this.config?.mass;
+    const mArm = this.config ? this._massKg() : undefined;
     if (!(mNet > 0) || !(vNet > 0) || !(mArm > 0)) return 0;
     const dx = launchDir?.x || 0, dy = launchDir?.y || 0, dz = launchDir?.z || 0;
     const dLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
@@ -5425,7 +5423,7 @@ export class ArmUnit {
    */
   _reelHomeEtaS(distM, fromNow = false, withCatch = false) {
     if (!(distM > 0)) return 0;
-    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    const armMass = this._massKg();
     if (!Constants.isFeatureEnabled('REEL_PROFILE_V2')) {
       return distM / (REEL_IN_SPEED_EMPTY || 1);
     }
@@ -6255,7 +6253,7 @@ export class ArmUnit {
           return;
         }
         this._catchSnugged = true;
-        const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+        const armMass = this._massKg();
         eventBus.emit(Events.CATCH_SNUGGED, {
           armIndex: this.index,
           debrisId: this.capturedDebris.id,
@@ -6907,7 +6905,7 @@ export class ArmUnit {
 
   /** kg she moves on a carry: her own mass, every piece on her rack and one net each (reel-home's line-up scaling). */
   carryMassKg() {
-    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    const armMass = this._massKg();
     const nc = getNetClassForType(this.type);
     const netKg = nc && typeof nc.MASS === 'number' ? nc.MASS : 0;
     let m = armMass;
@@ -6917,8 +6915,10 @@ export class ArmUnit {
 
   /** The % of her fuel the push costs: 2 × PAYOUT_MPS against the tank's Δv, mass-scaled. */
   carryFuelPct() {
-    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
-    const massScale = Math.max(1, this.carryMassKg() / armMass);
+    // the tank's Δv is quoted at her BASE mass (a full tank is a fixed amount of propellant), so the denominator stays the
+    // base mass: a fitted (heavier) daughter pays MORE for the same carry, never less
+    const baseMass = daughterBaseMassKg(this.config.type);
+    const massScale = Math.max(1, this.carryMassKg() / baseMass);
     const v = (Constants.CARRY && Constants.CARRY.PAYOUT_MPS) || 0.2;
     return (2 * v / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV)) * 100 * massScale;
   }
@@ -7802,7 +7802,7 @@ export class ArmUnit {
     }
     if (r <= 1e-12) arrive = true;
 
-    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    const armMass = this._massKg();
     const mCatch = Math.max(0, this._computeReelMUnit(armMass, true) - armMass);
     const herShare = mCatch / Math.max(1e-9, armMass + mCatch);
     if (arrive) {
@@ -7988,8 +7988,9 @@ export class ArmUnit {
   _rhBeginLineUp(dockW, dist, parentPos, parentQuat) {
     const RH = Constants.REEL_HOME || {};
     const v = RH.ALIGN_SPEED_MPS ?? 0.5;
-    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
-    const massScale = Math.max(1, this._computeReelMUnit(armMass, !!this.capturedDebris) / armMass);
+    const armMass = this._massKg();
+    // live mass on top, BASE mass below (the tank's Δv is quoted at her base mass: fittings cost fuel, never save it)
+    const massScale = Math.max(1, this._computeReelMUnit(armMass, !!this.capturedDebris) / daughterBaseMassKg(this.config.type));
     const dvPct = (2 * v / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV)) * 100 * massScale;
     if (!(this.fuel >= dvPct) || this._powerOff() || !this._rhArcClear(dockW, dist, parentPos, parentQuat)) {
       if (!this._rhWaitSaid) {
@@ -8367,7 +8368,9 @@ export class ArmUnit {
   _billIonThread(dt, massKg) {
     if (!(dt > 0) || !(this.fuel > 0) || this._powerOff()) return;   // a flat pack: no thread, the winch alone pulls her
     const aTrue = this._ionThrustN() / Math.max(massKg, 1e-6);                       // m/s^2
-    const dvTrue = aTrue * dt * TimeAuthority.BASE_SCALE;                             // m/s per game time of this frame
+    // propellant flow at a thrust does not depend on her mass, but the tank's Δv is quoted at her BASE mass: a fitted daughter's
+    // smaller Δv per second is billed back at base mass (× live / base; 1 with no fittings)
+    const dvTrue = aTrue * dt * TimeAuthority.BASE_SCALE * this._fitMassRatio();     // m/s (base-mass equivalent) per game time of this frame
     const pct = dvTrue / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV) * 100;
     this.fuel = Math.max(0, this.fuel - pct);
     this.power.markEngine();
@@ -8529,7 +8532,7 @@ export class ArmUnit {
     let pullAccel = P.PULL_ACCEL ?? 10;
     const pp = this._pairPartner;
     if (pp && this._pairTogether && pp._pairTogether && pp.state === S.REELING && (Constants.PAIR_SHOT || {}).HOME_EQUAL_PULL === true) {
-      const mp = pp._computeReelMUnit((pp.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS) + pp.coldGasKg, !!pp.capturedDebris);
+      const mp = pp._computeReelMUnit(pp._massKg() + pp.coldGasKg, !!pp.capturedDebris);
       if (mp > 0 && mass > mp) pullAccel *= mp / mass;
     }
     let v;
@@ -8821,7 +8824,7 @@ export class ArmUnit {
     // Reel speed: REEL_PROFILE_V2 = trapezoidal velocity profile (power-bounded cruise ramping DOWN to a gentle dock
     // speed within DECEL_DISTANCE_M); legacy = constant REEL_IN_SPEED_* × boost.
     const profileV2 = Constants.isFeatureEnabled('REEL_PROFILE_V2');
-    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    const armMass = this._massKg();
     let reelSpeed;
     if (profileV2) {
       const distMeters = dist / M;
@@ -9429,7 +9432,7 @@ export class ArmUnit {
     this._seatOnTip(dt, parentPos, parentQuat);   // she rides the strut tip while the spring reloads
     if (this.reloadDuration <= 0) {
       const speed = this.launchSpeed;
-      const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+      const armMass = this._massKg();
       const energy = 0.5 * armMass * speed * speed;
       this.reloadDuration = energy / (CROSSBOW_RELOAD_POWER * CROSSBOW_WORM_GEAR_EFFICIENCY);
     }
@@ -9611,7 +9614,7 @@ export class ArmUnit {
     // Retrograde from the LIVE velocity vector, not `position × ŷ` (that assumed an equatorial orbit and was wrong for
     // inclined tracks, e.g. 51.6°). normalize() of a zero vector returns zero in THREE, so no NaN risk.
     const retrograde = _goalDir.copy(this.velocity).normalize().negate();
-    const thrustDV = (this._computeMetalThrust() / (this.config.mass + (this.capturedDebris?.mass || 0))) * dt;
+    const thrustDV = (this._computeMetalThrust() / (this._massKg() + (this.capturedDebris?.mass || 0))) * dt;
     this.velocity.add(retrograde.multiplyScalar(thrustDV));
     this.position.addScaledVector(this.velocity, dt);
 
@@ -9665,47 +9668,6 @@ export class ArmUnit {
 
       this._transitionTo(this._webShotPrevState);
     }
-  }
-
-  /** @private ABLATING: V5 10 W laser applies torque to reduce the target's angular velocity (de-spin/nudge). */
-  _updateAblating(dt) {
-    this.ablationTimer += dt;
-
-    if (this.ablationTarget) {
-      const targetPos = this.ablationTarget.mesh ? this.ablationTarget.mesh.position : null;
-      if (targetPos) {
-        const range = this.position.distanceTo(targetPos) / M;
-        if (range > ABLATION_RANGE_MAX) {
-          this._endAblation('outOfRange');
-          return;
-        }
-
-        if (this.ablationTarget.angularVelocity !== undefined) {
-          const despin = ABLATION_DESPIN_RATE * dt;
-          const av = this.ablationTarget.angularVelocity;
-          if (Math.abs(av) > despin) {
-            this.ablationTarget.angularVelocity -= Math.sign(av) * despin;
-          } else {
-            this.ablationTarget.angularVelocity = 0;
-          }
-        }
-      }
-    }
-
-    if (this.ablationTimer >= ABLATION_DURATION_MAX) {
-      this._endAblation('timeout');
-    }
-  }
-
-  /** @private End ablation and return to transit. @param {string} reason */
-  _endAblation(reason) {
-    eventBus.emit(Events.ABLATION_END, {
-      armIndex: this.index,
-      despinAchieved: reason !== 'outOfRange',
-    });
-    this.ablationTimer = 0;
-    this.ablationTarget = null;
-    this._transitionTo(S.TRANSIT);
   }
 
   /**
@@ -9857,7 +9819,6 @@ export class ArmUnit {
       [S.DOCKING]: 0.2,
       [S.RELOADING]: 0.0,         // worm gear: zero FEEP fuel
       [S.WEB_SHOT]: 0.0,          // Fuel consumed upfront in fireWebShot()
-      [S.ABLATING]: 0.0,          // laser de-spin: zero FEEP fuel
       [S.SCANNING]: 0.0,          // sensor mode: zero FEEP fuel
     };
     let rate = rates[this.state] || 0;
@@ -9883,7 +9844,8 @@ export class ArmUnit {
     } else if ((this.state === S.TRANSIT || this.state === S.APPROACH) && !this._manualMode) {
       const dvMps = this._impulseDvAccum;
       this._impulseDvAccum = 0;
-      this.fuel -= (dvMps / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV)) * 100;
+      // the Δv she achieved is billed at base mass (same thrust, same propellant): × live / base
+      this.fuel -= (dvMps * this._fitMassRatio() / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV)) * 100;
       if (dvMps > 0) this.power.markEngine();   // impulse-priced: a frame with a commanded impulse bills her engine's rating
     } else {
       this._impulseDvAccum = 0;
@@ -10230,7 +10192,6 @@ export class ArmUnit {
       case S.TRAWLING:   this._statusLightMat.color.setHex(blink ? 0x44aaff : 0x002244); break;
       case S.DEORBITING: this._statusLightMat.color.setHex(blink ? 0xff4400 : 0x441100); break;
       case S.WEB_SHOT:   this._statusLightMat.color.setHex(blink ? 0xffffff : 0x448844); break;
-      case S.ABLATING:   this._statusLightMat.color.setHex(blink ? 0xff4488 : 0x441122); break;
       case S.SCANNING:   this._statusLightMat.color.setHex(blink ? 0x88ffff : 0x224444); break;
       case S.STATION_KEEP: this._statusLightMat.color.setHex(blink ? 0x00ffaa : 0x004422); break;
       case S.ADRIFT:     this._statusLightMat.color.setHex(blink ? 0xffaa00 : 0x442200); break;

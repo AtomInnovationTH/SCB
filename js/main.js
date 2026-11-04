@@ -1699,7 +1699,7 @@ async function init() {
   }
 
   if (Constants.FEATURE_FLAGS.LASER_DESPIN) {
-    despinLaser.init({ scene, player, targetSelector, resourceSystem, armManager });
+    despinLaser.init({ scene, player, targetSelector, resourceSystem, armManager, debrisField });
   }
 
   // Reward-first onboarding: front-arc autolock + net-range tracking. Auto-selects the nearest forward debris so a

@@ -636,9 +636,10 @@ export const Events = {
   PULSE_SCAN_COMPLETE:      'pulseScan:complete',        // { detections[] }
 
   // Ablation
-  ABLATION_START:           'ablation:start',            // { armIndex, targetId }
+  ABLATION_START:           'ablation:start',            // { armIndex, targetId, kinds? } the de-spin laser began firing; `kinds` = sorted unique beam kinds acting ('direct'|'relay'|'own'), laser round 2
   ABLATION_END:             'ablation:end',              // { armIndex, despinAchieved }
   DESPIN_IN_SPEC:           'despin:inSpec',             // { targetId, tumbleDeg } target detumbled below net-safe spin
+  DESPIN_BEAMS:             'despin:beams',              // { targetId, kinds } while firing, the set of beam kinds acting changed (a relay or a weaver laser joined or dropped out); not sent at the start (ABLATION_START.kinds)
 
   // COLLISION AVOIDANCE
   CA_THREAT_DETECTED:       'ca:threatDetected',         // { debrisId, tca, missDistance, evasionVector }

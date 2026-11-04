@@ -95,6 +95,11 @@ export const EFFECT_ROUTES = {
   // reads ownership from the player each frame, so nothing else stores it) ──
   longLaser: [PLAYER],
 
+  // ── Daughters' relay mirror and the weaver's own laser → PlayerSatellite (hardware flags, idempotent: the save-restore replay
+  // re-applies them; DespinLaser reads ownership from the player each frame, the mass rides each daughter via daughterFittings) ──
+  relayMirrors: [PLAYER],
+  weaverLaser: [PLAYER],
+
   // ── Sensors → SENSOR_UPGRADE event (SensorSystem self-manages) ──
   sensorRange: [SENSOR_EVENT],
   detectUntracked: [SENSOR_EVENT],

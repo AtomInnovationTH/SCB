@@ -10,6 +10,7 @@ import { Constants, isArmAttachedToMother } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
+import { daughterMassKg } from '../systems/daughterFittings.js';   // a daughter's live mass: base + relay mirror / weaver laser
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { strutTipMeters, heldCargoPlumeConflictAt, heldCargoFoulsCorridorAt, suggestCargoArm } from '../systems/CoMCalculator.js';
@@ -428,7 +429,6 @@ function _pressHolders(mgr, holders, wantRad, autoOn, onlyThese) {
 
 const {
   V5_ARM_COUNT, V5_FRONT_ARM_TYPE, V5_BACK_ARM_TYPE,
-  V5_WEAVER_MASS, V5_SPINNER_MASS,
   DUALFIRE_SYNC_WINDOW, DUALFIRE_RECOIL_WEAVER, DUALFIRE_RECOIL_SPINNER, DUALFIRE_RCS_COMPENSATION_N2,
   PULSE_SCAN_DURATION, PULSE_SCAN_COOLDOWN, PULSE_SCAN_POWER, PULSE_SCAN_RANGE_MULT,
   CROSSBOW_LAUNCH_SPEED_MIN, CROSSBOW_LAUNCH_SPEED_DEFAULT,
@@ -470,7 +470,6 @@ const _SOFT_ROT_STATES = new Set([
   ARM_STATES.APPROACH,
   ARM_STATES.TRAWLING,
   ARM_STATES.SCANNING,
-  ARM_STATES.ABLATING,
   ARM_STATES.CARRY_PREP,
 ]);
 /** The four carry states. A carrying daughter is still part of the ship's books (her mass is aboard, recall refuses her,
@@ -2074,8 +2073,8 @@ export class ArmManager {
 
     if (firedTogether) {
       // net recoil (~zero for same-type pairs)
-      const mass1 = arm1.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
-      const mass2 = arm2.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+      const mass1 = daughterMassKg(arm1, this.playerSatellite);
+      const mass2 = daughterMassKg(arm2, this.playerSatellite);
       const recoil1 = mass1 * arm1.launchSpeed;
       const recoil2 = mass2 * arm2.launchSpeed;
       const residualMomentum = Math.abs(recoil1 - recoil2);
@@ -2320,8 +2319,8 @@ export class ArmManager {
     pr.t += dt;
     if (pr.a._springFired && pr.b._springFired) {
       this._pairRecoil = null;
-      const m1 = pr.a.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
-      const m2 = pr.b.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+      const m1 = daughterMassKg(pr.a, this.playerSatellite);
+      const m2 = daughterMassKg(pr.b, this.playerSatellite);
       const residual = Math.abs(m1 * pr.a.launchSpeed - m2 * pr.b.launchSpeed);
       const live = this.playerSatellite ? this.playerSatellite.mass : NaN;
       const motherMass = Number.isFinite(live) && live > 0 ? live : Constants.MOTHER_DRAG.MASS_KG;
@@ -4962,7 +4961,7 @@ export class ArmManager {
     let deployedArmMass = 0;
     let detachedArmMass = 0;
     for (const arm of this.arms) {
-      const m = arm.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+      const m = daughterMassKg(arm, this.playerSatellite);
       armMassTotal += m;
       // HOLDING_CATCH is home-and-occupied, NOT "out": keying on DOCKED only dipped the ship mass by one arm at the arrival
       // tick, as the rack gained the cargo. CoMCalculator counts her throughout (only detached/expended are excluded).
@@ -4986,7 +4985,7 @@ export class ArmManager {
 
     // DECISIONS §33 row 4 (2026-10-20): the mother's nets aboard are real mass, carried in the launcher like the cargo: in
     // the loaded and the empty mass, and so in the engine's Tsiolkovsky dry term. A fired net leaves the ship (the count is
-    // the one CaptureNetSystem owns). The daughters' own nets are taken to be inside V5_WEAVER_MASS / V5_SPINNER_MASS (no
+    // the one CaptureNetSystem owns). The daughters' own nets are taken to be inside the daughter's base mass (V5_WEAVER_MASS / V5_SPINNER_MASS, no
     // separate term). CoMCalculator books the same mass on the launcher axis (motherNetBooking). Every loaded net weighs
     // the current line-fibre tier's packed mass (CaptureNetSystem.getMotherNetMassKg: count x
     // TETHER_TIERS[tier].netMassKg.mother; 1.425 kg = CAPTURE_NET.LARGE.MASS at the start tier).
@@ -5138,7 +5137,7 @@ export class ArmManager {
   /**
    * The rotation lock tier based on deployed arm states.
    * 'block' — hard-block rotation (high-risk: REELING, HAULING, GRAPPLED, STATION_KEEP, NETTING, DOCKING)
-   * 'soft'  — soft-cap rotation to TETHER_ROTATION.SOFT_CAP_RATE (TRANSIT, APPROACH, TRAWLING, LAUNCHING, RETURNING, SCANNING, ABLATING)
+   * 'soft'  — soft-cap rotation to TETHER_ROTATION.SOFT_CAP_RATE (TRANSIT, APPROACH, TRAWLING, LAUNCHING, RETURNING, SCANNING)
    * 'none'  — no constraint (all arms DOCKED/EXPENDED/RELOADING or detached)
    *
    * A LAUNCHING daughter whose spring has NOT fired is still clamped to her strut (part of the ship, no tether out), so she

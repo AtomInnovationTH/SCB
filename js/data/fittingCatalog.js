@@ -266,6 +266,18 @@ const FITTING_SPECS = {
     display: () => ({ param: 'longDespinLaser', base: false, unit: 'flag', op: 'ON' }),
     current: (deps) => !!(deps.player && typeof deps.player.hasLongLaser === 'function' && deps.player.hasLongLaser()),
   },
+  // BORDERLINE (shop cat "Sensors"): hardware on the daughters that serves the mother's de-spin laser (a relay mirror on each) or
+  // is a laser of their own (weavers); shown as flags read from the player, like the long laser. Tagged SENSORS with it.
+  relay_mirrors: {
+    subsystem: 'SENSORS', reads: 'player',
+    display: () => ({ param: 'relayMirrors', base: false, unit: 'flag', op: 'ON' }),
+    current: (deps) => !!(deps.player && typeof deps.player.hasRelayMirrors === 'function' && deps.player.hasRelayMirrors()),
+  },
+  weaver_laser: {
+    subsystem: 'SENSORS', reads: 'player',
+    display: () => ({ param: 'weaverLaser', base: false, unit: 'flag', op: 'ON' }),
+    current: (deps) => !!(deps.player && typeof deps.player.hasWeaverLaser === 'function' && deps.player.hasWeaverLaser()),
+  },
   kessler_warning: {
     // BORDERLINE (shop cat "Automation"): warnings land in comms, but the player buys situational AWARENESS (onboard cascade
     // analysis), a sensing capability. Q3 expects COMMS empty.

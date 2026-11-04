@@ -27,6 +27,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { heldSlotAnchorInto, rackOffsetFor, catchLongAxisInto, nextFreeRackCell } from '../entities/ArmUnit.js';
 import { composeDockedArmQuat } from '../entities/ArmDockBasis.js';
+import { daughterMassKg } from './daughterFittings.js';   // a daughter's live mass: base + relay mirror / weaver laser
 import { DebrisField } from '../entities/DebrisField.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { degToRad, clamp01, lerp } from '../core/MathUtil.js';
@@ -202,9 +203,7 @@ export function heldInHandBookingMeters(arm, dp, alpha, playerSatellite, sizeMet
 // Detached/expended arms contribute nothing ("aboard" in the ledger sense). cb(mass kg, point m).
 function _forEachArmMassPoint(arm, dp, alpha, playerSatellite, cb) {
   if (arm.isDetached || arm.state === Constants.ARM_STATES.EXPENDED) return;
-  const armMass = arm.config.type === 'weaver'
-    ? Constants.V5_WEAVER_MASS
-    : Constants.V5_SPINNER_MASS;
+  const armMass = daughterMassKg(arm, playerSatellite);
   cb(armMass, strutTipMeters(dp, alpha));
   const handMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
   if (handMass > 0) {
@@ -227,9 +226,7 @@ function getDaughterMass(arm) {
   if (arm.isDetached) return 0;
   const state = arm.state;
   if (state === Constants.ARM_STATES.EXPENDED) return 0;
-  const armMass = arm.config.type === 'weaver'
-    ? Constants.V5_WEAVER_MASS
-    : Constants.V5_SPINNER_MASS;
+  const armMass = daughterMassKg(arm);
   // Held cargo is real mass: moves CoM / inertia (computeInertia splits it out and clamps it with the berthed mass,
   // INERTIA_MAX_FACTOR). Mocks may lack heldCatches.
   let cargoMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
@@ -547,9 +544,7 @@ export function computeInertia(armManager, playerSatellite, opts) {
 
     // Daughter at the tip (0 when detached/expended, as in computeCoM): structure unclamped, held cargo clamped below.
     if (!arm.isDetached && arm.state !== Constants.ARM_STATES.EXPENDED) {
-      const armMass = arm.config.type === 'weaver'
-        ? Constants.V5_WEAVER_MASS
-        : Constants.V5_SPINNER_MASS;
+      const armMass = daughterMassKg(arm, playerSatellite);
       const tip = strutTipMeters(dp, alpha);
       addPoint(armMass, tip);
       // Cargo = in-hand catch + every piece on the parked rack; each books at its PINNED slot, not at the tip.

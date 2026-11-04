@@ -501,6 +501,11 @@ export class PlayerSatellite extends THREE.Group {
     // Long-range de-spin laser (Constants.DESPIN_LASER.LONG; plan laser-1101 D2/D6): bought at the resupply stop, replayed by a
     // continued save, cleared with the run (`resetWheelState`). DespinLaser asks `hasLongLaser()`; it stores no ownership.
     this._longLaser = false;
+    // Daughters' laser fittings (laser round 2, E2/E3/E10): the relay mirror (every daughter) and the weaver's own laser. Bought at the
+    // resupply stop, replayed by a continued save, cleared with the run. DespinLaser asks `hasRelayMirrors()` / `hasWeaverLaser()`;
+    // their mass rides each daughter (`daughterFittings.daughterExtraMassKg`), so ownership is stored only here.
+    this._relayMirrors = false;
+    this._weaverLaser = false;
     this._wheelH = new THREE.Vector3();
     this._wheelSpin = false;         // the current spin was made by the wheels, so the wheels stop it (the gas twin is `_gasSpin`)
     this._wheelUse = { x: 0, y: 0, z: 0 };   // this frame's full-torque seconds per axis (the power bill, `_wheelFrameEnd`)
@@ -3409,6 +3414,30 @@ export class PlayerSatellite extends THREE.Group {
     return { massKg: Constants.DESPIN_LASER.LONG.MASS_KG, z: SENSOR_GIMBAL_Z_M + LASER_TELE_CENTER_Z_M };
   }
 
+  // DAUGHTER LASER FITTINGS (Constants.DESPIN_LASER.RELAY / .WEAVER; laser round 2 E2/E3/E10). Hardware flags on the player, like the
+  // long laser; the mass sits on each daughter (`ArmUnit._massKg`, via `daughterFittings`), so the mass budget, the CoM and the
+  // inertia pick it up through the arms. DespinLaser asks these each frame and stores nothing, so a new run cannot inherit them.
+
+  /** @returns {boolean} the relay mirrors are aboard (one mirror on every daughter) */
+  hasRelayMirrors() { return this._relayMirrors === true; }
+
+  /** @returns {boolean} the weaver's own laser is aboard (on every large daughter) */
+  hasWeaverLaser() { return this._weaverLaser === true; }
+
+  /** @private Install the relay mirrors (idempotent). The daughters get heavier, so the cached inertia goes. */
+  _installRelayMirrors() {
+    if (this._relayMirrors) return;
+    this._relayMirrors = true;
+    this._attitudeInertia = null;
+  }
+
+  /** @private Install the weaver's laser (idempotent). The weavers get heavier, so the cached inertia goes. */
+  _installWeaverLaser() {
+    if (this._weaverLaser) return;
+    this._weaverLaser = true;
+    this._attitudeInertia = null;
+  }
+
   /** @returns {{x:number,y:number,z:number}} the wheels' stored spin, ship frame, N·m·s (a copy) */
   getWheelMomentum() {
     const h = this._wheelH;
@@ -3447,6 +3476,7 @@ export class PlayerSatellite extends THREE.Group {
   resetWheelState() {
     // (tolerant of a ship stub built without the constructor: a test double the reset handlers are handed)
     if (this._longLaser) { this._longLaser = false; this._attitudeInertia = null; }
+    if (this._relayMirrors || this._weaverLaser) { this._relayMirrors = false; this._weaverLaser = false; this._attitudeInertia = null; }
     if (this._wheelH) this._wheelH.set(0, 0, 0);
     this._wheelSpin = false;
     if (this._wheelUnload) { this._wheelUnload.x = false; this._wheelUnload.y = false; }
@@ -8272,6 +8302,15 @@ export class PlayerSatellite extends THREE.Group {
         // Long-range de-spin laser: a flag + dry mass + inertia (the cached inertia drops with it). Idempotent: the save-restore
         // replay re-applies it. DespinLaser reads hasLongLaser(); the card's reach and draw come from DESPIN_LASER.LONG.
         this._installLongLaser();
+        break;
+      case 'relayMirrors':
+        // Relay mirrors: a flag; every daughter carries the mirror's mass (Constants.DESPIN_LASER.RELAY.MASS_KG). Idempotent: the
+        // save-restore replay re-applies it. DespinLaser reads hasRelayMirrors().
+        this._installRelayMirrors();
+        break;
+      case 'weaverLaser':
+        // The weaver's own laser: a flag; every weaver carries its mass (Constants.DESPIN_LASER.WEAVER.MASS_KG). Idempotent.
+        this._installWeaverLaser();
         break;
     }
   }

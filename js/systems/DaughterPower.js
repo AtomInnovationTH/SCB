@@ -11,6 +11,7 @@
  *   - her engine at its rated watts (ION_THRUSTER.BEAM_POWER_*), P × dt once per frame with any ion-fuel debit
  *     (`markEngine()`; DECISIONS-level pricing set by the coordinator 2026-10-29: the game's fast moves are impulse-priced,
  *     so every debit bills the engine at its rating for that frame, never more than P per frame),
+ *   - her own de-spin laser (`bill(drawW, dt, 'laser')` from `DespinLaser`, weaver only, laser round 2),
  *   - engine hot standby, avionics and attitude (every undocked frame), aiming (turning faster than AIM_MIN_DEG_S),
  *     the cold-gas valves (`markGas()`, once per frame however many debits), the net launcher (`shot()`).
  * What fills it: sunlight on one long face (0 in Earth's shadow) and the mother's charge while docked.
@@ -62,7 +63,7 @@ export class DaughterPower {
     this.wh = this.maxWh;
     this.tempC = DP.HEAT.START_C;
     /** Wh drawn since built, by load kind (tests, telemetry). */
-    this.drawnWh = { engine: 0, standby: 0, avionics: 0, aim: 0, valves: 0, launcher: 0 };
+    this.drawnWh = { engine: 0, standby: 0, avionics: 0, aim: 0, valves: 0, launcher: 0, laser: 0 };
     this._flat = false;
     this._engineFlag = false;
     this._gasFlag = false;
@@ -97,7 +98,8 @@ export class DaughterPower {
    * pack is untouched: the Wh are the mother's to pay (summed in `motherLoadW`), but they still heat her and show in her watts.
    * @param {number} watts
    * @param {number} dt
-   * @param {'engine'|'standby'|'avionics'|'aim'|'valves'|'launcher'} kind
+   * @param {'engine'|'standby'|'avionics'|'aim'|'valves'|'launcher'|'laser'} kind ('laser': a weaver's own de-spin laser,
+   *   `DespinLaser`, laser round 2 E3; all of it heats her)
    * @param {boolean} [fromMother]
    */
   bill(watts, dt, kind, fromMother = false) {

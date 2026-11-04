@@ -936,7 +936,6 @@ export const Constants = {
     REELING: 'REELING',            // strut-reel motor haul (the winch pulls; under REEL_HOME her ion thread keeps the line tight and her cold-gas jet brakes)
     RELOADING: 'RELOADING',        // worm gear compresses spring
     HOLDING_CATCH: 'HOLDING_CATCH', // Daughter docked at strut tip holding a captured debris in-net, awaiting furnace transfer (occupied — not redeployable, not reloaded)
-    ABLATING: 'ABLATING',          // 10W laser de-spin/nudge
     SCANNING: 'SCANNING',          // pulse scan distributed sensor array
     STATION_KEEP: 'STATION_KEEP',  // hold position relative to debris (orbital-crane)
     ADRIFT: 'ADRIFT',              // Out of usable FEEP but STILL TETHERED & powered — recoverable.
@@ -1211,7 +1210,9 @@ export const Constants = {
     // it can never silently drift when the catalog changes (the test computes Σ UPGRADES live; re-derive this with it).
     // Consumables are excluded (gas resupply, mother_net_restock).
     // Re-derived 2026-11-02 (laser-1101 L4): +2000 for long_despin_laser (47930 -> 49930). The taper thresholds move with it.
-    CATALOG_TOTAL_CR: 49930,
+    // Re-derived 2026-11-04 (laser round 2 S1): +1200 relay_mirrors, +1500 weaver_laser (49930 -> 52630). The taper (CAPTURE_CREDITS_TAPER,
+    // multiples of this) now starts at 1.5 x 52630 = 78,945 cr of capture earnings (was 74,895) and approaches 2.5 x = 131,575 cr (was 124,825).
+    CATALOG_TOTAL_CR: 52630,
     // Ordered recommendation preference for the starter highlight. The shop
     // marks the first item here that is un-owned and currently affordable.
     RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],
@@ -2650,11 +2651,7 @@ export const Constants = {
     VALUE_REF_PTS: 500,  // reference point value for normalization
   },
 
-  // --- Ablation ---
-  ABLATION_LASER_POWER: 10,              // watts — onboard laser for de-spin/nudge
-  ABLATION_RANGE_MAX: 50,                // meters — max effective ablation range
-  ABLATION_DURATION_MAX: 30,             // seconds — max continuous ablation
-  ABLATION_DESPIN_RATE: 0.1,             // rad/s² — angular deceleration applied
+  // --- Ablation: the daughter's own ablation constants were never used; the de-spin laser is DESPIN_LASER (below) ---
 
   // Mother-mounted de-spin laser (archive/BIG_PICTURE.md §16; GAME_DESIGN "10W laser de-spin").
   // Hold-to-fire assist that bleeds a tumbling target's spin down until a net can cling.
@@ -2701,7 +2698,8 @@ export const Constants = {
       TRL:          4,
       // Reach from a 10 cm mirror 41.0 m, from 5 cm 20.5 m, push 597 µN (computed from the close tier; test-DespinRelay pins them)
     },
-    // The weaver's own laser (laser round 2, E3): the mother's close regime on a 10 cm telescope. Used from wave 2 on.
+    // The weaver's own laser (laser round 2, E3): the mother's close regime on a 10 cm telescope. DespinLaser fires it from every
+    // weaver station-keeping on the target (`'own'` beams), billed to her own pack as 'laser'; its reaction pushes the piece (E5).
     WEAVER: {
       APERTURE_M:         0.10,
       WAVELENGTH_M:       1.064e-6,

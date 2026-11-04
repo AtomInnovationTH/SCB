@@ -16,11 +16,27 @@ import { DAUGHTER_NET_EFFECT_TYPE } from '../systems/upgradeEffectRoutes.js';
 import { depotWords, shopTitle } from '../systems/resupplyWords.js';   // lane 3d: the depot words read the map switch
 import { upgradePrereqsMet, upgradeCostNow, engineTankFull, consumableFull as noRoomFor } from './shopGating.js';
 import { gasPriceCr, coldGasPriceCr, coldGasPoolToKg, indiumCartridgePriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
-import { despinReachM, drawW } from '../systems/DespinLaser.js';   // the long-laser card reads reach and draw from the optics
+import { despinReachM, drawW, beamW, relayTier, relayLegMaxM } from '../systems/DespinLaser.js';   // the laser cards read reach, draw and leg from the optics
 import { shipWear, partPriceCr, REPLACE_EFFECT_PART } from '../systems/ShipWear.js';
 
+/** The relay-mirror card, plain words; every number is read from Constants.DESPIN_LASER.RELAY and the optics (never typed). */
+function relayMirrorsDesc() {
+  const D = Constants.DESPIN_LASER, R = D.RELAY;
+  const cm = (m) => Math.round(m * 100);
+  const reachM = (type) => Math.round(despinReachM(relayTier(D.CLOSE, R.MIRROR_M[type])));
+  const legKm = (type) => (relayLegMaxM(D.CLOSE, R.MIRROR_M[type]) / 1000).toFixed(1);
+  return `A steering mirror on every daughter. Hold her next to a tumbling piece and the mother's laser bounces off her onto it, so the piece can be slowed from beyond the mother's own reach. Measured from the daughter, a large one (${cm(R.MIRROR_M.weaver)} cm mirror) works a piece about ${reachM('weaver')} m away, a small one (${cm(R.MIRROR_M.spinner)} cm) about ${reachM('spinner')} m; the mother's beam can cross up to about ${legKm('weaver')} km to a large daughter (${legKm('spinner')} km to a small one). The mirror returns almost all of the beam. Adds ${R.MASS_KG.weaver} kg to each large daughter and ${R.MASS_KG.spinner} kg to each small one; she draws about ${R.STEER_W.weaver} W from her own battery while she holds the mirror on the piece.`;
+}
+
+/** The weaver-laser card, plain words; every number is read from Constants.DESPIN_LASER.WEAVER and the optics (never typed). */
+function weaverLaserDesc() {
+  const W = Constants.DESPIN_LASER.WEAVER;
+  const pushUn = Math.round(W.COUPLING_UN_PER_W * beamW(W));
+  return `A laser of its own for every large daughter: infrared, ${Math.round(W.APERTURE_M * 100)} cm mirror, ${Math.round(beamW(W))} W of beam. When she is holding station at a tumbling piece she slows it herself, from about ${Math.round(despinReachM(W))} m away, drawing about ${Math.round(drawW(W))} W from her own battery while it fires (it can run flat). It pushes with about ${pushUn} \u00B5N, so a big piece takes a long time. Adds ${W.MASS_KG} kg to each large daughter; the small daughters do not carry one.`;
+}
+
 /**
- * Upgrade definitions — 46 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 48 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins this header to them).
  * Each carries a `trl` (NASA TRL 1-9) and optional `trlRationale` for the badge. TRL is display-only — NEVER used in gating.
  * Exported for the Node test harness (test-TRL.js).
@@ -133,7 +149,7 @@ export const UPGRADES = [
     effect: 'replaceWings', value: 1, maxLevel: Infinity, consumable: true,
     trl: 5, trlRationale: 'ISS arrays were added and replaced by spacewalk (iROSA); no small-satellite array swap has flown' },
 
-  // Sensors (5)
+  // Sensors (7)
   { id: 'enhanced_eo', cat: 'Sensors', name: 'Enhanced EO', cost: 500,
     desc: '+50% detection range', effect: 'sensorRange', value: 1.5, maxLevel: 1,
     trl: 9, trlRationale: 'Electro-optical telescopes flown on every imaging sat' },
@@ -150,9 +166,23 @@ export const UPGRADES = [
   // reads them (reach and draw are computed by DespinLaser, never typed here). The standard infrared laser stays; with both aboard
   // the close one fires inside its own reach (it pushes harder there) and this one beyond it.
   { id: 'long_despin_laser', cat: 'Sensors', name: 'Long-range de-spin laser', cost: Constants.DESPIN_LASER.LONG.PRICE_CR,
+    requiresFeature: 'LASER_DESPIN',   // the de-spin laser is off with its flag, so its upgrades are not for sale (laser round 2, E8b)
     desc: `A second laser on the telescope deck: ultraviolet, ${Math.round(Constants.DESPIN_LASER.LONG.APERTURE_M * 100)} cm mirror, so it slows a tumbling piece from about ${(despinReachM(Constants.DESPIN_LASER.LONG) / 1000).toFixed(1)} km away (the standard infrared laser reaches about ${Math.round(despinReachM(Constants.DESPIN_LASER.CLOSE) / 10) * 10} m). Adds ${Constants.DESPIN_LASER.LONG.MASS_KG} kg and draws about ${Math.round(drawW(Constants.DESPIN_LASER.LONG))} W from the battery while firing. It pushes more gently than the close laser, so a big piece still takes a long time.`,
     effect: 'longLaser', value: true, maxLevel: 1,
     trl: 4, trlRationale: 'No picosecond space laser of this pulse energy has flown; Aeolus (2018-2023) flew a nanosecond 355 nm laser of 53-90 mJ' },
+  // Daughters' relay mirror (laser round 2, E1/E2): she bounces the mother's laser onto the piece; reach is measured from her. The
+  // card reads Constants.DESPIN_LASER.RELAY and the optics helpers (reach, leg limit, mass); nothing typed.
+  { id: 'relay_mirrors', cat: 'Sensors', name: 'Relay mirrors for the daughters', cost: Constants.DESPIN_LASER.RELAY.PRICE_CR,
+    requiresFeature: 'LASER_DESPIN',
+    desc: relayMirrorsDesc(),
+    effect: 'relayMirrors', value: true, maxLevel: 1,
+    trl: Constants.DESPIN_LASER.RELAY.TRL, trlRationale: 'Laser-line mirrors of this reflectivity are catalogue parts; a steerable relay mirror on a free-flying satellite has not flown (the DLR relay study is for ground lasers)' },
+  // The weaver's own laser (laser round 2, E3): the mother's close-laser regime on a 10 cm telescope, drawn from her own battery.
+  { id: 'weaver_laser', cat: 'Sensors', name: 'Laser for the large daughters', cost: Constants.DESPIN_LASER.WEAVER.PRICE_CR,
+    requiresFeature: 'LASER_DESPIN',
+    desc: weaverLaserDesc(),
+    effect: 'weaverLaser', value: true, maxLevel: 1,
+    trl: Constants.DESPIN_LASER.WEAVER.TRL, trlRationale: 'Nanosecond space lasers of about 10 W average power have flown on large satellites (ICESat-2); none is built to ride a small free-flying daughter' },
 
   // Arms (5)
   // owner 2026-08-21: `long_tether` (600 cr, effect 'tetherRange' ×2) retired from the catalog — it wrote the same live

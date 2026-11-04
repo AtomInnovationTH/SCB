@@ -8,6 +8,9 @@
  *
  * Laser round 2 (E1/E4): a daughter that owns a relay mirror and station-keeps on the piece can bounce the beam onto it
  * (`relayTier`, `relayLegMaxM`); `planBeams` picks the mother's best path, `previewBeams` answers for the hint and the button.
+ * A weaver that owns the laser and station-keeps on the piece within 23.7 m adds her own beam (E3/E4). Every acting beam is paid by
+ * its own payer (the mother's battery, or the daughter's pack) and pushes the piece along (piece − emitter) through
+ * `debrisField.applyDeltaV` (E5).
  *
  * Pure core (`applyDespin`) is exported for headless testing. The Three.js beam is created lazily and skipped entirely
  * when no scene is injected.
@@ -117,7 +120,9 @@ function incidenceRad(daughterPos, motherPos, piecePos) {
  * Which beams act on the piece, pure. The mother fires its single best path: direct with any owned tier in reach, or relayed
  * through an eligible daughter (a daughter with a mirror, a pack that is not flat); the largest push wins, ties go to the direct
  * path, then to the nearest daughter. Positions are scene units; a missing position counts as an unknown distance (the first
- * owned tier fires direct, as the old range gate skipped itself). `hasOwnLaser` daughters are reserved for the weaver laser.
+ * owned tier fires direct, as the old range gate skipped itself). On top of that one mother beam, every eligible weaver with
+ * its own laser (`hasOwnLaser`, a pack that is not flat) whose reach covers the piece adds an `'own'` beam (E3/E4): the weaver's
+ * 10 cm telescope, emitted from her, ordered after the mother's beam by arm index. Own beams need known positions.
  * @param {{motherPos: THREE.Vector3|null, target: {mass?: number, lengthM?: number}|null, targetPos: THREE.Vector3|null,
  *   tiers: object[], daughters: {armIndex: number, type: string, pos: THREE.Vector3, eligible: boolean, hasMirror: boolean,
  *   hasOwnLaser?: boolean, packOk: boolean}[]}} ctx
@@ -125,10 +130,38 @@ function incidenceRad(daughterPos, motherPos, piecePos) {
  *   path: THREE.Vector3[], pushN: number, alpha: number}[]}
  */
 export function planBeams(ctx) {
-  const { motherPos, target, targetPos } = ctx;
+  const { target } = ctx;
   const tiers = ctx.tiers || [];
   const daughters = ctx.daughters || [];
-  if (!target || !tiers.length) return [];
+  if (!target) return [];
+  const mother = planMotherBeam(ctx, tiers, daughters);
+  const own = planOwnBeams(ctx, daughters);
+  return mother.concat(own);
+}
+
+/** The weaver lasers that reach the piece: one `'own'` beam each, sorted by arm index. */
+function planOwnBeams(ctx, daughters) {
+  const { target, targetPos } = ctx;
+  if (!targetPos) return [];
+  const tier = Constants.DESPIN_LASER.WEAVER;
+  const reach = despinReachM(tier);
+  const out = [];
+  for (const d of daughters) {
+    if (!d || !d.eligible || !d.hasOwnLaser || !d.packOk || !d.pos) continue;
+    if (!(d.pos.distanceTo(targetPos) / M <= reach)) continue;
+    const alpha = despinAlpha(tier, target.mass, target.lengthM);
+    if (!(alpha > 0)) continue;
+    out.push({ kind: 'own', armIndex: d.armIndex, tier, baseTier: tier, emitter: d.pos, path: [d.pos, targetPos],
+      pushN: tier.COUPLING_UN_PER_W * 1e-6 * beamW(tier), alpha });
+  }
+  out.sort((a, b) => a.armIndex - b.armIndex);
+  return out;
+}
+
+/** The mother's single best path (direct or relayed), as a 0- or 1-element array. */
+function planMotherBeam(ctx, tiers, daughters) {
+  const { motherPos, target, targetPos } = ctx;
+  if (!tiers.length) return [];
   const mass = target.mass, len = target.lengthM;
   const R = Constants.DESPIN_LASER.RELAY;
   const cand = [];
@@ -188,7 +221,10 @@ export class DespinLaser {
     this._targetSelector = null;
     this._firing = false;       // intent set by InputManager from the held key
     this._wasFiring = false;    // edge detection for ABLATION_START/END
-    this._beam = null;          // lazy THREE.Line
+    this._beam = null;          // lazy THREE.Line (the mother's path: direct, or mother → daughter → piece)
+    this._ownLines = new Map(); // lazy THREE.Line per weaver whose own laser fires (daughter → piece)
+    this._kindsKey = '';        // the beam kinds acting last frame, joined (DESPIN_BEAMS change detection)
+    this._debrisField = null;   // takes the piece's push (`applyDeltaV`); null = no push (headless tests)
     this._beamTarget = null;    // debris currently lit
     this._overrideTarget = null; // piloted-arm SK target (see setOverrideTarget)
     this._activeTier = null;    // the mother's tier that acted this frame (null when not firing)
@@ -198,13 +234,14 @@ export class DespinLaser {
     this._emptyTold = false;    // the "battery empty" line was said for this press
   }
 
-  /** @param {{scene?, player?, targetSelector?, resourceSystem?, armManager?}} deps */
-  init({ scene = null, player = null, targetSelector = null, resourceSystem = null, armManager = null } = {}) {
+  /** @param {{scene?, player?, targetSelector?, resourceSystem?, armManager?, debrisField?}} deps */
+  init({ scene = null, player = null, targetSelector = null, resourceSystem = null, armManager = null, debrisField = null } = {}) {
     this._scene = scene;
     this._player = player;
     this._targetSelector = targetSelector;
     this._rs = resourceSystem;
     this._armManager = armManager;
+    this._debrisField = debrisField;
     this._emptyTold = false;
   }
 
@@ -226,6 +263,12 @@ export class DespinLaser {
   hasRelayMirrors() {
     const p = this._player;
     try { return !!(p && typeof p.hasRelayMirrors === 'function' && p.hasRelayMirrors()); } catch (_e) { return false; }
+  }
+
+  /** The weavers' own lasers aboard? Asks the player (`hasWeaverLaser()`); false when it has no such method. */
+  hasWeaverLaser() {
+    const p = this._player;
+    try { return !!(p && typeof p.hasWeaverLaser === 'function' && p.hasWeaverLaser()); } catch (_e) { return false; }
   }
 
   /** The longest reach aboard, metres (the long tier's when owned, else the close tier's). */
@@ -294,6 +337,7 @@ export class DespinLaser {
     const motherPos = p && p.getPosition ? p.getPosition() : null;
     const tiers = this.hasLongRange() ? [cfg.CLOSE, cfg.LONG] : [cfg.CLOSE];
     const hasMirror = this.hasRelayMirrors();
+    const hasLaser = this.hasWeaverLaser();
     const S = Constants.ARM_STATES;
     const arms = (this._armManager && this._armManager.arms) || [];
     const daughters = [];
@@ -302,7 +346,7 @@ export class DespinLaser {
       if (!u || !u.position || u.state !== S.STATION_KEEP || !target || u._stationKeepTarget !== target) continue;
       daughters.push({
         armIndex: u.index ?? i, type: u.type, pos: u.position, eligible: true, hasMirror,
-        hasOwnLaser: false, packOk: !(u.power && u.power.flat),
+        hasOwnLaser: hasLaser && u.type === 'weaver', packOk: !(u.power && u.power.flat),
       });
     }
     return { motherPos, target, targetPos, tiers, daughters };
@@ -312,14 +356,34 @@ export class DespinLaser {
    * The beams that would fire at `target` (default: the laser's target) and the physical seconds to bring it to `IN_SPEC_DEG`
    * with their summed spin-down (0 when already in spec, Infinity when no beam can fire). Works whether or not L is held; the
    * hint and the DE-SPIN button use it.
+   *
+   * `motherDistanceM` (optional, metres): the mother→piece distance as the caller measured it (the glass button's and the hint's
+   * injected probes). When given, the direct legs use it instead of the live positions: with live positions the piece is
+   * re-seated along the real mother→piece line at that distance (so a relay still sees the real daughters; its daughter→piece
+   * leg then follows the re-seated piece, a small difference when the caller measures what the game measures); with no live
+   * positions the two ends are placed on a line and no daughter can relay (their geometry is unknown).
    * @param {object} [target]
+   * @param {{motherDistanceM?: number|null}} [opts]
    * @returns {{beams: object[], timeS: number}}
    */
-  previewBeams(target) {
+  previewBeams(target, { motherDistanceM = null } = {}) {
     const t = target || this._target();
     if (!t) return { beams: [], timeS: Infinity };
     const tPos = (t === this._target()) ? this._targetPos() : (t._scenePosition || null);
-    const beams = planBeams(this._ctx(t, tPos));
+    const ctx = this._ctx(t, tPos);
+    if (Number.isFinite(motherDistanceM) && motherDistanceM >= 0) {
+      const d = motherDistanceM * M;
+      if (ctx.motherPos && ctx.targetPos) {
+        const dir = new THREE.Vector3().subVectors(ctx.targetPos, ctx.motherPos);
+        if (dir.lengthSq() > 0) dir.normalize(); else dir.set(1, 0, 0);
+        ctx.targetPos = new THREE.Vector3().copy(ctx.motherPos).addScaledVector(dir, d);
+      } else {
+        ctx.motherPos = new THREE.Vector3(0, 0, 0);
+        ctx.targetPos = new THREE.Vector3(d, 0, 0);
+        ctx.daughters = [];
+      }
+    }
+    const beams = planBeams(ctx);
     if (!beams.length) return { beams, timeS: Infinity };
     const alpha = beams.reduce((a, b) => a + b.alpha, 0);
     const from = t.tumbleRate || 0, to = degToRad(Constants.DESPIN_LASER.IN_SPEC_DEG);
@@ -339,43 +403,47 @@ export class DespinLaser {
       // A piece with no mass or length gives no beam (no silent default).
       beams = planBeams(this._ctx(target, this._targetPos()));
     }
-    const motherBeam = () => beams.find((b) => b.kind !== 'own') || null;
+    const live = dt > 0 && gameDt > 0;
+    const motherBeam = beams.find((b) => b.kind !== 'own') || null;
 
-    // The beam is paid for in real battery seconds (D7): draw/EFFICIENCY watts, tagged 'laser', the part that leaves as
-    // light (EFFICIENCY) kept out of the heat. Nothing is billed while the world is held (gameDt 0). A battery that cannot
-    // cover the frame scales the despin by what it could pay, and an empty one stops it (one line per press). A daughter
-    // that relays bills her own pack STEER_W for the steering ('aim').
-    let paid = 1;
-    const mb = motherBeam();
-    if (mb && this._rs && dt > 0 && gameDt > 0) {
-      const w = drawW(mb.tier);
+    // Each beam is paid by its own payer (laser round 2, E4/E5). The mother's beams (direct, and the relayed one) scale by what
+    // the MOTHER's battery could pay of her draw (D7: draw/EFFICIENCY watts, tagged 'laser', the part that leaves as light kept
+    // out of the heat; one "battery empty" line per press). A relayed beam also needs its daughter's steering: she bills
+    // STEER_W ('aim') to her pack, and a flat pack drops the beam. A weaver's own beam is paid by that weaver's pack alone
+    // (`drawW(WEAVER)`, 'laser'): a flat mother battery does not stop it, and a flat pack does. Nothing is billed while the
+    // world is held (gameDt 0).
+    let motherPaid = 1;
+    if (motherBeam && this._rs && live) {
+      const w = drawW(motherBeam.baseTier);
       const want = (w / Constants.SHIP_HEAT.W_PER_UNIT_S) * dt;
-      const got = this._rs.billWatts(w, dt, 'laser', mb.tier.EFFICIENCY);
-      paid = want > 0 ? Math.min(1, got / want) : 1;
-      if (paid < 1 - 1e-9 && !this._emptyTold) {
+      const got = this._rs.billWatts(w, dt, 'laser', motherBeam.baseTier.EFFICIENCY);
+      motherPaid = want > 0 ? Math.min(1, got / want) : 1;
+      if (motherPaid < 1 - 1e-9 && !this._emptyTold) {
         this._emptyTold = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'MOTHER', text: 'De-spin laser short of power: battery empty.',
           channel: 'CMD', priority: 'warning',
         });
       }
-      if (!(paid > 0)) beams = [];
-      else if (paid >= 1 - 1e-9) this._emptyTold = false;
+      else if (motherPaid >= 1 - 1e-9) this._emptyTold = false;
     }
     if (!this._firing) this._emptyTold = false;
-    if (beams.length && dt > 0 && gameDt > 0) {
-      const R = Constants.DESPIN_LASER.RELAY;
-      const arms = (this._armManager && this._armManager.arms) || [];
-      for (const b of beams) {
-        if (b.kind !== 'relay') continue;
-        const unit = arms.find((a, i) => a && (a.index ?? i) === b.armIndex);
-        if (unit && unit.power && typeof unit.power.bill === 'function') unit.power.bill(R.STEER_W[unit.type] || 0, dt, 'aim');
+    const acted = [];
+    for (const b of beams) {
+      let paid;
+      if (b.kind === 'own') paid = live ? this._billOwn(b, dt) : 1;
+      else {
+        paid = motherPaid;
+        if (paid > 0 && b.kind === 'relay' && live) paid = Math.min(paid, this._billRelay(b, dt));
       }
+      if (paid > 0) acted.push({ ...b, paid });
     }
+    beams = acted;
     const active = beams.length > 0;
-    const mAct = active ? motherBeam() : null;
+    const mAct = beams.find((b) => b.kind !== 'own') || null;
     this._activeTier = mAct ? mAct.baseTier : null;
     this._beamsActed = beams;
+    const kinds = [...new Set(beams.map((b) => b.kind))].sort();
 
     if (!active) {
       if (this._wasFiring) {
@@ -386,28 +454,36 @@ export class DespinLaser {
         eventBus.emit(Events.ABLATION_END, { armIndex: -1, despinAchieved: achieved });
         this._wasFiring = false;
       }
+      this._kindsKey = '';
       if (this._beamTarget) { this._beamTarget._despinning = false; this._beamTarget = null; }
       this._hideBeam();
       return;
     }
 
     const cfg = Constants.DESPIN_LASER;
+    const key = kinds.join(',');
     if (!this._wasFiring) {
       this._wasFiring = true;
-      eventBus.emit(Events.ABLATION_START, { armIndex: -1, targetId: target.id ?? null });
+      this._kindsKey = key;
+      eventBus.emit(Events.ABLATION_START, { armIndex: -1, targetId: target.id ?? null, kinds });
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'MOTHER', text: 'De-spin laser firing. Bleeding target tumble.',
         channel: 'CMD', priority: 'info',
       });
+    } else if (key !== this._kindsKey) {
+      // a relay or a weaver laser joined (or dropped out) while firing
+      this._kindsKey = key;
+      eventBus.emit(Events.DESPIN_BEAMS, { targetId: target.id ?? null, kinds });
     }
 
-    const alpha = beams.reduce((a, b) => a + b.alpha, 0);
+    const alpha = beams.reduce((a, b) => a + b.alpha * b.paid, 0);
     const before = target.tumbleRate || 0;
-    const after = applyDespin(before, alpha, gameDt * paid);
+    const after = applyDespin(before, alpha, gameDt);
     target.tumbleRate = after;
     if (this._beamTarget && this._beamTarget !== target) this._beamTarget._despinning = false;
     target._despinning = true;          // HUD hint (TargetReticle)
     this._beamTarget = target;
+    this._push(target, this._targetPos(), beams, gameDt);
 
     // Crossed below the net-safe spin this frame → announce once.
     const inSpecRad = degToRad(cfg.IN_SPEC_DEG);
@@ -420,7 +496,66 @@ export class DespinLaser {
       });
     }
 
-    this._drawBeam(target, mAct);
+    if (mAct) this._drawBeam(target, mAct);
+    else if (this._beam) this._beam.visible = false;   // only weaver lasers act: no line from the mother
+    this._drawOwnBeams(beams.filter((b) => b.kind === 'own'));
+  }
+
+  /** @private the daughter unit (ArmUnit-shaped) a beam belongs to, or null. */
+  _unitFor(armIndex) {
+    const arms = (this._armManager && this._armManager.arms) || [];
+    return arms.find((a, i) => a && (a.index ?? i) === armIndex) || null;
+  }
+
+  /**
+   * @private a relay beam's steering bill: the daughter's pack pays `STEER_W` ('aim') for `dt`. Returns the share of it the pack
+   * could pay (0 when flat); 1 when no pack answers.
+   */
+  _billRelay(b, dt) {
+    const u = this._unitFor(b.armIndex);
+    if (!u || !u.power || typeof u.power.bill !== 'function') return 1;
+    const w = Constants.DESPIN_LASER.RELAY.STEER_W[u.type] || 0;
+    const want = w * dt / Constants.SHIP_HEAT.W_PER_UNIT_S;
+    if (!(want > 0)) return 1;
+    return Math.min(1, u.power.bill(w, dt, 'aim') / want);
+  }
+
+  /**
+   * @private a weaver's own beam bill: her pack pays `drawW(WEAVER)` ('laser') for `dt`, all of it as heat in her lump. Returns the
+   * share she could pay (0 when flat); 1 when no pack answers.
+   */
+  _billOwn(b, dt) {
+    const u = this._unitFor(b.armIndex);
+    if (!u || !u.power || typeof u.power.bill !== 'function') return 1;
+    const w = drawW(b.tier);
+    const want = w * dt / Constants.SHIP_HEAT.W_PER_UNIT_S;
+    if (!(want > 0)) return 1;
+    return Math.min(1, u.power.bill(w, dt, 'laser') / want);
+  }
+
+  /**
+   * @private E5: each acting beam pushes the piece along (piece − emitter) with its force (`pushN` × the share paid): the
+   * emitter is the mother (direct) or the daughter (relay, own). Δv = Σ F × gameDt / mass, summed as vectors (beams from opposite
+   * sides cancel) and applied once through `debrisField.applyDeltaV`. Zero while the world is held (gameDt 0); a beam with an
+   * unknown emitter is skipped. `applyDeltaV` refuses held, captured or netted pieces.
+   */
+  _push(target, targetPos, beams, gameDt) {
+    const df = this._debrisField;
+    if (!df || typeof df.applyDeltaV !== 'function' || !targetPos || !(gameDt > 0)) return;
+    const mass = target.mass;
+    if (!(mass > 0)) return;
+    const sum = new THREE.Vector3();
+    let total = 0;
+    for (const b of beams) {
+      if (!b.emitter) continue;
+      const dir = new THREE.Vector3().subVectors(targetPos, b.emitter);   // a new vector: the live positions are never written
+      if (!(dir.lengthSq() > 0)) continue;
+      const dv = b.pushN * b.paid * gameDt / mass;
+      total += dv;
+      sum.addScaledVector(dir.normalize(), dv);
+    }
+    const net = sum.length();
+    if (net > 1e-9 * total && net > 0) df.applyDeltaV(target, sum.multiplyScalar(1 / net), net);
   }
 
   /**
@@ -458,9 +593,42 @@ export class DespinLaser {
     this._beam.visible = true;
   }
 
-  /** @private hide the beam line. */
+  /**
+   * @private one cyan line per weaver whose own laser acts: daughter → piece (no-op without a scene). Lines of weavers that
+   * stopped are hidden.
+   */
+  _drawOwnBeams(own) {
+    if (!this._scene) return;
+    const tPos = this._targetPos();
+    const seen = new Set();
+    if (tPos) {
+      for (const b of own) {
+        if (!b.emitter) continue;
+        seen.add(b.armIndex);
+        let line = this._ownLines.get(b.armIndex);
+        if (!line) {
+          const cfg = Constants.DESPIN_LASER;
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', new THREE.Float32BufferAttribute(new Array(6).fill(0), 3));
+          line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: cfg.BEAM_COLOR, transparent: true, opacity: cfg.BEAM_OPACITY }));
+          line.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
+          this._scene.add(line);
+          this._ownLines.set(b.armIndex, line);
+        }
+        const pos = line.geometry.attributes.position;
+        pos.setXYZ(0, b.emitter.x, b.emitter.y, b.emitter.z);
+        pos.setXYZ(1, tPos.x, tPos.y, tPos.z);
+        pos.needsUpdate = true;
+        line.visible = true;
+      }
+    }
+    for (const [i, line] of this._ownLines) if (!seen.has(i)) line.visible = false;
+  }
+
+  /** @private hide the beam line(s). */
   _hideBeam() {
     if (this._beam) this._beam.visible = false;
+    for (const line of this._ownLines.values()) line.visible = false;
   }
 }
 
