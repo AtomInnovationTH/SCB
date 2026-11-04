@@ -31,6 +31,7 @@ import { deriveCaptureFlags } from './debrisFerrous.js';
 import { referenceDragAreaM2 } from './MotherDragArea.js';
 import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';
 import { bagSize } from './scoopRule.js';
+import { addDeltaVToOrbit } from './pieceDeltaV.js';
 import { DragSailSet } from './DragSailMesh.js';
 import { degToRad, radToDeg, clamp01, clamp, smoothstep01 } from '../core/MathUtil.js';
 
@@ -3431,6 +3432,30 @@ export class DebrisField {
     if (left === (this._moversLeft || 0)) return;
     this._moversLeft = left;
     eventBus.emit(Events.MOVERS_CHANGED, { left });
+  }
+
+  /**
+   * Push a free piece: add a real velocity change to its orbit (laser round 2, E6; the de-spin laser's ablation reaction calls
+   * this every frame it acts). The piece's elements are turned into position and velocity, `dvMps` is added along `dirScene`,
+   * and the elements are rebuilt (`pieceDeltaV.addDeltaVToOrbit`), so the orbit really changes: an along-track push raises
+   * the semi-major axis by 2a·Δv/v, a radial push makes it slightly eccentric. Every piece has the same elements, a training
+   * mover included, so it gets the same treatment.
+   *
+   * Refused (false, piece untouched): a dead piece, one held or being caught (aboard the mother, pinned to an arm or the
+   * onboarding pose, a net targeting or holding it), no orbit, bad direction or Δv, or a push that would leave the field's
+   * eccentricity band (above 0.1) or fail the round trip. A piece let go is free again and can be pushed.
+   *
+   * @param {object} piece  a debris record from `debrisList`
+   * @param {{x:number,y:number,z:number}} dirScene  direction in scene axes (a THREE.Vector3; normalised here)
+   * @param {number} dvMps  speed change in m/s, finite and > 0 (the sign belongs in `dirScene`)
+   * @returns {boolean} true when the Δv went into the orbit
+   */
+  applyDeltaV(piece, dirScene, dvMps) {
+    if (!piece || !piece.orbit || piece.alive === false) return false;
+    if (piece._captured || piece._armPinned || piece._capturedByArm || piece._motherParked
+        || piece._onboardingPinned || piece._netted || piece._committedNetArmId != null
+        || netHoldsPiece(this._reseatNetSource, piece)) return false;
+    return addDeltaVToOrbit(piece.orbit, dirScene, dvMps);
   }
 
   /**

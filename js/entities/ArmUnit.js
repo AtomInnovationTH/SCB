@@ -1234,9 +1234,6 @@ export class ArmUnit {
     // Reel boost
     this._boostReelHeld = false;
     this._boostReel = false;               // boost ACTIVE this frame (REELING + payload)
-    // Eddy-current detumble (MAGNET secondary)
-    this._eddyActive = false;
-    this._eddyTarget = null;               // debris being damped (for flag cleanup)
     // Magnetic-grapple sub-state machine: null | 'ENERGIZING' | 'CLOSING' | 'GRIP'
     this._magPhase = null;
     this._magTimer = 0;
@@ -4225,8 +4222,6 @@ export class ArmUnit {
         this._toolOddsTimer = 0;
         this._refreshToolOdds();
       }
-      // MAGNET secondary: eddy-current detumble on conductive targets
-      this._updateEddyDamp(dt, target);
     }
 
     // over the mother's catch limit she is here to INSPECT: the hold at most CLOSE_RANGE_M out, then her arc, then home
@@ -4708,14 +4703,14 @@ export class ArmUnit {
   /**
    * @private The seat: the piece is in its cell on her. Its angular momentum L = I*omega goes into HER and she cancels it with her
    * cold-gas jet (DAUGHTER_COLD_GAS): torque = jet thrust x SEAT_LEVER_M, exhaust speed = ISP_S x g0, so cancelling L spends
-   * L / (lever x v_e) kg and takes L / torque seconds. At most SEAT_CAP_BOTTLE_FRAC of her FULL bottle (and no more than she has)
-   * is spent on one seat; any L left is bled by her eddy damper at its existing rate (EDDY_DAMP.DESPIN_RATE_RAD_S2 on the rate:
-   * extra time, no gas), never deleted. The piece keeps turning in her frame while it goes, its cell re-laid each frame so it never
+   * L / (lever x v_e) kg and takes L / torque seconds. She spends what the cancel needs from ALL the gas she has (no per-seat cap);
+   * only if her bottle runs dry does the rest stay as spin on the catch (`tumbleRate` = the rate left, nothing deleted). The piece
+   * keeps turning in her frame while it goes, its cell re-laid each frame so it never
    * touches her. A piece that is not carrying a spin (under 0.1 deg/s, or not a net catch) costs nothing.
    * @param {object} d the piece, in its cell on her (`_rackCell` assigned)
    * @param {THREE.Quaternion} herQ her world attitude as the piece was seeded in her frame
    * @param {THREE.Vector3|null} axisWorld the spin axis in the world frame (read BEFORE the cell's attitude overwrote it)
-   * @returns {object|null} the plan (telemetry/tests): { gasKg, gasS, dampS, totalS, L, Lpaid, Lleft }
+   * @returns {object|null} the plan (telemetry/tests): { gasKg, gasS, totalS, L, Lpaid, Lleft }
    */
   _seatSpinBegin(d, herQ, axisWorld) {
     if (!d || d._carrySpin !== true) return null;
@@ -4729,23 +4724,20 @@ export class ArmUnit {
     const CG = Constants.DAUGHTER_COLD_GAS || {};
     const ve = (CG.ISP_S ?? 60) * (CTS.SEAT_G0 ?? Constants.G0);
     const torque = this._coldGasThrustN() * lever;                      // N*m while the jet fires
-    const full = this._coldGasBottleKg();
-    const gasAvail = clamp(this.coldGasKg, 0, (CTS.SEAT_CAP_BOTTLE_FRAC ?? 0.10) * full);
-    const Lcap = gasAvail * lever * ve;                                  // the L the gas she may spend can cancel
+    const gasAvail = Math.max(0, this.coldGasKg);                        // all the gas she has
+    const Lcap = gasAvail * lever * ve;                                  // the L that gas can cancel
     const Lpaid = torque > 0 ? Math.min(L, Lcap) : 0;
     const Lleft = L - Lpaid;
     const gasKg = Lpaid / (lever * ve);
     const gasS = torque > 0 ? Lpaid / torque : 0;
-    const wLeft = I > 0 ? Lleft / I : 0;
-    const dampS = wLeft / Math.max(1e-9, Constants.EDDY_DAMP?.DESPIN_RATE_RAD_S2 ?? 0.10);
     const ax = new THREE.Vector3();
     if (axisWorld && axisWorld.lengthSq() > 1e-12) ax.copy(axisWorld).normalize().applyQuaternion(_seatInvQ.copy(herQ).invert());
     else ax.set(0, 0, 1);
     this._seatSpin = {
-      debris: d, axisHer: ax, I, L, Lpaid, Lleft, gasKg, gasS, dampS, totalS: gasS + dampS,
+      debris: d, axisHer: ax, I, L, Lpaid, Lleft, gasKg, gasS, totalS: gasS,
       t: 0, gasBilled: 0, w: w0, done: false,
     };
-    return { gasKg, gasS, dampS, totalS: gasS + dampS, L, Lpaid, Lleft };
+    return { gasKg, gasS, totalS: gasS, L, Lpaid, Lleft };
   }
 
   /** @private Step the seat spin-down one frame (see `_seatSpinBegin`). Inert single null-check when none is live. */
@@ -4761,7 +4753,7 @@ export class ArmUnit {
     let left = dt;
     const I = Math.max(1e-12, st.I);
     const torque = this._coldGasThrustN() * (Constants.CAPTURE_TORQUE_SETTLE.SEAT_LEVER_M ?? 0.10);
-    // phase 1: the gas jet (L falls at `torque`), billed as it fires; phase 2: the eddy damper (the rate falls at its rate)
+    // the gas jet (L falls at `torque`), billed as it fires; what her bottle cannot cancel stays as the piece's spin
     if (st.t < st.gasS && torque > 0) {
       const step = Math.min(left, st.gasS - st.t);
       const dL = torque * step;
@@ -4773,14 +4765,8 @@ export class ArmUnit {
       st.t += step; left -= step;
       if (st.t >= st.gasS - 1e-12) { st.t = st.gasS; this.coldGasKg = Math.max(0, this.coldGasKg - Math.max(0, st.gasKg - st.gasBilled)); st.gasBilled = st.gasKg; }
     }
-    if (left > 0 && st.t >= st.gasS) {
-      const rate = Constants.EDDY_DAMP?.DESPIN_RATE_RAD_S2 ?? 0.10;
-      const step = Math.min(left, st.dampS - (st.t - st.gasS));
-      st.w = Math.max(0, st.w - rate * Math.max(0, step));
-      st.t += Math.max(0, step);
-    }
     const finished = st.t >= st.totalS - 1e-12;
-    if (finished) st.w = 0;
+    if (finished) st.w = Math.max(0, st.Lleft / I);   // 0 when the gas cancelled it all; the rate left when her bottle ran dry
     // the piece turns in HER frame about its spin axis (same visual convention as free tumble); its cell is re-laid for the new
     // attitude so the gap stays the net gap while it goes round
     const dAng = Math.min(Math.max(0, st.w) * TS, degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity)) * dt;
@@ -4795,7 +4781,7 @@ export class ArmUnit {
     }
     this._seatEaseStep();
     d.tumbleRate = st.w;
-    if (finished) { st.done = true; this._seatSpin = null; d.tumbleRate = 0; }
+    if (finished) { st.done = true; this._seatSpin = null; d.tumbleRate = st.w; }
   }
 
   /**
@@ -5000,13 +4986,6 @@ export class ArmUnit {
     // Clear LOD protection flag so normal LOD applies again
     if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
     this._stationKeepTarget = null;
-    // stop eddy damping + clear the target's HUD flags (_despinning is safe to clear: DespinLaser re-asserts it each frame)
-    if (this._eddyTarget) {
-      this._eddyTarget._eddyDamping = false;
-      this._eddyTarget._despinning = false;
-    }
-    this._eddyTarget = null;
-    this._eddyActive = false;
     this._thetaRate = 0;
     this._phiRate = 0;
     this._radiusRate = 0;
@@ -5204,64 +5183,6 @@ export class ArmUnit {
       });
     } else {
       this._toolOddsFragRisk = 0;
-    }
-  }
-
-  /**
-   * @private Eddy-current detumble: a MAGNET's rotating field bleeds the tumble of a CONDUCTIVE hull at ~⅓ of the mother
-   * laser's rate, within EDDY_DAMP.RANGE_M. Passive while station-keeping with MAGNET selected; counts toward DESPIN_IN_SPEC.
-   * @param {number} dt
-   * @param {object|null} target the STATION_KEEP target
-   */
-  _updateEddyDamp(dt, target) {
-    const ED = Constants.EDDY_DAMP;
-    const conductive = !!(ED && target
-      && Array.isArray(ED.CONDUCTIVE_MATERIALS)
-      && ED.CONDUCTIVE_MATERIALS.includes(target.material));
-    const active = conductive
-      && this.selectedTool === 'MAGNET'
-      && (target.tumbleRate || 0) > 0
-      && (typeof this._standoffR === 'number' && this._standoffR <= (ED.RANGE_M || 30));
-
-    if (!active) {
-      if (this._eddyActive) {
-        this._eddyActive = false;
-        if (this._eddyTarget) {
-          this._eddyTarget._eddyDamping = false;
-          // Also clear the shared HUD hint (the laser re-asserts it every frame while firing, so this never fights a beam).
-          this._eddyTarget._despinning = false;
-        }
-        this._eddyTarget = null;
-      }
-      return;
-    }
-
-    if (!this._eddyActive) {
-      this._eddyActive = true;
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        source: this.displayName,
-        text: `${this.displayName}: Eddy-current damping engaged. EPM field bleeding tumble (${target.material} hull).`,
-        channel: 'CMD', priority: 'info',
-      });
-    }
-    if (this._eddyTarget && this._eddyTarget !== target) this._eddyTarget._eddyDamping = false;
-    this._eddyTarget = target;
-    target._eddyDamping = true;
-    target._despinning = true;   // shared HUD hint (live °/s readouts)
-
-    const before = target.tumbleRate || 0;
-    const after = Math.max(0, before - (ED.DESPIN_RATE_RAD_S2 || 0.1) * dt);
-    target.tumbleRate = after;
-
-    // Crossed below the net-safe spin → announce once (same loop as the laser).
-    const inSpecRad = degToRad((Constants.DESPIN_LASER && Constants.DESPIN_LASER.IN_SPEC_DEG) || 10);
-    if (before > inSpecRad && after <= inSpecRad) {
-      eventBus.emit(Events.DESPIN_IN_SPEC, { targetId: target.id ?? null, tumbleDeg: radToDeg(after) });
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        source: this.displayName,
-        text: `${this.displayName}: Tumble in spec. Net it.`,
-        channel: 'CMD', priority: 'success',
-      });
     }
   }
 
@@ -6349,7 +6270,7 @@ export class ArmUnit {
         if (!this._rhNetReelStep(dt)) return;
         this._rhNetDone = true;
       }
-      // Seated: the catch's spin is cancelled with her gas (and her damper); she holds here until it is done, then goes home.
+      // Seated: the catch's spin is cancelled with her gas; she holds here until it is done, then goes home.
       if (rh && this._seatSpin) return;
       // pair-home: a daughter of a pair launch waits here until her partner's catch is in its cell too; `ArmManager._tickPairHome`
       // lets both go in ONE call, so both enter REELING in the same frame. A single never waits.

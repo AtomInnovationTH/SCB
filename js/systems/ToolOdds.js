@@ -127,8 +127,9 @@ export function resolvePadModeForOdds(target, uvDosesRemaining) {
  *  • target.hasSolarPanels / target.vRel changed, NET_CEREMONY flipped: capture-mode inputs; mode picks pBase (§3.4).
  *  • LASER_DESPIN flipped (tumbleOn): governs whether tumble is read at all.
  *  • |target.tumbleRate − rate-at-compute| > NET_TUMBLE_PENALTY.RATE_EPS_RAD_S: the despin laser (a physical rate per piece,
- *    DespinLaser.despinAlpha: mass and length decide it, not a flat figure) and MAGNET eddy
- *    damp (0.10 rad/s²) move tumble continuously MID-LOCK, so an at-lock snapshot would freeze the odds-climb loop the despin
+ *    DespinLaser.despinAlpha: mass and length decide it, not a flat figure) (the
+ *    continuous writer on a free piece; the seat spin-down `_tickSeatSpin` writes a seated catch's rate; the MAGNET eddy brake
+ *    was removed 2026-11-04, see Decisions E7) moves tumble continuously MID-LOCK, so an at-lock snapshot would freeze the odds-climb loop the despin
  *    laser exists for. Only f_tumble recomputes on this trigger (tumbleComputes), not the lock bundle. A value-delta check,
  *    not DESPIN_* event wiring, because tumbleRate has non-despin writers too (capture-torque settle → 0, tumble-remainder
  *    resume). The epsilon is measured against the rate at the LAST compute, so a step under it still counts: the 1,500 kg, 10 m

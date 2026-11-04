@@ -1578,17 +1578,6 @@ export const Constants = {
     BRIDLE_APEX_Y_FRAC:   0.70,   // hardware SSOT: bridle gimbal apex at local (0, +0.70·by, 0) — MUST match the bridle-leg geometry in ArmUnit._createMesh (weaver by=0.2 m ⇒ 0.14 m tether standoff)
   },
 
-  // Eddy-current detumble.
-  // MAGNET secondary: while station-keeping with MAGNET selected near a
-  // CONDUCTIVE target, the EPM's rotating field induces eddy currents that
-  // bleed tumble — a daughter-local detumble option independent of the
-  // mother's laser (slower, shorter-ranged; no new key).
-  EDDY_DAMP: {
-    RANGE_M:             30,     // must hold standoff at/inside this
-    DESPIN_RATE_RAD_S2:  0.10,   // its own rate (was ~⅓ of the mother laser's flat 0.30 rad/s², deleted 2026-11-01; DESPIN_LASER is now physical)
-    CONDUCTIVE_MATERIALS: ['aluminum', 'steel', 'titanium'],
-  },
-
   // Fragmentation severity tiers.
   // The frag risk (computeFragRisk at _resolveCatch) is ROLLED;
   // severity scales with vRel excess × brittleness:
@@ -2701,6 +2690,32 @@ export const Constants = {
       PRICE_CR:           2000,     // game-economy estimate between the wheel kit (800) and the MPD drive (3000)
       // Reach 1,373 m, push 150 µN (computed)
     },
+    // Relay mirror on a daughter (laser round 2, E1/E2): she bounces the mother's beam onto the piece. The mirror becomes the last
+    // aperture (DespinLaser.relayTier); reach is measured daughter to piece. Bought once at the resupply stop, fits every daughter.
+    RELAY: {
+      MIRROR_M:     { weaver: 0.10, spinner: 0.05 }, // mirror width, m (the research's 10 cm / 5 cm options; a tilted mirror shows less: × cos θi)
+      REFLECTIVITY: 0.995,    // share of the beam the mirror returns (sourced: Thorlabs 1064/355 nm laser-line mirrors, R_avg > 99.5 %)
+      STEER_W:      { weaver: 2, spinner: 2 }, // watts from her pack while she holds the mirror on the piece (estimate; no datasheet gave power)
+      MASS_KG:      { weaver: 1.0, spinner: 0.40 }, // carried in addition (estimate: PI S-330.4 tip/tilt 380 g for 50 mm; no 10 cm datasheet)
+      PRICE_CR:     1200,     // game-economy estimate, under the long laser (2,000)
+      TRL:          4,
+      // Reach from a 10 cm mirror 41.0 m, from 5 cm 20.5 m, push 597 µN (computed from the close tier; test-DespinRelay pins them)
+    },
+    // The weaver's own laser (laser round 2, E3): the mother's close regime on a 10 cm telescope. Used from wave 2 on.
+    WEAVER: {
+      APERTURE_M:         0.10,
+      WAVELENGTH_M:       1.064e-6,
+      PULSE_J:            10 / 300, // beam = PULSE_J × REP_HZ = 10 W (owner pick "10 W … 10 cm")
+      REP_HZ:             300,
+      M2:                 1.5,
+      FLUENCE_J_CM2:      5,
+      COUPLING_UN_PER_W:  20,
+      EFFICIENCY:         0.25,     // kept equal to the close tier (round 1 D1)
+      MASS_KG:            4.0,      // carried in addition (estimate: flown 10 W-class ns lasers are heavier, ICESat-2 ATLAS, BELA)
+      PRICE_CR:           1500,
+      TRL:                4,
+      // Reach 23.7 m, draw 40 W, push 200 µN (computed)
+    },
     // Spin-down (DespinLaser.despinAlpha): the push acts off-centre as a torque. Both numbers are estimates (research "Analysis").
     LEVER_FRAC:         0.3,      // lever arm as a fraction of half the piece's length
     INERTIA_K:          0.115,    // moment of inertia = INERTIA_K × m × L²
@@ -2717,7 +2732,7 @@ export const Constants = {
     // Tumble-factor cache invalidation epsilon for the pre-fire odds lock cache (ToolOdds.makeNetOddsLockCache;
     // CAPTURE_NET.md §10 concern 3). |Δ tumbleRate| beyond this recomputes f_tumble. tumbleRate only changes via
     // discrete writes (despin laser, a physical rate per piece: 5e-4 rad/s² for a 5 kg, 0.3 m fragment down to 5e-8 for a 1,500 kg,
-    // 10 m stage, computed from DESPIN_LASER.CLOSE; eddy damp 0.10 rad/s², torque settle → 0, remainder resume). The check compares
+    // 10 m stage, computed from DESPIN_LASER.CLOSE; torque settle → 0, remainder resume). The check compares
     // against the rate at the last compute, so a step under the epsilon adds up and recomputes within a few frames; any real
     // write recomputes (the displayed odds stay numerically identical to a fresh computation), while
     // bit-stable re-reads skip the work.
@@ -6224,7 +6239,6 @@ export const Constants = {
     // and, at the seat (the net reel's end), its angular momentum L goes into her and is cancelled with her own cold gas
     // (DAUGHTER_COLD_GAS jet). Effective lever of the jet about her centre (estimate: her body half-length is about 0.15 m):
     SEAT_LEVER_M: 0.10,            // m (est) - torque = jet thrust x lever (weaver 0.10, spinner 0.05 N·m)
-    SEAT_CAP_BOTTLE_FRAC: 0.10,    // at most this fraction of her FULL bottle per seat; any L left is bled by the eddy damper
     SEAT_G0: 9.80665,              // m/s^2, exhaust speed = DAUGHTER_COLD_GAS.ISP_S x this
   },
 

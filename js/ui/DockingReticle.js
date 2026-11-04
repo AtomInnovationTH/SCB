@@ -918,11 +918,6 @@ export class DockingReticle {
     if (sel && sel.p === 0 && sel.hint) {
       return { text: sel.hint, color: '#ff7755' };
     }
-    // Live eddy-damping readout: shows the tumble bleeding so the NET % climb reads as caused by the MAGNET.
-    if (selected === 'MAGNET' && target && target._eddyDamping) {
-      const deg = Math.abs(target.tumbleRate || 0) * RAD2DEG;
-      return { text: `eddy-damping ${deg.toFixed(1)}\u00B0/s\u2193`, color: '#66ddff' };
-    }
     if (bestKind) {
       const offer = this._switchOffer(bestKind, bestP);
       if (offer) return offer;
