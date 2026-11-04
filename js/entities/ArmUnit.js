@@ -1177,6 +1177,7 @@ export class ArmUnit {
 
     // Manual pilot mode (ARM PILOT)
     this._manualMode = false;
+    this._manualBurnS = 0;       // seconds of manual thrust since the last fuel bill (coasting under manual pilot is free)
     this._manualCapture = false;
     this._fuelAtDeploy = 100;    // Track fuel at deployment for efficiency scoring
     this._autoFailChance = 0;    // Set by external code to trigger tutorial auto-failure
@@ -2824,6 +2825,7 @@ export class ArmUnit {
 
   disableManual() {
     this._manualMode = false;
+    this._manualBurnS = 0;      // unbilled thrust seconds never carry into autopilot or a later sortie
     eventBus.emit(Events.ARM_STATE_CHANGE, { armId: this.id, manual: false });
   }
 
@@ -2867,6 +2869,7 @@ export class ArmUnit {
     this.velocity.addScaledVector(right, direction.x * dv);
     this.velocity.addScaledVector(up, direction.y * dv);
     this.velocity.addScaledVector(forward, direction.z * dv);
+    this._manualBurnS += dt;   // billed by _consumeFuel (manual TRANSIT/APPROACH pay only for the seconds the thruster fired)
     this.power.markEngine();   // thrusting: her engine bills its rating this frame
   }
 
@@ -3167,6 +3170,7 @@ export class ArmUnit {
     this._carryGaveUp = false;
     this.state = S.DOCKED;
     this.fuel = 100;
+    this._manualBurnS = 0;
     this.coldGasKg = this._coldGasBottleKg();   // the bottle resets wherever the FEEP fuel does
     this.power.reset();                         // the pack too: full, 20 °C
     this._adriftCause = null;
@@ -9837,7 +9841,7 @@ export class ArmUnit {
     // (ARM_TOTAL_DELTAV 50 m/s → 2 %/m/s). A time-based rate capped any powered sortie at ~63 s to the reserve (630 m
     // @10 m/s) and billed a slow shot MORE than a fast one over the same ground. Coasting is free; the arrival kill is
     // the bill. Manual-pilot TRANSIT/APPROACH keeps the time-based rate (its thrust path meters no impulse: a recorded
-    // split, not an oversight).
+    // split, not an oversight), but only for the seconds the thruster fires (`_manualBurnS`); coasting is free.
     if (this._powerOff()) {
       // a flat pack: no push, so no fuel spent and no engine billed (DECISIONS §53 row 3: no power, no thrust)
       this._impulseDvAccum = 0;
@@ -9849,9 +9853,19 @@ export class ArmUnit {
       if (dvMps > 0) this.power.markEngine();   // impulse-priced: a frame with a commanded impulse bills her engine's rating
     } else {
       this._impulseDvAccum = 0;
-      this.fuel -= rate * dt;
-      if (rate > 0) this.power.markEngine();
+      const manualFlight = this._manualMode && (this.state === S.TRANSIT || this.state === S.APPROACH);
+      if (manualFlight) {
+        // Manual pilot flight: the time-based rate bills only the seconds the thruster fired (applyManualThrust). Coasting
+        // is free, as for the autopilot: piloting her and not pushing drained the tank in ~57 s (measured 2026-11-04).
+        const burnS = this._manualBurnS;
+        this.fuel -= rate * burnS;
+        if (burnS > 0) this.power.markEngine();
+      } else {
+        this.fuel -= rate * dt;
+        if (rate > 0) this.power.markEngine();
+      }
     }
+    this._manualBurnS = 0;
 
     // Detached arm fuel warnings (no refuel possible)
     if (this.isDetached) {
