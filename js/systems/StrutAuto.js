@@ -11,7 +11,12 @@
  *   4. Arms dodge an inbound catch (the lean-aside duck; also triggered by the mother net's own approach, not only by
  *      LASSO_CAPTURED).
  *   5. A manual move ("." key, DAUGHTERS tile) holds for 10 s after the arm ARRIVES, then eases back to automatic.
- *   6. The full range of motion is shown once per player, the first time the struts leave closed.
+ *   6. The full range of motion is shown once per player, at the struts' first opening, and only if nothing else is going
+ *      on at that moment (no catch, net, launch, duck or leash hand-off, every arm docked). If something is, the show is
+ *      skipped for good (marked seen, no line said); a catch, net, launch or hand-off that cuts a running show short ends
+ *      it for good too, so it never plays late. Only a "." press (the player asked), a menu, or play being off (safe
+ *      mode, the dance, the feature flag off) leaves it unseen to retry. The retry plays at the next "." press, or by
+ *      itself once the 10 s "." hold has ended and a piece is near, but only while nothing else is going on.
  *
  * Everything moves at the real hinge rate: this module only writes the same `arm._strutTargetAlpha` latch the "." key
  * writes; the ship's per-frame driver (PlayerSatellite._updateStruts) slews it at STRUT_SLEW_RATE. Nothing here
@@ -232,7 +237,12 @@ export class StrutAutoController {
       this._scanS = 0;
       const d = view.nearestPieceM();
       const ring = Constants.NET_LOCK_RANGE_M;
+      const wasOpened = this._anyOpened;
       this._near = view.catchActive() || d <= (this._near ? ring * V.LEAVE_FACTOR : ring);
+      // The very first opening of the run, with a catch, net, launch or hand-off going on (or just over): the show is
+      // skipped for good now, not when the struts finally open after it (that would play it late).
+      if (this._near && !wasOpened && view.store && !view.store.seen
+        && (this._eventGoingOn(view) || this._coolS > 0)) this._skipShow(view);
       if (this._near) { this._anyOpened = true; this._markOpened(arms); }   // a piece / a catch opens every arm
     }
 
@@ -260,16 +270,27 @@ export class StrutAutoController {
     }
     if (this._showArms.size === 0) this._showPending = false;
 
+    // Never late (owner 2026-11-04): the show is only for the first opening when nothing else is going on. Decided at the
+    // frame it is queued, BEFORE the busy return below: a catch, net, launch, hand-off, duck or a cool-off running, or
+    // an arm that is not docked / has its aim reserved, ends it for good (marked seen, no line said).
+    if (this._showPending && !this._show && view.store && !view.store.seen
+      && (this._eventGoingOn(view) || this._coolS > 0 || !this._armsQuiet(docked, view))) {
+      this._skipShow(view);
+    }
+    // A cut-short show that a "." press asked for waits for its next press, but a catch, net, hand-off or launch (busy)
+    // ends it for good.
+    if (this._retry && !this._show && view.store && !view.store.seen && this._eventGoingOn(view)) this._skipShow(view);
+
     // busy → hands off, 3 s cool-off (3)
     const busy = view.busy();
     if (busy) {
       this._coolS = V.HANDOFF_S;
-      if (this._show) this._cancelShow();
+      if (this._show) this._cancelShow(view.store);   // a launch, duck or hand-off cut it short: seen, no replay later
       return;
     }
     if (this._coolS > 0) {
       this._coolS -= dt;
-      if (this._show) this._cancelShow();
+      if (this._show) this._cancelShow(view.store);
     }
 
     // the show owns the latch while it runs
@@ -332,14 +353,35 @@ export class StrutAutoController {
     return this._near && !(view.arms || []).some((a) => a && a._strutManual);
   }
 
+  /** A catch is under way, a net is out or inbound, or a leash hand-off runs. */
+  _catchGoingOn(view) {
+    return !!(view.catchActive() || view.inboundNetRadiusM() != null
+      || (typeof view.netInFlight === 'function' && view.netInFlight()));
+  }
+
+  /** Anything that owns the struts or the ship's attention: a catch/net/hand-off, or a launch, aim, duck (`busy`). */
+  _eventGoingOn(view) { return this._catchGoingOn(view) || !!view.busy(); }
+
+  /** Every arm docked and none with its aim reserved. */
+  _armsQuiet(docked, view) {
+    if (docked.length === 0) return false;
+    const arms = (view.arms || []).filter(Boolean);
+    return arms.length === docked.length && docked.every((a) => !a._aimReserved);
+  }
+
   /** Quiet: every arm docked, none aiming, no net in flight or reeling, no leash hand-off. */
   _showMayStart(docked, view) {
-    if (!view.store || view.store.seen || docked.length === 0) return false;
-    const arms = (view.arms || []).filter(Boolean);
-    if (arms.length !== docked.length) return false;
-    if (view.catchActive() || view.inboundNetRadiusM() != null) return false;
-    if (typeof view.netInFlight === 'function' && view.netInFlight()) return false;
-    return docked.every((a) => !a._aimReserved);
+    if (!view.store || view.store.seen) return false;
+    return this._armsQuiet(docked, view) && !this._catchGoingOn(view);
+  }
+
+  /** The show will not play: marked seen (so it never plays late), nothing said, nothing queued. */
+  _skipShow(view) {
+    this._showPending = false;
+    this._showArms.clear();
+    this._retry = false;
+    this._retryArms = [];
+    if (view.store) view.store.markSeen();
   }
 
   _startShow(docked, view) {
@@ -369,8 +411,10 @@ export class StrutAutoController {
   /**
    * Stop the show where it is: arms still heading for the show's angle are frozen (a latch someone else wrote is
    * theirs), then the automatic pose takes them to the due angle at the real rate.
+   * @param {StrutAutoStore|null} [endForGood] given when a catch, net, launch or hand-off cut it short: the show is then
+   *   marked seen and never replays. Without it (a "." press, a menu, safe mode) it stays unseen and retries.
    */
-  _cancelShow() {
+  _cancelShow(endForGood = null) {
     const s = this._show;
     if (s) {
       this._retry = true;                       // cut short: not marked seen, try again when quiet
@@ -384,18 +428,24 @@ export class StrutAutoController {
     }
     this._show = null;
     this._showPending = false;
+    if (s && endForGood) {
+      this._retry = false;
+      this._retryArms = [];
+      this._showArms.clear();
+      endForGood.markSeen();
+    }
   }
 
   _tickShow(dt, docked, view) {
     const V = Constants.OCTOPUS_V5.STRUT_AUTO;
     const s = this._show;
-    // Cancelled by: a "." press, an arm leaving the dock, a reserved aim, an inbound catch, a foreign latch.
-    if (view.pressCount() !== s.press
-      || s.arms.some((a) => a.state !== Constants.ARM_STATES.DOCKED || a._aimReserved)
+    // A "." press cuts it short and the player asked: unseen, retried at the next press.
+    if (view.pressCount() !== s.press) { this._cancelShow(); return; }
+    // An arm leaving the dock, a reserved aim, a catch, a net or a hand-off: it ends for good (seen), never replayed later.
+    if (s.arms.some((a) => a.state !== Constants.ARM_STATES.DOCKED || a._aimReserved)
       || (view.arms || []).some((a) => a && a.state !== Constants.ARM_STATES.DOCKED)
-      || view.catchActive() || view.inboundNetRadiusM() != null
-      || (typeof view.netInFlight === 'function' && view.netInFlight())) {
-      this._cancelShow();
+      || this._catchGoingOn(view)) {
+      this._cancelShow(view.store);
       return;
     }
     for (const a of s.arms) {

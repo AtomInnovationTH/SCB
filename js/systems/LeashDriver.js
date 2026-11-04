@@ -870,7 +870,9 @@ export class LeashDriver {
         this._free(h, res.state);
         break;
       case 'releaseHold':
-        this._releaseHold(h);
+        // Only a hand-off that ran to its end (phase DONE) leaves the ship pointed where it is; a latched failure, CUT_FREE
+        // and REEL_HOME keep the old recentre toward prograde (capture-1104 S2)
+        this._releaseHold(h, !!(res && res.phase === 'DONE'));
         break;
       default:
         break;
@@ -1042,7 +1044,13 @@ export class LeashDriver {
     this.cns.removeNetNow(net);
   }
 
-  _releaseHold(h) {
+  /**
+   * @param {object} h
+   * @param {boolean} [done=false] the hand-off ran to its DONE: the ship then stays pointed where the last turn left her (no
+   *   recentre burn back toward prograde between catches, owner 2026-11-04), and a mother net fired meanwhile takes the hold
+   *   over so its aim survives (capture-1104 S2, S3). Every other end keeps today's behaviour.
+   */
+  _releaseHold(h, done = false) {
     if (!h.tookHold) return;
     h.tookHold = false;
     // a turn still running when the hold is let go (a snag during the un-turn cuts the line free): stop it first, or the autopilot
@@ -1054,7 +1062,8 @@ export class LeashDriver {
         ap.cancelAttitudeTurn('leash hand-off ended');
       }
     } catch (e) { /* the turn is already over */ }
-    if (ap && typeof ap.releaseAttitudeHold === 'function') ap.releaseAttitudeHold();
+    if (ap && typeof ap.releaseAttitudeHold === 'function') ap.releaseAttitudeHold(done ? { passToNet: true } : undefined);
+    if (done && typeof this.player.holdHeadingBetweenCatches === 'function') this.player.holdHeadingBetweenCatches();
   }
 
   _applyState(h, st, dt, restKg) {

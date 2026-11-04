@@ -771,6 +771,8 @@ export class AutopilotSystem {
     /** Who owns the attitude hold ('leash' = LeashDriver), or null. Other listeners may not release an owned hold. */
     this._attitudeHoldOwner = null;
     this._attitudeHoldElapsed = 0;
+    /** A mother net is away (NET_FIRED until its catch, miss or release): the leash hand-off passes the hold on to it. */
+    this._motherNetFlying = false;
     /** The attitude hold from the end of an aimed daughter launch's aim to her spring, or null. */
     this._launchHold = null;
     /** The wheels turning her toward a picked daughter's shot, or null. NOT an aim (`isAiming()` stays false). */
@@ -1258,8 +1260,9 @@ export class AutopilotSystem {
   }
 
   /** Release the reel-in attitude hold (unless an aim seq owns it).
-   * @param {{ifUnowned?: boolean}} [opts] — `ifUnowned` (the lasso / net listeners) leaves a hold that an owner took
-   *   (the leash hand-off) alone; the owner and the safety cap release it for real.
+   * @param {{ifUnowned?: boolean, passToNet?: boolean}} [opts] — `ifUnowned` (the lasso / net listeners) leaves a hold that an
+   *   owner took (the leash hand-off) alone; the owner and the safety cap release it for real. `passToNet` (the hand-off's
+   *   end): a mother net fired while the hand-off held the ship takes the hold over, so its aim survives (capture-1104 S3).
    * @returns {boolean} true if the hold was released */
   releaseAttitudeHold(opts) {
     if (opts && opts.ifUnowned && this._attitudeHoldOwner) return false;
@@ -1269,7 +1272,19 @@ export class AutopilotSystem {
     this._attitudeHoldTimeoutS = null;
     // A running scripted turn keeps the aim ownership (it re-asserts the hold when it ends).
     if (this._player && !this._aimCoroutine && !this._turn && !this._preturn) this._player.aimHold = false;
+    if (opts && opts.passToNet && this._motherNetFlying) this.holdAttitudeForNet();
     return true;
+  }
+
+  /** The catch is seated (net berthed, lasso stowed): the hold ends and the ship STAYS pointed where it is. A real ship has
+   * no reason to burn gas turning back toward prograde between catches (owner 2026-11-04, capture-1104 S1): the recentre
+   * pauses exactly as after a refused shot, until the next manual command, autopilot engage, new aim or a daughter going
+   * out. Nothing is paused when no hold was running or the leash hand-off already owns it (its own end pauses, S2). */
+  _endHoldCatchSeated() {
+    const hadFreeHold = this._attitudeHold && !this._attitudeHoldOwner;
+    if (this.releaseAttitudeHold({ ifUnowned: true }) && hadFreeHold && this._player) {
+      this._player.holdHeadingBetweenCatches?.();
+    }
   }
 
   /** @private The hold is a steady freeze (steering is suppressed): this only enforces the safety cap if a reel-in end event is missed. */
@@ -3084,7 +3099,7 @@ export class AutopilotSystem {
     // prograde auto-orient (_orientAlongVelocity via player.aimHold) and `_rotateTowardWorld` (guarded on `_attitudeHold`).
     eventBus.on(Events.LASSO_FIRED, () => this.holdAttitude());
     const endHold = () => this.releaseAttitudeHold({ ifUnowned: true });
-    eventBus.on(Events.LASSO_STOWED, endHold);
+    eventBus.on(Events.LASSO_STOWED, () => this._endHoldCatchSeated());   // the seat: the ship stays pointed (S1)
     eventBus.on(Events.LASSO_SNAPPED, endHold);
     eventBus.on(Events.LASSO_MISSED, endHold);
     eventBus.on(Events.LASSO_DENIED, endHold);
@@ -3092,14 +3107,23 @@ export class AutopilotSystem {
     // Mother-net attitude hold: mirrors the lasso wiring, mother-only (podIndex ≥ 0), with the dedicated net timeout (flight + reel
     // + berth, not the shared 30 s AIM_TIMEOUT_S). The hold is a FREEZE; manual rotation stays available by design.
     eventBus.on(Events.NET_FIRED, (data) => {
-      if (data && data.podIndex >= 0) this.holdAttitudeForNet();
+      if (data && data.podIndex >= 0) { this._motherNetFlying = true; this.holdAttitudeForNet(); }
     });
+    // Every end of a mother net's flight clears the flag (a lost, failed or released net has nothing to pass the hold to).
     const endNetHold = (data) => {
-      if (data && data.podIndex >= 0) this.releaseAttitudeHold({ ifUnowned: true });
+      if (data && data.podIndex >= 0) { this._motherNetFlying = false; this.releaseAttitudeHold({ ifUnowned: true }); }
     };
     eventBus.on(Events.NET_CATCH_MISS, endNetHold);
     eventBus.on(Events.NET_RELEASED, endNetHold);
-    eventBus.on(Events.NET_BERTHED, endNetHold);
+    // Seated at the collar: the hold ends and the ship stays pointed between catches (S1).
+    eventBus.on(Events.NET_BERTHED, (data) => {
+      if (data && data.podIndex >= 0) { this._motherNetFlying = false; this._endHoldCatchSeated(); }
+    });
+    // A new game starts recentring again: the between-catches pause must not outlive the run (review, capture-1104).
+    eventBus.on(Events.GAME_RESET, () => {
+      this._motherNetFlying = false;
+      if (this._player) this._player._recenterPaused = false;
+    });
     // NET_FAILED / TETHER_SNAP are ArmUnit-only emitters: subscribed defensively, never relied on for mother cleanup.
     eventBus.on(Events.NET_FAILED, endNetHold);
     eventBus.on(Events.TETHER_SNAP, endNetHold);

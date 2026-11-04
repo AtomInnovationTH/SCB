@@ -8394,6 +8394,18 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * Between catches the ship stays pointed where the catch left her (owner 2026-11-04, capture-1104: a real ship has no reason
+   * to burn gas turning back to prograde after a catch is seated or a hand-off is done: about 420 g and 7 s per 1 m catch).
+   * The same pause as after a refused shot, with the same ends (a manual pitch/yaw command, autopilot engage, a new aim, a
+   * daughter going out). Called where the attitude hold is released, i.e. while the owner is still AIM: the rate is already
+   * zero and the recentre has not run, so the flag is all there is to do. While an owner other than the player is in charge
+   * (a hold, an aim) the per-frame clear in `_tickAttitudeCore` keeps it off, as designed: the next release sets it again.
+   */
+  holdHeadingBetweenCatches() {
+    this._recenterPaused = true;
+  }
+
+  /**
    * Continuity on handback (load-bearing). When attitude ownership returns to PLAYER, fold the current world attitude into
    * the manual offset so `quaternion = prograde · _manualRotation` reproduces it exactly (no snap), and zero the body rate.
    * When the hold that aimed the ship (owner AIM) hands back, the heading she hands back at becomes the heading the tether
