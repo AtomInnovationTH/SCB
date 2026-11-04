@@ -409,6 +409,18 @@ export function holdsStillLine(reason) {
   return `Aiming the arm only: ${why}, so the ship holds still.`;
 }
 
+/**
+ * The line when the ship must hold still and the strut alone cannot line the daughter up (by analogy with DECISIONS §45 row 1 / §61, which rule
+ * on nets, not launches: a launch that cannot reach its piece is refused and spends nothing). She stays docked.
+ * @param {string} name her display name
+ * @param {string} reason why the ship holds still (what `ArmManager._motherTurnBlock` answers)
+ * @param {number} deg how far off her best strut line the piece lies (degrees)
+ */
+export function armOnlyOffLineLine(name, reason, deg) {
+  const why = reason === 'a catch is being reeled in' ? 'a catch is reeling in' : reason;
+  return `${name} stays docked: ${why}, so the ship holds still, and the piece is ${Math.round(deg)}° off her strut.`;
+}
+
 // Geometry: pure; plain arrays or {x,y,z}; one common frame, metres.
 
 const v3 = (p) => (Array.isArray(p) ? [p[0], p[1], p[2]] : [p.x, p.y, p.z]);

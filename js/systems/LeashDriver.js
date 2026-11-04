@@ -35,7 +35,7 @@ import { reseatOrbitFromScene } from '../entities/OrbitalMechanics.js';
 import { DebrisField } from '../entities/DebrisField.js';
 import { DEG2RAD } from '../core/MathUtil.js';
 
-const ATTITUDE_HOLD_S = 300;   // s — safety cap for the autopilot's attitude hold (the hand-off is ~45 s; releaseHold ends it)
+const ATTITUDE_HOLD_S = 300;   // s — safety cap for the autopilot's attitude hold (a hand-off takes about 23-27 s, `LEASH.EXPECTED_S`, plus the nose pull-in of a deep catch; releaseHold ends it)
 const HOLD_OWNER = 'leash';  // the autopilot's lasso / net listeners leave a hold with this owner alone
 const FLOOR_EASE_S = 1.0;  // s — the drawn size eases from the net-held floor to the real size
 const OWN_TIP_RADIUS_M = 0.20;  // m — the hand-off's own tip hardware is never a snag within this of the latch
@@ -201,6 +201,20 @@ export class LeashDriver {
   handoffTip() { return this._h ? this._h.tipIndex : -1; }
 
   handoffNet() { return this._h ? this._h.net : null; }
+
+  /**
+   * Seconds left of the hand-off, only where that count is true: the middle stage (the line is out, the radiators fold and
+   * the catch swings to the tip), where `net._cargoS` counts up from 0 to `EXPECTED_S`. NaN in the nose pull-in (its clock
+   * restarts when the line goes out, so a number there would jump back up) and once the catch has latched, relatched or been
+   * freed (`_applyState` stops the clock there while the radiator still swings home): the caller says no time then.
+   * @returns {number}
+   */
+  handoffSecondsLeft() {
+    const h = this._h;
+    if (!h || !h.net || h.phase === 'NOSE_REEL' || h.latched || h.relatched || h.freed) return NaN;
+    const dur = h.net._cargoDur;
+    return Number.isFinite(dur) ? Math.max(0, dur - (h.net._cargoS || 0)) : NaN;
+  }
 
   /**
    * Can a hand-off start now? Null = yes; else the reason, once per reason per catch.
@@ -1106,9 +1120,11 @@ export class LeashDriver {
     }
   }
 
-  _say(text, priority = 'info') {
+  _say(text, priority = 'info', loud = false) {
     // `_keep`: where the catch went (and why a hand-off failed) is never folded into "x N queued".
-    this.eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true });
+    // `_critical`: a failure (a warning, or "the catch is gone") passes the tutorial's tier-0 mute: without it the player
+    // never learns the leash touched the hull and the catch drifted free (measured, training 1). Progress lines stay muted.
+    this.eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true, _critical: loud || priority === 'warning' });
   }
 
   _finish(h, res) {
@@ -1132,7 +1148,7 @@ export class LeashDriver {
   }
 
   _lose(h) {
-    this._say('The catch is gone. The leash is released.', 'info');
+    this._say('The catch is gone. The leash is released.', 'info', true);
     this._abort('lost');
     if (h.net) {
       h.net._leash = false;

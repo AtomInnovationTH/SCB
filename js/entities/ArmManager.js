@@ -30,7 +30,7 @@ import { GestureHints } from '../ui/hud/GestureHints.js';
 import {
   pieceClaim, isFree, linesCross, lineWrapsShip, pieceIsCaught,
   launchRefusalLine, crossNamedStrutLine, crossNoneClearLine, launchDroppedLine, launchCrossDroppedLine,
-  fanOutLine, fanOutNoneLine, stayedLine, reachNoneLine, heavyNoneLine, holdsStillLine, netIsOut,
+  fanOutLine, fanOutNoneLine, stayedLine, reachNoneLine, heavyNoneLine, holdsStillLine, armOnlyOffLineLine, netIsOut,
   pairNoneLine, pairNeedsTurnLine, pairNotReadyLine, pairDroppedLine, pairHeldLine, pairDriftLine, pairCrossLine, pairStrutLine, pairRangeLine, pairErrorLine, pairHoldLine,
 } from '../systems/PieceClaim.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac, coldGasPoolToKg } from '../systems/ResourceSystem.js';
@@ -777,6 +777,7 @@ export class ArmManager {
    * @returns {boolean} true if an arm was deployed
    */
   deployArm(target, preferType = null) {
+    this._armOnlyRefusedFlag = false;                  // read by GameFlowManager.deployArm after this call
     if (!target) return false;
     if (target._disposed === true) return false;       // a piece that was disposed of is no catch
 
@@ -886,6 +887,7 @@ export class ArmManager {
     // auto-pick caller announces only a launch that has already happened).
     const blocked = this._motherTurnBlock();
     if (blocked) {
+      if (this._armOnlyRefused(arm, target, blocked)) return false;   // the strut alone cannot line her up: nothing spent
       this._sayCantTurn(blocked);
       return this._launchArm(arm, 'target', () => this._launchDirShip(arm, target),
         () => arm.deploy(target), { ...(opts || {}), announce: true }, target);
@@ -942,6 +944,7 @@ export class ArmManager {
       // Reaction wheels: with the steering gas out the wheels were asked to turn her and need longer than the aim allows
       // ('TOO_SLOW', refused at once, nothing moved): the strut aims alone, as it always did with the gas out.
       if (err && err.code === 'TOO_SLOW' && arm.state === ARM_STATES.DOCKED) {
+        if (this._armOnlyRefused(arm, target, 'the steering gas is empty')) return;
         this._sayCantTurn('the steering gas is empty');
         this._launchArm(arm, 'target', () => this._launchDirShip(arm, target),
           () => arm.deploy(target), { announce: true }, target);
@@ -1021,6 +1024,8 @@ export class ArmManager {
     if (target && !(this._pendingLaunches && this._pendingLaunches.has(index))) {
       const blocked = this._motherTurnBlock();
       if (!blocked) return this._deployWithCeremony(arm, target, opts);
+      // The strut alone cannot line her up: refused, nothing spent (the line is said there).
+      if (this._armOnlyRefused(arm, target, blocked)) return false;
       // The D key with this daughter selected (`announce`) says why the mother does not turn, once; a launch of hers that
       // already waits keeps its single entry and says nothing again.
       if (opts && opts.announce) this._sayCantTurn(blocked);
@@ -1444,6 +1449,49 @@ export class ArmManager {
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: holdsStillLine(reason), priority: 'info',
     });
+  }
+
+  /**
+   * The ship holds still, so only `arm`'s strut aims: how far (degrees) the piece lies off the strut line she can reach,
+   * read before anything moves (the best strut angle `_aimAlphaFor` picks, capped as the launch caps it, against the bearing
+   * to the piece). A daughter ducked aside (lean-aside: the duck owns her latch, `_launchAimed` never aims her) launches from
+   * wherever her strut is now, so she is judged from `getAimAlpha()`, not from the best angle. Null when it cannot be told
+   * (no piece position, a mock arm): nothing is refused on a guess.
+   * @private
+   */
+  _armOnlyMissDeg(arm, target) {
+    try {
+      const i = this.arms.indexOf(arm);
+      const tp = target && target._scenePosition;
+      if (i < 0 || !tp || !arm.position || !arm.dockOffset || typeof arm.getAimAlpha !== 'function') return null;
+      const wanted = this._launchDirShip(arm, target);
+      if (!wanted || !(wanted.lengthSq() > 1e-12)) return null;
+      const aim = this._leanAsideArmIndices.has(i) ? arm.getAimAlpha() : this._aimAlphaFor(i, wanted);
+      const axis = strutLocalDirection(aim, Math.atan2(arm.dockOffset.y, arm.dockOffset.x), new THREE.Vector3()).normalize();
+      return radToDeg(Math.acos(Math.max(-1, Math.min(1, axis.dot(wanted.clone().normalize())))));
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * Refuse a strut-only launch (the ship holds still) when the piece lies past `AIM.ARM_ONLY_MISS_MAX_DEG` off the line her
+   * strut can reach: she stays docked, nothing is spent, one line says why (by analogy with DECISIONS §45 row 1 / §61, which rule on nets, not launches). Within the
+   * tolerance the launch goes as before. Sets `_armOnlyRefused` for the auto-pick caller (GameFlowManager), which would
+   * otherwise add a second, generic refusal line.
+   * @param {ArmUnit} arm
+   * @param {object} target
+   * @param {string} reason why the ship holds still
+   * @returns {boolean} true when refused (the line is said)
+   * @private
+   */
+  _armOnlyRefused(arm, target, reason) {
+    const miss = this._armOnlyMissDeg(arm, target);
+    if (miss === null || !(miss > Constants.AIM.ARM_ONLY_MISS_MAX_DEG)) return false;
+    this._armOnlyRefusedFlag = true;
+    arm._claimTarget = null;
+    eventBus.emit(Events.COMMS_MESSAGE, { text: armOnlyOffLineLine(arm.displayName, reason, miss), priority: 'warning' });
+    return true;
   }
 
   /**
@@ -2352,13 +2400,14 @@ export class ArmManager {
   toggleStruts(armIndex) {
     this.lastStrutPressNote = null;
     this._pendingStrutNote = null;               // a new press supersedes a line still waiting out the double-press window
-    let docked = (this.arms || []).filter((a) => a && a.state === ARM_STATES.DOCKED);
+    // an arm mid-aim (`_aimReserved`: Q / launch turn) owns its strut; a "." press leaves it alone
+    let docked = (this.arms || []).filter((a) => a && a.state === ARM_STATES.DOCKED && a._aimReserved !== true);
     // a daughter holding a catch takes the press too; her strut stays between her hold pose and HOLD_POSE_MAX_DEG (see `_pressHolders`)
     let holders = (this.arms || []).filter((a) => a && a.state === ARM_STATES.HOLDING_CATCH && !a.isDetached
       && Array.isArray(a.heldCatches) && a.heldCatches.some((h) => h));
     if (Number.isInteger(armIndex) && armIndex >= 0) {
       const only = (this.arms || [])[armIndex];
-      if (only && only.state === ARM_STATES.DOCKED) { docked = [only]; holders = []; }
+      if (only && only.state === ARM_STATES.DOCKED) { docked = only._aimReserved === true ? [] : [only]; holders = []; }
       else if (only && holders.includes(only)) { docked = []; holders = [only]; }
     }
     if (!docked.length && !holders.length) return null;
@@ -2413,6 +2462,7 @@ export class ArmManager {
     if (!docked.length) return null;
     const V5 = Constants.OCTOPUS_V5;
     for (const arm of docked) {
+      if (arm._aimReserved === true) continue;   // an arm mid-aim (Q / launch turn) owns its strut: the opening runs a task after Q's handler and must not re-latch it
       if (_strutLiveAlpha(arm) >= V5.STRUT_OPEN_THRESHOLD) continue;
       arm._strutTargetAlpha = V5.STRUT_REST_ALPHA;
       // Softer opening (DECISIONS §55 row 4): this move starts and ends gently at the strut's own top speed. The mark is

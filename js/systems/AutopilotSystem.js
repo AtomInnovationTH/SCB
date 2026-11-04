@@ -2140,6 +2140,10 @@ export class AutopilotSystem {
 
     const AP = Constants.AUTOPILOT;
     const POS_TOL = AP.POS_TOL;                            // m
+    // On station is "in position" only where the shot's sure range holds: a hold inside the net's CLOSE_RANGE (the mother's net, 20 m)
+    // arrives only within the rest of that range, so the ship is never farther than CLOSE_RANGE (30 m) when the line says "Press N".
+    const closeM = Constants.CAPTURE_NET.CLOSE_RANGE;
+    const ARRIVE_TOL = Dtrail_m < closeM ? Math.min(POS_TOL, closeM - Dtrail_m) : POS_TOL;   // m
     const VEL_TOL = AP.VEL_TOL;                            // m/s
     const ANG_TOL = degToRad(AP.ANG_TOL_DEG);        // rad
     const FAR_TO_MATCH = AP.FAR_TO_MATCH_POS;              // m
@@ -2183,7 +2187,7 @@ export class AutopilotSystem {
       }
       case PHASE.TRAIL_ALIGN: {
         dvCmd.copy(velCtrlErr).multiplyScalar(AP.KP_VEL);
-        if (posErrM < POS_TOL && velErrMps < VEL_TOL && angleRad < ANG_TOL) {
+        if (posErrM < ARRIVE_TOL && velErrMps < VEL_TOL && angleRad < ANG_TOL) {
           this._setPhase(PHASE.HOLD);
           this._holdTimer = 0;
 
@@ -2984,8 +2988,8 @@ export class AutopilotSystem {
   /**
    * Tool-aware trailing distance (metres):
    *   lasso   → D_TRAIL_LASSO
-   *   spinner → D_TRAIL_ARMS
-   *   weaver  → D_TRAIL_ARMS
+   *   spinner → D_TRAIL_NET for a piece over the lasso's 10 kg (N fires the mother's large net at it), else D_TRAIL_ARMS
+   *   weaver  → same as spinner
    *   trawl   → D_TRAIL_TRAWL
    *   mother  → D_TRAIL_NET (20 m, inside the Large Net sure-shot band)
    *   default → D_TRAIL_DEFAULT
@@ -2994,13 +2998,28 @@ export class AutopilotSystem {
     const AP = Constants.AUTOPILOT;
     const tool = this._targetSelector ? this._targetSelector._recommendedTool : null;
     switch (tool) {
+      case 'spinner':
+      case 'weaver':  return this._armToolTrailM();
       case 'lasso':   return AP.D_TRAIL_LASSO;
-      case 'spinner': return AP.D_TRAIL_ARMS;
-      case 'weaver':  return AP.D_TRAIL_ARMS;
       case 'trawl':   return AP.D_TRAIL_TRAWL;
       case 'mother':  return AP.D_TRAIL_NET;
       default:        return AP.D_TRAIL_DEFAULT;
     }
+  }
+
+  /**
+   * Hold distance (m) for a piece the small or large daughter's tool is recommended for. Over the lasso's 10 kg, N fires the MOTHER'S
+   * large net at it (netRouting.classifyNetTarget), and that net's sure-shot floor needs range <= CLOSE_RANGE (30 m): the old flat 35 m
+   * ("arm reach") parked the ship where the cling chance is 0.48-0.72 and said "In position. Press N to net it." there (training 3: 7 of
+   * 12 casts missed). So those pieces hold at D_TRAIL_NET (20 m), the same margin as the whale band; a daughter's tether (500 m+) needs
+   * no closer-in than that and loses nothing. Unknown mass reads as the lasso band (unchanged D_TRAIL_ARMS).
+   * @returns {number}
+   */
+  _armToolTrailM() {
+    const AP = Constants.AUTOPILOT;
+    const piece = this._lockedTargetRef || (this._targetSelector ? this._targetSelector.getActiveTarget?.() : null);
+    const mass = piece && Number.isFinite(piece.mass) ? piece.mass : 0;
+    return classifyNetTarget(mass).band === 'lasso' ? AP.D_TRAIL_ARMS : AP.D_TRAIL_NET;
   }
 
   /**
@@ -3386,6 +3405,16 @@ export class AutopilotSystem {
       eventBus.on(Events.TARGET_CLEARED, onTargetGone);
 
       this._player.aimHold = true;
+
+      // One driver per strut: a pending latch (the opening's rest-pose move, a "." press) is re-driven every frame by
+      // PlayerSatellite._updateStruts with its own ease, and `ArmUnit.setAimAlpha` restarts a move whenever the ease object
+      // differs, so the two would reset each other and the strut would crawl (training 2: the first Q stalled 30 s). The aim
+      // takes over: drop the latch and its ease on the arm(s) it turns.
+      if (mode === 'daughter') {
+        for (const sa of [opts.arm, pair && pair.armB]) {
+          if (sa && sa._strutTargetAlpha !== undefined) { sa._strutTargetAlpha = undefined; sa._strutEase = null; }
+        }
+      }
 
       eventBus.emit(Events.AIM_SEQUENCE_START, { mode });
       if (slothAim) {

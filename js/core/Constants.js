@@ -4387,6 +4387,11 @@ export const Constants = {
      *  The aim slows to a stop at the target (eased, `_tickAimEased`), so it ends with ~0 rate instead of
      *  stopping the turn dead short and snapping the last degrees. */
     DAUGHTER_AIM_TOLERANCE_DEG: 1,
+    /** The ship holds still (a daughter out on her line, a catch on the collar, a launch under way, the steering gas out), so only
+     *  the strut aims: a piece farther than this off the best strut line is refused, nothing spent (by analogy with DECISIONS §45 row 1 / §61, which rule on nets, not launches).
+     *  A miss of 5-10° still launches and costs a mother turn at reel-home (about 0.1 kg of gas; accepted).
+     *  10 = `PAIR_SHOT.MISS_DEG`, the launch-line miss a daughter already steers out after a pair shot (FIRE_MISS_DEG 12 is its spring gate). */
+    ARM_ONLY_MISS_MAX_DEG: 10,
     /** Abort the aim sequence if it cannot converge within this many seconds. */
     AIM_TIMEOUT_S: 30,
     /** Autopilot-managed slew rate (rad/s) — matches AutopilotSystem AP_ROT_RATE. */
@@ -4464,7 +4469,7 @@ export const Constants = {
   AUTOPILOT: {
     // --- Tool-aware trailing distance (metres behind debris along V_d) ---
     D_TRAIL_LASSO:   70,   // m — park INSIDE the 90 m lasso/net range (LASSO_RANGE === NET_LOCK_RANGE_M); 70 + POS_TOL 15 < 90
-    D_TRAIL_ARMS:    35,   // m — spinner/weaver arm reach (~50 m)
+    D_TRAIL_ARMS:    35,   // m — spinner/weaver hold for a piece of 10 kg or less (unknown mass); over 10 kg N fires the mother's net, so the hold is D_TRAIL_NET (AutopilotSystem._armToolTrailM). 35 was "arm reach (~50 m)", not the laser (reach 122.9 m) or the plume
     D_TRAIL_TRAWL:   150,  // m — trawl sweep trailing centroid
     D_TRAIL_DEFAULT: 80,   // m — fallback when no tool recommendation
     // Mother Large Net (whale) hold. Must sit INSIDE the sure-shot band: SURE_SHOT_MIN_CLING needs range ≤

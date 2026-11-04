@@ -17,7 +17,7 @@ import { CeremonyTimeScale } from './CeremonyTimeScale.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 import {
-  classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, targetRangeM, netRangeLine,
+  classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, collarBusyLine, targetRangeM, netRangeLine,
   netReachForMassM, driftOutOfReachLine, netFlightClockScale,
 } from './netRouting.js';
 import { computeLeadAim, netMaxReachM, overCatchLimit, catchLimitLine } from '../entities/CaptureNet.js';
@@ -2554,6 +2554,10 @@ export class InputManager {
     // Small net too: refuse (nothing spent) a piece that will have drifted past reach by the time the net gets there.
     if (activeTarget && this._refuseDriftOutOfReach(activeTarget)) return;
 
+    // The nose collar (or a leash hand-off on it) is busy: LassoSystem.fire would refuse, but only AFTER the aim turn
+    // (~16 s of ship turning, steering gas spent, the hand-off's own turn and hold stripped). Say so now, start nothing.
+    if (this._refuseCollarBusy()) return;
+
     // ── Aim-before-launch (as the Large Net): only with a selected target in lasso range, autopilot and live attitude;
     // the no-target auto-aim stays instant.
     const ap = d.autopilotSystem;
@@ -2604,6 +2608,45 @@ export class InputManager {
     }
 
     this._castLasso();
+  }
+
+  /**
+   * N while the nose collar is busy: refuse BEFORE any aim turn, windup or gas (DECISIONS §61 row 1), with the lasso's own
+   * `collar_busy` denial and line (LassoSystem.fire says the same, but only after the turn). Busy = a catch on the collar,
+   * a mother net away, a lasso catch waiting for the collar, or a leash hand-off running; while the hand-off's line is out and
+   * counting down, the line adds its time left (none in the pull-in or after the latch: no true count there). `leashOnly` (the large net, which may fire past a catch on the collar) checks the hand-off alone:
+   * its aim turn would replace the hand-off's own turn and hold.
+   * @param {{leashOnly?: boolean}} [opts]
+   * @returns {boolean} true when refused (nothing started)
+   */
+  _refuseCollarBusy(opts) {
+    const d = this._deps; if (!d) return false;
+    const leashOnly = !!(opts && opts.leashOnly);
+    const drv = d.player && d.player.leashDriver;
+    const leashBusy = !!(drv && (drv.busy === true || (typeof drv.isActive === 'function' && drv.isActive())));
+    const cns = d.captureNetSystem;
+    let busy = leashBusy;
+    if (!leashOnly && !busy && cns) {
+      busy = !!((typeof cns.getDockedCatch === 'function' && cns.getDockedCatch())
+        || (typeof cns.hasMotherNetInFlight === 'function' && cns.hasMotherNetInFlight())
+        || (d.lassoSystem && d.lassoSystem._pendingAdoption));
+    }
+    if (!busy) return false;
+    let waitS = NaN;
+    // The driver gives a number only in the stage where it is true (the line out, counting down); none in the nose
+    // pull-in (its clock restarts) or after the latch (the clock stops while the radiator swings home).
+    if (leashBusy && typeof drv.handoffSecondsLeft === 'function') waitS = drv.handoffSecondsLeft();
+    const noseFull = !leashOnly && cns && typeof cns.getNoseFullLine === 'function' ? cns.getNoseFullLine() : null;
+    eventBus.emit(Events.LASSO_DENIED, { reason: 'collar_busy' });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: noseFull || collarBusyLine(waitS),
+      source: 'SYSTEM',
+      channel: 'CMD',
+      priority: 'warning',
+      _lassoFeedback: true,
+    });
+    d.audioSystem?.playDeny?.();
+    return true;
   }
 
   /**
@@ -2788,7 +2831,7 @@ export class InputManager {
       const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
       // The piece may have been taken during the windup (a daughter's launch, a net): re-check at release.
       if (target && this._refuseNetAtOwnedPiece(target)) {
-        d.autopilotSystem?.releaseAttitudeHold?.();
+        d.autopilotSystem?.releaseAttitudeHold?.({ ifUnowned: true });
         if (afterAim) d.player.holdHeadingAfterRefusal?.();
         return;
       }
@@ -2796,12 +2839,12 @@ export class InputManager {
       // route it to the mother-net path as fireLasso does. Nothing spent yet; the attitude hold is released first.
       if (target && d.captureNetSystem && Constants.isFeatureEnabled('CAPTURE_NET')
           && classifyNetTarget(target.mass || 0).band !== 'lasso') {
-        d.autopilotSystem?.releaseAttitudeHold?.();
+        d.autopilotSystem?.releaseAttitudeHold?.({ ifUnowned: true });
         this.fireMotherNet(target);
         return;
       }
       if (target && this._refuseDriftOutOfReach(target, 0)) {   // the windup has run: no launch delay left
-        d.autopilotSystem?.releaseAttitudeHold?.();
+        d.autopilotSystem?.releaseAttitudeHold?.({ ifUnowned: true });
         if (afterAim) d.player.holdHeadingAfterRefusal?.();
         return;
       }
@@ -2809,7 +2852,7 @@ export class InputManager {
       // A refused cast (out of arc, cargo full, no ammo, cooldown…) fires no reel-in end event: release the attitude
       // hold now, or the ship stays frozen until the safety cap.
       if (cast === false) {
-        d.autopilotSystem?.releaseAttitudeHold?.();
+        d.autopilotSystem?.releaseAttitudeHold?.({ ifUnowned: true });
         if (afterAim) d.player.holdHeadingAfterRefusal?.();
       }
     }, windupMs);
@@ -2835,6 +2878,9 @@ export class InputManager {
       cns.fireMotherNet(podIndex, d.player.getPosition(), { x: 0, y: 0, z: 1 }, target);
       return;
     }
+
+    // A leash hand-off is turning the ship / holding its attitude: the aim below would replace its turn and hold. Refuse now.
+    if (this._refuseCollarBusy({ leashOnly: true })) return;
 
     if (ap && typeof ap.isAiming === 'function' && ap.isAiming()) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -3194,7 +3240,7 @@ export class InputManager {
     if (!arm) return false;
 
     if (arm.state === Constants.ARM_STATES.STATION_KEEP) {
-      this.captureWithDaughter(arm);
+      this.captureWithDaughter(arm, { manual: true });   // the player flew her and pressed N: a manual catch, as in flight (training 2)
       return true;
     }
 
@@ -3354,10 +3400,14 @@ export class InputManager {
    * Work a station-keeping daughter's selected tool (multi-tool dispatch when DAUGHTER_MULTITOOL is on, else the
    * plain net); shared by captureWithPilotedArm and the no-pilot-mode KeyN branch.
    * @param {object} arm — an ArmUnit in STATION_KEEP
+   * @param {{manual?:boolean}} [opts] — `manual: true` only from the piloted-daughter N (captureWithPilotedArm): the catch then
+   *   counts as manual (ARM_CAPTURED `manual:true`, the x2 score, the coach's manual-catch beat). Always assigned, so a no-pilot
+   *   N never inherits an earlier piloted press's flag.
    */
-  captureWithDaughter(arm) {
+  captureWithDaughter(arm, opts = {}) {
     const d = this._deps;
     if (this._refuseDaughterNetOutOfReach(arm)) return;
+    arm._manualCapture = opts.manual === true;
     if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
         && typeof arm.dispatchSelectedTool === 'function') {
       arm.dispatchSelectedTool();

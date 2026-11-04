@@ -4499,7 +4499,7 @@ export class GameFlowManager {
         channel: 'CMD',
         priority: 'info',
       });
-    } else if (!deployed) {
+    } else if (!deployed && !armManager._armOnlyRefusedFlag) {   // (the strut-only refusal has said its one line)
       // ArmManager.deployArm() already emits specific comms for the common rejections; the one silent path is a docked arm
       // whose ArmUnit.deploy() returns false (state mismatch, spring uncharged): backstop with a reason read from the fleet
       const arms = armManager.arms || [];

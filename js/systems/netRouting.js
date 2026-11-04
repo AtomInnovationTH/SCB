@@ -11,6 +11,15 @@ import { TimeAuthority } from './TimeAuthority.js';
 /** The ONE line for N with no mother nets left (DECISIONS §33 row 3). Every empty-magazine refusal says exactly this. */
 export const OUT_OF_MOTHER_NETS_LINE = 'Out of mother nets. Press D to send a daughter.';
 
+/** N while the nose collar holds a catch, a net is away, or a leash hand-off runs. One home for the line the lasso and
+ *  InputManager (the pre-turn refusal) both say; `waitS` (the hand-off's time left, when known) is appended in plain words. */
+export const COLLAR_BUSY_LINE = 'Cargo berth busy. Wait for the nose collar to clear.';
+export function collarBusyLine(waitS) {
+  return Number.isFinite(waitS) && waitS >= 2
+    ? `${COLLAR_BUSY_LINE.slice(0, -1)}, about ${Math.ceil(waitS)} s.`
+    : COLLAR_BUSY_LINE;
+}
+
 /**
  * N on a piece beyond the reach of the net that would fire, but inside a docked daughter's reach (DECISIONS §33 row 3).
  * Not said while the mission-1 tutorial runs (its range beat teaches the autopilot instead).

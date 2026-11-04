@@ -11,7 +11,7 @@ import { devShotGate } from '../core/DevShotGate.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
-import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, targetRangeM, netRangeLine, motherNLine, motherNWorks } from './netRouting.js';
+import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, COLLAR_BUSY_LINE, targetRangeM, netRangeLine, motherNLine, motherNWorks } from './netRouting.js';
 import { isFree, netRefusalLine, lassoRangeAllOwnedLine } from './PieceClaim.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
@@ -872,7 +872,7 @@ export class LassoSystem {
             // line; while a hand-off is pending the wait line stays.
             const noseFull = typeof cns.getNoseFullLine === 'function' ? cns.getNoseFullLine() : null;
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: noseFull || 'Cargo berth busy. Wait for the nose collar to clear.',
+                text: noseFull || COLLAR_BUSY_LINE,
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
