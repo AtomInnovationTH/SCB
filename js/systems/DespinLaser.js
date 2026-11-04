@@ -224,6 +224,7 @@ export class DespinLaser {
     this._beam = null;          // lazy THREE.Line (the mother's path: direct, or mother → daughter → piece)
     this._ownLines = new Map(); // lazy THREE.Line per weaver whose own laser fires (daughter → piece)
     this._kindsKey = '';        // the beam kinds acting last frame, joined (DESPIN_BEAMS change detection)
+    this._motherSaid = false;   // the MOTHER "De-spin laser firing" line was said for this firing (the mother's laser acted)
     this._debrisField = null;   // takes the piece's push (`applyDeltaV`); null = no push (headless tests)
     this._beamTarget = null;    // debris currently lit
     this._overrideTarget = null; // piloted-arm SK target (see setOverrideTarget)
@@ -455,6 +456,7 @@ export class DespinLaser {
         this._wasFiring = false;
       }
       this._kindsKey = '';
+      this._motherSaid = false;
       if (this._beamTarget) { this._beamTarget._despinning = false; this._beamTarget = null; }
       this._hideBeam();
       return;
@@ -466,14 +468,19 @@ export class DespinLaser {
       this._wasFiring = true;
       this._kindsKey = key;
       eventBus.emit(Events.ABLATION_START, { armIndex: -1, targetId: target.id ?? null, kinds });
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'MOTHER', text: 'De-spin laser firing. Bleeding target tumble.',
-        channel: 'CMD', priority: 'info',
-      });
     } else if (key !== this._kindsKey) {
       // a relay or a weaver laser joined (or dropped out) while firing
       this._kindsKey = key;
       eventBus.emit(Events.DESPIN_BEAMS, { targetId: target.id ?? null, kinds });
+    }
+    // The MOTHER line is said once per firing, on the first frame the mother's laser acts (direct or relayed): at the start, or
+    // when it joins a weaver-only firing. A weaver-only firing says nothing.
+    if (mAct && !this._motherSaid) {
+      this._motherSaid = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'MOTHER', text: 'De-spin laser firing. Bleeding target tumble.',
+        channel: 'CMD', priority: 'info',
+      });
     }
 
     const alpha = beams.reduce((a, b) => a + b.alpha * b.paid, 0);

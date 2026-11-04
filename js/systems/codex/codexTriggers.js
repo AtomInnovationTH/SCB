@@ -22,6 +22,8 @@ const txtAll = (...subs) => (p) => !!p && !!p.text && subs.every(s => p.text.toL
 const txtCS = (...subs) => (p) => !!p && !!p.text && subs.some(s => p.text.includes(s));
 const src = (...sources) => (p) => !!p && sources.includes(p.source);
 const always = () => true;
+/** The de-spin laser's `kinds` payload (ABLATION_START, DESPIN_BEAMS) holds any of `wanted`; false for a payload without `kinds`. */
+const beamKindsHave = (p, ...wanted) => Array.isArray(p?.kinds) && p.kinds.some((k) => wanted.includes(k));
 /** COMMS_MESSAGE from an ISRO ground station (case-insensitive source match). */
 const isroComms = (p) => {
   const s = (p.source || '').toUpperCase();
@@ -300,8 +302,15 @@ export const CODEX_TRIGGERS = {
   two_beam_plasma_pusher: [{ event: E.BIG_PIECE_FATE, match: (p) => p?.fate === 'push' }],
   ion_beam_shepherd:      [{ event: E.BIG_PIECE_FATE, match: (p) => p?.fate === 'push' }],
   laser_debris_nudge:     [{ event: E.ABLATION_START, match: always }],
-  // The mother's own laser: DespinLaser emits ABLATION_START with armIndex -1 (a daughter's ablation laser sends its arm index).
-  despin_laser:           [{ event: E.ABLATION_START, match: (p) => p?.armIndex === -1 }],
+  // De-spin laser cards (laser round 2). DespinLaser emits ABLATION_START and, when the set changes while firing,
+  // DESPIN_BEAMS, both with `kinds` = the sorted unique beam kinds acting ('direct' | 'relay' | 'own'). `despin_laser` (the
+  // mother's laser) unlocks only when the mother's laser acts: 'direct', or 'relay' (her beam bounced off a daughter). A
+  // weaver-only firing (kinds ['own']) leaves it locked and unlocks `relay_mirror` instead (a relay or a weaver's own laser).
+  // No `kinds` (an old or foreign payload) matches neither.
+  despin_laser:           [{ event: E.ABLATION_START, match: (p) => beamKindsHave(p, 'direct', 'relay') },
+                           { event: E.DESPIN_BEAMS, match: (p) => beamKindsHave(p, 'direct', 'relay') }],
+  relay_mirror:           [{ event: E.ABLATION_START, match: (p) => beamKindsHave(p, 'relay', 'own') },
+                           { event: E.DESPIN_BEAMS, match: (p) => beamKindsHave(p, 'relay', 'own') }],
   net_membrane_wrap:      [{ event: E.NET_CATCH_SUCCESS, match: always }],
   spring_net_ejector:     [{ event: E.NET_FIRED, match: always }],
   electroadhesive_grip:   [{ event: E.ARM_CAPTURED, match: (p) => p?.tool === 'PAD' }],
