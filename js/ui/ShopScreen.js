@@ -14,7 +14,7 @@ import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
 import { DAUGHTER_NET_EFFECT_TYPE } from '../systems/upgradeEffectRoutes.js';
 import { depotWords, shopTitle } from '../systems/resupplyWords.js';   // lane 3d: the depot words read the map switch
-import { upgradePrereqsMet, upgradeCostNow, engineTankFull, consumableFull as noRoomFor } from './shopGating.js';
+import { upgradePrereqsMet, upgradeCostNow, engineTankFull, consumableFull as noRoomFor, isShopRowOffered } from './shopGating.js';
 import { gasPriceCr, coldGasPriceCr, coldGasPoolToKg, indiumCartridgePriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
 import { despinReachM, drawW, beamW, relayTier, relayLegMaxM } from '../systems/DespinLaser.js';   // the laser cards read reach, draw and leg from the optics
 import { shipWear, partPriceCr, REPLACE_EFFECT_PART } from '../systems/ShipWear.js';
@@ -79,10 +79,12 @@ export const UPGRADES = [
     // the tank is pool units (20 = 6 kg); the card says real kg (+10 units = +3 kg)
     desc: `+${coldGasPoolToKg(10)} kg max cold gas`, effect: 'coldGasMax', value: 10, maxLevel: 2,
     trl: 9, trlRationale: 'Cold gas tanks ubiquitous since 1960s' },
-  // Reaction-wheel kit (DECISIONS §2 row 9): three RW4-class wheels, magnetic coils that slow them, the electronics.
-  // The numbers are Constants.WHEELS (the card says them out loud: mass, what the wheels do, what they do not).
+  // Reaction-wheel kit (DECISIONS §2 row 9): three RW4-class wheels, magnetic coils that slow them, the electronics. STANDARD since
+  // §57 row 4 (`Constants.WHEELS.STANDARD`, fitted at boot by `installStandardWheels`): the card is NOT offered (like the flower rows,
+  // the row stays here so an old save's purchase still replays and the catalog totals keep their shape; `wheelKit` is idempotent).
+  // The numbers are Constants.WHEELS (the card text says them out loud: mass, what the wheels do, what they do not).
   { id: 'reaction_wheels', cat: 'Propulsion', name: 'Reaction Wheels (3)', cost: Constants.WHEELS.PRICE_CR,
-    desc: `Three spinning wheels, one per axis (${Constants.WHEELS.MASS_KG.toFixed(1)} kg with coils and electronics). They turn her for battery power, no steering gas, but each holds only ${Constants.WHEELS.MOMENTUM_NMS} N·m·s and gives ${Constants.WHEELS.TORQUE_NM} N·m, so a big turn takes minutes: quick turns and big turns stay on the gas. Magnetic coils slow a full wheel in about 4 hours of game time.`,
+    desc: `Standard on every launch, not sold. Three spinning wheels, one per axis (${Constants.WHEELS.MASS_KG.toFixed(1)} kg with coils and electronics). They turn her for battery power, no steering gas, but each holds only ${Constants.WHEELS.MOMENTUM_NMS} N·m·s and gives ${Constants.WHEELS.TORQUE_NM} N·m, so a turn is slow. A full wheel is emptied by a little steering gas when she is at rest. Magnetic coils slow a full wheel in about 4 hours of game time.`,
     effect: 'wheelKit', value: 1, maxLevel: 1,
     trl: 9, trlRationale: 'Reaction wheels flown on thousands of satellites since the 1960s (RW4-class small-satellite wheels, magnetorquer momentum dumping)' },
   { id: 'mpd_thruster', cat: 'Propulsion', name: 'MPD Thruster', cost: 3000,
@@ -293,6 +295,12 @@ export const UPGRADES = [
     requiresAll: ['flower_pair_a'],
     trl: 8, trlRationale: 'Same rigid-radiator heritage as Pair A; staging is operational, not technological' },
 ];
+
+/**
+ * Is this catalog row drawn in the shop? The predicate lives in shopGating.js (pure, shared with the refit card and the purchase
+ * guard below); re-exported here for the tests that import it from the shop.
+ */
+export { isShopRowOffered };
 
 /**
  * Recommended-starter highlight: ordered preference; the shop ⭐-marks the first item here that is un-owned and affordable.
@@ -854,12 +862,8 @@ export class ShopScreen {
 
     const categories = {};
     UPGRADES.forEach(u => {
-      // Hide feature-gated items (e.g. Mother net restock) when the gating flag is off.
-      if (u.requiresFeature && !Constants.isFeatureEnabled(u.requiresFeature)) return;
-      // owner 2026-08-27: while FLOWER_PREINSTALLED is ON the hardware is already aboard at boot — hide its purchase rows so
-      // nobody pays for installed hardware. Rows stay in UPGRADES: CATALOG_TOTAL_CR and its pacing pins are catalog-shape facts.
-      if (Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED
-          && (u.id === 'flower_pair_a' || u.id === 'flower_pair_b')) return;
+      // Hide feature-gated items (e.g. Mother net restock) when the gating flag is off, and hardware that is already aboard.
+      if (!isShopRowOffered(u)) return;
       if (!categories[u.cat]) categories[u.cat] = [];
       categories[u.cat].push(u);
     });
@@ -1143,6 +1147,7 @@ export class ShopScreen {
   _purchaseUpgrade(upgradeId) {
     const upgrade = UPGRADES.find(u => u.id === upgradeId);
     if (!upgrade) return;
+    if (!isShopRowOffered(upgrade)) return;   // a hidden row (standard wheels, pre-installed flower) is never sold, by any route
     if (this._refuseTrade()) return;   // u1-resupply-stop D2: no store in the middle of space
 
     // Consumables (e.g. Mother Large Net restock) are repeatable — no maxLevel gate, no ownership record; they just spend

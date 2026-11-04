@@ -112,8 +112,9 @@ export const CHANGE_FLASH_MS = 1200;
  * The sink rate of the game's drag at `altKm` for HER REFERENCE coefficient, km per REAL second at BASE_SCALE 10 / rate 1.
  * PlayerSatellite integrates atmosphericDrag(alt, v, area, mass) as sma *= 1 - 2*a*dt/v per world second; with her
  * reference area (MotherDragArea.referenceDragAreaM2(): nose-first, radiators 146 deg, wings tracking the sun, 5.79 m2)
- * and her start mass (MOTHER_DRAG.MASS_KG, 294.28 kg) the sink is 2.13e-4 at 350 km, 8.4e-5 at 400, 3.6e-5 at 450 and
- * 1.6e-5 at 500 km (Vallado's air). Her real sink differs at any moment (her area runs from about 1 to 9 m2; she is
+ * and her start mass (MOTHER_DRAG.MASS_KG, 308.78 kg: the standard wheels and the full 6 kg steering tank included) the sink is
+ * 2.03e-4 at 350 km, 8.0e-5 at 400, 3.4e-5 at 450 and 1.5e-5 at 500 km (measured 2026-11-04 by calling this function; they were
+ * 2.13e-4, 8.4e-5, 3.6e-5 and 1.6e-5 at the old 294.28 kg) (Vallado's air). Her real sink differs at any moment (her area runs from about 1 to 9 m2; she is
  * lighter by the gas burnt): this is the yardstick the arrow's line is cut from, not a prediction.
  * @returns {number} km per real second
  */
@@ -625,7 +626,8 @@ export class OrbitPane {
       v.lon = F.lon(sp.lonEastDeg);
     }
 
-    // Eclipse: the predictor rotates BOTH the orbit (world time) and the sun (real time).
+    // Eclipse: the predictor rotates BOTH the orbit (world time) and the sun (real time). Both run on the frame dt × SimClock
+    // k (game time ×8 while the wheels turn her), so its "real" seconds are game seconds and secondsToFlip stays world time.
     const sunDirAt = this._sunDirAtFn();
     let pred = null;
     if (orbit && sunDirAt) {

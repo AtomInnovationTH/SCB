@@ -75,11 +75,15 @@ export const Constants = {
   // per-frame SMA step => lock-step decay. With no source or no frame yet they use her REFERENCE coefficient:
   // MotherDragArea.referenceDragAreaM2() (nose-first, radiators 146 deg, wings tracking the sun) over MASS_KG.
   //
-  // MASS_KG = 294.28 kg: her START mass with both radiator pairs fitted (the game fits them at boot: FLOWER_PREINSTALLED,
-  // main.js applyUpgrade flowerPairA/B). Measured on test-LiveMass.js's full rig: ArmManager.getMassBudget().shipMassKg
-  // = core dry 255.10 (incl. 51.6 kg of radiators) + cold gas 3.6 + docked daughters 17.4 + argon 12.5 + 4 nets 5.7.
-  // test-LiveMass.js keeps it within 0.05 kg of that. Fallback of PlayerSatellite.mass (no arm manager) and the mass
-  // the reference drag is taken at.
+  // MASS_KG = her START mass: DERIVED below the literal (never typed), = START_BASE_KG + the cold-gas start fill + the standard
+  // wheel kit. START_BASE_KG 290.68 kg = the 294.28 kg measured 2026-10-22 on test-LiveMass.js's full rig with both radiator
+  // pairs fitted (the game fits them at boot: FLOWER_PREINSTALLED, main.js applyUpgrade flowerPairA/B) and the old 3.6 kg cold-gas
+  // start, less that 3.6 kg: ArmManager.getMassBudget().shipMassKg = core dry 255.10 (incl. 51.6 kg of radiators) + docked
+  // daughters 17.4 + argon 12.5 + 4 nets 5.7 = 290.68. Then (2026-11-04, wheels-warp D1/D5): + cold gas 6.0 (the full tank,
+  // COLD_GAS_START_FRACTION x OCTOPUS_CORE_COLD_GAS) + the standard wheels 12.1 (WHEELS.MASS_KG, installed at boot by
+  // `PlayerSatellite.installStandardWheels`) = 308.78 kg. The live budget (`getMassBudget`) adds the wheels through
+  // `getWheelKitMassKg` and does not read MASS_KG, so the 12.1 kg is counted once. test-LiveMass.js keeps it within 0.05 kg
+  // of the full rig's budget. Fallback of PlayerSatellite.mass (no arm manager) and the mass the reference drag is taken at.
   //
   // CORE_AREA_M2 = projected area across each body axis, ship WITHOUT the two ROSA blankets, wings at 0 deg, by
   // radiator angle. Columns: radiator angle (deg), across X, across Y, across Z (m2; Z is nose-first). Measured from
@@ -90,7 +94,8 @@ export const Constants = {
   // The model off the axes is in MotherDragArea.js (p-norm 1.5 + two flat wing plates; max 38 %, median 5.5 % against
   // the meshes on 360 poses).
   MOTHER_DRAG: {
-    MASS_KG: 294.28,
+    START_BASE_KG: 290.68,           // the start mass with no cold gas and no wheel kit (see above); MASS_KG is derived from it below the literal
+    MASS_KG: 0,                      // filled below the literal: START_BASE_KG + cold-gas start + standard wheels
     CORE_AREA_M2: [
       // 2026-10-29 (P34 L1): the four tip canisters and gimbal heads are always drawn: only the two nose-first cells that moved
       // more than the test's 5 % (0 and 180 deg across Z, +0.07 and +0.11 m2) are re-measured; every other cell is still within it,
@@ -250,7 +255,7 @@ export const Constants = {
                                    // (FUELS[gas].kgFull kg). Name kept; rename is later cleanup.
   ENGINE_TANK_DRY_MASS_KG: 9.5,   // the 60 L, 200 bar Ti/COPV tank itself (research §2.2 fit). Carried as dry mass in getMassBudget().
   ENGINE_TANK_VOLUME_L: 60,       // base engine tank volume (documentation; kgFull is derived from it)
-  COLD_GAS_MAX: 20,               // tank units, NOT kg: 20 units = 6 kg of nitrogen (0.3 kg a unit; the start fill of 12 units = the 3.6 kg in the mass budget)
+  COLD_GAS_MAX: 20,               // tank units, NOT kg: 20 units = 6 kg of nitrogen (0.3 kg a unit; the start fill, COLD_GAS_START_FRACTION, is all 20 = 6 kg in the mass budget)
   COLD_GAS_LOW_FRAC: 0.25,        // "steering gas low" — a fraction of COLD_GAS_MAX (coldGas / coldGasMax); the HUD
                                    // gas meter turns amber below the same fraction (VitalsPane reads this), the comms line is sent once on crossing it
   COLD_GAS_LOW_REARM_FRAC: 0.35,  // ...and re-arms only after the tank is back above this fraction (a refill), so a tank hovering at a quarter says it once
@@ -260,8 +265,11 @@ export const Constants = {
   BATTERY_START_FRACTION: 0.5,    // owner 2026-10-12: "battery is 50% and dropping until wings open". Every boot —
                                    // new game, retry, loaded save — starts at this fraction of the max; saves carry no charge.
   PROPELLANT_START_FRACTION: 0.6, // owner 2026-10-14: "they start with the cheapest for
-                                   // modern satellites.. and only 60% full": the engine tank AND the cold-gas
-                                   // tank start at this fraction of their max on every boot, like BATTERY_START_FRACTION.
+                                   // modern satellites.. and only 60% full": the ENGINE tank starts at this fraction of its max on
+                                   // every boot, like BATTERY_START_FRACTION. (The cold-gas tank no longer does: see COLD_GAS_START_FRACTION.)
+  COLD_GAS_START_FRACTION: 1.0,   // owner 2026-11-03 (DECISIONS §57 row 5, "Wheels + faster time + full"): "Missions start with a
+                                   // full 6 kg tank." The steering-gas tank starts full on every boot (new game, retry, continue); it
+                                   // was 0.6 (3.6 kg) with the engine tank, and training 1 ran dry at 4 of 5 catches (tmp/tm7/g1).
 
   // DECISIONS §2b (owner 2026-10-14: "every kg is expensive to send up on rockets"): engine gas is priced by what it
   // costs to launch.
@@ -481,6 +489,17 @@ export const Constants = {
   // === TIME ===
   TIME_SCALE_GAMEPLAY: 10,        // 1 real sec = 10 game sec
   ORBITAL_PERIOD_400KM: 5556,     // seconds (~92.6 min)
+  // Game time runs faster while the reaction wheels turn the ship (DECISIONS §57 row 5, owner 2026-11-03: "Time runs
+  // about 8× faster during autopilot turns"). One global scale k owned by js/systems/SimClock.js and applied in
+  // main.js's frame: every game-time system gets dt × k in steps of at most MAX_STEP_S game seconds; input polling,
+  // camera, HUD drawing, comms pacing and idle timers keep the wall clock. Never multiplies a TimeAuthority rate ≠ 1.
+  SIM_SPEEDUP: {
+    K: 8,                    // × game time while the wheels turn her (a 90° wheel turn: 63 s game in ~8 s wall, measured 11-04)
+    RAMP_UP_S: 0.5,          // wall seconds from 1× to K×
+    RAMP_DOWN_S: 0.25,       // wall seconds from K× back to 1× (a gate drops k to 1 the same frame)
+    MAX_STEP_S: 0.1,         // game seconds per sim step: the step every system already gets at a 10 fps frame (realDt clamp)
+    MIN_TURN_LEFT_S: 3,      // game seconds of wheel turn left below which the speed-up is not asked for (read by isWheelTurnActive)
+  },
 
   // === ATMOSPHERE LAYERS (scene units, radii) ===
   CLOUD_RADIUS: 63.81,            // +10 km above surface
@@ -818,10 +837,16 @@ export const Constants = {
 
   // ── Reaction-wheel kit (owner 2026-10-23/24, DECISIONS §2 row 9; archive/research/2026-10-reaction-wheels.md): the standard 3-wheel
   // rung. One RW4-class wheel per body axis (x pitch, y yaw, z roll), a magnetic coil per axis that slowly bleeds the stored spin
-  // into the Earth's field, and the electronics. Wheels turn her for nothing but battery; the cold gas stays for fast turns and as
-  // backup. The kit is structure (on the axis, z = Z_M): it counts in her dry mass and her inertia, not in her centre of mass.
+  // into the Earth's field, and the electronics. Wheels turn her for nothing but battery; the cold gas stays for fast turns, for
+  // emptying a full wheel at rest (wheels-warp D4) and as backup. The kit is structure (on the axis, z = Z_M): it counts in her dry
+  // mass and her inertia, not in her centre of mass.
   // MASS_KG and COIL_TORQUE_NM are derived below the literal, never typed.
   WHEELS: {
+    // The kit is STANDARD (owner 2026-10-29 DECISIONS §57 row 4, built 2026-11-04 wheels-warp D1): the game's boot calls
+    // `PlayerSatellite.installStandardWheels()`, which fits it when this is true, and the shop's reaction-wheels card is not offered.
+    // A bare `new PlayerSatellite()` (headless rigs) stays without the kit until they fit it. Read by `resetWheelState`
+    // (a standard kit stays aboard through a new run, a retry, a continue).
+    STANDARD: true,
     COUNT: 3,
     MOMENTUM_NMS: 4,             // N·m·s each wheel holds at most (RW4 class)
     TORQUE_NM: 0.25,             // N·m each wheel gives the ship at most
@@ -836,8 +861,12 @@ export const Constants = {
     COIL_MOMENT_AM2: 15,         // A·m² per coil
     FIELD_T: 36e-6,              // T: the study's mean field at 350 km (the game has no field model)
     FIELD_ALLOWANCE: 0.5,        // the coil works across the field, not along it: half of it on average (study)
-    UNLOAD_ON_FRAC: 0.9,         // steering gas empty: the tail boxes start unloading an axis at this fraction of full ... (coordinator's assumption)
-    UNLOAD_OFF_FRAC: 0.5,        // ... and stop at this one
+    UNLOAD_ON_FRAC: 0.9,         // a full wheel: with the steering gas EMPTY the tail boxes unload an axis at this fraction of full (gas aboard: UNLOAD_GAS_ON_FRAC) ... (coordinator's assumption)
+    UNLOAD_OFF_FRAC: 0.5,        // ... and stop at this one (gas aboard: UNLOAD_GAS_OFF_FRAC)
+    UNLOAD_GAS_ON_FRAC: 0.5,     // with steering gas aboard the unload starts here: real servicers dump momentum well before saturation, and a wheel at 90 % would crawl a turn (~135/(1-f) s for 90° at 146°)
+    UNLOAD_GAS_OFF_FRAC: 0.1,    // ... and stops here: ~2.2 g of gas per N·m·s (`turnNullKg`), so a 50 → 10 % dump of all three 4 N·m·s wheels costs about 10 g (computed)
+    TURN_CEILING_S: 300,         // game s: the longest turn the wheels take while steering gas is aboard (covers 180° with empty wheels, ~286 s, and 90° up to ~50 % fill); longer goes to the gas
+    UNLOAD_GAS_REST_RAD_S: 1e-4, // rad/s: the gas unload counts a body rate this small as rest (the gas brake after a key turn leaves ~1e-4, and the thrusters cancel the wheel's torque anyway)
     FULL_FRAC: 0.98,             // an axis this full cannot take more spin in that direction: the selector counts the wheels as full
     MIN_BATTERY_WH: 0.5,         // below this the wheels give no torque (AutopilotSystem BATTERY_EMPTY_WH)
     SERVO_ZONE_S: 2,             // the wheel rate-null is proportional inside alpha x this (rad/s): full torque outside, no chatter inside
@@ -4410,6 +4439,14 @@ export const Constants = {
     ARM_ONLY_MISS_MAX_DEG: 10,
     /** Abort the aim sequence if it cannot converge within this many seconds. */
     AIM_TIMEOUT_S: 30,
+    /** Reaction wheels (DECISIONS §57 row 5, "wheels + faster time"): the longest turn the autopilot's own turns may ask of the wheels
+     *  (approach slews, net and lasso aims, daughter and pair aims, recentre, the reel-home line-up). None: the wheels turn her however long it
+     *  takes (a 90° turn at radiators 146° is about 151 s of ship time) and the faster clock shows it. This is NOT a time-out: an aim's own
+     *  time-out and its wheel-to-gas hand-over deadline scale from its wheel estimate (`requestAimRotation`). The gas keeps the arrow keys,
+     *  a moving piece the wheels cannot follow, full or unpowered wheels, and the leash hand-off (`leashWheelLimitS`). */
+    WHEEL_LIMIT_S: Infinity,
+    /** The trip hold's slew (before a trip burn) keeps the old 30 s wheel limit in this build: trips run their own clock (follow-up). */
+    TRIP_HOLD_WHEEL_LIMIT_S: 30,
     /** Autopilot-managed slew rate (rad/s) — matches AutopilotSystem AP_ROT_RATE. */
     AP_ROT_RATE: 0.2,
     /** Onboarding may scale AP_ROT_RATE for the very first net/daughter beats. */
@@ -5557,8 +5594,8 @@ export const Constants = {
           id: 'ch2_intro',
           type: 'narrative',
           source: 'BANGALORE',
-          text: 'ISRO Bangalore here. Training mission 2: double shots. Launching one daughter usually costs cold gas; two opposite daughters fired together cost almost none.',
-          mapText: 'ISRO Bangalore here. Training mission 2: double shots, at the {km} km field. Launching one daughter usually costs cold gas; two opposite daughters fired together cost almost none. Low on nets or gas? Fly to the resupply satellite.',
+          text: 'ISRO Bangalore here. Training mission 2: double shots. Launching one daughter kicks the ship; two opposite daughters fired together cancel the kick and cost almost nothing.',
+          mapText: 'ISRO Bangalore here. Training mission 2: double shots, at the {km} km field. Launching one daughter kicks the ship; two opposite daughters fired together cancel the kick and cost almost nothing. Low on nets or gas? Fly to the resupply satellite.',
         },
         // Mission 2 double-shot lesson (owner 2026-10-26; docs/DECISIONS.md): AutopilotSystem sets it up on MISSION_BEAT_STARTED
         // (waits for both daughters, marks the pair, selects her); the Q key (touch: PAIR) fires it (DUAL_FIRE).
@@ -6422,6 +6459,13 @@ Constants.WHEELS.MASS_KG =
   Constants.WHEELS.WHEEL_MASS_KG + Constants.WHEELS.COIL_MASS_KG + Constants.WHEELS.ELECTRONICS_MASS_KG;
 Constants.WHEELS.COIL_TORQUE_NM =
   Constants.WHEELS.COIL_MOMENT_AM2 * Constants.WHEELS.FIELD_T * Constants.WHEELS.FIELD_ALLOWANCE;
+
+// Her start mass (see MOTHER_DRAG): derived, never typed. 290.68 + 20 x 0.3 = 6.0 kg of cold gas (a full tank) + 12.1 kg of
+// wheels = 308.78 kg. The kit's term is added only while the kit is standard (the shop's card sold it before).
+Constants.MOTHER_DRAG.MASS_KG =
+  Constants.MOTHER_DRAG.START_BASE_KG
+  + Constants.COLD_GAS_MAX * Constants.COLD_GAS_START_FRACTION * (Constants.OCTOPUS_CORE_COLD_GAS / Constants.COLD_GAS_MAX)
+  + (Constants.WHEELS.STANDARD ? Constants.WHEELS.MASS_KG : 0);
 
 // TRL pure helpers — exported for UI and tests; side-effect-free and DOM-free so they run in Node.
 

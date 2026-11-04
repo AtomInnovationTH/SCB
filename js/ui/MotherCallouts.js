@@ -90,8 +90,9 @@ const specRow = (row) => (row === FLOWER_ROW && GestureHints.isGlass() ? FLOWER_
 //            under `player` whose name STARTS WITH one joins this part's pick targets, so small pieces (bolts, clips,
 //            mounts, booms, panels) highlight their part and block the pointer for the part behind. Same traverse-all
 //            rule as `pick`, so prefixes must stay disjoint across parts; the pick-table test pins both.
-//   wheelGated  the part shows only while `player.hasWheelKit()` (the reaction-wheel kit is aboard): read where `flowerGated` is read,
-//            hidden (opacity 0, no anchor, not pickable) without the kit.
+//   wheelGated  the part shows only while the kit is aboard: always, while the kit is standard (`Constants.WHEELS.STANDARD`, DECISIONS
+//            §57 row 4); otherwise only while `player.hasWheelKit()`. Read where `flowerGated` is read, hidden (opacity 0, no anchor,
+//            not pickable) when gone.
 //   flowerGated  the part's mesh exists only after the aft radiator flower is bought: until then the mesh lookup is
 //            skipped (no warn, static `anchor` used) and re-armed on the gone→present edge (_resolveAnchor).
 // The wing tilt drive's stator ring (PlayerSatellite `_buildMidRing`): outer radius (typed there, not exported) and the length
@@ -187,7 +188,7 @@ const SYSTEMS = [
         massKg: Constants.ENGINE_TANK_DRY_MASS_KG, priority: 2,
         specs: [`${Constants.ENGINE_TANK_VOLUME_L} L engine tank (argon)`, 'Plus the steering-gas tank'],
         anchor: [ 0, 0.404 * M, -0.60 * M ] },
-      // Shown only while the kit is aboard (`wheelGated`, read like `flowerGated`).
+      // Always shown while the kit is standard; otherwise only while it is aboard (`wheelGated`, read like `flowerGated`).
       { id: 'wheels', name: 'REACTION WHEELS', risk: 'GREEN', tier: 'detail', codexId: 'reaction_wheels',
         massKg: Constants.WHEELS.MASS_KG, priority: 2, wheelGated: true,
         specs: [`${Constants.WHEELS.COUNT} wheels, one per axis`, `${Constants.WHEELS.TORQUE_NM} N·m each, no gas`],
@@ -1611,9 +1612,12 @@ export class MotherCallouts {
    */
   _resolveAnchor(rec) {
     const def = rec.def;
-    // The reaction-wheel row hides without the kit (the same idiom): no anchor is resolved while it is gone.
+    // The reaction-wheel row hides without the kit (the same idiom): no anchor is resolved while it is gone. The kit is STANDARD
+    // (Constants.WHEELS.STANDARD, DECISIONS §57 row 4): the label always shows then, whatever the player object can say.
     if (def.wheelGated) {
-      rec._wheelGone = !(typeof this.player?.hasWheelKit === 'function' && this.player.hasWheelKit());
+      rec._wheelGone = Constants.WHEELS.STANDARD === true
+        ? false
+        : !(typeof this.player?.hasWheelKit === 'function' && this.player.hasWheelKit());
       if (rec._wheelGone) return;
     }
     // The THERMAL family hides until a flower pair is purchased (the daughter `_armGone` idiom).

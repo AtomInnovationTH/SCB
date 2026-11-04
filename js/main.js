@@ -139,6 +139,7 @@ import { shouldYieldSpecsTab } from './ui/WorkbenchPane.js';
 import { resolveSubject as resolveSpecsSubject } from './systems/SpecsSubject.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { tripWarpArgs, isTripBurning } from './systems/TransferTrip.js';
+import { SimClock, netsFlying } from './systems/SimClock.js';
 import { MissionGasTally, bindMissionGasTally } from './systems/MissionGasTally.js';
 import { RangeMap } from './ui/RangeMap.js';
 import { FloorContract } from './core/FloorContract.js';
@@ -601,6 +602,14 @@ let _perfSettleUntil = 0;
 // Catch slo-mo state
 let slowMoTimer = 0;
 let slowMoFactor = 1.0;
+
+// Game time ×8 while the wheels turn her (SimClock; DECISIONS §57 row 5). One instance; its gate inputs are ONE reused
+// object filled per frame in gameLoop (no allocation).
+const _simClock = new SimClock();
+const _simSig = {
+  gameplay: false, dance: false, paused: false, worldHold: false, taRate: 1, trip: false, slowMo: false,
+  netInFlight: false, lasso: false, ceremony: false, leash: false, conjunction: false, daughterByHand: false, arrowKeys: false,
+};
 
 // Scratch outputs for `orbitToSceneCartesianInto` in the per-frame approach-distance check (APPROACH state).
 const _approachCartPos = { x: 0, y: 0, z: 0 };
@@ -1301,6 +1310,10 @@ async function init() {
   sunLight = new SunLight(scene, sceneManager);
 
   player = new PlayerSatellite(scene);
+
+  // Reaction wheels are standard hardware (owner 2026-10-29, DECISIONS §57 row 4; Constants.WHEELS.STANDARD): aboard from the first
+  // frame, through the same install path an old save's purchase uses. `resetWheelState` keeps them on a new run, retry and continue.
+  player.installStandardWheels();
 
   // P2 aft flower — ON by default (owner 2026-08-27, FEATURE_FLAGS.FLOWER_PREINSTALLED: "just flip it on. you can
   // flip it off later p3"). Both pairs install at boot through the SAME applyUpgrade path a shop purchase drives
@@ -6220,9 +6233,45 @@ function gameLoop(timestamp) {
   // SAFE_MODE, the collision-consequence scan) does not tick while the world clock is stopped. Inactive
   // TimeAuthority pins rate 1 → dtWorld > 0; the ~0.6 s ramp to 0 on the open edge still ticks (rate > 0), by design.
   const _worldHeld = !(dtWorld > 0);
+  // GAME TIME ×8 WHILE THE WHEELS TURN HER (SimClock, DECISIONS §57 row 5). k targets SIM_SPEEDUP.K while the autopilot
+  // turns the ship on the wheels and no gate is up; it ramps on the WALL clock (realDt) and any gate drops it to 1 this
+  // frame. A TimeAuthority rate ≠ 1 is a gate, so k never multiplies a warped or held world. frame() cuts this frame's
+  // game time (dt × k) into steps of ≤ MAX_STEP_S that the game-time systems below run in; at k = 1 it is one step of
+  // exactly (dt, dtWorld). A daughter out on her tether is deliberately NOT read (her physics runs in the same steps).
+  const _simWheelTurn = !!(autopilotSystem && autopilotSystem.isWheelTurnActive && autopilotSystem.isWheelTurnActive());
+  {
+    const s = _simSig;
+    const _keys = (inputManager && inputManager.keys) || null;
+    s.gameplay = gameState.isGameplay();
+    s.dance = !!(openingDance && openingDance.isActive && openingDance.isActive());
+    s.paused = !!gameFlowManager.paused;
+    s.worldHold = _worldHoldOpen || _worldHeld;
+    s.taRate = timeAuthority.rate;
+    s.trip = !!(gameFlowManager.isTripRunning && gameFlowManager.isTripRunning());
+    s.slowMo = slowMoTimer > 0;
+    s.netInFlight = !!(captureNetSystem && ((captureNetSystem.hasMotherNetInFlight && captureNetSystem.hasMotherNetInFlight())
+      || netsFlying(captureNetSystem.activeNets)));
+    s.lasso = !!(lassoSystem && lassoSystem.active);
+    s.ceremony = CeremonyTimeScale.get() < 1 || CeremonyTimeScale.owner() != null;
+    s.leash = !!(player && player.leashDriver && player.leashDriver.busy);
+    // getStatus() only while the speed-up is asked for or still on (the read the danger cap above also avoids).
+    s.conjunction = (_simWheelTurn || _simClock.k > 1) && !!(conjunctionSystem && conjunctionSystem.getStatus
+      && conjunctionSystem.getStatus().alertActive);
+    s.daughterByHand = !!(inputManager && inputManager.isArmPilotMode && inputManager.isArmPilotMode());
+    s.arrowKeys = !!(_keys && (_keys.ArrowUp || _keys.ArrowDown || _keys.ArrowLeft || _keys.ArrowRight));
+  }
+  _simClock.update(realDt, _simWheelTurn, _simSig);
+  _simClock.frame(dt, dtWorld);
+  const _simK = _simClock.k;
+  const _simN = _simClock.n, _simStepDt = _simClock.stepDt, _simStepDw = _simClock.stepDtWorld;
+  const _simGameDt = _simClock.gameDt, _simGameDw = _simClock.gameDtWorld;
   // Rail warp readout (VisualLaw.RAIL.SHOWS 'warp-readout'): the live rate, only while the ladder is engaged.
-  // setRate is write-on-change and ≤ 4 Hz internally, so the per-frame call is free.
-  if (_ladderActive && railIndicator && railIndicator.setRate) railIndicator.setRate(timeAuthority.rate);
+  // setRate is write-on-change and ≤ 4 Hz internally, so the per-frame call is free. × k: the player sees the speed-up
+  // ("8×") while the wheels turn her (Ruling 0); k is 1 whenever the rate is not.
+  if (_ladderActive && railIndicator && railIndicator.setRate) railIndicator.setRate(timeAuthority.rate * _simK);
+  // While game time is sped up the rail (and its "8×") stays awake: the edge chrome would fade it after its idle time
+  // mid-turn (measured 11-04: hidden in 33 of 76 samples at 8×). It fades as usual once k is back to 1.
+  if (_simK > 1 && _ladderActive && edgeChrome) edgeChrome.wake('rail', timestamp);
   // Build-stamp floor law: write `body[data-ladder-floor]` = the engaged floor's id, write-on-change. Disengaged
   // (menu, pause → menu, ?ladder=0) → null → removeAttribute → the stamp shows. The pure-scenery rule still hides
   // it on F1 transiently (index.html). Gated on the flag: ?ladder=0 does ZERO DOM writes.
@@ -6337,7 +6386,10 @@ function gameLoop(timestamp) {
   // player.update; a skipped call would leave it stale. Side effect: the eclipse-intensity blend and
   // _updateAutoExposure also key off dt, so exposure stops adapting while held. _worldHeld only turns true once the
   // ~0.6 s world-clock ramp to 0 finishes, so the sun runs at full rate through the ramp and then stops.
-  const sunDir = sunLight.update(_worldHeld ? 0 : dt, player.getPosition());
+  // The sun runs on GAME time (dt × SimClock k): while the wheels turn her at 8× the battery's sun and the eclipse
+  // predictor (SunLight.directionAt, same unit as the orbit's dt) keep pace with the orbit. Earth's clouds and the stars
+  // are scenery on the wall clock.
+  const sunDir = sunLight.update(_worldHeld ? 0 : _simGameDt, player.getPosition());
   earth.setSunDirection(sunDir);
   earth.update(_worldHeld ? 0 : dt);
   // Bloom gate — skips the whole UnrealBloom mip chain on frames where nothing can cross the threshold. NOT
@@ -6378,15 +6430,26 @@ function gameLoop(timestamp) {
       // The restore rides a finally — a throw inside processInput must never leave the arrows blanked (the
       // physical key state would be dead until the next keydown re-set it).
       try {
-        inputManager.processInput(dt);
+        inputManager.processInput(_simGameDt);
       } finally {
         k.ArrowUp = _turnSaved.up; k.ArrowDown = _turnSaved.down;
         k.ArrowLeft = _turnSaved.left; k.ArrowRight = _turnSaved.right;
       }
     } else {
-      inputManager.processInput(dt);
+      // One call with the frame's GAME dt (dt × SimClock k, ≤ 0.8 s; not stepped): its dt feeds game logic (the net
+      // lead's frame clock and reach tracker, the daughters' wait for the net). Arrow keys and flying a daughter by
+      // hand are SimClock gates, so piloting always sees k = 1.
+      inputManager.processInput(_simGameDt);
     }
 
+    // ── GAME-TIME STEPS (SimClock). The near field and the ship run in _simN steps of (_simStepDt, _simStepDw): the
+    // frame's game time dt × k cut so each step is ≤ SIM_SPEEDUP.MAX_STEP_S (0.1 s), the step every system already gets
+    // at a 10 fps frame. Inside each step `dt` / `dtWorld` ARE that step (shadowed), so the lines below read as before;
+    // at k = 1 it is one step of exactly (dt, dtWorld) and the frame is unchanged. Daughters (armManager) step in this
+    // loop with the ship; nets, the leash and the tip cargo run the same _simN steps in a later loop against the ship's
+    // end-of-frame pose (a berthed catch may lag the ship by up to _simN−1 steps inside one frame; review 11-04).
+    for (let _si = 0; _si < _simN; _si++) {
+    const dt = _simStepDt, dtWorld = _simStepDw;   // this step's game time (SimClock)
     // F15: Autopilot steering + thrust (before player.update applies thrustInput)
     try { autopilotSystem.update(dt, dtWorld); } catch (e) { console.error('[GameLoop] autopilotSystem:', e); }
 
@@ -6413,10 +6476,11 @@ function gameLoop(timestamp) {
     // DOCKED daughter keeps re-clamping to the ship's live position/attitude (it must, so it stays attached if the
     // ship turns) — passing zero rather than skipping the call does both.
     if (armManager) { try { armManager.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] armManager:', e); } }
+    }   // end of the near-field game-time steps
 
     // Latch mechLive for the NEXT frame's scheduler decision. Must run AFTER armManager.update (the
     // struts) and the flower/ROSA writes inside player.update above, and on
-    // DRAWN frames only — see the comment above _mechPrev.
+    // DRAWN frames only — see the comment above _mechPrev. (Once per frame, on the frame's wall dt.)
     _fillMechValues(_mechCur);
     _mechLive = FrameSched.anyMoved(_mechPrev, _mechCur, MECH_EPS_RAD_PER_S * dt);
     { const _tmp = _mechPrev; _mechPrev = _mechCur; _mechCur = _tmp; }
@@ -6431,6 +6495,9 @@ function gameLoop(timestamp) {
     // MENU_DEPARTURE_START handler while the state is still MENU.
     try { openingDance.tick(dt); } catch (e) { console.error('[GameLoop] openingDance:', e); }
 
+    // The catch side steps on game time too, the same _simN steps (SimClock; one step at k = 1).
+    for (let _si = 0; _si < _simN; _si++) {
+    const dt = _simStepDt;   // this step's game time (SimClock)
     // Capture net FSM + visual effects (flag-gated internally)
     try { captureNetSystem.update(dt); } catch (e) { console.error('[GameLoop] captureNetSystem:', e); }
     // The resupply satellite sits on her nose collar: after player.update (Rule G), real time (its arm plays while the world is held).
@@ -6440,14 +6507,18 @@ function gameLoop(timestamp) {
     if (player.leashDriver) { try { player.leashDriver.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] leashDriver:', e); } }
     // Bags on the radiator tips: pin every frame, cook on the rack's clock (zero time while the world is held).
     if (player.tipCargo) { try { player.tipCargo.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] tipCargo:', e); } }
+    }   // end of the catch-side game-time steps
     try { captureNetVisual.update(dt); } catch (e) { console.error('[GameLoop] captureNetVisual:', e); }
     // After the driver, tip cargo and the net visual — it reads the view and the pinned catches.
     if (leashVisual) { try { leashVisual.update(dt); } catch (e) { console.error('[GameLoop] leashVisual:', e); } }
     try { furnaceBreakdownVisual.update(dt); } catch (e) { console.error('[GameLoop] furnaceBreakdownVisual:', e); }
 
     // De-spin laser (flag-gated internally). Second argument: the game-clock step (0 while the world is held), the one the
-    // tumble animation turns by; the first is the real frame time.
+    // tumble animation turns by; the first is the real frame time. Stepped on game time with the rest (SimClock).
+    for (let _si = 0; _si < _simN; _si++) {
+    const dt = _simStepDt, dtWorld = _simStepDw;   // this step's game time (SimClock)
     try { despinLaser.update(dt, dtWorld); } catch (e) { console.error('[GameLoop] despinLaser:', e); }
+    }
 
     // Drain deferred teaching overlays (≤1 per QUEUE_DRAIN_INTERVAL_S). Held world: zero time stalls the
     // _drainTimer countdown, so a QUEUED tip normally waits for the drawer to close; a tip already due when the
@@ -6460,14 +6531,15 @@ function gameLoop(timestamp) {
     // Lost-in-space recovery advisor (5 s scan cadence internally; veteran-gated watchdog)
     try { navRecoveryAdvisor.update(dt); } catch (e) { console.error('[GameLoop] navRecoveryAdvisor:', e); }
 
-    // MissionCoach beat timers (narrative dwell + interactive escalation)
-    try { if (missionCoach) missionCoach.update(dt); } catch (e) { console.error('[GameLoop] missionCoach:', e); }
+    // MissionCoach beat timers: a narrative beat's reading dwell on the wall clock (dt); an interactive beat's nag waits
+    // on game events, so it runs on game time (dt × SimClock k).
+    try { if (missionCoach) missionCoach.update(dt, _simGameDt); } catch (e) { console.error('[GameLoop] missionCoach:', e); }
     // ISS conjunction boss TCA countdown and Starlink cascade boss containment window (game-time). Held world:
     // the countdowns (and an armed onset) wait for the world clock — a boss cannot start or run out while you
-    // shop or read.
+    // shop or read. Game time: dt × SimClock k (one call; the conjunction alert is a SimClock gate anyway).
     if (!_worldHeld) {
-      try { if (issConjunctionBoss) issConjunctionBoss.update(dt); } catch (e) { console.error('[GameLoop] issConjunctionBoss:', e); }
-      try { if (starlinkCascadeBoss) starlinkCascadeBoss.update(dt); } catch (e) { console.error('[GameLoop] starlinkCascadeBoss:', e); }
+      try { if (issConjunctionBoss) issConjunctionBoss.update(_simGameDt); } catch (e) { console.error('[GameLoop] issConjunctionBoss:', e); }
+      try { if (starlinkCascadeBoss) starlinkCascadeBoss.update(_simGameDt); } catch (e) { console.error('[GameLoop] starlinkCascadeBoss:', e); }
     }
 
     // Update target selector
@@ -6478,33 +6550,38 @@ function gameLoop(timestamp) {
     try { if (autoLockController) autoLockController.update(dt); } catch (e) { console.error('[GameLoop] autoLockController:', e); }
 
     // Extracted systems. Held world: fate clocks stop while a drawer is open.
+    // Battery, solar, analysis load and ship heat step on game time with the ship (SimClock; one step at k = 1).
+    for (let _si = 0; _si < _simN; _si++) {
+    const dt = _simStepDt;   // this step's game time (SimClock)
     if (!_worldHeld) { try { resourceSystem.update(dt); } catch (e) { console.error('[GameLoop] resourceSystem:', e); } }
-    try { if (missionGasTally) missionGasTally.update(); } catch (e) { console.error('[GameLoop] missionGasTally:', e); }
     // Scan analysis load + ship heat on the battery's clock, held with
     // it. Held: what the battery bills meanwhile (base load) neither heats the
     // ship nor spikes the power meter on release; a running analysis pauses.
     if (!_worldHeld) { try { sensorSystem.drawAnalysis(dt); const _heat = resourceSystem.getThermalSource(); if (_heat) _heat.update(dt); } catch (e) { console.error('[GameLoop] thermal:', e); } }
     else { try { resourceSystem.discardHeldFrame(); const _heat = resourceSystem.getThermalSource(); if (_heat) _heat.skipHeld(); } catch (e) { console.error('[GameLoop] thermal (held):', e); } }
-    try { sensorSystem.update(dt, player.getPosition(), debrisField); } catch (e) { console.error('[GameLoop] sensorSystem:', e); }
+    }
+    try { if (missionGasTally) missionGasTally.update(); } catch (e) { console.error('[GameLoop] missionGasTally:', e); }
+    // Scan timers and cooldowns: game time (one call).
+    try { sensorSystem.update(_simGameDt, player.getPosition(), debrisField); } catch (e) { console.error('[GameLoop] sensorSystem:', e); }
     // The wings hint stays until the wings are out. Outside the held-world guard on
     // purpose: it is a screen row, not a fate clock, and it must go the frame the wings are out.
     try { wingsHint.update(player, hud && hud.hintTicker); } catch (e) { console.error('[GameLoop] wingsHint:', e); }
     try { if (hud) hud.syncHintPlacement(); } catch (e) { console.error('[GameLoop] hintPlacement:', e); }
-    // Close-range survey → Full Profile
+    // Close-range survey → Full Profile. Game time (dt × SimClock k), one call.
     try {
-      dossierSystem.update(dt, {
+      dossierSystem.update(_simGameDt, {
         playerPos: player.getPosition(),
         armManager,
         target: targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null,
-        gameDt: dtWorld,         // the time authority's step (warp included), the one the tumble animation turns by
+        gameDt: _simGameDw,      // the time authority's step (warp included) × SimClock k, the one the tumble animation turns by
         worldHeld: _worldHeld,   // the characterising clocks run on game time and wait with the world
       });
     } catch (e) { console.error('[GameLoop] dossierSystem:', e); }
-    if (!_worldHeld) { try { kesslerSystem.update(dt); } catch (e) { console.error('[GameLoop] kesslerSystem:', e); } }
+    if (!_worldHeld) { try { kesslerSystem.update(_simGameDt); } catch (e) { console.error('[GameLoop] kesslerSystem:', e); } }
 
-    // Trawl manager
+    // Trawl manager (game time: it advances the mother's anomaly)
     try {
-      trawlManager.update(dt, {
+      trawlManager.update(_simGameDt, {
         playerPos: player.getPosition(),
         debrisField,
         armManager,
@@ -6530,7 +6607,8 @@ function gameLoop(timestamp) {
         : (() => { const _lv = player.getVelocity();
             return (_lv && (_lv.x || _lv.y || _lv.z))
               ? _lassoVelScratch.set(_lv.x, _lv.y, _lv.z).normalize() : null; })();
-      lassoSystem.update(dt, player.getPosition(), debrisField, targetSelector.getActiveTarget(), _noseDir);
+      // Game time (a lasso out is a SimClock gate, so its flight always steps at k = 1; idle cooldowns run on game time).
+      lassoSystem.update(_simGameDt, player.getPosition(), debrisField, targetSelector.getActiveTarget(), _noseDir);
     } catch (e) { console.error('[GameLoop] lassoSystem:', e); }
 
     // Reward system (milestone checks)
@@ -6539,11 +6617,11 @@ function gameLoop(timestamp) {
     // Mission event system (mid-mission complications)
     if (!_worldHeld) { try { missionEventSystem.update(dt); } catch (e) { console.error('[GameLoop] missionEventSystem:', e); } }
 
-    // Learning systems (Codex + Space Weather)
+    // Learning systems (Codex + Space Weather). Codex popups pace on the wall clock; the weather runs on game time.
     try { codexSystem.update(dt); } catch (e) { console.error('[GameLoop] codexSystem:', e); }
     if (!_worldHeld) {
       try {
-        spaceWeatherSystem.update(dt, {
+        spaceWeatherSystem.update(_simGameDt, {
           playerOrbit: player.getOrbitalElements(),
           sunDirection: sunDir,
         });
@@ -6551,15 +6629,15 @@ function gameLoop(timestamp) {
     }
 
     // Environment hazards (AO, MMOD, Safe-Mode, Radiation, Battery DOD)
-    // Held world: no erosion, no MMOD roll, no DOD tick while the clock is 0.
+    // Held world: no erosion, no MMOD roll, no DOD tick while the clock is 0. Game time (dt × SimClock k).
     if (environmentSystem && !_worldHeld) {
-      try { environmentSystem.update(dt); } catch (e) { console.error('[GameLoop] environmentSystem:', e); }
+      try { environmentSystem.update(_simGameDt); } catch (e) { console.error('[GameLoop] environmentSystem:', e); }
     }
 
-    // Subsystem events (spacecraft subsystem ambiance)
+    // Subsystem events (spacecraft subsystem ambiance), game time
     if (!_worldHeld) {
       try {
-        subsystemEvents.update(dt, {
+        subsystemEvents.update(_simGameDt, {
           playerOrbit: player.getOrbitalElements(),
           armManager,
           deployedArms: armManager ? armManager.getDeployedCount() : 0,
@@ -6569,11 +6647,12 @@ function gameLoop(timestamp) {
     }
 
     // Conjunction alert system. dtWorld drives the MOID
-    // timer; above ~10× warp detection switches to MOID screening.
+    // timer; above ~10× warp detection switches to MOID screening. Game time for both clocks (dt × SimClock k): an
+    // alert is a SimClock gate, so its timers always run at k = 1.
     try {
-      conjunctionSystem.update(dt, gameState, debrisField.debrisList,
+      conjunctionSystem.update(_simGameDt, gameState, debrisField.debrisList,
         player.getPosition(), player.getVelocity(), inputManager.isArmPilotMode(),
-        dtWorld, timeAuthority.isMoidScreening());
+        _simGameDw, timeAuthority.isMoidScreening());
     } catch (e) { console.error('[GameLoop] conjunctionSystem:', e); }
 
     // Power distribution (warnings for dangerous configs)

@@ -56,7 +56,7 @@ import { buyAtLine } from '../systems/resupplyWords.js';
 import { FITTING_CATALOG, groupBySubsystem } from '../data/fittingCatalog.js';
 import { BLUEPRINT_SUBSYSTEMS } from '../data/blueprintSubsystems.js';
 import { subsystemForPart, partsForSubsystem } from '../data/refitIndex.js';
-import { upgradePrereqsMet, upgradeCostNow, consumableFull } from './shopGating.js';
+import { upgradePrereqsMet, upgradeCostNow, consumableFull, isShopRowOffered } from './shopGating.js';
 import { pendingAboard } from '../systems/BigPieces.js';
 import { coldGasPoolToKg } from '../systems/ResourceSystem.js';   // nitrogen aboard is shown in real kg (the pool is 0.3 kg a unit)
 
@@ -189,6 +189,7 @@ export class RefitPane {
     const ranked = [];
     (entries || []).forEach((entry, i) => {
       const shop = entry.shop || {};
+      if (!isShopRowOffered(shop)) return;   // a row the shop hides (standard wheels, pre-installed flower) is never offered here
       const level = ctx.levelOf ? (ctx.levelOf(entry.id) || 0) : 0;
       const maxed = !shop.consumable && Number.isFinite(shop.maxLevel) && level >= shop.maxLevel;
       if (maxed) return;                
@@ -308,6 +309,7 @@ export class RefitPane {
     if (ctx.atStop === false) return 0;   // the tab's gold count must not promise a buy mid-mission
     for (const entry of (catalog || [])) {
       const shop = entry.shop || {};
+      if (!isShopRowOffered(shop)) continue;   // the gold count never counts a row the shop hides
       const level = ctx.levelOf ? (ctx.levelOf(entry.id) || 0) : 0;
       if (!shop.consumable && Number.isFinite(shop.maxLevel) && level >= shop.maxLevel) continue;
       if (ctx.prereqsMet && !ctx.prereqsMet(shop)) continue;

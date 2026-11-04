@@ -80,9 +80,14 @@ export class BeatSequencer {
     return true;
   }
 
-  update(dt) {
+  /**
+   * @param {number} dt  wall seconds: a narrative beat's reading dwell
+   * @param {number} [gameDt=dt]  game seconds (dt × SimClock k): an interactive beat's nag waits on game events
+   */
+  update(dt, gameDt = dt) {
     if (!this.running) return;
-    this._timer += dt;
+    // One timer per beat; a beat is narrative or interactive for its whole life, so its clock never mixes.
+    this._timer += this._awaitingSatisfy ? gameDt : dt;
     const beat = this.beats[this.index];
     if (!this._awaitingSatisfy) {
       const holdS = (beat.holdMs ?? this.timing.narrativeHoldMs ?? 4000) / 1000;

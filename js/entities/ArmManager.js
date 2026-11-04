@@ -921,7 +921,8 @@ export class ArmManager {
 
     ap.requestAimRotation(provider, {
       mode: 'daughter', armManager: this, arm, pairIndex: arm.index,
-      maxWaitS: Constants.AIM.AIM_TIMEOUT_S,   // backstop: `_motherTurnBlock` already sends a slow turn to the strut-only launch
+      maxWaitS: Constants.AIM.AIM_TIMEOUT_S,   // backstop for the tail boxes: `_motherTurnBlock` already sends a slow turn to the strut-only launch
+      wheelLimitS: Constants.AIM.WHEEL_LIMIT_S,   // the wheels turn her however long it takes (DECISIONS §57 row 5)
     }).then(() => {
       arm._aimReserved = false;
       // the launch goes through the keep-out gate. The line is checked along the converged STRUT direction (re-derived each
@@ -1518,8 +1519,9 @@ export class ArmManager {
     if (this.getRotationLockTier(exceptArm) !== 'none') return 'a daughter is out on her line';
     // with the steering gas out she turns on the tail boxes, minutes for a launch turn: the strut aims alone ("Aiming the arm
     // only: the steering gas is empty, so the ship holds still.") and a reel-home line-up is hers to do. (With the reaction-wheel
-    // kit powered and not full the wheels turn her for no gas, a launch turn the aim may still refuse as too slow for its 30 s:
-    // then the strut aims alone, `_deployWithCeremony`)
+    // kit powered and not full the wheels turn her for no gas, however long it takes with the steering gas out; with gas aboard a
+    // turn over `WHEELS.TURN_CEILING_S` goes to the gas. Only the tail boxes' too-slow turn is refused: then the strut aims
+    // alone, `_deployWithCeremony`)
     const pl = this.playerSatellite;
     if (pl && typeof pl.isSlothMode === 'function' && pl.isSlothMode()
         && !(typeof pl.wheelsCanTurn === 'function' && pl.wheelsCanTurn())) return 'the steering gas is empty';
@@ -2140,7 +2142,8 @@ export class ArmManager {
     const release = () => { armA._aimReserved = false; armB._aimReserved = false; armA._claimTarget = null; armB._claimTarget = null; };
     ap.requestAimRotation(ap.pairAimProvider(offer), {
       mode: 'daughter', armManager: this, arm: armA, pairIndex: armA.index, pair: { armB, alpha: offer.alpha },
-      maxWaitS: Constants.AIM.AIM_TIMEOUT_S,
+      maxWaitS: Constants.AIM.AIM_TIMEOUT_S,   // the tail boxes' refusal only
+      wheelLimitS: Constants.AIM.WHEEL_LIMIT_S,   // the wheels turn her however long it takes (DECISIONS §57 row 5)
     }).then(() => {
       armA._aimReserved = false; armB._aimReserved = false;
       try {
@@ -4006,7 +4009,10 @@ export class ArmManager {
     owner._rhTurnTries++;
     owner._rhTurnWaitS = RH.TURN_RETRY_S ?? 1;
     const turn = { arm: owner, tracked };
-    const opts = { holdOwner: 'REEL_HOME', holdS: 30, maxWaitS: 60 };   // sloth mode backstop: `_motherTurnBlock` already refuses
+    // No `maxWaitS`: the wheels line her up however long it takes (no wheel limit, DECISIONS §57 row 5), so with the steering gas
+    // out the reel-home turn runs on them and completes (it was refused over 60 s: the soft-lock). The tail boxes are never asked
+    // (`_motherTurnBlock` already refuses without wheels); the gas turns her when the wheels cannot (full, no power).
+    const opts = { holdOwner: 'REEL_HOME', holdS: 30 };
     if (tracked) {
       opts.track = () => this._rhTrackPlane(turn, owner, az, tol);
       opts.timeoutS = 60;                                                     // a moving target: the planned-time default is too short

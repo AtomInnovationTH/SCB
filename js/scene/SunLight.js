@@ -932,6 +932,8 @@ export class SunLight {
    * update() and the eclipse predictor (OrbitalMechanics.nextShadowTransition).
    * REAL seconds because update(dt) gets the real frame dt: the sun never warps
    * with the floor's time cap (the orbit does: dtWorld = realDt × BASE_SCALE × rate).
+   * Both clocks scale by SimClock k (game time ×8 while the wheels turn her), so
+   * "real seconds" here means the frame dt × k: game seconds before BASE_SCALE.
    *
    * @param {number} aheadRealS  real seconds ahead (0 = now)
    * @param {THREE.Vector3|{x:number,y:number,z:number}} [out]  written and
@@ -962,7 +964,8 @@ export class SunLight {
   }
 
   /**
-   * @param {number} dt — real frame delta (s)
+   * @param {number} dt — game frame delta (s): the real frame dt × SimClock k (k = 1 except while the wheels turn
+   *   the ship at 8×), so the sun keeps pace with the orbit; 0 while the world is held
    * @param {THREE.Vector3} [cameraPos] — player camera position for eclipse check
    * @returns {THREE.Vector3} current sun direction (normalized)
    */

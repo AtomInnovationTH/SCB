@@ -1812,7 +1812,8 @@ export class GameFlowManager {
     if (armManager) armManager.reset();
     // Nothing of the reel push (gathered Δv, the turn it kicked) survives into the next run.
     if (player && player.clearReelPushState) player.clearReelPushState();
-    // The run's wheel kit goes with its purchases (a continued save's upgrade replay puts it back); wheels stand empty.
+    // The standard wheel kit stays aboard (DECISIONS §57 rows 4-5, `resetWheelState` keeps it); only the wheels' spin is cleared, and
+    // the run's bought wheel kit (a continued save's old purchase replays idempotently) goes with its purchases.
     if (player && player.resetWheelState) player.resetWheelState();
 
     // Every path that does NOT run the opening dance (CONTINUE, GAMEOVER retry, reduced motion, flag off, ?shot

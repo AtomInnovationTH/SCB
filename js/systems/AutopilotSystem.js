@@ -852,6 +852,10 @@ export class AutopilotSystem {
 
   isAiming() { return !!this._aimCoroutine; }
 
+  /** An aim is running on the reaction wheels (a long turn by design: no 30 s wheel limit). False on the gas, the boxes, and after
+   * a hand-over to the gas. InputManager's net wait reads it so it does not send the daughters at the gas aim's cap. */
+  isAimOnWheels() { return !!this._aimCoroutine && this._aimCoroutine.src === 'wheels'; }
+
   /** True while the wheels turn her toward a picked daughter's shot or hold her on it. Not an aim: `isAiming()` and
    * `isAttitudeHeld()` stay false, so ArmManager's launch checks (`_motherTurnBlock`) see a free mother and the launch
    * takes over from where the wheels got her.
@@ -1024,10 +1028,11 @@ export class AutopilotSystem {
     // In sloth mode the turn's rate is a real spin: it does not vanish when the steering lets go of her (the player's
     // own rate-null brakes it on the boxes when they can), and a held world only pauses it.
     if (!drive) { this._tripLetGo(p); return; }
-    // Which source turns her: tail boxes, wheels or cold gas (`_slewSource`).
+    // Which source turns her: tail boxes, wheels or cold gas (`_slewSource`). The trip hold keeps today's 30 s wheel limit
+    // (DECISIONS §57 row 5: the trip runs its own clock; a follow-up); every other slew has none.
     const target = this._tripRetro ? _Q_TRIP_RETRO : _Q_IDENTITY;
     const geom = this._offsetTurnGeom(p, target);
-    const src = geom ? this._slewSource(p, geom.err, geom.nx, geom.ny) : this._slowGeneric(p);
+    const src = geom ? this._slewSource(p, geom.err, geom.nx, geom.ny, Constants.AIM.TRIP_HOLD_WHEEL_LIMIT_S) : this._slowGeneric(p);
     if (!(dtWorld > 0)) { if (!src) this._tripOmega = 0; return; }
     if (src) { this._slothOffsetTurn(p, dt, target, src); return; }
     this._tripOmega = 0;
@@ -1068,10 +1073,13 @@ export class AutopilotSystem {
 
   /** @private Which source runs ONE autopilot slew of `err` rad about the body axis (nx, ny): 'tailBoxes' | 'wheels' (the
    * eased slow laws) or null (cold gas at AP_ROT_RATE, billed by `_billSlewStep`). The selector decides (gas out: the
-   * wheels, or the boxes when they are full; gas: the wheels if they can finish within AIM_TIMEOUT_S, else the gas) and the
+   * wheels, or the boxes when they are full; gas: the wheels if they can finish within `limitS`, else the gas) and the
    * choice is LATCHED until the slew stops (`_slewStopTick`); gas gone mid-slew (sloth mode) overrides the latch.
+   * `limitS` (DECISIONS §57 row 5): the wheel limit of THIS slew, none (`AIM.WHEEL_LIMIT_S`, Infinity) for the approach and
+   * orbit-frame slews; the trip hold passes `AIM.TRIP_HOLD_WHEEL_LIMIT_S` (30 s, unchanged in this build).
+   * @param {number} [limitS]
    * @returns {'tailBoxes'|'wheels'|null} */
-  _slewSource(p, err, nx, ny) {
+  _slewSource(p, err, nx, ny, limitS = Constants.AIM.WHEEL_LIMIT_S) {
     if (typeof p.attitudeTorqueSource !== 'function') return null;
     const sloth = typeof p.isSlothMode === 'function' ? p.isSlothMode() : this._slowGeneric(p) !== null;
     if (!(err > AP_ROT_DEADZONE)) {
@@ -1080,21 +1088,31 @@ export class AutopilotSystem {
       return this._tripOmega > 0 && isSlowSrc(this._tripSrc) ? this._tripSrc : null;
     }
     // Steering gas out: "the wheels are full" counts only for a ship at rest (`carrying`): a wheel-made rate stays on the wheels to its stop.
-    const sel = p.attitudeTorqueSource({ spinUp: true, angleRad: err, nx, ny, limitS: Constants.AIM.AIM_TIMEOUT_S, carrying: this._wheelRateCarried() });
-    if (sloth) { this._slewLatch = null; return isSlowSrc(sel) ? sel : null; }
+    const sel = p.attitudeTorqueSource({ spinUp: true, angleRad: err, nx, ny, limitS, carrying: this._wheelRateCarried() });
+    if (sloth) { this._slewLatch = null; if (sel === 'wheels') this._noteWheelSlew(err, nx, ny); return isSlowSrc(sel) ? sel : null; }
     const latch = this._slewLatch;
-    if (latch === 'gas') return null;                              // a gas slew runs to its stop on gas
+    if (latch === 'gas') { if (this._wheelSlew) this._wheelSlew.on = false; return null; }   // a gas slew runs to its stop on gas (never on the ×8 clock)
     if (latch === 'wheels') {
       const usable = typeof p.wheelsUsable === 'function' && p.wheelsUsable();
       // A wheel slew whose wheels have just filled still goes on: the rate may not climb (`wheelSpareRate` is 0) but she
       // coasts and the wheels brake her (that is what un-fills them). Only a ship at rest with full wheels is the gas's.
       const full = typeof p.wheelsFull === 'function' && p.wheelsFull(nx, ny) && !(this._tripOmega > 0);
-      if (usable && !full) return 'wheels';
+      if (usable && !full) { this._noteWheelSlew(err, nx, ny); return 'wheels'; }
       this._slewLatch = 'gas';                                      // the wheels cannot go on (no power, full at rest): the gas takes it
+      if (this._wheelSlew) this._wheelSlew.on = false;              // ... and the ×8 clock goes off (a gas turn marks itself stepping every frame, so the stop check never would)
       return null;
     }
     this._slewLatch = sel === 'wheels' ? 'wheels' : 'gas';
+    if (sel === 'wheels') this._noteWheelSlew(err, nx, ny);
+    else if (this._wheelSlew) this._wheelSlew.on = false;
     return sel === 'wheels' ? 'wheels' : null;
+  }
+
+  /** @private A slew is running on the wheels: its angle left and body axis, for `isWheelTurnActive` (read once a frame, so the
+   * time is worked out there). Cleared by `_slewStopTick` on a frame with no slew step (the stop), and by a gas hand-over. */
+  _noteWheelSlew(err, nx, ny) {
+    const s = this._wheelSlew || (this._wheelSlew = { on: false, err: 0, nx: 1, ny: 0 });
+    s.on = true; s.err = err; s.nx = nx; s.ny = ny;
   }
 
   /** @private The orbit-frame offset's turn to `target` as the slow laws see it: angle and body axis (q⁻¹·target; w < 0 = the
@@ -1776,7 +1794,7 @@ export class AutopilotSystem {
   }
 
   // WHEEL PRE-TURN. owner 2026-10-25: with the wheel kit, a docked daughter picked (keys 1-4) and a piece picked (either order),
-  // the wheels turn the mother toward the shot the aim would take: no gas, at the wheels' own pace (no 30 s limit).
+  // the wheels turn the mother toward the shot the aim would take: no gas, at the wheels' own pace (no wheel limit).
   // NOT an aim: own state `_preturn`; `isAiming()` and `isAttitudeHeld()` stay false; nothing is announced or aborted.
   // Firing (D) goes through the normal ceremony; its first act (`requestAimRotation`) ends the pre-turn: the rate it has is braked
   // on the wheels (billed) and the aim starts from where she got to. Same eased law as the aim on the wheel source (`_aimAccel`,
@@ -1880,7 +1898,7 @@ export class AutopilotSystem {
     const offer = this._pairOffer;
     if (offer && (arm === offer.armA || arm === offer.armB) && offer.t1 === target && this._pairPieceOk(offer.t2)) {
       const pprov = this._pairAimProvider(offer);
-      const pshot = this._planPairShot(pprov, { arm: offer.armA, armManager: am, pair: { armB: offer.armB, alpha: offer.alpha } }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+      const pshot = this._planPairShot(pprov, { arm: offer.armA, armManager: am, pair: { armB: offer.armB, alpha: offer.alpha } }, AIM.WHEEL_LIMIT_S, tolRad, rate);
       if (pshot && pshot.errRad > tolRad) {
         const pwheels = p.attitudeTorqueSource({ spinUp: true, angleRad: pshot.errRad - 0.5 * tolRad, nx: pshot.nx, ny: pshot.ny, limitS: Infinity, quiet: true });
         if (pwheels === 'wheels') {
@@ -1904,9 +1922,9 @@ export class AutopilotSystem {
     }
     const provider = this._preturnProvider(arm, target);
     // The shot the fire would take right now: the pre-turn does the first part of that very aim on the wheels, so a later fire
-    // finds less left to turn. When the shot's turn is on the gas (too long for the wheels in 30 s, or they are full that way) the
+    // finds less left to turn. When the shot's turn is on the gas (the wheels are full that way, or a moving piece) the
     // pre-turn still turns her toward it on the wheels at their pace, if they can turn her that way at all.
-    const shot = this._planDaughterShot(provider, { arm, armManager: am, pairIndex: arm.index }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+    const shot = this._planDaughterShot(provider, { arm, armManager: am, pairIndex: arm.index }, AIM.WHEEL_LIMIT_S, tolRad, rate);
     if (!shot || !(shot.errRad > tolRad)) return;
     const wheelsOk = p.attitudeTorqueSource({ spinUp: true, angleRad: shot.errRad - 0.5 * tolRad, nx: shot.nx, ny: shot.ny, limitS: Infinity, quiet: true });
     if (wheelsOk !== 'wheels') return;
@@ -1990,6 +2008,7 @@ export class AutopilotSystem {
     if (pt.pair) bm.set(0, 0, 1); else strutLocalDirection(pt.alphaF, az, bm);   // pair: the barrel is the boresight
     bm.applyQuaternion(q).normalize();
     const errM = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));
+    pt.errM = errM;                                        // the angle left, for `isWheelTurnActive` (the axis is `axX/axY`, set by `_aimAccel`)
 
     // Arrived and at rest: hold (no torque) and swing the strut to the chosen angle (billed by the strut driver; not while another
     // driver has a move in flight, a "." press or an auto pose: that one finishes first). The strut stays folded while she turns:
@@ -2601,7 +2620,7 @@ export class AutopilotSystem {
     if (typeof p.setOrbitFrameHold !== 'function') return false;
     // With the steering gas out, the wheels or the boxes hold her in the orbit frame at EVERY warp (co-rotating with the orbit is
     // free; only a change of the offset is a turn, at the real α). Above warp 1 with gas the ease may still be the wheels'
-    // (`_slewSource`, the 30 s rule) when they can finish it.
+    // (`_slewSource`, no wheel limit) when they can do it.
     const sloth = this._slowGeneric(p) !== null;
     if (!sloth && !this._isWarpAbove1(dt, dtWorld)) return false;
     if (!this._apFrameHold) { p.setOrbitFrameHold(true); this._apFrameHold = true; }
@@ -2665,7 +2684,7 @@ export class AutopilotSystem {
     const t = slowTurnTimeS(p, src, err, nx, ny) + slowWarmupLeftS(p, src);
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: src === 'wheels'
-        ? `Autopilot turning on the reaction wheels, ${p.slothTimeWords(t)}.`
+        ? `Autopilot turning on the reaction wheels, ${this._wheelTimeWords(t)}.`
         : `Autopilot on emergency steering: turning slowly on the tail boxes, ${p.slothTimeWords(t)}.`,
       priority: 'warning', source: 'HOUSTON',
     });
@@ -2732,7 +2751,7 @@ export class AutopilotSystem {
     if (dtWorld <= 0) return;
     const stepped = this._slewSteppedThisFrame;
     this._slewSteppedThisFrame = false;
-    if (!stepped) { this._slewLatch = null; this._slewTrackDt = 0; }   // no slew step = the slew's stop: the next one chooses afresh
+    if (!stepped) { this._slewLatch = null; this._slewTrackDt = 0; if (this._wheelSlew) this._wheelSlew.on = false; }   // no slew step = the slew's stop: the next one chooses afresh
     const w0 = this._slewOmega;
     if (stepped || w0.lengthSq() === 0) return;
     const bill = this._slowGeneric(p) === null
@@ -2978,7 +2997,7 @@ export class AutopilotSystem {
    */
   _rotateTowardWorld(worldDir, dt, dtWorld) {
     // With the steering gas out the nose goes to the heading at the tail boxes' α, not at AP_ROT_RATE for free (a held world
-    // pauses it, like the trip hold); likewise a slew the wheels can finish in AIM_TIMEOUT_S (`_slewSource`, latched to the slew's
+    // pauses it, like the trip hold); likewise a slew on the wheels (`_slewSource`, no wheel limit, latched to the slew's
     // stop). The choke point for every caller of this slew.
     let src = null;
     if (typeof this._player.attitudeTorqueSource === 'function') {
@@ -3368,14 +3387,16 @@ export class AutopilotSystem {
     const rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
 
     // Sloth mode: the tank cannot pay for a turn, so the aim turns her on the tail boxes (minutes, not seconds). The source is
-    // chosen once, here, by the player's selector. A caller with its own time limit passes `maxWaitS`: a slow turn longer than that
-    // is refused at once with the honest time (nothing moves, nothing is billed).
-    // Reaction wheels (the kit): the selector also gets the angle and the caller's limit (`maxWaitS`, else the aim's own 30 s): with
-    // gas, the wheels take an aim they can finish inside it (0 gas, battery) and the gas takes the rest; with the gas out the wheels
-    // take every aim (the boxes when they are full), and `maxWaitS` refuses a too-slow one as for the boxes.
+    // chosen once, here, by the player's selector. A caller with its own time limit passes `maxWaitS`: a slow turn on the TAIL BOXES
+    // longer than that is refused at once with the honest time (nothing moves, nothing is billed).
+    // Reaction wheels (the kit; DECISIONS §57 row 5): the wheels have NO time limit here (`AIM.WHEEL_LIMIT_S`), so the wheel limit is
+    // separate from the caller's wait (`maxWaitS`, the boxes' refusal and nothing else). The selector gets the angle and that limit:
+    // the wheels take every aim they can follow (0 gas, battery) and the gas takes a moving piece the wheels cannot cover
+    // (`LOS_COVER`), full or unpowered wheels. A caller may still hold the wheels to a time of its own with `wheelLimitS`; then a
+    // too-slow wheel aim is handed to the gas (or, with the gas out, refused) as before.
     const slowAimSrc = { src: null };
     let slothEstS = 0, lineS = 0;
-    const aimLimitS = Number.isFinite(opts.maxWaitS) ? opts.maxWaitS : AIM.AIM_TIMEOUT_S;   // the time the wheels must finish a net aim in
+    const aimLimitS = Number.isFinite(opts.wheelLimitS) ? opts.wheelLimitS : AIM.WHEEL_LIMIT_S;   // the time the wheels must finish an aim in
     // The geometry is read only when it can change the answer (sloth mode, or a ship with the kit): a stateful provider must be
     // read once per aim.
     const kitAboard = typeof this._player.hasWheelKit === 'function' && this._player.hasWheelKit();
@@ -3416,11 +3437,14 @@ export class AutopilotSystem {
       if (src) {
         slothEstS = turnRad > 0 ? slowTurnTimeS(p, src, turnRad, nx, ny) + slowWarmupLeftS(p, src) : 0;
         // The seconds the line says are the shot's own (the wheel law run with the strut's inertia as it swings out): the rest-to-rest
-        // figure at today's inertia undercounts. `slothEstS` stays that figure (the selector's 30 s test, the watch's limit); the line
+        // figure at today's inertia undercounts. `slothEstS` stays that figure (the selector's limit test, the watch's limit); the line
         // and the hand-over deadline use the longer of the two.
         if (shot && src === 'wheels' && shot.src === 'wheels' && turnRad > 0 && Number.isFinite(shot.timeS)) lineS = Math.max(slothEstS, shot.timeS);
         else lineS = slothEstS;
-        if (sloth && Number.isFinite(opts.maxWaitS) && slothEstS > opts.maxWaitS) {
+        // The refusal: the tail boxes against the caller's `maxWaitS`; the wheels only against a `wheelLimitS` the caller asked for
+        // (no wheel aim is "too slow" by the old 30 s: with the gas out the wheels do it however long it takes: lead c's soft-lock)
+        const waitS = src === 'wheels' ? opts.wheelLimitS : opts.maxWaitS;
+        if (sloth && Number.isFinite(waitS) && slothEstS > waitS) {
           const text = src === 'wheels'
             ? `Steering gas is empty and the reaction wheels need ${p.slothTimeWords(slothEstS)} to turn her that far: too slow for this.`
             : `Emergency steering — the tail boxes need ${p.slothTimeWords(slothEstS)} to turn her that far: too slow for this.`;
@@ -3466,7 +3490,7 @@ export class AutopilotSystem {
           const quick = shot && shot.alt ? this._shotQuickWords(shot.alt) : '';
           eventBus.emit(Events.COMMS_MESSAGE, {
             text: slowAimSrc.src === 'wheels'
-              ? `Turning the ship on the reaction wheels (no steering gas used): ${this._player.slothTimeWords(lineS)}${kick}.${quick}`
+              ? this._wheelAimLine(shot, lineS, kick, quick)
               : `Emergency steering — turning slowly on the tail boxes: ${this._player.slothTimeWords(slothEstS)}${kick}.${quick}`,
             priority: slowAimSrc.src === 'wheels' ? 'info' : 'warning', source: 'HOUSTON',
             _keep: true,
@@ -3500,7 +3524,8 @@ export class AutopilotSystem {
         sloth: slothAim,           // the slow eased law runs (the tail boxes or the wheels)
         src: slowAimSrc.src,       // 'tailBoxes' | 'wheels' | null (cold gas)
         estS: slothEstS,
-        limitS: aimLimitS,         // the limit that planned time had to fit (the watch applies it to a drifting target's chase)
+        lineS,                     // the seconds the line said (a wheel shot's own law, the longer one): `isWheelTurnActive`'s turn left is this minus `elapsed`
+        limitS: aimLimitS,         // the wheel limit the planned time had to fit (none by default; the watch applies it to a drifting target's chase)
         handAt: Constants.WHEELS.AIM_HANDOVER_X * Math.max(slothEstS, lineS) + Constants.WHEELS.AIM_HANDOVER_S,   // a wheel aim not done by then goes to the gas
         wLos: 0,                   // the target bearing's whole turn rate (rad/s, smoothed); read only on the wheels
         wFf: 0,                    // the part of it along her error axis, away from her boresight (the feed-forward)
@@ -3794,7 +3819,7 @@ export class AutopilotSystem {
     const tolRad = degToRad(AIM.DAUGHTER_AIM_TOLERANCE_DEG), rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
     const sk = `${sel.index}:${T1.id}`;
     if (!this._pairSingle || this._pairSingle.key !== sk) {
-      const single = this._planDaughterShot(this._preturnProvider(sel, T1), { arm: sel, armManager: am, pairIndex: sel.index }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+      const single = this._planDaughterShot(this._preturnProvider(sel, T1), { arm: sel, armManager: am, pairIndex: sel.index }, AIM.WHEEL_LIMIT_S, tolRad, rate);
       this._pairSingle = { key: sk, empties: !!(single && single.empties) };
     }
     if (this._pairSingle.empties) return null;
@@ -3887,7 +3912,7 @@ export class AutopilotSystem {
       const homeGapS = this._pairHomeGapS(armA, armB, r.swap ? c.r2 : r1, r.swap ? r1 : c.r2);
       if (homeGapS > (PS.HOME_GAP_S ?? Infinity)) { st.why = st.why || {}; st.why['pair home gap'] = (st.why['pair home gap'] || 0) + 1; return null; }
       const nW = { x: r.n[0], y: r.n[1], z: r.n[2] };
-      const shot = this._planPairShot(() => nW, { arm: armA, armManager: am, pair: { armB, alpha: r.alpha } }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+      const shot = this._planPairShot(() => nW, { arm: armA, armManager: am, pair: { armB, alpha: r.alpha } }, AIM.WHEEL_LIMIT_S, tolRad, rate);
       return shot ? { shot, fuelG, tA, tB, homeGapS } : null;
     })();
     if (!verdict) return;                                          // the other way round is tried next
@@ -3992,7 +4017,7 @@ export class AutopilotSystem {
     const AIM = Constants.AIM;
     const tolRad = degToRad(AIM.DAUGHTER_AIM_TOLERANCE_DEG), rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
     const nW = { x: r.n[0], y: r.n[1], z: r.n[2] };
-    const shot = this._planPairShot(() => nW, { arm: cur.armA, armManager: am, pair: { armB: cur.armB, alpha: r.alpha } }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+    const shot = this._planPairShot(() => nW, { arm: cur.armA, armManager: am, pair: { armB: cur.armB, alpha: r.alpha } }, AIM.WHEEL_LIMIT_S, tolRad, rate);
     if (!shot) return null;
     return Object.assign({}, cur, {
       swap: r.swap, tA, tB, alpha: r.alpha, n: r.n, missA: r.missA, missB: r.missB, turnDeg: r.turnDeg, fuelG, gasKg: shot.gasKg, shot, homeGapS,
@@ -4180,7 +4205,7 @@ export class AutopilotSystem {
       const tolRad = degToRad(AIM.DAUGHTER_AIM_TOLERANCE_DEG), rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
       let singles = 0;
       for (const [arm, target] of [[o.armA, o.tA], [o.armB, o.tB]]) {
-        const s = this._planDaughterShot(this._preturnProvider(arm, target), { arm, armManager: am, pairIndex: arm.index }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+        const s = this._planDaughterShot(this._preturnProvider(arm, target), { arm, armManager: am, pairIndex: arm.index }, AIM.WHEEL_LIMIT_S, tolRad, rate);
         if (!s || !Number.isFinite(s.gasKg)) return null;
         singles += s.gasKg * 1000;
       }
@@ -4375,7 +4400,12 @@ export class AutopilotSystem {
     };
     const dt = 1 / 30;
     let err = q.err, was = q.omega0 || 0, t = 0, pool = 0, sFrac = q.strutDone ? 1 : 0;
-    for (let n = 0; n < 60 * 30; n++) {
+    // (a wheel aim with steering gas aboard stops at the ceiling `WHEELS.TURN_CEILING_S`: the selector sends a longer turn to the gas, so
+    // nothing past it is planned, and a strut angle costs at most 300 s × 30 steps. With the gas out the wheels have no limit: an hour
+    // of ship time at most, D2: 151 s for 90° at radiators 146°; the old 60 s ceiling returned "60 s" for every longer wheel shot)
+    const gasAboard = !(typeof p.isSlothMode === 'function' && p.isSlothMode());
+    const maxSteps = wheels && gasAboard ? Math.ceil(Constants.WHEELS.TURN_CEILING_S / dt) : 3600 * 30;
+    for (let n = 0; n < maxSteps; n++) {
       const cp = couples(at(sFrac));
       if (!cp) break;
       const strutDone = t >= strutT;
@@ -4409,8 +4439,25 @@ export class AutopilotSystem {
    * gas differs by over QUICK_FRAC.
    */
   _shotAimLine(shot) {
+    // a shot the wheels turn is no gas turn: say the wheels and no gas (grams only where gas turns her)
+    if (shot.src === 'wheels') return this._wheelAimLine(shot, shot.timeS, '', shot.alt && shot.kind !== 'pair' ? this._shotQuickWords(shot.alt) : '');
     if (shot.kind === 'pair') return `Turning the ship to line up the pair shot. About ${Math.max(1, Math.round(shot.timeS))} s, ${this._shotGasWords(shot.gasKg)}.`;
     return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(shot.timeS))} s, ${this._shotGasWords(shot.gasKg)}.${shot.alt ? this._shotQuickWords(shot.alt) : ''}`;
+  }
+
+  /** @private A time in plain words as SHIP time: the faster clock shows during a wheel turn (the HUD's "×8"), and the line must
+   * not promise the seconds a player will watch. "about 2 min of ship time". */
+  _wheelTimeWords(sec) {
+    return `${this._player.slothTimeWords(sec)} of ship time`;
+  }
+
+  /** @private The line of a turn on the reaction wheels: no steering gas, ship time; a pair shot says it is the pair's. `kick` / `quick`
+   * are the launch kick's gas words and the quicker other way (either may be ''). */
+  _wheelAimLine(shot, sec, kick, quick) {
+    const head = shot && shot.kind === 'pair'
+      ? 'Turning the ship on the reaction wheels to line up the pair shot'
+      : 'Turning the ship on the reaction wheels';
+    return `${head} (no steering gas used): ${this._wheelTimeWords(sec)}${kick}.${quick}`;
   }
 
   /** @private " (quick: 7 s, 133 g)": the other way of the shot (seconds under 90, else minutes). */
@@ -4590,6 +4637,7 @@ export class AutopilotSystem {
         wall: 0,         // time since the request (timeout clock)
         sloth: slothTurn,          // the slow eased law runs: the boxes (sloth mode) or the wheels turn her (always a tracked turn: `selfTrack`)
         src: slowSrc,              // 'tailBoxes' | 'wheels' | null (cold gas)
+        estS: slothEstS,           // the wheel plan the line said (0 on the gas): `isWheelTurnActive`'s turn left is this minus `wall`
         nb: { x: nBody.x, y: nBody.y },   // the turn axis in the body frame (the wheels' room depends on its direction)
         timeoutS, holdS, holdOwner,
         gasUnits: 0,
@@ -4607,7 +4655,7 @@ export class AutopilotSystem {
       if (slothTurn) {
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: slowSrc === 'wheels'
-            ? `Turning the ship on the reaction wheels (no steering gas used): ${player.slothTimeWords(slothEstS)}.`
+            ? `Turning the ship on the reaction wheels (no steering gas used): ${this._wheelTimeWords(slothEstS)}.`
             : `Emergency steering — turning slowly on the tail boxes: ${player.slothTimeWords(slothEstS)}.`,
           priority: slowSrc === 'wheels' ? 'info' : 'warning', source: 'HOUSTON',
         });
@@ -4959,6 +5007,7 @@ export class AutopilotSystem {
     if (daughter && !c.pair) strutLocalDirection(alphaT, az, bm); else bm.set(0, 0, 1);
     bm.applyQuaternion(q).normalize();
     const errM = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));      // what is left for her to turn
+    c.errM = errM;                                                     // the angle left, for `isWheelTurnActive` once the plan's time has run
 
     // A wheel aim is judged while it runs; one the gas takes over carries on below as a gas aim (same frame, gas torque).
     if (c.src === 'wheels' && c.law !== undefined) this._aimWheelWatch(c, bm, T, errM);
@@ -5106,7 +5155,7 @@ export class AutopilotSystem {
    * the wheels are all she has and the plan's time-out stands):
    *  - from LOS_CHECK_S on, every LOS_RECHECK_S, ask the selector again with the bearing's measured turn rate (`c.wLos`):
    *    it says gas when the wheels' room does not cover that rate LOS_COVER times over;
-   *  - the same look holds the aim to its 30 s (`c.limitS`): the planned time plus the time the drift adds, from her rate now;
+   *  - the same look holds the aim to the caller's wheel limit (`c.limitS`; none by default, so this never fires unless a caller named one): the planned time plus the time the drift adds, from her rate now;
    *  - an aim not converged by AIM_HANDOVER_X x its plan + AIM_HANDOVER_S goes to the gas, whatever the cause.
    * A look inside the tolerance does not hand over (she is on the bearing; only the plan's time can).
    */
@@ -5118,12 +5167,12 @@ export class AutopilotSystem {
     else if (c.elapsed >= W.LOS_CHECK_S && c.elapsed - c.losAt >= W.LOS_RECHECK_S && errM > c.tolRad) {
       c.losAt = c.elapsed;
       const sel = p.attitudeTorqueSource({
-        spinUp: true, angleRad: errM, nx: c.axX, ny: c.axY, limitS: Infinity,   // the rate cover only: the 30 s is judged below (from her rate now)
+        spinUp: true, angleRad: errM, nx: c.axX, ny: c.axY, limitS: Infinity,   // the rate cover only: the caller's limit is judged below (from her rate now)
         losRateRadS: Math.max(0, c.wLos), rateRadS: c.omega, quiet: true,
       });
       if (sel !== 'wheels') why = 'drift';
       else if (c.wLos > 0) {
-        // The 30 s the wheels were chosen for (c.limitS) counts the drift too, which the start could not see: check at every
+        // The limit the wheels were chosen for (c.limitS, a caller's own: none by default) counts the drift too, which the start could not see: check at every
         // look the plan of the angle (c.estS, which passed) plus what the drift adds from where she is now (chase from her
         // present rate with the drift, minus without it). Over the limit -> the gas takes it now, not at the handover deadline.
         const extra = p.wheelChaseTimeS(errM, c.axX, c.axY, c.wLos, c.omega) - p.wheelChaseTimeS(errM, c.axX, c.axY, 0, c.omega);
@@ -5257,5 +5306,47 @@ export class AutopilotSystem {
     const seconds = c.omega / c.burn.a;
     c.omega = 0;
     this._fireAimCouples(c, -1, seconds);
+  }
+
+  /**
+   * Is the ship being turned on the reaction wheels, with more than MIN_TURN_LEFT_S of ship time still to turn? The signal
+   * `SimClock` (main.js) reads to run the sim faster while a long wheel turn shows (DECISIONS §57 row 5). Read once a frame, from
+   * state the last frame left; pure (no allocation, no billing). False for a hold, a gas turn (the arrow keys, a gas slew, an aim the
+   * wheels handed to the gas: `src` is cleared), the tail boxes, and a small correction (3 s or less left). "Turn left", per path:
+   *  - scripted turn (`_turn.src === 'wheels'`: the reel-home line-up, any `requestAttitudeTurn`): its plan `estS` minus `wall`
+   *    (seconds since the request); past the plan, `wheelTurnTimeS` of the angle left (`sign·A − progress`, tracked turns);
+   *  - aim (`_aimCoroutine.src === 'wheels'`: net, lasso, daughter, pair): `max(estS, lineS)` minus `elapsed`; past the plan,
+   *    `wheelTurnTimeS` of the angle left (`errM`, her last look, minus the stop error);
+   *  - pre-turn (`_preturn`, phase 'turn'): `wheelTurnTimeS` of the angle left (`errM`) about its axis (no plan is kept);
+   *  - slew (`_wheelSlew.on`: the approach/orbit-frame slew with `_slewLatch === 'wheels'`, or the gas-out slew, whose rate is
+   *    `_tripOmega` made by `_tripSrc === 'wheels'`): `wheelTurnTimeS` of the angle left (`err`, about `nx, ny`);
+   *  - the player's own wheel recentre: `wheelRecentreLeftS()` = `wheelTurnTimeS` of the offset left.
+   * The trip hold's slew (30 s wheel limit) counts like any wheel slew while it runs on the wheels.
+   * @returns {boolean}
+   */
+  isWheelTurnActive() {
+    const MIN_TURN_LEFT_S = Constants.SIM_SPEEDUP.MIN_TURN_LEFT_S;   // game seconds (SimClock's constant)
+    const p = this._player;
+    if (!p || typeof p.wheelTurnTimeS !== 'function') return false;
+    const t = this._turn;
+    if (t && t.src === 'wheels') {
+      let left = t.estS - t.wall;
+      if (!(left > 0) && t.track && t.nb) left = p.wheelTurnTimeS(t.sign * t.A - t.progress, t.nb.x, t.nb.y);
+      if (left > MIN_TURN_LEFT_S) return true;
+    }
+    const c = this._aimCoroutine;
+    if (c && c.src === 'wheels') {
+      let left = Math.max(c.estS || 0, c.lineS || 0) - c.elapsed;
+      if (!(left > 0) && Number.isFinite(c.errM) && c.axX !== undefined) left = p.wheelTurnTimeS(Math.max(0, c.errM - c.stopErr), c.axX, c.axY);
+      if (left > MIN_TURN_LEFT_S) return true;
+    }
+    const pt = this._preturn;
+    if (pt && pt.src === 'wheels' && pt.phase === 'turn') {
+      const err = Number.isFinite(pt.errM) ? pt.errM : (pt.shot ? pt.shot.errRad : 0);
+      if (p.wheelTurnTimeS(Math.max(0, err - pt.stopErr), pt.axX, pt.axY) > MIN_TURN_LEFT_S) return true;
+    }
+    const s = this._wheelSlew;
+    if (s && s.on && p.wheelTurnTimeS(s.err, s.nx, s.ny) > MIN_TURN_LEFT_S) return true;
+    return typeof p.wheelRecentreLeftS === 'function' && p.wheelRecentreLeftS() > MIN_TURN_LEFT_S;
   }
 }

@@ -2065,8 +2065,17 @@ export class InputManager {
     if (!w || w.done || !(dt > 0)) return;
     w.elapsed += dt;
     if (w.graceAt !== null && w.elapsed >= w.graceAt) { w.settle('send'); return; }
+    const ap = this._deps && this._deps.autopilotSystem;
+    // An aim on the reaction wheels is long by design (no 30 s wheel limit: about 151 s for 90° at radiators 146°): the cap
+    // below is the gas aim's. While the wheels turn her the wait goes on (the aim's own end or time-out settles it: `onAim`); an aim the
+    // wheels hand to the gas is a gas aim again, with the cap's seconds from then.
+    if (ap && typeof ap.isAimOnWheels === 'function' && ap.isAimOnWheels()) { w.onWheels = true; return; }
+    if (w.onWheels) {
+      w.onWheels = false;
+      w.cap = Math.max(w.cap, w.elapsed + ((Constants.AIM && Constants.AIM.AIM_TIMEOUT_S) || 30) + 3);
+      return;
+    }
     if (w.elapsed >= w.cap) {
-      const ap = this._deps && this._deps.autopilotSystem;
       if (ap && typeof ap.isAiming === 'function' && ap.isAiming() && w.extended < 2) { w.extended++; w.cap += 3; return; }
       w.settle('send');
     }
@@ -2250,7 +2259,7 @@ export class InputManager {
    */
   processInput(dt) {
     const d = this._deps;
-    if (dt > 0) this._frameClockS = (this._frameClockS || 0) + dt;   // the lead provider's frame clock (capped real seconds)
+    if (dt > 0) this._frameClockS = (this._frameClockS || 0) + dt;   // the lead provider's frame clock (game seconds: the loop's capped dt × SimClock k, ≤ 0.8 s; no cap here)
     this._tickNetWait(dt);       // the Shift+A daughters' wait for the net's turn runs on game time
     this._sampleReach(dt);       // the piece's velocity relative to the ship, for the reach-at-arrival check
 
@@ -2595,8 +2604,9 @@ export class InputManager {
           aligned = (radToDeg(Math.acos(dot))) <= Constants.AIM.NET_AIM_TOLERANCE_DEG;
         }
         if (!aligned) {
-          // The lock has the aim's own 30 s (AIM_TIMEOUT_S); a slow turn on the tail boxes is refused at once (`TOO_SLOW`)
-          ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined, maxWaitS: Constants.AIM.AIM_TIMEOUT_S })
+          // The wheels turn her however long it takes (no wheel limit: `AIM.WHEEL_LIMIT_S`; the aim's own time-out scales from its
+          // wheel estimate); a slow turn on the tail boxes longer than the aim's 30 s (AIM_TIMEOUT_S) is refused at once (`TOO_SLOW`)
+          ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined, maxWaitS: Constants.AIM.AIM_TIMEOUT_S, wheelLimitS: Constants.AIM.WHEEL_LIMIT_S })
             .then(() => this._castLasso({ afterAim: true }))
             .catch((err) => {
               // aborted — nothing cast; a timed-out aim / lost target leaves the ship quiet (as the net does)
@@ -2660,15 +2670,18 @@ export class InputManager {
     const t = ts && typeof ts.getActiveTarget === 'function' ? ts.getActiveTarget() : null;
     const sp = t && t._scenePosition;
     const pp = d && d.player && (d.player.position || (typeof d.player.getPosition === 'function' ? d.player.getPosition() : null));
-    if (!sp || !pp || dt > 0.5) { this._reachTrack = null; return; }   // nothing to track, or a long gap (pause / warp): start over
+    // A long gap (pause / warp) starts over. The game loop hands up to 0.8 s (its 0.1 s cap × SimClock k 8 while the
+    // wheels turn her): a frame, not a gap.
+    if (!sp || !pp || dt > 1) { this._reachTrack = null; return; }   // nothing to track, or a long gap: start over
     if (!(dt > 1e-4)) return;
     const rx = sp.x - pp.x, ry = sp.y - pp.y, rz = sp.z - pp.z;
     const tr = this._reachTrack;
     if (tr && tr.id === t.id) {
       // Frame dt is capped (0.1 s), so a gap never shows in dt: a jump in the relative position (trip arrival, warp,
-      // respawn) is the tell. 50 m in one frame is 500+ m/s relative, not motion: start over.
+      // respawn) is the tell. 50 m in one 0.1 s frame is 500+ m/s relative, not motion: start over (the bound grows with
+      // a longer game step, so ×8 frames keep the same 500 m/s line).
       const jx = rx - tr.rx, jy = ry - tr.ry, jz = rz - tr.rz;
-      const jumpSc = 50 * Constants.SCENE_UNITS_PER_METER;
+      const jumpSc = 50 * Constants.SCENE_UNITS_PER_METER * Math.max(1, Math.max(dt, tr.dt || 0) / 0.1);
       if (jx * jx + jy * jy + jz * jz > jumpSc * jumpSc) { this._reachTrack = null; return this._startReachTrack(t.id, rx, ry, rz, dt); }
       // The position seen now was moved by the PREVIOUS frame's step, so its velocity is delta / that frame's dt.
       const mdt = tr.dt > 1e-4 ? tr.dt : dt;
@@ -3154,9 +3167,11 @@ export class InputManager {
     }
 
     // Otherwise rotate to attitude, then fire on resolve. Reject = no fire, no inventory decrement (AutopilotSystem
-    // emits the abort comms). The lock lasts the aim's own 30 s (AIM_TIMEOUT_S); a slow turn on the tail boxes (steering
-    // gas out) is refused at once with the honest time (`TOO_SLOW`): nothing moves, no net is spent.
-    ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined, maxWaitS: Constants.AIM.AIM_TIMEOUT_S })
+    // emits the abort comms). The wheels turn her however long it takes (no wheel limit, `AIM.WHEEL_LIMIT_S`: the aim's time-out and
+    // gas hand-over scale from its wheel estimate); a slow turn on the tail boxes (steering gas out, wheels unusable) longer than the
+    // aim's 30 s (AIM_TIMEOUT_S) is refused at once with the honest time (`TOO_SLOW`): nothing moves, no net is spent. The lead
+    // (`provider`) is read again every frame and aims at where the piece will be when the net leaves, so a long aim still meets it.
+    ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined, maxWaitS: Constants.AIM.AIM_TIMEOUT_S, wheelLimitS: Constants.AIM.WHEEL_LIMIT_S })
       .then(() => {
         // §9.6: aim-resolve double-tick — the slew settled on the launch attitude ("locked, then confirmed" before the thump).
         d.audioSystem?.playAimResolveTick?.();

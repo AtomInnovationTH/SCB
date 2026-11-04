@@ -276,9 +276,13 @@ export class ResourceSystem {
     return max * frac;
   }
 
-  /** The level a tank (engine propellant or cold gas) starts a boot at, kg: new game, retry, CONTINUE (owner 2026-10-14: "only 60% full"). */
+  /**
+   * The level the steering-gas (cold-gas) tank starts a boot at, in tank units: new game, retry, CONTINUE. It is COLD_GAS_START_FRACTION
+   * of `max` (full: owner 2026-11-03, DECISIONS §57 row 5, "Missions start with a full 6 kg tank"). The ENGINE tank keeps its own
+   * PROPELLANT_START_FRACTION (60 %, owner 2026-10-14): `startEnginePool`. Every caller passes the cold-gas max.
+   */
   static startPropellant(max) {
-    const f = Constants.PROPELLANT_START_FRACTION;
+    const f = Constants.COLD_GAS_START_FRACTION;
     const frac = Number.isFinite(f) ? clamp01(f) : 1;
     return max * frac;
   }

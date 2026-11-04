@@ -145,7 +145,7 @@ const FITTING_SPECS = {
   coldgas_resupply: {
     subsystem: 'ENGINEERING', reads: 'resourceSystem',
     // real kg (the pool is 0.3 kg a unit), so a 5 kg buy reads +5
-    display: (row) => ({ param: 'coldGasKg', base: coldGasPoolToKg(Constants.COLD_GAS_MAX * Constants.PROPELLANT_START_FRACTION), unit: 'kg', op: `+${row.value}` }),
+    display: (row) => ({ param: 'coldGasKg', base: coldGasPoolToKg(Constants.COLD_GAS_MAX * Constants.COLD_GAS_START_FRACTION), unit: 'kg', op: `+${row.value}` }),
     current: (deps) => (deps.resourceSystem && Number.isFinite(deps.resourceSystem.coldGas) ? coldGasPoolToKg(deps.resourceSystem.coldGas) : undefined),
   },
   extra_coldgas: {

@@ -396,6 +396,8 @@ const _nstSun = { x: 0, y: 0, z: 0 };
  * baseScale, the same law as the game loop) while the sun direction is a function of REAL time (SunLight.update(dt) is fed the real dt: the
  * sun never warps with the floor's time cap). At ~400 km with rate 1 the two turn at the same angular rate, so the shadow geometry is
  * nearly frozen there and the transitions come on the warped floors; a predictor that held the sun still would lie.
+ * "Real" seconds are the game loop's frame dt, which SimClock scales by k (game time ×8 while the wheels turn her) for the sun
+ * AND the orbit alike: the answer is in game seconds, and × rate × baseScale in world seconds, whatever k is.
  *
  * Method: sample the coming orbital period (in real seconds) at `samples` steps; the first sample whose `isInShadow` differs from the
  * t = 0 state brackets the flip, refined by 6 bisection steps (precision = the sample spacing / 64). No sample differs → no flip within

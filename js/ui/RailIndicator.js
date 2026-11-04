@@ -443,8 +443,9 @@ export class RailIndicator {
   }
 
   /**
-   * Time-rate readout at the rail's head. Fed per frame by main.js with `timeAuthority.rate` while the ladder is
-   * engaged. Write-on-change, ≤ 4 Hz (RATE_WRITE_MIN_MS). Headless: no DOM → returns before touching any state.
+   * Time-rate readout at the rail's head. Fed per frame by main.js with `timeAuthority.rate × SimClock k` while the
+   * ladder is engaged (k > 1 only at rate 1: the "8×" the player sees while the wheels turn her, DECISIONS §57 row 5).
+   * Write-on-change, ≤ 4 Hz (RATE_WRITE_MIN_MS). Headless: no DOM → returns before touching any state.
    * @param {number} rate - TimeAuthority.rate (1 = shipped speed)
    * @param {number} [nowMs] - caller clock (defaults to performance.now())
    * @returns {boolean} whether a DOM write happened this call

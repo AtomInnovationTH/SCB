@@ -2478,7 +2478,7 @@
       "i18n": {
         "title": "Reaction Wheels",
         "shortText": "Spin up a flywheel and the spacecraft turns the other way. Propellant-free pointing by conservation of momentum.",
-        "hardwareNote": "The {{WHEELS.COUNT}} reaction wheels, one per axis, turn the ship without spending gas, and they only appear once the wheel kit is bought.",
+        "hardwareNote": "The {{WHEELS.COUNT}} reaction wheels, one per axis, are standard on her from the first launch: they turn the ship on battery power, without spending gas.",
         "fullText": "A reaction wheel is an electric motor spinning a heavy disc. Speed the disc up and, by conservation of angular momentum, the spacecraft rotates the opposite way; three wheels give full three-axis control with no propellant spent, just electricity.\n\nThe limit is saturation. Every disturbance the wheels absorb makes them spin a little faster, until they reach their maximum rate and can take no more. At that point they must be desaturated by applying an external torque, usually magnetorquers pushing against Earth's magnetic field. Wheels do the quiet, precise, fuel-free pointing; something external periodically bleeds off what they have stored.",
         "realWorld": "Reaction wheels provide propellant-free 3-axis control on most satellites; desaturated via magnetorquers or thrusters.",
         "trlRationale": "Ubiquitous fine-pointing actuator.",

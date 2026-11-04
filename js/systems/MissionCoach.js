@@ -122,8 +122,12 @@ export class MissionCoach {
     });
   }
 
-  /** Per-frame tick (gameplay frames only): fires an armed chapter, then drives narrative dwell + escalation timers. */
-  update(dt) {
+  /**
+   * Per-frame tick (gameplay frames only): fires an armed chapter, then drives narrative dwell + escalation timers.
+   * @param {number} dt  wall seconds (a narrative beat's reading dwell)
+   * @param {number} [gameDt=dt]  game seconds, dt × SimClock k (an interactive beat's nag, which waits on game events)
+   */
+  update(dt, gameDt = dt) {
     if (this._disposed) return;
     if (this._onset.armed) {
       // Hold while the depot stop is pending (the boss/chapter never starts
@@ -132,7 +136,7 @@ export class MissionCoach {
       if (mission != null) this._startChapter(mission);
     }
     if (!this._seq) return;
-    this._seq.update(dt);
+    this._seq.update(dt, gameDt);
   }
 
   /**

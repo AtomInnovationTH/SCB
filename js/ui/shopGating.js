@@ -100,3 +100,21 @@ function partAsNew(res, part) {
   const w = res && typeof res.getWear === 'function' ? res.getWear() : null;
   return !w || w[part] < 0.01;
 }
+
+/**
+ * Is this catalog row sold at all? Pure; shared by the shop list, the refit card's ranking and both purchase guards, so a hidden
+ * row cannot be bought by another route. A row is not offered when its feature flag is off, or when the hardware is already aboard
+ * from boot: owner 2026-08-27, while FLOWER_PREINSTALLED is ON the two radiator rows are hidden so nobody pays for installed hardware;
+ * owner 2026-10-29 / DECISIONS §57 row 4 (built 2026-11-04), while `Constants.WHEELS.STANDARD` is on the reaction-wheels card is
+ * hidden too (`PlayerSatellite.installStandardWheels` at boot). Rows stay in UPGRADES: CATALOG_TOTAL_CR and its pacing pins are
+ * catalog-shape facts, and an old save's `wheelKit` purchase still replays (idempotent). Re-exported by ShopScreen.
+ * @param {{id?:string, requiresFeature?:string}} u
+ * @returns {boolean}
+ */
+export function isShopRowOffered(u) {
+  if (!u) return true;
+  if (u.requiresFeature && !Constants.isFeatureEnabled(u.requiresFeature)) return false;
+  if (Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED && (u.id === 'flower_pair_a' || u.id === 'flower_pair_b')) return false;
+  if (Constants.WHEELS.STANDARD === true && u.id === 'reaction_wheels') return false;
+  return true;
+}

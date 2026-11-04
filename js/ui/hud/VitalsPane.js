@@ -29,7 +29,7 @@
  *            lives in the MOTHER hover detail (`flowText()` feeds it).
  *            Source: `getPowerSnapshot()`, falling back to the plain
  *            `player.resources` copy.
- *   PROPULSION one row, two halves: `N₂ ▮▮▮▯ 3.6 kg │ ARGON ▮▮▮▯ 1468 m/s`.
+ *   PROPULSION one row, two halves: `N₂ ▮▮▮▮ 6.0 kg │ ARGON ▮▮▮▯ 1468 m/s`.
  *            The nitrogen half = the cold-gas tank (kg from the mass budget's
  *            `coldGasCurrent`); amber < 25 %, red < 10 %; the same cost flash
  *            for any spend of >= 0.25 % of the tank. The engine half = the
@@ -38,11 +38,12 @@
  *            ship's ΔV in m/s (`getMassBudget().deltaV`; `—` before the
  *            budget is ready); amber < 15 %, red only when empty. No physics
  *            constant is read here: every kg and m/s comes from the budget.
- *   WHEELS   (the reaction-wheel kit, DECISIONS §2 row 9; only while the kit is aboard) a third half on the PROPULSION
+ *   WHEELS   (the reaction-wheel kit, DECISIONS §2 row 9; standard since §57 row 4: the game's boot fits it, so the half shows from
+ *            the first frame with nothing bought; it is hidden only for a ship without the kit, e.g. a bare test rig) a third half on the PROPULSION
  *            row (built the first time the kit is aboard; on a pane under 430 px, the iPad held sideways, without the bar),
  *            `│ WHEELS ▮▯▯▯ 42%`: the fullest of the three wheels, |h| / 4 N·m·s. Full is the BAD end (the opposite of the
- *            tanks): green < 75 %, amber from 75 %, red from 90 % (a wheel that full cannot take more spin that way; the gas
- *            or the tail boxes take over until the coils slow it). Not in the pane without the kit: its DOM is unchanged.
+ *            tanks): green < 75 %, amber from 75 %, red from 90 % (a wheel that full cannot take more spin that way; the steering gas
+ *            empties it when she is at rest, or the tail boxes once the gas is out, until then the coils slow it). Not in the pane without the kit: its DOM is unchanged.
  *
  * Contract with the ResourceSystem (both OPTIONAL — every method is probed
  * with `?.` and a missing one falls back, never throws):
@@ -1044,7 +1045,7 @@ export class VitalsPane {
       el.appendChild(label);
 
       if (key === 'propulsion') {
-        // One row, two halves: `N₂ ▮▮▮▯ 3.6 kg │ ARGON ▮▮▮▯ 1468 m/s`. Each half has its own band.
+        // One row, two halves: `N₂ ▮▮▮▮ 6.0 kg │ ARGON ▮▮▮▯ 1468 m/s`. Each half has its own band.
         this._row.propulsion = { el, label, st: { band: 'none', fill: '', value: '', rate: '', tag: '' } };
         VITALS_HALVES.forEach((hk, i) => {
           if (i > 0) el.appendChild(mk('span', 'vp-sep', '\u2502'));

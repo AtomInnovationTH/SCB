@@ -483,9 +483,10 @@ export function radiatorInertia(petals) {
  * same place, so each axis is the inertia of a real mass layout about its own centre: > 0, never above the origin
  * value. The berthed mass sits on the axis at z = +L/2 (the clamp's own model, below). computeCoM has no berthed mass,
  * so while a catch is berthed the inertia's centre differs from computeCoM's by that mass (accepted). Diagonal terms only
- * (no products of inertia). Both this sum and computeCoM leave out 25.6 kg the ship's mass budget carries
- * (ArmManager.getMassBudget): the engine tank's dry mass 9.5 kg, the cold gas 3.6 kg and the engine gas
- * 12.5 kg: none of them has a place in the mass tree. The tree's 268.7 kg of the ship's 294.28 is what the
+ * (no products of inertia). Both this sum and computeCoM leave out 28.0 kg the ship's mass budget carries
+ * (ArmManager.getMassBudget): the engine tank's dry mass 9.5 kg, the cold gas 6.0 kg (the full steering tank) and the engine gas
+ * 12.5 kg: none of them has a place in the mass tree. The tree's 268.7 kg plus those 28.0 and the standard wheel kit's 12.1
+ * (booked on its own below) make the ship's 308.78 kg start mass (294.28 before 2026-11-04); the tree is what the
  * centre of mass is taken on.
  *
  * @param {object} armManager — ArmManager (may be null/empty → bus-only inertia)
