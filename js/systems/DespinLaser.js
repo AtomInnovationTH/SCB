@@ -48,8 +48,8 @@ export function despinReachM(tier) {
 }
 
 /**
- * Angular deceleration the beam gives one piece, rad/s²: push = coupling × beam watts, acting `LEVER_FRAC` of the half-length off
- * centre, over the moment of inertia `INERTIA_K × m × L²`. 0 when the piece lacks a usable mass or length (no silent default).
+ * Angular deceleration the beam gives one piece, rad/s²: push = coupling × beam watts, acting `LEVER_FRAC` (0.55, the laser aims
+ * at the end of the piece, E12; was 0.3) of the half-length off centre, over the moment of inertia `INERTIA_K × m × L²`. 0 when the piece lacks a usable mass or length (no silent default).
  * @param {object} tier
  * @param {number} massKg
  * @param {number} lengthM

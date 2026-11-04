@@ -2717,7 +2717,10 @@ export const Constants = {
       // Reach 23.7 m, draw 40 W, push 200 µN (computed)
     },
     // Spin-down (DespinLaser.despinAlpha): the push acts off-centre as a torque. Both numbers are estimates (research "Analysis").
-    LEVER_FRAC:         0.3,      // lever arm as a fraction of half the piece's length
+    // LEVER_FRAC 0.3 → 0.55 (laser round 2, E12, owner pick 2026-11-04 "Aim at the end"): her laser follows the correct end of the
+    // piece. 0.3 matched a laser holding one spot; an end-aiming laser is 0.83 rod / 0.49 cube / 0.55 2:1 box (estimate, M = 4),
+    // 0.55 the middle one. Source: docs/research/2026-11-spin-timing.md. Every de-spin time scales by 0.3/0.55.
+    LEVER_FRAC:         0.55,     // lever arm as a fraction of half the piece's length (aims at the end)
     INERTIA_K:          0.115,    // moment of inertia = INERTIA_K × m × L²
     IN_SPEC_DEG:        10,       // tumble at/below this is net-safe → "tumble in spec, net it"
     BEAM_COLOR:         0x66ddff, // cyan glow (archive/BIG_PICTURE.md §16.4)
