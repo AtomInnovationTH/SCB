@@ -64,7 +64,7 @@ function relayActs(target, d) {
 }
 
 /**
- * How near a daughter must hold to the piece for the mirror to carry the beam, in plain words ("41 m"): the longest reach, over the
+ * How near a daughter must hold to the piece for the mirror to carry the beam, in plain words ("40 m", the figure for a mirror on the piece's far side; the 41.0 m reach rounded down): the longest reach, over the
  * laser tiers aboard and the daughter types in the fleet (a weaver's 10 cm mirror when no daughter is out), of the mirror as the
  * last aperture (`relayTier`, mirror facing the piece). Metres rounded DOWN, so the words never promise more than the game gives.
  * @returns {string}
@@ -82,12 +82,13 @@ function relayReachWords() {
 
 /**
  * "get within 120 m to stop its spin", and with the relay mirrors aboard "get within 120 m to stop its spin, or hold a daughter
- * within 41 m of it" (the mirror bounces the beam, so what counts is the daughter's distance to the piece).
+ * on its far side, up to 40 m from it" (the mirror bounces the beam, so what counts is the daughter's distance to the piece; far side
+ * because the mirror's reach shrinks with the bounce angle (`relayTier`): full on the piece's far side, 0.71x at 90 degrees, none from between ship and piece).
  * @param {string} reach - the mother's reach in words
  * @returns {string}
  */
 function pastReachWords(reach) {
-  return `get within ${reach} to stop its spin${despinLaser.hasRelayMirrors() ? `, or hold a daughter within ${relayReachWords()} of it` : ''}`;
+  return `get within ${reach} to stop its spin${despinLaser.hasRelayMirrors() ? `, or hold a daughter on its far side, up to ${relayReachWords()} from it` : ''}`;
 }
 
 /**
@@ -106,7 +107,7 @@ export function outOfReachWords(target) {
 /**
  * The keys advice for a tumbling target: "de-spin [L]" with the time where the laser would fire, but past every owned reach
  * (L does nothing there) the same words glass gets: "get within 120 m to stop its spin" (with mirrors aboard, "..., or hold a
- * daughter within 41 m of it"). Unknown distance: "de-spin [L]".
+ * daughter on its far side, up to 40 m from it"). Unknown distance: "de-spin [L]".
  * @param {object} target
  * @param {string} [lead] - the keys phrase when the laser can fire (default "de-spin [L]"; the aspect line passes its own)
  * @returns {string}

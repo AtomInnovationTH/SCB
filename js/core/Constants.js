@@ -2722,7 +2722,10 @@ export const Constants = {
       MIRROR_M:     { weaver: 0.10, spinner: 0.05 }, // mirror width, m (the research's 10 cm / 5 cm options; a tilted mirror shows less: × cos θi)
       REFLECTIVITY: 0.995,    // share of the beam the mirror returns (sourced: Thorlabs 1064/355 nm laser-line mirrors, R_avg > 99.5 %)
       STEER_W:      { weaver: 2, spinner: 2 }, // watts from her pack while she holds the mirror on the piece (estimate; no datasheet gave power)
-      MASS_KG:      { weaver: 1.0, spinner: 0.40 }, // carried in addition (estimate: PI S-330.4 tip/tilt 380 g for 50 mm; no 10 cm datasheet)
+      // carried in addition. Real steering mirrors of this size weigh 1.6 kg (Cedrat DTT40SM-SG, 80 mm) and 1.7 kg (Cedrat P-FSM400MML,
+      // 120 mm; Cedrat FSM brochure re-read 2026-11-05), so the weaver's 10 cm mirror is 1.6 kg; the spinner's 0.40 kg matches
+      // PI S-330.4 (380 g for 50 mm). Owner 2026-11-05.
+      MASS_KG:      { weaver: 1.6, spinner: 0.40 },
       PRICE_CR:     1200,     // game-economy estimate, under the long laser (2,000)
       TRL:          4,
       // Reach from a 10 cm mirror 41.0 m, from 5 cm 20.5 m, push 597 µN (computed from the close tier; test-DespinRelay pins them)
