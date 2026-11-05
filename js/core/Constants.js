@@ -4825,12 +4825,15 @@ export const Constants = {
 
   // HIGH_FIELD — the rows of a HIGH field: dead satellites and rocket stages (DECISIONS §33 row 6:
   // "dead satellites and rocket stages at 750-900 km"; DebrisField._spawnWelcomeField, FieldRegistry)
-  // The same 7 rows lay out every `kind: 'high'` field in FIELDS.LIST (row i of the table is piece i of the field), through
+  // The same 8 rows lay out every `kind: 'high'` field in FIELDS.LIST (row i of the table is piece i of the field), through
   // the path that lays out WELCOME_FIELD for a low field. Per field: 2 upper stages (800-1,500 kg), 2 dead satellites over
-  // 500 kg (the mother net takes them: a daughter's net stops at 500 kg) and 3 dead satellites of 50-500 kg. The field's seed
+  // 500 kg (the mother net takes them: a daughter's net stops at 500 kg) and 4 dead satellites of 50-500 kg (the 8th, 160-190 kg,
+  // is a company's: the good-press job). The field's seed
   // rolls where each piece sits along the track and, inside each row's ranges, how heavy it is: the SAME roll picks mass and
-  // size, so a heavier piece is a bigger one. Every piece is a real catalogue class (data/debris-catalog.json at 700-960 km),
-  // in HER orbit's tilt (the catalogue's own 70-99 deg is not used), and fits her net: largest side at or under
+  // size, so a heavier piece is a bigger one. Rows 1-5 are real catalogue classes (data/debris-catalog.json at 700-960 km; the two stage rows cut
+  // to fit, below); rows 6 and 7 are named estimates (no catalogue entry in their mass range); row 8 (ORBCOMM OG2 class) is NOT in that file: its
+  // 172 kg is sourced by the URLs at its row, its size, tumble and band are estimates. All sit
+  // in HER orbit's tilt (the catalogue's own 70-99 deg is not used), and fit her net: largest side at or under
   // CATCH_MAX_SIDE_M (a margin under the 6 m mother net, CAPTURE_NET.LARGE.DIAMETER), mass under the net's 5,000 kg strength,
   // tumble under the net's 10 deg/s limit (DEBRIS_TYPES / assessNetFit).
   // Mass is the exception: the Meteor 2 row (1,800-2,700 kg) is over her 1,500 kg catch limit
@@ -4870,6 +4873,17 @@ export const Constants = {
       fwdMinM: 2050, fwdMaxM: 2300, latM: -330, radM: 120,     // #7 a named estimate
       owner: { name: null, status: 'abandoned', launchYear: 2009, notable: 'Its company is gone.' },   // estimate; always set: an abandoned piece is still big
       areaM2: 1.9 },    // box 1.7 x 0.9 x 0.9 m
+    // #8 (route-1101 J4, Locked 3): the one piece a COMPANY owns, so the good-press job (`pressClient`, JobsBoard.js) has someone to pay. ORBCOMM OG2 class: 172 kg,
+    // 4 of its 17 satellites failed in 2015-2017 (https://space.skyrocket.de/doc_sdat/orbcomm-2.htm, https://spacenews.com/three-orbcomm-og2-satellites-malfunctioning-fate-to-be-determined).
+    // The owner is "its operator", never the company by name (it has said nothing about removal). Precedent for a company paying to remove its own dead
+    // satellites: Iridium would "pay to deorbit its 30 defunct satellites, for the right price" (SpaceNews 30 Dec 2019,
+    // https://spacenews.com/iridium-would-pay-to-deorbit-its-30-defunct-satellites-for-the-right-price). Mass range 160-190 kg around the sourced 172 kg;
+    // size, tumble and band are estimates.
+    { name: 'Dead small satellite (ORBCOMM OG2 class)', types: ['defunctSat'], material: 'aluminum', massMin: 160, massMax: 190, sizeMin: 1.6, sizeMax: 2.0, tumbleDegS: 6,
+      fwdMinM: 2500, fwdMaxM: 2700, latM: 380, radM: -140,      // #8 a named estimate (the band after #7's, signs alternated, inside RESEAT.DIST_M)
+      owner: { name: 'its operator', status: 'owner', launchYear: 2015, notable: 'A company satellite that died in orbit; its operator would pay to have it removed for good press.' },
+      pressClient: true,                                         // the good-press job's client (JobsBoard.pressRows)
+      areaM2: 2.0 },    // box 1.6 x 1.0 x 0.9 m (estimate)
   ],
   // BIG_PIECES — what a big piece (a HIGH_FIELD stage or satellite: `owner` set) pays when DISPOSED OF, not at the catch
   // (DECISIONS §33 row 16-17; BigPieceValues.js, OrbitLifetime.js). Estimates to tune. Metal in orbit is priced like her gas: the
@@ -4882,6 +4896,25 @@ export const Constants = {
     CONSENT_SHARE: 0.2,                                           // the owner's (or insurer's) share of what is sold or reused
     COLLECTOR: { EARLY_BEFORE_YEAR: 1975, EARLY_CR: 10000, MID_UNTIL_YEAR: 1989, MID_CR: 3000 },   // launched before 1975 / 1975-1989 / later: 0
     SAIL: { areaM2: 25, massKg: 9.5, priceCr: 1200 },             // drag sail: HPS ADEO-L class; price = launch mass 665 + 500 hardware (est.)
+    // Removal jobs (DECISIONS §62 rows 4 and 12, plan route-1101 D8 and J4): a job piece pays its job pay instead of FEE_CR_PER_KG. Three kinds, each
+    // with its own real anchor (docs/research/2026-11-removal-pay.md §1 and §4). The credit rates are derived, never typed: USD over USD_PER_CREDIT.
+    // A: the one agency job, Japan's phase II contract: about $81 M for one stage of about 3 t = 27,000 USD per kg (computed, two significant
+    // figures; §1 row 1, `table.A`; also docs/research/2026-10-adr-missions.md:86).
+    JOB_USD_PER_KG: 27000,
+    get JOB_CR_PER_KG() { return Constants.BIG_PIECES.JOB_USD_PER_KG / Constants.USD_PER_CREDIT; },                  // 270
+    // B: the later agency jobs, NASA's ceiling (same doc §1 row "Benefit-side buyer": removal "can have significant net benefits if removal
+    // costs less than $3,000/kg", NASA OTPS phase 2 slides May 2024; §4 `table.B`, a ceiling, not a price). In credits per kg: 30.
+    JOB_B_USD_PER_KG: 3000,
+    get JOB_B_CR_PER_KG() { return Constants.BIG_PIECES.JOB_B_USD_PER_KG / Constants.USD_PER_CREDIT; },
+    // C: a company that wants good press pays a flat price for its own dead satellite: $10.5 M, the average of Astroscale's own "$8 million to
+    // $13 million per satellite" estimate (same doc §1 row "Operator who wants to look responsible"; §4 `table.C`). In credits: 105,000.
+    JOB_PRESS_USD: 10500000,
+    get JOB_PRESS_CR() { return Constants.BIG_PIECES.JOB_PRESS_USD / Constants.USD_PER_CREDIT; },
+    // Job rules (DECISIONS §62 row 12, plan route-1101 Locked 2; counts and first missions are game rules, same doc §4 `table.*.times_per_run`).
+    // `A_MAX` / `B_MAX` / `PRESS_MAX`: postings a game can make of each kind; `A_FIRST_MISSION` / `PRESS_FIRST_MISSION`: the mission number from which
+    // it may be posted; `A_MIN_REMOVED`: big pieces she must have removed herself before A; `SPACING_MISSIONS`: a kind's next posting comes this
+    // many missions after its last one closed (B's first counts from A's close).
+    JOB_RULES: { A_MAX: 1, B_MAX: 2, PRESS_MAX: 2, A_FIRST_MISSION: 5, PRESS_FIRST_MISSION: 3, A_MIN_REMOVED: 1, SPACING_MISSIONS: 3 },
     RULE_YEARS: 25,                                               // IADC: out of orbit within 25 years
     PUSH_TARGET_YEARS: 24,                                        // a push aims at 24 years' life: a year's margin
     PUSH_STEP_KM: 5,                                              // the push height is floored to this step

@@ -720,8 +720,8 @@ export class DebrisField {
   }
 
   /**
-   * The PARKED HEAVY SPARES: one for every row of every `high` field in `Constants.FIELDS.LIST` (4 fields x the 7
-   * `Constants.HIGH_FIELD` rows = 28), of that row's type and material. A high field lays its rows out through the
+   * The PARKED HEAVY SPARES: one for every row of every `high` field in `Constants.FIELDS.LIST` (4 fields x the 8
+   * `Constants.HIGH_FIELD` rows = 32), of that row's type and material. A high field lays its rows out through the
    * ordinary field spawn path (`_spawnWelcomeField`), but an instanced mesh is sized and shaped once at the build
    * (`_buildInstancedMeshes`) and a retyped fragment still draws as a fragment. So the heavy bodies exist from the
    * start, parked out of play, and a high field CLAIMS one per row.

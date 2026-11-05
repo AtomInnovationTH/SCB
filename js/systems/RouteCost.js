@@ -45,6 +45,7 @@ import { Constants } from '../core/Constants.js';
 import { tripProfile } from './TripProfile.js';
 import { planeAngle, planeChangeDeltaV } from '../entities/OrbitalMechanics.js';
 import { pieceValues } from './BigPieceValues.js';
+import { isJobPiece, jobPayCr } from './JobsBoard.js';
 import { planBurn } from './BigMelt.js';
 
 const SECONDS_PER_DAY = 86400;
@@ -337,13 +338,15 @@ export const PAY_BASIS = 'base pay: bounty premium, capture taper and the market
  *              (`kept: false`): she is paid for removal and no salvage (DECISIONS §49 row 8)
  *   feeCr      the removal fee a big piece's owner pays: `BigPieceValues.pieceValues(piece).removalFeeCr`. The game pays it at a
  *              hand-over, a melt or a push (§49 row 2), not at the catch; `walkRoute` counts it where the piece is caught and reports it
- *              apart (`totals.feeCr`). It is not tapered (`awardDisposal`, ScoringSystem.js:336)
+ *              apart (`totals.feeCr`). It is not tapered (`awardDisposal`, ScoringSystem.js:336). For the piece of an open job
+ *              (`ctx.jobPostings`) it is the job's pay in place of the ordinary fee: mass x 270 (A) or x 30 (B) cr/kg, or the flat press pay
+ *              (`JobsBoard.jobPayCr`)
  *   kept       the catch stays aboard and joins her mass; false for a let-go bag (DECISIONS §49 row 8)
  * The callers pass the two pure pay helpers of ScoringSystem.js (importing that module here would build its singleton).
  * @param {{type: string, mass: number, tumbleRate?: number, owner?: object, salvage?: {metals?: Array<{subtype?: string, amount?: number}>}}} piece
  * @param {{scoringSystem: {calculateScore: Function}, captureTier: number, kept?: boolean, captureCreditsEarned?: number,
- *   taperMultiplier: Function, computeSaleValue: Function}} ctx `captureTier`: ScoringSystem's `CAPTURE_TIERS.CAPTURE`;
- *   `taperMultiplier` and `computeSaleValue` the exports of ScoringSystem.js
+ *   taperMultiplier: Function, computeSaleValue: Function, jobPostings?: object[]}} ctx `captureTier`: ScoringSystem's `CAPTURE_TIERS.CAPTURE`;
+ *   `taperMultiplier` and `computeSaleValue` the exports of ScoringSystem.js; `jobPostings` the board's postings (`GameFlowManager.jobPostings()`)
  * @returns {{creditsCr: number, salvageCr: number, feeCr: number, massKg: number, kept: boolean, valueCr: number, basis: string}}
  */
 export function pieceValue(piece, ctx) {
@@ -369,8 +372,11 @@ export function pieceValue(piece, ctx) {
     if (def && Number.isFinite(m.amount)) listedCr += m.amount * def.marketValue;
   }
   const salvageCr = kept ? ctx.computeSaleValue(listedCr, 0).saleValue : 0;
-  const feeCr = pieceValues(piece).removalFeeCr;
   const massKg = Number.isFinite(piece.mass) ? piece.mass : 0;
+  // A removal job's stage (js/systems/JobsBoard.js; the caller passes the board's open postings): the job pays mass x its rate INSTEAD of
+  // the ordinary fee, so `feeCr` is the job pay. Any other piece, or no postings, is the ordinary fee as before.
+  const job = Array.isArray(ctx.jobPostings) ? ctx.jobPostings.find((p) => p && (p.kind === 'removal' || p.kind === 'press') && isJobPiece(p, piece)) : null;
+  const feeCr = job ? jobPayCr(job, massKg) : pieceValues(piece).removalFeeCr;
   return { creditsCr, salvageCr, feeCr, massKg, kept, valueCr: creditsCr + salvageCr + feeCr, basis: PAY_BASIS };
 }
 

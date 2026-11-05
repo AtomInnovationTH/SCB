@@ -147,6 +147,10 @@ class PersistenceManager {
         // The jobs board's one posting `{v, fieldId, row, posted, done, doneShown}` (js/systems/JobsBoard.js, DECISIONS §42 row 5);
         // written only once it is posted, so every old save and a game-over save stay byte-identical. A missing or malformed key loads as "not posted yet".
         ...(data.jobs != null && typeof data.jobs === 'object' ? { jobs: data.jobs } : {}),
+        // The agency and good-press jobs and the board's counts `{v, removal?, press?, aPosted, aPaid, bPosted, pressPosted, closeMission, removed}`
+        // (JobsBoard.boardToSave, plan route-1101 J4): one key beside `jobs`, so a save with only the Vespa bounty (every save before this) is read
+        // exactly as before: nothing else posted, every count 0. Written only once a job was posted or a piece removed.
+        ...(data.jobBoard != null && typeof data.jobBoard === 'object' ? { jobBoard: data.jobBoard } : {}),
         // DECISIONS §49 row 3: the characterising steps already paid for pieces over her catch limit, `[{k: 'fieldId|fieldRow',
         // s: ['find','orbit',...]}]` (gather: DossierSystem; piece ids do not survive a reload, a field and its row do),
         // restored by GameFlowManager on Continue so a reload never pays a step twice. Written only when something was paid.

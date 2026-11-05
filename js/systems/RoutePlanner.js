@@ -101,11 +101,12 @@ export function pushHeightKm(mass, areaM2) {
 }
 
 /**
- * Push heights of the 7 `HIGH_FIELD` rows at the middle of their mass range and their own drag area, from `pushTargetKm` (measured
- * 2026-11-02: 635, 670, 590, 560, 655, 645, 700 km). A table so the first list that opens does not integrate ten years of decay seven
- * times; js/test/test-RoutePlanner.js recomputes two of them and fails on drift.
+ * Push heights of the 8 `HIGH_FIELD` rows at the middle of their mass range and their own drag area, from `pushTargetKm` (measured
+ * 2026-11-02: 635, 670, 590, 560, 655, 645, 700 km; row 7, the ORBCOMM OG2-class satellite at 175 kg and 2.0 m2, measured 2026-11-05
+ * by `pushTargetKm` itself: 655 km). A table so the first list that opens does not integrate ten years of decay eight
+ * times; js/test/test-RoutePlanner.js recomputes three of them (rows 1, 4 and 7) and fails on drift.
  */
-export const HIGH_ROW_PUSH_KM = [635, 670, 590, 560, 655, 645, 700];
+export const HIGH_ROW_PUSH_KM = [635, 670, 590, 560, 655, 645, 700, 655];
 
 function bigInfo(d, knownPushKm) {
   const key = `${d.type}|${d.mass}|${d.areaM2}|${d.owner ? `${d.owner.status}|${d.owner.launchYear}` : ''}`;

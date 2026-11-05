@@ -26,6 +26,7 @@ import { VisualLaw } from '../core/VisualLaw.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { whereNextView } from '../systems/WhereNextRows.js';
+import { jobLineState } from '../systems/JobsBoard.js';
 
 export const WHERE_NEXT_ID = 'where-next-list';
 /** Row height on glass (iPad): the 44 px touch target. */
@@ -392,10 +393,34 @@ export class WhereNextList {
     Object.assign(title.style, { color: VisualLaw.COLORS.INFO, marginBottom: '4px', opacity: '0.85' });
     add(title);
     if (job) {      // the jobs board (js/systems/JobsBoard.js): one line under the opening line, not a row (it cannot be picked)
+      // several postings (the Vespa bounty and a removal job) come as lines of one text, split at "\n" (JobsBoard.jobLine); each line takes its own
+      // state (dim, `data-job`) from its own words (`jobLineState`): a finished bounty must not dim an open removal line. A lone line keeps the
+      // model's flags (a model whose text carries no "Done:" / "Missed:" lead).
+      const lines = job.text.split('\n').filter((t) => t.length > 0);
+      const kindOf = (t) => {
+        const own = jobLineState(t);
+        return own !== 'wanted' || lines.length > 1 ? own : (job.done ? 'done' : job.missed ? 'missed' : 'wanted');
+      };
+      const style = (el, kind) => Object.assign(el.style, { color: VisualLaw.COLORS.INFO, marginBottom: '4px', fontSize: '0.75rem', opacity: kind === 'wanted' ? '1' : '0.7' });      // may wrap: the gas and days at its end must stay readable
       const wanted = doc.createElement('div');
-      wanted.textContent = job.text;
-      wanted.setAttribute('data-job', job.done ? 'done' : job.missed ? 'missed' : 'wanted');
-      Object.assign(wanted.style, { color: VisualLaw.COLORS.INFO, marginBottom: '4px', fontSize: '0.75rem', opacity: job.done || job.missed ? '0.7' : '1' });      // may wrap: the gas and days at its end must stay readable
+      if (lines.length > 1) {
+        wanted.setAttribute('data-job-lines', String(lines.length));
+        wanted.setAttribute('data-job', kindOf(lines[0]));
+        for (const t of lines) {
+          const one = doc.createElement('div');
+          one.textContent = t;
+          const kind = kindOf(t);
+          one.setAttribute('data-job', kind);
+          style(one, kind);
+          wanted.appendChild(one);
+        }
+        Object.assign(wanted.style, { marginBottom: '4px' });
+      } else {
+        const kind = kindOf(lines[0] || job.text);
+        wanted.textContent = job.text;
+        wanted.setAttribute('data-job', kind);
+        style(wanted, kind);
+      }
       add(wanted);
     }
     for (const r of view.rows) {
@@ -537,6 +562,7 @@ export class WhereNextList {
     return this._rowEls.map((el) => {
       const kids = el.children ? Array.from(el.children) : [];
       const isTag = (c) => typeof c.getAttribute === 'function' && c.getAttribute('data-tag') === 'best';
+      if (kids.length && typeof el.getAttribute === 'function' && el.getAttribute('data-job-lines')) return kids.map((c) => c.textContent).join('\n');      // the board's lines
       return kids.length ? kids.map((c) => (isTag(c) ? ' ' : '') + c.textContent).join('') : el.textContent;
     });
   }
