@@ -49,6 +49,7 @@ const _rhGapB = new THREE.Vector3();
 const _rhAxisR = new THREE.Vector3();
 const _rhTurnP = new THREE.Vector3();      // her place in the ship's frame, from the ship's centre
 const _rhTurnQ = new THREE.Quaternion();
+const _rhPost = new THREE.Vector3();       // where she will stand once the plane turn is done (`_rhFloorAfterPlane`)
 
 // Safety-net release (s): LASSO_CAPTURED's adoption (CaptureNetSystem.adoptLassoCatch) deliberately does not emit
 // NET_BERTHED, so a ducked arm on that path never sees the release event. Longer than the duck sweep AND the lasso's ~3 s
@@ -4058,8 +4059,7 @@ export class ArmManager {
    * 0 when no turn would be asked (`_rhTurnAsk`: inside the range or too big, no autopilot to turn her, or the mother is not free:
    * `_motherTurnBlock(arm)`, then she lines herself up and no turn is promised). The turn's source is the one the autopilot
    * would pick (`attitudeTorqueSource`): the wheels' `wheelTurnTimeS`, or the gas's fixed profile time (`attitudeTurnProfile`).
-   * Only the first turn (plane, else floor) is counted: the floor turn after a plane turn is not. Infinity when no source can
-   * turn her. Reads her place from her last frame (`_rhStrutAim` is run here from `parentPos` / `parentQuat`, as every reeling
+   * A plane turn is followed by the floor turn when she will end below the strut's range (`_rhFloorAfterPlane`): its time is added. Reads her place from her last frame (`_rhStrutAim` is run here from `parentPos` / `parentQuat`, as every reeling
    * frame does).
    * @param {ArmUnit} arm
    * @param {THREE.Vector3} [parentPos]
@@ -4076,11 +4076,67 @@ export class ArmManager {
     if (!want) return 0;
     if (this._motherTurnBlock(arm)) return 0;
     const { theta, axisL } = want;
+    const first = this._rhTurnTimeS(theta, axisL.x, axisL.y);
+    if (Math.abs(arm._rhPlaneErrRad) <= (Constants.REEL_HOME?.PLANE_TOL_DEG ?? 5) * DEG2RAD) return first;   // a floor turn is the last one
+    const floor = this._rhFloorAfterPlane(arm);                                // the floor turn that follows the plane turn (`_tickReelHomeTurn` asks it once the plane turn ends)
+    return floor ? first + this._rhTurnTimeS(floor.theta, floor.nx, floor.ny) : first;
+  }
+
+  /**
+   * Seconds from the reel-start line until she arrives at the strut, for the line's number: the reel and the mother's turns run at the same time
+   * (the reel only holds her at the 2 m line-up and the 5 m floor hold), so it is the LONGER of the two, not their sum. On the gas the turns
+   * (`turnS`, from `reelHomeTurnEstimateS`) are scaled by REEL_HOME.TURN_REEL_OVERLAP (she reels in during them and her angle shrinks); a wheel turn
+   * is slow enough to be unscaled. The 3 s latch (ARM_DOCK_DURATION) is not in it, as for a reel with no turn.
+   * @param {ArmUnit} arm
+   * @param {number} reelS the reel's own time (`_reelHomeEtaS`)
+   * @param {number} turnS `reelHomeTurnEstimateS(arm)`
+   * @returns {number} seconds
+   */
+  reelHomeArriveEstimateS(arm, reelS, turnS) {
+    if (!(turnS > 0) || !Number.isFinite(turnS)) return reelS;
+    const want = this._rhTurnAsk(arm);
+    const ps = this.playerSatellite;
+    const wheels = want && ps && typeof ps.attitudeTorqueSource === 'function'
+      && ps.attitudeTorqueSource({ spinUp: true, angleRad: want.theta, nx: want.axisL.x, ny: want.axisL.y, quiet: true }) === 'wheels';
+    return Math.max(reelS, wheels ? turnS : turnS * (Constants.REEL_HOME?.TURN_REEL_OVERLAP ?? 0.7));
+  }
+
+  /**
+   * Ship seconds one mother turn of `theta` rad about the horizontal axis (nx, ny, 0) takes, by the source the autopilot would pick:
+   * the wheels' `wheelTurnTimeS`, or the gas's fixed profile time (`attitudeTurnProfile`). Infinity when no source can turn her.
+   * @returns {number}
+   */
+  _rhTurnTimeS(theta, nx, ny) {
+    const ps = this.playerSatellite;
     const src = typeof ps.attitudeTorqueSource === 'function'
-      ? ps.attitudeTorqueSource({ spinUp: true, angleRad: theta, nx: axisL.x, ny: axisL.y, quiet: true }) : 'coldGas';
-    if (src === 'wheels' && typeof ps.wheelTurnTimeS === 'function') return ps.wheelTurnTimeS(theta, axisL.x, axisL.y);
-    const prof = attitudeTurnProfile(ps, { x: axisL.x, y: axisL.y, z: 0 }, theta, { boxes: src === 'tailBoxes' });
+      ? ps.attitudeTorqueSource({ spinUp: true, angleRad: theta, nx, ny, quiet: true }) : 'coldGas';
+    if (src === 'wheels' && typeof ps.wheelTurnTimeS === 'function') return ps.wheelTurnTimeS(theta, nx, ny);
+    const prof = attitudeTurnProfile(ps, { x: nx, y: ny, z: 0 }, theta, { boxes: src === 'tailBoxes' });
     return prof && prof.ok ? prof.T : Infinity;
+  }
+
+  /**
+   * The FLOOR turn `_tickReelHomeTurn` asks right after the plane turn ends, predicted from her place now, or null when none
+   * will be (she ends inside the strut's range or within PLANE_TOL_DEG of it, the turn would be over TURN_MAX_DEG, or her floor request
+   * was refused). The plane turn turns her about the strut's radial axis: her radial part stays, the part across the plane goes to 0
+   * and moves into the nose axis (on the near side unless she is behind it, as `_rhTurnAsk`'s wrap). An estimate: she reels in
+   * during the plane turn, which moves her angle a few degrees (measured: predicted 16°, asked 9.4° for one stage). Pure read.
+   * @param {ArmUnit} owner
+   * @returns {{theta:number, nx:number, ny:number}|null}
+   */
+  _rhFloorAfterPlane(owner) {
+    const RH = Constants.REEL_HOME || {};
+    const v = owner._rhRelShip;
+    if (!v || owner._rhFloorRefused === true) return null;
+    const az = owner._rhAzRad();
+    const tol = (RH.PLANE_TOL_DEG ?? 5) * DEG2RAD;
+    const vr = v.x * Math.cos(az) + v.y * Math.sin(az);
+    const vt = -v.x * Math.sin(az) + v.y * Math.cos(az);
+    const lz = (-v.z >= 0 ? 1 : -1) * Math.hypot(vt, v.z);                   // her nose-axis part (-z) once she is in the plane
+    _rhPost.set(Math.cos(az) * vr, Math.sin(az) * vr, -lz);
+    const theta = _rhFloorTheta(_rhPost, az, RH);
+    if (theta === 0 || Math.abs(theta) <= tol || Math.abs(theta) > (RH.TURN_MAX_DEG ?? 60) * DEG2RAD) return null;
+    return { theta, nx: -Math.sin(az), ny: Math.cos(az) };
   }
 
   // reel-hold (owner 2026-10-23): a daughter waits 5 m out until the floor turn is done and the radiators are clear

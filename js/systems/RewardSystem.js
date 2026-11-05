@@ -56,6 +56,8 @@ export class RewardSystem {
     this._totalDetaches = 0;
     this._detachedCaptures = 0;
 
+    /** @type {Map<number|string,{method:string,data:object}>} How each grabbed piece was grabbed (ARM_CAPTURED), until counted or let go */
+    this._grabs = new Map();
     this._setupListeners();
 
     console.log('[RewardSystem] Initialized');
@@ -122,13 +124,27 @@ export class RewardSystem {
     // 2026-11-05: "Five captures this sweep" came on a hit that tore 0.14 s later). CATCH_COUNTED is emitted before the field removal
     // that can fire CLUSTER_CLEARED (our per-sweep reset), so no listener-registration order matters.
     eventBus.on(Events.CATCH_COUNTED, (data) => { this._onSecured(data); });
+
+    // A grab that never becomes a catch forgets what it said about itself (lasso): the net let go, tore or missed, or the tether snapped.
+    for (const name of ['NET_CATCH_MISS', 'NET_RELEASED', 'NET_FAILED', 'NET_TORN', 'TETHER_SNAP']) {
+      if (Events[name]) eventBus.on(Events[name], (d) => { if (d && d.debrisId != null) this._grabs.delete(d.debrisId); });
+    }
   }
 
   /** @private The mission counted a catch (CATCH_COUNTED, once per body: the de-dup is GameFlowManager's). @param {object} data CATCH_COUNTED payload */
   _onSecured(data) {
     this._totalCatches++;
     this._trawlCatches++;
-    this._checkMilestones(data, null, 'secured');
+    // The line about HOW it was caught (first lasso catch) belongs to this secured catch, not the grab: the grab
+    // is remembered per piece (`_grabs`, from ARM_CAPTURED) and read here, once, for the piece (or a bag's members) just counted.
+    let grab = null;
+    const ids = [data && data.debrisId, ...((data && data.bodyIds) || [])];
+    for (const id of ids) {
+      if (id == null || !this._grabs.has(id)) continue;
+      grab = grab || this._grabs.get(id);
+      this._grabs.delete(id);
+    }
+    this._checkMilestones(grab ? grab.data : data, grab ? grab.method : null, 'secured');
   }
 
   /** @private @param {object} data — ARM_CAPTURED payload @param {string} method — 'arm' | 'lasso' | other */
@@ -146,6 +162,13 @@ export class RewardSystem {
       this._trawlArmsUsed.add(data.armId);
     }
 
+    // Remember how this piece was grabbed until it is counted (`_onSecured`) or let go (net miss / release / tear).
+    const pieceId = data ? (data.targetId != null ? data.targetId : data.debrisId) : null;
+    if (pieceId != null) {
+      this._grabs.set(pieceId, { method, data });
+      if (this._grabs.size > 32) this._grabs.delete(this._grabs.keys().next().value);   // never grows: a grab nobody resolved
+    }
+
     this._fieldCaptured++;
     this._checkFieldClearing();
 
@@ -161,12 +184,13 @@ export class RewardSystem {
    * one line per fact). Specific = about this very catch (a free-flying catch, a large daughter's first, the
    * first lasso catch) before the running counts (50 total, 25 / 10 / 5 this sweep), and the plain
    * "first capture ever" last. Every milestone is still recorded as reached.
-   * `part`: 'hit' = only the lines about the grab itself (large daughter, lasso, free-flying: ARM_CAPTURED), 'secured' = only the running
-   * counts (first capture, 5 / 10 / 25 / 50: CATCH_COUNTED, `_onSecured`), omitted = both.
+   * `part`: 'hit' = only the lines about the grab itself (large daughter, free-flying catch: ARM_CAPTURED), 'secured' = the running counts
+   * (first capture, 5 / 10 / 25 / 50) and the line about how the held piece was caught (first lasso catch): CATCH_COUNTED,
+   * `_onSecured`, with the grab remembered from ARM_CAPTURED; omitted = all.
    * @private
    */
   _checkMilestones(data, method, part) {
-    const counts = part !== 'hit', kinds = part !== 'secured';
+    const counts = part !== 'hit', kinds = part !== 'secured', held = part !== 'hit';
     // [rank (lower = more specific), line]
     const reached = [];
     const reach = (key, rank, line) => { this.milestones.set(key, true); reached.push([rank, line]); };
@@ -196,11 +220,12 @@ export class RewardSystem {
       reach('firstWeaver', 1, 'Houston: First catch by a large daughter. The mother keeps her fuel for the heavy pieces.');
     }
 
-    if (kinds && method === 'lasso' && !this.milestones.has('firstLasso')) {
+    if (held && method === 'lasso' && !this.milestones.has('firstLasso')) {
       reach('firstLasso', 2, 'Houston: Lasso capture confirmed. Quick reflexes out there.');
     }
 
-    // Arm was free-flying when it caught
+    // Arm was free-flying when it caught. Said at the grab: a free-flying daughter's catch goes straight to the deorbit burn
+    // (ArmUnit, EXPENDED) and is never counted, so CATCH_COUNTED never fires for it.
     if (kinds && data && data.detached && !this.milestones.has('firstDetachedCapture')) {
       this._detachedCaptures++;
       reach('firstDetachedCapture', 0, 'Houston: Free-flying capture confirmed! That\'s one for the textbooks.');

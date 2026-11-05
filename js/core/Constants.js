@@ -1367,6 +1367,7 @@ export const Constants = {
     STRUT_MIN_DEG:       34,    // strut angle floor while she is hauled home (measured: 0° scrapes hull and radiators)
     STRUT_MAX_DEG:       180,   // strut angle ceiling
     PLANE_TOL_DEG:       5,     // she is "in the strut's plane" within this; beyond it the mother turns, and the turn ends inside half of it (reel-turn: closed loop, test-ReelTurnSettle.js)
+    TURN_REEL_OVERLAP:   0.7,   // gas turns: she reels in during the turn and her angle shrinks, so it ends at about this share of its from-rest profile time (measured: 0.61-0.75 on 4 stagings, test-ReelHome G3); the reel runs meanwhile, so the line shows the longer of the two, not the sum
     ALIGN_DIST_M:        2.0,   // m from the strut tip: the line-up check and hold
     ALIGN_TOL_DEG:       10,    // the line (tip -> her) must be within this of the strut axis to go on in
     ALIGN_WAIT_S:        5,     // s the mother gets to line her up before she uses her own thrusters

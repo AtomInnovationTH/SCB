@@ -5536,7 +5536,7 @@ export class ArmUnit {
       if (!Number.isFinite(e)) tail = `${Math.round(distM)} m`;
       else if (turnS > 0) {
         tail = Number.isFinite(turnS)
-          ? `${Math.round(distM)} m, about ${Math.max(1, Math.round(e + turnS))} s of ship time` : `${Math.round(distM)} m`;
+          ? `${Math.round(distM)} m, about ${Math.max(1, Math.round(am.reelHomeArriveEstimateS(this, e, turnS)))} s of ship time` : `${Math.round(distM)} m`;
       } else tail = `${Math.round(distM)} m, about ${Math.max(1, Math.round(e))} s`;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD', priority: 'info',

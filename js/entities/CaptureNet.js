@@ -1997,6 +1997,23 @@ export class NetProjectile {
   }
 
   /**
+   * Seconds until this net has come home and the launcher is free again, for a MISSED net's plain reel-in (the legacy
+   * progress reel: tether ÷ REEL_SPEED, linear). 0 once stowed. null when it can't be known: still staging a failure,
+   * a ceremony is slowing this net's clock, or the berth reel (a catch) whose corridor hold has no fixed length.
+   * @returns {number|null} seconds of game time
+   */
+  homeEtaS() {
+    if (!this.isActive || this.state === STATES.STOWED || this.state === STATES.RELEASED) return 0;
+    if (this.state !== STATES.REELING) return null;
+    if (this._isMother && this.catchResult === 'success' && !this._motherReelFallback) return null;
+    if (this._heldByArm) return null;
+    const scale = FEATURE_FLAGS.NET_CEREMONY ? CeremonyTimeScale.get() : 1.0;
+    if (scale !== 1.0) return null;
+    const rate = this.netClass.REEL_SPEED / Math.max(1, this.tetherPaidOut);
+    return Math.max(0, (1 - this.reelProgress) / rate);
+  }
+
+  /**
    * @private The catch's commanded speed `crem` metres from its end: the class reel speed, then a constant
    * deceleration (DECEL_MPS2) that reaches SLOW_MPS at SLOW_ZONE_M and holds it to arrival.
    * @param {number} crem — catch distance still to go, metres
@@ -4832,8 +4849,17 @@ export class CaptureNetSystem {
     }
     if (this._cooldownTimers.has(`pod_${podIndex}`)) {
       const secs = this._cooldownTimers.get(`pod_${podIndex}`) || 0;
+      // The cooldown (1 s after a miss) starts when the reel-in starts, but N works only once the net is home and
+      // stowed. While it is still out, the wait is the longer of the two; if the reel time can't be known, no number.
+      const out = this.activeNets.find(n => n.podIndex === podIndex && n.isActive
+        && n.state !== STATES.STOWED && n.state !== STATES.RELEASED
+        && n.state !== STATES.BERTHED && n.state !== STATES.COLLARED) || null;
+      const homeS = out ? out.homeEtaS() : 0;
+      let text = `Mother net reloading. ${Math.ceil(secs)}s`;
+      if (homeS === null) text = 'Mother net still reeling in. Wait for it to come home.';
+      else if (homeS > secs) text = `Mother net reeling in. ${Math.ceil(homeS)}s`;
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Mother net reloading. ${Math.ceil(secs)}s`,
+        text,
         source: 'SYSTEM',
         channel: 'CMD',
         priority: 'info',

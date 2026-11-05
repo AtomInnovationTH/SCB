@@ -5006,12 +5006,14 @@ export class DebrisField {
     const FS = Constants.FRAG_SEVERITY || {};
     if (data.destroyTarget) {
       // fragments carry the body's mass; original removed
-      this.createFragments({ x: pos.x, y: pos.y, z: pos.z }, debris.mass || data.mass || 1, count);
+      this.createFragments({ x: pos.x, y: pos.y, z: pos.z }, debris.mass || data.mass || 1, count,
+        { source: data.source || 'tool', destroyTarget: true });
       this.removeDebris(debris.id);
     } else {
       // crack: shed a small mass fraction; the target survives
       const shedMass = Math.max(0.1, (debris.mass || 1) * (FS.CRACK_MASS_FRACTION ?? 0.05));
-      this.createFragments({ x: pos.x, y: pos.y, z: pos.z }, shedMass, count);
+      this.createFragments({ x: pos.x, y: pos.y, z: pos.z }, shedMass, count,
+        { source: data.source || 'tool', destroyTarget: false });
     }
   }
 
@@ -5020,9 +5022,11 @@ export class DebrisField {
    * @param {{ x: number, y: number, z: number }} position - Scene units
    * @param {number} mass - Source mass (kg)
    * @param {number} count - Number of fragments to create
+   * @param {{source: string, destroyTarget: boolean}|null} [cause] - what made them. A tool's contact (the net) is no
+   *   collision: the comms line names it. null = a collision (the cascade's own).
    * @returns {Array<number>} IDs of new fragments
    */
-  createFragments(position, mass, count) {
+  createFragments(position, mass, count, cause = null) {
     // cap to prevent runaway
     const actualCount = Math.min(count, Constants.KESSLER_FRAGMENT_LIMIT);
     const ids = [];
@@ -5065,7 +5069,7 @@ export class DebrisField {
     }
 
     // New fragments have no instanced mesh slots yet (growing the meshes is not implemented); emit the event for tracking only.
-    eventBus.emit(Events.DEBRIS_KESSLER, { count: actualCount, position });
+    eventBus.emit(Events.DEBRIS_KESSLER, { count: actualCount, position, cause });
 
     return ids;
   }

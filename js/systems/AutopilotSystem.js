@@ -148,12 +148,21 @@ export const AP_BATTERY_EMPTY_WINGS_LINE =
 /** Has this piece been caught so that chasing it is over? True when `DebrisField.update` stopped propagating its orbit for
  * a reason other than an onboarding tease pin: `_motherParked` (the mother's hold owns the piece, mesh at the nose). Its
  * frozen orbit is a ghost the moving mother leaves behind (~77 km per real second at the 10x clock).
- * Deliberately NOT `_captured`, `_armPinned` or `_capturedByArm`: set while the orbit still propagates, when the HOLD
- * "close on the daughter" burn runs. `_onboardingPinned` is never "done" (resolved by `_targetSceneState`).
+ * Not `_captured`, `_armPinned` or `_capturedByArm` alone (the orbit still propagates); a daughter-held piece ends the
+ * chase through `isCaughtForChase` below. `_onboardingPinned` is never "done" (resolved by `_targetSceneState`).
  * @param {object|null|undefined} target — a debris record
  * @returns {boolean} */
 export function isChaseDone(target) {
   return !!(target && target._motherParked && !target._onboardingPinned);
+}
+
+/** Caught for the chase's purposes: `isChaseDone` (a net berthed at the mother) OR in a daughter's hands (`_capturedByArm` +
+ * `_captured`, set by every daughter catch: pad, her net, gripper, trawl; cleared when she lets go). That piece moves with her,
+ * so the autopilot hands the ship back (TARGET_CAUGHT). A bare `_captured` is not enough: the mother's own reel sets it too.
+ * @param {object|null|undefined} target — a debris record
+ * @returns {boolean} */
+export function isCaughtForChase(target) {
+  return isChaseDone(target) || !!(target && target._captured && target._capturedByArm && !target._onboardingPinned);
 }
 
 /** Autopilot rotation rate (rad/s) — gentler than manual (0.3) */
@@ -1611,7 +1620,7 @@ export class AutopilotSystem {
     }
     // A berthed piece has nothing left to chase: refuse up front (no AUTOPILOT_ENGAGE, no state change) rather than engage
     // for one frame and disengage TARGET_CAUGHT. The in-flight TARGET_CAUGHT disengage stays.
-    if (isChaseDone(activeTarget)) {
+    if (isCaughtForChase(activeTarget)) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
         text: 'That piece is already caught. Pick another target.',
@@ -2166,7 +2175,7 @@ export class AutopilotSystem {
     // Locked target already caught: a parked catch is still `alive` but DebrisField no longer propagates its orbit, so the
     // orbit-derived goal is a ghost the mother leaves behind at orbital speed: hand the ship back. Must come BEFORE
     // _resolveTargetState. The reel-in attitude hold is independent of engagement and keeps running.
-    if (this._lockedTargetRef && isChaseDone(this._lockedTargetRef)) {
+    if (this._lockedTargetRef && isCaughtForChase(this._lockedTargetRef)) {   // + a daughter's catch (pad / her net), not only a berthed net
       this.disengage('TARGET_CAUGHT');
       return;
     }
@@ -2458,8 +2467,8 @@ export class AutopilotSystem {
             return;
           }
         }
-        // When an arm is GRAPPLED or REELING the mother also gently closes on the daughter: a small additive ΔV toward the active arm,
-        // bounded by the MAX_ACCEL clamp below so it cannot overpower HOLD control; works whether or not the target's orbit is synced.
+        // When an arm is GRAPPLED or REELING another piece the mother also gently closes on her (her own catch of the locked piece
+        // ends the chase, `isCaughtForChase`): a small additive ΔV toward the arm, bounded by the MAX_ACCEL clamp below; synced or not.
         if (this._armManager && this._armManager.arms) {
           let activeArm = null;
           for (const a of this._armManager.arms) {

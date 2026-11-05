@@ -12,7 +12,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, COLLAR_BUSY_LINE, targetRangeM, netRangeLine, motherNLine, motherNWorks } from './netRouting.js';
-import { isFree, netRefusalLine, lassoRangeAllOwnedLine } from './PieceClaim.js';
+import { isFree, pieceIsCaught, netRefusalLine, lassoRangeAllOwnedLine } from './PieceClaim.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { DebrisField } from '../entities/DebrisField.js';
@@ -752,6 +752,15 @@ export class LassoSystem {
 
         const canCast = !this.active && this.cooldown <= 0 && this.getAmmo() > 0;
         if (!canCast || !selectedTarget || !playerPos) {
+            this._inRangePromptId = null;
+            return;
+        }
+
+        // The selector keeps the piece just caught as the active target until it berths (TargetSelector: cleared on NET_BERTHED
+        // only), so "selected" is not "castable": a held, owned or gone piece is no invitation (training 3 r3, 2026-11-05: the line
+        // came right after a catch with the next piece not picked). fire() refuses an owned pick the same way.
+        if (pieceIsCaught(selectedTarget) || selectedTarget._disposed === true || selectedTarget.alive === false
+            || this._pieceOwner(selectedTarget)) {
             this._inRangePromptId = null;
             return;
         }

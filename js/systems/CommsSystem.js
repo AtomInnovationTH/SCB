@@ -297,6 +297,33 @@ export function sanitizeCommsLink(link) {
   return link;
 }
 
+/**
+ * The line for new debris pieces (DEBRIS_KESSLER). Singular for one piece. A piece shed by a tool's contact (the net's
+ * touch on a catch; `cause` set by DebrisField) is NOT a collision: it says what really happened.
+ *
+ * @param {number} count new pieces
+ * @param {number} altKm altitude, km
+ * @param {{source?: string, destroyTarget?: boolean}|null} [cause] null = a real collision
+ * @returns {{priority: string, source: string, text: string}}
+ */
+export function debrisPiecesLine(count, altKm, cause = null) {
+  const one = count === 1;
+  const pieces = one ? '1 new debris piece' : `${count} new debris pieces`;
+  const adding = one ? 'Adding it to the catalog now.' : 'Adding them to the catalog now.';
+  const t = KESSLER_TEMPLATES[0];
+  if (!cause) {
+    return {
+      priority: t.priority,
+      source: t.source,
+      text: t.template.replace('{alt}', altKm).replace('{count} new debris pieces', pieces)
+        .replace('Adding them to the catalog now.', adding),
+    };
+  }
+  const tool = cause.source === 'net_contact' ? "The net's" : "The tool's";
+  const what = cause.destroyTarget ? `broke the target into ${pieces}.` : `chipped ${pieces} off the target.`;
+  return { priority: CommsPriority.WARNING, source: t.source, text: `WARNING: ${tool} contact ${what} ${adding}` };
+}
+
 export class CommsSystem {
   constructor() {
     /** @type {Array<{ timestamp: number, source: string, text: string, priority: string, channel: string, id: number }>} */
@@ -521,17 +548,11 @@ export class CommsSystem {
   _setupEventListeners() {
     eventBus.on(Events.DEBRIS_KESSLER, (data) => {
       if (!this._canSend('kessler')) return;
-      const tmpl = KESSLER_TEMPLATES[0];
       const altKm = data.position ?
         Math.round(Math.sqrt(data.position.x ** 2 + data.position.y ** 2 + data.position.z ** 2) / Constants.SCENE_SCALE - Constants.EARTH_RADIUS_KM) :
         Math.round(400 + Math.random() * 600);
-      this.addMessage(
-        tmpl.priority,
-        tmpl.source,
-        tmpl.template
-          .replace('{alt}', altKm)
-          .replace('{count}', data.count)
-      );
+      const line = debrisPiecesLine(data.count, altKm, data.cause || null);
+      this.addMessage(line.priority, line.source, line.text);
     });
 
     eventBus.on(Events.FUEL_CHANGED, (data) => {
