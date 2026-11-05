@@ -4921,7 +4921,23 @@ export const Constants = {
     // `A_MAX` / `B_MAX` / `PRESS_MAX`: postings a game can make of each kind; `A_FIRST_MISSION` / `PRESS_FIRST_MISSION`: the mission number from which
     // it may be posted; `A_MIN_REMOVED`: big pieces she must have removed herself before A; `SPACING_MISSIONS`: a kind's next posting comes this
     // many missions after its last one closed (B's first counts from A's close).
-    JOB_RULES: { A_MAX: 1, B_MAX: 2, PRESS_MAX: 2, A_FIRST_MISSION: 5, PRESS_FIRST_MISSION: 3, A_MIN_REMOVED: 1, SPACING_MISSIONS: 3 },
+    JOB_RULES: {
+      A_MAX: 1, B_MAX: 2, PRESS_MAX: 2, A_FIRST_MISSION: 5, PRESS_FIRST_MISSION: 3, A_MIN_REMOVED: 1, SPACING_MISSIONS: 3,
+      // Plan route-1101 J5 (DECISIONS §62 row 12; research doc §4 rows D and E): `D_MAX`: the insurer's job, once a game, from mission `D_FIRST_MISSION`;
+      // `E_MAX`: the station's part job, twice a game from mission `E_FIRST_MISSION` (spacing `SPACING_MISSIONS`); `E_MAX_KG`: the heaviest part the station's
+      // return capsule takes (owner 2026-11-04, "small parts only": 20 kg or less).
+      D_MAX: 1, D_FIRST_MISSION: 4, E_MAX: 2, E_FIRST_MISSION: 4, E_MAX_KG: 20,
+    },
+    // D: an insurer that holds a written-off satellite pays for it back whole. Real basis: in 1984 underwriters paid NASA $5.5 M for the retrieval of TWO satellites
+    // (Palapa B2 and Westar 6, STS-51-A; UPI 12 Nov 1984, snippet only; docs/research/2026-11-removal-pay.md §1 row "Insurer holding a written-off satellite", §4
+    // `table.D`), so $2.75 M a satellite: 27,500 cr. It is paid ON TOP of the ordinary hand-over pay, for a satellite handed over whole to the resupply satellite.
+    JOB_D_USD: 2750000,
+    get JOB_D_CR() { return Constants.BIG_PIECES.JOB_D_USD / Constants.USD_PER_CREDIT; },                           // 27,500
+    // E: a payer who wants one small part of a dead craft back: the station's return capsule takes it down. Real basis: flown hardware sells for $0.44-2.9 M at
+    // auction (Apollo 11 flown hand controller $437,034, RR Auction 2024; Vostok 3KA-2 capsule $2.88 M, Sotheby's 2011; doc §1 row "Owner who wants one part back");
+    // the game's $1 M is an ESTIMATE (doc §4 `table.E`). In credits: 10,000.
+    JOB_E_USD: 1000000,
+    get JOB_E_CR() { return Constants.BIG_PIECES.JOB_E_USD / Constants.USD_PER_CREDIT; },                           // 10,000
     RULE_YEARS: 25,                                               // IADC: out of orbit within 25 years
     PUSH_TARGET_YEARS: 24,                                        // a push aims at 24 years' life: a year's margin
     PUSH_STEP_KM: 5,                                              // the push height is floored to this step

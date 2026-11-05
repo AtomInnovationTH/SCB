@@ -211,6 +211,18 @@ export function buildWhereNextRows(reg, opts = {}) {
     const sf = rows.find((r) => r.kind === 'field' && r.id === wait.fieldId);
     if (sf && wait.note) { sf.text += ` ${DOT} ${wait.note}`; if (sf.shortText) sf.shortText += ` ${DOT} ${wait.note}`; }
   }
+  // route-1101 J5: a part aboard for the station's part job (`opts.station.partCr`, GameFlowManager `_stationRowsOpts`): the station field's row says what the
+  // station pays for it. Nothing about a part otherwise.
+  const partCr = opts && opts.station && Number.isFinite(opts.station.partCr) ? opts.station.partCr : 0;
+  if (partCr > 0 && !berth) {
+    const sfId = stationFieldId(reg);
+    const sfRow = sfId ? rows.find((r) => r.kind === 'field' && r.id === sfId) : null;
+    if (sfRow) {
+      const note = `takes the part: ${creditsText(partCr)} cr`;
+      sfRow.text += ` ${DOT} ${note}`;
+      if (sfRow.shortText) sfRow.shortText += ` ${DOT} ${note}`;
+    }
+  }
   // Stay: she goes on where she is. With a mission going on it is the only way on (a cleared field included: background pieces remain),
   // so it is always there then; flown to the satellite there is none.
   if (!atSat && (hereN > 0 || !owed)) {

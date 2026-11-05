@@ -28,6 +28,7 @@ import { pieceValue, isCandidate, bestRoutes, SORTS, MAX_MOVES } from './RouteCo
 import { fatePay, pieceValues } from './BigPieceValues.js';
 import { lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
 import { PART_KG } from './BigMelt.js';
+import { isJobPiece } from './JobsBoard.js';
 import { STAY_ID, PUSH_PREFIX, creditsText, kgText, daysText } from './WhereNextRows.js';
 
 export { SORTS };
@@ -225,18 +226,36 @@ export function candidates(state, opts = {}) {
     stops.push(...disposalStops(stop));
   }
   for (const s of stops.slice()) if (s.kind === 'piece') stops.push(...disposalStops(s));
+  // (e) the station (route-1101 J5 Task 12): while the station's part job is open, a trip to the station field is a stop of its own; the walker pays it 10,000 cr when the
+  // part is aboard (at planning, or kept by an earlier melt stop of the posted piece) and she arrives lined up by the route's own days. Not offered where she is already.
+  const partJob = (state.jobPostings || []).find((j) => j && j.kind === 'part' && !j.done && !j.missed);
+  if (partJob) {
+    const sid = state.stationFieldId;
+    const sf = sid ? (state.fields || []).find((f) => f.id === sid) : null;
+    if (sf && sid !== state.fieldId) stops.push({ kind: 'station', id: `station:${sid}`, fieldId: sid, altKm: sf.altKm, payCr: Math.max(0, partJob.payCr || 0), name: 'station' });
+    for (const s of stops) if (s.kind === 'piece' && s.big && isJobPiece(partJob, { fieldId: s.fieldId, fieldRow: s.fieldRow })) s.partJob = true;
+    // a held piece is matched by the field it was caught in (the held entry's own keys), not the field she is in now (`h.stop.fieldId` is that one)
+    for (const h of held) {
+      const src = (state.held || []).find((x) => x && x.id === h.id);
+      if (src && isJobPiece(partJob, { fieldId: src.fieldId, fieldRow: src.fieldRow })) h.stop.partJob = true;
+    }
+  }
   // no free furnace (every tip busy or absent, GameFlowManager._freeTips): a melt would do nothing, so it is not offered
   return { stops: state.furnaces === 0 ? stops.filter((s) => s.kind !== 'melt') : stops, held };
 }
 
 /** The `RouteCost` state of a panel state. */
 export function routeState(state, held = []) {
+  const partJob = (state.jobPostings || []).find((j) => j && j.kind === 'part' && !j.done && !j.missed);
   return {
     dryMassKg: state.dryMassKg, gasKg: state.gasKg, carriedKg: state.carriedKg || 0, altKm: state.altKm, fieldId: state.fieldId ?? null,
     posM: { x: 0, y: 0, z: 0 }, thrustN: state.thrustN, ispS: state.ispS, areaM2: state.areaM2, cos: 1, stepS: PANEL_STEP_S,
     catchesLeft: state.catchesLeft || 0, maxMoves: Number.isFinite(state.maxMoves) ? state.maxMoves : MAX_MOVES,
     holdSlots: state.holdSlots, holdRoomKg: state.holdRoomKg, held,
     ...(Number.isFinite(state.furnaces) ? { furnaces: state.furnaces } : {}),     // the free radiator tips (`_freeTips`); absent = 4
+    // the node gap and the part aboard (J5 Task 12): `gapDeg`/`incDeg` let the walker move the gap by the route's days; `partCr` is the part job's pay
+    ...(Number.isFinite(state.gapDeg) && Number.isFinite(state.incDeg) ? { gapDeg: state.gapDeg, incDeg: state.incDeg } : {}),
+    ...(partJob ? { partAboard: state.partAboard > 0 || !!(partJob.aboard && partJob.aboard.kg > 0), partCr: Math.max(0, partJob.payCr || 0) } : {}),
   };
 }
 
@@ -252,12 +271,13 @@ export function routeState(state, held = []) {
  */
 export function stopsText(steps) {
   const segs = [];
-  const open = (where, bare = false) => { const s = { where, big: [], other: 0, fill: 0, melt: [], bare }; segs.push(s); return s; };
+  const open = (where, bare = false) => { const s = { where, big: [], other: 0, fill: 0, melt: [], bare, part: false }; segs.push(s); return s; };
   let cur = open('here');
   for (const st of steps || []) {
     if (st.kind === 'catch') { if (st.big) cur.big.push(st.label || 'piece'); else cur.other++; }
     else if (st.kind === 'fill') cur.fill += st.n;
     else if (st.kind === 'melt') { cur.melt.push(st.label || 'piece'); }
+    else if (st.kind === 'dispose' && st.fate === 'station') cur.part = true;      // the station takes the kept part (J5 Task 12)
     else if (st.kind === 'move') {
       if (st.what === 'sat') cur = open('satellite', true);
       else if (st.what === 'push') cur = open('push', true);
@@ -270,6 +290,7 @@ export function stopsText(steps) {
     if (s.other) parts.push(`${s.other} ${s.other === 1 ? 'piece' : 'pieces'}`);
     if (!s.big.length && !s.other && s.fill && !s.bare) parts.push(`+${s.fill} unscanned`);
     if (s.melt.length) parts.push(`melt ${s.melt.join(' + ')}`);
+    if (s.part) parts.push('part handed over');
     return parts.length ? `${s.where}: ${parts.join(', ')}` : s.where;
   });
   return words.length && !(words.length === 1 && words[0] === 'here') ? words.join(' \u2192 ') : 'stay here';
@@ -311,8 +332,9 @@ function stateKey(state, sortBy, maxStops) {
     (state.pieces || []).map((e) => [e.id, e.discovered === true, !!e.hazard, !!e.captured, e.piece && r(e.piece.mass, 10), e.posM ? [r(e.posM.x, 0.1), r(e.posM.y, 0.1), r(e.posM.z, 0.1)] : null]),
     (state.fields || []).map((f) => [f.id, (f.remaining || []).join(',')]),
     (state.held || []).map((h) => [h.id, h.piece && r(h.piece.mass, 10), h.melting === true]),
-    (state.jobPostings || []).map((j) => [j.fieldId, j.row, j.done, j.missed, j.payCr]),
+    (state.jobPostings || []).map((j) => [j.kind, j.fieldId, j.row, j.done, j.missed, j.payCr, j.aboard ? j.aboard.kg : 0]),
     r(state.captureCreditsEarned, 1),
+    r(state.gapDeg, 100), r(state.incDeg, 100), state.stationFieldId ?? null, r(state.partAboard, 10),      // J5 Task 12: the station stop
   ]);
 }
 

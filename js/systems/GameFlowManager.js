@@ -39,9 +39,9 @@ import { TransferTrip } from './TransferTrip.js';
 import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg } from './NodeDrift.js';     // route-1101 lane S2: the station node gap
 import { WAIT_ID } from './WhereNextRows.js';
 import {
-  postFirstJob, postRemovalJob, postPressJob, isJobPiece, jobMember, bodyMassKg, bountyPayLine, removalPayLine, jobPayCr, jobPartPayCr, jobSupplementCr,
-  nextRemovalTier, pressDue, recordPosted, recordClosed, newBoardState, boardToSave as jobBoardToSave,
-  toSave as jobToSave, boardFromSave as jobBoardFromSave, JOBS,
+  postFirstJob, postRemovalJob, postPressJob, postInsurerJob, postPartJob, isJobPiece, jobMember, bodyMassKg, bountyPayLine, removalPayLine, jobPayCr, jobPartPayCr,
+  jobSupplementCr, insurerPayLine, partTakenLine, partPayCr, insurerRows, nextRemovalTier, pressDue, insurerDue, partDue, recordPosted, recordClosed, newBoardState,
+  boardToSave as jobBoardToSave, toSave as jobToSave, boardFromSave as jobBoardFromSave, JOBS,
 } from './JobsBoard.js';
 import { buildWhereNextRows, STAY_ID, CALL_ID, PUSH_KIND, PUSH_PREFIX, OPEN_LINE, BERTH_LINE, BERTH_MISSION_LINE, STUCK_CALL_LINE } from './WhereNextRows.js';
 import { salvageGasKg, coldGasKgToPool, coldGasPoolToKg, engineGasKg } from './ResourceSystem.js';
@@ -187,6 +187,15 @@ export class GameFlowManager {
     this._removalTold = null;
     this._pressJob = null;
     this._pressTold = null;
+    /**
+     * Plan route-1101 J5: the insurer's job (`_insurerJob`: its dead microsatellite handed over whole to the resupply satellite, a flat pay on top) and the station's
+     * part job (`_partJob`: the melt keeps one part of its piece whole, she takes it to the station field lined up; its `aboard` is the part she carries), each its own
+     * slot, saved in `jobBoard` and told once when closed (`_insurerTold`, `_partTold`) like the press job.
+     */
+    this._insurerJob = null;
+    this._insurerTold = null;
+    this._partJob = null;
+    this._partTold = null;
     this._jobState = newBoardState();
 
     /**
@@ -779,13 +788,17 @@ export class GameFlowManager {
       if (save.gameOver !== true && Array.isArray(save.bigPieces)) this._restoreBigPieces(save.bigPieces);
       // The jobs board's postings and counts come back as they were (a save without the keys, or a malformed one, is "not posted yet", every count 0). An old
       // save holds only the Vespa bounty (`jobs`); its agency and press jobs are posted at the next list when due.
-      const board = save.gameOver !== true ? jobBoardFromSave(save) : { bounty: null, removal: null, press: null, state: newBoardState() };
+      const board = save.gameOver !== true ? jobBoardFromSave(save) : { bounty: null, removal: null, press: null, insurer: null, part: null, state: newBoardState() };
       this._job = board.bounty;
       this._removalJob = board.removal;
       this._pressJob = board.press;
+      this._insurerJob = board.insurer;
+      this._partJob = board.part;
       this._jobState = board.state;
       this._removalTold = null;
       this._pressTold = null;
+      this._insurerTold = null;
+      this._partTold = null;
       this._jobDoneOn = false;
       // big-rules (§49 row 3): the characterising steps already paid for pieces over her catch limit come back (nothing pays at load).
       if (save.gameOver !== true) dossierSystem.restoreInspect(save.inspectPaid);
@@ -834,6 +847,10 @@ export class GameFlowManager {
 
       // Demo mode (DemoEnd.js): a save already at or past the end of the demo opens the end card at once; no welcome-back line.
       if (this._demoEndReached(gameState.debrisCleared)) { this._setResupplyStop(false); return; }
+
+      // route-1101 J5: a load fires no MISSION_START / FIELD_ARRIVED, so a save made at the station field, lined up, with a part aboard hands it over here (the jobs
+      // board, the node gap and the registry are restored above; resetGame aborted any trip, so none is under way)
+      this._stationHandOver();
 
       // Welcome-back comms: mission # and objective arrive as a short HOUSTON trickle AFTER the handoff, emitted after the
       // transition so CommsSystem has self-started on GAME_STATE_CHANGE → ORBITAL_VIEW (CommsSystem.js constructor).
@@ -929,6 +946,10 @@ export class GameFlowManager {
       this._removalTold = null;
       this._pressJob = null;
       this._pressTold = null;
+      this._insurerJob = null;
+      this._insurerTold = null;
+      this._partJob = null;
+      this._partTold = null;
       this._jobState = newBoardState();
       this._jobDoneOn = false;
       this._unplacedBig = [];
@@ -1007,6 +1028,11 @@ export class GameFlowManager {
         targetSelector.setTarget(debris);  // imported singleton — emits TARGET_SELECTED → wireframe hears it
       }
     });
+
+    // Plan route-1101 J5: the station takes a part she carries when she is lined up at the station field: on arrival at a field and at a mission start (a new mission at the station). A load fires neither: the MENU_CONTINUE handler calls it itself (the
+    // third call site is the end of a wait, `_pickWait`; a load is the fourth).
+    eventBus.on(Events.FIELD_ARRIVED, () => { this._stationHandOver(); });
+    eventBus.on(Events.MISSION_START, () => { this._stationHandOver(); });
 
     eventBus.on(Events.SCORE_UPDATE, (data) => {
       gameState.score = data.total;
@@ -1825,6 +1851,10 @@ export class GameFlowManager {
     this._removalTold = null;
     this._pressJob = null;
     this._pressTold = null;
+    this._insurerJob = null;
+    this._insurerTold = null;
+    this._partJob = null;
+    this._partTold = null;
     this._jobState = newBoardState();
     this._jobDoneOn = false;
     this._unplacedBig = [];
@@ -2078,7 +2108,7 @@ export class GameFlowManager {
       if (pending.length) saveData.bigPieces = pending;
       const jobs = jobToSave(this._job);                         // the jobs board's posting (none: no key; a game-over save carries none)
       if (jobs) saveData.jobs = jobs;
-      const board = jobBoardToSave(this._jobState, this._removalJob, this._pressJob);   // the agency and press jobs and the counts (none: no key, so an old reader sees the bounty alone)
+      const board = jobBoardToSave(this._jobState, this._removalJob, this._pressJob, { insurer: this._insurerJob, part: this._partJob });   // the agency, press, insurer and part jobs and the counts (none: no key, so an old reader sees the bounty alone)
       if (board) saveData.jobBoard = board;
       // The hold (orbit metal the furnaces made, and the small catches' metal). Written only when it holds something.
       const cs = this._refs.cargoSystem;
@@ -2568,9 +2598,21 @@ export class GameFlowManager {
    */
   _jobsOf(held) {
     const out = [];
-    for (const posting of [this._removalJob, this._pressJob]) {
+    for (const posting of [this._removalJob, this._pressJob, this._insurerJob, this._partJob]) {
       const body = posting ? jobMember(posting, held) : null;
       if (body) out.push({ posting, body });
+    }
+    return out;
+  }
+
+  /** @private The open postings that pay by the piece's mass or a flat share of the fee (agency A and B, good press): what the melt's parts and a disposal's fee carry. @param {Array<{posting: object, body: object}>} jobs */
+  _feeJobs(jobs) { return jobs.filter((j) => j.posting.kind === 'removal' || j.posting.kind === 'press'); }
+
+  /** @private Every open posting's piece, as `{fieldId, row}`: no piece goes in two postings (`JobsBoard` pickers' `exclude`, plan route-1101 J5 D4). */
+  _openJobPieces() {
+    const out = [];
+    for (const j of [this._job, this._removalJob, this._pressJob, this._insurerJob, this._partJob]) {
+      if (j && j.posted && !j.done && !j.missed) out.push({ fieldId: j.fieldId, row: j.row });
     }
     return out;
   }
@@ -2593,6 +2635,7 @@ export class GameFlowManager {
     // it, so `bodyMassKg` is what is left of it; a bag's MEMBERS do not shrink (only the bag, `_setHeldPieceMass`), so the member's full mass is scaled by
     // the share of the bag still to pay (`_meltShare`): the melted part was already paid at the job rate part by part (`_meltFinishPart`), never twice.
     const jobs = fate !== 'keep' ? this._jobsOf(held).map((j) => ({ ...j, kg: bodyMassKg(j.body) * (held && held.isBag === true ? this._meltShare(held) : 1) })) : [];
+    const meltDone = held && held._disposal && Number.isFinite(held._disposal.meltDoneKg) ? held._disposal.meltDoneKg : 0;   // kg of it melted already (the insurer wants it whole)
     const d = bigPieces.remove(id);
     if (!d) return false;
     if (fate !== 'keep' && bounty) this._jobState.removed += 1;      // one removal per piece (a melt disposes once, at its last part); keep and a sail left over 25 years are none. A bag counts once though `bigBodiesOf` could list several big members: it cannot hold two, as the high-field pieces lie over 100 m apart (test-HighFields.js:371) and a net's mouth is 6 m (CAPTURE_NET.LARGE.DIAMETER), so `pickScoopMembers` (scoopRule.js:106) never joins two of them
@@ -2609,6 +2652,28 @@ export class GameFlowManager {
     // A sail that brings the piece down within `RULE_YEARS` (`bounty` true) is a removal like any other: it pays the job pay too (test R5c); only a
     // sail that leaves it up past the rule misses the job.
     for (const { posting, kg } of jobs) {
+      if (posting.kind === 'insurer') {
+        // The insurer's job (JobsBoard kind 'insurer', plan route-1101 J5): a hand-over of the posted piece with no part melted pays its flat pay ON TOP of the
+        // ordinary hand-over pay (already in `totalCr`; `awardDisposal` does not taper it). A push, a sail (either outcome) or a melt misses it. A hand-over
+        // after a part was melted cannot happen in play (`setFate` refuses a new fate once `meltDoneKg` > 0): guarded, it pays the ordinary pay only and misses.
+        if (fate === 'satellite' && !(meltDone > 0)) {
+          const cr = jobPayCr(posting, kg);
+          totalCr = Math.max(0, Number(totalCr) || 0) + cr;
+          posting.paidCr = (posting.paidCr || 0) + cr;
+          line = `${line ? `${line} ` : ''}${insurerPayLine(posting)}`;
+          posting.done = true;
+        } else posting.missed = true;
+        this._closeJob(posting);
+        continue;
+      }
+      if (posting.kind === 'part') {
+        // The station's part job (kind 'part'): a part kept aboard cannot be missed (the piece goes on melting; the station pays for the part). The posted piece
+        // leaving by a hand-over, a push, a sail, or a melt that kept no part is a miss.
+        if (posting.aboard) continue;
+        posting.missed = true;
+        this._closeJob(posting);
+        continue;
+      }
       if (!bounty) {
         posting.missed = true;                                       // let go but still up over 25 years: no fee, no job pay, closed
       } else {
@@ -2971,7 +3036,9 @@ export class GameFlowManager {
     const s = cs.serialize();
     const id = Constants.BIG_MELT.METAL_ID;
     if (!s.entries.some((e) => e.metalId === id) && s.entries.length >= (Constants.CARGO_CAPACITY_SLOTS || 20)) return 0;
-    return Math.max(0, s.capacityKg - s.totalMassKg);
+    // The kept part of the station's part job (`_meltKeepPart`) sits in the hold until the station takes it: its kg count against the room (no live-mass term: D5)
+    const partKg = this._partJob && this._partJob.aboard && Number.isFinite(this._partJob.aboard.kg) ? this._partJob.aboard.kg : 0;
+    return Math.max(0, s.capacityKg - s.totalMassKg - partKg);
   }
 
   /** @private Put melted metal in the hold, listed so that a sale of 50 kg or more nets the in-orbit price per kg. */
@@ -3223,7 +3290,7 @@ export class GameFlowManager {
         continue;
       }
       if (p.st === 0 && p.cutS <= t) this._meltCut(m, p);
-      if (p.st === 1 && p.startS <= t) p.st = 2;
+      if (p.st === 1 && p.startS <= t && !this._meltKeepPart(m, p)) p.st = 2;      // (a kept part is settled and over, st 3: it never melts)
       if (p.st === 2) {
         if (p.endS <= t) this._meltFinishPart(m, p);
         else if (this._ballAt(p.tip)) {
@@ -3271,8 +3338,13 @@ export class GameFlowManager {
     for (const d of touched) this._meltReshape(d, m.inFlight.get(d.id) || 0);
   }
 
-  /** @private A part is melted: the piece's mass falls by it, its metal goes in the hold, its share of the fee (less the owner's share) is paid. */
-  _meltFinishPart(m, p) {
+  /**
+   * @private A part is melted: the piece's mass falls by it, its metal goes in the hold, its share of the fee (less the owner's share) is paid.
+   * `keep` (plan route-1101 J5, the station's part job): the part is set aside WHOLE instead of melted: the same account for the piece (its mass falls by the part,
+   * the part's share of the fee and of any job pay is paid exactly as a melted part's, so the parts still sum to the whole), but no metal is made: the metal kg and
+   * the owner's share of the metal (`meltAccount`'s `metalKg` and `shareCr`) are 0 for it, nothing goes to the hold.
+   */
+  _meltFinishPart(m, p, keep = false) {
     const d = p.d;
     const L = d._disposal;
     const before = L.meltDoneKg || 0;
@@ -3282,12 +3354,13 @@ export class GameFlowManager {
     const acct0 = meltAccount(d, L.massAtCatch, before, after);
     // The agency and press jobs (JobsBoard.js): a part of the posted piece is paid at the job pay in place of the ordinary fee, so the part's
     // fee (and its net) carry the difference. Shares of the piece as the melt's own account takes them (cumulative, rounded once per point; the flat
-    // press pay is shared the same way, so its parts add up to exactly the whole).
+    // press pay is shared the same way, so its parts add up to exactly the whole). The insurer's and the part job pay flat elsewhere (`_feeJobs`).
     const f0 = L.massAtCatch > 0 ? before / L.massAtCatch : 0;
     const f1 = L.massAtCatch > 0 ? after / L.massAtCatch : 0;
-    const jobShares = this._jobsOf(d).map(({ posting, body }) => ({ posting, base: body === d ? L.massAtCatch : bodyMassKg(body) }));
+    const jobShares = this._feeJobs(this._jobsOf(d)).map(({ posting, body }) => ({ posting, base: body === d ? L.massAtCatch : bodyMassKg(body) }));
     const jobSup = jobShares.reduce((sum, j) => sum + jobSupplementCr(j.posting, j.base, f0, f1), 0);
-    const acct = jobSup > 0 ? { ...acct0, feeCr: acct0.feeCr + jobSup, netCr: acct0.netCr + jobSup } : acct0;
+    let acct = jobSup > 0 ? { ...acct0, feeCr: acct0.feeCr + jobSup, netCr: acct0.netCr + jobSup } : acct0;
+    if (keep) acct = { ...acct, metalKg: 0, shareCr: 0, netCr: acct.feeCr };       // no metal: no metal kg, no owner's share of it
     if (acct.metalKg > this._holdRoomKg() + 1e-9) {   // room is checked where the metal goes in: other tips' catches add metal mid-burn
       this._meltStopWork(m);
       return;
@@ -3296,19 +3369,79 @@ export class GameFlowManager {
     p.st = 3;
     L.meltDoneKg = after;
     for (const j of jobShares) j.posting.paidCr = (j.posting.paidCr || 0) + jobPartPayCr(j.posting, j.base, f0, f1);
+    // The insurer wants its satellite whole: the first melted part of it misses that job (`_insurerJob`; a kept part is only ever the part job's piece)
+    if (!keep) this._missInsurerOn(d);
     m.inFlight.set(d.id, Math.max(0, (m.inFlight.get(d.id) || 0) - p.kg));
     this._setHeldPieceMass(d, isLast ? 0 : L.massAtCatch - after);
     this._meltReshape(d, m.inFlight.get(d.id));
     this._storeOrbitMetal(acct.metalKg);
     let t = m.totals.get(d.id);
     if (!t) { t = { name: pieceName(d), kg: 0, metalKg: 0, feeCr: 0, shareCr: 0, netCr: 0, holder: acct.holder }; m.totals.set(d.id, t); }
-    t.kg += acct.kg; t.metalKg += acct.metalKg; t.feeCr += acct.feeCr; t.shareCr += acct.shareCr; t.netCr += acct.netCr;
+    t.kg += keep ? 0 : acct.kg; t.metalKg += acct.metalKg; t.feeCr += acct.feeCr; t.shareCr += acct.shareCr; t.netCr += acct.netCr;
     if (!isLast) { this.payBigPieceShare(d.id, { cr: acct.netCr }); return; }
     // last part: the piece is gone, paid once, the trip says its line
     m.said.add(d.id);
     this._meltFinals = this._meltFinals || [];
     this._meltFinals.push({ id: d.id, cr: acct.netCr, line: tripLine(t) });
     this._meltSettleFinals();
+  }
+
+  /** @private The insurer's job misses when a part of its piece is melted: it wanted the satellite whole (JobsBoard kind 'insurer'). @param {object} d the piece */
+  _missInsurerOn(d) {
+    const j = this._insurerJob;
+    if (!j || !jobMember(j, d)) return;
+    j.missed = true;
+    this._closeJob(j);
+  }
+
+  /**
+   * @private The station's part job (plan route-1101 J5, JobsBoard kind 'part'): while it is open and nothing is aboard for it, the posted piece's FIRST part cut on a
+   * trip is set aside whole at the step where it would begin to melt (state 1 to 2), not melted. The piece's mass falls by it and its share of the fee and of any
+   * job pay is paid as a melted part's (`_meltFinishPart(m, p, true)`: no metal, so no metal kg and no owner's share of metal); its tip frees and the burn is not
+   * re-planned (that tip idles for the part's slot). It becomes the posting's `aboard` record (kg), which counts against the hold's room (`_holdRoomKg`) until the
+   * station takes it. Never the piece's last part (`isLast`: no keep, melted as usual), never a part over the capsule's `E_MAX_KG`, never a part of a piece that has
+   * melted something already (an E piece is in orbit when posted: its first cut is its first part).
+   * @param {object} m the melt @param {object} p the part about to begin melting @returns {boolean} true = kept (the part is over)
+   */
+  _meltKeepPart(m, p) {
+    const post = this._partJob;
+    const d = p.d;
+    const L = d && d._disposal;
+    if (!post || post.done || post.missed || post.aboard || !L || !jobMember(post, d)) return false;
+    if ((L.meltDoneKg || 0) > 0 || !(L.massAtCatch > 0)) return false;
+    if (p.kg >= d.mass - 1e-9 || p.kg > Constants.BIG_PIECES.JOB_RULES.E_MAX_KG) return false;      // the piece's last part melts as usual
+    const kg = p.kg;
+    post.aboard = { kg };
+    this._meltFinishPart(m, p, true);
+    if (p.st !== 3) { post.aboard = null; return false; }          // (cannot happen: a kept part makes no metal, so the hold's room never stops it)
+    this._meltSay(`The ${Math.round(kg)} kg part of the ${pieceName(d)} is kept whole for the station's return capsule: fly to the station field lined up with it and the station takes the part.`, 'info');
+    return true;
+  }
+
+  /**
+   * @private The station's hand-over (JobsBoard kind 'part', plan route-1101 J5): she is lined up at the station field (`stationLinedUp`) with a part aboard, and no trip
+   * is under way: the station takes the part for its return capsule (a Dragon-class capsule, off-screen): pays `JOB_E_USD` over `USD_PER_CREDIT` untapered
+   * (`awardDisposal`), frees the part's hold room, closes the job paid and says one line. Not lined up, another field, berthed, or a trip under way: nothing.
+   * Called on arrival at a field (FIELD_ARRIVED), at a mission start (MISSION_START: a new mission at the station), at a load (MENU_CONTINUE, which fires neither event) and when a wait has gone by.
+   * @returns {boolean} true = the station took the part
+   */
+  _stationHandOver() {
+    const post = this._partJob;
+    if (!post || post.done || post.missed || !post.aboard) return false;
+    if (!this._bigPiecesOn()) return false;                        // the map off: no station, no field (`stationLinedUp` is true then)
+    if (this._trip && this._trip.isActive() && !this._trip.isChoosing()) return false;     // a trip under way (one leaving the station field still reads lined up)
+    if (!this.stationLinedUp()) return false;
+    const cr = partPayCr();
+    const paid = scoringSystem.awardDisposal(cr);
+    post.partKg = post.aboard.kg;
+    const line = partTakenLine(post, paid);
+    post.aboard = null;
+    post.paidCr = (post.paidCr || 0) + paid;
+    post.done = true;
+    this._closeJob(post);
+    eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: line, priority: paid > 0 ? 'good' : 'info', _keep: true });
+    this.saveGame();
+    return true;
   }
 
   /**
@@ -3447,31 +3580,50 @@ export class GameFlowManager {
     const gone = (j) => !!j && (j.done || j.missed) && j.doneShown;
     const rjGone = gone(this._removalJob);
     const pjGone = gone(this._pressJob);
-    if (this._job && this._removalJob && this._pressJob && !rjGone && !pjGone) return;
+    const ijGone = gone(this._insurerJob);
+    const tjGone = gone(this._partJob);
+    if (this._job && this._removalJob && this._pressJob && this._insurerJob && this._partJob && !rjGone && !pjGone && !ijGone && !tjGone) return;
     if (!reg || typeof reg.isOn !== 'function' || !reg.isOn()) return;
     if (getMissionProgress(gameState.debrisCleared).missionsCompleted < 1) return;
     if (!this._job) this._job = postFirstJob(reg);
     const mission = scoringSystem.getMissionNumber();
+    // No piece is in two open postings (route-1101 J5 D4): every picker below skips the pieces of the postings that are open when it picks (read again for each, so a
+    // posting made a line earlier counts)
     // The agency slot (A, then B): what is due by the counts, the removals so far and the spacing (JobsBoard.nextRemovalTier); the piece with the cheapest
     // trip from where she is (JobsBoard.postRemovalJob)
     if (!this._removalJob || rjGone) {
       const tier = nextRemovalTier(this._jobState, mission);
-      const p = tier ? postRemovalJob(reg, tier) : null;
+      const p = tier ? postRemovalJob(reg, tier, { exclude: this._openJobPieces() }) : null;
       if (p) recordPosted(this._jobState, p);
       this._removalJob = p;
     }
     // The press slot (C): a company's own dead satellite (JobsBoard.postPressJob)
     if (!this._pressJob || pjGone) {
-      const p = pressDue(this._jobState, mission) ? postPressJob(reg) : null;
+      const p = pressDue(this._jobState, mission) ? postPressJob(reg, { exclude: this._openJobPieces() }) : null;
       if (p) recordPosted(this._jobState, p);
       this._pressJob = p;
+    }
+    // The insurer's slot (D): its dead microsatellite, once a game, from mission 4 (JobsBoard.postInsurerJob)
+    if (!this._insurerJob || ijGone) {
+      const p = insurerDue(this._jobState, mission) ? postInsurerJob(reg, { exclude: this._openJobPieces() }) : null;
+      if (p) recordPosted(this._jobState, p);
+      this._insurerJob = p;
+    }
+    // The station's part slot (E): a part of a big piece, from mission 4, at most twice, 3 missions apart (JobsBoard.postPartJob). The insurer's piece is never
+    // picked while D is still to come or open: the insurer wants that one whole.
+    if (!this._partJob || tjGone) {
+      const insurerOpen = !!this._insurerJob && !this._insurerJob.done && !this._insurerJob.missed;
+      const skipRows = insurerOpen || (this._jobState.insurerPosted || 0) < Constants.BIG_PIECES.JOB_RULES.D_MAX ? insurerRows() : [];
+      const p = partDue(this._jobState, mission) ? postPartJob(reg, { exclude: this._openJobPieces(), skipRows }) : null;
+      if (p) recordPosted(this._jobState, p);
+      this._partJob = p;
     }
   }
 
   /**
    * @private The postings the list shows now, in this order: the Vespa bounty (an open one, or a finished one only on the list that is open
-   * since it was done), the agency and press jobs that closed since the last list (that list only), the open agency job, the open press job. Several ride on
-   * the first as `also` (the list has one job slot; `jobLine` makes one line each). Null with none. A lone posting is returned as it is.
+   * since it was done), the agency, press, insurer and part jobs that closed since the last list (that list only), then the open agency, press, insurer and part
+   * jobs. Several ride on the first as `also` (the list has one job slot; `jobLine` makes one line each). Null with none. A lone posting is returned as it is.
    */
   _jobForRows() {
     this._postJobIfDue();
@@ -3481,7 +3633,9 @@ export class GameFlowManager {
     if (j && !((j.done || j.missed) && !(this._jobDoneOn && choosing))) shown.push(j);
     if (this._removalTold && choosing) shown.push(this._removalTold);
     if (this._pressTold && choosing) shown.push(this._pressTold);
-    for (const r of [this._removalJob, this._pressJob]) if (r && !r.done && !r.missed) shown.push(this._withLivePay(r));
+    if (this._insurerTold && choosing) shown.push(this._insurerTold);
+    if (this._partTold && choosing) shown.push(this._partTold);
+    for (const r of [this._removalJob, this._pressJob, this._insurerJob, this._partJob]) if (r && !r.done && !r.missed) shown.push(this._withLivePay(r));
     if (!shown.length) return null;
     return shown.length === 1 ? shown[0] : { ...shown[0], also: shown.slice(1) };
   }
@@ -3510,7 +3664,9 @@ export class GameFlowManager {
     if (j && !((j.done || j.missed) && j.doneShown && !(this._jobDoneOn && choosing))) out.push({ ...j });
     if (this._removalTold && choosing) out.push({ ...this._removalTold });
     if (this._pressTold && choosing) out.push({ ...this._pressTold });
-    for (const r of [this._removalJob, this._pressJob]) {
+    if (this._insurerTold && choosing) out.push({ ...this._insurerTold });
+    if (this._partTold && choosing) out.push({ ...this._partTold });
+    for (const r of [this._removalJob, this._pressJob, this._insurerJob, this._partJob]) {
       if (!r || ((r.done || r.missed) && r.doneShown)) continue;
       out.push({ ...this._withLivePay(r) });
     }
@@ -3595,8 +3751,10 @@ export class GameFlowManager {
     // The agency and press jobs that closed since the last list are told on this list once (`_removalTold`, `_pressTold`), then the next due one is posted in place
     this._removalTold = null;
     this._pressTold = null;
+    this._insurerTold = null;
+    this._partTold = null;
     let closedNow = false;
-    for (const [key, told] of [['_removalJob', '_removalTold'], ['_pressJob', '_pressTold']]) {
+    for (const [key, told] of [['_removalJob', '_removalTold'], ['_pressJob', '_pressTold'], ['_insurerJob', '_insurerTold'], ['_partJob', '_partTold']]) {
       const jb = this[key];
       if (jb && (jb.done || jb.missed)) {
         if (!jb.doneShown) { jb.doneShown = true; this[told] = { ...jb }; }
@@ -3960,7 +4118,13 @@ export class GameFlowManager {
     const boss = this._issBoss;
     const pending = !!(cfg && boss && scoringSystem.getMissionNumber() >= cfg.MISSION
       && !(boss.isArmed() || boss.isActive() || boss.hasCompleted()));
-    return { pending, gapDeg: this.stationGapDeg(), incDeg: this._herIncDeg() };
+    return { pending, gapDeg: this.stationGapDeg(), incDeg: this._herIncDeg(), partCr: this._partAboard() ? partPayCr() : 0 };
+  }
+
+  /** @private The part she carries for the station's part job (`{kg}`), or null: the station's row says what it pays while one is aboard. */
+  _partAboard() {
+    const post = this._partJob;
+    return post && !post.done && !post.missed && post.aboard ? post.aboard : null;
   }
 
   /**
@@ -3982,6 +4146,7 @@ export class GameFlowManager {
       const leg = trip.lastLeg;
       trip.lastLeg = null;
       if (leg) { gameState.shipDays += leg.days; this._advanceStationGap(leg); }
+      this._stationHandOver();                                // route-1101 J5: a wait that lines her up at the station field with a part aboard
       const f = reg.fieldById(row.stationFieldId);
       const atStation = !!f && reg.currentId() === f.id;      // she waited at the station field itself: nothing to fly
       if (f) eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: atStation ? `The station's orbit is lined up.` : `The station's orbit lines up from here. Fly to the ${Math.round(f.altKm)} km field.`, priority: 'info', _keep: true });
@@ -4777,6 +4942,10 @@ export class GameFlowManager {
       holdRoomKg: this._holdRoomKg(),
       captureCreditsEarned: scoringSystem.captureCreditsEarned,
       jobPostings: this.jobPostings?.() ?? [],
+      // Plan route-1101 J5 Task 12: what the route walker needs to price the station stop (the node gap moves with the route's days; the part aboard is paid
+      // at the station field when she arrives lined up)
+      gapDeg: this.stationGapDeg(), incDeg: this._herIncDeg(), stationFieldId: stationFieldId(reg),
+      partAboard: this._partAboard() ? this._partAboard().kg : 0,
     };
   }
 }

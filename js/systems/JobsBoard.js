@@ -26,10 +26,21 @@
  * postings under the save's `jobBoard` (`boardFromSave`). A posting: the bounty's shape plus `kind` ('removal' or 'press'), `tier` ('A' or 'B' on a
  * removal job), `what` ('stage' or 'satellite'), `payCr` (an ESTIMATE shown before she arrives: the row's middle mass x the rate, or the flat pay;
  * the real pay is the caught piece's own mass) and `paidCr` (what the job has paid so far).
+ *
+ * STATION JOBS (plan route-1101 lane J5, DECISIONS §62 row 12; research doc §4 rows D and E): two more kinds, each its own slot.
+ *   D  the insurer's job ('insurer'): from mission 4, once a game, the insurer's dead microsatellite (a row with `owner.status` 'insurer', today row 5) handed WHOLE
+ *      to the resupply satellite; it pays a flat 27,500 cr ON TOP of the ordinary hand-over pay (`JOB_D_USD` over `USD_PER_CREDIT`). Push, sail, or the first melted
+ *      part misses it; keep leaves it open;
+ *   E  the station's part job ('part'): from mission 4, at most 2 a game (spacing as the others), one part a payer wants of a big piece (a part the melt already cuts,
+ *      `partKgFor`, at most `JOB_RULES.E_MAX_KG` kg): the melt keeps that part whole instead of melting it, she carries it to the station field lined up with the
+ *      station, and the station takes it for its return capsule: a flat 10,000 cr (`JOB_E_USD`). The posting's `aboard` ({kg}) is the part she carries.
+ * No piece is in two open postings: every picker takes an `exclude` list of {fieldId, row} (the game fills it with every open posting's piece); E never picks an
+ * insurer's piece (`skipRows`) while D is still to come or open.
  * @module systems/JobsBoard
  */
 
 import { Constants } from '../core/Constants.js';
+import { partKgFor } from './BigMelt.js';
 
 /** The one posting. `BONUS_CR` is an ESTIMATE to tune (about one to three times this piece's 1,000-2,500 cr removal fee). */
 export const JOBS = { FIELD_ID: 'f800', ROW: 4, BONUS_CR: 3000 };
@@ -118,9 +129,18 @@ export function removalPayCr(massKg, tier = 'A') { return Math.round((Number.isF
 /** @returns {number} the good-press job's flat pay, whole credits (`BIG_PIECES.JOB_PRESS_USD` over `USD_PER_CREDIT`: 105,000 today). */
 export function pressPayCr() { return Math.round(Constants.BIG_PIECES.JOB_PRESS_CR); }
 
-/** @returns {number} what `posting` pays for a piece of `massKg` in all: the flat press pay, or mass x its tier's rate. */
+/** @returns {number} the insurer's job pay on top of the hand-over, whole credits (`BIG_PIECES.JOB_D_USD` over `USD_PER_CREDIT`: 27,500 today). */
+export function insurerPayCr() { return Math.round(Constants.BIG_PIECES.JOB_D_CR); }
+
+/** @returns {number} the station's pay for one part, whole credits (`BIG_PIECES.JOB_E_USD` over `USD_PER_CREDIT`: 10,000 today). */
+export function partPayCr() { return Math.round(Constants.BIG_PIECES.JOB_E_CR); }
+
+/** @returns {number} what `posting` pays for a piece of `massKg` in all: the flat press, insurer or part pay, or mass x its tier's rate. */
 export function jobPayCr(posting, massKg) {
-  return posting && posting.kind === 'press' ? pressPayCr() : removalPayCr(massKg, posting && posting.tier === 'B' ? 'B' : 'A');
+  if (posting && posting.kind === 'press') return pressPayCr();
+  if (posting && posting.kind === 'insurer') return insurerPayCr();
+  if (posting && posting.kind === 'part') return partPayCr();
+  return removalPayCr(massKg, posting && posting.tier === 'B' ? 'B' : 'A');
 }
 
 /**
@@ -140,6 +160,7 @@ export function jobPartPayCr(posting, massKg, f0 = 0, f1 = 1) {
  * @param {object} posting a removal or press posting @param {number} massKg @param {number} [f0] @param {number} [f1]
  */
 export function jobSupplementCr(posting, massKg, f0 = 0, f1 = 1) {
+  if (posting && (posting.kind === 'insurer' || posting.kind === 'part')) return 0;      // a flat pay on top of the disposal (D) or at the station (E): never a share of the fee
   const m = Number.isFinite(massKg) && massKg > 0 ? massKg : 0;
   const jobCr = jobPayCr(posting, m);                                     // the whole job pay
   const feeCr = Math.round(m * Constants.BIG_PIECES.FEE_CR_PER_KG);       // the whole ordinary fee, as BigPieceValues rounds it
@@ -189,6 +210,44 @@ export function pressRows() {
 
 const fieldDef = (id) => Constants.FIELDS.LIST.find((f) => f.id === id) || null;
 
+/**
+ * The insurer's job's rows: a piece whose owner is an insurer (`owner.status` 'insurer') with a mass within her catch limit. Today 5 (the dead microsatellite).
+ * @returns {number[]}
+ */
+export function insurerRows() {
+  const limit = catchLimitKg();
+  const out = [];
+  highTable().forEach((def, i) => { if (def && def.owner && def.owner.status === 'insurer' && canPost(def) && def.massMax <= limit) out.push(i); });
+  return out;
+}
+
+/** @returns {number} the kg of the part the melt cuts from a row's piece (`BigMelt.partKgFor` of its type), 0 when the row has no type. */
+export function rowPartKg(def) { return def && Array.isArray(def.types) && def.types.length ? partKgFor(def.types[0]) : 0; }
+
+/**
+ * The station's part job's rows: any high row whose piece she can catch (mass within her catch limit at its heaviest) and whose part is at most `JOB_RULES.E_MAX_KG`
+ * (the station's return capsule takes small parts only). A piece nobody owns can be the payer-less kind: "a collector" wants it. 0-based, as `JOBS.ROW`.
+ * @returns {number[]}
+ */
+export function partRows() {
+  const limit = catchLimitKg();
+  const out = [];
+  highTable().forEach((def, i) => {
+    if (!def || !(def.massMax <= limit)) return;
+    const kg = rowPartKg(def);
+    if (kg > 0 && kg <= rules().E_MAX_KG) out.push(i);
+  });
+  return out;
+}
+
+/** The payer's words for the station's part job: "its insurer" (insurer), "a collector" (nobody owns it), else the owner's name. */
+export function partPayer(def) {
+  const o = def && def.owner;
+  if (o && o.status === 'insurer') return 'its insurer';
+  if (!o || o.status === 'abandoned' || typeof o.name !== 'string' || !o.name.length) return 'a collector';
+  return o.name;
+}
+
 /** @returns {'stage'|'satellite'} the word for a row's piece. */
 const whatOf = (def) => (def && Array.isArray(def.types) && def.types.includes('rocketBody') ? 'stage' : 'satellite');
 
@@ -208,18 +267,39 @@ function jobPosting(kind, tier, fieldId, row, def) {
 }
 
 /**
+ * A station job's posting (D: 'insurer', E: 'part'): the same shape as `jobPosting`, `client` the payer's words (`partPayer`), `payCr` the flat pay, and for E
+ * `partKg` (what the melt cuts) and `aboard` (null until the melt keeps the part: `{kg}`).
+ * @param {'insurer'|'part'} kind @param {string} fieldId @param {number} row @param {object} def the `HIGH_FIELD` row
+ */
+function stationPosting(kind, fieldId, row, def) {
+  const o = def.owner;
+  const p = {
+    v: 1, kind, fieldId, row, client: partPayer(def), launchYear: o && Number.isFinite(o.launchYear) ? o.launchYear : null,
+    label: pieceLabel(def), what: whatOf(def), payCr: 0, paidCr: 0, posted: true, done: false, missed: false, doneShown: false,
+  };
+  if (kind === 'part') { p.partKg = rowPartKg(def); p.aboard = null; }
+  p.payCr = jobPayCr(p, 0);
+  return p;
+}
+
+const pairKey = (fieldId, row) => `${fieldId}#${row}`;
+
+/**
  * Pick the piece a job names: of the rows `rows` still out in a high field (`reg.remainingRows(fieldId)` holds the row), the one with the cheapest trip
  * from where she is (`reg.planTo(fieldId)` gas; a trip that cannot be flown counts as dearest), ties to the heavier piece (the row's `massMax`), then the
  * lower field and row. The field she is in costs what `planTo` says (nothing for the same height). A field she has cleared (the row gone) is never offered.
+ * `exclude` (route-1101 J5, D4): `{fieldId, row}` of every piece already in an open posting; those pieces are never offered, so no piece is in two postings.
+ * @param {object|null} reg @param {number[]} rows @param {Array<{fieldId: string, row: number}>} [exclude]
  * @returns {{fieldId: string, row: number}|null}
  */
-function pickPiece(reg, rows) {
+function pickPiece(reg, rows, exclude = []) {
   if (!reg || typeof reg.remainingRows !== 'function' || !rows.length) return null;
   const fields = (typeof reg.fields === 'function' ? reg.fields() : Constants.FIELDS.LIST).filter((f) => f && f.kind === 'high');
+  const taken = new Set((Array.isArray(exclude) ? exclude : []).filter((x) => x && typeof x.fieldId === 'string').map((x) => pairKey(x.fieldId, x.row)));
   let best = null;
   for (const f of fields) {
     const out = reg.remainingRows(f.id);
-    const here = rows.filter((r) => out.includes(r));
+    const here = rows.filter((r) => out.includes(r) && !taken.has(pairKey(f.id, r)));
     if (!here.length) continue;
     const plan = typeof reg.planTo === 'function' ? reg.planTo(f.id) : null;
     const gas = plan && plan.profile && plan.profile.ok && Number.isFinite(plan.profile.gasKg) ? plan.profile.gasKg : Infinity;
@@ -235,36 +315,58 @@ function pickPiece(reg, rows) {
 /**
  * Post the next agency job of `tier`: the piece with the cheapest trip among `removalRows(tier)` (see `pickPiece`).
  * @param {{remainingRows: function, fields?: function, planTo?: function}|null} reg the field registry
- * @param {'A'|'B'} [tier]
+ * @param {'A'|'B'} [tier] @param {{exclude?: Array<{fieldId: string, row: number}>}} [o]
  * @returns {object|null} the posting, or null (no registry, or no allowed piece is out in any high field)
  */
-export function postRemovalJob(reg, tier = 'A') {
-  const pick = pickPiece(reg, removalRows(tier));
+export function postRemovalJob(reg, tier = 'A', o = {}) {
+  const pick = pickPiece(reg, removalRows(tier), o.exclude);
   return pick ? jobPosting('removal', tier === 'B' ? 'B' : 'A', pick.fieldId, pick.row, Constants.HIGH_FIELD[pick.row]) : null;
 }
 
-/** Post the good-press job: the press client's piece with the cheapest trip. @param {object|null} reg @returns {object|null} */
-export function postPressJob(reg) {
-  const pick = pickPiece(reg, pressRows());
+/** Post the good-press job: the press client's piece with the cheapest trip. @param {object|null} reg @param {{exclude?: object[]}} [o] @returns {object|null} */
+export function postPressJob(reg, o = {}) {
+  const pick = pickPiece(reg, pressRows(), o.exclude);
   return pick ? jobPosting('press', null, pick.fieldId, pick.row, Constants.HIGH_FIELD[pick.row]) : null;
+}
+
+/** Post the insurer's job: an insurer's piece (`insurerRows`) with the cheapest trip. @param {object|null} reg @param {{exclude?: object[]}} [o] @returns {object|null} */
+export function postInsurerJob(reg, o = {}) {
+  const pick = pickPiece(reg, insurerRows(), o.exclude);
+  return pick ? stationPosting('insurer', pick.fieldId, pick.row, Constants.HIGH_FIELD[pick.row]) : null;
+}
+
+/**
+ * Post the station's part job: a piece of `partRows()` with the cheapest trip. `o.skipRows`: rows never picked (the game passes the insurer's rows while D is still
+ * to come or open: the insurer wants that piece whole); `o.exclude`: the pieces of every open posting.
+ * @param {object|null} reg @param {{exclude?: object[], skipRows?: number[]}} [o] @returns {object|null}
+ */
+export function postPartJob(reg, o = {}) {
+  const skip = Array.isArray(o.skipRows) ? o.skipRows : [];
+  const pick = pickPiece(reg, partRows().filter((r) => !skip.includes(r)), o.exclude);
+  return pick ? stationPosting('part', pick.fieldId, pick.row, Constants.HIGH_FIELD[pick.row]) : null;
 }
 
 // ── the board's counts and spacing ───────────────────────────────────────────
 
 /**
  * A fresh board state: how many of each kind were posted, whether A was paid, the mission number each slot last closed in (`removal`: the agency slot,
- * A or B; `press`), and how many big pieces she has removed herself (push, hand-over, melt, a sail that brings it down within 25 years; never keep).
- * @returns {{aPosted: number, aPaid: boolean, bPosted: number, pressPosted: number, closeMission: {removal: number|null, press: number|null}, removed: number}}
+ * A or B; `press`; `insurer`; `part`: the station's part job), how many insurer and part jobs were posted, and how many big pieces she has removed herself (push,
+ * hand-over, melt, a sail that brings it down within 25 years; never keep).
+ * @returns {{aPosted: number, aPaid: boolean, bPosted: number, pressPosted: number, insurerPosted: number, partPosted: number,
+ *   closeMission: {removal: number|null, press: number|null, insurer: number|null, part: number|null}, removed: number}}
  */
 export function newBoardState() {
-  return { aPosted: 0, aPaid: false, bPosted: 0, pressPosted: 0, closeMission: { removal: null, press: null }, removed: 0 };
+  return {
+    aPosted: 0, aPaid: false, bPosted: 0, pressPosted: 0, insurerPosted: 0, partPosted: 0,
+    closeMission: { removal: null, press: null, insurer: null, part: null }, removed: 0,
+  };
 }
 
 const rules = () => Constants.BIG_PIECES.JOB_RULES;
-/** The slot a posting sits in: the agency slot ('removal': A and B) or the press slot. */
-const slotOf = (posting) => (posting && posting.kind === 'press' ? 'press' : 'removal');
+/** The slot a posting sits in: the agency slot ('removal': A and B), the press slot, the insurer's or the station's part slot. */
+const slotOf = (posting) => (posting && (posting.kind === 'press' || posting.kind === 'insurer' || posting.kind === 'part') ? posting.kind : 'removal');
 const spaced = (state, slot, mission) => {
-  const close = state.closeMission[slot];
+  const close = state.closeMission ? state.closeMission[slot] : null;
   return close == null || mission >= close + rules().SPACING_MISSIONS;
 };
 
@@ -292,8 +394,25 @@ export function pressDue(state, mission) {
 export function recordPosted(state, posting) {
   if (!state || !posting) return;
   if (posting.kind === 'press') state.pressPosted += 1;
+  else if (posting.kind === 'insurer') state.insurerPosted = (state.insurerPosted || 0) + 1;
+  else if (posting.kind === 'part') state.partPosted = (state.partPosted || 0) + 1;
   else if (posting.tier === 'B') state.bPosted += 1;
   else state.aPosted += 1;
+}
+
+/**
+ * Is the insurer's job due now (the caller asks only while its slot is empty)? From `D_FIRST_MISSION`, once a game (`D_MAX`: never again once paid or missed, as
+ * the count stays).
+ */
+export function insurerDue(state, mission) {
+  const R = rules();
+  return !!state && Number.isFinite(mission) && (state.insurerPosted || 0) < R.D_MAX && mission >= R.D_FIRST_MISSION;
+}
+
+/** Is the station's part job due now (the caller asks only while its slot is empty)? From `E_FIRST_MISSION`, `SPACING_MISSIONS` after the last one closed, at most `E_MAX`. */
+export function partDue(state, mission) {
+  const R = rules();
+  return !!state && Number.isFinite(mission) && (state.partPosted || 0) < R.E_MAX && mission >= R.E_FIRST_MISSION && spaced(state, 'part', mission);
 }
 
 /** A posting closed (paid or missed) in mission `mission`: its slot's spacing starts, and a paid A unlocks B. */
@@ -343,7 +462,10 @@ export function doneLine(posting) { return `Done: ${posting.client}'s ${posting.
  */
 export function jobLine(posting, row, fmt) {
   if (!posting || !posting.posted) return null;
-  const own = posting.kind === 'removal' || posting.kind === 'press' ? removalLine(posting, row, fmt) : bountyLine(posting, row, fmt);
+  const own = posting.kind === 'removal' || posting.kind === 'press' ? removalLine(posting, row, fmt)
+    : posting.kind === 'insurer' ? insurerLine(posting, row, fmt)
+      : posting.kind === 'part' ? partLine(posting, row, fmt)
+        : bountyLine(posting, row, fmt);
   // Postings shown together: the list has one job slot, so the others ride on the first as `also` and come as further lines
   const more = Array.isArray(posting.also) ? posting.also.map((p) => jobLine({ ...p, also: undefined }, null, fmt)).filter((t) => !!t) : [];
   return [own, ...more].filter((t) => !!t).join('\n');
@@ -392,6 +514,71 @@ function removalLine(posting, row, fmt) {
   return `${what}${reason ? ` \u00b7 ${reason}` : ''}`;
 }
 
+const capFirst = (t) => (typeof t === 'string' && t.length ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+
+/** A posting's piece in plain words: "microsatellite" from "Dead microsatellite (est.)", "SL-14 stage", "Cosmos 1175 satellite" (a class name keeps its kind). */
+function pieceWords(posting) {
+  const label = typeof posting.label === 'string' ? posting.label : 'piece';
+  if (/^dead /i.test(label)) return label.replace(/^dead /i, '').replace(/\s*\(est\.\)\s*$/i, '');
+  return stageName(posting);
+}
+
+/** "its" for an owner's piece, "the" for a payer that does not own it (a collector). */
+const ownerWord = (posting) => (posting.client === 'a collector' ? 'the' : 'its');
+
+function atWords(posting, row) {
+  const f = fieldDef(posting.fieldId);
+  const km = row && Number.isFinite(row.altKm) ? row.altKm : (f ? f.altKm : NaN);
+  return Number.isFinite(km) ? `${Math.round(km)} km` : '';
+}
+
+function withTrip(what, row, fmt) {
+  if (!row) return what;
+  if (Number.isFinite(row.gasKg) && Number.isFinite(row.days)) return `${what} \u00b7 ${tripWords(row, fmt)}`;
+  const reason = rowReason(row);
+  return `${what}${reason ? ` \u00b7 ${reason}` : ''}`;
+}
+
+/**
+ * The insurer's job's lines (D):
+ *   "Its insurer wants its dead microsatellite back whole: hand it to the resupply satellite, 800 km, pays 27,500 cr on top (once)"
+ */
+function insurerLine(posting, row, fmt) {
+  const piece = pieceWords(posting);
+  if (posting.done) return `Done: ${capFirst(posting.client)}'s ${piece} handed over whole, insurer's job paid ${commas(posting.paidCr)} cr on top \u2713`;
+  if (posting.missed) return `Missed: ${capFirst(posting.client)}'s ${piece} did not reach the resupply satellite whole, no insurer pay`;
+  const km = atWords(posting, row);
+  const what = `${capFirst(posting.client)} wants its dead ${piece} back whole: hand it to the resupply satellite${km ? `, ${km}` : ''}, pays ${commas(posting.payCr)} cr on top (once)`;
+  return withTrip(what, row, fmt);
+}
+
+/**
+ * The station's part job's lines (E):
+ *   "Russia wants one 5 kg part of its SL-14 stage at 850 km: melt the stage and the part is kept; take it to the station (lined up), pays 10,000 cr"
+ *   with the part aboard: "Part aboard: 5 kg of Russia's SL-14 stage, for the station's return capsule (lined up), pays 10,000 cr"
+ */
+function partLine(posting, row, fmt) {
+  const piece = pieceWords(posting);
+  const kg = Number.isFinite(posting.aboard && posting.aboard.kg) ? posting.aboard.kg : posting.partKg;
+  if (posting.done) return `Done: the station took the ${commas(kg)} kg part of ${capFirst(posting.client)}'s ${piece}, part job paid ${commas(posting.paidCr)} cr \u2713`;
+  if (posting.missed) return `Missed: ${capFirst(posting.client)}'s ${piece} left before a part was kept, no part pay`;
+  if (posting.aboard) return `Part aboard: ${commas(kg)} kg of ${capFirst(posting.client)}'s ${piece}, for the station's return capsule (lined up), pays ${commas(posting.payCr)} cr`;
+  const km = atWords(posting, row);
+  const what = `${capFirst(posting.client)} wants one ${commas(kg)} kg part of ${ownerWord(posting)} ${piece}${km ? ` at ${km}` : ''}: melt the ${posting.what === 'satellite' ? 'satellite' : 'stage'} and the part is kept; take it to the station (lined up), pays ${commas(posting.payCr)} cr`;
+  return withTrip(what, row, fmt);
+}
+
+/** The pay line added to the disposal line of a satellite hand-over that closes the insurer's job. */
+export function insurerPayLine(posting) {
+  return `${capFirst(posting.client)} paid ${commas(posting.paidCr)} cr on top for its ${pieceWords(posting)} back whole.`;
+}
+
+/** The Houston line when the station takes the part: "The station took the 5 kg part of Russia's SL-14 stage for its next return capsule: +10,000 cr". */
+export function partTakenLine(posting, paidCr) {
+  const kg = Number.isFinite(posting.aboard && posting.aboard.kg) ? posting.aboard.kg : posting.partKg;
+  return `The station took the ${commas(kg)} kg part of ${capFirst(posting.client)}'s ${pieceWords(posting)} for its next return capsule: +${commas(paidCr)} cr`;
+}
+
 /** The Vespa bounty's lines (unchanged words). */
 function bountyLine(posting, row, fmt) {
   if (posting.done) return doneLine(posting);
@@ -438,35 +625,49 @@ export function fromSave(saved) {
 
 /** @returns {object|null} the save form of an agency or press job (a copy), or null with nothing posted. Saved inside the save's `jobBoard` (`boardToSave`). */
 export function removalToSave(posting) {
-  if (!posting || !posting.posted || (posting.kind !== 'removal' && posting.kind !== 'press')) return null;
+  if (!posting || !posting.posted || !['removal', 'press', 'insurer', 'part'].includes(posting.kind)) return null;
   const out = {
     v: 1, kind: posting.kind, ...(posting.kind === 'removal' ? { tier: posting.tier === 'B' ? 'B' : 'A' } : {}), fieldId: posting.fieldId, row: posting.row, posted: true,
     done: !!posting.done, missed: !!posting.missed, doneShown: !!posting.doneShown, paidCr: Number.isFinite(posting.paidCr) && posting.paidCr > 0 ? Math.round(posting.paidCr) : 0,
   };
+  if (posting.kind === 'part') {
+    if (posting.aboard && Number.isFinite(posting.aboard.kg) && posting.aboard.kg > 0) out.aboard = { kg: posting.aboard.kg };
+    if (posting.done && Number.isFinite(posting.partKg) && posting.partKg > 0) out.partKg = posting.partKg;      // the part the station took (a done posting has nothing aboard)
+  }
   return out;
 }
 
 /**
- * An agency or press job back from a save: it must name a high field and a row its kind allows (`removalRows(tier)` / `pressRows()`); the client's words and
- * the pay estimate are re-read from the table. Anything else is "not posted yet" (null), never an error.
+ * An agency, press, insurer or part job back from a save: it must name a high field and a row its kind allows (`removalRows(tier)` / `pressRows()` /
+ * `insurerRows()` / `partRows()`); the client's words and the pay estimate are re-read from the table (a part's `aboard` keeps its saved kg). Anything else
+ * is "not posted yet" (null), never an error.
  * @param {*} saved a posting's save form
  * @returns {object|null}
  */
 export function removalFromSave(saved) {
   try {
     if (!saved || typeof saved !== 'object' || saved.v !== 1 || saved.posted !== true) return null;
-    const press = saved.kind === 'press';
-    if (!press && saved.kind !== 'removal') return null;
+    const kind = saved.kind;
+    if (!['removal', 'press', 'insurer', 'part'].includes(kind)) return null;
     const tier = saved.tier === 'B' ? 'B' : 'A';
     const { fieldId, row } = saved;
-    if (typeof fieldId !== 'string' || !Number.isInteger(row) || !(press ? pressRows() : removalRows(tier)).includes(row)) return null;
+    const rows = kind === 'press' ? pressRows() : kind === 'insurer' ? insurerRows() : kind === 'part' ? partRows() : removalRows(tier);
+    if (typeof fieldId !== 'string' || !Number.isInteger(row) || !rows.includes(row)) return null;
     const f = fieldDef(fieldId);
     if (!f || f.kind !== 'high') return null;
-    const posting = jobPosting(press ? 'press' : 'removal', press ? null : tier, fieldId, row, Constants.HIGH_FIELD[row]);
+    const def = Constants.HIGH_FIELD[row];
+    const posting = kind === 'insurer' || kind === 'part'
+      ? stationPosting(kind, fieldId, row, def)
+      : jobPosting(kind, kind === 'press' ? null : tier, fieldId, row, def);
     posting.done = saved.done === true;
     posting.missed = saved.missed === true && saved.done !== true;
     posting.doneShown = saved.doneShown === true;
     posting.paidCr = Number.isFinite(saved.paidCr) && saved.paidCr > 0 ? Math.round(saved.paidCr) : 0;
+    if (kind === 'part') {
+      const ab = saved.aboard;
+      posting.aboard = !posting.done && !posting.missed && ab && typeof ab === 'object' && Number.isFinite(ab.kg) && ab.kg > 0 ? { kg: ab.kg } : null;
+      if (posting.done && Number.isFinite(saved.partKg) && saved.partKg > 0) posting.partKg = saved.partKg;
+    }
     return posting;
   } catch (_e) {
     return null;
@@ -477,30 +678,39 @@ const wholeNum = (n, max) => (Number.isFinite(n) && n > 0 ? Math.min(max, Math.f
 const missionOrNull = (n) => (Number.isFinite(n) && n >= 1 ? Math.floor(n) : null);
 
 /**
- * The save form of the board's agency and press state: the two postings (or null) and the counts. Null when there is nothing to save (a fresh state and
- * no posting), so a save that never saw a job stays byte-identical.
+ * The save form of the board's state: the postings (or null) and the counts. Null when there is nothing to save (a fresh state and no posting), so a save that
+ * never saw a job stays byte-identical. The insurer and part keys are written only when set, so a board that never saw them saves as it did before.
  * @param {object} state `newBoardState()` @param {object|null} removal the agency posting @param {object|null} press the press posting
+ * @param {{insurer?: object|null, part?: object|null}} [extra] the insurer's and the station's part postings
  * @returns {object|null}
  */
-export function boardToSave(state, removal, press) {
+export function boardToSave(state, removal, press, extra = {}) {
   const s = state || newBoardState();
+  const cm = s.closeMission || {};
   const rem = removalToSave(removal);
   const prs = removalToSave(press);
-  const fresh = !rem && !prs && !s.aPosted && !s.bPosted && !s.pressPosted && !s.removed && s.closeMission.removal == null && s.closeMission.press == null;
+  const ins = removalToSave(extra && extra.insurer);
+  const prt = removalToSave(extra && extra.part);
+  const fresh = !rem && !prs && !ins && !prt && !s.aPosted && !s.bPosted && !s.pressPosted && !s.insurerPosted && !s.partPosted && !s.removed
+    && cm.removal == null && cm.press == null && cm.insurer == null && cm.part == null;
   if (fresh) return null;
+  const insClose = missionOrNull(cm.insurer);
+  const prtClose = missionOrNull(cm.part);
   return {
-    v: 1, ...(rem ? { removal: rem } : {}), ...(prs ? { press: prs } : {}),
+    v: 1, ...(rem ? { removal: rem } : {}), ...(prs ? { press: prs } : {}), ...(ins ? { insurer: ins } : {}), ...(prt ? { part: prt } : {}),
     aPosted: wholeNum(s.aPosted, 1), aPaid: s.aPaid === true, bPosted: wholeNum(s.bPosted, 99), pressPosted: wholeNum(s.pressPosted, 99),
-    closeMission: { removal: missionOrNull(s.closeMission.removal), press: missionOrNull(s.closeMission.press) },
+    ...(s.insurerPosted ? { insurerPosted: wholeNum(s.insurerPosted, 99) } : {}), ...(s.partPosted ? { partPosted: wholeNum(s.partPosted, 99) } : {}),
+    closeMission: { removal: missionOrNull(cm.removal), press: missionOrNull(cm.press), ...(insClose != null ? { insurer: insClose } : {}), ...(prtClose != null ? { part: prtClose } : {}) },
     removed: wholeNum(s.removed, 9999),
   };
 }
 
 /**
  * The whole board back from a save: the Vespa bounty from `save.jobs` (the only key a save before the removal jobs holds, so an old save loads exactly as
- * it did, with nothing else posted and every count 0) and the agency and press state from `save.jobBoard`. Malformed pieces drop to "not posted yet".
+ * it did, with nothing else posted and every count 0) and the agency, press, insurer and part state from `save.jobBoard` (a board from before the station jobs
+ * holds no insurer or part keys: nothing posted, counts 0, nothing aboard). Malformed pieces drop to "not posted yet".
  * @param {{jobs?: *, jobBoard?: *}|null} save
- * @returns {{bounty: object|null, removal: object|null, press: object|null, state: object}}
+ * @returns {{bounty: object|null, removal: object|null, press: object|null, insurer: object|null, part: object|null, state: object}}
  */
 export function boardFromSave(save) {
   const s = save && typeof save === 'object' ? save : {};
@@ -511,11 +721,18 @@ export function boardFromSave(save) {
     state.aPaid = b.aPaid === true && state.aPosted > 0;
     state.bPosted = wholeNum(b.bPosted, 99);
     state.pressPosted = wholeNum(b.pressPosted, 99);
+    state.insurerPosted = wholeNum(b.insurerPosted, 99);
+    state.partPosted = wholeNum(b.partPosted, 99);
     const cm = b.closeMission && typeof b.closeMission === 'object' ? b.closeMission : {};
-    state.closeMission = { removal: missionOrNull(cm.removal), press: missionOrNull(cm.press) };
+    state.closeMission = { removal: missionOrNull(cm.removal), press: missionOrNull(cm.press), insurer: missionOrNull(cm.insurer), part: missionOrNull(cm.part) };
     state.removed = wholeNum(b.removed, 9999);
   }
   const removal = b ? removalFromSave(b.removal) : null;
   const press = b ? removalFromSave(b.press) : null;
-  return { bounty: fromSave(s.jobs), removal: removal && removal.kind === 'removal' ? removal : null, press: press && press.kind === 'press' ? press : null, state };
+  const insurer = b ? removalFromSave(b.insurer) : null;
+  const part = b ? removalFromSave(b.part) : null;
+  return {
+    bounty: fromSave(s.jobs), removal: removal && removal.kind === 'removal' ? removal : null, press: press && press.kind === 'press' ? press : null,
+    insurer: insurer && insurer.kind === 'insurer' ? insurer : null, part: part && part.kind === 'part' ? part : null, state,
+  };
 }

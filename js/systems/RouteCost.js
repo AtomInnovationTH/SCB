@@ -47,6 +47,7 @@ import { planeAngle, planeChangeDeltaV } from '../entities/OrbitalMechanics.js';
 import { pieceValues } from './BigPieceValues.js';
 import { isJobPiece, jobPayCr } from './JobsBoard.js';
 import { planBurn } from './BigMelt.js';
+import { gapChangeOverLeg, isLinedUp } from './NodeDrift.js';
 
 const SECONDS_PER_DAY = 86400;
 
@@ -377,7 +378,10 @@ export function pieceValue(piece, ctx) {
   // the ordinary fee, so `feeCr` is the job pay. Any other piece, or no postings, is the ordinary fee as before.
   const job = Array.isArray(ctx.jobPostings) ? ctx.jobPostings.find((p) => p && (p.kind === 'removal' || p.kind === 'press') && isJobPiece(p, piece)) : null;
   const feeCr = job ? jobPayCr(job, massKg) : pieceValues(piece).removalFeeCr;
-  return { creditsCr, salvageCr, feeCr, massKg, kept, valueCr: creditsCr + salvageCr + feeCr, basis: PAY_BASIS };
+  // The insurer's job (JobsBoard kind 'insurer', plan route-1101 J5): its flat pay comes ON TOP of a satellite hand-over of its piece, never of a push or a melt.
+  // It rides on the value (`insurerCr`), not on the piece's `big` info: `RoutePlanner.bigInfo` is memoized by the piece's type and mass and would go stale.
+  const ins = Array.isArray(ctx.jobPostings) ? ctx.jobPostings.find((p) => p && p.kind === 'insurer' && isJobPiece(p, piece)) : null;
+  return { creditsCr, salvageCr, feeCr, massKg, kept, valueCr: creditsCr + salvageCr + feeCr, basis: PAY_BASIS, ...(ins ? { insurerCr: jobPayCr(ins, massKg) } : {}) };
 }
 
 /** A piece with no credit and no salvage (and no fee) is not a candidate. @param {{creditsCr: number, salvageCr: number, feeCr?: number}} v */
@@ -421,6 +425,15 @@ export function isCandidate(v) {
  *                                                      {pushKm, satExtraCr, melt: {partKg, metalPerKg, shareCr}} for a big piece)
  *   {kind: 'push', pieceId, pushKm}                    take that piece (aboard) down to `pushKm`, let go; pays its fee
  *   {kind: 'melt', pieceId, melt}                      mark that piece (aboard) for the furnaces: they melt it during the next transfers
+ *   {kind: 'station', id, fieldId, altKm, payCr}       (route-1101 J5 Task 12) a transfer to the station field as a `field` stop is (a mission starts there);
+ *                                                      if the part for the station's part job is aboard and the node gap (`state.gapDeg`, moved by every leg's days)
+ *                                                      is within `linedUpDeg` on arrival, the station takes it and pays `payCr` (`totals.partCr`)
+ *
+ * The node gap (`state.gapDeg`, `state.incDeg`): the walker moves it by `NodeDrift.gapChangeOverLeg` for every leg that takes days (a transfer from its height
+ * samples, an approach at the height she holds); without both numbers it is not tracked and a station stop pays nothing. `state.partAboard` (true: the part is
+ * aboard at planning). A melt of the piece the part job names (`stop.partJob`) keeps its first part whole (`applyMelts`, as the game's `_meltKeepPart`): the part
+ * is aboard from then on. NOT modelled: the turn she flies first (`daysWithTurnWait`), a wait to line up (the list's own wait row), the rest of the gap's drift
+ * during a mission's catches (only approach days are counted).
  */
 
 /** Moves a route may hold (the current mission, then at most this many moves; beyond it no piece is known). */
@@ -432,20 +445,25 @@ const stopValueCr = (s) => (s && s.value ? (s.value.valueCr ?? ((s.value.credits
  * An upper bound of what taking a stop can add to any route (the exact search's ceiling): the piece's value (catch, salvage and fee) plus the
  * most its disposal can add beyond the fee: a hand-over's parts and collector pay (`satExtraCr`), or the metal of a melt at the in-orbit price
  * (a melt pays the fee less the owner's share, so the fee itself is already counted). A piece's disposal is a stop of its own with no value of
- * its own, so without this the search would cut a route whose best part is a hand-over or a melt of a piece not yet caught.
+ * its own, so without this the search would cut a route whose best part is a hand-over or a melt of a piece not yet caught. The station stop's pay
+ * counts in full (the part may be aboard by then).
  */
-const stopCeilingCr = (s) => {
+export const stopCeilingCr = (s) => {
+  if (s && s.kind === 'station') return Math.max(0, s.payCr || 0);
   const base = stopValueCr(s);
   const big = s && s.big;
   if (!big) return base;
   const metal = (s.value && s.value.massKg || 0) * ((big.melt && big.melt.metalPerKg) || 0) * Constants.BIG_PIECES.IN_ORBIT_CR_PER_KG;
-  return base + Math.max(big.satExtraCr || 0, metal);
+  const insurer = (s.value && s.value.insurerCr) || 0;                // the insurer's job pays on top of a hand-over only (JobsBoard kind 'insurer')
+  return base + Math.max((big.satExtraCr || 0) + insurer, metal);
 };
 const stopCatchCr = (s) => (s && s.value ? (s.value.creditsCr || 0) + (s.value.salvageCr || 0) : 0);
 const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
 /** What taking a big piece to `fate` ('satellite' | 'push') pays: its fee as `pieceValue` says (a job's pay included), plus a hand-over's parts and collector pay. */
-const disposalPay = (stop, fate) => (stop && stop.value ? (stop.value.feeCr || 0) : 0) + (fate === 'satellite' && stop && stop.big ? (stop.big.satExtraCr || 0) : 0);
+const disposalPay = (stop, fate) => (stop && stop.value ? (stop.value.feeCr || 0) : 0)
+  + (fate === 'satellite' && stop && stop.big ? (stop.big.satExtraCr || 0) : 0)
+  + (fate === 'satellite' && stop && stop.value ? (stop.value.insurerCr || 0) : 0);     // the insurer's flat pay (J5): a hand-over of its piece only
 /** Metal sold at a satellite: a lot of `BULK_THRESHOLD_KG` or more nets the in-orbit price per kg (`metalListedCrPerKg`), a smaller lot loses the bulk bonus. */
 function metalSaleCr(kg) {
   const price = Constants.BIG_PIECES.IN_ORBIT_CR_PER_KG;
@@ -460,7 +478,7 @@ const meltPay = (stop, massKg, frac = 1) => {
 };
 /** The most a big piece still aboard can pay when it is disposed of (the search's upper bound and the beam's look-ahead). */
 const potentialCr = (w) => {
-  let s = 0;
+  let s = w.partAboard && !w.partPaid ? (w.partCr || 0) : 0;         // the part aboard for the station's part job: the station stop pays it
   for (const a of w.aboard) {
     if (a.melting) { const m = w.melts.find((x) => x.id === a.id); s += m ? meltPay(a.stop, a.massKg, m.leftKg / m.massKg) : 0; continue; }
     s += Math.max(disposalPay(a.stop, 'satellite'), disposalPay(a.stop, 'push'), meltPay(a.stop, a.massKg));
@@ -482,12 +500,15 @@ function freshWalk(state) {
   const melts = [];
   for (const h of held) {
     const m = h.melting && h.stop && h.stop.big && h.stop.big.melt;
-    if (m && m.partKg > 0) melts.push({ id: h.id, massKg: h.melting.wholeKg, leftKg: h.melting.leftKg, partKg: m.partKg, metalPerKg: m.metalPerKg, feeCr: h.melting.feeCr, shareCr: m.shareCr || 0 });
+    if (m && m.partKg > 0) melts.push({ id: h.id, massKg: h.melting.wholeKg, leftKg: h.melting.leftKg, partKg: m.partKg, metalPerKg: m.metalPerKg, feeCr: h.melting.feeCr, shareCr: m.shareCr || 0, keep: !!h.stop.partJob && h.melting.leftKg >= h.melting.wholeKg - 1e-9 });
   }
   return {
     dryMassKg: state.dryMassKg, gasKg: state.gasKg, carriedKg: state.carriedKg || 0, altKm: state.altKm,
     fieldId: state.fieldId ?? null, posM: state.posM || null,
     gasUsedKg: 0, days: 0, valueCr: 0, feeCr: 0, metalCr: 0, ok: true,
+    // the station's part job (J5 Task 12): the node gap as the route's days move it (null = not tracked), the part aboard, what the station paid
+    gapDeg: Number.isFinite(state.gapDeg) && Number.isFinite(state.incDeg) ? state.gapDeg : null,
+    partAboard: !!state.partAboard, partPaid: false, partCr: Number.isFinite(state.partCr) ? state.partCr : 0, partPaidCr: 0,
     left: Math.max(0, Math.min(quotaOf(), Math.floor(Number(state.catchesLeft) || 0))),   // catches still owed to the mission she is in
     moves: 0, unscanned: 0, metalKg: 0,
     holdRoomKg: Number.isFinite(state.holdRoomKg) ? state.holdRoomKg : Infinity,
@@ -500,6 +521,12 @@ function freshWalk(state) {
 /** The route's shape so far: finished segments (their pieces sorted) and the open one. */
 const sigOf = (w) => w.sigDone + w.sigGroup.slice().sort().join(',');
 function sigMove(w, token) { w.sigDone += `${w.sigGroup.slice().sort().join(',')}>${token};`; w.sigGroup = []; w.shape += `${token};`; }
+
+/** The node gap moves by the station's rate minus hers over a leg's `days` (NodeDrift.gapChangeOverLeg); `samples` only for an exact transfer. Not tracked: nothing. */
+function advanceGap(w, state, days, fromKm, altKm, samples) {
+  if (w.gapDeg === null || !(days > 0)) return;
+  w.gapDeg += gapChangeOverLeg({ days, fromKm, altKm, samples }, state.incDeg);
+}
 
 /**
  * The close-in approach distance a catch nobody priced is flown at, metres. ESTIMATE, not a rule of the game: the pieces of an ordinary field
@@ -526,7 +553,7 @@ function fillQuota(w, steps, x) {
         const massKg = w.dryMassKg + w.carriedKg + w.gasKg;
         const ap = approachLeg({ distanceM, massKg });
         ok = ap.ok && fitsGas(w, ap.gasKg, x.fast);
-        w.gasKg -= ap.gasKg; w.gasUsedKg += ap.gasKg; w.days += ap.days;
+        w.gasKg -= ap.gasKg; w.gasUsedKg += ap.gasKg; w.days += ap.days; advanceGap(w, x.state, ap.days, w.altKm, w.altKm);
         if (x.legs) x.legs.push({ kind: 'approach', stop: x.stopIndex, distanceM, gasKg: ap.gasKg, days: ap.days, massKg, gasLeftKg: w.gasKg, ok, unscanned: true });
       }
     }
@@ -555,21 +582,33 @@ function applyMelts(w, days, state, steps) {
   if (!plan.parts.length) return;
   const done = {};
   for (const p of plan.parts) done[p.pieceId] = (done[p.pieceId] || 0) + p.kg;
-  let paid = 0; let meltedKg = 0; const finished = [];
+  let paid = 0; let meltedKg = 0; let keptKg = 0; let keptMetalKg = 0; const finished = [];
   w.melts = w.melts.map((m) => {
     const kg = done[m.id] || 0;
     if (!(kg > 0)) return m;
     const f = kg / m.massKg;
-    const pay = Math.max(0, m.feeCr * f - m.shareCr * f);
+    let pay = Math.max(0, m.feeCr * f - m.shareCr * f);
+    let keepNow = false;
+    // The station's part job (J5, the game's `_meltKeepPart`): the posted piece's first part is set aside whole, not melted: its share of the fee is paid without the
+    // owner's share of metal, no metal is made for it, and it stays aboard (it is never the piece's last part). One part per job.
+    if (m.keep && !w.partAboard && m.leftKg >= m.massKg - 1e-9 && m.partKg < m.leftKg - 1e-9) {
+      keepNow = true;
+      const k = Math.min(m.partKg, kg);
+      pay += m.shareCr * (k / m.massKg);
+      keptKg = k; keptMetalKg = k * (m.metalPerKg || 0);
+      w.partAboard = true;
+      if (steps) steps.push({ kind: 'keep', id: m.id, kg: k });
+    }
     paid += pay; meltedKg += kg;
     const left = m.leftKg - kg;
     if (left <= 1e-6) { finished.push(m.id); if (steps) steps.push({ kind: 'dispose', fate: 'melt', id: m.id, payCr: pay }); }
-    return { ...m, leftKg: Math.max(0, left) };
+    return { ...m, leftKg: Math.max(0, left), ...(keepNow ? { keep: false } : {}) };
   }).filter((m) => m.leftKg > 1e-6);
   if (finished.length) w.aboard = w.aboard.filter((a) => !finished.includes(a.id));
   w.valueCr += paid; w.feeCr += paid;
-  w.carriedKg = Math.max(0, w.carriedKg - meltedKg + plan.metalKg);
-  w.metalKg += plan.metalKg; w.holdRoomKg -= plan.metalKg;
+  const metalKg = plan.metalKg - keptMetalKg;                         // the kept part makes no metal
+  w.carriedKg = Math.max(0, w.carriedKg - (meltedKg - keptKg) + metalKg);   // (the kept part stays on her mass)
+  w.metalKg += metalKg; w.holdRoomKg -= metalKg + keptKg;
 }
 
 /** Run one stop on a walk state `w` (mutated), pushing legs onto `legs` (or not, when null); false when a leg or a rule does not allow it. */
@@ -584,7 +623,9 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
     // a climb the engine cannot finish inside the game's own limit is not run (a heavy hold would spend seconds of CPU finding that out)
     const t = climbTooLong(args) ? { ok: false, gasKg: 0, days: 0 } : transfer(args);
     const fits = t.ok && fitsGas(w, t.gasKg, fast);
-    w.gasKg -= t.gasKg; w.gasUsedKg += t.gasKg; w.days += t.days; w.altKm = toKm;
+    w.gasKg -= t.gasKg; w.gasUsedKg += t.gasKg; w.days += t.days;
+    advanceGap(w, state, t.days, w.altKm, toKm, t.profile && t.profile.samples);          // before `altKm` moves: the leg's own heights
+    w.altKm = toKm;
     if (legs) legs.push({ kind: 'transfer', stop: stopIndex, toKm, gasKg: t.gasKg, days: t.days, massKg, gasLeftKg: w.gasKg, ok: fits });
     if (fits) applyMelts(w, t.days, state, steps);
     return fits;
@@ -621,7 +662,7 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
     const distanceM = dist3(here, target);
     const ap = approachLeg({ distanceM, massKg });
     const fits = ap.ok && fitsGas(w, ap.gasKg, fast);
-    w.gasKg -= ap.gasKg; w.gasUsedKg += ap.gasKg; w.days += ap.days;
+    w.gasKg -= ap.gasKg; w.gasUsedKg += ap.gasKg; w.days += ap.days; advanceGap(w, state, ap.days, w.altKm, w.altKm);
     if (legs) legs.push({ kind: 'approach', stop: stopIndex, distanceM, gasKg: ap.gasKg, days: ap.days, massKg, gasLeftKg: w.gasKg, ok: fits });
     if (!fits) return false;
     w.posM = { x: target.x, y: target.y, z: target.z };
@@ -665,18 +706,19 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
     const m = stop.melt;
     if (!a || !m || !(m.partKg > 0)) return false;
     w.aboard = w.aboard.map((x) => (x === a ? { ...x, melting: true } : x));
-    w.melts = w.melts.concat({ id: a.id, massKg: a.massKg, leftKg: a.massKg, partKg: m.partKg, metalPerKg: m.metalPerKg, feeCr: (a.stop.value && a.stop.value.feeCr) || 0, shareCr: m.shareCr || 0 });
+    w.melts = w.melts.concat({ id: a.id, massKg: a.massKg, leftKg: a.massKg, partKg: m.partKg, metalPerKg: m.metalPerKg, feeCr: (a.stop.value && a.stop.value.feeCr) || 0, shareCr: m.shareCr || 0, keep: !!a.stop.partJob });
     w.sigGroup = w.sigGroup.concat(`melt:${a.id}`);
     if (steps) steps.push({ kind: 'melt', stop: stopIndex, id: a.id });
     return true;
   }
-  // a field or the satellite: a move, a transfer, then she is at its arrival point
+  // a field, the station field or the satellite: a move, a transfer, then she is at its arrival point
   if (!beginMove()) return false;
-  if (w.altKm !== stop.altKm || (stop.id && stop.id !== w.fieldId)) {
+  const destId = stop.kind === 'station' ? stop.fieldId : stop.id;
+  if (w.altKm !== stop.altKm || (destId && destId !== w.fieldId)) {
     if (!doTransfer(stop.altKm)) return false;
   } else if (legs) legs.push({ kind: 'transfer', stop: stopIndex, toKm: stop.altKm, gasKg: 0, days: 0, massKg: w.dryMassKg + w.carriedKg + w.gasKg, gasLeftKg: w.gasKg, ok: true });
   w.posM = null;
-  w.fieldId = stop.kind === 'sat' ? null : (stop.id ?? null);
+  w.fieldId = stop.kind === 'sat' ? null : (destId ?? null);
   if (stop.kind === 'sat') {
     // handed over: the big pieces aboard stay at the satellite and pay (DECISIONS §49 row 2), the orbit metal is sold; what is still in the furnaces stays aboard
     let mass = 0;
@@ -696,6 +738,12 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
   } else {
     w.left = quota;
     if (steps) steps.push({ kind: 'move', what: 'field', stop: stopIndex, id: w.fieldId, altKm: stop.altKm, unscanned: true });
+    // The station takes the part she carries when she arrives lined up (GameFlowManager `_stationHandOver`, on FIELD_ARRIVED): the gap as the route's own days left it
+    if (stop.kind === 'station' && w.partAboard && !w.partPaid && w.gapDeg !== null && isLinedUp(w.gapDeg)) {
+      const cr = Math.max(0, stop.payCr || 0);
+      w.partPaid = true; w.partAboard = false; w.partPaidCr += cr; w.valueCr += cr;
+      if (steps) steps.push({ kind: 'dispose', fate: 'station', id: stop.id, payCr: cr });
+    }
     sigMove(w, `f:${w.fieldId}`);
   }
   return true;
@@ -728,7 +776,7 @@ export function walkRoute(state, stops) {
     legs, steps,
     totals: {
       gasKg: w.gasUsedKg, days: w.days, valueCr: w.valueCr, feeCr: w.feeCr, metalCr: w.metalCr, gasLeftKg: w.gasKg, carriedKg: w.carriedKg, feasible,
-      moves: w.moves, unscanned: w.unscanned,
+      moves: w.moves, unscanned: w.unscanned, partCr: w.partPaidCr, gapDeg: w.gapDeg,
     },
   };
 }
