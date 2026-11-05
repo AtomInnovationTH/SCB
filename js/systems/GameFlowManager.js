@@ -1184,6 +1184,16 @@ export class GameFlowManager {
         // pays NOTHING twice: score, manual-capture bookkeeping, salvage, the cleared counter and the autosave all belong to
         // the single credited event.
         if (countCatch) {
+        // The mission's one count, told to whoever else counts catches (RewardSystem's "Five captures this sweep", first capture,
+        // 10 / 25 / 50): same rule, so a reloaded already-credited piece, a digest completion and a re-caught bag member add
+        // nothing there either. Emitted here, before the field removal below that can clear a cluster (RewardSystem's own
+        // CLUSTER_CLEARED reset), so the count never depends on listener registration order.
+        eventBus.emit(Events.CATCH_COUNTED, {
+          debrisId: debris ? debris.id : data.debrisId,
+          bodyIds: bodies.filter(Boolean).map((b) => b.id),
+          armId: data.armId || null,
+          method: data.method || 'arm',
+        });
         // Award score via scoring system. `method` honours the emitter — 'arm' for daughters, 'mother' for a berthed whale
         // (§4.8/§19). ScoringSystem's METHOD_BONUS[method] || 1.0 accepts any string, so a new method needs no scoring-model
         // change.

@@ -525,6 +525,19 @@ export class InputManager {
     return this.armPilotMode;
   }
 
+  /**
+   * True only while the player is flying a daughter BY HAND: the pilot view is up AND one of the hand-flying keys that
+   * emit ARM_ORBIT_ADJUST is held (arrows, `=`/`-`, numpad ±; see processInput). The pilot view alone is not hand
+   * flying: the game enters it by itself after a launch (SimClock's `daughterByHand` gate reads this, t9-misc).
+   * @returns {boolean}
+   */
+  isArmHandFlying() {
+    if (!this.armPilotMode) return false;
+    const k = this.keys;
+    return !!(k.ArrowLeft || k.ArrowRight || k.ArrowUp || k.ArrowDown
+      || k.Equal || k.NumpadAdd || k.Minus || k.NumpadSubtract);
+  }
+
   /** @param {boolean} val */
   setArmPilotMode(val) {
     this.armPilotMode = val;

@@ -52,7 +52,7 @@ export const SIM_GATES = Object.freeze([
  * @param {boolean} [s.ceremony]      CeremonyTimeScale.get() < 1 or an owner set
  * @param {boolean} [s.leash]         player.leashDriver.busy
  * @param {boolean} [s.conjunction]   a conjunction alert is up
- * @param {boolean} [s.daughterByHand] inputManager.isArmPilotMode()
+ * @param {boolean} [s.daughterByHand] inputManager.isArmHandFlying(): pilot view AND a hand-flying key held
  * @param {boolean} [s.arrowKeys]     an arrow key is held
  * @returns {string|null}
  */

@@ -14,7 +14,7 @@ export class RewardSystem {
     /** @type {Map<string,boolean>} */
     this.milestones = new Map();
 
-    this._totalCatches = 0;
+    this._totalCatches = 0;   // catches the mission counted (CATCH_COUNTED, `_onSecured`), the counts the "Five captures" lines read
     this._totalLassoCatches = 0;
     this._totalArmCatches = 0;
 
@@ -115,13 +115,25 @@ export class RewardSystem {
     });
 
     // A detached capture is ARM_CAPTURED with `data.detached` (see _checkMilestones).
+
+    // The running counts (first capture, 5 / 10 / 25 this sweep, 50 total) count the catches the MISSION counts: GameFlowManager
+    // emits CATCH_COUNTED once per body, inside its `countCatch` rule (not a digest completion, body not yet credited; that rule
+    // reads the body's own `_credited` mark, so it holds after a load too). A net hit that rips a moment later is no catch (training 1,
+    // 2026-11-05: "Five captures this sweep" came on a hit that tore 0.14 s later). CATCH_COUNTED is emitted before the field removal
+    // that can fire CLUSTER_CLEARED (our per-sweep reset), so no listener-registration order matters.
+    eventBus.on(Events.CATCH_COUNTED, (data) => { this._onSecured(data); });
+  }
+
+  /** @private The mission counted a catch (CATCH_COUNTED, once per body: the de-dup is GameFlowManager's). @param {object} data CATCH_COUNTED payload */
+  _onSecured(data) {
+    this._totalCatches++;
+    this._trawlCatches++;
+    this._checkMilestones(data, null, 'secured');
   }
 
   /** @private @param {object} data — ARM_CAPTURED payload @param {string} method — 'arm' | 'lasso' | other */
   _onCapture(data, method) {
-    this._totalCatches++;
-    this._trawlCatches++;
-
+    // (`_totalCatches` / `_trawlCatches` count secured catches: `_onSecured`)
     if (method === 'arm') {
       this._totalArmCatches++;
       this._trawlArmCatches++;
@@ -137,7 +149,7 @@ export class RewardSystem {
     this._fieldCaptured++;
     this._checkFieldClearing();
 
-    this._checkMilestones(data, method);
+    this._checkMilestones(data, method, 'hit');
 
     this._checkRapidStreak();
 
@@ -149,44 +161,47 @@ export class RewardSystem {
    * one line per fact). Specific = about this very catch (a free-flying catch, a large daughter's first, the
    * first lasso catch) before the running counts (50 total, 25 / 10 / 5 this sweep), and the plain
    * "first capture ever" last. Every milestone is still recorded as reached.
+   * `part`: 'hit' = only the lines about the grab itself (large daughter, lasso, free-flying: ARM_CAPTURED), 'secured' = only the running
+   * counts (first capture, 5 / 10 / 25 / 50: CATCH_COUNTED, `_onSecured`), omitted = both.
    * @private
    */
-  _checkMilestones(data, method) {
+  _checkMilestones(data, method, part) {
+    const counts = part !== 'hit', kinds = part !== 'secured';
     // [rank (lower = more specific), line]
     const reached = [];
     const reach = (key, rank, line) => { this.milestones.set(key, true); reached.push([rank, line]); };
 
-    if (this._totalCatches === 1 && !this.milestones.has('firstCatch')) {
+    if (counts && this._totalCatches === 1 && !this.milestones.has('firstCatch')) {
       reach('firstCatch', 7, 'Houston: Confirmed first capture. Welcome to the cleanup crew, Cowboy.');
     }
 
-    if (this._trawlCatches === 5 && !this.milestones.has('trawl5')) {
+    if (counts && this._trawlCatches === 5 && !this.milestones.has('trawl5')) {
       reach('trawl5', 6, 'Houston: Five captures this sweep. Solid work out there.');
     }
 
-    if (this._trawlCatches === 10 && !this.milestones.has('trawl10')) {
+    if (counts && this._trawlCatches === 10 && !this.milestones.has('trawl10')) {
       reach('trawl10', 5, 'Houston: Ten confirmed. You\'re making a real dent in this cluster.');
     }
 
-    if (this._trawlCatches === 25 && !this.milestones.has('trawl25')) {
+    if (counts && this._trawlCatches === 25 && !this.milestones.has('trawl25')) {
       reach('trawl25', 4, 'Houston: Twenty-five. That\'s a record pace. Ground team is watching.');
     }
 
-    if (this._totalCatches === 50 && !this.milestones.has('total50')) {
+    if (counts && this._totalCatches === 50 && !this.milestones.has('total50')) {
       reach('total50', 3, 'Houston: Fifty objects secured. Command is talking about naming a procedure after you.');
     }
 
     // Weaver = large arm
-    if (method === 'arm' && data && data.type === 'weaver' && !this.milestones.has('firstWeaver')) {
+    if (kinds && method === 'arm' && data && data.type === 'weaver' && !this.milestones.has('firstWeaver')) {
       reach('firstWeaver', 1, 'Houston: First catch by a large daughter. The mother keeps her fuel for the heavy pieces.');
     }
 
-    if (method === 'lasso' && !this.milestones.has('firstLasso')) {
+    if (kinds && method === 'lasso' && !this.milestones.has('firstLasso')) {
       reach('firstLasso', 2, 'Houston: Lasso capture confirmed. Quick reflexes out there.');
     }
 
     // Arm was free-flying when it caught
-    if (data && data.detached && !this.milestones.has('firstDetachedCapture')) {
+    if (kinds && data && data.detached && !this.milestones.has('firstDetachedCapture')) {
       this._detachedCaptures++;
       reach('firstDetachedCapture', 0, 'Houston: Free-flying capture confirmed! That\'s one for the textbooks.');
     }

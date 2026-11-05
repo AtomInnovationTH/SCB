@@ -27,6 +27,7 @@ import { DebrisField } from './DebrisField.js';
 import { clearRackCell, berthAnchorLocalInto, catchHomeDistM, homeShapeKey, isInspectOnlyMass } from './CaptureNet.js';
 import { noseBucketFor, noseRadiatorsOk, noseWindowSpans } from './NoseRoute.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
+import { attitudeTurnProfile } from '../systems/AutopilotSystem.js';   // the gas turn's planned time (reel-home line-up estimate)
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import {
   pieceClaim, isFree, linesCross, lineWrapsShip, pieceIsCaught,
@@ -3971,35 +3972,11 @@ export class ArmManager {
     if (!owner) return;
     if (this._rhTurn) { owner._rhMotherWorking = true; return; }
     if (owner._rhTurnWaitS > 0) return;
-    const v = owner._rhRelShip;
-    if (!v) return;
     const az = owner._rhAzRad();
     const tol = (RH.PLANE_TOL_DEG ?? 5) * DEG2RAD;
-    // which error: first the one across the strut's swing plane (a turn about its radial direction); once in the plane, the one along it
-    // (the strut can only point at [STRUT_MIN, STRUT_MAX]: below the floor the mother turns about the plane's normal)
-    let theta;
-    let axisL;
-    let tracked = false;
-    if (Math.abs(owner._rhPlaneErrRad) > tol) {
-      // closed loop (see the docblock): the angle left is read from her live place every frame (`_rhTrackPlane`). Without the ship's
-      // place (a headless stub) the open-loop angle from the hinge direction stays.
-      const live = this._rhPlaneTurnLeft(owner, az);
-      if (live !== null) {
-        theta = live;
-        tracked = true;
-      } else {
-        const vt = -v.x * Math.sin(az) + v.y * Math.cos(az);
-        theta = Math.atan2(vt, -v.z);
-        if (theta > Math.PI / 2) theta -= Math.PI; else if (theta <= -Math.PI / 2) theta += Math.PI;
-      }
-      axisL = _rhAxisR.set(Math.cos(az), Math.sin(az), 0);
-    } else {
-      theta = _rhFloorTheta(v, az, RH);                                         // turning the ship by +t moves her angle by +t (shared with `reelHoldReason`)
-      if (theta === 0) return;
-      if (Math.abs(theta) <= tol) return;                                       // a few degrees short: the 2 m check decides
-      axisL = _rhAxisR.set(-Math.sin(az), Math.cos(az), 0);
-    }
-    if (Math.abs(theta) > (RH.TURN_MAX_DEG ?? 60) * DEG2RAD || Math.abs(theta) < 1e-3) return;
+    const want = this._rhTurnAsk(owner);
+    if (!want) return;
+    const { theta, axisL, tracked } = want;
     const ap = this._autopilot;
     if (!ap || typeof ap.requestAttitudeTurn !== 'function') return;
     if (this._motherTurnBlock(owner)) return;
@@ -4033,6 +4010,77 @@ export class ArmManager {
     if (!tracked) owner._rhFloorRefused = false;
     this._rhTurn = turn;
     owner._rhMotherWorking = true;
+  }
+
+  /**
+   * The turn the mother would be asked for to line `owner` up now (the one `_tickReelHomeTurn` requests), or null when none is
+   * (no look at her yet, a few degrees short, inside the strut's range, or more than TURN_MAX_DEG). Which error: first the one
+   * across the strut's swing plane (a turn about its radial direction); once in the plane, the one along it (the strut can only
+   * point at [STRUT_MIN, STRUT_MAX]: below the floor the mother turns about the plane's normal). `axisL` is a shared scratch
+   * vector (ship-local): read it before the next call. Pure read.
+   * @param {ArmUnit} owner
+   * @returns {{theta:number, axisL:THREE.Vector3, tracked:boolean}|null}
+   */
+  _rhTurnAsk(owner) {
+    const RH = Constants.REEL_HOME || {};
+    const v = owner._rhRelShip;
+    if (!v) return null;
+    const az = owner._rhAzRad();
+    const tol = (RH.PLANE_TOL_DEG ?? 5) * DEG2RAD;
+    let theta;
+    let axisL;
+    let tracked = false;
+    if (Math.abs(owner._rhPlaneErrRad) > tol) {
+      // closed loop (see `_tickReelHomeTurn`): the angle left is read from her live place every frame (`_rhTrackPlane`). Without the ship's
+      // place (a headless stub) the open-loop angle from the hinge direction stays.
+      const live = this._rhPlaneTurnLeft(owner, az);
+      if (live !== null) {
+        theta = live;
+        tracked = true;
+      } else {
+        const vt = -v.x * Math.sin(az) + v.y * Math.cos(az);
+        theta = Math.atan2(vt, -v.z);
+        if (theta > Math.PI / 2) theta -= Math.PI; else if (theta <= -Math.PI / 2) theta += Math.PI;
+      }
+      axisL = _rhAxisR.set(Math.cos(az), Math.sin(az), 0);
+    } else {
+      theta = _rhFloorTheta(v, az, RH);                                         // turning the ship by +t moves her angle by +t (shared with `reelHoldReason`)
+      if (theta === 0) return null;
+      if (Math.abs(theta) <= tol) return null;                                  // a few degrees short: the 2 m check decides
+      axisL = _rhAxisR.set(-Math.sin(az), Math.cos(az), 0);
+    }
+    if (Math.abs(theta) > (RH.TURN_MAX_DEG ?? 60) * DEG2RAD || Math.abs(theta) < 1e-3) return null;
+    return { theta, axisL, tracked };
+  }
+
+  /**
+   * Ship seconds the mother's line-up turn for `arm` is expected to take, for the reel-start line ("about N s of ship time"):
+   * 0 when no turn would be asked (`_rhTurnAsk`: inside the range or too big, no autopilot to turn her, or the mother is not free:
+   * `_motherTurnBlock(arm)`, then she lines herself up and no turn is promised). The turn's source is the one the autopilot
+   * would pick (`attitudeTorqueSource`): the wheels' `wheelTurnTimeS`, or the gas's fixed profile time (`attitudeTurnProfile`).
+   * Only the first turn (plane, else floor) is counted: the floor turn after a plane turn is not. Infinity when no source can
+   * turn her. Reads her place from her last frame (`_rhStrutAim` is run here from `parentPos` / `parentQuat`, as every reeling
+   * frame does).
+   * @param {ArmUnit} arm
+   * @param {THREE.Vector3} [parentPos]
+   * @param {THREE.Quaternion} [parentQuat]
+   * @returns {number} seconds
+   */
+  reelHomeTurnEstimateS(arm, parentPos, parentQuat) {
+    const ap = this._autopilot;
+    const ps = this.playerSatellite;
+    if (!arm || !ps || !ap || typeof ap.requestAttitudeTurn !== 'function') return 0;
+    if (!Constants.isFeatureEnabled('REEL_HOME')) return 0;
+    if (typeof arm._rhStrutAim === 'function') arm._rhStrutAim(parentPos || ps.position, parentQuat || ps.quaternion);
+    const want = this._rhTurnAsk(arm);
+    if (!want) return 0;
+    if (this._motherTurnBlock(arm)) return 0;
+    const { theta, axisL } = want;
+    const src = typeof ps.attitudeTorqueSource === 'function'
+      ? ps.attitudeTorqueSource({ spinUp: true, angleRad: theta, nx: axisL.x, ny: axisL.y, quiet: true }) : 'coldGas';
+    if (src === 'wheels' && typeof ps.wheelTurnTimeS === 'function') return ps.wheelTurnTimeS(theta, axisL.x, axisL.y);
+    const prof = attitudeTurnProfile(ps, { x: axisL.x, y: axisL.y, z: 0 }, theta, { boxes: src === 'tailBoxes' });
+    return prof && prof.ok ? prof.T : Infinity;
   }
 
   // reel-hold (owner 2026-10-23): a daughter waits 5 m out until the floor turn is done and the radiators are clear

@@ -513,6 +513,11 @@ export function pairSavedLine(xG, yG) {
 /** The lesson's closing sentence (always said, saved or not). */
 export const PAIR_PARK_LINE = 'Park the ship between two pieces to get more double shots.';
 
+/** The lesson, a pair whose turn the plan did not foresee (the gas took it): only what was billed, no comparison with plans. */
+export function pairUsedLine(xG) {
+  return `Double shot: ${xG.toFixed(1)} g of gas used.`;
+}
+
 /** The lesson, a pair that saved nothing here: plain words, and why. */
 export function pairSameLine(xG) {
   return `Double shot: about ${xG.toFixed(1)} g of gas, the same as two singles here: pairs save most when the ship would have to turn.`;

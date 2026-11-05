@@ -879,6 +879,13 @@ export const Constants = {
     LOS_CHECK_S: 0.8,            // s: the first look at the measured rate; the aim is re-judged every LOS_RECHECK_S after
     LOS_RECHECK_S: 0.5,
     LOS_TAU_S: 0.5,              // s: the measured rate is smoothed over this time
+    // The autopilot's approach slew (a world heading that turns with the orbit, ~0.011 rad/s at the 10x world clock) rides the wheels only while
+    // they can follow (t9-slew, 2026-11-05; browser training 3: the wheels lagged 6.5 degrees behind, then filled, and the approach never arrived).
+    // With steering gas aboard a wheel slew is handed to the gas when the wheels are full and the error is not shrinking, or it makes no progress for this long.
+    SLEW_STALL_S: 30,            // game s: the heading error has not shrunk by SLEW_PROGRESS_DEG in this time. The wheels spin up to the heading's rate in
+                                 // (rate / alpha) = 0.011 / (0.25 N·m / 381 kg·m²) = ~17 s at the worst pose (radiators 146°, computed); twice that
+                                 // is a wheel slew that is not closing, not one still spinning up.
+    SLEW_PROGRESS_DEG: 0.5,      // degrees the error must fall below its best so far to count as closing
     AIM_HANDOVER_X: 1.5,         // an aim not converged by AIM_HANDOVER_X × its plan + AIM_HANDOVER_S hands over to the gas (gas above sloth's floor)
     AIM_HANDOVER_S: 5,
   },

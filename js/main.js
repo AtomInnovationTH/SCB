@@ -6257,7 +6257,9 @@ function gameLoop(timestamp) {
     // getStatus() only while the speed-up is asked for or still on (the read the danger cap above also avoids).
     s.conjunction = (_simWheelTurn || _simClock.k > 1) && !!(conjunctionSystem && conjunctionSystem.getStatus
       && conjunctionSystem.getStatus().alertActive);
-    s.daughterByHand = !!(inputManager && inputManager.isArmPilotMode && inputManager.isArmPilotMode());
+    // Real hand flying only (pilot view AND a hand-flying key held): the pilot view alone is not a gate, the game
+    // enters it by itself after a launch (training 2: k stuck at 1 for minutes while a daughter was reeled home).
+    s.daughterByHand = !!(inputManager && inputManager.isArmHandFlying && inputManager.isArmHandFlying());
     s.arrowKeys = !!(_keys && (_keys.ArrowUp || _keys.ArrowDown || _keys.ArrowLeft || _keys.ArrowRight));
   }
   _simClock.update(realDt, _simWheelTurn, _simSig);

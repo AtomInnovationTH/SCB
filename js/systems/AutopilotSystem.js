@@ -22,7 +22,7 @@ import { wingsHint } from './WingsHint.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { tripRefuses } from './TransferTrip.js';
 import { outOfMotherNetsLine } from './resupplyWords.js';
-import { wrapRefusalLine, linesCross, pairReadyLine, pairLessonWaitLine, pairLessonSkipLine, pairSavedLine, pairSameLine, PAIR_PARK_LINE } from './PieceClaim.js';
+import { wrapRefusalLine, linesCross, pairReadyLine, pairLessonWaitLine, pairLessonSkipLine, pairSavedLine, pairSameLine, pairUsedLine, PAIR_PARK_LINE } from './PieceClaim.js';
 import { checkActiveSatArming } from './ActiveSatGuard.js';
 import { daughterMassKg } from './daughterFittings.js';   // her launch mass includes the relay mirror / laser the player bought
 import { DEG2RAD, degToRad, clamp01, clamp } from '../core/MathUtil.js';
@@ -822,8 +822,12 @@ export class AutopilotSystem {
     // until the launch's own hold takes over. Cleared at the top of every `update`.
     this._aimJustResolved = false;
     this._slewTrackDt = 0;                    // the world slew's real dt of the last frame if it was a pure track (alpha 1), else 0 (`_rotateTowardWorld`)
+    // The wheel slew's safety nets (`_slewSource`, rules b and c): the smallest error so far, the error of the last step, game s without progress.
+    this._slewBestErr = Infinity;
+    this._slewPrevErr = Infinity;
+    this._slewStallS = 0;
     /** What the engaged autopilot / the trip hold has already said about its slow turn (one engagement). */
-    this._slow = { said: false, kind: null, mode: null, ref: null, noPowerSaid: false };
+    this._slow = { said: false, kind: null, mode: null, ref: null, noPowerSaid: false, handSaid: false };   // handSaid: the wheel-to-gas hand-over line (`_slewSource`)
     this._aimBm = new THREE.Vector3();     // the mother's boresight with the strut at its target angle
 
     this._setupListeners();
@@ -1078,8 +1082,14 @@ export class AutopilotSystem {
    * `limitS` (DECISIONS §57 row 5): the wheel limit of THIS slew, none (`AIM.WHEEL_LIMIT_S`, Infinity) for the approach and
    * orbit-frame slews; the trip hold passes `AIM.TRIP_HOLD_WHEEL_LIMIT_S` (30 s, unchanged in this build).
    * @param {number} [limitS]
+   * Safety nets (t9-slew): with steering gas aboard, a slew latched to the wheels is handed to the gas (latch 'gas', `_wheelSlew.on`
+   * false the same call, so `isWheelTurnActive` is false at once) when (b) the wheels are full while she chases a drifting
+   * world heading (`chase`: the approach slew) and the error is not shrinking (a coast would let it grow), or (c) the error has not
+   * fallen by `WHEELS.SLEW_PROGRESS_DEG` in `WHEELS.SLEW_STALL_S` game seconds (`dt`, a game step; 0 = no progress watch), or the
+   * wheels lose power (as before). With the gas out the wheels keep every slew, as today.
+   * @param {boolean} [chase] the approach slew to a world heading (not the trip hold, not an orbit-frame slew) @param {number} [dt]
    * @returns {'tailBoxes'|'wheels'|null} */
-  _slewSource(p, err, nx, ny, limitS = Constants.AIM.WHEEL_LIMIT_S) {
+  _slewSource(p, err, nx, ny, limitS = Constants.AIM.WHEEL_LIMIT_S, chase = false, dt = 0) {
     if (typeof p.attitudeTorqueSource !== 'function') return null;
     const sloth = typeof p.isSlothMode === 'function' ? p.isSlothMode() : this._slowGeneric(p) !== null;
     if (!(err > AP_ROT_DEADZONE)) {
@@ -1095,17 +1105,38 @@ export class AutopilotSystem {
     if (latch === 'wheels') {
       const usable = typeof p.wheelsUsable === 'function' && p.wheelsUsable();
       // A wheel slew whose wheels have just filled still goes on: the rate may not climb (`wheelSpareRate` is 0) but she
-      // coasts and the wheels brake her (that is what un-fills them). Only a ship at rest with full wheels is the gas's.
-      const full = typeof p.wheelsFull === 'function' && p.wheelsFull(nx, ny) && !(this._tripOmega > 0);
-      if (usable && !full) { this._noteWheelSlew(err, nx, ny); return 'wheels'; }
-      this._slewLatch = 'gas';                                      // the wheels cannot go on (no power, full at rest): the gas takes it
+      // coasts and the wheels brake her (that is what un-fills them). Only a ship at rest with full wheels is the gas's, or one
+      // chasing a world heading whose error is not shrinking (b): there the rate cannot climb, and a coast lets the error grow.
+      const stepErr = this._slewPrevErr;
+      this._slewPrevErr = err;
+      const chasing = chase && dt > 0 && err >= stepErr;
+      const full = typeof p.wheelsFull === 'function' && p.wheelsFull(nx, ny) && (chasing || !(this._tripOmega > 0));
+      // (c) the error is closing
+      const stalled = this._slewStalled(err, dt);
+      if (usable && !full && !stalled) { this._noteWheelSlew(err, nx, ny); return 'wheels'; }
+      this._slewLatch = 'gas';                                      // the wheels cannot go on (no power, full at rest or chasing, not closing): the gas takes it
+      if (usable) this._slewHandOverNote(full);                     // (b) or (c): one true line; no power is the no-power line's business
       if (this._wheelSlew) this._wheelSlew.on = false;              // ... and the ×8 clock goes off (a gas turn marks itself stepping every frame, so the stop check never would)
       return null;
     }
     this._slewLatch = sel === 'wheels' ? 'wheels' : 'gas';
+    this._slewBestErr = err; this._slewPrevErr = err; this._slewStallS = 0;   // the progress watch starts with the slew
     if (sel === 'wheels') this._noteWheelSlew(err, nx, ny);
     else if (this._wheelSlew) this._wheelSlew.on = false;
     return sel === 'wheels' ? 'wheels' : null;
+  }
+
+  /** @private Rule (c) of `_slewSource`: has the error of the wheel slew in force stopped closing? Counts `dt` game seconds while the
+   * error is outside the arrival cone (`AUTOPILOT.ANG_TOL_DEG`: a flat error inside it is no trouble) and has not fallen
+   * `WHEELS.SLEW_PROGRESS_DEG` below its best; a fall (or being inside the cone) restarts the count. dt 0 only reads it.
+   * @returns {boolean} the count has reached `WHEELS.SLEW_STALL_S` */
+  _slewStalled(err, dt) {
+    const W = Constants.WHEELS;
+    if (dt > 0) {
+      if (err < degToRad(Constants.AUTOPILOT.ANG_TOL_DEG) || err < this._slewBestErr - degToRad(W.SLEW_PROGRESS_DEG)) { this._slewBestErr = err; this._slewStallS = 0; }
+      else this._slewStallS += dt;
+    }
+    return this._slewStallS >= W.SLEW_STALL_S;
   }
 
   /** @private A slew is running on the wheels: its angle left and body axis, for `isWheelTurnActive` (read once a frame, so the
@@ -2625,7 +2656,7 @@ export class AutopilotSystem {
     if (!sloth && !this._isWarpAbove1(dt, dtWorld)) return false;
     if (!this._apFrameHold) { p.setOrbitFrameHold(true); this._apFrameHold = true; }
     const geom = this._offsetTurnGeom(p, _Q_IDENTITY);
-    const src = geom ? this._slewSource(p, geom.err, geom.nx, geom.ny) : this._slowGeneric(p);
+    const src = geom ? this._slewSource(p, geom.err, geom.nx, geom.ny, undefined, false, dtWorld > 0 ? dt : 0) : this._slowGeneric(p);
     if (src) { if (!(dtWorld <= 0)) this._slothOffsetTurn(p, dt, _Q_IDENTITY, src); return true; }   // a held world pauses the turn
     if (this._tripOmega > 0) this._slothBrakeBill(p);                  // the slow source stops being the source: bill the brake of what was turning
     const mr = p._manualRotation;                                      // the ease is billed (`_billSlewStep`)
@@ -2701,7 +2732,19 @@ export class AutopilotSystem {
   /** A new engagement (or a trip hold) says its slow turn and its no-power line again. */
   _slothNoticeReset() {
     const s = this._slow;
-    s.said = false; s.kind = null; s.mode = null; s.ref = null; s.noPowerSaid = false;
+    s.said = false; s.kind = null; s.mode = null; s.ref = null; s.noPowerSaid = false; s.handSaid = false;
+  }
+
+  /** @private The wheel slew was handed to the steering gas by rule (b) (wheels full) or (c) (not keeping up): say so once per engagement,
+   * after the "turning on the reaction wheels" line it follows (so the player is not left thinking the wheels still turn her). */
+  _slewHandOverNote(full) {
+    const s = this._slow;
+    if (s.handSaid) return;
+    s.handSaid = true;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: full ? 'Wheels full: finishing the turn on steering gas.' : "The wheels can't keep up: finishing the turn on steering gas.",
+      priority: 'warning', source: 'HOUSTON',
+    });
   }
 
   /**
@@ -3002,7 +3045,7 @@ export class AutopilotSystem {
     let src = null;
     if (typeof this._player.attitudeTorqueSource === 'function') {
       const wg = this._worldTurnGeom(this._player, worldDir);
-      src = this._slewSource(this._player, wg.err, wg.nx, wg.ny);
+      src = this._slewSource(this._player, wg.err, wg.nx, wg.ny, undefined, true, dtWorld > 0 ? dt : 0);
     }
     if (src) {
       this._slewTrackDt = 0;
@@ -3481,6 +3524,9 @@ export class AutopilotSystem {
       }
 
       eventBus.emit(Events.AIM_SEQUENCE_START, { mode });
+      // A wheel line is said only after the watch's first look has passed with no hand-over (`_aimWheelWatch`), so it never goes out
+      // for an aim the gas takes 1-3 s later. With the steering gas out there is no watch (the wheels are all she has): said now.
+      let pendingLine = null;
       if (slothAim) {
         // the honest time; nothing to say when the target is already inside the tolerance (the shot fires with no turn)
         if (slothEstS > 0) {
@@ -3488,13 +3534,15 @@ export class AutopilotSystem {
           // other way when the gas line would name it
           const kick = shot && shot.kickKg * 1000 >= 1 ? `, then ${this._shotGasWords(shot.kickKg)} for the launch kick` : '';
           const quick = shot && shot.alt ? this._shotQuickWords(shot.alt) : '';
-          eventBus.emit(Events.COMMS_MESSAGE, {
+          const msg = {
             text: slowAimSrc.src === 'wheels'
               ? this._wheelAimLine(shot, lineS, kick, quick)
               : `Emergency steering — turning slowly on the tail boxes: ${this._player.slothTimeWords(slothEstS)}${kick}.${quick}`,
             priority: slowAimSrc.src === 'wheels' ? 'info' : 'warning', source: 'HOUSTON',
             _keep: true,
-          });
+          };
+          if (slowAimSrc.src === 'wheels' && !slothAtStart) pendingLine = msg;
+          else eventBus.emit(Events.COMMS_MESSAGE, msg);
         }
       } else {
         // a daughter shot says what it will really take (seconds, grams of gas), not the worst case
@@ -3530,6 +3578,7 @@ export class AutopilotSystem {
         wLos: 0,                   // the target bearing's whole turn rate (rad/s, smoothed); read only on the wheels
         wFf: 0,                    // the part of it along her error axis, away from her boresight (the feed-forward)
         losAt: -Infinity,          // c.elapsed of the last look at it
+        pendingLine,               // the wheel line waiting for the first look (null: said already, or nothing to say)
         _cleanup: () => {
           eventBus.off(Events.MOTHER_MANUAL_ROTATE, onManualRotate);
           eventBus.off(Events.TARGET_SELECTED, onTargetChange);
@@ -4195,7 +4244,11 @@ export class AutopilotSystem {
   /**
    * The gas of the pair about to leave and of the two single shots it replaces, all from the attitude now and the same plans
    * (`_planDaughterShot` / `_planPairShot`) as the shot's "About N s" line. Null when a plan is not possible.
-   * @returns {{x:number, y:number, armA:number, armB:number, t:number, lesson:boolean}|null} x, y in grams
+   * `gas0` = the cold gas in the tank NOW (pool units): `_onDualFire` says the grams really billed from here to the fire, not these
+   * plans (a plan taken at the press cannot know the aim will be handed to the gas: 147-153 g spent under "about 0.0 g", 2026-11-05).
+   * `changed` is set when the aim was handed to the gas (`_aimToGas`): the turn source is not the one planned here, and
+   * the comparison with two single shots is then not said (it compares two plans, one of them no longer the pair's).
+   * @returns {{x:number, y:number, singlesG:number, gas0:number, changed:boolean, armA:number, armB:number, t:number, lesson:boolean}|null} x, y, singlesG in grams
    */
   _pairSavingNow(opts) {
     try {
@@ -4210,7 +4263,8 @@ export class AutopilotSystem {
         singles += s.gasKg * 1000;
       }
       const x = o.gasKg * 1000;
-      return { x, y: singles - x, armA: o.armA.index, armB: o.armB.index, t: this._pairT, lesson: this._lessonBeat };
+      const gas0 = Number(this._player && this._player.resources && this._player.resources.coldGas);
+      return { x, y: singles - x, singlesG: singles, gas0: Number.isFinite(gas0) ? gas0 : NaN, changed: false, armA: o.armA.index, armB: o.armB.index, t: this._pairT, lesson: this._lessonBeat };
     } catch (_err) { return null; }
   }
 
@@ -4226,9 +4280,20 @@ export class AutopilotSystem {
     const df = this._debrisField;
     const mission = df && Number.isFinite(df._currentMissionNumber) ? df._currentMissionNumber : 2;
     if (!lesson && mission < 2) return;
-    const saved = mine && sv.y >= 1;
     let text = null;
-    if (mine) text = saved ? pairSavedLine(sv.x, sv.y) : (lesson ? pairSameLine(sv.x) : null);
+    if (mine) {
+      // The grams are the BILL from the Q press to this fire (cold gas then minus now), not the plan taken at the press.
+      const now = Number(this._player && this._player.resources && this._player.resources.coldGas);
+      const billedG = (Number.isFinite(sv.gas0) && Number.isFinite(now)) ? Math.max(0, (coldGasPoolToKg(sv.gas0) - coldGasPoolToKg(now)) * 1000) : sv.x;
+      // two single shots' plan against what the pair really cost; not said when the aim was handed to the gas (`changed`) or when the
+      // bill is not the plan's gas (off by over 10 % and a gram: the plan missed what the ship burned, so "the same as two singles" or
+      // "N g less" would compare a plan with a bill)
+      const offPlan = Number.isFinite(sv.x) && Math.abs(billedG - sv.x) > Math.max(1, 0.1 * sv.x);
+      const noCompare = sv.changed || offPlan;
+      const y = noCompare ? 0 : (Number.isFinite(sv.singlesG) ? sv.singlesG - billedG : sv.y);
+      if (y >= 1) text = pairSavedLine(billedG, y);
+      else if (lesson) text = noCompare ? pairUsedLine(billedG) : pairSameLine(billedG);
+    }
     if (lesson) text = (text ? text + ' ' : '') + PAIR_PARK_LINE;
     if (!text) return;
     // `_keep` + `_coach` (2026-11-02): these are the pair-shot lesson's words; the pilot beat's line followed within 2 s and coalesced them
@@ -5161,7 +5226,7 @@ export class AutopilotSystem {
    */
   _aimWheelWatch(c, bm, T, errM) {
     const p = this._player, W = Constants.WHEELS;
-    if (typeof p.isSlothMode !== 'function' || p.isSlothMode()) return;
+    if (typeof p.isSlothMode !== 'function' || p.isSlothMode()) { this._sayPendingWheelLine(c); return; }   // gas gone: no watch, the wheels are all she has
     let why = null;
     if (c.elapsed >= c.handAt) why = 'late';
     else if (c.elapsed >= W.LOS_CHECK_S && c.elapsed - c.losAt >= W.LOS_RECHECK_S && errM > c.tolRad) {
@@ -5187,6 +5252,18 @@ export class AutopilotSystem {
       }
     }
     if (why) this._aimToGas(c, bm, T);
+    else if (c.pendingLine && c.elapsed >= W.LOS_CHECK_S) {
+      // The first look is past with no hand-over: the wheels have it, and the line is true. (A look is skipped when she is already
+      // inside the tolerance: the aim is done, nothing to announce.)
+      if (c.losAt >= 0) this._sayPendingWheelLine(c); else c.pendingLine = null;
+    }
+  }
+
+  /** @private Say the wheel line that waited for the watch's first look (once). */
+  _sayPendingWheelLine(c) {
+    const msg = c.pendingLine;
+    c.pendingLine = null;
+    if (msg) eventBus.emit(Events.COMMS_MESSAGE, msg);
   }
 
   /**
@@ -5197,6 +5274,8 @@ export class AutopilotSystem {
     const p = this._player;
     c.src = null;
     c.sloth = false;
+    c.pendingLine = null;                                              // the wheel line never goes out for an aim the gas took
+    if (c.pair && this._pairSaving) this._pairSaving.changed = true;   // the Q press priced the wheels' turn (`_pairSavingNow`)
     c.k = (p._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
     const aG = this._aimAccel(c, bm, T);
     c.vCap = c.rate;

@@ -5526,7 +5526,18 @@ export class ArmUnit {
       this._rhReelStartM = distM;
       if (quiet) return;
       const e = Constants.isFeatureEnabled('REEL_PROFILE_V2') ? this._reelHomeEtaS(distM, false, this.capturedDebris !== null) : Infinity;
-      const tail = Number.isFinite(e) ? `${Math.round(distM)} m, about ${Math.max(1, Math.round(e))} s` : `${Math.round(distM)} m`;
+      // The mother's line-up turn (ArmManager: the turn she is asked for, wheels or gas) is waited for at `rhGate = 0` and can take
+      // minutes on the wheels: it is added, and the line says ship time so it stays true when the clock runs ×8 (training 2:
+      // "about 8 s", docked 170 s later). No turn needed: today's wording.
+      const am = this._playerSatellite && this._playerSatellite.armManager;
+      const turnS = (am && typeof am.reelHomeTurnEstimateS === 'function' && Number.isFinite(e))
+        ? am.reelHomeTurnEstimateS(this, this._frameParentPos || this._prevParentPos, this._frameParentQuat || this._lastParentQuat) : 0;
+      let tail;
+      if (!Number.isFinite(e)) tail = `${Math.round(distM)} m`;
+      else if (turnS > 0) {
+        tail = Number.isFinite(turnS)
+          ? `${Math.round(distM)} m, about ${Math.max(1, Math.round(e + turnS))} s of ship time` : `${Math.round(distM)} m`;
+      } else tail = `${Math.round(distM)} m, about ${Math.max(1, Math.round(e))} s`;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD', priority: 'info',
         text: `Reeling ${this.displayName} home: ${tail}.${this._rhReelNote || ''}`,
