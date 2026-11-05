@@ -161,6 +161,7 @@ const AP_ROT_RATE = 0.2;
 /** The orbit-frame offset of a retrograde trip hold: 180° about her up (+Y) axis. */
 const _Q_TRIP_RETRO = new THREE.Quaternion(0, 1, 0, 0);
 const _Q_IDENTITY = new THREE.Quaternion();
+const _v3OrbitStep = new THREE.Vector3();   // scratch for a provider's `orbitStep` (the pair shot's held answer)
 
 /** The angle the trip's hold still has to turn her nose through. PURE: `offset` is her attitude relative to prograde
  * (the `_manualRotation` the hold eases); a climb eases it to nothing, a descent to the half turn about her up axis.
@@ -826,6 +827,13 @@ export class AutopilotSystem {
     this._slewBestErr = Infinity;
     this._slewPrevErr = Infinity;
     this._slewStallS = 0;
+    // The orbit's own step (`_orbitStepTick`, DECISIONS §61 row 10): the prograde frame of the last tick, and this tick's step Δ = pg_now · pg_prev⁻¹
+    this._orbitPgPrev = new THREE.Quaternion();
+    this._orbitPgNow = new THREE.Quaternion();
+    this._orbitDelta = new THREE.Quaternion();
+    this._orbitPgHave = false;                // `_orbitPgPrev` holds a reading
+    this._orbitStepOn = false;                // this tick's Δ is a real turn (not the identity)
+    this._launchFollowsOrbit = false;         // the aim that began the launch hold ran on the wheels: the hold follows the orbit too
     /** What the engaged autopilot / the trip hold has already said about its slow turn (one engagement). */
     this._slow = { said: false, kind: null, mode: null, ref: null, noPowerSaid: false, handSaid: false };   // handSaid: the wheel-to-gas hand-over line (`_slewSource`)
     this._aimBm = new THREE.Vector3();     // the mother's boresight with the strut at its target angle
@@ -1206,7 +1214,8 @@ export class AutopilotSystem {
   }
 
   /** @private One frame of a slow turn toward a WORLD direction (the engaged law's rendezvous heading) on the tail boxes or
-   * the wheels (`src`): a world-frame target is held inertially (no torque); the nose goes by the minimal arc, roll is not turned.
+   * the wheels (`src`): the nose goes by the minimal arc toward a world-frame target, roll is not turned. On the tail boxes the target is held
+   * inertially (no torque); a wheel slew follows the orbit frame through `_orbitStepTick` (the orbit's own step costs no wheel momentum).
    * @param {object} p the player @param {{x:number,y:number,z:number}} worldDir @param {number} dt real seconds
    * @param {string} [src] */
   _slothSteerWorld(p, worldDir, dt, src = 'tailBoxes') {
@@ -1384,6 +1393,7 @@ export class AutopilotSystem {
   _clearLaunchHold() {
     const h = this._launchHold;
     this._launchHold = null;
+    this._launchFollowsOrbit = false;
     if (h && h.onManual) eventBus.off(Events.MOTHER_MANUAL_ROTATE, h.onManual);
   }
 
@@ -2097,6 +2107,8 @@ export class AutopilotSystem {
     if (apPlayer && typeof apPlayer.undoRecoilOverlay === 'function') apPlayer.undoRecoilOverlay();
     // One frame only: set again by `_resolveAim` below if an aim arrives on this frame (before any reader of it).
     this._aimJustResolved = false;
+    // The orbit's step since the last tick turns whatever the wheels hold, with the bearings the aim carries (before anything reads the pose).
+    if (apPlayer) this._orbitStepTick(apPlayer);
     if (apPlayer) this._slewStopTick(apPlayer, dtWorld);
     // order: a pre-turn whose conditions are gone ends before anything below moves the nose
     if (this._preturn) this._preturnGuard(dt);
@@ -2783,6 +2795,67 @@ export class AutopilotSystem {
     const w0 = this._slewOmega;
     if (I) p._billTurnNullN2(I.ixx * Math.abs(w.x - w0.x), I.iyy * Math.abs(w.y - w0.y));
     w0.copy(w);
+  }
+
+  /**
+   * The top of `update`, once per autopilot tick (carrying ticks and held-world ticks too; the autopilot runs once per SimClock step).
+   * DECISIONS §61 row 10 (owner 2026-11-05, "Aim on the wheels"): the world clock runs the orbit at 10x, and the player's hold between
+   * catches follows it for free (`PlayerSatellite._orientAlongVelocity`: prograde · offset). An aim, a slew or a pre-turn writes the
+   * quaternion in the WORLD frame, so a piece floating beside her (still in the orbit frame) seemed to drift at the orbit's own turn
+   * (0.64 deg/s) and the wheels were asked to chase it. So, while the WHEELS (or a hold after them) own the nose, the orbit's step
+   * Δ = pg_now · pg_prev⁻¹ (the change of the exact prograde frame since the last tick) is applied to the nose once: `q ← Δ · q`
+   * (world frame, the same composition as the hold's `pg · manual`), and every world-frame bearing the aim carries from tick to
+   * tick (`c.pT`; the low-passed line `c.tf`, which exists only on gas / tail-box aims, and those get no Δ, so in practice it is never rotated here) is rotated by it. The aim's rate readings (`wLos`, `wFf`, `wT`) are then rates
+   * relative to the orbit frame: a piece beside her reads about 0, a real mover keeps its true relative rate. Kinematic, like the hold:
+   * the orbit's part costs no wheel or gas momentum. `pg_prev` is refreshed on EVERY tick (also when nothing follows), so a step never
+   * piles up and lands later. Δ is the identity for a stub player (no `_progradeQuat`) and when there is no velocity.
+   * Left alone: a gas aim, a gas slew, the scripted turn, the leash hand-off's turns, the reel-in hold, and what already holds in the orbit
+   * frame (`_apFrameHold`: the prograde follow above warp 1, or with the gas out).
+   */
+  _orbitStepTick(p) {
+    this._orbitStepOn = false;
+    if (typeof p._progradeQuat !== 'function') { this._orbitPgHave = false; return; }
+    const pg = p._progradeQuat(this._orbitPgNow);
+    if (!pg) { this._orbitPgHave = false; return; }
+    const had = this._orbitPgHave;
+    if (had) {
+      this._orbitDelta.copy(this._orbitPgPrev).invert().premultiply(pg);             // pg_now · pg_prev⁻¹
+      this._orbitStepOn = Math.abs(this._orbitDelta.w) < 1 - 1e-14;                  // a real turn (|w| = cos(angle/2): the full turn is more than ~2.8e-7 rad); a smaller step is dropped, not saved up (`_orbitPgPrev` is refreshed below every tick)
+    }
+    this._orbitPgPrev.copy(pg);
+    this._orbitPgHave = true;
+    if (!this._orbitStepOn || !this._orbitFollowsNow(p)) return;
+    p.quaternion.premultiply(this._orbitDelta).normalize();
+    const c = this._aimCoroutine;
+    if (c) {                                                                         // the bearings the aim carries from tick to tick
+      if (c.pT) c.pT.applyQuaternion(this._orbitDelta);
+      if (c.tf) c.tf.applyQuaternion(this._orbitDelta);
+    }
+    // ... and the one a provider holds between its own refreshes (the pair shot's: refined every 0.25 s from its last answer): it turns with the orbit
+    // too, or its output would sit still for 14 ticks and jump on the 15th, and the aim would read the whole sawtooth (twice the orbit's rate) as a mover.
+    const pv = c ? c.provider : (this._preturn ? this._preturn.provider : null);
+    if (pv && typeof pv.orbitStep === 'function') pv.orbitStep(this._orbitDelta);
+  }
+
+  /**
+   * @private Does the orbit's step turn the nose this tick (`_orbitStepTick`)? Yes while the WHEELS own it: an aim on them (`c.src ===
+   * 'wheels'`; a gas aim and the tail boxes' never: their numbers and tests keep the world frame), a wheel pre-turn in any phase (turning or
+   * holding on the shot), the hold from the end of such an aim to the spring, or the engaged autopilot's slew whose source is not the gas
+   * (`_slewLatch !== 'gas'`: wheels, or arrived with no step running, which `_slewStopTick` clears to null; a ship without the kit has no free
+   * hold to give, and with the gas out only while the last source was not the tail boxes). One reason is enough: a pre-turn and a slew in the
+   * same tick still get Δ once. Accepted: a finished gas slew (`_slewLatch` back to null once its step stops) also follows the orbit while the
+   * engaged hold lasts; that is kinematic, like the player's hold, and costs no gas.
+   */
+  _orbitFollowsNow(p) {
+    if (this._apFrameHold || this._turn) return false;                               // already held in the orbit frame / a scripted turn writes the pose
+    const c = this._aimCoroutine;
+    if (c) return c.src === 'wheels' && c.eased !== false;                           // (the tail boxes' aims and the gas's keep the world frame)
+    if (this._preturn) return true;
+    if (this._launchHold && this._launchFollowsOrbit) return this._launchHoldIsOurs(this._launchHold);
+    if (!this._engaged || this._attitudeHold || this._slewLatch === 'gas') return false;
+    if (typeof p.hasWheelKit !== 'function' || !p.hasWheelKit()) return false;
+    // gas out: the wheels take the slews the tail boxes do not (`_tripSrc` names the last source)
+    return !(typeof p.isSlothMode === 'function' && p.isSlothMode() && this._tripSrc === 'tailBoxes');
   }
 
   /**
@@ -3814,7 +3887,7 @@ export class AutopilotSystem {
     const out = { x: offer.n[0], y: offer.n[1], z: offer.n[2] };
     let n = offer.n.slice(), last = -Infinity;
     const R = new Float64Array(9), T1 = [0, 0, 0], T2 = [0, 0, 0];
-    return () => {
+    const prov = () => {
       if (!this._pairPieceOk(offer.t1) || !this._pairPieceOk(offer.t2)) return null;
       if (this._pairT - last >= 0.25 && this._player) {
         last = this._pairT;
@@ -3825,6 +3898,12 @@ export class AutopilotSystem {
       out.x = n[0]; out.y = n[1]; out.z = n[2];
       return out;
     };
+    // The held answer turns with the orbit's step while the wheels follow it (`_orbitStepTick`): the pieces' bearing does, and the next refinement starts from it.
+    prov.orbitStep = (dq) => {
+      _v3OrbitStep.set(n[0], n[1], n[2]).applyQuaternion(dq);
+      n[0] = _v3OrbitStep.x; n[1] = _v3OrbitStep.y; n[2] = _v3OrbitStep.z;
+    };
+    return prov;
   }
 
   pairAimProvider(offer) { return this._pairAimProvider(offer); }
@@ -4553,6 +4632,8 @@ export class AutopilotSystem {
     // Always called from `_tickAimCoroutine` inside `update` (the only callers are its two ticks), so the flag is read by the
     // guards later in this same update and cleared at the top of the next. A launch that never follows loses it one frame on.
     this._aimJustResolved = true;
+    // The hold from here to the spring follows the orbit when the aim ran on the wheels (`_orbitFollowsNow`)
+    this._launchFollowsOrbit = !!(c.src === 'wheels' && c.eased !== false);
     // A daughter launch keeps the mother still from here to the spring. Set BEFORE _cleanup so aimHold never drops
     // (cleanup keeps aimHold = _attitudeHold).
     if (c.mode === 'daughter' && c.arm) this._beginLaunchHold(c.arm);
