@@ -3628,8 +3628,10 @@ export class AutopilotSystem {
         }
       } else {
         // a daughter shot says what it will really take (seconds, grams of gas), not the worst case
+        // a net aim says what the gas will really take too (the aim's own law run on numbers: `_netGasLine`)
+        const netG = shot ? null : this._netGasEstimate(this._aimGeom(opts.aimDir || provider()), tolRad, rate, 0);
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: shot ? this._shotAimLine(shot) : `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / rate)} s at most.`,
+          text: shot ? this._shotAimLine(shot) : this._netGasLine(netG, rate),
           priority: 'info', source: 'HOUSTON',
           _keep: true,
         });
@@ -4619,6 +4621,42 @@ export class AutopilotSystem {
     return ` (quick: ${t}, ${Math.round(alt.gasKg * 1000)} g)`;
   }
 
+  /** @private The turn from her nose onto the direction `dir`: `{err, nx, ny}` (rad, and the turn axis in her body frame), or null with no direction. */
+  _aimGeom(dir) {
+    const p = this._player;
+    if (!dir || !p || !p.quaternion) return null;
+    const nose = this._aimBm.set(0, 0, 1).applyQuaternion(p.quaternion).normalize();
+    const dv = this._aimTargetDir.set(dir.x, dir.y, dir.z);
+    if (!(dv.lengthSq() > 1e-12)) return null;
+    dv.normalize();
+    const err = Math.acos(clamp(nose.dot(dv), -1, 1));
+    let nx = 1, ny = 0;
+    const ax = this._aimErrAxis.crossVectors(nose, dv);
+    if (ax.lengthSq() > 1e-12) { ax.applyQuaternion(this._aimInvQuat.copy(p.quaternion).invert()).normalize(); nx = ax.x; ny = ax.y; }
+    return { err, nx, ny };
+  }
+
+  /**
+   * @private Seconds and grams of a cold-gas NET aim (no strut) from rate `omega0`, by the law the aim runs (`_simGasAim`, her inertia as
+   * it is now); null when the geometry or the inertia is not there (a stub).
+   */
+  _netGasEstimate(geom, tolRad, rate, omega0) {
+    const p = this._player;
+    const I = (p && typeof p.getAttitudeInertia === 'function') ? p.getAttitudeInertia() : null;
+    if (!geom || !I) return null;
+    const e = this._simGasAim({ err: geom.err, nx: geom.nx, ny: geom.ny, table: [{ ixx: I.ixx, iyy: I.iyy }], tS: 0, stopErr: 0.5 * tolRad, tolRad,
+      rate, omega0: Math.max(0, omega0 || 0), strutDone: true, dStrut: 0 });
+    // a piece in orbit always moves against the world frame the gas turns hold: the aim ends AIM_TRACK_DWELL_S after she is inside the
+    // tolerance (measured 5.4 s against the law's 3 s for 25 deg)
+    return { timeS: e.timeS + AIM_TRACK_DWELL_S, gasKg: e.gasKg };
+  }
+
+  /** @private The gas line of a net aim: the estimate's seconds and grams; with no estimate the old worst case. */
+  _netGasLine(e, rate) {
+    if (!e) return `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / rate)} s at most.`;
+    return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(e.timeS))} s, ${this._shotGasWords(e.gasKg)}.`;
+  }
+
   /** @private The same line when the wheels hand a daughter aim to the gas (what is left of the turn, plus the kick). */
   _shotHandedLine(c, bm, T) {
     const err = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));
@@ -5418,7 +5456,8 @@ export class AutopilotSystem {
     c.timeout = c.elapsed + Constants.AIM.AIM_TIMEOUT_S;
     c.handedToGas = true;
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: (c.mode === 'daughter' && c.shot) ? this._shotHandedLine(c, bm, T) : `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / c.rate)} s at most.`,
+      text: (c.mode === 'daughter' && c.shot) ? this._shotHandedLine(c, bm, T)
+        : this._netGasLine(this._netGasEstimate({ err: Math.acos(clamp(bm.dot(T), -1, 1)), nx: c.axX, ny: c.axY }, c.tolRad, c.rate, c.omega), c.rate),
       priority: 'info', source: 'HOUSTON', _keep: true,
     });
   }
