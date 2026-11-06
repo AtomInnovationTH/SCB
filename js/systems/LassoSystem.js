@@ -1138,7 +1138,8 @@ export class LassoSystem {
         if (!this._firstCastPrimerSent) {
             this._firstCastPrimerSent = true;
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Lasso deployed. Hold steady for catch. Recharges from onboard power.',
+                // The cast spends one mother net (below) and only a resupply refills the magazine: nothing recharges from power.
+                text: 'Lasso deployed. Hold steady for catch.',
                 priority: 'info',
             });
         }

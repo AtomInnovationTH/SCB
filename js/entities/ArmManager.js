@@ -778,7 +778,7 @@ export class ArmManager {
    * @returns {boolean} true if an arm was deployed
    */
   deployArm(target, preferType = null) {
-    this._armOnlyRefusedFlag = false;                  // read by GameFlowManager.deployArm after this call
+    this._armOnlyRefusedFlag = false;                  // set when a refusal has said its own line; read by GameFlowManager.deployArm after this call (no second, generic line)
     if (!target) return false;
     if (target._disposed === true) return false;       // a piece that was disposed of is no catch
 
@@ -787,18 +787,20 @@ export class ArmManager {
         text: 'Daughters locked. Safe mode active. Repair subsystems first.',
         priority: 'warning',
       });
+      this._armOnlyRefusedFlag = true;
       return false;
     }
 
     // Active-satellite treaty guard: refuse if the target's NORAD is in the active-sat catalogue (emits RED CONJUNCTION_ALERT +
     // Houston stand-down COMMS_MESSAGE)
-    if (checkActiveSatArming(target, this._catalogLoader, eventBus)) return false;
+    if (checkActiveSatArming(target, this._catalogLoader, eventBus)) { this._armOnlyRefusedFlag = true; return false; }
 
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
         priority: 'warning',
       });
+      this._armOnlyRefusedFlag = true;
       return false;
     }
 
@@ -809,6 +811,7 @@ export class ArmManager {
     const pick = this._pickLaunchArm(target, preferType);
     if (pick.refusal) {
       this._sayWarn(pick.refusal.text);
+      this._armOnlyRefusedFlag = true;
       return false;
     }
     const arm = pick.arm;
@@ -836,6 +839,7 @@ export class ArmManager {
         text: `${arm.displayName} cannot capture ${targetMass}kg (max ${arm.config.maxCaptureMass}kg)`,
         priority: 'warning',
       });
+      this._armOnlyRefusedFlag = true;
       return false;
     }
 
@@ -856,7 +860,7 @@ export class ArmManager {
    * @private
    */
   _deployWithCeremony(arm, target, opts) {
-    if (this._flatPackRefusal(arm)) return false;   // before the mother turns for a launch that will not go
+    if (this._flatPackRefusal(arm)) { this._armOnlyRefusedFlag = true; return false; }   // before the mother turns for a launch that will not go
     const ap = this._autopilot;
     const player = this.playerSatellite;
     const canCeremony = ap && typeof ap.requestAimRotation === 'function'
@@ -873,6 +877,7 @@ export class ArmManager {
           text: `${arm.displayName}: Target ${Math.round(distM)}m away (max ${Math.round(maxRange)}m). Press A to autopilot closer first.`,
           priority: 'warning',
         });
+        this._armOnlyRefusedFlag = true;   // her own line is the one line (GameFlowManager adds no generic "Launch refused")
         return false;
       }
     }
@@ -1518,7 +1523,15 @@ export class ArmManager {
    * @private
    */
   _motherTurnBlock(exceptArm = null) {
-    if (this.getRotationLockTier(exceptArm) !== 'none') return 'a daughter is out on her line';
+    if (this.getRotationLockTier(exceptArm) !== 'none') {
+      // A daughter in her last seconds of docking (line wound in, seated on her strut) still holds the ship, but she is not
+      // out on her line: say what she is doing (Training 2, g207.2: the line named a daughter that had just come home).
+      const holders = this.arms.filter((a) => !a.isDetached && !this._rhIgnoredForTurn(a, exceptArm)
+        && !(a.state === ARM_STATES.LAUNCHING && !a._springFired)
+        && (_HIGH_RISK_ROT_STATES.has(a.state) || _SOFT_ROT_STATES.has(a.state)));
+      if (holders.length > 0 && holders.every((a) => a.state === ARM_STATES.DOCKING)) return 'a daughter is still docking';
+      return 'a daughter is out on her line';
+    }
     // with the steering gas out she turns on the tail boxes, minutes for a launch turn: the strut aims alone ("Aiming the arm
     // only: the steering gas is empty, so the ship holds still.") and a reel-home line-up is hers to do. (With the reaction-wheel
     // kit powered and not full the wheels turn her for no gas, however long it takes with the steering gas out; with gas aboard a
@@ -1542,12 +1555,12 @@ export class ArmManager {
     }
     const ld = this.playerSatellite && this.playerSatellite.leashDriver;
     if (ld && typeof ld.isActive === 'function' && ld.isActive()) return 'a hand-off is running';
-    if (this._heldCatchCorridorRadiusM() !== null) return 'a catch is on the collar';
+    if (this._heldCatchCorridorRadiusM() !== null) return this._onlyMissedNetsHeld() ? 'a net is reeling back' : 'a catch is on the collar';
     if (!mine && ap && typeof ap.isTurning === 'function' && ap.isTurning()) return 'a hand-off is running';   // a scripted turn takes an anonymous hold too
     if (ap && typeof ap.isReelInHeld === 'function' && ap.isReelInHeld()) {
       // say what is true: the hold starts the moment a net or the lasso leaves; while it is still flying there is no catch
       // yet, only "a net is out".
-      return netIsOut(this.claimWorld()) ? 'a net is out' : 'a catch is being reeled in';
+      return netIsOut(this.claimWorld()) ? 'a net is out' : (this._onlyMissedNetsHeld() ? 'a net is reeling back' : 'a catch is being reeled in');
     }
     if (!mine && ap && typeof ap.isAttitudeHeld === 'function' && ap.isAttitudeHeld()) return 'a hand-off is running';
     return null;
@@ -4109,7 +4122,7 @@ export class ArmManager {
    * Seconds from the reel-start line until she arrives at the strut, for the line's number: the reel and the mother's turns run at the same time
    * (the reel only holds her at the 2 m line-up and the 5 m floor hold), so it is the LONGER of the two, not their sum. On the gas the turns
    * (`turnS`, from `reelHomeTurnEstimateS`) are scaled by REEL_HOME.TURN_REEL_OVERLAP (she reels in during them and her angle shrinks); a wheel turn
-   * is slow enough to be unscaled. The 3 s latch (ARM_DOCK_DURATION) is not in it, as for a reel with no turn.
+   * is slow enough to be unscaled. The 3 s latch (ARM_DOCK_DURATION) is not in it: `ArmUnit._rhNoteTransition` adds it, the line runs to "<name> is home".
    * @param {ArmUnit} arm
    * @param {number} reelS the reel's own time (`_reelHomeEtaS`)
    * @param {number} turnS `reelHomeTurnEstimateS(arm)`
@@ -6320,6 +6333,26 @@ export class ArmManager {
   _aimsStrut(mode) {
     return Constants.FEATURE_FLAGS.LAUNCH_AIMS_STRUT === true
       && (mode === 'target' || mode === 'freefly' || mode === 'trawl');
+  }
+
+  /**
+   * Are the mother nets in a held state ALL misses (`catchResult` 'miss': a graze, `cling_failed`, that is reeling home empty)? Then nothing
+   * is caught: the ship holds still for a net, not for "a catch" (training 3, 2026-11-06: "a catch is on the collar" after a graze).
+   * False when no mother net is in a held state.
+   * @returns {boolean}
+   * @private
+   */
+  _onlyMissedNetsHeld() {
+    const cns = this.playerSatellite && this.playerSatellite._captureNetSystem;
+    const nets = cns && Array.isArray(cns.activeNets) ? cns.activeNets : null;
+    if (!nets) return false;
+    let missed = false;
+    for (const n of nets) {
+      if (!n || !n._isMother || AIM_CATCH_HELD_STATES.indexOf(n.state) < 0) continue;
+      if (n.catchResult !== 'miss') return false;
+      missed = true;
+    }
+    return missed;
   }
 
   /** Radius (m) of the berth corridor of the catch the mother holds or takes in (as the lean-aside duck uses), or null. */

@@ -5532,12 +5532,14 @@ export class ArmUnit {
       const am = this._playerSatellite && this._playerSatellite.armManager;
       const turnS = (am && typeof am.reelHomeTurnEstimateS === 'function' && Number.isFinite(e))
         ? am.reelHomeTurnEstimateS(this, this._frameParentPos || this._prevParentPos, this._frameParentQuat || this._lastParentQuat) : 0;
+      // The number runs to "<name> is home" (end of the 3 s latch), the moment the player sees, not to her arrival at the strut (training 1/3 2026-11-06).
+      const latchS = Constants.ARM_DOCK_DURATION ?? 3;
       let tail;
       if (!Number.isFinite(e)) tail = `${Math.round(distM)} m`;
       else if (turnS > 0) {
         tail = Number.isFinite(turnS)
-          ? `${Math.round(distM)} m, about ${Math.max(1, Math.round(am.reelHomeArriveEstimateS(this, e, turnS)))} s of ship time` : `${Math.round(distM)} m`;
-      } else tail = `${Math.round(distM)} m, about ${Math.max(1, Math.round(e))} s`;
+          ? `${Math.round(distM)} m, about ${Math.max(1, Math.round(am.reelHomeArriveEstimateS(this, e, turnS) + latchS))} s of ship time` : `${Math.round(distM)} m`;
+      } else tail = `${Math.round(distM)} m, about ${Math.max(1, Math.round(e + latchS))} s`;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD', priority: 'info',
         text: `Reeling ${this.displayName} home: ${tail}.${this._rhReelNote || ''}`,
@@ -5637,7 +5639,8 @@ export class ArmUnit {
     const distM = this._strutTipDistM();
     const far = distM != null && distM > ((Constants.FAIL_REEL && Constants.FAIL_REEL.AUTO_REEL_MAX_M) ?? 200);
     // owner 2026-10-22: every reel line gives the distance and the real reel time (`_reelHomeEtaS`).
-    const etaS = distM != null ? Math.round(this._reelHomeEtaS(distM, false, false)) : NaN;
+    // (+ the 3 s latch: the line ends at "<name> is home", not at her arrival at the strut)
+    const etaS = distM != null ? Math.round(this._reelHomeEtaS(distM, false, false) + (Constants.ARM_DOCK_DURATION ?? 3)) : NaN;
     const etaTxt = Number.isFinite(etaS) ? `about ${etaS} s` : 'a long haul';
     const lead = cause ? `${cause} ` : '';
     // A hold is for a retry; with no net left in a net daughter's magazine there is none, so reel whatever the range.
@@ -8632,8 +8635,14 @@ export class ArmUnit {
       this._indiumSwapT = -1;
       if (!ps._daughterIndiumEmptySaid) {
         ps._daughterIndiumEmptySaid = true;
+        // The store is the indium the daughters burn, not the ship's engine gas. D still launches her while she has more than 5 % left
+        // (`ArmManager` ready test `fuel > 5`), so the line says which: no refill, and whether she can still go.
+        const pct = Math.max(0, Math.floor(this.fuel));
+        const goes = this.fuel > 5
+          ? `${this.displayName} can still launch on the ${pct} % she has.`
+          : `${this.displayName} has only ${pct} % left and cannot launch.`;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `The ion-fuel store is empty; daughters cannot refill their ion fuel. Buy a cartridge at the ${placeName()}.`, priority: 'info',
+          text: `The ion-fuel store is empty (the indium the daughters burn, not the ship's engine gas); daughters cannot refill their ion fuel. ${goes} Buy a cartridge at the ${placeName()}.`, priority: 'info',
         });
       }
       return;

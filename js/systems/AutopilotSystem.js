@@ -1610,9 +1610,16 @@ export class AutopilotSystem {
       ? hasSelectedTarget
       : ((this._cachedDebrisResult && this._cachedDebrisResult.debris) || null);
     if (activeTarget && activeTarget._onboardingPinned) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
+      // No mother nets: N would only say "Out of mother nets", so name what she can do (arrivalLineText: a daughter, or her blocker).
+      let pinText = 'Target is already in net range — launch the net (N).';
+      if (this._motherNetsLeft <= 0) {
+        const d = arrivalLineText(activeTarget.mass, 0, this._armManager?.daughterLaunchReadiness?.(activeTarget) ?? null);
+        pinText = d === 'In position. Press D to send a daughter.' ? 'Target is already in net range. Press D to send a daughter.'
+          : (d || 'Target is already in net range — no mother nets left, and no daughter is free yet.');
+      }
+      if (pinText) eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
-        text: 'Target is already in net range — launch the net (N).',
+        text: pinText,
         priority: 'info',
         _reactive: true,
       });

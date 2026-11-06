@@ -187,6 +187,9 @@ export const ONBOARDING_BEATS = [
     id: 'close_and_catch',
     commsSource: 'BANGALORE', commsText: 'In range. Launch the net.',
     commsAck: null,
+    // The line claims range, so hold it while the selected target is still known to be out of net reach: A advances
+    // range_wall at engage, ~70 s before the ship arrives (training 1, 2026-11-06). Unknown range never holds.
+    holdWhileOutOfRange: true,
     glyph: '✓', keys: [], skillId: null,
     triggerEvent: 'LASSO_CAPTURED',
     altTriggerEvents: ['DEBRIS_CAPTURED'],
@@ -310,6 +313,8 @@ export class OnboardingDirector {
     this._wings = deps.wings || wingsHint;
     /** @type {number|null} Date.now() when the ship's opening line (StartOpening) went up; cleared when the handshake posts. */
     this._openingLineAtMs = null;
+    /** True once a scan has started or revealed a contact this run: "Scan to identify targets." is then stale and is not posted. */
+    this._scanSeen = false;
 
     this._completedBeats = new Set();
     this._skippedBeats = new Set();
@@ -494,6 +499,7 @@ export class OnboardingDirector {
     this._stationKeepArrowsShown = false;
     this._motherNets = this._fullMagazine();
     this._motherShotInFlight = false;
+    this._scanSeen = false;
     this._clearDetailHintPoll();
     // `_detailHintShown` is per-player — not cleared (locked decision #17).
     this._persist();
@@ -610,6 +616,11 @@ export class OnboardingDirector {
     // false) releases a handshake held on `requiresWingsCommanded`. The held-beat poll tick is the backstop.
     if (Events.HINT_SATISFIED) {
       on(Events.HINT_SATISFIED, (d) => { if (d && d.id === WINGS_HINT_ID) this._recheckHeldGate(); });
+    }
+    // A scan the player already ran (measured 2026-11-06: pressed 26.4 s, done 26.7 s, "Scan to identify targets." posted 5.3 s
+    // later, after the opening line's read time) makes the handshake line false: _postBeat skips it.
+    for (const name of ['SCAN_INITIATED', 'SCAN_COMPLETE', 'TARGET_DISCOVERED']) {
+      if (Events[name]) on(Events[name], () => { this._scanSeen = true; });
     }
     // Note when the ship's opening line goes up (StartOpening), so the handshake beat can leave it on screen for
     // OPENING_LINE_READ_MS (see _beatGateMet).
@@ -1108,7 +1119,7 @@ export class OnboardingDirector {
     if (motherEmpty && !minimal) {
       this._postMotherEmpty(beat);
     } else {
-      if (beat.commsText && !minimal) {
+      if (beat.commsText && !minimal && !(beat.id === 'handshake' && this._scanSeen)) {
         this._emitComms({
           source: beat.commsSource || 'HOUSTON',
           channel: 'HOUSTON',
@@ -1212,7 +1223,7 @@ export class OnboardingDirector {
       // Leave the ship's opening line on screen long enough to read.
       if (this._openingLineAtMs !== null && Date.now() - this._openingLineAtMs < OPENING_LINE_READ_MS) return false;
     }
-    if (!beat.requiresContacts && !Number.isFinite(beat.requiresProximityM) && !beat.requiresOutOfRange) return true;
+    if (!beat.requiresContacts && !Number.isFinite(beat.requiresProximityM) && !beat.requiresOutOfRange && !beat.holdWhileOutOfRange) return true;
     if (!this._context) return true; // no provider → don't block
     let ctx = null;
     try { ctx = this._context() || {}; } catch (_e) { return true; }
@@ -1228,6 +1239,7 @@ export class OnboardingDirector {
       // the far one). Driven by TARGET_OUT_OF_RANGE via the context flag.
       if (!ctx.targetOutOfRange) return false;
     }
+    if (beat.holdWhileOutOfRange && ctx.targetOutOfRange) return false;
     return true;
   }
 

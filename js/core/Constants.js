@@ -5654,8 +5654,8 @@ export const Constants = {
           id: 'ch2_intro',
           type: 'narrative',
           source: 'BANGALORE',
-          text: 'ISRO Bangalore here. Training mission 2: double shots. Launching one daughter kicks the ship; two opposite daughters fired together cancel the kick and cost almost nothing.',
-          mapText: 'ISRO Bangalore here. Training mission 2: double shots, at the {km} km field. Launching one daughter kicks the ship; two opposite daughters fired together cancel the kick and cost almost nothing. Low on nets or gas? Fly to the resupply satellite.',
+          text: 'ISRO Bangalore here. Training mission 2: double shots. Launching one daughter kicks the ship; two opposite daughters fired together cancel the kick, so the kick itself costs almost no gas. Turning the ship to line them up can still use steering gas; a line tells you how much.',
+          mapText: 'ISRO Bangalore here. Training mission 2: double shots, at the {km} km field. Launching one daughter kicks the ship; two opposite daughters fired together cancel the kick, so the kick itself costs almost no gas. Turning the ship to line them up can still use steering gas; a line tells you how much. Low on nets or gas? Fly to the resupply satellite.',
         },
         // Mission 2 double-shot lesson (owner 2026-10-26; docs/DECISIONS.md): AutopilotSystem sets it up on MISSION_BEAT_STARTED
         // (waits for both daughters, marks the pair, selects her); the Q key (touch: PAIR) fires it (DUAL_FIRE).
@@ -5665,7 +5665,7 @@ export const Constants = {
           id: 'ch2_pair_shot',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Next, a double shot. Once both daughters are home and charged, I\'ll mark two pieces that line up for them at once. Fired together, their kicks cancel, so the launch costs almost no gas. Press Q to fire the pair.',
+          text: 'Next, a double shot. Once both daughters are home and charged, I\'ll mark two pieces that line up for them at once. Fired together, their kicks cancel, so the kick itself costs almost no gas. Turning the ship to line them up can still use steering gas; a line tells you how much. Press Q to fire the pair.',
           skillId: 'collect_dual_fire',
           triggerEvent: 'DUAL_FIRE',
           title: 'DOUBLE SHOT',
