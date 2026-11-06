@@ -27,6 +27,7 @@ import {
   getVisualMode,
 } from '../ui/DebrisWireframe.js';
 import { buildRegimeDebrisSeeds, regimeFromStartOrbit, mulberry32, samplePowerLawSize, sampleSbmMassKg, buildIntactMassPools } from './CatalogConverter.js';
+import { TRAINING_MISSIONS, trainingMassLimitKg as trainingLimitKg } from '../core/missionProgress.js';
 import { deriveCaptureFlags } from './debrisFerrous.js';
 import { referenceDragAreaM2 } from './MotherDragArea.js';
 import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';
@@ -559,6 +560,7 @@ export class DebrisField {
     _bm?.('DebrisField initAtlases (type + flag atlas textures) complete');
     this._buildInstancedMeshes();
     _bm?.('DebrisField._buildInstancedMeshes complete');
+    this._syncTrainingBoss(this._currentMissionNumber);   // DECISIONS §64 row 1: a new field is mission 1, no boss-level piece yet
     this._buildFlagOverlays();    // country flag decal overlay layer
     _bm?.('DebrisField._buildFlagOverlays complete');
     this._generateBackground();
@@ -598,6 +600,9 @@ export class DebrisField {
           this.backgroundPoints.visible = false;
         }
       }
+      // AFTER `_leaveMission1` (it revives every piece hidden for mission 1, boss included): missions 1-3 hide the boss-level
+      // pieces again, mission 4 on brings them back (DECISIONS §64 row 1).
+      this._syncTrainingBoss(data.missionNumber);
     });
 
     // Welcome field: reset flag on game reset
@@ -606,6 +611,7 @@ export class DebrisField {
       this._currentMissionProfile = null;
       this._currentMissionNumber = 1;
       this._applyShardLaw(1);               // a new game is mission 1 again: the shards go back to the first law
+      this._syncTrainingBoss(1);            // ...and mission 1 has no boss-level piece (DECISIONS §64 row 1)
       // A previous game's group pieces are ordinary debris now: the map-off "is a group still out?" test
       // (`has('group')` in `_spawnWelcomeField`) reads `_extraKind`, and a stale tag would make the next game skip its
       // group. (The satellite's body is parked below, which drops the tag with every other flag.)
@@ -991,7 +997,74 @@ export class DebrisField {
     // session, then quit to the menu and CONTINUE of a mission-3 save, must not leave pieces hidden or the dots off.
     if (missionNumber > 1) this._leaveMission1(missionNumber);
     else this._applyShardLaw(missionNumber);
+    this._syncTrainingBoss(missionNumber);
     return true;
+  }
+
+  /**
+   * The training limit (DECISIONS §64 row 1, owner 2026-11-06: nothing over 500 kg in training): the mass above which only the
+   * mother's big net works, `TOOL_RECOMMENDATION.MOTHER_MIN_MASS` (500 kg).
+   * @returns {number} kg
+   */
+  static trainingMassLimitKg() {
+    return trainingLimitKg();
+  }
+
+  /**
+   * DECISIONS §64 row 1 (owner 2026-11-06: "a 1600 kg debri should not appear in the training missions. That would be a
+   * very advanced boss level."; then "Nothing over 500 kg"): is this piece boss-level? The act-3 member of the authored cast
+   * (the 1,600 kg rocket body, or the real catalogue whale that replaces that row: a substituted finale is `foreground` with
+   * no `act`), or any non-hazard piece over `trainingMassLimitKg()` (500 kg). Hazard shards and a parked heavy spare are never
+   * one (a spare is not in the field; a high field's over-limit rows are kept out at the spawn instead, see
+   * `_spawnWelcomeField`).
+   * @param {object} d a debris record
+   * @returns {boolean}
+   */
+  static isBossPiece(d) {
+    if (!d || d.hazard || d._heavySpare) return false;
+    if (d.foreground && d.act !== 1 && d.act !== 2) return true;
+    return Number.isFinite(d.mass) && d.mass > DebrisField.trainingMassLimitKg();
+  }
+
+  /**
+   * Training missions (1..TRAINING_MISSIONS) hold no boss-level piece (DECISIONS §64 row 1); from the next mission they are
+   * back, alive and discovered as before. Idempotent, no random draw, a flag of its own (`_hiddenForTraining`) apart from
+   * mission 1's `_hiddenForMission1` so each hide/restore keeps its own books: mission 1's restore at mission 2 revives the
+   * piece and this call hides it again; mission 4's call restores what only this flag hides. A piece in play (held, netted,
+   * arm-pinned, parked on the mother) is never hidden. Nothing is saved: the pieces are regenerated from the field seed on
+   * a load, and the load names the mission (`setMissionNumber`, the field plan, MISSION_START), which calls this.
+   * @param {number} [missionNumber] default: the mission now laid out
+   * @returns {number} how many pieces it hid (training) or restored (later)
+   */
+  _syncTrainingBoss(missionNumber = this._currentMissionNumber) {
+    const training = (missionNumber || 1) <= TRAINING_MISSIONS;
+    let n = 0;
+    for (const d of this.debrisList) {
+      if (training) {
+        if (!d.alive || !DebrisField.isBossPiece(d)) continue;
+        if (d._captured || d._armPinned || d._capturedByArm || d._motherParked || d._netted || d._disposed) continue;
+        d._hiddenForTraining = true;
+        d.alive = false;
+        d.tracked = false;
+        const lookup = this._instanceLookup && this._instanceLookup.get(d.id);
+        if (lookup) {
+          const mesh = this.instancedMeshes[lookup.meshKey];
+          if (mesh) {
+            this._tempMatrix.makeScale(0, 0, 0);
+            mesh.setMatrixAt(lookup.instanceIndex, this._tempMatrix);
+            mesh.instanceMatrix.needsUpdate = true;
+          }
+        }
+        n++;
+      } else if (d._hiddenForTraining) {
+        d._hiddenForTraining = false;
+        if (d._hiddenForMission1) continue;     // still mission 1's to restore (`_leaveMission1`)
+        d.alive = true;
+        d.tracked = this._trackedFor(d);
+        n++;
+      }
+    }
+    return n;
   }
 
   /**
@@ -3977,9 +4050,19 @@ export class DebrisField {
     let fieldRows = null;                       // the WELCOME_FIELD (or HIGH_FIELD) row index of each piece to lay out (null = all, in order)
     if (fieldPlan) {
       this.storeFieldPieces();                  // anything of hers still free goes back into store first (a Stay re-seats it)
-      fieldRows = fieldPlan.rows.filter((r) => Number.isInteger(r) && specOfRow(r));
       if (Number.isInteger(fieldPlan.missionNumber) && fieldPlan.missionNumber > 0) this._currentMissionNumber = fieldPlan.missionNumber;
+      // DECISIONS §64 row 1 (owner 11-06: nothing over 500 kg in training): a training mission lays out no high-field row over
+      // 500 kg (rows 0-3, 0-based, 800-2,700 kg: the big stages and satellites). The row stays owed in the registry (nothing was caught),
+      // and is laid out from mission 4 on; the field's 50-450 kg rows stay.
+      const training = (this._currentMissionNumber || 1) <= TRAINING_MISSIONS;
+      const trainLimit = DebrisField.trainingMassLimitKg();
+      fieldRows = fieldPlan.rows.filter((r) => {
+        const sp = Number.isInteger(r) ? specOfRow(r) : null;
+        return !!sp && !(training && isHigh && sp.massMin > trainLimit);
+      });
     }
+    // The cast's boss-level piece is not a candidate below in a training mission (and is back in play from mission 4).
+    (this._syncTrainingBoss || DebrisField.prototype._syncTrainingBoss).call(this, this._currentMissionNumber || 1);
     // Shards run on the size law of the mission being laid out (mission 1: today's; mission 2 on: 2-50 cm).
     // Tolerant of mock receivers (tests bind only _spawnWelcomeField onto a plain object).
     (this._applyShardLaw || DebrisField.prototype._applyShardLaw).call(this, this._currentMissionNumber || 1);

@@ -1778,6 +1778,8 @@ async function init() {
   });
   // Aim-before-launch: give ArmManager the autopilot for the daughter ceremony.
   if (typeof armManager.setAutopilot === 'function') armManager.setAutopilot(autopilotSystem);
+  // Her "launch the net" / "In position" lines say the berth wait while N would be refused (the lasso's one predicate).
+  autopilotSystem.setCollarBusyProbe(() => lassoSystem.collarBusyNow());
 
   // Earth city labels (5 key, off by default, persisted): offline-first local JSON, attached to the command-view Earth.
   cityLabels.load().then((count) => {

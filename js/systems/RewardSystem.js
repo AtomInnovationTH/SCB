@@ -184,8 +184,8 @@ export class RewardSystem {
    * one line per fact). Specific = about this very catch (a free-flying catch, a large daughter's first, the
    * first lasso catch) before the running counts (50 total, 25 / 10 / 5 this sweep), and the plain
    * "first capture ever" last. Every milestone is still recorded as reached.
-   * `part`: 'hit' = only the lines about the grab itself (large daughter, free-flying catch: ARM_CAPTURED), 'secured' = the running counts
-   * (first capture, 5 / 10 / 25 / 50) and the line about how the held piece was caught (first lasso catch): CATCH_COUNTED,
+   * `part`: 'hit' = only the line about the grab itself (free-flying catch: ARM_CAPTURED), 'secured' = the running counts
+   * (first capture, 5 / 10 / 25 / 50) and the lines about how the held piece was caught (first large-daughter catch, first lasso catch): CATCH_COUNTED,
    * `_onSecured`, with the grab remembered from ARM_CAPTURED; omitted = all.
    * @private
    */
@@ -215,8 +215,10 @@ export class RewardSystem {
       reach('total50', 3, 'Houston: Fifty objects secured. Command is talking about naming a procedure after you.');
     }
 
-    // Weaver = large arm
-    if (kinds && method === 'arm' && data && data.type === 'weaver' && !this.milestones.has('firstWeaver')) {
+    // Weaver = large arm. Said at the secured catch (a net grab can still tear or be let go: 11-06 training browser run,
+    // Ruling 0), from the grab's remembered payload; a free-flying large daughter is never counted, so her line is the
+    // free-flying one below.
+    if (held && method === 'arm' && data && data.type === 'weaver' && !this.milestones.has('firstWeaver')) {
       reach('firstWeaver', 1, 'Houston: First catch by a large daughter. The mother keeps her fuel for the heavy pieces.');
     }
 

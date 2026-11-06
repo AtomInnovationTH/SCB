@@ -30,6 +30,7 @@ import { lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
 import { PART_KG } from './BigMelt.js';
 import { isJobPiece } from './JobsBoard.js';
 import { STAY_ID, PUSH_PREFIX, creditsText, kgText, daysText } from './WhereNextRows.js';
+import { trainingHoldsHighRow } from '../core/missionProgress.js';
 
 export { SORTS };
 
@@ -190,6 +191,8 @@ export function candidates(state, opts = {}) {
     for (const row of f.remaining || []) {
       const def = Array.isArray(Constants.HIGH_FIELD) ? Constants.HIGH_FIELD[row] : null;
       if (!def) continue;
+      // DECISIONS §64 row 1: a row the training rule holds back is not laid out in the mission she flies next (it stays owed, out from mission 4), so it is no stop
+      if (Number.isFinite(state.nextMissionNumber) && trainingHoldsHighRow(row, state.nextMissionNumber)) continue;
       const mass = (def.massMin + def.massMax) / 2;
       if (mass > limit) continue;                                    // the Meteor 2 row (1,800-2,700 kg) is over her catch limit
       const d = { type: def.types[0], mass, owner: def.owner ? { ...def.owner } : null, areaM2: def.areaM2, name: def.name, fieldId: f.id, fieldRow: row };
@@ -332,7 +335,7 @@ let _memo = null;
 function stateKey(state, sortBy, maxStops) {
   const r = (x, d = 1000) => (Number.isFinite(x) ? Math.round(x * d) : x);
   return JSON.stringify([
-    sortBy, maxStops, r(state.dryMassKg), r(state.gasKg), r(state.carriedKg), r(state.altKm), state.fieldId, state.catchesLeft, state.holdSlots, r(state.holdRoomKg, 1), state.furnaces,
+    sortBy, maxStops, state.nextMissionNumber ?? null, r(state.dryMassKg), r(state.gasKg), r(state.carriedKg), r(state.altKm), state.fieldId, state.catchesLeft, state.holdSlots, r(state.holdRoomKg, 1), state.furnaces,
     (state.pieces || []).map((e) => [e.id, e.discovered === true, !!e.hazard, !!e.captured, e.piece && r(e.piece.mass, 10), e.posM ? [r(e.posM.x, 0.1), r(e.posM.y, 0.1), r(e.posM.z, 0.1)] : null]),
     (state.fields || []).map((f) => [f.id, (f.remaining || []).join(',')]),
     (state.held || []).map((h) => [h.id, h.piece && r(h.piece.mass, 10), h.melting === true]),

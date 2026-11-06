@@ -4575,8 +4575,9 @@ export const Constants = {
     // proportional-only law had no predictive braking and overshot by hundreds of metres from >500 m.
     MAX_ACCEL:        2.0, // m/s² — clamp per-tick commanded acceleration
     KP_VEL:           0.8, // dimensionless — velocity tracking gain
-    BRAKE_FRACTION:   0.5, // fraction of MAX_ACCEL reserved for along-track braking
+    STABLE_STEP_S:    2.0, // s — longest world step (dtWorld) the law above is tuned for (the shipped clock is 0.167 s, 10x warp 1.67 s); a longer frame (20x, 100x) gets the same law in continuous time (AutopilotSystem.update, Ruling 0: the same chase costs the same argon at every clock rate)   0.5, // fraction of MAX_ACCEL reserved for along-track braking
     V_CAP:           50.0, // m/s — hard cap on commanded closing speed v*
+    BRAKE_FRACTION:   0.5, // fraction of MAX_ACCEL reserved for along-track braking
     KP_POS:           0.2, // 1/s — deprecated; retained for compatibility, not used in control law
 
     // --- Station-keeping recoil compensation ---

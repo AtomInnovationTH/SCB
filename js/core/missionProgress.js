@@ -36,6 +36,30 @@ export function getMissionProgress(debrisCleared) {
 export const TRAINING_MISSIONS = 3;
 
 /**
+ * The training mass limit (DECISIONS §64 row 1, owner 2026-11-06: "Nothing over 500 kg"): `TOOL_RECOMMENDATION.MOTHER_MIN_MASS`,
+ * the mass above which only the mother's big net works. The one place the number is read (DebrisField, FieldRegistry, RoutePlanner).
+ * @returns {number} kg
+ */
+export function trainingMassLimitKg() {
+  const v = Constants.TOOL_RECOMMENDATION && Constants.TOOL_RECOMMENDATION.MOTHER_MIN_MASS;
+  return Number.isFinite(v) ? v : 500;
+}
+
+/**
+ * Does the training rule hold this high-field row back from the mission about to be flown (DECISIONS §64 row 1)? True when that
+ * mission is a training one (1..TRAINING_MISSIONS) and the row (`Constants.HIGH_FIELD[row]`) starts over the limit: the row stays
+ * owed and is laid out from mission 4 (`DebrisField._spawnWelcomeField` keeps it out). A row with no table entry is not held.
+ * @param {number} row index into `Constants.HIGH_FIELD`
+ * @param {number} missionNumber the internal number of the mission she will fly next
+ * @returns {boolean}
+ */
+export function trainingHoldsHighRow(row, missionNumber) {
+  if (!((missionNumber || 1) <= TRAINING_MISSIONS)) return false;
+  const def = Array.isArray(Constants.HIGH_FIELD) ? Constants.HIGH_FIELD[row] : null;
+  return !!def && def.massMin > trainingMassLimitKg();
+}
+
+/**
  * A mission's name as the player reads it, from the internal mission number. Missions 1..TRAINING_MISSIONS are
  * "Training mission 1".."Training mission 3"; the real missions after them count from 1 again (internal 4 is
  * "Mission 1", internal 12 "Mission 9"). Forms: 'start' (a line or heading starts with it), 'mid' (inside a

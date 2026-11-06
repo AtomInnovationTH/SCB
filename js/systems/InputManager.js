@@ -17,7 +17,7 @@ import { CeremonyTimeScale } from './CeremonyTimeScale.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 import {
-  classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, collarBusyLine, targetRangeM, netRangeLine,
+  classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, collarBusyLine, collarBusyState, targetRangeM, netRangeLine,
   netReachForMassM, driftOutOfReachLine, netFlightClockScale,
 } from './netRouting.js';
 import { computeLeadAim, netMaxReachM, overCatchLimit, catchLimitLine } from '../entities/CaptureNet.js';
@@ -2636,8 +2636,9 @@ export class InputManager {
   /**
    * N while the nose collar is busy: refuse BEFORE any aim turn, windup or gas (DECISIONS §61 row 1), with the lasso's own
    * `collar_busy` denial and line (LassoSystem.fire says the same, but only after the turn). Busy = a catch on the collar,
-   * a mother net away, a lasso catch waiting for the collar, or a leash hand-off running; while the hand-off's line is out and
-   * counting down, the line adds its time left (none in the pull-in or after the latch: no true count there). `leashOnly` (the large net, which may fire past a catch on the collar) checks the hand-off alone:
+   * a mother net away, a lasso catch waiting for the collar, or a leash hand-off running; while the hand-off runs, the line adds
+   * its time left (counted through the unfold; none in the nose pull-in or the recovery: no true count there). With the nose
+   * full the line is the nose-full text. `leashOnly` (the large net, which may fire past a catch on the collar) checks the hand-off alone:
    * its aim turn would replace the hand-off's own turn and hold.
    * @param {{leashOnly?: boolean}} [opts]
    * @returns {boolean} true when refused (nothing started)
@@ -2645,20 +2646,14 @@ export class InputManager {
   _refuseCollarBusy(opts) {
     const d = this._deps; if (!d) return false;
     const leashOnly = !!(opts && opts.leashOnly);
-    const drv = d.player && d.player.leashDriver;
-    const leashBusy = !!(drv && (drv.busy === true || (typeof drv.isActive === 'function' && drv.isActive())));
     const cns = d.captureNetSystem;
-    let busy = leashBusy;
-    if (!leashOnly && !busy && cns) {
-      busy = !!((typeof cns.getDockedCatch === 'function' && cns.getDockedCatch())
-        || (typeof cns.hasMotherNetInFlight === 'function' && cns.hasMotherNetInFlight())
-        || (d.lassoSystem && d.lassoSystem._pendingAdoption));
-    }
+    const { busy, waitS } = collarBusyState({
+      leashDriver: d.player && d.player.leashDriver, captureNetSystem: cns,
+      pendingAdoption: !!(d.lassoSystem && d.lassoSystem._pendingAdoption), leashOnly,
+    });
     if (!busy) return false;
-    let waitS = NaN;
-    // The driver gives a number only in the stage where it is true (the line out, counting down); none in the nose
-    // pull-in (its clock restarts) or after the latch (the clock stops while the radiator swings home).
-    if (leashBusy && typeof drv.handoffSecondsLeft === 'function') waitS = drv.handoffSecondsLeft();
+    // `waitS` (the shared predicate): a number only in the stage where it is true (counted through the line out, the turns, the
+    // reel, the latch and the radiator's unfold); none in the nose pull-in (its clock restarts) or in the recovery.
     const noseFull = !leashOnly && cns && typeof cns.getNoseFullLine === 'function' ? cns.getNoseFullLine() : null;
     eventBus.emit(Events.LASSO_DENIED, { reason: 'collar_busy' });
     eventBus.emit(Events.COMMS_MESSAGE, {

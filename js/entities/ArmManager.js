@@ -4027,6 +4027,9 @@ export class ArmManager {
     // out the reel-home turn runs on them and completes (it was refused over 60 s: the soft-lock). The tail boxes are never asked
     // (`_motherTurnBlock` already refuses without wheels); the gas turns her when the wheels cannot (full, no power).
     const opts = { holdOwner: 'REEL_HOME', holdS: 30 };
+    // (the line for this turn says "up to about N s": it is cut off when she is home, which can come far sooner than the plan, or
+    // later than her reel's own time when the reel waits at the 5 m hold; measured 11-06: the plan 45 s, the turn ran 10 s; a
+    // headless plane turn planned 127 s ran 49 s with 1.5 s of reel left at its start. `opts.endsInS` stays for a caller that can prove it.)
     if (tracked) {
       opts.track = () => this._rhTrackPlane(turn, owner, az, tol);
       opts.timeoutS = 60;                                                     // a moving target: the planned-time default is too short

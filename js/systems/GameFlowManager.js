@@ -1228,6 +1228,10 @@ export class GameFlowManager {
           bodyIds: bodies.filter(Boolean).map((b) => b.id),
           armId: data.armId || null,
           method: data.method || 'arm',
+          // What the secured-catch toast names (HUD): who held it and what it is.
+          armType: (returningArm && returningArm.type) || data.type || null,
+          debrisType: (debris && debris.type) || null,
+          mass: (debris && Number(debris.mass)) || 0,
         });
         // Award score via scoring system. `method` honours the emitter — 'arm' for daughters, 'mother' for a berthed whale
         // (§4.8/§19). ScoringSystem's METHOD_BONUS[method] || 1.0 accepts any string, so a new method needs no scoring-model
@@ -1727,6 +1731,7 @@ export class GameFlowManager {
             if (this._firstTimeComms.has('first_capture')) return; // already caught it
             if (this._firstTimeComms.has('drift_recovery')) return;
             if (!arrivedTarget.alive) return;
+            if (arrivedTarget._captured) return;   // grabbed meanwhile: it is not drifting
 
             const { player } = this._refs;
             if (!player) return;
@@ -1749,6 +1754,8 @@ export class GameFlowManager {
       }
     });
 
+    // Said at the SECURED catch (CATCH_COUNTED: once per body the mission counts), not the grab: a grab can still tear, be let go
+    // or snap its tether (11-06 training browser run, Ruling 0). A free-flying daughter's catch is never counted, so it says nothing here.
     const onFirstCapture = () => {
       // During onboarding the Director owns the post-capture flow (`captured` → `solo_intro` → `solo_practice` beats teach
       // "find another"): skip this duplicate "Press T" line then.
@@ -1762,8 +1769,7 @@ export class GameFlowManager {
         });
       }
     };
-    eventBus.on(Events.ARM_CAPTURED, onFirstCapture);
-    eventBus.on(Events.LASSO_CAPTURED, onFirstCapture);
+    eventBus.on(Events.CATCH_COUNTED, onFirstCapture);
   }
 
   /**
@@ -3837,12 +3843,14 @@ export class GameFlowManager {
     const berth = typeof reg.berthedSatellite === 'function' ? reg.berthedSatellite() : null;
     const atSat = !!berth && !(typeof reg.berthedHere === 'function' && reg.berthedHere());
     const owed = this.missionStartOwed();
+    // the pieces the next mission lays out at a field: the owed rows less the ones the training rule holds back (FieldRegistry.layableCount)
+    const layable = (fid) => (typeof reg.layableCount === 'function' ? reg.layableCount(fid) : reg.remainingCount(fid));
     if (id === CALL_ID) return this._callSatellite(choice, start);
     if (id === WAIT_ID) return this._pickWait(choice, start);           // route-1101 lane S2
     if (typeof id === 'string' && id.startsWith(PUSH_PREFIX)) return this._pickPush(id, choice, start, berth);
     if (id === STAY_ID) {
       if (atSat) return false;
-      if (owed && reg.remainingCount(reg.currentId()) <= 0) return false;  // nothing here to stay for
+      if (owed && layable(reg.currentId()) <= 0) return false;  // nothing here to stay for (a high field's rows held back in training, DECISIONS §64 row 1, are not pieces to stay for)
       trip.leaveChoice();
       if (berth) { this._leaveBerth(berth); this._clearBerth(); }          // a called satellite: the field is hers again
       start();
@@ -3855,7 +3863,7 @@ export class GameFlowManager {
     if (!field) return false;
     if (!owed) return false;
     if (sat ? !!(berth && berth.id === sat.id) : (!atSat && field.id === reg.currentId())) return false;     // already there
-    if (!sat && reg.remainingCount(field.id) <= 0) return false;
+    if (!sat && layable(field.id) <= 0) return false;
     this._syncTripDeps();
     trip.leaveChoice();                                                    // idle again, so `begin` accepts the trip
     if (this._flyToField(field, start)) {
@@ -5054,6 +5062,7 @@ export class GameFlowManager {
       dryMassKg: p.mass - gasKg - carriedKg, gasKg, carriedKg, altKm: herKm, fieldId,
       thrustN: realThrustN(reg._loadedGas()), ispS: probe.ispS, areaM2: probe.areaM2,
       owed, catchesLeft: owed ? 0 : quota - caught,
+      nextMissionNumber: typeof reg.nextMissionNumber === 'function' ? reg.nextMissionNumber() : null,    // the planner skips the high rows the training rule holds back (DECISIONS §64 row 1)
       pieces,
       fields: reg.fields().map((f) => ({ id: f.id, altKm: f.altKm, kind: f.kind === 'high' ? 'high' : 'low', remaining: reg.remainingRows(f.id) })),
       satellites: reg.satellites().map((s) => ({ id: s.id, altKm: s.altKm, name: s.name })),

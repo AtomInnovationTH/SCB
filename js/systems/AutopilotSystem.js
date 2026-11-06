@@ -9,7 +9,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
-import { classifyNetTarget } from './netRouting.js';
+import { classifyNetTarget, berthBusyPhrase } from './netRouting.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
@@ -18,6 +18,7 @@ import { findNearestLiveDebris } from './NavRecoveryAdvisor.js';
 import { strutLocalDirection, bestStrutAlpha, chestStrutAlpha, launchKickPerNs } from '../entities/ArmDockBasis.js';
 import { computeCoM, computeInertia, strutTipMeters, strutMidpointMeters } from './CoMCalculator.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg, coldGasPoolToKg } from './ResourceSystem.js';
+import { estimateChase, chaseWarnLine, chaseNoGasLine, chaseTooFarLine, CHASE_WARN_FRACTION, CHASE_CONFIRM_WINDOW_MS } from './ChaseCost.js';
 import { wingsHint } from './WingsHint.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { tripRefuses } from './TransferTrip.js';
@@ -92,10 +93,17 @@ const ARRIVAL_NO_LOCK = Symbol('arrivalNoLock');
  * @param {number} [motherNetsLeft] the mother's nets now (default: a full magazine)
  * @param {object} [readiness] `ArmManager.daughterLaunchReadiness` for the piece; with nets 0 the D line waits until a
  *   daughter can launch (null = say nothing yet / a daughter is already out), or names the real blocker
+ * @param {{busy: boolean, waitS: number}|null} [berth] the shared cargo-berth answer (netRouting.collarBusyState); busy with
+ *   nets left: N would be refused, so the line says the wait instead of inviting it (Ruling 0)
  * @returns {string|null} */
-export function arrivalLineText(mass, motherNetsLeft, readiness) {
+export function arrivalLineText(mass, motherNetsLeft, readiness, berth) {
   const left = Number.isFinite(motherNetsLeft) ? motherNetsLeft : Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
-  if (left > 0) return 'In position. Press N to net it.';
+  if (left > 0) {
+    if (berth && berth.busy && berth.noseFull) return `In position. ${berth.noseFull}`;   // N is refused for good: never "then press N"
+    return berth && berth.busy
+      ? `In position. ${berthBusyPhrase(berth.waitS)}; then press N to net it.`
+      : 'In position. Press N to net it.';
+  }
   if (mass > 0 && classifyNetTarget(mass).band === 'whale') {
     return outOfMotherNetsLine();
   }
@@ -664,6 +672,7 @@ export class AutopilotSystem {
     /** @type {number} The mother's magazine capacity (4 at the start; 6 / 8 / 10 after the upgrade), from the podMax
      *  on her inventory events. A new game puts this many nets back. */
     this._motherNetCap = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+    this._collarBusyProbe = null;             // setCollarBusyProbe: the cargo berth's answer for the lines that invite N
 
     /** @type {string} 'OFF'|'RENDEZVOUS_FAR'|'MATCH_ORBIT'|'TRAIL_ALIGN'|'HOLD' */
     this._phase = PHASE.OFF;
@@ -709,6 +718,8 @@ export class AutopilotSystem {
 
     /** @type {boolean} Armed after a trawl-denied engage: the next A press aborts the sweep */
     this._trawlAbortArmed = false;
+    /** @type {({id: *, target: object, at: number}|null)} Armed by the cost warning: a second A press on the same piece within CHASE_CONFIRM_WINDOW_MS engages */
+    this._chaseConfirm = null;
 
     this._debrisMapCluster = null;
 
@@ -863,6 +874,21 @@ export class AutopilotSystem {
   }
 
   _slowTurnBusy() { return this._tripOmega > 0 || !!this._aimCoroutine || !!this._turn || !!this._preturn; }
+
+  /**
+   * Hand over the one answer to "would N be refused for the cargo berth now?" (LassoSystem.collarBusyNow, i.e.
+   * netRouting.collarBusyState). main.js wires it; unwired (headless tests) = never busy.
+   * @param {(() => {busy: boolean, waitS: number})|null} fn
+   */
+  setCollarBusyProbe(fn) { this._collarBusyProbe = typeof fn === 'function' ? fn : null; }
+
+  /** @returns {{busy: boolean, waitS: number}|null} the berth's state when N would be refused for it, else null */
+  _berthBusyNow() {
+    if (!this._collarBusyProbe) return null;
+    let s = null;
+    try { s = this._collarBusyProbe(); } catch (_e) { s = null; }
+    return s && s.busy ? s : null;
+  }
 
   get engaged() { return this._engaged; }
 
@@ -1503,6 +1529,9 @@ export class AutopilotSystem {
 
   /** Attempt to engage: validates ΔV and trawl state, resolves (or one-tap acquires) a target; a pinned in-net-range target gets a hint instead. */
   engage() {
+    // A pending "press A again" (the cost warning) lives for one press: whatever refuses below, or a chase of another piece, clears it.
+    const armedConfirm = this._chaseConfirm;
+    this._chaseConfirm = null;
     // The burn to the next field is the ship's job; the player's autopilot waits until it is over.
     if (tripRefuses('autopilot')) return;
     // Empty battery (DECISIONS §27): refuse, and say so (answers the A press).
@@ -1611,7 +1640,14 @@ export class AutopilotSystem {
       : ((this._cachedDebrisResult && this._cachedDebrisResult.debris) || null);
     if (activeTarget && activeTarget._onboardingPinned) {
       // No mother nets: N would only say "Out of mother nets", so name what she can do (arrivalLineText: a daughter, or her blocker).
+      // Nets left but the cargo berth busy: N would be refused, so the line says the wait (the shared predicate).
       let pinText = 'Target is already in net range — launch the net (N).';
+      const pinBerth = this._berthBusyNow();
+      if (this._motherNetsLeft > 0 && pinBerth) {
+        pinText = pinBerth.noseFull
+          ? `Target is already in net range. ${pinBerth.noseFull}`   // N is refused for good: never "then launch the net"
+          : `Target is already in net range — ${berthBusyPhrase(pinBerth.waitS, true)}; then launch the net (N).`;
+      }
       if (this._motherNetsLeft <= 0) {
         const d = arrivalLineText(activeTarget.mass, 0, this._armManager?.daughterLaunchReadiness?.(activeTarget) ?? null);
         pinText = d === 'In position. Press D to send a daughter.' ? 'Target is already in net range. Press D to send a daughter.'
@@ -1638,6 +1674,8 @@ export class AutopilotSystem {
     }
 
     const heading = this._determineHeading();
+    // The cost gate (DECISIONS §64 row 2): a chase of a piece says what it will cost before it spends it.
+    if (heading && (heading.mode === 'TARGET' || heading.mode === 'DEBRIS') && this._chaseGate(activeTarget, armedConfirm)) return;
     if (!heading) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Autopilot has no target to fly to, so it is following your orbit.',
@@ -1747,11 +1785,76 @@ export class AutopilotSystem {
   }
 
   /**
+   * The cost gate of engage() for a piece chase (DECISIONS §64 row 2, owner 2026-11-06). Says what the chase costs and returns true
+   * (the press is spent, nothing engages) when: the piece can never be reached from here (refuse, "too far"); it costs more than she
+   * has (refuse); it costs more than CHASE_WARN_FRACTION of what she has and this is not the second press on the same piece within
+   * CHASE_CONFIRM_WINDOW_MS (warn, arm the second press). Returns false (engage as before, no line) otherwise, or when no estimate
+   * can be made. Nothing is spent on a refusal or a warning.
+   * @private
+   * @param {object} target the piece
+   * @param {({id: *, target: object, at: number}|null)} armed the confirm armed by the previous press, already cleared from `this`
+   * @returns {boolean}
+   */
+  _chaseGate(target, armed) {
+    const est = this._chaseEstimate(target);
+    if (!est) return false;
+    const res = this._player && this._player.resources;
+    const gasId = (res && res.tankGasId) || Constants.DEFAULT_FUEL;
+    const say = (text) => eventBus.emit(Events.COMMS_MESSAGE, { sender: 'HOUSTON', text, priority: 'warning', _reactive: true, _keep: true });
+    if (!est.canArrive) { say(chaseTooFarLine(est.rangeKm)); return true; }
+    if (est.argonKg > est.gasKg) { say(chaseNoGasLine(est.argonKg, est.gasKg, gasId)); return true; }
+    if (est.argonKg <= CHASE_WARN_FRACTION * est.gasKg) return false;
+    const now = Date.now();
+    const same = armed && (target.id != null ? armed.id === target.id : armed.target === target);
+    if (same && now - armed.at <= CHASE_CONFIRM_WINDOW_MS) return false;       // the second press: go
+    this._chaseConfirm = { id: target.id, target, at: now };
+    say(chaseWarnLine(est.argonKg, est.gasKg, gasId));
+    return true;
+  }
+
+  /**
    * Engine gas aboard now, kg (what ApproachCostLine subtracts for the "That approach used ..." line), or null with no ship.
    * @private
    */
   _gasKgNow() {
     return this._player ? engineGasKg(this._player.resources) : null;
+  }
+
+  /**
+   * What chasing `target` from here would cost (ChaseCost.estimateChase: engine gas, and whether she can arrive at all), or null
+   * when it can't be worked out (no ship, no mass budget wired, no orbit: headless stubs) and the caller lets the chase go as before.
+   * @private
+   * @param {object} target debris record
+   * @returns {({argonKg: number, dvMps: number, canArrive: boolean, reason: (string|null), rangeKm: number, gasKg: number})|null}
+   */
+  _chaseEstimate(target) {
+    const p = this._player;
+    if (!p || !target || !target.orbit || !this._armManager || typeof this._armManager.getMassBudget !== 'function') return null;
+    if (typeof p.getPosition !== 'function' || typeof p.getVelocity !== 'function') return null;
+    let massKg = NaN;
+    try { massKg = this._armManager.getMassBudget().shipMassKg; } catch (_) { return null; }
+    if (!this._targetSceneState(target, this._tmpAPCartPos, this._tmpAPCartVel)) return null;
+    const AP = Constants.AUTOPILOT, SS = Constants.SCENE_SCALE, RE = Constants.EARTH_RADIUS_KM;
+    const Pd = this._tmpAPCartPos, Vd = this._tmpAPCartVel, Pm = p.getPosition(), Vm = p.getVelocity();
+    const rx = Pd.x - Pm.x, ry = Pd.y - Pm.y, rz = Pd.z - Pm.z;
+    const rangeM = Math.hypot(rx, ry, rz) / M;
+    const relSpeedMps = Math.hypot(Vd.x - Vm.x, Vd.y - Vm.y, Vd.z - Vm.z) * 1000;
+    const fuel = Constants.FUELS[(p.resources && p.resources.tankGasId)] || Constants.FUELS[Constants.DEFAULT_FUEL];
+    const est = estimateChase({
+      rangeM, relSpeedMps,
+      ahead: rx * Vm.x + ry * Vm.y + rz * Vm.z >= 0,
+      shipAltKm: Math.hypot(Pm.x, Pm.y, Pm.z) / SS - RE,
+      targetAltKm: target.orbit.semiMajorAxis / SS - RE,
+      trailM: this._getTrailDistance(),
+      maxAccel: AP.MAX_ACCEL, brakeFraction: AP.BRAKE_FRACTION, vCap: AP.V_CAP,
+      thrustScale: this._engineThrustScale(),
+      consMult: typeof p.getConsumptionMultiplier === 'function' ? p.getConsumptionMultiplier() : 1,
+      massKg, isp: fuel && fuel.isp, g0: Constants.G0,
+      vleoMinKm: Constants.VLEO_MIN / SS, leoMaxKm: Constants.LEO_MAX / SS,
+    });
+    const gasKg = this._gasKgNow();
+    if (est.reason === 'BAD_INPUT' || !Number.isFinite(gasKg)) return null;
+    return { ...est, rangeKm: rangeM / 1000, gasKg };
   }
 
   /**
@@ -1843,7 +1946,7 @@ export class AutopilotSystem {
     this._arrivalPendingT = 0;
     const readiness = this._armManager?.daughterLaunchReadiness?.(lockRef);
     if (!readiness) { this._arrivalPendingFor = undefined; this._arrivalSaidFor = key; return; }
-    const text = arrivalLineText(lockRef.mass, this._motherNetsLeft, readiness);
+    const text = arrivalLineText(lockRef.mass, this._motherNetsLeft, readiness, this._berthBusyNow());
     if (text === null && !readiness.going) return;   // still waiting
     this._arrivalPendingFor = undefined;
     this._arrivalSaidFor = key;
@@ -2266,8 +2369,24 @@ export class AutopilotSystem {
     // request limit below (MAX_ACCEL · dt) is not, so the real limit is thrustScale·MAX_ACCEL and the real/brake headroom
     // (1/BRAKE_FRACTION = 2x) is the same on every fuel. The MATCH→TRAIL gate below reads the same A_BRAKE.
     const A_BRAKE = AP.MAX_ACCEL * AP.BRAKE_FRACTION * this._engineThrustScale();   // m/s²
-    const vStarBrake = Math.sqrt(2 * A_BRAKE * posErrM);   // m/s
-    const vStar = Math.min(AP.V_CAP, vStarBrake);          // m/s
+    // A frame longer than AP.STABLE_STEP_S (the clock above ~10x warp; floors 4-6 run 20x, 100x) is one impulse then a coast of
+    // dtWorld game seconds, so the law above, tuned for steps of a second or two, oscillates through the goal and bills several
+    // times the argon (measured 2026-11-06, tmp/t11/rate: a 3 km chase 1.73 kg at 10x, 7.36 kg at 100x). Beyond that step the
+    // per-frame law is made the same continuous-time one: (1) the velocity gain is raised so the correction per game second matches
+    // the stable step's, (2) the braking profile is the speed after this frame's impulse from which the coast of dtWorld just
+    // reaches the goal (v*(r) = -A·h + √((A·h)² + 2·A·r), h = the excess over the stable step, halved), (3) v* never exceeds r /
+    // dtWorld, so one coast cannot carry her through the goal. At or below the stable step all three are the old law, bit for bit.
+    const dtExtra = Math.max(0, dtWorld - AP.STABLE_STEP_S);   // s
+    let vStarBrake;
+    if (dtExtra > 0) { const h = 0.5 * A_BRAKE * dtExtra; vStarBrake = -h + Math.sqrt(h * h + 2 * A_BRAKE * posErrM); }
+    else vStarBrake = Math.sqrt(2 * A_BRAKE * posErrM);   // m/s
+    let vStar = Math.min(AP.V_CAP, vStarBrake);            // m/s
+    let kpVel = AP.KP_VEL;
+    if (dtExtra > 0) {
+      vStar = Math.min(vStar, posErrM / dtWorld);
+      const thrustScale = this._engineThrustScale(), step = Math.min(0.99, AP.KP_VEL * thrustScale);   // the fraction of the error one stable step removes
+      kpVel = (1 - Math.pow(1 - step, dtWorld / AP.STABLE_STEP_S)) / thrustScale;
+    }
 
     // goalDir in world frame (scene-unit direction == world-direction since M is scalar)
     const goalDir = this._goalDir.set(0, 0, 0);
@@ -2279,12 +2398,12 @@ export class AutopilotSystem {
 
     switch (this._phase) {
       case PHASE.RENDEZVOUS_FAR: {
-        dvCmd.copy(velCtrlErr).multiplyScalar(AP.KP_VEL);
+        dvCmd.copy(velCtrlErr).multiplyScalar(kpVel);
         if (posErrM < FAR_TO_MATCH) this._setPhase(PHASE.MATCH_ORBIT);
         break;
       }
       case PHASE.MATCH_ORBIT: {
-        dvCmd.copy(velCtrlErr).multiplyScalar(AP.KP_VEL);
+        dvCmd.copy(velCtrlErr).multiplyScalar(kpVel);
         // MATCH→TRAIL gate: under the braking law the residual velocity error is v*(r) by design, so a tight velErr gate would block
         // TRAIL_ALIGN entry until sub-metre posErr; gate on posErr and a looser velErr consistent with v*(D_trail).
         if (posErrM < Dtrail_m && velErrMps < Math.sqrt(2 * A_BRAKE * Dtrail_m)) {
@@ -2295,7 +2414,7 @@ export class AutopilotSystem {
         break;
       }
       case PHASE.TRAIL_ALIGN: {
-        dvCmd.copy(velCtrlErr).multiplyScalar(AP.KP_VEL);
+        dvCmd.copy(velCtrlErr).multiplyScalar(kpVel);
         if (posErrM < ARRIVE_TOL && velErrMps < VEL_TOL && angleRad < ANG_TOL) {
           this._setPhase(PHASE.HOLD);
           this._holdTimer = 0;
@@ -2364,7 +2483,7 @@ export class AutopilotSystem {
           if (!lockDone && this._arrivalSaidFor !== lockKey && this._arrivalPendingFor !== lockKey) {
             const readiness = (lockRef && !(this._motherNetsLeft > 0))
               ? (this._armManager?.daughterLaunchReadiness?.(lockRef) ?? null) : null;
-            const text = arrivalLineText(lockRef ? lockRef.mass : 0, this._motherNetsLeft, readiness);
+            const text = arrivalLineText(lockRef ? lockRef.mass : 0, this._motherNetsLeft, readiness, this._berthBusyNow());
             if (text === null && !readiness?.going) {
               this._arrivalPendingFor = lockKey;    // a daughter will be ready soon: say it then
               this._arrivalPendingT = 0;
@@ -3273,7 +3392,7 @@ export class AutopilotSystem {
     // A new game starts recentring again: the between-catches pause must not outlive the run (review, capture-1104).
     eventBus.on(Events.GAME_RESET, () => {
       this._motherNetFlying = false;
-      if (this._player) this._player._recenterPaused = false;
+      if (this._player) { this._player._recenterPaused = false; this._player._seatedHoldPending = false; }
     });
     // NET_FAILED / TETHER_SNAP are ArmUnit-only emitters: subscribed defensively, never relied on for mother cleanup.
     eventBus.on(Events.NET_FAILED, endNetHold);
@@ -4603,8 +4722,28 @@ export class AutopilotSystem {
   _shotAimLine(shot) {
     // a shot the wheels turn is no gas turn: say the wheels and no gas (grams only where gas turns her)
     if (shot.src === 'wheels') return this._wheelAimLine(shot, shot.timeS, '', shot.alt && shot.kind !== 'pair' ? this._shotQuickWords(shot.alt) : '');
-    if (shot.kind === 'pair') return `Turning the ship to line up the pair shot. About ${Math.max(1, Math.round(shot.timeS))} s, ${this._shotGasWords(shot.gasKg)}.`;
-    return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(shot.timeS))} s, ${this._shotGasWords(shot.gasKg)}.${shot.alt ? this._shotQuickWords(shot.alt) : ''}`;
+    const sec = Math.max(1, Math.round(shot.timeS + this._carryBrakeS()));   // + the wait for a carried wheel rate to brake (Ruling 0)
+    if (shot.kind === 'pair') return `Turning the ship to line up the pair shot. About ${sec} s, ${this._shotGasWords(shot.gasKg)}.`;
+    return `Turning the ship to line up the launch. About ${sec} s, ${this._shotGasWords(shot.gasKg)}.${shot.alt ? this._shotQuickWords(shot.alt) : ''}`;
+  }
+
+  /**
+   * @private Seconds the slow law's CARRIED rate (`_tripOmega`: a wheel slew or trip turn still turning her when an aim takes the nose)
+   * needs to brake at its source's own α. The incoming aim waits for her to come to rest (`_slothCarryTick`) before the gas turn
+   * starts, so a gas aim's line must add it (browser g1: "About 7 s" took 21 s: 13 s of waiting, then the 8 s burn). 0 with no rate carried.
+   */
+  _carryBrakeS() {
+    const w = this._tripOmega || 0, p = this._player;
+    if (!(w > 0) || !this._tripAxis || !p || typeof p.getAttitudeInertia !== 'function') return 0;
+    // The same two checks `_slothCarryTick` makes before it brakes: with the source off, or wheels without power while the gas
+    // can brake (`_slothBrakeBill`), the carried rate ends at once and the aim waits no seconds.
+    if (!this._tripSourceOn(p)) return 0;
+    const src = this._tripSrc || 'tailBoxes';
+    if (src === 'wheels' && typeof p.wheelsUsable === 'function' && !p.wheelsUsable()
+        && (p.resources ? p.resources.coldGas || 0 : 0) > (typeof p.slothGasDustPool === 'function' ? p.slothGasDustPool() : 0)) return 0;
+    if (this._slothWhyBlocked(p, src)) return 0;   // nothing can push: she coasts on and the aim is not held up
+    const { aFull } = this._slothTripAccel(p, this._tripAxis.x, this._tripAxis.y, src);
+    return aFull > 0 ? w / aFull : 0;
   }
 
   /** @private A time in plain words as SHIP time: the faster clock shows during a wheel turn (the HUD's "×8"), and the line must
@@ -4619,7 +4758,26 @@ export class AutopilotSystem {
     const head = shot && shot.kind === 'pair'
       ? 'Turning the ship on the reaction wheels to line up the pair shot'
       : 'Turning the ship on the reaction wheels';
-    return `${head} (no steering gas used): ${this._wheelTimeWords(sec)}${kick}.${quick}`;
+    return `${head}${this._kickSourceRunning() ? '' : ' (no steering gas used)'}: ${this._wheelTimeWords(sec)}${kick}.${quick}`;
+  }
+
+  /**
+   * @private True while something can push the ship's attitude and spill onto the steering gas (`PlayerSatellite._flushKicks`: what the
+   * wheels cannot take is billed as gas): a daughter reeling home or latching, a mother-net / lasso catch being hauled in, or a
+   * reel-home turn's hold. The wheel line then makes no "no steering gas used" claim (Ruling 0: the reel's push spilled 33-142 g
+   * during lines that said none).
+   * @returns {boolean}
+   */
+  _kickSourceRunning() {
+    if (this._attitudeHoldOwner === 'REEL_HOME' || this.isReelInHeld()) return true;
+    const arms = this._armManager && this._armManager.arms;
+    if (!arms) return false;
+    for (const a of arms) {
+      if (!a) continue;
+      if (a.isReelingHome === true) return true;
+      if (typeof a.reelHomeStage === 'function' && a.reelHomeStage()) return true;
+    }
+    return false;
   }
 
   /** @private " (quick: 7 s, 133 g)": the other way of the shot (seconds under 90, else minutes). */
@@ -4661,7 +4819,7 @@ export class AutopilotSystem {
   /** @private The gas line of a net aim: the estimate's seconds and grams; with no estimate the old worst case. */
   _netGasLine(e, rate) {
     if (!e) return `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / rate)} s at most.`;
-    return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(e.timeS))} s, ${this._shotGasWords(e.gasKg)}.`;
+    return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(e.timeS + this._carryBrakeS()))} s, ${this._shotGasWords(e.gasKg)}.`;
   }
 
   /** @private The same line when the wheels hand a daughter aim to the gas (what is left of the turn, plus the kick). */
@@ -4741,6 +4899,8 @@ export class AutopilotSystem {
    *   sizes the first look (sign, gas check, acceleration); every frame `track()` gives the signed angle still to turn
    *   about the axis (rad) and her rate follows it; `null` / NaN = stop here (she brakes at the couples' α).
    * @param {number} [opts.stopRad] — tracked turns: the angle left (rad) at which a turn at rest is over (default 0.1°)
+   * @param {number} [opts.endsInS] — the turn will be cut off after this many ship seconds (the reel-home turn ends when her
+   *   daughter is home): the wheel line says the shorter of this and the plan, never a time the turn will not run
    * @returns {Promise<{ angleRad:number, gasUnits:number, seconds:number }>}
    *   A rejection is an Error carrying `progressRad` and `gasUnits` (what was done so far).
    */
@@ -4849,13 +5009,20 @@ export class AutopilotSystem {
         stopRad: (Number.isFinite(opts.stopRad) && opts.stopRad > 0) ? opts.stopRad : TURN_TRACK_STOP_RAD,
         dirPos: { x: Math.sign(nBody.x) || 1, y: Math.sign(nBody.y) || 1 },   // couple signs that speed a POSITIVE turn up
       };
+      // Asked before this turn's own hold is set: a bare scripted turn's anonymous hold would read as a reel-in hold.
+      const kickBefore = this._kickSourceRunning();
       this.holdAttitude(holdS, { owner: holdOwner });
       this._player.aimHold = true;
       eventBus.emit(Events.AIM_SEQUENCE_START, { mode: 'turn' });
       if (slothTurn) {
+        // A reel-home turn (holdOwner REEL_HOME) runs while her push can spill onto the steering gas (`PlayerSatellite._flushKicks`)
+        // and is cut off when she is home, so the plan is only a ceiling: "up to about N s", never a promised time.
+        const reelHome = opts.holdOwner === 'REEL_HOME';
+        const spill = reelHome || kickBefore;
+        const lineS = Number.isFinite(opts.endsInS) && opts.endsInS > 0 ? Math.min(slothEstS, opts.endsInS) : slothEstS;
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: slowSrc === 'wheels'
-            ? `Turning the ship on the reaction wheels (no steering gas used): ${this._wheelTimeWords(slothEstS)}.`
+            ? `Turning the ship on the reaction wheels${spill ? '' : ' (no steering gas used)'}: ${reelHome ? 'up to ' : ''}${this._wheelTimeWords(lineS)}.`
             : `Emergency steering — turning slowly on the tail boxes: ${player.slothTimeWords(slothEstS)}.`,
           priority: slowSrc === 'wheels' ? 'info' : 'warning', source: 'HOUSTON',
         });

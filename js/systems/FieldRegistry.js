@@ -52,6 +52,7 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { trainingHoldsHighRow } from '../core/missionProgress.js';
 import { engineGasKg } from './ResourceSystem.js';
 import { shipWear } from './ShipWear.js';
 import { realThrustN, playSeconds, tripDragAreaM2 } from './TripProfile.js';
@@ -185,6 +186,30 @@ export class FieldRegistry {
 
   remainingCount(id) { return (this._state.remaining[id] || []).length; }
 
+  /**
+   * The internal number of the mission her next trip (or a Stay) starts: the last one started, plus one. (Mission 1 counts as
+   * started in a fresh game, so the list that opens after it is for mission 2.)
+   * @returns {number}
+   */
+  nextMissionNumber() { return this._state.at + 1; }
+
+  /**
+   * The owed rows of a field that will be LAID OUT when the next mission starts: `remainingRows` less the high-field rows the training rule
+   * holds back (DECISIONS §64 row 1: nothing over 500 kg in missions 1..3; they stay owed and come out from mission 4).
+   * @param {string} id the field's id
+   * @returns {number[]}
+   */
+  layableRows(id) {
+    const f = this.fieldById(id);
+    const rows = this.remainingRows(id);
+    if (!f || f.kind !== 'high') return rows;
+    const next = this.nextMissionNumber();
+    return rows.filter((r) => !trainingHoldsHighRow(r, next));
+  }
+
+  /** How many pieces the next mission would lay out at a field (`layableRows`): what a trip or a Stay there is for. */
+  layableCount(id) { return this.layableRows(id).length; }
+
   satellites() { return Constants.RESUPPLY.SATS.slice(); }
 
   satelliteById(id) { return Constants.RESUPPLY.SATS.find((s) => s.id === id) || null; }
@@ -313,7 +338,7 @@ export class FieldRegistry {
     const here = sat || this.currentField();
     let best = null;
     for (const f of this.fields()) {
-      if ((!sat && f.id === here.id) || this.remainingCount(f.id) === 0) continue;
+      if ((!sat && f.id === here.id) || this.layableCount(f.id) === 0) continue;
       const plan = this.planTo(f);
       if (!plan || !plan.enough) continue;
       const gap = Math.abs(f.altKm - here.altKm);

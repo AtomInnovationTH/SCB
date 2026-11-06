@@ -524,6 +524,9 @@ export class PlayerSatellite extends THREE.Group {
     // A refused mother-net shot / lasso cast leaves the ship pointed where the aim turned it: no
     // recenter toward prograde until the next deliberate attitude change. See holdHeadingAfterRefusal.
     this._recenterPaused = false;
+    // A seated catch's hold asked while a reel-home turn held the attitude (`holdHeadingBetweenCatches({ afterTurn })`): the
+    // per-frame clear under that owner would wipe `_recenterPaused`, so the hold waits here and is applied when the turn hands back.
+    this._seatedHoldPending = false;
 
     // Autopilot flag: suppresses orientation decay when autopilot is steering
     this.autopilotEngaged = false;
@@ -8407,7 +8410,7 @@ export class PlayerSatellite extends THREE.Group {
     const y = clamp(yawCmd || 0, -1, 1);
     // Latch the RAW demand: the integrator re-applies the rate-cap gate itself (ω changes across substeps).
     this._attitudeCmd = (p !== 0 || y !== 0) ? { pitch: p, yaw: y } : null;
-    if (this._attitudeCmd) this._recenterPaused = false;   // a manual command ends the recenter pause
+    if (this._attitudeCmd) { this._recenterPaused = false; this._seatedHoldPending = false; }   // a manual command ends the recenter pause
 
     // Rate-cap gate for FEEDBACK/BILLING (mirrors _integrateAttitudeStep): an axis already at the cap goes dark and unbilled.
     const A = Constants.ATTITUDE;
@@ -8473,9 +8476,15 @@ export class PlayerSatellite extends THREE.Group {
    * daughter going out). Called where the attitude hold is released, i.e. while the owner is still AIM: the rate is already
    * zero and the recentre has not run, so the flag is all there is to do. While an owner other than the player is in charge
    * (a hold, an aim) the per-frame clear in `_tickAttitudeCore` keeps it off, as designed: the next release sets it again.
+   *
+   * A daughter docks with a catch DURING a reel-home turn (the turn ends when she docks): the hold is asked while the turn
+   * still owns the attitude, and no release follows that calls this. `opts.afterTurn` remembers it (`_seatedHoldPending`)
+   * and the hand-back from the turn applies it. The same ends: a manual command, autopilot engage, a daughter out, a new game.
+   * @param {{afterTurn?: boolean}} [opts]
    */
-  holdHeadingBetweenCatches() {
+  holdHeadingBetweenCatches(opts) {
     this._recenterPaused = true;
+    if (opts && opts.afterTurn && this._attitudeOwner === 'AIM') this._seatedHoldPending = true;
   }
 
   /**
@@ -9069,6 +9078,13 @@ export class PlayerSatellite extends THREE.Group {
       this._handAttitudeToPlayer(prev === 'AIM' || (prev === 'AUTOPILOT' && this._holdsHeadingForTether()));
     }
 
+    // The seated catch's hold asked during a reel-home turn: the turn hands back, the hold starts (set before the recentre runs).
+    // The autopilot taking over instead ends it (its engage is a new heading).
+    if (this._seatedHoldPending) {
+      if (entersManual) { if (prev === 'AIM') this._recenterPaused = true; this._seatedHoldPending = false; }
+      else if (owner === 'AUTOPILOT') this._seatedHoldPending = false;
+    }
+
     // A spin another owner was carrying (`adoptBodySpin`) joins her rate once she is hers again, after the hand-back's zeroing
     if (this._adoptSpin) {
       if (entersManual) {
@@ -9389,7 +9405,7 @@ export class PlayerSatellite extends THREE.Group {
   setAttitudeConstraintTier(tier) {
     this._attitudeConstraintTier = tier || 'none';
     if (this._attitudeConstraintTier === 'none') this._tetherLatchOn = false;   // no daughter out, no latch
-    else this._recenterPaused = false;   // a daughter out on her line has her own rules for the heading
+    else { this._recenterPaused = false; this._seatedHoldPending = false; }   // a daughter out on her line has her own rules for the heading
   }
 
   /**

@@ -11,7 +11,7 @@ import { devShotGate } from '../core/DevShotGate.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
-import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, COLLAR_BUSY_LINE, targetRangeM, netRangeLine, motherNLine, motherNWorks } from './netRouting.js';
+import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, collarBusyLine, collarBusyState, berthBusyPhrase, targetRangeM, netRangeLine, motherNLine, motherNWorks } from './netRouting.js';
 import { isFree, pieceIsCaught, netRefusalLine, lassoRangeAllOwnedLine } from './PieceClaim.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
@@ -360,6 +360,20 @@ export class LassoSystem {
 
     setPlayer(player) {
         this._player = player || null;
+    }
+
+    /**
+     * Would N be refused for the cargo berth right now? The ONE answer (netRouting.collarBusyState): `fire()` refuses on it,
+     * and every line that invites N (this class's in-range hint; the autopilot's pinned-piece and arrival lines, through the
+     * probe main.js hands it) says the wait instead while it is true (Ruling 0).
+     * @returns {{busy: boolean, leashBusy: boolean, waitS: number}}
+     */
+    collarBusyNow() {
+        return collarBusyState({
+            leashDriver: this._player && this._player.leashDriver,
+            captureNetSystem: this._captureNetSystem,
+            pendingAdoption: !!this._pendingAdoption,
+        });
     }
 
     /** Hand over the scene manager so the web can draw in the near pass. The web follows the HELD piece it wraps (its
@@ -799,12 +813,22 @@ export class LassoSystem {
                 // until he is back on the ship. Picked now, as the hint is posted.
                 const _nWorks = motherNWorks();
                 const _castLine = motherNLine('In range. N to cast');
-                const _castComms = motherNLine('Target in lasso range. Press N to cast.');
                 if (_castLine == null) return;
+                // While N would be refused for the cargo berth (a catch on the collar, a hand-off running) the line says the
+                // wait instead of inviting a key press that will be denied (Ruling 0; the same predicate N's refusal reads).
+                // A veteran's ticker entry just waits, unconsumed, until the berth is free: then the invitation is true.
+                const berth = this.collarBusyNow();
+                const veteran = !!(ss && typeof ss.isVeteran === 'function' && ss.isVeteran());
+                if (berth.busy && veteran) return;
+                const _castComms = berth.busy
+                    ? (berth.noseFull
+                        // nose full: N is refused for good, so no "then press N": say the refusal's own words (Ruling 0)
+                        ? `Target in lasso range. ${berth.noseFull}`
+                        : `Target in lasso range. ${berthBusyPhrase(berth.waitS)}; then ${_nWorks ? 'press N to cast.' : motherNLine('N to cast.')}`)
+                    : motherNLine('Target in lasso range. Press N to cast.');
                 this._inRangePromptId = targetId;
 
                 // Veteran: a one-line ticker entry instead of a comms line.
-                const veteran = !!(ss && typeof ss.isVeteran === 'function' && ss.isVeteran());
                 if (veteran) {
                     eventBus.emit(Events.HINT_POSTED, {
                         id: 'lasso_in_range',
@@ -875,13 +899,14 @@ export class LassoSystem {
         // The lasso rides the ONE holding model: a catch berths at the nose collar. Soft-block while that station is busy
         // (a mated/inbound mother net holds it, or a catch is already waiting for it).
         const cns = this._captureNetSystem;
-        if (cns && (cns.getDockedCatch() || cns.hasMotherNetInFlight() || this._pendingAdoption)) {
+        const berth = this.collarBusyNow();
+        if (berth.busy) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'collar_busy' });
             // A catch the nose cannot get rid of (no furnace; every tip and daughter cell taken) gets the plain "nose is full"
             // line; while a hand-off is pending the wait line stays.
-            const noseFull = typeof cns.getNoseFullLine === 'function' ? cns.getNoseFullLine() : null;
+            const noseFull = cns && typeof cns.getNoseFullLine === 'function' ? cns.getNoseFullLine() : null;
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: noseFull || COLLAR_BUSY_LINE,
+                text: noseFull || collarBusyLine(berth.waitS),
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',

@@ -227,18 +227,23 @@ export class LeashDriver {
   handoffNet() { return this._h ? this._h.net : null; }
 
   /**
-   * Seconds left of the hand-off, only where that count is true: the middle stage (the line is out, the radiators fold and
-   * the catch swings to the tip), where `net._cargoS` counts up from 0 to `EXPECTED_S`. NaN in the nose pull-in (its clock
-   * restarts when the line goes out, so a number there would jump back up) and once the catch has latched, relatched or been
-   * freed (`_applyState` stops the clock there while the radiator still swings home): the caller says no time then.
+   * Seconds left of the hand-off (until N works again), counted by the machine from every phase still to run: fold and payout,
+   * the first ship turn, the second turn of the straight arrival, the reel, the latch and the radiator's unfold
+   * (`LeashTransfer.secondsLeft`, Ruling 0: the old count was a fixed 23 s less the time run, 11 s short on a long hand-off).
+   * NaN in the nose pull-in (its clock restarts when the line goes out, so a number there would jump back up) and in the recovery
+   * (relatched, freed, REEL_HOME): the caller says no time then. With no machine to ask (a test's stand-in), the old count: the
+   * middle stage's `net._cargoS` up to `net._cargoDur`, NaN once latched.
    * @returns {number}
    */
   handoffSecondsLeft() {
     const h = this._h;
-    if (!h || !h.net || h.phase === 'NOSE_REEL' || h.latched || h.relatched || h.freed) return NaN;
+    if (!h || !h.net || h.phase === 'NOSE_REEL' || h.relatched || h.freed) return NaN;
+    if (h.machine && typeof h.machine.secondsLeft === 'function') return h.machine.secondsLeft();
+    if (h.latched) return NaN;
     const dur = h.net._cargoDur;
     return Number.isFinite(dur) ? Math.max(0, dur - (h.net._cargoS || 0)) : NaN;
   }
+
 
   /**
    * Can a hand-off start now? Null = yes; else the reason, once per reason per catch.

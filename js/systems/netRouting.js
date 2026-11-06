@@ -21,6 +21,53 @@ export function collarBusyLine(waitS) {
 }
 
 /**
+ * THE one answer to "would N be refused for the cargo berth right now?" (Ruling 0: no line may invite N while this is true).
+ * Busy = a leash hand-off running, or (not `leashOnly`) a catch on the collar, a mother net away, or a lasso catch waiting for
+ * the collar. `leashOnly` is the large net, which may fire past a catch on the collar: its aim turn would only replace the
+ * hand-off's own turn and hold. `waitS` is the hand-off's seconds left where the driver can say it truly (NaN elsewhere).
+ * Read by N's own refusals (InputManager._refuseCollarBusy, LassoSystem.fire) and by every line that invites N
+ * (lasso-range hint, the autopilot's pinned-piece and arrival lines). Pure: callers pass what they have, missing parts are free.
+ * @param {{leashDriver?: object|null, captureNetSystem?: object|null, pendingAdoption?: boolean, leashOnly?: boolean}} [src]
+ * @returns {{busy: boolean, leashBusy: boolean, waitS: number, noseFull: string|null}} `noseFull`: the nose-full refusal line
+ *   (CaptureNet.getNoseFullLine) when the catch on the collar can never leave by itself: N is refused for good, so an
+ *   invitation says this line, never "then press N".
+ */
+export function collarBusyState(src) {
+  const s = src || {};
+  const drv = s.leashDriver || null;
+  const cns = s.captureNetSystem || null;
+  const leashBusy = !!(drv && (drv.busy === true || (typeof drv.isActive === 'function' && drv.isActive())));
+  let busy = leashBusy;
+  if (!s.leashOnly && !busy && cns) {
+    busy = !!((typeof cns.getDockedCatch === 'function' && cns.getDockedCatch())
+      || (typeof cns.hasMotherNetInFlight === 'function' && cns.hasMotherNetInFlight())
+      || s.pendingAdoption);
+  }
+  // The driver gives a number only in the stage where it is true: counted through the line out, the turns, the reel, the latch
+  // and the radiator's unfold (LeashDriver.handoffSecondsLeft); NaN in the nose pull-in and in the recovery.
+  const waitS = leashBusy && typeof drv.handoffSecondsLeft === 'function' ? drv.handoffSecondsLeft() : NaN;
+  // Nose full (a catch on the collar with no furnace, no free tip and no free daughter cell): N is refused for good, not for a
+  // wait, so no line may say "then press N". `noseFull` is the refusal's own text; every invitation says it instead.
+  const noseFull = !s.leashOnly && busy && cns && typeof cns.getNoseFullLine === 'function'
+    ? (cns.getNoseFullLine() || null) : null;
+  return { busy, leashBusy, waitS, noseFull };
+}
+
+/**
+ * The plain-words wait an invitation says while the berth is busy: "The cargo berth is busy for about 20 s" (no seconds part
+ * when the driver cannot say them; same under-2 s rule as `collarBusyLine`). No sentence end: the caller adds "; then press N ...".
+ * @param {number} waitS
+ * @param {boolean} [midSentence] lower-case "the" (the phrase follows a dash, not a full stop)
+ * @returns {string}
+ */
+export function berthBusyPhrase(waitS, midSentence = false) {
+  const t = Number.isFinite(waitS) && waitS >= 2
+    ? `The cargo berth is busy for about ${Math.ceil(waitS)} s`
+    : 'The cargo berth is busy';
+  return midSentence ? `t${t.slice(1)}` : t;
+}
+
+/**
  * N on a piece beyond the reach of the net that would fire, but inside a docked daughter's reach (DECISIONS §33 row 3).
  * Not said while the mission-1 tutorial runs (its range beat teaches the autopilot instead).
  */

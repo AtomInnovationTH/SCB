@@ -187,8 +187,9 @@ export const ONBOARDING_BEATS = [
     id: 'close_and_catch',
     commsSource: 'BANGALORE', commsText: 'In range. Launch the net.',
     commsAck: null,
-    // The line claims range, so hold it while the selected target is still known to be out of net reach: A advances
-    // range_wall at engage, ~70 s before the ship arrives (training 1, 2026-11-06). Unknown range never holds.
+    // The line claims range, so hold it until the selected target is KNOWN to be inside net reach (TARGET_IN_RANGE): A advances
+    // range_wall at engage, ~70 s before the ship arrives (training 1, 2026-11-06), and the range can still be unknown then
+    // (66 s early, t10b g1). Unknown counts as not in range. A catch while it is held still completes the beat.
     holdWhileOutOfRange: true,
     glyph: '✓', keys: [], skillId: null,
     triggerEvent: 'LASSO_CAPTURED',
@@ -1239,7 +1240,9 @@ export class OnboardingDirector {
       // the far one). Driven by TARGET_OUT_OF_RANGE via the context flag.
       if (!ctx.targetOutOfRange) return false;
     }
-    if (beat.holdWhileOutOfRange && ctx.targetOutOfRange) return false;
+    // The line says "in range", so it waits until the range is KNOWN and inside the net's reach (Ruling 0, training 1 11-06: posted
+    // 66 s before arrival while the range was still unknown). Unknown (no TARGET_IN_RANGE yet) counts as not in range.
+    if (beat.holdWhileOutOfRange && (ctx.targetOutOfRange || ctx.targetInRange !== true)) return false;
     return true;
   }
 

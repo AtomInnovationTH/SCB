@@ -1286,10 +1286,27 @@ export class HUD {
     eventBus.on(Events.ARM_STATE_CHANGE, () => this.statusPanel.renderArmPanel());
     eventBus.on(Events.ARM_DEPLOYED, () => this.statusPanel.renderArmPanel());
     eventBus.on(Events.LAUNCH_SPEED_CHANGED, () => this.statusPanel.renderArmPanel());   // arms-panel header readout
+    eventBus.on(Events.ARM_CAPTURED, () => this.statusPanel.renderArmPanel());
+    // "secured" is said at the secured catch (CATCH_COUNTED: once per body the mission counts), not at the grab: a grab can still
+    // tear, be let go or snap (11-06 training browser run, Ruling 0). One quiet bottom toast per catch (the arm pane + comms + status
+    // lights already reflect it).
+    // The lasso's grab carries `armId: 'lasso'` and no arm type; CATCH_COUNTED's `armType` is null for it (method 'mother'), so the
+    // grab is remembered per piece (as RewardSystem's `_grabs` does) and names the tool at the secured toast: "Lasso — …", not
+    // "Mother — …". A grab that never becomes a catch forgets it.
+    const lassoGrabs = new Set();
     eventBus.on(Events.ARM_CAPTURED, (data) => {
-      this.statusPanel.renderArmPanel();
-      // One quiet bottom toast per catch (the arm pane + comms + status lights already reflect it).
-      const armLabel = (data.type || 'arm').charAt(0).toUpperCase() + (data.type || 'arm').slice(1);
+      if (data && data.armId === 'lasso' && data.debrisId != null) lassoGrabs.add(data.debrisId);
+    });
+    for (const name of ['NET_CATCH_MISS', 'NET_RELEASED', 'NET_FAILED', 'NET_TORN', 'TETHER_SNAP']) {
+      if (Events[name]) eventBus.on(Events[name], (d) => { if (d && d.debrisId != null) lassoGrabs.delete(d.debrisId); });
+    }
+    eventBus.on(Events.CATCH_COUNTED, (data) => {
+      let lasso = false;
+      for (const id of [data.debrisId, ...(data.bodyIds || [])]) {
+        if (id != null && lassoGrabs.delete(id)) lasso = true;
+      }
+      const kind = data.armType || (lasso ? 'lasso' : (data.method === 'mother' ? 'mother' : 'arm'));
+      const armLabel = kind.charAt(0).toUpperCase() + kind.slice(1);
       const debrisLabel = data.debrisType || 'debris';
       const massKg = data.mass || 0;
       const massText = massKg > 0 ? ` (+${massKg.toLocaleString()} kg)` : '';

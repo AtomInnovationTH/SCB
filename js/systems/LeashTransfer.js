@@ -127,6 +127,31 @@ export function leashTurnSeconds(angleRad) {
 }
 
 /**
+ * The time left of a hand-off turn of `angleRad` that has already turned `doneRad` (same trapezoid as `leashTurnSeconds`:
+ * the elapsed time at that angle is read off the profile and taken from the total).
+ * @param {number} angleRad
+ * @param {number} [doneRad=0]
+ * @returns {number} s
+ */
+export function leashTurnSecondsLeft(angleRad, doneRad = 0) {
+    const lim = leashTurnLimits();
+    const A = Math.abs(angleRad);
+    const p = clamp(Number.isFinite(doneRad) ? doneRad : 0, 0, A);
+    const total = leashTurnSeconds(A);
+    const v = lim.maxRate, a = lim.accel;
+    let tAt;
+    if (A * a >= v * v) {
+        const ramp = v * v / (2 * a);                       // the angle each ramp covers
+        if (p <= ramp) tAt = Math.sqrt(2 * p / a);
+        else if (p <= A - ramp) tAt = v / a + (p - ramp) / v;
+        else tAt = total - Math.sqrt(2 * (A - p) / a);
+    } else {
+        tAt = p <= A / 2 ? Math.sqrt(2 * p / a) : total - Math.sqrt(2 * (A - p) / a);
+    }
+    return Math.max(0, total - tAt);
+}
+
+/**
  * The rate and ramp the hand-off asks the autopilot for when it turns the ship (rad/s, rad/s²). The ONE place they are
  * read: the TURN phase sends them with `startTurn`, and the early gas check (`LeashDriver.gasShort`) prices the turn
  * with the same limits.
@@ -451,6 +476,7 @@ export class LeashLine {
 const ACTIVE_LINE_PHASES = new Set(['RELEASE', 'PAYOUT', 'TURN', 'CATCH', 'TURN2', 'REEL', 'REEL_HOME']);
 const LATCHED_PHASES = new Set(['LATCHED', 'CUT', 'SWING', 'UNFOLD']);
 const NO_NAMES = [];
+const ETA_PHASES = new Set(['FOLD', 'RELEASE', 'PAYOUT', 'TURN', 'CATCH', 'TURN2', 'REEL', 'LATCHED', 'CUT', 'SWING', 'UNFOLD']);
 const BERTH_NAMES = ['BerthCollar', 'BerthFace'];
 
 /**
@@ -532,6 +558,67 @@ export class LeashTransfer {
     }
 
     getState() { return this._last ? JSON.parse(JSON.stringify(this._last.state)) : null; }
+
+    /**
+     * Seconds until this hand-off ends (DONE), from the step just run: what is left of every phase still to come, as the
+     * machine will run them (Ruling 0: the "berth busy, about N s" line must count down the real time, not a fixed 23 s):
+     * the fold (and the payout it hides, or the payout alone), the FIRST ship turn, the SECOND turn of the straight arrival
+     * (`LEASH.STRAIGHT_ARRIVAL`; its predicted angle until it starts), the reel at its own speed (0.085 m/s after the
+     * straight arrival), then the cut, the swing and the radiator's unfold. A correcting second turn cannot be foreseen and
+     * is not counted. NaN where no honest count exists: not started, and the recovery phases (REEL_HOME, CUT_FREE, FAILED).
+     * @returns {number} s
+     */
+    secondsLeft() {
+        const io = this.io, k = K(), ph = this.phase;
+        if (ph === 'DONE') return 0;
+        if (!io || !this._started || !ETA_PHASES.has(ph)) return NaN;
+        const slew = k.HOLD_SLEW_DEG_S * DEG2RAD;
+        const foldLeft = Math.abs(io.radiatorThetaRad - this.thetaH) / slew;
+        const unfoldLeft = Math.abs(io.radiatorThetaRad - this.unfoldTheta) / slew;
+        // after the latch: the cutter, then the radiator opens from the hand-off angle to its way-home angle
+        const tail = k.CUT_DWELL_S + Math.abs(this.thetaH - this.unfoldTheta) / slew;
+        const reelS = (dist, speed) => Math.max(0, dist - this.bagR - k.CONTACT_M) / speed + (k.RAMP_TAU_S ?? 0);
+        if (ph === 'LATCHED') return tail;
+        if (ph === 'CUT') return Math.max(0, k.CUT_DWELL_S - this.phaseT) + Math.abs(this.thetaH - this.unfoldTheta) / slew;
+        if (ph === 'SWING' || ph === 'UNFOLD') return unfoldLeft;
+        // the plan the hand-off will run (the early one, made on the radiator's final place, while it still folds)
+        let plan = this.plan;
+        if (!plan || !plan.ok) {
+            if (!this._etaPlan) this._etaPlan = this._planFor(io, io.tipFinalWorld || io.tipWorld, io.boomFinalWorld || io.boomWorld);
+            plan = this._etaPlan;
+        }
+        if (!plan || !plan.ok) return NaN;
+        const st = plan.straight && io.boomWorld ? plan.straight : null;
+        const reelSpeed = st && this._reelStraight ? this._straightReelMps() : this.reelSpeed;
+        const payoutS = Math.abs(plan.payoutM) > 1e-9 ? Math.abs(plan.payoutM) / k.PAYOUT_PUSH_MPS + k.PAYOUT_PUSH_MPS / (2 * k.REEL_ACCEL_MPS2) : 0;
+        const turn1 = leashTurnSeconds(plan.psiRad);
+        const turn2 = st ? leashTurnSeconds(st.psiRad2) : 0;                   // the second turn: the term the old fixed 23 s lacked
+        const reelAll = reelS(st ? st.d2 : plan.d, reelSpeed);
+        // the angle the turn under way has done: this step's `io` was built before the turn was issued, so on the step that issues a
+        // turn it still shows the LAST turn (done, full angle) and counts for nothing
+        const curTurn = this.turns[this.turns.length - 1];
+        const turnState = io.turn && !(curTurn && this.stepNo <= curTurn.issuedStep) ? io.turn.state : 'idle';
+        const doneRad = turnState === 'turning' ? (io.turn.progressRad || 0) : (turnState === 'done' ? 2 * Math.PI : 0);
+        if (ph === 'FOLD') return foldLeft + (this.foldWait ? 0 : payoutS) + turn1 + turn2 + reelAll + tail;
+        if (ph === 'RELEASE') return payoutS + turn1 + turn2 + reelAll + tail;
+        if (ph === 'PAYOUT') {
+            const line = this.line;
+            let rem = line ? Math.max(0, line.target - line.L) / k.PAYOUT_PUSH_MPS + k.PAYOUT_PUSH_MPS / (2 * k.REEL_ACCEL_MPS2) : payoutS;
+            if (this.payoutDone) rem = 0;
+            if (this.foldWait) rem = Math.max(rem, foldLeft);
+            return rem + turn1 + turn2 + reelAll + tail;
+        }
+        if (ph === 'TURN') return (this.entered ? leashTurnSecondsLeft(plan.psiRad, doneRad) : turn1) + turn2 + reelAll + tail;
+        if (ph === 'CATCH') return turn2 + reelAll + tail;
+        if (ph === 'TURN2') {
+            const p2 = this.plan2;
+            // between a turn and its correction (`entered` false for one step) the next turn's angle is not known yet: none counted
+            const cur = this.entered && p2 ? leashTurnSecondsLeft(p2.psiRad, doneRad) : (this.turn2Tries > 0 ? 0 : turn2);
+            return cur + reelS(p2 ? p2.d2 : (st ? st.d2 : plan.d), reelSpeed) + tail;
+        }
+        // REEL: the way still to go, from where the bag is
+        return reelS(len(sub(io.tipWorld, this.bag.pos)), this.reelSpeed) + tail;
+    }
 
     _buildState(io) {
         const line = this.line;

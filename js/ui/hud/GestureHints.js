@@ -275,6 +275,8 @@ const GLASS_LINES = Object.freeze([
   // warning ("; move it to a radiator (Press C).") can show while no such button is up, so it leaves the sentence out.
   ['All daughters are holding catches. Press C to move one to a radiator.', 'All daughters are holding catches. Tap one in DAUGHTERS; if her catch can go, tap TO RADIATOR.'],
   ['; move it to a radiator (Press C).', '.'],
+  // The chase cost warning (ChaseCost.chaseWarnLine, DECISIONS §64 row 2): the second A press is the AUTOPILOT button again.
+  ['Press A again to go.', 'Tap AUTOPILOT again to go.'],
 ]);
 // Only the INSTRUCTION form of "click" becomes "tap": a bare Click / click, then a space and a word, at the start of a
 // sentence or after , ; : ( or a joining word ("click another to change it"). "right-click", "double-click" and a noun

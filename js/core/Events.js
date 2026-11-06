@@ -147,7 +147,7 @@ export const Events = {
   DEBRIS_CLEARED:     'debris:cleared',
   DEBRIS_CAPTURED:    'debris:captured',
   CATCH_PROCESSED:    'catch:processed',   // furnace-transfer complete — { armId, debrisId, type }; owns salvage+scoring — mother path: { parked: true } credits at the collar mate; { digested: true } closes it (no second credit — enforced handler-side by the per-body debris._credited ledger)
-  CATCH_COUNTED:      'catch:counted',     // the mission's one catch count (GameFlowManager `countCatch`: not a digest completion, body not yet credited) — { debrisId, bodyIds, armId, method }; RewardSystem's running-count lines listen to this
+  CATCH_COUNTED:      'catch:counted',     // the mission's one catch count (GameFlowManager `countCatch`: not a digest completion, body not yet credited) — { debrisId, bodyIds, armId, method, armType, debrisType, mass }; the secured-catch lines (RewardSystem's running counts, the HUD toast, "Got it! Press T") listen to this
   // Staged furnace breakdown: visual-only choreography on the way to CATCH_PROCESSED
   // (gameplay still keys off that one event). Consumed by FurnaceBreakdownVisual + CaptureNetVisual. The collar's
   // mother-side beat carries `{ anchor: { kind:'collar', podIndex } }` in place of an armFaced payload

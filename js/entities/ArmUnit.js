@@ -9248,6 +9248,12 @@ export class ArmUnit {
           this._breakdownStarted = false;     // reset staged-furnace bookkeeping
           this._breakdownChunksFired = 0;
           this._transitionTo(S.HOLDING_CATCH);
+          // Her catch is seated at the mother: the ship stays pointed where she is (DECISIONS §61 row 8, owner 2026-11-06),
+          // as after a mother-net catch. Her tier goes back to 'none' with this transition, which would start the recentre
+          // toward prograde. An empty dock (below) and a lost catch keep the turn-back.
+          // She docks during her own reel-home turn (it ends when she docks): that turn holds the attitude and clears the pause
+          // every frame, so the hold is handed to the turn's hand-back (`afterTurn`).
+          this._playerSatellite?.holdHeadingBetweenCatches?.({ afterTurn: !!this._playerSatellite.armManager?._rhTurn });
           eventBus.emit(Events.DEBRIS_CAPTURED, {
             debrisId: debris.id,
             armId: this.id,
