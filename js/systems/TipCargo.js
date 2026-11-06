@@ -768,6 +768,9 @@ export class TipCargo {
   }
   count() { let n = 0; for (const s of this._slots) if (s) n++; return n; }
   isSwinging(i) { const s = this._slots[i]; return !!(s && s.swinging); }
+
+  /** True once tip i's tight pull-in is planned (the bag is on the boom axis, its pose fixed in the strut-tip frame). Allocation-free, unlike `tightInfo`. */
+  isPullPlanned(i) { const s = this._slots[i]; return !!(s && s.pullPlanned); }
   /** @returns {object|null} the debris held on tip i */
   debrisAt(i) { const s = this._slots[i]; return s ? s.debris : null; }
 

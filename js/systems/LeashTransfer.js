@@ -450,6 +450,7 @@ export class LeashLine {
 
 const ACTIVE_LINE_PHASES = new Set(['RELEASE', 'PAYOUT', 'TURN', 'CATCH', 'TURN2', 'REEL', 'REEL_HOME']);
 const LATCHED_PHASES = new Set(['LATCHED', 'CUT', 'SWING', 'UNFOLD']);
+const NO_NAMES = [];
 const BERTH_NAMES = ['BerthCollar', 'BerthFace'];
 
 /**
@@ -655,7 +656,7 @@ export class LeashTransfer {
         if (ko && LATCHED_PHASES.has(ph)) {
             if ((ph === 'SWING' || ph === 'UNFOLD') && io.bagWorld && ko.sphere) {
                 const c = toShip(io.bagWorld);
-                const hit = ko.sphere(c, this.bagR, { ignore: [{ point: toShip(io.tipWorld), r: K().CONE_IGNORE_R_M }] });
+                const hit = ko.sphere(c, this.bagR, { ignore: [{ point: toShip(io.tipWorld), r: K().CONE_IGNORE_R_M }, ...(io.ownTipIgnore || NO_NAMES)] });
                 if (tripped(hit)) return hit.name || 'unknown';
             }
             return null;

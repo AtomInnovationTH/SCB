@@ -703,12 +703,14 @@ export class CommsSystem {
 
     // Net MISS reasons → actionable plain text: a miss is fully recoverable (the net reels back, inventory restored),
     // so the line must say WHY it missed and what to do next. 'forced' (test/scripted resolves) stays silent.
+    // `_lassoFeedback`: actionable capture feedback for the shot the player just fired, so it passes the tutorial's tier-0 mute
+    // like the lasso and net-denial lines (measured 2026-11-06: a fresh onboarding run missed and said nothing).
     eventBus.on(Events.NET_CATCH_MISS, (data) => {
       const text = missReasonToText(data?.reason);
       if (!text) return;
       const source = (data?.armIndex != null && data.armIndex >= 0)
         ? `ARM-${data.armIndex + 1}` : 'LARGE NET';
-      this.addMessage('WARNING', source, text, { channel: 'ALERT' });
+      this.addMessage('WARNING', source, text, { channel: 'ALERT', _lassoFeedback: true });
     });
 
     eventBus.on(Events.ARM_RETURNED, (data) => {

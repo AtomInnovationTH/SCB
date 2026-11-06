@@ -40,6 +40,30 @@ const HOLD_OWNER = 'leash';  // the autopilot's lasso / net listeners leave a ho
 const FLOOR_EASE_S = 1.0;  // s — the drawn size eases from the net-held floor to the real size
 const OWN_TIP_RADIUS_M = 0.20;  // m — the hand-off's own tip hardware is never a snag within this of the latch
 
+/**
+ * Name prefixes of tip i's own strut hardware that the hand-off's bag ball is NOT tested against once the catch sits on the
+ * boom (tight pull-in planned, `TipCargo.isPullPlanned`). Every one rides the strut-tip frame (0 mm, whatever the radiator
+ * angle) or is the wing group, which moves only with the radiator angle. `ShipKeepOut` skips a string entry whole by name
+ * prefix. Not listed on purpose: the sun-oven ball group (ball, ring, mirror, sleeve, film, rot, receiver: it turns to the sun
+ * and is hidden when stowed), other tips, the hull and its cradles. The real piece mesh keeps >= 0.02 m from all of these
+ * (`test-TipTightOwnClear.js`, which imports this function).
+ * @param {number} i tip index
+ * @returns {string[]} a fresh array
+ */
+export function ownTipPartNames(i) {
+  return [
+    `FlowerStrutSunOvenHead_${i}`, `FlowerStrutSunOvenCanister_${i}`,      // sun-oven head and canister (tip group)
+    `FlowerStrutTipPad_${i}`, `FlowerStrutTipStalk_${i}`, `FlowerStrutTipCone_${i}`,   // tip hardware (also ignored near the latch)
+    `FlowerStrut_${i}`,                                                       // the boom
+    `FlowerStrutPlate_${i}`,                                                  // centre plate + _Frame, _Pipes, _Header
+    `FlowerStrutSeam_${i}_`, `FlowerStrutLatch_${i}`,                         // plate-edge seams, the latch lug
+    `FlowerStrutHingeLug_${i}_`,                                              // lugs (panel and wing side), pins, hose
+    `FlowerStrutWing_${i}_`,                                                  // wing panels + _Frame, _Pipes, _Header
+    `FlowerStrutWingHinge_${i}_`, `FlowerStrutWingSeam_${i}_`, `FlowerStrutWingKnuckle_${i}_`,
+  ];
+}
+const NO_OWN_IGNORE = Object.freeze([]);
+
 /** The leash's own hinge rate (the held petal's fold, unfold and way home): `LEASH.HOLD_SLEW_DEG_S`, read at call time. */
 const _slew = { rateRadS: 0 };
 const leashSlew = () => { _slew.rateRadS = Constants.LEASH.HOLD_SLEW_DEG_S * DEG2RAD; return _slew; };
@@ -452,7 +476,7 @@ export class LeashDriver {
       easeT: 0,
       easeFull: Math.max(DebrisField.baseRenderScale(debris), typeof net._catchFloorScale === 'function' ? net._catchFloorScale(debris, 0) : 0),
       // Everything the per-frame path reuses
-      io: null, koIgnore: [], koOpts: {}, koOwn: null, keepOut: null, tipShip: { x: 0, y: 0, z: 0 },
+      io: null, koIgnore: [], koOpts: {}, koOwn: null, ownNames: ownTipPartNames(tipIndex), keepOut: null, tipShip: { x: 0, y: 0, z: 0 },
       bagW: { x: 0, y: 0, z: 0 }, bagKnown: false, bagOff: { x: 0, y: 0, z: 0 },
       tipFinalBody: null, tipFinalW: { x: 0, y: 0, z: 0 },
       boomFinalBody: null, boomFinalW: { x: 0, y: 0, z: 0 },
@@ -693,6 +717,7 @@ export class LeashDriver {
       turn: { state: 'idle', progressRad: 0, reason: '' },
       swingDone: false,
       noseReleased: false,
+      ownTipIgnore: NO_OWN_IGNORE,
       keepOut: undefined,
       bagWorld: undefined,
       tipFinalWorld: undefined,
@@ -715,6 +740,9 @@ export class LeashDriver {
     this._turnIoInto(h, io.turn);
     io.swingDone = h.swingIssued && !tc.isSwinging(h.tipIndex);
     io.noseReleased = h.noseReleased;
+    // Once the catch sits on the boom (tight pull-in planned) the bag ball is not tested against this tip's own hardware: the
+    // real piece stays clear of it (test-TipTightOwnClear), the enclosing ball need not. Otherwise today's list.
+    io.ownTipIgnore = (typeof tc.isPullPlanned === 'function' && tc.isPullPlanned(h.tipIndex)) ? h.ownNames : NO_OWN_IGNORE;
     // the final tip position, offered only while the machine is still in FOLD (it plans the payout on it once)
     io.tipFinalWorld = (h.tipFinalBody && h.phase === 'FOLD') ? qRotInto(q, h.tipFinalBody, h.tipFinalW) : undefined;
     // the boom axis (unit, world axes): now, and at the final angle while in FOLD. The straight arrival's second turn lays the line along it.
@@ -785,6 +813,8 @@ export class LeashDriver {
   /**
    * The ship's keep-out, with the catch itself (and the tip it is going to) never counted as an obstacle, and the
    * hand-off's OWN tip hardware (cone, stalk, pad of tip i within OWN_TIP_RADIUS_M of the latch) not a snag either.
+   * One more exception rides on the query, not on this wrapper: the SWING/UNFOLD ball check also skips
+   * `io.ownTipIgnore` (`ownTipPartNames(i)`, whole parts, set in `_buildIo` once TipCargo reports tip i's pull-in planned).
    * Built once per hand-off: the ignore list and the options object are reused by every query, and the latch point in
    * it is refreshed every step (`_buildIo`).
    */
