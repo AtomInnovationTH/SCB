@@ -256,6 +256,10 @@ export function routeState(state, held = []) {
     // the node gap and the part aboard (J5 Task 12): `gapDeg`/`incDeg` let the walker move the gap by the route's days; `partCr` is the part job's pay
     ...(Number.isFinite(state.gapDeg) && Number.isFinite(state.incDeg) ? { gapDeg: state.gapDeg, incDeg: state.incDeg } : {}),
     ...(partJob ? { partAboard: state.partAboard > 0 || !!(partJob.aboard && partJob.aboard.kg > 0), partCr: Math.max(0, partJob.payCr || 0) } : {}),
+    // The kept part weighs (plan hold-mass-1106): its kg beside the boolean above (an explicit `state.partKg`, else the panel's `partAboard` kg, else the posting's record).
+    // The walk keeps it on her mass through a satellite stop and drops it where the station pays it. The hold's metal and its SELL ALL value ride in as they are.
+    ...(partJob ? { partKg: Number.isFinite(state.partKg) ? Math.max(0, state.partKg) : (state.partAboard > 0 ? state.partAboard : Math.max(0, (partJob.aboard && partJob.aboard.kg) || 0)) } : {}),
+    ...(state.holdKg > 0 ? { holdKg: state.holdKg } : {}), ...(state.holdSaleCr > 0 ? { holdSaleCr: state.holdSaleCr } : {}),
   };
 }
 
@@ -335,6 +339,7 @@ function stateKey(state, sortBy, maxStops) {
     (state.jobPostings || []).map((j) => [j.kind, j.fieldId, j.row, j.done, j.missed, j.payCr, j.aboard ? j.aboard.kg : 0]),
     r(state.captureCreditsEarned, 1),
     r(state.gapDeg, 100), r(state.incDeg, 100), state.stationFieldId ?? null, r(state.partAboard, 10),      // J5 Task 12: the station stop
+    r(state.holdKg, 1000), r(state.holdSaleCr, 1), r(state.partKg, 10),                                    // hold-mass-1106: the hold's metal, its sale value, the kept part's kg
   ]);
 }
 

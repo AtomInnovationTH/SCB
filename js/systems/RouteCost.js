@@ -37,7 +37,10 @@
  *
  * Mass: her mass on a leg is `dryMassKg + carriedKg + gasKg` (everything that is not engine gas, plus what she carries, plus the
  * engine gas aboard). A kept catch adds its mass to every later leg (the catch joins her mass, ArmManager.getCargoMassKg ->
- * getMassBudget); a hand-over at the satellite leaves it there (DECISIONS §49 row 2); a let-go bag adds nothing (§49 row 8).
+ * getMassBudget); a hand-over at the satellite leaves it there (DECISIONS §49 row 2); a let-go bag adds nothing (§49 row 8). The metal already
+ * in the hold and the part kept for the station weigh too (plan hold-mass-1106: `holdKg`, `partKg`, inside `carriedKg` from the start): the first
+ * satellite stop sells the hold's metal (`holdSaleCr`) and it leaves her mass there; the kept part stays aboard through a satellite stop and
+ * leaves at the station stop that pays it.
  * Feasible means every leg's gas fits what is aboard, the rule `FieldRegistry.planTo` calls `enough`; no reserve rule exists.
  * @module systems/RouteCost
  */
@@ -397,7 +400,12 @@ export function isCandidate(v) {
  * @typedef {object} RouteState
  * @property {number} dryMassKg   her mass without the engine gas and without the catches she carries
  * @property {number} gasKg       engine gas aboard
- * @property {number} carriedKg   catches aboard (their mass is on every later leg)
+ * @property {number} carriedKg   what she carries (its mass is on every later leg): the catches aboard, the metal in the hold and the part kept for the station
+ *                                (plan hold-mass-1106: the same sources her live mass adds, so `dryMassKg` stays her true dry mass)
+ * @property {number} [holdKg]    the metal already in the hold, kg (inside `carriedKg`); the route's first satellite stop sells it and it leaves her mass there
+ * @property {number} [holdSaleCr] what that metal sells for at the satellite (SELL ALL, `_strandedCargoCredits`); counted in the search's value bounds until sold
+ * @property {number} [partKg]    the part kept for the station's part job, kg (inside `carriedKg`, with `partAboard`): it stays aboard through a satellite stop and leaves at
+ *                                the station stop that pays it
  * @property {number} altKm       her height now
  * @property {number} thrustN     `realThrustN(fuel)`
  * @property {number} ispS        the Isp the tank is billed at (the gas's, over c)
@@ -479,6 +487,7 @@ const meltPay = (stop, massKg, frac = 1) => {
 /** The most a big piece still aboard can pay when it is disposed of (the search's upper bound and the beam's look-ahead). */
 const potentialCr = (w) => {
   let s = w.partAboard && !w.partPaid ? (w.partCr || 0) : 0;         // the part aboard for the station's part job: the station stop pays it
+  s += w.holdSaleCr || 0;                                            // the hold's metal, until a satellite stop sells it (plan hold-mass-1106): pruning must not drop the route that sells it
   for (const a of w.aboard) {
     if (a.melting) { const m = w.melts.find((x) => x.id === a.id); s += m ? meltPay(a.stop, a.massKg, m.leftKg / m.massKg) : 0; continue; }
     s += Math.max(disposalPay(a.stop, 'satellite'), disposalPay(a.stop, 'push'), meltPay(a.stop, a.massKg));
@@ -509,6 +518,8 @@ function freshWalk(state) {
     // the station's part job (J5 Task 12): the node gap as the route's days move it (null = not tracked), the part aboard, what the station paid
     gapDeg: Number.isFinite(state.gapDeg) && Number.isFinite(state.incDeg) ? state.gapDeg : null,
     partAboard: !!state.partAboard, partPaid: false, partCr: Number.isFinite(state.partCr) ? state.partCr : 0, partPaidCr: 0,
+    partKg: state.partAboard && state.partKg > 0 ? state.partKg : 0,   // the kept part's mass (in `carriedKg`): it stays aboard until the station pays it
+    holdKg: state.holdKg > 0 ? state.holdKg : 0, holdSaleCr: state.holdSaleCr > 0 ? state.holdSaleCr : 0,   // the hold's metal and what the first satellite stop sells it for
     left: Math.max(0, Math.min(quotaOf(), Math.floor(Number(state.catchesLeft) || 0))),   // catches still owed to the mission she is in
     moves: 0, unscanned: 0, metalKg: 0,
     holdRoomKg: Number.isFinite(state.holdRoomKg) ? state.holdRoomKg : Infinity,
@@ -596,7 +607,7 @@ function applyMelts(w, days, state, steps) {
       const k = Math.min(m.partKg, kg);
       pay += m.shareCr * (k / m.massKg);
       keptKg = k; keptMetalKg = k * (m.metalPerKg || 0);
-      w.partAboard = true;
+      w.partAboard = true; w.partKg = k;
       if (steps) steps.push({ kind: 'keep', id: m.id, kg: k });
     }
     paid += pay; meltedKg += kg;
@@ -729,9 +740,10 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
       if (steps) steps.push({ kind: 'dispose', fate: 'satellite', id: a.id, payCr: pay });
     }
     w.aboard = w.aboard.filter((a) => a.melting);
-    const sold = metalSaleCr(w.metalKg);
-    w.valueCr += sold; w.metalCr += sold; w.metalKg = 0;
-    w.carriedKg = mass;
+    const sold = metalSaleCr(w.metalKg) + w.holdSaleCr;              // the route's own metal, and the hold's metal she already had aboard (SELL ALL: first satellite stop only)
+    w.valueCr += sold; w.metalCr += sold; w.metalKg = 0; w.holdKg = 0; w.holdSaleCr = 0;
+    // what stays aboard: the pieces still in the furnaces and the kept part (a satellite does not take it: only the station's part job does); the hold's metal left with the sale
+    w.carriedKg = mass + (w.partAboard && !w.partPaid ? w.partKg : 0);
     w.left = 0;                                                      // berthed: the next mission starts after the next where-next pick
     if (steps) steps.push({ kind: 'move', what: 'sat', stop: stopIndex, id: stop.id ?? null, altKm: stop.altKm });
     sigMove(w, `sat:${stop.id ?? ''}`);
@@ -742,6 +754,7 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
     if (stop.kind === 'station' && w.partAboard && !w.partPaid && w.gapDeg !== null && isLinedUp(w.gapDeg)) {
       const cr = Math.max(0, stop.payCr || 0);
       w.partPaid = true; w.partAboard = false; w.partPaidCr += cr; w.valueCr += cr;
+      w.carriedKg = Math.max(0, w.carriedKg - w.partKg); w.partKg = 0;   // the part leaves her mass with the pay
       if (steps) steps.push({ kind: 'dispose', fate: 'station', id: stop.id, payCr: cr });
     }
     sigMove(w, `f:${w.fieldId}`);

@@ -97,6 +97,8 @@ export class CargoSystem {
     this._totalMassKg -= removed;
 
     if (entry.massKg <= 0.01) {
+      // The dropped residue leaves the running total too, so it stays the sum of the entries (the hold's weight reads it)
+      this._totalMassKg -= entry.massKg;
       this._cargo.delete(metalId);
     }
 
@@ -105,6 +107,15 @@ export class CargoSystem {
       eventBus.emit(Events.CARGO_UPDATED, this.getStatus());
     }
     return removed;
+  }
+
+  /**
+   * Every kg in the hold, all entries (the running total: no allocation). The one number her mass reads for the hold
+   * (`GameFlowManager.holdMassKg` adds the kept part to it; plan hold-mass-1106).
+   * @returns {number}
+   */
+  getTotalMassKg() {
+    return this._totalMassKg;
   }
 
   getTotalValue() {

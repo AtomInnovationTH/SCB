@@ -1733,6 +1733,29 @@ export class ArmManager {
   }
 
   /**
+   * The hold's weight (plan hold-mass-1106, DECISIONS §33 row 11 "her mass is live"): the melted metal and other cargo in
+   * the hold plus the kept part, kg. `GameFlowManager.init` wires `() => this.holdMassKg()`; a rig with no hold
+   * never sets it, so its numbers stay as they were.
+   * @param {(() => number)|null} fn
+   */
+  setHoldMassSource(fn) {
+    this._holdMassSource = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * Kg in the hold now (0 with no source set, or a source that throws or answers nothing usable). `getMassBudget` carries it
+   * like the indium store; CoMCalculator books it at the bus centre. No allocation.
+   * @returns {number}
+   */
+  getHoldMassKg() {
+    const fn = this._holdMassSource;
+    if (!fn) return 0;
+    let kg = 0;
+    try { kg = fn(); } catch (e) { return 0; }
+    return Number.isFinite(kg) && kg > 0 ? kg : 0;
+  }
+
+  /**
    * Wire the SceneManager so docked/close daughters can join the near-field depth pass. Without this, daughters render on layer 0
    * (far pass), get occluded by the depth-cleared near pass and z-fight the mother's strut-tip collars. Null-safe.
    * @param {import('../scene/SceneManager.js').SceneManager} sceneManager
@@ -5024,7 +5047,8 @@ export class ArmManager {
 
   /**
    * Mass and Tsiolkovsky ΔV remaining for the HUD. coreDry = V5 bus dry mass + strut mass (struts stay on the mothership);
-   * daughter masses (weaver/spinner) are separate — they leave when deployed.
+   * daughter masses (weaver/spinner) are separate — they leave when deployed. Carried dry mass also holds the cargo aboard, the mother's nets,
+   * the indium store, the drag sails and the hold (`holdMassKg`: the metal in it and the kept part, plan hold-mass-1106).
    * @returns {object}
    */
   getMassBudget() {
@@ -5111,9 +5135,12 @@ export class ArmManager {
     const indiumStoreKg = (this._resourceSystem && Number.isFinite(this._resourceSystem.indiumStoreKg)) ? Math.max(0, this._resourceSystem.indiumStoreKg) : 0;
     // The drag sails in her stock (§33 row 11 "her mass is live") are carried like the indium: in the loaded and the empty mass.
     const dragSailKg = (this._resourceSystem && typeof this._resourceSystem.dragSailMassKg === 'function') ? this._resourceSystem.dragSailMassKg() : 0;
-    const carriedDry = coreDry + coldGasCurrent + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg + dragSailKg;
+    // Plan hold-mass-1106 (§33 row 11): the hold's metal (melted metal, small-catch metals, cargo-burned ion fuels) and the part kept for the station weigh what
+    // they weigh: carried like the indium store, in the loaded and the empty mass and in the engine's dry term. Not in the cargo clamps: the hold is inside the bus.
+    const holdMassKg = this.getHoldMassKg();
+    const carriedDry = coreDry + coldGasCurrent + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg + dragSailKg + holdMassKg;
     const wetMass = carriedDry + xenonCurrent;
-    const dryMass = coreDry + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg + dragSailKg;   // reported without either gas
+    const dryMass = coreDry + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg + dragSailKg + holdMassKg;   // reported without either gas
 
     // Tsiolkovsky for the engine: ΔV = Isp_eff x g0 x ln((dry + cold + gas) / (dry + cold)).
     // Isp_eff = the ACTIVE fuel's Isp / c (shop upgrade x power split act as Isp gains).
@@ -5123,7 +5150,7 @@ export class ArmManager {
     const ispActive = fuel && fuel.isp > 0 ? fuel.isp : Constants.OCTOPUS_CORE_HALL_ISP;
     const isp = ispActive / (c > 0 ? c : 1);
     const deltaV = engineDeltaV({
-      dryKg: coreDry + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg + dragSailKg, coldGasKg: coldGasCurrent, gasKg: xenonCurrent, isp: ispActive, c,
+      dryKg: coreDry + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg + dragSailKg + holdMassKg, coldGasKg: coldGasCurrent, gasKg: xenonCurrent, isp: ispActive, c,
     });
 
     return {
@@ -5145,6 +5172,7 @@ export class ArmManager {
       cargoMass: Math.round(cargoMass * 10) / 10,
       motherNets: motherNetCount,
       motherNetMass: Math.round(motherNetMass * 1000) / 1000,
+      holdMassKg,   // exact: the hold's kg now (the metal in it and the kept part), already inside wetMass / dryMass / deltaV
       deltaV: Math.round(deltaV),
       isp,
       shipMassKg: wetMass,   // exact (unrounded) total mass now — the gas-flow law's m_ship (PlayerSatellite)

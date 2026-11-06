@@ -7388,7 +7388,8 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * Her live wet mass, kg: ArmManager.getMassBudget().shipMassKg = core dry + engine gas + cold gas + docked daughters +
-   * cargo aboard + the mother's nets (lighter as gas burns, a net flies or a daughter leaves). Every reader of `ship.mass`
+   * cargo aboard + the mother's nets + the indium store and drag sails + the hold (the metal in it and the kept part, plan
+   * hold-mass-1106) (lighter as gas burns, a net flies or a daughter leaves; heavier as metal goes into the hold). Every reader of `ship.mass`
    * (drag, recoils, RCS torque, net tug, lasso, autopilot recoil compensation, cargoThrustFactor) gets it. Without an arm
    * manager, or when the budget throws or is not a positive finite number: Constants.MOTHER_DRAG.MASS_KG (start mass).
    * An explicit override (the setter below) wins while set. No cache: the budget costs 0.0006 ms a call.
@@ -8157,7 +8158,8 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * Attitude-dynamics inertia SSOT: {ixx, iyy, izz} kg·m² about her true centre of mass (radiators counted), lazily computed
    * and cached. Cleared by an arm state-change / berth event or a cargo-ledger direct invalidation (lasso adoption, collar
-   * digestion, [K] jettison from BERTHED/COLLARED, the rack's stay-parked feed-end, ArmManager.reset()), and when the cache
+   * digestion, [K] jettison from BERTHED/COLLARED, the rack's stay-parked feed-end, ArmManager.reset(), a piece's mass falling
+   * (GameFlowManager._setHeldPieceMass), the hold's kg changing and the first frame (GameFlowManager._syncHoldInertia)), and when the cache
    * key changes (fold angle, petal holds, pairs owned), i.e. every frame the radiators swing.
    * @returns {{ ixx:number, iyy:number, izz:number }}
    */

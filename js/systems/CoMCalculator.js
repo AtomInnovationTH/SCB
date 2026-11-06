@@ -254,10 +254,29 @@ export function motherNetBooking(playerSatellite) {
 }
 
 /**
+ * The hold's weight, kg (plan hold-mass-1106, DECISIONS §33 row 11): the metal and the kept part inside the bus. No hold geometry exists, so
+ * it is booked at the bus centre (ship-frame origin) as structure: mass, no moment, not in the cargo clamp. Read from the arm manager when it has
+ * the getter, else from the player's own (`playerSatellite.armManager`): AutopilotSystem hands plain `{ arms, _dockPositions }` views to
+ * computeInertia, and its what-if slews must see the same hold as the live inertia.
+ * @param {object} [armManager] @param {object} [playerSatellite]
+ * @returns {number} kg, 0 when none (or no source)
+ */
+export function holdMassKgOf(armManager, playerSatellite) {
+  let kg = 0;
+  if (armManager && typeof armManager.getHoldMassKg === 'function') kg = armManager.getHoldMassKg();
+  else {
+    const am = playerSatellite && playerSatellite.armManager;
+    if (am && typeof am.getHoldMassKg === 'function') kg = am.getHoldMassKg();
+  }
+  return Number.isFinite(kg) && kg > 0 ? kg : 0;
+}
+
+/**
  * Composite center of mass of the spacecraft, body-local (ship frame, meters).
  * Core bus at origin; strut (STRUT_MASS) at its α-dependent midpoint; daughter at the strut tip; radiators (owner
  * 2026-10-24, "count them"): every owned petal at its live angle, mass centre where the inertia puts it
- * (`radiatorCentroid`; a caller with no radiator info books none).
+ * (`radiatorCentroid`; a caller with no radiator info books none). The hold's metal and the kept part ride at the bus centre
+ * (`holdMassKgOf`: mass, no moment), so a full hold dilutes the offset the other parts make.
  *
  * @param {object} [playerSatellite] — radiatorBookings(), tipCargo, _captureNetSystem (all guarded: mocks may lack them)
  * @param {{ radiators?: boolean, excludeArm?: object }} [opts] — `radiators: false` leaves the petals out (the stow
@@ -343,6 +362,10 @@ export function computeCoM(armManager, playerSatellite, opts) {
       radMass = rc.massKg;
     }
   }
+
+  // The hold (metal + kept part): at the bus centre, mass and no moment. Structure: the radiators-off stow suggestion keeps it, which only
+  // scales every offset it compares by the same factor.
+  totalMass += holdMassKgOf(armManager, playerSatellite);
 
   const invTotal = totalMass > 0 ? 1 / totalMass : 0;
   return {
@@ -487,7 +510,8 @@ export function radiatorInertia(petals) {
  * (ArmManager.getMassBudget): the engine tank's dry mass 9.5 kg, the cold gas 6.0 kg (the full steering tank) and the engine gas
  * 12.5 kg: none of them has a place in the mass tree. The tree's 268.7 kg plus those 28.0 and the standard wheel kit's 12.1
  * (booked on its own below) make the ship's 308.78 kg start mass (294.28 before 2026-11-04); the tree is what the
- * centre of mass is taken on.
+ * centre of mass is taken on. The hold's metal and the kept part (`holdMassKgOf`, plan hold-mass-1106) are the exception: the budget
+ * carries them AND this sum books them, at the bus centre (mass, no moment), so the mass the sum divides by is the budget's.
  *
  * @param {object} armManager — ArmManager (may be null/empty → bus-only inertia)
  * @param {{ about?: 'origin'|'com' }} [opts] — `about: 'origin'` returns the sum about the barrel origin (tests show the
@@ -582,6 +606,10 @@ export function computeInertia(armManager, playerSatellite, opts) {
   // rule as the wheel kit: a caller with no laser info books none; computeCoM leaves it out.
   const longLaser = playerSatellite && typeof playerSatellite.longLaserBooking === 'function' ? playerSatellite.longLaserBooking() : null;
   if (longLaser && longLaser.massKg > 0) addPoint(longLaser.massKg, { x: 0, y: 0, z: longLaser.z });
+
+  // The hold (metal + kept part, plan hold-mass-1106): structure at the bus centre, mass and no moment, unclamped: it adds no inertia about the
+  // origin (a point there), only the mass the centre-of-mass move below divides by, the same dilution computeCoM makes.
+  sM += holdMassKgOf(armManager, playerSatellite);
 
   // Radiators: structure (unclamped), at each petal's live angle.
   let radIxx = 0, radIyy = 0, radIzz = 0;   // the radiators' share, also part of the clamp's reference below
@@ -698,9 +726,11 @@ function _balancedReference(armManager, playerSatellite, out) {
   }
 
   // The nets and radiators are in the actual CoM, so they are in the reference too (nets: permanent, on-axis;
-  // radiators: all at the shared angle).
+  // radiators: all at the shared angle). So is the hold (plan hold-mass-1106): at the bus centre, mass and no moment, exactly as the actual
+  // centre books it, so the reference is diluted the way the centre is and a full hold makes no false drift.
   const netsB = motherNetBooking(playerSatellite);
   if (netsB.massKg > 0) { bcz += netsB.massKg * netsB.z; bTotal += netsB.massKg; }
+  bTotal += holdMassKgOf(armManager, playerSatellite);
 
   const petals = _radiatorPetals(playerSatellite);
   if (petals) {

@@ -102,6 +102,8 @@ function lifeWords(years) {
 /** @private A bag let go drifts away from her at this speed (km/s: 0.5 m/s, an estimate) and is gone this many seconds later. */
 const BAG_DRIFT_KMS = 0.0005;
 const BAG_GONE_S = 8;
+/** A kept piece never falls below this when its salvage moves into her stores (kg): a small positive floor, not a zero-mass body. */
+const HELD_PIECE_MIN_KG = 0.01;
 /** @private P34 L3-fix3: a holder that has not reached her burn-lift pose this many real seconds after the time she needs to get there is given up on (`_meltLiftTimeout`). */
 const LIFT_SETTLE_EXTRA_S = 2;
 
@@ -309,6 +311,11 @@ export class GameFlowManager {
     // The real game starts mid-mission: the shop's trade gate is closed until the first completed mission (a shop
     // that was never told stays permissive, so bare test rigs are unaffected).
     this._setResupplyStop(false);
+    // Plan hold-mass-1106: the hold's weight is part of her mass (ArmManager.getMassBudget reads it through this source: the
+    // metal in the hold and the part kept for the station). Guarded: a mock arm manager may lack the setter.
+    if (refs && refs.armManager && typeof refs.armManager.setHoldMassSource === 'function') {
+      refs.armManager.setHoldMassSource(() => this.holdMassKg());
+    }
   }
 
   /**
@@ -1296,6 +1303,9 @@ export class GameFlowManager {
         if (hasSalvage) {
           const salvage = debris.salvage;
           const refineryMult = this._hasUpgrade('refinery_arm') ? 1.5 : 1.0;
+          // Every kg of this body's salvage that lands in a store her mass budget weighs (engine gas, cold gas, indium store, the hold) is read
+          // off these stores before and after (below), so a kept piece gives up what moved and the kg count once.
+          const storesBefore = this._weighedStoresKg();
 
           // Xenon → main satellite fuel. Salvaged gas is MASS: today's argon amount in kg, loaded as kg of the gas IN the
           // tank (the resupply path, clamped to free space), named for the real gas and the real kg.
@@ -1375,6 +1385,9 @@ export class GameFlowManager {
           }
 
           // --- Metal cargo storage ---
+          // A kept catch ({ parked: true }: at the nose collar or on a rack) stays aboard at its full mass while its salvage goes into stores
+          // that now weigh (the hold's metal, engine gas, cold gas, the indium store); the kg that moved into them leave the piece (plan
+          // hold-mass-1106 H5b, review extension): the kg count once.
           const metalSalvage = (salvage.metals || []).filter(s => s.type === 'metal');
           for (const metal of metalSalvage) {
             eventBus.emit(Events.CARGO_STORE, {
@@ -1385,6 +1398,10 @@ export class GameFlowManager {
               ispAsThrust: metal.ispAsThrust,
               marketValue: metal.amount > 0 ? metal.value / metal.amount : 0, // per-kg value
             });
+          }
+          if (data.parked && outerDebris && Number.isFinite(outerDebris.mass)) {
+            const movedKg = this._weighedStoresKg() - storesBefore;
+            if (movedKg > 0) this._setHeldPieceMass(outerDebris, Math.max(HELD_PIECE_MIN_KG, outerDebris.mass - movedKg));
           }
 
           eventBus.emit(Events.SALVAGE_RECOVERED, { debris, salvage });
@@ -3029,6 +3046,37 @@ export class GameFlowManager {
     return { tips, say: null, inWay, fitRejected };
   }
 
+  /**
+   * What the hold weighs, kg (plan hold-mass-1106, DECISIONS §33 row 11): every kg in the cargo hold (all entries) plus the part
+   * kept for the station's part job while it is aboard (`_partAboard`, which hides a done or missed job). Her mass budget
+   * (`ArmManager.getHoldMassKg`) reads this: ship mass, the gas-flow law, every trip and route bill, the HUD. No allocation.
+   * @returns {number}
+   */
+  holdMassKg() {
+    const cs = this._refs && this._refs.cargoSystem;
+    const metal = cs && typeof cs.getTotalMassKg === 'function' ? cs.getTotalMassKg() : 0;
+    const part = this._partAboard();
+    const partKg = part && Number.isFinite(part.kg) && part.kg > 0 ? part.kg : 0;
+    return (metal > 0 ? metal : 0) + partKg;
+  }
+
+  /**
+   * @private Kg in the stores her mass budget weighs and a catch's salvage can fill: engine gas, cold gas, the indium store and the hold's
+   * metal (`ArmManager.getMassBudget`). A kept catch gives up the kg that moved into these (CATCH_PROCESSED salvage pass).
+   * @returns {number}
+   */
+  _weighedStoresKg() {
+    const r = this._refs || {};
+    const rs = r.resourceSystem;
+    const cs = r.cargoSystem;
+    let kg = cs && typeof cs.getTotalMassKg === 'function' ? cs.getTotalMassKg() : 0;
+    if (rs) {
+      kg += engineGasKg(rs) + coldGasPoolToKg(Number.isFinite(rs.coldGas) ? rs.coldGas : 0)
+        + (Number.isFinite(rs.indiumStoreKg) ? rs.indiumStoreKg : 0);
+    }
+    return kg;
+  }
+
   /** @private Room in the hold for orbit metal, kg: free kilograms, 0 when the 20 stacks are full and orbit metal has none. */
   _holdRoomKg() {
     const cs = this._refs && this._refs.cargoSystem;
@@ -3036,7 +3084,7 @@ export class GameFlowManager {
     const s = cs.serialize();
     const id = Constants.BIG_MELT.METAL_ID;
     if (!s.entries.some((e) => e.metalId === id) && s.entries.length >= (Constants.CARGO_CAPACITY_SLOTS || 20)) return 0;
-    // The kept part of the station's part job (`_meltKeepPart`) sits in the hold until the station takes it: its kg count against the room (no live-mass term: D5)
+    // The kept part of the station's part job (`_meltKeepPart`) sits in the hold until the station takes it: its kg count against the room, and in her live mass (`holdMassKg`)
     const partKg = this._partJob && this._partJob.aboard && Number.isFinite(this._partJob.aboard.kg) ? this._partJob.aboard.kg : 0;
     return Math.max(0, s.capacityKg - s.totalMassKg - partKg);
   }
@@ -4281,12 +4329,28 @@ export class GameFlowManager {
   }
 
   /**
+   * @private The hold is inside the bus and counts in her inertia (CoMCalculator, plan hold-mass-1106), but no event says that
+   * the hold's weight changed (a sale, a melt's metal, a kept part, a burned cargo fuel): when `holdMassKg` differs from the
+   * last frame's, her cached attitude inertia is dropped so the next read recomputes it. The first frame records the hold and also
+   * drops the cache (a hold restored by a load was never seen by a cached read).
+   */
+  _syncHoldInertia() {
+    const kg = this.holdMassKg();
+    const first = this._holdKgSeen === undefined;
+    if (!first && kg === this._holdKgSeen) return;
+    this._holdKgSeen = kg;
+    const p = this._refs && this._refs.player;
+    if (p && '_attitudeInertia' in p) p._attitudeInertia = null;
+  }
+
+  /**
    * Per-frame tick (main.js, right after gameState.update): counts GAME time toward the held mission start's cap. Never a
    * timer: the hold must follow a paused or held world (dt 0 counts nothing); the depot flow pins that no boundary timer exists.
    * @param {number} dt - seconds of game time this frame (0 while the world is held)
    */
   update(dt) {
     // first, before the held-mission-start early return below (it returns on almost every frame)
+    this._syncHoldInertia();
     this._updateStranded(dt);
     this._resumeOwedTrip(dt);
     if (this._unplacedBig && this._unplacedBig.length) this._placeUnplacedBig();   // a restored piece no holder could take yet
@@ -4862,7 +4926,8 @@ export class GameFlowManager {
    * What the Routes section of the "where next" list needs from the live game (plan route-1101, lane R2; RoutePlanner.plan reads it).
    * Plain data, no game objects but the pieces' own bodies (for `pieceValue`). Null when the field map is off or she has no height.
    *   dryMassKg, gasKg, carriedKg   her mass without the engine gas and without what she carries; the engine gas; what she carries
-   *                                 (ArmManager.getCargoMassKg, ArmManager.js:4432)
+   *                                 (ArmManager.getCargoMassKg, ArmManager.js:4558, plus the hold's weight: ArmManager.getHoldMassKg)
+   *   holdKg, holdSaleCr            the metal in the hold, kg (without the kept part), and what SELL ALL pays for it now (`_strandedCargoCredits`)
    *   altKm, fieldId                her height; the field she is in (null berthed at the satellite she flew to, or at the free place)
    *   thrustN, ispS, areaM2         the thruster and the Isp and drag area the list prices a trip with (FieldRegistry.planTo)
    *   catchesLeft                   catches that finish the mission she is in: 0 when the list is open for a pick (a mission start is
@@ -4890,7 +4955,11 @@ export class GameFlowManager {
     const owed = this.missionStartOwed();
     const caught = gameState.debrisCleared % quota;
     const gasKg = engineGasKg(p.resources);
-    const carriedKg = r.armManager && typeof r.armManager.getCargoMassKg === 'function' ? r.armManager.getCargoMassKg() : 0;
+    const holdKgNow = r.cargoSystem && typeof r.cargoSystem.getTotalMassKg === 'function' ? Math.max(0, r.cargoSystem.getTotalMassKg()) : 0;
+    // What she carries = the catches aboard (racks, berth, tips) + the hold's weight (the metal in it and the kept part): the same sources `p.mass` adds, so
+    // `dryMassKg` below stays her true dry mass (plan hold-mass-1106 H5).
+    const carriedKg = (r.armManager && typeof r.armManager.getCargoMassKg === 'function' ? r.armManager.getCargoMassKg() : 0)
+      + (r.armManager && typeof r.armManager.getHoldMassKg === 'function' ? r.armManager.getHoldMassKg() : 0);
     const out = !!(reg.atSatellite && reg.atSatellite()) || !!(reg.isFree && reg.isFree());   // no field is hers
     const fieldId = out ? null : reg.currentId();
     const pieces = [];
@@ -4946,6 +5015,9 @@ export class GameFlowManager {
       // at the station field when she arrives lined up)
       gapDeg: this.stationGapDeg(), incDeg: this._herIncDeg(), stationFieldId: stationFieldId(reg),
       partAboard: this._partAboard() ? this._partAboard().kg : 0,
+      // Plan hold-mass-1106 H5: the metal already in the hold (kg, without the kept part) and what SELL ALL pays for it now: the walk carries the kg until the
+      // route's first satellite stop sells it (RouteCost `holdKg`, `holdSaleCr`)
+      holdKg: holdKgNow, holdSaleCr: this._strandedCargoCredits(),
     };
   }
 }
