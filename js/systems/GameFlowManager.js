@@ -36,14 +36,14 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
-import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg } from './NodeDrift.js';     // route-1101 lane S2: the station node gap
+import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg, stationInOwnPlane, stationOrbit } from './NodeDrift.js'; import { finishBurn } from './RouteCost.js';     // route-1101 lane S2: the station node gap; route-1106 lane S4: the finish burn to the station's plane (one line: test-CodexAdr2026 pins GameFlowManager line numbers)
 import { WAIT_ID } from './WhereNextRows.js';
 import {
   postFirstJob, postRemovalJob, postPressJob, postInsurerJob, postPartJob, isJobPiece, jobMember, bodyMassKg, bountyPayLine, removalPayLine, jobPayCr, jobPartPayCr,
   jobSupplementCr, insurerPayLine, partTakenLine, partPayCr, insurerRows, nextRemovalTier, pressDue, insurerDue, partDue, recordPosted, recordClosed, newBoardState,
   boardToSave as jobBoardToSave, toSave as jobToSave, boardFromSave as jobBoardFromSave, JOBS,
 } from './JobsBoard.js';
-import { buildWhereNextRows, STAY_ID, CALL_ID, PUSH_KIND, PUSH_PREFIX, OPEN_LINE, BERTH_LINE, BERTH_MISSION_LINE, STUCK_CALL_LINE } from './WhereNextRows.js';
+import { buildWhereNextRows, STAY_ID, CALL_ID, PUSH_KIND, PUSH_PREFIX, OPEN_LINE, BERTH_LINE, BERTH_MISSION_LINE, STUCK_CALL_LINE, kgText, daysText } from './WhereNextRows.js';
 import { salvageGasKg, coldGasKgToPool, coldGasPoolToKg, engineGasKg } from './ResourceSystem.js';
 import { realThrustN } from './TripProfile.js';
 import { shipFramePos } from './RoutePlanner.js';
@@ -955,8 +955,10 @@ export class GameFlowManager {
       this._pressTold = null;
       this._insurerJob = null;
       this._insurerTold = null;
-      this._partJob = null;
-      this._partTold = null;
+    this._partJob = null;
+    this._partTold = null;
+    /** The ship day and gap of the last refused finish burn (route-1106 lane S4): the same refusal is said once per day and gap. Not saved. */
+    this._finishRefused = null;
       this._jobState = newBoardState();
       this._jobDoneOn = false;
       this._unplacedBig = [];
@@ -3469,7 +3471,8 @@ export class GameFlowManager {
   /**
    * @private The station's hand-over (JobsBoard kind 'part', plan route-1101 J5): she is lined up at the station field (`stationLinedUp`) with a part aboard, and no trip
    * is under way: the station takes the part for its return capsule (a Dragon-class capsule, off-screen): pays `JOB_E_USD` over `USD_PER_CREDIT` untapered
-   * (`awardDisposal`), frees the part's hold room, closes the job paid and says one line. Not lined up, another field, berthed, or a trip under way: nothing.
+   * (`awardDisposal`), frees the part's hold room, closes the job paid and says one line. The finish burn to the station's plane (`finishStationBurn`,
+   * route-1106 lane S4) is billed first: a refused finish (too little gas, a worn-out engine) keeps the part aboard. Not lined up, another field, berthed, or a trip under way: nothing.
    * Called on arrival at a field (FIELD_ARRIVED), at a mission start (MISSION_START: a new mission at the station), at a load (MENU_CONTINUE, which fires neither event) and when a wait has gone by.
    * @returns {boolean} true = the station took the part
    */
@@ -3479,6 +3482,7 @@ export class GameFlowManager {
     if (!this._bigPiecesOn()) return false;                        // the map off: no station, no field (`stationLinedUp` is true then)
     if (this._trip && this._trip.isActive() && !this._trip.isChoosing()) return false;     // a trip under way (one leaving the station field still reads lined up)
     if (!this.stationLinedUp()) return false;
+    if (!this.finishStationBurn()) return false;                   // route-1106 lane S4: the part is taken in the station's plane; too little gas = it stays aboard
     const cr = partPayCr();
     const paid = scoringSystem.awardDisposal(cr);
     post.partKg = post.aboard.kg;
@@ -4144,6 +4148,54 @@ export class GameFlowManager {
     const inc = this._herIncDeg();
     if (!leg || !Number.isFinite(g) || !Number.isFinite(inc)) return;
     gameState.stationNodeGapDeg = wrapDeg(g + gapChangeOverLeg(leg, inc));
+  }
+
+  /**
+   * The station's plane in her scene (route-1106 lane S4, D2): for the start whose tilt is the station's (`NodeDrift.stationInOwnPlane`:
+   * the English / New York start) `{inclination, raan}` in radians, the station's tilt and her node plus the gap. Any other start: null
+   * (the caller keeps her plane, DECISIONS §60 row 5).
+   * @returns {{inclination: number, raan: number}|null}
+   */
+  stationPlane() {
+    const inc = this._herIncDeg();
+    const gap = this.stationGapDeg();
+    const o = this._refs && this._refs.player && this._refs.player.orbit;
+    if (!stationInOwnPlane(inc) || !Number.isFinite(gap) || !o || !Number.isFinite(o.raan)) return null;
+    return { inclination: stationOrbit().incDeg * Math.PI / 180, raan: o.raan + gap * Math.PI / 180 };
+  }
+
+  /**
+   * The finish burn to the station's plane (route-1106 lane S4, D4): she is lined up and a station action is due (the boss is about to arm,
+   * or a part is to be handed over). Prices `RouteCost.finishBurn` on the registry's `burnInputs`; refuses (false, nothing billed, one line
+   * naming the gas) when the gas is short or the engine worn out; else bills the gas, adds the days, closes the gap and says one line.
+   * True without billing when the field map is off, the gap is 0, or her start's tilt is not the station's.
+   * @returns {boolean} true = the finish is flown (or nothing was owed)
+   */
+  finishStationBurn() {
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!reg || typeof reg.isOn !== 'function' || !reg.isOn()) return true;
+    const gap = this.stationGapDeg();
+    if (!this.stationPlane() || !Number.isFinite(gap) || gap === 0) return true;
+    if (Math.abs(gap) < 1e-4) { gameState.stationNodeGapDeg = 0; return true; }     // float residue of a wait (under 0.02 m/s): nothing to bill
+    const inp = typeof reg.burnInputs === 'function' ? reg.burnInputs() : null;
+    const player = this._refs.player;
+    if (!inp || !player || typeof player.billBurnGas !== 'function') return true;
+    const fb = finishBurn({ gapDeg: gap, herIncDeg: this._herIncDeg(), massKg: inp.massKg, thrustN: inp.thrustN, ispS: inp.ispS, gasAboardKg: inp.gasAboardKg });
+    const say = (text, priority) => eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true });
+    if (!fb.feasible || inp.wornOut) {
+      // the boss and the hand-over both ask on an arrival and again at the mission start: one line per ship day and gap
+      const last = this._finishRefused;
+      if (!last || last.shipDays !== gameState.shipDays || last.gapDeg !== gap) {
+        this._finishRefused = { shipDays: gameState.shipDays, gapDeg: gap };
+        say(inp.wornOut ? `The finish burn to the station's plane needs ${kgText(fb.gasKg)} kg of gas and a working engine.` : `The finish burn to the station's plane needs ${kgText(fb.gasKg)} kg of gas.`, 'warn');
+      }
+      return false;
+    }
+    player.billBurnGas(fb.dvMps);
+    gameState.shipDays += fb.days;
+    gameState.stationNodeGapDeg = 0;
+    say(`Finish burn to the station's plane: ${Math.round(fb.dvMps)} m/s, ${kgText(fb.gasKg)} kg gas, ${daysText(fb.days)}.`, 'info');
+    return true;
   }
 
   /**

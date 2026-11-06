@@ -42,8 +42,13 @@ export class IssConjunctionBoss {
    *   Default (not given: headless rigs, the old tests): always lined up, i.e. it arms at the boss mission's start as before.
    * @param {Function} [deps.otherBossBusy] — () => boolean (main.js: the Starlink boss is armed or running). The boss does not arm
    *   while it returns true (it can arm after that boss resolves, if she is lined up then) and an armed onset holds. Default: never.
+   * @param {Function} [deps.finishStationBurn] — () => boolean (GameFlowManager.finishStationBurn(), wired by main.js; route-1106 lane S4):
+   *   bills the finish burn that closes the last gap to the station's plane. The boss does not arm while it returns false (too little
+   *   gas). Default (headless rigs, the old tests): nothing to bill, true.
+   * @param {Function} [deps.stationPlane] — () => ({inclination, raan}|null) (GameFlowManager.stationPlane(), wired by main.js): the
+   *   station's own plane in her scene, for the start whose tilt is the station's; the pieces are built in it. Default: null (her plane).
    */
-  constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null, depotStopPending = null, stationLinedUp = null, otherBossBusy = null } = {}) {
+  constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null, depotStopPending = null, stationLinedUp = null, otherBossBusy = null, finishStationBurn = null, stationPlane = null } = {}) {
     this._eventBus = eventBus;
     this._scoring = scoringSystem;
     this._debrisField = debrisField;
@@ -52,6 +57,8 @@ export class IssConjunctionBoss {
     this._depotStopPending = typeof depotStopPending === 'function' ? depotStopPending : () => false;
     this._stationLinedUp = typeof stationLinedUp === 'function' ? stationLinedUp : () => true;
     this._otherBossBusy = typeof otherBossBusy === 'function' ? otherBossBusy : () => false;
+    this._finishStationBurn = typeof finishStationBurn === 'function' ? finishStationBurn : () => true;
+    this._stationPlane = typeof stationPlane === 'function' ? stationPlane : () => null;
 
     /** @type {boolean} boss already run+resolved this game. */
     this._completed = false;
@@ -167,7 +174,8 @@ export class IssConjunctionBoss {
    * @private DECISIONS §62 row 2 (route-1101 lane S2): arm when the mission is the boss mission or later AND she is at the station field
    * with the node gap within `ISS_BOSS.LINED_UP_DEG` (`stationLinedUp`, GameFlowManager.stationLinedUp, wired by main.js); never at
    * mission 5 otherwise. Asked on arrival at a field and at a mission start there. The finish burn that closes the last <= 0.346 deg
-   * (at most 57 m/s, station-drift doc §2) is NOT billed in this step: it comes with the station at its own node (route-1101 wave 3).
+   * (at most 57 m/s, station-drift doc §2) is billed here (route-1106 lane S4: `finishStationBurn`, for the start whose tilt is the
+   * station's); with too little gas the boss does not arm.
    * @param {number} mission
    */
   _tryArm(mission) {
@@ -176,6 +184,7 @@ export class IssConjunctionBoss {
     if (!cfg || !(mission >= cfg.MISSION)) return;
     if (!this._stationLinedUp()) return;
     if (this._otherBossBusy()) return;          // never two bosses at once: the Starlink boss (mission 9) arms with no such check
+    if (!this._finishStationBurn()) return;     // the finish burn is paid before the boss arms (S4); a refusal bills nothing
     this._onset.arm(mission);
   }
 
@@ -192,7 +201,7 @@ export class IssConjunctionBoss {
 
     let ids = [];
     if (this._debrisField && typeof this._debrisField.spawnIssThreatField === 'function') {
-      const res = this._debrisField.spawnIssThreatField({ count });
+      const res = this._debrisField.spawnIssThreatField({ count, plane: this._stationPlane() || undefined });
       ids = (res && Array.isArray(res.ids)) ? res.ids : [];
     }
     // No candidates to repurpose → can't stage the boss; bail without marking complete so it can run on a later entry.

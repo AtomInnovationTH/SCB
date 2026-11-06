@@ -286,6 +286,22 @@ export class FieldRegistry {
   }
 
   /**
+   * What a burn costs her NOW, the same inputs `planTo` flies a trip with (route-1106 lane S4: the finish burn to the station's plane is
+   * priced from these): her mass, the real thrust, the Isp the tank is billed at, the gas aboard, and whether the engine is worn out.
+   * @returns {{massKg: number, thrustN: number, ispS: number, gasAboardKg: number, wornOut: boolean}|null} null without a ship
+   */
+  burnInputs() {
+    const p = this._player;
+    if (!p) return null;
+    const fuel = this._loadedGas();
+    const c = typeof p.getConsumptionMultiplier === 'function' ? p.getConsumptionMultiplier() : 1;
+    return {
+      massKg: p.mass, thrustN: realThrustN(fuel), ispS: fuel.isp / (c > 0 ? c : 1),
+      gasAboardKg: engineGasKg(p.resources), wornOut: !!shipWear.isEngineWornOut(),
+    };
+  }
+
+  /**
    * The one-button pick: the NEAREST other field, by height from the one she is at, that still has pieces and that she
    * has the gas to reach. Ties go to the cheaper trip. Null = none (stay). Berthed at the satellite no field is hers:
    * every field counts, nearest by height from the satellite.

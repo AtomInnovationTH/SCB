@@ -4411,13 +4411,15 @@ export class DebrisField {
   /**
    * CH5 ISS conjunction boss (MISSION_ARC §6): spawn `count` threat fragments in the ISS forward track, tagged `iss_threat:true`.
    * @param {object} [options] @param {number} [options.count]
+   * @param {{inclination: number, raan: number}} [options.plane] the station's own plane in her scene (rad; route-1106 lane S4:
+   *   GameFlowManager.stationPlane(), only for the start whose tilt is the station's); absent = her plane
    * @returns {{ ids: number[] }}
    */
   spawnIssThreatField(options = {}) {
     const cfg = Constants.ISS_BOSS;
     if (!cfg || !cfg.ORBIT) return { ids: [] };
     const count = Math.max(1, options.count ?? cfg.FRAG_COUNT ?? 6);
-    return this._spawnThreatField(cfg.ORBIT, count, 'iss_threat');
+    return this._spawnThreatField(cfg.ORBIT, count, 'iss_threat', options.plane);
   }
 
   /**
@@ -4442,9 +4444,11 @@ export class DebrisField {
    *        are the real object's plane, used only when no player orbit is cached). The plane is the mother's (DECISIONS §60 row 5).
    * @param {number} count
    * @param {string} tag — per-debris flag identifying the threat set
+   * @param {{inclination: number, raan: number}} [plane] — a plane (rad) to build the pieces in instead of hers (the ISS boss at the
+   *        station's own node, route-1106 lane S4); absent or not finite = her plane
    * @returns {{ ids: number[] }}
    */
-  _spawnThreatField(cfg, count, tag) {
+  _spawnThreatField(cfg, count, tag, plane) {
     const altKm = cfg.altKm ?? 408;
     const sma = Constants.EARTH_RADIUS + altKm * Constants.SCENE_SCALE;
     const meanMotion = Math.sqrt(Constants.MU_EARTH / Math.pow(sma / Constants.SCENE_SCALE, 3));
@@ -4469,8 +4473,8 @@ export class DebrisField {
     // time (the cached player orbit); the config's real inclination/node (`cfg.incDeg`/`cfg.raanDeg`, the real object's plane) are
     // used only when no player orbit has been seen yet (a bare test field), never for placement otherwise.
     const mother = this._lastPlayerOrbit;
-    const planeInc = Number.isFinite(mother?.inclination) ? mother.inclination : degToRad(cfg.incDeg ?? 51.6);
-    const planeRaan = Number.isFinite(mother?.raan) ? mother.raan : degToRad(cfg.raanDeg ?? 123.4);
+    const planeInc = Number.isFinite(plane?.inclination) ? plane.inclination : (Number.isFinite(mother?.inclination) ? mother.inclination : degToRad(cfg.incDeg ?? 51.6));
+    const planeRaan = Number.isFinite(plane?.raan) ? plane.raan : (Number.isFinite(mother?.raan) ? mother.raan : degToRad(cfg.raanDeg ?? 123.4));
     for (let i = 0; i < count && i < candidates.length; i++) {
       const debris = candidates[i];
 
@@ -4513,7 +4517,7 @@ export class DebrisField {
     }
 
     if (ids.length > 0) {
-      console.log(`[DebrisField] boss spawn: ${ids.length} ${tag} frags at ${altKm} km / ${radToDeg(planeInc).toFixed(1)}° (her plane)`);
+      console.log(`[DebrisField] boss spawn: ${ids.length} ${tag} frags at ${altKm} km / ${radToDeg(planeInc).toFixed(1)}° (${plane ? 'the station\'s plane' : 'her plane'})`);
     }
     return { ids };
   }
@@ -5310,7 +5314,7 @@ export class DebrisField {
    * scoreCluster reads it, not the cell's incCenter label (the label remains the payload-less fallback): the DebrisMap
    * SCORE priced the transfer against the label, which is wrong where a language's incDeg is off the cell centre.
    * @returns {Array<{id: string, name: string, altRange: {min:number,max:number},
-   *           incCenter: number, avgIncRad: number, count: number,
+   *           incCenter: number, avgIncRad: number, avgRaanRad?: number, count: number,
    *           avgAltKm: number, totalMassKg: number, types: object,
    *           targets: Array, center: {x:number,y:number,z:number}}>}
    */
@@ -5336,6 +5340,8 @@ export class DebrisField {
           targets: [],       // debris objects in this cluster
           _altSum: 0,         // running sum for avg computation
           _incSum: 0,         // running sum (radians) for the members' mean plane
+          _raanSin: 0,        // running sums of sin and cos of the members' nodes: their circular mean
+          _raanCos: 0,
           _centerSum: { x: 0, y: 0, z: 0 }, // running sum for center computation
         });
       }
@@ -5355,6 +5361,10 @@ export class DebrisField {
       cluster.count++;
       cluster._altSum += altKm;
       cluster._incSum += debris.orbit.inclination; // radians
+      if (Number.isFinite(debris.orbit.raan)) {
+        cluster._raanSin += Math.sin(debris.orbit.raan);   // circular mean of the nodes (route-1106 lane S4)
+        cluster._raanCos += Math.cos(debris.orbit.raan);
+      }
       cluster.totalMassKg += debris.mass;
       cluster.types[debris.type] = (cluster.types[debris.type] || 0) + 1;
       cluster.targets.push(debris);
@@ -5374,6 +5384,8 @@ export class DebrisField {
       if (cluster.count === 0) continue;
       cluster.avgAltKm = cluster._altSum / cluster.count;
       cluster.avgIncRad = cluster._incSum / cluster.count;
+      // the members' mean node (circular mean, rad in (-pi, pi]); undefined when no member has one or the nodes cancel out (a ring)
+      cluster.avgRaanRad = Math.hypot(cluster._raanSin, cluster._raanCos) > 1e-9 ? Math.atan2(cluster._raanSin, cluster._raanCos) : undefined;
 
       // center = average cartesian position of members
       cluster.center = {
@@ -5384,6 +5396,8 @@ export class DebrisField {
 
       delete cluster._altSum;
       delete cluster._incSum;
+      delete cluster._raanSin;
+      delete cluster._raanCos;
       delete cluster._centerSum;
       delete cluster.incSpread;
       result.push(cluster);

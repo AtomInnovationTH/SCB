@@ -38,7 +38,8 @@ import { pieceName } from './BigPieces.js';
 import { fatePay } from './BigPieceValues.js';
 import { pushTargetKm, lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
 import { jobLine } from './JobsBoard.js';
-import { stationFieldId, gapChangeOverLeg, waitDaysToLineUp, isLinedUp } from './NodeDrift.js';
+import { stationFieldId, gapChangeOverLeg, waitDaysToLineUp, isLinedUp, stationInOwnPlane, wrapDeg } from './NodeDrift.js';
+import { finishBurn } from './RouteCost.js';
 
 export const STAY_ID = 'stay';
 
@@ -392,7 +393,19 @@ function stationWait(reg, st, here, herKm, turn = null) {
   // high fields, where it is faster
   const daysHere = Number.isFinite(days) ? `${daysText(days)} here` : '';
   let note;
-  if (lined) note = STATION_LINED_NOTE;
+  if (lined) {
+    note = STATION_LINED_NOTE;
+    // route-1106 lane S4: the finish burn that closes the last gap, for the start whose tilt is the station's (the game bills it when a
+    // station action is due); the arrival gap is today's gap plus what the trip itself moves
+    const arrivalGap = st.gapDeg + tripChangeDeg;
+    if (stationInOwnPlane(st.incDeg) && arrivalGap !== 0 && typeof reg.burnInputs === 'function') {
+      const inp = reg.burnInputs();
+      // a trip to the station field comes first: the finish is flown on the gas and mass she has after it
+      const spent = prof && Number.isFinite(prof.gasKg) ? prof.gasKg : 0;
+      const fin = inp ? finishBurn({ gapDeg: wrapDeg(arrivalGap), herIncDeg: st.incDeg, massKg: Math.max(1, inp.massKg - spent), thrustN: inp.thrustN, ispS: inp.ispS, gasAboardKg: Math.max(0, inp.gasAboardKg - spent) }) : null;
+      if (fin && fin.gasKg >= 0.005) note += fin.feasible && !inp.wornOut ? `; finish burn ${kgText(fin.gasKg)} kg gas, ${daysText(fin.days)}` : `; finish burn needs ${kgText(fin.gasKg)} kg of gas`;
+    }
+  }
   else if (row) note = `station not lined up: wait ${daysText(days)} here`;
   else if (herKm < highKm) note = `station not lined up: ${daysHere ? `${daysHere}, ` : ''}${STATION_FASTER_NOTE}`;
   else note = daysHere ? `station not lined up: ${daysHere}` : 'station not lined up';

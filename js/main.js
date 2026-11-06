@@ -1745,6 +1745,9 @@ async function init() {
     eventBus, scoringSystem, debrisField, shopScreen, persistenceManager, depotStopPending,
     // DECISIONS §62 row 2: it arms only at the station field, lined up with the station (route-1101 lane S2)
     stationLinedUp: () => gameFlowManager.stationLinedUp(),
+    // route-1106 lane S4: the finish burn is billed before the boss arms; the pieces are built in the station's own plane (51.6 deg start only)
+    finishStationBurn: () => gameFlowManager.finishStationBurn(),
+    stationPlane: () => gameFlowManager.stationPlane(),
     // never two bosses at once: not while the Starlink boss (mission 9, built just below) is armed or running
     otherBossBusy: () => !!starlinkCascadeBoss && (starlinkCascadeBoss.isArmed() || starlinkCascadeBoss.isActive()),
   });

@@ -30,6 +30,9 @@
  *   transferLeg   field to field, the real low-thrust profile (TripProfile.tripProfile) at her live mass; exact.
  *   planeLeg      a change of orbit plane (tilt and node, `planeAngle`), low thrust: Edelbaum, pi/2 x the impulsive price for a
  *                 small angle. Every field shares her plane today, so it answers 0 there.
+ *   finishBurn    the last node gap to the station (<= 0.346 deg, <= 57 m/s), billed at the station's 408 km, only for the start whose tilt is the
+ *                 station's (route-1106 lane S4; `NodeDrift.stationInOwnPlane`): the walker's station stop pays it before the part, the game's
+ *                 `finishStationBurn` bills it.
  *   approachLeg   the autopilot's close-in flight to a piece, billed gas by distance and her mass (a MEASURED table below).
  *   daughterLeg   a daughter's fetch, billed from her own tank the way the game bills it (never from the mother's).
  *   pieceValue    what a piece is worth, from the game's own pay code (never copied prices).
@@ -50,7 +53,7 @@ import { planeAngle, planeChangeDeltaV } from '../entities/OrbitalMechanics.js';
 import { pieceValues } from './BigPieceValues.js';
 import { isJobPiece, jobPayCr } from './JobsBoard.js';
 import { planBurn } from './BigMelt.js';
-import { gapChangeOverLeg, isLinedUp } from './NodeDrift.js';
+import { gapChangeOverLeg, isLinedUp, stationInOwnPlane, stationOrbit } from './NodeDrift.js';
 
 const SECONDS_PER_DAY = 86400;
 
@@ -169,6 +172,27 @@ export function planeLeg(a) {
   const ve = a.ispS * C.G0;
   const gasKg = a.massKg * (1 - Math.exp(-dvMps / ve));
   return { gasKg, dvMps, days: gasKg * ve / a.thrustN / SECONDS_PER_DAY, feasible: gasKg <= aboard + 1e-9, angleRad };
+}
+
+/**
+ * The finish burn: closing a small node gap to the station (route-1106 lane S4, D3; station-drift doc §2: 164.7 m/s per degree, so at most
+ * 0.346 deg = 57 m/s). Billed only for the start whose tilt is the station's (`stationInOwnPlane`); every other tilt and a gap of 0 cost
+ * nothing. Priced at the station's own height (408 km), where her node turns at the station's rate and the gap does not move during the
+ * burn: an Edelbaum `planeLeg` from her plane (her tilt, node 0) to the station's (its tilt, node = the gap).
+ * @param {{gapDeg: number, herIncDeg: number, massKg: number, thrustN: number, ispS: number, gasAboardKg?: number}} a
+ * @returns {{dvMps: number, gasKg: number, days: number, feasible: boolean}}
+ */
+export function finishBurn(a) {
+  const none = { dvMps: 0, gasKg: 0, days: 0, feasible: true };
+  if (!stationInOwnPlane(a.herIncDeg) || !Number.isFinite(a.gapDeg) || a.gapDeg === 0) return none;
+  const s = stationOrbit();
+  const D2R = Math.PI / 180;
+  const r = planeLeg({
+    fromOrbit: { altKm: s.altKm, inclination: a.herIncDeg * D2R, raan: 0 },
+    toOrbit: { altKm: s.altKm, inclination: s.incDeg * D2R, raan: a.gapDeg * D2R },
+    massKg: a.massKg, thrustN: a.thrustN, ispS: a.ispS, gasAboardKg: a.gasAboardKg,
+  });
+  return { dvMps: r.dvMps, gasKg: r.gasKg, days: r.days, feasible: r.feasible };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -752,10 +776,17 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
     if (steps) steps.push({ kind: 'move', what: 'field', stop: stopIndex, id: w.fieldId, altKm: stop.altKm, unscanned: true });
     // The station takes the part she carries when she arrives lined up (GameFlowManager `_stationHandOver`, on FIELD_ARRIVED): the gap as the route's own days left it
     if (stop.kind === 'station' && w.partAboard && !w.partPaid && w.gapDeg !== null && isLinedUp(w.gapDeg)) {
-      const cr = Math.max(0, stop.payCr || 0);
-      w.partPaid = true; w.partAboard = false; w.partPaidCr += cr; w.valueCr += cr;
-      w.carriedKg = Math.max(0, w.carriedKg - w.partKg); w.partKg = 0;   // the part leaves her mass with the pay
-      if (steps) steps.push({ kind: 'dispose', fate: 'station', id: stop.id, payCr: cr });
+      // route-1106 lane S4: the finish burn closes the last gap first (the game's `finishStationBurn`: gas and days, billed at the station's
+      // height; priced only for the start whose tilt is the station's, else 0); with too little gas the part stays aboard, nothing billed
+      const fin = finishBurn({ gapDeg: w.gapDeg, herIncDeg: state.incDeg, massKg: w.dryMassKg + w.carriedKg + w.gasKg, thrustN: state.thrustN, ispS: state.ispS, gasAboardKg: w.gasKg });
+      if (fin.feasible) {
+        w.gasKg -= fin.gasKg; w.gasUsedKg += fin.gasKg; w.days += fin.days;
+        if (fin.gasKg > 0) w.gapDeg = 0;
+        const cr = Math.max(0, stop.payCr || 0);
+        w.partPaid = true; w.partAboard = false; w.partPaidCr += cr; w.valueCr += cr;
+        w.carriedKg = Math.max(0, w.carriedKg - w.partKg); w.partKg = 0;   // the part leaves her mass with the pay
+        if (steps) steps.push({ kind: 'dispose', fate: 'station', id: stop.id, payCr: cr });
+      }
     }
     sigMove(w, `f:${w.fieldId}`);
   }

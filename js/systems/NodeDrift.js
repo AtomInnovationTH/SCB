@@ -9,8 +9,10 @@
  * node 123.4 deg (`Constants.ISS_BOSS.ORBIT`); the GAP is the station's node minus hers, wrapped to (-180, 180]. Each day the gap changes
  * by the station's rate minus hers: higher than the station she turns slower, so the gap falls (she gains on the station).
  *
- * The first step (station-drift doc §5): only the gap moves, with ship days. Her tilt and her scene orbit stay as they are (D6), and the
- * station pieces stay in her plane (DECISIONS §60 row 5).
+ * The first step (station-drift doc §5): only the gap moves, with ship days. Her tilt and her scene orbit stay as they are (D6). For the
+ * start whose tilt is the station's (`stationInOwnPlane`, route-1106 lane S4) the station pieces are built in the station's own plane
+ * (her node + the gap) and the finish burn that closes the gap is billed (`RouteCost.finishBurn`); every other start keeps its pieces in
+ * her plane (DECISIONS §60 row 5) and bills no finish.
  * @module systems/NodeDrift
  */
 
@@ -38,6 +40,15 @@ export function nodeRateDegPerDay(altKm, incDeg) {
 export function stationOrbit() {
   const o = (Constants.ISS_BOSS && Constants.ISS_BOSS.ORBIT) || {};
   return { altKm: o.altKm ?? 408, incDeg: o.incDeg ?? 51.6, nodeDeg: o.raanDeg ?? 123.4 };
+}
+
+/**
+ * Does her tilt equal the station's (51.6 deg, the English / New York start)? Only then the station sits in its own plane in the scene and
+ * the finish burn is billed (route-1106 lane S4, D1); the six other starts keep today's behaviour until lane D2.
+ * @param {number} herIncDeg @returns {boolean} within 0.05 deg
+ */
+export function stationInOwnPlane(herIncDeg) {
+  return Number.isFinite(herIncDeg) && Math.abs(herIncDeg - stationOrbit().incDeg) <= 0.05;
 }
 
 /** The station's own node rate (deg/day): -4.98 at 408 km, 51.6 deg (doc §1). */
