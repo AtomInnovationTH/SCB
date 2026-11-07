@@ -3594,9 +3594,13 @@ export class ArmUnit {
     this.state = newState;
     this.stateTimer = 0;
     this._rhNoteTransition(old, newState);       // the reel-start / "is home" lines and the reel's starting distance
-    eventBus.emit(Events.ARM_STATE_CHANGE, {
-      armId: this.id, from: old, to: newState,
-    });
+    const stateChange = { armId: this.id, from: old, to: newState };
+    if (newState === S.GRAPPLED) {
+      // the piece's own spin at the catch (rad/s, the number the target list shows; the pad zeroes it only AFTER this event)
+      const held = this.capturedDebris || this.target;
+      if (held && typeof held.tumbleRate === 'number') stateChange.tumbleRateRadS = Math.abs(held.tumbleRate);
+    }
+    eventBus.emit(Events.ARM_STATE_CHANGE, stateChange);
     if (newState === S.DOCKED || newState === S.RELOADING) {
       this._captureToolKind = 'NET';   // reset capture-verb to default
     }
@@ -5508,6 +5512,27 @@ export class ArmUnit {
   }
 
   /**
+   * @private The ", about N s" part of a reel-home line (the reel start line and the failed-catch line), '' when the time is unknown.
+   * The number runs to "<name> is home" (end of the 3 s latch), the moment the player sees, not to her arrival at the strut (training 1/3
+   * 2026-11-06). The mother's line-up turn (ArmManager: the turn she is asked for, wheels or gas, or asked only at the line-up) is waited for
+   * at `rhGate = 0` and can take minutes on the wheels: it is in the number, and the line says ship time so it stays true when the clock
+   * runs ×8 (training 2: "about 8 s", docked 170 s later). No turn needed: "about N s". The failed-catch line left the turn out (t12: a failed
+   * net 166 m out said "about 14 s", home after 25 s).
+   * @param {number} e the reel's own time (`_reelHomeEtaS`)
+   * @returns {string}
+   */
+  _rhReelSecondsText(e) {
+    if (!Number.isFinite(e)) return '';
+    const latchS = Constants.ARM_DOCK_DURATION ?? 3;
+    const am = this._playerSatellite && this._playerSatellite.armManager;
+    const est = am && typeof am.reelHomeSecondsEstimate === 'function'
+      ? am.reelHomeSecondsEstimate(this, e, this._frameParentPos || this._prevParentPos, this._frameParentQuat || this._lastParentQuat)
+      : { arriveS: e, turn: false };
+    if (!Number.isFinite(est.arriveS)) return '';
+    return `, ${est.upTo ? 'up to about' : 'about'} ${Math.max(1, Math.round(est.arriveS + latchS))} s${est.turn ? ' of ship time' : ''}`;
+  }
+
+  /**
    * @private Called from `_transitionTo`. A reel home starting says how far and how long ("Reeling Large 1 home: 48 m,
    * about 21 s."), unless the failed-catch or hold line just gave the time; the latch after a reel says she is home. Also
    * keeps the reel's starting distance for the panel bar.
@@ -5529,17 +5554,7 @@ export class ArmUnit {
       // The mother's line-up turn (ArmManager: the turn she is asked for, wheels or gas) is waited for at `rhGate = 0` and can take
       // minutes on the wheels: it is added, and the line says ship time so it stays true when the clock runs ×8 (training 2:
       // "about 8 s", docked 170 s later). No turn needed: today's wording.
-      const am = this._playerSatellite && this._playerSatellite.armManager;
-      const turnS = (am && typeof am.reelHomeTurnEstimateS === 'function' && Number.isFinite(e))
-        ? am.reelHomeTurnEstimateS(this, this._frameParentPos || this._prevParentPos, this._frameParentQuat || this._lastParentQuat) : 0;
-      // The number runs to "<name> is home" (end of the 3 s latch), the moment the player sees, not to her arrival at the strut (training 1/3 2026-11-06).
-      const latchS = Constants.ARM_DOCK_DURATION ?? 3;
-      let tail;
-      if (!Number.isFinite(e)) tail = `${Math.round(distM)} m`;
-      else if (turnS > 0) {
-        tail = Number.isFinite(turnS)
-          ? `${Math.round(distM)} m, about ${Math.max(1, Math.round(am.reelHomeArriveEstimateS(this, e, turnS) + latchS))} s of ship time` : `${Math.round(distM)} m`;
-      } else tail = `${Math.round(distM)} m, about ${Math.max(1, Math.round(e + latchS))} s`;
+      const tail = `${Math.round(distM)} m${this._rhReelSecondsText(e)}`;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD', priority: 'info',
         text: `Reeling ${this.displayName} home: ${tail}.${this._rhReelNote || ''}`,
@@ -5640,8 +5655,9 @@ export class ArmUnit {
     const far = distM != null && distM > ((Constants.FAIL_REEL && Constants.FAIL_REEL.AUTO_REEL_MAX_M) ?? 200);
     // owner 2026-10-22: every reel line gives the distance and the real reel time (`_reelHomeEtaS`).
     // (+ the 3 s latch: the line ends at "<name> is home", not at her arrival at the strut)
-    const etaS = distM != null ? Math.round(this._reelHomeEtaS(distM, false, false) + (Constants.ARM_DOCK_DURATION ?? 3)) : NaN;
-    const etaTxt = Number.isFinite(etaS) ? `about ${etaS} s` : 'a long haul';
+    // (+ the mother's line-up turn when one is asked: `_rhReelSecondsText`, the reel start line's number)
+    const secTxt = distM != null ? this._rhReelSecondsText(this._reelHomeEtaS(distM, false, false)) : '';
+    const etaTxt = secTxt ? secTxt.slice(2) : 'a long haul';
     const lead = cause ? `${cause} ` : '';
     // A hold is for a retry; with no net left in a net daughter's magazine there is none, so reel whatever the range.
     const noRetry = Constants.isFeatureEnabled('CAPTURE_NET') && (this._netInventory ?? 0) <= 0

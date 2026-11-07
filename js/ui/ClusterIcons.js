@@ -18,6 +18,7 @@
 
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
+import { catchableCount, heldBackCount, heldBackNote } from '../core/missionProgress.js';
 
 /** The FieldRegistry (or a getter) `ClusterIcons.nameLine` names her field from; set by `setFieldRegistry`. */
 let _registrySource = null;
@@ -128,7 +129,13 @@ export class ClusterIcons {
         : (typeof reg.fields === 'function' && typeof reg.currentId === 'function' ? reg.fields().find((x) => x.id === reg.currentId()) : null);
       if (f && Number.isFinite(f.altKm)) {
         // The cluster snapshot is only re-polled on activate/plan; the height column and list read the registry live.
-        if (typeof reg.remainingCount === 'function') { const live = reg.remainingCount(f.id); if (Number.isFinite(live)) n = Math.max(0, live); }
+        if (typeof reg.remainingCount === 'function') {
+          // DECISIONS §64 row 1: the pieces she can catch now; the ones the training rule holds back are named after them
+          const live = catchableCount(reg, f.id);
+          if (Number.isFinite(live)) n = Math.max(0, live);
+          const held = heldBackCount(reg, f.id);
+          if (held > 0) return `Field at ${Math.round(f.altKm)} km \u00b7 ${pieces(n)} \u00b7 ${heldBackNote(held)}`;
+        }
         return `Field at ${Math.round(f.altKm)} km \u00b7 ${pieces(n)}`;
       }
     }

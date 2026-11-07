@@ -11,7 +11,7 @@ import { devShotGate } from '../core/DevShotGate.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
-import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, collarBusyLine, collarBusyState, berthBusyPhrase, targetRangeM, netRangeLine, motherNLine, motherNWorks } from './netRouting.js';
+import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, dInviteLine, collarBusyLine, collarBusyState, berthBusyPhrase, targetRangeM, netRangeLine, motherNLine, motherNWorks } from './netRouting.js';
 import { isFree, pieceIsCaught, netRefusalLine, lassoRangeAllOwnedLine } from './PieceClaim.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
@@ -720,6 +720,16 @@ export class LassoSystem {
         return (live && live.id === d.id && live.alive !== false) ? live : null;
     }
 
+    /** An "... Press D to send a daughter." line, turned into the wait when D would still be refused while a hand-off holds
+     *  the ship still (ArmManager.launchHoldRefusal, as InputManager._dInviteText). The line unchanged when nothing holds. */
+    _dInviteText(line, target) {
+        const am = this._player && this._player.armManager;
+        const hold = target && am && typeof am.launchHoldRefusal === 'function' ? am.launchHoldRefusal(target) : null;
+        if (!hold) return line;
+        const { waitS } = collarBusyState({ leashDriver: this._player && this._player.leashDriver });
+        return dInviteLine(line, hold, waitS);
+    }
+
     /** Who owns `piece` now (a daughter flying, holding or lining up a launch for it, a mother net inbound, a catch
      *  held)? Null when nobody does or no arm manager is wired (headless mocks). The lasso itself is not asked: it is idle
      *  whenever this runs. */
@@ -887,7 +897,7 @@ export class LassoSystem {
         if (this.getAmmo() <= 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_ammo' });
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: OUT_OF_MOTHER_NETS_LINE,
+                text: this._dInviteText(OUT_OF_MOTHER_NETS_LINE, selectedTarget),
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',

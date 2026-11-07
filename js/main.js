@@ -720,6 +720,9 @@ function _daughterReadyWithNets(target) {
       const dx = tp.x - arm.position.x, dy = tp.y - arm.position.y, dz = tp.z - arm.position.z;
       if (Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_UNITS_PER_METER > arm.config.tetherMax * Constants.ARM_DEPLOY_RANGE_FRACTION) return false;
     }
+    // D would still be refused while the ship must hold still (a hand-off running...) and her strut cannot reach the piece:
+    // ArmManager.launchHoldRefusal, the D press's own answer. No chip, no "can send" until it clears.
+    if (typeof armManager.launchHoldRefusal === 'function' && armManager.launchHoldRefusal(t, arm)) return false;
   }
   return true;
 }
@@ -1369,7 +1372,7 @@ async function init() {
   if (typeof debrisField.attachNearField === 'function') debrisField.attachNearField(sceneManager, player);
   _bootMark('DebrisField constructed (5 authored + ~795 hazard + 5000 background)');
   fieldRegistry = new FieldRegistry();
-  fieldRegistry.init({ debrisField, player });
+  fieldRegistry.init({ debrisField, player, missionNumber: () => scoringSystem.getMissionNumber() });
   // The start lines' "Arrived ..." wording follows the field she is at (null with the field map off: new game only).
   openingDance.setFieldProvider(() => (fieldRegistry ? fieldRegistry.startLineField() : null));
   debrisField.setFieldSource(fieldRegistry);
@@ -1555,7 +1558,22 @@ async function init() {
       try {
         ladderAway = !!(ladderController && ladderController.isActive() && ladderController.currentFloor() !== 2);
       } catch (_e) { /* best-effort */ }
-      return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange, targetInRange: _onboardingTargetInRange, daughterReady: _daughterReadyWithNets(), ladderAway };
+      // The cargo berth: the same answer N's refusal reads (LassoSystem.collarBusyNow -> netRouting.collarBusyState). Best-effort: free if unreadable.
+      let collarBusy = false;
+      let collarWaitS = NaN;
+      try {
+        const berth = lassoSystem && typeof lassoSystem.collarBusyNow === 'function' ? lassoSystem.collarBusyNow() : null;
+        collarBusy = !!(berth && berth.busy);
+        if (berth) collarWaitS = berth.waitS;
+      } catch (_e) { collarBusy = false; }
+      // D's own refusal for the selected piece (ArmManager.launchHoldRefusal, the D press's answer): the out-of-mother-nets line says
+      // the wait while it holds, with the hand-off's seconds. null = D is free (or no piece selected).
+      let dHold = null;
+      try {
+        const sel = targetSelector && targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null;
+        dHold = (sel && armManager && typeof armManager.launchHoldRefusal === 'function' ? armManager.launchHoldRefusal(sel) : null) || null;
+      } catch (_e) { dHold = null; }
+      return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange, targetInRange: _onboardingTargetInRange, daughterReady: _daughterReadyWithNets(), ladderAway, collarBusy, dHold, dHoldWaitS: collarWaitS };
     },
     // Live floor for the DETAIL onboarding beat. ladderController is constructed later; read live (GestureSplash idiom).
     floorProvider: () => ((ladderController && !ladderController.isRiding() && !(ladderController.introInFlight && ladderController.introInFlight())) ? ladderController.currentFloor() : null),

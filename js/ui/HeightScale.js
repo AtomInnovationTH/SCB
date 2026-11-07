@@ -20,6 +20,7 @@
  */
 import { VisualLaw } from '../core/VisualLaw.js';
 import { STAY_ID, piecesText, daysText, kgText } from '../systems/WhereNextRows.js';
+import { catchableCount, heldBackCount, heldBackNote } from '../core/missionProgress.js';
 import { STOPPED_EVENTS, FOCUS_COLOR } from './WhereNextList.js';
 import { ClusterIcons } from './ClusterIcons.js';
 
@@ -88,15 +89,18 @@ export function buildScaleChips(reg, list = null) {
   /** @type {ScaleItem[]} */
   const items = [];
   for (const f of reg.fields()) {
-    const n = reg.remainingCount(f.id);
+    // DECISIONS §64 row 1: the count is the pieces she can catch now; pieces the training rule holds back are named on the detail line
+    const n = catchableCount(reg, f.id);
+    const held = heldBackCount(reg, f.id);
     const here = !berth && f.id === hereId;
     const rowId = here ? STAY_ID : f.id;
     const row = byId.get(rowId) || null;
     let detail = rowDetail(row);
     if (here && !(row && row.state === 'stay')) detail = 'You are here';
+    if (held > 0) detail = detail ? `${detail} ${DOT} ${heldBackNote(held, true)}` : heldBackNote(held);
     items.push({
-      kind: 'field', id: f.id, rowId: row ? rowId : null, altKm: f.altKm, here, cleared: n === 0,
-      text: `${kmText(f.altKm)} ${DOT} ${n === 0 ? 'cleared' : piecesText(n)}`, detail,
+      kind: 'field', id: f.id, rowId: row ? rowId : null, altKm: f.altKm, here, cleared: n === 0 && held === 0,
+      text: `${kmText(f.altKm)} ${DOT} ${n === 0 && held === 0 ? 'cleared' : piecesText(n)}`, detail,
       selectable: !!(row && row.selectable), focused: !!row && focusId === rowId,
     });
   }

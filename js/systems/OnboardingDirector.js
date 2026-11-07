@@ -27,7 +27,7 @@ import { GestureHints } from '../ui/hud/GestureHints.js';
 import { gameState } from '../core/GameState.js';
 import { wingsHint, WINGS_HINT_ID } from './WingsHint.js';
 import { isOpeningLine } from './StartOpening.js';
-import { OUT_OF_MOTHER_NETS_LINE, motherNWorks, motherNHeldBack, motherNLine } from './netRouting.js';
+import { OUT_OF_MOTHER_NETS_LINE, dInviteLine, motherNWorks, motherNHeldBack, motherNLine } from './netRouting.js';
 
 /**
  * DECISIONS §33 row 9 (owner, 2026-10-20): the mother carries four nets for the whole run and a miss costs one, so a
@@ -189,7 +189,8 @@ export const ONBOARDING_BEATS = [
     commsAck: null,
     // The line claims range, so hold it until the selected target is KNOWN to be inside net reach (TARGET_IN_RANGE): A advances
     // range_wall at engage, ~70 s before the ship arrives (training 1, 2026-11-06), and the range can still be unknown then
-    // (66 s early, t10b g1). Unknown counts as not in range. A catch while it is held still completes the beat.
+    // (66 s early, t10b g1). Unknown counts as not in range. It also holds while the cargo berth is busy (N would be refused).
+    // A catch while it is held still completes the beat.
     holdWhileOutOfRange: true,
     glyph: '✓', keys: [], skillId: null,
     triggerEvent: 'LASSO_CAPTURED',
@@ -284,6 +285,8 @@ export class OnboardingDirector {
    *   nearestDebrisM:number|null, hasTarget:boolean, targetOutOfRange?:boolean, ladderAway?:boolean }.
    *   `ladderAway`: true while the Zoom Ladder holds a floor other than the flying view (the stall escalation defers
    *   and ladder inputs don't count as unrelated). Optional; beats degrade gracefully without it.
+   *   `dHold` / `dHoldWaitS`: D's refusal for the selected piece (ArmManager.launchHoldRefusal) and the hand-off's seconds; the
+   *   out-of-mother-nets line says the wait while `dHold` is set.
    * @param {Function} [deps.floorProvider]  — () → number|null, the settled Zoom Ladder floor. Same contract as
    *   GestureSplash's `floor` getter: null while the intro flyby / a ride is in flight, 2 on the flying floor.
    *   Absent → the DETAIL ticker beat never fires (main.js wires it inside the LADDER gate).
@@ -928,10 +931,17 @@ export class OnboardingDirector {
    * id, so the beat's own HINT_SATISFIED (advance / complete / drop) takes it down like any step chip.
    */
   _postMotherEmpty(beat) {
+    // While D itself would be refused (a hand-off running after the last net's catch...), say the wait, not "Press D" (Ruling 0):
+    // the context's `dHold` is ArmManager.launchHoldRefusal, `dHoldWaitS` the hand-off's seconds where known.
+    let text = OUT_OF_MOTHER_NETS_LINE;
+    try {
+      const ctx = (this._context && this._context()) || {};
+      if (ctx.dHold) text = dInviteLine(OUT_OF_MOTHER_NETS_LINE, ctx.dHold, ctx.dHoldWaitS);
+    } catch (_e) { text = OUT_OF_MOTHER_NETS_LINE; }
     this._emitComms({
       source: 'HOUSTON',
       channel: 'HOUSTON',
-      text: OUT_OF_MOTHER_NETS_LINE,
+      text,
       priority: 'info',
       _keep: true,
       _coach: true,
@@ -1243,6 +1253,10 @@ export class OnboardingDirector {
     // The line says "in range", so it waits until the range is KNOWN and inside the net's reach (Ruling 0, training 1 11-06: posted
     // 66 s before arrival while the range was still unknown). Unknown (no TARGET_IN_RANGE yet) counts as not in range.
     if (beat.holdWhileOutOfRange && (ctx.targetOutOfRange || ctx.targetInRange !== true)) return false;
+    // ...and "Launch the net" waits while N would be refused for the cargo berth (a radiator hand-off ran 1.2 s before to 34.9 s
+    // after the line, training 1 11-06). `collarBusy` is the answer N's own refusal reads (netRouting.collarBusyState, handed in
+    // by main.js through LassoSystem.collarBusyNow); absent = free. The poll re-checks, so it posts within a poll of the berth freeing.
+    if (beat.holdWhileOutOfRange && ctx.collarBusy === true) return false;
     return true;
   }
 

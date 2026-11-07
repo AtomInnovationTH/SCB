@@ -1482,6 +1482,45 @@ export class ArmManager {
   }
 
   /**
+   * The test the strut-only refusal makes: how far off her strut the piece lies when that is past
+   * `AIM.ARM_ONLY_MISS_MAX_DEG` (she is refused), else null (she launches, the strut alone aims). Pure. The ONE test the D press
+   * (`_armOnlyRefused`) and `launchHoldRefusal` (every line that invites D) both read.
+   * @returns {number|null}
+   * @private
+   */
+  _armOnlyOffDeg(arm, target) {
+    const miss = this._armOnlyMissDeg(arm, target);
+    return miss !== null && miss > Constants.AIM.ARM_ONLY_MISS_MAX_DEG ? miss : null;
+  }
+
+  /**
+   * THE one answer to "would D be refused right now because the ship cannot turn?" (Ruling 0: no line may invite D while this
+   * is true). Pure, no comms. Mirrors the D key: the daughter `deployArm` would send (`_pickLaunchArm`, or `arm` when one is
+   * picked), the ceremony available, `_motherTurnBlock` holding the ship still (a hand-off, a scripted turn, a catch on the
+   * collar, a daughter on her line...), and the piece past what her strut alone can reach (`_armOnlyOffDeg`): the press then says
+   * "<name> stays docked: <reason>, so the ship holds still, and the piece is N° off her strut." A piece her strut can reach
+   * still launches (with the "Aiming the arm only" line), so no refusal.
+   * @param {object} target
+   * @param {ArmUnit|null} [arm] the daughter already picked (D with a daughter selected); default the auto-pick
+   * @returns {{reason: string, deg: number, arm: ArmUnit}|null}
+   */
+  launchHoldRefusal(target, arm = null) {
+    try {
+      if (!target || !target._scenePosition) return null;
+      const ap = this._autopilot;
+      if (!(ap && typeof ap.requestAimRotation === 'function' && Constants.FEATURE_FLAGS.SEMI_AUTO_AIM && this.playerSatellite)) return null;
+      const reason = this._motherTurnBlock();
+      if (!reason) return null;
+      const a = arm || this._pickLaunchArm(target).arm;
+      if (!a) return null;
+      const deg = this._armOnlyOffDeg(a, target);
+      return deg === null ? null : { reason, deg, arm: a };
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  /**
    * Refuse a strut-only launch (the ship holds still) when the piece lies past `AIM.ARM_ONLY_MISS_MAX_DEG` off the line her
    * strut can reach: she stays docked, nothing is spent, one line says why (by analogy with DECISIONS §45 row 1 / §61, which rule on nets, not launches). Within the
    * tolerance the launch goes as before. Sets `_armOnlyRefused` for the auto-pick caller (GameFlowManager), which would
@@ -1493,8 +1532,8 @@ export class ArmManager {
    * @private
    */
   _armOnlyRefused(arm, target, reason) {
-    const miss = this._armOnlyMissDeg(arm, target);
-    if (miss === null || !(miss > Constants.AIM.ARM_ONLY_MISS_MAX_DEG)) return false;
+    const miss = this._armOnlyOffDeg(arm, target);
+    if (miss === null) return false;
     this._armOnlyRefusedFlag = true;
     arm._claimTarget = null;
     eventBus.emit(Events.COMMS_MESSAGE, { text: armOnlyOffLineLine(arm.displayName, reason, miss), priority: 'warning' });
@@ -4125,19 +4164,116 @@ export class ArmManager {
    * Seconds from the reel-start line until she arrives at the strut, for the line's number: the reel and the mother's turns run at the same time
    * (the reel only holds her at the 2 m line-up and the 5 m floor hold), so it is the LONGER of the two, not their sum. On the gas the turns
    * (`turnS`, from `reelHomeTurnEstimateS`) are scaled by REEL_HOME.TURN_REEL_OVERLAP (she reels in during them and her angle shrinks); a wheel turn
-   * is slow enough to be unscaled. The 3 s latch (ARM_DOCK_DURATION) is not in it: `ArmUnit._rhNoteTransition` adds it, the line runs to "<name> is home".
+   * is slow enough to be unscaled. Of the PLANE turn only the part that brings her line inside ALIGN_TOL_DEG counts (`_rhGateTurnS`: the reel waits
+   * at 2 m only while it is outside; t12 training 2: plan 40 s, home after 22 s). The 3 s latch (ARM_DOCK_DURATION) is not in it: `ArmUnit._rhNoteTransition` adds it, the line runs to "<name> is home".
    * @param {ArmUnit} arm
    * @param {number} reelS the reel's own time (`_reelHomeEtaS`)
    * @param {number} turnS `reelHomeTurnEstimateS(arm)`
+   * @param {THREE.Vector3} [parentPos]
+   * @param {THREE.Quaternion} [parentQuat]
    * @returns {number} seconds
    */
-  reelHomeArriveEstimateS(arm, reelS, turnS) {
-    if (!(turnS > 0) || !Number.isFinite(turnS)) return reelS;
+  reelHomeArriveEstimateS(arm, reelS, turnS, parentPos, parentQuat) {
+    return this._rhArriveParts(arm, reelS, turnS, parentPos, parentQuat).arriveS;
+  }
+
+  /**
+   * Seconds the plane turn really holds her up at the 2 m line-up (t12, training 2 2026-11-06: "about 43 s of ship time", home after 22 s).
+   * The reel only waits at 2 m while her line (tip -> her) is more than ALIGN_TOL_DEG off the strut's axis, which across the plane is her
+   * out-of-plane angle; the plane turn brings it down from rest, so only the part of the turn that gets the line inside the tolerance is
+   * waited for (the turn goes on, and is cut off when she is home). A turn of `theta` that takes `T` s from rest (bang-bang: equal
+   * speed-up and slow-down halves) has turned `phi` after t = T sqrt(phi / 2 theta) (first half) or T (1 - sqrt((theta - phi) / 2 theta)).
+   * The out-of-plane angle is read from the strut TIP (the gate's own origin), the part across the plane of her line about the radial axis.
+   * @returns {number|null} seconds from the line until the line is inside the tolerance (0 = it is already), null when she cannot be read
+   */
+  _rhGateTurnS(arm, theta, T, parentPos, parentQuat) {
+    const ps = this.playerSatellite;
+    const pos = parentPos || (ps && ps.position);
+    const q = parentQuat || (ps && ps.quaternion);
+    if (!ps || !pos || !q || !arm.position || !arm.dockOffset || !(T > 0) || !Number.isFinite(T) || !(Math.abs(theta) > 1e-6)) return null;
+    const RH = Constants.REEL_HOME || {};
+    const az = arm._rhAzRad();
+    const rel = _rhTurnP.copy(arm.position).sub(pos).applyQuaternion(_rhTurnQ.copy(q).invert()).sub(arm.dockOffset);
+    const len = rel.length();
+    if (len < 1e-9) return null;
+    rel.multiplyScalar(1 / len);
+    const vr = rel.x * Math.cos(az) + rel.y * Math.sin(az);
+    const vt = -rel.x * Math.sin(az) + rel.y * Math.cos(az);
+    const rho = Math.sqrt(Math.max(1e-12, 1 - vr * vr));                         // her part across the radial axis: the turn swings it, never shortens it
+    const psi0 = Math.asin(clamp(Math.abs(vt) / rho, 0, 1));
+    const psiGate = Math.asin(clamp(Math.sin((RH.ALIGN_TOL_DEG ?? 10) * DEG2RAD) / rho, 0, 1));
+    const phi = Math.min(psi0 - psiGate, Math.abs(theta));
+    if (!(phi > 0)) return 0;
+    const th = Math.abs(theta);
+    return phi <= th / 2 ? T * Math.sqrt(phi / (2 * th)) : T * (1 - Math.sqrt((th - phi) / (2 * th)));
+  }
+
+  /**
+   * The parts of `reelHomeArriveEstimateS`: `arriveS` and `upTo`, true when the number is a ceiling ("up to about N s": a wheel turn
+   * that is longer than the reel; the wheels' real rate is not the plan's, and the turn is cut off when she is home). The turn term is the
+   * plane turn up to the line being inside the tolerance (`_rhGateTurnS`) plus the floor turn that follows it; a floor turn alone is whole.
+   * @returns {{arriveS:number, upTo:boolean}}
+   */
+  _rhArriveParts(arm, reelS, turnS, parentPos, parentQuat) {
+    if (!(turnS > 0) || !Number.isFinite(turnS)) return { arriveS: reelS, upTo: false };
     const want = this._rhTurnAsk(arm);
     const ps = this.playerSatellite;
-    const wheels = want && ps && typeof ps.attitudeTorqueSource === 'function'
-      && ps.attitudeTorqueSource({ spinUp: true, angleRad: want.theta, nx: want.axisL.x, ny: want.axisL.y, quiet: true }) === 'wheels';
-    return Math.max(reelS, wheels ? turnS : turnS * (Constants.REEL_HOME?.TURN_REEL_OVERLAP ?? 0.7));
+    const wheels = !!(want && ps && typeof ps.attitudeTorqueSource === 'function'
+      && ps.attitudeTorqueSource({ spinUp: true, angleRad: want.theta, nx: want.axisL.x, ny: want.axisL.y, quiet: true }) === 'wheels');
+    let eff = turnS;
+    if (want && Math.abs(arm._rhPlaneErrRad) > (Constants.REEL_HOME?.PLANE_TOL_DEG ?? 5) * DEG2RAD) {
+      const first = this._rhTurnTimeS(want.theta, want.axisL.x, want.axisL.y);
+      const gate = this._rhGateTurnS(arm, want.theta, first, parentPos, parentQuat);
+      if (gate !== null && Number.isFinite(first)) eff = Math.max(0, turnS - first) + gate;   // turnS = first (+ the floor turn that follows)
+    }
+    const term = wheels ? eff : Math.min(eff, turnS * (Constants.REEL_HOME?.TURN_REEL_OVERLAP ?? 0.7));
+    return { arriveS: Math.max(reelS, term), upTo: wheels && term > reelS };
+  }
+
+  /**
+   * Seconds she waits at the 2 m line-up when the mother's turn is NOT asked from the start (t12, training 2026-11-06: a failed net 166 m
+   * out said "about 14 s", docking began after 20 s). `_rhTurnAsk` is null while the angle left from the ship's CENTRE is over TURN_MAX_DEG
+   * (far out her lever on the strut's axis is gone) or the mother is not free; her line is then still off the axis the strut can point to
+   * by more than ALIGN_TOL_DEG, so at the 2 m hold she waits ALIGN_WAIT_S and then lines herself up on her own thrusters at ALIGN_SPEED_MPS
+   * on the 2 m circle. Measured headless 11-06 (gas, 166 m and 462 m): the reel's time + 8.7 .. 9.6 s. 0 when the turn is asked now or she is within the tolerance.
+   * @param {ArmUnit} arm `_rhStrutAim` has run
+   * @returns {number} seconds
+   */
+  _rhLateTurnS(arm) {
+    const RH = Constants.REEL_HOME || {};
+    const v = arm && arm._rhRelShip;
+    const ps = this.playerSatellite;
+    const ap = this._autopilot;
+    if (!v || !ps || !ap || typeof ap.requestAttitudeTurn !== 'function' || !Number.isFinite(arm._rhBestAlpha)
+      || !Constants.isFeatureEnabled('REEL_HOME') || this._rhTurnAsk(arm)) return 0;
+    const lo = (RH.STRUT_MIN_DEG ?? 34) * DEG2RAD, hi = (RH.STRUT_MAX_DEG ?? 180) * DEG2RAD;
+    const axis = strutLocalDirection(clamp(arm._rhBestAlpha, lo, hi), arm._rhAzRad(), _rhGapA).normalize();
+    const eps = Math.acos(clamp(axis.dot(v), -1, 1));                          // her line from the strut vs the axis the strut can point to
+    const tolA = (RH.ALIGN_TOL_DEG ?? 10) * DEG2RAD;
+    if (eps <= tolA) return 0;
+    return (RH.ALIGN_WAIT_S ?? 5) + (eps - tolA) * (RH.ALIGN_DIST_M ?? 2) / (RH.ALIGN_SPEED_MPS ?? 0.5);
+  }
+
+  /**
+   * The number of seconds on a reel-home line (the reel start line and the failed-catch line): from the line to her arrival at the strut,
+   * the 3 s latch not in it. The mother's turn asked from the start runs with the reel (`reelHomeArriveEstimateS`); a turn asked only at
+   * the line-up (`_rhLateTurnS`) comes after it, so it is added.
+   * @param {ArmUnit} arm
+   * @param {number} reelS the reel's own time (`_reelHomeEtaS`)
+   * @param {THREE.Vector3} [parentPos]
+   * @param {THREE.Quaternion} [parentQuat]
+   * @returns {{arriveS:number, turn:boolean}} turn = the mother's turn is part of the number (the line says "of ship time"); arriveS is
+   *   Infinity when no source can turn her
+   */
+  reelHomeSecondsEstimate(arm, reelS, parentPos, parentQuat) {
+    const turnS = this.reelHomeTurnEstimateS(arm, parentPos, parentQuat);
+    if (turnS > 0) {
+      if (!Number.isFinite(turnS)) return { arriveS: Infinity, turn: true, upTo: false };
+      const p = this._rhArriveParts(arm, reelS, turnS, parentPos, parentQuat);
+      return { arriveS: p.arriveS, turn: true, upTo: p.upTo };
+    }
+    const late = this._rhLateTurnS(arm);
+    return late > 0 ? { arriveS: reelS + late, turn: true, upTo: false } : { arriveS: reelS, turn: false, upTo: false };
   }
 
   /**
@@ -5333,14 +5469,15 @@ export class ArmManager {
    * picks by type, its capture mass), so `ready` is true exactly when `deployArm(target)` gets past them. Daughter fuel
    * never refills in play, so fuel <= 5 is a dead end (`noFuel`).
    * @param {object} target - needs `.mass` (default 1 kg, as deployArm)
-   * @returns {{ready:boolean, wait:boolean, going:boolean, why:(string|null), counts:{noFuel:number, holding:number, heavy:number}}}
+   * @returns {{ready:boolean, wait:boolean, going:boolean, why:(string|null), counts:{noFuel:number, holding:number, heavy:number}, hold:({reason:string, deg:number, arm:ArmUnit}|null)}}
    *   `going`: a daughter already out for this very piece. `wait`: not ready, but one will be (spring reloading, or
    *   out on her line). `why`: 'safe' | 'power' | 'none' | 'fuel' | 'holding' | 'heavy' | 'mixed' when nothing will be ready.
+   *   `hold` (with `ready`): `launchHoldRefusal`, set when D would still be refused because the ship must hold still.
    */
   daughterLaunchReadiness(target) {
     const S = ARM_STATES;
     const counts = { noFuel: 0, holding: 0, heavy: 0 };
-    const out = { ready: false, wait: false, going: false, why: null, counts };
+    const out = { ready: false, wait: false, going: false, why: null, counts, hold: null };
     const arms = this.arms || [];
     out.going = !!target && arms.some((a) => a && a.state !== S.DOCKED && a.target === target);
     if (this.playerSatellite && this.playerSatellite.safeMode) { out.why = 'safe'; return out; }
@@ -5356,7 +5493,12 @@ export class ArmManager {
         break;
       }
     }
-    if (out.ready) return out;
+    if (out.ready) {
+      // She is free, but D would still be refused while the ship must hold still and the strut cannot line her up (a hand-off
+      // running...): `hold` is `launchHoldRefusal`, the D press's own answer, so the invitation says the wait, not "press D".
+      out.hold = this.launchHoldRefusal(target || null);
+      return out;
+    }
 
     for (const a of arms) {
       if (!a || a.state === S.EXPENDED || a.state === S.ADRIFT || a.isDetached) continue;

@@ -32,6 +32,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { catchableCount, heldBackCount, heldBackNote } from '../core/missionProgress.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { daysWithTurnWait } from './TripProfile.js';
 import { pieceName } from './BigPieces.js';
@@ -113,8 +114,8 @@ export function pctText(gasKg, aboardKg) {
  * @typedef {object} WhereNextRow
  * @property {'field'|'stay'|'satellite'|'call'|'push'|'wait'} kind   'wait': route-1101 lane S2, wait here for the station to line up
  * @property {number} altKm       the field's height (Stay and the call: her own field's; the satellite's)
- * @property {'ok'|'cleared'|'short'|'cannot'|'stay'|'mission'|'poor'|'here'} state   'mission': a mission is going on, trips wait
- *   for its end; 'poor': the call, short of credits; 'here': a push row with no trip (she is at or below the piece's 25-year height)
+ * @property {'ok'|'cleared'|'short'|'cannot'|'stay'|'mission'|'poor'|'here'|'held'} state   'mission': a mission is going on, trips wait
+ *   for its end; 'held': only pieces the training rule holds back until Mission 1 are owed there (DECISIONS §64 row 1; `held` counts them); 'poor': the call, short of credits; 'here': a push row with no trip (she is at or below the piece's 25-year height)
  * @property {string} [shortText] the panel's one short line for a trip she can fly; drawn in place of `text` when there
  * @property {number} [days]      the profile's days (the call: the satellite's days, the estimate when the profile cannot be read)
  * @property {number} [shortKg]   profile gas minus gas aboard (state 'short')
@@ -171,10 +172,18 @@ export function buildWhereNextRows(reg, opts = {}) {
     }
   }
   for (const f of others) {
-    const n = reg.remainingCount(f.id);
+    // DECISIONS §64 row 1: in training the count is the pieces she can catch now; the ones held back until Mission 1 are named, never counted
+    const n = catchableCount(reg, f.id);
+    const held = heldBackCount(reg, f.id);
+    const heldNote = held > 0 ? ` ${DOT} ${heldBackNote(held)}` : '';
+    const heldShort = held > 0 ? ` ${DOT} ${heldBackNote(held, true)}` : '';
     const head = `Field at ${Math.round(f.altKm)} km`;
-    if (n === 0) {
+    if (n === 0 && held === 0) {
       rows.push({ id: f.id, kind: 'field', altKm: f.altKm, pieces: 0, state: 'cleared', selectable: false, text: `${head} ${DOT} cleared` });
+      continue;
+    }
+    if (n === 0) {      // only held-back pieces are owed here: not cleared, and nothing to fly there for yet
+      rows.push({ id: f.id, kind: 'field', altKm: f.altKm, pieces: 0, held, state: 'held', selectable: false, text: `${head}${heldNote}` });
       continue;
     }
     if (!owed) {
@@ -199,11 +208,12 @@ export function buildWhereNextRows(reg, opts = {}) {
     const gasPct = plan.gasAboardKg > 0 ? gasKg / plan.gasAboardKg * 100 : 0;
     rows.push({
       id: f.id, kind: 'field', altKm: f.altKm, pieces: n, state: 'ok', selectable: true, gasKg, gasPct, days,
-      text: `${head} ${DOT} ${piecesText(n)} ${DOT} ${kgText(gasKg)} kg gas (${pctText(gasKg, plan.gasAboardKg)}) ${DOT} ${daysText(days)}`,
-      shortText: `${Math.round(f.altKm)} km ${DOT} ${piecesText(n)} ${DOT} ${kgText(gasKg)} kg gas ${DOT} ${daysText(days)}`,
+      text: `${head} ${DOT} ${piecesText(n)}${heldNote} ${DOT} ${kgText(gasKg)} kg gas (${pctText(gasKg, plan.gasAboardKg)}) ${DOT} ${daysText(days)}`,
+      shortText: `${Math.round(f.altKm)} km ${DOT} ${piecesText(n)}${heldShort} ${DOT} ${kgText(gasKg)} kg gas ${DOT} ${daysText(days)}`,
     });
   }
-  const hereN = reg.remainingCount(here.id);
+  const hereN = catchableCount(reg, here.id);
+  const hereHeld = heldBackCount(reg, here.id);
   // route-1101 lane S2: the wait row and the station field's note, while the ISS boss is still to come
   const wait = owed && !berth ? stationWait(reg, opts && opts.station, here, herKm, turn) : null;
   if (wait) {
@@ -229,7 +239,8 @@ export function buildWhereNextRows(reg, opts = {}) {
   if (!atSat && (hereN > 0 || !owed)) {
     rows.push({
       id: STAY_ID, kind: 'stay', altKm: here.altKm, pieces: hereN, state: 'stay', selectable: true,
-      text: hereN > 0 ? `Stay here ${DOT} ${piecesText(hereN)}` : `Stay here ${DOT} field cleared`,
+      text: hereN > 0 ? `Stay here ${DOT} ${piecesText(hereN)}${hereHeld > 0 ? ` ${DOT} ${heldBackNote(hereHeld)}` : ''}`
+        : (hereHeld > 0 ? `Stay here ${DOT} ${piecesText(0)} ${DOT} ${heldBackNote(hereHeld)}` : `Stay here ${DOT} field cleared`),
     });
   }
   const selectable = rows.filter((r) => r.selectable).map((r) => r.id);

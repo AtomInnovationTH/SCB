@@ -9,7 +9,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
-import { classifyNetTarget, berthBusyPhrase } from './netRouting.js';
+import { classifyNetTarget, berthBusyPhrase, dInviteLine } from './netRouting.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
@@ -110,6 +110,9 @@ export function arrivalLineText(mass, motherNetsLeft, readiness, berth) {
   if (!readiness) return 'In position. Press D to send a daughter.';
   // Nets gone: the D line only once a daughter can really launch (DECISIONS §33 row 3).
   if (readiness.going) return null;
+  // She is free but D would be refused while the ship must hold still (a hand-off running...: the D press's own answer,
+  // ArmManager.launchHoldRefusal): say the wait, with the hand-off's seconds when the driver can say them (Ruling 0).
+  if (readiness.ready && readiness.hold) return dInviteLine('In position. Press D to send a daughter.', readiness.hold, berth && berth.waitS);
   if (readiness.ready) return 'In position. Press D to send a daughter.';
   if (readiness.wait) return null;
   return daughterBlockerText(readiness);
@@ -175,6 +178,10 @@ export function isCaughtForChase(target) {
 
 /** Autopilot rotation rate (rad/s) — gentler than manual (0.3) */
 const AP_ROT_RATE = 0.2;
+/** Ship seconds a gas finish after a wheel-to-gas hand-over takes to close its remaining angle (peak rate = the heading's own rate +
+ * angle / this, never above AP_ROT_RATE). t12-gasrate: at the fixed 0.2 rad/s a 3.6 deg finish billed 0.36-0.56 kg (I x 0.2 at spin-up and
+ * again at the stop, whatever the angle; tmp/t12/gascost/summary.md); a controller sizes its coast to the angle. */
+const GAS_FINISH_S = 5;
 /** The orbit-frame offset of a retrograde trip hold: 180° about her up (+Y) axis. */
 const _Q_TRIP_RETRO = new THREE.Quaternion(0, 1, 0, 0);
 const _Q_IDENTITY = new THREE.Quaternion();
@@ -847,6 +854,10 @@ export class AutopilotSystem {
     this._slewBestErr = Infinity;
     this._slewPrevErr = Infinity;
     this._slewStallS = 0;
+    this._handGasKg = null;                   // kg of steering gas billed since a wheel-to-gas hand-over or a world slew's start on gas, until that turn ends (null = none; `_slewHandOverNote`, `_slewStopTick`)
+    this._gasFinRate = null;                  // the peak rate (rad/s) of the gas finish after a hand-over, sized to its angle (`_gasFinishRate`); null = not set, reset with `_handGasKg`
+    this._gasPrevDir = new THREE.Vector3();   // the world slew's heading of the last running call (its own rate = how far it moved / dt)
+    this._gasPrevOk = false;
     // The orbit's own step (`_orbitStepTick`, DECISIONS §61 row 10): the prograde frame of the last tick, and this tick's step Δ = pg_now · pg_prev⁻¹
     this._orbitPgPrev = new THREE.Quaternion();
     this._orbitPgNow = new THREE.Quaternion();
@@ -1142,7 +1153,7 @@ export class AutopilotSystem {
     }
     // Steering gas out: "the wheels are full" counts only for a ship at rest (`carrying`): a wheel-made rate stays on the wheels to its stop.
     const sel = p.attitudeTorqueSource({ spinUp: true, angleRad: err, nx, ny, limitS, carrying: this._wheelRateCarried() });
-    if (sloth) { this._slewLatch = null; if (sel === 'wheels') this._noteWheelSlew(err, nx, ny); return isSlowSrc(sel) ? sel : null; }
+    if (sloth) { this._slewLatch = null; this._handGasKg = null; if (sel === 'wheels') this._noteWheelSlew(err, nx, ny); return isSlowSrc(sel) ? sel : null; }
     const latch = this._slewLatch;
     if (latch === 'gas') { if (this._wheelSlew) this._wheelSlew.on = false; return null; }   // a gas slew runs to its stop on gas (never on the ×8 clock)
     if (latch === 'wheels') {
@@ -1165,7 +1176,13 @@ export class AutopilotSystem {
     this._slewLatch = sel === 'wheels' ? 'wheels' : 'gas';
     this._slewBestErr = err; this._slewPrevErr = err; this._slewStallS = 0;   // the progress watch starts with the slew
     if (sel === 'wheels') this._noteWheelSlew(err, nx, ny);
-    else if (this._wheelSlew) this._wheelSlew.on = false;
+    else {
+      if (this._wheelSlew) this._wheelSlew.on = false;
+      // A world slew that STARTS on the steering gas (wheels full at rest, no wheel power) is sized and told like a handed-over one:
+      // the tally opens now (`_gasFinishRate`, `_handGasDoneNote`). Only `chase` (the world slew): the trip hold's ease and the
+      // orbit-frame slew keep their rate and say no grams.
+      if (chase) { this._handGasKg = 0; this._gasFinRate = null; }
+    }
     return sel === 'wheels' ? 'wheels' : null;
   }
 
@@ -1649,8 +1666,10 @@ export class AutopilotSystem {
           : `Target is already in net range — ${berthBusyPhrase(pinBerth.waitS, true)}; then launch the net (N).`;
       }
       if (this._motherNetsLeft <= 0) {
-        const d = arrivalLineText(activeTarget.mass, 0, this._armManager?.daughterLaunchReadiness?.(activeTarget) ?? null);
-        pinText = d === 'In position. Press D to send a daughter.' ? 'Target is already in net range. Press D to send a daughter.'
+        const d = arrivalLineText(activeTarget.mass, 0, this._armManager?.daughterLaunchReadiness?.(activeTarget) ?? null, pinBerth);
+        // the D invitation ("... send a daughter."), plain or as the hand-off's wait, opens with this line's own words
+        pinText = typeof d === 'string' && d.startsWith('In position. ') && d.endsWith('send a daughter.')
+          ? `Target is already in net range. ${d.slice('In position. '.length)}`
           : (d || 'Target is already in net range — no mother nets left, and no daughter is free yet.');
       }
       if (pinText) eventBus.emit(Events.COMMS_MESSAGE, {
@@ -2856,6 +2875,10 @@ export class AutopilotSystem {
   _slothNotice(p, err, nx, ny, kind, src = 'tailBoxes') {
     const s = this._slow;
     if (this._slothNoPowerNote(p, s, undefined, src)) return;
+    // A wheel turn the next step hands to the gas (rule (b) of `_slewSource`: the wheels are already full at rest) is never announced as a
+    // wheel turn: only the hand-over line is said (the notice stays unsaid, so a later true wheel turn of this engagement still says it).
+    if (src === 'wheels' && this._slewLatch === 'wheels' && !(this._tripOmega > 0)
+        && typeof p.wheelsFull === 'function' && p.wheelsFull(nx, ny)) return;
     const mode = this._headingMode, ref = this._slothTargetRef();
     if (s.said && s.kind === kind && s.mode === mode && s.ref === ref) return;
     s.said = true; s.kind = kind; s.mode = mode; s.ref = ref;
@@ -2880,12 +2903,15 @@ export class AutopilotSystem {
   _slothNoticeReset() {
     const s = this._slow;
     s.said = false; s.kind = null; s.mode = null; s.ref = null; s.noPowerSaid = false; s.handSaid = false;
+    this._handGasKg = null;                                         // a turn the engagement left unfinished says no grams
   }
 
   /** @private The wheel slew was handed to the steering gas by rule (b) (wheels full) or (c) (not keeping up): say so once per engagement,
    * after the "turning on the reaction wheels" line it follows (so the player is not left thinking the wheels still turn her). */
   _slewHandOverNote(full) {
     const s = this._slow;
+    this._handGasKg = 0;                                            // every hand-over opens a tally; `_handGasDoneNote` says it when the gas has finished the turn
+    this._gasFinRate = null;                                        // ... and sizes this finish's rate afresh (`_gasFinishRate`)
     if (s.handSaid) return;
     s.handSaid = true;
     eventBus.emit(Events.COMMS_MESSAGE, {
@@ -2928,7 +2954,7 @@ export class AutopilotSystem {
     }
     const I = p.getAttitudeInertia();
     const w0 = this._slewOmega;
-    if (I) p._billTurnNullN2(I.ixx * Math.abs(w.x - w0.x), I.iyy * Math.abs(w.y - w0.y));
+    if (I) this._tallyHandGas(p._billTurnNullN2(I.ixx * Math.abs(w.x - w0.x), I.iyy * Math.abs(w.y - w0.y)));
     w0.copy(w);
   }
 
@@ -3002,16 +3028,36 @@ export class AutopilotSystem {
     if (dtWorld <= 0) return;
     const stepped = this._slewSteppedThisFrame;
     this._slewSteppedThisFrame = false;
-    if (!stepped) { this._slewLatch = null; this._slewTrackDt = 0; if (this._wheelSlew) this._wheelSlew.on = false; }   // no slew step = the slew's stop: the next one chooses afresh
+    if (!stepped) { this._slewLatch = null; this._slewTrackDt = 0; this._gasPrevOk = false; if (this._wheelSlew) this._wheelSlew.on = false; }   // no slew step = the slew's stop: the next one chooses afresh (and reads no heading rate across the gap)
     const w0 = this._slewOmega;
-    if (stepped || w0.lengthSq() === 0) return;
-    const bill = this._slowGeneric(p) === null
-      && typeof p._billTurnNullN2 === 'function' && typeof p.getAttitudeInertia === 'function';
-    if (bill) {
-      const I = p.getAttitudeInertia();
-      if (I) p._billTurnNullN2(I.ixx * Math.abs(w0.x), I.iyy * Math.abs(w0.y));
+    if (!stepped && w0.lengthSq() !== 0) {
+      const bill = this._slowGeneric(p) === null
+        && typeof p._billTurnNullN2 === 'function' && typeof p.getAttitudeInertia === 'function';
+      if (bill) {
+        const I = p.getAttitudeInertia();
+        if (I) this._tallyHandGas(p._billTurnNullN2(I.ixx * Math.abs(w0.x), I.iyy * Math.abs(w0.y)));
+      }
+      w0.set(0, 0, 0);
     }
-    w0.set(0, 0, 0);
+    if (!stepped) this._handGasDoneNote();                          // the turn the gas finished after a hand-over has ended, its stop billed
+  }
+
+  /** @private Adds a steering-gas bill (kg) to the running hand-over tally, if a wheel-to-gas hand-over is open (`_slewHandOverNote`). */
+  _tallyHandGas(kg) {
+    if (this._handGasKg !== null && kg > 0) this._handGasKg += kg;
+  }
+
+  /** @private The turn that the steering gas finished after a wheel-to-gas hand-over has ended: say the grams billed from the hand-over to
+   * the stop (measured by `_tallyHandGas`), once per hand-over. */
+  _handGasDoneNote() {
+    const kg = this._handGasKg;
+    if (kg === null) return;
+    this._handGasKg = null;
+    const g = Math.round(kg * 1000);
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `Turn finished on steering gas: ${g >= 1 ? `${g} g` : 'under 1 g'}.`,
+      priority: 'warning', source: 'HOUSTON',
+    });
   }
 
   /**
@@ -3247,6 +3293,13 @@ export class AutopilotSystem {
    * @param {number} [dtWorld] world seconds (0 = a held world; only the slow turn on the tail boxes reads it)
    */
   _rotateTowardWorld(worldDir, dt, dtWorld) {
+    // The heading's own rate (rad per real second): how far worldDir moved since the last running call (a held world moved nothing).
+    // Read on every call, the wheel phase included, so the first gas frame after a hand-over has it.
+    let hdgRate = 0;
+    if (!(dtWorld <= 0) && dt > 0) {
+      if (this._gasPrevOk) hdgRate = this._gasPrevDir.angleTo(worldDir) / dt;
+      this._gasPrevDir.copy(worldDir); this._gasPrevOk = true;
+    }
     // With the steering gas out the nose goes to the heading at the tail boxes' α, not at AP_ROT_RATE for free (a held world
     // pauses it, like the trip hold); likewise a slew on the wheels (`_slewSource`, no wheel limit, latched to the slew's
     // stop). The choke point for every caller of this slew.
@@ -3271,7 +3324,7 @@ export class AutopilotSystem {
     const angle = this._player.quaternion.angleTo(targetQuat);
     if (angle < AP_ROT_DEADZONE) return;
 
-    const maxAngle = AP_ROT_RATE * dt;
+    const maxAngle = this._gasFinishRate(angle, hdgRate) * dt;
     const alpha = Math.min(maxAngle / angle, 1.0);
     this._slewQ0.copy(this._player.quaternion);                        // the world slew is billed (`_billSlewStep`)
     this._player.quaternion.slerp(targetQuat, alpha);
@@ -3284,6 +3337,23 @@ export class AutopilotSystem {
     const track = alpha >= 1;
     this._billSlewStep(this._player, this._slewQ0, this._player.quaternion, dt, track && this._slewTrackDt > 0 ? this._slewTrackDt : dt);
     this._slewTrackDt = track ? dt : 0;
+    if (track) this._handGasDoneNote();                                // the gas has closed the whole error: a handed-over turn is finished (what follows is tracking, not turning)
+  }
+
+  /**
+   * @private The peak rate (rad per real second) of the world slew's step. Always AP_ROT_RATE, except for the gas finish after a
+   * wheel-to-gas hand-over (`_handGasKg` open, `_slewLatch` 'gas'): there it is sized to the angle left, `hdgRate + angle / GAS_FINISH_S`
+   * (never above AP_ROT_RATE), set once at the hand-over so the finish is one steady coast (spin-up and stop billed as I x |dw|, as
+   * ever). A heading that keeps moving needs `hdgRate` on top, or the finish never catches it: if the need later rises over
+   * 1.5x the set rate (a real shortfall, not frame-time wobble in `hdgRate`) the rate is set again. The trip hold's ease, the prograde
+   * hold keep AP_ROT_RATE. A world slew that STARTS on gas (`_slewSource` opens the tally at the fresh choice) is sized the same way.
+   * @param {number} angle rad left to the heading @param {number} hdgRate rad/s the heading itself moves
+   * @returns {number} rad/s */
+  _gasFinishRate(angle, hdgRate) {
+    if (this._handGasKg === null || this._slewLatch !== 'gas') { this._gasFinRate = null; return AP_ROT_RATE; }
+    const need = Math.min(AP_ROT_RATE, hdgRate + angle / GAS_FINISH_S);
+    if (this._gasFinRate === null || need > 1.5 * this._gasFinRate) this._gasFinRate = need;
+    return this._gasFinRate;
   }
 
   /**

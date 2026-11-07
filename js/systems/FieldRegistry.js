@@ -143,6 +143,7 @@ export class FieldRegistry {
   init(deps = {}) {
     if (deps.debrisField) this._debris = deps.debrisField;
     if (deps.player) this._player = deps.player;
+    if (typeof deps.missionNumber === 'function') this._missionNow = deps.missionNumber;   // () => the scorer's mission number (is a start owed?)
     return this;
   }
 
@@ -203,8 +204,25 @@ export class FieldRegistry {
     const f = this.fieldById(id);
     const rows = this.remainingRows(id);
     if (!f || f.kind !== 'high') return rows;
-    const next = this.nextMissionNumber();
-    return rows.filter((r) => !trainingHoldsHighRow(r, next));
+    const m = this.laidOutMission(id);
+    return rows.filter((r) => !trainingHoldsHighRow(r, m));
+  }
+
+  /**
+   * The mission whose layout decides which of a field's owed rows are out: the next one (`nextMissionNumber`), except at the
+   * field she is at while a mission is going on (the scorer's number is not above the last one started): that field is laid out
+   * for the mission flying now, and the training rule holds its rows back until it ends (DECISIONS §64 row 1). Without the
+   * `missionNumber` probe (`init`) a start is taken to be owed.
+   * @param {string} id the field's id
+   * @returns {number}
+   */
+  laidOutMission(id) {
+    const at = this._state.at;
+    if (id === this._state.currentId && typeof this._missionNow === 'function') {
+      const n = Number(this._missionNow());
+      if (Number.isFinite(n) && n <= at) return at;
+    }
+    return at + 1;
   }
 
   /** How many pieces the next mission would lay out at a field (`layableRows`): what a trip or a Stay there is for. */

@@ -66,9 +66,15 @@ const SHIP_WINGS_ROLLED_UP = Object.freeze({ wing1: 0, wing2: 0 });
  *  open on the player's first action (StartOpening, "Solar panels open. Power coming in.", DECISIONS "Opening at the start"). */
 export const START_ARRIVED_FIRST_LINE = 'Arrived at first debris field.';
 /** A new game or a retry (training mission 1 at the start field) says this instead of START_ARRIVED_FIRST_LINE: the
- *  first pieces are held in place (owner 2026-10-31: "Debris is fixed in place, like a shooting gallery"; DECISIONS §38
- *  row 9). A continue at the start field keeps the plain line. */
-export const START_TRAINING_LINE = 'Arrived at the training range. The pieces are held in place for practice.';
+ *  pieces stay near her (owner 2026-10-31: "Debris is fixed in place, like a shooting gallery"; DECISIONS §38 row 9).
+ *  They are NOT held: every piece but the two pinned ones is a real co-orbital orbit (DebrisField.js WELCOME_FIELD,
+ *  dragDecelFor), so the range changes by up to about 0.5 m/s on its own and by metres per second the moment she flies
+ *  (2026-11-06 probe tmp/t12/held: an autopilot approach to one piece moved the range to the others by 150-300 m in 40 s,
+ *  the two pinned pieces stayed at 22 m / 45 m). Reeling daughters in pushes her too (the designed reel push): in a training 2
+ *  browser run two reels at once moved her 2.3 m/s against the field, and the ranges opened to 700+ m over the next 150 s of
+ *  free orbits (tmp/t12/drift/summary.md). Training 3's movers add about 0.07 m/s. So the line says "when the ship moves",
+ *  not "when you fly"; true in training 1, 2 and 3 (test-TrainingRangeLine). A continue at the start field keeps the plain line. */
+export const START_TRAINING_LINE = 'Arrived at the training range. The pieces drift only slowly; the distances change mostly when the ship moves.';
 export const START_SYSTEMS_LINE = 'Systems... nominal.';
 
 /** Zero progress — what every consumer sees before t = 0 and after unbind. Frozen: the idle object is shared. */

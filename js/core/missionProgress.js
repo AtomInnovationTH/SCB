@@ -60,6 +60,39 @@ export function trainingHoldsHighRow(row, missionNumber) {
 }
 
 /**
+ * How many of a field's owed pieces she can catch now: `reg.layableCount` (the training rule holds a high field's pieces over 500 kg
+ * back, DECISIONS §64 row 1), or `remainingCount` for a registry without it. What every count on screen shows.
+ * @param {object} reg a FieldRegistry (or anything with `remainingCount`)
+ * @param {string} id the field's id
+ * @returns {number}
+ */
+export function catchableCount(reg, id) {
+  const total = reg.remainingCount(id);
+  if (typeof reg.layableCount !== 'function') return total;
+  const n = reg.layableCount(id);
+  return Number.isFinite(n) ? Math.min(total, n) : total;
+}
+
+/**
+ * How many of a field's owed pieces the training rule holds back until Mission 1 (owed, but not catchable now).
+ * @param {object} reg a FieldRegistry @param {string} id the field's id
+ * @returns {number}
+ */
+export function heldBackCount(reg, id) {
+  return Math.max(0, reg.remainingCount(id) - catchableCount(reg, id));
+}
+
+/**
+ * The words for pieces held back: "+2 big pieces from Mission 1" (short: "+2 big from Mission 1"). '' for none.
+ * @param {number} k how many are held back @param {boolean} [short=false]
+ * @returns {string}
+ */
+export function heldBackNote(k, short = false) {
+  if (!(k > 0)) return '';
+  return `+${k} big ${short ? '' : (k === 1 ? 'piece ' : 'pieces ')}from ${missionName(TRAINING_MISSIONS + 1)}`;
+}
+
+/**
  * A mission's name as the player reads it, from the internal mission number. Missions 1..TRAINING_MISSIONS are
  * "Training mission 1".."Training mission 3"; the real missions after them count from 1 again (internal 4 is
  * "Mission 1", internal 12 "Mission 9"). Forms: 'start' (a line or heading starts with it), 'mid' (inside a

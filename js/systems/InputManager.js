@@ -17,7 +17,7 @@ import { CeremonyTimeScale } from './CeremonyTimeScale.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 import {
-  classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, collarBusyLine, collarBusyState, targetRangeM, netRangeLine,
+  classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, collarBusyLine, collarBusyState, targetRangeM, netRangeLine, dInviteLine,
   netReachForMassM, driftOutOfReachLine, netFlightClockScale,
 } from './netRouting.js';
 import { computeLeadAim, netMaxReachM, overCatchLimit, catchLimitLine } from '../entities/CaptureNet.js';
@@ -2544,7 +2544,7 @@ export class InputManager {
       if (typeof cns.getMotherNetCount === 'function' && cns.getMotherNetCount() <= 0) {
         eventBus.emit(Events.LASSO_DENIED, { reason: 'no_ammo' });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: OUT_OF_MOTHER_NETS_LINE,
+          text: this._dInviteText(OUT_OF_MOTHER_NETS_LINE, activeTarget),
           source: 'SYSTEM',
           channel: 'CMD',
           priority: 'warning',
@@ -2558,7 +2558,7 @@ export class InputManager {
       if (activeTarget && this._beyondNetReachButDaughterCan(activeTarget)) {
         eventBus.emit(Events.LASSO_DENIED, { reason: 'out_of_net_range' });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: OUT_OF_NET_RANGE_LINE,
+          text: this._dInviteText(OUT_OF_NET_RANGE_LINE, activeTarget),
           source: 'SYSTEM',
           channel: 'CMD',
           priority: 'warning',
@@ -3290,6 +3290,23 @@ export class InputManager {
 
     d.audioSystem?.playClick();
     return false;
+  }
+
+  /**
+   * A line that ends "Press D to send a daughter." (out of nets, out of net range), said as the wait instead while D itself would be
+   * refused because the ship must hold still: ArmManager.launchHoldRefusal is the D press's own answer, and the hand-off's seconds
+   * come from the same predicate N's busy line reads (collarBusyState). No target or no answer = the line unchanged.
+   * @param {string} line
+   * @param {object|null} target the piece D would go to
+   * @returns {string}
+   */
+  _dInviteText(line, target) {
+    const d = this._deps;
+    const am = d && d.armManager;
+    const hold = target && am && typeof am.launchHoldRefusal === 'function' ? am.launchHoldRefusal(target) : null;
+    if (!hold) return line;
+    const { waitS } = collarBusyState({ leashDriver: d.player && d.player.leashDriver });
+    return dInviteLine(line, hold, waitS);
   }
 
   /**

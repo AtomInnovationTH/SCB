@@ -102,7 +102,7 @@ export function ringLabel(ring, row, here) {
     case 'short': return `${head} ${DOT} short ${kgText(row.shortKg)} kg`;
     case 'cannot': return `${head} ${DOT} too far`;
     case 'cleared': return `${head} ${DOT} cleared`;
-    case 'mission': return `${head} ${DOT} later`;
+    case 'mission': case 'held': return `${head} ${DOT} later`;
     default: return head;
   }
 }

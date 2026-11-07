@@ -272,18 +272,15 @@ class AttitudeSubsystem extends BaseSubsystem {
     this._setTimer('reactionWheel', sub.REACTION_WHEEL_INTERVAL);
     this._setTimer('gyroCheck', sub.GYRO_CHECK_INTERVAL);
     this._desatTimer = 0;
-    this._detumbleTimer = 0;
-    this._detumbleTarget = 0;
 
     eventBus.on(Events.ARM_STATE_CHANGE, (data) => {
-      if (data && data.to === 'GRAPPLED') {
-        const tumbleRate = randInt(5, 50);
+      // The piece's own spin at the catch (ArmUnit puts it on the event, rad/s). A payload without it says nothing:
+      // a made-up number read 47°/s for a piece the target list showed at 7°/s (training 3, 2026-11-06).
+      if (data && data.to === 'GRAPPLED' && Number.isFinite(data.tumbleRateRadS)) {
         sendComms(
-          `Target tumble rate: ${tumbleRate}°/s. Despinning via reaction torque...`,
+          `Target tumble rate: ${(data.tumbleRateRadS * 180 / Math.PI).toFixed(1)}°/s.`,
           'NAV', 'MEDIUM'
         );
-        this._detumbleTimer = rand(3, 6);
-        this._detumbleTarget = (Math.random() * 0.4 + 0.1).toFixed(1);
       }
     });
   }
@@ -291,17 +288,6 @@ class AttitudeSubsystem extends BaseSubsystem {
   update(dt, gameData, totalTime) {
     this._tickCooldown(dt);
     const sub = Constants.SUBSYSTEMS;
-
-    if (this._detumbleTimer > 0) {
-      this._detumbleTimer -= dt;
-      if (this._detumbleTimer <= 0) {
-        sendComms(
-          `Target stabilized at ${this._detumbleTarget}°/s. Safe for haul.`,
-          'NAV', 'LOW'
-        );
-        this._startCooldown(10);
-      }
-    }
 
     if (this._desatTimer > 0) {
       this._desatTimer -= dt;

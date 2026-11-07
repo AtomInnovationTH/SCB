@@ -68,10 +68,45 @@ export function berthBusyPhrase(waitS, midSentence = false) {
 }
 
 /**
+ * The plain-words wait an invitation to D says while D would be refused because the ship must hold still (the answer
+ * `ArmManager.launchHoldRefusal` gives, the same one the D press refuses on): "A hand-off is running for about 20 s"
+ * (seconds only when `waitS` is known and 2 or more, like `berthBusyPhrase`), or "The ship holds still while a daughter is
+ * out on her line". No sentence end: the caller adds "; then press D to send a daughter."
+ * @param {{reason: string}} hold
+ * @param {number} [waitS] the hand-off's seconds left where the driver can say it truly (`collarBusyState().waitS`)
+ * @param {boolean} [midSentence] lower-case first letter (the phrase follows a dash)
+ * @returns {string}
+ */
+export function daughterHoldPhrase(hold, waitS, midSentence = false) {
+  const why = hold.reason === 'a catch is being reeled in' ? 'a catch is reeling in' : hold.reason;
+  let t;
+  if (hold.reason === 'a hand-off is running') {
+    t = Number.isFinite(waitS) && waitS >= 2 ? `A hand-off is running for about ${Math.ceil(waitS)} s` : 'A hand-off is running';
+  } else {
+    t = `The ship holds still while ${why}`;
+  }
+  return midSentence ? `${t[0].toLowerCase()}${t.slice(1)}` : t;
+}
+
+/**
  * N on a piece beyond the reach of the net that would fire, but inside a docked daughter's reach (DECISIONS §33 row 3).
  * Not said while the mission-1 tutorial runs (its range beat teaches the autopilot instead).
  */
 export const OUT_OF_NET_RANGE_LINE = 'Out of net range. Press D to send a daughter.';
+
+/**
+ * A line that ends in "Press D to send a daughter.", said instead as the wait while D would be refused (`hold`, the answer of
+ * `ArmManager.launchHoldRefusal`): "Out of net range. A hand-off is running for about 20 s; then press D to send a daughter."
+ * @param {string} line one of the "... Press D to send a daughter." lines
+ * @param {{reason: string}|null} [hold]
+ * @param {number} [waitS]
+ * @returns {string}
+ */
+export function dInviteLine(line, hold, waitS) {
+  if (!hold) return line;
+  const head = line.replace(/\s*Press D to send a daughter\.$/, '');
+  return `${head ? `${head} ` : ''}${daughterHoldPhrase(hold, waitS)}; then press D to send a daughter.`;
+}
 
 /** A daughter with no nets: they refill only at the resupply stop (DECISIONS §33 rows 5 and 8). The map-off words; read
  *  through `daughterOutOfNetsLine()` where the line is said ("resupply satellite" with the map on). */
