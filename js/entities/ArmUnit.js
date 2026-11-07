@@ -1018,6 +1018,9 @@ const _rhV3 = new THREE.Vector3();
 let _reelSeqCounter = 0;                 // the order reels began in, across all daughters
 const _failTip = new THREE.Vector3();   // her strut tip, world, for the 200 m rule
 const _inspTip = new THREE.Vector3();   // her strut tip, world, for the inspection arc's tether clearance
+const _bsHer = new THREE.Vector3();     // beside hold: the direction piece -> a spot she may move to (arrow check)
+const _bsMom = new THREE.Vector3();     // beside hold: the direction piece -> mother
+const _bsEnd = new THREE.Vector3();     // beside hold: that spot, scene units
 const _rhV4 = new THREE.Vector3();
 const _rhV5 = new THREE.Vector3();
 const _rhQ1 = new THREE.Quaternion();
@@ -1270,6 +1273,15 @@ export class ArmUnit {
     this._skPitch0 = 0;                     // rad — entry pitch (so θ=φ=0 reproduces arrival pose)
     /** @private Auto-return state (set during STATION_KEEP) */
     this._skIdleS = 0;                      // s — accumulated time since last arrow input
+    /**
+     * @private The beside hold (DECISIONS §63 row 9): the unit direction piece → her parking spot, scene axes, at a right angle
+     * to the piece → mother line. Written every frame by ArmManager._tickBeside while she is a beam daughter on a spinning piece
+     * (null = today's hold: the auto-return goes back to the entry pose).
+     * @type {THREE.Vector3|null}
+     */
+    this._besideDir = null;
+    this._besideGoal = { theta: 0, phi: 0 };   // rad — `_besideDir` in her hold frame (set by _besideGoalAngles)
+    this._besideStarted = false;               // she has begun to ease to the beside pose (the first ease skips the 3 s dwell)
     this._standoffR = 5;                    // current standoff radius in metres
     this._standoffTargetR = 5;              // m — radius the settle-in eases toward
     this._standoffSettling = false;         // true while easing entry distance → nominal standoff
@@ -3592,6 +3604,8 @@ export class ArmUnit {
       this._clearRecoilKick();
     }
     this.state = newState;
+    // the beside hold ends with the hold (ArmManager._tickBeside frees her slot on its next frame)
+    if (old === S.STATION_KEEP && newState !== S.STATION_KEEP) { this._besideDir = null; this._besideStarted = false; }
     this.stateTimer = 0;
     this._rhNoteTransition(old, newState);       // the reel-start / "is home" lines and the reel's starting distance
     const stateChange = { armId: this.id, from: old, to: newState };
@@ -4234,6 +4248,8 @@ export class ArmUnit {
     const inspecting = isInspectOnlyMass(target.mass);
     if (inspecting && this._driveInspectSweep(dt)) return;
 
+    const _prevTheta = this._orbitTheta, _prevPhi = this._orbitPhi;
+    const _pilotMoved = Math.abs(this._thetaRate) > 1e-4 || Math.abs(this._phiRate) > 1e-4;
     this._orbitTheta += this._thetaRate * dt;
     this._orbitPhi += this._phiRate * dt;
     this._standoffR += this._radiusRate * dt;
@@ -4259,8 +4275,17 @@ export class ArmUnit {
       }
     }
 
-    // ── Pattern-C auto-return ── after a quiet dwell with no arrow input she eases back toward the entry pose; any new
-    // input cancels the ease and resets the dwell.
+    // ── Beside hold (DECISIONS §63 row 9) ── a beam daughter on a spinning piece parks at a right angle to the ship's line, so the
+    // auto-return below goes to that pose (her angles in this frame) instead of the entry pose. Never for an inspecting daughter.
+    let beside = null;
+    if (this._besideDir && !inspecting) {
+      const _bp = target._scenePosition || (target.mesh && target.mesh.position);
+      if (_bp) beside = this._besideGoalAngles(_bp);
+    }
+    if (!beside) this._besideStarted = false;
+
+    // ── Pattern-C auto-return ── after a quiet dwell with no arrow input she eases back toward the entry pose (the beside pose for
+    // a beside hold); any new input cancels the ease and resets the dwell.
     const _hasInput = Math.abs(this._thetaRate) > 1e-4
                    || Math.abs(this._phiRate) > 1e-4
                    || Math.abs(this._radiusRate) > 1e-4;
@@ -4270,19 +4295,23 @@ export class ArmUnit {
       this._skIdleS = (this._skIdleS || 0) + dt;
       const dwell = SK.AUTO_RETURN_DWELL_S || 3.0;
       const tauSlow = SK.AUTO_RETURN_TIME_CONSTANT_S || 4.0;
+      // the first beside ease starts at once: she is going to her parking spot, not coming back from a look round
+      if (beside && !this._besideStarted) { this._besideStarted = true; this._skIdleS = Math.max(this._skIdleS, dwell); }
       let tau = null;
       if (this._skIdleS >= dwell) {
         tau = tauSlow;
       }
       if (tau !== null) {
         const k = 1 - Math.exp(-dt / tau);
-        this._orbitTheta += (0 - this._orbitTheta) * k;
-        this._orbitPhi   += (0 - this._orbitPhi)   * k;
+        const goalTheta = beside ? beside.theta : 0;
+        const goalPhi = beside ? beside.phi : 0;
+        this._orbitTheta += (goalTheta - this._orbitTheta) * k;
+        this._orbitPhi   += (goalPhi   - this._orbitPhi)   * k;
         // Dead-zone snap so we don't asymptote forever.
         const deadRad = degToRad(SK.AUTO_RETURN_DEADZONE_DEG || 2.0);
-        if (Math.abs(this._orbitTheta) < deadRad && Math.abs(this._orbitPhi) < deadRad) {
-          this._orbitTheta = 0;
-          this._orbitPhi   = 0;
+        if (Math.abs(this._orbitTheta - goalTheta) < deadRad && Math.abs(this._orbitPhi - goalPhi) < deadRad) {
+          this._orbitTheta = goalTheta;
+          this._orbitPhi   = goalPhi;
         }
       }
     }
@@ -4290,15 +4319,40 @@ export class ArmUnit {
     // Clamp phi to the pitch swing limit (MAX_LATITUDE − TETHER_SAFETY_MARGIN as half-angle): keeps her from going behind
     // the debris or wrapping the tether vertically. An inspecting daughter may level a full 90 degrees (a pole arrival,
     // straight along the mother's line, otherwise stops 20 degrees short of the equator, a cap of 70 degrees round the pole
-    // where no two directions are 160 apart); her tether is kept clear by the arc's own limit.
+    // where no two directions are 160 apart); her tether is kept clear by the arc's own limit. A beside hold may take the
+    // pitch out to its spot's own pitch + 1° (so a spot over a pole of her frame is reachable), no further.
     let phiLimit = this._phiMax - (degToRad(SK.TETHER_SAFETY_MARGIN));
     if (inspecting) phiLimit = Math.max(phiLimit, degToRad(90));
-    this._orbitPhi = clamp(this._orbitPhi, -phiLimit, phiLimit);
+    let phiLo = -phiLimit, phiHi = phiLimit;
+    if (beside) {
+      phiLo = Math.min(phiLo, beside.phi - degToRad(1));
+      phiHi = Math.max(phiHi, beside.phi + degToRad(1));
+    }
+    this._orbitPhi = clamp(this._orbitPhi, phiLo, phiHi);
 
     // Clamp θ around entry (frozen frame: θ measured from 0, so ±THETA_LIMIT_DEG): prevents tether wrap and rotating past
-    // the mother's peripheral view.
-    const thetaLimitRad = degToRad(SK.THETA_LIMIT_DEG || 120);
+    // the mother's peripheral view. A beside hold lifts it to its spot + 1° (never more than a half turn from the entry pose).
+    let thetaLimitRad = degToRad(SK.THETA_LIMIT_DEG || 120);
+    if (beside) thetaLimitRad = Math.max(thetaLimitRad, Math.min(Math.PI, Math.abs(beside.theta) + degToRad(1)));
     this._orbitTheta = clamp(this._orbitTheta, -thetaLimitRad, thetaLimitRad);
+
+    // A beside hold keeps the tether off the piece whatever the arrows do (R1-1): a key press that would take her past 120° at the
+    // piece from the mother, or put the tether's chord closer than the piece's radius + 2 m to its centre, is refused (axis by axis, so
+    // she slides along the limit). A move that makes either no worse is allowed, so she can always come back out.
+    if (beside && _pilotMoved) {
+      const mk = this._besideMetrics(this._orbitTheta, this._orbitPhi, target);
+      if (mk) {
+        const need = (target.sizeMeter || 0) / 2 + 2;
+        const prev = this._besideMetrics(_prevTheta, _prevPhi, target);
+        const ok = (m) => m && (m.ang <= 120 || m.ang <= prev.ang) && (m.clr == null || m.clr >= need || m.clr >= (prev.clr == null ? Infinity : prev.clr));
+        if (!ok(mk)) {
+          const th = this._orbitTheta, ph = this._orbitPhi;
+          if (ok(this._besideMetrics(th, _prevPhi, target))) this._orbitPhi = _prevPhi;
+          else if (ok(this._besideMetrics(_prevTheta, ph, target))) this._orbitTheta = _prevTheta;
+          else { this._orbitTheta = _prevTheta; this._orbitPhi = _prevPhi; }
+        }
+      }
+    }
 
     // Clamp radius. While settling in from a wide SK entry the arrival distance can exceed _rMax: only the lower bound is
     // enforced until settled.
@@ -4896,6 +4950,49 @@ export class ArmUnit {
   }
 
   /**
+   * @private `_besideDir` (scene axes) as her hold-frame angles: the goal direction is
+   * (equator0 cos θ + right sin θ) cos P + polar sin P, with P = entry pitch + φ, so P = asin(d·polar) and θ = atan2(d·right, d·equator0).
+   * θ = atan2 in (-180°, 180°], measured from the entry direction (the mother's side), so she always goes round by the FRONT, never behind
+   * the piece (the arrows hold her within 120° of the mother at the piece, so the front is the short way). Lazy-inits the frame like the hold does.
+   * @param {THREE.Vector3} targetPos her piece's scene position
+   * @returns {{theta: number, phi: number}|null} the shared `_besideGoal` object, null when she has no beside direction
+   */
+  _besideGoalAngles(targetPos) {
+    const d = this._besideDir;
+    if (!d) return null;
+    if (!this._skPolarAxis) this._initSkFrame(targetPos);
+    const dp = clamp(d.dot(this._skPolarAxis), -1, 1);
+    const raw = Math.atan2(d.dot(this._skRightVec), d.dot(this._skEquator0));
+    this._besideGoal.theta = raw;
+    this._besideGoal.phi = Math.asin(dp) - this._skPitch0;
+    return this._besideGoal;
+  }
+
+  /**
+   * @private What a beside hold's arrow key may not do (R1-1): from the hold-frame angles (theta, phi), the angle AT THE PIECE between
+   * "to the mother" (her current position) and "to her" (deg), and the distance (m) from the piece centre to her tether's straight chord
+   * (strut tip -> that spot). Null in a rig with no mother position seen.
+   * @param {number} theta hold-frame yaw
+   * @param {number} phi hold-frame pitch (without the entry pitch)
+   * @param {object} target her piece
+   * @returns {{ang: number, clr: number|null}|null}
+   */
+  _besideMetrics(theta, phi, target) {
+    const mp = this._frameParentPos || this._prevParentPos;
+    const pp = target && target._scenePosition;
+    if (!mp || !pp || !this._skPolarAxis) return null;
+    const cy = Math.cos(theta), sy = Math.sin(theta), P = this._skPitch0 + phi, cp = Math.cos(P), sp = Math.sin(P);
+    const ex = this._skEquator0.x * cy + this._skRightVec.x * sy;
+    const ey = this._skEquator0.y * cy + this._skRightVec.y * sy;
+    const ez = this._skEquator0.z * cy + this._skRightVec.z * sy;
+    _bsHer.set(ex * cp + this._skPolarAxis.x * sp, ey * cp + this._skPolarAxis.y * sp, ez * cp + this._skPolarAxis.z * sp);
+    _bsMom.subVectors(mp, pp).normalize();
+    const ang = Math.acos(clamp(_bsHer.dot(_bsMom), -1, 1)) * 180 / Math.PI;
+    _bsEnd.copy(pp).addScaledVector(_bsHer, this._standoffR * M);
+    return { ang, clr: this._inspectTetherClearM(target, _bsEnd) };
+  }
+
+  /**
    * @private A daughter holding station at a piece over the mother's catch limit (no net; DECISIONS §49 row 3). She keeps the
    * hold inside `INSPECT.CLOSE_RANGE_M` (the full inspection is within 10 m), levels her orbit onto the equator of her hold
    * frame (so the arc covers the piece from opposite sides whatever way she arrived), sweeps +THETA_LIMIT then -THETA_LIMIT
@@ -4970,12 +5067,14 @@ export class ArmUnit {
   /**
    * @private The distance (metres) from the centre of her piece to the whole tether line (her strut tip -> her), or null before a mother
    * position has been seen (a bare test rig). The segment, not the points: the line can cross a piece that both ends are clear of.
+   * @param {object} target her piece
+   * @param {{x:number,y:number,z:number}} [end] the tether's far end (default: where she is); the beside hold asks about a spot she may move to
    */
-  _inspectTetherClearM(target) {
+  _inspectTetherClearM(target, end = this.position) {
     const c = target && target._scenePosition;
     if (!c || !this.strutTipWorldInto(_inspTip)) return null;
     const ax = _inspTip.x, ay = _inspTip.y, az = _inspTip.z;
-    const bx = this.position.x - ax, by = this.position.y - ay, bz = this.position.z - az;
+    const bx = end.x - ax, by = end.y - ay, bz = end.z - az;
     const len2 = bx * bx + by * by + bz * bz;
     let u = len2 > 0 ? ((c.x - ax) * bx + (c.y - ay) * by + (c.z - az) * bz) / len2 : 0;
     u = clamp01(u);

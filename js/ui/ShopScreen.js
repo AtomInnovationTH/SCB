@@ -23,9 +23,9 @@ import { shipWear, partPriceCr, REPLACE_EFFECT_PART } from '../systems/ShipWear.
 function relayMirrorsDesc() {
   const D = Constants.DESPIN_LASER, R = D.RELAY;
   const cm = (m) => Math.round(m * 100);
-  const reachM = (type) => Math.round(despinReachM(relayTier(D.CLOSE, R.MIRROR_M[type])));
+  const reachM = (type) => Math.round(despinReachM(relayTier(D.CLOSE, R.MIRROR_M[type] * Math.cos(Math.PI / 4))));   // beside the piece: the beam meets the mirror at 45 degrees
   const legKm = (type) => (relayLegMaxM(D.CLOSE, R.MIRROR_M[type]) / 1000).toFixed(1);
-  return `A steering mirror on every daughter. Hold her next to a tumbling piece and the mother's laser bounces off her onto it, so the piece can be slowed from beyond the mother's own reach. Measured from the daughter, a large one (${cm(R.MIRROR_M.weaver)} cm mirror) works a piece about ${reachM('weaver')} m away, a small one (${cm(R.MIRROR_M.spinner)} cm) about ${reachM('spinner')} m; the mother's beam can cross up to about ${legKm('weaver')} km to a large daughter (${legKm('spinner')} km to a small one). The mirror returns almost all of the beam. Adds ${R.MASS_KG.weaver} kg to each large daughter and ${R.MASS_KG.spinner} kg to each small one; she draws about ${R.STEER_W.weaver} W from her own battery while she holds the mirror on the piece.`;
+  return `A steering mirror on every daughter. Send her to hold beside a tumbling piece, at a right angle to the ship, and the mother's laser bounces off her onto it, so the piece can be slowed from beyond the mother's own reach; a second daughter takes the opposite side, so their pushes cancel. Measured from the daughter, held there, a large one (${cm(R.MIRROR_M.weaver)} cm mirror) works a piece about ${reachM('weaver')} m away, a small one (${cm(R.MIRROR_M.spinner)} cm) about ${reachM('spinner')} m; the mother's beam can cross up to about ${legKm('weaver')} km to a large daughter (${legKm('spinner')} km to a small one). The mirror returns almost all of the beam. Adds ${R.MASS_KG.weaver} kg to each large daughter and ${R.MASS_KG.spinner} kg to each small one; she draws about ${R.STEER_W.weaver} W from her own battery while she holds the mirror on the piece.`;
 }
 
 /** The weaver-laser card, plain words; every number is read from Constants.DESPIN_LASER.WEAVER and the optics (never typed). */

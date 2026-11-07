@@ -48,6 +48,7 @@ const _rhGapA = new THREE.Vector3();
 const _rhGapB = new THREE.Vector3();
 const _rhAxisR = new THREE.Vector3();
 const _rhTurnP = new THREE.Vector3();      // her place in the ship's frame, from the ship's centre
+const _bsLine = new THREE.Vector3();       // the piece -> mother line, unit, for the beside hold (_tickBeside)
 const _rhTurnQ = new THREE.Quaternion();
 const _rhPost = new THREE.Vector3();       // where she will stand once the plane turn is done (`_rhFloorAfterPlane`)
 
@@ -615,6 +616,12 @@ export class ArmManager {
     /** @type {ArmUnit[]} */
     this.arms = [];
 
+    /**
+     * The beside hold's books (`_tickBeside`, DECISIONS §63 row 9): per piece the unit perpendicular `u` to its piece -> mother line and the two
+     * daughters beside it (slot 0 at +u, slot 1 at -u).
+     * @type {Map<object, {u: THREE.Vector3, has: boolean, slots: Array<ArmUnit|null>}>}
+     */
+    this._besideBook = new Map();
     /** P34 L3-fix2: a trip burn with parts to melt keeps every holder at her radiator-lift pose (`setBurnLift`), so the sun-oven balls open beside a raised piece. */
     this._burnLift = false;
     /** P34 L3-fix3: per holder `{key, rad}` while the burn lift is on: the lift pose the sun-oven fit was checked at (`setBurnLift`), `rad` null = none. */
@@ -2714,10 +2721,81 @@ export class ArmManager {
     }
   }
 
+  /**
+   * The beside hold's bookkeeping (DECISIONS §63 row 9), once a frame before the arms move. A daughter that can put a beam on her piece
+   * (the relay mirror aboard and a width for her type, or a weaver with the ship's laser) and holds station on one that still tumbles
+   * above `IN_SPEC_DEG` is given a parking direction at a right angle to the piece -> mother line; the first takes the perpendicular
+   * nearest her, a second the opposite one (the two pushes cancel). A third, a daughter without a beam and an inspecting one keep the
+   * normal hold. The slot is kept until her hold ends (the spin slowed does not send her back to the front). The perpendicular is
+   * re-projected off the CURRENT line every frame, so it follows the mother as she drifts and stays on its side.
+   * @private
+   * @param {THREE.Vector3} motherPos mother, scene units
+   */
+  _tickBeside(motherPos) {
+    const SK = ARM_STATES.STATION_KEEP;
+    const book = this._besideBook || (this._besideBook = new Map());   // (a manager built without the constructor has none yet)
+    for (const [piece, e] of book) {          // free the slots whose hold has ended
+      for (let k = 0; k < 2; k++) {
+        const a = e.slots[k];
+        if (a && !(a.state === SK && a._stationKeepTarget === piece && this.arms.includes(a))) { a._besideDir = null; e.slots[k] = null; }
+      }
+      if (!e.slots[0] && !e.slots[1]) book.delete(piece);
+    }
+    let any = book.size > 0;
+    if (!any) for (const a of this.arms) if (a && a.state === SK) { any = true; break; }
+    if (!any) return;
+
+    const ps = this.playerSatellite;
+    const R = Constants.DESPIN_LASER.RELAY;
+    const mirrors = !!ps && typeof ps.hasRelayMirrors === 'function' && ps.hasRelayMirrors();
+    const laser = !!ps && typeof ps.hasWeaverLaser === 'function' && ps.hasWeaverLaser();
+    const inSpec = degToRad(Constants.DESPIN_LASER.IN_SPEC_DEG);
+    for (const a of this.arms) {
+      if (!a || a.state !== SK || !a._stationKeepTarget) continue;
+      const piece = a._stationKeepTarget;
+      let e = book.get(piece);
+      if (e && (e.slots[0] === a || e.slots[1] === a)) continue;
+      const beam = (mirrors && R.MIRROR_M[a.type] > 0) || (laser && a.type === 'weaver');
+      if (!beam || !(piece.tumbleRate > inSpec) || a.isInspecting() || (a.power && a.power.flat)) continue;
+      if (e && e.slots[0] && e.slots[1]) continue;     // two are beside it already
+      if (!e) { e = { u: new THREE.Vector3(), has: false, slots: [null, null] }; book.set(piece, e); }
+      if (!e.has) {                                       // the first one's side: the perpendicular nearest her
+        const pp = piece._scenePosition || (piece.mesh && piece.mesh.position);
+        if (!pp) { book.delete(piece); continue; }
+        e.u.subVectors(a.position, pp).normalize();
+        e.has = true;
+      }
+      const k = e.slots[0] ? 1 : 0;
+      e.slots[k] = a;
+      a._besideDir = a._besideDir || new THREE.Vector3();
+    }
+    for (const [piece, e] of book) {
+      const pp = piece._scenePosition || (piece.mesh && piece.mesh.position);
+      if (!pp) continue;
+      _bsLine.subVectors(motherPos, pp);
+      if (!(_bsLine.lengthSq() > 0)) continue;
+      _bsLine.normalize();
+      e.u.addScaledVector(_bsLine, -e.u.dot(_bsLine));       // the part of it square to the piece -> mother line
+      if (!(e.u.lengthSq() > 1e-6)) {                        // on the line (or no direction yet): any perpendicular
+        e.u.set(Math.abs(_bsLine.x) < 0.9 ? 1 : 0, Math.abs(_bsLine.x) < 0.9 ? 0 : 1, 0);
+        e.u.addScaledVector(_bsLine, -e.u.dot(_bsLine));
+      }
+      e.u.normalize();
+      for (let k = 0; k < 2; k++) {
+        const a = e.slots[k];
+        if (!a) continue;
+        a._besideDir.copy(e.u);
+        if (k === 1) a._besideDir.negate();
+      }
+    }
+  }
+
   /** @param {number} dt - Real-time delta in seconds */
   update(dt, opts) {
     const parentPos = this.playerSatellite.position || this.playerSatellite.mesh?.position || new THREE.Vector3();
     const parentQuat = this.playerSatellite.quaternion || null;
+
+    this._tickBeside(parentPos);
 
     if (this._pulseScanCooldown > 0) {
       this._pulseScanCooldown -= dt;
@@ -6017,6 +6095,7 @@ export class ArmManager {
       arm.dispose();
     }
     this.arms = [];
+    this._besideBook?.clear();
   }
 
   // Launch line: nothing is fired into a part of the ship. Every launch path (ceremony, key D by index, free-fly, trawl,

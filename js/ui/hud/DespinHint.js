@@ -13,7 +13,7 @@
  * on the screen clock, for the laser that would fire (laser-1101 D8); ToolOdds and the reticle append it to their de-spin advice.
  */
 import { Constants } from '../../core/Constants.js';
-import { despinLaser, despinTimeS, despinReachM, relayTier } from '../../systems/DespinLaser.js';
+import { despinLaser, despinTimeS } from '../../systems/DespinLaser.js';
 import { TimeAuthority } from '../../systems/TimeAuthority.js';   // BASE_SCALE: the one owner of the game-clock rate (test-TimeSweep)
 import { degToRad } from '../../core/MathUtil.js';
 
@@ -64,31 +64,15 @@ function relayActs(target, d) {
 }
 
 /**
- * How near a daughter must hold to the piece for the mirror to carry the beam, in plain words ("40 m", the figure for a mirror on the piece's far side; the 41.0 m reach rounded down): the longest reach, over the
- * laser tiers aboard and the daughter types in the fleet (a weaver's 10 cm mirror when no daughter is out), of the mirror as the
- * last aperture (`relayTier`, mirror facing the piece). Metres rounded DOWN, so the words never promise more than the game gives.
- * @returns {string}
- */
-function relayReachWords() {
-  const cfg = Constants.DESPIN_LASER;
-  const tiers = despinLaser.hasLongRange() ? [cfg.CLOSE, cfg.LONG] : [cfg.CLOSE];
-  const arms = (despinLaser._armManager && despinLaser._armManager.arms) || [];
-  const types = [...new Set(arms.filter(Boolean).map((u) => u.type).filter((ty) => cfg.RELAY.MIRROR_M[ty] > 0))];
-  if (!types.length) types.push('weaver');
-  let best = 0;
-  for (const ty of types) for (const t of tiers) best = Math.max(best, despinReachM(relayTier(t, cfg.RELAY.MIRROR_M[ty])));
-  return best < 1000 ? `${Math.floor(best)} m` : reachWords(best);
-}
-
-/**
- * "get within 120 m to stop its spin", and with the relay mirrors aboard "get within 120 m to stop its spin, or hold a daughter
- * on its far side, up to 40 m from it" (the mirror bounces the beam, so what counts is the daughter's distance to the piece; far side
- * because the mirror's reach shrinks with the bounce angle (`relayTier`): full on the piece's far side, 0.71x at 90 degrees, none from between ship and piece).
+ * "get within 120 m to stop its spin", and with a daughter that can put a beam on the piece aboard (the relay mirrors, or the weaver's
+ * own laser) "get within 120 m to stop its spin, or send a daughter to hold beside it" (DECISIONS §63 row 9: that daughter parks beside
+ * the piece at a right angle to the ship, where the mirror works and her line stays clear of it, so no distance is promised here).
  * @param {string} reach - the mother's reach in words
  * @returns {string}
  */
 function pastReachWords(reach) {
-  return `get within ${reach} to stop its spin${despinLaser.hasRelayMirrors() ? `, or hold a daughter on its far side, up to ${relayReachWords()} from it` : ''}`;
+  const daughterBeam = despinLaser.hasRelayMirrors() || despinLaser.hasWeaverLaser();
+  return `get within ${reach} to stop its spin${daughterBeam ? ', or send a daughter to hold beside it' : ''}`;
 }
 
 /**
@@ -106,8 +90,8 @@ export function outOfReachWords(target) {
 
 /**
  * The keys advice for a tumbling target: "de-spin [L]" with the time where the laser would fire, but past every owned reach
- * (L does nothing there) the same words glass gets: "get within 120 m to stop its spin" (with mirrors aboard, "..., or hold a
- * daughter on its far side, up to 40 m from it"). Unknown distance: "de-spin [L]".
+ * (L does nothing there) the same words glass gets: "get within 120 m to stop its spin" (with a daughter beam aboard, "..., or send a
+ * daughter to hold beside it"). Unknown distance: "de-spin [L]".
  * @param {object} target
  * @param {string} [lead] - the keys phrase when the laser can fire (default "de-spin [L]"; the aspect line passes its own)
  * @returns {string}
