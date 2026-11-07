@@ -4499,17 +4499,20 @@ export class DebrisField {
   }
 
   /**
-   * CH5 ISS conjunction boss (MISSION_ARC §6): spawn `count` threat fragments in the ISS forward track, tagged `iss_threat:true`.
+   * CH5 ISS conjunction boss (MISSION_ARC §6): spawn `count` threat fragments near her on the threat orbit, tagged `iss_threat:true`.
+   * Route-1107-d2: the pieces start on her own track (see `_spawnThreatField` `nearHer`), not at a random phase, whatever the start.
    * @param {object} [options] @param {number} [options.count]
    * @param {{inclination: number, raan: number}} [options.plane] the station's own plane in her scene (rad; route-1106 lane S4:
    *   GameFlowManager.stationPlane(), only for the start whose tilt is the station's); absent = her plane
+   * @param {number} [options.altKm] the station object's height (a start city's real object, `Constants.CITY_STATIONS`); absent = the ISS's 408 km
    * @returns {{ ids: number[] }}
    */
   spawnIssThreatField(options = {}) {
     const cfg = Constants.ISS_BOSS;
     if (!cfg || !cfg.ORBIT) return { ids: [] };
     const count = Math.max(1, options.count ?? cfg.FRAG_COUNT ?? 6);
-    return this._spawnThreatField(cfg.ORBIT, count, 'iss_threat', options.plane);
+    const orbit = Number.isFinite(options.altKm) ? { ...cfg.ORBIT, altKm: options.altKm } : cfg.ORBIT;
+    return this._spawnThreatField(orbit, count, 'iss_threat', options.plane, { tcaHours: cfg.TCA_HOURS || 38 });
   }
 
   /**
@@ -4536,15 +4539,43 @@ export class DebrisField {
    * @param {string} tag — per-debris flag identifying the threat set
    * @param {{inclination: number, raan: number}} [plane] — a plane (rad) to build the pieces in instead of hers (the ISS boss at the
    *        station's own node, route-1106 lane S4); absent or not finite = her plane
+   * @param {{tcaHours: number}} [nearHer] — route-1107-d2 (ISS pieces only; the Starlink spawn leaves it out and keeps its random
+   *        phase): put the pieces on HER track instead of at a random phase. Found 2026-11-07 (3,000 random spawns): with the random phase
+   *        the nearest piece sat a median 9,450 km from her and only 6 % of spawns put one inside the 1,000 km target list. The phase is the
+   *        argument of latitude (the pieces' argument of perigee is 45 deg). With dh = the pieces' height minus hers, the pieces drift along
+   *        track by -1.5 n dh (above her they fall behind), so they start on the side they drift toward her from, evenly 20 km to 20 + D km
+   *        from her, D = max(70 km, |drift| x TCA); for |dh| < 1 km, 20 km to 90 km ahead (no drift to count on). No cached player orbit
+   *        (a bare test field): the random phase as before.
    * @returns {{ ids: number[] }}
    */
-  _spawnThreatField(cfg, count, tag, plane) {
+  _spawnThreatField(cfg, count, tag, plane, nearHer) {
     const altKm = cfg.altKm ?? 408;
     const sma = Constants.EARTH_RADIUS + altKm * Constants.SCENE_SCALE;
     const meanMotion = Math.sqrt(Constants.MU_EARTH / Math.pow(sma / Constants.SCENE_SCALE, 3));
-    const baseNu = Math.random() * Math.PI * 2;          // random phase around the track
     const spreadRad = degToRad(cfg.trackSpreadDeg ?? 8);
     const frameComp = meanMotion * (this._lastSpawnGameDt || 0); // mid-frame propagation pre-compensation
+    const argPerigeeRad = degToRad(cfg.argPerigeeDeg ?? 45);
+    let baseNu = Math.random() * Math.PI * 2;            // random phase around the track
+    /** @type {number[]|null} along-track offsets (rad of argument of latitude, + = ahead of her) per piece, near-her placement only */
+    let leads = null;
+    const herOrbit = this._lastPlayerOrbit;
+    const herAltNow = herOrbit && Number.isFinite(herOrbit.semiMajorAxis) ? (herOrbit.semiMajorAxis - Constants.EARTH_RADIUS) / Constants.SCENE_SCALE : NaN;
+    if (nearHer && herAltNow > 100 && Number.isFinite(herOrbit.trueAnomaly)) {
+      const herAltKm = herAltNow;
+      const herRKm = Constants.EARTH_RADIUS_KM + herAltKm;
+      const dh = altKm - herAltKm;
+      const nHer = Math.sqrt(Constants.MU_EARTH / (herRKm * herRKm * herRKm));        // rad/s
+      const driftKm = Math.abs(1.5 * nHer * dh) * (nearHer.tcaHours || 38) * 3600;      // km along track over the countdown
+      const small = Math.abs(dh) < 1;
+      const span = small ? 70 : Math.max(70, driftKm);
+      const side = small || dh > 0 ? 1 : -1;                                              // above her: start ahead and fall back
+      leads = [];
+      for (let i = 0; i < count; i++) {
+        const km = 20 + (count > 1 ? span * i / (count - 1) : 0);
+        leads.push(side * km / herRKm);
+      }
+      baseNu = (Number.isFinite(herOrbit.argPerigee) ? herOrbit.argPerigee : 0) + herOrbit.trueAnomaly - argPerigeeRad;
+    }
 
     // Candidates: alive, not special-tagged, NOT mid-capture. Unlike the welcome field (mission-1 init, nothing grappled),
     // this runs on SHOP_DEPLOY into a later mission, when a daughter may be hauling a catch (_capturedByArm/_armPinned);
@@ -4568,8 +4599,8 @@ export class DebrisField {
     for (let i = 0; i < count && i < candidates.length; i++) {
       const debris = candidates[i];
 
-      // Evenly spread leads ahead in track (forward conjunction).
-      const lead = ((i + 1) / count) * spreadRad;
+      // Evenly spread leads ahead in track (forward conjunction); near her: the offsets worked out above.
+      const lead = leads ? leads[i] : ((i + 1) / count) * spreadRad;
       debris.orbit.semiMajorAxis = sma;
       debris.orbit.eccentricity = cfg.eccentricity ?? 0.0003;
       debris.orbit.inclination = planeInc;

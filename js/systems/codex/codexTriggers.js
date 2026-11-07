@@ -156,9 +156,10 @@ export const CODEX_TRIGGERS = {
   fengyun_test:           [{ event: E.KESSLER_CASCADE, match: always }],
   ssa_network:            [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 40 }],
   adr_methods_real:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 50 }],
-  iss_saver:              [{ event: E.ISS_BOSS_RESOLVED, match: (p) => p.outcome === 'intercept' }],
-  iss_pdam:               [{ event: E.ISS_BOSS_RESOLVED, match: (p) => p.outcome === 'decline' }],
-  iss_hydrazine_burn:     [{ event: E.ISS_BOSS_RESOLVED, match: (p) => p.outcome === 'miss' }],
+  // route-1107-d2: the three iss_* entries are about the ISS, so they unlock only for New York (`city` null); a start city's boss protects another object
+  iss_saver:              [{ event: E.ISS_BOSS_RESOLVED, match: (p) => p.city == null && p.outcome === 'intercept' }],
+  iss_pdam:               [{ event: E.ISS_BOSS_RESOLVED, match: (p) => p.city == null && p.outcome === 'decline' }],
+  iss_hydrazine_burn:     [{ event: E.ISS_BOSS_RESOLVED, match: (p) => p.city == null && p.outcome === 'miss' }],
   hubble_watch:           [{ event: E.COMMS_MESSAGE, match: txtCS('Hubble') }],
   starlink_contained:     [{ event: E.STARLINK_BOSS_RESOLVED, match: (p) => p.outcome === 'contained' }],
   starlink_cascade:       [{ event: E.STARLINK_BOSS_RESOLVED, match: (p) => p.outcome === 'cascade' }],

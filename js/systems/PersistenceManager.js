@@ -161,6 +161,9 @@ class PersistenceManager {
         // Route-1101 lane S2: the station's node minus hers (deg, js/systems/NodeDrift.js), written with the fields block (flag on). An
         // old save without it gets it from her node at load (GameFlowManager).
         ...(Number.isFinite(data.stationNodeGapDeg) ? { stationNodeGapDeg: data.stationNodeGapDeg } : {}),
+        // Route-1107-d2: she has joined the station object's plane (the finish burn flown, no leg of days since); written only when true.
+        // `stationJoinedCity`: the city key of her tilt when she joined (null at New York); a load under another start drops the join.
+        ...(data.stationJoined === true ? { stationJoined: true, stationJoinedCity: typeof data.stationJoinedCity === 'string' ? data.stationJoinedCity : null } : {}),
       };
 
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));

@@ -18,6 +18,7 @@ import { upgradePrereqsMet, upgradeCostNow, engineTankFull, consumableFull as no
 import { gasPriceCr, coldGasPriceCr, coldGasPoolToKg, indiumCartridgePriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
 import { despinReachM, drawW, beamW, relayTier, relayLegMaxM } from '../systems/DespinLaser.js';   // the laser cards read reach, draw and leg from the optics
 import { shipWear, partPriceCr, REPLACE_EFFECT_PART } from '../systems/ShipWear.js';
+import { capsuleMassKg, capsulePriceCr } from '../systems/JobsBoard.js';   // route-1107-d2 D-B3: the reentry capsule row's name and price
 
 /** The relay-mirror card, plain words; every number is read from Constants.DESPIN_LASER.RELAY and the optics (never typed). */
 function relayMirrorsDesc() {
@@ -36,7 +37,7 @@ function weaverLaserDesc() {
 }
 
 /**
- * Upgrade definitions — 48 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 49 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins this header to them).
  * Each carries a `trl` (NASA TRL 1-9) and optional `trlRationale` for the badge. TRL is display-only — NEVER used in gating.
  * Exported for the Node test harness (test-TRL.js).
@@ -236,6 +237,13 @@ export const UPGRADES = [
     effect: 'dragSail', value: 1, maxLevel: Infinity, consumable: true,
     requiresFeature: 'FIELDS_BY_HEIGHT',
     trl: 6, trlRationale: 'Drag sails have flown on small satellites, and HPS sells the 25 m\u00B2-class ADEO-L; fitting one to a derelict in orbit is not yet demonstrated' },
+  // Reentry capsule (plan route-1107-d2 D-B3, owner 2026-11-07 "Small reentry capsule"): sold only where the station takes no part (the six cities; `isShopRowOffered` with
+  // `capsuleCity`). A count in her stock (ResourceSystem.capsules); its mass counts in hers (GameFlowManager.holdMassKg); used up on the drop. Price = its mass at the launch price.
+  { id: 'reentry_capsule', cat: 'Daughters', name: `Reentry capsule (${capsuleMassKg()} kg)`,
+    cost: capsulePriceCr(),
+    desc: 'Heat-shielded capsule with its own small solid motor (Stardust-size shell, STAR 6B). Packs a kept part and drops it home; used up on the drop.',
+    effect: 'reentryCapsule', value: 1, maxLevel: Infinity, consumable: true,
+    trl: 7, trlRationale: 'Stardust\'s 46 kg capsule returned its samples in 2006; the STAR 6B is a catalogue solid motor; this pairing has not flown as one unit.' },
   { id: 'hazmat_handler', cat: 'Daughters', name: 'Hazmat Handler', cost: 1200,
     desc: 'Recover hydrazine → cold gas', effect: 'hazmatRecovery', value: true, maxLevel: 1,
     trl: 2, trlRationale: 'On-orbit hazmat recovery from derelicts is fully speculative' },
@@ -398,6 +406,7 @@ export class ShopScreen {
 
     this._cargoSystem = null;
     this._resourceSystem = null;   // g1-gas-upgrades D5
+    this._capsuleCity = null;      // route-1107-d2: () => does her part go home by reentry capsule (the capsule row's gate)
     this._scoringSystem = null;
     this._contractMassKg = 0;
 
@@ -430,6 +439,20 @@ export class ShopScreen {
 
   /** ResourceSystem reference — the engine-gas resupply is priced and gated by the tank. */
   setResourceSystem(rs) { this._resourceSystem = rs; }
+
+  /**
+   * Plan route-1107-d2 D-B3: where the reentry capsule is sold. `fn` answers "does her part go home by capsule" (main.js wires `JobsBoard.partGoesByCapsule(her tilt)`: never the
+   * settings language, a loaded save can differ). Without it (a bare test rig) the capsule row is not offered.
+   * @param {(() => boolean)|null} fn
+   */
+  setCapsuleCity(fn) { this._capsuleCity = typeof fn === 'function' ? fn : null; }
+
+  /** @private The context `isShopRowOffered` reads: `{capsuleCity}`. */
+  _rowCtx() {
+    let capsuleCity = false;
+    try { capsuleCity = !!(this._capsuleCity && this._capsuleCity()); } catch (_e) { capsuleCity = false; }
+    return { capsuleCity };
+  }
 
   setScoringSystem(ss) { this._scoringSystem = ss; }
 
@@ -861,9 +884,10 @@ export class ShopScreen {
       : null;
 
     const categories = {};
+    const rowCtx = this._rowCtx();
     UPGRADES.forEach(u => {
       // Hide feature-gated items (e.g. Mother net restock) when the gating flag is off, and hardware that is already aboard.
-      if (!isShopRowOffered(u)) return;
+      if (!isShopRowOffered(u, rowCtx)) return;
       if (!categories[u.cat]) categories[u.cat] = [];
       categories[u.cat].push(u);
     });
@@ -1001,6 +1025,7 @@ export class ShopScreen {
           ${consumableFull && upgrade.effect === 'engineGasResupply' ? `<div style="font-size:0.65rem;color:#ff6644;">Engine tank full</div>` : ''}
           ${consumableFull && upgrade.effect === 'coldGasResupply' ? `<div style="font-size:0.65rem;color:#ff6644;">Cold-gas tank full</div>` : ''}
           ${consumableFull && upgrade.effect === 'indiumCartridge' ? `<div style="font-size:0.65rem;color:#ff6644;">Indium store full</div>` : ''}
+          ${consumableFull && upgrade.effect === 'reentryCapsule' ? `<div style="font-size:0.65rem;color:#ff6644;">Capsule bay full (${Constants.PART_CAPSULE.MAX_ABOARD} aboard)</div>` : ''}
           ${REPLACE_EFFECT_PART[upgrade.effect] ? `<div style="font-size:0.65rem;color:${consumableFull ? '#ff6644' : '#ffcc44'};">${Math.round(shipWear.wornFraction(REPLACE_EFFECT_PART[upgrade.effect], this._resourceSystem) * 100)}% worn${consumableFull ? ': nothing to replace' : ''}</div>` : ''}
           ${consumableFull && daughterNetType ? `<div style="font-size:0.65rem;color:#ff6644;">No docked daughter has room</div>` : ''}
           ${upgrade.requiresAll && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${upgrade.requiresAll.map(id => UPGRADES.find(u => u.id === id)?.name || id).join(' + ')}</div>` : ''}
@@ -1147,7 +1172,7 @@ export class ShopScreen {
   _purchaseUpgrade(upgradeId) {
     const upgrade = UPGRADES.find(u => u.id === upgradeId);
     if (!upgrade) return;
-    if (!isShopRowOffered(upgrade)) return;   // a hidden row (standard wheels, pre-installed flower) is never sold, by any route
+    if (!isShopRowOffered(upgrade, this._rowCtx())) return;   // a hidden row (standard wheels, pre-installed flower, the capsule outside a capsule city) is never sold, by any route
     if (this._refuseTrade()) return;   // u1-resupply-stop D2: no store in the middle of space
 
     // Consumables (e.g. Mother Large Net restock) are repeatable — no maxLevel gate, no ownership record; they just spend
@@ -1171,7 +1196,7 @@ export class ShopScreen {
         return;
       }
       // Nor for nitrogen with no room in the cold-gas tank (free < 0.1 kg), nor a cartridge the indium store cannot take
-      if ((upgrade.effect === 'coldGasResupply' || upgrade.effect === 'indiumCartridge') && noRoomFor(upgrade, this._resourceSystem)) {
+      if ((upgrade.effect === 'coldGasResupply' || upgrade.effect === 'indiumCartridge' || upgrade.effect === 'reentryCapsule') && noRoomFor(upgrade, this._resourceSystem)) {
         audioSystem.playDeny();
         if (upgrade.effect === 'indiumCartridge') {            // one plain line: the store takes whole cartridges only
           eventBus.emit(Events.COMMS_MESSAGE, {

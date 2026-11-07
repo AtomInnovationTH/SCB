@@ -38,7 +38,7 @@ import { daysWithTurnWait } from './TripProfile.js';
 import { pieceName } from './BigPieces.js';
 import { fatePay } from './BigPieceValues.js';
 import { pushTargetKm, lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
-import { jobLine } from './JobsBoard.js';
+import { jobLine, capsuleCanDrop } from './JobsBoard.js';
 import { stationFieldId, gapChangeOverLeg, waitDaysToLineUp, isLinedUp, stationInOwnPlane, wrapDeg } from './NodeDrift.js';
 import { finishBurn } from './RouteCost.js';
 
@@ -160,6 +160,10 @@ export function buildWhereNextRows(reg, opts = {}) {
   const handOver = handOverWords(handPieces);
   const handOverShort = handPieces.length ? `pays ${creditsText(handPieces.reduce((sum, d) => sum + fatePay(d, 'satellite').totalCr, 0))}` : '';
   if (typeof reg.satellites === 'function') {
+    // route-1107-d2 D-B5 (`opts.capsule`, GameFlowManager `_capsuleRowsOpts`): the part goes home by reentry capsule. With the part aboard and no capsule, the satellite row says what it
+    // nets after the capsule's price; with a capsule aboard nothing is said (the drop happens on arrival).
+    const cap = opts && opts.capsule && opts.capsule.byCapsule === true ? opts.capsule : null;
+    const capsuleNet = cap && cap.partAboard === true && !(cap.capsules > 0) && Number.isFinite(cap.payCr) && Number.isFinite(cap.priceCr) ? cap.payCr - cap.priceCr : null;
     // Order as the fields. The call summons the NEAREST satellite and sits right after its row when she cannot fly there. Berthed
     // at one, the OTHER satellites are still destinations (nearest from where she is); no call then.
     const sats = reg.satellites().filter((s) => !berth || s.id !== berth.id)
@@ -167,6 +171,12 @@ export function buildWhereNextRows(reg, opts = {}) {
     for (let i = 0; i < sats.length; i++) {
       const row = satelliteRow(reg, sats[i], owed, turn);
       if (handOver && row.state === 'ok') { row.text += ` ${DOT} ${handOver}`; row.shortText += ` ${DOT} ${handOverShort}`; }
+      // route-1107-d2 D-B5: a kept part that goes home by reentry capsule and no capsule aboard: the satellite sells one, and it goes home from there (what it nets)
+      if (capsuleNet != null && row.state === 'ok' && capsuleCanDrop(sats[i].altKm, opts.capsule.partKg)) {
+        const note = `capsule home: +${creditsText(capsuleNet)} cr`;
+        row.text += ` ${DOT} ${note}`;
+        if (row.shortText) row.shortText += ` ${DOT} ${note}`;
+      }
       rows.push(row);
       if (!berth && i === 0 && credits !== null && !row.selectable) rows.push(callRow(sats[i], row, here, credits, gasCredits));
     }
@@ -223,10 +233,10 @@ export function buildWhereNextRows(reg, opts = {}) {
     if (sf && wait.note) { sf.text += ` ${DOT} ${wait.note}`; if (sf.shortText) sf.shortText += ` ${DOT} ${wait.note}`; }
   }
   // route-1101 J5: a part aboard for the station's part job (`opts.station.partCr`, GameFlowManager `_stationRowsOpts`): the station field's row says what the
-  // station pays for it. Nothing about a part otherwise.
-  const partCr = opts && opts.station && Number.isFinite(opts.station.partCr) ? opts.station.partCr : 0;
+  // station pays for it. Nothing about a part otherwise. Not for a part that goes home by reentry capsule (route-1107-d2 D-B5: no crewed station takes it).
+  const partCr = opts && opts.station && Number.isFinite(opts.station.partCr) && !(opts.capsule && opts.capsule.byCapsule === true) ? opts.station.partCr : 0;
   if (partCr > 0 && !berth) {
-    const sfId = stationFieldId(reg);
+    const sfId = stationFieldId(reg, opts && opts.station ? opts.station.incDeg : undefined);
     const sfRow = sfId ? rows.find((r) => r.kind === 'field' && r.id === sfId) : null;
     if (sfRow) {
       const note = `takes the part: ${creditsText(partCr)} cr`;
@@ -380,7 +390,8 @@ function outOfReachLines(all) {
  */
 function stationWait(reg, st, here, herKm, turn = null) {
   if (!st || st.pending !== true || !Number.isFinite(st.gapDeg) || !Number.isFinite(st.incDeg)) return null;
-  const fieldId = stationFieldId(reg);
+  const fieldId = stationFieldId(reg, st.incDeg);
+  const nm = typeof st.name === 'string' && st.name ? st.name : null;       // the station object's short name (a start city's; none at New York)
   const field = fieldId ? reg.fieldById(fieldId) : null;
   if (!field) return null;
   const plan = field.id === here.id ? null : reg.planTo(field);
@@ -392,7 +403,7 @@ function stationWait(reg, st, here, herKm, turn = null) {
   const maxDays = (Constants.TRIP && Constants.TRIP.PROFILE_MAX_DAYS) || 400;
   const km = Math.round(field.altKm);
   const gapText = `${Math.abs(st.gapDeg).toFixed(1)}\u00b0`;
-  const words = `Wait here until lined up with the station: ${daysText(days)} (gap ${gapText})`;
+  const words = `Wait here until lined up with ${nm || 'the station'}: ${daysText(days)} (gap ${gapText})`;
   const row = !lined && days > 0 && days <= maxDays ? {
     id: WAIT_ID, kind: WAIT_KIND, altKm: herKm, pieces: 0, state: 'ok', selectable: true, gasKg: 0, gasPct: 0, days, stationFieldId: fieldId,
     text: field.id === here.id ? words : `${words}, then fly to the ${km} km field`,
@@ -405,11 +416,13 @@ function stationWait(reg, st, here, herKm, turn = null) {
   const daysHere = Number.isFinite(days) ? `${daysText(days)} here` : '';
   let note;
   if (lined) {
-    note = STATION_LINED_NOTE;
-    // route-1106 lane S4: the finish burn that closes the last gap, for the start whose tilt is the station's (the game bills it when a
-    // station action is due); the arrival gap is today's gap plus what the trip itself moves
+    note = nm ? `${nm} lined up on arrival` : STATION_LINED_NOTE;
+    // route-1106 lane S4: the finish burn that closes the last gap, for the seven start tilts (route-1107-d2: every start has a station
+    // object; the game bills it when a station action is due); the arrival gap is today's gap plus what the trip itself moves. Not shown
+    // while she is joined to the object's plane and flies no trip there (no leg of days between now and the station action).
     const arrivalGap = st.gapDeg + tripChangeDeg;
-    if (stationInOwnPlane(st.incDeg) && arrivalGap !== 0 && typeof reg.burnInputs === 'function') {
+    const joinedHere = st.joined === true && !prof;
+    if (stationInOwnPlane(st.incDeg) && !joinedHere && typeof reg.burnInputs === 'function') {
       const inp = reg.burnInputs();
       // a trip to the station field comes first: the finish is flown on the gas and mass she has after it
       const spent = prof && Number.isFinite(prof.gasKg) ? prof.gasKg : 0;
@@ -417,9 +430,9 @@ function stationWait(reg, st, here, herKm, turn = null) {
       if (fin && fin.gasKg >= 0.005) note += fin.feasible && !inp.wornOut ? `; finish burn ${kgText(fin.gasKg)} kg gas, ${daysText(fin.days)}` : `; finish burn needs ${kgText(fin.gasKg)} kg of gas`;
     }
   }
-  else if (row) note = `station not lined up: wait ${daysText(days)} here`;
-  else if (herKm < highKm) note = `station not lined up: ${daysHere ? `${daysHere}, ` : ''}${STATION_FASTER_NOTE}`;
-  else note = daysHere ? `station not lined up: ${daysHere}` : 'station not lined up';
+  else if (row) note = `${nm || 'station'} not lined up: wait ${daysText(days)} here`;
+  else if (herKm < highKm) note = `${nm || 'station'} not lined up: ${daysHere ? `${daysHere}, ` : ''}${STATION_FASTER_NOTE}`;
+  else note = daysHere ? `${nm || 'station'} not lined up: ${daysHere}` : `${nm || 'station'} not lined up`;
   return { fieldId, row, note, days };
 }
 

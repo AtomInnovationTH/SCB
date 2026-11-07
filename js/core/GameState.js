@@ -55,6 +55,9 @@ class GameState {
      *  Null until a game sets it (GameFlowManager._applyStartLocation, a load). */
     this.stationNodeGapDeg = null;
 
+    /** @type {boolean} route-1107-d2: she has flown the finish burn into the station object's plane and no leg of days has gone since, so
+     *  a second finish bills nothing (GameFlowManager.finishStationBurn; cleared by _advanceStationGap; saved; old saves false). */
+    this.stationJoined = false;
     // Ship wear (js/systems/ShipWear.js, DECISIONS §57 row 3). The parts age by `shipDays`: `wearShipDays` is the ship day the
     // wear has been applied up to (ShipWear.poll applies the difference once a frame). Saved: wearShipDays, wearEngineNs,
     // wearBatteryCycles, wearWingAge. NOT saved (re-anchored at a load, a reset or the first frame): wearAltKm, wearGasKg, wearGasId.
@@ -187,6 +190,7 @@ class GameState {
     this._penultimateHailed = false; // last-debris ceremony guards
     this._finalHailed = false;
     this.stationNodeGapDeg = null;   // route-1101 lane S2: set again by the next game's start or load
+    this.stationJoined = false;      // route-1107-d2
   }
 }
 

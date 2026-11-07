@@ -115,10 +115,10 @@ export function calledStartLine(days) {
   const d = Math.max(1, Math.round(days));
   return `Resupply satellite called. It is about ${d} ${d === 1 ? 'day' : 'days'} out.`;
 }
-/** The one line when she starts waiting for the station's orbit to line up (`beginWait`). @param {number} days */
-export function waitStartLine(days) {
+/** The one line when she starts waiting for the station's orbit to line up (`beginWait`). @param {number} days @param {string} [name] the station object's short name (route-1107-d2; default "the station") */
+export function waitStartLine(days, name) {
   const d = Math.max(1, Math.round(days));
-  return `Waiting here for the station's orbit to line up: about ${d} ${d === 1 ? 'day' : 'days'}.`;
+  return `Waiting here for ${name ? `${name}'s` : "the station's"} orbit to line up: about ${d} ${d === 1 ? 'day' : 'days'}.`;
 }
 // The free place's words: a push-down trip ends at a height that is no field and no satellite
 /** @param {{id?: string}|null} target @returns {boolean} the trip's target is the free place of a push-down (FieldRegistry's `FREE_ID`) */
@@ -571,7 +571,7 @@ export class TransferTrip {
    * `playSeconds(days)` real seconds, as a called satellite does, then `lastLeg` carries the days (`{wait: true, altKm, days, gasKg: 0}`:
    * GameFlowManager adds them to the ship's clock and moves the node gap) and `onArrive` runs. `isActive()` is true meanwhile (no
    * mission starts, every credit guard holds). Only from idle (after `leaveChoice()`).
-   * @param {function} onArrive @param {{days: number, altKm?: number}} opts the days to wait and her height (the leg's)
+   * @param {function} onArrive @param {{days: number, altKm?: number, name?: string}} opts the days to wait, her height (the leg's) and the station object's short name for the line
    * @returns {boolean} true = the wait began
    */
   beginWait(onArrive, opts) {
@@ -584,7 +584,7 @@ export class TransferTrip {
     this._lineupS = 0;
     this._onArrive = typeof onArrive === 'function' ? onArrive : null;
     this.lastLeg = null;
-    this._say(waitStartLine(days), { _keep: true });
+    this._say(waitStartLine(days, opts && opts.name), { _keep: true });
     return true;
   }
 

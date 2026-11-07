@@ -78,6 +78,11 @@ export function indiumStoreFull(res, cartridgeKg = Constants.DAUGHTER_SUPPLY.IND
   return Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG - have < cartridgeKg - 1e-9;
 }
 
+/** True when the capsule stock is at `PART_CAPSULE.MAX_ABOARD` (the shop sells no more). Works on a ResourceSystem or player.resources. */
+export function capsuleBayFull(res) {
+  return !!res && Number.isFinite(res.capsules) && res.capsules >= Constants.PART_CAPSULE.MAX_ABOARD;
+}
+
 /**
  * "This consumable has nowhere to go": engine tank full (gas resupply), cold-gas tank full (nitrogen buy), the indium store
  * cannot take a cartridge, or a new part with nothing to replace (under 1 % of its life used: ShipWear, via
@@ -88,6 +93,7 @@ export function consumableFull(upgrade, res) {
     case 'engineGasResupply': return engineTankFull(res);
     case 'coldGasResupply': return coldGasTankFull(res);
     case 'indiumCartridge': return indiumStoreFull(res, upgrade.value);
+    case 'reentryCapsule': return capsuleBayFull(res);
     case 'replaceEngine': return partAsNew(res, 'engine');
     case 'replaceBattery': return partAsNew(res, 'battery');
     case 'replaceWings': return partAsNew(res, 'wings');
@@ -109,10 +115,13 @@ function partAsNew(res, part) {
  * hidden too (`PlayerSatellite.installStandardWheels` at boot). Rows stay in UPGRADES: CATALOG_TOTAL_CR and its pacing pins are
  * catalog-shape facts, and an old save's `wheelKit` purchase still replays (idempotent). Re-exported by ShopScreen.
  * @param {{id?:string, requiresFeature?:string}} u
+ * @param {{capsuleCity?: boolean}} [ctx] where she is (plan route-1107-d2 D-B3): the reentry capsule is sold only with `capsuleCity` true (her part goes home by capsule: the six
+ *   cities, never New York); a caller with no context never offers it. Every other row ignores it.
  * @returns {boolean}
  */
-export function isShopRowOffered(u) {
+export function isShopRowOffered(u, ctx) {
   if (!u) return true;
+  if (u.id === 'reentry_capsule' && !(ctx && ctx.capsuleCity === true)) return false;
   if (u.requiresFeature && !Constants.isFeatureEnabled(u.requiresFeature)) return false;
   if (Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED && (u.id === 'flower_pair_a' || u.id === 'flower_pair_b')) return false;
   if (Constants.WHEELS.STANDARD === true && u.id === 'reaction_wheels') return false;

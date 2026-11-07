@@ -2042,7 +2042,7 @@
       "i18n": {
         "title": "Hubble Watch",
         "shortText": "The Hubble Space Telescope shares the low-mid band and is strictly off-limits: a live asset, not salvage.",
-        "fullText": "Hubble orbits near 500 km at 28.5°, a working observatory rather than a derelict. Treaty law leaves every spacecraft in its owner's hands, and plain sense makes active, crewed or functioning spacecraft no-fire targets. Your daughters refuse to engage them; a net or a nudge aimed at a live asset is a fault, not a catch.\n\nThe skill this teaches is identification. Before you commit fuel, a grip, or a net, you confirm what a contact is, because at this altitude the field mixes priceless working hardware with genuine junk. Reading a target correctly is the difference between a clean removal and an incident.",
+        "fullText": "Hubble orbits near 470 km at 28.5°, a working observatory rather than a derelict. Treaty law leaves every spacecraft in its owner's hands, and plain sense makes active, crewed or functioning spacecraft no-fire targets. Your daughters refuse to engage them; a net or a nudge aimed at a live asset is a fault, not a catch.\n\nThe skill this teaches is identification. Before you commit fuel, a grip, or a net, you confirm what a contact is, because at this altitude the field mixes priceless working hardware with genuine junk. Reading a target correctly is the difference between a clean removal and an incident.",
         "realWorld": "Hubble operating since 1990 (~500 km, slowly sinking; 28.5°); Outer Space Treaty Art. VIII: the owner state keeps control.",
         "trlRationale": "HST operational since 1990; OST Art. VIII: owner keeps control.",
         "unlockHint": "Encounter the Hubble Space Telescope on a scan."

@@ -4960,6 +4960,19 @@ export const Constants = {
     get IN_ORBIT_CR_PER_KG() { return Constants.LAUNCH_USD_PER_KG / Constants.USD_PER_CREDIT; },          // 70
     get ANCHOR_PREMIUM_CR_PER_KG() { return Constants.ELEVATOR_CONTRACT.BONUS_CREDITS_PER_KG; },           // 5: the anchor's bonus per kg
   },
+  // PART_CAPSULE — the small reentry capsule for the station's part job in the six cities whose tilt is not the ISS's (plan route-1107-d2 D-B1..D-B5, owner
+  // 2026-11-07 ~13:51Z "Small reentry capsule": she buys a small heat-shielded capsule at the resupply satellite, packs the part and drops it home; the
+  // capsule's mass and price count against her gas and credits). Real anchors (webreader 2026-11-07): the Stardust sample-return capsule is 46 kg, 0.8 m
+  // across and 0.5 m high (nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1999-003A), its heat shield PICA (nasa.gov Ames, OSIRIS-REx contributions);
+  // the STAR 6B solid motor is 10.3 kg in all, 6.1 kg of it propellant, Isp 273 s (space.skyrocket.de/doc_eng/star-6.htm, a secondary compilation). No
+  // small capsule has a published price: it is priced as its mass at the launch price (ShipWear.partPriceCr's rule, DECISIONS §62 row 10). The motor's
+  // Delta-v (rocket equation) must cover a one-burn deorbit to a `PERIGEE_KM` perigee (JobsBoard.capsuleCanDrop). `MAX_ABOARD`: the shop sells two at most.
+  PART_CAPSULE: {
+    SHELL_KG: 46,
+    MOTOR: { NAME: 'STAR 6B', TOTAL_KG: 10.3, PROP_KG: 6.1, ISP_S: 273 },
+    PERIGEE_KM: 60,
+    MAX_ABOARD: 2,
+  },
   // BIG_MELT — melting a big piece for metal in the four sun-oven balls at the radiator tips, on the SHIP'S clock during trip
   // burns (DECISIONS §33 rows 16-17: "4 furnaces, one on each radiator strut", "many hours or days of realtime to melt debris";
   // BigMelt.js). The trip's days and the hold set the pace, not the delivery. P34 (2026-10-29): each furnace is a fixed 0.6 m
@@ -5106,17 +5119,22 @@ export const Constants = {
 
   // FIELDS — the debris fields, stacked by height in the start orbit's tilt and node (DECISIONS §33 row 6;
   // js/systems/FieldRegistry.js, FEATURE_FLAGS.FIELDS_BY_HEIGHT)
-  // The start field (350 km, mission 1) is the welcome field. The four small fields above it follow row 6: "small pieces at
+  // The start field (350 km, mission 1) is the welcome field. The four small fields above it (f375-f450; route-1107-d2 adds f475, f525,
+  // f620 below) follow row 6: "small pieces at
   // 350-450 km" in the SAME tilt and node as the start orbit (tilting costs 134 m/s per degree, research doc).
   // The START field holds PIECES pieces laid out like DebrisField's WELCOME_FIELD rows (3-10 kg fragments and a cubesat);
   // `seed` fixes the along-track rolls of the free rows, so the same field always looks the same.
-  // DECISIONS §38 row 4: each of the four other low fields holds ONE small-piece group (SMALL_GROUP; the count is
+  // DECISIONS §38 row 4: each of the other low fields holds ONE small-piece group (SMALL_GROUP; the count is
   // `smallGroupCount(seed)`) in place of the welcome rows, from its own seeded stream; and from mission 4 on the mission
   // adds to the field it starts at the extras SMALL_GROUP / MISSION_SAT describe (rows 200+ and 300).
   // Every field has a `kind`: `low` = the WELCOME_FIELD rows (PIECES of them); `high` = the HIGH_FIELD rows (one piece per
   // row); no `kind` is `low`. Four high fields at 750-900 km (row 6: "dead satellites and rocket stages at 750-900 km").
-  // Total: 7 start + 4 low groups (8-12 each; 40 for the seeds as listed) + 28 high = about 75 pieces before the mission
-  // extras, and a run is won at 60 (WIN_DEBRIS_COUNT).
+  // Total: 7 start + 7 low groups (8-12 each; 12 + 11 + 9 + 8 + 12 + 9 + 11 = 72 for the seeds as listed) + 32 high = 111 pieces before the mission
+  // extras (79 before route-1107-d2's three fields), and a run is won at 60 (WIN_DEBRIS_COUNT).
+  // route-1107-d2 (owner 2026-11-07 ~14:20Z, "Add fields at 475, 525, 620 km"): three more low fields, f475, f525 and f620, so every
+  // start city's station mission happens within 8 km of its real object's height (CITY_STATIONS). Before them nothing lay between 450 and
+  // 750 km; f475 sits under the 500 km resupply satellite, f525 and f620 above it, so a `low` field is no longer always
+  // below the satellite.
   // Heights, counts and seeds are ESTIMATES to tune (§33: "counts and prices are estimates to tune").
   FIELDS: {
     PIECES: 7,
@@ -5126,6 +5144,9 @@ export const Constants = {
       { id: 'f400', altKm: 400, seed: 400, kind: 'low' },
       { id: 'f425', altKm: 425, seed: 425, kind: 'low' },
       { id: 'f450', altKm: 450, seed: 450, kind: 'low' },
+      { id: 'f475', altKm: 475, seed: 475, kind: 'low' },
+      { id: 'f525', altKm: 525, seed: 525, kind: 'low' },
+      { id: 'f620', altKm: 620, seed: 620, kind: 'low' },
       { id: 'f750', altKm: 750, seed: 750, kind: 'high' },
       { id: 'f800', altKm: 800, seed: 800, kind: 'high' },
       { id: 'f850', altKm: 850, seed: 850, kind: 'high' },
@@ -5162,7 +5183,7 @@ export const Constants = {
   // (about y 0-262), clear of the list (bottom centre: WhereNextList.js BOTTOM_PX, WIDTH_PX, TOP_CLEAR_PX; test-RangeMapModel
   // pins these copies to the list's own), the floor rail (right edge, mid-height: RAIL_*) and the footer band (REFIT tab,
   // detail slider: top 164 px up). The open drawer (left, z 35) may cover it. Ring sizes are not to scale (rank of height,
-  // not kilometres) so eleven rings can be read: EARTH_FRAC, BREAK_KM and BREAK_EXTRA set the look; the label box is an
+  // not kilometres) so fourteen rings (twelve fields and two satellites; eleven before route-1107-d2) can be read: EARTH_FRAC, BREAK_KM and BREAK_EXTRA set the look; the label box is an
   // ESTIMATE of the drawn text (LABEL_CHAR_PX per mono character), the view draws inside it.
   RANGE_MAP: {
     TOP_PX: 280,              // the map's top edge, below the top HUD strip
@@ -5195,14 +5216,14 @@ export const Constants = {
     RING_MAX_STEP_PX: 28,     // few rings: spacing stops growing here and the map shrinks to fit
     BREAK_KM: 100,            // a height gap this big between neighbouring rings is drawn as a visible break
     BREAK_EXTRA: 1.5,         // ... of this many extra ring spacings
-    MIN_GAP_PX: 14,           // adjacent rings are at least this far apart from a 440 px side up (the Mac)
+    MIN_GAP_PX: 11,           // adjacent rings are at least this far apart from a 440 px side up (the Mac); was 14 with eleven rings: route-1107-d2's three fields make fourteen rings, 11.9 px apart at the 460 px side (measured; neighbouring labels sit two spacings apart, so none overlap)
     MIN_GAP_SMALL_PX: 9,      // ... and at least this on the smaller iPad side
     GAP_SIDE_PX: 440,         // the side from which MIN_GAP_PX is asked
     LABEL_FONT_PX: 11,
     LABEL_H_PX: 14,
     LABEL_CHAR_PX: 7.2,       // the label box's width per character: at least LABEL_FONT_PX x B612 Mono's 0.65 em advance (Typeface.MONO_ADVANCE_EM), pinned by test-RangeMapModel
     LABEL_PAD_PX: 6,          // the box's padding left and right of the text
-    HIT_MIN_PX: 12,           // a tap is a ring's when it lands within this (or half the local spacing, if more) of the ring
+    HIT_MIN_PX: 11,           // a tap is a ring's when it lands within this (or half the local spacing, if more) of the ring; was 12: with fourteen rings the middle of the break is 11.75 px from each ring at the 369 px side and must still map to nothing
     DIM_RING_ALPHA: 0.5,      // trip mode: the rings that are neither hers nor the target are dimmed to this (F1.9: 0.35 left the labels unreadable in the shots),
     DIM_LABEL_ALPHA: 0.72,    // their labels to this
     UNFLOWN_ALPHA: 0.8,       // the part of her path not yet flown (F1.9: at 0.45 over its dark stroke it read as dark green)
@@ -5377,6 +5398,23 @@ export const Constants = {
     LINED_UP_DEG: 0.346,
     // The station field: the first of these (nearest to the station's 408 km first) that still holds FRAG_COUNT rows (NodeDrift.stationFieldId)
     STATION_FIELDS: ['f400', 'f425', 'f375', 'f450'],
+  },
+
+  // CITY_STATIONS — the real object each start city's station mission protects instead of the ISS (owner 2026-11-07 ~13:51Z, picks
+  // "Use these picks": Bangkok Hubble, South of Honshu XRISM, Madrid WorldView Legion 3, Amazon AstroSat, New Delhi EOS-04, Chennai
+  // SRMSAT; plan route-1107-d2; DECISIONS row drafted, not yet placed). Keyed by start language (js/core/Languages.js); New York ('en')
+  // has no entry and keeps ISS_BOSS. Values copied from data/real-sky.json `cityStations` (GCAT, J. McDowell, planet4589.org/space/gcat,
+  // orbit dates 2026 Nov 3-4; altKm = mean of perigee and apogee, massKg as GCAT counts it: Hubble with its 36 attached rows folded in).
+  // `canDodge` = can the object manoeuvre: Hubble no (four reaction wheels and four magnetic torquers, "neither uses propellants",
+  // science.nasa.gov/mission/hubble/observatory/design/pointing-control/); AstroSat yes (42 kg hydrazine, eight 11 N thrusters,
+  // isro.gov.in/AstroSat-Spacecraft.html); null = not known (XRISM, WorldView Legion 3, EOS-04, SRMSAT: no page found).
+  CITY_STATIONS: {
+    th: { name: 'Hubble Space Telescope', short: 'Hubble', satcat: 20580, altKm: 469, incDeg: 28.47, massKg: 12072, canDodge: false },
+    ja: { name: 'XRISM', short: 'XRISM', satcat: 57800, altKm: 525, incDeg: 31, massKg: 2700, canDodge: null },
+    es: { name: 'WorldView Legion 3', short: 'WorldView Legion 3', satcat: 60452, altKm: 519.5, incDeg: 45, massKg: 630, canDodge: null },
+    pt: { name: 'AstroSat', short: 'AstroSat', satcat: 40930, altKm: 620, incDeg: 6, massKg: 1470, canDodge: true },
+    hi: { name: 'EOS-04', short: 'EOS-04', satcat: 51656, altKm: 527.5, incDeg: 97.52, massKg: 1650, canDodge: null },
+    ta: { name: 'SRMSAT', short: 'SRMSAT', satcat: 37841, altKm: 853.5, incDeg: 19.97, massKg: 10, canDodge: null },
   },
 
   // CH9 STARLINK FRAGMENTATION BOSS (MISSION_ARC §6)

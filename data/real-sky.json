@@ -128,20 +128,20 @@
   {
    "altKm": [
     450,
-    600
+    650
    ],
-   "n": 12175,
+   "n": 13346,
    "byClass": {
-    "working": 11370,
-    "dead": 245,
-    "rocket": 125,
-    "debris": 341,
-    "part": 94
+    "working": 11963,
+    "dead": 345,
+    "rocket": 205,
+    "debris": 693,
+    "part": 140
    },
-   "massT": 5554.6,
-   "massMissing": 627,
-   "attachedMassMissing": 22,
-   "massEstShare": 0.94
+   "massT": 6050,
+   "massMissing": 1017,
+   "attachedMassMissing": 23,
+   "massEstShare": 0.92
   },
   {
    "altKm": [
@@ -1204,6 +1204,152 @@
      "orbitDate": "2026-11-04"
     }
    ]
+  }
+ },
+ "cityStations": {
+  "th": {
+   "tiltDeg": 28.5,
+   "row": {
+    "name": "Hubble Space Telescope",
+    "satcat": 20580,
+    "jcat": "S20580",
+    "cls": "dead",
+    "massKg": 12072,
+    "massEst": true,
+    "attached": 36,
+    "lengthM": 13.1,
+    "diameterM": 4.3,
+    "shape": "Step Cyl + 2 Pan",
+    "owner": "GSFC",
+    "state": "US",
+    "launchYear": 1990,
+    "perigeeKm": 468,
+    "apogeeKm": 470,
+    "incDeg": 28.47,
+    "dIncDeg": 0.03,
+    "orbitDate": "2026-11-04",
+    "altKm": 469
+   }
+  },
+  "ja": {
+   "tiltDeg": 30,
+   "row": {
+    "name": "XRISM",
+    "satcat": 57800,
+    "jcat": "S57800",
+    "cls": "working",
+    "massKg": 2700,
+    "massEst": false,
+    "attached": 0,
+    "lengthM": 4.5,
+    "diameterM": 2.2,
+    "shape": "Oct+2 pan+boom",
+    "owner": "JAXA/ISASJ",
+    "state": "J",
+    "launchYear": 2023,
+    "perigeeKm": 520,
+    "apogeeKm": 530,
+    "incDeg": 31,
+    "dIncDeg": 1,
+    "orbitDate": "2026-11-04",
+    "altKm": 525
+   }
+  },
+  "es": {
+   "tiltDeg": 45,
+   "row": {
+    "name": "WorldView Legion 3",
+    "satcat": 60452,
+    "jcat": "S60452",
+    "cls": "working",
+    "massKg": 630,
+    "massEst": false,
+    "attached": 0,
+    "lengthM": 3,
+    "diameterM": 2,
+    "shape": "Box + panel",
+    "owner": "VANTOR",
+    "state": "US",
+    "launchYear": 2024,
+    "perigeeKm": 514,
+    "apogeeKm": 525,
+    "incDeg": 45,
+    "dIncDeg": 0,
+    "orbitDate": "2026-11-04",
+    "altKm": 519.5
+   }
+  },
+  "pt": {
+   "tiltDeg": 5,
+   "row": {
+    "name": "ASTROSAT",
+    "satcat": 40930,
+    "jcat": "S40930",
+    "cls": "working",
+    "massKg": 1470,
+    "massEst": false,
+    "attached": 0,
+    "lengthM": 2,
+    "diameterM": 1.3,
+    "shape": "Box+ 2 pan",
+    "owner": "ISRO",
+    "state": "IN",
+    "launchYear": 2015,
+    "perigeeKm": 614,
+    "apogeeKm": 626,
+    "incDeg": 6,
+    "dIncDeg": 1,
+    "orbitDate": "2026-11-03",
+    "altKm": 620
+   }
+  },
+  "hi": {
+   "tiltDeg": 97.5,
+   "row": {
+    "name": "EOS-04",
+    "satcat": 51656,
+    "jcat": "S51656",
+    "cls": "working",
+    "massKg": 1650,
+    "massEst": false,
+    "attached": 0,
+    "lengthM": 3.9,
+    "diameterM": 2,
+    "shape": "Box + Hex Box+3 pan",
+    "owner": "ISRO",
+    "state": "IN",
+    "launchYear": 2022,
+    "perigeeKm": 526,
+    "apogeeKm": 529,
+    "incDeg": 97.52,
+    "dIncDeg": 0.02,
+    "orbitDate": "2026-11-04",
+    "altKm": 527.5
+   }
+  },
+  "ta": {
+   "tiltDeg": 18,
+   "row": {
+    "name": "SRMSAT",
+    "satcat": 37841,
+    "jcat": "S37841",
+    "cls": "working",
+    "massKg": 10,
+    "massEst": false,
+    "attached": 0,
+    "lengthM": 0.3,
+    "diameterM": 0.3,
+    "shape": "Box",
+    "owner": "SRMU",
+    "state": "IN",
+    "launchYear": 2011,
+    "perigeeKm": 845,
+    "apogeeKm": 862,
+    "incDeg": 19.97,
+    "dIncDeg": 1.97,
+    "orbitDate": "2026-11-04",
+    "altKm": 853.5
+   }
   }
  }
 }

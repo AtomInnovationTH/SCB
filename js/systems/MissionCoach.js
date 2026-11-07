@@ -42,6 +42,25 @@ function issBossChapter() {
   return Number.isInteger(m) ? m : null;
 }
 
+/**
+ * Route-1107-d2 D-A7: a chapter-5 beat for a start city. The table's words are the ISS's (New York's); for a city the same beat names the
+ * real object it protects (`obj`, a `Constants.CITY_STATIONS` entry): "the ISS, which flies at 51.6°" becomes "<n>, which flies at <t>° and
+ * <h> km", the sentence about people aboard is dropped (no object here is crewed), the "CSA dodge it on the station's own thrusters" clause
+ * says what that object can do, and any other "ISS" is the object's name.
+ * @param {string|undefined} text @param {{short: string, altKm: number, incDeg: number, canDodge: (boolean|null)}} obj @returns {string|undefined}
+ */
+export function cityBeatText(text, obj) {
+  if (typeof text !== 'string' || !obj) return text;
+  const n = obj.short;
+  const dodge = obj.canDodge === true ? 'leave it to its operators to dodge' : 'let it ride out the pass';
+  return text
+    .replace('A Cosmos-1408 fragment cloud', 'A fragment cloud')
+    .replace('the ISS, which flies at 51.6°', `${n}, which flies at ${obj.incDeg.toFixed(1)}° and ${Math.round(obj.altKm)} km`)
+    .replace(' There are people aboard that station.', '')
+    .replace("or we let CSA dodge it on the station's own thrusters", `or ${dodge}`)
+    .replace(/\bthe ISS\b/g, n).replace(/\bISS\b/g, n);
+}
+
 /** The one line when no mover is left in the field while a mover beat is open (plan D9). */
 export const NO_MOVERS_LINE = 'No moving pieces left here.';
 
@@ -81,6 +100,8 @@ export class MissionCoach {
      */
     this._latch = this._freshLatch();
 
+    /** @type {object|null} the real object the boss protects when a start city runs it (null: the ISS, New York); set by ISS_BOSS_STARTED */
+    this._issObject = null;
     this._unsubs = [];
     this._disposed = false;
   }
@@ -93,7 +114,7 @@ export class MissionCoach {
     on(Events.MISSION_START, (d) => this._onMissionStart(d));
     // Chapter 5's beats (the ISS boss) come when the boss starts, not at mission 5's start: the boss waits until she is lined up with
     // the station (DECISIONS §62 row 2, route-1101 lane S2). The boss itself starts only with no depot stop pending.
-    on(Events.ISS_BOSS_STARTED, () => this._onIssBossStarted());
+    on(Events.ISS_BOSS_STARTED, (d) => this._onIssBossStarted(d));
     // A terminal state before the armed chapter fires cancels it (a GAME_OVER
     // continue restarts the counter at 0; a new game resets everything).
     on(Events.GAME_STATE_CHANGE, (d) => {
@@ -169,6 +190,7 @@ export class MissionCoach {
     this._onset.cancel();
     this._completedByMission = {};
     this._activeMission = null;
+    this._issObject = null;
     this._latch = this._freshLatch();
   }
 
@@ -195,8 +217,10 @@ export class MissionCoach {
     this._onset.arm(mission);
   }
 
-  /** @private The ISS boss started (Events.ISS_BOSS_STARTED): ARM its chapter (the onset rule then holds it behind a running one). */
-  _onIssBossStarted() {
+  /** @private The ISS boss started (Events.ISS_BOSS_STARTED): ARM its chapter (the onset rule then holds it behind a running one).
+   *  Route-1107-d2: the event carries the real object a start city protects (`station`, null at New York); the beats name it, not the ISS. */
+  _onIssBossStarted(d) {
+    this._issObject = d && d.station ? d.station : null;
     const ch = issBossChapter();
     if (ch == null || !this._hasChapter(ch)) return;
     this._onset.arm(ch);
@@ -292,6 +316,7 @@ export class MissionCoach {
       const f = this._fields && typeof this._fields.currentField === 'function' ? this._fields.currentField() : null;
       if (f && Number.isFinite(f.altKm)) text = beat.mapText.replace('{km}', String(Math.round(f.altKm)));
     }
+    if (this._issObject) { text = cityBeatText(text, this._issObject); return { ...beat, text: wordsFor(text), body: wordsFor(cityBeatText(beat.body, this._issObject)) }; }
     return { ...beat, text: wordsFor(text), body: wordsFor(beat.body) };
   }
 

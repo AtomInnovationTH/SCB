@@ -61,6 +61,8 @@ export const EFFECT_ROUTES = {
   indiumCartridge: [RESOURCE_SYSTEM],
   // ── the drag sail goes into her sail stock (a count) → ResourceSystem ──
   dragSail: [RESOURCE_SYSTEM],
+  // ── the reentry capsule goes into her capsule stock (a count) → ResourceSystem ──
+  reentryCapsule: [RESOURCE_SYSTEM],
   // ── a new part from the resupply satellite resets that part's wear (ShipWear.replace) → ResourceSystem ──
   replaceEngine: [RESOURCE_SYSTEM],
   replaceBattery: [RESOURCE_SYSTEM],

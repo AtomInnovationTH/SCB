@@ -204,7 +204,8 @@ const GLASS_LINES = Object.freeze([
   [' plus the [;]/[\'] launch-speed dial makes the transit', ' makes the transit'],
   // The THROTTLE UP beat chip (Shift+=) is up for the whole ch5_burn lesson, the only place these two lines show.
   [' Trim your closing rate on the throttle (+/-) to nail the intercept window.', ' Tap THROTTLE UP to trim your closing rate and nail the intercept window.'],
-  ['Use + / - to throttle and time your intercept burn on the ISS threat frags.', 'Tap THROTTLE UP and time your intercept burn on the ISS threat frags.'],
+  // (the beat names the object the boss protects: the ISS, or a start city's real object, so the row stops before its name; route-1107-d2)
+  ['Use + / - to throttle and time your intercept burn', 'Tap THROTTLE UP and time your intercept burn'],
   ['They open to 146°: press O.', 'They open to 146°: tap RADIATORS on floor 1.'],
   [' O opens them to ', ' RADIATORS on floor 1 opens them to '],
   ['Nav orb shown (8 to hide)', 'Nav orb shown (tap ORB to fold it)'],

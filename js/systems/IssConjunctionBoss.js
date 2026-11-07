@@ -27,6 +27,37 @@ import { GameStates } from '../core/GameState.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { ThreatSet, awardElevatorMass, MissionOnset } from './_bossLifecycle.js';
 
+/**
+ * The boss's five comms lines. New York (no `obj`): the ISS lines, byte for byte as they were. A start city (`obj` = its
+ * `Constants.CITY_STATIONS` entry, route-1107-d2 D-A7): the same beats around its real object, with no crew and no reboost.
+ * `canDodge`: true = its operators can fire thrusters, false = it has none, null = not known.
+ * @param {object|null} obj @returns {{start: function, imminent: function, intercept: function, decline: function, miss: function}}
+ */
+export function bossLines(obj) {
+  if (!obj) {
+    return {
+      start: (total, tcaH) => `Cosmos-1408 fragment cloud converging on the ISS. ${total} pieces, closest approach in ${tcaH} h. Clear them or we let the station reboost. Crew's counting on you.`,
+      imminent: (h, cleared, total) => `ISS conjunction in ${h} h. ${cleared}/${total} fragments cleared. Close it out, Cowboy.`,
+      intercept: () => 'Threat neutralised. ISS is clear, no reboost required. The crew sends their thanks, Cowboy.',
+      decline: () => 'Understood. Handing it to the station. ISS performing an autonomous avoidance reboost. No harm done.',
+      miss: () => 'Out of time. ISS executing a late reboost, ~3 kg of hydrazine burned. Threat cleared, but that one cost us.',
+    };
+  }
+  const n = obj.short;
+  const dodge = obj.canDodge;
+  return {
+    start: (total, tcaH) => `Fragment cloud converging on ${n} (${Math.round(obj.altKm)} km). ${total} pieces, closest approach in ${tcaH} h. `
+      + (dodge === true ? 'Clear them or its operators burn fuel to dodge.' : dodge === false ? `${n} has no thrusters and cannot dodge.` : 'Clear them before the pass.'),
+    imminent: (h, cleared, total) => `${n} conjunction in ${h} h. ${cleared}/${total} fragments cleared. Close it out, Cowboy.`,
+    intercept: () => `Threat neutralised. ${n} is clear. Thanks from its operators, Cowboy.`,
+    decline: () => (dodge === true ? `Understood. ${n}'s operators fire its thrusters to dodge. No harm done.`
+      : dodge === false ? `Understood. ${n} cannot dodge and rides out the pass. The fragments missed this time.`
+        : `Understood. ${n} rides out the pass. The fragments missed this time.`),
+    miss: () => (dodge === true ? `Out of time. ${n} burned fuel on a late dodge. Threat cleared, but that one cost them.`
+      : `Out of time. ${n} rode out the pass with fragments still near it. They missed, but the bonus is lost.`),
+  };
+}
+
 export class IssConjunctionBoss {
   /**
    * @param {object} deps
@@ -46,9 +77,12 @@ export class IssConjunctionBoss {
    *   bills the finish burn that closes the last gap to the station's plane. The boss does not arm while it returns false (too little
    *   gas). Default (headless rigs, the old tests): nothing to bill, true.
    * @param {Function} [deps.stationPlane] — () => ({inclination, raan}|null) (GameFlowManager.stationPlane(), wired by main.js): the
-   *   station's own plane in her scene, for the start whose tilt is the station's; the pieces are built in it. Default: null (her plane).
+   *    station's own plane in her scene, for the start whose tilt is the station's; the pieces are built in it. Default: null (her plane).
+   *    A city's start (`stationObject`) builds them in HER scene plane instead: the finish burn put her in the object's plane.
+   * @param {Function} [deps.stationObject] — () => (Constants.CITY_STATIONS entry|null) (main.js: `NodeDrift.cityStation(her tilt)`; route-1107-d2):
+   *    the real object a start city protects (name, height, canDodge). Null = New York, the ISS. Default: null.
    */
-  constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null, depotStopPending = null, stationLinedUp = null, otherBossBusy = null, finishStationBurn = null, stationPlane = null } = {}) {
+  constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null, depotStopPending = null, stationLinedUp = null, otherBossBusy = null, finishStationBurn = null, stationPlane = null, stationObject = null } = {}) {
     this._eventBus = eventBus;
     this._scoring = scoringSystem;
     this._debrisField = debrisField;
@@ -59,6 +93,7 @@ export class IssConjunctionBoss {
     this._otherBossBusy = typeof otherBossBusy === 'function' ? otherBossBusy : () => false;
     this._finishStationBurn = typeof finishStationBurn === 'function' ? finishStationBurn : () => true;
     this._stationPlane = typeof stationPlane === 'function' ? stationPlane : () => null;
+    this._stationObject = typeof stationObject === 'function' ? stationObject : () => null;
 
     /** @type {boolean} boss already run+resolved this game. */
     this._completed = false;
@@ -114,7 +149,7 @@ export class IssConjunctionBoss {
         cleared: this._threats.clearedCount,
         total: this._threats.total,
       });
-      this._comms(`ISS conjunction in ${Math.round(remainingH)} h. ${this._threats.clearedCount}/${this._threats.total} fragments cleared. Close it out, Cowboy.`, 'warning');
+      this._comms(bossLines(this._stationObject()).imminent(Math.round(remainingH), this._threats.clearedCount, this._threats.total), 'warning');
     }
 
     if (this._tcaRemainingS <= 0) {
@@ -200,8 +235,12 @@ export class IssConjunctionBoss {
     const count = cfg.FRAG_COUNT || 6;
 
     let ids = [];
+    const obj = this._stationObject();
     if (this._debrisField && typeof this._debrisField.spawnIssThreatField === 'function') {
-      const res = this._debrisField.spawnIssThreatField({ count, plane: this._stationPlane() || undefined });
+      // New York: the ISS's 408 km, in the station's own plane (equal to hers after the finish). A city: its object's height, built in HER
+      // scene plane (the finish put her in the object's plane, and the scene keeps her orbit as its frame; route-1107-d2 D-A6).
+      const opts = obj ? { count, altKm: obj.altKm } : { count, plane: this._stationPlane() || undefined };
+      const res = this._debrisField.spawnIssThreatField(opts);
       ids = (res && Array.isArray(res.ids)) ? res.ids : [];
     }
     // No candidates to repurpose → can't stage the boss; bail without marking complete so it can run on a later entry.
@@ -224,8 +263,10 @@ export class IssConjunctionBoss {
     this._eventBus.emit(Events.ISS_BOSS_STARTED, {
       threatIds: [...this._threats.threats],
       tcaHours: cfg.TCA_HOURS || 38,
+      city: this._cityKey(),     // route-1107-d2: the start language of the city object (null at New York); `station` is its entry, for the coach's words
+      station: obj,
     });
-    this._comms(`Cosmos-1408 fragment cloud converging on the ISS. ${this._threats.total} pieces, closest approach in ${cfg.TCA_HOURS || 38} h. Clear them or we let the station reboost. Crew's counting on you.`, 'critical');
+    this._comms(bossLines(obj).start(this._threats.total, cfg.TCA_HOURS || 38), 'critical');
   }
 
   /** @private Mark a threat cleared (idempotent); finish on a full sweep. */
@@ -243,6 +284,7 @@ export class IssConjunctionBoss {
     const cleared = this._threats.clearedCount;
     const total = this._threats.total;
 
+    const lines = bossLines(this._stationObject());
     if (outcome === 'intercept') {
       // Credits via scoring; elevator mass via the shop contract.
       this._eventBus.emit(Events.SCORING_AWARD, {
@@ -250,17 +292,27 @@ export class IssConjunctionBoss {
         reason: 'ISS conjunction cleared',
       });
       this._awardElevatorMass(cfg.INTERCEPT_BONUS_KG || 200);
-      this._comms('Threat neutralised. ISS is clear, no reboost required. The crew sends their thanks, Cowboy.', 'info');
+      this._comms(lines.intercept(), 'info');
     } else if (outcome === 'decline') {
-      this._comms('Understood. Handing it to the station. ISS performing an autonomous avoidance reboost. No harm done.', 'info');
+      this._comms(lines.decline(), 'info');
     } else { // miss
-      this._comms('Out of time. ISS executing a late reboost, ~3 kg of hydrazine burned. Threat cleared, but that one cost us.', 'warning');
+      this._comms(lines.miss(), 'warning');
     }
 
-    this._eventBus.emit(Events.ISS_BOSS_RESOLVED, { outcome, cleared, total });
+    // `city`: the start language of the object she protected (route-1107-d2), null for New York's ISS; the `iss_*` codex entries unlock only for null
+    const cityKey = this._cityKey();
+    this._eventBus.emit(Events.ISS_BOSS_RESOLVED, { outcome, cleared, total, city: cityKey });
 
     this._completed = true;
     this._endRun();
+  }
+
+  /** @private The start-language key of the city object she protects (`Constants.CITY_STATIONS`), or null for New York's ISS. */
+  _cityKey() {
+    const obj = this._stationObject();
+    if (!obj) return null;
+    const all = Constants.CITY_STATIONS || {};
+    return Object.keys(all).find((k) => all[k] === obj || all[k].satcat === obj.satcat) || null;
   }
 
   /** @private Add mass to the elevator contract (fires the win path on threshold). */

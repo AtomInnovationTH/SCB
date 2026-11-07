@@ -1754,6 +1754,7 @@ async function init() {
 
   shopScreen.setCargoSystem(cargoSystem);
   shopScreen.setResourceSystem(resourceSystem);   // the resupply is priced by the tank gas
+  shopScreen.setCapsuleCity(() => gameFlowManager.capsuleOffered());   // route-1107-d2: the reentry capsule row is sold only while a capsule part posting is open (F4)
   shopScreen.setScoringSystem(scoringSystem);
 
   // CH5 ISS conjunction boss (protect-the-asset). Needs the shop (elevator-mass award) + debrisField (ISS-track
@@ -1766,6 +1767,8 @@ async function init() {
     // route-1106 lane S4: the finish burn is billed before the boss arms; the pieces are built in the station's own plane (51.6 deg start only)
     finishStationBurn: () => gameFlowManager.finishStationBurn(),
     stationPlane: () => gameFlowManager.stationPlane(),
+    // route-1107-d2: the real object a start city protects instead of the ISS (its height, lines and plane rule); null at New York
+    stationObject: () => gameFlowManager.stationObject(),
     // never two bosses at once: not while the Starlink boss (mission 9, built just below) is armed or running
     otherBossBusy: () => !!starlinkCascadeBoss && (starlinkCascadeBoss.isArmed() || starlinkCascadeBoss.isActive()),
   });
@@ -2326,6 +2329,7 @@ async function init() {
       // Buying happens only at the resupply stop after a mission: mid-mission the chips read "buy at the resupply
       // stop" and the tab's gold count promises nothing.
       getAtStop: () => gameFlowManager.atResupplyStop(),
+      capsuleCity: () => gameFlowManager.capsuleOffered(),   // route-1107-d2: the capsule row's gate (an open capsule part posting)
       // Alternative hover → the hull hardware pulses cyan (MotherCallouts ghost outlines).
       onGhost: (ids) => motherCallouts.setGhostOutline(ids),
       // Live alternative rows: the fittingCatalog `current` adapters read these deps. A GETTER returning a fresh

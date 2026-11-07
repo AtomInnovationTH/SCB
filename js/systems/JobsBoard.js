@@ -34,6 +34,8 @@
  *   E  the station's part job ('part'): from mission 4, at most 2 a game (spacing as the others), one part a payer wants of a big piece (a part the melt already cuts,
  *      `partKgFor`, at most `JOB_RULES.E_MAX_KG` kg): the melt keeps that part whole instead of melting it, she carries it to the station field lined up with the
  *      station, and the station takes it for its return capsule: a flat 10,000 cr (`JOB_E_USD`). The posting's `aboard` ({kg}) is the part she carries.
+ *      Plan route-1107-d2: for the six starts whose tilt is not the ISS's (`partGoesByCapsule`) the posting is `byCapsule`: no crewed station takes the part; she buys a
+ *      reentry capsule (`Constants.PART_CAPSULE`) at the resupply satellite and drops the part home from where she is.
  * No piece is in two open postings: every picker takes an `exclude` list of {fieldId, row} (the game fills it with every open posting's piece); E never picks an
  * insurer's piece (`skipRows`) while D is still to come or open.
  * @module systems/JobsBoard
@@ -134,6 +136,56 @@ export function insurerPayCr() { return Math.round(Constants.BIG_PIECES.JOB_D_CR
 
 /** @returns {number} the station's pay for one part, whole credits (`BIG_PIECES.JOB_E_USD` over `USD_PER_CREDIT`: 10,000 today). */
 export function partPayCr() { return Math.round(Constants.BIG_PIECES.JOB_E_CR); }
+
+// ── the reentry capsule (plan route-1107-d2 D-B1, D-B2; Constants.PART_CAPSULE) ──────────────────────────────────────────────
+
+/**
+ * Does the part job's part go home by reentry capsule from this start (her tilt)? The ISS flies at 51.6 deg and is the only crewed station: a start whose tilt is within 0.05
+ * deg of it (New York) keeps the station hand-over; every other start (the six cities' objects carry no crew) buys a capsule. A tilt that is not a number is "no".
+ * Pure and its own source: it must not read NodeDrift (the station's orbit moves with the city). @param {number|null|undefined} herIncDeg @returns {boolean}
+ */
+export function partGoesByCapsule(herIncDeg) {
+  return Number.isFinite(herIncDeg) && Math.abs(herIncDeg - Constants.ISS_BOSS.ORBIT.incDeg) > 0.05;
+}
+
+/** @returns {number} one capsule's mass, kg: the Stardust-size shell and the STAR 6B motor (56.3 today). */
+export function capsuleMassKg() { const C = Constants.PART_CAPSULE; return C.SHELL_KG + C.MOTOR.TOTAL_KG; }
+
+/** @returns {number} one capsule's price, whole credits: its mass at the launch price per kg, rounded to 10 cr (ShipWear.partPriceCr's rule; 3,940 today). */
+export function capsulePriceCr() { return Math.round(capsuleMassKg() * Constants.LAUNCH_USD_PER_KG / Constants.USD_PER_CREDIT / 10) * 10; }
+
+/** @returns {number} what `capsules` capsules weigh aboard, kg (her live mass counts it, `GameFlowManager.holdMassKg`). */
+export function capsulesMassKg(capsules) { return Math.max(0, Math.floor(Number.isFinite(capsules) ? capsules : 0)) * capsuleMassKg(); }
+
+/**
+ * The motor's Delta-v with a part of `partKg` packed, m/s (rocket equation, Isp x standard gravity): the capsule is shell + motor + part, the propellant burns off.
+ * @param {number} partKg @returns {number}
+ */
+export function capsuleMotorDvMps(partKg) {
+  const C = Constants.PART_CAPSULE;
+  const m0 = capsuleMassKg() + (Number.isFinite(partKg) && partKg > 0 ? partKg : 0);
+  return C.MOTOR.ISP_S * Constants.G0 * Math.log(m0 / (m0 - C.MOTOR.PROP_KG));
+}
+
+/**
+ * The Delta-v of one impulsive burn that takes a circular orbit at `altKm` down to a perigee of `PART_CAPSULE.PERIGEE_KM` (vis-viva; mu 398,600 km^3/s^2,
+ * `Constants.EARTH_RADIUS_KM`), m/s. 0 at or below the perigee height. @param {number} altKm @returns {number}
+ */
+export function deorbitDvMps(altKm) {
+  const MU = 398600;
+  const re = Constants.EARTH_RADIUS_KM;
+  const r1 = re + (Number.isFinite(altKm) ? altKm : 0);
+  const rp = re + Constants.PART_CAPSULE.PERIGEE_KM;
+  if (!(r1 > rp)) return 0;
+  const a = (r1 + rp) / 2;
+  return (Math.sqrt(MU / r1) - Math.sqrt(MU * (2 / r1 - 1 / a))) * 1000;
+}
+
+/** Can the capsule's motor bring a `partKg` part down from `altKm`? Its Delta-v must cover the deorbit burn. @param {number} altKm @param {number} partKg @returns {boolean} */
+export function capsuleCanDrop(altKm, partKg) { return capsuleMotorDvMps(partKg) >= deorbitDvMps(altKm); }
+
+/** @returns {number} what a kept part nets by capsule when she has to buy the capsule: the pay less the price (6,060 today). */
+export function capsuleNetPayCr() { return partPayCr() - capsulePriceCr(); }
 
 /** @returns {number} what `posting` pays for a piece of `massKg` in all: the flat press, insurer or part pay, or mass x its tier's rate. */
 export function jobPayCr(posting, massKg) {
@@ -268,16 +320,17 @@ function jobPosting(kind, tier, fieldId, row, def) {
 
 /**
  * A station job's posting (D: 'insurer', E: 'part'): the same shape as `jobPosting`, `client` the payer's words (`partPayer`), `payCr` the flat pay, and for E
- * `partKg` (what the melt cuts) and `aboard` (null until the melt keeps the part: `{kg}`).
- * @param {'insurer'|'part'} kind @param {string} fieldId @param {number} row @param {object} def the `HIGH_FIELD` row
+ * `partKg` (what the melt cuts), `aboard` (null until the melt keeps the part: `{kg}`) and `byCapsule` (the part goes home by reentry capsule, `partGoesByCapsule` of her tilt when
+ * it was posted; `o.byCapsule`).
+ * @param {'insurer'|'part'} kind @param {string} fieldId @param {number} row @param {object} def the `HIGH_FIELD` row @param {{byCapsule?: boolean}} [o]
  */
-function stationPosting(kind, fieldId, row, def) {
-  const o = def.owner;
+function stationPosting(kind, fieldId, row, def, o = {}) {
+  const own = def.owner;
   const p = {
-    v: 1, kind, fieldId, row, client: partPayer(def), launchYear: o && Number.isFinite(o.launchYear) ? o.launchYear : null,
+    v: 1, kind, fieldId, row, client: partPayer(def), launchYear: own && Number.isFinite(own.launchYear) ? own.launchYear : null,
     label: pieceLabel(def), what: whatOf(def), payCr: 0, paidCr: 0, posted: true, done: false, missed: false, doneShown: false,
   };
-  if (kind === 'part') { p.partKg = rowPartKg(def); p.aboard = null; }
+  if (kind === 'part') { p.partKg = rowPartKg(def); p.aboard = null; p.byCapsule = !!(o && o.byCapsule); }
   p.payCr = jobPayCr(p, 0);
   return p;
 }
@@ -337,13 +390,14 @@ export function postInsurerJob(reg, o = {}) {
 
 /**
  * Post the station's part job: a piece of `partRows()` with the cheapest trip. `o.skipRows`: rows never picked (the game passes the insurer's rows while D is still
- * to come or open: the insurer wants that piece whole); `o.exclude`: the pieces of every open posting.
- * @param {object|null} reg @param {{exclude?: object[], skipRows?: number[]}} [o] @returns {object|null}
+ * to come or open: the insurer wants that piece whole); `o.exclude`: the pieces of every open posting; `o.byCapsule`: the part goes home by reentry capsule (the game passes
+ * `partGoesByCapsule(her tilt)`).
+ * @param {object|null} reg @param {{exclude?: object[], skipRows?: number[], byCapsule?: boolean}} [o] @returns {object|null}
  */
 export function postPartJob(reg, o = {}) {
   const skip = Array.isArray(o.skipRows) ? o.skipRows : [];
   const pick = pickPiece(reg, partRows().filter((r) => !skip.includes(r)), o.exclude);
-  return pick ? stationPosting('part', pick.fieldId, pick.row, Constants.HIGH_FIELD[pick.row]) : null;
+  return pick ? stationPosting('part', pick.fieldId, pick.row, Constants.HIGH_FIELD[pick.row], { byCapsule: o.byCapsule === true }) : null;
 }
 
 // ── the board's counts and spacing ───────────────────────────────────────────
@@ -560,11 +614,26 @@ function insurerLine(posting, row, fmt) {
 function partLine(posting, row, fmt) {
   const piece = pieceWords(posting);
   const kg = Number.isFinite(posting.aboard && posting.aboard.kg) ? posting.aboard.kg : posting.partKg;
+  if (posting.byCapsule === true) return capsulePartLine(posting, row, fmt, piece, kg);
   if (posting.done) return `Done: the station took the ${commas(kg)} kg part of ${capFirst(posting.client)}'s ${piece}, part job paid ${commas(posting.paidCr)} cr \u2713`;
   if (posting.missed) return `Missed: ${capFirst(posting.client)}'s ${piece} left before a part was kept, no part pay`;
   if (posting.aboard) return `Part aboard: ${commas(kg)} kg of ${capFirst(posting.client)}'s ${piece}, for the station's return capsule (lined up), pays ${commas(posting.payCr)} cr`;
   const km = atWords(posting, row);
   const what = `${capFirst(posting.client)} wants one ${commas(kg)} kg part of ${ownerWord(posting)} ${piece}${km ? ` at ${km}` : ''}: melt the ${posting.what === 'satellite' ? 'satellite' : 'stage'} and the part is kept; take it to the station (lined up), pays ${commas(posting.payCr)} cr`;
+  return withTrip(what, row, fmt);
+}
+
+/**
+ * The part job's lines for a part that goes home by reentry capsule (`posting.byCapsule`, plan route-1107-d2 D-B4): the same states as `partLine`, the capsule instead of the station.
+ *   "Russia wants one 5 kg part of its SL-14 stage at 850 km: melt the stage and the part is kept; buy a reentry capsule at the resupply satellite (3,940 cr) and drop it home, pays 10,000 cr"
+ *   with the part aboard: "Part aboard: 5 kg of Russia's SL-14 stage, for a reentry capsule home, pays 10,000 cr"
+ */
+function capsulePartLine(posting, row, fmt, piece, kg) {
+  if (posting.done) return `Done: the ${commas(kg)} kg part of ${capFirst(posting.client)}'s ${piece} went home in a reentry capsule, part job paid ${commas(posting.paidCr)} cr \u2713`;
+  if (posting.missed) return `Missed: ${capFirst(posting.client)}'s ${piece} left before a part was kept, no part pay`;
+  if (posting.aboard) return `Part aboard: ${commas(kg)} kg of ${capFirst(posting.client)}'s ${piece}, for a reentry capsule home, pays ${commas(posting.payCr)} cr`;
+  const km = atWords(posting, row);
+  const what = `${capFirst(posting.client)} wants one ${commas(kg)} kg part of ${ownerWord(posting)} ${piece}${km ? ` at ${km}` : ''}: melt the ${posting.what === 'satellite' ? 'satellite' : 'stage'} and the part is kept; buy a reentry capsule at the resupply satellite (${commas(capsulePriceCr())} cr) and drop it home, pays ${commas(posting.payCr)} cr`;
   return withTrip(what, row, fmt);
 }
 
@@ -577,6 +646,18 @@ export function insurerPayLine(posting) {
 export function partTakenLine(posting, paidCr) {
   const kg = Number.isFinite(posting.aboard && posting.aboard.kg) ? posting.aboard.kg : posting.partKg;
   return `The station took the ${commas(kg)} kg part of ${capFirst(posting.client)}'s ${pieceWords(posting)} for its next return capsule: +${commas(paidCr)} cr`;
+}
+
+/** The Houston line when the part goes home in her reentry capsule: "The 5 kg part of the SL-14 stage went home in a reentry capsule: +10,000 cr." */
+export function capsuleDropLine(posting, paidCr) {
+  const kg = Number.isFinite(posting.aboard && posting.aboard.kg) ? posting.aboard.kg : posting.partKg;
+  return `The ${commas(kg)} kg part of the ${pieceWords(posting)} went home in a reentry capsule: +${commas(paidCr)} cr.`;
+}
+
+/** The line (once a ship day) when the capsule's motor cannot bring the part down from `altKm`. */
+export function capsuleTooHighLine(posting, altKm) {
+  const kg = Number.isFinite(posting.aboard && posting.aboard.kg) ? posting.aboard.kg : posting.partKg;
+  return `The capsule's motor cannot bring the ${commas(kg)} kg part down from ${commas(altKm)} km; drop it from a lower field.`;
 }
 
 /** The Vespa bounty's lines (unchanged words). */
@@ -631,6 +712,7 @@ export function removalToSave(posting) {
     done: !!posting.done, missed: !!posting.missed, doneShown: !!posting.doneShown, paidCr: Number.isFinite(posting.paidCr) && posting.paidCr > 0 ? Math.round(posting.paidCr) : 0,
   };
   if (posting.kind === 'part') {
+    out.byCapsule = posting.byCapsule === true;      // the way the part goes home, decided when posted and always saved (fix F1: a New York posting must not be read as an old save and turned into a capsule one by a load under another city); absent = a save from before the capsule, computed from her tilt on load
     if (posting.aboard && Number.isFinite(posting.aboard.kg) && posting.aboard.kg > 0) out.aboard = { kg: posting.aboard.kg };
     if (posting.done && Number.isFinite(posting.partKg) && posting.partKg > 0) out.partKg = posting.partKg;      // the part the station took (a done posting has nothing aboard)
   }
@@ -642,9 +724,10 @@ export function removalToSave(posting) {
  * `insurerRows()` / `partRows()`); the client's words and the pay estimate are re-read from the table (a part's `aboard` keeps its saved kg). Anything else
  * is "not posted yet" (null), never an error.
  * @param {*} saved a posting's save form
+ * @param {{herIncDeg?: number|null}} [o] her tilt now: a part posting without a saved `byCapsule` (a save from before the capsule) computes it from this (`partGoesByCapsule`)
  * @returns {object|null}
  */
-export function removalFromSave(saved) {
+export function removalFromSave(saved, o = {}) {
   try {
     if (!saved || typeof saved !== 'object' || saved.v !== 1 || saved.posted !== true) return null;
     const kind = saved.kind;
@@ -657,7 +740,7 @@ export function removalFromSave(saved) {
     if (!f || f.kind !== 'high') return null;
     const def = Constants.HIGH_FIELD[row];
     const posting = kind === 'insurer' || kind === 'part'
-      ? stationPosting(kind, fieldId, row, def)
+      ? stationPosting(kind, fieldId, row, def, { byCapsule: saved.byCapsule === true || (saved.byCapsule === undefined && partGoesByCapsule(o && o.herIncDeg)) })
       : jobPosting(kind, kind === 'press' ? null : tier, fieldId, row, def);
     posting.done = saved.done === true;
     posting.missed = saved.missed === true && saved.done !== true;
@@ -710,9 +793,10 @@ export function boardToSave(state, removal, press, extra = {}) {
  * it did, with nothing else posted and every count 0) and the agency, press, insurer and part state from `save.jobBoard` (a board from before the station jobs
  * holds no insurer or part keys: nothing posted, counts 0, nothing aboard). Malformed pieces drop to "not posted yet".
  * @param {{jobs?: *, jobBoard?: *}|null} save
+ * @param {{herIncDeg?: number|null}} [o] her tilt now (a part posting saved before the capsule computes `byCapsule` from it)
  * @returns {{bounty: object|null, removal: object|null, press: object|null, insurer: object|null, part: object|null, state: object}}
  */
-export function boardFromSave(save) {
+export function boardFromSave(save, o = {}) {
   const s = save && typeof save === 'object' ? save : {};
   const b = s.jobBoard && typeof s.jobBoard === 'object' && s.jobBoard.v === 1 ? s.jobBoard : null;
   const state = newBoardState();
@@ -730,7 +814,7 @@ export function boardFromSave(save) {
   const removal = b ? removalFromSave(b.removal) : null;
   const press = b ? removalFromSave(b.press) : null;
   const insurer = b ? removalFromSave(b.insurer) : null;
-  const part = b ? removalFromSave(b.part) : null;
+  const part = b ? removalFromSave(b.part, o) : null;
   return {
     bounty: fromSave(s.jobs), removal: removal && removal.kind === 'removal' ? removal : null, press: press && press.kind === 'press' ? press : null,
     insurer: insurer && insurer.kind === 'insurer' ? insurer : null, part: part && part.kind === 'part' ? part : null, state,

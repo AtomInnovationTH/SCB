@@ -138,6 +138,7 @@ export class RefitPane {
     this._adapterDepsFn = deps.adapterDeps || null;
     this._getRecommended = deps.getRecommended || null;
     this._getAtStop = deps.getAtStop || null;
+    this._capsuleCity = typeof deps.capsuleCity === 'function' ? deps.capsuleCity : null;     // route-1107-d2 D-B3: () => her part goes home by reentry capsule
     /** Glass boot: every tap target wears the 44 pt HIG box. */
     this._glass = !!deps.glass;
     this._actuators = (deps.actuators && typeof deps.actuators === 'object') ? deps.actuators : null;
@@ -189,7 +190,7 @@ export class RefitPane {
     const ranked = [];
     (entries || []).forEach((entry, i) => {
       const shop = entry.shop || {};
-      if (!isShopRowOffered(shop)) return;   // a row the shop hides (standard wheels, pre-installed flower) is never offered here
+      if (!isShopRowOffered(shop, ctx)) return;   // a row the shop hides (standard wheels, pre-installed flower, the capsule outside a capsule city) is never offered here
       const level = ctx.levelOf ? (ctx.levelOf(entry.id) || 0) : 0;
       const maxed = !shop.consumable && Number.isFinite(shop.maxLevel) && level >= shop.maxLevel;
       if (maxed) return;                
@@ -232,7 +233,7 @@ export class RefitPane {
       return { kind: 'needs', text: `replaced by ${String(by).replace(/ Engine Gas$/, '')}` };
     }
     if (consumableFull(shop, ctx.res)) {
-      return { kind: 'needs', text: shop.effect === 'indiumCartridge' ? 'store full' : (/^replace/.test(shop.effect) ? 'as new' : 'tank full') };
+      return { kind: 'needs', text: shop.effect === 'indiumCartridge' ? 'store full' : (shop.effect === 'reentryCapsule' ? 'bay full' : (/^replace/.test(shop.effect) ? 'as new' : 'tank full')) };
     }
     if (ctx.prereqsMet && !ctx.prereqsMet(shop)) {
       const ids = [];
@@ -309,7 +310,7 @@ export class RefitPane {
     if (ctx.atStop === false) return 0;   // the tab's gold count must not promise a buy mid-mission
     for (const entry of (catalog || [])) {
       const shop = entry.shop || {};
-      if (!isShopRowOffered(shop)) continue;   // the gold count never counts a row the shop hides
+      if (!isShopRowOffered(shop, ctx)) continue;   // the gold count never counts a row the shop hides
       const level = ctx.levelOf ? (ctx.levelOf(entry.id) || 0) : 0;
       if (!shop.consumable && Number.isFinite(shop.maxLevel) && level >= shop.maxLevel) continue;
       if (ctx.prereqsMet && !ctx.prereqsMet(shop)) continue;
@@ -556,12 +557,16 @@ export class RefitPane {
     // a big piece waits for its fate and the stock has no sail: the sail ranks first (rankAlternatives).
     let needSail = false;
     try { needSail = pendingAboard().length > 0 && !((res && res.dragSails) > 0); } catch (_e) { needSail = false; }
+    // route-1107-d2 D-B3: does her part go home by reentry capsule (the capsule row's gate; the dependency reads her tilt, never the settings language)
+    let capsuleCity = false;
+    try { capsuleCity = !!(this._capsuleCity && this._capsuleCity()); } catch (_e) { capsuleCity = false; }
     return {
       credits,
       avg,
       res,
       atStop,
       needSail,
+      capsuleCity,
       levelOf,
       ownedHas: (id) => ownedShim.has(id),
       nameOf: (id) => CATALOG_BY_ID.get(id)?.shop?.name || null,

@@ -235,7 +235,7 @@ export function candidates(state, opts = {}) {
   if (partJob) {
     const sid = state.stationFieldId;
     const sf = sid ? (state.fields || []).find((f) => f.id === sid) : null;
-    if (sf && sid !== state.fieldId) stops.push({ kind: 'station', id: `station:${sid}`, fieldId: sid, altKm: sf.altKm, payCr: Math.max(0, partJob.payCr || 0), name: 'station' });
+    if (sf && sid !== state.fieldId && partJob.byCapsule !== true) stops.push({ kind: 'station', id: `station:${sid}`, fieldId: sid, altKm: sf.altKm, payCr: Math.max(0, partJob.payCr || 0), name: 'station' });      // route-1107-d2 D-B5: a capsule part has no station stop (no crewed station takes it)
     for (const s of stops) if (s.kind === 'piece' && s.big && isJobPiece(partJob, { fieldId: s.fieldId, fieldRow: s.fieldRow })) s.partJob = true;
     // a held piece is matched by the field it was caught in (the held entry's own keys), not the field she is in now (`h.stop.fieldId` is that one)
     for (const h of held) {
@@ -263,6 +263,9 @@ export function routeState(state, held = []) {
     // The walk keeps it on her mass through a satellite stop and drops it where the station pays it. The hold's metal and its SELL ALL value ride in as they are.
     ...(partJob ? { partKg: Number.isFinite(state.partKg) ? Math.max(0, state.partKg) : (state.partAboard > 0 ? state.partAboard : Math.max(0, (partJob.aboard && partJob.aboard.kg) || 0)) } : {}),
     ...(state.holdKg > 0 ? { holdKg: state.holdKg } : {}), ...(state.holdSaleCr > 0 ? { holdSaleCr: state.holdSaleCr } : {}),
+    // route-1107-d2 D-B5: the reentry capsules in her stock (their mass is inside `carriedKg`), and whether the part goes home by capsule (the walker then pays it at the first satellite
+    // stop, less the capsule's price, or at the first stop with a capsule aboard, and never at a station stop)
+    ...(state.capsulesAboard > 0 ? { capsulesAboard: Math.floor(state.capsulesAboard) } : {}), ...(partJob && partJob.byCapsule === true ? { byCapsule: true } : {}),
   };
 }
 
@@ -278,13 +281,14 @@ export function routeState(state, held = []) {
  */
 export function stopsText(steps) {
   const segs = [];
-  const open = (where, bare = false) => { const s = { where, big: [], other: 0, fill: 0, melt: [], bare, part: false }; segs.push(s); return s; };
+  const open = (where, bare = false) => { const s = { where, big: [], other: 0, fill: 0, melt: [], bare, part: false, capsule: false }; segs.push(s); return s; };
   let cur = open('here');
   for (const st of steps || []) {
     if (st.kind === 'catch') { if (st.big) cur.big.push(st.label || 'piece'); else cur.other++; }
     else if (st.kind === 'fill') cur.fill += st.n;
     else if (st.kind === 'melt') { cur.melt.push(st.label || 'piece'); }
     else if (st.kind === 'dispose' && st.fate === 'station') cur.part = true;      // the station takes the kept part (J5 Task 12)
+    else if (st.kind === 'dispose' && st.fate === 'capsule') cur.capsule = true;    // a reentry capsule takes it home (route-1107-d2 D-B5)
     else if (st.kind === 'move') {
       if (st.what === 'sat') cur = open('satellite', true);
       else if (st.what === 'push') cur = open('push', true);
@@ -298,6 +302,7 @@ export function stopsText(steps) {
     if (!s.big.length && !s.other && s.fill && !s.bare) parts.push(`+${s.fill} unscanned`);
     if (s.melt.length) parts.push(`melt ${s.melt.join(' + ')}`);
     if (s.part) parts.push('part handed over');
+    if (s.capsule) parts.push('part home by capsule');
     return parts.length ? `${s.where}: ${parts.join(', ')}` : s.where;
   });
   return words.length && !(words.length === 1 && words[0] === 'here') ? words.join(' \u2192 ') : 'stay here';
@@ -339,10 +344,11 @@ function stateKey(state, sortBy, maxStops) {
     (state.pieces || []).map((e) => [e.id, e.discovered === true, !!e.hazard, !!e.captured, e.piece && r(e.piece.mass, 10), e.posM ? [r(e.posM.x, 0.1), r(e.posM.y, 0.1), r(e.posM.z, 0.1)] : null]),
     (state.fields || []).map((f) => [f.id, (f.remaining || []).join(',')]),
     (state.held || []).map((h) => [h.id, h.piece && r(h.piece.mass, 10), h.melting === true]),
-    (state.jobPostings || []).map((j) => [j.kind, j.fieldId, j.row, j.done, j.missed, j.payCr, j.aboard ? j.aboard.kg : 0]),
+    (state.jobPostings || []).map((j) => [j.kind, j.fieldId, j.row, j.done, j.missed, j.payCr, j.aboard ? j.aboard.kg : 0, j.byCapsule === true]),
     r(state.captureCreditsEarned, 1),
     r(state.gapDeg, 100), r(state.incDeg, 100), state.stationFieldId ?? null, r(state.partAboard, 10),      // J5 Task 12: the station stop
     r(state.holdKg, 1000), r(state.holdSaleCr, 1), r(state.partKg, 10),                                    // hold-mass-1106: the hold's metal, its sale value, the kept part's kg
+    state.capsulesAboard > 0 ? Math.floor(state.capsulesAboard) : 0,                                       // route-1107-d2: the reentry capsules aboard
   ]);
 }
 

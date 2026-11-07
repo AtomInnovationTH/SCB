@@ -36,12 +36,12 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
-import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg, stationInOwnPlane, stationOrbit } from './NodeDrift.js'; import { finishBurn } from './RouteCost.js';     // route-1101 lane S2: the station node gap; route-1106 lane S4: the finish burn to the station's plane (one line: test-CodexAdr2026 pins GameFlowManager line numbers)
+import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg, stationInOwnPlane, stationOrbit, cityStation, cityStationKey } from './NodeDrift.js'; import { finishBurn } from './RouteCost.js';     // route-1101 lane S2: the station node gap; route-1106 lane S4: the finish burn to the station's plane (one line: test-CodexAdr2026 pins GameFlowManager line numbers)
 import { WAIT_ID } from './WhereNextRows.js';
 import {
   postFirstJob, postRemovalJob, postPressJob, postInsurerJob, postPartJob, isJobPiece, jobMember, bodyMassKg, bountyPayLine, removalPayLine, jobPayCr, jobPartPayCr,
   jobSupplementCr, insurerPayLine, partTakenLine, partPayCr, insurerRows, nextRemovalTier, pressDue, insurerDue, partDue, recordPosted, recordClosed, newBoardState,
-  boardToSave as jobBoardToSave, toSave as jobToSave, boardFromSave as jobBoardFromSave, JOBS,
+  boardToSave as jobBoardToSave, toSave as jobToSave, boardFromSave as jobBoardFromSave, JOBS, partGoesByCapsule, capsulesMassKg, capsuleMassKg, capsuleCanDrop, capsulePriceCr, capsuleDropLine, capsuleTooHighLine,
 } from './JobsBoard.js';
 import { buildWhereNextRows, STAY_ID, CALL_ID, PUSH_KIND, PUSH_PREFIX, OPEN_LINE, BERTH_LINE, BERTH_MISSION_LINE, STUCK_CALL_LINE, kgText, daysText } from './WhereNextRows.js';
 import { salvageGasKg, coldGasKgToPool, coldGasPoolToKg, engineGasKg } from './ResourceSystem.js';
@@ -790,12 +790,13 @@ export class GameFlowManager {
       // route-1101 lane S2: the station node gap as saved; a save from before it gets it from her node (NodeDrift.initialGapDeg)
       gameState.stationNodeGapDeg = Number.isFinite(save.stationNodeGapDeg) ? wrapDeg(save.stationNodeGapDeg) : null;
       if (gameState.stationNodeGapDeg == null) gameState.stationNodeGapDeg = this.stationGapDeg();
+      gameState.stationJoined = save.stationJoined === true && (typeof save.stationJoinedCity === 'string' ? save.stationJoinedCity : null) === cityStationKey(this._herIncDeg());   // route-1107-d2: an old save has none; a save joined at another city's object (her tilt now differs) is not joined
       // The big pieces she was still holding come back on their holders (nothing pays at load). AFTER the arms' reset and
       // the registry's restore; a game-over save carries none.
       if (save.gameOver !== true && Array.isArray(save.bigPieces)) this._restoreBigPieces(save.bigPieces);
       // The jobs board's postings and counts come back as they were (a save without the keys, or a malformed one, is "not posted yet", every count 0). An old
       // save holds only the Vespa bounty (`jobs`); its agency and press jobs are posted at the next list when due.
-      const board = save.gameOver !== true ? jobBoardFromSave(save) : { bounty: null, removal: null, press: null, insurer: null, part: null, state: newBoardState() };
+      const board = save.gameOver !== true ? jobBoardFromSave(save, { herIncDeg: this._herIncDeg() }) : { bounty: null, removal: null, press: null, insurer: null, part: null, state: newBoardState() };
       this._job = board.bounty;
       this._removalJob = board.removal;
       this._pressJob = board.press;
@@ -982,6 +983,7 @@ export class GameFlowManager {
       player.orbit.semiMajorAxis = Constants.EARTH_RADIUS + Constants.START_ALTITUDE;
       player.orbit.trueAnomaly = 0;
       gameState.stationNodeGapDeg = null;   // route-1101 lane S2: set again from her start node by _applyStartLocation just below
+      gameState.stationJoined = false;
       this._applyStartLocation();
 
       // Reset target selection (emits TARGET_CLEARED → DebrisWireframe self-clears); silent: not a real target loss, so
@@ -1112,7 +1114,7 @@ export class GameFlowManager {
     // --- Upgrade / save events ---
 
     eventBus.on(Events.UPGRADE_PURCHASED, (data) => {
-      this.applyUpgradeEffect(data);
+      this.applyUpgradeEffect(data); if (data && data.id === 'reentry_capsule') this._capsuleHandOver();     // plan route-1107-d2 D-B4: a capsule bought with a part aboard drops it at once
       this.saveGame();
     });
 
@@ -1821,6 +1823,7 @@ export class GameFlowManager {
     // route-1101 lane S2: a new game's node gap to the station, from her start city's node (English: -169.6 deg). A load sets it
     // again from the save right after this (or from her node, for a save from before it).
     gameState.stationNodeGapDeg = initialGapDeg(orbit.raan * 180 / Math.PI);
+    gameState.stationJoined = false;     // route-1107-d2: a new start is in her own plane
 
     // The field shares the player's plane from the SAME orbit computation. The typeof guard keeps legacy mocks
     // (no reseatFieldRegime) working.
@@ -2068,7 +2071,7 @@ export class GameFlowManager {
       delete resources.xenon;
       delete resources.coldGas;
       delete resources.indiumStoreKg;   // a fresh attempt starts the indium store empty too
-      delete resources.dragSails;       // ... and with no drag sails
+      delete resources.dragSails; delete resources.capsules;       // ... and with no drag sails and no reentry capsules
     }
     const upgrades = shopScreen.getSerializableUpgrades();
 
@@ -2122,6 +2125,7 @@ export class GameFlowManager {
     }
     // route-1101 lane S2: the station node gap, with the fields block (after it, not beside `shipDays`: lane W2 adds its line there)
     if (fieldsSave && Number.isFinite(gameState.stationNodeGapDeg)) saveData.stationNodeGapDeg = gameState.stationNodeGapDeg;
+    if (fieldsSave && gameState.stationJoined === true) { saveData.stationJoined = true; saveData.stationJoinedCity = cityStationKey(this._herIncDeg()); }     // route-1107-d2: with the city key of her tilt (null at New York), so a load under another language does not keep it
     // The worn parts (ShipWear.serialize: null while nothing is worn, so a fresh save is byte-identical).
     const wearSave = shipWear.serialize();
     if (wearSave) saveData.shipWear = wearSave;
@@ -2296,7 +2300,7 @@ export class GameFlowManager {
    * @param {object} sat the satellite @param {() => void} start the mission transition kept for the field pick
    */
   _arriveAtSatellite(sat, start) {
-    this._enterBerth(sat, false);
+    this._enterBerth(sat, false); this._capsuleHandOver();    // fix F2: a capsule aboard takes a kept part home at the satellite berth too (the route walker pays it there)
     this.saveGame();
     this._openWhereNext(start, { said: true });
   }
@@ -3056,7 +3060,8 @@ export class GameFlowManager {
 
   /**
    * What the hold weighs, kg (plan hold-mass-1106, DECISIONS §33 row 11): every kg in the cargo hold (all entries) plus the part
-   * kept for the station's part job while it is aboard (`_partAboard`, which hides a done or missed job). Her mass budget
+   * kept for the station's part job while it is aboard (`_partAboard`, which hides a done or missed job) plus the reentry capsules in her stock
+   * (plan route-1107-d2 D-B3: 56.3 kg each, `ResourceSystem.capsules`). Her mass budget
    * (`ArmManager.getHoldMassKg`) reads this: ship mass, the gas-flow law, every trip and route bill, the HUD. No allocation.
    * @returns {number}
    */
@@ -3065,7 +3070,13 @@ export class GameFlowManager {
     const metal = cs && typeof cs.getTotalMassKg === 'function' ? cs.getTotalMassKg() : 0;
     const part = this._partAboard();
     const partKg = part && Number.isFinite(part.kg) && part.kg > 0 ? part.kg : 0;
-    return (metal > 0 ? metal : 0) + partKg;
+    return (metal > 0 ? metal : 0) + partKg + this._capsulesKg();
+  }
+
+  /** @private The reentry capsules in her stock, kg (0 without a ResourceSystem or with none). */
+  _capsulesKg() {
+    const rs = this._refs && this._refs.resourceSystem;
+    return rs ? capsulesMassKg(rs.capsules) : 0;
   }
 
   /**
@@ -3094,7 +3105,7 @@ export class GameFlowManager {
     if (!s.entries.some((e) => e.metalId === id) && s.entries.length >= (Constants.CARGO_CAPACITY_SLOTS || 20)) return 0;
     // The kept part of the station's part job (`_meltKeepPart`) sits in the hold until the station takes it: its kg count against the room, and in her live mass (`holdMassKg`)
     const partKg = this._partJob && this._partJob.aboard && Number.isFinite(this._partJob.aboard.kg) ? this._partJob.aboard.kg : 0;
-    return Math.max(0, s.capacityKg - s.totalMassKg - partKg);
+    return Math.max(0, s.capacityKg - s.totalMassKg - partKg - this._capsulesKg());     // the reentry capsules in her stock take hold room too (route-1107-d2 D-B3)
   }
 
   /** @private Put melted metal in the hold, listed so that a sale of 50 kg or more nets the in-orbit price per kg. */
@@ -3470,6 +3481,12 @@ export class GameFlowManager {
     post.aboard = { kg };
     this._meltFinishPart(m, p, true);
     if (p.st !== 3) { post.aboard = null; return false; }          // (cannot happen: a kept part makes no metal, so the hold's room never stops it)
+    if (post.byCapsule === true) {            // plan route-1107-d2 D-B4: no crewed station takes it; a reentry capsule takes it home
+      const rs = this._refs && this._refs.resourceSystem;
+      const have = rs && rs.capsules > 0;
+      this._meltSay(`The ${Math.round(kg)} kg part of the ${pieceName(d)} is kept whole for a reentry capsule: ${have ? 'it goes home in your capsule at the next stop.' : `buy one at the resupply satellite (${Math.round(capsulePriceCr()).toLocaleString('en-US')} cr) and it goes home.`}`, 'info');
+      return true;
+    }
     this._meltSay(`The ${Math.round(kg)} kg part of the ${pieceName(d)} is kept whole for the station's return capsule: fly to the station field lined up with it and the station takes the part.`, 'info');
     return true;
   }
@@ -3484,6 +3501,7 @@ export class GameFlowManager {
    */
   _stationHandOver() {
     const post = this._partJob;
+    if (post && post.byCapsule === true) return this._capsuleHandOver();     // plan route-1107-d2 D-B4: the part goes home by capsule, never by the station (its four callers need no edit)
     if (!post || post.done || post.missed || !post.aboard) return false;
     if (!this._bigPiecesOn()) return false;                        // the map off: no station, no field (`stationLinedUp` is true then)
     if (this._trip && this._trip.isActive() && !this._trip.isChoosing()) return false;     // a trip under way (one leaving the station field still reads lined up)
@@ -3493,6 +3511,81 @@ export class GameFlowManager {
     const paid = scoringSystem.awardDisposal(cr);
     post.partKg = post.aboard.kg;
     const line = partTakenLine(post, paid);
+    post.aboard = null;
+    post.paidCr = (post.paidCr || 0) + paid;
+    post.done = true;
+    this._closeJob(post);
+    eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: line, priority: paid > 0 ? 'good' : 'info', _keep: true });
+    this.saveGame();
+    return true;
+  }
+
+  /**
+   * Does her part go home by reentry capsule now (route-1107-d2 D-B1: her tilt is not the ISS's)? While a part posting is open (aboard or not) the posting's own `byCapsule` answers
+   * (a save loaded under another city keeps the way the part was posted: her tilt after a load comes from the settings language, not the save); with none open, her tilt does.
+   * @returns {boolean}
+   */
+  partByCapsule() {
+    const post = this._partJob;
+    if (post && !post.done && !post.missed) return post.byCapsule === true;
+    return partGoesByCapsule(this._herIncDeg());
+  }
+
+  /**
+   * Is the reentry capsule on sale now (route-1107-d2 fix F4)? Only while a part posting that goes by capsule is open (the part aboard or not yet kept), so a capsule cannot be bought with no job
+   * and ride as unsellable mass. main.js hands this to the shop and the refit pane as their `capsuleCity`.
+   * @returns {boolean}
+   */
+  capsuleOffered() {
+    const post = this._partJob;
+    return !!post && !post.done && !post.missed && post.byCapsule === true;
+  }
+
+  /**
+   * @private What the where-next rows need about the reentry capsule (route-1107-d2 D-B5): `{byCapsule, partAboard, partKg, capsules, payCr, priceCr}` while the part job is
+   * open and goes home by capsule; `{byCapsule: false}` otherwise (New York, no part job).
+   */
+  _capsuleRowsOpts() {
+    const post = this._partJob;
+    if (!post || post.done || post.missed || post.byCapsule !== true) return { byCapsule: false };
+    const rs = this._refs && this._refs.resourceSystem;
+    const ab = this._partAboard();
+    return {
+      byCapsule: true, partAboard: !!ab, partKg: ab ? ab.kg : 0, capsules: rs && rs.capsules > 0 ? Math.floor(rs.capsules) : 0,
+      payCr: partPayCr(), priceCr: capsulePriceCr(),
+    };
+  }
+
+  /**
+   * @private The reentry capsule's drop (plan route-1107-d2 D-B4; JobsBoard kind 'part' with `byCapsule`): the part job is open with the part aboard, a capsule is in her stock, no trip is
+   * under way, and the capsule's motor can bring the part down from her height (`capsuleCanDrop`): pays `partPayCr()` the way the station does (`awardDisposal`), uses up one capsule
+   * (its mass leaves hers with the part), closes the job paid and says one HOUSTON line. Above the motor's reach: one line a ship day, nothing paid. No capsule: nothing (the satellite sells it;
+   * buying one calls this at once). Called by `_stationHandOver` (FIELD_ARRIVED, MISSION_START, a load, a wait) and by a capsule purchase.
+   * @returns {boolean} true = the part went home
+   */
+  _capsuleHandOver() {
+    const post = this._partJob;
+    if (!post || post.byCapsule !== true || post.done || post.missed || !post.aboard) return false;
+    const rs = this._refs && this._refs.resourceSystem;
+    if (!rs || !(rs.capsules > 0)) return false;
+    if (!this._bigPiecesOn()) return false;
+    if (this._trip && this._trip.isActive() && !this._trip.isChoosing()) return false;
+    const reg = this._refs && this._refs.fieldRegistry;
+    const altKm = reg && typeof reg.altitudeKm === 'function' ? reg.altitudeKm() : null;
+    if (!Number.isFinite(altKm)) return false;
+    if (!capsuleCanDrop(altKm, post.aboard.kg)) {
+      const day = Math.floor(gameState.shipDays || 0);
+      if (this._capsuleSaidDay !== day) {
+        this._capsuleSaidDay = day;
+        eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: capsuleTooHighLine(post, altKm), priority: 'info', _keep: true });
+      }
+      return false;
+    }
+    rs.capsules = Math.max(0, Math.floor(rs.capsules) - 1);
+    if (typeof rs._syncToPlayer === 'function') rs._syncToPlayer();
+    const paid = scoringSystem.awardDisposal(partPayCr());
+    post.partKg = post.aboard.kg;
+    const line = capsuleDropLine(post, paid);
     post.aboard = null;
     post.paidCr = (post.paidCr || 0) + paid;
     post.done = true;
@@ -3625,6 +3718,7 @@ export class GameFlowManager {
       bigPieces: this._bigPiecesOn() ? bigPieces.pendingAboard() : [],      // the push rows and the satellite rows' hand-over words
       job: this._jobForRows(),                                              // the jobs board's line and the tag on its field's row
       station: this._stationRowsOpts(),                                     // route-1101 lane S2: the wait row and the station field's note
+      capsule: this._capsuleRowsOpts(),                                     // route-1107-d2 D-B5: the part goes home by reentry capsule (no station note; the satellite row's capsule note)
     };
   }
 
@@ -3672,7 +3766,7 @@ export class GameFlowManager {
     if (!this._partJob || tjGone) {
       const insurerOpen = !!this._insurerJob && !this._insurerJob.done && !this._insurerJob.missed;
       const skipRows = insurerOpen || (this._jobState.insurerPosted || 0) < Constants.BIG_PIECES.JOB_RULES.D_MAX ? insurerRows() : [];
-      const p = partDue(this._jobState, mission) ? postPartJob(reg, { exclude: this._openJobPieces(), skipRows }) : null;
+      const p = partDue(this._jobState, mission) ? postPartJob(reg, { exclude: this._openJobPieces(), skipRows, byCapsule: partGoesByCapsule(this._herIncDeg()) }) : null;
       if (p) recordPosted(this._jobState, p);
       this._partJob = p;
     }
@@ -4150,18 +4244,29 @@ export class GameFlowManager {
     return o && Number.isFinite(o.raan) ? initialGapDeg(o.raan * 180 / Math.PI) : null;
   }
 
-  /** @private A leg's days have gone on the ship's clock: the gap moves by the station's rate minus hers over them (NodeDrift.gapChangeOverLeg). */
+  /** @private A leg's days have gone on the ship's clock: the gap moves by the station's rate minus hers over them (NodeDrift.gapChangeOverLeg).
+   *  Any leg of more than 0 days takes her out of the station object's plane again (`stationJoined`, route-1107-d2). */
   _advanceStationGap(leg) {
+    if (leg && leg.days > 0) gameState.stationJoined = false;
     const g = this.stationGapDeg();
     const inc = this._herIncDeg();
     if (!leg || !Number.isFinite(g) || !Number.isFinite(inc)) return;
     gameState.stationNodeGapDeg = wrapDeg(g + gapChangeOverLeg(leg, inc));
   }
 
+  /** The real object her start protects (`Constants.CITY_STATIONS` entry, `NodeDrift.cityStation`), or null at New York (the ISS). main.js wires the boss here. */
+  stationObject() { return cityStation(this._herIncDeg()); }
+
+  /** @private The station object's short name for her start ("Hubble"), or null for New York (the ISS: lines say "the station"; route-1107-d2). */
+  _stationName() {
+    const c = this.stationObject();
+    return c ? c.short : null;
+  }
+
   /**
-   * The station's plane in her scene (route-1106 lane S4, D2): for the start whose tilt is the station's (`NodeDrift.stationInOwnPlane`:
-   * the English / New York start) `{inclination, raan}` in radians, the station's tilt and her node plus the gap. Any other start: null
-   * (the caller keeps her plane, DECISIONS §60 row 5).
+   * The station object's plane in her scene (route-1106 lane S4, D2; route-1107-d2: every start): `{inclination, raan}` in radians, the
+   * object's tilt (the ISS's 51.6 deg, or the start city's real object) and her node plus the gap. Null for a tilt that is no start's
+   * or without a gap or a ship.
    * @returns {{inclination: number, raan: number}|null}
    */
   stationPlane() {
@@ -4169,40 +4274,50 @@ export class GameFlowManager {
     const gap = this.stationGapDeg();
     const o = this._refs && this._refs.player && this._refs.player.orbit;
     if (!stationInOwnPlane(inc) || !Number.isFinite(gap) || !o || !Number.isFinite(o.raan)) return null;
-    return { inclination: stationOrbit().incDeg * Math.PI / 180, raan: o.raan + gap * Math.PI / 180 };
+    return { inclination: stationOrbit(inc).incDeg * Math.PI / 180, raan: o.raan + gap * Math.PI / 180 };
   }
 
   /**
-   * The finish burn to the station's plane (route-1106 lane S4, D4): she is lined up and a station action is due (the boss is about to arm,
-   * or a part is to be handed over). Prices `RouteCost.finishBurn` on the registry's `burnInputs`; refuses (false, nothing billed, one line
-   * naming the gas) when the gas is short or the engine worn out; else bills the gas, adds the days, closes the gap and says one line.
-   * True without billing when the field map is off, the gap is 0, or her start's tilt is not the station's.
+   * The finish burn to the station object's plane (route-1106 lane S4, D4; route-1107-d2: every start, priced at the object's height with
+   * the tilt difference counted): she is lined up and a station action is due (the boss is about to arm, or a part is to be handed over).
+   * Prices `RouteCost.finishBurn` on the registry's `burnInputs`; refuses (false, nothing billed, one line naming the gas) when the gas is
+   * short or the engine worn out; else bills the gas, adds the days, closes the gap, sets `stationJoined` and says one line. While joined
+   * (no leg of days since the last finish) it bills nothing. True without billing when the field map is off or the plane angle is under
+   * 1e-4 deg.
    * @returns {boolean} true = the finish is flown (or nothing was owed)
    */
   finishStationBurn() {
     const reg = this._refs && this._refs.fieldRegistry;
     if (!reg || typeof reg.isOn !== 'function' || !reg.isOn()) return true;
     const gap = this.stationGapDeg();
-    if (!this.stationPlane() || !Number.isFinite(gap) || gap === 0) return true;
-    if (Math.abs(gap) < 1e-4) { gameState.stationNodeGapDeg = 0; return true; }     // float residue of a wait (under 0.02 m/s): nothing to bill
+    if (!this.stationPlane() || !Number.isFinite(gap)) return true;
+    if (gameState.stationJoined) return true;                                       // she is in the object's plane: nothing more to fly
     const inp = typeof reg.burnInputs === 'function' ? reg.burnInputs() : null;
     const player = this._refs.player;
     if (!inp || !player || typeof player.billBurnGas !== 'function') return true;
     const fb = finishBurn({ gapDeg: gap, herIncDeg: this._herIncDeg(), massKg: inp.massKg, thrustN: inp.thrustN, ispS: inp.ispS, gasAboardKg: inp.gasAboardKg });
+    if (fb.dvMps === 0 && fb.gasKg === 0 && fb.days === 0) {                        // no plane angle to close (a gap of 0 at New York's tilt; float residue of a wait)
+      if (Math.abs(gap) < 1e-4) gameState.stationNodeGapDeg = 0;
+      gameState.stationJoined = true;
+      return true;
+    }
+    const nm = this._stationName();
+    const plane = nm ? `${nm}'s plane` : `the station's plane`;
     const say = (text, priority) => eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true });
     if (!fb.feasible || inp.wornOut) {
       // the boss and the hand-over both ask on an arrival and again at the mission start: one line per ship day and gap
       const last = this._finishRefused;
       if (!last || last.shipDays !== gameState.shipDays || last.gapDeg !== gap) {
         this._finishRefused = { shipDays: gameState.shipDays, gapDeg: gap };
-        say(inp.wornOut ? `The finish burn to the station's plane needs ${kgText(fb.gasKg)} kg of gas and a working engine.` : `The finish burn to the station's plane needs ${kgText(fb.gasKg)} kg of gas.`, 'warn');
+        say(inp.wornOut ? `The finish burn to ${plane} needs ${kgText(fb.gasKg)} kg of gas and a working engine.` : `The finish burn to ${plane} needs ${kgText(fb.gasKg)} kg of gas.`, 'warn');
       }
       return false;
     }
     player.billBurnGas(fb.dvMps);
     gameState.shipDays += fb.days;
     gameState.stationNodeGapDeg = 0;
-    say(`Finish burn to the station's plane: ${Math.round(fb.dvMps)} m/s, ${kgText(fb.gasKg)} kg gas, ${daysText(fb.days)}.`, 'info');
+    gameState.stationJoined = true;
+    say(`Finish burn to ${plane}: ${Math.round(fb.dvMps)} m/s, ${kgText(fb.gasKg)} kg gas, ${daysText(fb.days)}.`, 'info');
     return true;
   }
 
@@ -4216,17 +4331,18 @@ export class GameFlowManager {
     const reg = this._refs && this._refs.fieldRegistry;
     if (!reg || typeof reg.isOn !== 'function' || !reg.isOn()) return true;
     if ((typeof reg.isBerthed === 'function' && reg.isBerthed()) || (typeof reg.isFree === 'function' && reg.isFree())) return false;
-    const id = stationFieldId(reg);
+    const id = stationFieldId(reg, this._herIncDeg());
     return !!id && reg.currentId() === id && isLinedUp(this.stationGapDeg());
   }
 
-  /** @private The "where next" rows' `station` option: the boss still to come (mission 5 on, a boss wired and not armed, running or done), the gap, her tilt. */
+  /** @private The "where next" rows' `station` option: the boss still to come (mission 5 on, a boss wired and not armed, running or done), the gap, her tilt,
+   *  the station object's short name (null at New York) and whether she is joined to its plane (no finish to show). */
   _stationRowsOpts() {
     const cfg = Constants.ISS_BOSS;
     const boss = this._issBoss;
     const pending = !!(cfg && boss && scoringSystem.getMissionNumber() >= cfg.MISSION
       && !(boss.isArmed() || boss.isActive() || boss.hasCompleted()));
-    return { pending, gapDeg: this.stationGapDeg(), incDeg: this._herIncDeg(), partCr: this._partAboard() ? partPayCr() : 0 };
+    return { pending, gapDeg: this.stationGapDeg(), incDeg: this._herIncDeg(), partCr: this._partAboard() ? partPayCr() : 0, name: this._stationName(), joined: gameState.stationJoined === true };
   }
 
   /** @private The part she carries for the station's part job (`{kg}`), or null: the station's row says what it pays while one is aboard. */
@@ -4257,10 +4373,10 @@ export class GameFlowManager {
       this._stationHandOver();                                // route-1101 J5: a wait that lines her up at the station field with a part aboard
       const f = reg.fieldById(row.stationFieldId);
       const atStation = !!f && reg.currentId() === f.id;      // she waited at the station field itself: nothing to fly
-      if (f) eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: atStation ? `The station's orbit is lined up.` : `The station's orbit lines up from here. Fly to the ${Math.round(f.altKm)} km field.`, priority: 'info', _keep: true });
+      if (f) { const who = this._stationName(); const own = who ? `${who}'s` : `The station's`; eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: atStation ? `${own} orbit is lined up.` : `${own} orbit lines up from here. Fly to the ${Math.round(f.altKm)} km field.`, priority: 'info', _keep: true }); }
       this.saveGame();
       this._openWhereNext(start, { said: !!f });
-    }, { days: row.days, altKm: row.altKm });
+    }, { days: row.days, altKm: row.altKm, name: this._stationName() });
     if (began) return true;
     trip.choose(choice, { again: true });
     return false;
@@ -5074,8 +5190,9 @@ export class GameFlowManager {
       jobPostings: this.jobPostings?.() ?? [],
       // Plan route-1101 J5 Task 12: what the route walker needs to price the station stop (the node gap moves with the route's days; the part aboard is paid
       // at the station field when she arrives lined up)
-      gapDeg: this.stationGapDeg(), incDeg: this._herIncDeg(), stationFieldId: stationFieldId(reg),
+      gapDeg: this.stationGapDeg(), incDeg: this._herIncDeg(), stationFieldId: stationFieldId(reg, this._herIncDeg()),      // (the tilt selects the city's station field after lane A; ignored before)
       partAboard: this._partAboard() ? this._partAboard().kg : 0,
+      capsulesAboard: this._refs.resourceSystem && this._refs.resourceSystem.capsules > 0 ? Math.floor(this._refs.resourceSystem.capsules) : 0,      // route-1107-d2 D-B5: the capsules in her stock (their mass is in `carriedKg`)
       // Plan hold-mass-1106 H5: the metal already in the hold (kg, without the kept part) and what SELL ALL pays for it now: the walk carries the kg until the
       // route's first satellite stop sells it (RouteCost `holdKg`, `holdSaleCr`)
       holdKg: holdKgNow, holdSaleCr: this._strandedCargoCredits(),

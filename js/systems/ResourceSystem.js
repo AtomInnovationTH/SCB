@@ -178,6 +178,8 @@ export class ResourceSystem {
     this.indiumStoreKg = 0;
     // Drag sails aboard (a count; each is BIG_PIECES.SAIL.massKg of her live mass). A new run starts with none.
     this.dragSails = 0;
+    // Reentry capsules aboard (a count; each is `capsuleMassKg()` of her live mass through `GameFlowManager.holdMassKg`; plan route-1107-d2 D-B3). A new run starts with none.
+    this.capsules = 0;
     // Two cumulative tallies in KILOGRAMS of engine gas for the range map's "this mission" line (MissionGasTally keeps its
     // own baseline and rebases if these drop): all drawn from the engine pool (every billed burn, trips included: the
     // tally decides what to count) and what SALVAGE loaded (a shop buy does not count). Zero on reset() and restore(); never saved.
@@ -707,6 +709,7 @@ export class ResourceSystem {
       coldGas: this.coldGas,
       indiumStoreKg: this.indiumStoreKg,   // saved like coldGas (an old save has none and loads as 0)
       dragSails: this.dragSails,           // the sail stock (an old save has none and loads as 0)
+      capsules: this.capsules,             // the reentry-capsule stock (an old save has none and loads as 0)
       batteryMax: this.batteryMax,
       // The base this `batteryMax` was written against. A worn battery (ShipWear, the deep-cycle fade) can sit below the new
       // base, which `restore` would otherwise read as a legacy 100 Wh save and rebase upward. Only a save WITHOUT this key is rebased.
@@ -772,6 +775,7 @@ export class ResourceSystem {
       ? clampLevel(data.indiumStoreKg, Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG)
       : 0;
     this.dragSails = Number.isFinite(data.dragSails) ? Math.max(0, Math.floor(data.dragSails)) : 0;
+    this.capsules = Number.isFinite(data.capsules) ? Math.min(Constants.PART_CAPSULE.MAX_ABOARD, Math.max(0, Math.floor(data.capsules))) : 0;
     this.xenonDrawnKg = 0;   // a load starts the gas tallies again (MissionGasTally rebases)
     this.salvageGasKg = 0;
     this.battery = ResourceSystem.startCharge(this.batteryMax);
@@ -960,6 +964,17 @@ export class ResourceSystem {
     return this.dragSails;
   }
 
+  /**
+   * One bought reentry capsule goes into the stock AT THE CLICK, at most `PART_CAPSULE.MAX_ABOARD` (its mass counts in hers through `GameFlowManager.holdMassKg`).
+   * @returns {number} the stock after the load
+   */
+  loadCapsule() {
+    this.capsules = Math.min(Constants.PART_CAPSULE.MAX_ABOARD, Math.max(0, Math.floor(this.capsules) || 0) + 1);
+    this._syncToPlayer();
+    eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'reentryCapsule', value: 1 });
+    return this.capsules;
+  }
+
   applyUpgrade(data) {
     switch (data.effect) {
       case 'xenonMax':
@@ -981,6 +996,9 @@ export class ResourceSystem {
       case 'dragSail':
         this.loadDragSail();
         return true;   // loadDragSail synced and emitted RESOURCE_UPGRADED itself
+      case 'reentryCapsule':
+        this.loadCapsule();
+        return true;   // loadCapsule synced and emitted RESOURCE_UPGRADED itself
       case 'coldGasMax':
         this.coldGasMax += data.value;
         this.coldGas = Math.min(this.coldGas + data.value, this.coldGasMax);
@@ -1033,6 +1051,7 @@ export class ResourceSystem {
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
     this.indiumStoreKg = 0;   // a new run (retry, game-over continue) starts the indium store empty
     this.dragSails = 0;
+    this.capsules = 0;        // ... and no reentry capsules
 
     this.xenonDrawnKg = 0;    // the gas tallies start again (MissionGasTally rebases)
     this.salvageGasKg = 0;

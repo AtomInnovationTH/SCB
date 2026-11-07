@@ -9,14 +9,16 @@
  * node 123.4 deg (`Constants.ISS_BOSS.ORBIT`); the GAP is the station's node minus hers, wrapped to (-180, 180]. Each day the gap changes
  * by the station's rate minus hers: higher than the station she turns slower, so the gap falls (she gains on the station).
  *
- * The first step (station-drift doc §5): only the gap moves, with ship days. Her tilt and her scene orbit stay as they are (D6). For the
- * start whose tilt is the station's (`stationInOwnPlane`, route-1106 lane S4) the station pieces are built in the station's own plane
- * (her node + the gap) and the finish burn that closes the gap is billed (`RouteCost.finishBurn`); every other start keeps its pieces in
- * her plane (DECISIONS §60 row 5) and bills no finish.
+ * The first step (station-drift doc §5): only the gap moves, with ship days. Her tilt and her scene orbit stay as they are (D6). Every
+ * start has a station object (route-1107-d2): New York the ISS (408 km, 51.6 deg), each of the six cities its real object
+ * (`Constants.CITY_STATIONS`, picked by her tilt: `cityStation`); the station pieces are built in the object's own plane (her node + the
+ * gap) and the finish burn that closes the gap is billed (`RouteCost.finishBurn`). Every function that reads the station's orbit takes
+ * her tilt (for the ones that already took `incDeg`, that is it); with none, the ISS.
  * @module systems/NodeDrift
  */
 
 import { Constants } from '../core/Constants.js';
+import { LANGUAGES } from '../core/Languages.js';
 
 /** The J2 formula's equatorial radius (WGS-84, km): `a = 6378.137 + height`, as the station-drift doc's probe (its line 4). */
 export const J2_RADIUS_KM = 6378.137;
@@ -36,26 +38,63 @@ export function nodeRateDegPerDay(altKm, incDeg) {
   return -1.5 * n * Constants.J2 * (J2_RADIUS_KM / a) ** 2 * Math.cos(incDeg * D2R) * SECONDS_PER_DAY * R2D;
 }
 
-/** The station's orbit (`Constants.ISS_BOSS.ORBIT`: 408 km, 51.6 deg, node 123.4 deg). */
-export function stationOrbit() {
-  const o = (Constants.ISS_BOSS && Constants.ISS_BOSS.ORBIT) || {};
-  return { altKm: o.altKm ?? 408, incDeg: o.incDeg ?? 51.6, nodeDeg: o.raanDeg ?? 123.4 };
+/**
+ * The city whose start tilt is her tilt, within 0.05 deg (`Languages.js`), for the six starts that protect a real object other than the
+ * ISS (`Constants.CITY_STATIONS`, route-1107-d2). Null for New York's 51.6 deg, for any other tilt and for a tilt that is not finite.
+ * @param {number} [herIncDeg] @returns {string|null} the start language code ('th', 'ja', ...)
+ */
+export function cityStationKey(herIncDeg) {
+  if (!Number.isFinite(herIncDeg)) return null;
+  const cities = Constants.CITY_STATIONS || {};
+  for (const l of LANGUAGES) {
+    if (cities[l.code] && Math.abs(herIncDeg - l.incDeg) <= 0.05) return l.code;
+  }
+  return null;
 }
 
 /**
- * Does her tilt equal the station's (51.6 deg, the English / New York start)? Only then the station sits in its own plane in the scene and
- * the finish burn is billed (route-1106 lane S4, D1); the six other starts keep today's behaviour until lane D2.
+ * The object her start protects: its `Constants.CITY_STATIONS` entry `{ name, short, satcat, altKm, incDeg, massKg, canDodge }`, or null
+ * for New York (the ISS), for any other tilt and for a tilt that is not finite (route-1107-d2 D-A4).
+ * @param {number} [herIncDeg] @returns {object|null}
+ */
+export function cityStation(herIncDeg) {
+  const k = cityStationKey(herIncDeg);
+  return k ? Constants.CITY_STATIONS[k] : null;
+}
+
+/**
+ * The station's orbit for her start: the city's real object (`Constants.CITY_STATIONS`: its height and tilt; the node is the ISS
+ * constant's, GCAT has none, route-1107-d2 D-A4) or, for New York and for no tilt, the ISS (`Constants.ISS_BOSS.ORBIT`: 408 km, 51.6 deg,
+ * node 123.4 deg).
+ * @param {number} [herIncDeg] her tilt @returns {{altKm: number, incDeg: number, nodeDeg: number}}
+ */
+export function stationOrbit(herIncDeg) {
+  const o = (Constants.ISS_BOSS && Constants.ISS_BOSS.ORBIT) || {};
+  const nodeDeg = o.raanDeg ?? 123.4;
+  const c = cityStation(herIncDeg);
+  if (c) return { altKm: c.altKm, incDeg: c.incDeg, nodeDeg };
+  return { altKm: o.altKm ?? 408, incDeg: o.incDeg ?? 51.6, nodeDeg };
+}
+
+/**
+ * Is the station in a plane she can be put in by the finish burn? True for the seven start tilts (New York's 51.6 deg and the six
+ * cities': each protects its own real object, route-1107-d2), false for any other tilt and for a tilt that is not finite.
  * @param {number} herIncDeg @returns {boolean} within 0.05 deg
  */
 export function stationInOwnPlane(herIncDeg) {
-  return Number.isFinite(herIncDeg) && Math.abs(herIncDeg - stationOrbit().incDeg) <= 0.05;
+  if (!Number.isFinite(herIncDeg)) return false;
+  return Math.abs(herIncDeg - stationOrbit().incDeg) <= 0.05 || cityStationKey(herIncDeg) !== null;
 }
 
-/** The station's own node rate (deg/day): -4.98 at 408 km, 51.6 deg (doc §1). */
-export function stationRateDegPerDay() {
-  const s = stationOrbit();
+/**
+ * The station object's own node rate (deg/day): -4.98 at 408 km, 51.6 deg for the ISS (doc §1); a city's object at its height and tilt.
+ * @param {number} [herIncDeg] her tilt (none: the ISS)
+ */
+export function stationRateDegPerDay(herIncDeg) {
+  const s = stationOrbit(herIncDeg);
   return nodeRateDegPerDay(s.altKm, s.incDeg);
 }
+
 
 /** An angle wrapped to (-180, 180]. @param {number} deg @returns {number} */
 export function wrapDeg(deg) {
@@ -88,12 +127,13 @@ export function isLinedUp(gapDeg) {
 }
 
 /**
- * The gap's change over `days` spent at one height (a wait): (station rate - her rate) x days.
+ * The gap's change over `days` spent at one height (a wait): (the station object's rate - her rate) x days; `incDeg` is her tilt, which
+ * also picks the station object (`stationOrbit`).
  * @param {number} altKm @param {number} incDeg her tilt @param {number} days @returns {number} deg
  */
 export function gapChangeAtHeight(altKm, incDeg, days) {
   if (!(days > 0)) return 0;
-  return (stationRateDegPerDay() - nodeRateDegPerDay(altKm, incDeg)) * days;
+  return (stationRateDegPerDay(incDeg) - nodeRateDegPerDay(altKm, incDeg)) * days;
 }
 
 /**
@@ -136,7 +176,7 @@ export function gapChangeOverLeg(leg, incDeg) {
     if (!Number.isFinite(to)) return 0;
     herRate = from === to ? nodeRateDegPerDay(to, incDeg) : 0.5 * (nodeRateDegPerDay(from, incDeg) + nodeRateDegPerDay(to, incDeg));
   }
-  return (stationRateDegPerDay() - herRate) * leg.days;
+  return (stationRateDegPerDay(incDeg) - herRate) * leg.days;
 }
 
 /**
@@ -150,7 +190,7 @@ export function waitDaysToLineUp({ gapDeg, waitKm, incDeg, tripChangeDeg = 0 }) 
   if (!Number.isFinite(gapDeg) || !Number.isFinite(waitKm) || !Number.isFinite(incDeg)) return Infinity;
   const x = gapDeg + (Number.isFinite(tripChangeDeg) ? tripChangeDeg : 0);
   if (isLinedUp(x)) return 0;
-  const d = stationRateDegPerDay() - nodeRateDegPerDay(waitKm, incDeg);  // deg/day the gap moves while she waits
+  const d = stationRateDegPerDay(incDeg) - nodeRateDegPerDay(waitKm, incDeg);  // deg/day the gap moves while she waits
   if (Math.abs(d) < 1e-9) return Infinity;
   return d < 0 ? wrap360(x) / -d : wrap360(-x) / d;
 }
@@ -161,19 +201,23 @@ export function waitDaysToLineUp({ gapDeg, waitKm, incDeg, tripChangeDeg = 0 }) 
  * that still has rows. Rule: the first of `Constants.ISS_BOSS.STATION_FIELDS` (f400, f425, f375, f450: nearest to the station's 408 km
  * first) whose remaining rows are at least FRAG_COUNT; if all four are short, the field nearest to 408 km with at least that many; if
  * none has that many, the nearest with any rows left; null when every field is cleared.
+ * For a city (`herIncDeg` picks one, route-1107-d2 D-A4) the fields are taken by height gap to its real object (`Constants.CITY_STATIONS`;
+ * ties: the lower field): the first with at least FRAG_COUNT rows, else the nearest with any, else null. No tilt: New York's rule.
  * @param {{fields: function, fieldById: function, remainingCount: function}} reg the field registry
+ * @param {number} [herIncDeg] her tilt
  * @returns {string|null} the field id
  */
-export function stationFieldId(reg) {
+export function stationFieldId(reg, herIncDeg) {
   if (!reg || typeof reg.remainingCount !== 'function') return null;
   const cfg = Constants.ISS_BOSS || {};
   const need = cfg.FRAG_COUNT || 6;
-  const list = Array.isArray(cfg.STATION_FIELDS) ? cfg.STATION_FIELDS : ['f400', 'f425', 'f375', 'f450'];
+  const city = cityStation(herIncDeg);
+  const list = city ? [] : (Array.isArray(cfg.STATION_FIELDS) ? cfg.STATION_FIELDS : ['f400', 'f425', 'f375', 'f450']);
   for (const id of list) {
     if (typeof reg.fieldById === 'function' && !reg.fieldById(id)) continue;
     if (reg.remainingCount(id) >= need) return id;
   }
-  const stKm = stationOrbit().altKm;
+  const stKm = stationOrbit(herIncDeg).altKm;
   const all = (typeof reg.fields === 'function' ? reg.fields() : [])
     .slice().sort((a, b) => Math.abs(a.altKm - stKm) - Math.abs(b.altKm - stKm) || a.altKm - b.altKm);
   const enough = all.find((f) => reg.remainingCount(f.id) >= need);

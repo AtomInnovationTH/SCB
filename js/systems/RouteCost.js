@@ -51,7 +51,7 @@ import { Constants } from '../core/Constants.js';
 import { tripProfile } from './TripProfile.js';
 import { planeAngle, planeChangeDeltaV } from '../entities/OrbitalMechanics.js';
 import { pieceValues } from './BigPieceValues.js';
-import { isJobPiece, jobPayCr } from './JobsBoard.js';
+import { isJobPiece, jobPayCr, capsuleCanDrop, capsuleMassKg, capsulePriceCr } from './JobsBoard.js';
 import { planBurn } from './BigMelt.js';
 import { gapChangeOverLeg, isLinedUp, stationInOwnPlane, stationOrbit } from './NodeDrift.js';
 
@@ -175,23 +175,26 @@ export function planeLeg(a) {
 }
 
 /**
- * The finish burn: closing a small node gap to the station (route-1106 lane S4, D3; station-drift doc §2: 164.7 m/s per degree, so at most
- * 0.346 deg = 57 m/s). Billed only for the start whose tilt is the station's (`stationInOwnPlane`); every other tilt and a gap of 0 cost
- * nothing. Priced at the station's own height (408 km), where her node turns at the station's rate and the gap does not move during the
- * burn: an Edelbaum `planeLeg` from her plane (her tilt, node 0) to the station's (its tilt, node = the gap).
+ * The finish burn: closing a small node gap to the station object (route-1106 lane S4, D3; station-drift doc §2: 164.7 m/s per degree, so at
+ * most 0.346 deg = 57 m/s at the ISS). Billed for the seven start tilts (`stationInOwnPlane`); any other tilt costs nothing. Priced at the
+ * object's own height (`stationOrbit(herIncDeg)`: the ISS 408 km, or the start city's real object, route-1107-d2), where her node turns at
+ * the object's rate and the gap does not move during the burn: an Edelbaum `planeLeg` from her plane (her tilt, node 0) to the object's
+ * (its tilt, node = the gap), so a tilt difference counts too (XRISM 1.0 deg, AstroSat 1.0 deg, SRMSAT 1.97 deg). Free when the whole plane
+ * angle is under 1e-4 deg (a gap of 0 at New York's tilt).
  * @param {{gapDeg: number, herIncDeg: number, massKg: number, thrustN: number, ispS: number, gasAboardKg?: number}} a
  * @returns {{dvMps: number, gasKg: number, days: number, feasible: boolean}}
  */
 export function finishBurn(a) {
   const none = { dvMps: 0, gasKg: 0, days: 0, feasible: true };
-  if (!stationInOwnPlane(a.herIncDeg) || !Number.isFinite(a.gapDeg) || a.gapDeg === 0) return none;
-  const s = stationOrbit();
+  if (!stationInOwnPlane(a.herIncDeg) || !Number.isFinite(a.gapDeg)) return none;
+  const s = stationOrbit(a.herIncDeg);
   const D2R = Math.PI / 180;
   const r = planeLeg({
     fromOrbit: { altKm: s.altKm, inclination: a.herIncDeg * D2R, raan: 0 },
     toOrbit: { altKm: s.altKm, inclination: s.incDeg * D2R, raan: a.gapDeg * D2R },
     massKg: a.massKg, thrustN: a.thrustN, ispS: a.ispS, gasAboardKg: a.gasAboardKg,
   });
+  if (r.angleRad < 1e-4 * D2R) return none;
   return { dvMps: r.dvMps, gasKg: r.gasKg, days: r.days, feasible: r.feasible };
 }
 
@@ -543,6 +546,7 @@ function freshWalk(state) {
     gapDeg: Number.isFinite(state.gapDeg) && Number.isFinite(state.incDeg) ? state.gapDeg : null,
     partAboard: !!state.partAboard, partPaid: false, partCr: Number.isFinite(state.partCr) ? state.partCr : 0, partPaidCr: 0,
     partKg: state.partAboard && state.partKg > 0 ? state.partKg : 0,   // the kept part's mass (in `carriedKg`): it stays aboard until the station pays it
+    byCapsule: state.byCapsule === true, capsules: state.capsulesAboard > 0 ? Math.floor(state.capsulesAboard) : 0,   // route-1107-d2 D-B5: the part goes home by reentry capsule; the capsules in her stock (inside `carriedKg`)
     holdKg: state.holdKg > 0 ? state.holdKg : 0, holdSaleCr: state.holdSaleCr > 0 ? state.holdSaleCr : 0,   // the hold's metal and what the first satellite stop sells it for
     left: Math.max(0, Math.min(quotaOf(), Math.floor(Number(state.catchesLeft) || 0))),   // catches still owed to the mission she is in
     moves: 0, unscanned: 0, metalKg: 0,
@@ -644,6 +648,26 @@ function applyMelts(w, days, state, steps) {
   const metalKg = plan.metalKg - keptMetalKg;                         // the kept part makes no metal
   w.carriedKg = Math.max(0, w.carriedKg - (meltedKg - keptKg) + metalKg);   // (the kept part stays on her mass)
   w.metalKg += metalKg; w.holdRoomKg -= metalKg + keptKg;
+}
+
+/**
+ * The reentry capsule takes the kept part home (plan route-1107-d2 D-B5; the game's `_capsuleHandOver`): on arriving at a stop at height `altKm`, with the part aboard and the
+ * motor able to bring it down from there (`capsuleCanDrop`). A capsule already aboard drops it at the first stop (the pay, her mass less the part and the capsule); with none,
+ * the satellite sells one (`sat`: the pay less its price, the capsule is bought and used at once, so only the part leaves her mass). Never at a station stop (a crewed station
+ * takes no `byCapsule` part). Mutates `w`; returns what it netted (the pay less the price bought) when the part went home, else null (the caller pushes the `dispose` step).
+ */
+function capsuleDrop(w, altKm, sat) {
+  if (!w.byCapsule || !w.partAboard || w.partPaid) return null;
+  const have = w.capsules > 0;
+  if (!have && !sat) return null;
+  if (!capsuleCanDrop(altKm, w.partKg)) return null;
+  const cr = Math.max(0, w.partCr || 0);
+  const net = cr - (have ? 0 : capsulePriceCr());
+  w.partPaid = true; w.partAboard = false; w.partPaidCr += cr; w.valueCr += net;
+  w.carriedKg = Math.max(0, w.carriedKg - w.partKg - (have ? capsuleMassKg() : 0));
+  w.partKg = 0;
+  if (have) w.capsules -= 1;
+  return net;
 }
 
 /** Run one stop on a walk state `w` (mutated), pushing legs onto `legs` (or not, when null); false when a leg or a rule does not allow it. */
@@ -766,16 +790,20 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
     w.aboard = w.aboard.filter((a) => a.melting);
     const sold = metalSaleCr(w.metalKg) + w.holdSaleCr;              // the route's own metal, and the hold's metal she already had aboard (SELL ALL: first satellite stop only)
     w.valueCr += sold; w.metalCr += sold; w.metalKg = 0; w.holdKg = 0; w.holdSaleCr = 0;
-    // what stays aboard: the pieces still in the furnaces and the kept part (a satellite does not take it: only the station's part job does); the hold's metal left with the sale
-    w.carriedKg = mass + (w.partAboard && !w.partPaid ? w.partKg : 0);
+    // what stays aboard: the pieces still in the furnaces and the kept part (a satellite does not take it: only the station's part job does, or a reentry capsule dropped here); the hold's metal left with the sale
+    const capNet = capsuleDrop(w, stop.altKm, true);                 // route-1107-d2 D-B5: a capsule-city part goes home from here (the capsule is bought on the spot when none is aboard)
+    w.carriedKg = mass + (w.partAboard && !w.partPaid ? w.partKg : 0) + w.capsules * capsuleMassKg();     // (the capsules in her stock stay on her mass)
     w.left = 0;                                                      // berthed: the next mission starts after the next where-next pick
     if (steps) steps.push({ kind: 'move', what: 'sat', stop: stopIndex, id: stop.id ?? null, altKm: stop.altKm });
+    if (steps && capNet !== null) steps.push({ kind: 'dispose', fate: 'capsule', id: stop.id ?? null, payCr: capNet });
     sigMove(w, `sat:${stop.id ?? ''}`);
   } else {
     w.left = quota;
     if (steps) steps.push({ kind: 'move', what: 'field', stop: stopIndex, id: w.fieldId, altKm: stop.altKm, unscanned: true });
+    const capNet = capsuleDrop(w, stop.altKm, false);               // route-1107-d2 D-B5: a capsule aboard takes the part home on arriving (the game's FIELD_ARRIVED hand-over)
+    if (steps && capNet !== null) steps.push({ kind: 'dispose', fate: 'capsule', id: w.fieldId, payCr: capNet });
     // The station takes the part she carries when she arrives lined up (GameFlowManager `_stationHandOver`, on FIELD_ARRIVED): the gap as the route's own days left it
-    if (stop.kind === 'station' && w.partAboard && !w.partPaid && w.gapDeg !== null && isLinedUp(w.gapDeg)) {
+    if (stop.kind === 'station' && !w.byCapsule && w.partAboard && !w.partPaid && w.gapDeg !== null && isLinedUp(w.gapDeg)) {
       // route-1106 lane S4: the finish burn closes the last gap first (the game's `finishStationBurn`: gas and days, billed at the station's
       // height; priced only for the start whose tilt is the station's, else 0); with too little gas the part stays aboard, nothing billed
       const fin = finishBurn({ gapDeg: w.gapDeg, herIncDeg: state.incDeg, massKg: w.dryMassKg + w.carriedKg + w.gasKg, thrustN: state.thrustN, ispS: state.ispS, gasAboardKg: w.gasKg });
