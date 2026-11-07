@@ -562,6 +562,24 @@ export class SensorSystem {
   }
 
   /**
+   * Mark every piece within `NET_LINEUP.PROFILE_RANGE_M` of the mother `netProfiled = true` on the ORIGINAL debris object
+   * (the query hands back spread copies, and its radius is the ~500 km reveal range, so the distance is checked here, on
+   * each copy's own `distance`, which a frame-cached larger query also carries). The net's hold part reads it (NetLineupOdds).
+   * @param {Array<object>|null} nearby getDebrisNear copies for this scan's reveal range
+   * @private
+   */
+  _profileNearbyForNet(nearby) {
+    const debrisField = this._lastDebrisField;
+    if (!debrisField || !Array.isArray(nearby)) return;
+    const limit = Constants.NET_LINEUP.PROFILE_RANGE_M * Constants.SCENE_UNITS_PER_METER;
+    for (const copy of nearby) {
+      if (!copy || copy.hazard || !(copy.distance <= limit)) continue;
+      const original = debrisField.getDebrisById(copy.id);
+      if (original) original.netProfiled = true;
+    }
+  }
+
+  /**
    * Discover undiscovered debris near the player with staggered timing; quick scan reveals fewer targets at shorter range.
    * @param {Array<object>} [nearbyArg] the getDebrisNear result for this scan's reveal range when the caller has it
    *   (_completeScan); omitted → runs its own query, so direct callers (tests) keep working.
@@ -582,6 +600,9 @@ export class SensorSystem {
     const nearby = Array.isArray(nearbyArg)
       ? nearbyArg
       : debrisField.getDebrisNear(playerPos, revealRange);
+    // Net profile (net-odds-1107 D4): a scan that completes with a piece this close profiles it for the mother's net, new
+    // contact or already known, before the empty-field return below. It stays for the piece's life.
+    this._profileNearbyForNet(nearby);
     if (!nearby || nearby.length === 0) return;
 
     // Undiscovered only, resolved to the original objects (already sorted by distance). hasDiscovered: a re-scan of a known

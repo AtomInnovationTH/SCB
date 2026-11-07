@@ -116,5 +116,9 @@ export function isShopRowOffered(u) {
   if (u.requiresFeature && !Constants.isFeatureEnabled(u.requiresFeature)) return false;
   if (Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED && (u.id === 'flower_pair_a' || u.id === 'flower_pair_b')) return false;
   if (Constants.WHEELS.STANDARD === true && u.id === 'reaction_wheels') return false;
+  // net-odds-1107 D5: "Reinforced Nets" (+20% capture success) set a daughter config value that nothing reads, so it sold a
+  // promise the game did not keep. Not sold until wave 2 turns the row into the mother's closing winch; an owned copy stays in
+  // the save untouched.
+  if (u.id === 'capture_net') return false;
   return true;
 }

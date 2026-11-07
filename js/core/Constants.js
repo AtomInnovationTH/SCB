@@ -1250,8 +1250,9 @@ export const Constants = {
     // multiples of this) now starts at 1.5 x 52630 = 78,945 cr of capture earnings (was 74,895) and approaches 2.5 x = 131,575 cr (was 124,825).
     CATALOG_TOTAL_CR: 52630,
     // Ordered recommendation preference for the starter highlight. The shop
-    // marks the first item here that is un-owned and currently affordable.
-    RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],
+    // marks the first item here that is un-owned and currently affordable. 'capture_net' left it 2026-11-07 (net-odds-1107 D5:
+    // the row is not sold, its effect was never wired).
+    RECOMMENDED_STARTERS: ['fast_reel', 'enhanced_eo', 'efficient_ion'],
   },
 
   // Orientation-based capture.
@@ -2778,6 +2779,19 @@ export const Constants = {
     // write recomputes (the displayed odds stay numerically identical to a fresh computation), while
     // bit-stable re-reads skip the work.
     RATE_EPS_RAD_S: 1e-9,
+  },
+  // The mother's Large Net catch chance, "line up and scan" (owner pick 2026-11-07; NetLineupOdds.js is the one function the
+  // roll and the screen both read). p = aim part x line-up x hold x tumble. Daughter nets keep CAPTURE_NET's §3.3 stack.
+  // Every number here is a design value, not a measurement.
+  NET_LINEUP: {
+    AIM_CLOSE_M:             30,     // at/inside this range the aim part is 1 (a still piece this close is a sure aim)
+    Q_MIN:                   0.78,   // line-up part when quick (u = 0); 1.0 when fully lined up (u = 1)
+    HOLD_MISS:               0.10,   // hold part loses this / roughness for an un-profiled piece (a close scan times the closing)
+    TUMBLE_LIMIT_DEG:        10,     // the net holds a piece spinning up to this (deg/s) with no tumble loss
+    WINCH_TUMBLE_LIMIT_DEG:  15,     // same, with the closing winch (wave 2)
+    TUMBLE_SLOPE:            0.045,  // tumble part loses this per deg/s above the limit
+    TUMBLE_FLOOR:            0.4,    // never below this: tumble stays probabilistic, never impossible (owner 2026-08-12)
+    PROFILE_RANGE_M:         100,    // a scan completing with the piece this close to the mother profiles it for the net
   },
 
   // --- V5 Arm Configuration ---
@@ -5067,6 +5081,9 @@ export const Constants = {
     MASS_MIN_KG: 12, MASS_MAX_KG: 15,
     SIZE_MIN_M: 0.8, SIZE_MAX_M: 1.0,
     TUMBLE_MIN_DEG_S: 11, TUMBLE_MAX_DEG_S: 12,
+    // A sturdy piece (net-odds-1107 D7): the first large-net throw of the game must not be able to break its target. The net
+    // only destroys a piece with brittleness over about 0.9 at launch speed (CaptureNet.resolveFragSeverity, severity 0.45).
+    BRITTLENESS: 0.3,
     PIECES: [
       { daM: 30,  fwdM: 566, latM: 250 },
       { daM: -30, fwdM: 600, latM: -200 },
@@ -5754,7 +5771,7 @@ export const Constants = {
           id: 'ch3_net',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Now net it: N, or D for a daughter.',
+          text: 'Press S up close first, so the net closes at the right moment. Now net it: N, or D for a daughter.',
           skillId: 'mover_net',
           triggerEvent: 'NET_CATCH_SUCCESS',
           triggerFilter: (d) => !!(d && d.mover === true),

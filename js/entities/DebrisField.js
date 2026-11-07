@@ -1311,7 +1311,10 @@ export class DebrisField {
     // A spec authors it directly (the cast's look is deliberate).
     const material = (specActive && spec.material) ? spec.material : weightedMaterial(type);
 
-    const brittleness = Math.random();
+    // A spec may author it (training 3's movers: sturdy, so the first large-net throw cannot break its piece). The draw
+    // is taken either way, so every later random number in the field is the same as before.
+    const brittlenessDraw = Math.random();
+    const brittleness = (specActive && typeof spec.brittleness === 'number') ? spec.brittleness : brittlenessDraw;
 
     // Tracked: probability by debris type (real-world catalog coverage). The cast is catalogued (tracked); hazard
     // shards are the untrackable population by construction.
@@ -3861,6 +3864,7 @@ export class DebrisField {
     const tumbleDegS = M.TUMBLE_MIN_DEG_S + r() * (M.TUMBLE_MAX_DEG_S - M.TUMBLE_MIN_DEG_S);
     return {
       types: ['fragment'], sizeM, massMin: massKg, massMax: massKg, tumbleDegS, own: true, mover: true, daM: p.daM,
+      brittleness: M.BRITTLENESS,
       fwdMinM: p.fwdM, fwdMaxM: p.fwdM, latM: p.latM, radM: 0, name: 'Drifting piece',
       rng: mulberry32((Math.imul(x, 0x9E3779B1) + Math.imul(k + 1, 0xC2B2AE35) + 5000) >>> 0),
     };
@@ -4226,6 +4230,9 @@ export class DebrisField {
       _place.call(this, debris, spec, playerOrbit, _frameComp);
 
       debris.mass = spec.massMin + Math.random() * (spec.massMax - spec.massMin);
+      // An authored brittleness (training 3's movers are sturdy: net-odds-1107 D7). The piece was drawn at random above; an
+      // assignment adds no draw, so the stream is the same as before.
+      if (typeof spec.brittleness === 'number') debris.brittleness = spec.brittleness;
 
       // Mission-1 onboarding is NET-ONLY (every guided beat captures with the Mother net; no Daughter beat), and the net
       // rejects anything over LASSO_MAX_CAPTURE_MASS: clamp the welcome cluster to that ceiling, else the first target trips
@@ -4935,6 +4942,11 @@ export class DebrisField {
           mass: debris.mass,
           tumbleRate: debris.tumbleRate,
           material: debris.material,
+          // what the mother's net odds read (NetLineupOdds.buildLineupSnapshot): the panel's badge must see what the roll sees
+          surfaceRoughness: debris.surfaceRoughness,
+          brittleness: debris.brittleness,
+          fragility: debris.fragility,
+          netProfiled: debris.netProfiled === true,
           tracked: debris.tracked,
           distance: dist,
           distanceKm: distKm,

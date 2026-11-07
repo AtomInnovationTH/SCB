@@ -19,6 +19,7 @@ import { strutTipFoulsCorridor } from './ArmDockBasis.js';
 // CUT_AT_NOSE: the pure planner, called ONCE when a collared catch is over the hand-off gate.
 import { planCuts } from '../systems/cutPlanner.js';
 import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE, targetRangeM, netMaxReachM } from '../systems/netRouting.js';
+import { buildLineupSnapshot } from '../systems/NetLineupOdds.js';   // cycle (NetLineupOdds -> ToolOdds -> CaptureNet): used only inside fireMotherNet
 export { netMaxReachM };   // lives in netRouting.js: the reticle reads it without this module
 // The carrier scorer lives with the CoM maths (ONE computation: it reuses computeCoM/strutTipMeters).
 import { suggestCargoArm, countEmptyDockedDaughters, heldCargoFoulsCorridorAt } from '../systems/CoMCalculator.js';
@@ -1270,6 +1271,11 @@ export class NetProjectile {
     /** @type {number|null} Deterministic cling-roll override for tests / the shot harness (`__netScenario`).
      *  0 ⇒ guaranteed catch; read at the `_clingRoll <= _clingProbability` compare in `_resolveCatch`. */
     this._clingRollOverride = null;
+    /** @type {object|null} The mother Large Net's odds, taken ONCE at release (NetLineupOdds.buildLineupSnapshot: range,
+     *  tumble, roughness, scan, frag inputs). `_resolveCatch` rolls exactly these numbers, so the % the panel showed on the
+     *  last frame before release is the % rolled (net-odds-1107 D3). null = a LARGE net built without one (tests that
+     *  construct a net directly) keeps the legacy §3.3 path, as does every daughter net. */
+    this._lineup = null;
     /** @type {boolean} Set when the mother reel has no berth context (headless test path): the reel falls through to
      *  the daughter-style reel-back so the net still stows/prunes instead of looping MISSED→REELING. */
     this._motherReelFallback = false;
@@ -2621,11 +2627,15 @@ export class NetProjectile {
       }
     }
 
+    // The mother's Large Net rolls the numbers it took at release (net-odds-1107 D3); a daughter's net, or a LARGE net built
+    // without a snapshot, keeps the §3.3 stack below.
+    const lineup = (this._lineup && this.netClass === CN.LARGE && this.armIndex === -1) ? this._lineup : null;
+
     const pBase = this.captureMode === MODES.CINCH
       ? CN.CINCH_P_BASE.RIGHT_HARDER   // 0.93
       : CN.SLAM_P_BASE.RIGHT_HARDER;   // 0.80
 
-    const params = {
+    const params = lineup ? null : {
       pBase,
       vRel:            this.speed,
       vOptimal:        this.netClass.LAUNCH_SPEED,
@@ -2648,12 +2658,12 @@ export class NetProjectile {
         : null,
     };
 
-    this._clingProbability = computeClingProbability(params);
+    this._clingProbability = lineup ? lineup.pCatch : computeClingProbability(params);
     this._clingRoll = Math.random();
 
     // The frag risk is ROLLED: handleFragmentation (mercy rule) → NET_FRAGMENTATION; INTERACTION_FRAGMENTATION →
     // KesslerSystem counts it and DebrisField sheds/replaces the body.
-    this._fragRisk = computeFragRisk({
+    this._fragRisk = lineup ? lineup.fragRisk : computeFragRisk({
       netMass:         this.netClass.MASS,
       vRel:            this.speed,
       targetFragility: effectiveFragility(this.targetDebris),
@@ -2662,8 +2672,8 @@ export class NetProjectile {
     const fragRoll = (this._fragRollOverride != null) ? this._fragRollOverride : Math.random();
     if (this.targetDebris && fragRoll <= this._fragRisk) {
       const sev = resolveFragSeverity({
-        brittleness: this.targetDebris.brittleness ?? 0.5,
-        vRel: this.speed,
+        brittleness: lineup ? lineup.brittleness : (this.targetDebris.brittleness ?? 0.5),
+        vRel: lineup ? lineup.vRel : this.speed,
         vOptimal: this.netClass.LAUNCH_SPEED,
         countRoll: (this._fragCountRollOverride != null) ? this._fragCountRollOverride : Math.random(),
       });
@@ -4925,6 +4935,13 @@ export class CaptureNetSystem {
       lassoSystem: this._lassoSystem,
       captureNetSystem: this,
     };
+    // The odds, once, now (net-odds-1107 D3): what the panel showed is what contact rolls. Range = ship centre to the piece's
+    // rendered position, the HUD distance (and the fire gate's: netRouting.targetRangeM), so the last panel frame before
+    // release shows this very range. A target with no rendered position (headless mock) has no honest range, so its net
+    // keeps the legacy §3.3 roll. (No ship either: `launchPos` is in metres on some test paths, scene units on others.)
+    const shipPos = (this._player && typeof this._player.getPosition === 'function') ? this._player.getPosition() : null;
+    const releaseRangeM = (shipPos && target && target._scenePosition) ? targetRangeM(shipPos, target._scenePosition) : Infinity;
+    if (Number.isFinite(releaseRangeM)) net._lineup = buildLineupSnapshot(target, releaseRangeM);
 
     this.activeNets.push(net);
 

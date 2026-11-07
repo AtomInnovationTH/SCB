@@ -37,6 +37,7 @@ import {
   strainBandT,
 } from '../entities/CaptureNet.js';
 import { RAD2DEG, clamp01, clamp } from '../core/MathUtil.js';
+import { buildLineupSnapshot, computeAimPart, computeHoldPart, computeTumblePart } from './NetLineupOdds.js';
 
 /** Preference order for ▶ tie-breaks (matches ToolRecommender). */
 export const TOOL_PREF_ORDER = ['NET', 'MAGNET', 'GRIPPER', 'PAD'];
@@ -226,6 +227,41 @@ function refreshTumbleFactor(cache, tumbleRate) {
   cache.tumbleComputes++;
 }
 
+/**
+ * The mother Large Net's odds row: the "line up and scan" model (NetLineupOdds, net-odds-1107 D2) at the live range. The same
+ * snapshot function the net takes at release, so the % shown is the % rolled (CaptureNet._resolveCatch). Wave 1: lined up,
+ * no winch. Strain survival is applied as in the daughter row (1.0 at the 1,500 kg limit: 30 % of the net's rating).
+ * @private
+ */
+function computeMotherLineupOdds(target, range, netClass) {
+  const snap = buildLineupSnapshot(target, range);
+  const strainSurvival = 1 - computeStrainFailProbability((target && target.mass) || 0, (netClass && netClass.MAX_CAPTURE_MASS) || 0);
+  const losses = [];
+  if (snap.tumbleRadS != null) {
+    const limitDeg = Constants.NET_LINEUP.TUMBLE_LIMIT_DEG;
+    const tumbleDeg = Math.abs(snap.tumbleRadS) * RAD2DEG;
+    if (tumbleDeg > limitDeg) {
+      losses.push({
+        loss: 1 - computeTumblePart(snap.tumbleRadS, snap.winch),
+        blocker: 'TUMBLE',
+        hint: `tumbling ${Math.round(tumbleDeg)}\u00B0/s \u2014 ${GestureHints.isGlass() ? glassDespinWords(target) : `${keysDespinWords(target)}`}`,
+      });
+    }
+  }
+  const aim = computeAimPart(range);
+  if (aim < 1) losses.push({ loss: 1 - aim, blocker: 'RANGE', hint: 'long throw. Close in' });
+  const hold = computeHoldPart(snap.roughness, snap.profiled);
+  if (hold < 1) losses.push({ loss: 1 - hold, blocker: 'SCAN', hint: 'scan it up close: the net then closes at the right moment' });
+  if (snap.pDestroy > 0) losses.push({ loss: snap.pDestroy, blocker: 'FRAGILE', hint: 'brittle piece. The net may break it up' });
+  losses.sort((a, b) => b.loss - a.loss);
+  const top = losses[0] || null;
+  return {
+    p: clamp01(snap.pShown * strainSurvival),
+    blocker: top ? top.blocker : null,
+    hint: top ? top.hint : 'good shot',
+  };
+}
+
 function computeNetOdds(opts) {
   const CN = Constants.CAPTURE_NET;
   const target = opts.target || null;
@@ -253,6 +289,7 @@ function computeNetOdds(opts) {
 
   // Probabilistic stack (same fns as NetProjectile._resolveCatch). Lock-stable factors come from the caller's lock cache
   // when provided; the fresh path recomputes them into the module scratch; identical output either way.
+  if (opts.motherLineup) return computeMotherLineupOdds(target, range, netClass);
   const tumbleOn = !Constants.isFeatureEnabled || Constants.isFeatureEnabled('LASER_DESPIN');
   const tumbleRate = (tumbleOn && target && typeof target.tumbleRate === 'number')
     ? target.tumbleRate : null;
@@ -447,6 +484,8 @@ export function computeToolOdds(opts = {}) {
           netCount,
           presentedWidthM: opts.presentedWidthM,
           lockCache: opts.lockCache,
+          // the mother's Large Net rolls the line-up model; every daughter keeps §3.3 (net-odds-1107 D1)
+          motherLineup: armType === 'mother' && netClass === Constants.CAPTURE_NET.LARGE,
         });
         break;
       case 'MAGNET':

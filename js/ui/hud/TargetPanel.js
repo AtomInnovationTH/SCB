@@ -10,8 +10,8 @@ import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
 import { computeTotalSalvageDeltaV } from '../../entities/OrbitalMechanics.js';
-import { assessNetFit, overCatchLimit, presentedWidthForApproach, getNetClassForType, renderedSpanM, renderedSpanOverflows } from '../../entities/CaptureNet.js';
-import { classifyNetTarget } from '../../systems/netRouting.js';
+import { assessNetFit, overCatchLimit, presentedWidthForApproach, getNetClassForType, renderedSpanM, renderedSpanOverflows, captureNetSystem } from '../../entities/CaptureNet.js';
+import { classifyNetTarget, netReachForMassM } from '../../systems/netRouting.js';
 import { computeToolOdds, computeBestTool, toolShortLabel, makeNetOddsLockCache } from '../../systems/ToolOdds.js';
 import { dossierSystem, appraiseSalvage } from '../../systems/DossierSystem.js';
 import { bigPayLine } from '../../systems/FateRows.js';
@@ -74,6 +74,9 @@ export const TARGET_STEP_ROWS_GLASS = Object.freeze({ min: 1, normal: 5, max: 9 
  * should move"; owner 2026-10-18). The `min` step still collapses the pane (the 0 key's remedy), see `targetHeightPx`.
  */
 export const TARGET_SIMPLE_NEAREST = 3;
+/** Font size (px) of the lasso badge chip: the same 10 px as every other chip (the 10 px floor), kept as a number so the
+ *  literal count pinned in test-TargetPanel-law.js stays the number of chips the panel's CSS-in-JS writes by hand. */
+const LASSO_CHIP_PX = 10;
 export const TARGET_SIMPLE_LINES = TARGET_SIMPLE_NEAREST + 1;
 
 /**
@@ -908,9 +911,13 @@ export class TargetPanel {
     // daughter planning badges keep the fresh path: they sweep MANY targets per render, where a single-slot cache
     // buys nothing.
     if (!this._motherOddsLockCache) this._motherOddsLockCache = makeNetOddsLockCache();
+    // The live range, so the % is the one the net will roll if N were pressed now (net-odds-1107 D6). A row with no distance
+    // (tests, a row built by hand) falls back to ToolOdds' nominal range.
+    const range = (typeof t.distanceKm === 'number' && Number.isFinite(t.distanceKm)) ? t.distanceKm * 1000 : undefined;
     const odds = tooBig ? null : computeToolOdds({
       armType: 'mother',
       target: t,
+      range,
       netClass: CN && CN.LARGE,
       presentedWidthM: presentedWidthForApproach(t, null),
       lockCache: this._motherOddsLockCache,
@@ -918,7 +925,9 @@ export class TargetPanel {
     const o = odds && odds.NET;
     if (o && o.p != null && o.p > 0) {
       const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
-      const pct = Math.round(Math.min(o.p, cap) * 100);
+      // "100%" only when the shown value is exactly 1.0: a true certainty, rolled as one (a close, scanned, still, lined-up
+      // piece). Anything else still caps at 99 %.
+      const pct = o.p >= 1 ? 100 : Math.round(Math.min(o.p, cap) * 100);
       // Same overflow qualifier as the daughter badge: only downgrades a GREEN (pct ≥ 80) to amber, never lifts a red.
       const overflow = pct >= 80 && renderedSpanOverflows(t, CN && CN.LARGE);
       const col = this._targetLaw ? lookColor(oddsColor(pct, overflow)) : overflow ? 'var(--hud-caution, #ffd166)' : pct >= 80 ? 'var(--hud-normal, #00ffaa)' : pct >= 50 ? 'var(--hud-caution, #ffd166)' : 'var(--hud-warning, #ff7755)';
@@ -929,8 +938,29 @@ export class TargetPanel {
     const word = blocker === 'BIG' ? 'Too big to catch'
       : blocker === 'WIDE' ? 'TOO WIDE'
       : blocker === 'HEAVY' ? 'TOO HEAVY'
+      : blocker === 'RANGE' ? 'too far'
       : blocker === 'EMPTY' ? 'NO NETS' : blocker;
     return `<span style="color:${this._targetLaw ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})` : 'var(--hud-warning, #ff7755)'};font-size:10px;font-weight:bold;" title="${tooBig ? `Over the mother's ${CN.LARGE.CATCH_LIMIT_KG} kg catch limit: inspect it instead` : 'Mother Large Net'}">${word}</span>`;
+  }
+
+  /**
+   * @private The lasso's badge (N on a piece up to 10 kg): the lasso has no dice, so inside its reach the chance is a true
+   * 100 %; past it the row says "too far", the words the simple rows use. The reach is `netReachForMassM`, the one number N's
+   * fire gate reads.
+   * @returns {string} HTML span
+   */
+  _renderLassoBadge(t) {
+    // The lasso spends the mother's nets: an empty magazine is a refusal, never a 100 % (honest numbers, CAPTURE_NET.md:433).
+    if (captureNetSystem && typeof captureNetSystem.getMotherNetCount === 'function' && captureNetSystem.getMotherNetCount() === 0) {
+      return `<span style="color:${this._targetLaw ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})` : 'var(--hud-warning, #ff7755)'};font-size:${LASSO_CHIP_PX}px;font-weight:bold;" title="Out of nets">NO NETS</span>`;
+    }
+    const reachM = netReachForMassM(t.mass || 0);
+    const distM = (typeof t.distanceKm === 'number' && Number.isFinite(t.distanceKm)) ? t.distanceKm * 1000 : 0;
+    if (distM <= reachM) {
+      const col = this._targetLaw ? lookColor(oddsColor(100, false)) : 'var(--hud-normal, #00ffaa)';
+      return `<span style="color:${col};font-size:${LASSO_CHIP_PX}px;font-weight:bold;" title="Lasso: no dice, it always holds">100%${this._glassNow() ? '' : ' [N]'}</span>`;
+    }
+    return `<span style="color:${this._targetLaw ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})` : 'var(--hud-warning, #ff7755)'};font-size:${LASSO_CHIP_PX}px;font-weight:bold;" title="Beyond the lasso's ${Math.round(reachM)} m reach">too far</span>`;
   }
 
   /** Update the target list display; called at 2 Hz from the coordinator. @param {object} data - { cachedTargets, cachedUntracked, cachedActiveSats } */
@@ -1154,9 +1184,16 @@ export class TargetPanel {
             // exactly when the mother's LARGE net is the right tool, and `_getFitBadgeArm` would show daughter odds for
             // a target no daughter can take.
             let fitBadge;
-            const isWhale = classifyNetTarget(t.mass || 0).band === 'whale';
-            if (isWhale) {
+            const band = classifyNetTarget(t.mass || 0).band;
+            const isWhale = band === 'whale';
+            // net-odds-1107 D6: with no daughter selected, N is the verb on the screen, so the badge is N's chance: the
+            // mother's Large Net for 10-500 kg, the lasso (no dice) for a piece up to 10 kg. A selected daughter keeps hers.
+            const am = this._armManager;
+            const daughterSelected = !!(am && typeof am.getSelectedArm === 'function' && am.getSelectedArm());
+            if (isWhale || (band === 'mother' && !daughterSelected)) {
               fitBadge = this._renderMotherOddsBadge(t);
+            } else if (band === 'lasso' && !daughterSelected) {
+              fitBadge = this._renderLassoBadge(t);
             } else {
             const badgeArm = this._getFitBadgeArm();
             if (badgeArm) {
