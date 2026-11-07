@@ -75,6 +75,9 @@ export class CatalogLoader {
 
     /** @type {object} Space-weather payload { cycle_start_game_hour, cycle_length_game_hours, events[] } */
     this._weather = { cycle_start_game_hour: 0, cycle_length_game_hours: 0, events: [] };
+
+    /** @type {object|null} real-sky.json summary (GCAT counts and masses per height), null until loaded */
+    this._realSky = null;
   }
 
   /**
@@ -194,6 +197,14 @@ export class CatalogLoader {
         }
         break;
 
+      case 'real-sky.json':
+        // GCAT summary (scripts/build-real-sky.mjs): kept only when it has the five bands and the credit line.
+        if (data && Array.isArray(data.bands) && data.bands.length === 5
+          && typeof data.credit === 'string' && data.credit) {
+          this._realSky = data;
+        }
+        break;
+
       default:
         // Unknown file — ignored.
         break;
@@ -208,6 +219,7 @@ export class CatalogLoader {
       weather_events: this._weather.events.length,
       ground_stations: this._groundList.length,
       constellations: this._constellationById.size,
+      real_sky_bands: this._realSky ? this._realSky.bands.length : 0,
     };
     const version = this._meta && this._meta.version ? this._meta.version : null;
     try {
@@ -246,6 +258,10 @@ export class CatalogLoader {
 
   /** @returns {object[]} */
   getAllGroundStations() { return this._groundList.slice(); }
+
+  /** GCAT real counts and masses per height band (data/real-sky.json), or null when absent or malformed.
+   *  @returns {object|null} */
+  getRealSky() { return this._realSky; }
 
   /** @param {string} id @returns {object|null} */
   getConstellation(id) {

@@ -101,24 +101,39 @@ export function satAltKm(sat) {
  * @param {object} [src]
  * @param {Array} [src.clusters] - DebrisField.getDebrisClusters() shapes ({count, avgAltKm, totalMassKg, ...})
  * @param {Array} [src.sats]     - active-sat records (satAltKm shapes)
+ * @param {object} [src.realSky] - data/real-sky.json (GCAT counts + masses per height; CatalogLoader.getRealSky()). A
+ *   band whose [lo,hi] equals one of its `bands[].altKm` takes the real mass (estimate false) and carries `realCount` /
+ *   `realNotWorking`; an edge that does not match keeps the estimate (no partial merge). Absent → exactly the estimates.
  * @returns {{bands: Array<{altKm:[number,number], massT:number, estimate:boolean,
  *            note:string, count:number, clusterCount:number, satCount:number,
- *            liveMassT:number}>, outOfBand:{count:number, satCount:number,
- *            clusterCount:number}, totalCount:number}}
+ *            liveMassT:number, realCount?:number, realNotWorking?:number}>, outOfBand:{count:number, satCount:number,
+ *            clusterCount:number}, totalCount:number, realSky:object|null}}
  */
 export function aggregateBands(src = {}) {
   const clusters = Array.isArray(src.clusters) ? src.clusters : [];
   const sats = Array.isArray(src.sats) ? src.sats : [];
-  const bands = FloorContract.MASS_BANDS.LEO_SUB_BANDS.map((b) => ({
-    altKm: [b.altKm[0], b.altKm[1]],
-    massT: b.massT,
-    estimate: !!b.estimate,
-    note: b.note || '',
-    count: 0,
-    clusterCount: 0,
-    satCount: 0,
-    liveMassT: 0,
-  }));
+  const realSky = (src.realSky && Array.isArray(src.realSky.bands)) ? src.realSky : null;
+  const bands = FloorContract.MASS_BANDS.LEO_SUB_BANDS.map((b) => {
+    const band = {
+      altKm: [b.altKm[0], b.altKm[1]],
+      massT: b.massT,
+      estimate: !!b.estimate,
+      note: b.note || '',
+      count: 0,
+      clusterCount: 0,
+      satCount: 0,
+      liveMassT: 0,
+    };
+    const real = realSky && realSky.bands.find((r) => r && r.altKm
+      && r.altKm[0] === b.altKm[0] && r.altKm[1] === b.altKm[1]);
+    if (real && Number.isFinite(real.massT) && Number.isFinite(real.n)) {
+      band.massT = real.massT;
+      band.estimate = false;
+      band.realCount = real.n;
+      band.realNotWorking = real.n - ((real.byClass && real.byClass.working) || 0);
+    }
+    return band;
+  });
   const lo0 = bands[0].altKm[0];
   const hiN = bands[bands.length - 1].altKm[1];
   const outOfBand = { count: 0, satCount: 0, clusterCount: 0 };
@@ -156,8 +171,11 @@ export function aggregateBands(src = {}) {
     }
   }
   const totalCount = bands.reduce((a, b) => a + b.count, 0) + outOfBand.count;
-  return { bands, outOfBand, totalCount };
+  return { bands, outOfBand, totalCount, realSky };
 }
+
+/** 12816 → "12,816" (fixed separator, never the locale's). */
+const _thousands = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
 /**
  * Per-band lens weights, normalized 0..1 against the strongest band (all-zero input → all-zero weights).
@@ -173,7 +191,8 @@ export function lensWeights(bands, lens) {
     if (lens === 'THREAT') {
       const [lo, hi] = b.altKm;
       const vol = Math.pow(R + hi, 3) - Math.pow(R + lo, 3);
-      return vol > 0 ? (b.count || 0) / vol : 0;
+      const n = b.realCount != null ? b.realCount : (b.count || 0); // real GCAT count when the band has one
+      return vol > 0 ? n / vol : 0;
     }
     return (b.massT || 0) + (b.liveMassT || 0);
   });
@@ -317,6 +336,41 @@ export function rankLabels(candidates, budget = FLOOR.labelBudget) {
   return list.slice(0, Math.max(0, budget | 0));
 }
 
+/** Smallest allowed distance between two label baselines, px (10 px font). */
+export const LABEL_MIN_GAP_PX = 14;
+/** Label x offset from the centre: beside its ring when alone, further out when it sits in a leader column. */
+const LABEL_X_NEAR = 8;
+const LABEL_X_COLUMN = 24;
+
+/**
+ * Lay the ring labels out so no two text boxes overlap. A label sits beside its ring (baseline 3 px above the ring's
+ * mid-radius, clamped to ≥ 12 px from the top). Where neighbours would be closer than `minGap` (the inner LEO rings are
+ * only ~8 px apart) the whole run of neighbours goes into a column at fixed `minGap` spacing, outermost first, each with a
+ * leader line from its ring (`ringY`) to the label. The input is not mutated; the strip title (rPx 0, painted with the
+ * strip) passes through untouched.
+ * @param {Array<{id:*, rPx:number}>} labels
+ * @param {number} cy - chart centre y, px
+ * @param {number} [minGap]
+ * @returns {Array<object>} each label plus `x` (offset from the centre), `y` (baseline), `ringY`, `leader`
+ */
+export function layoutLabels(labels, cy, minGap = LABEL_MIN_GAP_PX) {
+  const out = labels.map((l) => {
+    const ringY = cy - l.rPx;
+    return { ...l, x: LABEL_X_NEAR, y: Math.max(12, ringY - 3), ringY, leader: false };
+  });
+  const rings = out.filter((l) => l.id !== 'kessler-strip').sort((a, b) => a.y - b.y);
+  const raw = rings.map((l) => l.y);
+  for (let k = 1; k < rings.length; k++) rings[k].y = Math.max(raw[k], rings[k - 1].y + minGap);
+  for (let k = 0; k < rings.length; k++) {
+    const pushed = (m) => m >= 0 && m < rings.length && rings[m].y > raw[m] + 1e-9;
+    if (pushed(k) || pushed(k + 1)) { // pushed itself, or it pushed its inner neighbour
+      rings[k].x = LABEL_X_COLUMN;
+      rings[k].leader = true;
+    }
+  }
+  return out;
+}
+
 export class SdaChart {
   /**
    * @param {function} [deps.now] - monotonic ms clock (tests); default performance.now
@@ -366,19 +420,23 @@ export class SdaChart {
   /**
    * Frame signature: every input that changes the rasterized pixels except the THREAT pulse phase (time-gated instead).
    * `fontEpoch` (integer) is one term: a chart painted on the fallback face repaints once when the faces settle.
-   * @param {object} m - {lens, wPx, hPx, bands, outOfBand, timeline, riskFraction, fontEpoch}
+   * The real-sky terms (band mass, estimate flag, real count; the `rs` term) appear only when real data is present, so a
+   * chart without it signs exactly as it always did and a chart that receives the file repaints.
+   * @param {object} m - {lens, wPx, hPx, bands, outOfBand, timeline, riskFraction, fontEpoch, realSky}
    */
   static frameSig(m) {
     const bands = (m.bands || [])
-      .map((b) => `${b.count}/${b.satCount}/${Math.round((b.liveMassT || 0) * 10)}`)
+      .map((b) => `${b.count}/${b.satCount}/${Math.round((b.liveMassT || 0) * 10)}`
+        + (b.realCount != null ? `/r${b.realCount}/m${Math.round((b.massT || 0) * 10)}/${b.estimate ? 1 : 0}` : ''))
       .join('|');
+    const rs = m.realSky ? `|rs${(m.realSky.beyond2000 && m.realSky.beyond2000.n) || 0}` : '';
     const oob = m.outOfBand ? `${m.outOfBand.count}` : '0';
     const proj = m.timeline && m.timeline.projection
       ? m.timeline.projection.map((p) => p.tracked).join(',')
       : '';
     const risk = Math.round((m.riskFraction || 0) * 100);
     const epoch = (typeof m.fontEpoch === 'number') ? m.fontEpoch : 0;
-    return `${m.lens}|${m.wPx}x${m.hPx}|${bands}|${oob}|${proj}|r${risk}|e${epoch}`;
+    return `${m.lens}|${m.wPx}x${m.hPx}|${bands}|${oob}|${proj}|r${risk}${rs}|e${epoch}`;
   }
 
   /** @private */
@@ -435,17 +493,25 @@ export class SdaChart {
     const map = meoRadialMap({ wPx, hPx });
     const weights = lensWeights(bands, lens);
 
-    const rings = bands.map((b, i) => ({
-      id: `band-${b.altKm[0]}`,
-      altKm: b.altKm,
-      innerPx: radiusPxForAltKm(map, b.altKm[0]),
-      outerPx: radiusPxForAltKm(map, b.altKm[1]),
-      weight: weights[i],
-      count: b.count,
-      massT: b.massT,
-      liveMassT: b.liveMassT,
-      estimate: b.estimate,
-    }));
+    const rings = bands.map((b, i) => {
+      const ring = {
+        id: `band-${b.altKm[0]}`,
+        altKm: b.altKm,
+        innerPx: radiusPxForAltKm(map, b.altKm[0]),
+        outerPx: radiusPxForAltKm(map, b.altKm[1]),
+        weight: weights[i],
+        count: b.count,
+        massT: b.massT,
+        liveMassT: b.liveMassT,
+        estimate: b.estimate,
+      };
+      if (b.realCount != null) { // GCAT real numbers for this band (aggregateBands, realSky)
+        ring.realCount = b.realCount;
+        ring.realNotWorking = b.realNotWorking;
+      }
+      return ring;
+    });
+    const realSky = m.realSky || null;
 
     // Named world-label candidates (the budget applies): the bands (lens-weighted), the GEO gold ring, the strip title.
     const gold = FloorContract.MASS_BANDS.REGIMES
@@ -456,7 +522,9 @@ export class SdaChart {
       weight: weights[i],
       text: lens === 'VALUE'
         ? `${r.altKm[0]}\u2013${r.altKm[1]} km \u00b7 ${Math.round(r.massT + r.liveMassT)} t${r.estimate ? ' \u00b7 EST' : ''}`
-        : `${r.altKm[0]}\u2013${r.altKm[1]} km \u00b7 ${r.count} obj`,
+        : (r.realCount != null
+          ? `${r.altKm[0]}\u2013${r.altKm[1]} km \u00b7 ${_thousands(r.realCount)} tracked \u00b7 ${_thousands(r.realNotWorking)} not working`
+          : `${r.altKm[0]}\u2013${r.altKm[1]} km \u00b7 ${r.count} obj`),
       rPx: (r.innerPx + r.outerPx) / 2,
     }));
     candidates.push({
@@ -471,20 +539,20 @@ export class SdaChart {
       text: 'KESSLER TIMELINE 1957\u21922126',
       rPx: 0,
     });
-    const labels = rankLabels(candidates, FLOOR.labelBudget);
+    const labels = layoutLabels(rankLabels(candidates, FLOOR.labelBudget), hPx / 2);
 
     const timeline = m.timeline || null;
     const sig = SdaChart.frameSig({
       lens, wPx, hPx, bands,
       outOfBand: m.outOfBand, timeline, riskFraction: m.riskFraction,
-      fontEpoch: this._fontEpoch.value(),
+      fontEpoch: this._fontEpoch.value(), realSky,
     });
     const now = this._now();
     const wouldPaint = SdaChart.shouldPaint(sig, this._lastSig, lens, now, this._lastPaintMs);
 
     let painted = false;
     if (wouldPaint && this._canvas && this._ctx2d && this._visible) {
-      this._paint({ wPx, hPx, lens, map, rings, labels, timeline, outOfBand: m.outOfBand, now });
+      this._paint({ wPx, hPx, lens, map, rings, labels, timeline, outOfBand: m.outOfBand, realSky, now });
       painted = true;
     }
     if (wouldPaint) {
@@ -547,9 +615,16 @@ export class SdaChart {
     g.textAlign = 'left';
     for (const l of labels) {
       if (l.id === 'kessler-strip') continue; // painted with the strip below
-      const y = cy - l.rPx;
       g.fillStyle = this._rgba(ramp, 0.95);
-      g.fillText(l.text, cx + 8, Math.max(12, y - 3));
+      if (l.leader) { // column label: a thin leader from its ring (same colour as the label)
+        g.beginPath();
+        g.moveTo(cx, l.ringY);
+        g.lineTo(cx + l.x - 3, l.y - 4);
+        g.strokeStyle = this._rgba(ramp, 0.95);
+        g.lineWidth = 1;
+        g.stroke();
+      }
+      g.fillText(l.text, cx + l.x, l.y);
     }
 
     // Honesty chrome (not world labels): MEO tag + ESTIMATE provenance.
@@ -557,15 +632,34 @@ export class SdaChart {
     g.fillStyle = VisualLaw.COLORS.INFO;
     g.globalAlpha = 0.8;
     if (map.compressed) g.fillText(FLOOR.chart.compressionTag, cx, 16);
+    const realSky = f.realSky || null;
     if (lens === 'VALUE') {
-      g.fillText('sub-LEO band masses are estimates (EST)', cx, 30);
+      // The EST line stays only while some band still shows an estimate (a real band has none).
+      if (rings.some((r) => r.estimate)) g.fillText('sub-LEO band masses are estimates (EST)', cx, 30);
     } else {
       g.fillText('pre-2020 count jumps partly = better sensors \u00b7 cascade onset disputed', cx, 30);
     }
     // Objects beyond the LEO shells are counted, never silently dropped.
-    if (f.outOfBand && f.outOfBand.count > 0) {
+    const topKm = rings.length ? rings[rings.length - 1].altKm[1] : 2000;
+    if (realSky && realSky.beyond2000 && Number.isFinite(realSky.beyond2000.n)) {
+      // Bottom right on the credit's baseline (h-7): the top edge clips it at 1728×1117 and the Houston panel covers it at
+      // 1366×1024, and the field-heights row (h-20) is taken by the strip's last year label (2126) at the right.
       g.textAlign = 'right';
-      g.fillText(`beyond ${rings.length ? rings[rings.length - 1].altKm[1] : 2000} km: ${f.outOfBand.count} obj`, w - 10, 16);
+      g.fillText(`beyond ${topKm} km: ${_thousands(realSky.beyond2000.n)} tracked`, w - 10, h - 7);
+    } else if (f.outOfBand && f.outOfBand.count > 0) {
+      g.textAlign = 'right';
+      g.fillText(`beyond ${topKm} km: ${f.outOfBand.count} obj`, w - 10, 16);
+    }
+    // Real numbers need their credit (CC BY 4.0): bottom centre, both lenses, under the strip (h-34); the strip's year
+    // labels (h-20) sit at its far left and right, so the centred field-heights line on that row clears them.
+    if (realSky && typeof realSky.credit === 'string' && realSky.credit) {
+      g.textAlign = 'center';
+      const fb = Array.isArray(realSky.fieldBands) ? realSky.fieldBands : [];
+      if (fb.length) {
+        const parts = fb.map((b) => `${b.altKm[0]}\u2013${b.altKm[1]} km ${_thousands(b.n)}`);
+        g.fillText(`Real objects at her field heights: ${parts.join(' \u00b7 ')}`, cx, h - 20);
+      }
+      g.fillText(realSky.credit, cx, h - 7);
     }
     g.globalAlpha = 1;
 

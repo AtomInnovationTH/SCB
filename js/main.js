@@ -1962,6 +1962,7 @@ async function init() {
   sdaFloor = new SdaFloor({
     clusterSource: debrisField,
     satSource: () => catalogLoader.getAllActiveSats(),
+    realSkySource: () => catalogLoader.getRealSky(),
     kessler: kesslerSystem,
   });
   // F3 (HULL CAM) content orchestrator: ship-local blueprint callouts. The projector composes

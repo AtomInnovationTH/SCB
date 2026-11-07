@@ -47,11 +47,13 @@ export class SdaFloor {
    * @param {function|object} [deps.satSource] - () => active-sat records, or getAllActiveSats() (CatalogLoader)
    * @param {object} [deps.kessler] - getCascadeRisk() and/or getStatus() (KesslerSystem); feeds the timeline riskBoost
    * @param {object} [deps.chart] - SdaChart instance (default: fresh)
+   * @param {function} [deps.realSkySource] - () => data/real-sky.json summary or null (CatalogLoader.getRealSky())
    * @param {function} [deps.now] - monotonic ms clock (tests)
    */
   constructor(deps = {}) {
     this._clusterSource = deps.clusterSource || null;
     this._satSource = deps.satSource || null;
+    this._realSkySource = deps.realSkySource || null;
     this._kessler = deps.kessler || null;
     this._chart = deps.chart || new SdaChart();
     this._now = deps.now || _nowMs;
@@ -59,6 +61,7 @@ export class SdaFloor {
     this._active = false;
     this._bands = [];
     this._outOfBand = { count: 0, satCount: 0, clusterCount: 0 };
+    this._realSky = null;
     this._timeline = null;
     this._risk = 0;
     this._lastRefreshMs = -Infinity;
@@ -92,11 +95,24 @@ export class SdaFloor {
       ? (this._clusterSource.getDebrisClusters() || [])
       : [];
     const sats = this._readSats();
-    const agg = aggregateBands({ clusters, sats });
+    const realSky = this._readRealSky();
+    const agg = aggregateBands({ clusters, sats, realSky });
     this._bands = agg.bands;
     this._outOfBand = agg.outOfBand;
+    this._realSky = agg.realSky;
     this._risk = this._readRisk();
     this._timeline = buildTimeline({ riskBoost: this._risk });
+  }
+
+  /** @private The GCAT real-sky summary, or null (no source, no data, or a throwing source: the chart keeps its estimates). */
+  _readRealSky() {
+    const s = this._realSkySource;
+    if (typeof s !== 'function') return null;
+    try {
+      return s() || null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /** @private Active-sat records from either dep shape. */
@@ -149,6 +165,7 @@ export class SdaFloor {
     return this._chart.render({
       bands: this._bands,
       outOfBand: this._outOfBand,
+      realSky: this._realSky,
       timeline: this._timeline,
       riskFraction: this._risk,
       wPx: ctx.wPx,
