@@ -21,6 +21,21 @@ import {
   netReachForMassM, driftOutOfReachLine, netFlightClockScale,
 } from './netRouting.js';
 import { computeLeadAim, netMaxReachM, overCatchLimit, catchLimitLine } from '../entities/CaptureNet.js';
+import { buildLineupSnapshot } from './NetLineupOdds.js';
+
+/** Scratch for the line-up's nose reading (one per module: the line-up ticks once a frame). */
+const _lineupNose = new THREE.Vector3();
+
+/**
+ * A catch chance (0..1) as the whole number the panel and the ring show: "100" only when exactly 1.0 (a rolled certainty),
+ * else at most 99 (`TOOL_ODDS.DISPLAY_CAP`), the rule TargetPanel's badge uses.
+ * @param {number} p
+ * @returns {number}
+ */
+function netPctText(p) {
+  const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
+  return p >= 1 ? 100 : Math.round(Math.min(p, cap) * 100);
+}
 import { tripRefuses } from './TransferTrip.js';
 import { isFree, samePiece, netRefusalLine, wrapRefusalLine, SCAN_FIRST_LINE, DAUGHTERS_ONLY_LINE, fanOutNoneText, daughtersHeldBackLine } from './PieceClaim.js';
 import { openingDance } from './OpeningDance.js';
@@ -188,6 +203,11 @@ export class InputManager {
     this._lassoWindingUp = false;
     /** @type {object|null} The Shift+A daughters' wait for the net's turn (see _afterNetSettles) */
     this._netWait = null;
+    /**
+     * @type {object|null} The mother Large Net's line-up (net-odds-1107 D9): `{ target, u, started, quickArmed, ... }` from the
+     * first N on a heavy piece until the net leaves or the aim ends. Ticked by `_tickNetLineup`, read by `getNetLineup()`.
+     */
+    this._netLineup = null;
     /** @type {number|null} Windup timeout handle */
     this._lassoWindupTimeout = null;
 
@@ -1309,6 +1329,9 @@ export class InputManager {
           this.captureWithPilotedArm();
           break;
         }
+        // Key auto-repeat never counts as a press (net-odds-1107 D10): holding N must not become the quick shot of the line-up
+        // the first press started, nor a new net after the last one left.
+        if (e.repeat) { e.preventDefault(); break; }
         // (2) MOTHER lasso fire: N is the single lasso/net fire verb. Delegated to fireLasso() (also used by the
         // onboarding smart-default) so windup/fire tuning can't drift between paths.
         if (d.lassoSystem) {
@@ -2274,6 +2297,7 @@ export class InputManager {
     const d = this._deps;
     if (dt > 0) this._frameClockS = (this._frameClockS || 0) + dt;   // the lead provider's frame clock (game seconds: the loop's capped dt × SimClock k, ≤ 0.8 s; no cap here)
     this._tickNetWait(dt);       // the Shift+A daughters' wait for the net's turn runs on game time
+    this._tickNetLineup(dt);     // the Large Net's line-up meter (net-odds-1107 D9) runs on game time too
     this._sampleReach(dt);       // the piece's velocity relative to the ship, for the reach-at-arrival check
 
     // De-spin laser (hold L): set the fire intent every frame BEFORE the overlay early-returns so it releases when an
@@ -2886,6 +2910,12 @@ export class InputManager {
    */
   fireMotherNet(target) {
     const d = this._deps; if (!d || !d.captureNetSystem || !d.player) return;
+    // A line-up is running (net-odds-1107 D10): this press is the quick shot, not a new net. Checked before the isAiming()
+    // test below, which the line-up's own hold aim would trip. A line-up for another piece is stale: end it (no net) first.
+    if (this._netLineup) {
+      if (this._netLineup.target === target) { this._pressQuickShot(this._netLineup); return; }
+      this._endNetLineup({ fire: false, reason: 'Target changed', code: 'TARGET_CHANGED' });
+    }
     if (target && target._disposed === true) return;   // a disposed-of piece is no catch (never aimed at)
     if (tripRefuses('net')) return;   // refuse BEFORE the ship slews to aim (CaptureNet would refuse only after the turn)
     const cns = d.captureNetSystem;
@@ -3114,11 +3144,13 @@ export class InputManager {
     if (checkRefusals(lead.relVel)) return;
 
     // Launches along the ACTUAL ship +Z at fire time from the current muzzle; direct bearing with no attitude
-    // (headless mocks). Returns true when the net left, false when refused (the caller then tells her to stay put).
-    const fireNow = () => {
+    // (headless mocks). Returns the net when it left, null when refused (the caller then tells her to stay put).
+    // `fireOpts.lineup` = the line-up meter u the shot leaves with (net-odds-1107 D9; the odds snapshot at release reads it);
+    // omitted = the call CaptureNet always had (a fully lined-up throw).
+    const fireNow = (fireOpts) => {
       // Fire-time re-check: the slew takes seconds and the range/drift picture changes (the AP's VEL_TOL residual
       // moves the range ~45 m over a 9 s slew+flight).
-      if (checkRefusals(lead.relVel)) return false;
+      if (checkRefusals(lead.relVel)) return null;
       const posScene = (typeof d.player.getNetPodPosition === 'function')
         ? d.player.getNetPodPosition(podIndex) : d.player.getPosition();
       // TRAP: NetProjectile works in METRES, the pod accessor returns SCENE UNITS. Divide by M as
@@ -3139,7 +3171,9 @@ export class InputManager {
           dir = { x: 0, y: 0, z: 1 };
         }
       }
-      const net = cns.fireMotherNet(podIndex, pos, dir, target);
+      const net = (fireOpts && typeof fireOpts.lineup === 'number')
+        ? cns.fireMotherNet(podIndex, pos, dir, target, undefined, { lineup: fireOpts.lineup })
+        : cns.fireMotherNet(podIndex, pos, dir, target);
       if (net) {
         if (d.armManager && typeof d.armManager.clearNetBlocks === 'function') d.armManager.clearNetBlocks();   // a shot nobody blocked ends the marks
         d.audioSystem?.playClick?.();
@@ -3147,7 +3181,7 @@ export class InputManager {
           text: 'Attitude locked — net away.', priority: 'info', source: 'HOUSTON',
         });
       }
-      return !!net;
+      return net || null;
     };
 
     // No attitude-aware aiming (no autopilot or live attitude): fire at once (headless mocks).
@@ -3157,16 +3191,15 @@ export class InputManager {
     }
 
     const aimDir = provider();
-    if (aimDir) {
-      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(d.player.quaternion).normalize();
-      const dot = Math.max(-1, Math.min(1, fwd.dot(new THREE.Vector3(aimDir.x, aimDir.y, aimDir.z))));
-      const errDeg = radToDeg(Math.acos(dot));
-      if (errDeg <= Constants.AIM.NET_AIM_TOLERANCE_DEG) { fireNow(); return; }
-    }
+    const onLine = !!aimDir && this._netAimErrDeg(aimDir) <= Constants.AIM.NET_AIM_TOLERANCE_DEG;
+    // A stand-in autopilot with no hold aim (`endAimHold`: headless mocks) cannot run a line-up: it keeps the instant throw.
+    const canHold = typeof ap.endAimHold === 'function';
+    if (!canHold && onLine) { fireNow(); return; }
 
     // owner 2026-10-22: refuse the turn to the net's attitude only if a daughter's line would then run through the
-    // ship. (AutopilotSystem.requestAimRotation backstops any other net aim with the same test.)
-    if (aimDir && d.armManager && typeof d.armManager.netTurnWraps === 'function') {
+    // ship. (AutopilotSystem.requestAimRotation backstops any other net aim with the same test.) A press already on the
+    // line needs no turn, so no wrap check either (it never moved the ship).
+    if (aimDir && !onLine && d.armManager && typeof d.armManager.netTurnWraps === 'function') {
       const wrap = d.armManager.netTurnWraps(aimDir);
       if (wrap.wraps) {
         refuse(wrapRefusalLine((wrap.arm && wrap.arm.displayName) || 'A daughter'));
@@ -3174,13 +3207,34 @@ export class InputManager {
       }
     }
 
-    // Otherwise rotate to attitude, then fire on resolve. Reject = no fire, no inventory decrement (AutopilotSystem
-    // emits the abort comms). The wheels turn her however long it takes (no wheel limit, `AIM.WHEEL_LIMIT_S`: the aim's time-out and
-    // gas hand-over scale from its wheel estimate); a slow turn on the tail boxes (steering gas out, wheels unusable) longer than the
-    // aim's 30 s (AIM_TIMEOUT_S) is refused at once with the honest time (`TOO_SLOW`): nothing moves, no net is spent. The lead
-    // (`provider`) is read again every frame and aims at where the piece will be when the net leaves, so a long aim still meets it.
-    ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined, maxWaitS: Constants.AIM.AIM_TIMEOUT_S, wheelLimitS: Constants.AIM.WHEEL_LIMIT_S })
+    // LINE-UP (net-odds-1107 D9): the ship turns to the lead aim (if it is not on it already) and then HOLDS it; the meter u
+    // climbs while the error stays inside the tolerance, and the net leaves by itself at u = 1 (`_tickNetLineup`). A press
+    // already on the line starts the meter at once, no instant throw. The wheels turn her however long it takes (no wheel
+    // limit, `AIM.WHEEL_LIMIT_S`: the aim's time-out and gas hand-over scale from its wheel estimate); a slow turn on the tail
+    // boxes (steering gas out, wheels unusable) longer than the aim's 30 s (AIM_TIMEOUT_S) is refused at once with the honest
+    // time (`TOO_SLOW`): nothing moves, no net is spent. The lead (`provider`) is read again every frame and aims at where the
+    // piece will be when the net leaves, so a long aim still meets it. Reject = no net, no inventory decrement
+    // (AutopilotSystem emits the abort comms). A stand-in autopilot (`canHold` false) has no line-up: the aim resolves, the net
+    // leaves on arrival, as before.
+    const lu = !canHold ? null : {
+      target, provider, fireNow,
+      u: 0,                    // the meter, 0..1
+      started: false,          // the error has been inside the tolerance once: u counts from then
+      quickArmed: false,       // a second N came while the error was over the quick tolerance: it throws the first frame inside it
+      ending: false,           // the line-up itself is ending the hold aim (its resolve is not an arrival)
+      errDeg: Infinity,        // the error at the last tick
+      p: null,                 // shown chance now (0..1), null with no honest range
+    };
+    if (lu) {
+      this._netLineup = lu;
+      const s0 = this._lineupSnapshot(lu, 0);
+      lu.p = s0 ? s0.pShown : null;
+    }
+    ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined, maxWaitS: Constants.AIM.AIM_TIMEOUT_S, wheelLimitS: Constants.AIM.WHEEL_LIMIT_S, hold: !!lu })
       .then(() => {
+        if (lu && (lu.ending || this._netLineup !== lu)) return;   // the line-up ended the hold aim itself (net away, or cancelled)
+        // The aim resolved by itself: no hold in this autopilot, so today's flow, a throw on arrival (lineup 1).
+        if (lu) this._netLineup = null;
         // §9.6: aim-resolve double-tick — the slew settled on the launch attitude ("locked, then confirmed" before the thump).
         d.audioSystem?.playAimResolveTick?.();
         // Refused at fire time (the target left the envelope during the slew, or the net system said no) after the
@@ -3190,8 +3244,155 @@ export class InputManager {
       .catch((err) => {
         // Aborted — nothing fired/spent. A timed-out aim or lost target is a refusal after the turn: the ship stays
         // where it turned. Manual input / superseded / a deliberate target change keep the normal recenter.
+        if (lu && this._netLineup === lu) this._netLineup = null;   // the line-up ends with the aim: the ring goes
         if (err && (err.code === 'TIMEOUT' || err.code === 'TARGET_LOST')) d.player.holdHeadingAfterRefusal?.();
       });
+    if (lu && this._netLineup === lu && typeof ap.isAiming === 'function' && ap.isAiming()) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Lining up: the net fires when the ring is full. N again throws now.', priority: 'info', source: 'HOUSTON',
+      });
+    }
+  }
+
+  /**
+   * The angle (degrees) between the ship's nose (+Z) and a world direction. Infinity with no attitude. Scratch vector reused.
+   * @param {{x,y,z}} dir
+   * @returns {number}
+   * @private
+   */
+  _netAimErrDeg(dir) {
+    const q = this._deps && this._deps.player && this._deps.player.quaternion;
+    if (!q || !dir) return Infinity;
+    const f = _lineupNose.set(0, 0, 1).applyQuaternion(q).normalize();
+    const dot = Math.max(-1, Math.min(1, f.x * dir.x + f.y * dir.y + f.z * dir.z));
+    return radToDeg(Math.acos(dot));
+  }
+
+  /**
+   * The line-up the reticle draws, or null (net-odds-1107 D11). `p` = the chance a shot now gets (0..1, null without an honest
+   * range: the ring then draws with no %), the same snapshot the release takes.
+   * @returns {{target: object, u: number, p: number|null, livePct: number|null, started: boolean, quickArmed: boolean, errDeg: number}|null}
+   */
+  getNetLineup() {
+    const lu = this._netLineup;
+    if (!lu) return null;
+    // The aim is gone but the tick has not cleared the line-up yet (up to a frame): nothing runs, so the ring and the touch
+    // chip ("Throw now") must not show it.
+    const ap = this._deps && this._deps.autopilotSystem;
+    if (ap && typeof ap.isAiming === 'function' && !ap.isAiming()) return null;
+    return {
+      target: lu.target, u: lu.u, p: lu.p, livePct: lu.p == null ? null : netPctText(lu.p),
+      started: lu.started, quickArmed: lu.quickArmed, errDeg: lu.errDeg,
+    };
+  }
+
+  /**
+   * End the running line-up. `fire` false: nothing is thrown, the hold aim ends as a cancel (a "Launch aborted" line); the
+   * line-up is already gone when the aim's catch runs.
+   * @param {{fire?: boolean, reason?: string, code?: string}} [opts]
+   * @returns {boolean} true when a hold aim was running and has been ended (false: no line-up, or its aim was already gone)
+   * @private
+   */
+  _endNetLineup({ fire = false, reason = 'line-up ended', code = 'OTHER' } = {}) {
+    const lu = this._netLineup;
+    if (!lu) return false;
+    lu.ending = true;
+    this._netLineup = null;
+    const ap = this._deps && this._deps.autopilotSystem;
+    if (ap && typeof ap.endAimHold === 'function') return !!ap.endAimHold({ fire, reason, code });
+    return false;
+  }
+
+  /**
+   * The chance a shot gets right now: the odds snapshot at the live range (ship centre to the piece's rendered position, the
+   * range the release uses) with the meter at `u`. Null when the piece has no rendered position (headless): no honest range.
+   * @private
+   */
+  _lineupSnapshot(lu, u) {
+    const d = this._deps;
+    const tp = lu.target && lu.target._scenePosition;
+    const pos = d && d.player && typeof d.player.getPosition === 'function' ? d.player.getPosition() : null;
+    if (!tp || !pos) return null;
+    const rangeM = targetRangeM(pos, tp);
+    if (!Number.isFinite(rangeM)) return null;
+    return buildLineupSnapshot(lu.target, rangeM, { lineup: u });
+  }
+
+  /**
+   * Release the net of a line-up now with the meter at `u`: ends the hold aim (it resolves like an arrival: the launch follows at
+   * once), then throws along the nose as it is. `quick` says the shot's chance in the comms. A refused throw (the piece left
+   * the envelope, the net system said no) leaves her where she is, as an aim's refusal does.
+   * @private
+   */
+  _releaseNetLineup(lu, u, quick) {
+    const d = this._deps;
+    // The hold aim may already be gone (cancelled earlier in this same handler, e.g. a same-target re-select sent
+    // TARGET_SELECTED): then there is nothing to release and no one lined this throw up. The line-up is cleared, nothing fires.
+    if (!this._endNetLineup({ fire: true })) return;
+    d.audioSystem?.playAimResolveTick?.();
+    const net = lu.fireNow({ lineup: u });
+    if (!net) { d.player.holdHeadingAfterRefusal?.(); return; }
+    if (quick) {
+      const p = net._lineup && Number.isFinite(net._lineup.pShown) ? net._lineup.pShown : null;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: p == null ? 'Quick throw.' : `Quick throw: ${netPctText(p)}%.`, priority: 'info', source: 'HOUSTON',
+      });
+    }
+  }
+
+  /**
+   * A second N while a line-up runs (net-odds-1107 D10): throw now at the meter's u when the error is inside
+   * QUICK_AIM_TOL_DEG, else arm the throw for the first frame it is.
+   * @private
+   */
+  _pressQuickShot(lu) {
+    const err = this._netAimErrDeg(lu.provider());
+    lu.errDeg = err;
+    if (err <= Constants.NET_LINEUP.QUICK_AIM_TOL_DEG) { this._releaseNetLineup(lu, lu.u, true); return; }
+    lu.quickArmed = true;
+  }
+
+  /**
+   * One frame of the line-up (net-odds-1107 D9/D10), from processInput on game time: the error to the lead aim, the armed quick
+   * shot, the meter (starts at 0 the first time the error is inside the tolerance, climbs LINEUP_S while it stays, holds
+   * outside), the auto-throw at u = 1, and the shown % for the ring. A piece disposed of, or an aim that ended some other way,
+   * ends it with no net.
+   * @param {number} dt game seconds
+   * @private
+   */
+  _tickNetLineup(dt) {
+    const lu = this._netLineup;
+    if (!lu) return;
+    const d = this._deps;
+    const ap = d && d.autopilotSystem;
+    if (!d || !ap || (typeof ap.isAiming === 'function' && !ap.isAiming())) { this._netLineup = null; return; }
+    if (lu.target && (lu.target._disposed === true || lu.target.alive === false)) {
+      this._endNetLineup({ fire: false, reason: 'target lost', code: 'TARGET_LOST' });
+      return;
+    }
+    const dir = lu.provider();
+    if (!dir) return;                       // the aim itself rejects a lost target ("target lost")
+    const L = Constants.NET_LINEUP;
+    const err = this._netAimErrDeg(dir);
+    lu.errDeg = err;
+    if (lu.quickArmed && err <= L.QUICK_AIM_TOL_DEG) { this._releaseNetLineup(lu, lu.u, true); return; }
+    if (err <= Constants.AIM.NET_AIM_TOLERANCE_DEG) {
+      if (!lu.started) lu.started = true;                      // u starts at 0 here
+      else if (dt > 0) lu.u = Math.min(1, lu.u + dt / L.LINEUP_S);
+    }
+    const snap = this._lineupSnapshot(lu, lu.u);
+    lu.p = snap ? snap.pShown : null;
+    if (lu.u >= 1) this._releaseNetLineup(lu, 1, false);
+  }
+
+  /**
+   * True while a net line-up's meter is running (the aim has been within the tolerance once, the line-up has not ended).
+   * Allocation-free; SimClock's `netLineup` gate reads it each frame so the automatic ×8 ends and the ring fills in 3 s.
+   * @returns {boolean}
+   */
+  isNetLineupMeterRunning() {
+    const lu = this._netLineup;
+    return !!(lu && lu.started);
   }
 
   /**

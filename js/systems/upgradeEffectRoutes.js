@@ -97,6 +97,10 @@ export const EFFECT_ROUTES = {
   // reads ownership from the player each frame, so nothing else stores it) ──
   longLaser: [PLAYER],
 
+  // ── Large Net closing winch → PlayerSatellite (hardware flag, idempotent: the save-restore replay re-applies it; NetLineupOdds
+  // reads ownership from the player through its provider, so nothing else stores it; net-odds-1107 D13) ──
+  netWinch: [PLAYER],
+
   // ── Daughters' relay mirror and the weaver's own laser → PlayerSatellite (hardware flags, idempotent: the save-restore replay
   // re-applies them; DespinLaser reads ownership from the player each frame, the mass rides each daughter via daughterFittings) ──
   relayMirrors: [PLAYER],
@@ -115,7 +119,6 @@ export const EFFECT_ROUTES = {
   tetherRange: [ARM_MANAGER],
   reelSpeed: [ARM_MANAGER],
   armFuelMax: [ARM_MANAGER],
-  captureRate: [ARM_MANAGER],
   autoDock: [ARM_MANAGER],
   springTier: [ARM_MANAGER],
   tetherTier: [ARM_MANAGER],

@@ -63,6 +63,7 @@ import { IssConjunctionBoss } from './systems/IssConjunctionBoss.js';
 import { StarlinkCascadeBoss } from './systems/StarlinkCascadeBoss.js';
 import { LassoSystem } from './systems/LassoSystem.js';
 import { despinLaser } from './systems/DespinLaser.js';
+import { setNetWinchSource } from './systems/NetLineupOdds.js';
 import { RewardSystem } from './systems/RewardSystem.js';
 import { CodexSystem } from './systems/CodexSystem.js';import { loadCodexData } from './systems/codex/codexData.js';
 import { SpaceWeatherSystem } from './systems/SpaceWeatherSystem.js';
@@ -608,7 +609,7 @@ let slowMoFactor = 1.0;
 const _simClock = new SimClock();
 const _simSig = {
   gameplay: false, dance: false, paused: false, worldHold: false, taRate: 1, trip: false, slowMo: false,
-  netInFlight: false, lasso: false, ceremony: false, leash: false, conjunction: false, daughterByHand: false, arrowKeys: false,
+  netInFlight: false, lasso: false, netLineup: false, ceremony: false, leash: false, conjunction: false, daughterByHand: false, arrowKeys: false,
 };
 
 // Scratch outputs for `orbitToSceneCartesianInto` in the per-frame approach-distance check (APPROACH state).
@@ -1714,6 +1715,7 @@ async function init() {
   hud.statusPanel.setPilotedArmGetter(() => (inputManager && inputManager.armPilotMode && cameraSystem && cameraSystem.getPilotedArm ? cameraSystem.getPilotedArm() : null));
   if (armManager) player.setArmManager(armManager);
   debrisField.setMotherDragSource(player);   // the welcome pieces share her drag coefficient (the area and mass her last drag step used)
+  setNetWinchSource(() => player.hasNetWinch());   // net-odds-1107 D13: the release, the panel and the ring all read the closing winch from the player
   if (lassoSystem && typeof hud.setLassoSystem === 'function') hud.setLassoSystem(lassoSystem);   // NetInventoryPanel polls initial ammo state
 
   if (Constants.FEATURE_FLAGS.CAPTURE_NET) {
@@ -3068,6 +3070,8 @@ async function init() {
         },
         getFarState: _touchFarState,
         getReelable: _daughterReelable,
+        // A mother-net line-up is running (the ring is filling): the chip reads "Throw now" (a second N throws early).
+        getNetLineup: () => (inputManager && inputManager.getNetLineup ? inputManager.getNetLineup() : null),
         // The CHOOSE button (U) stands whenever any big piece is aboard (picked or not: a pick can be changed)
         // and the fate list is closed, as a state chip; the catch line only adds it first, for 30 s.
         getChoosePending: () => !!(fateList && !fateList.isOpen() && pendingAboard().length > 0),
@@ -6280,6 +6284,8 @@ function gameLoop(timestamp) {
     s.netInFlight = !!(captureNetSystem && ((captureNetSystem.hasMotherNetInFlight && captureNetSystem.hasMotherNetInFlight())
       || netsFlying(captureNetSystem.activeNets)));
     s.lasso = !!(lassoSystem && lassoSystem.active);
+    // The net line-up's meter has started (aim first within 0.5°): the automatic speed-up ends so the ring fills over its real 3 s.
+    s.netLineup = !!(inputManager && inputManager.isNetLineupMeterRunning && inputManager.isNetLineupMeterRunning());
     s.ceremony = CeremonyTimeScale.get() < 1 || CeremonyTimeScale.owner() != null;
     s.leash = !!(player && player.leashDriver && player.leashDriver.busy);
     // getStatus() only while the speed-up is asked for or still on (the read the danger cap above also avoids).
@@ -6849,8 +6855,13 @@ function gameLoop(timestamp) {
       } else {
         dockingReticle.setVisible(false);
       }
+      // The mother net's line-up ring (net-odds-1107 D11) needs no daughter: it draws whenever a line-up runs (and not while the
+      // ladder hides the aiming reticles).
+      dockingReticle.setNetLineup(!_ladderReticleSuppress && inputManager.getNetLineup ? inputManager.getNetLineup() : null);
       dockingReticle.update(dt);
     }
+    // A teaching / coach card ("NET IT") folds to its title line while a net line-up runs, so it never covers the ring (idempotent).
+    if (teachingOverlay && teachingOverlay.setFolded) teachingOverlay.setFolded(!!(inputManager && inputManager.getNetLineup && inputManager.getNetLineup()));
 
     // Velocity Streaks update (Canvas 2D acceleration overlay)
     if (velocityStreaks) {

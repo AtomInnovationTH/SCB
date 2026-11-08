@@ -43,6 +43,28 @@ const C = {
 
 const FONT = FONT_MONO;
 
+/** The mother net's line-up ring (net-odds-1107 D11): radius in CSS px, and a scratch for projecting the piece. The ring clears the
+ *  selected target bracket's corners (half 48 px, diagonal ~68 px, `TargetReticle.SELECTED_BRACKET_MAX_PX`) and the range label
+ *  under it (baseline 70 px below the centre, bold 22 px), which the old 36 px ring ran through (and a 76 px one still touched
+ *  at 1366 x 1024). Its centre sits NET_RING_DY_PX below the piece: the label side gets 86 px, the top only 74, so on the iPad,
+ *  where the target is high, the arc's start is not under the folded coach card. */
+const NET_RING_R_PX = 80;
+const NET_RING_DY_PX = 6;
+const NET_RING_TRACK = { width: 2, color: 'rgba(255, 255, 255, 0.2)' };   // the unfilled circle: dim grey
+const NET_RING_ARC_PX = 4;                                                // the filled arc: bright and thick
+const _ringVec = new THREE.Vector3();
+
+/**
+ * A catch chance (0..1) as the number on the panel's badge: "100" only when exactly 1.0 (a rolled certainty), else at most 99
+ * (`TOOL_ODDS.DISPLAY_CAP`).
+ * @param {number} p
+ * @returns {number}
+ */
+function ringPct(p) {
+  const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
+  return p >= 1 ? 100 : Math.round(Math.min(p, cap) * 100);
+}
+
 export class DockingReticle {
   /**
    * @param {THREE.PerspectiveCamera} camera - For projection math
@@ -62,6 +84,10 @@ export class DockingReticle {
     this._arm = null;
     this._target = null;
     this._time = 0;
+    /** @type {{target: object, u: number, p: number|null}|null} the mother net's line-up the ring draws (setNetLineup) */
+    this._netLineup = null;
+    this._netRing = null;        // what the ring drew last frame ({x, y, u, sweep, pct, text}), null when nothing
+    this._ringOnly = false;      // the canvas is showing the ring alone (no arm-pilot overlay)
     // when net readiness last arrived: drives the decaying-breathe cue in _drawNetStatus (null = not ready)
     this._netReadySince = null;
     // when the fired net last entered CAPTURED: drives the finite flourish in _drawOddsStripInFlight
@@ -209,13 +235,85 @@ export class DockingReticle {
 
   /** @param {number} dt - seconds */
   update(dt) {
-    if (!this._visible || !this._arm) return;
+    if (!this._visible || !this._arm) { this._updateNetRingOnly(); return; }
     this._time += dt;
     this._lastDt = dt;   // the odds-strip display easing needs frame dt
     this._computeMetrics(dt);
     this._updateApproachAudio();
     this._render();
+    if (this._netLineup && this._ctx) this._drawNetRing(this._ctx, this._netLineup);   // a line-up while piloting (not possible today): still drawn
     this._updateSkActiveFlag();
+  }
+
+  /**
+   * The mother Large Net's line-up to draw (InputManager.getNetLineup(): `{ target, u, p }`), or null. Read by `update`.
+   * @param {{target: object, u: number, p: number|null}|null} lineup
+   */
+  setNetLineup(lineup) {
+    this._netLineup = lineup || null;
+  }
+
+  /**
+   * @private The ring needs no daughter: when the reticle is not in arm-pilot mode, `update` lands here. A line-up is drawn on the
+   * (otherwise hidden) canvas; when it ends the canvas is cleared and hidden again.
+   */
+  _updateNetRingOnly() {
+    if (!this._canvas || !this._ctx) return;
+    const l = this._netLineup;
+    if (l) {
+      this._canvas.style.display = 'block';
+      this._ctx.clearRect(0, 0, this._width, this._height);
+      this._ringOnly = true;
+      this._drawNetRing(this._ctx, l);
+    } else if (this._ringOnly) {
+      this._ringOnly = false;
+      this._netRing = null;
+      this._ctx.clearRect(0, 0, this._width, this._height);
+      if (!this._visible) this._canvas.style.display = 'none';
+    }
+  }
+
+  /**
+   * @private The line-up ring (net-odds-1107 D11): centred on the piece's projected screen position, radius NET_RING_R_PX; a dim grey 2 px full circle (the track), an arc from 12 o'clock clockwise sweeping u x 360 deg in the bright HUD green, 4 px, and the shown % ("what a shot now gets") to
+   * its right. Hidden when the piece is off screen. The drawn state is kept in `_netRing` ({x, y, u, sweep, pct, text}) for tests.
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {{target: object, u: number, p: number|null}} lineup
+   */
+  _drawNetRing(ctx, lineup) {
+    this._netRing = null;
+    const pos = lineup && lineup.target && lineup.target._scenePosition;
+    if (!pos || !this._camera) return;
+    const v = _ringVec.set(pos.x, pos.y, pos.z).project(this._camera);
+    if (!(v.z >= -1 && v.z <= 1) || Math.abs(v.x) > 1 || Math.abs(v.y) > 1) return;   // behind the camera or off screen
+    const x = (v.x * 0.5 + 0.5) * this._width;
+    const y = (-v.y * 0.5 + 0.5) * this._height + NET_RING_DY_PX;   // the ring's centre (the piece's, a little lower)
+    const u = clamp01(Number.isFinite(lineup.u) ? lineup.u : 0);
+    const sweep = u * Math.PI * 2;
+    const pct = (typeof lineup.p === 'number' && Number.isFinite(lineup.p)) ? ringPct(lineup.p) : null;
+    const text = pct == null ? null : `${pct}%`;
+    this._netRing = { x, y, u, sweep, pct, text };
+
+    ctx.save && ctx.save();
+    ctx.lineWidth = NET_RING_TRACK.width;
+    ctx.strokeStyle = NET_RING_TRACK.color;
+    ctx.beginPath();
+    ctx.arc(x, y, NET_RING_R_PX, 0, Math.PI * 2);
+    ctx.stroke();
+    if (sweep > 0) {
+      ctx.lineWidth = NET_RING_ARC_PX;
+      ctx.strokeStyle = C.primary;
+      ctx.beginPath();
+      ctx.arc(x, y, NET_RING_R_PX, -Math.PI / 2, -Math.PI / 2 + sweep);
+      ctx.stroke();
+    }
+    if (text) {
+      ctx.font = `bold 14px ${FONT}`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = C.primary;
+      ctx.fillText(text, x + NET_RING_R_PX + 8, y);
+    }
+    ctx.restore && ctx.restore();
   }
 
   /** True if within net deployment range. */

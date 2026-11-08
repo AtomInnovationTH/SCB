@@ -2416,10 +2416,6 @@ export class ArmUnit {
         );
         break;
       }
-      case 'captureRate':
-        // Increase capture success rate (value is additive, e.g., 0.2 = +20%)
-        this.config.captureSuccessRate = Math.min(1.0, 0.85 + value);
-        break;
       case 'autoDock':
         // Reduce docking time multiplier (value=0.5 → half dock time)
         this.config.dockSpeedMultiplier = 1.0 / value;

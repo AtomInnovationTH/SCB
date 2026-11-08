@@ -34,6 +34,8 @@ export const TOUCH_ACTION_CHIP_ID = 'touch_action_chip';
 /** The chips. `net` and `daughter` use the same wording as the teaching beats' chips (OnboardingDirector IN_REACH_NUDGE / MOTHER_EMPTY_CHIP). */
 const CHIPS = Object.freeze({
   net: Object.freeze({ text: 'Launch the net', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'LAUNCH NET' }),
+  // While the mother net's line-up ring fills (net-odds-1107 D10) the same tap (KeyN) is the quick shot: it throws now, at lower odds.
+  throw: Object.freeze({ text: 'Throw now', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'THROW NOW' }),
   pad: Object.freeze({ text: 'Stick the pad on', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'STICK PAD' }),
   // N works whichever tool she holds (ArmUnit.dispatchSelectedTool), so each tool has its own word; `net` is both nets.
   grip: Object.freeze({ text: 'Close the gripper', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'CLOSE GRIPPER' }),
@@ -70,7 +72,7 @@ export const BEAT_CHIPS = Object.freeze({
   ch5_burn: Object.freeze({ kind: 'throttle', needs: null }),
 });
 
-const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', grip: 'KeyN', magnet: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', letgobag: 'KeyK', choose: 'KeyU', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
+const KIND_KEY = Object.freeze({ net: 'KeyN', throw: 'KeyN', pad: 'KeyN', grip: 'KeyN', magnet: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', letgobag: 'KeyK', choose: 'KeyU', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
 
 /** Chip kinds that are KeyN; a daughter holding the piece decides which one is true now. */
 const N_KINDS = Object.freeze(['net', 'pad', 'grip', 'magnet']);
@@ -121,16 +123,19 @@ export class TouchActionChip {
    *        true, LET GO (KeyK) stands as a state chip on floors 2-3, below every other chip; omitted = never (tests).
    * @param {() => (string|null)} [deps.getPilotState]  the state ('TRANSIT'|'APPROACH'|'STATION_KEEP'|...) of the daughter
    *        the player is piloting, or null when not piloting. Gates the ch2_manual_capture beat chip; omitted = never shown.
+   * @param {() => (object|null)} [deps.getNetLineup]  the mother net's running line-up (InputManager.getNetLineup) or null. While
+   *        one runs, the 'net' chip reads "Throw now" (the same KeyN is then the quick shot); omitted = never.
    * @param {() => number} [deps.now]  ms clock (tests)
    * @param {(fn:Function)=>void} [deps.schedule]  runs `fn` one tick later; tests pass a synchronous or queued one
    * @param {boolean} [deps.glass=true]  false -> never posts (desktop)
    * @param {boolean} [deps.poll=true]   false -> no timer (tests drive `evaluate()`)
    */
   constructor({ eventBus, ticker = null, getFloor = null, getMotherNets = null, hasDaughter = null, getHolding = null,
-    getFarState = null, getReelable = null, getPilotState = null, getChoosePending = null, getRackBag = null, getCollarCatch = () => captureNetSystem.getDockedCatch(), now = null, schedule = null, glass = true, poll = true } = {}) {
+    getFarState = null, getReelable = null, getPilotState = null, getChoosePending = null, getRackBag = null, getNetLineup = null, getCollarCatch = () => captureNetSystem.getDockedCatch(), now = null, schedule = null, glass = true, poll = true } = {}) {
     this._eb = eventBus;
     this._ticker = ticker;
     this._getFloor = getFloor;
+    this._getNetLineup = typeof getNetLineup === 'function' ? getNetLineup : null;
     this._hasDaughter = hasDaughter;
     this._getHolding = getHolding;
     this._getFarState = getFarState;
@@ -190,6 +195,9 @@ export class TouchActionChip {
     const motherNet = (d) => !d || !(d.armIndex >= 0);
     on(Events.LASSO_FIRED, re(() => { this._inFlight = true; }));
     on(Events.NET_FIRED, re((d) => { if (d && d.source === 'mother') this._inFlight = true; }));
+    // The line-up starts and ends with the net aim: look again at once so the label follows (the poll catches the rest).
+    on(Events.AIM_SEQUENCE_START, re(() => {}));
+    on(Events.AIM_SEQUENCE_END, re(() => {}));
     for (const n of ['LASSO_CAPTURED', 'LASSO_MISSED']) {
       on(Events[n], re(() => { this._inFlight = false; }));
     }
@@ -443,7 +451,14 @@ export class TouchActionChip {
    */
   wanted() {
     if (!this._glass) return null;
-    return this._wantedFirst() || (this._rackBagStanding() ? 'letgobag' : null) || (this._chooseStanding() ? 'choose' : null);
+    const w = this._wantedFirst() || (this._rackBagStanding() ? 'letgobag' : null) || (this._chooseStanding() ? 'choose' : null);
+    return w === 'net' && this._lineupRunning() ? 'throw' : w;
+  }
+
+  /** @private A mother-net line-up is running now (the ring is filling): the net chip becomes "Throw now". */
+  _lineupRunning() {
+    if (!this._getNetLineup) return false;
+    try { return !!this._getNetLineup(); } catch (_e) { return false; }
   }
 
   _rackBagStanding() {

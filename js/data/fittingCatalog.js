@@ -304,10 +304,10 @@ const FITTING_SPECS = {
     },
   },
   capture_net: {
-    subsystem: 'BERTHS', reads: 'armManager',
-    // captureSuccessRate = min(1, 0.85 + value); 0.85 is Constants.ARM_CAPTURE_SUCCESS_RATE
-    display: (row) => ({ param: 'captureSuccess', base: Constants.ARM_CAPTURE_SUCCESS_RATE, unit: 'prob', op: `+${row.value}` }),
-    current: (deps) => firstArm(deps)?.config?.captureSuccessRate,
+    // net-odds-1107 D13: the Large Net's closing winch, a flag on the player (hasNetWinch), like the long laser; the row keeps its id.
+    subsystem: 'BERTHS', reads: 'player',
+    display: () => ({ param: 'netWinch', base: false, unit: 'flag', op: 'ON' }),
+    current: (deps) => !!(deps.player && typeof deps.player.hasNetWinch === 'function' && deps.player.hasNetWinch()),
   },
   mother_net_restock: {
     // BORDERLINE: the Large-Net launcher rides the Mother hull, but D9 groups nets with the berth/reel cartridges -> BERTHS

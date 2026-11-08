@@ -125,12 +125,35 @@ export function computeLineupShown({ fragRisk = 0, brittleness = 0.5, keFactor =
 }
 
 /**
+ * Where `buildLineupSnapshot` asks whether the closing winch is fitted when the caller does not say (net-odds-1107 D13). main.js
+ * registers `() => player.hasNetWinch()` once at boot, so the release, the panel and the ring all see the same answer without
+ * passing it. Unset (tests, headless) means no winch.
+ * @type {(() => boolean)|null}
+ */
+let _winchSource = null;
+
+/**
+ * Register (or clear, with null) the closing-winch provider.
+ * @param {(() => boolean)|null} fn
+ */
+export function setNetWinchSource(fn) {
+  _winchSource = (typeof fn === 'function') ? fn : null;
+}
+
+/** @returns {boolean} the provider's answer; false when none is set or it throws */
+function winchFromSource() {
+  if (!_winchSource) return false;
+  try { return !!_winchSource(); } catch (_e) { return false; }
+}
+
+/**
  * The inputs and results of the model for one piece at one moment: read by the panel with the live range, and stored on a
  * mother Large Net at release, which then rolls exactly these numbers (so the last panel frame shows the rolled %).
  * Reads the piece the way the roll does: tumble only while LASER_DESPIN is on, roughness `|| 1.0`, brittleness `?? 0.5`.
  * @param {object|null} target debris (surfaceRoughness, tumbleRate rad/s, netProfiled, brittleness, fragility)
  * @param {number} rangeM range to the target (m)
- * @param {{lineup?: number, winch?: boolean}} [opt] wave 1 passes nothing: lined up (1), no winch
+ * @param {{lineup?: number, winch?: boolean}} [opt] lineup defaults to 1 (lined up); winch defaults to the registered provider
+ *   (`setNetWinchSource`), false when none
  * @returns {{rangeM:number, tumbleRadS:number|null, roughness:number, profiled:boolean, lineup:number, winch:boolean,
  *   fragRisk:number, brittleness:number, keFactor:number, vRel:number, pCatch:number, pDestroy:number, pShown:number}}
  */
@@ -141,7 +164,7 @@ export function buildLineupSnapshot(target, rangeM, opt = {}) {
   const roughness = (target && target.surfaceRoughness) || 1.0;
   const profiled = !!(target && target.netProfiled);
   const lineup = (typeof opt.lineup === 'number') ? opt.lineup : 1;
-  const winch = !!opt.winch;
+  const winch = (typeof opt.winch === 'boolean') ? opt.winch : winchFromSource();
   const brittleness = (target && typeof target.brittleness === 'number') ? target.brittleness : 0.5;
   // Contact speed is the launch speed (the flight model; the net does not speed up or brake before contact).
   const vRel = net.LAUNCH_SPEED;
@@ -157,4 +180,4 @@ export function buildLineupSnapshot(target, rangeM, opt = {}) {
   };
 }
 
-export default { computeLineupCatch, computeLineupShown, computeAimPart, computeHoldPart, computeTumblePart, computeDestroyChance, buildLineupSnapshot };
+export default { computeLineupCatch, computeLineupShown, computeAimPart, computeHoldPart, computeTumblePart, computeDestroyChance, buildLineupSnapshot, setNetWinchSource };

@@ -229,8 +229,7 @@ function refreshTumbleFactor(cache, tumbleRate) {
 
 /**
  * The mother Large Net's odds row: the "line up and scan" model (NetLineupOdds, net-odds-1107 D2) at the live range. The same
- * snapshot function the net takes at release, so the % shown is the % rolled (CaptureNet._resolveCatch). Wave 1: lined up,
- * no winch. Strain survival is applied as in the daughter row (1.0 at the 1,500 kg limit: 30 % of the net's rating).
+ * snapshot function the net takes at release, so the % shown is the % rolled (CaptureNet._resolveCatch). Lined up (u = 1), and the winch as the player has it (the registered provider). Strain survival is applied as in the daughter row (1.0 at the 1,500 kg limit: 30 % of the net's rating).
  * @private
  */
 function computeMotherLineupOdds(target, range, netClass) {
@@ -238,7 +237,7 @@ function computeMotherLineupOdds(target, range, netClass) {
   const strainSurvival = 1 - computeStrainFailProbability((target && target.mass) || 0, (netClass && netClass.MAX_CAPTURE_MASS) || 0);
   const losses = [];
   if (snap.tumbleRadS != null) {
-    const limitDeg = Constants.NET_LINEUP.TUMBLE_LIMIT_DEG;
+    const limitDeg = snap.winch ? Constants.NET_LINEUP.WINCH_TUMBLE_LIMIT_DEG : Constants.NET_LINEUP.TUMBLE_LIMIT_DEG;
     const tumbleDeg = Math.abs(snap.tumbleRadS) * RAD2DEG;
     if (tumbleDeg > limitDeg) {
       losses.push({

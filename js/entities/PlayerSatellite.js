@@ -502,6 +502,9 @@ export class PlayerSatellite extends THREE.Group {
     // Long-range de-spin laser (Constants.DESPIN_LASER.LONG; plan laser-1101 D2/D6): bought at the resupply stop, replayed by a
     // continued save, cleared with the run (`resetWheelState`). DespinLaser asks `hasLongLaser()`; it stores no ownership.
     this._longLaser = false;
+    // Closing winch for the Large Net's neck (net-odds-1107 D13; the shop's `capture_net` row): bought at the resupply stop, replayed by
+    // a continued save, cleared with the run. NetLineupOdds asks `hasNetWinch()` through a provider; it stores no ownership.
+    this._netWinch = false;
     // Daughters' laser fittings (laser round 2, E2/E3/E10): the relay mirror (every daughter) and the weaver's own laser. Bought at the
     // resupply stop, replayed by a continued save, cleared with the run. DespinLaser asks `hasRelayMirrors()` / `hasWeaverLaser()`;
     // their mass rides each daughter (`daughterFittings.daughterExtraMassKg`), so ownership is stored only here.
@@ -3413,6 +3416,15 @@ export class PlayerSatellite extends THREE.Group {
   /** @returns {boolean} the long-range de-spin laser is aboard */
   hasLongLaser() { return this._longLaser === true; }
 
+  // CLOSING WINCH on the Large Net's neck (net-odds-1107 D13). A flag only: no mass or inertia is booked. NetLineupOdds reads
+  // `hasNetWinch()` (never stores it), so a new run cannot inherit it.
+
+  /** @returns {boolean} the Large Net's closing winch is aboard (the net holds a piece spinning up to 15 °/s, not 10) */
+  hasNetWinch() { return this._netWinch === true; }
+
+  /** @private Fit it (idempotent: the save-restore replay re-applies it). */
+  _installNetWinch() { this._netWinch = true; }
+
   /** @private Install it (idempotent). It is structure: mass and inertia change, so the cached inertia goes. */
   _installLongLaser() {
     if (this._longLaser) return;
@@ -3500,6 +3512,7 @@ export class PlayerSatellite extends THREE.Group {
   resetWheelState() {
     // (tolerant of a ship stub built without the constructor: a test double the reset handlers are handed)
     if (this._longLaser) { this._longLaser = false; this._attitudeInertia = null; }
+    this._netWinch = false;   // the Large Net's closing winch goes with the run's purchases (a continued save's replay refits it)
     if (this._relayMirrors || this._weaverLaser) { this._relayMirrors = false; this._weaverLaser = false; this._attitudeInertia = null; }
     if (this._wheelH) this._wheelH.set(0, 0, 0);
     this._wheelSpin = false;
@@ -8378,6 +8391,11 @@ export class PlayerSatellite extends THREE.Group {
         // Long-range de-spin laser: a flag + dry mass + inertia (the cached inertia drops with it). Idempotent: the save-restore
         // replay re-applies it. DespinLaser reads hasLongLaser(); the card's reach and draw come from DESPIN_LASER.LONG.
         this._installLongLaser();
+        break;
+      case 'netWinch':
+        // Large Net closing winch (net-odds-1107 D13): a flag. Idempotent: the save-restore replay re-applies it. NetLineupOdds reads
+        // hasNetWinch() through its provider (main.js registers it); the 15 °/s limit is NET_LINEUP.WINCH_TUMBLE_LIMIT_DEG.
+        this._installNetWinch();
         break;
       case 'relayMirrors':
         // Relay mirrors: a flag; every daughter carries the mirror's mass (Constants.DESPIN_LASER.RELAY.MASS_KG). Idempotent: the

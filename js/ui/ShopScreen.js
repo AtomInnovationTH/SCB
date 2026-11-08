@@ -197,9 +197,9 @@ export const UPGRADES = [
   { id: 'arm_fuel', cat: 'Daughters', name: 'Daughter Fuel Reserve', cost: 700,
     desc: '+50% daughter FEEP fuel', effect: 'armFuelMax', value: 1.5, maxLevel: 1,
     trl: 7, trlRationale: 'FEEP thrusters flown on Gaia, LISA Pathfinder; miniaturised variants emerging' },
-  { id: 'capture_net', cat: 'Daughters', name: 'Reinforced Nets', cost: 800,
-    desc: '+20% capture success', effect: 'captureRate', value: 0.2, maxLevel: 1,
-    trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
+  { id: 'capture_net', cat: 'Daughters', name: 'Net closing winch', cost: 800,
+    desc: "The Large Net's neck closes faster: holds a piece spinning up to 15°/s (10°/s without).", effect: 'netWinch', value: true, maxLevel: 1,
+    trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018 (neck winches)' },
   // Consumable Mother Large Net restock. Repeatable (no maxLevel gate — see _purchaseUpgrade). Each buy loads one net (250 cr)
   // into the Mother's one launcher, up to 4 (DECISIONS §33). No in-mission resupply. Gated by CAPTURE_NET (filtered at render).
   { id: 'mother_net_restock', cat: 'Daughters', name: 'Mother net',
@@ -317,11 +317,10 @@ export { isShopRowOffered };
  */
 export const STARTER_PREFERENCE =
   (Constants.SHOP && Constants.SHOP.RECOMMENDED_STARTERS)
-  || ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'];
+  || ['fast_reel', 'enhanced_eo', 'efficient_ion'];
 
 /** One-line "why" per starter, shown next to the ⭐ badge. */
 const STARTER_WHY = {
-  capture_net:  'Miss fewer catches',
   fast_reel:    'Reel in faster, retry sooner',
   enhanced_eo:  'Spot debris from farther out',
   efficient_ion:'Stretch every drop of xenon',

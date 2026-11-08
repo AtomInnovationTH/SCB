@@ -195,8 +195,11 @@ const GLASS_LINES = Object.freeze([
   ['Hold L to fire the de-spin laser', 'Hold DE-SPIN to fire the de-spin laser'],
   // training 3's de-spin beat (ch3_despin): DE-SPIN shows while the selected piece spins above spec
   ['Hold L to slow it under 10°/s.', 'Hold DE-SPIN to slow it under 10°/s.'],
-  ['Now net it: N, or D for a daughter.', 'Now net it: tap LAUNCH NET, or hold the target for DAUGHTER.'],
-  ['Press N to fire the mother net, or D to send a daughter.', 'Tap LAUNCH NET to fire the mother net, or hold the target for DAUGHTER.'],
+  ['Then N, and let the ring fill: N again throws early, at lower odds. Or D for a daughter.', 'Then tap LAUNCH NET, and let the ring fill: tap THROW NOW to throw early, at lower odds. Or hold the target for DAUGHTER.'],
+  // the first-press line of the net line-up (InputManager._launchNetThroughAim): N again is the THROW NOW chip
+  ['Lining up: the net fires when the ring is full. N again throws now.', 'Lining up: the net fires when the ring is full. Tap THROW NOW to throw now.'],
+  // training 3's NET IT card body (SCAN is the iPad's quick-scan chip; the Mac line names S)
+  ['Scan it up close first (S). Then N: the net fires when the ring is full; N again throws early. Or D for a daughter.', 'Tap SCAN up close first. Then tap LAUNCH NET: the net fires when the ring is full; tap THROW NOW to throw early. Or hold the target for DAUGHTER.'],
   ['Hold L to bleed the piece\'s spin under 10°/s before you net it.', 'Hold DE-SPIN to bleed the piece\'s spin under 10°/s before you net it.'],
   ['Hand-flying in orbit is a black-belt skill. For almost everything, press A and let the computer do it.', 'Hand-flying in orbit is a black-belt skill. For almost everything, tap AUTOPILOT and let the computer do it.'],
   [' Set the fleet launch speed with [\'] up and [;] down — a hotter shot reaches farther', ' A hotter shot reaches farther'],

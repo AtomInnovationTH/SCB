@@ -2792,6 +2792,8 @@ export const Constants = {
     TUMBLE_SLOPE:            0.045,  // tumble part loses this per deg/s above the limit
     TUMBLE_FLOOR:            0.4,    // never below this: tumble stays probabilistic, never impossible (owner 2026-08-12)
     PROFILE_RANGE_M:         100,    // a scan completing with the piece this close to the mother profiles it for the net
+    LINEUP_S:                3.0,    // wave 2 (D9): the line-up meter climbs from 0 to 1 in this many game seconds, while the aim error stays inside AIM.NET_AIM_TOLERANCE_DEG
+    QUICK_AIM_TOL_DEG:       2,      // wave 2 (D10): a second N throws now (at the meter's u) once the aim error is inside this
   },
 
   // --- V5 Arm Configuration ---
@@ -5809,14 +5811,14 @@ export const Constants = {
           id: 'ch3_net',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Press S up close first, so the net closes at the right moment. Now net it: N, or D for a daughter.',
+          text: 'Press S up close first, so the net closes at the right moment. Then N, and let the ring fill: N again throws early, at lower odds. Or D for a daughter.',
           skillId: 'mover_net',
           triggerEvent: 'NET_CATCH_SUCCESS',
           triggerFilter: (d) => !!(d && d.mover === true),
           doneIf: (latch) => latch.caught,
           mover: true,
           title: 'NET IT',
-          body: 'Press N to fire the mother net, or D to send a daughter.',
+          body: 'Scan it up close first (S). Then N: the net fires when the ring is full; N again throws early. Or D for a daughter.',
         },
         {
           id: 'ch3_wide_scan',

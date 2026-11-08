@@ -4832,9 +4832,11 @@ export class CaptureNetSystem {
    * @param {object} launchDir  — normalised direction {x, y, z}
    * @param {object} target     — debris object (with .position, .mass, .id)
    * @param {string} [mode]     — 'SLAM_WRAP' or 'CINCH' (auto-recommend if omitted)
+   * @param {{lineup?: number}} [opts] — net-odds-1107 D9: `lineup` = the line-up meter u (0..1) the shot leaves with; omitted = 1
+   *   (a fully lined-up throw: scripted and test callers keep today's odds)
    * @returns {NetProjectile|null} The created projectile, or null on failure
    */
-  fireMotherNet(podIndex, launchPos, launchDir, target, mode) {
+  fireMotherNet(podIndex, launchPos, launchDir, target, mode, opts) {
     if (tripRefuses('net')) return null;            // no net while the ship burns to the next field
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return null;
     if (target && target._disposed === true) return null;       // a piece that was disposed of is no catch
@@ -4941,7 +4943,11 @@ export class CaptureNetSystem {
     // keeps the legacy §3.3 roll. (No ship either: `launchPos` is in metres on some test paths, scene units on others.)
     const shipPos = (this._player && typeof this._player.getPosition === 'function') ? this._player.getPosition() : null;
     const releaseRangeM = (shipPos && target && target._scenePosition) ? targetRangeM(shipPos, target._scenePosition) : Infinity;
-    if (Number.isFinite(releaseRangeM)) net._lineup = buildLineupSnapshot(target, releaseRangeM);
+    if (Number.isFinite(releaseRangeM)) {
+      net._lineup = (opts && typeof opts.lineup === 'number' && Number.isFinite(opts.lineup))
+        ? buildLineupSnapshot(target, releaseRangeM, { lineup: opts.lineup })
+        : buildLineupSnapshot(target, releaseRangeM);
+    }
 
     this.activeNets.push(net);
 

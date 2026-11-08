@@ -73,6 +73,10 @@ export class TeachingOverlay {
     // TargetReticle listens to) so the card can stay below it.
     this._apEngaged = false;
     this._layoutTimer = null;
+    /** Folded to its title line (the body and the title's gap hidden): main.js folds it while a net line-up runs. */
+    this._folded = false;
+    this._bodyEl = null;
+    this._titleRowEl = null;
     this._unsub = [];
     if (_hasDOM && eventBus && Events) {
       if (Events.AUTOPILOT_ENGAGE) this._unsub.push(eventBus.on(Events.AUTOPILOT_ENGAGE, () => { this._apEngaged = true; this._layout(); }));
@@ -116,6 +120,30 @@ export class TeachingOverlay {
   /** Whether an overlay is currently visible. */
   isVisible() {
     return this._visible;
+  }
+
+  /**
+   * Fold the card to its title line (the body is hidden, the title stays) or open it again. Kept across cards: one shown while
+   * folded comes up folded. Cheap and idempotent: main.js calls it every frame with "a net line-up is running", so the
+   * training coach card ("NET IT") never covers the line-up ring on a screen where the target sits high (net-odds-1107 D11).
+   * @param {boolean} on
+   */
+  setFolded(on) {
+    const f = !!on;
+    if (f === this._folded) return;
+    this._folded = f;
+    this._applyFold();
+  }
+
+  /** Whether the card is folded to its title line. */
+  isFolded() {
+    return this._folded;
+  }
+
+  /** @private Put the shown card's body and title gap in line with `_folded`. */
+  _applyFold() {
+    if (this._bodyEl) this._bodyEl.style.display = this._folded ? 'none' : '';
+    if (this._titleRowEl) this._titleRowEl.style.marginBottom = this._folded ? '0px' : '6px';
   }
 
   /** Cleanup DOM and timers. */
@@ -215,6 +243,9 @@ export class TeachingOverlay {
     el.appendChild(bodyP);
 
     this._element = el;
+    this._bodyEl = bodyP;
+    this._titleRowEl = titleRow;
+    this._applyFold();
     this._container.appendChild(el);
     this._visible = true;
 

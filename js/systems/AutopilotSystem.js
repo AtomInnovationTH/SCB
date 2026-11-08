@@ -3647,6 +3647,9 @@ export class AutopilotSystem {
    * @param {number} [opts.pairIndex] chosen pair primary index (daughter)
    * @param {{x,y,z}} [opts.aimDir] net mode: the aim direction the caller has JUST read from its provider; the wrap check uses it
    *   instead of reading the provider again (a stateful provider must not get an extra sample)
+   * @param {boolean} [opts.hold] net mode only (net-odds-1107 D9, the line-up): on arrival the aim does NOT resolve; it keeps
+   *   pointing at the provider's line every frame until `endAimHold()` (which resolves it like an arrival) or a rejection
+   *   (manual steering, a new target, a lost target, the time-out, which then counts from the arrival).
    * @returns {Promise<{ mode:string, launchDir:{x,y,z} }>}
    */
   requestAimRotation(dirProvider, opts = {}) {
@@ -3836,6 +3839,8 @@ export class AutopilotSystem {
 
       this._aimCoroutine = {
         mode, provider, tolRad, rate,
+        hold: mode === 'net' && opts.hold === true,   // net line-up: arrival keeps tracking instead of resolving (`_arriveHold`)
+        heldOnce: false,           // a hold aim has arrived at least once (its time-out then counts from that arrival)
         stopErr: 0.5 * tolRad,     // the eased turn comes to rest this far from the target (inside tolRad)
         pT: null,                  // last frame's aim direction (a clone), for the target's turn rate
         inTolS: 0,                 // seconds inside the tolerance, strut done
@@ -4907,12 +4912,46 @@ export class AutopilotSystem {
     });
   }
 
+  /**
+   * @private A hold aim (net line-up) is on target: it stays running instead of resolving. The first arrival starts a fresh
+   * time-out window (the plain 30 s counted from the request would end a long turn's line-up a moment after it began).
+   * @returns {boolean} true when the aim is a hold aim (the caller returns, the aim goes on)
+   */
+  _arriveHold(c) {
+    if (!c.hold) return false;
+    if (!c.heldOnce) {
+      c.heldOnce = true;
+      c.timeout = c.elapsed + Constants.AIM.AIM_TIMEOUT_S;
+    }
+    return true;
+  }
+
+  /**
+   * End a hold aim (net line-up, `requestAimRotation(..., { hold: true })`) from outside.
+   *  - `fire` (default): resolve it as an arrival would (the caller releases the net at once, along the nose as it is);
+   *    the rest of the turn's rate is braked and billed first, as a rejected aim's is.
+   *  - otherwise: a cancel with no net (`reason`/`code` as `_rejectAim`: a "Launch aborted" line, the caller's catch runs).
+   * @param {{fire?: boolean, reason?: string, code?: string}} [opts]
+   * @returns {boolean} true when a hold aim was running and has been ended
+   */
+  endAimHold({ fire = true, reason = 'line-up ended', code = 'OTHER' } = {}) {
+    const c = this._aimCoroutine;
+    if (!c || !c.hold || !this._player) return false;
+    if (!fire) { this._rejectAim(reason, code); return true; }
+    this._billAimTail(c);
+    const q = this._player.quaternion;
+    const nose = q ? this._aimBm.set(0, 0, 1).applyQuaternion(q).normalize() : this._aimBm.set(0, 0, 1);
+    this._resolveAim({ x: nose.x, y: nose.y, z: nose.z });
+    return true;
+  }
+
   _resolveAim(launchDir) {
     const c = this._aimCoroutine;
     if (!c) return;
     this._aimCoroutine = null;
-    // Always called from `_tickAimCoroutine` inside `update` (the only callers are its two ticks), so the flag is read by the
-    // guards later in this same update and cleared at the top of the next. A launch that never follows loses it one frame on.
+    // Called from `_tickAimCoroutine` inside `update` (its two ticks), so the flag is read by the guards later in this same update
+    // and cleared at the top of the next; or from `endAimHold` (a line-up's release, from the input handler between updates), where
+    // the next update clears it at the top before any guard reads it. A launch that never follows loses it one frame on.
     this._aimJustResolved = true;
     // The hold from here to the spring follows the orbit when the aim ran on the wheels (`_orbitFollowsNow`)
     this._launchFollowsOrbit = !!(c.src === 'wheels' && c.eased !== false);
@@ -5337,6 +5376,7 @@ export class AutopilotSystem {
     const errAngle = Math.acos(dot);
 
     if (errAngle <= c.tolRad) {
+      if (this._arriveHold(c)) return;   // a line-up holds the line instead (no turn needed inside the tolerance)
       this._resolveAim({ x: b.x, y: b.y, z: b.z });
       return;
     }
@@ -5572,6 +5612,7 @@ export class AutopilotSystem {
     if (strutDone && errM <= c.tolRad && now <= Math.max(slack, c.src === 'wheels' ? AIM_REST_EPS : 0)) {
       if (was > 0) this._fireAimCouples(c, -1, was / aFull);           // the last of the brake
       c.omega = 0;
+      if (this._arriveHold(c)) return;                                 // a line-up keeps pointing (the next frames run this law again)
       this._resolveAim({ x: bm.x, y: bm.y, z: bm.z });                 // strut is there: this IS the launcher axis
       return;
     }
@@ -5600,7 +5641,7 @@ export class AutopilotSystem {
     const p = this._player, W = Constants.WHEELS;
     if (typeof p.isSlothMode !== 'function' || p.isSlothMode()) { this._sayPendingWheelLine(c); return; }   // gas gone: no watch, the wheels are all she has
     let why = null;
-    if (c.elapsed >= c.handAt) why = 'late';
+    if (c.elapsed >= c.handAt && !c.heldOnce) why = 'late';   // (a line-up that has arrived keeps the wheels: only drift hands it over)
     else if (c.elapsed >= W.LOS_CHECK_S && c.elapsed - c.losAt >= W.LOS_RECHECK_S && errM > c.tolRad) {
       c.losAt = c.elapsed;
       const sel = p.attitudeTorqueSource({

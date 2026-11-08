@@ -35,6 +35,10 @@ const EDGE_PADDING = 40;              // px from screen edge for arrows
 const RETICLE_MIN_SIZE = 12;          // px minimum bracket size
 const RETICLE_MAX_SIZE = 60;          // px maximum bracket size
 const SELECTED_RETICLE_SCALE = 1.6;   // Selected target is bigger
+/** The selected bracket's box at close range (the size is at its maximum from 4 km in: 60 x 1.6 = 96 px), and where its range
+ *  label's baseline sits below the box (`y + half + 22`). DockingReticle's net ring is sized to clear both (net-odds-1107 D11). */
+export const SELECTED_BRACKET_MAX_PX = RETICLE_MAX_SIZE * SELECTED_RETICLE_SCALE;
+export const SELECTED_LABEL_BASELINE_PX = 22;
 /** owner 2026-09-07: an unselected bracket whose BOX (arms + dist label) touches the score strip's exclusion band
  *  grown by this pad (px, every side) is skipped whole, never half-drawn. */
 const SCORE_STRIP_PAD_PX = 8;
