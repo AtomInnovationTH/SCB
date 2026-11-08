@@ -198,6 +198,38 @@ export function finishBurn(a) {
   return { dvMps: r.dvMps, gasKg: r.gasKg, days: r.days, feasible: r.feasible };
 }
 
+/**
+ * The nearest resupply satellite (DECISIONS §67 rows 5-6): the one with the smallest height gap from `fromKm`, a tie to the lower one. This is
+ * the order `WhereNextRows.buildWhereNextRows` draws satellite rows in (its first is the one the call summons). Satellites are heights only
+ * (`Constants.RESUPPLY.SATS`, `FieldRegistry.satellites()`); the game treats them as in her plane, so no plane change is priced to one.
+ * @param {Array<{id: string, altKm: number}>} sats @param {number} fromKm the height she is measured from
+ * @returns {({id: string, altKm: number}|null)} the satellite object, or null for an empty list
+ */
+export function nearestSatellite(sats, fromKm) {
+  if (!Array.isArray(sats) || !sats.length) return null;
+  return sats.slice().sort((a, b) => Math.abs(a.altKm - fromKm) - Math.abs(b.altKm - fromKm) || a.altKm - b.altKm)[0];
+}
+
+/**
+ * The reserve the station finish keeps (DECISIONS §67 row 6): after the finish burn she must still have the gas to fly on to the nearest
+ * resupply satellite. Prices that trip through the registry (`planTo(sat, {fromKm, lessKg})`: her live mass less the finish's gas) and
+ * compares it with the gas left after the finish. Shared by `GameFlowManager.finishStationBurn` and the where-next station note.
+ * Null = no test (a registry without `satellites()` / `planTo`, a height that is not a number, no satellite, no plan): the finish goes
+ * ahead as before, a missing answer never refuses it for ever.
+ * @param {object} reg the FieldRegistry @param {{fromKm: number, lessKg: number, gasLeftKg: number}} a
+ *   `fromKm` where the finish is flown, `lessKg` the gas already spent (the trip is flown at her mass less this), `gasLeftKg` the gas aboard after it
+ * @returns {({holds: boolean, sat: {id: string, altKm: number}, tripKg: (number|null)}|null)} `tripKg` null = the thruster cannot fly that trip
+ */
+export function finishReserve(reg, a) {
+  if (!reg || typeof reg.satellites !== 'function' || typeof reg.planTo !== 'function' || !a || !Number.isFinite(a.fromKm)) return null;
+  const sat = nearestSatellite(reg.satellites(), a.fromKm);
+  if (!sat) return null;
+  const plan = reg.planTo(sat, { fromKm: a.fromKm, lessKg: a.lessKg });
+  if (!plan) return null;
+  const tripKg = plan.profile && plan.profile.ok ? plan.profile.gasKg : null;
+  return { holds: tripKg !== null && tripKg <= a.gasLeftKg + 1e-9, sat, tripKg };
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------
 // Approach leg: a measured table, and the physical minimum beside it
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -807,7 +839,18 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
       // route-1106 lane S4: the finish burn closes the last gap first (the game's `finishStationBurn`: gas and days, billed at the station's
       // height; priced only for the start whose tilt is the station's, else 0); with too little gas the part stays aboard, nothing billed
       const fin = finishBurn({ gapDeg: w.gapDeg, herIncDeg: state.incDeg, massKg: w.dryMassKg + w.carriedKg + w.gasKg, thrustN: state.thrustN, ispS: state.ispS, gasAboardKg: w.gasKg });
-      if (fin.feasible) {
+      // DECISIONS §67 row 6: the game's `finishStationBurn` also keeps a reserve: after the finish she must still reach the nearest resupply
+      // satellite (the leg from the station's height, at her mass after the finish, on the gas left). A zero finish goes ahead as the game's early return does.
+      let reserveOk = true;
+      if (fin.feasible && fin.gasKg > 0) {
+        const sat = nearestSatellite(Constants.RESUPPLY.SATS, stop.altKm);
+        if (sat) {
+          const rargs = { fromKm: stop.altKm, toKm: sat.altKm, massKg: Math.max(1, w.dryMassKg + w.carriedKg + w.gasKg - fin.gasKg), thrustN: state.thrustN, ispS: state.ispS, areaM2: state.areaM2, cos, stepS: state.stepS };
+          const rt = climbTooLong(rargs) ? { ok: false, gasKg: 0 } : transfer(rargs);
+          reserveOk = rt.ok && rt.gasKg <= w.gasKg - fin.gasKg + 1e-9;
+        }
+      }
+      if (fin.feasible && reserveOk) {
         w.gasKg -= fin.gasKg; w.gasUsedKg += fin.gasKg; w.days += fin.days;
         if (fin.gasKg > 0) w.gapDeg = 0;
         const cr = Math.max(0, stop.payCr || 0);

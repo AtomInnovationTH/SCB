@@ -37,7 +37,7 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
-import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg, stationInOwnPlane, stationOrbit, cityStation, cityStationKey } from './NodeDrift.js'; import { finishBurn } from './RouteCost.js';     // route-1101 lane S2: the station node gap; route-1106 lane S4: the finish burn to the station's plane (one line: test-CodexAdr2026 pins GameFlowManager line numbers)
+import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg, stationInOwnPlane, stationOrbit, cityStation, cityStationKey } from './NodeDrift.js'; import { finishBurn, finishReserve } from './RouteCost.js';     // route-1101 lane S2: the station node gap; route-1106 lane S4: the finish burn to the station's plane (one line: test-CodexAdr2026 pins GameFlowManager line numbers)
 import { WAIT_ID } from './WhereNextRows.js';
 import {
   postFirstJob, postRemovalJob, postPressJob, postInsurerJob, postPartJob, isJobPiece, jobMember, bodyMassKg, bountyPayLine, removalPayLine, jobPayCr, jobPartPayCr,
@@ -4316,7 +4316,9 @@ export class GameFlowManager {
    * The finish burn to the station object's plane (route-1106 lane S4, D4; route-1107-d2: every start, priced at the object's height with
    * the tilt difference counted): she is lined up and a station action is due (the boss is about to arm, or a part is to be handed over).
    * Prices `RouteCost.finishBurn` on the registry's `burnInputs`; refuses (false, nothing billed, one line naming the gas) when the gas is
-   * short or the engine worn out; else bills the gas, adds the days, closes the gap, sets `stationJoined` and says one line. While joined
+   * short or the engine worn out, and (DECISIONS §67 row 6, `RouteCost.finishReserve`) when after the burn she would not have the gas left to
+   * reach the nearest resupply satellite (one line, same throttle: it waits and is asked again at the next mission start or arrival; no test
+   * for a registry without `satellites()` / `planTo` or a height that is no number); else bills the gas, adds the days, closes the gap, sets `stationJoined` and says one line. While joined
    * (no leg of days since the last finish) it bills nothing. True without billing when the field map is off or the plane angle is under
    * 1e-4 deg.
    * @returns {boolean} true = the finish is flown (or nothing was owed)
@@ -4345,6 +4347,22 @@ export class GameFlowManager {
       if (!last || last.shipDays !== gameState.shipDays || last.gapDeg !== gap) {
         this._finishRefused = { shipDays: gameState.shipDays, gapDeg: gap };
         say(inp.wornOut ? `The finish burn to ${plane} needs ${kgText(fb.gasKg)} kg of gas and a working engine.` : `The finish burn to ${plane} needs ${kgText(fb.gasKg)} kg of gas.`, 'warn');
+      }
+      return false;
+    }
+    // DECISIONS §67 row 6: the finish only begins if, after the burn, she still has the gas to reach the nearest resupply satellite. No test for
+    // a registry without `satellites()` / `planTo` or a height that is no number (a null plan must never refuse the finish for ever).
+    const herKm = typeof reg.altitudeKm === 'function' ? reg.altitudeKm() : NaN;
+    const rsv = finishReserve(reg, { fromKm: herKm, lessKg: fb.gasKg, gasLeftKg: inp.gasAboardKg - fb.gasKg });
+    if (rsv && !rsv.holds) {
+      const last = this._finishRefused;
+      if (!last || last.shipDays !== gameState.shipDays || last.gapDeg !== gap) {
+        this._finishRefused = { shipDays: gameState.shipDays, gapDeg: gap };
+        // two decimals: the refusal can be a few hundredths short, and a rounded 0.6 + 0.3 against 0.9 aboard would not read as short
+        const onTo = rsv.tripKg === null ? `the thruster could not then fly on to the ${Math.round(rsv.sat.altKm)} km resupply satellite` : `the trip on to the ${Math.round(rsv.sat.altKm)} km resupply satellite ${rsv.tripKg.toFixed(2)} kg more`;
+        // the shortfall rounded UP to 0.01 kg, so a few thousandths short still reads as short (none when the trip cannot be flown at all)
+        const shortTxt = rsv.tripKg === null ? '' : `, ${Math.max(0.01, Math.ceil((fb.gasKg + rsv.tripKg - inp.gasAboardKg) * 100 - 1e-9) / 100).toFixed(2)} kg short`;
+        say(`The finish burn to ${plane} waits: it takes ${fb.gasKg.toFixed(2)} kg of gas, and ${onTo}; ${inp.gasAboardKg.toFixed(2)} kg aboard${shortTxt}.`, 'warn');
       }
       return false;
     }

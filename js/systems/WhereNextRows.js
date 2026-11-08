@@ -40,7 +40,7 @@ import { fatePay } from './BigPieceValues.js';
 import { pushTargetKm, lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
 import { jobLine, capsuleCanDrop } from './JobsBoard.js';
 import { stationFieldId, gapChangeOverLeg, waitDaysToLineUp, isLinedUp, stationInOwnPlane, wrapDeg } from './NodeDrift.js';
-import { finishBurn } from './RouteCost.js';
+import { finishBurn, nearestSatellite, finishReserve } from './RouteCost.js';
 
 export const STAY_ID = 'stay';
 
@@ -135,7 +135,8 @@ export function pctText(gasKg, aboardKg) {
  * field row ends " \u00b7 Wanted".
  * `station` (route-1101 lane S2) `{pending, gapDeg, incDeg}`: while `pending` (the ISS boss still to come), a wait row (kind `wait`, id
  * WAIT_ID) and the station field's note (`stationWait`). None berthed, or with a mission going on.
- * @returns {{rows: WhereNextRow[], focusId: (string|null), selectable: string[], line: (string|null), job: ({text: string, fieldId: string, done: boolean, missed: boolean}|null)}}
+ * @returns {{rows: WhereNextRow[], focusId: (string|null), selectable: string[], line: (string|null), job: ({text: string, fieldId: string, done: boolean, missed: boolean}|null), nearestSatId: (string|null)}}
+ *   `nearestSatId` (DECISIONS §67 row 5): the id of the nearest resupply satellite (`RouteCost.nearestSatellite` from where she is measured from); null while berthed at one
  */
 export function buildWhereNextRows(reg, opts = {}) {
   const berth = typeof reg.berthedSatellite === 'function' ? reg.berthedSatellite() : null;
@@ -274,7 +275,9 @@ export function buildWhereNextRows(reg, opts = {}) {
   const line = selectable.length
     ? (berth && !anyPieces && onlySatellites ? ALL_CLEARED_LINE : null)
     : (berth ? (anyPieces ? BERTH_NO_REACH_LINE : ALL_CLEARED_LINE) : NO_REACH_LINE);
-  return { rows, focusId, selectable, line, job: jobOf(rows, opts && opts.job) };
+  // DECISIONS §67 row 5: the nearest resupply satellite from where she is measured from (null while berthed at one: she is at the shop already)
+  const nearSat = !berth && typeof reg.satellites === 'function' ? nearestSatellite(reg.satellites(), fromKm) : null;
+  return { rows, focusId, selectable, line, job: jobOf(rows, opts && opts.job), nearestSatId: nearSat ? nearSat.id : null };
 }
 
 /**
@@ -308,9 +311,11 @@ const moreFields = (n) => `${n} more ${n === 1 ? 'field' : 'fields'}`;
  *   - the field of an open job (`model.job`, not done, not missed) she can pick is always drawn: one extra line after the five when it is not among them.
  *   - Stay is its own line at the bottom, outside the five.
  *   - the call, when she can pick it, is always among the five (it has no chip on the height scale).
+ *   - the nearest resupply satellite (`model.nearestSatId`, DECISIONS §67 row 5), when she can pick it, is always among the five: it takes the
+ *     last slot the wait and call rows do not hold, never row 1's. Not drawn when she cannot pick it (short of gas: the call row comes instead).
  *   - `outLines`: at most two short lines saying why rows are not drawn ("3 more fields out of reach: need more gas"); none when there
  *     is nothing to say, and none when the model already carries its own line (nothing can be picked).
- * @param {{rows: WhereNextRow[], focusId: (string|null), line?: (string|null)}} model @param {string|null} [focusId] the focus now
+ * @param {{rows: WhereNextRow[], focusId: (string|null), line?: (string|null), nearestSatId?: (string|null)}} model @param {string|null} [focusId] the focus now
  * @returns {{rows: WhereNextRow[], topIds: string[], bestId: (string|null), outLines: string[]}}
  */
 export function whereNextView(model, focusId = null) {
@@ -333,6 +338,18 @@ export function whereNextView(model, focusId = null) {
   if (waitRow && !top.includes(waitRow)) {
     if (top.length < TOP_N) top.push(waitRow);
     else top[callRow && top[TOP_N - 1] === callRow ? TOP_N - 2 : TOP_N - 1] = waitRow;
+  }
+  // DECISIONS §67 row 5: the nearest resupply satellite is always among the five while she can pick it (buying stays one tap away). Forced
+  // after the wait block (that block overwrites the last slot unless the call is there): it takes the last slot a forced wait or call row does
+  // not hold, and never the best pick's. Not selectable (short, a mission going on): nothing is forced. A model without `nearestSatId` draws as before.
+  const nearRow = model && model.nearestSatId ? reach.find((r) => r.id === model.nearestSatId && r.kind === SATELLITE_ROW_KIND) : null;
+  if (nearRow && !top.includes(nearRow)) {
+    if (top.length < TOP_N) top.push(nearRow);
+    else {
+      let at = TOP_N - 1;
+      while (at > 0 && (top[at] === callRow || top[at] === waitRow)) at--;
+      top[at] = nearRow;
+    }
   }
   const drawn = top.slice();
   // an open job's field is always on the list (the Wanted line tells her to go there): one extra row after the five when it is not among them
@@ -427,7 +444,16 @@ function stationWait(reg, st, here, herKm, turn = null) {
       // a trip to the station field comes first: the finish is flown on the gas and mass she has after it
       const spent = prof && Number.isFinite(prof.gasKg) ? prof.gasKg : 0;
       const fin = inp ? finishBurn({ gapDeg: wrapDeg(arrivalGap), herIncDeg: st.incDeg, massKg: Math.max(1, inp.massKg - spent), thrustN: inp.thrustN, ispS: inp.ispS, gasAboardKg: Math.max(0, inp.gasAboardKg - spent) }) : null;
-      if (fin && fin.gasKg >= 0.005) note += fin.feasible && !inp.wornOut ? `; finish burn ${kgText(fin.gasKg)} kg gas, ${daysText(fin.days)}` : `; finish burn needs ${kgText(fin.gasKg)} kg of gas`;
+      if (fin && fin.gasKg >= 0.005) {
+        if (!(fin.feasible && !inp.wornOut)) note += `; finish burn needs ${kgText(fin.gasKg)} kg of gas`;
+        else {
+          // DECISIONS §67 row 6: the finish also keeps the gas to reach the nearest resupply satellite; short of it the finish waits
+          const rsv = finishReserve(reg, { fromKm: field.altKm, lessKg: spent + fin.gasKg, gasLeftKg: inp.gasAboardKg - spent - fin.gasKg });
+          note += rsv && !rsv.holds
+            ? `; finish burn waits: ${fin.gasKg.toFixed(2)} kg gas ${rsv.tripKg === null ? 'and the thruster could not then fly on' : `+ ${rsv.tripKg.toFixed(2)} kg`} to the ${Math.round(rsv.sat.altKm)} km satellite${rsv.tripKg === null ? '' : `, ${Math.max(0.01, Math.ceil((rsv.tripKg - (inp.gasAboardKg - spent - fin.gasKg)) * 100 - 1e-9) / 100).toFixed(2)} kg short`}`
+            : `; finish burn ${kgText(fin.gasKg)} kg gas, ${daysText(fin.days)}`;
+        }
+      }
     }
   }
   else if (row) note = `${nm || 'station'} not lined up: wait ${daysText(days)} here`;
