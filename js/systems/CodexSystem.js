@@ -16,6 +16,7 @@ import { Constants, trlToBadgeColor, trlToLabel } from '../core/Constants.js';
 import { persistenceManager } from './PersistenceManager.js';
 import { CODEX_TRIGGERS } from './codex/codexTriggers.js';
 import { interpolate } from './codex/codexInterpolate.js';
+import { isTrainingNow, onTrainingHintShown } from './TrainingHintGate.js';
 
 // Logic enum; labels/icons/colours live in data/codex.json meta.
 export const CodexCategory = {
@@ -210,6 +211,9 @@ export class CodexSystem {
       }
     }
 
+    // Training 1-3: a held hint reaches the text triggers when CommsSystem shows it, with the line as shown
+    onTrainingHintShown((data, text) => this._checkUnlocks(Events.COMMS_MESSAGE, { ...data, text }, true));
+
     // Codex persistence, self-managed (like SubsystemEvents). On save, attach state to the bundle; on load, read via
     // peek() (load() re-emits PERSISTENCE_LOADED and would recurse).
     eventBus.on(Events.PERSISTENCE_GATHER, (saveData) => {
@@ -255,7 +259,11 @@ export class CodexSystem {
     eventBus.on(Events.GAME_RESET, resetMissionClock);
   }
 
-  _checkUnlocks(eventName, payload) {
+  _checkUnlocks(eventName, payload, fromGate = false) {
+    // Training 1-3 (DECISIONS §65 row 1): a hint line the comms gate may hold (or drop) and a colour line it drops are not
+    // read from the raw emit; a hint triggers the codex when it is SHOWN (`fromGate`, below). Elsewhere nothing changes.
+    if (eventName === Events.COMMS_MESSAGE && !fromGate && payload
+        && (payload._kind === 'hint' || payload._kind === 'colour') && isTrainingNow()) return;
     // GAME_WIN is terminal (update() stops draining the queue on the win screen): unlock matching entries immediately
     // so a simultaneous endgame batch all lands. _performUnlock guards !unlocked, so this stays safe.
     const immediate = (eventName === Events.GAME_WIN);

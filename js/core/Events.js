@@ -590,7 +590,7 @@ export const Events = {
 
   // AIM-BEFORE-LAUNCH
   AIM_SEQUENCE_START:     'aim:sequenceStart',         // { mode: 'net'|'daughter'|'turn' }
-  AIM_SEQUENCE_END:       'aim:sequenceEnd',           // { mode: 'net'|'daughter'|'turn', result: 'resolved'|'rejected', reason? }
+  AIM_SEQUENCE_END:       'aim:sequenceEnd',           // { mode: 'net'|'daughter'|'turn', result: 'resolved'|'rejected', reason?, gasUnits? (mode 'turn': the turn's steering gas, pool units) }
   MOTHER_MANUAL_ROTATE:   'mother:manualRotate',       // arrow-key attitude input in mother mode (cancels aim seq)
 
   // THRUST VISUAL
@@ -810,6 +810,12 @@ export const Events = {
   /** A daughter launch was refused: a part of the ship is in the way (or opening struts never cleared it in 8 s).
    *  Payload: { armIndex, armId, part: plain-words part, cat: 'hull'|'wing'|'rad'|'nose'|'strutN'|'dauN'|'catch', reason: 'blocked'|'timeout' } */
   ARM_LAUNCH_HELD:           'arm:launchHeld',
+
+  // TRAINING HINTS (DECISIONS §65 row 1)
+  /** A key press reached the game's action handling (InputManager, after the overlay / codex / menu intercepts):
+   *  something useful, as far as the training hint gate is concerned (camera, zoom and menu keys never emit this).
+   *  Payload: { key: 'S'|'N'|'D'|'A'|'L'|'T'|'R'|'Q'|'.'|'TURN' } */
+  PLAYER_ACTED:              'player:acted',
 };
 
 export default Events;

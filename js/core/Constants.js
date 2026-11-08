@@ -5702,6 +5702,8 @@ export const Constants = {
      *   { id, type:'narrative'|'interactive'|'reactive', text, source?, channel?,
      *     skillId?, triggerEvent? (Events key), triggerFilter?(data)=>bool,
      *     holdMs?, escalateMs?, title?, body? (escalation overlay),
+     *     hintKey? (the key an interactive beat's line asks for: a useful input with it drops the held line in training 1-3; default the beat id),
+     *     hintStaleIf? (latch) => bool, true = the held line's claim is no longer true (it drops; the beat itself goes on),
      *     mapText? (the words when fields by height is on and the LEO map is there to ask on; `{km}` = the height of the
      *     field she is at, read by MissionCoach from the field registry; absent or no registry = `text`) }
      */
@@ -5726,6 +5728,7 @@ export const Constants = {
           text: 'Next, a double shot. Once both daughters are home and charged, I\'ll mark two pieces that line up for them at once. Fired together, their kicks cancel, so the kick itself costs almost no gas. Turning the ship to line them up can still use steering gas; a line tells you how much. Press Q to fire the pair.',
           skillId: 'collect_dual_fire',
           triggerEvent: 'DUAL_FIRE',
+          hintKey: 'Q',
           title: 'DOUBLE SHOT',
           body: 'Press Q when two pieces are marked to launch both daughters together.',
         },
@@ -5748,6 +5751,7 @@ export const Constants = {
           skillId: 'arm_pilot_capture',
           triggerEvent: 'ARM_CAPTURED',
           triggerFilter: (d) => d && d.manual === true,
+          hintKey: 'N',
           title: 'MANUAL CAPTURE',
           body: 'Close on a target under manual pilot and press N to net it for 2× score.',
         },
@@ -5787,6 +5791,9 @@ export const Constants = {
           skillId: 'mover_close',
           triggerEvent: 'AUTOPILOT_ARRIVED',
           triggerFilter: (d) => !!(d && d.mover === true),
+          hintKey: 'A',
+          // "Too far for a net." is not true any more once the picked piece is inside net range on its own (the held line drops)
+          hintStaleIf: (latch) => !!(latch.inRange && latch.inRange.in === true && latch.selected && latch.selected.id === latch.inRange.id),
           doneIf: (latch) => !!(latch.arrived && latch.arrived.debrisId != null) || latch.caught,
           mover: true,
           title: 'FLY IN',
@@ -5800,6 +5807,7 @@ export const Constants = {
           skillId: 'mover_despin',
           triggerEvent: 'DESPIN_IN_SPEC',
           triggerFilter: (d) => !!(d && d.mover === true),
+          hintKey: 'L',
           doneIf: (latch) => latch.caught
             || !!(latch.selected && latch.selected._mover === true && Number.isFinite(latch.selected.tumbleRate)
               && latch.selected.tumbleRate * 180 / Math.PI <= Constants.DESPIN_LASER.IN_SPEC_DEG),
@@ -5815,6 +5823,7 @@ export const Constants = {
           skillId: 'mover_net',
           triggerEvent: 'NET_CATCH_SUCCESS',
           triggerFilter: (d) => !!(d && d.mover === true),
+          hintKey: 'N',
           doneIf: (latch) => latch.caught,
           mover: true,
           title: 'NET IT',

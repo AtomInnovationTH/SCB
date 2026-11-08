@@ -691,6 +691,10 @@ export class PlayerSatellite extends THREE.Group {
     // that push opposite ways in the same frame cancel instead of being billed one after the other.
     this._kickLx = 0;
     this._kickLy = 0;
+    // Which source (a reeling daughter, the launch gun, ...) made this frame's kick: |Lx|+|Ly| per source, so the gas the frame's sum
+    // costs can be shared out in `_flushKicks` (t13 lane G: a reel's pull is named in the "is home" line).
+    this._kickSrcAbs = new Map();
+    this._reelPullKgBySrc = new Map();        // source -> kg of steering gas its pushes cost since `takeReelPullKg` last cleared it
     // The gas the reel line's push has cost her (kg): holding against it under the autopilot HOLD, and nulling its turn;
     // and when her cold-gas puffs last fired for it (performance.now seconds).
     this._reelPushHoldKg = 0;
@@ -7574,6 +7578,8 @@ export class PlayerSatellite extends THREE.Group {
       // once with `opts.flush` (the tests that read the bill right after).
       this._kickLx += lx;
       this._kickLy += ly;
+      const bySrc = this._kickSrcAbs || (this._kickSrcAbs = new Map());   // (lazy: a test's bare prototype object has no constructor state)
+      bySrc.set(src, (bySrc.get(src) || 0) + Math.abs(lx) + Math.abs(ly));
       if (opts.flush === true) this._flushKicks();
     }
 
@@ -7594,15 +7600,40 @@ export class PlayerSatellite extends THREE.Group {
    */
   _flushKicks() {
     let lx = this._kickLx, ly = this._kickLy;
+    const bySrc = this._kickSrcAbs || (this._kickSrcAbs = new Map());
     this._kickLx = 0;
     this._kickLy = 0;
-    if (!(Math.abs(lx) + Math.abs(ly) > 1e-6)) return;
+    if (!(Math.abs(lx) + Math.abs(ly) > 1e-6)) { bySrc.clear(); return; }
     const o = this._wheelAbsorbKick(lx, ly);
     if (o) { lx = o.x; ly = o.y; }
     if (Math.abs(lx) + Math.abs(ly) > 1e-6) {
-      this._reelPushTurnKg += this._billTurnNullN2(lx, ly);
+      const kg = this._billTurnNullN2(lx, ly);
+      this._reelPushTurnKg += kg;
+      // the frame's gas bill, shared out by each source's part of the frame's kicks (a pull and a push of one frame that cancelled
+      // were billed once, so this is the share of the sum, not a per-source price list)
+      if (kg > 0) {
+        let total = 0;
+        for (const a of bySrc.values()) total += a;
+        if (total > 0) {
+          const pulls = this._reelPullKgBySrc || (this._reelPullKgBySrc = new Map());
+          for (const [s, a] of bySrc) pulls.set(s, (pulls.get(s) || 0) + kg * a / total);
+        }
+      }
       this._reelPushTurnPuff(lx, ly);
     }
+    bySrc.clear();
+  }
+
+  /**
+   * kg of steering gas the pushes of `source` (a reeling daughter: `applyForceAtPoint`'s `opts.source`) have cost through
+   * `_flushKicks` since the last call for it; clears the tally. What the "is home" / "secured" line names (t13 lane G, Decision 8).
+   * @param {object} source @returns {number}
+   */
+  takeReelPullKg(source) {
+    const pulls = this._reelPullKgBySrc;
+    const kg = (pulls && pulls.get(source)) || 0;
+    if (pulls) pulls.delete(source);
+    return kg;
   }
 
   /** @private reel-push: `source`'s gathered-Δv vector (m/s, world), made on demand when `create`; else null when it has none. */
@@ -7630,7 +7661,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!(acc.length() > 1e-9)) return null;                               // below applyCartesianImpulse's own floor
     const dv = (this._vPushDv || (this._vPushDv = new THREE.Vector3())).copy(acc);
     const res = this.applyCartesianImpulse(dv, 0, { noBill: true, quiet: true });
-    if (res === true && this._reelPushHoldErases()) this._reelPushHoldBurn(dv);
+    if (res === true && this._reelPushHoldErases()) this._reelPushHoldBurn(dv, key);
     return res;
   }
 
@@ -7651,6 +7682,8 @@ export class PlayerSatellite extends THREE.Group {
     this.clearReelPush();
     this._kickLx = 0;
     this._kickLy = 0;
+    if (this._kickSrcAbs) this._kickSrcAbs.clear();
+    if (this._reelPullKgBySrc) this._reelPullKgBySrc.clear();
     this._recoilPitchVel = 0;
     this._recoilYawVel = 0;
     this._recoilPitchAngle = 0;
@@ -7698,9 +7731,11 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * @private The HOLD burns to cancel `dvWorld` (what the line just gave her): bill the gas and puff.
-   * m = M x |Δv| / (Isp x g0), what is left in the tank at most (a short tank is drained, like the other burn bills).
+   * m = M x |Δv| / (Isp x g0), what is left in the tank at most (a short tank is drained, like the other burn bills). The kg is also
+   * added to `source`'s pull tally (`takeReelPullKg`: the autopilot HOLD's station-keeping against a reel's line is part of that reel's
+   * pull cost, named in the "is home" line).
    */
-  _reelPushHoldBurn(dvWorld) {
+  _reelPushHoldBurn(dvWorld, source) {
     const RP = Constants.REEL_PUSH || {};
     const mass = (this.mass > 0) ? this.mass : 130;
     let kg = mass * dvWorld.length() / ((RP.HOLD_ISP_S ?? 60) * Constants.G0);
@@ -7713,6 +7748,10 @@ export class PlayerSatellite extends THREE.Group {
     if (pool > 0) {
       eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'coldGas', amount: pool });
       this._reelPushHoldKg += kg;
+      if (source) {
+        const pulls = this._reelPullKgBySrc || (this._reelPullKgBySrc = new Map());
+        pulls.set(source, (pulls.get(source) || 0) + kg);
+      }
     }
     // The burn pushes AGAINST the line: thrust along -dv; the puff sprites sit at the nozzle that opposes this thrust,
     // like every other burn puff

@@ -11,6 +11,7 @@ import { Events } from '../core/Events.js';
 import { gameState, GameStates } from '../core/GameState.js';
 import { getMissionProgress, isGuidedChapterNumber, missionName } from '../core/missionProgress.js';
 import timerManager from './TimerManager.js';
+import { isTrainingNow } from './TrainingHintGate.js';
 import { CameraViews } from './CameraSystem.js';
 import { scoringSystem, computeSaleValue } from './ScoringSystem.js';
 import { audioSystem } from './AudioSystem.js';
@@ -1646,6 +1647,9 @@ export class GameFlowManager {
               sender: 'SPACECRAFT',
               text: 'Multiple contacts nearby. Press S to scan.',
               priority: 'info',
+              // an invitation: training 1-3 hold it until she has done nothing useful for ~10 s (DECISIONS §65 row 1)
+              _kind: 'hint',
+              _hintKey: 'S',
             });
           }
         }, 3600, { owner: this });
@@ -1744,11 +1748,25 @@ export class GameFlowManager {
 
             if (dist > 0.005) { // > ~500m = drifted significantly
               this._firstTimeComms.add('drift_recovery');
+              // The whole line is a nudge (she let the piece drift): ONE hint, held in training 1-3 until she is stuck for ~10 s
+              // (DECISIONS §65 row 1).
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'SPACECRAFT',
                 text: 'Target drifting. Press A to re-approach.',
                 priority: 'info',
                 _keep: true,   // the next step - never folded into "x N queued"
+                _kind: 'hint',
+                _hintKey: 'A',
+                // she netted it (or it is gone), or she closed in herself: it is no longer drifting away from us
+                _hintStale: () => {
+                  if (arrivedTarget._captured === true || arrivedTarget.alive === false || this._firstTimeComms.has('first_capture')) return true;
+                  try {
+                    const c = orbitToSceneCartesian(arrivedTarget.orbit);
+                    const p = this._refs.player;
+                    if (!c || !c.position || !p) return false;
+                    return p.getPosition().distanceTo(new THREE.Vector3(c.position.x, c.position.y, c.position.z)) <= 0.005;
+                  } catch (_e) { return false; }
+                },
               });
             }
           }, 8000, { owner: this });
@@ -1764,10 +1782,27 @@ export class GameFlowManager {
       if (this._onboardingRunning) return;
       if (!this._firstTimeComms.has('first_capture')) {
         this._firstTimeComms.add('first_capture');
+        if (!isTrainingNow()) {
+          // mission 4+: the ONE original line (nothing holds there, so no split)
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            sender: 'HOUSTON',
+            text: 'Got it! Press T for next target.',
+            priority: 'info',
+          });
+          return;
+        }
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'HOUSTON',
-          text: 'Got it! Press T for next target.',
+          text: 'Got it!',
           priority: 'info',
+        });
+        // the invitation waits for her to be stuck in training 1-3 (DECISIONS §65 row 1)
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          sender: 'HOUSTON',
+          text: 'Press T for next target.',
+          priority: 'info',
+          _kind: 'hint',
+          _hintKey: 'T',
         });
       }
     };

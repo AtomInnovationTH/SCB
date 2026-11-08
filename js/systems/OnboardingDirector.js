@@ -224,6 +224,15 @@ export const ONBOARDING_BEATS = [
 const BEAT_INDEX_BY_ID = new Map(ONBOARDING_BEATS.map((b, i) => [b.id, i]));
 
 /**
+ * The beats whose comms line asks her to do something (DECISIONS §65 row 1), with the key it asks for (a useful input with
+ * that key drops the held line; free_clear / final name no key, so their id is their key). The other beats' lines report.
+ */
+const HINT_BEAT_KEYS = Object.freeze({
+  handshake: 'S', tease_lock: 'N', second_catch: 'N', range_wall: 'A', close_and_catch: 'N',
+  free_clear: 'free_clear', final: 'final',
+});
+
+/**
  * All trigger-event NAMES for a beat: `triggerEvent` plus `altTriggerEvents` (capture beats satisfy on the mother
  * path's LASSO_CAPTURED or a daughter dock's DEBRIS_CAPTURED). De-duplicated; empty for narrative beats.
  */
@@ -319,6 +328,13 @@ export class OnboardingDirector {
     this._openingLineAtMs = null;
     /** True once a scan has started or revealed a contact this run: "Scan to identify targets." is then stale and is not posted. */
     this._scanSeen = false;
+
+    /**
+     * Running counts of what she has done, for the training hint predicates (DECISIONS §65 row 1): a held beat line
+     * is compared with the counts at its own post, so "she fired a net / caught / engaged the autopilot AFTER the line
+     * was posted" makes it stale. Never reset by a beat change (a beat advancing on its timer must not touch them).
+     */
+    this._acts = { nets: 0, catches: 0, autopilots: 0 };
 
     this._completedBeats = new Set();
     this._skippedBeats = new Set();
@@ -626,6 +642,10 @@ export class OnboardingDirector {
     for (const name of ['SCAN_INITIATED', 'SCAN_COMPLETE', 'TARGET_DISCOVERED']) {
       if (Events[name]) on(Events[name], () => { this._scanSeen = true; });
     }
+    // What she has done, for the training hint predicates (see `_acts`, `_hintFields`).
+    for (const name of ['LASSO_FIRED', 'NET_FIRED']) if (Events[name]) on(Events[name], () => { this._acts.nets++; });
+    for (const name of ['LASSO_CAPTURED', 'DEBRIS_CAPTURED']) if (Events[name]) on(Events[name], () => { this._acts.catches++; });
+    if (Events.AUTOPILOT_ENGAGE) on(Events.AUTOPILOT_ENGAGE, () => { this._acts.autopilots++; });
     // Note when the ship's opening line goes up (StartOpening), so the handshake beat can leave it on screen for
     // OPENING_LINE_READ_MS (see _beatGateMet).
     if (Events.COMMS_MESSAGE) {
@@ -1141,6 +1161,7 @@ export class OnboardingDirector {
           // Tag actionable instructions with their beat id so the comms panel can drop the attention highlight the
           // instant the player follows it (HINT_SATISFIED), not at an ack.
           _onboardingBeatId: beat.triggerEvent ? beat.id : undefined,
+          ...this._hintFields(beat),
         });
       }
 
@@ -1693,6 +1714,75 @@ export class OnboardingDirector {
       this._postBeatChip(beat);
     }
     a.nChipPiloted = now;
+  }
+
+  /**
+   * The "do this" fields of a beat's comms line (DECISIONS §65 row 1; TrainingHintGate). In training missions 1-3 CommsSystem
+   * holds such a line until she has done nothing useful for about 10 s. Beats whose line only reports (the acks, the
+   * out-of-nets lines, the smart-default line) get none. The beat's own timer may advance the beat (`autoAdvanceAfter`)
+   * without touching the held line: the line goes only when what it asks for has happened or can no longer happen.
+   *  - `_hintKey`: the key it asks for (a useful input with that key drops it); free_clear / final name no key.
+   *  - `_hintStale()`: true = drop (she did it, or nothing is left to do it to).
+   *  - `_hintReady()`: false = keep holding (the ask is not yet true: the berth is busy, the range is unknown).
+   * Counts are taken NOW, at the post: only what she does after the line counts.
+   * @param {object} beat an ONBOARDING_BEATS row
+   * @returns {object} fields to spread into the COMMS_MESSAGE payload ({} when the line is not an ask)
+   */
+  _hintFields(beat) {
+    const key = HINT_BEAT_KEYS[beat.id];
+    if (!key) return {};
+    const at = { ...this._acts };
+    const ctx = () => { try { return (this._context && this._context()) || {}; } catch (_e) { return {}; } };
+    // nothing left to act on: the field's discovered pieces are all gone (unknown = not gone)
+    const noPieces = () => { const n = ctx().trackedContacts; return Number.isFinite(n) && n === 0; };
+    const acted = () => this._acts.nets > at.nets || this._acts.catches > at.catches;
+    const out = { _kind: 'hint', _hintKey: key };
+    switch (beat.id) {
+      case 'handshake':
+        out._hintStale = () => this._scanSeen || Number(ctx().trackedContacts) > 0;
+        break;
+      case 'tease_lock':
+        out._hintStale = () => acted() || noPieces();
+        // "Debris N meters in front" was true when posted; the ship and the piece move while the line is held (fix round H3)
+        out._hintText = () => this._renderLiveHint(beat);
+        break;
+      case 'second_catch':
+        out._hintStale = () => acted() || noPieces();
+        // the berth is busy (a radiator hand-off): N would be refused, so "keep netting" is not true yet (training 1, 11-06)
+        out._hintReady = () => !this._context || ctx().collarBusy !== true;
+        break;
+      case 'range_wall':
+        // "too far for the net": also stale once the context says the target is no longer out of range (cleared, or in reach).
+        // `=== false` only: a context that does not say (undefined) leaves it held.
+        out._hintStale = () => this._acts.autopilots > at.autopilots || ctx().targetInRange === true || ctx().targetOutOfRange === false || noPieces();
+        break;
+      case 'close_and_catch':
+        out._hintStale = () => acted() || noPieces();
+        // the same answer as the beat's own gate: the target KNOWN inside net reach and the berth free
+        out._hintReady = () => this._beatGateMet(beat);
+        break;
+      default:   // free_clear, final: "clear the rest / the field"
+        out._hintStale = () => noPieces();
+    }
+    return out;
+  }
+
+  /**
+   * The beat's comms line as it is true NOW (a held hint is rendered again when it shows). The distance is re-read; "in front"
+   * stays only while the nearest piece is KNOWN to be within 45° of her heading (the context's `nearestDebrisFrontDeg`).
+   * Past 45°, or when the angle is not a finite number (unknown), it says "away" (no distance known: "nearby"), still true and
+   * still an invitation to N, which aims on its own.
+   * @param {object} beat
+   * @returns {string}
+   */
+  _renderLiveHint(beat) {
+    const text = this._renderCommsText(beat.commsText);
+    if (typeof text !== 'string' || text.indexOf(' in front.') === -1) return text;
+    let ang = null;
+    try { ang = this._context ? (this._context() || {}).nearestDebrisFrontDeg : null; } catch (_e) { ang = null; }
+    // "in front" is claimed only when the bearing is KNOWN and within 45°; an unknown bearing (nothing within 5 km) drops it
+    if (Number.isFinite(ang) && ang <= 45) return text;
+    return /meters in front\./.test(text) ? text.replace(' in front.', ' away.') : text.replace(/Debris in front\./, 'Debris nearby.');
   }
 
   _emitComms(msg) {

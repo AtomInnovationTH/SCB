@@ -7,6 +7,7 @@
 
 import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from './TimeAuthority.js';
+import { isTrainingNow } from './TrainingHintGate.js';
 
 /** The ONE line for N with no mother nets left (DECISIONS §33 row 3). Every empty-magazine refusal says exactly this. */
 export const OUT_OF_MOTHER_NETS_LINE = 'Out of mother nets. Press D to send a daughter.';
@@ -106,6 +107,35 @@ export function dInviteLine(line, hold, waitS) {
   if (!hold) return line;
   const head = line.replace(/\s*Press D to send a daughter\.$/, '');
   return `${head ? `${head} ` : ''}${daughterHoldPhrase(hold, waitS)}; then press D to send a daughter.`;
+}
+
+/**
+ * Split a line that reports and then invites a key press ("In position. Press N to net it.", "Out of mother nets. Press D to
+ * send a daughter.", "In position. The cargo berth is busy for about 12 s; then press N to net it.") into the report (the
+ * first sentence) and the invitation. In training missions 1-3 the report posts at once and the invitation waits for her to
+ * be stuck (DECISIONS §65 row 1). A wait that precedes "then press X" stays in the REPORT as a plain sentence ("In position.
+ * The cargo berth is busy for about 12 s.": true when said); the invitation is the bare "Press X ...", which its caller holds
+ * until the wait is over (`_hintReady`), so it never shows while it would be refused. `waited` says a wait was moved. Pure.
+ * @param {string} text
+ * @returns {{ report: string, ask: string, key: string, waited: boolean }|null} null when the text has no such invitation
+ */
+export function splitReportAsk(text) {
+  if (typeof text !== 'string') return null;
+  const m = /^([^]*?[.!?])\s+([^.!?]*?;\s*then\s+)?([Pp]ress\s+([A-Z0-9])\b[^]*)$/.exec(text);
+  if (!m) return null;
+  const report = m[2] ? `${m[1]} ${m[2].replace(/;\s*then\s+$/, '.')}` : m[1];
+  return { report, ask: `P${m[3].slice(1)}`, key: m[4], waited: !!m[2] };
+}
+
+/**
+ * `splitReportAsk`, but ONLY in training missions 1-3 (DECISIONS §65 row 1). Mission 4+ never splits: the gate does not hold
+ * there, so a bare "Press N to net it." would show while N may still be refused for the berth. Callers post the original
+ * joined line when this returns null (same text, same fields as before the training-hint change).
+ * @param {string} text
+ * @returns {{ report: string, ask: string, key: string, waited: boolean }|null}
+ */
+export function trainingSplit(text) {
+  return isTrainingNow() ? splitReportAsk(text) : null;
 }
 
 /** A daughter with no nets: they refill only at the resupply stop (DECISIONS §33 rows 5 and 8). The map-off words; read

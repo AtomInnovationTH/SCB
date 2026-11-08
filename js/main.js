@@ -1533,6 +1533,9 @@ async function init() {
     contextProvider: () => {
       let trackedContacts = 0;
       let nearestDebrisM = null;
+      // degrees between her heading (the velocity direction, the game's "forward": AutoLock's arc) and that nearest piece;
+      // null = unknown. The tease_lock line says "in front" only while this is under 45° when it SHOWS (a held hint).
+      let nearestDebrisFrontDeg = null;
       try {
         if (debrisField && typeof debrisField.getDiscoveredCount === 'function') {
           trackedContacts = debrisField.getDiscoveredCount(true);
@@ -1543,12 +1546,21 @@ async function init() {
           // (1 unit = 100 km, Constants.SCENE_SCALE = 0.01 per km), so 5 km is 5 * SCENE_SCALE.
           const near = debrisField.getDebrisNear(playerPos, 5 * Constants.SCENE_SCALE);
           let bestKm = Infinity;
+          let bestSp = null;
           for (const d of (near || [])) {
             if (!d) continue; const live = debrisField.getDebrisById ? debrisField.getDebrisById(d.id) : null; if ((live ? live.discovered : d.discovered) === false) continue; // canonical flag: the frame cache can hold pre-reveal snapshots
             if (typeof d.distanceKm === 'number' && d.distanceKm > 5) continue; // getDebrisNear reuses a same-frame wider (500 km sensor) result unfiltered when the radius shrinks: keep to the 5 km we asked for
-            if (typeof d.distanceKm === 'number' && d.distanceKm < bestKm) bestKm = d.distanceKm;
+            if (typeof d.distanceKm === 'number' && d.distanceKm < bestKm) { bestKm = d.distanceKm; bestSp = d._scenePosition || null; }
           }
           if (bestKm < Infinity) nearestDebrisM = bestKm * 1000;
+          const vel = player && player.getVelocity ? player.getVelocity() : null;
+          if (bestSp && vel) {
+            const tx = bestSp.x - playerPos.x; const ty = bestSp.y - playerPos.y; const tz = bestSp.z - playerPos.z;
+            const tl = Math.hypot(tx, ty, tz); const vl = Math.hypot(vel.x, vel.y, vel.z);
+            if (tl > 1e-12 && vl > 1e-12) {
+              nearestDebrisFrontDeg = Math.acos(Math.max(-1, Math.min(1, (tx * vel.x + ty * vel.y + tz * vel.z) / (tl * vl)))) * 180 / Math.PI;
+            }
+          }
         }
       } catch (_e) { /* context is best-effort */ }
       const hasTarget = !!(targetSelector && targetSelector.getActiveTarget && targetSelector.getActiveTarget());
@@ -1574,7 +1586,7 @@ async function init() {
         const sel = targetSelector && targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null;
         dHold = (sel && armManager && typeof armManager.launchHoldRefusal === 'function' ? armManager.launchHoldRefusal(sel) : null) || null;
       } catch (_e) { dHold = null; }
-      return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange, targetInRange: _onboardingTargetInRange, daughterReady: _daughterReadyWithNets(), ladderAway, collarBusy, dHold, dHoldWaitS: collarWaitS };
+      return { trackedContacts, nearestDebrisM, nearestDebrisFrontDeg, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange, targetInRange: _onboardingTargetInRange, daughterReady: _daughterReadyWithNets(), ladderAway, collarBusy, dHold, dHoldWaitS: collarWaitS };
     },
     // Live floor for the DETAIL onboarding beat. ladderController is constructed later; read live (GestureSplash idiom).
     floorProvider: () => ((ladderController && !ladderController.isRiding() && !(ladderController.introInFlight && ladderController.introInFlight())) ? ladderController.currentFloor() : null),
@@ -1615,7 +1627,10 @@ async function init() {
   camera.position.copy(startPos);
   camera.position.y += 0.00008;
 
-  commsSystem = new CommsSystem();
+  // Training missions 1-3 (DECISIONS §65 row 1): the ONE mission getter. CommsSystem holds "do this" lines until she is
+  // stuck and drops colour lines while `isTrainingNow()` (TrainingHintGate) says so; EnvironmentSystem and the other
+  // colour emitters ask the same function. It is read live, never a flag set on MISSION_START (not emitted for mission 1).
+  commsSystem = new CommsSystem({ getMissionNumber: () => scoringSystem.getMissionNumber() });
 
   // MissionCoach (chapters 2+; chapter 1 stays with OnboardingDirector): the chapter onset keys on MISSION_START and
   // holds while a depot stop is pending — the predicate is GameFlowManager's (the ONE depot decision per catch);

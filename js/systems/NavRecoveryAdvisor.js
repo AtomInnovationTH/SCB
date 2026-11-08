@@ -279,21 +279,47 @@ export class NavRecoveryAdvisor {
     if (!nearest) {
       // Field genuinely empty — "lost" vs "done" (#11.4): milestones are GameFlowManager's (#12); here we only
       // route the player to the next cluster.
+      // This whole line is guidance, not a result of anything she did (it fires because she has been lost for a while):
+      // ONE hint, held in training 1-3 until she has done nothing useful for ~10 s (DECISIONS §65 row 1).
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
         text: 'No live contacts remain in this field. Scroll out to LEO and press Space to fly to the next cluster.',
         priority: 'info',
         _postOnboarding: true,
+        _kind: 'hint',
+        _hintKey: 'LEO_MAP',
+        // a live contact came back (a new piece in reach): "No live contacts remain" is no longer true
+        _hintStale: () => {
+          const p = this._playerPos();
+          return !!(p && this._debrisField && findNearestLiveDebris(p, this._debrisField.debrisList || []));
+        },
       });
       return;
     }
 
     const bearing = classifyBearing(playerPos, this._playerVel(), nearest.pos);
+    const hasTargetNow = () => !!(this._targetSelector && typeof this._targetSelector.getActiveTarget === 'function'
+      && this._targetSelector.getActiveTarget());
+    /** the nearest live contact and its bearing as they are NOW (null = none left, or no position) */
+    const liveNow = () => {
+      const p = this._playerPos();
+      const n = p && this._debrisField ? findNearestLiveDebris(p, this._debrisField.debrisList || []) : null;
+      return n ? classifyBearing(p, this._playerVel(), n.pos) : null;
+    };
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
       text: `Nearest contact ~${formatDistanceKm(bearing.distKm)}, ${bearing.label}. Press A to approach.`,
       priority: 'info',
       _postOnboarding: true,
+      _kind: 'hint',
+      _hintKey: 'A',
+      // she picked a target herself meanwhile, or the last live contact is gone: nothing to approach
+      _hintStale: () => hasTargetNow() || liveNow() === null,
+      // the distance and bearing are as they are when the line SHOWS (she and the piece move while it is held)
+      _hintText: () => {
+        const b = liveNow();
+        return b ? `Nearest contact ~${formatDistanceKm(b.distKm)}, ${b.label}. Press A to approach.` : null;
+      },
     });
   }
 }

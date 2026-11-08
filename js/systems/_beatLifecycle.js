@@ -43,7 +43,7 @@ export function beatMatches(beat, data) {
  * interactive/reactive beat waits for `satisfy()` and escalates once after a
  * timeout. Drive it with `update(dt)`; observe via hooks.
  *
- * hooks: { onPost(beat), onSatisfy(beat), onEscalate(beat), onComplete(), shouldSkip?(beat) }
+ * hooks: { onPost(beat), onSatisfy(beat), onEscalate(beat), onComplete(), shouldSkip?(beat), escalateClock?() }
  * timing: { narrativeHoldMs, escalateMs }
  */
 export class BeatSequencer {
@@ -94,7 +94,14 @@ export class BeatSequencer {
       if (this._timer >= holdS) this._advance();
     } else {
       const escS = (beat.escalateMs ?? this.timing.escalateMs ?? 20000) / 1000;
-      if (!this._escalated && this._timer >= escS) {
+      // `hooks.escalateClock()` (optional): seconds on another clock, or null for the beat's own. Training 1-3 reads the
+      // hint gate's idle clock here (DECISIONS §65 row 1): the re-prompt comes when she has done nothing useful for that long.
+      let waited = this._timer;
+      if (typeof this.hooks.escalateClock === 'function') {
+        const s = this.hooks.escalateClock();
+        if (Number.isFinite(s)) waited = s;
+      }
+      if (!this._escalated && waited >= escS) {
         this._escalated = true;
         if (typeof this.hooks.onEscalate === 'function') this.hooks.onEscalate(beat);
       }

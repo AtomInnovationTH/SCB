@@ -15,13 +15,24 @@ import { messagePassesSuppression, rampSuppressionTier, postOnboardingStartTier 
 import { missReasonToText } from '../entities/CaptureNet.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
-import { flyFirstLine } from './netRouting.js';   // the daughter's "Press N" line says her number when N is not hers
+import { flyFirstLine, splitReportAsk } from './netRouting.js';   // the daughter's "Press N" line says her number when N is not hers
 import { depotWords } from './resupplyWords.js';   // the "depot" advice reads the map switch
 import { radToDeg, clamp } from '../core/MathUtil.js';
+import { TrainingHintGate, isTrainingNow, setTrainingMissionGetter, setActiveTrainingGate, notifyTrainingHintShown } from './TrainingHintGate.js';
 
 const MAX_MESSAGES = 20;
 /** A shut start-up gate opens itself after this many seconds of updates (the safety). */
 const HOLD_SAFETY_S = 20;
+
+/**
+ * Game events that only she causes: each counts as "she did something useful" for the training hint gate (the key is
+ * what a held hint with that `_hintKey` was asking for; null = it only restarts the idle clock). Not in the list, on
+ * purpose: TARGET_SELECTED (fires on auto-lock), camera and menu events. Key presses come as `PLAYER_ACTED`.
+ */
+const USEFUL_EVENT_KEYS = [
+  ['LASSO_FIRED', 'N'], ['NET_FIRED', 'N'], ['ARM_DEPLOYED', 'D'], ['AUTOPILOT_ENGAGE', 'A'], ['SCAN_QUICK', 'S'],
+  ['LASSO_CAPTURED', null], ['DEBRIS_CAPTURED', null],
+];
 
 export const CommsPriority = {
   INFO: 'INFO',
@@ -325,7 +336,33 @@ export function debrisPiecesLine(count, altKm, cause = null) {
 }
 
 export class CommsSystem {
-  constructor() {
+  /**
+   * @param {object} [opts]
+   * @param {() => number} [opts.getMissionNumber] the one mission getter (main.js wires `scoringSystem.getMissionNumber`);
+   *   given here it is also what `isTrainingNow()` reads. Without one nothing is training and no line is held or dropped.
+   * @param {() => number} [opts.now] wall clock (ms) of the training hint gate; tests inject a fake
+   */
+  constructor(opts = {}) {
+    if (opts && typeof opts.getMissionNumber === 'function') setTrainingMissionGetter(opts.getMissionNumber);
+    /**
+     * Training missions 1-3: "do this" lines wait until she has done nothing useful for about 10 s, colour lines are
+     * dropped (DECISIONS §65 row 1). See TrainingHintGate.
+     */
+    this._trainingGate = new TrainingHintGate({ now: opts && opts.now });
+    setActiveTrainingGate(this._trainingGate);   // teaching cards and the coach's forced card share its idle clock
+    /**
+     * Raw COMMS_MESSAGE payloads this system held (a waiting hint) or dropped (a colour line). `wouldShow` reads it:
+     * the HUD draws the panel from the raw bus only for lines that pass `wouldShow`. This works because CommsSystem
+     * subscribes to COMMS_MESSAGE before the HUD does (main.js: `new CommsSystem()` is built before the HUD's listener),
+     * so the mark is set when the HUD asks.
+     * @type {WeakSet<object>}
+     */
+    this._gateMarked = new WeakSet();
+    /** Raw ids of the daughters now holding station (STATION_KEEP_ENTERED / _EXITED): the "Press N" ask is stale once hers is gone. */
+    this._stationKeeping = new Set();
+    /** Count of the player's tool changes per raw daughter id (TOOL_SELECTED byPlayer): a held ask posted before one is stale. */
+    this._toolChanges = new Map();
+
     /** @type {Array<{ timestamp: number, source: string, text: string, priority: string, channel: string, id: number }>} */
     this.messages = [];
 
@@ -444,104 +481,182 @@ export class CommsSystem {
     });
 
     // Persists externally-emitted COMMS_MESSAGE events. Stores directly, without addMessage(), to avoid double audio/emit.
-    eventBus.on(Events.COMMS_MESSAGE, (data) => {
-      if (!data || data._internal) return;
-      // External emitters use 'source', 'sender', or 'speaker'; a missing source defaults to 'SYSTEM' so capture-loop comms render
-      let rawSrc = data.source || data.sender || data.speaker;
-      let body = data.text;
-      if (!rawSrc && body) {
-        // no source, but the text names a daughter ("Small 1: ..."): she is the sender, said once
-        const named = splitDaughterPrefix(body);
-        if (named) { rawSrc = named.source; body = named.text; }
-      }
-      if (!rawSrc) console.debug('[CommsSystem] sourceless emit defaulted to SYSTEM:', data.text);
-      const src = rawSrc || 'SYSTEM';
-      if (!body) return;
-      const rawText = stripSenderPrefix(src, body);   // the sender is shown once
-      // On glass the line names the button (LAUNCH NET ...), not the key; desktop text is untouched.
-      // Runs AFTER the strip/split helpers.
-      const text = GestureHints.chipPhrase(rawText);
+    eventBus.on(Events.COMMS_MESSAGE, (data) => this._onExternalMessage(data));
 
-      const channel = sourceToChannel(src, data);
+    // Training hint gate: the player's own inputs (and the events she causes) restart its idle clock (DECISIONS §65 row 1)
+    if (Events.PLAYER_ACTED) eventBus.on(Events.PLAYER_ACTED, (d) => this._trainingGate.noteInput(d && d.key));
+    for (const [name, key] of USEFUL_EVENT_KEYS) {
+      if (Events[name]) eventBus.on(Events[name], () => this._trainingGate.noteInput(key));
+    }
+    // a new mission / a reset: the idle clock restarts and the held hints go
+    if (Events.MISSION_START) eventBus.on(Events.MISSION_START, () => this._trainingGate.reset());
+  }
 
-      // Tier gate. Tag bypasses (_critical/_onboarding/_postOnboarding/_lassoFeedback) + CRITICAL priority are
-      // honoured in the pure helper.
-      if (!messagePassesSuppression(this._suppressionTier, channel, data, data.priority)) {
+  /**
+   * One externally-emitted COMMS_MESSAGE (the bus listener's body). In training missions 1-3 a `_kind: 'colour'` line is
+   * dropped here and a `_kind: 'hint'` line goes through the training gate (held until she has been idle ~10 s); every
+   * other line posts at once. The raw payload of a held or dropped line is marked so `wouldShow` says false.
+   *
+   * @private
+   * @param {object} data the COMMS_MESSAGE payload
+   * @param {boolean} [released] true when the training gate is releasing this held line (it must not be gated again)
+   */
+  _onExternalMessage(data, released = false) {
+    if (!data || data._internal) return;
+    // External emitters use 'source', 'sender', or 'speaker'; a missing source defaults to 'SYSTEM' so capture-loop comms render
+    let rawSrc = data.source || data.sender || data.speaker;
+    let body = data.text;
+    if (released) body = this._hintTextNow(data, body);   // a held hint says what is true when it SHOWS
+    if (!rawSrc && body) {
+      // no source, but the text names a daughter ("Small 1: ..."): she is the sender, said once
+      const named = splitDaughterPrefix(body);
+      if (named) { rawSrc = named.source; body = named.text; }
+    }
+    if (!rawSrc) console.debug('[CommsSystem] sourceless emit defaulted to SYSTEM:', data.text);
+    const src = rawSrc || 'SYSTEM';
+    if (!body) return;
+    const rawText = stripSenderPrefix(src, body);   // the sender is shown once
+    // On glass the line names the button (LAUNCH NET ...), not the key; desktop text is untouched.
+    // Runs AFTER the strip/split helpers.
+    const text = GestureHints.chipPhrase(rawText);
+
+    const channel = sourceToChannel(src, data);
+
+    // Tier gate. Tag bypasses (_critical/_onboarding/_postOnboarding/_lassoFeedback) + CRITICAL priority are
+    // honoured in the pure helper.
+    if (!messagePassesSuppression(this._suppressionTier, channel, data, data.priority)) {
+      return;
+    }
+
+    // Training 1-3: colour is dropped, a "do this" line waits for her to be stuck (see TrainingHintGate)
+    if (!released && isTrainingNow()) {
+      if (data._kind === 'colour') { this._gateMarked.add(data); return; }
+      if (data._kind === 'hint') {
+        const r = this._trainingGate.submit({ data, post: () => this._onExternalMessage(data, true) });
+        if (r.held || r.dropped) this._gateMarked.add(data);
+        this._postReleased(r.released, data);
         return;
       }
+    }
+    this._gateMarked.delete(data);
 
-      // Behind a shut gate the line waits (no log, no callback, no sound, no summary).
-      if (!this._gateOpen) {
-        this._hold({
-          id: this._nextId++,
-          timestamp: this._clockStamp(),
-          source: src,
-          text,
-          priority: data.priority || CommsPriority.INFO,
-          channel,
-          age: 0,
-          // as on the normal post path below
-          onboardingBeatId: data._onboardingBeatId,
-          link: sanitizeCommsLink(data.link),
-        }, data._critical === true || data._reactive === true || data._keep === true || data._coach === true,
-        data._coach === true);
-        return;
-      }
+    // A held hint is shown now: the codex text triggers read it at THIS moment (they skip the raw emit in training 1-3)
+    if (released && data._kind === 'hint') notifyTrainingHintShown(data, text);
 
-      const now = new Date();
-      const tsStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
-      const nowMs = Date.now();
+    this._storeExternal(data, src, text, rawText, channel);
+  }
 
-      const windowMs = COMMS.COALESCE_WINDOW_MS || 2000;
-      this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
-      // A _critical / _reactive line is "kept": never summarised away, and it does not count toward tipping plain lines
-      // into a burst. A `_keep` status line (mission progress, where a catch went, the next step) is kept the same way:
-      // it never bypasses the suppression tier, only coalescing. A `_coach` line (a lesson line, 2026-11-02) counts as
-      // kept here too, and is stored with `coach` so the comms panel's queue cap spares it (`keep` alone does not).
-      const coach = data._coach === true;
-      const kept = data._critical === true || data._reactive === true || data._keep === true || coach;
-      const coal = kept ? { shouldCoalesce: false, count: 0 }
-        : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
-      if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
+  /**
+   * What a held hint says at the moment it shows: its optional `_hintText()` (a distance, a bearing, a "last N°" that was true
+   * when it was posted may have changed while it waited). A missing, throwing or non-string `_hintText` keeps `fallback`.
+   * @private
+   * @param {object} data the hint's payload / extra fields
+   * @param {string} fallback the text it was posted with
+   * @returns {string}
+   */
+  _hintTextNow(data, fallback) {
+    if (!data || typeof data._hintText !== 'function') return fallback;
+    try {
+      const t = data._hintText();
+      return typeof t === 'string' && t ? t : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
 
-      if (coal.shouldCoalesce) {
-        // A burst keeps only its newest line: the older non-kept same-channel lines go; the current line is posted
-        // below as a normal message. No "× n ... queued" line.
-        let removed = 0;
-        for (let i = this.messages.length - 1; i >= 0 && removed < coal.count - 1; i--) {
-          if (this.messages[i].channel === channel && !this.messages[i].keep) {
-            this.messages.splice(i, 1);
-            removed++;
-          }
-        }
-      }
+  /**
+   * Post the hints the training gate released. A line released later than its own post is not on the raw bus any more,
+   * so the panel is repainted with a text-less internal event (as `_openGate` does); the listener body emits none.
+   * @private
+   * @param {Array<{data: object, post: () => void}>} released
+   * @param {object|null} [current] the raw payload being handled right now: the HUD's own bus listener repaints for it
+   */
+  _postReleased(released, current = null) {
+    let repaint = false;
+    for (const h of released) {
+      h.post();
+      if (h.data !== current) repaint = true;
+    }
+    if (repaint) eventBus.emit(Events.COMMS_MESSAGE, { _internal: true, _repaint: true });
+  }
 
-      const msg = {
+  /**
+   * Store one external line in the log (the tail of the COMMS_MESSAGE listener): park it behind a shut start-up gate,
+   * coalesce plain bursts, push, call the HUD.
+   * @private
+   */
+  _storeExternal(data, src, text, rawText, channel) {
+    // Behind a shut gate the line waits (no log, no callback, no sound, no summary).
+    if (!this._gateOpen) {
+      this._hold({
         id: this._nextId++,
-        timestamp: tsStr,
+        timestamp: this._clockStamp(),
         source: src,
         text,
         priority: data.priority || CommsPriority.INFO,
         channel,
         age: 0,
-        // lets the comms panel drop the "demanding attention" highlight the moment the player follows the beat
+        // as on the normal post path below
         onboardingBeatId: data._onboardingBeatId,
-        // `{ term, entryId, anchor? }` or null; CommsPanel wraps the term as a SPECS link, nothing else reads it
         link: sanitizeCommsLink(data.link),
-      };
-      if (kept) msg.keep = true;
-      if (coach) msg.coach = true;
+      }, data._critical === true || data._reactive === true || data._keep === true || data._coach === true,
+      data._coach === true);
+      return;
+    }
 
-      this.messages.push(msg);
-      GestureHints.noteChipLine(rawText);   // glass: a line that names an action key brings that chip up
-      while (this.messages.length > MAX_MESSAGES) {
-        this.messages.shift();
+    const now = new Date();
+    const tsStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+    const nowMs = Date.now();
+
+    const windowMs = COMMS.COALESCE_WINDOW_MS || 2000;
+    this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
+    // A _critical / _reactive line is "kept": never summarised away, and it does not count toward tipping plain lines
+    // into a burst. A `_keep` status line (mission progress, where a catch went, the next step) is kept the same way:
+    // it never bypasses the suppression tier, only coalescing. A `_coach` line (a lesson line, 2026-11-02) counts as
+    // kept here too, and is stored with `coach` so the comms panel's queue cap spares it (`keep` alone does not).
+    const coach = data._coach === true;
+    const kept = data._critical === true || data._reactive === true || data._keep === true || coach;
+    const coal = kept ? { shouldCoalesce: false, count: 0 }
+      : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
+    if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
+
+    if (coal.shouldCoalesce) {
+      // A burst keeps only its newest line: the older non-kept same-channel lines go; the current line is posted
+      // below as a normal message. No "× n ... queued" line.
+      let removed = 0;
+      for (let i = this.messages.length - 1; i >= 0 && removed < coal.count - 1; i--) {
+        if (this.messages[i].channel === channel && !this.messages[i].keep) {
+          this.messages.splice(i, 1);
+          removed++;
+        }
       }
-      // HUD (no sound replay, no re-emit)
-      if (this.onMessage) {
-        this.onMessage(msg);
-      }
-    });
+    }
+
+    const msg = {
+      id: this._nextId++,
+      timestamp: tsStr,
+      source: src,
+      text,
+      priority: data.priority || CommsPriority.INFO,
+      channel,
+      age: 0,
+      // lets the comms panel drop the "demanding attention" highlight the moment the player follows the beat
+      onboardingBeatId: data._onboardingBeatId,
+      // `{ term, entryId, anchor? }` or null; CommsPanel wraps the term as a SPECS link, nothing else reads it
+      link: sanitizeCommsLink(data.link),
+    };
+    if (kept) msg.keep = true;
+    if (coach) msg.coach = true;
+
+    this.messages.push(msg);
+    GestureHints.noteChipLine(rawText);   // glass: a line that names an action key brings that chip up
+    while (this.messages.length > MAX_MESSAGES) {
+      this.messages.shift();
+    }
+    // HUD (no sound replay, no re-emit)
+    if (this.onMessage) {
+      this.onMessage(msg);
+    }
   }
 
   /** @private */
@@ -738,12 +853,39 @@ export class CommsSystem {
             : 'Daughter in position. Press N to net it.'));
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const armId = daughterDisplayName(data?.armId) || 'SYSTEM';
-      this.addMessage('INFO', armId, inPositionLine(data?.tool, data?.armId, data?.inspect), { channel: 'CMD' });
+      const rawId = data?.armId;
+      this._stationKeeping.add(rawId);
+      const line = inPositionLine(data?.tool, rawId, data?.inspect);
+      // Outside training 1-3 (mission 4+) and for the inspect-only line (no invitation) the line is the ONE joined line, as
+      // before the training-hint change (the gate does not hold there, so a split would show a bare "Press N" at once).
+      if (data?.inspect === true || !isTrainingNow()) { this.addMessage('INFO', armId, line, { channel: 'CMD' }); return; }
+      // Training 1-3 (DECISIONS §65 row 1): report now, the invitation as a hint held until she has done nothing useful for
+      // ~10 s. On glass the line names a button, not "Press": one hint.
+      const split = splitReportAsk(line);
+      if (split) this.addMessage('INFO', armId, split.report, { channel: 'CMD' });
+      // the PLAYER's tool changes on this daughter since the ask was posted (her tool at arrival is what it names)
+      const toolSeqAtPost = this._toolChanges.get(rawId) || 0;
+      // The invitation is the next step to press: `_keep`, so a burst (two daughters arriving together make four lines) folds the
+      // plain reports away, never the invitation.
+      this.addMessage('INFO', armId, split ? split.ask : line, {
+        channel: 'CMD', _keep: true, _kind: 'hint', _hintKey: split ? split.key : 'N',
+        // she left station-keep (net away, recalled, fuel, lost): nothing to net any more; or she switched tool while it waited
+        // (the old ask names the old tool; the switch already posted the new tool's line at once, so this one is dropped)
+        _hintStale: () => !this._stationKeeping.has(rawId) || (this._toolChanges.get(rawId) || 0) !== toolSeqAtPost,
+        // re-rendered when it shows: if she flies this daughter meanwhile, N works her tool and "Press 1 to fly her, then" goes
+        _hintText: () => {
+          const now = inPositionLine(data?.tool, rawId, false);
+          const s = splitReportAsk(now);
+          return s ? s.ask : now;
+        },
+      });
     });
+    eventBus.on(Events.STATION_KEEP_EXITED, (data) => { this._stationKeeping.delete(data?.armId); });
     // The PLAYER changed her tool (backquote or CHANGE TOOL): say the new tool's line once. The recommendation ArmUnit
     // makes on station-keep entry emits TOOL_SELECTED too, without `byPlayer`: the entry line above covers it.
     eventBus.on(Events.TOOL_SELECTED, (data) => {
       if (!data || data.byPlayer !== true) return;
+      this._toolChanges.set(data.armId, (this._toolChanges.get(data.armId) || 0) + 1);
       this.addMessage('INFO', daughterDisplayName(data.armId) || 'SYSTEM', inPositionLine(data.tool, data.armId, data.inspect), { channel: 'CMD' });
     });
   }
@@ -759,6 +901,9 @@ export class CommsSystem {
       this._holdElapsedS += dt;
       if (this._holdElapsedS >= HOLD_SAFETY_S) this._openGate();
     }
+    // the training hint gate's clock: real seconds of play only (this runs only in the gameplay branch)
+    const due = this._trainingGate.tick();
+    if (due.length) this._postReleased(due);
     if (!this._active) return;
 
     const gameDt = dt * TimeAuthority.BASE_SCALE;
@@ -814,24 +959,29 @@ export class CommsSystem {
 
   /** @private */
   _sendFlavorMessage() {
+    // Training 1-3: no colour (DECISIONS §65 row 1); the timer just runs on
+    if (isTrainingNow()) return;
     const msg = FLAVOR_MESSAGES[Math.floor(Math.random() * FLAVOR_MESSAGES.length)];
     // radio chatter on a timer, no player action behind it: hidden at every tier
-    this.addMessage(CommsPriority.INFO, msg.source, msg.text, { _quiet: true });
+    this.addMessage(CommsPriority.INFO, msg.source, msg.text, { _quiet: true, _kind: 'colour' });
   }
 
   /** @private */
   _sendLaunchAlert() {
+    if (isTrainingNow()) return;   // colour: a launch somewhere else, nothing she did
     const tmpl = LAUNCH_TEMPLATES[Math.floor(Math.random() * LAUNCH_TEMPLATES.length)];
     const text = tmpl.template
       .replace('{time}', (3 + Math.floor(Math.random() * 12)).toString())
       .replace('{alt}', (400 + Math.floor(Math.random() * 800)).toString())
       .replace('{inc}', (28 + Math.floor(Math.random() * 70)).toFixed(1))
       .replace('{count}', (20 + Math.floor(Math.random() * 60)).toString());
-    this.addMessage(tmpl.priority, tmpl.source, text);
+    this.addMessage(tmpl.priority, tmpl.source, text, { _kind: 'colour' });
   }
 
   /** @private */
   _sendWeatherEvent() {
+    // Training 1-3: the weather event is skipped WITH its effect (a solar storm changes what she has: power)
+    if (isTrainingNow()) return;
     const idx = Math.floor(Math.random() * SPACE_WEATHER_TEMPLATES.length);
     const tmpl = SPACE_WEATHER_TEMPLATES[idx];
     const text = tmpl.template
@@ -839,7 +989,7 @@ export class CommsSystem {
       .replace('{kp}', (5 + Math.floor(Math.random() * 4)).toString())
       .replace('{dur}', (25 + Math.floor(Math.random() * 20)).toString());
 
-    this.addMessage(tmpl.priority, tmpl.source, text);
+    this.addMessage(tmpl.priority, tmpl.source, text, { _kind: 'colour' });
 
     if (tmpl.effect === 'solarStorm') {
       this.activeEffects.solarStorm = true;
@@ -854,6 +1004,7 @@ export class CommsSystem {
 
   /** @private */
   _sendMissionUpdate(gameData) {
+    if (isTrainingNow()) return;   // colour: a timer line she did not cause (DECISIONS §65 row 1)
     // `{target}` is a LIVE piece from the field, never a made-up "Object-NNN". With no live piece the templates that
     // need one are not sent (the others still are).
     const list = (gameData && gameData.debrisField && Array.isArray(gameData.debrisField.debrisList))
@@ -877,7 +1028,7 @@ export class CommsSystem {
       .replace('{tumble}', spinDegS === null ? '' : spinDegS.toFixed(1))
       .replace('{days}', (30 + Math.floor(Math.random() * 365)).toString());
 
-    this.addMessage(tmpl.priority, tmpl.source, text, tmpl.quiet ? { _quiet: true } : undefined);
+    this.addMessage(tmpl.priority, tmpl.source, text, tmpl.quiet ? { _quiet: true, _kind: 'colour' } : { _kind: 'colour' });
   }
 
   /**
@@ -908,6 +1059,31 @@ export class CommsSystem {
       return;
     }
 
+    // Training 1-3 (DECISIONS §65 row 1): colour is dropped, a "do this" line waits for her to be stuck
+    if (extra && isTrainingNow()) {
+      if (extra._kind === 'colour') return;
+      if (extra._kind === 'hint') {
+        const data = { ...extra, text, source, priority };
+        const r = this._trainingGate.submit({ data, post: () => {
+          // re-rendered at release (see `_hintTextNow`)
+          const t = this._hintTextNow(extra, text);
+          if (t === text) { this._storeAdded(priority, source, text, rawText, channel, extra); return; }
+          const raw = stripSenderPrefix(source, t);
+          this._storeAdded(priority, source, GestureHints.chipPhrase(raw), raw, channel, extra);
+        } });
+        this._postReleased(r.released);
+        return;
+      }
+    }
+    this._storeAdded(priority, source, text, rawText, channel, extra);
+  }
+
+  /**
+   * The tail of `addMessage`: park a line behind a shut start-up gate, or coalesce, log, sound, call the HUD, emit the
+   * internal event.
+   * @private
+   */
+  _storeAdded(priority, source, text, rawText, channel, extra) {
     // Behind a shut gate the line waits (no log, no callback, no sound, no summary). The internal event still fires
     // (other systems read it).
     if (!this._gateOpen) {
@@ -1039,6 +1215,8 @@ export class CommsSystem {
 
   reset() {
     this.messages = [];
+    this._trainingGate.reset();
+    this._stationKeeping.clear();
     this._nextId = 0;
     // a shut gate stays shut and keeps its held lines (GAME_RESET can arrive after the hold began); renumber them so
     // they cannot collide with ids handed out after the reset
@@ -1079,6 +1257,8 @@ export class CommsSystem {
     if (!data) return false;
     if (data._internal) return true;
     if (!data.text) return false;
+    // a hint this system is holding for the training gate, or a colour line it dropped: nothing to draw
+    if (this._gateMarked.has(data)) return false;
     const src = data.source || data.sender || data.speaker || 'SYSTEM';
     return messagePassesSuppression(this._suppressionTier, sourceToChannel(src, data), data, data.priority);
   }

@@ -11,6 +11,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { persistenceManager } from './PersistenceManager.js';
+import { isTrainingNow } from './TrainingHintGate.js';
 
 /** Random float in [min, max] */
 function rand(min, max) { return min + Math.random() * (max - min); }
@@ -30,9 +31,16 @@ function formatUptime(totalSeconds) {
 /**
  * `quiet` tags the line `_quiet`: the owner's "stay hidden" kinds (radio-pass chatter and routine readouts that say
  * nothing is being done, needed or broken). CommsSystem drops a `_quiet` line at every tier; the SUBSYSTEM_EVENT still fires.
+ *
+ * `colour` (default true) tags the line `_kind:'colour'`: a timer or random line she did not cause. In training missions
+ * 1-3 (DECISIONS §65 row 1) a colour line is not emitted at all, and neither is its SUBSYSTEM_EVENT (nothing on the raw bus
+ * sees it). A line that reports a result of her own action (the tumble rate of what she just caught) passes `false`.
  */
-function sendComms(text, source = 'SYSTEM', priority = 'LOW', quiet = false) {
-  eventBus.emit(Events.COMMS_MESSAGE, quiet ? { priority, source, text, _quiet: true } : { priority, source, text });
+function sendComms(text, source = 'SYSTEM', priority = 'LOW', quiet = false, colour = true) {
+  if (colour && isTrainingNow()) return false;
+  const msg = quiet ? { priority, source, text, _quiet: true } : { priority, source, text };
+  if (colour) msg._kind = 'colour';
+  eventBus.emit(Events.COMMS_MESSAGE, msg);
   eventBus.emit(Events.SUBSYSTEM_EVENT, { source, text });
   return true;
 }
@@ -279,7 +287,7 @@ class AttitudeSubsystem extends BaseSubsystem {
       if (data && data.to === 'GRAPPLED' && Number.isFinite(data.tumbleRateRadS)) {
         sendComms(
           `Target tumble rate: ${(data.tumbleRateRadS * 180 / Math.PI).toFixed(1)}°/s.`,
-          'NAV', 'MEDIUM'
+          'NAV', 'MEDIUM', false, false   // a result of her own catch: not colour
         );
       }
     });

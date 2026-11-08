@@ -105,6 +105,10 @@ const _tintScratch  = new THREE.Color();
 const _tintTarget   = new THREE.Color();
 
 const S = Constants.ARM_STATES;
+/** kg of the mother's steering gas from which a daughter's bottle refill is named in a line (t13 lane G, Decision 8: 50 g). */
+const REFILL_SAY_KG = 0.05;
+/** kg of steering gas a reel's pull must have cost for the "is home" / "secured" line to name it (t13 lane G, Decision 8: 20 g). */
+const REEL_PULL_SAY_KG = 0.02;
 
 const {
   CROSSBOW_DRAW_DISTANCE, CROSSBOW_SPRING_K_WEAVER, CROSSBOW_SPRING_K_SPINNER,
@@ -5634,6 +5638,8 @@ export class ArmUnit {
    */
   _rhNoteTransition(old, newState) {
     if (newState === S.REELING) {
+      const ps0 = this._playerSatellite;
+      if (ps0 && typeof ps0.takeReelPullKg === 'function') ps0.takeReelPullKg(this);   // this reel's pull tally starts at zero (`_reelPullWords`)
       this._rpEtaCache = null;
       this._rhReelStartM = null;
       this._rhReelSeq = ++_reelSeqCounter;       // which reel this is (the camera follows the newest)
@@ -5662,10 +5668,23 @@ export class ArmUnit {
     if (old === S.DOCKING && this._rhDockFree && (newState === S.RELOADING || newState === S.DOCKED)) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD', priority: 'success',
-        text: `${this.displayName} is home.`,
+        text: `${this.displayName} is home.${this._reelPullWords()}`,
       });
     }
     if (newState !== S.STATION_KEEP) this._rhReelEtaSaid = false;
+  }
+
+  /**
+   * @private The steering gas this daughter's reel cost the mother (her pull on the line turns the ship; the gas that turn takes
+   * back out, `PlayerSatellite._flushKicks`, shared out by source), folded into the line that ends the reel ("is home" / "Catch
+   * secured at the strut"). Named from REEL_PULL_SAY_KG (20 g) up: Decision 8, folded into a line that is said anyway, never a line
+   * of its own. Takes (clears) the tally. '' when there is nothing to name.
+   * @returns {string} ' Reeling her in cost N g of steering gas.' or ''
+   */
+  _reelPullWords() {
+    const ps = this._playerSatellite;
+    const kg = ps && typeof ps.takeReelPullKg === 'function' ? ps.takeReelPullKg(this) : 0;
+    return kg >= REEL_PULL_SAY_KG ? ` Reeling her in cost ${Math.round(kg * 1000)} g of steering gas.` : '';
   }
 
   /** @private She leaves whatever she was doing and is wound home on her strut line (REELING), nothing held. */
@@ -8695,7 +8714,11 @@ export class ArmUnit {
    */
   _updateColdGasRefill(dt) {
     const st = this.state;
-    if (!(dt > 0) || (st !== S.DOCKED && st !== S.HOLDING_CATCH && st !== S.RELOADING)) return;
+    if (st !== S.DOCKED && st !== S.HOLDING_CATCH && st !== S.RELOADING) {
+      if (this._refillTallyKg > 0) this._sayRefillTally();     // she left the strut part-way: what the mother gave so far
+      return;
+    }
+    if (!(dt > 0)) return;
     const G = Constants.DAUGHTER_COLD_GAS;
     const full = this._coldGasBottleKg();
     const need = full - this.coldGasKg;
@@ -8717,12 +8740,35 @@ export class ArmUnit {
       const next = this.coldGasKg + got;
       this.coldGasKg = (full - next < 1e-12) ? full : next;           // full is full (no float residue)
       ps._daughterGasEmptySaid = false;
-    } else if (!ps._daughterGasEmptySaid) {
-      ps._daughterGasEmptySaid = true;
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'The mother is out of cold gas; daughters cannot refill their braking gas.', priority: 'warning',
-      });
+      this._refillTallyKg = (this._refillTallyKg || 0) + got;
+      if (this.coldGasKg >= full) this._sayRefillTally();             // full: the one line, what the mother gave this time
+    } else {
+      if (this._refillTallyKg > 0) this._sayRefillTally();            // the mother ran dry part-way: what she did give
+      if (!ps._daughterGasEmptySaid) {
+        ps._daughterGasEmptySaid = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: 'The mother is out of cold gas; daughters cannot refill their braking gas.', priority: 'warning',
+        });
+      }
     }
+  }
+
+  /**
+   * @private Training 2 spent 37-211 g of the mother's steering gas on a daughter's bottle, never said (t13 lane G, Decision 8). One
+   * line per refill, with the grams the mother really gave (the tally of `_updateColdGasRefill`'s draws, exact), when the bottle is
+   * full, the mother runs dry or the daughter leaves her strut. Named from REFILL_SAY_KG (50 g) up; a smaller refill says nothing
+   * (a result line of its own under 50 g is the chatter Decision 8 rules out).
+   */
+  _sayRefillTally() {
+    const kg = this._refillTallyKg || 0;
+    this._refillTallyKg = 0;
+    if (!(kg >= REFILL_SAY_KG)) return;
+    // "refilled" only when the bottle is full; when the mother ran dry part-way (or she left the strut) it is "topped up"
+    const verb = this.coldGasKg >= this._coldGasBottleKg() - 1e-9 ? 'refilled' : 'topped up';
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `${this.displayName}: gas bottle ${verb} from the mother's tank, ${Math.round(kg * 1000)} g of steering gas.`,
+      priority: 'info',
+    });
   }
 
   /**
@@ -9377,10 +9423,11 @@ export class ArmUnit {
           eventBus.emit(Events.CATCH_PROCESSED, {
             armId: this.id, debrisId: debris.id, type: this.type, parked: true, source: 'rack',
           });
+          const pullWords = this._reelPullWords();      // what her reel cost the mother's steering gas (t13 G5; '' under 20 g)
           eventBus.emit(Events.COMMS_MESSAGE, {
             text: Constants.isFeatureEnabled('FURNACE_COOK')
-              ? `${this.displayName}: Catch secured at the strut. Holding in net (awaiting processing). Capture #${this.captures}.`
-              : `${this.displayName}: Catch secured at the strut. Holding it in the net until the burn to the next field, when she carries it to a furnace. Capture #${this.captures}.`,
+              ? `${this.displayName}: Catch secured at the strut. Holding in net (awaiting processing). Capture #${this.captures}.${pullWords}`
+              : `${this.displayName}: Catch secured at the strut. Holding it in the net until the burn to the next field, when she carries it to a furnace. Capture #${this.captures}.${pullWords}`,
             priority: 'success',
           });
           return;

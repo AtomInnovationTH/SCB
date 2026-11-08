@@ -58,6 +58,8 @@ import { NOTCH_PX } from '../systems/WheelRouter.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { clamp01, clamp } from '../core/MathUtil.js';
 import { isDevHost } from '../core/DevHost.js';
+import { eventBus } from '../core/EventBus.js';
+import { Events } from '../core/Events.js';
 
 const FLOOR_COUNT = FloorContract.FLOORS.length;
 /** The four keys the turn pad may write — never any other. */
@@ -726,7 +728,17 @@ export class TouchControls {
       if (!!this._keys[k] !== want[k]) { this._keys[k] = want[k]; changed = true; }
     }
     const any = want.ArrowLeft || want.ArrowRight || want.ArrowUp || want.ArrowDown;
-    if (any) { if (!p.written && this._stats) this._stats.drag++; p.written = true; }
+    if (any) {
+      if (!p.written && this._stats) this._stats.drag++;
+      p.written = true;
+      // The pad writes the key map directly (no keydown), so it tells the training hint gate herself: turning the ship is
+      // something useful (DECISIONS §65 row 1). At most once per 500 ms.
+      const nowMs = Date.now();
+      if (!(nowMs - (this._lastActedMs || 0) < 500)) {
+        this._lastActedMs = nowMs;
+        eventBus.emit(Events.PLAYER_ACTED, { key: 'TURN' });
+      }
+    }
     if (changed && this._telemetry) this._telemetry.log('turn', want);
   }
 

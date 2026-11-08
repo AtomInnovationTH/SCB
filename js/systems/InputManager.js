@@ -46,6 +46,17 @@ import { TimeAuthority } from './TimeAuthority.js';
 import { lassoFlightParams, lassoNoFixLine } from './LassoSystem.js';
 
 /**
+ * Keys that count as "she did something useful" for the training hint gate (DECISIONS §65 row 1): the action keys and the
+ * turn keys, and the daughter number keys 1-4 (they fly / select a daughter: flying one is an action; Shift+1-3 are the power
+ * buses and do not count). Not camera, zoom or view keys. `Tab` is T's legacy alias.
+ */
+const USEFUL_KEYS = Object.freeze({
+  KeyS: 'S', KeyN: 'N', KeyD: 'D', KeyA: 'A', KeyL: 'L', KeyT: 'T', Tab: 'T', KeyR: 'R', KeyQ: 'Q', Period: '.',
+  ArrowLeft: 'TURN', ArrowRight: 'TURN', ArrowUp: 'TURN', ArrowDown: 'TURN',
+  Digit1: '1', Digit2: '2', Digit3: '3', Digit4: '4',
+});
+
+/**
  * The line posted when a daughter's pilot view opens. Arrow keys (the turn pad on glass) steer her only while she holds
  * station (the STATION_KEEP block of update()); the way out is Esc / V / her number again, or a tap on her DAUGHTERS row on glass.
  * @param {string} name
@@ -785,6 +796,14 @@ export class InputManager {
     // ST-5.1: Comms menu intercept removed — center popup deleted.
     // UX-11 #9: the C-hold RadialMenu was also removed. Bare C is now "Move a catch to a radiator" (case 'KeyC' below);
     // comms expand lives on the 7 key.
+
+    // Training hint gate (DECISIONS §65 row 1): a key that reaches the action handling below is "something useful", even if
+    // the game then refuses it (the refusal line is a result). Here, AFTER the overlay / codex / map / ceremony intercepts
+    // have returned, so a closed-menu key or a blocked key never counts. Camera, zoom and view keys are not in the list.
+    const actedKey = USEFUL_KEYS[e.code];
+    if (actedKey && isGameplay && !e.ctrlKey && !e.metaKey && !(e.shiftKey && /^Digit/.test(e.code))) {
+      eventBus.emit(Events.PLAYER_ACTED, { key: actedKey });
+    }
 
     switch (e.code) {
       // Confirm / Enter action (gameplay only — menu/briefing handle their own Enter)

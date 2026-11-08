@@ -23,6 +23,7 @@ import { GameStates } from '../core/GameState.js';
 import { BeatSequencer, buildBeatComms, beatMatches } from './_beatLifecycle.js';
 import { MissionOnset } from './_bossLifecycle.js';
 import { satelliteIsTheStop, wordsFor } from './resupplyWords.js';
+import { isTrainingNow, trainingIdleMs, noteTrainingHintShown } from './TrainingHintGate.js';
 
 /** Training chapters: one still running when the next mission starts ends quietly (plan D7). */
 const TRAINING_CHAPTERS = [2, 3];
@@ -126,7 +127,10 @@ export class MissionCoach {
     // The training-3 latch (plan D5, D9). Registered here, before any beat arms its own trigger, so on one event the latch is
     // updated first and a beat's own handler reads it.
     on(Events.TARGET_SELECTED, (d) => { this._latch.selected = d ? (d.debris || { id: d.id }) : null; });
-    on(Events.TARGET_CLEARED, () => { this._latch.selected = null; });
+    on(Events.TARGET_CLEARED, () => { this._latch.selected = null; this._latch.inRange = null; });
+    // net range, as AutoLockController says it on each crossing (with the piece's id: a state said for another piece is not hers)
+    if (Events.TARGET_IN_RANGE) on(Events.TARGET_IN_RANGE, (d) => { this._latch.inRange = { id: d ? d.id : null, in: true }; });
+    if (Events.TARGET_OUT_OF_RANGE) on(Events.TARGET_OUT_OF_RANGE, (d) => { this._latch.inRange = { id: d ? d.id : null, in: false }; });
     on(Events.AUTOPILOT_ENGAGE, () => { this._latch.arrived = null; });
     on(Events.AUTOPILOT_ARRIVED, (d) => {
       if (d && d.mover === true) this._latch.arrived = { debrisId: d.debrisId ?? null };
@@ -239,7 +243,7 @@ export class MissionCoach {
 
   /** @private */
   _freshLatch() {
-    return { selected: null, arrived: null, caught: false, left: null };
+    return { selected: null, arrived: null, caught: false, left: null, inRange: null };
   }
 
   /**
@@ -301,6 +305,9 @@ export class MissionCoach {
         onEscalate: (beat) => this._escalateBeat(beat),
         onComplete: () => this._complete(),
         shouldSkip: (beat) => this._shouldSkip(beat),
+        // Training 1-3: the re-prompt card comes after 22 s on the hint gate's idle clock (real seconds of her doing nothing
+        // useful), not 22 s of game time (2.75 real s at x8). Elsewhere null = the beat's own game-time clock.
+        escalateClock: () => (isTrainingNow() ? (trainingIdleMs() === null ? null : trainingIdleMs() / 1000) : null),
       },
     });
     this._seq.start();
@@ -322,7 +329,28 @@ export class MissionCoach {
 
   /** @private Post a beat: comms line + (interactive) beat-start + trigger arming. */
   _postBeat(beat) {
-    this._eventBus.emit(Events.COMMS_MESSAGE, buildBeatComms(this._view(beat)));
+    const msg = buildBeatComms(this._view(beat));
+    if (beat.type === 'interactive' || beat.type === 'reactive') {
+      // An ask ("Press Q ...", "Select a drifting piece"): in training 1-3 CommsSystem holds it until she has done nothing
+      // useful for about 10 s (DECISIONS §65 row 1). Narrative beats only report and post at once. The beat's narrative
+      // hold timer cannot drop it: it goes when the sequence has moved off this beat (she did it, or the lesson ended)
+      // or on a useful input with its key (`hintKey`, default the beat id).
+      const seq = this._seq;
+      msg._kind = 'hint';
+      msg._hintKey = beat.hintKey || beat.id;
+      // The ask is also stale once its goal is already met (`doneIf`: caught, arrived, selected, spin in spec) or the beat's own
+      // `hintStaleIf(latch)` says what it claims is no longer true ("Too far for a net." once the piece drifts into net range).
+      // Read live: the latch is replaced on a reset.
+      const goalMet = () => {
+        for (const f of [beat.doneIf, beat.hintStaleIf]) {
+          if (typeof f !== 'function') continue;
+          try { if (f(this._latch)) return true; } catch (_) { /* a throwing predicate is not stale */ }
+        }
+        return false;
+      };
+      msg._hintStale = () => !seq || seq.current() !== beat || goalMet();
+    }
+    this._eventBus.emit(Events.COMMS_MESSAGE, msg);
 
     this._disarmBeat();
 
@@ -356,6 +384,7 @@ export class MissionCoach {
   /** @private Unsatisfied interactive beat → re-prompt via the teaching overlay. */
   _escalateBeat(beat) {
     const v = this._view(beat);
+    if (isTrainingNow()) noteTrainingHintShown();   // a card is a "do this" too: the gate's clock restarts
     this._eventBus.emit(Events.TEACHING_MOMENT_FORCE, {
       id: `coach_${beat.id}`,
       title: beat.title || 'MISSION COACH',

@@ -11,6 +11,7 @@
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { RAD2DEG } from '../core/MathUtil.js';
+import { isTrainingNow, trainingIdleMs, noteTrainingHintShown, onTrainingInput, HINT_IDLE_MS } from './TrainingHintGate.js';
 
 /**
  * All 29 teaching moments (TEACHING_MOMENTS.length is the SSOT; test-shop-cadence pins this header to it). Each:
@@ -257,6 +258,13 @@ export class TeachingSystem {
     this._activeCoachBeat = null;
     /** seconds until the next queued overlay may drain (≤1 per interval) */
     this._drainTimer = 0;
+    /**
+     * Training missions 1-3 (DECISIONS §65 row 1): an ordinary card is "do this" text too, so it waits here until she has
+     * done nothing useful for about 10 s (the hint gate's idle clock) and is dropped, and un-marked seen so it can show at
+     * its next real moment, on a useful input. Empty outside training.
+     * @type {Array<object>}
+     */
+    this._trainingHeld = [];
 
     this._loadSeen();
   }
@@ -283,6 +291,9 @@ export class TeachingSystem {
     };
 
     on(Events.TARGET_SELECTED, () => this._trigger('first_target'));
+
+    // Training 1-3: a useful input drops a card that was waiting for her to be stuck (see `_trainingHeld`)
+    this._unsubs.push(onTrainingInput(() => this._dropTrainingHeld()));
 
     on(Events.ARM_DEPLOYED, () => this._trigger('first_arm'));
 
@@ -448,6 +459,7 @@ export class TeachingSystem {
           this._queue.length = 0;
           this._saveSeen();
         }
+        if (this._onboardingActive) this._dropTrainingHeld();   // the same for the cards held for the idle rule
         this._onboardingActive = false;
       });
     }
@@ -522,6 +534,14 @@ export class TeachingSystem {
     // Mark seen immediately, even when queued, so the next event doesn't re-trigger.
     this.markSeen(momentId);
 
+    // Training missions 1-3: the card is "do this" text; it waits until she has done nothing useful for ~10 s
+    if (isTrainingNow() && trainingIdleMs() !== null) {
+      this._trainingHeld.push(moment);
+      const cap = (Constants && Constants.TEACHING && Constants.TEACHING.MAX_QUEUE_DEPTH) || 3;
+      while (this._trainingHeld.length > cap) this._unmarkSeen(this._trainingHeld.shift());
+      return;
+    }
+
     // A blocking surface, the OnboardingDirector, or a coach beat owns the screen: defer for orderly drain; else show now.
     if (this._isBlocked()) {
       this._enqueue(moment);
@@ -532,6 +552,18 @@ export class TeachingSystem {
 
   _isBlocked() {
     return this._blockers.size > 0 || this._onboardingActive || this._activeCoachBeat != null;
+  }
+
+  /** @private Forget that a dropped card was seen, so it can still show at its next real moment (as the onboarding queue drop does). */
+  _unmarkSeen(moment) {
+    if (moment && moment.id != null && this._seen.delete(moment.id)) this._saveSeen();
+  }
+
+  /** @private A useful input in training: the cards waiting for her to be stuck are not needed any more. */
+  _dropTrainingHeld() {
+    if (!this._trainingHeld.length) return;
+    for (const m of this._trainingHeld) this._unmarkSeen(m);
+    this._trainingHeld.length = 0;
   }
 
   _enqueue(moment) {
@@ -558,6 +590,7 @@ export class TeachingSystem {
   /** @private Clear all pending/deferred arbitration state (GAME_RESET). Keeps `_seen`. */
   _clearPending() {
     this._queue.length = 0;
+    this._trainingHeld.length = 0;
     this._blockers.clear();
     this._onboardingActive = false;
     this._activeCoachBeat = null;
@@ -568,6 +601,16 @@ export class TeachingSystem {
   update(dt) {
     if (this._disposed) return;
     if (this._drainTimer > 0) this._drainTimer -= dt;
+    // Training 1-3: one waiting card shows when she has done nothing useful for ~10 s (the gate's idle clock restarts
+    // with it: at most one "do this" per 10 s); leaving training sends the rest down the normal path.
+    if (this._trainingHeld.length) {
+      if (!isTrainingNow()) {
+        for (const m of this._trainingHeld.splice(0)) this._enqueue(m);
+      } else if (!this._isBlocked() && (trainingIdleMs() ?? 0) >= HINT_IDLE_MS) {
+        this._show(this._trainingHeld.shift());
+        noteTrainingHintShown();
+      }
+    }
     if (this._queue.length === 0) return;
     if (this._isBlocked()) return;
     if (this._drainTimer > 0) return;

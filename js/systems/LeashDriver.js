@@ -30,6 +30,7 @@ import { eventBus as defaultBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { LeashTransfer, planHandoff, minHandoffD, minBoomD, leashTurnLimits, leashWheelLimitS } from './LeashTransfer.js';
 import { attitudeTurnProfile, turnGasShort } from './AutopilotSystem.js';
+import { coldGasPoolToKg } from './ResourceSystem.js';
 import { bandDegForRadius } from './TipCargo.js';
 import { reseatOrbitFromScene } from '../entities/OrbitalMechanics.js';
 import { DebrisField } from '../entities/DebrisField.js';
@@ -39,6 +40,8 @@ const ATTITUDE_HOLD_S = 300;   // s — safety cap for the autopilot's attitude 
 const HOLD_OWNER = 'leash';  // the autopilot's lasso / net listeners leave a hold with this owner alone
 const FLOOR_EASE_S = 1.0;  // s — the drawn size eases from the net-held floor to the real size
 const OWN_TIP_RADIUS_M = 0.20;  // m — the hand-off's own tip hardware is never a snag within this of the latch
+const TURN_SAY_KG = 0.02;  // kg — a hand-off turn on the steering gas names its grams from here (t13 lane G3, Decision 8: 20 g)
+const TURN_BILL_SAY_KG = 0.05, TURN_BILL_TOL = 0.15;  // kg, share — the real grams are said after the turns from 50 g in total, when over 15 % above the line's
 
 /**
  * Name prefixes of tip i's own strut hardware that the hand-off's bag ball is NOT tested against once the catch sits on the
@@ -198,6 +201,7 @@ export class LeashDriver {
       const h = this._h;
       if (!h || !h.turn || h.turn.state !== 'turning' || !e || e.mode !== 'turn') return;
       h.turn.ended = { result: e.result, reason: e.reason || '' };
+      h.turnGasUnits = (h.turnGasUnits || 0) + (e.gasUnits > 0 ? e.gasUnits : 0);   // every turn of this hand-off adds its bill (`_sayTurnBill`)
     };
     this._onReset = () => this._abort('reset');
     bus.on(Events.AIM_SEQUENCE_END, this._onTurnEnd);
@@ -878,7 +882,23 @@ export class LeashDriver {
         // with the same command, and "bring radiator N to the catch" would then say the opposite of what happens.
         if (h.phase === 'TURN' && !h.turnSaid && h.turn && h.turn.state !== 'rejected') {
           h.turnSaid = true;
-          this._say(`Turning the ship to bring radiator ${h.tipIndex + 1} to the catch.`);
+          // A cold-gas turn names its grams (its profile is fixed: both burns priced, `attitudeTurnProfile.gasEstimate`; t13 G3,
+          // Decision 8: named from 20 g up, folded into this line). A wheel or tail-box turn burns no steering gas: no grams. The
+          // straight arrival's second turn (TURN2, same price list) is said with it, as "the two turns": the hand-off pays both. When
+          // the first turn runs on the wheels and the second on gas, the line names the second turn's grams ("for the second turn").
+          // What the turns really bill is checked at the hand-off's end (`_sayTurnBill`).
+          const plan = h.turn.plan;
+          const firstGasKg = plan && !plan.src ? plan.gasKg : 0;
+          let gasKg = firstGasKg, both = false, second = false;
+          const st = plan && h.machine && h.machine.plan ? h.machine.plan.straight : null;
+          if (st && st.psiRad2 >= 1e-4 && !(typeof p.attitudeTorqueSource === 'function'
+              && p.attitudeTorqueSource({ spinUp: true, angleRad: st.psiRad2, nx: st.axisBody2.x, ny: st.axisBody2.y, limitS: leashWheelLimitS(st.psiRad2), quiet: true }) === 'wheels')) {
+            const prof2 = attitudeTurnProfile(p, st.axisBody2, st.psiRad2, leashTurnLimits());
+            if (prof2.ok) { gasKg += coldGasPoolToKg(prof2.gasEstimate); both = firstGasKg > 0; second = firstGasKg <= 0; }
+          }
+          h.turnSaidKg = gasKg;
+          const gas = gasKg >= TURN_SAY_KG ? ` About ${Math.round(gasKg * 1000)} g of steering gas${both ? ' for the two turns' : second ? ' for the second turn' : ''}.` : '';
+          this._say(`Turning the ship to bring radiator ${h.tipIndex + 1} to the catch.${gas}`);
         }
         break;
       case 'cancelTurn':
@@ -938,6 +958,7 @@ export class LeashDriver {
       return;
     }
     h.tookHold = true;
+    if (typeof ap.lastAttitudeTurnPlan === 'function') t.plan = ap.lastAttitudeTurnPlan();   // what the turn will cost (the line names the gas)
     if (!ap.isTurning()) {
       t.state = 'rejected';
       t.reason = t.reason || this._whyNoTurn();
@@ -1171,6 +1192,19 @@ export class LeashDriver {
     this.eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true, _critical: loud || priority === 'warning' });
   }
 
+  /**
+   * The hand-off's turns billed more steering gas than the turn line said (training 3: 349 g said, 391 g billed with a correction turn;
+   * the first turn on the wheels and a second on gas): when the real total is 50 g or more AND over 15 % above the grams the line said,
+   * say the real grams once, after the turns (t13 lane G fix 4, Decision 8). Nothing otherwise. Once per hand-off.
+   */
+  _sayTurnBill(h) {
+    if (!h || h.turnBillSaid) return;
+    h.turnBillSaid = true;
+    const realKg = coldGasPoolToKg(h.turnGasUnits || 0), saidKg = h.turnSaidKg || 0;
+    if (realKg < TURN_BILL_SAY_KG || !(realKg > saidKg * (1 + TURN_BILL_TOL))) return;
+    this._say(`The hand-off turns took ${Math.round(realKg * 1000)} g of steering gas.`);
+  }
+
   _finish(h, res) {
     const p = this.player;
     // The one closing line of a hand-off that ran to the end: the radiator's number and the angle it comes to rest at
@@ -1188,6 +1222,7 @@ export class LeashDriver {
     this._releaseHold(h);
     if (!h.latched && !h.freed) this._relatch(h);
     h.net._leash = false;
+    this._sayTurnBill(h);
     this._h = null;
   }
 
@@ -1223,6 +1258,7 @@ export class LeashDriver {
       }
     } catch (e) { /* radiators already free */ }
     try { this._releaseHold(h); } catch (e) { /* hold already free */ }
+    this._sayTurnBill(h);
     if (!h.latched && !h.freed) {
       if (why === 'reset') {
         h.net._leash = false;

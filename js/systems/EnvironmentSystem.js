@@ -15,6 +15,7 @@ import { Constants } from '../core/Constants.js';
 import { Events }    from '../core/Events.js';
 import { persistenceManager } from './PersistenceManager.js';
 import { clamp01 } from '../core/MathUtil.js';
+import { isTrainingNow } from './TrainingHintGate.js';
 
 // Seeded RNG: same multiplicative congruential pattern as DebrisTextureAtlas.
 
@@ -268,6 +269,20 @@ export class EnvironmentSystem {
     }
   }
 
+  /**
+   * @private A colour line: a timer or random event she did not cause. In training missions 1-3 it is not emitted at all
+   * (DECISIONS §65 row 1; nothing on the raw bus sees it); otherwise it is the normal Houston line, tagged `_kind:'colour'`.
+   * @param {string} text
+   * @param {string} [priority]
+   * @param {string} [source]
+   */
+  _colourLine(text, priority = 'info', source = 'houston') {
+    if (isTrainingNow()) return;
+    if (Events.COMMS_MESSAGE) {
+      this._emit(Events.COMMS_MESSAGE, { text, priority, source, _kind: 'colour' });
+    }
+  }
+
   /** @private */
   _updateAtomicOxygen(dt, altKm) {
     const E = ENV();
@@ -277,9 +292,11 @@ export class EnvironmentSystem {
       return;
     }
 
-    if (!this._aoFirstWarned) {
+    // Training 1-3: the first-time warning waits (the flag stays unset, so mission 4 still gets it); the erosion itself,
+    // a physical effect of the altitude, is unchanged.
+    if (!this._aoFirstWarned && !isTrainingNow()) {
       this._aoFirstWarned = true;
-      this._houston('Caution. Atomic oxygen concentration increasing at this altitude. Equipment degradation possible.', 'warning');
+      this._colourLine('Caution. Atomic oxygen concentration increasing at this altitude. Equipment degradation possible.', 'warning');
     }
 
     this._aoTimer += dt;
@@ -316,6 +333,8 @@ export class EnvironmentSystem {
     const interval = E.MMOD_CHECK_INTERVAL_S || 30;
     if (this._mmodTimer < interval) return;
     this._mmodTimer -= interval;
+    // Training 1-3: a random hit is skipped WITH its damage (it would change what she has); no roll is taken
+    if (isTrainingNow()) return;
 
     // Probability = base × density factor × CME amplifier
     let prob = (E.MMOD_BASE_PROBABILITY || 0.02) * this._getDensityFactor(altKm);
@@ -343,7 +362,7 @@ export class EnvironmentSystem {
 
     const subsystemLabel = subsystem.charAt(0).toUpperCase() + subsystem.slice(1);
     // Plain words (no raw hazard code).
-    this._houston(`A tiny piece of space debris hit the ship (${subsystemLabel}). Checking for damage.`, 'warning');
+    this._colourLine(`A tiny piece of space debris hit the ship (${subsystemLabel}). Checking for damage.`, 'warning');
 
     this._emit(Events.AUDIO_CUE, { cue: 'mmod_impact' });
 
@@ -415,9 +434,9 @@ export class EnvironmentSystem {
 
     if (inBelt && !this._wasInRadBelt) {
       this._wasInRadBelt = true;
-      if (!this._radiationFirstWarned) {
+      if (!this._radiationFirstWarned && !isTrainingNow()) {
         this._radiationFirstWarned = true;
-        this._houston('Entering radiation belt. Expect sensor interference and comms latency.', 'warning');
+        this._colourLine('Entering radiation belt. Expect sensor interference and comms latency.', 'warning');
       }
       this._emit(Events.ENVIRONMENT_EFFECT, { type: 'radiation_belt', inBelt: true });
     } else if (!inBelt && this._wasInRadBelt) {
@@ -435,11 +454,7 @@ export class EnvironmentSystem {
       this._radiationNoiseTimer -= noiseInterval;
 
       const garbled = '▓▒░ s█gn█l ░▒▓ …interference… ▓▒░';
-      this._emit(Events.COMMS_MESSAGE, {
-        text: garbled,
-        priority: 'low',
-        source: 'interference',
-      });
+      this._colourLine(garbled, 'low', 'interference');
     }
   }
 

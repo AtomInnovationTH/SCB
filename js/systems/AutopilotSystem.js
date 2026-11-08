@@ -9,7 +9,8 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
-import { classifyNetTarget, berthBusyPhrase, dInviteLine } from './netRouting.js';
+import { classifyNetTarget, berthBusyPhrase, dInviteLine, trainingSplit, splitReportAsk } from './netRouting.js';
+import { isTrainingNow } from './TrainingHintGate.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
@@ -212,6 +213,14 @@ const AP_ROT_DEADZONE = 1e-5;
 
 /** An autopilot turn on the tail boxes is announced above this angle (2°); again only for a NEW target (`_slothNotice`). */
 const SLOTH_SAY_RAD = degToRad(2);
+/** REAL (wall) seconds the wheels must have turned her, uninterrupted, before the autopilot's wheel line is said (t13 lane G2; the
+ * SimClock runs game time at ×8 while the wheels turn her, so a game-second count would say it 0.3 real s in). */
+const WHEEL_NOTICE_AFTER_S = 1;
+/** A wheel line's wall clock counts at most this much between two ticks (a pause or a hitch is not turning time). */
+const WHEEL_NOTICE_MAX_GAP_S = 0.5;
+/** A gas aim that billed this many grams (a line of its own only from 50 g; 20-50 g may only be folded into an existing line) says them after the
+ * aim; a still bearing whose forecast named grams says them only when off by over `AIM_BILL_TOL` and `AIM_BILL_MIN_DIFF_G` g (t13 lane G1). */
+const AIM_BILL_SAY_G = 50, AIM_BILL_TOL = 0.15, AIM_BILL_MIN_DIFF_G = 10;
 
 /** Leash turn (requestAttitudeTurn): default peak body rate, 5 °/s. Slow on purpose — gas depends on peak rate and
  * inertia, never on the angle, so a slow turn is cheap and keeps a hanging bag's lag small. */
@@ -783,6 +792,8 @@ export class AutopilotSystem {
     this._turn = null;
     /** @type {string|null} Why the last requestAttitudeTurn() call refused at once (null = it was accepted) */
     this._lastTurnRefusal = null;
+    /** @type {{gasKg:number, src:string|null}|null} The cost of the last accepted requestAttitudeTurn() (`lastAttitudeTurnPlan`) */
+    this._lastTurnPlan = null;
 
     this._attitudeHold = false;
     /** The transfer trip's own prograde hold is on (attitude only; NOT the autopilot - `_engaged` stays false). */
@@ -866,7 +877,11 @@ export class AutopilotSystem {
     this._orbitStepOn = false;                // this tick's Δ is a real turn (not the identity)
     this._launchFollowsOrbit = false;         // the aim that began the launch hold ran on the wheels: the hold follows the orbit too
     /** What the engaged autopilot / the trip hold has already said about its slow turn (one engagement). */
-    this._slow = { said: false, kind: null, mode: null, ref: null, noPowerSaid: false, handSaid: false };   // handSaid: the wheel-to-gas hand-over line (`_slewSource`)
+    this._slow = { said: false, kind: null, mode: null, ref: null, noPowerSaid: false, handSaid: false, pend: null };   // handSaid: the wheel-to-gas hand-over line (`_slewSource`); pend: a wheel turn's notice waiting for its first second (`_slothNotice`)
+    this._apTickN = 0;                      // update() calls so far: a wheel turn's "uninterrupted" is a run of consecutive ticks (`_slothNotice`)
+    this._wallNow = () => performance.now() / 1000;   // real seconds (the wheel line counts these; `init({ now })` replaces it in tests)
+    this._apClockS = 0;                     // game seconds the autopilot has run (aim / line-up bookkeeping: seconds from the line to the end)
+    this._hdgRateNow = 0;                   // the world heading's own rate (rad/s) as `_rotateTowardWorld` last read it (a wheel turn's line sizes the chase by it)
     this._aimBm = new THREE.Vector3();     // the mother's boresight with the strut at its target angle
 
     this._setupListeners();
@@ -879,6 +894,7 @@ export class AutopilotSystem {
     this._debrisField = deps.debrisField;
     this._armManager = deps.armManager;
     this._targetAcquisition = deps.targetAcquisition || null;
+    if (typeof deps.now === 'function') this._wallNow = deps.now;   // tests drive the wall clock the wheel line counts (`_slothNotice`)
     // The reaction-wheel tail-box unload runs only with the ship at rest: it asks whether a slow turn of ours is
     // running (our turns write her attitude directly, so her own rate reads 0 under them)
     if (this._player && typeof this._player.setSlowTurnProbe === 'function') this._player.setSlowTurnProbe(() => this._slowTurnBusy());
@@ -927,6 +943,12 @@ export class AutopilotSystem {
    * handler runs later, and isTurning() cannot tell a refusal from a turn somebody else already had running.
    * @returns {string|null} */
   lastAttitudeTurnRefusal() { return this._lastTurnRefusal; }
+
+  /** What the most recent accepted requestAttitudeTurn() call will cost: `gasKg` is the cold-gas turn's fixed profile priced
+   * (`attitudeTurnProfile.gasEstimate`, both burns; 0 for a wheel or tail-box turn) and `src` the slow source or null (gas). Null when
+   * the last call refused. Read it right after the call (the leash hand-off names the grams in its line, t13 lane G3).
+   * @returns {{gasKg:number, src:string|null}|null} */
+  lastAttitudeTurnPlan() { return this._lastTurnPlan; }
 
   /** True while some system holds the mother's attitude steady (net reel-in, leash hand-off, a launch's hold from aim end to spring).
    * @returns {boolean} */
@@ -1293,6 +1315,7 @@ export class AutopilotSystem {
     this._tripAxis.x = nx; this._tripAxis.y = ny;
     if (!(err > AP_ROT_DEADZONE)) {
       // arrived: the last of her rate is braked by its source (lit time billed), not dropped for free
+      this._slow.pend = null;                                      // (a wheel notice still waiting for its first second: the turn is over, nothing to say)
       const w0 = this._tripOmega || 0;
       const madeBy = this._tripSrc || src;
       this._tripOmega = 0;
@@ -1301,7 +1324,7 @@ export class AutopilotSystem {
     }
     const { aFull, mx, my } = this._slothTripAccel(p, nx, ny, src);
     if (!(aFull > 0)) return 0;
-    if (err > SLOTH_SAY_RAD) this._slothNotice(p, err, nx, ny, kind, src);
+    if (err > SLOTH_SAY_RAD) this._slothNotice(p, err, nx, ny, kind, src, dt);
     const f = slowPeek(p, src, mx + my, dt);                       // boxes: asking starts the warm-up; 0 until warm
     const a = aFull * f, dOm = a * dt;
     const was = this._tripOmega || 0;
@@ -1943,9 +1966,39 @@ export class AutopilotSystem {
     eventBus.emit(Events.SHOW_NOTIFICATION, { text: 'AUTOPILOT DISENGAGED', kind: 'memo' });
   }
 
-  /** The arrival line, as the one COMMS_MESSAGE (plain words; the next step to press stays up). */
+  /**
+   * The arrival line, as COMMS_MESSAGE (plain words; the next step to press stays up). It reports ("In position.") and
+   * invites ("Press N to net it."): the report posts at once, the invitation as a `_kind:'hint'` line that training
+   * missions 1-3 hold until she has done nothing useful for about 10 s (DECISIONS §65 row 1). Outside training both post
+   * at once, back to back. A line with no invitation ("In position. The nose is full ...") is one plain report.
+   */
   _emitArrivalLine(text) {
-    eventBus.emit(Events.COMMS_MESSAGE, { text, priority: 'info', _keep: true });
+    const split = trainingSplit(text);   // null outside training 1-3: the ONE joined line, as before the hint change
+    if (!split) {
+      eventBus.emit(Events.COMMS_MESSAGE, { text, priority: 'info', _keep: true });
+      return;
+    }
+    eventBus.emit(Events.COMMS_MESSAGE, { text: split.report, priority: 'info', _keep: true });
+    const lockRef = this._lockedTargetRef;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: split.ask,
+      priority: 'info',
+      _keep: true,
+      _kind: 'hint',
+      _hintKey: split.key,
+      // she did it, or the piece is gone / no longer the lock
+      _hintStale: () => !!lockRef && (lockRef._captured === true || lockRef.alive === false || this._lockedTargetRef !== lockRef),
+      // not yet true: N is refused while the cargo berth is busy; D while no daughter can go (spring reloading, safe mode, no
+      // power) or the ship must hold still (a hand-off running). With no readiness to read (an older rig) nothing contradicts it.
+      _hintReady: () => {
+        if (split.key === 'N') return !this._berthBusyNow();
+        if (split.key === 'D') {
+          const r = lockRef ? this._armManager?.daughterLaunchReadiness?.(lockRef) : null;
+          return !r || (r.ready === true && !r.hold);
+        }
+        return true;
+      },
+    });
   }
 
   /** The "Press D" line waiting for a daughter (nets 0 at arrival, none able to launch yet, one soon able to). Looks
@@ -2245,6 +2298,7 @@ export class AutopilotSystem {
     if (apPlayer && typeof apPlayer.undoRecoilOverlay === 'function') apPlayer.undoRecoilOverlay();
     // One frame only: set again by `_resolveAim` below if an aim arrives on this frame (before any reader of it).
     this._aimJustResolved = false;
+    this._apTickN++; this._apClockS += dt > 0 ? dt : 0;
     // The orbit's step since the last tick turns whatever the wheels hold, with the bearings the aim carries (before anything reads the pose).
     if (apPlayer) this._orbitStepTick(apPlayer);
     if (apPlayer) this._slewStopTick(apPlayer, dtWorld);
@@ -2871,8 +2925,16 @@ export class AutopilotSystem {
    * heading) or a NEW target (the locked target object or the commanded heading mode changed). Never because a world heading
    * drifts: a rendezvous heading turns with the orbit all the time (0.66°/s of real time at warp 1), and that is the same
    * target. Never per frame. No power / no engine gas says the one "can't turn" line instead.
+   *
+   * The WHEEL line (t13 lane G2, training 1 browser run `tmp/t12b/g1/summary.md` i): it is said only once the wheels have turned her
+   * `WHEEL_NOTICE_AFTER_S` of REAL time on consecutive ticks (the sim clock runs ×8 while they turn her; a takeover inside it, a hand-off, a disengage or the target
+   * being caught speaks for itself: "about 50 s" / "about 20 s" were said over turns that ran 0 s and 1 s), and then it sizes the
+   * turn as it stands: the wheel leg left from her rate now (`wheelChaseTimeS`, the heading's own rate counted), or, when the heading
+   * outruns what the wheels' room can hold, how long until the wheels fill and that the steering gas finishes the turn ("about 3 min"
+   * was said where the wheels filled at 71 s and the gas finished it). The gas finish's grams follow in its own line
+   * (`_handGasDoneNote`, "Turn finished on steering gas: N g"). `dt` is the tick's game seconds.
    */
-  _slothNotice(p, err, nx, ny, kind, src = 'tailBoxes') {
+  _slothNotice(p, err, nx, ny, kind, src = 'tailBoxes', dt = 0) {
     const s = this._slow;
     if (this._slothNoPowerNote(p, s, undefined, src)) return;
     // A wheel turn the next step hands to the gas (rule (b) of `_slewSource`: the wheels are already full at rest) is never announced as a
@@ -2881,14 +2943,71 @@ export class AutopilotSystem {
         && typeof p.wheelsFull === 'function' && p.wheelsFull(nx, ny)) return;
     const mode = this._headingMode, ref = this._slothTargetRef();
     if (s.said && s.kind === kind && s.mode === mode && s.ref === ref) return;
+    if (src === 'wheels') {
+      const pend = s.pend;
+      if (!pend || pend.kind !== kind || pend.mode !== mode || pend.ref !== ref || this._apTickN - pend.tick > 1) {
+        s.pend = { kind, mode, ref, runS: 0, tick: this._apTickN, wall: this._wallNow() };   // (re)start the count: nothing is said yet
+        return;
+      }
+      pend.tick = this._apTickN;
+      const wall = this._wallNow();
+      pend.runS += Math.min(WHEEL_NOTICE_MAX_GAP_S, Math.max(0, wall - pend.wall));   // REAL seconds, not game seconds (×8 while the wheels turn her)
+      pend.wall = wall;
+      if (pend.runS < WHEEL_NOTICE_AFTER_S) return;
+      s.pend = null;
+    }
     s.said = true; s.kind = kind; s.mode = mode; s.ref = ref;
+    if (src === 'wheels') {
+      eventBus.emit(Events.COMMS_MESSAGE, { text: this._wheelNoticeText(p, err, nx, ny, kind), priority: 'warning', source: 'HOUSTON' });
+      return;
+    }
     const t = slowTurnTimeS(p, src, err, nx, ny) + slowWarmupLeftS(p, src);
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: src === 'wheels'
-        ? `Autopilot turning on the reaction wheels, ${this._wheelTimeWords(t)}.`
-        : `Autopilot on emergency steering: turning slowly on the tail boxes, ${p.slothTimeWords(t)}.`,
+      text: `Autopilot on emergency steering: turning slowly on the tail boxes, ${p.slothTimeWords(t)}.`,
       priority: 'warning', source: 'HOUSTON',
     });
+  }
+
+  /**
+   * @private The wheel line's words, from the turn as it stands (`_slothNotice`): the wheel leg left, or the wheels filling first.
+   * @returns {string}
+   */
+  _wheelNoticeText(p, err, nx, ny, kind) {
+    const rate = this._tripOmega > 0 ? this._tripOmega : 0;
+    const hdg = kind === 'world' && this._hdgRateNow > 0 ? this._hdgRateNow : 0;
+    if (typeof p.wheelChaseTimeS !== 'function') return `Autopilot turning on the reaction wheels, ${this._wheelLegWords(slowTurnTimeS(p, 'wheels', err, nx, ny))}.`;
+    const hand = hdg > 0 ? this._wheelHandOverS(p, err, nx, ny, hdg, rate) : null;
+    // The predicted hand-over time is not trusted in the game (training 2-3: 4 of 4 said "then gas finishes", the wheels did the whole turn
+    // of 40-127 s): a predicted hand-over makes no time claim and no certain gas claim. The real one is said by "Reaction wheels full" and
+    // `_handGasDoneNote` ("Turn finished on steering gas: N g").
+    if (hand !== null) return 'Autopilot turning on the reaction wheels; steering gas takes over if they fill.';
+    const left = p.wheelChaseTimeS(err, nx, ny, hdg, rate);
+    return `Autopilot turning on the reaction wheels, ${this._wheelLegWords(left)}.`;
+  }
+
+  /**
+   * @private A wheel chase of a moving world heading (`hdg` rad/s) that the wheels will not finish: game seconds from now to the hand-over to
+   * the steering gas, null when they do. The wheels' rate climbs at α to their room's top rate `wmax` and the error follows the heading
+   * (+hdg·dt, −rate·dt); the hand-over is rule (b) of `_slewSource` (the wheels full while the error is not shrinking: first step
+   * with the rate at `wmax` and `hdg >= wmax`) or rule (c) (the error has not fallen `WHEELS.SLEW_PROGRESS_DEG` below its best for
+   * `WHEELS.SLEW_STALL_S`). A 0.25 s step, to at most 20 min. Training 1 said "about 3 min" over a turn the wheels filled on at 71 s.
+   * @returns {number|null}
+   */
+  _wheelHandOverS(p, err, nx, ny, hdg, rate) {
+    const lim = typeof p._wheelTurnLimits === 'function' ? p._wheelTurnLimits(err, nx, ny, rate) : null;
+    if (!lim) return null;
+    const W = Constants.WHEELS, step = 0.25;
+    const tol = degToRad(Constants.AUTOPILOT.ANG_TOL_DEG), prog = degToRad(W.SLEW_PROGRESS_DEG);
+    let e = err, r = rate, best = err, stall = 0;
+    for (let t = 0; t < 1200; t += step) {
+      if (e <= tol) return null;                                  // arrived on the wheels
+      if (r >= lim.wmax - 1e-9 && hdg >= lim.wmax) return t;      // (b) full and the heading outruns them
+      r = Math.min(lim.wmax, r + lim.alpha * step, Math.sqrt(2 * lim.alpha * e));
+      e = Math.max(0, e + (hdg - r) * step);
+      if (e < tol || e < best - prog) { best = Math.min(best, e); stall = 0; } else stall += step;
+      if (stall >= W.SLEW_STALL_S) return t + step;               // (c) not closing
+    }
+    return null;
   }
 
   /** What the engaged heading is aimed at, by identity: the locked target, the Field-Assay cluster, or the debris id. */
@@ -2902,7 +3021,7 @@ export class AutopilotSystem {
   /** A new engagement (or a trip hold) says its slow turn and its no-power line again. */
   _slothNoticeReset() {
     const s = this._slow;
-    s.said = false; s.kind = null; s.mode = null; s.ref = null; s.noPowerSaid = false; s.handSaid = false;
+    s.said = false; s.kind = null; s.mode = null; s.ref = null; s.noPowerSaid = false; s.handSaid = false; s.pend = null;
     this._handGasKg = null;                                         // a turn the engagement left unfinished says no grams
   }
 
@@ -2910,6 +3029,7 @@ export class AutopilotSystem {
    * after the "turning on the reaction wheels" line it follows (so the player is not left thinking the wheels still turn her). */
   _slewHandOverNote(full) {
     const s = this._slow;
+    s.pend = null;                                                  // the wheels no longer turn her: a notice still waiting for its first second is never said
     this._handGasKg = 0;                                            // every hand-over opens a tally; `_handGasDoneNote` says it when the gas has finished the turn
     this._gasFinRate = null;                                        // ... and sizes this finish's rate afresh (`_gasFinishRate`)
     if (s.handSaid) return;
@@ -3300,6 +3420,7 @@ export class AutopilotSystem {
       if (this._gasPrevOk) hdgRate = this._gasPrevDir.angleTo(worldDir) / dt;
       this._gasPrevDir.copy(worldDir); this._gasPrevOk = true;
     }
+    this._hdgRateNow = hdgRate;                                        // (`_wheelNoticeText` sizes a wheel chase by it)
     // With the steering gas out the nose goes to the heading at the tail boxes' α, not at AP_ROT_RATE for free (a held world
     // pauses it, like the trip hold); likewise a slew on the wheels (`_slewSource`, no wheel limit, latched to the slew's
     // stop). The choke point for every caller of this slew.
@@ -3506,6 +3627,9 @@ export class AutopilotSystem {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Press A to autopilot to next target cluster.',
         priority: 'info',
+        _kind: 'hint',
+        _hintKey: 'A',
+        _hintStale: () => this._engaged === true,
       });
     });
 
@@ -3808,13 +3932,17 @@ export class AutopilotSystem {
       // A wheel line is said only after the watch's first look has passed with no hand-over (`_aimWheelWatch`), so it never goes out
       // for an aim the gas takes 1-3 s later. With the steering gas out there is no watch (the wheels are all she has): said now.
       let pendingLine = null;
+      let saidAim = null;   // the seconds and grams the gas line said, kept to be told the real ones when the aim ends (`_sayAimBill`)
+      // A piece moves against the frame the gas turn holds, so its forecast says seconds only; grams only for a bearing the caller says
+      // stands still (`opts.stillBearing`), where the law is exact. The after-aim line (`_sayAimBill`) gives the real grams.
+      const still = opts.stillBearing === true;
       if (slothAim) {
         // the honest time; nothing to say when the target is already inside the tolerance (the shot fires with no turn)
         if (slothEstS > 0) {
           // a daughter shot also says the gas of the launch kick (what the wheels cannot take) when it is a gram or more, and the quicker
           // other way when the gas line would name it
           const kick = shot && shot.kickKg * 1000 >= 1 ? `, then ${this._shotGasWords(shot.kickKg)} for the launch kick` : '';
-          const quick = shot && shot.alt ? this._shotQuickWords(shot.alt) : '';
+          const quick = shot && shot.alt ? this._shotQuickWords(shot.alt, still) : '';
           const msg = {
             text: slowAimSrc.src === 'wheels'
               ? this._wheelAimLine(shot, lineS, kick, quick)
@@ -3829,8 +3957,10 @@ export class AutopilotSystem {
         // a daughter shot says what it will really take (seconds, grams of gas), not the worst case
         // a net aim says what the gas will really take too (the aim's own law run on numbers: `_netGasLine`)
         const netG = shot ? null : this._netGasEstimate(this._aimGeom(opts.aimDir || provider()), tolRad, rate, 0);
+        const gasText = shot ? this._shotAimLine(shot, still) : this._netGasLine(netG, rate, still);
+        saidAim = this._aimSaid(gasText, shot ? shot.kickKg : 0, still);
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: shot ? this._shotAimLine(shot) : this._netGasLine(netG, rate),
+          text: gasText,
           priority: 'info', source: 'HOUSTON',
           _keep: true,
         });
@@ -3852,6 +3982,7 @@ export class AutopilotSystem {
         alphaF: shot ? shot.alpha : undefined,   // the strut angle her boresight is aimed for (`_tickAimEased` keeps it fixed for the aim)
         azRad: null,
         elapsed: 0,
+        t0First: this._apClockS,   // the autopilot clock when she began to turn: the wheel hand-off renews `said` (and its t0), this one stays (`_sayAimBill`)
         // a slow aim: twice its planned time + the cathodes' warm-up + a minute (the plain 30 s is for a gas turn)
         timeout: slothAim ? Math.max(AIM.AIM_TIMEOUT_S, 2 * slothEstS + Constants.SLOTH.AIM_SLACK_S) : AIM.AIM_TIMEOUT_S,
         sloth: slothAim,           // the slow eased law runs (the tail boxes or the wheels)
@@ -3864,6 +3995,8 @@ export class AutopilotSystem {
         wFf: 0,                    // the part of it along her error axis, away from her boresight (the feed-forward)
         losAt: -Infinity,          // c.elapsed of the last look at it
         pendingLine,               // the wheel line waiting for the first look (null: said already, or nothing to say)
+        said: saidAim,             // {g, kickG, s, t0, still}: what the gas line promised (grams incl. the launch kick, null when it named none; seconds), null when it said none
+        still,                     // the bearing stands still: the forecast named grams (`opts.stillBearing`)
         _cleanup: () => {
           eventBus.off(Events.MOTHER_MANUAL_ROTATE, onManualRotate);
           eventBus.off(Events.TARGET_SELECTED, onTargetChange);
@@ -4373,7 +4506,29 @@ export class AutopilotSystem {
     if (next && this._pairSaid !== next.key) {
       this._pairSaid = next.key;
       const deg = Math.max(1, Math.round(Math.max(next.missA, next.missB)));
-      eventBus.emit(Events.COMMS_MESSAGE, { text: pairReadyLine(deg), priority: 'info', source: 'HOUSTON', _keep: true, _coach: true });
+      // Lane H (DECISIONS §65 row 1): in training 1-3 the report posts now, the invitation ("Press Q ...") as a hint held
+      // until she has done nothing useful for ~10 s (a line with no "Press", glass "Tap PAIR ...", is one hint). Mission 4+
+      // posts the ONE joined line, as before.
+      const full = pairReadyLine(deg);
+      const split = trainingSplit(full);
+      if (!isTrainingNow()) {
+        eventBus.emit(Events.COMMS_MESSAGE, { text: full, priority: 'info', source: 'HOUSTON', _keep: true, _coach: true });
+      } else {
+        if (split) eventBus.emit(Events.COMMS_MESSAGE, { text: split.report, priority: 'info', source: 'HOUSTON', _keep: true, _coach: true });
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: split ? split.ask : full, priority: 'info', source: 'HOUSTON', _keep: true, _coach: true,
+          _kind: 'hint', _hintKey: 'Q',
+          _hintStale: () => !this._pairOffer || this._pairOffer.key !== next.key,   // the offer is gone (fired, a piece went)
+          // "the last N°" is the offer's CURRENT miss when the hint shows (the pair keeps turning while it waits)
+          _hintText: () => {
+            const o = this._pairOffer && this._pairOffer.key === next.key ? this._pairOffer : next;
+            const d = Math.max(1, Math.round(Math.max(o.missA, o.missB)));
+            const f = pairReadyLine(d);
+            const s = splitReportAsk(f);
+            return s ? s.ask : f;
+          },
+        });
+      }
     }
     if (!next) this._pairSaid = null;
     const W = Constants.WHEEL_PRETURN;
@@ -4791,15 +4946,17 @@ export class AutopilotSystem {
   }
 
   /**
-   * @private Daughter aim line in plain words: seconds and grams of the shot taken, plus the quicker other way when its
-   * gas differs by over QUICK_FRAC.
+   * @private Daughter aim line in plain words: seconds (and, for a bearing that stands still, grams) of the shot taken, plus the quicker
+   * other way when its gas differs by over QUICK_FRAC. A piece moves against the frame the gas turn holds, so the forecast for a piece
+   * says the seconds only (`still` false, the default: what the aim bills is told after it, `_sayAimBill`).
    */
-  _shotAimLine(shot) {
+  _shotAimLine(shot, still = false) {
     // a shot the wheels turn is no gas turn: say the wheels and no gas (grams only where gas turns her)
-    if (shot.src === 'wheels') return this._wheelAimLine(shot, shot.timeS, '', shot.alt && shot.kind !== 'pair' ? this._shotQuickWords(shot.alt) : '');
+    if (shot.src === 'wheels') return this._wheelAimLine(shot, shot.timeS, '', shot.alt && shot.kind !== 'pair' ? this._shotQuickWords(shot.alt, still) : '');
     const sec = Math.max(1, Math.round(shot.timeS + this._carryBrakeS()));   // + the wait for a carried wheel rate to brake (Ruling 0)
-    if (shot.kind === 'pair') return `Turning the ship to line up the pair shot. About ${sec} s, ${this._shotGasWords(shot.gasKg)}.`;
-    return `Turning the ship to line up the launch. About ${sec} s, ${this._shotGasWords(shot.gasKg)}.${shot.alt ? this._shotQuickWords(shot.alt) : ''}`;
+    const gas = still ? `, ${this._shotGasWords(shot.gasKg)}` : '';
+    if (shot.kind === 'pair') return `Turning the ship to line up the pair shot. About ${sec} s${gas}.`;
+    return `Turning the ship to line up the launch. About ${sec} s${gas}.${shot.alt ? this._shotQuickWords(shot.alt, still) : ''}`;
   }
 
   /**
@@ -4825,6 +4982,14 @@ export class AutopilotSystem {
    * not promise the seconds a player will watch. "about 2 min of ship time". */
   _wheelTimeWords(sec) {
     return `${this._player.slothTimeWords(sec)} of ship time`;
+  }
+
+  /** @private `_wheelTimeWords` with finer rounding, for a line that must land within 15 % of the leg it names (t13 lane G2: `slothTimeWords`
+   * rounds 141 s to "about 2 min", 15 % under): whole seconds under 20 s, 5 s to 90 s, 10 s to 5 min, then whole minutes. */
+  _wheelLegWords(sec) {
+    if (!Number.isFinite(sec)) return 'a very long time';
+    const s = sec < 20 ? Math.max(1, Math.round(sec)) : sec < 90 ? Math.round(sec / 5) * 5 : sec < 300 ? Math.round(sec / 10) * 10 : 0;
+    return `about ${s > 0 ? `${s} s` : `${Math.round(sec / 60)} min`} of ship time`;
   }
 
   /** @private The line of a turn on the reaction wheels: no steering gas, ship time; a pair shot says it is the pair's. `kick` / `quick`
@@ -4855,10 +5020,10 @@ export class AutopilotSystem {
     return false;
   }
 
-  /** @private " (quick: 7 s, 133 g)": the other way of the shot (seconds under 90, else minutes). */
-  _shotQuickWords(alt) {
+  /** @private " (quick: 7 s, 133 g)": the other way of the shot (seconds under 90, else minutes); grams only for a bearing that stands still. */
+  _shotQuickWords(alt, still = true) {
     const t = alt.timeS < 90 ? `${Math.max(1, Math.round(alt.timeS))} s` : `${Math.round(alt.timeS / 60)} min`;
-    return ` (quick: ${t}, ${Math.round(alt.gasKg * 1000)} g)`;
+    return ` (quick: ${t}${still ? `, ${Math.round(alt.gasKg * 1000)} g` : ''})`;
   }
 
   /** @private The turn from her nose onto the direction `dir`: `{err, nx, ny}` (rad, and the turn axis in her body frame), or null with no direction. */
@@ -4891,24 +5056,60 @@ export class AutopilotSystem {
     return { timeS: e.timeS + AIM_TRACK_DWELL_S, gasKg: e.gasKg };
   }
 
-  /** @private The gas line of a net aim: the estimate's seconds and grams; with no estimate the old worst case. */
-  _netGasLine(e, rate) {
+  /** @private The gas line of a net aim: the estimate's seconds, and its grams for a bearing that stands still (`still`; a piece's grams
+   * are told after the aim, `_sayAimBill`); with no estimate the old worst case. */
+  _netGasLine(e, rate, still = false) {
     if (!e) return `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / rate)} s at most.`;
-    return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(e.timeS + this._carryBrakeS()))} s, ${this._shotGasWords(e.gasKg)}.`;
+    return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(e.timeS + this._carryBrakeS()))} s${still ? `, ${this._shotGasWords(e.gasKg)}` : ''}.`;
   }
 
-  /** @private The same line when the wheels hand a daughter aim to the gas (what is left of the turn, plus the kick). */
+  /** @private The same line when the wheels hand a daughter aim to the gas (what is left of the turn, plus the kick for a still bearing). */
   _shotHandedLine(c, bm, T) {
     const err = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));
     const I = this._player.getAttitudeInertia();
     const e = this._simGasAim({ err, nx: c.axX, ny: c.axY, table: [{ ixx: I.ixx, iyy: I.iyy }], tS: c.handTS > 0 ? c.handTS : 0, stopErr: c.stopErr, tolRad: c.tolRad,
       rate: c.rate, omega0: Math.max(0, c.omega || 0), strutDone: !(c.handTS > 0), dStrut: 0 });
-    return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(e.timeS))} s, ${this._shotGasWords(e.gasKg + c.shot.kickKg)}.`;
+    return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(e.timeS))} s${c.still ? `, ${this._shotGasWords(e.gasKg + c.shot.kickKg)}` : ''}.`;
   }
 
   _sayWheelsEmpty() {
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: 'This launch also empties the wheels.', priority: 'info', source: 'HOUSTON',
+    });
+  }
+
+  /**
+   * @private What a gas aim line promised ("About 13 s, 521 g of gas." / "About 13 s."): `{g, kickG, s, t0, still}` (grams the line named, null
+   * when it named none, of which `kickG` is the launch kick that comes after the aim; seconds; the autopilot clock when it was said; whether
+   * the bearing stands still, so the forecast named grams). Always an object for a gas aim: the real bill is told after it (`_sayAimBill`).
+   */
+  _aimSaid(text, kickKg, still = false) {
+    const m = /About (\d+) s(?:, (\d+) g of gas)?/.exec(text || '');
+    return { g: m && m[2] !== undefined ? +m[2] : null, kickG: Math.round((kickKg || 0) * 1000), s: m ? +m[1] : null, t0: this._apClockS, still: !!still };
+  }
+
+  /**
+   * @private A gas aim ends (resolved, aborted or timed out): say what it really billed, once. The forecast for a piece says seconds only
+   * (a piece moves against the frame the gas turn holds, so its tracking and closing burst cannot be known at the request; training 1: 521 g
+   * said, 624 g billed; training 3: 89 g said, 252 g billed), so every aim that billed 50 g or more says its grams after it, from the
+   * aim's own tally (`c.gasUnits`, every burn including the closing brake), with the seconds from the line to now. A bearing that stands
+   * still (`c.still`, the forecast named grams) says it only when the forecast was more than 15 % off (and 10 g). A seconds-only miss never
+   * posts a line (t13 lane G1, Decision 8; coordinator ruling: a line of its own only from 50 g). A launch kick is not in the grams.
+   */
+  _sayAimBill(c, stopped = false) {
+    const sd = c && c.said;
+    if (!sd) return;
+    c.said = null;
+    const realG = Math.round(coldGasPoolToKg(c.gasUnits || 0) * 1000);
+    if (realG < AIM_BILL_SAY_G) return;
+    const saidG = sd.g === null ? null : Math.max(0, sd.g - sd.kickG);
+    if (sd.still && saidG !== null && !(Math.abs(realG - saidG) > AIM_BILL_TOL * realG && Math.abs(realG - saidG) >= AIM_BILL_MIN_DIFF_G)) return;
+    const realS = Math.max(1, Math.round(this._apClockS - (Number.isFinite(c.t0First) ? c.t0First : sd.t0)));   // from the start of the turn, the wheel part included
+    const kick = sd.kickG >= 1 ? ', not counting the launch kick' : '';
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: stopped ? `The line-up had used ${realS} s and ${realG} g of gas when it stopped${kick}.`
+        : `The line-up took ${realS} s and ${realG} g of gas${kick}.`,
+      priority: 'info', source: 'HOUSTON',
     });
   }
 
@@ -4961,6 +5162,7 @@ export class AutopilotSystem {
     if (c.mode === 'daughter' && c.pair && c.pair.armB) this._beginLaunchHold(c.pair.armB);   // the one hold covers both
     c._cleanup();
     eventBus.emit(Events.AIM_SEQUENCE_END, { mode: c.mode, result: 'resolved' });
+    this._sayAimBill(c);           // the real seconds and grams, when the line's forecast was off (after the aim's end: the line-up is done)
     c.resolve({ mode: c.mode, launchDir });
   }
 
@@ -4978,6 +5180,7 @@ export class AutopilotSystem {
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `Launch aborted — ${reason}.`, priority: 'warning', source: 'HOUSTON',
     });
+    this._sayAimBill(c, true);     // what the aborted line-up already billed (a cancelled aim still burned gas)
     const err = new Error(reason);
     err.code = code;
     c.reject(err);
@@ -5016,6 +5219,7 @@ export class AutopilotSystem {
   requestAttitudeTurn(axisWorld, angleRad, opts = {}) {
     const player = this._player;
     this._lastTurnRefusal = null;
+    this._lastTurnPlan = null;
     const fail = (msg) => { this._lastTurnRefusal = msg; return Promise.reject(new Error(msg)); };
     if (!player) return fail('AutopilotSystem not initialized (no player).');
     if (this._aimCoroutine) return fail('Aim in progress');
@@ -5085,6 +5289,7 @@ export class AutopilotSystem {
       return fail('not enough steering gas');
     }
     const { sign, A, a, wp, ta, tc, T, mag, dir, k } = prof;
+    this._lastTurnPlan = { gasKg: slothTurn ? 0 : coldGasPoolToKg(prof.gasEstimate), src: slowSrc };
 
     // A slow source's own planning time is a floor under a caller's explicit limit (the reel-home tracked turn's 60 s
     // would abort a wheel turn accepted at an estimate of 55 s).
@@ -5186,7 +5391,7 @@ export class AutopilotSystem {
     // Re-assert the hold (a stray releaseAttitudeHold mid-turn cleared the flag
     // but kept aimHold) and restart its clock: it counts from the END of the turn.
     this.holdAttitude(c.holdS, { owner: c.holdOwner });
-    eventBus.emit(Events.AIM_SEQUENCE_END, { mode: 'turn', result: 'resolved' });
+    eventBus.emit(Events.AIM_SEQUENCE_END, { mode: 'turn', result: 'resolved', gasUnits: c.gasUnits });
     c.resolve({ angleRad: c.track ? c.progress : c.sign * c.A, gasUnits: c.gasUnits, seconds: c.track ? c.wall : c.t });
   }
 
@@ -5197,7 +5402,7 @@ export class AutopilotSystem {
     const progressRad = c.track ? c.progress : c.sign * this._turnAngleAt(c, c.t);
     this._turn = null;
     this.holdAttitude(c.holdS, { owner: c.holdOwner });
-    eventBus.emit(Events.AIM_SEQUENCE_END, { mode: 'turn', result: 'rejected', reason });
+    eventBus.emit(Events.AIM_SEQUENCE_END, { mode: 'turn', result: 'rejected', reason, gasUnits: c.gasUnits });
     const err = new Error(reason);
     err.progressRad = progressRad;
     err.gasUnits = c.gasUnits;
@@ -5740,9 +5945,12 @@ export class AutopilotSystem {
     }
     c.timeout = c.elapsed + Constants.AIM.AIM_TIMEOUT_S;
     c.handedToGas = true;
+    const handedText = (c.mode === 'daughter' && c.shot) ? this._shotHandedLine(c, bm, T)
+      : this._netGasLine(this._netGasEstimate({ err: Math.acos(clamp(bm.dot(T), -1, 1)), nx: c.axX, ny: c.axY }, c.tolRad, c.rate, c.omega), c.rate, c.still);
+    c.said = this._aimSaid(handedText, (c.mode === 'daughter' && c.shot) ? c.shot.kickKg : 0, c.still);   // the real rest-of-the-aim is told against this line
+    c.gasUnits = 0;                                                    // the gas bill of the aim counts from here (the wheels billed none)
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: (c.mode === 'daughter' && c.shot) ? this._shotHandedLine(c, bm, T)
-        : this._netGasLine(this._netGasEstimate({ err: Math.acos(clamp(bm.dot(T), -1, 1)), nx: c.axX, ny: c.axY }, c.tolRad, c.rate, c.omega), c.rate),
+      text: handedText,
       priority: 'info', source: 'HOUSTON', _keep: true,
     });
   }

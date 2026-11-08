@@ -13,6 +13,7 @@ import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, dInviteLine, collarBusyLine, collarBusyState, berthBusyPhrase, targetRangeM, netRangeLine, motherNLine, motherNWorks } from './netRouting.js';
 import { isFree, pieceIsCaught, netRefusalLine, lassoRangeAllOwnedLine } from './PieceClaim.js';
+import { isTrainingNow } from './TrainingHintGate.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { DebrisField } from '../entities/DebrisField.js';
@@ -853,15 +854,40 @@ export class LassoSystem {
                 } else {
                     // Keep it actionable: no raw capture-odds % (noise to a new player); the labelled odds live in the Target panel
                     // badge and the reticle odds strip (SSOT ToolOdds).
-                    eventBus.emit(Events.COMMS_MESSAGE, {
-                        text: _castComms,
+                    const _castBase = {
                         source: 'SYSTEM',
                         channel: 'CMD',
                         priority: 'info',
                         // Proactive teach prompt — tier-gated (does NOT bypass tier 0).
                         _lassoFeedback: true,
                         _proactive: true,
-                    });
+                    };
+                    // Report now, the invitation as a hint (DECISIONS §65 row 1: training 1-3 hold it until she has done nothing
+                    // useful for ~10 s). The nose-full line only reports (N is refused for good). The free-berth line is one hint
+                    // (the range is the thing it invites; the reticle already shows it). While the berth is busy the wait it
+                    // names would be false by the time the hint shows, so the report posts now and the bare invitation is held
+                    // until the berth is free (`_hintReady`). Mission 4+ posts the ONE original line (`_castComms`), joined:
+                    // nothing holds there, so a bare "Press N to cast." would show while N may still be refused.
+                    const _training = isTrainingNow();
+                    const _busyAsk = _training && berth.busy && !berth.noseFull ? (_nWorks ? 'Press N to cast.' : motherNLine('Press N to cast.')) : null;
+                    const _hint = {
+                        _kind: 'hint',
+                        _hintKey: 'N',
+                        // she fired, left range, or the piece is gone / caught
+                        _hintStale: () => this._inRangePromptId !== targetId || selectedTarget.alive === false || selectedTarget._captured === true,
+                        // not yet true while N would be refused for the cargo berth, or while she flies a daughter and Esc would recall her
+                        _hintReady: () => !this.collarBusyNow().busy && motherNLine('N to cast') != null,
+                        // said as true when it SHOWS: while she flies a daughter N is "Esc, then N" (or the line waits), a free berth says no wait
+                        _hintText: () => (_busyAsk ? motherNLine('Press N to cast.') : motherNLine('Target in lasso range. Press N to cast.')),
+                    };
+                    if (_busyAsk) {
+                        eventBus.emit(Events.COMMS_MESSAGE, { ..._castBase, text: `Target in lasso range. ${berthBusyPhrase(berth.waitS)}.` });
+                        eventBus.emit(Events.COMMS_MESSAGE, { ..._castBase, ..._hint, text: _busyAsk });
+                    } else {
+                        eventBus.emit(Events.COMMS_MESSAGE, berth.noseFull || !_training
+                            ? { ..._castBase, text: _castComms }
+                            : { ..._castBase, ..._hint, text: _castComms });
+                    }
                 }
                 if (ss && typeof ss.noteNudgeShown === 'function') {
                     ss.noteNudgeShown('collect_lasso');
