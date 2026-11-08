@@ -645,12 +645,6 @@ export class PlayerSatellite extends THREE.Group {
     this._detailMeshes = [];
     this._detailHidden = false;
 
-    this._edtDeployed = false;
-    this._edtDeployTimer = 0;
-    this._edtActive = false;
-
-    eventBus.on(Events.EDT_DEPLOY, () => this.toggleEDT());
-
     // kg — mothership mass for recoil calculations AND the drag denominator below (update() "Atmospheric drag").
     // `mass` is an ACCESSOR (see `get mass()` below): her live wet mass from the ArmManager budget,
     // Constants.MOTHER_DRAG.MASS_KG (308.78: her start mass with the standard wheels and the full cold-gas tank) when there is no arm manager. The constructor must NOT
@@ -6817,47 +6811,6 @@ export class PlayerSatellite extends THREE.Group {
     this._updateStruts(dt);
     this._stepFlowerAndOvens(dt);
 
-    if (this._edtDeployed && !this._edtActive) {
-      const deployTime = (Constants.EDT && Constants.EDT.DEPLOY_TIME) || 5;
-      this._edtDeployTimer += dt;
-      if (this._edtDeployTimer >= deployTime) {
-        this._edtActive = true;
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: 'EDT', text: 'EDT active. Attracting nearby debris', priority: 'info',
-        });
-      }
-    }
-
-    if (this._edtActive) {
-      const powerDraw = (Constants.EDT && Constants.EDT.POWER_DRAW) || 0.05;
-      if (this._resourceSystem && !this._resourceSystem.canAfford('battery', powerDraw * dt)) {
-        this._edtActive = false;
-        this._edtDeployed = false;
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: 'EDT', text: 'EDT shutdown. Low power', priority: 'warning',
-        });
-      } else if (this._resourceSystem) {
-        this._resourceSystem.consume('battery', powerDraw * dt);
-        eventBus.emit(Events.EDT_ATTRACT, {
-          position: this.position ? this.position.clone() : new THREE.Vector3(),
-          radius: (Constants.EDT && Constants.EDT.ATTRACTION_RADIUS_KM) || 0.2,
-          force: (Constants.EDT && Constants.EDT.ATTRACTION_FORCE) || 0.0001,
-          maxMass: (Constants.EDT && Constants.EDT.MAX_ATTRACT_MASS) || 20,
-        });
-      } else {
-        // No resource system — drain legacy battery directly
-        this.resources.battery -= powerDraw * dt;
-        if (this.resources.battery <= 0) {
-          this.resources.battery = 0;
-          this._edtActive = false;
-          this._edtDeployed = false;
-          eventBus.emit(Events.COMMS_MESSAGE, {
-            sender: 'EDT', text: 'EDT shutdown. Low power', priority: 'warning',
-          });
-        }
-      }
-    }
-
     if (Math.random() < 0.02) {
       const currentFuel = this._resourceSystem
         ? this._resourceSystem.getCurrentFuel()
@@ -6880,8 +6833,6 @@ export class PlayerSatellite extends THREE.Group {
         currentFuelId: currentFuel.id || Constants.DEFAULT_FUEL,
         currentIsp: currentFuel.isp || Constants.OCTOPUS_CORE_HALL_ISP,
         throttleLevel: this.throttleLevel,
-        edtActive: this._edtActive,
-        edtDeployed: this._edtDeployed,
         hasMPD: this._hasMPD,
         mpdCathodeTime: this._mpdCathodeTime,
         mpdCathodeHealth: this.mpdCathodeHealth,
@@ -7328,19 +7279,6 @@ export class PlayerSatellite extends THREE.Group {
           break;
       }
     });
-
-    // EDT active: pulse the indicators blue (colour override: they are MeshBasicMaterial, no emissive)
-    if (this._edtActive && this._tetherIndicators && this._tetherIndicators.length > 0) {
-      const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.005);
-      const r = Math.round(79 * pulse);
-      const g = Math.round(195 * (0.5 + 0.5 * pulse));
-      const b = Math.round(247);
-      for (const indicator of this._tetherIndicators) {
-        if (indicator && indicator.material) {
-          indicator.material.color.setRGB(r / 255, g / 255, b / 255);
-        }
-      }
-    }
   }
 
   /** Set ResourceSystem reference for fuel-aware thrust. */
@@ -10631,35 +10569,6 @@ export class PlayerSatellite extends THREE.Group {
   getVelocity() {
     return { ...this._cartesian.velocity };
   }
-
-  toggleEDT() {
-    if (!this._edtActive && !this._edtDeployed) {
-      this._edtDeployed = true;
-      this._edtDeployTimer = 0;
-      this._edtActive = false;
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'EDT', text: 'Deploying electrodynamic tether...', priority: 'info',
-      });
-    } else if (this._edtActive) {
-      this._edtDeployed = false;
-      this._edtActive = false;
-      eventBus.emit(Events.EDT_RETRACT);
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'EDT', text: 'EDT retracted', priority: 'info',
-      });
-    } else if (this._edtDeployed && !this._edtActive) {
-      this._edtDeployed = false;
-      this._edtDeployTimer = 0;
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'EDT', text: 'EDT deployment cancelled', priority: 'info',
-      });
-    }
-  }
-
-  isEDTActive() { return this._edtActive; }
-
-  /** @returns {boolean} Whether EDT is deployed (may still be deploying) */
-  isEDTDeployed() { return this._edtDeployed; }
 
   getOrbitalElements() {
     return { ...this.orbit };

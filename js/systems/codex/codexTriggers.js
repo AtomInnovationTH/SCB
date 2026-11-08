@@ -139,8 +139,9 @@ export const CODEX_TRIGGERS = {
   // No TANGLED state or TETHER_TANGLE emitter exists; tangle physics matters while reeling in, so it rides the live
   // TETHER_REEL_STATE.
   tether_tangle_physics:  [{ event: E.TETHER_REEL_STATE, match: (p) => p.reeling === true }],
-  edt_physics:            [{ event: E.COMMS_MESSAGE, match: txt('edt') },
-                           { event: E.EDT_ATTRACT, match: always }],
+  // The free E-key electrodynamic tether is out of the game for now (DECISIONS §68 row 2), so this card unlocks on
+  // debris cleared; 22 is the nearest whole number to 12 that no other card uses.
+  edt_physics:            [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 22 }],
   miura_ori_net:          [{ event: E.CROSSBOW_FIRE, match: always }],
   reel_mechanics:         [{ event: E.TETHER_REEL_STATE, match: (p) => p.reeling === true }],
   bolas_weapon:           [{ event: E.LASSO_FIRED, match: always }],

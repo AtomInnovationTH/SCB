@@ -364,7 +364,7 @@ export const Events = {
   CONTRACT_UPDATE:     'contract:update',
   CONTRACT_COMPLETE:   'contract:complete',
 
-  // TRAWLING & EDT
+  // TRAWLING
   TRAWL_START:         'trawl:start',
   TRAWL_CAPTURE:       'trawl:capture',
   TRAWL_END:           'trawl:end',
@@ -376,9 +376,6 @@ export const Events = {
   TRAWL_TARGET_ENTERING:      'trawl:target_entering',
   TRAWL_TARGET_EXITED:        'trawl:target_exited',
   TRAWL_TARGET_WINDOW_CLOSING: 'trawl:target_window_closing',
-  EDT_DEPLOY:          'edt:deploy',
-  EDT_RETRACT:         'edt:retract',
-  EDT_ATTRACT:         'edt:attract',
   ROUTE_PLAN_UPDATE:   'route:planUpdate',
 
   // CLUSTER TRANSFER WINDOW

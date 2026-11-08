@@ -12,7 +12,7 @@
  * with a big piece aboard. While open, `onOpenChange(true)` lets the host hide the where-next list.
  *
  * Three big choices by rule (FateRows.pickChoices: easiest fate that pays, best-paying other, keep); under them a
- * DETAILS block: the "Also" rows (other pickable fates) and plain lines. The model keeps all five fates.
+ * DETAILS block: the "Also" rows (other pickable fates) and plain lines. The model keeps every fate she can use (§68 row 1).
  *
  * Keys (while open; a window capture listener, so the ladder's arrows and Tab never see them):
  *   Left / Right  the previous / next piece ("1 of 3")        Up / Down / Tab  the previous / next choice, then the "Also" rows
@@ -156,7 +156,7 @@ export class FateList {
   /** 0-based index of the shown piece, or -1. */
   index() { return this._pieces.findIndex((p) => p.debris.id === this._pieceId); }
   pieceId() { return this._pieceId; }
-  /** The shown piece's rows as built: [{id, text, label, money, sub, selectable, state, current, focused}], all five fates (a copy). */
+  /** The shown piece's rows as built: [{id, text, label, money, sub, selectable, state, current, focused}], every fate she can use (a copy). */
   rows() { return this._model ? this._model.rows.map((r) => ({ ...r, focused: r.id === this._focusId })) : []; }
   choices() { return this._model ? this._model.choices.slice() : []; }
   /** Ids of the "Also" rows (pickable, shown small under the choices). */

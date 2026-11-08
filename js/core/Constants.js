@@ -3147,17 +3147,6 @@ export const Constants = {
     DEPLOY_SPEED: 2,                      // m/s — trawl net deployment speed
   },
 
-  // EDT — Electrodynamic Tether deployment to attract small debris
-
-  EDT: {
-    DEPLOY_LENGTH_KM: 0.1,     // 100m tether
-    POWER_DRAW: 0.05,          // Wh per second (an absolute draw, NOT a fraction of capacity)
-    ATTRACTION_RADIUS_KM: 0.2, // 200m — draws small debris closer
-    ATTRACTION_FORCE: 0.0001,  // km/s² — gentle pull
-    MAX_ATTRACT_MASS: 20,      // only affects debris < 20kg
-    DEPLOY_TIME: 5,            // seconds to deploy
-  },
-
   // ROUTE PLANNER — ΔV-optimal multi-target visit order
 
   ROUTE_PLANNER: {

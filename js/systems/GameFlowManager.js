@@ -4218,7 +4218,7 @@ export class GameFlowManager {
       return false;
     }
     if (!rs || !(rs.dragSails > 0)) {
-      eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: `No drag sail aboard for the ${pieceName(d0)}. Buy one at a resupply satellite.`, priority: 'info', _keep: true });
+      eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: `No drag sail aboard for the ${pieceName(d0)}.`, priority: 'info', _keep: true });
       return false;
     }
     return this._letGoBig(id, 'sail', { sail: true });

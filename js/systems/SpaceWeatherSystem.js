@@ -38,7 +38,6 @@ const WEATHER_TYPES = {
     icon: 'GEO',
     color: '#9933ff',
     effects: {
-      edtEfficiency: 1.5,
       commsBandwidth: 0.5,
       atmosphericDrag: 1.3,
     },
@@ -46,7 +45,9 @@ const WEATHER_TYPES = {
     maxDuration: SW.GEOMAGNETIC_MAX_DURATION,
     minInterval: SW.GEOMAGNETIC_MIN_INTERVAL,
     maxInterval: SW.GEOMAGNETIC_MAX_INTERVAL,
-    commsAlert: (kp) => `SPACE WEATHER: Geomagnetic storm. Kp index ${kp}. EDT efficiency boosted.`,
+    // Only the storm's own start is announced: nothing in the game reads its comms or drag multipliers, so the line
+    // claims no effect (it used to promise a boost to the removed E-key tether; DECISIONS §68 row 2).
+    commsAlert: (kp) => `SPACE WEATHER: Geomagnetic storm. Kp index ${kp}.`,
     codexTrigger: 'van_allen_belts',
   },
 
@@ -326,7 +327,6 @@ export class SpaceWeatherSystem {
     return {
       sensorRange: 1.0,
       solarPower: 1.0,
-      edtEfficiency: 1.0,
       commsBandwidth: 1.0,
       atmosphericDrag: 1.0,
       radiationRisk: false,
@@ -344,7 +344,6 @@ export class SpaceWeatherSystem {
       const fx = event.effects;
       if (fx.sensorRange != null) merged.sensorRange *= fx.sensorRange;
       if (fx.solarPower != null) merged.solarPower *= fx.solarPower;
-      if (fx.edtEfficiency != null) merged.edtEfficiency *= fx.edtEfficiency;
       if (fx.commsBandwidth != null) merged.commsBandwidth *= fx.commsBandwidth;
       if (fx.atmosphericDrag != null) merged.atmosphericDrag *= fx.atmosphericDrag;
       if (fx.radiationRisk) merged.radiationRisk = true;

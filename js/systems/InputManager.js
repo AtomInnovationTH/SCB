@@ -1104,14 +1104,6 @@ export class InputManager {
         }
         break;
 
-      case 'KeyE':
-        if (isGameplay) {
-          eventBus.emit(Events.EDT_DEPLOY);
-          d.audioSystem.playClick();
-          e.preventDefault();
-        }
-        break;
-
       // L key — de-spin laser (hold L). The continuous beam is driven by the held-key poll in processInput(); this
       // keydown only gives a no-target affordance. Also live in ARM_PILOT when the piloted arm is station-keeping a
       // target (the SK readout advises "de-spin [L]"). This key never touches recall (that is Shift+R).

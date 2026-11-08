@@ -14,7 +14,8 @@
  *     push       "Push it down to 635 km and let go . 10.4 kg gas, 95 days, then about 1.8 kg to climb back . pays 14,000" (down with
  *                her mass now, back up without the piece); short of gas for both legs: not selectable; at or within 0.5 km above
  *                that height: selectable "Let the SL-14 stage go here ..." (the where-next row's words)
- *     sail       "Fit a drag sail and let go . down in 39 years . ..."; none aboard: not selectable
+ *     sail       "Fit a drag sail and let go . down in 39 years . ..."; none aboard: no row at all (the shop sells none, §68 row 1;
+ *                only an old save carries sails)
  *     keep       "Keep it for now . pays nothing yet . 1,400 kg more on every trip"
  *     melt       "Melt it for metal . ... . pays up to 61,040"; selectable only with `ctx.bigMelt` (FEATURE_FLAGS.BIG_MELT)
  *   A piece already in the furnaces (`_disposal.meltDoneKg` > 0): `progress` "In the furnaces: 820 of 1,400 kg
@@ -108,7 +109,7 @@ function valueLines(d) {
  * @param {object} [ctx] see `fateContext`: {fromKm, planTo, planBack, berth, sats, sailsAboard, bigMelt, turnWaitS}
  * @returns {{name, mass, values: string[], rows: FateRow[], progress, maxPayCr, picked, berthed, choices: string[],
  *   also: string[], details: string[]}}
- *   `rows` are all five fates; `choices` the ids shown big (see `pickChoices`), `also` the other fates she can still pick,
+ *   `rows` are the fates she can use: all five, or four with no sail aboard; `choices` the ids shown big (see `pickChoices`), `also` the other fates she can still pick,
  *   `details` the short lines under them ("Not possible now: ...", "Owner: ...", "Values: ...").
  */
 export function buildFateRows(piece, ctx = {}) {
@@ -122,9 +123,10 @@ export function buildFateRows(piece, ctx = {}) {
     return { ...base, rows: [], progress: `In the furnaces: ${kgWhole(disp.meltDoneKg)} of ${kgWhole(total)} kg melted`, choices: [], also: [], details: [] };
   }
   const x = { mass, name: pieceName(d), berthed: !!ctx.berth };
+  // The drag sail is sold nowhere (DECISIONS §68 row 1): its row shows only for an old save that still carries a sail.
   const rows = [
     satelliteRow(d, ctx), pushRow(d, ctx), sailRow(d, ctx), keepRow(d, mass), meltRow(d, ctx),
-  ].map((r) => withWords({ ...r, current: r.id === picked }, x));
+  ].filter(Boolean).map((r) => withWords({ ...r, current: r.id === picked }, x));
   const { choices, also } = pickChoices(rows);
   return { ...base, rows, progress: null, choices, also, details: detailLines(d, rows) };
 }
@@ -251,8 +253,6 @@ export function rowWords(id, state, r, x = {}) {
       return { label: 'Fit a drag sail and let go', money: r.within ? plusCr(r.payCr) : 'no fee',
         sub: `down in ${yearsText(r.lifeYears)}${r.within ? '' : ` (over ${Constants.BIG_PIECES.RULE_YEARS} years)`} ${DOT} 1 of ${r.aboard} ${r.aboard === 1 ? 'sail' : 'sails'}`,
         clause: 'fit a drag sail', why: '' };
-    case 'sail/none':
-      return { label: 'Fit a drag sail and let go', money: 'no fee', sub: 'buy one at a resupply satellite', clause: 'fit a drag sail', why: 'buy one at a resupply satellite' };
     case 'keep/ok':
       return { label: 'Keep it for now', money: 'pays nothing yet', sub: `${creditsText(x.mass)} kg more on every trip`, clause: 'keep it for now', why: '' };
     case 'melt/ok':
@@ -314,12 +314,11 @@ function pushRow(d, ctx) {
     text: `${head} ${DOT} ${kgText(gasKg)} kg gas, ${daysText(days)}, then about ${kgText(backGasKg)} kg to climb back ${DOT} ${paysText(payCr)}` };
 }
 
+/** @private The sail row: null (no row at all) with no sail aboard; the shop sells none (§68 row 1), so only an old save has one. */
 function sailRow(d, ctx) {
   const head = 'Fit a drag sail and let go';
   const aboard = Number.isFinite(ctx.sailsAboard) ? Math.max(0, Math.floor(ctx.sailsAboard)) : 0;
-  if (aboard < 1) {
-    return { id: 'sail', state: 'none', selectable: false, payCr: 0, text: `${head} ${DOT} needs a drag sail: buy one at a resupply satellite` };
-  }
+  if (aboard < 1) return null;
   const km = Number.isFinite(ctx.fromKm) ? ctx.fromKm : NaN;
   const life = sailLifeYears(d, km);
   const pay = fatePay(d, 'sail', { lifeYears: life });

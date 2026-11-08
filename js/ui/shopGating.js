@@ -122,6 +122,8 @@ function partAsNew(res, part) {
 export function isShopRowOffered(u, ctx) {
   if (!u) return true;
   if (u.id === 'reentry_capsule' && !(ctx && ctx.capsuleCity === true)) return false;
+  // owner 2026-11-08 / DECISIONS §68 row 1: the drag sail comes later, so the shop sells none. The row stays in UPGRADES (an old save's purchase and its sails still load).
+  if (u.id === 'drag_sail') return false;
   if (u.requiresFeature && !Constants.isFeatureEnabled(u.requiresFeature)) return false;
   if (Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED && (u.id === 'flower_pair_a' || u.id === 'flower_pair_b')) return false;
   if (Constants.WHEELS.STANDARD === true && u.id === 'reaction_wheels') return false;

@@ -186,11 +186,6 @@ export class StatusPanel {
     eventBus.on(Events.FUEL_CHANGED, (data) => this._updateFuelIndicator(data));
 
     eventBus.on(Events.PLAYER_TELEMETRY, (t) => {
-      const edtEl = document.getElementById('edt-indicator');
-      if (edtEl) {
-        edtEl.style.display = t.edtActive ? '' : 'none';
-      }
-
       if (t.hasMPD && !this._mpdUnlocked) {
         this._mpdUnlocked = true;
         const liRow = document.getElementById('mpd-lithium-row');

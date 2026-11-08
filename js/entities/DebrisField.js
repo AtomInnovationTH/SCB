@@ -571,9 +571,6 @@ export class DebrisField {
       console.log(`[DebrisField] HYBRID mode. ${this.realEntryCount} real catalogue + ${proc} procedural filler`);
     }
 
-    // EDT attract events nudge small debris toward the player
-    eventBus.on(Events.EDT_ATTRACT, (data) => this._onEdtAttract(data));
-
     // GSL web shot hits apply a drag multiplier
     eventBus.on(Events.WEB_SHOT_HIT, (data) => this._onWebShotHit(data));
 
@@ -3373,64 +3370,6 @@ export class DebrisField {
   }
 
   /**
-   * EDT_ATTRACT: nudge small debris toward the attract point via small orbital perturbations
-   * (trueAnomaly + semiMajorAxis), so it drifts rather than teleports.
-   * @param {object} data
-   * @param {THREE.Vector3|{x:number,y:number,z:number}} data.position — attract centre (scene coords)
-   * @param {number} data.radius — attract radius in km (Constants.EDT.ATTRACTION_RADIUS_KM)
-   * @param {number} data.force  — base force in km/s² (Constants.EDT.ATTRACTION_FORCE)
-   * @param {number} data.maxMass — max debris mass affected (Constants.EDT.MAX_ATTRACT_MASS)
-   */
-  _onEdtAttract({ position, radius, force, maxMass }) {
-    if (!position) return;
-
-    // km → scene units
-    const radiusScene = (radius || Constants.EDT.ATTRACTION_RADIUS_KM) * Constants.SCENE_SCALE;
-    const radiusSq = radiusScene * radiusScene;
-
-    const baseForce = (force || Constants.EDT.ATTRACTION_FORCE) * Constants.SCENE_SCALE;
-    const massLimit = maxMass || Constants.EDT.MAX_ATTRACT_MASS;
-
-    for (const debris of this.debrisList) {
-      if (!debris.alive || debris.mass > massLimit) continue;
-
-      const dPos = debris._scenePosition;
-      if (!dPos) continue;
-
-      const dx = position.x - dPos.x;
-      const dy = position.y - dPos.y;
-      const dz = position.z - dPos.z;
-      const distSq = dx * dx + dy * dy + dz * dz;
-
-      if (distSq >= radiusSq || distSq < 1e-12) continue;
-
-      const dist = Math.sqrt(distSq);
-
-      // linear fall-off to zero at the boundary
-      const strength = baseForce * (1.0 - dist / radiusScene);
-
-      const cart = orbitToSceneCartesian(debris.orbit);
-      const vx = cart.velocity.x;
-      const vy = cart.velocity.y;
-      const vz = cart.velocity.z;
-      const vLen = Math.sqrt(vx * vx + vy * vy + vz * vz);
-      if (vLen < 1e-10) continue;
-
-      // tangential: attract direction · velocity direction, nudges trueAnomaly
-      const tangDot = (dx * vx + dy * vy + dz * vz) / (dist * vLen);
-      debris.orbit.trueAnomaly += strength * tangDot / debris.orbit.semiMajorAxis;
-
-      // radial: drift semiMajorAxis toward the attract-point altitude
-      const debrisR = Math.sqrt(dPos.x * dPos.x + dPos.y * dPos.y + dPos.z * dPos.z);
-      const attractR = Math.sqrt(
-        position.x * position.x + position.y * position.y + position.z * position.z
-      );
-      debris.orbit.semiMajorAxis += (attractR - debrisR) * strength * 0.1;
-    }
-  }
-
-
-  /**
    * Write a pinned piece's orbit as "the mother's orbit, phased forward by the pin's along-track offset" — the ONE
    * co-orbital expression of the tease pin. Callers: update() every frame while `_onboardingPinned`, and
    * _clearOnboardingPin once (seamless hand-back to free propagation).
@@ -5061,7 +5000,7 @@ export class DebrisField {
   /**
    * Resolve the (altitude band × inclination cluster) bucket id for a debris object: the single classification entry
    * shared by getDebrisClusters, getFieldIdNear and the CLUSTER_CLEARED accounting. Memoized on sma + inc (identical to a
-   * live recompute; auto-invalidates when either changes: drift, deorbit, EDT attract, station-keep snap, fragment respawn).
+   * live recompute; auto-invalidates when either changes: drift, deorbit, station-keep snap, fragment respawn).
    * @private
    * @param {object} debris
    * @returns {string|null} cluster id, or null if out of tracked bands

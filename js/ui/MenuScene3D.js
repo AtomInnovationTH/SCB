@@ -996,7 +996,6 @@ function emitSparkBurst(sparkSystem, weldPos, n) {
  * @param {PlayerSatellite} mother - phantom, display-only satellite instance
  */
 export function neutralizePhantomSatellite(mother) {
-  mother.toggleEDT = () => {};
   mother._applyCrossbowRecoil = () => {};
   mother._applyDualFireRecoil = () => {};
   // Emits RESOURCE_CONSUME coldGas (twice, via _autoRcsCompensation) on every NET_FIRED with source==='mother'.
@@ -1350,7 +1349,7 @@ export class MenuScene3D {
     this.scene.add(this._pivot);
 
     // Mother: the REAL PlayerSatellite. The constructor parents it into whatever "scene" we pass, so we hand it the
-    // orbit pivot. It also seeds an orbital position + 11 eventBus listeners (10 in the constructor body, plus one
+    // orbit pivot. It also seeds an orbital position + 10 eventBus listeners (9 in the constructor body, plus one
     // wired deeper in _buildModel → _buildNetPods); we zero the position and leave it static (never call update()).
     const mother = new PlayerSatellite(this._pivot);
     mother.position.set(0, 0, 0);            // ignore the orbital position the ctor set
@@ -1360,7 +1359,7 @@ export class MenuScene3D {
     // come out of _buildModel already deployed.
     mother.rotation.z = -Math.PI / 2;
 
-    // The constructor wired the sim's eventBus handlers (crossbow recoil, EDT toggle, dual-fire, mother-net recoil);
+    // The constructor wired the sim's eventBus handlers (crossbow recoil, dual-fire, mother-net recoil);
     // this instance lives for the whole app, so neutralise them with the shared helper (see its doc).
     neutralizePhantomSatellite(mother);
     // No power subsystem drives solarRate here: constant energized ROSA glow (see _animateRosaGlow).

@@ -1625,7 +1625,7 @@
         "realWorld": "TSS-1R (1996) generated ~3,500 V on a ~20 km tether before it snapped; EDT deorbit not yet operational.",
         "formula": "EMF = ∫ (v × B) · dL   (motional induction along the tether)",
         "trlRationale": "TSS-1R demonstrated EDT current generation; not operational.",
-        "unlockHint": "Fly until the mothership mentions the electrodynamic tether."
+        "unlockHint": "Clear 22 pieces of debris."
       }
     },
     {

@@ -1087,12 +1087,7 @@ export class VitalsPane {
       el.appendChild(rec.value);
       if (key === 'battery') {
         // The trend arrow and the time left ride the BATTERY row itself
-        // (the in / out watts line is in the MOTHER hover detail). The E-Tether tag keeps its id.
-        const edt = mk('span', 'vp-edt', 'E-Tether');
-        edt.id = 'edt-indicator';
-        edt.setAttribute('title', 'Electrodynamic Tether');
-        edt.style.display = 'none';
-        el.appendChild(edt);
+        // (the in / out watts line is in the MOTHER hover detail).
         rec.rate = mk('span', 'vp-rate');
         rec.rate.setAttribute('data-empty', '');
         el.appendChild(rec.rate);
@@ -1122,7 +1117,6 @@ export class VitalsPane {
     const NORMAL = `var(--hud-normal, ${P.PLAYER})`;
     const CAUTION = `var(--hud-caution, ${P.CAUTION})`;
     const WARNING = `var(--hud-warning, ${WARNING_RED})`;
-    const INFO = 'var(--hud-info, #4488ff)';
     const DIM = `var(--hud-dim, ${NO_READING_GREY})`;
     const TITLE_SHADOW = 'var(--hud-title-shadow, 0 0 8px rgba(0, 255, 136, 0.35))';
     const style = doc.createElement('style');
@@ -1304,7 +1298,6 @@ export class VitalsPane {
         opacity: 0.85;
         text-shadow: ${HALO};
       }
-      #${VITALS_ID} .vp-edt { color: ${INFO}; font-size: 9px; font-weight: 700; flex: 0 0 auto; }
       #${VITALS_ID} .vp-rate[data-empty] { display: none; }
       #${VITALS_ID} .vp-tag[data-empty] { display: none; }
     `;

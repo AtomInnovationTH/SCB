@@ -197,7 +197,6 @@ export const HOTKEY_GROUPS = [
       [['Shift − +'], 'Throttle down / up', { id: 'throttle' }],
       [['Shift 1–3'], 'Pick power line', { id: 'power_line' }],
       [['[', ']'], 'Power less / more', { id: 'power_adj' }],
-      [['E'], 'Electric tether out / in', { id: 'tether' }],
       'col',
       // More for Daughters: launch → fly → reel → cut (destructive last).
       [['Shift D'], 'Launch all, one per piece', { id: 'launch_all' }],

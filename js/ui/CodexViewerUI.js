@@ -1290,7 +1290,8 @@ export class CodexViewerUI {
   /**
    * The entry's photo pairs (owner 2026-10-29, DECISIONS §55 row 6): one row per pair, its pictures side by side (stacked
    * in the narrow layout), the caption and a credit line under each picture. Every string is escaped; a `src` must be a
-   * relative bundled path and a link must be https, so a bad data row prints text, never markup or a foreign script.
+   * relative bundled path, and the licence address and Commons file name print as plain text (https values only), so a bad
+   * data row prints text, never markup, a link or a foreign script.
    * Pure. Returns '' for an entry without pairs.
    * @param {{photoPairs?: Array<{caption?: string, images?: Array<object>}>}} entry
    * @returns {string}
@@ -1299,21 +1300,30 @@ export class CodexViewerUI {
     const pairs = entry && Array.isArray(entry.photoPairs) ? entry.photoPairs : [];
     if (!pairs.length) return '';
     const safeSrc = (s) => (typeof s === 'string' && /^[\w][\w./-]*$/.test(s) && !s.includes('..')) ? escapeHtml(s) : '';
-    const safeUrl = (u) => (typeof u === 'string' && /^https:\/\//.test(u)) ? escapeHtml(u) : '';
-    const link = (label, url) => {
-      const href = safeUrl(url);
-      return href
-        ? `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#7fc8e8;">${escapeHtml(label)}</a>`
-        : escapeHtml(label);
+    // The game is an offline sim (owner 2026-11-08, DECISIONS §68 row 3): no link in the Tech library. A licence address
+    // and a Commons file name print as plain text; only an `https://` value is used at all, so a bad data row can never put
+    // a `javascript:` or `http:` string on the page.
+    const licenceAddress = (u) => {
+      if (typeof u !== 'string' || !/^https:\/\//.test(u)) return '';
+      return u.replace(/^https:\/\//, '').replace(/\/deed\.[\w-]+\/?$/, '').replace(/\/+$/, '');
     };
+    const commonsFile = (u) => {
+      if (typeof u !== 'string' || !/^https:\/\//.test(u)) return '';
+      const m = /\/wiki\/(File:[^?#]+)/.exec(u);
+      if (!m) return '';
+      let name = m[1];
+      try { name = decodeURIComponent(name); } catch (_) { /* keep the raw text */ }
+      return name.replace(/_/g, ' ');
+    };
+    const withAddress = (label, address) => escapeHtml(address ? `${label}, ${address}` : label);
     const flow = this._narrow ? 'flex-direction:column;' : 'flex-direction:row;';
     const rows = pairs.map((pair) => {
       const figs = (Array.isArray(pair.images) ? pair.images : []).map((im) => {
         const src = safeSrc(im && im.src);
         if (!src) return '';
         const parts = [escapeHtml(im.credit || '')];
-        if (im.licence) parts.push(link(im.licence, im.licenceUrl));
-        if (im.sourceUrl) parts.push(link('Wikimedia Commons', im.sourceUrl), 'resized');
+        if (im.licence) parts.push(withAddress(im.licence, licenceAddress(im.licenceUrl)));
+        if (im.sourceUrl) parts.push(withAddress('Wikimedia Commons', commonsFile(im.sourceUrl)), 'resized');
         return `<figure class="codex-photo" style="flex:1 1 0;min-width:0;margin:0;">
           <img src="${src}" alt="${escapeHtml(im.alt || '')}" loading="lazy"
             style="display:block;width:100%;height:auto;border:1px solid rgba(255,255,255,0.12);border-radius:4px;">

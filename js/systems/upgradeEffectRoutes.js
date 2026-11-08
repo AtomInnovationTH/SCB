@@ -168,6 +168,10 @@ export const RESOURCE_RESTORED_EFFECTS = new Set([
   // restore() already set the tank gas (`tankGasId`) and fills the launch mass: a replay on MENU_CONTINUE must not vent or
   // refill. (GAMEOVER_CONTINUE replays from a reset base.)
   'engineGasSwitch',
+  // Rules 2 A (§68 row 1): the shop sells no sail now, but a save that carries sails keeps them: restore() sets the stock, so a
+  // 'drag_sail' purchase record must not add one on a Menu Continue replay. The game never wrote one (the sail is consumable);
+  // this only guards a hand-made or future record. (GAMEOVER_CONTINUE replays from a reset base, as above.)
+  'dragSail',
 ]);
 
 /**
