@@ -5383,8 +5383,8 @@ export const Constants = {
     INTERCEPT_BONUS_CREDITS: 500,     // credits awarded on a full intercept
     PERSISTENCE_KEY: 'spacecowboy_iss_boss_v1',
     CODEX: { SAVER: 'iss_saver', PDAM: 'iss_pdam', HYDRAZINE: 'iss_hydrazine_burn' },
-    // ISS height (408 km) the threat frags are spawned at (NORAD 25544 ≈). The pieces are placed in HER plane, not the ISS's
-    // (DECISIONS §60 row 5): incDeg/raanDeg are the real station's plane, NOT used for placement (only a bare-field fallback).
+    // ISS height (408 km) the threat frags are spawned at (NORAD 25544 ≈). The pieces go in the station's own node once lined
+    // up, else HER plane (DECISIONS §62 row 9): incDeg/raanDeg are the real station's plane, only a bare-field fallback.
     ORBIT: {
       altKm: 408,
       incDeg: 51.6,

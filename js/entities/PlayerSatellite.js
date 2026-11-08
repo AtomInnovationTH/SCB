@@ -3185,7 +3185,7 @@ export class PlayerSatellite extends THREE.Group {
     // control with target 0, so this default never rolls the wings out.
     const target = this._rosaManualControl ? this._rosaFurlTarget : 1.0;
 
-    // Wing-drum clamps are re-latchable motor-driven latches (owner 2026-09-25; DECISIONS-older.md). Once fully rolled
+    // Wing-drum clamps are re-latchable motor-driven latches (owner 2026-09-25; DECISIONS-record.md). Once fully rolled
     // up (target 0, progress 0) and both tilts are within WING_CLAMP_RELATCH_TILT_DEG of 0, they snap closed
     // (_rosaStowLatched) until the player unrolls. ORDER: the latch opens FIRST and the roll-out resumes the FOLLOWING
     // frame, so the drum never turns inside a closed clamp. Tilt is read here, ahead of _animateSolarTracking (which

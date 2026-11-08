@@ -4876,7 +4876,7 @@ export class ArmManager {
    * Every daughter parked HOLDING_CATCH with a catch gets her strut to her hold pose (`holdPoseFor`: 34° if her catch is
    * plume-clear there, else the lowest plume-clear angle, never above 100°). It starts from 34°, NOT from where the strut
    * is (a strut the reel left at 180° comes down), and acts whether or not the catch bites at the present angle. Live,
-   * NOT flag-gated; THRUSTER_INTERLOCK stays dormant.
+   * NOT flag-gated.
    *  • MANUAL: a "." press (`_strutManual`, aged by StrutAuto for holding arms too) stands for its quiet window as long as the
    *    angle it asked for is safe (not below the hold pose, not above 100°, catch plume-clear there); an unsafe one is dropped.
    *  • ONE writer of `_strutTargetAlpha` for a holding arm while no hand-off runs (CARRY_* arms are in another state).
