@@ -258,6 +258,8 @@ export function routeState(state, held = []) {
     ...(Number.isFinite(state.furnaces) ? { furnaces: state.furnaces } : {}),     // the free radiator tips (`_freeTips`); absent = 4
     // the node gap and the part aboard (J5 Task 12): `gapDeg`/`incDeg` let the walker move the gap by the route's days; `partCr` is the part job's pay
     ...(Number.isFinite(state.gapDeg) && Number.isFinite(state.incDeg) ? { gapDeg: state.gapDeg, incDeg: state.incDeg } : {}),
+    // plan route-1109 lane D: the plane she is in against the satellites' (a satellite stop pays the tilt back, a station stop's finish starts from it)
+    ...(Number.isFinite(state.planeTiltDeg) ? { planeTiltDeg: state.planeTiltDeg } : {}), ...(Number.isFinite(state.satNodeGapDeg) && state.satNodeGapDeg !== 0 ? { satNodeGapDeg: state.satNodeGapDeg } : {}),
     ...(partJob ? { partAboard: state.partAboard > 0 || !!(partJob.aboard && partJob.aboard.kg > 0), partCr: Math.max(0, partJob.payCr || 0) } : {}),
     // The kept part weighs (plan hold-mass-1106): its kg beside the boolean above (an explicit `state.partKg`, else the panel's `partAboard` kg, else the posting's record).
     // The walk keeps it on her mass through a satellite stop and drops it where the station pays it. The hold's metal and its SELL ALL value ride in as they are.

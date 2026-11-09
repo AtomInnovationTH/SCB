@@ -7,6 +7,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { StorageKeys } from '../core/StorageKeys.js';
+import { isSupportedLanguage } from '../core/Languages.js';
 
 const SAVE_KEY = StorageKeys.SAVE;
 // a New Game copies the existing save here before deleting it: an accidental Enter-on-menu maps to START
@@ -161,6 +162,9 @@ class PersistenceManager {
         // Route-1101 lane S2: the station's node minus hers (deg, js/systems/NodeDrift.js), written with the fields block (flag on). An
         // old save without it gets it from her node at load (GameFlowManager).
         ...(Number.isFinite(data.stationNodeGapDeg) ? { stationNodeGapDeg: data.stationNodeGapDeg } : {}),
+        // Route-1109 lane C: the language code of the start city her tilt, node and station came from; kept only when supported, so a
+        // load under another language keeps the save's own orbit. An old save lacks it and continues at the settings language.
+        ...(typeof data.startLang === 'string' && isSupportedLanguage(data.startLang) ? { startLang: data.startLang } : {}),
         // Route-1107-d2: she has joined the station object's plane (the finish burn flown, no leg of days since); written only when true.
         // `stationJoinedCity`: the city key of her tilt when she joined (null at New York); a load under another start drops the join.
         ...(data.stationJoined === true ? { stationJoined: true, stationJoinedCity: typeof data.stationJoinedCity === 'string' ? data.stationJoinedCity : null } : {}),

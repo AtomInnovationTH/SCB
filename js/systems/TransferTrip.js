@@ -1366,8 +1366,14 @@ export class TransferTrip {
         // route-1101 lane S2: where she left from and the profile's height samples, for the station node gap's advance (NodeDrift.gapChangeOverLeg)
         fromKm: this._profile.fromKm, samples: this._profile.samples };
       if (this._d.fields) {
-        if (isFreeTarget(this._field)) this._d.fields.arrive(this._field.id, { altKm: this._field.altKm });      // the free place needs its height
-        else this._d.fields.arrive(this._field.id);
+        // plan route-1109 lane D, Locked 4: her own trip to a satellite brings her back to the satellites' plane (the tilt was flown in the profile), so the
+        // registry forgets the node she gave up. It is read BEFORE `arrive` clears it and handed on with the leg: the station gap takes it back
+        // (`GameFlowManager._advanceStationGap`).
+        const f = this._d.fields;
+        const satOff = isSatelliteTarget(this._field) && typeof f.satNodeGapDeg === 'function' ? f.satNodeGapDeg() : 0;
+        if (isFreeTarget(this._field)) f.arrive(this._field.id, { altKm: this._field.altKm });      // the free place needs its height
+        else f.arrive(this._field.id);
+        if (Number.isFinite(satOff) && satOff !== 0) this.lastLeg.satOffsetDeg = satOff;
       }
       line = this._gasShort ? TRIP_LINES.ARRIVED_LAST_GAS : tripArrivedLine(this._field);
     } else {

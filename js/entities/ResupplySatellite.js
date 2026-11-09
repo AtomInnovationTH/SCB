@@ -219,6 +219,46 @@ function armJoints(tipY, tipZ, out) {
 }
 const _AJ = { ey: 0, ez: 0, wy: 0, wz: 0 };
 
+/** The points of `W` (`_aboardAtGripGen`: one xyz array per piece aboard, the grip at the origin) within `PULL.bandM` of the arm's plane: the only ones its links can touch. */
+function armBand(W) {
+  const band = [];
+  for (const w of W) for (let i = 0; i < w.length; i += 3) if (Math.abs(w[i]) <= PULL.bandM) band.push(w[i], w[i + 1], w[i + 2]);
+  return Float64Array.from(band);
+}
+/**
+ * The arm-to-piece rule, one place for the normal hover and the hover pulled in: with the bus `Dg` from the grip, the least SQUARED distance from the axis of the arm's
+ * links (shoulder to wrist joint; the wrist stub and head are the grip itself) to the points `B` (`armBand`), at the hover and at each of `PULL.poses` along the end of the
+ * reach. The take is clear when this is `PULL.armClearM` squared or more. A generator (it yields between slices of work).
+ * @param {Float64Array} B band points, xyz, the grip at the origin, the approach along -z (the hover is at z = -Dg)
+ * @param {number} Dg bus-to-grip distance, m
+ * @returns {number} Infinity when B is empty
+ */
+function* armClearD2Gen(B, Dg) {
+  let best2 = Infinity;
+  const J = { ey: 0, ez: 0, wy: 0, wz: 0 };
+  const ay = [], az = [];
+  for (const t of PULL.poses) {
+    armJoints(RAISE.y * (1 - t), lerp(RAISE.z, Dg, t), J);
+    ay.length = 0; az.length = 0;
+    const linkTo = (y0, z0, y1, z1) => {
+      const n = Math.max(1, Math.ceil(Math.hypot(y1 - y0, z1 - z0) / PULL.armStepM));
+      for (let i = 0; i <= n; i++) { ay.push(y0 + (y1 - y0) * i / n); az.push(z0 + (z1 - z0) * i / n); }
+    };
+    linkTo(ARM_BASE.y, ARM_BASE.z, J.ey, J.ez);
+    linkTo(J.ey, J.ez, J.wy, J.wz);
+    for (let a = 0; a < ay.length; a++) {
+      for (let i = 0; i < B.length; i += 3) {
+        const dy = B[i + 1] - ay[a], dz = B[i + 2] + Dg - az[a];
+        const d2 = B[i] * B[i] + dy * dy + dz * dz;
+        if (d2 < best2) best2 = d2;
+      }
+      _work.n += B.length / 3 * 0.02;
+      if (WORK_DUE()) { _work.n = 0; yield; }
+    }
+  }
+  return best2;
+}
+
 // The haul rule and the planner's measuring tools. A rack piece rests 2-70 mm from her radiator hardware and her daughters, so a haul that
 // is only "aft" can pass through a petal. The planner measures instead and judges every line by ONE rule, read by the planner and by
 // js/test/_satGeom.js (`haulViolations`): the distance from every sample point of the piece (`haulRulePoints`) to the EXACT triangles of
@@ -1610,6 +1650,26 @@ export class ResupplySatellite {
       if (bi < 0) bi = bj;
       su = bestAll;
       G.set(verts[bi], verts[bi + 1], verts[bi + 2]);
+      if (!nose) {
+        // route-1109 lane B: the pull-in and the arm check below measure against the piece's SURFACE samples (`haulRuleGen`), not its vertices, and a flat
+        // face can rise above every vertex near the plane (seed 2's microsatellite: 0.147 m). Gripping at the highest of those samples inside the same x
+        // band keeps the reach true to what is tested. (A sample lies on a triangle, so it can never rise above the farthest vertex: `su` stands.)
+        // Which checks run on which hover: the REACH (`DgBase` against GRIP_DIST_MAX_M), the arm's links against every piece aboard (`PULL.armClearM`,
+        // `armClearD2Gen`) and the haul sweep run on every take, from the normal hover and from a hover pulled in alike; the bus solids' stand-off
+        // (`STAND_OFF_M`) and the nothing-of-hers-near and run-in checks run only in `_pullInGen`, because the normal hover is
+        // `STAND_OFF_M` beyond everything aboard by construction.
+        const rp = yield* haulRuleGen(rec.piece);
+        const sv = new THREE.Vector3();
+        let bestU = G.dot(u);
+        for (let i = 0; i < rp.length; i += 3) {
+          sv.set(rp[i], rp[i + 1], rp[i + 2]);
+          if (rec.qRel) sv.applyQuaternion(rec.qRel);
+          sv.add(rec.cM);
+          if (Math.abs(sv.x) > GRIP_X_MAX_M) continue;
+          const d = sv.x * u.x + sv.y * u.y + sv.z * u.z;
+          if (d > bestU) { bestU = d; G.copy(sv); }
+        }
+      }
     } else {
       const r = Math.max(0.1, (rec.piece.sizeMeter || 1) / 2);
       G.copy(rec.cM).addScaledVector(u, r);
@@ -1631,11 +1691,20 @@ export class ResupplySatellite {
     const reachOk = DgBase <= GRIP_DIST_MAX_M;
     if (PLAN_DEBUG.on) { PLAN_DEBUG.pull = null; PLAN_DEBUG.grip = { nose, side, Dg: DgBase, D, su, gu, G: G.toArray(), reachOk }; }
     const Q = nose ? QY_PI.clone() : qRackPhi(side * Math.PI / 2);
+    // the arm's links keep `PULL.armClearM` from every piece aboard on the normal hover too (a rack piece: the nose piece is not swept by it, as before): a hover in
+    // reach that fails it is not taken, the piece goes to the pull-in below as one out of reach does
+    let armOk = true;
+    if (reachOk && !nose) {
+      const W = yield* this._aboardAtGripGen(rec, gone, G, Q);
+      const armD2 = yield* armClearD2Gen(armBand(W), DgBase);
+      armOk = armD2 >= PULL.armClearM * PULL.armClearM;
+      if (PLAN_DEBUG.on) { PLAN_DEBUG.grip.armM = Math.sqrt(armD2); PLAN_DEBUG.grip.armOk = armOk; }
+    }
     let Dg = DgBase;
     let H0 = new THREE.Vector3().copy(G).addScaledVector(u, Dg);
     let body = null;
-    if (!reachOk) {
-      // the default hover is out of the arm's reach: the bus moves in along the same line to the first spot that measures clear. A nose piece does
+    if (!reachOk || !armOk) {
+      // the default hover is out of the arm's reach, or leaves the arm too near a piece: the bus tries hovers along the same line from the arm's full reach inward, to the first spot that measures clear. A nose piece does
       // not: it is gripped at its farthest vertex
       if (nose || this._noPull) return null;
       const pick = yield* this._pullInGen(rec, gone, hull, G, u, Q);
@@ -1688,6 +1757,31 @@ export class ResupplySatellite {
   }
 
   /**
+   * Every piece aboard (this one and the others not in `gone`), as the satellite sees it with the bus at the grip `G` and its attitude `Q`: xyz triples of each piece's
+   * surface samples (`haulRuleGen`), the grip point the origin; the hover `Dg` is then z + Dg. A generator.
+   * @returns {Float64Array[]} one array per piece
+   */
+  *_aboardAtGripGen(rec, gone, G, Q) {
+    const Qi = new THREE.Quaternion().copy(Q).invert();
+    const v = new THREE.Vector3();
+    const W = [];
+    for (const r of [rec, ...this._aboardRecs(rec.piece, gone)]) {
+      const rp = yield* haulRuleGen(r.piece);
+      const w = new Float64Array(rp.length);
+      for (let i = 0; i < rp.length; i += 3) {
+        v.set(rp[i], rp[i + 1], rp[i + 2]);
+        if (r.qRel) v.applyQuaternion(r.qRel);
+        v.add(r.cM).sub(G).applyQuaternion(Qi);
+        w[i] = v.x; w[i + 1] = v.y; w[i + 2] = v.z;
+        _work.n += 0.3;
+        if (WORK_DUE()) { _work.n = 0; yield; }
+      }
+      W.push(w);
+    }
+    return W;
+  }
+
+  /**
    * A hover pulled in, a generator. The default hover (the bus `STAND_OFF_M` beyond everything aboard) can leave the grip farther than the
    * arm reaches (`GRIP_DIST_MAX_M`): a long piece whose far end lies well past its gripped point. Hovers along the same line are tried from
    * the arm's full reach down to `GRIP_DIST_MIN_M` in `PULL.stepM`; the first is taken at which, measured on the drawn things in her frame:
@@ -1710,24 +1804,8 @@ export class ResupplySatellite {
     const ext = model.ext, nBox = ext.length;
     const Qi = new THREE.Quaternion().copy(Q).invert();
     const v = new THREE.Vector3();
-    // every piece aboard, as the satellite sees it with the bus at the grip: x, y, z (the grip point is the origin); the hover `Dg` is then z + Dg
-    const W = [];
-    for (const r of [rec, ...this._aboardRecs(rec.piece, gone)]) {
-      const rp = yield* haulRuleGen(r.piece);
-      const w = new Float64Array(rp.length);
-      for (let i = 0; i < rp.length; i += 3) {
-        v.set(rp[i], rp[i + 1], rp[i + 2]);
-        if (r.qRel) v.applyQuaternion(r.qRel);
-        v.add(r.cM).sub(G).applyQuaternion(Qi);
-        w[i] = v.x; w[i + 1] = v.y; w[i + 2] = v.z;
-        _work.n += 0.3;
-        if (WORK_DUE()) { _work.n = 0; yield; }
-      }
-      W.push(w);
-    }
-    const band = [];
-    for (const w of W) for (let i = 0; i < w.length; i += 3) if (Math.abs(w[i]) <= PULL.bandM) band.push(w[i], w[i + 1], w[i + 2]);
-    const B = Float64Array.from(band);
+    const W = yield* this._aboardAtGripGen(rec, gone, G, Q);
+    const B = armBand(W);
     const spheres = [];  // the nose catch and the tip bags (a rack's catch is measured at its mesh, above)
     const am = this.player && this.player.armManager;
     if (am && typeof am._heldCatchSpheres === 'function') {
@@ -1739,8 +1817,6 @@ export class ResupplySatellite {
     }
     const stand2 = STAND_OFF_M * STAND_OFF_M, arm2 = PULL.armClearM * PULL.armClearM;
     const restB = new Float64Array(hull.nLabels).fill(Infinity);           // the solids rest against nothing (checked below: nothing within 0.2 m)
-    const J = { ey: 0, ez: 0, wy: 0, wz: 0 };
-    const ay = [], az = [];
     const loc = new THREE.Vector3();
     for (let n = 0; ; n++) {
       const Dg = +(GRIP_DIST_MAX_M - n * PULL.stepM).toFixed(3);
@@ -1771,26 +1847,7 @@ export class ResupplySatellite {
       }
       if (c.catchM < STAND_OFF_M) continue;
       // 3. the arm's links, at the hover and along the end of the reach, against the pieces near its plane
-      let armBest2 = Infinity;
-      for (const t of PULL.poses) {
-        armJoints(RAISE.y * (1 - t), lerp(RAISE.z, Dg, t), J);
-        ay.length = 0; az.length = 0;
-        const linkTo = (y0, z0, y1, z1) => {
-          const n = Math.max(1, Math.ceil(Math.hypot(y1 - y0, z1 - z0) / PULL.armStepM));
-          for (let i = 0; i <= n; i++) { ay.push(y0 + (y1 - y0) * i / n); az.push(z0 + (z1 - z0) * i / n); }
-        };
-        linkTo(ARM_BASE.y, ARM_BASE.z, J.ey, J.ez);
-        linkTo(J.ey, J.ez, J.wy, J.wz);
-        for (let a = 0; a < ay.length; a++) {
-          for (let i = 0; i < B.length; i += 3) {
-            const dy = B[i + 1] - ay[a], dz = B[i + 2] + Dg - az[a];
-            const d2 = B[i] * B[i] + dy * dy + dz * dz;
-            if (d2 < armBest2) armBest2 = d2;
-          }
-          _work.n += B.length / 3 * 0.02;
-          if (WORK_DUE()) { _work.n = 0; yield; }
-        }
-      }
+      const armBest2 = yield* armClearD2Gen(B, Dg);
       c.armM = Math.sqrt(armBest2);
       if (armBest2 < arm2) continue;
       // 4. nothing of her hardware or her daughters within 0.2 m of the solids at the hover

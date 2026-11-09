@@ -29,10 +29,13 @@
  * The legs:
  *   transferLeg   field to field, the real low-thrust profile (TripProfile.tripProfile) at her live mass; exact.
  *   planeLeg      a change of orbit plane (tilt and node, `planeAngle`), low thrust: Edelbaum, pi/2 x the impulsive price for a
- *                 small angle. Every field shares her plane today, so it answers 0 there.
+ *                 small angle. Every field follows her plane, so it answers 0 there.
  *   finishBurn    the last node gap to the station (<= 0.346 deg, <= 57 m/s), billed at the station's 408 km, only for the start whose tilt is the
  *                 station's (route-1106 lane S4; `NodeDrift.stationInOwnPlane`): the walker's station stop pays it before the part, the game's
- *                 `finishStationBurn` bills it.
+ *                 `finishStationBurn` bills it, from the tilt she is in now (`fromIncDeg`; route-1109 lane D).
+ *   tiltBackDvMps the satellites stay in her START plane, so after a finish her own trip to one also turns the plane back: Edelbaum's combined burn
+ *                 (`FieldRegistry.planTo` adds it through `withTiltBack`; the walker's satellite stop and the finish reserve price it the same way;
+ *                 plan route-1109 lane D, owner 2026-11-09 "price it").
  *   approachLeg   the autopilot's close-in flight to a piece, billed gas by distance and her mass (a MEASURED table below).
  *   daughterLeg   a daughter's fetch, billed from her own tank the way the game bills it (never from the mother's).
  *   pieceValue    what a piece is worth, from the game's own pay code (never copied prices).
@@ -53,7 +56,7 @@ import { planeAngle, planeChangeDeltaV } from '../entities/OrbitalMechanics.js';
 import { pieceValues } from './BigPieceValues.js';
 import { isJobPiece, jobPayCr, capsuleCanDrop, capsuleMassKg, capsulePriceCr } from './JobsBoard.js';
 import { planBurn } from './BigMelt.js';
-import { gapChangeOverLeg, isLinedUp, stationInOwnPlane, stationOrbit } from './NodeDrift.js';
+import { gapChangeOverLeg, isLinedUp, stationInOwnPlane, stationOrbit, wrapDeg } from './NodeDrift.js';
 
 const SECONDS_PER_DAY = 86400;
 
@@ -175,13 +178,88 @@ export function planeLeg(a) {
 }
 
 /**
+ * The low-thrust delta-v of a climb or descent that also turns the orbit plane through `angleDeg` (plan route-1109 lane D, DECISIONS §67
+ * row 4 area: the satellites are in her start plane, so a ship that finished in the station's plane pays the tilt back on the way to one).
+ * Edelbaum's combined optimum, `sqrt(v1^2 + v2^2 - 2 v1 v2 cos(pi/2 x angle))` with `v1`, `v2` the circular speeds at the two heights,
+ * written as `sqrt((v1 - v2)^2 + 4 v1 v2 sin^2(pi angle / 4))` (the same number, exact for a tiny angle). The EXTRA over the plain height
+ * leg is that less `|v1 - v2|`: 0 for a zero angle; at equal heights it is `planeLeg`'s `2 v sin(pi angle / 4)`.
+ * @param {number} fromKm @param {number} toKm heights above the surface @param {number} angleDeg the plane angle (deg, >= 0)
+ * @returns {number} m/s extra over the height leg alone (0 for no angle or heights that are not numbers)
+ */
+export function tiltBackDvMps(fromKm, toKm, angleDeg) {
+  if (!Number.isFinite(fromKm) || !Number.isFinite(toKm) || !(angleDeg > 0)) return 0;
+  const C = Constants;
+  const v1 = Math.sqrt(C.MU_EARTH / (C.EARTH_RADIUS_KM + fromKm)) * 1000;
+  const v2 = Math.sqrt(C.MU_EARTH / (C.EARTH_RADIUS_KM + toKm)) * 1000;
+  const s = Math.sin((Math.PI / 4) * (angleDeg * Math.PI / 180));
+  return Math.sqrt((v1 - v2) * (v1 - v2) + 4 * v1 * v2 * s * s) - Math.abs(v1 - v2);
+}
+
+/**
+ * The angle (deg) between the plane she is in and the satellites' plane (her start tilt, her start node): `planeAngle` of (`tiltDeg`, node =
+ * `satNodeGapDeg`, her node minus the satellites') and (`startIncDeg`, 0). Plan route-1109 lane D, Locked 1.
+ * @param {{tiltDeg: number, satNodeGapDeg: number}} plane @param {number} startIncDeg @returns {number} deg (0 when a number is missing)
+ */
+export function tiltBackAngleDeg(plane, startIncDeg) {
+  if (!plane || !Number.isFinite(plane.tiltDeg) || !Number.isFinite(plane.satNodeGapDeg) || !Number.isFinite(startIncDeg)) return 0;
+  const D2R = Math.PI / 180;
+  return planeAngle({ inclination: plane.tiltDeg * D2R, raan: plane.satNodeGapDeg * D2R }, { inclination: startIncDeg * D2R, raan: 0 }) / D2R;
+}
+
+/**
+ * A height profile with the tilt back flown with it (`tiltBackDvMps`; plan route-1109 lane D, Locked 3): one burn that climbs or descends AND
+ * turns the plane. The delta-v adds the extra to the profile's own (drag included), the gas is the rocket equation on the total at the mass
+ * the profile starts with, the days follow from the engine's steady flow (`gas x ve / thrust`, the profile's own relation), and the samples keep
+ * their shape stretched over the longer burn (so the trip flies and bills it as one burn). Carries `tiltBackDeg` and `tiltBackDvMps`. A profile that
+ * is not ok, or a zero angle, comes back as it is.
+ * @param {object} profile `tripProfile`'s answer (never changed: a new object comes back) @param {number} angleDeg
+ * @param {{ispS: number, thrustN: number}} burn @returns {object}
+ */
+export function withTiltBack(profile, angleDeg, burn) {
+  if (!profile || !profile.ok || !(angleDeg > 0)) return profile;
+  const extra = tiltBackDvMps(profile.fromKm, profile.toKm, angleDeg);
+  if (!(extra > 0)) return profile;
+  const ve = burn.ispS * Constants.G0;
+  const dvMps = profile.dvMps + extra;
+  const gasKg = profile.m0 * (1 - Math.exp(-dvMps / ve));
+  const days = gasKg * ve / burn.thrustN / SECONDS_PER_DAY;
+  const tEndS = days * SECONDS_PER_DAY;
+  const k = profile.tEndS > 0 ? tEndS / profile.tEndS : 0;
+  const g = profile.gasKg > 0 ? gasKg / profile.gasKg : 0;
+  const samples = (profile.samples || []).map((s) => ({ t: s.t * k, a: s.a, m: profile.m0 - (profile.m0 - s.m) * g }));
+  return { ...profile, dvMps, gasKg, days, tEndS, m1: profile.m0 - gasKg, samples, tiltBackDeg: angleDeg, tiltBackDvMps: extra };
+}
+
+/**
+ * The words that name the tilt back in a line (plan route-1109 lane D, Locked 7): "incl. 1.97° tilt back" (three decimals under 0.1 deg). Empty for no tilt.
+ * @param {number} deg the plane angle @returns {string}
+ */
+export function tiltBackNote(deg) {
+  if (!(deg > 0)) return '';
+  return `incl. ${deg >= 0.1 ? deg.toFixed(2) : deg.toFixed(3)}\u00b0 tilt back`;
+}
+
+/**
+ * Where the finish leaves her plane: the object's tilt and the node she now has against the satellites' (her old offset plus the gap she closed).
+ * Pure, so the game, the where-next note and the walker price the reserve from the same plane (plan route-1109 lane D, Locked 2 and 5).
+ * @param {{herIncDeg: number, satNodeGapDeg: number, gapDeg: number}} a `herIncDeg` the start tilt (the city key), `satNodeGapDeg` her node minus the
+ *   satellites' before the finish, `gapDeg` the node gap the finish closes
+ * @returns {{tiltDeg: number, satNodeGapDeg: number}}
+ */
+export function planeAfterFinish(a) {
+  return { tiltDeg: stationOrbit(a.herIncDeg).incDeg, satNodeGapDeg: wrapDeg((a.satNodeGapDeg || 0) + (a.gapDeg || 0)) };
+}
+
+/**
  * The finish burn: closing a small node gap to the station object (route-1106 lane S4, D3; station-drift doc §2: 164.7 m/s per degree, so at
  * most 0.346 deg = 57 m/s at the ISS). Billed for the seven start tilts (`stationInOwnPlane`); any other tilt costs nothing. Priced at the
  * object's own height (`stationOrbit(herIncDeg)`: the ISS 408 km, or the start city's real object, route-1107-d2), where her node turns at
  * the object's rate and the gap does not move during the burn: an Edelbaum `planeLeg` from her plane (her tilt, node 0) to the object's
  * (its tilt, node = the gap), so a tilt difference counts too (XRISM 1.0 deg, AstroSat 1.0 deg, SRMSAT 1.97 deg). Free when the whole plane
  * angle is under 1e-4 deg (a gap of 0 at New York's tilt).
- * @param {{gapDeg: number, herIncDeg: number, massKg: number, thrustN: number, ispS: number, gasAboardKg?: number}} a
+ * `herIncDeg` is the start tilt: it keys the city and its object. The plane leg starts from `fromIncDeg` (default `herIncDeg`) instead: the tilt she
+ * is in NOW (plan route-1109 lane D, Locked 2: after one finish she is already in the object's tilt, so a second finish pays only its node gap).
+ * @param {{gapDeg: number, herIncDeg: number, fromIncDeg?: number, massKg: number, thrustN: number, ispS: number, gasAboardKg?: number}} a
  * @returns {{dvMps: number, gasKg: number, days: number, feasible: boolean}}
  */
 export function finishBurn(a) {
@@ -189,8 +267,9 @@ export function finishBurn(a) {
   if (!stationInOwnPlane(a.herIncDeg) || !Number.isFinite(a.gapDeg)) return none;
   const s = stationOrbit(a.herIncDeg);
   const D2R = Math.PI / 180;
+  const fromInc = Number.isFinite(a.fromIncDeg) ? a.fromIncDeg : a.herIncDeg;
   const r = planeLeg({
-    fromOrbit: { altKm: s.altKm, inclination: a.herIncDeg * D2R, raan: 0 },
+    fromOrbit: { altKm: s.altKm, inclination: fromInc * D2R, raan: 0 },
     toOrbit: { altKm: s.altKm, inclination: s.incDeg * D2R, raan: a.gapDeg * D2R },
     massKg: a.massKg, thrustN: a.thrustN, ispS: a.ispS, gasAboardKg: a.gasAboardKg,
   });
@@ -201,7 +280,8 @@ export function finishBurn(a) {
 /**
  * The nearest resupply satellite (DECISIONS §67 rows 5-6): the one with the smallest height gap from `fromKm`, a tie to the lower one. This is
  * the order `WhereNextRows.buildWhereNextRows` draws satellite rows in (its first is the one the call summons). Satellites are heights only
- * (`Constants.RESUPPLY.SATS`, `FieldRegistry.satellites()`); the game treats them as in her plane, so no plane change is priced to one.
+ * (`Constants.RESUPPLY.SATS`, `FieldRegistry.satellites()`), in her START plane; a trip to one pays the tilt back from the plane she is in
+ * (`FieldRegistry.planTo`, `tiltBackDvMps`; plan route-1109 lane D, owner 2026-11-09 "price it").
  * @param {Array<{id: string, altKm: number}>} sats @param {number} fromKm the height she is measured from
  * @returns {({id: string, altKm: number}|null)} the satellite object, or null for an empty list
  */
@@ -212,22 +292,25 @@ export function nearestSatellite(sats, fromKm) {
 
 /**
  * The reserve the station finish keeps (DECISIONS §67 row 6): after the finish burn she must still have the gas to fly on to the nearest
- * resupply satellite. Prices that trip through the registry (`planTo(sat, {fromKm, lessKg})`: her live mass less the finish's gas) and
+ * resupply satellite. Prices that trip through the registry (`planTo(sat, {fromKm, lessKg, plane})`: her live mass less the finish's gas, from
+ * the plane AFTER the finish, so the tilt back to the satellites' plane is in it) and
  * compares it with the gas left after the finish. Shared by `GameFlowManager.finishStationBurn` and the where-next station note.
  * Null = no test (a registry without `satellites()` / `planTo`, a height that is not a number, no satellite, no plan): the finish goes
  * ahead as before, a missing answer never refuses it for ever.
- * @param {object} reg the FieldRegistry @param {{fromKm: number, lessKg: number, gasLeftKg: number}} a
- *   `fromKm` where the finish is flown, `lessKg` the gas already spent (the trip is flown at her mass less this), `gasLeftKg` the gas aboard after it
- * @returns {({holds: boolean, sat: {id: string, altKm: number}, tripKg: (number|null)}|null)} `tripKg` null = the thruster cannot fly that trip
+ * @param {object} reg the FieldRegistry @param {{fromKm: number, lessKg: number, gasLeftKg: number, plane?: {tiltDeg: number, satNodeGapDeg: number}}} a
+ *   `fromKm` where the finish is flown, `lessKg` the gas already spent (the trip is flown at her mass less this), `gasLeftKg` the gas aboard after it,
+ *   `plane` the plane she is in after the finish (`planeAfterFinish`; absent = the registry's own now)
+ * @returns {({holds: boolean, sat: {id: string, altKm: number}, tripKg: (number|null), tiltBackDeg: number}|null)} `tripKg` null = the thruster cannot
+ *   fly that trip; `tiltBackDeg` the plane angle the trip turns through (0 = none: the trip is in her plane)
  */
 export function finishReserve(reg, a) {
   if (!reg || typeof reg.satellites !== 'function' || typeof reg.planTo !== 'function' || !a || !Number.isFinite(a.fromKm)) return null;
   const sat = nearestSatellite(reg.satellites(), a.fromKm);
   if (!sat) return null;
-  const plan = reg.planTo(sat, { fromKm: a.fromKm, lessKg: a.lessKg });
+  const plan = reg.planTo(sat, { fromKm: a.fromKm, lessKg: a.lessKg, ...(a.plane ? { plane: a.plane } : {}) });
   if (!plan) return null;
   const tripKg = plan.profile && plan.profile.ok ? plan.profile.gasKg : null;
-  return { holds: tripKg !== null && tripKg <= a.gasLeftKg + 1e-9, sat, tripKg };
+  return { holds: tripKg !== null && tripKg <= a.gasLeftKg + 1e-9, sat, tripKg, tiltBackDeg: (plan.profile && plan.profile.tiltBackDeg) || 0 };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -473,6 +556,9 @@ export function isCandidate(v) {
  * @property {string} [fieldId]   the field she is at, if any (pieces in it cost no transfer)
  * @property {{x: number, y: number, z: number}|null} [posM]  where she is inside that field, metres in the frame of her arrival (null = the arrival point)
  * @property {number} [catchesLeft]  catches that finish the mission she is in (0 = at a mission boundary, the default; a move is free then)
+ * @property {number|null} [planeTiltDeg]  her tilt now when it is not her start tilt (null/absent = the start tilt, `incDeg`): after a station finish she is in the object's
+ *                                   (plan route-1109 lane D). A satellite stop pays the tilt back from here and resets it; a station stop's finish starts from it
+ * @property {number} [satNodeGapDeg] her node minus the satellites' (deg, 0 = the same node; default 0), moved by the finish and reset at a satellite stop
  * @property {number} [stepS]        game seconds per step of the exact transfer profile (default `TRIP.PROFILE_STEP_S`; a coarser step is
  *                                   cheaper and gives the same delta-v to 3 decimals: the panel uses 300)
  * @property {number} [maxMoves]     moves allowed (default `MAX_MOVES`)
@@ -576,6 +662,8 @@ function freshWalk(state) {
     gasUsedKg: 0, days: 0, valueCr: 0, feeCr: 0, metalCr: 0, ok: true,
     // the station's part job (J5 Task 12): the node gap as the route's days move it (null = not tracked), the part aboard, what the station paid
     gapDeg: Number.isFinite(state.gapDeg) && Number.isFinite(state.incDeg) ? state.gapDeg : null,
+    // plan route-1109 lane D: the plane she is in against the satellites' (start tilt, start node): her tilt now (null = her start tilt) and her node minus theirs
+    planeTiltDeg: Number.isFinite(state.planeTiltDeg) ? state.planeTiltDeg : null, satNodeGapDeg: Number.isFinite(state.satNodeGapDeg) ? state.satNodeGapDeg : 0,
     partAboard: !!state.partAboard, partPaid: false, partCr: Number.isFinite(state.partCr) ? state.partCr : 0, partPaidCr: 0,
     partKg: state.partAboard && state.partKg > 0 ? state.partKg : 0,   // the kept part's mass (in `carriedKg`): it stays aboard until the station pays it
     byCapsule: state.byCapsule === true, capsules: state.capsulesAboard > 0 ? Math.floor(state.capsulesAboard) : 0,   // route-1107-d2 D-B5: the part goes home by reentry capsule; the capsules in her stock (inside `carriedKg`)
@@ -708,19 +796,28 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
   const cos = state.cos === undefined ? 1 : state.cos;
   const maxMoves = Number.isFinite(state.maxMoves) ? state.maxMoves : MAX_MOVES;
   const quota = quotaOf();
-  const doTransfer = (toKm) => {
+  const doTransfer = (toKm, tiltDv = 0) => {
     const massKg = w.dryMassKg + w.carriedKg + w.gasKg;
     const args = { fromKm: w.altKm, toKm, massKg, thrustN: state.thrustN, ispS: state.ispS, areaM2: state.areaM2, cos, stepS: state.stepS };
     // a climb the engine cannot finish inside the game's own limit is not run (a heavy hold would spend seconds of CPU finding that out)
-    const t = climbTooLong(args) ? { ok: false, gasKg: 0, days: 0 } : transfer(args);
+    let t = climbTooLong(args) ? { ok: false, gasKg: 0, days: 0 } : transfer(args);
+    // the tilt back to the satellites' plane (plan route-1109 lane D, Locked 3 and 6): one burn, the extra delta-v on the leg's own, the gas by the rocket
+    // equation on the total at this mass, the days from the engine's steady flow
+    if (t.ok && tiltDv > 0) {
+      const ve = state.ispS * Constants.G0;
+      const gasKg = massKg * (1 - Math.exp(-((t.dvMps || 0) + tiltDv) / ve));
+      t = { ...t, gasKg, days: gasKg * ve / state.thrustN / SECONDS_PER_DAY };
+    }
     const fits = t.ok && fitsGas(w, t.gasKg, fast);
     w.gasKg -= t.gasKg; w.gasUsedKg += t.gasKg; w.days += t.days;
     advanceGap(w, state, t.days, w.altKm, toKm, t.profile && t.profile.samples);          // before `altKm` moves: the leg's own heights
     w.altKm = toKm;
-    if (legs) legs.push({ kind: 'transfer', stop: stopIndex, toKm, gasKg: t.gasKg, days: t.days, massKg, gasLeftKg: w.gasKg, ok: fits });
+    if (legs) legs.push({ kind: 'transfer', stop: stopIndex, toKm, gasKg: t.gasKg, days: t.days, massKg, gasLeftKg: w.gasKg, ok: fits, ...(tiltDv > 0 ? { tiltBackDv: tiltDv } : {}) });
     if (fits) applyMelts(w, t.days, state, steps);
     return fits;
   };
+  /** The plane angle (deg) she must turn back to the satellites' plane from where this walk has her (0 = in it). */
+  const tiltBackDeg = () => tiltBackAngleDeg({ tiltDeg: w.planeTiltDeg ?? state.incDeg, satNodeGapDeg: w.satNodeGapDeg }, state.incDeg);
   /** A move is a where-next pick: only at a mission boundary (the quota is filled first), and only `maxMoves` of them. */
   const beginMove = () => {
     if (w.moves >= maxMoves) return false;
@@ -805,9 +902,16 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
   // a field, the station field or the satellite: a move, a transfer, then she is at its arrival point
   if (!beginMove()) return false;
   const destId = stop.kind === 'station' ? stop.fieldId : stop.id;
-  if (w.altKm !== stop.altKm || (destId && destId !== w.fieldId)) {
-    if (!doTransfer(stop.altKm)) return false;
+  // A satellite is in her START plane: the stop pays the tilt back from the plane the walk has her in (plan route-1109 lane D, Locked 6), as the game's
+  // `planTo` does, and puts her back in that plane (the node she gave up goes back on the station gap, as `TransferTrip._end` hands it on).
+  const backDeg = stop.kind === 'sat' ? tiltBackDeg() : 0;
+  if (w.altKm !== stop.altKm || (destId && destId !== w.fieldId) || backDeg > 0) {
+    if (!doTransfer(stop.altKm, backDeg > 0 ? tiltBackDvMps(w.altKm, stop.altKm, backDeg) : 0)) return false;
   } else if (legs) legs.push({ kind: 'transfer', stop: stopIndex, toKm: stop.altKm, gasKg: 0, days: 0, massKg: w.dryMassKg + w.carriedKg + w.gasKg, gasLeftKg: w.gasKg, ok: true });
+  if (stop.kind === 'sat') {
+    if (w.gapDeg !== null) w.gapDeg = wrapDeg(w.gapDeg + w.satNodeGapDeg);
+    w.planeTiltDeg = null; w.satNodeGapDeg = 0;
+  }
   w.posM = null;
   w.fieldId = stop.kind === 'sat' ? null : (destId ?? null);
   if (stop.kind === 'sat') {
@@ -838,20 +942,26 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
     if (stop.kind === 'station' && !w.byCapsule && w.partAboard && !w.partPaid && w.gapDeg !== null && isLinedUp(w.gapDeg)) {
       // route-1106 lane S4: the finish burn closes the last gap first (the game's `finishStationBurn`: gas and days, billed at the station's
       // height; priced only for the start whose tilt is the station's, else 0); with too little gas the part stays aboard, nothing billed
-      const fin = finishBurn({ gapDeg: w.gapDeg, herIncDeg: state.incDeg, massKg: w.dryMassKg + w.carriedKg + w.gasKg, thrustN: state.thrustN, ispS: state.ispS, gasAboardKg: w.gasKg });
+      const fin = finishBurn({ gapDeg: w.gapDeg, herIncDeg: state.incDeg, fromIncDeg: w.planeTiltDeg ?? state.incDeg, massKg: w.dryMassKg + w.carriedKg + w.gasKg, thrustN: state.thrustN, ispS: state.ispS, gasAboardKg: w.gasKg });
       // DECISIONS §67 row 6: the game's `finishStationBurn` also keeps a reserve: after the finish she must still reach the nearest resupply
-      // satellite (the leg from the station's height, at her mass after the finish, on the gas left). A zero finish goes ahead as the game's early return does.
+      // satellite (the leg from the station's height, at her mass after the finish, on the gas left), the tilt back to the satellites' plane
+      // from the plane AFTER the finish included (plan route-1109 lane D, Locked 5). A zero finish goes ahead as the game's early return does.
+      const after = planeAfterFinish({ herIncDeg: state.incDeg, satNodeGapDeg: w.satNodeGapDeg, gapDeg: w.gapDeg });
       let reserveOk = true;
       if (fin.feasible && fin.gasKg > 0) {
         const sat = nearestSatellite(Constants.RESUPPLY.SATS, stop.altKm);
         if (sat) {
           const rargs = { fromKm: stop.altKm, toKm: sat.altKm, massKg: Math.max(1, w.dryMassKg + w.carriedKg + w.gasKg - fin.gasKg), thrustN: state.thrustN, ispS: state.ispS, areaM2: state.areaM2, cos, stepS: state.stepS };
-          const rt = climbTooLong(rargs) ? { ok: false, gasKg: 0 } : transfer(rargs);
+          let rt = climbTooLong(rargs) ? { ok: false, gasKg: 0 } : transfer(rargs);
+          const extra = rt.ok ? tiltBackDvMps(stop.altKm, sat.altKm, tiltBackAngleDeg(after, state.incDeg)) : 0;
+          if (extra > 0) rt = { ...rt, gasKg: rargs.massKg * (1 - Math.exp(-((rt.dvMps || 0) + extra) / (state.ispS * Constants.G0))) };
           reserveOk = rt.ok && rt.gasKg <= w.gasKg - fin.gasKg + 1e-9;
         }
       }
       if (fin.feasible && reserveOk) {
         w.gasKg -= fin.gasKg; w.gasUsedKg += fin.gasKg; w.days += fin.days;
+        // the plane she is in now (the game's `FieldRegistry.setPlane`): the object's tilt, and the node she took from the satellites'
+        if (stationInOwnPlane(state.incDeg) && (fin.gasKg > 0 || Math.abs(w.gapDeg) < 1e-4)) { w.planeTiltDeg = after.tiltDeg; w.satNodeGapDeg = after.satNodeGapDeg; }
         if (fin.gasKg > 0) w.gapDeg = 0;
         const cr = Math.max(0, stop.payCr || 0);
         w.partPaid = true; w.partAboard = false; w.partPaidCr += cr; w.valueCr += cr;

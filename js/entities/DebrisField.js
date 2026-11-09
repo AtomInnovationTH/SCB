@@ -4456,6 +4456,10 @@ export class DebrisField {
 
   /**
    * CH9 Starlink fragmentation boss (MISSION_ARC §6): burst-spawn `count` fragments in the Starlink shell, tagged `starlink_threat:true`.
+   * Route-1109 lane A (DECISIONS §67 row 4 extended to Starlink; owner 2026-11-09): the pieces start on her own track (see
+   * `_spawnThreatField` `nearHer`), as the station boss's do, not at a random phase. Found 2026-11-07: with the random phase only 17 %
+   * of spawns put any piece inside the 1,000 km target list. The countdown is the boss's own clock, `STARLINK_BOSS.WINDOW_MIN` game
+   * minutes (the ISS boss passes its 38 h); no plane is passed, so the pieces are in her plane (§60 row 5).
    * @param {object} [options] @param {number} [options.count]
    * @returns {{ ids: number[] }}
    */
@@ -4463,12 +4467,13 @@ export class DebrisField {
     const cfg = Constants.STARLINK_BOSS;
     if (!cfg || !cfg.ORBIT) return { ids: [] };
     const count = Math.max(1, options.count ?? cfg.FRAG_COUNT ?? 35);
-    return this._spawnThreatField(cfg.ORBIT, count, 'starlink_threat');
+    return this._spawnThreatField(cfg.ORBIT, count, 'starlink_threat', undefined, { tcaHours: (cfg.WINDOW_MIN || 5) / 60 });
   }
 
   /**
    * Shared boss-frag spawner. Repurposes alive, non-special, NOT-mid-capture debris into the orbit `cfg` (as
-   * `_spawnWelcomeField`): overwrites elements, spreads them ahead in true-anomaly, refreshes mass/type/salvage, sets
+   * `_spawnWelcomeField`): overwrites elements, spreads them ahead in true-anomaly at a random phase (or, with `nearHer`, on her track,
+   * ahead or behind), refreshes mass/type/salvage, sets
    * `debris[tag]=true`, marks them tracked + discovered. Returns the spawned ids (fewer than `count` if candidates run out).
    *
    * @private
@@ -4478,9 +4483,10 @@ export class DebrisField {
    * @param {string} tag — per-debris flag identifying the threat set
    * @param {{inclination: number, raan: number}} [plane] — a plane (rad) to build the pieces in instead of hers (the ISS boss at the
    *        station's own node, route-1106 lane S4); absent or not finite = her plane
-   * @param {{tcaHours: number}} [nearHer] — route-1107-d2 (ISS pieces only; the Starlink spawn leaves it out and keeps its random
-   *        phase): put the pieces on HER track instead of at a random phase. Found 2026-11-07 (3,000 random spawns): with the random phase
-   *        the nearest piece sat a median 9,450 km from her and only 6 % of spawns put one inside the 1,000 km target list. The phase is the
+   * @param {{tcaHours: number}} [nearHer] — route-1107-d2 (the ISS pieces; the Starlink pieces too since route-1109 lane A, DECISIONS
+   *        §67 row 4, with the boss's 5-minute window as `tcaHours`): put the pieces on HER track instead of at a random phase. Found 2026-11-07 (3,000 random spawns of the
+   *        station boss): with the random phase the nearest piece sat a median 9,450 km from her and only 6 % of spawns put one inside
+   *        the 1,000 km target list. The Starlink spawn's own figure was 17 % within 1,000 km (probe `tmp/d2probe/probe2.mjs`). The phase is the
    *        argument of latitude (the pieces' argument of perigee is 45 deg). With dh = the pieces' height minus hers, the pieces drift along
    *        track by -1.5 n dh (above her they fall behind), so they start on the side they drift toward her from, evenly 20 km to 20 + D km
    *        from her, D = max(70 km, |drift| x TCA); for |dh| < 1 km, 20 km to 90 km ahead (no drift to count on). No cached player orbit

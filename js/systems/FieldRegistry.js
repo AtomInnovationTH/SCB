@@ -57,9 +57,12 @@ import { engineGasKg } from './ResourceSystem.js';
 import { shipWear } from './ShipWear.js';
 import { realThrustN, playSeconds, tripDragAreaM2 } from './TripProfile.js';
 // The trip profile and its cache live in RouteCost (route-1101 R1): one cost model prices every leg, and `planTo` is its transfer leg.
-import { transferLeg } from './RouteCost.js';
+import { transferLeg, withTiltBack, tiltBackAngleDeg } from './RouteCost.js';
+import { wrapDeg } from './NodeDrift.js';
 
 const SAVE_VERSION = 1;
+/** Plane numbers closer than this (deg) are the same plane: nothing is saved, nothing is priced. */
+const PLANE_EPS_DEG = 1e-6;
 
 /** The id of the free place a push-down trip ends at (a height that is no field and no satellite). */
 export const FREE_ID = 'free';
@@ -293,13 +296,16 @@ export class FieldRegistry {
    * and whether the gas is enough. `target`: a field id or a field, or a satellite (its id or the satellite). `cos` is
    * how much of the push goes the way she wants (1 = she can turn; TransferTrip passes less when a daughter out on her
    * line keeps her where she points).
-   * @param {{cos?: number, fromKm?: number, thetaRad?: number, lessKg?: number}} [opts] `thetaRad`: the radiator angle the
+   * @param {{cos?: number, fromKm?: number, thetaRad?: number, lessKg?: number, tiltBack?: boolean, plane?: {tiltDeg: number, satNodeGapDeg: number}}} [opts]
+   *   `thetaRad`: the radiator angle the
    *   drag area is taken at (default her own now, `_flowerThetaRad`; capped at the burn band's edge, 146 deg:
    *   TripProfile.tripDragAreaM2); `lessKg`: plan the trip with her live mass less this much (the climb back up after a
-   *   push-down is flown without the piece she let go)
+   *   push-down is flown without the piece she let go); `tiltBack` false: a trip to a resupply satellite WITHOUT the tilt back (the called-satellite
+   *   estimate, which spends the satellite's own gas); `plane`: price the tilt back from that plane instead of hers now (the reserve after a finish)
    * @returns {{field: object, fromKm: number, profile: object, ispS: number, areaM2: number, gasAboardKg: number, enough: boolean,
    *   playS: number}|null} `ispS` is the Isp the profile was flown with (the gas's, divided by the gas multiplier c: the
- *   power share x the ion-drive upgrade)
+   *   power share x the ion-drive upgrade). A trip to a satellite from a plane that is not the satellites' (her start tilt and node) carries the tilt
+   *   back in its profile: `gasKg`, `dvMps`, `days` include it and `tiltBackDeg`, `tiltBackDvMps` name it (plan route-1109 lane D).
    */
   planTo(target, opts = {}) {
     const field = typeof target === 'string' ? (this.fieldById(target) || this.satelliteById(target)) : target;
@@ -322,10 +328,64 @@ export class FieldRegistry {
     }).profile;
     // A worn-out engine (ShipWear: 100 % of its rated push given) flies no trip: `ok: false` is what every reader already
     // words as "the thruster cannot take her there" (WhereNextRows, RangeMap, FateRows). `flown` may be RouteCost's cached object: copy it.
-    const profile = shipWear.isEngineWornOut() ? { ...flown, ok: false, wornOut: true } : flown;
+    // The tilt back (plan route-1109 lane D, owner 2026-11-09 "price it"): a trip to a resupply satellite (they are in her START plane) from a plane
+    // that is not that one flies the plane change with the climb, as one low-thrust burn (`RouteCost.withTiltBack`). A CALLED satellite comes to
+    // her and spends its own gas (`tiltBack: false`, the called-satellite estimate); `plane` prices from another plane (the reserve after a finish).
+    let priced = flown;
+    if (opts.tiltBack !== false && this.satelliteById(field.id)) {
+      const theta = this.tiltBackDeg(opts.plane);
+      if (theta > 0) priced = withTiltBack(flown, theta, { ispS, thrustN: realThrustN(fuel) });
+    }
+    const profile = shipWear.isEngineWornOut() ? { ...priced, ok: false, wornOut: true } : priced;
     const gasAboardKg = engineGasKg(p.resources);
     const enough = profile.ok && profile.gasKg <= gasAboardKg + 1e-9;
     return { field, fromKm, profile, ispS, areaM2, gasAboardKg, enough, playS: playSeconds(profile.days) };
+  }
+
+  /** Her START tilt (deg): the orbit's tilt, which a trip never changes (`TransferTrip._applyProfile` holds it); null without a ship. */
+  startTiltDeg() {
+    const o = this._player && this._player.orbit;
+    return o && Number.isFinite(o.inclination) ? o.inclination * 180 / Math.PI : null;
+  }
+
+  /**
+   * The plane she is in against the satellites' (plan route-1109 lane D, Locked 1): `tiltDeg` her tilt now (her start tilt until a finish takes her to
+   * the station object's) and `satNodeGapDeg` her node minus the satellites' (0 at the start). Null without a ship.
+   * @returns {{tiltDeg: number, satNodeGapDeg: number}|null}
+   */
+  planeState() {
+    const start = this.startTiltDeg();
+    if (!Number.isFinite(start)) return null;
+    return { tiltDeg: this._state.planeTiltDeg ?? start, satNodeGapDeg: this._state.satNodeGapDeg };
+  }
+
+  /** The saved tilt when she is not in her start tilt (null = her start tilt). */
+  planeTiltDeg() { return this._state.planeTiltDeg; }
+
+  /** Her node minus the satellites' (deg, wrapped; 0 = the same node). */
+  satNodeGapDeg() { return this._state.satNodeGapDeg; }
+
+  /**
+   * The plane angle (deg) between the plane she is in (or `plane`, `{tiltDeg, satNodeGapDeg}`: another one to price from) and the satellites'
+   * (`RouteCost.tiltBackAngleDeg`). 0 in the satellites' plane, and without a ship.
+   * @param {{tiltDeg: number, satNodeGapDeg: number}} [plane] @returns {number}
+   */
+  tiltBackDeg(plane) {
+    const from = plane || this.planeState();
+    const start = this.startTiltDeg();
+    return from && Number.isFinite(start) ? tiltBackAngleDeg(from, start) : 0;
+  }
+
+  /**
+   * A finish burn has put her in the station object's plane: her tilt is the object's (null when that is her start tilt) and her node has moved
+   * by the gap the burn closed, so her node minus the satellites' is the old offset plus the gap (`RouteCost.planeAfterFinish`).
+   * @param {{tiltDeg: number, satNodeGapDeg: number}} plane
+   */
+  setPlane(plane) {
+    if (!plane || !Number.isFinite(plane.tiltDeg) || !Number.isFinite(plane.satNodeGapDeg)) return;
+    const start = this.startTiltDeg();
+    this._state.planeTiltDeg = Number.isFinite(start) && Math.abs(plane.tiltDeg - start) < PLANE_EPS_DEG ? null : plane.tiltDeg;
+    this._state.satNodeGapDeg = Math.abs(plane.satNodeGapDeg) < PLANE_EPS_DEG ? 0 : wrapDeg(plane.satNodeGapDeg);
   }
 
   /**
@@ -401,8 +461,11 @@ export class FieldRegistry {
     this._state.berthId = id;
     const km = opts && opts.here === true ? this.altitudeKm() : null;
     this._state.berthKm = Number.isFinite(km) ? km : null;
-    if (this._state.berthKm == null) this._state.freeKm = null;       // she flew to the satellite: no free place any more (a called one came to her where she is)
+    if (this._state.berthKm == null) { this._state.freeKm = null; this.clearPlane(); }       // she flew to the satellite: no free place any more, and she is back in the satellites' plane (the tilt was paid in the trip; a called one came to her where she is and changes neither)
   }
+
+  /** She is in the satellites' plane again (her own trip to one has flown the tilt back): tilt and node offset back to the default. */
+  clearPlane() { this._state.planeTiltDeg = null; this._state.satNodeGapDeg = 0; }
 
   /**
    * Put her at a height (a load, or the end of a trip): the semi-major axis and mean motion follow, tilt, node, argument
@@ -427,6 +490,9 @@ export class FieldRegistry {
       out.berth = this._state.berthId;
       if (this._state.berthKm != null) out.berthKm = Math.round(this._state.berthKm * 1000) / 1000;     // a called berth: her height, not the satellite's
     }
+    // plan route-1109 lane D: the plane she is in against the satellites', only when it is not the default (a fresh save stays byte-identical)
+    if (this._state.planeTiltDeg != null) out.planeTiltDeg = Math.round(this._state.planeTiltDeg * 1e6) / 1e6;
+    if (this._state.satNodeGapDeg !== 0) out.satNodeGapDeg = Math.round(this._state.satNodeGapDeg * 1e6) / 1e6;
     return out;
   }
 
@@ -448,6 +514,9 @@ export class FieldRegistry {
       // saved at the free place (a broken height is dropped: she is at the start field, as for any unknown place)
       if (saved.current === FREE_ID && Number.isFinite(saved.freeKm) && saved.freeKm >= FREE_KM_MIN && saved.freeKm <= FREE_KM_MAX) this._state.freeKm = saved.freeKm;
       if (Number.isInteger(saved.at) && saved.at > 0) this._state.at = saved.at;
+      // the plane she was saved in (plan route-1109 lane D): a tilt in [0, 180] and a node offset, both numbers; anything else is the default plane
+      if (Number.isFinite(saved.planeTiltDeg) && saved.planeTiltDeg >= 0 && saved.planeTiltDeg <= 180) this._state.planeTiltDeg = saved.planeTiltDeg;
+      if (Number.isFinite(saved.satNodeGapDeg) && Math.abs(saved.satNodeGapDeg) <= 360) this._state.satNodeGapDeg = wrapDeg(saved.satNodeGapDeg);
       // a berth she was saved at (an unknown or broken one is dropped: she is at her saved field)
       if (typeof saved.berth === 'string' && this.satelliteById(saved.berth)) {
         this._state.berthId = saved.berth;
@@ -490,7 +559,7 @@ export class FieldRegistry {
   _fresh() {
     const remaining = {};
     for (const f of Constants.FIELDS.LIST) remaining[f.id] = allRows(f);
-    return { currentId: this._startField().id, berthId: null, berthKm: null, freeKm: null, remaining, at: 1 };
+    return { currentId: this._startField().id, berthId: null, berthKm: null, freeKm: null, remaining, at: 1, planeTiltDeg: null, satNodeGapDeg: 0 };
   }
 
   /** @private The gas that pushes her: the one in the tank (a cargo fuel's own Isp when she is burning cargo metal). */

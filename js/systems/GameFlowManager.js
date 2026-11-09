@@ -34,10 +34,11 @@ import { trawlManager } from './TrawlManager.js';
 import { openingDance } from './OpeningDance.js';
 import { orbitToSceneCartesian, reseatOrbitFromScene } from '../entities/OrbitalMechanics.js';
 import { computeStartOrbit } from './startOrbitMath.js';
+import { getLanguage, isSupportedLanguage } from '../core/Languages.js';   // route-1109 lane C: a save's own start city (startLang)
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
-import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg, stationInOwnPlane, stationOrbit, cityStation, cityStationKey } from './NodeDrift.js'; import { finishBurn, finishReserve } from './RouteCost.js';     // route-1101 lane S2: the station node gap; route-1106 lane S4: the finish burn to the station's plane (one line: test-CodexAdr2026 pins GameFlowManager line numbers)
+import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg, stationInOwnPlane, stationOrbit, cityStation, cityStationKey } from './NodeDrift.js'; import { finishBurn, finishReserve, planeAfterFinish, tiltBackNote } from './RouteCost.js';     // route-1101 lane S2: the station node gap; route-1106 lane S4: the finish burn to the station's plane (one line: test-CodexAdr2026 pins GameFlowManager line numbers)
 import { WAIT_ID } from './WhereNextRows.js';
 import {
   postFirstJob, postRemovalJob, postPressJob, postInsurerJob, postPartJob, isJobPiece, jobMember, bodyMassKg, bountyPayLine, removalPayLine, jobPayCr, jobPartPayCr,
@@ -682,7 +683,9 @@ export class GameFlowManager {
 
       // Clean slate first, then restore saved progression (the start lines wait for the saved field)
       this.resetGame({ deferStartLine: true });
-      this._applyStartLocation();   // place ground track over the player's home region
+      // route-1109 lane C (owner 2026-11-09): the orbit, station and field plane follow the SAVE's start city, not the language set now;
+      // a save without a supported code (an old one) uses the settings language and its next save writes the code.
+      this._applyStartLocation(isSupportedLanguage(save.startLang) ? getLanguage(save.startLang) : null);
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
 
       // Skip first-experience guidance for returning players (must be AFTER resetGame, which resets these flags)
@@ -985,7 +988,7 @@ export class GameFlowManager {
       player.orbit.trueAnomaly = 0;
       gameState.stationNodeGapDeg = null;   // route-1101 lane S2: set again from her start node by _applyStartLocation just below
       gameState.stationJoined = false;
-      this._applyStartLocation();
+      this._applyStartLocation(isSupportedLanguage(gameState.startLang) ? getLanguage(gameState.startLang) : null);   // route-1109 lane C: the run's own start city, not the language set now
 
       // Reset target selection (emits TARGET_CLEARED → DebrisWireframe self-clears); silent: not a real target loss, so
       // no audio earcon.
@@ -1840,11 +1843,17 @@ export class GameFlowManager {
    * mid-menu language switch doesn't leave the field on the boot language's plane. Orbits only (sma/ecc preserved);
    * an unchanged language is a value-compared no-op. Runs after the player writes so the welcome cluster's lazy
    * first-frame spawn lands on the re-seated plane.
+   *
+   * route-1109 lane C: `entry` is the start city's language entry; absent, the settings language (every new start). Continue
+   * passes the save's own (`gameState.startLang`, saved), so a save made at 45 degrees stays at 45 under another language.
+   * The UI language is not touched.
+   *
+   * @param {object|null} [entry] language entry whose start city to use (default: the settings language)
    */
-  _applyStartLocation() {
+  _applyStartLocation(entry) {
     const { player, debrisField } = this._refs;
     if (!player || !player.orbit) return;
-    const lang = settingsManager.getLanguageEntry();
+    const lang = entry || settingsManager.getLanguageEntry();
     const orbit = computeStartOrbit(lang);
     if (!orbit) return;
 
@@ -1859,6 +1868,7 @@ export class GameFlowManager {
     // again from the save right after this (or from her node, for a save from before it).
     gameState.stationNodeGapDeg = initialGapDeg(orbit.raan * 180 / Math.PI);
     gameState.stationJoined = false;     // route-1107-d2: a new start is in her own plane
+    gameState.startLang = lang && typeof lang.code === 'string' ? lang.code : null;   // route-1109 lane C: the city this orbit came from (saved)
 
     // The field shares the player's plane from the SAME orbit computation. The typeof guard keeps legacy mocks
     // (no reseatFieldRegime) working.
@@ -2160,6 +2170,7 @@ export class GameFlowManager {
     }
     // route-1101 lane S2: the station node gap, with the fields block (after it, not beside `shipDays`: lane W2 adds its line there)
     if (fieldsSave && Number.isFinite(gameState.stationNodeGapDeg)) saveData.stationNodeGapDeg = gameState.stationNodeGapDeg;
+    if (typeof gameState.startLang === 'string') saveData.startLang = gameState.startLang;   // route-1109 lane C: the start city her tilt, node and station come from, so a load under another language keeps them
     if (fieldsSave && gameState.stationJoined === true) { saveData.stationJoined = true; saveData.stationJoinedCity = cityStationKey(this._herIncDeg()); }     // route-1107-d2: with the city key of her tilt (null at New York), so a load under another language does not keep it
     // The worn parts (ShipWear.serialize: null while nothing is worn, so a fresh save is byte-identical).
     const wearSave = shipWear.serialize();
@@ -4280,13 +4291,16 @@ export class GameFlowManager {
   }
 
   /** @private A leg's days have gone on the ship's clock: the gap moves by the station's rate minus hers over them (NodeDrift.gapChangeOverLeg).
-   *  Any leg of more than 0 days takes her out of the station object's plane again (`stationJoined`, route-1107-d2). */
+   *  Any leg of more than 0 days takes her out of the station object's plane again (`stationJoined`, route-1107-d2). A leg that took her back to the
+   *  satellites' plane (`leg.satOffsetDeg`, from `TransferTrip._end`: the node she gave up at a finish) puts that node back on the gap
+   *  (plan route-1109 lane D, Locked 4: gap = station node minus hers, and hers has moved back by the offset). */
   _advanceStationGap(leg) {
     if (leg && leg.days > 0) gameState.stationJoined = false;
     const g = this.stationGapDeg();
     const inc = this._herIncDeg();
     if (!leg || !Number.isFinite(g) || !Number.isFinite(inc)) return;
-    gameState.stationNodeGapDeg = wrapDeg(g + gapChangeOverLeg(leg, inc));
+    const back = Number.isFinite(leg.satOffsetDeg) ? leg.satOffsetDeg : 0;
+    gameState.stationNodeGapDeg = wrapDeg(g + gapChangeOverLeg(leg, inc) + back);
   }
 
   /** The real object her start protects (`Constants.CITY_STATIONS` entry, `NodeDrift.cityStation`), or null at New York (the ISS). main.js wires the boss here. */
@@ -4332,9 +4346,14 @@ export class GameFlowManager {
     const inp = typeof reg.burnInputs === 'function' ? reg.burnInputs() : null;
     const player = this._refs.player;
     if (!inp || !player || typeof player.billBurnGas !== 'function') return true;
-    const fb = finishBurn({ gapDeg: gap, herIncDeg: this._herIncDeg(), massKg: inp.massKg, thrustN: inp.thrustN, ispS: inp.ispS, gasAboardKg: inp.gasAboardKg });
+    // plan route-1109 lane D, Locked 2: the plane leg starts from the tilt she is in NOW (the registry's; the start tilt until a first finish), while the
+    // start tilt stays the city key: a second finish pays only its node gap
+    const fromInc = typeof reg.planeTiltDeg === 'function' && Number.isFinite(reg.planeTiltDeg()) ? reg.planeTiltDeg() : this._herIncDeg();
+    const satGap = typeof reg.satNodeGapDeg === 'function' ? reg.satNodeGapDeg() : 0;
+    const fb = finishBurn({ gapDeg: gap, herIncDeg: this._herIncDeg(), fromIncDeg: fromInc, massKg: inp.massKg, thrustN: inp.thrustN, ispS: inp.ispS, gasAboardKg: inp.gasAboardKg });
     if (fb.dvMps === 0 && fb.gasKg === 0 && fb.days === 0) {                        // no plane angle to close (a gap of 0 at New York's tilt; float residue of a wait)
       if (Math.abs(gap) < 1e-4) gameState.stationNodeGapDeg = 0;
+      if (typeof reg.setPlane === 'function') reg.setPlane(planeAfterFinish({ herIncDeg: this._herIncDeg(), satNodeGapDeg: satGap, gapDeg: Math.abs(gap) < 1e-4 ? gap : 0 }));
       gameState.stationJoined = true;
       return true;
     }
@@ -4353,13 +4372,16 @@ export class GameFlowManager {
     // DECISIONS §67 row 6: the finish only begins if, after the burn, she still has the gas to reach the nearest resupply satellite. No test for
     // a registry without `satellites()` / `planTo` or a height that is no number (a null plan must never refuse the finish for ever).
     const herKm = typeof reg.altitudeKm === 'function' ? reg.altitudeKm() : NaN;
-    const rsv = finishReserve(reg, { fromKm: herKm, lessKg: fb.gasKg, gasLeftKg: inp.gasAboardKg - fb.gasKg });
+    // plan route-1109 lane D, Locked 5: the reserve prices the trip on to the satellite from the plane AFTER the finish (the object's tilt, the node taken), so
+    // the tilt back to the satellites' plane is in it
+    const after = planeAfterFinish({ herIncDeg: this._herIncDeg(), satNodeGapDeg: satGap, gapDeg: gap });
+    const rsv = finishReserve(reg, { fromKm: herKm, lessKg: fb.gasKg, gasLeftKg: inp.gasAboardKg - fb.gasKg, plane: after });
     if (rsv && !rsv.holds) {
       const last = this._finishRefused;
       if (!last || last.shipDays !== gameState.shipDays || last.gapDeg !== gap) {
         this._finishRefused = { shipDays: gameState.shipDays, gapDeg: gap };
         // two decimals: the refusal can be a few hundredths short, and a rounded 0.6 + 0.3 against 0.9 aboard would not read as short
-        const onTo = rsv.tripKg === null ? `the thruster could not then fly on to the ${Math.round(rsv.sat.altKm)} km resupply satellite` : `the trip on to the ${Math.round(rsv.sat.altKm)} km resupply satellite ${rsv.tripKg.toFixed(2)} kg more`;
+        const onTo = rsv.tripKg === null ? `the thruster could not then fly on to the ${Math.round(rsv.sat.altKm)} km resupply satellite` : `the trip on to the ${Math.round(rsv.sat.altKm)} km resupply satellite ${rsv.tripKg.toFixed(2)} kg more${rsv.tiltBackDeg > 0 ? ` (${tiltBackNote(rsv.tiltBackDeg)})` : ''}`;
         // the shortfall rounded UP to 0.01 kg, so a few thousandths short still reads as short (none when the trip cannot be flown at all)
         const shortTxt = rsv.tripKg === null ? '' : `, ${Math.max(0.01, Math.ceil((fb.gasKg + rsv.tripKg - inp.gasAboardKg) * 100 - 1e-9) / 100).toFixed(2)} kg short`;
         say(`The finish burn to ${plane} waits: it takes ${fb.gasKg.toFixed(2)} kg of gas, and ${onTo}; ${inp.gasAboardKg.toFixed(2)} kg aboard${shortTxt}.`, 'warn');
@@ -4368,6 +4390,7 @@ export class GameFlowManager {
     }
     player.billBurnGas(fb.dvMps);
     gameState.shipDays += fb.days;
+    if (typeof reg.setPlane === 'function') reg.setPlane(after);                    // she is in the object's plane now (route-1109 lane D): the satellites' is the tilt back
     gameState.stationNodeGapDeg = 0;
     gameState.stationJoined = true;
     say(`Finish burn to ${plane}: ${Math.round(fb.dvMps)} m/s, ${kgText(fb.gasKg)} kg gas, ${daysText(fb.days)}.`, 'info');
@@ -4474,6 +4497,7 @@ export class GameFlowManager {
         planTo: (f, o) => r.fieldRegistry.planTo(f, o),
         depart: () => { r.fieldRegistry.depart(); targetSelector.setTarget(null, { silent: true }); },
         arrive: (id, o) => r.fieldRegistry.arrive(id, o),
+        satNodeGapDeg: () => (typeof r.fieldRegistry.satNodeGapDeg === 'function' ? r.fieldRegistry.satNodeGapDeg() : 0),      // route-1109 lane D: the node she gave up at a finish, read by `TransferTrip._end` before the arrival at a satellite clears it
       } : null,
     });
     this._trip.setBurnWork(this._burnWorkFace());   // the tip furnaces' melt rides the burn on the ship's clock
@@ -5245,6 +5269,8 @@ export class GameFlowManager {
       // at the station field when she arrives lined up)
       gapDeg: this.stationGapDeg(), incDeg: this._herIncDeg(), stationFieldId: stationFieldId(reg, this._herIncDeg()),      // (the tilt selects the city's station field after lane A; ignored before)
       partAboard: this._partAboard() ? this._partAboard().kg : 0,
+      // plan route-1109 lane D: the plane she is in against the satellites' (the walker's satellite stop pays the tilt back from it; its station stop's finish starts from it)
+      planeTiltDeg: typeof reg.planeTiltDeg === 'function' ? reg.planeTiltDeg() : null, satNodeGapDeg: typeof reg.satNodeGapDeg === 'function' ? reg.satNodeGapDeg() : 0,
       capsulesAboard: this._refs.resourceSystem && this._refs.resourceSystem.capsules > 0 ? Math.floor(this._refs.resourceSystem.capsules) : 0,      // route-1107-d2 D-B5: the capsules in her stock (their mass is in `carriedKg`)
       // Plan hold-mass-1106 H5: the metal already in the hold (kg, without the kept part) and what SELL ALL pays for it now: the walk carries the kg until the
       // route's first satellite stop sells it (RouteCost `holdKg`, `holdSaleCr`)

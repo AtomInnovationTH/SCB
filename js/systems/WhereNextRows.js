@@ -40,7 +40,7 @@ import { fatePay } from './BigPieceValues.js';
 import { pushTargetKm, lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
 import { jobLine, capsuleCanDrop } from './JobsBoard.js';
 import { stationFieldId, gapChangeOverLeg, waitDaysToLineUp, isLinedUp, stationInOwnPlane, wrapDeg } from './NodeDrift.js';
-import { finishBurn, nearestSatellite, finishReserve } from './RouteCost.js';
+import { finishBurn, nearestSatellite, finishReserve, planeAfterFinish, tiltBackNote } from './RouteCost.js';
 
 export const STAY_ID = 'stay';
 
@@ -443,14 +443,17 @@ function stationWait(reg, st, here, herKm, turn = null) {
       const inp = reg.burnInputs();
       // a trip to the station field comes first: the finish is flown on the gas and mass she has after it
       const spent = prof && Number.isFinite(prof.gasKg) ? prof.gasKg : 0;
-      const fin = inp ? finishBurn({ gapDeg: wrapDeg(arrivalGap), herIncDeg: st.incDeg, massKg: Math.max(1, inp.massKg - spent), thrustN: inp.thrustN, ispS: inp.ispS, gasAboardKg: Math.max(0, inp.gasAboardKg - spent) }) : null;
+      // plan route-1109 lane D: the finish starts from the tilt she is in now, and the reserve prices the trip on from the plane after it
+      const nowTilt = typeof reg.planeTiltDeg === 'function' && Number.isFinite(reg.planeTiltDeg()) ? reg.planeTiltDeg() : st.incDeg;
+      const satGap = typeof reg.satNodeGapDeg === 'function' ? reg.satNodeGapDeg() : 0;
+      const fin = inp ? finishBurn({ gapDeg: wrapDeg(arrivalGap), herIncDeg: st.incDeg, fromIncDeg: nowTilt, massKg: Math.max(1, inp.massKg - spent), thrustN: inp.thrustN, ispS: inp.ispS, gasAboardKg: Math.max(0, inp.gasAboardKg - spent) }) : null;
       if (fin && fin.gasKg >= 0.005) {
         if (!(fin.feasible && !inp.wornOut)) note += `; finish burn needs ${kgText(fin.gasKg)} kg of gas`;
         else {
           // DECISIONS §67 row 6: the finish also keeps the gas to reach the nearest resupply satellite; short of it the finish waits
-          const rsv = finishReserve(reg, { fromKm: field.altKm, lessKg: spent + fin.gasKg, gasLeftKg: inp.gasAboardKg - spent - fin.gasKg });
+          const rsv = finishReserve(reg, { fromKm: field.altKm, lessKg: spent + fin.gasKg, gasLeftKg: inp.gasAboardKg - spent - fin.gasKg, plane: planeAfterFinish({ herIncDeg: st.incDeg, satNodeGapDeg: satGap, gapDeg: wrapDeg(arrivalGap) }) });
           note += rsv && !rsv.holds
-            ? `; finish burn waits: ${fin.gasKg.toFixed(2)} kg gas ${rsv.tripKg === null ? 'and the thruster could not then fly on' : `+ ${rsv.tripKg.toFixed(2)} kg`} to the ${Math.round(rsv.sat.altKm)} km satellite${rsv.tripKg === null ? '' : `, ${Math.max(0.01, Math.ceil((rsv.tripKg - (inp.gasAboardKg - spent - fin.gasKg)) * 100 - 1e-9) / 100).toFixed(2)} kg short`}`
+            ? `; finish burn waits: ${fin.gasKg.toFixed(2)} kg gas ${rsv.tripKg === null ? 'and the thruster could not then fly on' : `+ ${rsv.tripKg.toFixed(2)} kg${rsv.tiltBackDeg > 0 ? ` (${tiltBackNote(rsv.tiltBackDeg)})` : ''}`} to the ${Math.round(rsv.sat.altKm)} km satellite${rsv.tripKg === null ? '' : `, ${Math.max(0.01, Math.ceil((rsv.tripKg - (inp.gasAboardKg - spent - fin.gasKg)) * 100 - 1e-9) / 100).toFixed(2)} kg short`}`
             : `; finish burn ${kgText(fin.gasKg)} kg gas, ${daysText(fin.days)}`;
         }
       }
@@ -488,10 +491,15 @@ function satelliteRow(reg, s, owed, turn) {
   }
   const gasKg = plan.profile.gasKg;
   const days = tripDays(plan.profile, turn);
-  base.plainDays = plan.profile.days;  // the trip without her turn: a called satellite comes to her
+  // the trip without her turn: a called satellite comes to her. It comes in the satellites' plane at its own cost (plan route-1109 lane D: the tilt back is
+  // HER trip's), so its days are the plain height trip's, not the row's with the tilt back in them
+  const tilt = plan.profile.tiltBackDeg > 0;
+  const plain = tilt ? reg.planTo(s, { tiltBack: false }) : plan;
+  base.plainDays = plain && plain.profile && plain.profile.ok ? plain.profile.days : plan.profile.days;
+  const back = tilt ? tiltBackNote(plan.profile.tiltBackDeg) : '';
   if (!plan.enough) {
     const shortKg = gasKg - plan.gasAboardKg;
-    return { ...base, state: 'short', selectable: false, gasKg, shortKg, days, text: `${head} ${DOT} needs ${kgText(gasKg)} kg gas, ${kgText(shortKg)} kg short` };
+    return { ...base, state: 'short', selectable: false, gasKg, shortKg, days, text: `${head} ${DOT} needs ${kgText(gasKg)} kg gas${back ? ` (${back})` : ''}, ${kgText(shortKg)} kg short` };
   }
   const gasPct = plan.gasAboardKg > 0 ? gasKg / plan.gasAboardKg * 100 : 0;
   if (!owed) {
@@ -499,8 +507,8 @@ function satelliteRow(reg, s, owed, turn) {
   }
   return {
     ...base, state: 'ok', selectable: true, gasKg, gasPct, days,
-    text: `${head} ${DOT} nets, gas, shop ${DOT} ${kgText(gasKg)} kg gas (${pctText(gasKg, plan.gasAboardKg)}) ${DOT} ${daysText(days)}`,
-    shortText: `${s.name || 'Resupply satellite'} ${Math.round(s.altKm)} km ${DOT} ${kgText(gasKg)} kg gas ${DOT} ${daysText(days)}`,
+    text: `${head} ${DOT} nets, gas, shop ${DOT} ${kgText(gasKg)} kg gas (${pctText(gasKg, plan.gasAboardKg)}${back ? `, ${back}` : ''}) ${DOT} ${daysText(days)}`,
+    shortText: `${s.name || 'Resupply satellite'} ${Math.round(s.altKm)} km ${DOT} ${kgText(gasKg)} kg gas${back ? ` (${back})` : ''} ${DOT} ${daysText(days)}`,
   };
 }
 

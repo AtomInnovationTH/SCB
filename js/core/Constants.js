@@ -5152,7 +5152,8 @@ export const Constants = {
   // research doc 2026-10-trips-by-height), in the start orbit's tilt and node like the fields. A second one at 825 km, same
   // tilt and node, sits between the 800 and 850 km high fields: the same place with the same buying (a trip from one to the
   // other is an ordinary trip by `planTo`). Both are listed here, in height order; every satellite reader goes through
-  // `FieldRegistry.satellites()`. It is a PLACE, not a field: nothing is laid out while she is berthed.
+  // `FieldRegistry.satellites()`. It is a PLACE, not a field: nothing is laid out while she is berthed. They stay in her START plane:
+  // after a station finish she is in the station object's, so her own trip to one also pays the tilt back (plan route-1109 lane D, owner 2026-11-09).
   // CALL_CREDITS is row 7's "Stuck: call it to you for 1,000 credits" (the "where next" list's call row,
   // GameFlowManager._callSatellite). CALL_DAYS_EST is an ESTIMATE: the days a called satellite takes when the real trip
   // profile to its height cannot be read (the thruster cannot fly it); 16 = the 350 -> 500 km trip's days with drag off
