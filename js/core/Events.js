@@ -225,7 +225,6 @@ export const Events = {
    *  actually saw the callouts" signal. Payload: {} */
   MOTHER_INSPECTION_ENGAGED: 'inspection:motherEngaged',
   COMMS_SEND:         'comms:send',
-  COMMS_SOLAR_STORM:  'comms:solarStorm',
   COMMS_GEO_STORM:    'comms:geoStorm',
   // The start's lines wait until comms can be seen. OpeningDance.start() emits HOLD; OpeningDance
   // (just before OPENING_DANCE_HANDOVER, and in endState) and OnboardingDirector (veteran skip) emit RELEASE.

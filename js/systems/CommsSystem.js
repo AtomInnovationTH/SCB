@@ -133,30 +133,14 @@ function shouldCoalesce(recentWindow, newChannel, thresholdCount) {
   };
 }
 
+// Random radio colour only. The solar-storm, eclipse and solar-particle lines left on 2026-11-09 (owner: they announced
+// things that never happen); the real weather keeps its own alerts in SpaceWeatherSystem.
 const SPACE_WEATHER_TEMPLATES = [
-  {
-    priority: CommsPriority.CRITICAL,
-    source: 'NOAA SWPC',
-    template: 'WARNING: Solar storm (Coronal Mass Ejection) inbound in {time} min. A blast of radiation from the Sun. Duck into Earth\'s shadow to shield your panels.',
-    effect: 'solarStorm',
-  },
   {
     priority: CommsPriority.WARNING,
     source: 'NOAA SWPC',
     template: 'Geomagnetic storm, strength Kp={kp} (how charged-up Earth\'s magnetic field is).',
     effect: 'geoStorm',
-  },
-  {
-    priority: CommsPriority.INFO,
-    source: 'MISSION CTRL',
-    template: 'Heading into Earth\'s shadow for {dur} min. No sunlight, so you\'re on battery power. Go easy on the tools.',
-    effect: 'eclipse',
-  },
-  {
-    priority: CommsPriority.WARNING,
-    source: 'NOAA SWPC',
-    template: 'Burst of solar particles detected. Your solar panels may wear down faster for the next {time} min.',
-    effect: 'solarProton',
   },
 ];
 
@@ -396,9 +380,7 @@ export class CommsSystem {
     this._isroHandoffDone = false;  // whether the ISRO handoff dialogue has played
 
     this.activeEffects = {
-      solarStorm: false,
       geoStorm: false,
-      solarStormTimer: 0,
       geoStormTimer: 0,
     };
 
@@ -917,13 +899,6 @@ export class CommsSystem {
       if (time - dt <= 0) this._cooldowns.delete(key);
     }
 
-    if (this.activeEffects.solarStorm) {
-      this.activeEffects.solarStormTimer -= dt;
-      if (this.activeEffects.solarStormTimer <= 0) {
-        this.activeEffects.solarStorm = false;
-        this.addMessage(CommsPriority.INFO, 'NOAA SWPC', 'Solar storm subsiding. Radiation levels returning to normal.');
-      }
-    }
     if (this.activeEffects.geoStorm) {
       this.activeEffects.geoStormTimer -= dt;
       if (this.activeEffects.geoStormTimer <= 0) {
@@ -980,22 +955,16 @@ export class CommsSystem {
 
   /** @private */
   _sendWeatherEvent() {
-    // Training 1-3: the weather event is skipped WITH its effect (a solar storm changes what she has: power)
+    // Training 1-3: the weather line is skipped WITH its effect flag (colour: a line about the sky, nothing she did)
     if (isTrainingNow()) return;
     const idx = Math.floor(Math.random() * SPACE_WEATHER_TEMPLATES.length);
     const tmpl = SPACE_WEATHER_TEMPLATES[idx];
     const text = tmpl.template
-      .replace('{time}', (2 + Math.floor(Math.random() * 8)).toString())
-      .replace('{kp}', (5 + Math.floor(Math.random() * 4)).toString())
-      .replace('{dur}', (25 + Math.floor(Math.random() * 20)).toString());
+      .replace('{kp}', (5 + Math.floor(Math.random() * 4)).toString());
 
     this.addMessage(tmpl.priority, tmpl.source, text, { _kind: 'colour' });
 
-    if (tmpl.effect === 'solarStorm') {
-      this.activeEffects.solarStorm = true;
-      this.activeEffects.solarStormTimer = 30 + Math.random() * 30; // 30-60 real seconds
-      eventBus.emit(Events.COMMS_SOLAR_STORM, { duration: this.activeEffects.solarStormTimer });
-    } else if (tmpl.effect === 'geoStorm') {
+    if (tmpl.effect === 'geoStorm') {
       this.activeEffects.geoStorm = true;
       this.activeEffects.geoStormTimer = 20 + Math.random() * 40;
       eventBus.emit(Events.COMMS_GEO_STORM, { duration: this.activeEffects.geoStormTimer });
@@ -1229,8 +1198,8 @@ export class CommsSystem {
     this._cooldowns.clear();
     this._coalesceWindow = [];
     this.activeEffects = {
-      solarStorm: false, geoStorm: false,
-      solarStormTimer: 0, geoStormTimer: 0,
+      geoStorm: false,
+      geoStormTimer: 0,
     };
     this._active = false;
     this._isroHandoffDone = false;
