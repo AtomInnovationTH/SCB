@@ -475,11 +475,15 @@ export class CommsPanel {
    * coach line, they may wait beyond the cap, up to COMMS.PANE_QUEUE_MAX_COACH; past that the oldest non-warning line is
    * skipped even if it is a coach line. Run AFTER the release step, so a batch (COMMS_RELEASE) still starts with its
    * oldest line and only then loses the surplus from the front of the queue.
+   * 2026-11-08 (t14): `result` shelters the lines that REPORT A RESULT (a catch, "is home", grams, seconds, credits,
+   * a refill; each emitter posts `_result: true`) under the same rules and the same sizes as a coach line. It is a flag of
+   * its own: unlike `_coach` it does not make a line "kept", so CommsSystem still coalesces a burst of them. In training 3
+   * the radiator "took 465 g" line and in training 1 "Small 1 is home" were skipped here as plain lines.
    */
   _capQueue() {
     const cap = COMMS.PANE_QUEUE_MAX;
     while (this._waiting.length > cap) {
-      let k = this._waiting.findIndex((m) => !isWarningOrWorse(m.priority) && !m.coach);
+      let k = this._waiting.findIndex((m) => !isWarningOrWorse(m.priority) && !m.coach && !m.result);
       if (k < 0) {
         if (this._waiting.length <= COMMS.PANE_QUEUE_MAX_COACH) break;
         k = this._waiting.findIndex((m) => !isWarningOrWorse(m.priority));

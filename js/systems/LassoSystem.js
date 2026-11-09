@@ -1913,7 +1913,7 @@ export class LassoSystem {
 
         eventBus.emit(Events.COMMS_MESSAGE, {
             text: `Lasso catch! ${target ? target.type : 'debris'} secured.`,
-            priority: 'info',
+            priority: 'info', _result: true,   // a result (a catch) (t14 P)
         });
 
         this._beginWebFadeOut();   // success path — same crossfade as the adoption route

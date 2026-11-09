@@ -5472,7 +5472,7 @@ export const Constants = {
     // replaces the newest row only after the last one has been on screen PANE_MIN_SHOW_S seconds; warnings jump the
     // queue. At most PANE_QUEUE_MAX messages wait; past that the oldest waiting one that is not a warning and not a coach
     // (lesson) line is skipped (it stays in the log). 2026-11-02: a line that is only `_keep` gets no shelter; a coach line
-    // (`_coach`) is never the one skipped, so if every waiting non-warning line is a coach line they may wait up to
+    // (`_coach`) or result line (`_result`, 2026-11-08) is never the one skipped, so if every waiting non-warning line is one of them they may wait up to
     // PANE_QUEUE_MAX_COACH; past that the oldest non-warning line is skipped even if it is a coach line.
     PANE_MIN_SHOW_S: 3,
     PANE_QUEUE_MAX: 4,

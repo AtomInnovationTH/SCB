@@ -1329,7 +1329,7 @@ export class GameFlowManager {
               text: gotKg > 0
                 ? `\u26CF Salvaged ${gotKg.toFixed(1)} kg ${gasName} \u2014 \u0394V extended!`
                 : `\u26CF Salvaged ${wantKg.toFixed(1)} kg ${gasName} \u2014 engine tank already full`,
-              priority: 'good',
+              priority: 'good', _result: true,   // a result (kg salvaged): the panel queue cap spares it (t14 P)
             });
           }
 
@@ -1346,7 +1346,7 @@ export class GameFlowManager {
                 : (gotKg > 0
                   ? `\u26CF Indium recovered \u2014 ${grams(gotKg)} g stored, ${grams(wantKg - gotKg)} g lost: the ion-fuel store is full`
                   : `\u26CF Indium recovered, but the ion-fuel store is full \u2014 ${grams(wantKg)} g lost`),
-              priority: 'good',
+              priority: 'good', _result: true,   // a result (g recovered) (t14 P)
             });
           }
 
@@ -1354,7 +1354,7 @@ export class GameFlowManager {
             resourceSystem.replenishPanelHealth(salvage.gaAs * refineryMult);
             eventBus.emit(Events.COMMS_MESSAGE, {
               text: `\u26CF GaAs cells recovered \u2014 panel health +${(salvage.gaAs * 100).toFixed(1)}%`,
-              priority: 'good',
+              priority: 'good', _result: true,   // a result (t14 P)
             });
           }
 
@@ -1362,7 +1362,7 @@ export class GameFlowManager {
             resourceSystem.replenish('battery', salvage.battery * refineryMult);
             eventBus.emit(Events.COMMS_MESSAGE, {
               text: `\u26A1 Battery salvage \u2014 +${salvage.battery.toFixed(0)} Wh`,
-              priority: 'info',
+              priority: 'info', _result: true,   // a result (t14 P)
             });
           }
 
@@ -1392,7 +1392,7 @@ export class GameFlowManager {
             resourceSystem.addLithium(liAmount);
             eventBus.emit(Events.COMMS_MESSAGE, {
               text: `⚗ Lithium salvaged. +${liAmount.toFixed(1)} units (MPD propellant)`,
-              priority: 'good',
+              priority: 'good', _result: true,   // a result (t14 P)
             });
           }
 
@@ -1797,7 +1797,7 @@ export class GameFlowManager {
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'HOUSTON',
           text: 'Got it!',
-          priority: 'info',
+          priority: 'info', _result: true,   // a result (a catch) (t14 P)
         });
         // the invitation waits for her to be stuck in training 1-3 (DECISIONS §65 row 1)
         eventBus.emit(Events.COMMS_MESSAGE, {
@@ -2763,7 +2763,7 @@ export class GameFlowManager {
     }
     const paid = scoringSystem.awardDisposal(totalCr);
     if (line) {
-      eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: line, priority: paid > 0 ? 'good' : 'info', _keep: true });
+      eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: line, priority: paid > 0 ? 'good' : 'info', _keep: true, _result: true });
     }
     eventBus.emit(Events.BIG_PIECE_DISPOSED, { debrisId: id, fate, totalCr: paid });
     this.saveGame();
@@ -2856,8 +2856,8 @@ export class GameFlowManager {
   }
 
   /** @private One line from Houston, kept in the log. */
-  _meltSay(text, priority = 'good') {
-    eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true });
+  _meltSay(text, priority = 'good', coach = false) {
+    eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true, _result: coach });   // coach: a result line (t14 P)
   }
 
   /**
@@ -3561,7 +3561,7 @@ export class GameFlowManager {
     post.paidCr = (post.paidCr || 0) + paid;
     post.done = true;
     this._closeJob(post);
-    eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: line, priority: paid > 0 ? 'good' : 'info', _keep: true });
+    eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: line, priority: paid > 0 ? 'good' : 'info', _keep: true, _result: true });
     this.saveGame();
     return true;
   }
@@ -3636,7 +3636,7 @@ export class GameFlowManager {
     post.paidCr = (post.paidCr || 0) + paid;
     post.done = true;
     this._closeJob(post);
-    eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: line, priority: paid > 0 ? 'good' : 'info', _keep: true });
+    eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: line, priority: paid > 0 ? 'good' : 'info', _keep: true, _result: true });
     this.saveGame();
     return true;
   }
@@ -3699,7 +3699,7 @@ export class GameFlowManager {
       d._meltBusy = false;
       if (m.said.has(d.id) || !bigPieces.has(d.id)) continue;      // a piece that is gone (finished, or the run was reset) says nothing more
       const t = m.totals.get(d.id);
-      if (t && t.kg > 0) this._meltSay(tripLine(t));
+      if (t && t.kg > 0) this._meltSay(tripLine(t), 'good', true);
       this._meltReshape(d, 0);
     }
     if ((m.plan.stop === 'hold' || m.holdFull) && completed) this._meltSay(HOLD_FULL_LINE, 'info');
@@ -5095,7 +5095,7 @@ export class GameFlowManager {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
         text: `First cleanup contract settled \u2014 +$${topUp} cr to your refit budget.`,
-        priority: 'success',
+        priority: 'success', _result: true,   // a result (credits) (t14 P)
       });
     }
 

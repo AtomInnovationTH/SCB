@@ -26,6 +26,7 @@ import { StorageKeys } from '../core/StorageKeys.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { gameState } from '../core/GameState.js';
 import { wingsHint, WINGS_HINT_ID } from './WingsHint.js';
+import { isTrainingNow, getTrainingMission, trainingIdleMs, noteTrainingHintShown, HINT_IDLE_MS } from './TrainingHintGate.js';
 import { isOpeningLine } from './StartOpening.js';
 import { OUT_OF_MOTHER_NETS_LINE, dInviteLine, motherNWorks, motherNHeldBack, motherNLine } from './netRouting.js';
 
@@ -760,7 +761,7 @@ export class OnboardingDirector {
     const beat = a.beat;
     const idleMs = Constants.ONBOARDING?.IDLE_ESCALATION_MS || 15000;
     if (beat.escalationText && a.idleTimer == null) {
-      a.idleTimer = this._setTimeout(() => this._escalate(beat), idleMs);
+      a.idleTimer = this._setTimeout(() => this._escalateFromTimer(beat), idleMs);
     }
     if (Number.isFinite(beat.autoAdvanceAfter) && a.autoAdvanceTimer == null) {
       a.autoAdvanceTimer = this._setTimeout(() => {
@@ -1113,6 +1114,8 @@ export class OnboardingDirector {
     this._active = {
       beat,
       postedAt: Date.now(),
+      /** what she had done when the beat started: the stall card's "she did it already" check compares with this */
+      actsAtStart: { ...this._acts },
       unrelatedInputs: 0,
       escalated: false,
       idleTimer: null,
@@ -1207,7 +1210,7 @@ export class OnboardingDirector {
     } else {
       const idleMs = Constants.ONBOARDING?.IDLE_ESCALATION_MS || 15000;
       if (beat.escalationText) {
-        this._active.idleTimer = this._setTimeout(() => this._escalate(beat), idleMs);
+        this._active.idleTimer = this._setTimeout(() => this._escalateFromTimer(beat), idleMs);
       }
       // Confirmation beats (triggerEvent + autoAdvanceAfter): advance on the event, but fall back to a timer so
       // a missed/failed event can't hang the pipeline.
@@ -1242,6 +1245,21 @@ export class OnboardingDirector {
     this._emit('onboarding:beatEnter', { beatId: beat.id });
   }
 
+  /**
+   * Real ms still to wait before the handshake beat stops waiting for the wings: only in training 1 with a gate registered,
+   * 0 once the gate's idle clock (`trainingIdleMs`) has reached HINT_IDLE_MS, null everywhere else (the wait never ends by idle).
+   * @returns {number|null}
+   */
+  _wingsIdleRemainingMs() {
+    if (getTrainingMission() !== 1 || !isTrainingNow()) return null;
+    const idle = trainingIdleMs();
+    if (idle === null) return null;
+    return Math.max(0, HINT_IDLE_MS - idle);
+  }
+
+  /** True when the wings wait is over because she has done nothing useful for the gate's 10 s (training 1 only). */
+  _wingsWaitOver() { return this._wingsIdleRemainingMs() === 0; }
+
   /** Whether a beat's pre-conditions are met given live game context. TRUE when no contextProvider is wired. */
   _beatGateMet(beat) {
     if (!beat) return true;
@@ -1251,7 +1269,10 @@ export class OnboardingDirector {
       let needs = null;
       try { needs = this._wings && typeof this._wings.needsOpening === 'function' ? this._wings.needsOpening() : null; }
       catch (_e) { needs = null; }
-      if (needs === true) return false;
+      // Training 1 (2026-11-08, plan training-chat14 Decision 1): the wings open only on her first key, so an idle first minute
+      // never got "Scan to identify targets.". Once the gate's idle clock reaches its 10 s the beat stops waiting for the wings
+      // (S works with them closed and opens them); the gate then releases the line as for any ask.
+      if (needs === true && !this._wingsWaitOver()) return false;
       // Leave the ship's opening line on screen long enough to read.
       if (this._openingLineAtMs !== null && Date.now() - this._openingLineAtMs < OPENING_LINE_READ_MS) return false;
     }
@@ -1297,6 +1318,11 @@ export class OnboardingDirector {
     this._postHeldNudge(beat);
 
     const poll = Constants.ONBOARDING?.GATE_POLL_MS || 1200;
+    // A handshake held for the wings in training 1 looks again exactly when the gate's idle clock reaches its 10 s (not up to a poll late).
+    const nextPoll = () => {
+      const rem = beat.requiresWingsCommanded ? this._wingsIdleRemainingMs() : null;
+      return rem !== null && rem > 0 && rem < poll ? Math.max(50, rem) : poll;
+    };
     const tick = () => {
       if (!this._active || this._active.beat.id !== beat.id || !this._active.held) return;
       if (this._beatGateMet(beat)) {
@@ -1305,9 +1331,9 @@ export class OnboardingDirector {
         return;
       }
       this._refreshHeldNudge(beat);
-      this._active.gateTimer = this._setTimeout(tick, poll);
+      this._active.gateTimer = this._setTimeout(tick, nextPoll());
     };
-    this._active.gateTimer = this._setTimeout(tick, poll);
+    this._active.gateTimer = this._setTimeout(tick, nextPoll());
   }
 
   /**
@@ -1513,6 +1539,29 @@ export class OnboardingDirector {
     }
   }
 
+  /**
+   * The idle timer fired: it is no longer pending (so `_escalate` may re-arm it), then the same escalation.
+   * @param {object} beat
+   */
+  _escalateFromTimer(beat) {
+    const a = this._active;
+    if (a && a.beat.id === beat.id) a.idleTimer = null;
+    this._escalate(beat);
+  }
+
+  /**
+   * Real ms of her doing nothing useful still owed before the stall card may show: training 1-3 only (the card is a "do this",
+   * so it waits for the gate's 10 s idle clock, DECISIONS §65 row 1; plan training-chat14 Decision 3). 0 in mission 4+, with no
+   * gate, or once she has been idle long enough.
+   * @returns {number}
+   */
+  _cardIdleWaitMs() {
+    if (!isTrainingNow()) return 0;
+    const idle = trainingIdleMs();
+    if (idle === null) return 0;
+    return Math.max(0, HINT_IDLE_MS - idle);
+  }
+
   _escalate(beat) {
     if (!this._active || this._active.beat.id !== beat.id) return;
     if (this._active.escalated) return;
@@ -1523,9 +1572,25 @@ export class OnboardingDirector {
       if (beat.escalationText && typeof setTimeout === 'function') {
         if (this._active.idleTimer != null) this._clearTimer(this._active.idleTimer);
         const idleMs = Constants.ONBOARDING?.IDLE_ESCALATION_MS || 15000;
-        this._active.idleTimer = this._setTimeout(() => this._escalate(beat), idleMs);
+        this._active.idleTimer = this._setTimeout(() => this._escalateFromTimer(beat), idleMs);
       }
       return;
+    }
+    // Training 1-3: the card is an ask, so it waits until she has done nothing useful for 10 s. Look again when that time is
+    // up; never stack timers (the unrelated-input path calls this on every key past the threshold).
+    const owed = this._cardIdleWaitMs();
+    if (owed > 0) {
+      if (beat.escalationText && this._active.idleTimer == null && typeof setTimeout === 'function') {
+        this._active.idleTimer = this._setTimeout(() => this._escalateFromTimer(beat), Math.max(100, owed));
+      }
+      return;
+    }
+    // ...and what the card asks is read again when it shows: a target that is in reach, cleared or gone needs no card.
+    if (isTrainingNow()) {
+      let stale = false;
+      // counts from the beat's start: autopilot (or a net) used during the wait makes the card false
+      try { const f = this._hintFields(beat, this._active.actsAtStart); stale = typeof f._hintStale === 'function' && f._hintStale() === true; } catch (_e) { stale = false; }
+      if (stale) return;
     }
     this._active.escalated = true;
     // A stall is a struggle signal: let the GuidanceDirector re-escalate one tier.
@@ -1540,6 +1605,7 @@ export class OnboardingDirector {
     // '{distM}' template for tease_lock and re-say the comms line for the rest.)
     const body = beat.escalationText || '';
     if (!body) return;
+    if (isTrainingNow()) noteTrainingHintShown();   // a card is a "do this" too: the gate's idle clock restarts (MissionCoach does the same)
     this._emit(Events.TEACHING_MOMENT_FORCE, {
       id: 'onboarding_' + beat.id,
       title: (beat.text || beat.commsText || '').slice(0, 40),
@@ -1726,12 +1792,13 @@ export class OnboardingDirector {
    *  - `_hintReady()`: false = keep holding (the ask is not yet true: the berth is busy, the range is unknown).
    * Counts are taken NOW, at the post: only what she does after the line counts.
    * @param {object} beat an ONBOARDING_BEATS row
+   * @param {{nets:number, catches:number, autopilots:number}} [at] the counts to compare with (default: now). The stall card
+   *   passes the counts from when the beat started, so what she did during the wait counts.
    * @returns {object} fields to spread into the COMMS_MESSAGE payload ({} when the line is not an ask)
    */
-  _hintFields(beat) {
+  _hintFields(beat, at = { ...this._acts }) {
     const key = HINT_BEAT_KEYS[beat.id];
     if (!key) return {};
-    const at = { ...this._acts };
     const ctx = () => { try { return (this._context && this._context()) || {}; } catch (_e) { return {}; } };
     // nothing left to act on: the field's discovered pieces are all gone (unknown = not gone)
     const noPieces = () => { const n = ctx().trackedContacts; return Number.isFinite(n) && n === 0; };

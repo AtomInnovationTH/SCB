@@ -183,7 +183,7 @@ export class ScoringSystem {
           text: 'Manual daughter capture: 2× score bonus!',
           source: 'SYSTEM',
           channel: 'CMD',
-          priority: 'info',
+          priority: 'info', _result: true,   // a result (score) (t14 P)
         });
       } else if (!data.manualCapture && !this._firstAutoArmMsg) {
         this._firstAutoArmMsg = true;
@@ -366,7 +366,7 @@ export class ScoringSystem {
       const bulkMult = (Constants.MARKET && Constants.MARKET.BULK_BONUS_MULTIPLIER) || 1.15;
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `BULK BONUS ×${bulkMult}. ${data.totalMassKg.toFixed(0)}kg sold at once!`,
-        priority: 'success',
+        priority: 'success', _result: true,   // a result (credits) (t14 P)
       });
     }
 

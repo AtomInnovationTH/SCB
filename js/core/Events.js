@@ -812,6 +812,11 @@ export const Events = {
    *  something useful, as far as the training hint gate is concerned (camera, zoom and menu keys never emit this).
    *  Payload: { key: 'S'|'N'|'D'|'A'|'L'|'T'|'R'|'Q'|'.'|'TURN' } */
   PLAYER_ACTED:              'player:acted',
+  /** A useful key is HELD down (de-spin laser L, or an arrow that really turns the ship / orbits a station-keeping daughter):
+   *  InputManager's per-frame held-key block emits it at most every 0.5 s real, only while the page has focus and is visible.
+   *  The training hint gate keeps its idle clock at 0 (a hold is useful while it lasts); unlike PLAYER_ACTED it drops no held
+   *  line and wakes no "she acted" listener. Payload: { key: 'L'|'TURN' } */
+  PLAYER_HOLDING:            'player:holding',
 };
 
 export default Events;

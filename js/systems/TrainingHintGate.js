@@ -9,7 +9,8 @@
  *  - The idle clock is the gate's own: it accrues only from `tick()` calls, each adding min(real ms since the last tick,
  *    TICK_CAP_MS). Pause, a hidden tab, slow motion and the x8 wheel clock neither speed it up nor slow it down.
  *  - The idle clock restarts on every useful input (`noteInput`), at mission start, and each time a hint is shown (at most
- *    one "do this" line per 10 s of her doing nothing).
+ *    one "do this" line per 10 s of her doing nothing). A held L or arrow (`noteHolding`, from PLAYER_HOLDING) keeps it at 0
+ *    while held; it is not a new input (no held line is dropped).
  *  - A hint posted while she has been idle >= 10 s shows at once; otherwise it is held. Held hints show one at a time,
  *    oldest first. Held hints with the same `_hintKey` collapse to the newest text. At most MAX_HELD are kept.
  *  - A hint is dropped only when what it asks for has happened or can no longer happen: `_hintStale()` true, or a useful
@@ -236,6 +237,12 @@ export class TrainingHintGate {
       return typeof h.data._hintStale === 'function';                              // predicate hints keep waiting
     });
   }
+
+  /**
+   * A useful key is HELD (L, or an arrow that acts): the idle clock stays at 0 for as long as it is held. Unlike `noteInput` this
+   * is not "she did something new": no held line is dropped and no input listener runs (the keydown did that once).
+   */
+  noteHolding() { this._idle = 0; }
 
   /**
    * A hint is posted. Held unless she has been idle long enough; a hint whose ask is already done is dropped.

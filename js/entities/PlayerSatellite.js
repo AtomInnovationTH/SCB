@@ -3598,15 +3598,21 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * The wheels cannot take (meaningful) spin in this direction: with a direction (dx, dy) an axis it uses has under
    * (1 - FULL_FRAC) of its capacity left that way; without one, a pitch or yaw wheel is at FULL_FRAC or more.
+   * `extraRateRadS` (read-only, direction given only): would they read full after the ship had spun up that much more (rad/s,
+   * along (dx, dy)) than she has now? Each axis's room falls by I·|d_i|/|d| per rad/s, as `wheelSpareRate` counts it. The autopilot's
+   * wheel hand-over forecast (`_wheelHandOverS`) asks it, so its rule (b) is the runtime's own test and no copy of the threshold.
+   * @param {number} [extraRateRadS=0]
    * @returns {boolean}
    */
-  wheelsFull(dx, dy) {
+  wheelsFull(dx, dy, extraRateRadS = 0) {
     if (!this._wheelKit) return false;
     const W = Constants.WHEELS, h = this._wheelH;
     const lo = (1 - W.FULL_FRAC) * W.MOMENTUM_NMS;
     if (Number.isFinite(dx) && Number.isFinite(dy) && (dx !== 0 || dy !== 0)) {
-      if (Math.abs(dx) > 1e-6 && W.MOMENTUM_NMS + Math.sign(dx) * h.x < lo) return true;
-      if (Math.abs(dy) > 1e-6 && W.MOMENTUM_NMS + Math.sign(dy) * h.y < lo) return true;
+      const more = extraRateRadS > 0 ? extraRateRadS : 0;
+      const I = more > 0 ? this.getAttitudeInertia() : null, l = Math.hypot(dx, dy);
+      if (Math.abs(dx) > 1e-6 && W.MOMENTUM_NMS + Math.sign(dx) * h.x - (I ? I.ixx * Math.abs(dx) / l * more : 0) < lo) return true;
+      if (Math.abs(dy) > 1e-6 && W.MOMENTUM_NMS + Math.sign(dy) * h.y - (I ? I.iyy * Math.abs(dy) / l * more : 0) < lo) return true;
       return false;
     }
     return Math.max(Math.abs(h.x), Math.abs(h.y)) >= W.FULL_FRAC * W.MOMENTUM_NMS;

@@ -72,7 +72,7 @@ export class CargoSystem {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'CARGO',
         text: `Stored ${toStore.toFixed(1)}kg ${data.name} (${overflow.toFixed(1)}kg overflow lost)`,
-        priority: 'info'
+        priority: 'info', _result: true   // a result (kg stored) (t14 P)
       });
     } else {
       eventBus.emit(Events.COMMS_MESSAGE, {

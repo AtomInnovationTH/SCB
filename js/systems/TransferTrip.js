@@ -1290,7 +1290,7 @@ export class TransferTrip {
     }
     if (held && typeof tc.unreserve === 'function') tc.unreserve(lt);
     const n = this._unflown;
-    if (n > 0) this._say(`On the way the daughters handed ${n} ${n === 1 ? 'catch' : 'catches'} to the furnaces.`, { _keep: true });
+    if (n > 0) this._say(`On the way the daughters handed ${n} ${n === 1 ? 'catch' : 'catches'} to the furnaces.`, { _keep: true, _result: true });   // a result (t14 P)
   }
 
   /** A leash hand-off or a carry runs: the world clock drops to TRIP.HANDOFF_RATE. */
@@ -1350,7 +1350,7 @@ export class TransferTrip {
     this.melted++;
     const what = this._desc.get(e.debrisId) || '';
     this._desc.delete(e.debrisId);
-    this._say(meltLine(e.tipIndex >= 0 ? e.tipIndex : 0, what), { _keep: true });
+    this._say(meltLine(e.tipIndex >= 0 ? e.tipIndex : 0, what), { _keep: true, _result: true });   // a result (t14 P)
   }
 
   /** @private Settle the gas, say it, stop the plume and the hold, then run the callback. */

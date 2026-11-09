@@ -2261,7 +2261,7 @@ export class NetProjectile {
       });
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `Catch secured at the collar. Securing ${Math.round(this.capturedMass)} kg…`,
-        source: 'HOUSTON', priority: 'info',
+        source: 'HOUSTON', priority: 'info', _result: true,   // a result: the panel queue cap spares it (t14 P)
       });
     }
   }
@@ -2848,7 +2848,7 @@ export class NetProjectile {
     if (arm) arm.target = bag;            // ArmUnit's net poll adopts it too (its `reelCaught` test compares the two)
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: scoopLine((arm && arm.displayName) || 'Daughter', members.length),
-      source: 'SYSTEM', channel: 'CMD', priority: 'info',
+      source: 'SYSTEM', channel: 'CMD', priority: 'info', _result: true,   // a result: what the net took (t14 P)
     });
     return bag;
   }
@@ -3804,7 +3804,7 @@ export class CaptureNetSystem {
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON', channel: 'CMD',
       text: `Catch stowed on ${arm.displayName || arm.id}. Launcher clear.`,
-      priority: 'success',
+      priority: 'success', _result: true,   // a result (t14 P)
       _keep: true, // where a catch went is never folded into "× N queued"
     });
     return true;

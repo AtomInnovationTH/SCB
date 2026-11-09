@@ -467,6 +467,8 @@ export class CommsSystem {
 
     // Training hint gate: the player's own inputs (and the events she causes) restart its idle clock (DECISIONS §65 row 1)
     if (Events.PLAYER_ACTED) eventBus.on(Events.PLAYER_ACTED, (d) => this._trainingGate.noteInput(d && d.key));
+    // A held L / arrow keeps the idle clock at 0 (InputManager's per-frame block, at most every 0.5 s, page focused): not a new input
+    if (Events.PLAYER_HOLDING) eventBus.on(Events.PLAYER_HOLDING, () => this._trainingGate.noteHolding());
     for (const [name, key] of USEFUL_EVENT_KEYS) {
       if (Events[name]) eventBus.on(Events[name], () => this._trainingGate.noteInput(key));
     }
@@ -582,7 +584,7 @@ export class CommsSystem {
         onboardingBeatId: data._onboardingBeatId,
         link: sanitizeCommsLink(data.link),
       }, data._critical === true || data._reactive === true || data._keep === true || data._coach === true,
-      data._coach === true);
+      data._coach === true, data._result === true);
       return;
     }
 
@@ -596,7 +598,10 @@ export class CommsSystem {
     // into a burst. A `_keep` status line (mission progress, where a catch went, the next step) is kept the same way:
     // it never bypasses the suppression tier, only coalescing. A `_coach` line (a lesson line, 2026-11-02) counts as
     // kept here too, and is stored with `coach` so the comms panel's queue cap spares it (`keep` alone does not).
+    // A `_result` line (a line that reports a result, 2026-11-08) is NOT kept: it coalesces like a plain line and is stored
+    // with `result` only so the panel's queue cap spares it.
     const coach = data._coach === true;
+    const result = data._result === true;
     const kept = data._critical === true || data._reactive === true || data._keep === true || coach;
     const coal = kept ? { shouldCoalesce: false, count: 0 }
       : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
@@ -629,6 +634,7 @@ export class CommsSystem {
     };
     if (kept) msg.keep = true;
     if (coach) msg.coach = true;
+    if (result) msg.result = true;
 
     this.messages.push(msg);
     GestureHints.noteChipLine(rawText);   // glass: a line that names an action key brings that chip up
@@ -1060,7 +1066,7 @@ export class CommsSystem {
         id: this._nextId++, timestamp: this._clockStamp(), source, text, priority, channel, age: 0,
       };
       this._hold(held, !!extra && (extra._critical === true || extra._reactive === true || extra._keep === true || extra._coach === true),
-        !!extra && extra._coach === true);
+        !!extra && extra._coach === true, !!extra && extra._result === true);
       eventBus.emit(Events.COMMS_MESSAGE, { ...held, _internal: true });
       return;
     }
@@ -1073,6 +1079,7 @@ export class CommsSystem {
     this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
     // "kept" lines: see the COMMS_MESSAGE listener
     const coach = !!extra && extra._coach === true;
+    const result = !!extra && extra._result === true;   // not kept: coalesces like a plain line
     const kept = !!extra && (extra._critical === true || extra._reactive === true || extra._keep === true || coach);
     const coal = kept ? { shouldCoalesce: false, count: 0 }
       : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
@@ -1100,6 +1107,7 @@ export class CommsSystem {
     };
     if (kept) msg.keep = true;
     if (coach) msg.coach = true;
+    if (result) msg.result = true;
 
     this.messages.push(msg);
     GestureHints.noteChipLine(rawText);   // the text as passed in, before chipPhrase
@@ -1127,9 +1135,10 @@ export class CommsSystem {
   }
 
   /** @private Park a built message behind the shut gate (bounded: the oldest falls off). */
-  _hold(msg, keep, coach = false) {
+  _hold(msg, keep, coach = false, result = false) {
     if (keep) msg.keep = true;
     if (coach) msg.coach = true;
+    if (result) msg.result = true;
     this._held.push(msg);
     while (this._held.length > MAX_MESSAGES) this._held.shift();
   }

@@ -198,7 +198,7 @@ export class DossierSystem {
       text: withCatch
         ? `Survey data: ${total} credits earned.`
         : `Survey data sent to ground station. ${total} credits earned.`,
-      priority: 'success',
+      priority: 'success', _result: true,   // a result (credits) (t14 P)
       _onboarding: true,
     });
   }
@@ -466,7 +466,7 @@ export class DossierSystem {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
       text: `${words}:${rate} ${credits} credits.`,
-      priority: 'success',
+      priority: 'success', _result: true,   // a result (credits) (t14 P)
     });
   }
 
@@ -512,7 +512,7 @@ export class DossierSystem {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
         text: `Survey data sent to ground station.${bountyClause}`,
-        priority: 'success',
+        priority: 'success', _result: true,   // a result (credits) (t14 P)
       });
     }
   }

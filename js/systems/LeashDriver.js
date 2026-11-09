@@ -202,6 +202,15 @@ export class LeashDriver {
       if (!h || !h.turn || h.turn.state !== 'turning' || !e || e.mode !== 'turn') return;
       h.turn.ended = { result: e.result, reason: e.reason || '' };
       h.turnGasUnits = (h.turnGasUnits || 0) + (e.gasUnits > 0 ? e.gasUnits : 0);   // every turn of this hand-off adds its bill (`_sayTurnBill`)
+      // t14 W2a: the straight arrival's CORRECTING turns (TURN2 after its first turn: `turn2Tries > 1`, LeashTransfer `_ph_TURN2`) are
+      // tallied apart, so the after line can name their share. The machine's phase is still TURN2 when this turn's end event fires.
+      const m = h.machine;
+      if (m && m.phase === 'TURN2' && m.turn2Tries > 1) {
+        const u = e.gasUnits > 0 ? e.gasUnits : 0;
+        h.corrRan = (h.corrRan || 0) + 1;
+        h.corrGasUnits = (h.corrGasUnits || 0) + u;
+        if (u > 0) h.corrGasTurns = (h.corrGasTurns || 0) + 1;
+      }
     };
     this._onReset = () => this._abort('reset');
     bus.on(Events.AIM_SEQUENCE_END, this._onTurnEnd);
@@ -897,7 +906,11 @@ export class LeashDriver {
             if (prof2.ok) { gasKg += coldGasPoolToKg(prof2.gasEstimate); both = firstGasKg > 0; second = firstGasKg <= 0; }
           }
           h.turnSaidKg = gasKg;
-          const gas = gasKg >= TURN_SAY_KG ? ` About ${Math.round(gasKg * 1000)} g of steering gas${both ? ' for the two turns' : second ? ' for the second turn' : ''}.` : '';
+          // The forecast cannot price the straight arrival's CORRECTING turns (a small turn follows when the first two leave the piece off
+          // the boom axis, `STRAIGHT_MAX_TRIES`): wherever it names a gram figure (the two turns', the second turn's, or the first turn's
+          // alone, the second running on the wheels) of a straight arrival, it says so (t14 W2a; the review's gas-then-wheels case).
+          const gas = gasKg >= TURN_SAY_KG
+            ? ` About ${Math.round(gasKg * 1000)} g of steering gas${both ? ' for the two turns' : second ? ' for the second turn' : ''}${st ? ', more if small correcting turns follow' : ''}.` : '';
           this._say(`Turning the ship to bring radiator ${h.tipIndex + 1} to the catch.${gas}`);
         }
         break;
@@ -1185,24 +1198,33 @@ export class LeashDriver {
     }
   }
 
-  _say(text, priority = 'info', loud = false) {
+  _say(text, priority = 'info', loud = false, result = false) {
     // `_keep`: where the catch went (and why a hand-off failed) is never folded into "x N queued".
     // `_critical`: a failure (a warning, or "the catch is gone") passes the tutorial's tier-0 mute: without it the player
     // never learns the leash touched the hull and the catch drifted free (measured, training 1). Progress lines stay muted.
-    this.eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true, _critical: loud || priority === 'warning' });
+    // `_result` (t14 Decision 6): a line that reports a result (grams, the catch, where the radiator came to rest) is spared by the
+    // panel's queue cap (CommsPanel `_capQueue`): training 3 radiator 1's "took 465 g" was evicted by newer lines with `_keep` alone.
+    const msg = { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true, _critical: loud || priority === 'warning' };
+    if (result) msg._result = true;
+    this.eventBus.emit(Events.COMMS_MESSAGE, msg);
   }
 
   /**
    * The hand-off's turns billed more steering gas than the turn line said (training 3: 349 g said, 391 g billed with a correction turn;
    * the first turn on the wheels and a second on gas): when the real total is 50 g or more AND over 15 % above the grams the line said,
-   * say the real grams once, after the turns (t13 lane G fix 4, Decision 8). Nothing otherwise. Once per hand-off.
+   * say the real grams once, after the turns (t13 lane G fix 4, Decision 8). Also whenever a correcting turn ran and the total is 50 g or
+   * more (t14 W2a: the forecast cannot price the corrections; the line names their share, from the per-turn tally `_onTurnEnd` keeps).
+   * Nothing otherwise. Once per hand-off.
    */
   _sayTurnBill(h) {
     if (!h || h.turnBillSaid) return;
     h.turnBillSaid = true;
     const realKg = coldGasPoolToKg(h.turnGasUnits || 0), saidKg = h.turnSaidKg || 0;
-    if (realKg < TURN_BILL_SAY_KG || !(realKg > saidKg * (1 + TURN_BILL_TOL))) return;
-    this._say(`The hand-off turns took ${Math.round(realKg * 1000)} g of steering gas.`);
+    const corrected = (h.corrRan || 0) > 0;
+    if (realKg < TURN_BILL_SAY_KG || !(corrected || realKg > saidKg * (1 + TURN_BILL_TOL))) return;
+    const corrG = Math.round(coldGasPoolToKg(h.corrGasUnits || 0) * 1000), n = h.corrGasTurns || 0;
+    const share = corrG >= 1 && n > 0 ? `, ${corrG} g of it in ${n > 1 ? `${n} correcting turns` : 'a correcting turn'}` : '';
+    this._say(`The hand-off turns took ${Math.round(realKg * 1000)} g of steering gas${share}.`, 'info', false, true);
   }
 
   _finish(h, res) {
@@ -1211,7 +1233,7 @@ export class LeashDriver {
     // (what `releasePetalHandoff` said: the shared angle, or just under the bag band; at DONE the radiator is within 1° of it)
     if (res && res.phase === 'DONE' && h.latched && h.machine) {
       const n = h.tipIndex + 1, deg = Math.round(Number.isFinite(h.restDeg) ? h.restDeg : h.machine.unfoldTheta / DEG2RAD);
-      this._say(this._tc && this._tc.has(h.tipIndex) ? `Catch on radiator ${n}'s tip, radiator back at ${deg}°.` : `Radiator ${n} is back at ${deg}°.`);
+      this._say(this._tc && this._tc.has(h.tipIndex) ? `Catch on radiator ${n}'s tip, radiator back at ${deg}°.` : `Radiator ${n} is back at ${deg}°.`, 'info', false, true);
     }
     if (typeof p.isPetalHolding === 'function' && p.isPetalHolding(this._petalAz(h.tipIndex)) && typeof p.releasePetalHandoff === 'function') {
       p.releasePetalHandoff(this._petalAz(h.tipIndex), leashSlew());

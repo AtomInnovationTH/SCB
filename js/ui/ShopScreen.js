@@ -765,7 +765,7 @@ export class ShopScreen {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'MARKET',
       text: `Sold ${item.massKg}kg ${item.name} for ${credits}¢`,
-      priority: 'info'
+      priority: 'info', _result: true   // a result (credits) (t14 P)
     });
 
     this.refresh();
@@ -794,7 +794,7 @@ export class ShopScreen {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'MARKET',
       text: `Sold all cargo (${totalMass.toFixed(1)}kg) for ${credits}¢`,
-      priority: 'info'
+      priority: 'info', _result: true   // a result (credits) (t14 P)
     });
 
     this.refresh();

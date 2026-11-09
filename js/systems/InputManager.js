@@ -56,6 +56,9 @@ const USEFUL_KEYS = Object.freeze({
   Digit1: '1', Digit2: '2', Digit3: '3', Digit4: '4',
 });
 
+/** A held useful key tells the training hint gate at most this often (real ms; PLAYER_HOLDING). */
+const HOLD_EMIT_MS = 500;
+
 /**
  * The line posted when a daughter's pilot view opens. Arrow keys (the turn pad on glass) steer her only while she holds
  * station (the STATION_KEEP block of update()); the way out is Esc / V / her number again, or a tap on her DAUGHTERS row on glass.
@@ -192,6 +195,8 @@ export class InputManager {
   constructor() {
     /** @type {Object<string, boolean>} Key state map */
     this.keys = {};
+    /** @type {number} real ms of the last PLAYER_HOLDING emit (see `_noteHolding`) */
+    this._lastHoldMs = -Infinity;
 
     /** @type {boolean} ARM PILOT mode active */
     this.armPilotMode = false;
@@ -229,6 +234,8 @@ export class InputManager {
 
     this._onKeyDown = this._handleKeyDown.bind(this);
     this._onKeyUp = this._handleKeyUp.bind(this);
+    this._onFocusLost = this._releaseHeldKeys.bind(this);
+    this._onVisibility = () => { if (typeof document !== 'undefined' && document && document.hidden === true) this._releaseHeldKeys(); };
     this._onPointerDown = this._handlePointerDown.bind(this);
   }
 
@@ -492,6 +499,11 @@ export class InputManager {
   start() {
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
+    // A keyup that happens in another app never reaches us: drop every held key when the window loses focus or the page hides.
+    window.addEventListener('blur', this._onFocusLost);
+    if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', this._onVisibility);
+    }
     // The mouse wheel is owned by the single WheelRouter (window capture): the arm-pilot STATION_KEEP branch is
     // handleArmPilotWheel(e), which the router calls first (highest priority).
     window.addEventListener('pointerdown', this._onPointerDown);
@@ -508,6 +520,10 @@ export class InputManager {
   stop() {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup', this._onKeyUp);
+    window.removeEventListener('blur', this._onFocusLost);
+    if (typeof document !== 'undefined' && document && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('visibilitychange', this._onVisibility);
+    }
     window.removeEventListener('pointerdown', this._onPointerDown);
     this._removeAudioGestureListeners();
     if (this._audioUnlockTimerId !== null) {
@@ -1778,6 +1794,16 @@ export class InputManager {
   }
 
   /**
+   * The window lost focus or the page was hidden: every key still marked held is released, as its keyup would have done (a
+   * keyup that happens in another app is never delivered; the laser kept firing and the training idle clock stayed at 0). The
+   * map is cleared IN PLACE: main.js and the touch pad hold this same object.
+   * @private
+   */
+  _releaseHeldKeys() {
+    for (const code in this.keys) this.keys[code] = false;
+  }
+
+  /**
    * Cycle the active debris target (TPI-sorted), shared by the `Tab` alias and the `T` verb; same list as the HUD.
    * @private
    */
@@ -2301,6 +2327,31 @@ export class InputManager {
   }
 
   /**
+   * A useful key is held this frame (training hint gate, plan training-chat14 Decision 2): emit PLAYER_HOLDING at most every
+   * HOLD_EMIT_MS real ms, and only while the page has focus and is visible (a blur or a hidden page also clears the key map, see
+   * `_releaseHeldKeys`; this check covers the frames before that event arrives).
+   * @param {'L'|'TURN'} key
+   */
+  _noteHolding(key) {
+    const now = this._holdClockMs();
+    if (now - this._lastHoldMs < HOLD_EMIT_MS) return;
+    if (!this._pageActive()) return;
+    this._lastHoldMs = now;
+    eventBus.emit(Events.PLAYER_HOLDING, { key });
+  }
+
+  /** Real ms clock of the hold throttle (tests replace it). */
+  _holdClockMs() { return typeof performance !== 'undefined' ? performance.now() : Date.now(); }
+
+  /** The page has focus and is visible; with no `document` (Node) there is nothing to lose focus, so yes. */
+  _pageActive() {
+    if (typeof document === 'undefined' || !document) return true;
+    if (document.hidden === true || document.visibilityState === 'hidden') return false;
+    if (typeof document.hasFocus === 'function' && !document.hasFocus()) return false;
+    return true;
+  }
+
+  /**
    * Process held keys into thrust commands.
    * @param {number} dt - Real-time delta (seconds)
    */
@@ -2322,12 +2373,14 @@ export class InputManager {
       skDespinTarget = this._getPilotedSkDespinTarget();
     }
     despinLaser.setOverrideTarget(skDespinTarget);
-    despinLaser.setFiring(
-      !overlayOpen
+    const laserActs = !overlayOpen
       && (!this.armPilotMode || !!skDespinTarget)
       && (d.gameState && d.gameState.isGameplay && d.gameState.isGameplay())
-      && this.keys['KeyL'] === true,
-    );
+      && this.keys['KeyL'] === true;
+    despinLaser.setFiring(laserActs);
+    // Training hint gate: a held L is useful while it is held (a hold sends one keydown, then nothing)
+    if (laserActs) this._noteHolding('L');
+    const gameplayNow = !!(d.gameState && d.gameState.isGameplay && d.gameState.isGameplay());
 
     // Hold Shift: BOOST reel ×2 on reeling daughters. Set every frame (like the laser intent above) so it releases on
     // keyup/overlay. Shift is otherwise only a modifier (Shift+R/V/D/A/N/S/G), so a bare hold is conflict-free.
@@ -2366,6 +2419,7 @@ export class InputManager {
 
         if (theta !== 0 || phi !== 0 || radius !== 0) {
           const fine = this.keys['ShiftLeft'] || this.keys['ShiftRight'];
+          if ((theta !== 0 || phi !== 0) && gameplayNow) this._noteHolding('TURN');   // a held arrow orbits her: useful while held
           eventBus.emit(Events.ARM_ORBIT_ADJUST, {
             armId: skArm.id,
             theta,
@@ -2469,6 +2523,9 @@ export class InputManager {
         eventBus.emit(Events.MOTHER_MANUAL_ROTATE);
         d.audioSystem.playRcsPuff?.();
       }
+      // Training hint gate: an arrow held where it really turns the ship is useful while held (keyboard, or the touch turn pad
+      // writing this same key map: it sends no event while the thumb is still)
+      if (gameplayNow && (_pk.up || _pk.down || _pk.left || _pk.right)) this._noteHolding('TURN');
 
       // Per-axis rate demand: Up=pitch+, Down=pitch−, Left=yaw+, Right=yaw−.
       let pitchIn = 0, yawIn = 0;

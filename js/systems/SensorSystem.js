@@ -464,7 +464,7 @@ export class SensorSystem {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
         text: `Survey data received. Fresh field logged. +$${reward}`,
-        priority: 'info',
+        priority: 'info', _result: true,   // a result (credits): the panel queue cap spares it (t14 P)
       });
     } else if (rewardKind === 'stale') {
       // On mission 1 the ONLY field is the welcome cluster: "Move to a new field" would send a new player away from what
@@ -481,7 +481,7 @@ export class SensorSystem {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
         text: 'Scan complete. No significant debris field in range. No survey data of value.',
-        priority: 'info',
+        priority: 'info', _result: true,   // a scan result (t14 P)
       });
     } else if (rewardKind === 'capped') {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -551,7 +551,7 @@ export class SensorSystem {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
         text: `Scan complete. ${discoveries.length} new contact${discoveries.length > 1 ? 's' : ''} found!`,
-        priority: 'success',
+        priority: 'success', _result: true,   // a scan result (t14 P)
       });
     }
 

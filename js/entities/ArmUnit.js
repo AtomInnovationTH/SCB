@@ -5490,7 +5490,7 @@ export class ArmUnit {
       mover: target._mover === true,   // training 3: the coach reads a tool catch of a drifting piece as a mover catch (no net event follows)
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      source: this.displayName, text: successMsg, channel: 'CMD', priority: 'success',
+      source: this.displayName, text: successMsg, channel: 'CMD', priority: 'success', _result: true,   // a result: the panel queue cap spares it (t14 P)
     });
     this._transitionTo(S.GRAPPLED);
   }
@@ -5667,7 +5667,7 @@ export class ArmUnit {
     // transition (HOLDING_CATCH), so that one is the line and this one stays quiet (owner: one line per event).
     if (old === S.DOCKING && this._rhDockFree && (newState === S.RELOADING || newState === S.DOCKED)) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'HOUSTON', channel: 'CMD', priority: 'success',
+        source: 'HOUSTON', channel: 'CMD', priority: 'success', _result: true,   // a result: the panel queue cap spares it (t14 P)
         text: `${this.displayName} is home.${this._reelPullWords()}`,
       });
     }
@@ -6126,7 +6126,7 @@ export class ArmUnit {
         });
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `${this.displayName}: Target secured! SMA cinch complete.`,
-          priority: 'success',
+          priority: 'success', _result: true,   // a result (t14 P)
         });
       } else {
         eventBus.emit(Events.ARM_CAPTURE_FAILED, {
@@ -6286,7 +6286,7 @@ export class ArmUnit {
       if (!reelCaught) {   // a real catch reached the STOWED branch before, which said nothing; keep it quiet
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `${this.displayName}: Target secured! SMA cinch complete.`,
-          priority: 'success',
+          priority: 'success', _result: true,   // a result (t14 P)
         });
       }
     } else if (netState === CN_STATES.MISSED || netState === CN_STATES.RELEASED) {
@@ -8767,7 +8767,7 @@ export class ArmUnit {
     const verb = this.coldGasKg >= this._coldGasBottleKg() - 1e-9 ? 'refilled' : 'topped up';
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `${this.displayName}: gas bottle ${verb} from the mother's tank, ${Math.round(kg * 1000)} g of steering gas.`,
-      priority: 'info',
+      priority: 'info', _result: true,   // a result: the refill (t14 P)
     });
   }
 
@@ -8824,7 +8824,7 @@ export class ArmUnit {
     ps._indiumSwapArm = null;
     eventBus.emit(Events.ARM_REFUELED, { armId: this.id, amount: this.fuel - before });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.displayName}: new ion-fuel cartridge in. Fuel ${Math.round(this.fuel)}%.`, priority: 'good',
+      text: `${this.displayName}: new ion-fuel cartridge in. Fuel ${Math.round(this.fuel)}%.`, priority: 'good', _result: true,   // a result: the refill (t14 P)
     });
   }
 
@@ -9428,7 +9428,7 @@ export class ArmUnit {
             text: Constants.isFeatureEnabled('FURNACE_COOK')
               ? `${this.displayName}: Catch secured at the strut. Holding in net (awaiting processing). Capture #${this.captures}.${pullWords}`
               : `${this.displayName}: Catch secured at the strut. Holding it in the net until the burn to the next field, when she carries it to a furnace. Capture #${this.captures}.${pullWords}`,
-            priority: 'success',
+            priority: 'success', _result: true,   // a result: the panel queue cap spares it (t14 P)
           });
           return;
         }
@@ -9779,7 +9779,7 @@ export class ArmUnit {
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: this.displayName,
             text: `🎣 Trawl capture! ${debris.id} netted passively.`,
-            priority: 'success',
+            priority: 'success', _result: true,   // a result (t14 P)
           });
           eventBus.emit(Events.TRAWL_END, { armId: this.id });
           break;

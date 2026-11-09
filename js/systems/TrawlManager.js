@@ -273,7 +273,7 @@ export class TrawlManager {
 
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `Trawl complete: ${report.catches}/${report.opportunities} captured (${Math.round(report.catchRatio * 100)}%)`,
-      priority: 'info',
+      priority: 'info', _result: true,   // a result (t14 P)
     });
 
     eventBus.emit(Events.TRAWL_SWEEP_COMPLETE, {

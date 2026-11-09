@@ -218,6 +218,11 @@ const SLOTH_SAY_RAD = degToRad(2);
 const WHEEL_NOTICE_AFTER_S = 1;
 /** A wheel line's wall clock counts at most this much between two ticks (a pause or a hitch is not turning time). */
 const WHEEL_NOTICE_MAX_GAP_S = 0.5;
+/** Time constant (s of autopilot steps) of the smoothed heading rate against the orbit frame (`_hdgRateRel`); the wheel line reads it
+ * after at least `WHEEL_NOTICE_AFTER_S` of real turning, many time constants on. */
+const HDG_REL_SMOOTH_S = 0.5;
+/** A heading moving against the orbit frame by less than this (0.02 deg/s) is a piece beside her: the wheel line sizes a plain turn to rest. */
+const HDG_MOVING_RAD_S = degToRad(0.02);
 /** A gas aim that billed this many grams (a line of its own only from 50 g; 20-50 g may only be folded into an existing line) says them after the
  * aim; a still bearing whose forecast named grams says them only when off by over `AIM_BILL_TOL` and `AIM_BILL_MIN_DIFF_G` g (t13 lane G1). */
 const AIM_BILL_SAY_G = 50, AIM_BILL_TOL = 0.15, AIM_BILL_MIN_DIFF_G = 10;
@@ -881,7 +886,11 @@ export class AutopilotSystem {
     this._apTickN = 0;                      // update() calls so far: a wheel turn's "uninterrupted" is a run of consecutive ticks (`_slothNotice`)
     this._wallNow = () => performance.now() / 1000;   // real seconds (the wheel line counts these; `init({ now })` replaces it in tests)
     this._apClockS = 0;                     // game seconds the autopilot has run (aim / line-up bookkeeping: seconds from the line to the end)
-    this._hdgRateNow = 0;                   // the world heading's own rate (rad/s) as `_rotateTowardWorld` last read it (a wheel turn's line sizes the chase by it)
+    this._hdgRateNow = 0;                   // the world heading's own rate (rad/s) as `_rotateTowardWorld` last read it (the gas finish sizes itself by it)
+    this._hdgRateRel = 0;                   // the same heading's rate against the ORBIT frame (rad/s), smoothed (~0.5 s): what the wheels really chase (`_wheelNoticeText`, `_wheelHandOverS`)
+    this._hdgRelSeeded = false;             // `_hdgRateRel` has a first reading (it restarts with every slew: `_slewStopTick` clears `_gasPrevOk`)
+    this._orbitStepApplied = false;         // `_orbitStepTick` turned the nose by the orbit's step this tick (the heading's rate then drops that part)
+    this._hdgRelTmp = new THREE.Vector3();
     this._aimBm = new THREE.Vector3();     // the mother's boresight with the strut at its target angle
 
     this._setupListeners();
@@ -2974,40 +2983,56 @@ export class AutopilotSystem {
    */
   _wheelNoticeText(p, err, nx, ny, kind) {
     const rate = this._tripOmega > 0 ? this._tripOmega : 0;
-    const hdg = kind === 'world' && this._hdgRateNow > 0 ? this._hdgRateNow : 0;
+    const hdg = kind === 'world' && this._hdgRateRel > 0 ? this._hdgRateRel : 0;   // against the ORBIT frame: that is what the wheel slew rides (`_orbitStepTick`)
     if (typeof p.wheelChaseTimeS !== 'function') return `Autopilot turning on the reaction wheels, ${this._wheelLegWords(slowTurnTimeS(p, 'wheels', err, nx, ny))}.`;
-    const hand = hdg > 0 ? this._wheelHandOverS(p, err, nx, ny, hdg, rate) : null;
+    // A heading that keeps moving: the step model of the runtime's own rules. (A heading below `HDG_MOVING_RAD_S` is a piece beside her: the rest-to-rest turn.)
+    const sim = hdg >= HDG_MOVING_RAD_S ? this._wheelSim(p, err, nx, ny, hdg, rate) : null;
     // The predicted hand-over time is not trusted in the game (training 2-3: 4 of 4 said "then gas finishes", the wheels did the whole turn
     // of 40-127 s): a predicted hand-over makes no time claim and no certain gas claim. The real one is said by "Reaction wheels full" and
     // `_handGasDoneNote` ("Turn finished on steering gas: N g").
-    if (hand !== null) return 'Autopilot turning on the reaction wheels; steering gas takes over if they fill.';
-    const left = p.wheelChaseTimeS(err, nx, ny, hdg, rate);
+    if (sim && sim.hand !== null) return 'Autopilot turning on the reaction wheels; steering gas takes over if they fill.';
+    // No hand-over. A piece beside her: the turn to rest (`wheelChaseTimeS`, until the wheel-turn flag drops). A heading that keeps moving is
+    // tracked for good (the flag never drops): the leg is until she is inside the autopilot's arrival cone of it (`AUTOPILOT.ANG_TOL_DEG`).
+    const left = sim && sim.arrive !== null ? sim.arrive : p.wheelChaseTimeS(err, nx, ny, hdg, rate);
     return `Autopilot turning on the reaction wheels, ${this._wheelLegWords(left)}.`;
   }
 
   /**
-   * @private A wheel chase of a moving world heading (`hdg` rad/s) that the wheels will not finish: game seconds from now to the hand-over to
-   * the steering gas, null when they do. The wheels' rate climbs at α to their room's top rate `wmax` and the error follows the heading
-   * (+hdg·dt, −rate·dt); the hand-over is rule (b) of `_slewSource` (the wheels full while the error is not shrinking: first step
-   * with the rate at `wmax` and `hdg >= wmax`) or rule (c) (the error has not fallen `WHEELS.SLEW_PROGRESS_DEG` below its best for
-   * `WHEELS.SLEW_STALL_S`). A 0.25 s step, to at most 20 min. Training 1 said "about 3 min" over a turn the wheels filled on at 71 s.
+   * @private A wheel chase of a moving world heading (`hdg` rad/s AGAINST THE ORBIT FRAME, `_hdgRateRel`) that the wheels will not finish:
+   * game seconds from now to the hand-over to the steering gas, null when they do. The wheels' rate climbs at α to their room's top rate
+   * `wmax` and the error follows the heading (+hdg·dt, −rate·dt); the hand-over is the runtime's rule (b) of `_slewSource` (the wheels
+   * full, read from `wheelsFull(nx, ny, spin gained)` with the rate gained since now, and the error not shrinking:
+   * `wheelsFull && (chasing || !(_tripOmega > 0))`, `chasing` = the heading's rate is at least hers) or rule (c) (the error has not
+   * fallen `WHEELS.SLEW_PROGRESS_DEG` below its best for `WHEELS.SLEW_STALL_S`), the count seeded from the slew in force
+   * (`_slewBestErr`, `_slewStallS`: set on a latched wheel slew only; a sloth slew returns before them, so it starts at `err`, 0).
+   * A 0.25 s step, to at most 20 min. Training 1 said "about 3 min" over a turn the wheels filled on at 71 s.
    * @returns {number|null}
    */
-  _wheelHandOverS(p, err, nx, ny, hdg, rate) {
+  _wheelHandOverS(p, err, nx, ny, hdg, rate) { return this._wheelSim(p, err, nx, ny, hdg, rate).hand; }
+
+  /**
+   * @private The step model behind `_wheelHandOverS`: `hand` as there, and `arrive`, the game seconds until the error is inside the
+   * autopilot's arrival cone (`AUTOPILOT.ANG_TOL_DEG`) on the wheels (null when the gas takes over first or never in 20 min).
+   * @returns {{hand: number|null, arrive: number|null}}
+   */
+  _wheelSim(p, err, nx, ny, hdg, rate) {
+    const none = { hand: null, arrive: null };
     const lim = typeof p._wheelTurnLimits === 'function' ? p._wheelTurnLimits(err, nx, ny, rate) : null;
-    if (!lim) return null;
+    if (!lim) return none;
     const W = Constants.WHEELS, step = 0.25;
     const tol = degToRad(Constants.AUTOPILOT.ANG_TOL_DEG), prog = degToRad(W.SLEW_PROGRESS_DEG);
-    let e = err, r = rate, best = err, stall = 0;
+    const live = this._slewLatch === 'wheels' && Number.isFinite(this._slewBestErr);
+    const full = (r) => (typeof p.wheelsFull === 'function' ? p.wheelsFull(nx, ny, r - rate) : r >= lim.wmax - 1e-9);
+    let e = err, r = rate, best = live ? this._slewBestErr : err, stall = live ? this._slewStallS : 0;
     for (let t = 0; t < 1200; t += step) {
-      if (e <= tol) return null;                                  // arrived on the wheels
-      if (r >= lim.wmax - 1e-9 && hdg >= lim.wmax) return t;      // (b) full and the heading outruns them
+      if (e <= tol) return { hand: null, arrive: t };              // arrived on the wheels
+      if (full(r) && (hdg >= r || !(r > 0))) return { hand: t, arrive: null };   // (b) full and the error not shrinking (the heading keeps up with her rate)
       r = Math.min(lim.wmax, r + lim.alpha * step, Math.sqrt(2 * lim.alpha * e));
       e = Math.max(0, e + (hdg - r) * step);
       if (e < tol || e < best - prog) { best = Math.min(best, e); stall = 0; } else stall += step;
-      if (stall >= W.SLEW_STALL_S) return t + step;               // (c) not closing
+      if (stall >= W.SLEW_STALL_S) return { hand: t + step, arrive: null };   // (c) not closing
     }
-    return null;
+    return none;
   }
 
   /** What the engaged heading is aimed at, by identity: the locked target, the Field-Assay cluster, or the debris id. */
@@ -3095,6 +3120,7 @@ export class AutopilotSystem {
    */
   _orbitStepTick(p) {
     this._orbitStepOn = false;
+    this._orbitStepApplied = false;
     if (typeof p._progradeQuat !== 'function') { this._orbitPgHave = false; return; }
     const pg = p._progradeQuat(this._orbitPgNow);
     if (!pg) { this._orbitPgHave = false; return; }
@@ -3107,6 +3133,7 @@ export class AutopilotSystem {
     this._orbitPgHave = true;
     if (!this._orbitStepOn || !this._orbitFollowsNow(p)) return;
     p.quaternion.premultiply(this._orbitDelta).normalize();
+    this._orbitStepApplied = true;
     const c = this._aimCoroutine;
     if (c) {                                                                         // the bearings the aim carries from tick to tick
       if (c.pT) c.pT.applyQuaternion(this._orbitDelta);
@@ -3176,7 +3203,7 @@ export class AutopilotSystem {
     const g = Math.round(kg * 1000);
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `Turn finished on steering gas: ${g >= 1 ? `${g} g` : 'under 1 g'}.`,
-      priority: 'warning', source: 'HOUSTON',
+      priority: 'warning', source: 'HOUSTON', _result: true,   // a result: the panel queue spares it (CommsPanel `_capQueue`)
     });
   }
 
@@ -3417,10 +3444,19 @@ export class AutopilotSystem {
     // Read on every call, the wheel phase included, so the first gas frame after a hand-over has it.
     let hdgRate = 0;
     if (!(dtWorld <= 0) && dt > 0) {
-      if (this._gasPrevOk) hdgRate = this._gasPrevDir.angleTo(worldDir) / dt;
+      if (this._gasPrevOk) {
+        hdgRate = this._gasPrevDir.angleTo(worldDir) / dt;
+        // Against the ORBIT frame (what a slew on the wheels chases, `_orbitStepTick`): the orbit's step this tick, applied to the nose, is
+        // taken off the heading's move too. A piece beside her reads about 0 here and 0.6 deg/s in `hdgRate` (training 1: "about 70 s" for 151).
+        const prev = this._hdgRelTmp.copy(this._gasPrevDir);
+        if (this._orbitStepApplied) prev.applyQuaternion(this._orbitDelta);
+        const rel = prev.angleTo(worldDir) / dt;
+        if (this._hdgRelSeeded) this._hdgRateRel += (rel - this._hdgRateRel) * (1 - Math.exp(-dt / HDG_REL_SMOOTH_S));
+        else { this._hdgRateRel = rel; this._hdgRelSeeded = true; }
+      } else { this._hdgRateRel = 0; this._hdgRelSeeded = false; }
       this._gasPrevDir.copy(worldDir); this._gasPrevOk = true;
     }
-    this._hdgRateNow = hdgRate;                                        // (`_wheelNoticeText` sizes a wheel chase by it)
+    this._hdgRateNow = hdgRate;                                        // (the gas finish sizes itself by the WORLD rate)
     // With the steering gas out the nose goes to the heading at the tail boxes' α, not at AP_ROT_RATE for free (a held world
     // pauses it, like the trip hold); likewise a slew on the wheels (`_slewSource`, no wheel limit, latched to the slew's
     // stop). The choke point for every caller of this slew.
@@ -5109,7 +5145,7 @@ export class AutopilotSystem {
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: stopped ? `The line-up had used ${realS} s and ${realG} g of gas when it stopped${kick}.`
         : `The line-up took ${realS} s and ${realG} g of gas${kick}.`,
-      priority: 'info', source: 'HOUSTON',
+      priority: 'info', source: 'HOUSTON', _result: true,   // a result: the panel queue spares it
     });
   }
 
