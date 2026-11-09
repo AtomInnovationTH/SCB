@@ -143,7 +143,7 @@ const SPACE_WEATHER_TEMPLATES = [
   {
     priority: CommsPriority.WARNING,
     source: 'NOAA SWPC',
-    template: 'Geomagnetic storm, strength Kp={kp} (how charged-up Earth\'s magnetic field is). Magnetic capture works +50% better, but orbit tracking is -30% less accurate.',
+    template: 'Geomagnetic storm, strength Kp={kp} (how charged-up Earth\'s magnetic field is).',
     effect: 'geoStorm',
   },
   {
