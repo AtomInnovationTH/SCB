@@ -178,7 +178,7 @@ import { plan as planRoutes } from './systems/RoutePlanner.js';
 import { FateList } from './ui/FateList.js';
 import { buildFateRows, fateContext } from './systems/FateRows.js';
 import { pendingAboard } from './systems/BigPieces.js';
-import { fieldsFromSearch } from './systems/resupplyWords.js';
+import { fieldsFromSearch, setResupplyOpenGetter, setResupplyOnTheWayGetter } from './systems/resupplyWords.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { LeashVisual } from './ui/LeashVisual.js';
@@ -2033,6 +2033,8 @@ async function init() {
     },
     providers: hullcamProviders,
   });
+  setResupplyOpenGetter(() => gameFlowManager.isResupplyOpenNow());   // the out-of-nets line says "restock at ..." only where she can
+  setResupplyOnTheWayGetter(() => gameFlowManager.isResupplyOnTheWay());   // ... and "when you arrive" while the trip to the satellite is under way
   // REFIT section engine (seven-subsystem index, exactly three ranked alternatives, one-click BUY): a block
   // INSIDE the one workbench pane (floor 1 only); Space toggles that pane via the controller's `workbench` dep
   // below. Constructed ONLY while the ladder flag is on, the same live Constants.LADDER.ENABLED every ladder

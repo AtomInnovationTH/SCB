@@ -501,6 +501,13 @@ export class CommsPanel {
   _releaseNext() {
     if (this._waiting.length === 0) return false;
     if (this._shown.length > 0 && this._sinceShown + SHOW_TIME_SLACK_S < COMMS.PANE_MIN_SHOW_S) return false;
+    // Training 1-3: a released "do this" line that waited here while she did something useful is withdrawn (it goes back to the
+    // gate, which shows it again after the next idle stretch if it is still true). Other lines and later missions: unchanged.
+    const cs = this._commsSystem;
+    if (cs && typeof cs.takeStaleHint === 'function') {
+      while (this._waiting.length > 0 && cs.takeStaleHint(this._waiting[0])) this._waiting.shift();
+      if (this._waiting.length === 0) return false;
+    }
     this._pushShown(this._waiting.shift());
     this._sinceShown = 0;
     return true;

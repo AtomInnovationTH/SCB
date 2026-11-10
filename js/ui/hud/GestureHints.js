@@ -174,6 +174,8 @@ const GLASS_LINES = Object.freeze([
   ['Press N to use the magnet (or 1-4 to pilot her).', 'Tap USE MAGNET to use the magnet (or tap her row in DAUGHTERS to pilot her).'],
   ['Press N to grip it (or 1-4 to pilot her).', 'Tap CLOSE GRIPPER to grip it (or tap her row in DAUGHTERS to pilot her).'],
   ['Press her number again (1-4) or Esc to back out to Command view.', 'Tap her row in DAUGHTERS again to back out to Command view.'],
+  // the out-of-nets line before the satellite is open (resupplyWords.padStepWords; it words touch itself, this row is the net under it)
+  ['Fly her yourself (press 1-4), then ', 'Tap her row in DAUGHTERS to fly her, then '],
   ['Daughters capture heavier targets at longer range. Press 1-4 to pilot a launched daughter.', 'Daughters capture heavier targets at longer range. Tap her row in DAUGHTERS to pilot a launched daughter.'],
   ['Run both daughters: [D] deploys, [1-4] select and pilot (press again to switch back), [Shift+R] recalls the whole fleet.', 'Run both daughters: hold the target for DAUGHTER to send one, and tap her row in DAUGHTERS to pilot her (tap again to switch back).'],
   ['Press D twice to deploy both daughters, then [1]/[2] to switch between them.', 'Hold the target for DAUGHTER twice to send both daughters, then tap a daughter\'s row in DAUGHTERS to switch between them.'],

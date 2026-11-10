@@ -37,7 +37,7 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { getLanguage, isSupportedLanguage } from '../core/Languages.js';   // route-1109 lane C: a save's own start city (startLang)
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
-import { TransferTrip } from './TransferTrip.js';
+import { TransferTrip, isSatelliteTarget } from './TransferTrip.js';
 import { initialGapDeg, gapChangeOverLeg, isLinedUp, stationFieldId, wrapDeg, stationInOwnPlane, stationOrbit, cityStation, cityStationKey } from './NodeDrift.js'; import { finishBurn, finishReserve, planeAfterFinish, tiltBackNote } from './RouteCost.js';     // route-1101 lane S2: the station node gap; route-1106 lane S4: the finish burn to the station's plane (one line: test-CodexAdr2026 pins GameFlowManager line numbers)
 import { WAIT_ID } from './WhereNextRows.js';
 import {
@@ -4511,6 +4511,27 @@ export class GameFlowManager {
 
   /** The boundary waits for a pick on the "where next" list (the FMA strip's line). */
   isWhereNextPending() { return this._trip.isChoosing(); }
+
+  /**
+   * Can she restock right now? True while the "where next" list is open (the satellite can be picked) and while the stop /
+   * berth is open (buying open); false mid-mission. The one answer `resupplyWords.resupplyIsOpenNow` reads (main.js wires it).
+   * @returns {boolean}
+   */
+  isResupplyOpenNow() {
+    return this._atResupplyStop === true || (!!this._trip && this._trip.isChoosing());
+  }
+
+  /**
+   * Is she on her way to the resupply satellite right now (her own trip, or the called satellite coming to her)? Not "open"
+   * yet (nothing can be bought until she is berthed), but the out-of-nets line says "when you arrive", not "after this
+   * mission". `resupplyWords.resupplyIsOnTheWay` reads it (main.js wires it).
+   * @returns {boolean}
+   */
+  isResupplyOnTheWay() {
+    const t = this._trip;
+    if (!t || !t.isActive() || t.isChoosing() || this._atResupplyStop === true) return false;
+    return t.isCalling() || isSatelliteTarget(t.field);
+  }
 
   /**
    * Is a catch at the nose collar waiting to move to a radiator tip that the hand-off can still take? A hand-off under way

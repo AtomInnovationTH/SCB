@@ -2980,7 +2980,7 @@ export class ArmUnit {
       audioSystem.playDeny();
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.displayName,
-        text: daughterOutOfNetsLine(),   // DECISIONS §33 row 8: nets refill only at the resupply stop (not "return to mother")
+        text: daughterOutOfNetsLine(this._outOfNetsNow()),   // DECISIONS §33 row 8: nets refill only at the resupply stop (not "return to mother")
         channel: 'CMD',
         priority: 'warning',
       });
@@ -5149,7 +5149,7 @@ export class ArmUnit {
       audioSystem.playDeny();
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.displayName,
-        text: daughterOutOfNetsLine(),   // DECISIONS §33 row 8: nets refill only at the resupply stop (not "return to mother")
+        text: daughterOutOfNetsLine(this._outOfNetsNow()),   // DECISIONS §33 row 8: nets refill only at the resupply stop (not "return to mother")
         channel: 'CMD',
         priority: 'warning',
       });
@@ -5657,7 +5657,7 @@ export class ArmUnit {
       // "about 8 s", docked 170 s later). No turn needed: today's wording.
       const tail = `${Math.round(distM)} m${this._rhReelSecondsText(e)}`;
       eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'HOUSTON', channel: 'CMD', priority: 'info',
+        source: 'HOUSTON', channel: 'CMD', priority: 'info', _result: true,   // a result: the panel queue cap spares it (t15 F3)
         text: `Reeling ${this.displayName} home: ${tail}.${this._rhReelNote || ''}`,
       });
       if (this._rhReelNote) this._rhReelNoteSaid = true;
@@ -6202,7 +6202,7 @@ export class ArmUnit {
          eventBus.emit(Events.COMMS_MESSAGE, {
            source: this.displayName,
            // Out of nets: the ONE line, exact (nets refill only at the resupply stop; nothing reloads on docking).
-           text: inv <= 0 ? daughterOutOfNetsLine() : `${this.displayName}: ${reason}`,
+           text: inv <= 0 ? daughterOutOfNetsLine(this._outOfNetsNow(true)) : `${this.displayName}: ${reason}`,
            channel: 'CMD', priority: 'warning',
          });
        }
@@ -10615,5 +10615,30 @@ export class ArmUnit {
       }
     });
     if (this.scene) this.scene.remove(this.group);
+  }
+
+  /**
+   * @private What still works for her with no nets, read from the real state, for `daughterOutOfNetsLine`: `padWorks` when her
+   * pad is on, in her toolset, and would take THIS piece (its spin is within the pad's limit and the surface gives it a mode;
+   * the piece is one she may work and within her rating), the same ToolOdds the odds strip and `padContact` read. `step` is the
+   * move the game accepts NOW toward the pad (see `resupplyWords.padStepWords`): the tool key / CHANGE TOOL exist only while she
+   * is flown and holds station (InputManager Backquote), so she is asked to be flown first when she is not, and to wait for
+   * her station when she is still flying to the piece.
+   * @param {boolean} [holdsStation] she is about to hold station (the net fallback emits just before the hand-back to STATION_KEEP)
+   * @returns {{padWorks: boolean, step?: string}}
+   */
+  _outOfNetsNow(holdsStation = false) {
+    const t = this._stationKeepTarget || this.target;
+    if (!t || !Array.isArray(this.toolset) || !this.toolset.includes('PAD') || !Constants.isFeatureEnabled('SPINNER_PAD')) return { padWorks: false };
+    if (!Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) return { padWorks: false };   // N works only the net without the multi-tool
+    if (isInspectOnlyMass(t.mass) || (t.mass || 0) > (Constants.SPINNER_MAX_CAPTURE_MASS ?? 50)) return { padWorks: false };
+    const padChosen = this.selectedTool === 'PAD';
+    if (!padChosen && this.toolset.length <= 1) return { padWorks: false };               // no tool change to make
+    const pad = computeToolOdds({ armType: this.type, toolset: ['PAD'], target: t, padUvDoses: this._padUvCureDosesRemaining }).PAD;
+    if (!(!!pad && pad.p > 0 && pad.blocker == null)) return { padWorks: false };
+    const holds = holdsStation || this.state === S.STATION_KEEP;
+    const flown = this.isManual();
+    const step = !holds ? 'wait' : padChosen ? (flown ? 'stick' : 'flystick') : (flown ? 'switch' : 'fly');
+    return { padWorks: true, step };
   }
 }

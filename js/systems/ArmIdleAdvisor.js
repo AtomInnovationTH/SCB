@@ -13,7 +13,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
-import { wordsFor } from './resupplyWords.js';
+import { wordsFor, outOfNetsCoach } from './resupplyWords.js';
 import { nWorksFor, flyDigitFor } from './netRouting.js';
 
 const FLY_THEN_N_CHIP = 'Fly her, then N';   // her tool chip when N would not work her (cap = her number key)
@@ -181,6 +181,11 @@ export class ArmIdleAdvisor {
             this._fire(hint.hintId, hint.title, hint.text, hint.icon, FLY_THEN_N_CHIP, String(n), ['Digit' + n]);
             continue;
           }
+        }
+        // Out of nets: the chip points at the satellite only while it is open; else her pad, or when the nets come back.
+        if (hint.hintId === 'sk_out_of_nets') {
+          const coach = outOfNetsCoach(typeof arm._outOfNetsNow === 'function' ? arm._outOfNetsNow() : null);
+          if (coach) { this._fire(hint.hintId, hint.title, coach.text, hint.icon, coach.chip, hint.glyph, hint.keys); continue; }
         }
         this._fire(hint.hintId, hint.title, hint.text, hint.icon, hint.chip, hint.glyph, hint.keys);
       }

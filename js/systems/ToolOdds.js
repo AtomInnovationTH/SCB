@@ -24,6 +24,7 @@
 
 import { Constants } from '../core/Constants.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
+import { resupplyIsOpenNow, resupplyIsOnTheWay } from './resupplyWords.js';
 import { glassDespinWords, keysDespinWords } from '../ui/hud/DespinHint.js';
 import {
   computeClingLockFactors,
@@ -268,7 +269,9 @@ function computeNetOdds(opts) {
   const range = opts.range;
 
   if (opts.netCount === 0) {
-    return { p: null, blocker: 'EMPTY', hint: 'magazine empty. Restock' };
+    // "Restock" points at the satellite only while it is open; on the trip it is "on arrival", else after the mission.
+    const when = resupplyIsOpenNow() ? '' : resupplyIsOnTheWay() ? ' on arrival' : ' after this mission';
+    return { p: null, blocker: 'EMPTY', hint: `magazine empty. Restock${when}` };
   }
 
   // Deterministic gates (live: range/geometry never cached). Width: presented width falls back to the scalar sizeMeter;

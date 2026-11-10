@@ -235,11 +235,15 @@ const WELCOME_FIELD = [
   // plate = flat panel-shard variant, material = the rendered colour (gold mli_mylar foil, blue solar_cell cell).
   //
   // tumbleDegS / tumbleAxis (optional) author the OPENING TUMBLE. Without them a piece keeps its creation-time class
-  // roll (fragment band 10–180 °/s): a 180 °/s blender read as chaos, and anything above
+  // roll (fragment band 10–180 °/s): a 180 °/s blender read as chaos, anything above
   // NET_TUMBLE_PENALTY.IN_SPEC_DEG (10 °/s) queued the `first_high_tumble_target` de-spin teach (TeachingSystem) on
-  // the first lock, out of context since the M1 lasso ignores tumble. #1 is 7 °/s on a fixed axis (identical opening
-  // every session); #2 15 °/s; #3+ deliberately stay on the class roll. Honoured ONLY by _spawnWelcomeField.
-  // Guarded by test-WelcomeField 'authored opening tumble' (threshold from Constants, not a magic number).
+  // the first lock (out of context since the M1 lasso ignores tumble), and anything above PAD_CONTACT.SPIN_MAX_DEG
+  // (30 °/s) is refused by the daughter's pad, so with the mother's four nets spent nothing could grab it (training
+  // chat 15, owner 11-10). #1 is 7 °/s on a fixed axis (identical opening every session); #2 15. #3-#7 carry
+  // `trainTumbleDegS` (12, 18, 10, 22, 8 °/s: all at or under 25, a margin below the pad's limit; random axis), read only
+  // in training missions 1-3 (`TRAINING_MISSIONS`); from mission 4 on they keep the class roll (a retyped cubesat #7 keeps
+  // its candidate's roll, which can be a fragment's). Honoured ONLY by _spawnWelcomeField.
+  // Guarded by test-WelcomeField 'authored opening tumble' and test-T15Fixes (thresholds from Constants).
   { types: ['fragment'], sizeM: 0.60, lowValue: true, appearMaterial: 'aluminum', appearPlate: true,
     massMin: 3, massMax: 3,  pin: true, fwdM: 22, latM: 0,
     tumbleDegS: 7, tumbleAxis: { x: 0.25, y: 1.0, z: 0.15 } },  // #1 aluminium panel shard (flat) — dead centre, ~22 m, drawn at its true size (sizeM); stately authored tumble (< IN_SPEC_DEG)
@@ -249,16 +253,16 @@ const WELCOME_FIELD = [
   { types: ['fragment'], sizeM: 0.45, appearMaterial: 'solar_cell', appearPlate: true,
     massMin: 5, massMax: 5,
     fwdMinM: Constants.NET_LOCK_RANGE_M * 1.15, fwdMaxM: Constants.NET_LOCK_RANGE_M * 1.40,
-    latM: 0, radM: 0 },                                         // #3 RANGE WALL — solar-cell shard, dead ahead ~104–126 m (just outside the 90 m net lock)
+    latM: 0, radM: 0, trainTumbleDegS: 12 },                  // #3 RANGE WALL — solar-cell shard, dead ahead ~104–126 m (just outside the 90 m net lock)
   // Medium/far tier: free orbits fanned left/right and up/down (≈8–10° half-angle).
   { types: ['fragment'], sizeM: 0.55, appearMaterial: 'aluminum', appearPlate: false,
-    massMin: 6, massMax: 6,  fwdMinM: 220,  fwdMaxM: 320,  latM: -40,  radM: 20 },  // #4 aluminium fragment ~220–320 m, left + up
+    massMin: 6, massMax: 6,  fwdMinM: 220,  fwdMaxM: 320,  latM: -40,  radM: 20, trainTumbleDegS: 18 },  // #4 aluminium fragment ~220–320 m, left + up
   { types: ['fragment'], sizeM: 0.95, appearMaterial: 'solar_cell', appearPlate: true,
-    massMin: 6, massMax: 6,  fwdMinM: 420,  fwdMaxM: 560,  latM: 75,   radM: -30 }, // #5 large thin solar-array section ~420–560 m, right + down
+    massMin: 6, massMax: 6,  fwdMinM: 420,  fwdMaxM: 560,  latM: 75,   radM: -30, trainTumbleDegS: 10 }, // #5 large thin solar-array section ~420–560 m, right + down
   { types: ['fragment'], sizeM: 0.70, appearMaterial: 'mli_mylar', appearPlate: true,
-    massMin: 8, massMax: 8,  fwdMinM: 700,  fwdMaxM: 900,  latM: -120, radM: 50 },  // #6 foil + strut bundle ~700–900 m, left + up
+    massMin: 8, massMax: 8,  fwdMinM: 700,  fwdMaxM: 900,  latM: -120, radM: 50, trainTumbleDegS: 22 },  // #6 foil + strut bundle ~700–900 m, left + up
   { types: ['cubesat'], sizeM: 0.30,
-    massMin: 10, massMax: 10, fwdMinM: 1100, fwdMaxM: 1400, latM: 170,  radM: -65 }, // #7 cubesat (small whole microsat) ~1100–1400 m, right + down
+    massMin: 10, massMax: 10, fwdMinM: 1100, fwdMaxM: 1400, latM: 170,  radM: -65, trainTumbleDegS: 8 }, // #7 cubesat (small whole microsat) ~1100–1400 m, right + down
 ];
 
 /** How often the per-piece distance sweep in _reseatDriftedWelcome runs, in REAL seconds (player-experience timer,
@@ -4206,6 +4210,10 @@ export class DebrisField {
       // player de-spin.
       if (Number.isFinite(spec.tumbleDegS)) {
         debris.tumbleRate = degToRad(spec.tumbleDegS);
+        debris._initialTumbleRate = debris.tumbleRate;
+      } else if (Number.isFinite(spec.trainTumbleDegS) && (this._currentMissionNumber || 1) <= TRAINING_MISSIONS) {
+        // training only (1-3): the daughter's pad refuses a piece above PAD_CONTACT.SPIN_MAX_DEG, so none opens that fast
+        debris.tumbleRate = degToRad(spec.trainTumbleDegS);
         debris._initialTumbleRate = debris.tumbleRate;
       }
       if (spec.tumbleAxis) {

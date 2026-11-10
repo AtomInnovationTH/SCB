@@ -342,6 +342,12 @@ export class CommsSystem {
      * @type {WeakSet<object>}
      */
     this._gateMarked = new WeakSet();
+    /** The gate entry of a stored line that came from a released hint (`_stampHint`), for `takeStaleHint`. @type {WeakMap<object, object>} */
+    this._hintHandles = new WeakMap();
+    /** The gate entry being posted right now (`_postReleased`); null otherwise. */
+    this._releasingHint = null;
+    /** Hints a withdrawn line sent back to the gate that it released at once: posted by the next `update`. */
+    this._repost = [];
     /** Raw ids of the daughters now holding station (STATION_KEEP_ENTERED / _EXITED): the "Press N" ask is stale once hers is gone. */
     this._stationKeeping = new Set();
     /** Count of the player's tool changes per raw daughter id (TOOL_SELECTED byPlayer): a held ask posted before one is stale. */
@@ -558,10 +564,50 @@ export class CommsSystem {
   _postReleased(released, current = null) {
     let repaint = false;
     for (const h of released) {
-      h.post();
+      this._releasingHint = h;   // the store functions stamp the line they build with this hint (`_stampHint`)
+      try { h.post(); } finally { this._releasingHint = null; }
       if (h.data !== current) repaint = true;
     }
     if (repaint) eventBus.emit(Events.COMMS_MESSAGE, { _internal: true, _repaint: true });
+  }
+
+  /**
+   * @private A stored line that comes from a hint the training gate released is marked `hint: true` with the gate's useful-input
+   * count at that moment (`hintInputs`), and its gate entry is remembered, so the comms panel can ask `takeStaleHint` before it
+   * draws a line that waited behind others while she acted. Only a line released through `_postReleased` is stamped (training
+   * 1-3 only: no gate, no stamp).
+   * Only the line built from the released hint's own payload is stamped: another line stored while the hint posts (the shown-hint
+   * listeners emit one) is a plain line and is never withdrawn.
+   * @param {object} msg the stored line
+   * @param {object} payload the raw payload the line was built from (`data` / `extra`)
+   */
+  _stampHint(msg, payload) {
+    const h = this._releasingHint;
+    if (!h || !payload || payload !== (h.own || h.data)) return;
+    msg.hint = true;
+    msg.hintInputs = typeof this._trainingGate.inputCount === 'function' ? this._trainingGate.inputCount() : 0;
+    this._hintHandles.set(msg, h);
+  }
+
+  /**
+   * The comms panel asks this before it draws the head of its waiting queue. A released training hint that has waited while she
+   * did something useful (the gate's input count moved) is not drawn: it leaves the log and goes back to the gate, which shows it
+   * after the next idle stretch only if it is still true (`_hintStale`) and replaces any copy it already holds (one per
+   * `_hintKey`: no duplicates). Anything else, and everything outside training 1-3, answers false and is drawn as ever.
+   * @param {object} msg a stored line
+   * @returns {boolean} true: the line was withdrawn, the panel must not draw it
+   */
+  takeStaleHint(msg) {
+    if (!msg || msg.hint !== true || !isTrainingNow() || typeof this._trainingGate.inputCount !== 'function') return false;
+    if (msg.hintInputs === this._trainingGate.inputCount()) return false;
+    const i = this.messages.indexOf(msg);
+    if (i >= 0) this.messages.splice(i, 1);
+    const h = this._hintHandles.get(msg);
+    if (h) {
+      const r = this._trainingGate.resubmit(h);
+      if (r.released.length) this._repost.push(...r.released);   // posted by the next update(), never inside the panel's own draw
+    }
+    return true;
   }
 
   /**
@@ -635,6 +681,7 @@ export class CommsSystem {
     if (kept) msg.keep = true;
     if (coach) msg.coach = true;
     if (result) msg.result = true;
+    this._stampHint(msg, data);
 
     this.messages.push(msg);
     GestureHints.noteChipLine(rawText);   // glass: a line that names an action key brings that chip up
@@ -891,6 +938,7 @@ export class CommsSystem {
     }
     // the training hint gate's clock: real seconds of play only (this runs only in the gameplay branch)
     const due = this._trainingGate.tick();
+    if (this._repost.length) due.unshift(...this._repost.splice(0));
     if (due.length) this._postReleased(due);
     if (!this._active) return;
 
@@ -1039,7 +1087,7 @@ export class CommsSystem {
       if (extra._kind === 'colour') return;
       if (extra._kind === 'hint') {
         const data = { ...extra, text, source, priority };
-        const r = this._trainingGate.submit({ data, post: () => {
+        const r = this._trainingGate.submit({ data, own: extra, post: () => {
           // re-rendered at release (see `_hintTextNow`)
           const t = this._hintTextNow(extra, text);
           if (t === text) { this._storeAdded(priority, source, text, rawText, channel, extra); return; }
@@ -1108,6 +1156,7 @@ export class CommsSystem {
     if (kept) msg.keep = true;
     if (coach) msg.coach = true;
     if (result) msg.result = true;
+    this._stampHint(msg, extra);
 
     this.messages.push(msg);
     GestureHints.noteChipLine(rawText);   // the text as passed in, before chipPhrase
@@ -1194,6 +1243,7 @@ export class CommsSystem {
   reset() {
     this.messages = [];
     this._trainingGate.reset();
+    this._repost = [];
     this._stationKeeping.clear();
     this._nextId = 0;
     // a shut gate stays shut and keeps its held lines (GAME_RESET can arrive after the hold began); renumber them so

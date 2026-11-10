@@ -1969,7 +1969,7 @@ export class AutopilotSystem {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: autopilotOffText(reason),
         priority: reason === 'DELTAV' || reason === 'COLLISION' ? 'warning' : 'info',
-        _keep: true,
+        _keep: true, _result: reason === 'TARGET_CAUGHT',   // the catch line is a result: the panel queue cap spares it (t15 F3)
       });
     }
     eventBus.emit(Events.SHOW_NOTIFICATION, { text: 'AUTOPILOT DISENGAGED', kind: 'memo' });

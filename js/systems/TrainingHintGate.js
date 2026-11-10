@@ -145,6 +145,7 @@ function ask(data, name, fallback) {
 /**
  * @typedef {object} HeldHint
  * @property {object} data the raw message payload (carries `_hintKey`, `_hintStale`, `_hintReady`)
+ * @property {object} [own] the payload the stored line is built from, when that is not `data` (CommsSystem's `addMessage` path)
  * @property {() => void} post posts it into the log (the owner's normal post path)
  */
 
@@ -160,6 +161,9 @@ export class TrainingHintGate {
     /** @type {HeldHint[]} oldest first */
     this._held = [];
     this._idle = 0;
+    /** Useful inputs counted so far (`noteInput` and `noteHolding`, wherever either zeroes the idle clock). A line that was
+     *  released and waits in the comms panel compares this with the count it was stored at: a change means she acted. Never reset. */
+    this._inputs = 0;
     this._lastTick = null;
     this._mission = getTrainingMission();
   }
@@ -172,6 +176,9 @@ export class TrainingHintGate {
 
   /** @returns {number} real ms of doing nothing useful, as the gate counts it */
   idleMs() { return this._idle; }
+
+  /** @returns {number} useful inputs counted so far (see `_inputs`); a released hint is "fresh" while this has not moved */
+  inputCount() { return this._inputs; }
 
   /** Another "do this" surface (a teaching card) showed a hint: the idle clock restarts, as when a held line is released. */
   noteHintShown() { this._idle = 0; }
@@ -227,6 +234,7 @@ export class TrainingHintGate {
    */
   noteInput(key) {
     this._idle = 0;
+    this._inputs++;
     for (const fn of inputListeners) {
       try { fn(key ? String(key).toUpperCase() : null); } catch (e) { /* a listener never breaks input */ }
     }
@@ -242,7 +250,7 @@ export class TrainingHintGate {
    * A useful key is HELD (L, or an arrow that acts): the idle clock stays at 0 for as long as it is held. Unlike `noteInput` this
    * is not "she did something new": no held line is dropped and no input listener runs (the keydown did that once).
    */
-  noteHolding() { this._idle = 0; }
+  noteHolding() { this._idle = 0; this._inputs++; }
 
   /**
    * A hint is posted. Held unless she has been idle long enough; a hint whose ask is already done is dropped.
@@ -261,6 +269,19 @@ export class TrainingHintGate {
     const released = this._drain();
     const held = this._held.includes(hint);
     return { dropped: !held && !released.includes(hint), held, released };
+  }
+
+  /**
+   * A released hint that waited in the comms panel queue is withdrawn and goes back (`CommsSystem.takeStaleHint`). Like `submit`,
+   * except that a hint whose `_hintKey` is already held is dropped: the held copy is newer (it was submitted after this one was
+   * released), and the gate collapses to the newest text.
+   * @param {HeldHint} hint
+   * @returns {{ dropped: boolean, held: boolean, released: HeldHint[] }} as `submit`
+   */
+  resubmit(hint) {
+    const key = hint.data._hintKey;
+    if (key && this._held.some((h) => h.data._hintKey === key)) return { dropped: true, held: false, released: [] };
+    return this.submit(hint);
   }
 }
 
