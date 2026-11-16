@@ -60,6 +60,7 @@ import { clamp01, clamp } from '../core/MathUtil.js';
 import { isDevHost } from '../core/DevHost.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { pairSetupOffered } from '../systems/PairSetup.js';
 
 const FLOOR_COUNT = FloorContract.FLOORS.length;
 /** The four keys the turn pad may write — never any other. */
@@ -263,7 +264,7 @@ export class TouchControls {
                 paneDensity = null, openShop = null, toggleLibrary = null,
                 telemetry = null, tune = null,
                 inputKeys = null, cameraSystem = null, onTap = null, onHold = null,
-                pressKey = null, openPane = null, onEdgeTouch = null, pairOffered = null } = {}) {
+                pressKey = null, openPane = null, onEdgeTouch = null, pairOffered = null, pairSetupOffered: setupOffered = null } = {}) {
     this._canvas = canvas || null;
     this._router = wheelRouter || null;
     this._ladder = ladderController;
@@ -280,6 +281,10 @@ export class TouchControls {
     // DECISIONS §32 iPad: () => true while the game offers a pair; the PAIR button is shown only then.
     this._pairOffered = (typeof pairOffered === 'function') ? pairOffered : null;
     this._pairBtn = null;
+    // The SET UP PAIR button (plan sky-1116, lane L-pair): shown while the game offers the pair-setup burn; presses KeyY. The default reads
+    // PairSetup's own offer, so the hub wires nothing.
+    this._pairSetupOffered = (typeof setupOffered === 'function') ? setupOffered : pairSetupOffered;
+    this._setupBtn = null;
     this._openPane = (typeof openPane === 'function') ? openPane : null;
     this._onEdgeTouch = (typeof onEdgeTouch === 'function') ? onEdgeTouch : null;
     const userTune = (typeof window !== 'undefined' && window.__TOUCH_TUNE) || null;
@@ -359,6 +364,11 @@ export class TouchControls {
       this._pairBtn.removeEventListener('click', this._onPairTap);
       if (this._pairBtn.parentNode) this._pairBtn.parentNode.removeChild(this._pairBtn);
       this._pairBtn = null;
+    }
+    if (this._setupBtn) {
+      this._setupBtn.removeEventListener('click', this._onSetupTap);
+      if (this._setupBtn.parentNode) this._setupBtn.parentNode.removeChild(this._setupBtn);
+      this._setupBtn = null;
     }
     if (this._padEl) {
       this._padEl.removeEventListener('touchstart', this._onPadStart);
@@ -681,6 +691,27 @@ export class TouchControls {
     }
     const d = want ? '' : 'none';
     if (el.style.display !== d) el.style.display = d;
+  }
+
+  /** @private SET UP PAIR button: shown while the pair-setup burn is offered, under the same rules as the PAIR button. */
+  _syncSetup() {
+    const el = this._setupBtn;
+    if (!el) return;
+    let want = false;
+    try { want = !!(this._pairSetupOffered && this._pairSetupOffered()); } catch (_err) { want = false; }
+    if (want && this._gameState && typeof this._gameState.isGameplay === 'function' && !this._gameState.isGameplay()) want = false;
+    if (want && this._ladder && typeof this._ladder.paneState === 'function') {
+      let ps = null;
+      try { ps = this._ladder.paneState(); } catch (_err) { ps = null; }
+      if (ps && ps.library) want = false;
+    }
+    const d = want ? '' : 'none';
+    if (el.style.display !== d) el.style.display = d;
+  }
+
+  /** Read-only (tests). */
+  isSetupButtonShown() {
+    return !!(this._setupBtn && this._setupBtn.style.display !== 'none');
   }
 
   /** Read-only (tests). */
@@ -1008,6 +1039,18 @@ export class TouchControls {
         -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
       }
       #touch-pair-btn:active { background: rgba(255, 207, 74, 0.22); }
+      /* pair setup (plan sky-1116, L-pair): the SET UP PAIR button sits one button-height above PAIR; same look. */
+      #touch-pair-setup-btn {
+        position: fixed; z-index: ${TURN_PAD_Z};
+        left: ${TURN_PAD_CENTRE_X + TURN_PAD_PX / 2 + 16}px; bottom: ${TURN_PAD_CENTRE_FROM_BOTTOM - 24 + 60}px;
+        min-width: 96px; min-height: 48px; box-sizing: border-box; padding: 10px 14px;
+        border-radius: 8px; border: 1px solid rgba(255, 207, 74, 0.9);
+        background: rgba(5, 10, 20, 0.86); color: #ffcf4a;
+        font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.14em;
+        pointer-events: auto; touch-action: manipulation;
+        -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+      }
+      #touch-pair-setup-btn:active { background: rgba(255, 207, 74, 0.22); }
       #touch-turn-pad.touch-idle { opacity: ${this._tune.idleOpacity}; }
       #touch-turn-pad.touch-pad-held { background: rgba(0, 255, 136, 0.14); border-color: rgba(0, 255, 136, 0.95); }
       #touch-turn-pad i {
@@ -1092,6 +1135,22 @@ export class TouchControls {
       document.body.appendChild(btn);
       this._pairBtn = btn;
       this._syncPair();
+
+      // The SET UP PAIR button (pair setup, plan sky-1116): the same key path as the keyboard's Y.
+      const sb = document.createElement('button');
+      sb.type = 'button';
+      sb.id = 'touch-pair-setup-btn';
+      sb.textContent = 'SET UP PAIR';
+      sb.style.display = 'none';
+      this._onSetupTap = () => {
+        this._touched();
+        if (this._telemetry) this._telemetry.log('pairSetup', { code: 'KeyY' });
+        if (this._pressKey) { try { this._pressKey('KeyY'); } catch (_err) { /* dep */ } }
+      };
+      sb.addEventListener('click', this._onSetupTap);
+      document.body.appendChild(sb);
+      this._setupBtn = sb;
+      this._syncSetup();
     }
 
     // The rail grip lives OUTSIDE #touch-controls: it must stack above the rail (#ladder-rail z-index 35), which the
@@ -1115,6 +1174,7 @@ export class TouchControls {
       this._syncChrome();
       this._syncPad();
       this._syncPair();
+      this._syncSetup();
     }, this._tune.sliderSyncMs);
   }
 

@@ -481,10 +481,35 @@ export function nextShadowTransition(orbit, sunDirAt, opts = {}) {
  * It is the MEAN-solar-activity air (rows 100-180 km equal the CIRA mean values). Above 1000 km the density is 0; below 0 km it is the
  * sea-level 1.225. See docs/research/2026-10-trips-by-height.md.
  *
+ * `atmosphericDensityBase` is that table alone. `atmosphericDensity` is the table times the game's air model, when one is
+ * installed (`setAirModel`: js/systems/SunStorms.js, the Sun's level and the day's storm, plan sky-1116): with none installed
+ * (tests, the menu, training missions 1-3) the two are the same number.
+ *
  * @param {number} altitudeKm - Altitude above Earth surface (km)
  * @returns {number} Atmospheric density (kg/m^3)
  */
 export function atmosphericDensity(altitudeKm) {
+  const rho = atmosphericDensityBase(altitudeKm);
+  if (airModel === null || !(rho > 0) || altitudeKm < 0) return rho;
+  return rho * airModel.multiplier(altitudeKm);
+}
+
+/** @type {{multiplier: (altKm: number) => number, realDrag: () => boolean}|null} the installed air model (SunStorms) */
+let airModel = null;
+
+/**
+ * Install (or with null remove) the air model: `multiplier(altKm)` scales the table today, `realDrag()` says whether every
+ * debris piece feels its own drag (true) or the welcome pieces keep her ballistic coefficient (false: training missions 1-3,
+ * and everything with no model).
+ * @param {{multiplier: (altKm: number) => number, realDrag: () => boolean}|null} model
+ */
+export function setAirModel(model) { airModel = model && typeof model.multiplier === 'function' ? model : null; }
+
+/** @returns {boolean} true when an air model is installed and says pieces feel their own drag (DebrisField.dragDecelFor reads it) */
+export function airModelRealDrag() { return airModel !== null && airModel.realDrag() === true; }
+
+/** The mean-Sun table alone (see `atmosphericDensity`): what long-lived estimates (orbit life) and the quiet-day comparison read. */
+export function atmosphericDensityBase(altitudeKm) {
   if (altitudeKm < 0) return 1.225;
   if (altitudeKm > 1000) return 0;
 
@@ -533,7 +558,18 @@ export function atmosphericDensity(altitudeKm) {
 
 /** Atmospheric drag deceleration (km/s²): `altitudeKm` km, `velocity` km/s, `area` m², `mass` kg, `cd` default 2.2. */
 export function atmosphericDrag(altitudeKm, velocity, area, mass, cd = 2.2) {
-  const rho = atmosphericDensity(altitudeKm);
+  return dragForDensity(atmosphericDensity(altitudeKm), velocity, area, mass, cd);
+}
+
+/**
+ * The same drag on the mean-Sun table times a multiplier you give (`mult` 1 = the table alone): a trip that walks the calendar
+ * day by day, or an orbit-life estimate (mult 1: years of drag are the mean, not today's storm). Ignores the installed air model.
+ */
+export function atmosphericDragOn(altitudeKm, velocity, area, mass, mult = 1, cd = 2.2) {
+  return dragForDensity(atmosphericDensityBase(altitudeKm) * mult, velocity, area, mass, cd);
+}
+
+function dragForDensity(rho, velocity, area, mass, cd) {
   // velocity in km/s → m/s for drag equation
   const vMs = velocity * 1000;
   const dragForce = 0.5 * rho * vMs * vMs * cd * area;

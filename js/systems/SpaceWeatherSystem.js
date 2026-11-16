@@ -9,6 +9,7 @@ import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { persistenceManager } from './PersistenceManager.js';
+import { stormMultiplier, multText } from './SunStorms.js';
 
 // `icon` is a short text tag (<= 4 chars) the HUD weather badge shows beside `name` (no pictographs anywhere; the comms
 // line carries the name alone).
@@ -37,17 +38,18 @@ const WEATHER_TYPES = {
     name: 'Geomagnetic Storm',
     icon: 'GEO',
     color: '#9933ff',
+    // A real storm day (plan sky-1116): the calendar decides (SunStorms), never a random timer. The effect below lasts a short while
+    // (the radiation dose, the audio pulse); the thicker air itself lasts the whole day (`atmosphericDensity`).
+    calendar: true,
     effects: {
       commsBandwidth: 0.5,
-      atmosphericDrag: 1.3,
     },
     minDuration: SW.GEOMAGNETIC_MIN_DURATION,
     maxDuration: SW.GEOMAGNETIC_MAX_DURATION,
-    minInterval: SW.GEOMAGNETIC_MIN_INTERVAL,
-    maxInterval: SW.GEOMAGNETIC_MAX_INTERVAL,
-    // Only the storm's own start is announced: nothing in the game reads its comms or drag multipliers, so the line
-    // claims no effect (it used to promise a boost to the removed E-key tether; DECISIONS §68 row 2).
-    commsAlert: (kp) => `SPACE WEATHER: Geomagnetic storm. Kp index ${kp}.`,
+    // The radio line of a real storm day: its strength, what the air at her height is, and what it does to pieces.
+    commsAlert: (kp, mult, altKm) => (mult > 0
+      ? `Storm today, Kp ${kp}: the air at ${altKm} km is ${multText(mult)} times thicker than on a quiet day. Light pieces sink faster and drift ahead along the track.`
+      : `Storm today, Kp ${kp}: the air is thicker than on a quiet day. Light pieces sink faster and drift ahead along the track.`),
     codexTrigger: 'van_allen_belts',
   },
 
@@ -93,6 +95,8 @@ export class SpaceWeatherSystem {
    * @param {object} [opts]
    * @param {object} [opts.catalogLoader] optional seeded-replay source. When ready, replaces random-roll scheduling with a
    *        deterministic timeline from `/data/space-weather.json`; otherwise falls back to random intervals.
+   * @param {object} [opts.sunStorms] the game's storm calendar (SunStorms); with it real storm days start the storm event and say so on the radio
+   * @param {() => number} [opts.getAltKm] her height now (km), for the storm line's air number
    */
   constructor(opts = {}) {
     /** @type {Map<string, { startTime: number, duration: number, effects: object, def: object }>} */
@@ -114,8 +118,14 @@ export class SpaceWeatherSystem {
 
     // Timers stay initialized in BOTH modes so a mid-session fallback still works (randomized first occurrence).
     for (const [type, def] of Object.entries(WEATHER_TYPES)) {
-      this.timers[type] = randRange(def.minInterval * 0.5, def.maxInterval);
+      if (!def.calendar) this.timers[type] = randRange(def.minInterval * 0.5, def.maxInterval);
     }
+
+    // The real storm calendar (SunStorms) and her height for the radio line; both optional (a test builds none).
+    this._sky = opts.sunStorms || null;
+    this._getAltKm = typeof opts.getAltKm === 'function' ? opts.getAltKm : null;
+    this._seenDay = null;
+    this._announceOwed = false;
 
     // Skill gate: suppress weather until power management is discovered
     this._powerMgmtDiscovered = false;
@@ -127,10 +137,13 @@ export class SpaceWeatherSystem {
     this._weatherAllowed = false;
     eventBus.on(Events.MISSION_START, (d) => {
         this._weatherAllowed = d.profile.weather;
+        this._announceOwed = true;       // a storm day that is on when a mission starts is announced then
     });
 
     eventBus.on(Events.GAME_RESET, () => {
         this._weatherAllowed = false;
+        this._seenDay = null;
+        this._announceOwed = false;
         this._firedReplayIdx = new Set();
         this._replayCursor = 0;
     });
@@ -175,9 +188,10 @@ export class SpaceWeatherSystem {
   _catalogTypeToKey(t) {
     switch (String(t || '').toLowerCase()) {
       case 'solar_flare':  return 'SOLAR_FLARE';
+      // geomagnetic / cme / proton_event: the catalogue's storms are gone (plan sky-1116). Storm days come from the calendar (SunStorms).
       case 'geomagnetic':
       case 'cme':
-      case 'proton_event': return 'GEOMAGNETIC_STORM';
+      case 'proton_event': return null;
       case 'saa_passage':  return 'SAA_PASSAGE';
       case 'eclipse':      return 'ECLIPSE_ENTRY';
       case 'quiet':        return null;
@@ -218,6 +232,7 @@ export class SpaceWeatherSystem {
       }
     } else {
       for (const [type, def] of Object.entries(WEATHER_TYPES)) {
+        if (def.calendar) continue;                 // storm days come from the calendar, never a random timer (plan sky-1116)
         if (this.activeEvents.has(type)) continue;
 
         this.timers[type] -= dt;
@@ -232,6 +247,8 @@ export class SpaceWeatherSystem {
         }
       }
     }
+
+    if (this._tickCalendarStorm()) stateChanged = true;
 
     for (const [type, event] of this.activeEvents.entries()) {
       event.elapsed = (event.elapsed || 0) + dt;
@@ -275,9 +292,6 @@ export class SpaceWeatherSystem {
     if (type === 'SOLAR_FLARE') {
       const classes = ['C4.2', 'M1.7', 'M3.5', 'X1.1'];
       alertText = def.commsAlert(classes[Math.floor(Math.random() * classes.length)]);
-    } else if (type === 'GEOMAGNETIC_STORM') {
-      const kp = 5 + Math.floor(Math.random() * 4); // Kp 5-8
-      alertText = def.commsAlert(kp);
     } else {
       alertText = def.commsAlert();
     }
@@ -310,17 +324,85 @@ export class SpaceWeatherSystem {
     const def = WEATHER_TYPES[type];
     this.activeEvents.delete(type);
 
-    this.timers[type] = randRange(def.minInterval, def.maxInterval);
+    if (!def.calendar) this.timers[type] = randRange(def.minInterval, def.maxInterval);
 
     eventBus.emit(Events.WEATHER_EFFECT_END, { type });
 
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      priority: 'LOW',
-      source: 'WEATHER',
-      text: `${def.name} has subsided. Normal operations resumed.`,
-    });
+    // A real storm day says nothing when its short effect ends: the thicker air goes on all day, so "subsided" would be untrue.
+    if (!event.real) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        priority: 'LOW',
+        source: 'WEATHER',
+        text: `${def.name} has subsided. Normal operations resumed.`,
+      });
+    }
 
     console.log(`[SpaceWeather] ${def.icon} ${def.name} ended`);
+  }
+
+  /**
+   * The real calendar (plan sky-1116): once a frame, look at the game day. A new day (a trip landed, a load, the first frame) or a new
+   * mission on a storm day starts the storm's short effect and says on the radio that it is a storm day, how strong, and what the
+   * air is at her height. Nothing in training missions 1-3 or without a calendar (`sunStorms.today()` is null there).
+   * @returns {boolean} the active events changed
+   * @private
+   */
+  _tickCalendarStorm() {
+    const sky = this._sky;
+    if (!sky) return false;
+    const st = sky.today();
+    if (!st) { this._seenDay = null; return false; }
+    const newDay = st.dayIdx !== this._seenDay;
+    if (!newDay && !this._announceOwed) return false;
+    this._seenDay = st.dayIdx;
+    this._announceOwed = false;
+    let changed = false;
+    const key = 'GEOMAGNETIC_STORM';
+    if (newDay && this.activeEvents.has(key)) { this._endEvent(key); changed = true; }
+    // A mission whose profile has no weather (missions 4-9) keeps the air and the radio line but none of the storm's effects: a storm
+    // still running from the mission before ends here.
+    if (!this._weatherAllowed && this.activeEvents.has(key)) { this._endEvent(key); changed = true; }
+    if (st.kp >= 5) {
+      if (!this.activeEvents.has(key)) { if (this._startRealStorm(key, WEATHER_TYPES[key], st)) changed = true; }
+      else this._sayRealStorm(WEATHER_TYPES[key], st);          // a new mission on a storm day already running: said again
+    }
+    return changed;
+  }
+
+  /** @private The radio line of a real storm day: strength, the air at her height, what it does to pieces. */
+  _sayRealStorm(def, st) {
+    const alt = this._getAltKm ? this._getAltKm() : NaN;
+    const mult = Number.isFinite(alt) ? stormMultiplier(alt, st.f107, st.kp) : 0;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      priority: 'MEDIUM',
+      source: 'WEATHER',
+      text: def.commsAlert(st.kp, mult, Math.round(alt)),
+    });
+  }
+
+  /**
+   * @private A real storm day begins: the radio line always; the effect event (radiation dose, debris-hit risk, halved bandwidth,
+   * audio) only on a mission whose profile allows weather, and then under the skill gate as ever. The air multiplier needs neither.
+   * @returns {boolean} an effect event was registered
+   */
+  _startRealStorm(type, def, st) {
+    if (!this._weatherAllowed) { this._sayRealStorm(def, st); return false; }
+    const duration = randRange(def.minDuration, def.maxDuration);
+    const event = { startTime: this.totalTime, duration, elapsed: 0, effects: { ...def.effects }, def, real: true, kp: st.kp };
+    this.activeEvents.set(type, event);
+    this._sayRealStorm(def, st);
+    if (!this._powerMgmtDiscovered) return true;     // the radiation and audio effects keep their skill gate
+    eventBus.emit(Events.WEATHER_EFFECT_START, {
+      type,
+      effects: event.effects,
+      duration,
+      name: def.name,
+      icon: def.icon,
+      color: def.color,
+      kp: st.kp,
+    });
+    console.log(`[SpaceWeather] ${def.icon} ${def.name} (real storm day, Kp ${st.kp}) started (${Math.round(duration)}s)`);
+    return true;
   }
 
   _defaultEffects() {
@@ -328,7 +410,6 @@ export class SpaceWeatherSystem {
       sensorRange: 1.0,
       solarPower: 1.0,
       commsBandwidth: 1.0,
-      atmosphericDrag: 1.0,
       radiationRisk: false,
       sensorNoise: false,
       thermalStress: false,
@@ -345,7 +426,6 @@ export class SpaceWeatherSystem {
       if (fx.sensorRange != null) merged.sensorRange *= fx.sensorRange;
       if (fx.solarPower != null) merged.solarPower *= fx.solarPower;
       if (fx.commsBandwidth != null) merged.commsBandwidth *= fx.commsBandwidth;
-      if (fx.atmosphericDrag != null) merged.atmosphericDrag *= fx.atmosphericDrag;
       if (fx.radiationRisk) merged.radiationRisk = true;
       if (fx.sensorNoise) merged.sensorNoise = true;
       if (fx.thermalStress) merged.thermalStress = true;

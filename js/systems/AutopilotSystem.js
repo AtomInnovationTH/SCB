@@ -25,7 +25,7 @@ import { GestureHints } from '../ui/hud/GestureHints.js';
 import { tripRefuses } from './TransferTrip.js';
 import { outOfMotherNetsLine } from './resupplyWords.js';
 import { wrapRefusalLine, linesCross, pairReadyLine, pairLessonWaitLine, pairLessonSkipLine, pairSavedLine, pairSameLine, pairUsedLine, PAIR_PARK_LINE } from './PieceClaim.js';
-import { checkActiveSatArming } from './ActiveSatGuard.js';
+import { checkActiveSatArming } from './ActiveSatGuard.js'; import { PairSetup } from './PairSetup.js';   // (one line: the file's line pins, test-CodexAdr2026 :68 and others, stay put)
 import { daughterMassKg } from './daughterFittings.js';   // her launch mass includes the relay mirror / laser the player bought
 import { DEG2RAD, degToRad, clamp01, clamp } from '../core/MathUtil.js';
 
@@ -2330,7 +2330,7 @@ export class AutopilotSystem {
     // Reel-in always ends with a stow/snap/miss event; an internal safety cap releases if one is ever missed.
     this._tickAttitudeHold(dtWorld > 0 ? dt : 0);   // the 120 s cap does not run while the world is held
     this._tickLaunchHold(dtWorld > 0 ? dt : 0);     // the hold from the end of the aim to the spring
-    if (dtWorld > 0) this._tickPairOffer(dt);       // second piece for a picked daughter's opposite partner; before the pre-turn reads it
+    if (dtWorld > 0) { this._tickPairOffer(dt); this._tickPairSetup(dt, dtWorld); }   // second piece for a picked daughter's opposite partner; before the pre-turn reads it. Then the pair-setup burn (PairSetup.js, key Y)
     if (dtWorld > 0) this._tickPairLesson(dt);      // Mission 2 coach beat's setup; after the offer's look, which it waits on
     this._tickPreturn(dt, dtWorld);
 
@@ -4240,6 +4240,30 @@ export class AutopilotSystem {
     if (this._pairSearch && am && typeof am.getSelectedArm === 'function') { const a = am.getSelectedArm(); if (a !== o.armA && a !== o.armB) return null; }
     return o;
   }
+
+  /** The pair-setup burn's offer (`{key, idA, idB, T, gasG, ...}`) or null (PairSetup.js). */
+  getPairSetupOffer() { return this._pairSetup ? this._pairSetup.getOffer() : null; }
+
+  /** The accept key (Y) or the touch tap: fly the offered pair-setup burn. @returns {boolean} true when it started */
+  acceptPairSetup() { return this._pairSetupGet().accept(); }
+
+  /** @returns {object|null} the running pair-setup burn, null when none (read-only) */
+  getPairSetupBurn() { return this._pairSetup ? this._pairSetup.getBurn() : null; }
+
+  /** @returns {object|null} the piece to give the reticle's PAIR mark after a pair-setup arrival (until the game's own pair offer takes over) */
+  getPairSetupMarkPiece() { return this._pairSetup ? this._pairSetup.getMarkPiece() : null; }
+
+  /** @private the one PairSetup, made on first use; the pair solver's functions go in so PairSetup imports nothing from here (no cycle) */
+  _pairSetupGet() {
+    if (!this._pairSetup) {
+      this._pairSetup = new PairSetup(this, { solvePairAimAll, pairTethersCross, pairAttitudeFor, pairGeometry, pairRotationOf });
+      eventBus.on(Events.GAME_RESET, () => { if (this._pairSetup) this._pairSetup.reset(); });
+    }
+    return this._pairSetup;
+  }
+
+  /** @private one frame of the pair setup (a look while none is offered, or the burn). dtWorld > 0 only. */
+  _tickPairSetup(dt, dtWorld) { this._pairSetupGet().tick(dt, dtWorld); }
 
   _pairPieceOk(d) {
     return !!d && d.alive !== false && !d._disposed && !d.hazard && !d.isBag && !!d._scenePosition;

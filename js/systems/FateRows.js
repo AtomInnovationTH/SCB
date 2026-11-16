@@ -26,7 +26,8 @@ import { Constants } from '../core/Constants.js';
 import { pieceValues, fatePay } from './BigPieceValues.js';
 import { pushTargetKm, sailLifeYears, lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
 import { creditsText, kgText, daysText } from './WhereNextRows.js';
-import { tripProfile, realThrustN, daysWithTurnWait } from './TripProfile.js';
+import { realThrustN, daysWithTurnWait } from './TripProfile.js';
+import { cachedTripProfile } from './RouteCost.js';
 import { pieceName, pieceNameCap, bigBodiesOf, FATES } from './BigPieces.js';
 
 const DOT = '\u00b7';
@@ -342,9 +343,6 @@ function meltRow(d, ctx) {
 }
 
 
-const _backCache = new Map();
-const BACK_CACHE_MAX = 32;
-
 /**
  * The context the rows read, from the live game: her height, `planTo` (the registry's own: the gas now, her mass now), `planBack` (the
  * climb back WITHOUT the piece: the push lets it go, so her mass then is her mass now less the piece's), the berthed satellite or none,
@@ -365,14 +363,9 @@ export function fateContext(deps = {}) {
       if (!plan || !(mass > 0) || !Number.isFinite(toKm)) return null;
       const fuel = reg && typeof reg._loadedGas === 'function' ? reg._loadedGas() : null;
       const args = { fromKm: atKm, toKm, massKg: mass, thrustN: realThrustN(fuel), ispS: plan.ispS, areaM2: plan.areaM2, cos: 1 };
-      const key = [args.fromKm, args.toKm, args.massKg, args.thrustN, args.ispS, args.areaM2].join('|');
-      let hit = _backCache.get(key);
-      if (hit === undefined) {
-        hit = tripProfile(args);
-        if (_backCache.size >= BACK_CACHE_MAX) _backCache.delete(_backCache.keys().next().value);
-        _backCache.set(key, hit);
-      }
-      return hit;
+      // Plan sky-1116: priced on the game's calendar through RouteCost's cache (its key holds the date), as `transferLeg` is, so the
+      // climb back changes after a landing or a storm day instead of staying at the first answer.
+      return cachedTripProfile(args);
     },
     berth: reg && typeof reg.berthedSatellite === 'function' ? reg.berthedSatellite() : null,
     sats: reg && typeof reg.satellites === 'function' ? reg.satellites() : [],

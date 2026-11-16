@@ -14,7 +14,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
-import { atmosphericDrag } from '../entities/OrbitalMechanics.js';
+import { atmosphericDragOn } from '../entities/OrbitalMechanics.js';
 
 const YEAR_S = 365.25 * 86400;
 const LEO_STOP_KM = 180;        // below this the body is gone (the game's LEO_MIN_ALT)
@@ -29,7 +29,7 @@ export function lifetimeYears(altKm, massKg, areaM2) {
   const RE = Constants.EARTH_RADIUS_KM, mu = Constants.MU_EARTH;
   const rate = (a) => {            // da/dt, km/s
     const v = Math.sqrt(mu / a);
-    return -2 * Math.sqrt(a * a * a / mu) * atmosphericDrag(a - RE, v, areaM2, massKg);
+    return -2 * Math.sqrt(a * a * a / mu) * atmosphericDragOn(a - RE, v, areaM2, massKg, 1);   // the mean-Sun air: years of drag are not today's storm (plan sky-1116)
   };
   let a = RE + altKm, t = 0;
   while (a - RE > LEO_STOP_KM) {

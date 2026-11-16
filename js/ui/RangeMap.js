@@ -35,6 +35,7 @@ import {
   rangeMapRect, buildLayout, reachBand, ringOfRow, spiralPoints, spiralAt, callArrow, orbitCount, hitTest, textLines,
 } from '../systems/RangeMapModel.js';
 import { degToRad, clamp01 } from '../core/MathUtil.js';
+import { sunStorms } from '../systems/SunStorms.js';
 
 export const RANGE_MAP_ID = 'range-map';
 const RM = () => Constants.RANGE_MAP;
@@ -484,6 +485,7 @@ export class RangeMap {
       showMission: d.phase === 'list' && !berthed && !!tally, gainedKg: tally ? tally.gainedKg : NaN, usedKg: tally ? tally.usedKg : NaN,
       orbits: this._plan && this._plan.profile && Array.isArray(this._plan.profile.samples) ? orbitCount(this._plan.profile.samples) : 0,
       day: td ? td.day : NaN, days: td ? td.days : NaN, called: d.phase === 'call',
+      sun: sunStorms.sunLine(reg && typeof reg.altitudeKm === 'function' ? reg.altitudeKm() : NaN),   // plan sky-1116: the Sun and the air at her height ('' in training)
     });
     for (let i = 0; i < t.length; i++) {
       if (t[i] !== this._text[i]) { this._text[i] = t[i]; if (this._lines[i]) this._lines[i].textContent = t[i]; }

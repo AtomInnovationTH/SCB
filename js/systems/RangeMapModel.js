@@ -401,9 +401,10 @@ export const CALL_LINE = 'The resupply satellite is on its way';
 
 /**
  * The lines under the canvas, packed top-down and padded with '' to TEXT_LINES: the gas aboard, then (choosing, not berthed) what her catches gave
- * and what her own moves used, then how often she circles Earth on the chosen path, then the day of the trip (or the called satellite's note).
+ * and what her own moves used, then how often she circles Earth on the chosen path, then the day of the trip (or the called satellite's note),
+ * then (plan sky-1116) one line on the Sun and the air at her height (`sun`, SunStorms.sunLine: "Sun middling, air x0.65 here"; none in training).
  * Each fits the smallest canvas (test-RangeMapModel pins the widest case).
- * @param {{aboardKg?: number, tankKg?: number, gainedKg?: number, usedKg?: number, showMission?: boolean, orbits?: number, day?: number, days?: number, called?: boolean}} [p]
+ * @param {{aboardKg?: number, tankKg?: number, gainedKg?: number, usedKg?: number, showMission?: boolean, orbits?: number, day?: number, days?: number, called?: boolean, sun?: string}} [p]
  * @returns {string[]}
  */
 export function textLines(p = {}) {
@@ -414,6 +415,7 @@ export function textLines(p = {}) {
   if (orbit) out.push(orbit);
   if (p.called) out.push(CALL_LINE);
   else if (Number.isFinite(p.day) && Number.isFinite(p.days)) out.push(tripDayText(p.day, p.days));
+  if (typeof p.sun === 'string' && p.sun) out.push(p.sun);
   const n = R().TEXT_LINES;
   while (out.length < n) out.push('');
   return out.slice(0, n);

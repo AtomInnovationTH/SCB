@@ -28,7 +28,8 @@
  * drift between heights (J2).
  */
 import { Constants } from '../core/Constants.js';
-import { atmosphericDrag } from '../entities/OrbitalMechanics.js';
+import { atmosphericDrag, atmosphericDragOn } from '../entities/OrbitalMechanics.js';
+import { dayAirMultiplier, dayOf, kpOnDay } from './SunStorms.js';
 import { motherDragAreaM2, referenceDragAreaM2, wingNormalAt } from '../entities/MotherDragArea.js';
 import { DEG2RAD, clamp01, clamp } from '../core/MathUtil.js';
 
@@ -115,9 +116,15 @@ export function daysWithTurnWait(days, waitS) {
  * @param {number} [p.cos=1]       the share of the push that goes the way she wants, 0..1 (the cos of her angle to it)
  * @param {boolean} [p.drag=true]  false = the air is off (the research doc's "drag off" case)
  * @param {number} [p.stepS]       game seconds per step (default `Constants.TRIP.PROFILE_STEP_S`)
+ * @param {{startMs: number, seed: number}|null} [p.sky] the calendar (plan sky-1116): the departure date (ms, UTC) and the save's storm seed.
+ *                                 With it every day of the trip has its own Sun level and storm (SunStorms.dayAirMultiplier); without it
+ *                                 the air is the installed air model's (SunStorms for today in the game, the plain table in a test).
  * @returns {{ok: boolean, reason: (string|null), dir: number, fromKm: number, toKm: number, days: number, tEndS: number,
  *   m0: number, m1: number, gasKg: number, dvMps: number,
- *   samples: Array<{t: number, a: number, m: number}>}}
+ *   samples: Array<{t: number, a: number, m: number}>,
+ *   storm?: {days: Array<{dayIdx: number, kp: number}>, gasExtraKg: number, daysExtra: number, sinkExtraKm: number}}}
+ *   `storm` (only when the trip crosses a storm day): the days, and what the storm cost against the same trip on quiet days
+ *   (the Sun's level kept): extra gas, extra days, and extra sinking (km the air took off her, summed over the flight).
  *   `samples`: t game seconds from departure, a semi-major axis in km, m mass in kg (at most ~1200, first and last included).
  *   `ok` false: `reason` 'drag' (the air beats the push and she never gets there), 'push' (no push the way she wants),
  *   'days' (not arrived by TRIP.PROFILE_MAX_DAYS), 'input' (a number was not usable).
@@ -154,41 +161,76 @@ export function tripProfile(p) {
   const push = dir * cos * T;                     // N along her motion (signed)
   const aTarget = RE + toKm;
   const tMax = C.TRIP.PROFILE_MAX_DAYS * SECONDS_PER_DAY;
+  // The calendar (plan sky-1116): with `sky` the trip walks the days one by one, each with its own Sun level and storm; without it the air is
+  // the installed air model's (today's multiplier in the game, 1 in a test or in training).
+  const sky = p && p.sky && Number.isFinite(p.sky.startMs) ? p.sky : null;
 
-  const rate = (a, m) => {
-    const v = Math.sqrt(mu / a);                  // circular speed, km/s
-    const d = dragOn ? atmosphericDrag(a - RE, v, area, m) : 0;   // km/s2, positive slows her
-    return 2 * Math.sqrt(a * a * a / mu) * (push / m / 1000 - d);
+  /** One flight from `fromKm`. `quiet`: the quiet-day twin (the Sun's level on every day, no storm). */
+  const fly = (quiet) => {
+    let lastD = 0;                                // the drag the last `rate` call used, km/s2
+    const rate = (a, m, t) => {
+      const v = Math.sqrt(mu / a);                // circular speed, km/s
+      let d = 0;                                  // km/s2, positive slows her
+      if (dragOn) {
+        d = sky
+          ? atmosphericDragOn(a - RE, v, area, m, dayAirMultiplier(sky.seed, dayOf(sky.startMs + t * 1000), a - RE, !quiet))
+          : atmosphericDrag(a - RE, v, area, m);
+      }
+      lastD = d;
+      return 2 * Math.sqrt(a * a * a / mu) * (push / m / 1000 - d);
+    };
+
+    let a = RE + fromKm;
+    let m = m0;
+    let t = 0;
+    let sinkKm = 0;                               // the height the air took off her, summed over the flight
+    let day = null;
+    const stormDays = [];
+    const ts = [0];
+    const as = [a];
+    const ms = [m];
+    let ok = true;
+    let reason = null;
+    while (true) {
+      if (sky && !quiet) {                        // the storm days the flight passes through
+        const dn = dayOf(sky.startMs + t * 1000);
+        if (dn !== day) { day = dn; const kp = kpOnDay(sky.seed, dn); if (kp >= 5) stormDays.push({ dayIdx: dn, kp }); }
+      }
+      const r0 = rate(a, m, t);
+      if (!(dir * r0 > 0)) { ok = false; reason = dir > 0 ? 'drag' : 'push'; break; }
+      const aMid = a + 0.5 * stepS * r0;
+      const mMid = m - 0.5 * stepS * mdot;
+      const rMid = rate(aMid, mMid, t + 0.5 * stepS);
+      const sinkMid = 2 * Math.sqrt(aMid * aMid * aMid / mu) * lastD;   // km/s
+      const a1 = a + stepS * rMid;
+      const m1 = m - stepS * mdot;
+      const done = dir > 0 ? a1 >= aTarget : a1 <= aTarget;
+      if (done) {
+        const frac = clamp01((aTarget - a) / (a1 - a));
+        t += frac * stepS;
+        m -= frac * stepS * mdot;
+        sinkKm += sinkMid * frac * stepS;
+        a = aTarget;
+        ts.push(t); as.push(a); ms.push(m);
+        break;
+      }
+      a = a1; m = m1; t += stepS;
+      sinkKm += sinkMid * stepS;
+      ts.push(t); as.push(a); ms.push(m);
+      if (t >= tMax) { ok = false; reason = 'days'; break; }
+    }
+    return { ok, reason, ts, as, ms, t, m, sinkKm, stormDays };
   };
 
-  let a = RE + fromKm;
-  let m = m0;
-  let t = 0;
-  const ts = [0];
-  const as = [a];
-  const ms = [m];
-  let ok = true;
-  let reason = null;
-  while (true) {
-    const r0 = rate(a, m);
-    if (!(dir * r0 > 0)) { ok = false; reason = dir > 0 ? 'drag' : 'push'; break; }
-    const aMid = a + 0.5 * stepS * r0;
-    const mMid = m - 0.5 * stepS * mdot;
-    const rMid = rate(aMid, mMid);
-    const a1 = a + stepS * rMid;
-    const m1 = m - stepS * mdot;
-    const done = dir > 0 ? a1 >= aTarget : a1 <= aTarget;
-    if (done) {
-      const frac = clamp01((aTarget - a) / (a1 - a));
-      t += frac * stepS;
-      m -= frac * stepS * mdot;
-      a = aTarget;
-      ts.push(t); as.push(a); ms.push(m);
-      break;
-    }
-    a = a1; m = m1; t += stepS;
-    ts.push(t); as.push(a); ms.push(m);
-    if (t >= tMax) { ok = false; reason = 'days'; break; }
+  const main = fly(false);
+  const { ok, reason, ts, as, ms } = main;
+  const t = main.t;
+  const m = main.m;
+  // A storm inside the trip: fly the quiet-day twin and keep the difference (what the storm cost: gas, days, and sinking in km).
+  let storm = null;
+  if (ok && main.stormDays.length > 0) {
+    const q = fly(true);
+    if (q.ok) storm = { days: main.stormDays, gasExtraKg: (m0 - m) - (m0 - q.m), daysExtra: (t - q.t) / SECONDS_PER_DAY, sinkExtraKm: main.sinkKm - q.sinkKm };
   }
 
   // At most MAX_SAMPLES, evenly by index, the last always kept.
@@ -209,6 +251,7 @@ export function tripProfile(p) {
     days: t / SECONDS_PER_DAY, tEndS: t,
     m0, m1: m, gasKg, dvMps: ve * Math.log(m0 / m),
     samples,
+    ...(storm ? { storm } : {}),
   };
 }
 

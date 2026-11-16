@@ -38,6 +38,9 @@ import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { netCellLayout } from './netCellLayout.js';
 import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js';
 import { DEG2RAD, RAD2DEG, degToRad, radToDeg, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
+import { CW_FLIGHT, planLaunch, replanVelocity, coastPath, tideAccel } from './DaughterCW.js';   // the long fetch's curved flight (plan sky-1116)
+import { isTrainingNow } from '../systems/TrainingHintGate.js';
+import { orbitToSceneCartesian } from './OrbitalMechanics.js';
 
 /** 1 meter in scene units (1 scene unit = 100 km); the one authoritative scale, pinned in test-CaptureNet-Bookkeeping.js. */
 const M = Constants.SCENE_UNITS_PER_METER;
@@ -1212,6 +1215,9 @@ export class ArmUnit {
     this.launchSpeed = Math.min(CROSSBOW_LAUNCH_SPEED_DEFAULT, SPRING_TIERS[0].maxSpeed);
     this.launchDirection = null;
     this._impulseDvAccum = 0;              // Σ|dvCmd| (m/s) the autopilot applied this frame — impulse fuel
+    this._cw = null;                       // the long fetch's flight plan while she flies the curve (DaughterCW.js); null = the old controller
+    this._cwTide = false;                  // she feels the gravity gradient (a long fetch launched on the curve; cleared after APPROACH)
+    this._cwLine = null;                   // the drawn path of that flight (a line, made on first use)
 
     // V5 Tether state
     this.tetherTension = 0;                // Current tension in Newtons
@@ -2527,7 +2533,9 @@ export class ArmUnit {
         if (this._lastParentQuat) strutLocal.applyQuaternion(this._lastParentQuat);
         this.launchDirection = strutLocal.normalize();
       } else {
-        this.launchDirection = tPos.clone().sub(this.position).normalize();
+        // No strut was turned (nothing physical pushes her): a long fetch is pushed along its curved plan, else the bearing.
+        const cwDir = this.cwAimDirection(target);
+        this.launchDirection = cwDir || tPos.clone().sub(this.position).normalize();
       }
       this._aimConverged = false;
     } else {
@@ -3216,6 +3224,7 @@ export class ArmUnit {
     this._frameParentQuat = null;
     this._prevParentPos = null;
     this._frameParentPos = null;   // this frame's parent position
+    this._cwClear(true);           // no long-fetch plan survives a reset
 
     this.springCharged = true;
     this.reloadProgress = 0;
@@ -3595,6 +3604,8 @@ export class ArmUnit {
 
   _transitionTo(newState) {
     const old = this.state;
+    if (this._cw && newState !== S.TRANSIT) this._cwClear();   // the curved flight ends with TRANSIT, whatever ended it
+    if (this._cwTide && newState !== S.TRANSIT && newState !== S.APPROACH) this._cwTide = false;   // and the gradient with the approach
     if (old === S.NETTING) this._firedNet = null;  // clear net ref when leaving NETTING
     // §11.4: the recoil transient only integrates inside the SK/NETTING hold loops; leaving that pair hands control to a
     // controller with its own residuals (GRAPPLED reel, RETURNING burn, ...). Clear so a stale kick can't replay on re-entry.
@@ -3731,6 +3742,10 @@ export class ArmUnit {
     // energy budget; the impulse itself is applied directly as velocity for numerical stability)
     const launchVelocity = speed * M;  // Convert to game units
 
+    // Long fetch (DaughterCW.js): a piece at least CW_FLIGHT.MIN_RANGE_M away is reached on the curved path. The spring still pushes
+    // along the strut (the strut was turned to the plan's direction at aim time, `cwAimDirection`); the plan here only has to agree
+    // with that line within CW_FLIGHT.AIM_TOL_DEG, else the old flight (nothing below changes).
+    this._cwPlanAtLaunch(speed, this.launchDirection || this._worldDockDirection(this._lastParentQuat));
     if (this.launchDirection) {
       this.velocity.copy(this.launchDirection).multiplyScalar(launchVelocity);
     } else {
@@ -3764,6 +3779,253 @@ export class ArmUnit {
     this.reloadDuration = energy / (CROSSBOW_RELOAD_POWER * CROSSBOW_WORM_GEAR_EFFICIENCY);
 
     return speed;
+  }
+
+  // ── The long fetch: the curved flight (DaughterCW.js; plan sky-1116, Done C) ─────────────────────────────────────────────
+  // Today's controller (`_updateTransit`, below) flies a straight line in the mother's translating frame and burns gas to follow a
+  // piece that circles in that frame; past `CW_FLIGHT.MIN_RANGE_M` she is instead launched on the Clohessy-Wiltshire intercept,
+  // feels the real gravity gradient on the way, corrects a little, and hands over to the old controller for the arrival.
+
+  /**
+   * @private The long fetch's inputs now, SI in the scene's axes: the mother's state, her offset and rate from the mother, the
+   * piece's offset and its velocity relative to the mother. Null when anything is missing (a bare test rig: no orbits), which keeps
+   * the old flight.
+   * @param {THREE.Vector3} parentPos
+   * @param {object} [target] the piece (default: her target; the aim looks before she has one)
+   * @returns {{R:number[], V:number[], dd:number[], ud:number[], dtgt:number[], ut:number[]}|null}
+   */
+  _cwInputs(parentPos, target = this.target) {
+    const ps = this._playerSatellite, tg = target;
+    if (!parentPos || !ps || !ps.orbit || !tg || !tg.orbit) return null;
+    const tPos = tg._scenePosition || null;
+    if (!tPos) return null;
+    const mc = orbitToSceneCartesian(ps.orbit), tc = orbitToSceneCartesian(tg.orbit);
+    const R = [parentPos.x / M, parentPos.y / M, parentPos.z / M];
+    const rn = Math.hypot(R[0], R[1], R[2]);
+    if (!(rn > 6.0e6 && rn < 1.0e8)) return null;   // not a position on an Earth orbit: leave it to the old controller
+    const BS = TimeAuthority.BASE_SCALE;
+    return {
+      R, V: [mc.velocity.x * 1000, mc.velocity.y * 1000, mc.velocity.z * 1000],
+      dd: [(this.position.x - parentPos.x) / M, (this.position.y - parentPos.y) / M, (this.position.z - parentPos.z) / M],
+      ud: [this.velocity.x / (M * BS), this.velocity.y / (M * BS), this.velocity.z / (M * BS)],
+      dtgt: [(tPos.x - parentPos.x) / M, (tPos.y - parentPos.y) / M, (tPos.z - parentPos.z) / M],
+      ut: [(tc.velocity.x - mc.velocity.x) * 1000, (tc.velocity.y - mc.velocity.y) * 1000, (tc.velocity.z - mc.velocity.z) * 1000],
+    };
+  }
+
+  /**
+   * @private Is a curved long fetch to `target` possible from here (the switch on, no manual flight, not training, both orbits known, the
+   * piece at least `CW_FLIGHT.MIN_RANGE_M` away)? Returns the plan's inputs, or null (the old flight).
+   * @param {object} target
+   */
+  _cwEligibleInputs(target) {
+    if (!CW_FLIGHT.ENABLED || this._manualMode || isTrainingNow()) return null;
+    const inp = this._cwInputs(this._frameParentPos, target);
+    if (!inp) return null;
+    const rangeM = Math.hypot(inp.dtgt[0] - inp.dd[0], inp.dtgt[1] - inp.dd[1], inp.dtgt[2] - inp.dd[2]);
+    return rangeM < CW_FLIGHT.MIN_RANGE_M ? null : inp;
+  }
+
+  /** @private Her launch speed at the spring (game units, m/s): what `_applyLaunchImpulse` uses. */
+  _cwLaunchSpeed() {
+    return Math.min(this.launchSpeed, SPRING_TIERS[this.springTier].maxSpeed);
+  }
+
+  /**
+   * The direction the strut must be turned to for a long fetch (>= `CW_FLIGHT.MIN_RANGE_M`): the Clohessy-Wiltshire launch direction
+   * (DaughterCW.js), which is far off the line to the piece (measured 76 degrees at 2 km, 121 at 10 km). The crossbow pushes along
+   * its strut, so the aim ceremony turns the strut to THIS, and the spring then pushes along it. Solved now (the world moves on, so
+   * it is kept `CW_FLIGHT.AIM_REFRESH_MS` and solved again). Null: not a long fetch, or no transfer the caller accepts; aim at the piece as before.
+   * @param {object} target the piece
+   * @param {((dir:number[])=>boolean)|null} [accept] the strut-only aim: the strut can reach only its meridian plane, so a transfer
+   *   whose direction it cannot take is passed over for the next one (ArmManager gives it the reach and hull test); null: the ship turns, any direction
+   * @returns {THREE.Vector3|null} unit, scene axes (a fresh copy)
+   */
+  cwAimDirection(target, accept = null) {
+    const speed = this._cwLaunchSpeed();
+    const kind = accept ? 1 : 0;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const c = this._cwAimCache || (this._cwAimCache = [null, null]);
+    const hit = c[kind];
+    if (hit && hit.target === target && hit.speed === speed && now - hit.at < CW_FLIGHT.AIM_REFRESH_MS && now >= hit.at) {
+      return hit.dir ? hit.dir.clone() : null;
+    }
+    let dir = null;
+    const inp = this._cwEligibleInputs(target);
+    if (inp) {
+      const plan = planLaunch({
+        R: inp.R, V: inp.V, dd: inp.dd, dtgt: inp.dtgt, ut: inp.ut,
+        speedPhys: speed / TimeAuthority.BASE_SCALE, maxRangeM: this.config.tetherMax * CW_FLIGHT.TETHER_FRACTION,
+      }, accept ? { accept } : {});
+      if (plan) dir = new THREE.Vector3(plan.dir[0], plan.dir[1], plan.dir[2]);
+    }
+    c[kind] = { target, speed, at: now, dir };
+    return dir ? dir.clone() : null;
+  }
+
+  /**
+   * @private At the spring: plan the curved flight to the piece if it is at least `CW_FLIGHT.MIN_RANGE_M` away. The spring pushes along
+   * `pushDir` (the strut); the plan is a transfer whose launch direction lies within `CW_FLIGHT.AIM_TOL_DEG` of it, and the first
+   * mid-course correction pays the few degrees left. No such transfer: the old flight (and `pushDir` is still where she goes).
+   * @param {number} speedMps her launch speed (game units, m/s)
+   * @param {THREE.Vector3} pushDir the direction the spring pushes (unit, scene axes)
+   * @returns {boolean} true: she flies the curve
+   */
+  _cwPlanAtLaunch(speedMps, pushDir) {
+    this._cwClear(true);
+    const inp = this._cwEligibleInputs(this.target);
+    if (!inp || !pushDir) return false;
+    const BS = TimeAuthority.BASE_SCALE;
+    const px = pushDir.x, py = pushDir.y, pz = pushDir.z, pn = Math.hypot(px, py, pz) || 1;
+    const cosTol = Math.cos(CW_FLIGHT.AIM_TOL_DEG * Math.PI / 180);
+    const plan = planLaunch({
+      R: inp.R, V: inp.V, dd: inp.dd, dtgt: inp.dtgt, ut: inp.ut,
+      speedPhys: speedMps / BS, maxRangeM: this.config.tetherMax * CW_FLIGHT.TETHER_FRACTION,
+    }, { accept: (d) => (d[0] * px + d[1] * py + d[2] * pz) / pn >= cosTol });
+    if (!plan) return false;
+    this._cwTide = true;   // she feels the gradient from here to the catch (TRANSIT's curve and APPROACH's arrival: see `_cwTideKick`)
+    this._cw = {
+      plan, target: this.target, T: plan.T,
+      elapsedWorld: (CROSSBOW_RELEASE_TIME + 0.2) * BS,   // the spring-to-TRANSIT frames fly the straight line (a few metres: no tide to speak of)
+      sinceReplan: 0, pending: new THREE.Vector3(), path: null, corrections: 0, a: [0, 0, 0],
+    };
+    TimeAuthority.holdFlight(this);   // the plan assumes the world runs exactly BASE_SCALE x her clock: warp stays at 1 while she flies it
+    // the path she will fly (the push the spring really gives, along the strut), drawn from the launch (the mother's frame)
+    const sp = speedMps / BS / pn;
+    this._cw.path = coastPath({ R: inp.R, V: inp.V, dd: inp.dd, dtgt: inp.dtgt, ut: inp.ut, ud: [px * sp, py * sp, pz * sp], T: plan.T });
+    const min = Math.round(plan.T / BS / 60);
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `${this.displayName}: Long reach: aimed off the straight line to ride the curve, about ${min >= 1 ? `${min} min` : 'a minute'} out.`,
+      priority: 'info',
+    });
+    return true;
+  }
+
+  /** @private The flight plan and its drawn path go (a state other than TRANSIT, a new launch, a handover, a reset). `all`: the gradient too. */
+  _cwClear(all = false) {
+    this._cw = null;
+    TimeAuthority.releaseFlight(this);
+    if (all) this._cwTide = false;
+    if (this._cwLine) this._cwLine.visible = false;
+  }
+
+  /**
+   * @private On a curved long fetch the piece's drift velocity (its velocity minus the mother's, in her frame) is read from the two
+   * orbits, not from the smoothed finite difference: that estimate lags a velocity which rotates with the orbit (56 m/s per 5 km in
+   * her units, turning 0.011 rad/s), and the controller paid the lag as a steady thrust through the whole arrival.
+   * @param {THREE.Vector3} parentPos
+   */
+  _cwExactDrift(parentPos) {
+    if (!this._cwTide || !this._smoothDriftVel) return;
+    const inp = this._cwInputs(parentPos);
+    if (!inp) return;
+    const k = M * TimeAuthority.BASE_SCALE;   // true m/s -> her units (scene/s)
+    this._smoothDriftVel.set(inp.ut[0] * k, inp.ut[1] * k, inp.ut[2] * k);
+  }
+
+  /**
+   * @private After the curved cruise she keeps feeling the gravity gradient through the arrival: the old controller follows the piece's
+   * rotating drift velocity, and without the gradient that costs a steady thrust (0.65 m/s per real second at 5 km, measured: 14 % of the
+   * tank per 8 s), the same cost that runs a 1.5 km straight fetch dry. One Euler kick (the arrival is slow and short).
+   * @param {number} dt real seconds @param {THREE.Vector3} parentPos
+   */
+  _cwTideKick(dt, parentPos) {
+    if (!this._cwTide || !parentPos || !(dt > 0)) return;
+    const BS = TimeAuthority.BASE_SCALE;
+    const k = dt * BS * BS * M;
+    const a = tideAccel(
+      [parentPos.x / M, parentPos.y / M, parentPos.z / M],
+      [(this.position.x - parentPos.x) / M, (this.position.y - parentPos.y) / M, (this.position.z - parentPos.z) / M],
+      this._cwKickA || (this._cwKickA = [0, 0, 0]));
+    this.velocity.x += a[0] * k; this.velocity.y += a[1] * k; this.velocity.z += a[2] * k;
+  }
+
+  /**
+   * @private One TRANSIT frame of the curved flight: the gravity gradient (kick, drift, kick), the pending correction, the mid-course
+   * re-solve every `REPLAN_REAL_S`. Returns false (nothing moved) when the old controller should fly this frame: the piece is within
+   * `HANDOFF_M`, the piece changed, or the plan broke.
+   * @param {number} dt real seconds @param {THREE.Vector3} parentPos @param {number} distScene her range to the piece (scene units)
+   * @returns {boolean} true: this frame is flown
+   */
+  _cwStep(dt, parentPos, distScene) {
+    const cw = this._cw;
+    if (!cw) return false;
+    if (this.target !== cw.target || !(dt > 0)) { this._cwClear(); return false; }
+    if (distScene / M <= CW_FLIGHT.HANDOFF_M) { this._cwClear(); return false; }
+    const BS = TimeAuthority.BASE_SCALE;
+    // a true acceleration a (m/s^2) over the frame's world time dt*BS changes her speed (game units, scene/s) by a * BS^2 * dt * M
+    const kick = 0.5 * dt * BS * BS * M;
+    const Rm = [parentPos.x / M, parentPos.y / M, parentPos.z / M];
+    const off = [(this.position.x - parentPos.x) / M, (this.position.y - parentPos.y) / M, (this.position.z - parentPos.z) / M];
+    let a = tideAccel(Rm, off, cw.a);
+    this.velocity.x += a[0] * kick; this.velocity.y += a[1] * kick; this.velocity.z += a[2] * kick;
+    // the pending mid-course correction, at her thrust limit; it is billed like the old controller's impulse
+    const pend = cw.pending.length();
+    if (pend > 0 && !this._powerOff()) {
+      const aMax = Constants.DAUGHTER_AUTOPILOT.MAX_ACCEL / this._fitMassRatio();
+      const take = Math.min(pend, aMax * M * dt * BS);
+      this.velocity.addScaledVector(cw.pending, take / pend);
+      this._impulseDvAccum += take / M;
+      cw.pending.multiplyScalar((pend - take) / pend);
+    }
+    this.position.addScaledVector(this.velocity, dt);
+    off[0] = (this.position.x - parentPos.x) / M; off[1] = (this.position.y - parentPos.y) / M; off[2] = (this.position.z - parentPos.z) / M;
+    a = tideAccel(Rm, off, cw.a);
+    this.velocity.x += a[0] * kick; this.velocity.y += a[1] * kick; this.velocity.z += a[2] * kick;
+    cw.elapsedWorld += dt * BS;
+    cw.sinceReplan += dt;
+    if (cw.sinceReplan >= CW_FLIGHT.REPLAN_REAL_S) { cw.sinceReplan = 0; this._cwReplan(parentPos); }
+    if (this._cw) this._cwDrawPath(parentPos);
+    return true;
+  }
+
+  /**
+   * @private Mid-course: the velocity that still meets the piece at the planned moment; the difference from her velocity is queued as
+   * the correction. A correction past `MAX_CORRECTION_X_SPEED` launch speeds means the plan broke (the mother burned, the piece was
+   * hit): the old controller takes over.
+   * @param {THREE.Vector3} parentPos
+   */
+  _cwReplan(parentPos) {
+    const cw = this._cw;
+    const inp = this._cwInputs(parentPos);
+    if (!cw || !inp) { this._cwClear(); return; }
+    const BS = TimeAuthority.BASE_SCALE;
+    const period = 2 * Math.PI / Math.sqrt(Constants.MU_EARTH * 1e9 / Math.pow(Math.hypot(inp.R[0], inp.R[1], inp.R[2]), 3));
+    const Trem = cw.T - cw.elapsedWorld;
+    if (Trem < CW_FLIGHT.NO_REPLAN_ORBITS * period) return;   // too near the end to re-solve; the handover is close
+    const uReq = replanVelocity({ R: inp.R, V: inp.V, dd: inp.dd, dtgt: inp.dtgt, ut: inp.ut, Trem });
+    if (!uReq) return;
+    const dv = [uReq[0] - inp.ud[0], uReq[1] - inp.ud[1], uReq[2] - inp.ud[2]];
+    const dvGame = Math.hypot(dv[0], dv[1], dv[2]) * BS;
+    if (dvGame > CW_FLIGHT.MAX_CORRECTION_X_SPEED * (this._launchSpeedMps || Constants.DAUGHTER_AUTOPILOT.V_CAP)) { this._cwClear(); return; }
+    cw.pending.set(dv[0], dv[1], dv[2]).multiplyScalar(M * BS);
+    cw.corrections++;
+    cw.path = coastPath({ R: inp.R, V: inp.V, dd: inp.dd, dtgt: inp.dtgt, ut: inp.ut, ud: uReq, T: Trem });
+  }
+
+  /** @private Write the planned path (offsets from the mother, kept in her translating frame) into the line, group-local. */
+  _cwDrawPath(parentPos) {
+    const cw = this._cw;
+    if (!cw || !cw.path || !this.group) return;
+    if (!this._cwLine) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(CW_FLIGHT.PATH_POINTS * 3), 3));
+      const mat = new THREE.LineBasicMaterial({ color: 0x66ccff, transparent: true, opacity: 0.55, depthWrite: false });
+      this._cwLine = new THREE.Line(geo, mat);
+      this._cwLine.frustumCulled = false;
+      this._cwLine.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
+      this.group.add(this._cwLine);
+    }
+    const arr = this._cwLine.geometry.attributes.position.array;
+    for (let i = 0; i < cw.path.length; i++) {
+      const p = cw.path[i];
+      arr[i * 3] = parentPos.x + p[0] * M - this.position.x;
+      arr[i * 3 + 1] = parentPos.y + p[1] * M - this.position.y;
+      arr[i * 3 + 2] = parentPos.z + p[2] * M - this.position.z;
+    }
+    this._cwLine.geometry.attributes.position.needsUpdate = true;
+    this._cwLine.quaternion.copy(this.group.quaternion).invert();   // world orientation, as the tether does
+    this._cwLine.visible = true;
   }
 
   /**
@@ -3907,6 +4169,7 @@ export class ArmUnit {
   _updateTransit(dt, parentPos) {
     if (this._homeIfPieceLost()) return;
     if (this._manualMode) {
+      if (this._cw || this._cwTide) this._cwClear(true);   // she is piloted: the planned curve and the gradient are off (the player flies her)
       // Manual mode: player controls velocity. Autopilot (controller, pings, thruster audio) is skipped: the approach beep
       // and thruster hum annoyed in ARM_PILOT mode.
       this.position.addScaledVector(this.velocity, dt);
@@ -3992,7 +4255,13 @@ export class ArmUnit {
     if (!this._smoothDriftVel) this._smoothDriftVel = new THREE.Vector3(0, 0, 0);
     const alpha = DAP_T.DRIFT_EMA_ALPHA || 0.1;
     this._smoothDriftVel.lerp(rawDriftVel, alpha);
+    this._cwExactDrift(parentPos);   // a curved long fetch reads the piece's true relative velocity instead (no-op otherwise)
     const driftVelT = this._smoothDriftVel;
+
+    // Long fetch: she rides the planned curve (gravity gradient + mid-course corrections) until HANDOFF_M, then the controller below
+    // flies the arrival. The drift EMA above keeps running either way, so the handover starts with a settled estimate.
+    if (this._cw && this._cwStep(dt, parentPos, dist)) return;
+    this._cwTideKick(dt, parentPos);   // after a curved cruise: the arrival still feels the gradient (no-op otherwise)
 
     const relVT = _relVel.subVectors(driftVelT, this.velocity);
 
@@ -4129,8 +4398,10 @@ export class ArmUnit {
     if (!this._smoothDriftVel) this._smoothDriftVel = new THREE.Vector3(0, 0, 0);
     const alphaA = DAP_A.DRIFT_EMA_ALPHA || 0.1;
     this._smoothDriftVel.lerp(rawDriftVelA, alphaA);
+    this._cwExactDrift(parentPos);   // as in TRANSIT (no-op unless this was a curved long fetch)
     const driftVelA = this._smoothDriftVel;
 
+    this._cwTideKick(dt, parentPos);   // a curved long fetch keeps feeling the gradient through the arrival (no-op otherwise)
     const relVA = _relVel.subVectors(driftVelA, this.velocity);
 
     // Signed excess distance: + outside standoff, − inside (a restoring spring pushes her back OUT)
@@ -10586,6 +10857,7 @@ export class ArmUnit {
   }
 
   dispose() {
+    TimeAuthority.releaseFlight(this);   // a disposed daughter must not hold the world's warp
     // Arms are NOT session singletons (unlike the mother): unsubscribe the net inventory listener so disposed arms don't
     // leak / react to stale emits.
     if (this._onNetInventoryChanged) {

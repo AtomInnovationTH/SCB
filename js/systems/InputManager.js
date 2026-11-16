@@ -1244,6 +1244,19 @@ export class InputManager {
         }
         break;
 
+      // Y key ("yes"): the PAIR SETUP (plan sky-1116, lane L-pair). When the game offers a small burn that lines two pieces up for a
+      // pair shot (PairSetup.js, one line in Comms), Y flies it: the same thrust command the autopilot uses, over 1-2 game hours, and
+      // the pair offer shows on arrival. With none offered it says so. Y was unbound; E is kept free (the electrodynamic tether's old
+      // key, "later", DECISIONS §68 row 2, pinned unbound by test-EdtLater), and W is the key players press first to move, so a stray
+      // press must not burn gas. The touch SET UP PAIR button presses it.
+      case 'KeyY':
+        if (isGameplay && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && d.autopilotSystem && typeof d.autopilotSystem.acceptPairSetup === 'function') {
+          const started = d.autopilotSystem.acceptPairSetup();
+          if (started) d.audioSystem?.playClick(); else d.audioSystem?.playDeny?.();
+          e.preventDefault();
+        }
+        break;
+
       // A key: Shift+A = "go salvage the field" combo; plain A = autopilot toggle. Works in both mother and daughter modes.
       case 'KeyA':
         if (isGameplay && !e.repeat) {

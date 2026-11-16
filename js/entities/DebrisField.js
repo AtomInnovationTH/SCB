@@ -18,6 +18,7 @@ import {
   totalDeltaV,
   orbitalVelocity,
   atmosphericDrag,
+  airModelRealDrag,
 } from './OrbitalMechanics.js';
 import {
   DebrisWireframe,
@@ -1988,8 +1989,14 @@ export class DebrisField {
    * quadratically (along-track ≈ 0.026–0.040·t² m; > 2 km within ~3.5–5 real minutes with no key pressed: the
    * "welcome cluster drifts away / vanishes" report). Same coefficient ⇒ same per-frame decay factor ⇒ lock-step
    * decay. The pieces stay REAL orbits (not mother-pinned), so RCS / thrust still separate the player from them.
-   * Scope: welcomeSpawn only; the M2+ authored cast keeps physical drag. Every other piece keeps cross-section ≈
+   * Scope: `welcomeSpawn` only; the M2+ authored cast keeps physical drag. Every other piece keeps cross-section ≈
    * sizeMeter², mass from its spec (floor 1 kg: a 0 / missing mass must not divide to Infinity).
+   *
+   * Plan sky-1116 (owner D1, 2026-11-16, "Always real, not training"): with the game's air model installed
+   * (SunStorms, set by main.js) and outside training missions 1-3, a `welcomeSpawn` piece feels its OWN drag too (every field
+   * piece in every field has `welcomeSpawn` set, :4278, so before this EVERY piece kept her coefficient and never drifted).
+   * So a light piece sinks faster than she does and drifts ahead along the track, a storm makes it faster still, and the
+   * field spreads out over a long game. Training 1-3, and every caller with no air model (tests), keep the lock-step above.
    *
    * @param {object} debris - reads welcomeSpawn, sizeMeter, mass
    * @param {number} altKm - altitude above the surface (km)
@@ -1998,7 +2005,7 @@ export class DebrisField {
    * @returns {number} deceleration (km/s²)
    */
   static dragDecelFor(debris, altKm, velKms, source = null) {
-    if (debris.welcomeSpawn) {
+    if (debris.welcomeSpawn && !airModelRealDrag()) {
       let area = source ? source.lastDragAreaM2 : 0;
       let mass = source ? source.lastDragMassKg : 0;
       if (!(area > 0) || !(mass > 0)) { area = referenceDragAreaM2(); mass = Constants.MOTHER_DRAG.MASS_KG; }
@@ -2248,7 +2255,9 @@ export class DebrisField {
         o.meanMotion = _tmpKmOrbit.meanMotion;
 
         // Atmospheric drag: the same formula, sub-stepping and gameDt as PlayerSatellite.update (dtWorld is threaded
-        // to both from main.js), and for welcomeSpawn pieces the same BALLISTIC COEFFICIENT too (dragDecelFor).
+        // to both from main.js), and for welcomeSpawn pieces the same BALLISTIC COEFFICIENT too (dragDecelFor), in
+        // training missions 1-3 and wherever no air model is installed; the air itself carries the Sun's level and the
+        // day's storm (atmosphericDensity), and outside training every piece uses its own coefficient (plan sky-1116).
         // Matching the formula alone was not enough: with their own sizeMeter²/mass the welcome pieces decayed 3–17×
         // slower than the mother and drifted km away. ("Co-orbiting objects stay on the same trajectory" held only
         // for the pinned #1/#2, which skip this branch and ride the mother.)

@@ -51,6 +51,13 @@ class GameState {
     /** @type {number} days of ship time the trips between fields have added (FIELDS_BY_HEIGHT; saved) */
     this.shipDays = 0;
 
+    /** @type {number|null} the real date (ms since 1970, UTC) of her first start; with `shipDays` it is the game date that
+     *  sets the Sun's level and the storm days (js/systems/SunStorms.js). Stamped on first use outside training, saved, null
+     *  until then; a new game clears it (GameFlowManager.resetGame), a game-over retry keeps it. */
+    this.skyStartMs = null;
+    /** @type {number|null} the save's storm-calendar seed (uint32; stamped with `skyStartMs`, saved) */
+    this.skySeed = null;
+
     /** @type {number|null} the station's node minus hers, deg in (-180, 180] (js/systems/NodeDrift.js; moves with ship days; saved).
      *  Null until a game sets it (GameFlowManager._applyStartLocation, a load). */
     this.stationNodeGapDeg = null;

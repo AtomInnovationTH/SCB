@@ -23,6 +23,7 @@ import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { StrutAutoController, openingStrutEase } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit, planeTurnLeftRad } from './ArmUnit.js';
+import { CW_FLIGHT } from './DaughterCW.js';   // the long fetch's aim tolerance (sky-1116)
 import { DebrisField } from './DebrisField.js';
 import { clearRackCell, berthAnchorLocalInto, catchHomeDistM, homeShapeKey, isInspectOnlyMass } from './CaptureNet.js';
 import { noseBucketFor, noseRadiatorsOk, noseWindowSpans } from './NoseRoute.js';
@@ -924,6 +925,10 @@ export class ArmManager {
     // TRANSIT corrects. One scratch output object (no per-frame allocation).
     const provOut = { x: 0, y: 0, z: 0 };
     const provider = () => {
+      // A long fetch (2 km+): the crossbow pushes along its strut and the curved flight leaves along the plan's direction, which is far
+      // off the line to the piece, so the strut is turned to that (sky-1116 L-flight fix; null = the line to the piece, as before).
+      const cw = typeof arm.cwAimDirection === 'function' ? arm.cwAimDirection(target) : null;
+      if (cw) { provOut.x = cw.x; provOut.y = cw.y; provOut.z = cw.z; return provOut; }
       const tp = (target._scenePosition) ? target._scenePosition
         : (typeof target.getScenePosition === 'function' ? target.getScenePosition() : null);
       if (!tp || !arm.position) return null;
@@ -6213,7 +6218,33 @@ export class ArmManager {
     const tp = target && target._scenePosition;
     if (!tp) return this._dockDirShip(arm);
     if (arm._aimConverged) return this._strutDirShip(arm);
+    // A long fetch with the ship holding still: the strut alone aims, so only a curved-flight direction it can take (within its
+    // meridian plane, clear of the hull) is aimed at; else the line to the piece and the old flight.
+    const cw = typeof arm.cwAimDirection === 'function' ? arm.cwAimDirection(target, (d) => this._strutTakesWorldDir(arm, d)) : null;
+    if (cw) return this._worldToShipDir(cw);
     return this._worldToShipDir(new THREE.Vector3(tp.x - arm.position.x, tp.y - arm.position.y, tp.z - arm.position.z));
+  }
+
+  /**
+   * Can `arm`'s strut alone (the ship holds still) push along world direction `d` (unit, array)? The strut swings in one meridian plane
+   * (`_aimAlphaFor`: the best angle, capped short of a held catch's corridor), so the line it ends on must be within the curved flight's
+   * aim tolerance of `d`, and that line must not run into the hull (`_launchVerdict`: blocked and not fixable fails).
+   * @param {ArmUnit} arm @param {number[]} d
+   * @returns {boolean}
+   */
+  _strutTakesWorldDir(arm, d) {
+    try {
+      const i = this.arms.indexOf(arm);
+      if (i < 0 || !arm.dockOffset) return false;
+      const want = this._worldToShipDir(new THREE.Vector3(d[0], d[1], d[2]));
+      const alpha = this._leanAsideArmIndices.has(i) ? arm.getAimAlpha() : this._aimAlphaFor(i, want);
+      const axis = strutLocalDirection(alpha, Math.atan2(arm.dockOffset.y, arm.dockOffset.x), new THREE.Vector3()).normalize();
+      if (axis.dot(want) < Math.cos(CW_FLIGHT.AIM_TOL_DEG * DEG2RAD)) return false;
+      const v = this._launchVerdict(i, axis, 'target');
+      return !v.blocked || v.fixable;
+    } catch (_e) {
+      return false;
+    }
   }
 
   _trawlDirShip(arm, direction) {

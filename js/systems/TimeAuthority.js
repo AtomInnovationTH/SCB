@@ -40,6 +40,9 @@ import { FloorContract } from '../core/FloorContract.js';
 
 const TR = FloorContract.TIME_RULES;
 
+/** Daughters that hold warp at 1x while they fly a planned curve (see `TimeAuthority.holdFlight`). */
+const _flightHolds = new Set();
+
 export class TimeAuthority {
   /** Shipped base rate: 1 real second = BASE_SCALE game seconds (=10). */
   static get BASE_SCALE() { return Constants.TIME_SCALE_GAMEPLAY; }
@@ -57,6 +60,18 @@ export class TimeAuthority {
    * @returns {number} game seconds at the base (unwarped) rate
    */
   static baseGameDt(dtReal) { return dtReal * Constants.TIME_SCALE_GAMEPLAY; }
+
+  /**
+   * A daughter on the curved long-fetch flight (ArmUnit `_cw`) holds warp at 1x: her plan assumes the world runs exactly BASE_SCALE
+   * world seconds per second of her clock, and arms are fed real dt while the world gets dt x BASE x rate. Owners (arms) register
+   * here and release when the flight ends; any owner holds the rate at 1 like a conjunction does (never raises a paused target).
+   * @param {object} owner
+   */
+  static holdFlight(owner) { _flightHolds.add(owner); }
+  /** @param {object} owner */
+  static releaseFlight(owner) { _flightHolds.delete(owner); }
+  /** @returns {boolean} true while any daughter flies a planned curve */
+  static isFlightHeld() { return _flightHolds.size > 0; }
 
   /**
    * Euler sub-steps (each ≤ DRAG_CHUNK_GAME_S) a drag integration should take: 1 (a single, byte-identical step) for any
@@ -166,7 +181,8 @@ export class TimeAuthority {
     // Target = floor cap, clamped to 1× under danger. The clamp is a min(), so it never RAISES the target: a cap-0 floor
     // stays paused.
     const cap = Math.max(0, targetCap);
-    const target = dangerActive ? Math.min(1, cap) : cap;
+    // A daughter flying a planned curve holds it the same way (`holdFlight`).
+    const target = (dangerActive || _flightHolds.size > 0) ? Math.min(1, cap) : cap;
 
     // Exponential approach: ramping DOWN uses the fast τ (danger and down-crossings arrive slow), UP the gentle τ
     // (auto-warp / up-crossings ease in with visible feedback).

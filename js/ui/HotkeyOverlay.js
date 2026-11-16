@@ -85,6 +85,7 @@ export const HOTKEY_GROUPS = [
       [['1', '–', '4'], 'Select a daughter', { id: 'select' }],
       [['D'], 'Launch selected daughter', { id: 'launch_d' }],
       [['Q'], 'Launch marked pair', { id: 'pair' }],
+      [['Y'], 'Line up a pair (small burn)', { id: 'pair_setup' }],
       [['R'], 'Reel selected daughter', { id: 'reel' }],
       [['`'], 'Next tool', { id: 'next_tool' }],
       [['N'], 'Use tool', { id: 'use_tool' }],

@@ -4315,8 +4315,8 @@ export const Constants = {
     SOLAR_FLARE_MAX_INTERVAL: 600,
     SOLAR_FLARE_MIN_DURATION: 60,
     SOLAR_FLARE_MAX_DURATION: 120,
-    GEOMAGNETIC_MIN_INTERVAL: 600,
-    GEOMAGNETIC_MAX_INTERVAL: 1200,
+    // The geomagnetic storm has no random timer any more (plan sky-1116): storm days come from the calendar (systems/SunStorms.js).
+    // These two are how long its short effect (radiation dose, audio pulse) runs, in real seconds.
     GEOMAGNETIC_MIN_DURATION: 90,
     GEOMAGNETIC_MAX_DURATION: 180,
     SAA_DURATION: 45,

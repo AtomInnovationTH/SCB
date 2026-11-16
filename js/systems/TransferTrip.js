@@ -1365,6 +1365,7 @@ export class TransferTrip {
       this.lastLeg = { fieldId: this._field.id, altKm: this._field.altKm, days: this._flownDays(), gasKg: this._billedKg,
         // route-1101 lane S2: where she left from and the profile's height samples, for the station node gap's advance (NodeDrift.gapChangeOverLeg)
         fromKm: this._profile.fromKm, samples: this._profile.samples };
+      if (this._profile.storm) this.lastLeg.storm = this._profile.storm;   // plan sky-1116: a storm inside the trip, for the landing line (GameFlowManager._reportStormLeg)
       if (this._d.fields) {
         // plan route-1109 lane D, Locked 4: her own trip to a satellite brings her back to the satellites' plane (the tilt was flown in the profile), so the
         // registry forgets the node she gave up. It is read BEFORE `arrive` clears it and handed on with the leg: the station gap takes it back

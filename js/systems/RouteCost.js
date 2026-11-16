@@ -52,11 +52,13 @@
  */
 import { Constants } from '../core/Constants.js';
 import { tripProfile } from './TripProfile.js';
+import { currentSky } from './SunStorms.js';
 import { planeAngle, planeChangeDeltaV } from '../entities/OrbitalMechanics.js';
 import { pieceValues } from './BigPieceValues.js';
 import { isJobPiece, jobPayCr, capsuleCanDrop, capsuleMassKg, capsulePriceCr } from './JobsBoard.js';
 import { planBurn } from './BigMelt.js';
 import { gapChangeOverLeg, isLinedUp, stationInOwnPlane, stationOrbit, wrapDeg } from './NodeDrift.js';
+import { CW_FLIGHT, fetchModel } from '../entities/DaughterCW.js';
 
 const SECONDS_PER_DAY = 86400;
 
@@ -72,13 +74,21 @@ const SECONDS_PER_DAY = 86400;
  */
 const PROFILE_CACHE_MAX = 64;
 const _profileCache = new Map();
+/** The calendar part of a cache key: the departure date and the seed (a trip's days walk the calendar), or 0 with none. */
+const skyKey = (sky) => (sky ? `${sky.startMs}/${sky.seed}` : 0);
+/**
+ * Plan sky-1116: a trip is flown on the game's calendar. `args.sky` (`{startMs, seed}`, SunStorms) says on which days; with none given it
+ * is today's (`currentSky()`: null in a test that sets no game date and in training missions 1-3, where the air is the plain table). The
+ * date is part of the cache key, so a day later is a different answer.
+ */
 export function cachedTripProfile(args) {
   const C = Constants;
+  const sky = args.sky !== undefined ? args.sky : currentSky();
   const key = [args.fromKm, args.toKm, args.massKg, args.thrustN, args.ispS, args.areaM2, args.cos, args.stepS,
-    C.TRIP.PROFILE_STEP_S, C.TRIP.PROFILE_MAX_DAYS, C.EARTH_RADIUS_KM, C.MU_EARTH, C.G0].join('|');
+    C.TRIP.PROFILE_STEP_S, C.TRIP.PROFILE_MAX_DAYS, C.EARTH_RADIUS_KM, C.MU_EARTH, C.G0, skyKey(sky)].join('|');
   let hit = _profileCache.get(key);
   if (hit === undefined) {
-    hit = tripProfile(args);
+    hit = tripProfile(args.sky === sky ? args : { ...args, sky });
     if (_profileCache.size >= PROFILE_CACHE_MAX) _profileCache.delete(_profileCache.keys().next().value);
     _profileCache.set(key, hit);
   }
@@ -131,10 +141,11 @@ const FAST_STEP_S = 600;
 const FAST_REF_KG = 300;
 const _fastCache = new Map();
 function referenceDv(a) {
-  const key = [a.fromKm, a.toKm, a.thrustN, a.ispS, a.areaM2, a.cos].join('|');
+  const sky = a.sky !== undefined ? a.sky : currentSky();       // plan sky-1116: the search prices on the game's calendar too
+  const key = [a.fromKm, a.toKm, a.thrustN, a.ispS, a.areaM2, a.cos, skyKey(sky)].join('|');
   let v = _fastCache.get(key);
   if (v === undefined) {
-    const p = tripProfile({ fromKm: a.fromKm, toKm: a.toKm, massKg: FAST_REF_KG, thrustN: a.thrustN, ispS: a.ispS, areaM2: a.areaM2, cos: a.cos, stepS: FAST_STEP_S });
+    const p = tripProfile({ fromKm: a.fromKm, toKm: a.toKm, massKg: FAST_REF_KG, thrustN: a.thrustN, ispS: a.ispS, areaM2: a.areaM2, cos: a.cos, stepS: FAST_STEP_S, sky });
     v = p.ok ? p.dvMps : -1;
     if (_fastCache.size > 20000) _fastCache.clear();
     _fastCache.set(key, v);
@@ -430,30 +441,76 @@ export function gasForDv(dvMps, massKg, ispS) {
 // ---------------------------------------------------------------------------------------------------------------------------
 
 /**
- * A daughter's fetch of a piece `distanceM` away, priced from HER tank the way the game bills it (never the mother's gas): the
- * crossbow spring pays the launch (`CROSSBOW_LAUNCH_SPEED_DEFAULT`, 10 m/s: free), her FEEP pays the arrival kill, impulse-priced
- * against `ARM_TOTAL_DELTAV` (50 m/s = a whole tank; ArmUnit.js:9922-9930, Constants.js:4115); the reel home on the mother's winch is free of the
- * daughter's tank (the winch pays; only `ARM_RESERVE_FUEL` is held back, Constants.js:4100). Reach: the tether times
- * `ARM_DEPLOY_RANGE_FRACTION` (weaver 2,000 m x 0.8 = 1,600 m, spinner 500 m x 0.8 = 400 m). Time: out at the launch speed, home at
- * the cruise cap `REEL_PROFILE.V_CRUISE_MAX` (60 m/s, a light catch; a heavy one reels slower, so this is the lower bound). A model, not a measurement.
- * @param {{distanceM: number, armType?: 'weaver'|'spinner'}} a
- * @returns {{ok: boolean, reachM: number, fuelPct: number, dvMps: number, seconds: number, gasKgMother: number}}
+ * The curved long fetch's gas, MEASURED 2026-11-16: `js/test/_cwRig.js` `flyFetch` (a real ArmUnit on Kepler orbits at the game clock,
+ * launched through `deploy()` and the spring, flown to the first frame of APPROACH), 400 km, the piece on her orbit, ranges 2.2-9.9 km,
+ * tether 12.5 km. Two parts, both in her tank's m/s: the mid-course corrections on the curve (about 0.43 + 0.05 per km of range) and the
+ * arrival from the handover at 400 m to APPROACH, which does not depend on the range but on her launch speed (`[speed, m/s]` rows, linear
+ * between them, flat past the last). 350 and 800 km differ by about 5 %. The curve itself costs no gas: she feels the real gravity
+ * gradient (DaughterCW.js).
+ */
+export const DAUGHTER_CURVE = {
+  measured: '2026-11-16, js/test/_cwRig.js flyFetch, tmp/sky1116/flight/grid2.mjs',
+  correctionBaseMps: 0.43,
+  correctionPerKmMps: 0.05,
+  /** [launch speed m/s, arrival gas m/s] */
+  arrivalRows: [[4, 8.5], [7.1, 8.2], [10, 9.2], [15, 11.3], [25, 21.0]],
+  /** seconds from the spring to APPROACH beyond the curve's own time (launch, the 400 m arrival): measured 12 s at 9.9 km */
+  extraSeconds: 12,
+};
+
+/** Piecewise-linear lookup of `rows` ([x, y]) at x, flat outside. */
+function rowsAt(rows, x) {
+  if (x <= rows[0][0]) return rows[0][1];
+  for (let i = 1; i < rows.length; i++) {
+    if (x <= rows[i][0]) return lerp(rows[i - 1][0], rows[i - 1][1], rows[i][0], rows[i][1], x);
+  }
+  return rows[rows.length - 1][1];
+}
+
+/**
+ * A daughter's fetch of a piece `distanceM` away, priced from HER tank the way the game bills it (never the mother's gas).
+ * Up to `CW_FLIGHT.MIN_RANGE_M` (2 km) the old straight flight: the crossbow spring pays the launch (`CROSSBOW_LAUNCH_SPEED_DEFAULT`, 10 m/s: free), her FEEP pays
+ * the arrival kill, impulse-priced against `ARM_TOTAL_DELTAV` (50 m/s = a whole tank; ArmUnit.js:9922-9930, Constants.js:4115), taken as
+ * the launch speed (a model, not a measurement: the flown straight fetch costs more, 9.5 m/s at 300 m and 31 m/s at 1 km, measured
+ * 2026-11-16 with the same rig; plan sky-1116 leaves the short flight alone). From 2 km the real curved flight (DaughterCW.js): the time is the transfer's
+ * (closed form at the piece's range on her orbit at `altKm`, 400 by default) and the gas is `DAUGHTER_CURVE`, measured on the real
+ * flight; a piece no transfer reaches at that speed or inside the tether's bulge limit is priced the old way (the flight itself then flies the old way too).
+ * The reel home on the mother's winch is free of the daughter's tank (the winch pays; only `ARM_RESERVE_FUEL` is held back, Constants.js:4100). Reach: the
+ * tether times `ARM_DEPLOY_RANGE_FRACTION` (weaver 2,000 m x 0.8 = 1,600 m, spinner 500 m x 0.8 = 400 m; `a.tetherM` for a longer
+ * tier, e.g. 10,000 m graphene = 8,000 m). Home: the cruise cap `REEL_PROFILE.V_CRUISE_MAX` (60 m/s, a light catch; a heavy one reels slower, so this is the lower bound).
+ * @param {{distanceM: number, armType?: 'weaver'|'spinner', tetherM?: number, altKm?: number, launchSpeedMps?: number}} a
+ * @returns {{ok: boolean, reachM: number, fuelPct: number, dvMps: number, seconds: number, gasKgMother: number, curved: boolean}}
  */
 export function daughterLeg(a) {
   const C = Constants;
   const type = a.armType === 'spinner' ? 'spinner' : 'weaver';
-  const tether = type === 'weaver' ? C.WEAVER_TETHER_LENGTH : C.SPINNER_TETHER_LENGTH;
+  const tether = a.tetherM > 0 ? a.tetherM : (type === 'weaver' ? C.WEAVER_TETHER_LENGTH : C.SPINNER_TETHER_LENGTH);
   const reachM = tether * C.ARM_DEPLOY_RANGE_FRACTION;
   const d = Math.max(0, Number(a.distanceM) || 0);
-  const v = C.CROSSBOW_LAUNCH_SPEED_DEFAULT;
-  const dvMps = d > 0 ? v : 0;
+  const v = a.launchSpeedMps > 0 ? a.launchSpeedMps : C.CROSSBOW_LAUNCH_SPEED_DEFAULT;
   const reel = C.REEL_PROFILE.V_CRUISE_MAX;
+  const back = reel > 0 ? d / reel : 0;
+  if (CW_FLIGHT.ENABLED && d >= CW_FLIGHT.MIN_RANGE_M && d <= reachM) {
+    const m = fetchModel({
+      distanceM: d, altKm: a.altKm > 0 ? a.altKm : 400, speedPhys: v / C.TIME_SCALE_GAMEPLAY,
+      maxRangeM: tether * CW_FLIGHT.TETHER_FRACTION,
+    });
+    if (m) {
+      const D = DAUGHTER_CURVE;
+      const dvMps = D.correctionBaseMps + D.correctionPerKmMps * d / 1000 + rowsAt(D.arrivalRows, v);
+      return {
+        ok: true, reachM, fuelPct: (dvMps / C.ARM_TOTAL_DELTAV) * 100, dvMps,
+        seconds: m.T / C.TIME_SCALE_GAMEPLAY + D.extraSeconds + back, gasKgMother: 0, curved: true,
+      };
+    }
+  }
+  const dvMps = d > 0 ? v : 0;
   return {
     ok: d <= reachM, reachM,
     fuelPct: (dvMps / C.ARM_TOTAL_DELTAV) * 100,
     dvMps,
-    seconds: d / v + (reel > 0 ? d / reel : 0),
-    gasKgMother: 0,
+    seconds: d / v + back,
+    gasKgMother: 0, curved: false,
   };
 }
 

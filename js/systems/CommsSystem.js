@@ -134,15 +134,8 @@ function shouldCoalesce(recentWindow, newChannel, thresholdCount) {
 }
 
 // Random radio colour only. The solar-storm, eclipse and solar-particle lines left on 2026-11-09 (owner: they announced
-// things that never happen); the real weather keeps its own alerts in SpaceWeatherSystem.
-const SPACE_WEATHER_TEMPLATES = [
-  {
-    priority: CommsPriority.WARNING,
-    source: 'NOAA SWPC',
-    template: 'Geomagnetic storm, strength Kp={kp} (how charged-up Earth\'s magnetic field is).',
-    effect: 'geoStorm',
-  },
-];
+// things that never happen); the real weather keeps its own alerts in SpaceWeatherSystem. The random geomagnetic-storm line
+// left on 2026-11-16 (plan sky-1116): a storm now happens on a calendar day (SunStorms) and is announced there, with its air.
 
 const KESSLER_TEMPLATES = [
   {
@@ -366,12 +359,10 @@ export class CommsSystem {
 
     this._gameTime = 0;
 
-    // time until the next flavor / launch / weather / mission message
+    // time until the next flavor / launch / mission message
     this._nextFlavorTime = this._randomFlavorInterval();
 
     this._nextLaunchTime = 180 + Math.random() * 300; // 3-8 min
-
-    this._nextWeatherTime = 120 + Math.random() * 240; // 2-6 min
 
     this._nextMissionTime = 60 + Math.random() * 120;
 
@@ -384,11 +375,6 @@ export class CommsSystem {
     this._active = false;
 
     this._isroHandoffDone = false;  // whether the ISRO handoff dialogue has played
-
-    this.activeEffects = {
-      geoStorm: false,
-      geoStormTimer: 0,
-    };
 
     /**
      * Guidance arbiter suppression tier (archive/GUIDANCE_ARBITER_SPEC.md §2), 0–3:
@@ -953,14 +939,6 @@ export class CommsSystem {
       if (time - dt <= 0) this._cooldowns.delete(key);
     }
 
-    if (this.activeEffects.geoStorm) {
-      this.activeEffects.geoStormTimer -= dt;
-      if (this.activeEffects.geoStormTimer <= 0) {
-        this.activeEffects.geoStorm = false;
-        this.addMessage(CommsPriority.INFO, 'NOAA SWPC', 'Geomagnetic activity returning to quiet levels.');
-      }
-    }
-
     this._nextFlavorTime -= dt;
     if (this._nextFlavorTime <= 0) {
       this._nextFlavorTime = this._randomFlavorInterval();
@@ -971,12 +949,6 @@ export class CommsSystem {
     if (this._nextLaunchTime <= 0) {
       this._nextLaunchTime = 180 + Math.random() * 420; // 3-10 min
       this._sendLaunchAlert();
-    }
-
-    this._nextWeatherTime -= dt;
-    if (this._nextWeatherTime <= 0) {
-      this._nextWeatherTime = 180 + Math.random() * 360;
-      this._sendWeatherEvent();
     }
 
     this._nextMissionTime -= dt;
@@ -1005,24 +977,6 @@ export class CommsSystem {
       .replace('{inc}', (28 + Math.floor(Math.random() * 70)).toFixed(1))
       .replace('{count}', (20 + Math.floor(Math.random() * 60)).toString());
     this.addMessage(tmpl.priority, tmpl.source, text, { _kind: 'colour' });
-  }
-
-  /** @private */
-  _sendWeatherEvent() {
-    // Training 1-3: the weather line is skipped WITH its effect flag (colour: a line about the sky, nothing she did)
-    if (isTrainingNow()) return;
-    const idx = Math.floor(Math.random() * SPACE_WEATHER_TEMPLATES.length);
-    const tmpl = SPACE_WEATHER_TEMPLATES[idx];
-    const text = tmpl.template
-      .replace('{kp}', (5 + Math.floor(Math.random() * 4)).toString());
-
-    this.addMessage(tmpl.priority, tmpl.source, text, { _kind: 'colour' });
-
-    if (tmpl.effect === 'geoStorm') {
-      this.activeEffects.geoStorm = true;
-      this.activeEffects.geoStormTimer = 20 + Math.random() * 40;
-      eventBus.emit(Events.COMMS_GEO_STORM, { duration: this.activeEffects.geoStormTimer });
-    }
   }
 
   /** @private */
@@ -1252,14 +1206,9 @@ export class CommsSystem {
     this._gameTime = 0;
     this._nextFlavorTime = this._randomFlavorInterval();
     this._nextLaunchTime = 180 + Math.random() * 300;
-    this._nextWeatherTime = 120 + Math.random() * 240;
     this._nextMissionTime = 60 + Math.random() * 120;
     this._cooldowns.clear();
     this._coalesceWindow = [];
-    this.activeEffects = {
-      geoStorm: false,
-      geoStormTimer: 0,
-    };
     this._active = false;
     this._isroHandoffDone = false;
     // back to the steady-state default; onboarding (if it re-runs) drops to 0

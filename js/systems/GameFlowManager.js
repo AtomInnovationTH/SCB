@@ -778,6 +778,9 @@ export class GameFlowManager {
       // back at ITS height with ITS remaining pieces (DebrisField lays them out on its next update: a load fires no
       // MISSION_START). A game-over save restarts at the start field (the CONTINUE rule below).
       gameState.shipDays = Number.isFinite(save.shipDays) && save.shipDays > 0 ? save.shipDays : 0;
+      // The game date's first-start day and the storm calendar's seed (SunStorms.js); an older save has neither and is stamped on first use.
+      gameState.skyStartMs = Number.isFinite(save.skyStartMs) ? save.skyStartMs : null;
+      gameState.skySeed = Number.isFinite(save.skySeed) ? save.skySeed : null;
       // Ship wear (ShipWear.js): the worn parts come back; a save without it wears nothing on its first frame (wearShipDays =
       // shipDays). ResourceSystem.restore (above) set the wings to 1: they start at their age.
       shipWear.restore(save.shipWear, gameState.shipDays);
@@ -1940,6 +1943,9 @@ export class GameFlowManager {
     eventBus.emit(Events.GAME_RESET);
 
     gameState.reset();
+    // A NEW game gets its own first-start date and storm calendar (stamped on first use, SunStorms.js); a continue loads the save's after this,
+    // and a game-over retry (no newGame) keeps the date it had.
+    if (newGame) { gameState.skyStartMs = null; gameState.skySeed = null; }
     scoringSystem.reset();
     resourceSystem.reset();
 
@@ -2168,6 +2174,9 @@ export class GameFlowManager {
       saveData.fields = fieldsSave;
       if (gameState.shipDays > 0) saveData.shipDays = gameState.shipDays;
     }
+    // Plan sky-1116: the game date's first-start day and the storm calendar's seed, once stamped (SunStorms.js); no key before, so older and test saves are unchanged.
+    if (Number.isFinite(gameState.skyStartMs)) saveData.skyStartMs = gameState.skyStartMs;
+    if (Number.isFinite(gameState.skySeed)) saveData.skySeed = gameState.skySeed;
     // route-1101 lane S2: the station node gap, with the fields block (after it, not beside `shipDays`: lane W2 adds its line there)
     if (fieldsSave && Number.isFinite(gameState.stationNodeGapDeg)) saveData.stationNodeGapDeg = gameState.stationNodeGapDeg;
     if (typeof gameState.startLang === 'string') saveData.startLang = gameState.startLang;   // route-1109 lane C: the start city her tilt, node and station come from, so a load under another language keeps them
@@ -4290,11 +4299,29 @@ export class GameFlowManager {
     return o && Number.isFinite(o.raan) ? initialGapDeg(o.raan * 180 / Math.PI) : null;
   }
 
+  /**
+   * @private A trip that crossed a storm day says so on landing, with what the storm cost against quiet days (plan sky-1116: extra gas in grams and
+   * extra sinking in km, both from `tripProfile`'s `storm`, which `TransferTrip._end` hands on in `leg.storm`). A leg with no storm says nothing.
+   * Called from `_advanceStationGap`, which every flown, called and waited leg already passes through.
+   */
+  _reportStormLeg(leg) {
+    const st = leg && leg.storm;
+    if (!st || !Array.isArray(st.days) || st.days.length === 0) return;
+    const worst = st.days.reduce((m, d) => Math.max(m, d.kp), 0);
+    const n = st.days.length;
+    const gasG = Math.round(Math.abs(st.gasExtraKg) * 1000);
+    const km = Math.abs(st.sinkExtraKm).toFixed(1);
+    const more = st.gasExtraKg >= 0;
+    const text = `A storm crossed the trip (${n === 1 ? 'one day' : `${n} days`}, up to Kp ${worst}): the thicker air cost ${gasG} g ${more ? 'more' : 'less'} gas and ${km} km ${st.sinkExtraKm >= 0 ? 'more' : 'less'} sinking than quiet days.`;
+    eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority: 'info', _keep: true, _result: true });
+  }
+
   /** @private A leg's days have gone on the ship's clock: the gap moves by the station's rate minus hers over them (NodeDrift.gapChangeOverLeg).
    *  Any leg of more than 0 days takes her out of the station object's plane again (`stationJoined`, route-1107-d2). A leg that took her back to the
    *  satellites' plane (`leg.satOffsetDeg`, from `TransferTrip._end`: the node she gave up at a finish) puts that node back on the gap
    *  (plan route-1109 lane D, Locked 4: gap = station node minus hers, and hers has moved back by the offset). */
   _advanceStationGap(leg) {
+    this._reportStormLeg(leg);
     if (leg && leg.days > 0) gameState.stationJoined = false;
     const g = this.stationGapDeg();
     const inc = this._herIncDeg();

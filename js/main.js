@@ -67,6 +67,7 @@ import { setNetWinchSource } from './systems/NetLineupOdds.js';
 import { RewardSystem } from './systems/RewardSystem.js';
 import { CodexSystem } from './systems/CodexSystem.js';import { loadCodexData } from './systems/codex/codexData.js';
 import { SpaceWeatherSystem } from './systems/SpaceWeatherSystem.js';
+import { sunStorms } from './systems/SunStorms.js';
 import { SubsystemEvents } from './systems/SubsystemEvents.js';
 import { CollisionAvoidanceSystem } from './systems/CollisionAvoidanceSystem.js';
 import { MissionEventSystem } from './systems/MissionEventSystem.js';
@@ -1439,7 +1440,8 @@ async function init() {
   codexSystem = new CodexSystem(codexData);
   // Lets the manage_codex SM-2 reminder resurface unread entries.
   skillsSystem.setCodexSystem(codexSystem);
-  spaceWeatherSystem = new SpaceWeatherSystem({ catalogLoader });
+  sunStorms.install();   // the Sun's level and the day's storm go into the air (and every piece feels its own drag outside training 1-3), plan sky-1116
+  spaceWeatherSystem = new SpaceWeatherSystem({ catalogLoader, sunStorms, getAltKm: () => (player ? player.getAltitudeKm() : NaN) });
   subsystemEvents = new SubsystemEvents();
 
   missionEventSystem = new MissionEventSystem();
@@ -6824,7 +6826,7 @@ function gameLoop(timestamp) {
         playerOrbit: player.orbit,
         skTargetId: _skTargetIdForReticle,
         // The pair's second piece gets its own mark while a pair is offered (AutopilotSystem.getPairOffer)
-        pairPiece: (() => { const o = autopilotSystem && autopilotSystem.getPairOffer ? autopilotSystem.getPairOffer() : null; return o ? o.t2 : null; })(),
+        pairPiece: (() => { const o = autopilotSystem && autopilotSystem.getPairOffer ? autopilotSystem.getPairOffer() : null; return o ? o.t2 : (autopilotSystem && autopilotSystem.getPairSetupMarkPiece ? autopilotSystem.getPairSetupMarkPiece() : null); })(),
         // owner 2026-09-07: the score strip's rect as the exclusion band for debris brackets (cached by HUD; null off the ladder).
         exclusionRect: _ladderActive ? hud.scoreStripRect() : null,
         // The target colour law's inputs — same idiom; null off the ladder → the reticle's shipped palette.

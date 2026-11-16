@@ -132,6 +132,10 @@ class PersistenceManager {
         // An old save loads as "fresh, at the start field".
         ...(data.fields != null ? { fields: data.fields } : {}),
         ...(Number.isFinite(data.shipDays) && data.shipDays > 0 ? { shipDays: data.shipDays } : {}),
+        // The game date and the storm calendar (js/systems/SunStorms.js, plan sky-1116): the real date of her first start (ms) and the calendar's
+        // seed. Written only once stamped (outside training), so every older save and every test save is byte-identical.
+        ...(Number.isFinite(data.skyStartMs) ? { skyStartMs: data.skyStartMs } : {}),
+        ...(Number.isFinite(data.skySeed) ? { skySeed: data.skySeed } : {}),
         // Ship wear (ShipWear.serialize, DECISIONS §57 row 3): `{d: ship day the wear is applied up to, e: engine N·s, b: battery
         // cycles, w: wing age}`; written only once something is worn (a fresh save is byte-identical); an old save loads as "nothing worn".
         ...(data.shipWear != null && typeof data.shipWear === 'object' ? { shipWear: data.shipWear } : {}),
