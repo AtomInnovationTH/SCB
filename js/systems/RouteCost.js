@@ -442,21 +442,44 @@ export function gasForDv(dvMps, massKg, ispS) {
 
 /**
  * The curved long fetch's gas, MEASURED 2026-11-16: `js/test/_cwRig.js` `flyFetch` (a real ArmUnit on Kepler orbits at the game clock,
- * launched through `deploy()` and the spring, flown to the first frame of APPROACH), 400 km, the piece on her orbit, ranges 2.2-9.9 km,
- * tether 12.5 km. Two parts, both in her tank's m/s: the mid-course corrections on the curve (about 0.43 + 0.05 per km of range) and the
- * arrival from the handover at 400 m to APPROACH, which does not depend on the range but on her launch speed (`[speed, m/s]` rows, linear
- * between them, flat past the last). 350 and 800 km differ by about 5 %. The curve itself costs no gas: she feels the real gravity
- * gradient (DaughterCW.js).
+ * launched through `deploy()` and the spring, flown to the first frame of APPROACH), 400 km, the piece on her orbit. From 2.2 km (ranges
+ * 2.2-9.9 km, tether 12.5 km) two parts, both in her tank's m/s: the mid-course corrections on the curve (about 0.43 + 0.05 per km of
+ * range) and the arrival from the handover at 400 m to APPROACH, which does not depend on the range but on her launch speed (`[speed,
+ * m/s]` rows, linear between them, flat past the last). 350 and 800 km differ by about 5 %. The curve itself costs no gas: she feels the
+ * real gravity gradient (DaughterCW.js).
+ * From `CW_FLIGHT.MIN_RANGE_M` (500 m) to 2.2 km the two parts no longer separate (the handover at 400 m leaves a short curve, and at
+ * slow speeds the arrival grows with the range), so the whole spend is read from `shortRows` (plan sky-1116, lane L-500, same rig, 400 km,
+ * `tmp/sky1116/flight/grid500b.mjs`): per launch speed, `[range m, flown gas m/s]`, linear in range, then linear between the speeds.
  */
 export const DAUGHTER_CURVE = {
-  measured: '2026-11-16, js/test/_cwRig.js flyFetch, tmp/sky1116/flight/grid2.mjs',
+  measured: '2026-11-16, js/test/_cwRig.js flyFetch, tmp/sky1116/flight/grid2.mjs (2.2 km and up), grid500b.mjs (0.5-2.2 km)',
   correctionBaseMps: 0.43,
   correctionPerKmMps: 0.05,
   /** [launch speed m/s, arrival gas m/s] */
   arrivalRows: [[4, 8.5], [7.1, 8.2], [10, 9.2], [15, 11.3], [25, 21.0]],
   /** seconds from the spring to APPROACH beyond the curve's own time (launch, the 400 m arrival): measured 12 s at 9.9 km */
   extraSeconds: 12,
+  /** metres: below this the whole spend is `shortRows`; from it up the corrections plus arrival above (the two agree within 4% here) */
+  shortBelowM: 2200,
+  /** [launch speed m/s, [[range m, flown gas m/s], ...]] from 500 m to 2.2 km (the 2.2 km row is the joint with the formula) */
+  shortRows: [
+    [4, [[500, 6.69], [750, 7.56], [1000, 8.08], [1500, 8.65], [2000, 8.99], [2200, 9.10]]],
+    [7.1, [[500, 7.21], [750, 7.45], [1000, 7.86], [1500, 8.38], [2000, 8.68], [2200, 8.75]]],
+    [10, [[500, 9.33], [750, 9.15], [1000, 9.20], [1500, 9.44], [2000, 9.62], [2200, 9.66]]],
+    [15, [[500, 12.68], [750, 12.72], [1000, 12.64], [1500, 12.46], [2000, 12.28], [2200, 12.25]]],
+    [25, [[500, 22.67], [750, 22.63], [1000, 22.61], [1500, 22.56], [2000, 22.34], [2200, 22.25]]],
+  ],
 };
+
+/** The curved fetch's gas (m/s of her tank) at range `d` metres and launch speed `v` m/s: the short table below `shortBelowM`, else the formula. */
+export function curvedFetchDv(d, v) {
+  const D = DAUGHTER_CURVE;
+  if (d < D.shortBelowM) {
+    const col = D.shortRows.map(([sp, rows]) => [sp, rowsAt(rows, d)]);
+    return rowsAt(col, v);
+  }
+  return D.correctionBaseMps + D.correctionPerKmMps * d / 1000 + rowsAt(D.arrivalRows, v);
+}
 
 /** Piecewise-linear lookup of `rows` ([x, y]) at x, flat outside. */
 function rowsAt(rows, x) {
@@ -469,11 +492,11 @@ function rowsAt(rows, x) {
 
 /**
  * A daughter's fetch of a piece `distanceM` away, priced from HER tank the way the game bills it (never the mother's gas).
- * Up to `CW_FLIGHT.MIN_RANGE_M` (2 km) the old straight flight: the crossbow spring pays the launch (`CROSSBOW_LAUNCH_SPEED_DEFAULT`, 10 m/s: free), her FEEP pays
+ * Under `CW_FLIGHT.MIN_RANGE_M` (500 m) the old straight flight: the crossbow spring pays the launch (`CROSSBOW_LAUNCH_SPEED_DEFAULT`, 10 m/s: free), her FEEP pays
  * the arrival kill, impulse-priced against `ARM_TOTAL_DELTAV` (50 m/s = a whole tank; ArmUnit.js:9922-9930, Constants.js:4115), taken as
- * the launch speed (a model, not a measurement: the flown straight fetch costs more, 9.5 m/s at 300 m and 31 m/s at 1 km, measured
- * 2026-11-16 with the same rig; plan sky-1116 leaves the short flight alone). From 2 km the real curved flight (DaughterCW.js): the time is the transfer's
- * (closed form at the piece's range on her orbit at `altKm`, 400 by default) and the gas is `DAUGHTER_CURVE`, measured on the real
+ * the launch speed (a model, not a measurement: the flown straight fetch costs more, 12 m/s at 300 m and 16 m/s at 500 m, measured
+ * 2026-11-16 with the same rig; plan sky-1116 leaves the short flight alone). From 500 m the real curved flight (DaughterCW.js): the time is the transfer's
+ * (closed form at the piece's range on her orbit at `altKm`, 400 by default) and the gas is `curvedFetchDv` (`DAUGHTER_CURVE`), measured on the real
  * flight; a piece no transfer reaches at that speed or inside the tether's bulge limit is priced the old way (the flight itself then flies the old way too).
  * The reel home on the mother's winch is free of the daughter's tank (the winch pays; only `ARM_RESERVE_FUEL` is held back, Constants.js:4100). Reach: the
  * tether times `ARM_DEPLOY_RANGE_FRACTION` (weaver 2,000 m x 0.8 = 1,600 m, spinner 500 m x 0.8 = 400 m; `a.tetherM` for a longer
@@ -497,7 +520,7 @@ export function daughterLeg(a) {
     });
     if (m) {
       const D = DAUGHTER_CURVE;
-      const dvMps = D.correctionBaseMps + D.correctionPerKmMps * d / 1000 + rowsAt(D.arrivalRows, v);
+      const dvMps = curvedFetchDv(d, v);
       return {
         ok: true, reachM, fuelPct: (dvMps / C.ARM_TOTAL_DELTAV) * 100, dvMps,
         seconds: m.T / C.TIME_SCALE_GAMEPLAY + D.extraSeconds + back, gasKgMother: 0, curved: true,

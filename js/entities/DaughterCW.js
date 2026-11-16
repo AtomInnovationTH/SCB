@@ -27,13 +27,17 @@ const MU = Constants.MU_EARTH * 1e9;   // m^3/s^2
 
 /**
  * The tunables, in one object so a test can switch the long fetch off for one call and put it back.
- * `MIN_RANGE_M` is plan sky-1116's "about 2 km": a fetch shorter than this keeps the old controller exactly.
+ * `MIN_RANGE_M` is 500 m (plan sky-1116: first 2 km, lowered to 500 m by the owner 2026-11-16 "Start at 500 m" after the old straight flight measured
+ * 12 m/s of her 50 at 300 m, 16 at 500 m, 31 at 1 km and dry at 1.5 km): a fetch shorter than this keeps the old controller exactly.
  */
 export const CW_FLIGHT = {
   ENABLED: true,
   /** metres: the piece must be at least this far at the spring for the curved flight to be used */
-  MIN_RANGE_M: 2000,
-  /** metres: inside this range of the piece the old controller flies the arrival (at least 3x its approach threshold) */
+  MIN_RANGE_M: 500,
+  /** metres: inside this range of the piece the old controller flies the arrival (at least 3x its approach threshold). Kept at 400 m for the
+   *  500 m-2 km fetches (L-500, 2026-11-16, `_cwRig` `flyFetch`, 10 m/s, 400 km): a 500 m fetch flies only 100 m of curve yet costs 9.3 m/s of
+   *  her 50, the same as 1 km (9.2) and 2 km (9.6), and she is caught within 17 m at every range; a smaller handover would save 1-2 m/s
+   *  (200 m: 7.8 at 500 m) but leaves the last stretch open-loop and moves every `RouteCost.DAUGHTER_CURVE` row. */
   HANDOFF_M: 400,
   /** real seconds between mid-course corrections */
   REPLAN_REAL_S: 8,

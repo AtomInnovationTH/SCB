@@ -925,7 +925,7 @@ export class ArmManager {
     // TRANSIT corrects. One scratch output object (no per-frame allocation).
     const provOut = { x: 0, y: 0, z: 0 };
     const provider = () => {
-      // A long fetch (2 km+): the crossbow pushes along its strut and the curved flight leaves along the plan's direction, which is far
+      // A long fetch (500 m+, `CW_FLIGHT.MIN_RANGE_M`): the crossbow pushes along its strut and the curved flight leaves along the plan's direction, which is far
       // off the line to the piece, so the strut is turned to that (sky-1116 L-flight fix; null = the line to the piece, as before).
       const cw = typeof arm.cwAimDirection === 'function' ? arm.cwAimDirection(target) : null;
       if (cw) { provOut.x = cw.x; provOut.y = cw.y; provOut.z = cw.z; return provOut; }
