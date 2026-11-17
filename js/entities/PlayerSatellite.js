@@ -43,6 +43,7 @@ import {
   atmosphericDrag,
 } from './OrbitalMechanics.js';
 import { DEG2RAD, RAD2DEG, degToRad, radToDeg, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
+import { RECOIL_SCALE, pushN2Kg } from '../systems/PairRecoil.js'; import { isTrainingNow } from '../systems/TrainingHintGate.js';   // the linear recoil nudge's scale (one place) and what a leftover pair push costs in N2; training 1-3 keeps the old refund
 import { SunOvenBalls } from './SunOvenBall.js';
 
 // Engine-gas flow follows thrust and Isp. Module-level (not methods) so the borrowed-prototype / mock ships the tests use
@@ -7868,9 +7869,8 @@ export class PlayerSatellite extends THREE.Group {
     const motherMass = this.mass || 130; // kg
     const recoilSpeed = (armMass * speed) / motherMass;
 
-    // Scene units/s, scaled to 10% of theoretical: a subtle nudge, not disorienting for new players (real ADR sats
+    // Scene units/s, scaled to 10% of theoretical (`RECOIL_SCALE`, PairRecoil.js): a subtle nudge, not disorienting for new players (real ADR sats
     // absorb most recoil with internal momentum management).
-    const RECOIL_SCALE = 0.1;
     const recoilDv = recoilSpeed * M * RECOIL_SCALE;
 
     // Recoil opposite to the arm launch direction, approximated as backward along the ship's heading (-Z local)
@@ -7948,32 +7948,38 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Handle the dual-fire recoil result: cancelled → no compensation needed (opposing arms cancelled momentum); residual
-   * → small RCS correction only.
+   * Handle the dual-fire recoil result. Each daughter's `_autoRcsCompensation` already billed its own push (the gas, and the velocity it
+   * cancelled). The two pushes are a vector sum (`ArmManager._tickPairRecoil`): `residualDv` is what is left (0 when they cancel). Refund
+   * what cancels: the frame's N2 minus what the residual alone costs (the per-shot formula, `PairRecoil.pushN2Kg`), never below 0. Nothing is
+   * added: the bill for the leftover is already in the gas kept, and its velocity was cancelled with each shot (no second compensation).
    * @param {object} data - { cancelled: boolean, residualDv: number }
    * @private
    */
   _applyDualFireRecoil(data) {
-    if (data.cancelled) {
-      // Momentum fully cancelled by opposing arms: each arm's autoRcsCompensation already cancelled the velocity, so only
-      // the cold gas the individual CROSSBOW_FIRE handlers consumed (2 arms × compensation) is refunded.
-      if (this._crossbowAutoRcs && this._frameN2Consumed > 0) {
-        eventBus.emit(Events.RESOURCE_REPLENISH, {
-          resource: 'coldGas',
-          amount: coldGasKgToPool(this._frameN2Consumed),   // kg back to pool units, the way it was billed
-        });
+    if (isTrainingNow()) {   // training 1-3: main's rule, unchanged (cancelled: the whole frame's gas back; else the old residual compensation)
+      const cancelledOld = !!data.cancelled;
+      if (cancelledOld && this._crossbowAutoRcs && this._frameN2Consumed > 0) {
+        eventBus.emit(Events.RESOURCE_REPLENISH, { resource: 'coldGas', amount: coldGasKgToPool(this._frameN2Consumed) });
       }
       this._frameRecoilDv = 0;
       this._frameRecoilCount = 0;
       this._frameN2Consumed = 0;
+      if (!cancelledOld) this._autoRcsCompensation(data.residualDv * M);
       return;
     }
-
+    const consumedKg = this._frameN2Consumed;
     this._frameRecoilDv = 0;
     this._frameRecoilCount = 0;
     this._frameN2Consumed = 0;
-    const residualDv = data.residualDv * M;
-    this._autoRcsCompensation(residualDv);
+    if (!this._crossbowAutoRcs || !(consumedKg > 0)) return;
+    const keepKg = data.cancelled ? 0 : pushN2Kg(data.residualDv);
+    const refundKg = Math.max(0, consumedKg - keepKg);
+    if (refundKg > 0) {
+      eventBus.emit(Events.RESOURCE_REPLENISH, {
+        resource: 'coldGas',
+        amount: coldGasKgToPool(refundKg),   // kg back to pool units, the way it was billed
+      });
+    }
   }
 
   /**

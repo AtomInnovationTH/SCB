@@ -11,6 +11,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import { daughterMassKg } from '../systems/daughterFittings.js';   // a daughter's live mass: base + relay mirror / weaver laser
+import { pairPush } from '../systems/PairRecoil.js'; import { isTrainingNow } from '../systems/TrainingHintGate.js';   // the pair's leftover push, as a vector (each spring along its own launch line); training 1-3 keeps the scalar
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { strutTipMeters, heldCargoPlumeConflictAt, heldCargoFoulsCorridorAt, suggestCargoArm } from '../systems/CoMCalculator.js';
@@ -2402,8 +2403,11 @@ export class ArmManager {
   }
 
   /**
-   * Once both springs of a pair launch have fired (the same frame) the opposite kicks cancel: emit `DUAL_FIRE_RECOIL`, so the
-   * linear-recoil gas each daughter's push billed is refunded (`PlayerSatellite._applyDualFireRecoil`). Called each frame.
+   * Once both springs of a pair launch have fired (the same frame) the pushes are compared: emit `DUAL_FIRE_RECOIL`, so the linear-recoil
+   * gas each daughter's push billed is refunded for the part that cancels (`PlayerSatellite._applyDualFireRecoil`). The residual is the VECTOR
+   * sum |m1 v1 u1 + m2 v2 u2| / M over each daughter's real launch direction (`launchDirection`, the spring's own) and speed: struts that are
+   * not exactly opposite (curved launches are 149-180 degrees apart) leave a push, and two equal pushes 90 degrees apart leave sqrt(2) of
+   * one, which the old scalar |m1 v1 - m2 v2| called 0. Without both directions (a bare test arm) it is that scalar. Called each frame.
    */
   _tickPairRecoil(dt) {
     const pr = this._pairRecoil;
@@ -2413,10 +2417,17 @@ export class ArmManager {
       this._pairRecoil = null;
       const m1 = daughterMassKg(pr.a, this.playerSatellite);
       const m2 = daughterMassKg(pr.b, this.playerSatellite);
-      const residual = Math.abs(m1 * pr.a.launchSpeed - m2 * pr.b.launchSpeed);
       const live = this.playerSatellite ? this.playerSatellite.mass : NaN;
       const motherMass = Number.isFinite(live) && live > 0 ? live : Constants.MOTHER_DRAG.MASS_KG;
-      const residualDv = residual / motherMass;
+      const speed = (a) => (a._launchSpeedMps > 0 ? a._launchSpeedMps : a.launchSpeed);   // what the spring really gave her
+      const d1 = pr.a.launchDirection, d2 = pr.b.launchDirection;
+      let residualDv;
+      if (!isTrainingNow() && d1 && d2 && d1.lengthSq() > 0 && d2.lengthSq() > 0) {   // training 1-3: the scalar, exactly as on main
+        const u1 = d1.clone().normalize(), u2 = d2.clone().normalize();
+        residualDv = pairPush([u1.x, u1.y, u1.z], [u2.x, u2.y, u2.z], m1, speed(pr.a), m2, speed(pr.b), motherMass);
+      } else {
+        residualDv = Math.abs(m1 * pr.a.launchSpeed - m2 * pr.b.launchSpeed) / motherMass;
+      }
       eventBus.emit(Events.DUAL_FIRE_RECOIL, { cancelled: residualDv < 0.01, residualDv });
     } else if (pr.t > 5 || (pr.a.state !== ARM_STATES.LAUNCHING && pr.b.state !== ARM_STATES.LAUNCHING && pr.t > 0)) {
       this._pairRecoil = null;       // one never fired (recalled in the clamp): nothing to refund together

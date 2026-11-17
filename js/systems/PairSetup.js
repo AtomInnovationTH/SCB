@@ -33,6 +33,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { isTrainingNow } from './TrainingHintGate.js';
+import { aimVecLvlh } from './PairCurveAim.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 
 /** The numbers of this lane (plan sky-1116 keeps each lane's constants in its own module). */
@@ -363,7 +364,8 @@ export function attitudeInLvlh(Rw, L) {
  * @param {object} env `{ solvePairAimAll, pairTethersCross, pairAttitudeFor, pairLineBlockedAt?(alpha) }` (from AutopilotSystem)
  * @param {object} g `pairGeometry` @param {ArrayLike<number>} Rb her attitude in LVLH (`attitudeInLvlh`)
  * @param {number[]} rA metres from her centre to piece A, LVLH @param {number[]} rB likewise piece B
- * @param {{planMaxDeg:number, type:string, speedA:number, speedB:number}} opt
+ * @param {{planMaxDeg:number, type:string, speedA:number, speedB:number, aimA?:number[], aimB?:number[]}} opt aimA/aimB: where the two struts
+ *   must point (LVLH, from her centre): the pieces' curve launch directions (`PairCurveAim.aimVecLvlh`); omitted, the lines of sight rA, rB
  * @returns {{ok:boolean, why?:string, miss?:number, turnDeg?:number, alpha?:number}}
  */
 export function pairVerdict(env, g, Rb, rA, rB, opt) {
@@ -372,7 +374,7 @@ export function pairVerdict(env, g, Rb, rA, rB, opt) {
   const sep = Math.acos(Math.max(-1, Math.min(1, dot3(rA, rB) / (la * lb)))) * 180 / Math.PI;
   if (sep < PS.MIN_SEP_DEG) return { ok: false, why: 'clump' };
   if (Math.abs(la / opt.speedA - lb / opt.speedB) > (PS.HOME_GAP_S ?? Infinity)) return { ok: false, why: 'home gap' };
-  const sols = env.solvePairAimAll(g, Rb, rA, rB, { turnDeg: PS.TURN_DEG });
+  const sols = env.solvePairAimAll(g, Rb, opt.aimA || rA, opt.aimB || rB, { turnDeg: PS.TURN_DEG });   // the struts aim at the aim vectors; the tethers below are judged on the pieces' places (rA, rB)
   let why = 'no solution';
   for (const r of sols) {
     if (r.missA > PS.MISS_DEG || r.missB > PS.MISS_DEG || r.turnDeg > PS.TURN_DEG + 1e-6) { why = 'miss'; continue; }
@@ -563,11 +565,17 @@ export class PairSetup {
     const env = { solvePairAimAll: this._env.solvePairAimAll, pairTethersCross: this._env.pairTethersCross, pairAttitudeFor: this._env.pairAttitudeFor,
       pairLineBlockedAt: (alpha) => typeof ctx.am.pairLineBlockedAt === 'function' && ctx.am.pairLineBlockedAt(ctx.armA, ctx.armB, alpha) };
     const planMaxDeg = ctx.ap._pairPlaneMax();
+    // where each strut must point (`PairCurveAim`): the pieces' CURVE launch directions, planned from the relative state THERE (here it is
+    // `planLaunch` on the predicted state, not `cwAimDirection`, which reads the live orbits); a piece under 500 m, or training, by its line
+    const tetherMax = ctx.reachM / Constants.ARM_DEPLOY_RANGE_FRACTION, speedGame = Math.min(ctx.speedA, ctx.speedB);
+    const aim = (pos, vel) => (vel ? aimVecLvlh({ n: ctx.n, pos, vel, speedGame, tetherMax }) : pos);
+    const opt = (aimA, aimB) => ({ planMaxDeg, type: ctx.type, speedA: ctx.speedA, speedB: ctx.speedB, aimA, aimB });
+    const rel = (st, V) => [st.vel[0] - V[0], st.vel[1] - V[1], st.vel[2] - V[2]];   // a piece's rate relative to her at the end point
     return {
       n: ctx.n, a: ctx.a, massKg: ctx.mass * ctx.cons, ve: ctx.ve, pieces, reachM: ctx.reachM, launchSpeed: Math.min(ctx.speedA, ctx.speedB),
       homeGapS: PS.HOME_GAP_S ?? 30, windows, z0: ctx.z0,
-      verdictAt: (rA, rB) => pairVerdict(env, ctx.g, ctx.Rb, rA, rB, { planMaxDeg, type: ctx.type, speedA: ctx.speedA, speedB: ctx.speedB }).ok,
-      verdict: (c) => pairVerdict(env, ctx.g, ctx.Rb, c.rA, c.rB, { planMaxDeg, type: ctx.type, speedA: ctx.speedA, speedB: ctx.speedB }).ok,
+      verdictAt: (rA, rB, vA, vB) => pairVerdict(env, ctx.g, ctx.Rb, rA, rB, opt(aim(rA, vA), aim(rB, vB))).ok,
+      verdict: (c) => pairVerdict(env, ctx.g, ctx.Rb, c.rA, c.rB, opt(aim(c.rA, rel(c.endA, c.V)), aim(c.rB, rel(c.endB, c.V)))).ok,
     };
   }
 
@@ -592,7 +600,7 @@ export class PairSetup {
       tried++;
       const c = finishGoal(inp, g);
       // a pair the rule already offers from where she is needs no burn: the player's own pick shows it
-      if (c && c.arcs.dv * 1.5 < dvLeft && inp.verdict(c) && !inp.verdictAt(pieces[c.i].pos, pieces[c.j].pos)) pass.push(c);
+      if (c && c.arcs.dv * 1.5 < dvLeft && inp.verdict(c) && !inp.verdictAt(pieces[c.i].pos, pieces[c.j].pos, pieces[c.i].vel, pieces[c.j].vel)) pass.push(c);
       yield;
     }
     const best = chooseBest(pass);
@@ -774,7 +782,7 @@ export class PairSetup {
     const pieces = this._pieces(ctx, [b.idA, b.idB]);
     if (pieces.length < 2) return { ok: false };
     const pa = pieces.find((x) => x.id === b.idA) || pieces[0], pb = pieces.find((x) => x.id === b.idB) || pieces[1];
-    return { ok: !!this._input(ctx, pieces).verdictAt(pa.pos, pb.pos), labelA: pieceLabel(pa.d, pa.dist), labelB: pieceLabel(pb.d, pb.dist) };
+    return { ok: !!this._input(ctx, pieces).verdictAt(pa.pos, pb.pos, pa.vel, pb.vel), labelA: pieceLabel(pa.d, pa.dist), labelB: pieceLabel(pb.d, pb.dist) };
   }
 
   _arrive() {

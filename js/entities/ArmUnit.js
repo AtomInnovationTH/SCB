@@ -3841,17 +3841,17 @@ export class ArmUnit {
    *   whose direction it cannot take is passed over for the next one (ArmManager gives it the reach and hull test); null: the ship turns, any direction
    * @returns {THREE.Vector3|null} unit, scene axes (a fresh copy)
    */
-  cwAimDirection(target, accept = null) {
+  cwAimDirection(target, accept = null, opts = null) {   // opts.fresh: neither read nor write the one-target cache (a pair asks about two pieces; `PairCurveAim`)
     const speed = this._cwLaunchSpeed();
     const kind = accept ? 1 : 0;
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const c = this._cwAimCache || (this._cwAimCache = [null, null]);
     const hit = c[kind];
-    if (hit && hit.target === target && hit.speed === speed && now - hit.at < CW_FLIGHT.AIM_REFRESH_MS && now >= hit.at) {
+    if (!(opts && opts.fresh) && hit && hit.target === target && hit.speed === speed && now - hit.at < CW_FLIGHT.AIM_REFRESH_MS && now >= hit.at) {
       return hit.dir ? hit.dir.clone() : null;
     }
     let dir = null;
-    const inp = this._cwEligibleInputs(target);
+    const inp = (opts && opts.anyRange && CW_FLIGHT.ENABLED && !this._manualMode && !isTrainingNow()) ? this._cwInputs(this._frameParentPos, target) : this._cwEligibleInputs(target);   // opts.anyRange: the plan whatever the range (a pair's latched aim for a piece that drifted under 500 m); one line, the file's line pins stay put
     if (inp) {
       const plan = planLaunch({
         R: inp.R, V: inp.V, dd: inp.dd, dtgt: inp.dtgt, ut: inp.ut,
@@ -3859,7 +3859,7 @@ export class ArmUnit {
       }, accept ? { accept } : {});
       if (plan) dir = new THREE.Vector3(plan.dir[0], plan.dir[1], plan.dir[2]);
     }
-    c[kind] = { target, speed, at: now, dir };
+    if (!(opts && opts.fresh)) c[kind] = { target, speed, at: now, dir };
     return dir ? dir.clone() : null;
   }
 
