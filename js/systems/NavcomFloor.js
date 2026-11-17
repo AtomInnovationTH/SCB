@@ -95,7 +95,7 @@ export class NavcomFloor {
    * ΔV/fuel/time assessments + the reachability orb); absent, it is fully inert (no budget reads, no orb DOM). The field
    * planners' clock poll is dep-independent by design. Others: clusterSource (getDebrisClusters()), player (orbit /
    * getOrbitalElements(), getPosition/getVelocity), project ((worldVec3)->{x,y,visible}), clusterIcons / transferWindows /
-   * reachOrb (default: fresh), onPlanTransfer ((cluster, window) => void), now (ms clock, tests).
+   * reachOrb (default: fresh), onPlanTransfer ((cluster, window) => void), now (ms clock, tests), realSky (RealSkyLayer: show(4) / hide(4)).
    * @param {object} [deps]
    */
   constructor(deps = {}) {
@@ -108,6 +108,7 @@ export class NavcomFloor {
     this._getMassBudget = deps.getMassBudget || null;
     this._orb = deps.reachOrb || new ReachOrb();
     this._now = deps.now || _nowMs;
+    this._realSky = deps.realSky || null;   // the real-catalogue dots (ui/RealSkyLayer.js, plan sky-1116): shown on this floor and on SDA
     // The "where next" list (ui/WhereNextList.js) this floor hosts; set by main.js once built.
     this._whereNext = null;
     this._whereNextHeld = false;     // the fate list holds the where-next list hidden
@@ -161,6 +162,7 @@ export class NavcomFloor {
     if (this._getMassBudget && this._orb.show) this._orb.show();
     if (this._whereNext) this._whereNext.setFloorShown(!this._whereNextHeld);     // pending choice: the list is there again on return (unless the fate list holds it)
     if (this._heightScale) this._heightScale.show();
+    if (this._realSky) this._realSky.show(FLOOR.id);
   }
 
   /** Leave NAVCOM: hide the costume (state kept so re-entry is cheap). */
@@ -172,6 +174,7 @@ export class NavcomFloor {
     if (this._orb.hide) this._orb.hide();
     if (this._whereNext) this._whereNext.setFloorShown(false);    // a pending choice stays pending; only the panel goes
     if (this._heightScale) this._heightScale.hide();
+    if (this._realSky) this._realSky.hide(FLOOR.id);
   }
 
 

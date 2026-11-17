@@ -133,6 +133,9 @@ import { NavcomFloor } from './systems/NavcomFloor.js';
 import { earthTurnTrigger } from './systems/EarthTurn.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
+import { RealSkyLayer } from './ui/RealSkyLayer.js';
+import { RealSkyCard } from './ui/RealSkyCard.js';
+import { isTrainingNow } from './systems/TrainingHintGate.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
 import { LibraryPane } from './ui/LibraryPane.js';
@@ -861,6 +864,8 @@ let f4LastFocusId = null;
 // below. Inert while LADDER.ENABLED is false.
 let proxNetFloor;
 let sdaFloor;
+// The real catalogue as dots on floors 4-5 (ui/RealSkyLayer.js, plan sky-1116). Built in the ladder block; its clock is ticked from gameLoop.
+let realSkyLayer = null;
 let hullcamFloor;
 // The F1 REFIT section engine (RefitPane: the seven-subsystem index, the ranked fits, BUY, the wallet). A HOSTED
 // section engine: renders into the slot the WorkbenchPane shell mounts it in; owns no root / tab / slide.
@@ -1954,7 +1959,20 @@ async function init() {
   // dispatches its 'plan-transfer' Space verb. The world→screen projector is built off the ladder camera;
   // onPlanTransfer routes the planned transfer into the shipped approach autopilot. Never activated while
   // LADDER.ENABLED is false.
+  // The real catalogue (data/sky.json, fetched on the first entry to floor 4 or 5) as dots; both floors show/hide it from their
+  // activate()/deactivate(). ActiveSatellites' hand-placed template orbits are hidden while it shows (nothing invented on 4-5).
+  realSkyLayer = new RealSkyLayer({
+    scene,
+    getCamera: () => (cameraSystem ? cameraSystem.camera : null),
+    getViewport: () => ({ w: window.innerWidth, h: window.innerHeight }),
+    dateMs: () => sunStorms.dateMs(),
+    isTraining: () => isTrainingNow(),
+    isGlass: () => GestureHints.isGlass(),
+    card: new RealSkyCard(),
+    hideWhileActive: activeSatellites ? [activeSatellites.group] : [],
+  });
   navcomFloor = new NavcomFloor({
+    realSky: realSkyLayer,
     simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // plain trip lines at the simple level
     clusterSource: debrisField,
     player,
@@ -1982,6 +2000,7 @@ async function init() {
   // F7 (SDA) content orchestrator: screen-space mass-band chart over live cluster/active-sat/Kessler
   // aggregates. Activated on debrisMode 'massBands'; Space flips the VALUE↔THREAT lens.
   sdaFloor = new SdaFloor({
+    realSkyLayer,
     clusterSource: debrisField,
     satSource: () => catalogLoader.getAllActiveSats(),
     realSkySource: () => catalogLoader.getRealSky(),
@@ -3041,6 +3060,9 @@ async function init() {
       const hit = tapNearestWithin(proxNetFloor.lastInsertionPoints(), x, y);
       if (hit) { proxNetFloor.selectInsertion(hit.point.zone); return 'insertion'; }
     }
+    // Floors 4 and 5: a tap on a real catalogue dot opens its card (RealSkyLayer.tap: the nearest painted dot inside the tap
+    // radius); a miss keeps today's behaviour on these floors (nothing).
+    if (floor === 4 || floor === 5) return (realSkyLayer && realSkyLayer.tap(x, y)) ? 'sky' : null;
     if (floor !== 2 && floor !== 3) return null;
     // The ONE eligibility rule is TargetAcquisition.getEligibleTargets (the same rule InputManager._cycleTarget
     // applies), so the tap can never split the selection universe from the Tab/T cycle.
@@ -4287,6 +4309,7 @@ async function init() {
       // Getters (the __scbSceneManager pattern): the debris field (to project a target for the tap), the input
       // manager (its PUBLIC keys map), the autopilot (the F2 Space verb).
       window.__scbDebrisField = () => debrisField;
+      window.__scbRealSky = () => realSkyLayer;   // the real catalogue dots (plan sky-1116): the browser probe reads dots, picks, the card
       window.__scbInputManager = () => inputManager;
       window.__scbAutopilot = () => autopilotSystem;
       window.__touchControls = () => touchControls;   // undefined on a no-touch boot (never constructed)
@@ -6317,6 +6340,7 @@ function gameLoop(timestamp) {
   }
   _simClock.update(realDt, _simWheelTurn, _simSig);
   _simClock.frame(dt, dtWorld);
+  if (realSkyLayer) realSkyLayer.tickClock(_simClock.gameDtWorld);   // the real sky's clock: game seconds since the game date last moved
   const _simK = _simClock.k;
   const _simN = _simClock.n, _simStepDt = _simClock.stepDt, _simStepDw = _simClock.stepDtWorld;
   const _simGameDt = _simClock.gameDt, _simGameDw = _simClock.gameDtWorld;
@@ -7153,6 +7177,8 @@ function updateCamera(dt, timestamp) {
   // SDA (F7): screen-space chart — no projector or ship pose needed; the floor self-throttles its data refresh
   // (2 s cadence).
   if (sdaFloor && sdaFloor.isActive()) sdaFloor.update();
+  // The real catalogue dots (floors 4-5): after the camera moved, so floor 5's projection reads this frame's pose; self-gated.
+  if (realSkyLayer) realSkyLayer.update();
 
   // HULL CAM (F3): the camera→subject distance in METRES drives the overview/detail lens split; centerX (the
   // subject's screen x) picks the rail side for the callout cards. Reads this frame's camera pose, so it stays in

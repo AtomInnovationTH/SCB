@@ -49,6 +49,7 @@ export class SdaFloor {
    * @param {object} [deps.chart] - SdaChart instance (default: fresh)
    * @param {function} [deps.realSkySource] - () => data/real-sky.json summary or null (CatalogLoader.getRealSky())
    * @param {function} [deps.now] - monotonic ms clock (tests)
+   * @param {object} [deps.realSkyLayer] - RealSkyLayer (show(5) / hide(5)); absent = no real dots
    */
   constructor(deps = {}) {
     this._clusterSource = deps.clusterSource || null;
@@ -57,6 +58,7 @@ export class SdaFloor {
     this._kessler = deps.kessler || null;
     this._chart = deps.chart || new SdaChart();
     this._now = deps.now || _nowMs;
+    this._realSkyLayer = deps.realSkyLayer || null;   // the real-catalogue dots (ui/RealSkyLayer.js, plan sky-1116): show(5) / hide(5)
 
     this._active = false;
     this._bands = [];
@@ -79,12 +81,14 @@ export class SdaFloor {
     this._chart.setLens(LENSES[0]); // VALUE on arrival, every arrival
     this.refreshData();
     if (this._chart.show) this._chart.show();
+    if (this._realSkyLayer) this._realSkyLayer.show(FLOOR.id);
   }
 
   deactivate() {
     if (!this._active) return;
     this._active = false;
     if (this._chart.hide) this._chart.hide();
+    if (this._realSkyLayer) this._realSkyLayer.hide(FLOOR.id);
   }
 
 
