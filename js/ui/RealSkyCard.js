@@ -66,8 +66,30 @@ export function cardFields(row, heights, snapshotUtc, gcatName) {
   };
 }
 
+/** Floor 4 = the NAVCOM globe (Earth big); floor 5 = the SDA chart (Earth a small disc, its bottom right holds the Kessler timeline). */
+const FLOOR_GLOBE = 4;
+
+/**
+ * Where the panel sits (plan sky-1116-lsky-card, owner 2026-11-17: "move it clear of Earth"). Measured (tmp/sky-card-probe.mjs):
+ * with the ISS card open (272 x 342 px) at top:176px the iPad (1366 x 1024, touch) card sat 0 to 18 px over Earth's right edge on
+ * floor 4 (Earth r 393-417 px, widest point at the screen's middle height, x 1076-1100 vs the card's left edge 1082) and 11 px over the
+ * HUD's right-hand status strip (bottom y 187). No top offset clears it: the card is taller than the gap above Earth's widest point.
+ * On touch, floor 4, the panel therefore sits in the bottom-right corner (card top y 670; Earth's edge at that height x 1069),
+ * growing upward. On floor 5 the top-right stays: Earth's disc there ends at x 917 (card left 1082), and the bottom-right holds the
+ * Kessler timeline (a bottom-right card covered it in the probe's screenshot). The Mac (1728 x 1117, mouse) has 151 px between Earth's
+ * edge and the card on floor 4, so its placement stays as it was.
+ * @param {boolean} glass touch device
+ * @param {number|null} [floor] 4 or 5
+ * @returns {{top:string, bottom:string, maxHeight:string}} CSS values
+ */
+export function panelPlacement(glass, floor) {
+  return glass && floor === FLOOR_GLOBE
+    ? { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: 'calc(100vh - 260px)' }
+    : { top: '176px', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
+}
+
 const PANEL_CSS = [
-  'position:fixed', 'right:12px', 'top:176px', 'max-height:calc(100vh - 260px)', 'overflow:auto', 'width:272px', 'z-index:36', 'display:none', 'pointer-events:auto',
+  'position:fixed', 'right:12px', 'overflow:auto', 'width:272px', 'z-index:36', 'display:none', 'pointer-events:auto',
   'box-sizing:border-box', 'padding:8px 10px', 'border-radius:6px', 'background:rgba(8,12,22,0.82)',
   'border:1px solid rgba(160,180,220,0.28)', 'color:#dbe4f5', 'font-family:var(--font-mono)', 'font-size:11px',
   'line-height:1.35', 'letter-spacing:0.02em', 'user-select:none', '-webkit-user-select:none',
@@ -81,7 +103,9 @@ export class RealSkyCard {
    */
   constructor(deps = {}) {
     this._doc = deps.document !== undefined ? deps.document : (typeof document !== 'undefined' ? document : null);
-    this._isGlass = deps.isGlass || (() => false);
+    this._isGlass = deps.isGlass || null;           // optional; the layer also calls setLayout() every frame
+    this._glass = false;
+    this._floor = null;
     this._onSearch = null;
     this._onClose = null;
     this._shown = false;
@@ -168,7 +192,32 @@ export class RealSkyCard {
     root.append(input, msg, fail, card, legend, credit);
     d.body.appendChild(root);
     Object.assign(this._els, { root, input, msg, card, nameEl, dot, body, credit, legend, legendItems, fail });
+    this._place();
     this._render();
+  }
+
+  /**
+   * Touch (glass) or mouse, and the floor: the layer tells the card each frame; the placement changes only when the answer changes.
+   * @param {boolean} glass
+   * @param {number|null} floor
+   */
+  setLayout(glass, floor) {
+    const g = glass === true, f = floor === FLOOR_GLOBE ? FLOOR_GLOBE : null;
+    if (g === this._glass && f === this._floor && this._placed) return;
+    this._glass = g;
+    this._floor = f;
+    this._place();
+  }
+
+  /** Applies panelPlacement(glass, floor) to the panel (no-op before the panel is built). */
+  _place() {
+    const root = this._els.root;
+    if (!root) return;
+    const p = panelPlacement(this._glass, this._floor);
+    root.style.top = p.top;
+    root.style.bottom = p.bottom;
+    root.style.maxHeight = p.maxHeight;
+    this._placed = true;
   }
 
   /** Whether the CelesTrak status was joined into the data: when not, no dot is working or dead, so those two legend entries are hidden. */
@@ -196,8 +245,10 @@ export class RealSkyCard {
   }
 
   show() {
+    if (this._isGlass) this._glass = this._isGlass() === true;
     this._build();
     this._shown = true;
+    this._place();
     if (this._els.root) this._els.root.style.display = 'block';
   }
 

@@ -296,6 +296,7 @@ export class RealSkyLayer {
     }
     if (this._canvas) this._canvas.style.opacity = f5 ? '1' : '0';
     if (this._card) {
+      if (this._card.setLayout) this._card.setLayout(this._isGlass(), this._floor);
       if (this._card.setLoadFailed) this._card.setLoadFailed(on && failed);
       if (on && (ready || failed)) this._card.show(); else this._card.hide();
     }
@@ -352,6 +353,7 @@ export class RealSkyLayer {
   update() {
     const on = this.isActive();
     if (`${on}|${this._loadState}` !== this._gate) this._apply();
+    if (this._card && this._card.setLayout) this._card.setLayout(this._isGlass(), this._floor);   // a first touch / a floor change moves the panel clear of Earth
     if (this._points) { const s = this._isGlass() ? DOT_PX_GLASS : DOT_PX; if (this._points.material.size !== s) this._points.material.size = s; }
     if (!on || this._loadState !== 'ready') { this._lastBatch = 0; return; }
     const t = this.skySeconds();
