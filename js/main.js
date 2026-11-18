@@ -135,7 +135,6 @@ import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
 import { RealSkyLayer } from './ui/RealSkyLayer.js';
 import { RealSkyCard } from './ui/RealSkyCard.js';
-import { isTrainingNow } from './systems/TrainingHintGate.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
 import { LibraryPane } from './ui/LibraryPane.js';
@@ -1966,7 +1965,6 @@ async function init() {
     getCamera: () => (cameraSystem ? cameraSystem.camera : null),
     getViewport: () => ({ w: window.innerWidth, h: window.innerHeight }),
     dateMs: () => sunStorms.dateMs(),
-    isTraining: () => isTrainingNow(),
     isGlass: () => GestureHints.isGlass(),
     card: new RealSkyCard(),
     hideWhileActive: activeSatellites ? [activeSatellites.group] : [],

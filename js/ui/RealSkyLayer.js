@@ -12,7 +12,7 @@
  *            its own canvas just above the chart: radius = SdaChart's `radiusPxForAltKm` of the object's height, angle = the direction
  *            of the object as the camera sees it, measured from Earth's projected centre. Repainted at most once a second.
  *
- * Gates: shows on floors 4 and 5 only, never in training 1-3 (`isTraining`). The cost is bounded: ROWS_PER_FRAME rows propagated per
+ * Gates: shows on floors 4 and 5 only (also in training 1-3, DECISIONS §74 row 5). The cost is bounded: ROWS_PER_FRAME rows propagated per
  * frame (the whole sky refreshes in under a second), one `Points` draw call.
  *
  * Everything the game gives it is injected (scene, camera getter, viewport, fetch, clock, gates, card), so it runs headless.
@@ -89,7 +89,6 @@ export class RealSkyLayer {
    * @param {function} [deps.getViewport] () => {w, h} CSS px of the game canvas
    * @param {function} [deps.fetchJson] (url) => Promise<object>; default: fetchData(url).json()
    * @param {function} [deps.dateMs] () => game date ms (SunStorms.dateMs); NaN before the first start
-   * @param {function} [deps.isTraining] () => true in training 1..3 (TrainingHintGate.isTrainingNow)
    * @param {function} [deps.isGlass] () => true on touch (bigger dots, bigger tap radius)
    * @param {function} [deps.pixelRatio] () => device pixel ratio
    * @param {function} [deps.now] () => monotonic ms
@@ -103,7 +102,6 @@ export class RealSkyLayer {
     this._getViewport = deps.getViewport || (() => ({ w: 1728, h: 1117 }));
     this._fetchJson = deps.fetchJson || defaultFetchJson;
     this._dateMs = deps.dateMs || (() => NaN);
-    this._isTraining = deps.isTraining || (() => false);
     this._isGlass = deps.isGlass || (() => false);
     this._pixelRatio = deps.pixelRatio || (() => (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
@@ -162,7 +160,7 @@ export class RealSkyLayer {
   show(floor) {
     if (floor !== FLOOR_NAVCOM && floor !== FLOOR_SDA) return;
     this._floor = floor;
-    if ((this._loadState === 'idle' || this._loadState === 'failed') && !this._isTraining()) this._loadPromise = this._load();
+    if (this._loadState === 'idle' || this._loadState === 'failed') this._loadPromise = this._load();
     this._lastPaintMs = -Infinity;      // a re-show repaints floor 5 at once
     this._apply();
   }
@@ -174,8 +172,8 @@ export class RealSkyLayer {
     this._apply();
   }
 
-  /** Floors 4-5 are showing the layer's slot and training is not on: the layer draws (once loaded). */
-  isActive() { return this._floor !== null && !this._isTraining(); }
+  /** Floors 4-5 are showing the layer's slot: the layer draws (once loaded), in training too. */
+  isActive() { return this._floor !== null; }
 
   floor() { return this._floor; }
   fetchCount() { return this._fetchCount; }
@@ -352,6 +350,8 @@ export class RealSkyLayer {
   /** One frame: propagate the row budget, move the highlight, repaint floor 5 when due. No-op while the layer is off. */
   update() {
     const on = this.isActive();
+    // the load never depends on the moment the floor was entered: a floor with the layer and nothing loaded starts it here
+    if (on && this._loadState === 'idle') this._loadPromise = this._load();
     if (`${on}|${this._loadState}` !== this._gate) this._apply();
     if (this._card && this._card.setLayout) this._card.setLayout(this._isGlass(), this._floor);   // a first touch / a floor change moves the panel clear of Earth
     if (this._points) { const s = this._isGlass() ? DOT_PX_GLASS : DOT_PX; if (this._points.material.size !== s) this._points.material.size = s; }
