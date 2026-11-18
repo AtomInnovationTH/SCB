@@ -92,6 +92,8 @@ function coastStepS(prevMs, nowMs) {
  *  - IDLE_S: the wait after the LAST view input (mouse or finger drag, held arrows, wheel or pinch zoom) once the drag's
  *    coast has stopped. Any view input restarts it. Real seconds, the same clock as the coast (a hitch counts at most
  *    COAST_STEP_MAX_S, so a pause or a hidden tab never ends the wait).
+ *  - IDLE_S_F4: the same wait on floor 4 only: 10 s (owner 2026-11-18, "After she drags the view, floor 4 waits 10 s with
+ *    no input before turning back to centre the field"; DECISIONS §59 row 1). Floors 1-3 keep IDLE_S.
  *  - GLIDE_S: floors 1-3 (ship anchor): smoothstep along the great circle from the view to the chase direction
  *    (`_ladderChaseLocal`; over a pole of the floor, the same smoothstep over azimuth and polar angle instead, so the
  *    horizon never flips); the zoom distance does not change. Floor 4 (Earth anchor): CameraSystem only raises
@@ -99,7 +101,7 @@ function coastStepS(prevMs, nowMs) {
  *    (`ladderTurnEarthDir`). Floor 5 never moves.
  * No return while a drawer is open, a ride runs, or the catch focus or reel view holds the camera.
  */
-export const LADDER_VIEW_RETURN = Object.freeze({ IDLE_S: 4.0, GLIDE_S: 2.0 });
+export const LADDER_VIEW_RETURN = Object.freeze({ IDLE_S: 4.0, IDLE_S_F4: 10.0, GLIDE_S: 2.0 });
 
 /**
  * DOWN-rides (Earth→ship, F6→F5): the roll back to ship-up completes within this FRACTION of the ride (the cubic in-out
@@ -3819,7 +3821,7 @@ export class CameraSystem {
     vr.prevCur = lc.curDistU;
     vr.prevTarget = lc.targetDistU;
     // A press or a held finger that has not turned the view is input (it holds the wait) but owes nothing: only a turn
-    // that moved the view makes `dirty` (a plain click must not turn the floor-4 view 4 s later).
+    // that moved the view makes `dirty` (a plain click must not turn the floor-4 view 10 s later).
     const input = moved || dg.isDragging || dg.touchHeld || dg.hasPend || dg.velocityTheta !== 0 || dg.velocityPhi !== 0;
     if (moved) vr.dirty = true;
     // The catch focus holds the wait while it owns the camera; once his input has taken its pose over (the ladder owns
@@ -3835,7 +3837,7 @@ export class CameraSystem {
     const step = Math.min(coastStep, COAST_STEP_MAX_S);   // a hitch (pause, hidden tab) never ends the wait
     if (vr.glide) { this._advanceLadderViewReturnGlide(step); return; }
     vr.t += step;
-    if (vr.t < LADDER_VIEW_RETURN.IDLE_S) return;
+    if (vr.t < (lc.floor === 4 ? LADDER_VIEW_RETURN.IDLE_S_F4 : LADDER_VIEW_RETURN.IDLE_S)) return;
     vr.t = 0;
     if (!shipAnchored) {                     // Earth anchor: main.js's floor-4 block answers (floor 5 never moves)
       vr.dirty = false;
@@ -4083,7 +4085,7 @@ export class CameraSystem {
    * mouse drag, a touch drag, a ride, a disengage, an anchor change) also counts once in `ladderEarthFrameCancels()`,
    * which ends LadderController's framing glide. The wheel no longer calls it (a trackpad tail after arrival cancelled the
    * turn to the lifted default view, owner 2026-10-31); should a USER-input cause ('wheel', 'mouse drag', 'touch drag') stop
-   * a running turn on floor 4, the view is marked off default (`viewReturn.dirty`) so the 4 s return restores it.
+   * a running turn on floor 4, the view is marked off default (`viewReturn.dirty`) so the 10 s return restores it.
    * @param {string} [cause] which call site; the three user-input causes above also owe the view return
    */
   ladderCancelEarthTurn(cause = 'camera input') {

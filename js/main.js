@@ -142,6 +142,8 @@ import { WorkbenchPane } from './ui/WorkbenchPane.js';
 import { shouldYieldSpecsTab } from './ui/WorkbenchPane.js';
 import { resolveSubject as resolveSpecsSubject } from './systems/SpecsSubject.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
+import { MapClock } from './systems/MapClock.js';
+import { MapClockSlider, speedText as mapClockSpeedText } from './ui/MapClockSlider.js';
 import { tripWarpArgs, isTripBurning } from './systems/TransferTrip.js';
 import { SimClock, netsFlying } from './systems/SimClock.js';
 import { MissionGasTally, bindMissionGasTally } from './systems/MissionGasTally.js';
@@ -829,6 +831,10 @@ let touchControls;
 
 // The ONE world-time choke point. Owns dtWorld/warp; pins the shipped base rate whenever the ladder is disengaged.
 let timeAuthority;
+// The map clock slider (floors 4-5, owner 2026-11-18): the state (MapClock) and its row of buttons. The chosen step is one more
+// term in the warp target below; every hold still wins when lower.
+const mapClock = new MapClock();
+let mapClockSlider = null;
 // Reused per-frame arg object for timeAuthority.update: it runs on the flag-off path too, so no per-frame
 // allocation; update destructures synchronously and retains nothing.
 const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: false };
@@ -3001,6 +3007,10 @@ async function init() {
   // The ONE dtReal/dtWorld choke point (T2). Ticked each frame from the game loop; pins the shipped base rate
   // while the ladder is disengaged.
   timeAuthority = new TimeAuthority();
+  mapClockSlider = new MapClockSlider({
+    getLanguage: () => settingsManager.getLanguage(),
+    onPick: (i) => { mapClock.setStep(i); },
+  });
   wheelRouter = new WheelRouter({
     canvas,
     inputManager,
@@ -4279,6 +4289,7 @@ async function init() {
       // The world-clock handle (rate 0 under HOLD — the policy witness beside window.__frameSched, which is always
       // published). ?shot-gated like every harness handle here.
       window.__timeAuthority = timeAuthority;
+      window.__mapClock = mapClock;   // the map clock slider's choice (floors 4-5); the slider itself is #map-clock-slider
       // The update watcher (booted hash / check() / pending()) — always constructed (flag-independent).
       window.__updateWatch = updateWatch;
       // The controller (floor / turntable / isActive probes); the DETAIL slider (null on a ?ladder=0 boot — never
@@ -6270,13 +6281,18 @@ function gameLoop(timestamp) {
     gameplay: gameState.isGameplay(),
   });
   let _floorCap = 1;
+  let _mapFloor = null;   // the engaged (destination) floor while the ladder is on; null otherwise (the map clock choice resets)
   if (_ladderActive && ladderController.ladder && ladderController.ladder.getState) {
     const _lf = ladderController.ladder.getState().floor;
+    _mapFloor = _lf;
+    mapClock.observeFloor(_lf);   // below floor 4 the slider's choice goes back to real speed
     const _lfRow = FloorContract.byId(_lf);
     _floorCap = _lfRow ? _lfRow.timeCap : 1;
+    // Floors 4-5: the player's slider step replaces the floor's own cap (real speed by default); every hold below still wins.
+    _floorCap = mapClock.capFor(_lf, _floorCap);
     const _hold = (cameraSystem && cameraSystem.ladderWarpHoldFloor) ? cameraSystem.ladderWarpHoldFloor() : null;
     const _holdRow = (_hold != null) ? FloorContract.byId(_hold) : null;
-    const _holdCap = _holdRow ? _holdRow.timeCap : null;
+    const _holdCap = _holdRow ? mapClock.capFor(_hold, _holdRow.timeCap) : null;
     _floorCap = TimeAuthority.ladderTargetCap(_floorCap, _holdCap);
     // Held world: an open workbench drawer clamps the warp target to 0 — the world clock STOPS
     // while you shop or read (the rail reads HOLD; the frame scheduler is on its 10 fps heartbeat).
@@ -6304,6 +6320,18 @@ function gameLoop(timestamp) {
   });
   timeAuthority.update(_taFrameArgs);
   const dtWorld = timeAuthority.dtWorld;
+  // The map clock slider's row: on floors 4-5 only; dimmed with the trip's own speed while a transfer trip burns (D4: a trip
+  // keeps its rates). Write-on-change inside; the per-frame calls are cheap.
+  if (_mapFloor == null) mapClock.observeFloor(null);
+  if (mapClockSlider) {
+    const _mapShow = _mapFloor != null && FloorContract.TIME_RULES.MAP_CLOCK_FLOORS.includes(_mapFloor);
+    mapClockSlider.setShown(_mapShow);
+    if (_mapShow) {
+      const _tripBurn = !!(gameFlowManager.isTripRunning && gameFlowManager.isTripRunning());
+      mapClockSlider.setState(mapClock.step(), _tripBurn, _tripBurn ? mapClockSpeedText(timeAuthority.rate, TimeAuthority.BASE_SCALE) : '');
+      mapClockSlider.setLayout({ floor: _mapFloor, glass: GestureHints.isGlass() });
+    }
+  }
   // THE HELD WORLD IS HELD. While a workbench drawer is open the world clock is 0 (calmCap → 0, the rail reads
   // HOLD). The ONE gate: a system that can change the player's fate (ISS TCA, Starlink window, MMOD damage rolls /
   // SAFE_MODE, the collision-consequence scan) does not tick while the world clock is stopped. Inactive
@@ -7131,7 +7159,7 @@ function updateCamera(dt, timestamp) {
       z: shipPos.z + (vel.z / vmag) * eps,
     });
     const shipAngleRad = Math.atan2(s1.y - s0.y, s1.x - s0.x);
-    // owner 2026-10-25: 4 s after his last drag on floor 4 the camera asks for the view back. Answer it with the
+    // owner 2026-10-25, wait 10 s since 2026-11-18: 10 s after his last view input on floor 4 the camera asks for the view back. Answer it with the
     // same framing turn the arrival uses, direction only (no frameZoomTo: the zoom stays where he put it).
     if (cameraSystem.ladderViewReturnDue()) {
       const back = navcomFloor.framing({ shipPos, shipVel: vel, project: navcomProject, fovDeg: cameraSystem.camera.fov });
@@ -7142,7 +7170,7 @@ function updateCamera(dt, timestamp) {
     // and each time the focus changes while there (Tab, a click on an icon).
     // It turns to where your ship AND the field are both in view, and glides out until the whole
     // low-orbit shell they move in fits clear of the panels (EarthTurn.earthFrame); the field wins when
-    // both cannot. A drag stops it (the 4 s view return then restores it); the wheel/pinch only ends the zoom glide.
+    // both cannot. A drag stops it (the 10 s view return then restores it); the wheel/pinch only ends the zoom glide.
     const f4Focus = navcomFloor.getFocusedCluster();
     const f4 = earthTurnTrigger({
       floor: ladderController.currentFloor(), riding: ladderController.isRiding(),

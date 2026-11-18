@@ -109,7 +109,25 @@ export const FloorContract = {
 
   /** Automatic time-warp rules (TimeAuthority reads these + per-floor timeCap). */
   TIME_RULES: {
-    AUTO_WARP: true,             // rate drifts toward floor cap; no manual control
+    // The rate drifts toward the floor's timeCap. Floors 1-3 have no manual control. Floors 4-5 open at REAL speed (timeCap 0.1 =
+    // 1 game second per real second; owner 2026-11-18: "what if Floor 4/5 is actual speed, with a time slider") and the
+    // player sets the speed with the map clock slider (MAP_CLOCK_STEPS below, js/systems/MapClock.js).
+    AUTO_WARP: true,
+    /**
+     * The map clock slider's steps on floors MAP_CLOCK_FLOORS (owner 2026-11-18: "Actual speed + speed slider"). `cap` is the
+     * TimeAuthority target (multiples of BASE_SCALE = 10 game s per real s): pause / real time (0.1 x 10 = 1x) / 10x (her
+     * ship-view pace) / 100x / 1000x real time. The step is one more term in the target; a conjunction alert, a planned daughter
+     * flight, an open drawer and a transfer trip's own rates still win when lower (TimeAuthority.update, tripWarpArgs).
+     */
+    MAP_CLOCK_STEPS: [
+      { id: 'pause', cap: 0 },
+      { id: 'real', cap: 0.1 },
+      { id: 'x10', cap: 1 },
+      { id: 'x100', cap: 10 },
+      { id: 'x1000', cap: 100 },
+    ],
+    MAP_CLOCK_FLOORS: [4, 5],    // the floors that show the slider
+    MAP_CLOCK_DEFAULT: 1,        // index into MAP_CLOCK_STEPS: real speed
     DANGER_RAMP_TO_1X: true,     // conjunction inside alarm horizon ramps to 1x BEFORE knock
     CROSS_DOWN_PRERAMP: true,    // riding down pre-ramps to the lower floor's cap
     MOID_SCREENING_ABOVE: 10,    // warp > this switches conjunctions to MOID screening
@@ -203,7 +221,7 @@ export const FloorContract = {
       // 1.1-4 R_E: 70..255 u (R_E = Constants.EARTH_RADIUS = 63.71 u).
       camera: { distU: [70, 255], rangeLog10: logRange(70, 255), fov: 45, near: 0.05, far: 500, upFrame: 'earth-north' },
       humps: { inFirmness: 1.6 },
-      timeCap: 20,
+      timeCap: 0.1, // real speed (1 game s per real s); was 20 (200x) until 2026-11-18. The map clock slider picks faster.
       fidelity: { nearField: false, physicsMode: 'warp-moid', debrisMode: 'clusters' },
       costume: { leave: ['NearFieldPass', 'ShipMesh'], arrive: ['ClusterIcons', 'TransferWindows'], transform: 'ship-to-icon' },
       contextPanel: 'transfer-planner',
@@ -220,7 +238,7 @@ export const FloorContract = {
       // floors use the camera-following shell (Starfield.setFollowCamera), so stars sit at exactly R = 400 on F4/F5.
       camera: { distU: [500, 1300], rangeLog10: logRange(500, 1300), fov: 35, near: 0.5, far: 2000, upFrame: 'earth-north' },
       humps: { inFirmness: 1.6 },
-      timeCap: 100,
+      timeCap: 0.1, // real speed; was 100 (1000x) until 2026-11-18. The map clock slider picks faster.
       fidelity: { nearField: false, physicsMode: 'warp-moid', debrisMode: 'massBands' },
       costume: { leave: ['ClusterIcons'], arrive: ['SdaChart', 'KesslerTimeline', 'LensToggle'], transform: 'earth-to-chart' },
       contextPanel: 'sda-ledger',

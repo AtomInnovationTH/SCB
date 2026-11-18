@@ -10,10 +10,11 @@
  *            object's orbit as one THREE.Line and a bigger highlight dot;
  *   floor 5: SdaChart is a screen-static 2D canvas with its own altitude -> radius map, so 3D dots would not line up. The layer paints
  *            its own canvas just above the chart: radius = SdaChart's `radiusPxForAltKm` of the object's height, angle = the direction
- *            of the object as the camera sees it, measured from Earth's projected centre. Repainted at most once a second.
+ *            of the object as the camera sees it, measured from Earth's projected centre. Repainted every drawn frame (skipped while the clock is paused and the view still).
  *
  * Gates: shows on floors 4 and 5 only (also in training 1-3, DECISIONS §74 row 5). The cost is bounded: ROWS_PER_FRAME rows propagated per
- * frame (the whole sky refreshes in under a second), one `Points` draw call.
+ * frame (the whole sky is refreshed in under a second), every row carried forward from its stored velocity each frame so the dots move
+ * smoothly, one `Points` draw call.
  *
  * Everything the game gives it is injected (scene, camera getter, viewport, fetch, clock, gates, card), so it runs headless.
  *
@@ -23,22 +24,25 @@
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { fetchData } from '../core/dataUrl.js';
-import { SkyPropagator } from '../systems/SkyPropagator.js';
+import { SkyPropagator, WGS72 } from '../systems/SkyPropagator.js';
 import { meoRadialMap, radiusPxForAltKm, chartTextBoxes, chartTextVersion } from './SdaChart.js';
 import { cardFields, CLASS_COLORS } from './RealSkyCard.js';
 
 export { CLASS_COLORS };
 
-/** Rows propagated per frame: about 1 ms on the dev Mac (measured: 0.38 ms per 1,500 rows in Node); the whole sky refreshes in 9 frames, 0.15 s at 60 fps. */
+/** Rows propagated exactly per frame: about 1 ms on the dev Mac (measured: 0.38 ms per 1,500 rows in Node); the whole sky is refreshed in 9 frames, 0.15 s at 60 fps. Between refreshes a row is carried forward from its stored velocity (see `_extrapolate`). */
 export const ROWS_PER_FRAME = 4000;
+/** A sky-clock step bigger than this (sky seconds between two frames) refreshes every row at once instead of carrying old states forward. */
+export const JUMP_S = 120;
+/** No row's stored state is carried forward more than about this many sky seconds (measured error at 120 s: a few km for a low orbit). */
+export const MAX_AGE_S = 120;
 /** Dot size, CSS px: mouse / glass. */
 export const DOT_PX = 2;
 export const DOT_PX_GLASS = 3;
 /** Tap radius, CSS px: mouse / glass (the nearest painted dot inside it opens the card). */
 export const PICK_PX = 12;
 export const PICK_PX_GLASS = 24;
-/** Floor 5 repaints at most this often (ms), or at once when the selection or window changes. */
-export const PAINT_5_MS = 1000;
+/* Floor 5 repaints its chart every drawn frame (sky-smooth-1118: one repaint measured 2.6 ms median, 32.6k fillRects, 1728x1117); it skips a frame only while nothing moved. */
 /** The picked object's orbit ring on floor 4: this many segments (129 points), redrawn this often (ms). */
 export const ORBIT_SEGMENTS = 128;
 export const ORBIT_REFRESH_MS = 2000;
@@ -121,7 +125,12 @@ export class RealSkyLayer {
     this._rows = [];
     this._prop = null;
     this._snapshotMs = NaN;
-    this._pos = null;                   // Float32Array(3N): scene units, the Points' position attribute too
+    this._pos = null;                   // Float32Array(3N): scene units, the Points' position attribute too (the DRAWN position: carried forward to now)
+    this._base = null;                  // Float32Array(3N): position at the row's last exact refresh
+    this._vel = null;                   // Float32Array(3N): velocity then, scene units per sky second
+    this._acc = null;                   // Float32Array(3N): two-body acceleration then, scene units per sky second squared
+    this._t0 = null;                    // Float64Array(N): sky time of that refresh
+    this._lastT = null;                 // sky time of the last extrapolation
     this._cursor = 0;
     this._lastBatch = 0;
     this._points = null;
@@ -133,6 +142,7 @@ export class RealSkyLayer {
     this._lastOrbitMs = -Infinity;
     this._tmp = new Float64Array(3 * (ORBIT_SEGMENTS + 1));
     this._tmp3 = new Float64Array(3);
+    this._tmpV = new Float64Array(3);
 
     // the clock
     this._sumS = 0;
@@ -144,8 +154,10 @@ export class RealSkyLayer {
     this._sx = null;
     this._sy = null;
     this._cls = null;                   // Uint8Array(N): class per row, clamped to the 6 colours (floor 5 paints by class from it)
-    this._lastPaintMs = -Infinity;
+    this._lastPaintMs = -Infinity;      // -Infinity = repaint at once (a show, a selection change)
     this._lastPaintKey = '';
+    this._lastPaintT = NaN;
+    this._lastVP = new Float64Array(16);
     this._painted5 = 0;
 
     this._vp = new THREE.Matrix4();
@@ -216,6 +228,11 @@ export class RealSkyLayer {
     this._prop = new SkyPropagator(sky.rows, sky.fields);
     const N = sky.rows.length;
     this._pos = new Float32Array(3 * N);
+    this._base = new Float32Array(3 * N);
+    this._vel = new Float32Array(3 * N);
+    this._acc = new Float32Array(3 * N);
+    this._t0 = new Float64Array(N);
+    this._lastT = null;
     this._sx = new Float32Array(N).fill(NaN);
     this._sy = new Float32Array(N).fill(NaN);
     const col = new Float32Array(3 * N);
@@ -364,39 +381,70 @@ export class RealSkyLayer {
     if (this._floor === FLOOR_SDA) this._paint5(t);
   }
 
+  /**
+   * One batch of rows is propagated exactly (position, velocity, gravity at that moment, and the sky time); then EVERY row is drawn at
+   * its stored state carried forward to now, in one pass (`_extrapolate`). Without that, a row only moved when its batch came round
+   * (every 9 frames) and a dot jumped tens of px at the floor's 200x clock (lane sky-smooth-1118).
+   */
   _propagateBatch(t) {
     const N = this._rows.length;
-    const n = Math.min(this._rowsPerFrame, N);
+    // the budget grows with the clock so no row is ever more than MAX_AGE_S sky seconds old (the carry-forward error grows with its cube)
+    const dtT = this._lastT === null ? 0 : Math.abs(t - this._lastT);
+    const jump = dtT > JUMP_S;                       // a clock jump (a trip landed, the date changed): every stored state is too old to carry forward
+    const n = jump ? Math.min(N, this._rowsPerFrame) : Math.min(N, Math.max(this._rowsPerFrame, Math.ceil(N * dtT / MAX_AGE_S)));
     let c = this._cursor;
-    const attr = this._posAttr;
-    attr.clearUpdateRanges();
     let left = n;
+    if (jump) { this.refreshAll(); left = 0; }
     while (left > 0) {
       const take = Math.min(left, N - c);
       this._propagateRange(c, c + take, t);
-      attr.addUpdateRange(3 * c, 3 * take);
       left -= take;
       c = (c + take) % N;
     }
     this._cursor = c;
-    attr.needsUpdate = true;
     this._lastBatch = n;
+    this._extrapolate(t);
   }
 
+  /** Propagate rows [from, to) exactly at sky time t and store their state for `_extrapolate`. */
   _propagateRange(from, to, t) {
-    const prop = this._prop, pos = this._pos, o = this._tmp3, S = Constants.SCENE_SCALE;
+    const prop = this._prop, base = this._base, vel = this._vel, acc = this._acc, t0 = this._t0;
+    const p = this._tmp3, v = this._tmpV, S = Constants.SCENE_SCALE, GM = WGS72.MU * S;
     for (let i = from; i < to; i++) {
-      prop.positionInto(i, t, o, 0);
-      pos[3 * i] = o[0] * S; pos[3 * i + 1] = o[1] * S; pos[3 * i + 2] = o[2] * S;
+      prop.positionVelocityInto(i, t, p, 0, v, 0);
+      const k = 3 * i;
+      const r2 = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
+      const g = -GM / (r2 * Math.sqrt(r2));              // two-body pull: acceleration = (km position) * g, already in scene units
+      base[k] = p[0] * S; base[k + 1] = p[1] * S; base[k + 2] = p[2] * S;
+      vel[k] = v[0] * S; vel[k + 1] = v[1] * S; vel[k + 2] = v[2] * S;
+      acc[k] = p[0] * g; acc[k + 1] = p[1] * g; acc[k + 2] = p[2] * g;
+      t0[i] = t;
     }
+  }
+
+  /**
+   * Draw every row at `base + vel*dt + acc*dt^2/2` (dt = sky seconds since its refresh) and upload the buffer once. A paused clock keeps
+   * dt, so the dots stand still. Measured error against a fresh propagation: about 0.05 km at 30 sky-s (the 9-frame cycle at 200x).
+   */
+  _extrapolate(t) {
+    const N = this._rows.length, pos = this._pos, base = this._base, vel = this._vel, acc = this._acc, t0 = this._t0;
+    for (let i = 0; i < N; i++) {
+      const dt = t - t0[i], h = 0.5 * dt * dt, k = 3 * i;
+      pos[k] = base[k] + vel[k] * dt + acc[k] * h;
+      pos[k + 1] = base[k + 1] + vel[k + 1] * dt + acc[k + 1] * h;
+      pos[k + 2] = base[k + 2] + vel[k + 2] * dt + acc[k + 2] * h;
+    }
+    this._lastT = t;
+    this._posAttr.clearUpdateRanges();
+    this._posAttr.needsUpdate = true;
   }
 
   /** Every row now (first load, and tests). */
   refreshAll() {
     if (!this._prop) return;
-    this._propagateRange(0, this._rows.length, this.skySeconds());
-    this._posAttr.needsUpdate = true;
-    this._posAttr.clearUpdateRanges();
+    const t = this.skySeconds();
+    this._propagateRange(0, this._rows.length, t);
+    this._extrapolate(t);
   }
 
   /** Scene-unit position of row i as of the last propagation. @returns {{x:number,y:number,z:number}} */
@@ -452,11 +500,16 @@ export class RealSkyLayer {
     const vpSize = this._getViewport();
     const W = vpSize.w, H = vpSize.h;
     const key = `${W}x${H}|${this._selected}|${chartTextVersion()}`;   // the chart's text moved or repainted: clear its boxes again
-    const now = this._now();
-    if (key === this._lastPaintKey && now - this._lastPaintMs < PAINT_5_MS) return;
     if (!this._viewProj()) return;
+    // every drawn frame, from the carried-forward positions; but not while nothing moved (paused clock, still camera, same selection)
+    const el = this._vp.elements, last = this._lastVP;
+    let same = key === this._lastPaintKey && t === this._lastPaintT && this._lastPaintMs !== -Infinity;
+    for (let k = 0; same && k < 16; k++) if (el[k] !== last[k]) same = false;
+    if (same) return;
+    for (let k = 0; k < 16; k++) last[k] = el[k];
     this._lastPaintKey = key;
-    this._lastPaintMs = now;
+    this._lastPaintT = t;
+    this._lastPaintMs = this._now();
 
     const dpr = this._pixelRatio();
     const cw = Math.round(W * dpr), ch = Math.round(H * dpr);

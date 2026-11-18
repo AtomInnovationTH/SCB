@@ -7,7 +7,9 @@
  *
  *   - **dtReal**  — real (slow-mo-scaled) seconds: camera, UI, ceremonies, attitude substeps, resources, animations. Unwarped.
  *   - **dtWorld** — world-simulation seconds = `dtReal × scale`, where `scale = BASE_SCALE × rate` and `rate` (the ladder
- *     warp multiplier) drifts toward the current floor's `timeCap` (docs/ladder/01-numbers.md: [0,1,1,1,4,20,100]).
+ *     warp multiplier) drifts toward the current floor's `timeCap` (docs/ladder/01-numbers.md: [0,1,1,1,4,20,100]; since
+ *     2026-11-18 floors 4-5 open at real speed, 0.1, and the player's map clock slider (systems/MapClock.js) picks the
+ *     target there: pause / 0.1 / 1 / 10 / 100).
  *
  * `BASE_SCALE` mirrors the shipped `Constants.TIME_SCALE_GAMEPLAY` (=10). With the ladder disengaged (`active:false`, i.e.
  * `Constants.LADDER.ENABLED` off or not in gameplay) the authority pins `rate = 1` INSTANTLY (no ramp), so

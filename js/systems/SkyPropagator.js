@@ -145,6 +145,43 @@ export class SkyPropagator {
     rotateInto(xP, yP, raan, argp, this.cosI[i], this.sinI[i], out, o);
   }
 
+  /**
+   * Position (km) and velocity (km/s) of row i at `tSec`, scene frame, written to pOut[po..po+2] and vOut[vo..vo+2]. Allocation-free.
+   * The position is exactly `positionInto`'s. The velocity is the exact time derivative of that model (Kepler motion plus the secular
+   * rates of the node and the perigee), so `p + v * dt` follows `positionInto(i, t + dt)` to second order in dt.
+   */
+  positionVelocityInto(i, tSec, pOut, po, vOut, vo) {
+    const dt = tSec - this.epochS[i];
+    const e = this.e[i];
+    let M = (this.ma0[i] + this.dMa[i] * dt) % TWO_PI;
+    if (M < 0) M += TWO_PI;
+    const E = solveE(M, e);
+    const a = this.a[i];
+    const b = a * Math.sqrt(1 - e * e);
+    const cE = Math.cos(E), sE = Math.sin(E);
+    const xP = a * (cE - e), yP = b * sE;
+    const eDot = this.dMa[i] / (1 - e * cE);
+    const xV = -a * sE * eDot, yV = b * cE * eDot;
+    const raan = this.raan0[i] + this.dRaan[i] * dt;
+    const argp = this.argp0[i] + this.dArgp[i] * dt;
+    const ci = this.cosI[i], si = this.sinI[i];
+    const cO = Math.cos(raan), sO = Math.sin(raan), cw = Math.cos(argp), sw = Math.sin(argp);
+    const l1 = cO * cw - sO * sw * ci, l2 = -cO * sw - sO * cw * ci;
+    const m1 = sO * cw + cO * sw * ci, m2 = -sO * sw + cO * cw * ci;
+    pOut[po] = l1 * xP + l2 * yP;
+    pOut[po + 1] = sw * si * xP + cw * si * yP;
+    pOut[po + 2] = m1 * xP + m2 * yP;
+    // d(matrix)/d(node) and d(matrix)/d(perigee), times the rates, applied to the perifocal position; plus the matrix on the perifocal velocity
+    const dO = this.dRaan[i], dW = this.dArgp[i];
+    const dl1 = (-sO * cw - cO * sw * ci) * dO + l2 * dW;
+    const dl2 = (sO * sw - cO * cw * ci) * dO - l1 * dW;
+    const dm1 = l1 * dO + m2 * dW;
+    const dm2 = l2 * dO - m1 * dW;
+    vOut[vo] = l1 * xV + l2 * yV + dl1 * xP + dl2 * yP;
+    vOut[vo + 1] = si * (sw * xV + cw * yV) + si * dW * (cw * xP - sw * yP);
+    vOut[vo + 2] = m1 * xV + m2 * yV + dm1 * xP + dm2 * yP;
+  }
+
   /** Radius (km from Earth's centre) of row i at `tSec` (cheap: no rotation). */
   radiusKm(i, tSec) {
     const dt = tSec - this.epochS[i];
