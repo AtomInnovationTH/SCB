@@ -35,6 +35,11 @@ const SCROLL_STEP_MAX = 3;
 const SHOWN_MAX = 20;
 // A float sum of frame times can land a hair under the limit; this slack never lets a line leave early in play.
 const SHOW_TIME_SLACK_S = 1e-6;
+// Floors 4 and 5 (owner 2026-11-17, DECISIONS §74 row 2): the room hides the box; a NEW message shows it for
+// COMMS.PANE_FAR_SHOW_S through this attribute, never through the density bit (so no room memory is written).
+const FAR_FLOORS = Object.freeze([4, 5]);
+export const FLASH_ATTR = 'data-comms-flash';
+const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
 
 // 3-colour palette by priority: green = normal, amber = warning, red = critical.
 const COMMS_COLOR_NORMAL = 'var(--hud-normal, #00ff88)';   // green  — info / nominal
@@ -188,8 +193,139 @@ export class CommsPanel {
     /** @type {number} stored objects taken so far; 0 = the panel has never queued anything (draws the store) */
     this._intakeCount = 0;
 
+    /** @type {(function(): (number|null))|null} the applied floor id (main.js; absent = never a far floor) */
+    this._floorFn = null;
+    /** @type {number|null} the floor seen at the last tick (a change ends the temporary show) */
+    this._lastFloor = null;
+    /** @type {number} rows drawn since the temporary show began on a far floor (0 = no temporary show) */
+    this._flashRows = 0;
+    /** @type {boolean} the last `_farFlashMode()` seen by the tick (a change redraws the log) */
+    this._lastFlashMode = false;
+    /** @type {number} the px the right column is moved down while the temporary box is up (0 = not moved) */
+    this._dodgePx = 0;
+
     this._build();
     this._setupListeners();
+  }
+
+  /** Inject the applied-floor getter (main.js: `() => floorMask.getAppliedFloor()`); the far-floor rule reads it live. */
+  setFloorGetter(fn) { this._floorFn = typeof fn === 'function' ? fn : null; }
+
+  /** @private The applied floor id, or null. Never throws. */
+  _floor() {
+    if (!this._floorFn) return null;
+    try { const f = this._floorFn(); return typeof f === 'number' ? f : null; } catch (_e) { return null; }
+  }
+
+  /** @private True on floors 4 and 5. */
+  _isFar() { return FAR_FLOORS.includes(this._floor()); }
+
+  /** @private True while the room hides the box (the density bit is the player's/room's choice; only that bit counts). */
+  _roomHidden() {
+    const el = this.panels && this.panels.comms;
+    return !!(el && el.hasAttribute && el.hasAttribute(DENSITY_HIDDEN_ATTR));
+  }
+
+  /**
+   * @private On a far floor with the box hidden by the room: the temporary show is what draws the box, with only the
+   * messages that arrived since it began. Everywhere else the full log, as ever.
+   */
+  _farFlashMode() { return this._isFar() && this._roomHidden(); }
+
+  /** @private Set / clear the temporary-show attribute (write-on-change; a no-op without a DOM). */
+  _syncFlashAttr(on) {
+    const el = this.panels && this.panels.comms;
+    if (!el || !el.hasAttribute || !el.setAttribute) return;
+    const has = el.hasAttribute(FLASH_ATTR);
+    if (on && !has) { el.setAttribute(FLASH_ATTR, ''); this._dodgeColumn(el, true); }
+    else if (!on && has) { el.removeAttribute(FLASH_ATTR); this._dodgeColumn(el, false); }
+  }
+
+  /**
+   * @private The right column (TARGETS / NEXT) sits at the top while the room hides this box (HUD's column follows the box's
+   * bottom, 0 when hidden), so the temporary box would print over NEXT (measured in the browser probe at 1728x1117: NEXT
+   * y 10-73 under a box y 0-114). While the temporary box is up the column is moved down by the box's height - where HUD
+   * puts it when the box is shown - and back after. A visual shift only (a transform), so HUD's own top/height stay as they were.
+   */
+  _dodgeColumn(el, on) {
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    const col = document.getElementById('hud-right-column');
+    if (!col || !col.style) return;
+    const h = on && el.getBoundingClientRect ? Math.round(el.getBoundingClientRect().height || 0) : 0;
+    if (h === this._dodgePx) return;   // write on change only (this also runs every frame while the box is up)
+    this._dodgePx = h;
+    col.style.transform = h > 0 ? `translateY(${h}px)` : '';
+  }
+
+  /**
+   * @private A row was just drawn: on a far floor it (re)starts the temporary show. `_sinceShown` is the clock the
+   * show runs on (the same one the release gap uses), so the box and the queue never disagree.
+   */
+  _noteRowDrawn() {
+    if (!this._isFar()) return;
+    this._flashRows = Math.min(this._flashRows + 1, SHOWN_MAX);
+    this._syncFlashAttr(this._farFlashMode());
+  }
+
+  /**
+   * @private Per-frame, before the queue ticks: a floor change ends the temporary show and (entering a far floor) lets
+   * the first new line show at once; the show ends PANE_FAR_SHOW_S after the last row, with nothing waiting.
+   */
+  _tickFar() {
+    const f = this._floor();
+    if (this._lastFloor === null) {
+      this._lastFloor = f;   // the first look: no change to settle (lines already in flight keep their turns)
+    } else if (f !== this._lastFloor) {
+      this._lastFloor = f;
+      this._flashRows = 0;
+      if (FAR_FLOORS.includes(f)) {
+        this._settleWaitingAsOld();
+        this._sinceShown = Infinity;   // old lines never count: the next new line is at once
+      }
+      this._syncFlashAttr(false);
+      this._lastFlashMode = this._farFlashMode();
+      if (this._logEl) this._updateCommsPanel();
+      return;
+    }
+    // The player's `+` (or 7) showed the box on a far floor, or the room hid it again: redraw whole log / new rows only.
+    const mode = this._farFlashMode();
+    if (mode !== this._lastFlashMode) {
+      this._lastFlashMode = mode;
+      if (this._logEl) this._updateCommsPanel();
+    }
+  }
+
+  /**
+   * @private Lines still waiting for their turn when a far floor is entered arrived on the floor before (lane fix F4, 2026-11-18, owner
+   * 2026-11-17: "Scan to identify targets." must not keep showing on floors 4-5; measured in the probe: a line queued behind "Solar panels
+   * open" on floor 4 was released the moment floor 5 opened, and the game's "Comms are up" the moment floor 4 opened). They are OLD: they go
+   * into the log silently (the `+` box still lists them), never into a temporary show. A warning (yellow) keeps waiting and shows at once.
+   */
+  _settleWaitingAsOld() {
+    if (!Array.isArray(this._waiting) || !Array.isArray(this._shown)) return;
+    const keep = [];
+    for (const m of this._waiting) {
+      if (isWarningOrWorse(m.priority)) { keep.push(m); continue; }
+      this._shown.push(m);
+    }
+    while (this._shown.length > SHOWN_MAX) this._shown.shift();
+    this._waiting.length = 0;
+    for (const m of keep) this._waiting.push(m);
+  }
+
+  /** @private Per-frame, after the queue ticked: the temporary show ends PANE_FAR_SHOW_S after the last row with nothing waiting. */
+  _tickFarEnd() {
+    if (this._flashRows <= 0) return;
+    const over = this._sinceShown >= COMMS.PANE_FAR_SHOW_S && this._waiting.length === 0;
+    if (over || !this._isFar()) {
+      this._flashRows = 0;
+      this._syncFlashAttr(false);
+      this._lastFlashMode = this._farFlashMode();
+      if (this._logEl) this._updateCommsPanel();
+    } else {
+      this._syncFlashAttr(this._farFlashMode());   // the room may have hidden it after the box was player-shown
+      if (this._farFlashMode()) this._dodgeColumn(this.panels.comms, true);   // the box's height settles after its first draw
+    }
   }
 
   /** Inject the glossary seen-state controller so first-use cues drop after a term has been seen. */
@@ -203,6 +339,16 @@ export class CommsPanel {
     Object.assign(div.style, styles);
     this._container.appendChild(div);
     return div;
+  }
+
+  /** @private The temporary-show rule: the longer selector beats the density bit's `display: none !important`. */
+  _injectFlashCss() {
+    if (typeof document === 'undefined' || !document.head || !document.getElementById || !document.createElement) return;
+    if (document.getElementById('comms-flash-style')) return;
+    const st = document.createElement('style');
+    st.id = 'comms-flash-style';
+    st.textContent = `#hud-comms-panel[${FLASH_ATTR}][${DENSITY_HIDDEN_ATTR}] { display: block !important; }`;
+    document.head.appendChild(st);
   }
 
   /** @private */
@@ -220,6 +366,7 @@ export class CommsPanel {
     });
     this.panels.comms.dataset.hudGroup = 'manage_comms';
     this.panels.comms.classList.add('hud-active');
+    this._injectFlashCss();
 
     // Elevator-contract tracker (the 10,000 kg endgame objective): display:none until the first contribution
     // (CONTRACT_UPDATE with contractMassKg > 0), so a new pilot never sees an unreachable 0/10,000.
@@ -350,7 +497,9 @@ export class CommsPanel {
    * @param {number} dt — seconds
    */
   update(dt) {
+    if (this._queueReady()) this._tickFar();   // before the queue: a floor change must settle before a line is released on it
     this._tickQueue(dt);
+    if (this._queueReady()) this._tickFarEnd();
     if (this._commsFlashTimer > 0) {
       this._commsFlashTimer -= dt;
       // Calm-HUD: a steady red border for the critical window (no strobe).
@@ -412,6 +561,7 @@ export class CommsPanel {
   _pushShown(m) {
     this._shown.push(m);
     while (this._shown.length > SHOWN_MAX) this._shown.shift();
+    this._noteRowDrawn();
   }
 
   /**
@@ -493,6 +643,11 @@ export class CommsPanel {
     }
   }
 
+  /** @private Seconds a line stays before the next waiting one replaces it: longer on floors 4-5 (DECISIONS §74 row 2). */
+  _minShowS() {
+    return this._isFar() ? COMMS.PANE_FAR_SHOW_S : COMMS.PANE_MIN_SHOW_S;
+  }
+
   /**
    * @private Draw the head of the queue when the newest row has been on screen long enough, or when nothing is on
    * screen at all (never "Awaiting transmission…" while a line waits). One line per call.
@@ -500,7 +655,7 @@ export class CommsPanel {
    */
   _releaseNext() {
     if (this._waiting.length === 0) return false;
-    if (this._shown.length > 0 && this._sinceShown + SHOW_TIME_SLACK_S < COMMS.PANE_MIN_SHOW_S) return false;
+    if (this._shown.length > 0 && this._sinceShown + SHOW_TIME_SLACK_S < this._minShowS()) return false;
     // Training 1-3: a released "do this" line that waited here while she did something useful is withdrawn (it goes back to the
     // gate, which shows it again after the next idle stretch if it is still true). Other lines and later missions: unchanged.
     const cs = this._commsSystem;
@@ -798,7 +953,10 @@ export class CommsPanel {
   _updateCommsPanel() {
     if (!this._logEl) return;
 
-    const allMessages = this._displayMessages();
+    let allMessages = this._displayMessages();
+    // Floors 4-5 with the box hidden by the room: only the rows that arrived since the temporary show began, never the
+    // old log (DECISIONS §74 row 2). With the box shown by the player (`+`, 7) the full log, as on every other floor.
+    if (this._farFlashMode()) allMessages = allMessages.slice(Math.max(0, allMessages.length - this._flashRows));
 
     if (allMessages.length === 0) {
       this._logEl.innerHTML = `<span style="opacity:0.4;font-size:13px;">Awaiting transmission…</span>`;

@@ -5475,6 +5475,9 @@ export const Constants = {
     // (`_coach`) or result line (`_result`, 2026-11-08) is never the one skipped, so if every waiting non-warning line is one of them they may wait up to
     // PANE_QUEUE_MAX_COACH; past that the oldest non-warning line is skipped even if it is a coach line.
     PANE_MIN_SHOW_S: 3,
+    // owner 2026-11-17 (docs/DECISIONS.md §74 row 2): on floors 4-5 the box is hidden by default and a NEW message shows it for
+    // this long (each queued message gets its own time, so also the release gap on those floors), then it hides again.
+    PANE_FAR_SHOW_S: 6,
     PANE_QUEUE_MAX: 4,
     PANE_QUEUE_MAX_COACH: 8,
     STRIPE_WIDTH_PX: 3,

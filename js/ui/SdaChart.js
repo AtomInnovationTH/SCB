@@ -338,6 +338,37 @@ export function rankLabels(candidates, budget = FLOOR.labelBudget) {
 
 /** Smallest allowed distance between two label baselines, px (10 px font). */
 export const LABEL_MIN_GAP_PX = 14;
+/**
+ * First baseline the chart's own text may use at the top, px (owner 2026-11-17, DECISIONS §74 row 3 / lane T6). The score bar
+ * covers y 8-43 at the top centre (measured at 1728x1117 and 1366x1024: x 689-1039 / 508-858), so the "MEO compressed" tag,
+ * its caveat line and the GEO ring label used to print under it. They now start below it, one 14 px row apart.
+ */
+export const CHART_TOP_CLEAR_PX = 62; // 56 left the tag's glyphs 5 px under the score bar on the iPad (visual check 2026-11-18): 11 px now
+/**
+ * The Kessler strip's top and bottom edges as distances from the screen bottom, px (lane fix F2, 2026-11-18). The bottom used to be
+ * 34: the field-heights line (baseline h-23, glyph tops h-31) touched the decade ticks (to h-30) and the trace. At 44 the ticks end at
+ * h-40, 9 px above the field-heights line's glyph tops (at least 6 px asked).
+ */
+export const STRIP_TOP_FROM_BOTTOM_PX = 88;
+export const STRIP_BOTTOM_FROM_BOTTOM_PX = 44;
+/** Decade ticks hang this far under the strip's bottom edge. */
+export const STRIP_TICK_PX = 4;
+
+/**
+ * Every string the chart painted last (CSS px: x, y top, w, h) - the real-sky dots canvas (z 34) sits over the chart (z 33) and
+ * clears these rectangles after painting its dots, so no label is overprinted by a dot (lane fix F1, 2026-11-18). Module-level
+ * because the two layers never meet otherwise; a hidden chart reports none.
+ * @type {Array<{text:string,x:number,y:number,w:number,h:number}>}
+ */
+let _chartTextBoxes = [];
+let _chartTextVersion = 0;
+/** @returns {Array<{text:string,x:number,y:number,w:number,h:number}>} the last painted chart text boxes (empty when hidden) */
+export function chartTextBoxes() { return _chartTextBoxes; }
+/** @returns {number} bumps whenever the boxes change (the dots canvas repaints on it) */
+export function chartTextVersion() { return _chartTextVersion; }
+function _setChartTextBoxes(list) { _chartTextBoxes = list; _chartTextVersion++; }
+/** The lowest a label baseline may start: below the tag and the caveat row (CHART_TOP_CLEAR_PX + 2 rows). */
+export const LABEL_TOP_PX = CHART_TOP_CLEAR_PX + 28;
 /** Label x offset from the centre: beside its ring when alone, further out when it sits in a leader column. */
 const LABEL_X_NEAR = 8;
 const LABEL_X_COLUMN = 24;
@@ -353,10 +384,10 @@ const LABEL_X_COLUMN = 24;
  * @param {number} [minGap]
  * @returns {Array<object>} each label plus `x` (offset from the centre), `y` (baseline), `ringY`, `leader`
  */
-export function layoutLabels(labels, cy, minGap = LABEL_MIN_GAP_PX) {
+export function layoutLabels(labels, cy, minGap = LABEL_MIN_GAP_PX, minY = 12) {
   const out = labels.map((l) => {
     const ringY = cy - l.rPx;
-    return { ...l, x: LABEL_X_NEAR, y: Math.max(12, ringY - 3), ringY, leader: false };
+    return { ...l, x: LABEL_X_NEAR, y: Math.max(minY, ringY - 3), ringY, leader: false };
   });
   const rings = out.filter((l) => l.id !== 'kessler-strip').sort((a, b) => a.y - b.y);
   const raw = rings.map((l) => l.y);
@@ -467,6 +498,8 @@ export class SdaChart {
 
   hide() {
     this._visible = false;
+    this._boxes = [];
+    _setChartTextBoxes([]);
     if (this._canvas) {
       this._canvas.style.opacity = '0';
       if (this._ctx2d) this._ctx2d.clearRect(0, 0, this._canvas.width, this._canvas.height);
@@ -539,7 +572,7 @@ export class SdaChart {
       text: 'KESSLER TIMELINE 1957\u21922126',
       rPx: 0,
     });
-    const labels = layoutLabels(rankLabels(candidates, FLOOR.labelBudget), hPx / 2);
+    const labels = layoutLabels(rankLabels(candidates, FLOOR.labelBudget), hPx / 2, LABEL_MIN_GAP_PX, LABEL_TOP_PX);
 
     const timeline = m.timeline || null;
     const sig = SdaChart.frameSig({
@@ -575,6 +608,7 @@ export class SdaChart {
     this.paintCount++;
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     g.clearRect(0, 0, w, h);
+    this._boxes = [];
     const cx = w / 2, cy = h / 2;
     const ramp = lens === 'VALUE' ? VisualLaw.COLORS.VALUE : VisualLaw.COLORS.THREAT;
     // THREAT ALWAYS pulses (VisualLaw); phase quantized by the paint gate.
@@ -624,20 +658,20 @@ export class SdaChart {
         g.lineWidth = 1;
         g.stroke();
       }
-      g.fillText(l.text, cx + l.x, l.y);
+      this._text(g, l.text, cx + l.x, l.y);
     }
 
     // Honesty chrome (not world labels): MEO tag + ESTIMATE provenance.
     g.textAlign = 'center';
     g.fillStyle = VisualLaw.COLORS.INFO;
     g.globalAlpha = 0.8;
-    if (map.compressed) g.fillText(FLOOR.chart.compressionTag, cx, 16);
+    if (map.compressed) this._text(g, FLOOR.chart.compressionTag, cx, CHART_TOP_CLEAR_PX);
     const realSky = f.realSky || null;
     if (lens === 'VALUE') {
       // The EST line stays only while some band still shows an estimate (a real band has none).
-      if (rings.some((r) => r.estimate)) g.fillText('sub-LEO band masses are estimates (EST)', cx, 30);
+      if (rings.some((r) => r.estimate)) this._text(g, 'sub-LEO band masses are estimates (EST)', cx, CHART_TOP_CLEAR_PX + 14);
     } else {
-      g.fillText('pre-2020 count jumps partly = better sensors \u00b7 cascade onset disputed', cx, 30);
+      this._text(g, 'pre-2020 count jumps partly = better sensors \u00b7 cascade onset disputed', cx, CHART_TOP_CLEAR_PX + 14);
     }
     // Objects beyond the LEO shells are counted, never silently dropped.
     const topKm = rings.length ? rings[rings.length - 1].altKm[1] : 2000;
@@ -645,10 +679,10 @@ export class SdaChart {
       // Bottom right on the credit's baseline (h-7): the top edge clips it at 1728×1117 and the Houston panel covers it at
       // 1366×1024, and the field-heights row (h-20) is taken by the strip's last year label (2126) at the right.
       g.textAlign = 'right';
-      g.fillText(`beyond ${topKm} km: ${_thousands(realSky.beyond2000.n)} tracked`, w - 10, h - 7);
+      this._text(g, `beyond ${topKm} km: ${_thousands(realSky.beyond2000.n)} tracked`, w - 10, h - 7);
     } else if (f.outOfBand && f.outOfBand.count > 0) {
       g.textAlign = 'right';
-      g.fillText(`beyond ${topKm} km: ${f.outOfBand.count} obj`, w - 10, 16);
+      this._text(g, `beyond ${topKm} km: ${f.outOfBand.count} obj`, w - 10, h - 7);
     }
     // Real numbers need their credit (CC BY 4.0): bottom centre, both lenses, under the strip (h-34); the strip's year
     // labels (h-20) sit at its far left and right, so the centred field-heights line on that row clears them.
@@ -657,19 +691,30 @@ export class SdaChart {
       const fb = Array.isArray(realSky.fieldBands) ? realSky.fieldBands : [];
       if (fb.length) {
         const parts = fb.map((b) => `${b.altKm[0]}\u2013${b.altKm[1]} km ${_thousands(b.n)}`);
-        g.fillText(`Real objects at her field heights: ${parts.join(' \u00b7 ')}`, cx, h - 20);
+        this._text(g, `Real objects at her field heights: ${parts.join(' \u00b7 ')}`, cx, h - 23);   // 3 px more air above the credit (visual check 2026-11-17: the two lines touched)
       }
-      g.fillText(realSky.credit, cx, h - 7);
+      this._text(g, realSky.credit, cx, h - 7);
     }
     g.globalAlpha = 1;
 
     if (timeline) this._paintStrip(g, w, h, lens, timeline, labels, pulse);
+    _setChartTextBoxes(this._boxes);
+  }
+
+  /** @private fillText that also records the string's box (the glyphs sit about 8 px above the baseline, 3 px of descender). */
+  _text(g, s, x, y) {
+    const str = String(s);
+    const m = typeof g.measureText === 'function' ? g.measureText(str) : null;
+    const w = m && Number.isFinite(m.width) ? m.width : str.length * 6.1;
+    const left = g.textAlign === 'center' ? x - w / 2 : (g.textAlign === 'right' || g.textAlign === 'end') ? x - w : x;
+    if (this._boxes) this._boxes.push({ text: str, x: left, y: y - 9, w, h: 12 });
+    g.fillText(str, x, y);
   }
 
   /** @private The decade-scale Kessler timeline strip along the bottom. */
   _paintStrip(g, w, h, lens, timeline, labels, pulse) {
     const x0 = w * 0.08, x1 = w * 0.92;
-    const y0 = h - 78, y1 = h - 34;
+    const y0 = h - STRIP_TOP_FROM_BOTTOM_PX, y1 = h - STRIP_BOTTOM_FROM_BOTTOM_PX;
     const hist = timeline.history || [];
     const proj = timeline.projection || [];
     if (!hist.length && !proj.length) return;
@@ -683,7 +728,7 @@ export class SdaChart {
     g.strokeStyle = CHART_GRID;
     g.lineWidth = 1;
     for (let yr = Math.ceil(yr0 / 10) * 10; yr <= yr1; yr += 10) {
-      g.beginPath(); g.moveTo(X(yr), y1); g.lineTo(X(yr), y1 + 4); g.stroke();
+      g.beginPath(); g.moveTo(X(yr), y1); g.lineTo(X(yr), y1 + STRIP_TICK_PX); g.stroke();
     }
 
     g.strokeStyle = VisualLaw.COLORS.INFO;
@@ -706,13 +751,13 @@ export class SdaChart {
     if (title) {
       g.textAlign = 'left';
       g.fillStyle = this._rgba(lens === 'THREAT' ? VisualLaw.COLORS.THREAT : VisualLaw.COLORS.INFO, 0.95);
-      g.fillText(title.text, x0, y0 - 6);
+      this._text(g, title.text, x0, y0 - 6);
     }
     g.textAlign = 'center';
     g.fillStyle = VisualLaw.COLORS.INFO;
     g.globalAlpha = 0.7;
-    g.fillText(String(yr0), X(yr0), y1 + 14);
-    g.fillText(String(yr1), X(yr1), y1 + 14);
+    this._text(g, String(yr0), X(yr0), y1 + 14);
+    this._text(g, String(yr1), X(yr1), y1 + 14);
     g.globalAlpha = 1;
   }
 
@@ -728,6 +773,8 @@ export class SdaChart {
     this._ctx2d = null;
     this._built = false;
     this._visible = false;
+    this._boxes = [];
+    _setChartTextBoxes([]);
     this._lastSig = null;
     this._lastPaintMs = -Infinity;
   }

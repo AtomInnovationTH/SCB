@@ -35,6 +35,10 @@ export const ENVELOPE_RECOMPUTE_MS = 500;
 /** Ring sampling density (points per ring). */
 export const RING_SEGMENTS = 64;
 
+/** The caption's font size (CSS px; owner 2026-11-17: at least 13) and its baseline's distance from the screen bottom. */
+export const REACH_CAPTION_PX = 13;
+export const REACH_CAPTION_BASELINE_PX = 28;
+
 /** Monotonic ms clock (Date.now fallback headless). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
@@ -212,12 +216,29 @@ export class ReachOrb {
     this._strokeRing(g, max, 'rgba(0, 204, 255, 0.6)');
 
     if (caption) {
-      g.font = mono(10);
+      // Owner 2026-11-17 (DECISIONS §74 row 1): the gas budget stays on floor 4 as this line, so it must read over Earth
+      // and stars: 13 px, full opacity, on a dark rounded backing.
+      g.font = mono(13);   // = REACH_CAPTION_PX; a literal, as the font census (test-Fonts) counts
       g.textAlign = 'center';
+      g.textBaseline = 'alphabetic';
+      const cx = w / 2;
+      const base = h - REACH_CAPTION_BASELINE_PX;
+      const tw = g.measureText ? g.measureText(caption).width : caption.length * REACH_CAPTION_PX * 0.6;
+      const padX = 10, padY = 5;
+      const bx = cx - tw / 2 - padX;
+      const by = base - REACH_CAPTION_PX - padY + 2;
+      const bw = tw + padX * 2;
+      const bh = REACH_CAPTION_PX + padY * 2;
+      g.fillStyle = 'rgba(4, 8, 16, 0.78)';
+      g.beginPath();
+      if (g.roundRect) g.roundRect(bx, by, bw, bh, 6); else g.rect(bx, by, bw, bh);
+      g.fill();
+      g.strokeStyle = 'rgba(0, 204, 255, 0.45)';   // a hairline so the backing shows over black space too
+      g.lineWidth = 1;
+      g.stroke();
       g.fillStyle = VisualLaw.COLORS.INFO;
-      g.globalAlpha = 0.85;
-      g.fillText(caption, w / 2, h - 28);
       g.globalAlpha = 1;
+      g.fillText(caption, cx, base);
     }
   }
 

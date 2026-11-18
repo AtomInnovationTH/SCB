@@ -80,12 +80,18 @@ const STACK_HIDDEN_ATTR = 'data-stack-hidden';
 const MODE_ATTR = 'data-fma-mode';
 const BOXED_ATTR = 'data-boxed';
 const SEG_HIDDEN_ATTR = 'data-fma-hidden';
-/** The autopilot is flying on floor 2 - the strip shows there although the room hides it. */
+/** The autopilot is flying on floor 2 or 4 - the strip shows there although the room hides it. */
 export const FLYING_ATTR = 'data-ap-flying';
 /** The plain-words line (floor 2, simple level): no small-caps, no PHASE / numbers segments. */
 const PLAIN_ATTR = 'data-fma-plain';
 
 const HOME_FLOOR = 2;
+
+/**
+ * Floors where the strip shows while the autopilot flies although the room hides it: the home floor 2 and the route map
+ * floor 4 (owner 2026-11-17, DECISIONS 74 row 1: "Autopilot shows only while it is flying a leg").
+ */
+const FLY_FLOORS = Object.freeze([HOME_FLOOR, 4]);
 
 const MINUS = '\u2212';                          // − (Math Operators, allowed)
 const DOT = '\u00b7';                            // · (Latin-1, allowed)
@@ -226,7 +232,8 @@ export class FmaStrip {
   naturalPx() { return FMA_GEOMETRY.HEIGHT_PX; }
 
   /**
-   * The autopilot is flying (engaged; HOLD after arrival counts). On the home floor (floor 2) the strip then shows even
+   * The autopilot is flying (engaged; HOLD after arrival counts). On the home floor (floor 2) and the route map (floor 4)
+   * the strip then shows even
    * though the room hides it: a separate attribute, never the density bit, so the pane level (FloorMask.extraPaneShown /
    * capture) is untouched. The hub calls it from AUTOPILOT_ENGAGE / AUTOPILOT_DISENGAGE (this class holds no listener);
    * the next poll re-reads the truth from `deps.fma()`. Shows / hides at once and repaints without waiting for the poll.
@@ -245,7 +252,7 @@ export class FmaStrip {
   isFlyingShown() { return this._flyShown; }
 
   _syncFlyAttr() {
-    const want = this._flying && this._floor() === HOME_FLOOR;
+    const want = this._flying && FLY_FLOORS.includes(this._floor());
     if (want !== this._flyShown) this._flyShown = want;
     this._setFlag(this._root, FLYING_ATTR, want);
   }

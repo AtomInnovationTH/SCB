@@ -1,7 +1,8 @@
 /**
  * RealSkyCard.js — the DOM panel of the real sky on floors 4-5 (plan sky-1116, lane L-sky): a search field (name or number), the card
- * of the tapped object (name, number, kind, size, mass, launch year, height, tilt, "orbit as of <snapshot date>"), the legend of the 6
- * colours and the credit line. Styles are inline in this module. DOM-guarded: with no document it is inert (headless tests use
+ * of the tapped object (name, number, kind, size, mass, launch year, height, tilt, "orbit as of <snapshot date>"), a one-row colour key
+ * and one small credit line (a tap opens the full wording). By default only the field, the key and the credit show; the card opens on a
+ * tapped dot or a search hit and never repeats the key or the credit (owner 2026-11-17, DECISIONS §74 row 3). Styles are inline in this module. DOM-guarded: with no document it is inert (headless tests use
  * `cardFields`, which is pure).
  *
  * The panel itself takes pointer events (so the input and the close button work); everything around it stays click-through. Keys typed
@@ -13,6 +14,26 @@
 export const CLASS_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown'];
 /** One colour per class (index = skyPack.CLS), readable on the dark map. */
 export const CLASS_COLORS = ['#ff8a3d', '#c77dff', '#8f98a8', '#52f08a', '#4fb4ff', '#ffe14d'];
+/** The one-row colour key's short words (same order as CLASS_NAMES; the full name is each item's tooltip). */
+export const LEGEND_LABELS = ['debris', 'stage', 'dead', 'working', 'sat', 'unknown'];
+
+/**
+ * The one small credit line: every source the full credit names, in a few words. Built from the full text (never typed
+ * apart from it), so a source the data does not claim (CelesTrak without the status join) is not named, and an old
+ * snapshot still says so.
+ * @param {string} full the layer's credit line
+ * @returns {string}
+ */
+export function shortCredit(full) {
+  const t = String(full || '');
+  if (!t) return '';
+  const names = [];
+  if (/Space-Track/i.test(t)) names.push('Space-Track');
+  if (/GCAT/i.test(t)) names.push('GCAT');
+  if (/CelesTrak/i.test(t)) names.push('CelesTrak');
+  const old = t.match(/Snapshot (\d+) days old\./);
+  return `Data: ${names.join(', ')}${old ? ` \u00b7 snapshot ${old[1]} days old` : ''}`;
+}
 /** Class number -> the kind line on the card. A satellite says which: working, dead, or "status not known". */
 const KIND_TEXT = ['debris', 'rocket stage', 'dead satellite (not working)', 'working satellite',
   'satellite (working or dead not known)', 'unknown object'];
@@ -83,9 +104,10 @@ const FLOOR_GLOBE = 4;
  * @returns {{top:string, bottom:string, maxHeight:string}} CSS values
  */
 export function panelPlacement(glass, floor) {
-  return glass && floor === FLOOR_GLOBE
-    ? { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: 'calc(100vh - 260px)' }
-    : { top: '176px', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
+  if (glass && floor === FLOOR_GLOBE) return { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: 'calc(100vh - 260px)' };
+  // Mac floor 4 (lane fix F3, 2026-11-18): while a radio message shows, the right column (NEXT) moves down under the radio box and sits at
+  // y 153-215 (measured 1728x1117); the panel at 176 covered 39 px of it. 224 clears it by 9 px; with no message NEXT is at y 10-73.
+  return { top: !glass && floor === FLOOR_GLOBE ? '224px' : '176px', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
 }
 
 const PANEL_CSS = [
@@ -112,6 +134,7 @@ export class RealSkyCard {
     this._built = false;
     this._info = null;
     this._credit = '';
+    this._creditOpen = false;
     this._statusJoined = false;
     this._loadFailed = false;
     this._els = {};
@@ -175,17 +198,27 @@ export class RealSkyCard {
     const body = el('div', 'margin-top:3px');
     card.append(head, body);
 
-    const legend = el('div', 'margin-top:7px;display:flex;flex-wrap:wrap;gap:2px 9px;color:#aebbd6');
+    // One row that fits the 250 px inside the panel: 9 px words, no letter spacing, small swatches (measured: at 10 px the six entries were 295 px wide).
+    const legend = el('div', 'margin-top:7px;display:flex;flex-wrap:nowrap;justify-content:space-between;gap:0 3px;font-size:9px;letter-spacing:0;color:#aebbd6');
+    legend.id = 'real-sky-key';
     const legendItems = [];
     CLASS_NAMES.forEach((n, i) => {
       const item = el('span', 'white-space:nowrap');
-      const sw = el('span', `display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;background:${CLASS_COLORS[i]}`);
-      item.append(sw, d.createTextNode(n));
+      item.title = n;
+      const sw = el('span', `display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:2px;background:${CLASS_COLORS[i]}`);
+      item.append(sw, d.createTextNode(LEGEND_LABELS[i]));
       legend.append(item);
       legendItems.push(item);
     });
-    const credit = el('div', 'margin-top:7px;font-size:10px;line-height:1.3;color:#8392b3');
+    // One small credit line naming every source; a tap opens the full wording, a second tap closes it (owner 2026-11-17, DECISIONS §74 row 3).
+    const credit = el('div', 'margin-top:2px;padding:4px 0 0;font-size:10px;line-height:1.3;color:#8392b3;cursor:pointer');
     credit.id = 'real-sky-credit';
+    credit.setAttribute('role', 'button');
+    credit.setAttribute('tabindex', '0');
+    credit.setAttribute('aria-expanded', 'false');
+    credit.title = 'Tap for the full credit';
+    credit.addEventListener('click', () => this.toggleCredit());
+    credit.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); this.toggleCredit(); } });
     const fail = el('div', 'display:none;margin-top:7px;color:#ffb06b', 'The sky data could not be loaded.');
     fail.id = 'real-sky-load-failed';
 
@@ -280,14 +313,34 @@ export class RealSkyCard {
 
   setCredit(text) {
     this._credit = text || '';
-    if (this._els.credit) this._els.credit.textContent = this._credit;
+    this._renderCredit();
+  }
+
+  /** Opens / closes the full credit wording (the default is the one short line). */
+  toggleCredit() {
+    this._creditOpen = !this._creditOpen;
+    this._renderCredit();
+  }
+
+  /** True while the full credit wording shows. */
+  creditOpen() { return this._creditOpen === true; }
+
+  /** The credit line as drawn now (short by default, the full wording when opened). */
+  creditText() { return this._els.credit ? this._els.credit.textContent : ''; }
+
+  _renderCredit() {
+    const c = this._els.credit;
+    if (!c) return;
+    c.textContent = this._creditOpen ? this._credit : shortCredit(this._credit);
+    c.setAttribute('aria-expanded', this._creditOpen ? 'true' : 'false');
+    c.title = this._creditOpen ? 'Tap to shorten' : 'Tap for the full credit';
   }
 
   _render() {
     const e = this._els;
     if (!e.root) return;
     this._renderLegend();
-    e.credit.textContent = this._credit;
+    this._renderCredit();
     const i = this._info;
     e.card.style.display = i ? 'block' : 'none';
     if (!i) return;

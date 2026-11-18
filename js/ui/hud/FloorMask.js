@@ -101,7 +101,7 @@ export const MASK_PANES = Object.freeze({
   mother:      Object.freeze({ rung: 'mother',      els: Object.freeze(['#hud-mother-panel']),        memory: true }),
   // Meters (DECISIONS §15 row 5): heat, battery, gas and ion, top left. Hidable (owner 2026-10-22: "the new and
   // improved mother pane should be hidable"): the `vitals` member of the `motherbox` step is its ONE hide writer.
-  // Shown on F1-F4, gone on F5 by default.
+  // Shown on F1-F3, gone on F4-F5 by default (owner 2026-11-17, DECISIONS §74 row 1).
   vitals:      Object.freeze({ rung: 'vitals',      els: Object.freeze(['#hud-vitals']),              memory: true }),
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
   // Target marks: the whole #reticle-canvas. The `targetmarks` step is its ONE hide writer (the entry keeps the name
@@ -116,7 +116,7 @@ export const MASK_PANES = Object.freeze({
   orbit:       Object.freeze({ rung: 'orbit',       els: Object.freeze(['#hud-orbit-pane']),          memory: true }),
   copilot:     Object.freeze({ rung: 'copilot',     els: Object.freeze(['#hud-fma-strip']),           memory: true }),
   next:        Object.freeze({ rung: 'next',        els: Object.freeze(['#hud-next-pane']),           memory: true }),
-  // owner 2026-09-07: no radio chatter at the workbench — comms is a room pane (gone on F1, shown on floors 2-5).
+  // owner 2026-09-07: no radio chatter at the workbench — comms is a room pane (gone on F1, shown on floors 2-3, gone on floors 4-5 where a new message shows it for a few seconds: DECISIONS §74 row 2).
   comms:       Object.freeze({ rung: 'comms',       els: Object.freeze(['#hud-comms-panel']),         memory: true }),
   // SAFETY OVERRIDE panel (owner 2026-09-07): the demo cockpit button at bottom-centre. A pane-density rung at index
   // 0, hidden by default on EVERY floor; the last `+` reveals it, the first `-` sheds it. `shipped: 'gone'`: a
@@ -151,14 +151,16 @@ export const ALWAYS_ON = Object.freeze([
  *       tall, both where the mid-height rails land; the orb was off in the shipped cockpit too).
  *       owner 2026-09-06: gone by default on F2, from the first screen look.
  *   F3 approach view (insertion): corner orb + daughters; lists go.
- *   F4 route planning (transfer): daughters faint (out flying); rest go.
+ *   F4 route planning (transfer): NEXT + score only; the meters, the autopilot strip, the daughter rows and the radio box
+ *       are 'gone' by default (owner 2026-11-17: DECISIONS §74 rows 1-2); the strip still shows while flying a leg and the
+ *       radio box shows a new message for a few seconds.
  *   F5 whole-Earth chart (survey): chart + score + alerts only.
  *   The hint ticker is gone on every floor but F2 (owner 2026-09-02: "same clean-up" for the far floors).
  *   CARGO is 'shown' on F1 only (the shop floor, where selling and contributing happen), by the 13-inch iPad numbers:
  *   on F2 the bottom-right slot has 8 px of slack under the SPECS tab (owner 2026-09-06).
  *   ORBIT and COPILOT are 'shown' on the two flying floors F2 + F3 (owner 2026-09-06: by the 13-inch iPad numbers);
- *   COPILOT stays 'faint' on F4 with the daughters rows (the autopilot can be flying a cluster leg while the player
- *   plans); NEXT is 'shown' on F3 + F4 (TCA and the transfer window are their subjects) and 'gone' on F2; all three
+ *   COPILOT is 'gone' on F4 (owner 2026-11-17, DECISIONS §74 row 1) but FmaStrip's fly attribute shows it while the
+ *   autopilot flies a leg; NEXT is 'shown' on F3 + F4 (TCA and the transfer window are their subjects) and 'gone' on F2; all three
  *   'gone' on F1 and F5.
  */
 // `override` is 'gone' on every floor by design — `_applyRoom` defaults a MISSING key to 'shown', so every row must
@@ -197,16 +199,21 @@ export const DEFAULT_ROOMS = Object.freeze({
     vitals: 'shown',
   }),
   4: Object.freeze({
-targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-      pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
-     cargo: 'gone', orbit: 'gone', copilot: 'faint', next: 'shown', comms: 'shown', override: 'gone', f1bar: 'gone',
+    // owner 2026-11-17 (DECISIONS §74 row 1): floor 4 hides the meters (vitals), the autopilot strip (copilot) and the
+    // daughter rows (arms) by default, as floor 5 does. The strip shows only while the autopilot flies a leg
+    // (FmaStrip `data-ap-flying`); `+` brings all three back. The gas budget stays in the REACH line.
+    targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
+    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
+    // The radio box (comms) is 'gone' here too (DECISIONS §74 row 2): CommsPanel shows it for a few seconds when a NEW
+    // message arrives (its own `data-comms-flash` attribute, never the density bit); `+` shows the full box.
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'shown', comms: 'gone', override: 'gone', f1bar: 'gone',
     score: 'shown',
-    vitals: 'shown',
+    vitals: 'gone',
   }),
   5: Object.freeze({
-targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-      pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
-     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone', f1bar: 'gone',
+    targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
+    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone', f1bar: 'gone',
     score: 'shown',
     vitals: 'gone',
   }),
@@ -233,8 +240,11 @@ export class FloorMask {
    *   still applies; DOM treatments no-op (Node tests drive stub rungs).
    * @param {function} [deps.reducedMotion] - zero-arg bool probe (default:
    *   the house matchMedia pattern) — picks the arrival fade length.
+   * @param {object} [deps.rooms] - the room table (default DEFAULT_ROOMS). Tests pass their own; since 2026-11-17 no shipped
+   *   floor row uses 'faint', so only an injected table exercises that tier.
    */
   constructor(deps = {}) {
+    this._rooms = deps.rooms || DEFAULT_ROOMS;
     this._hud = deps.hud || null;
     this._doc = deps.doc !== undefined ? deps.doc
       : (typeof document !== 'undefined' ? document : null);
@@ -339,7 +349,7 @@ export class FloorMask {
    */
   extraPaneShown() {
     if (this._disposed || !this._enabled || this._appliedFloor == null || !this._rungs) return false;
-    const room = DEFAULT_ROOMS[this._appliedFloor];
+    const room = this._rooms[this._appliedFloor];
     if (!room) return false;
     for (const [id, pane] of Object.entries(MASK_PANES)) {
       if (room[id] !== 'gone') continue;
@@ -375,7 +385,7 @@ export class FloorMask {
     if (this._disposed) return false;
     let changed = false;
     for (const [floor, panes] of Array.from(this._memory)) {
-      const room = DEFAULT_ROOMS[floor];
+      const room = this._rooms[floor];
       if (!room) continue;
       for (const [pane, vis] of Array.from(panes)) {
         if (vis === true && room[pane] === 'gone') { panes.delete(pane); changed = true; }
@@ -457,7 +467,7 @@ export class FloorMask {
 
   _applyRoom(floor) {
     this._appliedFloor = floor;
-    const room = DEFAULT_ROOMS[floor] || null;   // no row (out-of-table id) → all shown
+    const room = this._rooms[floor] || null;   // no row (out-of-table id) → all shown
     const mem = this._memory.get(floor) || null;
     const fadeMs = this._reducedMotion() ? REDUCED_CROSSFADE_MS : TRANSITION_FADE_MS;
     for (const [id, pane] of Object.entries(MASK_PANES)) {

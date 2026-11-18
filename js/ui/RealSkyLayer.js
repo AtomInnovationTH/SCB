@@ -24,7 +24,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { fetchData } from '../core/dataUrl.js';
 import { SkyPropagator } from '../systems/SkyPropagator.js';
-import { meoRadialMap, radiusPxForAltKm } from './SdaChart.js';
+import { meoRadialMap, radiusPxForAltKm, chartTextBoxes, chartTextVersion } from './SdaChart.js';
 import { cardFields, CLASS_COLORS } from './RealSkyCard.js';
 
 export { CLASS_COLORS };
@@ -451,7 +451,7 @@ export class RealSkyLayer {
     if (!g) return;
     const vpSize = this._getViewport();
     const W = vpSize.w, H = vpSize.h;
-    const key = `${W}x${H}|${this._selected}`;
+    const key = `${W}x${H}|${this._selected}|${chartTextVersion()}`;   // the chart's text moved or repainted: clear its boxes again
     const now = this._now();
     if (key === this._lastPaintKey && now - this._lastPaintMs < PAINT_5_MS) return;
     if (!this._viewProj()) return;
@@ -500,6 +500,9 @@ export class RealSkyLayer {
       }
     }
     this._painted5 = n;
+    // The chart's own text (ring labels, tag, bottom lines, strip title) is on the canvas UNDER this one: wipe the dots out of each
+    // string's box, 3 px of margin, so every label reads (lane fix F1, 2026-11-18; the dense LEO shells covered the top labels).
+    for (const b of chartTextBoxes()) g.clearRect(b.x - 3, b.y - 3, b.w + 6, b.h + 6);
     const s = this._selected;
     if (s >= 0 && Number.isFinite(sx[s])) {
       g.strokeStyle = '#ffffff';

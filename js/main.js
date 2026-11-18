@@ -2761,7 +2761,7 @@ async function init() {
     fmaStrip = new FmaStrip({
       fma: () => ((autopilotSystem && autopilotSystem.fmaState) ? autopilotSystem.fmaState() : null),
       onPhaseChange: (prev, next, state) => { if (copilotVoice) copilotVoice.phase(prev, next, state); },
-      // Floor 2 shows the strip while the autopilot flies, in plain words at the simple level.
+      // Floors 2 and 4 show the strip while the autopilot flies, in plain words at the simple level.
       floor: () => (ladderFloorMask && ladderFloorMask.getAppliedFloor ? ladderFloorMask.getAppliedFloor() : null),
       simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),
       // The boundary waits for her pick of the next field ("Where next? Pick on the LEO map").
@@ -2923,6 +2923,10 @@ async function init() {
   ladderFloorMask = new FloorMask({
     hud,
   });
+  // Floors 4-5: the radio box shows only a NEW message for a few seconds (DECISIONS §74 row 2); it reads the applied floor.
+  if (hud && hud.commsPanel && typeof hud.commsPanel.setFloorGetter === 'function') {
+    hud.commsPanel.setFloorGetter(() => ladderFloorMask.getAppliedFloor());
+  }
   // Interaction sfx. GETTERS, not refs (unlock pattern above). tickBus, NOT padBus: input confirms belong to the
   // TICK family (AudioSystem.playClick → tickBus; FAMILY_GAIN.tick 0.8); same sfxBus → master ducking/suspend rules.
   ladderSfx = new LadderSfx({
