@@ -92,8 +92,11 @@ function coastStepS(prevMs, nowMs) {
  *  - IDLE_S: the wait after the LAST view input (mouse or finger drag, held arrows, wheel or pinch zoom) once the drag's
  *    coast has stopped. Any view input restarts it. Real seconds, the same clock as the coast (a hitch counts at most
  *    COAST_STEP_MAX_S, so a pause or a hidden tab never ends the wait).
- *  - IDLE_S_F4: the same wait on floor 4 only: 10 s (owner 2026-11-18, "After she drags the view, floor 4 waits 10 s with
- *    no input before turning back to centre the field"; DECISIONS §59 row 1). Floors 1-3 keep IDLE_S.
+ *  - IDLE_S_F4: the same wait on floor 4 only: 15 s (owner 2026-11-18 14:12Z, "view should reset after no mouse activity
+ *    for 15 seconds"; was 10 s earlier that day, DECISIONS §75 row 3; §59 row 1). Floors 1-3 keep IDLE_S. On floor 4 the
+ *    wait also restarts on mouse activity that turns nothing: a pointer move over the canvas, a button down or up, a
+ *    wheel event, any touch event (`ladderNoteActivity`). Floors 1-3 count only view input. Floor 5 has no mouse or touch
+ *    drag (`_ladderDragEnabledFor`), so it never owes a return.
  *  - GLIDE_S: floors 1-3 (ship anchor): smoothstep along the great circle from the view to the chase direction
  *    (`_ladderChaseLocal`; over a pole of the floor, the same smoothstep over azimuth and polar angle instead, so the
  *    horizon never flips); the zoom distance does not change. Floor 4 (Earth anchor): CameraSystem only raises
@@ -101,7 +104,10 @@ function coastStepS(prevMs, nowMs) {
  *    (`ladderTurnEarthDir`). Floor 5 never moves.
  * No return while a drawer is open, a ride runs, or the catch focus or reel view holds the camera.
  */
-export const LADDER_VIEW_RETURN = Object.freeze({ IDLE_S: 4.0, IDLE_S_F4: 10.0, GLIDE_S: 2.0 });
+export const LADDER_VIEW_RETURN = Object.freeze({ IDLE_S: 4.0, IDLE_S_F4: 15.0, GLIDE_S: 2.0 });
+
+/** Window events that count as player activity for the floor-4 view-return wait (the wheel goes through WheelRouter, touch through TouchControls). */
+const ACTIVITY_WINDOW_EVENTS = Object.freeze(['wheel', 'touchstart', 'touchmove', 'touchend', 'touchcancel']);
 
 /**
  * DOWN-rides (Earth→ship, F6→F5): the roll back to ship-up completes within this FRACTION of the ride (the cubic in-out
@@ -705,6 +711,7 @@ export class CameraSystem {
       viewReturn: {
         dirty: false,       // a view input moved the view since it was last at default: a return is owed
         moved: false,       // the drag block applied a turn this frame (set there, read and cleared by the step)
+        activity: false,    // mouse / touch / wheel event since the last frame (ladderNoteActivity): restarts the floor-4 wait only
         t: 0,               // real seconds since the last input / hold (the wait clock)
         glide: null,        // while gliding: { t, arc, az0, daz, th0, dth } (pose = from + s(t) along the path)
         due: false,         // floor 4: the wait is over, main.js's answer is owed (ladderViewReturnDue)
@@ -843,6 +850,7 @@ export class CameraSystem {
     this._boundMouseMove = this._onMouseMove.bind(this);
     this._boundMouseUp = this._onMouseUp.bind(this);
     this._boundWindowMouseUp = () => { this._ladderCam.drag.isDragging = false; };   // a release off the canvas ends the ladder drag
+    this._boundActivity = () => this.ladderNoteActivity();   // wheel and touch events anywhere: floor-4 view-return wait restarts
     this._boundContextMenu = (e) => {
       if (this.currentView === CameraViews.FIRST_PERSON ||
           this.currentView === CameraViews.ORBIT) {
@@ -3422,7 +3430,10 @@ export class CameraSystem {
     this.canvas.addEventListener('mousedown', this._boundMouseDown);
     this.canvas.addEventListener('mousemove', this._boundMouseMove);
     this.canvas.addEventListener('mouseup', this._boundMouseUp);
-    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('mouseup', this._boundWindowMouseUp);
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('mouseup', this._boundWindowMouseUp);
+      for (const type of ACTIVITY_WINDOW_EVENTS) window.addEventListener(type, this._boundActivity, { passive: true, capture: true });
+    }
     // The wheel is owned by the single WheelRouter (window capture); the zoom logic lives in handleWheelZoom(e), which
     // the router calls on the legacy (ladder-off) path. No canvas wheel listener here.
     this.canvas.addEventListener('contextmenu', this._boundContextMenu);
@@ -3434,6 +3445,7 @@ export class CameraSystem {
     // ZOOM LADDER: while the ladder owns the camera, its drag branch owns the mouse; RETURN so the legacy
     // ORBIT/INSPECTION/free-look paths never double-fire. Gated on lc.active: byte-identical when disengaged.
     if (this._ladderCam.active) {
+      this.ladderNoteActivity();           // a button press is mouse activity even where no drag arms (floor 5)
       if (this._lassoCut.active) this.abortLassoCut();
       const d = this._ladderCam.drag;
       // Left or right click starts a rotate drag on the drag-enabled floors
@@ -3473,6 +3485,7 @@ export class CameraSystem {
     // that is an ORBIT-view skills-discovery signal, and the ladder keeps the events graph unchanged. RETURN keeps the
     // legacy paths unreachable while engaged.
     if (this._ladderCam.active) {
+      this.ladderNoteActivity();           // a pointer move over the canvas, button or not
       const d = this._ladderCam.drag;
       if (d.isDragging) {
         const dx = e.clientX - d.lastMouseX;
@@ -3516,6 +3529,7 @@ export class CameraSystem {
     // ZOOM LADDER: release the rotate drag; the accumulated velocities decay as momentum in _updateLadderCamera (ORBIT
     // feel). RETURN keeps the legacy release paths unreachable while the ladder owns the camera.
     if (this._ladderCam.active) {
+      this.ladderNoteActivity();
       this._ladderCam.drag.isDragging = false;
       return;
     }
@@ -3768,6 +3782,17 @@ export class CameraSystem {
    */
   ladderSetTouchHeld(on) {
     this._ladderCam.drag.touchHeld = !!on && this._ladderCam.active;
+    this.ladderNoteActivity();
+  }
+
+  /**
+   * Mouse, wheel or touch activity that turns nothing (a pointer move over the canvas, a button down or up, a wheel event,
+   * any touch event): on floor 4 it restarts the view-return wait (LADDER_VIEW_RETURN.IDLE_S_F4; owner 2026-11-18 "no mouse
+   * activity for 15 seconds"). One flag, read and cleared by _stepLadderViewReturn. Ignored while the ladder is off.
+   */
+  ladderNoteActivity() {
+    const lc = this._ladderCam;
+    if (lc.active) lc.viewReturn.activity = true;
   }
 
   // VIEW RETURN (see LADDER_VIEW_RETURN; owner 2026-10-25): after the last view input, once the drag's coast has
@@ -3777,7 +3802,7 @@ export class CameraSystem {
   /** @private Forget any owed return, glide and wait (engage / disengage). `dragMemory` is kept. */
   _resetLadderViewReturn() {
     const vr = this._ladderCam.viewReturn;
-    vr.dirty = false; vr.moved = false; vr.t = 0; vr.glide = null; vr.due = false;
+    vr.dirty = false; vr.moved = false; vr.activity = false; vr.t = 0; vr.glide = null; vr.due = false;
     vr.anchor = null; vr.prevCur = null; vr.prevTarget = null;
   }
 
@@ -3812,6 +3837,8 @@ export class CameraSystem {
     const dg = lc.drag;
     const moved = vr.moved;
     vr.moved = false;
+    const noted = vr.activity;
+    vr.activity = false;
     if (vr.anchor !== null && vr.anchor !== lc.anchor) {
       vr.dirty = shipAnchored && lc.floor != null && !!lc.dragMemory[lc.floor];
       vr.glide = null; vr.due = false; vr.t = 0;
@@ -3834,6 +3861,9 @@ export class CameraSystem {
       return;
     }
     if (!vr.dirty) { vr.t = 0; return; }
+    // Floor 4: mouse, wheel or touch activity that turned nothing still restarts the wait (owner 2026-11-18 "no mouse
+    // activity for 15 seconds"). Floors 1-3 keep "4 s after the last view input".
+    if (noted && lc.floor === 4) { vr.t = 0; return; }
     const step = Math.min(coastStep, COAST_STEP_MAX_S);   // a hitch (pause, hidden tab) never ends the wait
     if (vr.glide) { this._advanceLadderViewReturnGlide(step); return; }
     vr.t += step;
@@ -4085,7 +4115,7 @@ export class CameraSystem {
    * mouse drag, a touch drag, a ride, a disengage, an anchor change) also counts once in `ladderEarthFrameCancels()`,
    * which ends LadderController's framing glide. The wheel no longer calls it (a trackpad tail after arrival cancelled the
    * turn to the lifted default view, owner 2026-10-31); should a USER-input cause ('wheel', 'mouse drag', 'touch drag') stop
-   * a running turn on floor 4, the view is marked off default (`viewReturn.dirty`) so the 10 s return restores it.
+   * a running turn on floor 4, the view is marked off default (`viewReturn.dirty`) so the 15 s return restores it.
    * @param {string} [cause] which call site; the three user-input causes above also owe the view return
    */
   ladderCancelEarthTurn(cause = 'camera input') {
@@ -5519,7 +5549,10 @@ export class CameraSystem {
     this.canvas.removeEventListener('mousedown', this._boundMouseDown);
     this.canvas.removeEventListener('mousemove', this._boundMouseMove);
     this.canvas.removeEventListener('mouseup', this._boundMouseUp);
-    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') window.removeEventListener('mouseup', this._boundWindowMouseUp);
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+      window.removeEventListener('mouseup', this._boundWindowMouseUp);
+      for (const type of ACTIVITY_WINDOW_EVENTS) window.removeEventListener(type, this._boundActivity, { capture: true });
+    }
     this.canvas.removeEventListener('contextmenu', this._boundContextMenu);
 
     if (this._viewIndicator && this._viewIndicator.parentNode) {

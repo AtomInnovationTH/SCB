@@ -1087,6 +1087,11 @@ const _navProjV = new THREE.Vector3();
 function navcomProject(worldVec3) {
   const cam = cameraSystem && cameraSystem.camera;
   if (!cam) return { x: 0, y: 0, visible: false };
+  // The view matrix must be THIS frame's pose, not the one the last render left: cameraSystem.update has already moved
+  // the camera, but `matrixWorldInverse` is only refreshed by a render, so without this the field label, "You" and the
+  // reach band are placed with last frame's camera and jitter against the globe while she drags (CityLabels and
+  // RealSkyLayer refresh it the same way; sky-jitter-1118).
+  cam.updateMatrixWorld();
   const v = _navProjV.copy(worldVec3).project(cam);
   return {
     x: (v.x * 0.5 + 0.5) * window.innerWidth,
@@ -7159,7 +7164,7 @@ function updateCamera(dt, timestamp) {
       z: shipPos.z + (vel.z / vmag) * eps,
     });
     const shipAngleRad = Math.atan2(s1.y - s0.y, s1.x - s0.x);
-    // owner 2026-10-25, wait 10 s since 2026-11-18: 10 s after his last view input on floor 4 the camera asks for the view back. Answer it with the
+    // owner 2026-10-25, wait 15 s since 2026-11-18 14:12Z: 15 s after his last mouse, wheel or touch activity on floor 4 the camera asks for the view back. Answer it with the
     // same framing turn the arrival uses, direction only (no frameZoomTo: the zoom stays where he put it).
     if (cameraSystem.ladderViewReturnDue()) {
       const back = navcomFloor.framing({ shipPos, shipVel: vel, project: navcomProject, fovDeg: cameraSystem.camera.fov });
@@ -7170,7 +7175,7 @@ function updateCamera(dt, timestamp) {
     // and each time the focus changes while there (Tab, a click on an icon).
     // It turns to where your ship AND the field are both in view, and glides out until the whole
     // low-orbit shell they move in fits clear of the panels (EarthTurn.earthFrame); the field wins when
-    // both cannot. A drag stops it (the 10 s view return then restores it); the wheel/pinch only ends the zoom glide.
+    // both cannot. A drag stops it (the 15 s view return then restores it); the wheel/pinch only ends the zoom glide.
     const f4Focus = navcomFloor.getFocusedCluster();
     const f4 = earthTurnTrigger({
       floor: ladderController.currentFloor(), riding: ladderController.isRiding(),
