@@ -57,6 +57,7 @@ export class TransferWindows {
     this._root = null;
     this._built = false;
     this._visible = false;
+    this._wanted = true;        // a trip is picked (setWanted); true until refresh() says otherwise, so a caller that never passes `picked` is unchanged
     this._boxH = null;          // the box's measured outer height (heightPx)
     this._lastHtml = null;      // last painted markup — skips per-frame innerHTML churn
     this._lastStructKey = null; // last painted STRUCTURAL key (shouldWrite)
@@ -129,11 +130,11 @@ export class TransferWindows {
   static readout(win, opts = {}) {
     const model = TransferWindows._readout(win, opts);
     if (!opts.simple) return model;
-    // Simple level: two plain sentences, no numbers of the trip itself.
+    // Simple level: plain sentences, no numbers of the trip itself. Her own height has no box at all (refresh hides it), so no sentence for it.
     let plainText;
     let plainFuelText = '';
     if (model.empty) plainText = 'Point at a debris field to plan a trip.';
-    else if (model.coOrbital) plainText = 'You are already at this height. No trip needed.';
+    else if (model.coOrbital) plainText = '';
     else {
       const when = TransferWindows.plainWindow(win.departIn);
       plainText = when == null ? '' : `Next window ${when}`;
@@ -228,8 +229,32 @@ export class TransferWindows {
     this._root = root;
   }
 
-  show() { this._build(); this._visible = true; if (this._root) this._root.style.opacity = '1'; this._measure(); }
-  hide() { this._visible = false; if (this._root) this._root.style.opacity = '0'; }
+  show() { this._build(); this._visible = true; this._applyVisible(); this._measure(); }
+  hide() { this._visible = false; this._applyVisible(); }
+
+  /**
+   * The box is on screen only for a trip she picked: the picked field is not her own height and a window exists (owner 2026-11-19,
+   * DECISIONS §78 row 14). Nothing picked, or her own field (co-orbital), leaves no box at all. Write-on-change; a box that comes back is measured.
+   * @private
+   * @param {boolean} wanted
+   */
+  _setWanted(wanted) {
+    if (wanted === this._wanted) return;
+    this._wanted = wanted;
+    this._applyVisible();
+    if (wanted) this._measure();
+  }
+
+  /** @private */
+  _applyVisible() {
+    const root = this._root;
+    if (!root || !root.style) return;
+    root.style.opacity = this._visible && this._wanted ? '1' : '0';
+    root.style.display = this._wanted ? '' : 'none';
+  }
+
+  /** Is the box on screen right now (floor 4 showing and a trip picked)? */
+  isShown() { return !!(this._root && this._visible && this._wanted); }
 
   /**
    * The box's live outer height in px (border and padding included), for panels that must clear it. Its top edge is
@@ -237,7 +262,7 @@ export class TransferWindows {
    * tallest state). Measured only after a markup write and at show(), never per frame.
    * @returns {number|null}
    */
-  heightPx() { return (this._visible && this._boxH > 0) ? this._boxH : null; }
+  heightPx() { return (this._visible && this._wanted && this._boxH > 0) ? this._boxH : null; }
 
   /** @private A missing rect (headless DOM) leaves it unmeasured. */
   _measure() {
@@ -250,7 +275,8 @@ export class TransferWindows {
 
   /**
    * @param {object|null} win - computeTransferWindow() result (or null)
-   * @param {object} [opts] - { targetName, assessment, budget, route, sweep }
+   * @param {object} [opts] - { targetName, assessment, budget, route, sweep, picked }. `picked === false` = nothing is picked on
+   *                 the map: the box is hidden (absent = picked, so older callers are unchanged).
    * @returns {object} the display model that was rendered (readout())
    */
   refresh(win, opts = {}) {
@@ -258,6 +284,8 @@ export class TransferWindows {
     try { simple = !!(this._simple && this._simple()); } catch (_e) { simple = false; }
     const model = TransferWindows.readout(win, simple ? { ...opts, simple: true } : opts);
     if (!this._root) return model;
+    // The box shows for a picked trip only: `opts.picked === false` (nothing picked on the map) or no window, or her own height (co-orbital), hides it.
+    this._setWanted(opts.picked !== false && !model.empty && !model.coOrbital);
     // Structural changes paint immediately; countdown-only ticks are capped (shouldWrite). The fuel and FIELD
     // route/sweep rows are structural (NavcomFloor recomputes them on its own throttled cadence).
     const structKey = `${simple ? 'S' : 'F'}|${model.plainText || ''}|${model.plainFuelText || ''}|${model.targetName}|${model.empty}|${model.coOrbital}|${model.imminent}|${model.dvText}|${model.showArrive}|${model.fuelText}|${model.routeText}|${model.sweepText}`;
@@ -321,6 +349,7 @@ export class TransferWindows {
     if (this._root && this._root.remove) this._root.remove();
     this._root = null;
     this._built = false;
+    this._wanted = true;
     this._boxH = null;
     this._lastHtml = null;
     this._lastStructKey = null;

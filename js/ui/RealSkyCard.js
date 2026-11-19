@@ -121,15 +121,15 @@ const NAME_DOUBLE_MS = 350;
 export function panelPlacement(glass, floor) {
   if (glass && floor === FLOOR_GLOBE) return { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: 'calc(100vh - 260px)' };
   // Mac floor 4 (lane sky-skylook-1119, owner 2026-11-19: "move the right panel to top right to improve visibility of the object cloud"):
-  // the panel's top edge is 12 px from the top. The radio box and NEXT that sat there move out of its way (see `SKY_PANEL_TOP_CLASS`).
+  // the panel's top edge is 12 px from the top. The radio box and the right column (Targets, Target info, NEXT when `+` brings it back; NEXT is gone on floor 4 by default since DECISIONS §78 row 11) that sat there move out of its way (see `SKY_PANEL_TOP_ATTR`).
   if (!glass && floor === FLOOR_GLOBE) return { top: 'calc(12px + env(safe-area-inset-top, 0px))', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
   return { top: '176px', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
 }
 
 /**
- * Mac floor 4: the panel sits at the top right, so the radio box (`#hud-comms-panel`) and the right column (NEXT, `#hud-right-column`),
+ * Mac floor 4: the panel sits at the top right, so the radio box (`#hud-comms-panel`) and the right column (Targets / Target info, and NEXT where it shows: it is gone on floor 4 by default since §78 row 11, `+` brings it back; `#hud-right-column`),
  * which live there, move DOWN to just under it (lane sky-skylook-1119). Measured (tmp/sky10-look/probe-rects.js, 1728 x 1117, dots not
- * hidden by Earth): moved to the LEFT of the panel the 600 px wide radio box covered 1,555 dots and NEXT 260-288; moved below, 519-882 and
+ * hidden by Earth, NEXT then still on floor 4): moved to the LEFT of the panel the 600 px wide radio box covered 1,555 dots and NEXT 260-288; moved below, 519-882 and
  * 26-157 (panel closed / card open). Below wins on both, and it is the side that never reaches Earth. How: `<html data-sky-panel-top>`
  * and `--sky-panel-dy` (the panel's bottom + 12 px) feed the one rule below; the individual `translate` property sits outside the HUD's
  * own `scale` and `transform` (index.html), so neither is disturbed. Set only while the panel shows with a mouse on floor 4 or 5 (floor 5: the panel keeps top 176 px; the column's Targets / Target info panes dodge too).
@@ -137,8 +137,10 @@ export function panelPlacement(glass, floor) {
 export const SKY_PANEL_TOP_ATTR = 'data-sky-panel-top';
 export const SKY_PANEL_DY_VAR = '--sky-panel-dy';
 export const SKY_PANEL_STYLE_ID = 'real-sky-panel-dodge-style';
+/** Touch floor 4: the panel's height + gap (px) while it shows in the bottom-right corner; the speed control's bottom edge adds it. */
+export const SKY_PANEL_LIFT_VAR = '--sky-panel-lift';
 export const SKY_PANEL_TOP_CSS = `html[${SKY_PANEL_TOP_ATTR}] #hud-comms-panel, html[${SKY_PANEL_TOP_ATTR}] #hud-right-column { translate: 0 var(${SKY_PANEL_DY_VAR}, 0px); }`;
-/** Gap between the panel's bottom edge and the radio box / NEXT under it, px. */
+/** Gap between the panel's bottom edge and the radio box / right column under it, px. */
 export const SKY_PANEL_GAP_PX = 12;
 /**
  * How far the dodge rule has moved the radio box and the right column down right now, px (0 when it is off). HUD reads it so the right
@@ -185,7 +187,7 @@ export class RealSkyCard {
     this._statusJoined = false;
     this._loadFailed = false;
     this._els = {};
-    this._dodgeOn = false;                // <html data-sky-panel-top> is set (the radio box and NEXT are moved under the panel)
+    this._dodgeOn = false;                // <html data-sky-panel-top> is set (the radio box and the right column are moved under the panel)
     this._dodgeDy = NaN;                  // the --sky-panel-dy written now, px
     this._ro = null;
   }
@@ -340,7 +342,25 @@ export class RealSkyCard {
   }
 
   /**
-   * Mouse + floor 4 or 5 + showing: put the radio box, NEXT and the Targets / Target info panes under the panel (attribute + the panel's
+   * The room the panel takes at the bottom right, for the map speed control (lane sky-floor4-1119, DECISIONS §78 row 12): on touch, floor 4,
+   * the panel sits in the bottom-right corner and grows upward, so the speed control stands just above it. `--sky-panel-lift` on <html> is the
+   * panel's height + SKY_PANEL_GAP_PX while it shows there, else removed; MapClockSlider's bottom edge adds it (CSS only, so the control moves
+   * with the panel when a tapped dot's card opens, with no per-frame work). Same write-on-change and same rect-read moments as the dodge.
+   * @private
+   */
+  _syncLift(de, root) {
+    const on = !!root && this._shown && this._glass && this._floor === FLOOR_GLOBE;
+    if (!on) {
+      if (this._liftPx !== undefined) { de.style.removeProperty(SKY_PANEL_LIFT_VAR); this._liftPx = undefined; }
+      return;
+    }
+    const r = typeof root.getBoundingClientRect === 'function' ? root.getBoundingClientRect() : null;
+    const lift = Math.round((r && r.height) || 0) + SKY_PANEL_GAP_PX;
+    if (lift !== this._liftPx) { de.style.setProperty(SKY_PANEL_LIFT_VAR, `${lift}px`); this._liftPx = lift; }
+  }
+
+  /**
+   * Mouse + floor 4 or 5 + showing: put the radio box and the right column (Targets / Target info panes, NEXT when shown) under the panel (attribute + the panel's
    * bottom + SKY_PANEL_GAP_PX as a CSS variable on <html>); in every other state take it all back. Floor 5 (D7, review of 2026-11-19):
    * the panel stays at top 176 px, right 12 px, 272 px wide, over `#hud-right-column` (right 0, 350 px), and `+` after a scan shows the
    * panes there as on floor 4 (no floor test in the `+` walk: PaneDensity, HUD `_densityIsAvailable`), so the same dodge applies. Writes
@@ -350,6 +370,7 @@ export class RealSkyCard {
     const d = this._doc, de = d && d.documentElement;
     if (!de || !de.style || typeof de.setAttribute !== 'function') return;
     const root = this._els.root;
+    this._syncLift(de, root);
     const on = !!root && this._shown && !this._glass && (this._floor === FLOOR_GLOBE || this._floor === FLOOR_CHART);
     if (!on) {
       if (this._dodgeOn) { de.removeAttribute(SKY_PANEL_TOP_ATTR); de.style.removeProperty(SKY_PANEL_DY_VAR); this._dodgeOn = false; this._dodgeDy = NaN; }

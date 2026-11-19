@@ -151,17 +151,16 @@ export const ALWAYS_ON = Object.freeze([
  *       tall, both where the mid-height rails land; the orb was off in the shipped cockpit too).
  *       owner 2026-09-06: gone by default on F2, from the first screen look.
  *   F3 approach view (insertion): corner orb + daughters; lists go.
- *   F4 route planning (transfer): NEXT + score only; the meters, the autopilot strip, the daughter rows and the radio box
+ *   F4 route planning (transfer): the score only; the meters, the autopilot strip, the daughter rows and the radio box
  *       are 'gone' by default (owner 2026-11-17: DECISIONS §74 rows 1-2); the strip still shows while flying a leg and the
- *       radio box shows a new message for a few seconds.
+ *       radio box shows a new message for a few seconds. NEXT is 'gone' too (owner 2026-11-19, DECISIONS §78 row 11).
  *   F5 whole-Earth chart (survey): chart + score + alerts only.
  *   The hint ticker is gone on every floor but F2 (owner 2026-09-02: "same clean-up" for the far floors).
  *   CARGO is 'shown' on F1 only (the shop floor, where selling and contributing happen), by the 13-inch iPad numbers:
  *   on F2 the bottom-right slot has 8 px of slack under the SPECS tab (owner 2026-09-06).
  *   ORBIT and COPILOT are 'shown' on the two flying floors F2 + F3 (owner 2026-09-06: by the 13-inch iPad numbers);
  *   COPILOT is 'gone' on F4 (owner 2026-11-17, DECISIONS §74 row 1) but FmaStrip's fly attribute shows it while the
- *   autopilot flies a leg; NEXT is 'shown' on F3 + F4 (TCA and the transfer window are their subjects) and 'gone' on F2; all three
- *   'gone' on F1 and F5.
+ *   autopilot flies a leg; NEXT is 'shown' on F3 only (TCA is its subject) and 'gone' on F1, F2, F4 and F5.
  */
 // `override` is 'gone' on every floor by design — `_applyRoom` defaults a MISSING key to 'shown', so every row must
 // carry it (the exhaustive-row test pins that).
@@ -206,7 +205,8 @@ export const DEFAULT_ROOMS = Object.freeze({
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
     // The radio box (comms) is 'gone' here too (DECISIONS §74 row 2): CommsPanel shows it for a few seconds when a NEW
     // message arrives (its own `data-comms-flash` attribute, never the density bit); `+` shows the full box.
-    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'shown', comms: 'gone', override: 'gone', f1bar: 'gone',
+    // NEXT is 'gone' here too (owner 2026-11-19, DECISIONS §78 row 11): the map is the subject; floor 3 keeps it.
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone', f1bar: 'gone',
     score: 'shown',
     vitals: 'gone',
   }),

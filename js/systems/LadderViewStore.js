@@ -62,8 +62,9 @@ export const LADDER_VIEW_VERSION = 1;
  *   9 — ORBIT (LAT, LON, ALT, MET) is 'gone' on F3 by default (owner 2026-10-18, "what is noise").
  *  10 — F4 hides the meters (vitals), the autopilot strip (copilot) and the daughter rows (arms) by default (owner
  *       2026-11-17, DECISIONS §74 row 1). A saved F4 row from before would keep the old panes shown.
+ *  11 — NEXT is 'gone' on F4 by default (owner 2026-11-19, DECISIONS §78 row 11). A saved F4 row from before would keep it shown.
  */
-export const ROOMS_GENERATION = 10;
+export const ROOMS_GENERATION = 11;
 
 export const DEFAULT_PANES = Object.freeze({ refit: false, library: false });
 

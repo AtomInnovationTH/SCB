@@ -15,6 +15,7 @@
  */
 
 import { MAP_CLOCK_TEXT, mapClockTextFor, NO_SPACING_LANGS } from './mapClockText.js';
+import { SKY_PANEL_LIFT_VAR } from './RealSkyCard.js';
 
 export const MAP_CLOCK_SLIDER_ID = 'map-clock-slider';
 /** Hit-box minimum in CSS px (DECISIONS §32: touch targets at least 44 px). */
@@ -36,19 +37,28 @@ export function speedText(rate, baseScale = 10) {
   return `${Math.round(v).toLocaleString('en-US')}\u00d7`;
 }
 
+/** The bottom-right corner's inset from the window edge (px), the real-sky panel's own. */
+export const EDGE_PX = 12;
+
 /**
- * Where the row sits: the left edge, under the height list and above the bottom-left hint box (both floors, mouse and touch).
- * Measured with the probe tmp/clockshots/layout.mjs (2026-11-18, headless Chromium): in the bottom centre it covered the touch
- * FLY THERE button on the iPad (602-764 x 888-936) and sat on the REACH line / Earth's rim on the Mac; on the right, the real-sky
- * panel (iPad floor 4: 1082-1354 x 928-1012) and the radio box and NEXT (top right, to y 215) take the column. On the left, floor 4
- * has the height list and scale (to y 773 on the iPad, y 650 on the Mac) and the hint box from y 950 (iPad) / 1043 (Mac);
- * floor 5 has the Kessler timeline from y 920 (iPad). Top 800 px (or 230 px above the bottom on a shorter window) sits in the gap
- * on both screens: 800-870 on 1366x1024 and on 1728x1117; Earth's rim is at x 415 / 478 at that height, the row ends at x 276. Pure.
+ * Where the row sits (owner 2026-11-19, DECISIONS §78 row 12). Floor 4: the bottom-right corner (12 px in; the bottom-centre holds REACH and
+ * the FLY THERE button, the left the hint box). On touch the real-sky panel holds that corner (his 11-17 pick), so the row stands directly
+ * above it, right edges aligned, its bottom edge = 12 px + the panel's live height (`--sky-panel-lift`, set by RealSkyCard, so a tapped dot's
+ * taller card pushes it up). Floor 5: the left edge, top 800 px (or 230 px above the bottom on a shorter window): the gap between the Kessler
+ * timeline (from y 920) and the left column, measured 2026-11-18 (tmp/clockshots/layout.mjs, 1366x1024 and 1728x1117). Pure.
  * @param {{floor:number|null, glass:boolean}} p
- * @returns {{left:string, top:string}}
+ * @returns {{left:string, top:string, right:string, bottom:string}}
  */
 export function sliderPlacement(p) {
-  return { left: '12px', top: 'min(800px, calc(100vh - 230px))' };
+  const p0 = p || {};
+  const right = `calc(${EDGE_PX}px + env(safe-area-inset-right, 0px))`;
+  const bottom = `calc(${EDGE_PX}px + env(safe-area-inset-bottom, 0px))`;
+  if (p0.floor === 4 && p0.glass) {
+    // iPad: the real-sky panel holds the corner (right 12 px, bottom 12 px + safe area); stand directly above it, right edges aligned, and follow its height (a tapped dot's card makes it taller)
+    return { left: 'auto', top: 'auto', right: `${EDGE_PX}px`, bottom: `calc(${EDGE_PX}px + env(safe-area-inset-bottom, 0px) + var(${SKY_PANEL_LIFT_VAR}, 0px))` };
+  }
+  if (p0.floor === 4) return { left: 'auto', top: 'auto', right, bottom };
+  return { left: `${EDGE_PX}px`, top: 'min(800px, calc(100vh - 230px))', right: 'auto', bottom: 'auto' };
 }
 
 export class MapClockSlider {
@@ -110,11 +120,13 @@ export class MapClockSlider {
   setLayout(p) {
     if (!this._root) return;
     const pl = sliderPlacement(p);
-    const key = `${pl.left}|${pl.top}`;
+    const key = `${pl.left}|${pl.top}|${pl.right}|${pl.bottom}`;
     if (key === this._placed) return;
     this._placed = key;
     this._root.style.left = pl.left;
     this._root.style.top = pl.top;
+    this._root.style.right = pl.right;
+    this._root.style.bottom = pl.bottom;
   }
 
   /** Language read again (the menu's picker can change it between games). */

@@ -1,11 +1,14 @@
 /**
- * OpeningDive.js — the opening dive through the real dots, behind a test switch (lane sky-dive-1118, DECISIONS §75 row 5).
+ * OpeningDive.js — the opening dive through the real dots, every player's opening (lane sky-dive-1118, DECISIONS §75 row 5;
+ * on by default since lane sky-diveon-1119, §78 row 15).
  *
  * Owner 2026-11-18: "A job makes a slower dive, about 6 s, from the globe through the real dots down to her ship. The dots fade
  * near the ship, and any key skips it as today. It stays behind a test switch until you look on the Mac."
+ * Owner 2026-11-19: "switch on the dive thru debris".
  *
- * The switch is `?dive=1`, read through `devSearch()`: it works on a dev host (localhost on the Mac) and nowhere else, so a public
- * page never dives. With it off nothing in this file runs and the opening is exactly today's.
+ * The dive is the DEFAULT wherever today's opening ride plays. `?dive=0` turns it off (the old 2.4 s ride), read through
+ * `devSearch()`: it works on a dev host (localhost on the Mac) and nowhere else, so a public page always dives. `?dive=1` is
+ * still accepted and means on. With `?dive=0` nothing in this file runs and the opening is the old ride.
  *
  * The camera ride itself belongs to LadderController (`armIntroRide({ dive: true })`, INTRO_DIVE_MS, `diveInFlight()`,
  * `finishDive()`). This file owns what the dive adds on top: the dots' opacity by the camera's distance from the ship, and
@@ -37,12 +40,13 @@ export const DIVE_FADE_START_M = 7.0e6;
 export const DIVE_FADE_END_M = 1.2e5;
 
 /**
- * The `?dive=1` test switch (dev host only; `loc` is injectable for tests).
+ * Is the opening dive on? Yes, unless `?dive=0` on a dev host (a public host ignores the switch: always on). `?dive=1` is still
+ * accepted and means on; any other value is the default, on. (`loc` is injectable for tests.)
  * @param {{protocol?:string, hostname?:string, search?:string}|null|undefined} [loc]
  * @returns {boolean}
  */
-export function devDive(loc = globalThis.location) {
-  return new URLSearchParams(devSearch(loc)).get('dive') === '1';
+export function diveOn(loc = globalThis.location) {
+  return new URLSearchParams(devSearch(loc)).get('dive') !== '0';
 }
 
 /**
@@ -68,7 +72,7 @@ export function diveAlpha(distM) {
 export const DIVE_VEIL_OUT_MS = 450;
 /** The dive fades up from black this long, from its first frame, ms. */
 export const DIVE_VEIL_IN_MS = 700;
-/** If no dive has started this long after the cut (the switch was on but nothing armed a dive), the veil lifts anyway, ms. */
+/** If no dive has started this long after the cut (the dive was wanted but nothing armed one), the veil lifts anyway, ms. */
 export const DIVE_VEIL_FALLBACK_MS = 1500;
 /** A skip during the dive: the veil, if still up, lifts in this many ms. */
 export const DIVE_VEIL_SKIP_MS = 200;
@@ -76,7 +80,7 @@ export const DIVE_VEIL_SKIP_MS = 200;
 /**
  * The black veil over the screen for the menu -> dive cut. States: idle -> armed (begin: fade-out scheduled) -> out (fading to
  * black) -> black (the cut) -> in (the dive's fade-up) -> idle (element removed). All times are milliseconds on the page's own
- * clock (`now`), driven by `raf`; both and the DOM are injectable for tests. With the `?dive=1` switch off nothing here is
+ * clock (`now`), driven by `raf`; both and the DOM are injectable for tests. With `?dive=0` (dev host) nothing here is
  * ever called.
  */
 export class DiveVeil {

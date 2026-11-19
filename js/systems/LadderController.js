@@ -54,7 +54,7 @@ const DZ_RETURN_PEAK_MPS = 20;
 export const INTRO_RIDE_MS = 2400;
 
 /**
- * The OPENING DIVE (test switch `?dive=1`, lane sky-dive-1118, DECISIONS §75 row 5): the intro dive's duration with the switch on.
+ * The OPENING DIVE (the default; `?dive=0` on a dev host turns it off; lane sky-dive-1118, DECISIONS §75 row 5, §78 row 15): the intro dive's duration.
  * The ladder engages at the cut (dance t 2.70 s; measured engage 2.73), so a 5.5 s ride lands near dance t 8.23, about 0.47 s
  * before the hand-over (8.71 s). Longer than 5.67 s would land after 8.40 s, i.e. later than the hand-over minus 0.3 s.
  */
@@ -84,7 +84,7 @@ export const INTRO_PULLBACK_MS = 800;
 export const INTRO_DANCE_LANDING_Z01 = 0.23;
 export const INTRO_DANCE_DRIFT_Z01 = 0.82;
 /**
- * Where the OPENING DIVE (`?dive=1` only) lands: z01 0.85, the far edge of floor 1's free zone (1 - WALL_ZONE_FRAC), never
+ * Where the OPENING DIVE (every dive; `?dive=0` gives the old ride instead) lands: z01 0.85, the far edge of floor 1's free zone (1 - WALL_ZONE_FRAC), never
  * the normal opening's close 0.23. The dive has no dolly, so the pull-back starts from the landing point, and its first frames
  * run on floor 2, whose near clip is 3 m. Measured 2026-11-19 (tmp/sky10-keys/before, camera to ship centre / nearest hull
  * surface): landing at 0.23 was 2.58 m / 1.50 m and the pull-back began at 2.59 m / 1.52 m, so the hull sat inside that 3 m
@@ -1114,7 +1114,7 @@ export class LadderController {
    *   `handoverZ01` — where the PULL-BACK leaves the camera (where the player takes the wheel). Absent: the contract's own
    *     ENTRY_Z01_FROM_BELOW.
    *   `pullbackMs` — the pull-back's duration. Absent ⇒ INTRO_PULLBACK_MS.
-   *   `dive` — the OPENING DIVE (test switch `?dive=1`): the armed ride is the long dive (the caller passes `rideMs`
+   *   `dive` — the OPENING DIVE (the default; main.js passes false under `?dive=0`): the armed ride is the long dive (the caller passes `rideMs`
    *     INTRO_DIVE_MS), the dwell's dolly is dropped (the hand-over starts the pull-back from where the dive landed, which is
    *     INTRO_DIVE_LANDING_Z01 whatever `entryZ01` says), and the ride flies with INTRO_DIVE_FAR_U as its far plane. See
    *     diveInFlight() / finishDive().

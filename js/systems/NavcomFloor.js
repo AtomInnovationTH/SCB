@@ -117,6 +117,7 @@ export class NavcomFloor {
     this._active = false;
     this._clusters = [];
     this._focusId = null;
+    this._picked = false;            // she picked a field on the map (icon click, Tab, Space): only then does the trip box show; the default focus is not a pick
 
     // FUEL-REACHABILITY state (all inert without the getMassBudget dep).
     this._budget = null;
@@ -169,6 +170,7 @@ export class NavcomFloor {
   deactivate() {
     if (!this._active) return;
     this._active = false;
+    this._picked = false;               // leaving the map clears her pick: the trip box starts hidden on the next visit
     if (this._icons.hide) this._icons.hide();
     if (this._windows.hide) this._windows.hide();
     if (this._orb.hide) this._orb.hide();
@@ -217,6 +219,7 @@ export class NavcomFloor {
     this._clusters = list;
     if (list.length === 0) {
       this._focusId = null;
+      this._picked = false;
       this._recomputeAssessments();
       this._recomputeFieldPlans();
       return;
@@ -224,6 +227,7 @@ export class NavcomFloor {
     if (this._focusId == null || !list.some((c) => c.id === this._focusId)) {
       const ranked = ClusterIcons.rank(list, list.length);
       this._focusId = ranked.length ? ranked[0].id : null;
+      this._picked = false;             // the default focus is not a pick
     }
     this._recomputeAssessments();
     this._recomputeFieldPlans();
@@ -238,6 +242,7 @@ export class NavcomFloor {
   focusById(id) {
     if (!this._clusters.some((c) => c.id === id)) return false;
     this._focusId = id;
+    this._picked = true;
     this._recomputeAssessments();
     return true;
   }
@@ -249,6 +254,7 @@ export class NavcomFloor {
     if (i < 0) i = 0;
     i = Math.min(ranked.length - 1, Math.max(0, i + (dir < 0 ? -1 : 1)));
     this._focusId = ranked[i].id;
+    this._picked = true;
     this._recomputeAssessments();
   }
 
@@ -611,6 +617,7 @@ export class NavcomFloor {
       budget: this._budget,
       route: this._routePlan,
       sweep: this._sweepPlan,
+      picked: this._picked,
     });
     // Reachability orb: envelope rings in the player's orbital plane; never mounts/paints without the dep + a live
     // budget/orbit/projector.
@@ -639,6 +646,7 @@ export class NavcomFloor {
     const cluster = this.getFocusedCluster();
     if (!cluster) return null;
     const window = this.computeWindow(cluster);
+    this._picked = true;                // Space on the aimed field commits to the trip: the box shows it
     // Surface it immediately (the readout doubles as the "plan committed" cue).
     if (this._windows.refresh) {
       this._windows.refresh(window, {
@@ -647,6 +655,7 @@ export class NavcomFloor {
         budget: this._budget,
         route: this._routePlan,
         sweep: this._sweepPlan,
+        picked: true,
       });
     }
     if (typeof this._onPlanTransfer === 'function') this._onPlanTransfer(cluster, window);

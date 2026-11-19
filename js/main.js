@@ -136,7 +136,7 @@ import { earthTurnTrigger } from './systems/EarthTurn.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
 import { RealSkyLayer } from './ui/RealSkyLayer.js';
-import { OpeningDive, devDive, diveVeil } from './ui/OpeningDive.js';
+import { OpeningDive, diveOn, diveVeil } from './ui/OpeningDive.js';
 import { RealSkyCard } from './ui/RealSkyCard.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
@@ -937,7 +937,7 @@ let _introForced = false;
  * leaves it closed too; the next MENU visit re-opens it.
  */
 let _introFlown = false;
-/** The opening dive's dots driver (ui/OpeningDive.js): built at the first New Game with `?dive=1` on a dev host, else null. */
+/** The opening dive's dots driver (ui/OpeningDive.js): built at the first New Game that dives (the default; `?dive=0` on a dev host turns it off), else null. */
 let _openingDive = null;
 /**
  * Is this boot a FIRST-TIME player's run? The MAP store's first-run bit under the harness policy (the same policy
@@ -964,13 +964,13 @@ function _prefersReducedMotion() {
   } catch (_e) { return false; }
 }
 /**
- * The opening dive's switch for this New Game (lane sky-dive-1118): true only with `?dive=1` on a dev host, the dance on and
- * reduced motion off. The first true builds the dots driver (ui/OpeningDive.js) the frame loop updates.
+ * Does this New Game dive (lane sky-dive-1118; the default since sky-diveon-1119)? True unless `?dive=0` on a dev host, with the
+ * dance on and reduced motion off. The first true builds the dots driver (ui/OpeningDive.js) the frame loop updates.
  * @param {boolean} danceCamera Constants.FEATURE_FLAGS.OPENING_DANCE (the dive lands before the dance's hand-over)
  * @returns {boolean}
  */
 function _openingDiveOn(danceCamera) {
-  if (!danceCamera || _prefersReducedMotion() || !devDive()) return false;
+  if (!danceCamera || _prefersReducedMotion() || !diveOn()) return false;
   if (!_openingDive && realSkyLayer && ladderController) {
     _openingDive = new OpeningDive({
       ladder: ladderController,
@@ -986,12 +986,12 @@ function _openingDiveOn(danceCamera) {
 }
 /**
  * Does this New Game's departure end in the opening dive, so the picture should dissolve through black at the cut (lane
- * sky-divecut-1119)? The same gate as `_openingDiveOn`, true only with `?dive=1` on a dev host; false everywhere else, so the
- * normal opening and training never see the veil.
+ * sky-divecut-1119)? The same gate as `_openingDiveOn`: true unless `?dive=0` on a dev host; false where no dive plays (reduced
+ * motion, dance flag off, a `?shot=` capture without `&intro=1`), and a Continue never begins it (MENU_START departures only).
  * @returns {boolean}
  */
 function _diveVeilWanted() {
-  return !!(Constants.FEATURE_FLAGS.OPENING_DANCE) && !_prefersReducedMotion() && _introRideAllowed() && devDive();
+  return !!(Constants.FEATURE_FLAGS.OPENING_DANCE) && !_prefersReducedMotion() && _introRideAllowed() && diveOn();
 }
 /** The hint ticker's band from the bottom (its BOTTOM_PX + ROW_HEIGHT_PX) — the ORBIT pane's floor never enters it. */
 const _HINT_BAND_PX = ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).BOTTOM_PX + ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).ROW_HEIGHT_PX;
@@ -2693,8 +2693,9 @@ async function init() {
         // the plain flyby (dive → the 800 ms breath → pull), never the ceiling, or the camera would squat at the hull
         // for the full ceiling with nothing to wait for.
         const _danceCamera = !!(Constants.FEATURE_FLAGS.OPENING_DANCE);
-        // The opening dive (test switch ?dive=1, dev host only; lane sky-dive-1118): a 5.5 s dive through the real dots instead
-        // of the 2.4 s one, no dolly, the dots fading near the ship (_openingDiveOn, ui/OpeningDive.js). Off: as shipped.
+        // The opening dive (the default; `?dive=0` on a dev host turns it off; lane sky-dive-1118, on by default in sky-diveon-1119):
+        // a 5.5 s dive through the real dots instead
+        // of the 2.4 s one, no dolly, the dots fading near the ship (_openingDiveOn, ui/OpeningDive.js). `?dive=0`: the old ride.
         const _dive = typeof _openingDiveOn === 'function' && _openingDiveOn(_danceCamera);
         ladderController.armIntroRide({
           rideMs: _dive ? INTRO_DIVE_MS : INTRO_RIDE_MS,
@@ -2709,17 +2710,17 @@ async function init() {
         _introFlown = true;
       }
     });
-    // The opening dive's dots (test switch ?dive=1): start fetching data/sky.json at the NEW-GAME click (MENU_DEPARTURE_START,
+    // The opening dive's dots (on by default, `?dive=0` off): start fetching data/sky.json at the NEW-GAME click (MENU_DEPARTURE_START,
     // about 2.7 s before the cut where the dive begins) and again at MENU_START; never awaited (the dots fade in on arrival).
     eventBus.on(Events.MENU_DEPARTURE_START, ({ event } = {}) => {
-      if (event === Events.MENU_START && realSkyLayer && !_prefersReducedMotion() && _introRideAllowed() && devDive()) realSkyLayer.preload();
+      if (event === Events.MENU_START && realSkyLayer && !_prefersReducedMotion() && _introRideAllowed() && diveOn()) realSkyLayer.preload();
     });
     eventBus.on(Events.MENU_START, () => {
-      if (realSkyLayer && !_prefersReducedMotion() && _introRideAllowed() && devDive()) realSkyLayer.preload();
+      if (realSkyLayer && !_prefersReducedMotion() && _introRideAllowed() && diveOn()) realSkyLayer.preload();
     });
-    // The menu -> dive dissolve (test switch ?dive=1, lane sky-divecut-1119): the picture fades to black over the last 0.45 s of
+    // The menu -> dive dissolve (on by default, `?dive=0` off; lane sky-divecut-1119): the picture fades to black over the last 0.45 s of
     // the departure, is black at the cut (MENU_START, a skip's early one included), and the dive fades up from black at its first
-    // frame (OpeningDive.update). Measured: the cut is one frame in which Earth jumps 2,606 px and 97 % smaller. Off: nothing runs.
+    // frame (OpeningDive.update). Measured: the cut is one frame in which Earth jumps 2,606 px and 97 % smaller. `?dive=0`: nothing runs.
     eventBus.on(Events.MENU_DEPARTURE_START, ({ event, durationMs } = {}) => {
       if (event === Events.MENU_START && _diveVeilWanted()) diveVeil.begin(durationMs);
     });
@@ -3650,7 +3651,7 @@ async function init() {
   let _powerupFlashEl = null;
   const _triggerPowerupFlash = () => {
     if (_orientMode === 'flyaround') return;   // seamless — no mask needed
-    if (diveVeil.active()) return;             // ?dive=1: the black veil covers this cut (a blue flash on it would show through the fade-up)
+    if (diveVeil.active()) return;             // the dive's black veil covers this cut (a blue flash on it would show through the fade-up)
     if (!_powerupFlashEl) {
       _powerupFlashEl = document.createElement('div');
       _powerupFlashEl.id = 'powerup-flash';
@@ -7349,7 +7350,7 @@ function updateCamera(dt, timestamp) {
   if (sdaFloor && sdaFloor.isActive()) sdaFloor.update();
   // The real catalogue dots (floors 4-5): after the camera moved, so floor 5's projection reads this frame's pose; self-gated.
   if (realSkyLayer) realSkyLayer.update();
-  // The opening dive's dots (test switch ?dive=1; null otherwise): opacity by the camera's distance, the skip, the hand-back.
+  // The opening dive's dots (on by default, `?dive=0` off; null until the first dive): opacity by the camera's distance, the skip, the hand-back.
   if (_openingDive) _openingDive.update();
 
   // HULL CAM (F3): the camera→subject distance in METRES drives the overview/detail lens split; centerX (the

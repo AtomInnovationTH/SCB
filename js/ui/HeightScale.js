@@ -7,7 +7,8 @@
  * "ISS Band" icon and the other fields have none. The chips stand in a column at the left edge (off the globe, under
  * the top-left panels), highest at the top:
  *   "450 km · cleared"   "425 km · 7 pieces"   "Resupply satellite · 500 km"   ...   "You · 352 km" (her real height)
- * While the where-next list is open each chip also carries its row's gas and days ("0.6 kg gas · 5 days", "needs
+ * The column shows ONLY while the where-next list is open (the after-mission choice; owner 2026-11-19, DECISIONS §78 row 13): the rest
+ * of the time it is hidden and nothing is computed. Then each chip also carries its row's gas and days ("0.6 kg gas · 5 days", "needs
  * 1.2 kg gas, 0.4 kg short"), the focused row's chip is highlighted, and tapping a chip FOCUSES its row
  * (`WhereNextList.focus`, never a pick: flying stays the list's own tap-again / Space / FLY THERE). Her own field's
  * chip is the Stay row's. Flag off (or no registry): nothing is built.
@@ -263,11 +264,21 @@ export class HeightScale {
   /** @private the range map is on screen in the column's place: the column yields */
   _yielded() { try { return !!this._yieldTo(); } catch (_e) { return false; } }
 
-  show() { this._visible = true; if (this._root) this._root.style.display = this._items.length && !this._yielded() ? 'block' : 'none'; }
+  /** @private the after-mission "Where next?" choice is open (the list's own open state): the column shows only then (owner 2026-11-19, DECISIONS §78 row 13) */
+  _choiceOpen() {
+    const l = this._list;
+    try { return !!(l && typeof l.isOpen === 'function' && l.isOpen()); } catch (_e) { return false; }
+  }
+
+  /** @returns {boolean} the column is up: floor 4 showing, the choice open, the range map not in its place (and chips to draw) */
+  _wantShown() { return this._visible && this._choiceOpen() && !this._yielded() && this._items.length > 0; }
+
+  show() { this._visible = true; if (this._root) this._root.style.display = this._wantShown() ? 'block' : 'none'; }
   hide() { this._visible = false; if (this._root) this._root.style.display = 'none'; }
 
   /**
-   * One frame while floor 4 is the floor she is on: refresh the chips and put the column at the left edge of the screen. Map off = nothing built.
+   * One frame while floor 4 is the floor she is on: refresh the chips and put the column at the left edge of the screen. Shown only while the
+   * "Where next?" choice is open: with it closed nothing is computed and the column stays hidden. Map off = nothing built.
    * @param {object} [ctx]
    * @param {{x: number, y: number, visible?: boolean}|null} [ctx.shipPx] her ship marker's screen position
    * @param {number} [ctx.viewW] @param {number} [ctx.viewH]   viewport (default: the window's)
@@ -276,6 +287,7 @@ export class HeightScale {
    */
   render(ctx = {}) {
     if (this._disposed) return null;
+    if (!this._choiceOpen()) { this._items = []; if (this._root) this._root.style.display = 'none'; return null; }
     const items = this._compute();
     if (!items.length) { this._items = []; if (this._root) this._root.style.display = 'none'; return null; }
     this._lastView = ctx;
