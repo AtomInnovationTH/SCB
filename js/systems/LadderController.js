@@ -53,6 +53,20 @@ const DZ_RETURN_PEAK_MPS = 20;
  */
 export const INTRO_RIDE_MS = 2400;
 
+/**
+ * The OPENING DIVE (test switch `?dive=1`, lane sky-dive-1118, DECISIONS §75 row 5): the intro dive's duration with the switch on.
+ * The ladder engages at the cut (dance t 2.70 s; measured engage 2.73), so a 5.5 s ride lands near dance t 8.23, about 0.47 s
+ * before the hand-over (8.71 s). Longer than 5.67 s would land after 8.40 s, i.e. later than the hand-over minus 0.3 s.
+ */
+export const INTRO_DIVE_MS = 5500;
+/** A key or tap during the dive: the camera finishes the descent to the hull in this many ms (the dance's own skip takes 0.5 s). */
+export const INTRO_DIVE_SKIP_MS = 500;
+/**
+ * The far clip plane (scene units) while the dive flies: floor 1's own far (500) would clip the globe and the dots while the
+ * camera is 500-800 u out (measured: it starts 806 u from the ship). Floor 5's far.
+ */
+export const INTRO_DIVE_FAR_U = 2000;
+
 /** Intro FLYBY follow-ups: the breath at the hull after the dive lands, and the silent pull-back up to INTRO_LANDING_FLOOR. */
 export const INTRO_DWELL_MS = 800;
 export const INTRO_PULLBACK_MS = 800;
@@ -63,13 +77,18 @@ export const INTRO_PULLBACK_MS = 800;
  *
  * Landing z01 0.23 → 2.67 m on F1; drift end 0.82 → 5.59 m; both strictly inside the free zone (0.15–0.85) so the
  * settle-back rule never yanks them to a wall edge. The dolly is 2.0 s (DECISIONS §15 row 4): it must END before the
- * dance's hand-over (8.70 s), which pulls the camera back. Measured: the dive engages ~1.0 s after the cut and lands
- * near dance t 6.1, so a 2.0 s drift ends ~8.1 (0.6 s margin). test-StartPose pins the budget.
+ * dance's hand-over (8.70 s), which pulls the camera back. Measured (2026-11-19, game clock): the ladder engages ~0.03 s after
+ * the cut (dance t 2.73) and the 2.4 s switch-off ride lands near dance t 5.13, so a 2.0 s drift ends ~7.13 (about 1.6 s margin).
+ * test-StartPose pins the budget with the older, larger lag figure below.
  */
 export const INTRO_DANCE_LANDING_Z01 = 0.23;
 export const INTRO_DANCE_DRIFT_Z01 = 0.82;
 export const INTRO_DANCE_DOLLY_MS = 2000;
-/** Measured engage lag of the intro dive after the cut, ms — the dolly budget's input. */
+/**
+ * The engage-lag budget of the intro dive after the cut, ms, used by test-StartPose's dolly pin. It is the OLD budget figure
+ * (an earlier measurement, ~1.0 s); the lag measured 2026-11-19 is ~0.03 s (see INTRO_DIVE above). Kept at 1000 so the
+ * switch-off pin stays as it was: a larger lag only makes that pin stricter.
+ */
 export const INTRO_DANCE_ENGAGE_LAG_MS = 1000;
 /**
  * Where the pull-back leaves the camera when the player takes the wheel: z01 0.17 on F2 = **11 m** (owner 2026-09-21:
@@ -297,6 +316,10 @@ export class LadderController {
     this._introDwellMs = INTRO_DWELL_MS;
     this._introDolly = null;
     this._introDwellEarly = false;
+    /** The opening dive (`dive` option of armIntroRide): the armed ride is the switch-on dive (no dolly, dive far plane). */
+    this._introDive = false;
+    /** True from the dive's engage until its ride has landed: floor 1's fidelity block is pushed with INTRO_DIVE_FAR_U. */
+    this._diveClip = false;
     /**
      * The last FREE-zone rest z01 on the applied floor: the player's working position (see `isFreeRest`). Seeded at engage
      * and every floor ARRIVAL from the entry z01, advanced by every free `move`, untouched by flick-to-wall landings,
@@ -413,6 +436,7 @@ export class LadderController {
     // Intro FLYBY state machine (owner 2026-09-07): dive (5 → the hull) → one breath (INTRO_DWELL_MS) → silent pull-back up to
     // INTRO_LANDING_FLOOR. Any player input after the dive started cancels the remaining phases.
     this._introTick(t);
+    this._diveClipTick();
     // NOTE: the NAVCOM floor content is NOT ticked here — main.js is the SINGLE navcom ticker (navcom.update({project,shipPos,
     // shipAngleRad}) with the live camera projector right after cameraSystem.update, so icons read this frame's pose and never
     // render twice). This controller owns only the activate/deactivate lifecycle (_applyFloorContent / _disengage).
@@ -1080,13 +1104,16 @@ export class LadderController {
    *   `handoverZ01` — where the PULL-BACK leaves the camera (where the player takes the wheel). Absent: the contract's own
    *     ENTRY_Z01_FROM_BELOW.
    *   `pullbackMs` — the pull-back's duration. Absent ⇒ INTRO_PULLBACK_MS.
+   *   `dive` — the OPENING DIVE (test switch `?dive=1`): the armed ride is the long dive (the caller passes `rideMs`
+   *     INTRO_DIVE_MS), the dwell's dolly is dropped (the hand-over starts the pull-back from the hull), and the ride
+   *     flies with INTRO_DIVE_FAR_U as its far plane. See diveInFlight() / finishDive().
    * @param {{ rideMs?: number, entryZ01?: number, dwellMs?: number,
    *           dolly?: { toZ01: number, rideMs?: number },
-   *           handoverZ01?: number, pullbackMs?: number,
+   *           handoverZ01?: number, pullbackMs?: number, dive?: boolean,
    *           reducedMotion?: boolean }} [arg]
    * @returns {boolean} whether the intro was armed (or, reduced, placed)
    */
-  armIntroRide({ rideMs, entryZ01, dwellMs, dolly, handoverZ01, pullbackMs, reducedMotion = false } = {}) {
+  armIntroRide({ rideMs, entryZ01, dwellMs, dolly, handoverZ01, pullbackMs, dive = false, reducedMotion = false } = {}) {
     this._introPending = null;
     // Dance options reset FIRST: every early return below leaves nothing dance-shaped armed.
     this._introEntryZ01 = null;
@@ -1095,6 +1122,7 @@ export class LadderController {
     this._introDwellMs = INTRO_DWELL_MS;
     this._introDolly = null;
     this._introDwellEarly = false;
+    this._introDive = false;
     const ids = FloorContract.FLOORS.map((f) => f.id).filter((id) => Number.isFinite(id));
     if (!ids.length || !ids.includes(INTRO_LANDING_FLOOR)) return false;
     if (reducedMotion) return this._placeWhileHidden(INTRO_LANDING_FLOOR, 0.5);
@@ -1122,6 +1150,10 @@ export class LadderController {
         rideMs: (Number.isFinite(drm) && drm > 0) ? drm : null,
       };
     }
+    if (dive === true) {
+      this._introDive = true;
+      this._introDolly = null;   // the dive replaces the dwell's drift
+    }
     return true;
   }
 
@@ -1136,6 +1168,50 @@ export class LadderController {
     this._introDwellMs = INTRO_DWELL_MS;
     this._introDolly = null;
     this._introDwellEarly = false;
+    this._introDive = false;
+    this._releaseDiveClip();
+  }
+
+  /**
+   * True only while the opening dive flies: from its engage (the ride starts) to its landing, or until the player's input
+   * cancels the flyby. `introInFlight()` is also true before the engage and through the dwell and the pull-back, so it is
+   * not this one. Always false with the switch off.
+   */
+  diveInFlight() { return this._introDive && this._introPhase === 'dive'; }
+
+  /**
+   * True while the dive's far clip plane (INTRO_DIVE_FAR_U) is still applied: from the engage until the dive's ride has landed
+   * (a skip's short ride included) or the controller disengaged. Outlives `diveInFlight()` when player input cancels the flyby
+   * mid-dive, because the camera keeps descending with the wide far plane. Always false with the switch off.
+   * @returns {boolean}
+   */
+  diveClipActive() { return this._diveClip === true; }
+
+  /**
+   * End the dive early (a key / click / tap skipped the dance): the camera completes the descent to the hull in `ms` from
+   * where it is (the same destination frame, a short ride; the superseded ride's completion is dropped by `_startRide`'s
+   * sequence guard). No-op unless the dive is flying. The dive's far plane stays until this ride lands (`_diveClipTick`).
+   * @param {number} [ms]
+   * @returns {boolean} whether the remaining ride was restarted
+   */
+  finishDive(ms = INTRO_DIVE_SKIP_MS) {
+    if (!this.diveInFlight() || !this.isRiding()) return false;
+    const t = this._now();
+    const z = this._ladder.getState().z01;
+    this._startRide(WORKBENCH_FLOOR, z, ms, t, false);
+    return true;
+  }
+
+  /** @private The dive's far plane is released once its ride is over (or the controller disengaged). */
+  _diveClipTick() {
+    if (this._diveClip && !this.isRiding()) this._releaseDiveClip();
+  }
+
+  /** @private */
+  _releaseDiveClip() {
+    if (!this._diveClip) return;
+    this._diveClip = false;
+    if (this._engaged && this._floorApplied != null) this._applyFidelity(this._floorApplied);
   }
 
   /**
@@ -1419,6 +1495,8 @@ export class LadderController {
       const decisions = (typeof this._ladder.ceremonyRide === 'function')
         ? this._ladder.ceremonyRide({ tMs: t, toFloor: WORKBENCH_FLOOR, entryZ01 })
         : this._ladder.jump({ tMs: t, toFloor: WORKBENCH_FLOOR });
+      // The opening dive flies with its own far plane (set BEFORE the ride starts so _startRide's _applyFidelity reads it).
+      if (this._introDive) this._diveClip = true;
       this._apply(decisions, t, { rideMs: ms, silent: true });
       this._introPhase = 'dive';
       this._introDiveStartMs = t;
@@ -1435,6 +1513,8 @@ export class LadderController {
     this._introDwellMs = INTRO_DWELL_MS;
     this._introDolly = null;
     this._introDwellEarly = false;
+    this._introDive = false;
+    this._diveClip = false;   // the setLadderFloorFidelity(null) below restores the shipped block
     if (this._cameraSystem && this._cameraSystem.ladderDisengage) {
       this._cameraSystem.ladderDisengage();
     }
@@ -1582,12 +1662,15 @@ export class LadderController {
     if (!this._sceneManager || !this._sceneManager.setLadderFloorFidelity) return;
     const f = FloorContract.byId(floor);
     if (!f) return;
+    // The opening dive (switch on): floor 1's block with the far plane of floor 5, and `floor: 5` only because
+    // SceneManager keys the camera-following star shell on floor >= 4 (a world-fixed shell would be seen from outside at 800 u).
+    const dive = this._diveClip && floor === WORKBENCH_FLOOR;
     this._sceneManager.setLadderFloorFidelity({
       nearField: f.fidelity.nearField,
       near: nearOverride != null ? nearOverride : f.camera.near,
-      far: f.camera.far,
+      far: dive ? Math.max(f.camera.far, INTRO_DIVE_FAR_U) : f.camera.far,
       debrisMode: f.fidelity.debrisMode,
-      floor,
+      floor: dive ? 5 : floor,
     });
   }
 

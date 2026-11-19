@@ -30,7 +30,9 @@ import { regimeFromStartOrbit } from './entities/CatalogConverter.js';
 import { computeStartOrbit } from './systems/startOrbitMath.js';
 import { ActiveSatellites } from './entities/ActiveSatellite.js';
 import { ResupplySatellite } from './entities/ResupplySatellite.js';
-import { ArmManager } from './entities/ArmManager.js';
+import { ArmManager, armCanLaunchNow } from './entities/ArmManager.js';
+import { DaughterReachBubble } from './ui/DaughterReachBubble.js';
+import { isTrainingNow } from './systems/TrainingHintGate.js';
 import { orbitToSceneCartesianInto, subSatellitePoint } from './entities/OrbitalMechanics.js';
 import { CeremonyTimeScale } from './systems/CeremonyTimeScale.js';
 
@@ -122,7 +124,7 @@ import { wireStillPlaying, wireIdleTimers } from './ui/StillPlayingCard.js';
 import { shouldEndDemo, wireDemoEnd } from './systems/DemoEnd.js';   // demo mode: the game ends after mission 1, on the engines (owner 2026-10-29)
 import { DemoEndCard } from './ui/DemoEndCard.js';
 import { WheelRouter } from './systems/WheelRouter.js';
-import { LadderController, INTRO_RIDE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
+import { LadderController, INTRO_RIDE_MS, INTRO_DIVE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
 import { FloorMask } from './ui/hud/FloorMask.js';
 import { setChipsUnderDrawer } from './ui/hud/FooterChip.js';
@@ -134,6 +136,7 @@ import { earthTurnTrigger } from './systems/EarthTurn.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
 import { RealSkyLayer } from './ui/RealSkyLayer.js';
+import { OpeningDive, devDive } from './ui/OpeningDive.js';
 import { RealSkyCard } from './ui/RealSkyCard.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
@@ -868,6 +871,8 @@ let f4LastFocusId = null;
 // ladder block, injected into LadderController (which owns activate/deactivate + Space verbs), ticked from the loop
 // below. Inert while LADDER.ENABLED is false.
 let proxNetFloor;
+// The daughters' reach as a faint wire sphere round the mother on floors 2-3 (ui/DaughterReachBubble.js, plan sky-bubble-1119).
+let daughterReachBubble = null;
 let sdaFloor;
 // The real catalogue as dots on floors 4-5 (ui/RealSkyLayer.js, plan sky-1116). Built in the ladder block; its clock is ticked from gameLoop.
 let realSkyLayer = null;
@@ -928,6 +933,8 @@ let _introForced = false;
  * leaves it closed too; the next MENU visit re-opens it.
  */
 let _introFlown = false;
+/** The opening dive's dots driver (ui/OpeningDive.js): built at the first New Game with `?dive=1` on a dev host, else null. */
+let _openingDive = null;
 /**
  * Is this boot a FIRST-TIME player's run? The MAP store's first-run bit under the harness policy (the same policy
  * _introRideAllowed applies; that helper reads no first-run bit). Gates ONLY the GestureSplash, not the intro ride.
@@ -951,6 +958,27 @@ function _prefersReducedMotion() {
   try {
     return !!(typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   } catch (_e) { return false; }
+}
+/**
+ * The opening dive's switch for this New Game (lane sky-dive-1118): true only with `?dive=1` on a dev host, the dance on and
+ * reduced motion off. The first true builds the dots driver (ui/OpeningDive.js) the frame loop updates.
+ * @param {boolean} danceCamera Constants.FEATURE_FLAGS.OPENING_DANCE (the dive lands before the dance's hand-over)
+ * @returns {boolean}
+ */
+function _openingDiveOn(danceCamera) {
+  if (!danceCamera || _prefersReducedMotion() || !devDive()) return false;
+  if (!_openingDive && realSkyLayer && ladderController) {
+    _openingDive = new OpeningDive({
+      ladder: ladderController,
+      layer: realSkyLayer,
+      dance: openingDance,
+      getDistM: () => (cameraSystem && player)
+        ? cameraSystem.camera.position.distanceTo(player.getPosition()) / Constants.SCENE_UNITS_PER_METER
+        : NaN,
+      suppress: (on) => { if (motherCallouts && motherCallouts.setSuppressed) motherCallouts.setSuppressed(on); },
+    });
+  }
+  return true;
 }
 /** The hint ticker's band from the bottom (its BOTTOM_PX + ROW_HEIGHT_PX) — the ORBIT pane's floor never enters it. */
 const _HINT_BAND_PX = ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).BOTTOM_PX + ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).ROW_HEIGHT_PX;
@@ -1978,6 +2006,9 @@ async function init() {
     dateMs: () => sunStorms.dateMs(),
     isGlass: () => GestureHints.isGlass(),
     card: new RealSkyCard(),
+    // Floor 4 "fly to a dot" (double-click / double-tap a dot, a search hit, double-click the card's name): the globe turns to it, and
+    // that turn is HER move, so the floor-4 idle wait turns the view back to the field afterwards (owesReturn; plan sky-trio-1118).
+    onFlyTo: (dir) => (cameraSystem ? cameraSystem.ladderTurnEarthDir(dir, { owesReturn: true }) : false),
     hideWhileActive: activeSatellites ? [activeSatellites.group] : [],
   });
   navcomFloor = new NavcomFloor({
@@ -2005,6 +2036,13 @@ async function init() {
       clusterSelected(eventBus, Events, cluster);   // LadderBridge, before engage
       return autopilotSystem.engageCluster(cluster, { arrivalPoint });
     },
+  });
+  // How far a ready daughter can be sent (deploy gate = live tether length x ARM_DEPLOY_RANGE_FRACTION), floors 2-3, not in training 1-3.
+  daughterReachBubble = new DaughterReachBubble({
+    getArms: () => (armManager ? armManager.arms : []),
+    canLaunch: armCanLaunchNow,
+    getFloor: () => ((ladderController && ladderController.isActive()) ? ladderController.currentFloor() : null),
+    isTraining: isTrainingNow,
   });
   // F7 (SDA) content orchestrator: screen-space mass-band chart over live cluster/active-sat/Kessler
   // aggregates. Activated on debrisMode 'massBands'; Space flips the VALUE↔THREAT lens.
@@ -2633,17 +2671,29 @@ async function init() {
         // the plain flyby (dive → the 800 ms breath → pull), never the ceiling, or the camera would squat at the hull
         // for the full ceiling with nothing to wait for.
         const _danceCamera = !!(Constants.FEATURE_FLAGS.OPENING_DANCE);
+        // The opening dive (test switch ?dive=1, dev host only; lane sky-dive-1118): a 5.5 s dive through the real dots instead
+        // of the 2.4 s one, no dolly, the dots fading near the ship (_openingDiveOn, ui/OpeningDive.js). Off: as shipped.
+        const _dive = typeof _openingDiveOn === 'function' && _openingDiveOn(_danceCamera);
         ladderController.armIntroRide({
-          rideMs: INTRO_RIDE_MS,
+          rideMs: _dive ? INTRO_DIVE_MS : INTRO_RIDE_MS,
           entryZ01: _danceCamera ? INTRO_DANCE_LANDING_Z01 : undefined,
           dwellMs: _danceCamera ? INTRO_DANCE_DWELL_CEILING_MS : undefined,
-          dolly: _danceCamera ? { toZ01: INTRO_DANCE_DRIFT_Z01, rideMs: INTRO_DANCE_DOLLY_MS } : undefined,
+          dolly: (_danceCamera && !_dive) ? { toZ01: INTRO_DANCE_DRIFT_Z01, rideMs: INTRO_DANCE_DOLLY_MS } : undefined,
           handoverZ01: _danceCamera ? INTRO_DANCE_HANDOVER_Z01 : undefined,
           pullbackMs: _danceCamera ? INTRO_DANCE_PULLBACK_MS : undefined,
+          dive: _dive,
           reducedMotion: _prefersReducedMotion(),
         });
         _introFlown = true;
       }
+    });
+    // The opening dive's dots (test switch ?dive=1): start fetching data/sky.json at the NEW-GAME click (MENU_DEPARTURE_START,
+    // about 2.7 s before the cut where the dive begins) and again at MENU_START; never awaited (the dots fade in on arrival).
+    eventBus.on(Events.MENU_DEPARTURE_START, ({ event } = {}) => {
+      if (event === Events.MENU_START && realSkyLayer && !_prefersReducedMotion() && _introRideAllowed() && devDive()) realSkyLayer.preload();
+    });
+    eventBus.on(Events.MENU_START, () => {
+      if (realSkyLayer && !_prefersReducedMotion() && _introRideAllowed() && devDive()) realSkyLayer.preload();
     });
     // The dance's HANDOVER is the ONE signal that ends the intro dwell (normal completion AND the skip arrive here), so
     // the camera never waits on its ceiling when the dance has handed over, and never jumps ahead of it (the ceiling
@@ -3079,7 +3129,7 @@ async function init() {
     }
     // Floors 4 and 5: a tap on a real catalogue dot opens its card (RealSkyLayer.tap: the nearest painted dot inside the tap
     // radius); a miss keeps today's behaviour on these floors (nothing).
-    if (floor === 4 || floor === 5) return (realSkyLayer && realSkyLayer.tap(x, y)) ? 'sky' : null;
+    if (floor === 4 || floor === 5) return (realSkyLayer && realSkyLayer.tap(x, y, { mouse: !!(opts && opts.mouse) })) ? 'sky' : null;
     if (floor !== 2 && floor !== 3) return null;
     // The ONE eligibility rule is TargetAcquisition.getEligibleTargets (the same rule InputManager._cycleTarget
     // applies), so the tap can never split the selection universe from the Tab/T cycle.
@@ -3264,7 +3314,14 @@ async function init() {
       _clickDown = null;
       if (!d || d.type === 'touch') return;
       if (Math.abs(e.clientX - d.x) > TAP_SLOP_PX || Math.abs(e.clientY - d.y) > TAP_SLOP_PX || (performance.now() - d.t) > TAP_SLOP_MS) return;
-      _touchTap({ x: e.clientX, y: e.clientY }, { scanOnMiss: false });
+      _touchTap({ x: e.clientX, y: e.clientY }, { scanOnMiss: false, mouse: true });
+    });
+    // Floor 4: a double-click on a real-catalogue dot turns the globe to it (its two clicks already selected it). The browser's own
+    // `dblclick` follows the OS double-click speed; touch uses RealSkyLayer.tap's two-taps rule instead.
+    canvas.addEventListener('dblclick', (e) => {
+      if (gameFlowManager && gameFlowManager.paused) return;
+      if (!ladderController || !ladderController.isActive() || ladderController.currentFloor() !== 4) return;
+      if (realSkyLayer) realSkyLayer.flyAt(e.clientX, e.clientY, { mouse: true });
     });
     // The DESKTOP edge wake: ONE passive `document` handler for `pointermove` (≤ 10 Hz by timestamp: a hover sweep
     // costs one band test per 100 ms) and `pointerdown` (never throttled: a click on faded chrome lands on the canvas
@@ -7209,11 +7266,21 @@ function updateCamera(dt, timestamp) {
     proxNetFloor.update({ project: navcomProject, shipPos, shipAngleRad });
   }
 
+  // Daughter reach bubble (floors 2-3): same slot, after the camera moved; hides itself on other floors, in training 1-3
+  // and with no daughter ready.
+  if (daughterReachBubble) {
+    try {
+      daughterReachBubble.update({ shipPos: player.getPosition(), shipVel: player.getVelocity(), project: navcomProject });
+    } catch (e) { console.error('[GameLoop] daughterReachBubble:', e); }
+  }
+
   // SDA (F7): screen-space chart — no projector or ship pose needed; the floor self-throttles its data refresh
   // (2 s cadence).
   if (sdaFloor && sdaFloor.isActive()) sdaFloor.update();
   // The real catalogue dots (floors 4-5): after the camera moved, so floor 5's projection reads this frame's pose; self-gated.
   if (realSkyLayer) realSkyLayer.update();
+  // The opening dive's dots (test switch ?dive=1; null otherwise): opacity by the camera's distance, the skip, the hand-back.
+  if (_openingDive) _openingDive.update();
 
   // HULL CAM (F3): the camera→subject distance in METRES drives the overview/detail lens split; centerX (the
   // subject's screen x) picks the rail side for the callout cards. Reads this frame's camera pose, so it stays in

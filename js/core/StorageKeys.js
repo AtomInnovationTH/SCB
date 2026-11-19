@@ -44,6 +44,8 @@ export const StorageKeys = {
   FLOOR_WORDS: 'sc_floor_words_v1',
   /** CityLabels visibility toggle ('0' | '1'). */
   CITY_LABELS: 'sc_city_labels_visible',
+  /** RealSkyLayer: the legend kinds she switched off on floors 4-5 (JSON list of kind names; missing or bad = all shown). */
+  REAL_SKY_HIDDEN: 'sc_real_sky_hidden_v1',
   /** BlackPatchHeal's ring of the last 20 "centre went black on F4/F5" records (detected, which repair step healed it).
    *  Device-owned diagnostics, never in the run save; read back from the owner's browser
    *  (BLACK_SCREEN_TRIAGE.md, Producer 4). */

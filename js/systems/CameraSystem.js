@@ -3492,7 +3492,8 @@ export class CameraSystem {
         const dy = e.clientY - d.lastMouseY;
         d.lastMouseX = e.clientX;
         d.lastMouseY = e.clientY;
-        this._dragMove(d, -dx * d.rotateSpeed, dy * d.rotateSpeed, false);   // a SET: the last move of a frame wins
+        const t = this._ladderDragTurn(dx, dy, d.rotateSpeed);
+        this._dragMove(d, t.theta, t.phi, false);   // a SET: the last move of a frame wins
         this.ladderCancelCatchFocus('mouse drag');   // his own camera input ends the catch focus
         this.ladderCancelEarthTurn('mouse drag');    // so does the floor-4 turn to the focused field
       }
@@ -3736,6 +3737,56 @@ export class CameraSystem {
   }
 
   /**
+   * @private CSS-px viewport height for the floor-4 grab rate: the render canvas's clientHeight, else clientWidth /
+   * camera.aspect (the number the aspect is built from). 0 when unknown (the caller then keeps the fixed rate).
+   */
+  _ladderViewportHeightPx() {
+    const c = this.canvas;
+    const h = c ? c.clientHeight : 0;
+    if (Number.isFinite(h) && h > 0) return h;
+    const w = c ? c.clientWidth : 0;
+    const a = this.camera ? this.camera.aspect : 0;
+    return (Number.isFinite(w) && w > 0 && Number.isFinite(a) && a > 0) ? w / a : 0;
+  }
+
+  /**
+   * @private A pointer / finger move of (dx, dy) CSS px as a view turn { theta, phi } in rad for the drag apply
+   * (theta = yaw about the up pole, phi = pitch; the sign rule of _updateLadderCamera).
+   *
+   * Floors 1-3 (ship-sized subject): the fixed `rotateSpeed` rad/px, drag right = -theta, drag down = +phi.
+   *
+   * Floor 4 (Earth anchor, GRAB drag; owner 2026-11-19 "Grab drag"): the ground under the centre of the view follows the
+   * cursor at every zoom. The ray through the screen centre meets Earth (radius R, centre = scene origin) at D - R from the
+   * camera (D = lc.curDistU); one px at the screen centre is 2 tan(fov/2) / H rad of view angle (H = viewport height,
+   * CSS px), which is (D - R) * that much arc on the ground, so the turn about Earth's centre is
+   * (D - R) / R * 2 tan(fov/2) / H rad per px. Pitch uses it as is, with the sign flipped (drag down = the ground moves
+   * down = the camera moves north: phi = -dy * rate). Yaw turns about Earth-north, which moves the ground at the centre
+   * by R sin(polar) per rad, so it is divided by sin(polar) (floored at the pole clamp's own sin(0.1)) and the ground
+   * still follows the cursor at any latitude. Falls back to the fixed rate where D <= R, fov or the viewport height is
+   * unknown (never NaN, never a guess).
+   * @param {number} dx - px, + = right
+   * @param {number} dy - px, + = down
+   * @param {number} rotateSpeed - the fixed rad/px (floors 1-3)
+   * @returns {{theta:number, phi:number}}
+   */
+  _ladderDragTurn(dx, dy, rotateSpeed) {
+    const lc = this._ladderCam;
+    if (lc.floor === 4 && lc.anchor === 'earth') {
+      const R = Constants.EARTH_RADIUS;
+      const D = lc.curDistU;
+      const H = this._ladderViewportHeightPx();
+      const fov = this.camera ? this.camera.fov : 0;
+      if (D > R && H > 0 && fov > 0 && Number.isFinite(D) && Number.isFinite(fov)) {
+        const rate = ((D - R) / R) * 2 * Math.tan(THREE.MathUtils.DEG2RAD * 0.5 * fov) / H;
+        const polar = Math.acos(Math.max(-1, Math.min(1, lc.dir.y)));   // Earth-north is +Y
+        const yawGain = 1 / Math.max(Math.sin(polar), Math.sin(0.1));
+        return { theta: -dx * rate * yawGain, phi: -dy * rate };
+      }
+    }
+    return { theta: -dx * rotateSpeed, phi: dy * rotateSpeed };
+  }
+
+  /**
    * The turntable's ARROW nudge: LadderController maps held arrow keys to this while a drawer is open on floor 1. Same
    * math as the pointer path (_onMouseMove): the px delta becomes a pending turn (then a per-second coast speed) through
    * drag.rotateSpeed, decaying through drag.damping per 1/60 s: one drag feel, two inputs. Gated like a pointer drag:
@@ -3770,9 +3821,9 @@ export class CameraSystem {
     // at 2). Several nudges inside ONE drawn frame therefore SUM; the first nudge of a frame still SETS (the pointer's
     // law, and the held arrow's one-call-per-frame).
     const d = lc.drag;
-    const addTheta = -dx * d.rotateSpeed, addPhi = dy * d.rotateSpeed;
+    const t = this._ladderDragTurn(dx, dy, d.rotateSpeed);
     const same = d.nudgeSeq === this._ladderUpdateSeq;
-    this._dragMove(d, addTheta, addPhi, same);
+    this._dragMove(d, t.theta, t.phi, same);
     d.nudgeSeq = this._ladderUpdateSeq;
   }
 
@@ -3857,7 +3908,7 @@ export class CameraSystem {
     const held = lc.riding || lc.leveling || lc.paneOpen || !!lc.earthTurn || (cf.active && !cf.takenOver);
     if (held || input || zoomed) {
       vr.glide = null; vr.t = 0; vr.due = false;
-      if (lc.earthTurn) vr.dirty = false;   // a framing turn has just replaced the view
+      if (lc.earthTurn) vr.dirty = !!lc.earthTurn.owes;   // a framing turn has just replaced the view; a fly-to (owes) is HER view, the return stays owed
       return;
     }
     if (!vr.dirty) { vr.t = 0; return; }
@@ -4089,8 +4140,11 @@ export class CameraSystem {
    * LadderController.frameZoomTo glides to it). Refused off an Earth anchor, on any floor but 4, disengaged, or for an
    * unusable direction.
    * @param {{x:number,y:number,z:number}} dir  any non-zero vector from Earth's centre
+   * @param {{owesReturn?: boolean}} [opts]  `owesReturn`: the turn is HER move (a fly-to a dot, sky-trio-1118): the view counts
+   *   as off the floor's default, so after the floor-4 wait with no activity (LADDER_VIEW_RETURN.IDLE_S_F4) it turns back. The
+   *   framing turns (arrival, focus change, the return itself) leave it off, or the view would turn back forever.
    */
-  ladderTurnEarthDir(dir) {
+  ladderTurnEarthDir(dir, opts) {
     const lc = this._ladderCam;
     if (!lc.active || lc.anchor !== 'earth' || !dir) return false;
     if (lc.floor != null && lc.floor !== 4) return false;   // floor 5 (also Earth-anchored) never re-frames
@@ -4100,7 +4154,7 @@ export class CameraSystem {
     const target = earthTurnTarget({ x: dir.x * k, y: dir.y * k, z: dir.z * k });
     if (!target) return false;
     // Smoothness: sine in-out, stretched (≤ 1.5 s) when the path would pass 120°/s at its fastest.
-    lc.earthTurn = { start: lc.dir.clone(), target, t: 0, s: earthFrameTurnS(lc.dir, target), ease: earthFrameEase };
+    lc.earthTurn = { start: lc.dir.clone(), target, t: 0, s: earthFrameTurnS(lc.dir, target), ease: earthFrameEase, owes: !!(opts && opts.owesReturn) };
     return true;
   }
 

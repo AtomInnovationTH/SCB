@@ -493,6 +493,13 @@ class OpeningDance {
     this._skipStartMs = this._now();
   }
 
+  /**
+   * True while a skip() fast-forward runs (set by skip(), cleared when the fade is over). The opening dive (ui/OpeningDive.js,
+   * lane sky-dive-1118) reads it to end the dive with the dance's skip; nothing else does.
+   * @returns {boolean}
+   */
+  isSkipping() { return this._skipStartMs !== null; }
+
   /** @returns {boolean} the launch-driver duck-type's activity gate */
   isActive() {
     return !!(this._running && this._t0Ms !== null && this._fired !== null && !this._fired.handover);

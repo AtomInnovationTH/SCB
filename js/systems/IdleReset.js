@@ -38,6 +38,7 @@ export const CLEAR_KEYS = Object.freeze([
   StorageKeys.LADDER_VIEW,
   StorageKeys.COMMS_STEP,
   StorageKeys.CITY_LABELS,
+  StorageKeys.REAL_SKY_HIDDEN,
   'spacecowboy_iss_boss_v1',
   'spacecowboy_starlink_boss_v1',
   'spacecowboy_mission_coach_v1',

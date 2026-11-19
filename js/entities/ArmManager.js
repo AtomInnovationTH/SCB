@@ -596,7 +596,7 @@ export function generateDockPositions(tierKeyOrCount) {
  * @param {object} a an ArmUnit
  * @returns {boolean}
  */
-function armCanLaunchNow(a) {
+export function armCanLaunchNow(a) {
   return !!a && a.state === ARM_STATES.DOCKED && !!a.springCharged && a.fuel > 5 && !a._aimReserved;
 }
 

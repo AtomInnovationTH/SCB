@@ -7,7 +7,7 @@
  * invented: no hashed nodes, no hand-placed objects.
  *
  *   floor 4: one THREE.Points (screen-fixed size, one colour per class) in the same scene frame as the Earth, plus the picked
- *            object's orbit as one THREE.Line and a bigger highlight dot;
+ *            object's orbit as one fat line (Line2, with a dark edge) and a bigger highlight dot;
  *   floor 5: SdaChart is a screen-static 2D canvas with its own altitude -> radius map, so 3D dots would not line up. The layer paints
  *            its own canvas just above the chart: radius = SdaChart's `radiusPxForAltKm` of the object's height, angle = the direction
  *            of the object as the camera sees it, measured from Earth's projected centre. Repainted every drawn frame (skipped while the clock is paused and the view still).
@@ -22,11 +22,15 @@
  */
 
 import * as THREE from 'three';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { Constants } from '../core/Constants.js';
 import { fetchData } from '../core/dataUrl.js';
 import { SkyPropagator, WGS72 } from '../systems/SkyPropagator.js';
 import { meoRadialMap, radiusPxForAltKm, chartTextBoxes, chartTextVersion } from './SdaChart.js';
-import { cardFields, CLASS_COLORS } from './RealSkyCard.js';
+import { cardFields, CLASS_COLORS, CLASS_NAMES } from './RealSkyCard.js';
+import { StorageKeys } from '../core/StorageKeys.js';
 
 export { CLASS_COLORS };
 
@@ -46,6 +50,13 @@ export const PICK_PX_GLASS = 24;
 /** The picked object's orbit ring on floor 4: this many segments (129 points), redrawn this often (ms). */
 export const ORBIT_SEGMENTS = 128;
 export const ORBIT_REFRESH_MS = 2000;
+/** The ring's width, CSS px: mouse / glass; its dark edge is RING_EDGE_PX wider (plan sky8: the 1 px ring was too weak on both screens). */
+export const RING_PX = 3;
+export const RING_PX_GLASS = 4;
+export const RING_EDGE_PX = 2;
+/** A double-tap on floor 4 (touch): two taps on the same dot within this many ms and CSS px turn the globe to it (a mouse uses the browser's `dblclick`). */
+export const DOUBLE_TAP_MS = 350;
+export const DOUBLE_TAP_PX = 24;
 
 const FLOOR_NAVCOM = 4;
 const FLOOR_SDA = 5;
@@ -110,7 +121,21 @@ export class RealSkyLayer {
     this._pixelRatio = deps.pixelRatio || (() => (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this._card = deps.card || null;
-    if (this._card && this._card.setHandlers) this._card.setHandlers({ onSearch: (q) => this.search(q), onClose: () => this.select(-1) });
+    // Floor 4 "fly to a dot": onFlyTo(sceneDir) turns the globe to put that direction in the middle (main.js: cameraSystem.ladderTurnEarthDir).
+    this._onFlyTo = typeof deps.onFlyTo === 'function' ? deps.onFlyTo : null;
+    this._storage = deps.storage !== undefined ? deps.storage : (() => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch (_) { return null; } })();
+    this._hideCls = new Uint8Array(CLASS_NAMES.length);   // 1 = that kind is switched off (index = class number); read from storage now
+    this._loadHiddenKinds();
+    this._idxAttr = null;               // the draw index floor 4 uses while a kind is hidden (created once, reused)
+    this._lastTap = null;               // the previous floor 4 touch tap that hit a dot: {i, x, y, t}
+    if (this._card && this._card.setHandlers) {
+      this._card.setHandlers({
+        onSearch: (q) => this.search(q), onClose: () => this.select(-1),
+        onToggleKind: (name) => this.setKindHidden(name, !this.isKindHidden(name)),
+        isKindHidden: (name) => this.isKindHidden(name),
+        onFlyName: () => this.flySelected(),
+      });
+    }
     this._doc = deps.document !== undefined ? deps.document : (typeof document !== 'undefined' ? document : null);
     this._rowsPerFrame = deps.rowsPerFrame || ROWS_PER_FRAME;
     // Objects that draw made-up positions on floors 4-5 (ActiveSatellites' group): hidden while the layer shows, restored after.
@@ -248,6 +273,7 @@ export class RealSkyLayer {
     }
     if (this._card && this._card.setStatusJoined) this._card.setStatusJoined(sky.statusJoined === true);
     this._buildScene(col);
+    this._applyHiddenDraw();
     this.refreshAll();
   }
 
@@ -275,13 +301,22 @@ export class RealSkyLayer {
     this._hiPoints.visible = false;
     this._hiPoints.name = 'real-sky-selected';
 
-    const lg = new THREE.BufferGeometry();
-    lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3 * (ORBIT_SEGMENTS + 1)), 3));
-    this._orbitLine = new THREE.Line(lg, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false }));
+    // The ring is a fat line (Line2: a plain THREE.Line is 1 px in WebGL whatever its width, "visible but weak" on the Mac, "hard to see" on the iPad;
+    // plan sky8). Kind colour, RING_PX / RING_PX_GLASS wide, over a dark edge RING_EDGE_PX wider (a second Line2 on the same points, a child so it
+    // shows and hides with the ring) so it reads over Earth's bright land and cloud. Widths are in CSS px (the resolution is the CSS viewport).
+    const lg = new LineGeometry();
+    lg.setPositions(new Float32Array(3 * (ORBIT_SEGMENTS + 1)));
+    this._orbitLine = new Line2(lg, new LineMaterial({ color: 0xffffff, linewidth: RING_PX, transparent: true, opacity: 1, depthWrite: false }));
     this._orbitLine.frustumCulled = false;
     this._orbitLine.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;
     this._orbitLine.visible = false;
     this._orbitLine.name = 'real-sky-orbit';
+    this._orbitShadow = new Line2(lg, new LineMaterial({ color: 0x000000, linewidth: RING_PX + RING_EDGE_PX, transparent: true, opacity: 0.8, depthWrite: false }));
+    this._orbitShadow.frustumCulled = false;
+    this._orbitShadow.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT - 0.1;
+    this._orbitShadow.name = 'real-sky-orbit-shadow';
+    this._orbitLine.add(this._orbitShadow);
+    this._ringSize();
 
     if (this._scene && this._scene.add) {
       this._scene.add(this._points);
@@ -302,8 +337,11 @@ export class RealSkyLayer {
     const showSky = on && ready;
     const f4 = showSky && this._floor === FLOOR_NAVCOM;
     const f5 = showSky && this._floor === FLOOR_SDA;
+    // opening dive (lane sky-dive-1118): the dots show while the dive flies, though no floor holds the layer (_floor is null)
+    const diveDots = this._dive === true && ready && this._diveAlpha > 0;
+    if (this._dive === true) this._diveMaterial(this.diveAlpha());   // the Points are built when the data arrives, possibly mid-dive
     if (this._points) {
-      this._points.visible = f4;
+      this._points.visible = f4 || diveDots;
       this._points.material.size = this._isGlass() ? DOT_PX_GLASS : DOT_PX;   // 3 px on glass, 2 px with a mouse
       const sel = this._selected >= 0;
       this._hiPoints.visible = f4 && sel;
@@ -316,10 +354,12 @@ export class RealSkyLayer {
       if (on && (ready || failed)) this._card.show(); else this._card.hide();
     }
     this._gate = `${on}|${this._loadState}`;
-    if (showSky && !this._hidden) {
-      this._hidden = this._hideWhileActive.map((obj) => ({ obj, was: obj.visible }));
-      for (const h of this._hidden) h.obj.visible = false;
-    } else if (!showSky && this._hidden) {
+    if (showSky || (this._dive === true && ready)) {
+      if (!this._hidden) {
+        this._hidden = this._hideWhileActive.map((obj) => ({ obj, was: obj.visible }));
+        for (const h of this._hidden) h.obj.visible = false;
+      }
+    } else if (this._hidden) {
       for (const h of this._hidden) h.obj.visible = h.was;
       this._hidden = null;
     }
@@ -372,6 +412,7 @@ export class RealSkyLayer {
     if (`${on}|${this._loadState}` !== this._gate) this._apply();
     if (this._card && this._card.setLayout) this._card.setLayout(this._isGlass(), this._floor);   // a first touch / a floor change moves the panel clear of Earth
     if (this._points) { const s = this._isGlass() ? DOT_PX_GLASS : DOT_PX; if (this._points.material.size !== s) this._points.material.size = s; }
+    this._ringSize();
     if (!on || this._loadState !== 'ready') { this._lastBatch = 0; return; }
     const t = this.skySeconds();
     this._propagateBatch(t);
@@ -461,12 +502,31 @@ export class RealSkyLayer {
     if (now - this._lastOrbitMs >= ORBIT_REFRESH_MS) { this._lastOrbitMs = now; this._fillOrbit(t); }
   }
 
+  /** Ring width (3 px mouse, 4 px glass; the dark edge 2 px wider) and the line material's resolution = the CSS viewport; cheap, called each frame. */
+  _ringSize() {
+    if (!this._orbitLine) return;
+    const v = this._getViewport(), w = Math.max(1, v.w || 1), h = Math.max(1, v.h || 1);
+    const rs = this._orbitLine.material.resolution;   // LineMaterial copies what it is given: set each material's own Vector2
+    if (rs.x !== w || rs.y !== h) { rs.set(w, h); this._orbitShadow.material.resolution.set(w, h); }
+    const px = this._isGlass() ? RING_PX_GLASS : RING_PX;
+    if (this._orbitLine.material.linewidth !== px) {
+      this._orbitLine.material.linewidth = px;
+      this._orbitShadow.material.linewidth = px + RING_EDGE_PX;
+    }
+  }
+
   _fillOrbit(t) {
     const i = this._selected, S = Constants.SCENE_SCALE;
     this._prop.orbitLineInto(i, t, ORBIT_SEGMENTS, this._tmp);
-    const arr = this._orbitLine.geometry.attributes.position.array;
-    for (let k = 0; k < arr.length; k++) arr[k] = this._tmp[k] * S;
-    this._orbitLine.geometry.attributes.position.needsUpdate = true;
+    // Fat-line geometry: one instance per segment, [start xyz, end xyz] interleaved; rewritten in place (no per-refresh allocation).
+    const buf = this._orbitLine.geometry.attributes.instanceStart.data, arr = buf.array, tmp = this._tmp;
+    for (let k = 0; k < ORBIT_SEGMENTS; k++) {
+      for (let c = 0; c < 6; c++) arr[6 * k + c] = tmp[3 * k + c] * S;
+    }
+    buf.needsUpdate = true;
+    // The ring wears the dot's own kind colour at full strength (plan sky-trio-1118 T1: the old 0.85 white ring was faint over Earth's bright land and cloud).
+    this._orbitLine.material.color.set(CLASS_COLORS[this._cls[i]] || '#ffffff');
+    this._orbitLine.material.opacity = 1;
   }
 
   /* ---------------------------------------------------------------- floor 5 canvas */
@@ -525,13 +585,14 @@ export class RealSkyLayer {
     const cx = W / 2, cy = H / 2;
     const px = this._isGlass() ? DOT_PX_GLASS : DOT_PX;
     const half = px / 2;
-    const pos = this._pos, N = this._rows.length, sx = this._sx, sy = this._sy, cls = this._cls;
+    const pos = this._pos, N = this._rows.length, sx = this._sx, sy = this._sy, cls = this._cls, hide = this._hideCls, sel = this._selected;
     sx.fill(NaN); sy.fill(NaN);
     const w0 = m15;                                    // Earth's centre is the origin: clip w = m15
     if (!(w0 > 1e-9)) { this._painted5 = 0; return; }
     const c0x = (m12 / w0 * 0.5 + 0.5) * W, c0y = (-m13 / w0 * 0.5 + 0.5) * H;
     const rEarthU = Constants.EARTH_RADIUS, geoPx = map.geoPx;
     for (let i = 0; i < N; i++) {
+      if (hide[cls[i]] === 1 && i !== sel) continue;   // a switched-off kind is neither painted nor pickable (only a search's pick keeps its ring)
       const x = pos[3 * i], y = pos[3 * i + 1], z = pos[3 * i + 2];
       const w = m3 * x + m7 * y + m11 * z + m15;
       if (!(w > 1e-9)) continue;                       // behind the camera
@@ -545,6 +606,7 @@ export class RealSkyLayer {
     }
     let n = 0;
     for (let c = 0; c < CLASS_COLORS.length; c++) {
+      if (hide[c] === 1) continue;
       g.fillStyle = CLASS_COLORS[c];
       for (let i = 0; i < N; i++) {
         if (cls[i] !== c || sx[i] !== sx[i]) continue;   // sx[i] !== sx[i]: NaN, not painted
@@ -591,12 +653,12 @@ export class RealSkyLayer {
   }
 
   _pick5(x, y, R) {
-    const sx = this._sx, sy = this._sy;
+    const sx = this._sx, sy = this._sy, hide = this._hideCls, cls = this._cls;
     let best = -1, bd = R * R;
     for (let i = 0; i < sx.length; i++) {
       const dx = sx[i] - x, dy = sy[i] - y;          // NaN (unpainted) compares false
       const d = dx * dx + dy * dy;
-      if (d <= bd) { bd = d; best = i; }
+      if (d <= bd && hide[cls[i]] !== 1) { bd = d; best = i; }
     }
     return best;
   }
@@ -607,9 +669,10 @@ export class RealSkyLayer {
     const v = this._getViewport(), W = v.w, H = v.h;
     const m = this._vp.elements;
     const cp = cam.position;
-    const pos = this._pos, N = this._rows.length, RE = Constants.EARTH_RADIUS;
+    const pos = this._pos, N = this._rows.length, RE = Constants.EARTH_RADIUS, hide = this._hideCls, cls = this._cls;
     let best = -1, bd = R * R;
     for (let i = 0; i < N; i++) {
+      if (hide[cls[i]] === 1) continue;                // a switched-off kind is not drawn, so it is not pickable
       const px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
       const w = m[3] * px + m[7] * py + m[11] * pz + m[15];
       if (!(w > 1e-9)) continue;
@@ -654,20 +717,112 @@ export class RealSkyLayer {
     return this._selected;
   }
 
-  /** Tap resolver: pick, and open the card when a dot was hit. @returns {boolean} true when a dot was hit (the tap is used) */
+  /**
+   * Tap resolver: pick, and open the card when a dot was hit. On floor 4 with a finger, a second tap on the same dot within
+   * DOUBLE_TAP_MS and DOUBLE_TAP_PX also turns the globe to it (a mouse's double-click comes through `flyAt`).
+   * @returns {boolean} true when a dot was hit (the tap is used)
+   */
   tap(x, y, opts) {
+    const i = this.pick(x, y, opts);
+    if (i < 0) { this._lastTap = null; return false; }
+    this.select(i);
+    if (this._card && this._card.clearSearch) this._card.clearSearch();
+    if (this._floor === FLOOR_NAVCOM && !(opts && opts.mouse)) {
+      const now = this._now(), lt = this._lastTap;
+      if (lt && lt.i === i && now - lt.t <= DOUBLE_TAP_MS && Math.hypot(x - lt.x, y - lt.y) <= DOUBLE_TAP_PX) {
+        this._lastTap = null;
+        this.flyTo(i);
+      } else this._lastTap = { i, x, y, t: now };
+    }
+    return true;
+  }
+
+  /** A mouse double-click at (x, y): select the dot there (as a tap does) and, on floor 4, turn the globe to it. @returns {boolean} true when a dot was hit */
+  flyAt(x, y, opts) {
     const i = this.pick(x, y, opts);
     if (i < 0) return false;
     this.select(i);
     if (this._card && this._card.clearSearch) this._card.clearSearch();
+    this.flyTo(i);
     return true;
   }
 
-  /** Search by name or NORAD number: opens the best match's card and highlights its dot. No camera move. @returns {number} row index or -1 */
+  /** Floor 4 only: turn the globe so row i sits in the middle of the view (onFlyTo gets the scene direction from Earth's centre). @returns {boolean} true when a turn started */
+  flyTo(i) {
+    if (this._floor !== FLOOR_NAVCOM || !this._onFlyTo || !this._pos || !(i >= 0 && i < this._rows.length)) return false;
+    return !!this._onFlyTo({ x: this._pos[3 * i], y: this._pos[3 * i + 1], z: this._pos[3 * i + 2] });
+  }
+
+  /** Turn the globe to the card's object (a double-click or double-tap on its name). */
+  flySelected() { return this._selected >= 0 ? this.flyTo(this._selected) : false; }
+
+  /* ---------------------------------------------------------------- show / hide by kind (legend boxes) */
+
+  /** True when the legend box of this kind (a name from CLASS_NAMES) is switched off. */
+  isKindHidden(name) {
+    const k = CLASS_NAMES.indexOf(name);
+    return k >= 0 && this._hideCls[k] === 1;
+  }
+
+  /** The kinds switched off now (CLASS_NAMES order). */
+  hiddenKinds() { return CLASS_NAMES.filter((n, k) => this._hideCls[k] === 1); }
+
+  /**
+   * Switch a kind off or on: not drawn on floors 4 and 5 and not pickable while off; saved. Switching off the kind of the object
+   * that is open closes its card and ring. A search still opens a hidden kind's card (an explicit ask).
+   * @param {string} name a name from CLASS_NAMES @param {boolean} hide
+   */
+  setKindHidden(name, hide) {
+    const k = CLASS_NAMES.indexOf(name);
+    if (k < 0) return false;
+    const h = hide ? 1 : 0;
+    if (this._hideCls[k] === h) return h === 1;
+    this._hideCls[k] = h;
+    this._saveHiddenKinds();
+    this._applyHiddenDraw();
+    this._lastPaintMs = -Infinity;                     // floor 5 repaints at once
+    if (h === 1 && this._selected >= 0 && this._cls && this._cls[this._selected] === k) this.select(-1);
+    if (this._card && this._card.refreshKinds) this._card.refreshKinds();
+    return h === 1;
+  }
+
+  _loadHiddenKinds() {
+    try {
+      const raw = this._storage ? this._storage.getItem(StorageKeys.REAL_SKY_HIDDEN) : null;
+      const list = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(list)) for (const n of list) { const k = CLASS_NAMES.indexOf(n); if (k >= 0) this._hideCls[k] = 1; }
+    } catch (_) { /* a bad value = all shown */ }
+  }
+
+  _saveHiddenKinds() {
+    try { if (this._storage) this._storage.setItem(StorageKeys.REAL_SKY_HIDDEN, JSON.stringify(this.hiddenKinds())); } catch (_) { /* private mode: not saved */ }
+  }
+
+  /**
+   * Floor 4: draw only the rows whose kind is on. Nothing hidden = the plain non-indexed draw as before; otherwise an index of the
+   * visible rows (one Uint32 attribute, rebuilt only here, when the set changes) and a draw range of its length. No per-frame cost.
+   */
+  _applyHiddenDraw() {
+    const geo = this._geo;
+    if (!geo || !this._cls) return;
+    const N = this._rows.length, cls = this._cls, hide = this._hideCls;
+    let any = false;
+    for (let k = 0; k < hide.length; k++) if (hide[k] === 1) any = true;
+    if (!any) { geo.setIndex(null); geo.setDrawRange(0, Infinity); return; }
+    if (!this._idxAttr) this._idxAttr = new THREE.BufferAttribute(new Uint32Array(N), 1);
+    const arr = this._idxAttr.array;
+    let n = 0;
+    for (let i = 0; i < N; i++) if (hide[cls[i]] !== 1) arr[n++] = i;
+    this._idxAttr.needsUpdate = true;
+    geo.setIndex(this._idxAttr);
+    geo.setDrawRange(0, n);
+  }
+
+  /** Search by name or NORAD number: opens the best match's card, highlights its dot (also for a hidden kind: an explicit ask); on floor 4 the globe turns to it. @returns {number} row index or -1 */
   search(query) {
     if (this._loadState !== 'ready') return -1;
     const i = searchRows(this._rows, query);
-    if (i >= 0) this.select(i);
+    if (i >= 0) { this.select(i); this.flyTo(i); }
     else if (this._card && this._card.setNoMatch) this._card.setNoMatch(String(query == null ? '' : query).trim());
     return i;
   }
@@ -679,7 +834,69 @@ export class RealSkyLayer {
     for (const o of [this._points, this._hiPoints, this._orbitLine]) {
       if (o) { o.geometry.dispose(); o.material.dispose(); }
     }
+    if (this._orbitShadow) this._orbitShadow.material.dispose();   // its geometry is the ring's, disposed above
     if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
     this._canvas = null; this._ctx = null;
+  }
+
+  /* --- opening dive (lane sky-dive-1118) ---
+   * The opening dive (test switch ?dive=1, ui/OpeningDive.js) flies the camera from the globe down to the ship through the real
+   * dots. No floor holds the layer then (`_floor` is null), so these methods carry the dots: `diveBegin()` turns them on at
+   * opacity 0, `diveSetAlpha(a)` fades them, `diveTick()` moves them (update() returns early without a floor), `diveEnd()`
+   * puts everything back to today's floor 4-5 rules. The material is only made transparent in here and restored by diveEnd(). */
+
+  /** Start the one fetch of data/sky.json now (the switch-on menu start calls it); never waits. @returns {Promise} */
+  preload() {
+    if (this._loadState === 'idle' || this._loadState === 'failed') this._loadPromise = this._load();
+    return this._loadPromise || Promise.resolve();
+  }
+
+  /** True from diveBegin() to diveEnd(). */
+  diveOn() { return this._dive === true; }
+
+  /** The dots' current dive opacity (0..1). */
+  diveAlpha() { return this._diveAlpha > 0 ? this._diveAlpha : 0; }
+
+  diveBegin() {
+    this._dive = true;
+    this._diveAlpha = 0;
+    this.preload();
+    this._diveMaterial(0);
+    this._apply();
+  }
+
+  /** Set the dots' opacity (0 hides them). Re-applies the gates when the dots turn on or off. */
+  diveSetAlpha(a) {
+    if (this._dive !== true) return;
+    const v = a > 0 ? (a < 1 ? a : 1) : 0;
+    const flip = (v > 0) !== (this._diveAlpha > 0);
+    this._diveAlpha = v;
+    this._diveMaterial(v);
+    if (flip) this._apply();
+  }
+
+  /** One frame of the dive: propagate and draw the dots at the sky's current time. No-op until the data is ready. */
+  diveTick() {
+    if (this._dive !== true || this._loadState !== 'ready') return;
+    this._propagateBatch(this.skySeconds());
+  }
+
+  diveEnd() {
+    if (this._dive !== true) return;
+    this._dive = false;
+    this._diveAlpha = 0;
+    if (this._points) {
+      const m = this._points.material;
+      if (m.transparent || m.opacity !== 1) { m.transparent = false; m.opacity = 1; m.needsUpdate = true; }
+    }
+    this._apply();
+  }
+
+  /** @private the dots' material for opacity `v`: transparent only while the dive runs. */
+  _diveMaterial(v) {
+    if (!this._points) return;
+    const m = this._points.material;
+    if (m.transparent !== true) { m.transparent = true; m.needsUpdate = true; }
+    m.opacity = v;
   }
 }

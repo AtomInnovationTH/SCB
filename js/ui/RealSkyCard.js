@@ -89,6 +89,8 @@ export function cardFields(row, heights, snapshotUtc, gcatName) {
 
 /** Floor 4 = the NAVCOM globe (Earth big); floor 5 = the SDA chart (Earth a small disc, its bottom right holds the Kessler timeline). */
 const FLOOR_GLOBE = 4;
+/** Two clicks or taps on the open object's name within this many ms = "fly to it" (floor 4). */
+const NAME_DOUBLE_MS = 350;
 
 /**
  * Where the panel sits (plan sky-1116-lsky-card, owner 2026-11-17: "move it clear of Earth"). Measured (tmp/sky-card-probe.mjs):
@@ -130,6 +132,9 @@ export class RealSkyCard {
     this._floor = null;
     this._onSearch = null;
     this._onClose = null;
+    this._onToggleKind = null;
+    this._isKindHidden = null;
+    this._onFlyName = null;
     this._shown = false;
     this._built = false;
     this._info = null;
@@ -140,10 +145,24 @@ export class RealSkyCard {
     this._els = {};
   }
 
-  /** The layer wires these: onSearch(query) => row index or -1; onClose() => void. */
-  setHandlers({ onSearch, onClose } = {}) {
+  /** The layer wires these: onSearch(query) => row index or -1; onClose() => void; onToggleKind(name) flips a legend box; isKindHidden(name) => bool (the boxes read it); onFlyName() turns floor 4's globe to the open object. */
+  setHandlers({ onSearch, onClose, onToggleKind, isKindHidden, onFlyName } = {}) {
     this._onSearch = onSearch || null;
     this._onClose = onClose || null;
+    this._onToggleKind = onToggleKind || null;
+    this._isKindHidden = isKindHidden || null;
+    this._onFlyName = onFlyName || null;
+  }
+
+  /** The legend's boxes again (the layer changed a kind). */
+  refreshKinds() { this._renderLegend(); }
+
+  /** Legend state for tests and the browser probe: kind name -> true when its box is ticked (shown). Entries the legend does not show are left out. */
+  legendState() {
+    const out = {};
+    const e = this._els;
+    if (e.legendItems) CLASS_NAMES.forEach((n, i) => { if (e.legendItems[i].style.display !== 'none') out[n] = !(this._isKindHidden && this._isKindHidden(n)); });
+    return out;
   }
 
   isShown() { return this._shown; }
@@ -198,15 +217,26 @@ export class RealSkyCard {
     const body = el('div', 'margin-top:3px');
     card.append(head, body);
 
-    // One row that fits the 250 px inside the panel: 9 px words, no letter spacing, small swatches (measured: at 10 px the six entries were 295 px wide).
-    const legend = el('div', 'margin-top:7px;display:flex;flex-wrap:nowrap;justify-content:space-between;gap:0 3px;font-size:9px;letter-spacing:0;color:#aebbd6');
+    // The colour key is also the show/hide switch (owner 2026-11-18, DECISIONS §75 row 4): one tick box per kind; the whole entry
+    // (box + swatch + word) toggles. A 3-column grid: 44 px tall chips on glass, 22 px with a mouse (_renderLegend sets the height).
+    const legend = el('div', 'margin-top:7px;display:grid;grid-template-columns:repeat(3,1fr);gap:2px 4px;font-size:10px;letter-spacing:0;color:#aebbd6');
     legend.id = 'real-sky-key';
     const legendItems = [];
     CLASS_NAMES.forEach((n, i) => {
-      const item = el('span', 'white-space:nowrap');
-      item.title = n;
-      const sw = el('span', `display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:2px;background:${CLASS_COLORS[i]}`);
-      item.append(sw, d.createTextNode(LEGEND_LABELS[i]));
+      const item = el('div', 'display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer;box-sizing:border-box;min-height:22px;padding:0 3px;border-radius:4px;touch-action:manipulation');
+      item.title = `${n} (tap to show or hide)`;
+      item.setAttribute('role', 'checkbox');
+      item.setAttribute('tabindex', '0');
+      item.setAttribute('aria-label', n);
+      const box = el('span', 'flex:none;display:inline-block;width:12px;height:12px;box-sizing:border-box;border:1px solid #9fb0d0;border-radius:2px;line-height:10px;text-align:center;font-size:10px;color:#e8eefc');
+      const sw = el('span', `flex:none;display:inline-block;width:7px;height:7px;border-radius:50%;background:${CLASS_COLORS[i]}`);
+      const word = el('span', null, LEGEND_LABELS[i]);
+      item.append(box, sw, word);
+      const toggle = () => { if (this._onToggleKind) this._onToggleKind(n); this._renderLegend(); };
+      // A click (mouse or finger) must not leave keyboard focus on the chip, or Space (floor 4's approach command) would go to it
+      // instead of the game. A chip reached by Tab toggles with Enter only; Space is never handled here, so it always reaches InputManager.
+      item.addEventListener('click', () => { toggle(); if (typeof item.blur === 'function') item.blur(); });
+      item.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); toggle(); } });
       legend.append(item);
       legendItems.push(item);
     });
@@ -225,6 +255,13 @@ export class RealSkyCard {
     root.append(input, msg, fail, card, legend, credit);
     d.body.appendChild(root);
     Object.assign(this._els, { root, input, msg, card, nameEl, dot, body, credit, legend, legendItems, fail });
+    // A double-click or double-tap on the object's name turns floor 4's globe to it (two clicks within 350 ms; a click fires for mouse and finger).
+    let lastNameClick = -Infinity;
+    title.style.cursor = 'pointer';
+    title.addEventListener('click', () => {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (now - lastNameClick <= NAME_DOUBLE_MS) { lastNameClick = -Infinity; if (this._onFlyName) this._onFlyName(); } else lastNameClick = now;
+    });
     this._place();
     this._render();
   }
@@ -240,6 +277,7 @@ export class RealSkyCard {
     this._glass = g;
     this._floor = f;
     this._place();
+    this._renderLegend();                           // the chips are taller on glass
   }
 
   /** Applies panelPlacement(glass, floor) to the panel (no-op before the panel is built). */
@@ -269,11 +307,17 @@ export class RealSkyCard {
     const e = this._els;
     if (!e.root) return;
     e.fail.style.display = this._loadFailed ? 'block' : 'none';
-    e.legend.style.display = this._loadFailed ? 'none' : 'flex';
+    e.legend.style.display = this._loadFailed ? 'none' : 'grid';
     e.credit.style.display = this._loadFailed ? 'none' : 'block';
     CLASS_NAMES.forEach((n, i) => {
       const hide = (i === CLS_DEAD || i === CLS_WORKING) && !this._statusJoined;
-      e.legendItems[i].style.display = hide ? 'none' : '';
+      const item = e.legendItems[i];
+      item.style.display = hide ? 'none' : 'flex';
+      item.style.minHeight = this._glass ? '44px' : '22px';
+      const off = !!(this._isKindHidden && this._isKindHidden(n));
+      item.style.opacity = off ? '0.45' : '1';
+      item.setAttribute('aria-checked', off ? 'false' : 'true');
+      item.children[0].textContent = off ? '' : '\u2713';
     });
   }
 
