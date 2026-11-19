@@ -46,6 +46,10 @@ export const DOT_PX_GLASS = 3;
 /** Tap radius, CSS px: mouse / glass (the nearest painted dot inside it opens the card). */
 export const PICK_PX = 12;
 export const PICK_PX_GLASS = 24;
+/** Hover (mouse only, floors 4-5; lane sky-look-1119): the pointer is picked at most once per frame, and only when it moved or this many ms passed (the dots move). */
+export const HOVER_MIN_MS = 100;
+/** The hover ring's diameter, CSS px (the selected dot's mark is 9 px on floor 4, a 14 px ring on floor 5). */
+export const HOVER_RING_PX = 24;
 /* Floor 5 repaints its chart every drawn frame (sky-smooth-1118: one repaint measured 2.6 ms median, 32.6k fillRects, 1728x1117); it skips a frame only while nothing moved. */
 /** The picked object's orbit ring on floor 4: this many segments (129 points), redrawn this often (ms). */
 export const ORBIT_SEGMENTS = 128;
@@ -128,6 +132,18 @@ export class RealSkyLayer {
     this._loadHiddenKinds();
     this._idxAttr = null;               // the draw index floor 4 uses while a kind is hidden (created once, reused)
     this._lastTap = null;               // the previous floor 4 touch tap that hit a dot: {i, x, y, t}
+    // mouse hover (lane sky-look-1119): setCursor(css) sets the game canvas's cursor; the ring and label are DOM elements made on the first hover
+    this._setCursor = typeof deps.setCursor === 'function' ? deps.setCursor : null;
+    this._hover = -1;                   // row under the mouse, or -1
+    this._hoverPtr = null;              // {x, y} last mouse position over the canvas (CSS px), or null
+    this._hoverMoved = false;           // the pointer moved since the last hover pick
+    this._hoverPickMs = -Infinity;
+    this._hoverText = '';
+    this._hoverRing = null;
+    this._hoverLabel = null;
+    this._hoverScr = { x: 0, y: 0 };    // scratch for _screenOf (no allocation per frame)
+    this._hoverShown = { ring: false, label: false, rx: NaN, ry: NaN, lx: NaN, ly: NaN };   // last written ring / label state: a style is written only on change
+    this._cursorOn = false;
     if (this._card && this._card.setHandlers) {
       this._card.setHandlers({
         onSearch: (q) => this.search(q), onClose: () => this.select(-1),
@@ -283,6 +299,8 @@ export class RealSkyLayer {
     this._posAttr.setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('position', this._posAttr);
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    // The dots go through the composer's OutputPass (ACES) like the rest of the frame, so the colours in CLASS_COLORS are chosen for ACES
+    // (see there); a material flag could not change that. Lane sky-look-1119.
     const mat = new THREE.PointsMaterial({ size: DOT_PX, sizeAttenuation: false, vertexColors: true, depthWrite: false });
     const pts = new THREE.Points(geo, mat);
     pts.frustumCulled = false;                       // positions move every frame; no bounding sphere to keep right
@@ -348,6 +366,7 @@ export class RealSkyLayer {
       this._orbitLine.visible = f4 && sel;
     }
     if (this._canvas) this._canvas.style.opacity = f5 ? '1' : '0';
+    if (!f4 && !f5 && (this._hover >= 0 || this._cursorOn)) this.hoverClear();   // another floor, a menu, the opening dive: no hover
     if (this._card) {
       if (this._card.setLayout) this._card.setLayout(this._isGlass(), this._floor);
       if (this._card.setLoadFailed) this._card.setLoadFailed(on && failed);
@@ -420,6 +439,7 @@ export class RealSkyLayer {
     if (credit !== this._creditShown) { this._creditShown = credit; if (this._card && this._card.setCredit) this._card.setCredit(credit); }
     if (this._selected >= 0) this._moveSelection(t);
     if (this._floor === FLOOR_SDA) this._paint5(t);
+    this._hoverTick();
   }
 
   /**
@@ -756,6 +776,139 @@ export class RealSkyLayer {
   /** Turn the globe to the card's object (a double-click or double-tap on its name). */
   flySelected() { return this._selected >= 0 ? this.flyTo(this._selected) : false; }
 
+  /* ---------------------------------------------------------------- mouse hover (lane sky-look-1119; owner 2026-11-19: "some mouse hover clue ... to show the dot is select, can click") */
+
+  /**
+   * The mouse moved over the game canvas (main.js calls this from the canvas's `pointermove`). Remembers the spot only; the pick runs in
+   * `update()` (`_hoverTick`), at most once per frame. Anything but a plain mouse move (touch or pen, a button held = a drag) clears the hover.
+   * @param {number} x CSS px @param {number} y @param {{mouse?: boolean, buttons?: number}} [opts]
+   */
+  hoverMove(x, y, opts) {
+    if (!opts || opts.mouse !== true || opts.buttons) { this.hoverClear(); return; }
+    this._hoverPtr = { x, y };
+    this._hoverMoved = true;
+  }
+
+  /** The mouse left the canvas, a drag began, or the layer went off: no ring, no label, the normal cursor. */
+  hoverClear() {
+    this._hoverPtr = null;
+    this._hoverMoved = false;
+    this._setHover(-1);
+  }
+
+  /** The row under the mouse now, or -1 (probes and tests). */
+  hoverIndex() { return this._hover; }
+
+  /** The name the hover label shows ('' = no label). */
+  hoverLabelText() { return this._hoverLabel && this._hoverLabel.style.display !== 'none' ? this._hoverText : ''; }
+
+  /** The hover ring and label elements, or null before the first hover (probes and tests). */
+  hoverElements() { return { ring: this._hoverRing, label: this._hoverLabel }; }
+
+  /** Once per frame from `update()`: pick under the pointer when it moved or HOVER_MIN_MS passed, then keep the ring on its (moving) dot. */
+  _hoverTick() {
+    const p = this._hoverPtr;
+    if (!p) return;
+    if (this._dive === true || (this._floor !== FLOOR_NAVCOM && this._floor !== FLOOR_SDA) || this._loadState !== 'ready') { this.hoverClear(); return; }
+    const now = this._now();
+    if (this._hoverMoved || now - this._hoverPickMs >= HOVER_MIN_MS) {
+      this._hoverPickMs = now;
+      this._hoverMoved = false;
+      this._setHover(this.pick(p.x, p.y, { glass: false }));
+    }
+    if (this._hover >= 0) this._placeHover();
+  }
+
+  /** Make (or clear, -1) the hover: cursor, name text, and show / hide the ring and label. */
+  _setHover(i) {
+    const was = this._hover;
+    this._hover = i;
+    const on = i >= 0;
+    if (on !== this._cursorOn) {
+      this._cursorOn = on;
+      if (this._setCursor) this._setCursor(on ? 'pointer' : '');
+    }
+    if (i === was) return;
+    if (!on) {
+      this._hoverText = '';
+      if (this._hoverRing) this._hoverRing.style.display = 'none';
+      if (this._hoverLabel) this._hoverLabel.style.display = 'none';
+      this._hoverResetShown();
+      return;
+    }
+    const d = this.describe(i);
+    this._hoverText = d ? d.name : '';
+    this._hoverBuild();
+    if (this._hoverLabel) {
+      this._hoverLabel.textContent = this._hoverText;
+      this._hoverLabel.style.borderLeftColor = CLASS_COLORS[this._cls[i]] || '#ffffff';
+    }
+  }
+
+  _hoverBuild() {
+    if (this._hoverRing || !this._doc || !this._doc.body || !this._doc.createElement) return;
+    const ring = this._doc.createElement('div');
+    ring.id = 'real-sky-hover-ring';
+    ring.style.cssText = ['position:fixed', 'display:none', 'pointer-events:none', 'z-index:35', `width:${HOVER_RING_PX}px`, `height:${HOVER_RING_PX}px`,
+      'box-sizing:border-box', 'border-radius:50%', 'border:2px solid #ffffff', 'box-shadow:0 0 0 1px rgba(0,0,0,0.75), inset 0 0 0 1px rgba(0,0,0,0.75)'].join(';');
+    const label = this._doc.createElement('div');
+    label.id = 'real-sky-hover-label';
+    label.style.cssText = ['position:fixed', 'display:none', 'pointer-events:none', 'z-index:35', 'max-width:260px', 'box-sizing:border-box', 'padding:3px 7px',
+      'border-radius:4px', 'border-left:3px solid #ffffff', 'background:rgba(8,12,22,0.88)', 'color:#e8eefc', 'font-family:var(--font-mono)', 'font-size:12px',
+      'line-height:1.3', 'white-space:nowrap', 'overflow:hidden', 'text-overflow:ellipsis', 'user-select:none', '-webkit-user-select:none'].join(';');
+    this._doc.body.appendChild(ring);
+    this._doc.body.appendChild(label);
+    this._hoverRing = ring;
+    this._hoverLabel = label;
+  }
+
+  /** Forget what was last written to the ring and label (they were hidden or dropped), so the next placement writes everything. */
+  _hoverResetShown() {
+    const c = this._hoverShown;
+    c.ring = false; c.label = false; c.rx = NaN; c.ry = NaN; c.lx = NaN; c.ly = NaN;
+  }
+
+  /** Screen point (CSS px) of row i now into the scratch `_hoverScr`: floor 5 = as last painted, floor 4 = projected through the camera; false when it has none. */
+  _screenOf(i) {
+    const out = this._hoverScr;
+    if (this._floor === FLOOR_SDA) {
+      if (!this._sx || !Number.isFinite(this._sx[i])) return false;
+      out.x = this._sx[i]; out.y = this._sy[i];
+      return true;
+    }
+    if (!this._viewProj()) return false;
+    const v = this._getViewport(), m = this._vp.elements, pos = this._pos;
+    const px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
+    const w = m[3] * px + m[7] * py + m[11] * pz + m[15];
+    if (!(w > 1e-9)) return false;
+    out.x = ((m[0] * px + m[4] * py + m[8] * pz + m[12]) / w * 0.5 + 0.5) * v.w;
+    out.y = (-(m[1] * px + m[5] * py + m[9] * pz + m[13]) / w * 0.5 + 0.5) * v.h;
+    return true;
+  }
+
+  /** Put the ring on the hovered dot and the label beside the pointer (kept inside the viewport). A style is written only when its value changed. */
+  _placeHover() {
+    if (!this._hoverRing) return;
+    const c = this._hoverShown, ring = this._hoverRing, p = this._hoverPtr;
+    const v = this._getViewport();
+    if (this._screenOf(this._hover)) {
+      const s = this._hoverScr;
+      const rx = Math.round(s.x - HOVER_RING_PX / 2), ry = Math.round(s.y - HOVER_RING_PX / 2);
+      if (!c.ring) { ring.style.display = 'block'; c.ring = true; }
+      if (rx !== c.rx) { ring.style.left = `${rx}px`; c.rx = rx; }
+      if (ry !== c.ry) { ring.style.top = `${ry}px`; c.ry = ry; }
+    } else if (c.ring) { ring.style.display = 'none'; c.ring = false; }
+    if (p && this._hoverText) {
+      const lab = this._hoverLabel;
+      if (!c.label) { lab.style.display = 'block'; c.label = true; }
+      const w = Math.min(260, 14 + this._hoverText.length * 7.5);
+      const lx = Math.round(Math.max(4, p.x + 16 + w > v.w - 4 ? p.x - 16 - w : p.x + 16));
+      const ly = Math.round(Math.max(4, p.y + 22 + 24 > v.h ? p.y - 30 : p.y + 18));
+      if (lx !== c.lx) { lab.style.left = `${lx}px`; c.lx = lx; }
+      if (ly !== c.ly) { lab.style.top = `${ly}px`; c.ly = ly; }
+    }
+  }
+
   /* ---------------------------------------------------------------- show / hide by kind (legend boxes) */
 
   /** True when the legend box of this kind (a name from CLASS_NAMES) is switched off. */
@@ -837,6 +990,10 @@ export class RealSkyLayer {
     if (this._orbitShadow) this._orbitShadow.material.dispose();   // its geometry is the ring's, disposed above
     if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
     this._canvas = null; this._ctx = null;
+    this.hoverClear();
+    for (const o of [this._hoverRing, this._hoverLabel]) if (o && o.parentNode) o.parentNode.removeChild(o);
+    this._hoverRing = null; this._hoverLabel = null;
+    this._hoverResetShown();
   }
 
   /* --- opening dive (lane sky-dive-1118) ---

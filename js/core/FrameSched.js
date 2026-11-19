@@ -17,7 +17,8 @@
  *             looks steppy.
  *   'boost' — native refresh: within BOOST_MS (1000) of input in gameplay (HOLD_BOOST_MS under a drawer), or while a
  *   ladder camera ride / the intro launch ceremony is in flight.
- *   'rest'  — plain gameplay, no recent input: REST_FPS (60). 60 Hz → N = 1; 120 Hz → N = 2.
+ *   'rest'  — plain gameplay, no recent input: REST_FPS (60). 60 Hz → N = 1; 120 Hz → N = 2. On the map floors
+ *             (4-5) with a calm picture (`mapRest`, below) the target is MAP_REST_FPS (30): 120 Hz → N = 4.
  *
  * Non-gameplay states never reach this policy: the shipped interval throttles own them
  * (pause halts the loop, hidden halts, blurred ~30 fps keepalive, menus ~30 fps via _getScheduleIntervalMs).
@@ -55,10 +56,11 @@ export class FrameSched {
    * 'full'|'partial'|'none' (viewCover() this frame); nowMs (rAF timestamp); lastInputMs
    * (last pointer/touch/wheel/key/pane/purchase); riding (ladder ride in flight / intro launch ceremony); dragLive
    * (turntable drag pressed or velocity > ε); mechLive (a mother actuator — flower/ROSA/struts — actually moving now;
-   * same tier as dragLive); periodMs (medianPeriodMs()); perf {REST_FPS, BOOST_MS, HOLD_FPS, HOLD_BOOST_MS}.
+   * same tier as dragLive); mapRest (FrameSched.mapRest(): a calm map floor, rest draws at MAP_REST_FPS; optional);
+   * periodMs (medianPeriodMs()); perf {REST_FPS, BOOST_MS, HOLD_FPS, HOLD_BOOST_MS, MAP_REST_FPS}.
    * @returns {{ mode: 'rest'|'boost'|'hold', n: number }}
    */
-  static plan({ cover, nowMs, lastInputMs, riding, dragLive, mechLive, periodMs, perf }) {
+  static plan({ cover, nowMs, lastInputMs, riding, dragLive, mechLive, mapRest, periodMs, perf }) {
     if (cover === 'partial') {
       // Held world (drawer open): heartbeat unless the player is touching it.
       const boosted = (nowMs - lastInputMs) < perf.HOLD_BOOST_MS || dragLive || mechLive || riding;
@@ -68,7 +70,32 @@ export class FrameSched {
     // Plain gameplay: native within the input window and during rides.
     const boosted = (nowMs - lastInputMs) < perf.BOOST_MS || riding;
     if (boosted) return { mode: 'boost', n: 1 };
-    return { mode: 'rest', n: FrameSched.skipFactor(periodMs, perf.REST_FPS) };
+    return { mode: 'rest', n: FrameSched.skipFactor(periodMs, (mapRest && perf.MAP_REST_FPS > 0) ? perf.MAP_REST_FPS : perf.REST_FPS) };
+  }
+
+  /**
+   * Is the engaged floor a map floor (4-5) whose picture is calm enough for the lower rest rate? True only on a map floor
+   * (`perf.MAP_FLOORS`) with the map clock below `perf.MAP_FULL_RATE_STEP` (x100: a dot would jump about a pixel per frame at
+   * 30 fps), no fly-to / trip burn, and no view motion of the camera's own (the 15 s view return gliding, a floor-4 framing
+   * turn). Input, rides and drags are NOT read here: plan() already boosts those to native.
+   * @param {{floor:(number|null), clockStep:number, trip:boolean, viewMotion:boolean, perf:object}} a
+   * @returns {boolean}
+   */
+  static mapRest({ floor, clockStep, trip, viewMotion, perf }) {
+    if (floor == null || !perf || !Array.isArray(perf.MAP_FLOORS) || !perf.MAP_FLOORS.includes(floor)) return false;
+    if (trip || viewMotion) return false;
+    return !(clockStep >= perf.MAP_FULL_RATE_STEP);
+  }
+
+  /**
+   * Bloom on this frame? The bloom mip chain costs 3-5 ms of GPU per frame at HIGH on the map floors for a strength-0.08
+   * glow nobody can see there; `perf.MAP_BLOOM_OFF` skips it on floors 4-5 only. `sourceVisible` is the existing
+   * SunLight gate (nothing above the threshold on screen).
+   * @returns {boolean}
+   */
+  static bloomOn({ floor, sourceVisible, perf }) {
+    if (!sourceVisible) return false;
+    return !(perf && perf.MAP_BLOOM_OFF && floor != null && Array.isArray(perf.MAP_FLOORS) && perf.MAP_FLOORS.includes(floor));
   }
 
   /**

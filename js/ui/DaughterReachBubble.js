@@ -109,6 +109,15 @@ export class DaughterReachBubble {
   get last() { return this._last; }
 
   /**
+   * Can the bubble be up this frame at all (a floor 2-3 frame outside training)? The loop asks BEFORE it copies the mother's
+   * position and velocity and refreshes the camera matrices, so a hidden bubble (floors 1, 4, 5) costs one floor read per frame.
+   * @returns {boolean}
+   */
+  wantsFrame() {
+    return REACH_BUBBLE_FLOORS.includes(this._getFloor()) && !this._isTraining();
+  }
+
+  /**
    * Should the bubble be up this frame, and how big?
    * @returns {{radiusM:number, type:string, name:string, label:string}|null}
    */

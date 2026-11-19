@@ -136,7 +136,7 @@ import { earthTurnTrigger } from './systems/EarthTurn.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
 import { RealSkyLayer } from './ui/RealSkyLayer.js';
-import { OpeningDive, devDive } from './ui/OpeningDive.js';
+import { OpeningDive, devDive, diveVeil } from './ui/OpeningDive.js';
 import { RealSkyCard } from './ui/RealSkyCard.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
@@ -486,7 +486,11 @@ let _schedTick = 0;                 // rAF-entry counter for the Nth-beat draw
 // The cadence median is CACHED, recomputed on drawn ticks only (a skipped tick must not pay a 30-sample clone+sort),
 // and plan() reads ONE reused args object (no per-frame allocation). null until the sample window fills → N = 1.
 let _rafPeriodMs = null;
-const _planArgs = { cover: 'none', nowMs: 0, lastInputMs: 0, riding: false, dragLive: false, mechLive: false, periodMs: null, perf: Constants.PERF };
+const _planArgs = { cover: 'none', nowMs: 0, lastInputMs: 0, riding: false, dragLive: false, mechLive: false, mapRest: false, periodMs: null, perf: Constants.PERF };
+// Map-floor rest rate (sky-speed-1119): ONE reused args object for FrameSched.mapRest, and the settled map floor (4-5, null while
+// riding / off the ladder) that the bloom gate below reads on drawn frames.
+const _mapRestArgs = { floor: null, clockStep: 1, trip: false, viewMotion: false, perf: Constants.PERF };
+let _mapFloorSettled = null;
 let _launchCeremonyLive = false;    // intro ride (LAUNCH_CEREMONY_* events)
 // The published policy witness (one object, fields mutated per frame; the headless gate asserts POLICY, mode + n,
 // never fps: SwiftShader runs ~4 fps and its measured period clamps N to 1 by design).
@@ -980,6 +984,15 @@ function _openingDiveOn(danceCamera) {
   }
   return true;
 }
+/**
+ * Does this New Game's departure end in the opening dive, so the picture should dissolve through black at the cut (lane
+ * sky-divecut-1119)? The same gate as `_openingDiveOn`, true only with `?dive=1` on a dev host; false everywhere else, so the
+ * normal opening and training never see the veil.
+ * @returns {boolean}
+ */
+function _diveVeilWanted() {
+  return !!(Constants.FEATURE_FLAGS.OPENING_DANCE) && !_prefersReducedMotion() && _introRideAllowed() && devDive();
+}
 /** The hint ticker's band from the bottom (its BOTTOM_PX + ROW_HEIGHT_PX) — the ORBIT pane's floor never enters it. */
 const _HINT_BAND_PX = ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).BOTTOM_PX + ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).ROW_HEIGHT_PX;
 // The DARK COCKPIT's edge law (owner 2026-09-07).
@@ -1112,14 +1125,16 @@ let ladderSfx;
 // World→screen projector off the live ladder camera, for NavcomFloor's cluster icons and ship chevron;
 // |z| <= 1 keeps only points inside the camera near/far planes visible.
 const _navProjV = new THREE.Vector3();
-function navcomProject(worldVec3) {
+/** The reach bubble's projector: the caller refreshes the camera matrices ONCE, then every ring point skips the per-call refresh. */
+const _reachProject = (p) => navcomProject(p, true);
+function navcomProject(worldVec3, poseFresh) {
   const cam = cameraSystem && cameraSystem.camera;
   if (!cam) return { x: 0, y: 0, visible: false };
   // The view matrix must be THIS frame's pose, not the one the last render left: cameraSystem.update has already moved
   // the camera, but `matrixWorldInverse` is only refreshed by a render, so without this the field label, "You" and the
   // reach band are placed with last frame's camera and jitter against the globe while she drags (CityLabels and
   // RealSkyLayer refresh it the same way; sky-jitter-1118).
-  cam.updateMatrixWorld();
+  if (!poseFresh) cam.updateMatrixWorld();   // `poseFresh`: the caller refreshed it once for a batch (the reach bubble's 193 points)
   const v = _navProjV.copy(worldVec3).project(cam);
   return {
     x: (v.x * 0.5 + 0.5) * window.innerWidth,
@@ -2006,6 +2021,8 @@ async function init() {
     dateMs: () => sunStorms.dateMs(),
     isGlass: () => GestureHints.isGlass(),
     card: new RealSkyCard(),
+    // Mouse hover on floors 4-5 (lane sky-look-1119): a pointer cursor over a dot that a click would open.
+    setCursor: (c) => { const cv = document.getElementById('game-canvas'); if (cv) cv.style.cursor = c; },
     // Floor 4 "fly to a dot" (double-click / double-tap a dot, a search hit, double-click the card's name): the globe turns to it, and
     // that turn is HER move, so the floor-4 idle wait turns the view back to the field afterwards (owesReturn; plan sky-trio-1118).
     onFlyTo: (dir) => (cameraSystem ? cameraSystem.ladderTurnEarthDir(dir, { owesReturn: true }) : false),
@@ -2041,7 +2058,12 @@ async function init() {
   daughterReachBubble = new DaughterReachBubble({
     getArms: () => (armManager ? armManager.arms : []),
     canLaunch: armCanLaunchNow,
-    getFloor: () => ((ladderController && ladderController.isActive()) ? ladderController.currentFloor() : null),
+    // Allocation-free floor read (the core's floorId; currentFloor() builds a state object): this runs every frame, hidden or not.
+    getFloor: () => {
+      if (!(ladderController && ladderController.isActive())) return null;
+      const l = ladderController.ladder;
+      return (l && l.floorId) ? l.floorId() : ladderController.currentFloor();
+    },
     isTraining: isTrainingNow,
   });
   // F7 (SDA) content orchestrator: screen-space mass-band chart over live cluster/active-sat/Kessler
@@ -2695,6 +2717,15 @@ async function init() {
     eventBus.on(Events.MENU_START, () => {
       if (realSkyLayer && !_prefersReducedMotion() && _introRideAllowed() && devDive()) realSkyLayer.preload();
     });
+    // The menu -> dive dissolve (test switch ?dive=1, lane sky-divecut-1119): the picture fades to black over the last 0.45 s of
+    // the departure, is black at the cut (MENU_START, a skip's early one included), and the dive fades up from black at its first
+    // frame (OpeningDive.update). Measured: the cut is one frame in which Earth jumps 2,606 px and 97 % smaller. Off: nothing runs.
+    eventBus.on(Events.MENU_DEPARTURE_START, ({ event, durationMs } = {}) => {
+      if (event === Events.MENU_START && _diveVeilWanted()) diveVeil.begin(durationMs);
+    });
+    eventBus.on(Events.MENU_START, () => { diveVeil.cut(); });
+    eventBus.on(Events.MENU_CONTINUE, () => { diveVeil.clear(); });
+    eventBus.on(Events.GAME_STATE_CHANGE, ({ to } = {}) => { if (to === 'MENU') diveVeil.clear(); });
     // The dance's HANDOVER is the ONE signal that ends the intro dwell (normal completion AND the skip arrive here), so
     // the camera never waits on its ceiling when the dance has handed over, and never jumps ahead of it (the ceiling
     // is the fallback; the event is the truth). Inside the gate a ?ladder=0 boot registers nothing.
@@ -3323,6 +3354,27 @@ async function init() {
       if (!ladderController || !ladderController.isActive() || ladderController.currentFloor() !== 4) return;
       if (realSkyLayer) realSkyLayer.flyAt(e.clientX, e.clientY, { mouse: true });
     });
+    // Mouse hover on floors 4-5 (lane sky-look-1119; owner 2026-11-19): the layer picks under the pointer once per frame, at most. Canvas events
+    // only, so a card, a menu or any other element over the spot never gets a hover; touch and pen (pointerType !== 'mouse') and a held button
+    // (a drag) clear it. The layer itself ignores it with no floor-4/5 layer on show and during the opening dive.
+    let _hoverDown = null;   // {x, y} of the press in progress (for the hover restore on pointerup)
+    canvas.addEventListener('pointermove', (e) => {
+      if (!realSkyLayer) return;
+      const f = (ladderController && ladderController.isActive()) ? ladderController.currentFloor() : null;
+      if ((f !== 4 && f !== 5) || (gameFlowManager && gameFlowManager.paused)) { realSkyLayer.hoverClear(); return; }
+      realSkyLayer.hoverMove(e.clientX, e.clientY, { mouse: e.pointerType === 'mouse', buttons: e.buttons });
+    }, { passive: true });
+    canvas.addEventListener('pointerleave', () => { if (realSkyLayer) realSkyLayer.hoverClear(); }, { passive: true });
+    canvas.addEventListener('pointerdown', (e) => { _hoverDown = { x: e.clientX, y: e.clientY }; if (realSkyLayer) realSkyLayer.hoverClear(); }, { passive: true });
+    // After the button is released the dot may still be under the pointer: put the hover back at once (no mouse move needed) unless the
+    // press became a drag (moved more than 5 px since the press); the next pointermove restores it after a drag.
+    canvas.addEventListener('pointerup', (e) => {
+      const d = _hoverDown; _hoverDown = null;
+      if (!realSkyLayer || !d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) return;
+      const f = (ladderController && ladderController.isActive()) ? ladderController.currentFloor() : null;
+      if ((f !== 4 && f !== 5) || (gameFlowManager && gameFlowManager.paused)) return;
+      realSkyLayer.hoverMove(e.clientX, e.clientY, { mouse: e.pointerType === 'mouse', buttons: e.buttons });
+    }, { passive: true });
     // The DESKTOP edge wake: ONE passive `document` handler for `pointermove` (≤ 10 Hz by timestamp: a hover sweep
     // costs one band test per 100 ms) and `pointerdown` (never throttled: a click on faded chrome lands on the canvas
     // and MUST wake it). Coordinates only, no preventDefault (InputManager's window capture listeners and the frame
@@ -3598,6 +3650,7 @@ async function init() {
   let _powerupFlashEl = null;
   const _triggerPowerupFlash = () => {
     if (_orientMode === 'flyaround') return;   // seamless — no mask needed
+    if (diveVeil.active()) return;             // ?dive=1: the black veil covers this cut (a blue flash on it would show through the fade-up)
     if (!_powerupFlashEl) {
       _powerupFlashEl = document.createElement('div');
       _powerupFlashEl.id = 'powerup-flash';
@@ -6210,6 +6263,19 @@ function gameLoop(timestamp) {
     _planArgs.dragLive = !!(_dragS && (_dragS.isDragging
       || Math.abs(_dragS.velocityTheta) > 6e-3 || Math.abs(_dragS.velocityPhi) > 6e-3));   // rad/s (1e-4 rad per frame at 60 fps)
     _planArgs.mechLive = _mechLive;
+    // Floors 4-5 at a calm picture rest at MAP_REST_FPS (FrameSched.mapRest). Allocation-free reads (floorId, not getState).
+    // Skipped ticks still advance gameplay time: lastTime moves on drawn ticks only, so realDt below spans the skipped ones.
+    {
+      const _lad = (ladderController && ladderController.isActive() && !_planArgs.riding) ? ladderController.ladder : null;
+      const _mf = (_lad && _lad.floorId) ? _lad.floorId() : null;
+      const _lcam = (cameraSystem && cameraSystem._ladderCam) ? cameraSystem._ladderCam : null;
+      _mapRestArgs.floor = _mf;
+      _mapRestArgs.clockStep = mapClock.step();
+      _mapRestArgs.trip = !!(gameFlowManager.isTripRunning && gameFlowManager.isTripRunning());
+      _mapRestArgs.viewMotion = !!(_lcam && (_lcam.earthTurn || _lcam.leveling || (_lcam.viewReturn && _lcam.viewReturn.glide)));
+      _planArgs.mapRest = _mf != null && FrameSched.mapRest(_mapRestArgs);
+      _mapFloorSettled = (_mf != null && Constants.PERF.MAP_FLOORS.includes(_mf)) ? _mf : null;
+    }
     _planArgs.periodMs = _rafPeriodMs;
     const _sched = FrameSched.plan(_planArgs);
     _frameSched.mode = _sched.mode;
@@ -6223,6 +6289,7 @@ function gameLoop(timestamp) {
     // drawing more (a stale, larger period → a smaller N).
     _rafPeriodMs = FrameSched.medianPeriodMs(_rafDeltas);
   } else {
+    _mapFloorSettled = null;
     _frameSched.mode = 'rest';
     _frameSched.n = 1;
     // Gameplay is not running — reset the mechLive latch so a stale "moving" read can never
@@ -6347,10 +6414,10 @@ function gameLoop(timestamp) {
   if (_ladderActive && ladderController.ladder && ladderController.ladder.getState) {
     const _lf = ladderController.ladder.getState().floor;
     _mapFloor = _lf;
-    mapClock.observeFloor(_lf);   // below floor 4 the slider's choice goes back to real speed
+    mapClock.observeFloor(_lf);   // below floor 4 the slider's choice goes back to the 10x default
     const _lfRow = FloorContract.byId(_lf);
     _floorCap = _lfRow ? _lfRow.timeCap : 1;
-    // Floors 4-5: the player's slider step replaces the floor's own cap (real speed by default); every hold below still wins.
+    // Floors 4-5: the player's slider step replaces the floor's own cap (10x by default); every hold below still wins.
     _floorCap = mapClock.capFor(_lf, _floorCap);
     const _hold = (cameraSystem && cameraSystem.ladderWarpHoldFloor) ? cameraSystem.ladderWarpHoldFloor() : null;
     const _holdRow = (_hold != null) ? FloorContract.byId(_hold) : null;
@@ -6566,7 +6633,8 @@ function gameLoop(timestamp) {
   // Bloom gate — skips the whole UnrealBloom mip chain on frames where nothing can cross the threshold. NOT
   // sun-only: Venus rides the brightness ladder at 2.74 (> Constants.BLOOM_THRESHOLD) and its visibility is
   // independent of the sun's, so the gate asks SunLight for any visible threshold-crossing source.
-  sceneManager.setBloomEnabled(sunLight.isBloomSourceVisible());
+  // Floors 4-5 (settled, not riding) skip it too: the mip chain was 3-5 ms of GPU per frame there for a strength-0.08 glow.
+  sceneManager.setBloomEnabled(FrameSched.bloomOn({ floor: _mapFloorSettled, sourceVisible: sunLight.isBloomSourceVisible(), perf: Constants.PERF }));
   // Feed the renderer's CAPPED pixel ratio (HIGH tier caps at 1.5), not window.devicePixelRatio (=2.0), so
   // gl_PointSize maps to the true physical render-target and stars aren't ~33% oversized.
   starfield.update(_worldHeld ? 0 : dt, sceneManager.getRenderer().getPixelRatio(), sceneManager.getCamera());
@@ -7270,7 +7338,13 @@ function updateCamera(dt, timestamp) {
   // and with no daughter ready.
   if (daughterReachBubble) {
     try {
-      daughterReachBubble.update({ shipPos: player.getPosition(), shipVel: player.getVelocity(), project: navcomProject });
+      // Hidden (floors 1, 4, 5, training 1-3): no position / velocity copies, no matrix refresh; update({}) only hides it.
+      if (daughterReachBubble.wantsFrame()) {
+        if (cameraSystem && cameraSystem.camera) cameraSystem.camera.updateMatrixWorld();
+        daughterReachBubble.update({ shipPos: player.getPosition(), shipVel: player.getVelocity(), project: _reachProject });
+      } else {
+        daughterReachBubble.update({});
+      }
     } catch (e) { console.error('[GameLoop] daughterReachBubble:', e); }
   }
 

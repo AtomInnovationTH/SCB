@@ -127,7 +127,7 @@ export const FloorContract = {
       { id: 'x1000', cap: 100 },
     ],
     MAP_CLOCK_FLOORS: [4, 5],    // the floors that show the slider
-    MAP_CLOCK_DEFAULT: 1,        // index into MAP_CLOCK_STEPS: real speed
+    MAP_CLOCK_DEFAULT: 2,        // index into MAP_CLOCK_STEPS: 10x (owner 2026-11-19: "default to 10x so motion is obvious")
     DANGER_RAMP_TO_1X: true,     // conjunction inside alarm horizon ramps to 1x BEFORE knock
     CROSS_DOWN_PRERAMP: true,    // riding down pre-ramps to the lower floor's cap
     MOID_SCREENING_ABOVE: 10,    // warp > this switches conjunctions to MOID screening

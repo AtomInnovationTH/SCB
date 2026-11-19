@@ -3,7 +3,7 @@
  * pause / real / 10x / 100x / 1000x on the game's one clock, so everything stays in step").
  *
  * Holds the chosen step (an index into `FloorContract.TIME_RULES.MAP_CLOCK_STEPS`). The choice stays while she moves between
- * floors 4 and 5 and goes back to real speed the moment the current (or destination) floor is anywhere else, or the ladder is
+ * floors 4 and 5 and goes back to the 10x default the moment the current (or destination) floor is anywhere else, or the ladder is
  * not engaged (menu, shop, new game). The step is NOT the clock: it is one more term in the TimeAuthority target
  * (`TimeAuthority.mapClockCap`), so every hold that wins today still wins (conjunction alert, planned daughter flight, drawer).
  *
@@ -40,7 +40,7 @@ export class MapClock {
 
   /**
    * Called once per frame with the engaged floor (the destination during a ride), or null when the ladder is not engaged.
-   * Anywhere but floors 4-5 the choice goes back to real speed.
+   * Anywhere but floors 4-5 the choice goes back to the 10x default.
    * @param {number|null} floorId
    */
   observeFloor(floorId) {

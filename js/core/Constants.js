@@ -6498,6 +6498,16 @@ export const Constants = {
     BOOST_MS: 1000,      // native-refresh window after any input in gameplay
     HOLD_FPS: 10,        // drawer-open heartbeat (world clock 0 — D-F held world)
     HOLD_BOOST_MS: 500,  // native window after input while a drawer is open
+    // Floors 4-5 (the map floors) at rest (sky-speed-1119, owner 2026-11-19 "BL2 uses only 10 % of GPU"). Measured on the
+    // dev Mac (Apple M5 Max, headless ANGLE-Metal, tmp/speed1119/table.md): floor 4 at rest cost 3-9 ms of GPU per frame at 60
+    // draws/s (session to session; 17-53 % busy), 3-5 ms of it the bloom mip chain. At 30 draws/s with bloom skipped it is 4-10 % busy.
+    // At the real-speed clock nothing on the map moves fast enough to need 60 fps, so the map floors
+    // draw at MAP_REST_FPS and skip bloom; input, rides, drags, the view return, a fly-to and a map clock of MAP_FULL_RATE_STEP
+    // (x100) or faster all go back to the full draw rate (FrameSched.mapRest decides; main.js feeds it); bloom stays off there.
+    MAP_REST_FPS: 30,
+    MAP_FLOORS: [4, 5],        // = FloorContract.TIME_RULES.MAP_CLOCK_FLOORS
+    MAP_FULL_RATE_STEP: 3,     // map clock step index (MAP_CLOCK_STEPS: pause 0, real 1, x10 2, x100 3, x1000 4)
+    MAP_BLOOM_OFF: true,       // floors 4-5: the bloom mip chain is skipped (a same-view before/after look at 1728x1117 showed no difference)
 
     // --- Quality tiers ---
     // Each tier is a config object consumed by SceneManager._setupPostProcessing() and the renderer pixelRatio setter.

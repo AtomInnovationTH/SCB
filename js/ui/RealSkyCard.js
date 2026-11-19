@@ -12,8 +12,15 @@
  */
 
 export const CLASS_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown'];
-/** One colour per class (index = skyPack.CLS), readable on the dark map. */
-export const CLASS_COLORS = ['#ff8a3d', '#c77dff', '#8f98a8', '#52f08a', '#4fb4ff', '#ffe14d'];
+/**
+ * One colour per class (index = skyPack.CLS), readable on the dark map. Debris is a deep error red and working a deep pure green
+ * (owner 2026-11-19: debris "a bit faint and a bit orange", working "a bit faint and a bit yellow-green"; lane sky-look-1119).
+ * Floor 4's dots go through the composer's OutputPass (ACES), which pales a bright green toward yellow-green (measured: #1aff40 came out
+ * rgb 154,229,119, hue 101); #00b42a is about the brightest green that still comes out green there (ACES alone: rgb 53,192,53 hue 120; measured
+ * on screen with the bloom 60-ish,195,60-ish). Red survives
+ * (#ff2020 comes out about 252,48,39).
+ */
+export const CLASS_COLORS = ['#ff2020', '#c77dff', '#8f98a8', '#00b42a', '#4fb4ff', '#ffe14d'];
 /** The one-row colour key's short words (same order as CLASS_NAMES; the full name is each item's tooltip). */
 export const LEGEND_LABELS = ['debris', 'stage', 'dead', 'working', 'sat', 'unknown'];
 
